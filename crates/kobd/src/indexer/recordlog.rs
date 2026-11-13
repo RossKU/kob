@@ -1,46 +1,69 @@
 //! The permanent record log: append-only, compact, hash-chained.
 //!
-//! What it holds is what the node cannot give back after pruning and what the indexer cannot
+//! The log holds what the node cannot give back after pruning and what the indexer cannot
 //! re-derive: the extracted KOB records (`record::TxRecord`: KOB1 genesis payloads, every
-//! transaction that touched a KOB covenant, token custody / stray outputs) grouped by chain
-//! block, plus the reorg and operator operations that changed the derived state. It never holds
-//! a raw node response. The database (`index.sqlite3`) is a derived view of it: any schema change or
-//! lost database is repaired with `kobd db replay`, which re-applies the records and then
-//! re-syncs the tail from the node.
+//! transaction that touched a KOB covenant, token custody and stray outputs) grouped by chain
+//! block, plus the reorg and operator operations that changed the derived state. It never holds a
+//! raw node response. The database (`index.sqlite3`) is a derived view of it. Any schema change or
+//! lost database is repaired with `kobd db replay`, which re-applies the records and then re-syncs
+//! the tail from the node.
 //!
-//! Frame layout, one per committed batch:
+//! # Frame layout
+//!
+//! There is one frame per committed batch:
 //!
 //! ```text
 //! u32 LE body length | body | 32-byte chain hash = blake3(previous chain hash || body)
 //! ```
 //!
-//! The body is versioned ([`FORMAT`]). Format 2 (since 2026-10-01) is self-describing: `0x00 0x02`, the write time, a
-//! template table per frame (record-log code -> template hash of every order template and token program the frame refers
-//! to) and length-prefixed states, so a frame decodes whatever the templates are when it is read; a reveal of a template
-//! this build does not pin is dropped and counted, never misread. Format 3 ([`FORMAT_KCC23`], since 2026-10-19) is format 2
-//! with KCC-23 declaration sections in its records, written only for the frames that hold one; format 4 ([`FORMAT_PAYER`],
-//! since 2026-11-09) is format 3 with payer sections (who funded a transaction that spends a tracked order), likewise; format 5
-//! ([`FORMAT_IN_VALUE`], since 2026-11-12) is format 4 with input-value sections (what such a transaction's inputs held), likewise. A
-//! frame this build cannot decode (format 1, written before 2026-10-01 without a marker, or a newer format) is kept and
-//! skipped by [`read_all`] with a counted warning
-//! (`open` checks the chain only and never decodes a body).
+//! # Formats
 //!
-//! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the segment file: the writer compresses
-//! the segment it has just rotated away from ([`compress_sealed`]; `kobd db migrate` does the ones an older run left
-//! whole), after reading the copy back and comparing it with the segment. The frames, their chain hashes and everything that reads
-//! the log are the same; only the bytes on disk are a third of the size.
+//! The body is versioned ([`FORMAT`]).
 //!
-//! The chain detects truncation in the middle and edits. Ordering guarantee with the database: a frame
-//! is appended and fsynced BEFORE the database transaction commits, and the database stores
-//! `records_next_n`. After a crash the log can hold one frame the database never committed; a database restored from a
-//! backup one frame older looks the same. [`RecordLog::open`] never cuts a complete frame: it refuses
-//! ([`RecordLogError::AheadOfDatabase`]) and keeps it. `Indexer::open` applies one such frame itself when it continues the
-//! database's cursor (its `start` is the database's cursor hash: the commit it records is what the database lacks) and
-//! refuses one of another history ([`RecordLogError::Lineage`]). More frames past the database position mean the database is
-//! older than the log (a restored backup): they are kept for `kobd db replay --onto-database`, which checks the same lineage. The reverse (database ahead of the log) means the log was lost and is
-//! reported as an error. A failed append (full disk, I/O error) is rolled back to the last complete frame before the
-//! error is returned, so nothing is ever appended after a partial frame; an incomplete frame with complete frames after
-//! it is corruption (refused), only an incomplete last frame is a torn tail (removed).
+//! - Format 2 is self-describing. It starts with `0x00 0x02` and the write time, and it carries a
+//!   template table per frame: the record-log code of every order template and token program the
+//!   frame refers to, with its template hash. States are length-prefixed. A frame therefore
+//!   decodes whatever the templates are when it is read. A reveal of a template this build does
+//!   not pin is dropped and counted, never misread.
+//! - Format 3 ([`FORMAT_KCC23`]) is format 2 with KCC-23 declaration sections in its records. It is
+//!   written only for the frames that hold one.
+//! - Format 4 ([`FORMAT_PAYER`]) is format 3 with payer sections (who funded a transaction that
+//!   spends a tracked order), likewise.
+//! - Format 5 ([`FORMAT_IN_VALUE`]) is format 4 with input-value sections (what such a
+//!   transaction's inputs held), likewise.
+//!
+//! A frame this build cannot decode (format 1, which has no marker, or a newer format) is kept and
+//! skipped by [`read_all`] with a counted warning. `open` checks the chain only and never decodes a
+//! body.
+//!
+//! # Segments
+//!
+//! A sealed segment (every one but the newest) is kept as `seg-<n>.kobrec.gz`, the gzip of the
+//! segment file. The writer compresses the segment it has just rotated away from
+//! ([`compress_sealed`]), after reading the copy back and comparing it with the segment. `kobd db
+//! migrate` compresses the ones an older run left whole. The frames, their chain hashes and
+//! everything that reads the log are the same. Only the bytes on disk are a third of the size.
+//!
+//! # Integrity and crashes
+//!
+//! The chain detects truncation in the middle and edits. A frame is appended and fsynced BEFORE the
+//! database transaction commits, and the database stores `records_next_n`. After a crash the log
+//! can hold one frame that the database never committed. A database restored from a backup one
+//! frame older looks the same.
+//!
+//! [`RecordLog::open`] never cuts a complete frame. It refuses
+//! ([`RecordLogError::AheadOfDatabase`]) and keeps it. `Indexer::open` applies one such frame
+//! itself when it continues the database's cursor: its `start` is the database's cursor hash, and
+//! the commit it records is what the database lacks. It refuses one of another history
+//! ([`RecordLogError::Lineage`]). More frames past the database position mean that the database is
+//! older than the log, for example a restored backup. They are kept for `kobd db replay
+//! --onto-database`, which checks the same lineage. The reverse, a database ahead of the log,
+//! means that the log was lost and is reported as an error.
+//!
+//! A failed append (full disk, I/O error) is rolled back to the last complete frame before the
+//! error is returned, so nothing is ever appended after a partial frame. An incomplete frame with
+//! complete frames after it is corruption and is refused. Only an incomplete last frame is a torn
+//! tail, and it is removed.
 
 use super::record::{DecodeCtx, DecodeStats, TemplateTable, TxRecord};
 use crate::hex::Hash32;
@@ -50,36 +73,50 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+/// A position in the chain: a block hash and its DAA score.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogCursor {
+    /// Hash of the chain block.
     pub hash: Hash32,
+    /// DAA score of the chain block.
     pub daa: u64,
 }
 
 /// A chain block that carried KOB-relevant transactions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogBlock {
+    /// Hash of the chain block.
     pub hash: Hash32,
+    /// DAA score of the chain block.
     pub daa: u64,
+    /// Blue score of the chain block.
     pub blue: u64,
+    /// Timestamp of the chain block.
     pub ts: u64,
+    /// The relevant transactions of the block, as records.
     pub txs: Vec<TxRecord>,
 }
 
-/// The custody token UTXO of an imported ask-side order (verified against the node when the maker
-/// supplied the extension commitment).
+/// The custody token UTXO of an imported ask-side order.
+///
+/// It is verified against the node when the maker supplied the extension commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportCustody {
+    /// Transaction id of the custody output.
     pub txid: Hash32,
+    /// Index of the custody output.
     pub index: u32,
+    /// KAS value of the custody output, in sompi.
     pub value: u64,
+    /// Token amount in base units.
     pub amount: i64,
     /// KCC-20 extension commitment of the custody token.
     pub ext: Hash32,
 }
 
-/// Operator operations that are not chain data but change the derived state, logged so a replay
-/// reproduces them (recovery imports, gap reconciliation).
+/// Operator operations that are not chain data but change the derived state.
+///
+/// They are logged so a replay reproduces them (recovery imports, gap reconciliation).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogOp {
     /// An order recovered from a maker export or archive, verified against the node's UTXO set.
@@ -93,15 +130,19 @@ pub enum LogOp {
         spk: Vec<u8>,
         daa: u64,
         custody: Option<ImportCustody>,
-        /// The entry of an if-done exit (from the export; `None` for every other order and in operations written before
-        /// 2026-10-02, op code 1).
+        /// The entry of an if-done exit, from the export.
+        ///
+        /// `None` for every other order, and for an operation of op code 1.
         parent: Option<Hash32>,
-        /// A sell-first `KobIfdPair`'s second custody (its B prefund; op code 6). `None` for every other order.
+        /// A sell-first `KobIfdPair`'s second custody, its B prefund (op code 6).
+        ///
+        /// `None` for every other order.
         prefund: Option<ImportCustody>,
     },
-    /// A tracked order output the node no longer has (spent during a gap): close its lineage.
+    /// A tracked order output that the node no longer has, spent during a gap: close its lineage.
     CloseGap { txid: Hash32, index: u32, covenant_id: Hash32 },
-    /// A tracked order continued during a gap under the same script: adopt the node's current output.
+    /// A tracked order continued during a gap under the same script: adopt the node's current
+    /// output.
     Adopt {
         covenant_id: Hash32,
         old_txid: Hash32,
@@ -110,16 +151,21 @@ pub enum LogOp {
         index: u32,
         value: u64,
         spk: Vec<u8>,
-        /// The DAA score the node reports for the adopted output (its refund / kill time counts from it). `None` in operations
-        /// written before 2026-10-02 (op code 3): the cursor's DAA stands in, as it did then.
+        /// The DAA score the node reports for the adopted output.
+        ///
+        /// The order's refund and kill time count from it. `None` in an operation of op code 3,
+        /// where the cursor's DAA stands in.
         daa: Option<u64>,
-        /// The order's custody, found by the reconciliation at the custody script it derives (token-holding kinds).
+        /// The order's custody for the token-holding kinds, found by the reconciliation at the
+        /// custody script it derives.
         custody: Option<ImportCustody>,
-        /// Token UTXOs owned by the order (custody or strays) the node still holds: they stay live, every other one is closed.
+        /// Token UTXOs owned by the order (custody or strays) that the node still holds. They stay
+        /// live, and every other one is closed.
         keep: Vec<(Hash32, u32)>,
     },
 }
 
+/// One committed batch, which is one frame of the log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogBatch {
     /// The `start_hash` the request was made with.
@@ -130,6 +176,7 @@ pub struct LogBatch {
     pub cursor: LogCursor,
     /// Only the chain blocks that carried relevant transactions.
     pub blocks: Vec<LogBlock>,
+    /// Operator operations of the batch.
     pub ops: Vec<LogOp>,
 }
 
@@ -137,38 +184,49 @@ fn code_of(t: TemplateId) -> u8 {
     crate::model::wire_code(t)
 }
 
-/// Record-log frame format this build writes and reads: the body starts with the marker `0x00 0x02`, carries a template
-/// table (wire code -> template hash) and length-prefixes every state, so a frame decodes without assuming today's
-/// templates. Format 1 (frames written before 2026-10-01, no marker: the body starts with the write time in ms, a varint >
-/// 0) is not read.
+/// The base record-log frame format.
+///
+/// The body starts with the marker `0x00 0x02`, carries a template table (wire code -> template
+/// hash) and length-prefixes every state, so a frame decodes without assuming the current
+/// templates. Format 1, which has no marker (the body starts with the write time in ms, a varint
+/// greater than 0), is not read.
 pub const FORMAT: u8 = 2;
 
-/// Format 3 (since 2026-10-19): format 2 whose records may carry a KCC-23 declaration section (`record::TxRecord::kcc23`, flagged by
-/// bit 30 of a record's position). Only a frame that holds such a section is written as format 3; every other frame stays
-/// format 2, byte for byte, so a build before declarations reads it and skips (with a counted "newer format" warning) only the
-/// frames with declarations instead of misreading them.
+/// Format 3: format 2 whose records may carry a KCC-23 declaration section.
+///
+/// The section is `record::TxRecord::kcc23`, flagged by bit 30 of a record's position. Only a
+/// frame that holds such a section is written as format 3. Every other frame stays format 2, byte
+/// for byte, so an older build skips only the frames with declarations, with a counted "newer
+/// format" warning, instead of misreading them.
 pub const FORMAT_KCC23: u8 = 3;
 
-/// Format 4 (since 2026-11-09): format 3 whose records may carry a payer section (`record::TxRecord::payer`: the script that funded a
-/// transaction spending a tracked order, flagged by bit 29 of a record's position). Only a frame that holds such a section is written
-/// as format 4 (KCC-23 sections may be in it too); every other frame stays format 2 or 3, so a build before payers skips (with a
-/// counted "newer format" warning) only those frames instead of misreading them. A record of an earlier frame has no payer: the
-/// submitter of its transaction is unknown.
+/// Format 4: format 3 whose records may carry a payer section.
+///
+/// The section is `record::TxRecord::payer`: the script that funded a transaction spending a
+/// tracked order, flagged by bit 29 of a record's position. Only a frame that holds such a section
+/// is written as format 4, and KCC-23 sections may be in it too. Every other frame stays format 2
+/// or 3, so an older build skips only those frames, with a counted "newer format" warning, instead
+/// of misreading them. A record of an earlier frame has no payer: the submitter of its transaction
+/// is unknown.
 pub const FORMAT_PAYER: u8 = 4;
 
-/// Format 5 (since 2026-11-12): format 4 whose records may carry an input-value section (`record::TxRecord::in_value`: what the inputs of
-/// a transaction spending a tracked order held, as the node reported them, so its network fee is known; flagged by bit 28 of a record's
-/// position). Only a frame that holds such a section is written as format 5 (payer and KCC-23 sections may be in it too); every other
-/// frame stays format 2, 3 or 4, so a build before input values skips (with a counted "newer format" warning) only those frames instead
-/// of misreading them. A record of an earlier frame has no input value: the network fee of its transaction is unknown.
+/// Format 5: format 4 whose records may carry an input-value section.
+///
+/// The section is `record::TxRecord::in_value`: what the inputs of a transaction spending a tracked
+/// order held, as the node reported them, so that its network fee is known. It is flagged by bit
+/// 28 of a record's position. Only a frame that holds such a section is written as format 5, and
+/// payer and KCC-23 sections may be in it too. Every other frame stays format 2, 3 or 4, so an
+/// older build skips only those frames, with a counted "newer format" warning, instead of
+/// misreading them. A record of an earlier frame has no input value: the network fee of its
+/// transaction is unknown.
 pub const FORMAT_IN_VALUE: u8 = 5;
 
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
         match self {
             LogOp::Import { template, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund } => {
-                // op 5 = op 1 followed by the parent (op 1 is still read); op 6 = op 5 followed by the second custody (a pair
-                // entry's B prefund), written only when there is one
+                // Op 5 is op 1 followed by the parent (op 1 is still read). Op 6 is op 5 followed
+                // by the second custody (a pair entry's B prefund), written only when there is one.
                 w.u8(if prefund.is_some() { 6 } else { 5 });
                 w.u8(code_of(*template));
                 w.bytes(state);
@@ -191,7 +249,8 @@ impl LogOp {
                 w.hash(covenant_id);
             }
             LogOp::Adopt { covenant_id, old_txid, old_index, txid, index, value, spk, daa, custody, keep } => {
-                // op 4 = op 3 followed by the output's DAA, the custody and the kept token UTXOs (op 3 is still read)
+                // Op 4 is op 3 followed by the output's DAA, the custody and the kept token UTXOs
+                // (op 3 is still read).
                 w.u8(4);
                 w.hash(covenant_id);
                 w.hash(old_txid);
@@ -217,7 +276,10 @@ impl LogOp {
         }
     }
 
-    /// `None`: an import of an order layout this build cannot interpret (read past and counted in `ctx`).
+    /// Decodes an operation.
+    ///
+    /// It is `None` for an import of an order layout this build cannot interpret, which is read
+    /// past and counted in `ctx`.
     fn decode(r: &mut Reader<'_>, ctx: &mut DecodeCtx<'_>) -> Result<Option<LogOp>, WireError> {
         Ok(Some(match r.u8()? {
             op @ (1 | 5 | 6) => {
@@ -356,8 +418,10 @@ impl LogBatch {
         (orders, programs)
     }
 
-    /// Encodes the batch as a format-2 frame body (format 3 when a record carries a KCC-23 declaration section, 4 when one carries a
-    /// payer section, 5 when one carries an input-value section).
+    /// Encodes the batch as a frame body.
+    ///
+    /// The body is format 2, or format 3 when a record carries a KCC-23 declaration section, 4 when
+    /// one carries a payer section, and 5 when one carries an input-value section.
     pub fn encode(&self, now_ms: u64) -> Vec<u8> {
         let mut w = Writer::new();
         w.u8(0);
@@ -454,14 +518,19 @@ impl LogBatch {
     }
 }
 
+/// Errors of the record log.
 #[derive(Debug, thiserror::Error)]
 pub enum RecordLogError {
+    /// A read or write of a segment failed.
     #[error("record log io: {0}")]
     Io(#[from] std::io::Error),
+    /// A frame cannot be read.
     #[error("record log frame {n} is corrupt: {reason}")]
     Corrupt { n: u64, reason: String },
+    /// The log ends before the database's position: it was lost or replaced.
     #[error("record log ends at frame {log_next} but the database expects {db_next}: the log was lost or replaced")]
     BehindDatabase { log_next: u64, db_next: u64 },
+    /// The log holds frames that the database has not committed, so the database is older.
     #[error(
         "record log holds frames {db_next}..{log_next} that the database has not committed; an unclean shutdown leaves at \
          most one, which the indexer applies itself when it continues the database's cursor, so the database is older than \
@@ -470,16 +539,20 @@ pub enum RecordLogError {
          (docs/ops/executor.md, Part B, 8)"
     )]
     AheadOfDatabase { log_next: u64, db_next: u64 },
-    /// The first frame past the database position does not continue the database's cursor: the log and the database are
-    /// of different histories.
+    /// The first frame past the database position does not continue the database's cursor.
+    ///
+    /// The log and the database are of different histories.
     #[error(
         "record log frame {n} starts at block {frame_start}, but the database's cursor is {db_cursor}: the log and the \
          database do not belong together (another instance's log, or a database of another history). Nothing was changed; \
          rebuild the database from this log with `kobd db replay` into a fresh data directory"
     )]
     Lineage { n: u64, frame_start: Hash32, db_cursor: String },
-    /// An append or a truncation failed and the segment could not be put back to its last complete frame: nothing more is
-    /// written until a restart, whose `open` repairs the log (a torn last frame) or refuses it.
+    /// An append or a truncation failed, and the segment could not be put back to its last
+    /// complete frame.
+    ///
+    /// Nothing more is written until a restart, whose `open` repairs the log (a torn last frame) or
+    /// refuses it.
     #[error("record log is not written to any more until a restart: {0}")]
     Stopped(String),
 }
@@ -499,9 +572,11 @@ fn segment_name(first_n: u64) -> String {
     format!("seg-{first_n:012}.kobrec")
 }
 
-/// Extension of a sealed segment kept gzip-compressed: `seg-<n>.kobrec.gz` holds the bytes of `seg-<n>.kobrec`, frame for frame
-/// (the chain hashes cover the frame bodies, so the log reads and verifies the same). Only a sealed segment is ever compressed,
-/// never the newest one, which the writer appends to.
+/// Extension of a sealed segment that is kept gzip-compressed.
+///
+/// `seg-<n>.kobrec.gz` holds the bytes of `seg-<n>.kobrec`, frame for frame. The chain hashes cover
+/// the frame bodies, so the log reads and verifies the same. Only a sealed segment is ever
+/// compressed, never the newest one, which the writer appends to.
 const GZ: &str = ".gz";
 
 fn is_compressed(p: &Path) -> bool {
@@ -525,8 +600,8 @@ fn list_segments(dir: &Path) -> std::io::Result<Vec<(u64, PathBuf)>> {
             },
         };
         if let Ok(n) = digits.parse::<u64>() {
-            // both forms of one segment (a compression that stopped before it removed the original): the original is the one
-            // that is trusted, as it was before this existed
+            // Both forms of one segment exist, because a compression stopped before it removed the
+            // original. The original is the one that is trusted.
             match v.iter().position(|(m, _)| *m == n) {
                 Some(i) => {
                     if !gz {
@@ -601,9 +676,11 @@ fn read_frame(r: &mut impl Read) -> std::io::Result<FrameRead> {
     Ok(FrameRead::Frame { body, chain, total: 4 + len as u64 + 32 })
 }
 
-/// Whether the bytes of `path` after `offset` (an incomplete frame) hold a complete frame that continues the chain from
-/// `prev`. A crash during an append leaves nothing after the incomplete frame; a complete, chained frame after it means
-/// the incomplete one sits in the middle of the log, and cutting there would drop good frames.
+/// Whether a complete frame, chained from `prev`, follows the incomplete frame at `offset`.
+///
+/// `path` is the segment to read. A crash during an append leaves nothing after the incomplete
+/// frame. A complete, chained frame after it means the incomplete one sits in the middle of the
+/// log, and cutting there would drop good frames.
 fn complete_frame_follows(path: &Path, offset: u64, prev: &[u8; 32]) -> std::io::Result<bool> {
     let mut f = File::open(path)?;
     std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(offset))?;
@@ -636,8 +713,10 @@ struct ScanEnd {
     torn: bool,
 }
 
-/// Walk every frame in order, verifying the chain. `visit(n, body)` returns `true` to stop before
-/// frame `n` (the offset of that frame is reported in `cut`).
+/// Walks every frame in order, verifying the chain.
+///
+/// `visit(n, body)` returns `true` to stop before frame `n`, and the offset of that frame is
+/// reported in `cut`.
 fn scan(
     segs: &[(u64, PathBuf)],
     mut visit: impl FnMut(u64, &[u8]) -> Result<bool, RecordLogError>,
@@ -646,7 +725,8 @@ fn scan(
     let mut prev = ZERO;
     for (si, (_, path)) in segs.iter().enumerate() {
         let file_len = std::fs::metadata(path)?.len();
-        // the newest segment is never compressed (the writer appends to it), so the torn-tail checks below see plain bytes
+        // The newest segment is never compressed (the writer appends to it), so the torn-tail
+        // checks below see plain bytes.
         let mut rdr = BufReader::with_capacity(1 << 20, open_segment(path)?);
         let mut offset = 0u64;
         loop {
@@ -694,6 +774,7 @@ pub struct OpenReport {
     pub torn_tail_removed: bool,
 }
 
+/// An open record log: the segment being appended to and the position in the chain.
 pub struct RecordLog {
     dir: PathBuf,
     segment_bytes: u64,
@@ -709,7 +790,9 @@ pub struct RecordLog {
 }
 
 impl RecordLog {
-    /// Open the log, reconcile it with the database position `db_next_n`, and position for append.
+    /// Opens the log, reconciles it with the database position `db_next_n` and positions it for
+    /// append.
+    ///
     /// `db_next_n` is 0 for a fresh database.
     pub fn open(dir: &Path, segment_bytes: u64, db_next_n: u64) -> Result<(RecordLog, OpenReport), RecordLogError> {
         std::fs::create_dir_all(dir)?;
@@ -721,9 +804,11 @@ impl RecordLog {
             if end.torn {
                 report.torn_tail_removed = true;
             } else {
-                // a complete frame at or after db_next_n is never cut: whether it is the one append an unclean shutdown left
-                // uncommitted or a committed frame of a newer database (a backup one frame older looks the same), it is a
-                // faithful record of the chain. The caller applies it after a lineage check (`Indexer::open`) or refuses.
+                // A complete frame at or after db_next_n is never cut. It may be the one append an
+                // unclean shutdown left uncommitted, or a committed frame of a newer database (a
+                // backup one frame older looks the same). Either way it is a faithful record of
+                // the chain. The caller applies it after a lineage check (`Indexer::open`) or
+                // refuses.
                 let all = scan(&segs, |_, _| Ok(false))?;
                 return Err(RecordLogError::AheadOfDatabase { log_next: all.frames, db_next: db_next_n });
             }
@@ -739,8 +824,10 @@ impl RecordLog {
         if total_frames < db_next_n {
             return Err(RecordLogError::BehindDatabase { log_next: total_frames, db_next: db_next_n });
         }
-        // A torn tail can sit after uncommitted frames: after the cut above the log ends at frame `end.frames`.
-        // the segment appended to is a whole one (compression leaves the newest alone; should it be a gzip anyway, a new one starts)
+        // A torn tail can sit after uncommitted frames. After the cut above, the log ends at frame
+        // `end.frames`.
+        // The segment appended to is a whole one. Compression leaves the newest alone, and should
+        // it be a gzip anyway, a new one starts.
         let (path, seg_len) = match segs.last() {
             Some((_, p)) if !is_compressed(p) => (p.clone(), std::fs::metadata(p)?.len()),
             _ => (dir.join(segment_name(total_frames)), 0),
@@ -761,20 +848,21 @@ impl RecordLog {
         ))
     }
 
+    /// The number of the next frame to be appended.
     pub fn next_n(&self) -> u64 {
         self.next_n
     }
 
-    /// Append one batch and fsync. Returns the frame number and the frame's size in bytes.
+    /// Appends one batch and fsyncs. Returns the frame number and the frame's size in bytes.
     pub fn append(&mut self, batch: &LogBatch, now_ms: u64) -> Result<(u64, u64), RecordLogError> {
         self.append_body(&batch.encode(now_ms))
     }
 
-    /// Append one frame body as it is (tests and tools write frames of other formats with it). Returns the frame number
-    /// and size.
+    /// Appends one frame body as it is. Tests and tools write frames of other formats with it.
     ///
-    /// A failed write or fsync is rolled back: the segment is cut back to its length before the append, so the next
-    /// append starts right after the last complete frame. When even that fails, the log refuses every later write
+    /// Returns the frame number and size. A failed write or fsync is rolled back: the segment is
+    /// cut back to its length before the append, so the next append starts right after the last
+    /// complete frame. When even that fails, the log refuses every later write
     /// ([`RecordLogError::Stopped`]).
     #[doc(hidden)]
     pub fn append_body(&mut self, body: &[u8]) -> Result<(u64, u64), RecordLogError> {
@@ -787,7 +875,8 @@ impl RecordLog {
             self.file = OpenOptions::new().create(true).append(true).open(&path)?;
             self.seg_path = path;
             self.seg_len = 0;
-            // the segment just sealed (and any sealed one an earlier run left whole) is kept compressed; a failure only costs space
+            // The segment just sealed (and any sealed one an earlier run left whole) is kept
+            // compressed. A failure only costs space.
             match compress_sealed(&self.dir) {
                 Ok(r) if r.segments > 0 => {
                     tracing::info!(segments = r.segments, before = r.before, after = r.after, "record log: sealed segments compressed")
@@ -811,9 +900,10 @@ impl RecordLog {
         Ok((n, frame.len() as u64))
     }
 
-    /// Cut the current segment back to its last complete frame after a failed append. Returns the error to report: the
-    /// append's own when the cut succeeded; [`RecordLogError::Stopped`] when it did not (the log then refuses every later
-    /// write).
+    /// Cuts the current segment back to its last complete frame after a failed append.
+    ///
+    /// Returns the error to report: the append's own when the cut succeeded, and
+    /// [`RecordLogError::Stopped`] when it did not. The log then refuses every later write.
     fn roll_back(&mut self, e: std::io::Error) -> RecordLogError {
         let undo = OpenOptions::new().write(true).open(&self.seg_path).and_then(|f| {
             f.set_len(self.seg_len)?;
@@ -838,8 +928,10 @@ impl RecordLog {
         self.stopped.is_some()
     }
 
-    /// Discard frames `>= n` (a commit failed after the append). Only the newest frames can be cut. When the cut fails,
-    /// the log refuses every later write ([`RecordLogError::Stopped`]); the next start's `open` cuts the uncommitted frame.
+    /// Discards frames `>= n`, after a commit failed following the append.
+    ///
+    /// Only the newest frames can be cut. When the cut fails, the log refuses every later write
+    /// ([`RecordLogError::Stopped`]), and the next start's `open` cuts the uncommitted frame.
     pub fn truncate_to(&mut self, n: u64) -> Result<(), RecordLogError> {
         if let Some(why) = &self.stopped {
             return Err(RecordLogError::Stopped(why.clone()));
@@ -875,8 +967,10 @@ impl RecordLog {
     }
 }
 
-/// The segment to cut a log at: a compressed one is expanded back to a whole segment first (the cut of the newest frames of a
-/// log whose last rotation was just compressed, `truncate_to`), and the whole file's path is returned.
+/// Returns the segment to cut a log at, expanding a compressed one to a whole segment first.
+///
+/// This is the cut of the newest frames of a log whose last rotation was just compressed
+/// (`truncate_to`). The whole file's path is returned.
 fn make_cuttable(p: &Path) -> std::io::Result<PathBuf> {
     if !is_compressed(p) {
         return Ok(p.to_path_buf());
@@ -896,16 +990,19 @@ fn make_cuttable(p: &Path) -> std::io::Result<PathBuf> {
     Ok(plain)
 }
 
-/// gzip level of a sealed segment: 3.5x on the TN10 soak log, at a speed that holds the writer for about 2 seconds per
-/// 256 MiB segment, once per rotation.
+/// The gzip level of a sealed segment.
+///
+/// It gives a good ratio at a speed that holds the writer only briefly, once per rotation.
 const GZ_LEVEL: u32 = 6;
 
 /// What [`compress_sealed`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CompressReport {
+    /// Number of segments compressed.
     pub segments: usize,
-    /// Bytes of the segments before and after.
+    /// Bytes of the segments before compression.
     pub before: u64,
+    /// Bytes of the segments after compression.
     pub after: u64,
 }
 
@@ -921,9 +1018,11 @@ fn digest_of(mut r: impl Read) -> std::io::Result<[u8; 32]> {
     }
 }
 
-/// Compress one sealed segment: the gzip is written beside it, read back and compared with the segment (blake3 of both), and only
-/// then does it replace the segment (rename, then the segment is removed), so no step loses a frame and a crash leaves the
-/// segment in one form or both. Returns the compressed size.
+/// Compresses one sealed segment and returns the compressed size.
+///
+/// The gzip is written beside the segment, read back and compared with it (blake3 of both). Only
+/// then does it replace the segment: rename, then the segment is removed. So no step loses a
+/// frame, and a crash leaves the segment in one form or both.
 fn compress_one(plain: &Path) -> std::io::Result<u64> {
     let mut gz = plain.as_os_str().to_owned();
     gz.push(GZ);
@@ -949,8 +1048,10 @@ fn compress_one(plain: &Path) -> std::io::Result<u64> {
     Ok(size)
 }
 
-/// Compress every sealed segment of the log directory that is still whole: all but the newest, which the writer appends to.
-/// Idempotent. The caller holds the writer lock (`run`, `kobd db migrate`).
+/// Compresses every sealed segment of the log directory that is still whole.
+///
+/// That is all but the newest, which the writer appends to. It is idempotent. The caller holds the
+/// writer lock (`run`, `kobd db migrate`).
 pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
     let segs = list_segments(dir)?;
     let mut rep = CompressReport::default();
@@ -967,8 +1068,10 @@ pub fn compress_sealed(dir: &Path) -> Result<CompressReport, RecordLogError> {
     Ok(rep)
 }
 
-/// Number of complete frames in a log directory, without decoding them. Used at startup to refuse
-/// an empty database next to a non-empty log (that is a job for `replay`, never for `open`).
+/// Number of complete frames in a log directory, without decoding them.
+///
+/// It is used at startup to refuse an empty database next to a non-empty log, which is a job for
+/// `replay`, never for `open`.
 pub fn record_count(dir: &Path) -> Result<u64, RecordLogError> {
     let segs = list_segments(dir)?;
     Ok(scan(&segs, |_, _| Ok(false))?.frames)
@@ -992,8 +1095,9 @@ pub struct LogEnd {
     pub torn: bool,
 }
 
-/// Verify the chain of the whole log without decoding a frame (one frame in memory at a time). A replay calls it before it
-/// applies anything, so a broken log is refused with nothing applied.
+/// Verifies the chain of the whole log without decoding a frame, with one frame in memory.
+///
+/// A replay calls it before it applies anything, so a broken log is refused with nothing applied.
 pub fn verify(dir: &Path) -> Result<LogEnd, RecordLogError> {
     let end = scan(&list_segments(dir)?, |_, _| Ok(false))?;
     Ok(LogEnd { frames: end.frames, torn: end.torn })
@@ -1004,6 +1108,7 @@ pub fn verify(dir: &Path) -> Result<LogEnd, RecordLogError> {
 pub struct Streamed {
     /// Complete frames read (`upto` when given).
     pub frames: u64,
+    /// Whether a torn (partial) last frame follows the frames.
     pub torn: bool,
     /// Frames from `from` on this build could not decode, with the reason (they stay in the log).
     pub skipped: Vec<(u64, String)>,
@@ -1011,11 +1116,16 @@ pub struct Streamed {
     pub dropped: DecodeStats,
 }
 
-/// Decode the frames from number `from` on, one at a time, and hand each decoded one to `apply` as it is read, in order: memory
-/// holds one frame whatever the size of the log. The frames before `from` are verified but not decoded; an undecodable frame is
-/// counted in [`Streamed::skipped`] and not handed over. The chain is verified as the frames are read, so a broken frame after
-/// some were handed over is an error only then: a replay [`verify`]s the log first and passes its `frames` as `upto`, the frame
-/// to stop before (a log that ends before it is an error). The first error of `apply` stops the read and is returned.
+/// Decodes the frames from number `from` on, one at a time, and hands each decoded one to `apply`.
+///
+/// The frames are handed over in order as they are read, so memory holds one frame whatever the
+/// size of the log. The frames before `from` are verified but not decoded. An undecodable frame is
+/// counted in [`Streamed::skipped`] and not handed over.
+///
+/// The chain is verified as the frames are read, so a broken frame after some were handed over is
+/// an error only then. A replay [`verify`]s the log first and passes its `frames` as `upto`, the
+/// frame to stop before. A log that ends before it is an error. The first error of `apply` stops
+/// the read and is returned.
 pub fn for_each_from<E: From<RecordLogError>>(
     dir: &Path,
     from: u64,
@@ -1063,19 +1173,24 @@ pub fn for_each_from<E: From<RecordLogError>>(
 pub struct Replay {
     /// The frames this build decoded, with their numbers.
     pub records: Vec<(u64, LogBatch)>,
+    /// Whether a torn (partial) last frame follows the frames.
     pub torn: bool,
     /// Every complete frame of the log (decoded or skipped): the database position after a replay.
     pub frames: u64,
-    /// Frames this build could not decode at all (a newer format, or a layout no table here describes), with the
-    /// reason. They stay in the log; a replay skips them.
+    /// Frames this build could not decode at all, with the reason.
+    ///
+    /// The cause is a newer format or a layout no table here describes. They stay in the log, and
+    /// a replay skips them.
     pub skipped: Vec<(u64, String)>,
     /// What the decoded frames had to drop (reveals / holdings / imports of unknown layouts).
     pub dropped: DecodeStats,
 }
 
-/// The frames from number `from` on (decoded; an undecodable one in `skipped`), chain verified over the whole log. The
-/// frames before `from` are verified but not decoded. It holds every decoded frame in memory (tests and small logs): a replay
-/// streams them with [`for_each_from`].
+/// The frames from number `from` on, chain verified over the whole log.
+///
+/// A frame is decoded, or listed in `skipped` when it is undecodable. The frames before `from` are
+/// verified but not decoded. It holds every decoded frame in memory (tests and small logs). A
+/// replay streams them with [`for_each_from`].
 pub fn read_from(dir: &Path, from: u64) -> Result<Replay, RecordLogError> {
     let mut records = Vec::new();
     let s = for_each_from(dir, from, None, |n, b| {
@@ -1085,9 +1200,11 @@ pub fn read_from(dir: &Path, from: u64) -> Result<Replay, RecordLogError> {
     Ok(Replay { records, torn: s.torn, frames: s.frames, skipped: s.skipped, dropped: s.dropped })
 }
 
-/// Every frame of a log directory in order, chain verified. A frame that is authentic (its chain hash verifies) but that
-/// this build cannot decode is skipped and reported in [`Replay::skipped`] instead of failing the whole read; a broken
-/// chain is still an error.
+/// Reads every frame of a log directory in order, chain verified.
+///
+/// A frame that is authentic (its chain hash verifies) but that this build cannot decode is
+/// skipped and reported in [`Replay::skipped`] instead of failing the whole read. A broken chain
+/// is still an error.
 pub fn read_all(dir: &Path) -> Result<Replay, RecordLogError> {
     read_from(dir, 0)
 }
@@ -1160,7 +1277,8 @@ mod tests {
                 custody: None,
                 keep: vec![],
             },
-            // a sell-first pair entry's import carries its second custody (op 6); any other import is op 5
+            // A sell-first pair entry's import carries its second custody (op 6). Any other import
+            // is op 5.
             LogOp::Import {
                 template: TemplateId::KobIfdPair,
                 state: vec![0x11; template(TemplateId::KobIfdPair).state_len],
@@ -1191,7 +1309,7 @@ mod tests {
         let d = LogBatch::decode(&b.encode(5)).unwrap();
         assert_eq!(d.batch, b);
 
-        // operations written before 2026-10-02: op 3 (adopt without DAA, custody and kept token UTXOs)
+        // Older operations: op 3 (adopt without DAA, custody and kept token UTXOs).
         let mut empty = batch(3);
         empty.ops = vec![];
         let mut body = empty.encode(5);
@@ -1254,8 +1372,10 @@ mod tests {
         assert_eq!(record_count(d.path()).unwrap(), 5);
     }
 
-    /// The stream hands the frames from `from` over one at a time across segments, stops before `upto`, refuses a log that ends
-    /// before `upto`, and stops at the first error of the caller.
+    /// The stream hands the frames from `from` over one at a time across segments.
+    ///
+    /// It stops before `upto`, refuses a log that ends before `upto`, and stops at the first error
+    /// of the caller.
     #[test]
     fn frames_stream_across_segments_and_stop_where_asked() {
         let d = tempfile::tempdir().unwrap();
@@ -1297,22 +1417,25 @@ mod tests {
             log.append(&batch(i), 0).unwrap();
         }
         drop(log);
-        // database only committed 3 frames: the 4th is kept (the indexer applies it or refuses), never cut
+        // The database only committed 3 frames: the 4th is kept (the indexer applies it or
+        // refuses), never cut.
         assert!(matches!(RecordLog::open(d.path(), 1 << 20, 3), Err(RecordLogError::AheadOfDatabase { log_next: 4, db_next: 3 })));
         assert_eq!(record_count(d.path()).unwrap(), 4);
         let tail = read_from(d.path(), 3).unwrap();
         assert_eq!((tail.frames, tail.records.len()), (4, 1));
         assert_eq!(tail.records[0], (3, batch(3)));
-        // at the log's end the chain continues correctly
+        // At the log's end the chain continues correctly.
         let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 4).unwrap();
         log.append(&batch(9), 0).unwrap();
         drop(log);
         assert_eq!(read_all(d.path()).unwrap().records.len(), 5);
-        // database claims more than the log has
+        // The database claims more than the log has.
         assert!(matches!(RecordLog::open(d.path(), 1 << 20, 7), Err(RecordLogError::BehindDatabase { log_next: 5, db_next: 7 })));
     }
 
-    /// A database older than the log (a restored backup) is not a crash: `open` refuses and keeps every frame.
+    /// A database older than the log, such as a restored backup, is not a crash.
+    ///
+    /// `open` refuses and keeps every frame.
     #[test]
     fn frames_of_more_than_one_uncommitted_write_are_kept_and_refused() {
         let d = tempfile::tempdir().unwrap();
@@ -1348,9 +1471,11 @@ mod tests {
         assert!(!read_all(d.path()).unwrap().torn);
     }
 
-    /// A partial frame (a write that failed part way) with complete, chained frames after it is not a torn tail: `open` and
-    /// `read_all` refuse the log and leave every byte of it in place, whether the partial frame's length runs past the end
-    /// of the file or into the frames after it.
+    /// A partial frame (a write that failed part way) with complete, chained frames after it is not
+    /// a torn tail.
+    ///
+    /// `open` and `read_all` refuse the log and leave every byte of it in place, whether the
+    /// partial frame's length runs past the end of the file or into the frames after it.
     #[test]
     fn an_incomplete_frame_followed_by_complete_frames_is_refused_and_kept() {
         for declared in [3_010u32, 12_000, 1 << 20] {
@@ -1361,10 +1486,10 @@ mod tests {
             drop(log);
             let seg = segment_paths(d.path()).unwrap().pop().unwrap();
             let mut bytes = std::fs::read(&seg).unwrap();
-            // the partial frame: its length, then only part of its body
+            // The partial frame: its length, then only part of its body.
             bytes.extend_from_slice(&declared.to_le_bytes());
             bytes.extend_from_slice(&[7u8; 3000]);
-            // two complete frames chained from the last complete one
+            // Two complete frames chained from the last complete one.
             let mut chain = prev;
             for i in 1..3u8 {
                 let body = batch(i).encode(0);
@@ -1391,7 +1516,7 @@ mod tests {
         drop(log);
         let seg = segment_paths(d.path()).unwrap().pop().unwrap();
         let mut bytes = std::fs::read(&seg).unwrap();
-        // flip a byte inside the second frame's body
+        // Flip a byte inside the second frame's body.
         let first = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize + 36;
         bytes[first + 10] ^= 0xff;
         std::fs::write(&seg, bytes).unwrap();
@@ -1439,7 +1564,7 @@ mod tests {
         assert_eq!(read_all(d.path()).unwrap().records.len(), 40);
         assert_eq!(record_count(d.path()).unwrap(), 40);
         drop(log);
-        // reopened and extended: the chain continues over the compressed segments
+        // Reopened and extended: the chain continues over the compressed segments.
         let (mut log, _) = RecordLog::open(d.path(), 300, 40).unwrap();
         log.append(&batch(41), 0).unwrap();
         assert_eq!(log.next_n(), 41);
@@ -1447,7 +1572,7 @@ mod tests {
         assert_eq!(r.records.len(), 41);
         assert_eq!(r.records[40].1, batch(41));
         assert_eq!(compress_sealed(d.path()).unwrap().segments, 0, "idempotent");
-        // the newest frame can still be cut after a rotation
+        // The newest frame can still be cut after a rotation.
         log.truncate_to(40).unwrap();
         assert_eq!(read_all(d.path()).unwrap().records.len(), 40);
     }
@@ -1463,12 +1588,13 @@ mod tests {
         let want = read_all(d.path()).unwrap().records;
         let gz: Vec<PathBuf> = segment_paths(d.path()).unwrap().into_iter().filter(|p| is_compressed(p)).collect();
         assert!(gz.len() >= 2);
-        // an old log: every sealed segment whole
+        // An old log: every sealed segment whole.
         for p in &gz {
             gunzip_to_plain(p);
         }
         assert_eq!(read_all(d.path()).unwrap().records, want);
-        // a compression that wrote the gzip and stopped before it removed the segment: both files exist
+        // A compression that wrote the gzip and stopped before it removed the segment: both files
+        // exist.
         let plain = segment_paths(d.path()).unwrap()[0].clone();
         let mut both = plain.as_os_str().to_owned();
         both.push(".gz");
@@ -1504,13 +1630,14 @@ mod tests {
     use crate::indexer::record::{RecIn, RecOut, Reveal};
     use kob_protocol::artifacts::template;
 
-    /// The dispatch tag of today's `KobPair.settle` (the kind under the record-log code the cross limits had).
+    /// The dispatch tag of the current `KobPair.settle`, the kind under the record-log code the
+    /// cross limits had.
     fn new_settle() -> [u8; 4] {
         let t = template(TemplateId::KobPair);
         *t.contract().entries.get("settle").expect("KobPair.settle").dispatch_tag.as_bytes()
     }
 
-    /// Today's `KobPair` state length.
+    /// The current `KobPair` state length.
     fn new_len() -> usize {
         template(TemplateId::KobPair).state_len
     }
@@ -1558,18 +1685,18 @@ mod tests {
         let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
         let t = 1_790_000_000_000u64;
         log.append_body(&batch(0).encode(t)).unwrap();
-        // format-2 frames under code 0x08 whose template hash this build does not pin (an older or a future artifact, today's
-        // state length or another)
+        // Format-2 frames under code 0x08 whose template hash this build does not pin (an older
+        // or a future artifact, the current state length or another).
         let mut unknown = batch_of(1, vec![cross_tx(1, 400, [1, 2, 3, 4], vec![])]).encode(t);
         let mut older = batch_of(2, vec![cross_tx(2, new_len(), new_settle(), vec![])]).encode(t);
-        // body: 0x00 0x02 | time (6-byte varint) | order table count | code | hash
+        // Body: 0x00 0x02 | time (6-byte varint) | order table count | code | hash.
         let at = 2 + 6 + 1;
         assert_eq!(unknown[at], 0x08, "the code 0x08");
         unknown[at + 1..at + 33].copy_from_slice(&[0xee; 32]);
         older[at + 1..at + 33].copy_from_slice(&[0xdd; 32]);
         log.append_body(&unknown).unwrap();
         log.append_body(&older).unwrap();
-        // a newer frame format, and a format-1 frame (no marker)
+        // A newer frame format, and a format-1 frame (no marker).
         let mut future = batch(3).encode(t);
         future[1] = 9;
         log.append_body(&future).unwrap();
@@ -1617,7 +1744,8 @@ mod tests {
         let (orders, programs) = b.tables();
         assert_eq!(orders.into_iter().collect::<Vec<_>>(), vec![(0x08, template(TemplateId::KobPair).hash)]);
         assert!(programs.is_empty());
-        // a batch without reveals pays two bytes for the empty tables after the marker and the write time
+        // A batch without reveals pays two bytes for the empty tables after the marker and the
+        // write time.
         assert_eq!(batch(1).encode(5)[..5], [0, FORMAT, 5, 0, 0]);
     }
 }
