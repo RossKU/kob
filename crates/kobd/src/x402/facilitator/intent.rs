@@ -1,26 +1,44 @@
-//! Intent-based swap-and-pay settlement (`kob-intent-v1`): the facilitator is the intent's keeper.
+//! Intent-based swap-and-pay settlement (`kob-intent-v1`), where the facilitator is the keeper.
 //!
-//! [`Facilitator::settle_intent`]:
+//! # Settle
 //!
-//! 1. an identical retry resumes from the ledger (the creation id is the key);
-//! 2. the creation is verified ([`kob_x402::intent::verify_intent`]) and **dry-run**: an execution must
+//! [`Facilitator::settle_intent`] runs in four steps:
+//!
+//! 1. An identical retry resumes from the ledger. The creation id is the key.
+//! 2. Verify the creation ([`kob_x402::intent::verify_intent`]) and dry-run it. An execution must
 //!    build and validate against the current book, or nothing is consumed or broadcast
-//!    (`intent_not_executable`, retryable);
-//! 3. the creation's inputs and the intent outpoint are consumed in the ledger, the creation is broadcast;
-//! 4. [`Facilitator::drive_intent`] runs until the execution is final or the settle wait ends: once the
-//!    intent UTXO is accepted it plans an execution against the book of the moment, records it in the
-//!    ledger BEFORE submitting it, and submits it; when an order it named is taken by someone else (a
-//!    `Conflict` on submit, or the order spent while the execution is not accepted) the execution is dead,
-//!    the order is remembered as lost and the next step plans again, without the payer. The periodic
-//!    reconcile keeps driving intents whose `/settle` returned `settlement_pending`.
+//!    (`intent_not_executable`, retryable).
+//! 3. Consume the creation's inputs and the intent outpoint in the ledger, then broadcast the
+//!    creation.
+//! 4. Run [`Facilitator::drive_intent`] until the execution is final or the settle wait ends.
 //!
-//! Settlement is the execution's merchant output at the required finality. The intent ends without a
-//! payment when its deadline (the authorization's expiry, capped by an invoice's) passes with no execution
-//! in flight (`intent_expired`), when it is spent outside this facilitator (the payer's cancel or another
-//! keeper: `intent_spent`), or after `maxAttempts` executions. An expired intent is then expired on chain by
-//! the facilitator ([`Facilitator::drive_expiry`], from the router intent's own deadline on, in the reconcile
-//! loop): the router returns the payer's KAS and tokens, and the intent can no longer be executed by anyone.
-//! The payer can also cancel it at any time.
+//! # Driving
+//!
+//! Once the intent UTXO is accepted, [`Facilitator::drive_intent`] plans an execution against the
+//! book of the moment. It records the execution in the ledger BEFORE submitting it, then submits
+//! it.
+//!
+//! An order the execution named may be taken by someone else. That is a `Conflict` on submit, or
+//! the order spent while the execution is not accepted. The execution is dead then. The order is
+//! remembered as lost and the next step plans again, without the payer.
+//!
+//! The periodic reconcile keeps driving intents whose `/settle` returned `settlement_pending`.
+//!
+//! # Ending
+//!
+//! Settlement is the execution's merchant output at the required finality. The intent ends without
+//! a payment in these cases:
+//!
+//! - Its deadline (the authorization's expiry, capped by an invoice's) passes with no execution
+//!   in flight (`intent_expired`).
+//! - It is spent outside this facilitator by a transaction that does not pay the merchant, such
+//!   as the payer's cancel (`intent_spent`).
+//! - `maxAttempts` executions failed (`intent_not_executable`).
+//!
+//! An intent that is given up but still on chain is then expired by the facilitator
+//! ([`Facilitator::drive_expiry`], from the router intent's own deadline on, in the reconcile
+//! loop). The router returns the payer's KAS and tokens, and nobody can execute the intent any
+//! more. The payer can also cancel it at any time.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -43,8 +61,10 @@ use crate::x402::ledger::{Claim, Entry, ExecRecord, ExecState, ExpiryRecord, Int
 /// The book a facilitator executes intents against, and the keeper's parameters.
 #[derive(Clone)]
 pub struct IntentRuntime {
-    /// A consistent snapshot of the plain resting orders (inside `kobd --executor`: the indexer's book).
-    /// `Err` while the book is not usable (the indexer catching up).
+    /// A consistent snapshot of the plain resting orders.
+    ///
+    /// Inside `kobd --executor` it is the indexer's book. `Err` while the book is not usable (the
+    /// indexer is catching up).
     pub book: Arc<dyn Fn() -> std::result::Result<BookView, String> + Send + Sync>,
     pub keeper: KeeperParams,
     /// Executions tried per intent before it is given up.
@@ -58,8 +78,9 @@ pub struct IntentRuntime {
 pub enum Drive {
     /// An execution reached the required finality (the entry is `accepted`).
     Final(Box<SettlementResponse>),
-    /// Something is in flight (the creation, an execution, confirmations) or the book cannot execute the
-    /// intent right now; drive again later.
+    /// Something is in flight, or the book cannot execute the intent right now. Drive again later.
+    ///
+    /// In flight means the creation, an execution or confirmations.
     Waiting(&'static str),
     /// The intent ended without a payment (the entry is `failed`).
     Dead(String),
@@ -80,40 +101,56 @@ fn op_of(j: &OutpointJson) -> Option<Outpoint> {
     Some(Outpoint::new(parse_hash32(&j.txid)?, j.index))
 }
 
-/// How long the facilitator retries the expiry of an intent on every reconcile, counted from when it gave the intent up
-/// (never before the deadline: the node accepts the expiry once its past median time, which trails the wall clock by
-/// minutes, reached the deadline). A facilitator that was down past the deadline starts its window when it comes back.
+/// How long the facilitator retries the expiry of an intent on every reconcile.
+///
+/// The window starts at the later of the moment the facilitator gave the intent up and the
+/// intent's deadline. The node accepts an expiry only once its past median time has reached the
+/// deadline, and that time trails the wall clock by minutes.
 pub const EXPIRY_WINDOW_MS: u64 = 3_600_000;
 
-/// How long the chain follower may take to report who spent a watched intent UTXO (the node UTXO set can be ahead of it).
+/// How long the chain follower may take to report who spent a watched intent UTXO.
+///
+/// The node's UTXO set can be ahead of the follower.
 const SPENDER_GRACE_MS: u64 = 60_000;
 
-/// A follower this many DAA behind the node tip is still catching up: the spender of an intent the node no longer holds may yet be
-/// reported (audit 2026-10-30 X17: a restart or a lag beyond the fixed grace failed a payment a rival keeper had executed).
+/// A follower this many DAA behind the node tip is still catching up.
+///
+/// The spender of an intent the node no longer holds may yet be reported. A restart or a lag
+/// beyond the fixed grace must not fail a payment that a rival keeper executed.
 const FOLLOWER_LAG_DAA: u64 = 100;
 
-/// The longest the facilitator waits for a lagging follower to report a spender (a follower stuck for longer is not waited for).
+/// The longest the facilitator waits for a lagging follower to report a spender.
+///
+/// A follower stuck for longer is not waited for.
 const SPENDER_LAG_WAIT_MS: u64 = 3_600_000;
 
-/// Past [`EXPIRY_WINDOW_MS`] the expiry is still retried while the intent stands (it holds the payer's funds and stays
-/// executable by anyone), at most once per this interval.
+/// Interval between expiry retries past [`EXPIRY_WINDOW_MS`].
+///
+/// The expiry is still retried while the intent stands, because the intent holds the payer's funds
+/// and stays executable by anyone.
 pub const EXPIRY_RETRY_MS: u64 = 600_000;
 
-/// How long an expiry may wait in the mempool before it is replaced at the high rate (C5 X-8): the normal bucket aims at
-/// inclusion within the minute.
+/// How long an expiry may wait in the mempool before it is replaced at the high rate.
+///
+/// The normal fee bucket aims at inclusion within the minute.
 pub const EXPIRY_BUMP_MS: u64 = 60_000;
 
-/// The indexes of the outputs of a foreign spend of an intent that pay the merchant what the intent promises, in output order.
+/// The indexes of the outputs of a foreign spend of an intent that pay the merchant what it
+/// promises, in output order.
 ///
-/// The script binds the merchant (a token merchant's script is the token program's P2SH over the merchant's state, hence over the token
-/// amount) and the value is at least the promised one (the router lets a keeper overpay). A token merchant is paid only by an output
-/// bound to the token's covenant id: the payer's own cancel can carry a plain copy of that script and carrier, which is no token
-/// (audit 2026-10-30 X8). A token merchant's output may carry less KAS than the facilitator's own carrier, down to the policy's
-/// minimum carrier: the router pins only the token state, and a rival keeper rationally pays the smallest carrier (audit 2026-10-30
-/// X18). A KAS merchant's output carries no covenant and at least the amount.
+/// An output pays the merchant when all of these hold:
 ///
-/// An output pays ONE intent: the caller claims the (spender, index) pair it takes ([`Ledger::claim_execution`]) and moves on to the
-/// next index when another intent holds it (audit 2026-10-30 X14).
+/// - Its script is the merchant's. A token merchant's script is the token program's P2SH over the
+///   merchant's state, hence over the token amount.
+/// - Its covenant id is the token's for a token merchant and none for a KAS merchant. The payer's
+///   own cancel can carry a plain copy of the token script and carrier, which is no token.
+/// - Its value is at least the promised one, because the router lets a keeper overpay. A token
+///   merchant's output may carry less KAS than the facilitator's own carrier, down to the
+///   policy's minimum carrier. The router pins only the token state, and a rival keeper
+///   rationally pays the smallest carrier.
+///
+/// An output pays ONE intent. The caller claims the (spender, index) pair it takes
+/// ([`Ledger::claim_execution`]) and moves on to the next index when another intent holds it.
 pub(crate) fn merchant_outputs_in<'a>(
     facts: &'a IntentFacts,
     merchant_spk: &'a ScriptPublicKey,
@@ -142,7 +179,7 @@ impl Facilitator {
         Ok(self.chain.virtual_daa_score()?.saturating_sub(rt.lock_margin_daa))
     }
 
-    /// The keeper's own rate (the floor of its executions and expiries) and its parameters at another rate.
+    /// The keeper's own rate, the floor of its executions and expiries.
     fn keeper_rate(rt: &IntentRuntime) -> u64 {
         rt.keeper.fee.fee_rate.unwrap_or(kob_protocol::tx::MIN_FEE_RATE)
     }
@@ -153,8 +190,11 @@ impl Facilitator {
         kp
     }
 
-    /// An execution at the high rate of the process (`crate::fee`: the merchant waits for it), held to the total cap; at the
-    /// keeper's own rate when the intent cannot pay the higher fee (its funds bound what an execution may cost).
+    /// An execution at the high rate of the process, held to the total cap.
+    ///
+    /// The merchant waits for the high rate (`crate::fee`). It falls back to the keeper's own rate
+    /// when the intent cannot pay the higher fee, because its funds bound what an execution may
+    /// cost.
     fn priced_execution(
         &self,
         rt: &IntentRuntime,
@@ -177,9 +217,12 @@ impl Facilitator {
         build_execution(f, book, exclude, lock_time, &rt.keeper)
     }
 
-    /// The expiry at the rate of `urgency` (the first one: normal; a replacement: high), held to the total cap and to what the
-    /// router lets an expiry pay (`EXPIRE_MAX_FEE`: the highest rate whose fee fits); at the keeper's own rate when the intent
-    /// cannot pay a higher fee. Returns the transaction and the rate it pays.
+    /// The expiry at the rate of `urgency`, and the rate it pays.
+    ///
+    /// The first expiry goes at the normal rate and a replacement at the high rate. The rate is
+    /// held to the total cap and to what the router lets an expiry pay (`EXPIRE_MAX_FEE`, the
+    /// highest rate whose fee fits). It falls back to the keeper's own rate when the intent cannot
+    /// pay a higher fee.
     fn priced_expiry(
         &self,
         rt: &IntentRuntime,
@@ -206,10 +249,13 @@ impl Facilitator {
         Ok((floor_tx, base))
     }
 
-    /// C5 X-8: an expiry that waits in the mempool for `EXPIRY_BUMP_MS` is replaced (replace-by-fee) at the high rate of the
-    /// process when that pays more than it does: the deadline has passed, and until the expiry is accepted anyone can still
-    /// execute the intent. The replacement keeps every rule of the expiry (the same outputs, a higher fee within
-    /// `EXPIRE_MAX_FEE`); one that the node refuses leaves the waiting expiry as it is.
+    /// Replaces an expiry that waited in the mempool for `EXPIRY_BUMP_MS` (replace-by-fee).
+    ///
+    /// The replacement goes at the high rate of the process and is made only when that pays more
+    /// than the waiting expiry. The deadline has passed, and until the expiry is accepted anyone
+    /// can still execute the intent. The replacement keeps every rule of the expiry (the same
+    /// outputs, a higher fee within `EXPIRE_MAX_FEE`). One that the node refuses leaves the
+    /// waiting expiry as it is.
     fn bump_expiry(
         &self,
         rt: &IntentRuntime,
@@ -298,8 +344,9 @@ impl Facilitator {
                         Metrics::inc(&self.metrics.settle_resumed);
                         return self.drive_and_observe(&e.txid, wait);
                     }
-                    // the creation may never have reached the node (a crash before the broadcast, an unknown
-                    // outcome): resume only when the chain knows it, else the full path below resubmits it
+                    // The creation may never have reached the node (a crash before the broadcast
+                    // or an unknown outcome). Resume only when the chain knows it. Otherwise the
+                    // full path below resubmits it.
                     State::Pending | State::Ambiguous => match self.creation_seen(&e) {
                         Ok(true) => {
                             self.check_known_id(&e, req)?;
@@ -395,9 +442,10 @@ impl Facilitator {
                 )
                 .retryable());
             }
-            // follow who spends the intent output BEFORE the creation can reach the chain: a spend in the first blocks, a creation whose
-            // submit answer is lost, or a restart before the first drive must not go unseen (audit 2026-10-30 X9). A full watch table
-            // refuses the payment while nothing was broadcast.
+            // Follow who spends the intent output BEFORE the creation can reach the chain. A spend
+            // in the first blocks, a creation whose submit answer is lost, or a restart before the
+            // first drive must not go unseen. A full watch table refuses the payment while nothing
+            // was broadcast.
             if !self.chain.watch_spend(&intent_op) {
                 self.fail(&entry.txid, "too many intents in flight to follow their spenders; nothing was broadcast");
                 return Err(unavailable("too many intents are in flight; retry later (nothing was broadcast)"));
@@ -441,8 +489,9 @@ impl Facilitator {
         r
     }
 
-    /// True if the chain knows the creation of an intent entry (its intent output accepted or spent, or it is in the
-    /// mempool).
+    /// Whether the chain knows the creation of an intent entry.
+    ///
+    /// It does when the intent output is accepted or spent, or the creation is in the mempool.
     fn creation_seen(&self, e: &Entry) -> std::result::Result<bool, ChainError> {
         let Some(rec) = e.intent.as_ref() else { return Ok(false) };
         if rec.seen_daa.is_some() || !rec.executions.is_empty() {
@@ -458,7 +507,9 @@ impl Facilitator {
         Ok(matches!(self.chain.output_status(&op, &spk)?, OutputStatus::Accepted { .. } | OutputStatus::Mempool))
     }
 
-    /// Drives an intent until it is final, dead, or `wait` elapsed (`settlement_pending`, retryable).
+    /// Drives an intent until it is final, dead or `wait` elapsed.
+    ///
+    /// On timeout the answer is `settlement_pending` (retryable).
     fn drive_and_observe(&self, txid: &str, wait: Duration) -> Result<SettlementResponse> {
         let deadline = Instant::now() + wait;
         loop {
@@ -512,9 +563,10 @@ impl Facilitator {
         Drive::Dead(reason)
     }
 
-    /// Gives an intent that may be (or later be) on chain up AND schedules its expiry: the reconcile loop expires it from its
-    /// deadline on ([`Self::drive_expiry`]), whatever made the payment fail, so the payer's KAS and tokens come back without
-    /// the payer.
+    /// Gives up an intent that may be, or later may be, on chain AND schedules its expiry.
+    ///
+    /// The reconcile loop expires it from its deadline on ([`Self::drive_expiry`]), whatever made
+    /// the payment fail. The payer's KAS and tokens come back without the payer.
     fn give_up_and_expire(&self, e: &Entry, facts: &IntentFacts, reason: String) -> Result<Drive> {
         let until_ms = self.clock.now_ms().max(facts.state.deadline().max(0) as u64).saturating_add(EXPIRY_WINDOW_MS);
         self.edit_intent(&e.txid, |en| {
@@ -529,8 +581,10 @@ impl Facilitator {
         Ok(dead)
     }
 
-    /// True while the creation of an intent whose UTXO is missing may still appear: in the mempool (never mined yet, or
-    /// re-queued by a reorg that dropped the block that had it).
+    /// True while the creation of an intent whose UTXO is missing may still appear.
+    ///
+    /// It is in the mempool when it was never mined yet, or when a reorg dropped its block and
+    /// re-queued it.
     fn creation_pending(&self, op: &Outpoint, spk: &ScriptPublicKey) -> std::result::Result<bool, ChainError> {
         Ok(self.chain.in_mempool(&op.txid)? || matches!(self.chain.output_status(op, spk)?, OutputStatus::Mempool))
     }
@@ -583,16 +637,18 @@ impl Facilitator {
             en.watched.amount = rec.facts.merchant_value;
         })?;
         self.ledger.set_accepted(&e.txid, accepted_daa, value, self.clock.now_ms())?;
-        // only now: a failed ledger write above leaves the watch in place for the next drive (audit 2026-10-30 X11)
+        // Only now: a failed ledger write above leaves the watch in place for the next drive.
         self.chain.unwatch_spend(&rec.facts.outpoint());
         Ok(Drive::Final(Box::new(resp)))
     }
 
-    /// One step of the expiry of an intent that ended unexecuted (its entry is `failed` with a pending
-    /// [`ExpiryRecord`]): from the intent's deadline on, build and submit the expiry (no signature: the router returns
-    /// the intent's KAS, less the fee, and the locked tokens to the payer). A node accepts it once its past median time
-    /// reached the deadline, so a rejection before that is retried on the next reconcile. Returns `true` while the
-    /// expiry is still pending.
+    /// One step of the expiry of an intent that ended unexecuted. Returns `true` while pending.
+    ///
+    /// The entry is `failed` with a pending [`ExpiryRecord`]. From the intent's deadline on, this
+    /// builds and submits the expiry. It needs no signature: the router returns the intent's KAS,
+    /// less the fee, and the locked tokens to the payer. A node accepts the expiry once its past
+    /// median time has reached the deadline, so a rejection before that is retried on the next
+    /// reconcile.
     pub fn drive_expiry(&self, txid: &str) -> Result<bool> {
         let rt = self.intents.as_ref().ok_or_else(intent_unsupported)?;
         let (_, rec) = self.intent_entry(txid)?;
@@ -621,7 +677,8 @@ impl Facilitator {
         let ours = x.txid.as_deref().and_then(parse_hash32);
         if found.is_none() {
             if let Some(id) = ours {
-                // our expiry is accepted: the tracker says so, or its payer output (output 0) is in the UTXO set
+                // Our expiry is accepted when the tracker says so, or when its payer output
+                // (output 0) is in the UTXO set.
                 let payer_out = (Outpoint::new(id, 0), kob_protocol::script::p2pk_spk(&facts.state.payer()));
                 let accepted = matches!(self.chain.tracked(&id), Tracked::Accepted { .. })
                     || matches!(self.chain.output_status(&payer_out.0, &payer_out.1).map_err(node)?, OutputStatus::Accepted { .. });
@@ -634,8 +691,8 @@ impl Facilitator {
                 }
                 self.chain.untrack(&id);
             }
-            // The creation is not (or no longer) in the UTXO set. Re-queued by a reorg, or never mined yet: it may still
-            // appear, and then it must be expired like any other.
+            // The creation is not in the UTXO set. It may be re-queued by a reorg or not mined
+            // yet. If it still appears, it must be expired like any other.
             if self.creation_pending(&intent_op, &intent_spk).map_err(node)? {
                 return Ok(true);
             }
@@ -654,8 +711,8 @@ impl Facilitator {
                 return Ok(true);
             }
         }
-        // Past the window the expiry is still retried while the intent stands (it holds the payer's funds and stays
-        // executable), throttled.
+        // Past the window the expiry is still retried while the intent stands, throttled. The
+        // intent holds the payer's funds and stays executable.
         if now > x.until_ms && x.last_try_ms.is_some_and(|t| now < t.saturating_add(EXPIRY_RETRY_MS)) {
             return Ok(true);
         }
@@ -682,7 +739,8 @@ impl Facilitator {
                 })?;
                 Ok(true)
             }
-            // the node's past median time has not reached the deadline yet (or the intent is being spent): next round
+            // The node's past median time has not reached the deadline yet, or the intent is being
+            // spent. Try again next round.
             Err(SubmitError::Rejected(_)) | Err(SubmitError::Unavailable(_)) => {
                 self.chain.untrack(&id);
                 Ok(true)
@@ -720,7 +778,8 @@ impl Facilitator {
         let facts: &IntentFacts = &rec.facts;
         let now = self.clock.now_ms();
         let node = |x: ChainError| unavailable(x.to_string());
-        // follow who spends the intent UTXO: another keeper may execute it, which pays the merchant all the same (idempotent)
+        // Follow who spends the intent UTXO. Another keeper may execute it, which pays the
+        // merchant all the same (idempotent).
         self.chain.watch_spend(&facts.outpoint());
 
         // a. every execution of ours: final? (a dead one may have won a race), live ones in flight?
@@ -746,8 +805,9 @@ impl Facilitator {
             if spent.is_empty() && in_pool {
                 return Ok(Drive::Waiting("execution in the mempool"));
             }
-            // re-check: our own acceptance spends the orders too. Read from the UTXO set itself: an accepted execution can still be
-            // listed in the node's mempool for a moment (see `Facilitator::observe`)
+            // Re-check, because our own acceptance spends the orders too. Read from the UTXO set
+            // itself, since an accepted execution can still be listed in the node's mempool for a
+            // moment (see `Facilitator::observe`).
             if self.accepted_now(&w, None).map_err(node)?.is_some() {
                 return Ok(Drive::Waiting("confirmations"));
             }
@@ -780,16 +840,17 @@ impl Facilitator {
         let found = self.chain.utxos(&[(intent_op, intent_spk.clone())]).map_err(node)?.into_iter().next().flatten();
         let Some(intent_utxo) = found else {
             let created = rec.seen_daa.is_some() || matches!(self.chain.tracked(&intent_op.txid), Tracked::Accepted { .. });
-            // Not in the UTXO set but in the mempool: never mined yet, or seen once and re-queued by a reorg that dropped
-            // its block. Either way it may still (again) hold the payer's funds: wait.
+            // Not in the UTXO set but in the mempool: never mined yet, or seen once and re-queued
+            // by a reorg that dropped its block. Either way it may still (again) hold the payer's
+            // funds, so wait.
             if self.creation_pending(&intent_op, &intent_spk).map_err(node)? {
                 return Ok(Drive::Waiting(if created { "creation re-queued (reorg)" } else { "creation in the mempool" }));
             }
             if !created {
-                // dropped from the mempool (or never relayed): the creation is in the payload of the entry? We hold only its
-                // id, so a creation that vanished is resolved by the payer's identical retry (it carries the bytes) or by its
-                // inputs being spent; until the deadline we wait. Past it the expiry stays scheduled: a creation that still
-                // turns up is expired.
+                // Dropped from the mempool, or never relayed. Only the creation's id is held, so a
+                // creation that vanished is resolved by the payer's identical retry (it carries
+                // the bytes) or by its inputs being spent. Until the deadline we wait. Past it the
+                // expiry stays scheduled, so a creation that still turns up is expired.
                 if now >= facts.deadline_ms {
                     return self.give_up_and_expire(
                         &e,
@@ -799,17 +860,20 @@ impl Facilitator {
                 }
                 return Ok(Drive::Waiting("creation not seen yet"));
             }
-            // An execution of ours may have been accepted since step (a) read it (one that left the mempool inside a block
-            // merged only now, after it was marked dead): the intent being gone is then this payment, not someone else's spend.
+            // An execution of ours may have been accepted since step (a) read it: one that left
+            // the mempool inside a block merged only now, after it was marked dead. The intent
+            // being gone is then this payment, not someone else's spend.
             for x in &rec.executions {
                 let Some(w) = Self::exec_out(&rec, x) else { continue };
                 if self.accepted_now(&w, None).map_err(node)?.is_some() {
                     return Ok(Drive::Waiting("confirmations"));
                 }
             }
-            // Spent outside this facilitator. Another keeper's execution pays the merchant exactly as ours would (the intent covenant
-            // sees to it, and any party may execute an intent): the payment is settled by the spending transaction when it pays the merchant
-            // the promised output, whoever broadcast it. The payer's cancel or expiry pays the payer instead (audit 2026-10-30 X3).
+            // Spent outside this facilitator. Another keeper's execution pays the merchant exactly
+            // as ours would, because the intent covenant sees to it and any party may execute an
+            // intent. So the payment is settled by the spending transaction when it pays the
+            // merchant the promised output, whoever broadcast it. The payer's cancel or expiry
+            // pays the payer instead.
             match self.chain.spent_by(&intent_op) {
                 SpentBy::Spent { txid: spender, block_daa_score, outputs } => {
                     let merchant_spk = spk_from_hex(&facts.merchant_spk)
@@ -819,7 +883,8 @@ impl Facilitator {
                     if !candidates.is_empty() && !self.deep_enough(block_daa_score, required).map_err(node)? {
                         return Ok(Drive::Waiting("confirmations"));
                     }
-                    // one output pays one intent: take the first matching output no other intent holds (X14)
+                    // One output pays one intent: take the first matching output that no other
+                    // intent holds.
                     for at in candidates {
                         let exec = ExecRecord {
                             txid: hex(&spender),
@@ -836,8 +901,8 @@ impl Facilitator {
                         }
                     }
                 }
-                // watched and nobody reported a spender yet: the node's UTXO set can be ahead of the chain follower, so give it a minute
-                // before the payment is given up
+                // Watched and nobody reported a spender yet. The node's UTXO set can be ahead of
+                // the chain follower, so give it a minute before the payment is given up.
                 SpentBy::Unspent => {
                     let since = rec.gone_ms.unwrap_or(now);
                     if rec.gone_ms.is_none() {
@@ -847,7 +912,8 @@ impl Facilitator {
                             }
                         })?;
                     }
-                    // the fixed grace, or longer while the follower is still behind the node (bounded)
+                    // The fixed grace, or longer while the follower is still behind the node
+                    // (bounded).
                     let behind = match (self.chain.follower_daa(), self.chain.virtual_daa_score()) {
                         (Some(f), Ok(v)) => f.saturating_add(FOLLOWER_LAG_DAA) < v,
                         _ => false,
@@ -874,9 +940,10 @@ impl Facilitator {
             })?;
         }
         if now >= facts.deadline_ms {
-            // The payment is over. The intent itself stays executable by anyone until it is spent (a covenant cannot
-            // prove an upper time bound), so the facilitator expires it from its deadline on: that returns the payer's
-            // KAS and tokens and ends it (`drive_expiry`, driven by the reconcile loop).
+            // The payment is over. A covenant cannot prove an upper time bound, so the intent stays
+            // executable by anyone until it is spent. The facilitator therefore expires it from its
+            // deadline on (`drive_expiry`, driven by the reconcile loop). That returns the payer's
+            // KAS and tokens and ends the intent.
             return self.give_up_and_expire(
                 &e,
                 facts,
@@ -969,7 +1036,8 @@ impl Facilitator {
                     })
                     .collect();
                 let spent = self.spent_orders(&refs).unwrap_or_default();
-                // an order in the mempool of another transaction is not spent in the UTXO set yet: name all of them lost
+                // An order in another transaction's mempool entry is not spent in the UTXO set yet,
+                // so name all of them lost.
                 let lost: Vec<OutpointJson> = if spent.is_empty() {
                     ex.orders.iter().map(outpoint_json).collect()
                 } else {
