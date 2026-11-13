@@ -1,26 +1,45 @@
-//! Market data derived from the indexed fills: trades, OHLCV candles, 24 h statistics and depth snapshots
-//! (`GET /v1/trades/{token}`, `/v1/candles/{token}`, `/v1/stats/{token}`, `/v1/depth/{token}`; `docs/ops/executor.md` B 5.3).
+//! Market data derived from the indexed fills: trades, OHLCV candles, 24 h statistics and depth.
 //!
-//! **Trades.** The indexer stores one `fill` event per order and fill: its `amount` (token base units) and its `price` (the
-//! order's quote at the fill, sompi per whole token, i.e. per `scale` base units of the order). A trade is every fill event of
-//! ONE transaction on ONE token. Its `amount` (token base units moved from sellers to buyers) is the sum of the ask-side fills'
-//! amounts, and its `quote` the same fills' `quoteOf(amount, price, scale)` (rounded down, sompi). A transaction without
-//! ask-side fills (a wallet taking a resting bid directly, e.g. swap-and-pay) is measured on its bid side. The **resting** side
-//! is the side whose orders are older (smaller `since_daa`: the DAA of the order's placement, or of its latest in-place amend before
-//! the fill, since an amend replaces the terms and restarts the order's age, `docs/spec/matcher.md` 1.1); it sets the trade price (its volume-weighted price) and the other
-//! side is the aggressor (`side`: `buy` when the aggressor bought, i.e. asks were resting). With one side only, that side is
-//! resting and the aggressor is the direct taker.
+//! These are the reads behind `GET /v1/trades/{token}`, `/v1/candles/{token}`,
+//! `/v1/stats/{token}` and `/v1/depth/{token}`, see `docs/ops/executor.md`, Part B, 5.3.
 //!
-//! **Only KAS-book fills make prices** (founder rule): trades, candles, last prices and statistics are per token in KAS and
-//! come only from fills of the KAS-quoted kinds (plain, conditional and if-done). A pair-order fill (`KobPair`, `KobCondPair`,
-//! `KobIfdPair`) is stored with a NULL price and never enters these views; its volume is in `pair_fills`
-//! (`indexer::pairs`). The KAS-book counterparties of a routed pair fill are ordinary KAS fills of their own tokens.
+//! # Trades
 //!
-//! **Price basis.** Prices are sompi per `price_basis` token base units: the token's standard scale (`10^decimals` of its
-//! registry entry, at most `10^9`: sompi per whole token) when the registry knows its decimals, else the scale of the first
-//! order seen. A fill at another scale is converted (`price × basis / scale`). Every view also carries `decimals` (the
-//! registry's, `null` without an entry) so a client can show whole tokens. Integer arithmetic (i128, saturating), rounded
-//! down.
+//! The indexer stores one `fill` event per order and fill. It holds the `amount` in token base
+//! units and the `price` of the order's quote at the fill, in sompi per whole token, that is,
+//! per `scale` base units of the order. A trade is every fill event of ONE transaction on ONE
+//! token.
+//!
+//! - The `amount` of a trade is the token base units moved from sellers to buyers. It is the sum
+//!   of the amounts of the ask-side fills.
+//! - The `quote` of a trade is the sum of `quoteOf(amount, price, scale)` over the same fills,
+//!   rounded down, in sompi.
+//! - A transaction without ask-side fills is measured on its bid side. An example is a wallet that
+//!   takes a resting bid directly, as in swap-and-pay.
+//!
+//! The **resting** side is the side whose orders are older. Age is `since_daa`, the DAA of the
+//! placement of the order, or of its latest in-place amend before the fill. An amend replaces the
+//! terms and restarts the age of the order, see `docs/spec/matcher.md`, 1.1. The resting side sets
+//! the trade price, which is its volume-weighted price. The other side is the aggressor. `side`
+//! is `buy` when the aggressor bought, that is, when asks were resting. With one side only, that
+//! side is resting and the aggressor is the direct taker.
+//!
+//! # Only KAS-book fills make prices
+//!
+//! Trades, candles, last prices and statistics are per token in KAS. They come only from fills
+//! of the KAS-quoted kinds: plain, conditional and if-done. A pair-order fill (`KobPair`,
+//! `KobCondPair`, `KobIfdPair`) is stored with a NULL price and never enters these views. Its
+//! volume is in `pair_fills` (`indexer::pairs`). The KAS-book counterparties of a routed pair fill
+//! are ordinary KAS fills of their own tokens.
+//!
+//! # Price basis
+//!
+//! Prices are sompi per `price_basis` token base units. The basis is the standard scale of the
+//! token, `10^decimals` of its registry entry and at most `10^9`, when the registry knows its
+//! decimals. Otherwise it is the scale of the first order seen. A fill at another scale is
+//! converted as `price × basis / scale`. Every view also carries `decimals`, which is the
+//! decimals of the registry or `null` without an entry, so a client can show whole tokens. All
+//! arithmetic is integer (i128, saturating) and rounds down.
 
 use crate::hex::Hash32;
 use crate::indexer::db::DbResult;
@@ -44,11 +63,12 @@ pub struct FillRow {
     pub price: i64,
     /// Base units per whole token of the filled order.
     pub scale: i64,
-    /// DAA at which the order's terms of this fill were set: its placement, or its latest in-place amend before the fill.
+    /// The DAA at which the order's terms of this fill were set: its placement, or its latest
+    /// in-place amend before the fill.
     pub since_daa: i64,
 }
 
-/// A trade (see the module docs). Amounts in base units / sompi, price per basis.
+/// A trade, see the module docs. Amounts are in base units and sompi, the price is per basis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trade {
     pub id: i64,
@@ -58,7 +78,7 @@ pub struct Trade {
     pub price: i128,
     pub amount: i128,
     pub quote: i128,
-    /// true when the aggressor bought
+    /// Whether the aggressor bought.
     pub buy: bool,
     pub fills: usize,
 }
@@ -68,7 +88,8 @@ fn per_basis(price: i64, scale: i64, basis: i128) -> i128 {
     (price as i128).saturating_mul(basis) / scale.max(1) as i128
 }
 
-/// Per side: (base units, sompi at the fills' quotes, base units x price per basis, oldest terms DAA).
+/// The sums of one side: (base units, sompi at the fills' quotes, base units x price per basis,
+/// oldest terms DAA).
 fn side_sums(rows: &[&FillRow], basis: i128) -> (i128, i128, i128, i64) {
     let mut amount = 0i128;
     let mut quote = 0i128;
@@ -91,12 +112,12 @@ pub fn trade_of(fills: &[FillRow], basis: i128) -> Option<Trade> {
     let bids: Vec<&FillRow> = fills.iter().filter(|f| f.side == 2).collect();
     let (a_amt, a_quote, a_w, a_age) = side_sums(&asks, basis);
     let (b_amt, b_quote, b_w, b_age) = side_sums(&bids, basis);
-    // the volume moved: the ask side's tokens, or the bid side's when no ask filled
+    // The volume moved: the tokens of the ask side, or of the bid side when no ask filled.
     let (amount, quote_moved) = if a_amt > 0 { (a_amt, a_quote) } else { (b_amt, b_quote) };
     if amount <= 0 || basis <= 0 {
         return None;
     }
-    // the resting side sets the price; ties (same terms DAA) go to the asks
+    // The resting side sets the price. Ties (the same terms DAA) go to the asks.
     let asks_rest = if a_amt > 0 && b_amt > 0 { a_age <= b_age } else { a_amt > 0 };
     let (r_amt, r_w) = if asks_rest { (a_amt, a_w) } else { (b_amt, b_w) };
     Some(Trade {
@@ -131,10 +152,12 @@ pub fn trades_of(mut fills: Vec<FillRow>, basis: i128) -> Vec<Trade> {
 /// Candle intervals the API serves: name and length in milliseconds.
 pub const INTERVALS: [(&str, i64); 4] = [("1m", 60_000), ("5m", 300_000), ("1h", 3_600_000), ("1d", 86_400_000)];
 
+/// The length in milliseconds of the candle interval `name`, if the API serves it.
 pub fn interval_ms(name: &str) -> Option<i64> {
     INTERVALS.iter().find(|(n, _)| *n == name).map(|(_, ms)| *ms)
 }
 
+/// An OHLCV candle of one bucket. `o`, `h`, `l` and `c` are prices per basis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candle {
     pub t: i64,
@@ -147,7 +170,9 @@ pub struct Candle {
     pub trades: u64,
 }
 
-/// OHLCV per bucket (`floor(ts / interval) * interval`), ascending; empty buckets are omitted. `trades` must be oldest first.
+/// OHLCV per bucket (`floor(ts / interval) * interval`), ascending. Empty buckets are omitted.
+///
+/// `trades` must be oldest first.
 pub fn candles_of(trades: &[Trade], interval: i64) -> Vec<Candle> {
     let mut out: VecDeque<Candle> = VecDeque::new();
     for t in trades {
@@ -156,8 +181,9 @@ pub fn candles_of(trades: &[Trade], interval: i64) -> Vec<Candle> {
     out.into()
 }
 
-/// Adds one trade (newer than every trade before it) to the candles: into the last candle when it is the trade's bucket, else
-/// as a new candle.
+/// Adds one trade, newer than every trade before it, to the candles.
+///
+/// It goes into the last candle when that is the bucket of the trade, else into a new candle.
 pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
     let b = t.ts.div_euclid(interval) * interval;
     match out.back_mut() {
@@ -182,14 +208,16 @@ pub(crate) fn add_trade(out: &mut VecDeque<Candle>, t: &Trade, interval: i64) {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ SQL
+// SQL.
 
+/// The select of the fill events of a token (`?1`), with the scale and the terms DAA of each order.
 pub(crate) const FILL_SELECT: &str =
     "SELECT e.id, e.txid, e.ts, e.daa, e.side, e.amount, e.price, COALESCE(o.scale, 1), \
      COALESCE((SELECT a.daa FROM order_events a WHERE a.order_id = e.order_id AND a.kind = 'amend' AND a.id < e.id ORDER BY a.id DESC LIMIT 1), o.genesis_daa) \
      FROM order_events e JOIN orders o ON o.id = e.order_id \
      WHERE e.kind = 'fill' AND e.token_id = (SELECT id FROM ids WHERE h = ?1) AND e.amount IS NOT NULL AND e.amount > 0 AND e.price IS NOT NULL AND e.side IN (1, 2)";
 
+/// Reads a [`FillRow`] from a row of [`FILL_SELECT`].
 pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
     Ok(FillRow {
         id: r.get(0)?,
@@ -204,8 +232,10 @@ pub(crate) fn fill_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<FillRow> {
     })
 }
 
-/// The price basis of a token: its standard scale (`10^decimals`, at most `10^9`) when its decimals are known, else the scale
-/// of its first order, else 1.
+/// The price basis of a token.
+///
+/// It is the standard scale of the token (`10^decimals`, at most `10^9`) when its decimals are
+/// known, else the scale of its first order, else 1.
 pub fn price_basis(conn: &Connection, token: &Hash32, decimals: Option<u32>) -> DbResult<i128> {
     if let Some(d) = decimals {
         return Ok(kob_protocol::defaults::default_scale(d) as i128);
@@ -220,7 +250,7 @@ pub fn price_basis(conn: &Connection, token: &Hash32, decimals: Option<u32>) -> 
     Ok(scale.filter(|s| *s > 0).unwrap_or(1) as i128)
 }
 
-/// Fills of `token` with `id < before` (newest first), at most `limit` rows, returned oldest first.
+/// Fills of `token` with `id < before` (newest first), at most `limit` rows, oldest first.
 fn fills_before(conn: &Connection, token: &Hash32, before: Option<i64>, limit: usize) -> DbResult<Vec<FillRow>> {
     let sql = format!("{FILL_SELECT} AND e.id < ?2 ORDER BY e.id DESC LIMIT ?3");
     let mut st = conn.prepare(&sql)?;
@@ -231,14 +261,19 @@ fn fills_before(conn: &Connection, token: &Hash32, before: Option<i64>, limit: u
     Ok(v)
 }
 
-/// Most fill rows the trade-list reads of a time window keep in memory (the 24 h stats, the last trade before a time). The
-/// newest rows win; a query that hits the cap reports it and drops the oldest, possibly partial, trade group. Candles are NOT
-/// read through it ([`window_candles`]): a cap on rows there cut every chart at the newest 20 000 fills, so a token's chart
-/// silently lost its oldest days as fills accumulated (the TN10 soak, 2026-10-14: about 3.5 days left of 8).
+/// The most fill rows that a trade-list read of a time window keeps in memory.
+///
+/// The 24 h statistics and the last trade before a time use it. The newest rows win. A query that
+/// hits the cap reports it and drops the oldest trade group, which may be partial. Candles are NOT
+/// read through the cap, see [`window_candles`]: a cap on rows there would cut every chart at the
+/// newest fills, so a chart would lose its oldest days as fills accumulate.
 pub const MAX_FILL_ROWS: usize = 20_000;
 
-/// The trades of `token` over `[from, to)` in the order the fills stream: every fill of the window in time order `(ts, id)` (served by
-/// the `(kind, token, ts)` index), folded into its transaction's trade. Nothing is held but one transaction's fills.
+/// Streams the trades of `token` over `[from, to)` in the order of the fills.
+///
+/// Every fill of the window is read in time order `(ts, id)`, served by the `(kind, token, ts)`
+/// index, and folded into the trade of its transaction. Nothing is held but the fills of one
+/// transaction.
 pub(crate) fn for_each_trade(
     conn: &Connection,
     token: &Hash32,
@@ -250,7 +285,8 @@ pub(crate) fn for_each_trade(
     let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts, e.id");
     let mut st = conn.prepare(&sql)?;
     let mut rows = st.query(params![token.0.to_vec(), from, to])?;
-    // the fills of one transaction share its block time and are stored together: they arrive as one run
+    // The fills of one transaction share its block time and are stored together, so they arrive
+    // as one run.
     let mut group: Vec<FillRow> = Vec::new();
     while let Some(r) = rows.next()? {
         let fill = fill_row(r)?;
@@ -268,13 +304,17 @@ pub(crate) fn for_each_trade(
     Ok(())
 }
 
-/// The candles of `token` over `[from, to)` read from the fills: every fill of the window is streamed ([`for_each_trade`]) and that
-/// trade folded into its bucket, and only the newest `keep` candles are held. Memory is bounded by `keep`, not by the fills read; the
-/// time spent grows with the fills of the window (the pooled read's 20 s interrupt and the heavy-route rate limit bound a client). No fill
-/// is left out, so the oldest candle of a window that reaches back to the first trade is the first trade's bucket.
+/// The candles of `token` over `[from, to)`, read from the fills.
 ///
-/// This is the reference: the maintained aggregates ([`super::candles`]) answer the same, and every window they cannot (a token not
-/// backfilled yet, a changed price basis, a lean store, an interval the API does not serve, a window inside one bucket) is read here.
+/// Every fill of the window is streamed ([`for_each_trade`]) and its trade is folded into its
+/// bucket. Only the newest `keep` candles are held, so memory is bounded by `keep` and not by the
+/// fills read. The time spent grows with the fills of the window. The 20 s interrupt of the pooled
+/// read and the rate limit of the heavy routes bound a client. No fill is left out, so the oldest
+/// candle of a window that reaches back to the first trade is the bucket of the first trade.
+///
+/// This is the reference. The maintained aggregates ([`super::candles`]) give the same answer.
+/// Every window they cannot answer is read here: a token that is not backfilled yet, a changed
+/// price basis, a lean store, an interval the API does not serve, or a window inside one bucket.
 pub fn scan_candles(
     conn: &Connection,
     token: &Hash32,
@@ -298,8 +338,10 @@ pub fn scan_candles(
     Ok(out.into())
 }
 
-/// The candles of `token` over `[from, to)`: from the maintained aggregates when they hold the token at this basis, else from the
-/// fills ([`scan_candles`]); the same candles either way.
+/// The candles of `token` over `[from, to)`, from the maintained aggregates when they hold the
+/// token at this basis, else from the fills ([`scan_candles`]).
+///
+/// The candles are the same either way.
 fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from: i64, to: i64, keep: usize) -> DbResult<Vec<Candle>> {
     match super::candles::read(conn, token, basis, iv, from, to, keep)? {
         Some(v) => Ok(v),
@@ -307,8 +349,10 @@ fn window_candles(conn: &Connection, token: &Hash32, basis: i128, iv: i64, from:
     }
 }
 
-/// Fills of `token` with `from <= ts < to`: at most `cap` rows, the NEWEST ones, returned oldest first, and whether older rows
-/// in the window were left out. Served by the `(kind, token_cov_id, ts)` index.
+/// Fills of `token` with `from <= ts < to`, and whether older rows in the window were left out.
+///
+/// It returns at most `cap` rows, the NEWEST ones, oldest first. The `(kind, token_cov_id, ts)`
+/// index serves it.
 fn fills_between(conn: &Connection, token: &Hash32, from: i64, to: i64, cap: usize) -> DbResult<(Vec<FillRow>, bool)> {
     let sql = format!("{FILL_SELECT} AND e.ts >= ?2 AND e.ts < ?3 ORDER BY e.ts DESC, e.id DESC LIMIT ?4");
     let mut st = conn.prepare(&sql)?;
@@ -319,8 +363,9 @@ fn fills_between(conn: &Connection, token: &Hash32, from: i64, to: i64, cap: usi
     Ok((v, truncated))
 }
 
-/// Trades of a window: the fills grouped by transaction; when the row cap cut the window, the oldest group (which may be
-/// incomplete) is dropped.
+/// The trades of a window: its fills grouped by transaction.
+///
+/// When the row cap cut the window, the oldest group, which may be incomplete, is dropped.
 fn window_trades(conn: &Connection, token: &Hash32, from: i64, to: i64, basis: i128) -> DbResult<(Vec<Trade>, bool)> {
     let (rows, truncated) = fills_between(conn, token, from, to, MAX_FILL_ROWS)?;
     let first_txid = rows.first().map(|r| r.txid.clone());
@@ -335,23 +380,28 @@ fn window_trades(conn: &Connection, token: &Hash32, from: i64, to: i64, basis: i
     Ok((ts, truncated))
 }
 
-/// Newest trade time of the token (ms), if any.
+/// The newest fill time of the token in ms, if any.
 fn newest_fill_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
     Ok(conn.query_row(
-        // price IS NOT NULL: a pair order's fill (no KAS price, founder rule) is not a KAS trade of its token
+        // `price IS NOT NULL` leaves out the fill of a pair order, which has no KAS price and is
+        // not a KAS trade of its token.
         "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL",
         params![token.0.to_vec()],
         |r| r.get::<_, Option<i64>>(0),
     )?)
 }
 
-/// Newest KAS trade time of the token (ms), if any (pair fills excluded: they carry no KAS price).
+/// The newest KAS trade time of the token in ms, if any.
+///
+/// Pair fills carry no KAS price and are excluded.
 pub fn newest_trade_ts(conn: &Connection, token: &Hash32) -> DbResult<Option<i64>> {
     newest_fill_ts(conn, token)
 }
 
-/// The newest `keep` KAS candles of `token` over `[start, end)` (prices per `basis` base units; `interval` ms buckets), oldest
-/// first. The pair charts are built from these ([`super::pairs::pair_candles`]).
+/// The newest `keep` KAS candles of `token` over `[start, end)`, oldest first.
+///
+/// Prices are per `basis` base units and the buckets are `interval` ms long. The pair charts are
+/// built from these ([`super::pairs::pair_candles`]).
 pub fn candle_series(
     conn: &Connection,
     token: &Hash32,
@@ -364,7 +414,7 @@ pub fn candle_series(
     window_candles(conn, token, basis, interval, start, end, keep)
 }
 
-/// The price (per `basis`) of the last KAS trade of `token` before `ts` (ms), if any.
+/// The price, per `basis`, of the last KAS trade of `token` before `ts` (ms), if any.
 pub fn last_trade_price_before(conn: &Connection, token: &Hash32, basis: i128, ts: i64) -> DbResult<Option<i128>> {
     let last: Option<i64> = conn.query_row(
         "SELECT MAX(ts) FROM order_events WHERE kind = 'fill' AND token_id = (SELECT id FROM ids WHERE h = ?1) AND price IS NOT NULL AND ts < ?2",
@@ -376,13 +426,14 @@ pub fn last_trade_price_before(conn: &Connection, token: &Hash32, basis: i128, t
     Ok(trades.last().map(|t| t.price))
 }
 
-/// Newest chain block time the indexer has recorded an event for (ms).
+/// The newest chain block time, in ms, that the indexer has recorded an event for.
 fn newest_event_ts(conn: &Connection) -> DbResult<Option<i64>> {
     Ok(conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get::<_, Option<i64>>(0))?)
 }
 
-// ------------------------------------------------------------------------------------------------ views
+// API views.
 
+/// One trade as the API serves it.
 #[derive(Debug, Clone, Serialize)]
 pub struct TradeView {
     pub id: i64,
@@ -401,11 +452,13 @@ pub struct TradeView {
     pub settled: bool,
 }
 
+/// The trades of one token, newest first, with the cursor of the next page.
 #[derive(Debug, Clone, Serialize)]
 pub struct TradesView {
     pub token: String,
     pub price_basis: String,
-    /// The token's decimals (registry), to show base units as whole tokens; `null` without an entry.
+    /// The decimals of the token from the registry, to show base units as whole tokens. `null`
+    /// without an entry.
     pub decimals: Option<u32>,
     pub items: Vec<TradeView>,
     pub next_cursor: Option<String>,
@@ -427,7 +480,10 @@ fn trade_view(t: &Trade, ctx: &ReadCtx) -> TradeView {
     }
 }
 
-/// Recent trades, newest first; `before` is a trade id (exclusive). `decimals`: the token's (registry), if known.
+/// Recent trades of `token`, newest first.
+///
+/// `before` is a trade id and is exclusive. `decimals` is that of the token from the registry,
+/// if known.
 pub fn trades(
     conn: &Connection,
     ctx: &ReadCtx,
@@ -437,7 +493,8 @@ pub fn trades(
     limit: usize,
 ) -> DbResult<TradesView> {
     let basis = price_basis(conn, token, decimals)?;
-    // over-fetch: several fills per trade; the oldest group may be cut by the row limit, so it is dropped unless the data ended
+    // Over-fetch, because a trade has several fills. The row limit may cut the oldest group, so it
+    // is dropped unless the data ended.
     let want_rows = (limit + 1) * 12;
     let rows = fills_before(conn, token, before, want_rows)?;
     let exhausted = rows.len() < want_rows;
@@ -463,6 +520,7 @@ pub fn trades(
     })
 }
 
+/// One candle as the API serves it. Prices and volumes are strings.
 #[derive(Debug, Clone, Serialize)]
 pub struct CandleView {
     pub t: i64,
@@ -477,6 +535,7 @@ pub struct CandleView {
     pub trades: u64,
 }
 
+/// The candles of one token at one interval.
 #[derive(Debug, Clone, Serialize)]
 pub struct CandlesView {
     pub token: String,
@@ -486,7 +545,9 @@ pub struct CandlesView {
     pub items: Vec<CandleView>,
 }
 
-/// OHLCV candles. Without `from`, the window is the `limit` intervals ending with the bucket of the newest trade.
+/// OHLCV candles of `token`.
+///
+/// Without `from`, the window is the `limit` intervals ending with the bucket of the newest trade.
 #[allow(clippy::too_many_arguments)]
 pub fn candles(
     conn: &Connection,
@@ -505,9 +566,10 @@ pub fn candles(
         (None, Some(n)) => (n.div_euclid(iv) + 1) * iv,
         (None, None) => 0,
     };
-    // saturating: `to=-9223372036854775808` wrapped (release) or panicked (debug) here (audit 2026-10-30 I3)
+    // Saturating: `to=-9223372036854775808` wrapped in release and panicked in debug here.
     let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
-    // every fill of the window counts (no row cap): the newest `limit` candles of it; an empty or inverted window has none
+    // Every fill of the window counts, with no row cap, and the newest `limit` candles of it are
+    // kept. An empty or inverted window has none.
     let items = if end > start { window_candles(conn, token, basis, iv, start, end, limit)? } else { vec![] };
     Ok(CandlesView {
         token: token.to_hex(),
@@ -530,77 +592,94 @@ pub fn candles(
     })
 }
 
+/// The 24 h statistics and the touch of the book of one token.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatsView {
     pub token: String,
     pub price_basis: String,
     pub decimals: Option<u32>,
-    /// The end of the 24 h window (ms): the newer of the newest chain block time the indexer knows and its wall clock
-    /// ([`ReadCtx::window_end`]), so a quiet market's figures age out.
+    /// The end of the 24 h window in ms: the newer of the newest chain block time the indexer
+    /// knows and its wall clock ([`ReadCtx::window_end`]). The figures of a quiet market age out.
     pub ts: Option<i64>,
     pub last: Option<String>,
     pub last_ts: Option<i64>,
     pub last_side: Option<&'static str>,
-    /// The price 24 h ago, the reference of `change_24h_bps`: the last trade at or before the window's start (`ts` − 24 h); the
-    /// first trade of the window only when the token had no earlier trade. `null` when the window holds no trade.
+    /// The price 24 h ago, the reference of `change_24h_bps`: the last trade at or before the start
+    /// of the window (`ts` − 24 h). It is the first trade of the window only when the token had no
+    /// earlier trade. `null` when the window holds no trade.
     pub open_24h: Option<String>,
     pub high_24h: Option<String>,
     pub low_24h: Option<String>,
-    /// (`last` − `open_24h`) × 10 000 / `open_24h`, truncated toward zero; `null` when the window holds no trade.
+    /// (`last` − `open_24h`) × 10 000 / `open_24h`, truncated toward zero. `null` when the window
+    /// holds no trade.
     pub change_24h_bps: Option<i64>,
     /// Base units.
     pub volume_24h: String,
     /// Sompi.
     pub quote_volume_24h: String,
     pub trades_24h: u64,
-    /// The 24 h window held more fills than one query reads ([`MAX_FILL_ROWS`]): the figures cover the newest ones.
+    /// The 24 h window held more fills than one query reads ([`MAX_FILL_ROWS`]), so the figures
+    /// cover the newest ones.
     pub window_truncated: bool,
     pub best_bid: Option<String>,
     pub best_ask: Option<String>,
     pub mid: Option<String>,
     pub spread_bps: Option<i64>,
-    /// The orders of the book's two sides (`/v1/books`: resting orders a matcher may fill now, the same set as `best_bid` /
-    /// `best_ask` and the depth).
+    /// The orders of the two sides of the book (`/v1/books`): the resting orders a matcher may
+    /// fill now, which is the set of `best_bid`, `best_ask` and the depth.
     pub open_asks: i64,
     pub open_bids: i64,
-    /// Sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below it are worth (a bid at its escrow's buying power: an upper bound),
-    /// i.e. how much can trade without moving the price more than 2 %. With one side only the reference is that side's best price; `null` for an empty book.
+    /// Sompi: what the resting asks up to 2 % above the mid and the resting bids down to 2 % below
+    /// it are worth. A bid counts at the buying power of its escrow, so this is an upper bound. It
+    /// is how much can trade without moving the price more than 2 %. With one side only, the
+    /// reference is the best price of that side. `null` for an empty book.
     pub depth_2pct_quote: Option<String>,
-    /// Sompi: the part of the 2 % band on the bid side (the resting bids down to 2 % below the reference price; same reference and value as `depth_2pct_quote`).
-    /// `"0"` for a missing side or an empty book (a string like every sompi figure; always present).
+    /// Sompi: the part of the 2 % band on the bid side, the resting bids down to 2 % below the
+    /// reference price. The reference and the value are those of `depth_2pct_quote`. `"0"` for a
+    /// missing side or an empty book. It is a string like every sompi figure and is always present.
     pub depth_2pct_bid_sompi: String,
-    /// Sompi: the part of the 2 % band on the ask side (the resting asks up to 2 % above the reference price). `"0"` for a missing side or an empty book.
+    /// Sompi: the part of the 2 % band on the ask side, the resting asks up to 2 % above the
+    /// reference price. `"0"` for a missing side or an empty book.
     pub depth_2pct_ask_sompi: String,
 }
 
 const DAY_MS: i64 = 86_400_000;
 
-/// The touch of a token's book and the depth near it, from ONE scan of its live orders per side (the same scan the `book` read makes).
+/// The touch of the book of a token and the depth near it, from ONE scan of its live orders per
+/// side. It is the scan that the `book` read makes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Touch {
     /// Sompi per `basis` base units.
     bid: Option<i128>,
     ask: Option<i128>,
-    /// Sompi the resting asks up to [`DEPTH_BAND_PERCENT`] % above the reference price and the resting bids down to that much below it are worth.
+    /// Sompi that the resting asks up to [`DEPTH_BAND_PERCENT`] % above the reference price and the
+    /// resting bids down to that much below it are worth.
     depth: Option<i128>,
-    /// The two parts of `depth` (bids, asks); 0 for a missing side or no reference.
+    /// The two parts of `depth` (bids, asks). 0 for a missing side or no reference.
     depth_bid: i128,
     depth_ask: i128,
-    /// The orders of each side's levels (the same book).
+    /// The orders of the levels of each side, from the same book.
     bid_orders: i64,
     ask_orders: i64,
 }
 
-/// The band of `depth_2pct_quote`: percent above (asks) and below (bids) the reference price.
+/// The band of `depth_2pct_quote`: the percent above (asks) and below (bids) the reference price.
 const DEPTH_BAND_PERCENT: i128 = 2;
 
-/// The reference price of the depth band: the mid of the touch; with one side only, that side's best price; none for an empty book (or a price that is not positive).
+/// The reference price of the depth band.
+///
+/// It is the mid of the touch. With one side only, it is the best price of that side. There is none
+/// for an empty book or a price that is not positive.
 fn depth_reference(bid: Option<i128>, ask: Option<i128>) -> Option<i128> {
     bid.zip(ask).map(|(b, a)| a.saturating_add(b) / 2).or(bid).or(ask).filter(|r| *r > 0)
 }
 
-/// The depth band around the reference price from the levels of both sides, best first, as (price per basis, value in sompi): the value of the bids down to
-/// [`DEPTH_BAND_PERCENT`] % below and of the asks up to that much above the reference (both bounds inclusive), as (bid, ask). None for a book with no reference.
+/// The depth band around the reference price, from the levels of both sides, best first, as
+/// (price per basis, value in sompi).
+///
+/// The result is the value of the bids down to [`DEPTH_BAND_PERCENT`] % below the reference and
+/// of the asks up to that much above it, both bounds inclusive, as (bid, ask). It is `None` for a
+/// book with no reference.
 fn depth_bands(bids: &[(i128, i128)], asks: &[(i128, i128)]) -> Option<(i128, i128)> {
     let r = depth_reference(bids.first().map(|l| l.0), asks.first().map(|l| l.0))?;
     let up = r.saturating_mul(100 + DEPTH_BAND_PERCENT);
@@ -614,7 +693,8 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     let asks = reads::book_side_sorted(conn, ctx, token, 1)?;
     let bids = reads::book_side_sorted(conn, ctx, token, 2)?;
     let price = |l: &reads::RawBookLevel| per_basis(l.0 .0, l.0 .1, basis);
-    // levels are in book order (exact price per base unit, best first), so the first one is the best and the band is a prefix
+    // Levels are in book order (exact price per base unit, best first), so the first one is the
+    // best and the band is a prefix.
     let ask = asks.first().map(price);
     let bid = bids.first().map(price);
     let value = |l: &reads::RawBookLevel| (price(l), (l.1 .0).saturating_mul(l.0 .0 as i128) / (l.0 .1.max(1) as i128));
@@ -626,6 +706,7 @@ fn touch(conn: &Connection, ctx: &ReadCtx, token: &Hash32, basis: i128) -> DbRes
     Ok(Touch { bid, ask, depth, depth_bid, depth_ask, bid_orders: orders(&bids), ask_orders: orders(&asks) })
 }
 
+/// The 24 h statistics and the touch of the book of `token`.
 pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>) -> DbResult<StatsView> {
     let basis = price_basis(conn, token, decimals)?;
     let now = ctx.window_end(newest_event_ts(conn)?);
@@ -642,7 +723,8 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
         Some(n) => window_trades(conn, token, n - DAY_MS, n + 1, basis)?,
         None => (vec![], false),
     };
-    // the price 24 h ago: the last trade at or before the window's start, else (no earlier trade) the window's first
+    // The price 24 h ago is the last trade at or before the start of the window, else, with no
+    // earlier trade, the first trade of the window.
     let open = match (now, window.first()) {
         (Some(n), Some(first)) => Some(last_trade_price_before(conn, token, basis, n - DAY_MS + 1)?.unwrap_or(first.price)),
         _ => None,
@@ -688,6 +770,7 @@ pub fn stats(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<
     })
 }
 
+/// One level of the depth, with the cumulative amount and quote up to it.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepthLevel {
     /// Sompi per `price_basis` base units.
@@ -696,11 +779,12 @@ pub struct DepthLevel {
     pub amount: String,
     pub orders: i64,
     pub cum_amount: String,
-    /// Sompi: the cumulative amounts at their level prices (rounded down per level).
+    /// Sompi: the cumulative amounts at their level prices, rounded down per level.
     pub cum_quote: String,
     pub estimated: bool,
 }
 
+/// The depth snapshot of one token: the levels of both sides, best first.
 #[derive(Debug, Clone, Serialize)]
 pub struct DepthView {
     pub token: String,
@@ -712,10 +796,13 @@ pub struct DepthView {
     pub asks: Vec<DepthLevel>,
 }
 
-/// One aggregated book level in per-basis terms, before merging: (price, amount, orders, estimated).
+/// One aggregated book level in per-basis terms, before merging: (price, amount, orders,
+/// estimated).
 pub type RawLevel = (i128, i128, i64, bool);
 
-/// Merges levels of equal per-basis price (input best first) and adds cumulative sums; at most `levels` rows.
+/// Merges levels of equal per-basis price, given best first, and adds cumulative sums.
+///
+/// It returns at most `levels` rows.
 pub fn depth_side(raw: &[RawLevel], basis: i128, levels: usize) -> Vec<DepthLevel> {
     let mut merged: Vec<RawLevel> = Vec::new();
     for &(p, a, n, e) in raw {
@@ -747,9 +834,10 @@ pub fn depth_side(raw: &[RawLevel], basis: i128, levels: usize) -> Vec<DepthLeve
         .collect()
 }
 
+/// The depth snapshot of `token`, with at most `levels` merged levels per side.
 pub fn depth(conn: &Connection, ctx: &ReadCtx, token: &Hash32, decimals: Option<u32>, levels: usize) -> DbResult<DepthView> {
     let basis = price_basis(conn, token, decimals)?;
-    // fetch generously: several (price, scale) rows can merge into one per-basis level
+    // Fetch generously, because several (price, scale) rows can merge into one per-basis level.
     let b = reads::book(conn, ctx, token, levels.saturating_mul(4).max(1), true)?;
     let raw = |s: &BookSide, ask: bool| -> Vec<RawLevel> {
         let mut v: Vec<RawLevel> = match s {
@@ -786,48 +874,56 @@ mod tests {
         assert_eq!(depth_reference(Some(100), None), Some(100));
         assert_eq!(depth_reference(None, Some(110)), Some(110));
         assert_eq!(depth_reference(None, None), None);
-        // a price that is not positive is no reference
+        // A price that is not positive is no reference.
         assert_eq!(depth_reference(Some(0), None), None);
     }
 
     #[test]
     fn depth_bands_split_the_two_percent_band_by_side() {
-        // both sides: reference = mid of 1000 and 1020 = 1010, band 989.8 ..= 1030.2; the asks at 1020 and 1030 are in, 1031 is out; the bids at 1000 and 990 in, 989 out
+        // Both sides: the reference is the mid of 1000 and 1020, which is 1010, and the band is
+        // 989.8 ..= 1030.2. The asks at 1020 and 1030 are in and 1031 is out. The bids at 1000 and
+        // 990 are in and 989 is out.
         let bids = [(1000, 5), (990, 7), (989, 100)];
         let asks = [(1020, 3), (1030, 11), (1031, 100)];
         assert_eq!(depth_bands(&bids, &asks), Some((12, 14)));
-        // one side only: the reference is that side's best price (bids: 1000, band down to 980; asks: 1020, band up to 1040.4), the other side is 0
+        // One side only: the reference is the best price of that side. For bids it is 1000 with the
+        // band down to 980. For asks it is 1020 with the band up to 1040.4. The other side is 0.
         assert_eq!(depth_bands(&bids, &[]), Some((112, 0)));
         assert_eq!(depth_bands(&[], &asks), Some((0, 114)));
-        // an empty book has no reference
+        // An empty book has no reference.
         assert_eq!(depth_bands(&[], &[]), None);
-        // a side with no level in the band is 0 (a far bid under a near ask: reference 600, band 588 ..= 612)
+        // A side with no level in the band is 0: a far bid under a near ask has the reference 600
+        // and the band 588 ..= 612.
         assert_eq!(depth_bands(&[(200, 9)], &[(1000, 4)]), Some((0, 0)));
     }
 
     #[test]
     fn depth_band_bounds_are_inclusive_at_exactly_two_percent() {
-        // one side only (reference 10 000): an ask at exactly +2 % (10 200) counts, one sompi more does not; a bid at exactly -2 % (9 800) counts, one less does not
+        // One side only, with the reference 10 000: an ask at exactly +2 % (10 200) counts and one
+        // sompi more does not. A bid at exactly -2 % (9 800) counts and one less does not.
         assert_eq!(depth_bands(&[], &[(10_000, 1), (10_200, 2), (10_201, 4)]), Some((0, 3)));
         assert_eq!(depth_bands(&[(10_000, 1), (9_800, 2), (9_799, 4)], &[]), Some((3, 0)));
     }
 
-    /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale 100); the basis is 100.
+    /// A fill of `amount` base units at `price` sompi per whole token of 100 base units (scale
+    /// 100). The basis is 100.
     fn f(id: i64, tx: u8, ts: i64, side: i64, amount: i64, price: i64, gdaa: i64) -> FillRow {
         FillRow { id, txid: vec![tx; 32], ts, daa: ts / 100, side, amount, price, scale: 100, since_daa: gdaa }
     }
 
     #[test]
     fn resting_side_sets_the_price_and_the_aggressor_side() {
-        // ask (older) at 250 per whole token, bid (newer) at 260: the ask rested, a buyer crossed it
+        // The ask is older, at 250 per whole token, and the bid is newer, at 260. The ask rested
+        // and a buyer crossed it.
         let t = trade_of(&[f(1, 1, 1000, 1, 200, 250, 10), f(2, 1, 1000, 2, 200, 260, 20)], 100).unwrap();
         assert_eq!((t.price, t.amount, t.quote, t.buy, t.fills), (250, 200, 500, true, 2));
-        // the bid rested (older): the seller aggressed, the price is the bid's
+        // The bid rested, being older. The seller aggressed, and the price is the price of the bid.
         let t = trade_of(&[f(3, 2, 1000, 1, 100, 250, 30), f(4, 2, 1000, 2, 100, 260, 20)], 100).unwrap();
         assert_eq!((t.price, t.buy), (260, false));
     }
 
-    /// A fill of an order with a long history of fills finds the order's latest amend through the amend index, not by walking its events.
+    /// A fill of an order with a long history of fills finds the latest amend of the order through
+    /// the amend index, not by walking its events.
     #[test]
     fn the_age_of_a_fill_is_read_through_the_amend_index() {
         let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
@@ -838,7 +934,8 @@ mod tests {
 
     #[test]
     fn one_sided_trade_is_the_direct_takers() {
-        // a wallet sold into a resting bid (no ask fill): the bid side measures the volume and is resting
+        // A wallet sold into a resting bid, so there is no ask fill. The bid side measures the
+        // volume and is resting.
         let t = trade_of(&[f(5, 3, 1000, 2, 300, 240, 5)], 100).unwrap();
         assert_eq!((t.amount, t.quote, t.price, t.buy), (300, 720, 240, false));
         assert!(trade_of(&[], 100).is_none());
@@ -846,23 +943,26 @@ mod tests {
 
     #[test]
     fn vwap_of_several_resting_fills() {
-        // two asks of the same tx at 250 x 100 and 270 x 300 base units, one newer bid: VWAP 265 per whole token
+        // Two asks of the same transaction at 250 x 100 and 270 x 300 base units, and one newer
+        // bid: the VWAP is 265 per whole token.
         let t = trade_of(&[f(1, 1, 5, 1, 100, 250, 1), f(2, 1, 5, 1, 300, 270, 2), f(3, 1, 5, 2, 400, 300, 9)], 100).unwrap();
         assert_eq!((t.price, t.amount, t.quote), (265, 400, 1060));
     }
 
-    /// Fills of another scale are converted to the basis; quotes round down per fill (the maker-favour rounding of the
-    /// covenants is the fill's own; a display sum never rounds up).
+    /// Fills of another scale are converted to the basis. Quotes round down per fill. The
+    /// maker-favour rounding of the covenants is that of the fill itself, and a display sum never
+    /// rounds up.
     #[test]
     fn fills_of_another_scale_and_amounts_off_the_whole_token() {
-        // 50 base units at 250 per 100 (scale 100) and 5 base units at 2 500 per 1 000 (scale 1 000: the same price per base unit)
+        // 50 base units at 250 per 100 (scale 100), and 5 base units at 2 500 per 1 000 (scale
+        // 1 000), which is the same price per base unit.
         let other = FillRow { scale: 1_000, ..f(2, 1, 5, 1, 5, 2_500, 1) };
         let t = trade_of(&[f(1, 1, 5, 1, 50, 250, 1), other], 100).unwrap();
         assert_eq!((t.price, t.amount, t.quote), (250, 55, 125 + 12));
-        // a basis of 1 000: the same trade per 1 000 base units
+        // A basis of 1 000 gives the same trade per 1 000 base units.
         let t = trade_of(&[f(1, 1, 5, 1, 50, 250, 1)], 1_000).unwrap();
         assert_eq!((t.price, t.quote), (2_500, 125));
-        // huge numbers saturate instead of overflowing
+        // Huge numbers saturate instead of overflowing.
         let big = FillRow { amount: i64::MAX, price: i64::MAX, scale: 1, ..f(1, 1, 5, 1, 0, 0, 1) };
         let t = trade_of(&[big.clone(), FillRow { id: 2, ..big }], 1_000_000_000).unwrap();
         assert!(t.price > 0 && t.quote > 0 && t.amount == 2 * i64::MAX as i128);
