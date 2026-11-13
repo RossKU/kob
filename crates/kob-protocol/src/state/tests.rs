@@ -234,6 +234,139 @@ fn bid_budget_rules() {
     assert_eq!(e, 1_011 + 3 + 4 * 100 + 7);
 }
 
+/// The buying power as it was computed before it became O(1): the floor of `budget * scale / rate`,
+/// then a scan down one unit at a time to the first n the covenant's arithmetic accepts. It scans
+/// about `10^18` steps for a negative tip, so the tests below run it only on sane states.
+fn scan_buying_power(b: &BidState, value: i64) -> i64 {
+    let Some(rate) = b.budget_rate().filter(|r| *r > 0) else { return 0 };
+    let budget = value as i128 - b.delivery_carrier as i128 - b.reserve as i128;
+    if budget <= 0 || b.scale <= 0 {
+        return 0;
+    }
+    let mut n = (budget * b.scale as i128 / rate as i128).min(i64::MAX as i128) as i64;
+    while n > 0 && b.used(n).is_none_or(|u| u as i128 > budget) {
+        n -= 1;
+    }
+    n
+}
+
+/// `n` is the largest amount whose budget the covenant accepts and the escrow funds: `used(n)`
+/// evaluates and is at most the budget, and `used(n + 1)` does not or is more.
+fn assert_largest_funded(b: &BidState, value: i64, n: i64) {
+    let budget = value as i128 - b.delivery_carrier as i128 - b.reserve as i128;
+    assert!(b.used(n).is_some_and(|u| u as i128 <= budget), "{b:?} {value} {n}");
+    if n < i64::MAX {
+        assert!(b.used(n + 1).is_none_or(|u| u as i128 > budget), "{b:?} {value} {n}");
+    }
+}
+
+/// A bid the covenant can never fill has no buying power, and the answer comes at once: a negative
+/// tip (for which `used` fails at every n while the budget rate stays positive), a scale above
+/// `10^9` (where `quote_of` overflows) or not a power of ten, and i64-extreme numbers. Each of the
+/// first two used to scan down from about `10^18`, which hung the indexer and the web book.
+#[test]
+fn buying_power_of_a_hostile_bid_is_zero_at_once() {
+    let base = BidState { slope: 0, max_fill: 0, delivery_carrier: 0, reserve: 0, ..bid() };
+    let kas = 1_000_000_000i64;
+    let neg_tip = BidState { price: 2, tip: -1, scale: 1_000_000_000, ..base.clone() };
+    assert_eq!(neg_tip.budget_rate(), Some(1));
+    assert_eq!(neg_tip.used(1), None);
+    assert_eq!(neg_tip.buying_power(10 * kas), 0);
+    assert_eq!(neg_tip.buying_power(i64::MAX), 0);
+    for scale in [1_000_000_000_000i64, 10_000_000_000, 3_100_000_000, i64::MAX, 7, 20, 0, -1, i64::MIN] {
+        let b = BidState { price: 2, tip: 0, scale, ..base.clone() };
+        assert_eq!(b.buying_power(10 * kas), 0, "scale {scale}");
+        assert_eq!(b.buying_power(i64::MAX), 0, "scale {scale}");
+    }
+    // every combination of extreme numbers: total, prompt, never negative, and either 0 or the
+    // largest funded amount
+    let ext = [i64::MIN, i64::MIN + 1, -2, -1, 0, 1, 2, i64::MAX - 1, i64::MAX];
+    let scales = [i64::MIN, -1, 0, 1, 10, 1_000_000_000, 10_000_000_000, i64::MAX];
+    for &price in &ext {
+        for &tip in &ext {
+            for &price_end in &ext {
+                for &slope in &[0, 1] {
+                    for &scale in &scales {
+                        for &carrier in &[i64::MIN, -1, 0, i64::MAX] {
+                            for &reserve in &[i64::MIN, -1, 0, i64::MAX] {
+                                let b = BidState {
+                                    price,
+                                    tip,
+                                    price_end,
+                                    slope,
+                                    scale,
+                                    delivery_carrier: carrier,
+                                    reserve,
+                                    ..base.clone()
+                                };
+                                for &value in &[i64::MIN, -1, 0, 1, kas, i64::MAX] {
+                                    let n = b.buying_power(value);
+                                    assert!(n >= 0, "{b:?} {value}");
+                                    if n > 0 {
+                                        assert!(tip >= 0 && check_scale(scale).is_ok(), "{b:?} {value}");
+                                        assert_largest_funded(&b, value, n);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // a negative reserve lifts the budget past i64::MAX: the covenant's sum then caps it, and the
+    // power is the largest n whose budget fits, computed directly (the scan took 10^9 steps here)
+    let b = BidState { price: 1, tip: 0, scale: 1_000_000_000, reserve: -kas, ..base.clone() };
+    let n = b.buying_power(i64::MAX);
+    assert_eq!(n as i128, (i64::MAX as i128 * 1_000_000_000).min(i64::MAX as i128));
+    assert_largest_funded(&b, i64::MAX, n);
+    let b = BidState { price: 3_000_000_000, tip: 0, scale: 1_000, reserve: -kas, ..base };
+    let n = b.buying_power(i64::MAX);
+    assert_eq!(n as i128, i64::MAX as i128 * 1_000 / 3_000_000_000);
+    assert_largest_funded(&b, i64::MAX, n);
+}
+
+/// On sane bids the O(1) buying power equals the scan it replaced, over random states of every
+/// magnitude, and equals a brute-force count up from 0 on small ones.
+#[test]
+fn buying_power_matches_the_scan_and_a_brute_force_count() {
+    let base = BidState { max_fill: 0, ..bid() };
+    let cap = 4_000_000_000_000_000i64 / 1_000;
+    let mut g = Rng(0x5eed_b1d5_0fc0_ffee);
+    for _ in 0..100_000 {
+        let scale = 10i64.pow(g.below(10) as u32);
+        let price = 1 + g.wide(cap - 1);
+        let slope = [0, 0, 1, 1 + g.wide(1_000_000)][g.below(4) as usize];
+        let price_end = [0, price, price - 1, price + 1, 1 + g.wide(cap - 1)][g.below(5) as usize];
+        let tip = [0, 1, g.wide(price.min(1_000_000_000))][g.below(3) as usize];
+        let delivery_carrier = [0, 1, 100_000_000, g.wide(1 << 40)][g.below(4) as usize];
+        let reserve = [0, g.wide(10_000_000_000)][g.below(2) as usize];
+        let b = BidState { scale, price, slope, price_end, tip, delivery_carrier, reserve, ..base.clone() };
+        let value = g.wide(i64::MAX);
+        let n = b.buying_power(value);
+        assert_eq!(n, scan_buying_power(&b, value), "{b:?} {value}");
+        if n > 0 {
+            assert_largest_funded(&b, value, n);
+        }
+    }
+    for _ in 0..1_000 {
+        let scale = 10i64.pow(g.below(4) as u32);
+        let price = (scale / 4).max(1) + g.below(5_000) as i64;
+        let tip = g.below(100) as i64;
+        let delivery_carrier = g.below(50) as i64;
+        let reserve = g.below(50) as i64;
+        let b = BidState { scale, price, slope: 0, tip, delivery_carrier, reserve, ..base.clone() };
+        let value = g.below(2_000) as i64;
+        let budget = value - delivery_carrier - reserve;
+        let mut count = 0;
+        while b.used(count + 1).is_some_and(|u| u <= budget) {
+            count += 1;
+        }
+        assert_eq!(b.buying_power(value), count, "{b:?} {value}");
+        assert_eq!(scan_buying_power(&b, value), count, "{b:?} {value}");
+    }
+}
+
 // ---------------------------------------------------------------- pair orders
 
 fn compiled_pair() -> PairState {

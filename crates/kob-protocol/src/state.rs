@@ -1360,20 +1360,35 @@ impl BidState {
     ///
     /// It is the largest n with `used(n) <= value − deliveryCarrier − reserve`, and 0 when not even
     /// one base unit is funded.
+    ///
+    /// It is O(1) and total over any state, including a hostile one decoded from the chain. It is 0
+    /// when `tip < 0`, when the budget rate `pMax + tip` overflows or is not positive, when `scale`
+    /// fails [`check_scale`], or when the budget is not positive. Such a bid cannot be filled.
+    ///
+    /// Otherwise `used(n)` is the exact `ceil(n * rate / scale)` wherever that fits in an `i64`: a
+    /// scale of at most `10^9` keeps every other intermediate of [`quote_of`] below `2^63`. The
+    /// covenant can therefore spend at most `min(budget, i64::MAX)`, and the result is the largest n
+    /// with `n * rate <= min(budget, i64::MAX) * scale`, i.e. `floor(min(budget, i64::MAX) * scale
+    /// / rate)`, capped at `i64::MAX`. Clamping the budget is the direct form of the largest n at
+    /// which the covenant's arithmetic does not overflow; it only matters for a negative carrier or
+    /// reserve. The result is then checked against [`BidState::used`], and 0 is returned should it
+    /// ever disagree.
     pub fn buying_power(&self, value: i64) -> i64 {
-        let Some(rate) = self.budget_rate().filter(|r| *r > 0) else { return 0 };
-        let budget = value as i128 - self.delivery_carrier as i128 - self.reserve as i128;
-        if budget <= 0 || self.scale <= 0 {
+        if self.tip < 0 || check_scale(self.scale).is_err() {
             return 0;
         }
+        let Some(rate) = self.budget_rate().filter(|r| *r > 0) else { return 0 };
+        let budget = value as i128 - self.delivery_carrier as i128 - self.reserve as i128;
+        if budget <= 0 {
+            return 0;
+        }
+        let budget = budget.min(i64::MAX as i128);
         // ceil(n * rate / scale) <= budget  <=>  n * rate <= budget * scale
         let n = (budget * self.scale as i128 / rate as i128).min(i64::MAX as i128) as i64;
-        // The covenant's own arithmetic must hold at that amount. It does whenever the result fits.
-        let mut n = n;
-        while n > 0 && self.used(n).is_none_or(|u| u as i128 > budget) {
-            n -= 1;
+        match self.used(n) {
+            Some(u) if u as i128 <= budget => n,
+            _ => 0,
         }
-        n
     }
     /// The covenant's rules for a fill of n of an escrow of `value`.
     ///
