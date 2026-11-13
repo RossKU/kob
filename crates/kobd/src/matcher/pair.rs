@@ -1,33 +1,59 @@
-//! Pair orders as participants of the global batch (`docs/spec/matcher.md` §3.5, `docs/spec/order-types.md`, pair orders).
+//! Pair orders as participants of the global batch (`docs/spec/matcher.md` §3.5).
 //!
-//! A pair order of tokens A/B (`KobPair`, `KobCondPair`, `KobIfdPair`; protocol v3, founder option 2) enforces only its own
-//! guarantees: an ask (it sells its base A, its custody S = A) receives at least `ceil(n × p / scale(A))` of B for n base
-//! units of A, a bid (it holds a B escrow, S = B) pays exactly `floor(n × p / scale(A))` of B and receives exactly n of A.
-//! Fillers may route through the KAS books, net any number of opposite pair orders, or fill from inventory; the reference
-//! planner holds no tokens, so it routes and nets:
+//! A pair order of tokens A/B (`KobPair`, `KobCondPair`, `KobIfdPair`) enforces only its own
+//! guarantees, as `docs/spec/order-types.md` describes under pair orders:
+//! - An ask sells its base A, so its custody S is A. It receives at least `ceil(n × p / scale(A))`
+//!   of B for n base units of A.
+//! - A bid holds a B escrow, so S is B. It pays exactly `floor(n × p / scale(A))` of B and
+//!   receives exactly n of A.
 //!
-//! * **Netting** ([`PairInfo`] participants of one token pair, `super::batch`): the pair orders selling token X for token Y
-//!   against those selling Y for X, best limits first, any number per side. Each participant's fill is computed exactly at
-//!   its own covenant rounding (an ask's receipt is a minimum, a bid's payment and receipt are exact); the tokens the
-//!   netted orders release beyond what they receive (the surplus) go to the pair asks buying that token (their deliveries
-//!   are minimums: the builder hands the surplus to the first one) or, when that is profitable, are sold to the plain KAS
-//!   bids of that token ([`PairRole::Surplus`]). Netting runs first in every allocation; what is left of a netted order is
-//!   routed.
-//! * **Route**: a pair order enters the KAS books as two legs that share its one covenant input: its **Sell** leg sells the
-//!   token S it releases into the plain KAS bids of S (an ask in every book of S's market), its **Buy** leg buys the token T
-//!   it receives from the plain KAS asks of T (a bid in every book of T's market). Each leg is ranked at its implied quote
-//!   at `t`: the Sell leg at what the T one whole A of the order needs costs at the best plain ask of T, less the order's
-//!   KAS tip; the Buy leg at what the S of one whole A fetches at the best plain bid of S. The batch reconciles the legs to
-//!   one fill n (the S released exactly, the T bought covering the order's receipt: exactly for an exact receipt, at least
-//!   for an ask whose receipt is a minimum, the excess going to its delivery).
+//! Fillers may route through the KAS books, net any number of opposite pair orders, or fill from
+//! inventory. The reference planner holds no tokens, so it routes and nets.
 //!
-//! Prices are recorded only from KAS-book fills (the indexer's rule): a netting fill moves no KAS. The operator keeps the
-//! KAS spread of the route legs' counterparties, the netting surplus it sells, and the pair orders' KAS tips, less the fee.
+//! # Netting
 //!
-//! Pair conditionals (`KobCondPair` stop legs) and pair stop entries (`KobIfdPair`) arm from trigger evidence of the same
-//! transaction in one of two modes ([`PairNeed`]): two KAS-book fills (a plain resting order of A and one of B, the implied
-//! rate) or the fill of a resting `KobPair` of the same pair ([`PairTouch`]); a booked exit's take-profit re-arms its
-//! entry in the same transaction ([`MergeOf`]).
+//! `super::batch` nets the [`PairInfo`] participants of one token pair. The pair orders that sell
+//! token X for token Y meet those that sell Y for X, best limits first, any number per side. Each
+//! participant's fill is computed exactly at its own covenant rounding. An ask's receipt is a
+//! minimum, and a bid's payment and receipt are exact.
+//!
+//! The netted orders may release more of a token than they receive. That surplus goes to the pair
+//! asks that buy the token, because their deliveries are minimums, and the builder hands it to the
+//! first one. When it is profitable, the surplus is sold to the plain KAS bids of that token
+//! instead ([`PairRole::Surplus`]). Netting runs first in every allocation, and what is left of a
+//! netted order is routed.
+//!
+//! # Route
+//!
+//! A pair order enters the KAS books as two legs that share its one covenant input:
+//! - Its Sell leg sells the token S it releases into the plain KAS bids of S. It is an ask in
+//!   every book of S's market.
+//! - Its Buy leg buys the token T it receives from the plain KAS asks of T. It is a bid in every
+//!   book of T's market.
+//!
+//! Each leg is ranked at its implied quote at `t`. The Sell leg is ranked at what the T for one
+//! whole A of the order costs at the best plain ask of T, less the order's KAS tip. The Buy leg is
+//! ranked at what the S of one whole A fetches at the best plain bid of S.
+//!
+//! The batch reconciles the legs to one fill n. The S is released exactly, and the T bought covers
+//! the order's receipt. It covers an exact receipt exactly. For an ask, whose receipt is a minimum,
+//! it covers at least the receipt, and the excess goes to the ask's delivery.
+//!
+//! # Prices and income
+//!
+//! Prices are recorded only from KAS-book fills, the indexer's rule, because a netting fill moves
+//! no KAS. The operator keeps the KAS spread of the route legs' counterparties, the netting surplus
+//! it sells and the pair orders' KAS tips, less the fee.
+//!
+//! # Triggers
+//!
+//! Pair conditionals (`KobCondPair` stop legs) and pair stop entries (`KobIfdPair`) arm from
+//! trigger evidence of the same transaction ([`PairNeed`]). The evidence has one of two modes:
+//! - Mode 0 is two KAS-book fills, of a plain resting order of A and one of B, read as their
+//!   implied rate.
+//! - Mode 1 is the fill of a resting `KobPair` of the same pair ([`PairTouch`]).
+//!
+//! A booked exit's take-profit re-arms its entry in the same transaction ([`MergeOf`]).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -40,126 +66,177 @@ use super::book::{BookKey, CovId, ListedOrder, Market};
 use super::candidate::*;
 use super::family::token_limits;
 
-/// The least KAS an output of a fill can hold (a continuation, an exit order UTXO, a delivery's carrier): each carries a
-/// covenant id, so it takes two KIP-9 storage units, and below 0.08 KAS its storage mass alone exceeds the block limit and the
-/// transaction could never be mined ([`kob_protocol::tx::COVENANT_OUTPUT_MIN`], the bound the builders and `seal` apply). A
-/// fill that would leave less is not planned: an order whose partial fills all would is matched only in full.
+/// Least KAS an output of a fill can hold, such as a continuation, an exit UTXO or a delivery's
+/// carrier.
+///
+/// Each such output carries a covenant id. Below 0.08 KAS its storage mass alone exceeds the block
+/// limit, and the transaction could never be mined. This is
+/// [`kob_protocol::tx::COVENANT_OUTPUT_MIN`], the bound the builders and `seal` apply. A fill that
+/// would leave less is not planned. An order whose partial fills all would is matched only in full.
 const DUST: i64 = COV_OUTPUT_MIN;
 
-/// How a pair order's fill of n base units of its base token A maps to the token amounts it releases and receives.
+/// How a pair order's fill of n base units of its base token A maps to the token amounts it
+/// releases and receives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PairShape {
-    /// Sells n of A (S = A), receives at least `ceil(n × p / scale(A))` of B (T = B): `KobPair` / `KobCondPair` ASK. Its
-    /// delivery takes the batch's surplus of B.
+    /// Sells n of A (S = A) and receives at least `ceil(n × p / scale(A))` of B (T = B).
+    ///
+    /// This is a `KobPair` or `KobCondPair` ask. Its delivery takes the batch's surplus of B.
     AskMin,
-    /// Sells n of A, receives exactly `ceil(n × p / scale(A))` of B: a sell-first `KobIfdPair` (its exit's custody).
+    /// Sells n of A and receives exactly `ceil(n × p / scale(A))` of B.
+    ///
+    /// This is a sell-first `KobIfdPair`, whose receipt is its exit's custody.
     AskExact,
-    /// Pays exactly its B (S = B; `floor(n × p / scale(A))`) and receives exactly n of A (T = A): `KobPair` / `KobCondPair`
-    /// BID, a buy-first `KobIfdPair`.
+    /// Pays exactly `floor(n × p / scale(A))` of B (S = B) and receives exactly n of A (T = A).
+    ///
+    /// This is a `KobPair` or `KobCondPair` bid, or a buy-first `KobIfdPair`.
     Bid,
 }
 
-/// A booked exit's take-profit with its entry's merge (`KobCondPair` leg 0 before `rptUntil`): the entry is re-armed in
-/// the same transaction (`KobIfdPair.fill` with the merge argument).
+/// A booked exit's take-profit with its entry's merge.
+///
+/// It is a `KobCondPair` leg 0 before `rptUntil`. The entry is re-armed in the same transaction,
+/// by `KobIfdPair.fill` with the merge argument.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MergeOf {
     /// The entry's covenant id.
     pub entry: CovId,
     /// Token inputs and outputs the entry's custodies add, per token: (A in, A out, B in, B out).
     pub slots: (u32, u32, u32, u32),
-    /// The entry UTXO's KAS (its continuation keeps at least this).
+    /// The entry UTXO's KAS. Its continuation keeps at least this.
     pub entry_value: i64,
-    /// The entry's exit carrier (a merge that creates a custody pays it from the entry).
+    /// The entry's exit carrier. A merge that creates a custody pays it from the entry.
     pub exit_carrier: i64,
-    /// Custodies the merge creates (the entry had none of that token).
+    /// Custodies the merge creates, for tokens of which the entry had none.
     pub new_custodies: i64,
 }
 
-/// What an unarmed pair stop (a `KobCondPair` stop leg, a `KobIfdPair` stop entry) reads from its trigger evidence: two
-/// KAS-book fills of the same transaction (mode 0: a plain resting order of A and one of B, the implied rate
-/// `a × scale(B) / b`) or the fill of a resting `KobPair` of the same pair (mode 1).
+/// What an unarmed pair stop reads from its trigger evidence.
+///
+/// The stop is a `KobCondPair` stop leg or a `KobIfdPair` stop entry. Its evidence is one of:
+/// - mode 0, two KAS-book fills of the same transaction, of a plain resting order of A and one of
+///   B, at the implied rate `a × scale(B) / b`;
+/// - mode 1, the fill of a resting `KobPair` of the same pair.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairNeed {
-    /// The evidence's A side is an ask (the rate fell: a sell stop reads an ask of A and a bid of B, or a pair ASK);
-    /// otherwise a bid of A and an ask of B, or a pair BID (the rate rose: a buy stop).
+    /// Whether the evidence's A side is an ask.
+    ///
+    /// When true the rate fell. A sell stop reads an ask of A and a bid of B, or a pair ask. When
+    /// false the rate rose. A buy stop reads a bid of A and an ask of B, or a pair bid.
     pub ask_a: bool,
+    /// Covenant id of token A.
     pub a: [u8; 32],
+    /// Covenant id of token B.
     pub b: [u8; 32],
-    /// The extension commitment of A's and of B's market (the order's own: [`markets`]). The covenants do not compare it
-    /// (finding AUD-EXT): the planner only ever reads evidence of the order's own markets, never of another commitment of
-    /// the same covenant id.
+    /// The extension commitment of A's market, the order's own ([`markets`]).
+    ///
+    /// The planner only reads evidence of the order's own markets, never of another commitment of
+    /// the same covenant id. The covenants refuse such evidence too.
     pub a_ext: [u8; 32],
+    /// The extension commitment of B's market, the order's own.
     pub b_ext: [u8; 32],
+    /// Scale of A.
     pub a_scale: i64,
+    /// Scale of B.
     pub b_scale: i64,
-    /// `minTouch` (base units of A) and its B value at the stop (mode 0's B threshold).
+    /// `minTouch`, in base units of A.
     pub min_touch: i64,
+    /// The B value of `minTouch` at the stop, the B threshold of mode 0.
     pub min_touch_b: Option<i64>,
+    /// `minRestDaa`.
     pub min_rest: i64,
-    /// The order's state (`KobCondPair` or `KobIfdPair`): its own `arms` / `trail_k` decide.
+    /// The order's state, a `KobCondPair` or `KobIfdPair`. Its own `arms` and `trail_k` decide.
     pub state: AnyState,
 }
 
-/// What the fill of a resting `KobPair` offers as mode-1 trigger evidence (mirrors `pair_evidence` of the builder).
+/// What the fill of a resting `KobPair` offers as mode-1 trigger evidence.
+///
+/// It mirrors `pair_evidence` of the builder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairTouch {
-    /// A pair ASK (sells A) or a pair BID.
+    /// True for a pair ask, which sells A, and false for a pair bid.
     pub ask: bool,
+    /// Covenant id of token A.
     pub a: [u8; 32],
+    /// Covenant id of token B.
     pub b: [u8; 32],
-    /// The extension commitments of the resting order's markets of A and B ([`markets`]).
+    /// The extension commitment of the resting order's market of A ([`markets`]).
     pub a_ext: [u8; 32],
+    /// The extension commitment of the resting order's market of B.
     pub b_ext: [u8; 32],
+    /// Scale of A.
     pub a_scale: i64,
+    /// Scale of B.
     pub b_scale: i64,
-    /// The order's `price` (B base units per whole A).
+    /// The order's `price`, in B base units per whole A.
     pub price: i64,
     /// `max(UTXO DAA + interval, activeFrom, custody DAA)`.
     pub exposed_since: i64,
 }
 
-/// One pair order on one leg (a `KobCondPair` take-profit or stop leg), normalised at `t` for the planner: shared by its
-/// Sell and Buy legs.
+/// One pair order on one leg, normalised at `t` for the planner.
+///
+/// A `KobCondPair` has one per take-profit or stop leg it can fill. The Sell and Buy legs of the
+/// order share it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairInfo {
+    /// Covenant id of the order.
     pub id: CovId,
+    /// Template of the order.
     pub kind: TemplateId,
-    /// Conditional leg (0 take-profit / limit, 1 stop); 0 for the other kinds.
+    /// Conditional leg, 0 for take-profit or limit and 1 for stop. 0 for the other kinds.
     pub leg: u8,
+    /// How a fill maps to the token amounts the order releases and receives.
     pub shape: PairShape,
     /// The order's state.
     pub state: AnyState,
-    /// The quote of this fill at `t` (B base units per whole A): the order's price, its auction's, its leg price.
+    /// The quote of this fill at `t`, in B base units per whole A.
+    ///
+    /// It is the order's price, its auction's price or its leg price.
     pub price: i64,
-    /// The price that ranks the order (a booked exit's effective one: its merge moves the repeat budget).
+    /// The price that ranks the order.
+    ///
+    /// For a booked exit it is the effective price, because its merge moves the repeat budget.
     pub rank_price: i64,
+    /// Scale of A.
     pub a_scale: i64,
-    /// KAS tip, sompi per whole A.
+    /// KAS tip, in sompi per whole A.
     pub tip: i64,
-    /// The markets of A and B (token, program, extension commitment of the outputs the batch makes of it).
+    /// The market of A: the token, its program and the extension commitment of the outputs the
+    /// batch makes of it.
     pub a: Market,
+    /// The market of B.
     pub b: Market,
-    /// Most base units of A fillable now (the covenant's affordability rules).
+    /// Most base units of A fillable now, by the covenant's affordability rules.
     pub cap: i64,
-    /// The largest fill below `cap` the covenant accepts (0: none). A partial fill must leave a continuation that funds its
-    /// delivery carrier and tip; once the order UTXO's prefunded carriers are used up only `cap` itself (the fill of
-    /// everything left) is possible, so the fills the covenant accepts are `[minFill, part_cap]` and `cap`, not every n up to
-    /// `cap`.
+    /// The largest fill below `cap` that the covenant accepts, 0 for none.
+    ///
+    /// A partial fill must leave a continuation that funds its delivery carrier and tip. Once the
+    /// order UTXO's prefunded carriers are used up, only `cap` itself, the fill of everything
+    /// left, is possible. So the fills the covenant accepts are `[minFill, part_cap]` and `cap`,
+    /// not every n up to `cap`.
     pub part_cap: i64,
+    /// `amountLeft`, in base units of A.
     pub amount_left: i64,
+    /// `minFill`, in base units of A.
     pub min_fill: i64,
+    /// A FOK order, filled only whole.
     pub fok: bool,
+    /// An IOC order.
     pub ioc: bool,
-    /// The S the order holds (exact custody): its rest is `custody − S released`.
+    /// The S the order holds, its exact custody. Its rest is `custody − S released`.
     pub custody: i64,
-    /// Both KAS books exist: the order may be routed (its legs are in the book lists).
+    /// Both KAS books exist, so the order may be routed. Its legs are in the book lists.
     pub route: bool,
-    /// A pair market order whose auction price still moves at `t`: never cut below what the books reach.
+    /// A pair market order whose auction price still moves at `t`.
+    ///
+    /// It is never cut below what the books reach.
     pub relaxing: bool,
-    /// An unarmed stop: filled only next to its evidence.
+    /// For an unarmed stop, its trigger need. It is filled only next to its evidence.
     pub need: Option<PairNeed>,
-    /// A resting `KobPair` without decay: its fill is mode-1 evidence.
+    /// For a resting `KobPair` without decay, the mode-1 evidence its fill offers.
     pub touch: Option<PairTouch>,
+    /// For a booked exit's take-profit, the merge of its entry.
     pub merge: Option<MergeOf>,
     /// The order UTXO's KAS.
     pub value: i64,
@@ -170,18 +247,18 @@ fn qo(n: i64, p: i64, scale: i64, r: Round) -> Option<i64> {
 }
 
 impl PairInfo {
-    /// The leg whose quantity is the fill n: an ask's Sell leg, a bid's Buy leg.
+    /// The leg whose quantity is the fill n, an ask's Sell leg or a bid's Buy leg.
     pub fn primary(&self) -> PairRole {
         match self.shape {
             PairShape::AskMin | PairShape::AskExact => PairRole::Sell,
             PairShape::Bid => PairRole::Buy,
         }
     }
-    /// True for an ask (it sells A).
+    /// True for an ask, which sells A.
     pub fn sells_a(&self) -> bool {
         self.shape != PairShape::Bid
     }
-    /// The market of the token it sells (S) and of the one it buys (T).
+    /// The market of the token S that the order sells.
     pub fn s_market(&self) -> Market {
         if self.sells_a() {
             self.a
@@ -189,6 +266,7 @@ impl PairInfo {
             self.b
         }
     }
+    /// The market of the token T that the order buys.
     pub fn t_market(&self) -> Market {
         if self.sells_a() {
             self.b
@@ -196,8 +274,9 @@ impl PairInfo {
             self.a
         }
     }
-    /// One whole A of the order in each token: (S base units, T base units) at its rank price, for the implied quotes and the
-    /// netting order.
+    /// One whole A of the order in each token, as (S base units, T base units) at its rank price.
+    ///
+    /// The implied quotes and the netting order use it.
     pub fn whole(&self) -> (i64, i64) {
         if self.sells_a() {
             (self.a_scale, self.rank_price)
@@ -205,19 +284,24 @@ impl PairInfo {
             (self.rank_price, self.a_scale)
         }
     }
-    /// True when the order's receipt is exact (a bid's A, a sell-first entry's exit custody); an ask's receipt is a
-    /// minimum and takes the batch's surplus of its token.
+    /// True when the order's receipt is exact, as a bid's A or a sell-first entry's exit custody.
+    ///
+    /// Otherwise the order is an ask whose receipt is a minimum, and it takes the batch's surplus
+    /// of its token.
     pub fn buy_exact(&self) -> bool {
         self.shape != PairShape::AskMin
     }
-    /// S released into the transaction for a fill of n (the covenant's amounts; a booked exit's merge included).
+    /// S released into the transaction for a fill of n.
+    ///
+    /// The amounts are the covenant's, including a booked exit's merge.
     pub fn sell_qty(&self, n: i64) -> Option<i64> {
         if n <= 0 {
             return Some(0);
         }
         match (self.shape, &self.merge, &self.state) {
             (PairShape::Bid, Some(_), AnyState::KobCondPair(s)) => {
-                // a re-arming BID exit pays at most proceeds - 1 (partial) or custody - back - 1 (sell-out)
+                // A re-arming bid exit pays at most proceeds - 1 on a partial fill, or
+                // custody - back - 1 on a sell-out.
                 let floor = qo(n, self.price, self.a_scale, Round::Down)?;
                 let back = s.rpt_back(n)?;
                 if n < s.amount_left {
@@ -230,14 +314,15 @@ impl PairInfo {
             _ => Some(n),
         }
     }
-    /// T the order receives for a fill of n (a minimum for an ask, exact otherwise).
+    /// T the order receives for a fill of n, a minimum for an ask and exact otherwise.
     pub fn buy_qty(&self, n: i64) -> Option<i64> {
         if n <= 0 {
             return Some(0);
         }
         match (self.shape, &self.merge, &self.state) {
             (PairShape::AskMin, Some(_), AnyState::KobCondPair(s)) => {
-                // a re-arming ASK exit delivers more than the entry's budget (the maker's profit is at least one unit)
+                // A re-arming ask exit delivers more than the entry's budget. The maker's profit is
+                // at least one unit.
                 let t = qo(n, self.price, self.a_scale, Round::Up)?;
                 Some(t.max(s.rpt_proceeds(n)?.checked_add(1)?))
             }
@@ -245,7 +330,7 @@ impl PairInfo {
             _ => qo(n, self.price, self.a_scale, Round::Up),
         }
     }
-    /// The largest n in `[0, cap]` whose `f(n)` stays within `q` (`f` monotone).
+    /// The largest n in `[0, cap]` whose `f(n)` stays within `q`, for a monotone `f`.
     fn n_within(&self, q: i64, f: impl Fn(i64) -> Option<i64>) -> i64 {
         if q <= 0 {
             return 0;
@@ -255,7 +340,7 @@ impl PairInfo {
             return self.cap;
         }
         let (mut lo, mut hi) = (0i64, self.cap);
-        // invariant: ok(lo), !ok(hi)
+        // Invariant: ok(lo) and !ok(hi).
         while hi - lo > 1 {
             let mid = lo + (hi - lo) / 2;
             if ok(mid) {
@@ -280,7 +365,10 @@ impl PairInfo {
         }
         self.n_within(q, |n| self.buy_qty(n))
     }
-    /// The covenant's quantity rules of a fill of n: `minFill` unless it takes everything left, FOK whole, the cap.
+    /// Whether a fill of n passes the covenant's quantity rules.
+    ///
+    /// The rules are the cap and `part_cap`, `minFill` unless the fill takes everything left, and
+    /// a FOK only whole.
     pub fn quantity_ok(&self, n: i64) -> bool {
         n > 0
             && n <= self.cap
@@ -288,7 +376,7 @@ impl PairInfo {
             && min_fill_ok(n, self.amount_left, self.min_fill)
             && (!self.fok || n == self.amount_left)
     }
-    /// The largest fill at most `n` the order accepts ([`Self::quantity_ok`]); 0 when none.
+    /// The largest fill of at most `n` that the order accepts ([`Self::quantity_ok`]), or 0.
     pub fn fit_down(&self, n: i64) -> i64 {
         if n <= 0 {
             return 0;
@@ -303,15 +391,19 @@ impl PairInfo {
             0
         }
     }
-    /// True when the order can only be filled in full (no partial fill is possible: its carriers are used up, FOK).
+    /// True when the order can only be filled in full.
+    ///
+    /// That is a FOK, or an order whose carriers are used up so that no partial fill is possible.
     pub fn whole_only(&self) -> bool {
         self.fok || self.part_cap < self.min_fill.min(self.cap)
     }
-    /// KAS tip a fill of n releases to the filler: `floor(n × tip / scale(A))`.
+    /// KAS tip that a fill of n releases to the filler, `floor(n × tip / scale(A))`.
     pub fn tip_kas(&self, n: i64) -> i64 {
         qo(n, self.tip, self.a_scale, Round::Down).unwrap_or(0)
     }
-    /// The fill n a Sell leg quantity stands for (a bid's S release is rounded: the largest n it covers).
+    /// The fill n that a Sell leg quantity stands for.
+    ///
+    /// A bid's S release is rounded, so it is the largest n the quantity covers.
     fn n_at_sell(&self, q: i64) -> i64 {
         if self.sells_a() {
             q
@@ -319,8 +411,10 @@ impl PairInfo {
             self.n_of_sell(q)
         }
     }
-    /// Token inputs and outputs of the Sell leg's token at a Sell quantity of `q`: the custody input (and a merge's entry
-    /// custodies of that token), the custody's rest or return, a re-arming BID exit's B profit.
+    /// Token inputs and outputs of the Sell leg's token at a Sell quantity of `q`.
+    ///
+    /// They are the custody input, a merge's entry custodies of that token, the custody's rest or
+    /// return, and a re-arming bid exit's B profit.
     pub fn sell_slots(&self, q: i64) -> (u32, u32) {
         if q <= 0 {
             return (0, 0);
@@ -328,15 +422,19 @@ impl PairInfo {
         let n = self.n_at_sell(q);
         let left = self.amount_left - n;
         match (&self.merge, self.shape) {
-            // BID exit (S = B): its custody in, its rest (partial), the maker's B profit, the entry's B prefund in / out
+            // A bid exit (S = B): its custody in, its rest on a partial fill, the maker's B profit,
+            // and the entry's B prefund in and out.
             (Some(m), PairShape::Bid) => (1 + m.slots.2, u32::from(left > 0) + 1 + m.slots.3),
-            // ASK exit (S = A): its custody in, its rest (partial); a re-arm never returns tokens
+            // An ask exit (S = A): its custody in and its rest on a partial fill. A re-arm never
+            // returns tokens.
             (Some(_), _) => (1, u32::from(left > 0)),
             (None, _) => {
-                // the rest (GTC partial) or the return (IOC, a bid's unspent escrow) of the custody at its own index
+                // The custody's rest on a GTC partial fill, or its return for an IOC or a bid's
+                // unspent escrow, at its own index.
                 let out = match self.kind {
                     TemplateId::KobIfdPair => {
-                        // an entry's custody of S keeps a rest when it holds something after the fill
+                        // An entry's custody of S keeps a rest when it holds something after the
+                        // fill.
                         if self.sells_a() {
                             u32::from(left > 0)
                         } else {
@@ -349,18 +447,21 @@ impl PairInfo {
             }
         }
     }
-    /// Token inputs and outputs of the Buy leg's token at a Buy quantity of `q`: the delivery (or the exit's custody), a
-    /// merge's entry custodies, a sell-first entry's B prefund in and out.
+    /// Token inputs and outputs of the Buy leg's token at a Buy quantity of `q`.
+    ///
+    /// They are the delivery or the exit's custody, a merge's entry custodies, and a sell-first
+    /// entry's B prefund in and out.
     pub fn buy_slots(&self, q: i64) -> (u32, u32) {
         if q <= 0 {
             return (0, 0);
         }
         match (&self.merge, self.shape, &self.state) {
-            // ASK exit (T = B): the maker's delivery, the entry's B custody in / out
+            // An ask exit (T = B): the maker's delivery, and the entry's B custody in and out.
             (Some(m), PairShape::AskMin, _) => (m.slots.2, 1 + m.slots.3),
-            // BID exit (T = A): no delivery to the maker; the entry's A custody in / out
+            // A bid exit (T = A): no delivery to the maker, and the entry's A custody in and out.
             (Some(m), _, _) => (m.slots.0, m.slots.1),
-            // a sell-first entry: the exit's custody of B, and its own B prefund in / out (at its index)
+            // A sell-first entry: the exit's custody of B, and its own B prefund in and out at its
+            // index.
             (None, PairShape::AskExact, AnyState::KobIfdPair(s)) => {
                 let n = self.n_of_buy(q);
                 let cont = n < s.amount_left || s.rpt_amount > 0;
@@ -371,13 +472,13 @@ impl PairInfo {
             _ => (0, 1),
         }
     }
-    /// Whether the evidence arms this order's stop (its own covenant rule).
+    /// Whether the evidence arms this order's stop, by its own covenant rule.
     pub fn arms(&self, ev: PairEvidence) -> bool {
         need_arms(&self.state, ev)
     }
 }
 
-/// Whether `ev` arms the pair stop of `state` (`KobCondPair` stop leg or `KobIfdPair` stop entry).
+/// Whether `ev` arms the pair stop of `state`, a `KobCondPair` stop leg or `KobIfdPair` stop entry.
 pub fn need_arms(state: &AnyState, ev: PairEvidence) -> bool {
     match state {
         AnyState::KobCondPair(s) => s.arms(ev) == Some(true),
@@ -386,31 +487,42 @@ pub fn need_arms(state: &AnyState, ev: PairEvidence) -> bool {
     }
 }
 
-/// A KAS-book fill of the allocation that may be mode-0 evidence: (candidate, token, what it offers, base units).
+/// A KAS-book fill of the allocation that may be mode-0 evidence.
 #[derive(Clone, Copy, Debug)]
 pub struct KasTouch {
+    /// Index of the fill's candidate.
     pub ix: usize,
+    /// Covenant id of the fill's token.
     pub token: [u8; 32],
-    /// The extension commitment of the fill's book (a KAS book is one commitment of its token).
+    /// The extension commitment of the fill's book. A KAS book is one commitment of its token.
     pub ext: [u8; 32],
+    /// What the fill offers as evidence.
     pub src: TouchSrc,
+    /// Base units of the fill.
     pub n: i64,
 }
 
-/// A resting `KobPair` fill of the allocation that may be mode-1 evidence: (its primary leg, what it offers, base units of A).
+/// A resting `KobPair` fill of the allocation that may be mode-1 evidence.
 #[derive(Clone, Copy, Debug)]
 pub struct PairFillTouch {
+    /// Index of the order's primary leg.
     pub ix: usize,
+    /// What the fill offers as evidence.
     pub src: PairTouch,
+    /// Base units of A of the fill.
     pub n: i64,
 }
 
-/// Evidence of a pair stop: the leg (candidate) of A or the `KobPair`, and the leg of B (mode 0).
+/// Evidence of a pair stop, as candidate indices.
+///
+/// The first is the leg of A, or the `KobPair` in mode 1. The second is the leg of B in mode 0.
 pub type PairEv = (usize, Option<usize>);
 
-/// The evidence candidates of `need` with the evidence each offers, in allocation order: mode 1 (a resting `KobPair` of the
-/// pair whose side is `ask_a`'s) first, then every qualifying (A, B) pair of KAS-book fills (an A fill on the `ask_a` side,
-/// a B fill on the other).
+/// The evidence candidates of `need`, with the evidence each offers, in allocation order.
+///
+/// Mode 1 comes first: a resting `KobPair` of the pair whose side is that of `ask_a`. Then come
+/// every qualifying (A, B) pair of KAS-book fills, an A fill on the `ask_a` side and a B fill on
+/// the other.
 pub fn evidence_options(
     need: &PairNeed,
     ask_a: bool,
@@ -421,7 +533,8 @@ pub fn evidence_options(
     let mut out = vec![];
     for p in pairs {
         let s = &p.src;
-        // the same tokens AND the same extension commitments: the covenant does not compare the commitment (AUD-EXT)
+        // The same tokens and the same extension commitments. Evidence of another commitment of
+        // the same covenant id is never used.
         if s.ask == ask_a
             && (s.a, s.b, s.a_ext, s.b_ext, s.a_scale, s.b_scale)
                 == (need.a, need.b, need.a_ext, need.b_ext, need.a_scale, need.b_scale)
@@ -458,13 +571,16 @@ pub fn evidence_options(
     out
 }
 
-/// The first evidence that arms the stop of `need` (mode 1 preferred: the smaller transaction).
+/// The first evidence that arms the stop of `need`.
+///
+/// Mode 1 is preferred, because it makes the smaller transaction.
 pub fn arm_evidence(need: &PairNeed, kas: &[KasTouch], pairs: &[PairFillTouch], t: i64) -> Option<PairEv> {
     evidence_options(need, need.ask_a, kas, pairs, t).into_iter().find(|(_, ev)| need_arms(&need.state, *ev)).map(|(e, _)| e)
 }
 
-/// The evidence that ratchets a trailing pair stop the most (the opposite side's evidence; the first on a tie) and the
-/// steps it justifies.
+/// The evidence that ratchets a trailing pair stop the most, and the steps it justifies.
+///
+/// It is evidence of the opposite side. On a tie the first one wins.
 pub fn trail_evidence(need: &PairNeed, kas: &[KasTouch], pairs: &[PairFillTouch], t: i64) -> Option<(PairEv, i64)> {
     let AnyState::KobCondPair(s) = &need.state else { return None };
     let mut best: Option<(PairEv, i64)> = None;
@@ -478,7 +594,7 @@ pub fn trail_evidence(need: &PairNeed, kas: &[KasTouch], pairs: &[PairFillTouch]
     best
 }
 
-/// The extension commitment of the outputs of a token the order makes (KRON: none).
+/// The extension commitment of the outputs of a token that the order makes. KRON has none.
 fn ext_or_zero(t: &PairToken, ext: Option<[u8; 32]>) -> [u8; 32] {
     if t.family_of() == Some(Family::Kron) {
         [0; 32]
@@ -487,8 +603,10 @@ fn ext_or_zero(t: &PairToken, ext: Option<[u8; 32]>) -> [u8; 32] {
     }
 }
 
-/// The markets of A and B of a pair order: the token, its program and the extension commitment its outputs carry (a
-/// custody's own, else the state's).
+/// The markets of A and B of a pair order.
+///
+/// A market is the token, its program and the extension commitment its outputs carry. The
+/// commitment is a custody's own, else the state's.
 pub fn markets(o: &ListedOrder) -> Option<(Market, Market)> {
     let t = o.order.state.pair_tokens()?;
     let ext_of = |tok: &PairToken| -> Option<[u8; 32]> {
@@ -506,24 +624,30 @@ pub fn markets(o: &ListedOrder) -> Option<(Market, Market)> {
     Some((m(&t.a)?, m(&t.b)?))
 }
 
-/// Bytes of a pair order's fill (its input and redeem script, its custodies, its outputs; an entry's exit genesis).
+/// Bytes of a pair order's fill.
+///
+/// They count its input and redeem script, its custodies, its outputs, and an entry's exit
+/// genesis.
 fn order_bytes(kind: TemplateId, s_prog: Option<TemplateId>, t_prog: Option<TemplateId>, custodies: u64, merge_bytes: u64) -> u64 {
     let mut b = INPUT_BYTES + redeem_len(kind) + custodies * token_input_bytes(s_prog) + 3 * OUTPUT_BYTES + 2 * NEXT_STATE_BYTES;
     if kind == TemplateId::KobIfdPair {
         let x = template(TemplateId::KobCondPair);
         b += (x.prefix.len() + x.suffix.len()) as u64;
-        // a sell-first entry's B prefund custody
+        // A sell-first entry's B prefund custody.
         b += token_input_bytes(t_prog) / 2;
     }
     b + merge_bytes
 }
 
-/// The token program of a pair token (a supported program of the family its state names).
+/// The token program of a pair token, a supported program of the family its state names.
 fn program(m: &Market) -> Option<TemplateId> {
     kob_protocol::artifacts::token_template_by_hash(&m.template).filter(|t| t.family == m.family).map(|t| t.id)
 }
 
-/// Whether the pair order may be filled at `t` at all: listed with its exact custodies, accepted, active, not due.
+/// Whether the pair order may be filled at `t` at all.
+///
+/// It must be listed with its exact custodies, accepted at or before `t`, not excluded and not
+/// due.
 fn eligible(o: &ListedOrder, t: i64, cx: &CandCtx) -> bool {
     let id = o.id();
     o.order.utxo.covenant_id.is_some()
@@ -535,7 +659,10 @@ fn eligible(o: &ListedOrder, t: i64, cx: &CandCtx) -> bool {
         && !excluded_by_expiry(o, t, cx.utc)
 }
 
-/// A repeating pair entry a booked exit merges: listed, accepted, not spent by a pending transaction, custodies exact.
+/// Whether a booked exit may merge this repeating pair entry.
+///
+/// It must be listed, accepted at or before `t`, not spent by a pending transaction, and hold its
+/// exact custodies.
 fn merge_entry_ok(e: &ListedOrder, cx: &CandCtx) -> bool {
     !cx.excluded.contains(&e.id())
         && e.custody_ok()
@@ -544,8 +671,9 @@ fn merge_entry_ok(e: &ListedOrder, cx: &CandCtx) -> bool {
         && e.order.utxo.block_daa_score as i64 <= cx.t
 }
 
-/// The normalised pair participants of one listed order at `t` (a `KobCondPair`: one per leg it can fill), without their
-/// route quotes.
+/// The normalised pair participants of one listed order at `t`, without their route quotes.
+///
+/// A `KobCondPair` has one per leg it can fill.
 pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
     let t = cx.t;
     if !eligible(o, t, cx) || crate::sanity::check(&o.order.state).is_err() {
@@ -557,7 +685,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
     }
     let id = o.id();
     let udaa = o.utxo_daa() as i64;
-    // the tick its auction is quoted at (the engine's earliest-tick search may set an earlier one, §3.3); eligibility at t
+    // The tick its auction is quoted at. The engine's earliest-tick search may set an earlier one
+    // (§3.3). Eligibility is judged at t.
     let ta = cx.pair_tick(&id);
     let v = o.order.utxo.amount.min(i64::MAX as u64) as i64;
     let base = |kind, shape, state: AnyState| PairInfo {
@@ -613,8 +742,9 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
             x.custody = s.custody;
             x.fok = s.tif == TIF_FOK;
             x.ioc = s.tif == TIF_IOC;
-            // the covenant's affordability: a rest keeps something in the custody and funds its carrier and tip; the KAS
-            // outputs the fill leaves (the continuation of a rest, else the maker's delivery) are not dust
+            // The covenant's affordability. A rest keeps something in the custody and funds its
+            // carrier and tip. The KAS outputs the fill leaves are not dust. They are the
+            // continuation of a rest, else the maker's delivery.
             let cv = o.custody.as_ref().map(|c| c.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
             let fits = |n: i64| {
                 s.fill(n, p, v).is_ok_and(|f| {
@@ -692,7 +822,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     if x.merge.is_some() {
                         let Some(tq) = x.buy_qty(n) else { return false };
                         if s.is_ask() {
-                            // the custody releases n; a partial keeps its rest
+                            // The custody releases n, and a partial fill keeps its rest.
                             let out = s.custody - n;
                             return out >= 0 && (left == 0 || out > 0) && tq > 0 && (left == 0 || v - s.delivery_carrier - tp >= DUST);
                         }
@@ -706,8 +836,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                             && (left == 0 || v - s.delivery_carrier - tp >= DUST);
                     }
                     let out = s.custody - if s.is_ask() { n } else { so };
-                    // the continuation of a partial fill, else the maker's delivery (with the custody's KAS when it closes),
-                    // is not dust
+                    // The continuation of a partial fill is not dust. Else the maker's delivery is
+                    // not, with the custody's KAS when the custody closes.
                     let kas = if left > 0 {
                         v - s.delivery_carrier - tp
                     } else if out > 0 {
@@ -720,7 +850,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                 (x.cap, x.part_cap) = cap_of(x.cap, s.min_fill, ok);
                 (x.cap > 0).then_some(x)
             };
-            // take-profit / limit leg
+            // Take-profit or limit leg.
             if s.tp_price > 0 {
                 let mut merge = None;
                 let mut ok = true;
@@ -759,7 +889,7 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                     }
                 }
             }
-            // stop leg
+            // Stop leg.
             if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) {
                 if s.armed != 0 {
                     let origin = armed_origin(s.armed, udaa).unwrap_or(i64::MAX);
@@ -874,7 +1004,8 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
                 cap = cap.min(MERGE_SHIFT - 1);
             }
             if let Some(m) = rpt_fill_max(s.rpt_amount, s.min_fill) {
-                // while a minimum fill of re-arms is left, a fill takes at most the re-arms left (it is booked)
+                // While a minimum fill of re-arms is left, a fill takes at most the re-arms left,
+                // and it is booked.
                 cap = cap.min(m);
             }
             (x.cap, x.part_cap) = cap_of(cap, s.min_fill, ok);
@@ -902,11 +1033,15 @@ pub fn infos(o: &ListedOrder, cx: &CandCtx) -> Vec<PairInfo> {
     out
 }
 
-/// The fills in `1..=max` the covenant accepts (`ok`), as `(cap, part_cap)`: `cap` is the whole `max` if possible, else the
-/// largest partial fill; `part_cap` is the largest partial fill (below `max`). Every affordability rule of a partial fill is
-/// monotone in n (a partial fill below the minimum fill is refused, which a bisection must not read as the threshold), but
-/// the fill of everything left is not a partial fill: it needs no continuation, so it can be possible when no partial fill
-/// is (the order UTXO's prefunded delivery carriers are used up). 0 when none.
+/// The fills in `1..=max` that the covenant accepts (`ok`), as `(cap, part_cap)`.
+///
+/// `cap` is the whole `max` if possible, else the largest partial fill. `part_cap` is the largest
+/// partial fill, below `max`. Each is 0 when there is none.
+///
+/// Every affordability rule of a partial fill is monotone in n. A partial fill below the minimum
+/// fill is refused too, and the bisection must not read that as the threshold. The fill of
+/// everything left is not a partial fill. It needs no continuation, so it can be possible when no
+/// partial fill is, once the order UTXO's prefunded delivery carriers are used up.
 fn cap_of(max: i64, min_fill: i64, ok: impl Fn(i64) -> bool) -> (i64, i64) {
     if max <= 0 {
         return (0, 0);
@@ -928,7 +1063,9 @@ fn cap_of(max: i64, min_fill: i64, ok: impl Fn(i64) -> bool) -> (i64, i64) {
     }
 }
 
-/// The best plain resting KAS quotes of every market (all-in per base unit): the lowest ask, the highest bid.
+/// The best plain resting KAS quotes of every market, all-in per base unit.
+///
+/// They are the lowest ask and the highest bid.
 pub fn best_quotes(direct: &[Cand]) -> BTreeMap<(Market, Side), (i128, i128)> {
     let mut m: BTreeMap<(Market, Side), (i128, i128)> = BTreeMap::new();
     for c in direct {
@@ -952,22 +1089,28 @@ fn ceil_div(a: i128, b: i128) -> i128 {
     (a + b - 1).div_euclid(b)
 }
 
-/// A pair participant before its legs: (the order's index in the slice, the order, its normalised fill, its route quotes:
-/// the KAS cost of the T of one whole A, what the S of one whole A fetches).
+/// A pair participant before its legs.
+///
+/// It holds the order's index in the slice, the order, its normalised fill and its route quotes.
+/// The quotes are the KAS cost of the T for one whole A and what the S of one whole A fetches.
 type Participant<'a> = (usize, &'a ListedOrder, PairInfo, Option<(i64, i64)>);
 
-/// The two legs (Sell, Buy) of every pair participant among `orders` at `t`, ranked at their implied quotes from the best
-/// plain KAS quotes of `direct` (a participant without both KAS books is not routed: its legs only net). Pure and
+/// The two legs (Sell, Buy) of every pair participant among `orders` at `t`.
+///
+/// The legs are ranked at their implied quotes from the best plain KAS quotes of `direct`. A
+/// participant without both KAS books is not routed, and its legs only net. Pure and
 /// deterministic.
 pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand, Cand)> {
     let best = best_quotes(direct);
-    // what the plain KAS books can take at all: the base units of the plain resting bids and asks of every market
+    // What the plain KAS books can take at all: the base units of the plain resting bids and asks
+    // of every market.
     let mut depth: BTreeMap<(Market, Side), i128> = BTreeMap::new();
     for c in direct.iter().filter(|c| c.is_plain() && c.trigger.is_none()) {
         *depth.entry((c.book.market(), c.side)).or_default() += c.cap.max(0) as i128;
     }
-    // every participant with its route quotes (the T of one whole A at the best plain ask of T, rounded up; the S of one
-    // whole A at the best plain bid of S, rounded down: they only rank the legs, §3.5)
+    // Every participant with its route quotes. The T for one whole A is costed at the best plain
+    // ask of T, rounded up. The S of one whole A is valued at the best plain bid of S, rounded
+    // down. They only rank the legs (§3.5).
     let mut parts: Vec<Participant> = vec![];
     for (idx, &o) in orders.iter().enumerate() {
         for info in infos(o, cx) {
@@ -990,10 +1133,12 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
             parts.push((idx, o, info, quotes));
         }
     }
-    // The route takes no more pair orders per direction than the KAS books of both its tokens can fill: the most
-    // profitable first (the KAS margin of one whole A at the top of both books, then the tip), while the S they sell before
-    // each is below the plain bids of S and the T they buy below the plain asks of T. The others can still net. A large
-    // or hostile pair book then costs the planner what the KAS books can absorb, not its own size.
+    // The route takes no more pair orders per direction than the KAS books of both its tokens can
+    // fill. The most profitable go first, by the KAS margin of one whole A at the top of both
+    // books, then by the tip. An order is routed while the S sold before it is below the plain
+    // bids of S and the T bought before it is below the plain asks of T. The others can still
+    // net. So a large or hostile pair book costs the planner what the KAS books can absorb, not
+    // its own size.
     let mut by_dir: BTreeMap<(Market, Market), Vec<usize>> = BTreeMap::new();
     for (k, (_, _, info, q)) in parts.iter().enumerate() {
         if q.is_some() && info.need.is_none() {
@@ -1103,7 +1248,9 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
     out
 }
 
-/// A valid `KobPair` state (the template's compiled one) for the surplus offers, which stand for no order.
+/// A valid `KobPair` state, the template's compiled one, for the surplus offers.
+///
+/// Surplus offers stand for no order.
 fn placeholder_state() -> AnyState {
     static S: std::sync::OnceLock<AnyState> = std::sync::OnceLock::new();
     S.get_or_init(|| {
@@ -1113,7 +1260,9 @@ fn placeholder_state() -> AnyState {
     .clone()
 }
 
-/// The netting surplus offer of a token (one per market a netting group trades; its cap is set by every allocation).
+/// The netting surplus offer of a token.
+///
+/// There is one per market a netting group trades. Every allocation sets its cap.
 pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
     let info = PairInfo {
         id: marker,
@@ -1172,8 +1321,10 @@ pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
     }
 }
 
-/// The pair conditionals and pair stop entries of the view a batch may arm (or ratchet) with an `update` next to its
-/// evidence: accepted with a known DAA score at or before `t`, active, not expired, not excluded, custodies exact.
+/// Pair stops of the view that a batch may arm or ratchet with an `update`, next to its evidence.
+///
+/// These are pair conditionals and pair stop entries. Each is accepted with a known DAA score at
+/// or before `t`, active, not expired, not excluded, and holds its exact custodies.
 pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
     let t = cx.t;
     let mut out = vec![];
@@ -1235,7 +1386,7 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
             continue;
         }
         let Some(tip) = o.order.state.keeper_tip() else { continue };
-        // the continuation must clear the covenant-output bound (see `candidate::updatable`)
+        // The continuation must clear the covenant-output bound, see `candidate::updatable`.
         if o.order.utxo.amount.min(i64::MAX as u64) as i64 - tip < COV_OUTPUT_MIN {
             continue;
         }
@@ -1260,9 +1411,12 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
     out
 }
 
-/// A pair order an update arms (or ratchets): what it reads from its evidence and whether it may trail now.
+/// A pair order that an update arms or ratchets.
+///
+/// It holds what the order reads from its evidence, and whether it may trail now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairUp {
+    /// What the order reads from its trigger evidence.
     pub need: PairNeed,
     /// A trailing `KobCondPair` whose UTXO is `trailWait` old at `t`.
     pub trail: bool,
@@ -1290,7 +1444,10 @@ mod tests {
         x
     }
 
-    /// The inverses are exact: the largest n whose S release (receipt) stays within q, for every shape, scale and price.
+    /// The inverses are exact.
+    ///
+    /// They give the largest n whose S release, or receipt, stays within q, for every shape, scale
+    /// and price.
     #[test]
     fn the_inverse_quantities_are_the_largest_fills_within() {
         let mut seed: u64 = 7;
@@ -1315,7 +1472,9 @@ mod tests {
         }
     }
 
-    /// An ask releases its fill exactly and receives at least the ceil; a bid pays exactly the floor and receives its fill.
+    /// An ask releases its fill exactly and receives at least the ceil.
+    ///
+    /// A bid pays exactly the floor and receives its fill.
     #[test]
     fn the_shapes_are_the_covenant_amounts() {
         let ask = info(PairShape::AskMin, 1_234, 1_000, 10_000);
@@ -1328,9 +1487,11 @@ mod tests {
         assert!(entry.buy_exact() && entry.primary() == PairRole::Sell);
         assert_eq!(entry.tip_kas(1_000), 0);
     }
-    /// AUD-EXT: the covenants do not compare the KCC-20 extension commitment of a pair stop's evidence, so the planner
-    /// must: a fill of another commitment of A's (or B's) covenant id, or a resting `KobPair` of other commitments, is
-    /// never evidence (mode 0 or mode 1). The same fills under the order's own commitments are.
+    /// The planner reads pair stop evidence only of the order's own KCC-20 extension commitments.
+    ///
+    /// A fill of another commitment of A's or B's covenant id, or a resting `KobPair` of other
+    /// commitments, is never evidence, in mode 0 or mode 1. The same fills under the order's own
+    /// commitments are.
     #[test]
     fn pair_stop_evidence_is_only_of_the_orders_own_commitments() {
         let (a, b, ea, eb, other) = ([1; 32], [4; 32], [3; 32], [5; 32], [9; 32]);
@@ -1372,9 +1533,9 @@ mod tests {
             }]
         };
         let count = |k: &[KasTouch], p: &[PairFillTouch]| evidence_options(&need, true, k, p, 100).len();
-        // the order's own commitments: one mode-0 pair of fills and the mode-1 resting pair order
+        // The order's own commitments: one mode-0 pair of fills and the mode-1 resting pair order.
         assert_eq!(count(&kas(ea, eb), &pair(ea, eb)), 2);
-        // another commitment of A's covenant id, of B's, or of both: nothing
+        // Another commitment of A's covenant id, of B's, or of both: nothing.
         assert_eq!(count(&kas(other, eb), &[]), 0);
         assert_eq!(count(&kas(ea, other), &[]), 0);
         assert_eq!(count(&[], &pair(other, eb)), 0);
