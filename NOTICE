@@ -20,6 +20,11 @@ Vendored source code
   applied to a separate checkout at build time (vendor/argent-upstream/UPSTREAM.md); the Argent sources are not
   stored in this repository.
 
+* workflow-serializer 0.18.0 (workflow-rs) -- vendor/workflow-serializer/
+  Copyright WORKFLOW-RS developers. MIT OR Apache-2.0, used under the MIT License
+  (vendor/workflow-serializer/LICENSE-MIT). KOB patches its vector decoding to bound the
+  pre-allocation and uses it in place of the crates.io crate (vendor/workflow-serializer/UPSTREAM.md).
+
 Vendored data and token programs
 --------------------------------
 

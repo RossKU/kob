@@ -1,0 +1,19 @@
+[package]
+name = "workflow-serializer"
+# The version of the upstream crate this copy replaces ([patch.crates-io] in the root Cargo.toml).
+version = "0.18.0"
+edition = "2021"
+authors = ["WORKFLOW-RS developers"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/workflow-rs/workflow-rs"
+description = """
+Serialization framework for wrapping Borsh-serialized payloads.
+"""
+keywords = ["wasm", "serialize", "binary", "borsh"]
+categories = []
+publish = false
+
+[dependencies]
+ahash = "0.8.6"
+borsh = { version = "1.5.1", features = ["derive", "rc"] }
+serde = { version = "1.0.190", features = ["derive", "rc"] }

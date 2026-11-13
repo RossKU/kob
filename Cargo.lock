@@ -5378,8 +5378,6 @@ dependencies = [
 [[package]]
 name = "workflow-serializer"
 version = "0.18.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64679db6856852a472caff4ce869e3ecebe291fbccc9406e9643eb5951a0904a"
 dependencies = [
  "ahash",
  "borsh",

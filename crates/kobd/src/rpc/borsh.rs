@@ -576,6 +576,60 @@ mod tests {
         assert!(decode_chain_ids(&[1, 0]).is_err());
     }
 
+    /// A length prefix that the answer does not back is an error, not an allocation of that size.
+    ///
+    /// The vectors of the node's types are read by workflow-serializer. Its 0.18.0 release
+    /// reserved the whole length at once, so an answer of about 35 bytes claiming 0xFFFFFFFF chain
+    /// blocks asked for terabytes and aborted the process. The vendored copy bounds the
+    /// reservation (`vendor/workflow-serializer/UPSTREAM.md`).
+    #[test]
+    fn a_huge_length_prefix_is_an_error_not_an_abort() {
+        let payload = |b: &[u8]| {
+            let mut out = vec![];
+            BorshSerialize::serialize(&b.to_vec(), &mut out).unwrap();
+            out
+        };
+        let answer = |chain_blocks: &[u8]| {
+            let mut inner = vec![];
+            BorshSerialize::serialize(&(1u16, Vec::<[u8; 32]>::new(), Vec::<[u8; 32]>::new()), &mut inner).unwrap();
+            inner.extend_from_slice(&payload(chain_blocks));
+            let mut frame = vec![];
+            BorshSerialize::serialize(&(Some(9u64), KIND_SUCCESS, Some(RpcApiOps::GetVirtualChainFromBlockV2)), &mut frame).unwrap();
+            frame.push(1);
+            frame.extend_from_slice(&wrap(inner));
+            frame
+        };
+        let decode = |frame: &[u8]| {
+            let Reply::Ok { body, .. } = parse_reply(frame).unwrap() else { panic!("not an answer") };
+            decode_vspc_v2(body, frame.len())
+        };
+        // The chain blocks: a count of 0xFFFFFFFF and no block.
+        let frame = answer(&u32::MAX.to_le_bytes());
+        assert!(frame.len() <= 40, "{} bytes", frame.len());
+        let e = decode(&frame).unwrap_err();
+        assert!(e.starts_with("getVirtualChainFromBlockV2 (Borsh)"), "{e}");
+        // One level deeper: a chain block whose transactions claim 0xFFFFFFFF.
+        let mut header = vec![];
+        Serializer::serialize(&sample_header(true, 10).1, &mut header).unwrap();
+        let mut block = 1u16.to_le_bytes().to_vec();
+        block.extend_from_slice(&payload(&header));
+        block.extend_from_slice(&payload(&u32::MAX.to_le_bytes()));
+        let mut blocks = 1u32.to_le_bytes().to_vec();
+        blocks.extend_from_slice(&payload(&block));
+        assert!(decode(&answer(&blocks)).is_err());
+        // The same frame with a real count decodes, so the error above is the count's.
+        let mut ok = 1u16.to_le_bytes().to_vec();
+        ok.extend_from_slice(&payload(&header));
+        ok.extend_from_slice(&payload(&0u32.to_le_bytes()));
+        let mut blocks = 1u32.to_le_bytes().to_vec();
+        blocks.extend_from_slice(&payload(&ok));
+        assert_eq!(decode(&answer(&blocks)).unwrap().chain_block_accepted_transactions.len(), 1);
+        // The accepted transaction ids: 0xFFFFFFFF chain blocks of ids, and none.
+        let mut inner = vec![];
+        BorshSerialize::serialize(&(1u16, Vec::<[u8; 32]>::new(), Vec::<[u8; 32]>::new(), u32::MAX), &mut inner).unwrap();
+        assert!(decode_chain_ids(&wrap(inner)).is_err());
+    }
+
     /// A captured answer frame of a live node (`KOB_BORSH_DUMP`) decodes.
     #[test]
     #[ignore]

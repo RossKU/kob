@@ -1,0 +1,2 @@
+# Upstream formatting (rustfmt defaults), so `cargo fmt --all --check` accepts src/ as published.
+edition = "2021"

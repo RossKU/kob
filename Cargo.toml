@@ -10,6 +10,7 @@ members = [
     "vendor/silverscript/silverscript-lang",
     "vendor/silverscript/silverscript-abi",
     "vendor/argent-artifact",
+    "vendor/workflow-serializer",
     "tools/sil2argent",
 ]
 
@@ -55,6 +56,11 @@ wasm-bindgen = "0.2"
 # wasm32-unknown-unknown randomness backends (used only under that target, see .cargo/config.toml)
 getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+
+# workflow-serializer 0.18.0 (used by kaspa-rpc-core) with a bounded pre-allocation, so a Borsh answer
+# claiming a huge vector is an error and not an abort (see vendor/workflow-serializer/UPSTREAM.md)
+[patch.crates-io]
+workflow-serializer = { path = "vendor/workflow-serializer" }
 
 [profile.dev]
 # The engine-level tests are CPU heavy; keep them quick and the target dir small.
