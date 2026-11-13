@@ -1,10 +1,14 @@
-//! `kob` command line.
+//! The `kob` command line.
 //!
-//! Implemented: `kob token create` (fixed-supply KCC-20 issuance), `kob registry validate` / `verify-genesis` / `programs` / `add-program`, `kob recover` (find the maker's
-//! orders on the node from a backup, a recovery / export file or an indexer view, and cancel them with `--cancel`), and
-//! `kob order sweep|cancel` (the maker's stray sweep in place and the maker's cancel from an indexer order view), the
-//! trading commands `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`, `kob send` and `kob merge`, and the
-//! views `kob book`, `kob orders` and `kob balances` ([`trade`]).
+//! The commands are:
+//! - `kob token create`, `resume` and `verify-declaration`: fixed-supply KCC-20 issuance.
+//! - `kob registry validate`, `verify-genesis`, `programs` and `add-program`.
+//! - `kob recover`: find the orders of a maker on the node from a backup, a recovery or export
+//!   file or an indexer view, and cancel them with `--cancel`.
+//! - `kob order sweep|cancel`: the sweep in place of the strays of a maker, and the cancel of the
+//!   maker, from an indexer order view.
+//! - The trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge`.
+//! - The views `kob book`, `orders` and `balances` ([`trade`]), and `kob watch` and `kob tokens`.
 
 mod common;
 mod congestion;
@@ -130,9 +134,11 @@ const COMMANDS: &[&str] = &[
     "balances", "watch", "tokens",
 ];
 
-/// The `kob --version` line: `kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`. A build without a deployment feature says
-/// `development build, no network`; the commit is `KOB_GIT_COMMIT` at build time (the release workflow sets it), first 12
-/// characters, `unknown` when absent or blank (as `kobd --version`).
+/// The `kob --version` line, such as `kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`.
+///
+/// A build without a deployment feature says `development build, no network`. The commit is
+/// `KOB_GIT_COMMIT` at build time, which the release workflow sets. It is cut to 12 characters,
+/// and is `unknown` when absent or blank, as in `kobd --version`.
 fn version_line() -> String {
     version_line_of(kob_protocol::artifacts::deployment_network(), option_env!("KOB_GIT_COMMIT"))
 }
@@ -146,14 +152,17 @@ fn version_line_of(network: Option<&str>, commit: Option<&str>) -> String {
     format!("kob {} ({build}, commit {commit})", kob_protocol::VERSION)
 }
 
-/// A subcommand that does not exist under a command family: the mistake on stderr, then the family's usage, exit 2.
+/// A subcommand that does not exist under a command family.
+///
+/// It prints the mistake on stderr, then the usage of the family, and returns exit code 2.
 fn unknown_sub(family: &str, sub: &str, usage: &str) -> i32 {
     eprintln!("error: unknown `kob {family} {sub}`\n");
     help::print_usage_error(&[usage])
 }
 
 fn main() {
-    // `--testnet` / `--netsuffix=10` (like kaspad) name testnet-10 for every command; mainnet is the default
+    // `--testnet` and `--netsuffix=10`, as in kaspad, name testnet-10 for every command. Mainnet is
+    // the default.
     let args = match common::network_switches(&std::env::args().skip(1).collect::<Vec<_>>()) {
         Ok(a) => a,
         Err(e) => {
@@ -164,10 +173,10 @@ fn main() {
     std::process::exit(dispatch(&args));
 }
 
-/// Run the command the arguments name; returns the process exit code.
+/// Run the command that the arguments name and return the process exit code.
 fn dispatch(args: &[String]) -> i32 {
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
-        // `kob help <command> [<sub>]` is `kob <command> [<sub>] --help`
+        // `kob help <command> [<sub>]` is `kob <command> [<sub>] --help`.
         ["help", first, ..] if COMMANDS.contains(first) => {
             let mut routed = args[1..].to_vec();
             routed.push("--help".to_string());
@@ -178,7 +187,8 @@ fn dispatch(args: &[String]) -> i32 {
             help::print_usage_error(&[USAGE])
         }
         ["token", "create", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
-        // the former name of `kob token create`: still works, says so on stderr (never in --json output on stdout)
+        // The former name of `kob token create`. It still works and says so on stderr, never in
+        // `--json` output on stdout.
         ["token", "issue", rest @ ..] => {
             eprintln!("note: `kob token issue` is now `kob token create`; the old name still works but is deprecated");
             token::run_issue(&args[2..2 + rest.len()])

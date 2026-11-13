@@ -1,8 +1,16 @@
-//! The congestion note of a signing command: when the node's fee estimate shows contended blocks (the rule of
-//! `kob_protocol::fee_estimate::FeeEstimate::contended`, the executor's reading of `getFeeEstimate`) and the person set no
-//! `--fee-rate` and no `--priority-fee`, one line on stderr says that KOB transactions are ranked by their storage mass, which the normal fee does not cover, so they may wait, and that
-//! `--priority-fee` (the web app's "Pay the priority fee") pays for it. Nothing else changes: the fee stays the relay minimum unless the person asks for more. One estimate is read per command, right before the
-//! plan is shown; a node that does not answer it, or answers nonsense, gives no note.
+//! The congestion note of a signing command.
+//!
+//! The note appears when the fee estimate of the node shows contended blocks and the person set no
+//! `--fee-rate` and no `--priority-fee`. The rule is `FeeEstimate::contended` of
+//! `kob_protocol::fee_estimate`, which is how the executor reads `getFeeEstimate`.
+//!
+//! The note is one line on stderr. It says that KOB transactions are ranked by their storage mass,
+//! which the normal fee does not cover, so they may wait. It also says that `--priority-fee` (the
+//! "Pay the priority fee" of the web app) pays for it. Nothing else changes: the fee stays the
+//! relay minimum unless the person asks for more.
+//!
+//! One estimate is read per command, right before the plan is shown. A node that does not answer
+//! it, or answers nonsense, gives no note.
 
 use std::time::Duration;
 
@@ -10,10 +18,10 @@ use kob_protocol::fee_estimate::FeeEstimate;
 use kob_protocol::tx::MIN_FEE_RATE;
 use serde_json::{json, Value};
 
-/// How long the estimate may take: it must never hold up a command.
+/// How long the estimate may take. It must never hold up a command.
 const ESTIMATE_TIMEOUT: Duration = Duration::from_secs(4);
 
-/// The note for a `getFeeEstimate` answer, or none when blocks are not contended or the answer is unusable.
+/// The note for a `getFeeEstimate` answer, or none if blocks are not contended or it is unusable.
 pub fn note_for(answer: &Value) -> Option<String> {
     let est = FeeEstimate::parse(answer).ok()?;
     est.contended(MIN_FEE_RATE).then(|| {
@@ -24,7 +32,9 @@ pub fn note_for(answer: &Value) -> Option<String> {
     })
 }
 
-/// The note of `node` for a command that set `fee_rate` / `priority_fee` (or not): none when a rate or the priority fee was chosen or the node gives no estimate.
+/// The note of `node` for a command, given its `fee_rate` and `priority_fee` choices.
+///
+/// It is none when a rate or the priority fee was chosen, or when the node gives no estimate.
 pub fn note(node: &str, fee_rate: Option<u64>, priority_fee: bool) -> Option<String> {
     if fee_rate.is_some() || priority_fee {
         return None;
@@ -73,11 +83,11 @@ mod tests {
 
     #[test]
     fn a_chosen_rate_or_a_node_without_the_method_gives_no_note() {
-        // no connection is made when a rate was chosen
+        // No connection is made when a rate was chosen.
         assert!(note("ws://127.0.0.1:1", Some(150), false).is_none());
-        // ... nor when the priority fee was chosen
+        // ... nor when the priority fee was chosen.
         assert!(note("ws://127.0.0.1:1", None, true).is_none());
-        // a node that errors on the method (the test mock answers "unknown method")
+        // A node that errors on the method. The test mock answers "unknown method".
         let (url, state) = crate::wrpc::mock::start(vec![]);
         assert!(note(&url, None, false).is_none());
         assert!(state.lock().unwrap().requests.iter().any(|(m, _)| m == "getFeeEstimate"));

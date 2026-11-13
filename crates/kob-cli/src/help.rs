@@ -1,5 +1,7 @@
-//! The help rule of every `kob` command: an explicit `--help` / `-h` prints the usage on stdout and exits 0; a usage printed
-//! because of a mistake goes to stderr and exits 2 (the README's "Exit codes").
+//! The help rule of every `kob` command.
+//!
+//! An explicit `--help` or `-h` prints the usage on stdout and exits 0. A usage printed because
+//! of a mistake goes to stderr and exits 2 (the README, "Exit codes").
 
 /// The exit code of a usage mistake.
 pub const USAGE_EXIT: i32 = 2;
@@ -18,21 +20,27 @@ fn text(parts: &[&str]) -> String {
     s
 }
 
-/// Print the usage on stdout (what an explicit `--help` asked for); returns the exit code 0.
+/// Print the usage on stdout, as an explicit `--help` asks, and return the exit code 0.
 pub fn print_help(parts: &[&str]) -> i32 {
     print!("{}", text(parts));
     0
 }
 
-/// Print the usage on stderr (a usage mistake); returns the exit code 2.
+/// Print the usage on stderr, for a usage mistake, and return the exit code 2.
 pub fn print_usage_error(parts: &[&str]) -> i32 {
     eprint!("{}", text(parts));
     USAGE_EXIT
 }
 
-/// The shared first step of a command: `Some(0)` after printing the usage on stdout when `--help` or `-h` was given, `Some(2)`
-/// after printing it on stderr when no argument was given and `needs_args` says the command cannot run without any, else `None`
-/// (go on parsing). `parts` are the pieces of the usage text, printed one after the other.
+/// The shared first step of a command.
+///
+/// It returns:
+/// - `Some(0)` after printing the usage on stdout, when `--help` or `-h` was given.
+/// - `Some(2)` after printing it on stderr, when no argument was given and `needs_args` says that
+///   the command cannot run without any.
+/// - `None` otherwise, and parsing goes on.
+///
+/// `parts` are the pieces of the usage text, printed one after the other.
 pub fn help_or_usage<S: AsRef<str>>(args: &[S], parts: &[&str], needs_args: bool) -> Option<i32> {
     if wants_help(args) {
         Some(print_help(parts))

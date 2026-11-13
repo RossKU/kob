@@ -1,8 +1,11 @@
-//! The order files the order commands read: the web wallet's backup (`kob-backup`), the indexer recovery / export file
-//! (`docs/ops/executor.md` 7.5) and indexer order views (`GET /v1/orders/{id}`, or a page `{"items": [..]}`).
+//! The order files that the order commands read.
 //!
-//! Nothing in a file is trusted beyond availability: every state is decoded canonically under its template and every
-//! UTXO is looked up on the node before anything is built.
+//! There are three formats: the backup of the web wallet (`kob-backup`), the recovery or export
+//! file of the indexer (`docs/ops/executor.md` 7.5) and the order views of the indexer
+//! (`GET /v1/orders/{id}`, or a page `{"items": [..]}`).
+//!
+//! Nothing in a file is trusted beyond availability. Every state is decoded canonically under its
+//! template, and every UTXO is looked up on the node before anything is built.
 
 use std::path::Path;
 
@@ -30,7 +33,9 @@ pub struct Entry {
     pub claimed_maker: Option<[u8; 32]>,
     /// The kind the file claims (backup records).
     pub claimed_kind: Option<String>,
-    /// The entry names a state later than the placement (a backup record's `last`, an export's current state, a proven view).
+    /// The entry names a state later than the placement.
+    ///
+    /// That is a backup record's `last`, the current state of an export, or a proven view.
     pub later: bool,
 }
 
@@ -82,7 +87,9 @@ pub struct View {
     pub ext: Option<[u8; 32]>,
     /// The live custody UTXO (a pair order: of its first custody).
     pub custody: Option<TokenView>,
-    /// A pair order's second live custody UTXO (a sell-first `KobIfdPair`'s B prefund: `pair.custodies[1].utxo`).
+    /// A pair order's second live custody UTXO, `pair.custodies[1].utxo`.
+    ///
+    /// For a sell-first `KobIfdPair` it is the B prefund.
     pub custody_b: Option<TokenView>,
     /// Live strays.
     pub strays: Vec<TokenView>,
@@ -162,7 +169,9 @@ fn int(v: Option<&Value>, what: &str) -> Result<Option<i128>, String> {
     }
 }
 
-/// Read one file of any of the three formats. `network` is checked against the file's own (backup and export files).
+/// Read one file of any of the three formats.
+///
+/// `network` is checked against the network of the file itself, for backup and export files.
 pub fn read_file(path: &Path, network: &str) -> Result<Parsed, String> {
     let v = read_json(path)?;
     parse(&v, &path.display().to_string(), network)
@@ -291,7 +300,7 @@ fn export_entry(e: &Value) -> Result<Entry, String> {
         ext: opt_h32(o.get("extension_commitment"), "extension_commitment")?,
         claimed_maker: None,
         claimed_kind: None,
-        // the export carries the current script when the exporter knew it (executor.md 7.5)
+        // The export carries the current script when the exporter knew it (executor.md 7.5).
         later: true,
     })
 }
@@ -356,7 +365,8 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
         None | Some(Value::Null) => None,
         Some(u) => Some(token_view(u, "custody.utxo")?),
     };
-    // a pair order view lists its custodies under `pair.custodies` (record order); the top-level `custody` is the first
+    // A pair order view lists its custodies under `pair.custodies` in record order. The top-level
+    // `custody` is the first.
     let custody_b = match o.get("pair").and_then(|p| p.get("custodies")).and_then(|c| c.get(1)).and_then(|c| c.get("utxo")) {
         None | Some(Value::Null) => None,
         Some(u) => Some(token_view(u, "pair.custodies[1].utxo")?),
@@ -383,8 +393,10 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
     })
 }
 
-/// Merge entries of one covenant id: entries with a later state first; every distinct span of the same template is kept
-/// as a candidate (the node decides which, if any, is the order's script).
+/// Merge the entries of one covenant id, entries with a later state first.
+///
+/// Every distinct span of the same template is kept as a candidate. The node decides which one,
+/// if any, is the script of the order.
 pub fn merge(entries: Vec<Entry>) -> (Vec<Entry>, Vec<Rejected>) {
     let mut out: Vec<Entry> = vec![];
     let mut notes = vec![];

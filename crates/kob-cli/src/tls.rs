@@ -1,13 +1,16 @@
-//! Blocking TLS for the indexer client (`https://` REST, `wss://` for `kob watch`): rustls with the ring provider and the
-//! webpki roots compiled in (the same set `kobd` uses): no system OpenSSL, no system certificate store, the same trust
-//! on every platform. The node's wRPC stays plain `ws://` (a local node).
+//! Blocking TLS for the indexer client and the Borsh link to a node.
+//!
+//! The users are `https://` REST, `wss://` for `kob watch` and `wss://` Borsh endpoints. It is
+//! rustls with the ring provider and the webpki roots compiled in, the same set that `kobd` uses.
+//! That means no system OpenSSL and no system certificate store, so the trust is the same on every
+//! platform. The JSON wRPC of a node stays plain `ws://`.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-/// The client configuration: ring, the safe default protocol versions, the webpki roots.
+/// The client configuration: ring, the safe default protocol versions and the webpki roots.
 fn config() -> Arc<rustls::ClientConfig> {
     static CFG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CFG.get_or_init(|| {
@@ -65,8 +68,10 @@ impl Write for Stream {
     }
 }
 
-/// Why a socket operation failed, as an English phrase (the operating system's own text comes in the system language and
-/// names the host again): the kinds a user meets are named, any other error keeps its own text.
+/// Why a socket operation failed, as an English phrase.
+///
+/// The text of the operating system is in the system language and names the host again. The kinds
+/// that a user meets are named here, and any other error keeps its own text.
 pub fn describe_io(e: &std::io::Error) -> String {
     use std::io::ErrorKind::*;
     match e.kind() {
@@ -85,8 +90,10 @@ pub fn describe_io(e: &std::io::Error) -> String {
     }
 }
 
-/// A TCP connection to `host:port` with read and write timeouts, wrapped in TLS when `secure` (server name: `host`). The
-/// error is the reason only (`connection refused`, `timed out`, `cannot resolve the host name`): the caller names the host.
+/// Open a TCP connection to `host:port` with read and write timeouts, in TLS when `secure`.
+///
+/// The server name is `host`. The error is the reason only, such as `connection refused`,
+/// `timed out` or `cannot resolve the host name`, and the caller names the host.
 pub fn connect(secure: bool, host: &str, port: u16, timeout: Duration) -> Result<Stream, String> {
     let addr = (host, port)
         .to_socket_addrs()
@@ -112,7 +119,8 @@ mod tests {
     fn the_configuration_builds_and_a_refused_connection_is_an_english_reason() {
         let _ = config();
         let e = connect(true, "127.0.0.1", 1, Duration::from_millis(300)).err().unwrap();
-        // a closed port is refused (a firewall may time it out instead): never the system language, never the host
+        // A closed port is refused, though a firewall may time it out instead. Never the system
+        // language, never the host.
         assert!(e == "connection refused" || e == "timed out", "{e}");
         assert!(connect(true, "not a host", 443, Duration::from_millis(300)).is_err());
     }
