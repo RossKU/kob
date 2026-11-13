@@ -3085,7 +3085,7 @@ that only knows the ids it submitted).
 without `rpc_url` uses). The executor asks the Kaspa
 resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`;
 `GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh`, tried in a random order with a 5 s timeout each) for public nodes, which serve Borsh wRPC over TLS only. It always uses two, on different hosts
-(`rpc::resolver`):
+(`rpc::resolver`). Observed 2026-10-22: the `json` encoding was `NOT FOUND` on every resolver, for every enabled group, so only `borsh` names nodes.
 
 * `resolver` is the chain authority; a second entry `resolver:2` is added by itself. It fetches windows of transaction
   bodies (checked against the authority as any other node's, Part B 3, *Several nodes*), takes every submission, and vouches
@@ -3509,6 +3509,16 @@ commit and where the rule lives now.
 | R2-L-2 | A restored journal entry refused for a missing input waits for the store before it counts as dropped. | `64414f4ed` | `matcher/submit.rs` |
 | R3-L-4 | A retired transaction that no node's mempool holds, twice in a row, frees its inputs before its hold ends. | `7b903793b` | `matcher/submit.rs`, `matcher/run.rs` |
 | R4-L-5 | The clock check judges from the first samples after a start and names the nodes when every one is behind. | `8c4799247` | `matcher/run.rs` |
+| M-5 | The health and the metrics carry the data directory's free bytes and the database's size (measured once a minute); a full disk, an I/O error or a corrupt file is the state `storage_error`, not "node unavailable". | `b1ee61e98` | `disk.rs`, `indexer/status.rs` |
+| M-10 | A key file inside the data directory is refused; a pause file there is refused when the directory is gone and warned about while it exists. | `012884030` | `executor.rs` (`refuse_files_in_data_dir`) |
+| M-13, M-16 | `/v1/health` and `/v1/metrics` name the build, its template generation and, under `kobd --executor`, the Executor's funds, submissions and series. | `ad643b6f7`, `b1ee61e98` | `matcher/run.rs`, `indexer/status.rs`, `api/tests.rs` |
+| L-12 | A host whose first address does not answer (an IPv6 one on an IPv4-only link) is reached on the next address; the whole GET ends within 5 s and one resolution within 60 s. | `67cfaaa2f` | `rpc/tls.rs` (`connect_any`), `rpc/resolver.rs` |
+| L-16 | `kobd health` asks the read API and is healthy only on 200 with `"ok": true`; the Docker image uses it as its HEALTHCHECK. | `71a5d6eac` | `cli.rs` |
+| R3-L-2 | A halted follower says "indexer still halted" every 10 minutes; a public chain authority whose answer contradicts the store is given up for another. | `d1a2536b8` | `indexer/follower.rs`, `rpc/multi.rs` |
+| R3-M-1 | Only a resolution that named a node counts against the rate limit, so a network blip heals within the backoff; an empty authority or pair is never held back. | `92d3f2bf6` | `rpc/resolver.rs` |
+| R4-L-1 | When a second authority on another host contradicts the store at the same cursor, the store halts there as a gap whose reason says the store is at fault. | `15a421bc3` | `rpc/multi.rs` |
+| R4-L-3, R4-L-4 | A named node found frozen keeps its alarm while its sink stays where it was found; only a node whose sink was seen to change counts as advancing. | `471ba7c12` | `rpc/multi.rs` |
+| R4-L-7 | A closed console pipe never takes the process down: the console is dropped at its first failed write, with one warning in the log file; the start banner and the exit error never panic. | `8415c0efb`, `8e700577c` | `logging.rs` |
 
 Paths are under `crates/kobd/src`. The keeper rule that a job which loses money only through its funding input or the foreign
 strays it returns is rebuilt without them (finding K-7 of an earlier review) predates the public history.
