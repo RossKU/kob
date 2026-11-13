@@ -1925,16 +1925,21 @@ impl Processor {
             }
             Act::Unknown => events.push(("unknown", None, None, closes)),
         }
-        // For a fill: what it released to the filler at the tip in force of the order, and the
-        // script that funded the transaction. An amend of an earlier transaction has already taken
-        // its new tip into the row. See `activity` and `GET /v1/stats`.
+        // For a fill: its priority tip, and the script that funded the transaction. The tip is the
+        // one the terms in force name (an amend of an earlier transaction has already taken its new
+        // tip into the row), at most the KAS the fill moved for the order. An unproven state, or one
+        // that fails the sanity check, records none. See `activity::fill_tip` and `GET /v1/stats`.
         let (fee, executor) = match events.iter().find(|e| e.0 == "fill") {
             Some(&(_, amount, _, _)) => {
                 let terms: Option<(Option<i64>, Option<i64>)> = conn
                     .prepare_cached("SELECT tip, scale FROM orders WHERE covenant_id = ?1")?
                     .query_row([&s.cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
                     .optional()?;
-                let fee = terms.and_then(|(tip, scale)| super::activity::fill_fee(amount, tip, scale));
+                let sane = s.before.as_ref().is_some_and(|b| crate::sanity::check(b).is_ok());
+                let moved = fill_moved(rec, s, payout);
+                let fee = terms
+                    .filter(|_| sane)
+                    .and_then(|(tip, scale)| super::activity::fill_tip(super::activity::fill_fee(amount, tip, scale), moved));
                 (fee, rec.payer.as_deref().map(|spk| super::activity::intern_script(conn, spk)).transpose()?)
             }
             None => (None, None),
@@ -2366,6 +2371,18 @@ pub fn tx_json(rec: &TxRecord, payload: Vec<u8>) -> TxJson {
         storage_mass: 0,
         payload,
     }
+}
+
+/// The KAS a fill moved for its order: the bound of the tip it records ([`super::activity::fill_tip`]).
+///
+/// It is the larger of what the order UTXO released, its value less its continuation's, and what
+/// the fill paid the maker of a sell order, `payout`, the output at the order's input index. A buy
+/// order and a pair order pay the tip out of their own KAS. A sell order's tip is a discount on
+/// what it is paid.
+fn fill_moved(rec: &TxRecord, s: &Spent, payout: Option<i64>) -> i64 {
+    let cont = rec.outputs.iter().find(|o| o.cov.is_some_and(|(_, c)| c == s.cov)).map_or(0, |o| i128::from(o.value));
+    let released = (i128::from(s.value) - cont).max(0);
+    released.max(i128::from(payout.unwrap_or(0))).min(i64::MAX as i128) as i64
 }
 
 /// The `(txid, idx, value, state)` of the current UTXO of an order.

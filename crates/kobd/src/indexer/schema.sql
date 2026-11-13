@@ -131,8 +131,9 @@ CREATE TABLE IF NOT EXISTS order_events (
     payout      INTEGER,                  -- sell side: value of the maker payout output (positional rule)
     closes      INTEGER NOT NULL DEFAULT 0,
     detail      TEXT,
-    -- (schema 10) a fill: sompi it released to the filler, floor(amount x tip / scale) at the tip the order had at the fill
-    -- (`activity::fill_fee`; NULL: a term unknown). NULL for every other kind.
+    -- (schema 10) a fill: its priority tip in sompi, floor(amount x tip / scale) at the tip the order had at the fill, at most the KAS
+    -- the fill moved for the order (`activity::fill_tip`; NULL: a term unknown, or the order's state unproven or not sane). NULL for every
+    -- other kind.
     fee         INTEGER,
     -- (schema 10) a fill: scripts.id of the script that funded its transaction (the record log's payer section: an Executor's
     -- funding key). NULL: not recorded (a frame written before 2026-11-09, or no plain input funded it). NULL for every other kind.

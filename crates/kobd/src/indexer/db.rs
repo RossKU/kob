@@ -265,6 +265,11 @@ pub fn backfill_counters(conn: &Connection) -> DbResult<bool> {
 /// them. It does nothing (returns false) once done (`meta.activity`). A fresh database counts its
 /// empty tables. The minute buckets are counted from the events in one pass, and the hour buckets
 /// from the minutes.
+///
+/// The fees of a bucket saturate at `i64::MAX` rather than fail, as `SUM` does past 64 bits. They are
+/// summed as their high and low 32 bits, which cannot overflow, and an integer product or sum past
+/// 64 bits turns into a real that `MIN` takes back to `i64::MAX`. A store that an earlier build
+/// indexed with the tips that hostile terms name (`activity::fill_tip`) could not open otherwise.
 pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
     if meta_get(conn, "activity")?.is_some() {
         return Ok(false);
@@ -273,7 +278,7 @@ pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
     tx.execute_batch(
         "DELETE FROM activity; DELETE FROM actors; \
          INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n) \
-           SELECT 60000, t, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), SUM(miner_fee_n), \
+           SELECT 60000, t, SUM(fills), MIN(SUM(fees >> 32) * 4294967296 + SUM(fees & 4294967295), 9223372036854775807), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), SUM(miner_fee_n), \
                   SUM(net), SUM(net_n), SUM(own_n) FROM ( \
              SELECT ts - ts % 60000 AS t, kind = 'fill' AS fills, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fees, \
                     kind = 'create' AS orders, 0 AS txs, 0 AS income, 0 AS income_n, 0 AS miner_fees, 0 AS miner_fee_n, 0 AS net, 0 AS net_n, \
@@ -284,7 +289,7 @@ pub fn backfill_activity(conn: &Connection) -> DbResult<bool> {
                FROM (SELECT ts, miner_fee, own_trade, CASE WHEN own_trade = 0 THEN income END AS ci FROM executor_txs)) \
            GROUP BY t; \
          INSERT INTO activity (iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n) \
-           SELECT 3600000, t - t % 3600000, SUM(fills), SUM(fees), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), \
+           SELECT 3600000, t - t % 3600000, SUM(fills), MIN(SUM(fees >> 32) * 4294967296 + SUM(fees & 4294967295), 9223372036854775807), SUM(orders), SUM(txs), SUM(income), SUM(income_n), SUM(miner_fees), \
                   SUM(miner_fee_n), SUM(net), SUM(net_n), SUM(own_n) FROM activity WHERE iv = 60000 GROUP BY t - t % 3600000; \
          INSERT INTO actors (kind, actor_id, last_block) \
            SELECT 1, maker_id, MAX(genesis_block) FROM orders WHERE maker_id IS NOT NULL GROUP BY maker_id; \

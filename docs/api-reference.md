@@ -946,9 +946,10 @@ one index range whatever the size of the history, and a reorg takes its blocks o
   input that spends no covenant output: an Executor's funding key), from the same first block. Only fills indexed from record-log frames written
   since 2026-11-09 (format 4, which records that script) name one: the fills a store indexed before (and a replay of an older log) have no
   executor and are not counted, nor is a fill whose transaction no plain input funded.
-* `tips_paid` (sompi, string): the priority tips the range's fills released to their fillers, `floor(amount x tip / scale)` per fill event at
-  the tip the order had at the fill (an amend after it does not change it). A fill whose terms are unknown (an imported history without a tip)
-  counts 0. `fees_paid` is the same figure under its first name: **deprecated** (kept for older clients; it was never all the executors earned).
+* `tips_paid` (sompi, string): the priority tips of the range's fills, `floor(amount x tip / scale)` per fill event at the tip the order had
+  at the fill (an amend after it does not change it), at most the KAS the fill moved for the order (what a bid or pair order paid out of its
+  KAS, or what a sell order was paid). A fill whose terms are unknown (an imported history without a tip), or of an order whose state is
+  unproven or fails the sanity check, counts 0. `fees_paid` is the same figure under its first name: **deprecated** (kept for older clients; it was never all the executors earned).
 * `executor_income` (sompi, string, may be negative) with `executor_income_txs` and `executor_income_unknown_txs` (numbers), schema 11: what the
   executors' transactions of the range left to the executors that sent them, before network fees. An executor's transaction is one that spends a
   tracked order by anything but the maker's own cancel, amend or sweep: a fill (one transaction however many orders it fills), a refund, a kill,

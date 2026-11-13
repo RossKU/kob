@@ -697,25 +697,33 @@ fn checks() -> Vec<(&'static str, String, String)> {
 /// Checks the activity totals just counted against the rows.
 ///
 /// The minutes and the hours hold every fill and `create` event once, and the fees the events
-/// carry. A difference aborts the migration and leaves the old store untouched.
-fn check_activity(conn: &Connection) -> DbResult<()> {
-    let sums = |iv: i64| -> DbResult<(i64, i64, i64)> {
-        Ok(conn.query_row(
-            "SELECT COALESCE(SUM(fills), 0), COALESCE(SUM(fees), 0), COALESCE(SUM(orders), 0) FROM main.activity WHERE iv = ?1",
-            [iv],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?)
+/// carry, each bucket's saturating at `i64::MAX` (`db::backfill_activity`). A difference aborts the
+/// migration and leaves the old store untouched.
+///
+/// The fees are added up in Rust, in 128 bits: the buckets of a store, and the fees of a minute,
+/// may sum past 64 bits, where the SQLite `SUM` fails.
+pub(crate) fn check_activity(conn: &Connection) -> DbResult<()> {
+    let total = |sql: &str, iv: i64| -> DbResult<(i64, i128, i64)> {
+        let mut st = conn.prepare(sql)?;
+        let mut rows = st.query([iv])?;
+        let mut s = (0i64, 0i128, 0i64);
+        while let Some(r) = rows.next()? {
+            s.0 += r.get::<_, i64>(0)?;
+            s.1 += i128::from(r.get::<_, i64>(1)?);
+            s.2 += r.get::<_, i64>(2)?;
+        }
+        Ok(s)
     };
-    let events: (i64, i64, i64) = conn.query_row(
-        "SELECT COALESCE(SUM(kind = 'fill'), 0), COALESCE(SUM(CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END), 0), COALESCE(SUM(kind = 'create'), 0)          FROM main.order_events WHERE kind IN ('fill', 'create')",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-    )?;
-    let (m, h) = (sums(super::activity::MINUTE)?, sums(super::activity::HOUR)?);
-    if m != events || h != events {
-        return Err(bad(format!(
-            "activity: the buckets ({m:?} by minute, {h:?} by hour) do not add up to the events ({events:?}). Nothing was migrated (the old store is untouched)"
-        )));
+    let buckets = "SELECT fills, fees, orders FROM main.activity WHERE iv = ?1";
+    // Per bucket, as the backfill sums them.
+    let events = "SELECT SUM(kind = 'fill'), MIN(SUM(fees >> 32) * 4294967296 + SUM(fees & 4294967295), 9223372036854775807), SUM(kind = 'create')                   FROM (SELECT ts, kind, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fees FROM main.order_events WHERE kind IN ('fill', 'create'))                   GROUP BY ts - ts % ?1";
+    for (iv, name) in [(super::activity::MINUTE, "minute"), (super::activity::HOUR, "hour")] {
+        let (b, e) = (total(buckets, iv)?, total(events, iv)?);
+        if b != e {
+            return Err(bad(format!(
+                "activity: the buckets by {name} ({b:?}) do not add up to the events ({e:?}). Nothing was migrated (the old store is untouched)"
+            )));
+        }
     }
     // The executors' transactions, their income and network fees.
     let txs = |iv: i64| -> DbResult<(i64, i64, i64)> {

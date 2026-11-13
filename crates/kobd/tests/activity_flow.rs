@@ -426,3 +426,57 @@ async fn an_executor_trading_for_itself_is_not_counted_as_paid_to_it() {
     let fees: i64 = [&matched, &refund].iter().map(|t| t.fee.fee as i64).sum();
     assert_eq!((v.executor_net.clone(), v.executor_net_txs), ((spread + e.refund_tip - fees).to_string(), 2));
 }
+
+/// A fill's tip is at most the KAS the fill moved for its order, and an order whose state fails the sanity check records none.
+///
+/// `KobAsk` requires only `price >= tip` and pays its maker `ceil(n x (price - tip) / scale)`. Asks at `price = tip` filled one base
+/// unit each pay their makers nothing but their carriers, and their terms named a tip of 2^60 (sane) or 2.9e18 (not sane) sompi per
+/// fill. Eight such fills in one minute summed the bucket's fees past 64 bits, into a float, which a revert then took back inexactly.
+#[tokio::test]
+async fn a_tip_is_at_most_the_kas_its_fill_moved_and_an_insane_order_records_none() {
+    let c = Ctx::with(kobd::testkit::Harness::new(open_memory("testnet-10").unwrap(), None));
+    let (sane, insane) = (1i64 << 60, activity::MAX_FEE);
+    let tops = [sane, sane, sane, sane, sane, sane, sane, sane, insane];
+    let asks: Vec<AskState> = tops
+        .iter()
+        .map(|&top| AskState { price: top, tip: top, scale: 1, min_fill: 1, amount_left: 1, ..ask(MAKER_A, P250) })
+        .collect();
+    let creates: Vec<SignedTx> = asks.iter().map(|a| c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 1)).collect();
+    c.push(&creates.iter().collect::<Vec<_>>()).await;
+    let leg = |k: usize| {
+        let cov = c.w.cov(&creates[k], 0);
+        let custody = c.w.token_at(&creates[k], 1, Kcc20State::custody(1, cov.0, EXT));
+        Leg::Ask { order: c.w.order(&creates[k], 0, asks[k].clone()), custody, amount: 1, t: None }
+    };
+    // A transaction of the token's program spends at most 3 token inputs: three batches of three asks, in one block.
+    let fills = [0, 3, 6].map(|k| c.w.sign(&Action::Batch(batch(&c.w, c.daa(), (k..k + 3).map(leg).collect()))));
+    c.push(&fills.iter().collect::<Vec<_>>()).await;
+    let mut paid = 0i64;
+    for (k, create) in creates.iter().enumerate() {
+        let cov = c.w.cov(create, 0);
+        let fee: Option<i64> = c.hs.query(
+            "SELECT fee FROM order_events WHERE kind = 'fill' AND order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            [&cov.0[..]],
+        );
+        // What the order moved: the KAS of its UTXO (a sold-out ask has no continuation), or its payout if that is more.
+        let fill = &fills[k / 3];
+        let input = fill.tx.inputs.iter().position(|i| i.transaction_id == create.tx.id && i.index == 0).expect("the order's input");
+        let moved = (CARRIER as i64).max(fill.tx.outputs[input].value as i64);
+        if tops[k] == sane {
+            assert_eq!(fee, Some(moved), "ask {k}: the tip its terms name ({sane}) is bounded by the KAS the fill moved");
+            paid += moved;
+        } else {
+            assert_eq!(fee, None, "ask {k}: an order that fails the sanity check records no tip");
+        }
+    }
+    assert!(paid < 1 << 40);
+    let v = live(&c);
+    assert_eq!((v.fills, v.tips_paid.clone()), (tops.len() as i64, paid.to_string()));
+    let real: i64 = c.hs.query("SELECT COUNT(*) FROM activity WHERE typeof(fees) != 'integer'", []);
+    assert_eq!(real, 0, "every bucket's fees stay an integer");
+    // A reorg takes the tips back exactly.
+    c.hs.node.reorg(1, vec![vec![]]);
+    c.hs.sync().await;
+    let v = live(&c);
+    assert_eq!((v.fills, v.tips_paid), (0, "0".to_string()));
+}

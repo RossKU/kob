@@ -10,9 +10,11 @@
 //! - **orders**: the orders placed in the range. These are the `create` events at or after `since`,
 //!   summed from the per-minute and per-hour buckets of `activity`: the minutes up to the first
 //!   whole hour, then the hours. For all time it is the `orders` counter.
-//! - **fills** and **tips paid**, likewise: the fill events, and the priority tips they released to
-//!   the filler, `amount x tip / scale` at the tip the order had at the fill. The tip is stored
-//!   with the event (`order_events.fee`), so a later amend does not change it. `fees_paid` is the
+//! - **fills** and **tips paid**, likewise: the fill events, and their priority tips. A tip is
+//!   `amount x tip / scale` at the tip the order had at the fill, at most the KAS the fill moved
+//!   for the order ([`fill_tip`]). An order whose state is unproven or fails the sanity check
+//!   records none. The tip is stored with the event (`order_events.fee`), so a later amend does
+//!   not change it. `fees_paid` is the
 //!   same figure under its first name. It is deprecated, because it is not all the executors earn.
 //! - **executor income**: what the executors' transactions of the range left to their senders
 //!   before the network fee. The transactions are fills, refunds, kills, expiries, arms, trails and
@@ -54,14 +56,14 @@ pub const HOUR: i64 = 3_600_000;
 
 /// The most a fee may be: the KAS supply in sompi (29 billion KAS).
 ///
-/// A fee the terms put above it is not a fee any transaction can pay, and the sums stay in 64 bits,
-/// so it is unknown.
+/// A fee the terms put above it is not a fee any transaction can pay, so it is unknown.
 pub const MAX_FEE: i64 = 29_000_000_000 * 100_000_000;
 
-/// What a fill of `amount` base units released to its filler at `tip` sompi per whole token.
+/// The tip that the terms of a fill of `amount` base units name, at `tip` sompi per whole token.
 ///
 /// A whole token is `scale` base units. The result is `floor(amount x tip / scale)`, the covenants'
-/// rounding. It is `None` when a term is missing or out of range.
+/// rounding. It is `None` when a term is missing or out of range. It is what the terms name, not
+/// what the fill released: a fill records [`fill_tip`].
 pub fn fill_fee(amount: Option<i64>, tip: Option<i64>, scale: Option<i64>) -> Option<i64> {
     let (amount, tip, scale) = (amount?, tip?, scale?);
     if amount < 0 || tip < 0 || scale <= 0 {
@@ -69,6 +71,18 @@ pub fn fill_fee(amount: Option<i64>, tip: Option<i64>, scale: Option<i64>) -> Op
     }
     let fee = i128::from(amount) * i128::from(tip) / i128::from(scale);
     i64::try_from(fee).ok().filter(|f| *f <= MAX_FEE)
+}
+
+/// The tip a fill records: `fee`, the one its terms name ([`fill_fee`]), at most `moved`, the KAS
+/// the fill moved for its order.
+///
+/// The terms alone bound nothing. `KobAsk` requires only `price >= tip` and pays its maker
+/// `ceil(n x (price - tip) / scale)`. An ask at `price = tip` that its own maker fills pays nothing
+/// and named a tip of up to [`MAX_FEE`] per fill: four such fills in a minute summed a bucket past
+/// 64 bits. An honest tip is a part of what moved: a bid pays it out of its escrow, a pair order out
+/// of its KAS, and an ask grants it as a discount on its payout.
+pub fn fill_tip(fee: Option<i64>, moved: i64) -> Option<i64> {
+    fee.map(|f| f.min(moved.max(0)))
 }
 
 /// The id of a script public key in `scripts`, added on first sight and never deleted, like `ids`.
@@ -113,9 +127,9 @@ pub struct ActivityView {
     ///
     /// It is not all the executors earn: see `executor_income`.
     pub fees_paid: String,
-    /// The priority tips the fills of the range released to their fillers (sompi, a string).
+    /// The priority tips of the fills of the range (sompi, a string).
     ///
-    /// It is `floor(amount x tip / scale)` per fill.
+    /// It is `floor(amount x tip / scale)` per fill, at most the KAS the fill moved ([`fill_tip`]).
     pub tips_paid: String,
     /// What the executors' transactions of the range left to their senders before the network fee.
     ///
@@ -226,8 +240,10 @@ fn buckets_from(conn: &Connection, from: i64) -> DbResult<Sums> {
         "SELECT {cols} FROM activity WHERE iv = ?1 AND t >= ?2 AND t < ?3 UNION ALL SELECT {cols} FROM activity WHERE iv = ?4 AND t >= ?3"
     ))?;
     let mut rows = st.query(params![MINUTE, from, hour, HOUR])?;
-    // A sompi sum that left 64 bits reads as a float rather than failing the read. It cannot happen
-    // with real amounts ([`MAX_FEE`]).
+    // A bucket that the triggers summed past 64 bits holds a float, and reads as one rather than
+    // failing the read. Each tip is at most the KAS its fill moved ([`fill_tip`]), so that takes KAS
+    // moved over and over through one bucket, or a store an earlier build indexed with the tips its
+    // terms named.
     let sompi = |r: &rusqlite::Row<'_>, i: usize| -> rusqlite::Result<i128> {
         Ok(match r.get_ref(i)? {
             rusqlite::types::ValueRef::Integer(v) => i128::from(v),
@@ -302,5 +318,45 @@ mod tests {
         assert_eq!(fill_fee(Some(i64::MAX), Some(i64::MAX), Some(1)), None);
         assert_eq!(fill_fee(Some(MAX_FEE), Some(1), Some(1)), Some(MAX_FEE));
         assert_eq!(fill_fee(Some(MAX_FEE), Some(2), Some(1)), None);
+        assert_eq!(fill_tip(Some(MAX_FEE), 1_000), Some(1_000));
+        assert_eq!(fill_tip(Some(7), 1_000), Some(7));
+        assert_eq!(fill_tip(Some(7), -1), Some(0));
+        assert_eq!(fill_tip(None, 1_000), None);
+    }
+
+    /// The totals of a store holding the tips that an earlier build recorded from hostile terms.
+    ///
+    /// Four fills of [`MAX_FEE`] in one minute sum past 64 bits. The start-up count (`db::backfill_activity`) and the migration's
+    /// check (`storage::check_activity`) failed there with "integer overflow". They now saturate the bucket, as an integer.
+    #[test]
+    fn the_counts_of_tips_past_64_bits_saturate_and_never_fail() {
+        let c = super::super::db::open_memory("testnet-10").unwrap();
+        let fill = |ts: i64, fee: i64| {
+            c.execute(
+                "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, amount, fee) VALUES (1, 0, 0, ?1, randomblob(32), 0, 'fill', 1, ?2)",
+                params![ts, fee],
+            )
+            .unwrap();
+        };
+        for k in 0..4 {
+            fill(60_000 + k, MAX_FEE);
+        }
+        fill(120_000, 3);
+        fill(120_001, 4);
+        c.execute_batch("DELETE FROM meta WHERE k = 'activity'").unwrap();
+        assert!(super::super::db::backfill_activity(&c).unwrap());
+        let bucket = |iv: i64, t: i64| -> (String, i64) {
+            c.query_row("SELECT typeof(fees), fees FROM activity WHERE iv = ?1 AND t = ?2", params![iv, t], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+        };
+        assert_eq!(bucket(MINUTE, 60_000), ("integer".to_string(), i64::MAX));
+        assert_eq!(bucket(MINUTE, 120_000), ("integer".to_string(), 7));
+        assert_eq!(bucket(HOUR, 0), ("integer".to_string(), i64::MAX));
+        super::super::storage::check_activity(&c).unwrap();
+        // A bucket that does not hold what its events sum to still fails the check.
+        c.execute("UPDATE activity SET fees = 8 WHERE iv = ?1 AND t = 120000", [MINUTE]).unwrap();
+        assert!(super::super::storage::check_activity(&c).is_err());
     }
 }
