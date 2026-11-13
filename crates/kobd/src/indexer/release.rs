@@ -1,20 +1,29 @@
 //! The update notice: a newer KOB release in use on chain.
 //!
-//! Every placement a KOB build writes carries the release of that build (the optional `RELEASE` record of the KOB1 payload,
-//! `docs/spec/kob1-payload.md`). The indexer notes the releases NEWER than its own build that it finds next to the placements
-//! it accepts, and once one of them has been seen on [`MIN_PLACEMENTS`] placements (distinct transactions) of at least
-//! [`MIN_MAKERS`] makers it reports it: `newer_release_seen` of `/v1/health`, a suffix of the status line, the
-//! `kob_newer_release_seen` metric, an INFO log once per version. The bar is there so one record (anyone can write any
-//! release into a payload) cannot raise it; it still costs real orders. There is no project server: the chain and the
-//! founder's posts are how an operator learns of a release (`docs/ops/release.md`).
+//! Every placement a KOB build writes carries the release of that build, in the optional
+//! `RELEASE` record of the KOB1 payload (`docs/spec/kob1-payload.md`). The indexer notes the
+//! releases newer than its own build that it finds next to the placements it accepts. Once one
+//! of them has been seen on [`MIN_PLACEMENTS`] placements (distinct transactions) of at least
+//! [`MIN_MAKERS`] makers, the indexer reports it in four places:
+//! - `newer_release_seen` of `/v1/health`.
+//! - A suffix of the status line.
+//! - The `kob_newer_release_seen` metric.
+//! - An INFO log line, once per version.
 //!
-//! The notice is informational: nothing the indexer, the matcher or the keepers do depends on it.
+//! The bar exists because anyone can write any release into a payload. One record cannot raise
+//! the notice, and raising it still costs real orders. There is no project server. An operator
+//! learns of a release from the chain and from announcements (`docs/ops/release.md`).
 //!
-//! The sightings are kept in the database (`meta.release_sightings`, a few hundred bytes of JSON), so a restart keeps the
-//! notice; they are written in the transaction of the block that carried them and are not reverted by a reorg (a reorged-away
-//! placement may have counted). Only releases newer than the build are stored, and at most [`MAX_VERSIONS`] of them (the
-//! lowest: the real next release is the closest one). Once the operator runs that release, they are no longer newer and
-//! the notice is gone.
+//! The notice is informational. Nothing the indexer, the matcher or the keepers do depends on it.
+//!
+//! # Storage
+//!
+//! The sightings are kept in the database (`meta.release_sightings`, a few hundred bytes of
+//! JSON), so a restart keeps the notice. They are written in the transaction of the block that
+//! carried them. A reorg does not revert them, because a reorged-away placement may have counted.
+//! Only releases newer than the build are stored, and at most [`MAX_VERSIONS`] of them. The
+//! lowest are kept, since the real next release is the closest one. Once the operator runs that
+//! release, it is no longer newer and the notice is gone.
 
 use super::db::{meta_get, meta_set, DbResult};
 use crate::hex::Hash32;
@@ -31,7 +40,7 @@ pub const MAX_VERSIONS: usize = 8;
 
 const META_KEY: &str = "release_sightings";
 
-/// The newest release seen often enough on chain (`/v1/health` `newer_release_seen`).
+/// The newest release seen often enough on chain, as shown in `/v1/health`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct NewerRelease {
     /// `0.1.1`.
@@ -40,7 +49,10 @@ pub struct NewerRelease {
     pub first_seen_daa: u64,
 }
 
-/// What is known of one newer release: where it was first seen, and up to the bar, the placements and makers it was seen with.
+/// What is known of one newer release.
+///
+/// It holds where the release was first seen and, up to the bar, the placements and makers it
+/// was seen with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Seen {
     version: Release,
@@ -62,9 +74,11 @@ pub struct Sightings {
 }
 
 impl Sightings {
-    /// Notes that the placement `txid` of `maker`, in a block of DAA score `daa`, announces `version`, for a build of release
-    /// `core` (a pre-release build when `prerelease`). Idempotent: the same placement again (a replay) changes nothing.
-    /// Returns whether anything changed.
+    /// Notes that placement `txid` of `maker`, in a block of DAA score `daa`, announces `version`.
+    ///
+    /// The build has release `core` (a pre-release build when `prerelease`). The call is
+    /// idempotent: the same placement again, as in a replay, changes nothing. Returns whether
+    /// anything changed.
     pub fn note(&mut self, core: Release, prerelease: bool, version: Release, maker: Hash32, txid: Hash32, daa: u64) -> bool {
         if !version.is_newer_than(core, prerelease) {
             return false;
@@ -99,7 +113,7 @@ impl Sightings {
         changed
     }
 
-    /// The newest release past the bar that is newer than a build of `core` (`None`: none).
+    /// The newest release past the bar that is newer than a build of `core`, or `None`.
     pub fn newer(&self, core: Release, prerelease: bool) -> Option<NewerRelease> {
         self.versions
             .iter()
@@ -108,21 +122,25 @@ impl Sightings {
             .map(|s| NewerRelease { version: s.version, first_seen_daa: s.first_seen_daa })
     }
 
-    /// Drops what is not newer than a build of `core` (after an update).
+    /// Drops what is not newer than a build of `core`, as after an update.
     fn retain_newer(&mut self, core: Release, prerelease: bool) {
         self.versions.retain(|s| s.version.is_newer_than(core, prerelease));
     }
 }
 
-/// The stored sightings (empty when there are none, or the row does not parse: it is informational and rebuilt from new
-/// placements).
+/// The stored sightings.
+///
+/// The result is empty when there are none or the row does not parse. The row is informational
+/// and is rebuilt from new placements.
 pub fn load(conn: &Connection) -> DbResult<Sightings> {
     let mut s: Sightings = meta_get(conn, META_KEY)?.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default();
     s.retain_newer(Release::build_core(), Release::build_is_prerelease());
     Ok(s)
 }
 
-/// [`Sightings::note`] for this build, in the store. Returns whether the stored sightings changed.
+/// Stores the sighting through [`Sightings::note`] for this build.
+///
+/// Returns whether the stored sightings changed.
 pub fn note(conn: &Connection, version: Release, maker: Hash32, txid: Hash32, daa: u64) -> DbResult<bool> {
     if !version.is_newer_than_build() {
         return Ok(false);
@@ -135,13 +153,15 @@ pub fn note(conn: &Connection, version: Release, maker: Hash32, txid: Hash32, da
     Ok(true)
 }
 
-/// The newer release this build should tell its operator about (`None`: none).
+/// The newer release this build should tell its operator about, or `None`.
 pub fn newer_seen(conn: &Connection) -> DbResult<Option<NewerRelease>> {
     Ok(load(conn)?.newer(Release::build_core(), Release::build_is_prerelease()))
 }
 
-/// Shows `n` in the health (`/v1/health`, the status line, the metric) and logs it at INFO once per version: when it is not
-/// the release the health already shows. Returns whether it was new.
+/// Shows `n` in the health and logs it at INFO, once per version.
+///
+/// The health is `/v1/health`, the status line and the metric. The log line is written when `n` is
+/// not the release the health already shows. Returns whether `n` was new.
 pub fn publish(health: &super::status::HealthState, n: NewerRelease) -> bool {
     let mut new = false;
     health.update(|h| {
@@ -160,7 +180,7 @@ pub fn publish(health: &super::status::HealthState, n: NewerRelease) -> bool {
     new
 }
 
-/// The status line's words for it.
+/// The words the status line uses for the notice.
 pub fn notice_text(n: &NewerRelease) -> String {
     format!("a newer KOB release is in use on chain ({}): update", n.version)
 }
@@ -181,17 +201,17 @@ mod tests {
         let mut s = Sightings::default();
         assert!(s.note(CORE, false, v, h(1), h(10), 500));
         assert_eq!(s.newer(CORE, false), None);
-        // the same placement again (a replay) and more placements of the same maker do not pass the bar
+        // The same placement again (a replay) and more placements of one maker do not pass the bar.
         assert!(!s.note(CORE, false, v, h(1), h(10), 500));
         assert!(s.note(CORE, false, v, h(1), h(11), 600));
         assert!(s.note(CORE, false, v, h(1), h(12), 700));
         assert_eq!(s.newer(CORE, false), None, "one maker");
-        // a second maker passes it; the first sighting's DAA is reported
+        // A second maker passes the bar. The first sighting's DAA is reported.
         assert!(s.note(CORE, false, v, h(2), h(13), 800));
         assert_eq!(s.newer(CORE, false), Some(NewerRelease { version: v, first_seen_daa: 500 }));
-        // nothing more to note once past the bar (bounded state)
+        // Nothing more is noted once past the bar, so the state stays bounded.
         assert!(!s.note(CORE, false, v, h(3), h(14), 900));
-        // an earlier block seen later (a replay from further back) moves the first sighting back
+        // An earlier block seen later (a replay from further back) moves the first sighting back.
         assert!(s.note(CORE, false, v, h(3), h(15), 400));
         assert_eq!(s.newer(CORE, false).unwrap().first_seen_daa, 400);
     }
@@ -216,7 +236,7 @@ mod tests {
             }
         }
         assert_eq!(s, Sightings::default());
-        // the same core is newer than a pre-release build of it (0.1.0 after 0.1.0-rc.1)
+        // The same core is newer than a pre-release build of it (0.1.0 after 0.1.0-rc.1).
         assert!(s.note(CORE, true, Release::new(0, 1, 0), h(1), h(1), 1));
     }
 
@@ -227,14 +247,14 @@ mod tests {
         for (k, m) in [(1u8, 1u8), (2, 2), (3, 1)] {
             s.note(CORE, false, a, h(m), h(k), 100 + k as u64);
         }
-        // a newer one seen once: still the older one past the bar
+        // A newer release seen once: the older one is still the one past the bar.
         s.note(CORE, false, b, h(9), h(20), 300);
         assert_eq!(s.newer(CORE, false).map(|n| n.version), Some(a));
         for (k, m) in [(21u8, 8u8), (22, 9)] {
             s.note(CORE, false, b, h(m), h(k), 300);
         }
         assert_eq!(s.newer(CORE, false), Some(NewerRelease { version: b, first_seen_daa: 300 }));
-        // after an update to 0.1.1, only 0.2.0 is newer; after one to 0.2.0, nothing
+        // After an update to 0.1.1 only 0.2.0 is newer. After one to 0.2.0 nothing is.
         assert_eq!(s.newer(a, false).map(|n| n.version), Some(b));
         assert_eq!(s.newer(b, false), None);
     }
@@ -242,7 +262,7 @@ mod tests {
     #[test]
     fn at_most_the_lowest_releases_are_kept() {
         let mut s = Sightings::default();
-        // a flood of made-up high releases does not crowd out the real next one
+        // A flood of made-up high releases does not crowd out the real next one.
         for k in 0..20u64 {
             s.note(CORE, false, Release::new(9, k, 0), h(1), h(k as u8), 1);
         }
@@ -261,7 +281,7 @@ mod tests {
         let core = Release::build_core();
         let next = Release::new(core.major, core.minor, core.patch + 1);
         assert_eq!(newer_seen(&conn).unwrap(), None);
-        // this build's own release and older ones are never stored
+        // This build's own release and older ones are never stored.
         assert!(!note(&conn, core, h(1), h(1), 1).unwrap());
         assert_eq!(meta_get(&conn, META_KEY).unwrap(), None);
         for (k, m) in [(1u8, 1u8), (2, 2), (3, 1)] {
@@ -269,7 +289,7 @@ mod tests {
         }
         assert!(!note(&conn, next, h(1), h(1), 10).unwrap(), "a replayed placement");
         assert_eq!(newer_seen(&conn).unwrap(), Some(NewerRelease { version: next, first_seen_daa: 10 }));
-        // a row that does not parse is ignored (informational)
+        // A row that does not parse is ignored, because the sightings are informational.
         meta_set(&conn, META_KEY, "{not json").unwrap();
         assert_eq!(newer_seen(&conn).unwrap(), None);
     }
