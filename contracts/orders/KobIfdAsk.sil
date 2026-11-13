@@ -110,9 +110,9 @@ contract KobIfdAsk(
     int constant MAX_IDLE = 77760000;
     int constant ASK_STATE_LEN = 276;
     int constant EXIT_STATE_LEN = 381;
-    // The most token inputs a transaction may carry, the KCC-20 limit. More
-    // are refused. The scan over these slots is unrolled by hand, one line per
-    // slot, so raising the cap needs as many lines.
+    // The most token inputs a transaction may carry, 8 for the 8/8 prototype.
+    // More are refused. The scan is unrolled by hand, one line per slot, so
+    // raising the cap needs as many lines.
     int constant MAX_TOK_IN = 8;
     // The merge argument is -(k * MERGE_K + m), for an input index k < 1024
     // and an amount m < MERGE_K = 2^53.

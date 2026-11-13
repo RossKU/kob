@@ -170,8 +170,8 @@ contract KobCondPair(
     int constant BID_STATE_LEN_KRON = 252;
     // State length of the KobPair template, for pair-order evidence.
     int constant PAIR_STATE_LEN = 447;
-    // The most token inputs of one token a transaction may carry, the KCC-20
-    // limit. A KRON program accepts fewer. The scans over these slots are
+    // The most token inputs of one token a transaction may carry, 8 for the
+    // 8/8 prototype. A KRON program accepts fewer. The scans over these are
     // unrolled by hand, one line per slot, so raising the cap needs as many
     // lines.
     int constant MAX_TOK_IN = 8;

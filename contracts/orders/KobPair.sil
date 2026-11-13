@@ -112,8 +112,8 @@ contract KobPair(
     // The IOC/FOK kill. Refundable by anyone 60 s (10 DAA/s) after the order
     // became fillable.
     int constant IOC_LIFE = 600;
-    // The most token inputs of one token a settle transaction may carry, the
-    // KCC-20 limit. A KRON program accepts fewer. The scans over these slots
+    // The most token inputs of one token a settle transaction may carry, 8
+    // for the 8/8 prototype. A KRON program accepts fewer. The scans over them
     // are unrolled by hand, one line per slot, so raising the cap needs as
     // many lines.
     int constant MAX_TOK_IN = 8;

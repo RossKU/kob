@@ -168,9 +168,9 @@ contract KobIfdPair(
     int constant PAIR_STATE_LEN = 447;
     // State length of the exit, KobCondPair.
     int constant EXIT_STATE_LEN = 543;
-    // The most token inputs of one token a transaction may carry, the KCC-20
-    // limit. The scans over these slots are unrolled by hand, one line per
-    // slot, so raising the cap needs as many lines.
+    // The most token inputs of one token a transaction may carry, 8 for the
+    // 8/8 prototype. The scans over these slots are unrolled by hand, one
+    // line per slot, so raising the cap needs as many lines.
     int constant MAX_TOK_IN = 8;
     // The merge argument is -(k * MERGE_K + m), for an input index k < 1024
     // and an amount m < MERGE_K = 2^53.
