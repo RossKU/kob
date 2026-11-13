@@ -1170,7 +1170,8 @@ at about **4 MB/s** together [F]. So while it is far behind, the follower fetche
   block, sent again with an allowance of its reported size (`prefetch_oversize_total` counts them). The window at the
   cursor always goes: with the room the budget leaves, and when that is too little the windows behind it are dropped
   (fetched again later) so it gets the whole budget. The one excess left: a single chain block larger than the whole
-  budget is fetched alone, with nothing else held. The window size is capped so that `fetch_parallel` windows fit;
+  budget is fetched alone, with nothing else held (TN10 flood chain blocks are about 2 MB). The window size is capped so
+  that `fetch_parallel` windows fit;
 * near the sink (lag at most `prefetch_min_lag_blue`, default 1,200 blue score, about two minutes) the follower is back to
   single steps. One step is one connection: under a flood that one connection cannot carry (on 10-07 in the soak, about
   1.2 MB/s per connection against 1.5 to 1.8 MB/s of Borsh bodies per second of chain), the lag settles near the threshold
