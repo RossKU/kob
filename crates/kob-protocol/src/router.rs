@@ -1,28 +1,36 @@
 //! The KOB router (`contracts/argent/kob_router.ag`): payment intents any keeper can execute.
 //!
-//! An intent is one covenant UTXO of one router actor. The payer creates it once (one signature,
-//! the creation transaction) and can always cancel it (`cancel`, SIGHASH_ALL); any keeper may
-//! execute it against the current book in the fill shape the actor was chosen for, without the
-//! payer; from its `deadline` (unix ms) on, anyone may `expire` it, which returns its KAS (less at
-//! most [`EXPIRE_MAX_FEE`]) and its locked tokens to the payer (`docs/argent/argent.md`, "The router"):
+//! # Intents
 //!
-//! | Intent | Payer locks | Merchant receives |
-//! |---|---|---|
-//! | `KasToToken_<shape>` | KAS | exactly `amount` of token B, bought from 1-3 `KobAsk`s |
-//! | `TokenToKas_<shape>` | token A (owner = the intent's covenant id) | at least `merchant_kas`, from selling into 1-3 `KobBid`s |
-//! | `TokenSwap_<shape>` | token A (as above) | exactly `amount_b` of token B: A into 1-2 bids, the KAS into 1-2 asks |
-//! | `TokenToKasKron_<shape>`, `TokenSwapKron_<shape>` | a KRON token A | as `TokenToKas` / `TokenSwap`, A sold into `KobBidKron`s |
+//! An intent is one covenant UTXO of one router actor. The payer creates it once, with one
+//! signature in the creation transaction, and can always cancel it (`cancel`, SIGHASH_ALL). Any
+//! keeper may execute it against the current book in the fill shape the actor was chosen for,
+//! without the payer. From its `deadline` (unix ms) on, anyone may `expire` it. That returns its
+//! KAS, less at most [`EXPIRE_MAX_FEE`], and its locked tokens to the payer. See
+//! `docs/argent/argent.md`, "The router".
 //!
-//! The router links the orders (`KobAsk`, `KobBid`, `KobBidKron`) by closed ICC. The token programs are open
-//! ICC handles in the intent's state ([`IntentState`] names the program of every token it moves, and the
-//! router reads and pins the tokens under it): one actor serves every KCC-20 program of the 112-byte state
-//! and every KRON program ([`intent_program`] says which programs an intent may name). A KRON token is paid
-//! with, never received (the merchant receives KAS or a KCC-20 token).
+//! - `KasToToken_<shape>`: the payer locks KAS, and the merchant receives exactly `amount` of token
+//!   B, bought from 1-3 `KobAsk`s.
+//! - `TokenToKas_<shape>`: the payer locks token A, owned by the intent's covenant id. The merchant
+//!   receives at least `merchant_kas`, from selling into 1-3 `KobBid`s.
+//! - `TokenSwap_<shape>`: the payer locks token A as above. The merchant receives exactly
+//!   `amount_b` of token B, with A sold into 1-2 bids and the KAS spent on 1-2 asks.
+//! - `TokenToKasKron_<shape>` and `TokenSwapKron_<shape>`: the payer locks a KRON token A. They
+//!   work as `TokenToKas` and `TokenSwap`, with A sold into `KobBidKron`s.
 //!
-//! This module embeds the router's SilverScript ABI (the `sil_abi` member of the committed Argent
-//! artifact `contracts/argent/router/artifact.json`, extracted into `data/router_sil_abi.json`; a test
-//! keeps the copy equal to the artifact) and pins every actor's template hash ([`ROUTER_PINNED`]):
-//! a different router is a different protocol and fails to load.
+//! # Orders and token programs
+//!
+//! The router links the orders (`KobAsk`, `KobBid`, `KobBidKron`) by closed ICC. The token programs
+//! are open ICC handles in the intent's state. [`IntentState`] names the program of every token it
+//! moves, and the router reads and pins the tokens under it. One actor therefore serves every
+//! KCC-20 program of the 112-byte state and every KRON program, and [`intent_program`] says which
+//! programs an intent may name. A KRON token is only paid with, never received, since the merchant
+//! receives KAS or a KCC-20 token.
+//!
+//! This module embeds the router's SilverScript ABI and pins every actor's template hash
+//! ([`ROUTER_PINNED`]), so a different router is a different protocol and fails to load. The ABI is
+//! the `sil_abi` member of the committed Argent artifact `contracts/argent/router/artifact.json`,
+//! extracted into `data/router_sil_abi.json`, and a test keeps the copy equal to the artifact.
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -41,18 +49,25 @@ use crate::script::push_data;
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
 pub const ROUTER_ARTIFACT_ID: &str = "08e7edd76c4f057f65060cfa1589d239a8aebf922eea90cc2a5606de764f2d24";
 
-/// Most sompi an `expire` may keep of the intent's KAS (`EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`).
+/// Most sompi an `expire` may keep of the intent's KAS.
+///
+/// This is `EXPIRE_MAX_FEE` of `tools/router-gen/router_head.ag`.
 pub const EXPIRE_MAX_FEE: u64 = 10_000_000;
 
-/// Least KAS an intent UTXO may hold: twice [`EXPIRE_MAX_FEE`]. Its cancel and its expiry take their fee from the intent's own
-/// KAS (they have no funding input), and the payer's output they leave must itself stay a standard output (KIP-9 storage
-/// mass): an intent below this could be neither cancelled nor expired. The builder and the verifier refuse it.
+/// Least KAS an intent UTXO may hold, twice [`EXPIRE_MAX_FEE`].
+///
+/// Its cancel and its expiry take their fee from the intent's own KAS, since they have no funding
+/// input. The payer's output they leave must itself stay a standard output (KIP-9 storage mass). An
+/// intent below this could be neither cancelled nor expired, and the builder and the verifier
+/// refuse it.
 pub const MIN_INTENT_VALUE: u64 = 2 * EXPIRE_MAX_FEE;
 
-/// Checks that `p` is a token program an intent may name: a program whose profile allows router intents
-/// (`router_intents` of `data/programs.json`; the router observes tokens by open ICC under the program the intent's state
-/// names, so a KCC-20 program needs the 112-byte state). KaspaCom's KCC20 0.2.5 is refused while it is pending review (a
-/// 25.5 KB program with a 0.5 KAS token output floor).
+/// Checks that `p` is a token program an intent may name.
+///
+/// That is a program whose profile allows router intents (`router_intents` of
+/// `data/programs.json`). The router observes tokens by open ICC under the program the intent's
+/// state names, so a KCC-20 program needs the 112-byte state. KaspaCom's KCC20 0.2.5, a 25.5 KB
+/// program with a 0.5 KAS token output floor, is refused while it is pending review.
 pub fn intent_program(p: TemplateId) -> Result<()> {
     let Some(profile) = p.profile() else {
         return Err(Error::Invalid(format!("{} is not a token program", p.name())));
@@ -66,12 +81,14 @@ pub fn intent_program(p: TemplateId) -> Result<()> {
     Ok(())
 }
 
-// True when the token slots of `p` (inputs, outputs of one token per transaction) hold `ins` / `outs`.
+/// True when the token slots of `p` (per-transaction inputs and outputs) hold `ins` / `outs`.
 fn slots_fit(p: TemplateId, ins: usize, outs: usize) -> bool {
     p.token_slots().is_some_and(|(i, o)| ins <= i && outs <= o)
 }
 
-/// Template hash of every router actor (hex). A changed router is a changed protocol.
+/// Template hash of every router actor (hex).
+///
+/// A changed router is a changed protocol.
 pub const ROUTER_PINNED: [(&str, &str); 30] = [
     ("KasToToken_buy", "f79266cbcafdfbc832631048bdd47dc5bd0b5c8bdfc63f5fe816fff0a7eee352"),
     ("KasToToken_buy_out", "1fc0dc4c8956b786f292711e0c3d9760de79c21299f16cc017c0420e43715909"),
@@ -119,6 +136,7 @@ pub enum IntentKind {
 }
 
 impl IntentKind {
+    /// The kind's name.
     pub fn as_str(self) -> &'static str {
         match self {
             IntentKind::KasToToken => "KasToToken",
@@ -136,9 +154,11 @@ impl IntentKind {
     }
 }
 
-/// The fill shape of one router actor: how many asks and bids the keeper fills, and whether the
-/// last order of each leg rests (continues, GTC) or ends (sold out / exhausted / IOC / FOK). Every
-/// order of a leg but the last ends.
+/// The fill shape of one router actor.
+///
+/// It says how many asks and bids the keeper fills, and whether the last order of each leg rests
+/// (continues, GTC) or ends (sold out, exhausted, IOC or FOK). Every order of a leg but the last
+/// ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shape {
@@ -147,21 +167,25 @@ pub struct Shape {
     pub bids: usize,
     pub last_ask_rests: bool,
     pub last_bid_rests: bool,
-    /// Family of token A, the token a token intent locks and sells (`KobBidKron`s for KRON); KasToToken: KCC-20.
+    /// Family of token A, which a token intent locks and sells (to `KobBidKron`s for KRON).
+    ///
+    /// It is KCC-20 for KasToToken.
     #[serde(default)]
     pub a_family: Family,
 }
 
 impl Shape {
-    /// Token slots the execution of this shape needs: (inputs, outputs) of token A, then of token B.
+    /// Token slots the execution of this shape needs: (inputs, outputs) of token A, then token B.
     pub fn token_slots(&self) -> ((usize, usize), (usize, usize)) {
         let a = if self.kind.locks_tokens() { (1, self.bids + 1) } else { (0, 0) };
         let b = if self.kind.merchant_gets_token() { (self.asks, 1 + usize::from(self.last_ask_rests)) } else { (0, 0) };
         (a, b)
     }
-    /// True when the programs of token A (`a`) and token B (`b`) can run this shape: the families match (token A of
-    /// `a_family`, token B KCC-20) and the programs' slots hold its token inputs and outputs (the 3/3 reference program
-    /// has no room for a three-bid sell: four token outputs).
+    /// True when the programs of token A (`a`) and token B (`b`) can run this shape.
+    ///
+    /// The families must match, i.e. token A of `a_family` and token B KCC-20. The programs' slots
+    /// must hold its token inputs and outputs. The 3/3 reference program, for example, has no room
+    /// for a three-bid sell, which has four token outputs.
     pub fn fits(&self, a: Option<TemplateId>, b: Option<TemplateId>) -> bool {
         let ((ai, ao), (bi, bo)) = self.token_slots();
         let a_ok = match (self.kind.locks_tokens(), a) {
@@ -270,6 +294,7 @@ impl RouterTemplate {
         crate::artifacts::spk_trace::record(&spk, crate::artifacts::spk_trace::Origin::Router(self.name), state);
         Ok(spk)
     }
+    /// Hex of the template hash.
     pub fn hash_hex(&self) -> String {
         to_hex(&self.hash)
     }
@@ -336,15 +361,17 @@ pub fn instance_of(redeem: &[u8]) -> Option<(&'static Actor, Vec<u8>)> {
     })
 }
 
-// ---------------------------------------------------------------------------------------------- state
+// ------------------------------------------------------------------------------------------- state
 
 fn default_program() -> TemplateId {
     TemplateId::Kcc20Ref8x8
 }
 
-/// The terms of an intent (the actor's state). Keys are x-only public keys, token ids covenant ids. Every token
-/// is named twice: its covenant id and its program, whose template hash the router's open ICC handle carries
-/// (`program*` fields; a JSON without them means `KCC20Ref_8x8`, the only program of the routers before them).
+/// The terms of an intent, i.e. the actor's state.
+///
+/// Keys are x-only public keys, and token ids are covenant ids. Every token is named twice: by its
+/// covenant id and by its program, whose template hash the router's open ICC handle carries (the
+/// `program*` fields). A JSON without those fields means `KCC20Ref_8x8`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum IntentState {
@@ -371,11 +398,15 @@ pub enum IntentState {
         /// Most sompi carriers, fillers and the network fee may take besides.
         #[serde(with = "crate::json::field")]
         max_extra: i64,
-        /// B PIN: extension_commitment of token B (the offer's token): every ask escrow the intent buys from must carry it,
-        /// and the merchant's delivery is pinned to it.
+        /// B PIN: extension_commitment of token B, the offer's token.
+        ///
+        /// Every ask escrow the intent buys from must carry it, and the merchant's delivery is
+        /// pinned to it.
         #[serde(with = "crate::json::field")]
         b_extension: [u8; 32],
-        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
+        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`).
+        ///
+        /// It is the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
     },
@@ -398,14 +429,20 @@ pub enum IntentState {
         /// Most token A base units sold (summed over the sweep).
         #[serde(with = "crate::json::field")]
         max_sell: i64,
-        /// LOCK PIN: exact token A base units of the lock (the creation's `lock_amount`); every entry that spends the lock
-        /// requires it, so no other token UTXO owned by the intent's id can stand in for the lock.
+        /// LOCK PIN: exact token A base units of the lock, the creation's `lock_amount`.
+        ///
+        /// Every entry that spends the lock requires it, so no other token UTXO owned by the
+        /// intent's id can stand in for the lock.
         #[serde(with = "crate::json::field")]
         lock_amount: i64,
-        /// LOCK PIN: extension_commitment of the lock (KCC-20 token A; all zero for a KRON token A, which has none).
+        /// LOCK PIN: extension_commitment of the lock.
+        ///
+        /// It is that of a KCC-20 token A, and all zero for a KRON token A, which has none.
         #[serde(with = "crate::json::field")]
         lock_extension: [u8; 32],
-        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
+        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`).
+        ///
+        /// It is the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
     },
@@ -431,18 +468,26 @@ pub enum IntentState {
         /// Exact token B base units the merchant receives.
         #[serde(with = "crate::json::field")]
         amount_b: i64,
-        /// LOCK PIN: exact token A base units of the lock (the creation's `lock_amount`); every entry that spends the lock
-        /// requires it, so no other token UTXO owned by the intent's id can stand in for the lock.
+        /// LOCK PIN: exact token A base units of the lock, the creation's `lock_amount`.
+        ///
+        /// Every entry that spends the lock requires it, so no other token UTXO owned by the
+        /// intent's id can stand in for the lock.
         #[serde(with = "crate::json::field")]
         lock_amount: i64,
-        /// LOCK PIN: extension_commitment of the lock (KCC-20 token A; all zero for a KRON token A, which has none).
+        /// LOCK PIN: extension_commitment of the lock.
+        ///
+        /// It is that of a KCC-20 token A, and all zero for a KRON token A, which has none.
         #[serde(with = "crate::json::field")]
         lock_extension: [u8; 32],
-        /// B PIN: extension_commitment of token B (the offer's token): every ask escrow the intent buys from must carry it,
-        /// and the merchant's delivery is pinned to it.
+        /// B PIN: extension_commitment of token B, the offer's token.
+        ///
+        /// Every ask escrow the intent buys from must carry it, and the merchant's delivery is
+        /// pinned to it.
         #[serde(with = "crate::json::field")]
         b_extension: [u8; 32],
-        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`): the payer's authorization expiry.
+        /// Unix ms from which anyone may expire the intent (`expire`, CLTV `tx.time`).
+        ///
+        /// It is the payer's authorization expiry.
         #[serde(with = "crate::json::field")]
         deadline: i64,
     },
@@ -458,6 +503,7 @@ fn handle(p: TemplateId) -> ArtifactValue {
 }
 
 impl IntentState {
+    /// The intent's kind.
     pub fn kind(&self) -> IntentKind {
         match self {
             IntentState::KasToToken { .. } => IntentKind::KasToToken,
@@ -465,6 +511,7 @@ impl IntentState {
             IntentState::TokenSwap { .. } => IntentKind::TokenSwap,
         }
     }
+    /// The payer's key.
     pub fn payer(&self) -> [u8; 32] {
         match self {
             IntentState::KasToToken { payer, .. } | IntentState::TokenToKas { payer, .. } | IntentState::TokenSwap { payer, .. } => {
@@ -472,6 +519,7 @@ impl IntentState {
             }
         }
     }
+    /// The merchant's key.
     pub fn merchant(&self) -> [u8; 32] {
         match self {
             IntentState::KasToToken { merchant, .. }
@@ -519,7 +567,9 @@ impl IntentState {
             IntentState::TokenSwap { program_b, .. } => Some(*program_b),
         }
     }
-    /// The family of the locked token A (KasToToken: KCC-20, the family of every actor without a token A).
+    /// The family of the locked token A.
+    ///
+    /// It is KCC-20 for KasToToken, the family of every actor without a token A.
     pub fn a_family(&self) -> Family {
         self.locked_program().map(|p| p.family()).unwrap_or(Family::Kcc20)
     }
@@ -531,7 +581,7 @@ impl IntentState {
             | IntentState::TokenSwap { lock_amount, lock_extension, .. } => Some((*lock_amount, *lock_extension)),
         }
     }
-    /// The B pin (KasToToken, TokenSwap): the extension commitment of the token the merchant receives.
+    /// The B pin (KasToToken, TokenSwap): the extension commitment of the merchant's token.
     pub fn b_extension(&self) -> Option<[u8; 32]> {
         match self {
             IntentState::KasToToken { b_extension, .. } | IntentState::TokenSwap { b_extension, .. } => Some(*b_extension),
@@ -620,9 +670,14 @@ impl IntentState {
         m
     }
 
-    /// Checks the terms: keys on the curve, positive amounts and bounds, distinct tokens, programs an intent may
-    /// name ([`intent_program`]; the merchant's token KCC-20), a deadline that is a time lock (unix ms, at least
-    /// [`kaspa_txscript::LOCK_TIME_THRESHOLD`]; a smaller value could never be met by `expire`).
+    /// Checks the terms.
+    ///
+    /// - The keys are on the curve.
+    /// - The amounts and bounds are positive, and the tokens distinct.
+    /// - The programs are ones an intent may name ([`intent_program`]), and the merchant's token is
+    ///   KCC-20.
+    /// - The deadline is a time lock: unix ms, at least [`kaspa_txscript::LOCK_TIME_THRESHOLD`]. A
+    ///   smaller value could never be met by `expire`.
     pub fn check(&self) -> Result<()> {
         crate::tx::check_key(&self.payer(), "intent payer")?;
         crate::tx::check_key(&self.merchant(), "intent merchant")?;
@@ -667,7 +722,8 @@ impl IntentState {
             if lock < max_sell {
                 return Err(Error::Invalid(format!("the intent may sell {max_sell} units but its lock_amount is {lock}")));
             }
-            // a KRON output holds 1..=1e9 units: the payer's change of a sale of max_sell must hold a unit
+            // A KRON output holds 1..=1e9 units, so the payer's change of a sale of max_sell must
+            // hold a unit.
             if self.a_family() == Family::Kron {
                 if lock <= max_sell {
                     return Err(Error::Invalid(format!(
@@ -682,8 +738,10 @@ impl IntentState {
         Ok(())
     }
 
-    /// Checks that `actor` can carry these terms: its kind, the family of token A, and the token slots of the
-    /// programs (a shape a program cannot run is refused here, not after the payer locked its funds).
+    /// Checks that `actor` can carry these terms: its kind, the family of token A, and the
+    /// programs' token slots.
+    ///
+    /// A shape a program cannot run is refused here, not after the payer locked its funds.
     pub fn check_actor(&self, actor: &Actor) -> Result<()> {
         if actor.shape.kind != self.kind() {
             return Err(Error::Invalid(format!("{} is not a {} actor", actor.name, self.kind().as_str())));
@@ -697,7 +755,9 @@ impl IntentState {
         Ok(())
     }
 
-    /// The encoded state span under `actor` (the actor must carry these terms, [`IntentState::check_actor`]).
+    /// The encoded state span under `actor`.
+    ///
+    /// The actor must carry these terms, see [`IntentState::check_actor`].
     pub fn encode(&self, actor: &Actor) -> Result<Vec<u8>> {
         self.check_actor(actor)?;
         let l = loaded();
@@ -726,8 +786,9 @@ impl IntentState {
         let c = &l.abi.contracts[actor.name];
         let v = silverscript_abi::decode_runtime_state_script(&l.abi, &c.runtime_state, state)
             .map_err(|e| Error::Invalid(format!("{}: state decoding: {e}", actor.name)))?;
-        // KCC-1 3.7.1: the consumed bytes must be exactly the canonical encoding of the decoded values (no negative zero,
-        // no over-long push prefix); silverscript-abi's decoder alone accepts both.
+        // KCC-1 3.7.1: the consumed bytes must be exactly the canonical encoding of the decoded
+        // values, with no negative zero and no over-long push prefix. silverscript-abi's decoder
+        // alone accepts both.
         let again = encode_runtime_state_script(&l.abi, &c.runtime_state, &v)
             .map_err(|e| Error::Invalid(format!("{}: state re-encoding: {e}", actor.name)))?;
         if again != state {
@@ -745,14 +806,14 @@ impl IntentState {
                 _ => Err(Error::Invalid(format!("{}: state field {k} is not an int", actor.name))),
             }
         };
-        // a handle names a known token program, or the instance is not one KOB can build or check
+        // A handle names a known token program, or the instance is not one KOB can build or check.
         let prog = |k: &str| -> Result<TemplateId> {
             let h = key(k)?;
             crate::artifacts::token_template_by_hash(&h)
                 .map(|t| t.id)
                 .ok_or_else(|| Error::Invalid(format!("{}: state field {k} names no known token program", actor.name)))
         };
-        // the lock's extension commitment: a KCC-20 token A pins it, a KRON one has none
+        // The lock's extension commitment: a KCC-20 token A pins it, a KRON one has none.
         let ext = || -> Result<[u8; 32]> {
             if actor.shape.a_family == Family::Kcc20 {
                 key("lock_extension")
@@ -807,11 +868,13 @@ impl IntentState {
     }
 }
 
-// ---------------------------------------------------------------------------------------------- entries
+// ----------------------------------------------------------------------------------------- entries
 
-/// The fill arguments of one execution: the orders in transaction order and the base units sold into
-/// each bid. The hidden witnesses (handle prefix / suffix lengths of KobAsk, KobBid / KobBidKron and of
-/// the token programs the intent's state names) are added by [`fill_args`].
+/// The fill arguments of one execution.
+///
+/// They are the orders in transaction order and the base units sold into each bid. [`fill_args`]
+/// adds the hidden witnesses: the handle prefix and suffix lengths of KobAsk, KobBid or KobBidKron,
+/// and of the token programs the intent's state names.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FillArgs {
     /// Covenant ids of the asks, in transaction order.
@@ -858,8 +921,10 @@ pub fn fill_args(actor: &Actor, state: &IntentState, f: &FillArgs) -> Result<Vec
     Ok(out)
 }
 
-/// A hidden witness of an entry that observes a template: the prefix or suffix length of a closed ICC handle
-/// (an imported order) or of an open one (a token program the intent's `state` names).
+/// A hidden witness of an entry that observes a template.
+///
+/// It is the prefix or suffix length of a closed ICC handle (an imported order), or of an open one
+/// (a token program the intent's `state` names).
 fn hidden_arg(name: &str, state: &IntentState) -> Option<i64> {
     let tok = |p: Option<TemplateId>, suffix: bool| -> Option<i64> {
         let t = crate::artifacts::token_template(p?);
@@ -872,7 +937,8 @@ fn hidden_arg(name: &str, state: &IntentState) -> Option<i64> {
         "gen__kob_orders__kob_bid_suffix_len" => handle_lens(TemplateId::KobBid).1,
         "gen__kob_orders_kron__kob_bid_kron_prefix_len" => handle_lens(TemplateId::KobBidKron).0,
         "gen__kob_orders_kron__kob_bid_kron_suffix_len" => handle_lens(TemplateId::KobBidKron).1,
-        // KasToToken / TokenToKas name one token (`token_type`), a swap two (`token_a_type`, `token_b_type`)
+        // KasToToken and TokenToKas name one token (`token_type`), a swap two (`token_a_type`,
+        // `token_b_type`).
         "gen__actor_type_self_token_type_prefix_len" => tok(state.merchant_program().or(state.locked_program()), false)?,
         "gen__actor_type_self_token_type_suffix_len" => tok(state.merchant_program().or(state.locked_program()), true)?,
         "gen__actor_type_self_token_a_type_prefix_len" => tok(state.locked_program(), false)?,
@@ -899,14 +965,18 @@ fn hidden_args(actor: &Actor, state: &IntentState, entry: &str, skip: usize) -> 
         .collect()
 }
 
-/// The ABI arguments of `actor`'s `expire` entry: none for a KasToToken intent, the token handle's hidden
-/// witnesses for a token intent (it observes the locked tokens).
+/// The ABI arguments of `actor`'s `expire` entry.
+///
+/// There are none for a KasToToken intent. A token intent observes the locked tokens and passes the
+/// token handle's hidden witnesses.
 pub fn expire_args(actor: &Actor, state: &IntentState) -> Result<Vec<ArtifactValue>> {
     hidden_args(actor, state, "expire", 0)
 }
 
-/// The ABI arguments of `actor`'s `cancel` entry after the payer's signature: none for a KasToToken intent, the
-/// token handle's hidden witnesses for a token intent (it observes the lock it must spend).
+/// The ABI arguments of `actor`'s `cancel` entry after the payer's signature.
+///
+/// There are none for a KasToToken intent. A token intent observes the lock it must spend and
+/// passes the token handle's hidden witnesses.
 pub fn cancel_args(actor: &Actor, state: &IntentState) -> Result<Vec<ArtifactValue>> {
     hidden_args(actor, state, "cancel", 1)
 }
@@ -936,9 +1006,11 @@ mod tests {
         }
     }
 
-    /// Which programs run which shapes: every shape on the 8/8 program and on KRON's 4/5; the 3/3 reference program
-    /// runs everything but the three-bid sells (4 token outputs); a KRON token is never the merchant's; KaspaCom's
-    /// program is pending review.
+    /// Which programs run which shapes.
+    ///
+    /// Every shape runs on the 8/8 program and on KRON's 4/5. The 3/3 reference program runs
+    /// everything but the three-bid sells, which have 4 token outputs. A KRON token is never the
+    /// merchant's, and KaspaCom's program is pending review.
     #[test]
     fn programs_fit_the_shapes() {
         use TemplateId::*;
@@ -952,11 +1024,12 @@ mod tests {
                 (IntentKind::TokenSwap, Family::Kron) => (Some(KronToken2732), Some(Kcc20Ref8x8)),
             };
             assert!(s.fits(pa, pb), "{}", a.name);
-            // the 3/3 programs: the reference and its published public-mint build
+            // The 3/3 programs: the reference and its published public-mint build.
             for p3 in [Kcc20Ref, Kcc20PublicMint] {
                 let three = |p: Option<TemplateId>| p.map(|_| p3);
                 let fits3 = s.fits(if s.a_family == Family::Kcc20 { three(pa) } else { pa }, three(pb));
-                // (a KRON token A keeps its program: only token B moves to the 3/3 program, and a KRON sell has no token B)
+                // A KRON token A keeps its program. Only token B moves to the 3/3 program, and a
+                // KRON sell has no token B.
                 assert_eq!(fits3, !(s.a_family == Family::Kcc20 && s.bids == 3), "{} on {}", a.name, p3.name());
             }
             if pa.is_some() {
@@ -979,7 +1052,9 @@ mod tests {
     }
 
     /// The embedded ABI is the `sil_abi` member of the committed Argent artifact, byte for byte in
-    /// content (`KOB_WRITE_ROUTER_ABI=1` rewrites the copy).
+    /// content.
+    ///
+    /// `KOB_WRITE_ROUTER_ABI=1` rewrites the copy.
     #[test]
     fn embedded_abi_is_the_committed_artifact() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -995,8 +1070,10 @@ mod tests {
         assert_eq!(mine, art["sil_abi"], "data/router_sil_abi.json is stale: rerun with KOB_WRITE_ROUTER_ABI=1");
     }
 
-    /// The TypeScript x402 SDK carries its own copy of the router artifact id
-    /// (`packages/kob-x402/src/types.ts`); it must be this one.
+    /// The TypeScript x402 SDK carries its own copy of the router artifact id, which must be this
+    /// one.
+    ///
+    /// The copy is in `packages/kob-x402/src/types.ts`.
     #[test]
     fn ts_sdk_names_the_same_router_artifact() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/kob-x402/src/types.ts");
@@ -1079,7 +1156,7 @@ mod tests {
         ];
         for a in &ACTORS {
             for st in states.iter().filter(|s| s.kind() == a.shape.kind && s.a_family() == a.shape.a_family) {
-                // the 3/3 program has no room for a three-bid sell
+                // The 3/3 program has no room for a three-bid sell.
                 if st.check_actor(a).is_err() {
                     assert_eq!((st.locked_program(), a.shape.bids), (Some(TemplateId::Kcc20Ref), 3), "{}", a.name);
                     continue;
@@ -1142,7 +1219,8 @@ mod tests {
         assert_eq!(v[2], ArtifactValue::Bytes(vec![1; 32]));
         assert_eq!(v[4], ArtifactValue::Int(5));
         assert_eq!(v[5], ArtifactValue::Int(6));
-        // the hidden witnesses: KobAsk, KobBid, then the handles of A (the 3/3 program) and B (the 8/8 one)
+        // The hidden witnesses: KobAsk, KobBid, then the handles of A (the 3/3 program) and B (the
+        // 8/8 one).
         let t3 = crate::artifacts::token_template(TemplateId::Kcc20Ref);
         let t8 = crate::artifacts::token_template(TemplateId::Kcc20Ref8x8);
         let lens = |x: [usize; 4]| x.map(|n| ArtifactValue::Int(n as i64));
