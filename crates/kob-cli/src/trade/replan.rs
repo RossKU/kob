@@ -1,11 +1,16 @@
-//! Replace by cancel-replace from the order kinds' own intents (`web/src/ui/orders/replace-intent.ts`, `replace-env.ts`):
-//! a live order the in-place / quick amend does not cover (a trailing stop, an if-done entry, any pair order) is turned
-//! back into the intent it was planned from, the user's changes are applied, the planner re-plans it in an environment
-//! where the order's own KAS and custody come back, and the planned order becomes the replacement of ONE cancel + new
-//! order transaction (`actions::build_replace`).
+//! Cancel-replace of a live order, planned from the intent of its own kind.
 //!
-//! Not replaced: repeat entries (their booked exits re-arm the entry: the position is cancelled instead), booked exits
-//! (bound to their entry), IOC / FOK / market auctions (they end within their window).
+//! This ports `web/src/ui/orders/replace-intent.ts` and `replace-env.ts`. It covers a live order
+//! that the in-place or quick amend does not: a trailing stop, an if-done entry or any pair order.
+//! The order is turned back into the intent it was planned from and the user's changes are
+//! applied. The planner then re-plans it in an environment where the own KAS and custody of the
+//! order come back. The planned order becomes the replacement in ONE cancel + new order
+//! transaction (`actions::build_replace`).
+//!
+//! These are not replaced:
+//! - Repeat entries. Their booked exits re-arm the entry, so the position is cancelled instead.
+//! - Booked exits, which are bound to their entry.
+//! - IOC, FOK and market auctions, which end within their window.
 
 use kob_protocol::state::{AnyState, CondPairState, IfdPairState, PairState, SIDE_ASK, TIF_GTC};
 use kob_protocol::tx::{KeyUtxo, TokenUtxo, Utxo};
@@ -15,14 +20,16 @@ use super::plan::{
     Side, StopKnobs, Trail, MAX_IDLE_DAA, SLIPPAGE_BPS,
 };
 
-/// A dated expiry above this is "no date" (the GTC of an exit).
+/// A dated expiry at or above this counts as "no date", the GTC of an exit.
 const NO_DATE_DAA: i64 = 1 << 60;
-/// A GTC is placement + 90 days: an expiry this close to genesis + 90 days is a GTC.
+/// A GTC is placement + 90 days, so an expiry within this many DAA of genesis + 90 days is a GTC.
 const GTC_TOLERANCE_DAA: i64 = 100_000;
-/// The stand-in transaction id of the order's own KAS and custodies in the planning environment.
+/// The stand-in transaction id of the own KAS and custodies of the order when replanning.
 const SYNTH_TXID: [u8; 32] = [0xff; 32];
 
-/// What the user changes (state prices: per whole token, a pair B per whole A; amounts base units of A).
+/// What the user changes.
+///
+/// Prices are per whole token, for a pair B per whole A. Amounts are in base units of A.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Changes {
     /// Limit price (a pair limit), take-profit (a conditional), entry price (an if-done entry).
@@ -39,7 +46,7 @@ pub struct Changes {
     pub tip: Option<i64>,
     /// An if-done exit's tip.
     pub exit_tip: Option<i64>,
-    /// Trailing step and gap.
+    /// Trailing step.
     pub trail_step: Option<i64>,
     /// Trailing gap.
     pub trail_gap: Option<i64>,
@@ -49,7 +56,7 @@ pub struct Changes {
     pub renew: bool,
 }
 
-/// The order's lifetime class: GTC (re-placed as a fresh GTC), a date, a day order.
+/// The lifetime class of an order: GTC (re-placed as a fresh GTC), a date or a day order.
 pub fn lifetime_of(expiry_daa: i64, genesis_daa: Option<i64>, deadline: Option<u64>, renew: bool) -> Lifetime {
     if renew {
         return Lifetime::Gtc;
@@ -83,11 +90,14 @@ pub fn replans(s: &AnyState) -> bool {
     }
 }
 
-/// The trigger of a stop leg as an intent: the stop, its band (the default 3 % as `slip_bps`, any other band as the
-/// stop-limit whose limit is the band's worst price), the knobs, the trail.
+/// The trigger of a stop leg as an intent.
+///
+/// It holds the stop, its band, the knobs and the trail. The default band of 3 % is kept as
+/// `slip_bps`. Any other band becomes the stop-limit whose limit is the worst price of the band.
 struct StopTerms {
     stop: i64,
-    /// The band as the state holds it (a trailing stop keeps it: its ticket has no stop-limit).
+    /// The band as the state holds it.
+    /// A trailing stop keeps it, because its ticket has no stop-limit.
     slip_raw: i64,
     slip_bps: Option<i64>,
     limit: Option<i64>,
@@ -183,8 +193,9 @@ fn cond_intent(
     }))
 }
 
-/// The ticket intent of a live order, with the user's changes (`intentFromOrder`). `now_daa` keeps a future activation;
-/// `lifetime` is the order's class ([`lifetime_of`]).
+/// The ticket intent of a live order, with the user's changes (`intentFromOrder`).
+///
+/// `now_daa` keeps a future activation. `lifetime` is the class of the order ([`lifetime_of`]).
 pub fn intent_from_order(s: &AnyState, lifetime: Lifetime, now_daa: i64, ch: &Changes) -> Result<Intent, String> {
     let act = |active_from: i64| (active_from > now_daa).then_some(Activation::Daa(active_from));
     match s {
@@ -367,7 +378,8 @@ fn ifd_intent(e: Entry, x: ExitTerms, lifetime: Lifetime, ch: &Changes) -> Resul
         tr.gap = ch.trail_gap.unwrap_or(tr.gap);
     }
     let stop_limit = ch.stop_limit.or(if x.t.stop > 0 { x.t.limit } else { None });
-    // a dated exit keeps its date when the entry is dated (an exit's GTC bound counts from its own creation)
+    // A dated exit keeps its date when the entry is dated. The GTC bound of an exit counts from
+    // its own creation.
     let exit_expiry_daa =
         (matches!(lifetime, Lifetime::GtdDaa(_)) && x.expiry_daa > 0 && x.expiry_daa < NO_DATE_DAA).then_some(x.expiry_daa);
     let entry_stop = ch.entry_stop.or((e.stop > 0).then_some(e.stop));
@@ -469,7 +481,7 @@ fn pair_intent(
     let tip = ch.tip.unwrap_or(x.tip);
     let min_fill = (x.min_fill > 0 && x.min_fill <= amount).then_some(x.min_fill);
     if x.interval > 0 && x.max_fill > 0 {
-        // TWAP / DCA: the per-slice auction from the price to its end at `slope` per DAA
+        // TWAP / DCA: the auction of each slice runs from the price to its end at `slope` per DAA.
         let diff = (x.price - x.price_end).abs();
         let (price_end, slice_auction) =
             if x.slope > 0 && x.price_end > 0 && diff > 0 { (Some(x.price_end), Some(ceil_div(diff, x.slope))) } else { (None, None) };
@@ -489,7 +501,8 @@ fn pair_intent(
         }));
     }
     if x.slope > 0 && x.price_end > 0 && ch.price.is_none() {
-        // Dutch / rising: the decay goes on from where it is now (same end and pace); ended: a limit at its end
+        // Dutch / rising: the decay goes on from where it is now, with the same end and pace. An
+        // ended one becomes a limit at its end.
         let sell = side == Side::Sell;
         let step = x.decay_step.max(1);
         let origin = x.active_from;
@@ -531,9 +544,11 @@ fn limit_of(
     LimitIntent { side, amount, price, tip, min_fill, lifetime, active_from, crossing: Crossing::Auction, max_fills: None }
 }
 
-/// The planning environment of a REPLACEMENT (`replaceEnv`): the order's own custody tokens and KAS come back in the
-/// same transaction, so the planner may count them (stand-in UTXOs it never spends: only the planned state, value and
-/// carriers are kept), and the order itself is no own order to self-trade against.
+/// The planning environment of a REPLACEMENT (`replaceEnv`).
+///
+/// The own custody tokens and KAS of the order come back in the same transaction, so the planner
+/// may count them. They are stand-in UTXOs that it never spends, and only the planned state,
+/// value and carriers are kept. The order itself is no own order to self-trade against.
 pub fn replace_env(env: &Env, cov: &[u8; 32], s: &AnyState, value: u64) -> Env {
     let mut out = env.clone();
     out.own.retain(|o| o.cov != *cov);
