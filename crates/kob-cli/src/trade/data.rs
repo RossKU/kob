@@ -451,7 +451,7 @@ pub fn own_pair_orders(indexer: &str, a: &TokenMarket, b: &TokenMarket, maker: &
     Ok(out)
 }
 
-// ------------------------------------------------------------------------------------------------ a live order
+// ---------------------------------------------------------------------------- a live order
 
 /// A live order confirmed on the node.
 ///
