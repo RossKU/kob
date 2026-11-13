@@ -141,8 +141,9 @@ contract KobIfdBid(
     // Trigger evidence. Input ev must be a resting KobBid of this token that
     // this transaction fills. tplState checks it by template hash and P2SH,
     // and its sigscript starts with the 8-byte push of its fill argument
-    // n > 0. Only the fill entries of KobAsk and KobBid start with an 8-byte
-    // item, and that order's own script enforces the fill for that n.
+    // n > 0. Only the fill entries of KobAsk and KobBid, and KobAsk's refund
+    // (n = 0, excluded by the n > 0 check), start with an 8-byte item. That
+    // order's own script enforces the fill for that n.
     //
     // It must quote at this scale and not decay, since a decaying price is
     // not a quote. It must trade n >= minTouch base units and have rested at

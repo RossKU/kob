@@ -555,9 +555,9 @@ contract KobIfdAskKron(
 
     // Arm a stop entry without a fill of this entry, next to the evidence fill
     // at input ev, with its custody at tk. Anyone may send it, and the keeper
-    // may take up to keeperTip from this UTXO's carrier. An exit never reads
-    // it as a merge, because the merge argument is negative and a valid ev is
-    // not.
+    // may take up to keeperTip from this UTXO, whose KAS is the carrier and
+    // the exits' prefund. An exit never reads it as a merge, because the
+    // merge argument is negative and a valid ev is not.
     entry update(int ev, int tk) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);

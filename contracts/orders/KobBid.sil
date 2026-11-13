@@ -97,9 +97,9 @@ contract KobBid(
     // The IOC/FOK kill. Refundable by anyone 60 s (10 DAA/s) after the order
     // became fillable.
     int constant IOC_LIFE = 600;
-    // The most token inputs a fill may carry, the KCC-20 limit of 8 in and
-    // 8 out. The scan over these slots is unrolled by hand, one line per
-    // slot, so raising the cap needs as many lines.
+    // The most token inputs a fill may carry: the cap of the scan, 8 to cover
+    // the 8/8 prototype (the issued reference is 3/3). The scan is unrolled by
+    // hand, one line per slot, so raising the cap needs as many lines.
     int constant MAX_TOK_IN = 8;
 
     // Quote value of n base units at rate r. c = 0 rounds down and
