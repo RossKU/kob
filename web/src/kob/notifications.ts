@@ -1,83 +1,131 @@
-// Notification model of the web wallet (pure: no DOM, no network, no timers). Everything is derived on the client from what the indexer already tells the
-// wallet about its own orders (`OrderView`), from the wallet's incoming UTXOs and from the status of x402 invoices the user chose to watch.
+// Notification model of the web wallet. It is pure, with no DOM, network or timers. Everything is
+// derived on the client from what the indexer tells the wallet about its own orders (`OrderView`),
+// from the wallet's incoming UTXOs, and from the status of x402 invoices the user chose to watch.
 //
-//   snapshotOf(view, clock)         one order -> `OrderSnap` (status, filled amount, armed, auction, expiry, refundable)
-//   diffOrders(prev, next, nowMs)   two snapshot maps -> events (fill, partial, armed, triggered, expirySoon, expired, refunded, killed, cancelled)
-//   diffVanished(prev, id, nowMs)   a live order the indexer no longer knows -> `reorg` event (its placement was reverted)
-//   diffPayments(prev, next, ...)   incoming P2PK KAS / token outputs -> `payment` events (once per outpoint)
-//   diffInvoice(prev, status, ...)  a watched invoice's status change -> `invoice` event
-//   NotificationStore               per network + wallet persistence (localStorage, in memory when it throws): snapshots, history (200), dedup, invoices
-//   NotifySettings                  opt-in switches (`kob.notify.settings`): in-app OFF by default, browser OFF by default, every kind on except `cancelled`
+// - `snapshotOf(view, clock)` turns one order into an `OrderSnap` with status, filled amount,
+//   armed, auction, expiry and refundable.
+// - `diffOrders(prev, next, nowMs)` turns two snapshot maps into events: fill, partial, armed,
+//   triggered, expirySoon, expired, refunded, killed and cancelled.
+// - `diffVanished(prev, id, nowMs)` turns a live order the indexer no longer knows into a `reorg`
+//   event, because its placement was reverted.
+// - `diffPayments(prev, next, ...)` turns incoming P2PK KAS and token outputs into `payment`
+//   events, once per outpoint.
+// - `diffInvoice(prev, status, ...)` turns a watched invoice's status change into an `invoice`
+//   event.
+// - `NotificationStore` persists per network and wallet in localStorage, or in memory when that
+//   throws. It holds snapshots, a history of 200, dedup state and invoices.
+// - `NotifySettings` holds the opt-in switches in `kob.notify.settings`. In-app and browser
+//   notifications are off by default, and every kind is on except `cancelled`.
 //
-// The FIRST poll of a wallet (no stored snapshots) only records the baseline: history never turns into a flood of "filled" notices. Snapshots persist, so
-// a fill that happened while the tab was closed is reported on the next load. Event ids are stable (`kind:order:value`), so a repeat is dropped by the store.
-// A pair order's fills are VOLUME only (base units of A; `quote` names B): never a price (prices come only from KAS-book fills).
+// The first poll of a wallet, with no stored snapshots, only records the baseline, so history never
+// turns into a flood of "filled" notices. Snapshots persist, so a fill that happened while the tab
+// was closed is reported on the next load. Event ids are stable, `kind:order:value`, so the store
+// drops a repeat. A pair order's fills are volume only, in base units of A, and `quote` names B.
+// They never carry a price, because prices come only from KAS-book fills.
 import type { OrderView } from '../data/indexer-types';
 import { daaToUnix } from './daa';
 import { pairOfView } from './pair-view';
 import type { Clock } from './plan-types';
 import type { Hex } from './types';
 
-// ------------------------------------------------------------------------------------------------ kinds and events
+// --- Kinds and events ---
 
+/** Every notification kind. */
 export const NOTIFY_KINDS = ['fill', 'partial', 'armed', 'triggered', 'expirySoon', 'expired', 'refunded', 'killed', 'cancelled', 'reorg', 'payment', 'invoice'] as const;
+/** One notification kind. */
 export type NotifyKind = (typeof NOTIFY_KINDS)[number];
 
+/** The plain parameters of an event. */
 export type NotifyParams = Record<string, string | number>;
 
+/** One notification. */
 export interface NotificationEvent {
-  /** stable: the same fact always yields the same id, so duplicates across polls and reloads are dropped */
+  /**
+   * Stable, so the same fact always yields the same id and duplicates across polls and reloads are
+   * dropped.
+   */
   id: string;
   kind: NotifyKind;
   orderId?: Hex;
-  /** token covenant id (orders, token payments) */
+  /** The token covenant id, for orders and token payments. */
   token?: Hex;
   side?: 'sell' | 'buy';
-  /** plain strings / numbers (amounts are base-unit decimal strings): rendered with i18n at display time */
+  /**
+   * Plain strings and numbers, with amounts as base-unit decimal strings. They are rendered with
+   * i18n at display time.
+   */
   params: NotifyParams;
-  /** unix ms */
+  /** Unix ms. */
   at: number;
   read: boolean;
 }
 
-/** An order within this long of its expiry gets one `expirySoon` (per expiry value): 24 h for GTC / GTD, 1 h for a day order (seconds). */
+/**
+ * An order within this many seconds of its expiry gets one `expirySoon` per expiry value. It is 24
+ * h for GTC and GTD.
+ */
 export const EXPIRY_SOON_SECONDS = 24 * 3600;
+/** The same window for a day order, 1 h. */
 export const EXPIRY_SOON_DAY_SECONDS = 3600;
-/** Above this an expiry DAA is the "no date" sentinel (2^62) of an exit, not a date (same bound as orders-model). */
+/**
+ * An expiry DAA at or above this is the "no date" sentinel of an exit, not a date. Orders-model
+ * uses the same bound.
+ */
 const NO_DATE_DAA = 1n << 60n;
 
-// ------------------------------------------------------------------------------------------------ order snapshots
+// --- Order snapshots ---
 
+/** One order as the diff sees it. */
 export interface OrderSnap {
   status: string;
-  /** base units filled (a decimal string; a snapshot stored by an older build may hold a number) */
+  /**
+   * Base units filled, as a decimal string. A stored snapshot may hold a number, which is read too.
+   */
   filled: string;
-  /** base units left, null when unknown */
+  /** Base units left, or null when unknown. */
   remaining: string | null;
-  /** base units the order started with (or filled + remaining), null when unknown */
+  /** Base units the order started with, or filled plus remaining. Null when unknown. */
   total: string | null;
-  /** `armed` of the proven state of a conditional kind / stop entry (null: the kind has none or the state is not proven) */
+  /**
+   * The `armed` field of the proven state of a conditional kind or stop entry. Null when the kind
+   * has none or the state is not proven.
+   */
   armed: bigint | null;
   auctionActive: boolean;
-  /** unix seconds of the on-chain expiry / the day-order deadline (null: none, a no-date exit, or no clock) */
+  /**
+   * Unix seconds of the on-chain expiry or the day-order deadline. Null for none, a no-date exit,
+   * or no clock.
+   */
   expiryAt: number | null;
-  /** a day order: `expiryAt` is its UTC deadline and the warning window is the short one */
+  /**
+   * True for a day order, whose `expiryAt` is its UTC deadline and whose warning window is the
+   * short one.
+   */
   dayOrder: boolean;
-  /** an IOC / FOK style order (it has a kill time): its expiry is seconds away by design, never a warning */
+  /**
+   * True for an IOC or FOK style order, which has a kill time. Its expiry is seconds away by design
+   * and never a warning.
+   */
   ephemeral: boolean;
-  /** open but past its deadline / expiry: a refund is pending */
+  /** True when the order is open but past its deadline or expiry, so a refund is pending. */
   refundable: boolean;
   token: Hex | null;
   side: 'sell' | 'buy' | null;
-  /** the order's own price (sompi per whole token; null: none, e.g. a pair order). Absent in snapshots stored by an older build. */
+  /**
+   * The order's own price in sompi per whole token. Null when it has none, as a pair order. May be
+   * absent in a stored snapshot.
+   */
   price?: string | null;
-  /** a pair order: its quote token B (its fills are volume of A only, never a price); null / absent otherwise */
+  /**
+   * The quote token B of a pair order, whose fills are volume of A only. Null or absent otherwise.
+   */
   quote?: Hex | null;
 }
 
+/** True for a status in which the order is still on the book. */
 export const isLiveStatus = (status: string): boolean => status === 'open' || status === 'partial';
 
-/** A stored amount (decimal string, or a number of an older snapshot) as a bigint; 0 when malformed. */
+// Reads a stored amount, a decimal string or a number, as a bigint. A malformed one is 0.
 const amt = (v: string | number | null | undefined): bigint => {
   if (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0) return BigInt(v);
   if (typeof v === 'string' && /^\d+$/.test(v)) return BigInt(v);
@@ -95,7 +143,10 @@ const armedOf = (v: OrderView): bigint | null => {
   }
 };
 
-/** One order as the diff sees it. `clock` maps an on-chain expiry (DAA) to wall-clock time; without it only a day order's deadline is known. */
+/**
+ * Takes the snapshot of one order. `clock` maps an on-chain expiry in DAA to wall-clock time, and
+ * without it only a day order's deadline is known.
+ */
 export function snapshotOf(v: OrderView, clock: Clock | null): OrderSnap {
   const dayOrder = v.deadline !== null && v.deadline !== undefined;
   let expiryAt: number | null = null;
@@ -122,15 +173,19 @@ export function snapshotOf(v: OrderView, clock: Clock | null): OrderSnap {
   };
 }
 
+/** Takes the snapshots of several orders, keyed by covenant id. */
 export const snapshotMap = (views: readonly OrderView[], clock: Clock | null): Map<Hex, OrderSnap> => new Map(views.map((v) => [v.covenant_id, snapshotOf(v, clock)]));
 
 const inExpiryWindow = (s: OrderSnap, nowSec: number): boolean =>
   isLiveStatus(s.status) && !s.ephemeral && s.expiryAt !== null && s.expiryAt > nowSec && s.expiryAt - nowSec <= (s.dayOrder ? EXPIRY_SOON_DAY_SECONDS : EXPIRY_SOON_SECONDS);
 
 /**
- * Events between two snapshot maps of the wallet's orders. `prev === null` is the very first poll: nothing happened "now", so only `expirySoon` for
- * orders already inside their warning window is produced. An order that appears later is compared with an "open, nothing filled" start, so an order
- * placed and filled between two polls still reports. An order that vanishes from the answer (paged out) produces nothing.
+ * Returns the events between two snapshot maps of the wallet's orders.
+ *
+ * A `prev` of null is the very first poll. Nothing happened "now", so only `expirySoon` is
+ * produced, for orders already inside their warning window. An order that appears later is compared
+ * with an "open, nothing filled" start, so an order placed and filled between two polls still
+ * reports. An order that vanishes from the answer, because it was paged out, produces nothing.
  */
 export function diffOrders(prev: ReadonlyMap<Hex, OrderSnap> | null, next: ReadonlyMap<Hex, OrderSnap>, nowMs: number): NotificationEvent[] {
   const out: NotificationEvent[] = [];
@@ -152,11 +207,12 @@ export function diffOrders(prev: ReadonlyMap<Hex, OrderSnap> | null, next: Reado
     const p: OrderSnap = p0 ?? { ...n, status: 'open', filled: '0', auctionActive: false, refundable: false };
     const nFilled = amt(n.filled);
     const pFilled = amt(p.filled);
-    // a pair order's fill is volume of A only: the quote token rides along, no price ever
+    // A pair order's fill is volume of A only. The quote token rides along and no price ever does.
     const pair: NotifyParams = n.quote ? { quote: n.quote } : {};
     const amounts = { amount: nFilled.toString(), total: (amtOrNull(n.total) ?? nFilled + (amtOrNull(n.remaining) ?? 0n)).toString(), ...pair };
 
-    // the chain re-organised under this order: something the wallet was told before is gone. Ordinary shallow re-orgs change nothing here and stay silent.
+    // The chain re-organised under this order, so something the wallet was told before is gone.
+    // Ordinary shallow re-orgs change nothing here and stay silent.
     if (p0) {
       const back = reorgOf(p0, n);
       if (back) out.push({ id: `reorg:${id}:${nowMs}`, kind: 'reorg', params: back, ...base });
@@ -177,16 +233,18 @@ export function diffOrders(prev: ReadonlyMap<Hex, OrderSnap> | null, next: Reado
 }
 
 /**
- * What a chain re-organisation undid on one order between two polls, or null. Only a step BACKWARDS counts (the indexer never rolls an order back
- * otherwise): a smaller filled amount (a fill was reverted: `what: 'fill'`), or a closed order (cancelled / refunded / killed) that is live again.
- * `price` is the order's own price (the fill's price for a plain limit order; absent when the order has none).
+ * Returns what a chain re-organisation undid on one order between two polls, or null.
+ * Only a step backwards counts, since the indexer never rolls an order back otherwise. That is a
+ * smaller filled amount, with `what: 'fill'`, or a closed order that is live again. A closed order
+ * is cancelled, refunded or killed. `price` is the order's own price, which is the fill's price for
+ * a plain limit order. It is absent when the order has none.
  */
 export function reorgOf(prev: OrderSnap, next: OrderSnap): NotifyParams | null {
   const nFilled = amt(next.filled);
   const pFilled = amt(prev.filled);
   const state = isLiveStatus(next.status) ? (nFilled > 0n ? 'partial' : 'open') : next.status;
   const total = (amtOrNull(next.total) ?? nFilled + (amtOrNull(next.remaining) ?? 0n)).toString();
-  // a pair order has no price (its fills are volume only)
+  // A pair order has no price, because its fills are volume only.
   const price = prev.quote || next.quote ? null : (prev.price ?? next.price ?? null);
   if (nFilled < pFilled) {
     return { what: 'fill', amount: (pFilled - nFilled).toString(), filled: nFilled.toString(), total, state, ...(price !== null ? { price } : {}) };
@@ -198,8 +256,9 @@ export function reorgOf(prev: OrderSnap, next: OrderSnap): NotifyParams | null {
 }
 
 /**
- * `reorg` event for a live order that the indexer no longer knows at all (its placement was in the reverted blocks). The caller must have asked for
- * the order by id: an order merely missing from a paged list is not this.
+ * Returns the `reorg` event for a live order that the indexer no longer knows at all.
+ * Its placement was in the reverted blocks. The caller must have asked for the order by id, because
+ * an order merely missing from a paged list is not this.
  */
 export function diffVanished(prev: OrderSnap, id: Hex, nowMs: number): NotificationEvent {
   return {
@@ -214,22 +273,29 @@ export function diffVanished(prev: OrderSnap, id: Hex, nowMs: number): Notificat
   };
 }
 
-// ------------------------------------------------------------------------------------------------ incoming payments
+// --- Incoming payments ---
 
+/** An output the wallet received. */
 export interface IncomingPayment {
-  /** `txid:index` */
+  /** The outpoint as `txid:index`. */
   key: string;
-  /** base units (sompi for KAS) */
+  /** Base units, which are sompi for KAS. */
   amount: bigint;
-  /** token covenant id; undefined = KAS */
+  /** The token covenant id. Undefined means KAS. */
   token?: Hex;
 }
 
 /**
- * `payment` events for P2PK outputs of the wallet that were not there at the last poll. `prev` = outpoint keys of the last poll (null: first poll, baseline
- * only). The wallet cannot tell its own change from someone else's money by the UTXO alone, so `suppress` (a caller that saw the wallet spend or an own
- * order settle in the same poll) and "a previously known outpoint disappeared" (the wallet spent inputs: the new output is its change) both drop the KAS
- * events; a token output that appears is reported unless `suppress` (order proceeds and refunds arrive as owned token UTXOs too).
+ * Returns `payment` events for P2PK outputs of the wallet that were not there at the last poll.
+ *
+ * `prev` holds the outpoint keys of the last poll. A null `prev` is the first poll, which only
+ * records the baseline.
+ *
+ * The wallet cannot tell its own change from someone else's money by the UTXO alone. Two things
+ * therefore drop the KAS events. One is `suppress`, set by a caller that saw the wallet spend or an
+ * own order settle in the same poll. The other is a previously known outpoint that disappeared,
+ * because then the new output is the wallet's change. A token output that appears is reported
+ * unless `suppress` is set, since order proceeds and refunds arrive as owned token UTXOs too.
  */
 export function diffPayments(prev: ReadonlySet<string> | null, next: readonly IncomingPayment[], nowMs: number, suppress = false): NotificationEvent[] {
   if (prev === null || suppress) return [];
@@ -244,19 +310,23 @@ export function diffPayments(prev: ReadonlySet<string> | null, next: readonly In
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ x402 invoices
+// --- x402 invoices ---
 
+/** The status of a watched invoice. */
 export type InvoiceWatchState = 'unpaid' | 'pending' | 'paid' | 'expired' | 'failed';
+/** The invoice statuses that end the watch. */
 export const INVOICE_TERMINAL: readonly string[] = ['paid', 'expired'];
+/** True when the invoice status ends the watch. */
 export const isTerminalInvoice = (status: string | null): boolean => status !== null && INVOICE_TERMINAL.includes(status);
 
+/** An x402 invoice the user chose to watch. */
 export interface WatchedInvoice {
-  /** the invoice URL (`https://host/invoices/<64 hex>`, no query / fragment) */
+  /** The invoice URL, `https://host/invoices/<64 hex>`, without query or fragment. */
   url: string;
   id: string;
-  /** the merchant's reference, once the status was read */
+  /** The merchant's reference, once the status was read. */
   reference: string | null;
-  /** last status seen (null: not read yet) */
+  /** The last status seen, or null when it has not been read yet. */
   status: string | null;
   addedAt: number;
 }
@@ -265,8 +335,10 @@ const HEX64 = /^[0-9a-f]{64}$/;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
- * Validates a pasted invoice URL: `https` (or `http` on localhost only), no credentials, path `/invoices/<64 hex>`. The returned URL has no query and no
- * fragment; the watcher only ever sends a plain GET to `<url>/status` (no wallet data, no cookies).
+ * Validates a pasted invoice URL and returns it normalised, or null.
+ * The URL must use `https`, or `http` on localhost only. It must have no credentials and the path
+ * `/invoices/<64 hex>`. The returned URL has no query and no fragment. The watcher only ever sends
+ * a plain GET to `<url>/status`, with no wallet data and no cookies.
  */
 export function parseInvoiceUrl(input: string): { url: string; id: string } | null {
   let u: URL;
@@ -284,25 +356,34 @@ export function parseInvoiceUrl(input: string): { url: string; id: string } | nu
   return { url: `${u.origin}${m[1]}/invoices/${id}`, id };
 }
 
-/** `invoice` event when the status moved to paid / expired / failed (not for unpaid -> pending, not for a status already reported). */
+/**
+ * Returns an `invoice` event when the status moved to paid, expired or failed, else null. Moving
+ * from unpaid to pending, or repeating a status, gives null.
+ */
 export function diffInvoice(w: WatchedInvoice, status: string, reference: string | null, nowMs: number): NotificationEvent | null {
   if (status === w.status) return null;
   if (status !== 'paid' && status !== 'expired' && status !== 'failed') return null;
   return { id: `invoice:${w.id}:${status}`, kind: 'invoice', params: { status, reference: reference ?? w.reference ?? '', invoice: w.id }, at: nowMs, read: false };
 }
 
-// ------------------------------------------------------------------------------------------------ settings
+// --- Settings ---
 
+/** The opt-in switches of the notifications. */
 export interface NotifySettings {
-  /** in-app notification centre and toasts (default off: opt-in) */
+  /** The in-app notification centre and toasts. Off by default. */
   enabled: boolean;
-  /** browser (OS) notifications through the Notification API; needs the permission, requested from a click in Settings (default off) */
+  /**
+   * Browser notifications through the Notification API. They need the permission, which a click in
+   * Settings requests. Off by default.
+   */
   browser: boolean;
   kinds: Record<NotifyKind, boolean>;
 }
 
+/** The localStorage key of the settings. */
 export const SETTINGS_KEY = 'kob.notify.settings';
 
+/** Returns the default settings, with every kind on except `cancelled`. */
 export const defaultNotifySettings = (): NotifySettings => ({
   enabled: false,
   browser: false,
@@ -311,6 +392,7 @@ export const defaultNotifySettings = (): NotifySettings => ({
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
+/** Returns localStorage, or null when it is missing or throws. */
 export function safeStorage(): Store | null {
   try {
     return typeof localStorage === 'undefined' ? null : localStorage;
@@ -319,6 +401,7 @@ export function safeStorage(): Store | null {
   }
 }
 
+/** Loads the settings, falling back to the defaults for anything missing or corrupt. */
 export function loadNotifySettings(storage: Store | null = safeStorage()): NotifySettings {
   const d = defaultNotifySettings();
   try {
@@ -335,6 +418,7 @@ export function loadNotifySettings(storage: Store | null = safeStorage()): Notif
   return d;
 }
 
+/** Saves the settings and returns whether it worked. */
 export function saveNotifySettings(s: NotifySettings, storage: Store | null = safeStorage()): boolean {
   try {
     if (!storage) return false;
@@ -345,8 +429,9 @@ export function saveNotifySettings(s: NotifySettings, storage: Store | null = sa
   }
 }
 
-// ------------------------------------------------------------------------------------------------ store
+// --- Store ---
 
+/** The most notifications the history keeps. */
 export const MAX_NOTIFICATIONS = 200;
 const MAX_SEEN_IDS = 1000;
 const MAX_SNAPSHOTS = 600;
@@ -356,7 +441,7 @@ const MAX_INVOICES = 20;
 interface SnapJson extends Omit<OrderSnap, 'armed'> { armed: string | null }
 interface Persisted {
   v: 1;
-  /** null: no baseline yet */
+  /** Null before the first poll, when there is no baseline yet. */
   snaps: Record<string, SnapJson> | null;
   payments: string[] | null;
   items: NotificationEvent[];
@@ -367,8 +452,10 @@ interface Persisted {
 const encodeSnap = (s: OrderSnap): SnapJson => ({ ...s, armed: s.armed === null ? null : s.armed.toString() });
 const decodeSnap = (s: SnapJson): OrderSnap => ({ ...s, armed: s.armed === null || s.armed === undefined ? null : BigInt(s.armed) });
 
+/** Returns the localStorage key of a wallet's notification store. */
 export const storeKey = (network: string, pubkey: string): string => `kob.notify.${network}.${pubkey.toLowerCase()}`;
 
+/** The notification history, snapshots and watched invoices of one wallet on one network. */
 export class NotificationStore {
   private state: Persisted = { v: 1, snaps: null, payments: null, items: [], seen: [], invoices: [] };
   private readonly listeners = new Set<() => void>();
@@ -394,7 +481,7 @@ export class NotificationStore {
         invoices: Array.isArray(j.invoices) ? j.invoices.filter((x) => x && typeof x.url === 'string' && typeof x.id === 'string') : [],
       };
     } catch {
-      /* unreadable or corrupt: start empty (memory only) */
+      /* Unreadable or corrupt data starts empty, in memory only. */
     }
   }
 
@@ -402,7 +489,7 @@ export class NotificationStore {
     try {
       this.storage?.setItem(this.key, JSON.stringify(this.state));
     } catch {
-      /* storage full / blocked: the in-memory copy keeps working */
+      /* Storage is full or blocked, so the in-memory copy keeps working. */
     }
     for (const l of [...this.listeners]) l();
   }
@@ -423,7 +510,8 @@ export class NotificationStore {
   }
 
   setSnapshots(m: ReadonlyMap<Hex, OrderSnap>): void {
-    // keep every live order and the newest others (insertion order of the map = the indexer's newest-first order)
+    // Keep every live order and the newest others. The map's insertion order is the indexer's
+    // newest-first order.
     const entries = [...m.entries()];
     const live = entries.filter(([, s]) => isLiveStatus(s.status));
     const rest = entries.filter(([, s]) => !isLiveStatus(s.status)).slice(0, Math.max(0, MAX_SNAPSHOTS - live.length));
@@ -440,7 +528,10 @@ export class NotificationStore {
     this.save();
   }
 
-  /** Adds events (deduplicated by id against the history and the seen list, `allowed` filters kinds); returns the ones that were new, newest first. */
+  /**
+   * Adds events and returns the new ones, newest first. They are deduplicated by id against the
+   * history and the seen list, and `allowed` filters kinds.
+   */
   ingest(events: readonly NotificationEvent[], allowed?: (kind: NotifyKind) => boolean): NotificationEvent[] {
     const seen = new Set(this.state.seen);
     for (const e of this.state.items) seen.add(e.id);
@@ -467,7 +558,10 @@ export class NotificationStore {
     return this.state.items.filter((e) => !e.read).length;
   }
 
-  /** Marks one notification read (a click on it); nothing when it is read already or gone. */
+  /**
+   * Marks one notification read, as a click on it does. It does nothing when it is read already or
+   * gone.
+   */
   markRead(id: string): void {
     if (!this.state.items.some((e) => e.id === id && !e.read)) return;
     this.state.items = this.state.items.map((e) => (e.id === id ? { ...e, read: true } : e));
@@ -480,7 +574,7 @@ export class NotificationStore {
     this.save();
   }
 
-  /** Empties the list (ids stay in the seen list: a cleared notice does not come back). */
+  /** Empties the list. The ids stay in the seen list, so a cleared notice does not come back. */
   clear(): void {
     if (!this.state.items.length) return;
     this.state.items = [];
@@ -491,7 +585,10 @@ export class NotificationStore {
     return this.state.invoices;
   }
 
-  /** false: already watched or too many. */
+  /**
+   * Adds a watched invoice. It returns false when the invoice is already watched or there are too
+   * many.
+   */
   addInvoice(w: WatchedInvoice): boolean {
     if (this.state.invoices.some((x) => x.id === w.id) || this.state.invoices.length >= MAX_INVOICES) return false;
     this.state.invoices = [...this.state.invoices, w];
