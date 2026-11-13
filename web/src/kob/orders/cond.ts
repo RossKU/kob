@@ -1,9 +1,14 @@
-// planCond(env, intent): stop-market, stop-limit, trailing stop, take-profit, OCO (one covenant, both legs) and, via cond-ifd.ts, IFD /
-// IFO / bracket and repeat IFD / IFO. Same contract as planSimple: never throws for user-input problems, they come back as `issues`.
+// Planner of the conditional orders: `planCond(env, intent)`.
+//
+// It covers stop-market, stop-limit, trailing stop, take-profit and OCO (one covenant, both legs).
+// IFD, IFO, bracket and the repeat forms go through cond-ifd.ts. The contract is the one of
+// planSimple: user-input problems never throw, they come back as `issues`.
 //
 // Mapping (docs/spec/order-types.md):
-//   sell side -> KobCondAsk (custody + carrier)     buy side -> KobCondBid (KAS escrow at the worst leg + delivery carriers)
-//   take-profit = leg 0 (`tpPrice`), stop = leg 1 (`stopPrice`, `slipBps`, `bandDaa`), trailing = `trailStep/Gap/Wait`, all `armed = 0`.
+// - Sell side is a KobCondAsk (custody and carrier).
+// - Buy side is a KobCondBid (KAS escrow at the worst leg and delivery carriers).
+// - Take-profit is leg 0 (`tpPrice`), stop is leg 1 (`stopPrice`, `slipBps`, `bandDaa`).
+// - Trailing is `trailStep`, `trailGap` and `trailWait`. Every order starts with `armed = 0`.
 import { checkAmount, checkMinFill, checkNotional, checkTip, crossingTouch } from '../guards';
 import type { CondIntent, OcoIntent, StopLimitIntent, StopMarketIntent, TakeProfitIntent, TrailingStopIntent } from '../intent-cond';
 import { COND_TYPES, isIfdLike } from '../intent-cond';
@@ -31,6 +36,7 @@ function knobs(i: { slipBps?: number; bandDaa?: bigint; keeperTip?: bigint; minT
   return l;
 }
 
+/** The leg input of the resolver for a stop, take-profit or OCO intent. */
 export const legInputOf = (i: LegsIntent): LegInput => {
   switch (i.type) {
     case 'takeProfit':
@@ -49,7 +55,7 @@ export const legInputOf = (i: LegsIntent): LegInput => {
   }
 };
 
-/** UI sentence tags of `Disclosure.notes` per type (the UI owns the wording; see the i18n keys `plan.note.<tag>`). */
+/** UI sentence tags of `Disclosure.notes` per type. The UI owns the wording (`plan.note.<tag>`). */
 export const NOTES_BY_TYPE: Record<LegsIntent['type'], string[]> = {
   stopMarket: ['stopTrigger', 'stopAuction', 'triggerExposure'],
   stopLimit: ['stopTrigger', 'stopAuction', 'triggerExposure', 'stopLimitMayNotFill'],
@@ -59,8 +65,10 @@ export const NOTES_BY_TYPE: Record<LegsIntent['type'], string[]> = {
 };
 
 /**
- * The leg price the default minimum fill is worth 10 KAS at: the take-profit, else the stop trigger; with both legs the lower one for a sell
- * (the larger default) and the higher one for a buy.
+ * The leg price the default minimum fill is worth 10 KAS at.
+ *
+ * It is the take-profit, else the stop trigger. With both legs it is the lower one for a sell (the
+ * larger default) and the higher one for a buy.
  */
 function minFillPrice(side: 'sell' | 'buy', l: LegInput): bigint {
   const cands = [l.tp, l.stop].filter((p): p is bigint => p !== undefined && p > 0n);
@@ -73,7 +81,7 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   const sell = intent.side === 'sell';
   const amount = intent.amount;
   const input = legInputOf(intent);
-  // the wallet default: the amount worth 10 KAS at the leg price (kob-wasm defaultMinFill)
+  // The wallet default: the amount worth 10 KAS at the leg price (kob-wasm defaultMinFill).
   const minFill = intent.minFill ?? defaultMinFillFor(env, amount, minFillPrice(intent.side, input));
   log.add(...checkMinFill(minFill, amount));
   if (log.failed) return failedPlan(log);
@@ -88,14 +96,14 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   const allIn = (price: bigint): bigint => (sell ? price - tip : price + tip);
   const worstState = sell ? askWorst(legs) : bidWorst(legs);
 
-  // a sell must leave the maker something on its lowest leg; a buy has no such bound
+  // A sell must leave the maker something on its lowest leg. A buy has no such bound.
   log.add(...checkTip(intent.side, tip, worstState));
   const topLeg = legs.tpPrice > legs.stopPrice ? legs.tpPrice : legs.stopPrice;
   log.add(...checkNotional(amount, sell ? topLeg : (legs.stopWorst > topLeg ? legs.stopWorst : topLeg) + tip, tk.scale));
   if (log.failed) return failedPlan(log);
   checkSelfTrade(env, log, intent.side, allIn(worstState), { field: 'amount' });
 
-  // market checks that only warn: the order is still valid
+  // Market checks only warn, the order stays valid.
   const bestAsk = env.book.asks[0]?.price;
   const bestBid = env.book.bids[0]?.price;
   if (hasStop) {
@@ -115,13 +123,14 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   if (sell) {
     order = { kind: kindFor('KobCondAsk', tk.family), state: condAskState(env, base, legs) } as CondSpecOrder;
     lines.push({ kind: 'orderCarrier', amount: carrier, count: 1 });
-    // arm / trail updates are paid from the carrier, next to the refund tip
+    // Arm and trail updates are paid from the carrier, next to the refund tip.
     if (keeper !== null && keeper.reserve + tk.refundTip > carrier) {
       log.cond('COND_KEEPER_FUNDING_TOO_LARGE', { reserve: keeper.reserve }, 'carrier');
       return failedPlan(log);
     }
   } else {
-    // each partial fill pays one delivery carrier out of the escrow (KobCondBid.settle): budget them, at most one per possible fill
+    // Each partial fill pays one delivery carrier out of the escrow (KobCondBid.settle), so budget
+    // at most one per possible fill.
     const maxFills = ceilDiv(amount, minFill);
     const fills = intent.maxFills ?? minBig(DEFAULT_BID_FILLS, maxFills);
     if (fills < 1n || fills > maxFills) {
@@ -129,7 +138,8 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
       return failedPlan(log);
     }
     order = { kind: kindFor('KobCondBid', tk.family), state: condBidState(env, { ...base, deliveryCarrier: carrier }, legs) } as CondSpecOrder;
-    // the escrow of the whole amount at the worst leg plus one carrier per fill, exactly kob-wasm condBidEscrow (each fill's spend rounds down)
+    // The escrow is the whole amount at the worst leg plus one carrier per fill, as kob-wasm
+    // condBidEscrow computes it (each fill's spend rounds down).
     const escrow = env.kob.condBidEscrow(order, fills);
     if (escrow === null) {
       log.shared('AMOUNT_TOO_LARGE', undefined, 'amount');
@@ -137,11 +147,12 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
     }
     lines.push({ kind: 'escrow', amount: escrow - carrier * fills, count: 1 });
     lines.push({ kind: 'deliveryCarrier', amount: carrier, count: Number(fills) });
-    // an arming / trailing keeper takes its tip out of the escrow: fund it on top so the budget stays whole
+    // An arming or trailing keeper takes its tip out of the escrow, so fund it on top.
     if (keeper !== null && keeper.reserve > 0n) lines.push({ kind: 'keeperReserve', amount: keeper.tip, count: keeper.expectedUpdates });
   }
 
-  // disclosure numbers (sompi per whole token; the total by the covenant's quote rule, kob-wasm condAskProceeds / condBidSpend)
+  // Disclosure numbers in sompi per whole token. The total follows the covenant's quote rule
+  // (kob-wasm condAskProceeds and condBidSpend).
   const stopWorst = hasStop ? legs.stopWorst : null;
   const tp = hasTp ? legs.tpPrice : null;
   const limitPrice = hasTp ? tp! : stopWorst!;
@@ -174,7 +185,7 @@ type CondSpecOrder = Parameters<typeof finishPlan>[2]['order'];
 const minBigOf = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 const maxBigOf = (a: bigint, b: bigint): bigint => (a > b ? a : b);
 
-/** Plans any conditional / if-done intent. */
+/** Plans any conditional or if-done intent. Never throws for user-input problems. */
 export function planCond(env: PlanEnv, intent: CondIntent): CondPlan {
   const log = new IssueLog();
   const raw = intent as { type?: unknown; side?: unknown; amount?: unknown };

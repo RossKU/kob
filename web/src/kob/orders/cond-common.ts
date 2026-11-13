@@ -1,9 +1,12 @@
-// Shared plumbing of the conditional / if-done planners (cond.ts, cond-legs.ts, cond-ifd.ts): defaults, issue log, expiry resolution,
-// price checks, guards, summaries, and the final `buildCreate` + disclosure step every order type ends in.
+// Shared plumbing of the conditional and if-done planners (cond.ts, cond-legs.ts, cond-ifd.ts).
 //
-// Coin selection, the `createOrder` build with adaptive fee reserve and the recover-and-compare self-check are the shared layer of
-// common.ts (`buildCreate`); nothing here re-implements protocol logic: states are only ASSEMBLED, the byte encoding, the signing
-// plan, fees and the placement record all come from kob-wasm.
+// It holds defaults, the issue log, expiry resolution, price checks, guards, summaries and the
+// final `buildCreate` plus disclosure step every order type ends in.
+//
+// Coin selection, the `createOrder` build with an adaptive fee reserve and the recover-and-compare
+// self-check are the shared layer of common.ts (`buildCreate`). Nothing here re-implements protocol
+// logic. States are only assembled, and the byte encoding, the signing plan, the fees and the
+// placement record all come from kob-wasm.
 import type { CondExpiry, CondIntent } from '../intent-cond';
 import type { Activation } from '../intent-simple';
 import type { CarrierLine, Disclosure, OrderPlan, PlanEnv, PlanIssue } from '../plan-types';
@@ -16,68 +19,79 @@ import { issue, type IssueCode, type IssueParams } from './common-issues';
 import { buildCreate } from './common';
 import { condIssue, type CondIssueCode } from './cond-issues';
 
-// ------------------------------------------------------------------------------------------------ defaults (matcher.md 10, order-types.md "Defaults")
+// ---- defaults (matcher.md 10, order-types.md "Defaults")
 
 /**
- * `expiryDaa` of an if-done EXIT with the default GTC: the exit's expiry is committed inside the entry when it is placed, long before
- * the exit exists, so it cannot be "placement + 90 days". The covenants refund at `min(expiryDaa, UTXO DAA + 90 days)`: a huge value
- * is exactly "90 days idle from the exit's creation" (matcher.md 10.8).
+ * `expiryDaa` of an if-done exit with the default GTC.
+ *
+ * The exit's expiry is committed inside the entry when it is placed, long before the exit exists,
+ * so it cannot be "placement + 90 days". The covenants refund at `min(expiryDaa, UTXO DAA + 90
+ * days)`, so a huge value means "90 days idle from the exit's creation" (matcher.md 10.8).
  */
 export const GTC_EXIT_EXPIRY_DAA = 1n << 62n;
-/** trailing: default update interval (10 minutes) and the shortest accepted (60 s) */
+/** Default trailing update interval in DAA (10 minutes). */
 export const DEFAULT_TRAIL_WAIT_DAA = 6_000n;
+/** Shortest accepted trailing update interval in DAA (60 s). */
 export const MIN_TRAIL_WAIT_DAA = 600n;
-// The default trigger threshold `minTouch` is the larger of the order's own minimum fill and a quarter of its amount (kob-wasm
-// `defaultMinTouch`, matcher.md §4.3 and §10 item 6); the ticket also offers 25% / 50% / 100% of the order's amount and a custom amount, resolved to base units before the intent.
+/** Trailing updates a keeper reserve is funded for by default. */
 export const DEFAULT_EXPECTED_UPDATES = 20;
+/** Most trailing updates a keeper reserve can be funded for. */
 export const MAX_EXPECTED_UPDATES = 1_000;
-/** repeat: "unlimited" is K large enough that only the 90-day bound ends it (each cycle takes at least two transactions) */
+/** Repeat count meaning "unlimited": large enough that only the 90-day bound ends it. */
 export const UNLIMITED_REPEAT_COUNT = 10_000_000n;
-/**
- * matcher.md 6.1 rule 7 / 10.13: a merge adds the entry input (buy-first: about +3.6 KB, +0.007 KAS) and, sell-first, the entry custody
- * (about +7.6 KB, +0.015 KAS) to the take-profit (protocol v2.6 measurements, to be re-measured for v3). Rounded up: the KAS one merge costs;
- * `mergeTipRate` spreads it over the smallest take-profit fill.
- */
+/** Extra KAS (sompi) one merge costs a buy-first repeat take-profit, rounded up. */
 export const MERGE_COST_BUY_FIRST = 1_000_000n;
+/**
+ * Extra KAS (sompi) one merge costs a sell-first repeat take-profit, rounded up.
+ *
+ * A merge adds the entry input (buy-first, about 3.6 KB) or the entry custody (sell-first, about
+ * 7.6 KB) to the take-profit. See matcher.md 6.1 rule 7 and 10.13. `mergeTipRate` spreads the cost
+ * over the smallest take-profit fill.
+ */
 export const MERGE_COST_SELL_FIRST = 1_500_000n;
 
 /**
- * The merge cost as a tip rate (sompi per whole token of `scale` base units) that pays `cost` even on the smallest take-profit fill
- * (`minFill` base units of the exit): `ceil(cost * scale / minFill)`, so `floor(minFill * rate / scale) >= cost`.
+ * The merge cost as a tip rate (sompi per whole token of `scale` base units).
+ *
+ * The rate is `ceil(cost * scale / minFill)`, so `floor(minFill * rate / scale) >= cost` and even
+ * the smallest take-profit fill (`minFill` base units of the exit) pays `cost`.
  */
 export const mergeTipRate = (cost: bigint, scale: bigint, minFill: bigint): bigint => ceilDiv(cost * scale, minFill > 0n ? minFill : 1n);
+/** 32 zero bytes as hex. */
 export const ZERO32 = '0'.repeat(64);
 
-// ------------------------------------------------------------------------------------------------ issues
+// ---- issues
 
-/** Collects issues; `failed` = at least one error. */
+/** Collects issues of a plan. `failed` is true when at least one is an error. */
 export class IssueLog {
   readonly issues: PlanIssue[] = [];
   add(...i: PlanIssue[]): void { this.issues.push(...i); }
-  /** issue of the shared catalogue (common-issues.ts) */
+  /** Adds an issue of the shared catalogue (common-issues.ts). */
   shared(code: IssueCode, params?: IssueParams, field?: string, severity?: PlanIssue['severity']): void { this.issues.push(issue(code, params, field, severity)); }
-  /** issue of the conditional catalogue (cond-issues.ts) */
+  /** Adds an issue of the conditional catalogue (cond-issues.ts). */
   cond(code: CondIssueCode, params?: IssueParams, field?: string, severity?: PlanIssue['severity']): void { this.issues.push(condIssue(code, params, field, severity)); }
   get failed(): boolean { return this.issues.some((i) => i.severity === 'error'); }
 }
 
-// ------------------------------------------------------------------------------------------------ what a plan additionally tells the UI
+// ---- what a plan additionally tells the UI
 
+/** Prices of the legs of a conditional order, as the UI shows them. */
 export interface LegSummary {
   /** limit leg (sompi per whole token), null when absent */
   takeProfit: bigint | null;
   /** stop trigger (sompi per whole token), null when absent */
   stop: bigint | null;
-  /** worst price of the stop leg (per whole token): sell `stop - floor(stop*slipBps/10^4)`, buy `stop + ...`; null without a stop leg */
+  /** worst price of the stop leg per whole token, null without a stop leg */
   stopWorst: bigint | null;
   slipBps: number;
   bandDaa: bigint;
   /** the stop leg's limit as the user gave it (stop-limit) */
   limit: bigint | null;
-  /** trigger rule (touch): a fill of at least `minTouch` base units of a resting order at or beyond the stop, exposed for `minRestDaa` DAA */
+  /** trigger rule: `minTouch` base units resting at or beyond the stop for `minRestDaa` DAA */
   minTouch: bigint;
   minRestDaa: bigint;
 }
+/** The trailing numbers of a stop. */
 export interface TrailSummary {
   step: bigint;
   gap: bigint;
@@ -87,6 +101,7 @@ export interface TrailSummary {
   maxUpdatesPerDay: bigint;
   expectedUpdates: number;
 }
+/** The keeper reserve of an order that a keeper arms or trails. */
 export interface KeeperSummary {
   /** most a keeper takes per arm / trail update */
   tip: bigint;
@@ -94,9 +109,10 @@ export interface KeeperSummary {
   expectedUpdates: number;
   /** tip * expectedUpdates */
   reserve: bigint;
-  /** where the reserve sits: inside the order's carrier (asks, sell-first entries) or added to the escrow (bids, buy-first entries) */
+  /** where the reserve sits: the carrier (asks, sell-first) or the escrow (bids, buy-first) */
   fundedFrom: 'carrier' | 'escrow';
 }
+/** The committed exit of an if-done entry, as the UI shows it. */
 export interface ExitSummary {
   side: 'sell' | 'buy';
   legs: LegSummary;
@@ -104,11 +120,11 @@ export interface ExitSummary {
   tip: bigint;
   /** the exit's minimum fill (base units) */
   minFill: bigint;
-  /** all-in per whole token of the take-profit / of the stop leg's worst price (sell: receives, buy: pays) */
+  /** all-in per whole token of the take-profit and of the stop worst price (sell: receives) */
   takeProfitAllIn: bigint | null;
   stopWorstAllIn: bigint | null;
   expiry: 'gtc' | 'gtd';
-  /** gtd only: the date every exit ends (DAA and approximate unix seconds); null for gtc (90 days idle from each exit's creation) */
+  /** gtd only: the date every exit ends (DAA and unix seconds), null for gtc */
   expiryDaa: bigint | null;
   expiryUnixSeconds: bigint | null;
   deliveryCarrier: bigint;
@@ -118,6 +134,7 @@ export interface ExitSummary {
   /** sell-first only: KAS prefunded per whole token beyond the entry proceeds */
   prefund: bigint | null;
 }
+/** The repeat numbers of a repeating if-done entry. */
 export interface RepeatSummary {
   /** K; null = unlimited within the 90-day bound */
   count: bigint | null;
@@ -127,32 +144,34 @@ export interface RepeatSummary {
   cycleAmount: bigint;
   /** the merge cost added to the exit's tip (sompi per whole token) */
   mergeTip: bigint;
-  /** profit per whole token and cycle at the limits (all-in take-profit minus all-in entry, buy-first; mirrored sell-first) */
+  /** profit per whole token and cycle at the limits (all-in take-profit minus all-in entry) */
   profitPerToken: bigint;
   /** the repeat ends at this DAA at the latest (entry expiry, at most 90 days from placement) */
   untilDaa: bigint;
 }
-/** Extra structured numbers of a conditional plan (the UI turns them and `disclosure.notes` into sentences). */
+/** Extra structured numbers of a conditional plan, which the UI turns into text with the notes. */
 export interface CondSummary {
   type: CondIntent['type'];
   legs: LegSummary | null;
   trail: TrailSummary | null;
   keeper: KeeperSummary | null;
-  /** `minFill` the entry's smallest fill (base units); `minTouch` / `minRestDaa`: the stop entry's trigger rule (touch), as for a stop leg */
+  /** `minFill` is the entry's smallest fill. `minTouch` and `minRestDaa` are the stop's trigger. */
   entry: { price: bigint; stop: bigint | null; bandDaa: bigint; minFill: bigint; maxFills: bigint; minTouch: bigint; minRestDaa: bigint } | null;
   exit: ExitSummary | null;
   repeat: RepeatSummary | null;
 }
 
+/** An OrderPlan plus the conditional summary. */
 export interface CondPlan extends OrderPlan {
   cond: CondSummary | null;
 }
 
+/** A plan that failed before anything was built. */
 export const failedPlan = (log: IssueLog): CondPlan => ({ ok: false, issues: log.issues, states: [], request: null, built: null, disclosure: null, cond: null });
 
-// ------------------------------------------------------------------------------------------------ small helpers
+// ---- small helpers
 
-/** A price per whole token as the state price (tick and range checked); null (issues logged) when it cannot be one. */
+/** A price per whole token as the state price. Logs issues and returns null if it cannot be one. */
 export function toStatePrice(env: PlanEnv, log: IssueLog, price: bigint, field: string): bigint | null {
   const bad = checkPrice(env.token, price, field);
   if (bad.length > 0) {
@@ -162,19 +181,22 @@ export function toStatePrice(env: PlanEnv, log: IssueLog, price: bigint, field: 
   return price;
 }
 
-// ------------------------------------------------------------------------------------------------ activation
+// ---- activation
 
+/** The state's activation and the moment shown to the user. */
 export interface ResolvedActivation {
   /** the state's `activeFrom` (0 = active at once) */
   activeFrom: bigint;
-  /** disclosure: the moment the order wakes up (null = now) */
+  /** disclosure: the moment the order wakes up (null = at once) */
   activatesAt: bigint | null;
 }
 
 /**
- * Timed activation exactly like the plain kinds (simple.ts `activationDaa` + `checkTimes`): a moment already past is an info (the order is active at
- * once), one beyond the 90-day horizon an error. Expiry is NOT shifted by it (GTC = placement + 90 days, as for plain orders); expiry <= activation is refused by
- * `resolveExpiry({ activeFrom })`.
+ * Timed activation exactly like the plain kinds (simple.ts `activationDaa` and `checkTimes`).
+ *
+ * A moment already past is an info (the order is active at once). One beyond the 90-day horizon is
+ * an error. Expiry is not shifted by the activation (GTC is placement + 90 days, as for plain
+ * orders). `resolveExpiry({ activeFrom })` refuses an expiry at or before the activation.
  */
 export function resolveActivation(env: PlanEnv, log: IssueLog, a: Activation | undefined): ResolvedActivation | null {
   if (!a) return { activeFrom: 0n, activatesAt: null };
@@ -187,8 +209,9 @@ export function resolveActivation(env: PlanEnv, log: IssueLog, a: Activation | u
   return { activeFrom, activatesAt: future ? requested : null };
 }
 
-// ------------------------------------------------------------------------------------------------ expiry
+// ---- expiry
 
+/** The state's expiry, the day-order deadline and the expiry shown to the user. */
 export interface ResolvedExpiry {
   /** the state's `expiryDaa` */
   expiryDaa: bigint;
@@ -198,10 +221,12 @@ export interface ResolvedExpiry {
 }
 
 /**
- * Turns the user's expiry into `expiryDaa` and the disclosure. Placed orders follow the shared rules (GTC = placement + 90 days,
- * nothing beyond 90 days, day orders by `kob.dayOrder`). `exit`: committed inside the entry long before it exists, so its GTC is the
- * "never" of `GTC_EXIT_EXPIRY_DAA` and a day order is refused; a repeat entry must end within 90 days (matcher.md 10.13), which the
- * 90-day ceiling of every order already guarantees.
+ * Turns the user's expiry into `expiryDaa` and the disclosure.
+ *
+ * Placed orders follow the shared rules: GTC is placement + 90 days, nothing goes beyond 90 days
+ * and day orders use `kob.dayOrder`. An `exit` is committed inside the entry long before it
+ * exists, so its GTC is `GTC_EXIT_EXPIRY_DAA` and a day order is refused. A repeat entry must end
+ * within 90 days (matcher.md 10.13), which the 90-day ceiling of every order guarantees.
  */
 export function resolveExpiry(env: PlanEnv, log: IssueLog, e: CondExpiry | undefined, o: { field: string; exit?: boolean; activeFrom?: bigint }): ResolvedExpiry | null {
   const spec: CondExpiry = e ?? { kind: 'gtc' };
@@ -253,28 +278,32 @@ export function resolveExpiry(env: PlanEnv, log: IssueLog, e: CondExpiry | undef
   };
 }
 
-// ------------------------------------------------------------------------------------------------ guards
+// ---- guards
 
 /**
- * Self-trade prevention (matcher.md 10.12): `worstAllIn` is the least a sell accepts / the most a buy pays per whole token over every leg that
- * can trade, all-in (tip included; passed to the shared guard with a zero tip). An own ACTIVE order of the opposite side that could
- * match it is an error for the placed order and only a warning for an exit (which is created later).
+ * Self-trade prevention (matcher.md 10.12).
+ *
+ * `worstAllIn` is the least a sell accepts or the most a buy pays per whole token over every leg
+ * that can trade, all-in. It goes to the shared guard with a zero tip. An own active order of the
+ * opposite side that could match is an error for the placed order and only a warning for an exit,
+ * which is created later.
  */
 export function checkSelfTrade(env: PlanEnv, log: IssueLog, side: 'sell' | 'buy', worstAllIn: bigint, o: { exit?: boolean; field: string }): void {
   const found = guardSelfTrade(env.ownOrders, { side, price: worstAllIn, tip: 0n });
   for (const f of found) log.add({ ...f, field: o.field, ...(o.exit ? { severity: 'warning' as const } : {}) });
 }
 
-// ------------------------------------------------------------------------------------------------ the placement pipeline
+// ---- the placement pipeline
 
-/** Everything an order type decides; `finishPlan` builds it and completes the disclosure. */
+/** Everything an order type decides. `finishPlan` builds it and completes the disclosure. */
 export interface CondSpec {
   order: OrderState;
   /** committed exit of an if-done entry (listed last in `states`) */
   exit: OrderState | null;
   /**
-   * KAS on the order UTXO, itemised: carriers plus budget lines ('escrow', 'prefund'). The order UTXO value is their sum; the custody
-   * token carrier and token change (ask kinds) are added by `finishPlan`.
+   * KAS on the order UTXO, itemised as carriers plus budget lines ('escrow', 'prefund').
+   * The order UTXO value is their sum. `finishPlan` adds the custody token carrier and the token
+   * change of ask kinds.
    */
   lines: CarrierLine[];
   carrier: bigint;
@@ -292,13 +321,13 @@ export interface CondSpec {
 const holdsTokens = (o: OrderState): boolean => baseKind(o.kind) === 'KobCondAsk' || baseKind(o.kind) === 'KobIfdAsk';
 const linesTotal = (lines: readonly CarrierLine[]): bigint => lines.reduce((s, l) => s + l.amount * BigInt(l.count), 0n);
 
-/** Builds the transaction (shared `buildCreate`) and completes the disclosure. Never throws for user-input problems. */
+/** Builds the transaction through the shared `buildCreate` and completes the disclosure. */
 export function finishPlan(env: PlanEnv, log: IssueLog, spec: CondSpec): CondPlan {
   const states: OrderState[] = spec.exit ? [spec.order, spec.exit] : [spec.order];
   const value = linesTotal(spec.lines);
   const asks = holdsTokens(spec.order);
   const tokenAmount = asks ? spec.amount : 0n;
-  // every covenant UTXO of this order (custody, delivery, exit) uses the order's carrier
+  // Every covenant UTXO of this order (custody, delivery, exit) uses the order's carrier.
   const res = buildCreate({ ...env, carrier: spec.carrier }, { order: spec.order, value, tokenAmount, deadline: spec.expiry.deadline });
   log.add(...res.issues);
   if (res.built === null || res.request === null || log.failed) {

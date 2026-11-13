@@ -1,10 +1,14 @@
-// IFD / IFO / bracket and repeat IFD / IFO (matcher.md 6, 6.1, 10.8, 10.13; order-types.md "Repeat IFD in detail").
+// Planner of IFD, IFO, bracket and the repeat forms (matcher.md 6, 6.1, 10.8 and 10.13,
+// order-types.md "Repeat IFD in detail").
 //
-//   buy-first : KobIfdBid  (escrow = budget + carriers)      -> every fill of n base units creates a KobCondAsk exit for exactly n
-//   sell-first: KobIfdAsk  (custody + prefund + carriers)    -> every fill of n base units creates a KobCondBid exit for exactly n
+// - Buy-first is a KobIfdBid (escrow is budget plus carriers). Every fill of n base units creates a
+//   KobCondAsk exit for exactly n.
+// - Sell-first is a KobIfdAsk (custody, prefund and carriers). Every fill of n base units creates a
+//   KobCondBid exit for exactly n.
 //
-// The exit is COMMITTED in the entry's `exitState` (the first 279 / 321 bytes of the exit state span, its `minFill` included). The entry itself
-// writes the exit's `amountLeft` and repeat fields, so what this planner commits is the plain exit with `amountLeft = amount`.
+// The exit is committed in the entry's `exitState`, the first 279 or 321 bytes of the exit state
+// including its `minFill`. The entry itself writes the exit's `amountLeft` and repeat fields,
+// so this planner commits the plain exit with `amountLeft = amount`.
 import { MAX_IDLE_DAA, MIN_REST_DAA, STOP_BAND_DAA } from '../daa';
 import type { EntrySpec, IfdLikeIntent } from '../intent-cond';
 import { isRepeat } from '../intent-cond';
@@ -20,14 +24,16 @@ import {
 } from './cond-common';
 import { askWorst, bidWorst, condAskState, condBidState, resolveLegs, type LegInput } from './cond-legs';
 
-/** Bytes of the committed exit prefix (`IFD_BID_EXIT_COMMIT` / `IFD_ASK_EXIT_COMMIT` of kob-protocol/state.rs). */
+/** Bytes of the committed exit prefix of a KobIfdBid (`IFD_BID_EXIT_COMMIT` in state.rs). */
 const IFD_BID_EXIT_COMMIT_BYTES = 279;
-/** the KRON sell-first exit has no extension commitment: 33 bytes less than `IFD_ASK_EXIT_COMMIT_BYTES` (state.rs `IFD_ASK_EXIT_COMMIT_KRON`) */
+/** The KRON sell-first exit has no extension commitment, 33 bytes less than the kcc20 prefix. */
 const IFD_ASK_EXIT_COMMIT_BYTES_KRON = 288;
+/** Bytes of the committed exit prefix of a KobIfdAsk (`IFD_ASK_EXIT_COMMIT` in state.rs). */
 const IFD_ASK_EXIT_COMMIT_BYTES = 321;
-/** stop entries re-arm unarmed each cycle: pre-fund at most this many arming updates of a repeating stop entry */
+/** A repeating stop entry re-arms each cycle and prefunds at most this many arming updates. */
 const MAX_ENTRY_ARM_UPDATES = 10n;
 
+/** The leg input of the resolver for an if-done exit. */
 export const exitLegInput = (e: IfdLikeIntent['exit']): LegInput => {
   const l: LegInput = {};
   if (e.takeProfit !== undefined) l.tp = e.takeProfit;
@@ -42,7 +48,11 @@ export const exitLegInput = (e: IfdLikeIntent['exit']): LegInput => {
   return l;
 };
 
-/** Which exit legs each type demands (order-types.md: IFD one leg, IFO both; a repeat needs the take-profit to re-arm). */
+/**
+ * Checks which exit legs each type demands. Logs an issue and returns false on a bad shape.
+ *
+ * An IFD takes one leg, an IFO both, and a repeat needs the take-profit to re-arm (order-types.md).
+ */
 export function checkExitShape(log: IssueLog, intent: IfdLikeIntent): boolean {
   const e = intent.exit;
   const tp = e.takeProfit !== undefined;
@@ -87,20 +97,21 @@ export function resolveEntry(env: PlanEnv, log: IssueLog, side: 'sell' | 'buy', 
   return { price, stop };
 }
 
-/** The committed exit prefix: first bytes of the encoded exit state (the wasm encoder owns the layout; the entry replaces the rest). */
+/** The committed exit prefix: the first bytes of the encoded exit state. */
 function commitExit(env: PlanEnv, exit: { kind: 'KobCondAsk' | 'KobCondAskKron'; state: CondAskState } | { kind: 'KobCondBid' | 'KobCondBidKron'; state: CondBidState }): Hex {
-  // a KRON sell-first entry commits 288 bytes: its exit has no extension commitment (33 bytes less)
+  // A KRON sell-first entry commits 288 bytes because its exit has no extension commitment.
   const bytes = exit.kind === 'KobCondAsk' || exit.kind === 'KobCondAskKron' ? IFD_BID_EXIT_COMMIT_BYTES : env.token.family === 'kron' ? IFD_ASK_EXIT_COMMIT_BYTES_KRON : IFD_ASK_EXIT_COMMIT_BYTES;
   return env.kob.encodeState(exit).slice(0, 2 * bytes);
 }
 
-/** The exit leg price its default minimum fill is worth 10 KAS at: the take-profit, else the stop (a sell exit: the lower of the two). */
+/** The exit leg price its default minimum fill is worth 10 KAS at (a sell exit: the lower leg). */
 export function exitLegPrice(side: 'sell' | 'buy', l: LegInput): bigint {
   const cands = [l.tp, l.stop].filter((p): p is bigint => p !== undefined && p > 0n);
   if (cands.length === 0) return 0n;
   return cands.reduce((a, b) => (side === 'sell' ? (a < b ? a : b) : a > b ? a : b));
 }
 
+/** Plans an if-done entry with its committed exit. Never throws for user-input problems. */
 export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip: bigint, carrier: bigint): CondPlan {
   const tk = env.token;
   const buyFirst = intent.side === 'buy';
@@ -115,13 +126,13 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   const entryTip = tip;
   if (entry === null) return failedPlan(log);
   const entryAllIn = buyFirst ? entry.price + entryTip : entry.price - entryTip;
-  // a sell-first entry's price must not be below its tip (the covenant refuses every fill otherwise)
+  // A sell-first entry's price must exceed its tip, or the covenant refuses every fill.
   if (entryAllIn <= 0n) {
     log.shared('TIP_EXCEEDS_PRICE', { tip: entryTip }, 'tip');
     return failedPlan(log);
   }
 
-  // ---- the entry's minimum fill (matcher.md 10.8: default ceil(amount / 4), kob-wasm defaultMinFillIfd)
+  // ---- the entry's minimum fill (matcher.md 10.8, default ceil(amount / 4))
   const minFill = intent.minFill ?? env.kob.defaultMinFillIfd(amount);
   if (minFill < 1n || minFill > amount) {
     log.cond('COND_MIN_FILL_INVALID', { amount }, 'minFill');
@@ -129,7 +140,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   }
   const fills = ceilDiv(amount, minFill);
 
-  // ---- repeat: rptAmount = 1 + K * N (N < 2^53), at most an i64
+  // ---- repeat: rptAmount = 1 + K * N (N < 2^53) and at most an i64
   let count: bigint | null = null;
   let rptAmount = 0n;
   if (repeat) {
@@ -152,7 +163,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
     rptAmount = 1n + kk * amount;
   }
 
-  // ---- exit (built first: the entry commits to it, its minimum fill included)
+  // ---- exit (built first because the entry commits to it, its minimum fill included)
   const exitIn = intent.exit;
   const exitTipBase = exitIn.tip ?? 0n;
   if (exitTipBase < 0n) {
@@ -160,44 +171,47 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
     return failedPlan(log);
   }
   const exitInput = exitLegInput(exitIn);
-  // every exit holds one entry fill (at least the entry's minimum fill, except the last): its own minimum fill is at most that
+  // Every exit holds one entry fill, at least the entry's minimum fill except the last. Its own
+  // minimum fill is at most that.
   const exitMinDefault = defaultMinFillFor(env, amount, exitLegPrice(exitSide, exitInput));
   const exitMinFill = exitIn.minFill ?? (exitMinDefault < minFill ? exitMinDefault : minFill);
   log.add(...checkMinFill(exitMinFill, amount, 'exit.minFill'));
   if (log.failed) return failedPlan(log);
-  // a repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill
+  // A repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill.
   const mergeTip = repeat ? mergeTipRate(buyFirst ? MERGE_COST_BUY_FIRST : MERGE_COST_SELL_FIRST, tk.scale, exitMinFill) : 0n;
   const exitTip = exitTipBase + mergeTip;
-  // the exit's trigger threshold scales with what it will sell or buy: at most the entry's amount, known now (its fills are not)
+  // The exit's trigger threshold scales with what it sells or buys. That is at most the entry's
+  // amount, which is known even though its fills are not.
   const legs = resolveLegs(env, log, exitSide, exitInput, 'exit.', exitMinFill, amount);
   const act = resolveActivation(env, log, intent.activeFrom);
   const entryExpiry = act === null ? null : resolveExpiry(env, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   const exitExpiry = resolveExpiry(env, log, exitIn.expiry, { field: 'exit.expiry', exit: true });
   if (legs === null || act === null || entryExpiry === null || exitExpiry === null || log.failed) return failedPlan(log);
 
-  // ---- economics: the take-profit must beat the entry all-in per whole token (10.13); for a plain IFD it is only a warning
+  // ---- economics (matcher.md 10.13)
+  // The take-profit must beat the entry all-in per whole token. For a plain IFD it is a warning.
   const tpAllIn = legs.tpPrice > 0n ? (buyFirst ? legs.tpPrice - exitTip : legs.tpPrice + exitTip) : null;
   let profitPerToken = 0n;
   if (tpAllIn !== null) {
     profitPerToken = buyFirst ? tpAllIn - entryAllIn : entryAllIn - tpAllIn;
     if (profitPerToken <= 0n) {
-      // a repeat re-arms only on a profitable take-profit (10.13); a plain IFD may knowingly exit at a loss
+      // A repeat re-arms only on a profitable take-profit. A plain IFD may exit at a loss.
       log.cond('COND_TP_NOT_PROFITABLE', { profitPerToken }, 'exit.takeProfit', repeat ? 'error' : 'warning');
       if (repeat) return failedPlan(log);
     }
   }
-  // the 2^62 bound of every rate the entry and its exit carry (the builders refuse beyond it)
+  // Every rate the entry and its exit carry stays below 2^62 (the builders refuse more).
   log.add(...checkNotional(amount, buyFirst ? entry.price + entryTip : entry.price, tk.scale, 'entry.price'));
   const exitTop = legs.stopWorst > legs.tpPrice ? legs.stopWorst : legs.tpPrice;
   log.add(...checkNotional(amount, buyFirst ? exitTop : exitTop + exitTip, tk.scale, 'exit.takeProfit'));
   if (log.failed) return failedPlan(log);
 
-  // ---- self-trade: the entry is a real order now; the exit only later (warning)
+  // ---- self-trade (the entry is a real order, the exit is created later so it only warns)
   checkSelfTrade(env, log, intent.side, entryAllIn, { field: 'entry.price' });
   const exitWorstAllIn = buyFirst ? askWorst(legs) - exitTip : bidWorst(legs) + exitTip;
   checkSelfTrade(env, log, exitSide, exitWorstAllIn, { exit: true, field: 'exit' });
 
-  // the entry crosses the book at placement: it fills right away at its limit
+  // The entry crosses the book at placement and fills right away at its limit.
   const touch = touchPrice(env.book, intent.side);
   if (entry.stop === 0n && touch !== null && (buyFirst ? touch <= intent.entry.price : touch >= intent.entry.price)) {
     log.cond('COND_ENTRY_CROSSES', undefined, 'entry.price');
@@ -208,8 +222,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   const stopEntry = entry.stop > 0n;
   const entryBand = stopEntry && entry.stop !== entry.price ? intent.entry.bandDaa ?? STOP_BAND_DAA : 0n;
   const entryKeeperTip = stopEntry ? intent.entry.keeperTip ?? tk.keeperTip : 0n;
-  // the stop entry's trigger threshold defaults to the larger of its minimum fill and a quarter of its amount (kob-wasm defaultMinTouch); a
-  // limit entry has none. An exit (it holds one entry fill of a size not known yet) defaults to its own minimum fill.
+  // The stop entry's trigger threshold defaults to the larger of its minimum fill and a quarter of
+  // its amount (kob-wasm defaultMinTouch). A limit entry has none.
   const entryTouch = stopEntry ? (intent.entry.minTouch ?? env.kob.defaultMinTouch(minFill, amount)) : 0n;
   const entryRestDaa = intent.entry.minRestDaa ?? MIN_REST_DAA;
   if (entryBand < 0n) log.cond('COND_BAND_INVALID', undefined, 'entry.bandDaa');
@@ -245,7 +259,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   let order: OrderState;
   let exitState: OrderState;
   let prefund: bigint | null = null;
-  // KAS on the order UTXO, itemised: the total is exactly the state's own escrow (kob-wasm ifdBidEscrow / ifdAskEscrow; the builder refuses less)
+  // KAS on the order UTXO, itemised. The total is the state's own escrow (kob-wasm ifdBidEscrow or
+  // ifdAskEscrow), and the builder refuses less.
   const lines: CarrierLine[] = [];
 
   const exitBase = { amount, minFill: exitMinFill, tip: exitTip, expiryDaa: exitExpiry.expiryDaa };
@@ -262,7 +277,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
       exitState: commitExit(env, { kind: kindFor('KobCondAsk', tk.family), state: ask } as { kind: 'KobCondAsk'; state: CondAskState }),
     };
     order = { kind: kindFor('KobIfdBid', tk.family), state: bid } as OrderState;
-    // a repeating entry outlives its last fill: one more exit carrier of its own (10.13)
+    // A repeating entry outlives its last fill, so it carries one more exit carrier (10.13).
     const exitCarriers = fills + (repeat ? 1n : 0n);
     const escrow = env.kob.ifdBidEscrow(order);
     if (escrow === null) {
@@ -276,7 +291,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   } else {
     const bidExit = condBidState(env, { ...exitBase, deliveryCarrier: carrier }, legs);
     exitState = { kind: kindFor('KobCondBid', tk.family), state: bidExit } as OrderState;
-    // the exit holds the proceeds plus prefund: enough for its worst buy-back (the covenant of the exit spends up to that), per whole token
+    // The exit holds the proceeds plus the prefund. That covers its worst buy-back per whole token,
+    // which is what the exit's covenant spends at most.
     const proceeds = entry.price - entryTip;
     const worstBuyBack = bidWorst(legs) + exitTip;
     const minPrefund = worstBuyBack > proceeds ? worstBuyBack - proceeds : 0n;
@@ -304,18 +320,21 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
       return failedPlan(log);
     }
     lines.push({ kind: 'orderCarrier', amount: carrier, count: 1 });
-    // the prefund of the whole amount, ceil(amount * prefund / scale), plus a sompi of rounding per extra fill (each fill's prefund rounds up)
+    // The prefund of the whole amount is ceil(amount * prefund / scale), plus a sompi of rounding
+    // per extra fill because each fill's prefund rounds up.
     const prefundKas = value - carrier - carrier * fills;
     if (prefundKas > 0n) lines.push({ kind: 'prefund', amount: prefundKas, count: 1 });
     lines.push({ kind: 'exitCarrier', amount: carrier, count: Number(fills) });
-    // the arming keeper is paid from the entry's carrier: it must stay a carrier (the exit and refund need it too)
+    // The arming keeper is paid from the entry's carrier, which must stay a carrier because the
+    // exit and the refund need it too.
     if (keeperReserve * 2n > carrier) {
       log.cond('COND_KEEPER_FUNDING_TOO_LARGE', { reserve: keeperReserve }, 'carrier');
       return failedPlan(log);
     }
   }
 
-  // exit keepers are paid from the exit's own carrier (buy-first exit: order value; sell-first exit: exitCarrier + proceeds)
+  // Exit keepers are paid from the exit's own carrier (buy-first exit: the order value, sell-first
+  // exit: exitCarrier plus proceeds).
   if (legs.keeper !== null && legs.keeper.reserve * 2n > carrier) {
     log.cond('COND_KEEPER_FUNDING_TOO_LARGE', { reserve: legs.keeper.reserve }, 'exit.trail');
     return failedPlan(log);
@@ -362,8 +381,9 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   if (!buyFirst) notes.push('prefund');
   const uniq = [...new Set(notes)];
 
-  // the entry's all-in total by the covenant's quote rule: a buy-first entry PAYS at most floor(amount (price + tip) / scale), a sell-first
-  // entry RECEIVES at least ceil(amount (price - tip) / scale)
+  // The entry's all-in total by the covenant's quote rule. A buy-first entry pays at most
+  // floor(amount (price + tip) / scale). A sell-first entry receives at least
+  // ceil(amount (price - tip) / scale).
   const allInTotal = buyFirst ? env.kob.ifdBidSpend(order, amount, entry.price) : env.kob.ifdAskProceeds(order, amount, entry.price);
   const spec: CondSpec = {
     order,

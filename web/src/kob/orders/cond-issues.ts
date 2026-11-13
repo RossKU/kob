@@ -1,7 +1,12 @@
-// Issue codes of the conditional / if-done planner (stops, take-profit, OCO, trailing, IFD / IFO, repeat), same conventions as
-// common-issues.ts: the UI translates by `code` (i18n `plan.issue.<CODE>`), `message` is the English fallback, `params` fill the
-// placeholders `{name}`, `{name:kas}` (sompi bigint -> KAS) and `{name:bps}`. Codes shared with the simple orders (SELF_TRADE,
-// INSUFFICIENT_KAS, PRICE_NOT_ON_TICK, AMOUNT_NOT_POSITIVE, EXPIRY_TOO_FAR, ...) stay in common-issues.ts and are reused as they are.
+// Issue codes of the conditional and if-done planner (stops, take-profit, OCO, trailing, IFD, IFO,
+// repeat), with the conventions of common-issues.ts.
+//
+// The UI translates by `code` (i18n key `plan.issue.<CODE>`) and `message` is the English
+// fallback. Placeholders are `{name}`, `{name:kas}` (sompi bigint as KAS) and `{name:bps}`.
+//
+// Codes shared with the simple orders (SELF_TRADE, INSUFFICIENT_KAS, PRICE_NOT_ON_TICK,
+// AMOUNT_NOT_POSITIVE, EXPIRY_TOO_FAR and so on) stay in common-issues.ts and are reused as they
+// are.
 import type { IssueSeverity, PlanIssue } from '../plan-types';
 import { formatBps, formatKas } from '../units';
 import type { IssueParams } from './common-issues';
@@ -9,6 +14,7 @@ import type { IssueParams } from './common-issues';
 interface CatalogEntry { severity: IssueSeverity; message: string }
 const e = (severity: IssueSeverity, message: string): CatalogEntry => ({ severity, message });
 
+/** Every issue code of the conditional planner with its default severity and text. */
 export const COND_ISSUE_CATALOG = {
   // ---- legs
   COND_LEGS_MISSING: e('error', 'A conditional order needs a take-profit or a stop.'),
@@ -47,7 +53,9 @@ export const COND_ISSUE_CATALOG = {
   COND_REPEAT_COUNT_INVALID: e('error', 'The repeat count must be at least 1 (use a plain IFD for no repeat).'),
 } as const satisfies Record<string, CatalogEntry>;
 
+/** The code of a conditional catalogue entry. */
 export type CondIssueCode = keyof typeof COND_ISSUE_CATALOG;
+/** All codes of the conditional catalogue. */
 export const COND_ISSUE_CODES = Object.keys(COND_ISSUE_CATALOG) as CondIssueCode[];
 
 function interpolate(template: string, params: IssueParams | undefined): string {
@@ -61,8 +69,10 @@ function interpolate(template: string, params: IssueParams | undefined): string 
 }
 
 /**
- * Creates a PlanIssue of the conditional catalogue. Codes whose text depends on the side (`{rule}`) get the sentence as a param, so
- * the UI can still translate by `code` and rebuild the sentence from the numbers in the other params.
+ * Creates a PlanIssue of the conditional catalogue.
+ *
+ * Codes whose text depends on the side (`{rule}`) get the sentence as a param. The UI can still
+ * translate by `code` and rebuild the sentence from the numbers in the other params.
  */
 export function condIssue(code: CondIssueCode, params?: IssueParams, field?: string, severity?: IssueSeverity): PlanIssue {
   const c: CatalogEntry = COND_ISSUE_CATALOG[code];
