@@ -1,16 +1,19 @@
-//! The x402 facilitator role of `kobd`: alone (`kobd x402`) or inside `kobd --executor`
-//! (`--x402-config`), where it follows acceptance through the indexer.
+//! The x402 facilitator role of `kobd`, alone or inside `kobd --executor`.
 //!
-//! | Module | Contents |
-//! |---|---|
-//! | [`config`] | strict JSON configuration and its validation |
-//! | [`ledger`] | durable replay ledger (JSONL write-ahead log, fsync per record) |
-//! | [`node`] | `ChainView` over the node's wRPC JSON |
-//! | [`facilitator`] | `supported`, `verify`, `settle`, `reconcile` |
-//! | [`http`] | axum service: admission, authentication, routes, server loop |
-//! | [`ratelimit`] | token buckets |
-//! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kobd --executor`) |
-//! | [`quote`] | swap-and-pay quotes from an indexer's book; the book view of intent executions |
+//! Alone (`kobd x402`) it takes finality from the node's UTXO set. Inside the Executor
+//! (`--x402-config`) it follows acceptance through the indexer instead. Operator guide:
+//! `docs/ops/executor.md`, A.6 and A.7.
+//!
+//! # Modules
+//!
+//! - [`config`]: strict JSON configuration and its validation.
+//! - [`ledger`]: durable replay ledger, a JSONL write-ahead log with an fsync per record.
+//! - [`node`]: `ChainView` over the node's wRPC JSON.
+//! - [`facilitator`]: `supported`, `verify`, `settle` and `reconcile`.
+//! - [`http`]: the axum service, with admission, authentication, routes and the server loop.
+//! - [`ratelimit`]: token buckets.
+//! - [`indexed`]: `ChainView` over the node and the indexer's acceptance tracking.
+//! - [`quote`]: swap-and-pay quotes from an indexer's book, and the book view for intents.
 
 // The facilitator is daemon code. It logs through `tracing`, so its lines carry a time and a level
 // and reach `--log-file`. It prints no command output, so every print macro is refused here.
@@ -45,33 +48,39 @@ use facilitator::{Facilitator, FacilitatorConfig};
 use ledger::Ledger;
 use node::NodeChain;
 
-/// `kobd x402`: the facilitator alone (without the indexer's acceptance tracking; finality
-/// from the UTXO observation). Flags override the configuration file.
+/// Arguments of `kobd x402`, the facilitator alone.
+///
+/// Finality comes from the UTXO observation, without the indexer's acceptance tracking. Flags
+/// override the configuration file.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct X402Args {
     /// Strict JSON configuration file (`crates/kobd/x402.example.json`).
     #[arg(long, env = "KOB_X402_CONFIG")]
     pub config: Option<PathBuf>,
-    /// `kaspa:mainnet` or `kaspa:testnet-10`. Required on the reference build (no default); a deployment build implies its own
-    /// and refuses another.
+    /// `kaspa:mainnet` or `kaspa:testnet-10`. Required on the reference build, which has no
+    /// default. A deployment build implies its own network and refuses another.
     #[arg(long)]
     pub network: Option<String>,
-    /// Node JSON wRPC endpoint (`ws://host:port`). Default: the local node's port of the network (`ws://127.0.0.1:18110` on
-    /// mainnet, `ws://127.0.0.1:18210` on testnet-10). Command-line arguments are visible to other local users (`ps`): a URL
-    /// with a password or an API key belongs in the configuration file (`node`) or in `KOB_NODE_WRPC`.
+    /// Node JSON wRPC endpoint (`ws://host:port`).
+    ///
+    /// The default is the local node's port of the network: `ws://127.0.0.1:18110` on mainnet and
+    /// `ws://127.0.0.1:18210` on testnet-10. Other local users see command-line arguments in `ps`.
+    /// A URL with a password or an API key belongs in the configuration file (`node`) or in
+    /// `KOB_NODE_WRPC`.
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub node: Option<String>,
     /// HTTP listen address (`addr:port`).
     #[arg(long)]
     pub listen: Option<String>,
-    /// Replay ledger path, or `:memory:` (volatile: replay protection is lost on restart).
+    /// Replay ledger path, or `:memory:`, which loses replay protection on restart.
     #[arg(long)]
     pub ledger: Option<String>,
-    /// Merchant authentication: `required` (Bearer keys from the configuration) or `open` (loopback only).
+    /// Merchant authentication: `required` (Bearer keys from the configuration) or `open`
+    /// (loopback only).
     #[arg(long, value_parser = ["required", "open"])]
     pub auth: Option<String>,
-    /// With `--auth open`: state that nothing on this host relays connections to the listen address (configuration
-    /// `openAuthNoProxy`).
+    /// With `--auth open`: states that nothing on this host relays connections to the listen
+    /// address (configuration `openAuthNoProxy`).
     #[arg(long)]
     pub open_auth_no_proxy: bool,
 }
@@ -115,10 +124,12 @@ pub struct Service {
     pub built: Built,
 }
 
-/// The node view of `cfg`, checked at startup: another network or a node without a UTXO index is
-/// refused; an unreachable node is only a warning (settlements fail closed until it answers).
+/// The node view of `cfg`, checked at startup.
+///
+/// A node on another network, or without a UTXO index, is refused. An unreachable node only logs a
+/// warning, and settlements fail closed until it answers.
 pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> {
-    // a `resolver` node resolves for the facilitator's network
+    // A `resolver` node resolves for the facilitator's network.
     crate::rpc::resolver::set_network(built.network.registry_name());
     let chain = NodeChain::connect(&cfg.node, built.network, Duration::from_millis(cfg.node_timeout_ms));
     match chain.check_network() {
@@ -131,17 +142,20 @@ pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> 
     Ok(chain)
 }
 
-/// The book intent payments are executed against (inside `kobd --executor`: the indexer's).
+/// The book that intent payments execute against. In the Executor it is the indexer's.
 pub type BookFn = Arc<dyn Fn() -> Result<kob_x402::intent::BookView, String> + Send + Sync>;
 
-/// Opens the ledger and builds the facilitator over `chain`, then reconciles the ledger once. Without a book,
-/// intent payments are refused (`intents.enabled` is an error).
+/// Opens the ledger, builds the facilitator over `chain` and reconciles the ledger once.
+///
+/// Without a book, `intents.enabled` is an error.
 pub fn prepare(built: Built, chain: Arc<dyn ChainView>) -> Result<Service, String> {
     prepare_with(built, chain, None, None)
 }
 
-/// [`prepare`] with the book intent payments are executed against, and its readiness (the indexer's health: while it is not
-/// ready `/supported` does not offer the intent mode).
+/// [`prepare`] with the book that intent payments are executed against, and its readiness.
+///
+/// The readiness is the indexer's health. While it is not ready, `/supported` does not offer the
+/// intent mode.
 pub fn prepare_with(
     built: Built,
     chain: Arc<dyn ChainView>,
@@ -225,7 +239,7 @@ pub fn prepare_with(
 }
 
 impl Service {
-    /// Binds the HTTP listen address (before anything else starts, so a taken port fails the start).
+    /// Binds the HTTP listen address. This runs first, so a taken port fails the start.
     pub async fn bind(&self) -> Result<tokio::net::TcpListener, String> {
         tokio::net::TcpListener::bind(self.built.listen).await.map_err(|e| format!("x402: bind {}: {e}", self.built.listen))
     }
@@ -265,7 +279,7 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
     res
 }
 
-/// `kobd x402 ...`: the facilitator alone; returns when the process is asked to stop.
+/// Runs `kobd x402` and returns when the process is asked to stop.
 pub async fn run(a: X402Args) -> anyhow::Result<()> {
     let go = async {
         let cfg = a.config()?;

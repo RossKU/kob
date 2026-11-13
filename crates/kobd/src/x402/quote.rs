@@ -1,14 +1,21 @@
 //! Swap-and-pay quotes from an indexer's book (`docs/spec/x402-swap-and-pay.md` §12, informative).
 //!
-//! Choosing the orders is the payer's job; any KOB indexer's book (the read API, a snapshot file, or
-//! [`crate::indexer::book::snapshot`] in process) lists what a quote needs: the order UTXO, its
-//! decoded state and, for asks, the exact custody. The facilitator itself exposes no quote endpoint.
+//! Choosing the orders is the payer's job. Any KOB indexer's book lists what a quote needs: the
+//! order UTXO, its decoded state and, for asks, the exact custody. The book comes from the read
+//! API, a snapshot file, or [`crate::indexer::book::snapshot`] in process. The facilitator itself
+//! exposes no quote endpoint.
 //!
-//! Only the orders the swap verifier accepts are quoted: plain `KobAsk` / `KobBid` (KCC-20) and
-//! `KobAskKron` / `KobBidKron` (KRON; a route may mix both) that rest
-//! (GTC), with a constant price (no decay / rise, no TWAP interval), active and not expired at the
-//! book's DAA score. Legs are chosen best price first; an order the payer already lost in an
-//! `order_conflict` is excluded by outpoint.
+//! # Quoted orders
+//!
+//! Only orders the swap verifier accepts are quoted. Each one must:
+//!
+//! - be a plain `KobAsk` or `KobBid` (KCC-20), or a `KobAskKron` or `KobBidKron` (KRON), and a
+//!   route may mix both families;
+//! - rest as good-till-cancelled, with a constant price (no decay or rise, no TWAP interval);
+//! - be active and not expired at the book's DAA score.
+//!
+//! Legs are chosen best price first. An order the payer already lost in an `order_conflict` is
+//! excluded by its outpoint.
 
 use kob_protocol::state::{AnyState, TIF_GTC};
 use kob_protocol::tx::OrderUtxo;
@@ -34,7 +41,9 @@ pub struct QuoteRequest {
     pub take: Take,
     /// Base units of the token.
     pub amount: i64,
-    /// Worst acceptable quote, sompi per whole token at the order's own scale (bids: at least; asks: at most).
+    /// Worst acceptable price, in sompi per whole token at the order's own scale.
+    ///
+    /// For bids it is a minimum and for asks a maximum.
     pub limit_price: Option<i64>,
     /// Order outpoints to skip (lost in an earlier `order_conflict`).
     pub exclude: Vec<Outpoint>,
@@ -44,9 +53,14 @@ fn outpoint_of(o: &ListedOrder) -> Outpoint {
     Outpoint::new(o.order.utxo.transaction_id, o.order.utxo.index)
 }
 
-/// A takeable level: price per whole token at `scale`, the base units available, the order's minimum fill, the smallest
-/// fill that ends it (exempt from the minimum fill) and the largest that does not (the KIP-9 bound of the outputs a partial
-/// fill leaves, `crate::matcher::candidate::plain_kip9`: the matcher's rule).
+/// A takeable level of the book, one per order.
+///
+/// - `price` is per whole token at `scale`.
+/// - `amount` is the base units available.
+/// - `min_fill` is the order's minimum fill.
+/// - `rest_from` is the smallest fill that ends the order. It is exempt from the minimum fill.
+/// - `part_cap` is the largest fill that does not end it. It is the KIP-9 bound of the outputs a
+///   partial fill leaves, as the matcher computes it in `crate::matcher::candidate::plain_kip9`.
 struct Level<'a> {
     price: i64,
     scale: i64,
@@ -63,7 +77,7 @@ impl Level<'_> {
         n > 0 && n <= self.amount && (n >= self.rest_from || (n >= self.min_fill && n <= self.part_cap))
     }
 
-    /// The level with the KIP-9 limits of its order's fills (None: no fill of it can be mined).
+    /// The level with the KIP-9 limits of its order's fills, or `None` when no fill can be mined.
     fn kip9(self, v: i64, cust: i64) -> Option<Self> {
         let r = QtyRules { cap: self.amount, min_fill: self.min_fill, rest_from: self.rest_from, part_cap: i64::MAX };
         let r = plain_kip9(&self.order.order.state, v, cust, self.price, r)?;
@@ -75,8 +89,8 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
     let t = book.daa_score as i64;
     let mut out = Vec::new();
     for o in &book.orders {
-        // an order whose token program is not one of its own family's (a KRON kind naming a KCC-20
-        // program, or an unknown program) is not a swap leg: the verifier refuses it
+        // An order whose token program is not its own family's is not a swap leg, and the verifier
+        // refuses it. That covers a KRON kind naming a KCC-20 program, and an unknown program.
         if req.exclude.contains(&outpoint_of(o)) || excluded_by_expiry(o, t, utc) || token_program(&o.order.state).is_none() {
             continue;
         }
@@ -88,7 +102,8 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
                 if s.token_cov_id != req.token || s.tif != TIF_GTC || s.slope != 0 || s.interval != 0 || t < s.active_from {
                     continue;
                 }
-                // what the escrow affords while keeping the maker's delivery carrier and reserve (the matcher's rule)
+                // What the escrow affords while keeping the maker's delivery carrier and reserve.
+                // This is the matcher's rule.
                 let v = o.order.utxo.amount.min(i64::MAX as u64) as i64;
                 let power = s.buying_power(v);
                 let amount = if s.max_fill > 0 { power.min(s.max_fill) } else { power };
@@ -132,19 +147,21 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
             _ => {}
         }
     }
-    // the price per base unit, compared exactly (orders of one token may differ in scale)
+    // Prices per base unit are compared exactly, because orders of one token may differ in scale.
     let per_base = |l: &Level| (l.price as i128, l.scale.max(1) as i128);
     let cmp = |a: (i128, i128), b: (i128, i128)| (a.0 * b.1).cmp(&(b.0 * a.1));
     match req.take {
-        // best bid first, then the older UTXO (it has waited longer)
+        // Best bid first, then the older UTXO, which has waited longer.
         Take::SellToBids => out.sort_by(|a, b| cmp(per_base(b), per_base(a)).then(a.order.utxo_daa().cmp(&b.order.utxo_daa()))),
         Take::BuyFromAsks => out.sort_by(|a, b| cmp(per_base(a), per_base(b)).then(a.order.utxo_daa().cmp(&b.order.utxo_daa()))),
     }
     out
 }
 
-/// The legs of one request, best price first; `None` when the book cannot fill `amount`. A level whose minimum fill the
-/// rest of the request does not reach is skipped (unless the take ends the order).
+/// The legs of one request, best price first, or `None` when the book cannot fill `amount`.
+///
+/// A level is skipped when the rest of the request does not reach its minimum fill, unless the
+/// take ends the order.
 pub fn quote_legs(book: &MemoryBook, req: &QuoteRequest, utc: u64) -> Option<Vec<OrderRef>> {
     if req.amount <= 0 {
         return None;
@@ -174,9 +191,10 @@ pub fn quote_legs(book: &MemoryBook, req: &QuoteRequest, utc: u64) -> Option<Vec
     (left == 0).then_some(legs)
 }
 
-/// A quote over one or more requests (a two-token route: the pay token's bids, then the merchant
-/// token's asks). `lock_time` is the DAA score the transaction proves (a little below the virtual
-/// DAA score, see [`Quote`]).
+/// A quote over one or more requests, such as a two-token route.
+///
+/// A two-token route takes the pay token's bids, then the merchant token's asks. `lock_time` is the
+/// DAA score the transaction proves, a little below the virtual DAA score (see [`Quote`]).
 pub fn quote(book: &MemoryBook, reqs: &[QuoteRequest], lock_time: u64, utc: u64) -> Option<Quote> {
     let mut orders = Vec::new();
     for r in reqs {
@@ -185,9 +203,11 @@ pub fn quote(book: &MemoryBook, reqs: &[QuoteRequest], lock_time: u64, utc: u64)
     Some(Quote { lock_time, orders })
 }
 
-/// The plain limit orders of a book as an intent execution's [`kob_x402::intent::BookView`]: KCC-20 asks with their
-/// exact custody (what an intent buys for the merchant), KCC-20 and KRON bids (what it sells the payer's token into); the
-/// planner filters further (the intent's token programs, plain resting orders, activity).
+/// The plain limit orders of a book as an intent execution's [`kob_x402::intent::BookView`].
+///
+/// It holds KCC-20 asks with their exact custody, which an intent buys for the merchant. It also
+/// holds KCC-20 and KRON bids, which an intent sells the payer's token into. The planner filters
+/// further by the intent's token programs, plain resting orders and activity.
 pub fn book_view(book: &MemoryBook) -> kob_x402::intent::BookView {
     let mut v = kob_x402::intent::BookView::default();
     for o in &book.orders {

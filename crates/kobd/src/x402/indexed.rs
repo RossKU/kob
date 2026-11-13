@@ -1,12 +1,17 @@
-//! The facilitator's chain view inside `kobd --executor`: node RPC for UTXO facts and submission,
-//! and the indexer's acceptance tracking (the same selected-chain follower the matcher uses) for
-//! finality.
+//! The facilitator's chain view inside `kobd --executor`.
 //!
-//! With the tracker, a settlement is `accepted` when a chain block of the current selected chain
-//! accepted the transaction, which stays true when the merchant spends the output right away (the
-//! UTXO observation alone would lose it) and turns false when that block is reorged away. The UTXO
-//! observation remains the fallback for transactions the tracker did not follow from before their
-//! broadcast (a restart) and while the indexer catches up.
+//! It takes UTXO facts and submission from the node, and finality from the indexer's acceptance
+//! tracking. That tracking is the selected-chain follower the matcher uses.
+//!
+//! # Finality
+//!
+//! A settlement is `accepted` when a block of the current selected chain accepted the transaction.
+//! This stays true when the merchant spends the output right away, which the UTXO observation alone
+//! would miss. It turns false when that block is reorged away.
+//!
+//! The UTXO observation is the fallback in two cases. One is a transaction the tracker did not
+//! follow from before its broadcast, such as after a restart. The other is a tracker that is still
+//! catching up.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -33,7 +38,8 @@ impl<C: ChainView> IndexedChain<C> {
     }
 
     fn lock(&self) -> MutexGuard<'_, Ingest> {
-        // a poisoned lock leaves SQLite and the watch map consistent (see `executor::IndexerSource`)
+        // A poisoned lock leaves SQLite and the watch map consistent.
+        // See `executor::IndexerSource`.
         self.ingest.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
