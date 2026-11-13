@@ -629,3 +629,51 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
     let old = old_orders(&conn, &ctx(), &f, 50, None);
     assert_eq!(serde_json::to_value(&first).unwrap(), serde_json::to_value(&old).unwrap());
 }
+
+/// The single-order view carries the newest [`MAX_VIEW_CHILDREN`] child orders, oldest first, and their number when there are
+/// more. `order_exists` finds exactly the orders the view finds.
+#[test]
+fn an_order_view_bounds_its_children() {
+    let conn = store(4, 50);
+    let ctx = ctx();
+    let parent: Vec<u8> = conn
+        .query_row(
+            "SELECT o.covenant_id FROM orders o JOIN ids t ON t.id = o.template_id WHERE t.h != ?1 LIMIT 1",
+            [vec![9u8; 32]],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let parent = Hash32(parent.try_into().unwrap());
+    let tpl: Vec<u8> = kob_protocol::artifacts::pinned_hash(TemplateId::KobAsk).to_vec();
+    let n = MAX_VIEW_CHILDREN + 30;
+    for i in 0..n {
+        conn.execute(
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, in_book, genesis_state, genesis_block, genesis_daa, listed, parent) \
+             VALUES (?1, 'KobAsk', ?2, 1, 1, 1, x'00', ?3, 1, 1, ?4)",
+            params![vec![(i % 256) as u8, (i / 256) as u8, 0xcc], intern(&conn, &tpl).unwrap(), 100 + i as i64, parent.0.to_vec()],
+        )
+        .unwrap();
+    }
+    let v = order(&conn, &ctx, &parent).unwrap().unwrap();
+    let kids = v.children.unwrap();
+    assert_eq!((kids.len(), v.children_total), (MAX_VIEW_CHILDREN, Some(n as i64)));
+    let newest: Vec<String> = (n - MAX_VIEW_CHILDREN..n).map(|i| hex::encode(&[(i % 256) as u8, (i / 256) as u8, 0xcc])).collect();
+    assert_eq!(kids, newest, "the newest, oldest first");
+    // Every other view (no child here) carries no total.
+    let all: Vec<Vec<u8>> = conn
+        .prepare("SELECT covenant_id FROM orders WHERE length(covenant_id) = 32")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    for cov in all {
+        let cov = Hash32(cov.try_into().unwrap());
+        assert_eq!(order_exists(&conn, &cov).unwrap(), order(&conn, &ctx, &cov).unwrap().is_some());
+        if cov != parent {
+            let v = order(&conn, &ctx, &cov).unwrap();
+            assert!(v.is_none_or(|v| v.children_total.is_none()));
+        }
+    }
+    assert!(!order_exists(&conn, &Hash32([0xfe; 32])).unwrap());
+}

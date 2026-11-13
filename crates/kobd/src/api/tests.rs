@@ -1192,7 +1192,7 @@ async fn a_quiet_market_ages_out_of_the_24h_figures() {
     assert_eq!((v["volume_24h"].as_str(), v["quote_volume_24h"].as_str(), v["trades_24h"].as_i64()), (Some("0"), Some("0"), Some(0)));
     assert!(v["ts"].as_i64().unwrap() > p + 365 * 24 * HOUR, "the window ends at the wall clock: {v}");
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills", h(BASE), h(QUOTE))).await;
-    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "0", "amount_b": "0", "fills": 0}));
+    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "0", "amount_b": "0", "fills": 0, "window_truncated": false}));
     assert_eq!(v["items"].as_array().unwrap().len(), 1, "the fill itself stays listed");
 
     // the same store read at chosen clocks (unix seconds)
@@ -1818,7 +1818,7 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
     );
     assert_eq!((items[2]["amount_a"].as_str(), items[2]["amount_b"].as_str()), (Some("2000"), Some("4000")));
     // the netting fill (both its orders record it) counts once: 2 000 + the route fill's 1 000 of A in 2 transactions
-    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "3000", "amount_b": "6000", "fills": 2}));
+    assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "3000", "amount_b": "6000", "fills": 2, "window_truncated": false}));
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=1", h(BASE), h(QUOTE))).await;
     let cursor = v["next_cursor"].as_str().unwrap().to_string();
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=5&before={cursor}", h(BASE), h(QUOTE))).await;

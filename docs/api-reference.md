@@ -506,7 +506,7 @@ are the bounds the two series allow, not observed trades. `pair_volume_*` and `p
 
 ```json
 { "base": "<hex32>", "quote": "<hex32>",
-  "volume_24h": { "amount_a": "4000", "amount_b": "4000", "fills": 1 },
+  "volume_24h": { "amount_a": "4000", "amount_b": "4000", "fills": 1, "window_truncated": false },
   "items": [ { "id": 7, "txid": "<hex32>", "ts": 1790000000000, "daa": 123, "order": "<hex32>", "contract": "KobPair", "side": "ask",
                "amount_a": "4000", "amount_b": "4000", "price": "1000", "price_num": "1", "price_den": "1", "a_scale": 1000,
                "tip_kas": "40000", "counterparty": "route", "price_source": "none", "confirmations": 12, "settled": false } ],
@@ -515,7 +515,7 @@ are the bounds the two series allow, not observed trades. `pair_volume_*` and `p
 
 `side` is `ask` (the order sold A) or `bid`. `counterparty` is `route`, `netting` or `inventory`. `price_source` is always `none`:
 a pair fill is volume only and never sets a price. `volume_24h` counts each transaction once like the candles (a netting fill is one, `fills` counts transactions) and covers the 24 hours ending at the newer of the newest chain block
-time the indexer has recorded and its wall clock (as `/v1/stats/{token}`). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
+time the indexer has recorded and its wall clock (as `/v1/stats/{token}`); `window_truncated` is true when the day held more than 20,000 pair-fill rows and the figures cover the newest ones (whole transactions only). `amount_b`, `price`, `price_num`, `price_den`, `tip_kas` may be null.
 
 ### 3.8 `GET /v1/orders`
 
@@ -611,7 +611,8 @@ curl -s $API/v1/orders/$ORDER
 | `last_block`, `last_daa`, `confirmations`, `settled` | number, number, number or null, bool | Latest event position of the order. |
 | `expired` | bool | Live and past `expiry_daa`: a refund is pending. |
 | `possibly_frozen`, `possibly_frozen_basis`, `frozen_reason` | bool, string or null, string **omitted** | The operator's own engine pre-simulation was rejected by the token program (a judgement of this operator's matcher, not chain data); such an order is not listed as liquidity. `frozen_reason` is omitted when not flagged. |
-| `children` | array, **omitted** | Covenant ids of orders created by this order (if-done exits). Single lookups only. |
+| `children` | array, **omitted** | Covenant ids of orders created by this order (if-done exits): the newest 100, oldest first. Single lookups only. |
+| `children_total` | number, **omitted** | Present only when the order has more children than `children` lists: how many it has. |
 | `pair` | object, **omitted** | Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): `base`, `quote`, `base_family`, `quote_family`, `base_template_hash`, `quote_template_hash`, `base_scale`, `quote_scale`, `side` (`ask`/`bid`), `price`, `price_num`, `price_den`, `stop_price` (omitted), `quote_now`, `amount_left`, `custodies` (`token`, `role` `base`/`quote`, `expected_amount`, and `utxo` and `ok`, both omitted outside single lookups and the live orders of a `maker=` list), `prefund` (omitted), `delivery_carrier`. See [ops/executor.md](ops/executor.md) 5.4. |
 | `warnings` | array of string | Show these with the order: `genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority`. |
 
@@ -1334,8 +1335,8 @@ What the code and the docs support, and no more:
 * **Defensive client habits** (advice, not a promise): ignore fields you do not know; treat an absent optional field as `null`
   (these are omitted when they do not apply: health `history_from_daa`, `catch_up`, `backfill`, `gaps`, `nodes`; token
   `decimals_source`, `program_ambiguous`, `candidate_templates`, `declaration`; order `placed_state`, `custody`, `strays`,
-  `strays_total`, `frozen_reason`, `children`, `pair`; pair `stop_price`, `prefund`, custody `utxo` and `ok`; token UTXO `state`,
-  `program`, `foreign`); parse amounts as arbitrary-precision integers; never assume a list is complete
+  `strays_total`, `frozen_reason`, `children`, `children_total`, `pair`; pair `stop_price`, `prefund`, custody `utxo` and
+  `ok`; token UTXO `state`, `program`, `foreign`); parse amounts as arbitrary-precision integers; never assume a list is complete
   without following `next_cursor`.
 * **Numbers that depend on the operator.** Page caps, rate limits, timeouts and connection caps are operator configuration
   (section 6); a public server may set stricter values than the defaults here.

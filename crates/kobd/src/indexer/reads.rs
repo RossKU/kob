@@ -1352,6 +1352,10 @@ pub struct OrderView {
     /// It is set only on single-order lookups.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<String>>,
+    /// Number of child orders, when `children` holds only the newest [`MAX_VIEW_CHILDREN`] of
+    /// them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub children_total: Option<i64>,
     /// Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): the pair, the side, the price in token
     /// B and the custodies.
     ///
@@ -1676,6 +1680,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         settled: ctx.settled(last_daa),
         last_daa,
         children: None,
+        children_total: None,
         pair,
         warnings: vec![],
     })
@@ -1870,13 +1875,36 @@ pub fn order(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32) -> DbResult
     if kob_protocol::json::hex32(&v.template_hash).ok().and_then(|h| kob_protocol::retired::retired_by_hash(&h)).is_some() {
         v.cancel_only = Some(true);
     }
+    // The newest children, oldest first. A repeating entry books an exit per fill, so the list is
+    // bounded like the strays.
     let mut st = conn.prepare(&format!(
-        "SELECT o.covenant_id FROM orders o WHERE o.parent = ?1 AND {pinned} ORDER BY o.genesis_block, o.covenant_id"
+        "SELECT o.covenant_id FROM orders o WHERE o.parent = ?1 AND {pinned} ORDER BY o.genesis_block DESC, o.covenant_id DESC LIMIT ?2"
     ))?;
-    let kids = st.query_map([covenant_id.0.to_vec()], |r| Ok(hx(r.get(0)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut kids = st
+        .query_map(rusqlite::params![covenant_id.0.to_vec(), MAX_VIEW_CHILDREN as i64 + 1], |r| Ok(hx(r.get(0)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if kids.len() > MAX_VIEW_CHILDREN {
+        kids.truncate(MAX_VIEW_CHILDREN);
+        v.children_total = Some(conn.query_row(
+            &format!("SELECT COUNT(*) FROM orders o WHERE o.parent = ?1 AND {pinned}"),
+            [covenant_id.0.to_vec()],
+            |r| r.get(0),
+        )?);
+    }
+    kids.reverse();
     v.children = Some(kids);
     attach_holdings(conn, ctx, covenant_id, &mut v)?;
     Ok(Some(v))
+}
+
+/// Most child orders (if-done exits) an order view carries: the newest. `children_total` says how
+/// many there are when there are more.
+pub const MAX_VIEW_CHILDREN: usize = 100;
+
+/// Whether [`order`] finds the order: the same template rule, without building the view.
+pub fn order_exists(conn: &Connection, covenant_id: &Hash32) -> DbResult<bool> {
+    let sql = format!("SELECT 1 FROM orders o WHERE o.covenant_id = ?1 AND {}", pinned_or_cancel_only_template());
+    Ok(conn.prepare_cached(&sql)?.exists([covenant_id.0.to_vec()])?)
 }
 
 /// The exact custody of an order (ask kinds) and its live strays, as the single-order view has it.

@@ -859,6 +859,9 @@ pub struct PairVolume {
     pub amount_b: String,
     /// Transactions that filled pair orders of the pair. A netting fill is one.
     pub fills: u64,
+    /// The day held more than [`market::MAX_FILL_ROWS`] pair-fill rows: the figures cover the
+    /// newest of them, whole transactions only.
+    pub window_truncated: bool,
 }
 
 /// The pair fills of one pair, newest first, with the 24 h pair volume.
@@ -920,11 +923,19 @@ pub fn pair_fills(
     let next_cursor = if more { items.last().map(|f| f.id.to_string()) } else { None };
     let newest: Option<i64> = conn.query_row("SELECT MAX(ts) FROM order_events", [], |r| r.get(0))?;
     let since = ctx.window_end(newest).unwrap_or(0) - 86_400_000;
-    let rows = pair_fill_rows(
+    // At most `MAX_FILL_ROWS` rows, the newest, as the 24 h statistics of a token read. A cut drops
+    // the transaction at the cut, which may be partial.
+    let mut rows = pair_fill_rows(
         conn,
-        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3",
-        params![base.0.to_vec(), quote.0.to_vec(), since],
+        "SELECT txid, ts, side, amount_a, amount_b FROM pair_fills WHERE base_cov_id = ?1 AND quote_cov_id = ?2 AND ts >= ?3 \
+         ORDER BY ts DESC, id DESC LIMIT ?4",
+        params![base.0.to_vec(), quote.0.to_vec(), since, market::MAX_FILL_ROWS as i64 + 1],
     )?;
+    let window_truncated = rows.len() > market::MAX_FILL_ROWS;
+    if window_truncated {
+        let cut = rows.pop().map(|r| r.0);
+        rows.retain(|r| Some(&r.0) != cut.as_ref());
+    }
     let (mut va, mut vb, mut n) = (0i128, 0i128, 0u64);
     for (_, x, y) in tx_volumes(rows) {
         va = va.saturating_add(x);
@@ -934,7 +945,7 @@ pub fn pair_fills(
     Ok(PairFillsView {
         base: base.to_hex(),
         quote: quote.to_hex(),
-        volume_24h: PairVolume { amount_a: va.to_string(), amount_b: vb.to_string(), fills: n },
+        volume_24h: PairVolume { amount_a: va.to_string(), amount_b: vb.to_string(), fills: n, window_truncated },
         items,
         next_cursor,
     })
@@ -943,6 +954,34 @@ pub fn pair_fills(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The 24 h pair volume reads at most `MAX_FILL_ROWS` rows, the newest, says so, and drops the
+    /// transaction at the cut.
+    #[test]
+    fn the_24h_pair_volume_is_bounded_and_flagged() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let (a, b) = (Hash32([0x0a; 32]), Hash32([0x0b; 32]));
+        let fill = |n: usize, ts: i64, per_tx: usize| {
+            conn.execute(
+                "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?1) \
+                 INSERT INTO pair_fills (block_seq, daa, ts, txid, tx_pos, covenant_id, contract, base_cov_id, quote_cov_id, side, amount_a, amount_b, a_scale, counterparty) \
+                 SELECT 1, 1, ?2 + i, CAST(printf('%032d', ?2 + i / ?5) AS BLOB), 0, x'01', 'KobPair', ?3, ?4, 1, 1, 1, 1, 'inventory' FROM k",
+                params![n as i64, ts, a.0.to_vec(), b.0.to_vec(), per_tx as i64],
+            )
+            .unwrap();
+        };
+        let ctx = ReadCtx { node_daa: None, settle_depth_daa: 100, now_unix: Some(1_800_000_000) };
+        let day = 1_800_000_000_000 - 86_400_000;
+        // One fill per transaction: the whole day.
+        fill(100, day + 1_000, 1);
+        let v = pair_fills(&conn, &ctx, &a, &b, None, 10).unwrap().volume_24h;
+        assert_eq!((v.amount_a.as_str(), v.fills, v.window_truncated), ("100", 100, false));
+        // More rows than the bound, two fills per transaction: the newest rows count, the cut transaction does not.
+        fill(market::MAX_FILL_ROWS + 50, day + 10_000, 2);
+        let v = pair_fills(&conn, &ctx, &a, &b, None, 10).unwrap().volume_24h;
+        assert!(v.window_truncated);
+        assert_eq!(v.fills as usize, market::MAX_FILL_ROWS / 2);
+    }
 
     #[test]
     fn prices_are_exact_when_they_fit_and_conservative_otherwise() {

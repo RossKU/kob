@@ -279,7 +279,7 @@ pub async fn order_events(State(app): State<Arc<App>>, Path(id): Path<String>, Q
         .state
         .pool
         .with_light(move |c| {
-            if reads::order(c, &ctx, &id)?.is_none() {
+            if !reads::order_exists(c, &id)? {
                 return Ok(None);
             }
             Ok(Some(reads::order_events(c, &ctx, &id, n, after)?))
