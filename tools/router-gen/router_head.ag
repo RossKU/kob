@@ -1,143 +1,92 @@
-// KOB router: the composition layer of KOB, an Argent app ON TOP of the hand-written orders.
+// KOB router: KOB's composition layer, an Argent app on top of the
+// hand-written orders. docs/argent/argent.md, "The router", specifies it.
 //
-// The orders (KobAsk, KobBid and the KRON bid KobBidKron) stay hand-written SilverScript. This app
-// never compiles them: it imports the published app artifacts KOBOrders and KOBOrdersKron
-// (contracts/argent/KOBOrders*/artifact.json, made by tools/sil2argent) and observes the orders by
-// CLOSED ICC, i.e. by their published template hashes. The token programs are observed by OPEN ICC:
-// every intent's state carries the template handle of each token it moves (`actor_type<KCC20State>`
-// for a KCC-20 program, `actor_type<KronTokenState>` for a KRON program), set by the payer at creation
-// and recomputed by a verifier from its token allowlist (the x402 facilitator does). A handle is the
-// token program's template hash; every observed token input is read, and every pinned token output is
-// checked, under it, so one actor serves every KCC-20 program of the 112-byte state (the reference 3/3
-// program KOB issues, the 8/8 prototype, ...) and every KRON program of the 46-byte state. The program's
-// own slot limits bound the shapes it can run (the 3/3 program has no room for a three-bid sell).
-// In every transaction the order validates itself (payout, continuation, custody, escrow
-// pinning); the actors below validate what the payer cares about.
+// The router imports the published apps KOBOrders and KOBOrdersKron and
+// observes KobAsk, KobBid and KobBidKron by closed ICC, by their published
+// template hashes. It observes the token programs by open ICC. Each intent's
+// state carries the handle of every token it moves, actor_type<KCC20State>
+// or actor_type<KronTokenState>. The payer sets it, and a verifier such as
+// the x402 facilitator recomputes it from its token allowlist. The router
+// reads every observed token input and checks every pinned token output
+// under that handle. So one actor serves every KCC-20 program of the 112-byte
+// state and every KRON program of the 46-byte state. Each order validates
+// itself, and the router validates what the payer cares about.
 //
-// Payment intents. Each actor is one covenant UTXO that any keeper or facilitator can spend; the
-// payer signs nothing at execution time and can always cancel (cancel, SIGHASH_ALL). The cancel of a
-// token intent must spend the locked tokens in the same transaction, at input j + 1, as the one token
-// input of its token (read under the intent's handle: owned by the intent's covenant id); the cancel
-// ends the intent covenant, and tokens owned by its id could never move afterwards. Where they go (one
-// token output) is the payer's signed choice.
+// Each intent is one covenant UTXO that any keeper or facilitator can spend.
+// The payer signs nothing at execution time.
+//   KasToToken      The payer locks KAS. The merchant receives exactly
+//                   `amount` of token B, bought from one to three KobAsks.
+//   TokenToKas      The payer locks token A. The merchant receives at least
+//                   `merchant_kas`, raised by selling at most `max_sell` of A
+//                   into one to three KobBids.
+//   TokenSwap       The payer locks token A. The merchant receives exactly
+//                   `amount_b` of token B. At most `max_sell_a` of A goes into
+//                   one or two KobBids, and the KAS buys B from one or two
+//                   KobAsks.
+//   TokenToKasKron  The same as TokenToKas and TokenSwap, with a KRON token A
+//   TokenSwapKron   sold into KobBidKrons. The merchant never receives a KRON
+//                   token. The lock is id_type 2, and the deliveries and the
+//                   payer's change are id_type 3. A KRON output holds
+//                   1..=1e9 units, so the change cannot be zero, and a KRON
+//                   intent locks more than it may sell.
+// What an order releases beyond what the payer authorised, such as spread and
+// tips, is the keeper's. The intent's parameters fix the payer's worst case.
 //
-// DEADLINE. Every intent carries a `deadline` (unix ms, the payer's authorization expiry). From the
-// deadline on ANYONE may `expire` the intent: it returns the intent's KAS to the payer (out j, less
-// at most EXPIRE_MAX_FEE for the fee) and, for a token intent, the locked tokens (out j + 1, owned by
-// the payer's key, with their whole carrier: the expirer keeps at most EXPIRE_MAX_FEE in all),
-// proven by CLTV (`tx.time >= deadline`). A covenant cannot prove an UPPER time bound (a
-// transaction valid at t stays valid later), so an execution is not refused by the clock: what
-// ends an abandoned intent is the expiry transaction, which the facilitator broadcasts itself once
-// the deadline passed without a settlement. After it confirms nothing can execute the intent,
-// and the facilitator knows how it ended (its own expiry, the payer's cancel, or an execution, by
-// the spending transaction). The payer's cancel works at any time.
-//   KasToToken  payer locked KAS; the merchant must receive exactly `amount` of token B, bought
-//               from one to three KobAsks of B.
-//   TokenToKas  payer locked token A, owned by this covenant (KCC-20 owner_scheme 0x04, KRON id_type 2); the
-//               merchant must receive >= `merchant_kas`, raised by selling at most `max_sell`
-//               units of A into one to three KobBids of A.
-//   TokenSwap   payer locked token A (as above); the merchant must receive exactly `amount_b` of
-//               token B: at most `max_sell_a` units of A are sold into one or two KobBids of A and
-//               the KAS is spent on one or two KobAsks of B. Token A -> KAS -> token B.
-//   TokenToKasKron, TokenSwapKron  the same with a KRON token A, sold into KobBidKrons (a KRON token is
-//               paid with, never received: the merchant receives KAS or a KCC-20 token B). The lock is
-//               a KRON UTXO of id_type 2 (owner = this covenant's id, is_minter 0); the deliveries to the
-//               bid makers and the payer's change are id_type 3 (address presence of the owner's key:
-//               what KRON wallets hold and KobBidKron delivers). A KRON output holds 1..=1e9 units, so
-//               the program refuses a sale of the whole lock (a zero change): a KRON intent locks more
-//               than it may sell.
-// LOCK PIN. The lock is the one token input of token A owned by the intent's covenant id, but anyone can make
-// another such UTXO (a KCC-20 transfer to owner_scheme 0x04 / a KRON id_type 2 output, owner = the intent's id). An
-// observed group has an exact shape (one token input), so an entry given such a stand-in as `mine` would end the
-// intent while the real lock, owned by a covenant id that no transaction can carry again, stayed frozen forever (a
-// 1-unit dust and an `expire` after the deadline sufficed). The state therefore pins the lock: `lock_amount`, its exact
-// base units, and for a KCC-20 token A `lock_extension`, its extension_commitment, both set by the payer's creation
-// (the builder refuses mixed extension commitments); every entry that spends the lock (fill, expire, cancel) requires
-// both. What is left is a substitute of exactly lock_amount units with the same commitment: it gives the payer the
-// whole lock's worth at the substituter's expense (the custody rule of KobAsk, which pins amountLeft, is the same).
-// B PIN. A KCC-20 token is (covenant id, program, extension_commitment): units of one covenant id with another
-// commitment are another token (only its issuer can make them, in its genesis). A KobAsk takes only a custody of the
-// commitment its state names (extensionCommitment), which can be any commitment of the covenant id, so the intents that
-// buy token B (KasToToken, TokenSwap, TokenSwapKron) carry `b_extension`, the commitment of the token the offer names, set
-// at creation and recomputed by a verifier like every other term: every escrow of an observed ask must carry it, and the
-// merchant's delivery is pinned to it.
-// What an order releases beyond what the payer authorised (spread, tips) is the keeper's; the
-// payer's worst case is fixed by the intent's parameters.
+// The payer may cancel at any time, signed with SIGHASH_ALL. A token
+// intent's cancel must spend the lock at input j + 1, because tokens owned by
+// the intent's id could never move after the covenant ends.
 //
-// FILL SHAPES. An Argent `observes` group has an exact shape (Argent has no observed ranges yet),
-// so each shape a keeper may use is its own entry, and, because the redeem script of a covenant
-// UTXO carries every entry of its actor, its own ACTOR: one template, one small script (the shape's
-// entry, expire and cancel). The fill shape is known when the payer creates the intent, so the payer
-// locks its funds in the actor of the shape it wants (KasToToken_buy2_out, TokenSwap_swap, ...).
-// The actors of one intent share the state and the rules below. Per order there are two shapes:
-//   rest  the order is filled partially and continues (KobAsk: same covenant with amountLeft - n,
-//         custody UTXO with the rest; KobBid: byte-identical continuation). GTC orders only.
-//   out   the order ends: a KobAsk is SOLD OUT (the whole custody is taken; any time-in-force),
-//         a KobBid terminates (exhausted, IOC or FOK): no covenant output for the order.
-// A sweep over several orders is `out, .., out, rest` or `out, .., out, out`: only the LAST order
-// of a sweep may rest (what a best-price-first matcher produces). Orders are listed in the entry
-// arguments in TRANSACTION ORDER (observed groups are ordered by position; the escrows of the
-// asks are matched to them by owner).
-// Slot limit: at most 3 orders per leg, i.e. at most 3 escrow inputs and 4 token outputs in one
-// token group: inside the 8/8 slots of the 8/8 prototype and KRON's 4/5; the 3/3 reference program
-// (the one KOB issues) runs every shape but the three-bid sells (4 token outputs).
+// FILL SHAPES. An `observes` group has an exact shape, and a covenant's
+// redeem script carries every entry of its actor. So each fill shape is its
+// own actor, with the shape's entry, expire and cancel. The payer picks the
+// shape at creation, such as KasToToken_buy2_out or TokenSwap_swap. Per order
+// there are two shapes.
+//   rest  The order is filled partially and continues, GTC orders only. A
+//         KobAsk continues with amountLeft - n and its custody holds the
+//         rest. A KobBid continues byte-identically.
+//   out   The order ends. A KobAsk is sold out, whatever its time in force. A
+//         KobBid ends when exhausted, IOC or FOK.
+// Only the last order of a sweep may rest, as a best-price-first matcher
+// produces. The entry arguments list the orders in transaction order, and
+// the asks' escrows are matched to them by owner. A leg has at most 3
+// orders, so a token group has at most 3 escrow inputs and 4 token outputs.
+// That fits the 8/8 prototype and KRON's 4/5. A 3/3 program runs every shape
+// but the three-bid sells. docs/argent/argent.md, "Fill shapes", lists them.
 //
-// Order invariants the router relies on. KobAsk holds its rest in the state (amountLeft, base units) and
-// its custody UTXO holds EXACTLY amountLeft: the router re-checks that equality, and, because every
-// observed token group has an exact shape, no other token input (a stray owned by an order's
-// covenant id, or anything else) can ride along; the orders' own stray guards reject such a tx too.
-// Amounts are base units and prices are per WHOLE token (protocol v3): an order quotes `price` sompi per
-// `scale` base units of its token (scale = 10^decimals, a state field). A take of any number of base units is
-// valid for the router; the order itself enforces its minimum fill (n >= minFill unless the fill takes all that
-// is left, KobBid: unless it ends the bid), its TWAP cap and its time in force.
-// The router bounds an ask AT ITS QUOTE: the KAS a keeper may take from a KasToToken intent for `take` base
-// units of an ask is quoteUp(take, price) = ceil(take * price / scale), the ask's own all-in rounding (KobAsk
-// header) at its quote price. What the ask really demands, ceil(take * (price(t) - tip) / scale), is never more
-// for a decaying ask (price(t) <= price) with a tip (>= 0) or a keeper's crossing spread; if it is more (an ask
-// whose decay floor priceEnd lies above its start price), the keeper pays the difference, never the payer. A
-// rising bid never pays less than its quote, and the router bounds what the payer gets, not what a bid pays
-// (the KAS a bid releases, floor(n * (p(t) + tip) / scale), is checked against the intent's merchant_kas), so the
-// payer's bounds hold at any t.
+// Source style. Order states are read by field projection
+// (`book.inputs.ask.price`), never copied into locals. A copy adds about one
+// live stack binding per field, 20 for a KobAskState and 21 for a
+// KobBidState, against the limit of 244. The router does not pin a resting
+// order's continuation with `become` either. That would not fit `swap2`, and
+// the order validates its continuation itself. The router's pin on the
+// escrow change output, which the ask pins too, ties n to the token flow.
+// Argent has no macros, so tools/router-gen/gen-router.sh writes the 30
+// actors out. KasToToken_buy, _buy_out, _buy3, TokenToKas_sell2,
+// TokenSwap_swap and _swap2_out show every ingredient.
 //
-// Source style. Order states are read by field projection (`book.inputs.ask.price`), never
-// copied into locals: a KobAskState has 20 fields, a KobBidState 21, and every copy is that many
-// more live stack bindings (consensus limit 244) in the compiled script. The continuation of a
-// resting order is not pinned with `become` either: the order validates it itself (KobAsk:
-// amountLeft - n, KobBid: byte-identical), and the router's pin on the escrow change output, which the
-// ask pins too, ties n to the token flow. (Pinning both sides would fit every shape but `swap2`, which
-// is one binding over the limit with argentc b312ded / SilverScript v1.0.0, measured before the lock pin: 245 of 244 live bindings;
-// the ask pin alone fits every shape, the bid pin alone is one combined stack item over in `swap2`. It
-// would also add a state copy and a template check to each resting script for a rule the order
-// already enforces, so it stays out. docs/argent/argent.md, "Fill shapes".)
-//
-// Reading guide. The 30 actors are one pattern at different widths: one order leg per observed
-// order (ask_leg / ask_fits / bid_fits: the order's own fields against the intent's terms), the
-// bound summed over the legs, the positional rule, and the token pins. Argent has no macros, so
-// the repetition is written out by tools/router-gen/gen-router.sh (this file is its output; the
-// build fails if it is edited by hand); `KasToToken_buy`, `_buy_out`, `_buy3`, `TokenToKas_sell2`,
-// `TokenSwap_swap` and `_swap2_out` show every ingredient. Sizes of the compiled scripts: 2.6-7.3 kB
-// per buy or sell shape, 5.7-10.0 kB for the swaps (docs/argent/argent.md).
-//
-// POSITIONAL ANTI-ALIASING RULE (hand-written, reviewed; Argent generates none). The intent
-// spent at input j owns exactly two outputs, j and j + 1, and everything it owes goes there:
-//     KasToToken  out j = payer KAS change      out j+1 = merchant token delivery
+// POSITIONAL ANTI-ALIASING RULE. Argent generates none, so this one is
+// hand-written and reviewed. The intent spent at input j owns exactly two
+// outputs, j and j + 1, and everything it owes goes there.
+//     KasToToken  out j = payer KAS change      out j+1 = merchant delivery
 //     TokenToKas  out j = merchant KAS          out j+1 = payer token change
-//     TokenSwap   out j = merchant delivery (B) out j+1 = payer token change (A)
-// Output j is checked by index; output j+1 is the LAST output of the token group the intent
-// observes (OpCovOutputIdx(token, count - 1) == j + 1). Output j+1 is also the positional slot of
-// whatever input sits at j + 1 (an order pays, delivers or refunds at its own input index), so the
-// intent MUST be the LAST input of the transaction (tx.inputs.length == j + 1): then no input can
-// claim output j+1 (otherwise an unobserved bid of the merchant or payer at j + 1 could take the
-// router's token output as its delivery, and an observed ask's refund could take it as its return).
-// With that, the intent cannot be satisfied by an output that another input's rule also claims:
-// two intents cannot share one delivery, a self-trading payer cannot make one output serve as both
-// its refund and an order payout, and each intent consumes an output pair of its own. Every
-// observed group has an exact shape (the escrow inputs of the listed orders and nothing else), so
-// two intents of the same token cannot be spent in one transaction. Every observed ask must run its
-// FILL: KobAsk.settle takes the base units n as its first argument, a fixed 8-byte push,
-// so its sigscript starts 0x08 n with n > 0; a refund (n = 0) or a cancel (65-byte signature push)
-// does not (written inline per ask: a helper function costs one stack slot too many in `swap2`).
-
+//     TokenSwap   out j = merchant delivery (B) out j+1 = payer change (A)
+// Output j+1 is the last output of the token group the intent observes.
+// Output j is checked by index, and in TokenSwap it is the last output of the
+// token B group. An order pays, delivers or refunds at its own input index,
+// so the intent must be the last input (tx.inputs.length == j + 1).
+// Otherwise an unobserved bid of the merchant or payer at j + 1 could take
+// the router's token output as its delivery, and an observed ask's refund
+// could take it as its return. So no output can serve two rules. Two intents
+// cannot share a delivery, and a self-trading payer cannot make one output
+// both its refund and an order payout. Every observed group has an exact
+// shape, so two intents of the same token cannot share a transaction.
+// docs/argent/argent.md, "Positional anti-aliasing rule", has the ablations.
+//
+// Every observed ask must run its fill. KobAsk.settle takes n as a fixed
+// 8-byte first push, so its sigscript starts with 0x08 followed by n > 0. A
+// refund (n = 0) or a cancel (a 65-byte signature push) does not. The check
+// is written inline per ask, because a helper costs one stack slot too many
+// in `swap2`.
 
 import "./kcc20_8x8.ag";
 import "./KOBOrders/artifact.json" id "aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907";
@@ -146,17 +95,34 @@ import "./KOBOrdersKron/artifact.json" id "7681275caba68f02eb4bb3521838755d1f6ec
 const int MAX_SOMPI = 2900000000000000000;
 const byte SIGHASH_ALL = 0x01;
 const byte[32] ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
-// Most sompi an expiry may keep of the intent's KAS (its network fee and whatever the expirer keeps).
+
+// DEADLINE. Every intent carries `deadline`, the payer's authorization
+// expiry in unix ms. From the deadline on, anyone may `expire` the intent,
+// proven by CLTV (tx.time >= deadline). The intent's KAS goes back to the
+// payer at out j, less at most EXPIRE_MAX_FEE. A token intent's lock goes
+// back whole, with its whole carrier, to the payer's key at out j + 1. So the
+// expirer keeps at most EXPIRE_MAX_FEE in all. A covenant cannot prove an
+// upper time bound, so the clock never refuses an execution. What ends an
+// abandoned intent is the expiry, which the facilitator broadcasts itself
+// once the deadline passed without a settlement. docs/argent/argent.md,
+// "Deadline".
+//
+// EXPIRE_MAX_FEE is the most sompi an expiry may keep of the intent's KAS,
+// for its network fee and whatever the expirer keeps.
 const int EXPIRE_MAX_FEE = 10000000;
-// KRON id_type values the router uses (contracts/orders/kron/README.md): an intent's lock is owned by its
-// covenant id (2); deliveries and the payer's change are held by address presence (3): a P2PK input of the owner
-// key authorises them, the type KRON wallets hold and KobBidKron delivers.
+
+// KRON id_type values, see contracts/orders/kron/README.md. An intent's lock
+// is owned by its covenant id (2). Deliveries and the payer's change are held
+// by address presence (3), so a P2PK input of the owner's key authorises
+// them. KRON wallets hold that type, and KobBidKron delivers it.
 const byte KRON_ID_COVENANT = 0x02;
 const byte KRON_ID_ADDRESS = 0x03;
 
-// The KRON token state (46 B at template offset 0: 0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter), the
-// shape of an `actor_type<KronTokenState>` handle (the KRON programs are raw bytecode, not Argent apps: they are
-// observed by open ICC only).
+// The KRON token state, 46 B at template offset 0, and the shape of an
+// `actor_type<KronTokenState>` handle. Its pushes are
+//   0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter
+// The KRON programs are raw bytecode, not Argent apps, so the router observes
+// them by open ICC only.
 state KronTokenState {
     byte[32] owner;
     byte id_type;
@@ -164,8 +130,29 @@ state KronTokenState {
     byte is_minter;
 }
 
-// Every token is named twice: its covenant id (which token) and its program handle (which template the router reads
-// and pins it under; the verifier recomputes both from its allowlist).
+// LOCK PIN. A token intent's lock is the one token input of token A owned by
+// the intent's covenant id. Anyone can make another such UTXO, with a KCC-20
+// transfer to owner scheme 0x04 or a KRON id_type 2 output. An entry given
+// it as `mine` would end the intent, and the real lock would stay frozen
+// forever. So the state pins the lock by `lock_amount`, its exact base units,
+// and for a KCC-20 token A by `lock_extension`, its extension commitment.
+// The payer's creation sets both, and every entry that spends the lock
+// (fill, expire, cancel) requires both. A substitute of exactly lock_amount
+// units with the same commitment gives the payer the lock's whole worth, at
+// the substituter's expense. docs/argent/argent.md, "Lock pin".
+//
+// B PIN. A KCC-20 token is (covenant id, program, extension commitment), so
+// units of one covenant id with another commitment are another token. A
+// KobAsk takes only a custody of the commitment its state names. So the
+// intents that buy token B (KasToToken, TokenSwap, TokenSwapKron) carry
+// `b_extension`, the commitment of the token the offer names. The payer sets
+// it and a verifier recomputes it. Every escrow of an observed ask must carry
+// it, and the merchant's delivery is pinned to it. docs/argent/argent.md,
+// "B pin".
+//
+// Every token is named twice, by its covenant id (which token) and by its
+// program handle (the template the router reads and pins it under). The
+// verifier recomputes both from its allowlist.
 state KasToTokenState {
     pubkey payer;                   // KAS change, cancel key
     byte[32] merchant;              // P2PK owner of the delivered token
@@ -237,22 +224,30 @@ fn require_cancel_sig(sig s, pubkey key) {
     require(checkSig(s, key));
 }
 
-// Quote value of n base units at rate r (r quote units per `scale` base units), rounded UP: KobAsk.quoteOf with
-// c = scale - 1, the rounding of what a maker receives. Split so that no partial product exceeds the result or
-// scale^2 (exact without a 128-bit product while scale^2 + scale < 2^63; the engine fails, never wraps, on an
-// overflow). n, r >= 0, scale > 0.
+// Quote value of n base units at rate r, in quote units per `scale` base
+// units, rounded up. This is KobAsk.quoteOf with c = scale - 1, the rounding
+// of what a maker receives. The split keeps every partial product below the
+// result or scale^2, so it is exact without a 128-bit product while
+// scale^2 + scale < 2^63. The engine fails on an overflow and never wraps.
+// It needs n, r >= 0 and scale > 0.
 fn quote_up(int n, int r, int scale) -> int {
     int m = n % scale;
     int q = n / scale;
     return q * r + m * (r / scale) + (m * (r % scale) + scale - 1) / scale;
 }
 
-// One ask leg. The ask (token, scale, amountLeft, price of its state) sells the token we want and
-// `esc` is ITS custody: owned by the ask's covenant id and holding exactly amountLeft base units.
-// `take` base units (> 0, at most the custody; the ask enforces its own minimum fill) are bought.
-// Returns the KAS the ask may demand for them AT ITS QUOTE, ceil(take * price / scale): a decaying ask,
-// a tip or a keeper crossing spread only lower what the maker takes. Each leg is at most MAX_SOMPI, so
-// the sum over three legs cannot overflow.
+// One ask leg. The ask, with the token, scale, amountLeft and price of its
+// state, sells the token the intent buys. `esc` is its custody, owned by the
+// ask's covenant id and holding exactly amountLeft base units. `take` base
+// units are bought, more than 0 and at most the custody. The ask enforces
+// its own minimum fill.
+//
+// Returns the KAS the ask may demand for them at its quote,
+// ceil(take * price / scale). A decaying ask, a tip or a keeper's crossing
+// spread only lower what the maker takes. An ask whose priceEnd lies above
+// its price demands more, and then the keeper pays the difference, never the
+// payer. Each leg is at most MAX_SOMPI, so the sum over three legs cannot
+// overflow.
 fn ask_leg(byte[32] a_token, int a_scale, int a_amount_left, int a_price, byte[32] esc_owner, byte esc_scheme, int esc_amount, byte[32] ask_id, byte[32] token, int take) -> int {
     require(a_token == token);
     require(esc_owner == ask_id);
@@ -267,8 +262,8 @@ fn ask_leg(byte[32] a_token, int a_scale, int a_amount_left, int a_price, byte[3
     return pay;
 }
 
-
-// The same custody checks without the price (TokenSwap: the KAS in between is the keeper's).
+// The custody checks of ask_leg without the price. In TokenSwap the KAS in
+// between is the keeper's.
 fn ask_fits(byte[32] a_token, int a_amount_left, byte[32] esc_owner, byte esc_scheme, int esc_amount, byte[32] ask_id, byte[32] token, int take) {
     require(a_token == token);
     require(esc_owner == ask_id);
@@ -278,24 +273,28 @@ fn ask_fits(byte[32] a_token, int a_amount_left, byte[32] esc_owner, byte esc_sc
     require(take <= esc_amount);
 }
 
-// The payer's own token UTXO: owned by the intent's covenant id, no borrow path may move it
-// without this intent.
+// The lock of a KCC-20 token A. It is owned by the intent's covenant id, and
+// no borrow path may move it without the intent.
 fn own_tokens(byte[32] owner, byte owner_scheme, byte borrow_scheme, byte[32] intent_id) {
     require(owner == intent_id);
     require(owner_scheme == OWNER_COVENANT_ID);
     require(borrow_scheme == BORROW_DISABLED);
 }
 
-// The payer's own KRON token UTXO: owned by the intent's covenant id (id_type 2, authorised by this intent's
-// presence), never a minter UTXO.
+// The lock of a KRON token A. It is owned by the intent's covenant id, with
+// id_type 2, so the intent's presence authorises it. It is never a minter
+// UTXO.
 fn own_kron(byte[32] owner, byte id_type, byte is_minter, byte[32] intent_id) {
     require(owner == intent_id);
     require(id_type == KRON_ID_COVENANT);
     require(is_minter == 0x00);
 }
 
-// One bid leg: the bid (token of its state) buys the token we sell and `n` base units (> 0) go into it.
-// The bid itself enforces its minimum fill and pins its delivery at n; the router pins the same output.
+// One bid leg. The bid buys the token the intent sells, and `n` base units,
+// more than 0, go into it. The bid enforces its own minimum fill and pins its
+// delivery at n, and the router pins the same output. A rising bid never
+// pays less than its quote, and the router bounds what the payer gets, not
+// what a bid pays. So the payer's bounds hold at any t.
 fn bid_fits(byte[32] b_token, byte[32] token, int n) {
     require(b_token == token);
     require(n > 0);

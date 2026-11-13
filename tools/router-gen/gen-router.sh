@@ -7,9 +7,9 @@
 #
 # Argent has no macros and an `observes` group has an exact shape, so every fill shape of an intent
 # is its own actor (one template, one small script): the same pattern at different widths. This
-# script writes that pattern out; `router_head.ag` (states, helper functions, the reviewed rules
-# in prose) is copied verbatim. The generated .ag is committed, and the build fails if it is not
-# what this script writes. Pure bash, LF output.
+# script writes that pattern out after a one-line "generated" banner; `router_head.ag` (states,
+# helper functions, the reviewed rules in prose) is copied verbatim. The generated .ag is
+# committed, and the build fails if it is not what this script writes. Pure bash, LF output.
 #
 # PIN=1 (or PIN=ask / PIN=bid) adds the continuation pin of every resting order (both sides, or only
 # resting asks / only resting KCC-20 bids) for measurements; the shipped router has none
@@ -163,10 +163,10 @@ k2t_entry() { # $1 = k, $2 = rest|out
   local args=()
   for m in $(seq 1 "$k"); do args+=("cov_id ask${m}_covid"); done
   echo
-  if [ "$k" = 1 ] && [ "$last" = rest ]; then echo "    // One ask, RESTING: the ask continues with amountLeft - amount.";
-  elif [ "$k" = 1 ]; then echo "    // One ask, SOLD OUT: the merchant gets the ask's whole custody, the ask ends.";
-  elif [ "$last" = rest ]; then echo "    // $k asks: the first $((k-1)) SOLD OUT, the last RESTING.";
-  else echo "    // $k asks, all SOLD OUT."; fi
+  if [ "$k" = 1 ] && [ "$last" = rest ]; then echo "    // One ask, which rests and continues with amountLeft - amount.";
+  elif [ "$k" = 1 ]; then echo "    // One ask, sold out. The merchant gets its whole custody, and the ask ends.";
+  elif [ "$last" = rest ]; then echo "    // $k asks. All but the last are sold out, and the last one rests.";
+  else echo "    // $k asks, all sold out."; fi
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$k"); do
     if [ "$m" = "$k" ]; then ask_obs "book$m" "ask${m}_covid" "$last"; else ask_obs "book$m" "ask${m}_covid" out; fi
@@ -239,10 +239,12 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
   for m in $(seq 1 "$k"); do args+=("cov_id bid${m}_covid"); done
   for m in $(seq 1 "$k"); do args+=("int n$m"); done
   echo
-  if [ "$k" = 1 ] && [ "$last" = rest ]; then echo "    // One bid, RESTING: n1 base units go into it and it continues.";
-  elif [ "$k" = 1 ]; then echo "    // One bid, ENDING (exhausted, IOC or FOK): n1 base units go into it.";
-  elif [ "$last" = rest ]; then echo "    // $k bids: the first $((k-1)) END, the last RESTS. n1 .. n$k base units, at most max_sell in all.";
-  else echo "    // $k bids, all ENDING. n1 .. n$k base units, at most max_sell in all."; fi
+  if [ "$k" = 1 ] && [ "$last" = rest ]; then echo "    // One bid, which rests. n1 base units go into it, and it continues.";
+  elif [ "$k" = 1 ]; then echo "    // One bid, which ends, exhausted, IOC or FOK. n1 base units go into it.";
+  elif [ "$last" = rest ]; then echo "    // $k bids. All but the last end, and the last one rests. n1 .. n$k base"
+    echo "    // units go into them, at most max_sell in all.";
+  else echo "    // $k bids, all ending. n1 .. n$k base units go into them, at most"
+    echo "    // max_sell in all."; fi
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$k"); do
     if [ "$m" = "$k" ]; then bid_obs "book$m" "bid${m}_covid" "$last" "$fam"; else bid_obs "book$m" "bid${m}_covid" out "$fam"; fi
@@ -298,7 +300,15 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
   for m in $(seq 1 "$ka"); do args+=("cov_id ask${m}_covid"); done
   for m in $(seq 1 "$kb"); do args+=("int n_a$m"); done
   echo
-  echo "    // $kb bid(s) (the last one $( [ "$bl" = rest ] && echo RESTING || echo ENDING ), the others END) and $ka ask(s) (the last one $( [ "$al" = rest ] && echo RESTING || echo SOLD OUT ), the others SOLD OUT)."
+  local bv av
+  if [ "$bl" = rest ]; then bv=rests; else bv=ends; fi
+  if [ "$al" = rest ]; then av=rests; else av="is sold out"; fi
+  if [ "$kb" = 1 ] && [ "$ka" = 1 ]; then
+    echo "    // One bid and one ask. The bid $bv, and the ask $av."
+  else
+    echo "    // $kb bids and $ka asks. Every bid but the last ends, and every ask but"
+    echo "    // the last is sold out. The last bid $bv, and the last ask $av."
+  fi
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$kb"); do
     if [ "$m" = "$kb" ]; then bid_obs "bids$m" "bid${m}_covid" "$bl" "$fam"; else bid_obs "bids$m" "bid${m}_covid" out "$fam"; fi
@@ -325,10 +335,10 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
   echo "        }"
   echo "    }"
   # Stack-lean body: the swaps observe four orders and two token groups under two handles, and `swap2` is the tightest
-  # script (214 live bindings and 221 combined stack items of the 244 allowed, measured on 2026-10-10; argentc refuses an
-  # entry over the limit, so every shape compiling is the check). So no local
-  # is kept that an expression can stand for: the input index (this.activeInputIndex), the sum of the base units sold
-  # into the bids and the take of a resting last ask are written out where they are used.
+  # script (docs/argent/argent.md, "Fill shapes", has the measured stack use; argentc refuses an entry over the limit,
+  # so every shape compiling is the check). So no local is kept that an expression can stand for: the input index
+  # (this.activeInputIndex), the sum of the base units sold into the bids and the take of a resting last ask are written
+  # out where they are used.
   local ME=this.activeInputIndex
   echo "    emits none {"
   echo "        require(tx.inputs.length == $ME + 1);"
@@ -408,11 +418,13 @@ expire_entry() {
   [ "$1" = TokenSwap ] && { grp=token_a_group; cov=token_a; h=self.token_a_type; }
   echo
   if [ "$1" = KasToToken ]; then
-    echo "    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE."
+    echo "    // From the deadline on, anyone may send the intent's KAS back to the payer"
+    echo "    // at out j, less at most EXPIRE_MAX_FEE."
     echo "    entry expire() emits none {"
   else
-    echo "    // From the deadline on, anyone: the intent's KAS back to the payer at out j, less at most EXPIRE_MAX_FEE,"
-    echo "    // and the locked tokens, whole and with their whole carrier, to the payer's key at out j + 1. Input j + 1 is"
+    echo "    // From the deadline on, anyone may send the intent's KAS back to the payer"
+    echo "    // at out j, less at most EXPIRE_MAX_FEE. The locked tokens go whole, with"
+    echo "    // their whole carrier, to the payer's key at out j + 1. Input j + 1 is"
     echo "    // those tokens, so no other input's positional rule can claim out j + 1."
     echo "    entry expire()"
     lock_obs "$grp" "$cov" "$h"
@@ -465,9 +477,11 @@ cancel_entry() {
     echo "        require_cancel_sig(s, payer);"
   else
     local M=$grp.inputs.mine
-    echo "    // The payer, any time. Input j + 1 must be the lock, the one token input of the locked token, read under the"
-    echo "    // intent's handle: owned by this intent's id. The cancel ends the intent covenant, and tokens owned by its id"
-    echo "    // could never move afterwards. Where they go (the one token output) is the payer's signed choice (SIGHASH_ALL)."
+    echo "    // The payer, at any time. Input j + 1 must be the lock, the one token"
+    echo "    // input of the locked token, read under the intent's handle and owned by"
+    echo "    // this intent's id. The cancel ends the intent covenant, and tokens owned"
+    echo "    // by its id could never move afterwards. The payer's SIGHASH_ALL"
+    echo "    // signature chooses where the one token output goes."
     echo "    entry cancel(sig s)"
     lock_obs "$grp" "$cov" "$h"
     echo "    emits none {"
@@ -513,50 +527,66 @@ emit_actor() {
 }
 
 {
-  cat "$HERE/router_head.ag"
-  echo "// ---------------------------------------------------------------- KasToToken"
+  echo "// Generated by tools/router-gen/gen-router.sh from router_head.ag. Do not edit."
   echo
-  echo "// Tx shape (all buy shapes): [.., ask_1 .. ask_k, escrow_1 .. escrow_k (token B), .., this j = the LAST input]"
-  echo "//   out i_m = ask_m maker payout, [ask_k continuation, escrow change (rest only)],"
-  echo "//   out j = payer change, out j+1 = merchant delivery (the last token B output)."
+  cat "$HERE/router_head.ag"
+  echo "// ---------------------------------------- KasToToken"
+  echo
+  echo "// Transaction shape of every buy:"
+  echo "//   in      .., ask_1 .. ask_k, escrow_1 .. escrow_k (token B), .., the"
+  echo "//           intent at j, the last input"
+  echo "//   out i_m the maker payout of ask_m"
+  echo "//   rest    also the continuation of ask_k and the escrow change"
+  echo "//   out j   the payer's change"
+  echo "//   out j+1 the merchant's delivery, the last token B output"
   echo
   for k in 1 2 3; do for last in rest out; do
     emit_actor KasToToken KasToToken kcc20 KasToTokenState "$(k2t_name $k $last)" < <(k2t_entry $k $last)
   done; done
-  echo "// ---------------------------------------------------------------- TokenToKas"
+  echo "// ---------------------------------------- TokenToKas"
   echo
-  echo "// Tx shape (all sell shapes): [bid_1 .. bid_k, our token A (leader), this j = the LAST input] ->"
-  echo "//   out i_m = bid_m delivery (token to the bid maker), [bid_k continuation (rest only)],"
-  echo "//   out j = merchant KAS, out j+1 = payer token change (the last token A output)."
+  echo "// Transaction shape of every sell:"
+  echo "//   in      bid_1 .. bid_k, the lock of token A (the leader), the intent at"
+  echo "//           j, the last input"
+  echo "//   out i_m the delivery of bid_m, token A to the bid's maker"
+  echo "//   rest    also the continuation of bid_k"
+  echo "//   out j   the merchant's KAS"
+  echo "//   out j+1 the payer's token change, the last token A output"
   echo
   for k in 1 2 3; do for last in rest out; do
     emit_actor TokenToKas TokenToKas kcc20 TokenToKasState "$(t2k_name $k $last)" < <(t2k_entry $k $last kcc20)
   done; done
-  echo "// ---------------------------------------------------------------- TokenSwap"
+  echo "// ---------------------------------------- TokenSwap"
   echo
-  echo "// Token A -> KAS -> token B. Tx shape (all swap shapes):"
-  echo "//   in  [.., bid_1 .., ask_1 .., token A (leader, owned by this), escrow_1 .. (leaders, owned"
-  echo "//        by the asks), .., this j = the LAST input]"
-  echo "//   out bid deliveries (A to the bid makers), ask maker payouts, continuations, escrow B"
-  echo "//       change (rest only),"
-  echo "//       out j = merchant delivery (B), out j+1 = payer token change (A)."
-  echo "// The KAS the bids release pays the asks; the router only bounds what the payer gives (A) and"
-  echo "// gets (B), not how the keeper routes the KAS in between."
+  echo "// Token A to KAS to token B. Transaction shape of every swap:"
+  echo "//   in      .., bid_1 .., ask_1 .., the lock of token A (a leader, owned by"
+  echo "//           the intent), escrow_1 .. (leaders, owned by the asks), .., the"
+  echo "//           intent at j, the last input"
+  echo "//   out     the bid deliveries (A to the bid makers) and the ask maker"
+  echo "//           payouts"
+  echo "//   rest    also the continuations and the escrow change of token B"
+  echo "//   out j   the merchant's delivery of token B"
+  echo "//   out j+1 the payer's change of token A"
+  echo "// The KAS the bids release pays the asks. The router bounds only what the"
+  echo "// payer gives and gets, not how the keeper routes the KAS in between."
   echo
   while read -r nm kb bl ka al; do
     emit_actor TokenSwap TokenSwap kcc20 TokenSwapState "$nm" < <(swap_entry "$nm" "$kb" "$bl" "$ka" "$al" kcc20)
   done <<< "$SWAP_SHAPES"
-  echo "// ---------------------------------------------------------------- TokenToKasKron"
+  echo "// ---------------------------------------- TokenToKasKron"
   echo
-  echo "// TokenToKas with a KRON token A (KronTokenState under the intent's KRON handle) sold into KobBidKrons."
-  echo "// Same tx shape and rules; the lock is id_type 2 (owner = this intent), deliveries and change id_type 3."
+  echo "// TokenToKas with a KRON token A, read as KronTokenState under the intent's"
+  echo "// KRON handle and sold into KobBidKrons. The transaction shape and the rules"
+  echo "// are the same. The lock is id_type 2, owned by the intent. The deliveries"
+  echo "// and the change are id_type 3."
   echo
   for k in 1 2 3; do for last in rest out; do
     emit_actor TokenToKasKron TokenToKas kron TokenToKasKronState "$(t2k_name $k $last)" < <(t2k_entry $k $last kron)
   done; done
-  echo "// ---------------------------------------------------------------- TokenSwapKron"
+  echo "// ---------------------------------------- TokenSwapKron"
   echo
-  echo "// TokenSwap with a KRON token A sold into KobBidKrons; token B (KCC-20) is bought from KobAsks as in TokenSwap."
+  echo "// TokenSwap with a KRON token A, sold into KobBidKrons. Token B is KCC-20"
+  echo "// and is bought from KobAsks as in TokenSwap."
   echo
   while read -r nm kb bl ka al; do
     emit_actor TokenSwapKron TokenSwap kron TokenSwapKronState "$nm" < <(swap_entry "$nm" "$kb" "$bl" "$ka" "$al" kron)
