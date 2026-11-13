@@ -2520,24 +2520,18 @@ fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltT
     }
 }
 
-fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
-    if b.legs.is_empty() {
-        return invalid("empty batch");
-    }
-    let lock = b.lock_time as i64;
-    let change = b.change.or(b.funding.first().map(|f| f.pubkey));
-    if change.is_none() {
-        // Without a change key the spread and tips would all become fee.
-        return invalid("a batch needs a change key (or a funding input) to receive the spread");
-    }
-    if let Some(t) = &b.taker {
-        check_key(t, "taker key")?;
-    }
-    for p in &b.receivers {
-        check_key(&p.pubkey, "token receiver")?;
-    }
-    let mut d = Draft::new(b.lock_time, &b.fee, change)?;
-    // The tokens of each leg: its main token, and a pair leg's (A, B) and amounts.
+/// The tokens of each leg of a batch, by leg.
+struct LegTokens {
+    /// The leg's main token.
+    main: Vec<Token>,
+    /// A pair leg's tokens (A, B).
+    pair: Vec<Option<(Token, Token)>>,
+    /// A pair leg's amounts.
+    calcs: Vec<Option<pair::PairCalc>>,
+}
+
+/// The tokens of every leg, and the amounts of the pair legs.
+fn collect_leg_tokens(b: &Batch, lock: i64, strict: bool) -> Result<LegTokens> {
     let mut leg_tokens: Vec<Token> = vec![];
     let mut pair_toks: Vec<Option<(Token, Token)>> = vec![];
     let mut calcs: Vec<Option<pair::PairCalc>> = vec![];
@@ -2555,7 +2549,13 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
-    // Every token the legs trade, in first-use order.
+    Ok(LegTokens { main: leg_tokens, pair: pair_toks, calcs })
+}
+
+/// Every token the legs trade, in first-use order.
+///
+/// One covenant id never comes with two programs.
+fn batch_tokens(leg_tokens: &[Token], pair_toks: &[Option<(Token, Token)>]) -> Result<Vec<Token>> {
     let mut tokens: Vec<Token> = vec![];
     for (i, t) in leg_tokens.iter().enumerate() {
         for x in std::iter::once(*t).chain(pair_toks[i].map(|(a, bt)| [a, bt]).into_iter().flatten()) {
@@ -2569,7 +2569,16 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             return invalid("one token covenant id with two different programs");
         }
     }
-    // The custody inputs of every leg.
+    Ok(tokens)
+}
+
+/// The custody inputs of every leg.
+fn custody_inputs<'a>(
+    b: &'a Batch,
+    leg_tokens: &[Token],
+    pair_toks: &[Option<(Token, Token)>],
+    calcs: &[Option<pair::PairCalc>],
+) -> Result<Vec<CustIn<'a>>> {
     let mut custs: Vec<CustIn> = vec![];
     for (i, l) in b.legs.iter().enumerate() {
         let tok = leg_tokens[i];
@@ -2593,11 +2602,13 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             _ => {}
         }
     }
-    let lay = layout(b, tokens, &custs)?;
-    let n_legs = b.legs.len();
+    Ok(custs)
+}
 
-    // Covenant ids spent by the batch. Each order is spent at most once, and a booked exit's entry
-    // only in its own merge.
+/// Covenant ids spent by the batch.
+///
+/// Each order is spent at most once, and a booked exit's entry only in its own merge.
+fn spent_covenant_ids(b: &Batch) -> Result<BTreeSet<[u8; 32]>> {
     let mut spent_ids: BTreeSet<[u8; 32]> = BTreeSet::new();
     for l in &b.legs {
         let id = l_utxo(l).covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -2622,6 +2633,32 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             return invalid("an updated order is spent once and not filled in the same transaction");
         }
     }
+    Ok(spent_ids)
+}
+
+fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
+    if b.legs.is_empty() {
+        return invalid("empty batch");
+    }
+    let lock = b.lock_time as i64;
+    let change = b.change.or(b.funding.first().map(|f| f.pubkey));
+    if change.is_none() {
+        // Without a change key the spread and tips would all become fee.
+        return invalid("a batch needs a change key (or a funding input) to receive the spread");
+    }
+    if let Some(t) = &b.taker {
+        check_key(t, "taker key")?;
+    }
+    for p in &b.receivers {
+        check_key(&p.pubkey, "token receiver")?;
+    }
+    let mut d = Draft::new(b.lock_time, &b.fee, change)?;
+    let LegTokens { main: leg_tokens, pair: pair_toks, calcs } = collect_leg_tokens(b, lock, strict)?;
+    let tokens = batch_tokens(&leg_tokens, &pair_toks)?;
+    let custs = custody_inputs(b, &leg_tokens, &pair_toks, &calcs)?;
+    let lay = layout(b, tokens, &custs)?;
+    let n_legs = b.legs.len();
+    let spent_ids = spent_covenant_ids(b)?;
 
     // Extension commitment per token (every token input and output of a token shares it).
     let mut exts: BTreeMap<[u8; 32], [u8; 32]> = BTreeMap::new();
