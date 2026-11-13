@@ -1,13 +1,22 @@
-//! Intent-based swap-and-pay (`extra.route.binding = "kob-intent-v1"`, proposal
-//! `docs/spec/x402-swap-and-pay.md`, "Intent mode").
+//! Intent-based swap-and-pay: the `kob-intent-v1` route (`extra.route.binding`).
 //!
-//! The payer signs ONE transaction, the **creation**: it locks the payer's funds in a KOB router intent
-//! (`kob_protocol::router`, `contracts/argent/kob_router.ag`) whose state binds the merchant and the
-//! payer's worst case. The facilitator verifies the creation against the offer, broadcasts it and then
-//! executes the intent itself, as a keeper, against the book of the moment; when an order it named is
-//! taken first it plans again and re-executes, without the payer (the intent needs no payer signature at
-//! execution). Settlement is the execution transaction accepted. The payer can always cancel an intent
-//! that was not executed (`cancel`, SIGHASH_ALL), and SHOULD once the authorization expired.
+//! The route is specified in `docs/spec/x402-swap-and-pay.md`, section 17, "Intent mode".
+//!
+//! # Flow
+//!
+//! The payer signs one transaction, the **creation**. It locks the payer's funds in a KOB router
+//! intent (`kob_protocol::router`, `contracts/argent/kob_router.ag`). The intent's state binds the
+//! merchant and the payer's worst case.
+//!
+//! The facilitator verifies the creation against the offer and broadcasts it. It then executes the
+//! intent itself, as a keeper, against the book of the moment. When an order it named is taken
+//! first, it plans again and re-executes, without the payer. The intent needs no payer signature at
+//! execution. Settlement is the execution transaction being accepted.
+//!
+//! The payer can always cancel an intent that was not executed (`cancel`, SIGHASH_ALL). The payer
+//! should cancel once the authorization has expired.
+//!
+//! # Intent kinds
 //!
 //! | Pay asset | Merchant receives | Intent |
 //! |---|---|---|
@@ -16,25 +25,35 @@
 //! | token A | token B (`kcc20`) | `TokenSwap_<shape>` |
 //! | KRON token A | KAS / token B | `TokenToKasKron_<shape>` / `TokenSwapKron_<shape>` |
 //!
-//! The router reads every token under the program the intent's state names (open ICC handles), so an intent
-//! trades any allowlisted token on a program the router accepts (`kob_protocol::router::intent_program`: the
-//! KCC-20 programs of the 112-byte state and the KRON programs; KaspaCom's program is pending review and paid
-//! through the payer-signed route `kob-swap-v1`). The verifier recomputes the programs from the allowlist, like
-//! every other term. A KRON token is a pay asset only (the merchant receives KAS or a KCC-20 token), its intent
-//! locks more than it may sell (a KRON output holds at least one unit), and a creation that spends key-held KRON
-//! tokens carries a P2PK input of their owner (KRON address presence).
+//! # Tokens
 //!
-//! **Binding.** The payload commitment (`kob-x402-payload-commitment-v1`) is embedded in the creation
-//! transaction's payload, with `route = { binding: "kob-intent-v1", payAsset, actor }` and
-//! `paymentOutputIndex` = the intent output. Every payer signature (SIGHASH_ALL) covers it, so the intent
-//! cannot be presented for another offer, request or expiry; the verifier recomputes the intent's script
-//! from the OFFER (merchant key, merchant asset, amount) and the payer's terms, so an intent for another
-//! merchant or amount does not match. The intent outpoint, like every input of the creation, is consumed
-//! once in the replay ledger.
+//! The router reads every token under the program that the intent's state names, through open ICC
+//! handles. An intent therefore trades any allowlisted token on a program the router accepts. That
+//! is decided by `kob_protocol::router::intent_program`. It accepts the KCC-20 programs of the
+//! 112-byte state and the KRON programs. KaspaCom's program is refused and pays through the
+//! payer-signed route `kob-swap-v1`. The verifier recomputes the programs from the allowlist, like
+//! every other term.
+//!
+//! A KRON token is a pay asset only, so the merchant receives KAS or a KCC-20 token. A KRON intent
+//! locks more than it may sell, because a KRON output holds at least one unit. A creation that
+//! spends key-held KRON tokens carries a P2PK input of their owner (KRON address presence).
+//!
+//! # Binding
+//!
+//! The payload commitment (`kob-x402-payload-commitment-v2`) is embedded in the creation
+//! transaction's payload. Its route is `{ binding: "kob-intent-v1", payAsset, actor }`, and
+//! `paymentOutputIndex` is the intent output. Every payer signature (SIGHASH_ALL) covers it. So the
+//! intent cannot be presented for another offer, request or expiry.
+//!
+//! The verifier recomputes the intent's script from the offer (merchant key, merchant asset,
+//! amount) and the payer's terms. An intent for another merchant or amount does not match. The
+//! intent outpoint, like every input of the creation, is consumed once in the replay ledger.
+//!
+//! # Scope
 //!
 //! This module verifies a creation ([`verify_intent`]) and plans and builds executions
-//! ([`plan_executions`], [`build_execution`]); it does no I/O. The facilitator's settlement loop lives in
-//! `kobd` (`x402::facilitator`).
+//! ([`plan_executions`], [`build_execution`]). It does no I/O. The facilitator's settlement loop
+//! lives in `kobd` (`x402::facilitator`).
 
 use std::collections::BTreeSet;
 
@@ -78,10 +97,12 @@ fn lower_hex32(s: &str) -> Option<[u8; 32]> {
     (s == s.to_ascii_lowercase()).then(|| parse_hash32(s)).flatten()
 }
 
-// ------------------------------------------------------------------------------------------ the offer
+// Offer.
 
-/// Parses and validates `offered.extra.route` of an intent offer: binding, critical flag, the router
-/// artifact the facilitator executes (it must be the one this build pins) and the pay assets.
+/// Parses and validates `offered.extra.route` of an intent offer.
+///
+/// It checks the binding, the critical flag, the router artifact and the pay assets. The router
+/// artifact must be the one this build pins, because the facilitator executes it.
 pub fn parse_intent_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetOffer>> {
     let route = offered.extra.get("route").and_then(Value::as_object).ok_or_else(|| req("extra.route must be an object"))?;
     if route.get("binding").and_then(Value::as_str) != Some(BINDING_INTENT) {
@@ -116,7 +137,8 @@ pub fn parse_intent_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetO
         }
         out.push(PayAssetOffer { asset: asset.to_string(), template_hash: th, extension_commitment: ec });
     }
-    // one entry per asset: a second one with other pins is never the one that applies (the first match is)
+    // One entry per asset. The first match applies, so a second entry with other pins would never
+    // be used.
     let mut seen = std::collections::HashSet::new();
     if !out.iter().all(|e| seen.insert(e.asset.as_str())) {
         return Err(req("extra.route.payAssets lists an asset twice"));
@@ -124,22 +146,27 @@ pub fn parse_intent_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetO
     Ok(out)
 }
 
-/// A token the router can sell for the payer: on a program an intent may name (KCC-20 of the 112-byte state or
-/// KRON; not KaspaCom's program while it is pending review).
+/// True if the router can sell this token for a payer.
+///
+/// The token must be on a program an intent may name, see `kob_protocol::router::intent_program`.
+/// That is KCC-20 with the 112-byte state, or KRON.
 pub fn router_capable(t: &AllowedToken) -> bool {
     intent_program(t.program).is_ok()
 }
 
-/// A token the router can deliver to a merchant: [`router_capable`] and KCC-20 (a KRON token is paid with, never
-/// received).
+/// True if the router can deliver this token to a merchant.
+///
+/// The token must be [`router_capable`] and KCC-20. A KRON token is paid with and never received.
 pub fn router_deliverable(t: &AllowedToken) -> bool {
     router_capable(t) && t.program.family() == Family::Kcc20
 }
 
-// ------------------------------------------------------------------------------------------ commitment
+// Commitment.
 
-/// The commitment object of an intent creation: the payload commitment of the companion proposal with
-/// `route = { binding: "kob-intent-v1", payAsset, actor }`.
+/// The commitment object of an intent creation.
+///
+/// It is the payload commitment with `route = { binding: "kob-intent-v1", payAsset, actor }`
+/// added.
 pub fn intent_commit_object(c: &PayloadCommit, actor: &str) -> Value {
     let mut v = payload_commit_object(c);
     v["route"] = json!({
@@ -158,9 +185,9 @@ pub fn intent_commit_digest(c: &PayloadCommit, actor: &str) -> Result<[u8; 32]> 
     canonical_hash(&intent_commit_object(c, actor))
 }
 
-// ------------------------------------------------------------------------------------------ facts
+// Facts.
 
-/// What the facilitator needs to execute a verified intent (serialized into its ledger).
+/// What the facilitator needs to execute a verified intent. It is serialized into its ledger.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IntentFacts {
@@ -180,7 +207,7 @@ pub struct IntentFacts {
     /// KAS value of the merchant's output: the carrier (token) or the amount (KAS).
     #[serde(with = "kob_protocol::json::field")]
     pub merchant_value: u64,
-    /// Authorization expiry (unix ms): the facilitator does not execute after it.
+    /// Authorization expiry in Unix milliseconds. The facilitator does not execute after it.
     #[serde(with = "kob_protocol::json::field")]
     pub deadline_ms: u64,
 }
@@ -207,7 +234,9 @@ fn amount_field(v: &Option<String>, what: &str) -> Result<i64> {
     })
 }
 
-/// The lock's units the payer's terms name (`lockAmount`, default `maxSell`): the state's lock pin.
+/// The lock units the payer's terms name, which is `lockAmount` and defaults to `maxSell`.
+///
+/// It is the state's lock pin.
 fn lock_amount(terms: &IntentTerms, max_sell: i64) -> Result<i64> {
     match &terms.lock_amount {
         Some(_) => amount_field(&terms.lock_amount, "lockAmount"),
@@ -292,28 +321,37 @@ fn expected_state(
     Ok(s)
 }
 
-// ------------------------------------------------------------------------------------------ verification
+// Verification.
 
-/// Verifies an intent creation (see the module docs). Returns the facilitator's [`Verified`] (the payment
-/// transaction is the creation; its watched output is the intent) and the [`IntentFacts`] to execute it.
+/// Verifies an intent creation (see the module docs).
 ///
-/// Checks, fail closed, everything recomputed from the offer and the trusted chain view:
+/// It returns the facilitator's [`Verified`] and the [`IntentFacts`] to execute the intent. The
+/// payment transaction is the creation, and its watched output is the intent.
 ///
-/// 1. the envelope (accepted == offered, network, amount, `payTo`, request hash) and the intent offer
-///    (binding, critical, pinned router, pay assets);
-/// 2. the pay asset (`KAS` only when the merchant receives a token; a token must be allowlisted, on a program
-///    the router accepts, issuer-controlled only when the policy allows it) and the intent kind it implies,
-///    the actor (a router actor of that kind and of the pay token's family, whose shape the programs can run);
-/// 3. the intent state recomputed from the OFFER (merchant key from `payTo`, merchant asset, exact
-///    amount) and the payer's terms, and its script;
-/// 4. the creation transaction: bounded parse, trusted UTXOs, every input a payer P2PK input or a payer
-///    key-owned token of the pay asset (borrow disabled / not a minter, pinned program and extension; a KRON
-///    token with a P2PK input of its owner), engine validation, fee and mass;
-/// 5. output `paymentOutputIndex` is the intent: script = the recomputed actor instance, a single-output
-///    genesis authorised by a P2PK input; for a token intent the locked token output is owned by the
-///    intent id and holds at least `maxSell`; no other output carries the intent's covenant id;
-/// 6. the commitment digest (route = `{ kob-intent-v1, payAsset, actor }`) in the creation's payload,
-///    the expiry and the payment identifier.
+/// The checks fail closed. Everything is recomputed from the offer and the trusted chain view.
+///
+/// 1. The envelope (accepted equals offered, network, amount, `payTo`, request hash) and the intent
+///    offer (binding, critical, pinned router, pay assets).
+/// 2. The pay asset and the intent kind it implies.
+///    - `KAS` is allowed only when the merchant receives a token.
+///    - A token must be allowlisted, on a program the router accepts, and issuer-controlled only
+///      when the policy allows it.
+///    - The actor must be a router actor of that kind and of the pay token's family, with a shape
+///      the programs can run.
+/// 3. The intent state, recomputed from the offer and the payer's terms, and its script. The offer
+///    gives the merchant key (from `payTo`), the merchant asset and the exact amount.
+/// 4. The creation transaction: bounded parse, trusted UTXOs, engine validation, fee and mass.
+///    Every input is a payer P2PK input or a payer key-owned token of the pay asset. A token has
+///    borrow disabled, is not a minter, and has the pinned program and extension. A KRON token
+///    needs a P2PK input of its owner.
+/// 5. Output `paymentOutputIndex` is the intent.
+///    - Its script is the recomputed actor instance, a single-output genesis authorised by a P2PK
+///      input.
+///    - For a token intent, the locked token output is owned by the intent id and holds at least
+///      `maxSell`.
+///    - No other output carries the intent's covenant id.
+/// 6. The commitment digest, with route `{ kob-intent-v1, payAsset, actor }`, in the creation's
+///    payload. Then the expiry and the payment identifier.
 pub fn verify_intent(
     ctx: &VerifyCtx,
     offered: &PaymentRequirements,
@@ -324,7 +362,7 @@ pub fn verify_intent(
     if !pol.swap_enabled {
         return Err(X402Error::new(Reason::UnsupportedScheme, Diag::RouteUnsupported, "swap-and-pay is not enabled on this verifier"));
     }
-    // 1. envelope and offer
+    // 1. Envelope and offer.
     let env = check_envelope(ctx, offered, payload, request_hash)?;
     let pay_offers = parse_intent_offer(offered)?;
     let route = payload.payload.route.as_ref().ok_or_else(|| {
@@ -365,7 +403,7 @@ pub fn verify_intent(
             return Err(X402Error::new(Reason::UnsupportedScheme, Diag::UnsupportedKaspaExactProfile, "additive is not supported"))
         }
     };
-    // 2. pay asset and kind
+    // 2. Pay asset and kind.
     let offer_entry = pay_offers
         .iter()
         .find(|e| e.asset == route.pay_asset)
@@ -413,13 +451,16 @@ pub fn verify_intent(
     if auth.version != AUTH_VERSION_PAYLOAD || auth.signature.is_some() || auth.input_index.is_some() {
         return Err(X402Error::payload(Diag::InvalidAuthorization, "an intent is authorized by the payload commitment only"));
     }
-    // 3. the intent the offer calls for
-    // the intent's deadline is the authorization's expiry (unix ms): from it on anyone may expire the intent
+    // 3. The intent the offer calls for.
+    //
+    // The intent's deadline is the authorization's expiry in Unix milliseconds. From then on anyone
+    // may expire the intent.
     let deadline = crate::common::parse_iso_ms(&auth.expires_at).and_then(|ms| i64::try_from(ms).ok()).ok_or_else(|| {
         X402Error::payload(Diag::InvalidAuthorization, "authorization.expiresAt is not a millisecond ISO-8601 UTC timestamp")
     })?;
     let state = expected_state(kind, terms, merchant_key, env.amount, pay_token.as_ref(), merchant.as_ref(), deadline)?;
-    // the actor's family (token A) and the programs' slots: a shape the programs cannot run is refused
+    // A shape the programs cannot run is refused. This checks the actor's family (token A) and the
+    // programs' slots.
     state.check_actor(actor).map_err(|e| unsupported(e.to_string()))?;
     let intent_spk = state.spk(actor).map_err(|e| unsupported(e.to_string()))?;
     let pi = payload.payload.payment_output_index;
@@ -447,7 +488,7 @@ pub fn verify_intent(
     }
     let expires_ms = check_expiry(ctx.clock.now_ms(), env.max_timeout_seconds, &auth.expires_at)?;
 
-    // 4. the creation transaction
+    // 4. The creation transaction.
     let parsed = parse_tx(ctx, payload)?;
     let tx = &parsed.tx;
     if tx.version != 1 || tx.gas != 0 {
@@ -456,7 +497,8 @@ pub fn verify_intent(
     check_payload_commitment(tx, &digest)?;
     let entries = resolve_entries(ctx, &parsed)?;
     let mut payer_keys: Vec<[u8; 32]> = vec![];
-    // payer token inputs: (input, owner key, KCC-20 owner scheme; None for KRON, which signs nothing itself)
+    // Payer token inputs as (input, owner key, KCC-20 owner scheme). The scheme is None for KRON,
+    // which signs nothing itself.
     let mut token_inputs: Vec<(usize, [u8; 32], Option<u8>)> = vec![];
     for (i, e) in entries.iter().enumerate() {
         if is_p2pk(&e.script_public_key) && e.covenant_id.is_none() {
@@ -517,7 +559,8 @@ pub fn verify_intent(
         }
         payer_keys.push(st.owner());
     }
-    // KRON address presence: a key-held KRON token is authorised by a P2PK input of its owner (it signs nothing itself)
+    // KRON address presence. A key-held KRON token is authorised by a P2PK input of its owner,
+    // because it signs nothing itself.
     let p2pk_keys: Vec<[u8; 32]> = entries
         .iter()
         .filter(|e| is_p2pk(&e.script_public_key) && e.covenant_id.is_none())
@@ -532,8 +575,9 @@ pub fn verify_intent(
         }
     }
 
-    // every payer signature is SIGHASH_ALL (P2PK inputs and the owner witnesses of the pay-token inputs), checked on
-    // the signature scripts before the engine, which accepts the other hash types
+    // Every payer signature must be SIGHASH_ALL. That covers the P2PK inputs and the owner
+    // witnesses of the pay-token inputs. It is checked on the signature scripts before the engine,
+    // which accepts the other hash types.
     crate::sighash::check_payer_inputs(
         tx,
         &entries,
@@ -541,7 +585,7 @@ pub fn verify_intent(
         token_inputs.iter().filter_map(|(i, _, scheme)| scheme.map(|s| (*i, s))),
     )?;
 
-    // 5. the intent output and the locked tokens
+    // 5. The intent output and the locked tokens.
     let outs = &tx.outputs;
     let io = outs
         .get(pi as usize)
@@ -611,7 +655,7 @@ pub fn verify_intent(
     };
     let fee = check_economics_and_scripts(ctx, tx, &entries)?;
 
-    // 6. results
+    // 6. Results.
     let (merchant_spk, merchant_value) = match &merchant {
         Some(m) => (m.spk.clone(), m.carrier),
         None => (env.pay_to_spk.clone(), env.amount),
@@ -679,11 +723,18 @@ pub fn verify_intent(
     Ok((verified, facts))
 }
 
-/// Checks the locked token output: exactly `amount` units (the payer's `lockAmount`, at least `maxSell`; more
-/// than `maxSell` for KRON, whose outputs hold at least one unit) owned by the intent's covenant id (KCC-20 owner
-/// scheme 0x04 with borrow disabled and the pinned extension, KRON id_type 2, not a minter), on the pay token's
-/// program. A P2SH output hides its state, so the payer states the amount and the verifier recomputes the script.
-/// Returns the lock's state.
+/// Checks the locked token output and returns the lock's state.
+///
+/// The output must hold exactly `amount` units, owned by the intent's covenant id, on the pay
+/// token's program.
+///
+/// - `amount` is the payer's `lockAmount`. It is at least `maxSell`, and more than `maxSell` for
+///   KRON, whose outputs hold at least one unit.
+/// - A KCC-20 lock uses owner scheme 0x04 with borrow disabled and the pinned extension.
+/// - A KRON lock uses id_type 2 and is not a minter.
+///
+/// A P2SH output hides its state. So the payer states the amount and the verifier recomputes the
+/// script.
 fn check_lock(
     lo: &kaspa_consensus_core::tx::TransactionOutput,
     pt: &AllowedToken,
@@ -711,9 +762,11 @@ fn check_lock(
     Ok(st)
 }
 
-// ------------------------------------------------------------------------------------------ execution
+// Execution.
 
-/// The book an execution is planned against: plain resting orders of the intent's tokens.
+/// The book an execution is planned against.
+///
+/// It holds plain resting orders of the intent's tokens.
 #[derive(Clone, Debug, Default)]
 pub struct BookView {
     /// Asks with their exact custody.
@@ -724,7 +777,7 @@ pub struct BookView {
 /// The keeper's parameters.
 #[derive(Clone, Debug)]
 pub struct KeeperParams {
-    /// Receives the residue (token intents) and the fillers of token intents.
+    /// Receives the residue and the fillers. Both occur in token intents only.
     pub keeper: [u8; 32],
     /// Value of a filler output.
     pub filler: u64,
@@ -794,18 +847,23 @@ fn bid_ok(o: &OrderUtxo<BidState>, token: &[u8; 32], program: TemplateId, lock: 
         && s.budget_rate().is_some_and(|r| r > 0)
 }
 
-/// Base units a bid can take at most (its buying power: the escrow less the delivery carrier and reserve, at the budget
-/// rate).
+/// The most base units a bid can take, which is its buying power.
+///
+/// That is the escrow less the delivery carrier and reserve, at the budget rate.
 fn bid_affordable(o: &OrderUtxo<BidState>) -> i64 {
     o.state.buying_power(o.utxo.amount as i64)
 }
 
-/// What the router lets the asks demand for `n` base units: the ask's quote, rounded up (`ask_leg` of the router).
+/// What the router lets the asks demand for `n` base units.
+///
+/// It is the ask's quote, rounded up (`ask_leg` of the router).
 fn ask_quote(s: &AskState, n: i64) -> Option<i64> {
     quote_of(n, s.price, s.scale, Round::Up)
 }
 
-/// Ask sweeps of `shape` that deliver exactly `amount` units, cheapest quote first.
+/// Ask sweeps that deliver exactly `amount` units, cheapest quote first.
+///
+/// A sweep uses `k` asks. `last_rests` says whether the last ask stays on the book.
 fn ask_sweeps(
     asks: &[&(OrderUtxo<AskState>, TokenUtxo)],
     k: usize,
@@ -815,7 +873,7 @@ fn ask_sweeps(
 ) -> Vec<Vec<IntentAsk>> {
     let mut out: Vec<(i64, Vec<IntentAsk>)> = vec![];
     let n = asks.len();
-    // choose the k-1 sold-out asks as an ordered subset (in price order), then the last ask
+    // Choose the k-1 sold-out asks as an ordered subset in price order, then the last ask.
     let mut idx: Vec<usize> = Vec::with_capacity(k);
     fn rec(
         asks: &[&(OrderUtxo<AskState>, TokenUtxo)],
@@ -869,15 +927,19 @@ fn ask_sweeps(
     out.into_iter().map(|(_, l)| l).collect()
 }
 
-/// Base units an ENDING bid of a sweep takes when it is not the last one: everything it can afford (a GTC bid is then
-/// exhausted, a FOK bid filled completely, an IOC bid killed after the fill). `None`: the bid cannot end here.
+/// Base units an ending bid of a sweep takes when it is not the last one.
+///
+/// It takes everything it can afford. A GTC bid is then exhausted, a FOK bid is filled completely
+/// and an IOC bid is killed after the fill. `None` means the bid cannot end here.
 fn bid_prefix_amount(o: &OrderUtxo<BidState>) -> Option<i64> {
     let aff = bid_affordable(o);
     (aff > 0 && matches!(o.state.tif, TIF_GTC | TIF_FOK | TIF_IOC) && bid_ends(o, aff) && o.state.fill_ok(aff, o.utxo.amount as i64))
         .then_some(aff)
 }
 
-/// A fill of `n` leaves the bid less than one minimum fill of buying power (a GTC bid then ends).
+/// True if a fill of `n` leaves the bid less than one minimum fill of buying power.
+///
+/// A GTC bid then ends.
 fn bid_ends(o: &OrderUtxo<BidState>, n: i64) -> bool {
     match o.state.used(n) {
         Some(u) => !o.state.can_continue(o.utxo.amount as i64 - u),
@@ -885,15 +947,21 @@ fn bid_ends(o: &OrderUtxo<BidState>, n: i64) -> bool {
     }
 }
 
-/// The KAS a bid releases for `n` base units (its all-in spend at its quote, rounded down).
+/// The KAS a bid releases for `n` base units.
+///
+/// It is the bid's all-in spend at its quote, rounded down.
 fn bid_spend(o: &OrderUtxo<BidState>, n: i64) -> Option<i64> {
     o.state.spend(n, 0, o.utxo.block_daa_score as i64)
 }
 
-/// The fewest base units the LAST bid of a sweep takes so that the sweep releases at least `missing` sompi, within the
-/// amounts its position allows (resting: a GTC bid filled at least its minimum fill and keeping at least one minimum
-/// fill of buying power; ending: an exhausted GTC or FOK bid takes everything it can afford, an IOC bid any amount
-/// from its minimum fill). `None` when no amount fits.
+/// The fewest base units the last bid of a sweep takes to release at least `missing` sompi.
+///
+/// The amount must fit what the bid's position allows. `None` means no amount fits.
+///
+/// - A resting GTC bid is filled at least its minimum fill and keeps at least one minimum fill of
+///   buying power.
+/// - An ending GTC or FOK bid takes everything it can afford.
+/// - An ending IOC bid takes any amount from its minimum fill.
 fn bid_last_amount(o: &OrderUtxo<BidState>, rests: bool, missing: i64) -> Option<i64> {
     let aff = bid_affordable(o);
     if aff <= 0 {
@@ -901,7 +969,7 @@ fn bid_last_amount(o: &OrderUtxo<BidState>, rests: bool, missing: i64) -> Option
     }
     let s = &o.state;
     let rate = s.price.checked_add(s.tip).filter(|r| *r > 0)?;
-    // fewest n with floor(n * rate / scale) >= missing: n = ceil(missing * scale / rate)
+    // The fewest n with floor(n * rate / scale) >= missing is ceil(missing * scale / rate).
     let want = if missing <= 0 {
         1
     } else {
@@ -923,8 +991,9 @@ fn bid_last_amount(o: &OrderUtxo<BidState>, rests: bool, missing: i64) -> Option
     (s.fill_ok(n, o.utxo.amount as i64) && bid_spend(o, n)? >= missing).then_some(n)
 }
 
-/// Bid sweeps of `k` bids (the first `k - 1` end) selling at most `max_sell`, releasing at least `need`
-/// sompi (all-in), fewest units sold first.
+/// Bid sweeps of `k` bids that release at least `need` sompi, fewest units sold first.
+///
+/// The first `k - 1` bids end. A sweep sells at most `max_sell` units, and `need` is all-in.
 fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sell: i64, need: i64) -> Vec<Vec<IntentBid>> {
     let mut out: Vec<(i64, Vec<IntentBid>)> = vec![];
     fn rec(
@@ -970,8 +1039,9 @@ fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sel
     out.into_iter().map(|(_, l)| l).collect()
 }
 
-/// Units of the lock an execution may sell: all of them, but one for a KRON lock (its change output holds at least one
-/// unit).
+/// Units of the lock an execution may sell.
+///
+/// That is all of them, except one for a KRON lock, whose change output holds at least one unit.
 fn sellable(f: &IntentFacts) -> i64 {
     let amount = f.lock.as_ref().map(|l| l.state.amount()).unwrap_or(0);
     if f.state.a_family() == Family::Kron {
@@ -981,10 +1051,14 @@ fn sellable(f: &IntentFacts) -> i64 {
     }
 }
 
-/// Candidate executions of a verified intent against `book`, best first (cheapest quote for the payer's
-/// KAS, fewest units sold of the payer's token). Orders in `exclude` (lost to a conflict) are skipped.
-/// The fee is not known before building: a token intent's candidates must release the merchant's KAS
-/// plus `fee_reserve` (beyond the intent's own value); [`build_execution`] builds them in order.
+/// Candidate executions of a verified intent against `book`, best first.
+///
+/// Best means the cheapest quote for the payer's KAS, then the fewest units sold of the payer's
+/// token. Orders in `exclude` were lost to a conflict and are skipped.
+///
+/// The fee is not known before building. So the candidates of a token intent must release the
+/// merchant's KAS plus `fee_reserve`, beyond the intent's own value. [`build_execution`] builds
+/// them in order.
 pub fn plan_executions(
     f: &IntentFacts,
     book: &BookView,
@@ -1034,7 +1108,7 @@ pub fn plan_executions(
         }
         IntentState::TokenToKas { merchant_kas, max_sell, .. } => {
             let lock_amt = sellable(f);
-            // fillers: one when the last bid ends
+            // One filler when the last bid ends.
             let need = *merchant_kas + fee_reserve + if shape.last_bid_rests { 0 } else { fillers(1) } - f.intent.amount as i64;
             for legs in bid_sweeps(&bids, shape.bids, shape.last_bid_rests, (*max_sell).min(lock_amt), need.max(1)) {
                 out.push(base(vec![], legs, *merchant_kas as u64));
@@ -1048,7 +1122,8 @@ pub fn plan_executions(
                 }) else {
                     continue;
                 };
-                // the queue holds ka + 1 slots: custody rest of B, bid continuation, ask continuation
+                // The queue holds ka + 1 slots: custody rest of B, bid continuation and ask
+                // continuation.
                 let queued = usize::from(shape.last_ask_rests) * 2 + usize::from(shape.last_bid_rests);
                 let need = pay + f.merchant_value as i64 + fee_reserve + fillers((shape.asks + 1).saturating_sub(queued))
                     - f.intent.amount as i64;
@@ -1063,8 +1138,10 @@ pub fn plan_executions(
     Ok(out)
 }
 
-/// Builds (and engine-validates) the first candidate of [`plan_executions`] that funds itself, raising the
-/// fee reserve of token intents until the fee is covered. `None`: the book cannot execute the intent now.
+/// Builds and engine-validates the first candidate of [`plan_executions`] that funds itself.
+///
+/// It raises the fee reserve of token intents until the fee is covered. `None` means the book
+/// cannot execute the intent now.
 pub fn build_execution(
     f: &IntentFacts,
     book: &BookView,
@@ -1115,9 +1192,11 @@ pub fn build_execution(
     Ok(None)
 }
 
-/// The expiry of a verified intent (anyone may submit it once the chain's past median time reached the intent's
-/// deadline): the intent's KAS back to the payer, less the fee, and the locked tokens to the payer's key. Needs no
-/// signature. `intent` and `lock` carry the UTXOs as the chain reports them.
+/// Builds the expiry transaction of a verified intent. It needs no signature.
+///
+/// Anyone may submit it once the chain's past median time has reached the intent's deadline. It
+/// returns the intent's KAS to the payer, less the fee, and the locked tokens to the payer's key.
+/// `intent` and `lock` carry the UTXOs as the chain reports them.
 pub fn build_expiry(
     f: &IntentFacts,
     intent: &Utxo,
@@ -1137,18 +1216,21 @@ pub fn build_expiry(
     signed.tx.to_tx().map_err(X402Error::from)
 }
 
-/// The facts of an execution transaction of `f` already built (for the ledger): the merchant output and
-/// its value, so acceptance can be observed.
+/// The merchant output of a built execution of `f`, with its value, for the ledger.
+///
+/// The ledger uses it to observe acceptance.
 pub fn merchant_watch(f: &IntentFacts, ex: &Execution) -> (Outpoint, ScriptPublicKey, u64) {
     (ex.merchant_output, ex.merchant_spk.clone(), f.merchant_value)
 }
 
-/// Txid of a creation's payload (helper for the facilitator's lock before verification).
+/// Transaction id of the creation in `payload`, or `None` if it does not parse.
+///
+/// The facilitator takes its lock on this id before verification.
 pub fn creation_txid(payload: &PaymentPayload, ctx: &VerifyCtx) -> Option<Txid> {
     parse_tx(ctx, payload).ok().map(|p| p.tx.id().as_bytes())
 }
 
-/// Hex of the intent's script (for SDKs).
+/// Hex of the intent's script, for SDKs.
 pub fn intent_script_hex(actor: &Actor, state: &IntentState) -> Result<String> {
     Ok(spk_to_hex(&state.spk(actor).map_err(|e| unsupported(e.to_string()))?))
 }
