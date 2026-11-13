@@ -1,13 +1,26 @@
-//! `kob recover`: find the maker's orders on the node from a backup / export / indexer view, without an indexer, and
-//! optionally cancel them (`--cancel`).
+//! `kob recover`: find the orders of a maker on the node, and optionally cancel them.
 //!
-//! Only availability is trusted: every state is decoded canonically under its pinned template, its P2SH
-//! script is derived here, and an order is live only when the node holds an unspent output at exactly that script carrying
-//! the order's covenant id. A partial fill splices a new `amountLeft` into the script (a new address), and with amounts in
-//! base units any amount at least `minFill` may have been filled, so the search over amounts is NOT exhaustive: it tries
-//! the known states, then the amounts the maker names with `--amount-left` (from an indexer view), then a bounded
-//! fallback of `amountLeft - k x minFill`. Ask-side custody is rebuilt from the live state (`amountLeft` base units owned
-//! by the covenant id) and verified the same way. An order of a template this build does not pin is `unsupported`.
+//! The orders come from a backup, an export or an indexer view, and the search needs no indexer.
+//! `--cancel` cancels the live ones.
+//!
+//! # What is trusted
+//!
+//! Only the availability of the node is trusted. Every state is decoded canonically under its
+//! pinned template, and its P2SH script is derived here. An order is live only when the node holds
+//! an unspent output at exactly that script that carries the covenant id of the order.
+//!
+//! # The search over amounts
+//!
+//! A partial fill splices a new `amountLeft` into the script, which gives a new address. Any
+//! amount of at least `minFill` base units may have been filled, so the search is not exhaustive.
+//! It tries, in this order:
+//! - The known states.
+//! - The amounts that the maker names with `--amount-left`, taken from an indexer view.
+//! - A bounded fallback of `amountLeft - k x minFill`.
+//!
+//! Ask-side custody is rebuilt from the live state, which owns `amountLeft` base units by the
+//! covenant id, and is verified the same way. An order of a template that this build does not pin
+//! is `unsupported`.
 
 use std::path::PathBuf;
 
@@ -108,7 +121,7 @@ pub struct Args {
     pub network: String,
     /// Maker filter.
     pub maker: Option<[u8; 32]>,
-    /// `--amount-left` hints: the covenant id they are for (`None`: every order) and the amount as typed.
+    /// `--amount-left` hints: the covenant id they are for (`None` is every order), and the amount.
     pub amount_left: Vec<(Option<[u8; 32]>, String)>,
     /// Report path.
     pub out: Option<PathBuf>,
@@ -128,8 +141,10 @@ pub struct Args {
     pub out_dir: Option<PathBuf>,
 }
 
-/// One `--amount-left` value: `<amount>` or `<covenant id>=<amount>`. The amount is checked against the order's scale
-/// when the order is searched (a decimal amount needs the token's decimals); here only its shape.
+/// One `--amount-left` value: `<amount>` or `<covenant id>=<amount>`.
+///
+/// Only its shape is checked here. The amount is checked against the scale of the order when the
+/// order is searched, because a decimal amount needs the decimals of the token.
 fn parse_hint(v: &str) -> Result<(Option<[u8; 32]>, String), String> {
     let (cov, amount) = match v.split_once('=') {
         Some((c, a)) => (Some(hex32(c).map_err(|e| format!("--amount-left covenant id: {e}"))?), a),
@@ -150,7 +165,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
     parse_args_with(args, default_key())
 }
 
-/// [`parse_args`] with the key `--cancel` falls back to when none is named (`$KOB_KEY`).
+/// [`parse_args`] with the key that `--cancel` falls back to when none is named (`$KOB_KEY`).
 pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Result<Args, String> {
     let mut a = Args {
         from: vec![],
@@ -231,19 +246,25 @@ pub struct Candidate {
     pub via: &'static str,
 }
 
-/// The candidate states of an order, distinct scripts only, at most [`MAX_CANDIDATES`], in this order:
+/// The candidate states of an order: distinct scripts only, at most [`MAX_CANDIDATES`].
 ///
-/// 1. the known states (latest first);
-/// 2. each known state with `amountLeft` = each of the maker's `hints` (base units);
-/// 3. each known state with `amountLeft = original - k x minFill`, k = 1, 2, ... while positive. A partial fill splices
-///    the new `amountLeft` into the script and any amount of at least `minFill` may have been filled, so this is a
-///    bounded guess and NOT exhaustive.
+/// The candidates come in this order:
+/// 1. The known states, latest first.
+/// 2. Each known state with `amountLeft` set to each of the maker's `hints`, in base units.
+/// 3. Each known state with `amountLeft = original - k x minFill`, for k = 1, 2, ... while the
+///    result is positive.
+///
+/// A partial fill splices the new `amountLeft` into the script, and any amount of at least
+/// `minFill` may have been filled. The third group is therefore a bounded guess and not
+/// exhaustive.
 #[cfg(test)]
 pub fn candidates(tpl: TemplateId, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
     candidates_under(OrderScript::Pinned(tpl), known, hints)
 }
 
-/// [`candidates`] under a pinned or a retired template (the scripts of a retired template's orders are its own).
+/// [`candidates`] under a pinned or a retired template.
+///
+/// A retired template's orders have their own scripts.
 pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
     let mut out: Vec<Candidate> = vec![];
     let push = |s: AnyState, via: &'static str, out: &mut Vec<Candidate>| {
@@ -298,10 +319,12 @@ pub enum Custody {
 /// A custody a live state implies: its token state, its script and the token covenant id.
 pub type CustodyTarget = (TokenState, ScriptPublicKey, [u8; 32]);
 
-/// A custody part of a state: (token covenant id, amount, token program template hash, extension commitment).
+/// A custody part of a state: token covenant id, amount, token program template hash, extension.
 type CustodyPart = ([u8; 32], i64, [u8; 32], Option<[u8; 32]>);
 
-/// The custody state and script a live state implies (`Ok(None)`: none needed; a pair order: its first custody).
+/// The custody state and script that a live state implies.
+///
+/// `Ok(None)` means that none is needed. A pair order gives its first custody.
 #[cfg(test)]
 pub fn custody_target(
     state: &AnyState,
@@ -311,10 +334,12 @@ pub fn custody_target(
     Ok(custody_targets(state, covenant_id, ext)?.into_iter().next().map(|(st, spk, _)| (st, spk)))
 }
 
-/// Every custody a live state holds, in record order, with its state, script and token covenant id: a KAS kind its one
-/// custody, a pair order each of `AnyState::custodies` under the program of that token (a sell-first `KobIfdPair`: its A
-/// custody, then its B prefund). `ext` is the first custody's extension commitment; the second one (the B prefund) carries
-/// the entry's `bExt`.
+/// Every custody that a live state holds, in record order, with its state, script and token id.
+///
+/// A KAS kind has its one custody. A pair order has one custody for each of `AnyState::custodies`,
+/// under the program of that token. A sell-first `KobIfdPair` has its A custody, then its B
+/// prefund. `ext` is the extension commitment of the first custody, and the second one carries the
+/// `bExt` of the entry.
 pub fn custody_targets(state: &AnyState, covenant_id: [u8; 32], ext: Option<[u8; 32]>) -> Result<Vec<CustodyTarget>, String> {
     let parts: Vec<CustodyPart> = match state {
         s if s.is_pair() => {
@@ -384,7 +409,7 @@ impl Status {
 pub struct Found {
     /// The merged entry.
     pub entry: Entry,
-    /// The order kind of its template (when this build pins it or keeps it in its cancel-only table).
+    /// The order kind of its template, if this build pins it or keeps it in its cancel-only table.
     pub tpl: Option<TemplateId>,
     /// The template: pinned, or retired (cancel only).
     pub script: Option<OrderScript>,
@@ -402,14 +427,18 @@ pub struct Found {
     pub via: Option<&'static str>,
     /// Custody of a live order (a pair order: its first custody).
     pub custody: Custody,
-    /// A pair order's second custody (a sell-first `KobIfdPair`'s B prefund); `Custody::None` for every other order.
+    /// A pair order's second custody, the B prefund of a sell-first `KobIfdPair`.
+    ///
+    /// It is `Custody::None` for every other order.
     pub prefund: Custody,
     /// The cancel outcome (`--cancel`).
     pub cancel: Option<Value>,
 }
 
-/// The `--amount-left` hints that apply to the order `covenant_id`, parsed with the order's `scale` (a decimal amount
-/// needs it); the ones that do not parse are returned as notes.
+/// The `--amount-left` hints that apply to the order `covenant_id`.
+///
+/// They are parsed with the `scale` of the order, because a decimal amount needs it. The ones that
+/// do not parse are returned as notes.
 fn hints_for(hints: &[(Option<[u8; 32]>, String)], covenant_id: [u8; 32], scale: Option<i64>) -> (Vec<i64>, String) {
     let mut amounts = vec![];
     let mut notes = String::new();
@@ -457,7 +486,7 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
         };
         return (f, vec![]);
     };
-    // every known state must be the same order: kind, maker and token
+    // Every known state must be the same order: kind, maker and token.
     known.retain(|s| s.template_id() == first.template_id() && s.maker() == first.maker() && s.token_cov_id() == first.token_cov_id());
     f.known = Some(first.clone());
     if let Some(k) = &e.claimed_kind {
@@ -481,7 +510,9 @@ fn prepare(e: Entry, maker: Option<[u8; 32]>, hints: &[(Option<[u8; 32]>, String
     (f, c)
 }
 
-/// Why nothing was found, and how far the search could see (the wording follows what the kind's script can change).
+/// Why nothing was found, and how far the search could see.
+///
+/// The wording follows what the script of the kind can change.
 fn not_found_note(known: Option<&AnyState>, searched: usize) -> String {
     match known {
         Some(k) if script_is_fixed(k) => format!("spent: no unspent output at the order's script ({searched} candidate)"),
@@ -494,8 +525,10 @@ fn not_found_note(known: Option<&AnyState>, searched: usize) -> String {
     }
 }
 
-/// Search every entry on the node (two rounds: order scripts, then the custody scripts of the live ones). `hints` are the
-/// `--amount-left` values.
+/// Search every entry on the node, in two rounds.
+///
+/// The first round looks for the order scripts and the second for the custody scripts of the live
+/// orders. `hints` are the `--amount-left` values.
 pub fn search(
     entries: Vec<Entry>,
     maker: Option<[u8; 32]>,
@@ -525,7 +558,7 @@ pub fn search(
         }
         found.push(f);
     }
-    // custodies of the live token-holding orders (a pair order: one per token it holds)
+    // Custodies of the live token-holding orders. A pair order has one per token it holds.
     let mut targets: Vec<Vec<CustodyTarget>> = vec![];
     for f in found.iter_mut() {
         let t = match &f.live {
@@ -592,7 +625,7 @@ pub fn order_json(f: &Found) -> Value {
         v["value"] = json!(u.amount.to_string());
         v["utxo_daa"] = json!(u.daa.to_string());
         v["state"] = json!(f.tpl.and_then(|t| encode_state(t, s).ok()).map(|b| to_hex(&b)));
-        // base-unit quantities as strings, like every other 64-bit value of the report
+        // Base-unit quantities are strings, like every other 64-bit value of the report.
         v["amount_left"] = json!(amount_left_in(s, u.amount).map(|a| a.to_string()));
         v["scale"] = json!(s.scale().to_string());
         v["min_fill"] = json!(s.min_fill().to_string());
@@ -626,7 +659,7 @@ pub fn report_json(a: &Args, found: &[Found], rejected: &[Rejected]) -> Value {
     })
 }
 
-/// Build, sign, validate, write and (unless dry run) submit the maker's cancel of one live order.
+/// Cancel one live order of the maker: build, sign, validate, write and, if not a dry run, submit.
 fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     let (u, state) = f.live.as_ref().ok_or("not live")?;
     let maker = state.maker();
@@ -639,7 +672,7 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         Custody::Missing(_) => return Err("custody not found on the node: not cancelled".into()),
         Custody::Unknown(why) => return Err(format!("custody {why}: not cancelled")),
     };
-    // a sell-first pair entry's B prefund (its second custody)
+    // The B prefund of a sell-first pair entry, which is its second custody.
     let prefund = match &f.prefund {
         Custody::None => None,
         Custody::Verified(c, st) => Some(TokenUtxo { utxo: utxo_of(c), state: st.clone() }),
@@ -668,7 +701,8 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     let cov = to_hex(&f.entry.covenant_id);
     let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
     if !a.dry_run {
-        // the same rule as every other submitting command: `--yes`, or a terminal asks, else nothing is signed
+        // The same rule as every other submitting command: `--yes`, or a terminal asks, else
+        // nothing is signed.
         if crate::trade::opts::would_ask(a.yes) {
             eprintln!(
                 "cancel {cov} ({}): ends the order; returns its custody and its KAS to the maker; fee paid by {}",
@@ -698,7 +732,9 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
     }))
 }
 
-/// Run the search (and the cancels); returns the report and whether every attempted cancel succeeded.
+/// Run the search and the cancels.
+///
+/// Returns the report and whether every attempted cancel succeeded.
 pub fn execute(a: &Args) -> Result<(Value, bool), String> {
     let mut entries = vec![];
     let mut rejected = vec![];
