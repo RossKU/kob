@@ -1,71 +1,98 @@
-// Facts that can be read straight off an order state (no protocol logic: the covenants and kob-wasm decide validity). Shared by the
-// pre-sign decoder (decode.ts), the cancel builders (cancel.ts), balances and positions. DOM-free, bigint arithmetic only.
+// Facts that can be read straight off an order state. They hold no protocol logic, because the
+// covenants and kob-wasm decide validity. The pre-sign decoder (decode.ts), the cancel builders
+// (cancel.ts), balances and positions share them. DOM-free, bigint arithmetic only.
 //
-// Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; protocol v3, docs/spec/order-types.md): an amount of the BASE token A at a price in the
-// QUOTE token B per WHOLE A. Their states name both tokens (S / T for KobPair and KobCondPair, A / B for KobIfdPair); the helpers below read
-// them oriented A / B, so for the rest of the app "the order's token" is A, its scale scale(A), its price B base units per whole A, and its tip
-// KAS (sompi per whole A).
+// Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`, docs/spec/order-types.md) trade an amount of
+// the base token A at a price in the quote token B per whole A. Their states name both tokens
+// (S / T for KobPair and KobCondPair, A / B for KobIfdPair). The helpers below read them
+// oriented A / B. So for the rest of the app the order's token is A, its scale is scale(A), its
+// price is B base units per whole A, and its tip is KAS (sompi per whole A).
 import type { AnyState, BaseKind, Family, Hex, IfdAskState, IfdBidState, KasKind, OrderKind, OrderState, PairKind, PairTriggerRule, TemplateName } from './types';
 import type { KobWasm } from './wasm';
 import { quoteOf } from './units';
 import { isTokenProgram, CODEC_OF_PROGRAM } from './programs.generated';
 
+/** The KAS-quoted kinds that sell the token (asks). */
 export const ASK_KINDS: readonly BaseKind[] = ['KobAsk', 'KobCondAsk', 'KobIfdAsk'];
+/** The KAS-quoted kinds that buy the token (bids). */
 export const BID_KINDS: readonly BaseKind[] = ['KobBid', 'KobCondBid', 'KobIfdBid'];
 /** The KAS-quoted kinds (a token against KAS), each with a KRON twin. */
 export const KAS_KINDS: readonly KasKind[] = ['KobAsk', 'KobCondAsk', 'KobIfdAsk', 'KobBid', 'KobCondBid', 'KobIfdBid'];
-/** The pair kinds (token A for token B): one template each for both sides and both token families (no KRON twin). */
+/**
+ * The pair kinds (token A for token B).
+ * One template per kind serves both sides and both token families, so there is no KRON twin.
+ */
 export const PAIR_KINDS: readonly PairKind[] = ['KobPair', 'KobCondPair', 'KobIfdPair'];
+/** Every family-neutral order kind. */
 export const BASE_KINDS: readonly BaseKind[] = [...ASK_KINDS, ...BID_KINDS, ...PAIR_KINDS];
-/** Every order kind as kob-wasm tags it: the KAS-quoted kinds with their KRON twins and the three pair kinds. */
+/**
+ * Every order kind as kob-wasm tags it.
+ * That is the KAS-quoted kinds with their KRON twins, and the three pair kinds.
+ */
 export const ORDER_KINDS: readonly OrderKind[] = [...BASE_KINDS, ...[...ASK_KINDS, ...BID_KINDS].map((k) => `${k}Kron` as OrderKind)];
 
 /** A pair kind (`KobPair`, `KobCondPair`, `KobIfdPair`). */
 export const isPairKind = (k: string): k is PairKind => (PAIR_KINDS as readonly string[]).includes(k);
-/** Every KAS-quoted kind exists once per token family: the KRON kinds are the KCC-20 names with a `Kron` suffix. */
+/** Strips the `Kron` suffix. Every KAS-quoted kind exists once per token family. */
 export const baseKind = (k: OrderKind): BaseKind => (k.endsWith('Kron') ? k.slice(0, -4) : k) as BaseKind;
 /**
- * Family of an order kind or template name (KAS-quoted kinds and token programs). A pair kind names no family: its state names one per token
- * (use {@link familyOfOrder} for an order: a pair order's family is its base token A's, as kob-protocol `AnyState::family`).
+ * Family of an order kind or template name (KAS-quoted kinds and token programs).
+ * A pair kind names no family, because its state names one per token. For an order use
+ * {@link familyOfOrder}. A pair order's family is its base token A's, as in kob-protocol
+ * `AnyState::family`.
  */
 export const familyOfKind = (k: TemplateName | string): Family => (isTokenProgram(k) ? CODEC_OF_PROGRAM[k] : k.endsWith('Kron') ? 'kron' : 'kcc20');
-/** The kind tag of a base kind in a family (the pair kinds have one template for every family). */
+/** The kind tag of a base kind in a family. The pair kinds have one template for every family. */
 export const kindFor = (k: BaseKind, family: Family): OrderKind => (family === 'kron' && !isPairKind(k) ? (`${k}Kron` as OrderKind) : k);
 
+/** True if `k` is an order kind as kob-wasm tags it. */
 export const isOrderKind = (k: string): k is OrderKind => (ORDER_KINDS as readonly string[]).includes(k);
-/** The order kind of a template name: a delivery id_type 0 build (`KobAskKronD0`, a KRON program with id_type 0 holders) is its KRON kind. */
+/**
+ * The order kind of a template name.
+ * A delivery id_type 0 build (`KobAskKronD0`, a KRON program with id_type 0 holders) maps to its
+ * KRON kind.
+ */
 export const orderKindOfTemplate = (t: string): string => (/^Kob[A-Za-z]+KronD0$/.test(t) ? t.slice(0, -2) : t);
 /**
- * Ask-side KAS kinds hold the maker's tokens in one custody UTXO owned by the order (matcher.md 1.2); every pair kind may hold custodies (of A,
- * of B or both: {@link custodiesOf} says which, from the state).
+ * True for kinds that may hold tokens in custody.
+ * The ask-side KAS kinds hold the maker's tokens in one custody UTXO owned by the order
+ * (docs/spec/matcher.md 1.2). Every pair kind may hold custodies of A, of B or both.
+ * {@link custodiesOf} says which, from the state.
  */
 export const holdsTokens = (k: OrderKind): boolean => (ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k);
-/** Side of a KAS kind. A pair kind's side is in its state ({@link sideOf}); 'sell' is returned for it as a placeholder. */
+/**
+ * Side of a KAS kind.
+ * A pair kind's side is in its state ({@link sideOf}), so 'sell' is returned for it as a
+ * placeholder.
+ */
 export const sideOfKind = (k: OrderKind): 'sell' | 'buy' => ((ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k) ? 'sell' : 'buy');
-/** Side of an order: KAS kinds by kind, pair kinds by their state (`side` 1 sells A, 2 buys A; a buy-first entry buys). */
+/** Side of an order: KAS kinds by kind, pair kinds by their state (`side` 1 sells A, 2 buys A). */
 export function sideOf(o: { kind: string; state: object }): 'sell' | 'buy' {
   if (isPairKind(o.kind)) return bigOr0((o.state as { side?: unknown }).side) === 1n ? 'sell' : 'buy';
   return sideOfKind(o.kind as OrderKind);
 }
-/** Conditional kinds (stop / take-profit / OCO legs): KobCondAsk, KobCondBid and the pair conditional KobCondPair. */
+/** Conditional kinds (stop, take-profit, OCO legs): KobCondAsk, KobCondBid and KobCondPair. */
 export const isCondKind = (k: OrderKind): boolean => baseKind(k) === 'KobCondAsk' || baseKind(k) === 'KobCondBid' || k === 'KobCondPair';
 /** If-done entries: KobIfdBid, KobIfdAsk and the pair entry KobIfdPair. */
 export const isIfdKind = (k: OrderKind): boolean => baseKind(k) === 'KobIfdAsk' || baseKind(k) === 'KobIfdBid' || k === 'KobIfdPair';
-/** Narrowing by family-neutral kind: `isKind(o, 'KobAsk')` is true for `KobAsk` and `KobAskKron`. */
+/** Narrows by family-neutral kind: `isKind(o, 'KobAsk')` holds for `KobAsk` and `KobAskKron`. */
 export function isKind<K extends BaseKind>(o: OrderState, k: K): o is Extract<OrderState, { kind: K | `${K}Kron` }> {
   return baseKind(o.kind) === k;
 }
 
-/** 64-bit decimal string -> bigint (tolerates numbers and bigints; never Number arithmetic on amounts). */
+/** Converts a 64-bit decimal string to bigint. It also takes numbers and bigints. */
 export const big = (v: string | number | bigint): bigint => BigInt(v);
-/** A state field as a bigint, 0 when absent or malformed (a hostile state describes as 0: describing it must not throw). */
+/**
+ * A state field as a bigint, 0 when absent or malformed.
+ * A hostile state describes as 0, because describing it must not throw.
+ */
 function bigOr0(v: unknown): bigint {
   if (typeof v === 'bigint') return v;
   if (typeof v === 'number' && Number.isSafeInteger(v)) return BigInt(v);
   return typeof v === 'string' && /^-?\d+$/.test(v) ? BigInt(v) : 0n;
 }
 
-// ------------------------------------------------------------------------------------------------ pair tokens
+// ------------------------------------------------------------------------------------- pair tokens
 
 /** One token of a pair order, as its state pins it. */
 export interface PairTokenFacts {
@@ -73,12 +100,18 @@ export interface PairTokenFacts {
   tplHash: Hex;
   prefixLen: bigint;
   suffixLen: bigint;
-  /** the state's family code as a family (null for a code other than 1 KCC-20 / 2 KRON: a hostile state) */
+  /**
+   * The state's family code as a family. Null for a code other than 1 (KCC-20) or 2 (KRON), which
+   * a hostile state can carry.
+   */
   family: Family | null;
   familyCode: bigint;
-  /** base units per whole token */
+  /** Base units per whole token. */
   scale: bigint;
-  /** the KCC-20 extension commitment the state names for NEW outputs of this token (zero for KRON); null when the state names none for it */
+  /**
+   * The KCC-20 extension commitment the state names for new outputs of this token (zero for
+   * KRON). Null when the state names none.
+   */
   ext: Hex | null;
 }
 
@@ -102,7 +135,7 @@ function tokenFacts(s: Record<string, unknown>, p: 's' | 't' | 'a' | 'b'): PairT
   };
 }
 
-/** A / B and the side of a pair order (mirrors kob-wasm `pairTokens`), null for every other kind. */
+/** A, B and the side of a pair order (mirrors kob-wasm `pairTokens`), null for other kinds. */
 export function pairFactsOf(o: { kind: string; state: object }): PairFacts | null {
   if (!isPairKind(o.kind)) return null;
   const s = o.state as Record<string, unknown>;
@@ -121,13 +154,19 @@ export function ownTokenIdsOf(o: { kind: string; state: object }): Hex[] {
   return [s.tokenCovId ?? ''].filter(Boolean);
 }
 
-/** One exact custody an order holds: the token, its amount and its role (`base` = the order's token A, `quote` = a pair order's B). */
+/**
+ * One exact custody an order holds: the token, its amount and its role.
+ * `base` is the order's token A and `quote` is a pair order's B.
+ */
 export interface CustodyFact { token: Hex; amount: bigint; role: 'base' | 'quote' }
 
 /**
- * The exact custodies an order holds, in record order (kob-protocol `AnyState::custodies`): a KAS ask its token (`amountLeft`); a `KobPair` /
- * `KobCondPair` its S (an ask: A, a bid: B; `custody`); a buy-first `KobIfdPair` its B escrow (when non-zero); a sell-first one its A (when
- * `amountLeft` > 0) then its B prefund (when `custody` > 0). With `kob`, kob-wasm's own answer is used.
+ * The exact custodies an order holds, in record order (kob-protocol `AnyState::custodies`).
+ * - A KAS ask holds its token (`amountLeft`).
+ * - A `KobPair` or `KobCondPair` holds its S in `custody` (an ask: A, a bid: B).
+ * - A buy-first `KobIfdPair` holds its B escrow, when non-zero.
+ * - A sell-first one holds its A (when `amountLeft` > 0), then its B prefund (when `custody` > 0).
+ * With `kob`, kob-wasm's own answer is used.
  */
 export function custodiesOf(o: OrderState, kob?: KobWasm): CustodyFact[] {
   const pf = pairFactsOf(o);
@@ -154,9 +193,10 @@ export function custodiesOf(o: OrderState, kob?: KobWasm): CustodyFact[] {
 }
 
 /**
- * Custody token amount the order holds in its (first) custody: a KAS ask exactly `amountLeft` base units (matcher.md 1.2); a pair order its FIRST
- * custody of kob-protocol `custodies` (a sell-first entry's B prefund is the second: {@link custodiesOf}); null for KAS bid kinds and a pair order
- * without custody.
+ * Custody token amount the order holds in its first custody, or null.
+ * A KAS ask holds exactly `amountLeft` base units (docs/spec/matcher.md 1.2). A pair order holds
+ * the first custody of kob-protocol `custodies`, because a sell-first entry's B prefund is the
+ * second ({@link custodiesOf}). KAS bid kinds and pair orders without custody give null.
  */
 export function custodyAmountOf(o: OrderState): bigint | null {
   if (isPairKind(o.kind)) return custodiesOf(o)[0]?.amount ?? null;
@@ -164,13 +204,16 @@ export function custodyAmountOf(o: OrderState): bigint | null {
   return big((o.state as { amountLeft: string }).amountLeft);
 }
 
-/** Base units (of A for a pair order) still open (asks / entries / conditionals / pair orders); null for plain KAS bids, whose quantity is their KAS budget. */
+/**
+ * Base units (of A for a pair order) still open, or null for plain KAS bids.
+ * The quantity of a plain KAS bid is its KAS budget.
+ */
 export function amountLeftOf(o: OrderState): bigint | null {
   if (baseKind(o.kind) === 'KobBid') return null;
   return big((o.state as { amountLeft: string }).amountLeft);
 }
 
-/** The order's scale: base units per whole token (a pair order: per whole A), the denominator of its prices. */
+/** The order's scale: base units per whole token (a pair order: per whole A). */
 export const scaleOf = (o: OrderState): bigint => {
   const pf = pairFactsOf(o);
   return pf ? pf.a.scale : big((o.state as { scale: string }).scale);
@@ -178,6 +221,7 @@ export const scaleOf = (o: OrderState): bigint => {
 /** The order's minimum fill (base units), unless a fill takes everything left. */
 export const minFillOf = (o: OrderState): bigint => big((o.state as { minFill: string }).minFill);
 
+/** The order's maker. */
 export const makerOf = (o: OrderState): Hex => o.state.maker;
 /** The order's token: a KAS-quoted order's token, a pair order's base token A. */
 export const tokenCovIdOf = (o: { kind: string; state: object }): Hex => pairFactsOf(o)?.a.covId ?? (o.state as { tokenCovId: Hex }).tokenCovId;
@@ -185,16 +229,17 @@ export const tokenCovIdOf = (o: { kind: string; state: object }): Hex => pairFac
 export const tokenTplHashOf = (o: { kind: string; state: object }): Hex => pairFactsOf(o)?.a.tplHash ?? (o.state as { tokenTplHash: Hex }).tokenTplHash;
 /** A pair order's quote token B (null for every other kind). */
 export const quoteCovIdOf = (o: { kind: string; state: object }): Hex | null => pairFactsOf(o)?.b.covId ?? null;
-/** The family of an order: a KAS-quoted kind's, a pair order's base token A's (kob-protocol `AnyState::family`). */
+/** The family of an order: a KAS-quoted kind's, or a pair order's base token A's. */
 export const familyOfOrder = (o: { kind: string; state: object }): Family => {
   const pf = pairFactsOf(o);
   return pf ? (pf.a.family ?? 'kcc20') : familyOfKind(o.kind);
 };
 
 /**
- * Extension commitment of the token of the order's FIRST custody when the state carries it: a KAS bid-side kind its token's; a sell-first
- * `KobIfdPair` holding A its `aExt`, any other `KobIfdPair` its `bExt`. KAS asks, `KobPair` and `KobCondPair` carry the ext of their custody
- * token only in the custody itself (null).
+ * Extension commitment of the token of the order's first custody, when the state carries it.
+ * A KAS bid-side kind carries its token's. A sell-first `KobIfdPair` holding A carries its `aExt`
+ * and any other `KobIfdPair` its `bExt`. KAS asks, `KobPair` and `KobCondPair` carry the
+ * commitment of their custody token only in the custody itself, so they give null.
  */
 export function extensionOf(o: OrderState): Hex | null {
   if (o.kind === 'KobIfdPair') {
@@ -202,14 +247,16 @@ export function extensionOf(o: OrderState): Hex | null {
     return String(s.side) === '1' && bigOr0(s.amountLeft) > 0n ? s.aExt : s.bExt;
   }
   if (isPairKind(o.kind)) return null;
-  // a KCC-20 sell-first entry names its custody's commitment in its committed exit (KobCondBid state [118..150)); a KRON one has none
+  // A KCC-20 sell-first entry names its custody's commitment in its committed exit (KobCondBid
+  // state [118..150)). A KRON one has none.
   if (o.kind === 'KobIfdAsk') return o.state.exitState.length === 642 ? o.state.exitState.slice(236, 300) : null;
   return 'extensionCommitment' in o.state ? (o.state as { extensionCommitment: Hex }).extensionCommitment : null;
 }
 
 /**
- * The extension commitment a pair order's state names for NEW outputs of `token` (A or B), or null: a `KobIfdPair` names both (`aExt`, `bExt`),
- * a `KobPair` / `KobCondPair` only its bought token's (`tExt`). Null for every other kind or token.
+ * The extension commitment a pair order's state names for new outputs of `token` (A or B), or null.
+ * A `KobIfdPair` names both (`aExt`, `bExt`). A `KobPair` or `KobCondPair` names only its bought
+ * token's (`tExt`). Every other kind or token gives null.
  */
 export function pairExtFor(o: OrderState, token: Hex): Hex | null {
   const pf = pairFactsOf(o);
@@ -219,107 +266,148 @@ export function pairExtFor(o: OrderState, token: Hex): Hex | null {
   return null;
 }
 
+/** Time in force: good-till-cancelled, immediate-or-cancel or fill-or-kill. */
 export type TifName = 'gtc' | 'ioc' | 'fok';
-/** Stop leg terms. Trigger (touch): arms only in a tx that fills >= `minTouch` base units of a resting order exposed >= `minRestDaa` DAA. */
+/**
+ * Stop leg terms.
+ * A trigger (touch) arms only in a tx that fills at least `minTouch` base units of a resting
+ * order exposed for at least `minRestDaa` DAA.
+ */
 export interface TriggerTerms {
   stopPrice: bigint; slipBps: bigint; armed: bigint; bandDaa: bigint; keeperTip: bigint; minRestDaa: bigint; minTouch: bigint;
   trailStep: bigint; trailGap: bigint; trailWait: bigint;
 }
 
 /**
- * The pair side of a pair order (`KobPair`, `KobCondPair`, `KobIfdPair`): both tokens, its prices in B base
- * units per WHOLE A, its custodies and its trigger rule. Amounts: A in base units of A, B in base units of B.
+ * The pair side of a pair order (`KobPair`, `KobCondPair`, `KobIfdPair`).
+ * It has both tokens, prices in B base units per whole A, custodies and the trigger rule.
+ * Amounts of A are in base units of A and amounts of B in base units of B.
  */
 export interface PairTerms {
   kind: PairKind;
-  /** sell = sells A for B (an ASK, a sell-first entry); buy = buys A with B (a BID, a buy-first entry) */
+  /**
+   * `sell` sells A for B (an ASK, a sell-first entry).
+   * `buy` buys A with B (a BID, a buy-first entry).
+   */
   side: 'sell' | 'buy';
   base: PairTokenFacts;
   quote: PairTokenFacts;
-  /** B base units per whole A: a `KobPair`'s limit (a decay's start), a `KobIfdPair`'s limit, a `KobCondPair`'s take-profit / limit leg (0 = none) */
+  /**
+   * B base units per whole A: a `KobPair`'s limit (a decay's start), a `KobIfdPair`'s limit or a
+   * `KobCondPair`'s take-profit / limit leg (0 = none).
+   */
   price: bigint;
-  /** a decaying ask's / rising bid's end price (`KobPair` with a slope), else null */
+  /** The end price of a decaying ask or rising bid (`KobPair` with a slope), else null. */
   priceEnd: bigint | null;
-  /** a `KobCondPair`'s stop (`stopPrice`) or a stop entry's `entryStop`; 0 = none */
+  /** A `KobCondPair`'s stop (`stopPrice`) or a stop entry's `entryStop`. 0 means none. */
   stop: bigint;
-  /** the state's mutable `custody` (the exact S held; a `KobIfdPair`: its B) */
+  /** The state's mutable `custody`: the exact S held (a `KobIfdPair`: its B). */
   custody: bigint;
-  /** the exact custodies in record order (kob-protocol `custodies`) */
+  /** The exact custodies in record order (kob-protocol `custodies`). */
   custodies: CustodyFact[];
-  /** A held in custody, B held in custody (a bid's escrow, a buy-first entry's escrow, a sell-first entry's prefund) */
+  /**
+   * A held in custody, and B held in custody. B is a bid's escrow, a buy-first entry's escrow or
+   * a sell-first entry's prefund.
+   */
   escrowA: bigint;
   escrowB: bigint;
-  /** a sell-first entry's buy-back prefund, B base units per whole A (0 otherwise) */
+  /** A sell-first entry's buy-back prefund, B base units per whole A (0 otherwise). */
   prefund: bigint;
-  /** KAS on each delivery (a `KobIfdPair`: on each exit custody) and on each exit UTXO (if-done entries), sompi */
+  /**
+   * KAS on each delivery (a `KobIfdPair`: on each exit custody) and on each exit UTXO (if-done
+   * entries), in sompi.
+   */
   deliveryCarrier: bigint;
   exitCarrier: bigint;
-  /** kob-wasm `pairTriggerRule` of a stop (conditional or stop entry), when `describeOrder` had kob-wasm; null otherwise */
+  /**
+   * kob-wasm `pairTriggerRule` of a stop (conditional or stop entry), when `describeOrder` had
+   * kob-wasm. Null otherwise.
+   */
   triggerRule: PairTriggerRule | null;
 }
 
+/** Terms of an if-done entry. */
 export interface EntryTerms {
   /**
-   * `rptAmount`: 0 = no repeat, else 1 + base units of re-arms left; `prefund`: sompi per whole token (sell-first KAS entries), B base units per
-   * whole A (a sell-first `KobIfdPair`)
+   * `rptAmount`: 0 = no repeat, else 1 + base units of re-arms left.
+   * `prefund`: sompi per whole token (sell-first KAS entries), B base units per whole A (a
+   * sell-first `KobIfdPair`).
    */
   entryStop: bigint; rptAmount: bigint; exitCarrier: bigint; deliveryCarrier: bigint; prefund: bigint; keeperTip: bigint;
   armed: bigint; bandDaa: bigint;
-  /** trigger rule of a stop entry (touch), as for a stop leg */
+  /** Trigger rule of a stop entry (touch), as for a stop leg. */
   minTouch: bigint; minRestDaa: bigint;
 }
 
 /**
- * Plain-data description of one order state for the pre-sign checks and the signer frame. All amounts bigint (base units); prices are sompi per whole token, a pair
- * order's B base units per whole A (its tip stays KAS, sompi per whole A).
+ * Plain-data description of one order state for the pre-sign checks and the signer frame.
+ * All amounts are bigint base units. Prices are sompi per whole token, or B base units per whole A
+ * for a pair order. A pair order's tip stays KAS (sompi per whole A).
  */
 export interface OrderDescription {
   kind: OrderKind;
   side: 'sell' | 'buy';
   maker: Hex;
-  /** the order's token (a pair order: its base token A) */
+  /** The order's token (a pair order: its base token A). */
   tokenCovId: Hex;
-  /** base units per whole token (the price denominator; a pair order: scale(A)) */
+  /** Base units per whole token (the price denominator; a pair order: scale(A)). */
   scale: bigint;
-  /** smallest fill (base units) unless a fill takes everything left */
+  /** Smallest fill (base units) unless a fill takes everything left. */
   minFill: bigint;
-  /** base units left; null for KobBid (budget order) */
+  /** Base units left; null for KobBid (budget order). */
   amountLeft: bigint | null;
-  /** custody amount of the order's token (KAS asks; a pair order: A held) */
+  /** Custody amount of the order's token (KAS asks; a pair order: A held). */
   tokenAmount: bigint | null;
-  /** limit price per whole token: ask/bid limit, conditional take-profit, if-done ENTRY limit; a pair order's B per whole A */
+  /**
+   * Limit price per whole token: ask / bid limit, conditional take-profit or if-done entry limit.
+   * For a pair order, B per whole A.
+   */
   price: bigint;
-  /** priority tip, sompi per whole token (KAS for every kind) */
+  /** Priority tip, sompi per whole token (KAS for every kind). */
   tip: bigint;
-  /** null for kinds without a tif field */
+  /** Null for kinds without a tif field. */
   tif: TifName | null;
   activeFrom: bigint;
   expiryDaa: bigint;
   refundTip: bigint;
-  /** KobAsk / KobBid / KobPair rate-limit and decay terms (TWAP, DCA, Dutch, market auctions); null when none is set */
+  /**
+   * KobAsk / KobBid / KobPair rate-limit and decay terms (TWAP, DCA, Dutch, market auctions).
+   * Null when none is set.
+   */
   auction: { interval: bigint; maxFill: bigint; slope: bigint; priceEnd: bigint; decayStep: bigint } | null;
-  /** conditional (stop / trailing / take-profit) terms */
+  /** Conditional (stop / trailing / take-profit) terms. */
   trigger: TriggerTerms | null;
-  /** if-done entry terms; `exit` is the committed exit order when it could be decoded */
+  /** If-done entry terms. `exit` is the committed exit order when it could be decoded. */
   entry: (EntryTerms & { exit: OrderDescription | null }) | null;
-  /** a pair order: its two tokens, prices in B, custodies and trigger rule; null for every KAS-quoted kind */
+  /** A pair order's tokens, prices, custodies and trigger rule. Null for every KAS-quoted kind. */
   pair: PairTerms | null;
-  /** repeat fields of a booked exit (parent entry id, the entry's rate per whole token, cut-off; a pair exit's `rptPre`); null for a plain order */
+  /**
+   * Repeat fields of a booked exit: parent entry id, the entry's rate per whole token, cut-off and,
+   * for a pair exit, `rptPre`. Null for a plain order.
+   */
   booked: { parent: Hex; rptPrice: bigint; rptUntil: bigint; rptPre?: bigint } | null;
-  /** KAS reserved inside the order value that is not trading value (bid `reserve` / `deliveryCarrier`, entry carriers, prefund; a pair order's tip prefund) */
+  /**
+   * KAS reserved inside the order value that is not trading value: bid `reserve` and
+   * `deliveryCarrier`, entry carriers, prefund, and a pair order's tip prefund.
+   */
   reservedKas: bigint;
 }
 
 const TIF: Record<string, TifName> = { '0': 'gtc', '1': 'ioc', '2': 'fok' };
 
 /**
- * The whole life (activeFrom to expiry, DAA) up to which a resting decaying auction of a plain KAS order reads as a MULTI-FILL MARKET order
- * (orders/simple.ts `planAuction` with fills > 1: the market auction as tif 0, expiring shortly after it reaches its bound; 300 DAA by default):
- * one hour. A Dutch / rising order or a crossing limit auction rests for days (GTC / GTD / day), so none of them is that short in practice.
+ * The whole life (activeFrom to expiry, in DAA) up to which a resting decaying auction of a plain
+ * KAS order reads as a multi-fill market order. It is 36,000 DAA, one hour.
+ * A multi-fill market order is the market auction of orders/simple.ts `planAuction` with fills > 1.
+ * It is tif 0 and expires shortly after it reaches its bound. A Dutch or rising order or a
+ * crossing limit auction rests for days, so none of them is that short in practice.
  */
 export const MARKET_FILLS_MAX_LIFE_DAA = 36_000n;
 
-/** A plain KAS order that is a multi-fill market order: resting (tif 0), one decaying auction (no schedule), a life of at most an hour. */
+/**
+ * True for a plain KAS order that is a multi-fill market order.
+ * It rests (tif 0), is one decaying auction (no schedule) and lives at most an hour.
+ */
 export function isMultiFillMarket(d: Pick<OrderDescription, 'kind' | 'pair' | 'tif' | 'auction' | 'activeFrom' | 'expiryDaa'>): boolean {
   const k = baseKind(d.kind);
   const a = d.auction;
@@ -329,10 +417,13 @@ export function isMultiFillMarket(d: Pick<OrderDescription, 'kind' | 'pair' | 't
 const ZERO32 = '00'.repeat(32);
 
 /**
- * The exit a KAS if-done entry commits is stored as a truncated state span (`exitState`: the exit state without its repeat fields, which the entry
- * writes itself: matcher.md 1.1). To DISPLAY it we pad the missing zero repeat fields (fixed-width pushes) and, for a KCC-20 `KobCondAsk` exit, the
- * entry's own `extensionCommitment` (which the buy-first entry writes behind them), and let kob-wasm decode it; the padded bytes are used for
- * display only, never signed or hashed. A pair entry's exit comes from kob-wasm `ifdPairExit`.
+ * Decodes the exit a KAS if-done entry commits, for display only.
+ * The entry stores the exit as a truncated state span (`exitState`), without the repeat fields
+ * the entry writes itself (docs/spec/matcher.md 1.1). To show it, this pads the missing zero
+ * repeat fields (fixed-width pushes) and, for a KCC-20 `KobCondAsk` exit, the entry's own
+ * `extensionCommitment`, which the buy-first entry writes behind them. kob-wasm then decodes it.
+ * The padded bytes are never signed or hashed. A pair entry's exit comes from kob-wasm
+ * `ifdPairExit`.
  */
 function decodeCommittedExit(kob: KobWasm, o: IfdBidState | IfdAskState, exitKind: 'KobCondAsk' | 'KobCondBid', family: Family): OrderState | null {
   const push32 = '20' + ZERO32;
@@ -346,7 +437,10 @@ function decodeCommittedExit(kob: KobWasm, o: IfdBidState | IfdAskState, exitKin
   }
 }
 
-/** The pair terms of a pair order (null for every other kind). With `kob`, the custodies and the trigger rule come from kob-wasm. */
+/**
+ * The pair terms of a pair order, or null for every other kind.
+ * With `kob`, the custodies and the trigger rule come from kob-wasm.
+ */
 export function pairTermsOf(o: OrderState, kob?: KobWasm): PairTerms | null {
   const pf = pairFactsOf(o);
   if (!pf) return null;
@@ -373,7 +467,11 @@ export function pairTermsOf(o: OrderState, kob?: KobWasm): PairTerms | null {
   };
 }
 
-/** Describes an order state. With `kob`, an if-done entry's committed exit is decoded as well (and a pair order's custodies / trigger rule). */
+/**
+ * Describes an order state.
+ * With `kob`, an if-done entry's committed exit is decoded as well, and a pair order's custodies
+ * and trigger rule.
+ */
 export function describeOrder(o: OrderState, kob?: KobWasm): OrderDescription {
   const kind = o.kind;
   const s = o.state as unknown as Record<string, string>;
@@ -413,10 +511,13 @@ export function describeOrder(o: OrderState, kob?: KobWasm): OrderDescription {
     : null;
   const left = amountLeftOf(o);
   const scale = pair ? pair.base.scale : bigOr0(s.scale);
-  // a hostile state (negative amounts or rates, a zero scale) describes as 0 here: the decoder flags such a state, describing it must not throw
+  // A hostile state (negative amounts or rates, a zero scale) describes as 0 here. The decoder
+  // flags such a state, and describing it must not throw.
   const q = (n: bigint, r: bigint, round: 'up' | 'down'): bigint => (n >= 0n && r >= 0n && scale > 0n ? quoteOf(n, r, scale, round) : 0n);
-  // a pair order's KAS is carriers (deliveries, exits) and its prefunded priority tip, floor(amountLeft x tip / scale(A)) (released to the filler
-  // per fill, rounded down, the rest returned): the tip is the reserved part. A sell-first KAS entry prefunds ceil(amountLeft x prefund / scale).
+  // A pair order's KAS is carriers (deliveries, exits) and its prefunded priority tip,
+  // floor(amountLeft x tip / scale(A)). The tip is released to the filler per fill, rounded down,
+  // and the rest is returned, so the tip is the reserved part.
+  // A sell-first KAS entry prefunds ceil(amountLeft x prefund / scale).
   const reservedKas = pair
     ? q(left ?? 0n, bigOr0(s.tip), 'down')
     : bigOr0(s.reserve) + bigOr0(s.deliveryCarrier) + bigOr0(s.exitCarrier) + q(left ?? 0n, bigOr0(s.prefund), 'up');
@@ -429,14 +530,14 @@ export function describeOrder(o: OrderState, kob?: KobWasm): OrderDescription {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ number formatting
+// ------------------------------------------------------------------------------- number formatting
 
-/** `12345000` sompi -> "0.12345 KAS" style decimal string (trailing zeros trimmed, at most 8 decimals). */
+/** Formats sompi as a decimal KAS string without a unit, for example `12345000` as "0.12345". */
 export function formatKas(sompi: bigint): string {
   return formatUnits(sompi, 8);
 }
 
-/** Base units -> decimal string with `decimals` places (bigint exact, trailing zeros trimmed). */
+/** Formats base units as a decimal string with at most `decimals` places. Exact, zeros trimmed. */
 export function formatUnits(amount: bigint, decimals: number): string {
   const neg = amount < 0n;
   const a = neg ? -amount : amount;
@@ -447,7 +548,7 @@ export function formatUnits(amount: bigint, decimals: number): string {
   return (neg ? '-' : '') + int.toString() + (frac ? '.' + frac : '');
 }
 
-/** Decoded state -> `AnyState` narrowing helper for callers holding `{kind,state}` from wasm or the indexer. */
+/** Narrows a decoded state to `OrderState` for callers holding `{kind,state}`. */
 export function asOrderState(s: AnyState | null | undefined): OrderState | null {
   return s && isOrderKind(s.kind) ? (s as OrderState) : null;
 }
