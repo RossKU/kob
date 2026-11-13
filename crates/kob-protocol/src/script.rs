@@ -63,10 +63,10 @@ pub fn leader_witness(sig: Option<&[u8]>) -> Vec<u8> {
 ///
 /// The columns are, in order:
 /// - the next-state columns of the whole covenant group (`owners`, `id_types`, `amounts`,
-/// `is_minters`), each one a concatenated push;
+///   `is_minters`), each one a concatenated push;
 /// - the signature column (`sigs`), of which only `id_type` 0 uses it and which is empty here;
 /// - the witness column, one byte per token input of the token in input order, the index of the
-/// input that authorises it;
+///   input that authorises it;
 /// - the redeem script.
 ///
 /// There is no dispatch tag, because the program has one entry.
