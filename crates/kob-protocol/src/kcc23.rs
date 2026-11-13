@@ -1,26 +1,44 @@
-//! KCC-23 "MJ: Metadata JSON" (kaspanet/kccs `kcc-0023.md`, merged 2026-10-14 as #26, `main` 1516a6c, status Draft): JSON
-//! metadata bound to a covenant id through the genesis's spent outpoint, and KOB's token-metadata convention on top of it.
+//! KCC-23 "MJ: Metadata JSON": JSON metadata bound to a covenant id, and KOB's token convention.
 //!
-//! **Codec** ([`encode`], [`decode`], section 3.1). The payload of a version 1 *preparation transaction* is the codec byte `0x00`
-//! followed by exactly one UTF-8 JSON object. The object must be I-JSON (RFC 7493: valid UTF-8, no unpaired surrogates, no
-//! duplicate member names), carry no byte-order mark, convert every number to a finite IEEE-754 binary64 value and nest at most
-//! 64 levels (the root object is depth 1). Any other codec byte is refused (KCC-23 defines no other). The commitment covers the
-//! exact bytes, so [`encode`] never re-serialises: it validates and prefixes the text it is given.
+//! The specification is `kcc-0023.md` of kaspanet/kccs (`main` at `1516a6c`, status Draft). The
+//! metadata is bound to a covenant id through the spent outpoint of the genesis. KOB's
+//! token-metadata convention sits on top of it (`docs/spec/token-metadata.md`).
 //!
-//! **Binding** ([`verify_binding`], section 3.3). The genesis spends an output of the preparation transaction; under KIP-20 the
-//! covenant id commits to that outpoint and to the genesis output group, and the version 1 transaction id commits to the payload.
-//! The check is the reference implementation's (`kcc-0023/implementation/src/lib.rs`) step for step: preparation version 1,
-//! genesis version >= 1, payload valid, an input of the genesis spends an existing output of the recomputed preparation id, and
-//! the covenant id recomputed from that outpoint and the group of outputs it authorises equals the expected one. It establishes
-//! the binding only, not that either transaction was accepted.
+//! # Codec
 //!
-//! **Token convention** ([`TokenMetadata`], [`TokenDeclaration`]; `docs/spec/token-metadata.md`). KCC-23 leaves field names to
-//! ecosystem conventions. KOB writes, in this order and only when set: `name`, `symbol`, `decimals` (the three of the KCC-23
-//! example), then `description`, `image`, `image_hash`, `website`, `x`, `telegram` (`image` and `image_hash` are the spelling of
-//! KCC-0021, KaspaRocket and kascov). A reader also takes the older `logo` as `image` when there is no `image`, and an `image` of
-//! the form `sha256:<hex>` as a hash alone. A reader takes each field independently: a field of the wrong
-//! type or out of range is dropped and named in [`TokenDeclaration::issues`], unknown fields are ignored, and a declaration
-//! without a usable `decimals` leaves the token's decimals undeclared.
+//! [`encode`] and [`decode`] (section 3.1). The payload of a version 1 *preparation transaction* is
+//! the codec byte `0x00` followed by exactly one UTF-8 JSON object. The object must be I-JSON (RFC
+//! 7493: valid UTF-8, no unpaired surrogates, no duplicate member names). It carries no byte-order
+//! mark, converts every number to a finite IEEE-754 binary64 value and nests at most 64 levels (the
+//! root object is depth 1). Any other codec byte is refused, because KCC-23 defines no other. The
+//! commitment covers the exact bytes, so [`encode`] never re-serialises: it validates and prefixes
+//! the text it is given.
+//!
+//! # Binding
+//!
+//! [`verify_binding`] (section 3.3). The genesis spends an output of the preparation transaction.
+//! Under KIP-20 the covenant id commits to that outpoint and to the genesis output group, and the
+//! version 1 transaction id commits to the payload. The check is the one of the reference
+//! implementation (`kcc-0023/implementation/src/lib.rs`), step for step:
+//! - the preparation is version 1 and the genesis is version >= 1;
+//! - the payload is valid;
+//! - an input of the genesis spends an existing output of the recomputed preparation id;
+//! - the covenant id recomputed from that outpoint and the group of outputs it authorises equals
+//!   the expected one.
+//!
+//! It establishes the binding only, not that either transaction was accepted.
+//!
+//! # Token convention
+//!
+//! [`TokenMetadata`] and [`TokenDeclaration`]. KCC-23 leaves field names to ecosystem conventions.
+//! KOB writes, in this order and only when set: `name`, `symbol`, `decimals` (the three of the
+//! KCC-23 example), then `description`, `image`, `image_hash`, `website`, `x`, `telegram`. `image`
+//! and `image_hash` are the spelling of KCC-0021, KaspaRocket and kascov.
+//!
+//! A reader takes each field independently. It also takes the older `logo` as `image` when there
+//! is no `image`, and an `image` of the form `sha256:<hex>` as a hash alone. A field of the wrong
+//! type or out of range is dropped and named in [`TokenDeclaration::issues`]. Unknown fields are
+//! ignored. A declaration without a usable `decimals` leaves the decimals of the token undeclared.
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
 use kaspa_consensus_core::hashing::tx::id as tx_id;
@@ -35,10 +53,12 @@ use std::fmt;
 pub const CODEC_JSON: u8 = 0x00;
 /// Deepest object / array nesting KCC-23 allows (the root object is depth 1).
 pub const MAX_DEPTH: usize = 64;
-/// Largest preparation payload KOB's readers decode (codec byte included). A reader policy, not a KCC-23 rule: a token
-/// declaration of KOB's convention is far smaller ([`MAX_TOKEN_PAYLOAD`]); larger payloads are left undecoded.
+/// Largest preparation payload KOB's readers decode (codec byte included). A reader policy, not a
+/// KCC-23 rule: a token declaration of KOB's convention is far smaller ([`MAX_TOKEN_PAYLOAD`]);
+/// larger payloads are left undecoded.
 pub const MAX_READ_PAYLOAD: usize = 16 * 1024;
-/// Largest token-metadata payload KOB writes (codec byte included): it is paid for in mass by the creator.
+/// Largest token-metadata payload KOB writes (codec byte included): it is paid for in mass by the
+/// creator.
 pub const MAX_TOKEN_PAYLOAD: usize = 1024;
 /// Most decimals a declaration may state (the registry's limit, [`crate::registry::MAX_DECIMALS`]).
 pub const MAX_DECIMALS: u8 = crate::registry::MAX_DECIMALS;
@@ -51,8 +71,9 @@ pub const MAX_TEXT_CHARS: usize = 512;
 /// Largest picture file KOB's tools hash for `image_hash` (the web app loads no larger logo).
 pub const MAX_IMAGE_BYTES: usize = 1_500_000;
 
-/// The `image_hash` of a picture file: the lowercase hex SHA-256 of its exact bytes. Refuses a file that is empty, larger than
-/// [`MAX_IMAGE_BYTES`], or not a PNG, JPEG, WebP or GIF by its magic bytes (an SVG is refused: it can carry script).
+/// The `image_hash` of a picture file: the lowercase hex SHA-256 of its exact bytes. Refuses a file
+/// that is empty, larger than [`MAX_IMAGE_BYTES`], or not a PNG, JPEG, WebP or GIF by its magic
+/// bytes (an SVG is refused: it can carry script).
 pub fn image_file_hash(bytes: &[u8]) -> Result<String, String> {
     use sha2::{Digest, Sha256};
     if bytes.is_empty() || bytes.len() > MAX_IMAGE_BYTES {
@@ -92,7 +113,8 @@ pub enum Kcc23Error {
     /// The JSON text starts with a byte-order mark.
     #[error("the JSON text starts with a byte-order mark")]
     Bom,
-    /// Not exactly one JSON value (syntax error, trailing data, lone surrogate, number out of range ...).
+    /// Not exactly one JSON value (syntax error, trailing data, lone surrogate, number out of range
+    /// ...).
     #[error("invalid JSON: {0}")]
     Json(String),
     /// The value is not an object.
@@ -121,7 +143,8 @@ pub enum BindingError {
     /// The preparation payload is not a declaration.
     #[error("preparation payload: {0}")]
     Payload(#[from] Kcc23Error),
-    /// No input of the genesis spends an output of the preparation transaction into a group of the expected covenant id.
+    /// No input of the genesis spends an output of the preparation transaction into a group of the
+    /// expected covenant id.
     #[error("no genesis input spends an output of preparation {preparation} into the covenant {covenant_id}")]
     NotBound {
         /// The recomputed preparation transaction id.
@@ -131,9 +154,11 @@ pub enum BindingError {
     },
 }
 
-// ------------------------------------------------------------------------------------------------ codec
+// ------------------------------------------------------------------------------------------------
+// codec
 
-/// Strict I-JSON reader: one value at `depth`, refusing duplicate member names, nesting beyond [`MAX_DEPTH`] and non-finite numbers.
+/// Strict I-JSON reader: one value at `depth`, refusing duplicate member names, nesting beyond
+/// [`MAX_DEPTH`] and non-finite numbers.
 struct Strict {
     depth: usize,
 }
@@ -204,7 +229,8 @@ impl<'de> Visitor<'de> for Strict {
     }
 }
 
-/// Parses `text` as one strict I-JSON object (the rules of KCC-23 section 3.1 after the codec byte).
+/// Parses `text` as one strict I-JSON object (the rules of KCC-23 section 3.1 after the codec
+/// byte).
 pub fn parse_object(text: &str) -> Result<Map<String, Value>, Kcc23Error> {
     if text.starts_with('\u{feff}') {
         return Err(Kcc23Error::Bom);
@@ -234,8 +260,10 @@ fn json_error(e: serde_json::Error) -> Kcc23Error {
     Kcc23Error::Json(s)
 }
 
-/// The KCC-23 payload of `json`: `0x00` followed by its exact UTF-8 bytes (whitespace and member order kept: the commitment covers
-/// them). Refused unless `json` is one strict I-JSON object.
+/// The KCC-23 payload of `json`: `0x00` followed by its exact UTF-8 bytes.
+///
+/// Whitespace and member order are kept, because the commitment covers them. Refused unless `json`
+/// is one strict I-JSON object.
 pub fn encode(json: &str) -> Result<Vec<u8>, Kcc23Error> {
     parse_object(json)?;
     let mut p = Vec::with_capacity(json.len() + 1);
@@ -244,8 +272,8 @@ pub fn encode(json: &str) -> Result<Vec<u8>, Kcc23Error> {
     Ok(p)
 }
 
-/// The JSON text of a KCC-23 payload, after checking the codec byte and every rule of section 3.1. No size limit: callers that
-/// read untrusted payloads use [`decode_limited`].
+/// The JSON text of a KCC-23 payload, after checking the codec byte and every rule of section 3.1.
+/// No size limit: callers that read untrusted payloads use [`decode_limited`].
 pub fn decode(payload: &[u8]) -> Result<&str, Kcc23Error> {
     let (&codec, rest) = payload.split_first().ok_or(Kcc23Error::Empty)?;
     if codec != CODEC_JSON {
@@ -265,14 +293,17 @@ pub fn decode_limited(payload: &[u8], max: usize) -> Result<(&str, Map<String, V
     Ok((text, parse_object(text)?))
 }
 
-/// True when `payload` starts with the JSON codec byte: the cheap pre-filter of an indexer before [`decode_limited`].
+/// True when `payload` starts with the JSON codec byte: the cheap pre-filter of an indexer before
+/// [`decode_limited`].
 pub fn looks_like_declaration(payload: &[u8]) -> bool {
     payload.first() == Some(&CODEC_JSON) && payload.len() >= 3
 }
 
-// ------------------------------------------------------------------------------------------------ binding
+// ------------------------------------------------------------------------------------------------
+// binding
 
-/// Section 3.3: the declaration of `preparation` when it is bound to `expected` through `genesis`. Returns the JSON text.
+/// Section 3.3: the declaration of `preparation` when it is bound to `expected` through `genesis`.
+/// Returns the JSON text.
 pub fn verify_binding<'a>(preparation: &'a Transaction, genesis: &Transaction, expected: Hash) -> Result<&'a str, BindingError> {
     if preparation.version != 1 {
         return Err(BindingError::PreparationVersion(preparation.version));
@@ -289,8 +320,11 @@ pub fn verify_binding<'a>(preparation: &'a Transaction, genesis: &Transaction, e
     }
 }
 
-/// Whether `genesis` creates the covenant `expected` from an output of `preparation` (whose id is `preparation_id`): the binding half of
-/// [`verify_binding`], for a caller that has checked the versions and the declaration itself once for many covenant ids of one genesis.
+/// Whether `genesis` creates the covenant `expected` from an output of `preparation`.
+///
+/// The id of `preparation` is `preparation_id`. This is the binding half of [`verify_binding`], for
+/// a caller that has checked the versions and the declaration itself once for many covenant ids of
+/// one genesis.
 pub fn is_bound(preparation: &Transaction, preparation_id: Hash, genesis: &Transaction, expected: Hash) -> bool {
     for (input_index, input) in genesis.inputs.iter().enumerate() {
         let outpoint = input.previous_outpoint;
@@ -312,8 +346,10 @@ pub fn is_bound(preparation: &Transaction, preparation_id: Hash, genesis: &Trans
     false
 }
 
-/// The checks of [`LaunchProof::verify`] that do not depend on the covenant id, for a preparation and genesis (the versions, the size
-/// and the syntax of the declaration): `Ok(())` means [`is_bound`] decides each covenant id of the genesis (audit 2026-10-30 I8).
+/// The checks of [`LaunchProof::verify`] that do not depend on the covenant id.
+///
+/// They cover a preparation and a genesis: the versions, and the size and the syntax of the
+/// declaration. `Ok(())` means that [`is_bound`] decides each covenant id of the genesis.
 pub fn check_launch(preparation: &Transaction, genesis: &Transaction) -> Result<(), String> {
     if preparation.version != 1 {
         return Err(BindingError::PreparationVersion(preparation.version).to_string());
@@ -329,9 +365,11 @@ pub fn check_launch(preparation: &Transaction, genesis: &Transaction) -> Result<
     Ok(())
 }
 
-// ------------------------------------------------------------------------------------------------ KOB token convention
+// ------------------------------------------------------------------------------------------------
+// KOB token convention
 
-/// Characters refused in any displayed text: control, zero-width and bidi controls (the registry's rule).
+/// Characters refused in any displayed text: control, zero-width and bidi controls (the registry's
+/// rule).
 pub fn has_bad_char(s: &str) -> bool {
     s.chars().any(|c| {
         c.is_control()
@@ -343,13 +381,15 @@ fn text_ok(s: &str, max: usize) -> bool {
     !s.trim().is_empty() && s.chars().count() <= max && !has_bad_char(s)
 }
 
-/// `https://x.com/<handle>` with a handle of 1..=15 of `A-Z a-z 0-9 _` (the canonical form KOB writes).
+/// `https://x.com/<handle>` with a handle of 1..=15 of `A-Z a-z 0-9 _` (the canonical form KOB
+/// writes).
 pub fn is_x_url(s: &str) -> bool {
     s.strip_prefix("https://x.com/")
         .is_some_and(|h| (1..=15).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
 }
 
-/// `https://t.me/<handle>` with a handle of 5..=32 of `A-Z a-z 0-9 _` (the canonical form KOB writes).
+/// `https://t.me/<handle>` with a handle of 5..=32 of `A-Z a-z 0-9 _` (the canonical form KOB
+/// writes).
 pub fn is_telegram_url(s: &str) -> bool {
     s.strip_prefix("https://t.me/")
         .is_some_and(|h| (5..=32).contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_'))
@@ -367,19 +407,24 @@ fn handle_of<'a>(input: &'a str, hosts: &[&str], len: std::ops::RangeInclusive<u
     (len.contains(&h.len()) && h.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')).then_some(h)
 }
 
-/// The canonical X address of `input`: a handle (`@name`, `name`) or an `https://x.com/name` / `https://twitter.com/name` address
-/// becomes `https://x.com/name`; anything else is None.
+/// The canonical X address of `input`, or None.
+///
+/// A handle (`@name`, `name`) or an `https://x.com/name` / `https://twitter.com/name` address
+/// becomes `https://x.com/name`. Anything else is None.
 pub fn x_url(input: &str) -> Option<String> {
     handle_of(input, &["x.com/", "twitter.com/"], 1..=15).map(|h| format!("https://x.com/{h}"))
 }
 
-/// The canonical Telegram address of `input`: a handle or an `https://t.me/name` / `https://telegram.me/name` address becomes
-/// `https://t.me/name`; anything else is None.
+/// The canonical Telegram address of `input`, or None.
+///
+/// A handle, or an `https://t.me/name` / `https://telegram.me/name` address, becomes
+/// `https://t.me/name`. Anything else is None.
 pub fn telegram_url(input: &str) -> Option<String> {
     handle_of(input, &["t.me/", "telegram.me/"], 5..=32).map(|h| format!("https://t.me/{h}"))
 }
 
-/// A link a reader takes: `https://` (or, for `image`, also `ipfs://`), at most [`MAX_TEXT_CHARS`], no space or bad character.
+/// A link a reader takes: `https://` (or, for `image`, also `ipfs://`), at most [`MAX_TEXT_CHARS`],
+/// no space or bad character.
 fn link_ok(s: &str, ipfs: bool) -> bool {
     (s.starts_with("https://") || (ipfs && s.starts_with("ipfs://")))
         && s.len() > "https://".len()
@@ -412,7 +457,8 @@ pub struct TokenMetadata {
 }
 
 impl TokenMetadata {
-    /// Checks every field as a reader would take it (so what KOB writes reads back whole) and the payload size.
+    /// Checks every field as a reader would take it (so what KOB writes reads back whole) and the
+    /// payload size.
     pub fn validate(&self) -> Result<(), String> {
         if !text_ok(&self.name, MAX_NAME_CHARS) {
             return Err(format!("name must be 1..={MAX_NAME_CHARS} characters without control, zero-width or bidi characters"));
@@ -459,8 +505,10 @@ impl TokenMetadata {
         Ok(())
     }
 
-    /// The compact JSON text, members in the fixed order `name, symbol, decimals, description, image, image_hash, website, x, telegram` (unset
-    /// optional members are left out).
+    /// The compact JSON text, with the members in a fixed order.
+    ///
+    /// The order is `name, symbol, decimals, description, image, image_hash, website, x, telegram`.
+    /// Unset optional members are left out.
     pub fn json(&self) -> String {
         let s = |v: &str| serde_json::to_string(v).expect("json string");
         let mut out = format!("{{\"name\":{},\"symbol\":{},\"decimals\":{}", s(&self.name), s(&self.symbol), self.decimals);
@@ -495,8 +543,10 @@ impl TokenMetadata {
     }
 }
 
-/// What a reader takes from a declaration under KOB's convention: every field independently, dropped (and named in `issues`) when
-/// it has the wrong type or is out of range. Unknown fields are ignored.
+/// What a reader takes from a declaration under KOB's convention.
+///
+/// Every field is taken independently, and dropped (and named in `issues`) when it has the wrong
+/// type or is out of range. Unknown fields are ignored.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct TokenDeclaration {
     /// `name`: 1..=64 characters without bad characters.
@@ -509,8 +559,10 @@ pub struct TokenDeclaration {
     pub description: Option<String>,
     /// `image`: an https:// or ipfs:// link; the older `logo` when there is no `image`.
     pub image: Option<String>,
-    /// `image_hash`: 64 hex characters (lowercased), the SHA-256 of the image file's bytes; also read from an `image` of the form
-    /// `sha256:<hex>` (a hash-only declaration, no link) when there is no usable `image_hash`.
+    /// `image_hash`: 64 hex characters (lowercased), the SHA-256 of the image file's bytes.
+    ///
+    /// Also read from an `image` of the form `sha256:<hex>` (a hash-only declaration, no link) when
+    /// there is no usable `image_hash`.
     pub image_hash: Option<String>,
     /// `website`: an https:// link.
     pub website: Option<String>,
@@ -543,7 +595,8 @@ impl TokenDeclaration {
         d.name = text("name", MAX_NAME_CHARS, &|_| true, &mut issues);
         d.symbol = text("symbol", MAX_SYMBOL_CHARS, &|s| !s.chars().any(char::is_whitespace), &mut issues);
         d.description = text("description", MAX_TEXT_CHARS, &|_| true, &mut issues);
-        // `image` is a link, or `sha256:<hex>` (a hash alone); with no `image` member the older `logo` is read in its place
+        // `image` is a link, or `sha256:<hex>` (a hash alone); with no `image` member the older
+        // `logo` is read in its place
         let mut from_sha = None;
         d.image = match obj.get("image") {
             Some(Value::String(s)) if text_ok(s, MAX_TEXT_CHARS) && link_ok(s, true) => Some(s.clone()),
@@ -594,7 +647,8 @@ impl TokenDeclaration {
         d
     }
 
-    /// Decodes a preparation payload (at most [`MAX_READ_PAYLOAD`] bytes) and reads its token fields.
+    /// Decodes a preparation payload (at most [`MAX_READ_PAYLOAD`] bytes) and reads its token
+    /// fields.
     pub fn from_payload(payload: &[u8]) -> Result<Self, Kcc23Error> {
         let (_, obj) = decode_limited(payload, MAX_READ_PAYLOAD)?;
         Ok(Self::from_object(&obj))
@@ -618,12 +672,14 @@ fn issue(k: &str, why: &str) -> String {
     format!("{k}: {why}")
 }
 
-// ------------------------------------------------------------------------------------------------ launch proof
+// ------------------------------------------------------------------------------------------------
+// launch proof
 
 /// Format tag of a [`LaunchProof`].
 pub const PROOF_FORMAT: &str = "kob-kcc23-proof/1";
 
-/// One input of a proof transaction: what the version 1 transaction id commits to (no signature script, no compute budget).
+/// One input of a proof transaction: what the version 1 transaction id commits to (no signature
+/// script, no compute budget).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofInput {
@@ -673,8 +729,10 @@ pub struct ProofOutput {
     pub covenant: Option<ProofCovenant>,
 }
 
-/// The fields of a transaction its version 1 id commits to (`kaspa_consensus_core::hashing::tx::id`): enough to recompute the id
-/// and the covenant id of a genesis group, nothing to execute.
+/// The fields of a transaction that its version 1 id commits to.
+///
+/// The id is `kaspa_consensus_core::hashing::tx::id`. The fields are enough to recompute the id and
+/// the covenant id of a genesis group, and nothing to execute.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofTx {
@@ -733,7 +791,8 @@ impl ProofTx {
         }
     }
 
-    /// A transaction with these fields (empty signature scripts, zero compute budgets and storage mass: none of them enters the id).
+    /// A transaction with these fields (empty signature scripts, zero compute budgets and storage
+    /// mass: none of them enters the id).
     pub fn to_tx(&self) -> Result<Transaction, String> {
         use kaspa_consensus_core::subnets::SubnetworkId;
         use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};
@@ -778,9 +837,11 @@ impl ProofTx {
     }
 }
 
-/// A KCC-23 launch proof (section 3.3): the preparation and genesis transactions of a covenant id, in the fields their ids commit
-/// to. Whoever supplies it (an indexer, a file), [`LaunchProof::verify`] recomputes everything and either returns the declaration
-/// bound to `covenant_id` or refuses: a supplier can withhold a declaration, never forge one.
+/// A KCC-23 launch proof (section 3.3): the preparation and genesis transactions of a covenant id.
+///
+/// They are given in the fields their ids commit to. Whoever supplies the proof, an indexer or a
+/// file, [`LaunchProof::verify`] recomputes everything. It either returns the declaration bound to
+/// `covenant_id` or refuses, so a supplier can withhold a declaration but never forge one.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LaunchProof {
@@ -825,8 +886,9 @@ impl LaunchProof {
         }
     }
 
-    /// Recomputes both transaction ids and the covenant id ([`verify_binding`]) and reads the declaration (at most
-    /// [`MAX_READ_PAYLOAD`] bytes).
+    /// Recomputes both transaction ids and the covenant id, and reads the declaration.
+    ///
+    /// The binding is [`verify_binding`]. The declaration is at most [`MAX_READ_PAYLOAD`] bytes.
     pub fn verify(&self) -> Result<VerifiedDeclaration, String> {
         if self.format != PROOF_FORMAT {
             return Err(format!("unknown proof format {:?}", self.format));
@@ -849,7 +911,8 @@ impl LaunchProof {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ tests
+// ------------------------------------------------------------------------------------------------
+// tests
 
 #[cfg(test)]
 mod tests {
@@ -1017,8 +1080,9 @@ mod tests {
         assert_eq!((d.name, d.description, d.issues.len()), (None, None, 2));
     }
 
-    /// KOB's convention vectors for the picture (not the pinned upstream conformance vectors): `image` + `image_hash`, the older
-    /// `logo`, and the hash-only `image` of `sha256:<hex>` that other launchers write.
+    /// KOB's convention vectors for the picture (not the pinned upstream conformance vectors):
+    /// `image` + `image_hash`, the older `logo`, and the hash-only `image` of `sha256:<hex>` that
+    /// other launchers write.
     #[test]
     fn the_picture_fields_and_their_older_spellings() {
         let h = "0123456789abcdef".repeat(4);
@@ -1038,7 +1102,8 @@ mod tests {
         // a hash alone: `image` as sha256:<hex> (KasSeal), no link
         let d = read(&format!(r#"{{"image":"sha256:{h}"}}"#));
         assert_eq!((d.image, d.image_hash.as_deref(), d.issues.len()), (None, Some(h.as_str()), 0));
-        // ... and an explicit image_hash wins over it; a launchpad that writes image + logo + hash is read whole
+        // ... and an explicit image_hash wins over it; a launchpad that writes image + logo + hash
+        // is read whole
         let other = "ff".repeat(32);
         let d = read(&format!(r#"{{"image":"sha256:{h}","image_hash":"{other}"}}"#));
         assert_eq!(d.image_hash.as_deref(), Some(other.as_str()));

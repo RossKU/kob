@@ -1,18 +1,22 @@
-//! KCC-1 (Covenant Concepts, Byte Layouts, and ABI): the parts of the base specification KOB implements itself.
+//! The parts of KCC-1 (Covenant Concepts, Byte Layouts, and ABI) that KOB implements itself.
 //!
-//! Pinned to kaspanet/kccs `main` at `411b41bc14b3fda8f3a0548242c555f3597cad1a` (KCC-1 in Last Call since 2026-10-01,
-//! compliance rewrite #27). The official vectors are vendored in `crates/kob-tests/vectors/kcc1/` and executed by
+//! Pinned to kaspanet/kccs `main` at `411b41bc14b3fda8f3a0548242c555f3597cad1a` (KCC-1 in Last
+//! Call). The official vectors are vendored in `crates/kob-tests/vectors/kcc1/` and executed by
 //! `crates/kob-tests/tests/kcc20/kcc1_conformance_tests.rs`.
 //!
-//! KOB encodes its own programs' arguments and state through `silverscript-abi` (the vectors show it conforms). This
-//! module adds what KOB needs beyond that encoder:
+//! KOB encodes the arguments and the state of its own programs through `silverscript-abi`, and the
+//! vectors show that it conforms. This module adds what KOB needs beyond that encoder:
 //!
-//! * the hash notation `Hash(x)` / `Hash(x, key)` (section 3.2.1);
-//! * the two push forms `PushMinimal` / `PushExplicit` (section 3.4.2) and the integer payloads (section 3.4.3);
-//! * canonical type names, dispatch type names, `FunctionSignature` and dispatch tags recomputed from an ABI
-//!   description (sections 3.4.1 and 3.5.1), so every committed artifact's tags can be checked;
-//! * argument-type validation and a strict decoder of a complete argument push sequence (sections 3.4.2 to 3.4.6);
-//! * a canonical state decoder: decode, then require that re-encoding reproduces the bytes (section 3.7.1).
+//! - the hash notation `Hash(x)` / `Hash(x, key)` (section 3.2.1);
+//! - the two push forms `PushMinimal` / `PushExplicit` (section 3.4.2) and the integer payloads
+//!   (section 3.4.3);
+//! - canonical type names, dispatch type names, `FunctionSignature` and dispatch tags recomputed
+//!   from an ABI description (sections 3.4.1 and 3.5.1), so that the tags of every committed
+//!   artifact can be checked;
+//! - argument-type validation and a strict decoder of a complete argument push sequence (sections
+//!   3.4.2 to 3.4.6);
+//! - a canonical state decoder: decode, then require that re-encoding reproduces the bytes (section
+//!   3.7.1).
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -54,7 +58,7 @@ pub enum Kcc1Error {
 
 type R<T> = std::result::Result<T, Kcc1Error>;
 
-// ------------------------------------------------------------------------------------------- hash (3.2.1)
+// Hash notation, section 3.2.1.
 
 /// `Hash(x)`: unkeyed BLAKE3-256.
 pub fn hash(x: &[u8]) -> [u8; 32] {
@@ -76,9 +80,10 @@ pub fn hash_keyed(x: &[u8], key: &[u8]) -> R<[u8; 32]> {
     Ok(*blake3::keyed_hash(&key32(key)?, x).as_bytes())
 }
 
-// ------------------------------------------------------------------------------------------ pushes (3.4.2)
+// Push forms, section 3.4.2.
 
-/// `PushMinimal(b)`: `OP_0` for empty, `OP_1..OP_16` / `OP_1NEGATE` for the one-byte numbers, else a length-based push.
+/// `PushMinimal(b)`: `OP_0` for empty, `OP_1..OP_16` / `OP_1NEGATE` for the one-byte numbers, else
+/// a length-based push.
 pub fn push_minimal(b: &[u8]) -> Vec<u8> {
     ScriptBuilder::new().add_data(b).expect("push within the script size limit").drain()
 }
@@ -88,9 +93,10 @@ pub fn push_explicit(b: &[u8]) -> Vec<u8> {
     ScriptBuilder::new().add_data_with_push_opcode(b).expect("push within the script size limit").drain()
 }
 
-// ---------------------------------------------------------------------------------------- integers (3.4.3)
+// Integer payloads, section 3.4.3.
 
-/// Minimal ScriptNum bytes of an `int` (the standalone-argument payload). `None` outside the KCC-1 range.
+/// Minimal ScriptNum bytes of an `int` (the standalone-argument payload). `None` outside the KCC-1
+/// range.
 pub fn int_argument_payload(v: i64) -> Option<Vec<u8>> {
     if v < INT_MIN {
         return None;
@@ -113,8 +119,10 @@ pub fn int_argument_payload(v: i64) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Decodes a standalone-argument `int` payload: minimal ScriptNum (no redundant sign byte, no negative zero), at most
-/// eight bytes, inside the KCC-1 range.
+/// Decodes a standalone-argument `int` payload.
+///
+/// The payload is minimal ScriptNum (no redundant sign byte, no negative zero), at most eight
+/// bytes, and inside the KCC-1 range.
 pub fn int_from_argument_payload(b: &[u8]) -> Option<i64> {
     if b.is_empty() {
         return Some(0);
@@ -135,7 +143,8 @@ pub fn int_from_argument_payload(b: &[u8]) -> Option<i64> {
     Some(if last & 0x80 != 0 { -m } else { m })
 }
 
-/// Eight-byte little-endian signed-magnitude `int` (state and fixed-width payload). `None` outside the KCC-1 range.
+/// Eight-byte little-endian signed-magnitude `int` (state and fixed-width payload). `None` outside
+/// the KCC-1 range.
 pub fn int_state_payload(v: i64) -> Option<[u8; 8]> {
     if v < INT_MIN {
         return None;
@@ -161,13 +170,15 @@ pub fn int_from_state_payload(b: &[u8]) -> Option<i64> {
     }
 }
 
-// ------------------------------------------------------------------------------------ type names (3.4.1)
+// Type names, section 3.4.1.
 
 /// Record definitions by name (ordered fields).
 pub type Records = BTreeMap<String, StructArtifact>;
 
-/// The records an entry of `contract` can name: the artifact's structs plus the runtime state as `State` (the
-/// silverscript convention for `State[]` parameters).
+/// The records an entry of `contract` can name.
+///
+/// They are the structs of the artifact plus the runtime state as `State` (the silverscript
+/// convention for `State[]` parameters).
 pub fn contract_records(abi: &SilAbiArtifact, contract: &SilContractArtifact) -> Records {
     let mut r = abi.structs.clone();
     r.entry("State".to_string()).or_insert_with(|| StructArtifact {
@@ -181,7 +192,8 @@ fn is_identifier(s: &str) -> bool {
     matches!(c.next(), Some(x) if x.is_ascii_alphabetic() || x == '_') && c.all(|x| x.is_ascii_alphanumeric() || x == '_')
 }
 
-/// `TypeName(T)`. SilverScript's `bytes` kind is KCC-1 `byte[]`; its `temporal` kind has no KCC-1 type name.
+/// `TypeName(T)`. SilverScript's `bytes` kind is KCC-1 `byte[]`; its `temporal` kind has no KCC-1
+/// type name.
 pub fn type_name(ty: &TypeArtifact) -> R<String> {
     Ok(match ty {
         TypeArtifact::Int => "int".into(),
@@ -205,8 +217,8 @@ pub fn type_name(ty: &TypeArtifact) -> R<String> {
     })
 }
 
-/// Parses a KCC-1 type name (`int`, `byte[32]`, `bool[3]`, `int[]`, `Point[2]`, `byte[]` ...). A name that is not a
-/// scalar is a record name.
+/// Parses a KCC-1 type name (`int`, `byte[32]`, `bool[3]`, `int[]`, `Point[2]`, `byte[]` ...). A
+/// name that is not a scalar is a record name.
 pub fn parse_type_name(s: &str) -> R<TypeArtifact> {
     let base_end = s.find('[').unwrap_or(s.len());
     let base = &s[..base_end];
@@ -256,7 +268,7 @@ fn record<'a>(records: &'a Records, name: &str) -> R<&'a StructArtifact> {
     records.get(name).ok_or_else(|| Kcc1Error::UnknownRecord(name.to_string()))
 }
 
-// ---------------------------------------------------------------------------------- dispatch tags (3.5.1)
+// Dispatch tags, section 3.5.1.
 
 /// `DispatchTypeName(T)`: record names and field names omitted, `{T_1,...,T_n}` for a record.
 pub fn dispatch_type_name(ty: &TypeArtifact, records: &Records) -> R<String> {
@@ -289,7 +301,8 @@ pub fn dispatch_tag(function_signature: &str) -> [u8; 4] {
     hash(function_signature.as_bytes())[..4].try_into().expect("4 bytes")
 }
 
-/// One entry's dispatch tag recomputed from its ABI types: `(entry, FunctionSignature, recomputed tag, artifact tag)`.
+/// One entry's dispatch tag recomputed from its ABI types: `(entry, FunctionSignature, recomputed
+/// tag, artifact tag)`.
 pub type RecomputedTag = (String, String, [u8; 4], [u8; 4]);
 
 /// Recomputes the dispatch tag of every entry of `contract` from its ABI types.
@@ -307,8 +320,8 @@ pub fn contract_dispatch_tags(abi: &SilAbiArtifact, contract: &SilContractArtifa
         .collect()
 }
 
-/// A program's entrypoints together: every dispatch tag distinct (identical preimages and truncated collisions both
-/// rejected). `entries` are `(name, argument types)`.
+/// A program's entrypoints together: every dispatch tag distinct (identical preimages and truncated
+/// collisions both rejected). `entries` are `(name, argument types)`.
 pub fn check_entrypoints(entries: &[(String, Vec<TypeArtifact>)], records: &Records) -> R<()> {
     let mut seen: BTreeMap<[u8; 4], String> = BTreeMap::new();
     for (name, params) in entries {
@@ -324,7 +337,7 @@ pub fn check_entrypoints(entries: &[(String, Vec<TypeArtifact>)], records: &Reco
     Ok(())
 }
 
-// ------------------------------------------------------------------------------- widths and validation
+// Payload widths and argument-type validation.
 
 /// Fixed payload width of a type in array / packed context, `None` when variable.
 pub fn fixed_width(ty: &TypeArtifact) -> Option<usize> {
@@ -372,8 +385,10 @@ fn contains_record(ty: &TypeArtifact) -> bool {
     }
 }
 
-/// Checks that `ty` is a permitted KCC-1 argument (and state) type: KCC-1 scalars, records whose names resolve, dynamic
-/// arrays of positive fixed width, arrays of records whose every lowered leaf has a positive fixed width.
+/// Checks that `ty` is a permitted KCC-1 argument (and state) type.
+///
+/// These are the KCC-1 scalars, records whose names resolve, dynamic arrays of positive fixed
+/// width, and arrays of records whose every lowered leaf has a positive fixed width.
 pub fn validate_argument_type(ty: &TypeArtifact, records: &Records) -> R<()> {
     fn go(ty: &TypeArtifact, records: &Records, depth: usize) -> R<()> {
         if depth > 64 {
@@ -450,7 +465,7 @@ fn lower(ty: &TypeArtifact, records: &Records, groups: &mut usize, out: &mut Vec
     Ok(())
 }
 
-// ----------------------------------------------------------------------------------- argument decoding
+// Strict argument decoding.
 
 /// One push of a push-only script: its payload and its exact bytes.
 struct Push<'a> {
@@ -494,7 +509,8 @@ fn parse_pushes(script: &[u8]) -> R<Vec<Push<'_>>> {
     Ok(out)
 }
 
-/// Decodes one fixed-width element payload (array element, record-array field element, packed value).
+/// Decodes one fixed-width element payload (array element, record-array field element, packed
+/// value).
 pub fn decode_element(ty: &TypeArtifact, b: &[u8]) -> Result<ArtifactValue, String> {
     let need = |n: usize| {
         if b.len() == n {
@@ -613,10 +629,12 @@ fn rebuild(ty: &TypeArtifact, records: &Records, leaves: &mut VecDeque<ArtifactV
     }
 }
 
-/// Decodes `script` as the complete canonical push sequence of `types` (no dispatch tag, no redeem script): every
-/// type validated, every push the exact `PushMinimal` of its payload, every payload valid for its lowered type, the
-/// field groups of each array of records holding the same element count (the declared one for a fixed array), and no
-/// push missing or left over.
+/// Decodes `script` as the complete canonical push sequence of `types`.
+///
+/// There is no dispatch tag and no redeem script. Every type is validated, every push is the exact
+/// `PushMinimal` of its payload, and every payload is valid for its lowered type. The field groups
+/// of each array of records hold the same element count (the declared one for a fixed array). No
+/// push is missing or left over.
 pub fn decode_arguments(types: &[TypeArtifact], records: &Records, script: &[u8]) -> R<Vec<ArtifactValue>> {
     for t in types {
         validate_argument_type(t, records)?;
@@ -656,11 +674,13 @@ pub fn decode_arguments(types: &[TypeArtifact], records: &Records, script: &[u8]
     types.iter().map(|t| rebuild(t, records, &mut decoded)).collect()
 }
 
-// ------------------------------------------------------------------------------------ P2SH envelope (3.6)
+// The P2SH envelope, section 3.6.
 
-/// A spending input's signature script split by the KCC-1 layout `PushArguments(arguments) || OP_DATA_4 dispatch_tag ||
-/// PushMinimal(R)`: push-only, the dispatch tag pushed with `OP_DATA_4`, the redeem script the final push in its
-/// `PushMinimal` form. Returns `(argument pushes, dispatch tag, R)`.
+/// Splits a spending input's signature script by the KCC-1 layout.
+///
+/// The layout is `PushArguments(arguments) || OP_DATA_4 dispatch_tag || PushMinimal(R)`. The script
+/// is push-only, the dispatch tag is pushed with `OP_DATA_4`, and the redeem script is the final
+/// push in its `PushMinimal` form. Returns `(argument pushes, dispatch tag, R)`.
 pub fn split_invocation(signature_script: &[u8]) -> R<(&[u8], [u8; 4], Vec<u8>)> {
     let pushes = parse_pushes(signature_script)?;
     let n = pushes.len();
@@ -678,11 +698,14 @@ pub fn split_invocation(signature_script: &[u8]) -> R<(&[u8], [u8; 4], Vec<u8>)>
     Ok((&signature_script[..args_len], tag.payload[..].try_into().expect("4 bytes"), redeem.payload.clone()))
 }
 
-// --------------------------------------------------------------------------------------- state (3.7.1)
+// Canonical state decoding, section 3.7.1.
 
-/// Decodes a complete encoded state against a runtime-state layout and requires the canonical encoding: every lowered
-/// field one push, the consumed bytes exactly `PushExplicit(StatePayload(T, v))` (re-encoding reproduces them), no
-/// field missing, no trailing bytes.
+/// Decodes a complete encoded state against a runtime-state layout and requires the canonical
+/// encoding.
+///
+/// Every lowered field is one push, and the consumed bytes are exactly
+/// `PushExplicit(StatePayload(T, v))`, so re-encoding reproduces them. No field is missing and no
+/// bytes trail.
 pub fn decode_state(abi: &SilAbiArtifact, layout: &RuntimeStateArtifact, encoded: &[u8]) -> R<BTreeMap<String, ArtifactValue>> {
     let records = abi.structs.clone();
     for f in &layout.fields {
