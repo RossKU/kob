@@ -1,41 +1,70 @@
-//! Pair books (`/v1/pairs`): token-for-token markets of the pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; protocol v3)
-//! and the implied quotes of the KAS route.
+//! Pair books (`/v1/pairs`): token-for-token markets of the pair orders, and the implied quotes of
+//! the KAS route.
 //!
-//! A pair `base/quote` is ORIENTED: the pair orders of A/B are those whose base token is A and quote token B (their price is
-//! B base units per whole A, `scale(A)` base units). An order of B/A is in the B/A book, never inverted into this one. The
-//! book of `base/quote` is shown as:
+//! The pair orders are `KobPair`, `KobCondPair` and `KobIfdPair` (protocol v3).
 //!
-//! * **direct levels** (`source: "direct"`): `KobPair` orders. An ASK (side 1, sells A for B) is an ask, a BID (side 2, buys A
-//!   with its B escrow) a bid; price = its quote now (`PairState::price_at`: a decaying ask / rising bid at the evaluation
-//!   time), amount = `amountLeft` base units of A;
-//! * **entry levels** (`source: "entry"`): `KobIfdPair` entries that rest at a limit (a limit entry, or a stop entry once
-//!   armed: its auction quote now). A buy-first entry (side BID) is a bid, a sell-first entry (side ASK) an ask; amount =
-//!   `amountLeft`. Unarmed stop entries and every `KobCondPair` (stops, take-profits, OCO, the exits of entries) are LEFT
-//!   OUT, as the KAS books leave out their KAS counterparts: nothing fills a stop before its trigger, and a conditional's
-//!   take-profit leg is not resting book liquidity;
-//! * **route levels** (`source: "route"`): what a taker could get in one transaction through the two KAS books. Route bids
-//!   (sell base for quote) walk the base token's KAS bids (best first, all-in `(quote + tip) / scale` sompi per base unit)
-//!   against the quote token's KAS asks (all-in `(quote − tip) / scale` sompi per quote unit); route asks (buy base with quote)
-//!   walk the quote token's KAS bids against the base token's KAS asks. Each step consumes the smaller KAS side of the current
-//!   pair of orders (an order's KAS: `floor(amount × all-in / scale)`, its amount a bid's buying power).
+//! A pair `base/quote` is ORIENTED. The pair orders of A/B are those whose base token is A and
+//! quote token is B. Their price is B base units per whole A, that is, per `scale(A)` base units.
+//! An order of B/A is in the B/A book and is never inverted into this one.
 //!
-//! Every price is `price_num / price_den` quote base units per base base unit, a reduced fraction, exact whenever both
-//! terms fit in 64 bits; otherwise it is rounded conservatively to terms that do (route and direct bids down, asks up).
-//! Route amounts are floored (a taker never gets more than shown). Implied quotes are indicative: they ignore the KAS
-//! orders' minimum fills and per-fill rounding, network fees, token slot limits and the matcher's profit rule.
+//! # Levels
 //!
-//! Only listed, live orders are used: open or partially filled, exact custody (every custody the state holds, one live
-//! custody UTXO per token at its exact amount), not flagged possibly frozen, active at the node's DAA score, not past their
-//! refund time (expiry, 90 days idle) or day-order deadline. The route uses plain `KobAsk` / `KobBid` orders.
+//! The book of `base/quote` is shown as three kinds of level:
+//! - **Direct levels** (`source: "direct"`) are `KobPair` orders. An ASK (side 1, sells A for B)
+//!   is an ask. A BID (side 2, buys A with its B escrow) is a bid. The price is its quote now,
+//!   `PairState::price_at`, which is a decaying ask or a rising bid at the evaluation time. The
+//!   amount is `amountLeft` base units of A.
+//! - **Entry levels** (`source: "entry"`) are `KobIfdPair` entries that rest at a limit. They are
+//!   a limit entry, or a stop entry once armed, whose price is its auction quote now. A buy-first
+//!   entry (side BID) is a bid and a sell-first entry (side ASK) is an ask. The amount is
+//!   `amountLeft`. Unarmed stop entries and every `KobCondPair` (stops, take-profits, OCO and the
+//!   exits of entries) are LEFT OUT, as the KAS books leave out their KAS counterparts. Nothing
+//!   fills a stop before its trigger, and the take-profit leg of a conditional is not resting
+//!   book liquidity.
+//! - **Route levels** (`source: "route"`) are what a taker could get in one transaction through
+//!   the two KAS books.
+//!   - Route bids (sell base for quote) walk the KAS bids of the base token, best first, at the
+//!     all-in `(quote + tip) / scale` sompi per base unit. They walk against the KAS asks of the
+//!     quote token, at the all-in `(quote − tip) / scale` sompi per quote unit.
+//!   - Route asks (buy base with quote) walk the KAS bids of the quote token against the KAS asks
+//!     of the base token.
+//!   - Each step consumes the smaller KAS side of the current pair of orders. The KAS of an order
+//!     is `floor(amount × all-in / scale)`, and the amount of a bid is its buying power.
 //!
-//! A level is resting liquidity a matcher can fill now, so the book is never crossed by what cannot (or does not) rest:
-//! **IOC / FOK orders** (`tif` 1 / 2: market, IOC and FOK takers, KAS or pair) are takers in flight, filled against the books
-//! or killed, never levels; a **TWAP / DCA order** (`interval` > 0) is a level only once its next slice is due (its UTXO
-//! `interval` DAA old, the covenant's CSV), for at most one slice (`maxFill`). A taker waits for a matcher for about the
-//! indexer's lag; shown as a level it crossed the pair book for that long (soak 2026-10-11, up to 6 %).
+//! # Prices
 //!
-//! **Prices of a pair are never recorded from pair fills** (founder rule): the pair charts are derived from the two KAS series
-//! ([`pair_candles`]); a pair fill records volume only ([`pair_fills`], `price_source: "none"`).
+//! Every price is `price_num / price_den` quote base units per base base unit, a reduced fraction.
+//! It is exact whenever both terms fit in 64 bits. Otherwise it is rounded conservatively to terms
+//! that do: route and direct bids down, asks up. Route amounts are floored, so a taker never gets
+//! more than shown.
+//!
+//! Implied quotes are indicative. They ignore the minimum fills and the per-fill rounding of the
+//! KAS orders, network fees, token slot limits and the profit rule of the matcher.
+//!
+//! # Which orders count
+//!
+//! Only listed, live orders are used. They are open or partially filled, have exact custody (every
+//! custody that the state holds, as one live custody UTXO per token at its exact amount), and are
+//! not flagged possibly frozen. They are active at the DAA score of the node, and not past their
+//! refund time (expiry, 90 days idle) or their day-order deadline. The route uses plain `KobAsk`
+//! and `KobBid` orders.
+//!
+//! A level is resting liquidity that a matcher can fill now, so the book is never crossed by what
+//! cannot or does not rest:
+//! - **IOC and FOK orders** (`tif` 1 and 2: market, IOC and FOK takers, KAS or pair) are takers in
+//!   flight. They are filled against the books or killed, and are never levels.
+//! - A **TWAP or DCA order** (`interval` > 0) is a level only once its next slice is due, that is,
+//!   its UTXO is `interval` DAA old (the CSV of the covenant), and for at most one slice
+//!   (`maxFill`).
+//!
+//! A taker waits for a matcher for about the lag of the indexer. Shown as a level, it would cross
+//! the pair book for that long. The measured size of this is in `docs/ops/executor.md`, 5.4.
+//!
+//! # Pair prices
+//!
+//! A price of a pair is never recorded from pair fills. The pair charts are derived from the two
+//! KAS series ([`pair_candles`]). A pair fill records volume only ([`pair_fills`],
+//! `price_source: "none"`).
 
 use super::db::DbResult;
 use super::market::{self, Candle};
@@ -47,48 +76,52 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-/// One price level of a pair book (decimal strings: base units can exceed 2^53).
+/// One price level of a pair book. Its numbers are decimal strings, because base units can exceed
+/// 2^53.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PairLevel {
-    /// `direct` (`KobPair`), `entry` (`KobIfdPair` resting at its limit) or `route` (implied quote of the KAS route).
+    /// `direct` (`KobPair`), `entry` (`KobIfdPair` resting at its limit) or `route` (the implied
+    /// quote of the KAS route).
     pub source: &'static str,
     pub price_num: String,
     pub price_den: String,
-    /// Base token base units.
+    /// Base units of the base token.
     pub amount: String,
-    /// Orders behind the level (route: the KAS orders it combines).
+    /// The orders behind the level. For a route level these are the KAS orders it combines.
     pub orders: i64,
 }
 
+/// The pair book of one pair: the levels of both sides, best first.
 #[derive(Debug, Clone, Serialize)]
 pub struct PairBook {
     pub base: String,
     pub quote: String,
-    /// The DAA score the quotes are evaluated at (the node's, else the indexer cursor's).
+    /// The DAA score the quotes are evaluated at: the node's, else the cursor of the indexer.
     pub daa_score: u64,
-    /// Ways to buy base with quote, ascending price.
+    /// Ways to buy base with quote, in ascending price.
     pub asks: Vec<PairLevel>,
-    /// Ways to sell base for quote, descending price.
+    /// Ways to sell base for quote, in descending price.
     pub bids: Vec<PairLevel>,
 }
 
-/// A pair (oriented: `base` A, `quote` B) with listed live pair orders.
+/// A pair with listed live pair orders. It is oriented: `base` is A and `quote` is B.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PairSummary {
     pub base: String,
     pub quote: String,
-    /// Listed live `KobPair` asks (sell A for B).
+    /// Listed live `KobPair` asks, which sell A for B.
     pub direct_asks: i64,
-    /// Listed live `KobPair` bids (buy A with B).
+    /// Listed live `KobPair` bids, which buy A with B.
     pub direct_bids: i64,
     /// Listed live `KobIfdPair` entries: sell-first (side ASK) and buy-first (side BID).
     pub entry_asks: i64,
     pub entry_bids: i64,
-    /// Listed live `KobCondPair` orders (stops, take-profits, OCO, exits).
+    /// Listed live `KobCondPair` orders: stops, take-profits, OCO and exits.
     pub conditionals: i64,
 }
 
-/// A level under construction: exact price terms (bounded to 64 bits), amount, the orders behind it.
+/// A level under construction: exact price terms bounded to 64 bits, the amount, and the orders
+/// behind it.
 #[derive(Debug, Clone)]
 struct Lvl {
     source: &'static str,
@@ -98,8 +131,10 @@ struct Lvl {
     orders: BTreeSet<(u8, usize)>,
 }
 
-/// `num / den` reduced and, when a term exceeds 64 bits, rounded to terms that fit (`up`: never below the exact value,
-/// else never above). `None` for a non-positive term.
+/// `num / den` reduced and, when a term exceeds 64 bits, rounded to terms that fit.
+///
+/// With `up` the result is never below the exact value, else never above it. It is `None` for a
+/// term that is not positive.
 pub fn bounded_price(num: u128, den: u128, up: bool) -> Option<(u128, u128)> {
     let (mut n, mut d) = reduce(i128::try_from(num).ok()?, i128::try_from(den).ok()?)?;
     let max = u64::MAX as u128;
@@ -121,7 +156,7 @@ pub fn bounded_price(num: u128, den: u128, up: bool) -> Option<(u128, u128)> {
     reduce(n as i128, d as i128)
 }
 
-/// `a / b` compared with `c / d` (all at most 64 bits, so the products fit).
+/// `a / b` compared with `c / d`. All terms are at most 64 bits, so the products fit.
 fn cmp_price(a: (u128, u128), b: (u128, u128)) -> std::cmp::Ordering {
     (a.0 * b.1).cmp(&(b.0 * a.1))
 }
@@ -132,7 +167,8 @@ fn mul_div(k: u128, m: i64, d: i64) -> u128 {
     (k / d).saturating_mul(m).saturating_add((k % d) * m / d)
 }
 
-/// A KAS order of the route: all-in sompi per whole token (`rate` per `scale` base units), base units available.
+/// A KAS order of the route: all-in sompi per whole token (`rate` per `scale` base units), and
+/// the base units available.
 #[derive(Debug, Clone, Copy)]
 struct KasOrder {
     rate: i64,
@@ -141,7 +177,8 @@ struct KasOrder {
 }
 
 impl KasOrder {
-    /// Sompi the order moves for its whole amount: `floor(amount × rate / scale)` (the quote rule, exact in 128 bits).
+    /// Sompi the order moves for its whole amount: `floor(amount × rate / scale)`. This is the
+    /// quote rule, exact in 128 bits.
     fn kas(&self) -> u128 {
         kob_protocol::state::quote_exact(self.amount, self.rate, self.scale, kob_protocol::state::Round::Down)
             .map(|v| v.max(0) as u128)
@@ -149,7 +186,7 @@ impl KasOrder {
     }
 }
 
-/// The DAA score quotes are evaluated at.
+/// The DAA score that quotes are evaluated at.
 fn eval_daa(conn: &Connection, ctx: &ReadCtx) -> DbResult<u64> {
     Ok(match ctx.node_daa {
         Some(n) => n,
@@ -157,8 +194,10 @@ fn eval_daa(conn: &Connection, ctx: &ReadCtx) -> DbResult<u64> {
     })
 }
 
-/// Whether a live order with tip `state` (UTXO created at `udaa`) can be filled at `now` (active, not due for a refund,
-/// day-order deadline not passed).
+/// Whether a live order with tip `state` can be filled at `now`.
+///
+/// `udaa` is the DAA score of the UTXO. The order must be active, not due for a refund, and not
+/// past its day-order deadline.
 fn eligible(state: &AnyState, udaa: i64, deadline: Option<i64>, now: i64, ctx: &ReadCtx) -> bool {
     if crate::sanity::check(state).is_err() {
         return false;
@@ -173,8 +212,10 @@ fn eligible(state: &AnyState, udaa: i64, deadline: Option<i64>, now: i64, ctx: &
     !matches!((deadline, ctx.now_unix), (Some(d), Some(n)) if n as i64 >= d)
 }
 
-/// Whether a pair order's live custody rows are exactly what its state holds ([`AnyState::custodies`]): one live custody
-/// UTXO per custody token, at the exact amount, and no other custody row.
+/// Whether the live custody rows of a pair order are exactly what its state holds
+/// ([`AnyState::custodies`]).
+///
+/// That is one live custody UTXO per custody token, at the exact amount, and no other custody row.
 pub fn pair_custody_ok(conn: &Connection, cov: &[u8], state: &AnyState) -> DbResult<bool> {
     let mut st = conn.prepare_cached(
         "SELECT tk.h, t.amount FROM token_utxos t JOIN ids tk ON tk.id = t.token_id \
@@ -187,13 +228,14 @@ pub fn pair_custody_ok(conn: &Connection, cov: &[u8], state: &AnyState) -> DbRes
     Ok(live == want)
 }
 
-/// A listed live pair order of the pair with its tip state and UTXO DAA score.
+/// A listed live pair order of the pair, with its tip state and the DAA score of its UTXO.
 struct LivePair {
     state: AnyState,
     udaa: i64,
 }
 
-/// Listed live pair orders of `base / quote` (that orientation only), eligible now, with an exact custody.
+/// The listed live pair orders of `base / quote`, that orientation only, that are eligible now and
+/// have an exact custody.
 fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<Vec<LivePair>> {
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline FROM order_state s \
@@ -224,7 +266,7 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
     Ok(out)
 }
 
-/// The plain KAS orders of one token and side (1 asks, 2 bids) usable by a route, best first.
+/// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
 fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i64, ctx: &ReadCtx) -> DbResult<Vec<KasOrder>> {
     let (kinds, dir) = if side == 1 { ("'KobAsk','KobAskKron'", "ASC") } else { ("'KobBid','KobBidKron'", "DESC") };
     let sql = format!(
@@ -252,9 +294,10 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
         if !eligible(&s, udaa, deadline, now, ctx) {
             continue;
         }
-        // the quote at the evaluation time (auctions move), all-in per whole token with checked arithmetic: what the ask's
-        // maker receives (`price - tip`), what the bid's maker pays (`price + tip`); a bid's amount is its buying power
-        // (resting orders only, a TWAP slice once due and at most one slice: the module doc)
+        // The quote at the evaluation time, because auctions move. It is all-in per whole token
+        // with checked arithmetic: what the maker of an ask receives (`price - tip`), or what the
+        // maker of a bid pays (`price + tip`). The amount of a bid is its buying power. Only
+        // resting orders count: a TWAP slice once due, and at most one slice (see the module doc).
         let resting = |tif: i64, interval: i64| tif == TIF_GTC && (interval <= 0 || now >= udaa.saturating_add(interval));
         let slice = |amount: i64, max_fill: i64| if max_fill > 0 { amount.min(max_fill) } else { amount };
         let k = crate::indexer::processor::guarded(|| match s.clone().into_family(kob_protocol::family::Family::Kcc20) {
@@ -275,7 +318,8 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
             }
         }
     }
-    // best first: bids pay the most per base unit, asks cost the least (ties keep the book order)
+    // Best first: bids pay the most per base unit and asks cost the least. Ties keep the book
+    // order.
     out.sort_by(|a, b| {
         let (x, y) = (a.rate as i128 * b.scale as i128, b.rate as i128 * a.scale as i128);
         if side == 1 {
@@ -287,7 +331,7 @@ fn kas_orders(conn: &Connection, token: &Hash32, side: i64, limit: usize, now: i
     Ok(out)
 }
 
-/// Adds a level, merging it into the last one when the price and source are the same.
+/// Adds a level, merging it into the last one when the price and the source are the same.
 fn push_level(levels: &mut Vec<Lvl>, l: Lvl) {
     if let Some(last) = levels.last_mut() {
         if last.source == l.source && (last.num, last.den) == (l.num, l.den) {
@@ -299,8 +343,10 @@ fn push_level(levels: &mut Vec<Lvl>, l: Lvl) {
     levels.push(l);
 }
 
-/// Route levels: `sell` (base token KAS orders) against `buy` (quote token KAS orders). `bids`: selling base (the base
-/// token's bids against the quote token's asks), else buying base (the base token's asks against the quote token's bids).
+/// Route levels of the KAS orders of `base` against those of `quote`.
+///
+/// With `bids`, the route sells base: the bids of the base token against the asks of the quote
+/// token. Otherwise it buys base: the asks of the base token against the bids of the quote token.
 fn route_levels(base: &[KasOrder], quote: &[KasOrder], bids: bool, depth: usize) -> Vec<Lvl> {
     let mut out: Vec<Lvl> = vec![];
     let (mut i, mut j) = (0usize, 0usize);
@@ -309,10 +355,11 @@ fn route_levels(base: &[KasOrder], quote: &[KasOrder], bids: bool, depth: usize)
     while i < base.len() && j < quote.len() {
         let (x, y) = (base[i], quote[j]);
         let k = left_b[i].min(left_q[j]);
-        // quote units per base unit = (sompi per base unit) / (sompi per quote unit) = (x.rate / x.scale) / (y.rate / y.scale)
+        // Quote units per base unit are (sompi per base unit) / (sompi per quote unit), which is
+        // (x.rate / x.scale) / (y.rate / y.scale).
         let num = x.rate as u128 * y.scale as u128;
         let den = x.scale as u128 * y.rate as u128;
-        // the base units k sompi buy or sell at x's rate (rounded down)
+        // The base units that k sompi buy or sell at the rate of x, rounded down.
         let amount = mul_div(k, x.scale, x.rate);
         if let Some((n, d)) = bounded_price(num, den, !bids) {
             if amount > 0 {
@@ -345,7 +392,8 @@ fn to_view(l: Lvl) -> PairLevel {
     }
 }
 
-/// Sort rank of a level's source at one price: the pair orders first (direct, then entry), the route last.
+/// The sort rank of the source of a level at one price: pair orders first (direct, then entry),
+/// the route last.
 fn source_rank(s: &str) -> u8 {
     match s {
         "direct" => 0,
@@ -354,7 +402,9 @@ fn source_rank(s: &str) -> u8 {
     }
 }
 
-/// Sorts levels (asks ascending, bids descending; at one price the pair orders first) and keeps `depth`.
+/// Sorts levels and keeps `depth` of them.
+///
+/// Asks are ascending and bids descending. At one price the pair orders come first.
 fn finish(mut levels: Vec<Lvl>, asks: bool, depth: usize) -> Vec<PairLevel> {
     levels.sort_by(|a, b| {
         let o = cmp_price((a.num, a.den), (b.num, b.den));
@@ -363,8 +413,11 @@ fn finish(mut levels: Vec<Lvl>, asks: bool, depth: usize) -> Vec<PairLevel> {
     levels.into_iter().take(depth).map(to_view).collect()
 }
 
-/// The resting level of a pair order now: `(ask, source, quote B per whole A, scale(A), amount of A)`; `None` for the orders
-/// the book leaves out (a `KobCondPair`, an unarmed stop entry, an IOC / FOK taker, a TWAP slice not due yet, nothing left).
+/// The resting level of a pair order now: `(ask, source, quote B per whole A, scale(A), amount of
+/// A)`.
+///
+/// It is `None` for the orders that the book leaves out: a `KobCondPair`, an unarmed stop entry, an
+/// IOC or FOK taker, a TWAP slice that is not due yet, and an order with nothing left.
 fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64, i64)> {
     crate::indexer::processor::guarded(|| match &p.state {
         AnyState::KobPair(s) if s.tif == TIF_GTC && (s.interval <= 0 || now >= p.udaa.saturating_add(s.interval)) => {
@@ -380,27 +433,31 @@ fn resting_level(p: &LivePair, now: i64) -> Option<(bool, &'static str, i64, i64
     .filter(|l| l.2 > 0 && l.3 > 0 && l.4 > 0)
 }
 
-/// True when the token has any listed order (an index seek on the token, then the first listed row). The live-set scans below walk every open order of the
-/// store whatever the token (300,000 bids of one token cost 0.7 s a scan, four scans a route), so a leg without a listed order must not
-/// start one (audit 2026-10-30 I15).
+/// Whether the token has any listed order: an index seek on the token, then the first listed row.
+///
+/// The live-set scans below walk every open order of the store whatever the token, so a leg
+/// without a listed order must not start one. The cost of a scan is in `docs/ops/executor.md`,
+/// 5.4.
 fn has_listed(conn: &Connection, token: &Hash32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached("SELECT 1 FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) AND listed = 1 LIMIT 1")?
         .exists([&token.0[..]])?)
 }
 
-/// The pair book of `base / quote` (token covenant ids), at most `depth` levels per side.
+/// The pair book of `base / quote`, given as token covenant ids, with at most `depth` levels per
+/// side.
 pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32, depth: usize) -> DbResult<PairBook> {
     let daa = eval_daa(conn, ctx)?;
     let now = daa.min(i64::MAX as u64) as i64;
     let depth = depth.max(1);
     let mut asks: Vec<Lvl> = vec![];
     let mut bids: Vec<Lvl> = vec![];
-    // pair orders are listed under their base token; a route needs a listed order on both legs
+    // Pair orders are listed under their base token. A route needs a listed order on both legs.
     let base_live = base != quote && has_listed(conn, base)?;
     let routes = base_live && has_listed(conn, quote)?;
     if base_live {
-        // direct and entry levels: the pair orders of the pair, grouped by source and exact price (B per A base unit)
+        // Direct and entry levels: the pair orders of the pair, grouped by source and exact price
+        // (B per A base unit).
         let mut grouped: BTreeMap<(bool, &'static str, (u128, u128)), Lvl> = BTreeMap::new();
         for (k, p) in pair_orders(conn, base, quote, now, ctx)?.iter().enumerate() {
             let Some((ask, source, price, scale, amount)) = resting_level(p, now) else { continue };
@@ -422,7 +479,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
                 bids.push(l);
             }
         }
-        // route levels: the two KAS books in one transaction
+        // Route levels: the two KAS books in one transaction.
         if routes {
             let n = (4 * depth + 16).min(400);
             let base_bids = kas_orders(conn, base, 2, n, now, ctx)?;
@@ -442,8 +499,11 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
     })
 }
 
-/// Pairs with at least one listed live pair order (optionally those naming `token` as base or quote), oriented as the
-/// orders are (`base` = A, `quote` = B; an order of B/A is counted under B/A), sorted by (base, quote).
+/// The pairs with at least one listed live pair order, optionally only those naming `token` as
+/// base or quote.
+///
+/// Pairs are oriented as the orders are: `base` is A and `quote` is B, and an order of B/A is
+/// counted under B/A. They are sorted by (base, quote).
 pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<Vec<PairSummary>> {
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
     let sql = format!(
@@ -488,10 +548,12 @@ pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResu
     Ok(counts.into_values().collect())
 }
 
-// ------------------------------------------------------------------------------------------------ pair charts
+// Pair charts.
 
-/// An exact rate of a pair candle: `value` = `floor(num / den)` B base units per `price_basis` base units of A (the base
-/// token's basis), `num / den` the reduced exact fraction.
+/// An exact rate of a pair candle.
+///
+/// `value` is `floor(num / den)` B base units per `price_basis` base units of A, where
+/// `price_basis` is the basis of the base token. `num / den` is the reduced exact fraction.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PairRate {
     pub value: String,
@@ -499,7 +561,7 @@ pub struct PairRate {
     pub den: String,
 }
 
-/// One pair candle derived from the two KAS series (see [`pair_candles`]).
+/// One pair candle derived from the two KAS series, see [`pair_candles`].
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PairCandleView {
     pub t: i64,
@@ -507,11 +569,13 @@ pub struct PairCandleView {
     pub h: PairRate,
     pub l: PairRate,
     pub c: PairRate,
-    /// Whether A / B traded in KAS in this bucket (`false`: that side carries its last close forward).
+    /// Whether A traded in KAS in this bucket, and likewise B for `b_traded`. When it is `false`,
+    /// that side carries its last close forward.
     pub a_traded: bool,
     pub b_traded: bool,
-    /// Pair volume of the bucket: pair-order fills of this pair (`pair_fills`), base units of A and of B, and the transactions
-    /// (`pair_fills`: a netting fill, which both its orders record, once).
+    /// The pair volume of the bucket: the pair-order fills of this pair (`pair_fills`), in base
+    /// units of A and of B, and the number of transactions. A netting fill, which both its orders
+    /// record, counts once.
     pub pair_volume_a: String,
     pub pair_volume_b: String,
     pub pair_fills: u64,
@@ -522,9 +586,9 @@ pub struct PairCandlesView {
     pub base: String,
     pub quote: String,
     pub interval: String,
-    /// Base units of A a rate is per (A's KAS price basis, `market::price_basis`).
+    /// The base units of A that a rate is per: the KAS price basis of A (`market::price_basis`).
     pub price_basis: String,
-    /// B's KAS price basis (base units of B its KAS price is per).
+    /// The KAS price basis of B: the base units of B that its KAS price is per.
     pub quote_price_basis: String,
     pub decimals: Option<u32>,
     pub quote_decimals: Option<u32>,
@@ -533,8 +597,11 @@ pub struct PairCandlesView {
     pub items: Vec<PairCandleView>,
 }
 
-/// `pa / pb` as B base units per `basis_a` base units of A: A's KAS price `pa` (sompi per `basis_a` base units of A) over B's
-/// `pb` (sompi per `basis_b` base units of B), i.e. `pa × basis_b / pb`. Exact (reduced) and floored.
+/// `pa / pb` as B base units per `basis_a` base units of A.
+///
+/// `pa` is the KAS price of A, in sompi per `basis_a` base units of A. `pb` is the KAS price of B,
+/// in sompi per `basis_b` base units of B. The rate is `pa × basis_b / pb`, exact (reduced) and
+/// floored.
 pub fn pair_rate(pa: i128, pb: i128, basis_b: i128) -> Option<PairRate> {
     let num = pa.checked_mul(basis_b)?;
     let (n, d) = reduce(num, pb)?;
@@ -544,12 +611,17 @@ pub fn pair_rate(pa: i128, pb: i128, basis_b: i128) -> Option<PairRate> {
 /// One `pair_fills` row as the volume reads it: `(txid, ts, side, amount_a, amount_b)`.
 type PairFillRow = (Vec<u8>, i64, i64, i64, Option<i64>);
 
-/// The pair volume of `pair_fills` rows, one entry per TRANSACTION in the order first seen: `(ts, A base units, B base units)`.
-/// Every pair order a transaction fills records its own row, so a netting fill (an ask and a bid of the pair filling each other)
-/// is two rows of one trade: a transaction's volume is the larger of its two sides' sums (each side's rows summed in 128 bits, a
-/// negative or missing amount as 0), so a netting fill counts once and the routed rest of a partly netted order still counts.
+/// The pair volume of `pair_fills` rows, one entry per TRANSACTION in the order first seen:
+/// `(ts, A base units, B base units)`.
+///
+/// Every pair order that a transaction fills records its own row, so a netting fill (an ask and a
+/// bid of the pair filling each other) is two rows of one trade. The volume of a transaction is
+/// the larger of the sums of its two sides. Each side's rows are summed in 128 bits, and a
+/// negative or missing amount counts as 0. So a netting fill counts once, and the routed rest of
+/// a partly netted order still counts.
 fn tx_volumes(rows: impl IntoIterator<Item = PairFillRow>) -> Vec<(i64, i128, i128)> {
-    // txid -> (ts, [A of asks, A of bids], [B of asks, B of bids]); `order` keeps the first-seen order
+    // txid -> (ts, [A of asks, A of bids], [B of asks, B of bids]). `order` keeps the first-seen
+    // order.
     let mut by: HashMap<Vec<u8>, (i64, [i128; 2], [i128; 2])> = HashMap::new();
     let mut order: Vec<Vec<u8>> = Vec::new();
     for (txid, ts, side, a, b) in rows {
@@ -564,15 +636,16 @@ fn tx_volumes(rows: impl IntoIterator<Item = PairFillRow>) -> Vec<(i64, i128, i1
     order.into_iter().filter_map(|t| by.remove(&t)).map(|(ts, a, b)| (ts, a[0].max(a[1]), b[0].max(b[1]))).collect()
 }
 
-/// The `pair_fills` rows of `query` (its parameters `params`), read for [`tx_volumes`].
+/// The `pair_fills` rows of `query`, with its parameters `params`, read for [`tx_volumes`].
 fn pair_fill_rows(conn: &Connection, query: &str, params: impl rusqlite::Params) -> DbResult<Vec<PairFillRow>> {
     let mut st = conn.prepare_cached(query)?;
     let rows = st.query_map(params, |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Pair volume per bucket in `[start, end)`: `t -> (A base units, B base units, transactions)` ([`tx_volumes`]: a netting fill
-/// once).
+/// The pair volume per bucket in `[start, end)`: `t -> (A base units, B base units, transactions)`.
+///
+/// A netting fill counts once, see [`tx_volumes`].
 fn pair_volume(
     conn: &Connection,
     a: &Hash32,
@@ -597,13 +670,19 @@ fn pair_volume(
     Ok(m)
 }
 
-/// Pair candles of `base / quote` derived from the two KAS series (founder rule: no pair price is ever recorded from pair
-/// fills). For every bucket in which A or B traded in KAS (`market` candles, prices per each token's basis): the open is
-/// `open(A) / open(B)`, the close `close(A) / close(B)`, the high `high(A) / low(B)` and the low `low(A) / high(B)` (the
-/// bounds of the implied rate the two series allow in the bucket, not observed trades), each as B base units per
-/// `price_basis` base units of A ([`pair_rate`]: exact reduced fraction, `value` floored). A side without a KAS trade in the
-/// bucket carries its last close forward (from before the window too); buckets before both tokens have a price are omitted.
-/// Without `from`, the window is the `limit` intervals ending with the bucket of the newest trade of either token.
+/// Pair candles of `base / quote`, derived from the two KAS series.
+///
+/// No pair price is ever recorded from pair fills. For every bucket in which A or B traded in KAS
+/// (`market` candles, with prices per the basis of each token):
+/// - The open is `open(A) / open(B)` and the close is `close(A) / close(B)`.
+/// - The high is `high(A) / low(B)` and the low is `low(A) / high(B)`. These are the bounds of
+///   the implied rate that the two series allow in the bucket, not observed trades.
+///
+/// Each is B base units per `price_basis` base units of A, see [`pair_rate`]: an exact reduced
+/// fraction with `value` floored. A side without a KAS trade in the bucket carries its last close
+/// forward, also from before the window. Buckets before both tokens have a price are omitted.
+/// Without `from`, the window is the `limit` intervals ending with the bucket of the newest trade
+/// of either token.
 #[allow(clippy::too_many_arguments)]
 pub fn pair_candles(
     conn: &Connection,
@@ -627,15 +706,17 @@ pub fn pair_candles(
     let start = from.unwrap_or_else(|| end.saturating_sub(iv.saturating_mul(limit as i64)));
     let mut items = vec![];
     if end > start {
-        // each side's newest `limit` candles hold every bucket of the union's newest `limit` (a bucket of A among them has
-        // fewer than `limit` newer buckets of A); the older ones are dropped and only their last close is carried, read
-        // as the last trade before the first bucket kept
+        // The newest `limit` candles of each side hold every bucket of the newest `limit` of the
+        // union: a bucket of A among them has fewer than `limit` newer buckets of A. The older ones
+        // are dropped and only their last close is carried, read as the last trade before the
+        // first bucket kept.
         let mut ca: BTreeMap<i64, Candle> =
             market::candle_series(conn, base, basis_a, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
         let mut cb: BTreeMap<i64, Candle> =
             market::candle_series(conn, quote, basis_b, iv, start, end, limit)?.into_iter().map(|c| (c.t, c)).collect();
         let mut buckets: BTreeSet<i64> = ca.keys().chain(cb.keys()).copied().collect();
-        // the window's start, or the first bucket kept when older ones were dropped (it is then after the start)
+        // The start of the window, or the first bucket kept when older ones were dropped. It is
+        // then after the start.
         let mut first = start;
         if buckets.len() > limit {
             while buckets.len() > limit {
@@ -649,7 +730,7 @@ pub fn pair_candles(
         let mut last_a = market::last_trade_price_before(conn, base, basis_a, first)?;
         let mut last_b = market::last_trade_price_before(conn, quote, basis_b, first)?;
         for t in buckets {
-            // (o, h, l, c) of each side: its candle, or its last close carried forward
+            // The (o, h, l, c) of each side: its candle, or its last close carried forward.
             let side = |c: Option<&Candle>, last: Option<i128>| c.map(|c| (c.o, c.h, c.l, c.c)).or(last.map(|p| (p, p, p, p)));
             let (a, b) = (side(ca.get(&t), last_a), side(cb.get(&t), last_b));
             if let Some(c) = ca.get(&t) {
@@ -692,7 +773,7 @@ pub fn pair_candles(
     })
 }
 
-// ------------------------------------------------------------------------------------------------ pair fills
+// Pair fills.
 
 /// One pair-order fill (`pair_fills`): volume, never a price source.
 #[derive(Debug, Clone, Serialize)]
@@ -710,15 +791,17 @@ pub struct PairFillView {
     pub amount_a: String,
     /// Base units of B the maker received (ask) or paid (bid).
     pub amount_b: Option<String>,
-    /// The order's quote at the fill (B base units per whole A, `a_scale` base units) and as a fraction per A base unit.
+    /// The quote of the order at the fill, in B base units per whole A (`a_scale` base units), and
+    /// as a fraction per A base unit.
     pub price: Option<String>,
     pub price_num: Option<String>,
     pub price_den: Option<String>,
     pub a_scale: i64,
     /// KAS tip the fill released to the filler (sompi).
     pub tip_kas: Option<String>,
-    /// `route` (the transaction also filled KAS-book orders of A or B: their KAS trades are in `/v1/trades`), `netting` (an
-    /// opposite pair order of the pair, no KAS-book fill) or `inventory` (the filler's own tokens).
+    /// `route` (the transaction also filled KAS-book orders of A or B, whose KAS trades are in
+    /// `/v1/trades`), `netting` (an opposite pair order of the pair, and no KAS-book fill) or
+    /// `inventory` (the own tokens of the filler).
     pub counterparty: String,
     /// Always `none`: a pair fill never sets a price, candle or last price.
     pub price_source: String,
@@ -726,17 +809,21 @@ pub struct PairFillView {
     pub settled: bool,
 }
 
-/// 24 h pair volume (the window ending at the newer of the newest chain block time the indexer knows and its wall clock,
-/// [`ReadCtx::window_end`]).
+/// The 24 h pair volume.
+///
+/// The window ends at the newer of the newest chain block time the indexer knows and its wall
+/// clock ([`ReadCtx::window_end`]).
 #[derive(Debug, Clone, Serialize)]
 pub struct PairVolume {
-    /// Base units of A and of B traded, each transaction once (a netting fill, which both its orders record, counts once).
+    /// Base units of A and of B traded. Each transaction counts once, so a netting fill, which both
+    /// its orders record, counts once.
     pub amount_a: String,
     pub amount_b: String,
-    /// Transactions that filled pair orders of the pair (a netting fill is one).
+    /// Transactions that filled pair orders of the pair. A netting fill is one.
     pub fills: u64,
 }
 
+/// The pair fills of one pair, newest first, with the 24 h pair volume.
 #[derive(Debug, Clone, Serialize)]
 pub struct PairFillsView {
     pub base: String,
@@ -744,11 +831,13 @@ pub struct PairFillsView {
     pub volume_24h: PairVolume,
     /// Newest first.
     pub items: Vec<PairFillView>,
-    /// `before` cursor of the next page (a fill id), when there may be more.
+    /// The `before` cursor of the next page, a fill id, when there may be more.
     pub next_cursor: Option<String>,
 }
 
-/// Pair fills of `base / quote`, newest first (`before`: a fill id, exclusive), and the 24 h pair volume.
+/// Pair fills of `base / quote`, newest first, and the 24 h pair volume.
+///
+/// `before` is a fill id and is exclusive.
 pub fn pair_fills(
     conn: &Connection,
     ctx: &ReadCtx,
@@ -825,29 +914,30 @@ mod tests {
         let big = (u64::MAX as u128) * 3 + 1;
         let (n, d) = bounded_price(big, 7, false).unwrap();
         assert!(n <= u64::MAX as u128 && d <= u64::MAX as u128);
-        // down: never above the exact value; up: never below
+        // Down: never above the exact value. Up: never below it.
         assert!(n * 7 <= big * d, "rounded down");
         let (n, d) = bounded_price(big, 7, true).unwrap();
         assert!(n * 7 >= big * d, "rounded up");
     }
 
-    /// A transaction's pair volume counts once however many of its pair orders record it.
+    /// The pair volume of a transaction counts once, however many of its pair orders record it.
     #[test]
     fn a_netting_fill_is_one_trade_of_the_pair_volume() {
         let tx = |n: u8| vec![n; 32];
         let v = tx_volumes([
-            // a netting fill: the ask and the bid each record 2 000 A for 4 000 B
+            // A netting fill: the ask and the bid each record 2 000 A for 4 000 B.
             (tx(1), 10, 1, 2_000, Some(4_000)),
             (tx(1), 10, 2, 2_000, Some(4_000)),
-            // a route fill of one ask
+            // A route fill of one ask.
             (tx(2), 20, 1, 1_000, Some(2_000)),
-            // an ask of 10 000 nets 6 000 against a bid and routes the other 4 000: 10 000 A, 20 000 B
+            // An ask of 10 000 nets 6 000 against a bid and routes the other 4 000, so the volume
+            // is 10 000 A and 20 000 B.
             (tx(3), 30, 1, 10_000, Some(20_000)),
             (tx(3), 30, 2, 6_000, Some(12_000)),
-            // two asks routed in one transaction: both sold, 3 000 + 500
+            // Two asks routed in one transaction: both sold, 3 000 + 500.
             (tx(4), 40, 1, 3_000, Some(6_000)),
             (tx(4), 40, 1, 500, None),
-            // a hostile negative amount counts as 0
+            // A hostile negative amount counts as 0.
             (tx(5), 50, 2, -7, Some(-1)),
         ]);
         assert_eq!(v, vec![(10, 2_000, 4_000), (20, 1_000, 2_000), (30, 10_000, 20_000), (40, 3_500, 6_000), (50, 0, 0)]);
@@ -862,15 +952,17 @@ mod tests {
 
     #[test]
     fn route_walk_consumes_the_smaller_kas_side_and_merges_equal_prices() {
-        // base bids pay 2 sompi per base unit (1 000 base units at 2 000 per whole token of 1 000), quote asks cost 1 sompi per
-        // quote unit (500, then 5 000 base units at 1 000 per whole token)
+        // Base bids pay 2 sompi per base unit (1 000 base units at 2 000 per whole token of 1 000).
+        // Quote asks cost 1 sompi per quote unit (500, then 5 000 base units at 1 000 per whole
+        // token).
         let base = [KasOrder { rate: 2_000, scale: 1_000, amount: 1_000 }];
         let quote = [KasOrder { rate: 1_000, scale: 1_000, amount: 500 }, KasOrder { rate: 1_000, scale: 1_000, amount: 5_000 }];
         let l = route_levels(&base, &quote, true, 10);
-        // one price (2 quote per base), all 1000 base units: the two asks merge into one level of three orders
+        // One price (2 quote per base) and all 1000 base units: the two asks merge into one level
+        // of three orders.
         assert_eq!(l.len(), 1);
         assert_eq!((l[0].num, l[0].den, l[0].amount, l[0].orders.len()), (2, 1, 1000, 3));
-        // a worse second ask starts a new level
+        // A worse second ask starts a new level.
         let quote = [KasOrder { rate: 1_000, scale: 1_000, amount: 500 }, KasOrder { rate: 2_000, scale: 1_000, amount: 5_000 }];
         let l = route_levels(&base, &quote, true, 10);
         assert_eq!(l.len(), 2);
@@ -879,28 +971,32 @@ mod tests {
         assert_eq!(route_levels(&base, &quote, true, 1).len(), 1, "depth bounds the walk");
     }
 
-    /// The KAS of an order is the quote rule's floor, exact in 128 bits; orders of different scales walk at their price per
-    /// base unit.
+    /// The KAS of an order is the floor of the quote rule, exact in 128 bits. Orders of different
+    /// scales walk at their price per base unit.
     #[test]
     fn route_amounts_follow_the_quote_rule_at_any_scale() {
-        // 999 base units at 2 001 sompi per whole token of 1 000: floor(1 998 999 / 1 000) = 1 998 sompi
+        // 999 base units at 2 001 sompi per whole token of 1 000: floor(1 998 999 / 1 000) = 1 998
+        // sompi.
         assert_eq!(KasOrder { rate: 2_001, scale: 1_000, amount: 999 }.kas(), 1_998);
-        // the largest amounts never overflow
+        // The largest amounts never overflow.
         assert_eq!(KasOrder { rate: i64::MAX, scale: 1, amount: i64::MAX }.kas(), (i64::MAX as u128) * (i64::MAX as u128));
-        // a base bid of scale 100 (2 sompi per base unit) against a quote ask of scale 10^8 (1 sompi per base unit)
+        // A base bid of scale 100 (2 sompi per base unit) against a quote ask of scale 10^8 (1
+        // sompi per base unit).
         let base = [KasOrder { rate: 200, scale: 100, amount: 1_000 }];
         let quote = [KasOrder { rate: 100_000_000, scale: 100_000_000, amount: 10_000 }];
         let l = route_levels(&base, &quote, true, 10);
         assert_eq!((l[0].num, l[0].den, l[0].amount), (2, 1, 1_000));
     }
 
-    /// A pair rate is A's KAS price over B's, in B base units per A basis: exact and floored.
+    /// A pair rate is the KAS price of A over that of B, in B base units per A basis. It is exact
+    /// and floored.
     #[test]
     fn pair_rates_divide_the_two_kas_prices_exactly() {
-        // A at 3 000 sompi per 1 000 base units, B at 2 000 sompi per 100 base units: 3 000 × 100 / 2 000 = 150 B base units
+        // A at 3 000 sompi per 1 000 base units, B at 2 000 sompi per 100 base units:
+        // 3 000 × 100 / 2 000 = 150 B base units.
         let r = pair_rate(3_000, 2_000, 100).unwrap();
         assert_eq!((r.value.as_str(), r.num.as_str(), r.den.as_str()), ("150", "150", "1"));
-        // 1 000 × 100 / 3 000 = 100 / 3: floored to 33, exact 100/3
+        // 1 000 × 100 / 3 000 = 100 / 3, floored to 33, with the exact value 100/3.
         let r = pair_rate(1_000, 3_000, 100).unwrap();
         assert_eq!((r.value.as_str(), r.num.as_str(), r.den.as_str()), ("33", "100", "3"));
         assert!(pair_rate(1, 0, 100).is_none());

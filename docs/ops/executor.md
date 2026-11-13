@@ -1680,6 +1680,9 @@ the node's DAA score, not past their refund time (expiry, 90 days idle, IOC / FO
   is a taker in flight, filled against the books or killed, never a level; a **TWAP / DCA** order (`interval` > 0) is a level
   only once its next slice is due (its UTXO `interval` DAA old), for at most one slice (`maxFill`). A taker waits for a matcher
   about the indexer's lag; as a level it crossed the pair book for that long (soak 2026-10-11, up to 6 %).
+* **Listed legs only**: the live-set scans walk every open order of the store whatever the token (300,000 bids of one token
+  cost 0.7 s a scan, and a route makes four scans), so a book is built only when the base token has a listed order, and its
+  route levels only when the quote token has one too.
 * **route**: route bids (sell base → KAS → quote) walk the base token's plain KAS bids (best first by all-in sompi per base unit,
   `(quote + tip) / scale`) against the quote token's plain KAS asks (cheapest first, all-in `(quote − tip) / scale` per quote
   unit); route asks (buy base with quote) walk the quote token's KAS bids against the base token's KAS asks (resting orders
