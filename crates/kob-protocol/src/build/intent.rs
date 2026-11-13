@@ -1,32 +1,48 @@
-//! Builders for KOB router payment intents (`crate::router`): create (the payer, one signature),
-//! execute (any keeper, no signature), cancel (the payer) and expire (anyone, from the deadline on,
-//! no signature).
+//! Builders for KOB router payment intents (`crate::router`).
+//!
+//! There are four builders:
+//! - create, by the payer with one signature,
+//! - execute, by any keeper with no signature,
+//! - cancel, by the payer,
+//! - expire, by anyone from the deadline on, with no signature.
+//!
+//! # Layouts
 //!
 //! Layouts follow the router's positional anti-aliasing rule (`docs/argent/argent.md`, "Positional
-//! anti-aliasing rule"): the intent is the LAST input `j` and owns outputs `j` and `j + 1`; every
+//! anti-aliasing rule"). The intent is the last input `j` and owns outputs `j` and `j + 1`. Every
 //! order spent at input `i` pays, delivers or refunds at output `i`.
 //!
 //! ```text
 //! KasToToken  (k asks, j = 2k)
 //!   in   [0..k) asks  [k..2k) their custodies (leader first)  [2k] intent
-//!   out  [0..k) maker payouts  [k] custody rest of the last ask (if it rests), fillers up to 2k
-//!        [2k] payer KAS change  [2k+1] merchant token delivery  [2k+2] last ask continuation (if it rests)
+//!   out  [0..k) maker payouts  [k] custody rest of the last ask (if it rests)
+//!        fillers up to 2k  [2k] payer KAS change  [2k+1] merchant token delivery
+//!        [2k+2] last ask continuation (if it rests)
 //! TokenToKas  (k bids, j = k + 1)
 //!   in   [0..k) bids  [k] locked token A (owned by the intent)  [k+1] intent
-//!   out  [0..k) deliveries to the bid makers  [k] last bid continuation (if it rests) or a filler
+//!   out  [0..k) deliveries to the bid makers
+//!        [k] last bid continuation (if it rests) or a filler
 //!        [k+1] merchant KAS  [k+2] payer token A change  then the keeper's KAS
 //! TokenSwap   (kb bids, ka asks, a0 = kb + ka, j = a0 + 1 + ka)
-//!   in   [0..kb) bids  [kb..a0) asks  [a0] locked token A  [a0+1..j) custodies of B (leader first)  [j] intent
-//!   out  [0..kb) A deliveries  [kb..a0) ask payouts  [a0..j) the first ka + 1 of: custody rest of B,
-//!        bid continuation, ask continuation (fillers when fewer)  [j] merchant B delivery
-//!        [j+1] payer token A change  then the remaining continuations, then the keeper's KAS
+//!   in   [0..kb) bids  [kb..a0) asks  [a0] locked token A
+//!        [a0+1..j) custodies of B (leader first)  [j] intent
+//!   out  [0..kb) A deliveries  [kb..a0) ask payouts
+//!        [a0..j) the first ka + 1 of: custody rest of B, bid continuation,
+//!                ask continuation (fillers when fewer)
+//!        [j] merchant B delivery  [j+1] payer token A change
+//!        then the remaining continuations, then the keeper's KAS
 //! ```
 //!
-//! Every token is of the program the intent's state names (`IntentState::locked_program`, `merchant_program`;
-//! the router reads and pins it under that handle). A KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`) is
-//! locked with id_type 2 and sold into `KobBidKron`s; its deliveries and the payer's change are id_type 3. KRON
-//! has no token leader: every KRON input names its authorising input (the lock: the intent; key-held tokens of the
-//! payer: a P2PK input of the same key, so a creation that spends them must be funded from that key).
+//! # Tokens
+//!
+//! Every token is of the program the intent's state names (`IntentState::locked_program`,
+//! `merchant_program`), and the router reads and pins it under that handle. A KRON token A
+//! (`TokenToKasKron_*`, `TokenSwapKron_*`) is locked with id_type 2 and sold into `KobBidKron`s,
+//! and its deliveries and the payer's change are id_type 3.
+//!
+//! KRON has no token leader. Every KRON input names its authorising input: the intent for the lock,
+//! and a P2PK input of the same key for key-held tokens of the payer. A creation that spends the
+//! payer's tokens must therefore be funded from that key.
 
 use serde::{Deserialize, Serialize};
 
@@ -61,8 +77,10 @@ fn locked_token(st: &IntentState) -> Option<Token> {
     st.locked_token().zip(st.locked_program())
 }
 
-/// The lock pin (router_head.ag, "LOCK PIN"): a token UTXO owned by the intent is its lock only with the state's exact
-/// `lock_amount` and `lock_extension`; the router refuses any other (a stand-in sent to the intent's id).
+/// The lock pin (router_head.ag, "LOCK PIN") of a token UTXO owned by the intent.
+///
+/// Such a UTXO is the intent's lock only with the state's exact `lock_amount` and `lock_extension`.
+/// The router refuses any other, e.g. a stand-in sent to the intent's id.
 fn check_lock_pin(st: &IntentState, l: &TokenUtxo) -> Result<()> {
     match st.lock_pin() {
         Some((amount, ext)) if l.state.amount() == amount && l.state.extension() == ext => Ok(()),
@@ -88,21 +106,25 @@ fn int_args(v: Vec<silverscript_abi::ArtifactValue>) -> Result<Vec<Arg>> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------------------------- create
+// ------------------------------------------------------------------------------------------ create
 
-/// Creates a payment intent: the actor's covenant UTXO (a genesis authorised by the first funding
-/// input) at output 0 and, for TokenToKas / TokenSwap, the locked token A owned by the intent's
-/// covenant id at output 1. The payer signs every input once (SIGHASH_ALL); the payload records (the
-/// x402 commitment) are covered by every signature.
+/// Creates a payment intent.
+///
+/// The actor's covenant UTXO, a genesis authorised by the first funding input, is at output 0. For
+/// TokenToKas and TokenSwap, the locked token A owned by the intent's covenant id is at output 1.
+/// The payer signs every input once (SIGHASH_ALL), and every signature covers the payload records
+/// (the x402 commitment).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateIntent {
-    /// Router actor (`KasToToken_buy`, `TokenToKas_sell2`, ...): the fill shape the keeper must use.
+    /// Router actor, e.g. `KasToToken_buy`: the fill shape a keeper must use.
     pub actor: String,
     pub state: IntentState,
-    /// KAS of the intent UTXO. KasToToken: what the asks, the merchant carrier, fillers and the fee
-    /// are paid from (the rest returns to the payer at execution). Token intents: what the keeper may
-    /// spend on fillers and the fee besides the proceeds.
+    /// KAS of the intent UTXO.
+    ///
+    /// For KasToToken it pays the asks, the merchant carrier, the fillers and the fee, and the rest
+    /// returns to the payer at execution. For token intents it is what the keeper may spend on
+    /// fillers and the fee besides the proceeds.
     #[serde(with = "crate::json::field")]
     pub value: u64,
     /// Token intents: the payer's key-owned token A UTXOs.
@@ -111,7 +133,8 @@ pub struct CreateIntent {
     /// Token intents: units locked in the intent (at least `max_sell`).
     #[serde(with = "crate::json::field", default)]
     pub lock_amount: i64,
-    /// Token intents: KAS on the locked token UTXO (it becomes the carrier of the payer's token change).
+    /// Token intents: KAS on the locked token UTXO, which becomes the carrier of the payer's token
+    /// change.
     #[serde(with = "crate::json::field", default)]
     pub lock_carrier: u64,
     /// KAS on the payer's token change output, if the inputs hold more than `lock_amount`.
@@ -179,13 +202,14 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         if r.lock_amount < max_sell {
             return invalid(format!("the intent may sell {max_sell} units but locks only {}", r.lock_amount));
         }
-        // a KRON output holds 1..=1e9 units: the payer's change of an execution must not be empty
+        // A KRON output holds 1..=1e9 units, so the payer's change of an execution must not be
+        // empty.
         if fam == Family::Kron && r.lock_amount <= max_sell {
             return invalid(format!(
                 "a KRON intent locks more than it may sell (its token change after a sale of max_sell {max_sell} must hold a unit)"
             ));
         }
-        // the state pins the lock this transaction creates (its amount and extension commitment)
+        // The state pins the lock this transaction creates, its amount and extension commitment.
         if r.state.lock_pin() != Some((r.lock_amount, ext)) {
             return invalid(format!(
                 "the intent's lock pin (lock_amount, lock_extension) must be the lock it creates: {} units, extension {}",
@@ -215,12 +239,14 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
     d.seal(budgets)
 }
 
-// ---------------------------------------------------------------------------------------------- cancel
+// ------------------------------------------------------------------------------------------ cancel
 
-/// The payer cancels an intent (SIGHASH_ALL by the intent's payer key) and, for a token intent,
-/// takes the locked tokens back in the same transaction (the intent's presence authorises them). The
-/// router requires the lock at input 1, as the one token input of its token (after the cancel nothing could move
-/// tokens owned by the intent id), and the builder refuses a token intent's cancel without it.
+/// The payer's cancel of an intent, by SIGHASH_ALL of the intent's payer key.
+///
+/// For a token intent the payer takes the locked tokens back in the same transaction, and the
+/// intent's presence authorises them. The router requires the lock at input 1, as the one token
+/// input of its token, because after the cancel nothing could move tokens owned by the intent id.
+/// The builder refuses a token intent's cancel without it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelIntent {
@@ -261,7 +287,8 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
             let back = TokenState::user(token.1.family(), l.state.amount(), to, l.state.extension());
             d.add_token_output(token, back, l.utxo.amount)?;
         }
-        // The cancel ends the intent covenant: the locked tokens (owned by the intent id) can never move afterwards.
+        // The cancel ends the intent covenant, after which the locked tokens (owned by the intent
+        // id) can never move.
         (Some(_), None) => return invalid("a token intent's cancel returns its locked tokens (the lock UTXO is required)"),
         (None, Some(_)) => return invalid("a KasToToken intent locks no tokens"),
         (None, None) => {}
@@ -269,12 +296,14 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
     d.seal(budgets)
 }
 
-// ---------------------------------------------------------------------------------------------- expire
+// ------------------------------------------------------------------------------------------ expire
 
-/// Anyone expires an intent from its deadline on (no signature): the intent's KAS back to the payer at
-/// output 0 (less the fee, at most [`EXPIRE_MAX_FEE`]) and, for a token intent, the locked tokens whole to
-/// the payer's key at output 1. The transaction's lock time is the deadline (a unix-ms time lock), so a
-/// node accepts it once its past median time reached the deadline.
+/// Anyone's expiry of an intent from its deadline on, with no signature.
+///
+/// The intent's KAS goes back to the payer at output 0, less the fee of at most [`EXPIRE_MAX_FEE`].
+/// For a token intent, the locked tokens go whole to the payer's key at output 1. The transaction's
+/// lock time is the deadline, a unix-ms time lock, so a node accepts it once its past median time
+/// reached the deadline.
 ///
 /// ```text
 ///   in   [0] intent.expire  [1] locked token A (owned by the intent; token intents)
@@ -294,7 +323,9 @@ pub struct ExpireIntent {
     pub fee: FeeOptions,
 }
 
-/// Builds an expiry. Fails if the fee would exceed [`EXPIRE_MAX_FEE`] (the router would reject it).
+/// Builds an expiry.
+///
+/// Fails if the fee would exceed [`EXPIRE_MAX_FEE`], which the router would reject.
 pub fn build_expire_intent(r: &ExpireIntent, budgets: BudgetFn) -> Result<BuiltTx> {
     let actor = actor_of(&r.actor)?;
     r.state.check()?;
@@ -332,7 +363,7 @@ pub fn build_expire_intent(r: &ExpireIntent, budgets: BudgetFn) -> Result<BuiltT
     Ok(built)
 }
 
-// ---------------------------------------------------------------------------------------------- execute
+// ----------------------------------------------------------------------------------------- execute
 
 /// One ask an execution buys from: `amount` base units out of its exact custody.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -353,7 +384,9 @@ pub struct IntentBid {
     pub amount: i64,
 }
 
-/// A keeper's execution of an intent against named orders (no signature: every input is a covenant).
+/// A keeper's execution of an intent against named orders.
+///
+/// It needs no signature, since every input is a covenant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecuteIntent {
@@ -471,8 +504,10 @@ fn plan_ask(a: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
 
 struct BidPlan {
     delivery: u64,
-    /// The KAS a bid that ends returns to its maker as an output of its own (at the end of the transaction, see
-    /// [`Draft::add_refund`]) instead of leaving it on the delivery.
+    /// The KAS an ending bid returns to its maker in an output of its own, instead of on the
+    /// delivery.
+    ///
+    /// The output is at the end of the transaction, see [`Draft::add_refund`].
     refund: Option<u64>,
     cont: Option<(u64, kaspa_consensus_core::tx::ScriptPublicKey)>,
     sold: i64,
@@ -590,8 +625,8 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let asks: Vec<AskPlan> = r.asks.iter().map(|a| plan_ask(a, tok_b.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
     let bids: Vec<BidPlan> = r.bids.iter().map(|b| plan_bid(b, tok_a.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
     check_shape(actor, &asks, &bids)?;
-    // The covenants pin a bid's refund at output M - 1 - i: the bids that return KAS come first, then the other bids that
-    // end, the bid that rests last (the router's shape).
+    // The covenants pin a bid's refund at output M - 1 - i. The bids that return KAS come first,
+    // then the other bids that end, and the bid that rests comes last (the router's shape).
     let rank = |b: &BidPlan| {
         if b.refund.is_some() {
             0
@@ -611,7 +646,8 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     if r.asks.iter().any(|a| a.custody.state.extension() != r.asks[0].custody.state.extension()) {
         return invalid("the asks' custodies mix extension commitments");
     }
-    // the B pin (router_head.ag, "B PIN"): every ask escrow carries the extension commitment the intent names
+    // The B pin (router_head.ag, "B PIN"): every ask escrow carries the extension commitment the
+    // intent names.
     if let Some(ext) = r.state.b_extension() {
         if r.asks.iter().any(|a| a.custody.state.extension() != ext) {
             return invalid(format!(
@@ -671,7 +707,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             if l.state.amount() < facts.sold {
                 return invalid(format!("the intent locks {} units, the execution sells {}", l.state.amount(), facts.sold));
             }
-            // a KRON output holds at least one unit: the payer's change must not be empty
+            // A KRON output holds at least one unit, so the payer's change must not be empty.
             if fam_a == Family::Kron && l.state.amount() == facts.sold {
                 return invalid("a KRON execution leaves the payer at least one unit (the token program refuses an empty output)");
             }
@@ -682,7 +718,8 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         (None, None) => None,
     };
 
-    // KasToToken: the change (the payer's) goes to the reserved slot j; token intents: the keeper's, last.
+    // For KasToToken the change is the payer's and goes to the reserved slot j. For token intents
+    // it is the keeper's and comes last.
     let change = if kind == IntentKind::KasToToken { payer } else { r.keeper };
     let mut d = Draft::new(r.lock_time, &r.fee, Some(change))?;
     let ka = r.asks.len();
@@ -693,7 +730,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let prog_a = tok_a.map(|t| t.1.name()).unwrap_or_default();
     let prog_b = tok_b.map(|t| t.1.name()).unwrap_or_default();
 
-    // inputs: bids, asks
+    // Inputs: bids, then asks.
     for (i, b) in r.bids.iter().enumerate() {
         let s = &b.order.state;
         let first_tok = kb + ka; // token A (the locked UTXO) follows the order inputs
@@ -708,7 +745,8 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     for (m, a) in r.asks.iter().enumerate() {
         let s = &a.order.state;
         let role = format!("KobAsk.settle.{}@{prog_b}", if asks[m].rests { "rest" } else { "close" });
-        // tokOut: the custody rest (first output after the positional / payout slots); patched below
+        // tokOut is the custody rest, the first output after the positional and payout slots. It is
+        // patched below.
         d.add_input(
             &a.order.utxo,
             order_entry(
@@ -721,7 +759,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             SEQUENCE_NONFINAL,
         );
     }
-    // token inputs: the locked token A (token intents), then the custodies of B
+    // Token inputs: the locked token A (token intents), then the custodies of B.
     if let Some(l) = lock_tok {
         d.add_token_input(l, tok_a.expect("token intent"), Witness::CovenantId)?;
     }
@@ -816,7 +854,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             for (m, a) in asks.iter().enumerate() {
                 d.add_output(a.payout, p2pk_spk(&r.asks[m].order.state.maker), None);
             }
-            // the queue: custody rest of B, bid continuation, ask continuation
+            // The queue: custody rest of B, bid continuation, ask continuation.
             enum Q {
                 Tok(u64, TokenState),
                 Plain(u64, kaspa_consensus_core::tx::ScriptPublicKey, Option<(u16, [u8; 32])>),
@@ -893,7 +931,8 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         d.payload = payload::encode_with_release(&r.records)?;
     }
     let built = d.seal(budgets)?;
-    // KasToToken: the router's bound on the payer's change (out j + pay + max_extra >= the intent value)
+    // KasToToken: the router's bound on the payer's change (out j + pay + max_extra >= the intent
+    // value).
     if let IntentState::KasToToken { max_extra, .. } = &r.state {
         let (tx, _) = built.tx.to_tx()?;
         let change = tx.outputs.get(me).map(|o| o.value as i64).unwrap_or(0);
@@ -910,33 +949,44 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     Ok((built, facts))
 }
 
-// -------------------------------------------------------------------------------------------- max_extra
+// --------------------------------------------------------------------------------------- max_extra
 
-/// The filler an execution puts in each output slot it must hold open, sompi: the reference keeper's (`KeeperParams::default`
-/// of `kob-x402`, `intents.fillerSompi` of the Executor). 0.2 KAS is what the storage mass of an output allows
-/// (`C / value`, KIP-9): a smaller one makes the execution too heavy to relay.
+/// The filler an execution puts in each output slot it must hold open, in sompi.
+///
+/// It is the reference keeper's filler, `KeeperParams::default` of `kob-x402` and
+/// `intents.fillerSompi` of the Executor. 0.2 KAS is what the storage mass of an output allows
+/// (`C / value`, KIP-9). A smaller one makes the execution too heavy to relay.
 pub const REFERENCE_FILLER: u64 = 20_000_000;
 
-/// Fee mass of a `KasToToken` execution of `asks` asks on a token B of `program`, an upper bound over every shape of that many
-/// asks (`tests/intent_builders.rs` measures every router-capable KCC-20 program and fails if a build is heavier):
-/// `3_500 + asks * (8_500 + 2 * L)`, `L` the bytes of the program's template (prefix and suffix: each ask's custody input and each
-/// token output carry it, and the relay floor charges twice the size, `MassReport::fee_mass`, the transient mass).
+/// Fee mass of a `KasToToken` execution of `asks` asks on a token B of `program`.
+///
+/// It is an upper bound over every shape of that many asks: `3_500 + asks * (8_500 + 2 * L)`, where
+/// `L` is the byte length of the program's template, prefix and suffix. Each ask's custody input
+/// and each token output carry the template, and the relay floor charges twice the size
+/// (`MassReport::fee_mass`, the transient mass). `tests/intent_builders.rs` measures every
+/// router-capable KCC-20 program and fails if a build is heavier.
 pub fn execution_fee_mass_bound(asks: usize, program: TemplateId) -> u64 {
     let t = crate::artifacts::token_template(program);
     3_500 + asks as u64 * (8_500 + 2 * (t.prefix.len() + t.suffix.len()) as u64)
 }
 
-/// Output slots a `KasToToken` execution fills with fillers: the `2k` slots before the payer's change, less the `k` ask
-/// payouts and the custody rest of a last ask that continues. Fillers are paid to the payer, but the router cannot tell
-/// them from a keeper's gain: it counts them against `max_extra`. A resting one-ask shape (`KasToToken_buy`) has none.
+/// Output slots a `KasToToken` execution fills with fillers.
+///
+/// They are the `2k` slots before the payer's change, less the `k` ask payouts and the custody rest
+/// of a last ask that continues. Fillers are paid to the payer, but the router cannot tell them
+/// from a keeper's gain, so it counts them against `max_extra`. A resting one-ask shape
+/// (`KasToToken_buy`) has none.
 pub fn kas_to_token_fillers(shape: &crate::router::Shape) -> u64 {
     (shape.asks as u64).saturating_sub(u64::from(shape.last_ask_rests))
 }
 
-/// What a `KasToToken` execution takes out of the intent beyond the asks' quotes, i.e. the `max_extra` it needs:
-/// `merchant_carrier + fillers(shape) * filler + fee_mass_bound(asks, program) * fee_rate` (the maker payouts, the custody rest and
-/// the ask continuation are balanced by the asks' own inputs; an ask that demands less than its quote only lowers it).
-/// `fee_rate` is sompi per gram.
+/// What a `KasToToken` execution takes out of the intent beyond the asks' quotes, i.e. its
+/// `max_extra`.
+///
+/// It is `merchant_carrier + fillers(shape) * filler + fee_mass_bound(asks, program) *
+/// fee_rate`, with `fee_rate` in sompi per gram. The maker payouts, the custody rest and the ask
+/// continuation are balanced by the asks' own inputs. An ask that demands less than its quote only
+/// lowers it.
 pub fn kas_to_token_extra_needed(
     shape: &crate::router::Shape,
     program: TemplateId,
@@ -949,31 +999,42 @@ pub fn kas_to_token_extra_needed(
         .saturating_add(execution_fee_mass_bound(shape.asks, program).saturating_mul(fee_rate))
 }
 
-/// How many times the payer's fee rate the default `max_extra` pays for: an execution may be priced above the rate the payer
-/// saw (the Executor's high bucket, at most 10 times the floor by default) and falls back to the floor when the intent cannot
-/// pay it.
+/// How many times the payer's fee rate the default `max_extra` pays for.
+///
+/// An execution may be priced above the rate the payer saw, e.g. in the Executor's high bucket,
+/// which is at most 10 times the floor by default. It falls back to the floor when the intent
+/// cannot pay it.
 pub const MAX_EXTRA_RATE_FACTOR: u64 = 5;
-/// The fixed margin of the default `max_extra`, sompi: about one floor fee of the heaviest one-ask shape, for the rounding of
-/// the asks' quotes and a mass bound that is a little low.
+/// The fixed margin of the default `max_extra`, in sompi.
+///
+/// It is about one floor fee of the heaviest one-ask shape. It covers the rounding of the asks'
+/// quotes and a mass bound that is a little low.
 pub const MAX_EXTRA_MARGIN: u64 = 2_000_000;
 
-/// The default `max_extra` of a `KasToToken` intent, tight on purpose: whoever executes the intent may keep all of it
-/// (`router_head.ag`: the payer's change only has to reach `value - pay - max_extra`). It is what the shape's execution needs
-/// ([`kas_to_token_extra_needed`], with the [`REFERENCE_FILLER`]) at [`MAX_EXTRA_RATE_FACTOR`] times the payer's `fee_rate`
-/// (sompi per gram; the relay floor when it is lower or unknown) plus [`MAX_EXTRA_MARGIN`].
+/// The default `max_extra` of a `KasToToken` intent, tight on purpose.
+///
+/// Whoever executes the intent may keep all of it, since the payer's change only has to reach
+/// `value - pay - max_extra` (`router_head.ag`). It is what the shape's execution needs
+/// ([`kas_to_token_extra_needed`] with the [`REFERENCE_FILLER`]) at [`MAX_EXTRA_RATE_FACTOR`] times
+/// the payer's `fee_rate`, plus [`MAX_EXTRA_MARGIN`]. The fee rate is in sompi per gram, and the
+/// relay floor is used when it is lower or unknown.
 pub fn default_max_extra(shape: &crate::router::Shape, program: TemplateId, merchant_carrier: u64, fee_rate: Option<u64>) -> u64 {
     let rate = fee_rate.unwrap_or(crate::tx::MIN_FEE_RATE).max(crate::tx::MIN_FEE_RATE).saturating_mul(MAX_EXTRA_RATE_FACTOR);
     kas_to_token_extra_needed(shape, program, merchant_carrier, REFERENCE_FILLER, rate).saturating_add(MAX_EXTRA_MARGIN)
 }
 
-// ---------------------------------------------------------------------------------------------- budgets
+// ----------------------------------------------------------------------------------------- budgets
 
-/// Budget of a router `cancel` input (one Schnorr signature check and, for a token intent, the read of its observed
-/// lock under the token handle; measured by `tests/intent_builders.rs` over every actor and program, which fails if it is
-/// too small or more than one unit too large).
+/// Budget of a router `cancel` input.
+///
+/// The input checks one Schnorr signature and, for a token intent, reads its observed lock under
+/// the token handle. `tests/intent_builders.rs` measures it over every actor and program, and fails
+/// if it is too small or more than one unit too large.
 pub const ROUTER_CANCEL_BUDGET: u16 = 16;
-/// Budget of a router `expire` input (the largest over every actor: a token intent reads and pins its
-/// locked tokens; measured by `tests/intent_builders.rs` like the cancel budget).
+/// Budget of a router `expire` input, the largest over every actor.
+///
+/// A token intent reads and pins its locked tokens. `tests/intent_builders.rs` measures it like the
+/// cancel budget.
 pub const ROUTER_EXPIRE_BUDGET: u16 = 13;
 /// Budget a router fill input is first built with before `execute_intent` measures the exact one.
 pub const ROUTER_FILL_BUDGET_FALLBACK: u16 = 900;
@@ -989,10 +1050,12 @@ pub fn intent_budgets(role: &str) -> Result<u16> {
     }
 }
 
-/// Budget a router fill input has in the measuring build of [`execute_intent`]: a little above the largest real one (52 units over
-/// every actor and program the builders cover), so that the fee of that build is close to the real fee. With the fallback budget
-/// the measuring build would cost about twenty times the real router input and could exceed a tight `max_extra` (which the router
-/// itself checks) although the exact build fits.
+/// Budget a router fill input has in the measuring build of [`execute_intent`].
+///
+/// It is a little above the largest real one, 52 units over every actor and program the builders
+/// cover, so that the fee of that build is close to the real fee. With the fallback budget the
+/// measuring build would cost about twenty times the real router input. It could then exceed a
+/// tight `max_extra`, which the router itself checks, although the exact build fits.
 const ROUTER_FILL_BUDGET_MEASURING: u16 = 64;
 
 fn measuring_budgets(role: &str) -> Result<u16> {
@@ -1002,9 +1065,10 @@ fn measuring_budgets(role: &str) -> Result<u16> {
     }
 }
 
-/// Builds an execution with the exact compute budget of every input (a first pass is measured in the
-/// script engine, the second is built with the measured budgets, so the fee pays for what is used) and
-/// finalises it: an execution needs no signature.
+/// Builds an execution with the exact compute budget of every input, and finalises it.
+///
+/// A first pass is measured in the script engine and the second is built with the measured budgets,
+/// so the fee pays for what is used. An execution needs no signature.
 #[cfg(feature = "engine")]
 pub fn execute_intent(r: &ExecuteIntent) -> Result<(crate::tx::SignedTx, ExecutionFacts)> {
     let (first, _) = build_execute_intent(r, &measuring_budgets)?;
