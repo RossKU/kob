@@ -1274,7 +1274,9 @@ stays the authority for the selected chain (`rpc::multi`):
 * transactions of the executor (the matcher, the keepers) are submitted to every node that takes submissions at once; the
   first node that takes one answers, the others go on for propagation. When none takes it, the primary's rejection counts
   (it decides double spends and missing inputs), unless the primary failed on the wire and another node gave a verdict.
-  The x402 facilitator still submits to the primary only.
+  A node that already holds the transaction keeps it pending at its first submission, but when a pending transaction is
+  checked again the primary's double spend or missing input drops it, so a stalled node holding a losing copy cannot keep
+  its funding coin reserved forever. The x402 facilitator still submits to the primary only.
 
 What a lying node can still do: hide a token transfer of a token nobody trades sent to an order id (a "foreign stray", which
 the indexer only flags for information), and slow the indexer down until it is dropped. It cannot add, remove or alter an

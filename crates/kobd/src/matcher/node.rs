@@ -161,6 +161,15 @@ pub trait NodeApi: Send + Sync {
     fn dag_info(&self) -> impl Future<Output = Result<DagInfo, RpcError>> + Send;
     /// Submits an `RpcTransaction` JSON; returns the transaction id or the node's message.
     fn submit(&self, tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send;
+    /// Submits a pending transaction again to settle it
+    /// (`crate::matcher::submit::Tracker::recheck_pending`).
+    ///
+    /// The default is [`NodeApi::submit`]. A client of several nodes ([`MultiSubmit`]) lets the
+    /// primary's double spend or missing input decide here, even when another node still holds the
+    /// transaction.
+    fn resubmit(&self, tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send {
+        self.submit(tx)
+    }
     /// One `getVirtualChainFromBlockV2` step starting at `start_hash`.
     fn chain_from(&self, start_hash: &str) -> impl Future<Output = Result<ChainUpdate, RpcError>> + Send;
     /// The UTXOs of `addresses` (`getUtxosByAddresses`).
@@ -580,6 +589,12 @@ impl NodeApi for WrpcNode {
 /// the transaction reaches the miners through several peers. When none takes it, the primary's
 /// rejection is the answer, since it decides double spends and missing inputs, unless the primary
 /// failed on the wire and another node gave a verdict.
+///
+/// At the first submission, a node that already holds the transaction answers "already known" over
+/// the primary's refusal, since the race is still open. When a pending transaction is checked again
+/// ([`NodeApi::resubmit`]), the primary's double spend or missing input wins. Otherwise a stalled or
+/// partitioned node that still holds the losing copy would keep it pending, and its funding coin
+/// reserved, forever.
 pub struct MultiSubmit<N: NodeApi + 'static> {
     primary: std::sync::Arc<N>,
     /// `(index in the node board, node)` of every other node.
@@ -599,18 +614,11 @@ impl<N: NodeApi + 'static> MultiSubmit<N> {
     pub fn primary(&self) -> &N {
         &self.primary
     }
-}
 
-impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
-    async fn server_info(&self) -> Result<ServerInfo, RpcError> {
-        self.primary.server_info().await
-    }
-
-    async fn dag_info(&self) -> Result<DagInfo, RpcError> {
-        self.primary.dag_info().await
-    }
-
-    async fn submit(&self, tx: Value) -> Result<[u8; 32], RpcError> {
+    /// Submits `tx` to every node. With `primary_decides`, the primary's double spend or missing
+    /// input is the answer whatever the other nodes say, and a taker other than the primary answers
+    /// only once the primary has answered too.
+    async fn submit_to_all(&self, tx: Value, primary_decides: bool) -> Result<[u8; 32], RpcError> {
         if self.others.is_empty() {
             return self.primary.submit(tx).await;
         }
@@ -632,24 +640,32 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
                 b.submitted(i, r.is_ok() || known, r.as_ref().err().filter(|_| !known).map(|e| e.to_string()));
             }
         };
-        let (mut primary_err, mut other_verdict, mut first_err, mut known) = (None, None, None, None);
+        let (mut primary_err, mut other_verdict, mut first_err, mut known, mut taken) = (None, None, None, None, None);
+        let mut answer: Option<Result<[u8; 32], RpcError>> = None;
         while let Some((i, r)) = recv.recv().await {
             note(i, &r);
             match r {
+                // At a recheck the primary decides: the transaction's inputs went elsewhere.
+                Err(RpcError::Node(m))
+                    if i == 0
+                        && primary_decides
+                        && matches!(classify_submit_error(&m), SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput) =>
+                {
+                    answer = Some(Err(RpcError::Node(m)));
+                    break;
+                }
                 // A node that holds the transaction already (or the chain does): it is out there,
                 // whatever another node says. The primary's refusal must not drop a transaction a
-                // mempool holds.
+                // mempool holds, except at a recheck (above).
                 Err(RpcError::Node(m)) if classify_submit_error(&m) == SubmitOutcome::AlreadyKnown => {
                     known.get_or_insert(RpcError::Node(m));
                 }
+                Ok(id) if i == 0 || !primary_decides => {
+                    answer = Some(Ok(id));
+                    break;
+                }
                 Ok(id) => {
-                    // The rest go on for propagation. Their outcomes are only counted.
-                    tokio::spawn(async move {
-                        while let Some((i, r)) = recv.recv().await {
-                            note(i, &r);
-                        }
-                    });
-                    return Ok(id);
+                    taken.get_or_insert(id);
                 }
                 Err(e) if i == 0 => primary_err = Some(e),
                 Err(e @ RpcError::Node(_)) => {
@@ -660,6 +676,18 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
                 }
             }
         }
+        if let Some(r) = answer {
+            // The rest go on for propagation. Their outcomes are only counted.
+            tokio::spawn(async move {
+                while let Some((i, r)) = recv.recv().await {
+                    note(i, &r);
+                }
+            });
+            return r;
+        }
+        if let Some(id) = taken {
+            return Ok(id);
+        }
         if let Some(k) = known {
             return Err(k);
         }
@@ -667,6 +695,24 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
             Some(e @ RpcError::Node(_)) => e,
             p => other_verdict.or(p).or(first_err).unwrap_or_else(|| RpcError::Transport("no node took the transaction".into())),
         })
+    }
+}
+
+impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
+    async fn server_info(&self) -> Result<ServerInfo, RpcError> {
+        self.primary.server_info().await
+    }
+
+    async fn dag_info(&self) -> Result<DagInfo, RpcError> {
+        self.primary.dag_info().await
+    }
+
+    async fn submit(&self, tx: Value) -> Result<[u8; 32], RpcError> {
+        self.submit_to_all(tx, false).await
+    }
+
+    async fn resubmit(&self, tx: Value) -> Result<[u8; 32], RpcError> {
+        self.submit_to_all(tx, true).await
     }
 
     /// The primary decides, since it holds the replaced transaction. The other nodes get the
@@ -812,6 +858,63 @@ mod tests {
         // A single node: exactly that node.
         let m: MultiSubmit<Fake> = MultiSubmit::new(fake(Ok([2; 32]), 1), vec![], None);
         assert_eq!(m.submit(json!({})).await, Ok([2; 32]));
+    }
+
+    /// A stalled or partitioned secondary that still holds the losing copy of a transaction cannot keep it pending. At the
+    /// first submission its "already known" keeps the transaction (the race is open). At a recheck the primary's double
+    /// spend or missing input wins and the tracker drops it, so its funding coin is free again. A transaction without
+    /// order inputs (a keeper job) is dropped no other way.
+    #[tokio::test]
+    async fn at_a_recheck_the_primary_decides_a_double_spend_or_a_missing_input() {
+        use crate::matcher::submit::{ResendClock, Tracked, Tracker, TrackerConfig};
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let fake =
+            |verdict: Result<[u8; 32], RpcError>, ms: u64| Fake { verdict, delay: Duration::from_millis(ms), calls: calls.clone() };
+        let ds =
+            RpcError::Node(format!("output ({}, 0) already spent by transaction {} in the mempool", "ab".repeat(32), "cd".repeat(32)));
+        let held = RpcError::Node("transaction x is already in the mempool".into());
+        let gone = RpcError::Node("transaction x is an orphan where orphan is disallowed".into());
+        let m = MultiSubmit::new(fake(Err(ds.clone()), 5), vec![(1, fake(Err(held.clone()), 1))], None);
+        assert_eq!(m.submit(json!({})).await, Err(held.clone()), "the first submission: the race is open");
+        assert_eq!(m.resubmit(json!({})).await, Err(ds.clone()), "a recheck: the primary decides");
+        // at a recheck, a taker other than the primary waits for the primary's verdict
+        let m = MultiSubmit::new(fake(Err(gone.clone()), 30), vec![(1, fake(Ok([3; 32]), 1))], None);
+        assert_eq!(m.submit(json!({})).await, Ok([3; 32]));
+        assert_eq!(m.resubmit(json!({})).await, Err(gone));
+        // the primary has no verdict, or refuses for another reason: as at the first submission
+        let m = MultiSubmit::new(fake(Err(RpcError::Transport("down".into())), 1), vec![(1, fake(Err(held.clone()), 5))], None);
+        assert_eq!(m.resubmit(json!({})).await, Err(held.clone()));
+        let m =
+            MultiSubmit::new(fake(Err(RpcError::Node("transaction x is invalid".into())), 1), vec![(1, fake(Ok([4; 32]), 5))], None);
+        assert_eq!(m.resubmit(json!({})).await, Ok([4; 32]));
+        // through the tracker: a keeper job pending past the timeout, a secondary still holding it
+        let m = MultiSubmit::new(fake(Err(ds.clone()), 5), vec![(1, fake(Err(held), 1))], None);
+        let mut tr = Tracker::new(TrackerConfig::default());
+        let t = Tracked {
+            txid: [7; 32],
+            spends: [([8; 32], 0)].into_iter().collect(),
+            orders: [[9; 32]].into_iter().collect(),
+            owners: Default::default(),
+            addresses: Default::default(),
+            parent: None,
+            submitted_daa: 1_000,
+            rpc_tx: json!({}),
+            accepted: None,
+            kind: "refund".into(),
+            profit: 1,
+            fee: 1,
+            fee_rate: 100,
+            unconfirmed: false,
+            deadline: None,
+            resend_until: None,
+            retired: None,
+        };
+        tr.txs.insert(t.txid, t);
+        let at = 1_000 + tr.cfg.pending_timeout;
+        let r = tr.recheck_pending(&m, &ResendClock::at(at), true).await;
+        assert_eq!(r.dropped.len(), 1, "{r:?}");
+        assert!(tr.txs.is_empty() && tr.spent_outpoints().is_empty(), "its inputs are free again");
+        assert!(tr.backed_off(at).contains(&[9; 32]));
     }
 
     #[test]

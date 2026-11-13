@@ -742,6 +742,9 @@ impl Tracker {
     ///   held funding coin);
     /// - no verdict: tried again at the next check.
     ///
+    /// The resend is [`NodeApi::resubmit`]: with several submit nodes, the primary's double spend or
+    /// missing input decides, even when another node still holds the transaction.
+    ///
     /// With `may_send` false (the kill switch, a dry run) nothing leaves the process and nothing is
     /// dropped. A transaction whose submission had no verdict is settled by
     /// [`Tracker::resubmit_unconfirmed`] instead.
@@ -773,7 +776,7 @@ impl Tracker {
                 r.retired.push(id);
                 continue;
             }
-            let (outcome, msg) = match node.submit(rpc).await {
+            let (outcome, msg) = match node.resubmit(rpc).await {
                 Ok(_) => (SubmitOutcome::Accepted, None),
                 Err(RpcError::Node(m)) => (classify_submit_error(&m), Some(m)),
                 Err(_) => (SubmitOutcome::Unknown, None),
