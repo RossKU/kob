@@ -1,14 +1,22 @@
-//! Test support: an in-memory node that speaks the `ChainSource` contract (including reorgs, pruning
-//! errors and IBD), fixtures and a chain world built on the `kob-protocol` builders (real protocol v3
-//! artifacts, real KCC-20 programs, real covenant ids, transactions validated by the rusty-kaspa
-//! script engine), and a deterministic database snapshot for equality checks (incremental vs rebuild).
+//! Test support: an in-memory node, fixtures, a chain world and a database snapshot.
 //!
-//! The fixtures count in base units like the protocol's own (`kob-protocol/tests/common`): the fixture token has
-//! [`SCALE`] = 1 000 base units per whole token ([`WHOLE`]), prices and tips are sompi per whole token, amounts are whole
-//! tokens times [`WHOLE`], and every order's minimum fill is one whole token.
+//! It contains:
 //!
-//! Compiled into the library (it is small and has no extra dependencies) so both unit tests and the
-//! integration tests under `tests/` can use it. Not part of the supported API.
+//! - an in-memory node that speaks the `ChainSource` contract, including reorgs, pruning errors
+//!   and IBD,
+//! - fixtures and a chain world built on the `kob-protocol` builders (real protocol v3 artifacts,
+//!   real KCC-20 programs, real covenant ids, transactions validated by the rusty-kaspa script
+//!   engine),
+//! - a deterministic database snapshot for equality checks (incremental vs rebuild).
+//!
+//! The fixtures count in base units like the protocol's own (`kob-protocol/tests/common`). The
+//! fixture token has [`SCALE`] = 1 000 base units per whole token ([`WHOLE`]). Prices and tips are
+//! sompi per whole token, amounts are whole tokens times [`WHOLE`], and every order's minimum fill
+//! is one whole token.
+//!
+//! The module is compiled into the library, because it is small and has no extra dependencies. So
+//! both unit tests and the integration tests under `tests/` can use it. It is not part of the
+//! supported API.
 
 use crate::hex::{Hash32, HexBytes};
 use crate::rpc::types::*;
@@ -36,9 +44,13 @@ pub fn h(tag: &str, n: u64) -> Hash32 {
 // ---------------------------------------------------------------------------------------------
 // fixtures (the shapes of the protocol's own test fixtures)
 
+/// Sompi per KAS.
 pub const KAS: u64 = 100_000_000;
+/// The KAS carrier of a fixture token UTXO, sompi.
 pub const CARRIER: u64 = 10 * KAS;
+/// The delivery carrier of the fixture orders, sompi.
 pub const DC: i64 = 10 * KAS as i64;
+/// The exit carrier of the fixture if-done entries, sompi.
 pub const EC: i64 = 10 * KAS as i64;
 /// Base units per whole fixture token (the fixtures' `scale`).
 pub const SCALE: i64 = 1_000;
@@ -46,33 +58,50 @@ pub const SCALE: i64 = 1_000;
 pub const WHOLE: i64 = SCALE;
 /// Priority tip, sompi per whole token.
 pub const TIP: i64 = 100_000;
+/// A far expiry, DAA.
 pub const EXPIRY: i64 = 400_000_000;
+/// An expiry no test chain reaches, DAA.
 pub const NO_EXPIRY: i64 = 499_999_999_999;
+/// The covenant id of the fixture token.
 pub const TOKEN_COV: [u8; 32] = [0x70; 32];
+/// The extension commitment of the fixture token.
 pub const EXT: [u8; 32] = [0xee; 32];
+/// A fixture price of 2.50 KAS per whole token, sompi.
 pub const P250: i64 = 250_000_000;
+/// A fixture price of 2.60 KAS per whole token, sompi.
 pub const P260: i64 = 260_000_000;
+/// A fixture price of 2.45 KAS per whole token, sompi.
 pub const P245: i64 = 245_000_000;
 
+/// Key number of the first maker.
 pub const MAKER_A: u8 = 1;
+/// Key number of the second maker.
 pub const MAKER_B: u8 = 2;
+/// Key number of the taker.
 pub const TAKER: u8 = 4;
+/// Key number of the matcher.
 pub const MATCHER: u8 = 5;
+/// Key number of the keeper.
 pub const KEEPER: u8 = 6;
+/// Key number of the founder.
 pub const FOUNDER: u8 = 7;
 
+/// The secret key of test key `n`.
 pub fn sk(n: u8) -> [u8; 32] {
     [n; 32]
 }
 
+/// The public key of test key `n`.
 pub fn pk(n: u8) -> [u8; 32] {
     pubkey_of(&sk(n)).unwrap()
 }
 
+/// Every test key, public key to secret key.
 pub fn keys() -> BTreeMap<[u8; 32], [u8; 32]> {
     (1..=40u8).map(|n| (pk(n), sk(n))).collect()
 }
 
+/// The template hash and the prefix and suffix lengths of a token program.
 pub fn tok_fields(tpl: TemplateId) -> ([u8; 32], i64, i64) {
     if tpl.is_artifact() {
         let t = template(tpl);
@@ -83,10 +112,12 @@ pub fn tok_fields(tpl: TemplateId) -> ([u8; 32], i64, i64) {
     }
 }
 
+/// The refund tip of the order kind `tpl`.
 pub fn rtip(tpl: TemplateId) -> i64 {
     tips(tpl).unwrap().refund_tip as i64
 }
 
+/// The keeper tip of the order kind `tpl`.
 pub fn ktip(tpl: TemplateId) -> i64 {
     tips(tpl).unwrap().keeper_tip as i64
 }
@@ -95,6 +126,7 @@ pub fn ktip(tpl: TemplateId) -> i64 {
 pub const T3: TemplateId = TemplateId::Kcc20Ref;
 /// The KRON token program of the KRON fixtures, and their token covenant id.
 pub const K3: TemplateId = TemplateId::KronToken2433;
+/// The covenant id of the KRON fixture token.
 pub const TOKEN_COV_KRON: [u8; 32] = [0x71; 32];
 
 /// Limit ask of 10 whole tokens at `price` (sompi per whole token), minimum fill one whole token.
@@ -124,7 +156,9 @@ pub fn ask(maker: u8, price: i64) -> AskState {
     }
 }
 
-/// Limit bid at `price` (sompi per whole token), minimum fill one whole token; its quantity is the escrow it is placed with.
+/// Limit bid at `price` (sompi per whole token), minimum fill one whole token.
+///
+/// Its quantity is the escrow it is placed with.
 pub fn bid(maker: u8, price: i64) -> BidState {
     let (hh, p, s) = tok_fields(T3);
     BidState {
@@ -152,8 +186,8 @@ pub fn bid(maker: u8, price: i64) -> BidState {
     }
 }
 
-/// OCO sell: take-profit 3.00, stop 2.00 (KAS per whole token) with the default 3% band opening over 300 DAA, 10 whole
-/// tokens; triggered by evidence of at least one base unit.
+/// OCO sell: take-profit 3.00, stop 2.00 (KAS per whole token) with the default 3% band opening
+/// over 300 DAA, 10 whole tokens. It is triggered by evidence of at least one base unit.
 pub fn cond_ask(maker: u8) -> CondAskState {
     let (hh, p, s) = tok_fields(T3);
     CondAskState {
@@ -187,7 +221,8 @@ pub fn cond_ask(maker: u8) -> CondAskState {
     }
 }
 
-/// Buy OCO: limit leg 2.00, buy-stop 3.00 (KAS per whole token) with the default 3% band over 300 DAA, 10 whole tokens.
+/// Buy OCO: limit leg 2.00, buy-stop 3.00 (KAS per whole token) with the default 3% band over 300
+/// DAA, 10 whole tokens.
 pub fn cond_bid(maker: u8) -> CondBidState {
     let (hh, p, s) = tok_fields(T3);
     CondBidState {
@@ -228,8 +263,8 @@ pub fn ifd_exit(maker: u8) -> CondAskState {
     CondAskState { stop_price: 220_000_000, expiry_daa: NO_EXPIRY, ..cond_ask(maker) }
 }
 
-/// Buy-first IFO entry at 2.60 (KAS per whole token) for `n` whole tokens (`n * WHOLE` base units), minimum fill one whole
-/// token.
+/// Buy-first IFO entry at 2.60 (KAS per whole token) for `n` whole tokens (`n * WHOLE` base
+/// units), minimum fill one whole token.
 pub fn ifd_bid(maker: u8, n: i64) -> IfdBidState {
     let (hh, p, s) = tok_fields(T3);
     IfdBidState {
@@ -265,8 +300,8 @@ pub fn ifda_exit(maker: u8) -> CondBidState {
     CondBidState { tp_price: 240_000_000, stop_price: 280_000_000, expiry_daa: NO_EXPIRY, ..cond_bid(maker) }
 }
 
-/// Sell-first IFO entry at 2.50 (KAS per whole token), 10 whole tokens, prefund 0.5 KAS per whole token, minimum fill one
-/// whole token.
+/// Sell-first IFO entry at 2.50 (KAS per whole token), 10 whole tokens, prefund 0.5 KAS per whole
+/// token, minimum fill one whole token.
 pub fn ifd_ask(maker: u8) -> IfdAskState {
     let (hh, p, s) = tok_fields(T3);
     IfdAskState {
@@ -308,7 +343,7 @@ pub fn kron(s: AnyState) -> AnyState {
             s.token_tpl_hash = hh;
             s.tpl_prefix_len = p;
             s.tpl_suffix_len = x;
-            // the KCC-20 default tip becomes the KRON default; a deliberate tip (0, huge) is kept
+            // The KCC-20 default tip becomes the KRON default. A deliberate tip (0, huge) is kept.
             if s.refund_tip == rtip(T3) {
                 s.refund_tip = rtip(K3);
             }
@@ -422,13 +457,13 @@ pub fn noise_tx(salt: u64, covenant: bool) -> Tx {
         outputs: vec![out],
         payload: HexBytes(vec![]),
         verbose_data: TxVerbose::default(),
-        // a covenant output needs a v1 transaction
+        // A covenant output needs a v1 transaction.
         version: Some(covenant as u16),
         lock_time: Some(0),
         subnetwork_id: Some(HexBytes(vec![0; 20])),
         gas: Some(0),
     };
-    // its real id (a node other than the primary is checked against it)
+    // Its real id (a node other than the primary is checked against it).
     t.verbose_data.transaction_id = crate::rpc::verify::tx_id(&t).expect("every field");
     t
 }
@@ -453,6 +488,7 @@ impl Default for World {
 }
 
 impl World {
+    /// A world with the test keys and no transactions.
     pub fn new() -> World {
         World { keys: keys(), counter: std::cell::Cell::new(0), daa: std::cell::RefCell::new(HashMap::new()), validate: true }
     }
@@ -492,11 +528,13 @@ impl World {
         self.finish(&built)
     }
 
-    /// Like [`World::sign`], `None` when the builder refuses the request (random traffic generators).
+    /// Like [`World::sign`], `None` when the builder refuses the request (random traffic
+    /// generators).
     pub fn try_sign(&self, action: &Action) -> Option<SignedTx> {
         build(action).ok().map(|b| self.finish(&b))
     }
 
+    /// Signs and finalizes a built transaction, and validates it when [`World::validate`] is on.
     pub fn finish(&self, built: &BuiltTx) -> SignedTx {
         let sigs = sign_locally(built, &self.keys).unwrap();
         let signed = finalize(built, &sigs, FinalizeOptions::default()).unwrap_or_else(|e| panic!("finalize: {e}"));
@@ -545,10 +583,12 @@ impl World {
         }
     }
 
+    /// The output `idx` of `t` as an order UTXO with `state`.
     pub fn order<S>(&self, t: &SignedTx, idx: usize, state: S) -> OrderUtxo<S> {
         OrderUtxo { utxo: self.utxo(t, idx), state }
     }
 
+    /// The output `idx` of `t` as a token UTXO with `state`.
     pub fn token_at(&self, t: &SignedTx, idx: usize, state: impl Into<TokenState>) -> TokenUtxo {
         TokenUtxo { utxo: self.utxo(t, idx), state: state.into() }
     }
@@ -592,7 +632,8 @@ impl World {
         self.stray_with_payload(fam, order_cov, amount, sender, None)
     }
 
-    /// [`World::stray_for`] carrying a payload (anyone can put one on a token transfer: a KCC-23 declaration, say).
+    /// [`World::stray_for`] carrying a payload. Anyone can put one on a token transfer, a KCC-23
+    /// declaration for example.
     pub fn stray_with_payload(&self, fam: Family, order_cov: Hash32, amount: i64, sender: u8, payload: Option<Vec<u8>>) -> SignedTx {
         let tok = self.token_for(fam, sender, amount + 5);
         let coin = self.coin(sender, 100);
@@ -636,7 +677,7 @@ impl World {
         }
         assert!(patched, "the leader authorises the recipient state");
         if let Some(p) = payload {
-            // the payload is paid for by mass: the fee comes out of the recipient's carrier
+            // The payload is paid for by mass, so the fee comes out of the recipient's carrier.
             let to_spk = spk_to_string(&TokenState::custody(fam, amount, order_cov.0, EXT).spk_with(token_template(program)));
             built.tx.outputs.iter_mut().find(|o| o.script_public_key == to_spk).expect("recipient output").value -= 5_000_000;
             built.tx.payload = p;
@@ -665,10 +706,15 @@ impl World {
 // in-memory node
 
 #[derive(Clone)]
+/// A block of the mock chain.
 pub struct MBlock {
+    /// The block hash.
     pub hash: Hash32,
+    /// The parent block hash.
     pub parent: Hash32,
+    /// The DAA score.
     pub daa: u64,
+    /// The transactions the block accepts.
     pub txs: Vec<Tx>,
     /// A real header: `hash` is its hash (what a node other than the primary is checked against).
     pub header: kaspa_consensus_core::header::Header,
@@ -719,7 +765,8 @@ struct MockState {
     link_txs: Option<usize>,
     /// `(start hash, minConfirmationCount, timeout scale, answered)` of every VSPC request.
     vspc_log: Vec<(Hash32, Option<u64>, u32, bool)>,
-    /// A VSPC answer takes this long to arrive (the round trip and transfer of a remote link, per connection).
+    /// A VSPC answer takes this long to arrive (the round trip and transfer of a remote link, per
+    /// connection).
     vspc_delay: std::time::Duration,
     /// Plus this long per transaction of the answer (the bandwidth of one connection).
     vspc_delay_per_tx: std::time::Duration,
@@ -732,8 +779,9 @@ struct MockState {
     hashes_delay: std::time::Duration,
     /// A reorg to apply before the VSPC request of this number: `(call, depth, new blocks)`.
     pending_reorg: Option<(usize, usize, Vec<Vec<Tx>>)>,
-    /// Ignore a request's size limit (`VspcRequest::max_bytes`): answer whatever it holds, as a source without the transport
-    /// check would. Default: refuse a larger answer with `RpcError::TooLarge`, as the websocket transport does.
+    /// Ignore a request's size limit (`VspcRequest::max_bytes`). The node answers whatever it
+    /// holds, as a source without the transport check would. The default is to refuse a larger
+    /// answer with `RpcError::TooLarge`, as the websocket transport does.
     ignore_size_limit: bool,
     /// Answers refused as too large.
     too_large: usize,
@@ -741,6 +789,9 @@ struct MockState {
     ids_calls: usize,
 }
 
+/// An in-memory node that answers the `ChainSource` calls from a scripted chain.
+///
+/// The tests shape the chain (blocks, reorgs, pruning) and the link (errors, delays, size limits).
 pub struct MockNode {
     st: Mutex<MockState>,
 }
@@ -749,10 +800,12 @@ pub struct MockNode {
 pub const ANCHOR_DAA: u64 = 1_000_000;
 
 impl MockNode {
+    /// A node with the anchor block at [`ANCHOR_DAA`].
     pub fn new(network: &str) -> Arc<MockNode> {
         Self::new_at(network, ANCHOR_DAA)
     }
 
+    /// A node with the anchor block at `anchor_daa`.
     pub fn new_at(network: &str, anchor_daa: u64) -> Arc<MockNode> {
         let anchor = MBlock::new(Hash32::ZERO, anchor_daa, vec![], 0);
         Arc::new(MockNode {
@@ -789,22 +842,27 @@ impl MockNode {
         f(&mut self.st.lock().unwrap())
     }
 
+    /// The anchor block, the first block of the chain.
     pub fn anchor(&self) -> Hash32 {
         self.with(|s| s.chain[0].hash)
     }
 
+    /// The hash of the chain tip.
     pub fn tip(&self) -> Hash32 {
         self.with(|s| s.chain.last().unwrap().hash)
     }
 
+    /// The DAA score of the chain tip.
     pub fn tip_daa(&self) -> u64 {
         self.with(|s| s.chain.last().unwrap().daa)
     }
 
+    /// The hashes of the chain blocks, the anchor first.
     pub fn chain_hashes(&self) -> Vec<Hash32> {
         self.with(|s| s.chain.iter().map(|b| b.hash).collect())
     }
 
+    /// The chain blocks, the anchor first.
     pub fn chain(&self) -> Vec<MBlock> {
         self.with(|s| s.chain.clone())
     }
@@ -814,6 +872,7 @@ impl MockNode {
         MBlock::new(parent, daa, txs, s.counter)
     }
 
+    /// Pushes a chain block with `txs` and returns its hash.
     pub fn push_block(&self, txs: Vec<Tx>) -> Hash32 {
         self.with(|s| {
             let last = s.chain.last().unwrap().clone();
@@ -836,8 +895,10 @@ impl MockNode {
         self.with(|s| Self::reorg_in(s, depth, new_blocks))
     }
 
-    /// [`MockNode::reorg`] just before VSPC request number `call` (counted from the node's start, 1-based) is answered:
-    /// the requests before it saw the old chain, the ones from it on see the new one.
+    /// [`MockNode::reorg`] just before VSPC request number `call` (counted from the node's start,
+    /// 1-based) is answered.
+    ///
+    /// The requests before it saw the old chain. The ones from it on see the new one.
     pub fn reorg_at_vspc_call(&self, call: usize, depth: usize, new_blocks: Vec<Vec<Tx>>) {
         self.with(|s| s.pending_reorg = Some((call, depth, new_blocks)))
     }
@@ -858,6 +919,7 @@ impl MockNode {
         out
     }
 
+    /// Makes the node forget the block `hash`, as if it were pruned.
     pub fn forget(&self, hash: Hash32) {
         self.with(|s| {
             s.forgotten.insert(hash);
@@ -869,28 +931,34 @@ impl MockNode {
         self.with(|s| s.retention_floor = floor)
     }
 
+    /// Switches the node's IBD state on or off. While it is on, chain answers fail.
     pub fn set_ibd(&self, on: bool) {
         self.with(|s| s.ibd = on)
     }
 
+    /// Caps the added block hashes of one chain answer.
     pub fn set_added_cap(&self, cap: usize) {
         self.with(|s| s.added_cap = cap)
     }
 
+    /// Queues an error that a later VSPC request returns, once.
     pub fn inject_error(&self, e: RpcError) {
         self.with(|s| s.fail.push_back(e))
     }
 
+    /// Sets the UTXOs the node reports, with their address.
     pub fn set_utxos(&self, u: Vec<(String, AddressUtxo)>) {
         self.with(|s| s.utxos = u)
     }
 
+    /// The number of VSPC requests so far.
     pub fn vspc_calls(&self) -> usize {
         self.with(|s| s.vspc_calls)
     }
 
-    /// Answer VSPC requests whatever their size limit (`VspcRequest::max_bytes`), as a source without the transport's check
-    /// would; by default a larger answer is refused with `RpcError::TooLarge`, as the websocket transport does.
+    /// Answers VSPC requests whatever their size limit (`VspcRequest::max_bytes`), as a source
+    /// without the transport's check would. By default a larger answer is refused with
+    /// `RpcError::TooLarge`, as the websocket transport does.
     pub fn set_ignore_size_limit(&self, ignore: bool) {
         self.with(|s| s.ignore_size_limit = ignore)
     }
@@ -900,23 +968,28 @@ impl MockNode {
         self.with(|s| s.too_large)
     }
 
-    /// A slow link: a VSPC response with more than `txs` transactions times out (scaled by the request's
-    /// timeout scale: a request that may wait twice as long gets twice as much through).
+    /// A slow link: a VSPC response with more than `txs` transactions times out. The count is
+    /// scaled by the request's timeout scale, so a request that may wait twice as long gets twice
+    /// as much through.
     pub fn set_link_txs(&self, txs: Option<usize>) {
         self.with(|s| s.link_txs = txs)
     }
 
-    /// Every VSPC answer arrives `d` after the request (a remote link: concurrent requests overlap their delays).
+    /// Every VSPC answer arrives `d` after the request. It models a remote link, where concurrent
+    /// requests overlap their delays.
     pub fn set_vspc_delay(&self, d: std::time::Duration) {
         self.with(|s| s.vspc_delay = d)
     }
 
-    /// A link of limited bandwidth per connection: an answer arrives `rtt` plus `per_tx` per transaction after the request.
-    /// The round trip of a hashes-only chain answer (`getVirtualChainFromBlock`): the chain grows while it travels.
+    /// The round trip of a hashes-only chain answer (`getVirtualChainFromBlock`).
+    ///
+    /// The chain grows while the answer travels.
     pub fn set_hashes_delay(&self, d: std::time::Duration) {
         self.with(|s| s.hashes_delay = d)
     }
 
+    /// A link of limited bandwidth per connection: an answer arrives `rtt` plus `per_tx` per
+    /// transaction after the request.
     pub fn set_vspc_link(&self, rtt: std::time::Duration, per_tx: std::time::Duration) {
         self.with(|s| {
             s.vspc_delay = rtt;
@@ -934,8 +1007,10 @@ impl MockNode {
         self.with(|s| s.hash_calls)
     }
 
-    /// The chain from `start` as `getVirtualChainFromBlock` reports it without transaction ids: removed hashes
-    /// (tip-first) and up to `added_cap` added hashes, no head stripping.
+    /// The chain from `start` as `getVirtualChainFromBlock` reports it without transaction ids.
+    ///
+    /// It has the removed hashes (tip-first) and up to `added_cap` added hashes, with no head
+    /// stripping.
     fn chain_answer(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.with(|s| {
             s.hash_calls += 1;
@@ -948,7 +1023,8 @@ impl MockNode {
         })
     }
 
-    /// The blocks to remove from `start` (tip-first) and the index of the chain block they lead back to.
+    /// The blocks to remove from `start` (tip-first) and the index of the chain block they lead
+    /// back to.
     fn path_from(s: &MockState, start: Hash32) -> Result<(Vec<Hash32>, usize), RpcError> {
         let unknown = || RpcError::Node(format!("cannot find header {start}"));
         if s.forgotten.contains(&start) {
@@ -975,8 +1051,11 @@ impl MockNode {
         self.with(|s| s.vspc_log.clone())
     }
 
-    /// A chain block as the node reports it: at `Full` with the whole header and every transaction field; at `High` without
-    /// the UTXO commitment and the pruning point, and without the transactions' version and lock time (as the real node).
+    /// A chain block as the node reports it.
+    ///
+    /// At `Full` it has the whole header and every transaction field. At `High` it has neither the
+    /// UTXO commitment nor the pruning point, and the transactions have neither version nor lock
+    /// time, as with the real node.
     fn block_json(b: &MBlock, full: bool) -> serde_json::Value {
         let hd = &b.header;
         let txs: Vec<serde_json::Value> = b
@@ -1009,12 +1088,15 @@ impl MockNode {
         r
     }
 
-    /// The chain blocks a request from `start` answers: the removed ones (tip-first) and the added ones, capped and stripped
-    /// at the head for `minConfirmationCount`.
+    /// The chain blocks a request from `start` answers.
+    ///
+    /// They are the removed ones (tip-first) and the added ones, capped and stripped at the head
+    /// for `minConfirmationCount`.
     fn answer_blocks(s: &MockState, start: Hash32, min_conf: Option<u64>) -> Result<(Vec<Hash32>, Vec<MBlock>), RpcError> {
         let (removed, anc_idx) = Self::path_from(s, start)?;
         let mut added: Vec<MBlock> = s.chain.iter().skip(anc_idx + 1).take(s.added_cap).cloned().collect();
-        // the node's head stripping (blue score = DAA score here): keep a block while sink - blue > minConf
+        // The node's head stripping (blue score = DAA score here): keep a block while
+        // sink - blue > minConf.
         if let Some(mc) = min_conf.filter(|m| *m > 0) {
             let sink_blue = s.chain.last().unwrap().daa;
             while added.last().is_some_and(|b| sink_blue.saturating_sub(b.daa) <= mc) {
@@ -1088,7 +1170,7 @@ impl ChainSource for MockNode {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let full = match req.data_verbosity_level {
             Verbosity::High => false,
-            // a window from a node other than the primary (`rpc::multi`)
+            // A window from a node other than the primary (`rpc::multi`).
             Verbosity::Full => true,
             v => panic!("the indexer must request High (or Full from another node), not {v:?}"),
         };
@@ -1097,7 +1179,7 @@ impl ChainSource for MockNode {
             s.vspc_max_in_flight = s.vspc_max_in_flight.max(s.vspc_in_flight);
             (s.vspc_delay, s.vspc_delay_per_tx)
         });
-        // counted out on drop too: the follower aborts prefetched requests it no longer needs
+        // Counted out on drop too: the follower aborts prefetched requests it no longer needs.
         struct InFlight<'a>(&'a MockNode);
         impl Drop for InFlight<'_> {
             fn drop(&mut self) {
@@ -1114,7 +1196,7 @@ impl ChainSource for MockNode {
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
-        // the transport's size limit: a larger answer is refused as its frame header arrives
+        // The transport's size limit: a larger answer is refused as its frame header arrives.
         match (r, req.max_bytes) {
             (Ok(r), Some(max)) if r.wire_bytes > max && !self.with(|s| s.ignore_size_limit) => {
                 self.with(|s| s.too_large += 1);
@@ -1198,9 +1280,10 @@ fn blob_hex(b: Option<Vec<u8>>) -> String {
     b.map(|b| crate::hex::encode(&b)).unwrap_or_else(|| "-".into())
 }
 
-/// A deterministic dump of every derived table with block sequence numbers mapped to block hashes,
-/// so two databases that reached the same state through different histories compare equal. Requires
-/// the reorg window to cover the chain under test (no pruned block rows).
+/// A deterministic dump of every derived table with block sequence numbers mapped to block hashes.
+///
+/// Two databases that reached the same state through different histories compare equal. It
+/// requires the reorg window to cover the chain under test (no pruned block rows).
 pub fn snapshot(conn: &Connection) -> String {
     let mut out = String::new();
     let seq_to_hash: HashMap<i64, String> = {
@@ -1316,7 +1399,8 @@ pub fn snapshot(conn: &Connection) -> String {
         "kcc23_declaration",
         &[4],
     );
-    // a status whose last order changed status keeps a zero row (incremental), which a rebuild never writes
+    // A status whose last order changed status keeps a zero row (incremental), which a rebuild
+    // never writes.
     dump("SELECT name, n FROM counters WHERE n != 0 ORDER BY name", 2, &mut out, "counter", &[]);
     dump(&format!("SELECT {ACTIVITY_COLS} FROM activity ORDER BY iv, t"), 13, &mut out, "activity", &[]);
     dump(
@@ -1334,9 +1418,11 @@ pub fn snapshot(conn: &Connection) -> String {
 /// The columns of an activity bucket (schema.sql).
 const ACTIVITY_COLS: &str = "iv, t, fills, fees, orders, txs, income, income_n, miner_fees, miner_fee_n, net, net_n, own_n";
 
-/// What the read paths rely on, checked on every [`snapshot`]: the row counters the triggers keep equal the counts of the
-/// tables (`/v1/health`), and an order has a current UTXO exactly when its status is `open` or `partial` (the books, counts
-/// and the matcher's book read the live set through the status, `reads::LIVE_FROM`).
+/// What the read paths rely on, checked on every [`snapshot`].
+///
+/// The row counters the triggers keep equal the counts of the tables (`/v1/health`). An order has a
+/// current UTXO exactly when its status is `open` or `partial`. The books, the counts and the
+/// matcher's book read the live set through the status (`reads::LIVE_FROM`).
 pub fn assert_read_invariants(conn: &Connection) {
     let kept = crate::indexer::reads::counters(conn).unwrap();
     let counted = crate::indexer::reads::counted(conn, kept.last_block_seq, kept.last_block_daa).unwrap();
@@ -1349,13 +1435,15 @@ pub fn assert_read_invariants(conn: &Connection) {
         .query_row("SELECT COUNT(*) FROM order_state WHERE (cur_txid IS NOT NULL) != (status IN ('open','partial'))", [], |r| r.get(0))
         .unwrap();
     assert_eq!(off, 0, "an order's current UTXO and its live status disagree");
-    // the activity totals the triggers keep (`GET /v1/stats`) are the ones the events and orders give
+    // The activity totals the triggers keep (`GET /v1/stats`) are the ones the events and orders
+    // give.
     let rows = |sql: &str| -> Vec<Vec<rusqlite::types::Value>> {
         let mut st = conn.prepare(sql).unwrap();
         let n = st.column_count();
         st.query_map([], |r| (0..n).map(|i| r.get(i)).collect()).unwrap().map(|r| r.unwrap()).collect()
     };
-    // (a lean store that has pruned keeps the totals of what it deleted: they are not the rows' any more, `indexer::lean`)
+    // A lean store that has pruned keeps the totals of what it deleted. They are not the rows' any
+    // more (`indexer::lean`).
     if crate::indexer::db::meta_get(conn, "pruned").unwrap().is_some() {
         return;
     }
@@ -1373,10 +1461,13 @@ pub fn assert_read_invariants(conn: &Connection) {
     );
 }
 
-/// The activity buckets the events and the executors' transactions give (what the triggers must have kept).
+/// The activity buckets the events and the executors' transactions give.
+///
+/// These are what the triggers must have kept.
 const COUNTED_ACTIVITY: &str = "SELECT v.iv, x.ts - x.ts % v.iv AS t, SUM(x.f), SUM(x.fe), SUM(x.o), SUM(x.tx), SUM(x.inc), SUM(x.inc_n), SUM(x.mf), SUM(x.mf_n), SUM(x.net), SUM(x.net_n), SUM(x.own) FROM (SELECT ts, kind = 'fill' AS f, CASE WHEN kind = 'fill' THEN COALESCE(fee, 0) ELSE 0 END AS fe, kind = 'create' AS o, 0 AS tx, 0 AS inc, 0 AS inc_n, 0 AS mf, 0 AS mf_n, 0 AS net, 0 AS net_n, 0 AS own FROM order_events WHERE kind IN ('fill', 'create') UNION ALL SELECT ts, 0, 0, 0, 1, COALESCE(ci, 0), ci IS NOT NULL, COALESCE(miner_fee, 0), miner_fee IS NOT NULL, COALESCE(ci - miner_fee, 0), ci IS NOT NULL AND miner_fee IS NOT NULL, own_trade FROM (SELECT ts, miner_fee, own_trade, CASE WHEN own_trade = 0 THEN income END AS ci FROM executor_txs)) x, (SELECT 60000 AS iv UNION ALL SELECT 3600000) v GROUP BY 1, 2 ORDER BY 1, 2";
 
-/// The makers (their keys) and executors (their scripts) the activity totals keep, with the newest block of each.
+/// The makers (their keys) and executors (their scripts) the activity totals keep, with the newest
+/// block of each.
 const ACTORS_KEPT: &str = "SELECT a.kind, CASE a.kind WHEN 1 THEN (SELECT h FROM ids WHERE id = a.actor_id) ELSE (SELECT spk FROM scripts WHERE id = a.actor_id) END,      a.last_block FROM actors a ORDER BY 1, 2";
 
 // ---------------------------------------------------------------------------------------------
@@ -1419,10 +1510,11 @@ pub fn allowlist() -> TokenAllowlist {
     ])
 }
 
+/// The indexer's processor with the fixtures' token allowlist and relaxed listing rules.
 pub fn processor() -> Processor {
     Processor {
         tokens: Arc::new(allowlist()),
-        // relaxed rules: the fixtures use round numbers and long expiries
+        // Relaxed rules: the fixtures use round numbers and long expiries.
         rules: ListingRules { min_order_value_sompi: 1, max_expiry_span_daa: 1 << 40, ..ListingRules::default() },
     }
 }
@@ -1432,19 +1524,27 @@ pub fn wide_window() -> IngestConfig {
     IngestConfig { reorg_window_daa: u64::MAX / 4, checkpoint_daa: u64::MAX / 4, ..IngestConfig::default() }
 }
 
+/// A follower over a mock node, with its store, health and event channel.
 pub struct Harness {
+    /// The mock node the follower reads.
     pub node: Arc<MockNode>,
+    /// The store.
     pub ingest: Arc<Mutex<Ingest>>,
+    /// The follower.
     pub follower: Follower<MockNode>,
+    /// The follower's health.
     pub health: Arc<HealthState>,
+    /// The indexer events the follower publishes.
     pub events: broadcast::Sender<Arc<IndexEvent>>,
 }
 
 impl Harness {
+    /// A harness over a default mock node, with the wide reorg window.
     pub fn new(conn: Connection, log: Option<RecordLog>) -> Harness {
         Self::with_node(MockNode::new("testnet-10"), conn, log, wide_window())
     }
 
+    /// A harness over `node` with the given ingest configuration.
     pub fn with_node(node: Arc<MockNode>, conn: Connection, log: Option<RecordLog>, cfg: IngestConfig) -> Harness {
         Self::with_processor(node, conn, log, cfg, processor())
     }
@@ -1460,7 +1560,8 @@ impl Harness {
         Self::with_follower(node, conn, log, cfg, proc, |_| {})
     }
 
-    /// [`Harness::with_processor`] with the follower's configuration adjusted (parallel fetch, windows).
+    /// [`Harness::with_processor`] with the follower's configuration adjusted (parallel fetch,
+    /// windows).
     pub fn with_follower(
         node: Arc<MockNode>,
         conn: Connection,
@@ -1497,8 +1598,10 @@ impl Harness {
         Harness { node, ingest, follower, health, events }
     }
 
-    /// Lean storage or archive pruning: prune until a batch finds nothing more (a no-op for a store that does not prune). `sync` does it,
-    /// as the follower's loop does between its steps.
+    /// Lean storage or archive pruning: prune until a batch finds nothing more.
+    ///
+    /// It does nothing for a store that does not prune. `sync` does it, as the follower's loop does
+    /// between its steps.
     pub fn lean_prune_all(&self) {
         for _ in 0..100_000 {
             match self.ingest.lock().unwrap().prune_batch(None) {
@@ -1508,8 +1611,11 @@ impl Harness {
         }
     }
 
-    /// A harness whose store is lean with the smallest retention the reorg window allows (`window` DAA): what the matcher and
-    /// the keepers read must not depend on a single row of history. The tests of `tests/` run under it with `KOB_TEST_LEAN=1`.
+    /// A harness whose store is lean with the smallest retention the reorg window allows (`window`
+    /// DAA).
+    ///
+    /// What the matcher and the keepers read must not depend on a single row of history. The tests
+    /// of `tests/` run under it with `KOB_TEST_LEAN=1`.
     pub fn lean(window: u64) -> Harness {
         let cfg = IngestConfig { reorg_window_daa: window, lean: Some(crate::indexer::lean::LeanConfig::new(0, 0)), ..wide_window() };
         Self::with_node(MockNode::new("testnet-10"), crate::indexer::db::open_memory("testnet-10").unwrap(), None, cfg)
@@ -1530,8 +1636,10 @@ impl Harness {
         panic!("follower did not settle: {out:?}");
     }
 
-    /// [`Harness::sync`] through transient failures (timeouts of a slow link): steps until the follower is idle at
-    /// the node's sink; panics on a gap or after `max_steps`.
+    /// [`Harness::sync`] through transient failures (timeouts of a slow link).
+    ///
+    /// It steps until the follower is idle at the node's sink. It panics on a gap or after
+    /// `max_steps`.
     pub async fn sync_through_retries(&self, max_steps: usize) -> Vec<StepOutcome> {
         let mut out = vec![];
         for _ in 0..max_steps {
@@ -1547,14 +1655,17 @@ impl Harness {
         panic!("follower did not reach the sink in {max_steps} steps: {:?}", &out[out.len().saturating_sub(20)..]);
     }
 
+    /// A deterministic dump of the store ([`snapshot`]).
     pub fn snapshot(&self) -> String {
         snapshot(self.ingest.lock().unwrap().conn())
     }
 
+    /// The first column of the first row of `sql`.
     pub fn query<T: rusqlite::types::FromSql>(&self, sql: &str, p: impl rusqlite::Params) -> T {
         self.ingest.lock().unwrap().conn().query_row(sql, p, |r| r.get(0)).unwrap()
     }
 
+    /// The status of the order with covenant id `cov`.
     pub fn status(&self, cov: &Hash32) -> String {
         self.query("SELECT status FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]])
     }
@@ -1589,7 +1700,8 @@ impl Harness {
         st.query_map([&cov.0[..]], |r| r.get::<_, String>(0)).unwrap().map(|r| r.unwrap()).collect()
     }
 
-    /// The `detail` JSON of an order's latest event of `kind` (e.g. `detail["evidence"]` of an arm).
+    /// The `detail` JSON of an order's latest event of `kind` (for example `detail["evidence"]`
+    /// of an arm).
     pub fn event_detail(&self, cov: &Hash32, kind: &str) -> serde_json::Value {
         let d: String = self.query(
             "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = ?2 ORDER BY id DESC LIMIT 1",
@@ -1634,7 +1746,9 @@ pub fn kcc23_txid(t: &kaspa_consensus_core::tx::Transaction) -> Hash32 {
     Hash32(kaspa_consensus_core::hashing::tx::id(t).as_bytes())
 }
 
-/// A version 1 preparation transaction carrying `payload` (one input funded by `h("kcc23-funding", salt)`, one plain output).
+/// A version 1 preparation transaction carrying `payload`.
+///
+/// It has one input funded by `h("kcc23-funding", salt)` and one plain output.
 pub fn kcc23_prep(salt: u64, payload: Vec<u8>) -> kaspa_consensus_core::tx::Transaction {
     use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
     use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput};
@@ -1643,8 +1757,10 @@ pub fn kcc23_prep(salt: u64, payload: Vec<u8>) -> kaspa_consensus_core::tx::Tran
     Transaction::new(1, vec![TransactionInput::new(funding, vec![], 0, 0)], vec![out], 0, SUBNETWORK_ID_NATIVE, 0, payload)
 }
 
-/// The genesis of a covenant spending output `out` of `prep` (the authorising input 0, one covenant output carrying the
-/// KIP-20 genesis id of that outpoint and group), and the covenant id.
+/// The genesis of a covenant spending output `out` of `prep`, and the covenant id.
+///
+/// The authorising input is 0. One covenant output carries the KIP-20 genesis id of that outpoint
+/// and group.
 pub fn kcc23_genesis(
     prep: &kaspa_consensus_core::tx::Transaction,
     out: u32,
@@ -1670,8 +1786,9 @@ pub fn kcc23_genesis(
     (g, Hash32(id.as_bytes()))
 }
 
-/// A consensus transaction as VSPC v2 reports it accepted: at `High` verbosity (`full` false) without the version, lock time,
-/// subnetwork and gas.
+/// A consensus transaction as VSPC v2 reports it accepted.
+///
+/// At `High` verbosity (`full` false) it has no version, lock time, subnetwork and gas.
 pub fn kcc23_wire(t: &kaspa_consensus_core::tx::Transaction, full: bool) -> Tx {
     Tx {
         inputs: t
