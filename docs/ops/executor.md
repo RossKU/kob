@@ -518,6 +518,14 @@ holds no key. Its `node` is the indexer's `--rpc-url` (the file's value is ignor
   payer's change: the outpoint names the transaction), by the reconcile or by the payer's identical retry. One the node
   no longer knows (not in the mempool, no output of it on chain) is not waited for forever: after an hour
   (`stale_broadcast` in the reconcile report) it becomes `ambiguous` and the ambiguous rules of A.7 apply.
+* **A spent order is judged without the mempool.** When an order of a swap-and-pay payment is spent
+  while the facilitator waits for finality, only a payment that was not accepted is dead, because its own
+  acceptance spends the order too. Acceptance is read from the tracker and the UTXO set, never from the
+  mempool. rusty-kaspa v2.1.0 updates its mempool only after the virtual state: `FlowContext::on_new_block`
+  awaits the block's virtual-state task, then `handle_new_block_transactions` removes the block's
+  transactions. For a moment an accepted transaction is still listed in the mempool while its outputs are in
+  the UTXO set and its inputs are not. `NodeChain::output_status` asks the mempool first and would call it
+  unaccepted.
 * **Watches are per consumer.** The matcher's acceptance bookkeeping drops only its own watches.
 * **Swap-and-pay quotes** are the payer's job (`docs/spec/x402-swap-and-pay.md` §12; the facilitator
   exposes no quote endpoint). `kobd::x402::quote` builds a `Quote` from any indexer book
@@ -2007,7 +2015,7 @@ stall or drain any executor:
   hashes, at most 8 distinct other scripts are resolved (each is an address-wide lookup on the node), and a
   `standard-native` payment's authorization is verified against the key of the input it names first, so a payload its
   payer did not authorize resolves nothing. `/verify` refuses a
-  payment funded by an immature coinbase output (100 DAA; it is a check, never a delivery guarantee: only `/settle`'s observed
+  payment funded by an immature coinbase output (1,000 DAA, the consensus maturity at 10 BPS; it is a check, never a delivery guarantee: only `/settle`'s observed
   finality is). `":memory:"` ledgers are refused on mainnet, and a `pending` entry the node never saw is failed and its outpoints
   released after 15 minutes.
 * **The hot key**: the hex text read from the key file or `KOB_OPERATOR_KEY` is wiped after parsing. On Windows the file's
