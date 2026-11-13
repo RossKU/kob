@@ -278,7 +278,9 @@ mod tests {
         json!({"entries": us.iter().map(wrpc::utxo_entry_json).collect::<Vec<_>>()})
     }
 
-    /// Two nodes `wss://a/..` and `wss://b/..` answering from scripts; `c` is the replacement the resolvers name.
+    /// Two nodes `wss://a/..` and `wss://b/..` answering from scripts.
+    ///
+    /// `c` is the replacement that the resolvers name.
     struct World {
         answers: RefCell<std::collections::HashMap<String, VecDeque<Result<Value, WrpcError>>>>,
         nodes: RefCell<Vec<String>>,
