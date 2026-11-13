@@ -20,8 +20,9 @@
 #   ... --no-argent                       skip the Argent artifacts (contracts/argent, needs argentc,
 #                                         built from the pinned upstream: see vendor/argent-upstream/UPSTREAM.md)
 #
-# Sources are passed to silverc as repo-relative paths from the repo root because the artifact
-# records `source_path`; that keeps the output independent of the checkout location.
+# Sources are passed to silverc as repo-relative paths from the repo root.
+# The artifact's `source_path` is `sil/<Name>.sil` whatever the input path, so the paths do not
+# affect the output.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
