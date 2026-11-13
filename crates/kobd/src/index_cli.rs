@@ -1,6 +1,10 @@
-//! The indexer's command line: the options of a start (`kobd --indexer`, and the set `kobd --executor` shares), the
-//! database tools, `kobd db <tool>` (migrate, vacuum, replay, export-orders, export-book, import-orders, rebase), and the token-logo
-//! reports, `kobd logo-reports <command>`.
+//! The indexer part of the `kobd` command line, and the code that runs it.
+//!
+//! It holds three things.
+//! - The options of a start, which `kobd --indexer` and `kobd --executor` share.
+//! - The database tools, `kobd db <tool>`: migrate, vacuum, replay, export-orders, export-book,
+//!   import-orders, rebase.
+//! - The token-logo reports, `kobd logo-reports <command>`.
 
 use crate::config::NodeConfig;
 use crate::config::{IndexerConfig, StartMode};
@@ -39,8 +43,9 @@ pub struct StoreOpts {
     /// TOML configuration file (all keys optional); flags override it.
     #[arg(long, global = true, env = "KOB_INDEX_CONFIG")]
     pub config: Option<PathBuf>,
-    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build (no default); a deployment
-    /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another.
+    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build
+    /// (no default); a deployment build (`deploy-mainnet`, `deploy-tn10`) implies its own and
+    /// refuses another.
     #[arg(long, global = true, env = "KOB_NETWORK")]
     pub network: Option<String>,
     /// Directory holding the SQLite database and the record log (`data_dir`; default `kob-data`).
@@ -51,48 +56,55 @@ pub struct StoreOpts {
     pub tokens: Option<PathBuf>,
 }
 
-/// The node and the further nodes: a start, and the database tools that ask a node (`import-orders`, `rebase`).
+/// The node and the further nodes: a start, and the database tools that ask a node
+/// (`import-orders`, `rebase`).
 #[derive(Args, Clone, Debug, Default)]
 #[command(next_help_heading = "Node")]
 pub struct NodeOpts {
-    /// THE node (the chain authority): JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh` path or a default Borsh port
-    /// `17110` / `17210`: every call in Borsh), or `resolver`: a public Kaspa node of the network found through the Kaspa
-    /// resolvers (Borsh over TLS, always a cross-checked pair; another one after a failure). Default: `resolver`. An own node
-    /// (the local one listens on `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10) is named here. A URL
-    /// with a password or an API key belongs in the config file (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line
-    /// (`ps`).
+    /// THE node (the chain authority): JSON wRPC (`ws://`, `wss://`), Borsh wRPC (a `.../borsh`
+    /// path or a default Borsh port `17110` / `17210`: every call in Borsh), or `resolver`: a
+    /// public Kaspa node of the network found through the Kaspa resolvers (Borsh over TLS, always a
+    /// cross-checked pair; another one after a failure). Default: `resolver`. An own node (the
+    /// local one listens on `ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on
+    /// testnet-10) is named here. A URL with a password or an API key belongs in the config file
+    /// (`rpc_url`) or in `KOB_NODE_WRPC`, not on the command line (`ps`).
     #[arg(long, global = true, env = "KOB_NODE_WRPC", value_name = "URL")]
     pub rpc_url: Option<String>,
-    /// A further node beside the node itself (`ws://` or `wss://`, JSON or Borsh wRPC as `--rpc-url`, or `resolver`: another
-    /// public node, resolved independently of the primary's; repeatable): windows of transaction bodies are fetched from it
-    /// too (checked against the node, `--rpc-url`) and transactions submitted to it too. Added to the config's `[[nodes]]`.
-    /// A URL with a password or an API key belongs in the config file or in `KOB_INDEX_NODES` (comma-separated), not on the
-    /// command line (`ps`).
+    /// A further node beside the node itself (`ws://` or `wss://`, JSON or Borsh wRPC as
+    /// `--rpc-url`, or `resolver`: another public node, resolved independently of the primary's;
+    /// repeatable): windows of transaction bodies are fetched from it too (checked against the
+    /// node, `--rpc-url`) and transactions submitted to it too. Added to the config's `[[nodes]]`.
+    /// A URL with a password or an API key belongs in the config file or in `KOB_INDEX_NODES`
+    /// (comma-separated), not on the command line (`ps`).
     #[arg(long = "extra-node", global = true, value_name = "URL", env = "KOB_INDEX_NODES", value_delimiter = ',')]
     pub nodes: Vec<String>,
-    /// The option of earlier builds for a further node: refused with the new name (`--extra-node`), never taken as the node.
+    /// The retired option for a further node. It is refused with the new name (`--extra-node`) and
+    /// never taken as the node. Hidden from `--help`.
     #[arg(long = "node", global = true, value_name = "URL", hide = true)]
     pub old_node: Vec<String>,
-    /// With `--extra-node`: the node itself serves windows of transaction bodies only when no other node can (it stays the
-    /// chain authority).
+    /// With `--extra-node`: the node itself serves windows of transaction bodies only when no other
+    /// node can (it stays the chain authority).
     #[arg(long, global = true)]
     pub no_primary_fetch: bool,
-    /// Fetch the windows of transaction bodies over each node's Borsh wRPC endpoint (`borsh` in the config).
+    /// Fetch the windows of transaction bodies over each node's Borsh wRPC endpoint (`borsh` in the
+    /// config).
     #[arg(long, global = true)]
     pub borsh: bool,
-    /// Parallel windows while the cursor is more than this many blue score behind the sink (`prefetch_min_lag_blue`).
+    /// Parallel windows while the cursor is more than this many blue score behind the sink
+    /// (`prefetch_min_lag_blue`).
     #[arg(long, global = true, value_name = "BLUE")]
     pub prefetch_min_lag_blue: Option<u64>,
 }
 
-/// The refusal of the option `--node` of earlier builds on a start and the database tools: since this release a further
-/// node is `--extra-node`, and the node itself has always been `--rpc-url` (`kobd setup --node`, `kobd x402 --node` and `kob
-/// --node` name the node, so the word would otherwise mean two things).
+/// The message that refuses the retired option `--node` on a start and on the database tools.
+///
+/// A further node is `--extra-node` and the node itself is `--rpc-url`. In `kobd setup --node` and
+/// `kobd x402 --node` the word `--node` names the node, so it would otherwise mean two things.
 pub const OLD_NODE_OPTION: &str =
     "--node is now --extra-node for a second node; the node itself is --rpc-url (or rpc_url in kobd.toml)";
 
 impl NodeOpts {
-    /// Refuses the option of earlier builds ([`OLD_NODE_OPTION`]).
+    /// Refuses the retired `--node` option ([`OLD_NODE_OPTION`]).
     pub fn refuse_old_node(&self) -> Result<()> {
         if self.old_node.is_empty() {
             Ok(())
@@ -112,17 +124,18 @@ pub struct IndexOpts {
     /// Where a fresh database starts: `pruning-point` (default), `sink`, or a chain block hash.
     #[arg(long, global = true, help_heading = "Storage", value_name = "WHERE")]
     pub start: Option<StartMode>,
-    /// The Executor on an empty data directory: trade at once on a store that follows the chain from the node's sink, and index the
-    /// history into the normal store meanwhile (`fast_start` in the configuration; docs/ops/executor.md, *Fast start*). On by
-    /// default for the Executor.
+    /// The Executor on an empty data directory: trade at once on a store that follows the chain
+    /// from the node's sink, and index the history into the normal store meanwhile (`fast_start` in
+    /// the configuration; docs/ops/executor.md, *Fast start*). On by default for the Executor.
     #[arg(long, global = true, conflicts_with = "no_fast_start", help_heading = "Storage")]
     pub fast_start: bool,
-    /// Turn fast start off for this start: the history is indexed before the matcher plans (fast start is on for the Executor
-    /// unless the configuration says `fast_start = false`).
+    /// Turn fast start off for this start: the history is indexed before the matcher plans (fast
+    /// start is on for the Executor unless the configuration says `fast_start = false`).
     #[arg(long, global = true, help_heading = "Storage")]
     pub no_fast_start: bool,
-    /// Lean storage: keep the live book and 30 days of closed orders (500 MB cap), no record log, a file that shrinks (`lean` in the
-    /// configuration; docs/ops/executor.md, *Lean storage*). The Executor alone is always lean, the Indexer never.
+    /// Lean storage: keep the live book and 30 days of closed orders (500 MB cap), no record log, a
+    /// file that shrinks (`lean` in the configuration; docs/ops/executor.md, *Lean storage*). The
+    /// Executor alone is always lean, the Indexer never.
     #[arg(long, global = true, conflicts_with = "no_lean", help_heading = "Storage")]
     pub lean: bool,
     /// Turn `lean` of the configuration off for this start.
@@ -134,7 +147,8 @@ pub struct IndexOpts {
     /// Lean storage: size cap of the database in MB (`lean_max_db_mb`, default 500; 0: none).
     #[arg(long, global = true, help_heading = "Storage", value_name = "MB")]
     pub lean_max_db_mb: Option<u64>,
-    /// Disable the permanent record log (not recommended: it is the rebuild source, see docs/ops/executor.md, Part B).
+    /// Disable the permanent record log (not recommended: it is the rebuild source, see
+    /// docs/ops/executor.md, Part B).
     #[arg(long, global = true, help_heading = "Storage")]
     pub no_record_log: bool,
     /// Hours of chain blocks kept for reorgs (the finality window; default 12).
@@ -143,17 +157,19 @@ pub struct IndexOpts {
     /// Read API listen address (`[api] listen`; default `127.0.0.1:8090`).
     #[arg(long, global = true, help_heading = "Read API", value_name = "ADDR")]
     pub listen: Option<std::net::SocketAddr>,
-    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`usd_price` in `[api]`). The
-    /// indexer asks CoinGecko's keyless API for it (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once a minute
-    /// (backing off to 10 minutes while an upstream fails) and only while a client asks, and serves the last good value with
-    /// its time and source. Off by default: no call to a third party unless this is given.
+    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display
+    /// (`usd_price` in `[api]`). The indexer asks CoinGecko's keyless API for it (a KuCoin KAS-USDT
+    /// ticker when CoinGecko fails), at most once a minute (backing off to 10 minutes while an
+    /// upstream fails) and only while a client asks, and serves the last good value with its time
+    /// and source. Off by default: no call to a third party unless this is given.
     #[arg(long, global = true, env = "KOB_USD_PRICE", help_heading = "Read API")]
     pub usd_price: bool,
     /// Do not serve the read API.
     #[arg(long, global = true, help_heading = "Read API")]
     pub no_api: bool,
-    /// Log a one-line status (the indexer's lag; with the Executor also the transactions sent, the profit, the funds and the
-    /// warnings) every this many seconds, as kaspad logs one every 10 s; 0: never.
+    /// Log a one-line status (the indexer's lag; with the Executor also the transactions sent, the
+    /// profit, the funds and the warnings) every this many seconds, as kaspad logs one every 10 s;
+    /// 0: never.
     #[arg(long, global = true, default_value_t = 10, help_heading = "Log", value_name = "SECS")]
     pub status_secs: u64,
 }
@@ -175,7 +191,8 @@ impl IndexOpts {
     }
 }
 
-/// The schema numbers of `kobd db migrate --help`, from the code: the lowest schema it brings forward and this build's.
+/// The schema numbers of `kobd db migrate --help`, from the code: the lowest schema it brings
+/// forward and this build's.
 fn migrate_about() -> &'static str {
     static ABOUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     ABOUT.get_or_init(|| {
@@ -195,10 +212,12 @@ fn migrate_about() -> &'static str {
 }
 #[derive(Subcommand)]
 pub enum DbSub {
-    /// Rebuild a NEW database from the record log (the log is not modified), then follow the node from its cursor.
+    /// Rebuild a NEW database from the record log (the log is not modified), then follow the node
+    /// from its cursor.
     Replay {
-        /// Bring the EXISTING database forward instead: apply the record-log frames it has not committed (a database
-        /// restored from a backup next to a newer log). The log is not modified.
+        /// Bring the EXISTING database forward instead: apply the record-log frames it has not
+        /// committed (a database restored from a backup next to a newer log). The log is not
+        /// modified.
         #[arg(long)]
         onto_database: bool,
     },
@@ -211,9 +230,10 @@ pub enum DbSub {
         #[arg(long)]
         no_compress_log: bool,
     },
-    /// Give the free pages of the store back to the file system (offline; stop the executor first): a copy without them is checked and
-    /// takes the place of the store, whose file is deleted. Once after the first pruning of a store that kept its whole history (the
-    /// archive pruning frees most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
+    /// Give the free pages of the store back to the file system (offline; stop the executor first):
+    /// a copy without them is checked and takes the place of the store, whose file is deleted. Once
+    /// after the first pruning of a store that kept its whole history (the archive pruning frees
+    /// most of it; docs/ops/executor.md 7.6b). Needs free disk for the copy (the pages in use).
     Vacuum,
     /// Print a maker order export (JSON) from the database.
     ExportOrders {
@@ -224,33 +244,37 @@ pub enum DbSub {
         #[arg(long)]
         live_only: bool,
     },
-    /// Write the matcher's book snapshot (JSON, `MemoryBook`: every listed order with its custody and strays, and the
-    /// keeper-only orders, at the store's cursor) for `match` / `keep --book-file`. Read-only next to a running writer;
-    /// `--out` replaces the file atomically.
+    /// Write the matcher's book snapshot (JSON, `MemoryBook`: every listed order with its custody
+    /// and strays, and the keeper-only orders, at the store's cursor) for `match` / `keep
+    /// --book-file`. Read-only next to a running writer; `--out` replaces the file atomically.
     ExportBook {
         /// Output file (written to a temporary sibling, then renamed); default: standard output.
         #[arg(long)]
         out: Option<PathBuf>,
     },
-    /// Recovery hook: import orders from a maker export or archive dump, verified against the node's UTXO set.
+    /// Recovery hook: import orders from a maker export or archive dump, verified against the
+    /// node's UTXO set.
     ImportOrders {
         file: PathBuf,
         #[command(flatten)]
         node: NodeOpts,
     },
-    /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with the node.
+    /// After a gap: move the cursor to a fresh start point and reconcile the tracked orders with
+    /// the node.
     Rebase {
         /// `sink` or a chain block hash.
         #[arg(long, default_value = "sink")]
         to: StartMode,
-        /// Only move the cursor; do not touch the tracked orders (they may stay open although spent).
+        /// Only move the cursor; do not touch the tracked orders (they may stay open although
+        /// spent).
         #[arg(long)]
         no_reconcile: bool,
         #[command(flatten)]
         node: NodeOpts,
     },
-    /// What a data directory holds, read-only and offline (works next to a running executor): the schema, the network, the
-    /// cursor, the orders, the sizes, lean or archive storage, where the history begins.
+    /// What a data directory holds, read-only and offline (works next to a running executor): the
+    /// schema, the network, the cursor, the orders, the sizes, lean or archive storage, where the
+    /// history begins.
     Info {
         /// One JSON object instead of the text.
         #[arg(long)]
@@ -267,7 +291,8 @@ pub enum LogoCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Show the logo again. New reports for the token are then only recorded for `cooldown_secs` (default 6 hours), after that they hide it again.
+    /// Show the logo again. New reports for the token are then only recorded for `cooldown_secs`
+    /// (default 6 hours), after that they hide it again.
     Restore {
         /// Covenant id (64 hex characters).
         covenant_id: String,
@@ -275,21 +300,26 @@ pub enum LogoCmd {
         #[arg(long)]
         force: bool,
     },
-    /// Hide the logo for good: reports never restore it; `restore --force` does. The token need not have been reported.
+    /// Hide the logo for good: reports never restore it; `restore --force` does. The token need not
+    /// have been reported.
     Hide {
         /// Covenant id (64 hex characters).
         covenant_id: String,
     },
-    /// Print the whole report state as JSON (reports are not derived from the chain: export before `kobd db replay` rebuilds the database).
+    /// Print the whole report state as JSON (reports are not derived from the chain: export before
+    /// `kobd db replay` rebuilds the database).
     Export,
     /// Load an export into an empty report store (after `kobd db replay`).
     Import { file: PathBuf },
 }
 
-/// The relative paths of a configuration file (`data_dir`, `tokens_path`, `[records] dir`) are relative to the file's
-/// directory, as `log_file` is (`crate::cli`), so `--config <dir>/kobd.toml` started from any directory reads the
-/// same files as a start in `<dir>`. A file named without a directory (the launcher's `--config kobd.toml`, run in
-/// the file's directory) keeps its paths as written. Paths given as flags stay relative to the working directory.
+/// Makes the relative paths of a configuration file relative to the directory of the file.
+///
+/// The paths are `data_dir`, `tokens_path` and `[records] dir`. `log_file` works the same way, see
+/// `crate::cli`. So `--config <dir>/kobd.toml`, started from any directory, reads the same files as
+/// a start in `<dir>`. A file named without a directory keeps its paths as written. That is the
+/// launcher's `--config kobd.toml`, run in the directory of the file. Paths given as flags stay
+/// relative to the working directory.
 fn relative_to_config(cfg: &mut IndexerConfig, file: &std::path::Path) {
     let Some(base) = file.parent().filter(|d| !d.as_os_str().is_empty()) else { return };
     cfg.data_dir = crate::logging::resolve(base, &cfg.data_dir);
@@ -298,6 +328,9 @@ fn relative_to_config(cfg: &mut IndexerConfig, file: &std::path::Path) {
     }
 }
 
+/// The indexer configuration of a start: the configuration file, then the options over it.
+///
+/// It refuses the retired `--node` option and resolves the network and the node.
 pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     a.node.refuse_old_node()?;
     let (s, n) = (&a.store, &a.node);
@@ -368,33 +401,34 @@ pub fn build_config(a: &IndexOpts) -> Result<IndexerConfig> {
     if a.no_record_log {
         cfg.records.enabled = false;
     }
-    // lean storage keeps no record log (it is the rebuild source of an archive; a lean store is rebuilt from the chain's
-    // retention in a day)
+    // Lean storage keeps no record log. The log is the rebuild source of an archive.
     if cfg.lean {
         cfg.records.enabled = false;
     }
     if let Some(v) = a.reorg_window_hours {
         cfg.reorg_window_hours = v;
     }
-    // A deployment build (e.g. `--features deploy-tn10`) records the network it was built for (the templates are the
-    // reference ones; the build only refuses to index another network). The reference build implies none: the network
-    // is given explicitly, never a silent testnet-10.
+    // A deployment build, such as `--features deploy-tn10`, records the network it was built for.
+    // The templates are the reference ones, and the build only refuses to index another network.
+    // The reference build implies none. The network is given explicitly, never a silent
+    // testnet-10.
     cfg.network = crate::config::resolve_network(Some(&cfg.network)).map_err(|e| anyhow!(e))?;
     if cfg.rpc_url.trim().is_empty() {
-        // no node named: the public pair (an own node is named with its URL)
+        // No node named: the public pair. An own node is named with its URL.
         cfg.rpc_url = crate::config::default_node(&cfg.network).ok_or_else(|| {
             anyhow!("no node endpoint for network {}: pass --rpc-url (or `rpc_url` in the configuration)", cfg.network)
         })?;
     }
     number_resolver_entries(&mut cfg);
     check_failover(&cfg)?;
-    // the resolver entries resolve public nodes of this network
+    // The resolver entries resolve public nodes of this network.
     crate::rpc::resolver::set_network(&cfg.network);
     Ok(cfg)
 }
 
-/// The `[failover]` table, refused rather than half used: the fallback is the public pair (`resolver`), which the configured
-/// nodes must not use already (the pair's entries are process-wide, `rpc::resolver`).
+/// The `[failover]` table, refused rather than half used: the fallback is the public pair
+/// (`resolver`), which the configured nodes must not use already (the pair's entries are
+/// process-wide, `rpc::resolver`).
 pub fn check_failover(cfg: &IndexerConfig) -> Result<()> {
     use crate::rpc::resolver::{is_resolver, RESOLVER};
     let f = &cfg.failover;
@@ -415,11 +449,14 @@ pub fn check_failover(cfg: &IndexerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Gives every resolver entry of the configuration its own pseudo URL (`rpc::resolver::pseudo`), so each resolves a public
-/// node of its own on another host: the primary's `resolver` stays `resolver`; a primary `resolver` always comes as a pair, the
-/// second entry `resolver:2` (added first, before any other node), which fetches windows, takes every submission and vouches
-/// for the primary's answers (`rpc::multi`, `NodeSpec::cross_check`); every other node `resolver` (`--extra-node resolver`) becomes
-/// the next number.
+/// Gives every resolver entry of the configuration its own pseudo URL (`rpc::resolver::pseudo`).
+///
+/// Each entry then resolves a public node of its own, on another host.
+/// - The primary's `resolver` stays `resolver`.
+/// - A primary `resolver` always comes as a pair. The second entry is `resolver:2`, added before
+///   any other node. It fetches windows, takes every submission and vouches for the answers of the
+///   primary (`rpc::multi`, `NodeSpec::cross_check`).
+/// - Every other node `resolver` (`--extra-node resolver`) becomes the next number.
 pub fn number_resolver_entries(cfg: &mut IndexerConfig) {
     use crate::config::NodeRole;
     use crate::rpc::resolver::{pseudo, RESOLVER};
@@ -438,7 +475,7 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     let mut w = WrpcConfig::new(url.to_string());
     w.request_timeout = std::time::Duration::from_secs(cfg.rpc_timeout_secs);
     w.vspc_connections = vspc_connections;
-    // Borsh only on VSPC connections of its own (with none, VSPC shares the JSON connection)
+    // Borsh only on VSPC connections of their own. With none, VSPC shares the JSON connection.
     w.borsh_url = cfg.borsh_url_of(url).filter(|_| vspc_connections > 0);
     if let Some(b) = &w.borsh_url {
         tracing::info!(node = %redact_url(url), borsh = %redact_url(b), connections = vspc_connections, "windows of transaction bodies over Borsh wRPC");
@@ -449,17 +486,18 @@ fn wrpc(cfg: &IndexerConfig, url: &str, vspc_connections: usize) -> Arc<WrpcClie
     Arc::new(WrpcClient::new(w))
 }
 
-/// The node source of the indexer: the primary (`rpc_url`, or the `nodes` entry with `role = "primary"`) and the other
-/// nodes of `nodes` (`rpc::multi`). With no other node it behaves exactly as the primary alone.
+/// The node source of the indexer: the primary (`rpc_url`, or the `nodes` entry with `role =
+/// "primary"`) and the other nodes of `nodes` (`rpc::multi`). With no other node it behaves exactly
+/// as the primary alone.
 pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     let parallel = cfg.fetch_parallel.max(1);
-    // the follower fetches that many VSPC windows at once while it catches up, one connection each
+    // The follower fetches that many VSPC windows at once while it catches up, one connection each.
     let conns = |n: usize| if parallel > 1 { n } else { 0 };
     let primary_url = cfg.primary_url().to_string();
     let primary = wrpc(cfg, &primary_url, conns(parallel));
     let primary_spec =
         NodeSpec { url: primary_url.clone(), fetch: cfg.primary_fetches(), submit: true, connections: parallel, cross_check: false };
-    // the second node of a resolver pair vouches for the primary's own answers too (rpc::multi)
+    // The second node of a resolver pair vouches for the answers of the primary too (rpc::multi).
     let pair = crate::rpc::resolver::is_resolver(&primary_url);
     let mut nodes = vec![(primary_spec, primary.clone())];
     for n in cfg.secondaries() {
@@ -468,7 +506,8 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
         let spec = NodeSpec { url: n.url.clone(), fetch: n.fetch && parallel > 1, submit: n.submit, connections: c, cross_check };
         nodes.push((spec, wrpc(cfg, &n.url, conns(c))));
     }
-    // the acceptance data and the primary's copies of chain blocks that matter, on connections of their own
+    // The acceptance data and the copies of chain blocks that matter, from the primary on
+    // connections of their own.
     let verifier = if nodes.len() > 1 { wrpc(cfg, &primary_url, 4) } else { primary };
     if nodes.len() > 1 {
         tracing::info!(
@@ -481,8 +520,8 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     Arc::new(MultiNode::new(nodes, verifier))
 }
 
-/// The fallback of the node failover: the public Kaspa nodes as a cross-checked pair (`rpc_url = "resolver"`, with the
-/// configuration's fetch settings).
+/// The fallback of the node failover: the public Kaspa nodes as a cross-checked pair (`rpc_url =
+/// "resolver"`, with the configuration's fetch settings).
 pub fn fallback_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     let mut f = cfg.clone();
     f.rpc_url = crate::rpc::resolver::RESOLVER.to_string();
@@ -492,8 +531,8 @@ pub fn fallback_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     node_client(&f)
 }
 
-/// The Indexer's node source with `[failover]`: the configured nodes ([`node_client`]) first, the public pair
-/// ([`fallback_client`]) when they stop answering (`rpc::failover`).
+/// The Indexer's node source with `[failover]`: the configured nodes ([`node_client`]) first, the
+/// public pair ([`fallback_client`]) when they stop answering (`rpc::failover`).
 pub fn failover_client(cfg: &IndexerConfig) -> Arc<Failover<MultiNode<WrpcClient>>> {
     use crate::rpc::failover::FailoverPolicy;
     let (primary, fallback) = (node_client(cfg), fallback_client(cfg));
@@ -511,9 +550,10 @@ pub fn failover_client(cfg: &IndexerConfig) -> Arc<Failover<MultiNode<WrpcClient
 
 pub use crate::shutdown::shutdown_signal;
 
-/// What the Indexer (`kobd --indexer`) refuses instead of ignoring: the options of role `run` that its configuration sets.
-/// The launcher refuses the same `[launch]` keys (`setup::launch_args`); `fast_start` needs the matcher the index role does not have.
-/// `file`: the configuration file, for the message.
+/// What the Indexer (`kobd --indexer`) refuses instead of ignoring: the options of role `run` that
+/// its configuration sets. The launcher refuses the same `[launch]` keys (`setup::launch_args`);
+/// `fast_start` needs the matcher the index role does not have. `file`: the configuration file, for
+/// the message.
 pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Path>) -> Result<()> {
     let at = file.map(|p| format!("{}: ", p.display())).unwrap_or_default();
     if let Some(k) = cfg.launch.as_ref().and_then(|l| l.run_only_key()) {
@@ -533,13 +573,12 @@ pub fn refuse_run_only_options(cfg: &IndexerConfig, file: Option<&std::path::Pat
     Ok(())
 }
 
-/// The tools of `kobd db`, as named on the command line.
 /// The Indexer: follow the node and serve the read API (`kobd --indexer`).
 pub async fn follow_and_serve(opts: IndexOpts) -> Result<()> {
     let cfg = build_config(&opts)?;
     refuse_run_only_options(&cfg, opts.config())?;
     tracing::info!(network = %cfg.network, rpc = %redact_url(cfg.primary_url()), data = %cfg.data_dir.display(), "starting indexer");
-    // listening before the slow part: a Ctrl+C while the store opens is not lost
+    // Listen before the slow part, so that a Ctrl+C while the store opens is not lost.
     let shutdown = shutdown_signal();
     let idx = Indexer::open(cfg)?;
     let status = opts.status_every().map(|every| {
@@ -612,8 +651,9 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
                     r.dropped.unknown_imports
                 );
             }
-            // a placement this build cannot interpret (an order or a token program it no longer pins) is a reject in the new
-            // database, not an order: say how many, by reason, so a rebuild that leaves orders out never looks complete
+            // A placement this build cannot interpret is a reject in the new database, not an
+            // order. That is an order or a token program that the build does not pin. Say how many
+            // there are, by reason, so that a rebuild that leaves orders out never looks complete.
             let conn = indexer::db::open_reader(&cfg.db_path(), &cfg.network)?;
             let mut q = conn.prepare("SELECT reason, COUNT(*) FROM rejects GROUP BY reason ORDER BY 2 DESC LIMIT 10")?;
             let rows = q.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
@@ -650,7 +690,8 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             );
         }
         DbSub::ExportOrders { maker, live_only } => {
-            // read-only: allowed next to a running writer of the same data directory (nothing indexed yet: an empty export)
+            // Read-only, so it is allowed next to a running writer of the same data directory.
+            // With nothing indexed yet the export is empty.
             let conn = if cfg.db_path().exists() {
                 indexer::db::open_reader(&cfg.db_path(), &cfg.network)?
             } else {
@@ -661,7 +702,7 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&export)?);
         }
         DbSub::ExportBook { out } => {
-            // read-only, like export-orders (nothing indexed yet: an empty book)
+            // Read-only, like export-orders. With nothing indexed yet the book is empty.
             let conn = if cfg.db_path().exists() {
                 indexer::db::open_reader(&cfg.db_path(), &cfg.network)?
             } else {
@@ -671,7 +712,7 @@ pub async fn run_db(a: DbArgs) -> Result<()> {
             match out {
                 None => println!("{json}"),
                 Some(path) => {
-                    // a matcher re-reading the file never sees half of it
+                    // A matcher that re-reads the file never sees half of it.
                     let mut tmp = path.clone().into_os_string();
                     tmp.push(".tmp");
                     std::fs::write(&tmp, json).with_context(|| PathBuf::from(&tmp).display().to_string())?;
@@ -714,8 +755,10 @@ fn file_and_wal_bytes(path: &std::path::Path) -> u64 {
     [path, wal.as_path()].iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum()
 }
 
-/// What `kobd db info` reports about the data directory of `cfg`: read-only and offline (no writer lock, no node, no schema
-/// change: a store of an older schema is described, not migrated).
+/// What `kobd db info` reports about the data directory of `cfg`.
+///
+/// It is read-only and offline. It takes no writer lock, contacts no node and changes no schema.
+/// A store of an older schema is described, not migrated.
 pub fn store_info(cfg: &IndexerConfig) -> Result<serde_json::Value> {
     use crate::indexer::db::{meta_get, SCHEMA_VERSION};
     use serde_json::json;
@@ -755,7 +798,8 @@ pub fn store_info(cfg: &IndexerConfig) -> Result<serde_json::Value> {
     v["cursor_hash"] = json!(meta("cursor_hash"));
     v["history_from_daa"] = json!(meta("history_from_daa").and_then(|s| s.parse::<u64>().ok()));
     v["orders"] = json!(conn.query_row("SELECT COUNT(*) FROM orders", [], |r| r.get::<_, i64>(0)).ok());
-    // a lean store gives freed pages back to the file (`auto_vacuum = INCREMENTAL`, `indexer::lean`)
+    // A lean store gives freed pages back to the file (`auto_vacuum = INCREMENTAL`,
+    // `indexer::lean`).
     let vacuum: i64 = conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0)).unwrap_or(0);
     v["storage"] = json!(if vacuum == 2 { "lean" } else { "archive" });
     v["database_bytes"] = json!(file_and_wal_bytes(&path));
@@ -813,7 +857,8 @@ pub fn store_info_lines(v: &serde_json::Value) -> Vec<String> {
 }
 
 fn ms_text(ms: i64) -> String {
-    // seconds since the epoch are enough for an operator who pipes it to `date -d @`; keep the table dependency-free
+    // Seconds since the epoch are enough for an operator who pipes it to `date -d @`. This keeps
+    // the table free of a date dependency.
     format!("{}", ms / 1000)
 }
 
@@ -889,13 +934,14 @@ mod tests {
     }
 
     fn cfg(args: &[&str]) -> IndexerConfig {
-        // the build's own network (a deployment build refuses another one)
+        // The network of the build itself. A deployment build refuses another one.
         let mut v = vec!["kobd", "--network", kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10")];
         v.extend_from_slice(args);
         build_config(&T::parse_from(v).opts).unwrap()
     }
 
-    /// The KAS/USD price route is opt-in: off unless `--usd-price` (or `usd_price` in `[api]`, or `KOB_USD_PRICE`) says so.
+    /// The KAS/USD price route is opt-in: off unless `--usd-price` (or `usd_price` in `[api]`, or
+    /// `KOB_USD_PRICE`) says so.
     #[test]
     fn the_usd_price_route_is_off_by_default() {
         let _g = crate::rpc::resolver::tests::serial();
@@ -909,11 +955,13 @@ usd_price = true",
         assert!(c.api.usd_price);
     }
 
-    /// `resolver` is always a pair of public nodes; `--extra-node resolver` adds a third; an own node with `--extra-node
-    /// resolver` is a primary and one public node. The option of earlier builds, `--node`, is refused with the new name.
+    /// `resolver` is always a pair of public nodes, and `--extra-node resolver` adds a third. An
+    /// own node with `--extra-node resolver` is a primary and one public node. The retired option
+    /// `--node` is refused with the new name.
     #[test]
     fn resolver_entries_come_as_a_pair_and_number_themselves() {
-        // build_config sets the resolver state's network: not while the resolver tests use it
+        // build_config sets the network of the resolver state, so not while the resolver tests
+        // use it.
         let _g = crate::rpc::resolver::tests::serial();
         let urls = |c: &IndexerConfig| c.nodes.iter().map(|n| n.url.clone()).collect::<Vec<_>>();
         let c = cfg(&["--rpc-url", "resolver"]);
@@ -923,19 +971,21 @@ usd_price = true",
         assert_eq!(urls(&c), ["resolver:2", "resolver:3"]);
         let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210", "--extra-node", "resolver"]);
         assert_eq!(urls(&c), ["resolver:2"]);
-        // `--node` never silently becomes a further node (nor the node): a usage error that names both options
+        // `--node` never silently becomes a further node or the node. It is a usage error that
+        // names both options.
         let net = kob_protocol::artifacts::deployment_network().unwrap_or("testnet-10");
         let e = build_config(&T::parse_from(["kobd", "--network", net, "--node", "ws://127.0.0.1:18210"]).opts).unwrap_err();
         assert!(e.downcast_ref::<crate::cli::Usage>().is_some() && e.to_string() == OLD_NODE_OPTION, "{e}");
-        // no node named: the public pair by default
+        // No node named: the public pair by default.
         let c = cfg(&[]);
         assert_eq!((c.rpc_url.as_str(), urls(&c)), ("resolver", vec!["resolver:2".to_string()]));
-        // a configured node takes precedence
+        // A configured node takes precedence.
         let c = cfg(&["--rpc-url", "ws://127.0.0.1:18210"]);
         assert!(c.nodes.is_empty() && c.rpc_url == "ws://127.0.0.1:18210");
     }
 
-    /// `[failover]` is for a configured node and its only fallback is the public pair: anything else is refused, not ignored.
+    /// `[failover]` is for a configured node and its only fallback is the public pair: anything
+    /// else is refused, not ignored.
     #[test]
     fn the_failover_falls_back_to_the_public_pair_from_a_configured_node_only() {
         let _g = crate::rpc::resolver::tests::serial();
@@ -955,21 +1005,22 @@ usd_price = true",
             let e = check_failover(&parse(&format!("{pub_cfg}[failover]\nfallback = \"resolver\"\n"))).unwrap_err();
             assert!(e.to_string().contains("uses the public nodes already"), "{e}");
         }
-        // the fallback client is the public pair
+        // The fallback client is the public pair.
         let f = fallback_client(&on);
         assert_eq!(
             f.specs().iter().map(|s| (s.url.as_str(), s.cross_check)).collect::<Vec<_>>(),
             [("resolver", false), ("resolver:2", true)]
         );
-        // the Executor refuses it
+        // The Executor refuses it.
         let e = crate::executor::refuse_failover(&on).unwrap_err();
         assert!(e.to_string().contains("an option of the Indexer"), "{e}");
         assert!(crate::executor::refuse_failover(&parse(own)).is_ok());
     }
 
-    /// `--config <dir>/kobd.toml` from another directory reads the files next to the configuration (the setup's
-    /// relative `data_dir`, `tokens_path`, `[records] dir`); absolute paths, a bare file name (the launcher, run in the
-    /// file's directory) and paths given as flags are left as they are.
+    /// `--config <dir>/kobd.toml` from another directory reads the files next to the configuration
+    /// (the setup's relative `data_dir`, `tokens_path`, `[records] dir`); absolute paths, a bare
+    /// file name (the launcher, run in the file's directory) and paths given as flags are left as
+    /// they are.
     #[test]
     fn relative_paths_of_a_config_file_are_taken_from_its_directory() {
         let _g = crate::rpc::resolver::tests::serial();
@@ -985,27 +1036,30 @@ usd_price = true",
         assert_eq!(c.data_dir, d.path().join("kob-data"));
         assert_eq!(c.tokens_path, Some(d.path().join("kob-tokens.json")));
         assert_eq!(c.records_dir(), d.path().join("logs/records"));
-        // flags win and stay relative to the working directory
+        // Flags win and stay relative to the working directory.
         let c = cfg(&["--config", &path, "--data-dir", "here", "--tokens", "t.json"]);
         assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("here"), Some(PathBuf::from("t.json"))));
-        // an absolute path in the file is kept
+        // An absolute path in the file is kept.
         std::fs::write(&file, toml(&abs)).unwrap();
         assert_eq!(cfg(&["--config", &path]).tokens_path, Some(abs));
-        // a bare file name: the paths as written (the launcher changes to the file's directory first)
+        // A bare file name keeps the paths as written. The launcher changes to the directory of the
+        // file first.
         let mut c: IndexerConfig = toml::from_str("data_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"").unwrap();
         relative_to_config(&mut c, std::path::Path::new("kobd.toml"));
         assert_eq!((c.data_dir, c.tokens_path), (PathBuf::from("kob-data"), Some(PathBuf::from("kob-tokens.json"))));
     }
 
-    /// The Indexer (`kobd --indexer`) refuses what it would otherwise ignore: the options of role `run` its configuration
-    /// sets (the launcher refuses the same `[launch]` keys), and `fast_start`, which needs the matcher the index role does not have.
+    /// The Indexer (`kobd --indexer`) refuses what it would otherwise ignore: the options of role
+    /// `run` its configuration sets (the launcher refuses the same `[launch]` keys), and
+    /// `fast_start`, which needs the matcher the index role does not have.
     #[test]
     fn index_refuses_the_options_of_role_run_instead_of_ignoring_them() {
-        // build_config sets the resolver state's network: not while the resolver tests use it
+        // build_config sets the network of the resolver state, so not while the resolver tests
+        // use it.
         let _g = crate::rpc::resolver::tests::serial();
         let parse = |toml: &str| toml::from_str::<IndexerConfig>(toml).unwrap();
         let file = std::path::Path::new("kobd.toml");
-        // a keyless index configuration is fine, with or without a [launch] table
+        // A keyless index configuration is fine, with or without a [launch] table.
         assert!(refuse_run_only_options(&parse(""), Some(file)).is_ok());
         let keyless = "[launch]\nrole = \"index\"\nargs = [\"--status-secs\", \"30\"]";
         assert!(refuse_run_only_options(&parse(keyless), Some(file)).is_ok());
@@ -1015,7 +1069,7 @@ usd_price = true",
             let e = refuse_run_only_options(&c, Some(file)).unwrap_err().to_string();
             assert!(e.starts_with("kobd.toml: ") && e.contains(&format!("[launch] {key} is an option of role \"run\"")), "{e}");
         }
-        // fast start: refused with the way out (the sink start) named
+        // Fast start is refused, and the message names the way out, the sink start.
         let e = refuse_run_only_options(&parse("fast_start = true"), Some(file)).unwrap_err().to_string();
         assert!(
             e.contains("fast_start is an option of the Executor (`kobd --executor`")
@@ -1023,7 +1077,7 @@ usd_price = true",
                 && e.contains("book_complete"),
             "{e}"
         );
-        // and the flag does the same: --fast-start switches it on for one start
+        // The flag does the same: --fast-start switches it on for one start.
         let c = cfg(&["--fast-start"]);
         assert!(c.fast_start && refuse_run_only_options(&c, None).is_err());
         assert!(refuse_run_only_options(&cfg(&["--start", "sink"]), None).is_ok());

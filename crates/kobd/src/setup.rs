@@ -153,13 +153,17 @@ pub fn program_path() -> String {
 /// name and the role flags) in `dir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
+    /// The directory of the configuration file, where the start runs.
     pub dir: PathBuf,
+    /// The options of the start, without the program name and the role flags.
     pub args: Vec<String>,
+    /// The `[launch] role` of the file.
     pub role: LaunchRole,
     /// The roles the file was set up for (`[launch] role` and `lean`).
     pub roles: AppRole,
     /// The read API's address (`None`: off), for the operator's first look.
     pub api: Option<std::net::SocketAddr>,
+    /// The pause file of the start, as written in the file (`None`: none).
     pub pause_file: Option<PathBuf>,
 }
 
@@ -254,9 +258,13 @@ pub fn service_line(dir: &Path, roles: AppRole, program: &str) -> String {
 /// The configuration file the setup writes: the indexer keys it chose and the `[launch]` table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SetupFile {
+    /// Network id of the node.
     pub network: String,
+    /// The node, `resolver` or a wRPC URL.
     pub rpc_url: String,
+    /// The data directory, relative to the configuration.
     pub data_dir: String,
+    /// The token list next to the configuration (`None`: the build pins its registry).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_path: Option<String>,
     /// `fast_start = true` for the roles with an Executor: the first start trades within seconds
@@ -274,6 +282,7 @@ pub struct SetupFile {
     /// wrapper's non-interactive setup (the Android app reads the process's output).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_file: Option<String>,
+    /// The `[launch]` table.
     pub launch: LaunchConfig,
 }
 
@@ -453,6 +462,7 @@ impl Console for StderrConsole {
 /// The node over JSON wRPC ([`WrpcNode`]), on the caller's runtime, with short timeouts (a person
 /// is waiting).
 pub struct WrpcSetupNode<'a> {
+    /// The runtime the node calls run on.
     pub rt: &'a tokio::runtime::Runtime,
 }
 
