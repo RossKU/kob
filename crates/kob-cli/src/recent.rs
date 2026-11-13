@@ -1,23 +1,32 @@
-//! A small local record of the token outputs the key's own transactions created (its token change, a merge's output, a
-//! payment to itself), so the next command can spend them before the indexer has seen the transaction: two sells in a row
-//! within the indexer's lag found no tokens ("you hold 0"), the change of the first being unknown to the indexer.
+//! A small local record of the token outputs that the own transactions of a key created.
 //!
-//! The record only names candidates. Every one is used only when the node holds that exact outpoint unspent, with that
-//! covenant id, at the script its state makes (the same check every token UTXO from the indexer goes through), so a stale,
-//! lost or edited record can hide nothing and add nothing. Entries are per network and owner key, kept for a day, at most
-//! [`MAX_ENTRIES`]. Writing it never fails a command: a transaction that was submitted stays submitted.
+//! The record holds the token change, the output of a merge and a payment to oneself. The next
+//! command can then spend them before the indexer has seen the transaction. Without it, two sells
+//! within the lag of the indexer found no tokens, because the indexer did not know the change of
+//! the first.
 //!
-//! `kob token create` also keeps what the creation declared (decimals, symbol, name) in `recent-issued-tokens.json`, so that
-//! `kob send` can name a token issued on this machine within the day, and prove its program from the recorded outputs on the
-//! node, without an indexer.
+//! # Trust
 //!
-//! The file is `recent-token-outputs.json` in `$KOB_STATE_DIR`, else the platform's per-user state directory
-//! (`%LOCALAPPDATA%\kob`, `$XDG_STATE_HOME/kob`, `~/.local/state/kob`).
+//! The record only names candidates. A candidate is used only when the node holds that exact
+//! outpoint unspent, with that covenant id, at the script that its state makes. Every token UTXO
+//! from the indexer goes through the same check. A stale, lost or edited record therefore can
+//! hide nothing and add nothing.
 //!
-//! Next to it, `recent-first-order-decimals.json` keeps the decimals `--decimals` named for a submitted first order of a token
-//! without a registry entry (per network and token, a day, at most [`MAX_ENTRIES`]): until the indexer lists that order and
-//! reports the scale of the token's market, the next command of the token takes them without `--decimals` and refuses a
-//! `--decimals` of another scale (TN10 2026-10-15 O-1). The indexer's market scale, once reported, decides.
+//! # Files
+//!
+//! The files are in `$KOB_STATE_DIR`, else in the state directory of the platform for the user
+//! (`%LOCALAPPDATA%\kob`, `$XDG_STATE_HOME/kob`, `~/.local/state/kob`). Each file is per network
+//! and owner key or token, keeps its entries for a day, and holds at most [`MAX_ENTRIES`] of them.
+//! Writing a file never fails a command: a transaction that was submitted stays submitted.
+//! - `recent-token-outputs.json` holds the token outputs.
+//! - `recent-issued-tokens.json` holds what `kob token create` declared (decimals, symbol, name),
+//!   so that `kob send` can name a token issued on this machine, and can prove its program from
+//!   the recorded outputs on the node, without an indexer.
+//! - `recent-first-order-decimals.json` holds the decimals that `--decimals` named for a submitted
+//!   first order of a token without a registry entry. Until the indexer lists that order and
+//!   reports the scale of the market, the next command for the token takes these decimals without
+//!   `--decimals`, and refuses a `--decimals` of another scale. Once the indexer reports the
+//!   scale, it decides.
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -31,7 +40,7 @@ use serde_json::{json, Value};
 pub const STATE_DIR_ENV: &str = "KOB_STATE_DIR";
 /// Most entries kept.
 pub const MAX_ENTRIES: usize = 256;
-/// How long an entry is kept (seconds): far beyond any indexer lag.
+/// How long an entry is kept, in seconds. It is far beyond any lag of the indexer.
 pub const KEEP_SECS: u64 = 24 * 3600;
 const FILE: &str = "recent-token-outputs.json";
 const DECIMALS_FILE: &str = "recent-first-order-decimals.json";
@@ -60,10 +69,10 @@ fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
-/// The directory of the record (`None`: no state directory is known).
+/// The directory of the record, or `None` when no state directory is known.
 pub fn state_dir() -> Option<PathBuf> {
     if cfg!(test) {
-        // one per test thread: the tests of a process do not share a record
+        // One directory per test thread, so that the tests of a process do not share a record.
         let t = format!("{:?}", std::thread::current().id()).replace(|c: char| !c.is_ascii_alphanumeric(), "");
         return Some(std::env::temp_dir().join(format!("kob-cli-test-state-{}-{t}", std::process::id())));
     }
@@ -96,15 +105,17 @@ impl Entry {
     }
 }
 
-/// The entries of the record file (unreadable entries skipped, an unreadable file: none).
+/// The entries of the record file. Unreadable entries are skipped, and an unreadable file has none.
 fn load_from(path: &std::path::Path) -> Vec<Entry> {
     let v: Value = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     v.as_array().map(|a| a.iter().filter_map(Entry::from_json).collect()).unwrap_or_default()
 }
 
-/// The token outputs of `built` that `owner` holds as plain user outputs: the next states of its
-/// token transfers with the holder owner of the token's program (KRON: id_type 3, or 0 for a program whose holders sign,
-/// KForge), matched to the outputs by the script each state makes and by covenant id.
+/// The token outputs of `built` that `owner` holds as plain user outputs.
+///
+/// These are the next states of its token transfers that have the holder owner of the program of
+/// the token (KRON: id_type 3, or 0 for a program whose holders sign, such as KForge). They are
+/// matched to the outputs by the script that each state makes and by covenant id.
 pub fn own_token_outputs(built: &BuiltTx, owner: &[u8; 32]) -> Vec<([u8; 32], u32, TokenState)> {
     let mut out = vec![];
     for p in &built.plans {
@@ -134,13 +145,15 @@ pub fn own_token_outputs(built: &BuiltTx, owner: &[u8; 32]) -> Vec<([u8; 32], u3
     out
 }
 
-/// Record the key's own token outputs of a submitted transaction. Never fails: a problem is a warning.
+/// Record the own token outputs of a submitted transaction. It never fails: a problem is a warning.
 pub fn record(network: &str, owner: &[u8; 32], built: &BuiltTx, txid: &str) {
     record_outputs(network, owner, own_token_outputs(built, owner), txid);
 }
 
-/// Record token outputs `(token, output index, state)` of a submitted transaction that `owner` holds (a genesis's own
-/// holders, whose states no later transaction has revealed yet). Never fails: a problem is a warning.
+/// Record token outputs `(token, output index, state)` of a submitted transaction, held by `owner`.
+///
+/// The genesis of a token is such a case: its own holders have states that no later transaction
+/// has revealed yet. It never fails: a problem is a warning.
 pub fn record_outputs(network: &str, owner: &[u8; 32], outs: Vec<([u8; 32], u32, TokenState)>, txid: &str) {
     if outs.is_empty() {
         return;
@@ -174,8 +187,9 @@ pub fn record_outputs(network: &str, owner: &[u8; 32], outs: Vec<([u8; 32], u32,
     }
 }
 
-/// The recorded token outputs of `token` that `owner` holds on `network` (candidates: the caller confirms each on the node):
-/// (state, txid, index).
+/// The recorded token outputs of `token` that `owner` holds on `network`, as (state, txid, index).
+///
+/// They are candidates, and the caller confirms each on the node.
 pub fn candidates(network: &str, owner: &[u8; 32], token: &[u8; 32]) -> Vec<(TokenState, [u8; 32], u32)> {
     let Some(dir) = state_dir() else { return vec![] };
     let (owner, token) = (to_hex(owner), to_hex(token));
@@ -186,13 +200,14 @@ pub fn candidates(network: &str, owner: &[u8; 32], token: &[u8; 32]) -> Vec<(Tok
         .collect()
 }
 
-/// Where the decimals of this machine's first orders are kept (`None`: no state directory is known).
+/// Where the decimals of the first orders of this machine are kept, or none without a state dir.
 pub fn decimals_path() -> Option<PathBuf> {
     state_dir().map(|d| d.join(DECIMALS_FILE))
 }
 
-/// Record the decimals `--decimals` named for a submitted first order of `token` on `network`. Never fails: a problem is a
-/// warning.
+/// Record the decimals that `--decimals` named for a submitted first order of `token` on `network`.
+///
+/// It never fails: a problem is a warning.
 pub fn record_first_order_decimals(network: &str, token: &[u8; 32], decimals: u32) {
     let Some(path) = decimals_path() else { return };
     let t = now();
@@ -223,7 +238,7 @@ pub fn record_first_order_decimals(network: &str, token: &[u8; 32], decimals: u3
     }
 }
 
-/// The decimals recorded for this machine's first order of `token` on `network` within the last day, if any.
+/// The decimals recorded for the first order of `token` on `network` in the last day, if any.
 pub fn first_order_decimals(network: &str, token: &[u8; 32]) -> Option<u32> {
     let path = decimals_path()?;
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
@@ -238,9 +253,11 @@ pub fn first_order_decimals(network: &str, token: &[u8; 32]) -> Option<u32> {
         .find_map(|e| e.get("decimals").and_then(Value::as_u64).and_then(|d| u32::try_from(d).ok()))
 }
 
-/// What `kob token create` declared for a token this machine issued (decimals, symbol, name), kept for a day so that `kob send`
-/// can name the token without an indexer. The token's program is not kept: the node proves it from the key's own recorded
-/// outputs ([`candidates`]).
+/// What `kob token create` declared for a token that this machine issued.
+///
+/// It holds decimals, symbol and name, and is kept for a day so that `kob send` can name the token
+/// without an indexer. The program of the token is not kept: the node proves it from the recorded
+/// outputs of the own key ([`candidates`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssuedFacts {
     /// Decimals the creation declared.
@@ -251,7 +268,9 @@ pub struct IssuedFacts {
     pub name: String,
 }
 
-/// Record the facts of a token this machine issued on `network` (a submitted creation). Never fails: a problem is a warning.
+/// Record the facts of a token that this machine issued on `network`, after a submitted creation.
+///
+/// It never fails: a problem is a warning.
 pub fn record_issued(network: &str, token: &[u8; 32], facts: &IssuedFacts) {
     let Some(dir) = state_dir() else { return };
     let path = dir.join(ISSUED_FILE);
@@ -284,7 +303,7 @@ pub fn record_issued(network: &str, token: &[u8; 32], facts: &IssuedFacts) {
     }
 }
 
-/// The facts recorded for a token this machine issued on `network` within the last day, if any.
+/// The facts recorded for a token that this machine issued on `network` in the last day, if any.
 pub fn issued(network: &str, token: &[u8; 32]) -> Option<IssuedFacts> {
     let path = state_dir()?.join(ISSUED_FILE);
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
@@ -317,8 +336,9 @@ mod tests {
         kob_protocol::tx::pubkey_of(&[n; 32]).unwrap()
     }
 
-    /// A KForge transfer (holders id_type 0, a token-level signature): the sender's token change is recorded with its
-    /// id_type 0 state (the holder owner of the program), the recipient's output is not the sender's.
+    /// A KForge transfer has holders with id_type 0 and a token-level signature. The token change
+    /// of the sender is recorded with its id_type 0 state, the holder owner of the program. The
+    /// output of the recipient is not the sender's.
     #[test]
     fn the_token_change_of_an_id_type_0_program_is_recorded() {
         const TOKEN: [u8; 32] = [0x38; 32];
@@ -345,7 +365,8 @@ mod tests {
         assert!(own_token_outputs(&built, &pk(9)).is_empty());
     }
 
-    /// The decimals of a first order are kept per network and token; a later first order of the token replaces them.
+    /// The decimals of a first order are kept per network and token. A later first order of the
+    /// token replaces them.
     #[test]
     fn first_order_decimals_are_kept_per_network_and_token() {
         const TOKEN: [u8; 32] = [0x9a; 32];
@@ -360,7 +381,8 @@ mod tests {
         assert_eq!(kept.as_array().unwrap().len(), 1, "{kept}");
     }
 
-    /// The facts of an issued token are kept per network and token; a later creation of the token replaces them.
+    /// The facts of an issued token are kept per network and token. A later creation of the token
+    /// replaces them.
     #[test]
     fn issued_token_facts_are_kept_per_network_and_token() {
         const TOKEN: [u8; 32] = [0x9c; 32];
@@ -374,8 +396,8 @@ mod tests {
         assert_eq!(issued("testnet-10", &TOKEN), Some(facts(2)));
     }
 
-    /// A genesis's own holders (recorded by `kob token create`, which has no leader whose next states reveal them) are
-    /// candidates of their owner and token on that network only.
+    /// The own holders of a genesis are recorded by `kob token create`, which has no leader whose
+    /// next states reveal them. They are candidates of their owner and token on that network only.
     #[test]
     fn recorded_genesis_outputs_are_candidates() {
         use kob_protocol::state::Kcc20State;
