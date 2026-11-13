@@ -1,20 +1,26 @@
-//! The matcher's view of the indexer's store: [`StoreBook`] implements
-//! [`OrderBookView`](crate::matcher::book::OrderBookView) over the SQLite tables, so the matcher and
-//! the keepers plan against exactly the orders the API serves (`docs/ops/executor.md`).
+//! The matcher's view of the indexer's store, so the matcher and the keepers plan against exactly
+//! the orders the API serves (`docs/ops/executor.md`).
 //!
-//! What is listed (`docs/spec/matcher.md` 1.1, 1.2):
+//! [`StoreBook`] implements [`OrderBookView`](crate::matcher::book::OrderBookView) over the SQLite
+//! tables.
 //!
-//! * an order the indexer validated (`orders.listed`), whose current UTXO is unspent and whose state
-//!   is proven (`order_state.state_known`): the placement record checked, a fresh covenant id, the
-//!   continuation derived and verified against the output's script public key;
-//! * its custody, when the kind holds tokens: the one live `custody` token UTXO. An order with more
-//!   than one custody row is left out (the view fails closed); a missing or wrong-sized custody is
-//!   reported as it is and the matcher's `custody_ok` rejects the order;
-//! * its strays: live token UTXOs owned by the order id that are not its custody. Never liquidity,
-//!   never spent by a matcher or keeper;
+//! # What is listed
+//!
+//! The rules are in `docs/spec/matcher.md`, sections 1.1 and 1.2.
+//!
+//! - An order the indexer validated (`orders.listed`), whose current UTXO is unspent and whose
+//!   state is proven (`order_state.state_known`). That means the placement record was checked, the
+//!   covenant id is fresh, and the continuation was derived and verified against the output's
+//!   script public key.
+//! - Its custody, when the kind holds tokens: the one live `custody` token UTXO per token. An order
+//!   with several custody rows for one token is left out, so the view fails closed. A missing or
+//!   wrong-sized custody is reported as it is, and the matcher's `custody_ok` rejects the order.
+//! - Its strays: live token UTXOs owned by the order id that are not its custody. They are never
+//!   liquidity. A fill never spends them. The keepers move them only inside a kill, refund or
+//!   close, and return foreign strays to the maker only with `KeeperConfig::return_foreign_strays`.
 //!
 //! The book is read in one transaction ([`snapshot`]), so orders, custody and strays are of one
-//! cursor. The trait methods read piecewise; the runner uses [`snapshot`] through
+//! cursor. The trait methods read piecewise. The runner uses [`snapshot`] through
 //! [`crate::executor::IndexerSource`].
 
 use super::db::DbResult;
@@ -28,14 +34,18 @@ use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
-/// The store as an [`OrderBookView`]. `operator` is the key the matcher signs with (informational: nothing in the view
-/// depends on it).
+/// The store as an [`OrderBookView`].
+///
+/// Nothing in the view depends on `operator`, the key the matcher signs with. It is informational.
 pub struct StoreBook<'a> {
+    /// The store connection the book reads.
     pub conn: &'a Connection,
+    /// The key the matcher signs with.
     pub operator: Option<[u8; 32]>,
 }
 
 impl<'a> StoreBook<'a> {
+    /// A book over `conn`.
     pub fn new(conn: &'a Connection, operator: Option<[u8; 32]>) -> Self {
         StoreBook { conn, operator }
     }
@@ -63,15 +73,18 @@ pub fn cursor_daa(conn: &Connection) -> DbResult<u64> {
     Ok(super::db::meta_get(conn, "cursor_daa")?.and_then(|d| d.parse().ok()).unwrap_or(0))
 }
 
-/// One consistent read of the whole book (a single read transaction): the listed orders and, apart, the proven unlisted
-/// ones the keepers serve (`keeper_only`), so a snapshot written to a file (`match` / `keep --book-file`) leaves no
-/// keeper-only order without its kill, refund or close.
+/// One consistent read of the whole book, in a single read transaction.
+///
+/// It holds the listed orders and, apart, the proven unlisted ones that the keepers serve
+/// (`keeper_only`). A snapshot written to a file (`match` or `keep --book-file`) therefore leaves
+/// no keeper-only order without its kill, refund or close.
 pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<MemoryBook> {
     let tx = conn.unchecked_transaction()?;
     let book = MemoryBook {
         daa_score: cursor_daa(&tx)?,
         orders: listed_orders(&tx)?,
-        // The operator's P2PK token inventory is not on any order id: the indexer does not track it.
+        // The operator's P2PK token inventory is not on any order id: the indexer does not track
+        // it.
         wallet_tokens: vec![],
         keeper_only: unlisted_orders(&tx)?,
     };
@@ -79,9 +92,12 @@ pub fn snapshot(conn: &Connection, _operator: Option<[u8; 32]>) -> DbResult<Memo
     Ok(book)
 }
 
-/// The operator's own key-owned token UTXOs, live and accepted, with their programs (`token_holdings`: every proven token
-/// output of a pinned program, whoever owns it; the runner keeps the tokens `Processor::operator_token` accepts), oldest first. Tokens a transaction leaves the operator (a route of an older planner,
-/// a taker's own inventory) land here; the maintenance jobs (`crate::maintenance`) merge or sell them.
+/// The operator's own key-owned token UTXOs, live and accepted, oldest first.
+///
+/// They come from `token_holdings`, which has every proven token output of a pinned program,
+/// whoever owns it. The runner keeps the tokens that `Processor::operator_token` accepts. Tokens
+/// that a transaction leaves the operator, such as a route of an older planner or a taker's own
+/// inventory, land here. The maintenance jobs (`crate::maintenance`) merge or sell them.
 pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<crate::maintenance::OwnToken>> {
     let mut st = conn.prepare_cached(
         "SELECT x.txid, x.idx, tk.h, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
@@ -105,7 +121,8 @@ pub fn operator_tokens(conn: &Connection, operator: &[u8; 32]) -> DbResult<Vec<c
         let Some(program) = kob_protocol::artifacts::TemplateId::from_name(&program).filter(|p| p.is_token()) else { continue };
         let Ok(state) = TokenState::decode_with(kob_protocol::artifacts::token_template(program), &state) else { continue };
         let (Some(txid), Some(token)) = (h32(txid), h32(token)) else { continue };
-        // key-owned only (the operator's P2PK / address-presence tokens), never an order's custody or stray
+        // Key-owned only: the operator's P2PK and address-presence tokens, never an order's custody
+        // or stray.
         if !state.is_user() || state.owner() != *operator {
             continue;
         }
@@ -185,17 +202,23 @@ pub fn listed_orders(conn: &Connection) -> DbResult<Vec<ListedOrder>> {
     live_orders(conn, true)
 }
 
-/// Every live order the indexer proved but does not list (a token outside the allowlist, an exit of an unlisted entry, ...),
-/// with its custody and strays: never offered to the matcher; the keepers kill, refund and close them when that pays.
+/// Every live order the indexer proved but does not list, with its custody and strays.
+///
+/// An order is unlisted when, for example, its token is outside the allowlist or it is an exit of
+/// an unlisted entry. These orders are never offered to the matcher. The keepers kill, refund and
+/// close them when that pays.
 pub fn unlisted_orders(conn: &Connection) -> DbResult<Vec<ListedOrder>> {
     live_orders(conn, false)
 }
 
-/// The live orders (`?1`: listed or not), read from the live set (`order_state` rows `open` / `partial`, through
-/// `order_state_status`), never by walking the order history (1 to 2.4 s per tick on a store of 300,000 orders, 12 ms
-/// this way): an order has a current UTXO (`cur_txid`) exactly when its status is `open` or `partial`
-/// (`processor::refresh_order_state` derives both from the same unspent UTXO), so the status filter only says which rows
-/// the join to the current UTXO can match. Only orders under a template this build pins (`reads::pinned_template`).
+/// The SQL of the live orders, with `?1` selecting listed or unlisted ones.
+///
+/// It reads the live set, the `order_state` rows `open` and `partial` through `order_state_status`,
+/// and never walks the order history (`docs/ops/executor.md`, section 5.5). An order has a current
+/// UTXO (`cur_txid`) exactly when its status is `open` or `partial`, and
+/// `processor::refresh_order_state` derives both from the same unspent UTXO. The status filter
+/// therefore only says which rows the join to the current UTXO can match. Only orders under a
+/// template this build pins are read (`reads::pinned_template`).
 pub(crate) fn live_orders_sql() -> &'static str {
     static SQL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SQL.get_or_init(|| {
@@ -239,14 +262,17 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let Some(fam) = u8::try_from(family).ok().and_then(Family::from_code) else { continue };
         let (Some(cov), Some(txid)) = (h32(cov), h32(txid)) else { continue };
         let Some(state) = tip_state(&contract, state) else { continue };
-        // An order placed under a template this build does not pin (a database carried over a template change: an older
-        // template with today's state layout decodes as today's kind) lives at a script nothing this build plans from today's
-        // template (a fill, kill, refund or close) hashes to. It is unknown here, like any other template: never offered to
-        // the matcher or the keepers. The query leaves it out already; this also holds the hash to the contract's own template.
+        // An order placed under a template this build does not pin lives at a script that nothing
+        // this build plans (a fill, kill, refund or close) hashes to. That happens in a database
+        // carried over a template change, where an older template with today's state layout decodes
+        // as today's kind. The order is unknown here, like any other template, and is never offered
+        // to the matcher or the keepers. The query leaves it out already. This also holds the hash
+        // to the contract's own template.
         if kob_protocol::artifacts::try_template(state.template_id()).is_none_or(|t| t.hash[..] != tpl_hash[..]) {
             continue;
         }
-        // a state the numeric gate refuses is never offered to the matcher (belt and braces: the listing flag already says so)
+        // A state the numeric gate refuses is never offered to the matcher. The listing flag
+        // already says so, so this is belt and braces.
         if let Err(why) = crate::sanity::check(&state) {
             if !listed {
                 continue; // often the very reason it is unlisted
@@ -254,10 +280,12 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             tracing::warn!(order = %Hash32(cov), %why, "order state fails the numeric gate; not listed");
             continue;
         }
-        // a KRON token has no extension commitment: the placement record's is zero and `TokenState` ignores it
+        // A KRON token has no extension commitment: the placement record's is zero, and
+        // `TokenState` ignores it.
         let ext = ext.and_then(h32).unwrap_or([0; 32]);
         let own = tokens.remove(&cov).unwrap_or_default();
-        // tokens of the order itself (a pair order: A and B) vs foreign strays (any other token, §1.2)
+        // Tokens of the order itself (a pair order has A and B) versus foreign strays (any other
+        // token, `docs/spec/matcher.md` 1.2).
         let pair = state.pair_tokens();
         let mine = |t: &OwnedToken| {
             let tok = t.utxo.covenant_id;
@@ -266,7 +294,7 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let (own, foreign_tokens): (Vec<_>, Vec<_>) = own.into_iter().partition(|t| mine(t));
         let mut foreign: Vec<kob_protocol::build::ForeignStrays> = vec![];
         for t in foreign_tokens {
-            // only a state the indexer proved, under a program this build pins, can be moved
+            // Only a state the indexer proved, under a program this build pins, can be moved.
             let (Some(state), Some(program), Some(tok)) = (t.proven, t.program, t.utxo.covenant_id) else { continue };
             let utxo = TokenUtxo { utxo: t.utxo, state };
             match foreign.iter_mut().find(|g| g.token.covenant_id == tok) {
@@ -278,7 +306,8 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             }
         }
         let (custody, strays): (Vec<_>, Vec<_>) = own.into_iter().partition(|t| t.custody);
-        // one custody per token the state holds (a pair order: `AnyState::custodies` order, at most one per token)
+        // One custody per token the state holds. A pair order lists them in `AnyState::custodies`
+        // order, at most one per token.
         let mut custody_tokens: Vec<Option<[u8; 32]>> = custody.iter().map(|t| t.utxo.covenant_id).collect();
         custody_tokens.sort();
         custody_tokens.dedup();
@@ -288,12 +317,15 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             }
             continue;
         }
-        // Every custody or stray carries the state the indexer proved against the output's script public key when it stored the
-        // row (a stray of another token, token B of a pair order, has its own family and extension commitment; a stray of the
-        // order's own token need not be plain nor carry the order's commitment). Without a proven state (a token the indexer does
-        // not track) it is rebuilt as `custody(family, amount, owner, ext)`, the exact custody's state.
+        // Every custody or stray carries the state the indexer proved against the output's script
+        // public key when it stored the row. A stray of another token, such as token B of a pair
+        // order, has its own family and extension commitment. A stray of the order's own token need
+        // not be plain nor carry the order's commitment. Without a proven state, for a token the
+        // indexer does not track, the state is rebuilt as `custody(family, amount, owner, ext)`,
+        // the exact custody's state.
         let as_token = |t: OwnedToken| {
-            // a pair order's token B has its own family (its custody's commitment is proven: every custody row has its holding)
+            // A pair order's token B has its own family. Its custody's commitment is proven,
+            // because every custody row has its holding.
             let tfam = match pair {
                 Some(p) if t.utxo.covenant_id == Some(p.b.cov_id) => p.b.family_of().unwrap_or(fam),
                 Some(p) => p.a.family_of().unwrap_or(fam),
@@ -302,8 +334,8 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             let state = t.proven.unwrap_or_else(|| TokenState::custody(tfam, t.amount, cov, ext));
             TokenUtxo { utxo: t.utxo, state }
         };
-        // the custodies in `AnyState::custodies` order: `custody` the first, `custody_b` the second (a sell-first pair entry's
-        // B prefund)
+        // The custodies in `AnyState::custodies` order: `custody` the first, `custody_b` the
+        // second, which is a sell-first pair entry's B prefund.
         let order_of: Vec<[u8; 32]> = state.custodies().iter().map(|c| c.0).collect();
         let mut custody = custody;
         custody.sort_by_key(|t| t.utxo.covenant_id.and_then(|c| order_of.iter().position(|x| *x == c)).unwrap_or(usize::MAX));
@@ -324,8 +356,9 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             custody: first,
             custody_b: second,
             deadline: deadline.and_then(|d| u64::try_from(d).ok()),
-            // The chain block that made this UTXO visible: earlier is served first among immediate
-            // orders (`docs/spec/matcher.md` 3.1). Deterministic across restarts, unlike a wall clock.
+            // The chain block that made this UTXO visible. An earlier one is served first among
+            // immediate orders (`docs/spec/matcher.md` 3.1). It is deterministic across restarts,
+            // unlike a wall clock.
             seen_daa: daa.max(0) as u64,
             foreign,
             strays: strays.into_iter().map(as_token).collect(),
