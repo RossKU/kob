@@ -1,27 +1,32 @@
 //! The trusted chain view over a Kaspa node's wRPC.
 //!
-//! [`WrpcClient`] is a synchronous websocket client (one connection behind a mutex, reconnected
-//! on demand, every call under an overall deadline): JSON wRPC, or every call in Borsh for a Borsh URL or a resolver entry (a
-//! public node; `crate::rpc::bridge`, `crate::rpc::resolver`), with the same JSON in and out of [`Rpc::call`]; `ws://` or
-//! `wss://` (`crate::rpc::tls`). [`NodeChain`] implements
-//! [`kob_x402::chain::ChainView`] on top of any [`Rpc`]:
+//! [`WrpcClient`] is a synchronous websocket client. It keeps a small pool of connections,
+//! reconnects on demand and puts every call under an overall deadline. It speaks JSON wRPC, or
+//! Borsh for a Borsh URL or a resolver entry, which is a public node (`crate::rpc::bridge`,
+//! `crate::rpc::resolver`). Either way [`Rpc::call`] sees the same JSON in and out. The URL is
+//! `ws://` or `wss://` (`crate::rpc::tls`).
 //!
-//! | ChainView | RPC |
-//! |---|---|
-//! | `utxos`, `utxos_of` | `getUtxosByAddresses` (the address of each claimed script is derived locally) |
-//! | `virtual_daa_score` | `getBlockDagInfo` -> `virtualDaaScore` |
-//! | `in_mempool` | `getMempoolEntry` (`... not found` is `false`) |
-//! | `output_status` | accepted iff the outpoint is in the virtual UTXO set of the address, else mempool presence, else unknown |
-//! | `submit` | `submitTransaction` (node JSON from `kob_protocol::issue::rpc_transaction_json`) |
+//! [`NodeChain`] implements [`kob_x402::chain::ChainView`] on top of any [`Rpc`]:
 //!
-//! The RPC is used rather than REST because REST drops the per-input compute budget. Only plain
-//! `ws://` is supported (put a TLS-terminating proxy in front of a remote node).
+//! - `utxos` and `utxos_of` use `getUtxosByAddresses`. The address of each claimed script is
+//!   derived locally.
+//! - `virtual_daa_score` reads `virtualDaaScore` from `getBlockDagInfo`.
+//! - `in_mempool` uses `getMempoolEntry`, and a `... not found` error is `false`.
+//! - `output_status` reports `Mempool` when the transaction is in the mempool. Otherwise it reports
+//!   `Accepted` when the outpoint is in the address's virtual UTXO set, and `Unknown` when not.
+//! - `submit` uses `submitTransaction`, with the node JSON from
+//!   `kob_protocol::issue::rpc_transaction_json`.
 //!
-//! Shapes were verified against a live TN10 node: `getUtxosByAddresses` answers
-//! `{"entries":[{"address","outpoint":{"transactionId","index"},"utxoEntry":{"amount","scriptPublicKey"
-//! (version-prefixed hex),"blockDaaScore","isCoinbase","covenantId"}}]}`; a `getMempoolEntry` miss is the
-//! error `Transaction <id> not found`; a submit with unknown inputs is
-//! `Rejected transaction <id>: transaction <id> is an orphan where orphan is disallowed`.
+//! The RPC is used rather than REST because REST drops the per-input compute budget.
+//!
+//! # Reply shapes
+//!
+//! - `getUtxosByAddresses` answers `{"entries":[{"address", "outpoint":{"transactionId","index"},
+//!   "utxoEntry":{"amount","scriptPublicKey","blockDaaScore","isCoinbase","covenantId"}}]}`. The
+//!   script is version-prefixed hex.
+//! - A `getMempoolEntry` miss is the error `Transaction <id> not found`.
+//! - A submit with unknown inputs is `Rejected transaction <id>: transaction <id> is an orphan
+//!   where orphan is disallowed`.
 
 use std::collections::HashMap;
 use std::io::ErrorKind;
@@ -90,7 +95,7 @@ const POOL_SIZE: usize = 4;
 
 struct Conn {
     ws: Ws,
-    /// The node this connection goes to (a resolver entry's public node; else the URL).
+    /// The node this connection goes to: a resolver entry's public node, else the URL.
     node: String,
     last_used: Instant,
 }
@@ -99,17 +104,20 @@ struct Conn {
 pub struct WrpcClient {
     url: String,
     timeout: Duration,
-    /// A pooled connection idle for longer than this is replaced before a call (a stale socket would
-    /// make a submit outcome ambiguous for no reason).
+    /// A pooled connection idle for longer than this is replaced before a call.
+    ///
+    /// A stale socket would make a submit outcome ambiguous for no reason.
     max_idle: Duration,
-    /// A small pool: sequential calls reuse the first connection, concurrent calls spill to the others.
+    /// A small pool. Sequential calls reuse the first connection, and concurrent calls spill to the
+    /// others.
     conns: Vec<Mutex<Option<Conn>>>,
     next_id: AtomicU64,
 }
 
 impl WrpcClient {
-    /// `url` is `ws://host:port` (JSON wRPC: 18110 mainnet, 18210 testnet-10); `timeout` bounds connect
-    /// and every call.
+    /// A client for `url`, such as `ws://host:port`, where `timeout` bounds connect and every call.
+    ///
+    /// The JSON wRPC ports are 18110 on mainnet and 18210 on testnet-10.
     pub fn new(url: &str, timeout: Duration) -> WrpcClient {
         WrpcClient {
             url: url.to_string(),
@@ -140,14 +148,15 @@ impl WrpcClient {
         if !node.starts_with("ws://") && !node.starts_with("wss://") {
             return Err(RpcError::Transport(format!("{shown}: only ws:// and wss:// node urls are supported")));
         }
-        // a dropped public node's one reconnect has a short timeout (`crate::rpc::resolver::failed`)
+        // A dropped public node's one reconnect has a short timeout.
+        // See `crate::rpc::resolver::failed`.
         let opened = crate::rpc::tls::connect(&target, crate::rpc::resolver::connect_timeout(&self.url, self.timeout))
             .map_err(|e| RpcError::Transport(format!("{shown}: {e}")))
             .and_then(|stream| tungstenite::client(node.as_str(), stream).map_err(|e| RpcError::Transport(format!("handshake: {e}"))));
         match opened {
             Ok((ws, _)) => Ok(Conn { ws, node, last_used: Instant::now() }),
             Err(e) => {
-                // a resolver entry moves to another public node
+                // A resolver entry moves to another public node.
                 crate::rpc::resolver::failed(&self.url, &node);
                 Err(e)
             }
@@ -199,7 +208,8 @@ impl WrpcClient {
 impl Rpc for WrpcClient {
     fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let mut guard = self.checkout();
-        // idle too long, or a resolver entry's connection to a node the entry gave up (it failed elsewhere, or the authority moved)
+        // A connection is stale when it was idle too long. It is also stale when a resolver entry
+        // gave up its node, because it failed elsewhere or the authority moved.
         let stale = |c: &Conn| {
             c.last_used.elapsed() > self.max_idle
                 || (crate::rpc::resolver::is_resolver(&self.url)
@@ -208,8 +218,9 @@ impl Rpc for WrpcClient {
         if guard.as_ref().is_some_and(stale) {
             *guard = None;
         }
-        // Idempotent reads retry once on a fresh connection; a submit is never resent by the client
-        // (its outcome is decided by the caller: `SubmitError::Unavailable` keeps the evidence consumed).
+        // Idempotent reads retry once on a fresh connection. The client never resends a submit,
+        // because its outcome is decided by the caller: `SubmitError::Unavailable` keeps the
+        // evidence consumed.
         let attempts = if method == "submitTransaction" { 1 } else { 2 };
         let mut last = RpcError::Transport("no attempt".into());
         for _ in 0..attempts {
@@ -229,12 +240,13 @@ impl Rpc for WrpcClient {
                     return Ok(v);
                 }
                 Err(e @ (RpcError::Node(_) | RpcError::Protocol(_))) => {
-                    // the connection itself is healthy
+                    // The connection itself is healthy.
                     *guard = Some(conn);
                     return Err(e);
                 }
                 Err(e) => {
-                    // transport failure: drop the connection (a resolver entry moves to another public node)
+                    // On a transport failure the connection is dropped, and a resolver entry moves
+                    // to another public node.
                     crate::rpc::resolver::failed(&self.url, &conn.node);
                     last = e;
                 }
@@ -250,8 +262,10 @@ impl Rpc for WrpcClient {
 pub struct NodeChain {
     rpc: Box<dyn Rpc>,
     network: Network,
-    /// Further nodes every submission goes to as well (`kobd --executor`: the other nodes of the indexer that take
-    /// submissions, the second public node of a resolver pair among them), as the matcher's `MultiSubmit` does.
+    /// Further nodes every submission goes to as well, as the matcher's `MultiSubmit` does.
+    ///
+    /// In `kobd --executor` these are the other nodes of the indexer that take submissions, the
+    /// second public node of a resolver pair among them.
     peers: Vec<std::sync::Arc<dyn Rpc>>,
     /// How long a submission waits for a peer's verdict when the primary gave none.
     peer_wait: Duration,
@@ -268,22 +282,27 @@ impl NodeChain {
         NodeChain { rpc, network, peers: vec![], peer_wait: Duration::from_secs(10) }
     }
 
-    /// Every submission (`submit`, `replace`) also goes to these nodes, at the same time as to the primary: the primary's
-    /// verdict answers when it takes the transaction or refuses it; when it gave none (transport, timeout) or refused it, the
-    /// first peer that takes it answers instead. Reads stay on the primary.
+    /// Sends every submission (`submit`, `replace`) to these nodes too, at the same time as to the
+    /// primary.
+    ///
+    /// The primary's verdict answers when it takes the transaction. When it gave none, by
+    /// transport failure or timeout, or refused it, the first peer that takes it answers instead.
+    /// Reads stay on the primary.
     pub fn with_submit_peers(mut self, peers: Vec<std::sync::Arc<dyn Rpc>>) -> NodeChain {
         self.peers = peers;
         self
     }
 
-    /// The submission URLs of `urls` as peers over wRPC (`with_submit_peers`).
+    /// Like [`NodeChain::with_submit_peers`], with each of `urls` as a wRPC peer.
     pub fn with_submit_urls(self, urls: &[String], timeout: Duration) -> NodeChain {
         let peers = urls.iter().map(|u| std::sync::Arc::new(WrpcClient::new(u, timeout)) as std::sync::Arc<dyn Rpc>).collect();
         self.with_submit_peers(peers)
     }
 
-    /// `method` with `params` to the primary and every peer at once; the verdict as described at [`NodeChain::with_submit_peers`].
-    /// The peers' calls go on in the background after the verdict (propagation through several nodes).
+    /// Sends `method` with `params` to the primary and every peer at once.
+    ///
+    /// The verdict is as described at [`NodeChain::with_submit_peers`]. The peers' calls go on in
+    /// the background after the verdict, so the transaction propagates through several nodes.
     fn submit_everywhere(&self, method: &'static str, params: Value) -> Result<Value, RpcError> {
         let (tx, rx) = std::sync::mpsc::channel();
         for p in &self.peers {
@@ -297,7 +316,7 @@ impl NodeChain {
         if primary.is_ok() || self.peers.is_empty() {
             return primary;
         }
-        // the primary refused it or gave no verdict: a peer that takes it answers
+        // The primary refused it or gave no verdict, so a peer that takes it answers.
         let deadline = std::time::Instant::now() + self.peer_wait;
         let mut peer_err = None;
         loop {
@@ -309,7 +328,8 @@ impl NodeChain {
             }
         }
         match (primary, peer_err) {
-            // no verdict from the primary but one from a peer: the peer's refusal
+            // With no verdict from the primary but a refusal from a peer, the peer's refusal
+            // answers.
             (Err(RpcError::Transport(_)), Some(e @ RpcError::Node(_))) => Err(e),
             (p, _) => p,
         }
@@ -323,7 +343,7 @@ impl NodeChain {
         self.rpc.call(method, params).map_err(|e| ChainError(format!("{method}: {e}")))
     }
 
-    /// Every unspent output of `addresses`: `address -> [(outpoint, utxo)]`.
+    /// Every unspent output of `addresses`, as `address -> [(outpoint, utxo)]`.
     fn utxos_by_addresses(&self, addresses: &[String]) -> Result<HashMap<String, Vec<(Outpoint, ChainUtxo)>>, ChainError> {
         let mut out: HashMap<String, Vec<(Outpoint, ChainUtxo)>> = HashMap::new();
         if addresses.is_empty() {
@@ -340,14 +360,14 @@ impl NodeChain {
 /// Why the startup node check failed.
 #[derive(Debug)]
 pub enum NetworkCheck {
-    /// The node is another network or lacks the UTXO index: refuse to start.
+    /// The node is another network or lacks the UTXO index, so the facilitator refuses to start.
     Mismatch(String),
-    /// The node could not be queried or is not synced: start, but fail closed until it is.
+    /// The node could not be queried or is not synced. The facilitator starts but fails closed.
     Unreachable(String),
 }
 
 impl NodeChain {
-    /// `getServerInfo`: the node must serve the configured network with a UTXO index.
+    /// Checks `getServerInfo`: the node must serve the configured network with a UTXO index.
     pub fn check_network(&self) -> Result<(), NetworkCheck> {
         let info = self.rpc.call("getServerInfo", json!({})).map_err(|e| NetworkCheck::Unreachable(e.to_string()))?;
         let id = info.get("networkId").and_then(Value::as_str).unwrap_or("");
@@ -401,10 +421,15 @@ pub fn parse_utxo_entries(reply: &Value) -> Result<Vec<(String, Outpoint, ChainU
 
 /// Maps the node's `submitTransaction` error text to a [`SubmitError`].
 ///
-/// Texts (rusty-kaspa v2.1.0): `transaction <id> is already in the mempool`, `... was already accepted
-/// by the consensus`, `output <o> already spent by transaction <t> in the mempool`, `at least one
-/// outpoint of the transaction is lacking a matching UTXO entry`, `... is an orphan where orphan is
-/// disallowed`; anything else (mass, fee, script, standardness) is a rejection.
+/// The texts are those of rusty-kaspa v2.1.0:
+///
+/// - `transaction <id> is already in the mempool` and `... was already accepted by the consensus`
+///   map to `AlreadyKnown`.
+/// - `output <o> already spent by transaction <t> in the mempool`, `at least one outpoint of the
+///   transaction is lacking a matching UTXO entry` and `... is an orphan where orphan is
+///   disallowed` map to `Conflict`.
+///
+/// Anything else, such as mass, fee, script or standardness, is a rejection.
 pub fn map_submit_error(msg: &str) -> SubmitError {
     let m = msg.to_ascii_lowercase();
     if m.contains("already in the mempool") || m.contains("already accepted by the consensus") {
@@ -438,7 +463,7 @@ impl ChainView for NodeChain {
             .zip(derived)
             .map(|((op, spk), addr)| {
                 let list = by_addr.get(&addr?)?;
-                // the script must match exactly, not only the address derived from it
+                // The script must match exactly, not only the address derived from it.
                 list.iter().find(|(o, u)| o == op && &u.script_public_key == spk).map(|(_, u)| u.clone())
             })
             .collect())
@@ -456,9 +481,9 @@ impl ChainView for NodeChain {
     }
 
     fn output_status(&self, out: &Outpoint, spk: &ScriptPublicKey) -> Result<OutputStatus, ChainError> {
-        // The cheap mempool query first: while the transaction waits there, the (address-wide, possibly
-        // large) UTXO query is skipped. A transaction that is accepted but not yet dropped from the
-        // mempool reports `Mempool` for a moment, which only delays success.
+        // The cheap mempool query comes first. While the transaction waits there, the UTXO query is
+        // skipped, which is address-wide and possibly large. A transaction that is accepted but not
+        // yet dropped from the mempool reports `Mempool` for a moment, which only delays success.
         if self.in_mempool(&out.txid)? {
             return Ok(OutputStatus::Mempool);
         }
@@ -491,8 +516,10 @@ impl ChainView for NodeChain {
         }
     }
 
-    /// `submitTransactionReplacement` (replace-by-fee: the node drops the mempool transactions that spend an input of `tx` when
-    /// `tx` pays a higher fee rate).
+    /// Submits `tx` with `submitTransactionReplacement`, which is replace-by-fee.
+    ///
+    /// The node drops the mempool transactions that spend an input of `tx` when `tx` pays a higher
+    /// fee rate.
     fn replace(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
         let local = tx.id().as_bytes();
         let params = json!({ "transaction": kob_protocol::issue::rpc_transaction_json(tx) });
@@ -580,9 +607,9 @@ mod tests {
         assert_eq!(r[0].as_ref().unwrap().covenant_id, None);
         assert_eq!(r[1].as_ref().unwrap().covenant_id, Some([0xab; 32]));
         assert!(r[2].is_none(), "not in the set");
-        // the same outpoint claimed under another script is not the entry
+        // The same outpoint claimed under another script is not the entry.
         assert!(r[3].is_none());
-        // one call for the distinct addresses; `other` is a second address
+        // One call for the distinct addresses. `other` is a second address.
         let calls = f.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].1["addresses"].as_array().unwrap().len(), 2);
@@ -628,7 +655,7 @@ mod tests {
         assert_eq!(chain.output_status(&pool, &spk).unwrap(), OutputStatus::Mempool);
         let unknown = Outpoint::new([0x44; 32], 0);
         assert_eq!(chain.output_status(&unknown, &spk).unwrap(), OutputStatus::Unknown);
-        // the same outpoint under another script is not accepted
+        // The same outpoint under another script is not accepted.
         let other = p2pk_spk(&pubkey(2));
         assert_eq!(chain.output_status(&acc, &other).unwrap(), OutputStatus::Unknown);
         assert!(chain.in_mempool(&[0x33; 32]).unwrap());
@@ -714,7 +741,7 @@ mod tests {
         });
         assert_eq!(chain.submit(&tx).unwrap(), txid.as_bytes());
         assert_eq!(f.calls.lock().unwrap().len(), 1);
-        // a different id from the node is an unknown outcome, never success
+        // A different id from the node is an unknown outcome, never success.
         let (chain, _) = fake(|_, _| Ok(json!({ "transactionId": "00".repeat(32) })));
         assert!(matches!(chain.submit(&tx), Err(SubmitError::Unavailable(_))));
         let (chain, _) = fake(|_, _| Ok(json!({})));
@@ -729,9 +756,11 @@ mod tests {
         assert!(matches!(chain.submit(&tx), Err(SubmitError::Rejected(_))));
     }
 
-    /// Inside \`kobd --executor\` the facilitator's submissions go to every node that takes them (the pair's second node):
-    /// the primary's verdict when it gives one that takes the transaction, else the first peer that takes it, else the
-    /// primary's refusal (or a peer's when the primary gave none).
+    /// Inside `kobd --executor` the facilitator's submissions go to every node that takes them,
+    /// such as the pair's second node.
+    ///
+    /// The answer is the primary's verdict when it takes the transaction, else the first peer that
+    /// takes it, else the primary's refusal. When the primary gave none, it is a peer's refusal.
     #[test]
     fn submissions_go_to_every_peer_too() {
         let tx = sample_tx();
@@ -746,7 +775,7 @@ mod tests {
             let f = Arc::new(Fake { calls: Mutex::new(vec![]), handler: h });
             (Arc::new(f.clone()) as Arc<dyn Rpc>, f)
         };
-        // both take it: the primary answers, the peer got it too
+        // Both take it. The primary answers, and the peer got it too.
         let (chain, primary) = fake(ok.clone());
         let (p, pf) = peer(Box::new(ok.clone()));
         let chain = chain.with_submit_peers(vec![p]);
@@ -758,20 +787,21 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!((primary.calls.lock().unwrap().len(), pf.calls.lock().unwrap()[0].0.as_str()), (1, "submitTransaction"));
-        // the primary is down or refuses: the peer that takes it answers
+        // When the primary is down or refuses, the peer that takes it answers.
         for h in [Box::new(down) as Handler, Box::new(refused)] {
             let (chain, _) = fake(h);
             let (p, _) = peer(Box::new(ok.clone()));
             assert_eq!(chain.with_submit_peers(vec![p]).submit(&tx).unwrap(), tx.id().as_bytes());
         }
-        // nobody takes it: the primary's refusal; with the primary down, the peer's
+        // When nobody takes it, the primary's refusal answers. With the primary down, the peer's
+        // does.
         let (chain, _) = fake(refused);
         let (p, _) = peer(Box::new(down));
         assert!(matches!(chain.with_submit_peers(vec![p]).submit(&tx), Err(SubmitError::Conflict(_))));
         let (chain, _) = fake(down);
         let (p, _) = peer(Box::new(refused));
         assert!(matches!(chain.with_submit_peers(vec![p]).submit(&tx), Err(SubmitError::Conflict(_))));
-        // a replacement goes everywhere too
+        // A replacement goes everywhere too.
         let (chain, _) = fake(down);
         let (p, pf) = peer(Box::new(ok));
         assert_eq!(chain.with_submit_peers(vec![p]).replace(&tx).unwrap(), tx.id().as_bytes());
@@ -789,7 +819,8 @@ mod tests {
         assert!(matches!(parse_reply(r#"{"id":1}"#, 1), Err(RpcError::Protocol(_))));
     }
 
-    /// A websocket mock node that serves `handler(method, params)` for every request on every connection.
+    /// A websocket mock node that serves `handler(method, params)` for every request on every
+    /// connection.
     fn mock_node(handler: fn(&str, &Value) -> String, connections: usize) -> (String, thread::JoinHandle<Vec<Value>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
@@ -829,7 +860,7 @@ mod tests {
             1,
         );
         let chain = NodeChain::connect(&url, Network::Testnet10, Duration::from_secs(5));
-        // several calls reuse the one connection
+        // Several calls reuse the one connection.
         assert_eq!(chain.virtual_daa_score().unwrap(), 123456);
         assert!(!chain.in_mempool(&[7; 32]).unwrap());
         assert_eq!(chain.virtual_daa_score().unwrap(), 123456);
@@ -844,7 +875,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let h = thread::spawn(move || {
-            // first connection: answer once, then close
+            // First connection: answer once, then close.
             let (s, _) = listener.accept().unwrap();
             let mut ws = tungstenite::accept(s).unwrap();
             let req: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
@@ -852,7 +883,7 @@ mod tests {
             let _ = ws.close(None);
             let _ = ws.flush();
             drop(ws);
-            // second connection answers
+            // The second connection answers.
             let (s, _) = listener.accept().unwrap();
             let mut ws = tungstenite::accept(s).unwrap();
             let req: Value = serde_json::from_str(ws.read().unwrap().to_text().unwrap()).unwrap();
@@ -897,7 +928,7 @@ mod tests {
             assert_eq!(h.join().unwrap(), 9);
         }
         assert_eq!(conns.load(Ordering::SeqCst), 3);
-        // sequential calls afterwards reuse the first pooled connection
+        // Sequential calls afterwards reuse the first pooled connection.
         assert_eq!(chain.virtual_daa_score().unwrap(), 9);
         assert_eq!(conns.load(Ordering::SeqCst), 3);
     }
@@ -928,7 +959,9 @@ mod tests {
         h.join().unwrap();
     }
 
-    /// The error text of an unreachable node (a retryable error's message, the logs) never carries the URL's credentials.
+    /// The error text of an unreachable node never carries the URL's credentials.
+    ///
+    /// That covers a retryable error's message and the logs.
     #[test]
     fn node_error_text_carries_no_url_secret() {
         for url in [

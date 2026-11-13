@@ -1,8 +1,13 @@
-//! Test support for the facilitator: a deterministic fixture over [`MockChain`], a KAS payment
-//! builder (consensus-valid version-0 P2PK spends the mock chain validates with the script engine) and
-//! a verifier that runs the shared verification checks of `kob_x402::common` (envelope, bounded parse,
-//! trusted UTXO resolution, economics and scripts) without the profile's authorization step, so tests
-//! can control the authorization expiry and the swap order inputs.
+//! Test support for the facilitator.
+//!
+//! It provides:
+//!
+//! - a deterministic fixture over [`MockChain`];
+//! - a KAS payment builder, whose consensus-valid version-0 P2PK spends the mock chain validates
+//!   with the script engine;
+//! - a verifier that runs the shared checks of `kob_x402::common` without the profile's
+//!   authorization step, so tests can control the authorization expiry and the swap order inputs.
+//!   The checks are the envelope, bounded parse, trusted UTXO resolution, economics and scripts.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,7 +40,9 @@ pub const MERCHANT_KEY: u8 = 2;
 /// The fixture clock's start (unix ms).
 pub const START_MS: u64 = 1_700_000_000_000;
 
-/// True when `again` is the repeat answer of `first`: the same settlement, marked `extensions.kob.replayed = true`.
+/// True when `again` is the repeat answer of `first`.
+///
+/// It is the same settlement, marked `extensions.kob.replayed = true`.
 pub fn is_repeat_of(again: &kob_x402::wire::SettlementResponse, first: &kob_x402::wire::SettlementResponse) -> bool {
     let mut stripped = again.clone();
     let marked = stripped
@@ -44,7 +51,7 @@ pub fn is_repeat_of(again: &kob_x402::wire::SettlementResponse, first: &kob_x402
         .and_then(|x| x.get_mut("kob"))
         .and_then(|k| k.as_object_mut())
         .and_then(|k| {
-            // the age of the first answer is a clock reading: not part of the comparison
+            // The age of the first answer is a clock reading, so it is not part of the comparison.
             k.remove("answeredAgoMs");
             k.remove("replayed")
         })
@@ -79,8 +86,10 @@ pub fn kas_requirements(amount: u64, finality: Finality, max_timeout_seconds: u6
     }
 }
 
-/// Builds and signs a version-0 P2PK payment of `amount` sompi to `pay_to` funded by `inputs` (payer
-/// key `payer_key`), with change back to the payer and the relay-floor fee.
+/// Builds and signs a version-0 P2PK payment of `amount` sompi to `pay_to`.
+///
+/// `inputs` fund it and `payer_key` signs. Change goes back to the payer, and the fee is the
+/// relay floor.
 pub fn build_kas_payment(
     chain: &MockChain,
     payer_key: u8,
@@ -183,7 +192,9 @@ pub struct TestVerifier {
     pub expires_at_ms: AtomicU64,
     /// Input outpoints reported as swap order inputs.
     pub orders: Mutex<Vec<Outpoint>>,
-    /// Advances this clock by the given ms while verifying (an expiry that lapses during awaited work).
+    /// Advances this clock by the given ms while verifying.
+    ///
+    /// It simulates an expiry that lapses during awaited work.
     pub advance_clock: Mutex<Option<(Arc<FixedClock>, u64)>>,
     /// Number of `verify` calls.
     pub calls: AtomicU64,
