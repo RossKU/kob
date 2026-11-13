@@ -27,9 +27,10 @@ fn commit_of(env: Option<&'static str>) -> Option<&'static str> {
 /// The template generation of this build.
 ///
 /// It is the first 16 hex digits of the blake3 hash of the template hashes of the order templates
-/// the build pins (`kob_protocol::artifacts::PINNED`, in order). Two builds with the same generation
-/// fill the same orders. An executor whose generation differs from the release's misses the orders
-/// of the other. See `docs/ops/release.md`, section 7, and `docs/spec/template-retirement.md`.
+/// the build pins (`kob_protocol::artifacts::PINNED`, in order). Two builds with the same
+/// generation fill the same orders. An executor whose generation differs from the release's
+/// misses the orders of the other. See `docs/ops/release.md`, section 7, and
+/// `docs/spec/template-retirement.md`.
 pub fn template_generation() -> &'static str {
     static GEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     GEN.get_or_init(|| {
@@ -127,7 +128,8 @@ mod tests {
         assert_eq!(v["version"], VERSION);
         assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
         assert_eq!(v["commit"].as_str(), commit());
-        // The template generation is 16 hex digits and stable. The build line and the metric name it.
+        // The template generation is 16 hex digits and stable. The build line and the metric carry
+        // it.
         let g = template_generation();
         assert_eq!(g.len(), 16);
         assert!(g.chars().all(|c| c.is_ascii_hexdigit()));

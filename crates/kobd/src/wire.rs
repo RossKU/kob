@@ -159,7 +159,9 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// A count that must be plausible for the remaining input (each item takes at least `min_item` bytes).
+    /// A count that must be plausible for the remaining input.
+    ///
+    /// Each item takes at least `min_item` bytes.
     pub fn count(&mut self, min_item: usize) -> WireResult<usize> {
         let n = self.var()? as usize;
         if n.checked_mul(min_item.max(1)).is_none_or(|t| t > self.b.len() - self.p) {
