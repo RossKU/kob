@@ -44,11 +44,13 @@ describe('network switch model', () => {
     expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ network: 'mainnet', features: { kastle: true } });
     const next = resolveConfig({ file, settings: JSON.parse(st.getItem(SETTINGS_KEY)!) }).config;
     expect(next).toMatchObject({ network: 'mainnet', indexerUrl: '', nodeUrl: '' });
-    // and back: the deployment's own servers apply again
+    // and back to the deployment's own network (the host's default): the stored network is cleared, the deployment's own servers apply again
+    expect(networkSwitchPatch(next, 'testnet-10')).toEqual({ network: null });
     expect(saveSettings(networkSwitchPatch(next, 'testnet-10'), st)).toBe(true);
+    expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ features: { kastle: true } });
     expect(resolveConfig({ file, settings: JSON.parse(st.getItem(SETTINGS_KEY)!) }).config).toMatchObject({ network: 'testnet-10', indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc' });
   });
-  it('on a host whose default network comes from `hostNetworks`, the switch stores the choice (per origin), which beats the host on the next load, both ways', () => {
+  it('on a host whose default network comes from `hostNetworks`, the switch stores a choice of the other network (per origin), which beats the host on the next load, and clears it on choosing the host own', () => {
     const shared = {
       network: 'mainnet', indexerUrl: 'https://main.example', networks: { 'testnet-10': { indexerUrl: 'https://tn.example' } },
       hostNetworks: { 'kob.example': 'mainnet', 'kob-tn10.example': 'testnet-10' },
@@ -61,9 +63,13 @@ describe('network switch model', () => {
     expect(saveSettings(networkSwitchPatch(first, 'mainnet'), st)).toBe(true);
     const switched = load(st);
     expect(switched).toMatchObject({ network: 'mainnet', indexerUrl: 'https://main.example' });
-    // back to the host's network: stored too (the switch writes the network it chose; Settings > reset servers removes it)
+    // back to the host's network: the stored network is CLEARED, so the browser follows the host again (a later change of `hostNetworks` reaches it)
+    expect(switched.hostNetwork).toBe('testnet-10');
+    expect(networkSwitchPatch(switched, 'testnet-10')).toEqual({ network: null });
     expect(saveSettings(networkSwitchPatch(switched, 'testnet-10'), st)).toBe(true);
-    expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ network: 'testnet-10' });
+    expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({});
     expect(load(st)).toMatchObject({ network: 'testnet-10', indexerUrl: 'https://tn.example' });
+    const moved = { ...shared, hostNetworks: { ...shared.hostNetworks, 'kob-tn10.example': 'mainnet' } };
+    expect(resolveConfig({ file: moved, host: 'kob-tn10.example', settings: JSON.parse(st.getItem(SETTINGS_KEY) ?? 'null') ?? undefined }).config.network).toBe('mainnet');
   });
 });

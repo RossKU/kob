@@ -66,7 +66,7 @@ for (const [width, height] of [[1280, 800], [1920, 1080]] as const) {
 test('the tab title has no covenant id; the details card has the name, the whole id with its copy button and the program chip, each once', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   const id = await openMarket(page, mock);
-  await expect(page).toHaveTitle('EXKCC/KAS · KOB');
+  await expect(page).toHaveTitle('Testnet · EXKCC/KAS · KOB');
   expect(await page.title()).not.toContain(id);
   const details = page.getByTestId('token-details');
   await details.scrollIntoViewIfNeeded();
@@ -147,7 +147,7 @@ test('1280 px: the pair page has the token page\'s bar, the pictures of both tok
     await expect(page.getByTestId('pair-header').getByTestId(`fingerprint-${id}`)).toBeVisible();
   }
   await expect(page.getByTestId('market-pair')).toHaveAttribute('data-pair', 'EXKCC/EXUSD');
-  await expect(page).toHaveTitle('EXKCC/EXUSD · KOB');
+  await expect(page).toHaveTitle('Testnet · EXKCC/EXUSD · KOB');
   // the pair's book: no "via KAS" chip on a row, the sources said once under the book
   await expect(page.getByTestId('pair-via-kas')).toHaveCount(0);
   await expect(page.getByTestId('pair-legend')).toBeVisible();

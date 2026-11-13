@@ -29,8 +29,12 @@ export function networkSwitchState(config: Pick<AppConfig, 'lockNetwork'>, store
   return fields.length ? { kind: 'blocked', fields } : { kind: 'open' };
 }
 
-/** What choosing `target` hands to `saveSettings`: the network alone (the other fields of the form are not saved). */
+/**
+ * What choosing `target` hands to `saveSettings`: the network alone (the other fields of the form are not saved). Choosing the host's own default (`hostNetwork`) CLEARS the
+ * stored network instead (`null`): the browser then follows the host again, so a later change of `hostNetworks` reaches it.
+ */
 export function networkSwitchPatch(config: AppConfig, target: NetworkName): Record<string, unknown> {
+  if (target === config.hostNetwork) return { network: null };
   return settingsPatch(validateSettings({ ...formFromConfig(config), network: target }).clean, ['network']);
 }
 

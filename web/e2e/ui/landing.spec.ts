@@ -46,7 +46,7 @@ for (const [width, height] of [
     await expect.poll(bar).toEqual({ opacity: '1', scrolled: true });
     expect((await page.getByTestId('landing-nav').boundingBox())!.y, 'sticky').toBe(0);
     await page.evaluate(() => window.scrollTo(0, 0));
-    await expect(page).toHaveTitle(/^KOB/);
+    await expect(page).toHaveTitle(/^Testnet · KOB/);
     expect(await noScroll(page), 'no horizontal scroll at the top').toBe(true);
 
     // the hero rises in, the bars grow in when scrolled to, the footer carries the network's disclaimer and the configured indexer's API

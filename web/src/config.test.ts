@@ -42,7 +42,7 @@ describe('mergeConfig', () => {
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
       logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs', standalone: { manual: false, auto: true, autoReturn: true },
-      deploymentNetwork: 'mainnet', serverNetworks: ['mainnet'], lockNetwork: false,
+      deploymentNetwork: 'mainnet', hostNetwork: 'mainnet', serverNetworks: ['mainnet'], lockNetwork: false,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -501,6 +501,19 @@ describe('per-network servers (`networks`) and the default network by host name 
   it('__KOB_CONFIG__ overrides config.json entry by entry, field by field', () => {
     const c = resolveConfig({ file: launch, injected: { networks: { 'testnet-10': { nodeUrl: 'wss://inj.example/wrpc' } }, hostNetworks: { 'kob.example': 'testnet-10' } }, host: 'kob.example' }).config;
     expect(c).toMatchObject({ ...tn10, nodeUrl: 'wss://inj.example/wrpc' });
+  });
+
+  it('a server URL with a query string or a fragment is ignored with a warning, on every layer and in every field', () => {
+    const q = (u: string) => resolveConfig({ file: { indexerUrl: u, nodeUrl: u.replace('https', 'wss'), extraIndexerUrls: [u], registryUrl: u, explorerUrl: u, logoBlocklistUrl: u, tokenNamesUrl: u, ipfsGatewayUrl: u } });
+    for (const u of ['https://a.example?key=1', 'https://a.example/x#f', 'https://a.example/?']) {
+      const r = q(u);
+      expect(r.warnings.map((w) => w.field).sort(), u).toEqual(['explorerUrl', 'extraIndexerUrls', 'indexerUrl', 'ipfsGatewayUrl', 'logoBlocklistUrl', 'nodeUrl', 'registryUrl', 'tokenNamesUrl']);
+      expect(r.config).toMatchObject({ indexerUrl: '', nodeUrl: '', extraIndexerUrls: [], registryUrl: './registry/tokens.json', explorerUrl: '', logoBlocklistUrl: '' });
+    }
+    expect(resolveConfig({ file: { indexerUrl: 'https://a.example/v1' } }).warnings).toEqual([]);
+    // a stored setting and a link: the same rule
+    expect(resolveConfig({ settings: { indexerUrl: 'https://a.example?k=1' } }).config.indexerUrl).toBe('');
+    expect(resolveConfig({ file: { allowQueryOverrides: true }, query: 'indexer=' + encodeURIComponent('https://a.example?k=1') }).config.indexerUrl).toBe('');
   });
 
   it('invalid entries are reported and ignored; both maps are deployment-only', () => {

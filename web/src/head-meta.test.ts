@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { applyNetworkToHead, tabTitle } from './app/page-title';
 import { applyHead, LANDING_ONLY_DESCRIPTION, parseBuildNetwork, parsePublicOrigin } from '../head-meta.mjs';
 
 const web = (rel: string) => fileURLToPath(new URL(`../${rel}`, import.meta.url));
@@ -65,6 +66,38 @@ describe('the frame logo (header and footer of every page)', () => {
     expect(logo).toContain('class="brand-mark" viewBox="0 0 512 512" aria-hidden="true" focusable="false"');
     expect(attrs(logo)).toEqual(attrs(fav));
     expect(logo).not.toMatch(/var\(--|currentColor|stroke/);
+  });
+});
+
+describe('the tab title follows the network in force at runtime (app/page-title.tsx)', () => {
+  // no DOM in this environment: a stand-in that holds the title and the two meta tags of an index.html text
+  const fake = (src: string) => {
+    const metas = new Map<string, { v: string; getAttribute: (n: string) => string; setAttribute: (n: string, v: string) => void }>();
+    const meta = (sel: string, key: RegExp) => {
+      const m = src.match(key);
+      if (m) {
+        const o = { v: m[1]!, getAttribute: () => o.v, setAttribute: (_n: string, v: string) => { o.v = v; } };
+        metas.set(sel, o);
+      }
+    };
+    meta('meta[property="og:title"]', /<meta property="og:title" content="([^"]*)"/);
+    meta('meta[name="twitter:title"]', /<meta name="twitter:title" content="([^"]*)"/);
+    return { title: src.match(/<title>([^<]*)<\/title>/)![1]!, head: { querySelector: (sel: string) => metas.get(sel) ?? null }, content: (sel: string) => metas.get(sel)?.v } as unknown as Document & { content: (sel: string) => string | undefined };
+  };
+  it('prefixes the title, og:title and twitter:title on testnet-10, leaves og:url alone, and replaces a build-time prefix instead of doubling it', () => {
+    const d = fake(html);
+    applyNetworkToHead('testnet-10', d);
+    expect(d.title).toBe(`Testnet · ${TITLE}`);
+    expect(d.content('meta[property="og:title"]')).toBe(`Testnet · ${TITLE}`);
+    expect(d.content('meta[name="twitter:title"]')).toBe(`Testnet · ${TITLE}`);
+    expect(tabTitle('Market · KOB')).toBe('Testnet · Market · KOB');
+    applyNetworkToHead('testnet-10', d);
+    expect(d.title).toBe(`Testnet · ${TITLE}`);
+    const built = fake(applyHead(html, { network: 'testnet-10' }));
+    applyNetworkToHead('mainnet', built);
+    expect(built.title).toBe(TITLE);
+    expect(built.content('meta[property="og:title"]')).toBe(TITLE);
+    expect(tabTitle('Market · KOB')).toBe('Market · KOB');
   });
 });
 

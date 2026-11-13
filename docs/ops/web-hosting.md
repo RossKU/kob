@@ -397,7 +397,8 @@ stored setting.
   one network: `indexerUrl`, `extraIndexerUrls`, `nodeUrl`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`, `quoteTokens` and `home`. The
   top-level fields still are the servers of `network` (`deploymentNetwork`), so an old `config.json` works unchanged. On another network the page uses
   that network's entry; a field the entry leaves out is the default, never the top-level value. Without an entry the page has no servers there (no
-  indexer, the SDK's public node, the bundled registry), as before. The URLs follow the rules of the top-level fields and carry no query or fragment.
+  indexer, the SDK's public node, the bundled registry), as before. The URLs follow the rules of the top-level fields.
+* The server URLs (the top-level fields and the entries of `networks`) carry no query string or fragment, on any layer (`config.json` is public, and the app appends paths to them): a URL with one is ignored with a warning.
 * `hostNetworks`: the default network of each host name, e.g. `{"kob.kaspa.ag": "mainnet"}`. The match is exact (case and a trailing dot aside): no
   port, path or wildcard.
 
@@ -409,6 +410,8 @@ The workflow writes them from `KOB_PAGES_NETWORKS` and `KOB_PAGES_HOST_NETWORKS`
 entry of `KOB_PAGES_NETWORKS` takes `indexerUrl` (required), `extraIndexerUrls`, `nodeUrl` and `explorerUrl`, checked like the site's own variables.
 Only `testnet-10` on a mainnet site is accepted (a testnet-10 site replaces the shipped mainnet registry); the script gives it the token-program list
 as `registry/testnet-10/tokens.json` and sets its `registryUrl`. With both variables unset, `config.json` is byte for byte what it was before.
+
+The old `kob-web` testnet project is kept for a while after the launch as a fallback, in case the shared deployment has to be rolled back.
 
 The launch config, for the mainnet project, with `KOB_PAGES_MAINNET_NETWORKS={"testnet-10": {"indexerUrl": "https://kob-api-tn10.kaspa.ag"}}` and
 `KOB_PAGES_MAINNET_HOST_NETWORKS={"kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10"}`:

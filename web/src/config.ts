@@ -98,6 +98,8 @@ export interface AppConfig {
    * setting or a link names itself still wins on any network.
    */
   deploymentNetwork: NetworkName;
+  /** The network this host defaults to: `hostNetworks` for the page's host, else `deploymentNetwork`. Computed, never read from a layer. The header switch clears a stored choice that equals it. */
+  hostNetwork: NetworkName;
   /** The networks the deployment has servers for: `deploymentNetwork` and every network of `networks`. Computed, never read from a layer. */
   serverNetworks: NetworkName[];
   /**
@@ -143,6 +145,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   ipfsGatewayUrl: DEFAULT_IPFS_GATEWAY_URL,
   standalone: Object.freeze({ manual: false, auto: true, autoReturn: true }) as StandaloneSettings,
   deploymentNetwork: 'mainnet' as NetworkName,
+  hostNetwork: 'mainnet' as NetworkName,
   serverNetworks: Object.freeze(['mainnet']) as unknown as NetworkName[],
   lockNetwork: false,
 });
@@ -171,7 +174,11 @@ const MAX_EXTRA_INDEXERS = 4;
 const RPC_SCHEMES = ['ws:', 'wss:', 'http:', 'https:'];
 const HTTP_SCHEMES = ['http:', 'https:'];
 
-/** Trimmed absolute URL of an allowed scheme, without a trailing slash; null when invalid. '' is valid (= unset). */
+/**
+ * Trimmed absolute URL of an allowed scheme, without a trailing slash; null when invalid. '' is valid (= unset). A query string or a fragment is refused on every layer
+ * (config.json is public and a secret in it would be served to everyone; the app appends paths to these URLs, which a query would break; one rule for a stored setting
+ * and a link too).
+ */
 export function validateUrl(value: unknown, schemes: readonly string[] = RPC_SCHEMES): string | null {
   if (typeof value !== 'string') return null;
   const v = value.trim();
@@ -183,6 +190,7 @@ export function validateUrl(value: unknown, schemes: readonly string[] = RPC_SCH
     return null;
   }
   if (!schemes.includes(u.protocol) || !u.hostname) return null;
+  if (/[?#]/.test(v)) return null;
   if (u.username || u.password) return null; // credentials in a URL end up in logs and referrers
   return v.replace(/\/+$/, '');
 }
@@ -206,7 +214,7 @@ export function validateRegistryUrl(value: unknown): string | null {
   const v = value.trim();
   if (v === '') return null;
   if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return validateUrl(v, HTTP_SCHEMES) || null;
-  if (v.startsWith('//') || /\s/.test(v)) return null;
+  if (v.startsWith('//') || /\s/.test(v) || /[?#]/.test(v)) return null;
   return v;
 }
 
@@ -300,7 +308,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
     if (f in raw) {
       const u = validateUrl(raw[f]);
       if (u !== null) out[f] = u;
-      else bad(f, 'URL (use ws, wss, http or https)');
+      else bad(f, 'URL (use ws, wss, http or https; no query or fragment)');
     }
   }
   if ('extraIndexerUrls' in raw) {
@@ -308,13 +316,13 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       const urls = raw.extraIndexerUrls.map((u) => validateUrl(u)).filter((u): u is string => !!u);
       // one indexer spelled twice is one verifier
       if (urls.length === raw.extraIndexerUrls.length && urls.length <= MAX_EXTRA_INDEXERS) out.extraIndexerUrls = [...new Map(urls.map((u) => [indexerKey(u), u])).values()];
-      else bad('extraIndexerUrls', `list of at most ${MAX_EXTRA_INDEXERS} URLs (use http or https)`);
+      else bad('extraIndexerUrls', `list of at most ${MAX_EXTRA_INDEXERS} URLs (use http or https; no query or fragment)`);
     } else bad('extraIndexerUrls', 'list of URLs');
   }
   if ('registryUrl' in raw) {
     const u = validateRegistryUrl(raw.registryUrl);
     if (u !== null) out.registryUrl = u;
-    else bad('registryUrl', 'registry URL');
+    else bad('registryUrl', 'registry URL (no query or fragment)');
   }
   if ('allowQueryOverrides' in raw) {
     const f = parseFlag(raw.allowQueryOverrides);
@@ -356,7 +364,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
     else {
       const u = validateUrl(raw.explorerUrl, HTTP_SCHEMES);
       if (u !== null) out.explorerUrl = u;
-      else bad('explorerUrl', 'URL (use http or https)');
+      else bad('explorerUrl', 'URL (use http or https; no query or fragment)');
     }
   }
   if ('tokenNamesUrl' in raw) {
@@ -364,7 +372,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
     else {
       const u = validateUrl(raw.tokenNamesUrl, ['https:']);
       if (u !== null) out.tokenNamesUrl = u;
-      else bad('tokenNamesUrl', 'URL (use https; empty turns the token names off)');
+      else bad('tokenNamesUrl', 'URL (use https, no query or fragment; empty turns the token names off)');
     }
   }
   if ('logoBlocklistUrl' in raw) {
@@ -372,7 +380,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
     else {
       const u = validateUrl(raw.logoBlocklistUrl, HTTP_SCHEMES);
       if (u !== null) out.logoBlocklistUrl = u;
-      else bad('logoBlocklistUrl', 'URL (use http or https; empty = the indexer base)');
+      else bad('logoBlocklistUrl', 'URL (use http or https, no query or fragment; empty = the indexer base)');
     }
   }
   if ('ipfsGatewayUrl' in raw) {
@@ -380,7 +388,7 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
     else {
       const u = validateUrl(raw.ipfsGatewayUrl, ['https:']);
       if (u !== null) out.ipfsGatewayUrl = u;
-      else bad('ipfsGatewayUrl', 'URL (use https; empty turns ipfs:// logos off)');
+      else bad('ipfsGatewayUrl', 'URL (use https, no query or fragment; empty turns ipfs:// logos off)');
     }
   }
   if ('lockNetwork' in raw) {
@@ -537,6 +545,7 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
       autoReturn: p.standaloneAutoReturn ?? base.standalone.autoReturn,
     },
     deploymentNetwork: base.deploymentNetwork,
+    hostNetwork: base.hostNetwork,
     serverNetworks: base.serverNetworks,
     lockNetwork: p.lockNetwork ?? base.lockNetwork,
   };
@@ -574,16 +583,16 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   const networks: Partial<Record<NetworkName, NetworkServers>> = {};
   for (const n of NETWORK_NAMES) if (file.networks?.[n] || injected.networks?.[n]) networks[n] = { ...file.networks?.[n], ...injected.networks?.[n] };
   const hostNetworks = { ...file.hostNetworks, ...injected.hostNetworks };
-  top = { ...top, deploymentNetwork, serverNetworks: [deploymentNetwork, ...NETWORK_NAMES.filter((n) => n !== deploymentNetwork && networks[n])] };
+  const host = layers.host ? hostKey(layers.host) : '';
+  const hostNetwork = (host && Object.prototype.hasOwnProperty.call(hostNetworks, host) ? hostNetworks[host] : undefined) ?? deploymentNetwork;
+  top = { ...top, deploymentNetwork, hostNetwork, serverNetworks: [deploymentNetwork, ...NETWORK_NAMES.filter((n) => n !== deploymentNetwork && networks[n])] };
   /** The deployment's configuration on network `n`: the top-level servers on `deploymentNetwork`, else the defaults; then `networks[n]`. */
   const forNetwork = (n: NetworkName): AppConfig => {
     const on = { ...top, network: n };
     return apply(n === deploymentNetwork ? on : withoutDeploymentServers(on), networks[n] ?? {});
   };
   // the default network: the one `hostNetworks` names for the page's host, else the deployment's
-  const host = layers.host ? hostKey(layers.host) : '';
-  const hostNetwork = host && Object.prototype.hasOwnProperty.call(hostNetworks, host) ? hostNetworks[host] : undefined;
-  let deployment = forNetwork(hostNetwork ?? deploymentNetwork);
+  let deployment = forNetwork(hostNetwork);
   const stored = sanitizeLayer('settings', layers.settings, false, warnings);
   let cfg = apply(deployment, stored);
   let queried: ConfigPatch = {};

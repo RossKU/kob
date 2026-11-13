@@ -71,10 +71,13 @@ test('keyboard: Enter opens the panel, Tab reaches the options, Enter on the oth
 test('switching to mainnet and back: the setting is saved, the page reloads into the network, and the testnet servers are not used on mainnet', async ({ appPage: page, mock }) => {
   await page.goto('/#/market');
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
+  // the tab title names the network in force (at runtime: one bundle serves both)
+  await expect(page).toHaveTitle(/^Testnet · Market · KOB/);
 
   await choose(page, 'mainnet');
   expect(await stored(page)).toEqual({ network: 'mainnet' });
   await expect(badge(page)).toHaveAttribute('data-network', 'mainnet');
+  await expect(page).toHaveTitle(/^Market · KOB/);
   await expect(page.getByTestId('network-switch')).toHaveAccessibleName('Network: mainnet. Change network');
   // none of the deployment's servers is in force: Settings (advanced) shows them empty, the network is mainnet
   await page.goto('/#/settings');
@@ -88,9 +91,9 @@ test('switching to mainnet and back: the setting is saved, the page reloads into
   await expect(page.getByTestId('network-option-mainnet')).toHaveAttribute('aria-current', 'true');
   await expect(page.getByTestId('network-switch-servers')).toHaveCount(0);
 
-  // and back: the deployment's own servers apply again
+  // and back to the deployment's own network (the host's default): the stored choice is cleared, and the deployment's own servers apply again
   await Promise.all([page.waitForEvent('load'), page.getByTestId('network-option-testnet-10').click()]);
-  expect(await stored(page)).toEqual({ network: 'testnet-10' });
+  expect((await stored(page))?.network).toBeUndefined();
   await expect(badge(page)).toHaveAttribute('data-network', 'testnet-10');
   await page.getByTestId('settings-servers-fold').getByRole('button').first().click();
   await expect(page.getByTestId('settings-indexer-url')).toHaveValue(mock.url);

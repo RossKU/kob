@@ -67,7 +67,7 @@ test.describe('activity page', () => {
     await seedToken(page, mock);
     await page.goto('/#/activity');
     await expect(page.getByTestId('nav-activity')).toHaveAttribute('aria-current', 'page');
-    await expect(page).toHaveTitle(/^Activity · KOB/);
+    await expect(page).toHaveTitle(/^Testnet · Activity · KOB/);
     await expect(rows(page).first()).toBeVisible();
     const kinds = await attrs(page, 'data-kind');
     expect(kinds).toContain('fill');
