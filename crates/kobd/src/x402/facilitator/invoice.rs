@@ -36,6 +36,7 @@ use kob_x402::wire::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tracing::{error, warn};
 
 use super::{Facilitator, Metrics};
 use crate::x402::ledger::State;
@@ -152,7 +153,7 @@ impl InvoiceStore {
                         good = (end + 1).min(raw.len());
                     }
                     Err(e) if unfinished => {
-                        eprintln!("invoices: discarding an unfinished last record at line {line_no}: {e}");
+                        warn!("invoices: discarding an unfinished last record at line {line_no}: {e}");
                         break;
                     }
                     Err(e) => {
@@ -623,7 +624,7 @@ impl Facilitator {
                     r.extra.push(x);
                 }
             }) {
-                eprintln!("x402: invoice {inv}: cannot record the released payment {}: {err}", e.txid);
+                error!("x402: invoice {inv}: cannot record the released payment {}: {err}", e.txid);
             }
         }
         true
@@ -664,7 +665,7 @@ impl Facilitator {
                     })
                     .is_ok()
                 {
-                    eprintln!("x402: invoice {}: a refused {} payment {} is on chain ({observed}); refund it", rec.id, x.kind, x.txid);
+                    warn!("x402: invoice {}: a refused {} payment {} is on chain ({observed}); refund it", rec.id, x.kind, x.txid);
                     seen += 1;
                 }
             }

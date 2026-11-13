@@ -44,6 +44,7 @@ use kob_x402::error::{Diag, Reason, X402Error};
 use kob_x402::wire::{hex, parse_hash32, OutpointJson};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use tracing::warn;
 
 /// Where a settlement stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,7 +514,7 @@ impl Ledger {
                 Err(LineError::Bad(msg)) if is_last && !terminated => {
                     // an unfinished last write (crash mid-append; torn or zero-filled): never acknowledged, so drop it.
                     // A newline-terminated line was written whole: one that does not parse is refused like any other.
-                    eprintln!("ledger: discarding an unfinished last record at line {line_no}: {msg}");
+                    warn!("ledger: discarding an unfinished last record at line {line_no}: {msg}");
                     break;
                 }
                 Err(LineError::Bad(msg)) => return Err(LedgerError::Corrupt { line: line_no, msg }),

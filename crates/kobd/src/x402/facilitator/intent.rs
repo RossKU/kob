@@ -34,6 +34,7 @@ use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
 use kob_x402::verify::VerifyCtx;
 use kob_x402::wire::{hex, parse_hash32, FacilitatorRequest, Finality, OutpointJson, SettlementResponse, BINDING_INTENT};
 use serde_json::{json, Value};
+use tracing::{info, warn};
 
 use super::invoice::InvoiceCtx;
 use super::{kind_str, pending_error, short, unavailable, Facilitator, Metrics};
@@ -242,7 +243,7 @@ impl Facilitator {
         match self.chain.replace(&tx) {
             Ok(_) | Err(SubmitError::AlreadyKnown) => {
                 self.chain.untrack(&waiting);
-                eprintln!(
+                info!(
                     "x402: intent {txid}: expiry {} waited in the mempool at {paid}; replaced by {} at {rate} sompi/gram",
                     hex(&waiting),
                     hex(&id)
@@ -978,7 +979,7 @@ impl Facilitator {
                 Ok(Drive::Waiting("execution conflicted; re-planning"))
             }
             Err(SubmitError::Rejected(m)) => {
-                eprintln!("x402 intent {txid}: execution {} rejected: {m}", hex(&ex_txid));
+                warn!("x402 intent {txid}: execution {} rejected: {m}", hex(&ex_txid));
                 dead(format!("rejected: {}", short(&m)), vec![])?;
                 Ok(Drive::Waiting("execution rejected; re-planning"))
             }

@@ -12,6 +12,10 @@
 //! | [`indexed`] | `ChainView` over the node and the indexer's acceptance tracking (`kobd --executor`) |
 //! | [`quote`] | swap-and-pay quotes from an indexer's book; the book view of intent executions |
 
+// The facilitator is daemon code. It logs through `tracing`, so its lines carry a time and a level
+// and reach `--log-file`. It prints no command output, so every print macro is refused here.
+#![deny(clippy::print_stdout, clippy::print_stderr)]
+
 pub mod config;
 pub mod facilitator;
 pub mod http;
@@ -34,6 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kob_x402::chain::{ChainView, SystemClock};
+use tracing::{info, warn};
 
 use config::{AuthMode, Built, X402Config};
 use facilitator::{Facilitator, FacilitatorConfig};
@@ -120,7 +125,7 @@ pub fn node_chain(cfg: &X402Config, built: &Built) -> Result<NodeChain, String> 
         Ok(()) => {}
         Err(node::NetworkCheck::Mismatch(m)) => return Err(m),
         Err(node::NetworkCheck::Unreachable(m)) => {
-            tracing::warn!("x402: node not reachable at startup ({m}); settlements fail closed until it is")
+            warn!("x402: node not reachable at startup ({m}); settlements fail closed until it is")
         }
     }
     Ok(chain)
@@ -145,7 +150,7 @@ pub fn prepare_with(
 ) -> Result<Service, String> {
     let cfg = &built.cfg;
     let ledger = if cfg.ledger == ":memory:" {
-        tracing::warn!("x402: volatile ledger; replay protection is lost on restart");
+        warn!("x402: volatile ledger; replay protection is lost on restart");
         Ledger::in_memory()
     } else {
         Ledger::open(&cfg.ledger).map_err(|e| e.to_string())?
@@ -185,7 +190,7 @@ pub fn prepare_with(
             max_attempts: cfg.intents.max_attempts,
             lock_margin_daa: cfg.intents.lock_margin_daa,
         });
-        tracing::info!("x402: intent-based swap-and-pay on (router {})", kob_protocol::router::ROUTER_ARTIFACT_ID);
+        info!("x402: intent-based swap-and-pay on (router {})", kob_protocol::router::ROUTER_ARTIFACT_ID);
     }
     if let Some(r) = book_ready {
         fac = fac.with_book_readiness(r);
@@ -199,12 +204,12 @@ pub fn prepare_with(
             }
         });
         let store = if path == ":memory:" {
-            tracing::warn!("x402: volatile invoice store; invoices vanish on restart");
+            warn!("x402: volatile invoice store; invoices vanish on restart");
             facilitator::InvoiceStore::in_memory()
         } else {
             facilitator::InvoiceStore::open(&path)?
         };
-        tracing::info!("x402: invoices on ({} stored)", store.len());
+        info!("x402: invoices on ({} stored)", store.len());
         fac = fac.with_invoices(facilitator::InvoiceRuntime {
             store: Arc::new(store),
             max_lifetime_ms: cfg.invoices.max_lifetime_seconds.saturating_mul(1_000),
@@ -215,7 +220,7 @@ pub fn prepare_with(
     }
     let fac = Arc::new(fac);
     let report = fac.reconcile();
-    tracing::info!("x402: ledger has {} entries; startup reconcile: {report:?}", fac.ledger.len());
+    info!("x402: ledger has {} entries; startup reconcile: {report:?}", fac.ledger.len());
     Ok(Service { fac, built })
 }
 
@@ -231,7 +236,7 @@ impl Service {
 pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shutdown: impl Future<Output = ()>) -> Result<(), String> {
     let Service { fac, built } = svc;
     let cfg = built.cfg.clone();
-    tracing::info!(
+    info!(
         "x402: facilitator for {} on http://{} (auth {:?}, {} merchants, node {})",
         built.network,
         built.listen,
@@ -249,14 +254,14 @@ pub async fn serve_service(svc: Service, listener: tokio::net::TcpListener, shut
             let f = recon.clone();
             if let Ok(r) = tokio::task::spawn_blocking(move || f.reconcile()).await {
                 if r.reorged > 0 || r.errors > 0 {
-                    tracing::warn!("x402: reconcile: {r:?}");
+                    warn!("x402: reconcile: {r:?}");
                 }
             }
         }
     });
     let res = http::serve(listener, app, cfg.conn_limits(), shutdown).await.map_err(|e| e.to_string());
     reconciler.abort();
-    tracing::info!("x402: facilitator stopped");
+    info!("x402: facilitator stopped");
     res
 }
 

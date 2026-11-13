@@ -55,6 +55,7 @@ use kob_x402::wire::{
     SettlementResponse, VerifyResponse, X402_VERSION,
 };
 use serde_json::{json, Map, Value};
+use tracing::{error, info, warn};
 
 use super::ledger::{Claim, Entry, Ledger, NewEntry, State, Watched};
 
@@ -1003,7 +1004,7 @@ impl Facilitator {
                     Some(format!("submit outcome unknown: {m}")),
                     self.clock.now_ms(),
                 );
-                eprintln!("x402: submit of {} has an unknown outcome ({m}); evidence stays consumed", entry.txid);
+                warn!("x402: submit of {} has an unknown outcome ({m}); evidence stays consumed", entry.txid);
                 return Err(unavailable(
                     "the node could not be reached; the outcome of the broadcast is unknown, retry the identical request",
                 ));
@@ -1146,10 +1147,7 @@ impl Facilitator {
             return self.cached(&e);
         }
         Metrics::inc(&self.metrics.settle_found_accepted);
-        eprintln!(
-            "x402: {} was accepted before its /settle (broadcast by the merchant or the payer); settling it as verified",
-            e.txid
-        );
+        info!("x402: {} was accepted before its /settle (broadcast by the merchant or the payer); settling it as verified", e.txid);
         let e = self.ledger.transition(&e.txid, State::Broadcast, None, now)?;
         self.chain.track(&txid);
         self.observe_and_finish(&e, wait, Some(tx))
@@ -1178,7 +1176,7 @@ impl Facilitator {
                     }
                     tries += 1;
                     Metrics::inc(&self.metrics.submit_retries);
-                    eprintln!("x402: submit of {} could not reach the node ({m}); re-submitting the same transaction", tx.id());
+                    warn!("x402: submit of {} could not reach the node ({m}); re-submitting the same transaction", tx.id());
                     std::thread::sleep(pause);
                     pause = (pause * 2).min(Duration::from_secs(2));
                 }
@@ -1208,7 +1206,7 @@ impl Facilitator {
             self.chain.unwatch_spend(&r.facts.outpoint());
         }
         if let Err(e) = self.ledger.transition(txid, State::Failed, Some(reason.to_string()), self.clock.now_ms()) {
-            eprintln!("x402: cannot mark {txid} failed: {e}");
+            error!("x402: cannot mark {txid} failed: {e}");
         }
         // the count bound holds at once (anonymous invoice payments fail entries between two reconciles)
         if self.ledger.failed_count() > self.config.max_failed_entries {
@@ -1228,7 +1226,7 @@ impl Facilitator {
                 n
             }
             Err(e) => {
-                eprintln!("x402: cannot prune failed ledger entries: {e}");
+                error!("x402: cannot prune failed ledger entries: {e}");
                 0
             }
         }
@@ -1398,7 +1396,7 @@ impl Facilitator {
                             match self.chain.submit(tx) {
                                 Ok(_) | Err(SubmitError::AlreadyKnown) => {
                                     Metrics::inc(&self.metrics.rebroadcasts);
-                                    eprintln!("x402: {} left the mempool unaccepted; re-broadcast", e.txid);
+                                    warn!("x402: {} left the mempool unaccepted; re-broadcast", e.txid);
                                 }
                                 // refused (an input spent meanwhile, or the node is down): no more re-broadcasts, observe on
                                 Err(_) => rebroadcasts = 0,
@@ -1558,7 +1556,7 @@ impl Facilitator {
                     Ok(false) => {
                         Metrics::inc(&self.metrics.reorgs_detected);
                         rep.reorged += 1;
-                        eprintln!(
+                        error!(
                             "x402: REORG SUSPECTED: merchant output {out} of accepted settlement {} vanished and the transaction is not in the mempool; marking ambiguous, evidence stays consumed",
                             e.txid
                         );
@@ -1607,7 +1605,7 @@ impl Facilitator {
                         if state == State::Ambiguous && e.accepted_daa.is_none() {
                             let age = now.saturating_sub(e.updated_ms);
                             if age >= self.config.ambiguous_grace.as_millis() as u64 {
-                                eprintln!(
+                                warn!(
                                     "x402: settlement {} was ambiguous and unknown to the node for {} s (not in the mempool, merchant output not on chain); failing it and releasing its outpoints",
                                     e.txid,
                                     age / 1000
@@ -1621,7 +1619,7 @@ impl Facilitator {
                             let age = now.saturating_sub(e.created_ms);
                             if age >= self.config.pending_grace.as_millis() as u64 {
                                 // nothing can ever resolve it; free the payer's outpoints instead of holding them forever
-                                eprintln!(
+                                warn!(
                                     "x402: settlement {} was pending and unknown to the node for {} s (crash before broadcast); failing it and releasing its outpoints",
                                     e.txid,
                                     age / 1000
@@ -1635,7 +1633,7 @@ impl Facilitator {
                                 }
                             } else {
                                 rep.unseen_pending += 1;
-                                eprintln!(
+                                warn!(
                                     "x402: settlement {} is pending and unknown to the node (crash before broadcast?); evidence stays consumed until the identical request is retried",
                                     e.txid
                                 );
@@ -1654,7 +1652,7 @@ impl Facilitator {
                         match self.chain.in_mempool(&txid) {
                             Ok(true) => {}
                             Ok(false) => {
-                                eprintln!(
+                                warn!(
                                     "x402: settlement {} was broadcast and is unknown to the node for {} s (not in the mempool, no output of it on chain); marking it ambiguous",
                                     e.txid,
                                     age / 1000
