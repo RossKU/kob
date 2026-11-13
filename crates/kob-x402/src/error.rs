@@ -1,9 +1,11 @@
-//! Errors: the public x402 wire reasons and the local diagnostic codes behind them.
+//! The x402 error type, with its public wire reasons and the finer local diagnostic codes.
 //!
-//! The elldeeone binding (`spec/errors.md`) exposes only a closed set of public reasons on the wire
-//! (`invalid_payload`, `invalid_transaction_state`, ...). Every failure this crate raises carries one
-//! of those reasons plus a finer local [`Diag`] code that is logged, tested and returned in
-//! `extensions.kaspa.diagnostic` of a failed response, never used as the wire reason itself.
+//! The binding (`spec/errors.md`) exposes a closed set of public reasons on the wire, such as
+//! `invalid_payload` and `invalid_transaction_state`. Every failure this crate raises carries a
+//! [`Reason`] value and a finer local [`Diag`] code.
+//!
+//! The diagnostic is logged and tested. A failed response returns it in
+//! `extensions.kaspa.diagnostic`. It is never the wire reason itself.
 
 use std::fmt;
 
@@ -38,11 +40,13 @@ impl Reason {
     }
 }
 
-/// Local diagnostic codes. The first block is the binding's own list (`kaspa-exact-v2.md`,
-/// `errors.md`); the second block is what the KOB token profile and swap-and-pay add.
+/// Local diagnostic codes.
+///
+/// The first group is the binding's own list (`kaspa-exact-v2.md`, `errors.md`). The later groups
+/// are added by the KOB token profile, swap-and-pay, intents, invoices and the runtime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Diag {
-    // binding diagnostics
+    // The binding's diagnostics.
     InvalidKaspaX402Amount,
     InvalidKaspaX402Binding,
     InvalidKaspaX402Payload,
@@ -61,11 +65,11 @@ pub enum Diag {
     InvalidKaspaExactMass,
     InvalidKaspaExactReplay,
     InvalidKaspaExactFinality,
-    // authorization / expiry (interop-v1 `expiry.cases`)
+    // Authorization and expiry (interop-v1 `expiry.cases`).
     ExpiredAuthorization,
     AuthorizationExceedsMaxTimeout,
     InvalidAuthorization,
-    // KOB token profile
+    // KOB token profile.
     TokenNotAllowlisted,
     TokenTemplateMismatch,
     TokenBorrowEnabled,
@@ -75,14 +79,14 @@ pub enum Diag {
     CarrierMismatch,
     Underpayment,
     Overpayment,
-    // KOB swap-and-pay
+    // KOB swap-and-pay.
     RouteUnsupported,
     RouteAliasing,
     UnknownOrderTemplate,
     OrderConflict,
     OrderNotSpendable,
     PayAssetNotAccepted,
-    // KOB intent-based swap-and-pay and invoices
+    // KOB intent-based swap-and-pay and invoices.
     IntentNotExecutable,
     IntentExpired,
     IntentSpent,
@@ -91,7 +95,7 @@ pub enum Diag {
     InvoicePaid,
     InvoicePending,
     InvalidInvoice,
-    // runtime
+    // Runtime.
     Replay,
     Expired,
     RateLimited,
@@ -102,7 +106,7 @@ pub enum Diag {
 }
 
 impl Diag {
-    /// Every diagnostic (for tables keyed by the wire spelling, e.g. the retry classification).
+    /// Every diagnostic, for tables keyed by the wire spelling such as the retry classification.
     pub const ALL: &'static [Diag] = &[
         Diag::InvalidKaspaX402Amount,
         Diag::InvalidKaspaX402Binding,
@@ -221,18 +225,20 @@ impl Diag {
     }
 }
 
-/// A verification / settlement failure.
+/// A verification or settlement failure.
 #[derive(Clone, Debug)]
 pub struct X402Error {
     /// Public reason for the wire.
     pub reason: Reason,
     /// Local diagnostic.
     pub diag: Diag,
-    /// Human-readable detail (never security relevant).
+    /// Human-readable detail. Nothing security relevant depends on it.
     pub message: String,
-    /// True when the payer can retry (with a fresh quote and signature for `order_conflict`).
+    /// True when the payer can retry.
+    ///
+    /// For `order_conflict` the retry needs a fresh quote and signature.
     pub retryable: bool,
-    /// Optional structured detail returned in `extensions.kaspa.details` (for example the spent order outpoints).
+    /// Structured detail returned in `extensions.kaspa.details`, such as the spent order outpoints.
     pub details: Option<Value>,
 }
 
@@ -241,15 +247,17 @@ impl X402Error {
     pub fn new(reason: Reason, diag: Diag, message: impl Into<String>) -> Self {
         X402Error { reason, diag, message: message.into(), retryable: false, details: None }
     }
-    /// `invalid_payload`.
+    /// A failure with reason `invalid_payload`.
     pub fn payload(diag: Diag, message: impl Into<String>) -> Self {
         Self::new(Reason::InvalidPayload, diag, message)
     }
-    /// `invalid_payment_requirements`.
+    /// A failure with reason `invalid_payment_requirements`.
     pub fn requirements(diag: Diag, message: impl Into<String>) -> Self {
         Self::new(Reason::InvalidPaymentRequirements, diag, message)
     }
-    /// `invalid_transaction_state` (replay, stale state, conflict, on-chain mismatch).
+    /// A failure with reason `invalid_transaction_state`.
+    ///
+    /// It covers replay, stale state, conflict and an on-chain mismatch.
     pub fn state(diag: Diag, message: impl Into<String>) -> Self {
         Self::new(Reason::InvalidTransactionState, diag, message)
     }
@@ -279,10 +287,10 @@ impl From<kob_protocol::Error> for X402Error {
     }
 }
 
-/// Result alias.
+/// Result with [`X402Error`] as the error.
 pub type Result<T> = std::result::Result<T, X402Error>;
 
-/// Shorthand: early-return an `invalid_payload` failure.
+/// Returns early with an `invalid_payload` failure.
 #[macro_export]
 macro_rules! bail_payload {
     ($diag:expr, $($arg:tt)*) => {

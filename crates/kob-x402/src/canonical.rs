@@ -1,13 +1,18 @@
-//! Canonical JSON and SHA-256 hashing of the binding (`kaspa-exact-v2.md`, "Canonical request
-//! authorization"): object keys sorted in ascending UTF-16 code-unit order, arrays in order, compact
-//! encoding, integers only (no floats), no whitespace.
+//! Canonical JSON and SHA-256 hashing for the binding's request authorization.
+//!
+//! The rules come from `kaspa-exact-v2.md`, "Canonical request authorization".
+//!
+//! - Object keys are sorted in ascending UTF-16 code-unit order.
+//! - Arrays keep their order.
+//! - The encoding is compact, with no whitespace.
+//! - Numbers are integers only. Floats are rejected.
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::error::{Diag, Result, X402Error};
 
-/// Deepest nesting the canonicalizer accepts (resource bound).
+/// Deepest nesting the canonicalizer accepts. It bounds the work done on untrusted input.
 pub const MAX_DEPTH: usize = 32;
 
 /// Canonical JSON text of a value.
@@ -78,9 +83,10 @@ pub fn requirements_hash(req: &crate::wire::PaymentRequirements) -> Result<[u8; 
     canonical_hash(&v)
 }
 
-/// Default normalized HTTP request fingerprint of the reference SDK:
-/// `sha256(canonical({method, url, body|null, paymentRequirementsHash}))`. A resource server may use
-/// any 32-byte fingerprint; the facilitator only requires it to be independently computed.
+/// Default normalized HTTP request fingerprint of the reference SDK.
+///
+/// It is `sha256(canonical({method, url, body|null, paymentRequirementsHash}))`. A resource server
+/// may use any 32-byte fingerprint. The facilitator only requires an independent computation.
 pub fn http_request_hash(method: &str, url: &str, body: Option<&Value>, requirements_hash_hex: &str) -> Result<[u8; 32]> {
     let mut m = serde_json::Map::new();
     m.insert("method".into(), Value::String(method.to_string()));
@@ -104,7 +110,8 @@ mod tests {
 
     #[test]
     fn utf16_order_differs_from_utf8_order() {
-        // U+FF5E (BMP, UTF-16 0xFF5E) sorts after U+1F600 (surrogates 0xD83D..) in UTF-16 but before it in UTF-8.
+        // U+FF5E is one UTF-16 unit, 0xFF5E. U+1F600 is a surrogate pair starting at 0xD83D.
+        // So U+FF5E sorts after U+1F600 in UTF-16, but before it in UTF-8.
         let v = json!({"\u{ff5e}": 1, "\u{1f600}": 2});
         assert_eq!(canonical_json(&v).unwrap(), "{\"\u{1f600}\":2,\"\u{ff5e}\":1}");
     }
