@@ -1,8 +1,10 @@
-//! Token-bucket rate limiting: one bucket per client plus one global bucket.
+//! Token-bucket rate limiting with one bucket per client, one per IPv6 site and one global bucket.
 //!
-//! Memory is bounded: idle client buckets expire after `bucket_ttl_secs`, and when the table hits
-//! `max_tracked_clients` the oldest buckets are evicted (an address-spray flood can only churn
-//! entries, never grow the table). The clock is injectable for tests.
+//! Memory is bounded. Idle client buckets expire after `bucket_ttl_secs`. When a table reaches
+//! `max_tracked_clients`, the oldest buckets are evicted. An address-spray flood can therefore
+//! only churn entries and never grow the table.
+//!
+//! The clock is injectable for tests.
 
 use crate::api::client_ip::rate_key;
 use crate::config::RateLimitConfig;
@@ -12,16 +14,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// A source of monotonic time.
 pub trait Clock: Send + Sync + 'static {
     /// Monotonic nanoseconds.
     fn now_ns(&self) -> u64;
 }
 
+/// The real clock. It counts from its creation.
 pub struct SystemClock {
     start: Instant,
 }
 
 impl SystemClock {
+    /// A clock that starts at zero now.
     pub fn new() -> Self {
         SystemClock { start: Instant::now() }
     }
@@ -39,11 +44,12 @@ impl Clock for SystemClock {
     }
 }
 
-/// A manually advanced clock.
+/// A manually advanced clock for tests.
 #[derive(Default)]
 pub struct FakeClock(AtomicU64);
 
 impl FakeClock {
+    /// Moves the clock forward by `d`.
     pub fn advance(&self, d: Duration) {
         self.0.fetch_add(d.as_nanos() as u64, Ordering::SeqCst);
     }
@@ -51,7 +57,7 @@ impl FakeClock {
 
 impl Clock for FakeClock {
     fn now_ns(&self) -> u64 {
-        // Start away from zero so "last seen" arithmetic never underflows.
+        // Start away from zero, so the arithmetic on the last-seen time never underflows.
         self.0.load(Ordering::SeqCst) + 1_000_000_000
     }
 }
@@ -67,7 +73,9 @@ impl Bucket {
         Bucket { tokens: burst, last_ns: now }
     }
 
-    /// Take `cost` tokens (at most the burst, or nothing could ever pass); on failure return the seconds until they are available.
+    /// Takes `cost` tokens, at most the burst, because a larger cost could never pass.
+    ///
+    /// On failure it returns the seconds until the tokens are available.
     fn take(&mut self, now: u64, rate: f64, burst: f64, cost: f64) -> Result<(), f64> {
         let cost = cost.clamp(1.0, burst.max(1.0));
         let elapsed = now.saturating_sub(self.last_ns) as f64 / 1e9;
@@ -87,20 +95,23 @@ struct Clients {
     last_sweep_ns: u64,
 }
 
+/// The per-client, per-site and global rate limiter.
 pub struct RateLimiter {
     cfg: RateLimitConfig,
     clock: Arc<dyn Clock>,
     clients: Mutex<Clients>,
-    /// IPv6 site buckets (`ipv6_site_prefix_bits`), bounded like the client table.
+    /// IPv6 site buckets (`ipv6_site_prefix_bits`). The table is bounded like the client table.
     sites: Mutex<Clients>,
     global: Mutex<Bucket>,
 }
 
 impl RateLimiter {
+    /// A limiter on the system clock.
     pub fn new(cfg: RateLimitConfig) -> Self {
         Self::with_clock(cfg, Arc::new(SystemClock::new()))
     }
 
+    /// A limiter on `clock`.
     pub fn with_clock(cfg: RateLimitConfig, clock: Arc<dyn Clock>) -> Self {
         let now = clock.now_ns();
         let global = Bucket::full(cfg.global_burst.max(1) as f64, now);
@@ -113,14 +124,17 @@ impl RateLimiter {
         }
     }
 
-    /// Admit one request from `ip`, or say how long to wait.
+    /// Admits one request from `ip`, or says how long to wait.
     pub fn check(&self, ip: IpAddr) -> Result<(), Duration> {
         self.check_cost(ip, 1)
     }
 
-    /// Admit a request that costs `cost` tokens (a candles or stats query is not the price of a health check).
-    /// The client bucket is charged first; the global bucket is charged only for requests that passed it, so a client that
-    /// is already limited cannot drain everybody else's share.
+    /// Admits a request that costs `cost` tokens, or says how long to wait.
+    ///
+    /// A candles or stats query costs more than a health check. The client bucket is charged
+    /// first, then the site bucket, then the global bucket. A request that fails an earlier
+    /// bucket does not reach the global one, so a client that is already limited cannot drain the
+    /// share of everybody else.
     pub fn check_cost(&self, ip: IpAddr, cost: u32) -> Result<(), Duration> {
         let now = self.clock.now_ns();
         let cost = cost.max(1) as f64;
@@ -132,7 +146,8 @@ impl RateLimiter {
             let b = c.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
             b.take(now, self.cfg.per_ip_rps, burst, cost).map_err(secs)?;
         }
-        // an IPv6 site shares one more bucket: rotating through the /64s of one allocation does not multiply the budget
+        // An IPv6 site shares one more bucket, so rotating through the /64s of one allocation does
+        // not multiply the budget.
         if self.cfg.per_ip_rps > 0.0
             && self.cfg.per_site_rps > 0.0
             && self.cfg.ipv6_site_prefix_bits > 0
@@ -163,7 +178,8 @@ impl RateLimiter {
         if c.map.len() >= cap && !c.map.contains_key(key) {
             c.map.retain(|_, b| now.saturating_sub(b.last_ns) < ttl);
             if c.map.len() >= cap {
-                // Evict the oldest tenth (at least one) in one pass so a spray attack pays O(n) rarely.
+                // Evict the oldest tenth, at least one, in one pass. A spray attack then pays
+                // O(n) rarely.
                 let evict = (cap / 10).max(1);
                 let mut ages: Vec<(u64, IpAddr)> = c.map.iter().map(|(k, b)| (b.last_ns, *k)).collect();
                 ages.sort_unstable_by_key(|(t, _)| *t);
@@ -174,7 +190,7 @@ impl RateLimiter {
         }
     }
 
-    /// Number of tracked client buckets.
+    /// The number of tracked client buckets.
     pub fn tracked_clients(&self) -> usize {
         self.clients.lock().unwrap_or_else(|e| e.into_inner()).map.len()
     }
@@ -184,7 +200,7 @@ fn secs(s: f64) -> Duration {
     Duration::from_secs_f64(s.max(0.0))
 }
 
-/// `Retry-After` header value: whole seconds, at least 1.
+/// The `Retry-After` header value for a wait: whole seconds, at least 1.
 pub fn retry_after_secs(d: Duration) -> u64 {
     d.as_secs_f64().ceil().max(1.0) as u64
 }
@@ -227,7 +243,7 @@ mod tests {
         clock.advance(Duration::from_millis(500));
         assert!(l.check(a).is_ok());
         assert!(l.check(a).is_err());
-        // tokens never exceed the burst however long we wait
+        // Tokens never exceed the burst however long we wait.
         clock.advance(Duration::from_secs(3600));
         for _ in 0..3 {
             assert!(l.check(a).is_ok());
@@ -263,7 +279,7 @@ mod tests {
         assert!(l.check_cost(a, 5).is_ok());
         assert!(l.check_cost(a, 5).is_ok());
         assert!(l.check_cost(a, 5).is_err(), "ten tokens are gone");
-        // a cost above the burst is clamped to it: it can pass, alone, once the bucket is full
+        // A cost above the burst is clamped to it. It can pass, alone, once the bucket is full.
         let (l, _c) = limiter(cfg(1.0, 3, 0.0, 1));
         assert!(l.check_cost(a, 99).is_ok());
         assert!(l.check_cost(a, 1).is_err());
@@ -277,7 +293,7 @@ mod tests {
         for _ in 0..50 {
             assert!(l.check(a).is_err());
         }
-        // four global tokens are left for everybody else
+        // Four global tokens are left for everybody else.
         for i in 2..6 {
             assert!(l.check(ip(&format!("2.2.2.{i}"))).is_ok(), "{i}");
         }
@@ -289,7 +305,8 @@ mod tests {
         c.per_site_rps = 1.0;
         c.per_site_burst = 25;
         let (l, clock) = limiter(c);
-        // three /64s of 2001:db8:7::/48: each has a fresh 10-token client bucket, together only 25 site tokens
+        // Three /64s of 2001:db8:7::/48. Each has a fresh 10-token client bucket, and together
+        // they have only 25 site tokens.
         let mut admitted = 0;
         for n in 1..=3 {
             for _ in 0..10 {
@@ -297,13 +314,13 @@ mod tests {
             }
         }
         assert_eq!(admitted, 25);
-        // another site and IPv4 are untouched
+        // Another site and IPv4 are untouched.
         assert!(l.check(ip("2001:db8:8:1::1")).is_ok());
         assert!(l.check(ip("1.1.1.1")).is_ok());
         clock.advance(Duration::from_secs(1));
         assert!(l.check(ip("2001:db8:7:4::1")).is_ok());
         assert!(l.check(ip("2001:db8:7:5::1")).is_err());
-        // 0 bits: no site bucket
+        // With 0 bits there is no site bucket.
         let mut c = cfg(10.0, 10, 0.0, 1);
         c.per_site_rps = 1.0;
         c.per_site_burst = 1;
