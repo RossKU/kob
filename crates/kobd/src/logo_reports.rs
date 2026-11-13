@@ -1,22 +1,33 @@
-//! The token-logo blocklist: reports in, the list of hidden tokens out (docs/api-reference.md, 3.19 and 3.20).
+//! The token-logo blocklist: reports in, the list of hidden tokens out.
 //!
-//! KOB keeps and serves no third-party image: a token's logo is loaded by each viewer's browser from the address its creator gave.
-//! What the operator can do about an image that should not be shown is to hide it, and that is this module:
+//! The routes are described in `docs/api-reference.md`, sections 3.19 and 3.20.
 //!
-//! * `POST /v1/logo-reports` files a report (a token, one of three reasons, and where it came from: the web app or a GitHub Issue form).
-//!   There is no free text, so nothing a stranger typed is stored.
-//! * The FIRST report of a token hides its logo at once (the web app then shows the letter avatar). The operator reviews the report
-//!   (`kobd logo-reports list`) and may `restore` the token. Reports that arrive for a restored token inside the cooldown
-//!   (`cooldown_secs`, default 6 hours) are recorded and change nothing; one after the cooldown hides it again.
-//!   An operator can also hide a token for good (`hide`: state `never`).
-//! * `GET /v1/logo-blocklist` serves `{"hidden":[covenant ids],"updated_ms":..}`; the web app reads it every two minutes.
+//! KOB keeps and serves no third-party image. A token's logo is loaded by each viewer's browser
+//! from the address its creator gave. What the operator can do about an image that should not be
+//! shown is to hide it, and that is this module.
 //!
-//! The state lives in the indexer's database (`logo_reports.sql`, created with the other tables). There is no administrative route on
-//! the network: restoring and hiding are subcommands of the executor, run on the host next to the database.
+//! - `POST /v1/logo-reports` files a report. A report names a token, one of three reasons and
+//!   where it came from (the web app or a GitHub Issue form). There is no free text, so nothing a
+//!   stranger typed is stored.
+//! - The first report of a token hides its logo at once, and the web app then shows the letter
+//!   avatar. The operator reviews the report (`kobd logo-reports list`) and may `restore` the
+//!   token. Reports that arrive for a restored token inside the cooldown (`cooldown_secs`, default
+//!   6 hours) are recorded and change nothing. One after the cooldown hides it again. An operator
+//!   can also hide a token for good (`hide`, state `never`).
+//! - `GET /v1/logo-blocklist` serves `{"hidden":[covenant ids],"updated_ms":..}`. The web app reads
+//!   it every two minutes.
 //!
-//! Abuse bounds: a report costs the reporting client one of `per_client_per_hour` and the server one of `max_per_day` (a flood from
-//! many addresses can hide at most that many tokens a day, and the operator restores them), the request body is at most 1 KiB, the
-//! report table keeps its newest [`MAX_REPORT_ROWS`] rows.
+//! The state lives in the indexer's database (`logo_reports.sql`, created with the other tables).
+//! There is no administrative route on the network. Restoring and hiding are subcommands of the
+//! executor, run on the host next to the database.
+//!
+//! # Abuse bounds
+//!
+//! - A report costs the reporting client one of `per_client_per_hour` and the server one of
+//!   `max_per_day`. A flood from many addresses can hide at most that many tokens a day, and the
+//!   operator restores them.
+//! - The request body is at most 1 KiB.
+//! - The report table keeps its newest [`MAX_REPORT_ROWS`] rows.
 
 use crate::config::LogoReportsConfig;
 use crate::hex::Hash32;
@@ -30,22 +41,28 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// The tables (also created by `db::open_writer`, so a database opened by this build always has them).
+/// The tables. `db::open_writer` creates them too, so a database opened by this build always has
+/// them.
 pub const SCHEMA: &str = include_str!("logo_reports.sql");
 /// The newest report rows kept.
 pub const MAX_REPORT_ROWS: i64 = 50_000;
 /// How long `GET /v1/logo-blocklist` reuses a rendered answer (a write drops it at once).
 pub const LIST_CACHE_MS: i64 = 5_000;
 
+/// Why a logo is reported.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Reason {
+    /// Content that is illegal.
     Illegal,
+    /// The logo impersonates another project or person.
     Impersonation,
+    /// Any other reason.
     Other,
 }
 
 impl Reason {
+    /// The lowercase name stored with the report.
     pub fn as_str(self) -> &'static str {
         match self {
             Reason::Illegal => "illegal",
@@ -55,14 +72,19 @@ impl Reason {
     }
 }
 
-/// Where a report came from. The web app files `Web`; the GitHub workflow files `Github` with the issue number.
+/// Where a report came from.
+///
+/// The web app files `Web`. The GitHub workflow files `Github` with the issue number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
+    /// The web app.
     Web,
+    /// A GitHub Issue form.
     Github,
 }
 
 impl Source {
+    /// The lowercase name stored with the report.
     pub fn as_str(self) -> &'static str {
         match self {
             Source::Web => "web",
@@ -74,22 +96,31 @@ impl Source {
 /// One report as the store takes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Report {
+    /// The reported token.
     pub covenant_id: Hash32,
+    /// Why it is reported.
     pub reason: Reason,
+    /// Where the report came from.
     pub source: Source,
     /// The GitHub issue number (only with `Source::Github`).
     pub reference: Option<u32>,
 }
 
-/// What a report did. `Hidden`: the token's logo is hidden now (it was, or this report hid it). `Recorded`: kept for the operator, nothing changed
-/// (the token is restored and inside the cooldown).
+/// What a report did.
+///
+/// `Hidden` means the token's logo is hidden now, because it already was or this report hid it.
+/// `Recorded` means the report was kept for the operator and nothing changed, because the token is
+/// restored and inside the cooldown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Filed {
+    /// The token's logo is hidden.
     Hidden,
+    /// The report was only recorded.
     Recorded,
 }
 
 impl Filed {
+    /// The lowercase name of the outcome.
     pub fn as_str(self) -> &'static str {
         match self {
             Filed::Hidden => "hidden",
@@ -98,14 +129,18 @@ impl Filed {
     }
 }
 
-/// Opens the database read-write for the report store (no schema work beyond the logo tables, no migration of the others): used by the
-/// API and by the administrative subcommands next to a running executor. The file must exist and belong to `network`.
+/// Opens the database read-write for the report store.
+///
+/// It does no schema work beyond the logo tables and no migration of the others. The API and the
+/// administrative subcommands next to a running executor use it. The file must exist and belong to
+/// `network`.
 pub fn open(path: &Path, network: &str) -> DbResult<Connection> {
     if !path.exists() {
         return Err(DbError::Invalid(format!("{} does not exist", path.display())));
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX)?;
-    // short: a request that cannot get the write lock soon answers "busy" instead of holding a thread
+    // Short, so a request that cannot get the write lock soon answers "busy" instead of holding a
+    // thread.
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     let net = meta_get(&conn, "network")?.unwrap_or_default();
     if net != network {
@@ -115,7 +150,7 @@ pub fn open(path: &Path, network: &str) -> DbResult<Connection> {
     Ok(conn)
 }
 
-/// Files `r` at `now_ms`. See the module documentation for the rules; one write transaction.
+/// Files `r` at `now_ms`, in one write transaction. See the module documentation for the rules.
 pub fn file_report(conn: &mut Connection, r: &Report, now_ms: i64, cooldown_ms: i64) -> DbResult<Filed> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let id = r.covenant_id.0.to_vec();
@@ -136,7 +171,7 @@ pub fn file_report(conn: &mut Connection, r: &Report, now_ms: i64, cooldown_ms: 
             (Filed::Hidden, "hidden")
         }
         Some((_, restored_ms)) => {
-            // restored: reports inside the cooldown are recorded only
+            // Restored: reports inside the cooldown are recorded only.
             if restored_ms.is_some_and(|at| now_ms < at.saturating_add(cooldown_ms)) {
                 tx.execute("UPDATE logo_blocklist SET report_count = report_count + 1 WHERE covenant_id = ?1", [&id])?;
                 (Filed::Recorded, "recorded")
@@ -171,10 +206,13 @@ pub fn blocklist(conn: &Connection) -> DbResult<(Vec<String>, i64)> {
 /// What the administrator can do to a listed token.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AdminError {
+    /// The token is not in the blocklist.
     NotListed,
     /// `restore` of a token hidden for good needs `force`.
     Never,
+    /// The token is already restored.
     AlreadyRestored,
+    /// A database error, as text.
     Db(String),
 }
 
@@ -197,7 +235,9 @@ impl From<rusqlite::Error> for AdminError {
     }
 }
 
-/// Restores a hidden token at `now_ms`: its logo shows again, and new reports are recorded without hiding it again for the cooldown.
+/// Restores a hidden token at `now_ms`.
+///
+/// Its logo shows again. New reports are recorded without hiding it again for the cooldown.
 pub fn restore(conn: &mut Connection, id: &Hash32, now_ms: i64, force: bool) -> Result<(), AdminError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let state: Option<String> =
@@ -216,7 +256,9 @@ pub fn restore(conn: &mut Connection, id: &Hash32, now_ms: i64, force: bool) -> 
     Ok(())
 }
 
-/// Hides a token for good (state `never`), listed or not: reports never restore it, only `restore --force` does.
+/// Hides a token for good (state `never`), listed or not.
+///
+/// Reports never restore it. Only `restore --force` does.
 pub fn hide_for_good(conn: &mut Connection, id: &Hash32, now_ms: i64) -> Result<(), AdminError> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute(
@@ -232,11 +274,17 @@ pub fn hide_for_good(conn: &mut Connection, id: &Hash32, now_ms: i64) -> Result<
 /// One listed token with what was reported about it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Listed {
+    /// The covenant id, hex.
     pub covenant_id: String,
+    /// `hidden`, `restored` or `never`.
     pub state: String,
+    /// How many reports the token has.
     pub reports: i64,
+    /// When the first report came in, milliseconds since the Unix epoch.
     pub first_ms: i64,
+    /// When the token was last hidden.
     pub hidden_ms: i64,
+    /// When it was last restored, if it was.
     pub restored_ms: Option<i64>,
     /// Reports per reason, in the order illegal, impersonation, other.
     pub by_reason: [i64; 3],
@@ -282,7 +330,8 @@ pub fn list(conn: &Connection) -> DbResult<Vec<Listed>> {
     Ok(out)
 }
 
-/// The whole state as JSON (`export`): the blocklist and the report rows, for a database that is rebuilt (`kobd db replay`).
+/// The whole state as JSON: the blocklist and the report rows, for a database that is rebuilt
+/// (`kobd db replay`).
 pub fn export(conn: &Connection) -> DbResult<serde_json::Value> {
     let mut q = conn.prepare("SELECT covenant_id, state, first_ms, hidden_ms, restored_ms, report_count, updated_ms FROM logo_blocklist ORDER BY covenant_id")?;
     let blocklist = q
@@ -314,7 +363,9 @@ pub fn export(conn: &Connection) -> DbResult<serde_json::Value> {
     Ok(json!({ "format": "kob-logo-reports/1", "blocklist": blocklist, "reports": reports }))
 }
 
-/// Loads an [`export`] into an EMPTY report store (it refuses to merge into rows that exist). Returns (listed tokens, report rows).
+/// Loads an [`export`] into an empty report store, which refuses to merge into rows that exist.
+///
+/// Returns (listed tokens, report rows).
 pub fn import(conn: &mut Connection, doc: &serde_json::Value) -> Result<(usize, usize), String> {
     if doc.get("format").and_then(|f| f.as_str()) != Some("kob-logo-reports/1") {
         return Err("not a kob-logo-reports/1 export".into());
@@ -364,18 +415,21 @@ pub fn import(conn: &mut Connection, doc: &serde_json::Value) -> Result<(usize, 
     Ok((tokens, rows))
 }
 
-// ------------------------------------------------------------------------------------------------ the service behind the routes
+// ---------------------------------------------------------------- the service behind the routes
 
 /// Why a report was not accepted.
 #[derive(Debug)]
 pub enum ReportError {
     /// Over a limit; retry after this many seconds.
     Limited(u64),
+    /// A database error.
     Db(DbError),
 }
 
-/// Sliding-window limits: `per_client_per_hour` per client key, `max_per_day` in all. Only admitted reports are remembered, so the table
-/// holds at most `max_per_day` entries and a flood of refused requests cannot grow it.
+/// Sliding-window limits: `per_client_per_hour` per client key and `max_per_day` in all.
+///
+/// Only admitted reports are remembered, so the table holds at most `max_per_day` entries and a
+/// flood of refused requests cannot grow it.
 struct Limiter {
     clients: HashMap<IpAddr, VecDeque<i64>>,
     day: VecDeque<i64>,
@@ -413,7 +467,9 @@ impl Limiter {
     }
 }
 
-/// The report store as the API uses it: one connection behind a mutex, the limits, and the rendered blocklist.
+/// The report store as the API uses it.
+///
+/// It is one connection behind a mutex, the limits and the rendered blocklist.
 pub struct LogoReports {
     conn: Mutex<Connection>,
     cfg: LogoReportsConfig,
@@ -423,15 +479,18 @@ pub struct LogoReports {
     ipv6_prefix_bits: u8,
 }
 
+/// Milliseconds since the Unix epoch, now.
 pub fn system_now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
 }
 
 impl LogoReports {
+    /// Opens the report store at `path` for `network`, with the system clock.
     pub fn open(path: &Path, network: &str, cfg: LogoReportsConfig, ipv6_prefix_bits: u8) -> DbResult<Arc<Self>> {
         Ok(Arc::new(Self::with_connection(open(path, network)?, cfg, ipv6_prefix_bits, Box::new(system_now_ms))))
     }
 
+    /// Builds the service over an open connection and a clock, for tests that fake the time.
     pub fn with_connection(
         conn: Connection,
         cfg: LogoReportsConfig,
@@ -448,7 +507,9 @@ impl LogoReports {
         }
     }
 
-    /// Files a report from `client` (the guard's client address). Blocking (a database write): call it from a blocking task.
+    /// Files a report from `client` (the guard's client address).
+    ///
+    /// It is blocking, because it writes to the database. Call it from a blocking task.
     pub fn report(&self, client: IpAddr, r: &Report) -> Result<Filed, ReportError> {
         let now = (self.now_ms)();
         let key = crate::api::client_ip::rate_key(client, self.ipv6_prefix_bits);
@@ -470,7 +531,9 @@ impl LogoReports {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The JSON body of `GET /v1/logo-blocklist`, rendered at most every [`LIST_CACHE_MS`]. Blocking.
+    /// The JSON body of `GET /v1/logo-blocklist`, rendered at most every [`LIST_CACHE_MS`].
+    ///
+    /// It is blocking.
     pub fn blocklist_body(&self) -> DbResult<Bytes> {
         let now = (self.now_ms)();
         if let Some((at, body)) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
@@ -525,7 +588,7 @@ max_per_day = 10",
             (true, 60, 5, 10)
         );
         assert!(!crate::config::IndexerConfig::default().logo_reports.enabled);
-        // a misspelt key (or an admin token this build does not have) is an error, never ignored
+        // A misspelt key (or an admin token this build does not have) is an error, never ignored.
         assert!(toml::from_str::<crate::config::IndexerConfig>(
             "[logo_reports]
 admin_token_file = \"x\""
@@ -541,7 +604,7 @@ admin_token_file = \"x\""
         assert_eq!(file_report(&mut c, &rep(A, Reason::Other), 2_000, COOLDOWN).unwrap(), Filed::Hidden);
         assert_eq!(hidden(&c), vec![A.to_hex(), B.to_hex()]);
         assert_eq!(blocklist(&c).unwrap().1, 2_000);
-        // a second report of a hidden token changes nothing about the set
+        // A second report of a hidden token changes nothing about the set.
         assert_eq!(file_report(&mut c, &rep(A, Reason::Illegal), 9_000, COOLDOWN).unwrap(), Filed::Hidden);
         assert_eq!(blocklist(&c).unwrap().1, 2_000, "the set did not change");
         let l = list(&c).unwrap();
@@ -556,16 +619,16 @@ admin_token_file = \"x\""
         restore(&mut c, &A, 100_000, false).unwrap();
         assert!(hidden(&c).is_empty(), "restored: shown again");
         assert_eq!(blocklist(&c).unwrap().1, 100_000);
-        // inside the cooldown
+        // Inside the cooldown.
         assert_eq!(file_report(&mut c, &rep(A, Reason::Illegal), 100_000 + COOLDOWN - 1, COOLDOWN).unwrap(), Filed::Recorded);
         assert!(hidden(&c).is_empty());
         assert_eq!(blocklist(&c).unwrap().1, 100_000, "a recorded report changes nothing");
-        // exactly at the end of the cooldown it hides again
+        // Exactly at the end of the cooldown it hides again.
         let at = 100_000 + COOLDOWN;
         assert_eq!(file_report(&mut c, &rep(A, Reason::Illegal), at, COOLDOWN).unwrap(), Filed::Hidden);
         assert_eq!(hidden(&c), vec![A.to_hex()]);
         assert_eq!(blocklist(&c).unwrap().1, at);
-        // every report is kept with its outcome
+        // Every report is kept with its outcome.
         let outcomes: Vec<String> = c
             .prepare("SELECT outcome FROM logo_reports ORDER BY id")
             .unwrap()
@@ -574,7 +637,7 @@ admin_token_file = \"x\""
             .map(|x| x.unwrap())
             .collect();
         assert_eq!(outcomes, ["hidden", "recorded", "rehidden"]);
-        // restoring again starts a new cooldown
+        // Restoring again starts a new cooldown.
         restore(&mut c, &A, at + 5, false).unwrap();
         assert_eq!(file_report(&mut c, &rep(A, Reason::Other), at + 10, COOLDOWN).unwrap(), Filed::Recorded);
     }
@@ -582,7 +645,7 @@ admin_token_file = \"x\""
     #[test]
     fn hide_for_good_survives_reports_and_needs_force_to_restore() {
         let mut c = open_memory("testnet-10").unwrap();
-        // an unlisted token can be hidden for good
+        // An unlisted token can be hidden for good.
         hide_for_good(&mut c, &A, 5).unwrap();
         assert_eq!(hidden(&c), vec![A.to_hex()]);
         assert_eq!(file_report(&mut c, &rep(A, Reason::Other), 6, COOLDOWN).unwrap(), Filed::Hidden);
@@ -592,7 +655,7 @@ admin_token_file = \"x\""
         assert!(hidden(&c).is_empty());
         assert_eq!(restore(&mut c, &A, 9, false), Err(AdminError::AlreadyRestored));
         assert_eq!(restore(&mut c, &B, 9, false), Err(AdminError::NotListed));
-        // a restored token can be hidden for good again
+        // A restored token can be hidden for good again.
         hide_for_good(&mut c, &A, 10).unwrap();
         assert_eq!(hidden(&c), vec![A.to_hex()]);
     }
@@ -639,7 +702,7 @@ admin_token_file = \"x\""
         assert_eq!(import(&mut d, &doc).unwrap(), (2, 2));
         assert_eq!(export(&d).unwrap(), doc);
         assert_eq!(hidden(&d), vec![A.to_hex()]);
-        // a second import would double the history: refused
+        // A second import would double the history: refused.
         assert!(import(&mut d, &doc).unwrap_err().contains("not empty"));
         assert!(import(&mut d, &json!({"format": "other"})).is_err());
     }
@@ -651,16 +714,17 @@ admin_token_file = \"x\""
         for i in 0..5 {
             l.admit(ip(1), i * 1000, 5, 7).unwrap();
         }
-        // the sixth within the hour: wait until the first leaves the window
+        // The sixth within the hour: wait until the first leaves the window.
         assert_eq!(l.admit(ip(1), 10_000, 5, 7), Err(3_590));
-        // another client has its own budget, until the day's total is used
+        // Another client has its own budget, until the day's total is used.
         l.admit(ip(2), 11_000, 5, 7).unwrap();
         l.admit(ip(2), 12_000, 5, 7).unwrap();
         assert_eq!(l.admit(ip(3), 13_000, 5, 7), Err(86_387), "the day's total is spent: the first report leaves in a day");
-        // an hour later the first client may report again (the total is still counted over the day)
+        // An hour later the first client may report again. The total is still counted over the
+        // day.
         assert!(l.admit(ip(1), HOUR_MS + 1, 5, 7).is_err(), "the total is still spent");
         assert!(l.admit(ip(1), DAY_MS + 1, 5, 7).is_ok());
-        // a refused request is not remembered
+        // A refused request is not remembered.
         let mut l = Limiter::new();
         for _ in 0..1000 {
             let _ = l.admit(ip(9), 0, 0, 5);
@@ -683,7 +747,7 @@ admin_token_file = \"x\""
         assert_eq!(body(&svc), json!({"hidden": [], "updated_ms": 0}));
         assert_eq!(svc.report(ip, &rep(A, Reason::Illegal)).unwrap(), Filed::Hidden);
         assert_eq!(body(&svc), json!({"hidden": [A.to_hex()], "updated_ms": 1_000_000}), "a report drops the cached list");
-        // the operator's change reaches clients within the cache time
+        // The operator's change reaches clients within the cache time.
         restore(&mut svc.conn.lock().unwrap(), &A, 1_000_500, false).unwrap();
         assert_eq!(body(&svc)["hidden"], json!([A.to_hex()]), "served from the cache");
         now.fetch_add(LIST_CACHE_MS, std::sync::atomic::Ordering::SeqCst);
