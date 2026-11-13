@@ -1,23 +1,38 @@
-//! Payer / merchant SDK: swap-and-pay (`extra.route`, binding `kob-swap-v1`).
+//! Payer and merchant SDK for swap-and-pay (`extra.route`, binding `kob-swap-v1`).
 //!
-//! Merchant: [`swap_requirements`] builds an offer entry (`standard-native` or `kcc20`) with `extra.route`.
-//! A pay asset may be a token of either family (KCC-20 programs, KaspaCom's included, KRON); the merchant
-//! token is a KCC-20 token.
+//! # Merchant side
 //!
-//! Payer: a [`Quote`] names the KOB orders (plain bids of the pay token, plain asks of the merchant token;
-//! the order kinds follow the tokens' families, e.g. `KobBidKron` for a KRON pay token) and the base units to fill.
-//! A KRON token is held by address presence, so `funds.funding` must hold a P2PK UTXO of the token owner. [`prepare_swap`] builds the transaction with `kob_protocol::build::{Batch, SwapRoute}`,
-//! commits the x402 payload-commitment digest as a `KOB1` `X402` record (the digest needs the merchant
-//! output index, so the transaction is laid out once with a placeholder digest and rebuilt with the real
-//! one; the index is asserted identical), refuses borrow-enabled payer tokens (G9), enforces the payer's
-//! `max_pay` (required: no unbounded swap) and never leaves a tiny KAS change output behind (G4: folded into the fee within the fee
-//! bound, with a warning, else the payment fails). [`PreparedSwap`] exposes the sign requests for a wallet
-//! or signs locally; [`PreparedSwap::complete`] finalizes (`tighten_budgets`) and assembles the
-//! `PAYMENT-SIGNATURE` object.
+//! [`swap_requirements`] builds an offer entry (`standard-native` or `kcc20`) with `extra.route`.
+//! A pay asset may be a token of either family (KCC-20 programs, KaspaCom's included, or KRON).
+//! The merchant token is a KCC-20 token.
+//!
+//! # Payer side
+//!
+//! A [`Quote`] names the KOB orders and the base units to fill. The orders are plain bids of the
+//! pay token and plain asks of the merchant token. Their kinds follow the tokens' families, for
+//! example `KobBidKron` for a KRON pay token. A KRON token is held by address presence, so
+//! `funds.funding` must hold a P2PK UTXO of the token owner.
+//!
+//! [`prepare_swap`] builds the transaction with `kob_protocol::build::{Batch, SwapRoute}`.
+//!
+//! - It commits the x402 payload-commitment digest as a `KOB1` `X402` record. The digest needs the
+//!   merchant output index, so the transaction is laid out once with a placeholder digest and
+//!   rebuilt with the real one. The two indices are asserted identical.
+//! - It refuses borrow-enabled payer tokens.
+//! - It enforces the payer's `max_pay`, which is required, so no swap is unbounded.
+//! - It never leaves a tiny KAS change output behind. Within the fee bound the change is folded
+//!   into the fee with a warning, otherwise the payment fails.
+//!
+//! [`PreparedSwap`] exposes the sign requests for a wallet, or signs locally.
+//! [`PreparedSwap::complete`] finalizes (`tighten_budgets`) and assembles the `PAYMENT-SIGNATURE`
+//! object.
+//!
+//! # Conflicts and revocation
 //!
 //! A payment whose order was taken meanwhile fails with `order_conflict` (retryable, see
-//! [`is_retryable_conflict`]): re-quote and call [`prepare_swap`] again, which signs anew. A signed
-//! payment that must not be broadcast any more is killed with [`revoke_swap`] (self-spend of one input, G13).
+//! [`is_retryable_conflict`]). Re-quote and call [`prepare_swap`] again, which signs anew. A signed
+//! payment that must not be broadcast any more is killed with [`revoke_swap`], a self-spend of one
+//! input.
 
 use std::collections::BTreeMap;
 
@@ -50,14 +65,15 @@ use crate::wire::{
     X402_VERSION,
 };
 
-// ------------------------------------------------------------------------------------------ merchant
+// ---------------------------------------------------------------------------------------- merchant
 
 /// What the merchant receives.
 #[derive(Clone, Copy, Debug)]
 pub enum MerchantGain<'a> {
     /// KAS (`standard-native`): `amount` sompi at `payTo`.
     Kas,
-    /// A KCC-20 token (`kcc20`): `amount` units in a token output of `carrier` sompi owned by `payTo`.
+    /// A KCC-20 token (`kcc20`): `amount` units in a token output of `carrier` sompi owned by
+    /// `payTo`.
     Token { token: &'a AllowedToken, carrier: u64 },
 }
 
@@ -184,10 +200,10 @@ pub fn swap_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
     })
 }
 
-// ------------------------------------------------------------------------------------------ payer types
+// ------------------------------------------------------------------------------------- payer types
 
-/// One order of a quote: a plain bid of the pay token or a plain ask of the merchant token, with the
-/// UTXOs it needs (asks: their exact custody) and the base units to fill.
+/// One order of a quote: a plain bid of the pay token or a plain ask of the merchant token, with
+/// the UTXOs it needs (asks: their exact custody) and the base units to fill.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderRef {
     pub leg: Leg,
@@ -198,7 +214,8 @@ impl OrderRef {
     pub fn bid(order: OrderUtxo<BidState>, amount: i64) -> Self {
         OrderRef { leg: Leg::Bid { order, amount, t: None } }
     }
-    /// An ask the payer buys `amount` base units from (`custody` holds exactly the ask's `amountLeft`).
+    /// An ask the payer buys `amount` base units from (`custody` holds exactly the ask's
+    /// `amountLeft`).
     pub fn ask(order: OrderUtxo<AskState>, custody: TokenUtxo, amount: i64) -> Self {
         OrderRef { leg: Leg::Ask { order, custody, amount, t: None } }
     }
@@ -248,8 +265,10 @@ impl OrderRef {
     }
 }
 
-/// A quote: the orders a swap uses and the DAA score the transaction proves (`lockTime`; use the
-/// current virtual DAA score minus a small margin, it must not exceed the verifier's virtual DAA).
+/// A quote: the orders a swap uses and the DAA score the transaction proves (`lockTime`).
+///
+/// Use the current virtual DAA score minus a small margin. It must not exceed the verifier's
+/// virtual DAA.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Quote {
     #[serde(with = "kob_protocol::json::field")]
@@ -258,8 +277,8 @@ pub struct Quote {
 }
 
 impl Quote {
-    /// The asset a swap over this quote pays with: the token its bids buy (covenant id, 64 hex), or `"KAS"` when it fills
-    /// asks only. The asset [`SwapOptions::max_pay`] must count.
+    /// The asset a swap over this quote pays with: the token its bids buy (covenant id, 64 hex), or
+    /// `"KAS"` when it fills asks only. The asset [`SwapOptions::max_pay`] must count.
     pub fn pay_asset(&self) -> String {
         self.orders
             .iter()
@@ -281,13 +300,15 @@ pub struct PayerFunds {
     pub change: [u8; 32],
 }
 
-/// The payer's bound on what a swap costs, qualified by the asset it is counted in: a bound never changes unit
-/// with the pay asset the route happens to use.
+/// The payer's bound on what a swap costs, qualified by the asset it is counted in.
+///
+/// A bound never changes unit with the pay asset the route happens to use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayBound {
     /// `"KAS"` or the pay token's covenant id (64 hex).
     pub asset: String,
-    /// Most units of `asset` the payment may take (sompi incl. the fee for KAS, base units for a token).
+    /// Most units of `asset` the payment may take (sompi incl. the fee for KAS, base units for a
+    /// token).
     pub amount: u64,
 }
 
@@ -313,29 +334,37 @@ impl PayBound {
 /// Knobs of [`prepare_swap`].
 #[derive(Clone, Debug)]
 pub struct SwapOptions {
-    /// Payer bound on what the swap costs, in units of the asset it names (token units; sompi incl. the fee
-    /// when paying KAS). A route that pays with another asset is refused. Required: [`prepare_swap`] refuses `None`
-    /// (no unbounded swap; `Option` only so that the other knobs can take their defaults).
+    /// Payer bound on what the swap costs, in units of the asset it names.
+    ///
+    /// Units are token units, or sompi including the fee when paying KAS. A route that pays with
+    /// another asset is refused. The bound is required: [`prepare_swap`] refuses `None` so that no
+    /// swap is unbounded. The type is `Option` only so that the other knobs can take defaults.
     pub max_pay: Option<PayBound>,
-    /// Authorization lifetime; clamped to `maxTimeoutSeconds` (an explicit larger value is an error).
+    /// Authorization lifetime. Clamped to `maxTimeoutSeconds`, and an explicit larger value is an
+    /// error.
     pub expires_in_ms: u64,
     /// Fee rate (sompi per gram), at least the relay minimum.
     pub fee_rate: Option<u64>,
-    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`] (storage-inclusive).
+    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`]
+    /// (storage-inclusive).
     pub fee_mode: FeeMode,
     /// KAS carrier of the payer's own token change (default: the policy's minimum carrier).
     pub change_carrier: Option<u64>,
-    /// KAS change below this is folded into the fee (default 0.1 KAS); see G4.
+    /// KAS change below this is folded into the fee (default 0.1 KAS).
     pub min_change_sompi: u64,
     /// Fee bound (default: the policy's `max_fee_sompi`).
     pub max_fee_sompi: Option<u64>,
-    /// The most KAS (sompi) the payment may take from the payer's coins: fee and carriers, and for a KAS-paid swap the
-    /// whole cost (`None`: no bound beyond `max_pay` and the fee and carrier bounds).
+    /// The most KAS (sompi) the payment may take from the payer's coins.
+    ///
+    /// That is the fee and carriers, and for a KAS-paid swap the whole cost. `None` leaves only
+    /// `max_pay` and the fee and carrier bounds.
     pub max_kas_sompi: Option<u64>,
-    /// Explicit `payment-identifier` id (default: a fresh random one, [`crate::client::native::random_payment_id`]).
+    /// Explicit `payment-identifier` id. Default: a fresh random one
+    /// ([`crate::client::native::random_payment_id`]).
     pub payment_identifier: Option<String>,
-    /// Refuse an `expires_in_ms` beyond the offer's `maxTimeoutSeconds` (default true; the diagnostics
-    /// suite turns it off to produce over-long authorizations).
+    /// Refuse an `expires_in_ms` beyond the offer's `maxTimeoutSeconds` (default true).
+    ///
+    /// The diagnostics suite turns this off to produce over-long authorizations.
     pub enforce_ttl: bool,
 }
 
@@ -371,9 +400,11 @@ pub struct PreparedSwap {
     pub expires_at: String,
     /// Pay-asset units the payer gives up.
     pub payer_spent: u64,
-    /// Sompi the payment takes from the payer: its KAS coins and the KAS of its token inputs, less its KAS change (the fee,
-    /// the carriers, and for a KAS-paid swap the whole cost; the carrier of the payer's own token change is counted, so
-    /// this is an upper bound).
+    /// Sompi the payment takes from the payer: its KAS coins and the KAS of its token inputs, less
+    /// its KAS change.
+    ///
+    /// That is the fee, the carriers, and for a KAS-paid swap the whole cost. The carrier of the
+    /// payer's own token change is counted, so this is an upper bound.
     pub kas_spent: u64,
     pub payer_address: Option<String>,
     pub warnings: Vec<String>,
@@ -418,7 +449,7 @@ pub fn conflicting_orders(e: &X402Error) -> Vec<Outpoint> {
         .collect()
 }
 
-// ------------------------------------------------------------------------------------------ building
+// ---------------------------------------------------------------------------------------- building
 
 fn offer_facts(
     pol: &Policy,
@@ -464,8 +495,10 @@ fn offer_facts(
     Ok((env, merchant))
 }
 
-/// Checks a payer token UTXO: the pay token, of its family, key-owned, borrow disabled (G9; a KRON token
-/// must not be a minter), pinned extension.
+/// Checks a payer token UTXO.
+///
+/// It must be the pay token, of its family, key-owned, borrow disabled and with the pinned
+/// extension. A KRON token must not be a minter.
 fn check_payer_token(t: &TokenUtxo, allowed: &AllowedToken) -> Result<()> {
     if t.utxo.covenant_id != Some(allowed.covenant_id) {
         return Err(err(Diag::PayAssetNotAccepted, "a payer token UTXO is not of the pay asset"));
@@ -500,11 +533,14 @@ fn check_payer_token(t: &TokenUtxo, allowed: &AllowedToken) -> Result<()> {
     Ok(())
 }
 
-/// Drops the payer's KAS change output and re-derives the sign requests: the change goes to the fee. Only the sighash
-/// of each request changes. A terminal bid fill's refund outputs (the maker's KAS, counted from the end: the refund of
-/// input i is output M - 1 - i) come after the change; dropping the change moves them one slot down, which the bid covenant
-/// accepts only while the slot is not the positional output of another order input (the first `order_inputs` inputs), so the
-/// fold is refused otherwise.
+/// Drops the payer's KAS change output and re-derives the sign requests, so the change goes to the
+/// fee.
+///
+/// Only the sighash of each request changes. A terminal bid fill's refund outputs are the maker's
+/// KAS, counted from the end, so the refund of input `i` is output `M - 1 - i`. They come after the
+/// change. Dropping the change moves them one slot down. The bid covenant accepts that only while
+/// the slot is not the positional output of another order input, one of the first `order_inputs`
+/// inputs. The fold is refused otherwise.
 fn fold_change_into_fee(built: &BuiltTx, order_inputs: usize) -> Result<BuiltTx> {
     let (mut tx, entries) = built.tx.to_tx()?;
     let ci = built.fee.change_output.map(|c| c as usize).filter(|c| *c < tx.outputs.len());
@@ -556,7 +592,8 @@ pub fn prepare_swap(
     if !policy.swap_enabled {
         return Err(err(Diag::RouteUnsupported, "swap-and-pay is disabled"));
     }
-    // no unbounded swap: the payer's bound on what the route costs is required (the TS SDK refuses the same)
+    // No unbounded swap: the payer's bound on what the route costs is required. The TS SDK
+    // refuses the same.
     let bound = opts.max_pay.as_ref().ok_or_else(|| err(Diag::InvalidKaspaX402Payload, MAX_PAY_REQUIRED))?;
     let (env, merchant) = offer_facts(policy, offer, request_hash)?;
     let pay_offers = parse_route_offer(offer)?;
@@ -576,7 +613,7 @@ pub fn prepare_swap(
             None => return Err(err(Diag::RouteUnsupported, "conditional / if-done legs are not supported by swap-and-pay")),
         }
     }
-    // pay asset: the bids' token, or KAS when the payer only buys the merchant token
+    // Pay asset: the bids' token, or KAS when the payer only buys the merchant token.
     let pay_token: Option<&AllowedToken> = match bids.first().and_then(OrderRef::token) {
         Some(id) => {
             if bids.iter().any(|b| b.token() != Some(id)) {
@@ -608,7 +645,7 @@ pub fn prepare_swap(
         }
         _ => {}
     }
-    // payer tokens (refuse borrow-enabled ones, G9), selected to cover the bids
+    // Payer tokens, selected to cover the bids. Borrow-enabled ones are refused.
     let needed: i128 = bids.iter().map(OrderRef::units).sum();
     let mut tokens: Vec<TokenUtxo> = vec![];
     match pay_token {
@@ -645,7 +682,7 @@ pub fn prepare_swap(
             }
         }
     }
-    // authorization lifetime
+    // Authorization lifetime.
     let ttl_cap = env.max_timeout_seconds.saturating_mul(1_000);
     if opts.enforce_ttl && opts.expires_in_ms > ttl_cap {
         return Err(err(Diag::AuthorizationExceedsMaxTimeout, "the requested authorization lifetime exceeds maxTimeoutSeconds"));
@@ -662,8 +699,9 @@ pub fn prepare_swap(
         Some(m) => (m.spk.clone(), None),
     };
 
-    // one build of the batch with the given KAS funding; the builder spends EVERY funding coin it is given, so the coins are
-    // selected below (a builder refusal stays a `kob_protocol::Error` so a funding shortfall can be told apart)
+    // One build of the batch with the given KAS funding. The builder spends EVERY funding coin it
+    // is given, so the coins are selected below. A builder refusal stays a `kob_protocol::Error`
+    // so that a funding shortfall can be told apart.
     let build_raw = |digest: &[u8; 32], funding: &[KeyUtxo]| -> Result<std::result::Result<BuiltTx, kob_protocol::Error>> {
         let records = vec![Record::X402 { reference: digest.to_vec() }];
         let legs_of = |v: &[OrderRef]| v.iter().map(|o| o.leg.clone()).collect::<Vec<_>>();
@@ -718,14 +756,16 @@ pub fn prepare_swap(
         };
         Ok(build_batch(&batch, &kob_protocol::budget::lookup))
     };
-    // KAS funding: the fewest of the payer's coins, largest first, that pay the fee and the carriers, within the verifier's
-    // input bound (passing every coin made a payer with more coins than the bound unable to pay at all; TN10 soak 2026-10-06)
+    // KAS funding: the fewest of the payer's coins, largest first, that pay the fee and the
+    // carriers, within the verifier's input bound. Passing every coin would make a payer with more
+    // coins than the bound unable to pay at all.
     let mut coins: Vec<KeyUtxo> = funds.funding.clone();
     coins.sort_by(|a, b| {
         b.utxo.amount.cmp(&a.utxo.amount).then((a.utxo.transaction_id, a.utxo.index).cmp(&(b.utxo.transaction_id, b.utxo.index)))
     });
     coins.dedup_by(|a, b| a.utxo.transaction_id == b.utxo.transaction_id && a.utxo.index == b.utxo.index);
-    // at least one coin when the payer has any (a KRON pay token is held by address presence: its owner's coin rides along)
+    // At least one coin when the payer has any. A KRON pay token is held by address presence, so
+    // its owner's coin rides along.
     let first = usize::from(!coins.is_empty());
     let mut chosen: Option<usize> = None;
     let mut short: Option<(u64, u64)> = None;
@@ -758,10 +798,10 @@ pub fn prepare_swap(
             .ok_or_else(|| err(Diag::Internal, "the built transaction has no merchant output"))
     };
 
-    // pass 1 fixes the layout (the merchant output index), pass 2 commits the digest
+    // Pass 1 fixes the layout (the merchant output index). Pass 2 commits the digest.
     let layout = build_with(&[0u8; 32])?;
     let idx = index_of(&layout)?;
-    // the payment identifier is chosen here: the commitment binds it
+    // The payment identifier is chosen first because the commitment binds it.
     let payment_identifier = crate::common::resolve_payment_id(opts.payment_identifier.as_deref())?;
     let digest = payload_commit_digest(&PayloadCommit {
         network: env.network,
@@ -784,7 +824,7 @@ pub fn prepare_swap(
         return Err(err(Diag::Internal, "the merchant output index moved between the layout pass and the committed build"));
     }
 
-    // G4: no tiny KAS change output
+    // No tiny KAS change output.
     let mut warnings = vec![];
     if let Some(ci) = built.fee.change_output {
         let value = built.tx.outputs[ci as usize].value;
@@ -811,10 +851,12 @@ pub fn prepare_swap(
     if built.tx.outputs.len() > policy.limits.max_outputs || built.tx.inputs.len() > policy.limits.max_inputs {
         return Err(err(Diag::InvalidKaspaExactTransaction, "the transaction exceeds the verifier's input / output bounds"));
     }
-    // what the payer gives up: KAS out of its coins (fee, carriers, and the cost when paying KAS), and the pay asset
+    // What the payer gives up: KAS out of its coins (fee, carriers, and the cost when paying KAS),
+    // and the pay asset.
     let put: u64 = funding.iter().map(|f| f.utxo.amount).sum();
     let back: u64 = built.fee.change_output.map(|ci| built.tx.outputs[ci as usize].value).unwrap_or(0);
-    // the KAS of the payer's token inputs counts too; the carrier of its own token change is not subtracted (an upper bound)
+    // The KAS of the payer's token inputs counts too. The carrier of its own token change is not
+    // subtracted, so the figure is an upper bound.
     let token_kas: u64 = tokens.iter().map(|t| t.utxo.amount).sum();
     let kas_spent = put.saturating_add(token_kas).saturating_sub(back);
     if let Some(max) = opts.max_kas_sompi.filter(|m| kas_spent > *m) {
@@ -939,8 +981,8 @@ pub fn pay_swap(
     prepared.complete(&sigs)
 }
 
-/// Payer-side preflight: runs the facilitator's verification logic against a chain view and checks the
-/// payer's own bound. Returns the verified result and the payer-side facts.
+/// Payer-side preflight: runs the facilitator's verification logic against a chain view and checks
+/// the payer's own bound. Returns the verified result and the payer-side facts.
 pub fn preflight_swap(
     ctx: &VerifyCtx,
     offer: &PaymentRequirements,
@@ -961,10 +1003,12 @@ pub fn preflight_swap(
 
 // ------------------------------------------------------------------------------------------ revoke
 
-/// Kills a signed payment that must not be broadcast any more (G13): a transaction that spends one of
-/// its payer-owned inputs back to the payer. Broadcast it (with a higher fee rate to win the race). A
-/// payer P2PK KAS input is preferred (a plain KAS self-spend); otherwise a P2PK-owned token input is
-/// sent back to its owner. `secrets` maps x-only keys to secret keys.
+/// Kills a signed payment that must not be broadcast any more.
+///
+/// The revocation spends one of the payment's payer-owned inputs back to the payer. Broadcast it
+/// with a higher fee rate to win the race. A payer P2PK KAS input is preferred, as a plain KAS
+/// self-spend. Otherwise a P2PK-owned token input is sent back to its owner. `secrets` maps x-only
+/// keys to secret keys.
 pub fn revoke_swap(
     policy: &Policy,
     payment: &SwapPayment,
@@ -979,9 +1023,11 @@ pub fn revoke_swap(
     Ok((rev, op))
 }
 
-/// The unsigned revocation of [`revoke_swap`] for the payer keys `payer_keys` (a wallet signs `built.sign`, C5 X-10; then
-/// `kob_protocol::tx::finalize`): the same choice of input, a payer P2PK KAS input first, else a P2PK-owned KCC-20 token
-/// input sent back to its owner. Returns the transaction to sign and the payment input it spends.
+/// The unsigned revocation of [`revoke_swap`] for the payer keys `payer_keys`.
+///
+/// A wallet signs `built.sign` and then calls `kob_protocol::tx::finalize`. The input choice is the
+/// same as in [`revoke_swap`]: a payer P2PK KAS input first, else a P2PK-owned KCC-20 token input
+/// sent back to its owner. Returns the transaction to sign and the payment input it spends.
 pub fn prepare_revoke_swap(
     policy: &Policy,
     payment: &SwapPayment,
@@ -990,7 +1036,7 @@ pub fn prepare_revoke_swap(
 ) -> Result<(BuiltTx, Outpoint)> {
     let rate = fee_rate.unwrap_or(MIN_FEE_RATE * 2).max(MIN_FEE_RATE);
     let tx = &payment.tx;
-    // 1. a payer P2PK KAS input
+    // 1. A payer P2PK KAS input.
     for (i, e) in payment.entries.iter().enumerate() {
         let Some(key) = p2pk_key(&e.script_public_key).filter(|_| is_p2pk(&e.script_public_key) && e.covenant_id.is_none()) else {
             continue;
@@ -1060,14 +1106,15 @@ pub fn prepare_revoke_swap(
         };
         return Ok((built, op));
     }
-    // 2. a payer P2PK-owned token input, sent back to its owner
+    // 2. A payer P2PK-owned token input, sent back to its owner.
     for (i, e) in payment.entries.iter().enumerate() {
         let Some(id) = e.covenant_id.map(|h| h.as_bytes()) else { continue };
         let Some(allowed) = policy.tokens.find(&id) else { continue };
         let Some(redeem) = crate::swap::redeem_of(&tx.inputs[i].signature_script) else { continue };
         let tpl = kob_protocol::artifacts::token_template(allowed.program);
         let Ok(state) = TokenState::from_redeem_with(tpl, redeem) else { continue };
-        // a KRON token is authorised by a P2PK input of its owner: step 1 covers every such payment
+        // A KRON token is authorised by a P2PK input of its owner. Step 1 covers every such
+        // payment.
         if allowed.family != kob_protocol::registry::Family::Kcc20 || !state.is_user() || !payer_keys.contains(&state.owner()) {
             continue;
         }
