@@ -498,8 +498,13 @@ pub fn backfill_unknown_pair_extensions(conn: &Connection) -> DbResult<usize> {
 /// too, which nothing fills before their trigger. This re-derives the live entries' state, which
 /// keeps an unarmed stop entry out of the books (`processor::refresh_order_state`). It is
 /// idempotent. Returns the entries taken out.
+///
+/// It runs at every open, over every live if-done entry in a book. So it is one transaction, not
+/// one commit (and sync) per entry, and each refresh keeps the stored filled amount instead of
+/// summing the entry's fills. With 10^5 entries it took minutes per restart.
 pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
-    let ids: Vec<Vec<u8>> = conn
+    let tx = conn.unchecked_transaction()?;
+    let ids: Vec<Vec<u8>> = tx
         .prepare(
             "SELECT o.covenant_id FROM order_state s CROSS JOIN orders o ON o.id = s.order_id              WHERE o.in_book = 1 AND o.contract IN ('KobIfdAsk','KobIfdBid','KobIfdAskKron','KobIfdBidKron')                AND s.status IN ('open','partial')",
         )?
@@ -508,10 +513,11 @@ pub fn backfill_stop_entry_books(conn: &Connection) -> DbResult<usize> {
     let mut out = 0;
     for id in ids {
         let Ok(cov) = <[u8; 32]>::try_from(id.as_slice()) else { continue };
-        super::processor::refresh_order_state(conn, &crate::hex::Hash32(cov))?;
-        let in_book: i64 = conn.query_row("SELECT in_book FROM orders WHERE covenant_id = ?1", [&cov[..]], |r| r.get(0))?;
+        super::processor::refresh_order_state_adding(&tx, &crate::hex::Hash32(cov), 0)?;
+        let in_book: i64 = tx.query_row("SELECT in_book FROM orders WHERE covenant_id = ?1", [&cov[..]], |r| r.get(0))?;
         out += usize::from(in_book == 0);
     }
+    tx.commit()?;
     Ok(out)
 }
 
