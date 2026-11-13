@@ -1,16 +1,20 @@
-//! A per-batch cache of the hot read responses (`/v1/stats`, `/v1/stats/{token}`, `/v1/books`, `/v1/depth`, `/v1/tokens`, `/v1/candles`).
+//! Per-generation cache of the hot read responses of the API.
 //!
-//! Every web client of a market polls the same few reads of the same token; between two commits of the indexer their answers
-//! are the same. A response body is kept under the request's parameters for one **data generation** of the store
-//! ([`crate::indexer::DataGeneration`]: bumped after every committed batch, revert, operator import and frozen-flag change),
-//! and the reads that depend on the clock carry it in their key (the node's DAA score, the wall-clock second), so a cached
-//! answer is byte for byte the one the request would have computed. Concurrent requests of one key compute it once (the
-//! others wait for it); a read that fails, or whose client goes away, is not kept and the next request computes it again.
+//! Every web client of a market polls the same few reads of the same token, and between two
+//! commits of the indexer their answers are the same. A response body is kept under the
+//! parameters of the request for one data generation of the store
+//! ([`crate::indexer::DataGeneration`]). Reads that depend on the clock carry it in their key,
+//! so a cached answer is byte for byte the one the request would compute.
 //!
-//! Memory is bounded: a new generation drops the previous one's entries, and within a generation at most [`MAX_ENTRIES`]
-//! responses and [`MAX_BYTES`] bytes are kept. A new key past either bound evicts the least recently used entries, so many
-//! distinct parameters (or a store that has not committed for a long time while the clock moved) push out the rare keys and
-//! never the hot ones.
+//! Concurrent requests of one key compute it once and the others wait for it. A read that
+//! fails, or whose client goes away, is not kept, and the next request computes it again.
+//!
+//! # Bounds
+//!
+//! A new generation drops the entries of the previous one. Within a generation at most
+//! [`MAX_ENTRIES`] responses and [`MAX_BYTES`] bytes are kept. A new key past either bound
+//! evicts the least recently used entries. Many distinct keys therefore push out the rare
+//! keys and never the hot ones.
 
 use axum::body::Bytes;
 use std::collections::HashMap;
@@ -24,12 +28,15 @@ pub const MAX_ENTRIES: usize = 1_024;
 /// Most response bytes one generation keeps (32 MiB).
 pub const MAX_BYTES: usize = 32 << 20;
 
+/// The response cache. It is shared by all request handlers.
 #[derive(Default)]
 pub struct ResponseCache {
     inner: Mutex<Inner>,
 }
 
-/// One kept response: the cell its requests share, when it was last asked for, and its size once computed.
+/// One kept response: the cell its requests share, when it was last asked for, and its size.
+///
+/// The size is 0 until the response is computed.
 struct Entry {
     cell: Arc<OnceCell<Bytes>>,
     used: u64,
@@ -41,7 +48,7 @@ struct Inner {
     generation: u64,
     cells: HashMap<String, Entry>,
     bytes: usize,
-    /// A counter of the lookups, the recency of [`Entry::used`].
+    /// Counter of the lookups. It is the recency that [`Entry::used`] records.
     tick: u64,
 }
 
@@ -58,8 +65,10 @@ impl Inner {
 }
 
 impl ResponseCache {
-    /// The body of `key` read at `generation`: the kept one, else `compute`'s (kept when it succeeds). A request that saw an
-    /// older generation than the cache holds is computed and not kept.
+    /// Returns the body of `key` read at `generation`.
+    ///
+    /// The body is the kept one, else the result of `compute`, which is kept when it succeeds.
+    /// A request that saw an older generation than the cache holds is computed and not kept.
     pub async fn get_or_compute<E, F, Fut>(&self, generation: u64, key: String, compute: F) -> Result<Bytes, E>
     where
         F: FnOnce() -> Fut,
@@ -98,7 +107,8 @@ impl ResponseCache {
         if computed {
             let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             let g = &mut *g;
-            // Counted only while the entry is still the one computed (not evicted or dropped with its generation).
+            // Count the bytes only while the entry is still the one computed, that is, not evicted
+            // and not dropped with its generation.
             if let Some(e) = g.cells.get_mut(&key).filter(|e| Arc::ptr_eq(&e.cell, &cell)) {
                 e.bytes = body.len();
                 g.bytes = g.bytes.saturating_add(body.len());
@@ -199,8 +209,8 @@ mod tests {
         assert!(c.len() <= MAX_ENTRIES);
     }
 
-    /// Many distinct keys evict the least recently used entries one by one, never the whole cache: a key that keeps being
-    /// asked for stays, computed once.
+    /// Many distinct keys evict the least recently used entries one by one, never the whole
+    /// cache. A key that keeps being asked for stays and is computed once.
     #[tokio::test]
     async fn distinct_keys_evict_the_least_recently_used_and_keep_the_hot_ones() {
         let c = ResponseCache::default();

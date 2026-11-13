@@ -1,19 +1,28 @@
-//! Connection-level limits of the HTTP servers (the read API and the x402 facilitator).
+//! Connection-level limits of the HTTP servers, the read API and the x402 facilitator.
 //!
-//! The request guards (rate limits, concurrency caps, request timeouts) only see a request once its head has been read,
-//! so the transport needs its own bounds or a client can hold sockets without ever sending a request:
+//! The request guards see a request only once its head has been read. Rate limits, concurrency
+//! caps and request timeouts are such guards. Without bounds in the transport, a client could
+//! hold sockets without ever sending a request. The transport enforces:
 //!
-//! - a header-read deadline: a request head (the first one, and each keep-alive one after a response) must arrive within
-//!   `header_timeout`, so slow-header (slowloris) and idle keep-alive connections are closed;
-//! - a write-stall deadline: a write that makes no progress for `write_timeout` (a client that pipelines requests and never
-//!   reads the responses, or stops reading a response) closes the connection;
-//! - a cap on open connections, a cap per client address (IPv6 per `ipv6_prefix_bits` prefix) so one host cannot hold
-//!   every slot, and a cap per IPv6 site (`ipv6_site_prefix_bits`, a /48) so the many /64s of one allocation cannot either.
-//!   Trusted reverse proxies are exempt from the per-address and per-site caps (every client behind them shares their address).
-//!   A connection over a cap gets a best-effort `503` and is closed, never served.
+//! - A header-read deadline. A request head must arrive within `header_timeout`, the first one
+//!   and each keep-alive one after a response. This closes slow-header (slowloris) and idle
+//!   keep-alive connections.
+//! - A write-stall deadline. A write that makes no progress for `write_timeout` closes the
+//!   connection. That is a client that pipelines requests and never reads the responses, or
+//!   that stops reading a response.
+//! - A cap on open connections.
+//! - A cap per client address, with IPv6 grouped by `ipv6_prefix_bits`. One host cannot hold
+//!   every slot.
+//! - A cap per IPv6 site, grouped by `ipv6_site_prefix_bits`. The many /64s of one allocation
+//!   cannot hold every slot either.
 //!
-//! On shutdown the listener stops accepting, every connection is asked to finish its in-flight request and close
-//! (HTTP/1 graceful shutdown), and [`serve`] returns once all of them are gone.
+//! Trusted reverse proxies are exempt from the per-address and per-site caps, because every
+//! client behind them shares their address. They count against the cap on open connections.
+//! A connection over a cap gets a best-effort `503` and is closed, never served.
+//!
+//! On shutdown the listener stops accepting and every connection is asked to finish its
+//! in-flight request and close (HTTP/1 graceful shutdown). [`serve`] returns once all of them
+//! are gone.
 
 use super::client_ip::{rate_key, TrustedProxies};
 use axum::extract::ConnectInfo;
@@ -31,33 +40,35 @@ use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use tokio::time::Sleep;
 
-/// Transport bounds of one server (see the module docs).
+/// Transport bounds of one server, see the module docs.
 #[derive(Clone, Debug)]
 pub struct ConnLimits {
-    /// Longest wait for a complete request head (also the keep-alive idle limit between requests).
+    /// Longest wait for a complete request head. It is also the keep-alive idle limit.
     pub header_timeout: Duration,
     /// Longest a write may make no progress; zero disables the check.
     pub write_timeout: Duration,
     /// Open connections at once.
     pub max_connections: usize,
-    /// Open connections per client address (IPv6: per `ipv6_prefix_bits` prefix); zero disables the per-address cap.
+    /// Open connections per client address. Zero disables the per-address cap.
     pub max_per_ip: usize,
+    /// Leading bits of the IPv6 prefix that counts as one client address.
     pub ipv6_prefix_bits: u8,
-    /// Open connections per IPv6 site (`ipv6_site_prefix_bits` prefix, all its /64s together); zero disables the site cap.
+    /// Open connections per IPv6 site, all its /64s together. Zero disables the site cap.
     pub max_per_site: usize,
-    /// Leading bits of an IPv6 site (48); zero disables the site cap.
+    /// Leading bits of an IPv6 site, normally 48. Zero disables the site cap.
     pub ipv6_site_prefix_bits: u8,
-    /// Peers exempt from the per-address cap (the operator's reverse proxies).
+    /// Peers exempt from the per-address and per-site caps, the reverse proxies of the operator.
     pub exempt: TrustedProxies,
 }
 
-/// Answer of a connection over a cap (written without blocking, best effort, then the socket is closed).
+/// Answer to a connection over a cap. It is written without blocking, then the socket is closed.
 const OVER_CAP: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nretry-after: 1\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
 
+/// Open connections per key.
 #[derive(Default)]
 struct PerIp(Mutex<HashMap<IpAddr, usize>>);
 
-/// One counted connection of a client address; released on drop.
+/// One counted connection of a client address. It is released on drop.
 struct IpSlot {
     reg: Arc<PerIp>,
     key: IpAddr,
@@ -95,8 +106,10 @@ impl Drop for IpSlot {
     }
 }
 
-/// Serves `app` (HTTP/1, upgrades allowed) on `listener` until `shutdown` resolves, under `limits`. Every request carries
-/// the peer address as `ConnectInfo<SocketAddr>`. `name` prefixes the connection-level log lines.
+/// Serves `app` (HTTP/1, upgrades allowed) on `listener` until `shutdown` resolves, under `limits`.
+///
+/// Every request carries the peer address as `ConnectInfo<SocketAddr>`. `name` prefixes the
+/// connection-level log lines.
 pub async fn serve(
     listener: TcpListener,
     app: Router,
@@ -109,7 +122,8 @@ pub async fn serve(
     let max = limits.max_connections.max(1);
     let slots = Arc::new(Semaphore::new(max));
     let per_ip = Arc::new(PerIp::default());
-    // site keys live in their own table: a /48 key and the key of its first /64 are the same address
+    // Site keys have their own table, because a /48 key and the key of its first /64 are the same
+    // address.
     let per_site = Arc::new(PerIp::default());
     let (stop_tx, stop_rx) = watch::channel(false);
     tokio::pin!(shutdown);
@@ -184,13 +198,15 @@ pub async fn serve(
     }
     drop(listener);
     let _ = stop_tx.send(true);
-    // every connection task holds one permit: all of them back = every connection closed
+    // Every connection task holds one permit, so all permits back means every connection closed.
     let _ = slots.acquire_many(u32::try_from(max).unwrap_or(u32::MAX)).await;
     Ok(())
 }
 
-/// A stream whose writes fail with `TimedOut` once one of them has made no progress for `timeout` (the peer stopped
-/// reading). Reads are untouched (the header deadline and the handlers' own deadlines bound them).
+/// A stream whose writes fail with `TimedOut` once one has made no progress for `timeout`.
+///
+/// That means the peer stopped reading. Reads are untouched. The header deadline and the
+/// deadlines of the handlers bound them.
 pub struct WriteStall<S> {
     inner: S,
     timeout: Duration,
@@ -198,11 +214,14 @@ pub struct WriteStall<S> {
 }
 
 impl<S> WriteStall<S> {
+    /// Wraps `inner`. A zero `timeout` disables the check.
     pub fn new(inner: S, timeout: Duration) -> Self {
         WriteStall { inner, timeout, stalled: None }
     }
 
-    /// `Pending` from the inner write: start (or keep) the stall timer; its expiry turns the write into an error.
+    /// Handles a `Pending` from the inner write.
+    ///
+    /// It starts the stall timer, or keeps it running. The expiry turns the write into an error.
     fn on_pending<T>(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<T>> {
         if self.timeout.is_zero() {
             return Poll::Pending;

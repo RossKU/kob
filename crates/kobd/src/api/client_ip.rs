@@ -1,10 +1,11 @@
 //! Proxy-aware client identity.
 //!
-//! The socket peer is the client unless it is a trusted proxy (the operator's reverse proxy or
-//! CDN). Only then is the forwarding header consulted, and for `X-Forwarded-For` the right-most
-//! address that is not itself a trusted proxy is used: everything to its left was supplied by the
-//! client or by earlier hops and can be spoofed. Any malformed or missing header falls back to the
-//! peer address.
+//! The socket peer is the client unless it is a trusted proxy, such as the reverse proxy or CDN
+//! of the operator. Only then is the forwarding header consulted.
+//!
+//! For `X-Forwarded-For` the right-most address that is not itself a trusted proxy is used.
+//! Everything to its left was supplied by the client or by earlier hops and can be spoofed.
+//! A malformed or missing header falls back to the peer address.
 
 use axum::http::HeaderMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -20,8 +21,11 @@ pub fn unmap(ip: IpAddr) -> IpAddr {
     }
 }
 
-/// The key clients are rate limited by: IPv4 as is, IPv6 collapsed to its first `prefix_bits` bits (64: one subscriber /64;
-/// 48 groups a whole site, for operators facing an attacker that owns a larger prefix and rotates addresses through it).
+/// The key that clients are rate limited by.
+///
+/// IPv4 is used as it is. IPv6 is collapsed to its first `prefix_bits` bits. 64 groups one
+/// subscriber. 48 groups a whole site, for operators facing an attacker that owns a larger prefix
+/// and rotates addresses through it.
 pub fn rate_key(ip: IpAddr, prefix_bits: u8) -> IpAddr {
     match unmap(ip) {
         IpAddr::V6(v6) => {
@@ -33,6 +37,7 @@ pub fn rate_key(ip: IpAddr, prefix_bits: u8) -> IpAddr {
     }
 }
 
+/// An IP network, or a host route when the prefix covers the whole address.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cidr {
     addr: IpAddr,
@@ -40,7 +45,7 @@ pub struct Cidr {
 }
 
 impl Cidr {
-    /// Parse `a.b.c.d/len`, `x::y/len`, or a bare address (a host route).
+    /// Parses `a.b.c.d/len`, `x::y/len`, or a bare address (a host route).
     pub fn parse(s: &str) -> Result<Cidr, String> {
         let s = s.trim();
         let (a, p) = match s.split_once('/') {
@@ -60,6 +65,7 @@ impl Cidr {
         Ok(Cidr { addr, prefix })
     }
 
+    /// Whether `ip` is inside the network. A v4-mapped address matches v4 networks.
     pub fn contains(&self, ip: IpAddr) -> bool {
         match (self.addr, unmap(ip)) {
             (IpAddr::V4(n), IpAddr::V4(a)) => mask_eq_v4(n, a, self.prefix),
@@ -79,25 +85,30 @@ fn mask_eq_v6(n: Ipv6Addr, a: Ipv6Addr, prefix: u8) -> bool {
     u128::from(n) & mask == u128::from(a) & mask
 }
 
+/// The networks whose peers are trusted to set the forwarding header.
 #[derive(Debug, Clone, Default)]
 pub struct TrustedProxies {
     nets: Vec<Cidr>,
 }
 
 impl TrustedProxies {
+    /// Parses a list of [`Cidr`] entries. One bad entry fails the whole list.
     pub fn parse(entries: &[String]) -> Result<Self, String> {
         Ok(TrustedProxies { nets: entries.iter().map(|e| Cidr::parse(e)).collect::<Result<_, _>>()? })
     }
 
+    /// Whether `ip` is inside one of the networks.
     pub fn is_trusted(&self, ip: IpAddr) -> bool {
         self.nets.iter().any(|n| n.contains(ip))
     }
 
+    /// Whether no proxy is trusted.
     pub fn is_empty(&self) -> bool {
         self.nets.is_empty()
     }
 }
 
+/// Resolves the client address of a request from its peer and the forwarding header.
 #[derive(Debug, Clone)]
 pub struct ClientIpResolver {
     proxies: TrustedProxies,
@@ -105,11 +116,14 @@ pub struct ClientIpResolver {
 }
 
 impl ClientIpResolver {
+    /// A resolver that reads `header` (case-insensitive) for peers inside `proxies`.
     pub fn new(proxies: TrustedProxies, header: &str) -> Self {
         ClientIpResolver { proxies, header: header.trim().to_ascii_lowercase() }
     }
 
     /// The address to attribute a request to.
+    ///
+    /// Without trusted proxies, or for an untrusted peer, this is the peer.
     pub fn resolve(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         let peer = unmap(peer);
         if self.proxies.is_empty() || !self.proxies.is_trusted(peer) {
@@ -120,7 +134,7 @@ impl ClientIpResolver {
             return peer;
         }
         if self.header == "x-forwarded-for" {
-            // Right to left across all header lines (a proxy may append its own line).
+            // Right to left across all header lines, because a proxy may append its own line.
             let entries: Vec<&str> = values.iter().flat_map(|v| v.split(',')).map(str::trim).collect();
             for e in entries.iter().rev() {
                 match parse_ip(e) {
@@ -138,7 +152,9 @@ impl ClientIpResolver {
     }
 }
 
-/// `1.2.3.4`, `::1`, or `[::1]`; ports are not accepted (a malformed entry must not be trusted).
+/// Parses `1.2.3.4`, `::1` or `[::1]`.
+///
+/// A port is not accepted, because a malformed entry must not be trusted.
 fn parse_ip(s: &str) -> Option<IpAddr> {
     let s = s.strip_prefix('[').and_then(|x| x.strip_suffix(']')).unwrap_or(s);
     s.parse::<IpAddr>().ok().map(unmap)
@@ -178,7 +194,7 @@ mod tests {
         let v6 = Cidr::parse("2001:db8::/32").unwrap();
         assert!(v6.contains(ip("2001:db8:1::5")));
         assert!(!v6.contains(ip("2001:db9::1")));
-        // v4-mapped addresses match v4 networks
+        // V4-mapped addresses match v4 networks.
         assert!(c.contains(ip("::ffff:10.1.2.3")));
         let all = Cidr::parse("0.0.0.0/0").unwrap();
         assert!(all.contains(ip("8.8.8.8")));
@@ -204,10 +220,11 @@ mod tests {
     #[test]
     fn xff_rightmost_untrusted_wins_over_spoofed_left() {
         let r = resolver(&["10.0.0.0/8"], "x-forwarded-for");
-        // client spoofed 9.9.9.9, real client 198.51.100.7 appended by the trusted proxy chain
+        // The client spoofed 9.9.9.9. The trusted proxy chain appended the real client
+        // 198.51.100.7.
         let h = hdrs("x-forwarded-for", &["9.9.9.9, 198.51.100.7, 10.0.0.2"]);
         assert_eq!(r.resolve(ip("10.0.0.1"), &h), ip("198.51.100.7"));
-        // multiple header lines
+        // Several header lines.
         let h = hdrs("x-forwarded-for", &["9.9.9.9", "198.51.100.7, 10.0.0.2"]);
         assert_eq!(r.resolve(ip("10.0.0.1"), &h), ip("198.51.100.7"));
     }

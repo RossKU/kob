@@ -1,30 +1,51 @@
-//! The `Cache-Control` of the read API's answers, so that a CDN in front of a public indexer (Cloudflare, docs/ops/chart-server.md) absorbs the repeated reads and
-//! the origin, a small PC behind a tunnel, serves each distinct one about once per TTL. The policy is by route class and by the question asked:
+//! The `Cache-Control` policy of the answers of the read API.
 //!
-//! | class | answers | `Cache-Control` |
-//! |---|---|---|
-//! | live | books, depth, orders (lists, one order, its events), fills, trades, strays, token UTXOs, token events, the pair book and pair fills | `public, max-age=1, s-maxage=1` |
-//! | open candles | a candle query whose range reaches the present (no `to`, or a recent one); the 24 h stats of a token | `public, max-age=3, s-maxage=3` (stats: 2) |
-//! | lists | the token list, the pair list, the activity totals | `public, max-age=5, s-maxage=5, stale-while-revalidate=5` (totals: 10) |
-//! | price | the KAS/USD price (`/v1/price/kas-usd`, opt-in; the indexer asks its upstream at most once a minute) | `public, max-age=60, s-maxage=60` |
-//! | declarations | a token's KCC-23 launch proof | `public, max-age=60, s-maxage=60` |
-//! | closed candles | a candle query whose `to` is more than an hour ago: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
-//! | never | health, readiness, metrics, the WebSocket, every other method, every answer that is not a success, and a request that carries the bypass parameter | `no-store` |
+//! A CDN in front of a public indexer absorbs the repeated reads (`docs/ops/chart-server.md`).
+//! The origin, a small PC behind a tunnel, then serves each distinct read about once per TTL.
+//! The policy depends on the route class and on the question asked. All values below are
+//! `public, max-age=N, s-maxage=N` unless stated otherwise.
 //!
-//! The bypass parameter ([`BYPASS_PARAM`], `_nc=<anything>`) is for a client that has just changed something itself (placed, cancelled, amended an order) and
-//! must see it at once: the server ignores it, the CDN keys the cache on the whole query so a fresh value is a miss, and the answer is `no-store` so nothing
-//! piles up under such keys. An answer that already carries a `Cache-Control` of its own (the logo blocklist's) keeps it.
+//! - Live, N = 1: books, depth, orders (lists, one order, its events), fills, trades, strays,
+//!   token UTXOs, token events, the pair book and pair fills.
+//! - Open candles, N = 3: a candle query whose range reaches the present, that is, with no `to`
+//!   or a recent one.
+//! - 24 h stats of a token, N = 2.
+//! - Lists, N = 5 with `stale-while-revalidate=5`: the token list and the pair list.
+//! - Activity totals, N = 10 with `stale-while-revalidate=10`.
+//! - KAS/USD price (`/v1/price/kas-usd`, opt-in), N = 60.
+//! - Token declarations (the KCC-23 launch proof of a token), N = 60.
+//! - Closed candles, N = 3600: a candle query whose `to` is at least an hour in the past. No
+//!   bucket in it can change.
+//! - Never, `no-store`: health, readiness, metrics, the WebSocket, every method other than `GET`
+//!   and `HEAD`, every answer that is not a success, and a request that carries the bypass
+//!   parameter.
+//!
+//! # Bypass parameter
+//!
+//! A client that has just changed something itself, such as placing, cancelling or amending an
+//! order, must see the change at once. It adds [`BYPASS_PARAM`], `_nc=<anything>`. The server
+//! ignores the value. The CDN keys its cache on the whole query, so a fresh value is a miss. The
+//! answer is `no-store`, so nothing piles up under such keys.
+//!
+//! An answer that already carries a `Cache-Control` of its own keeps it. The logo blocklist is
+//! one.
 
 use axum::http::{header, HeaderValue, Method, Response, StatusCode};
 
-/// The query parameter that makes an answer uncacheable and a CDN's key new (its value is ignored).
+/// The query parameter that makes an answer uncacheable and the key of a CDN new.
+///
+/// Its value is ignored.
 pub const BYPASS_PARAM: &str = "_nc";
 
-/// A query whose `to` is older than this is closed: no bucket it holds can still change (late fills are minutes behind the chain at most).
+/// A candle query whose `to` is at least this old is closed.
+///
+/// No bucket in it can still change, because fills reach the indexer well within this time.
 const CLOSED_AFTER_MS: i64 = 3_600_000;
 
+/// The `Cache-Control` choice for one answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Policy {
+    /// `no-store`.
     NoStore,
     /// `public, max-age=N, s-maxage=N` and `stale-while-revalidate=M` when `M` is not 0.
     Public {
@@ -34,6 +55,7 @@ pub enum Policy {
 }
 
 impl Policy {
+    /// The header value of the policy.
     pub fn header_value(&self) -> HeaderValue {
         match self {
             Policy::NoStore => HeaderValue::from_static("no-store"),
@@ -56,7 +78,9 @@ fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').filter_map(|kv| kv.split_once('=').or(Some((kv, "")))).find(|(k, _)| *k == key).map(|(_, v)| v)
 }
 
-/// The policy of a successful answer to `method path?query`, `now_ms` the wall clock (unix ms).
+/// The policy of a successful answer to `method path?query`.
+///
+/// `now_ms` is the wall clock in unix milliseconds.
 pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
     if (method != Method::GET && method != Method::HEAD) || query_value(query, BYPASS_PARAM).is_some() {
         return Policy::NoStore;
@@ -75,13 +99,16 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
                 .is_some_and(|to| to <= now_ms.saturating_sub(CLOSED_AFTER_MS));
             public(if closed { 3_600 } else { 3 })
         }
-        // books, depth, orders, fills, trades, strays, token UTXOs and events, the pair book and pair fills
+        // Books, depth, orders, fills, trades, strays, token UTXOs and events, the pair book and
+        // pair fills.
         ["v1", ..] => public(1),
         _ => Policy::NoStore,
     }
 }
 
-/// Set the response's `Cache-Control` unless it has one (or is a protocol switch): a success gets the policy of its route, anything else `no-store`.
+/// Sets the `Cache-Control` of a response, unless it has one or is a protocol switch.
+///
+/// A success gets the policy of its route. Anything else gets `no-store`.
 pub fn apply<B>(resp: &mut Response<B>, method: &Method, path: &str, query: &str, now_ms: i64) {
     if resp.status() == StatusCode::SWITCHING_PROTOCOLS || resp.headers().contains_key(header::CACHE_CONTROL) {
         return;
@@ -157,7 +184,7 @@ mod tests {
         assert_eq!(cc(Method::POST, "/v1/logo-reports", ""), "no-store");
         assert_eq!(cc(Method::POST, "/v1/orders", ""), "no-store");
         assert_eq!(get("/other", ""), "no-store", "outside /v1; an unknown /v1 route is a 404, which apply() never caches");
-        // the bypass parameter of a client that just acted
+        // The bypass parameter of a client that just acted.
         assert_eq!(get("/v1/books/ab", "_nc=17"), "no-store");
         assert_eq!(get("/v1/orders", "maker=ab&_nc=1"), "no-store");
         assert_eq!(get("/v1/books/ab", "aggregate=true&_nc"), "no-store");
