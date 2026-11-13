@@ -4,6 +4,7 @@ use crate::hex::Hash32;
 use serde::Serialize;
 use std::sync::RwLock;
 
+/// Where the follower is in its life cycle, as `/v1/health` reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FollowerState {
@@ -13,212 +14,316 @@ pub enum FollowerState {
     CatchingUp,
     /// At the node's sink and polling.
     Following,
-    /// The node is unreachable, not synced, or in a transitional IBD state. The cursor is not advanced.
+    /// The node is unreachable, not synced, or in a transitional IBD state.
+    ///
+    /// The cursor does not advance.
     NodeUnavailable,
-    /// The stored chain cannot be continued from the node (downtime beyond pruning, or a different
-    /// network). Operator action needed, see docs/ops/executor.md (Part B, 7.4).
+    /// The stored chain cannot be continued from the node, after downtime beyond pruning or on a
+    /// different network. The operator must act, see `docs/ops/executor.md` (Part B, 7.4).
     Gap,
+    /// The follower halted, for example because its record log could not be written.
+    ///
+    /// `halt_reason` says why.
     Stopped,
-    /// The database cannot be written (the disk is full, an I/O error) or is corrupt: nothing is indexed until it is fixed.
-    /// The follower retries (space freed: it goes on); `kobd --executor` exits after a few minutes of it, so that a supervisor
-    /// restarts it (`last_error` says what and what to do; a corrupt lean store can be deleted, fast start rebuilds it).
+    /// The database cannot be written (the disk is full, an I/O error) or is corrupt.
+    ///
+    /// Nothing is indexed until it is fixed. The follower retries, and goes on once space is freed.
+    /// `kobd --executor` exits after a few minutes of it, so that a supervisor restarts it.
+    /// `last_error` says what is wrong and what to do. A corrupt lean store can be deleted, and a
+    /// fast start rebuilds it.
     StorageError,
 }
 
+/// The follower's health, as `GET /v1/health` serves it.
 #[derive(Debug, Clone, Serialize)]
 pub struct HealthSnapshot {
+    /// Where the follower is.
     pub state: FollowerState,
+    /// Network name, for example `testnet-10`.
     pub network: String,
+    /// Version the node reports.
     pub node_version: Option<String>,
+    /// Hash of the block the cursor stands at.
     pub cursor_hash: Option<Hash32>,
+    /// DAA score of the cursor.
     pub cursor_daa: u64,
     /// Node virtual DAA score at the last successful poll.
     pub node_daa: Option<u64>,
+    /// The most recent follower error.
     pub last_error: Option<String>,
+    /// Why the store is halted at a gap.
     pub gap_reason: Option<String>,
+    /// Unix time in milliseconds of the last poll of the node.
     pub last_poll_unix_ms: u64,
-    /// Last time the cursor advanced or the node confirmed we are at its sink.
+    /// Unix time in milliseconds when the cursor last advanced or the node last confirmed that the
+    /// store is at its sink.
     pub last_progress_unix_ms: u64,
+    /// Reorgs handled.
     pub reorgs_total: u64,
+    /// Chain blocks reverted by reorgs.
     pub reverted_blocks_total: u64,
+    /// Chain blocks applied.
     pub blocks_applied_total: u64,
+    /// Relevant transactions applied.
     pub relevant_txs_total: u64,
+    /// Orders indexed.
     pub orders_total: u64,
+    /// Next position in the record log.
     pub records_next_n: u64,
-    /// Blue score between the cursor and the node's sink at the last request (`None`: not measured yet).
+    /// Blue score between the cursor and the node's sink at the last request.
+    ///
+    /// `None`: not measured yet.
     pub lag_blue: Option<u64>,
     /// The current VSPC batch window in blue score (`rpc::window`).
     pub batch_window_blue: Option<u64>,
-    /// The last batch: chain blocks, accepted transactions, bytes on the wire, fetch time.
+    /// Chain blocks in the last batch.
     pub last_batch_blocks: u64,
+    /// Accepted transactions in the last batch.
     pub last_batch_txs: u64,
+    /// Bytes on the wire for the last batch.
     pub last_batch_bytes: u64,
+    /// Fetch time of the last batch in milliseconds.
     pub last_fetch_ms: u64,
-    /// Since the start: VSPC bytes and accepted transactions fetched (wire cost per transaction), timeouts.
+    /// VSPC bytes fetched since the start.
     pub wire_bytes_total: u64,
+    /// Accepted transactions fetched since the start, for the wire cost per transaction.
     pub txs_fetched_total: u64,
+    /// VSPC requests that timed out since the start.
     pub vspc_timeouts_total: u64,
     /// Failed polls in a row (0 after any progress).
     pub consecutive_failures: u32,
-    /// Parallel fetch (`fetch_parallel`): windows queued ahead of the cursor, of which in flight; their bytes now and at
-    /// most; the current window in chain blocks; plans dropped because the chain moved under them (reorgs).
+    /// Windows the parallel fetch (`fetch_parallel`) has queued ahead of the cursor.
     pub prefetch_windows: u64,
+    /// Of those, the windows in flight.
     pub prefetch_in_flight: u64,
+    /// Bytes held by the queued windows now.
     pub prefetch_bytes: u64,
+    /// The most bytes the queued windows have held.
     pub prefetch_bytes_peak: u64,
+    /// The current window in chain blocks.
     pub prefetch_window_blocks: u64,
+    /// Plans dropped because the chain moved under them (reorgs).
     pub prefetch_discards_total: u64,
-    /// Prefetched windows whose answer was larger than its allowance (refused, then split or sent again).
+    /// Prefetched windows whose answer was larger than its allowance.
+    ///
+    /// Such an answer is refused, then split or sent again.
     pub prefetch_oversize_total: u64,
-    /// The lag in DAA up to which the store counts as usable for planning (`max_lag_secs`; 0: only `following`).
+    /// The lag in DAA up to which the store counts as usable for planning.
+    ///
+    /// It follows `max_lag_secs`. 0 means only `following` counts.
     pub lag_tolerance_daa: u64,
-    /// Several nodes (`rpc::multi`): windows fetched from a node other than the primary and their chain blocks; of these, the
-    /// chain blocks compared with the primary's copy before applying (`indexer::trust`); contradictions found that way.
+    /// Windows fetched from a node other than the primary, with several nodes (`rpc::multi`).
     pub untrusted_windows_total: u64,
+    /// Chain blocks of those windows.
     pub untrusted_blocks_total: u64,
+    /// Chain blocks of those windows compared with the primary's copy before applying
+    /// (`indexer::trust`).
     pub confirmed_blocks_total: u64,
+    /// Contradictions the comparison found.
     pub lies_total: u64,
-    /// Per node (empty with a single node).
+    /// Status per node. Empty with a single node.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<crate::rpc::multi::NodeStatus>,
-    /// The node failover (`[failover]`, `rpc::failover`): which node list is the chain source now, its switches and refusals.
-    /// Absent without a failover. `nodes` lists the nodes of the active list.
+    /// Status of the node failover: which node list is the chain source now, its switches and
+    /// refusals.
+    ///
+    /// See `[failover]` and `rpc::failover`. Absent without a failover. `nodes` lists the nodes of
+    /// the active list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_source: Option<crate::rpc::failover::FailoverStatus>,
-    /// Alarms of nodes named in the configuration (`rpc::judge`: on another network, no UTXO index, not synced for long,
-    /// hanging, behind the other node, contradicting it), `node: problem`. A public node is replaced instead (its
-    /// `nodes[].cut_reason` says why). Absent when there is none.
+    /// Alarms for nodes named in the configuration, one `node: problem` string each.
+    ///
+    /// The problems (`rpc::judge`) are: another network, no UTXO index, not synced for long,
+    /// hanging, behind the other node, and contradicting it. A public node is replaced instead,
+    /// and its `nodes[].cut_reason` says why. Absent when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub node_alarms: Vec<String>,
-    /// Public chain authorities given up for a finding since the start (`rpc::resolver::authority_replaced`: judged useless, a
-    /// disagreement that did not settle, or an answer that contradicted the store; not a lost connection).
+    /// Public chain authorities given up for a finding since the start.
+    ///
+    /// A finding is a judgement of useless, a disagreement that did not settle, or an answer that
+    /// contradicted the store (`rpc::resolver::authority_replaced`). A lost connection does not
+    /// count.
     pub authority_replaced_total: u64,
-    /// The store holds every order the node's history still shows. `false` during a fast start ([`crate::faststart`]: the store
-    /// follows the chain from the node's sink, and the history is being indexed into a second store; `backfill` then says how far
-    /// that one is), and for good in a store that began after the oldest history (`start = "sink"` or a block hash, or a rebase past
-    /// unread chain: `history_from_daa` says where its history begins).
+    /// Whether the store holds every order the node's history still shows.
+    ///
+    /// It is `false` during a fast start ([`crate::faststart`]). The store then follows the chain
+    /// from the node's sink while the history is indexed into a second store, and `backfill` says
+    /// how far that one is. It stays `false` for good in a store that began after the oldest
+    /// history, with `start = "sink"` or a block hash, or after a rebase past unread chain.
+    /// `history_from_daa` says where its history begins.
     pub book_complete: bool,
-    /// Where the history of this store begins, in DAA, when it does not begin at the node's pruning point (a start at the sink or
-    /// at a block, or a rebase past unread chain); 0: the start block's score was not known yet. Orders created before it are not
-    /// in this store. Absent for a store that read the node's whole retained history.
+    /// Where the history of this store begins, in DAA.
+    ///
+    /// It is set only when the history does not begin at the node's pruning point: a start at the
+    /// sink or at a block, or a rebase past unread chain. 0 means the start block's score was not
+    /// known yet. Orders created before it are not in this store. Absent for a store that read the
+    /// node's whole retained history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub history_from_daa: Option<u64>,
-    /// While `catching_up`: how fast the store closes in on the node and when it will have (absent once it follows, and until two
-    /// samples a second apart are known).
+    /// How fast the store closes in on the node and when it will have, while `catching_up`.
+    ///
+    /// Absent once it follows, and until two samples a second apart are known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub catch_up: Option<CatchUp>,
-    /// Lean storage ([`super::lean`]): the store keeps the live book and `lean_retention_days` of closed orders, not the history.
+    /// Whether the store is lean ([`super::lean`]).
+    ///
+    /// A lean store keeps the live book and `lean_retention_days` of closed orders, not the
+    /// history.
     pub lean: bool,
-    /// Closed orders and rows deleted by the lean pruning since the start.
+    /// Closed orders deleted by lean pruning since the start.
     pub lean_orders_pruned_total: u64,
+    /// Rows deleted by lean pruning since the start.
     pub lean_rows_pruned_total: u64,
-    /// What this process does: `executor` (the matcher and the keepers of `kobd --executor` work on this store) and/or
-    /// `indexer` (the store keeps the history and this API serves it; a lean store makes the process the Executor alone).
-    /// `kobd --indexer` is `["indexer"]`.
+    /// What this process does: `executor`, `indexer`, or both.
+    ///
+    /// `executor` means the matcher and the keepers of `kobd --executor` work on this store.
+    /// `indexer` means the store keeps the history and this API serves it. A lean store makes the
+    /// process the Executor alone. `kobd --indexer` is `["indexer"]`.
     pub roles: Vec<&'static str>,
-    /// The fast start's backfill: the full store's progress (absent once the book is complete).
+    /// The fast start's backfill: the progress of the full store. Absent once the book is complete.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backfill: Option<Backfill>,
-    /// Stretches of chain this store skipped on purpose since the start, oldest first ([`SkippedGap`]): the node pruned the
-    /// history the store was following, so it continued from the node's pruning point. Empty (and absent here) when none.
+    /// Stretches of chain this store skipped on purpose since the start, oldest first.
+    ///
+    /// The node pruned the history the store was following, so the store continued from the node's
+    /// pruning point ([`SkippedGap`]). Empty, and then absent, when there is none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<SkippedGap>,
-    /// Why the follower is halted or cannot write (states `stopped`, `gap`, `storage_error`): what an alarm shows. Absent while
-    /// it runs.
+    /// Why the follower is halted or cannot write, as an alarm shows it.
+    ///
+    /// It is set in the states `stopped`, `gap` and `storage_error`. Absent while it runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub halt_reason: Option<String>,
-    /// The read API stopped serving (it could not keep its listener): why. `kobd --executor` exits on it (a supervisor restarts
-    /// it). Absent while it serves.
+    /// Why the read API stopped serving, because it could not keep its listener.
+    ///
+    /// `kobd --executor` exits on it, and a supervisor restarts it. Absent while it serves.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_error: Option<String>,
-    /// Free bytes on the data directory's file system and the database's size (its file and write-ahead log), measured about
-    /// once a minute (`None`: not measured yet, or the platform cannot tell).
+    /// Free bytes on the data directory's file system, measured about once a minute.
+    ///
+    /// `None`: not measured yet, or the platform cannot tell.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data_dir_free_bytes: Option<u64>,
+    /// Size of the database in bytes, its file and write-ahead log, measured with the free bytes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub db_bytes: Option<u64>,
-    /// Reorgs that removed chain blocks this store no longer holds (deeper than its reorg window): their rows were not reverted.
+    /// Reorgs that removed chain blocks the store no longer holds, so their rows were not reverted.
+    ///
+    /// Such a reorg is deeper than the reorg window of the store.
     pub deep_reorgs_total: u64,
-    /// Lean storage: the store is above its size cap (`lean_max_db_mb`) at the last pruning, and pruning failures since the
-    /// start.
+    /// Whether a lean store was above its size cap (`lean_max_db_mb`) at the last pruning.
     pub lean_over_cap: bool,
+    /// Lean pruning failures since the start.
     pub lean_prune_failures_total: u64,
-    /// The Executor of this process (`kobd --executor`): its funds, submissions and alarms (absent for `kobd --indexer`).
-    /// Visible to whoever can reach this API, like the rest of `/v1/health`.
+    /// The Executor of this process (`kobd --executor`): its funds, submissions and alarms.
+    ///
+    /// Absent for `kobd --indexer`. Visible to whoever can reach this API, like the rest of
+    /// `/v1/health`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executor: Option<ExecutorHealth>,
-    /// A KOB release newer than this build is in use on chain: placements of at least two makers announce it
-    /// (`super::release`). Informational only: update when convenient (docs/ops/release.md). `null` when there is none.
+    /// A KOB release newer than this build that is in use on chain.
+    ///
+    /// Placements of at least two makers announce it (`super::release`). It is informational:
+    /// update when convenient (`docs/ops/release.md`). `null` when there is none.
     pub newer_release_seen: Option<super::release::NewerRelease>,
-    /// The Executor's own Prometheus series (the runner's), served after the indexer's by `GET /v1/metrics`.
+    /// The Executor's own Prometheus series, served after the indexer's by `GET /v1/metrics`.
+    ///
+    /// The runner writes them.
     #[serde(skip)]
     pub executor_metrics: String,
 }
 
-/// The Executor's part of `/v1/health` (`HealthSnapshot::executor`), written by the runner after each step. Amounts are decimal
-/// strings of sompi, like every amount of the API.
+/// The Executor's part of `/v1/health` (`HealthSnapshot::executor`).
+///
+/// The runner writes it after each step. Amounts are decimal strings of sompi, like every amount
+/// of the API.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct ExecutorHealth {
-    /// The operator's balance (the coins pending transactions hold included) and what is spendable now; `None`: not read yet,
-    /// or not shown (`funds_hidden`).
+    /// The operator's balance, including the coins pending transactions hold.
+    ///
+    /// `None`: not read yet, or not shown (`funds_hidden`).
     pub funds_sompi: Option<String>,
+    /// What is spendable now. `None` as for `funds_sompi`.
     pub spendable_sompi: Option<String>,
-    /// The amounts are left out: the read API is reachable from other hosts and `api.executor_funds` is off (the default).
+    /// Whether the amounts are left out.
+    ///
+    /// They are when the read API is reachable from other hosts and `api.executor_funds` is off,
+    /// which is the default.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub funds_hidden: bool,
     /// The balance is below the alert threshold (`--low-funds-kas`).
     pub low_funds: bool,
+    /// The alert threshold in sompi.
     pub low_funds_threshold_sompi: String,
+    /// Whether the Executor is paused.
     pub paused: bool,
+    /// Whether the Executor runs in dry-run mode.
     pub dry_run: bool,
-    /// Transactions submitted and not accepted yet, and how long the oldest has waited (seconds, at 10 DAA per second).
+    /// Transactions submitted and not accepted yet.
     pub pending: usize,
+    /// How long the oldest pending transaction has waited, in seconds (at 10 DAA per second).
     pub oldest_pending_seconds: u64,
+    /// Transactions submitted.
     pub submitted_total: u64,
+    /// Transactions finalized.
     pub finalized_total: u64,
-    /// Transactions given up (the node refused them at a check, or they lost a race) and other refusals.
+    /// Transactions given up: the node refused them at a check, or they lost a race.
     pub dropped_total: u64,
+    /// Other refusals.
     pub rejected_total: u64,
     /// Funding coins held because a mempool transaction this process does not track spends them.
     pub held_coins: usize,
-    /// Unix time of the last submission a node took, and of the last step; `None`: none yet.
+    /// Unix time of the last submission a node took. `None`: none yet.
     pub last_submit_unix: Option<u64>,
+    /// Unix time of the last step.
     pub last_step_unix: u64,
-    /// The last step failed: why (`None`: it did not).
+    /// Why the last step failed. `None`: it did not.
     pub last_tick_error: Option<String>,
-    /// The local clock minus the chain's (the newest chain block's timestamp), seconds; `None`: not measured yet. `clock_alarm`:
-    /// beyond the bound (30 s), and day orders near their deadline are not filled.
+    /// The local clock minus the chain's, in seconds.
+    ///
+    /// The chain's clock is the timestamp of the newest chain block. `None`: not measured yet.
     pub clock_skew_seconds: Option<i64>,
+    /// Whether the skew is beyond the bound (30 s), so that day orders near their deadline are not
+    /// filled.
     pub clock_alarm: bool,
-    /// Starts of this data directory before this one (the process restarts).
+    /// Starts of this data directory before this one, that is, process restarts.
     pub restarts: u64,
-    /// Transactions in the in-flight journal (what a restart resends).
+    /// Transactions in the in-flight journal, which a restart resends.
     pub journal_entries: usize,
 }
 
-/// The catch-up of a store that is behind the node (`HealthSnapshot::catch_up`), measured over the last minute.
+/// The catch-up of a store that is behind the node (`HealthSnapshot::catch_up`).
+///
+/// It is measured over the last minute.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct CatchUp {
-    /// How fast the history is indexed: DAA of chain per second of wall time (the chain itself moves at about 10).
+    /// How fast the history is indexed, in DAA of chain per second of wall time.
+    ///
+    /// The chain itself moves at about 10.
     pub rate_daa_per_sec: f64,
-    /// Seconds until the store has caught up at that pace (absent while the lag does not shrink).
+    /// Seconds until the store has caught up at that pace. Absent while the lag does not shrink.
     pub eta_seconds: Option<u64>,
 }
 
-/// A stretch of chain the store skipped on purpose ([`super::recovery`]): the node pruned it before the store had read it.
-/// The orders the store already had were reconciled with the node's UTXO set (closed with reason `gap`, or adopted); an order
-/// created inside the stretch and still open is not in the store until its maker imports it (docs/ops/executor.md, 7.4/7.5).
+/// A stretch of chain the store skipped on purpose ([`super::recovery`]).
+///
+/// The node pruned it before the store had read it. The orders the store already had were
+/// reconciled with the node's UTXO set: closed with reason `gap`, or adopted. An order created
+/// inside the stretch and still open is not in the store until its maker imports it
+/// (`docs/ops/executor.md`, 7.4 and 7.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SkippedGap {
-    /// DAA score of the cursor the store stood at, and of the node's pruning point it continued from.
+    /// DAA score of the cursor the store stood at.
     pub from_daa: u64,
+    /// DAA score of the node's pruning point the store continued from.
     pub to_daa: u64,
     /// The block the store continued from.
     pub to_hash: Hash32,
     /// Unix time of the move.
     pub at_unix: u64,
-    /// What the reconciliation did to the tracked orders: outputs closed with reason `gap`, continuations adopted.
+    /// Outputs of tracked orders closed with reason `gap` by the reconciliation.
     pub orders_closed: u64,
+    /// Continuations of tracked orders adopted by the reconciliation.
     pub orders_adopted: u64,
 }
 
@@ -229,7 +334,7 @@ impl SkippedGap {
     }
 }
 
-/// The backfill of a fast start: where the full store is on its way from the node's pruning point to the tip.
+/// The backfill of a fast start: the full store on its way from the pruning point to the tip.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Backfill {
     /// The full store's follower state.
@@ -238,20 +343,28 @@ pub struct Backfill {
     pub cursor_daa: u64,
     /// DAA the full store is behind the node (`None`: the node's position is not known yet).
     pub lag_daa: Option<u64>,
+    /// The same lag in seconds.
     pub lag_seconds: Option<u64>,
-    /// How fast the history is indexed: DAA of chain per second of wall time (the chain itself moves at `daa_per_second`).
+    /// How fast the history is indexed, in DAA of chain per second of wall time.
+    ///
+    /// The chain itself moves at `daa_per_second`.
     pub rate_daa_per_sec: Option<f64>,
-    /// Seconds until the full store has caught up at the recent pace (`None`: not known yet, or it is not closing in).
+    /// Seconds until the full store has caught up at the recent pace.
+    ///
+    /// `None`: not known yet, or it is not closing in.
     pub eta_seconds: Option<u64>,
     /// Unix time the fast store started following (the orders it knows were seen since).
     pub tip_since_unix: u64,
-    /// Stretches of chain the full store skipped on purpose ([`SkippedGap`]: the node pruned the history it was following).
+    /// Stretches of chain the full store skipped on purpose, because the node pruned the history
+    /// it was following ([`SkippedGap`]).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<SkippedGap>,
 }
 
 impl Backfill {
-    /// The part of the status line about the fast start: what the executor trades on and when the full book is there.
+    /// The part of the status line about the fast start.
+    ///
+    /// It says what the executor trades on and when the full book is there.
     pub fn status_text(&self) -> String {
         let mut s = format!("fast start: trading on the orders since {}", utc_clock(self.tip_since_unix));
         if !self.gaps.is_empty() {
@@ -275,7 +388,9 @@ pub fn utc_clock(unix: u64) -> String {
     format!("{:02}:{:02} UTC", unix % 86_400 / 3600, unix % 3600 / 60)
 }
 
-/// Estimates how fast the full store of a fast start closes in on the node from its lag over the last minute.
+/// Estimates how fast the full store of a fast start closes in on the node.
+///
+/// It uses the lag over the last minute.
 #[derive(Debug, Default)]
 pub struct BackfillPace {
     /// (seconds since the first sample, lag in DAA, cursor DAA), oldest first.
@@ -286,8 +401,10 @@ impl BackfillPace {
     /// How long the pace looks back.
     const SPAN_SECS: f64 = 60.0;
 
-    /// Records a sample taken `at` seconds from some fixed start; returns `(index rate in DAA per second, seconds to catch
-    /// up)` once two samples at least a second apart are known (the second is `None` while the lag does not shrink).
+    /// Records a sample taken `at` seconds from some fixed start.
+    ///
+    /// Returns `(index rate in DAA per second, seconds to catch up)` once two samples at least a
+    /// second apart are known. The second value is `None` while the lag does not shrink.
     pub fn push(&mut self, at: f64, lag_daa: u64, cursor_daa: u64) -> (Option<f64>, Option<u64>) {
         self.samples.push_back((at, lag_daa, cursor_daa));
         while self.samples.len() > 2 && self.samples.front().is_some_and(|f| at - f.0 > Self::SPAN_SECS) {
@@ -306,6 +423,7 @@ impl BackfillPace {
 }
 
 impl HealthSnapshot {
+    /// A snapshot in the `starting` state for `network`, with no progress recorded.
     pub fn new(network: &str) -> Self {
         HealthSnapshot {
             state: FollowerState::Starting,
@@ -372,18 +490,24 @@ impl HealthSnapshot {
         }
     }
 
-    /// Why this process should end so that a supervisor restarts it (`kobd --executor`): the read API stopped serving, or the
-    /// follower stopped (`stopped`: its record log could not be written) or cannot write its database (`storage_error`): what a
-    /// restart may cure once the disk has space again. The caller waits a few minutes before acting on a halt. A store halted at
-    /// a gap (`gap`) is not: the follower moves a pruned gap on its own, and a gap it gave up on (moved too often in this run,
-    /// or a store the node contradicts) needs the operator; a restart would only move the store again and reset that bound,
-    /// every few minutes, so the process stays up and says so (`kob_indexer_halted`, the status line). `None`: nothing of the
-    /// kind.
+    /// Why this process should end so that a supervisor restarts it (`kobd --executor`).
+    ///
+    /// The reasons are that the read API stopped serving, that the follower stopped (`stopped`: its
+    /// record log could not be written), and that it cannot write its database (`storage_error`).
+    /// A restart may cure the last two once the disk has space again. The caller waits a few
+    /// minutes before acting on a halt.
+    ///
+    /// A store halted at a gap (`gap`) is not one of them. The follower moves a pruned gap on its
+    /// own. A gap it gave up on needs the operator, because it was moved too often in this run or
+    /// the node contradicts the store. A restart would only move the store again and reset that
+    /// bound every few minutes. So the process stays up and says so (`kob_indexer_halted`, the
+    /// status line). Returns `None` when none of this applies.
     pub fn halted(&self) -> Option<(bool, String)> {
         if let Some(e) = &self.api_error {
             return Some((true, format!("the read API stopped: {e}")));
         }
-        // a storage error stays one while node errors come between the failed commits (only progress clears `halt_reason`)
+        // A storage error stays one while node errors come between the failed commits. Only
+        // progress clears `halt_reason`.
         let halted = matches!(self.state, FollowerState::Stopped | FollowerState::StorageError)
             || (self.halt_reason.is_some() && self.state == FollowerState::NodeUnavailable);
         if !halted {
@@ -393,13 +517,17 @@ impl HealthSnapshot {
         Some((false, format!("the indexer is {}: {}", state_name(self.state), why.unwrap_or_else(|| "no reason recorded".into()))))
     }
 
-    /// VSPC bytes on the wire per accepted transaction since the start (the bandwidth an indexer needs is
-    /// this times the chain's transaction rate, see docs/ops/executor.md).
+    /// VSPC bytes on the wire per accepted transaction since the start.
+    ///
+    /// The bandwidth an indexer needs is this times the chain's transaction rate, see
+    /// `docs/ops/executor.md`.
     pub fn bytes_per_tx(&self) -> Option<u64> {
         (self.txs_fetched_total > 0).then(|| self.wire_bytes_total / self.txs_fetched_total)
     }
 
-    /// Prometheus text exposition of the follower's state (`GET /v1/metrics`, and the executor's metrics file).
+    /// Prometheus text exposition of the follower's state.
+    ///
+    /// `GET /v1/metrics` and the executor's metrics file serve it.
     pub fn metrics_text(&self) -> String {
         let mut s = String::new();
         let mut m = |name: &str, kind: &str, help: &str, v: u64| {
@@ -656,24 +784,31 @@ impl HealthSnapshot {
         s
     }
 
-    /// Lag behind the node in DAA score (about one block per DAA at 10 BPS is one tenth of a second).
+    /// Lag behind the node in DAA score. At 10 DAA per second, one DAA is a tenth of a second.
     pub fn lag_daa(&self) -> Option<u64> {
         self.node_daa.map(|n| n.saturating_sub(self.cursor_daa))
     }
 
-    /// The store is caught up with the node: the follower's last poll applied the chain to within its catch-up distance of
-    /// the node's sink (`following`). Until then (`starting` after a restart, `catching_up`, node unavailable, gap) the
-    /// store lags the chain and an order or token it lists may already be spent: the matcher, the keepers and the
-    /// maintenance jobs plan nothing (`GET /v1/health` reports it as `caught_up`).
+    /// Whether the store is caught up with the node.
+    ///
+    /// That holds when the follower's last poll applied the chain to within its catch-up distance
+    /// of the node's sink (`following`). Until then the store lags the chain, and an order or token
+    /// it lists may already be spent. That covers `starting` after a restart, `catching_up`, node
+    /// unavailable and gap. The matcher, the keepers and the maintenance jobs plan nothing in that
+    /// time. `GET /v1/health` reports it as `caught_up`.
     pub fn caught_up(&self) -> bool {
         self.state == FollowerState::Following && self.node_daa.is_some()
     }
 
-    /// The store may be planned against although it is not caught up: the follower is applying the chain (`following` or
-    /// `catching_up`) and the node's sink is at most `lag_tolerance_daa` ahead of its cursor. A stale view is harmless, the
-    /// covenants enforce every order's terms and a spent input only loses the race (`MissingInput`); what the tolerance bounds
-    /// is how many such lost transactions a lagging store can cause. 0 (or a state other than the two above: `starting`, node
-    /// unavailable, gap, stopped) never qualifies. A caught-up store (`caught_up`) is always within.
+    /// Whether the store may be planned against although it is not caught up.
+    ///
+    /// That holds when the follower is applying the chain (`following` or `catching_up`) and the
+    /// node's sink is at most `lag_tolerance_daa` ahead of its cursor. A stale view is harmless:
+    /// the covenants enforce every order's terms, and a spent input only loses the race
+    /// (`MissingInput`). The tolerance bounds how many such lost transactions a lagging store can
+    /// cause. A tolerance of 0 never qualifies, and neither does any state other than the two
+    /// above (`starting`, node unavailable, gap, stopped). A caught-up store (`caught_up`) is
+    /// always within.
     pub fn within_lag_tolerance(&self) -> bool {
         if self.caught_up() {
             return true;
@@ -683,8 +818,9 @@ impl HealthSnapshot {
             && self.lag_daa().is_some_and(|l| l <= self.lag_tolerance_daa)
     }
 
-    /// Why the matcher, keepers and maintenance must not plan against the store (`None`: they may): it is neither caught up
-    /// nor within the lag tolerance.
+    /// Why the matcher, keepers and maintenance must not plan against the store.
+    ///
+    /// It is neither caught up nor within the lag tolerance. `None`: they may plan.
     pub fn not_ready(&self) -> Option<String> {
         if self.within_lag_tolerance() {
             None
@@ -693,8 +829,11 @@ impl HealthSnapshot {
         }
     }
 
-    /// One line for an operator watching the console (`--status-secs`): the follower's state and lag, in time as well as
-    /// DAA (10 per second), the orders indexed, and the last error while the node is unavailable or the chain has a gap.
+    /// One line for an operator watching the console (`--status-secs`).
+    ///
+    /// It gives the follower's state and lag, in time as well as DAA (10 per second), and the
+    /// orders indexed. While the node is unavailable or the chain has a gap, it adds the last
+    /// error.
     pub fn status_line(&self) -> String {
         let state = match self.state {
             FollowerState::Starting => "starting",
@@ -710,10 +849,11 @@ impl HealthSnapshot {
             Some(l) => format!("{l} DAA behind the node (about {})", human_secs(l / 10)),
             None => "node position unknown".to_string(),
         };
-        // catching up: the pace and the time to go (measured over the last minute), so a long first sync is not a guess
+        // While catching up, show the pace and the time to go, measured over the last minute. A
+        // long first sync is then not a guess.
         let lag = match (&self.catch_up, self.state) {
             (Some(c), FollowerState::CatchingUp) => {
-                // the chain itself moves at 10 DAA per second
+                // The chain itself moves at 10 DAA per second.
                 let x = c.rate_daa_per_sec / 10.0;
                 let x = if x >= 10.0 { format!("{x:.0}") } else { format!("{x:.1}") };
                 match c.eta_seconds {
@@ -725,7 +865,8 @@ impl HealthSnapshot {
             _ => lag,
         };
         let mut s = format!("indexer {state}, {lag}, {} orders indexed", self.orders_total);
-        // several nodes (a resolver pair: the hosts in use): which is the authority, and how each is doing
+        // With several nodes (a resolver pair), show the hosts in use, which is the authority and
+        // how each is doing.
         if !self.nodes.is_empty() {
             let nodes: Vec<String> = self
                 .nodes
@@ -796,7 +937,7 @@ impl HealthSnapshot {
         s
     }
 
-    /// Why the store is not caught up (`None`: it is).
+    /// Why the store is not caught up. `None`: it is.
     pub fn not_caught_up(&self) -> Option<String> {
         if self.caught_up() {
             return None;
@@ -809,7 +950,7 @@ impl HealthSnapshot {
     }
 }
 
-/// The state as `/v1/health` spells it (`catching_up`, `storage_error`, ...).
+/// The state as `/v1/health` spells it, for example `catching_up` or `storage_error`.
 pub fn state_name(s: FollowerState) -> String {
     serde_json::to_value(s).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
@@ -824,26 +965,31 @@ pub fn human_secs(s: u64) -> String {
     }
 }
 
-/// Shared handle: the follower writes, the API reads.
+/// Shared handle to the health snapshot: the follower writes, the API reads.
 pub struct HealthState(RwLock<HealthSnapshot>);
 
 impl HealthState {
+    /// A handle holding a fresh [`HealthSnapshot`] for `network`.
     pub fn new(network: &str) -> Self {
         HealthState(RwLock::new(HealthSnapshot::new(network)))
     }
 
+    /// A copy of the current snapshot.
     pub fn snapshot(&self) -> HealthSnapshot {
         self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
+    /// Changes the snapshot in place through `f`.
     pub fn update(&self, f: impl FnOnce(&mut HealthSnapshot)) {
         let mut g = self.0.write().unwrap_or_else(|e| e.into_inner());
         f(&mut g);
     }
 }
 
-/// A 64-bit quantity as a decimal string, as the REST API spells them: a JSON number loses precision above 2^53 in JavaScript
-/// (a supply can reach 2.9e18 base units).
+/// A 64-bit quantity as a decimal string, as the REST API spells them.
+///
+/// A JSON number loses precision above 2^53 in JavaScript, and a supply can reach 2.9e18 base
+/// units.
 mod dec_str {
     use serde::Serializer;
 
@@ -859,15 +1005,21 @@ mod dec_str {
     }
 }
 
-/// A committed fill, as pushed to WebSocket subscribers. `price`, `amount` and `payout` are decimal strings, like every
-/// quantity of the REST API (docs/ops/executor.md, 5.0); `side` and `daa` are numbers.
+/// A committed fill, as pushed to WebSocket subscribers.
+///
+/// `price`, `amount` and `payout` are decimal strings, like every quantity of the REST API
+/// (`docs/ops/executor.md`, 5.0). `side` and `daa` are numbers.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct FillNotice {
+    /// Covenant id of the order.
     pub order: Hash32,
+    /// The token the order trades, if any.
     pub token: Option<Hash32>,
     /// 1: an ask (sell) was filled, 2: a bid (buy) was filled.
     pub side: u8,
-    /// The order's price, sompi per whole token (`null` for a pair order and the conditional kinds).
+    /// The order's price, in sompi per whole token.
+    ///
+    /// It is `null` for a pair order and the conditional kinds.
     #[serde(serialize_with = "dec_str::opt")]
     pub price: Option<i64>,
     /// Base units filled.
@@ -876,26 +1028,37 @@ pub struct FillNotice {
     /// What the maker was paid, sompi (`null` when it is not a payment to the maker).
     #[serde(serialize_with = "dec_str::opt")]
     pub payout: Option<i64>,
+    /// The fill transaction.
     pub txid: Hash32,
+    /// The chain block that accepted it.
     pub block: Hash32,
+    /// DAA score the fill was accepted at.
     pub daa: u64,
 }
 
-/// What one committed batch changed. Published on a broadcast channel after the commit.
+/// What one committed batch changed.
+///
+/// It is published on a broadcast channel after the commit.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IndexEvent {
+    /// Hash of the cursor after the batch.
     pub cursor_hash: Option<Hash32>,
+    /// DAA score of the cursor after the batch.
     pub cursor_daa: u64,
+    /// Chain blocks reverted by the batch.
     pub reverted_blocks: u64,
+    /// Chain blocks added by the batch.
     pub added_blocks: u64,
     /// Covenant ids of orders whose state changed (created, filled, closed, or reverted).
     pub orders: Vec<Hash32>,
     /// Token covenant ids whose books may have changed.
     pub tokens: Vec<Hash32>,
+    /// Fills committed by the batch.
     pub fills: Vec<FillNotice>,
 }
 
 impl IndexEvent {
+    /// Whether the batch changed nothing that subscribers follow.
     pub fn is_empty(&self) -> bool {
         self.reverted_blocks == 0 && self.orders.is_empty() && self.fills.is_empty()
     }
@@ -917,7 +1080,8 @@ mod tests {
             h.status_line(),
             "indexer catching up, 120000 DAA behind the node (about 3 h 20 min), catch-up time: estimating, 7 orders indexed"
         );
-        // the pace of the last minute: how fast the store closes in on the node, and when it will have
+        // The pace of the last minute: how fast the store closes in on the node, and when it will
+        // have.
         h.catch_up = Some(CatchUp { rate_daa_per_sec: 150.0, eta_seconds: Some(8_640) });
         assert_eq!(
             h.status_line(),
@@ -935,7 +1099,7 @@ mod tests {
             h.status_line().starts_with("indexer waiting for the node, ")
                 && h.status_line().ends_with("(getServerInfo: transport: refused)")
         );
-        // a resolver pair: both hosts, their roles and states, replacements and disagreements
+        // A resolver pair: both hosts, their roles and states, replacements and disagreements.
         h.state = FollowerState::Following;
         h.last_error = None;
         h.nodes = vec![
@@ -969,8 +1133,7 @@ mod tests {
         );
     }
 
-    /// A store that began after the oldest history is not a complete book, for good: the health says where its history begins and the
-    /// status line says that older orders are not in it.
+    /// A newer release seen on chain shows in the status line, the health and the metrics.
     #[test]
     fn a_newer_release_on_chain_is_in_the_status_line_the_health_and_the_metrics() {
         let mut h = HealthSnapshot::new("testnet-10");
@@ -990,6 +1153,10 @@ mod tests {
         assert!(h.metrics_text().contains("\nkob_newer_release_seen 1\n"));
     }
 
+    /// A store that began after the oldest history is not a complete book, for good.
+    ///
+    /// The health says where its history begins, and the status line says that older orders are
+    /// not in it.
     #[test]
     fn a_store_that_began_late_says_so() {
         let mut h = HealthSnapshot::new("testnet-10");
@@ -1003,7 +1170,7 @@ mod tests {
         h.history_from_daa = Some(64_000);
         assert!(h.status_line().contains("history from about 60 min ago"), "{}", h.status_line());
         assert!(h.status_line().contains("older orders are not in this store"), "{}", h.status_line());
-        // the start block's score was not known: the line still says it
+        // The start block's score was not known: the line still says it.
         h.history_from_daa = Some(0);
         assert!(h.status_line().contains("history from the start point"), "{}", h.status_line());
         assert_eq!(serde_json::to_value(&h).unwrap()["history_from_daa"], 0);
@@ -1012,17 +1179,18 @@ mod tests {
     #[test]
     fn the_backfill_pace_estimates_when_the_full_book_is_there() {
         let mut p = BackfillPace::default();
-        // one sample: nothing to compare with
+        // One sample: nothing to compare with.
         assert_eq!(p.push(0.0, 360_000, 1_000), (None, None));
-        // the cursor moves 100 DAA per second while the chain moves 10: the lag shrinks by 90 per second
+        // The cursor moves 100 DAA per second while the chain moves 10: the lag shrinks by 90 per
+        // second.
         let (rate, eta) = p.push(10.0, 360_000 - 900, 2_000);
         assert_eq!(rate, Some(100.0));
         assert_eq!(eta, Some(3_990));
-        // a store that does not close in has no estimate
+        // A store that does not close in has no estimate.
         let mut q = BackfillPace::default();
         q.push(0.0, 1_000, 5_000);
         assert_eq!(q.push(10.0, 1_100, 5_100), (Some(10.0), None));
-        // only the last minute counts
+        // Only the last minute counts.
         let mut r = BackfillPace::default();
         r.push(0.0, 10_000_000, 0);
         r.push(100.0, 9_000_000, 10_000_000);
@@ -1049,7 +1217,7 @@ mod tests {
         );
         assert!(b(None, Some(107_000)).status_text().ends_with("full book: estimating (29 h 43 min to index)"));
         assert!(b(None, None).status_text().ends_with(", full book: estimating"));
-        // the health JSON a client reads
+        // The health JSON a client reads.
         let mut h = HealthSnapshot::new("testnet-10");
         assert!(h.book_complete && serde_json::to_value(&h).unwrap().get("backfill").is_none());
         h.book_complete = false;
@@ -1061,8 +1229,9 @@ mod tests {
         );
     }
 
-    /// Audit 2026-11-11 M-4, M-5: what ends `kobd --executor` (a halted follower, a storage error that node errors interrupt, a
-    /// dead API) and what does not (the node away, catching up); the metrics and the status line name it.
+    /// What ends `kobd --executor`: a halted follower, a storage error that node errors
+    /// interrupt, or a dead API. What does not: the node away, or catching up. The metrics and
+    /// the status line name it.
     #[test]
     fn a_halt_or_a_storage_error_is_named_and_ends_the_executor() {
         let mut h = HealthSnapshot::new("testnet-10");
@@ -1078,13 +1247,14 @@ mod tests {
         let m = h.metrics_text();
         assert!(m.contains("kob_indexer_storage_error 1") && m.contains("kob_indexer_halted 1"), "{m}");
         assert_eq!(serde_json::to_value(&h).unwrap()["state"], "storage_error");
-        // a node error between two failed commits keeps it a storage error
+        // A node error between two failed commits keeps it a storage error.
         h.state = FollowerState::NodeUnavailable;
         assert!(h.halted().is_some());
         h.halt_reason = None;
         assert!(h.halted().is_none());
-        // a store halted at a gap is not restarted: the follower moves a pruned gap itself, and a gap it gave up on needs the
-        // operator (a restart would reset the bound of moves, every few minutes)
+        // A store halted at a gap is not restarted. The follower moves a pruned gap itself, and a
+        // gap it gave up on needs the operator, because a restart would reset the bound of moves
+        // every few minutes.
         h.state = FollowerState::Gap;
         h.gap_reason = Some("pruned".into());
         assert!(h.halted().is_none());
@@ -1125,35 +1295,38 @@ mod tests {
         assert!(h.caught_up() && h.not_caught_up().is_none());
     }
 
-    /// The lag tolerance (`max_lag_secs`): `caught_up` stays strict, `within_lag_tolerance` / `not_ready` follow the bound.
+    /// The lag tolerance (`max_lag_secs`).
+    ///
+    /// `caught_up` stays strict, and `within_lag_tolerance` and `not_ready` follow the bound.
     #[test]
     fn within_lag_tolerance_follows_the_bound_and_never_overrides_caught_up() {
         let mut h = HealthSnapshot::new("testnet-10");
         h.cursor_daa = 1_000;
         h.lag_tolerance_daa = 300;
-        // no node position yet: not within, and a reason
+        // No node position yet: not within, and a reason.
         assert!(!h.within_lag_tolerance());
         assert_eq!(h.not_ready().as_deref(), Some("indexer starting, node position unknown"));
         h.node_daa = Some(1_300);
-        // starting / unavailable / gap / stopped never qualify, however small the lag
+        // Starting, unavailable, gap and stopped never qualify, however small the lag.
         for s in [FollowerState::Starting, FollowerState::NodeUnavailable, FollowerState::Gap, FollowerState::Stopped] {
             h.state = s;
             assert!(!h.within_lag_tolerance() && h.not_ready().is_some(), "{s:?}");
         }
-        // catching up (or following above the follower's own 100 DAA) within the tolerance: ready, but not caught up
+        // Catching up, or following above the follower's own 100 DAA, within the tolerance: ready,
+        // but not caught up.
         h.state = FollowerState::CatchingUp;
         assert!(h.within_lag_tolerance() && h.not_ready().is_none());
         assert!(!h.caught_up(), "caught_up stays strict");
         h.node_daa = Some(1_301);
         assert!(!h.within_lag_tolerance());
         assert_eq!(h.not_ready().as_deref(), Some("indexer catching_up, 301 DAA behind the node"));
-        // the strict gate (tolerance 0): only `following`
+        // The strict gate (tolerance 0): only `following`.
         h.lag_tolerance_daa = 0;
         h.node_daa = Some(1_001);
         assert!(!h.within_lag_tolerance() && h.not_ready().is_some());
         h.state = FollowerState::Following;
         assert!(h.within_lag_tolerance() && h.not_ready().is_none());
-        // the metrics carry both
+        // The metrics carry both.
         let m = h.metrics_text();
         assert!(
             m.contains("kob_indexer_caught_up 1")
@@ -1166,12 +1339,13 @@ mod tests {
     #[test]
     fn health_and_metrics_name_the_roles_of_the_process() {
         let roles = |h: &HealthSnapshot| serde_json::to_value(h).unwrap()["roles"].clone();
-        // a bare indexer (`kobd --indexer`) is the Indexer alone
+        // A bare indexer (`kobd --indexer`) is the Indexer alone.
         let mut h = HealthSnapshot::new("testnet-10");
         assert_eq!(roles(&h), serde_json::json!(["indexer"]));
         let m = h.metrics_text();
         assert!(m.contains("kob_role{role=\"indexer\"} 1") && m.contains("kob_role{role=\"executor\"} 0"), "{m}");
-        // `kobd --executor` over a full store is the Executor and the Indexer; over a lean store the Executor alone
+        // `kobd --executor` over a full store is the Executor and the Indexer. Over a lean store
+        // it is the Executor alone.
         let both = crate::matcher::run::Roles { matcher: true, keeper: true };
         h.roles = both.health_roles(false);
         assert_eq!(roles(&h), serde_json::json!(["executor", "indexer"]));
@@ -1181,7 +1355,7 @@ mod tests {
         assert_eq!(roles(&h), serde_json::json!(["executor"]));
         let m = h.metrics_text();
         assert!(m.contains("kob_role{role=\"executor\"} 1") && m.contains("kob_role{role=\"indexer\"} 0"), "{m}");
-        // the keepers alone are still the Executor
+        // The keepers alone are still the Executor.
         h.roles = crate::matcher::run::Roles { matcher: false, keeper: true }.health_roles(true);
         assert_eq!(roles(&h), serde_json::json!(["executor"]));
     }
