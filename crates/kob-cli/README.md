@@ -1,19 +1,23 @@
 # kob (kob-cli)
 
-`kob` is the KOB command line: read order books, trade, create tokens and follow the live feed. It builds the same
-transactions as the web wallet.
+`kob` is the KOB command line: read order books, trade, create tokens and follow the live feed. It
+builds the same transactions as the web wallet.
 
-> **Open review.** KOB has had no external audit. Interfaces, option names and JSON shapes can still change. Try things on
-> testnet-10 first, and run every signing command with `--dry-run` before you sign.
+> **Open review.** KOB has had no external audit. Interfaces, option names and JSON shapes can still
+> change. Try things on testnet-10 first, and run every signing command with `--dry-run` before you
+> sign.
 
-Details (planner defaults, units, every option, the `--json` shapes, all exit codes): [REFERENCE.md](REFERENCE.md).
-Options of one command: `kob <command> --help` (or `kob help <command>`; `kob token --help` and `kob registry --help` list their
-subcommands). `kob --help` groups the commands (read, trade, tokens and registry) and lists the options they share.
+Details (planner defaults, units, every option, the `--json` shapes, all exit codes):
+[REFERENCE.md](REFERENCE.md). Options of one command: `kob <command> --help` (or
+`kob help <command>`; `kob token --help` and `kob registry --help` list their subcommands).
+`kob --help` groups the commands (read, trade, tokens and registry) and lists the options they
+share.
 
 ## Install
 
-Download `kob-<version>-<network>-<target>` from the [releases](https://github.com/RossKU/kob/releases) (`.zip` on Windows,
-`.tar.gz` elsewhere), check it against the release's `SHA256SUMS`, and unpack it. Or build it:
+Download `kob-<version>-<network>-<target>` from the
+[releases](https://github.com/RossKU/kob/releases) (`.zip` on Windows, `.tar.gz` elsewhere), check
+it against the release's `SHA256SUMS`, and unpack it. Or build it:
 
 ```sh
 cargo build --release --locked --bin kob    # target/release/kob (kob.exe on Windows)
@@ -44,8 +48,9 @@ kob orders --testnet --key-file ~/.kob/maker.key
 kob cancel <covenant id> --testnet --key-file ~/.kob/maker.key
 ```
 
-Every signing command prints the plan and the decoded transaction first. It signs only with `--yes` or after you type
-`yes` at a terminal; without a terminal and without `--yes` it refuses. `--dry-run` cannot be combined with `--yes`.
+Every signing command prints the plan and the decoded transaction first. It signs only with `--yes`
+or after you type `yes` at a terminal. Without a terminal and without `--yes` it refuses.
+`--dry-run` cannot be combined with `--yes`.
 
 ## Configuration
 
@@ -59,15 +64,18 @@ Every signing command prints the plan and the decoded transaction first. It sign
 | Fee | `--fee-rate N`, `--priority-fee` | | 100 sompi per gram, relay minimum |
 | Local state, cache | | `KOB_STATE_DIR`, `KOB_CACHE_DIR` | per-user state and cache directories |
 
-- **Network.** Every plan and prompt names the network. The node must run it, or nothing is planned or signed.
-  The default indexer comes from `contracts/deploy/<network>/deployment.json` (`indexer_url`). Builds from before the web app moved to
-  Cloudflare Pages default to `https://kob.kaspa.ag/indexer` on testnet-10, which is gone, and builds from before the production domains
-  default to `https://kob-api.kaspa.ag`, which is the mainnet indexer now: such a build fails on testnet-10. Pass
-  `--indexer https://kob-api-tn10.kaspa.ag` or set `KOB_INDEXER_URL=https://kob-api-tn10.kaspa.ag`, or install a current build.
-- **Own node.** JSON wRPC `ws://host:18110` (mainnet) or `:18210` (testnet-10); Borsh `ws://host:17110` / `:17210`. Put a URL
-  with a password in `KOB_NODE_WRPC`, not on the command line. `KOB_RESOLVERS` replaces the resolver list.
-- **Fees.** `--priority-fee` also pays for the storage mass (the web app's "Pay the priority fee"). Use it when blocks are
-  contended; the CLI prints a `note:` on stderr when they are. See [Fees](REFERENCE.md#fees).
+- **Network.** Every plan and prompt names the network. The node must run it, or nothing is planned
+  or signed. The default indexer comes from `contracts/deploy/<network>/deployment.json`
+  (`indexer_url`). An older build may default to `https://kob.kaspa.ag/indexer`, which is not
+  served, or to `https://kob-api.kaspa.ag`, which is the mainnet indexer. Such a build fails on
+  testnet-10. Pass `--indexer https://kob-api-tn10.kaspa.ag` or set
+  `KOB_INDEXER_URL=https://kob-api-tn10.kaspa.ag`, or install a current build.
+- **Own node.** JSON wRPC `ws://host:18110` (mainnet) or `:18210` (testnet-10); Borsh
+  `ws://host:17110` / `:17210`. Put a URL with a password in `KOB_NODE_WRPC`, not on the command
+  line. `KOB_RESOLVERS` replaces the resolver list.
+- **Fees.** `--priority-fee` also pays for the storage mass (the web app's "Pay the priority fee").
+  Use it when blocks are contended. The CLI prints a `note:` on stderr when they are. See
+  [Fees](REFERENCE.md#fees).
 
 ### Keys
 
@@ -76,15 +84,18 @@ One rule for every command that takes a key:
 - `--key-file PATH`: a file holding the 64-hex secret.
 - `--key-env NAME`: the environment variable holding it.
 - With neither, the environment variable `KOB_KEY`. `--key-file` wins over the variable.
-- The key is never printed, and a command line that contains the key's hex anywhere is refused (arguments are visible to
-  other users: `ps`, shell history). The trading commands refuse `--key` altogether.
-- The CLI does not check the file's permissions. Protect it yourself: `chmod 600` on Unix, an owner-only ACL on Windows.
-- Commands that sign: `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `token create`, `recover --cancel`,
-  `order sweep|cancel`. `orders` and `balances` use only the public key (or `--maker KEY|ADDRESS`); the rest need no key.
-  `kob token create --dry-run` signs only when a key is named with `--key-file` or `--key-env`.
-- Older spellings of `kob token create`, `kob recover` and `kob order`: `--key file:PATH` (now `--key-file PATH`),
-  `--key env:NAME` (now `--key-env NAME`) and `--key HEX`. They still work and print a deprecation warning on stderr; a key
-  as `HEX` is visible to other users and is deprecated.
+- The key is never printed. A command line that contains the hex of the key anywhere is refused,
+  because arguments are visible to other users (`ps`, shell history). The trading commands refuse
+  `--key` altogether.
+- The CLI does not check the file's permissions. Protect it yourself: `chmod 600` on Unix, an
+  owner-only ACL on Windows.
+- Commands that sign: `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`,
+  `token create`, `recover --cancel`, `order sweep|cancel`. `orders` and `balances` use only the
+  public key (or `--maker KEY|ADDRESS`). The rest need no key. `kob token create --dry-run` signs
+  only when a key is named with `--key-file` or `--key-env`.
+- Deprecated spellings of `kob token create`, `kob recover` and `kob order`: `--key file:PATH` (use
+  `--key-file PATH`), `--key env:NAME` (use `--key-env NAME`) and `--key HEX`. They still work and
+  print a deprecation warning on stderr. A key as `HEX` is visible to other users.
 
 ## Commands
 
@@ -109,12 +120,12 @@ One rule for every command that takes a key:
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof |
 | `kob registry validate\|verify-genesis\|programs\|add-program` | token registry and token-program tools |
 
-`<ID>` is an order's covenant id (64 hex). `<TOKEN>` is a ticker or a covenant id. A ticker that names more than one
-token is refused: give the covenant id.
+`<ID>` is an order's covenant id (64 hex). `<TOKEN>` is a ticker or a covenant id. A ticker that
+names more than one token is refused: give the covenant id.
 
 ## Units
 
-Every amount needs a unit; a bare `2.5` is refused. Nothing is rounded.
+Every amount needs a unit. A bare `2.5` is refused. Nothing is rounded.
 
 | What | Units | Example |
 |---|---|---|
@@ -130,7 +141,8 @@ Prices are all-in: a sell receives `price - tip`, a buy pays `price + tip`.
 
 ## Order kinds
 
-`kob place <KIND> --token T --side buy|sell --amount A [options]`. Add `--quote B` to any kind for a pair order.
+`kob place <KIND> --token T --side buy|sell --amount A [options]`. Add `--quote B` to any kind for a
+pair order.
 
 | Kind | Required | What it is |
 |---|---|---|
@@ -151,11 +163,13 @@ Prices are all-in: a sell receives `price - tip`, a buy pays `price + tip`.
 | `repeat-ifd`, `repeat-ifo` | as `ifd` / `ifo` | re-enters after every take-profit (`--repeat-count K`) |
 | `pair-limit` | `--quote`, `--price` | a limit on a pair (price in B per whole A) |
 
-Defaults match the web wallet: minimum fill worth 10 KAS, 1 KAS carrier per covenant UTXO, tip 0 (a pair order, `--quote`, with no `--tip` carries the pair's keeper tip over its amount). Every option per kind:
-[REFERENCE.md](REFERENCE.md#order-kinds-every-option).
+Defaults match the web wallet: a minimum fill worth 10 KAS, a 1 KAS carrier per covenant UTXO and
+tip 0. A pair order (`--quote`) with no `--tip` carries the keeper tip of the pair over its amount.
+Every option per kind: [REFERENCE.md](REFERENCE.md#order-kinds-every-option).
 
-**Market sells need an extra flag.** The auction starts at the indexer's best price, which nothing independent checks. A
-`market` or `close` sell needs `--ack-market-start` on its own command line (`--yes` is not enough), or `--floor-price P`.
+**Market sells need an extra flag.** The auction starts at the indexer's best price, which nothing
+independent checks. A `market` or `close` sell needs `--ack-market-start` on its own command line
+(`--yes` is not enough), or `--floor-price P`.
 
 ## Examples
 
@@ -197,7 +211,8 @@ kob balances --maker kaspatest:qq... --testnet
 
 ## Watching the live feed
 
-`kob watch` follows the executor's WebSocket and prints one line per event. It needs no key and signs nothing.
+`kob watch` follows the executor's WebSocket and prints one line per event. It needs no key and
+signs nothing.
 
 ```sh
 kob watch fills [--token TOKEN]                 # every fill, or one token's
@@ -207,15 +222,18 @@ kob watch health                                # indexer progress; a health lin
 ```
 
 - The address comes from the indexer: `https://host/path` becomes `wss://host/path/v1/ws`.
-- It reconnects by itself (1 s up to 30 s). Fills during a gap are not replayed. Ctrl-C ends it (exit 0).
-- `--json` prints NDJSON: one JSON document per line. Events go to stdout; notes and errors to stderr.
+- It reconnects by itself (1 s up to 30 s). Fills during a gap are not replayed. Ctrl-C ends it
+  (exit 0).
+- `--json` prints NDJSON: one JSON document per line. Events go to stdout. Notes and errors go to
+  stderr.
 
 ## JSON output and exit codes
 
-- `--json` makes a command print **one JSON document** on stdout: the plan, the decoded transaction, the new covenant ids,
-  and the submission in its `result` key (`null` until submitted).
-- Amounts are decimal strings in base units or sompi; ids are lower-case hex. Do not parse text meant for people.
-  `kob cancel A B` prints one document per id; `kob watch --json` one per line.
+- `--json` makes a command print **one JSON document** on stdout: the plan, the decoded transaction,
+  the new covenant ids, and the submission in its `result` key (`null` until submitted).
+- Amounts are decimal strings in base units or sompi. Ids are lower-case hex. Do not parse text
+  meant for people. `kob cancel A B` prints one document per id, and `kob watch --json` one per
+  line.
 
 | Exit | Meaning |
 |---|---|
@@ -223,27 +241,30 @@ kob watch health                                # indexer progress; a health lin
 | 1 | the command ran but did not do its work: node / indexer / plan error, or a refusal to sign (no `--yes`, or a declined prompt) |
 | 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` on a trading command, `--yes` with `--dry-run` |
 
-`--help` prints on stdout and exits 0; a usage printed because of a mistake (`kob place` with no arguments) goes to stderr and
-exits 2. The reason is on stderr (`error: ...` or `not signed: ...`) and, with `--json`, in the `issues` array. Other commands
-differ a little: see [exit codes](REFERENCE.md#exit-codes) and every
-[JSON key and type](REFERENCE.md#json-output).
+`--help` prints on stdout and exits 0. A usage printed because of a mistake (`kob place` with no
+arguments) goes to stderr and exits 2. The reason is on stderr (`error: ...` or `not signed: ...`)
+and, with `--json`, in the `issues` array. Other commands differ a little. See
+[exit codes](REFERENCE.md#exit-codes) and every [JSON key and type](REFERENCE.md#json-output).
 
 ## Bots and scripts
 
-The CLI is the supported way for a program not written in Rust to place, amend, cancel or read orders:
+The CLI is the supported way for a program not written in Rust to place, amend, cancel or read
+orders:
 
 1. Run `kob ... --json --dry-run` and read the plan.
-2. Run `kob ... --json --yes` as a child process. Give the key with `--key-file` or `KOB_KEY`, never on the command line.
-3. Check the exit code first: when nothing could be planned, stdout is empty and the reason is on stderr.
+2. Run `kob ... --json --yes` as a child process. Give the key with `--key-file` or `KOB_KEY`, never
+   on the command line.
+3. Check the exit code first: when nothing could be planned, stdout is empty and the reason is on
+   stderr.
 4. Then parse stdout. `result.status` is `"submitted"` and `result.txid` is the transaction id.
 
-`crates/kob-wasm` and `web/src/kob` are internal to the web app and have no stability promise. The CLI's options and JSON
-are a pre-release interface too.
+`crates/kob-wasm` and `web/src/kob` are internal to the web app and have no stability promise. The
+CLI's options and JSON are a pre-release interface too.
 
 ## Token commands
 
-`kob token create` creates a fixed-supply KCC-20 token in two transactions: a preparation that declares the metadata
-(KCC-23), then the genesis.
+`kob token create` creates a fixed-supply KCC-20 token in two transactions: a preparation that
+declares the metadata (KCC-23), then the genesis.
 
 ```sh
 kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 1000000000000 \
@@ -251,23 +272,28 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   --network testnet-10 --key-file $HOME/.kob/maker.key --out-dir ./tusd-creation --dry-run
 ```
 
-- Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one `--fund-utxo` (amount in sompi),
-  and `--supply` and/or `--holder`. The supply is in base units (here 1,000,000 TUSD), all to the funding key by default.
-- Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or `KOB_NODE_WRPC` names one).
-- `--program public-mint` (default) is what kascov.io lists as KCC-20; `--program 3x3` is cheaper per transfer but other
-  indexers do not recognise it.
-- Files go to `--out-dir` (a submitting run without it: `./kob-create-<id>`). If the genesis did not go out:
-  `kob token resume <DIR>`.
+- Required: `--name`, `--ticker` (2 to 12 of A-Z 0-9), `--decimals` (0 to 18), at least one
+  `--fund-utxo` (amount in sompi), and `--supply` and/or `--holder`. The supply is in base units
+  (here 1,000,000 TUSD), all to the funding key by default.
+- Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or
+  `KOB_NODE_WRPC` names one).
+- `--program public-mint` (default) is what kascov.io lists as KCC-20. `--program 3x3` is cheaper
+  per transfer, but other indexers do not recognise it.
+- Files go to `--out-dir` (a submitting run without it: `./kob-create-<id>`). If the genesis did not
+  go out: `kob token resume <DIR>`.
 - `kob token verify-declaration <launch_proof.json>` checks a launch proof from any source.
-- Help: `kob token create --help` (`kob token --help` lists the subcommands). More: [details](REFERENCE.md#token-commands-details).
+- Help: `kob token create --help` (`kob token --help` lists the subcommands). More:
+  [details](REFERENCE.md#token-commands-details).
 
 ## Finding tokens
 
 `kob tokens [SEARCH] [--all] [--refresh] [--json]` lists tokens. It needs no key and no node.
 
-- By default: every token the indexer knows (an order was placed, or the registry lists it), with covenant id, decimals,
-  program, open asks and bids, and the indexer's warnings (such as `live_mint_authority` or `freeze`).
-- `--all` adds every token kascov.io lists for the network. Their tickers and decimals are the tokens' own claims.
+- By default: every token the indexer knows (an order was placed, or the registry lists it), with
+  covenant id, decimals, program, open asks and bids, and the indexer's warnings (such as
+  `live_mint_authority` or `freeze`).
+- `--all` adds every token kascov.io lists for the network. Their tickers and decimals are the
+  tokens' own claims.
 - `SEARCH` is a ticker prefix (any case) or a covenant-id prefix.
-- KOB makes no judgement of a token: there is no "verified" or "official" column. Tickers collide; the covenant id is the
-  identity. More: [details](REFERENCE.md#kob-tokens-details).
+- KOB makes no judgement of a token: there is no "verified" or "official" column. Tickers collide.
+  The covenant id is the identity. More: [details](REFERENCE.md#kob-tokens-details).
