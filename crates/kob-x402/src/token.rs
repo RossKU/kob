@@ -1,24 +1,32 @@
 //! KCC-20 token profile (`kcc20`) of `exact`.
 //!
-//! A payment is one version-1 transaction in which the payer spends KCC-20 UTXOs (and optionally plain
-//! P2PK KAS UTXOs for the fee) and the merchant receives exactly `amount` token units in exactly one
-//! output whose script is the token program with the merchant's state. The verifier
+//! A payment is one version-1 transaction. The payer spends KCC-20 UTXOs, and optionally plain P2PK
+//! KAS UTXOs for the fee. The merchant receives exactly `amount` token units in exactly one output,
+//! whose script is the token program with the merchant's state.
 //!
-//! * never trusts the payer's view of the chain: every input is resolved from the trusted
-//!   [`crate::chain::ChainView`] and classified from the *trusted* script public key;
-//! * classifies a token input only if its redeem script (the last push of the signature script) hashes
-//!   to the trusted script, matches the allowlisted program's prefix and suffix, decodes to a
-//!   [`Kcc20State`] the profile accepts (P2PK owner, borrowing disabled, pinned extension) and the UTXO
-//!   carries the token's covenant id;
-//! * recomputes every output it lets through (merchant output, payer token change, payer KAS change)
-//!   from the offer and the input states and rejects anything else;
-//! * requires the authorization to be a payload commitment (`kob-x402-payload-commitment-v1`): the
-//!   digest is embedded in the transaction payload, so every input authorizer's SIGHASH_ALL (the
-//!   KCC-20 owner witnesses, the funding key) covers it. Nothing here assumes one P2PK signer;
-//! * runs every input through the script engine ([`crate::common::check_economics_and_scripts`]).
+//! # Verification
 //!
-//! Custody (`extra.token.custody`) is enforced against the allowlist: an offer cannot describe an
-//! issuer-controlled token as unconditional, and issuer-controlled tokens are only served when the
+//! The verifier follows these rules.
+//!
+//! - It never trusts the payer's view of the chain. Every input is resolved from the trusted
+//!   [`crate::chain::ChainView`] and classified from the trusted script public key.
+//! - It classifies a token input only if all of these hold. The redeem script (the last push of the
+//!   signature script) hashes to the trusted script and matches the allowlisted program's prefix
+//!   and suffix. It decodes to a [`Kcc20State`] the profile accepts (P2PK owner, borrowing
+//!   disabled, pinned extension). The UTXO carries the token's covenant id.
+//! - It recomputes every output it lets through (merchant output, payer token change, payer KAS
+//!   change) from the offer and the input states, and rejects anything else.
+//! - It requires the authorization to be a payload commitment (`kob-x402-payload-commitment-v2`).
+//!   The digest is embedded in the transaction payload, so every input authorizer's SIGHASH_ALL
+//!   covers it, namely the KCC-20 owner witnesses and the funding key. Nothing here assumes one
+//!   P2PK signer.
+//! - It runs every input through the script engine
+//!   ([`crate::common::check_economics_and_scripts`]).
+//!
+//! # Custody
+//!
+//! Custody (`extra.token.custody`) is enforced against the allowlist. An offer cannot describe an
+//! issuer-controlled token as unconditional. Issuer-controlled tokens are only served when the
 //! policy opts in (`docs/spec/x402-kcc20-profile.md`).
 
 use std::collections::BTreeSet;
@@ -49,10 +57,11 @@ use crate::wire::{
 /// `extra.token.family` of this profile.
 pub const TOKEN_FAMILY: &str = "kcc20";
 
-// ------------------------------------------------------------------------------------------------ offer
+// ------------------------------------------------------------------------------------- offer
 
-/// The facts of a `kcc20` offer, parsed and re-derived without any policy (the payer SDK uses this
-/// too). Everything here comes from the requirement, nothing from a payload.
+/// The facts of a `kcc20` offer, parsed and re-derived without any policy.
+///
+/// The payer SDK uses this too. Everything here comes from the requirement, nothing from a payload.
 #[derive(Clone, Debug)]
 pub struct TokenOffer {
     /// KCC-20 covenant id (`asset`).
@@ -93,8 +102,10 @@ pub fn p2pk_owner_of_address(pay_to: &Address) -> Result<[u8; 32]> {
     Ok(pay_to.payload.as_slice().try_into().expect("32 bytes"))
 }
 
-/// Parses and validates the structure of a `kcc20` requirement: asset, `extra.token`, `payTo`, and
-/// recomputes `tokenScriptPublicKey`. No allowlist, no policy (see [`check_offer_policy`]).
+/// Parses and validates the structure of a `kcc20` requirement.
+///
+/// It checks asset, `extra.token` and `payTo`, and recomputes `tokenScriptPublicKey`. It applies no
+/// allowlist and no policy, see [`check_offer_policy`].
 pub fn parse_offer(offered: &PaymentRequirements) -> Result<TokenOffer> {
     let network = offered.network()?;
     let amount = offered.amount_u64()?;
@@ -152,9 +163,12 @@ pub fn parse_offer(offered: &PaymentRequirements) -> Result<TokenOffer> {
     })
 }
 
-/// Checks a parsed offer against the verifier policy and returns the allowlisted token: allowlisted,
-/// custody equal to the allowlist's (and issuer-controlled only if the policy opts in), program and
-/// extension commitment equal to the reviewed ones, carrier at least the policy floor.
+/// Checks a parsed offer against the verifier policy and returns the allowlisted token.
+///
+/// - The token is allowlisted.
+/// - Its custody equals the allowlist's, and is issuer-controlled only if the policy opts in.
+/// - Its program and extension commitment equal the reviewed ones.
+/// - The carrier is at least the policy floor.
 pub fn check_offer_policy<'a>(policy: &'a Policy, offer: &TokenOffer) -> Result<&'a AllowedToken> {
     let allowed = policy
         .tokens
@@ -206,7 +220,7 @@ pub fn check_offer_policy<'a>(policy: &'a Policy, offer: &TokenOffer) -> Result<
     Ok(allowed)
 }
 
-// ------------------------------------------------------------------------------------- script parsing
+// ---------------------------------------------------------------------------- script parsing
 
 /// One item of a push-only script.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -274,16 +288,20 @@ fn is_p2sh(spk: &ScriptPublicKey) -> bool {
     spk.version() == 0 && s.len() == 35 && s[0] == 0xaa && s[1] == 0x20 && s[34] == 0x87
 }
 
-/// Best-effort decode of the `next_states` argument of a KCC-20 leader signature script (the KCC-1 `State[]` record
-/// array of the token program's `transfer` entry, decoded strictly by [`kob_protocol::kcc20::transfer_next_states`]).
-/// Used ONLY to name the reason of a rejection precisely (underpayment, overpayment, borrow-enabled output); acceptance
-/// is always by recomputation, and the script engine binds these states to the real outputs. Every KCC-20 program KOB
-/// knows has the same `transfer` signature and state layout, so the reference program's ABI decodes them all.
+/// Best-effort decode of the `next_states` argument of a KCC-20 leader signature script.
+///
+/// The argument is the KCC-1 `State[]` record array of the token program's `transfer` entry,
+/// decoded strictly by [`kob_protocol::kcc20::transfer_next_states`].
+///
+/// It is used only to name the reason of a rejection precisely, such as underpayment, overpayment
+/// or a borrow-enabled output. Acceptance is always by recomputation, and the script engine binds
+/// these states to the real outputs. Every KCC-20 program KOB knows has the same `transfer`
+/// signature and state layout, so the reference program's ABI decodes them all.
 pub fn leader_next_states(signature_script: &[u8]) -> Option<Vec<Kcc20State>> {
     kob_protocol::kcc20::transfer_next_states(template(TemplateId::Kcc20Ref), signature_script)
 }
 
-// ------------------------------------------------------------------------------------------ verifier
+// ------------------------------------------------------------------------------- verifier
 
 /// A classified token input.
 struct TokenInput {
@@ -306,7 +324,7 @@ fn bad_out(msg: impl Into<String>) -> X402Error {
     X402Error::payload(Diag::InvalidKaspaExactPaymentOutput, msg)
 }
 
-/// Classifies one input from its TRUSTED entry (never from the payer's hint).
+/// Classifies one input from its trusted entry, never from the payer's hint.
 fn classify_input(i: usize, sig_script: &[u8], entry: &UtxoEntry, offer: &TokenOffer, tpl: &Template) -> Result<InputKind> {
     let spk = &entry.script_public_key;
     if let Some(key) = p2pk_key(spk) {
@@ -352,8 +370,9 @@ fn classify_input(i: usize, sig_script: &[u8], entry: &UtxoEntry, offer: &TokenO
     Ok(InputKind::Token(state))
 }
 
-/// Names why the merchant output does not carry the offered state, from the leader's `next_states`
-/// (diagnostic only; the rejection itself is decided by the recomputed script comparison).
+/// Names why the merchant output does not carry the offered state, from the leader's `next_states`.
+///
+/// It is diagnostic only. The recomputed script comparison decides the rejection.
 fn merchant_mismatch(tx: &Transaction, leader: usize, token_out_rank: usize, offer: &TokenOffer) -> X402Error {
     let generic = || bad_out("the payment output does not carry the offered token state");
     let Some(states) = leader_next_states(&tx.inputs[leader].signature_script) else { return generic() };
@@ -438,8 +457,9 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
         }
     }
     let payer_keys: BTreeSet<[u8; 32]> = owners.iter().copied().chain(plain_keys.iter().copied()).collect();
-    // every payer signature (funding P2PK inputs and the token owners' witnesses) is SIGHASH_ALL: checked on the
-    // signature scripts BEFORE the engine, which accepts NONE / SINGLE / ANYONECANPAY signatures too (step 8)
+    // Every payer signature is SIGHASH_ALL, namely the funding P2PK inputs and the token owners'
+    // witnesses. This is checked on the signature scripts before the engine runs, because the
+    // engine also accepts NONE, SINGLE and ANYONECANPAY signatures (step 8).
     crate::sighash::check_payer_inputs(
         tx,
         &entries,
@@ -463,7 +483,8 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
         o.covenant.is_some_and(|c| c.authorizing_input as usize == leader && c.covenant_id.as_bytes() == offer.asset)
     };
     let pay_out = &tx.outputs[pay_idx];
-    // rank of the payment output among the token outputs (outputs bound to a covenant), for diagnostics
+    // Rank of the payment output among the token outputs (outputs bound to a covenant), for
+    // diagnostics.
     let rank = tx.outputs[..pay_idx].iter().filter(|o| o.covenant.is_some()).count();
     if pay_out.script_public_key != offer.token_spk {
         return Err(merchant_mismatch(tx, leader, rank, &offer));
@@ -488,7 +509,7 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
             continue;
         }
         if o.covenant.is_some() {
-            // a token output: only the payer's own change
+            // A token output is only the payer's own change.
             if !binding_ok(o) {
                 return Err(bad_out(format!("output {j}: a covenant binding other than the token under the leader input")));
             }
@@ -526,7 +547,7 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
         }
     }
 
-    // 6. fee, mass, every input through the script engine (KCC-20 owner witnesses, funding signatures)
+    // 6. fee, mass, and every input through the script engine (owner witnesses, funding signatures)
     let fee = check_economics_and_scripts(ctx, tx, &entries)?;
 
     // 7. the verified fact sheet
@@ -571,8 +592,10 @@ pub fn verify_kcc20(ctx: &VerifyCtx, offered: &PaymentRequirements, payload: &Pa
     })
 }
 
-/// The payload-commitment authorization: version, no signature material, recomputed digest equal to
-/// the stated one, digest committed in the transaction payload, expiry window. Returns the expiry (ms).
+/// Checks the payload-commitment authorization and returns its expiry in unix ms.
+///
+/// It checks the version, that no signature material is present, that the recomputed digest equals
+/// the stated one, that the digest is committed in the transaction payload, and the expiry window.
 fn check_authorization(
     ctx: &VerifyCtx,
     env: &Envelope,

@@ -5,32 +5,41 @@ use kob_protocol::registry::{Family, Registry};
 
 use crate::wire::{parse_hash32, Network};
 
-/// Resource bounds (`kaspa-exact-v2.md`, "Resource bounds"). Checked as early as possible; every
-/// failure is fail-closed.
+/// Resource bounds (`kaspa-exact-v2.md`, "Resource bounds").
+///
+/// They are checked as early as possible, and every failure is fail-closed.
 #[derive(Clone, Debug)]
 pub struct Limits {
     /// Bytes of the `payload.transaction` JSON text.
     pub max_tx_json_bytes: usize,
     pub max_inputs: usize,
-    /// Distinct scripts of inputs other than P2SH spends one payment may ask the chain to resolve (a node resolves each
-    /// through a lookup of its whole address). A P2SH input names its script by the redeem script it carries.
+    /// Distinct scripts of inputs other than P2SH spends that one payment may ask the chain to
+    /// resolve.
+    ///
+    /// A node resolves each one through a lookup of its whole address. A P2SH input names its
+    /// script by the redeem script it carries.
     pub max_input_scripts: usize,
     pub max_outputs: usize,
-    /// Bytes of one signature script (a KCC-20 leader sigscript is about 3.1 KB, the 16/16 program more).
+    /// Bytes of one signature script. A KCC-20 leader sigscript is about 3.1 KB, and the 16/16
+    /// program needs more.
     pub max_signature_script_bytes: usize,
     /// Bytes of the tx payload.
     pub max_payload_bytes: usize,
-    /// Largest acceptable fee in sompi (verifier policy; the payer's own limit is client-side).
+    /// Largest acceptable fee in sompi. This is verifier policy, and the payer's own limit is
+    /// client-side.
     pub max_fee_sompi: u64,
     /// Smallest acceptable KAS amount in sompi. Application policy, not consensus (the binding
     /// defines no universal floor); 0 disables it.
     pub min_amount_sompi: u64,
     /// Smallest KAS value of a merchant token output ("carrier") an offer may quote.
     pub min_carrier_sompi: u64,
-    /// Largest KAS value of a merchant token output ("carrier") an offer may quote, and of the payer's own token
-    /// change output. The carrier is funded by the payer (a token payment moves the merchant's carrier out of
-    /// the payer's KAS), so an offer quoting one base unit with a 500 KAS carrier would drain the payer: the
-    /// payer's preflight and both builders refuse anything above this bound. Must be at least `min_carrier_sompi`.
+    /// Largest KAS value of a merchant token output ("carrier") an offer may quote, and of the
+    /// payer's own token change output.
+    ///
+    /// The payer funds the carrier, because a token payment moves the merchant's carrier out of the
+    /// payer's KAS. An offer quoting one base unit with a 500 KAS carrier would drain the payer, so
+    /// the payer's preflight and both builders refuse anything above this bound. It must be at
+    /// least `min_carrier_sompi`.
     pub max_carrier_sompi: u64,
     /// Bytes of a facilitator request body.
     pub max_body_bytes: usize,
@@ -54,12 +63,15 @@ impl Default for Limits {
     }
 }
 
-/// Custody class of a token (the founder's point on forum topic 15 post #20: acceptance is not
-/// unconditional custody when an issuer can freeze or seize).
+/// Custody class of a token.
+///
+/// Accepting a token payment is not unconditional custody when an issuer can freeze or seize.
+/// `docs/spec/x402-kcc20-profile.md`, "Custody classes", defines the classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Custody {
-    /// The token program was semantically reviewed to have no admin, freeze, seize, mint or burn path
-    /// that can touch a holder's balance: once the payment is final, the merchant owns the units.
+    /// The token program was semantically reviewed to have no admin, freeze, seize, mint or burn
+    /// path that can touch a holder's balance. Once the payment is final, the merchant owns the
+    /// units.
     Unconditional,
     /// The program (or its issuer through an extension) can reach a holder's balance. Accepting it
     /// is an explicit merchant risk and is never presented as final custody.
@@ -84,19 +96,26 @@ impl Custody {
 
 /// One token the facilitator accepts as payment.
 ///
-/// Two roles: a **merchant asset** (the `kcc20` profile, and the `kcc20` gain of a swap-and-pay offer)
-/// needs [`Family::Kcc20`]; a swap-and-pay **pay asset** may be of either family (a KRON token, a
-/// KaspaCom-template KCC-20 token, ...). Nothing else distinguishes tokens: the program is any pinned
-/// token program of the family.
+/// A token has one of two roles.
+///
+/// - A merchant asset is the `kcc20` profile asset or the `kcc20` gain of a swap-and-pay offer. It
+///   needs [`Family::Kcc20`].
+/// - A swap-and-pay pay asset may be of either family, for example a KRON token or a
+///   KaspaCom-template KCC-20 token.
+///
+/// Nothing else distinguishes tokens. The program is any pinned token program of the family.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllowedToken {
     /// KIP-20 covenant id (the x402 `asset`).
     pub covenant_id: [u8; 32],
-    /// The pinned token program (its template hash is what the verifier requires of every token input).
+    /// The pinned token program.
+    ///
+    /// Its template hash is what the verifier requires of every token input.
     pub program: TemplateId,
-    /// Token family (must be the program's family; [`Family::Kcc20`] by default, see [`AllowedToken::new`]).
+    /// Token family. It must be the program's family and is [`Family::Kcc20`] by default, see
+    /// [`AllowedToken::new`].
     pub family: Family,
-    /// Extension commitment; all zero for a KRON token (it has no such field).
+    /// Extension commitment. It is all zero for a KRON token, which has no such field.
     pub extension_commitment: [u8; 32],
     pub custody: Custody,
     pub ticker: String,
@@ -164,15 +183,24 @@ impl TokenAllowlist {
         self.tokens.iter()
     }
 
-    /// The default allowlist of a registry: every token entry (either family) that is `verified` (its covenant id and template
-    /// hash were checked against a chain UTXO: a fact, not an endorsement) and whose program is pinned in this build and on the
-    /// registry's strict list (`reviewed`: a program this build supports). KOB lists no token; a merchant who wants a narrower
-    /// set builds its own allowlist ([`TokenAllowlist::insert`]). The custody class
-    /// is the program's: [`Custody::Unconditional`] only when its registry `capabilities` are empty (the profile's
-    /// `unconditional` means no admin, freeze, seize, mint or burn path: freeze, seize and blacklist reach balances, mint authority,
-    /// public mint and burn dilute or destroy supply), else [`Custody::IssuerControlled`].
-    /// KRON tokens (no extension commitment: all zero) are only usable as a swap-and-pay pay asset,
-    /// see [`AllowedToken`]. Tokens of a program this build does not support (pending review) are not accepted as x402 payment.
+    /// The default allowlist of a registry.
+    ///
+    /// It holds every token entry, of either family, that meets both conditions:
+    ///
+    /// - It is `verified`: its covenant id and template hash were checked against a chain UTXO.
+    ///   That is a fact, not an endorsement.
+    /// - Its program is pinned in this build and on the registry's strict list (`reviewed`).
+    ///
+    /// KOB lists no token. A merchant who wants a narrower set builds its own allowlist
+    /// ([`TokenAllowlist::insert`]).
+    ///
+    /// The custody class is the program's. It is [`Custody::Unconditional`] only when the registry
+    /// `capabilities` are empty, and [`Custody::IssuerControlled`] otherwise. The profile's
+    /// `unconditional` means no admin, freeze, seize, mint or burn path.
+    ///
+    /// KRON tokens have no extension commitment, so they are only usable as a swap-and-pay pay
+    /// asset, see [`AllowedToken`]. Tokens of a program this build does not support are not
+    /// accepted as x402 payment.
     pub fn from_registry(reg: &Registry) -> Self {
         let mut list = TokenAllowlist::new();
         for t in reg.tokens.iter().filter(|t| t.verified) {
@@ -208,21 +236,27 @@ impl TokenAllowlist {
 pub struct Policy {
     pub network: Network,
     pub limits: Limits,
-    /// DAA depth below the virtual tip that `confirmed` finality requires (default 100, about 10 s).
+    /// DAA depth below the virtual tip that `confirmed` finality requires. The default is 100,
+    /// about 10 s.
     pub confirmations_daa: u64,
-    /// Tokens accepted by the `kcc20` profile (KCC-20 family) and as swap-and-pay payer assets (either
-    /// family) / merchant assets (KCC-20 family).
+    /// Tokens accepted by the `kcc20` profile (KCC-20 family).
+    ///
+    /// They are also accepted as swap-and-pay payer assets (either family) and merchant assets
+    /// (KCC-20 family).
     pub tokens: TokenAllowlist,
-    /// Accept [`Custody::IssuerControlled`] tokens at all (default off).
+    /// Whether [`Custody::IssuerControlled`] tokens are accepted at all. Off by default.
     pub allow_issuer_controlled: bool,
-    /// Weakest finality this verifier settles on (default `accepted`; the offer may ask for more).
+    /// Weakest finality this verifier settles on. The default is `accepted`, and an offer may ask
+    /// for more.
     pub min_finality: crate::wire::Finality,
     /// Serve swap-and-pay (`extra.route`).
     pub swap_enabled: bool,
 }
 
 impl Policy {
-    /// Defaults for a network: 100 DAA confirmation depth, no tokens, swap on (the payment identifier is always required).
+    /// Defaults for a network: 100 DAA confirmation depth, no tokens and swap on.
+    ///
+    /// The payment identifier is always required.
     pub fn new(network: Network) -> Self {
         Policy {
             network,
