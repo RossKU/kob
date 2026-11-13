@@ -83,7 +83,7 @@ pub const TAKER: u8 = 4;
 pub const MATCHER: u8 = 5;
 /// Key number of the keeper.
 pub const KEEPER: u8 = 6;
-/// Key number of the founder.
+/// A spare key number, kept in step with `kob-protocol/tests/common`.
 pub const FOUNDER: u8 = 7;
 
 /// The secret key of test key `n`.

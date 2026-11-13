@@ -271,7 +271,7 @@ impl<'a> MakeWriter<'a> for FileSink {
     }
 }
 
-/// The time of a log line: UTC to the millisecond (`2026-11-11 08:44:28.529Z`).
+/// The time of a log line: UTC to the millisecond (`2000-01-02 03:04:05.678Z`).
 struct UtcMillis;
 
 impl tracing_subscriber::fmt::time::FormatTime for UtcMillis {
