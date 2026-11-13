@@ -33,6 +33,8 @@ struct Tier {
     calls: AtomicUsize,
     boost: AtomicU64,
     fake_sink: AtomicBool,
+    /// Added to its sink blue score (`getSinkBlueScore`).
+    sink_boost: AtomicU64,
 }
 
 impl Tier {
@@ -43,6 +45,7 @@ impl Tier {
             calls: AtomicUsize::new(0),
             boost: AtomicU64::new(0),
             fake_sink: AtomicBool::new(false),
+            sink_boost: AtomicU64::new(0),
         })
     }
 
@@ -85,7 +88,7 @@ impl ChainSource for Tier {
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
         self.gate()?;
-        self.node.sink_blue_score().await
+        Ok(self.node.sink_blue_score().await? + self.sink_boost.load(Ordering::Relaxed))
     }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.gate()?;
@@ -631,4 +634,71 @@ async fn a_node_seen_for_the_first_time_does_not_count_as_advancing() {
     m.check_health().await;
     kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
     assert_eq!(kobd::rpc::judge::alarm_of(ua), None, "it moved again");
+}
+
+/// A node of the fallback pair that over-reports its sink blue score cannot keep the indexer off its primary. The probe
+/// compares the primary's sink with the lowest one the pair vouches for (`ChainSource::vouched_sink_blue_score`), not
+/// with the pair's authority alone, whose claim would make the primary look behind forever.
+#[tokio::test]
+async fn a_fallback_node_over_reporting_its_sink_does_not_keep_the_primary_away() {
+    use kobd::rpc::multi::{MultiNode, NodeSpec};
+    let _g = pair_serial().await;
+    let c = Ctx::new();
+    grow(&c, 40, 0);
+    let node = c.hs.node.clone();
+    let (own, fa, fb) = (Tier::new(&node), Tier::new(&node), Tier::new(&node));
+    let spec =
+        |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check, may_lead: true };
+    let primary = Arc::new(MultiNode::new(vec![(spec("ws://10.8.0.1:18210", false), own.clone())], own.clone()));
+    let fallback = Arc::new(MultiNode::new(
+        vec![(spec("ws://10.8.0.2:18210", false), fa.clone()), (spec("ws://10.8.0.3:18210", true), fb.clone())],
+        fa.clone(),
+    ));
+    let source = Arc::new(Failover::new(primary, fallback, "ws://10.8.0.1:18210", "resolver", "testnet-10", policy()));
+    let ingest = Arc::new(Mutex::new(Ingest::new(open_memory("testnet-10").unwrap(), processor(), None).with_config(wide_window())));
+    let health = Arc::new(HealthState::new("testnet-10"));
+    let (events, _) = tokio::sync::broadcast::channel(64);
+    let cfg = FollowerConfig {
+        network: "testnet-10".into(),
+        start: StartMode::Hash(node.anchor()),
+        poll_interval: Duration::from_millis(1),
+        backoff: Duration::from_millis(1),
+        max_backoff: Duration::from_millis(5),
+        min_confirmations: None,
+        max_walkback_blocks: 1_000,
+        status_refresh: Duration::from_millis(0),
+        caught_up_daa: 100,
+        batch_initial_blue: 8,
+        batch_target: Duration::from_secs(30),
+        fetch_parallel: 1,
+        prefetch_max_bytes: 256 << 20,
+        prefetch_min_lag_blue: 0,
+        prefetch_initial_blocks: 6,
+        authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
+        authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
+    };
+    let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
+    step_until(&follower, "first sync", || health.snapshot().cursor_hash == Some(node.tip())).await;
+    own.down.store(true, Ordering::Relaxed);
+    grow(&c, 10, 100_000);
+    step_until(&follower, "on the fallback", || source.active() == 1 && health.snapshot().cursor_hash == Some(node.tip())).await;
+    // the pair's authority claims a sink far ahead of everyone's; the configured node comes back
+    fa.sink_boost.store(10_000, Ordering::Relaxed);
+    own.down.store(false, Ordering::Relaxed);
+    step_until(&follower, "back on the configured node", || source.active() == 0).await;
+    let src = source.status();
+    assert!(src.last_switch_reason.as_deref().unwrap().contains("healthy again"), "{src:?}");
+}
+
+/// Steps `follower` (the background checks run between the steps) until `done`, or panics after 2,000 steps.
+async fn step_until<S: ChainSource>(follower: &Follower<S>, what: &str, done: impl Fn() -> bool) {
+    for _ in 0..2_000 {
+        if done() {
+            return;
+        }
+        let o = follower.step().await;
+        assert!(!matches!(o, StepOutcome::Gap(_) | StepOutcome::Halted(_)), "{o:?}");
+        tokio::time::sleep(Duration::from_millis(2)).await;
+    }
+    panic!("{what}: not reached in 2000 steps");
 }

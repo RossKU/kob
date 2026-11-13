@@ -31,8 +31,10 @@
 //!
 //! While the fallback serves, a background probe of the primary runs every `probe_every`. The probe
 //! wants the right network, a synced node and a node that knows the cursor. Its sink may be at most
-//! `max_behind_blue` behind the sink of the fallback. After `return_after_probes` healthy probes in
-//! a row the primary is the chain source again.
+//! `max_behind_blue` behind the sink of the fallback. That is the lowest sink both nodes of the
+//! pair report (`ChainSource::vouched_sink_blue_score`), so one public node that over-reports its
+//! sink cannot keep the indexer off its primary. After `return_after_probes` healthy probes in a
+//! row the primary is the chain source again.
 //!
 //! # Settling
 //!
@@ -280,7 +282,7 @@ impl<S: ChainSource> Inner<S> {
             }
             if let Some(o) = against {
                 let mine = node.sink_blue_score().await.map_err(|e| format!("getSinkBlueScore: {e}"))?;
-                let theirs = self.tiers[o].sink_blue_score().await.map_err(|e| format!("the {}'s sink: {e}", NAMES[o]))?;
+                let theirs = self.tiers[o].vouched_sink_blue_score().await.map_err(|e| format!("the {}'s sink: {e}", NAMES[o]))?;
                 if mine.saturating_add(self.policy.max_behind_blue) < theirs {
                     return Err(format!("its sink is {} blue score behind the {}'s", theirs - mine, NAMES[o]));
                 }
@@ -469,6 +471,9 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
         self.inner.call(|s| async move { s.sink_blue_score().await }).await.1
+    }
+    async fn vouched_sink_blue_score(&self) -> Result<u64, RpcError> {
+        self.inner.call(|s| async move { s.vouched_sink_blue_score().await }).await.1
     }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.inner.call(move |s| async move { s.block_blue_score(hash).await }).await.1

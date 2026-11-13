@@ -1770,6 +1770,22 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
         self.primary().sink_blue_score().await
     }
+    /// The lower of the authority's sink blue score and the cross-checking node's.
+    ///
+    /// Without a cross-checking node that answers within [`CROSS_CHECK_STEP_TIMEOUT`], it is the
+    /// authority's.
+    async fn vouched_sink_blue_score(&self) -> Result<u64, RpcError> {
+        let Some(j) = self.cross_checker() else { return self.primary().sink_blue_score().await };
+        let (own, other) = tokio::join!(
+            self.primary().sink_blue_score(),
+            tokio::time::timeout(CROSS_CHECK_STEP_TIMEOUT, self.nodes[j].sink_blue_score())
+        );
+        let own = own?;
+        Ok(match other {
+            Ok(Ok(o)) => own.min(o),
+            _ => own,
+        })
+    }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
         self.primary().block_blue_score(hash).await
     }

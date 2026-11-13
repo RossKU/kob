@@ -146,6 +146,14 @@ pub trait ChainSource: Send + Sync + 'static {
     fn block_exists(&self, hash: Hash32) -> impl Future<Output = Result<bool, RpcError>> + Send;
     /// Blue score of the node's sink (`getSinkBlueScore`): bounds a VSPC batch (`rpc::window`).
     fn sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send;
+    /// The sink blue score that every node vouching for this source's chain reaches: the lowest of
+    /// their answers. Another source is compared with it (`failover`), so that one node that
+    /// over-reports its sink cannot make that source look behind.
+    ///
+    /// The default is [`ChainSource::sink_blue_score`], the one node's own.
+    fn vouched_sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send {
+        self.sink_blue_score()
+    }
     /// Blue score of a block the node knows (`None`: the node does not know it).
     fn block_blue_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send;
     /// DAA score of a block the node knows, from its header's `daaScore`. `None` means the node
