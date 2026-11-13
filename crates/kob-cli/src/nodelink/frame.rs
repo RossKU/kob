@@ -1,18 +1,23 @@
-//! The workflow-rpc message frame of the node's Borsh wRPC (the same code as the executor's `rpc::borsh`, framing only): a request
-//! is `borsh(Option<u64> id, RpcApiOps op)` followed by the body as a Borsh byte vector, an answer
-//! `borsh(Option<u64> id, ServerMessageKind kind, Option<RpcApiOps> op)` followed by the Borsh `Result` of the call (a
-//! `ServerError` when the kind is `Error`).
+//! The workflow-rpc message frame of the Borsh wRPC of the node.
+//!
+//! This is the framing of `rpc::borsh` of the executor, and nothing else.
+//! - A request is `borsh(Option<u64> id, RpcApiOps op)` followed by the body as a Borsh byte
+//!   vector.
+//! - An answer is `borsh(Option<u64> id, ServerMessageKind kind, Option<RpcApiOps> op)` followed
+//!   by the Borsh `Result` of the call, which is a `ServerError` when the kind is `Error`.
 
 use ::borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_rpc_core::api::ops::RpcApiOps;
 
-/// workflow-rpc `ServerMessageKind`.
+/// The workflow-rpc `ServerMessageKind` values.
 const KIND_SUCCESS: u8 = 0;
 const KIND_ERROR: u8 = 1;
 const KIND_NOTIFICATION: u8 = 0xff;
 
-/// A request frame of an already encoded body: `borsh(Option<u64> id, op)`, then the body as a Borsh byte vector
-/// (workflow-serializer `Payload`: u32 length, then the bytes).
+/// A request frame of an already encoded body.
+///
+/// It is `borsh(Option<u64> id, op)`, then the body as a Borsh byte vector, which is the
+/// workflow-serializer `Payload` of a u32 length and the bytes.
 pub fn frame_bytes(id: u64, op: RpcApiOps, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + payload.len());
     BorshSerialize::serialize(&(Some(id), op), &mut out).expect("a Vec never fails to grow");
@@ -20,7 +25,9 @@ pub fn frame_bytes(id: u64, op: RpcApiOps, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The bytes of a workflow-serializer `Payload` (a Borsh byte vector: u32 length, then the bytes), without copying them.
+/// The bytes of a workflow-serializer `Payload`, without copying them.
+///
+/// A `Payload` is a Borsh byte vector: a u32 length, then the bytes.
 pub fn payload(body: &[u8]) -> Result<&[u8], String> {
     let (len, rest) = body.split_at_checked(4).ok_or("Borsh answer body shorter than its length")?;
     let len = u32::from_le_bytes(len.try_into().expect("four bytes")) as usize;
@@ -34,12 +41,15 @@ pub enum Reply<'a> {
     Ok { id: Option<u64>, body: &'a [u8] },
     /// The node refused request `id`, with its message.
     Err { id: Option<u64>, message: String },
-    /// A notification (never subscribed to; skipped).
+    /// A notification, which the client never subscribed to and skips.
     Notification,
 }
 
-/// Split an answer frame into header and body: `borsh(Option<u64> id, u8 kind, Option<RpcApiOps> op)`, then for a success
-/// the Borsh `Result` of the call (Ok: the body, a byte vector holding the answer), for an error the `ServerError`.
+/// Splits an answer frame into its header and body.
+///
+/// The header is `borsh(Option<u64> id, u8 kind, Option<RpcApiOps> op)`. A success then carries
+/// the Borsh `Result` of the call, whose `Ok` holds the answer as a byte vector. An error
+/// carries the `ServerError`.
 pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     let mut rest = buf;
     let id = <Option<u64> as BorshDeserialize>::deserialize(&mut rest).map_err(|e| format!("Borsh answer header: {e}"))?;
@@ -48,10 +58,12 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     if kind == KIND_NOTIFICATION {
         return Ok(Reply::Notification);
     }
-    // the op the answer is about: not needed (the id says which request it answers), but it must be read past
+    // The op of the answer is not needed, because the id says which request it answers, but it
+    // must be read past.
     <Option<RpcApiOps> as BorshDeserialize>::deserialize(&mut rest).map_err(|e| format!("Borsh answer header: {e}"))?;
     match kind {
-        // a success carries a Borsh `Result<body, ServerError>` (workflow-rpc `ServerResult`): tag 1 Ok, 0 Err
+        // A success carries a Borsh `Result<body, ServerError>` (workflow-rpc `ServerResult`).
+        // The tag is 1 for `Ok` and 0 for `Err`.
         KIND_SUCCESS => match rest.split_first() {
             Some((1, body)) => Ok(Reply::Ok { id, body }),
             Some((0, err)) => Ok(Reply::Err { id, message: server_error_text(err) }),
@@ -62,7 +74,9 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     }
 }
 
-/// The text of a workflow-rpc `ServerError` (a Borsh enum; the node's RPC errors travel as its `Text` variant).
+/// The text of a workflow-rpc `ServerError`, which is a Borsh enum.
+///
+/// RPC errors of the node travel as its `Text` variant.
 pub fn server_error_text(body: &[u8]) -> String {
     const UNIT: [&str; 10] = [
         "connection is closed",
@@ -81,11 +95,11 @@ pub fn server_error_text(body: &[u8]) -> String {
     };
     match tag {
         t if (t as usize) < UNIT.len() => UNIT[t as usize].into(),
-        // NotificationDeserialize, RespDeserialize, Text, WebSocketError: one string
+        // NotificationDeserialize, RespDeserialize, Text and WebSocketError hold one string.
         10 | 11 | 13 | 14 => {
             <String as BorshDeserialize>::deserialize(&mut rest).unwrap_or_else(|_| format!("node error (variant {tag})"))
         }
-        // Data: bytes
+        // Data holds bytes.
         12 => <Vec<u8> as BorshDeserialize>::deserialize(&mut rest)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_else(|_| "node error (data)".into()),
@@ -93,8 +107,10 @@ pub fn server_error_text(body: &[u8]) -> String {
     }
 }
 
-/// An answer frame as a node sends it (tests, mock nodes): `id`, the call's `op`, and the response body already serialised by
-/// workflow-serializer (`Serializer::serialize`).
+/// An answer frame as a node sends it, for tests and mock nodes.
+///
+/// `response` is the response body already serialised by workflow-serializer
+/// (`Serializer::serialize`).
 #[cfg(test)]
 pub fn answer_frame(id: u64, op: RpcApiOps, response: &[u8]) -> Vec<u8> {
     let mut out = vec![];
@@ -104,7 +120,7 @@ pub fn answer_frame(id: u64, op: RpcApiOps, response: &[u8]) -> Vec<u8> {
     out
 }
 
-/// A refusal frame (tests, mock nodes): a `ServerError::Text`.
+/// A refusal frame as a node sends it, for tests and mock nodes: a `ServerError::Text`.
 #[cfg(test)]
 pub fn error_frame(id: u64, op: RpcApiOps, text: &str) -> Vec<u8> {
     let mut out = vec![];

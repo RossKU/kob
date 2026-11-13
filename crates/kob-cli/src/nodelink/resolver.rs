@@ -1,18 +1,25 @@
-//! Public Kaspa nodes through the Kaspa resolvers (the same list and protocol as the executor's `rpc::resolver`): the
-//! resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`) answer `GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh` with
-//! `{"uid": .., "url": "wss://.../wrpc/borsh"}`. The public nodes serve Borsh wRPC only. Some resolvers are down at any time:
-//! they are tried in a random order, each with a short timeout, until one answers. A client uses a pair of nodes on two
-//! different hosts ([`super::pair`]).
+//! Public Kaspa nodes through the Kaspa resolvers.
+//!
+//! This is the list and the protocol of `rpc::resolver` of the executor. A resolver (see
+//! `rpc/wrpc/client/Resolvers.toml` of rusty-kaspa) answers
+//! `GET {resolver}/v2/kaspa/{network}/tls/wrpc/borsh` with
+//! `{"uid": .., "url": "wss://.../wrpc/borsh"}`.
+//! The public nodes serve Borsh wRPC only.
+//!
+//! Some resolvers are always down, so they are tried in a random order, each with a short
+//! timeout, until one answers. A client uses a pair of nodes on two different hosts, see
+//! [`super::pair`].
 
 use std::time::Duration;
 
 use rand::seq::SliceRandom;
 use serde_json::Value;
 
-/// The `--node` value (and the default) that selects public nodes.
+/// The `--node` value, and the default, that selects public nodes.
 pub const RESOLVER: &str = "resolver";
 
-/// The resolvers of rusty-kaspa `rpc/wrpc/client/Resolvers.toml` (the enabled groups; the executor's list).
+/// The enabled resolvers of `rpc/wrpc/client/Resolvers.toml` of rusty-kaspa, as the executor
+/// lists them.
 pub const RESOLVERS: &[&str] = &[
     "https://eric.kaspa.stream",
     "https://maxim.kaspa.stream",
@@ -32,14 +39,18 @@ pub const RESOLVERS: &[&str] = &[
     "https://luke.kaspa.blue",
 ];
 
-/// One resolver's answer may take this long.
+/// How long one resolver's answer may take.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Rounds over every resolver before a node on a host already in use is accepted (the resolvers spread their answers over the
-/// nodes, so a second round usually names another host).
+/// Rounds over every resolver before a node on a host already in use is accepted.
+///
+/// The resolvers spread their answers over the nodes, so a second round usually names another
+/// host.
 pub const ROUNDS: usize = 3;
 
-/// The network a resolver URL stands for: `resolver:<network>` (the node setting the CLI keeps once the network is known).
+/// The network that a resolver URL stands for, from `resolver:<network>`.
+///
+/// This is the node setting the command line keeps once the network is known.
 pub fn network_of(url: &str) -> Option<&str> {
     url.strip_prefix("resolver:").filter(|n| !n.is_empty())
 }
@@ -54,7 +65,9 @@ pub fn query_path(network: &str) -> String {
     format!("/v2/kaspa/{network}/tls/wrpc/borsh")
 }
 
-/// The node URL of a resolver's answer (`{"uid": .., "url": ..}`): a `wss://` URL (TLS was asked for).
+/// The node URL of a resolver's answer `{"uid": .., "url": ..}`.
+///
+/// It must be a `wss://` URL, because the query asked for TLS.
 pub fn parse_answer(v: &Value) -> Result<String, String> {
     let url = v.get("url").and_then(Value::as_str).ok_or_else(|| format!("not a node descriptor: {}", short(&v.to_string())))?;
     if !url.starts_with("wss://") || super::client::target(url).is_err() {
@@ -63,7 +76,9 @@ pub fn parse_answer(v: &Value) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-/// The host of a node URL (what "a different node" compares); the URL itself when it has none.
+/// The host of a node URL, which is what "a different node" compares.
+///
+/// A URL without a host stands for itself.
 pub fn host(url: &str) -> String {
     super::client::target(url).map(|t| t.host).unwrap_or_else(|_| url.to_string())
 }
@@ -86,9 +101,11 @@ pub struct Resolved {
     pub resolver: String,
 }
 
-/// Asks the resolvers in `order` for a node of `network`, one after the other, up to [`ROUNDS`] times over the list, until one
-/// names a node whose host is not in `avoid_hosts`; when every answer is on such a host, the first of them (there is no other).
-/// `get(resolver, path)` is the HTTP GET.
+/// Asks the resolvers in `order` for a node of `network`, one after the other.
+///
+/// It goes over the list up to [`ROUNDS`] times, until one resolver names a node whose host is
+/// not in `avoid_hosts`. When every answer is on such a host, the first of them is returned,
+/// because there is no other. `get(resolver, path)` is the HTTP GET.
 pub fn resolve_in(
     order: &[String],
     network: &str,
@@ -114,7 +131,7 @@ pub fn resolve_in(
                 Err(_) => {}
             }
         }
-        // no resolver answers at all: another round asks the same ones in vain
+        // When no resolver answers at all, another round would ask the same ones in vain.
         if !answered {
             break;
         }
@@ -122,8 +139,10 @@ pub fn resolve_in(
     fallback.ok_or_else(|| format!("no Kaspa resolver named a {network} node ({})", failures.join("; ")))
 }
 
-/// [`resolve_in`] over [`RESOLVERS`] (or `$KOB_RESOLVERS`, comma-separated resolver URLs, for an operator who runs a private
-/// resolver over its own nodes) in a random order, with real HTTP.
+/// [`resolve_in`] over [`RESOLVERS`] in a random order, with real HTTP.
+///
+/// `$KOB_RESOLVERS` replaces the list. It holds comma-separated resolver URLs, for an operator
+/// who runs a private resolver over its own nodes.
 pub fn resolve(network: &str, avoid_hosts: &[String]) -> Result<Resolved, String> {
     let mut order: Vec<String> = match std::env::var("KOB_RESOLVERS") {
         Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
@@ -160,7 +179,7 @@ mod tests {
     #[test]
     fn the_first_answering_resolver_wins_and_other_hosts_are_preferred() {
         let order: Vec<String> = ["https://r1", "https://r2", "https://r3"].iter().map(|s| s.to_string()).collect();
-        // r1 is down, r2 answers
+        // r1 is down, and r2 answers.
         let mut asked = vec![];
         let r = resolve_in(&order, "mainnet", &[], |r, p| {
             asked.push(r.to_string());
@@ -174,11 +193,12 @@ mod tests {
         .unwrap();
         assert_eq!((r.resolver.as_str(), r.url.as_str()), ("https://r2", "wss://r2.example/kaspa/mainnet/wrpc/borsh"));
         assert_eq!(asked, ["https://r1", "https://r2"]);
-        // the host already in use is skipped while another resolver names another
+        // The host in use is skipped while another resolver names another host.
         let r = resolve_in(&order, "mainnet", &["r1.example".to_string()], |r, _| Ok((200, node(&format!("{}.example", &r[8..])))))
             .unwrap();
         assert_eq!(r.resolver, "https://r2");
-        // every resolver names the host in use: it is taken (there is no other), after the rounds
+        // When every resolver names the host in use, it is taken after the rounds, as there is no
+        // other.
         let mut n = 0;
         let r = resolve_in(&order, "mainnet", &["same.example".to_string()], |_, _| {
             n += 1;
@@ -186,7 +206,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!((r.resolver.as_str(), n), ("https://r1", 3 * ROUNDS));
-        // nobody answers: one round, every failure named
+        // When nobody answers, there is one round and every failure is named.
         let mut n = 0;
         let e = resolve_in(&order, "mainnet", &[], |_, _| {
             n += 1;
@@ -195,7 +215,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(n, 3);
         assert!(e.contains("no Kaspa resolver named a mainnet node") && e.contains("https://r3: down"), "{e}");
-        // an HTTP error is a failure too
+        // An HTTP error is a failure too.
         let e = resolve_in(&order[..1], "mainnet", &[], |_, _| Ok((503, json!({"error": "busy"})))).unwrap_err();
         assert!(e.contains("HTTP 503"), "{e}");
     }

@@ -1,25 +1,30 @@
-//! Every node call over the node's Borsh wRPC encoding, for the command line's JSON-shaped client (the same code as the
-//! executor's `rpc::bridge`, which carries its JSON clients over Borsh; the public nodes serve Borsh only).
+//! Every node call over the Borsh wRPC encoding, for the JSON-shaped client of the command line.
 //!
-//! Public Kaspa nodes (the resolver's, `rpc::resolver`) serve Borsh wRPC only, and an own node's Borsh port answers the same
-//! calls in a fraction of the bytes. The clients keep building their requests and reading their answers as the JSON wRPC
-//! `params` they always did; this module carries them over Borsh with the node's own types (`kaspa-rpc-core`, the release of
-//! the node): the JSON parameters are deserialised into the call's request type (serde, the very conversion the node's JSON
-//! wRPC server makes) and Borsh-encoded; the Borsh answer is decoded into the call's response type and serialised back to
-//! JSON (serde, what the node's JSON server sends). Both directions are the node's own serde, so a client sees the same JSON
-//! over either encoding (tests below). Only the calls the command line makes are carried.
+//! This is the same code as `rpc::bridge` of the executor. Public Kaspa nodes serve Borsh wRPC
+//! only, and the Borsh port of an own node answers the same calls in a fraction of the bytes. The
+//! clients keep building requests and reading answers as JSON wRPC `params`, and this module
+//! carries them over Borsh with the types of the node (`kaspa-rpc-core`):
+//! - The JSON parameters are deserialised into the request type of the call, as the JSON wRPC
+//!   server of the node does, and then Borsh-encoded.
+//! - The Borsh answer is decoded into the response type and serialised back to JSON, as the JSON
+//!   server sends it.
 //!
-//! An endpoint is Borsh when its URL path ends in `/borsh` (`wss://host/kaspa/mainnet/wrpc/borsh`, what the resolver
-//! returns), see [`is_borsh_url`]; any other URL is JSON.
+//! Both directions use the serde of the node, so a client sees the same JSON over either
+//! encoding. Only the calls that the command line makes are carried.
+//!
+//! An endpoint is Borsh when the path of its URL ends in `/borsh`, such as
+//! `wss://host/kaspa/mainnet/wrpc/borsh` from the resolver. See [`is_borsh_url`].
 
 use kaspa_rpc_core::api::ops::RpcApiOps;
 use kaspa_rpc_core::model::*;
 use serde_json::Value;
 use workflow_serializer::prelude::{Deserializer, Serializer};
 
-/// Whether `url` names a Borsh wRPC endpoint: its path (before any query) ends in `/borsh` (the public nodes'
-/// `.../wrpc/borsh`), or it has no path and a node's default Borsh port (rusty-kaspa v2.1.0 `default_borsh_rpc_port`: 17110
-/// mainnet, 17210 testnet, 17510 simnet, 17610 devnet; `--rpclisten-borsh=default`). Every other URL is JSON wRPC.
+/// Whether `url` names a Borsh wRPC endpoint.
+///
+/// That is a path (before any query) that ends in `/borsh`, or no path and a default Borsh port
+/// of a node: 17110 mainnet, 17210 testnet, 17510 simnet or 17610 devnet. Every other URL is
+/// JSON wRPC.
 pub fn is_borsh_url(url: &str) -> bool {
     let base = url.split(['?', '#']).next().unwrap_or(url).trim_end_matches('/');
     let Some((_, rest)) = base.split_once("://") else { return false };
@@ -29,15 +34,21 @@ pub fn is_borsh_url(url: &str) -> bool {
     !rest.contains('/') && rest.rsplit_once(':').is_some_and(|(_, port)| matches!(port, "17110" | "17210" | "17510" | "17610"))
 }
 
-/// A request encoded once: its op and its Borsh body; [`Encoded::frame`] adds the header of a request id.
+/// A request encoded once: its op and its Borsh body.
+///
+/// [`Encoded::frame`] adds the header with the request id.
 #[derive(Debug, Clone)]
 pub struct Encoded {
+    /// The operation the request calls.
     pub op: RpcApiOps,
+    /// The Borsh encoding of the request.
     pub body: Vec<u8>,
 }
 
 impl Encoded {
-    /// The request frame for request `id` (workflow-rpc: `borsh(Option<u64> id, op)`, then the body as a byte vector).
+    /// The request frame for request `id`.
+    ///
+    /// It is `borsh(Option<u64> id, op)`, then the body as a byte vector.
     pub fn frame(&self, id: u64) -> Vec<u8> {
         super::frame::frame_bytes(id, self.op, &self.body)
     }
@@ -101,8 +112,10 @@ mod tests {
         out
     }
 
-    /// The node's side of a request: the frame's body decodes into the request type the node reads, and that request is the
-    /// JSON parameters the client sent (serde both ways, as the node's JSON server would read them).
+    /// The node's side of a request.
+    ///
+    /// The body of the frame must decode into the request type that the node reads, and that
+    /// request must equal the JSON parameters that the client sent.
     fn node_reads<T: Deserializer + serde::Serialize>(method: &str, params: Value) -> Value {
         let e = encode(method, &params).unwrap_or_else(|err| panic!("{method}: {err}"));
         let frame = e.frame(7);
@@ -142,22 +155,22 @@ mod tests {
         let addr = "kaspatest:qz484dy4edqk52xx6srdd4a6dcwp7euxw86fl43ve2wm8umqts20kyujkrssm";
         let r = node_reads::<GetUtxosByAddressesRequest>("getUtxosByAddresses", json!({"addresses": [addr]}));
         assert_eq!(r["addresses"][0], addr);
-        // a transaction as the CLI submits it (kob_protocol::issue::rpc_transaction_json)
+        // A transaction as the command line submits it.
         let tx = sample_tx();
         let tx_json = kob_protocol::issue::rpc_transaction_json(&tx);
         let r = node_reads::<SubmitTransactionRequest>("submitTransaction", json!({"transaction": tx_json, "allowOrphan": false}));
         let back: RpcTransaction = serde_json::from_value(r["transaction"].clone()).unwrap();
         let back = kaspa_consensus_core::tx::Transaction::try_from(back).unwrap();
         assert_eq!(back.id(), tx.id(), "the node reads the very transaction");
-        // what the client does not send correctly is refused here, before the wire
+        // A request that the client builds wrongly is refused here, before the wire.
         assert!(encode("getUtxosByAddresses", &json!({"addresses": ["nonsense"]}))
             .unwrap_err()
             .contains("getUtxosByAddresses parameters"));
         assert!(encode("getPeerAddresses", &json!({})).unwrap_err().contains("no Borsh encoding"));
     }
 
-    /// Answers decode to the JSON the node's JSON wRPC sends (the response type's serde), so every parser of the client reads them
-    /// unchanged.
+    /// Answers decode to the JSON that the JSON wRPC of the node sends, so every parser of the
+    /// client reads them unchanged.
     #[test]
     fn answers_decode_to_the_json_wrpc_shape() {
         let entries = vec![RpcUtxosByAddressesEntry {
@@ -176,7 +189,7 @@ mod tests {
         assert_eq!(v, serde_json::to_value(&utxos).unwrap());
         assert_eq!(v["entries"][0]["outpoint"]["transactionId"], H1);
         assert_eq!(v["entries"][0]["utxoEntry"]["amount"], 7_000);
-        // what the client reads from it
+        // What the client reads from the answer.
         let parsed = crate::wrpc::parse_utxo_entries(&v).unwrap();
         assert_eq!((parsed[0].amount, parsed[0].index, parsed[0].daa), (7_000, 2, 99));
 
@@ -200,7 +213,7 @@ mod tests {
         assert_eq!(crate::wrpc::normalize_network(v["network"].as_str().unwrap()), "mainnet");
         assert_eq!(v["virtualDaaScore"], 777);
 
-        // a body shorter than its length is refused, an unknown method too
+        // A body shorter than its length is refused, and so is an unknown method.
         assert!(decode("getServerInfo", &[9, 0, 0, 0, 1]).is_err());
         assert!(decode("getPeerAddresses", &body(&submitted)).is_err());
         assert_eq!(METHODS.len(), 5);

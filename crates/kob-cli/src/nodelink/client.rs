@@ -1,5 +1,7 @@
-//! A blocking Borsh wRPC connection: the calls of the JSON client (`wrpc::Conn`), carried over the node's Borsh encoding
-//! ([`super::bridge`]) on a `ws://` or `wss://` socket. The public nodes the resolvers name serve this encoding only.
+//! A blocking Borsh wRPC connection over a `ws://` or `wss://` socket.
+//!
+//! It carries the calls of the JSON client (`wrpc::Conn`) over the Borsh encoding of the node,
+//! see [`super::bridge`]. The public nodes that the resolvers name serve this encoding only.
 
 use std::time::Duration;
 
@@ -29,7 +31,9 @@ pub struct Target {
     pub url: String,
 }
 
-/// Split a `ws://` / `wss://` URL (default ports 80 / 443; an IPv6 host in brackets).
+/// Splits a `ws://` or `wss://` URL into its parts.
+///
+/// The default ports are 80 and 443, and an IPv6 host is in brackets.
 pub fn target(url: &str) -> Result<Target, String> {
     let bad = |what: &str| format!("node {}: {what}", shown(url));
     let (secure, rest) = if let Some(r) = url.strip_prefix("wss://") {
@@ -84,7 +88,8 @@ pub struct BorshConn {
 }
 
 impl BorshConn {
-    /// Connect to a Borsh endpoint (`wss://host/kaspa/mainnet/wrpc/borsh`, or an own node's `ws://host:17110`).
+    /// Connects to a Borsh endpoint, such as `wss://host/kaspa/mainnet/wrpc/borsh` or the
+    /// `ws://host:17110` of an own node.
     pub fn connect(url: &str, timeout: Duration) -> Result<BorshConn, WrpcError> {
         let t = target(url).map_err(WrpcError::Socket)?;
         let socket = |e: String| WrpcError::Socket(format!("node {}: {e}", shown(url)));
@@ -110,7 +115,7 @@ impl BorshConn {
         }
     }
 
-    /// Send `method` with the JSON `params` of the JSON wRPC and return the answer as the JSON `params` of that wRPC.
+    /// Sends `method` with its JSON wRPC `params` and returns the answer as JSON wRPC `params`.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, WrpcError> {
         let enc = bridge::encode(method, &params).map_err(WrpcError::Protocol)?;
         let id = self.next_id;
@@ -121,7 +126,7 @@ impl BorshConn {
                 Message::Binary(bytes) => match parse_reply(&bytes[..]).map_err(WrpcError::Protocol)? {
                     Reply::Ok { id: Some(i), body } if i == id => return bridge::decode(method, body).map_err(WrpcError::Protocol),
                     Reply::Err { id: Some(i), message } if i == id => return Err(WrpcError::Node(message)),
-                    // a notification or another request's answer
+                    // A notification, or the answer to another request.
                     _ => continue,
                 },
                 Message::Close(_) => return Err(WrpcError::Socket("connection closed before the response".into())),

@@ -1,10 +1,18 @@
-//! A pair of public nodes on two different hosts, as the executor uses them (`rpc::multi`: the authority and a cross-checking
-//! node). The command line asks both for what it signs from and compares: the network the nodes report (`getBlockDagInfo`)
-//! and the unspent outputs it plans a transaction from (`getUtxosByAddresses`) must agree, so one dishonest or lagging public
-//! node cannot make the CLI sign against outputs that are not there or against another network. A transaction goes to the
-//! first node, then (best effort) to the second. A node that cannot be reached is replaced by another the resolvers name.
+//! A pair of public nodes on two different hosts, as the executor uses them.
 //!
-//! The logic runs over [`Io`] (the resolvers, the connection), so tests drive it with fakes.
+//! The executor calls them the authority and a cross-checking node, see `rpc::multi`. The command
+//! line asks both for what it signs from and compares the answers:
+//! - The network that the nodes report (`getBlockDagInfo`) must agree.
+//! - The unspent outputs that it plans a transaction from (`getUtxosByAddresses`) must agree.
+//!
+//! So one dishonest or lagging public node cannot make the command line sign against outputs
+//! that are not there, or against another network.
+//!
+//! A transaction goes to the first node, and then, as a best effort, to the second. A node that
+//! cannot be reached is replaced by another that the resolvers name.
+//!
+//! The logic runs over [`Io`], which holds the resolvers and the connection, so tests drive it
+//! with fakes.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -16,24 +24,25 @@ use super::client::BorshConn;
 use super::resolver;
 use crate::wrpc::{self, NodeUtxo, WrpcError, ADDRESS_CHUNK};
 
-/// Times the two nodes are asked again when they disagree (they may be a block apart), and the pause between.
+/// How many times the two nodes are asked when they disagree, because they may be a block apart.
 const AGREE_TRIES: usize = 4;
+/// The pause between two such asks.
 const AGREE_PAUSE: Duration = Duration::from_millis(1500);
-/// Times a node that cannot be reached is replaced before the call fails.
+/// How many times a node that cannot be reached is replaced before the call fails.
 const REPLACE_TRIES: usize = 3;
 
-/// One call to one node: URL, method, JSON parameters, timeout.
+/// One call to one node, as URL, method, JSON parameters and timeout.
 pub type CallFn<'a> = dyn Fn(&str, &str, Value, Duration) -> Result<Value, WrpcError> + 'a;
 
 /// What the pair logic needs of the world.
 pub struct Io<'a> {
-    /// The two nodes (URLs); resolved on first use.
+    /// The two nodes as URLs, resolved on first use.
     pub nodes: &'a dyn Fn() -> Result<[String; 2], String>,
-    /// Give a node up (it could not be reached): the next [`Io::nodes`] names another.
+    /// Gives a node up because it could not be reached, so the next [`Io::nodes`] names another.
     pub replace: &'a dyn Fn(&str),
     /// One call to one node.
     pub call: &'a CallFn<'a>,
-    /// Wait before asking again.
+    /// Waits before asking again.
     pub pause: &'a dyn Fn(Duration),
 }
 
@@ -55,8 +64,10 @@ fn fetch_utxos(io: &Io, url: &str, addresses: &[String], timeout: Duration) -> R
     Ok(out)
 }
 
-/// The unspent outputs at `addresses`, read from both nodes: returned when they agree (asked again a few times when they do
-/// not: they may be a block apart), an error naming both hosts when they never do.
+/// The unspent outputs at `addresses`, read from both nodes.
+///
+/// They are returned when the nodes agree. When they do not, the nodes are asked again a few
+/// times, because they may be a block apart. When they never agree, the error names both hosts.
 pub fn utxos(io: &Io, addresses: &[String], timeout: Duration) -> Result<Vec<NodeUtxo>, WrpcError> {
     let mut replaced = 0;
     let mut last = String::new();
@@ -92,7 +103,9 @@ pub fn utxos(io: &Io, addresses: &[String], timeout: Duration) -> Result<Vec<Nod
     Err(WrpcError::Protocol(last))
 }
 
-/// The network both nodes report (`getBlockDagInfo`): an error when they report different ones.
+/// The network that both nodes report (`getBlockDagInfo`).
+///
+/// It is an error when they report different ones.
 pub fn network(io: &Io, timeout: Duration) -> Result<String, WrpcError> {
     let mut replaced = 0;
     loop {
@@ -123,14 +136,16 @@ pub fn network(io: &Io, timeout: Duration) -> Result<String, WrpcError> {
     }
 }
 
-/// One call to the first node that answers (a read that is not signed from, such as the DAA score for a clock).
+/// One call to the first node that answers.
+///
+/// It is for reads that are not signed from, such as the DAA score for a clock.
 pub fn call_any(io: &Io, method: &str, params: Value, timeout: Duration) -> Result<Value, WrpcError> {
     let mut replaced = 0;
     loop {
         let [a, b] = (io.nodes)().map_err(WrpcError::Resolve)?;
         match (io.call)(&a, method, params.clone(), timeout) {
             Err(e) if unreachable_(&e) => {
-                // the second node answers meanwhile; the first is given up
+                // The second node answers meanwhile, and the first is given up.
                 match (io.call)(&b, method, params.clone(), timeout) {
                     Ok(v) => {
                         (io.replace)(&a);
@@ -149,8 +164,10 @@ pub fn call_any(io: &Io, method: &str, params: Value, timeout: Duration) -> Resu
     }
 }
 
-/// Submit a transaction to the first node, then (best effort, its answer ignored) to the second, and return the accepted
+/// Submits a transaction to the first node, then to the second, and returns the accepted
 /// transaction id.
+///
+/// The answer of the second node is ignored.
 pub fn submit(io: &Io, transaction: &Value, allow_orphan: bool, timeout: Duration) -> Result<String, WrpcError> {
     let params = json!({ "transaction": transaction, "allowOrphan": allow_orphan });
     let mut replaced = 0;
@@ -171,7 +188,7 @@ pub fn submit(io: &Io, transaction: &Value, allow_orphan: bool, timeout: Duratio
     }
 }
 
-/// The public nodes of each network in use (this process), and the hosts that failed.
+/// The public nodes of each network in use in this process, and the hosts that failed.
 #[derive(Default)]
 struct State {
     pairs: HashMap<String, Vec<String>>,
@@ -187,8 +204,10 @@ fn lock() -> std::sync::MutexGuard<'static, State> {
     state().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The two nodes of `network`: resolved on first use, on two different hosts (a second one on the first's host only when the
-/// resolvers name no other), never on a host that failed in this process while another is named.
+/// The two nodes of `network`, resolved on first use.
+///
+/// They are on two different hosts. The second is on the host of the first only when the
+/// resolvers name no other. A host that failed in this process is avoided while another is named.
 fn real_nodes(network: &str) -> Result<[String; 2], String> {
     let mut s = lock();
     loop {
@@ -227,7 +246,7 @@ fn real_call(url: &str, method: &str, params: Value, timeout: Duration) -> Resul
     r
 }
 
-/// Run `f` with the real [`Io`] of `network`.
+/// Runs `f` with the real [`Io`] of `network`.
 pub fn with_real<T>(network: &str, f: impl FnOnce(&Io) -> T) -> T {
     let nodes = || real_nodes(network);
     let replace = |u: &str| real_replace(network, u);
@@ -320,7 +339,7 @@ mod tests {
         let us = [utxo(2, 5), utxo(1, 7)];
         let w = World::new(vec![("a", vec![Ok(entries(&us))]), ("b", vec![Ok(entries(&[us[1].clone(), us[0].clone()]))])], &[]);
         let got = w.run(|io| utxos(io, &addrs(), T)).unwrap();
-        // sorted by outpoint, whatever order the nodes answered in
+        // The outputs are sorted by outpoint, whatever order the nodes answered in.
         assert_eq!(got.iter().map(|u| u.txid[0]).collect::<Vec<_>>(), [1, 2]);
         assert_eq!(*w.pauses.borrow(), 0);
     }
@@ -328,11 +347,11 @@ mod tests {
     #[test]
     fn nodes_a_block_apart_are_asked_again_and_a_standing_disagreement_is_an_error() {
         let (x, y) = ([utxo(1, 7)], [utxo(1, 7), utxo(2, 5)]);
-        // the second node catches up on the second round
+        // The second node catches up on the second round.
         let w = World::new(vec![("a", vec![Ok(entries(&y))]), ("b", vec![Ok(entries(&x)), Ok(entries(&y))])], &[]);
         assert_eq!(w.run(|io| utxos(io, &addrs(), T)).unwrap().len(), 2);
         assert_eq!(*w.pauses.borrow(), 1);
-        // it never does: no signing from a view the nodes do not share
+        // It never does, so there is no signing from a view that the nodes do not share.
         let w = World::new(vec![("a", vec![Ok(entries(&y))]), ("b", vec![Ok(entries(&x))])], &[]);
         let e = w.run(|io| utxos(io, &addrs(), T)).unwrap_err();
         assert!(matches!(&e, WrpcError::Protocol(m) if m.contains("a.example and b.example disagree")), "{e}");
@@ -348,10 +367,10 @@ mod tests {
         );
         assert_eq!(w.run(|io| utxos(io, &addrs(), T)).unwrap(), us);
         assert_eq!(*w.replaced.borrow(), [url("a")]);
-        // no replacement left: the error of the call
+        // With no replacement left, the error of the call is returned.
         let w = World::new(vec![("a", vec![Err(WrpcError::Socket("refused".into()))]), ("b", vec![Ok(entries(&us))])], &[]);
         assert!(w.run(|io| utxos(io, &addrs(), T)).is_err());
-        // a node's own refusal is not a reason to replace it
+        // A refusal by the node is not a reason to replace it.
         let w = World::new(vec![("a", vec![Err(WrpcError::Node("bad".into()))]), ("b", vec![Ok(entries(&us))])], &["c"]);
         assert!(matches!(w.run(|io| utxos(io, &addrs(), T)).unwrap_err(), WrpcError::Node(_)));
         assert!(w.replaced.borrow().is_empty());
@@ -365,7 +384,7 @@ mod tests {
         let w = World::new(vec![("a", vec![Ok(dag("mainnet"))]), ("b", vec![Ok(dag("testnet-10"))])], &[]);
         let e = w.run(|io| network(io, T)).unwrap_err();
         assert!(matches!(&e, WrpcError::Protocol(m) if m.contains("report different networks (mainnet, testnet-10)")), "{e}");
-        // spellings compare equal
+        // The spellings compare equal.
         let w = World::new(vec![("a", vec![Ok(dag("kaspa-testnet-10"))]), ("b", vec![Ok(dag("testnet-10"))])], &[]);
         assert_eq!(w.run(|io| network(io, T)).unwrap(), "testnet-10");
     }
@@ -377,13 +396,14 @@ mod tests {
         let id = w.run(|io| submit(io, &json!({}), false, T)).unwrap();
         assert_eq!(id, "1".repeat(64));
         assert_eq!(w.asked.borrow().iter().map(|(h, _)| h.as_str()).collect::<Vec<_>>(), ["a.example", "b.example"]);
-        // the first is down: the replacement pair takes it (b stays), the transaction goes out once accepted
+        // The first node is down, so the replacement pair takes it and b stays. The transaction
+        // goes out once accepted.
         let w = World::new(
             vec![("a", vec![Err(WrpcError::Socket("refused".into()))]), ("b", vec![ok("2")]), ("c", vec![ok("2")])],
             &["c"],
         );
         assert_eq!(w.run(|io| submit(io, &json!({}), false, T)).unwrap(), "2".repeat(64));
-        // a refusal by the node is the answer
+        // A refusal by the node is the answer.
         let w = World::new(vec![("a", vec![Err(WrpcError::Node("orphan".into()))]), ("b", vec![ok("3")])], &[]);
         assert!(matches!(w.run(|io| submit(io, &json!({}), false, T)).unwrap_err(), WrpcError::Node(m) if m == "orphan"));
         assert_eq!(w.asked.borrow().len(), 1, "a refused transaction is not tried on the other node");
