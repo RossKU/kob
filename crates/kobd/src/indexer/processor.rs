@@ -106,6 +106,14 @@ impl Processor {
     }
 }
 
+/// A DAA score or time stamp as SQLite stores it: a node value above `i64::MAX` is `i64::MAX`.
+///
+/// The node supplies them. A plain `as i64` wraps such a value to a negative one, which reads as
+/// long past (a block that the pruning drops at once, an order that expired before it was made).
+pub(crate) fn sql_int(v: u64) -> i64 {
+    i64::try_from(v).unwrap_or(i64::MAX)
+}
+
 /// The chain block being applied.
 pub struct BlockCtx<'a> {
     /// The header of the chain block.
@@ -120,7 +128,7 @@ impl<'a> BlockCtx<'a> {
     /// Every applied block gets one. The writer prunes the rows older than the reorg window.
     pub fn new(conn: &Connection, header: &'a ChainBlockHeader) -> DbResult<Self> {
         conn.prepare_cached("INSERT INTO blocks (hash, daa) VALUES (?1, ?2)")?
-            .execute(params![&header.hash.0[..], header.daa_score as i64])?;
+            .execute(params![&header.hash.0[..], sql_int(header.daa_score)])?;
         Ok(BlockCtx { header, seq: conn.last_insert_rowid() })
     }
 }
@@ -767,7 +775,7 @@ impl Processor {
                 order_of!("?4"),
                 ",?5,?6,?7,?8,?9)"
             ))?
-            .execute(params![&txid.0[..], t.out, intern(conn, &token.0)?, &t.owner.0[..], t.amount, out.value as i64, role, seq, daa as i64])?;
+            .execute(params![&txid.0[..], t.out, intern(conn, &token.0)?, &t.owner.0[..], t.amount, out.value as i64, role, seq, sql_int(daa)])?;
             // A placement record may already have stored this very output as the custody. Keep the
             // stored role.
             let stored: String = conn
@@ -894,7 +902,7 @@ impl Processor {
             state.encode(),
             role,
             seq,
-            daa as i64,
+            sql_int(daa),
             intern(conn, &state.owner()[..])?
         ])?;
         if !proven_before {
@@ -1212,7 +1220,7 @@ impl Processor {
             &n.txid.0[..],
             n.out_index,
             n.block_seq,
-            n.daa as i64,
+            sql_int(n.daa),
             n.parent.map(|p| p.0.to_vec()),
             listed as i64,
             reason,
@@ -1228,7 +1236,7 @@ impl Processor {
                 order_of!("?4"),
                 ",?5,?6,'custody',?7,?8)"
             ))?
-            .execute(params![&c.txid.0[..], c.index, intern(conn, &ctok.0)?, &n.covenant_id.0[..], c.amount, c.value as i64, n.block_seq, n.daa as i64])?;
+            .execute(params![&c.txid.0[..], c.index, intern(conn, &ctok.0)?, &n.covenant_id.0[..], c.amount, c.value as i64, n.block_seq, sql_int(n.daa)])?;
             // A chain placement proves the state of the custody from its transfer leader, in step
             // 5b. An import verified the custody script that the state below produces, so it is
             // proven the same way.
@@ -1244,7 +1252,7 @@ impl Processor {
         .execute(params![
             &n.covenant_id.0[..],
             n.block_seq,
-            n.daa as i64,
+            sql_int(n.daa),
             n.ts as i64,
             &n.txid.0[..],
             n.tx_pos,
@@ -1270,7 +1278,7 @@ impl Processor {
                 conn.prepare_cached(
                     "INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) VALUES (?1,?2,?3,'seen',?4,?5,?6)",
                 )?
-                .execute(params![&tok.0[..], tpl.map(|t| t.0.to_vec()), e.map(|e| e.to_vec()), &n.txid.0[..], n.block_seq, n.daa as i64])?;
+                .execute(params![&tok.0[..], tpl.map(|t| t.0.to_vec()), e.map(|e| e.to_vec()), &n.txid.0[..], n.block_seq, sql_int(n.daa)])?;
             }
         }
         refresh_order_state(conn, &n.covenant_id)?;
@@ -1540,7 +1548,7 @@ impl Processor {
                  WHERE order_utxos.spent_block IS NULL OR excluded.created_block = 0"
             ),
         )?
-        .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
+        .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, sql_int(daa)])?;
         Ok(())
     }
 
@@ -1576,7 +1584,7 @@ impl Processor {
             act,
             reveal,
             before,
-            utxo_daa: inp.daa as i64,
+            utxo_daa: sql_int(inp.daa),
             value,
             after: None,
             amend: None,
@@ -1769,8 +1777,8 @@ impl Processor {
     ) -> DbResult<()> {
         let txid = rec.txid;
         let seq = ctx.seq;
-        let daa = ctx.header.daa_score as i64;
-        let ts = ctx.header.timestamp as i64;
+        let daa = sql_int(ctx.header.daa_score);
+        let ts = sql_int(ctx.header.timestamp);
         let ioc = matches!(s.order.tif, Some(1) | Some(2));
         let amount_before = s.before.as_ref().and_then(|b| b.amount_left());
         let pair = s.before.as_ref().filter(|b| b.is_pair());
@@ -2156,8 +2164,8 @@ impl Processor {
         )?
         .execute(params![
             ctx.seq,
-            ctx.header.daa_score as i64,
-            ctx.header.timestamp as i64,
+            sql_int(ctx.header.daa_score),
+            sql_int(ctx.header.timestamp),
             &rec.txid.0[..],
             income,
             fee,
@@ -2875,7 +2883,7 @@ impl Processor {
                                 ",?5,?6,'custody',0,?7) \
                                  ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL, role = 'custody'"
                             ))?
-                            .execute(params![&c.txid.0[..], c.index, intern(conn, &token.0)?, &covenant_id.0[..], c.amount, c.value as i64, udaa as i64])?;
+                            .execute(params![&c.txid.0[..], c.index, intern(conn, &token.0)?, &covenant_id.0[..], c.amount, c.value as i64, sql_int(udaa)])?;
                             let nc = NewCustody { txid: c.txid, index: c.index, value: c.value, amount: c.amount, token: Some(token) };
                             self.custody_holding(conn, covenant_id, &st, &nc, Some(c.ext.0), 0, udaa)?;
                         }
@@ -2934,7 +2942,7 @@ impl Processor {
                 ",?5,?6,'custody',0,?7) \
                  ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL"
             ))?
-            .execute(params![&c.txid.0[..], c.index, intern(conn, &c.token.unwrap_or(token).0)?, &cov.0[..], c.amount, c.value as i64, daa as i64])?;
+            .execute(params![&c.txid.0[..], c.index, intern(conn, &c.token.unwrap_or(token).0)?, &cov.0[..], c.amount, c.value as i64, sql_int(daa)])?;
             let ext = match ext {
                 Some(e) => Some(e),
                 None => order_ext_commit(conn, cov)?,
@@ -2966,7 +2974,7 @@ impl Processor {
         ))?
         .execute(params![
             &cov.0[..],
-            daa as i64,
+            sql_int(daa),
             &txid.0[..],
             kind,
             token.map(|t| intern(conn, &t.0)).transpose()?,
@@ -3320,5 +3328,21 @@ mod tests {
         // A recovery operation (block 0) writes an output the node verified as unspent.
         p.insert_utxo(&conn, &cov, &spent, 0, 3_000, &[0, 0], None, 0, 95).unwrap();
         assert_eq!(row(&spent), (None, 3_000, 0));
+    }
+
+    /// A node's DAA score or time stamp above `i64::MAX` is stored as `i64::MAX`, not wrapped to a
+    /// negative value that reads as long past.
+    #[test]
+    fn a_node_daa_past_i64_saturates() {
+        assert_eq!(sql_int(u64::MAX), i64::MAX);
+        assert_eq!(sql_int(1 << 63), i64::MAX);
+        assert_eq!(sql_int(i64::MAX as u64), i64::MAX);
+        assert_eq!(sql_int(42), 42);
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let header =
+            ChainBlockHeader { hash: Hash32([3; 32]), daa_score: u64::MAX, timestamp: u64::MAX, ..ChainBlockHeader::default() };
+        crate::testkit::processor().extract_and_apply_block(&conn, &header, &[], &mut Delta::default()).unwrap();
+        let daa: i64 = conn.query_row("SELECT daa FROM blocks WHERE hash = ?1", [&header.hash.0[..]], |r| r.get(0)).unwrap();
+        assert_eq!(daa, i64::MAX);
     }
 }

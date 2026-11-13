@@ -691,7 +691,10 @@ impl Ingest {
         super::candles::refresh(&tx, &self.proc.tokens)?;
         set_cursor(&tx, &cursor)?;
         // Chain blocks older than the reorg window are final and no longer kept.
-        tx.execute("DELETE FROM blocks WHERE daa < ?1", [cursor.daa.saturating_sub(self.cfg.reorg_window_daa) as i64])?;
+        tx.execute(
+            "DELETE FROM blocks WHERE daa < ?1",
+            [super::processor::sql_int(cursor.daa.saturating_sub(self.cfg.reorg_window_daa))],
+        )?;
         // Delete the recorded outputs that no later input can need: spent and final, or unspent
         // past their retention.
         super::outputs::prune(&tx, cursor.daa, self.cfg.reorg_window_daa)?;

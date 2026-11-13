@@ -967,7 +967,7 @@ impl Extractor<'_> {
                 let spk = spent.map(|u| u.script_public_key.0.as_slice()).unwrap_or(&[]);
                 if let Some(daa) = order_utxo_daa(self.conn, &prev.transaction_id, prev.index)? {
                     relevant = true;
-                    rec.daa = daa as u64;
+                    rec.daa = u64::try_from(daa).unwrap_or(0);
                     rec.reveal = reveal_of(i, inp, spk);
                 } else if token_utxo_tracked(self.conn, &prev.transaction_id, prev.index)?
                     || holding_tracked(self.conn, &prev.transaction_id, prev.index)?
