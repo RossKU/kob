@@ -1,6 +1,9 @@
-//! Amounts, prices, durations and dates as the trading commands read them: every number carries its unit, a bare number is
-//! refused. Nothing is rounded: a value that does not fit its unit exactly (more decimals than the token has, a price that is
-//! not a whole number of sompi per order scale) is an error naming the nearest valid values.
+//! Amounts, prices, durations and dates as the trading commands read them.
+//!
+//! Every number carries its unit, and a bare number is refused. Nothing is rounded. A value that
+//! does not fit its unit exactly is an error that names the nearest valid values. That covers
+//! more decimals than the token has, and a price that is not a whole number of sompi per order
+//! scale.
 //!
 //! | what | units | example |
 //! |---|---|---|
@@ -13,13 +16,13 @@
 //! | duration | `s`, `m`, `h`, `d` (wall clock, at 10 DAA/s) or `daa` | `30s`, `600daa` |
 //! | date | `YYYY-MM-DDTHH:MM[:SS]Z` (UTC) or `daa:N` | `2026-10-20T00:00Z` |
 
-/// KAS decimals.
+/// Decimals of KAS.
 pub const KAS_DECIMALS: u32 = 8;
 
 /// A token's display facts: ticker and decimals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenUnit {
-    /// Ticker (may be empty for an unlisted token: only `tok` / `base` then).
+    /// Ticker. It may be empty for an unlisted token, which then takes only `tok` and `base`.
     pub ticker: String,
     /// Decimals.
     pub decimals: u32,
@@ -55,7 +58,7 @@ fn no_unit(what: &str, raw: &str, hint: &str) -> String {
     format!("{what}: `{raw}` has no unit (amounts always carry one: {hint})")
 }
 
-/// A token amount in base units (positive).
+/// A positive token amount in base units.
 pub fn parse_token_amount(raw: &str, t: &TokenUnit, what: &str) -> Result<i64, String> {
     let (num, unit) = split_unit(raw);
     let hint = format!("e.g. 12.5{} for whole tokens or 1250base for base units", if t.ticker.is_empty() { "tok" } else { &t.ticker });
@@ -79,7 +82,7 @@ pub fn parse_token_amount(raw: &str, t: &TokenUnit, what: &str) -> Result<i64, S
     Ok(v)
 }
 
-/// A KAS amount in sompi (`zero_ok`: zero allowed).
+/// A KAS amount in sompi. `zero_ok` allows zero.
 pub fn parse_kas(raw: &str, what: &str, zero_ok: bool) -> Result<u64, String> {
     let (num, unit) = split_unit(raw);
     let v = match unit.to_ascii_lowercase().as_str() {
@@ -100,7 +103,9 @@ pub fn parse_kas(raw: &str, what: &str, zero_ok: bool) -> Result<u64, String> {
     Ok(v)
 }
 
-/// `per_whole * scale / 10^decimals`, which must be exact: the state price of a price per whole token.
+/// The state price of a price per whole token.
+///
+/// That is `per_whole * scale / 10^decimals`, which must be exact.
 fn to_state(per_whole: i128, decimals: u32, scale: i64, what: &str, raw: &str) -> Result<i64, String> {
     let num = per_whole * scale as i128;
     let den = 10i128.pow(decimals);
@@ -114,19 +119,25 @@ fn to_state(per_whole: i128, decimals: u32, scale: i64, what: &str, raw: &str) -
     to_i64(num / den, what, raw)
 }
 
-/// A price per whole token on a KAS book (or a tip: `zero_ok`), as the state price (sompi per `scale` base units).
+/// A price per whole token on a KAS book, or a tip when `zero_ok`, as a state price.
+///
+/// The state price is in sompi per `scale` base units.
 pub fn parse_kas_price(raw: &str, t: &TokenUnit, scale: i64, what: &str, zero_ok: bool) -> Result<i64, String> {
     let per_whole = parse_kas(raw, what, zero_ok)?;
     to_state(per_whole as i128, t.decimals, scale, what, raw)
 }
 
-/// A price of a pair A/B (B per whole A), as the state price (B base units per `scale(A)` base units of A).
+/// A price of a pair A/B, in B per whole A, as a state price.
+///
+/// The state price is in B base units per `scale(A)` base units of A.
 pub fn parse_pair_price(raw: &str, a: &TokenUnit, a_scale: i64, b: &TokenUnit, what: &str) -> Result<i64, String> {
     let per_whole_b_base = parse_token_amount(raw, b, what)? as i128;
     to_state(per_whole_b_base, a.decimals, a_scale, what, raw)
 }
 
-/// A difference of pair prices (a trail step or gap), as [`parse_pair_price`] with zero allowed.
+/// A difference of pair prices, such as a trail step or gap.
+///
+/// It is [`parse_pair_price`] with zero allowed.
 pub fn parse_pair_delta(raw: &str, a: &TokenUnit, a_scale: i64, b: &TokenUnit, what: &str) -> Result<i64, String> {
     let (num, unit) = split_unit(raw);
     if !unit.is_empty() && num.contains('0') && num.chars().all(|c| c == '0' || c == '.') {
@@ -135,7 +146,7 @@ pub fn parse_pair_delta(raw: &str, a: &TokenUnit, a_scale: i64, b: &TokenUnit, w
     parse_pair_price(raw, a, a_scale, b, what)
 }
 
-/// Basis points: `3%` (two decimals) or `300bps`.
+/// Basis points, as `3%` (two decimals) or `300bps`.
 pub fn parse_bps(raw: &str, what: &str) -> Result<i64, String> {
     let (num, unit) = split_unit(raw);
     let v = match unit.to_ascii_lowercase().as_str() {
@@ -147,7 +158,9 @@ pub fn parse_bps(raw: &str, what: &str) -> Result<i64, String> {
     to_i64(v, what, raw)
 }
 
-/// A duration in DAA: `daa` as is, wall-clock units at the nominal 10 DAA per second (rounded up).
+/// A duration in DAA.
+///
+/// `daa` is taken as is. Wall-clock units count at the nominal 10 DAA per second.
 pub fn parse_duration_daa(raw: &str, what: &str) -> Result<i64, String> {
     let (num, unit) = split_unit(raw);
     if num.contains('.') {
@@ -166,7 +179,7 @@ pub fn parse_duration_daa(raw: &str, what: &str) -> Result<i64, String> {
     Ok(secs.saturating_mul(10))
 }
 
-/// A point in time: UTC unix seconds or a DAA score.
+/// A point in time, as UTC unix seconds or a DAA score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum When {
     /// UTC unix seconds.
@@ -175,7 +188,7 @@ pub enum When {
     Daa(u64),
 }
 
-/// Days since 1970-01-01 of a civil date (proleptic Gregorian).
+/// Days since 1970-01-01 of a civil date in the proleptic Gregorian calendar.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -186,7 +199,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Civil date of days since 1970-01-01.
+/// The civil date of a number of days since 1970-01-01.
 fn civil_from_days(z: i64) -> (i64, i64, i64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -199,7 +212,7 @@ fn civil_from_days(z: i64) -> (i64, i64, i64) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-/// `YYYY-MM-DDTHH:MM[:SS]Z` (UTC only) or `daa:N`.
+/// Parses `YYYY-MM-DDTHH:MM[:SS]Z` (UTC only) or `daa:N`.
 pub fn parse_when(raw: &str, what: &str) -> Result<When, String> {
     let s = raw.trim();
     if let Some(d) = s.strip_prefix("daa:") {
@@ -226,7 +239,7 @@ pub fn parse_when(raw: &str, what: &str) -> Result<When, String> {
     Ok(When::Unix((days * 86_400 + h * 3600 + mi * 60 + se) as u64))
 }
 
-/// `2026-10-20 00:00:00 UTC`.
+/// Formats unix seconds as `YYYY-MM-DD HH:MM:SS UTC`.
 pub fn fmt_utc(unix: u64) -> String {
     let days = (unix / 86_400) as i64;
     let (y, m, d) = civil_from_days(days);
@@ -234,7 +247,7 @@ pub fn fmt_utc(unix: u64) -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", s / 3600, (s / 60) % 60, s % 60)
 }
 
-/// An integer with `decimals` fractional digits, trailing zeros trimmed.
+/// An integer with `decimals` fractional digits, with trailing zeros trimmed.
 pub fn fmt_decimal(v: i128, decimals: u32) -> String {
     let neg = v < 0;
     let a = v.unsigned_abs();
@@ -246,20 +259,22 @@ pub fn fmt_decimal(v: i128, decimals: u32) -> String {
     format!("{}{}{}{}", if neg { "-" } else { "" }, a / scale, if frac.is_empty() { "" } else { "." }, frac)
 }
 
-/// `2.5 KAS`.
+/// A sompi amount as KAS, such as `2.5 KAS`.
 pub fn kas(sompi: i128) -> String {
     format!("{} KAS", fmt_decimal(sompi, KAS_DECIMALS))
 }
 
-/// `12.5 TUSD (1250000000 base units)`.
+/// A token amount with its base units, such as `12.5 TUSD (1250000000 base units)`.
 pub fn tokens(base: i128, t: &TokenUnit) -> String {
     let tk = if t.ticker.is_empty() { "tokens".to_string() } else { t.ticker.clone() };
     format!("{} {tk} ({base} base units)", fmt_decimal(base, t.decimals))
 }
 
-/// A state price (quote units per `scale` base units) as quote per whole token, exact where possible.
+/// A state price as quote per whole token, exact where possible.
+///
+/// The state price is in quote units per `scale` base units. An inexact result is marked `~`.
 pub fn price_per_whole(state_price: i64, t: &TokenUnit, scale: i64, quote_decimals: u32, quote: &str) -> String {
-    // quote per whole token = price * 10^decimals / scale, in quote base units
+    // Quote per whole token is price * 10^decimals / scale, in quote base units.
     let num = state_price as i128 * 10i128.pow(t.decimals);
     let per_whole = num / scale as i128;
     let exact = num % scale as i128 == 0;
@@ -308,9 +323,9 @@ mod tests {
         assert!(parse_kas("2", "c", false).is_err());
         assert!(parse_kas("0.000000001KAS", "c", false).is_err());
         let t = tusd();
-        // 8 decimals, scale 10^8: the state price is sompi per whole token
+        // With 8 decimals and scale 10^8, the state price is sompi per whole token.
         assert_eq!(parse_kas_price("0.25KAS", &t, 100_000_000, "price", false), Ok(25_000_000));
-        // 12 decimals, scale 10^9: a price per whole token must divide by 1000
+        // With 12 decimals and scale 10^9, a price per whole token must divide by 1000.
         let t12 = TokenUnit { ticker: "BIG".into(), decimals: 12 };
         assert_eq!(parse_kas_price("1KAS", &t12, 1_000_000_000, "price", false), Ok(100_000));
         assert!(parse_kas_price("1001sompi", &t12, 1_000_000_000, "price", false).unwrap_err().contains("1 or 2"));
