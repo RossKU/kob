@@ -5,6 +5,9 @@
 // Delivery of a new event: always an in-app toast (a burst of more than 3 collapses into one summary toast); additionally a browser notification when
 // `settings.browser` is on, the permission was granted (it is requested only from a click in Settings) and the page is HIDDEN: a visible page already
 // shows the toast, so the OS notification is for the background tab. The notification `tag` is the event id (the browser merges repeats).
+//
+// System notifications (system-notices.ts: the market switched to the node, and back) need no wallet and no opt-in: they are in the bell's list and count,
+// for this session.
 import { createContext, type ComponentChildren } from 'preact';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -19,6 +22,7 @@ import { describeEvent } from './describe';
 import { INVOICE_POLL_MS, ORDERS_POLL_MS, pollInvoices, pollWallet } from './poll';
 import { declaredToken, loadDeclaration, restoreDeclarations } from '../../data/token-declarations';
 import { useLiveRefresh } from '../market/live';
+import { addNotice, noticeOfSwitch, type SystemNotice } from './system-notices';
 
 export type BrowserPermission = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -27,6 +31,9 @@ export interface NotifyApi {
   /** merges a patch (kinds merged key by key) and persists */
   update(patch: { enabled?: boolean; browser?: boolean; kinds?: Partial<Record<NotifyKind, boolean>> }): void;
   items: readonly NotificationEvent[];
+  /** the app's own notifications (no wallet needed), newest first */
+  system: readonly SystemNotice[];
+  /** unread notifications of the wallet and of the app */
   unread: number;
   /** a wallet is connected (notifications are per wallet) */
   connected: boolean;
@@ -44,7 +51,7 @@ export interface NotifyApi {
 export const browserPermission = (): BrowserPermission => (typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
 
 const STUB: NotifyApi = {
-  settings: loadNotifySettings(null), update() {}, items: [], unread: 0, connected: false, markRead() {}, markAllRead() {}, clear() {}, invoices: [], addInvoice: () => 'invalid', removeInvoice() {},
+  settings: loadNotifySettings(null), update() {}, items: [], system: [], unread: 0, connected: false, markRead() {}, markAllRead() {}, clear() {}, invoices: [], addInvoice: () => 'invalid', removeInvoice() {},
   permission: browserPermission, requestBrowser: async () => browserPermission(),
 };
 
@@ -81,6 +88,18 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
   const network = services.config.network;
   const [settings, setSettings] = useState<NotifySettings>(() => loadNotifySettings());
   const [, setTick] = useState(0);
+  const [system, setSystem] = useState<SystemNotice[]>([]);
+  // one notification per switch of the market to the node and back (the state the page opened with is not a switch)
+  useEffect(() => {
+    const c = services.standalone;
+    if (!c) return undefined;
+    let prev = c.state;
+    return c.subscribe((next) => {
+      const n = noticeOfSwitch(prev, next, Date.now());
+      prev = next;
+      if (n) setSystem((l) => addNotice(l, n));
+    });
+  }, [services.standalone]);
 
   const store = useMemo(() => (pubkey ? new NotificationStore(safeStorage(), network, pubkey) : null), [pubkey, network]);
   useEffect(() => (store ? store.subscribe(() => setTick((n) => n + 1)) : undefined), [store]);
@@ -152,15 +171,26 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
     }
   }, []);
 
+  const systemUnread = system.filter((n) => !n.read).length;
   const api: NotifyApi = {
     settings,
     update,
     items: store?.items() ?? [],
-    unread: store?.unread() ?? 0,
+    system,
+    unread: (store?.unread() ?? 0) + systemUnread,
     connected: !!store,
-    markRead: (id) => store?.markRead(id),
-    markAllRead: () => store?.markAllRead(),
-    clear: () => store?.clear(),
+    markRead: (id) => {
+      if (system.some((n) => n.id === id)) setSystem((l) => l.map((n) => (n.id === id ? { ...n, read: true } : n)));
+      else store?.markRead(id);
+    },
+    markAllRead: () => {
+      setSystem((l) => (l.some((n) => !n.read) ? l.map((n) => ({ ...n, read: true })) : l));
+      store?.markAllRead();
+    },
+    clear: () => {
+      setSystem([]);
+      store?.clear();
+    },
     invoices: store?.invoices() ?? [],
     addInvoice: (input) => {
       const p = parseInvoiceUrl(input);

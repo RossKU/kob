@@ -1,6 +1,8 @@
 // The current status of the bell's dialog: the conditions that hold now (settings that were ignored, test mode, registry failure, wallet trouble, node / indexer
 // health, the open review notice). Live state, not history: an entry is here while its condition holds, is never stored and has nothing to do with the
 // notifications (kob/notifications.ts). Pure: the facts in, the entries out (Banners.tsx gathers the facts and draws the entries).
+// The market's source is ONE calm line while it is not the indexer as usual (the header's dot says the same, StatusBar.tsx): trading through the node,
+// switching to it, a backup indexer, an indexer behind the chain; only a node that cannot be reached is an error.
 // There is deliberately none for chain re-organisations: shallow ones are routine (the indexer handles them), what one does to the user's own orders is a
 // notification, and a deep one is a header indicator (ReorgIndicator). Nor for a wallet on another network: that one stays at the top of the page
 // (NetworkMismatchBanner).
@@ -49,6 +51,8 @@ export interface StatusFacts {
   node: { reachable: boolean | undefined; error: Error | null };
   backup: FailoverState | null;
   standalone: StandaloneState | null;
+  /** standalone mode takes over by itself when the indexer cannot be used: a bad indexer is "switching to your node", not an error */
+  fallback?: boolean;
   indexer: HealthAssessment;
   /** the open review notice was not dismissed yet (preaudit.ts) */
   preAudit: boolean;
@@ -98,12 +102,14 @@ function walletNoticeEntry(notice: WalletNotice | null, onDismiss: () => void): 
   return null;
 }
 
-function indexerEntry(a: HealthAssessment, network: string): StatusEntry | null {
+function indexerEntry(a: HealthAssessment, network: string, fallback: boolean): StatusEntry | null {
   if (a.code === 'not-configured') return { key: 'noidx', tone: 'info', testid: 'banner-no-indexer', text: t('shell.banner.noIndexer') };
-  if (a.code === 'unreachable') return { key: 'idx', tone: 'error', testid: 'banner-indexer', title: t('shell.banner.indexerTitle'), text: t('shell.banner.unreachable') };
+  // the app takes the market from the node by itself: one calm line until it does
+  if (a.level === 'bad' && fallback) return { key: 'idx', tone: 'info', class: 'banner-compact', testid: 'banner-switching', text: t('shell.banner.switching') };
+  if (a.code === 'unreachable') return { key: 'idx', tone: 'warn', testid: 'banner-indexer', title: t('shell.banner.indexerTitle'), text: t('shell.banner.unreachable') };
   if (a.level === 'warn' || a.level === 'bad') {
     return {
-      key: 'idx', tone: a.level === 'bad' ? 'error' : 'warn', testid: 'banner-indexer',
+      key: 'idx', tone: a.level === 'bad' ? 'warn' : 'info', testid: 'banner-indexer',
       title: t('shell.banner.indexerTitle'), text: t(`shell.banner.${a.code}`, { lag: formatLag(a.lagSeconds), network }),
     };
   }
@@ -144,20 +150,20 @@ export function statusEntries(f: StatusFacts): StatusEntry[] {
       text: f.backup.historyPartial ? `${t('shell.banner.backupBody')} ${t('shell.banner.backupPartial')}` : t('shell.banner.backupBody'),
     });
   }
-  // standalone mode (data/standalone.ts): what the page shows comes from the node since the mode started. It says what the indexer's state means for the
-  // page (or, on by the setting, the indexer is not asked at all), so the indexer has no entry of its own then
+  // standalone mode (data/standalone.ts): trading goes through the node. One calm line; it says what the indexer's state means for the page (or, on by
+  // the setting, the indexer is not asked at all), so the indexer has no entry of its own then
   const sa = f.standalone;
   if (sa?.active) {
     const time = clockText(sa.sinceMs ?? Date.now());
     const manual = sa.reason === 'manual';
     out.push({
-      key: 'standalone', tone: manual ? 'info' : 'warn', testid: 'banner-standalone', title: t('shell.banner.standaloneTitle', { time }),
+      key: 'standalone', tone: 'info', class: 'banner-compact', testid: 'banner-standalone',
       text: t(manual ? 'shell.banner.standalone' : 'shell.banner.standaloneAuto', { time }),
       standalone: { connecting: sa.phase === 'connecting', back: sa.indexerBack },
       link: { href: '#/settings', text: t('shell.banner.standaloneSettings') },
     });
   } else {
-    const indexer = indexerEntry(f.indexer, f.network);
+    const indexer = indexerEntry(f.indexer, f.network, !!f.fallback);
     if (indexer) out.push(indexer);
   }
   return out.sort((a, b) => RANK[b.tone] - RANK[a.tone]);

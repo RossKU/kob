@@ -1,7 +1,7 @@
 // The notification centre: the bell of the header and the panel it opens under itself (a popover like the network chip's, review L-06; on a phone as wide as
-// the header): the current status (what holds now, ui/shell/status-entries.ts), then the notifications (newest first, mark all read, clear, the x402 invoice
-// watch box, a link to Settings). The current status does not depend on the notifications: it is there with them off or no wallet connected, and Clear does not
-// touch it; its worst tone colours the bell.
+// the header): the current status (what holds now, ui/shell/status-entries.ts), then the notifications (the app's own, system-notices.ts, with or without a
+// wallet; then the wallet's, newest first; mark all read, clear, the x402 invoice watch box, a link to Settings). The current status does not depend on
+// the notifications: it is there with them off or no wallet connected, and Clear does not touch it; its worst tone colours the bell.
 // The panel always lists what the bell counts (TN10 2026-10-17: a badge "5" opened a panel that only said the notifications were off); whether
 // new ones are collected is one line above the list, with its switch.
 import { useEffect, useRef, useState } from 'preact/hooks';
@@ -19,6 +19,7 @@ import { useNarrow } from '../shell/narrow';
 import { worstTone, type StatusEntry } from '../shell/status-entries';
 import { describeEvent } from './describe';
 import { useNotify } from './NotifyProvider';
+import type { SystemNotice } from './system-notices';
 import './notify.css';
 
 /** The bell is shown even while the notifications are off (the dialog then offers "Turn on"): set false to hide it until the user enables them in Settings, unless there is a current status to read. */
@@ -53,6 +54,24 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
       <a class="notify-go" href={d.href} onClick={props.onNavigate} aria-label={go} title={go} data-testid="notify-go">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
       </a>
+    </li>
+  );
+}
+
+/** One notification of the app itself (the market switched to the node, or back): a tap marks it read; it leads nowhere. */
+function SystemItem(props: { e: SystemNotice }) {
+  const n = useNotify();
+  const e = props.e;
+  const body = e.kind === 'node' ? t(e.reason === 'manual' ? 'notify.system.node.manual' : 'notify.system.node.auto') : t('notify.system.indexer.body');
+  return (
+    <li class={`notify-item${e.read ? '' : ' notify-unread'}`} data-testid="notify-item-system" data-kind={e.kind} data-read={e.read ? 'true' : 'false'} onClick={() => n.markRead(e.id)}>
+      <div class="notify-item-main">
+        <div class="notify-item-head">
+          <strong>{t(`notify.system.${e.kind}.title`)}</strong>
+          <time class="muted" dateTime={new Date(e.at).toISOString()} title={rowTimeTitle(e.at)}>{formatRowTime(e.at)}</time>
+        </div>
+        <div>{body}</div>
+      </div>
     </li>
   );
 }
@@ -121,18 +140,23 @@ export function NotificationPanel(props: { status: readonly StatusEntry[]; close
             <Button small variant="primary" onClick={() => n.update({ enabled: true })} data-testid="notify-enable">{t('notify.turnOn')}</Button>
           </div>
         ) : null}
+        {n.items.length || n.system.length ? (
+          <div class="row">
+            <Button small onClick={n.markAllRead} disabled={n.unread === 0} data-testid="notify-mark-read">{t('notify.markRead')}</Button>
+            <Button small variant="ghost" onClick={n.clear} data-testid="notify-clear">{t('notify.clear')}</Button>
+          </div>
+        ) : null}
+        {n.system.length ? (
+          <ul class="notify-list" data-testid="notify-system-list">
+            {n.system.map((e) => <SystemItem key={e.id} e={e} />)}
+          </ul>
+        ) : null}
         {!n.connected ? (
           <p data-testid="notify-connect">{t('notify.connect')}</p>
         ) : (
           <>
-            {n.items.length ? (
-              <div class="row">
-                <Button small onClick={n.markAllRead} disabled={n.unread === 0} data-testid="notify-mark-read">{t('notify.markRead')}</Button>
-                <Button small variant="ghost" onClick={n.clear} data-testid="notify-clear">{t('notify.clear')}</Button>
-              </div>
-            ) : null}
             {n.items.length === 0 ? (
-              <p class="muted" data-testid="notify-empty">{t('notify.empty')}</p>
+              n.system.length ? null : <p class="muted" data-testid="notify-empty">{t('notify.empty')}</p>
             ) : (
               <ul class="notify-list" data-testid="notify-list">
                 {n.items.map((e) => <Item key={e.id} e={e} onNavigate={close} />)}

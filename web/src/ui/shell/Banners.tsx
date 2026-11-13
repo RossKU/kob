@@ -39,6 +39,7 @@ export function useStatusEntries(warnings: readonly ConfigWarning[], storedOverr
     warnings, storedOverrides, registryError, node, backup, preAudit, dismissPreAudit,
     testMode: !!config.features.test, network: config.network, nodeUrl: config.nodeUrl,
     notice: wallet.notice, dismissNotice: wallet.dismissNotice, walletError: wallet.error, standalone: sa, indexer: indexer.assessment,
+    fallback: !!standalone && standalone.prefs.auto,
   });
 }
 
