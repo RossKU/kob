@@ -191,9 +191,9 @@ pub struct Follower<S: ChainSource> {
     cursor_blue: Mutex<Option<(Hash32, u64)>>,
     /// The windows fetched ahead of the cursor (parallel fetch).
     prefetch: tokio::sync::Mutex<Prefetch>,
-    /// When the next pruning batch of lean storage or archive pruning is due, `None` for no pruning.
+    /// When the next pruning batch of lean storage or archive pruning is due. `None`: no pruning.
     lean_next: Mutex<Option<std::time::Instant>>,
-    /// The catch-up pace, from the lag over the last minute, and the instant its seconds count from.
+    /// The catch-up pace, from the lag over the last minute, and when its seconds count from.
     pace: Mutex<(BackfillPace, std::time::Instant)>,
     /// When the free space of the data directory and the size of the database are measured next,
     /// see [`Follower::disk_tick`].
