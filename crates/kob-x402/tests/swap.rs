@@ -1028,6 +1028,64 @@ fn token_merchant_underpay_overpay_and_carrier() {
     assert_eq!(e.diag, Diag::CarrierMismatch, "{e}");
 }
 
+/// A purchase of more of the merchant token than the offer asks (an order's minimum fill can force one) is paid when the
+/// surplus goes back to the payer: an output of the merchant token holding exactly the surplus, in the pinned payer-change
+/// state of a payer input's key, like any payer token change (spec section 8.4). The same surplus to anyone else is a stray.
+#[test]
+fn a_payer_owned_surplus_of_the_merchant_token_is_payer_change() {
+    let f = fx();
+    let offer = f.token_offer_ab(2 * WHOLE as u64);
+    let to_merchant = Kcc20State::p2pk(2 * WHOLE, pk(MERCHANT), EXT);
+    // 3 whole tokens of B bought: 2 to the merchant, the surplus of 1 to `owner`
+    let split = |owner: u8| {
+        let bought = Kcc20State::p2pk(3 * WHOLE, pk(MERCHANT), EXT);
+        // the merchant output's index, which the commitment binds
+        let probe = manual_prep(&offer, &hex(&TOKEN_COV), sw3_route(&f, 3, CARRIER), 2, 0);
+        let (tx, _) = probe.built.tx.to_tx().unwrap();
+        let mj = tx.outputs.iter().position(|o| o.script_public_key == bought.spk_with(template(T))).expect("merchant output");
+        let prep = manual_prep(&offer, &hex(&TOKEN_COV), sw3_route(&f, 3, CARRIER), 2, mj as u32);
+        let surplus = Kcc20State::p2pk(WHOLE, pk(owner), EXT);
+        let (to_merchant, surplus_spk) = (to_merchant.clone(), surplus.spk_with(template(T)));
+        attack(&prep, move |tx, _, plans| {
+            let j = tx.outputs.iter().position(|o| o.script_public_key == bought.spk_with(template(T))).expect("merchant output");
+            assert_eq!(j, mj);
+            tx.outputs[j].script_public_key = to_merchant.spk_with(template(T));
+            let mut back = tx.outputs[j].clone();
+            back.script_public_key = surplus_spk.clone();
+            let change = tx.outputs.iter().position(|o| o.script_public_key == p2pk_spk(&pk(PAYER))).expect("payer KAS change");
+            // the carrier, and the fee of the larger transaction
+            tx.outputs[change].value -= back.value + 1_000_000;
+            tx.outputs.insert(j + 1, back);
+            // the token leaders check one more output
+            for i in tx.inputs.iter_mut() {
+                if let Some(b) = i.compute_commit.compute_budget() {
+                    i.compute_commit = kaspa_consensus_core::mass::ComputeBudget::from(b + 1).into();
+                }
+            }
+            for plan in plans.iter_mut() {
+                if let SigPlan::TokenLeader { next_states, .. } = plan {
+                    if let Some(k) = next_states.iter().position(|s| *s == bought) {
+                        next_states[k] = to_merchant.clone();
+                        next_states.insert(k + 1, surplus.clone());
+                    }
+                }
+            }
+        })
+    };
+    let p = split(PAYER);
+    let v = f.accept(&offer, &p);
+    assert_eq!(v.merchant_output.script_public_key, to_merchant.spk_with(template(T)));
+    assert!(
+        v.tx.outputs.iter().any(|o| o.script_public_key == Kcc20State::p2pk(WHOLE, pk(PAYER), EXT).spk_with(template(T))),
+        "the surplus is the payer's"
+    );
+    // the surplus to a key that is not the payer's leaves the payer's control
+    let f = fx();
+    let p = split(common::MAKER_A);
+    let e = err_of(f.verify(&offer, &p));
+    assert_eq!(e.diag, Diag::InvalidKaspaExactPaymentOutput, "{e}");
+}
+
 #[test]
 fn merchant_output_redirected_after_signing_swr2() {
     let f = fx();

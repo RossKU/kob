@@ -358,11 +358,16 @@ Every unclaimed output other than the merchant output MUST be one of:
   covenant binding.
 
 A verifier MAY additionally accept, for a `kcc20` route, a payer-owned output of the merchant token
-holding the surplus of a purchase larger than the offered amount (the reference verifier does
-not); builders SHOULD avoid the case by choosing amounts that need no surplus (any base-unit amount
-that respects the orders' minimum fills is fillable). Any other unclaimed
-output is rejected (`invalid_kaspa_exact_payment_output`). There is no "other outputs are fine"
-path: the fee is the only place value may leave the payer's control.
+holding the surplus of a purchase larger than the offered amount. The reference verifier accepts
+it as payer token change of the merchant token: one output whose script it recomputes as above,
+holding exactly the surplus by token conservation (what the orders release minus `amount`). A
+surplus that is missing or held by any other script is rejected. The surplus never leaves the
+payer's control, and its script is not the merchant's, so it cannot alias the merchant's gain.
+Builders SHOULD still avoid the case by choosing amounts that need no surplus (any base-unit amount
+that respects the orders' minimum fills is fillable); the reference payer SDK never builds one.
+
+Any other unclaimed output is rejected (`invalid_kaspa_exact_payment_output`). There is no "other
+outputs are fine" path: the fee is the only place value may leave the payer's control.
 
 ### 8.5 Engine validation makes the order covenants enforce prices
 
