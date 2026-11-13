@@ -53,8 +53,10 @@
 //!
 //! [`RecordLog::open`] never cuts a complete frame. It refuses
 //! ([`RecordLogError::AheadOfDatabase`]) and keeps it. `Indexer::open` applies one such frame
-//! itself when it continues the database's cursor: its `start` is the database's cursor hash, and
-//! the commit it records is what the database lacks. It refuses one of another history
+//! itself when it continues the database: its `start` is the database's cursor hash, or the
+//! frame before it ends at the cursor the database recorded with the last frame it applied
+//! (`log_cursor_hash`; a batch without KOB rows moves the cursor but is not logged). The commit it
+//! records is what the database lacks. It refuses one of another history
 //! ([`RecordLogError::Lineage`]). More frames past the database position mean that the database is
 //! older than the log, for example a restored backup. They are kept for `kobd db replay
 //! --onto-database`, which checks the same lineage. The reverse, a database ahead of the log,

@@ -2108,11 +2108,12 @@ loses nothing. Reorgs during the downtime are handled by the node's `removed` li
 
 The record-log frame is appended and fsynced before the database transaction commits. After a crash
 the log can hold one frame the database never committed. A database restored from a backup exactly one frame older looks
-the same, so `open` never cuts a complete frame: when the frame continues the database's cursor (its start is the block the
-database ends at) it applies it to the database, as the commit would have (`applied the one record-log frame the database had
-not committed`); a frame of another history is refused (`the log and the database do not belong together`) and kept. Two or
-more frames past the database's position mean the database is older than the log (restored from a backup, see 8), and the
-indexer refuses to start (`record log holds frames N..M that the database has not committed`) and leaves the log untouched.
+the same, so `open` never cuts a complete frame: when the frame continues the database (its start is the block the
+database ends at, or the frame before it is the last one the database applied) it applies it to the database, as the
+commit would have (`applied the one record-log frame the database had not committed`); a frame of another history is
+refused (`the log and the database do not belong together`) and kept. Two or more frames past the database's position mean
+the database is older than the log (restored from a backup, see 8), and the indexer refuses to start (`record log holds
+frames N..M that the database has not committed`) and leaves the log untouched.
 A torn (incomplete) last frame was never acknowledged and is removed. If the database is *ahead*
 of the log the log was lost; the indexer refuses to start rather than silently continue without its
 rebuild source. An empty database next to a populated log is refused as well (use `replay`).
@@ -2527,7 +2528,10 @@ systemctl start kob-index                                                 # re-s
 
 Each frame is applied in one transaction together with the database position after it, so a run that stops part way
 (Ctrl-C, a full disk, a frame that fails) is simply run again and continues from the first frame it did not commit. The
-first frame applied must continue the database's cursor; a log of another history is refused and nothing is applied.
+first frame applied must continue the database: its start is the database's cursor, or the frame before it ends where the last
+frame the database applied ended (a backup taken between two frames, after chain blocks without KOB transactions moved the
+cursor; a database written by a build before this check has only the first test). A log of another history is refused and
+nothing is applied.
 
 **How long it takes** (TN10 drill of 2026-10-20, `docs/reports/TN10-TEST-2026-10.md` section 14): `VACUUM INTO` of the running
 2.85 GB database 84 seconds; `replay --onto-database` of the frames since the copy a few minutes in all; a full `replay` of a

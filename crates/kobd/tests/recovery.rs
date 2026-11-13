@@ -413,7 +413,8 @@ async fn a_database_one_frame_older_than_the_log_gets_that_frame_applied() {
     assert_eq!(snap(&idx), live);
 }
 
-/// `replay --onto-database` applies a log only to the database whose cursor its first missing frame continues.
+/// `replay --onto-database` applies a log only to the database whose cursor its first missing frame continues, or whose last
+/// applied frame is the log's frame before it. A database of another history has neither.
 #[tokio::test]
 async fn onto_database_refuses_a_log_of_another_history() {
     let dir = tempfile::tempdir().unwrap();
@@ -423,12 +424,81 @@ async fn onto_database_refuses_a_log_of_another_history() {
     restore_db(&cfg, &backup);
     let before = {
         let c = open_writer(&cfg.db_path(), "testnet-10").unwrap();
-        c.execute("UPDATE meta SET v = ?1 WHERE k = 'cursor_hash'", ["ff".repeat(32)]).unwrap();
+        c.execute("UPDATE meta SET v = ?1 WHERE k IN ('cursor_hash', 'log_cursor_hash')", ["ff".repeat(32)]).unwrap();
         snapshot(&c)
     };
     let err = kobd::indexer::replay_onto_database(&cfg).expect_err("refused");
     assert!(err.to_string().contains("do not belong together"), "{err}");
     assert_eq!(snapshot(&open_writer(&cfg.db_path(), "testnet-10").unwrap()), before, "nothing was applied");
+}
+
+/// A batch without KOB rows is not logged but moves the cursor, so a backup saved between two frames is past the last frame it
+/// holds and short of the `start` of the next one. It continues the log all the same: `replay --onto-database` brings one
+/// two frames older forward, and `open` applies the one frame a backup one frame older lacks. A store without the cursor of
+/// its last frame (an earlier build) keeps the plain check, and is refused.
+#[tokio::test]
+async fn a_backup_saved_between_two_frames_is_brought_forward_from_the_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = MockNode::new("testnet-10");
+    let cfg = test_config(dir.path(), &node);
+    let w = World::new();
+    let (two_short, one_short) = (dir.path().join("two-short.sqlite3"), dir.path().join("one-short.sqlite3"));
+    let cursor = |idx: &Indexer| idx.ingest.lock().unwrap().cursor().unwrap().unwrap();
+    let live = {
+        let idx = Indexer::open(cfg.clone()).unwrap();
+        let f = idx.follower(node.clone());
+        let create = w.create_tx(AnyState::KobAsk(ask(MAKER_A, P250)), CARRIER, MAKER_A, 10 * WHOLE);
+        w.include(&node, &[&create]);
+        sync(&f).await;
+        // chain blocks without a KOB transaction: the cursor moves, the log does not
+        let (frames, at) = (recordlog::record_count(&cfg.records_dir()).unwrap(), cursor(&idx));
+        node.push_empty(3);
+        sync(&f).await;
+        assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames, "no frame for the empty blocks");
+        assert_ne!(cursor(&idx), at);
+        idx.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [two_short.to_str().unwrap()]).unwrap();
+        // more of them after the backup: the next frame starts past the backup's cursor
+        node.push_empty(2);
+        sync(&f).await;
+        ask_and_fill(&w, &node, P245);
+        sync(&f).await;
+        node.push_empty(2);
+        sync(&f).await;
+        idx.ingest.lock().unwrap().conn().execute("VACUUM INTO ?1", [one_short.to_str().unwrap()]).unwrap();
+        node.push_empty(2);
+        sync(&f).await;
+        let b = bid(MAKER_B, P245);
+        let create_b = w.create_tx(AnyState::KobBid(b.clone()), b.escrow(6 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
+        w.include(&node, &[&create_b]);
+        sync(&f).await;
+        assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames + 2, "one frame for the fill, one for the bid");
+        snap(&idx)
+    };
+    let frames = recordlog::record_count(&cfg.records_dir()).unwrap();
+
+    // one frame short: `open` applies it
+    restore_db(&cfg, &one_short);
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(idx.ingest.lock().unwrap().records_next(), Some(frames));
+    assert_eq!(snap(&idx), live);
+    drop(idx);
+
+    // two frames short: `open` refuses, `replay --onto-database` brings it forward
+    restore_db(&cfg, &two_short);
+    let err = Indexer::open(cfg.clone()).err().expect("must refuse");
+    assert!(err.to_string().contains("replay --onto-database"), "{err}");
+    let rep = kobd::indexer::replay_onto_database(&cfg).unwrap();
+    assert_eq!((rep.from, rep.replay.frames), (frames - 2, frames));
+    let idx = Indexer::open(cfg.clone()).unwrap();
+    assert_eq!(snap(&idx), live);
+    drop(idx);
+
+    // the same backup from a build that did not record the cursor of its last frame
+    restore_db(&cfg, &two_short);
+    open_writer(&cfg.db_path(), "testnet-10").unwrap().execute("DELETE FROM meta WHERE k = 'log_cursor_hash'", []).unwrap();
+    let err = kobd::indexer::replay_onto_database(&cfg).expect_err("refused");
+    assert!(err.to_string().contains("do not belong together"), "{err}");
+    assert_eq!(recordlog::record_count(&cfg.records_dir()).unwrap(), frames);
 }
 
 /// Both replays stream the frames from the log and apply each as it is decoded (memory holds one frame, not the log): on a log of

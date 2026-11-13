@@ -583,18 +583,57 @@ pub fn replay_onto_database(cfg: &IndexerConfig) -> Result<ForwardReport, Indexe
     Ok(ForwardReport { from, replay: ReplayReport { frames, relevant, orders, skipped: streamed.skipped, dropped: streamed.dropped } })
 }
 
+/// The cursor after the last record-log frame the database applied (`log_cursor_hash`,
+/// `log_cursor_daa`), or `None` for a store whose build did not record its hash.
+fn logged_cursor(conn: &rusqlite::Connection) -> Result<Option<ingest::Cursor>, IndexerError> {
+    let hash = db::meta_get(conn, "log_cursor_hash").map_err(db::DbError::from)?.and_then(|h| crate::hex::Hash32::parse(&h).ok());
+    let daa = db::meta_get(conn, "log_cursor_daa").map_err(db::DbError::from)?.and_then(|d| d.parse().ok());
+    Ok(hash.zip(daa).map(|(hash, daa)| ingest::Cursor { hash, daa }))
+}
+
+/// The cursor after record-log frame `n`, or `None` when this build cannot decode that frame.
+fn frame_cursor(dir: &std::path::Path, n: u64) -> Result<Option<ingest::Cursor>, IndexerError> {
+    let mut out = None;
+    recordlog::for_each_from(dir, n, Some(n + 1), |_, b| {
+        out = Some(ingest::Cursor { hash: b.cursor.hash, daa: b.cursor.daa });
+        Ok::<_, IndexerError>(())
+    })?;
+    Ok(out)
+}
+
+/// What the database knows of its place in the record log: its cursor, and the cursor after the
+/// last frame it applied ([`logged_cursor`]).
+struct DbPosition {
+    cursor: Option<ingest::Cursor>,
+    logged: Option<ingest::Cursor>,
+}
+
 /// Checks that the frame at the database position continues the database.
 ///
-/// The `start` of that frame must be the cursor that the database ends at. `first` is the first
-/// frame from `from` on that this build decoded, and is `None` when none could be decoded.
-fn check_lineage(cursor: Option<&ingest::Cursor>, from: u64, first: Option<(u64, &LogBatch)>) -> Result<(), IndexerError> {
+/// It does when either holds:
+/// - The `start` of that frame is the cursor that the database ends at.
+/// - The database moved past the last frame it applied, and the frame before this one
+///   (`from - 1`) ends at the cursor that the database recorded with that frame. A batch without
+///   KOB rows is not logged but still moves the cursor, so a database saved between two frames is
+///   past the last frame it holds and short of the `start` of the next one. Only batches the log
+///   leaves out lie between the two, and a replay from the log never applies them either. A
+///   database still at the end of its last frame must be continued exactly (the first check), and
+///   a store whose build did not record that cursor has only the first check.
+///
+/// `first` is the first frame from `from` on that this build decoded, and is `None` when none
+/// could be decoded.
+fn check_lineage(dir: &std::path::Path, db: &DbPosition, from: u64, first: Option<(u64, &LogBatch)>) -> Result<(), IndexerError> {
+    let cursor = db.cursor.as_ref();
     let Some((n, first)) = first.filter(|(n, _)| *n == from) else {
         return Err(IndexerError::Config(format!(
             "record-log frame {from} cannot be decoded by this build, so it cannot be checked against the database's cursor; \
              nothing was changed (rebuild the database from the log with `kobd db replay` into a fresh data directory)"
         )));
     };
-    if cursor.map(|c| c.hash) != Some(first.start) {
+    // A database still at the end of its last frame must be continued exactly.
+    let moved_on = cursor.is_some() && db.logged.is_some() && cursor != db.logged.as_ref();
+    let continues = cursor.map(|c| c.hash) == Some(first.start) || (from > 0 && moved_on && frame_cursor(dir, from - 1)? == db.logged);
+    if !continues {
         return Err(recordlog::RecordLogError::Lineage {
             n,
             frame_start: first.start,
@@ -619,11 +658,11 @@ fn apply_frames(
     upto: Option<u64>,
     warn_skipped: bool,
 ) -> Result<(recordlog::Streamed, (u64, u64, u64)), IndexerError> {
-    let cursor = ing.cursor()?;
+    let db = DbPosition { cursor: ing.cursor()?, logged: logged_cursor(ing.conn())? };
     let mut run = ingest::ReplayRun::default();
     let streamed = recordlog::for_each_from(dir, from, upto, |n, rec| {
         if run.is_empty() {
-            check_lineage(cursor.as_ref(), from, Some((n, &rec)))?;
+            check_lineage(dir, &db, from, Some((n, &rec)))?;
         }
         ing.replay_frame(&mut run, n, rec)?;
         Ok::<_, IndexerError>(())
@@ -634,7 +673,7 @@ fn apply_frames(
         }
     }
     if run.is_empty() {
-        check_lineage(cursor.as_ref(), from, None)?;
+        check_lineage(dir, &db, from, None)?;
     }
     let done = ing.replay_finish(run, streamed.frames)?;
     Ok((streamed, done))

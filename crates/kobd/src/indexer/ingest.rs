@@ -722,6 +722,7 @@ impl Ingest {
             let (n, len) = log.append(&rec, now_ms())?;
             meta_set(&tx, "records_next_n", &(n + 1).to_string())?;
             meta_set(&tx, "log_cursor_daa", &cursor.daa.to_string())?;
+            meta_set(&tx, "log_cursor_hash", &cursor.hash.to_hex())?;
             log_n = Some(n);
             log_len = len;
         } else if let Some(n) = replayed {
@@ -730,6 +731,7 @@ impl Ingest {
             // after the last frame it committed.
             meta_set(&tx, "records_next_n", &(n + 1).to_string())?;
             meta_set(&tx, "log_cursor_daa", &cursor.daa.to_string())?;
+            meta_set(&tx, "log_cursor_hash", &cursor.hash.to_hex())?;
         }
         if let Err(e) = tx.commit() {
             if let (Some(n), Some(log)) = (log_n, self.log.as_mut()) {
@@ -833,7 +835,7 @@ impl Ingest {
     /// see `recordlog::for_each_from`.
     pub fn replay_frame(&mut self, run: &mut ReplayRun, n: u64, rec: LogBatch) -> Result<(), IngestError> {
         let cursor = Cursor { hash: rec.cursor.hash, daa: rec.cursor.daa };
-        run.last_daa = Some(cursor.daa);
+        run.last = Some(cursor);
         let applied = self.commit_batch(
             Some(rec.start),
             &rec.removed,
@@ -855,8 +857,9 @@ impl Ingest {
     /// orders.
     pub fn replay_finish(&mut self, run: ReplayRun, frames: u64) -> Result<(u64, u64, u64), IngestError> {
         meta_set(&self.conn, "records_next_n", &frames.to_string())?;
-        if let Some(daa) = run.last_daa {
-            meta_set(&self.conn, "log_cursor_daa", &daa.to_string())?;
+        if let Some(c) = run.last {
+            meta_set(&self.conn, "log_cursor_daa", &c.daa.to_string())?;
+            meta_set(&self.conn, "log_cursor_hash", &c.hash.to_hex())?;
         }
         Ok((frames, run.relevant, self.order_count()?))
     }
@@ -866,12 +869,12 @@ impl Ingest {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayRun {
     relevant: u64,
-    last_daa: Option<u64>,
+    last: Option<Cursor>,
 }
 
 impl ReplayRun {
     /// No frame applied yet.
     pub fn is_empty(&self) -> bool {
-        self.last_daa.is_none()
+        self.last.is_none()
     }
 }
