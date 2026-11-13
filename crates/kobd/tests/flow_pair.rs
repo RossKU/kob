@@ -1010,3 +1010,85 @@ async fn a_pair_order_records_an_unknown_commitment_as_none_and_the_migration_fi
     assert_eq!(txid, ask.create.tx.id.to_vec());
     assert_eq!(migrate(), 0, "idempotent");
 }
+
+/// Copies the live pair order `cov` (its order, state, current UTXO and, with `custody`, its live custody rows) `n` times, as
+/// orders placed a block before every other order, so a pair read meets the copies first.
+fn junk_copies(c: &Ctx, cov: &Hash32, n: usize, custody: bool) {
+    let g = c.hs.ingest.lock().unwrap();
+    let conn = g.conn();
+    let (real, last, first): (i64, i64, i64) = conn
+        .query_row(
+            "SELECT id, (SELECT MAX(id) FROM orders), (SELECT MIN(genesis_block) FROM orders) FROM orders WHERE covenant_id = ?1",
+            [&cov.0[..]],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    conn.execute(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2) \
+         INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif, \
+         expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, genesis_txid, genesis_out, genesis_block, genesis_daa, \
+         parent, listed, unlisted_reason, origin, quote_id, genesis_value) \
+         SELECT randomblob(32), contract, template_id, family, side, maker_id, token_id, token_tpl_id, ext_id, scale, min_fill, price, tip, tif, \
+         expiry_daa, active_from, in_book, budget_rate, reserve, initial_amount, deadline, genesis_state, randomblob(32), genesis_out, \
+         ?3 - 1, genesis_daa, parent, listed, unlisted_reason, origin, quote_id, genesis_value FROM orders, n WHERE id = ?1",
+        rusqlite::params![real, n as i64, first],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO order_state (order_id, status, filled_amount, remaining_amount, amount_exact, cur_txid, cur_idx, cur_value, state_known, last_block, last_daa) \
+         SELECT o.id, s.status, s.filled_amount, s.remaining_amount, s.amount_exact, randomblob(32), s.cur_idx, s.cur_value, s.state_known, s.last_block, s.last_daa \
+         FROM orders o, order_state s WHERE o.id > ?2 AND s.order_id = ?1",
+        rusqlite::params![real, last],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
+         SELECT j.cur_txid, j.cur_idx, j.order_id, u.value, u.spk, u.state, u.created_block, u.created_daa \
+         FROM order_state j, order_state s JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx WHERE j.order_id > ?2 AND s.order_id = ?1",
+        rusqlite::params![real, last],
+    )
+    .unwrap();
+    if custody {
+        conn.execute(
+            "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) \
+             SELECT randomblob(32), t.idx, t.token_id, o.id, t.amount, t.value, t.role, t.created_block, t.created_daa \
+             FROM orders o, token_utxos t WHERE o.id > ?2 AND t.order_id = ?1 AND t.role = 'custody' AND t.spent_block IS NULL",
+            rusqlite::params![real, last],
+        )
+        .unwrap();
+    }
+}
+
+/// Pair orders that never rest, ahead of a real one, cannot hide it from the pair book. Those the order columns rule out (not
+/// active for a long time) are left out by the SQL. Those only their rows tell (no exact custody) do not count toward the
+/// orders a book is built from. Past the scan bound the book says it was cut.
+#[tokio::test]
+async fn junk_pair_orders_ahead_of_a_real_one_do_not_hide_it_from_the_pair_book() {
+    let p = AB;
+    let c = Ctx::new();
+    let (ta, tb) = (p.a(), p.b());
+    let real = place_pair(&c, p, AnyState::KobPair(pair_order(p, MAKER_A, true, RATE, 10)), PV, MAKER_A).await;
+    let mut later = pair_order(p, MAKER_A, true, RATE, 10);
+    later.active_from = EXPIRY - 1;
+    let later = place_pair(&c, p, AnyState::KobPair(later), PV, MAKER_A).await;
+    age(&c, 20).await;
+    let direct = |c: &Ctx| {
+        let g = c.hs.ingest.lock().unwrap();
+        let pb = pairs::pair_book(g.conn(), &rctx(c), &ta, &tb, 10).unwrap();
+        let asks: Vec<(String, i64)> = pb.asks.iter().filter(|l| l.source == "direct").map(|l| (l.amount.clone(), l.orders)).collect();
+        let listed: i64 = pairs::pairs(g.conn(), &rctx(c), Some(&ta)).unwrap().iter().map(|s| s.direct_asks).sum();
+        (asks, pb.orders_truncated, listed)
+    };
+    assert_eq!(direct(&c), (vec![("10000".to_string(), 1)], false, 1));
+
+    // More junk than a book is built from, of both kinds, all older than the real order
+    let n = pairs::PAIR_BOOK_ORDERS_MAX + 100;
+    junk_copies(&c, &later.cov, n, true);
+    junk_copies(&c, &real.cov, n, false);
+    assert_eq!(direct(&c), (vec![("10000".to_string(), 1)], false, 1), "the real order is still found");
+
+    // Junk up to the scan bound: the real order is past it, and the book says it was cut
+    junk_copies(&c, &real.cov, pairs::PAIR_SCAN_MAX - n, false);
+    let (asks, truncated, _) = direct(&c);
+    assert!(asks.is_empty() && truncated, "{asks:?} {truncated}");
+}

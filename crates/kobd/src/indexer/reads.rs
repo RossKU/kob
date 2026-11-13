@@ -918,7 +918,7 @@ pub(crate) fn fillable_now(now: i64, now_unix: Option<u64>) -> String {
 ///
 /// `tif` 1 or 2 is a market, IOC or FOK taker in flight, filled against the book or killed. The
 /// KAS books list resting orders only, as the pair books do (see the `pairs` module doc).
-const RESTING_TIF: &str = "COALESCE(o.tif, 0) = 0";
+pub(crate) const RESTING_TIF: &str = "COALESCE(o.tif, 0) = 0";
 
 /// What a live order of the KAS book rests with at DAA `now`: `(quote, amount)`.
 ///

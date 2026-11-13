@@ -69,7 +69,7 @@
 use super::db::DbResult;
 use super::market::{self, Candle};
 use super::packed::{GENESIS_O, ORDER_IDS_O};
-use super::reads::{pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN};
+use super::reads::{fillable_now, pinned_template, reduce, tip_state, ReadCtx, CUSTODY_OK, NOT_FROZEN, RESTING_TIF};
 use crate::hex::Hash32;
 use kob_protocol::state::{AnyState, TIF_GTC};
 use rusqlite::{params, Connection};
@@ -102,6 +102,10 @@ pub struct PairBook {
     pub asks: Vec<PairLevel>,
     /// Ways to sell base for quote, in descending price.
     pub bids: Vec<PairLevel>,
+    /// The direct and entry levels were built from part of the pair orders: the oldest
+    /// [`PAIR_BOOK_ORDERS_MAX`] that rest at a level, among the oldest [`PAIR_SCAN_MAX`]
+    /// candidates. Newer orders may be missing.
+    pub orders_truncated: bool,
 }
 
 /// A pair with listed live pair orders. It is oriented: `base` is A and `quote` is B.
@@ -234,18 +238,37 @@ struct LivePair {
     udaa: i64,
 }
 
-/// The listed live pair orders of `base / quote`, that orientation only, that are eligible now and
-/// have an exact custody.
-fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<Vec<LivePair>> {
+/// The most pair orders a pair book is built from: the oldest that rest at a level.
+pub const PAIR_BOOK_ORDERS_MAX: usize = 2_000;
+
+/// The most listed live pair orders one pair read examines (decodes and checks the custody of).
+///
+/// The SQL leaves out what the order columns already rule out: not active yet, expired, idle,
+/// past the deadline, and for the book an IOC or FOK taker or a conditional. What only the state
+/// or the custody tells (an unarmed stop entry, a TWAP slice not due yet, an inexact custody) is
+/// checked row by row, and those rows count toward this bound. Junk orders therefore cost a read
+/// a bounded amount of work, and the pair book says when they cut it (`orders_truncated`).
+pub const PAIR_SCAN_MAX: usize = 20_000;
+
+/// The listed live pair orders of `base / quote`, that orientation only, that are eligible now,
+/// have an exact custody and rest at a level ([`resting_level`]).
+///
+/// These are the oldest [`PAIR_BOOK_ORDERS_MAX`] such orders among the oldest [`PAIR_SCAN_MAX`]
+/// candidates. The flag is true when either bound cut the set.
+fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: &ReadCtx) -> DbResult<(Vec<LivePair>, bool)> {
+    // Every row the SQL leaves out is one that `eligible` or `resting_level` would drop, so the
+    // order columns filter before the bounds count.
+    let live = fillable_now(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline FROM order_state s \
          CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE o.listed = 1 AND o.token_id = (SELECT id FROM ids WHERE h = ?1) AND o.quote_id = (SELECT id FROM ids WHERE h = ?2) AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND {NOT_FROZEN} AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 2000",
+         AND u.spent_block IS NULL AND o.contract IN ('KobPair','KobIfdPair') AND {RESTING_TIF} AND {live} AND {NOT_FROZEN} AND {pinned} \
+         ORDER BY o.genesis_block, o.covenant_id LIMIT ?3",
         pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;
-    let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec()], |r| {
+    let rows = st.query_map(params![base.0.to_vec(), quote.0.to_vec(), PAIR_SCAN_MAX as i64 + 1], |r| {
         Ok((
             r.get::<_, Vec<u8>>(0)?,
             r.get::<_, String>(1)?,
@@ -255,15 +278,23 @@ fn pair_orders(conn: &Connection, base: &Hash32, quote: &Hash32, now: i64, ctx: 
         ))
     })?;
     let mut out = vec![];
-    for r in rows {
+    for (scanned, r) in rows.enumerate() {
+        // A row past either bound: the set was cut.
+        if scanned == PAIR_SCAN_MAX || out.len() == PAIR_BOOK_ORDERS_MAX {
+            return Ok((out, true));
+        }
         let (cov, contract, state, udaa, deadline) = r?;
         let Some(s) = tip_state(&contract, state) else { continue };
-        if !s.is_pair() || !eligible(&s, udaa, deadline, now, ctx) || !pair_custody_ok(conn, &cov, &s)? {
+        if !s.is_pair() || !eligible(&s, udaa, deadline, now, ctx) {
             continue;
         }
-        out.push(LivePair { state: s, udaa });
+        let p = LivePair { state: s, udaa };
+        if resting_level(&p, now).is_none() || !pair_custody_ok(conn, &cov, &p.state)? {
+            continue;
+        }
+        out.push(p);
     }
-    Ok(out)
+    Ok((out, false))
 }
 
 /// The plain KAS orders of one token and side (1 asks, 2 bids) that a route can use, best first.
@@ -452,6 +483,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
     let depth = depth.max(1);
     let mut asks: Vec<Lvl> = vec![];
     let mut bids: Vec<Lvl> = vec![];
+    let mut orders_truncated = false;
     // Pair orders are listed under their base token. A route needs a listed order on both legs.
     let base_live = base != quote && has_listed(conn, base)?;
     let routes = base_live && has_listed(conn, quote)?;
@@ -459,7 +491,9 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
         // Direct and entry levels: the pair orders of the pair, grouped by source and exact price
         // (B per A base unit).
         let mut grouped: BTreeMap<(bool, &'static str, (u128, u128)), Lvl> = BTreeMap::new();
-        for (k, p) in pair_orders(conn, base, quote, now, ctx)?.iter().enumerate() {
+        let (orders, truncated) = pair_orders(conn, base, quote, now, ctx)?;
+        orders_truncated = truncated;
+        for (k, p) in orders.iter().enumerate() {
             let Some((ask, source, price, scale, amount)) = resting_level(p, now) else { continue };
             let Some(pr) = bounded_price(price as u128, scale as u128, ask) else { continue };
             let l = grouped.entry((ask, source, pr)).or_insert_with(|| Lvl {
@@ -496,6 +530,7 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
         daa_score: daa,
         asks: finish(asks, true, depth),
         bids: finish(bids, false, depth),
+        orders_truncated,
     })
 }
 
@@ -506,12 +541,15 @@ pub fn pair_book(conn: &Connection, ctx: &ReadCtx, base: &Hash32, quote: &Hash32
 /// counted under B/A. They are sorted by (base, quote).
 pub fn pairs(conn: &Connection, ctx: &ReadCtx, token: Option<&Hash32>) -> DbResult<Vec<PairSummary>> {
     let now = eval_daa(conn, ctx)?.min(i64::MAX as u64) as i64;
+    // The order columns leave out what `eligible` would drop before the bound counts
+    // ([`PAIR_SCAN_MAX`]).
+    let live = fillable_now(now, ctx.now_unix);
     let sql = format!(
         "SELECT o.covenant_id, o.contract, kob_ustate(u.state, {GENESIS_O}), u.created_daa, o.deadline, o_tk.h, o_qt.h FROM order_state s \
          CROSS JOIN orders o ON o.id = s.order_id JOIN order_utxos u ON u.txid = s.cur_txid AND u.idx = s.cur_idx{ORDER_IDS_O} \
          WHERE o.listed = 1 AND o.quote_id IS NOT NULL AND s.status IN ('open','partial') AND s.state_known = 1 \
-         AND u.spent_block IS NULL AND (?1 IS NULL OR o_tk.h = ?1 OR o_qt.h = ?1) AND {NOT_FROZEN} \
-         AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT 20000",
+         AND u.spent_block IS NULL AND (?1 IS NULL OR o_tk.h = ?1 OR o_qt.h = ?1) AND {live} AND {NOT_FROZEN} \
+         AND {pinned} ORDER BY o.genesis_block, o.covenant_id LIMIT {PAIR_SCAN_MAX}",
         pinned = pinned_template()
     );
     let mut st = conn.prepare(&sql)?;

@@ -461,7 +461,8 @@ token B is `quote`; an order of B/A is in the B/A views and never inverted into 
 (section 5.6), the pair candles and fills are not.
 
 **`GET /v1/pairs?token=`** returns a JSON **array** (not an object) of pairs with at least one listed live pair order, sorted by
-(base, quote). `token` (hex32, optional) keeps pairs naming it as base or quote.
+(base, quote). `token` (hex32, optional) keeps pairs naming it as base or quote. The counts come from at most the oldest 20,000
+listed live pair orders that are active, not expired and not past their deadline; the list has no flag for that bound.
 
 ```json
 [ { "base": "<hex32>", "quote": "<hex32>", "direct_asks": 1, "direct_bids": 0, "entry_asks": 0, "entry_bids": 1, "conditionals": 2 } ]
@@ -472,13 +473,18 @@ token B is `quote`; an order of B/A is in the B/A views and never inverted into 
 ```json
 { "base": "<hex32>", "quote": "<hex32>", "daa_score": 123,
   "asks": [ { "source": "direct", "price_num": "1", "price_den": "1", "amount": "10000", "orders": 1 } ],
-  "bids": [ { "source": "route",  "price_num": "2601", "price_den": "1999", "amount": "3074", "orders": 2 } ] }
+  "bids": [ { "source": "route",  "price_num": "2601", "price_den": "1999", "amount": "3074", "orders": 2 } ],
+  "orders_truncated": false }
 ```
 
 `source` is `direct` (a `KobPair`), `entry` (a `KobIfdPair` resting at its limit) or `route` (an implied quote of one transaction
 through the two KAS books; indicative). The price of a level is `price_num / price_den` quote base units per base base unit;
 `amount` is base-token base units; `orders` is a number. `asks` are ways to buy base with quote, ascending; `bids` ways to sell,
 descending. `daa_score` (number) is the DAA score the quotes are evaluated at (the node's, else the cursor's).
+The direct and entry levels come from the oldest 2,000 pair orders that rest at a level, found among the oldest 20,000 listed
+live candidates that are active, GTC, not expired and not past their deadline (an unarmed stop entry, a TWAP slice not due yet
+or an inexact custody counts toward the 20,000 but not the 2,000). `orders_truncated` (bool) is true when either bound cut them,
+so newer resting orders may be missing.
 
 **`GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`** takes the parameters of `/v1/candles/{token}`
 (section 3.16: `interval` default `5m`, `limit` default 500, at most 1500). The candles are **derived from the two KAS series**,
