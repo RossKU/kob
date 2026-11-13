@@ -62,6 +62,12 @@ pub enum RpcError {
     TooLarge { size: usize, limit: usize },
 }
 
+/// The largest answer a client takes at all (`WrpcConfig::max_message_bytes`), 1 GiB.
+///
+/// No window of an honest node comes near it. A node whose answer claims more failed the request
+/// itself (`multi`).
+pub const MAX_MESSAGE_BYTES: usize = 1 << 30;
+
 /// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else
 /// [`RpcError::Transport`].
 fn transport_error(e: tokio_tungstenite::tungstenite::Error) -> RpcError {
@@ -325,7 +331,7 @@ impl WrpcConfig {
             url: url.into(),
             request_timeout: Duration::from_secs(180),
             connect_timeout: Duration::from_secs(15),
-            max_message_bytes: 1 << 30,
+            max_message_bytes: MAX_MESSAGE_BYTES,
             vspc_connections: 0,
             borsh_url: None,
         }

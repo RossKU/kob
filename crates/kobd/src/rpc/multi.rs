@@ -20,9 +20,11 @@
 //! - The follower takes the parts no hash covers from the authority, for every transaction that can
 //!   matter to KOB. It does this before it applies the window (`indexer::trust`).
 //! - A node that fails a window is skipped for a while, and the window goes to the next node. A
-//!   failure is a transport error, a timeout or an undecodable answer. The pause starts at 5 s and
-//!   doubles up to 80 s. A node that does not know the window or follows another chain is paused
-//!   for 10 s.
+//!   failure is a transport error, a timeout, an undecodable answer, or an answer that claims more
+//!   than the client takes at all (`rpc::MAX_MESSAGE_BYTES`). The pause starts at 5 s and doubles up
+//!   to 80 s. A node that does not know the window or follows another chain is paused for 10 s.
+//! - An answer too large only for the window's own limit is no failure of the node. The window is
+//!   split (`indexer::prefetch`).
 //! - A node that contradicts a hash or the authority's acceptance data is dropped until the process
 //!   restarts (`lies`).
 //!
@@ -1330,7 +1332,13 @@ impl<N: ChainSource> MultiNode<N> {
         let origin = Origin { node: i, trusted: false, tier: 0 };
         let node = &*self.nodes[i];
         let classify = |e: RpcError| match e {
-            e @ RpcError::TooLarge { .. } => Attempt::Window(e),
+            // Too large for the window's own limit: the window is split, whichever node serves it.
+            e @ RpcError::TooLarge { size, .. } if w.max_bytes.is_some() && size <= super::MAX_MESSAGE_BYTES => Attempt::Window(e),
+            // Beyond what the client takes at all. No window of an honest node is that large, so the
+            // node failed it: it backs off and the window goes to the next node. Taken as the window's
+            // size, the claim would split the window down to one chain block, ask for it without a
+            // limit and offer it to the same node again, forever.
+            e @ RpcError::TooLarge { .. } => Attempt::Node(e, Fault::Failed),
             e @ RpcError::Node(_) => Attempt::Node(e, Fault::OutOfSync),
             e => Attempt::Node(e, Fault::Failed),
         };

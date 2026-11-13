@@ -48,6 +48,8 @@ enum Mode {
     InflatesBlue,
     /// Its acceptance data unbounded by `minConfirmationCount` times out, as a request for a whole backlog would.
     IdsTimeOutUnbounded,
+    /// Every window it serves arrives as a frame header claiming 3 GiB, beyond the client's absolute limit (1 GiB).
+    Oversize,
 }
 
 struct Peer {
@@ -70,6 +72,9 @@ impl ChainSource for Peer {
         }
         if let Mode::Slow(d) = self.mode {
             tokio::time::sleep(d).await;
+        }
+        if windowed && self.mode == Mode::Oversize {
+            return Err(RpcError::TooLarge { size: 3 << 30, limit: req.max_bytes.unwrap_or(1 << 30) });
         }
         let mut r = self.node.vspc_v2(req).await?;
         if let Mode::HidesTxFrom(daa) = self.mode {
@@ -431,4 +436,25 @@ async fn a_node_inflating_the_window_end_cannot_make_the_primary_fail() {
     let st = source.board().snapshot();
     assert_eq!((st[0].windows_failed, st[0].timeouts, st[0].last_error.clone()), (0, 0, None), "{:?}", st[0]);
     assert_eq!(st[1].windows_ok, 3, "{:?}", st[1]);
+}
+
+/// A node whose answers claim a frame beyond the client's absolute limit (1 GiB) fails the window itself: it backs off
+/// and the window goes to the next node. Before, the claim was taken for the window's size: the window was split down to
+/// one chain block, asked for without a limit and offered to the same node again, forever, inside one step.
+#[tokio::test]
+async fn a_node_claiming_an_oversized_frame_is_charged_and_its_windows_go_elsewhere() {
+    let c = Ctx::new();
+    let _ = chain(&c, 80);
+    let node = c.hs.node.clone();
+    let primary = Peer::new(&node, Mode::Honest);
+    let liar = Peer::new(&node, Mode::Oversize);
+    let m = multi(node.anchor(), vec![(spec("primary", false, 2), primary.clone()), (spec("oversize", true, 2), liar.clone())]);
+    tokio::time::timeout(Duration::from_secs(120), m.sync(2_000)).await.expect("the follower reaches the sink");
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+    let l = &h.nodes[1];
+    assert!(l.windows_failed >= 1 && l.windows_ok == 0, "{l:?}");
+    assert!(l.last_error.as_deref().is_some_and(|e| e.contains("exceeds")), "{l:?}");
+    assert!(h.nodes[0].windows_ok > 0, "the primary took the windows: {:?}", h.nodes[0]);
 }
