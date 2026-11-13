@@ -1,7 +1,7 @@
 // Issue codes of the conditional and if-done planner (stops, take-profit, OCO, trailing, IFD, IFO,
 // repeat), with the conventions of common-issues.ts.
 //
-// The UI translates by `code` (i18n key `plan.issue.<CODE>`) and `message` is the English
+// The UI translates by `code` (i18n key `issues.<CODE>`) and `message` is the English
 // fallback. Placeholders are `{name}`, `{name:kas}` (sompi bigint as KAS) and `{name:bps}`.
 //
 // Codes shared with the simple orders (SELF_TRADE, INSUFFICIENT_KAS, PRICE_NOT_ON_TICK,

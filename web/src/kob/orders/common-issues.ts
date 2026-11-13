@@ -1,7 +1,7 @@
 // Stable issue codes of the order planners (`PlanIssue.code` in plan-types.ts), with their default
 // severity and English fallback text.
 //
-// The UI translates by `code` (i18n key `plan.issue.<CODE>`) and fills the placeholders from
+// The UI translates by `code` (i18n key `issues.<CODE>`) and fills the placeholders from
 // `params`. The `message` is only the fallback.
 //
 // Placeholders:

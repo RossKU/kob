@@ -55,7 +55,7 @@ export const legInputOf = (i: LegsIntent): LegInput => {
   }
 };
 
-/** UI sentence tags of `Disclosure.notes` per type. The UI owns the wording (`plan.note.<tag>`). */
+/** UI sentence tags of `Disclosure.notes` per type. The UI owns the wording (`ticket.note.*`). */
 export const NOTES_BY_TYPE: Record<LegsIntent['type'], string[]> = {
   stopMarket: ['stopTrigger', 'stopAuction', 'triggerExposure'],
   stopLimit: ['stopTrigger', 'stopAuction', 'triggerExposure', 'stopLimitMayNotFill'],
