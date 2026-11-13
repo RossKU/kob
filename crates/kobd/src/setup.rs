@@ -1,17 +1,20 @@
-//! First run for an operator who downloaded the binary: `kobd setup`, and the binary started without arguments
-//! (what a double click does).
+//! The first run of `kobd`: the interactive setup, and what a start without arguments does.
 //!
-//! Started without arguments (or with role flags only), the binary looks for [`CONFIG_FILE`] in its own directory
-//! ([`no_args_start`]). With one, it starts what the file's `[launch]` table says ([`launch_args`]): exactly `kobd --executor
-//! --config kobd.toml ...` (or `--indexer`) in the file's directory, printed before it starts. Without one, and on a
-//! terminal, it runs the interactive setup ([`run_setup`]), which writes the file and then starts the same way; a service
-//! starts it with the one line the setup prints ([`service_line`]).
+//! A start without arguments, or with role flags only, looks for [`CONFIG_FILE`] in the directory
+//! of the binary ([`no_args_start`]). With one, it starts what the `[launch]` table of the file
+//! says ([`launch_args`]). That is `kobd --executor --config kobd.toml ...`, or `--indexer`, in
+//! the directory of the file, and the command line is printed before it starts. Without one, and
+//! on a terminal, it runs the interactive setup ([`run_setup`]). The setup writes the file and
+//! then starts the same way. A service starts it with the one line that the setup prints
+//! ([`service_line`]).
 //!
-//! Nothing here talks to anything but the node the operator names (the local node of the build's network by default,
-//! [`default_wrpc_url`]): no telemetry, no fee, no project server, no update check.
+//! The setup talks to nothing but the node that the operator names, which is the local node of the
+//! build's network by default ([`default_wrpc_url`]). It sends no telemetry, charges no fee and
+//! contacts no project server or update check.
 //!
-//! The dialogue goes through [`Console`] (prompts and answers) and [`SetupNode`] (the two node calls), so it runs in tests
-//! on scripted answers and a fake node; [`StdConsole`] and [`WrpcSetupNode`] are the real ones.
+//! The dialogue goes through [`Console`] (prompts and answers) and [`SetupNode`] (the two node
+//! calls). Tests run it on scripted answers and a fake node. [`StdConsole`] and [`WrpcSetupNode`]
+//! are the real ones.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -36,45 +39,54 @@ pub const KEY_FILE: &str = "kob-operator.key";
 pub const LOG_FILE: &str = "kobd.log";
 /// The default data directory (database and record log), relative to the configuration.
 pub const DATA_DIR: &str = "kob-data";
-/// The pause file the setup configures (`pause_file`), next to the configuration and never in the data directory: the data
-/// directory is what an operator deletes to rebuild the store (docs/ops/executor-quickstart.md, upgrades), and a pause file
-/// there would go with it, so the executor would trade on its next start although its operator had paused it.
+/// The pause file the setup configures (`pause_file`), next to the configuration.
+///
+/// It is never in the data directory. An operator deletes that directory to rebuild the store, see
+/// the upgrades in docs/ops/executor-quickstart.md. A pause file there would go with it, and the
+/// executor would trade on its next start although its operator had paused it.
 pub const PAUSE_FILE: &str = "kob-pause";
-/// The token-program list a build without a pinned registry gets (testnet-10, [`program_registry`]).
+/// The token-program list a build without a pinned registry gets (testnet-10,
+/// [`program_registry`]).
 pub const TOKENS_FILE: &str = "kob-tokens.json";
-/// The balance at which the setup stops waiting for funds: `run`'s low-funds alert threshold (`--low-funds-kas`).
+/// The balance at which the setup stops waiting for funds: `run`'s low-funds alert threshold
+/// (`--low-funds-kas`).
 pub const MIN_FUNDS_KAS: u64 = 100;
-/// The funding the setup recommends: twice the alert threshold, so a day of trading does not start with a warning.
+/// The funding the setup recommends: twice the alert threshold, so a day of trading does not start
+/// with a warning.
 pub const RECOMMENDED_FUNDS_KAS: u64 = 200;
 
 /// `kobd setup`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct SetupArgs {
-    /// Directory of the configuration, the key file and the data directory. Default: the one a start without arguments
-    /// reads, `$KOBD_DIR` or else the executable's own directory.
+    /// Directory of the configuration, the key file and the data directory. Default: the one a
+    /// start without arguments reads, `$KOBD_DIR` or else the executable's own directory.
     #[arg(long)]
     pub dir: Option<PathBuf>,
     /// Write the configuration and exit instead of starting the executor.
     #[arg(long)]
     pub no_start: bool,
-    /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs `--node` and a role
-    /// (`--executor`, `--indexer` or both); writes the files and prints one JSON object (`address`, `config`, ...; never the
-    /// secret). Replaces an existing configuration (the old one is kept as `kobd.toml.bak`, named in the JSON as `replaced`),
-    /// keeps an existing key file.
+    /// For a wrapper (the Android app) that cannot answer questions: no dialogue, no start. Needs
+    /// `--node` and a role (`--executor`, `--indexer` or both); writes the files and prints one
+    /// JSON object (`address`, `config`, ...; never the secret). Replaces an existing configuration
+    /// (the old one is kept as `kobd.toml.bak`, named in the JSON as `replaced`), keeps an existing
+    /// key file.
     #[arg(long, requires = "node")]
     pub non_interactive: bool,
-    /// Non-interactive: `resolver` (two public nodes, the default of the interactive setup) or your node's wRPC URL.
+    /// Non-interactive: `resolver` (two public nodes, the default of the interactive setup) or your
+    /// node's wRPC URL.
     #[arg(long, requires = "non_interactive")]
     pub node: Option<String>,
-    /// Non-interactive: make the operator key when the directory has none (an existing key file is never replaced).
+    /// Non-interactive: make the operator key when the directory has none (an existing key file is
+    /// never replaced).
     #[arg(long, requires = "non_interactive")]
     pub new_key: bool,
-    /// Non-interactive, development builds only: `mainnet` or `testnet-10` (a deployment build knows its network).
+    /// Non-interactive, development builds only: `mainnet` or `testnet-10` (a deployment build
+    /// knows its network).
     #[arg(long, requires = "non_interactive")]
     pub network: Option<String>,
-    /// The roles: `--executor` (matches orders and refunds expired ones; needs a key), `--indexer` (full history and the read
-    /// API; no key) or both in one process. Without a flag the interactive setup asks. (Last: the heading "Roles" holds it
-    /// alone.)
+    /// The roles: `--executor` (matches orders and refunds expired ones; needs a key), `--indexer`
+    /// (full history and the read API; no key) or both in one process. Without a flag the
+    /// interactive setup asks. (Last: the heading "Roles" holds it alone.)
     #[command(flatten)]
     pub roles: crate::app::RoleFlags,
 }
@@ -86,7 +98,8 @@ pub enum NoArgs {
     Launch(PathBuf),
     /// No configuration, and a person at a terminal: the interactive setup.
     Setup,
-    /// No configuration and no terminal (a service, a pipe): nobody can answer the setup's questions.
+    /// No configuration and no terminal (a service, a pipe): nobody can answer the setup's
+    /// questions.
     Refuse(String),
 }
 
@@ -107,8 +120,9 @@ pub fn no_args_start(dir: &Path, interactive: bool) -> NoArgs {
     }
 }
 
-/// Environment variable naming the directory a start without arguments and `setup` use instead of the executable's own (a
-/// container's volume, where the executable's directory is part of the read-only image).
+/// Environment variable naming the directory a start without arguments and `setup` use instead of
+/// the executable's own (a container's volume, where the executable's directory is part of the
+/// read-only image).
 pub const DIR_ENV: &str = "KOBD_DIR";
 
 /// The directory of the configuration: `$KOBD_DIR` when set, else the executable's directory.
@@ -129,14 +143,14 @@ pub fn exe_dir() -> Result<PathBuf> {
     exe.parent().map(Path::to_path_buf).ok_or_else(|| anyhow!("the executable {} has no directory", exe.display()))
 }
 
-/// The running executable's full path, for a printed command line that works from any directory (`kobd` when it
-/// cannot be named).
+/// The running executable's full path, for a printed command line that works from any directory
+/// (`kobd` when it cannot be named).
 pub fn program_path() -> String {
     std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "kobd".into())
 }
 
-/// A start from a configuration file: the roles' start with the options `args` (without the program name and the role flags)
-/// in `dir`.
+/// A start from a configuration file: the roles' start with the options `args` (without the program
+/// name and the role flags) in `dir`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launch {
     pub dir: PathBuf,
@@ -149,9 +163,10 @@ pub struct Launch {
     pub pause_file: Option<PathBuf>,
 }
 
-/// The start options the configuration at `path` stands for: `--config <file name>`, the `[launch]` paths and `[launch] args`.
-/// The file must parse as a `--config` file (every indexer key is checked, unknown ones refused) and carry a `[launch]` table;
-/// the paths it names stay as written, relative to the file's directory, which the caller makes the working directory.
+/// The start options the configuration at `path` stands for: `--config <file name>`, the `[launch]`
+/// paths and `[launch] args`. The file must parse as a `--config` file (every indexer key is
+/// checked, unknown ones refused) and carry a `[launch]` table; the paths it names stay as written,
+/// relative to the file's directory, which the caller makes the working directory.
 pub fn launch_args(path: &Path) -> Result<Launch> {
     let cfg = IndexerConfig::load(path)?;
     let launch = cfg
@@ -192,8 +207,9 @@ fn shell_word(s: &str) -> String {
     }
 }
 
-/// The two lines that run `launch` with every option spelt out, from a terminal (Windows `cmd`, or a POSIX shell): change to its
-/// directory, then the program with the role flags and the options (what the start banner shows).
+/// The two lines that run `launch` with every option spelt out, from a terminal (Windows `cmd`, or
+/// a POSIX shell): change to its directory, then the program with the role flags and the options
+/// (what the start banner shows).
 pub fn command_line(launch: &Launch, program: &str) -> String {
     let cd = if cfg!(windows) { "cd /d" } else { "cd" };
     let flags = launch.roles.flags().iter().map(|f| f.to_string());
@@ -201,14 +217,16 @@ pub fn command_line(launch: &Launch, program: &str) -> String {
     format!("{cd} {}\n{} {}", shell_word(&launch.dir.to_string_lossy()), shell_word(program), args.join(" "))
 }
 
-/// Whether `dir` is the directory a start without arguments reads (`$KOBD_DIR`, else the executable's own).
+/// Whether `dir` is the directory a start without arguments reads (`$KOBD_DIR`, else the
+/// executable's own).
 fn is_home(dir: &Path) -> bool {
     let own = home_dir().ok().and_then(|h| h.canonicalize().ok());
     own.is_some() && own == dir.canonicalize().ok()
 }
 
-/// What the setup says about a start without arguments (a double click) for the configuration in `dir`: that it runs it too
-/// when `dir` is the directory such a start reads, else what to do instead (the line above names `--config`).
+/// What the setup says about a start without arguments (a double click) for the configuration in
+/// `dir`: that it runs it too when `dir` is the directory such a start reads, else what to do
+/// instead (the line above names `--config`).
 pub fn no_args_note(dir: &Path) -> String {
     if is_home(dir) {
         return "From now on, starting kobd without arguments (a double click) runs it too.".to_string();
@@ -220,8 +238,9 @@ pub fn no_args_note(dir: &Path) -> String {
     )
 }
 
-/// The one line a service (or a terminal anywhere) starts the configuration of `dir` with: the program and the role flags, plus
-/// `--config <file>` when `dir` is not the directory the program reads by itself (`$KOBD_DIR`, else its own).
+/// The one line a service (or a terminal anywhere) starts the configuration of `dir` with: the
+/// program and the role flags, plus `--config <file>` when `dir` is not the directory the program
+/// reads by itself (`$KOBD_DIR`, else its own).
 pub fn service_line(dir: &Path, roles: AppRole, program: &str) -> String {
     let mut words = vec![shell_word(program)];
     words.extend(roles.flags().iter().map(|f| f.to_string()));
@@ -240,26 +259,28 @@ pub struct SetupFile {
     pub data_dir: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens_path: Option<String>,
-    /// `fast_start = true` for the roles with an Executor: the first start trades within seconds and indexes the history meanwhile
-    /// (`crate::faststart`). Absent for the Indexer alone, which has no use for it.
+    /// `fast_start = true` for the roles with an Executor: the first start trades within seconds
+    /// and indexes the history meanwhile (`crate::faststart`). Absent for the Indexer alone, which
+    /// has no use for it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fast_start: Option<bool>,
-    /// `lean = true` for the Executor: the store keeps the live book, not the history (`crate::indexer::lean`); `false` for
-    /// Executor and Indexer, which keeps both.
+    /// `lean = true` for the Executor: the store keeps the live book, not the history
+    /// (`crate::indexer::lean`); `false` for Executor and Indexer, which keeps both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lean: Option<bool>,
-    /// `log_file` for the Executor: the console shows the log (a double click, a pipe, the journal, `docker logs`), and the file
-    /// keeps a copy that a scheduled task without a console can be read from (rotated by size, `crate::logging`). Absent for the index role and
-    /// for the wrapper's non-interactive setup (the Android app reads the process's output).
+    /// `log_file` for the Executor: the console shows the log (a double click, a pipe, the journal,
+    /// `docker logs`), and the file keeps a copy that a scheduled task without a console can be
+    /// read from (rotated by size, `crate::logging`). Absent for the index role and for the
+    /// wrapper's non-interactive setup (the Android app reads the process's output).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_file: Option<String>,
     pub launch: LaunchConfig,
 }
 
 impl SetupFile {
-    /// The `lean` key a setup writes for `role`: `true` for the Executor (the live book, no history), an explicit `false` for
-    /// the combined role (the archive keeps the history and the record log next to the Executor), absent for the Indexer (the
-    /// default is the archive).
+    /// The `lean` key a setup writes for `role`: `true` for the Executor (the live book, no
+    /// history), an explicit `false` for the combined role (the archive keeps the history and the
+    /// record log next to the Executor), absent for the Indexer (the default is the archive).
     pub fn lean_for(role: AppRole) -> Option<bool> {
         match role {
             AppRole::Executor => Some(true),
@@ -273,8 +294,9 @@ impl SetupFile {
         role.has_key().then(|| LOG_FILE.to_string())
     }
 
-    /// The `fast_start` key a setup writes for `role`: the roles with an Executor trade within seconds of the first start. With
-    /// the combined role the history is still indexed in full, into the record log, meanwhile (docs/ops/executor.md, A.1.1).
+    /// The `fast_start` key a setup writes for `role`: the roles with an Executor trade within
+    /// seconds of the first start. With the combined role the history is still indexed in full,
+    /// into the record log, meanwhile (docs/ops/executor.md, A.1.1).
     pub fn fast_start_for(role: AppRole) -> Option<bool> {
         role.has_key().then_some(true)
     }
@@ -299,11 +321,13 @@ impl SetupFile {
     }
 }
 
-/// The token list of a build that pins no registry (testnet-10): the programs of the embedded registry for `network`, with
-/// no token entries (the mainnet entries name mainnet tokens). A registry document with templates makes the allowlist open:
-/// every order of a supported program is listed (docs/ops/executor.md, *Token allowlist*), as the mainnet build lists with
-/// its embedded registry. That is KOB's no-curation policy: no token is listed by name and none refused for what it is (a
-/// bare list of chosen tokens would be a listing decision). Without any list nothing would be listed.
+/// The token list of a build that pins no registry, such as testnet-10.
+///
+/// It holds the programs of the embedded registry for `network` and no token entries, because the
+/// embedded entries name mainnet tokens. A registry document with templates makes the allowlist
+/// open, so every order of a supported program is listed, as on the mainnet build with its
+/// embedded registry. No token is listed by name and none is refused for what it is. A bare list
+/// of chosen tokens would be a listing decision. See docs/ops/executor.md, *Token allowlist*.
 pub fn program_registry(network: &str) -> Result<String> {
     let mut v: serde_json::Value = serde_json::from_str(kob_protocol::registry::DEFAULT_REGISTRY_JSON)?;
     let o = v.as_object_mut().ok_or_else(|| anyhow!("the embedded registry is not an object"))?;
@@ -346,20 +370,22 @@ pub trait SetupNode {
     fn node_name(&mut self, url: &str) -> Option<String> {
         crate::rpc::resolver::current(url).map(|n| crate::rpc::resolver::host(&n))
     }
-    /// The public node a resolver entry stands for, resolved now if it has none (`None`: not a resolver entry, or the
-    /// resolvers named none): the node a check of the entry asks.
+    /// The public node a resolver entry stands for, resolved now if it has none (`None`: not a
+    /// resolver entry, or the resolvers named none): the node a check of the entry asks.
     fn resolve(&mut self, url: &str) -> Option<String> {
         crate::rpc::resolver::is_resolver(url).then(|| crate::rpc::resolver::endpoint(url).ok()).flatten()
     }
-    /// The check of `node`, the public node the resolver entry `url` stood for, failed: the entry moves to another public node,
-    /// so that "try again" asks another one (a report about a node the entry no longer uses changes nothing).
+    /// The check of `node`, the public node the resolver entry `url` stood for, failed: the entry
+    /// moves to another public node, so that "try again" asks another one (a report about a node
+    /// the entry no longer uses changes nothing).
     fn give_up(&mut self, url: &str, node: &str, why: &str) {
         crate::rpc::resolver::replace(url, node, why);
     }
 }
 
-/// The lines of standard input, read on a thread of their own so that [`Console::poll`] can wait with a timeout. One reader
-/// for the whole process: the "press Enter to close" prompt after a fatal error reads the same lines ([`read_line`]).
+/// The lines of standard input, read on a thread of their own so that [`Console::poll`] can wait
+/// with a timeout. One reader for the whole process: the "press Enter to close" prompt after a
+/// fatal error reads the same lines ([`read_line`]).
 fn stdin_lines() -> &'static Mutex<Receiver<Option<String>>> {
     static LINES: OnceLock<Mutex<Receiver<Option<String>>>> = OnceLock::new();
     LINES.get_or_init(|| {
@@ -406,7 +432,8 @@ impl Console for StdConsole {
     }
 }
 
-/// The terminal with the prose on stderr: for a command whose stdout is one JSON document (`kobd withdraw --json`).
+/// The terminal with the prose on stderr: for a command whose stdout is one JSON document (`kobd
+/// withdraw --json`).
 pub struct StderrConsole;
 
 impl Console for StderrConsole {
@@ -423,7 +450,8 @@ impl Console for StderrConsole {
     }
 }
 
-/// The node over JSON wRPC ([`WrpcNode`]), on the caller's runtime, with short timeouts (a person is waiting).
+/// The node over JSON wRPC ([`WrpcNode`]), on the caller's runtime, with short timeouts (a person
+/// is waiting).
 pub struct WrpcSetupNode<'a> {
     pub rt: &'a tokio::runtime::Runtime,
 }
@@ -529,7 +557,8 @@ pub fn node_hint(network: &str) -> String {
     )
 }
 
-/// The node check: what it found, and whether that blocks the role (`Err`: the operator should fix it first).
+/// The node check: what it found, and whether that blocks the role (`Err`: the operator should fix
+/// it first).
 pub fn judge_node(info: &ServerInfo, network: &str, role: LaunchRole) -> Result<String, String> {
     let found = format!(
         "rusty-kaspa {} on {}, {}, UTXO index {}",
@@ -547,14 +576,16 @@ pub fn judge_node(info: &ServerInfo, network: &str, role: LaunchRole) -> Result<
     Ok(found)
 }
 
-/// The interactive setup. Writes the configuration (and the key file, the token list) into `opts.dir` and returns its path
-/// when the executor should start now (`None`: written, or nothing changed, and the operator starts it later).
+/// The interactive setup. Writes the configuration (and the key file, the token list) into
+/// `opts.dir` and returns its path when the executor should start now (`None`: written, or nothing
+/// changed, and the operator starts it later).
 pub fn run_setup(io: &mut dyn Console, node: &mut dyn SetupNode, opts: &SetupOptions) -> Result<Option<PathBuf>> {
     run_setup_with(io, node, opts, None, false)
 }
 
-/// [`run_setup`] with the roles already chosen on the command line (`--executor`, `--indexer`): the role question is skipped.
-/// With `no_start` (`--no-start`) the "start now?" question is not asked and the result is `None`.
+/// [`run_setup`] with the roles already chosen on the command line (`--executor`, `--indexer`): the
+/// role question is skipped. With `no_start` (`--no-start`) the "start now?" question is not asked
+/// and the result is `None`.
 pub fn run_setup_with(
     io: &mut dyn Console,
     node: &mut dyn SetupNode,
@@ -671,7 +702,8 @@ pub fn run_setup_with(
         }
     }
     io.say("");
-    // the sizes the roles need: lean storage is capped (`lean_max_db_mb`, 500 MB), an archive keeps the whole history
+    // Lean storage is capped by `lean_max_db_mb`, 500 MB by default. An archive keeps the whole
+    // history.
     let sizing =
         if app_role.is_archive() { "the database and the record log; a few GB" } else { "the live book; at most about 500 MB" };
     let data_dir = ask_default(io, &format!("Data directory ({sizing})"), DATA_DIR)?;
@@ -757,7 +789,8 @@ pub fn run_setup_with(
     }
 }
 
-/// What the "start now?" question names: the Indexer for an index-only configuration, else the executor.
+/// What the "start now?" question names: the Indexer for an index-only configuration, else the
+/// executor.
 fn start_noun(role: AppRole) -> &'static str {
     match role {
         AppRole::Indexer => "Indexer",
@@ -766,8 +799,8 @@ fn start_noun(role: AppRole) -> &'static str {
     }
 }
 
-/// The token list next to the configuration: kept when there, else written ([`program_registry`]). Its file name and whether
-/// it was written now.
+/// The token list next to the configuration: kept when there, else written ([`program_registry`]).
+/// Its file name and whether it was written now.
 pub(crate) fn ensure_token_list(dir: &Path, network: &str) -> Result<(String, bool)> {
     let p = dir.join(TOKENS_FILE);
     if p.exists() {
@@ -777,11 +810,12 @@ pub(crate) fn ensure_token_list(dir: &Path, network: &str) -> Result<(String, bo
     Ok((TOKENS_FILE.to_string(), true))
 }
 
-/// Writes `file` as `dir`/[`CONFIG_FILE`], after checking that it reads back as a launch configuration; returns its path.
+/// Writes `file` as `dir`/[`CONFIG_FILE`], after checking that it reads back as a launch
+/// configuration; returns its path.
 pub(crate) fn write_config(dir: &Path, file: &SetupFile) -> Result<PathBuf> {
     let config_path = dir.join(CONFIG_FILE);
     let text = file.text()?;
-    // the file must be what a start without arguments reads back
+    // The file must be what a start without arguments reads back.
     let tmp = dir.join(format!("{CONFIG_FILE}.tmp"));
     std::fs::write(&tmp, &text).with_context(|| tmp.display().to_string())?;
     let check = launch_args(&tmp);
@@ -796,17 +830,20 @@ pub(crate) fn write_config(dir: &Path, file: &SetupFile) -> Result<PathBuf> {
 /// What public nodes mean for an operator (the setup's note under the choice).
 pub const PUBLIC_NODES: &str = "Public nodes are shared and slower than your own. A bad node cannot steal funds: the executor signs only its own inputs and the covenants enforce every order. It could waste fees or hide orders, so the executor always uses two public nodes on different hosts, indexes only what both report, and sends every transaction to both; if one fails, the other carries on and a replacement is found.";
 
-/// The check of the public pair (`resolver` and `resolver:2`, `rpc::resolver`): both resolved on different hosts, each on the
-/// build's network, synced or syncing, with the UTXO index the role needs. `Ok(true)`: both fine; `Ok(false)`: the operator
-/// goes on anyway (the executor keeps resolving).
+/// The check of the public pair (`resolver` and `resolver:2`, `rpc::resolver`): both resolved on
+/// different hosts, each on the build's network, synced or syncing, with the UTXO index the role
+/// needs. `Ok(true)`: both fine; `Ok(false)`: the operator goes on anyway (the executor keeps
+/// resolving).
 fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &str, role: LaunchRole) -> Result<bool> {
     loop {
-        // the operator's own try again is never held back by the resolutions' rate limit (`rpc::resolver::CHURN_WINDOW`)
+        // The operator's own "try again" is never held back by the rate limit of the resolutions,
+        // `rpc::resolver::CHURN_WINDOW`.
         crate::rpc::resolver::forget_churn();
         io.say("Finding two public nodes through the Kaspa resolvers ...");
         let mut problems = vec![];
         for (entry, what) in [(crate::rpc::resolver::pseudo(1), "chain authority"), (crate::rpc::resolver::pseudo(2), "cross-check")] {
-            // the node this check asks, before the check can move the entry (a failed connection swaps the pair's roles)
+            // The node this check asks, read before the check can move the entry. A failed
+            // connection swaps the roles of the pair.
             let used = node.resolve(&entry);
             let res = node
                 .server_info(&entry)
@@ -817,7 +854,7 @@ fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &s
             match res {
                 Ok(found) => io.say(&format!("OK: {name} ({what}): {found}.")),
                 Err(why) => {
-                    // "try again" asks another public node, not the one that failed
+                    // "Try again" asks another public node, not the one that failed.
                     if let Some(n) = &used {
                         node.give_up(&entry, n, &format!("it failed the setup's check: {why}"));
                     }
@@ -840,8 +877,8 @@ fn check_public_pair(io: &mut dyn Console, node: &mut dyn SetupNode, network: &s
     }
 }
 
-/// The operator's key: the existing key file next to the configuration, a new one, or a file the operator names. Sets
-/// `launch.key_file`. Never prints the secret.
+/// The operator's key: the existing key file next to the configuration, a new one, or a file the
+/// operator names. Sets `launch.key_file`. Never prints the secret.
 fn operator_key(io: &mut dyn Console, dir: &Path, launch: &mut LaunchConfig) -> Result<HotKey> {
     let own = dir.join(KEY_FILE);
     if own.exists() {
@@ -912,7 +949,8 @@ fn wait_for_funds(io: &mut dyn Console, node: &mut dyn SetupNode, url: &str, add
             Poll::Nothing => {}
             Poll::Line(_) => {
                 match last {
-                    // funds are there, only fewer than the recommended minimum: say so instead of "not waiting"
+                    // Funds are there, only fewer than the recommended minimum. Say so instead of
+                    // "not waiting".
                     Some(b) if b > 0 => io.say(&format!(
                         "Going on with the {} KAS there; the executor reports its funds and warns below {MIN_FUNDS_KAS} KAS.",
                         kas_text(b as i64)
@@ -963,7 +1001,8 @@ mod tests {
         }
     }
 
-    /// A node that answers `info` (or refuses until `refuse` calls have been made) and reports the balances in turn.
+    /// A node that answers `info` (or refuses until `refuse` calls have been made) and reports the
+    /// balances in turn.
     struct FakeNode {
         info: ServerInfo,
         refuse: usize,
@@ -1043,7 +1082,8 @@ mod tests {
 
     #[test]
     fn the_default_node_is_the_local_node_of_the_build() {
-        // rusty-kaspa v2.1.0 `--rpclisten-json=default`: 127.0.0.1 and the network's JSON wRPC port
+        // The default of rusty-kaspa `--rpclisten-json=default`: 127.0.0.1 and the JSON wRPC port
+        // of the network.
         assert_eq!(default_wrpc_url("testnet-10").as_deref(), Some("ws://127.0.0.1:18210"));
         assert_eq!(default_wrpc_url("mainnet").as_deref(), Some("ws://127.0.0.1:18110"));
         assert!(node_hint("testnet-10").contains("kaspad --testnet --netsuffix=10 --utxoindex --rpclisten-json=default"));
@@ -1076,10 +1116,12 @@ mod tests {
         assert_eq!((c.network.as_str(), c.rpc_url.as_str()), ("testnet-10", "ws://127.0.0.1:18210"));
         assert_eq!(c.data_dir, PathBuf::from("kob-data"));
         assert_eq!(c.tokens_path, Some(PathBuf::from(TOKENS_FILE)));
-        // a matcher's configuration trades within seconds of the first start; an index-only one has no use for it
+        // A matcher's configuration trades within seconds of the first start. An index-only one
+        // has no use for that.
         assert!(c.fast_start && SetupFile::fast_start_for(AppRole::Indexer).is_none());
         assert!(c.lean && SetupFile::lean_for(AppRole::Indexer).is_none());
-        // a matcher keeps a rotated log file next to the configuration (a scheduled task has no console); index only does not
+        // A matcher keeps a rotated log file next to the configuration, because a scheduled task
+        // has no console. Index only does not.
         assert_eq!(c.log_file, Some(PathBuf::from(LOG_FILE)));
         assert!((c.log_max_mb, c.log_files) == (10, 5) && SetupFile::log_file_for(AppRole::Indexer).is_none());
         assert_eq!(c.launch.as_ref(), Some(&f.launch));
@@ -1095,16 +1137,16 @@ mod tests {
             ),
             "{cl}"
         );
-        // index only: no key options; a key option there is refused, not dropped
+        // Index only has no key options. A key option there is refused, not dropped.
         let idx = SetupFile { launch: LaunchConfig { role: LaunchRole::Index, ..LaunchConfig::default() }, ..f.clone() };
         std::fs::write(&p, idx.text().unwrap()).unwrap();
         assert_eq!(launch_args(&p).unwrap().args, ["--config", CONFIG_FILE]);
         std::fs::write(&p, idx.text().unwrap().replace("role = \"index\"", "role = \"index\"\nkey_file = \"k\"")).unwrap();
         assert!(launch_args(&p).unwrap_err().to_string().contains("key_file"));
-        // a misspelt launch key is refused like any other
+        // A misspelt launch key is refused like any other.
         std::fs::write(&p, f.text().unwrap().replace("pause_file", "pausefile")).unwrap();
         assert!(launch_args(&p).is_err());
-        // a plain --config file is not a launch configuration
+        // A plain --config file is not a launch configuration.
         std::fs::write(&p, "network = \"testnet-10\"\n").unwrap();
         assert!(launch_args(&p).unwrap_err().to_string().contains("[launch]"));
         assert_eq!(shell_word("C:\\Program Files\\kob"), "\"C:\\Program Files\\kob\"");
@@ -1120,21 +1162,22 @@ mod tests {
         assert!(crate::tokens::TokenAllowlist::parse(&text).unwrap().is_open());
     }
 
-    /// The whole dialogue of a testnet operator taking every default: a refused node first, then the node, a new key, funds
-    /// arriving, no x402, start.
+    /// The whole dialogue of a testnet operator taking every default: a refused node first, then
+    /// the node, a new key, funds arriving, no x402, start.
     #[test]
     fn a_first_setup_with_the_defaults() {
         let d = tempfile::tempdir().unwrap();
         let mut node = FakeNode::new("testnet-10");
         node.refuse = 1;
         node.balances = [0, 0, 150 * 100_000_000].into();
-        // node (public), role, Enter after the refused check, data dir, key choice, two polls while waiting, x402, start
+        // node (public), role, Enter after the refused check, data dir, key choice, two polls while
+        // waiting, x402, start
         let mut io = Script::new(&["", "", "", "", "", "<wait>", "<wait>", "", ""]);
         let got = run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap();
         let out = io.text();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)), "{out}");
         assert_eq!(node.urls, ["resolver", "resolver:2", "resolver", "resolver:2"], "both public nodes, checked again");
-        // the node that failed the check is given up, so that "try again" asks another one
+        // The node that failed the check is given up, so that "try again" asks another one.
         assert_eq!(node.given_up.len(), 1, "{:?}", node.given_up);
         let (entry, failed, why) = &node.given_up[0];
         assert_eq!((entry.as_str(), failed.as_str()), ("resolver", "wss://resolver.public.example/x/borsh"));
@@ -1149,12 +1192,12 @@ mod tests {
         assert!(out.contains("OK: resolver-2.public.example (cross-check)"), "{out}");
         assert!(out.contains("Operator address: kaspatest:") && out.contains("HOT key"), "{out}");
         assert!(out.contains("Balance: 0 KAS") && out.contains("Balance: 150 KAS") && out.contains("Funded."), "{out}");
-        // the secret is never shown
+        // The secret is never shown.
         let secret = std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap();
         assert!(!out.contains(secret.trim()), "the setup printed the secret");
         let k = HotKey::from_file(&d.path().join(KEY_FILE)).unwrap();
         assert!(out.contains(&k.address("testnet-10").to_string()));
-        // the configuration, the token list, and the command line it stands for
+        // The configuration, the token list and the command line that it stands for.
         let l = launch_args(&d.path().join(CONFIG_FILE)).unwrap();
         assert_eq!(l.args, ["--config", CONFIG_FILE, "--key-file", KEY_FILE, "--pause-file", PAUSE_FILE]);
         let c = IndexerConfig::load(&d.path().join(CONFIG_FILE)).unwrap();
@@ -1164,11 +1207,11 @@ mod tests {
         assert!(out.contains("Start it (also from a service) with:") && out.contains("kobd --executor --config "), "{out}");
         assert!(!d.path().join(format!("{CONFIG_FILE}.tmp")).exists());
 
-        // again: the configuration is kept unless replaced
+        // Again: the configuration is kept unless replaced.
         let mut io = Script::new(&[""]);
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         assert!(io.text().contains("Nothing changed"));
-        // replaced: the existing key is offered (never a new one over it), index only this time
+        // Replaced: the existing key is offered, never a new one over it. Index only this time.
         let mut io = Script::new(&["y", "", "2", "", "n"]);
         assert_eq!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap(), None);
         assert_eq!(launch_args(&d.path().join(CONFIG_FILE)).unwrap().args, ["--config", CONFIG_FILE]);
@@ -1183,7 +1226,8 @@ mod tests {
         assert!(out.contains(&k.address("testnet-10").to_string()), "the same key: {out}");
     }
 
-    /// Enter while waiting: with nothing there the setup says it is not waiting, with some funds it says it goes on with them.
+    /// Enter while waiting: with nothing there the setup says it is not waiting, with some funds it
+    /// says it goes on with them.
     #[test]
     fn going_on_without_waiting_tells_whether_funds_arrived() {
         let mut node = FakeNode::new("testnet-10");
@@ -1223,7 +1267,7 @@ mod tests {
     /// What each role's configuration says, word for word (the golden keys of the three roles).
     #[test]
     fn the_configuration_written_for_each_role_is_exactly_this() {
-        // the header names the role's subcommand; the keys follow the first blank line
+        // The header names the subcommand of the role. The keys follow the first blank line.
         let keys = |role: AppRole| {
             let t = written(role, "testnet-10");
             assert!(t.starts_with("# kobd configuration, written by"), "{t}");
@@ -1235,19 +1279,20 @@ mod tests {
         };
         let head = "network = \"testnet-10\"\nrpc_url = \"resolver\"\ndata_dir = \"kob-data\"\ntokens_path = \"kob-tokens.json\"\n";
         let run_launch = "\n[launch]\nrole = \"run\"\nkey_file = \"kob-operator.key\"\npause_file = \"kob-pause\"\nargs = []\n";
-        // the Executor: lean storage (no record log), fast start
+        // The Executor: lean storage, no record log, fast start.
         assert_eq!(keys(AppRole::Executor), format!("{head}fast_start = true\nlean = true\nlog_file = \"kobd.log\"\n{run_launch}"));
-        // the Indexer: nothing of the Executor
+        // The Indexer: nothing of the Executor.
         assert_eq!(keys(AppRole::Indexer), format!("{head}\n[launch]\nrole = \"index\"\nargs = []\n"));
-        // Executor and Indexer: the Executor's launch (run, key, pause file, fast start, log file) over an archive store (lean = false;
-        // the record log is on by default)
+        // Executor and Indexer: the Executor's launch (run, key, pause file, fast start, log file)
+        // over an archive store (lean = false; the record log is on by default)
         assert_eq!(
             keys(AppRole::ExecutorIndexer),
             format!("{head}fast_start = true\nlean = false\nlog_file = \"kobd.log\"\n{run_launch}")
         );
     }
 
-    /// The run-time side: the written file, read the way `kobd --executor` reads it, is an archive with a matcher.
+    /// The run-time side: the written file, read the way `kobd --executor` reads it, is an archive
+    /// with a matcher.
     #[test]
     fn executor_and_indexer_runs_as_an_archive_with_an_executor() {
         use clap::Parser as _;
@@ -1271,17 +1316,17 @@ mod tests {
         assert!(!c.lean, "no lean cap: the store keeps the history");
         assert!(c.records.enabled, "the record log is on");
         assert!(c.fast_start && c.api.enabled, "the matcher trades at once; the read API is served");
-        // the matcher's lean storage is the opposite: no history, no record log
+        // The lean storage of the matcher is the opposite: no history, no record log.
         let (_, m) = built(AppRole::Executor);
         assert!(m.lean && !m.records.enabled);
-        // index only keeps the history too, and has no matcher to start fast
+        // Index only keeps the history too, and has no matcher to start fast.
         let (l, i) = built(AppRole::Indexer);
         assert_eq!(l.args, ["--config", CONFIG_FILE]);
         assert!(!i.lean && i.records.enabled && !i.fast_start);
     }
 
-    /// The banner names no role (it comes before the role is chosen); the start question names the chosen one and is not asked
-    /// under `--no-start`.
+    /// The banner names no role (it comes before the role is chosen); the start question names the
+    /// chosen one and is not asked under `--no-start`.
     #[test]
     fn the_start_question_names_the_role_and_no_start_skips_it() {
         // node (public), data dir, start
@@ -1293,13 +1338,13 @@ mod tests {
         let out = io.text();
         assert!(out.contains("Start the Indexer now?") && !out.contains("Start the executor now?"), "{out}");
         assert!(out.starts_with(&format!("kobd {} setup", kob_protocol::VERSION)) && !out.contains("KOB executor"), "{out}");
-        // Enter starts it
+        // Enter starts it.
         let d = tempfile::tempdir().unwrap();
         let mut io = Script::new(&["", "", ""]);
         let o = opts(d.path(), "testnet-10", false);
         let got = run_setup_with(&mut io, &mut node, &o, Some(AppRole::Indexer), false).unwrap();
         assert_eq!(got, Some(d.path().join(CONFIG_FILE)));
-        // --no-start: the files are written, nothing is asked
+        // With --no-start the files are written and nothing is asked.
         let d = tempfile::tempdir().unwrap();
         let mut io = Script::new(&["", ""]);
         let o = opts(d.path(), "testnet-10", false);
@@ -1309,8 +1354,8 @@ mod tests {
         assert!(!out.contains("now?"), "{out}");
     }
 
-    /// The third choice of the dialogue: the warning is shown, the key and the funding come as for the matcher, and the file
-    /// is the archive's with a matcher.
+    /// The third choice of the dialogue: the warning is shown, the key and the funding come as for
+    /// the matcher, and the file is the archive's with a matcher.
     #[test]
     fn the_interactive_setup_offers_executor_and_indexer_with_a_warning() {
         let d = tempfile::tempdir().unwrap();
@@ -1331,7 +1376,7 @@ mod tests {
         let secret = std::fs::read_to_string(d.path().join(KEY_FILE)).unwrap();
         assert!(!out.contains(secret.trim()), "the setup printed the secret");
         assert_eq!(std::fs::read_to_string(d.path().join(CONFIG_FILE)).unwrap(), written(AppRole::ExecutorIndexer, "testnet-10"));
-        // the node check needs the UTXO index for it, as for the matcher
+        // The node check needs the UTXO index for it, as for the matcher.
         let mut no_index = FakeNode::new("testnet-10");
         no_index.info.has_utxo_index = false;
         assert!(judge_node(&no_index.info, "testnet-10", AppRole::ExecutorIndexer.launch_role()).unwrap_err().contains("--utxoindex"));
@@ -1348,8 +1393,8 @@ mod tests {
         info.is_synced = false;
         assert!(judge_node(&info, "testnet-10", LaunchRole::Index).unwrap().contains("not synced yet"));
 
-        // mainnet build: another URL (scheme added), skip the balance wait, an existing key file of the operator's, x402 with
-        // a file, no token list (the build pins its registry)
+        // mainnet build: another URL (scheme added), skip the balance wait, an existing key file of
+        // the operator's, x402 with a file, no token list (the build pins its registry)
         let d = tempfile::tempdir().unwrap();
         let mut node = FakeNode::new("mainnet");
         node.info.has_utxo_index = false;
@@ -1385,7 +1430,7 @@ mod tests {
         let e = run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).unwrap_err();
         assert!(e.to_string().contains("input ended"), "{e}");
         assert!(!d.path().join(CONFIG_FILE).exists());
-        // the questions repeat on a wrong answer
+        // The questions repeat on a wrong answer.
         let mut io = Script::new(&["7", "x"]);
         assert!(run_setup(&mut io, &mut node, &opts(d.path(), "testnet-10", false)).is_err());
         assert!(io.text().contains("Please answer a number from 1 to 2."));
