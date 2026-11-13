@@ -1,11 +1,20 @@
-//! The pair planners beyond the plain `KobPair` kinds: the pair conditionals (`KobCondPair`: stop-market, stop-limit,
-//! trailing stop, take-profit, OCO) and the pair if-done entries (`KobIfdPair` with a committed `KobCondPair` exit: IFD,
-//! IFO, stop entries, repeat), a port of `web/src/kob/orders/pair-cond.ts`, `pair-ifd.ts` and the placement tail of
-//! `pair-common.ts` (`placePair`), shared with the plain pair kinds of `plan.rs`.
+//! Pair planners for conditional and if-done orders on a token pair A/B.
 //!
-//! Units: amounts base units of A (each custody: base units of its own token), prices B base units per WHOLE A, tips,
-//! keeper tips and carriers KAS (`tip`: sompi per whole A, prefunded on the order UTXO, never part of a B price). Every
-//! rounded amount is the covenant's own arithmetic (`kob_protocol::state::{CondPairState, IfdPairState}`).
+//! This module plans the pair conditionals (`KobCondPair`: stop-market, stop-limit, trailing stop,
+//! take-profit and OCO) and the pair if-done entries (`KobIfdPair` with a committed `KobCondPair`
+//! exit: IFD, IFO, stop entries and repeat). It ports `web/src/kob/orders/pair-cond.ts`,
+//! `pair-ifd.ts` and the placement tail of `pair-common.ts` (`placePair`). The plain pair kinds
+//! of `plan.rs` share that tail.
+//!
+//! # Units
+//!
+//! - Amounts are base units of A. A custody is in base units of its own token.
+//! - Prices are base units of B per whole A.
+//! - Tips, keeper tips and carriers are KAS. A `tip` is in sompi per whole A, prefunded on the
+//!   order UTXO, and is never part of a B price.
+//!
+//! Every rounded amount is the covenant's own arithmetic
+//! (`kob_protocol::state::{CondPairState, IfdPairState}`).
 
 use kob_protocol::build::{check_new_order, min_order_value, CreateOrder};
 use kob_protocol::defaults::{default_min_fill_ifd, default_min_fill_pair, pair_tips, Tips};
@@ -16,11 +25,13 @@ use kob_protocol::Family;
 use super::market::TokenMarket;
 use super::plan::*;
 
-/// Fills each if-done EXIT budgets a delivery carrier for inside its exit carrier (a take-profit filled in up to two parts).
+/// Fills for which an if-done exit budgets a delivery carrier, enough for two partial take-profits.
 pub const DEFAULT_EXIT_FILLS: i64 = 2;
-/// The KAS one pair repeat merge adds to the exit's take-profit fill (buy-first / sell-first), spread over its smallest fill.
+/// KAS cost of the merge in a buy-first pair repeat.
+///
+/// The tip rate spreads it over the smallest take-profit fill of the exit.
 pub const PAIR_MERGE_COST_BUY_FIRST: i64 = 2_370_000;
-/// Sell-first pair merge cost.
+/// KAS cost of the merge in a sell-first pair repeat, spread like [`PAIR_MERGE_COST_BUY_FIRST`].
 pub const PAIR_MERGE_COST_SELL_FIRST: i64 = 1_690_000;
 /// B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
 pub const PAIR_SELL_FIRST_MERGE_B_OUTPUTS: usize = 4;
@@ -29,7 +40,7 @@ fn ceil_div(a: i128, b: i128) -> i128 {
     (a + b - 1) / b
 }
 
-/// The family code and the extension commitment of new outputs of a pair token.
+/// The family code of new outputs of a pair token: 2 for KRON, else 1.
 fn fam(m: &TokenMarket) -> i64 {
     if m.family == Family::Kron {
         2
@@ -37,6 +48,7 @@ fn fam(m: &TokenMarket) -> i64 {
         1
     }
 }
+/// The extension commitment of new outputs of a pair token: zero for KRON.
 fn ext(m: &TokenMarket) -> [u8; 32] {
     if m.family == Family::Kron {
         [0; 32]
@@ -50,11 +62,13 @@ pub(crate) fn tips_of(env: &Env, pair: &PairPart) -> Result<Tips, Issue> {
     pair_tips(env.market.program, pair.quote.program).map_err(|e| error("BUILD_REJECTED", e.to_string()))
 }
 
-/// The priority tip (KAS sompi per whole A) a pair order carries when the user sets none (`defaultPairTip` of
-/// `web/src/kob/orders/pair-common.ts`, which these numbers must equal): the pair's keeper tip (`pair_keeper_tips.json`,
-/// the measured fee of one update, doubled) over the whole amount, rounded up. The executor nets two crossing pair orders
-/// only when their tips pay the netting's network fee (a netting moves no KAS), so an untipped crossing pair order would
-/// wait for a route through the KAS books. No amount (or no table row for the pair): no default.
+/// The priority tip a pair order carries when the user sets none, in sompi per whole A.
+///
+/// It must equal `defaultPairTip` of `web/src/kob/orders/pair-common.ts`. It is the keeper tip of
+/// the pair (`pair_keeper_tips.json`, at least twice the fee of one update) over the whole amount,
+/// rounded up. The executor nets two crossing pair orders only when their tips pay the network fee
+/// of the netting, because a netting moves no KAS. An untipped crossing pair order would wait for a
+/// route through the KAS books. It is 0 without an amount or a table row for the pair.
 pub fn default_pair_tip(env: &Env, amount: i64) -> i64 {
     let Some(pair) = &env.pair else { return 0 };
     if amount <= 0 {
@@ -64,8 +78,10 @@ pub fn default_pair_tip(env: &Env, amount: i64) -> i64 {
     i64::try_from(ceil_div(t.keeper_tip as i128 * env.market.scale as i128, amount as i128)).unwrap_or(i64::MAX)
 }
 
-/// A tip typed for a pair order whose total over `amount` is below the default's (`pairTipBelowDefault`): a crossing pair
-/// order may then wait for a route through the KAS books.
+/// Whether the tip typed for a pair order is below the default (`pairTipBelowDefault`).
+///
+/// The total over `amount` is compared. A crossing pair order with such a tip may wait for a route
+/// through the KAS books.
 pub fn pair_tip_below_default(env: &Env, amount: i64, tip: i64) -> bool {
     let Some(pair) = &env.pair else { return false };
     if amount <= 0 {
@@ -75,13 +91,15 @@ pub fn pair_tip_below_default(env: &Env, amount: i64, tip: i64) -> bool {
     amount as i128 * tip as i128 / (env.market.scale as i128) < t.keeper_tip as i128
 }
 
-/// The note of an explicit tip below the default (one line on stderr).
+/// The note for an explicit tip below the default, one line on stderr.
 pub const PAIR_TIP_NOTE: &str = "With no tip, a crossing pair order may wait for a route through the KAS books.";
 
-/// The tip defaults of a pair order (`kob place` with `--quote`): a tip not typed (`tip_typed` / `exit_tip_typed` false)
-/// becomes the pair's default over the order's amount (a close: the held amount), a typed one stays as typed (zero
-/// included). Returns whether a typed tip is below the default: the caller says so in one line. A KAS-book order (no
-/// pair) is untouched.
+/// Fills in the tip defaults of a pair order (`kob place` with `--quote`).
+///
+/// A tip that was not typed (`tip_typed` or `exit_tip_typed` false) becomes the default of the pair
+/// over the amount of the order, for a close the held amount. A typed tip stays as typed, zero
+/// included. It returns whether a typed tip is below the default, so that the caller can say so in
+/// one line. An order on a KAS book (no pair) is untouched.
 pub fn apply_pair_tip_defaults(env: &Env, intent: &mut Intent, tip_typed: bool, exit_tip_typed: bool) -> bool {
     if env.pair.is_none() {
         return false;
@@ -109,8 +127,10 @@ pub fn apply_pair_tip_defaults(env: &Env, intent: &mut Intent, tip_typed: bool, 
     below
 }
 
-/// The environment the shared leg / expiry helpers run in for a pair (`legEnvOf`): prices are B per whole A, so the KAS
-/// tick does not apply, and the default keeper / refund tips are the pair's.
+/// The environment the shared leg and expiry helpers run in for a pair (`legEnvOf`).
+///
+/// Prices are B per whole A, so the KAS tick does not apply. The default keeper and refund tips
+/// are those of the pair.
 fn leg_env(env: &Env, t: &Tips) -> Env {
     Env {
         market: TokenMarket { tick: 1, keeper_tip: t.keeper_tip as i64, refund_tip: t.refund_tip as i64, ..env.market.clone() },
@@ -118,7 +138,7 @@ fn leg_env(env: &Env, t: &Tips) -> Env {
     }
 }
 
-/// The 2^62 bound of the order's B value at `rate`.
+/// Refuses an order whose B value at `rate` reaches 2^62.
 fn check_pair_notional(env: &Env, amount: i64, rate: i64) -> Vec<Issue> {
     if amount <= 0 || rate <= 0 {
         return vec![];
@@ -129,7 +149,7 @@ fn check_pair_notional(env: &Env, amount: i64, rate: i64) -> Vec<Issue> {
     vec![]
 }
 
-/// The KAS tip (sompi per whole A): not negative and its total over the amount below 2^62.
+/// Refuses a negative KAS tip (sompi per whole A), or one whose total over `amount` reaches 2^62.
 fn check_pair_tip(env: &Env, amount: i64, tip: i64, what: &str) -> Vec<Issue> {
     if tip < 0 {
         return vec![error("TIP_NEGATIVE", format!("{what} cannot be negative"))];
@@ -153,7 +173,8 @@ pub(crate) struct PairSpec {
     pub(crate) min_fill: i64,
     pub(crate) min_touch: Option<i64>,
     pub(crate) limit_price: Option<i64>,
-    /// The B of the whole amount at the limit (a sell receives at least, a buy pays at most).
+    /// The B value of the whole amount at the limit.
+    /// A sell receives at least it and a buy pays at most it.
     pub(crate) all_in_total: Option<i64>,
     pub(crate) expected_price: Option<i64>,
     pub(crate) worst_price: Option<i64>,
@@ -163,22 +184,25 @@ pub(crate) struct PairSpec {
     pub(crate) expiry_kind: &'static str,
     pub(crate) expiry_daa: i64,
     pub(crate) activates_at: Option<i64>,
-    /// The T a minimum fill delivers (`true`: of B), for the KRON output cap.
+    /// The token and amount that a minimum fill delivers. `true` means B. For the KRON output cap.
     pub(crate) delivery: (bool, i64),
     pub(crate) notes: Vec<&'static str>,
     /// KAS on each custody / token change output.
     pub(crate) carrier: i64,
 }
 
-/// The common tail of every pair planner (`placePair`): the KRON caps, `check_new_order` and `min_order_value`, the build
-/// (each custody drawn from the maker's UTXOs of its own token) with the recover-and-compare self-check, the disclosure.
+/// The common tail of every pair planner (`placePair`).
+///
+/// It checks the KRON caps, `check_new_order` and `min_order_value`. It then builds the order,
+/// drawing each custody from the maker's UTXOs of its own token, runs the recover-and-compare
+/// self-check and writes the disclosure.
 pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue>, spec: PairSpec) -> Plan {
     let a = &env.market;
     let b = &pair.quote;
     let order = spec.order.clone();
     let states: Vec<AnyState> = std::iter::once(order.clone()).chain(spec.exit.clone()).collect();
     let fail = |issues: Vec<Issue>| Plan { ok: false, issues, states: states.clone(), request: None, built: None, disclosure: None };
-    // KRON caps of what the order holds and delivers
+    // KRON caps on what the order holds and delivers.
     for (tok, amount) in order.custodies() {
         let m = if tok == a.cov { a } else { b };
         if m.family == Family::Kron && amount > KRON_MAX_OUTPUT_AMOUNT {
@@ -208,7 +232,7 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
     let value = value as i64;
     let dc = spec.carrier;
     let env = &Env { carrier: Some(dc as u64), ..env.clone() };
-    // the custodies: each from the maker's UTXOs of its own token
+    // The custodies, each drawn from the maker's UTXOs of its own token.
     let mut tokens = vec![];
     let mut draws: Vec<([u8; 32], i64)> = vec![];
     let mut outputs_kas = 0i128;
@@ -293,7 +317,7 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
         min_fill: spec.min_fill,
         min_touch: spec.min_touch,
         limit_price: spec.limit_price,
-        // the tip is KAS, never part of a B price: the all-in price is the limit itself
+        // A tip is KAS and never part of a B price, so the all-in price is the limit itself.
         all_in_price: spec.limit_price,
         all_in_total: spec.all_in_total,
         expected_price: spec.expected_price,
@@ -316,7 +340,9 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
     Plan { ok: !has_error(&issues), issues, states, request: Some(req), built: Some(built), disclosure: Some(disclosure) }
 }
 
-/// The KAS lines of a `KobPair` / `KobCondPair` order UTXO: `fills` delivery carriers and the tip prefund of the whole amount.
+/// The KAS lines of a `KobPair` or `KobCondPair` order UTXO.
+///
+/// They are `fills` delivery carriers and the tip prefund of the whole amount.
 pub(crate) fn pair_kas_lines(total: i64, fills: i64, dc: i64) -> Vec<CarrierLine> {
     let n = fills.max(1);
     let tip_total = total - dc * n;
@@ -327,7 +353,9 @@ pub(crate) fn pair_kas_lines(total: i64, fills: i64, dc: i64) -> Vec<CarrierLine
     lines
 }
 
-/// A new `KobCondPair` of the maker (sell = side ASK holds A; buy = side BID holds B) from validated legs.
+/// A new `KobCondPair` of the maker from validated legs.
+///
+/// A sell has side ASK and holds A. A buy has side BID and holds B.
 #[allow(clippy::too_many_arguments)]
 fn cond_pair_state(
     env: &Env,
@@ -387,7 +415,7 @@ fn cond_pair_state(
     }
 }
 
-/// Stop, take-profit, OCO and trailing stop on a pair (`planPairLegs`).
+/// Plans a stop, take-profit, OCO or trailing stop on a pair (`planPairLegs`).
 pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
     let Some(pair) = &env.pair else { return failed(vec![error("PAIR_MISSING", "a pair order needs a quote token")]) };
     let a = &env.market;
@@ -408,7 +436,8 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
     }
     let lenv = leg_env(env, &tips);
     let input = cond_leg_input(i);
-    // a resting pair order: the amount of A worth 10 KAS on A's KAS book
+    // The default minimum fill of a resting pair order is the amount of A worth 10 KAS on the KAS
+    // book of A.
     let min_fill = i.min_fill.unwrap_or_else(|| default_min_fill_pair(amount, pair.kas_per_whole_a, a.scale));
     if i.min_fill.is_none() && pair.kas_per_whole_a.is_none() {
         log.push(warning(
@@ -431,7 +460,7 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // self-trade on the B prices (no tips: a KAS tip never makes a B price cross)
+    // Self-trade on the B prices. Tips are KAS, so they never make a B price cross.
     log.extend(check_self_trade(&env.own, i.side, if sell { ask_worst(&legs) } else { bid_worst(&legs) }, 0));
     if has_stop {
         if let (true, Some(x)) = (sell, env.book.asks.first()) {
@@ -450,7 +479,7 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
             log.push(warning("PAIR_TP_CROSSES", format!("the take-profit crosses the pair book ({t}): it can fill at once")));
         }
     }
-    // KAS delivery carriers: one per budgeted fill, at most one per possible fill
+    // KAS delivery carriers: one per budgeted fill, at most one per possible fill.
     let possible = ceil_div(amount as i128, min_fill as i128) as i64;
     let fills = i.max_fills.unwrap_or(possible.min(MAX_DEFAULT_PAIR_FILLS));
     if fills < 1 || fills > possible {
@@ -478,21 +507,21 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
         &legs,
     );
     if !sell {
-        // the B escrow: the whole amount at the worst leg rounded down plus one base unit
+        // The B escrow is the whole amount at the worst leg, rounded down, plus one base unit.
         let Some(escrow) = st.bid_escrow(st.max_fills()) else {
             log.push(error("PAIR_NOTIONAL_TOO_LARGE", "the order value in the quote token is too large"));
             return failed(log);
         };
         st.custody = escrow;
     }
-    // at least the deliveries the protocol requires a new order to fund itself
+    // At least the deliveries that the protocol requires a new order to fund itself.
     let funded = fills.max(st.funded_fills());
     let Some(total) = st.kas_value(funded) else {
         log.push(error("TIP_TOO_LARGE", "the priority tip is too large for this quantity"));
         return failed(log);
     };
     let mut lines = pair_kas_lines(total, funded, carrier);
-    // an arming / trailing keeper takes its tip from the order UTXO: fund it on top
+    // An arming or trailing keeper takes its tip from the order UTXO, so fund it on top.
     if has_stop && legs.keeper_tip * legs.expected_updates > 0 {
         lines.push(CarrierLine { kind: "keeper reserve", amount: legs.keeper_tip as i128, count: legs.expected_updates, kept: false });
     }
@@ -537,7 +566,9 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
     )
 }
 
-/// IFD / IFO / stop entries / repeat on a pair (`planPairIfd`): a `KobIfdPair` entry with a committed `KobCondPair` exit.
+/// Plans IFD, IFO, stop entries and repeat on a pair (`planPairIfd`).
+///
+/// The entry is a `KobIfdPair` with a committed `KobCondPair` exit.
 pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     let Some(pair) = &env.pair else { return failed(vec![error("PAIR_MISSING", "a pair order needs a quote token")]) };
     let a = &env.market;
@@ -567,7 +598,7 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
         return failed(log);
     }
     log.extend(check_pair_tip(env, amount, i.tip, "the tip"));
-    // the entry's minimum fill (default ceil(amount / 4))
+    // The default minimum fill of the entry is `ceil(amount / 4)`.
     let min_fill = i.min_fill.unwrap_or_else(|| default_min_fill_ifd(amount));
     if min_fill < 1 || min_fill > amount {
         log.push(error("COND_MIN_FILL_INVALID", "the minimum fill must be 1..the amount"));
@@ -575,17 +606,18 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     }
     let fills = ceil_div(amount as i128, min_fill as i128) as i64;
     let Some((rpt_amount, count)) = repeat_amount(i.more.repeat, amount, &mut log) else { return failed(log) };
-    // ---- exit (built first: the entry commits to it)
+    // The exit is built first, because the entry commits to it.
     if i.exit_tip < 0 {
         log.push(error("TIP_NEGATIVE", "the exit tip cannot be negative"));
         return failed(log);
     }
     let exit_input = exit_leg_input(i);
     let exit_min_default = default_min_fill_pair(amount, pair.kas_per_whole_a, a.scale);
-    // the smallest take-profit fill an exit can see (the merge tip and the default trigger threshold scale with it)
+    // The smallest take-profit fill an exit can see. The merge tip and the default trigger
+    // threshold scale with it.
     let exit_min_base = i.more.exit_min_fill.unwrap_or(exit_min_default.min(min_fill));
-    // a sell-first repeating exit's partial take-profit that re-arms moves four B outputs: a B program with fewer token
-    // outputs takes profit only by a fill that sells the exit out
+    // A partial take-profit of a sell-first repeating exit that re-arms moves four B outputs. A B
+    // program with fewer token outputs takes profit only by a fill that sells the exit out.
     let whole_exit = !buy_first && repeat && b.slots.1 < PAIR_SELL_FIRST_MERGE_B_OUTPUTS;
     let exit_min_fill = i.more.exit_min_fill.unwrap_or(if whole_exit { amount } else { exit_min_base });
     if whole_exit {
@@ -617,7 +649,7 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // ---- economics in B (the tips are KAS, outside the rates)
+    // Economics in B. The tips are KAS, outside the rates.
     if legs.tp > 0 {
         let profit = if buy_first { legs.tp - i.price } else { i.price - legs.tp };
         if profit <= 0 {
@@ -630,7 +662,8 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
         }
     }
     let exit_worst = if buy_first { ask_worst(&legs) } else { bid_worst(&legs) };
-    // sell-first: the B prefund (per whole A) beyond the entry price that covers the exit's worst buy-back
+    // Sell-first: the prefund is the B per whole A beyond the entry price that covers the worst
+    // buy-back of the exit.
     let mut prefund = 0;
     if !buy_first {
         let min_prefund = (exit_worst - i.price).max(0);
@@ -653,7 +686,7 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // ---- self-trade: the entry is a real order now; the exit only later (warning)
+    // Self-trade. The entry is a real order now and the exit only later, so the exit only warns.
     log.extend(check_self_trade(&env.own, i.side, i.price, 0));
     for mut w in check_self_trade(&env.own, exit_side, exit_worst, 0) {
         w.severity = Severity::Warning;
@@ -672,14 +705,15 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     let Some(es) = entry_stop_of(i, i.price, min_fill, count, tips.keeper_tip as i64, &mut log) else { return failed(log) };
     let stop_entry = es.stop > 0;
     let keeper_reserve = es.keeper_tip * es.arm_updates;
-    // ---- the exit, committed: its custody and amount are written by the entry per fill
+    // The exit is committed. The entry writes its custody and amount per fill.
     let exit_draft =
         cond_pair_state(env, pair, exit_side, amount, exit_min_fill, exit_tip, 0, exit_exp, tips.refund_tip as i64, carrier, 0, &legs);
     let Some(exit_tip_kas) = exit_draft.tip_kas(amount) else {
         log.push(error("TIP_TOO_LARGE", "the exit tip is too large for this quantity"));
         return failed(log);
     };
-    // the exit UTXO funds its own fills (a delivery carrier each, up to two), its KAS tip and its keeper's updates
+    // The exit UTXO funds its own fills (a delivery carrier each, up to two), its KAS tip and the
+    // updates of its keeper.
     let exit_fills = DEFAULT_EXIT_FILLS.min(ceil_div(amount as i128, exit_min_fill as i128) as i64);
     let exit_keeper = if legs.stop > 0 { legs.keeper_tip * legs.expected_updates } else { 0 };
     let exit_planned = carrier * exit_fills + exit_tip_kas + exit_keeper;
@@ -724,11 +758,11 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
         rpt_amount,
         exit_state: exit_state.clone(),
     };
-    // never below what the protocol requires of every exit
+    // Never below what the protocol requires of every exit.
     let needed = draft_with(exit_planned).exit_carrier_needed();
     let exit_carrier = needed.filter(|n| *n > exit_planned).unwrap_or(exit_planned);
     let mut order = draft_with(exit_carrier);
-    // the B custody the entry needs (buy-first: its escrow; sell-first: its prefund)
+    // The B custody the entry needs: its escrow when buy-first, its prefund when sell-first.
     let Some(b_custody) = order.b_custody_needed() else {
         log.push(error("PAIR_NOTIONAL_TOO_LARGE", "the order value in the quote token is too large"));
         return failed(log);
@@ -753,7 +787,8 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if keeper_reserve > 0 {
         lines.push(CarrierLine { kind: "keeper reserve", amount: es.keeper_tip as i128, count: es.arm_updates, kept: false });
     }
-    // the exit a fill of the whole amount creates: buy-first n of A; sell-first the proceeds plus the prefund of n, in B
+    // The exit that a fill of the whole amount creates. Buy-first it holds n of A. Sell-first it
+    // holds, in B, the proceeds plus the prefund of n.
     let exit_custody = if buy_first {
         Some(amount)
     } else {
