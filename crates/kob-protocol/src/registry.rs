@@ -1,26 +1,44 @@
-//! Token registry: the pinned snapshot of facts behind a build (`registry/tokens.json`): the token programs it supports and
-//! facts about tokens that anyone can re-derive from the chain.
+//! Token registry: the pinned snapshot of facts behind a build (`registry/tokens.json`).
 //!
-//! A *family* is a token program lineage KOB can escrow (`kcc20`: the draft KCC-20 layout, `kron`: KRON's 46-byte layout).
-//! The registry pins, per family, the exact token programs (`templates`: template hash, sizes, slot limits and the escrow
-//! owner types the order contracts use) and records facts about known tokens (`tokens`: identity, decimals, the genesis check).
-//! A token's identity is `(family, covenant id, template hash, extension commitment)` (a token is its KIP-20
-//! covenant id plus template hash, and fungibility only holds among equal extension commitments). Display is
-//! `TICKER (abcd…1234)`; tickers are ASCII uppercase alphanumerics. Tickers are not unique: two entries may share a ticker or
-//! use look-alike ones (`KRON`, `KR0N`), and neither is refused, because choosing which of two tokens may carry a ticker is a
-//! curation decision KOB does not make (the covenant id beside the ticker tells them apart).
+//! The registry names the token programs a build supports and holds facts about tokens that anyone
+//! can re-derive from the chain.
 //!
-//! **Two lists.** `templates` is the STRICT list, the program allowlist: only the token programs this build supports for trading
-//! (`review_status: reviewed`: their engineering review is done and the order contracts escrow them) can carry a tradable token,
-//! and a template that can freeze, seize or blacklist holders says so in `capabilities`. `tokens` is the OPEN list: every token
-//! whose program is on the strict list is tradable and shown, whether or not it is in `tokens`. An entry adds facts only (the
-//! decimals the chain does not state, the identity and genesis checks); KOB makes no judgement about a token: no listing, no
-//! delisting, no official badge, no warning text written by people. Curation (official status, anti-impersonation, logos) belongs
-//! to external community lists the user chooses. The warnings a token carries are derived from the recorded facts
-//! ([`TokenWarning`]). Identity is always the covenant id plus the template hash, never the ticker.
+//! A *family* is a token program lineage that KOB can escrow: `kcc20` is the draft KCC-20 layout,
+//! and `kron` is the 46-byte layout of KRON. The registry pins, per family, the exact token
+//! programs (`templates`: template hash, sizes, slot limits and the escrow owner types of the
+//! order contracts). It records facts about known tokens (`tokens`: identity, decimals, the genesis
+//! check).
 //!
-//! The format is specified by `registry/tokens.schema.json` (structure) and this validator (structure plus the cross-field
-//! rules a schema cannot express). Everything is hand-validated on top of serde with `deny_unknown_fields`.
+//! # Identity
+//!
+//! A token's identity is `(family, covenant id, template hash, extension commitment)`. A token is
+//! its KIP-20 covenant id plus template hash, and fungibility only holds among equal extension
+//! commitments. Display is `TICKER (abcd…1234)`, and tickers are ASCII uppercase alphanumerics.
+//!
+//! Tickers are not unique. Two entries may share a ticker or use look-alike ones (`KRON`, `KR0N`),
+//! and neither is refused, because choosing which of two tokens may carry a ticker is a curation
+//! decision that KOB does not make. The covenant id beside the ticker tells them apart. Identity
+//! is always the covenant id plus the template hash, never the ticker.
+//!
+//! # Two lists
+//!
+//! `templates` is the STRICT list, the program allowlist. Only the token programs that this build
+//! supports for trading can carry a tradable token. These have `review_status: reviewed`: their
+//! engineering review is done and the order contracts escrow them. A template that can freeze,
+//! seize or blacklist holders says so in `capabilities`.
+//!
+//! `tokens` is the OPEN list. Every token whose program is on the strict list is tradable and
+//! shown, whether or not it is in `tokens`. An entry adds facts only: the decimals the chain does
+//! not state, and the identity and genesis checks. KOB makes no judgement about a token: no
+//! listing, no delisting, no official badge, no warning text written by people. Curation (official
+//! status, anti-impersonation, logos) belongs to external community lists that the user chooses.
+//! The warnings a token carries are derived from the recorded facts ([`TokenWarning`]).
+//!
+//! # Validation
+//!
+//! The format is specified by `registry/tokens.schema.json` (structure) and this validator
+//! (structure plus the cross-field rules that a schema cannot express). Everything is
+//! hand-validated on top of serde with `deny_unknown_fields`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -32,9 +50,11 @@ pub const DEFAULT_REGISTRY_JSON: &str = include_str!("../../../registry/tokens.j
 /// The JSON Schema of the format (`registry/tokens.schema.json`).
 pub const SCHEMA_JSON: &str = include_str!("../../../registry/tokens.schema.json");
 
-/// Lowercase hex sha256 of the embedded default registry ([`DEFAULT_REGISTRY_JSON`]) over its LF-normalised bytes: the hash
-/// the mainnet deployment record pins (`contracts/deploy/mainnet/deployment.json` `registry.sha256`
-/// and `GET /v1/tokens` `registry.sha256` of an executor that loads it).
+/// Lowercase hex sha256 of the embedded default registry ([`DEFAULT_REGISTRY_JSON`]).
+///
+/// The hash is over its LF-normalised bytes. It is the hash that the mainnet deployment record pins
+/// (`contracts/deploy/mainnet/deployment.json` `registry.sha256`, and `registry.sha256` of
+/// `GET /v1/tokens` of an executor that loads it).
 pub fn default_registry_sha256() -> String {
     use sha2::{Digest, Sha256};
     let lf = DEFAULT_REGISTRY_JSON.replace("\r\n", "\n");
@@ -43,18 +63,22 @@ pub fn default_registry_sha256() -> String {
 
 /// Format version this module reads and writes.
 pub const SCHEMA_VERSION: u32 = 1;
-/// Token keys of older files that carried a per-token judgement (the listing state, the official badge, a maintainer's warning
-/// text): [`Registry::parse`] reads and ignores them, whatever they hold, and nothing writes them. KOB makes no such judgement;
-/// curation belongs to external community lists.
+/// Token keys that carried a per-token judgement: the listing state, the official badge and a
+/// warning text.
+///
+/// [`Registry::parse`] reads and ignores them, whatever they hold, and nothing writes them. KOB
+/// makes no such judgement. Curation belongs to external community lists.
 pub const LEGACY_TOKEN_KEYS: [&str; 3] = ["status", "official", "warning"];
 /// Networks a registry can describe.
 pub const NETWORKS: [&str; 3] = ["mainnet", "testnet-10", "devnet"];
 /// Largest `decimals` a token may declare.
 pub const MAX_DECIMALS: u8 = 18;
-/// KRON's token program rejects any output above this amount (a custody, a delivery, a fill of a KRON order).
+/// KRON's token program rejects any output above this amount (a custody, a delivery, a fill of a
+/// KRON order).
 pub const KRON_MAX_OUTPUT_AMOUNT: i64 = 1_000_000_000;
 
-/// KCC-20 state span length (`amount owner owner_scheme borrow_scheme borrow_guard extension_commitment`).
+/// KCC-20 state span length (`amount owner owner_scheme borrow_scheme borrow_guard
+/// extension_commitment`).
 pub const KCC20_STATE_LEN: u32 = 112;
 /// KRON token state span length (`owner id_type amount is_minter`).
 pub const KRON_STATE_LEN: u32 = 46;
@@ -87,14 +111,16 @@ impl Family {
     }
 }
 
-/// Review state of a pinned token program: whether this build supports trading it (the program allowlist). A statement about a
-/// token PROGRAM (its bytes, owner types and limits), never about a token that runs it.
+/// Review state of a pinned token program: whether this build supports trading it (the program
+/// allowlist). A statement about a token PROGRAM (its bytes, owner types and limits), never about a
+/// token that runs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewStatus {
     /// Pinned, semantic review not done: this build does not trade it.
     PendingReview,
-    /// Semantic review done (owner types, no admin path, conservation, limits): this build supports trading it.
+    /// Semantic review done (owner types, no admin path, conservation, limits): this build supports
+    /// trading it.
     Reviewed,
 }
 impl ReviewStatus {
@@ -102,7 +128,9 @@ impl ReviewStatus {
     pub const ALL: [&'static str; 2] = ["pending-review", "reviewed"];
 }
 
-/// What a token program lets someone do beyond moving balances by their owners (the labels a strict-list template declares).
+/// What a token program lets someone do beyond moving balances by their owners.
+///
+/// These are the labels that a strict-list template declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Capability {
@@ -133,8 +161,10 @@ impl Capability {
             Capability::Blacklist => "blacklist",
         }
     }
-    /// True for the capabilities that can make escrowed tokens unspendable or take them: the maker (and the taker) then
-    /// bear the issuer's discretion, which a UI must say before an order is placed.
+    /// True for the capabilities that can make escrowed tokens unspendable or take them.
+    ///
+    /// The maker (and the taker) then bear the discretion of the issuer, which a UI must say before
+    /// an order is placed.
     pub fn restricts_holders(self) -> bool {
         matches!(self, Capability::Freeze | Capability::Seize | Capability::Blacklist)
     }
@@ -158,8 +188,9 @@ impl ExtensionClass {
 
 /// Owner types the order contracts use for this program.
 ///
-/// kcc20: `owner_scheme` 4 (covenant id), `borrow_scheme` 0. kron: `id_type` 2 (covenant id), `is_minter` 0, deliveries to
-/// makers with `delivery_id_type` 3 (address presence, KRON-wallet compatible) or 0 (pubkey).
+/// kcc20: `owner_scheme` 4 (covenant id), `borrow_scheme` 0. kron: `id_type` 2 (covenant id),
+/// `is_minter` 0, deliveries to makers with `delivery_id_type` 3 (address presence, KRON-wallet
+/// compatible) or 0 (pubkey).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Escrow {
@@ -184,7 +215,8 @@ pub struct Escrow {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
-    /// Repo-relative path of the pinned artifact (`.json` silverc artifact) or raw program (`.bin`).
+    /// Repo-relative path of the pinned artifact (`.json` silverc artifact) or raw program
+    /// (`.bin`).
     pub path: String,
     /// Upstream provenance (URL or reference), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,7 +234,8 @@ pub struct Template {
     pub id: String,
     /// Family.
     pub family: Family,
-    /// Template hash (silverscript `template_hash(prefix, suffix)`, blake3), lowercase hex, 32 bytes.
+    /// Template hash (silverscript `template_hash(prefix, suffix)`, blake3), lowercase hex, 32
+    /// bytes.
     pub template_hash: String,
     /// Template prefix length in bytes (bytes before the state span).
     pub prefix_len: u32,
@@ -216,13 +249,18 @@ pub struct Template {
     pub max_token_outputs: u32,
     /// Owner types the order contracts use.
     pub escrow: Escrow,
-    /// Review state (only `reviewed` templates are on the strict list: the programs this build supports for trading).
+    /// Review state (only `reviewed` templates are on the strict list: the programs this build
+    /// supports for trading).
     pub review_status: ReviewStatus,
-    /// What the program's authorities can do beyond owner-authorised transfers (see [`Capability`]); empty: nothing found.
+    /// What the program's authorities can do beyond owner-authorised transfers (see
+    /// [`Capability`]).
+    ///
+    /// Empty means nothing found.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<Capability>,
-    /// Declared risks of the program that are not a capability (missing hardening, signing assumptions), shown next to the
-    /// capabilities; empty: none declared.
+    /// Declared risks of the program that are not a capability, shown next to the capabilities.
+    ///
+    /// Examples are missing hardening and signing assumptions. Empty means none declared.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub risks: Vec<String>,
     /// Provenance.
@@ -230,11 +268,13 @@ pub struct Template {
 }
 
 impl Template {
-    /// True when the template is on the strict list (semantic review done: this build supports trading the program).
+    /// True when the template is on the strict list (semantic review done: this build supports
+    /// trading the program).
     pub fn is_strict(&self) -> bool {
         self.review_status == ReviewStatus::Reviewed
     }
-    /// True when an authority can freeze, seize or blacklist holders (UIs label such tokens: orders can fail).
+    /// True when an authority can freeze, seize or blacklist holders (UIs label such tokens: orders
+    /// can fail).
     pub fn restricts_holders(&self) -> bool {
         self.capabilities.iter().any(|c| c.restricts_holders())
     }
@@ -284,8 +324,9 @@ pub struct Token {
     pub extension_class: ExtensionClass,
     /// Decimals (<= 18).
     pub decimals: u8,
-    /// Legacy (the protocol v2 lots): read from older registry files and ignored. Protocol v3 orders have no lot (any amount
-    /// in base units) and no price tick; nothing reads or validates these, and the shipped registry no longer carries them.
+    /// Legacy (the protocol v2 lots): read from older registry files and ignored. Protocol v3
+    /// orders have no lot (any amount in base units) and no price tick, and nothing reads or
+    /// validates these. The shipped registry does not carry them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lot_size: Option<i64>,
     /// Legacy (the protocol v2 price tick): read and ignored, like `lot_size`.
@@ -297,29 +338,43 @@ pub struct Token {
     /// Redundant slot limits; when present they must equal the template's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_token_outputs: Option<u32>,
-    /// The covenant id and template hash were checked against a chain UTXO of the token (the UTXO is an instance of the
-    /// template, carrying the covenant id). A fact anyone can re-derive from the chain, not an endorsement of the token; the name
-    /// is the format's since schema version 1.
+    /// The covenant id and template hash were checked against a chain UTXO of the token.
+    ///
+    /// The UTXO is an instance of the template and carries the covenant id. This is a fact that
+    /// anyone can re-derive from the chain, not an endorsement of the token.
     pub verified: bool,
-    /// Genesis check: `true` = EVERY output of the token's genesis group was revealed and is an instance of its
-    /// program ([`verify_genesis`]); `false` = checked and NOT clean (a hidden non-template output); absent = not checked.
-    /// The covenant id commits only to the P2SH hashes of the genesis outputs, so an unchecked genesis may hide an output
-    /// that later mints look-alike tokens or feeds a fake balance into a transfer. Any token without `true` carries the API
-    /// warning [`TokenWarning::GenesisUnverified`]; trading never depends on it unless an operator opts in
+    /// Genesis check: `true`, `false` or absent.
+    ///
+    /// - `true`: EVERY output of the genesis group of the token was revealed and is an instance of
+    ///   its program ([`verify_genesis`]).
+    /// - `false`: checked and NOT clean, for example a hidden non-template output.
+    /// - absent: not checked.
+    ///
+    /// The covenant id commits only to the P2SH hashes of the genesis outputs, so an unchecked
+    /// genesis may hide an output that later mints look-alike tokens or feeds a fake balance into a
+    /// transfer. Any token without `true` carries the API warning
+    /// [`TokenWarning::GenesisUnverified`]. Trading never depends on it unless an operator opts in
     /// (`require_genesis_verified` of the executor).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis_verified: Option<bool>,
-    /// What the genesis check found on chain (the record behind `genesis_verified` and the live-mint-authority check);
-    /// re-derived from the committed chain evidence by `kob registry verify-genesis`. Live mint-authority cells in it give the
-    /// warning [`TokenWarning::LiveMintAuthority`].
+    /// What the genesis check found on chain.
+    ///
+    /// It is the record behind `genesis_verified` and the live-mint-authority check, and `kob
+    /// registry verify-genesis` re-derives it from the committed chain evidence. Live
+    /// mint-authority cells in it give the warning [`TokenWarning::LiveMintAuthority`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis: Option<GenesisRecord>,
-    /// Display metadata: a snapshot of what the token declares about itself (KCC-23) or of neutral facts, not KOB's word.
+    /// Display metadata: a snapshot of what the token declares about itself (KCC-23) or of neutral
+    /// facts.
+    ///
+    /// It is not KOB's word.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display: Option<Display>,
 }
 
-/// What a clean genesis check found (see [`verify_genesis`]); the registry records the result as `genesis_verified: true`.
+/// What a clean genesis check found (see [`verify_genesis`]).
+///
+/// The registry records the result as `genesis_verified: true`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisReport {
     /// Transaction that created the token's covenant (the genesis group), lowercase hex.
@@ -328,29 +383,43 @@ pub struct GenesisReport {
     pub outputs: u32,
     /// Total token amount the genesis created (sum of the genesis holders' amounts).
     pub supply: i64,
-    /// Genesis outputs that carry a mint authority, by output index: KRON outputs with `is_minter != 0`, and the
-    /// `PublicMint` outputs of a token of the published `KCC20PublicMint` app ([`crate::public_mint`]), and a federated bridge's
-    /// minter (a `bridge-minter` companion, also in `companion_outputs`; it adds nothing to `mint_allowance`). A KRON transaction
-    /// can create a minter output only when it spends a minter (every non-minter token input refuses minter outputs), and
-    /// only a `PublicMint` creates a `PublicMint`, so an empty list proves the token can never have a live minter. KaspaCom's
-    /// KCC-20 program keeps its minter lanes behind the extension commitment, which this check cannot see: always empty
-    /// for it.
+    /// Genesis outputs that carry a mint authority, by output index.
+    ///
+    /// They are:
+    /// - KRON outputs with `is_minter != 0`;
+    /// - the `PublicMint` outputs of a token of the published `KCC20PublicMint` app
+    ///   ([`crate::public_mint`]);
+    /// - the minter of a federated bridge (a `bridge-minter` companion, also in
+    ///   `companion_outputs`), which adds nothing to `mint_allowance`.
+    ///
+    /// A KRON transaction can create a minter output only when it spends a minter, because every
+    /// non-minter token input refuses minter outputs. Only a `PublicMint` creates a `PublicMint`.
+    /// So an empty list proves that the token can never have a live minter. KaspaCom's KCC-20
+    /// program keeps its minter lanes behind the extension commitment, which this check cannot see,
+    /// so the list is always empty for it.
     pub minter_outputs: Vec<u32>,
-    /// Sum of the `remaining` allowance of the genesis `PublicMint` outputs (0 without one): what anyone may still mint.
-    /// The token's maximum supply is `supply + mint_allowance`, fixed at genesis ([`crate::public_mint::GenesisSupply`]).
+    /// Sum of the `remaining` allowance of the genesis `PublicMint` outputs, 0 without one.
+    ///
+    /// It is what anyone may still mint. The maximum supply of the token is `supply +
+    /// mint_allowance`, fixed at genesis ([`crate::public_mint::GenesisSupply`]).
     #[serde(default)]
     pub mint_allowance: i64,
-    /// Genesis `TokenSeed` outputs (zero-amount holder factories of the published app), by output index.
+    /// Genesis `TokenSeed` outputs (zero-amount holder factories of the published app), by output
+    /// index.
     #[serde(default)]
     pub seed_outputs: Vec<u32>,
-    /// Genesis outputs that are opaque companions the program's profile declares (a launchpad's curve, pool or vault bound
-    /// to the token's covenant id; `genesis.companions` of `data/programs.json`): no amount, and no mint authority except a
-    /// `bridge-minter`.
+    /// Genesis outputs that are opaque companions the program's profile declares.
+    ///
+    /// Examples are the curve, pool or vault of a launchpad that is bound to the covenant id of the
+    /// token (`genesis.companions` of `data/programs.json`). They have no amount, and no mint
+    /// authority except a `bridge-minter`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companion_outputs: Vec<CompanionOutput>,
-    /// The upstream build of the published public-mint app whose `PublicMint` / `TokenSeed` actors the genesis holds
-    /// ([`crate::public_mint::IssuerVersion::label`], e.g. `kcc20-reference@27f8403`); absent when the genesis holds none of
-    /// them. A genesis never mixes builds.
+    /// The upstream build of the published public-mint app whose actors the genesis holds.
+    ///
+    /// The actors are `PublicMint` and `TokenSeed`. The value is
+    /// [`crate::public_mint::IssuerVersion::label`], e.g. `kcc20-reference@27f8403`. Absent means
+    /// the genesis holds none of them. A genesis never mixes builds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer: Option<String>,
 }
@@ -378,7 +447,8 @@ impl GenesisReport {
     }
 }
 
-/// The registry's record of a token's genesis check (condition C1) and live-mint-authority check (condition C2), as
+/// The registry's record of a token's genesis check (C1) and live-mint-authority check (C2).
+///
 /// `kob registry verify-genesis` derives it from chain evidence (`registry/evidence/`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -393,16 +463,23 @@ pub struct GenesisRecord {
     pub supply: i64,
     /// Genesis outputs carrying a mint authority (see [`GenesisReport::minter_outputs`]).
     pub minter_outputs: Vec<u32>,
-    /// Allowance of the genesis `PublicMint` outputs (see [`GenesisReport::mint_allowance`]); absent: the genesis holds no
-    /// public minter. The maximum supply is `supply + mint_allowance`.
+    /// Allowance of the genesis `PublicMint` outputs (see [`GenesisReport::mint_allowance`]).
+    ///
+    /// Absent means the genesis holds no public minter. The maximum supply is `supply +
+    /// mint_allowance`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mint_allowance: Option<i64>,
-    /// The upstream build of the published public-mint app the genesis's `PublicMint` / `TokenSeed` actors are instances of
-    /// (see [`GenesisReport::issuer`]); absent: the genesis holds none.
+    /// The upstream build of the published public-mint app that the actors of the genesis are
+    /// instances of.
+    ///
+    /// See [`GenesisReport::issuer`]. Absent means the genesis holds none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuer: Option<String>,
-    /// Live mint-authority cells (`txid:index`) at `checked_at_daa`: empty = none (condition C2 holds), absent = not
-    /// determined. A token with a live minter carries the warning [`TokenWarning::LiveMintAuthority`] (its supply can still grow).
+    /// Live mint-authority cells (`txid:index`) at `checked_at_daa`.
+    ///
+    /// Empty means none, and condition C2 holds. Absent means not determined. A token with a live
+    /// minter carries the warning [`TokenWarning::LiveMintAuthority`], because its supply can still
+    /// grow.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_minters: Option<Vec<String>>,
     /// Virtual DAA score of the node the check read liveness from.
@@ -411,18 +488,20 @@ pub struct GenesisRecord {
     pub source: String,
 }
 
-/// A warning a token carries in the registry data and the API (`warnings`, snake_case strings). UIs show it next to the token.
-/// Every code is derived from recorded chain facts by code, never written by people: KOB states what the chain shows about a
-/// token, not what it thinks of it.
+/// A warning a token carries in the registry data and the API (`warnings`, snake_case strings).
+///
+/// UIs show it next to the token. Every code is derived from recorded chain facts by code, never
+/// written by people. KOB states what the chain shows about a token, not what it thinks of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TokenWarning {
-    /// The registry does not say `genesis_verified: true`: not every genesis output of the token was checked
-    /// against its program, so the issuer may hold a hidden non-template output able to mint look-alike tokens or feed a fake
-    /// balance into a transfer. Every token on the open list without a registry entry carries it.
+    /// The registry does not say `genesis_verified: true`: not every genesis output of the token
+    /// was checked against its program, so the issuer may hold a hidden non-template output able to
+    /// mint look-alike tokens or feed a fake balance into a transfer. Every token on the open list
+    /// without a registry entry carries it.
     GenesisUnverified,
-    /// The token's genesis record lists live mint-authority cells (`genesis.live_minters` non-empty): whoever holds them can
-    /// still mint, so the supply can still grow.
+    /// The token's genesis record lists live mint-authority cells (`genesis.live_minters`
+    /// non-empty): whoever holds them can still mint, so the supply can still grow.
     LiveMintAuthority,
 }
 impl TokenWarning {
@@ -437,12 +516,15 @@ impl TokenWarning {
     }
 }
 
-/// Warnings of a token that has NO registry entry (a token of an open-list program the executor found on chain).
+/// Warnings of a token that has NO registry entry (a token of an open-list program the executor
+/// found on chain).
 pub const OPEN_TOKEN_WARNINGS: [TokenWarning; 1] = [TokenWarning::GenesisUnverified];
 
 impl Token {
-    /// Warnings this token carries (API `warnings`), derived from its recorded facts: [`TokenWarning::GenesisUnverified`] unless
-    /// `genesis_verified: true`, and [`TokenWarning::LiveMintAuthority`] when its genesis record lists a live minter.
+    /// Warnings this token carries (API `warnings`), derived from its recorded facts.
+    ///
+    /// It is [`TokenWarning::GenesisUnverified`] unless `genesis_verified: true`, and
+    /// [`TokenWarning::LiveMintAuthority`] when its genesis record lists a live minter.
     pub fn warnings(&self) -> Vec<TokenWarning> {
         let mut w = vec![];
         if self.genesis_verified != Some(true) {
@@ -454,7 +536,8 @@ impl Token {
         w
     }
 
-    /// True when the genesis record lists a live mint-authority cell (`genesis.live_minters` non-empty).
+    /// True when the genesis record lists a live mint-authority cell (`genesis.live_minters`
+    /// non-empty).
     pub fn has_live_minter(&self) -> bool {
         self.genesis.as_ref().and_then(|g| g.live_minters.as_ref()).is_some_and(|l| !l.is_empty())
     }
@@ -477,7 +560,8 @@ pub struct Registry {
     pub tokens: Vec<Token>,
 }
 
-/// Identity of a token: what a KOB order pins (covenant id, template hash, extension commitment) plus the family.
+/// Identity of a token: what a KOB order pins (covenant id, template hash, extension commitment)
+/// plus the family.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AllowlistKey {
     /// Family.
@@ -490,7 +574,7 @@ pub struct AllowlistKey {
     pub extension_commitment: Option<[u8; 32]>,
 }
 
-/// One row of the launch allowlist (plan section 2.3): what the listing rules and the executor need.
+/// One row of the launch allowlist: what the listing rules and the executor need.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AllowlistEntry {
     /// Identity.
@@ -645,8 +729,8 @@ pub enum ValidationError {
         /// The capability.
         capability: &'static str,
     },
-    /// A declared risk that is empty, longer than 512 characters or carries control / invisible characters (the schema's and
-    /// the web client's bound).
+    /// A declared risk that is empty, longer than 512 characters or carries control / invisible
+    /// characters (the schema's and the web client's bound).
     #[error("template `{id}`: risks must be texts of 1..=512 printable characters")]
     BadRisk {
         /// Template id.
@@ -714,10 +798,11 @@ impl Registry {
         Ok(r)
     }
 
-    /// Parse only (unknown fields and wrong types are still refused). The per-token judgements older files carry
-    /// ([`LEGACY_TOKEN_KEYS`]: `status`, `official`, `warning`) are read and ignored, whatever they hold: a registry of the
-    /// earlier shape (an operator's testnet file, say) still loads and trades exactly what it would trade without them, and
-    /// nothing of them is ever honoured or written back.
+    /// Parse only (unknown fields and wrong types are still refused). The per-token judgements
+    /// older files carry ([`LEGACY_TOKEN_KEYS`]: `status`, `official`, `warning`) are read and
+    /// ignored, whatever they hold: a registry of the earlier shape (an operator's testnet file,
+    /// say) still loads and trades exactly what it would trade without them, and nothing of them is
+    /// ever honoured or written back.
     pub fn parse_unvalidated(json: &str) -> Result<Registry, RegistryError> {
         let mut doc: serde_json::Value = serde_json::from_str(json)?;
         if let Some(tokens) = doc.get_mut("tokens").and_then(|t| t.as_array_mut()) {
@@ -780,8 +865,9 @@ impl Registry {
             if t.suffix_len == 0 {
                 e.push(bad("suffix_len must be > 0".into()));
             }
-            // a program this build embeds: the entry states its profile's facts (data/programs.json). A KRON-codec program may
-            // have a prefix (an entry selector): the order templates take the prefix length as a parameter.
+            // a program this build embeds: the entry states its profile's facts
+            // (data/programs.json). A KRON-codec program may have a prefix (an entry selector): the
+            // order templates take the prefix length as a parameter.
             if let Err(m) = crate::profile::check_registry_template(t) {
                 e.push(bad(format!("disagrees with the embedded program profile: {m}")));
             }
@@ -836,8 +922,8 @@ impl Registry {
             } else if !tk.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
                 e.push(tick_bad("only ASCII uppercase letters and digits are allowed"));
             }
-            // no uniqueness: a shared or look-alike ticker is not refused (the module documentation says why)
-            // name / display
+            // no uniqueness: a shared or look-alike ticker is not refused (the module documentation
+            // says why) name / display
             let disp_bad = |reason: String| ValidationError::BadDisplay { ticker: short(tk), reason };
             if tok.name.trim().is_empty() || tok.name.chars().count() > 64 || has_bad_char(&tok.name) {
                 e.push(disp_bad("name must be 1..=64 printable characters (no control, zero-width or bidi characters)".into()));
@@ -955,7 +1041,8 @@ impl Registry {
                     e.push(ValidationError::DuplicateIdentity { a: prev.to_string(), b: tk.to_string() });
                 }
             }
-            // genesis check: a token without `genesis_verified: true` carries the warning (derived, `Token::warnings`)
+            // genesis check: a token without `genesis_verified: true` carries the warning (derived,
+            // `Token::warnings`)
             let gbad = |reason: &'static str| ValidationError::Genesis { ticker: tk.to_string(), reason };
             if tok.genesis_verified == Some(true) && !tok.verified {
                 e.push(gbad("genesis_verified needs verified (the covenant id and template hash checked first)"));
@@ -991,7 +1078,8 @@ impl Registry {
                 if g.source.is_empty() || g.source.chars().count() > 512 || has_bad_char(&g.source) {
                     e.push(gbad("genesis.source must be 1-512 characters without control, zero-width or bidi characters"));
                 }
-                // a live minter is a recorded fact: the token carries the derived warning `live_mint_authority`
+                // a live minter is a recorded fact: the token carries the derived warning
+                // `live_mint_authority`
                 if g.live_minters.as_ref().is_some_and(|live| !live.iter().all(|o| is_outpoint(o))) {
                     e.push(gbad("genesis.live_minters entries must be <txid>:<index>"));
                 }
@@ -1039,9 +1127,12 @@ impl Registry {
         self.tokens.iter().find(|t| self.allowlist_key(t).is_ok_and(|k| &k == key))
     }
 
-    /// Allowlist rows of every token entry whose program is on the strict list, the programs this build supports (call after
-    /// `validate`). Entries on a program pending review give no row: nothing of such a program is tradable. A row is facts only
-    /// (identity, layout, decimals); a token of a supported program trades whether or not it has a row (the open list).
+    /// Allowlist rows of every token entry whose program is on the strict list.
+    ///
+    /// The strict list holds the programs that this build supports. Call it after `validate`.
+    /// Entries on a program pending review give no row, because nothing of such a program is
+    /// tradable. A row is facts only (identity, layout, decimals). A token of a supported program
+    /// trades whether or not it has a row (the open list).
     pub fn allowlist(&self) -> Vec<AllowlistEntry> {
         self.tokens
             .iter()
@@ -1059,7 +1150,8 @@ impl Registry {
             .collect()
     }
 
-    /// The strict template list: the templates whose review is done (a token on any of them is tradable).
+    /// The strict template list: the templates whose review is done (a token on any of them is
+    /// tradable).
     pub fn strict_templates(&self) -> impl Iterator<Item = &Template> {
         self.templates.iter().filter(|t| t.is_strict())
     }
@@ -1075,8 +1167,9 @@ impl Registry {
     }
 }
 
-/// `TICKER (abcd…1234)`: ticker and short covenant id, so tokens that share a ticker are told apart. No standing or badge: KOB
-/// makes no judgement about a token. Mirrors `displayName` of the web registry.
+/// `TICKER (abcd…1234)`: ticker and short covenant id, so tokens that share a ticker are told
+/// apart. No standing or badge: KOB makes no judgement about a token. Mirrors `displayName` of the
+/// web registry.
 pub fn display_name(token: &Token) -> String {
     let c = &token.covenant_id;
     let short_id = if c.len() >= 8 { format!("{}…{}", &c[..4], &c[c.len() - 4..]) } else { c.clone() };
@@ -1089,8 +1182,10 @@ impl fmt::Display for Token {
     }
 }
 
-/// One output of a token's genesis group as the chain shows it, with the redeem script behind its P2SH script public key
-/// (revealed when the output was spent, or published by the issuer; either way it is checked against the hash).
+/// One output of a token's genesis group as the chain shows it.
+///
+/// It comes with the redeem script behind its P2SH script public key. The spend of the output
+/// reveals that script, or the issuer publishes it. Either way it is checked against the hash.
 #[derive(Clone, Debug)]
 pub struct GenesisOutput {
     /// Output index in the genesis transaction.
@@ -1127,32 +1222,42 @@ pub enum GenesisError {
     /// A genesis output whose state does not decode, or a negative / overflowing amount.
     #[error("genesis output {0}: bad token state: {1}")]
     BadState(u32, String),
-    /// A genesis output whose extension commitment is not the token's (the one named, or the group's first output's): a
-    /// second class of token under the same covenant id, not fungible with the first and not part of its supply.
+    /// A genesis output whose extension commitment is not the token's (the one named, or the
+    /// group's first output's): a second class of token under the same covenant id, not fungible
+    /// with the first and not part of its supply.
     #[error("genesis output {0}: extension commitment {1} is not the token's ({2})")]
     ExtensionCommitment(u32, String, String),
 }
 
-/// Checks EVERY output of a token's genesis group against its pinned program: the step behind
-/// `genesis_verified: true` (without it a token carries the warning [`TokenWarning::GenesisUnverified`]).
+/// Checks EVERY output of a token's genesis group against its pinned program.
 ///
-/// A KIP-20 covenant id commits to the genesis outpoint and to the index, value and script public key of every output of the
-/// genesis group, and nothing else: for P2SH outputs only to the hash of the redeem script. A token program reads balances
-/// and authority from any input carrying its covenant id, so one hidden non-template output in the genesis (a "backdoor"
-/// script) can later mint look-alike tokens or feed a fake balance into a genuine transfer, and the template alone cannot
-/// show it. This function recomputes the covenant id from `authorizing_outpoint` (the previous outpoint of the input that
-/// authorised the group) and `outputs` (so `outputs` must be the complete group), then requires every output to be a P2SH
-/// of a revealed redeem script that is an instance of `template` (prefix, state span, suffix; template hash) with a
-/// decodable state, all of one extension commitment (fungibility holds only among equal commitments: a second commitment
-/// in the genesis group is a second class of token under the same covenant id). Returns what it found (record
-/// `genesis_verified: true` for the token). [`verify_genesis_of`] also names the commitment the token must carry.
+/// This is the step behind `genesis_verified: true`. Without it a token carries the warning
+/// [`TokenWarning::GenesisUnverified`].
 ///
-/// A token of the published `KCC20PublicMint` app (template `kcc20-ref-public-mint`) may also hold the app's issuance
-/// actors in its genesis, as upstream recommends ([`crate::public_mint`]): `PublicMint` minters and `TokenSeed` seeds of the
-/// app's exact programs, whose template fields name the app's own programs and whose extension commitment is the
-/// token's. A minter must have `remaining >= 0` and `mint_amount >= 1`. The report then lists them
+/// A KIP-20 covenant id commits to the genesis outpoint and to the index, value and script public
+/// key of every output of the genesis group, and nothing else. For P2SH outputs it commits only to
+/// the hash of the redeem script. A token program reads balances and authority from any input
+/// carrying its covenant id. So one hidden non-template output in the genesis (a "backdoor" script)
+/// can later mint look-alike tokens or feed a fake balance into a genuine transfer, and the
+/// template alone cannot show it.
+///
+/// This function recomputes the covenant id from `authorizing_outpoint` (the previous outpoint of
+/// the input that authorised the group) and `outputs`, so `outputs` must be the complete group.
+/// Then it requires every output to be a P2SH of a revealed redeem script that is an instance of
+/// `template` (prefix, state span, suffix; template hash) with a decodable state. All outputs must
+/// have one extension commitment. Fungibility holds only among equal commitments, and a second
+/// commitment in the genesis group is a second class of token under the same covenant id. It
+/// returns what it found (record `genesis_verified: true` for the token). [`verify_genesis_of`]
+/// also names the commitment the token must carry.
+///
+/// A token of the published `KCC20PublicMint` app (template `kcc20-ref-public-mint`) may also hold
+/// the issuance actors of the app in its genesis, as upstream recommends ([`crate::public_mint`]).
+/// They are `PublicMint` minters and `TokenSeed` seeds of the exact programs of the app. Their
+/// template fields name the programs of the app, and their extension commitment is the one of the
+/// token. A minter must have `remaining >= 0` and `mint_amount >= 1`. The report then lists them
 /// ([`GenesisReport::minter_outputs`], [`GenesisReport::seed_outputs`]) and sums their allowance
-/// ([`GenesisReport::mint_allowance`]); anything else in the group is refused as for every program.
+/// ([`GenesisReport::mint_allowance`]). Anything else in the group is refused, as for every
+/// program.
 pub fn verify_genesis(
     template: &Template,
     covenant_id: &str,
@@ -1163,9 +1268,11 @@ pub fn verify_genesis(
     verify_genesis_of(template, covenant_id, genesis_txid, authorizing_outpoint, outputs, None)
 }
 
-/// [`verify_genesis`] for a token whose extension commitment is known (the registry entry's `extension_commitment`; all
-/// zero for KRON, which has none): every output of the group must carry exactly `extension_commitment`. `None`: every
-/// output must carry the first output's.
+/// [`verify_genesis`] for a token whose extension commitment is known.
+///
+/// The commitment is the `extension_commitment` of the registry entry, all zero for KRON, which has
+/// none. Every output of the group must carry exactly `extension_commitment`. With `None`, every
+/// output must carry the commitment of the first output.
 pub fn verify_genesis_of(
     template: &Template,
     covenant_id: &str,
@@ -1180,9 +1287,12 @@ pub fn verify_genesis_of(
     verify_genesis_with(template, profile, covenant_id, genesis_txid, authorizing_outpoint, outputs, extension_commitment)
 }
 
-/// [`verify_genesis_of`] under an explicit program profile: its `genesis.companions` are the outputs beside the token's own
-/// that the group may hold (the embedded profile of the template's program is what [`verify_genesis_of`] passes; a review
-/// passes a candidate profile to try a launchpad's genesis shape before the profile is committed).
+/// [`verify_genesis_of`] under an explicit program profile.
+///
+/// The `genesis.companions` of the profile are the outputs beside the token's own that the group
+/// may hold. [`verify_genesis_of`] passes the embedded profile of the program of the template. A
+/// review passes a candidate profile to try the genesis shape of a launchpad before the profile is
+/// committed.
 pub fn verify_genesis_with(
     template: &Template,
     profile: &crate::profile::ProgramProfile,
@@ -1234,8 +1344,9 @@ pub fn verify_genesis_with(
             return Err(GenesisError::WrongRedeem(o.index));
         }
         let Some(state) = program.state_of(redeem) else {
-            // a companion the program's profile declares (the issuance actors of the published public-mint app, a
-            // launchpad's curve or pool bound to the token's id); anything else is genesis contamination
+            // a companion the program's profile declares (the issuance actors of the published
+            // public-mint app, a launchpad's curve or pool bound to the token's id); anything else
+            // is genesis contamination
             let found = crate::profile::match_companion(profile, redeem).map_err(|e| GenesisError::BadState(o.index, e))?;
             let c = match found.ok_or_else(|| GenesisError::NotTemplate(o.index, template.id.clone()))? {
                 crate::profile::CompanionMatch::Decoded(v, c) => {
@@ -1254,8 +1365,9 @@ pub fn verify_genesis_with(
                 }
                 crate::profile::CompanionMatch::Opaque(role) => {
                     if role == crate::profile::CompanionRole::BridgeMinter {
-                        // a federated bridge's minter (kUSDT's BridgeMint): a mint authority without an allowance KOB reads; what
-                        // it mints carries its extension commitment, which must be the token's one class
+                        // a federated bridge's minter (kUSDT's BridgeMint): a mint authority
+                        // without an allowance KOB reads; what it mints carries its extension
+                        // commitment, which must be the token's one class
                         let e = profile
                             .genesis
                             .companions
@@ -1360,7 +1472,8 @@ mod tests {
     fn tok(v: &mut Value, i: usize) -> &mut Value {
         &mut v["tokens"][i]
     }
-    /// A genesis record that found no live mint authority (no derived warning besides what genesis_verified decides).
+    /// A genesis record that found no live mint authority (no derived warning besides what
+    /// genesis_verified decides).
     fn genesis_rec() -> Value {
         json!({"txid": "ab".repeat(32), "daa_score": 10, "outputs": [1, 2], "supply": 1000, "minter_outputs": [],
             "live_minters": [], "checked_at_daa": 20, "source": "test"})
@@ -1370,10 +1483,12 @@ mod tests {
     fn default_and_example_registries_validate() {
         let d = Registry::default_registry();
         assert_eq!(d.network, "mainnet");
-        // the KRON family from the 2026-09-29 census: seven graduated tokens and KDIST, facts only: identity checked against a chain
-        // UTXO, and the genesis check (2026-10-03, `registry/evidence/mainnet-genesis.json`, `genesis_evidence`): every genesis output
-        // checked on mainnet data (C1), no genesis minter output so no live mint authority (C2), hence no derived warning. No entry
-        // carries a judgement (no listing state, no official flag, no written warning: the format has none)
+        // The KRON family: seven graduated tokens and KDIST, facts only. The identity is checked
+        // against a chain UTXO. The genesis check (`registry/evidence/mainnet-genesis.json`,
+        // `genesis_evidence`) covers every genesis output on mainnet data (C1), and there is no
+        // genesis minter output, so no live mint authority (C2) and no derived warning. No entry
+        // carries a judgement (no listing state, no official flag, no written warning: the format
+        // has none).
         assert_eq!(d.tokens.len(), 8);
         assert!(d.tokens.iter().all(|t| t.family == Family::Kron
             && t.verified
@@ -1387,11 +1502,12 @@ mod tests {
             .is_some_and(|s| !s.contains("listed") && !s.contains("official"))));
         assert_eq!(d.allowlist().len(), 8);
         assert_eq!(d.templates.len(), 8);
-        // internal review of the two KRON programs (2026-09-30, `review_b2_kron.rs`): reviewed with conditions (per-token genesis check and
-        // no live minter, facts each token shows as derived warnings); the reference KCC-20 3/3 program, KOB's standard one, is reviewed
-        // (internal review only, maintainer decision 2026-10-12: tradable on mainnet), and so is the reference's published public-mint
-        // build (2026-10-13, the same permissionless KCC-20 policy), KaspaRocket's 10 / 10 build of it (2026-10-27) and KForge's 6 / 6
-        // build (2026-11-05); the 8/8 prototype and KaspaCom's are pending
+        // The two KRON programs are reviewed with conditions: a per-token genesis check and no
+        // live minter, facts that each token shows as derived warnings. The reference KCC-20 3/3
+        // program, KOB's standard one, is reviewed (internal review only) and tradable on mainnet.
+        // So are the published public-mint build of the reference (the same permissionless
+        // KCC-20 policy), the 10 / 10 build of KaspaRocket and the 6 / 6 build of KForge. The 8/8
+        // prototype and KaspaCom's are pending.
         let strict: Vec<&str> = d.strict_templates().map(|t| t.id.as_str()).collect();
         assert_eq!(
             strict,
@@ -1430,8 +1546,9 @@ mod tests {
         assert!(d.template("kron-2433").unwrap().risks.iter().any(|r| r.starts_with("Missing hardening")));
         assert!(!d.template("kron-2732").unwrap().risks.iter().any(|r| r.starts_with("Missing hardening")));
         assert!(d.templates.iter().all(|t| t.risks.iter().any(|r| r.starts_with("Genesis contamination"))));
-        // the published public-mint build: its KCC-1 actor-type handle (34-byte prefix with the context field), reviewed (internal
-        // review only, 2026-10-13): tradable on mainnet, a live PublicMint bounded by the genesis allowance
+        // the published public-mint build: its KCC-1 actor-type handle (34-byte prefix with the
+        // context field), reviewed (internal review only): tradable on mainnet, a live
+        // PublicMint bounded by the genesis allowance
         let pm = d.template("kcc20-ref-public-mint").unwrap();
         assert_eq!(pm.review_status, ReviewStatus::Reviewed);
         assert!(pm
@@ -1452,19 +1569,22 @@ mod tests {
         let ex = Registry::parse(EXAMPLE).unwrap();
         assert_eq!(ex.network, "testnet-10");
         assert_eq!(ex.tokens.len(), 2);
-        // the example carries the same pinned templates, reviewed (a fixture of a reviewed strict list; the shipped file holds them)
+        // the example carries the same pinned templates, reviewed (a fixture of a reviewed strict
+        // list; the shipped file holds them)
         let reviewed: Vec<Template> =
             d.templates.iter().map(|t| Template { review_status: ReviewStatus::Reviewed, ..t.clone() }).collect();
         assert_eq!(ex.templates, reviewed, "example carries the same pinned templates");
         assert_eq!(ex.strict_templates().count(), 8);
         assert!(ex.validate_for_network("testnet-10").is_ok());
-        // both example entries are on reviewed (supported) programs: both give an allowlist row, unchecked as they are
+        // both example entries are on reviewed (supported) programs: both give an allowlist row,
+        // unchecked as they are
         assert_eq!(ex.allowlist().len(), 2);
     }
 
     #[test]
     fn strict_list_capabilities_and_warnings() {
-        // a template that can freeze is labelled, and only reviewed templates are on the strict list
+        // a template that can freeze is labelled, and only reviewed templates are on the strict
+        // list
         let r = check(|v| {
             for t in v["templates"].as_array_mut().unwrap() {
                 t["review_status"] = json!("reviewed");
@@ -1487,8 +1607,8 @@ mod tests {
             assert!(e.iter().any(|x| matches!(x, ValidationError::BadRisk { .. })), "{bad}");
         }
         assert!(check(|v| v["templates"][0]["risks"] = json!(["x".repeat(512)])).is_ok());
-        // the warnings are derived from the facts: a checked genesis without a live minter carries none, an entry without the check
-        // carries what an open-list token without an entry carries
+        // the warnings are derived from the facts: a checked genesis without a live minter carries
+        // none, an entry without the check carries what an open-list token without an entry carries
         let ok = check(|v| {
             tok(v, 0)["verified"] = json!(true);
             tok(v, 0)["genesis_verified"] = json!(true);
@@ -1496,8 +1616,9 @@ mod tests {
         })
         .unwrap();
         assert!(ok.tokens[0].warnings().is_empty() && ok.tokens[1].warnings() == OPEN_TOKEN_WARNINGS.to_vec());
-        // the judgements older files carry are read and ignored, whatever they hold (an operator's file of the earlier shape still
-        // loads): the result is the registry without them, and nothing of them is written back
+        // the judgements older files carry are read and ignored, whatever they hold (an operator's
+        // file of the earlier shape still loads): the result is the registry without them, and
+        // nothing of them is written back
         let plain = Registry::parse(EXAMPLE).unwrap();
         for (field, value) in [
             ("official", json!(true)),
@@ -1606,7 +1727,8 @@ mod tests {
         }));
         assert!(e.iter().any(|x| matches!(x, ValidationError::DuplicateIdentity { .. })), "{e:?}");
         assert!(e.iter().any(|x| matches!(x, ValidationError::DuplicateCovenantId { .. })));
-        // same covenant id, different extension commitment: still refused (one covenant id = one token)
+        // same covenant id, different extension commitment: still refused (one covenant id = one
+        // token)
         let e = errs(check(|v| {
             let mut t = v["tokens"][0].clone();
             t["ticker"] = json!("EXTWO");
@@ -1630,7 +1752,8 @@ mod tests {
             let e = errs(check(|v| tok(v, 0)["ticker"] = json!(bad)));
             assert!(e.iter().any(|x| matches!(x, ValidationError::BadTicker { .. })), "{bad}: {e:?}");
         }
-        // two tokens (two covenant ids) may share a ticker or use look-alike ones: choosing which may carry it is curation
+        // two tokens (two covenant ids) may share a ticker or use look-alike ones: choosing which
+        // may carry it is curation
         for (a, b) in [
             ("KRON", "KR0N"),
             ("PEPE", "PEPE"),
@@ -1692,8 +1815,8 @@ mod tests {
 
     #[test]
     fn allowlist_rows() {
-        // a row for every entry on a supported (reviewed) program, checked or not: an entry adds facts, it is no listing step
-        // (no lot or tick since protocol v3)
+        // a row for every entry on a supported (reviewed) program, checked or not: an entry adds
+        // facts, it is no listing step (protocol v3 has no lot or tick)
         let none = check(|v| {
             for t in v["templates"].as_array_mut().unwrap() {
                 t["review_status"] = json!("pending-review");
@@ -1720,8 +1843,8 @@ mod tests {
 
     #[test]
     fn genesis_check_rules_and_derived_warnings() {
-        // genesis_verified: true needs verified; a token without it trades with the derived genesis_unverified warning (the
-        // executor may require it: `require_genesis_verified`)
+        // genesis_verified: true needs verified; a token without it trades with the derived
+        // genesis_unverified warning (the executor may require it: `require_genesis_verified`)
         let base = |f: &dyn Fn(&mut Value)| {
             check(|v| {
                 tok(v, 0)["verified"] = json!(true);
@@ -1731,9 +1854,9 @@ mod tests {
             })
         };
         assert!(base(&|_| {}).is_ok());
-        // C2: a recorded live minter is a fact, not an error: the token carries the derived warning live_mint_authority; a
-        // record without a liveness check (absent live_minters) or no record gives none (the program's `mint-authority`
-        // capability still says what is possible)
+        // C2: a recorded live minter is a fact, not an error: the token carries the derived warning
+        // live_mint_authority; a record without a liveness check (absent live_minters) or no record
+        // gives none (the program's `mint-authority` capability still says what is possible)
         let lm = format!("{}:3", "cd".repeat(32));
         let live = base(&|v| tok(v, 0)["genesis"]["live_minters"] = json!([lm.clone()])).unwrap();
         assert!(live.tokens[0].has_live_minter());
@@ -1858,7 +1981,8 @@ mod tests {
         full_tok["display"] = json!({"description": "d", "website": "https://e.x", "icon": "https://e.x/i.png", "x": "https://x.com/e", "telegram": "https://t.me/example", "kcc23": {}});
         let full_tok_typed: Token = serde_json::from_value(full_tok.clone()).unwrap();
         let full_tok = serde_json::to_value(&full_tok_typed).unwrap();
-        // the schema also declares the legacy judgements of older files, which the parser reads and ignores (never written)
+        // the schema also declares the legacy judgements of older files, which the parser reads and
+        // ignores (never written)
         let legacy: BTreeSet<String> = LEGACY_TOKEN_KEYS.iter().map(|s| s.to_string()).collect();
         assert!(keys(&full_tok).is_disjoint(&legacy));
         assert_eq!(keys(&full_tok).union(&legacy).cloned().collect::<BTreeSet<_>>(), props(&defs["token"]), "token properties");
@@ -1941,9 +2065,10 @@ mod tests {
         assert_eq!(schema["additionalProperties"], false);
     }
 
-    /// Generic genesis rule: a group may hold, beside the token's own outputs, exactly the companions its program's profile
-    /// declares (here a launchpad's bonding curve bound to the token's id, as an opaque companion of the reference 3 / 3
-    /// program); the same group is refused under the embedded profile, and an impostor of the curve is refused under both.
+    /// Generic genesis rule: a group may hold, beside the token's own outputs, exactly the
+    /// companions its program's profile declares (here a launchpad's bonding curve bound to the
+    /// token's id, as an opaque companion of the reference 3 / 3 program); the same group is
+    /// refused under the embedded profile, and an impostor of the curve is refused under both.
     #[test]
     fn a_genesis_group_holds_the_companions_its_profile_declares_and_nothing_else() {
         use crate::profile::{CompanionRole, CompanionRule, Layout};
