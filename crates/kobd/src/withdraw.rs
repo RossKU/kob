@@ -1,23 +1,30 @@
 //! `kobd withdraw`: sends KAS out of the operator's key, over the node the configuration names.
 //!
-//! The default operator has no node of their own: the configuration says `rpc_url = "resolver"` (two public nodes found
-//! through the Kaspa resolvers, wss), which `kob-cli` cannot reach. The executor already speaks that, so the withdrawal is a
-//! command of the executor: it reads the configuration and the key file exactly as `address-balance` does, lists the plain
-//! (covenant-free) UTXOs of the key's address at the configured node, builds one version-1 payment (`kob_protocol::payment`),
-//! signs it with the operator key, and submits it to that node.
+//! The default operator has no node of their own. The configuration says `rpc_url = "resolver"`
+//! (two public nodes found through the Kaspa resolvers, wss), which `kob-cli` cannot reach. The
+//! executor already speaks that, so the withdrawal is a command of the executor. It reads the
+//! configuration and the key file exactly as `address-balance` does. It lists the plain
+//! (covenant-free) UTXOs of the key's address at the configured node, builds one version-1 payment
+//! (`kob_protocol::payment`), signs it with the operator key and submits it to that node.
 //!
-//! Safe next to the executor by refusing it: the command takes the data directory's single-writer lock
-//! (`indexer::lock`), the same one `run` holds for as long as it runs. A running executor makes it fail with that lock's
-//! message ("stop it first"), so no matcher transaction is being built from the coins it spends, and two withdrawals cannot
-//! overlap either. A transaction the stopped executor sent just before the stop may still sit in the node's mempool: a coin it
-//! spent is then refused by the node as a double spend, and nothing is lost.
+//! # Safety next to the executor
 //!
-//! Network safety is that of every command: the network is the configuration's, resolved against the build
-//! ([`crate::config::resolve_network`]: a deployment binary refuses the other network), the node must report it, and the
-//! destination must be an address of it.
+//! The command refuses to run next to the executor. It takes the data directory's single-writer
+//! lock (`indexer::lock`), the same one `run` holds for as long as it runs. A running executor
+//! makes it fail with that lock's message ("stop it first"). So no matcher transaction is being
+//! built from the coins it spends, and two withdrawals cannot overlap either.
 //!
-//! The secret never leaves the key file. Only plain KAS moves: the operator's token UTXOs and the orders' coins are not
-//! touched.
+//! A transaction the stopped executor sent just before the stop may still sit in the node's
+//! mempool. A coin it spent is then refused by the node as a double spend, and nothing is lost.
+//!
+//! # Network safety
+//!
+//! Network safety is that of every command. The network is the configuration's, resolved against
+//! the build ([`crate::config::resolve_network`]: a deployment binary refuses the other network).
+//! The node must report that network, and the destination must be an address of it.
+//!
+//! The secret never leaves the key file. Only plain KAS moves. The operator's token UTXOs and the
+//! orders' coins are not touched.
 
 use std::path::{Path, PathBuf};
 
@@ -33,7 +40,9 @@ use crate::matcher::run::kas_text;
 use crate::matcher::wallet::{p2pk_spk_string, HotKey, Signer};
 use crate::setup::{Console, CONFIG_FILE};
 
-/// Most coins one withdrawal spends (one transaction, the largest first); a key spread over more coins needs a second run.
+/// Most coins one withdrawal spends, the largest first, in one transaction.
+///
+/// A key spread over more coins needs a second run.
 pub const MAX_INPUTS: usize = 50;
 
 /// `kobd withdraw`.
@@ -45,26 +54,31 @@ pub struct WithdrawArgs {
     /// KAS to send (`2.5`, `2.5KAS`), or `all`: everything the key holds, minus the fee.
     #[arg(long)]
     pub amount: String,
-    /// Directory of `kobd.toml` and the key file. Default: `$KOBD_DIR` or the executable's own directory.
+    /// Directory of `kobd.toml` and the key file. Default: `$KOBD_DIR` or the executable's own
+    /// directory.
     #[arg(long, conflicts_with = "config")]
     pub dir: Option<PathBuf>,
-    /// The configuration file, instead of `--dir` (its directory is the base of its relative paths).
+    /// The configuration file, instead of `--dir` (its directory is the base of its relative
+    /// paths).
     #[arg(long)]
     pub config: Option<PathBuf>,
-    /// The key file, instead of the configuration's (else the environment: `KOB_OPERATOR_KEY_FILE`, a systemd credential).
+    /// The key file, instead of the configuration's (else the environment: `KOB_OPERATOR_KEY_FILE`,
+    /// a systemd credential).
     #[arg(long)]
     pub key_file: Option<PathBuf>,
     /// Fee rate, sompi per gram of mass (at least 100, the node's relay floor).
     #[arg(long, default_value_t = MIN_FEE_RATE)]
     pub fee_rate: u64,
-    /// Send without asking. Without it the command asks to confirm, and refuses to run without a terminal.
+    /// Send without asking. Without it the command asks to confirm, and refuses to run without a
+    /// terminal.
     #[arg(long, short = 'y')]
     pub yes: bool,
     /// Build and show the withdrawal, send nothing.
     #[arg(long)]
     pub dry_run: bool,
-    /// Print the result as one JSON object on stdout (`{txid, network, from, to, amount_sompi, fee_sompi, inputs,
-    /// remaining_coins}`, `txid` null for a dry run; `{error}` when nothing was sent); the details and the log go to stderr.
+    /// Print the result as one JSON object on stdout (`{txid, network, from, to, amount_sompi,
+    /// fee_sompi, inputs, remaining_coins}`, `txid` null for a dry run; `{error}` when nothing was
+    /// sent); the details and the log go to stderr.
     #[arg(long)]
     pub json: bool,
 }
@@ -74,6 +88,7 @@ pub struct WithdrawArgs {
 pub enum Amount {
     /// Everything the spent coins hold, minus the fee.
     All,
+    /// An amount of sompi.
     Sompi(u64),
 }
 
@@ -109,6 +124,7 @@ pub fn parse_amount(text: &str) -> Result<Amount> {
 
 /// The node calls of a withdrawal.
 pub trait WithdrawNode {
+    /// The node's server info.
     fn server_info(&mut self, url: &str) -> Result<ServerInfo, RpcError>;
     /// The UTXOs of `address` at the node's UTXO index.
     fn utxos(&mut self, url: &str, address: &str) -> Result<Vec<AddressUtxo>, RpcError>;
@@ -116,14 +132,17 @@ pub trait WithdrawNode {
     fn submit(&mut self, url: &str, tx: Value) -> Result<[u8; 32], RpcError>;
 }
 
-/// The real node: one connection for the whole command (a resolver entry keeps the public node it found), on the caller's
-/// runtime.
+/// The real node: one connection for the whole command, on the caller's runtime.
+///
+/// A resolver entry keeps the public node it found.
 pub struct WrpcWithdrawNode<'a> {
+    /// The runtime the node calls block on.
     pub rt: &'a tokio::runtime::Runtime,
     node: Option<WrpcNode>,
 }
 
 impl<'a> WrpcWithdrawNode<'a> {
+    /// A node that connects on its first call.
     pub fn new(rt: &'a tokio::runtime::Runtime) -> Self {
         WrpcWithdrawNode { rt, node: None }
     }
@@ -156,13 +175,19 @@ impl WithdrawNode for WrpcWithdrawNode<'_> {
 /// What the command is for (`withdraw`'s arguments, resolved).
 #[derive(Debug, Clone)]
 pub struct Request {
+    /// The destination address.
     pub to: String,
+    /// How much to send.
     pub amount: Amount,
+    /// The key file, if the arguments name one.
     pub key_file: Option<PathBuf>,
+    /// The fee rate, sompi per gram.
     pub fee_rate: u64,
+    /// Send without asking.
     pub yes: bool,
     /// Whether a person can answer the confirmation (standard input is a terminal).
     pub interactive: bool,
+    /// Build and show the withdrawal, send nothing.
     pub dry_run: bool,
 }
 
@@ -187,8 +212,10 @@ fn under(dir: &Path, p: &Path) -> PathBuf {
     }
 }
 
-/// The withdrawal: builds, shows, confirms and sends. Returns `{txid, to, amount_sompi, fee_sompi, inputs, remaining_coins, ...}`
-/// (`txid` null for a dry run). Never prints or returns the secret.
+/// The withdrawal: builds, shows, confirms and sends.
+///
+/// It returns `{txid, to, amount_sompi, fee_sompi, inputs, remaining_coins, ...}`, with `txid` null
+/// for a dry run. It never prints or returns the secret.
 pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn WithdrawNode, io: &mut dyn Console) -> Result<Value> {
     let mut cfg = IndexerConfig::load(cfg_path)?;
     let launch_key = cfg.launch.as_ref().and_then(|l| l.key_file.clone());
@@ -204,7 +231,7 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     let pubkey = key.pubkey();
     let from = key.address(&network).to_string();
 
-    // the destination: an address of this network, not the key's own
+    // The destination: an address of this network, not the key's own.
     let dest = kaspa_addresses::Address::try_from(req.to.as_str()).map_err(|e| anyhow!("--to `{}` is not an address: {e}", req.to))?;
     let want = crate::matcher::wallet::address_of(&pubkey, &network).prefix;
     if dest.prefix != want {
@@ -218,7 +245,8 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     }
     let fee = FeeOptions::rate(req.fee_rate);
 
-    // the executor and a withdrawal never write at once: the data directory's single-writer lock, held until the end
+    // The executor and a withdrawal never write at once: the data directory's single-writer lock,
+    // held until the end.
     cfg.data_dir = under(base, &cfg.data_dir);
     if let Some(r) = cfg.records.dir.take() {
         cfg.records.dir = Some(under(base, &r));
@@ -239,7 +267,8 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
         crate::rpc::resolver::set_network(&network);
     }
     let info = node.server_info(&url).map_err(|e| anyhow!("cannot reach {}: {e}", node_name(&url)))?;
-    // a resolver entry has found its public node now: name that host, not the configuration's word `resolver`
+    // A resolver entry has found its public node now: name that host, not the configuration's word
+    // `resolver`.
     let shown = node_name(&url);
     if info.network_id != network {
         bail!("{shown} is on {}, this is the {network} executor: nothing was sent", info.network_id);
@@ -365,8 +394,10 @@ pub fn withdraw(cfg_path: &Path, base: &Path, req: &Request, node: &mut dyn With
     Ok(out)
 }
 
-/// How the messages name the node of `url`: `the public node <host>` for a resolver entry that has found one, `the public
-/// nodes (resolver)` before that, else `the node <url>` (redacted).
+/// How the messages name the node of `url`.
+///
+/// It is `the public node <host>` for a resolver entry that has found one, `the public nodes
+/// (resolver)` before that, and `the node <url>` (redacted) otherwise.
 fn node_name(url: &str) -> String {
     use crate::rpc::resolver;
     if !resolver::is_resolver(url) {
@@ -378,8 +409,9 @@ fn node_name(url: &str) -> String {
     }
 }
 
-/// `submitTransaction`, again after a failure on the wire (the same signed transaction: an answer that it is already known counts
-/// as sent).
+/// `submitTransaction`, again after a failure on the wire.
+///
+/// It sends the same signed transaction. An answer that it is already known counts as sent.
 fn submit(node: &mut dyn WithdrawNode, url: &str, rpc: &Value, id: [u8; 32], shown: &str) -> Result<[u8; 32]> {
     let mut last = String::new();
     for attempt in 0..3 {
@@ -552,10 +584,10 @@ mod tests {
         assert_eq!(outputs[0]["value"], 4 * KAS);
         let fee = out["fee_sompi"].as_u64().unwrap();
         assert_eq!(outputs[1]["value"].as_u64().unwrap() + 4 * KAS + fee, 10 * KAS);
-        // the input is signed (a 65-byte Schnorr signature push) and is the coin picked
+        // The input is signed (a 65-byte Schnorr signature push) and is the coin picked.
         assert_eq!(tx["inputs"].as_array().unwrap().len(), 1);
         assert!(!tx["inputs"][0]["signatureScript"].as_str().unwrap().is_empty());
-        // the secret is in no line printed or returned
+        // The secret is in no line printed or returned.
         let secret = std::fs::read_to_string(fx.dir.path().join(crate::setup::KEY_FILE)).unwrap();
         assert!(!io.said.join("\n").contains(secret.trim()) && !out.to_string().contains(secret.trim()));
         assert!(io.said.iter().any(|l| l.contains(&fx.dest())));
@@ -597,18 +629,18 @@ mod tests {
         let fx = fixture();
         let other = if fx.network == "mainnet" { "testnet-10" } else { "mainnet" };
         let mut io = Script::default();
-        // a destination of the other network
+        // A destination of the other network.
         let mut r = fx.req(Amount::All);
         r.to = crate::matcher::wallet::address_of(&[5; 32], other).to_string();
         let mut node = fx.node(vec![fx.coin(1, 5 * KAS)]);
         let e = fx.run(&r, &mut node, &mut io).unwrap_err();
         assert!(e.to_string().contains("another network"), "{e}");
-        // not an address; the key's own address
+        // Not an address, and the key's own address.
         r.to = "kaspa:nonsense".into();
         assert!(fx.run(&r, &mut node, &mut io).is_err());
         r.to = crate::matcher::wallet::address_of(&fx.pubkey, &fx.network).to_string();
         assert!(fx.run(&r, &mut node, &mut io).unwrap_err().to_string().contains("own address"));
-        // a node of the other network, an unsynced node, a node without a UTXO index
+        // A node of the other network, an unsynced node, a node without a UTXO index.
         let mut node = fx.node(vec![fx.coin(1, 5 * KAS)]);
         node.info.network_id = other.into();
         assert!(fx.run(&fx.req(Amount::All), &mut node, &mut io).unwrap_err().to_string().contains(&format!("is on {other}")));
@@ -619,7 +651,8 @@ mod tests {
         node.info.has_utxo_index = false;
         assert!(fx.run(&fx.req(Amount::All), &mut node, &mut io).unwrap_err().to_string().contains("UTXO index"));
         assert!(node.submitted.is_empty(), "nothing was sent by any of these");
-        // a configuration of the other network than this binary's deployment network is refused as every command does
+        // A configuration of the other network than this binary's deployment network is refused, as
+        // every command does.
         if let Some(b) = kob_protocol::artifacts::deployment_network() {
             let p = fx.dir.path().join(CONFIG_FILE);
             let text = std::fs::read_to_string(&p).unwrap().replace(&format!("\"{b}\""), &format!("\"{other}\""));
@@ -635,7 +668,7 @@ mod tests {
     fn it_asks_unless_told_not_to_and_never_sends_without_an_answer() {
         let fx = fixture();
         let coins = vec![fx.coin(1, 5 * KAS)];
-        // no --yes and no terminal: refused
+        // No --yes and no terminal: refused.
         let mut r = fx.req(Amount::All);
         r.yes = false;
         let mut node = fx.node(coins.clone());
@@ -643,7 +676,7 @@ mod tests {
         let e = fx.run(&r, &mut node, &mut io).unwrap_err();
         assert!(e.to_string().contains("--yes"), "{e}");
         assert_eq!((node.submitted.len(), io.asked), (0, 0));
-        // a terminal: asked; anything but yes sends nothing
+        // A terminal: asked. Anything but yes sends nothing.
         r.interactive = true;
         for answer in ["", "n", "no", "yess", "send"] {
             let mut io = Script { answers: VecDeque::from([answer.to_string()]), ..Script::default() };
@@ -653,19 +686,19 @@ mod tests {
         let mut io = Script::default();
         assert!(fx.run(&r, &mut node, &mut io).is_err(), "the input ended");
         assert!(node.submitted.is_empty());
-        // yes sends
+        // Yes sends.
         for answer in ["yes", "Y"] {
             let mut node = fx.node(coins.clone());
             let mut io = Script { answers: VecDeque::from([answer.to_string()]), ..Script::default() };
             fx.run(&r, &mut node, &mut io).unwrap();
             assert_eq!(node.submitted.len(), 1, "{answer}");
         }
-        // --yes does not ask
+        // --yes does not ask.
         let mut node = fx.node(coins.clone());
         let mut io = Script::default();
         fx.run(&fx.req(Amount::All), &mut node, &mut io).unwrap();
         assert_eq!((node.submitted.len(), io.asked), (1, 0));
-        // a dry run builds and shows, sends nothing, asks nothing
+        // A dry run builds and shows, sends nothing and asks nothing.
         let mut d = fx.req(Amount::All);
         d.yes = false;
         d.dry_run = true;
@@ -689,7 +722,7 @@ mod tests {
         drop(held);
         fx.run(&fx.req(Amount::All), &mut node, &mut Script::default()).unwrap();
         assert_eq!(node.submitted.len(), 1);
-        // the lock is released when the command ends
+        // The lock is released when the command ends.
         assert!(WriterLock::acquire(&cfg).is_ok());
     }
 
@@ -709,7 +742,7 @@ mod tests {
         let (r, _) = run(vec![Err(RpcError::Node("Transaction y is already spent by transaction z in the mempool".into()))]);
         let m = r.unwrap_err().to_string();
         assert!(m.contains("already spent") && m.contains("Nothing was lost"), "{m}");
-        // a failure on the wire is retried with the same transaction, then reported as unknown
+        // A failure on the wire is retried with the same transaction, then reported as unknown.
         let (r, n) = run(vec![Err(RpcError::Transport("reset".into())), Ok([4; 32])]);
         assert_eq!(r.unwrap()["txid"], kob_protocol::json::to_hex(&[4; 32]));
         assert_eq!(n, 2);
