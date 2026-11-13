@@ -317,11 +317,10 @@ impl LogOp {
                         _ => return Err(WireError("adopt daa tag")),
                     };
                     let custody = get_custody(r)?;
-                    let n = r.var()?;
-                    if n > 65_536 {
-                        return Err(WireError("adopt keep count"));
-                    }
-                    let mut keep = Vec::with_capacity(n as usize);
+                    // Bounded by the bytes left (a hash and an index each), not by a fixed cap,
+                    // so every list that encode writes into a frame decodes.
+                    let n = r.count(33)?;
+                    let mut keep = Vec::with_capacity(n);
                     for _ in 0..n {
                         keep.push((r.hash()?, r.var()? as u32));
                     }
@@ -1525,6 +1524,33 @@ mod tests {
         let (log, rep) = RecordLog::open(d.path(), 1 << 20, 2).unwrap();
         assert!(rep.torn_tail_removed);
         assert_eq!((log.next_n(), record_count(d.path()).unwrap()), (2, 2));
+    }
+
+    /// An Adopt keep list of any length that fits a frame decodes as it was encoded, past the
+    /// 65,536 entries an earlier build refused, and a count larger than the bytes left is refused.
+    #[test]
+    fn an_adopt_keep_list_of_any_length_round_trips() {
+        let adopt = |keep: Vec<(Hash32, u32)>| LogOp::Adopt {
+            covenant_id: Hash32([1; 32]),
+            old_txid: Hash32([2; 32]),
+            old_index: 3,
+            txid: Hash32([4; 32]),
+            index: 5,
+            value: 6,
+            spk: vec![],
+            daa: Some(7),
+            custody: None,
+            keep,
+        };
+        let mut b = batch(1);
+        b.ops = vec![adopt((0..70_000u32).map(|i| (Hash32([(i % 251) as u8; 32]), i)).collect())];
+        assert_eq!(LogBatch::decode(&b.encode(0)).unwrap().batch, b);
+        // The keep count is the last byte of a frame whose last operation adopts nothing.
+        b.ops = vec![adopt(vec![])];
+        let mut body = b.encode(0);
+        assert_eq!(body.pop(), Some(0));
+        body.push(100);
+        assert!(LogBatch::decode(&body).is_err());
     }
 
     /// A partial frame (a write that failed part way) with complete, chained frames after it is not
