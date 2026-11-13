@@ -1,4 +1,7 @@
-//! Indexer configuration. Loaded from a TOML file (all keys optional) and overridden by CLI flags.
+//! The configuration of the indexer and the Executor.
+//!
+//! It is loaded from a TOML file in which every key is optional, and the command-line flags
+//! override it. An unknown key is refused, so a misspelt key is never dropped silently.
 
 use crate::hex::Hash32;
 use crate::tokens::ListingRules;
@@ -12,7 +15,8 @@ use std::path::{Path, PathBuf};
 pub enum StartMode {
     /// The node's current pruning point: replay everything the node still retains. Default.
     PruningPoint,
-    /// The node's current sink: no history, only orders created from now on (plus recovery imports).
+    /// The node's current sink: no history, only orders created from now on (plus recovery
+    /// imports).
     Sink,
     /// An explicit chain block hash the node still knows.
     Hash(Hash32),
@@ -33,6 +37,7 @@ impl std::str::FromStr for StartMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// The `[records]` table: the permanent record log.
 pub struct RecordsConfig {
     /// Keep the permanent record log (default). Without it a lost or outdated database cannot be
     /// rebuilt except by re-reading everything the node still retains.
@@ -51,6 +56,7 @@ impl Default for RecordsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// The `[api.rate_limit]` table: request budgets per client, per IPv6 site and overall.
 pub struct RateLimitConfig {
     /// Sustained requests per second per client (0 disables rate limiting).
     pub per_ip_rps: f64,
@@ -58,22 +64,25 @@ pub struct RateLimitConfig {
     pub per_ip_burst: u32,
     /// Sustained requests per second across all clients (0 = unlimited).
     pub global_rps: f64,
+    /// Burst size across all clients.
     pub global_burst: u32,
     /// Idle time after which a client bucket is forgotten.
     pub bucket_ttl_secs: u64,
     /// Hard cap on tracked clients (memory bound against address-spray floods).
     pub max_tracked_clients: usize,
-    /// IPv6 clients are limited per this many leading address bits (64: one subscriber; 48 groups a site, against an attacker
-    /// that rotates addresses through a larger prefix).
+    /// IPv6 clients are limited per this many leading address bits (64: one subscriber; 48 groups a
+    /// site, against an attacker that rotates addresses through a larger prefix).
     pub ipv6_prefix_bits: u8,
-    /// IPv6 clients are ALSO limited together per this wider prefix (48: a site), so an attacker rotating through the
-    /// /64s of one allocation gets one shared budget instead of a fresh one per /64; 0 disables the site bucket.
+    /// IPv6 clients are ALSO limited together per this wider prefix (48: a site), so an attacker
+    /// rotating through the /64s of one allocation gets one shared budget instead of a fresh one
+    /// per /64; 0 disables the site bucket.
     pub ipv6_site_prefix_bits: u8,
     /// Sustained requests per second of one IPv6 site (`ipv6_site_prefix_bits`).
     pub per_site_rps: f64,
     /// Burst size of one IPv6 site.
     pub per_site_burst: u32,
-    /// Bucket tokens one heavy read (candles, stats, depth, trades, books, strays, holdings) costs; a light request costs 1.
+    /// Bucket tokens one heavy read (candles, stats, depth, trades, books, strays, holdings) costs;
+    /// a light request costs 1.
     pub heavy_route_cost: u32,
 }
 
@@ -97,40 +106,54 @@ impl Default for RateLimitConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// The `[api]` table: the read API and its limits.
 pub struct ApiConfig {
+    /// Serve the read API.
     pub enabled: bool,
+    /// Address the read API listens on.
     pub listen: SocketAddr,
+    /// Request budgets of the guard.
     pub rate_limit: RateLimitConfig,
-    /// Peers (CIDR or bare IP) allowed to set the forwarded-client header, i.e. the reverse proxy or CDN.
-    /// Requests from any other peer are keyed by their socket address and the header is ignored.
+    /// Peers (CIDR or bare IP) allowed to set the forwarded-client header, i.e. the reverse proxy
+    /// or CDN. Requests from any other peer are keyed by their socket address and the header is
+    /// ignored.
     pub trusted_proxies: Vec<String>,
     /// Header carrying the client address behind a trusted proxy (`x-forwarded-for` takes the
-    /// right-most address that is not itself a trusted proxy; any other name is read as a single address).
+    /// right-most address that is not itself a trusted proxy; any other name is read as a single
+    /// address).
     pub client_ip_header: String,
     /// Concurrent in-flight REST requests.
     pub max_concurrent_requests: usize,
+    /// A request that takes longer than this to answer gets a 504.
     pub request_timeout_ms: u64,
-    /// A request head must arrive within this (also the keep-alive idle limit between requests): slow-header connections
-    /// are closed before the guard ever sees them.
+    /// A request head must arrive within this (also the keep-alive idle limit between requests):
+    /// slow-header connections are closed before the guard ever sees them.
     pub header_timeout_ms: u64,
-    /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
+    /// A response write that makes no progress for this long (the client stopped reading) closes
+    /// the connection; 0 = off.
     pub write_timeout_ms: u64,
-    /// Open HTTP connections at once (an upgraded WebSocket counts against `max_ws_connections` instead).
+    /// Open HTTP connections at once (an upgraded WebSocket counts against `max_ws_connections`
+    /// instead).
     pub max_connections: usize,
-    /// Open HTTP connections per socket peer (IPv6 per `rate_limit.ipv6_prefix_bits` prefix; trusted proxies exempt); 0 = no cap.
+    /// Open HTTP connections per socket peer (IPv6 per `rate_limit.ipv6_prefix_bits` prefix;
+    /// trusted proxies exempt); 0 = no cap.
     pub max_connections_per_ip: usize,
-    /// Open HTTP connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s together; trusted proxies
-    /// exempt); 0 = no site cap.
+    /// Open HTTP connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s
+    /// together; trusted proxies exempt); 0 = no site cap.
     pub max_connections_per_site: usize,
+    /// Open WebSocket connections at once.
     pub max_ws_connections: usize,
+    /// Open WebSocket connections per socket peer, IPv6 per `rate_limit.ipv6_prefix_bits` prefix.
     pub max_ws_per_ip: usize,
-    /// Open WebSocket connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s together); 0 = no site cap.
+    /// Open WebSocket connections per IPv6 site (`rate_limit.ipv6_site_prefix_bits`, all its /64s
+    /// together); 0 = no site cap.
     pub max_ws_per_site: usize,
-    /// A WebSocket session that sends no application message (a subscription change or `{"op":"ping"}`) for this long is
-    /// closed; protocol Ping / Pong frames do not count.
+    /// A WebSocket session that sends no application message (a subscription change or
+    /// `{"op":"ping"}`) for this long is closed; protocol Ping / Pong frames do not count.
     pub ws_idle_timeout_ms: u64,
     /// Messages a WebSocket client may send per second before it is disconnected.
     pub ws_client_msgs_per_sec: u32,
+    /// Channels one WebSocket session may subscribe to.
     pub max_ws_subscriptions: usize,
     /// Read connections to the database (plus one of the light lane, `db::ReadPool::with_light`).
     pub read_pool_size: usize,
@@ -138,34 +161,47 @@ pub struct ApiConfig {
     pub max_page_size: usize,
     /// `Access-Control-Allow-Origin` value; unset = no CORS headers (the CDN can add them).
     pub cors_allow_origin: Option<String>,
-    /// Serve `GET /v1/metrics` (the follower's state in the Prometheus text format; it names the node hosts the indexer uses).
-    /// The route is public like the rest of `/v1/`: `false` removes it (404) for a listener the public reaches, when nothing
-    /// scrapes it. Default `true`.
+    /// Serve `GET /v1/metrics` (the follower's state in the Prometheus text format; it names the
+    /// node hosts the indexer uses). The route is public like the rest of `/v1/`: `false` removes
+    /// it (404) for a listener the public reaches, when nothing scrapes it. Default `true`.
     pub metrics: bool,
-    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the web app's optional USD display (`--usd-price`, `KOB_USD_PRICE=1`).
-    /// The indexer fetches it from CoinGecko's keyless API (a KuCoin KAS-USDT ticker when CoinGecko fails), at most once a minute (backing off to 10 minutes while an upstream fails) and only
-    /// while a client asks, and serves the last good value with its time and source (`api::price`). Off by default: an indexer makes no call to a third party unless the operator turns it on
-    /// (the route then answers 404). Default `false`.
+    /// Serve `GET /v1/price/kas-usd`, the KAS price in USD for the optional USD display of the web
+    /// app.
+    ///
+    /// Set by `--usd-price` or `KOB_USD_PRICE=1`. The indexer fetches the price from CoinGecko,
+    /// with a volume-weighted average of several exchanges as the fallback. It asks at most once a
+    /// minute, backs off up to 10 minutes while an upstream fails, and asks only while a client
+    /// asks. It serves the last good value with its time and source, see `api::price`. Default
+    /// `false`: the indexer makes no call to a third party unless the operator turns it on, and the
+    /// route then answers 404.
     pub usd_price: bool,
-    /// Show the Executor's balance (`executor.funds_sompi` and `spendable_sompi` of `/v1/health`, the funding series of
-    /// `/v1/metrics`) on the read API. Default `false`: the API omits them (`executor.funds_hidden`) whatever it listens on,
-    /// since a loopback listener is often served to the public by a reverse proxy or a tunnel on the same host, and "this host
-    /// holds so much in a hot key" is worth hiding. The status line, `kobd address-balance` and the metrics file show it.
+    /// Show the balance of the Executor on the read API.
+    ///
+    /// That is `executor.funds_sompi` and `spendable_sompi` of `/v1/health`, and the funding series
+    /// of `/v1/metrics`. Default `false`: the API omits them (`executor.funds_hidden`) whatever
+    /// address it listens on. A loopback listener is often served to the public by a reverse proxy
+    /// or a tunnel on the same host, and the size of a hot key is worth hiding. The status line,
+    /// `kobd address-balance` and the metrics file show the balance.
     pub executor_funds: bool,
 }
 
 impl ApiConfig {
-    /// Whether the read API may show the Executor's balance ([`ApiConfig::executor_funds`]: only when asked for).
+    /// Whether the read API may show the Executor's balance ([`ApiConfig::executor_funds`]: only
+    /// when asked for).
     pub fn shows_executor_funds(&self) -> bool {
         self.executor_funds
     }
 
-    /// A warning for a listener other hosts can reach with no trusted proxy: a reverse proxy or CDN in front of it makes every
-    /// client arrive from the proxy's address, so all of them share one set of per-client limits (rate, connections,
-    /// WebSockets) until `trusted_proxies` names the proxy. `None` for a loopback listener (the default, and what
-    /// `kobd setup` writes): only this host's own programs reach it, a person's browser and tools, for whom one shared
-    /// set of limits is right; an operator who puts a proxy in front of it on the same host lists it as the guide says
-    /// (docs/ops/executor.md, Part B, 4). `None` with the API off or a trusted proxy configured.
+    /// A warning for a listener that other hosts can reach with no trusted proxy.
+    ///
+    /// A reverse proxy or CDN in front of such a listener makes every client arrive from the
+    /// address of the proxy. All clients then share one set of per-client limits (rate,
+    /// connections, WebSockets) until `trusted_proxies` names the proxy.
+    ///
+    /// `None` for a loopback listener, the default and what `kobd setup` writes. Only the programs
+    /// of this host reach it, and one shared set of limits is right for them. An operator who puts
+    /// a proxy in front of it on the same host lists it as docs/ops/executor.md, Part B, 4, says.
+    /// `None` too with the API off or a trusted proxy configured.
     pub fn proxy_warning(&self) -> Option<String> {
         (self.enabled && !self.listen.ip().is_loopback() && self.trusted_proxies.is_empty()).then(|| {
             format!(
@@ -209,19 +245,21 @@ impl Default for ApiConfig {
     }
 }
 
-/// The token-logo blocklist (`[logo_reports]`; docs/api-reference.md, 3.19 and 3.20). KOB shows a token logo straight from its creator's address in the
-/// viewer's browser and keeps no image. A report (the web app's button, or a GitHub Issue form) hides the logo at once, the operator reviews
-/// it (`kobd logo-reports`), and the web app reads the list of hidden tokens from `GET /v1/logo-blocklist`.
+/// The token-logo blocklist (`[logo_reports]`; docs/api-reference.md, 3.19 and 3.20). KOB shows a
+/// token logo straight from its creator's address in the viewer's browser and keeps no image. A
+/// report (the web app's button, or a GitHub Issue form) hides the logo at once, the operator
+/// reviews it (`kobd logo-reports`), and the web app reads the list of hidden tokens from `GET
+/// /v1/logo-blocklist`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LogoReportsConfig {
     /// Serve `POST /v1/logo-reports` and `GET /v1/logo-blocklist` (default false: both answer 404).
     pub enabled: bool,
-    /// After the operator restored a logo, new reports for the token do not hide it again for this long (they are still recorded).
-    /// Default 21600 (6 hours).
+    /// After the operator restored a logo, new reports for the token do not hide it again for this
+    /// long (they are still recorded). Default 21600 (6 hours).
     pub cooldown_secs: u64,
-    /// Reports one client may file per hour (the client address of the guard: behind `api.trusted_proxies`, IPv6 per
-    /// `api.rate_limit.ipv6_prefix_bits`). Default 5; 0: none.
+    /// Reports one client may file per hour (the client address of the guard: behind
+    /// `api.trusted_proxies`, IPv6 per `api.rate_limit.ipv6_prefix_bits`). Default 5; 0: none.
     pub per_client_per_hour: u32,
     /// Reports accepted from all clients together per 24 hours. Default 200; 0: none.
     pub max_per_day: u32,
@@ -237,7 +275,8 @@ impl Default for LogoReportsConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeRole {
-    /// The authority for the selected chain (chain hashes, acceptance data, reorgs); replaces `rpc_url`.
+    /// The authority for the selected chain (chain hashes, acceptance data, reorgs); replaces
+    /// `rpc_url`.
     Primary,
     /// Serves windows of transaction bodies (checked against the primary) and takes submissions.
     #[default]
@@ -257,7 +296,8 @@ pub struct NodeConfig {
     pub submit: bool,
     /// Windows fetched from it at once (default: `fetch_parallel`).
     pub connections: Option<usize>,
-    /// Its Borsh wRPC endpoint when `borsh` is on (default: derived from `url`, `rpc::borsh::borsh_url_for`).
+    /// Its Borsh wRPC endpoint when `borsh` is on (default: derived from `url`,
+    /// `rpc::borsh::borsh_url_for`).
     pub borsh_url: Option<String>,
 }
 
@@ -267,29 +307,31 @@ impl Default for NodeConfig {
     }
 }
 
-/// The Indexer's fallback when its configured node stops answering (`[failover]`; `rpc::failover`, docs/ops/executor.md,
-/// Part C, *Node failover*). Off unless `fallback` is set. `kobd --indexer` only: the Executor refuses it.
+/// The Indexer's fallback when its configured node stops answering (`[failover]`; `rpc::failover`,
+/// docs/ops/executor.md, Part C, *Node failover*). Off unless `fallback` is set. `kobd --indexer`
+/// only: the Executor refuses it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct FailoverConfig {
-    /// `"resolver"`: the public Kaspa nodes as a cross-checked pair (`rpc::resolver`). Empty (the default): no failover.
+    /// `"resolver"`: the public Kaspa nodes as a cross-checked pair (`rpc::resolver`). Empty (the
+    /// default): no failover.
     pub fallback: String,
-    /// The configured node is given up after this many failed calls in a row (transport, timeout, an undecodable answer, a
-    /// node in IBD) ...
+    /// The configured node is given up after this many failed calls in a row (transport, timeout,
+    /// an undecodable answer, a node in IBD) ...
     pub after_failures: u32,
     /// ... and this many seconds without any answer from it. Default 5 and 60.
     pub after_secs: u64,
     /// On the fallback, the configured node is probed this often (seconds; default 30) ...
     pub probe_secs: u64,
-    /// ... and taken back after this many healthy probes in a row (synced, the right network, not behind the fallback, knows
-    /// the cursor). Default 3.
+    /// ... and taken back after this many healthy probes in a row (synced, the right network, not
+    /// behind the fallback, knows the cursor). Default 3.
     pub return_after_probes: u32,
-    /// Right after a switch, the new node's first answer from the cursor may remove at most this many chain blocks (a reorg
-    /// the old node had not seen yet); a deeper one, or a cursor the new node does not know, is refused, never applied.
-    /// Default 100 (about 10 s of chain).
+    /// Right after a switch, the new node's first answer from the cursor may remove at most this
+    /// many chain blocks (a reorg the old node had not seen yet); a deeper one, or a cursor the new
+    /// node does not know, is refused, never applied. Default 100 (about 10 s of chain).
     pub max_reorg_blocks: usize,
-    /// A configured node whose sink is more than this many blue score behind the fallback's is not taken back yet. Default
-    /// 600 (about a minute).
+    /// A configured node whose sink is more than this many blue score behind the fallback's is not
+    /// taken back yet. Default 600 (about a minute).
     pub max_behind_blue: u64,
 }
 
@@ -317,125 +359,166 @@ impl FailoverConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndexerConfig {
-    /// Expected network id reported by the node (`testnet-10`, `mainnet`). Empty (the default): the build's deployment network
-    /// ([`resolve_network`]); the reference build requires it.
+    /// Expected network id reported by the node (`testnet-10`, `mainnet`). Empty (the default): the
+    /// build's deployment network ([`resolve_network`]); the reference build requires it.
     pub network: String,
-    /// The node: the primary (chain authority) unless `nodes` names another one. `resolver`: the public Kaspa nodes as a
-    /// cross-checked pair (`rpc::resolver`); a JSON or Borsh wRPC URL (`ws://`, `wss://`): that node (an own node, the choice
-    /// of a serious operator). Empty (the default): `resolver` ([`default_node`]).
+    /// The node: the primary (chain authority) unless `nodes` names another one. `resolver`: the
+    /// public Kaspa nodes as a cross-checked pair (`rpc::resolver`); a JSON or Borsh wRPC URL
+    /// (`ws://`, `wss://`): that node (an own node, the choice of a serious operator). Empty (the
+    /// default): `resolver` ([`default_node`]).
     pub rpc_url: String,
-    /// Further nodes: windows of transaction bodies are fetched from all of them in parallel (checked against the primary)
-    /// and transactions submitted to all of them. Empty: the one node of `rpc_url`.
+    /// Further nodes: windows of transaction bodies are fetched from all of them in parallel
+    /// (checked against the primary) and transactions submitted to all of them. Empty: the one node
+    /// of `rpc_url`.
     pub nodes: Vec<NodeConfig>,
-    /// With other nodes: the primary serves windows of the parallel fetch too (`false`: only when no other node can, e.g. a
-    /// primary much slower than the others; it stays the chain authority either way).
+    /// With other nodes: the primary serves windows of the parallel fetch too (`false`: only when
+    /// no other node can, e.g. a primary much slower than the others; it stays the chain authority
+    /// either way).
     pub primary_fetch: bool,
-    /// The Indexer's fallback when the primary stops answering ([`FailoverConfig`]; off by default).
+    /// The Indexer's fallback when the primary stops answering ([`FailoverConfig`]; off by
+    /// default).
     pub failover: FailoverConfig,
+    /// Directory of the database and, by default, the record log.
     pub data_dir: PathBuf,
+    /// Where a fresh database starts following the chain.
     pub start: StartMode,
-    /// `kobd --executor` on an empty data directory trades at once and fills in the history afterwards ([`crate::faststart`]):
-    /// a second store in `<data_dir>/tip` follows the chain from the node's current sink (seconds) and the matcher and
-    /// keepers work on it, while the normal store indexes the history from the pruning point; when that has caught up, the
-    /// executor switches to it and deletes the tip store. Default false here, but a start of the Executor (`kobd --executor`,
-    /// also from options alone) turns it on unless the configuration has the key or `--no-fast-start` is given (`cli`; the
-    /// setup writes true). It does nothing for `index`, with the x402 facilitator, or when
-    /// `start` is not the pruning point.
+    /// Trade at once on an empty data directory and fill in the history afterwards
+    /// ([`crate::faststart`]).
+    ///
+    /// A second store in `<data_dir>/tip` follows the chain from the current sink of the node,
+    /// which takes seconds, and the matcher and keepers work on it. The normal store indexes the
+    /// history from the pruning point meanwhile. When that has caught up, the Executor switches to
+    /// it and deletes the tip store.
+    ///
+    /// The default here is `false`, but a start of the Executor (`kobd --executor`, also from
+    /// options alone) turns it on. The configuration having this key or `--no-fast-start` says
+    /// otherwise, see `cli`. The setup writes `true`. It does nothing for the Indexer alone, with
+    /// the x402 facilitator, or when `start` is not the pruning point.
     pub fast_start: bool,
-    /// Lean storage ([`crate::indexer::lean`]): the store keeps the live book (open and partly filled orders and what the
-    /// matcher and keepers read), the reorg window and `lean_retention_days` of closed orders, and drops the rest in small
-    /// periodic batches; the record log is off and the file shrinks (incremental vacuum). The history comes from an archive
-    /// indexer (`lean = false`). Default false (the setup writes true for a matcher).
+    /// Lean storage ([`crate::indexer::lean`]): keep the live book and drop the rest in small
+    /// batches.
+    ///
+    /// The store keeps the live book, that is the open and partly filled orders and what the
+    /// matcher and keepers read, the reorg window, and `lean_retention_days` of closed orders. The
+    /// record log is off and the file shrinks by incremental vacuum. The history comes from an
+    /// archive indexer (`lean = false`). Default `false`, and the setup writes `true` for a
+    /// matcher.
     pub lean: bool,
-    /// Lean storage: days a closed order (filled, cancelled, refunded, killed) and its fills and events stay readable after it
-    /// closed (at least the reorg window). Default 30.
+    /// Lean storage: days a closed order (filled, cancelled, refunded, killed) and its fills and
+    /// events stay readable after it closed (at least the reorg window). Default 30.
     pub lean_retention_days: u64,
-    /// Lean storage: a size cap in MB on the database. Only while the store is larger, the OLDEST closed orders (with their fills
-    /// and events) are deleted first, retention or not, until it is under the cap; the live book is never pruned. 0: no cap.
-    /// Default 500.
+    /// Lean storage: a size cap in MB on the database. Only while the store is larger, the OLDEST
+    /// closed orders (with their fills and events) are deleted first, retention or not, until it is
+    /// under the cap; the live book is never pruned. 0: no cap. Default 500.
     pub lean_max_db_mb: u64,
-    /// Archive pruning ([`crate::indexer::archive`]) of a store that keeps its history (`lean = false`): once final (out of the reorg
-    /// window), the spent UTXO rows of orders that are no longer live, the in-place amends and the spent token holdings older than
-    /// `spent_holdings_retention_days` are deleted in small periodic batches; every other answer of the API stays the same. Default true.
+    /// Archive pruning ([`crate::indexer::archive`]) of a store that keeps its history (`lean =
+    /// false`).
+    ///
+    /// Once final, which means out of the reorg window, three kinds of row are deleted in small
+    /// periodic batches.
+    /// - The spent UTXO rows of orders that are no longer live.
+    /// - The in-place amends.
+    /// - The spent token holdings older than `spent_holdings_retention_days`.
+    ///
+    /// Every other answer of the API stays the same. Default `true`.
     pub archive_pruning: bool,
-    /// Archive pruning: days a spent token holding stays (`GET /v1/token-utxos?spent=true`) after it was created (at least the reorg
-    /// window; a live order's custody stays whatever its age). Default 30. A lean store keeps `lean_retention_days` of them.
+    /// Archive pruning: days a spent token holding stays (`GET /v1/token-utxos?spent=true`) after
+    /// it was created (at least the reorg window; a live order's custody stays whatever its age).
+    /// Default 30. A lean store keeps `lean_retention_days` of them.
     pub spent_holdings_retention_days: u64,
     /// Pause between polls once the cursor is at the node's sink.
     pub poll_interval_ms: u64,
     /// First delay after a failed call; doubles up to `max_backoff_ms`.
     pub backoff_ms: u64,
+    /// Longest delay after repeated failed calls.
     pub max_backoff_ms: u64,
     /// Per-request timeout for the node in seconds (VSPC batches are large).
     pub rpc_timeout_secs: u64,
-    /// While far behind the node, the follower fetches this many VSPC windows at once, one connection each, and
-    /// applies them in chain order (1: one batch at a time). See docs/ops/executor.md, Part B 3, *Parallel fetch*.
+    /// While far behind the node, the follower fetches this many VSPC windows at once, one
+    /// connection each, and applies them in chain order (1: one batch at a time). See
+    /// docs/ops/executor.md, Part B 3, *Parallel fetch*.
     pub fetch_parallel: usize,
-    /// Fetch the windows of transaction bodies and the primary's accepted transaction ids over each node's Borsh wRPC endpoint
-    /// (the JSON URL's `/json` path as `/borsh`, or its default port `18xxx` as `17xxx`; a node's `borsh_url` overrides):
-    /// about a third of the JSON bytes. Every other call stays JSON. See docs/ops/executor.md, *Borsh windows*.
+    /// Fetch the windows of transaction bodies and the primary's accepted transaction ids over each
+    /// node's Borsh wRPC endpoint (the JSON URL's `/json` path as `/borsh`, or its default port
+    /// `18xxx` as `17xxx`; a node's `borsh_url` overrides): about a third of the JSON bytes. Every
+    /// other call stays JSON. See docs/ops/executor.md, *Borsh windows*.
     pub borsh: bool,
-    /// Threads for the pure per-batch work before the single database pass (signature-script parsing, script hashing, placement
-    /// verification; `indexer::record::precompute`). 0: the available parallelism, at most 4. See docs/ops/executor.md, *Processing
-    /// capacity*.
+    /// Threads for the pure per-batch work before the single database pass (signature-script
+    /// parsing, script hashing, placement verification; `indexer::record::precompute`). 0: the
+    /// available parallelism, at most 4. See docs/ops/executor.md, *Processing capacity*.
     pub verify_threads: usize,
-    /// Upper bound in MiB of the VSPC windows held in memory ahead of the cursor (fetched, or reserved in flight: a hard bound,
-    /// see `indexer::prefetch`). The process holds about three times this at the peak (the parsed windows); 128 by default
-    /// (a small host running more than one indexer), 256 or more on a dedicated one.
+    /// Upper bound in MiB of the VSPC windows held in memory ahead of the cursor (fetched, or
+    /// reserved in flight: a hard bound, see `indexer::prefetch`). The process holds about three
+    /// times this at the peak (the parsed windows); 128 by default (a small host running more than
+    /// one indexer), 256 or more on a dedicated one.
     pub prefetch_max_mb: u64,
-    /// The parallel fetch runs while the cursor is more than this many blue score (about one block each at 10 BPS) behind the
-    /// node's sink; closer, the follower takes single steps on one connection. 1,200 by default (two minutes). Under a flood
-    /// that one connection cannot carry (one step slower than the chain it covers), the lag settles near this value: lower it
-    /// (e.g. 30) to keep the windows parallel up to the tip. See docs/ops/executor.md, *Parallel fetch*.
+    /// The parallel fetch runs while the cursor is more than this many blue score (about one block
+    /// each at 10 BPS) behind the node's sink; closer, the follower takes single steps on one
+    /// connection. 1,200 by default (two minutes). Under a flood that one connection cannot carry
+    /// (one step slower than the chain it covers), the lag settles near this value: lower it (e.g.
+    /// 30) to keep the windows parallel up to the tip. See docs/ops/executor.md, *Parallel fetch*.
     pub prefetch_min_lag_blue: u64,
-    /// Lag tolerance of the "wait until caught up" gates: the matcher, the keepers and the maintenance jobs of `kobd
-    /// run` plan while the store is at most this many seconds (`daa_per_second` DAA each) behind the node, whatever the
-    /// follower's state (`catching_up` included); beyond it they plan nothing. 0: only while `following` (the strict gate).
+    /// Lag tolerance of the "wait until caught up" gates: the matcher, the keepers and the
+    /// maintenance jobs of the Executor plan while the store is at most this many seconds
+    /// (`daa_per_second` DAA each) behind the node, whatever the follower's state (`catching_up`
+    /// included); beyond it they plan nothing. 0: only while `following` (the strict gate).
     /// `/v1/health` keeps `caught_up` strict and adds `within_lag_tolerance`.
     pub max_lag_secs: u64,
-    /// `kobd --executor` asks the node which listed orders it still holds (and leaves out those it no longer does) only while
-    /// the store is at least this many seconds behind the node: the query is a node round trip per tick, which loses races to
-    /// other executors when the book is current anyway. 0: ask every tick.
+    /// `kobd --executor` asks the node which listed orders it still holds (and leaves out those it
+    /// no longer does) only while the store is at least this many seconds behind the node: the
+    /// query is a node round trip per tick, which loses races to other executors when the book is
+    /// current anyway. 0: ask every tick.
     pub verify_live_orders_min_lag_secs: u64,
-    /// A transaction counts as settled once its chain block is this many DAA behind the node's virtual DAA.
-    /// Default 100 (about 10 s at 10 BPS), the release plan's "accepted plus N DAA".
+    /// A transaction counts as settled once its chain block is this many DAA behind the virtual DAA
+    /// of the node. Default 100, about 10 s at 10 BPS.
     pub settle_depth_daa: u64,
-    /// How many stored chain blocks the follower may probe, newest first, when the node does not know
-    /// the cursor (only blocks of the reorg window are stored).
+    /// How many stored chain blocks the follower may probe, newest first, when the node does not
+    /// know the cursor (only blocks of the reorg window are stored).
     pub max_walkback_blocks: u64,
-    /// Chain blocks are kept for this many hours behind the cursor (the reorg / finality window; 12 h
-    /// is consensus finality) and deleted after that.
+    /// Chain blocks are kept for this many hours behind the cursor (the reorg / finality window; 12
+    /// h is consensus finality) and deleted after that.
     pub reorg_window_hours: u64,
     /// An otherwise empty batch is still written to the record log when the cursor moved this many
     /// seconds since the last logged cursor, so a rebuild resumes close to the tip.
     pub checkpoint_secs: u64,
-    /// A KCC-23 candidate preparation no genesis has spent is kept this many hours (`indexer::kcc23`): a token's genesis must be
-    /// accepted within it of its preparation for the indexer to serve the declaration. 72 by default.
+    /// Hours a KCC-23 candidate preparation is kept while no genesis has spent it
+    /// (`indexer::kcc23`). The genesis of a token must be accepted within this window of its
+    /// preparation for the indexer to serve the declaration. Default 72.
     pub declaration_window_hours: u64,
+    /// DAA score per second, to turn a lag in DAA score into seconds.
     pub daa_per_second: u64,
     /// Lag alarm thresholds in hours (reported by /health and logged).
     pub lag_alarm_hours: Vec<u64>,
+    /// Token allowlist JSON. Absent: the registry that a deployment build pins, else no list.
     pub tokens_path: Option<PathBuf>,
-    /// Write the log to this file (a relative path is taken from the configuration's directory); the console shows the log too
-    /// while it is a terminal. Rotated by size (`log_max_mb`, `log_files`). Absent: the console only (`crate::logging`).
+    /// Write the log to this file (a relative path is taken from the configuration's directory);
+    /// the console shows the log too while it is a terminal. Rotated by size (`log_max_mb`,
+    /// `log_files`). Absent: the console only (`crate::logging`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_file: Option<PathBuf>,
-    /// The log file is rotated (`<file>.1`, `<file>.2`, ...) when it reaches this many MB. Default 10; 0: never.
+    /// The log file is rotated (`<file>.1`, `<file>.2`, ...) when it reaches this many MB. Default
+    /// 10; 0: never.
     pub log_max_mb: u64,
-    /// Rotated log files kept (the oldest is deleted). Default 5; 0: the file starts over when it is full.
+    /// Rotated log files kept (the oldest is deleted). Default 5; 0: the file starts over when it
+    /// is full.
     pub log_files: usize,
+    /// Which orders the indexer lists.
     pub rules: ListingRules,
+    /// The permanent record log.
     #[serde(alias = "rawlog")]
     pub records: RecordsConfig,
+    /// The read API.
     pub api: ApiConfig,
-    /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`, [`crate::logo_reports`]).
+    /// The token-logo blocklist the web app reads and reports to (`[logo_reports]`,
+    /// [`crate::logo_reports`]).
     pub logo_reports: LogoReportsConfig,
-    /// What the binary started without arguments runs with this file (`crate::setup`; `kobd setup` writes it into
-    /// `kobd.toml` next to the executable). Every command given the file as `--config` ignores the table.
+    /// What the binary started without arguments runs with this file (`crate::setup`; `kobd setup`
+    /// writes it into `kobd.toml` next to the executable). Every command given the file as
+    /// `--config` ignores the table.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub launch: Option<LaunchConfig>,
-    /// The `[receipts]` table of a v2.4 configuration (the trade receipt is retired): accepted and ignored. Every other
-    /// unknown key is refused, so a misspelt key is never dropped silently.
+    /// The `[receipts]` table of a configuration that still has one. It is accepted and ignored
+    /// with a warning, because the trade receipt is gone. Every other unknown key is refused.
     #[serde(skip_serializing)]
     pub receipts: Option<toml::Value>,
 }
@@ -509,13 +592,14 @@ impl LaunchRole {
     }
 }
 
-/// The `[launch]` table: the command-line options of a start without arguments that are not indexer keys. A start without
-/// arguments runs `kobd <role> --config <this file> --key-file ... --pause-file ... --x402-config ... <args>` in the
-/// file's directory, so its relative paths (these and `data_dir`, `tokens_path`) are relative to the file
-/// (`crate::setup::launch_args`).
+/// The `[launch]` table: the command-line options of a start without arguments that are not indexer
+/// keys. A start without arguments runs `kobd <role> --config <this file> --key-file ...
+/// --pause-file ... --x402-config ... <args>` in the file's directory, so its relative paths (these
+/// and `data_dir`, `tokens_path`) are relative to the file (`crate::setup::launch_args`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LaunchConfig {
+    /// The role a start without arguments runs.
     pub role: LaunchRole,
     /// The operator's key file (`--key-file`; `run` only).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -531,8 +615,9 @@ pub struct LaunchConfig {
 }
 
 impl LaunchConfig {
-    /// The first key that is an option of role `run` only (`key_file`, `pause_file`, `x402_config`) and is set; the index role
-    /// has no key, no kill switch and no facilitator, so a configuration of it that sets one is a mistake, refused rather than ignored.
+    /// The first key that is an option of role `run` only (`key_file`, `pause_file`, `x402_config`)
+    /// and is set; the index role has no key, no kill switch and no facilitator, so a configuration
+    /// of it that sets one is a mistake, refused rather than ignored.
     pub fn run_only_key(&self) -> Option<&'static str> {
         [("key_file", self.key_file.is_some()), ("pause_file", self.pause_file.is_some()), ("x402_config", self.x402_config.is_some())]
             .into_iter()
@@ -540,10 +625,13 @@ impl LaunchConfig {
     }
 }
 
-/// The network a command serves: the one given (`--network`, `network = ...`), else the build's deployment network
-/// (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature `deploy-tn10`, `mainnet` with
-/// `deploy-mainnet`). The reference build has none, so it requires the network explicitly; a deployment build refuses
-/// another network. Never an implicit testnet-10.
+/// The network a command serves: the one given (`--network`, `network = ...`), else the network
+/// of the build.
+///
+/// The deployment network is `kob_protocol::artifacts::deployment_network`: `testnet-10` with the
+/// feature `deploy-tn10` and `mainnet` with `deploy-mainnet`. The reference build has none, so it
+/// requires the network explicitly. A deployment build refuses another network. The result is
+/// never an implicit testnet-10.
 pub fn resolve_network(given: Option<&str>) -> Result<String, String> {
     resolve_network_for(given, kob_protocol::artifacts::deployment_network())
 }
@@ -561,9 +649,11 @@ pub fn resolve_network_for(given: Option<&str>, build: Option<&str>) -> Result<S
     }
 }
 
-/// The local node's JSON wRPC endpoint of a network: rusty-kaspa v2.1.0 `NetworkType::default_json_rpc_port`
-/// (`consensus/core/src/network.rs`: mainnet 18110, testnet 18210; the Borsh ports are 17110 / 17210). `None` for any
-/// other network (pass the endpoint explicitly).
+/// The JSON wRPC endpoint of the local node of a network.
+///
+/// The ports are the defaults of rusty-kaspa `NetworkType::default_json_rpc_port`: 18110 for
+/// mainnet and 18210 for testnet. The Borsh ports are 17110 and 17210. `None` for any other
+/// network, where the endpoint must be given explicitly.
 pub fn default_wrpc_url(network: &str) -> Option<String> {
     let port = match network {
         "mainnet" => 18110,
@@ -573,13 +663,15 @@ pub fn default_wrpc_url(network: &str) -> Option<String> {
     Some(format!("ws://127.0.0.1:{port}"))
 }
 
-/// The node of a configuration that names none: the public Kaspa nodes as a cross-checked pair (`resolver`, `rpc::resolver`)
-/// for the networks the resolvers serve (mainnet, testnet-10); `None` for any other network (pass the endpoint explicitly).
-/// An own node is configured with its URL (`rpc_url`; its local default is [`default_wrpc_url`]).
+/// The node of a configuration that names none: the public Kaspa nodes as a cross-checked pair
+/// (`resolver`, `rpc::resolver`) for the networks the resolvers serve (mainnet, testnet-10); `None`
+/// for any other network (pass the endpoint explicitly). An own node is configured with its URL
+/// (`rpc_url`; its local default is [`default_wrpc_url`]).
 pub fn default_node(network: &str) -> Option<String> {
     default_wrpc_url(network).map(|_| crate::rpc::resolver::RESOLVER.to_string())
 }
 
+/// Why a configuration file could not be loaded.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("cannot read config {0}: {}", io_text(.1))]
@@ -590,8 +682,10 @@ pub enum ConfigError {
     Parse(String, String),
 }
 
-/// An I/O error as an English sentence where its kind says enough (the operating system's own text comes in the system's
-/// language and turns into mojibake on a console of another code page); the OS text otherwise.
+/// An I/O error as an English sentence where its kind says enough, else the text of the system.
+///
+/// The text of the operating system comes in the language of the system and turns into mojibake
+/// on a console with another code page.
 pub fn io_text(e: &std::io::Error) -> String {
     use std::io::ErrorKind as K;
     match e.kind() {
@@ -604,6 +698,7 @@ pub fn io_text(e: &std::io::Error) -> String {
 }
 
 impl IndexerConfig {
+    /// Reads and parses the configuration file at `path`, refusing unknown keys.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let p = path.display().to_string();
         let s = std::fs::read_to_string(path).map_err(|e| match e.kind() {
@@ -622,15 +717,16 @@ impl IndexerConfig {
         self.verify_live_orders_min_lag_secs.saturating_mul(self.daa_per_second)
     }
 
-    /// Closed orders older than this many DAA stay readable under lean storage: `lean_retention_days`, and never less than the
-    /// reorg window (a closed order inside it can still be reverted).
+    /// Closed orders older than this many DAA stay readable under lean storage:
+    /// `lean_retention_days`, and never less than the reorg window (a closed order inside it can
+    /// still be reverted).
     pub fn lean_retention_daa(&self) -> u64 {
         let retention_secs = self.lean_retention_days.saturating_mul(86_400);
         retention_secs.max(self.reorg_window_hours.saturating_mul(3600)).saturating_mul(self.daa_per_second)
     }
 
-    /// Spent holdings created this many DAA before the node's position go under archive pruning: `spent_holdings_retention_days`, and never
-    /// less than the reorg window.
+    /// Spent holdings created this many DAA before the node's position go under archive pruning:
+    /// `spent_holdings_retention_days`, and never less than the reorg window.
     pub fn spent_holdings_retention_daa(&self) -> u64 {
         let retention_secs = self.spent_holdings_retention_days.saturating_mul(86_400);
         retention_secs.max(self.reorg_window_hours.saturating_mul(3600)).saturating_mul(self.daa_per_second)
@@ -651,8 +747,8 @@ impl IndexerConfig {
         self.nodes.iter().find(|n| n.role == NodeRole::Primary).map(|n| n.url.as_str()).unwrap_or(&self.rpc_url)
     }
 
-    /// The Borsh endpoint used for the node at `url`, if `borsh` is on: its configured `borsh_url`, else the one derived from
-    /// `url` (`None`: that node stays JSON).
+    /// The Borsh endpoint used for the node at `url`, if `borsh` is on: its configured `borsh_url`,
+    /// else the one derived from `url` (`None`: that node stays JSON).
     pub fn borsh_url_of(&self, url: &str) -> Option<String> {
         if !self.borsh {
             return None;
@@ -667,8 +763,9 @@ impl IndexerConfig {
         self.nodes.iter().filter(|n| n.role == NodeRole::Secondary && n.url != primary).collect()
     }
 
-    /// Windows of the parallel fetch in flight at once: `fetch_parallel` on the primary plus each fetching secondary's
-    /// connections (1 turns the parallel fetch off, and with it the other nodes' windows).
+    /// Windows of the parallel fetch in flight at once: `fetch_parallel` on the primary plus each
+    /// fetching secondary's connections (1 turns the parallel fetch off, and with it the other
+    /// nodes' windows).
     pub fn fetch_windows(&self) -> usize {
         let base = self.fetch_parallel.max(1);
         if base == 1 {
@@ -687,10 +784,12 @@ impl IndexerConfig {
         self.primary_fetch || !self.secondaries().iter().any(|n| n.fetch)
     }
 
+    /// The SQLite database file inside the data directory.
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("index.sqlite3")
     }
 
+    /// The directory of the record log: `records.dir`, else `records` inside the data directory.
     pub fn records_dir(&self) -> PathBuf {
         self.records.dir.clone().unwrap_or_else(|| self.data_dir.join("records"))
     }
@@ -702,29 +801,30 @@ mod tests {
 
     #[test]
     fn the_network_is_explicit_or_the_deployment_builds() {
-        // the reference build: no implicit network
+        // The reference build has no implicit network.
         let e = resolve_network_for(None, None).unwrap_err();
         assert!(e.contains("--network mainnet or --network testnet-10"), "{e}");
         assert_eq!(resolve_network_for(Some("  "), None), Err(e));
         assert_eq!(resolve_network_for(Some("mainnet"), None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for(Some("testnet-10"), None).unwrap(), "testnet-10");
-        // a deployment build implies its network and refuses another one
+        // A deployment build implies its network and refuses another one.
         assert_eq!(resolve_network_for(None, Some("mainnet")).unwrap(), "mainnet");
         assert_eq!(resolve_network_for(None, Some("testnet-10")).unwrap(), "testnet-10");
         assert_eq!(resolve_network_for(Some("mainnet"), Some("mainnet")).unwrap(), "mainnet");
         let e = resolve_network_for(Some("testnet-10"), Some("mainnet")).unwrap_err();
         assert!(e.contains("mainnet deployment build") && e.contains("testnet-10"), "{e}");
-        // this build
+        // This build.
         assert_eq!(resolve_network(None).ok().as_deref(), kob_protocol::artifacts::deployment_network());
-        // the node endpoint follows the network (rusty-kaspa's default JSON wRPC ports), never TN10's on mainnet
+        // The node endpoint follows the network, with the default JSON wRPC ports of rusty-kaspa.
+        // It is never the port of testnet-10 on mainnet.
         assert_eq!(default_wrpc_url("mainnet").as_deref(), Some("ws://127.0.0.1:18110"));
         assert_eq!(default_wrpc_url("testnet-10").as_deref(), Some("ws://127.0.0.1:18210"));
         assert_eq!(default_wrpc_url("devnet"), None);
-        // a configuration that names no node uses the public pair
+        // A configuration that names no node uses the public pair.
         assert_eq!(default_node("mainnet").as_deref(), Some("resolver"));
         assert_eq!(default_node("testnet-10").as_deref(), Some("resolver"));
         assert_eq!(default_node("devnet"), None);
-        // the configuration's defaults name no network and no node
+        // The defaults of the configuration name no network and no node.
         let d = IndexerConfig::default();
         assert_eq!((d.network.as_str(), d.rpc_url.as_str()), ("", ""));
         let t: IndexerConfig = toml::from_str("data_dir = \"x\"").unwrap();
@@ -837,12 +937,13 @@ url = \"wss://b\"
 
     #[test]
     fn only_a_listener_other_hosts_reach_is_warned_about_without_a_trusted_proxy() {
-        // loopback (the default and the setup's): only this host's programs reach it, no warning
+        // Loopback, the default and the setup's: only the programs of this host reach it, so no
+        // warning.
         let mut a = ApiConfig::default();
         assert_eq!(a.proxy_warning(), None);
         a.listen = "[::1]:8090".parse().unwrap();
         assert_eq!(a.proxy_warning(), None);
-        // reachable from other hosts: warned until a trusted proxy is named
+        // Reachable from other hosts: warned until a trusted proxy is named.
         for listen in ["0.0.0.0:8090", "[::]:8090", "192.168.1.10:8090", "203.0.113.5:443"] {
             a.listen = listen.parse().unwrap();
             let w = a.proxy_warning().unwrap_or_else(|| panic!("{listen}: no warning"));
@@ -855,7 +956,8 @@ url = \"wss://b\"
         assert_eq!(a.proxy_warning(), None);
     }
 
-    /// The example configuration of docs/ops/executor.md (Part B, 4) parses, and its API sits behind a proxy it trusts.
+    /// The example configuration of docs/ops/executor.md (Part B, 4) parses, and its API sits
+    /// behind a proxy it trusts.
     #[test]
     fn the_documented_example_configuration_parses() {
         let doc = include_str!("../../../docs/ops/executor.md");
