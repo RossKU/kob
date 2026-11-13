@@ -1,26 +1,39 @@
-//! Read API: REST + WebSocket over the indexer database.
+//! The read API, REST and WebSocket, over the indexer database.
 //!
-//! Everything is served from the database through the read pool (the hot market reads through a response cache kept per
-//! data generation of the store, [`cache`]); the node is never contacted, so public load cannot reach it. Every route passes one guard middleware that resolves the client
-//! address (proxy aware), applies the per-client and global rate limits, the concurrency cap and the
-//! request timeout, and adds CORS headers when configured. Below the guard, the transport bounds of
-//! [`conn`] (header-read and write-stall deadlines, total and per-address connection caps) keep
-//! connections that never complete a request from holding sockets.
+//! Everything is served from the database through the read pool. The hot market reads go
+//! through a response cache kept per data generation of the store ([`cache`]). The node is never
+//! contacted, so public load cannot reach it.
 //!
-//! Routes (GET, and the one POST `/v1/logo-reports`):
+//! Every route passes one guard middleware. It resolves the client address (proxy aware) and
+//! applies the per-client and global rate limits, the concurrency cap and the request timeout.
+//! It also adds CORS headers when configured. Below the guard, the transport bounds of [`conn`]
+//! keep connections that never complete a request from holding sockets.
+//!
+//! # Routes
+//!
+//! All routes are `GET`, except the one `POST /v1/logo-reports`.
 //! - `/v1/health`, `/v1/health/ready`
-//! - `/v1/tokens` (a row carries `declaration: true` when the indexer holds a KCC-23 declaration for the token),
-//!   `/v1/tokens/{covenant_id}/declaration` (its KCC-23 launch proof, `kob-kcc23-proof/1`)
-//! - `/v1/books/{token}?depth=&aggregate=` (KAS books; pair orders are in no KAS book)
-//! - `/v1/pairs?token=`, `/v1/pairs/{base}/{quote}/book?depth=` (pair orders and the implied KAS-route quotes),
-//!   `/v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` (derived from the two KAS series),
-//!   `/v1/pairs/{base}/{quote}/fills?limit=&before=` (pair-order fills: volume, counterparty, never a price)
-//! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`, `/v1/orders/{covenant_id}/events`
+//! - `/v1/tokens` (a row carries `declaration: true` when the indexer holds a KCC-23
+//!   declaration for the token), `/v1/tokens/{covenant_id}/declaration` (its KCC-23 launch
+//!   proof, `kob-kcc23-proof/1`)
+//! - `/v1/books/{token}?depth=&aggregate=` (KAS books, pair orders are in no KAS book)
+//! - `/v1/pairs?token=`, `/v1/pairs/{base}/{quote}/book?depth=` (pair orders and the implied
+//!   KAS-route quotes), `/v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=` (derived
+//!   from the two KAS series), `/v1/pairs/{base}/{quote}/fills?limit=&before=` (pair-order
+//!   fills: volume and counterparty, never a price)
+//! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`,
+//!   `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
-//! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS locked), `/v1/stats/{token}` (24 h statistics)
+//! - `/v1/trades/{token}`, `/v1/candles/{token}`, `/v1/depth/{token}`
+//! - `/v1/strays`, `/v1/token-events`, `/v1/token-utxos`
+//! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS
+//!   locked), `/v1/stats/{token}` (24 h statistics)
 //! - `/v1/ws` (WebSocket, see [`ws`])
-//! - with `usd_price`: `GET /v1/price/kas-usd` (the KAS price in USD, fetched by the indexer: [`price`])
-//! - with `[logo_reports] enabled`: `POST /v1/logo-reports` and `GET /v1/logo-blocklist` ([`crate::logo_reports`])
+//! - `/v1/metrics`, with `[api] metrics`
+//! - `/v1/price/kas-usd`, with `usd_price` (the KAS price in USD, fetched by the indexer,
+//!   see [`price`])
+//! - `POST /v1/logo-reports` and `GET /v1/logo-blocklist`, with `[logo_reports] enabled`
+//!   ([`crate::logo_reports`])
 
 pub mod cache;
 pub mod client_ip;
@@ -53,29 +66,44 @@ use tokio::sync::{watch, Semaphore};
 /// Everything the API needs from the rest of the process.
 #[derive(Clone)]
 pub struct ApiState {
+    /// Read connections to the indexer database.
     pub pool: ReadPool,
-    /// The store's data generation (the response cache's key, [`cache`]).
+    /// The data generation of the store, which keys the response cache ([`cache`]).
     pub generation: crate::indexer::DataGeneration,
+    /// Health of the indexer, as reported by `/v1/health`.
     pub health: Arc<HealthState>,
     /// The follower publishes one event per committed batch here.
     pub events: tokio::sync::broadcast::Sender<Arc<IndexEvent>>,
+    /// The token allowlist.
     pub tokens: Arc<TokenAllowlist>,
+    /// The API configuration.
     pub cfg: ApiConfig,
+    /// DAA depth at which an order counts as settled.
     pub settle_depth_daa: u64,
+    /// DAA scores per second of the network.
     pub daa_per_second: u64,
+    /// Lag thresholds in hours at which the health report raises an alarm.
     pub lag_alarm_hours: Vec<u64>,
-    /// The executor's effective minimum order value in sompi (`ListingRules::min_order_value_sompi`): an order worth less is
-    /// indexed but never listed. Reported by `/v1/health` so a client can warn before an order is placed.
+    /// The minimum order value of the executor in sompi (`ListingRules::min_order_value_sompi`).
+    ///
+    /// An order worth less is indexed but never listed. `/v1/health` reports the value so that a
+    /// client can warn before an order is placed.
     pub min_order_value_sompi: i64,
-    /// The token-logo blocklist (`[logo_reports]`, [`crate::logo_reports`]); `None` when it is off: its two routes answer 404.
+    /// The token-logo blocklist (`[logo_reports]`, [`crate::logo_reports`]).
+    ///
+    /// `None` when it is off. Its two routes then answer 404.
     pub logo: Option<Arc<crate::logo_reports::LogoReports>>,
-    /// The KAS/USD price (`[api] usd_price`, [`price`]); `None` when it is off: `GET /v1/price/kas-usd` answers 404.
+    /// The KAS/USD price (`[api] usd_price`, [`price`]).
+    ///
+    /// `None` when it is off. `GET /v1/price/kas-usd` then answers 404.
     pub price: Option<price::UsdPrice>,
 }
 
 impl ApiState {
-    /// Check the configuration up front (invalid `trusted_proxies` entries would otherwise be
-    /// ignored, which fails closed but silently).
+    /// Checks the configuration up front.
+    ///
+    /// Invalid `trusted_proxies` entries would otherwise be ignored. That fails closed, but
+    /// silently.
     pub fn validate(&self) -> Result<(), String> {
         TrustedProxies::parse(&self.cfg.trusted_proxies).map(|_| ()).map_err(|e| format!("api.trusted_proxies: {e}"))
     }
@@ -83,13 +111,14 @@ impl ApiState {
 
 /// Shared per-server state behind every handler.
 pub struct App {
+    /// The state the handlers read from.
     pub state: ApiState,
     pub(crate) limiter: RateLimiter,
     resolver: ClientIpResolver,
     concurrency: Arc<Semaphore>,
     pub(crate) ws: ws::WsRegistry,
     pub(crate) shutdown: watch::Sender<bool>,
-    /// The hot reads' responses of the current data generation ([`cache`]).
+    /// The responses of the hot reads for the current data generation ([`cache`]).
     pub(crate) cache: cache::ResponseCache,
 }
 
@@ -107,24 +136,31 @@ impl App {
 #[derive(Debug, Clone, Copy)]
 pub struct ClientIp(pub IpAddr);
 
-/// JSON error body `{"error":{"code":..,"message":..}}`.
+/// An API error. It is sent as the JSON body `{"error":{"code":..,"message":..}}`.
 #[derive(Debug)]
 pub struct ApiError {
+    /// HTTP status.
     pub status: StatusCode,
+    /// Stable machine-readable code.
     pub code: &'static str,
+    /// Human-readable message.
     pub message: String,
+    /// Seconds for the `Retry-After` header, when the client should retry.
     pub retry_after: Option<u64>,
 }
 
 impl ApiError {
+    /// An error with `status` and `code` and no `Retry-After`.
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
         ApiError { status, code, message: message.into(), retry_after: None }
     }
 
+    /// A 400 error with the code `bad_request`.
     pub fn bad_request(message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
 
+    /// A 404 error with the code `not_found`.
     pub fn not_found(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_FOUND, "not_found", message)
     }
@@ -156,7 +192,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Build the router. Rate limiting uses the system clock.
+/// Builds the router. Rate limiting uses the system clock.
 pub fn router(state: ApiState) -> Router {
     build(state, None).0
 }
@@ -179,7 +215,8 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         cache: cache::ResponseCache::default(),
         state,
     });
-    // the JSON reads are compressed (gzip, when the client accepts it); the WebSocket upgrade, the Prometheus text and the logo routes come after the layer
+    // The JSON reads are compressed. The WebSocket upgrade, the Prometheus text and the logo
+    // routes are added after the layer, so they are not.
     let mut router = Router::new()
         .route("/v1/health", get(rest::health))
         .route("/v1/health/ready", get(rest::ready))
@@ -211,7 +248,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         router = router.route("/v1/price/kas-usd", get(price::kas_usd));
     }
     if app.state.logo.is_some() {
-        // the one write route of the API: a report is a few dozen bytes of JSON
+        // The one write route of the API. A report is a few dozen bytes of JSON.
         router = router
             .route("/v1/logo-reports", post(rest::logo_report).layer(DefaultBodyLimit::max(rest::LOGO_REPORT_MAX_BYTES)))
             .route("/v1/logo-blocklist", get(rest::logo_blocklist));
@@ -223,12 +260,16 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
     (router, app)
 }
 
-/// Bodies below this size are sent as they are: the gzip header and the CPU cost more than they save.
+/// Bodies below this size are sent as they are. The gzip header and the CPU cost more than they
+/// save.
 const COMPRESS_MIN_BYTES: u64 = 512;
 
-/// gzip for a client that sends `Accept-Encoding: gzip` (the layer reads it, answers `Content-Encoding` and `Vary: accept-encoding`, and sends
-/// the body as it is for any other client): the read API's answers are tens of KB of repetitive JSON (`/v1/tokens`: 29 KB, 2.8 KB compressed)
-/// and a public indexer sits behind a tunnel. The fastest level: the same ratio within a few percent on JSON for a fraction of the CPU.
+/// The gzip layer for the JSON answers.
+///
+/// A client that sends `Accept-Encoding: gzip` gets a compressed body. Any other client gets the
+/// body as it is. The answers are tens of KB of repetitive JSON, and a public indexer sits
+/// behind a tunnel. The fastest level gives nearly the same ratio on JSON for a fraction of the
+/// CPU.
 fn compression() -> tower_http::compression::CompressionLayer<JsonAboveMin> {
     tower_http::compression::CompressionLayer::new()
         .gzip(true)
@@ -239,7 +280,9 @@ fn compression() -> tower_http::compression::CompressionLayer<JsonAboveMin> {
         .compress_when(JsonAboveMin)
 }
 
-/// Compress a response only when it is JSON of at least [`COMPRESS_MIN_BYTES`] (a body of unknown length counts as large).
+/// Compresses a response only when it is JSON of at least [`COMPRESS_MIN_BYTES`].
+///
+/// A body of unknown length counts as large.
 #[derive(Clone, Copy)]
 pub struct JsonAboveMin;
 
@@ -263,8 +306,10 @@ impl tower_http::compression::predicate::Predicate for JsonAboveMin {
     }
 }
 
-/// Rate-limit weight of a route: the queries that scan (candles, stats, depth, trades, books, holdings, strays) cost `heavy`
-/// tokens, everything else one.
+/// Rate-limit weight of a route.
+///
+/// The queries that scan cost `heavy` tokens, and everything else costs one. The scanning routes
+/// are the candles, stats, depth, trades, books, token UTXOs, strays and pairs.
 fn route_cost(path: &str, heavy: u32) -> u32 {
     const HEAVY: [&str; 8] =
         ["/v1/candles/", "/v1/stats", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
@@ -307,7 +352,7 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             }
         }
     };
-    // what a CDN may keep of the answer, and for how long (`edge_cache`)
+    // What a CDN may keep of the answer, and for how long, see `edge_cache`.
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
@@ -318,21 +363,22 @@ async fn guard(State(app): State<Arc<App>>, mut req: Request, next: Next) -> Res
             h.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, v);
             h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, HeaderValue::from_static("GET, POST, OPTIONS"));
             h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, HeaderValue::from_static("content-type"));
-            // a browser may read the wait of a 429 (the logo report form tells the viewer when to try again)
+            // A browser may read the wait of a 429. The logo report form tells the viewer when to
+            // try again.
             h.insert(header::ACCESS_CONTROL_EXPOSE_HEADERS, HeaderValue::from_static("retry-after"));
         }
     }
     resp
 }
 
-/// Bind `cfg.listen` and serve until `shutdown` resolves.
+/// Binds `cfg.listen` and serves until `shutdown` resolves.
 pub async fn serve(state: ApiState, shutdown: impl Future<Output = ()> + Send + 'static) -> std::io::Result<()> {
     let listener = tokio::net::TcpListener::bind(state.cfg.listen).await?;
     tracing::info!("read API listening on {}", listener.local_addr()?);
     serve_listener(listener, state, shutdown).await
 }
 
-/// Serve on an already bound listener (tests bind port 0).
+/// Serves on an already bound listener. Tests bind port 0.
 pub async fn serve_listener(
     listener: tokio::net::TcpListener,
     state: ApiState,
@@ -349,7 +395,7 @@ pub async fn serve_listener(
     .await
 }
 
-/// Transport bounds of the read API (`conn`): header and write deadlines, connection caps.
+/// Transport bounds of the read API: header and write deadlines and the connection caps.
 fn conn_limits(cfg: &ApiConfig) -> conn::ConnLimits {
     conn::ConnLimits {
         header_timeout: Duration::from_millis(cfg.header_timeout_ms.max(1)),
