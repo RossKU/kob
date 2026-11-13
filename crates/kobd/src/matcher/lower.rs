@@ -1,9 +1,9 @@
-//! Lowering a [`Plan`] to a `kob_protocol::build::Batch` (either token family) and the exact accounting
-//! of the built transaction.
+//! Lowering a [`Plan`] to a `kob_protocol::build::Batch` (either token family), and the exact
+//! accounting of the built transaction.
 //!
-//! Nothing here constructs transactions: the batch is a builder request; `kob_protocol` lays out
-//! the inputs and outputs, pays every maker exactly its all-in bound and hands the spread, the tips
-//! and the keeper tips of the updates to the operator's change output.
+//! Nothing here constructs transactions. The batch is a builder request: `kob_protocol` lays out
+//! the inputs and outputs, pays every maker exactly its all-in bound and hands the spread, the
+//! tips and the keeper tips of the updates to the change output of the operator.
 
 use std::collections::BTreeMap;
 
@@ -17,32 +17,44 @@ use super::planner::Plan;
 
 /// Everything lowering needs besides the plan.
 pub struct LowerCtx<'a> {
+    /// The orders of the plan by covenant id.
     pub by_id: &'a BTreeMap<CovId, ListedOrder>,
-    /// The operator's P2PK funding (the change output returns it with the spread and tips).
+    /// The operator's P2PK funding. The change output returns it with the spread and tips.
     pub funding: Vec<KeyUtxo>,
     /// Operator key: change and the taker of the batch.
     pub operator: [u8; 32],
+    /// Fee rate in sompi per gram.
     pub fee_rate: u64,
-    /// KAS carrier on the operator's token outputs (the reference planner leaves the operator none; kept for builders that do).
+    /// KAS carrier on the operator's token outputs. The reference planner leaves the operator none,
+    /// and the field is kept for builders that do.
     pub token_carrier: u64,
-    /// KAS carrier on the operator's token output of a kept surplus (`InventoryPolicy::keep_carrier`, `Batch::keep_carrier`).
+    /// KAS carrier on the operator's token output of a kept surplus
+    /// (`InventoryPolicy::keep_carrier`, `Batch::keep_carrier`).
     pub keep_carrier: u64,
-    /// Measured compute budgets (role -> at least this budget) that replace a short table budget. The table is the maximum
-    /// measured over every shape the planner builds (`kob-protocol/tests/budget_table.rs`); when the engine validation still
-    /// reports `ExceededCommittedScriptUnits` (a shape the generator misses), the engine measures the transaction's inputs
-    /// ([`measured_floors`]) and retries once with the budgets they need. Empty: the table.
+    /// Measured compute budgets (role -> at least this budget) that replace a short table budget.
+    /// Empty means the table alone.
+    ///
+    /// The table is the maximum measured over every shape the planner builds
+    /// (`kob-protocol/tests/budget_table.rs`). When the engine validation still reports
+    /// `ExceededCommittedScriptUnits` (a shape the generator misses), the engine measures the
+    /// inputs of the transaction ([`measured_floors`]) and retries once with the budgets they need.
     pub budget_floor: BTreeMap<String, u16>,
 }
 
-/// The typed state of an order UTXO. The KRON kinds carry the states of their KCC-20 counterparts; the builders
-/// derive the family from the leg's token program.
+/// The typed state of an order UTXO.
+///
+/// The KRON kinds carry the states of their KCC-20 counterparts. The builders derive the family
+/// from the token program of the leg.
 fn typed<S>(o: &OrderUtxo<AnyState>, f: impl Fn(&AnyState) -> Option<S>) -> Result<OrderUtxo<S>, String> {
     let base = o.state.clone().into_family(kob_protocol::family::Family::Kcc20);
     Ok(OrderUtxo { utxo: o.utxo.clone(), state: f(&base).ok_or("order kind does not match its candidate")? })
 }
 
-/// Builds the `Batch` request of a plan (either family: the builders follow the legs' token programs). Leg `i` is
-/// `plan.fills[i]`, so a triggered fill's and an update's `evidence` index is the evidence fill's position in the plan.
+/// Builds the `Batch` request of a plan (either family: the builders follow the token programs of
+/// the legs).
+///
+/// Leg `i` is `plan.fills[i]`, so the `evidence` index of a triggered fill or of an update is the
+/// position of the evidence fill in the plan.
 pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
     let get = |id: &CovId| cx.by_id.get(id).ok_or_else(|| format!("order {} is no longer listed", kob_protocol::json::to_hex(id)));
     let mut legs = vec![];
@@ -50,7 +62,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
         let o = get(&f.cand.id)?;
         let amount = f.amount;
         let evidence = f.evidence;
-        // the auction time the fill is priced at (§3.3, `Fill::t`); None: the lock time
+        // The auction time the fill is priced at (§3.3, `Fill::t`). None means the lock time.
         let t = f.t.and_then(|x| i64::try_from(x).ok());
         let custody = || o.custody.clone().ok_or_else(|| "ask-side order without custody".to_string());
         let leg = match &o.base_state() {
@@ -175,7 +187,8 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
         taker_tokens: vec![],
         taker: Some(cx.operator),
         taker_token_carrier: cx.token_carrier,
-        // the surpluses the plan keeps as the operator's inventory (`PlannerConfig::inventory`) stay with the taker
+        // The surpluses the plan keeps as the operator's inventory (`PlannerConfig::inventory`)
+        // stay with the taker.
         keep_surplus: plan.kept.iter().map(|k| k.token).collect(),
         keep_carrier: (!plan.kept.is_empty()).then_some(cx.keep_carrier),
         receivers: vec![],
@@ -189,10 +202,13 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
 
 static BUDGET_SLACK_RETRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// How many builds had to be retried with more compute budget than the table gives (the matcher: the measured budgets of
-/// [`measured_floors`]; a keeper job: one unit of slack). The table is generated exact over every builder shape in its
-/// largest batch context (`kob-protocol/tests/budget_table.rs`), so this is a logged safety net only: it stays 0 in every
-/// test, and a non-zero value in production is a shape the generator does not cover yet.
+/// How many builds had to be retried with more compute budget than the table gives.
+///
+/// The retry budget is the measured budgets of [`measured_floors`] for the matcher, and one unit of
+/// slack for a keeper job. The table is generated exact over every builder shape in its largest
+/// batch context (`kob-protocol/tests/budget_table.rs`), so this counter is a logged safety net
+/// only. It stays 0 in every test, and a non-zero value in production is a shape the generator
+/// does not cover yet.
 pub fn budget_slack_retries() -> u64 {
     BUDGET_SLACK_RETRIES.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -207,11 +223,13 @@ pub(crate) fn note_budget_slack(what: &str, error: &str) {
     );
 }
 
-/// The budgets the inputs of a built transaction need when the table gives one of them too little: the transaction is
-/// signed and run in the script engine without enforcing budgets, and every role with an input whose measured script
-/// units exceed the budget it commits gets the budget that covers them (the largest over its inputs). An input's script
-/// units do not depend on the budgets committed around it, so a rebuild with these budgets passes. Empty when every input
-/// fits its budget.
+/// The budgets the inputs of a built transaction need when the table gives one of them too little.
+///
+/// The transaction is signed and run in the script engine without enforcing budgets. Every role
+/// with an input whose measured script units exceed the budget it commits gets the budget that
+/// covers them, the largest over its inputs. The script units of an input do not depend on the
+/// budgets committed around it, so a rebuild with these budgets passes. The result is empty when
+/// every input fits its budget.
 pub fn measured_floors(
     built: &kob_protocol::tx::BuiltTx,
     signer: &dyn super::wallet::Signer,
@@ -265,8 +283,10 @@ pub fn budgets(role: &str) -> kob_protocol::Result<u16> {
         .ok_or_else(|| kob_protocol::Error::MissingBudget(role.to_string()))
 }
 
-/// `(need, have)` of a builder's "insufficient funds" refusal (`kob_protocol::Error::InsufficientFunds`, which lowering
-/// reports as text): the batch's funding did not cover its outputs and fee.
+/// `(need, have)` of a builder's "insufficient funds" refusal.
+///
+/// Lowering reports `kob_protocol::Error::InsufficientFunds` as text. The refusal means the funding
+/// of the batch did not cover its outputs and fee.
 pub fn insufficient_funds(err: &str) -> Option<(u64, u64)> {
     const NEED: &str = "insufficient funds: need ";
     let num = |s: &str| -> Option<u64> { s.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().ok() };
@@ -287,13 +307,17 @@ pub struct Accounting {
     pub funding: u64,
     /// `change − funding`: the operator's KAS profit.
     pub profit: i64,
+    /// Size of the built transaction in bytes.
     pub bytes: u64,
 }
 
-/// KAS the operator puts on and takes back from its own token UTXOs in a batch: (Σ its token
-/// inputs, the carriers of its net token outputs: one per token of which it receives some).
+/// KAS the operator puts on and takes back from its own token UTXOs in a batch.
+///
+/// The result is (Σ its token inputs, the carriers of its net token outputs), with one output per
+/// token of which it receives some.
 pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
-    // per token: base units released into the batch (asks, pair sales) − base units delivered (bids, pair receipts)
+    // Per token: base units released into the batch (asks, pair sales) minus base units delivered
+    // (bids, pair receipts).
     let mut net: BTreeMap<[u8; 32], i128> = BTreeMap::new();
     for f in &plan.fills {
         let q = f.amount as i128;
@@ -313,8 +337,8 @@ pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
             *net.entry(c).or_default() += t.state.amount() as i128;
         }
     }
-    // a token a pair ask buys: its surplus goes to that ask's delivery (a minimum), no operator output, unless the plan keeps
-    // it as inventory (`Batch::keep_surplus`)
+    // A token a pair ask buys: its surplus goes to the delivery of that ask (a minimum) and there
+    // is no operator output, unless the plan keeps it as inventory (`Batch::keep_surplus`).
     for f in &plan.fills {
         if let Some(x) = &f.cand.pair {
             if x.role != PairRole::Surplus && !x.info.buy_exact() && !batch.keep_surplus.contains(&x.info.t_market().token) {
@@ -323,7 +347,8 @@ pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
         }
     }
     let kin = batch.taker_tokens.iter().map(|t| t.utxo.amount).sum();
-    // one output per token it receives: a kept token's carries `keep_carrier` (when set), every other `taker_token_carrier`
+    // One output per token it receives. A kept token's carries `keep_carrier` (when set), and every
+    // other carries `taker_token_carrier`.
     let kout = net
         .iter()
         .filter(|(_, v)| **v > 0)
@@ -335,7 +360,8 @@ pub fn operator_token_kas(plan: &Plan, batch: &Batch) -> (u64, u64) {
     (kin, kout)
 }
 
-/// Accounting of a built plan: `profit = change + own token carrier out − funding − own token carriers in`.
+/// Accounting of a built plan: `profit = change + own token carrier out − funding − own token
+/// carriers in`.
 pub fn accounting(lowered: &super::family::Lowered, funding: &[KeyUtxo]) -> Accounting {
     let built = &lowered.built;
     let change = built.fee.change_output.map(|i| built.tx.outputs[i as usize].value).unwrap_or(0);

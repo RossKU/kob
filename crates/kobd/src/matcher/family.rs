@@ -1,16 +1,18 @@
 //! Token families behind one abstraction.
 //!
-//! The planner is family-agnostic: it works on normalised candidates (quotes, base units, classes) and
-//! on the per-transaction token limits a family's program imposes. A family adapter supplies those
-//! limits and lowers a [`Plan`](super::planner::Plan) to a transaction with that family's builders.
+//! The planner is family-agnostic. It works on normalised candidates (quotes, base units, classes)
+//! and on the per-transaction token limits that the program of a family imposes. A family adapter
+//! supplies those limits and lowers a [`Plan`](super::planner::Plan) to a transaction with the
+//! builders of that family.
 //!
-//! * **KCC-20** (`kob_protocol::build`): slot limits of the pinned program (3/3 reference, the program KOB issues,
-//!   and P2; the 4/5, 8/8 and 16/16 prototypes) and the covenants' `MAX_TOK_IN = 8`. A book that needs more custodies
-//!   than the slots hold is cleared over several chained transactions of the tick (`super::engine`).
-//! * **KRON** (`contracts/adapters/kron`): 4 token inputs / 5 outputs, every output amount at most
-//!   1e9 (`kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT`), no extension commitment. The matcher
-//!   plans KRON books with the same planner (the limits below enforced) and lowers them with the KRON
-//!   builders through [`KronAdapter`].
+//! - **KCC-20** (`kob_protocol::build`): the slot limits of the pinned program (3/3 reference,
+//!   which is the program KOB issues, and P2; the 4/5, 8/8 and 16/16 prototypes), and the
+//!   covenants' `MAX_TOK_IN = 8`. A book that needs more custodies than the slots hold is cleared
+//!   over several chained transactions of the tick (`super::engine`).
+//! - **KRON** (`contracts/adapters/kron`): 4 token inputs and 5 outputs, every output amount at
+//!   most 1e9 (`kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT`), and no extension commitment. The
+//!   matcher plans KRON books with the same planner, enforcing the limits below, and lowers them
+//!   with the KRON builders through [`KronAdapter`].
 
 use kob_protocol::artifacts::token_template_by_hash;
 use kob_protocol::tx::BuiltTx;
@@ -20,7 +22,7 @@ use super::planner::Plan;
 
 pub use kob_protocol::registry::Family;
 
-/// Default family of a listed order (JSON field omitted).
+/// Default family of a listed order, used when the JSON field is omitted.
 pub fn default_family() -> Family {
     Family::Kcc20
 }
@@ -28,7 +30,7 @@ pub fn default_family() -> Family {
 /// Per-transaction limits of one token program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TokenLimits {
-    /// Token inputs per transaction (leader included), already capped by the orders' own limit.
+    /// Token inputs per transaction, leader included, already capped by the limit of the orders.
     pub max_in: usize,
     /// Token outputs per transaction.
     pub max_out: usize,
@@ -36,14 +38,16 @@ pub struct TokenLimits {
     pub max_output_amount: Option<i64>,
 }
 
-/// KRON token program slots (`contracts/orders/kron/README.md`).
+/// KRON token program slots (inputs, outputs) (`contracts/orders/kron/README.md`).
 pub const KRON_SLOTS: (usize, usize) = (4, 5);
 /// Token inputs a KRON order accepts in one transaction.
 pub const KRON_MAX_TOK_IN: usize = 4;
 
-/// Limits of the token program with template hash `tpl` in `family` (None: not a supported program): the program's
-/// profile slots (`kob_protocol::profile`), the inputs capped by the family's order templates (`Family::max_tok_in`), and
-/// the family's output amount bound (KRON: 1e9).
+/// Limits of the token program with template hash `tpl` in `family`. None: not a supported program.
+///
+/// The limits are the slots of the program profile (`kob_protocol::profile`), the inputs capped by
+/// the order templates of the family (`Family::max_tok_in`), and the output amount bound of the
+/// family (KRON: 1e9).
 pub fn token_limits(family: Family, tpl: &[u8; 32]) -> Option<TokenLimits> {
     let t = token_template_by_hash(tpl).filter(|t| t.family == family)?;
     Some(TokenLimits {
@@ -53,31 +57,37 @@ pub fn token_limits(family: Family, tpl: &[u8; 32]) -> Option<TokenLimits> {
     })
 }
 
-// A lowered plan: the builder request (for logs and dry runs) and the unsigned transaction.
+/// A lowered plan: the builder request (for logs and dry runs) and the unsigned transaction.
 #[derive(Clone, Debug)]
 pub struct Lowered {
     /// The family's builder request as JSON (KCC-20: a `kob_protocol::build::Action`).
     pub request: serde_json::Value,
+    /// The unsigned transaction.
     pub built: BuiltTx,
-    /// KAS on the operator's own token inputs (0: the matcher trades no tokens of its own).
+    /// KAS on the operator's own token inputs. 0 means the matcher trades no tokens of its own.
     pub operator_token_kas_in: u64,
-    /// KAS on the operator's own token output (net tokens it receives).
+    /// KAS on the operator's own token output (the net tokens it receives).
     pub operator_token_kas_out: u64,
 }
 
 /// Lowers plans of one family to unsigned transactions with that family's own builders.
 pub trait FamilyAdapter: Send + Sync {
+    /// The family this adapter lowers.
     fn family(&self) -> Family;
+    /// Lowers `plan` to an unsigned transaction with the builders of the family.
     fn lower(&self, plan: &Plan, cx: &LowerCtx) -> Result<Lowered, String>;
 }
 
-/// Lowers a plan with the `kob_protocol::build` batch builder. The builders follow the token program of
-/// each leg, so one lowering serves both families; what differs is enforced there: the slot limits, the
-/// KRON output amount range, address-presence authorisation of key-owned KRON tokens (the operator's
-/// funding input is the P2PK input that authorises its own tokens).
+/// Lowers a plan with the `kob_protocol::build` batch builder.
+///
+/// The builders follow the token program of each leg, so one lowering serves both families. What
+/// differs is enforced there: the slot limits, the KRON output amount range, and the address
+/// presence authorisation of key-owned KRON tokens (the funding input of the operator is the P2PK
+/// input that authorises its own tokens).
 fn lower_with(plan: &Plan, cx: &LowerCtx, family: Family) -> Result<Lowered, String> {
-    // a global batch may trade both families: the adapter of its first book lowers it (the builders follow every leg's
-    // token program); the engine only plans families it has adapters for
+    // A global batch may trade both families. The adapter of its first book lowers it, because the
+    // builders follow the token program of every leg. The engine only plans families it has
+    // adapters for.
     if plan.book.family != family {
         return Err(format!("a plan led by a {} book reached the {} adapter", plan.book.family.as_str(), family.as_str()));
     }
@@ -131,14 +141,16 @@ impl Default for Families {
 }
 
 impl Families {
-    /// Registers an adapter (replacing one of the same family).
+    /// Registers an adapter, replacing one of the same family.
     pub fn register(&mut self, a: Box<dyn FamilyAdapter>) {
         self.adapters.retain(|x| x.family() != a.family());
         self.adapters.push(a);
     }
+    /// The adapter of family `f`, if one is registered.
     pub fn get(&self, f: Family) -> Option<&dyn FamilyAdapter> {
         self.adapters.iter().find(|a| a.family() == f).map(|a| a.as_ref())
     }
+    /// Whether an adapter of family `f` is registered.
     pub fn supports(&self, f: Family) -> bool {
         self.get(f).is_some()
     }

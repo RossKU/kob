@@ -1,10 +1,10 @@
-//! What the matcher and the keepers read: the [`OrderBookView`] trait (implemented by the indexer,
-//! and by [`MemoryBook`] for tests, dry runs and snapshot files).
+//! What the matcher and the keepers read: the [`OrderBookView`] trait, which the indexer
+//! implements, and [`MemoryBook`] for tests, dry runs and snapshot files.
 //!
-//! A view lists only **validated** orders (`docs/spec/matcher.md` §1.1: a valid placement record, a
-//! fresh covenant id, and for ask-side kinds exactly one custody UTXO holding `amountLeft` base units, §1.2).
-//! Stray token UTXOs owned by an order id are reported with the order so that nothing ever mistakes
-//! them for liquidity; matchers and keepers never spend them.
+//! A view lists only **validated** orders (`docs/spec/matcher.md` §1.1): a valid placement record,
+//! a fresh covenant id, and for ask-side kinds exactly one custody UTXO holding `amountLeft` base
+//! units (§1.2). Stray token UTXOs owned by an order id are reported with the order, so that
+//! nothing mistakes them for liquidity. Matchers and keepers never spend them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -30,16 +30,19 @@ pub fn outpoint(u: &Utxo) -> Outpoint {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListedOrder {
-    /// Token family of the order, informational: the state's kind (`KobAsk` / `KobAskKron`) names it.
+    /// Token family of the order, informational: the kind of the state (`KobAsk` / `KobAskKron`)
+    /// names it.
     #[serde(default = "super::family::default_family")]
     pub family: Family,
     /// The order UTXO (covenant id set) and its decoded state.
     pub order: OrderUtxo<AnyState>,
-    /// Token-holding kinds: the custody (the first of `AnyState::custodies`: an ask's exactly `amountLeft` base units, a
-    /// pair order's custody of the token it holds, a pair entry's A custody or B escrow), owned by the order id.
+    /// Token-holding kinds: the custody, which is the first of `AnyState::custodies`, owned by the
+    /// order id. For an ask it holds exactly `amountLeft` base units, for a pair order the token it
+    /// holds, and for a pair entry the A custody or the B escrow.
     #[serde(default)]
     pub custody: Option<TokenUtxo>,
-    /// The second custody of an order that holds two (a sell-first `KobIfdPair`: its B prefund next to its A custody).
+    /// The second custody of an order that holds two (a sell-first `KobIfdPair`: its B prefund next
+    /// to its A custody).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custody_b: Option<TokenUtxo>,
     /// Day orders: wall-clock deadline (UTC unix seconds) from the placement record (§10.10).
@@ -51,15 +54,16 @@ pub struct ListedOrder {
     /// Stray token UTXOs owned by the order id (§1.2): flagged, never spent by matchers or keepers.
     #[serde(default)]
     pub strays: Vec<TokenUtxo>,
-    /// Foreign strays (tokens other than the order's, §1.2) with a state the indexer proved, by token: a keeper that
-    /// refunds the order may return them to the maker (`KeeperConfig::return_foreign_strays`).
+    /// Foreign strays (tokens other than the one of the order, §1.2) with a state the indexer
+    /// proved, by token. A keeper that refunds the order may return them to the maker
+    /// (`KeeperConfig::return_foreign_strays`).
     #[serde(default)]
     pub foreign: Vec<kob_protocol::build::ForeignStrays>,
 }
 
 impl ListedOrder {
-    /// The order's state as the KCC-20 kind of the same name: the KRON kinds (`KobAskKron`, ...) carry the
-    /// same typed states, so family-agnostic logic matches on this.
+    /// The state of the order as the KCC-20 kind of the same name. The KRON kinds (`KobAskKron`,
+    /// ...) carry the same typed states, so family-agnostic logic matches on this.
     pub fn base_state(&self) -> AnyState {
         self.order.state.clone().into_family(kob_protocol::family::Family::Kcc20)
     }
@@ -74,10 +78,13 @@ impl ListedOrder {
         self.order.utxo.block_daa_score
     }
 
-    /// §1.2: a token-holding order is listable only with exactly its custodies (`AnyState::custodies`, in that order:
-    /// `custody`, then `custody_b`), each holding its exact amount of its token, owned by the order id, of the KCC-20
-    /// extension commitment the order pins for it (`AnyState::custody_ext`; a repeating `KobIfdAsk` with nothing left has
-    /// no custody; a pair entry holds one or two).
+    /// Whether the order may be listed (§1.2): its state passes `crate::sanity::check`, and a
+    /// token-holding order has exactly its custodies.
+    ///
+    /// The custodies are `AnyState::custodies`, in the order `custody`, then `custody_b`. Each
+    /// holds its exact amount of its token, is owned by the order id, and has the KCC-20 extension
+    /// commitment the order pins for it (`AnyState::custody_ext`). A repeating `KobIfdAsk` with
+    /// nothing left has no custody, and a pair entry holds one or two.
     pub fn custody_ok(&self) -> bool {
         if crate::sanity::check(&self.order.state).is_err() {
             return false;
@@ -99,13 +106,13 @@ impl ListedOrder {
         })
     }
 
-    /// The custody of `token` (pair orders hold custodies of either token; a KAS kind: its one custody).
+    /// The custody of `token`. Pair orders hold custodies of either token, and a KAS kind has one.
     pub fn custody_of(&self, token: &[u8; 32]) -> Option<&TokenUtxo> {
         self.custody.iter().chain(self.custody_b.iter()).find(|c| c.utxo.covenant_id.as_ref() == Some(token))
     }
 
-    /// Extension commitment of the order's token: the one its state names (an ask's custody carries it, a sell-first
-    /// entry names it in its committed exit, a bid delivers it).
+    /// Extension commitment of the token of the order: the one its state names. An ask's custody
+    /// carries it, a sell-first entry names it in its committed exit, and a bid delivers it.
     pub fn extension(&self) -> Option<[u8; 32]> {
         match &self.order.state {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
@@ -119,8 +126,10 @@ impl ListedOrder {
     }
 }
 
-/// The token family of an order's custody of `token` (a pair order: the family its state names for that token; a KAS
-/// kind: the order's family).
+/// The token family of the custody of `token` of an order.
+///
+/// For a pair order it is the family its state names for that token, and for a KAS kind the family
+/// of the order.
 pub fn custody_family(s: &AnyState, token: &[u8; 32]) -> Option<Family> {
     match s.pair_tokens() {
         Some(t) if &t.a.cov_id == token => t.a.family_of(),
@@ -135,25 +144,37 @@ pub fn custody_family(s: &AnyState, token: &[u8; 32]) -> Option<Family> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookKey {
+    /// Token family.
     pub family: Family,
+    /// Covenant id of the token.
     #[serde(with = "kob_protocol::json::field")]
     pub token: [u8; 32],
+    /// Hash of the token program template.
     #[serde(with = "kob_protocol::json::field")]
     pub template: [u8; 32],
+    /// Extension commitment of the token.
     #[serde(with = "kob_protocol::json::field")]
     pub extension: [u8; 32],
-    /// Base units per whole token of the book's orders (their prices are comparable only at the same scale).
+    /// Base units per whole token of the orders of the book. Their prices are comparable only at
+    /// the same scale.
     #[serde(with = "kob_protocol::json::field")]
     pub scale: i64,
 }
 
-/// A token market: the books of one token (covenant id, program, extension commitment) at every `scale`. Orders of one
-/// market can share a transaction's token slots; a routed pair order trades against the plain orders of its two markets.
+/// A token market: the books of one token (covenant id, program, extension commitment) at every
+/// `scale`.
+///
+/// Orders of one market can share the token slots of a transaction. A routed pair order trades
+/// against the plain orders of its two markets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Market {
+    /// Token family.
     pub family: Family,
+    /// Covenant id of the token.
     pub token: [u8; 32],
+    /// Hash of the token program template.
     pub template: [u8; 32],
+    /// Extension commitment of the token.
     pub extension: [u8; 32],
 }
 
@@ -193,8 +214,8 @@ pub trait OrderBookView {
     fn daa_score(&self) -> u64;
     /// Every listed, live order (all tokens).
     fn orders(&self) -> Vec<ListedOrder>;
-    /// P2PK token UTXOs of `owner` (the operator's token inventory, exported with the snapshot; the matcher does not
-    /// trade it).
+    /// P2PK token UTXOs of `owner`: the token inventory of the operator, exported with the
+    /// snapshot. The matcher does not trade it.
     fn wallet_tokens(&self, _owner: &[u8; 32]) -> Vec<TokenUtxo> {
         vec![]
     }
@@ -204,27 +225,33 @@ pub trait OrderBookView {
     }
 }
 
-/// In-memory book (tests, dry runs, snapshot files). JSON-serialisable: `kobd match
-/// --book-file` reads this format.
+/// In-memory book (tests, dry runs, snapshot files). It is JSON-serialisable, and
+/// `kobd match --book-file` reads this format.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryBook {
+    /// Virtual DAA score of the view.
     #[serde(with = "kob_protocol::json::field")]
     pub daa_score: u64,
+    /// Every listed, live order.
     #[serde(default)]
     pub orders: Vec<ListedOrder>,
-    /// P2PK token UTXOs by owner (hex key in JSON).
+    /// P2PK token UTXOs of every owner. `wallet_tokens` filters them by owner.
     #[serde(default)]
     pub wallet_tokens: Vec<TokenUtxo>,
-    /// Live orders the indexer proved but does not list (a token outside the allowlist, a carrier below the listing minimum,
-    /// an exit of an unlisted entry, ...; `indexer::book::unlisted_orders`): never matched, but the keepers kill, refund and
-    /// close them, as they do in process (`BookSource::keeper_only_orders`). An indexer's snapshot carries them so a keeper
-    /// fed by a `--book-file` serves them too (JSON `keeperOnly`, absent when empty).
+    /// Live orders the indexer proved but does not list: a token outside the allowlist, a carrier
+    /// below the listing minimum, an exit of an unlisted entry, and so on
+    /// (`indexer::book::unlisted_orders`).
+    ///
+    /// They are never matched, but the keepers kill, refund and close them, as they do in process
+    /// (`BookSource::keeper_only_orders`). A snapshot of the indexer carries them so that a keeper
+    /// fed by a `--book-file` serves them too. In JSON they are `keeperOnly`, absent when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub keeper_only: Vec<ListedOrder>,
 }
 
 impl MemoryBook {
+    /// An empty book at `daa_score`.
     pub fn new(daa_score: u64) -> Self {
         MemoryBook { daa_score, ..Default::default() }
     }
