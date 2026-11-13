@@ -291,7 +291,8 @@ async fn pair_serial() -> tokio::sync::MutexGuard<'static, ()> {
 
 fn pair<N: ChainSource>(a: (&str, &Arc<N>), b: (&str, &Arc<N>)) -> kobd::rpc::multi::MultiNode<N> {
     use kobd::rpc::multi::{MultiNode, NodeSpec};
-    let spec = |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check };
+    let spec =
+        |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check, may_lead: true };
     MultiNode::new(vec![(spec(a.0, false), a.1.clone()), (spec(b.0, true), b.1.clone())], a.1.clone()).with_watch(Duration::ZERO, 2)
 }
 

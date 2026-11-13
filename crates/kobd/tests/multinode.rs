@@ -142,11 +142,11 @@ impl ChainSource for Peer {
 /// A node that vouches for the primary's answers (`NodeSpec::cross_check`: the second node of a resolver pair) and serves
 /// no windows of its own.
 fn cross_check(name: &str) -> NodeSpec {
-    NodeSpec { url: name.into(), fetch: false, submit: true, connections: 1, cross_check: true }
+    NodeSpec { url: name.into(), fetch: false, submit: true, connections: 1, cross_check: true, may_lead: false }
 }
 
 fn spec(name: &str, fetch: bool, connections: usize) -> NodeSpec {
-    NodeSpec { url: name.into(), fetch, submit: true, connections, cross_check: false }
+    NodeSpec { url: name.into(), fetch, submit: true, connections, cross_check: false, may_lead: fetch }
 }
 
 /// A follower over `nodes` (the first one the primary, also the verifier) on a fresh database.

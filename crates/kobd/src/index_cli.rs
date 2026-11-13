@@ -497,15 +497,24 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
     let conns = |n: usize| if parallel > 1 { n } else { 0 };
     let primary_url = cfg.primary_url().to_string();
     let primary = wrpc(cfg, &primary_url, conns(parallel));
-    let primary_spec =
-        NodeSpec { url: primary_url.clone(), fetch: cfg.primary_fetches(), submit: true, connections: parallel, cross_check: false };
+    let primary_spec = NodeSpec {
+        url: primary_url.clone(),
+        fetch: cfg.primary_fetches(),
+        submit: true,
+        connections: parallel,
+        cross_check: false,
+        may_lead: true,
+    };
     // The second node of a resolver pair vouches for the answers of the primary too (rpc::multi).
     let pair = crate::rpc::resolver::is_resolver(&primary_url);
     let mut nodes = vec![(primary_spec, primary.clone())];
     for n in cfg.secondaries() {
         let c = n.connections.unwrap_or(parallel).max(1);
         let cross_check = pair && crate::rpc::resolver::is_resolver(&n.url);
-        let spec = NodeSpec { url: n.url.clone(), fetch: n.fetch && parallel > 1, submit: n.submit, connections: c, cross_check };
+        // Only the operator's full peers may lead, unless the entry says otherwise (`may_lead`).
+        let may_lead = n.may_lead.unwrap_or(n.fetch);
+        let spec =
+            NodeSpec { url: n.url.clone(), fetch: n.fetch && parallel > 1, submit: n.submit, connections: c, cross_check, may_lead };
         nodes.push((spec, wrpc(cfg, &n.url, conns(c))));
     }
     // The acceptance data and the copies of chain blocks that matter, from the primary on

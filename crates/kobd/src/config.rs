@@ -299,11 +299,23 @@ pub struct NodeConfig {
     /// Its Borsh wRPC endpoint when `borsh` is on (default: derived from `url`,
     /// `rpc::borsh::borsh_url_for`).
     pub borsh_url: Option<String>,
+    /// It may become the chain authority when the primary's chain requests keep failing
+    /// (`rpc::multi`, docs/ops/executor.md, Part C, *A failing chain authority*). Default: `fetch`,
+    /// so a submit-only node never leads unless this says so.
+    pub may_lead: Option<bool>,
 }
 
 impl Default for NodeConfig {
     fn default() -> Self {
-        NodeConfig { url: String::new(), role: NodeRole::Secondary, fetch: true, submit: true, connections: None, borsh_url: None }
+        NodeConfig {
+            url: String::new(),
+            role: NodeRole::Secondary,
+            fetch: true,
+            submit: true,
+            connections: None,
+            borsh_url: None,
+            may_lead: None,
+        }
     }
 }
 

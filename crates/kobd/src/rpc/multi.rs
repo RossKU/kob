@@ -115,6 +115,8 @@
 //!
 //! A named node can lead when all of these hold.
 //!
+//! - The configuration lets it lead (`NodeSpec::may_lead`). A submit-only node does not, unless the
+//!   operator says so.
 //! - It is not dropped, has no alarm and is not suspect.
 //! - It did not contradict the authority within [`PROMOTE_CLEAN_FOR`].
 //! - Within [`PROMOTE_CHECK_TIMEOUT`] it shows the right network and is synced. It knows the
@@ -160,6 +162,13 @@ pub struct NodeSpec {
     /// It vouches for the authority's own answers too (see the module documentation). This is the
     /// second node of a resolver pair.
     pub cross_check: bool,
+    /// It may become the chain authority when the authority's chain requests keep failing
+    /// (`MultiNode::authority_failing`).
+    ///
+    /// The configuration decides (`[[nodes]] may_lead`). It defaults to whether the node serves
+    /// windows, so a submit-only node never leads unless the operator says so. The configured
+    /// primary always may.
+    pub may_lead: bool,
 }
 
 /// What `/v1/health` reports per node.
@@ -1017,6 +1026,7 @@ impl<N: ChainSource> MultiNode<N> {
     ///
     /// A node qualifies when all of these hold.
     ///
+    /// - The configuration lets it lead ([`NodeSpec::may_lead`]).
     /// - It has a node. A resolver entry that is being replaced has none.
     /// - It is not dropped.
     /// - It has no alarm (`rpc::judge`). An alarm can mean another network, not synced, hanging,
@@ -1027,7 +1037,7 @@ impl<N: ChainSource> MultiNode<N> {
     fn candidates(&self, a: usize) -> Vec<usize> {
         let now = Instant::now();
         (0..self.nodes.len())
-            .filter(|&i| i != a)
+            .filter(|&i| i != a && self.specs[i].may_lead)
             .filter(|&i| {
                 let entry = self.board.entry(i);
                 let Some(node) = self.board.node_of(i) else { return false };
@@ -1921,8 +1931,15 @@ mod tests {
     fn node_credentials_stay_out_of_health_and_metrics() {
         let secret = "wss://user:hunter2@node.example/wrpc/json?apikey=SECRETKEY";
         let board = NodeBoard::new(&[
-            NodeSpec { url: "ws://127.0.0.1:18210".into(), fetch: true, submit: true, connections: 1, cross_check: false },
-            NodeSpec { url: secret.into(), fetch: true, submit: true, connections: 1, cross_check: false },
+            NodeSpec {
+                url: "ws://127.0.0.1:18210".into(),
+                fetch: true,
+                submit: true,
+                connections: 1,
+                cross_check: false,
+                may_lead: true,
+            },
+            NodeSpec { url: secret.into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true },
         ]);
         assert_eq!(board.url(1), "wss://node.example/...");
         let mut h = crate::indexer::status::HealthSnapshot::new("testnet-10");
@@ -2049,7 +2066,14 @@ mod tests {
     }
 
     fn pair(primary: Arc<Fixed>, second: Arc<Fixed>) -> MultiNode<Fixed> {
-        let spec = |url: &str, cross_check| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check };
+        let spec = |url: &str, cross_check| NodeSpec {
+            url: url.into(),
+            fetch: true,
+            submit: true,
+            connections: 1,
+            cross_check,
+            may_lead: true,
+        };
         MultiNode::new(vec![(spec("resolver", false), primary.clone()), (spec("resolver:2", true), second)], primary)
     }
 
@@ -2099,7 +2123,8 @@ mod tests {
         assert_eq!(one.authority_contradicted(cursor, why), StoreContradiction::Replaced);
         super::super::resolver::tests::set_current("resolver", &b);
         assert!(matches!(one.authority_contradicted(cursor, why), StoreContradiction::Halt(Some(_))), "the third at one cursor");
-        let spec = |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false };
+        let spec =
+            |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true };
         let own = Fixed::new(&[1], Ok(&[]));
         let m = MultiNode::new(vec![(spec("ws://127.0.0.1:18210"), own.clone())], own);
         assert_eq!(

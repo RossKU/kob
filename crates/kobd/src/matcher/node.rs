@@ -826,6 +826,7 @@ mod tests {
                     submit: true,
                     connections: 1,
                     cross_check: false,
+                    may_lead: true,
                 })
                 .collect::<Vec<_>>(),
         );

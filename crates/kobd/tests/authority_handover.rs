@@ -105,7 +105,12 @@ async fn serial() -> tokio::sync::MutexGuard<'static, ()> {
 }
 
 fn spec(url: &str, fetch: bool) -> NodeSpec {
-    NodeSpec { url: url.into(), fetch, submit: true, connections: 1, cross_check: false }
+    NodeSpec { url: url.into(), fetch, submit: true, connections: 1, cross_check: false, may_lead: true }
+}
+
+/// A node that only takes submissions (`[[nodes]] fetch = false`): it may not lead unless the configuration says so.
+fn submit_only(url: &str) -> NodeSpec {
+    NodeSpec { may_lead: false, ..spec(url, false) }
 }
 
 struct Run {
@@ -372,4 +377,26 @@ async fn the_recovered_old_primary_does_not_take_the_authority_back() {
     assert_eq!((h.nodes[0].promoted, h.nodes[1].promoted), (1, 1));
     assert_eq!(r.db(), fresh_snapshot(&node.chain()), "the same rows as a clean replay across both handovers");
     kobd::rpc::judge::set_alarm_clear_after(kobd::rpc::judge::ALARM_CLEAR_AFTER);
+}
+
+/// Only a node the operator lets lead is promoted (`NodeSpec::may_lead`). A submit-only node (`[[nodes]] fetch = false`,
+/// so `may_lead` is false unless set) is never even checked as a candidate, however healthy: the primary stays the
+/// authority with its alarm.
+#[tokio::test]
+async fn a_submit_only_node_is_never_promoted() {
+    let _g = serial().await;
+    let node = MockNode::new("testnet-10");
+    node.push_empty(20);
+    let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+    let (ua, ub) = ("ws://10.5.0.1:18210", "ws://10.5.0.2:18210");
+    let r = run(node.anchor(), vec![(spec(ua, true), a.clone()), (submit_only(ub), b.clone())], 1, Duration::from_millis(1));
+    r.until(500, "first sync", |r| r.cursor() == Some(node.tip())).await;
+    a.chain_down.store(true, Ordering::Relaxed);
+    node.push_empty(5);
+    let out = r.steps(40).await;
+    assert!(out.iter().all(|o| matches!(o, StepOutcome::Retry(_))), "{out:?}");
+    assert_eq!(r.source.board().authority(), 0, "not promoted");
+    assert_eq!(r.health.snapshot().nodes[1].promoted, 0);
+    assert_eq!(b.chain_calls.load(Ordering::Relaxed), 0, "never checked as a candidate");
+    assert!(kobd::rpc::judge::alarm_of(ua).is_some_and(|w| w.contains("chain requests keep failing")), "the primary's alarm");
 }

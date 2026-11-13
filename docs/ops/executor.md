@@ -1297,7 +1297,7 @@ rpc_url = "ws://127.0.0.1:18210"   # the primary: chain authority (and a body no
 primary_fetch = true               # false: the primary serves windows only when no other node can (it stays the authority)
 [[nodes]]
 url = "wss://boson-10.kaspa.red/kaspa/testnet-10/wrpc/json"
-# role = "secondary"   fetch = true   submit = true   connections = <fetch_parallel>
+# role = "secondary"   fetch = true   submit = true   connections = <fetch_parallel>   may_lead = <fetch>
 [[nodes]]
 url = "wss://alpha-10.kaspa.stream/kaspa/testnet-10/wrpc/json"
 ```
@@ -3150,7 +3150,8 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
 public read server: faster, not shared, nobody between the operator and the chain). It is the one chain authority, with no
 cross-check unless `[[nodes]]` add one (Part B 3, *Several nodes*), and a single point of failure unless the failover below
 is on. A `[[nodes]]` entry with a fixed public URL is a further body node, checked against the primary and taking
-submissions. It becomes the chain authority only when the primary's chain requests keep failing (below).
+submissions. It becomes the chain authority only when the primary's chain requests keep failing and its `may_lead` is on
+(below).
 
 **A failing chain authority** (`indexer::follower`, `rpc::multi`; every role, the Executor's indexer included). A node can
 answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
@@ -3158,8 +3159,9 @@ another node) time out or lose the connection: on 2026-11-13 such a primary held
 status `authority, ok`. When **2 chain requests in a row fail on the wire and the cursor has not moved for 3 minutes**
 (the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), the authority is handed over:
 
-* **Own node with `[[nodes]]`:** the first other node, in the order of the list, that is not dropped, has no alarm, is not
-  behind, has not contradicted the authority within 10 minutes and shows within 30 s that it is on the right network,
+* **Own node with `[[nodes]]`:** the first other node, in the order of the list, that may lead (`may_lead`, below), is not
+  dropped, has no alarm, is not behind, has not contradicted the authority within 10 minutes and shows within 30 s that
+  it is on the right network,
   synced, knows the cursor and has it on its selected chain becomes the chain authority. Since the stored chain is the
   cursor's own chain of selected parents, such a node agrees with everything the store holds; its first answers may still
   remove at most 100 chain blocks and must know the cursor, or they are refused and nothing is applied. The old primary
@@ -3171,6 +3173,13 @@ status `authority, ok`. When **2 chain requests in a row fail on the wire and th
   when the resolvers name no other).
 * **Single node:** nothing to hand over. It keeps its node alarm and the follower retries with its backoff, as before.
   With `[failover]` the public pair is checked and, when it can serve, becomes the chain source.
+
+Which nodes may take over is the operator's choice, per `[[nodes]]` entry: `may_lead = true` or `false`. The default is
+the entry's `fetch`. A node that serves windows is a full peer the operator listed, and it may lead. A submit-only node
+(`fetch = false`) is there to spread transactions, not to decide the chain, so it never leads unless `may_lead = true`.
+The primary (`rpc_url`, or the entry with `role = "primary"`) may always lead again. A candidate is checked on its own
+answers (network, sync, the cursor on its chain), so the setting is the operator's say in which nodes the store may
+follow: set `may_lead = false` on a node listed only for its bandwidth, such as a fixed public node.
 
 The handover is logged at warn (`another node is the chain authority now`, with both nodes), counted in
 `authority_replaced_total` (`kob_indexer_authority_replaced_total`) and the new authority's `nodes[].promoted`, and the
