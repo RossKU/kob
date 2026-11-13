@@ -62,7 +62,7 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
 function SystemItem(props: { e: SystemNotice }) {
   const n = useNotify();
   const e = props.e;
-  const body = e.kind === 'node' ? t(e.reason === 'manual' ? 'notify.system.node.manual' : 'notify.system.node.auto') : t('notify.system.indexer.body');
+  const body = e.kind === 'node' ? t(e.reason === 'manual' ? 'notify.system.node.manual' : e.behind ? 'notify.system.node.behind' : 'notify.system.node.auto') : t('notify.system.indexer.body');
   return (
     <li class={`notify-item${e.read ? '' : ' notify-unread'}`} data-testid="notify-item-system" data-kind={e.kind} data-read={e.read ? 'true' : 'false'} onClick={() => n.markRead(e.id)}>
       <div class="notify-item-main">

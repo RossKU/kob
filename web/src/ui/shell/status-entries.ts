@@ -158,7 +158,7 @@ export function statusEntries(f: StatusFacts): StatusEntry[] {
     const manual = sa.reason === 'manual';
     out.push({
       key: 'standalone', tone: 'info', class: 'banner-compact', testid: 'banner-standalone',
-      text: t(manual ? 'shell.banner.standalone' : 'shell.banner.standaloneAuto', { time }),
+      text: t(manual ? 'shell.banner.standalone' : sa.behind ? 'shell.banner.standaloneBehind' : 'shell.banner.standaloneAuto', { time }),
       standalone: { connecting: sa.phase === 'connecting', back: sa.indexerBack },
       link: { href: '#/settings', text: t('shell.banner.standaloneSettings') },
     });

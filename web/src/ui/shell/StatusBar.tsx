@@ -21,7 +21,8 @@ export function useTradingStatus(): { level: TradingLevel; code: TradingCode; te
   const sa = useStandalone(standalone);
   const backup = useFailoverState(failover);
   const s = tradingStatus({ nodeReachable: node.reachable, indexer: indexer.assessment, standalone: sa, fallback: !!standalone && standalone.prefs.auto, backup: !!backup?.onBackup });
-  const text = t(`shell.trading.${s.code}`, { time: clockText(sa?.sinceMs ?? Date.now()), host: backup?.host ?? '', lag: formatLag(indexer.assessment.lagSeconds) });
+  const key = s.code === 'node' && sa?.behind ? 'nodeBehind' : s.code;
+  const text = t(`shell.trading.${key}`, { time: clockText(sa?.sinceMs ?? Date.now()), host: backup?.host ?? '', lag: formatLag(indexer.assessment.lagSeconds) });
   return { ...s, text };
 }
 

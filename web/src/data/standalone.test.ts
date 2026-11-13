@@ -11,7 +11,7 @@ import type { StreamBlock } from './block-stream';
 import type { IndexerApi } from './indexer';
 import type { BookOrderView, HealthView, LevelView } from './indexer-types';
 import { IndexerError } from './indexer';
-import { ENTER_CHECK_MS, RECHECK_MS, RETURN_CHECK_MS, StandaloneController, VERIFY_DELAY_MS, isIndexerDown, modeIndexer, type StandalonePrefs } from './standalone';
+import { ENTER_CHECK_MS, LAG_RETURN_SECONDS, LAG_SWITCH_SECONDS, RECHECK_MS, RETURN_CHECK_MS, StandaloneController, VERIFY_DELAY_MS, isIndexerDown, modeIndexer, type StandalonePrefs } from './standalone';
 import { StreamBook, bookViewOf, listingOf, MIN_ORDER_VALUE_SOMPI, orderViewOf, tokensViewOf } from './stream-book';
 
 const kob = loadKobNode();
@@ -20,6 +20,8 @@ const EMPTY = { address: null, amount: '0', scriptPublicKey: '', blockDaaScore: 
 const asAnnounced = (tx: TxJson): TxJson => ({ ...tx, inputs: tx.inputs.map((i) => ({ ...i, utxo: { ...EMPTY } })) });
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 const health = (state: string): HealthView => ({ state, ok: true, network: 'testnet-10', cursor_daa: 1, node_daa: 1, lag_daa: 0, lag_seconds: 0, settle_depth_daa: 100 });
+const lagged = (sec: number): HealthView => ({ ...health('following'), lag_seconds: sec, lag_daa: sec * 10 });
+const assess = (h: HealthView) => assessIndexerHealth({ health: h, error: null, configured: true, network: 'testnet-10' });
 const bad = assessIndexerHealth({ health: null, error: new Error('down'), configured: true, network: 'testnet-10' });
 const good = assessIndexerHealth({ health: health('following'), error: null, configured: true, network: 'testnet-10' });
 
@@ -176,6 +178,76 @@ describe('the mode', () => {
     await expect(ix.order('bb'.repeat(32))).rejects.toMatchObject({ code: 'standalone_mode' });
     expect((await ix.book(TOKEN)).asks).toEqual([]);
     expect(real.book).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('an indexer that falls behind the chain', () => {
+  it('over the threshold switches (the second look agrees), and says it is behind', async () => {
+    const h = harness();
+    h.setHealth(lagged(LAG_SWITCH_SECONDS + 60));
+    h.c.report(assess(lagged(LAG_SWITCH_SECONDS + 60)));
+    expect(h.c.state.active).toBe(false);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state).toMatchObject({ active: true, reason: 'auto', behind: true });
+  });
+
+  it('a lag given in DAA only counts (10 DAA per second); at the threshold it does not switch', async () => {
+    const h = harness();
+    const daaOnly = (sec: number, state = 'following'): HealthView => ({ ...health(state), lag_seconds: null, lag_daa: sec * 10 });
+    h.setHealth(daaOnly(LAG_SWITCH_SECONDS));
+    h.c.report(assess(daaOnly(LAG_SWITCH_SECONDS)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS * 3);
+    expect(h.c.state.active).toBe(false);
+    h.setHealth(daaOnly(LAG_SWITCH_SECONDS + 30, 'catching_up'));
+    h.c.report(assess(daaOnly(LAG_SWITCH_SECONDS + 30, 'catching_up')));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state).toMatchObject({ active: true, behind: true });
+  });
+
+  it('a second look that finds it caught up cancels the switch', async () => {
+    const h = harness();
+    h.setHealth(lagged(0));
+    h.c.report(assess(lagged(500)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(false);
+  });
+
+  it('returns only once caught up, on two looks; in between it stays (no flapping)', async () => {
+    const h = harness();
+    h.setHealth(lagged(500));
+    h.c.report(assess(lagged(500)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    // under the switch threshold but over the return bound: stays, however long
+    h.setHealth(lagged(LAG_SWITCH_SECONDS - 30));
+    h.c.report(assess(lagged(LAG_SWITCH_SECONDS - 30)));
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 6);
+    expect(h.c.state.active).toBe(true);
+    // caught up once, then behind again: the two looks start over
+    h.setHealth(lagged(LAG_RETURN_SECONDS - 5));
+    h.c.report(assess(lagged(LAG_RETURN_SECONDS - 5)));
+    h.setHealth(lagged(LAG_SWITCH_SECONDS - 30));
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    // caught up on two looks in a row: it ends
+    h.setHealth(lagged(LAG_RETURN_SECONDS - 5));
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS * 3);
+    expect(h.c.state).toMatchObject({ active: false, behind: false });
+  });
+
+  it('with automatic fallback off it never switches on lag', async () => {
+    const h = harness({ auto: false });
+    h.setHealth(lagged(900));
+    h.c.report(assess(lagged(900)));
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS * 5);
+    expect(h.c.state.active).toBe(false);
+  });
+
+  it('an indexer that is down is not "behind"', async () => {
+    const h = harness();
+    h.c.report(bad);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state).toMatchObject({ active: true, behind: false });
   });
 });
 

@@ -15,6 +15,8 @@ export interface HealthAssessment {
   level: HealthLevel;
   code: HealthCode;
   lagSeconds: number | null;
+  /** the lag in seconds from `lag_seconds`, else from `lag_daa` (10 DAA per second); null when the indexer reports none */
+  lagEstimate?: number | null;
   /** the trading data can be trusted as current */
   fresh: boolean;
 }
@@ -39,7 +41,8 @@ export interface HealthInput {
 }
 
 export function assessIndexerHealth(i: HealthInput): HealthAssessment {
-  const mk = (level: HealthLevel, code: HealthCode, lagSeconds: number | null = null): HealthAssessment => ({ level, code, lagSeconds, fresh: level === 'ok' });
+  const est = !i.error && i.health ? (typeof i.health.lag_seconds === 'number' ? i.health.lag_seconds : typeof i.health.lag_daa === 'number' ? i.health.lag_daa / 10 : null) : null;
+  const mk = (level: HealthLevel, code: HealthCode, lagSeconds: number | null = null): HealthAssessment => ({ level, code, lagSeconds, lagEstimate: est, fresh: level === 'ok' });
   if (!i.configured) return mk('unknown', 'not-configured');
   if (i.error) return mk('bad', 'unreachable');
   const h = i.health;

@@ -113,3 +113,52 @@ test('the indexer goes down: one notification, a yellow dot, no warnings; a limi
   for (const id of GONE) await expect(page.getByTestId(id), id).toHaveCount(0);
   await expect(page.getByTestId('live-indicator')).not.toHaveText('Via node');
 });
+
+test('the indexer answers but falls behind the chain: one notification, a yellow dot, trading through the node; one more and green once it has caught up', async ({ appPage: page, mock }) => {
+  test.setTimeout(240_000);
+  await fund(mock, 'alice', { tokens: 50n });
+  const resting = page.waitForResponse((r) => /\/v1\/orders\?/.test(r.url()) && r.url().includes('status=active'));
+  await openMarket(page, mock);
+  await resting;
+  await expect(asks(page).first()).toBeVisible();
+  await expect(dot(page)).toHaveAttribute('data-level', 'ok');
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { amount: '30', price: '0.05' });
+  await waitReviewable(page);
+
+  // five minutes behind (3000 DAA, 10 per second): over the two-minute bound
+  await mock.post('/mock/health', { state: 'following', lag_daa: 3_000 });
+  await expect(dot(page)).toHaveAttribute('data-trading', 'node', { timeout: 40_000 });
+  await expect(dot(page)).toHaveAttribute('data-level', 'warn');
+  await expect(page.getByTestId('notify-unread')).toHaveText('1');
+  await openBell(page);
+  await expect(system(page)).toHaveCount(1);
+  await expect(system(page)).toHaveAttribute('data-kind', 'node');
+  await expect(system(page)).toContainText('Trading through your node');
+  await expect(system(page)).toContainText('behind the chain');
+  await closeBell(page);
+  await expect(page.getByTestId('live-indicator')).toHaveText('Via node');
+  await expect.poll(() => asks(page).count()).toBeGreaterThanOrEqual(8);
+
+  // trading works through the node on the kept data
+  await fillFields(page, { amount: '30', price: '0.05' });
+  await clickPlace(page);
+  const sell = await placedWithoutIndexer(mock, await waitSubmitted(page));
+  expect(onChainTerms(sell)[0]!.state.price).toBe('5000000');
+
+  // a minute behind is still not caught up: it stays on the node (no flapping)
+  await mock.post('/mock/health', { state: 'following', lag_daa: 600 });
+  await page.waitForTimeout(12_000);
+  await expect(dot(page)).toHaveAttribute('data-trading', 'node');
+
+  // caught up: one more notification, the dot green
+  await mock.post('/mock/health', { state: 'following', lag_daa: 0 });
+  await expect(dot(page)).toHaveAttribute('data-level', 'ok', { timeout: 40_000 });
+  await expect(dot(page)).toHaveAttribute('data-trading', 'indexer');
+  await openBell(page);
+  await expect(system(page)).toHaveCount(2);
+  await expect(system(page).first()).toHaveAttribute('data-kind', 'indexer');
+  await expect(system(page).first()).toContainText('Back on the indexer');
+  await closeBell(page);
+  await expect(page.getByTestId('live-indicator')).not.toHaveText('Via node');
+});

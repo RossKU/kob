@@ -17,9 +17,11 @@
 //     network, without its node), or the FIRST market read that finds it down (`readFailed`), is asked once more after ENTER_CHECK_MS; still bad,
 //     standalone mode starts, and the read that failed is answered from it. With failover (data/indexer-failover.ts) the report is about the active
 //     indexer and the failover gets its time first (`fastFallback` off): a usable backup keeps the app on the indexers;
-//   * `autoReturn` (default on): a report that the indexer is usable again (`ok`, or `warn`: reachable, minutes behind) is checked once more after
-//     RETURN_CHECK_MS (the mode asks the indexer's health itself every few seconds); still usable, an automatic mode ends and the indexer's book is
-//     read again (its book wins). Off: the mode stays and `indexerBack` says it may end (`returnToIndexer`, the button of the bell's entry).
+//     An indexer that answers but is BEHIND the chain by more than LAG_SWITCH_SECONDS (its health's `lag_seconds`, else `lag_daa` / 10) counts the same
+//     way (`behind`: the mode says so in its texts; the same second look, the same kept data);
+//   * `autoReturn` (default on): a report that the indexer is caught up (`ok` and within LAG_RETURN_SECONDS of the chain) is checked once more after
+//     RETURN_CHECK_MS (the mode asks the indexer's health itself every few seconds); still caught up, an automatic mode ends and the indexer's book is
+//     read again (its book wins). Between the two bounds the mode stays (no flapping). Off: the mode stays and `indexerBack` says it may end (`returnToIndexer`, the button of the bell's entry).
 //
 // What the page already read from the indexer in this session is KEPT, not dropped (data/stream-carry.ts: the candles, trades and 24 h figures of the
 // markets it loaded, the token list with the facts of open-list tokens, the activity rows, the resting orders): the views merge what the node shows
@@ -56,6 +58,10 @@ export const DEFAULT_STANDALONE: Readonly<StandalonePrefs> = Object.freeze({ man
 export const ENTER_CHECK_MS = 1_000;
 /** A usable report is checked once more after this long before an automatic mode ends (an indexer that flickers does not end it). */
 export const RETURN_CHECK_MS = 5_000;
+/** An indexer that answers but is more than this many seconds behind the chain is not used: an automatic mode starts (like an indexer that is down). */
+export const LAG_SWITCH_SECONDS = 120;
+/** An automatic mode ends only once the indexer is within this many seconds of the chain (well under LAG_SWITCH_SECONDS, so the two do not flap). */
+export const LAG_RETURN_SECONDS = 20;
 /** With further indexers the failover gets this long to find a usable one first (its re-checks and one round of probes take about 12 s). */
 export const ENTER_CHECK_FAILOVER_MS = 20_000;
 /** That check of the indexer is cut off after this long. */
@@ -99,6 +105,8 @@ export interface StandaloneState {
   orders: number;
   /** an automatic mode with `autoReturn` off: the indexer answers again (`returnToIndexer` ends the mode) */
   indexerBack: boolean;
+  /** an automatic mode: it started because the indexer is behind the chain (not because it cannot be reached) */
+  behind: boolean;
 }
 
 export interface StandaloneDeps {
@@ -114,6 +122,10 @@ export interface StandaloneDeps {
   prefs?: Partial<StandalonePrefs>;
   /** how long a bad report is waited on before the indexer is asked again (default ENTER_CHECK_MS; longer with failover, which switches first) */
   enterCheckMs?: number;
+  /** seconds behind the chain from which an answering indexer is left (default LAG_SWITCH_SECONDS) */
+  lagSwitchSeconds?: number;
+  /** seconds behind the chain up to which an automatic mode may end (default LAG_RETURN_SECONDS) */
+  lagReturnSeconds?: number;
   /** a market read that finds the indexer down starts the check at once and waits for it (default on; off with failover, which switches first) */
   fastFallback?: boolean;
   /** the registry's facts of a token: its orders are listed only with them, and its scale is the price basis */
@@ -123,7 +135,6 @@ export interface StandaloneDeps {
   clearTimer?: (h: unknown) => void;
 }
 
-const isUsable = (a: HealthAssessment): boolean => a.level === 'ok' || a.level === 'warn';
 
 /** An indexer read that failed because the indexer is down (no answer, a timeout, a server error), not a refusal, a cancel or a missing route. */
 export function isIndexerDown(e: unknown): boolean {
@@ -154,10 +165,12 @@ export class StandaloneController {
   private readonly clearTimer: (h: unknown) => void;
   private prefsNow: StandalonePrefs;
   private readonly enterCheckMs: number;
+  private readonly lagSwitch: number;
+  private readonly lagReturn: number;
   private readonly fastFallback: boolean;
   private readonly book = new StreamBook();
   private readonly listeners = new Set<(s: StandaloneState) => void>();
-  private snap: StandaloneState = { active: false, reason: null, phase: 'off', sinceMs: null, version: 0, orders: 0, indexerBack: false };
+  private snap: StandaloneState = { active: false, reason: null, phase: 'off', sinceMs: null, version: 0, orders: 0, indexerBack: false, behind: false };
   private gen = 0;
   private daa = 0n;
   private sub: BlockSubscription | null = null;
@@ -207,6 +220,8 @@ export class StandaloneController {
     this.prefsNow = { ...DEFAULT_STANDALONE, ...(d.prefs ?? {}) };
     this.enterCheckMs = d.enterCheckMs ?? ENTER_CHECK_MS;
     this.fastFallback = d.fastFallback ?? true;
+    this.lagSwitch = d.lagSwitchSeconds ?? LAG_SWITCH_SECONDS;
+    this.lagReturn = d.lagReturnSeconds ?? LAG_RETURN_SECONDS;
     this.indexer = standaloneIndexer(this);
     if (this.prefsNow.manual) this.enter('manual');
   }
@@ -233,30 +248,51 @@ export class StandaloneController {
     this.prefsNow = { ...this.prefsNow, ...p };
     if (this.prefsNow.manual) {
       if (!this.snap.active) this.enter('manual');
-      else if (this.snap.reason !== 'manual') this.set({ reason: 'manual', indexerBack: false });
+      else if (this.snap.reason !== 'manual') this.set({ reason: 'manual', indexerBack: false, behind: false });
       return;
     }
     if (this.snap.reason === 'manual') this.exit();
     else if (this.snap.indexerBack && this.prefsNow.autoReturn) this.exit();
   }
 
+  /** The indexer answers but is further behind the chain than the switch bound (a lag it does not report is not held against it). */
+  private isBehind(a: HealthAssessment): boolean {
+    return (a.level === 'ok' || a.level === 'warn') && typeof a.lagEstimate === 'number' && a.lagEstimate > this.lagSwitch;
+  }
+
+  /** The indexer is fit to be left for: it is down or behind the chain. */
+  private isUnfit(a: HealthAssessment): boolean {
+    return a.level === 'bad' || this.isBehind(a);
+  }
+
+  /** The indexer is caught up: healthy and within the return bound (a lag it does not report counts as caught up). */
+  private isCaughtUp(a: HealthAssessment): boolean {
+    return a.level === 'ok' && (typeof a.lagEstimate !== 'number' || a.lagEstimate <= this.lagReturn);
+  }
+
   /** The health of the indexer in use (the status poll): starts an automatic mode when it stays bad, ends it (or offers to) when it stays usable. */
   report(a: HealthAssessment): void {
     if (this.disposed || this.manual) return;
-    if (isUsable(a)) {
-      if (!this.entering) {
-        this.cancel('enterTimer');
-        this.release();
-      }
-      if (!this.snap.active) return;
-      if (this.prefsNow.autoReturn) this.armReturn();
-      else if (!this.snap.indexerBack) this.set({ indexerBack: true });
+    if (this.isUnfit(a)) {
+      this.disarmReturn();
+      if (this.snap.indexerBack) this.set({ indexerBack: false });
+      this.armEnter();
       return;
     }
-    if (a.level !== 'bad') return;
-    this.disarmReturn();
-    if (this.snap.indexerBack) this.set({ indexerBack: false });
-    this.armEnter();
+    if (a.level !== 'ok' && a.level !== 'warn') return;
+    if (!this.entering) {
+      this.cancel('enterTimer');
+      this.release();
+    }
+    if (!this.snap.active) return;
+    if (!this.isCaughtUp(a)) {
+      // answering, but not yet within the return bound: the two looks start over
+      this.disarmReturn();
+      if (this.snap.indexerBack) this.set({ indexerBack: false });
+      return;
+    }
+    if (this.prefsNow.autoReturn) this.armReturn();
+    else if (!this.snap.indexerBack) this.set({ indexerBack: true });
   }
 
   /**
@@ -279,7 +315,7 @@ export class StandaloneController {
       this.entering = true;
       void this.probe().then((b) => {
         this.entering = false;
-        if (b.level === 'bad' && gen === this.gen && !this.snap.active && !this.disposed && this.prefsNow.auto) this.enter('auto');
+        if (this.isUnfit(b) && gen === this.gen && !this.snap.active && !this.disposed && this.prefsNow.auto) this.enter('auto', this.isBehind(b));
         this.release();
       });
     }, this.enterCheckMs);
@@ -301,7 +337,7 @@ export class StandaloneController {
       void this.probe().then((b) => {
         if (seq !== this.returnSeq) return;
         this.returnTimer = null;
-        if (gen !== this.gen || !this.snap.active || this.snap.reason !== 'auto' || this.disposed || !isUsable(b)) return;
+        if (gen !== this.gen || !this.snap.active || this.snap.reason !== 'auto' || this.disposed || !this.isCaughtUp(b)) return;
         if (this.prefsNow.autoReturn) this.exit();
         else if (!this.snap.indexerBack) this.set({ indexerBack: true });
       });
@@ -462,7 +498,7 @@ export class StandaloneController {
     this.firstScale.clear();
   }
 
-  private enter(reason: 'manual' | 'auto'): void {
+  private enter(reason: 'manual' | 'auto', behind = false): void {
     this.gen++;
     this.reset();
     this.subscribeFails = 0;
@@ -470,7 +506,7 @@ export class StandaloneController {
     this.cancel('enterTimer');
     this.disarmReturn();
     this.seed();
-    this.snap = { active: true, reason, phase: 'connecting', sinceMs: this.now(), version: this.snap.version + 1, orders: 0, indexerBack: false };
+    this.snap = { active: true, reason, phase: 'connecting', sinceMs: this.now(), version: this.snap.version + 1, orders: 0, indexerBack: false, behind: reason === 'auto' && behind };
     this.publish(false);
     this.emit();
     void this.connect(this.gen);
@@ -514,7 +550,7 @@ export class StandaloneController {
     void sub?.close().catch(() => undefined);
     this.reset();
     if (!wasActive) return;
-    this.snap = { active: false, reason: null, phase: 'off', sinceMs: null, version: this.snap.version + 1, orders: 0, indexerBack: false };
+    this.snap = { active: false, reason: null, phase: 'off', sinceMs: null, version: this.snap.version + 1, orders: 0, indexerBack: false, behind: false };
     this.emit();
     this.release();
   }

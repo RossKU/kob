@@ -11,6 +11,7 @@ describe('system notifications', () => {
     expect(to).toMatchObject({ kind: 'node', reason: 'auto', at: 1000, read: false });
     expect(noticeOfSwitch(auto, off, 2000)).toMatchObject({ kind: 'indexer', reason: null });
     expect(noticeOfSwitch(auto, { active: true, reason: 'manual' }, 3000)).toBeNull();
+    expect(noticeOfSwitch(off, { active: true, reason: 'auto', behind: true }, 4000)).toMatchObject({ kind: 'node', behind: true });
     expect(noticeOfSwitch(off, off, 3000)).toBeNull();
     expect(noticeOfSwitch(off, auto, 1000)!.id).not.toBe(to.id);
   });
