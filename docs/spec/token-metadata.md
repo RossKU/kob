@@ -193,6 +193,14 @@ Whether the issued tokens can be found again depends on whether the genesis name
   one it stores the launch proof after verifying it; `GET /v1/tokens` marks declared tokens (`declaration: true`) and
   `GET /v1/tokens/{covenant_id}/declaration` serves the proof. Nodes keep no transaction index and prune, so the declaration is
   captured as the genesis is accepted; candidates no genesis spent within `declaration_window_hours` (72) are dropped.
+  Storage and bounds (`indexer/kcc23.rs`): a proof is stored once per transaction, not once per covenant id. The genesis and the
+  preparations it binds are rows of `kcc23_txs`, keyed by transaction id, and each covenant id's declaration row names them. The proof
+  JSON is assembled on read. Storing the whole proof per covenant id cost about 100 times the chain data for a genesis with many
+  covenant outputs, so a row written that way is moved to the shared form in bounded batches. A genesis binds at most 4
+  preparations and declares at most 32 covenant ids, and at most 256 covenant ids are examined. The transactions are rebuilt and
+  hashed once per preparation and genesis, not once per covenant id (41 ms at 100 ids and 241 ms at 300 ids when done per id). A
+  candidate preparation no genesis has bound stays in the database and never enters the permanent record log, because any
+  transaction can carry a 16 KiB `0x00{..}` payload.
 * **Web app** (`data/token-declarations.ts`): proofs from the indexer (asked only for tokens `GET /v1/tokens` marks as declared) and
   the creator's own (at once) are verified in kob-wasm
   against the covenant id asked for, kept in memory and, as proofs, in localStorage (re-verified when read back). The facts a token

@@ -1,42 +1,70 @@
-//! KCC-23 token declarations (kaspanet/kccs `kcc-0023.md`, Draft; `kob_protocol::kcc23`): the metadata JSON in the payload of
-//! a version 1 *preparation transaction*, bound to a covenant id because the covenant's genesis spends an output of it.
+//! KCC-23 token declarations, captured from preparation transactions and stored as launch proofs.
 //!
-//! **Capture.** Every accepted transaction whose payload is a declaration (`0x00` and one strict I-JSON object of at most
-//! [`kcc23::MAX_READ_PAYLOAD`] bytes) is kept as a *candidate preparation*: the fields its version 1 id commits to
-//! ([`ProofTx`], [`MAX_CANDIDATE_BYTES`] at most), keyed by its id. An accepted transaction with a covenant output whose
-//! authorising input spends an output of a candidate (accepted in the same batch or earlier) is a genesis candidate: the
-//! launch proof of each covenant id it creates is built from the two transactions and kept only when
-//! [`LaunchProof::verify`] accepts it (it recomputes both ids and the covenant id, so the continuation of an existing
-//! covenant, whose id was not created from that outpoint, is refused). The first declaration of a covenant id stays (a
-//! covenant id has one genesis).
+//! A declaration is the metadata JSON in the payload of a version 1 *preparation transaction*
+//! (kaspanet/kccs `kcc-0023.md`, see `kob_protocol::kcc23`). It is bound to a covenant id because
+//! the covenant's genesis spends an output of the preparation. Storage and bounds are described in
+//! `docs/spec/token-metadata.md`, section 4.
 //!
-//! **Fields a `High` answer lacks.** VSPC v2 at `High` verbosity carries outpoints, sequences, outputs and payloads but not
-//! the version, lock time, subnetwork or gas (`Full` does). They are taken as the standard ones (version 1, lock time 0, the
-//! native subnetwork, gas 0) unless the node reported them, and the fields are kept only when they hash to the transaction
-//! id the node reported: a transaction that hashes otherwise (a non-zero lock time, say) yields no candidate and no proof,
-//! never a wrong one.
+//! # Capture
 //!
-//! **Reorgs and the record log.** Both kinds of row are stamped with the chain block that accepted the transaction and
-//! deleted when it is reverted. The record of a genesis carries a declaration section ([`DeclSection`]: its own fields and the
-//! preparations it binds), so a rebuild from the record log re-creates the proofs with the code of the live path. A candidate
-//! preparation that no genesis has bound is kept in the database only, never in the permanent record log: any transaction
-//! can carry a `0x00{..}` payload of 16 KiB, and the log is permanent and shipped to followers (audit 2026-10-30 I2).
+//! Every accepted transaction whose payload is a declaration (`0x00` and one strict I-JSON object
+//! of at most [`kcc23::MAX_READ_PAYLOAD`] bytes) is kept as a *candidate preparation*. A candidate
+//! holds the fields its version 1 id commits to ([`ProofTx`], at most [`MAX_CANDIDATE_BYTES`]) and
+//! is keyed by that id.
 //!
-//! **Bounds (audit 2026-10-30 I7, I8).** A genesis binds at most [`MAX_BOUND_PREPARATIONS`] preparations and declares at most
-//! [`MAX_BOUND_COVENANTS`] covenant ids ([`MAX_COVENANTS_TRIED`] are examined); the preparation and genesis of a pair are checked
-//! once, then each covenant id costs one binding check. A preparation is written to the record log once, in the frame of the first
-//! genesis that binds it; the frame of a later genesis names it by transaction id ([`DeclSection::refs`], resolved from
-//! `kcc23_txs` where the earlier genesis put it). A record that is relevant to KOB for another reason (a token transfer) carries a
-//! declaration section only when it binds: a preparation payload on it is a database candidate like any other.
+//! An accepted transaction with a covenant output is a genesis candidate when the authorising input
+//! of that output spends an output of a candidate, accepted in the same batch or earlier. The
+//! launch proof of each covenant id it creates is built from the two transactions. It is kept only
+//! when [`LaunchProof::verify`] accepts it. That check recomputes both ids and the covenant id, so
+//! the continuation of an existing covenant is refused: its id was not created from that outpoint.
+//! The first declaration of a covenant id stays, because a covenant id has one genesis.
 //!
-//! **Proofs.** A proof is stored once per transaction, not once per covenant id: the genesis and the preparations it binds are
-//! rows of `kcc23_txs` (content-addressed by transaction id), and each covenant id's declaration row names them. The proof
-//! JSON a client fetches is assembled on read ([`proof_json`]), byte for byte the document the covenant id's verified
-//! [`LaunchProof`] serialises to. A genesis with K covenant outputs stored K proofs, each with the whole preparation and
-//! genesis: about 100x the chain data (audit 2026-10-30 I1). Rows an earlier build wrote (the proof column non-empty) are
-//! read as they are and moved to the shared form in bounded batches ([`compact_legacy`]). Candidates no genesis spent are pruned once older than the declaration window
-//! (`IndexerConfig::declaration_window_hours`, 72 h by default), unless a declaration of the reorg window still names them
-//! (a reverted genesis accepted again finds its preparation).
+//! # Fields a `High` answer lacks
+//!
+//! VSPC v2 at `High` verbosity carries outpoints, sequences, outputs and payloads. It does not
+//! carry the version, lock time, subnetwork or gas, which `Full` does. They are taken as the
+//! standard ones (version 1, lock time 0, the native subnetwork, gas 0) unless the node reported
+//! them. The fields are kept only when they hash to the transaction id the node reported. A
+//! transaction that hashes otherwise, for example with a non-zero lock time, yields no candidate
+//! and no proof, never a wrong one.
+//!
+//! # Reorgs and the record log
+//!
+//! Both kinds of row are stamped with the chain block that accepted the transaction and are deleted
+//! when it is reverted. The record of a genesis carries a declaration section ([`DeclSection`])
+//! with its own fields and the preparations it binds. A rebuild from the record log therefore
+//! re-creates the proofs with the code of the live path.
+//!
+//! A candidate preparation that no genesis has bound is kept in the database only, never in the
+//! record log. Any transaction can carry a 16 KiB `0x00{..}` payload, and the log is permanent and
+//! shipped to followers.
+//!
+//! # Bounds
+//!
+//! - A genesis binds at most [`MAX_BOUND_PREPARATIONS`] preparations and declares at most
+//!   [`MAX_BOUND_COVENANTS`] covenant ids. At most [`MAX_COVENANTS_TRIED`] are examined.
+//! - The preparation and genesis of a pair are checked once, then each covenant id costs one
+//!   binding check.
+//! - A preparation is written to the record log once, in the frame of the first genesis that binds
+//!   it. The frame of a later genesis names it by transaction id ([`DeclSection::refs`]), resolved
+//!   from `kcc23_txs`, where the earlier genesis put it.
+//! - A record that is relevant to KOB for another reason, such as a token transfer, carries a
+//!   declaration section only when it binds. A preparation payload on it is a database candidate
+//!   like any other.
+//!
+//! # Proofs
+//!
+//! A proof is stored once per transaction, not once per covenant id. The genesis and the
+//! preparations it binds are rows of `kcc23_txs`, keyed by transaction id, and each covenant id's
+//! declaration row names them. The proof JSON a client fetches is assembled on read
+//! ([`proof_json`]). It is byte for byte the document that the covenant id's verified
+//! [`LaunchProof`] serialises to.
+//!
+//! Rows with a non-empty proof column are read as they are and moved to the shared form in bounded
+//! batches ([`compact_legacy`]). Candidates that no genesis spent are pruned once older than the
+//! declaration window (`IndexerConfig::declaration_window_hours`, 72 h by default). A candidate is
+//! kept while a declaration of the reorg window still names it, because a reverted genesis that is
+//! accepted again needs its preparation.
 
 use super::db::{DbError, DbResult};
 use crate::hex::Hash32;
@@ -46,12 +74,17 @@ use kob_protocol::kcc23::{self, LaunchProof, ProofCovenant, ProofInput, ProofOut
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashSet;
 
-/// Largest encoding of a candidate preparation (record log and database): its payload is at most
-/// [`kcc23::MAX_READ_PAYLOAD`] bytes, its inputs and outputs get as much again. A token preparation of KOB is a few hundred
-/// bytes; a larger transaction is not kept as a candidate.
+/// Largest encoding of a candidate preparation, in the record log and in the database.
+///
+/// Its payload is at most [`kcc23::MAX_READ_PAYLOAD`] bytes, and its inputs and outputs get as much
+/// again. A token preparation of KOB is a few hundred bytes. A larger transaction is not kept as a
+/// candidate.
 pub const MAX_CANDIDATE_BYTES: usize = 2 * kcc23::MAX_READ_PAYLOAD;
 
-/// Most preparations one genesis binds (the ones its covenant outputs' authorising inputs spend first, in output order).
+/// Most preparations one genesis binds.
+///
+/// They are the ones that the authorising inputs of its covenant outputs spend first, in output
+/// order.
 pub const MAX_BOUND_PREPARATIONS: usize = 4;
 /// Most covenant ids one genesis declares.
 pub const MAX_BOUND_COVENANTS: usize = 32;
@@ -64,33 +97,44 @@ const NATIVE_SUBNETWORK: [u8; 20] = [0; 20];
 /// Section flags of a record ([`DeclSection::encode`]).
 const PREPARATION: u8 = 1;
 const GENESIS: u8 = 2;
-/// Some of the bound preparations are named by transaction id instead of carried (an earlier frame has them).
+/// Some bound preparations are named by transaction id instead of carried, because an earlier frame
+/// has them.
 const REFS: u8 = 4;
 
-/// The declaration section of a record: the transaction's id-relevant fields, whether it is a candidate preparation, and the
-/// candidate preparations its covenant outputs bind (a genesis; empty otherwise).
+/// The declaration section of a record.
+///
+/// It holds the transaction's id-relevant fields, whether it is a candidate preparation, and the
+/// candidate preparations that its covenant outputs bind. The last is empty unless the transaction
+/// is a genesis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeclSection {
     /// The transaction's own fields (they hash to its id).
     pub tx: ProofTx,
     /// Its payload is a declaration: kept as a candidate preparation.
     pub preparation: bool,
-    /// The preparations at least one of its covenant ids was verified against, that the record log does not hold yet.
+    /// The preparations at least one of its covenant ids was verified against.
+    ///
+    /// Only those that the record log does not hold yet.
     pub binds: Vec<ProofTx>,
-    /// Ids of preparations a genesis binds that an earlier declaration already put in `kcc23_txs` (and so in an earlier frame of the
-    /// log): not carried again.
+    /// Ids of bound preparations that an earlier frame of the log already holds.
+    ///
+    /// An earlier declaration put them in `kcc23_txs`, so they are not carried again.
     pub refs: Vec<[u8; 32]>,
 }
 
 impl DeclSection {
-    /// Whether a record whose only content is this section goes to the permanent record log: a genesis does (it carries the
-    /// preparations it binds, so a replay needs nothing else); a candidate no genesis has bound stays in the database only.
+    /// Whether a record whose only content is this section goes to the permanent record log.
+    ///
+    /// A genesis does: it carries the preparations it binds, so a replay needs nothing else. A
+    /// candidate that no genesis has bound stays in the database only.
     pub fn is_logged(&self) -> bool {
         !self.binds.is_empty() || !self.refs.is_empty()
     }
 
-    /// Record-log encoding: flags, the transaction, then (genesis) the preparations carried, then the ones named. A frame that names
-    /// none is byte for byte what the first format wrote.
+    /// Writes the record-log encoding of the section.
+    ///
+    /// It is the flags, the transaction, then, for a genesis, the preparations carried and the ones
+    /// named. A frame that names none is byte for byte what the first format wrote.
     pub fn encode(&self, w: &mut Writer) {
         let flags = if self.preparation { PREPARATION } else { 0 }
             | if self.is_logged() { GENESIS } else { 0 }
@@ -111,6 +155,10 @@ impl DeclSection {
         }
     }
 
+    /// Reads a section written by [`DeclSection::encode`].
+    ///
+    /// Flags that are unknown, empty or inconsistent, and a genesis without a preparation, are
+    /// errors.
     pub fn decode(r: &mut Reader<'_>) -> WireResult<DeclSection> {
         let flags = r.u8()?;
         if flags & !(PREPARATION | GENESIS | REFS) != 0 || flags == 0 || (flags & REFS != 0 && flags & GENESIS == 0) {
@@ -141,7 +189,7 @@ impl DeclSection {
     }
 }
 
-/// Compact encoding of a [`ProofTx`].
+/// Writes the compact encoding of a [`ProofTx`].
 pub fn put_tx(w: &mut Writer, t: &ProofTx) {
     w.var(t.version as u64);
     w.var(t.inputs.len() as u64);
@@ -174,6 +222,7 @@ fn small<T: TryFrom<u64>>(v: u64, what: &'static str) -> WireResult<T> {
     T::try_from(v).map_err(|_| WireError(what))
 }
 
+/// Reads a transaction written by [`put_tx`].
 pub fn get_tx(r: &mut Reader<'_>) -> WireResult<ProofTx> {
     let version = small(r.var()?, "transaction version")?;
     let n = r.count(34)?;
@@ -209,14 +258,14 @@ pub fn get_tx(r: &mut Reader<'_>) -> WireResult<ProofTx> {
     })
 }
 
-/// [`put_tx`] into a buffer of its own (the database form of a candidate).
+/// [`put_tx`] into a buffer of its own, which is the database form of a candidate.
 pub fn encode_tx(t: &ProofTx) -> Vec<u8> {
     let mut w = Writer::new();
     put_tx(&mut w, t);
     w.buf
 }
 
-/// The transaction of a [`encode_tx`] buffer (nothing may follow it).
+/// The transaction in an [`encode_tx`] buffer. Nothing may follow it.
 pub fn decode_tx(b: &[u8]) -> WireResult<ProofTx> {
     let mut r = Reader::new(b);
     let t = get_tx(&mut r)?;
@@ -226,13 +275,15 @@ pub fn decode_tx(b: &[u8]) -> WireResult<ProofTx> {
     Ok(t)
 }
 
-/// The id of a [`ProofTx`] (`None`: a subnetwork id that is not 20 bytes).
+/// The id of a [`ProofTx`], or `None` for a subnetwork id that is not 20 bytes.
 pub fn proof_txid(t: &ProofTx) -> Option<Hash32> {
     t.to_tx().ok().map(|tx| Hash32(kaspa_consensus_core::hashing::tx::id(&tx).as_bytes()))
 }
 
-/// The id-relevant fields of an accepted transaction, the ones a `High` answer lacks taken as the standard ones (see the module
-/// docs); `None` when they do not hash to the id the node reported.
+/// The id-relevant fields of an accepted transaction.
+///
+/// The fields a `High` answer lacks are taken as the standard ones (see the module docs). The
+/// result is `None` when the fields do not hash to the id the node reported.
 pub fn proof_tx(tx: &Tx) -> Option<ProofTx> {
     let inputs = tx
         .inputs
@@ -270,28 +321,34 @@ pub fn proof_tx(tx: &Tx) -> Option<ProofTx> {
     (proof_txid(&p) == Some(tx.verbose_data.transaction_id)).then_some(p)
 }
 
-/// A payload a reader takes as a declaration, of a version 1 transaction.
+/// Whether the payload of a transaction of this version is a declaration a reader accepts.
 pub fn is_declaration(version: u16, payload: &[u8]) -> bool {
     version == 1 && kcc23::looks_like_declaration(payload) && kcc23::decode_limited(payload, kcc23::MAX_READ_PAYLOAD).is_ok()
 }
 
-/// A covenant id `genesis` creates from an output of one of `preps`, verified.
+/// A covenant id that a genesis creates from an output of one of the preparations, verified.
 pub struct Binding {
     /// Index into the preparations.
     pub prep: usize,
+    /// The covenant id the genesis created.
     pub covenant_id: Hash32,
     /// The recomputed id of the preparation.
     pub preparation_txid: [u8; 32],
 }
 
-/// Every covenant id of `genesis` (whose id is `genesis_id`) authorised by an input that spends an output of one of `preps` and bound
-/// to it as [`LaunchProof::verify`] demands, at most [`MAX_BOUND_COVENANTS`] of them out of [`MAX_COVENANTS_TRIED`] examined.
+/// Every covenant id of `genesis` that is bound to one of `preps` as [`LaunchProof::verify`]
+/// demands.
 ///
-/// The transactions are rebuilt and hashed, and the declaration decoded, once per preparation and genesis (not once per covenant
-/// id: 41 ms at 100 ids, 241 ms at 300, audit 2026-10-30 I8); a covenant id then costs one binding check.
+/// `genesis_id` is the id of `genesis`. A covenant id qualifies when its authorising input spends
+/// an output of one of `preps`. At most [`MAX_BOUND_COVENANTS`] are returned, out of
+/// [`MAX_COVENANTS_TRIED`] examined.
+///
+/// The transactions are rebuilt and hashed, and the declaration decoded, once per preparation and
+/// genesis, not once per covenant id. A covenant id then costs one binding check.
 pub fn bindings(genesis: &ProofTx, genesis_id: &Hash32, preps: &[ProofTx]) -> Vec<Binding> {
     use kaspa_consensus_core::Hash;
-    // per preparation, built when a covenant output first names it: `Some(None)` = it fails the id-independent checks
+    // Per preparation, built when a covenant output first names it. `Some(None)` means it fails the
+    // id-independent checks.
     type Built = Option<(kaspa_consensus_core::tx::Transaction, Hash)>;
     let ids: Vec<Option<Hash32>> = preps.iter().map(proof_txid).collect();
     let mut prepared: Vec<Option<Built>> = (0..preps.len()).map(|_| None).collect();
@@ -331,15 +388,17 @@ fn candidate(conn: &Connection, txid: &Hash32) -> DbResult<Option<ProofTx>> {
     Ok(b.and_then(|b| decode_tx(&b).ok()))
 }
 
-/// The declaration section of an accepted transaction (`None`: neither a candidate preparation nor a verified genesis), looked
-/// up against the candidates the database holds.
+/// The declaration section of an accepted transaction, looked up against the stored candidates.
+///
+/// The result is `None` when the transaction is neither a candidate preparation nor a verified
+/// genesis.
 pub fn extract(conn: &Connection, tx: &Tx) -> DbResult<Option<DeclSection>> {
     let version = tx.version.unwrap_or(1);
     let prepares = is_declaration(version, &tx.payload.0);
     let mut preps = Vec::new();
     if version >= 1 {
         let mut asked: HashSet<Hash32> = HashSet::new();
-        // bounded: one primary-key lookup per distinct spent transaction, and only so many preparations are carried
+        // Bounded: one primary-key lookup per distinct spent transaction, and few preparations.
         for c in tx.outputs.iter().filter_map(|o| o.covenant.as_ref()).take(MAX_COVENANTS_TRIED) {
             if preps.len() >= MAX_BOUND_PREPARATIONS {
                 break;
@@ -360,7 +419,8 @@ pub fn extract(conn: &Connection, tx: &Tx) -> DbResult<Option<DeclSection>> {
         return Ok(None);
     };
     let preparation = prepares && encode_tx(&me).len() <= MAX_CANDIDATE_BYTES;
-    // the preparations a covenant id was verified against: carried in full the first time (nothing of the store names them), then by id
+    // The preparations a covenant id was verified against. The first genesis carries one in full,
+    // because nothing of the store names it yet. Later ones name it by id.
     let (mut binds, mut refs): (Vec<ProofTx>, Vec<[u8; 32]>) = (vec![], vec![]);
     if !preps.is_empty() {
         let found = bindings(&me, &txid, &preps);
@@ -377,15 +437,17 @@ pub fn extract(conn: &Connection, tx: &Tx) -> DbResult<Option<DeclSection>> {
     Ok(Some(DeclSection { tx: me, preparation, binds, refs }))
 }
 
-/// A transaction of `kcc23_txs` (the ones declarations name).
+/// A transaction of `kcc23_txs`, the table of the transactions that declarations name.
 fn stored_tx(conn: &Connection, id: &[u8; 32]) -> DbResult<Option<ProofTx>> {
     let b: Option<Vec<u8>> =
         conn.prepare_cached("SELECT tx FROM kcc23_txs WHERE txid = ?1")?.query_row([&id[..]], |r| r.get(0)).optional()?;
     Ok(b.and_then(|b| decode_tx(&b).ok()))
 }
 
-/// Applies a record's declaration section in chain block `seq` (DAA `daa`): the candidate, and the verified proofs of a genesis
-/// (the first declaration of a covenant id stays). Returns the covenant ids that got a declaration.
+/// Applies a record's declaration section in chain block `seq`, with DAA `daa`.
+///
+/// It stores the candidate and the verified proofs of a genesis. The first declaration of a
+/// covenant id stays. Returns the covenant ids that got a declaration.
 pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSection) -> DbResult<Vec<Hash32>> {
     if d.preparation {
         conn.prepare_cached("INSERT OR IGNORE INTO kcc23_candidates (txid, tx, created_block, daa) VALUES (?1, ?2, ?3, ?4)")?
@@ -395,7 +457,8 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
     if !d.is_logged() {
         return Ok(declared);
     }
-    // the preparations the frame carries, then the ones it names (an earlier declaration stored them)
+    // The preparations the frame carries, then the ones it names, which an earlier declaration
+    // stored.
     let mut preps = d.binds.clone();
     for r in &d.refs {
         match stored_tx(conn, r)? {
@@ -406,7 +469,8 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
         }
     }
     for b in bindings(&d.tx, txid, &preps) {
-        // the proof is assembled on read from the two transactions, stored once each (the proof column stays empty)
+        // The proof is assembled on read from the two transactions, which are stored once each. The
+        // proof column stays empty.
         let n = conn
             .prepare_cached(
                 "INSERT OR IGNORE INTO kcc23_declarations (covenant_id, proof, preparation_txid, genesis_txid, genesis_block, genesis_daa) \
@@ -423,9 +487,11 @@ pub fn apply(conn: &Connection, seq: i64, daa: u64, txid: &Hash32, d: &DeclSecti
     Ok(declared)
 }
 
-/// Deletes what chain block `seq` added (its candidates and declarations, and the transactions no declaration names any more).
-/// Returns the declarations deleted (a candidate no genesis bound is not in the record log, so it does not make a revert
-/// relevant to it).
+/// Deletes what chain block `seq` added.
+///
+/// That is its candidates and declarations, and the transactions that no declaration names any
+/// more. Returns the number of declarations deleted. A candidate that no genesis bound is not in
+/// the record log, so it does not make a revert relevant to it.
 pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     conn.prepare_cached("DELETE FROM kcc23_candidates WHERE created_block = ?1")?.execute([seq])?;
     let named: Vec<Vec<u8>> = {
@@ -446,7 +512,9 @@ pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     Ok(n)
 }
 
-/// Deletes the candidates accepted before DAA `before` that no declaration of the stored chain blocks (the reorg window) names.
+/// Deletes the candidates accepted before DAA `before` that no stored declaration names.
+///
+/// Only declarations of the stored chain blocks, the reorg window, count.
 pub fn prune(conn: &Connection, before: u64) -> DbResult<usize> {
     Ok(conn
         .prepare_cached(
@@ -479,16 +547,20 @@ pub fn proof_json(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<St
     Ok(Some(serde_json::to_string(&proof).map_err(|e| DbError::Invalid(format!("launch proof: {e}")))?))
 }
 
-/// Moves up to `limit` declarations an earlier build stored with their whole proof (once per covenant id) to the shared form: the
-/// preparation and genesis go to `kcc23_txs` once, the proof column is emptied. A row whose proof does not parse, or does not
-/// serialise back to the stored document, is left as it is. Each call is one short transaction, so a large store is converted in
-/// steps (`compact_legacy` until it returns 0) and an interrupted run resumes. The pages the proofs held are reused by the
-/// database; the file shrinks only on a `VACUUM`. Returns the rows converted.
+/// Moves declarations stored with a whole proof to the shared form, `limit` at most.
+///
+/// Such a row holds the whole proof once per covenant id. The preparation and genesis go to
+/// `kcc23_txs` once and the proof column is emptied. A row whose proof does not parse, or does not
+/// serialise back to the stored document, is left as it is.
+///
+/// Each call is one short transaction, so a large store is converted in steps: call it until it
+/// returns 0. An interrupted run resumes. The pages the proofs held are reused by the database, and
+/// the file shrinks only on a `VACUUM`. Returns the rows converted.
 pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
     let tx = conn.unchecked_transaction()?;
     let mut done = 0;
-    // in rowid order, so a row that does not convert (a hand-edited one) is passed over, never read again and again at the head of
-    // the scan, and only rows that changed count (audit 2026-10-30 I11)
+    // In rowid order, so a row that does not convert, such as a hand-edited one, is passed over and
+    // never read again at the head of the scan. Only rows that changed count.
     let mut after = 0i64;
     'pages: loop {
         let rows: Vec<(i64, Vec<u8>, String)> = {
@@ -505,7 +577,8 @@ pub fn compact_legacy(conn: &Connection, limit: usize) -> DbResult<usize> {
         for (_, cov, json) in rows {
             let Ok(p) = serde_json::from_str::<LaunchProof>(&json) else { continue };
             let (Some(pid), Some(gid)) = (proof_txid(&p.preparation), proof_txid(&p.genesis)) else { continue };
-            // only a proof that assembles back to the very document that was stored is replaced (nothing is lost)
+            // Only a proof that assembles back to the very document that was stored is replaced, so
+            // nothing is lost.
             if serde_json::to_string(&p).ok().as_deref() != Some(json.as_str()) {
                 continue;
             }
@@ -535,8 +608,10 @@ pub fn declared(conn: &Connection, covenant_id: &Hash32) -> DbResult<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM kcc23_declarations WHERE covenant_id = ?1")?.exists([&covenant_id.0[..]])?)
 }
 
-/// The decimals the indexer's declaration of a covenant id names: `None` without a declaration, `Some(None)` for one that names no
-/// usable `decimals`. The stored proof was verified when it was kept, so only the declaration's own payload is read again.
+/// The decimals the indexer's declaration of a covenant id names.
+///
+/// `None` means no declaration, and `Some(None)` a declaration that names no usable `decimals`. The
+/// stored proof was verified when it was kept, so only the declaration's own payload is read again.
 pub fn declaration_decimals(conn: &Connection, covenant_id: &Hash32) -> DbResult<Option<Option<u32>>> {
     let Some(json) = proof_json(conn, covenant_id)? else { return Ok(None) };
     let decimals = serde_json::from_str::<LaunchProof>(&json)
