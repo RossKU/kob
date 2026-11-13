@@ -1,37 +1,63 @@
-//! `kobd db migrate`: brings a data directory written by an earlier build (schema 5 to 11) to the layout of schema 12 in ONE offline
-//! run, and gives the space back. `kobd db vacuum` ([`vacuum`]): gives the free pages of a store of this build back, offline.
+//! Offline store migration for `kobd db migrate`, and the offline vacuum of `kobd db vacuum`.
 //!
-//! The store is not altered in place. A new file is built beside it and replaces it only when it has been verified; the old file
-//! stays as `index.sqlite3.before-migrate` (the rollback) until the operator deletes it. The steps, each reported with its time:
+//! `kobd db migrate` brings a data directory written by an earlier build (schema 5 to 12) to the
+//! layout of schema 13 in one offline run, and gives the space back. `kobd db vacuum` ([`vacuum`])
+//! gives the free pages of a store of this build back.
 //!
-//! 1. **Copy.** The tables are created from `schema.sql` (without its indexes and triggers), then filled from the old store in bulk
-//!    (`INSERT ... SELECT`, no per-row Rust). The old store is read through views that give every layout the shape of schema 7 (32-byte
-//!    ids in every row; a schema 8 store has them joined back): `orders` get their integer id and name their maker, templates, extension
-//!    commitment, token and quote token by id, the other ids (tokens, holding owners) get their `ids` rows ([`super::ids`]; the values the
-//!    orders name come first, the most used first, so that they take one byte), every row that named an order, a token or an owner by its
-//!    32 bytes names it by the integer, the packed state columns are written in the form [`super::packed`] stores (a value an earlier build
-//!    wrote whole is packed; a packed one is packed again from its decoded form), and the event ids, the sequence numbers and every other
-//!    table are kept as they were. A fill event gets its fee (schema 10): `amount x tip / scale` at the tip the order had at the fill (the
-//!    tip the next in-place amend of the order replaced, `detail.previous.tip` of its event, else the order's tip), as the processor
-//!    writes it; its executor stays unknown (the record log of the past has no payer sections).
-//! 2. **Indexes.** `schema.sql` is applied again: the indexes and triggers are built over the loaded rows (faster than maintaining
-//!    them row by row), then the counters and the activity totals the triggers keep are counted once.
-//! 3. **Verification.** Per table, the rows of the old store (states decoded, ids as their 32 bytes) and the rows of the new one
-//!    (joined back) are hashed in the same order and compared with their counts: a row that does not come back identical, a row
-//!    that has no order (an orphan the integer layout cannot hold), or a count that differs aborts the migration with the old
-//!    store untouched. The new file must also pass `PRAGMA quick_check` and open as a store of this build.
+//! The store is not altered in place. A new file is built beside it and replaces it only when it
+//! has been verified. The old file stays as `index.sqlite3.before-migrate`, the rollback, until the
+//! operator deletes it.
+//!
+//! # Steps
+//!
+//! Each step is reported with its time.
+//!
+//! 1. **Copy.** The tables are created from `schema.sql`, without its indexes and triggers. They
+//!    are then filled from the old store in bulk (`INSERT ... SELECT`, no per-row Rust). The old
+//!    store is read through views that give every layout the shape of schema 7, with 32-byte ids in
+//!    every row. A schema 8 store has them joined back. The load does the following:
+//!    - `orders` get their integer id and name their maker, templates, extension commitment, token
+//!      and quote token by id.
+//!    - The other ids (tokens, holding owners) get their `ids` rows ([`super::ids`]). The values
+//!      the orders name come first, the most used first, so that they take one byte.
+//!    - Every row that named an order, a token or an owner by its 32 bytes names it by the
+//!      integer.
+//!    - The packed state columns are written in the form [`super::packed`] stores. A value an
+//!      earlier build wrote whole is packed. A packed one is packed again from its decoded form.
+//!    - The event ids, the sequence numbers and every other table are kept as they were.
+//!    - A fill event gets its fee, `amount x tip / scale`, as the processor writes it. The tip is
+//!      the one the order had at the fill: the tip that the next in-place amend of the order
+//!      replaced (`detail.previous.tip` of its event), else the order's tip. Its executor stays
+//!      unknown, because the record log of the past has no payer sections.
+//! 2. **Indexes.** `schema.sql` is applied again. The indexes and triggers are built over the
+//!    loaded rows, which is faster than maintaining them row by row. Then the counters and the
+//!    activity totals that the triggers keep are counted once.
+//! 3. **Verification.** Per table, the rows of the old store (states decoded, ids as their 32
+//!    bytes) and the rows of the new one (joined back) are hashed in the same order and compared
+//!    with their counts. The migration aborts, with the old store untouched, on a row that does not
+//!    come back identical, a row that has no order (an orphan the integer layout cannot hold), or a
+//!    count that differs. The new file must also pass `PRAGMA quick_check` and open as a store of
+//!    this build.
 //! 4. **Swap.** The new file replaces `index.sqlite3`.
-//! 5. **Record log.** Every sealed segment is gzip-compressed ([`super::recordlog::compress_sealed`]); the newest is left whole.
+//! 5. **Record log.** Every sealed segment is gzip-compressed
+//!    ([`super::recordlog::compress_sealed`]). The newest is left whole.
 //!
-//! The data directory's writer lock ([`super::lock`]) is held throughout: no `run` or `index` can write it meanwhile. Free disk
-//! needed: the new store (about 3/4 of the old one) plus the temporary files of the index builds, while the old store stays. A run
-//! that stops half way leaves only `index.sqlite3.migrating`, deleted by the next run; the old store is not touched before the
-//! swap. A store of schema 9 to 11 takes the short way ([`upgrade_in_place`]: copied as it is and given the new columns, tables and
-//! triggers). A store that is of schema 12 already is left as it is (the record log step still runs).
+//! # Locking and disk
 //!
-//! Schema 11 counts the executors' transactions the store already holds as of unknown income and network fee (`db::backfill_executor_txs`):
-//! the store keeps no record of who owns their outputs. `kobd db replay` rebuilds their income from the record log (their network fees
-//! stay unknown: the log of the past has no input values).
+//! The data directory's writer lock ([`super::lock`]) is held throughout, so no `run` or `index`
+//! can write it meanwhile. The free disk needed is the new store (about 3/4 of the old one) plus
+//! the temporary files of the index builds, while the old store stays. A run that stops half way
+//! leaves only `index.sqlite3.migrating`, which the next run deletes. The old store is not touched
+//! before the swap.
+//!
+//! A store of schema 9 to 12 takes the short way ([`upgrade_in_place`]). It is copied as it is and
+//! given the new columns, tables and triggers. A store that is of schema 13 already is left as it
+//! is, and the record log step still runs.
+//!
+//! The executors' transactions that the store already holds are counted as of unknown income and
+//! network fee (`db::backfill_executor_txs`), because the store keeps no record of who owns their
+//! outputs. `kobd db replay` rebuilds their income from the record log. Their network fees stay
+//! unknown, because the log of the past has no input values.
 
 use super::db::{self, DbError, DbResult};
 use super::recordlog;
@@ -41,11 +67,12 @@ use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// The suffix of the file the new store replaced.
+/// The suffix of the file that the new store replaced.
 pub const BEFORE_MIGRATE: &str = "before-migrate";
-/// The suffix of the file the new store is built in.
+/// The suffix of the file that the new store is built in.
 const MIGRATING: &str = "migrating";
 
+/// Options of [`migrate`].
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     /// Compress the sealed record-log segments.
@@ -58,27 +85,37 @@ impl Default for Options {
     }
 }
 
-/// One table: rows of the old store, rows of the new one.
+/// Row count of one table of the new store.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableReport {
+    /// Name of the table.
     pub table: String,
+    /// Rows the new store holds in the table.
     pub rows: u64,
 }
 
+/// What [`migrate`] did.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
-    /// The schema version the store was at (8: nothing was rebuilt).
+    /// The schema version the store was at. It equals this build's when nothing was rebuilt.
     pub from_schema: i64,
+    /// Rows per table that the bulk load copied.
     pub tables: Vec<TableReport>,
     /// Rows of `ids` (token covenant ids and holding owners).
     pub ids: u64,
+    /// Size of the store (file and write-ahead log) before the migration, in bytes.
     pub db_bytes_before: u64,
+    /// Size of the store (file and write-ahead log) after the migration, in bytes.
     pub db_bytes_after: u64,
+    /// Size of the record log before the migration, in bytes.
     pub log_bytes_before: u64,
+    /// Size of the record log after the migration, in bytes.
     pub log_bytes_after: u64,
+    /// Sealed record-log segments that were compressed.
     pub log_segments_compressed: usize,
     /// Where the previous store was kept, when the store was rebuilt.
     pub kept_old: Option<PathBuf>,
+    /// Each step with its duration.
     pub steps: Vec<(&'static str, Duration)>,
 }
 
@@ -94,7 +131,7 @@ fn file_bytes(p: &Path) -> u64 {
 }
 
 fn checkpoint(conn: &Connection) {
-    // best effort: a reader holding the log back only delays the truncation
+    // Best effort. A reader holding the log back only delays the truncation.
     let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
 }
 
@@ -145,16 +182,20 @@ fn uri_of(path: &Path) -> String {
     out
 }
 
-// ------------------------------------------------------------------------------------------------ copy
+// -------------------------------------------------------------------------------------------- copy
 
-/// How a column of the new layout is read from the old store: its expression, or `None` to take the column of that name as it is
-/// (NULL when the old store has none: a column an earlier build did not have).
+/// How a column of the new layout is read from the old store.
+///
+/// It is an expression, or `None` to take the column of that name as it is. The column reads as
+/// NULL when the old store has none, as for a column an earlier build did not have.
 type Map<'a> = &'a dyn Fn(&str) -> Option<String>;
 
-/// A table whose rows are loaded from the source view `src_<table>` with some columns computed: every column of the new table (but `skip`)
-/// from `map` or, where it returns `None`, from the source column of the same name with alias `alias`. Source columns that are neither in
-/// the new table nor in `renamed` (the source names the map consumes) would be lost: an error. `ord` (the order of the source rows) is the
-/// view's own.
+/// Loads a table from the source view `src_<table>` with some columns computed.
+///
+/// Every column of the new table but `skip` comes from `map` or, where it returns `None`, from the
+/// source column of the same name with alias `alias`. A source column that is neither in the new
+/// table nor in `renamed` (the source names the map consumes) would be lost, so it is an error.
+/// `ord`, the order of the source rows, is the view's own.
 #[allow(clippy::too_many_arguments)]
 fn copy_mapped(
     conn: &Connection,
@@ -190,18 +231,21 @@ fn copy_mapped(
     count(conn, "main", table)
 }
 
-/// The tables whose columns hold the ids of schema 9 (the source views exist for these).
+/// The tables whose columns hold the ids of schema 9. The source views exist for these.
 const MAPPED: [&str; 7] = ["orders", "order_utxos", "order_events", "order_state", "order_amends", "token_utxos", "token_holdings"];
 
-/// Whether the old store has the table (and so its source view).
+/// Whether the old store has the table, and so its source view.
 fn source_has(conn: &Connection, table: &str) -> DbResult<bool> {
     table_exists(conn, "old", table)
 }
 
-/// The source views `temp.src_<table>`: every table of [`MAPPED`] in the shape of schema 7 (32-byte ids in the rows) plus a leading `ord`
-/// (the order the rows are loaded in: the old rowid). A store of schema 5, 6 or 7 is that shape already; one of schema 8 has its orders,
-/// tokens and owners named by integer, which are joined back (a row that names an order that is not there comes back with a NULL covenant
-/// id and fails the verification).
+/// The source views `temp.src_<table>`.
+///
+/// Each table of [`MAPPED`] is in the shape of schema 7 (32-byte ids in the rows) plus a leading
+/// `ord`, the order the rows are loaded in (the old rowid). A store of schema 5, 6 or 7 is in that
+/// shape already. One of schema 8 has its orders, tokens and owners named by integer, which are
+/// joined back. A row that names an order that is not there comes back with a NULL covenant id and
+/// fails the verification.
 fn create_source_views(conn: &Connection, from_schema: i64) -> DbResult<()> {
     for table in MAPPED {
         if !table_exists(conn, "old", table)? {
@@ -234,11 +278,11 @@ fn create_source_views(conn: &Connection, from_schema: i64) -> DbResult<()> {
             }
             format!("CREATE TEMP VIEW src_{table} AS SELECT {} FROM old.{table} x{joins}", list.join(", "))
         } else if from_schema >= 8 {
-            // the orders of schema 8 keep their blobs: only the integer key is the view's `ord`
+            // The orders of schema 8 keep their blobs. Only the integer key is the view's `ord`.
             let list: Vec<String> = cols.iter().filter(|c| *c != "id").map(|c| format!("x.{c}")).collect();
             format!("CREATE TEMP VIEW src_{table} AS SELECT x.id AS ord, {} FROM old.{table} x", list.join(", "))
         } else {
-            // columns an earlier build did not have read as NULL
+            // Columns an earlier build did not have read as NULL.
             let mut extra = String::new();
             for (t, c) in [("orders", "quote_cov_id"), ("order_amends", "min_fill")] {
                 if table == t && !cols.iter().any(|x| x == c) {
@@ -252,7 +296,7 @@ fn create_source_views(conn: &Connection, from_schema: i64) -> DbResult<()> {
     Ok(())
 }
 
-/// A table loaded as it is: the old columns by name (`ORDER BY` its natural order).
+/// A table loaded as it is: the old columns by name, in the table's natural order.
 fn copy_plain(conn: &Connection, table: &str) -> DbResult<u64> {
     if !table_exists(conn, "old", table)? {
         return Ok(0);
@@ -270,7 +314,8 @@ fn copy_plain(conn: &Connection, table: &str) -> DbResult<u64> {
         [table],
         |r| r.get(0),
     )?;
-    // a WITHOUT ROWID table in the order of its primary key, any other in the order of its rows
+    // A WITHOUT ROWID table goes in the order of its primary key, any other in the order of its
+    // rows.
     let order = if without_rowid {
         let mut st = conn.prepare("SELECT name FROM pragma_table_info(?1, 'main') WHERE pk > 0 ORDER BY pk")?;
         let keys = st.query_map([table], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -289,7 +334,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         say(&format!("  {name}: {rows} rows ({:.1} s)", t.elapsed().as_secs_f64()));
         out.push(TableReport { table: name.to_string(), rows });
     };
-    // meta: every key but the version and the counts the backfills write afresh
+    // meta: every key but the version and the counts that the backfills write afresh.
     {
         let t = Instant::now();
         conn.execute(
@@ -304,8 +349,9 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         done("blocks", n, t, say);
     }
 
-    // the ids the orders name come first, the most used first: they are a few dozen values that a row and an index entry then hold in one or two
-    // bytes (the makers, tokens, programs, templates, the extension commitment and the quote tokens)
+    // The ids the orders name come first, the most used first. They are a few dozen values (the
+    // makers, tokens, programs, templates, the extension commitment and the quote tokens), so a row
+    // and an index entry then hold them in one or two bytes.
     let t = Instant::now();
     conn.execute_batch(
         "CREATE TEMP TABLE dict (h BLOB PRIMARY KEY, c INTEGER NOT NULL) WITHOUT ROWID; \
@@ -319,7 +365,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
          INSERT INTO main.ids (h) SELECT h FROM dict ORDER BY c DESC, h; \
          DROP TABLE dict;",
     )?;
-    // then the other tokens and the holding owners (an owner may be a key, a script hash or a covenant id)
+    // Then the other tokens and the holding owners. An owner may be a key, a script hash or a
+    // covenant id.
     for sql in [
         "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM src_token_holdings GROUP BY token_cov_id",
         "INSERT OR IGNORE INTO main.ids (h) SELECT token_cov_id FROM src_token_utxos GROUP BY token_cov_id",
@@ -330,7 +377,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     }
     done("ids", count(conn, "main", "ids")?, t, say);
 
-    // the orders: ids in the order of the old rows
+    // The orders: ids in the order of the old rows.
     let t = Instant::now();
     let idq = |col: &str| format!("(SELECT id FROM main.ids WHERE h = {col})");
     let n = copy_mapped(
@@ -379,8 +426,9 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     )?;
     done("order_utxos", n, t, say);
 
-    // the tip each in-place amend replaced (`detail.previous.tip`: an amend needs the order's verified state, so every one has it), by the
-    // new order id and the event id: the tip a fill was paid at is the one the next amend after it replaced, or the order's own
+    // The tip each in-place amend replaced (`detail.previous.tip`), by the new order id and the
+    // event id. An amend needs the order's verified state, so every one has it. The tip a fill was
+    // paid at is the one the next amend after it replaced, or the order's own.
     let t = Instant::now();
     conn.execute_batch(
         "CREATE TEMP TABLE amend_tips (order_id INTEGER NOT NULL, id INTEGER NOT NULL, tip INTEGER, PRIMARY KEY (order_id, id)) WITHOUT ROWID;          INSERT INTO temp.amend_tips (order_id, id, tip)            SELECT n.id, e.id, json_extract(kob_dtext(e.detail), '$.previous.tip') FROM src_order_events e JOIN main.orders n ON n.covenant_id = e.covenant_id            WHERE e.kind = 'amend' ORDER BY 1, 2;",
@@ -400,7 +448,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
             "order_id" => Some("n.id".to_string()),
             "token_id" => Some("t.id".to_string()),
             "detail" => Some("CASE WHEN e.detail IS NULL THEN NULL ELSE kob_dpack(kob_dtext(e.detail), e.kind) END".to_string()),
-            // an amend without its previous tip (none should be) makes the fee unknown, not the order's current tip
+            // An amend without its previous tip, which should not happen, makes the fee unknown
+            // rather than the order's current tip.
             "fee" => Some(
                 "CASE WHEN e.kind = 'fill' THEN kob_fill_fee(e.amount, COALESCE((SELECT COALESCE(a.tip, -1) FROM temp.amend_tips a                  WHERE a.order_id = n.id AND a.id > e.id ORDER BY a.id LIMIT 1), n.tip), n.scale) END"
                     .to_string(),
@@ -496,7 +545,8 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
         done(table, n, t, say);
     }
 
-    // the sequences: an id of an autoincrement table is never reused, so the next one is above every id the old store ever gave
+    // The sequences. An id of an autoincrement table is never reused, so the next one is above
+    // every id the old store ever gave.
     for table in ["blocks", "order_events", "order_amends", "rejects", "token_events", "pair_fills", "logo_reports"] {
         let old: Option<i64> = conn
             .query_row("SELECT seq FROM old.sqlite_sequence WHERE name = ?1", [table], |r| r.get(0))
@@ -515,7 +565,7 @@ fn load(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<Vec<TableRepo
     Ok(out)
 }
 
-// ------------------------------------------------------------------------------------------------ verification
+// ------------------------------------------------------------------------------------ verification
 
 /// A hash of the rows of `sql` (every column of every row) and their count.
 fn digest(conn: &Connection, sql: &str) -> DbResult<([u8; 32], u64)> {
@@ -556,7 +606,9 @@ fn digest(conn: &Connection, sql: &str) -> DbResult<([u8; 32], u64)> {
     Ok((*h.finalize().as_bytes(), rows_n))
 }
 
-/// Per table: (name, SQL on the old store (the source views, 32-byte ids), SQL on the new one (ids joined back)).
+/// Per table: its name, the SQL on the old store and the SQL on the new one.
+///
+/// The old SQL reads the source views with 32-byte ids. The new SQL joins the ids back.
 fn checks() -> Vec<(&'static str, String, String)> {
     let gs = |o: &str, ids: [&str; 4]| format!("kob_gstate({o}.genesis_state, {}, {}, {}, {})", ids[0], ids[1], ids[2], ids[3]);
     let old_g = gs("o", ["o.maker", "o.token_cov_id", "o.token_tpl_hash", "o.quote_cov_id"]);
@@ -642,8 +694,10 @@ fn checks() -> Vec<(&'static str, String, String)> {
     ]
 }
 
-/// The activity totals just counted against the rows: the minutes and the hours hold every fill and `create` event once, and the fees
-/// the events carry. A difference aborts the migration (the old store is untouched).
+/// Checks the activity totals just counted against the rows.
+///
+/// The minutes and the hours hold every fill and `create` event once, and the fees the events
+/// carry. A difference aborts the migration and leaves the old store untouched.
 fn check_activity(conn: &Connection) -> DbResult<()> {
     let sums = |iv: i64| -> DbResult<(i64, i64, i64)> {
         Ok(conn.query_row(
@@ -663,7 +717,7 @@ fn check_activity(conn: &Connection) -> DbResult<()> {
             "activity: the buckets ({m:?} by minute, {h:?} by hour) do not add up to the events ({events:?}). Nothing was migrated (the old store is untouched)"
         )));
     }
-    // (schema 11) the executors' transactions, their income and network fees
+    // The executors' transactions, their income and network fees.
     let txs = |iv: i64| -> DbResult<(i64, i64, i64)> {
         Ok(conn.query_row(
             "SELECT COALESCE(SUM(txs), 0), COALESCE(SUM(income_n), 0), COALESCE(SUM(miner_fee_n), 0) FROM main.activity WHERE iv = ?1",
@@ -685,7 +739,9 @@ fn check_activity(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
-/// Step 3 (part): old and new rows, table by table, compared. Tables copied as they were are compared by `SELECT *`.
+/// Step 3 (part): compares the old and new rows, table by table.
+///
+/// Tables copied as they were are compared by `SELECT *`.
 fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
     for (table, old_sql, new_sql) in checks() {
         let t = Instant::now();
@@ -760,19 +816,19 @@ fn verify(conn: &Connection, say: &mut impl FnMut(&str)) -> DbResult<()> {
     Ok(())
 }
 
-// ------------------------------------------------------------------------------------------------ build and swap
+// ---------------------------------------------------------------------------------- build and swap
 
-/// Steps 1 to 3: the new store in `new`, loaded, indexed and verified against `old`.
+/// Steps 1 to 3: builds the new store in `new`, loaded, indexed and verified against `old`.
 fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mut Report, say: &mut impl FnMut(&str)) -> DbResult<()> {
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
     }
     let conn = Connection::open(new)?;
-    // a crash leaves a file nobody reads: no journal, no sync
+    // A crash leaves a file nobody reads, so there is no journal and no sync.
     conn.pragma_update(None, "journal_mode", "OFF")?;
     conn.pragma_update(None, "synchronous", "OFF")?;
     conn.pragma_update(None, "cache_size", -262_144)?;
-    // the sorts of the index builds go to disk (the system temporary directory, or SQLITE_TMPDIR)
+    // The sorts of the index builds go to disk (the system temporary directory, or SQLITE_TMPDIR).
     conn.pragma_update(None, "temp_store", "FILE")?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
     conn.pragma_update(None, "recursive_triggers", "OFF")?;
@@ -785,7 +841,8 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
         conn.pragma_update(None, "auto_vacuum", 2)?;
     }
 
-    // the tables from the schema, then without the indexes and triggers: they are built over the loaded rows
+    // The tables come from the schema, without the indexes and triggers. They are built over the
+    // loaded rows.
     conn.execute_batch(include_str!("schema.sql"))?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
     let drops: Vec<String> = {
@@ -799,7 +856,8 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
         conn.execute_batch(&d)?;
     }
 
-    // a table of the old store that this build does not have would be lost: refuse before anything is copied (receipts: retired in schema 3)
+    // A table of the old store that this build does not have would be lost, so refuse before
+    // anything is copied. The retired `receipts` table is ignored.
     {
         let mut st = conn.prepare(
             "SELECT name FROM old.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'receipts' \
@@ -828,14 +886,14 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     let t = Instant::now();
     conn.execute_batch(include_str!("schema.sql"))?;
     conn.execute_batch(crate::logo_reports::SCHEMA)?;
-    // the counts the triggers keep, counted once (as a store without them gets them at start-up)
+    // The counts the triggers keep, counted once, as a store without them gets them at start-up.
     db::backfill_counters(&conn)?;
     db::backfill_holding_programs(&conn)?;
     db::backfill_activity(&conn)?;
     db::backfill_executor_txs(&conn)?;
     db::backfill_all_time(&conn)?;
     check_activity(&conn)?;
-    // the counters the old store kept against the ones counted from the rows
+    // The counters the old store kept, against the ones counted from the rows.
     if table_exists(&conn, "old", "counters")? {
         let (a, _) = digest(&conn, "SELECT name, n FROM old.counters WHERE n != 0 ORDER BY name")?;
         let (b, _) = digest(&conn, "SELECT name, n FROM main.counters WHERE n != 0 ORDER BY name")?;
@@ -858,7 +916,9 @@ fn build(cfg: &IndexerConfig, old: &Path, new: &Path, from_schema: i64, rep: &mu
     opens_and_checks(cfg, new, say)
 }
 
-/// The file opens as a store of this build and passes `PRAGMA quick_check` before it replaces anything.
+/// Checks that the file opens as a store of this build and passes `PRAGMA quick_check`.
+///
+/// This runs before the file replaces anything.
 fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str)) -> DbResult<()> {
     let t = Instant::now();
     let check = db::open_writer_with(new, &cfg.network, cfg.lean)?;
@@ -875,23 +935,36 @@ fn opens_and_checks(cfg: &IndexerConfig, new: &Path, say: &mut impl FnMut(&str))
     Ok(())
 }
 
-/// Schema 9 to 12 to 13 (steps 1 to 3 for a store whose tables keep their layout): the store is copied as it is (`VACUUM INTO`, which
-/// also gives the free pages back), its triggers are dropped (`schema.sql` creates this build's: schema 12 changed the one that keeps the
-/// programs of the holdings), and
-/// * from 9, the fill events get their two columns and their fees (`amount x tip / scale` at the tip the order had at the fill, as in the
-///   copy of an older store);
-/// * from 10, the activity buckets get the columns of the executors' transactions and the actors their `kept` flag (schema 11);
-/// * from 9 to 11, the orders get the KAS of their genesis output (`orders.genesis_value`, schema 12), read from the genesis UTXO rows;
-/// * (schema 13) `recorded_outputs` is created empty by `schema.sql` (the outputs of the past are in the record log: a replay fills it), and
-///   the executors' transactions and the buckets get their own-trade flag and count (`executor_txs.own_trade`, `activity.own_n`: the
-///   transactions already counted as of unknown income stay unknown; a replay tells the own trades);
+/// Migrates a store of schema 9 to 12 to the current schema, keeping its table layout.
 ///
-/// then `schema.sql` adds the new tables, indexes and triggers, the activity totals are counted once (from 9), the executors' transactions
-/// the store holds are counted as of unknown income and network fee (`db::backfill_executor_txs`: the store has no record of their
-/// outputs' owners; `kobd db replay` rebuilds them from the record log), the all-time order counter is set, the totals are checked against
-/// the rows, and every table of the old store holds as many rows in the new one (the keys of `meta` and `counters` all there; the
-/// activity buckets, which may gain the minutes of executors' transactions without a fill, are checked against the rows instead). No row
-/// is rewritten but the fills (from 9) and the orders' new column; nothing of the old store is touched.
+/// These are steps 1 to 3 for a store whose tables keep their layout. The store is copied as it is
+/// (`VACUUM INTO`, which also gives the free pages back). Its triggers are dropped, because
+/// `schema.sql` creates this build's triggers (schema 12 changed the one that keeps the programs
+/// of the holdings). Then:
+///
+/// - From schema 9, the fill events get their two columns and their fees: `amount x tip / scale`
+///   at the tip the order had at the fill, as in the copy of an older store.
+/// - From schema 10, the activity buckets get the columns of the executors' transactions, and the
+///   actors get their `kept` flag (schema 11).
+/// - From schema 9 to 11, the orders get the KAS of their genesis output (`orders.genesis_value`,
+///   schema 12), read from the genesis UTXO rows.
+/// - `schema.sql` creates `recorded_outputs` empty (schema 13). The outputs of the past are in
+///   the record log, and a replay fills the table.
+/// - The executors' transactions and the buckets get their own-trade flag and count
+///   (`executor_txs.own_trade`, `activity.own_n`). The transactions already counted as of unknown
+///   income become unknown, and a replay tells the own trades.
+///
+/// Then `schema.sql` adds the new tables, indexes and triggers, and the activity totals are
+/// counted once (from 9). The executors' transactions the store holds are counted as of unknown
+/// income and network fee (`db::backfill_executor_txs`), because the store has no record of their
+/// outputs' owners. `kobd db replay` rebuilds them from the record log. The all-time order counter
+/// is set and the totals are checked against the rows.
+///
+/// Every table of the old store must hold as many rows in the new one, and the keys of `meta` and
+/// `counters` must all be there. The activity buckets may gain the minutes of executors'
+/// transactions without a fill, so they are checked against the rows instead. No row is rewritten
+/// but the fills (from 9), the orders' new column and the incomes of the executors' transactions
+/// (reset to unknown). Nothing of the old store is touched.
 fn upgrade_in_place(
     cfg: &IndexerConfig,
     from: i64,
@@ -912,7 +985,7 @@ fn upgrade_in_place(
     note(&mut rep.steps, say, "copy", t, format!("{} bytes", file_bytes(new)));
 
     let conn = Connection::open(new)?;
-    // a crash leaves a file nobody reads: no journal, no sync
+    // A crash leaves a file nobody reads, so there is no journal and no sync.
     conn.pragma_update(None, "journal_mode", "OFF")?;
     conn.pragma_update(None, "synchronous", "OFF")?;
     conn.pragma_update(None, "cache_size", -262_144)?;
@@ -923,7 +996,7 @@ fn upgrade_in_place(
     super::activity::register(&conn)?;
     conn.execute("ATTACH DATABASE ?1 AS old", [uri_of(old)])?;
 
-    // (no transaction: without a journal the file is thrown away on any error)
+    // No transaction: without a journal the file is thrown away on any error.
     let triggers: Vec<String> = {
         let mut st = conn.prepare("SELECT name FROM main.sqlite_master WHERE type = 'trigger' ORDER BY name")?;
         let v = st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -942,7 +1015,8 @@ fn upgrade_in_place(
                SELECT order_id, id, json_extract(kob_dtext(detail), '$.previous.tip') FROM main.order_events WHERE kind = 'amend' ORDER BY 1, 2;",
         )?;
         let amends = count(&conn, "temp", "amend_tips")?;
-        // an amend without its previous tip (none should be) makes the fee unknown, not the order's current tip
+        // An amend without its previous tip, which should not happen, makes the fee unknown
+        // rather than the order's current tip.
         let fills = conn.execute(
             "UPDATE main.order_events SET fee = (SELECT kob_fill_fee(order_events.amount, COALESCE((SELECT COALESCE(a.tip, -1) FROM temp.amend_tips a \
                WHERE a.order_id = order_events.order_id AND a.id > order_events.id ORDER BY a.id LIMIT 1), o.tip), o.scale) \
@@ -964,12 +1038,14 @@ fn upgrade_in_place(
              ALTER TABLE main.actors ADD COLUMN kept INTEGER NOT NULL DEFAULT 0;",
         )?;
     }
-    // (schema 12) the KAS of each order's genesis output
-    // (schema 13) the own trades of the executors' transactions, and their count in the buckets (a store of schema 11 or 12 has both tables)
+    // Schema 12: the KAS of each order's genesis output.
+    // Schema 13: the own trades of the executors' transactions, and their count in the buckets. A
+    // store of schema 11 or 12 has both tables.
     if table_exists(&conn, "main", "executor_txs")? && !columns(&conn, "main", "executor_txs")?.iter().any(|c| c == "own_trade") {
         conn.execute_batch("ALTER TABLE main.executor_txs ADD COLUMN own_trade INTEGER NOT NULL DEFAULT 0")?;
-        // which of the incomes a store of schema 11 or 12 counted were own trades the store cannot tell: they become unknown (a replay
-        // tells them), and the buckets count no income (the triggers are dropped: the rows and the buckets change together)
+        // The store cannot tell which of the incomes a store of schema 11 or 12 counted were own
+        // trades, so they become unknown and a replay tells them. The buckets count no income. The
+        // triggers are dropped, so the rows and the buckets change together.
         conn.execute_batch(
             "UPDATE main.executor_txs SET income = NULL WHERE income IS NOT NULL; \
              UPDATE main.activity SET income = 0, income_n = 0, net = 0, net_n = 0;",
@@ -1013,7 +1089,8 @@ fn upgrade_in_place(
         let table = table.as_str();
         let a = count(&conn, "old", table)?;
         let b = match table {
-            // the version is the one row of meta that changes, the backfills add keys and the all-time counter: every old key is there
+            // The version is the one row of meta that changes. The backfills add keys and the
+            // all-time counter. Every old key is there.
             "meta" => {
                 conn.query_row("SELECT COUNT(*) FROM old.meta o WHERE EXISTS (SELECT 1 FROM main.meta n WHERE n.k = o.k)", [], |r| {
                     r.get::<_, i64>(0)
@@ -1024,7 +1101,7 @@ fn upgrade_in_place(
                 [],
                 |r| r.get::<_, i64>(0),
             )? as u64,
-            // checked against the rows above (`check_activity`)
+            // Checked against the rows above (`check_activity`).
             "activity" => a,
             _ => count(&conn, "main", table)?,
         };
@@ -1042,18 +1119,18 @@ fn upgrade_in_place(
     opens_and_checks(cfg, new, say)
 }
 
-/// Step 4: `new` takes the place of `path`; the old file is kept beside it.
+/// Step 4: `new` takes the place of `path`, and the old file is kept beside it.
 fn swap(path: &Path, new: &Path) -> DbResult<PathBuf> {
     swap_as(path, new, BEFORE_MIGRATE)
 }
 
-/// `new` takes the place of `path`; the old file (with its `-wal` and `-shm`) is kept beside it with `suffix`.
+/// `new` takes the place of `path`. The old file, with its `-wal` and `-shm`, is kept as `suffix`.
 fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
     let old = suffixed(path, suffix);
     if old.exists() {
         return Err(bad(format!("{} exists already: delete it (or move it away) first", old.display())));
     }
-    // the old file's -wal and -shm belong to it; the new file starts clean
+    // The old file's -wal and -shm belong to it. The new file starts clean.
     std::fs::rename(path, &old)?;
     for suffix in ["-wal", "-shm"] {
         let from = format!("{}{suffix}", path.display());
@@ -1062,7 +1139,7 @@ fn swap_as(path: &Path, new: &Path, suffix: &str) -> DbResult<PathBuf> {
         }
     }
     if let Err(e) = std::fs::rename(new, path) {
-        // put the store back
+        // Put the store back.
         let _ = std::fs::rename(&old, path);
         for suffix in ["-wal", "-shm"] {
             let _ = std::fs::rename(format!("{}{suffix}", old.display()), format!("{}{suffix}", path.display()));
@@ -1088,10 +1165,14 @@ fn note(steps: &mut Vec<(&'static str, Duration)>, say: &mut impl FnMut(&str), n
     say(&format!("{name}: {what} ({:.1} s)", t.elapsed().as_secs_f64()));
 }
 
-/// The lowest schema `kobd db migrate` brings forward (an older store is rebuilt with `kobd db replay`).
+/// The lowest schema that `kobd db migrate` brings forward.
+///
+/// An older store is rebuilt with `kobd db replay`.
 pub const MIGRATE_FROM_SCHEMA: i64 = 5;
 
-/// Runs the migration of the data directory of `cfg` (takes its writer lock). `say` reports each step as it finishes.
+/// Migrates the store of the data directory of `cfg` and compresses its sealed record log.
+///
+/// It takes the writer lock. `say` reports each step as it finishes.
 pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) -> Result<Report, IndexerError> {
     let _writer = super::lock::WriterLock::acquire(cfg)?;
     let path = cfg.db_path();
@@ -1125,7 +1206,7 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
             build(cfg, &path, &new, rep.from_schema, &mut rep, &mut say)
         };
         if let Err(e) = built {
-            // nothing of the half-built file is worth keeping; the old store was not touched
+            // Nothing of the half-built file is worth keeping. The old store was not touched.
             for suffix in ["", "-wal", "-shm", "-journal"] {
                 let _ = std::fs::remove_file(format!("{}{suffix}", new.display()));
             }
@@ -1159,15 +1240,17 @@ pub fn migrate(cfg: &IndexerConfig, opts: Options, mut say: impl FnMut(&str)) ->
 /// What [`vacuum`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VacuumReport {
-    /// Bytes of the store (file and write-ahead log) before and after.
+    /// Size of the store (file and write-ahead log) before the rewrite, in bytes.
     pub bytes_before: u64,
+    /// Size of the store (file and write-ahead log) after the rewrite, in bytes.
     pub bytes_after: u64,
-    /// Free pages the store held (what the rewrite gave back), and the page size.
+    /// Free pages the store held, which the rewrite gave back.
     pub free_pages: u64,
+    /// Page size in bytes.
     pub page_size: u64,
 }
 
-/// (pages, free pages, page size) of a store file, read-only.
+/// Reads (pages, free pages, page size) of a store file, read-only.
 fn page_stats(path: &Path) -> DbResult<(i64, i64, i64)> {
     let c = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI)?;
     c.busy_timeout(Duration::from_secs(30))?;
@@ -1183,13 +1266,18 @@ fn page_stats(path: &Path) -> DbResult<(i64, i64, i64)> {
 const VACUUMING: &str = "vacuuming";
 const BEFORE_VACUUM: &str = "before-vacuum";
 
-/// `kobd db vacuum`: the store of the data directory of `cfg`, rewritten without its free pages (offline: it takes the writer lock). The
-/// pruning (lean or archive) frees pages that SQLite uses again for new rows but never gives back to the file system by itself (a lean
-/// store gives them back as it goes, `lean::release_pages`); a store that just had most of its history pruned (the first archive pruning
-/// of a store that kept everything) is mostly free pages. The copy (`VACUUM INTO index.sqlite3.vacuuming`, the pages in use only) opens as
-/// a store of this build and passes `PRAGMA quick_check` before it takes the place of the store, whose file is then deleted. The store is
-/// not touched before the swap: a run that fails or is stopped leaves only the partial copy, deleted by the next run. Free disk needed: the
-/// pages in use (at most the store's size), checked first.
+/// Rewrites the store of the data directory of `cfg` without its free pages, offline.
+///
+/// It takes the writer lock. Pruning (lean or archive) frees pages that SQLite uses again for new
+/// rows but never gives back to the file system by itself. A lean store gives them back as it
+/// goes (`lean::release_pages`). A store that just had most of its history pruned, such as the
+/// first archive pruning of a store that kept everything, is mostly free pages.
+///
+/// The copy (`VACUUM INTO index.sqlite3.vacuuming`, the pages in use only) opens as a store of
+/// this build and passes `PRAGMA quick_check` before it takes the place of the store. The old file
+/// is then deleted. The store is not touched before the swap, so a run that fails or is stopped
+/// leaves only the partial copy, which the next run deletes. The free disk needed is the pages in
+/// use (at most the store's size), checked first.
 pub fn vacuum(cfg: &IndexerConfig, mut say: impl FnMut(&str)) -> Result<VacuumReport, IndexerError> {
     let _writer = super::lock::WriterLock::acquire(cfg)?;
     let path = cfg.db_path();
@@ -1218,7 +1306,7 @@ pub fn vacuum(cfg: &IndexerConfig, mut say: impl FnMut(&str)) -> Result<VacuumRe
     ));
     let dir = path.parent().unwrap_or(Path::new("."));
     if let Some(avail) = crate::disk::free_bytes(dir) {
-        // the copy, and a margin for its write-ahead log and the temporary files of the check
+        // The copy, and a margin for its write-ahead log and the temporary files of the check.
         let need = used + used / 10 + (64 << 20);
         if avail < need {
             return Err(IndexerError::Config(format!(
