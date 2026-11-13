@@ -2108,15 +2108,16 @@ loses nothing. Reorgs during the downtime are handled by the node's `removed` li
 
 The record-log frame is appended and fsynced before the database transaction commits. After a crash
 the log can hold one frame the database never committed. A database restored from a backup exactly one frame older looks
-the same, so `open` never cuts a complete frame: when the frame continues the database (its start is the block the
-database ends at, or the frame before it is the last one the database applied) it applies it to the database, as the
-commit would have (`applied the one record-log frame the database had not committed`); a frame of another history is
+the same, so `open` never cuts a complete frame whose chain verifies: when the frame continues the database (its start is
+the block the database ends at, or the frame before it is the last one the database applied) it applies it to the
+database, as the commit would have (`applied the one record-log frame the database had not committed`); a frame of another history is
 refused (`the log and the database do not belong together`) and kept. Two or more frames past the database's position mean
 the database is older than the log (restored from a backup, see 8), and the indexer refuses to start (`record log holds
 frames N..M that the database has not committed`) and leaves the log untouched.
-A torn (incomplete) last frame was never acknowledged and is removed. If the database is *ahead*
-of the log the log was lost; the indexer refuses to start rather than silently continue without its
-rebuild source. An empty database next to a populated log is refused as well (use `replay`).
+A bad last frame past the database's position, incomplete or complete with a chain hash that does not verify, was never
+acknowledged and is removed; one the database committed is refused (`record log frame N is corrupt`, or `the log was lost
+or replaced`) and the log is left as it is. If the database is *ahead* of the log the log was lost; the indexer refuses to
+start rather than silently continue without its rebuild source. An empty database next to a populated log is refused as well (use `replay`).
 
 A write to the record log that fails while running (a full disk, an I/O error) is rolled back: the segment is cut back
 to its last complete frame and the database transaction is not committed. The follower then stops (`/v1/health` state

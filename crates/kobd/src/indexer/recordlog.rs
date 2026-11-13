@@ -51,7 +51,7 @@
 //! can hold one frame that the database never committed. A database restored from a backup one
 //! frame older looks the same.
 //!
-//! [`RecordLog::open`] never cuts a complete frame. It refuses
+//! [`RecordLog::open`] never cuts a complete frame whose chain verifies. It refuses
 //! ([`RecordLogError::AheadOfDatabase`]) and keeps it. `Indexer::open` applies one such frame
 //! itself when it continues the database: its `start` is the database's cursor hash, or the
 //! frame before it ends at the cursor the database recorded with the last frame it applied
@@ -64,8 +64,10 @@
 //!
 //! A failed append (full disk, I/O error) is rolled back to the last complete frame before the
 //! error is returned, so nothing is ever appended after a partial frame. An incomplete frame with
-//! complete frames after it is corruption and is refused. Only an incomplete last frame is a torn
-//! tail, and it is removed.
+//! complete frames after it is corruption and is refused. Only a bad last frame past the database
+//! position is a torn tail, and it is removed: an incomplete one, or a complete one whose chain
+//! hash does not verify. Either is an append the database never committed. A bad last frame that
+//! the database committed is refused before anything is cut, with the log left as it is.
 
 use super::record::{DecodeCtx, DecodeStats, TemplateTable, TxRecord};
 use crate::hex::Hash32;
@@ -713,6 +715,9 @@ struct ScanEnd {
     /// the scan stopped early (torn tail or `stop` returned true).
     cut: Option<(usize, u64)>,
     torn: bool,
+    /// The torn tail is a complete last frame whose chain hash does not verify, not an
+    /// incomplete one.
+    mismatch: bool,
 }
 
 /// Walks every frame in order, verifying the chain.
@@ -746,7 +751,7 @@ fn scan(
                                 .into(),
                         });
                     }
-                    return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: true });
+                    return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: true, mismatch: false });
                 }
                 FrameRead::Frame { body, chain, total } => {
                     if chain_hash(&prev, &body) != chain {
@@ -754,10 +759,10 @@ fn scan(
                         if !last {
                             return Err(RecordLogError::Corrupt { n, reason: "chain hash mismatch".into() });
                         }
-                        return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: true });
+                        return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: true, mismatch: true });
                     }
                     if visit(n, &body)? {
-                        return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: false });
+                        return Ok(ScanEnd { frames: n, last_chain: prev, cut: Some((si, offset)), torn: false, mismatch: false });
                     }
                     prev = chain;
                     n += 1;
@@ -766,7 +771,7 @@ fn scan(
             }
         }
     }
-    Ok(ScanEnd { frames: n, last_chain: prev, cut: None, torn: false })
+    Ok(ScanEnd { frames: n, last_chain: prev, cut: None, torn: false, mismatch: false })
 }
 
 /// What [`RecordLog::open`] found and repaired.
@@ -803,7 +808,24 @@ impl RecordLog {
         let end = scan(&segs, |n, _| Ok(n >= db_next_n))?;
         let mut total_frames = end.frames;
         if let Some((si, offset)) = end.cut {
+            if end.torn && end.frames < db_next_n {
+                // The bad tail is a frame the database committed. Cutting it would destroy a
+                // committed frame and still leave the log short, so the start is refused first,
+                // with the log as it is.
+                if end.mismatch {
+                    return Err(RecordLogError::Corrupt {
+                        n: end.frames,
+                        reason: format!(
+                            "the last frame is complete but its chain hash does not verify, and the database committed it \
+                             (it expects {db_next_n} frames); the log is left as it is"
+                        ),
+                    });
+                }
+                return Err(RecordLogError::BehindDatabase { log_next: end.frames, db_next: db_next_n });
+            }
             if end.torn {
+                // An incomplete last frame, or a complete one whose chain hash does not verify,
+                // past the database position: an append that the database never committed.
                 report.torn_tail_removed = true;
             } else {
                 // A complete frame at or after db_next_n is never cut. It may be the one append an
@@ -1471,6 +1493,38 @@ mod tests {
         assert!(rep.torn_tail_removed);
         assert_eq!(log.next_n(), 2);
         assert!(!read_all(d.path()).unwrap().torn);
+    }
+
+    /// A bad last frame that the database committed is never cut: `open` refuses with every byte
+    /// kept, whether the frame is complete with a chain hash that does not verify or incomplete.
+    /// Past the database position the same frame is an append the database never committed, and
+    /// is removed.
+    #[test]
+    fn a_committed_last_frame_with_a_bad_hash_is_kept() {
+        let d = tempfile::tempdir().unwrap();
+        let (mut log, _) = RecordLog::open(d.path(), 1 << 20, 0).unwrap();
+        for i in 0..3u8 {
+            log.append(&batch(i), 0).unwrap();
+        }
+        drop(log);
+        let seg = segment_paths(d.path()).unwrap().pop().unwrap();
+        let good = std::fs::read(&seg).unwrap();
+        let mut bad = good.clone();
+        *bad.last_mut().unwrap() ^= 0xff;
+        std::fs::write(&seg, &bad).unwrap();
+        let r = RecordLog::open(d.path(), 1 << 20, 3);
+        assert!(matches!(r, Err(RecordLogError::Corrupt { n: 2, .. })), "{:?}", r.err());
+        assert_eq!(std::fs::read(&seg).unwrap(), bad, "the log is left as it is");
+        let short = &good[..good.len() - 5];
+        std::fs::write(&seg, short).unwrap();
+        let r = RecordLog::open(d.path(), 1 << 20, 3);
+        assert!(matches!(r, Err(RecordLogError::BehindDatabase { log_next: 2, db_next: 3 })), "{:?}", r.err());
+        assert_eq!(std::fs::read(&seg).unwrap(), short, "the log is left as it is");
+        // One frame behind, the bad frame was never committed: it is removed.
+        std::fs::write(&seg, &bad).unwrap();
+        let (log, rep) = RecordLog::open(d.path(), 1 << 20, 2).unwrap();
+        assert!(rep.torn_tail_removed);
+        assert_eq!((log.next_n(), record_count(d.path()).unwrap()), (2, 2));
     }
 
     /// A partial frame (a write that failed part way) with complete, chained frames after it is not
