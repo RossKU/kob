@@ -1,8 +1,9 @@
 //! Node access: the [`ChainSource`] trait and a JSON wRPC client.
 //!
-//! The indexer speaks the node's JSON wRPC directly. It does not pull in the node's RPC crates,
-//! because they drift from the wire schema without a compile error. The integration test in
-//! `tests/tn10_follow.rs` checks the schema against a live node.
+//! The JSON calls are read into the indexer's own wire types (`types`), not the node's RPC types,
+//! which drift from the JSON schema without a compile error. The integration test in
+//! `tests/tn10_follow.rs` checks the schema against a live node. The Borsh calls (`borsh`,
+//! `bridge`) use the node's own types from `kaspa-rpc-core`, of the same release as the node.
 //!
 //! # Submodules
 //!
