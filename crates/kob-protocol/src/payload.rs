@@ -1,31 +1,43 @@
-//! `KOB1` transaction payload: versioned TLV (spec: `docs/spec/kob1-payload.md`).
+//! The `KOB1` transaction payload, a versioned TLV (spec: `docs/spec/kob1-payload.md`).
 //!
 //! ```text
 //! payload  = "KOB1" version:u8 record*
 //! record   = type:u8 len:u16le value[len]
 //! ```
 //!
-//! Record types `0x00..=0x7f` are critical (a decoder that does not know one must reject the
-//! payload); `0x80..=0xff` are optional (skipped). The payload is a hint for indexers and for
-//! recovery: nothing in it is trusted. Every order record is re-derived (template hash pinned, state
-//! decoded, P2SH recomputed, genesis covenant id recomputed) before it is accepted, see
-//! [`recover_orders`]; every in-place amend against the state its input spent, see [`verify_amend`].
+//! # Records
 //!
-//! Version 4 (protocol v3, written whenever a payload carries an `ORDER` or `AMEND` record) is the compact record of
-//! version 3 (no template hash: the family and kind name the pinned template; the state span as its fields, integers as
-//! LEB128, all-zero 32-byte fields as a bit in a mask; LEB128 indices) over the protocol v3 state layouts (amounts in
-//! base units, no lots). A pair order's record (kinds `0x08` `KobPair`, `0x09` `KobCondPair`, `0x0a` `KobIfdPair`, one
-//! template each for both families) carries the family of its BASE token A in its family byte; its custody parts are
-//! encoded in the family of each custody's own token ([`custody_families`]): the custody of S (`KobPair`, `KobCondPair`;
-//! a buy-first `KobIfdPair`'s B escrow, a sell-first one's A custody), then a sell-first `KobIfdPair`'s B PREFUND custody
-//! (the record's `prefund` part, present exactly when the state's `custody` is non-zero).
+//! Record types `0x00..=0x7f` are critical, and a decoder that does not know one must reject the
+//! payload. Types `0x80..=0xff` are optional and skipped.
 //!
-//! A placement also carries the optional `RELEASE` record (0x84, [`Release`]): the KOB release of the build that wrote it
-//! ([`encode_with_release`], what the builders call), so an indexer can tell its operator that a newer release is in use.
+//! The payload is a hint for indexers and for recovery, and nothing in it is trusted. Every order
+//! record is re-derived before it is accepted: the template hash is pinned, the state decoded, and
+//! the P2SH and the genesis covenant id recomputed, see [`recover_orders`]. Every in-place amend is
+//! checked against the state its input spent, see [`verify_amend`].
 //!
-//! Payloads without order records (an x402 commitment, a note) are written as version 2, byte for byte what they were.
-//! An `ORDER` record of version 2 and any payload of version 3 describe templates this build does not pin: they do not
-//! decode, like a record of any other unknown template.
+//! # Versions
+//!
+//! Version 4 is written whenever a payload carries an `ORDER` or `AMEND` record. Its records are
+//! compact:
+//! - no template hash, since the family and kind name the pinned template,
+//! - the state span as its fields, with integers as LEB128 and all-zero 32-byte fields as a bit in
+//!   a mask,
+//! - LEB128 indices.
+//!
+//! A pair order's record (kinds `0x08` `KobPair`, `0x09` `KobCondPair`, `0x0a` `KobIfdPair`, one
+//! template each for both families) carries the family of its base token A in its family byte. Its
+//! custody parts are encoded in the family of each custody's own token ([`custody_families`]). The
+//! first is the custody of S (`KobPair`, `KobCondPair`), the B escrow of a buy-first `KobIfdPair`
+//! or the A custody of a sell-first one. A sell-first `KobIfdPair`'s B prefund custody follows as
+//! the record's `prefund` part, present exactly when the state's `custody` is non-zero.
+//!
+//! A placement also carries the optional `RELEASE` record (0x84, [`Release`]), the KOB release of
+//! the build that wrote it ([`encode_with_release`], which the builders call). An indexer can then
+//! tell its operator that a newer release is in use.
+//!
+//! Payloads without order records, such as an x402 commitment or a note, are written as version 2.
+//! An `ORDER` record of version 2 and any payload of version 3 describe templates this build does
+//! not pin, so they do not decode, like a record of any other unknown template.
 
 use kaspa_consensus_core::hashing::covenant_id::covenant_id;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint, TransactionOutput};
@@ -39,62 +51,83 @@ use crate::tx::{spk_from_string, spk_to_string, SigPlan, TxJson};
 
 /// Payload magic.
 pub const MAGIC: &[u8; 4] = b"KOB1";
-/// Payload format version written for order records (4: the compact placement and in-place amend records of protocol v3,
-/// amounts in base units). A payload without order records is written as version 2; version 1 was never deployed, and
-/// version 3 (like an `ORDER` record of version 2) named templates this build does not pin.
+/// Payload format version written for order records.
+///
+/// Version 4 holds the compact placement and in-place amend records, with amounts in base units. A
+/// payload without order records is written as version 2. Version 3, like an `ORDER` record of
+/// version 2, names templates this build does not pin.
 pub const PAYLOAD_VERSION: u8 = 4;
 /// Version 2: written for payloads that carry no `ORDER` / `AMEND` record.
 pub const PAYLOAD_VERSION_2: u8 = 2;
 
-/// Record type codes.
+/// Record type: an order placement.
 pub const REC_ORDER: u8 = 0x01;
-/// Retired (reserved, never reused): the v2.4 receipt genesis marker. Protocol v2.6 has no receipts; a
-/// payload carrying this critical record type no longer decodes.
+/// Reserved critical record type, never reused.
+///
+/// A payload that carries it does not decode (`docs/spec/kob1-payload.md`).
 pub const REC_RETIRED_RECEIPT_GENESIS: u8 = 0x02;
-/// In-place amend (payload versions 3 and 4): the maker's cancel continues the order's covenant id with a new state.
+/// Record type: an in-place amend (payload version 4).
+///
+/// The maker's cancel continues the order's covenant id with a new state.
 pub const REC_AMEND: u8 = 0x03;
+/// Record type: an x402 payment reference (optional).
 pub const REC_X402: u8 = 0x81;
+/// Record type: a client note (optional).
 pub const REC_NOTE: u8 = 0x82;
-/// Sweep in place (optional): the maker's cancel continues the order's covenant id with the SAME script and moves only
-/// strays. Optional on purpose: an indexer that does not know it treats the continuation as any other unproven
-/// continuation of a cancel (state unknown, listed nowhere), never as something else.
+/// Record type: a sweep in place (optional).
+///
+/// The maker's cancel continues the order's covenant id with the same script and moves only strays.
+/// The type is optional on purpose. An indexer that does not know it treats the continuation as any
+/// other unproven continuation of a cancel, with the state unknown and listed nowhere, never as
+/// something else.
 pub const REC_SWEEP: u8 = 0x83;
-/// The KOB release of the build that wrote the payload (optional, any version): `major:LEB128 minor:LEB128 patch:LEB128`.
-/// The builders append it to every payload that carries an `ORDER` record ([`encode_with_release`]); an indexer that sees
-/// a release newer than its own on chain tells its operator (informational only, `docs/spec/kob1-payload.md`, *RELEASE
-/// record*). Optional on purpose: a build that does not know it skips it, so a new placement stays readable by old builds.
+/// Record type: the KOB release of the build that wrote the payload (optional, any version).
+///
+/// The value is `major:LEB128 minor:LEB128 patch:LEB128`. The builders append it to every payload
+/// that carries an `ORDER` record ([`encode_with_release`]). An indexer that sees a release on
+/// chain newer than its own tells its operator. This is informational only, see
+/// `docs/spec/kob1-payload.md`, *RELEASE record*. The type is optional on purpose: a build that
+/// does not know it skips it, so a new placement stays readable by old builds.
 pub const REC_RELEASE: u8 = 0x84;
 
 /// Compact ORDER flag: the record carries a day-order deadline.
 const FLAG_DEADLINE: u8 = 0x01;
 /// Compact ORDER flag: the custody's extension commitment is all zero (not spelled; KCC-20 only).
 const FLAG_EXT_ZERO: u8 = 0x02;
-/// Compact ORDER flag: the second custody part's (a sell-first `KobIfdPair`'s B prefund) extension commitment is all zero
-/// (not spelled; KCC-20 only).
+/// Compact ORDER flag: the extension commitment of the second custody part is all zero.
+///
+/// The second part is a sell-first `KobIfdPair`'s B prefund. The commitment is not spelled, and the
+/// flag is KCC-20 only.
 const FLAG_PREFUND_EXT_ZERO: u8 = 0x04;
 
-/// Token family codes (`Family::code`).
+/// Token family code of KCC-20 (`Family::code`).
 pub const FAMILY_KCC20: u8 = 0x01;
+/// Token family code of KRON-46, the 46-byte KRON token state (`Family::code`).
 pub const FAMILY_KRON46: u8 = 0x02;
 
 /// Legacy x402 text payload prefix (`X402:<hex>`), accepted by [`decode`].
 pub const LEGACY_X402_PREFIX: &[u8] = b"X402:";
 
-/// Token custody part of an order record (token-holding kinds only). The amount is not recorded:
-/// it is the order's `amountLeft` (exact custody).
+/// Token custody part of an order record, for token-holding kinds only.
+///
+/// The amount is not recorded, since it is the order's `amountLeft` (exact custody).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Custody {
     /// Output index of the token UTXO owned by the new order (scheme 0x04 / KRON `id_type` 2).
     pub token_output: u16,
-    /// KCC-20 extension commitment of the custody output. KRON has none: the KRON record carries no
-    /// such field (2-byte custody part) and this must be all zero.
+    /// KCC-20 extension commitment of the custody output.
+    ///
+    /// KRON has none. The KRON record carries no such field (a 2-byte custody part), and this must
+    /// be all zero.
     #[serde(with = "crate::json::field")]
     pub extension_commitment: [u8; 32],
 }
 
-/// A KOB release: the core `major.minor.patch` of a semantic version (the workspace version a release is tagged with,
-/// `docs/ops/release.md`). Ordered by semver precedence of the core; JSON spells it `"0.1.1"`.
+/// A KOB release: the core `major.minor.patch` of a semantic version.
+///
+/// It is the workspace version a release is tagged with (`docs/ops/release.md`). Releases are
+/// ordered by semver precedence of the core, and JSON spells one as `"0.1.1"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Release {
     pub major: u64,
@@ -103,12 +136,15 @@ pub struct Release {
 }
 
 impl Release {
+    /// A release from its three components.
     pub const fn new(major: u64, minor: u64, patch: u64) -> Release {
         Release { major, minor, patch }
     }
 
-    /// The release a payload of this build announces: the core of its crate version, `None` for a pre-release build
-    /// (`0.2.0-rc.1`: it announces nothing, so a release candidate on a test network never tells operators to update).
+    /// The release a payload of this build announces: the core of its crate version.
+    ///
+    /// It is `None` for a pre-release build such as `0.2.0-rc.1`, which announces nothing, so a
+    /// release candidate on a test network never tells operators to update.
     pub fn of_build() -> Option<Release> {
         (!Release::build_is_prerelease()).then(Release::build_core)
     }
@@ -124,13 +160,18 @@ impl Release {
         !env!("CARGO_PKG_VERSION_PRE").is_empty()
     }
 
-    /// `seen` is a newer release than a build of version `core` (with a pre-release part when `prerelease`), by semver
-    /// precedence: a larger core, or the same core as a pre-release build (`0.2.0` is newer than `0.2.0-rc.1`).
+    /// Whether `seen` is a newer release than a build of version `core`, by semver precedence.
+    ///
+    /// `prerelease` means the build has a pre-release part. `seen` is newer when its core is
+    /// larger, or when it has the same core and the build is a pre-release (`0.2.0` is newer than
+    /// `0.2.0-rc.1`).
     pub fn is_newer_than(self, core: Release, prerelease: bool) -> bool {
         self > core || (prerelease && self == core)
     }
 
-    /// `self` is a newer release than this build ([`Release::is_newer_than`] of [`Release::build_core`]).
+    /// Whether `self` is a newer release than this build.
+    ///
+    /// This is [`Release::is_newer_than`] of [`Release::build_core`].
     pub fn is_newer_than_build(self) -> bool {
         self.is_newer_than(Release::build_core(), Release::build_is_prerelease())
     }
@@ -186,18 +227,24 @@ pub enum Record {
         #[serde(with = "crate::json::field")]
         state: Vec<u8>,
         custody: Option<Custody>,
-        /// The second custody of a sell-first `KobIfdPair` (its B prefund, when it holds one); `None` for every other kind.
+        /// The second custody of a sell-first `KobIfdPair`, its B prefund when it holds one.
+        ///
+        /// It is `None` for every other kind.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prefund: Option<Custody>,
-        /// Day orders: wall-clock deadline (UTC unix seconds) after which conforming matchers stop
-        /// filling (`docs/spec/matcher.md` §2.3, §10.10).
+        /// Day orders: the wall-clock deadline (UTC unix seconds) after which conforming matchers
+        /// stop filling.
+        ///
+        /// See `docs/spec/matcher.md` §2.3 and §10.10.
         #[serde(with = "crate::json::field", default)]
         deadline: Option<u64>,
     },
-    /// An in-place amend (payload version 4): the maker's `cancel` of the order spent at `input` continues
-    /// its covenant id at `output` with `state` (the same template; an ask's custody stays where it is). Only
-    /// the plain ask and the plain bid of either family ([`amendable`]) and only terms that keep the custody
-    /// exact ([`check_amend_terms`]).
+    /// An in-place amend (payload version 4).
+    ///
+    /// The maker's `cancel` of the order spent at `input` continues its covenant id at `output`
+    /// with `state`, under the same template. An ask's custody stays where it is. Only the plain
+    /// ask and the plain bid of either family may be amended ([`amendable`]), and only with terms
+    /// that keep the custody exact ([`check_amend_terms`]).
     #[serde(rename_all = "camelCase")]
     Amend {
         output: u16,
@@ -209,13 +256,17 @@ pub enum Record {
         #[serde(with = "crate::json::field", default)]
         deadline: Option<u64>,
     },
-    /// A maker's sweep in place (optional type 0x83): the maker's `cancel` of the order spent at `input` continues its
-    /// covenant id at `output` with the SAME script, so the same state and custody; the transaction only returns strays
-    /// (`verify_sweep`).
+    /// A maker's sweep in place (optional type 0x83).
+    ///
+    /// The maker's `cancel` of the order spent at `input` continues its covenant id at `output`
+    /// with the same script, so with the same state and custody. The transaction only returns
+    /// strays (`verify_sweep`).
     #[serde(rename_all = "camelCase")]
     Sweep { output: u16, input: u16 },
-    /// The KOB release of the build that wrote the payload (optional type 0x84, [`REC_RELEASE`]): informational, never a
-    /// condition of anything. A value that is not exactly three canonical LEB128 integers decodes as [`Record::Unknown`].
+    /// The KOB release of the build that wrote the payload (optional type 0x84, [`REC_RELEASE`]).
+    ///
+    /// It is informational, never a condition of anything. A value that is not exactly three
+    /// canonical LEB128 integers decodes as [`Record::Unknown`].
     #[serde(rename_all = "camelCase")]
     Release { version: Release },
     /// x402 payment reference (opaque to KOB indexers).
@@ -237,8 +288,9 @@ pub enum Record {
 }
 
 impl Record {
-    /// Order record (placement record) for a state created at `output`; the family byte is the
-    /// state's family (a pair order: the family of its base token A).
+    /// Order record (placement record) for a state created at `output`.
+    ///
+    /// The family byte is the state's family, for a pair order the family of its base token A.
     pub fn order(output: u16, state: &AnyState, custody: Option<Custody>, deadline: Option<u64>) -> Record {
         Record::order_with_prefund(output, state, custody, None, deadline)
     }
@@ -295,7 +347,7 @@ fn put_record(out: &mut Vec<u8>, ty: u8, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------- compact fields (versions 3 and 4)
+// ---------------------------------------------------------------- compact fields
 
 /// Appends `x` as unsigned LEB128 (7 bits per byte, low group first, high bit = more follows).
 fn put_varint(out: &mut Vec<u8>, mut x: u64) {
@@ -310,8 +362,9 @@ fn put_varint(out: &mut Vec<u8>, mut x: u64) {
     }
 }
 
-/// Reads a canonical unsigned LEB128 (the shortest spelling, at most 10 bytes, no bits beyond 64): any other
-/// spelling of a value is refused, so every record has exactly one encoding.
+/// Reads a canonical unsigned LEB128: the shortest spelling, at most 10 bytes, no bits beyond 64.
+///
+/// Any other spelling of a value is refused, so every record has exactly one encoding.
 fn get_varint(v: &[u8], p: &mut usize, what: &str) -> Result<u64> {
     let bad = || Error::Payload(format!("{what}: malformed LEB128 integer"));
     let mut x = 0u64;
@@ -353,10 +406,12 @@ pub fn state_layout(t: TemplateId) -> Vec<(Vec<u8>, usize)> {
     state_layout_of(template(t))
 }
 
-/// The pushes that make up a template's state span, in order: each field's push header (opcode
-/// and, for a push of more than 75 bytes, its length bytes) and data length. Every state field is a fixed-width canonical
-/// push (`0x20` + 32 bytes, `0x08` + 8 bytes, a committed exit state behind `OP_PUSHDATA1/2`), so the layout is the
-/// template's: it is read from the artifact's compiled instance.
+/// The pushes that make up a template's state span, in order.
+///
+/// Each is a field's push header and data length. The header is the opcode and, for a push of more
+/// than 75 bytes, its length bytes. Every state field is a fixed-width canonical push: `0x20` + 32
+/// bytes, `0x08` + 8 bytes, or a committed exit state behind `OP_PUSHDATA1/2`. The layout is
+/// therefore the template's, and it is read from the artifact's compiled instance.
 pub fn state_layout_of(tpl: &Template) -> Vec<(Vec<u8>, usize)> {
     let code = &tpl.contract().compiled.bytecode;
     let span = &code[tpl.prefix.len()..tpl.prefix.len() + tpl.state_len];
@@ -376,9 +431,14 @@ pub fn state_layout_of(tpl: &Template) -> Vec<(Vec<u8>, usize)> {
     out
 }
 
-/// Compact state: `zeroMask:LEB128` then every field in template order: an 8-byte field (an int) as the LEB128 of its
-/// eight bytes read as a little-endian u64, a 32-byte field raw unless its bit in `zeroMask` says it is all zero (bit k =
-/// the k-th 32-byte field), any other field raw. The push headers are the template's and are not spelled.
+/// Compact state: `zeroMask:LEB128`, then every field in template order.
+///
+/// - An 8-byte field (an int) is the LEB128 of its eight bytes read as a little-endian u64.
+/// - A 32-byte field is raw, unless its bit in `zeroMask` says it is all zero. Bit k stands for the
+///   k-th 32-byte field.
+/// - Any other field is raw.
+///
+/// The push headers are the template's and are not spelled.
 fn put_compact_state(out: &mut Vec<u8>, tpl: &Template, span: &[u8]) -> Result<()> {
     let mut fields: Vec<&[u8]> = vec![];
     let mut p = 0;
@@ -415,8 +475,10 @@ fn put_compact_state(out: &mut Vec<u8>, tpl: &Template, span: &[u8]) -> Result<(
     Ok(())
 }
 
-/// Reads a compact state and rebuilds the exact state span (refusing a non-canonical spelling: an all-zero 32-byte
-/// field not in the mask, a mask bit beyond the fields).
+/// Reads a compact state and rebuilds the exact state span.
+///
+/// It refuses a non-canonical spelling: an all-zero 32-byte field not in the mask, or a mask bit
+/// beyond the fields.
 fn get_compact_state(v: &[u8], p: &mut usize, tpl: &Template) -> Result<Vec<u8>> {
     let layout = state_layout_of(tpl);
     let n32 = layout.iter().filter(|(_, n)| *n == 32).count();
@@ -448,9 +510,12 @@ fn get_compact_state(v: &[u8], p: &mut usize, tpl: &Template) -> Result<Vec<u8>>
     Ok(span)
 }
 
-/// The checks an encoder shares with the decoder: an order template serving the record's family, a state of the
-/// template's length that decodes canonically, of that family (a pair order: the family of its base token A is the
-/// record's family), and passes the numeric gate ([`AnyState::check_numbers`]).
+/// The checks an encoder shares with the decoder.
+///
+/// The template must be an order template serving the record's family. The state must have the
+/// template's length, decode canonically, be of that family and pass the numeric gate
+/// ([`AnyState::check_numbers`]). For a pair order, the family of its base token A is the record's
+/// family.
 fn check_order_state(family: u8, t: TemplateId, state: &[u8]) -> Result<AnyState> {
     if t.kind_code().is_none() {
         return Err(Error::Payload(format!("{} is not an order template", t.name())));
@@ -470,16 +535,19 @@ fn check_order_state(family: u8, t: TemplateId, state: &[u8]) -> Result<AnyState
     Ok(s)
 }
 
-/// Encodes records into a `KOB1` payload: version 4 when it carries an `ORDER` or `AMEND` record, otherwise version 2
-/// (an x402 commitment or a note is the same bytes in every version, and stays what the x402 profile specifies).
+/// Encodes records into a `KOB1` payload.
+///
+/// The payload is version 4 when it carries an `ORDER` or `AMEND` record, and version 2 otherwise.
+/// An x402 commitment or a note is the same bytes in every version, and stays what the x402 profile
+/// specifies.
 pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
     let mut out = MAGIC.to_vec();
     out.push(if records.iter().any(Record::is_order_record) { PAYLOAD_VERSION } else { PAYLOAD_VERSION_2 });
     for r in records {
         match r {
             Record::Order { output, family, template: t, template_hash, state, custody, prefund, deadline } => {
-                // The rules a decoder applies: a malformed placement is refused here, not only
-                // by the indexer after it is on chain.
+                // The rules a decoder applies. A malformed placement is refused here, not only by
+                // the indexer after it is on chain.
                 let s = check_order_state(*family, *t, state)?;
                 if *template_hash != pinned_hash(*t) {
                     return Err(Error::Payload(format!("template hash of {} is not the pinned one", t.name())));
@@ -577,9 +645,12 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// [`encode`] as the builders write a payload: one that carries an `ORDER` record (a placement) also announces the release
-/// of this build ([`REC_RELEASE`], appended after the other records), unless the records already hold one or this is a
-/// pre-release build ([`Release::of_build`]). Every other payload is [`encode`]'s, byte for byte.
+/// [`encode`] as the builders write a payload.
+///
+/// A payload that carries an `ORDER` record (a placement) also announces the release of this build
+/// ([`REC_RELEASE`], appended after the other records). It does not when the records already hold
+/// one, or when this is a pre-release build ([`Release::of_build`]). Every other payload is
+/// [`encode`]'s, byte for byte.
 pub fn encode_with_release(records: &[Record]) -> Result<Vec<u8>> {
     let placement = records.iter().any(|r| matches!(r, Record::Order { .. }));
     let has = records.iter().any(|r| matches!(r, Record::Release { .. }));
@@ -593,8 +664,10 @@ pub fn encode_with_release(records: &[Record]) -> Result<Vec<u8>> {
     }
 }
 
-/// The release a payload announces: its first [`Record::Release`] (`None`: an older build's payload, a pre-release
-/// build's, or one without a placement; read it as "unknown or older").
+/// The release a payload announces, its first [`Record::Release`].
+///
+/// `None` means an older build's payload, a pre-release build's, or one without a placement. Read
+/// it as "unknown or older".
 pub fn release_of(p: &Payload) -> Option<Release> {
     p.records.iter().find_map(|r| match r {
         Record::Release { version } => Some(*version),
@@ -602,15 +675,19 @@ pub fn release_of(p: &Payload) -> Option<Release> {
     })
 }
 
-/// True for the KAS kinds that hold tokens in covenant-id custody (and carry a custody part). The pair kinds hold one or
-/// two custodies depending on their state: [`custody_families`].
+/// True for the KAS kinds that hold tokens in covenant-id custody and carry a custody part.
+///
+/// The pair kinds hold one or two custodies depending on their state, see [`custody_families`].
 pub fn holds_tokens(t: TemplateId) -> bool {
     matches!(t.base(), TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk)
 }
 
-/// The custody parts a placement record of `s` carries, in order, as the family of each custody's token (the codec of
-/// its extension commitment): a KAS kind's one custody of its token; a pair order's [`AnyState::custodies`] (the custody
-/// of S, a sell-first entry's A custody and then its B prefund), each in its own token's family.
+/// The custody parts a placement record of `s` carries, in order, as the family of each custody's
+/// token.
+///
+/// The family is the codec of the part's extension commitment. A KAS kind has one custody, of its
+/// token. A pair order has its [`AnyState::custodies`]: the custody of S, or a sell-first entry's A
+/// custody and then its B prefund, each in its own token's family.
 pub fn custody_families(s: &AnyState) -> Vec<Family> {
     match s.pair_tokens() {
         Some(t) => s
@@ -663,15 +740,15 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
             (REC_X402, _) if v.is_empty() || v.len() > 64 => return bad("x402 reference must be 1..=64 bytes"),
             (REC_X402, _) => Record::X402 { reference: v.to_vec() },
             (REC_NOTE, _) if v.len() > 64 => return bad("note longer than 64 bytes"),
-            // NOTE is optional: bytes that are not UTF-8 are kept as an unknown optional record instead of
-            // failing the whole payload.
+            // NOTE is optional. Bytes that are not UTF-8 are kept as an unknown optional record
+            // instead of failing the whole payload.
             (REC_NOTE, _) => match String::from_utf8(v.to_vec()) {
                 Ok(text) => Record::Note { text },
                 Err(_) => Record::Unknown { record_type: REC_NOTE, value: v.to_vec() },
             },
             (REC_SWEEP, _) => decode_sweep(v)?,
-            // RELEASE is optional: a value that is not exactly three canonical integers is kept as an unknown optional
-            // record (it never fails the payload, and never names a release).
+            // RELEASE is optional. A value that is not exactly three canonical integers is kept as
+            // an unknown optional record. It never fails the payload, and never names a release.
             (REC_RELEASE, _) => match decode_release(v) {
                 Some(version) => Record::Release { version },
                 None => Record::Unknown { record_type: REC_RELEASE, value: v.to_vec() },
@@ -683,7 +760,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<Payload>> {
     Ok(Some(Payload { version, records, legacy: false }))
 }
 
-/// Family and kind bytes of a record: a known family, a kind that is not retired.
+/// Family and kind bytes of a record: a known family, and a kind that is not retired.
 fn decode_kind(family: u8, kind: u8) -> Result<TemplateId> {
     let Some(fam) = Family::from_code(family) else {
         return Err(Error::Payload(format!("unsupported token family {family:#04x}")));
@@ -694,14 +771,19 @@ fn decode_kind(family: u8, kind: u8) -> Result<TemplateId> {
     TemplateId::from_kind_code(fam, kind).ok_or_else(|| Error::Payload(format!("unknown order kind {kind:#04x}")))
 }
 
-/// The build of a KRON kind a record's state takes: both builds of a kind share its code and its state layout, and the token
-/// program the state pins decides ([`AnyState::template_id`]: the `*KronD0` build for a program whose holders are id_type 0).
-/// The kind itself when the state does not decode (the record's checks then report why).
+/// The build of a KRON kind that a record's state takes.
+///
+/// Both builds of a kind share its code and its state layout, and the token program the state pins
+/// decides ([`AnyState::template_id`]). A program whose holders are id_type 0 takes the `*KronD0`
+/// build. When the state does not decode, the kind itself is returned, and the record's checks then
+/// report why.
 fn build_of(t: TemplateId, state: &[u8]) -> TemplateId {
     AnyState::decode_kind(t, state).map(|s| s.template_id()).unwrap_or(t)
 }
 
-/// Compact ORDER record (version 4): `output:LEB128 family:u8 kind:u8 flags:u8 state [custody] [deadline:LEB128]`.
+/// Compact ORDER record (version 4).
+///
+/// The layout is `output:LEB128 family:u8 kind:u8 flags:u8 state [custody] [deadline:LEB128]`.
 fn decode_order_compact(v: &[u8]) -> Result<Record> {
     let mut p = 0;
     let output = get_u16_varint(v, &mut p, "order output")?;
@@ -758,7 +840,9 @@ fn decode_sweep(v: &[u8]) -> Result<Record> {
     Ok(Record::Sweep { output, input })
 }
 
-/// RELEASE record (optional, any version): `major:LEB128 minor:LEB128 patch:LEB128`, canonical, nothing after them.
+/// RELEASE record (optional, any version).
+///
+/// The layout is `major:LEB128 minor:LEB128 patch:LEB128`, canonical, with nothing after them.
 fn decode_release(v: &[u8]) -> Option<Release> {
     let mut p = 0;
     let major = get_varint(v, &mut p, "release").ok()?;
@@ -767,7 +851,9 @@ fn decode_release(v: &[u8]) -> Option<Release> {
     (p == v.len()).then_some(Release::new(major, minor, patch))
 }
 
-/// AMEND record (version 4): `output:LEB128 input:LEB128 family:u8 kind:u8 flags:u8 state [deadline:LEB128]`.
+/// AMEND record (version 4).
+///
+/// The layout is `output:LEB128 input:LEB128 family:u8 kind:u8 flags:u8 state [deadline:LEB128]`.
 fn decode_amend(v: &[u8]) -> Result<Record> {
     let mut p = 0;
     let output = get_u16_varint(v, &mut p, "amend output")?;
@@ -803,7 +889,9 @@ pub struct RecoveredOrder {
     #[serde(with = "crate::json::field")]
     pub covenant_id: [u8; 32],
     pub order: AnyState,
-    /// Token custody UTXO (token-holding kinds; a pair order: the custody of S, a sell-first entry's A custody).
+    /// Token custody UTXO of a token-holding kind.
+    ///
+    /// For a pair order it is the custody of S, or a sell-first entry's A custody.
     pub custody: Option<RecoveredCustody>,
     /// A sell-first `KobIfdPair`'s B prefund custody UTXO (when it holds one).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -823,9 +911,11 @@ pub struct RecoveredCustody {
     pub state: TokenState,
 }
 
-/// The genesis checks of an order record at output `o` whose script must be `spk`: the output is a genesis whose
-/// covenant id is recomputed from the authorising input's outpoint, and the genesis group is that output alone. Returns
-/// the covenant id and the output's value.
+/// The genesis checks of an order record at output `o` whose script must be `spk`.
+///
+/// The output must be a genesis whose covenant id is recomputed from the authorising input's
+/// outpoint, and the genesis group must be that output alone. Returns the covenant id and the
+/// output's value.
 fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
     let Some(txo) = tx.outputs.get(o) else { return bad("no such output") };
@@ -855,9 +945,9 @@ fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     if id != cov.covenant_id {
         return bad("covenant id is not the genesis id of its group");
     }
-    // The genesis group is the order output alone: a sibling bound to the same covenant
-    // id would carry it forever and could unlock the order's custody (KCC-20 scheme 0x04 / KRON
-    // id_type 2 only check that some input carries the id) outside the order's rules.
+    // The genesis group is the order output alone. A sibling bound to the same covenant id would
+    // carry it forever, and could unlock the order's custody outside the order's rules, because
+    // KCC-20 scheme 0x04 and KRON id_type 2 only check that some input carries the id.
     let bound = tx.outputs.iter().filter(|x| x.covenant.as_ref().is_some_and(|c| c.covenant_id == id)).count();
     if group.len() != 1 || bound != 1 {
         return bad("the genesis group has other outputs (an order covenant must be its output alone)");
@@ -865,8 +955,10 @@ fn verify_genesis(tx: &TxJson, o: usize, spk: &str) -> Result<([u8; 32], u64)> {
     Ok((id, txo.value))
 }
 
-/// The custody output of an order record: the P2SH of the custody state (`amount` owned by the order's covenant id
-/// `id`) under the order's token program `tpl_hash` of family `fam`, bound to the token covenant `token`.
+/// The custody output of an order record.
+///
+/// It is the P2SH of the custody state (`amount` owned by the order's covenant id `id`) under the
+/// order's token program `tpl_hash` of family `fam`, bound to the token covenant `token`.
 #[allow(clippy::too_many_arguments)]
 fn verify_custody(
     tx: &TxJson,
@@ -897,8 +989,10 @@ fn verify_custody(
     Ok(RecoveredCustody { output: c.token_output as u32, value: tout.value, state: st })
 }
 
-/// The two tokens of a pair order: supported programs of the recorded families, with the lengths the covenant uses, and
-/// two different tokens.
+/// Checks the two tokens of a pair order.
+///
+/// They must be supported programs of the recorded families, with the lengths the covenant uses,
+/// and two different tokens.
 fn check_pair_programs(o: usize, t: &crate::state::PairTokens) -> Result<()> {
     let bad = |m: String| Err(Error::Payload(format!("order record for output {o}: {m}")));
     for (what, k) in [("A", &t.a), ("B", &t.b)] {
@@ -916,17 +1010,25 @@ fn check_pair_programs(o: usize, t: &crate::state::PairTokens) -> Result<()> {
     Ok(())
 }
 
-/// One custody an order record must carry: (token, its program hash, family, amount, the extension commitment the order
-/// pins for it).
+/// One custody an order record must carry.
+///
+/// It is (token, its program hash, family, amount, the extension commitment the order pins for it).
 type Wanted = ([u8; 32], [u8; 32], Family, i64, Option<[u8; 32]>);
 
-/// Re-derives every order a transaction created from its `KOB1` payload (version 4 records of the pinned templates),
-/// trusting nothing: the template must be pinned, the state must decode canonically, the output's script must be
-/// the P2SH of `template(state)`, the output must be a genesis whose covenant id is recomputed from
-/// the authorising input's outpoint, no other output may be bound to that covenant id (the genesis
-/// group is the order output alone), and the custody token output (if any) must be the P2SH of the
-/// custody state (exactly `amountLeft`) under the order's token program. An order's KCC-20 custody carries the extension
-/// commitment its state pins for it ([`AnyState::custody_ext`]). Records failing any check are errors.
+/// Re-derives every order a transaction created from its `KOB1` payload, trusting nothing.
+///
+/// Only version 4 records of the pinned templates are read. For each:
+/// - the template must be pinned, and the state must decode canonically,
+/// - the output's script must be the P2SH of `template(state)`,
+/// - the output must be a genesis whose covenant id is recomputed from the authorising input's
+///   outpoint,
+/// - no other output may be bound to that covenant id, since the genesis group is the order output
+///   alone,
+/// - the custody token output, if any, must be the P2SH of the custody state (exactly `amountLeft`)
+///   under the order's token program.
+///
+/// An order's KCC-20 custody carries the extension commitment its state pins for it
+/// ([`AnyState::custody_ext`]). Records failing any check are errors.
 pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
     let Some(p) = decode(&tx.payload)? else { return Ok(vec![]) };
     let mut out = vec![];
@@ -936,7 +1038,8 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
         let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
         let order = check_order_state(*family, *t, state)?;
         let (id, value) = verify_genesis(tx, o, &spk_to_string(&order.spk()))?;
-        // the custodies the order holds: (token, its program hash, family, amount, the extension commitment the order pins)
+        // The custodies the order holds: (token, its program hash, family, amount, the extension
+        // commitment the order pins).
         let wanted: Vec<Wanted> = match order.pair_tokens() {
             Some(pt) => {
                 check_pair_programs(o, &pt)?;
@@ -968,8 +1071,9 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
         }
         let mut got = vec![];
         for (c, (tok, tpl_hash, fam, amount, ext)) in parts.into_iter().zip(wanted) {
-            // an order takes only a custody of the commitment it pins (KobAsk / KobCondAsk extensionCommitment, KobIfdAsk its
-            // exit's, KobPair / KobCondPair sExt, KobIfdPair aExt / bExt)
+            // An order takes only a custody of the commitment it pins: the extensionCommitment of
+            // KobAsk and KobCondAsk, its exit's for KobIfdAsk, sExt for KobPair and KobCondPair,
+            // aExt or bExt for KobIfdPair.
             if fam == Family::Kcc20 && ext.is_some_and(|e| e != c.extension_commitment) {
                 return bad("the custody's extension commitment is not the one the order pins");
             }
@@ -993,26 +1097,37 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
 
 // ---------------------------------------------------------------- in-place amend
 
-/// Kinds a maker may amend in place (AMEND record): the plain ask and the plain bid of either family. Their
-/// `cancel` (maker, SIGHASH_ALL) constrains no output, so the maker can continue the order's covenant id. An ask's
-/// custody, owned by that id, never moves; a bid owns no tokens (its quantity is the KAS escrow on the order UTXO
-/// itself, and a stray owned by its id stays a stray: only a cancel sweeps strays).
+/// Kinds a maker may amend in place (AMEND record): the plain ask and the plain bid of either
+/// family.
+///
+/// Their `cancel` (maker, SIGHASH_ALL) constrains no output, so the maker can continue the order's
+/// covenant id. An ask's custody, owned by that id, never moves. A bid owns no tokens, since its
+/// quantity is the KAS escrow on the order UTXO itself. A stray owned by its id stays a stray,
+/// because only a cancel sweeps strays.
 pub fn amendable(t: TemplateId) -> bool {
     matches!(t.base(), TemplateId::KobAsk | TemplateId::KobBid)
 }
 
 /// The terms an in-place amend keeps.
 ///
-/// A plain ask: the template, the maker, the token (covenant id, program and its template lengths, and the
-/// `extensionCommitment` its custody carries: the order settles only a custody of that commitment), the `scale` (prices
-/// of one lineage stay comparable) and `amountLeft`, so the custody the order already holds stays exactly `amountLeft`
-/// (C7). What may change: `price`, `tip`, `minFill`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`, `interval`,
-/// `maxFill`, `slope`, `priceEnd`, `decayStep` (a quantity change re-custodies: cancel-replace).
+/// A plain ask keeps:
+/// - the template and the maker,
+/// - the token: its covenant id, its program with the template lengths, and the
+///   `extensionCommitment` its custody carries, since the order settles only a custody of that
+///   commitment,
+/// - the `scale`, so that the prices of one lineage stay comparable,
+/// - `amountLeft`, so that the custody the order already holds stays exactly `amountLeft` (the
+///   exact-custody rule, C7 in `docs/ops/executor.md`).
 ///
-/// A plain bid: the template, the maker, the token (covenant id, program, template lengths and the pinned
-/// `extensionCommitment` its deliveries carry) and the `scale`. Its quantity is its escrow, so every other term may
-/// change (price, tip, minimum fill, time in force, timing, rising-bid terms, `reserve`, `deliveryCarrier`); the builder
-/// checks that the continuation still funds one minimum fill at the new terms ([`crate::build::min_order_value`]).
+/// It may change `price`, `tip`, `minFill`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`,
+/// `interval`, `maxFill`, `slope`, `priceEnd` and `decayStep`. A quantity change re-custodies, so
+/// it is a cancel-replace.
+///
+/// A plain bid keeps the template, the maker, the token (covenant id, program, template lengths and
+/// the pinned `extensionCommitment` its deliveries carry) and the `scale`. Its quantity is its
+/// escrow, so every other term may change: price, tip, minimum fill, time in force, timing,
+/// rising-bid terms, `reserve` and `deliveryCarrier`. The builder checks that the continuation
+/// still funds one minimum fill at the new terms ([`crate::build::min_order_value`]).
 pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
     let bad = |m: &str| Err(Error::Payload(format!("amend: {m}")));
     if previous.template_id() != next.template_id() {
@@ -1029,7 +1144,8 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
                 return bad("the token cannot change");
             }
             if a.extension_commitment != b.extension_commitment {
-                // the order settles only a custody of the commitment it pins, and the custody stays where it is
+                // The order settles only a custody of the commitment it pins, and the custody stays
+                // where it is.
                 return bad("the extensionCommitment cannot change (the order settles only the custody it holds)");
             }
             if (a.scale, a.amount_left) != (b.scale, b.amount_left) {
@@ -1057,8 +1173,10 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
     Ok(())
 }
 
-/// An order its maker amended in place (AMEND record), re-derived trusting nothing but the previous state, which
-/// the caller proves (the indexer from the revealed redeem script it tracks, a wallet from its own signing plan).
+/// An order its maker amended in place (AMEND record), re-derived trusting only the previous state.
+///
+/// The caller proves the previous state: the indexer from the revealed redeem script it tracks, a
+/// wallet from its own signing plan.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AmendedOrder {
@@ -1080,13 +1198,20 @@ pub struct AmendedOrder {
     pub deadline: Option<u64>,
 }
 
-/// Verifies one AMEND record of `tx` against `previous`, the state of the order the input spent, and `entry`, the
-/// entry that spent it: the record's state decodes canonically under a pinned amendable template, the input was
-/// spent by the maker's `cancel`, carries a covenant id and is the P2SH of `previous`, no other input carries that
-/// id, the terms keep the custody exact ([`check_amend_terms`]), and the output is the P2SH of the new state,
-/// bound to the same covenant id with the order input as its authorising input, and the ONLY output of the
-/// transaction bound to that id (as for a genesis, `recover_orders` rule 4: a sibling would carry the id and could
-/// unlock the custody outside the order's rules).
+/// Verifies one AMEND record of `tx` against `previous` and `entry`.
+///
+/// `previous` is the state of the order the input spent, and `entry` the entry that spent it. The
+/// checks are:
+/// - the record's state decodes canonically under a pinned amendable template,
+/// - the input was spent by the maker's `cancel`, carries a covenant id and is the P2SH of
+///   `previous`,
+/// - no other input carries that id,
+/// - the terms keep the custody exact ([`check_amend_terms`]),
+/// - the output is the P2SH of the new state, bound to the same covenant id with the order input as
+///   its authorising input,
+/// - the output is the only one of the transaction bound to that id. As for a genesis (rule 4 of
+///   `recover_orders`), a sibling would carry the id and could unlock the custody outside the
+///   order's rules.
 pub fn verify_amend(tx: &TxJson, record: &Record, previous: &AnyState, entry: &str) -> Result<AmendedOrder> {
     let Record::Amend { output, input, family, template: t, state, deadline } = record else {
         return Err(Error::Payload("not an amend record".into()));
@@ -1149,11 +1274,16 @@ pub struct SweptOrder {
     pub covenant_id: [u8; 32],
 }
 
-/// Verifies one SWEEP record of `tx` against `previous`, the state of the order the input spent (the caller proves it), and
-/// `entry`, the entry that spent it: the input was spent by the maker's `cancel`, carries a covenant id and is the P2SH of
-/// `previous`, no other input carries that id, and the output is the P2SH of the SAME state, bound to the same covenant
-/// id with the order input as its authorising input and the only output bound to that id. The order continues unchanged
-/// (custody included: a custody spent by the same transaction is the caller's check, as for an amend).
+/// Verifies one SWEEP record of `tx` against `previous` and `entry`.
+///
+/// `previous` is the state of the order the input spent, which the caller proves, and `entry` the
+/// entry that spent it. The input must have been spent by the maker's `cancel`, carry a covenant id
+/// and be the P2SH of `previous`, and no other input may carry that id. The output must be the P2SH
+/// of the same state, bound to the same covenant id with the order input as its authorising input,
+/// and the only output bound to that id.
+///
+/// The order continues unchanged, custody included. As for an amend, the caller checks a custody
+/// spent by the same transaction.
 pub fn verify_sweep(tx: &TxJson, record: &Record, previous: &AnyState, entry: &str) -> Result<SweptOrder> {
     let Record::Sweep { output, input } = record else {
         return Err(Error::Payload("not a sweep record".into()));
@@ -1186,8 +1316,10 @@ pub fn verify_sweep(tx: &TxJson, record: &Record, previous: &AnyState, entry: &s
     Ok(SweptOrder { transaction_id: tx.id, output: o as u32, input: i as u32, value: txo.value, covenant_id: id })
 }
 
-/// Data pushes of a push-only script (direct pushes, OP_PUSHDATA1/2/4, and the small-number opcodes `OP_1NEGATE`,
-/// `OP_1` .. `OP_16`, which push no data bytes: they appear as empty items); `None` for any other opcode.
+/// Data pushes of a push-only script, or `None` for any other opcode.
+///
+/// Direct pushes and OP_PUSHDATA1/2/4 give their data. The small-number opcodes `OP_1NEGATE` and
+/// `OP_1` .. `OP_16` push no data bytes and appear as empty items.
 fn script_pushes(script: &[u8]) -> Option<Vec<&[u8]>> {
     let mut out = vec![];
     let mut p = 0usize;
@@ -1217,8 +1349,10 @@ fn script_pushes(script: &[u8]) -> Option<Vec<&[u8]>> {
     Some(out)
 }
 
-/// The previous state and entry of an order input from its signature script (`args… ‖ push(tag) ‖ push(redeem)`):
-/// the redeem script must be an instance of `t`, the tag one of its entries.
+/// The previous state and entry of an order input, from its signature script.
+///
+/// The script is `args… ‖ push(tag) ‖ push(redeem)`. The redeem script must be an instance of `t`,
+/// and the tag one of its entries.
 fn revealed(t: TemplateId, sigscript: &[u8]) -> Result<(AnyState, String)> {
     let bad = |m: &str| Error::Payload(format!("amend: {m}"));
     let pushes = script_pushes(sigscript).ok_or_else(|| bad("the order input's signature script is not push-only"))?;
@@ -1236,9 +1370,11 @@ fn revealed(t: TemplateId, sigscript: &[u8]) -> Result<(AnyState, String)> {
     Ok((previous, entry))
 }
 
-/// Re-derives every in-place amend of a SIGNED transaction from its `KOB1` payload: the previous state and the entry
-/// are what each order input's signature script reveals (its redeem script hashes to the spent output: consensus
-/// checked it, [`verify_amend`] checks the P2SH again). All-or-nothing per payload, like [`recover_orders`].
+/// Re-derives every in-place amend of a signed transaction from its `KOB1` payload.
+///
+/// The previous state and the entry are what each order input's signature script reveals. Its
+/// redeem script hashes to the spent output, which consensus checked, and [`verify_amend`] checks
+/// the P2SH again. Like [`recover_orders`], it is all-or-nothing per payload.
 pub fn recover_amends(tx: &TxJson) -> Result<Vec<AmendedOrder>> {
     recover_amends_with(tx, |r| {
         let Record::Amend { input, template: t, .. } = r else { unreachable!("amend records only") };
@@ -1247,8 +1383,10 @@ pub fn recover_amends(tx: &TxJson) -> Result<Vec<AmendedOrder>> {
     })
 }
 
-/// [`recover_amends`] for a built, unsigned transaction: the previous state and the entry are the signing plan's
-/// (`BuiltTx::plans`), which the builder derived from the order the wallet is spending.
+/// [`recover_amends`] for a built, unsigned transaction.
+///
+/// The previous state and the entry are the signing plan's (`BuiltTx::plans`), which the builder
+/// derived from the order the wallet is spending.
 pub fn recover_amends_planned(tx: &TxJson, plans: &[SigPlan]) -> Result<Vec<AmendedOrder>> {
     recover_amends_with(tx, |r| {
         let Record::Amend { input, .. } = r else { unreachable!("amend records only") };
@@ -1294,7 +1432,7 @@ mod tests {
         odd.extend_from_slice(&[0; 3]);
         odd[6] += 3;
         assert!(decode(&odd).is_err());
-        // Version 1 (the pre-v2.4 layout) and unknown versions are not accepted.
+        // Version 1 and unknown versions are not accepted.
         for v in [1u8, 5, 0xff] {
             let mut x = bytes.clone();
             x[4] = v;
@@ -1323,15 +1461,16 @@ mod tests {
         assert!(encode(&[Record::X402 { reference: vec![] }]).is_err());
         assert!(encode(&[Record::X402 { reference: vec![1; 65] }]).is_err());
         assert!(decode(&rec(REC_NOTE, &[b'a'; 65])).is_err());
-        // A NOTE that is not UTF-8 does not fail the payload: it is kept (and re-encoded) as an unknown optional record.
+        // A NOTE that is not UTF-8 does not fail the payload. It is kept, and re-encoded, as an
+        // unknown optional record.
         let mut with_order = encode(&[Record::order(0, &st, None, None)]).unwrap();
         with_order.extend_from_slice(&rec(REC_NOTE, &[0xff, 0xfe])[5..]);
         let p = decode(&with_order).unwrap().unwrap();
         assert!(matches!(p.records[0], Record::Order { .. }));
         assert_eq!(p.records[1], Record::Unknown { record_type: REC_NOTE, value: vec![0xff, 0xfe] });
         assert_eq!(encode(&p.records).unwrap(), with_order);
-        // The encoder refuses what a decoder refuses: another template hash, another state length, a
-        // state that does not decode canonically.
+        // The encoder refuses what a decoder refuses: another template hash, another state length,
+        // or a state that does not decode canonically.
         let Record::Order { output, family, template: t, template_hash, state, custody, deadline, .. } =
             Record::order(0, &st, None, None)
         else {
@@ -1360,7 +1499,8 @@ mod tests {
         assert!(p.legacy);
         assert_eq!(p.records, vec![Record::X402 { reference: vec![10, 11] }]);
         assert!(decode(b"other").unwrap().is_none());
-        // A payload without order records stays version 2 (the x402 profile's commitment payload, byte for byte).
+        // A payload without order records stays version 2, byte for byte the x402 profile's
+        // commitment payload.
         let x = encode(&[Record::X402 { reference: vec![7; 32] }, Record::Note { text: "n".into() }]).unwrap();
         assert_eq!(&x[..5], b"KOB1\x02");
         assert_eq!(decode(&x).unwrap().unwrap().version, 2);
@@ -1387,7 +1527,9 @@ mod tests {
         }
     }
 
-    /// The compact state of every pinned order template round-trips losslessly and is shorter than the span.
+    /// The compact state of every pinned order template round-trips losslessly.
+    ///
+    /// It is also shorter than the span.
     #[test]
     fn every_template_state_is_a_push_layout_and_compacts_losslessly() {
         for tpl in TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some()).map(template) {
@@ -1409,10 +1551,11 @@ mod tests {
         let rec = Record::order(0, &st, custody.clone(), Some(1_790_726_400));
         let bytes = encode(std::slice::from_ref(&rec)).unwrap();
         assert_eq!(decode(&bytes).unwrap().unwrap().records, vec![rec.clone()]);
-        // The record carries no template hash and no push opcodes: well under the version-2 layout (2 + 1 + 1 + 32 + 2 +
-        // 243 + 34 + 8 bytes).
+        // The record carries no template hash and no push opcodes, so it is well under the
+        // version-2 layout (2 + 1 + 1 + 32 + 2 + 243 + 34 + 8 bytes).
         assert!(bytes.len() - 8 < 323 - 8 - 32 - 19, "{}", bytes.len());
-        // A zero extension commitment is a flag; spelled out it is refused (one encoding per record).
+        // A zero extension commitment is a flag. Spelled out it is refused, so there is one
+        // encoding per record.
         let zero = Record::order(0, &st, Some(Custody { token_output: 1, extension_commitment: [0; 32] }), None);
         let zb = encode(std::slice::from_ref(&zero)).unwrap();
         assert_eq!(decode(&zb).unwrap().unwrap().records, vec![zero]);
@@ -1449,9 +1592,11 @@ mod tests {
         assert!(decode(&forged).unwrap_err().to_string().contains("not amended in place"));
     }
 
-    /// A pair order's record names the family of its BASE token A (kind 0x08 / 0x09 / 0x0a in both families); each custody
-    /// part is in the family of its own token (a KRON custody spells no extension commitment), and a sell-first KobIfdPair
-    /// holding a prefund carries a second custody part.
+    /// A pair order's record names the family of its base token A, with kinds 0x08 to 0x0a in both
+    /// families.
+    ///
+    /// Each custody part is in the family of its own token, and a KRON custody spells no extension
+    /// commitment. A sell-first KobIfdPair holding a prefund carries a second custody part.
     #[test]
     fn pair_records_name_the_base_family_and_their_custodies() {
         use crate::state::{IfdPairState, PairState};
@@ -1537,8 +1682,10 @@ mod tests {
         assert_eq!(custody_families(&bid).len(), 1);
     }
 
-    /// The numeric gate applies to every placement record: a scale that is not a power of ten, or an amount whose full
-    /// fill at the order's price is worth 2^62 or more, is refused.
+    /// The numeric gate applies to every placement record.
+    ///
+    /// A scale that is not a power of ten, or an amount whose full fill at the order's price is
+    /// worth 2^62 or more, is refused.
     #[test]
     fn records_pass_the_numeric_gate() {
         let AnyState::KobAsk(a) = compiled(TemplateId::KobAsk) else { panic!() };
@@ -1551,8 +1698,10 @@ mod tests {
         assert!(encode(&[Record::order(0, &huge, c, None)]).is_err());
     }
 
-    /// The RELEASE record: the builders' encoding appends it to a placement and nothing else, it round-trips, a malformed
-    /// value never fails the payload, and a build that does not know the type (an older one) reads the same placement.
+    /// The RELEASE record round-trips, and the builders' encoding appends it to a placement only.
+    ///
+    /// A malformed value never fails the payload, and a build that does not know the type, an older
+    /// one, reads the same placement.
     #[test]
     fn release_record_rules() {
         let st = compiled(TemplateId::KobAsk);
@@ -1564,7 +1713,8 @@ mod tests {
             Some(r) => {
                 assert_eq!(p.records, vec![order.clone(), Record::Release { version: r }]);
                 assert_eq!(release_of(&p), Some(r));
-                // appended after the placement: the ORDER record's bytes are unchanged, 3 header bytes + 3 integers follow
+                // It is appended after the placement. The ORDER record's bytes are unchanged, and 3
+                // header bytes and 3 integers follow.
                 assert_eq!(&with[..without.len()], &without[..]);
                 assert_eq!(with.len(), without.len() + 6, "a release below 128.128.128 spells in 3 bytes");
                 assert_eq!(with[without.len()], REC_RELEASE);
@@ -1572,21 +1722,23 @@ mod tests {
             }
             None => assert_eq!(with, without),
         }
-        // a payload without a placement record is encode's, byte for byte (the x402 commitment stays version 2)
+        // A payload without a placement record is encode's, byte for byte, so the x402 commitment
+        // stays version 2.
         let x = [Record::X402 { reference: vec![7; 32] }];
         assert_eq!(encode_with_release(&x).unwrap(), encode(&x).unwrap());
-        // a release the records already hold is kept, not doubled
+        // A release the records already hold is kept, not doubled.
         let mine = [order.clone(), Record::Release { version: Release::new(7, 8, 9) }];
         assert_eq!(encode_with_release(&mine).unwrap(), encode(&mine).unwrap());
         let p = decode(&encode(&mine).unwrap()).unwrap().unwrap();
         assert_eq!(p.records, mine.to_vec());
         assert_eq!(release_of(&p), Some(Release::new(7, 8, 9)));
-        // an older payload (no RELEASE record) names no release: "unknown or older"
+        // An older payload, without a RELEASE record, names no release: "unknown or older".
         assert_eq!(release_of(&decode(&without).unwrap().unwrap()), None);
         // large components round-trip (LEB128)
         let big = [order.clone(), Record::Release { version: Release::new(1, 300, u64::MAX) }];
         assert_eq!(decode(&encode(&big).unwrap()).unwrap().unwrap().records, big.to_vec());
-        // a malformed value is an unknown optional record (kept verbatim), never an error and never a release
+        // A malformed value is an unknown optional record, kept verbatim, never an error and never
+        // a release.
         for bad in [&[][..], &[1, 2], &[1, 2, 3, 4], &[0x80, 0x00, 1, 2], &[0x80]] {
             let mut b = without.clone();
             b.push(REC_RELEASE);
@@ -1597,8 +1749,9 @@ mod tests {
             assert_eq!(release_of(&p), None);
             assert_eq!(encode(&p.records).unwrap(), b);
         }
-        // the old reader: a build that does not know type 0x84 treats it as every optional type it does not know (skipped,
-        // kept verbatim), so it reads exactly the placement. The same bytes under a type no build assigns show that path.
+        // The old reader. A build that does not know type 0x84 treats it as every optional type it
+        // does not know, skipped and kept verbatim, so it reads exactly the placement. The same
+        // bytes under a type no build assigns show that path.
         let mut old = with.clone();
         if old.len() > without.len() {
             old[without.len()] = 0x9f;
@@ -1630,20 +1783,23 @@ mod tests {
         for bad in ["", "0.1", "0.1.1.1", "0.1.x", "01.1.1", "0.1.-1", "0.1.1-rc.1", " 0.1.1", "0..1"] {
             assert!(bad.parse::<Release>().is_err(), "{bad}");
         }
-        // strictly newer only; the same core is newer than a pre-release build of it
+        // Strictly newer only. The same core is newer than a pre-release build of it.
         assert!(r("0.1.1").is_newer_than(r("0.1.0"), false));
         assert!(!r("0.1.0").is_newer_than(r("0.1.0"), false));
         assert!(!r("0.0.9").is_newer_than(r("0.1.0"), false));
         assert!(r("0.2.0").is_newer_than(r("0.2.0"), true));
         assert!(!r("0.1.9").is_newer_than(r("0.2.0"), true));
-        // this build: its own release is never newer than itself
+        // This build: its own release is never newer than itself.
         assert!(!Release::build_core().is_newer_than_build() || Release::build_is_prerelease());
         assert_eq!(Release::of_build().is_some(), !Release::build_is_prerelease());
         assert_eq!(Release::build_core().to_string(), env!("CARGO_PKG_VERSION").split('-').next().unwrap());
     }
 
-    /// An `ORDER` record of version 2 and every payload of version 3 name templates this build does not pin: they do not
-    /// decode. A version-2 payload without order records (an x402 commitment, a note) still does, byte for byte.
+    /// An `ORDER` record of version 2 and every payload of version 3 name templates this build does
+    /// not pin.
+    ///
+    /// They do not decode. A version-2 payload without order records, such as an x402 commitment or
+    /// a note, still does, byte for byte.
     #[test]
     fn order_records_of_older_payload_versions_do_not_decode() {
         let st = compiled(TemplateId::KobAsk);
