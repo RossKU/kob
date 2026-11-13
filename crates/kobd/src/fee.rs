@@ -1,20 +1,29 @@
-//! Fee policy (`docs/ops/executor.md`, fee policy; `docs/spec/matcher.md` §7): the rate every transaction of the executor pays,
-//! from the node's fee estimate.
+//! Fee policy: the rate every transaction of the executor pays, from the node's fee estimate.
 //!
-//! The node (rusty-kaspa v2.1.0 `getFeeEstimate`) answers three kinds of buckets in sompi per gram: a *priority* bucket
-//! (sub-second inclusion), *normal* buckets (the first: sub-minute) and *low* buckets (the first: sub-hour). Each job picks a
+//! The policy is described in `docs/ops/executor.md` ("Fee policy") and `docs/spec/matcher.md`,
+//! section 7.
+//!
+//! The node (`getFeeEstimate`) answers three kinds of buckets in sompi per gram. The *priority*
+//! bucket promises sub-second inclusion. The *normal* buckets promise sub-minute inclusion for the
+//! first one. The *low* buckets promise sub-hour inclusion for the first one. Each job picks a
 //! bucket by its [`Urgency`]:
 //!
-//! | urgency | bucket | jobs |
-//! |---|---|---|
-//! | [`Urgency::High`] | priority | matcher batches that fill an IOC / FOK / market / streaming order or a triggered stop; keeper kills; x402 intent executions |
-//! | [`Urgency::Normal`] | first normal | every other matcher batch; keeper refunds; x402 intent expiries |
-//! | [`Urgency::Low`] | first low | maintenance (merges, sales of the operator's tokens); keeper closes and sweeps |
+//! - [`Urgency::High`] uses the priority bucket. Its jobs are matcher batches that fill an IOC,
+//!   FOK, market or streaming order or a triggered stop, keeper kills and x402 intent executions.
+//! - [`Urgency::Normal`] uses the first normal bucket. Its jobs are every other matcher batch,
+//!   keeper refunds and x402 intent expiries.
+//! - [`Urgency::Low`] uses the first low bucket. Its jobs are maintenance (merges, sales of the
+//!   operator's tokens) and keeper closes and sweeps.
 //!
-//! The rate is `ceil(bucket)` clamped to `[floor, max_rate]` (the floor is the relay minimum 100 or the operator's
-//! `--fee-rate`, which wins over a lower `max_rate`). A transaction whose fee would exceed `max_tx_fee` is rebuilt at the rate
-//! that fits ([`FeeRates::capped`]), never below the floor. Without an estimate (the node does not answer it, it is malformed,
-//! or the last good one is older than `max_age`) every bucket is the floor: the policy never stops a job, it only prices it.
+//! The rate is `ceil(bucket)` clamped to `[floor, max_rate]`. The floor is the relay minimum 100 or
+//! the operator's `--fee-rate`, which wins over a lower `max_rate`.
+//!
+//! A transaction whose fee would exceed `max_tx_fee` is rebuilt at the rate that fits
+//! ([`FeeRates::capped`]), never below the floor.
+//!
+//! Without an estimate every bucket is the floor. That covers a node that does not answer, a
+//! malformed answer and a last good answer older than `max_age`. The policy never stops a job. It
+//! only prices it.
 
 use std::time::{Duration, Instant};
 
@@ -33,6 +42,7 @@ pub enum Urgency {
 }
 
 impl Urgency {
+    /// The lowercase name: `low`, `normal` or `high`.
     pub fn name(self) -> &'static str {
         match self {
             Urgency::Low => "low",
@@ -61,13 +71,16 @@ pub struct FeePolicy {
     pub dynamic: bool,
     /// The lowest rate, sompi per gram (at least the relay minimum, 100).
     pub floor: u64,
-    /// The highest rate the estimate may raise a transaction to, sompi per gram (below the floor: the floor).
+    /// The highest rate the estimate may raise a transaction to, sompi per gram. A value below the
+    /// floor means the floor.
     pub max_rate: u64,
-    /// The most one transaction pays in fees, sompi (0: no total cap). Never pushes a transaction below the floor.
+    /// The most one transaction pays in fees, sompi (0: no total cap). It never pushes a
+    /// transaction below the floor.
     pub max_tx_fee: u64,
     /// How often the estimate is read, milliseconds.
     pub refresh_ms: u64,
-    /// The last good estimate is used this long while the node does not answer a new one, milliseconds; then the floor.
+    /// The last good estimate is used this long while the node does not answer a new one,
+    /// milliseconds. After that the floor applies.
     pub max_age_ms: u64,
 }
 
@@ -96,7 +109,7 @@ impl FeePolicy {
         let ceiling = self.max_rate.max(floor);
         let est = est.filter(|_| self.dynamic);
         let pick = |u: Urgency| match est {
-            // `as u64` saturates (and maps NaN to 0, which the floor lifts)
+            // `as u64` saturates, and maps NaN to 0, which the floor lifts.
             Some(e) => (bucket(e, u).ceil() as u64).clamp(floor, ceiling),
             None => floor,
         };
@@ -111,7 +124,9 @@ impl FeePolicy {
     }
 }
 
-/// Command-line options of the fee policy (`kobd --executor`, `match`, `keep`); the floor is the command's `--fee-rate`.
+/// Command-line options of the fee policy (`kobd --executor`, `match`, `keep`).
+///
+/// The floor is the command's `--fee-rate`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct FeeArgs {
     /// Do not read the node's fee estimate: every transaction pays `--fee-rate`.
@@ -120,13 +135,15 @@ pub struct FeeArgs {
     /// The highest rate the fee estimate may raise a transaction to, sompi per gram.
     #[arg(long, default_value_t = 1_000)]
     pub fee_max_rate: u64,
-    /// The most one transaction pays in fees, KAS (0: no total cap). Never pushes a transaction below `--fee-rate`.
+    /// The most one transaction pays in fees, KAS (0: no total cap). Never pushes a transaction
+    /// below `--fee-rate`.
     #[arg(long, default_value_t = 1.0)]
     pub fee_max_tx_kas: f64,
     /// How often the fee estimate is read, milliseconds.
     #[arg(long, default_value_t = 10_000)]
     pub fee_refresh_ms: u64,
-    /// The last good fee estimate is used this long while the node answers none, milliseconds; then `--fee-rate`.
+    /// The last good fee estimate is used this long while the node answers none, milliseconds;
+    /// then `--fee-rate`.
     #[arg(long, default_value_t = 60_000)]
     pub fee_max_age_ms: u64,
 }
@@ -151,14 +168,19 @@ impl FeeArgs {
     }
 }
 
-/// The rates of one tick (sompi per gram), by urgency. The default is the floor everywhere and no total cap: a configuration
-/// that never sets them behaves as before the policy.
+/// The rates of one tick (sompi per gram), by urgency.
+///
+/// The default is the floor everywhere and no total cap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FeeRates {
+    /// The lowest rate, which every urgency respects.
     pub floor: u64,
+    /// The rate of [`Urgency::Low`].
     pub low: u64,
+    /// The rate of [`Urgency::Normal`].
     pub normal: u64,
+    /// The rate of [`Urgency::High`].
     pub high: u64,
     /// The most one transaction pays, sompi (0: no cap).
     pub max_tx_fee: u64,
@@ -193,9 +215,11 @@ impl FeeRates {
         self.floor.max(base)
     }
 
-    /// The total cap: a transaction built at `rate` that paid `fee` above `max_tx_fee` is rebuilt at the returned rate (the
-    /// largest that fits, `rate × max / fee` rounded down, at least `floor`). `None`: no cap, the fee fits, or the rate cannot
-    /// go lower.
+    /// The total cap. A transaction built at `rate` that paid `fee` above `max_tx_fee` is rebuilt
+    /// at the returned rate.
+    ///
+    /// That is the largest rate that fits, `rate × max / fee` rounded down, and at least `floor`.
+    /// The result is `None` when there is no cap, the fee fits or the rate cannot go lower.
     pub fn capped(&self, rate: u64, fee: u64, floor: u64) -> Option<u64> {
         if self.max_tx_fee == 0 || fee <= self.max_tx_fee || rate <= floor || fee == 0 {
             return None;
@@ -204,9 +228,12 @@ impl FeeRates {
         Some(r.max(floor)).filter(|r| *r < rate)
     }
 
-    /// The rate of a job priced from its build at `floor` (which paid `fee_at_floor` and left `profit_at_floor`, when its
-    /// profit counts): `want` (its urgency's rate) lowered to the total cap and to the highest rate that leaves `min_profit`
-    /// (the fee is linear in the rate: `fee(r) = r × fee_at_floor / floor`). At least `floor`.
+    /// The rate of a job priced from its build at `floor`.
+    ///
+    /// The build paid `fee_at_floor` and left `profit_at_floor`, when its profit counts. The result
+    /// is `want` (its urgency's rate) lowered to the total cap and to the highest rate that leaves
+    /// `min_profit`. The fee is linear in the rate, `fee(r) = r × fee_at_floor / floor`. The result
+    /// is at least `floor`.
     pub fn priced(&self, want: u64, floor: u64, fee_at_floor: u64, profit_at_floor: Option<i64>, min_profit: i64) -> u64 {
         if want <= floor || floor == 0 || fee_at_floor == 0 {
             return floor;
@@ -226,8 +253,11 @@ impl FeeRates {
         (r.min(u64::MAX as u128) as u64).max(floor)
     }
 
-    /// The highest rate at which a job built at `rate` for `fee` still leaves `min_profit` of a `profit` (profit is linear in
-    /// the fee: `profit(r) = profit + fee − r × fee / rate`). `None`: not even the floor leaves it, or `rate` already does.
+    /// The highest rate at which a job built at `rate` for `fee` still leaves `min_profit` of a
+    /// `profit`.
+    ///
+    /// The profit is linear in the fee, `profit(r) = profit + fee − r × fee / rate`. The result is
+    /// `None` when not even the floor leaves it, or `rate` already does.
     pub fn affordable(rate: u64, fee: u64, profit: i64, min_profit: i64, floor: u64) -> Option<u64> {
         if profit >= min_profit || rate == 0 || fee == 0 {
             return None;
@@ -241,8 +271,10 @@ impl FeeRates {
     }
 }
 
-/// The current rates shared by the parts of one process: the runner publishes the rates of each step that plans, the x402
-/// facilitator of `kobd --executor` prices its intent executions and expiries with them. Starts at the floor.
+/// The current rates shared by the parts of one process. It starts at the floor.
+///
+/// The runner publishes the rates of each step that plans. The x402 facilitator of
+/// `kobd --executor` prices its intent executions and expiries with them.
 pub type FeeBoard = std::sync::Arc<std::sync::Mutex<FeeRates>>;
 
 /// The rates on a board (a poisoned lock still holds the last rates).
@@ -250,7 +282,7 @@ pub fn read_board(b: &FeeBoard) -> FeeRates {
     *b.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Sets the fee rate of a builder request (any action; the fee mode is kept).
+/// Sets the fee rate of a builder request of any action. The fee mode is kept.
 pub fn set_rate(a: &mut kob_protocol::build::Action, rate: u64) {
     use kob_protocol::build::Action;
     let fee = match a {
@@ -267,7 +299,9 @@ pub fn set_rate(a: &mut kob_protocol::build::Action, rate: u64) {
     fee.fee_rate = Some(rate);
 }
 
-/// The estimate a process keeps between ticks: refreshed every `refresh_ms`, the last good one used up to `max_age_ms`.
+/// The estimate a process keeps between ticks.
+///
+/// It is refreshed every `refresh_ms`, and the last good one is used up to `max_age_ms`.
 #[derive(Debug, Default)]
 pub struct FeeState {
     /// The last good estimate and when it was read.
@@ -335,7 +369,7 @@ mod tests {
             "lowBuckets": [{"feerate": 115.0, "estimatedSeconds": 3000.0}]
         }});
         assert_eq!(FeeEstimate::parse(&v).unwrap(), est(211.4, 194.0, 115.0));
-        // the inner object alone, empty lists take the next faster bucket
+        // The inner object alone. Empty lists take the next faster bucket.
         let v = json!({"priorityBucket": {"feerate": 1.0}, "normalBuckets": [], "lowBuckets": []});
         assert_eq!(FeeEstimate::parse(&v).unwrap(), est(1.0, 1.0, 1.0));
         for bad in [
@@ -352,25 +386,25 @@ mod tests {
     #[test]
     fn buckets_by_urgency_rounded_up_and_clamped() {
         let p = FeePolicy { max_rate: 300, ..FeePolicy::default() };
-        // the soak's congestion: normal 140..194, low 115, priority above
+        // The congestion of the soak: normal 140..194, low 115, priority above.
         let r = p.rates(Some(&est(250.2, 194.0, 115.01)));
         assert_eq!((r.high, r.normal, r.low, r.floor, r.estimated), (251, 194, 116, 100, true));
         assert_eq!(r.rate(Urgency::High, 100), 251);
         assert_eq!(r.rate(Urgency::Normal, 100), 194);
         assert_eq!(r.rate(Urgency::Low, 100), 116);
-        // a component's own higher rate wins
+        // A component's own higher rate wins.
         assert_eq!(r.rate(Urgency::Low, 150), 150);
-        // an idle network estimates the relay minimum or less: the floor
+        // An idle network estimates the relay minimum or less: the floor.
         let r = p.rates(Some(&est(1.0, 1.0, 1.0)));
         assert_eq!((r.high, r.normal, r.low), (100, 100, 100));
-        // a spike is clamped to max_rate; an absurd one too
+        // A spike is clamped to max_rate. An absurd one too.
         let r = p.rates(Some(&est(5_000.0, f64::MAX, 301.0)));
         assert_eq!((r.high, r.normal, r.low), (300, 300, 300));
-        // max_rate below the floor: the floor
+        // A max_rate below the floor gives the floor.
         let p2 = FeePolicy { floor: 200, max_rate: 150, ..FeePolicy::default() };
         let r = p2.rates(Some(&est(500.0, 180.0, 120.0)));
         assert_eq!((r.high, r.normal, r.low, r.floor), (200, 200, 200, 200));
-        // a configured floor below the relay minimum is lifted to it
+        // A configured floor below the relay minimum is lifted to it.
         assert_eq!(FeePolicy { floor: 10, ..FeePolicy::default() }.rates(None).floor, 100);
     }
 
@@ -388,39 +422,39 @@ mod tests {
     #[test]
     fn total_cap_lowers_the_rate_never_below_the_floor() {
         let r = FeeRates { max_tx_fee: 1_000_000, ..FeeRates::flat(100) };
-        // 500 sompi/g for 2,000,000: 250 fits exactly
+        // 500 sompi/g for 2,000,000: 250 fits exactly.
         assert_eq!(r.capped(500, 2_000_000, 100), Some(250));
-        // under the cap: unchanged
+        // Under the cap: unchanged.
         assert_eq!(r.capped(500, 1_000_000, 100), None);
-        // the floor is the limit
+        // The floor is the limit.
         assert_eq!(r.capped(500, 50_000_000, 100), Some(100));
         assert_eq!(r.capped(100, 50_000_000, 100), None);
-        // no cap
+        // No cap.
         assert_eq!(FeeRates::flat(100).capped(500, u64::MAX, 100), None);
     }
 
     #[test]
     fn affordable_rate_keeps_the_minimum_profit() {
-        // built at 300 for 30,000 (mass 100), profit -5,000: room 25,000 -> 250
+        // Built at 300 for 30,000 (mass 100), profit -5,000: room 25,000 -> 250.
         assert_eq!(FeeRates::affordable(300, 30_000, -5_000, 0, 100), Some(250));
-        // profitable already
+        // Profitable already.
         assert_eq!(FeeRates::affordable(300, 30_000, 10, 0, 100), None);
-        // not even at the floor (100 -> fee 10,000, profit -25,000)
+        // Not even at the floor (100 -> fee 10,000, profit -25,000).
         assert_eq!(FeeRates::affordable(300, 30_000, -25_000, 0, 100), None);
-        // min_profit counts
+        // min_profit counts.
         assert_eq!(FeeRates::affordable(300, 30_000, -5_000, 5_000, 100), Some(200));
     }
 
     #[test]
     fn a_job_is_priced_from_its_floor_build() {
         let r = FeeRates { max_tx_fee: 0, ..FeeRates::flat(100) };
-        // mass 1,000 (fee 100,000 at 100): a tip leaving 250,000 at the floor pays up to 350
+        // Mass 1,000 (fee 100,000 at 100): a tip leaving 250,000 at the floor pays up to 350.
         assert_eq!(r.priced(300, 100, 100_000, Some(250_000), 0), 300);
         assert_eq!(r.priced(1_000_000, 100, 100_000, Some(250_000), 0), 350);
         assert_eq!(r.priced(1_000_000, 100, 100_000, Some(250_000), 50_000), 300);
-        // nothing left at the floor: the floor
+        // Nothing left at the floor: the floor.
         assert_eq!(r.priced(1_000, 100, 100_000, Some(-5), 0), 100);
-        // no profit to keep (a merge): the cap only
+        // No profit to keep (a merge): the cap only.
         let capped = FeeRates { max_tx_fee: 200_000, ..FeeRates::flat(100) };
         assert_eq!(capped.priced(1_000, 100, 100_000, None, 0), 200);
         assert_eq!(capped.priced(1_000, 100, 300_000, None, 0), 100, "the cap never goes below the floor");
@@ -438,14 +472,14 @@ mod tests {
         assert!(!s.due(&p, t0 + Duration::from_secs(5)));
         assert!(s.due(&p, t0 + Duration::from_secs(10)));
         assert_eq!(s.rates(&p, t0 + Duration::from_secs(5)).normal, 200);
-        // a failed read keeps the last good estimate while it is fresh
+        // A failed read keeps the last good estimate while it is fresh.
         s.record(t0 + Duration::from_secs(10), Err("down".into()));
         assert!(s.failing);
         assert_eq!(s.rates(&p, t0 + Duration::from_secs(60)).normal, 200);
-        // then the floor
+        // Then the floor.
         assert_eq!(s.rates(&p, t0 + Duration::from_secs(61)).normal, 100);
         assert_eq!(s.failures, 1);
-        // a static policy never asks
+        // A static policy never asks.
         assert!(!FeeState::default().due(&FeePolicy::fixed(100), t0));
     }
 }
