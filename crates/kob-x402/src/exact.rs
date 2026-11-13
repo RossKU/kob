@@ -1,14 +1,24 @@
-//! KAS `standard-native` exact: the elldeeone binding (`kaspa-exact-v2`, "Standard-native profile",
-//! "Verification", "Expiry"), verified from the payer's signed version-0 transaction.
+//! Verifier for the KAS `standard-native` exact profile of the `kaspa-exact-v2` binding.
 //!
-//! [`verify_native`] fails closed and trusts nothing the payer supplies: the transaction id is
-//! recomputed, every input is resolved from the trusted chain view (embedded UTXO hints are only a
-//! lookup key that must match), the payer's signatures run through the script engine, the merchant
-//! gain is checked exactly, and the request authorization digest is recomputed by the verifier.
+//! The binding sections are "Standard-native profile", "Verification" and "Expiry". The input is
+//! the payer's signed version-0 transaction.
 //!
-//! The module also carries independent implementations of the binding's transaction-id preimages
-//! ([`spec_txid_v0`], [`spec_txid_v1`]) written from the specification text only, so the interop
-//! vectors can prove that the pinned rusty-kaspa hashes exactly what the binding says.
+//! # Verification
+//!
+//! [`verify_native`] fails closed and trusts nothing the payer supplies.
+//!
+//! - The transaction id is recomputed.
+//! - Every input is resolved from the trusted chain view. Embedded UTXO hints are only a lookup
+//!   key and must match.
+//! - The payer's signatures run through the script engine.
+//! - The merchant gain is checked exactly.
+//! - The verifier recomputes the request authorization digest.
+//!
+//! # Id preimages
+//!
+//! The module also holds independent implementations of the binding's transaction-id preimages,
+//! [`spec_txid_v0`] and [`spec_txid_v1`]. They are written from the specification text only. The
+//! interop vectors use them to check that the pinned rusty-kaspa hashes what the binding says.
 
 use kaspa_consensus_core::tx::Transaction;
 use serde_json::{json, Map};
@@ -26,7 +36,7 @@ use crate::wire::{
     parse_hash32, PaymentPayload, PaymentRequirements, Profile, ASSET_KAS, AUTH_VERSION_SIGNED, BINDING_EXACT, TX_ENCODING,
 };
 
-/// `extra` fields of the additive profile; they MUST be absent from a standard-native offer.
+/// `extra` fields of the additive profile. A standard-native offer must not carry them.
 pub const ADDITIVE_EXTRA_KEYS: [&str; 10] = [
     "templateId",
     "headId",
@@ -40,18 +50,24 @@ pub const ADDITIVE_EXTRA_KEYS: [&str; 10] = [
     "challengeExpiresAt",
 ];
 
-/// Length of a canonical P2PK signature script: `OP_DATA_65 <64-byte Schnorr signature> <hash type>`.
+/// Length of a canonical P2PK signature script.
+///
+/// The script is `OP_DATA_65 <64-byte Schnorr signature> <hash type>`.
 pub const P2PK_SIGSCRIPT_LEN: usize = 66;
-/// `SIGHASH_ALL`: what KOB's own signers always use, and the only hash type KOB's own profiles (`kcc20`, swap-and-pay,
-/// intents) accept (`crate::sighash`). A standard-native payment accepts every consensus-supported hash type
-/// ([`crate::sighash::CONSENSUS_HASH_TYPES`]), as the binding's 1.0.0 verifiers do.
+/// The `SIGHASH_ALL` hash type byte.
+///
+/// KOB's own signers always use it. It is the only hash type that KOB's own profiles accept, which
+/// are `kcc20`, swap-and-pay and intents (`crate::sighash`). A standard-native payment accepts
+/// every consensus-supported hash type ([`crate::sighash::CONSENSUS_HASH_TYPES`]), as the
+/// binding's 1.0.0 verifiers do.
 pub const SIGHASH_ALL: u8 = 0x01;
 
 /// Verifies a `standard-native` payment (see `crate::verify`).
 ///
-/// Order: cheap envelope, profile and authorization checks first, then the artifact bounds and shape,
-/// then the trusted chain lookup, the authorization signature, and finally the script engine, fee
-/// and mass validation. Expiry is evaluated again after the chain work, right before returning.
+/// The cheap envelope, profile and authorization checks run first. Then come the artifact bounds
+/// and shape, the trusted chain lookup, the authorization signature and, last, the script engine,
+/// fee and mass validation. Expiry is evaluated again after the chain work, before the result is
+/// built.
 pub fn verify_native(
     ctx: &VerifyCtx,
     offered: &PaymentRequirements,
@@ -93,7 +109,7 @@ pub fn verify_native(
             format!("standard-native requires authorization version {AUTH_VERSION_SIGNED}"),
         ));
     }
-    // Early expiry decision (cheap, before any node call); repeated after the chain work below.
+    // Decide expiry early, before any node call. It is repeated after the chain work below.
     check_expiry(ctx.clock.now_ms(), env.max_timeout_seconds, &auth.expires_at)?;
 
     // Binding steps 3 and 4: bounds, canonical decode, recomputed id.
@@ -102,9 +118,11 @@ pub fn verify_native(
     check_context(tx)?;
     let pay_idx = check_merchant_output(tx, &env.pay_to_spk, env.amount, payload.payload.payment_output_index)?;
 
-    // Binding step 11: request authorization by an authoritative funding input. Checked against the key of the input's
-    // embedded utxo BEFORE any chain lookup: the lookup is by that script, so the resolved input has the same key, and a
-    // payload that the payer did not authorize makes the chain resolve nothing.
+    // Binding step 11: request authorization by an authoritative funding input.
+    //
+    // It is checked against the key of the input's embedded utxo before any chain lookup. The
+    // lookup is by that script, so the resolved input has the same key. A payload that the payer
+    // did not authorize makes the chain resolve nothing.
     for (i, h) in parsed.hints.iter().enumerate() {
         if h.as_ref().is_some_and(|h| !is_p2pk(&h.script_public_key)) {
             return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, format!("input {i} is not a standard Schnorr P2PK")));
@@ -163,12 +181,15 @@ pub fn verify_native(
         return Err(X402Error::payload(Diag::InvalidKaspaExactUtxo, "the authorizing input resolved to another script"));
     }
 
-    // Every input is a standard Schnorr P2PK of the payer with a canonical signature script: one 65-byte push whose
-    // trailing byte is a consensus-supported hash type. The binding (1.0.0) honors each signature's encoded type: the signer
-    // chooses its scope, while the exact merchant output, the recipient script, the profile and the request authorization
-    // stay mandatory below. A weaker scope only risks the payer's own funds: the facilitator settles exactly the verified
-    // transaction (its id commits to every output) and watches its merchant output, so a relayed variant with other outputs
-    // is another transaction that never settles this payment.
+    // Every input is a standard Schnorr P2PK of the payer. Its signature script is one 65-byte push
+    // whose trailing byte is a consensus-supported hash type.
+    //
+    // The binding (1.0.0) honors each signature's encoded type, so the signer chooses its scope.
+    // The exact merchant output, the recipient script, the profile and the request authorization
+    // stay mandatory below. A weaker scope only risks the payer's own funds. The facilitator
+    // settles exactly the verified transaction, whose id commits to every output, and watches its
+    // merchant output. A relayed variant with other outputs is another transaction that never
+    // settles this payment.
     for (i, (inp, e)) in tx.inputs.iter().zip(&entries).enumerate() {
         if !is_p2pk(&e.script_public_key) {
             return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, format!("input {i} is not a standard Schnorr P2PK")));
@@ -247,8 +268,10 @@ pub fn verify_native(
     })
 }
 
-/// Transaction context of the profile: version 0, native subnetwork (enforced by the decoder), gas 0,
-/// lock time 0, empty payload, no output covenants, one or two outputs.
+/// Checks the transaction context the profile requires.
+///
+/// That is version 0, gas 0, lock time 0, an empty payload, no output covenants and one or two
+/// outputs. The decoder enforces the native subnetwork.
 fn check_context(tx: &Transaction) -> Result<()> {
     let bad = |m: &str| Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, m.to_string()));
     if tx.version != 0 {
@@ -272,7 +295,9 @@ fn check_context(tx: &Transaction) -> Result<()> {
     Ok(())
 }
 
-/// Exactly one output pays `pay_to_spk`, at `paymentOutputIndex`, with exactly `amount`. Returns its index.
+/// Checks the merchant output and returns its index.
+///
+/// Exactly one output pays `pay_to_spk`, at `paymentOutputIndex`, with exactly `amount`.
 fn check_merchant_output(
     tx: &Transaction,
     pay_to_spk: &kaspa_consensus_core::tx::ScriptPublicKey,
@@ -311,7 +336,7 @@ pub fn verify_schnorr_digest(sig64: &[u8], digest: &[u8; 32], key: &[u8; 32]) ->
     secp.verify_schnorr(&sig, &msg, &key).is_ok()
 }
 
-// ---------------------------------------------------------------------------- spec txid preimages
+// Spec txid preimages.
 
 fn put_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -322,10 +347,13 @@ fn put_varbytes(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
 }
 
-/// The transaction serialization shared by both id preimages ("Integer and byte serialization"):
-/// signature scripts are always written as empty byte strings; `payload` is written as given
-/// (v0: the real payload, v1: empty, its digest is hashed separately); version-1 outputs append a
-/// covenant-presence byte and the binding (`u16 authorizingInput || 32-byte covenantId`).
+/// The transaction serialization shared by both id preimages ("Integer and byte serialization").
+///
+/// - Signature scripts are always written as empty byte strings.
+/// - `payload` is written as given. Version 0 passes the real payload. Version 1 passes an empty
+///   one and hashes its digest separately.
+/// - Version-1 outputs append a covenant-presence byte and the binding, which is
+///   `u16 authorizingInput || 32-byte covenantId`.
 fn serialize_for_id(tx: &Transaction, payload: &[u8]) -> Vec<u8> {
     let mut o = Vec::new();
     o.extend_from_slice(&tx.version.to_le_bytes());
@@ -364,7 +392,7 @@ pub fn spec_txid_v0_preimage(tx: &Transaction) -> Vec<u8> {
     serialize_for_id(tx, &tx.payload)
 }
 
-/// Version-0 transaction id: BLAKE2b-256 keyed with the UTF-8 bytes `TransactionID` over the preimage.
+/// Version-0 transaction id: BLAKE2b-256 keyed with `TransactionID` (UTF-8) over the preimage.
 pub fn spec_txid_v0(tx: &Transaction) -> [u8; 32] {
     let h = blake2b_simd::Params::new().hash_length(32).key(b"TransactionID").hash(&spec_txid_v0_preimage(tx));
     h.as_bytes().try_into().expect("32 bytes")

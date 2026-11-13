@@ -1,10 +1,23 @@
-//! Checks shared by every profile: envelope, transaction bounds, trusted input resolution, fee / mass /
-//! script validation, authorization expiry and the two request-authorization digests.
+//! Checks shared by every profile, and the two request-authorization digests.
 //!
-//! The order of checks follows the binding's "Verification" list (`kaspa-exact-v2.md`):
-//! 1 shape, 2 `payToScriptPublicKey` re-derivation, 3 size bounds, 4 canonical decode and id,
-//! 5 trusted UTXO resolution, 6 hint comparison, 7 signatures / witnesses (script engine), 9 fee and mass,
-//! 10 consensus-style validation, 11 request authorization.
+//! The checks cover the envelope, transaction bounds, trusted input resolution, fee, mass and
+//! script validation, and authorization expiry.
+//!
+//! # Order
+//!
+//! The order follows the binding's "Verification" list (`kaspa-exact-v2.md`). The step numbers
+//! are the binding's, and this list has no step 8.
+//!
+//! - Step 1: shape.
+//! - Step 2: `payToScriptPublicKey` re-derivation.
+//! - Step 3: size bounds.
+//! - Step 4: canonical decode and transaction id.
+//! - Step 5: trusted UTXO resolution.
+//! - Step 6: hint comparison.
+//! - Step 7: signatures and witnesses, through the script engine.
+//! - Step 9: fee and mass.
+//! - Step 10: consensus-style validation.
+//! - Step 11: request authorization.
 
 use std::collections::BTreeSet;
 
@@ -46,12 +59,15 @@ fn same_json(a: &impl serde::Serialize, b: &impl serde::Serialize) -> Result<boo
     Ok(canonical_json(&a)? == canonical_json(&b)?)
 }
 
-/// Validates the envelope (binding steps 1 and 2 and the request-hash rule) and returns its facts.
+/// Validates the envelope and returns its facts.
 ///
-/// * `offered` is the requirement the resource server holds (from its own `accepts`); `payload.accepted`
-///   must equal it (canonical JSON), so a payer cannot change amount, recipient, asset or profile;
-/// * `request_hash_hex` is the resource server's independently computed fingerprint; it must equal
-///   `payload.requestHash` (the facilitator never infers it from the payload).
+/// This is binding steps 1 and 2 and the request-hash rule.
+///
+/// - `offered` is the requirement the resource server holds, taken from its own `accepts`.
+///   `payload.accepted` must equal it in canonical JSON, so a payer cannot change the amount,
+///   recipient, asset or profile.
+/// - `request_hash_hex` is the resource server's independently computed fingerprint. It must equal
+///   `payload.requestHash`. The facilitator never infers it from the payload.
 pub fn check_envelope(
     ctx: &VerifyCtx,
     offered: &PaymentRequirements,
@@ -94,7 +110,7 @@ pub fn check_envelope(
     if payload.payload.kind != PAYLOAD_EXACT_TX {
         return Err(X402Error::payload(Diag::InvalidKaspaX402Payload, "payload.type must be exact-transaction"));
     }
-    // payTo -> script public key, independently.
+    // Derive the script public key from payTo independently of the offer.
     let pay_to = Address::try_from(offered.pay_to.as_str())
         .map_err(|e| X402Error::requirements(Diag::InvalidKaspaX402Binding, format!("payTo is not a Kaspa address: {e}")))?;
     if pay_to.prefix != network.prefix() {
@@ -105,7 +121,7 @@ pub fn check_envelope(
     if claimed != spk_to_hex(&pay_to_spk) {
         return Err(X402Error::requirements(Diag::InvalidKaspaX402Binding, "extra.payToScriptPublicKey does not match payTo"));
     }
-    // requestHash: the caller's independently computed value must equal the payload's.
+    // The caller's independently computed requestHash must equal the payload's.
     let request_hash = parse_hash32(request_hash_hex)
         .ok_or_else(|| X402Error::payload(Diag::InvalidKaspaX402Payload, "requestHash is not 32-byte hex"))?;
     let embedded = parse_hash32(&payload.payload.request_hash)
@@ -129,8 +145,9 @@ pub fn check_envelope(
     })
 }
 
-/// Parses the transaction artifact under the resource bounds (binding steps 3 and 4). The transaction
-/// id is recomputed by the consensus library; a stated `id` must match.
+/// Parses the transaction artifact under the resource bounds (binding steps 3 and 4).
+///
+/// The consensus library recomputes the transaction id, and a stated `id` must match it.
 pub fn parse_tx(ctx: &VerifyCtx, payload: &PaymentPayload) -> Result<ParsedTx> {
     let lim = &ctx.policy.limits;
     let safe = SafeTx::parse(&payload.payload.transaction, lim.max_tx_json_bytes)?;
@@ -166,9 +183,12 @@ fn is_p2sh(spk: &ScriptPublicKey) -> bool {
     spk.version() == 0 && s.len() == 35 && s[0] == 0xaa && s[1] == 0x20 && s[34] == 0x87
 }
 
-/// Bounds what the embedded hints may make the chain resolve, before any lookup: a P2SH hint must be the hash of the
-/// redeem script its input carries (consensus requires it of every P2SH spend), and the other hinted scripts (each a
-/// lookup of a whole address on a node) are at most `max_input_scripts` distinct ones.
+/// Bounds what the embedded hints may make the chain resolve, before any lookup.
+///
+/// - A P2SH hint must be the hash of the redeem script its input carries. Consensus requires this
+///   of every P2SH spend.
+/// - The other hinted scripts number at most `max_input_scripts` distinct ones. Each is a lookup
+///   of a whole address on a node.
 pub fn check_hint_scripts(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<()> {
     let mut others: BTreeSet<&[u8]> = BTreeSet::new();
     for (i, (inp, hint)) in parsed.tx.inputs.iter().zip(&parsed.hints).enumerate() {
@@ -201,9 +221,10 @@ pub fn check_hint_scripts(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<()> {
     Ok(())
 }
 
-/// Resolves every input from the trusted chain view and compares the embedded hints (binding steps 5
-/// and 6). An input that is not in the UTXO set is spent or unknown: `invalid_transaction_state`.
-/// [`check_hint_scripts`] bounds the lookup first.
+/// Resolves every input from the trusted chain view and compares the embedded hints.
+///
+/// This is binding steps 5 and 6. An input that is not in the UTXO set is spent or unknown, which
+/// fails as `invalid_transaction_state`. [`check_hint_scripts`] bounds the lookup first.
 pub fn resolve_entries(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<Vec<UtxoEntry>> {
     let mut wanted = Vec::with_capacity(parsed.tx.inputs.len());
     for (i, (inp, hint)) in parsed.tx.inputs.iter().zip(&parsed.hints).enumerate() {
@@ -235,7 +256,7 @@ pub fn resolve_entries(ctx: &VerifyCtx, parsed: &ParsedTx) -> Result<Vec<UtxoEnt
     Ok(entries)
 }
 
-/// Fee, mass and script validation (binding steps 7, 9 and 10). Returns the fee.
+/// Validates fee, mass and scripts (binding steps 7, 9 and 10) and returns the fee.
 pub fn check_economics_and_scripts(ctx: &VerifyCtx, tx: &Transaction, entries: &[UtxoEntry]) -> Result<u64> {
     let total_in: u128 = entries.iter().map(|e| e.amount as u128).sum();
     let total_out: u128 = tx.outputs.iter().map(|o| o.value as u128).sum();
@@ -265,7 +286,8 @@ pub fn check_economics_and_scripts(ctx: &VerifyCtx, tx: &Transaction, entries: &
     }
     kob_protocol::verify::validate(tx, entries).map_err(|e| {
         let msg = e.to_string();
-        // "engine: input N: <script error>": a failing plain P2PK input is a signature failure.
+        // The engine message reads "engine: input N: <script error>". A failing plain P2PK input
+        // is a signature failure.
         let diag = match msg.split("input ").nth(1).and_then(|r| r.split(':').next()).and_then(|n| n.trim().parse::<usize>().ok()) {
             Some(n) if entries.get(n).is_some_and(|en| is_p2pk(&en.script_public_key)) => Diag::InvalidKaspaExactSignature,
             _ => Diag::InvalidKaspaExactTransaction,
@@ -285,9 +307,9 @@ pub fn p2pk_key(spk: &ScriptPublicKey) -> Option<[u8; 32]> {
     is_p2pk(spk).then(|| spk.script()[1..33].try_into().expect("32 bytes"))
 }
 
-// ------------------------------------------------------------------------------------------ expiry
+// Expiry.
 
-/// Parses `YYYY-MM-DDTHH:MM:SS(.mmm)?Z` (UTC) into unix milliseconds.
+/// Parses `YYYY-MM-DDTHH:MM:SS(.mmm)?Z` (UTC) into Unix milliseconds.
 pub fn parse_iso_ms(s: &str) -> Option<u64> {
     let b = s.as_bytes();
     let digits = |r: std::ops::Range<usize>| -> Option<u64> {
@@ -321,7 +343,7 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
     if d > dim {
         return None;
     }
-    // days from civil (Howard Hinnant)
+    // Days from civil date, after Howard Hinnant's algorithm.
     let (yy, m) = if mo <= 2 { (y as i64 - 1, mo as i64 + 9) } else { (y as i64, mo as i64 - 3) };
     let era = yy.div_euclid(400);
     let yoe = yy - era * 400;
@@ -334,8 +356,9 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
     Some(((days as u64 * 24 + h) * 60 + mi) * 60_000 + sec * 1_000 + ms)
 }
 
-/// Authorization expiry rule (`Expiry`): strictly after `now` and no later than `now + maxTimeoutSeconds`.
-/// Returns the expiry in unix ms.
+/// Checks the authorization expiry rule and returns the expiry in Unix milliseconds.
+///
+/// The expiry must be strictly after `now` and no later than `now + maxTimeoutSeconds`.
 pub fn check_expiry(now_ms: u64, max_timeout_seconds: u64, expires_at: &str) -> Result<u64> {
     let exp = parse_iso_ms(expires_at).ok_or_else(|| {
         X402Error::payload(Diag::InvalidAuthorization, "authorization.expiresAt is not a millisecond ISO-8601 UTC timestamp")
@@ -352,7 +375,7 @@ pub fn check_expiry(now_ms: u64, max_timeout_seconds: u64, expires_at: &str) -> 
     Ok(exp)
 }
 
-/// Formats unix milliseconds as `YYYY-MM-DDTHH:MM:SS.mmmZ`.
+/// Formats Unix milliseconds as `YYYY-MM-DDTHH:MM:SS.mmmZ`.
 pub fn iso_from_ms(ms: u64) -> String {
     let days = (ms / 86_400_000) as i64;
     let rem = ms % 86_400_000;
@@ -369,9 +392,11 @@ pub fn iso_from_ms(ms: u64) -> String {
     format!("{y:04}-{m:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{milli:03}Z")
 }
 
-// -------------------------------------------------------------------------------- authorization digests
+// Authorization digests.
 
-/// Inputs of the binding's Schnorr-signed request authorization digest (`kaspa-x402-exact-request-authorization-v2`).
+/// Inputs of the binding's Schnorr-signed request authorization digest.
+///
+/// The digest domain is `kaspa-x402-exact-request-authorization-v2`.
 pub struct SignedAuth<'a> {
     pub network: Network,
     pub profile: Profile,
@@ -382,7 +407,7 @@ pub struct SignedAuth<'a> {
     pub pay_to_spk_hex: &'a str,
     pub requirements_hash: &'a [u8; 32],
     pub request_hash: &'a [u8; 32],
-    /// The logical payment identifier, verbatim (`paymentPayload.extensions["payment-identifier"].info.id`).
+    /// The logical payment identifier, verbatim, from `extensions["payment-identifier"].info.id`.
     pub payment_identifier: &'a str,
     pub challenge_id: Option<&'a str>,
     pub input_index: u32,
@@ -414,15 +439,17 @@ pub fn signed_auth_digest(a: &SignedAuth) -> Result<[u8; 32]> {
     canonical_hash(&signed_auth_object(a))
 }
 
-/// Inputs of the KOB payload-commitment digest (`kob-x402-payload-commitment-v2`), used where the
-/// paying authority is not a single P2PK signer (KCC-20 owner witnesses, swap-and-pay). It commits to
-/// everything the signed digest does (the payment identifier included) except the transaction id and the input index
-/// (the digest is embedded in the transaction payload, so it cannot contain the id), and every input authorizer's
-/// SIGHASH_ALL covers the payload.
+/// Inputs of the KOB payload-commitment digest (`kob-x402-payload-commitment-v2`).
+///
+/// It is used where the paying authority is not a single P2PK signer, such as KCC-20 owner
+/// witnesses and swap-and-pay. It commits to everything the signed digest does, including the
+/// payment identifier, except the transaction id and the input index. The digest is embedded in the
+/// transaction payload, so it cannot contain the id. Every input authorizer's SIGHASH_ALL covers
+/// the payload.
 pub struct PayloadCommit<'a> {
     pub network: Network,
     pub profile: Profile,
-    /// Swap-and-pay: the covenant id the payer pays with; `None` for a direct token payment.
+    /// Swap-and-pay only: the covenant id the payer pays with. `None` for a direct token payment.
     pub route_pay_asset: Option<&'a str>,
     pub asset: &'a str,
     pub amount: &'a str,
@@ -460,15 +487,18 @@ pub fn payload_commit_digest(c: &PayloadCommit) -> Result<[u8; 32]> {
     canonical_hash(&payload_commit_object(c))
 }
 
-/// The transaction payload that carries a commitment: a `KOB1` payload with one `X402` record holding
-/// the 32-byte digest.
+/// The transaction payload that carries a commitment.
+///
+/// It is a `KOB1` payload with one `X402` record holding the 32-byte digest.
 pub fn commitment_payload(digest: &[u8; 32]) -> Vec<u8> {
     kob_protocol::payload::encode(&[kob_protocol::payload::Record::X402 { reference: digest.to_vec() }])
         .expect("32-byte reference encodes")
 }
 
-/// Checks that the transaction payload commits to `digest`: a non-legacy `KOB1` payload with exactly
-/// one `X402` record equal to the digest, and no other record except notes.
+/// Checks that the transaction payload commits to `digest`.
+///
+/// The payload must be a non-legacy `KOB1` payload with exactly one `X402` record equal to the
+/// digest. It may hold no other record except notes.
 pub fn check_payload_commitment(tx: &Transaction, digest: &[u8; 32]) -> Result<()> {
     use kob_protocol::payload::{decode, Record};
     let p = decode(&tx.payload)
@@ -499,7 +529,7 @@ pub fn check_payload_commitment(tx: &Transaction, digest: &[u8; 32]) -> Result<(
     Ok(())
 }
 
-/// SHA-256 of the requirements' canonical JSON as lowercase hex (convenience for SDKs).
+/// SHA-256 of the requirements' canonical JSON as lowercase hex, for SDKs.
 pub fn requirements_hash_hex(req: &PaymentRequirements) -> Result<String> {
     Ok(hex(&requirements_hash(req)?))
 }
@@ -509,12 +539,12 @@ pub fn sha256_hex(b: &[u8]) -> String {
     hex(&sha256(b))
 }
 
-/// Payer receipt address: the address of a P2PK / P2SH script public key on `network`.
+/// Payer receipt address: the address of a P2PK or P2SH script public key on `network`.
 pub fn address_of(spk: &ScriptPublicKey, network: Network) -> Option<String> {
     kaspa_txscript::extract_script_pub_key_address(spk, network.prefix()).ok().map(|a| a.to_string())
 }
 
-/// Effective required finality: the offer's, raised to the policy minimum.
+/// The finality to require: the offer's, raised to the policy minimum.
 pub fn effective_finality(offered: Finality, policy: &crate::policy::Policy) -> Finality {
     offered.max(policy.min_finality)
 }
@@ -524,8 +554,10 @@ pub fn is_payment_id(s: &str) -> bool {
     (16..=128).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
 }
 
-/// The id a payer signs under: `explicit`, else a fresh random one ([`crate::client::native::random_payment_id`]). Fails on a
-/// malformed explicit id. The id is chosen before the authorization digest, which binds it.
+/// The id a payer signs under.
+///
+/// It is `explicit`, else a fresh random one from [`crate::client::native::random_payment_id`].
+/// A malformed explicit id fails. The id is chosen before the authorization digest, which binds it.
 pub fn resolve_payment_id(explicit: Option<&str>) -> Result<String> {
     let id = explicit.map_or_else(crate::client::native::random_payment_id, str::to_string);
     if !is_payment_id(&id) {
@@ -534,9 +566,12 @@ pub fn resolve_payment_id(explicit: Option<&str>) -> Result<String> {
     Ok(id)
 }
 
-/// The `payment-identifier` extension of a payload (`paymentPayload.extensions["payment-identifier"].info`):
-/// `{ "required": bool, "id": "^[A-Za-z0-9_-]{16,128}$" }`. Mandatory for every exact payment (the binding requires it,
-/// and both authorization digests bind the id): a missing or malformed id fails.
+/// The id from the `payment-identifier` extension of a payload.
+///
+/// The extension is `paymentPayload.extensions["payment-identifier"].info`, shaped
+/// `{ "required": bool, "id": "^[A-Za-z0-9_-]{16,128}$" }`. Every exact payment needs it, because
+/// the binding requires it and both authorization digests bind the id. A missing or malformed id
+/// fails.
 pub fn payment_identifier(payload: &PaymentPayload) -> Result<String> {
     let id =
         payload.extensions.as_ref().and_then(|e| e.get("payment-identifier")).and_then(|e| e.get("info")).and_then(|i| i.get("id"));
@@ -585,14 +620,15 @@ mod tests {
         let ctx = VerifyCtx { chain: &chain, clock: &clock, policy: &policy };
         let max = policy.limits.max_input_scripts;
         let sig = vec![0x41; 66];
-        // up to the bound of distinct non-P2SH scripts; repeats of one script count once
+        // Up to the bound of distinct non-P2SH scripts pass, and repeats of one script count once.
         let ok: Vec<_> = (0..2 * max).map(|k| (sig.clone(), p2pk_spk(&pubkey((k % max) as u8 + 10)))).collect();
         assert!(check_hint_scripts(&ctx, &parsed(ok.clone())).is_ok());
         let mut over = ok;
         over.push((sig.clone(), p2pk_spk(&pubkey(99))));
         let e = check_hint_scripts(&ctx, &parsed(over)).unwrap_err();
         assert!(e.message.contains("distinct scripts"), "{e:?}");
-        // a P2SH script is named by the redeem script its input carries, and does not count against the bound
+        // A P2SH script is named by the redeem script its input carries. It does not count against
+        // the bound.
         let redeem = vec![0x51u8, 0x52];
         let mut push = vec![redeem.len() as u8];
         push.extend_from_slice(&redeem);
@@ -602,7 +638,7 @@ mod tests {
         let other = kob_protocol::script::p2sh_spk(&[0x53]);
         let e = check_hint_scripts(&ctx, &parsed(vec![(push, other)])).unwrap_err();
         assert!(e.message.contains("redeem script"), "{e:?}");
-        // and the lookup itself is refused before the chain is asked
+        // The lookup itself is refused before the chain is asked.
         let mut over: Vec<_> = (0..=max).map(|k| (sig.clone(), p2pk_spk(&pubkey(k as u8 + 10)))).collect();
         over.truncate(max + 1);
         assert!(resolve_entries(&ctx, &parsed(over)).unwrap_err().message.contains("distinct scripts"));
