@@ -1,18 +1,28 @@
-//! Recovery hooks for the case the chain data is gone (downtime beyond the node's pruning window,
-//! a lost database with no record log): maker-side order export/import and gap reconciliation.
+//! Recovery hooks for when the chain data is gone.
 //!
-//! Trust model: only AVAILABILITY of the order parameters is trusted, never their content. An
-//! imported order is accepted only if the P2SH script public key rebuilt from a pinned template
-//! and the supplied state span equals the script public key of an unspent output the NODE reports
-//! (`getUtxosByAddresses`, needs `--utxoindex`) carrying a covenant id. A wrong or forged export
-//! matches no output and is reported as `not_found`. For an ask-side order the export may carry the
-//! extension commitment of its custody token (the placement record's custody part): the indexer then
-//! rebuilds the custody script (`amountLeft` base units owned by the order id) and verifies the custody UTXO
-//! the same way; without it the order is imported with unverified custody.
+//! The data can be gone after downtime beyond the node's pruning window, or after a lost database
+//! with no record log. The hooks are the maker-side order export and import, and gap
+//! reconciliation.
 //!
-//! The order parameters exist only in the genesis transaction's placement record, so makers (and the
-//! UI or CLI that placed the order) keep an "order receipt" in exactly this export format; `index
-//! export-orders` produces it from a healthy indexer, and archive services (api.kaspa.org, kascov)
+//! # Trust model
+//!
+//! Only the availability of the order parameters is trusted, never their content. An imported
+//! order is accepted only if the P2SH script public key rebuilt from a pinned template and the
+//! supplied state span equals the script public key of an unspent output that the node reports
+//! (`getUtxosByAddresses`, needs `--utxoindex`) and that carries a covenant id. A wrong or forged
+//! export matches no output and is reported as `not_found`.
+//!
+//! For an ask-side order the export may carry the extension commitment of its custody token (the
+//! placement record's custody part). The indexer then rebuilds the custody script (`amountLeft`
+//! base units owned by the order id) and verifies the custody UTXO the same way. Without it the
+//! order is imported with unverified custody.
+//!
+//! # Order receipts
+//!
+//! The order parameters exist only in the genesis transaction's placement record. So makers, and
+//! the UI or CLI that placed the order, keep an "order receipt" in exactly this export format.
+//! `index export-orders` produces it from a healthy indexer. Archive services (api.kaspa.org,
+//! kascov) can be turned into the same format.
 //! can be turned into the same format.
 
 use crate::hex::{Hash32, HexBytes};
@@ -31,42 +41,53 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// The version of the export format that is written. Import also accepts version 1.
 pub const EXPORT_VERSION: u32 = 2;
 
+/// A maker's export: the orders to import after a loss of chain data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MakerExport {
+    /// The format version.
     pub version: u32,
+    /// The network id the orders belong to.
     pub network: String,
+    /// The exported orders.
     #[serde(default)]
     pub orders: Vec<ExportedOrder>,
 }
 
+/// One exported order, as a maker's receipt keeps it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportedOrder {
     /// Full template hash of the order contract version.
     pub template_hash: Hash32,
     /// State span of the CURRENT script of the order (hex).
     pub state: HexBytes,
-    /// Ask-side kinds: extension commitment of the custody token (placement record, custody part; a pair order: of its first
-    /// custody, `AnyState::custodies`).
+    /// Ask-side kinds: extension commitment of the custody token (placement record, custody part).
+    /// For a pair order it is the one of its first custody (`AnyState::custodies`).
     #[serde(default)]
     pub extension_commitment: Option<Hash32>,
-    /// A sell-first `KobIfdPair`: extension commitment of its second custody (the B prefund; default: the state's `bExt`).
+    /// A sell-first `KobIfdPair`: extension commitment of its second custody (the B prefund). The
+    /// default is the state's `bExt`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefund_extension_commitment: Option<Hash32>,
+    /// The covenant id of the order.
     #[serde(default)]
     pub covenant_id: Option<Hash32>,
     /// Informational.
     #[serde(default)]
     pub genesis_txid: Option<Hash32>,
+    /// Informational.
     #[serde(default)]
     pub status: Option<String>,
-    /// If-done exits: the covenant id of the entry that booked them (an import links the exit to it when the entry is known,
-    /// so the position stays one). Informational for every other check.
+    /// If-done exits: the covenant id of the entry that booked them. An import links the exit to
+    /// the entry when the entry is known, so the position stays one. Informational for every other
+    /// check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Hash32>,
 }
 
+/// Why a recovery step failed.
 #[derive(Debug, thiserror::Error)]
 pub enum RecoverError {
     #[error("node: {0}")]
@@ -81,21 +102,28 @@ pub enum RecoverError {
     Invalid(String),
 }
 
+/// What an import did, by entry.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct ImportReport {
+    /// Orders imported.
     pub imported: u64,
+    /// Orders the store already had.
     pub already_known: u64,
-    /// Entries for which the node has no unspent output at the rebuilt script (spent, wrong state, or forged).
+    /// Entries for which the node has no unspent output at the rebuilt script (spent, wrong state,
+    /// or forged).
     pub not_found: Vec<String>,
+    /// Entries refused for another reason, with the reason.
     pub rejected: Vec<String>,
-    /// Imported ask-side orders whose custody token UTXO was not verified (no extension commitment in
-    /// the export, or the node has no such UTXO).
+    /// Imported ask-side orders whose custody token UTXO was not verified. Either the export has no
+    /// extension commitment, or the node has no such UTXO.
     pub custody_unverified: Vec<String>,
 }
 
-/// Export the orders of `maker` (all makers when `None`) from the database. An order whose current UTXO the indexer could not
-/// prove a state for (`state_known = 0`) is left out (logged): its genesis state names a script that no longer exists, which
-/// an import could only report `not_found`.
+/// Export the orders of `maker` (all makers when `None`) from the database.
+///
+/// An order whose current UTXO the indexer could not prove a state for (`state_known = 0`) is left
+/// out and logged. Its genesis state names a script that no longer exists, which an import could
+/// only report as `not_found`.
 pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -> DbResult<MakerExport> {
     let network = crate::indexer::db::meta_get(conn, "network")?.unwrap_or_default();
     let mut st = conn.prepare(&format!(
@@ -137,8 +165,9 @@ pub fn export_orders(conn: &Connection, maker: Option<&[u8]>, live_only: bool) -
     Ok(MakerExport { version: EXPORT_VERSION, network, orders })
 }
 
-/// The extension commitment of a pair order's second custody (a sell-first entry's B prefund): the proven state of its latest
-/// custody UTXO of that token.
+/// The extension commitment of a pair order's second custody (a sell-first entry's B prefund).
+///
+/// It is the proven state of the latest custody UTXO of that token.
 fn prefund_ext(conn: &Connection, o: &ExportedOrder) -> DbResult<Option<Hash32>> {
     let (Some(cov), Some(t)) = (o.covenant_id, template_by_hash(&o.template_hash.0)) else { return Ok(None) };
     let Ok(state) = AnyState::decode(t.id, &o.state.0) else { return Ok(None) };
@@ -158,8 +187,11 @@ fn prefund_ext(conn: &Connection, o: &ExportedOrder) -> DbResult<Option<Hash32>>
     }))
 }
 
-/// The custody scripts an exported order must have (token-holding kinds; a pair order one per custody): (script, address,
-/// amount, extension commitment, token covenant id). Empty without the extension commitment of the first custody.
+/// The custody scripts an exported order must have.
+///
+/// They exist for the token-holding kinds, one per custody for a pair order. Each is (script,
+/// address, amount, extension commitment, token covenant id). The result is empty without the
+/// extension commitment of the first custody.
 fn custody_scripts(state: &AnyState, e: &ExportedOrder, cov: Hash32, network: &str) -> Vec<(Vec<u8>, String, i64, Hash32, Hash32)> {
     let Some(ext) = e.extension_commitment else { return vec![] };
     let amounts: Vec<i64> = if state.is_pair() {
@@ -221,8 +253,9 @@ pub async fn import_orders<S: ChainSource>(
         addr: String,
         state: AnyState,
         entry: ExportedOrder,
-        /// Custody scripts (token-holding kinds; a pair order one per custody) when the export carries the extension
-        /// commitment: (script, address, amount, extension commitment, token).
+        /// Custody scripts when the export carries the extension commitment. They exist for
+        /// token-holding kinds, one per custody for a pair order. Each is (script, address, amount,
+        /// extension commitment, token).
         custody: Vec<(Vec<u8>, String, i64, Hash32, Hash32)>,
     }
     let mut cands = Vec::new();
@@ -324,9 +357,11 @@ struct OwnedToken {
     spk: Vec<u8>,
 }
 
-/// The live token UTXOs (custody and strays) owned by `covs` whose script the indexer can rebuild: from the proven holding
-/// state, or for a custody without one from its amount, the order and its extension commitment. A UTXO with neither is not
-/// returned (the reconciliation cannot check it, so it is closed).
+/// The live token UTXOs (custody and strays) owned by `covs` whose script the indexer can rebuild.
+///
+/// The script comes from the proven holding state or, for a custody without one, from its amount,
+/// the order and its extension commitment. A UTXO with neither is not returned. The reconciliation
+/// cannot check it, so it is closed.
 fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedToken>, RecoverError> {
     use kob_protocol::artifacts::{token_template, TemplateId};
     let mut out = Vec::new();
@@ -370,9 +405,11 @@ fn owned_token_scripts(conn: &Connection, covs: &[Hash32]) -> Result<Vec<OwnedTo
 /// A custody script, the units it holds, the token covenant id and the extension commitment.
 type CustodyScript = (Vec<u8>, i64, Hash32, Hash32);
 
-/// The custody script of an adopted order's state (`spk` is its script): ask-side kinds with an amount left whose token program
-/// this build pins and whose extension commitment the order row stores (KRON needs none). Returns (custody script, amount,
-/// token covenant id, extension commitment).
+/// The custody script of an adopted order's state (`spk` is its script).
+///
+/// It exists for ask-side kinds with an amount left whose token program this build pins and whose
+/// extension commitment the order row stores (KRON needs none). The result is (custody script,
+/// amount, token covenant id, extension commitment).
 fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result<Option<CustodyScript>, RecoverError> {
     use kob_protocol::artifacts::TemplateId;
     let row: Option<(String, Option<Vec<u8>>)> = conn
@@ -400,7 +437,8 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
         .optional()?;
     let Some(state) = state.and_then(|s| AnyState::decode(tid, &s).ok()) else { return Ok(None) };
     let Some(amount) = state.custody_amount().filter(|a| *a > 0) else { return Ok(None) };
-    // the first custody's token and program (a pair order: the first of `AnyState::custodies`, either token)
+    // The first custody's token and program (a pair order: the first of `AnyState::custodies`,
+    // either token).
     let Some((token, tpl)) = crate::indexer::processor::custody_part_tokens(&state).into_iter().next() else { return Ok(None) };
     let Some(tt) = tpl.and_then(|h| token_template_by_hash(&h)).filter(|t| state.is_pair() || t.family == state.family()) else {
         return Ok(None);
@@ -414,20 +452,23 @@ fn adopted_custody_script(conn: &Connection, cov: &Hash32, spk: &[u8]) -> Result
     Ok(Some((cspk, amount, token, Hash32(ext))))
 }
 
-/// Bring the tracked order outputs in line with the node's UTXO set and move the cursor to
-/// `new_cursor`. Used by `kobd db rebase` after a gap: outputs the node no longer has are closed with
-/// reason `gap`, and outputs that continued under the same script are adopted.
-/// What `kobd db rebase` did: the cursor it set and, unless it only moved the cursor, the reconciliation of the tracked orders.
+/// What `kobd db rebase` did: the cursor it set and, unless it only moved the cursor, the
+/// reconciliation of the tracked orders.
 #[derive(Debug, Clone)]
 pub struct RebaseReport {
+    /// The cursor it set.
     pub cursor: Cursor,
+    /// The reconciliation, or `None` when `reconcile` was off.
     pub reconciled: Option<OpReport>,
 }
 
-/// `kobd db rebase`: after a gap, move the cursor to `to` (the node's sink, its pruning point or a chain block) and, with
-/// `reconcile`, reconcile the tracked orders with the node's UTXO set ([`reconcile_open_orders`]). The cursor carries the
-/// DAA score of that block (its header's), not the node's virtual DAA score: the store's DAA (`cursor_daa`, what the book,
-/// the API's `expired` and the refund keepers read) must be the chain block's the store is synced to.
+/// `kobd db rebase`: after a gap, move the cursor to `to` and, with `reconcile`, reconcile the
+/// tracked orders with the node's UTXO set ([`reconcile_open_orders`]).
+///
+/// `to` is the node's sink, its pruning point or a chain block. The cursor carries the DAA score of
+/// that block (its header's), not the node's virtual DAA score. The store's DAA (`cursor_daa`, what
+/// the book, the API's `expired` and the refund keepers read) must be the DAA of the chain block
+/// the store is synced to.
 pub async fn rebase<S: ChainSource>(
     ingest: &Arc<Mutex<Ingest>>,
     source: &S,
@@ -450,7 +491,8 @@ pub async fn rebase<S: ChainSource>(
         .await?
         .ok_or_else(|| RecoverError::Invalid(format!("the node does not know block {hash}: no cursor set")))?;
     let cursor = Cursor { hash, daa };
-    // the chain between the old cursor and the new one is not read: orders created in it are not in this store (book_complete)
+    // The chain between the old cursor and the new one is not read. Orders created in it are not
+    // in this store (`book_complete`).
     {
         let g = lock(ingest);
         let old = g.cursor()?.map_or(0, |c| c.daa);
@@ -467,6 +509,11 @@ pub async fn rebase<S: ChainSource>(
     Ok(RebaseReport { cursor, reconciled: Some(rep) })
 }
 
+/// Brings the tracked order outputs in line with the node's UTXO set and moves the cursor to
+/// `new_cursor`.
+///
+/// `kobd db rebase` uses it after a gap. Outputs the node no longer has are closed with reason
+/// `gap`. Outputs that continued under the same script are adopted.
 pub async fn reconcile_open_orders<S: ChainSource>(
     ingest: &Arc<Mutex<Ingest>>,
     source: &S,
@@ -530,8 +577,9 @@ pub async fn reconcile_open_orders<S: ChainSource>(
             None => ops.push(LogOp::CloseGap { txid: t.txid, index: t.idx, covenant_id: t.cov }),
         }
     }
-    // An adopted order (same script, so the same state) keeps the token UTXOs it owns that the node still has, and its
-    // custody is looked up at the script the state derives (an ask partially filled and refilled in the gap holds a new one).
+    // An adopted order (same script, so the same state) keeps the token UTXOs it owns that the node
+    // still has. Its custody is looked up at the script the state derives (an ask partially filled
+    // and refilled in the gap holds a new one).
     let owned = if adoptions.is_empty() {
         Vec::new()
     } else {
@@ -542,7 +590,8 @@ pub async fn reconcile_open_orders<S: ChainSource>(
     let mut token_addrs: HashSet<String> = HashSet::new();
     let mut want: Vec<(Hash32, Option<CustodyScript>)> = Vec::new();
     for (t, _) in &adoptions {
-        // the custody script of the adopted state (ask-side kinds holding tokens, extension commitment known)
+        // The custody script of the adopted state (ask-side kinds holding tokens, extension
+        // commitment known).
         let cust = {
             let g = lock(ingest);
             adopted_custody_script(g.conn(), &t.cov, &t.spk)?
