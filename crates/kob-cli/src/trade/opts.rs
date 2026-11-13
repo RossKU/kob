@@ -1,5 +1,8 @@
-//! Options every trading command shares, the signing key (from a file or the environment, never from the command line),
-//! the network rule (named, or a deployment build's own), and the confirmation step before anything is signed.
+//! The options that every trading command shares.
+//!
+//! These are the signing key, which comes from a file or the environment and never from the
+//! command line, the network rule, which takes a named network or the network of a deployment
+//! build, and the confirmation step before anything is signed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, IsTerminal, Write};
@@ -9,16 +12,16 @@ use kob_protocol::tx::{pubkey_of, FeeMode, FeeOptions, MIN_FEE_RATE};
 
 use crate::common::Signer;
 
-/// The environment variable the signing key is read from by default.
+/// The environment variable that the signing key is read from by default.
 pub const KEY_ENV: &str = "KOB_KEY";
 
-/// Flags every trading command takes with a value.
+/// Flags that every trading command takes with a value.
 pub const COMMON_VALUE_FLAGS: &[&str] =
     &["--network", "--node", "--indexer", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--registry", "--key"];
-/// Flags every trading command takes without a value.
+/// Flags that every trading command takes without a value.
 pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json", "--priority-fee"];
 
-/// Help text of the shared options.
+/// The help text of the shared options.
 pub const COMMON_HELP: &str = "\
 COMMON OPTIONS
   --network NET     mainnet or testnet-10 (default: mainnet, or the network of a deployment build, which refuses
@@ -45,14 +48,14 @@ COMMON OPTIONS
   has seen the transaction; each is still used only when the node holds it.
 ";
 
-/// Parsed arguments: positionals, valued options (repeatable) and flags.
+/// Parsed arguments: positionals, valued options that may repeat, and flags.
 #[derive(Debug, Clone, Default)]
 pub struct Parsed {
-    /// Positional arguments.
+    /// The positional arguments.
     pub pos: Vec<String>,
-    /// `--flag value` (all occurrences).
+    /// The values of `--flag value`, from all occurrences.
     pub vals: BTreeMap<String, Vec<String>>,
-    /// Boolean flags present.
+    /// The boolean flags that are present.
     pub flags: BTreeSet<String>,
 }
 
@@ -67,7 +70,9 @@ impl Parsed {
     }
 }
 
-/// Parse `args` against the command's own valued / boolean flags plus the common ones. `--flag=value` is accepted.
+/// Parses `args` against the flags of the command plus the common ones.
+///
+/// `--flag=value` is accepted. The command's own flags are `value_flags` and `bool_flags`.
 pub fn parse(args: &[String], value_flags: &[&str], bool_flags: &[&str]) -> Result<Parsed, String> {
     let mut p = Parsed::default();
     let mut it = args.iter();
@@ -107,38 +112,40 @@ pub fn parse(args: &[String], value_flags: &[&str], bool_flags: &[&str]) -> Resu
 /// The shared settings of a trading command.
 #[derive(Debug, Clone)]
 pub struct Common {
-    /// Network.
+    /// The network.
     pub network: String,
-    /// Node URL (may be empty when not needed yet).
+    /// The node URL, which may be empty when it is not needed yet.
     pub node: String,
     /// Indexer URL.
     pub indexer: Option<String>,
-    /// Fee rate.
+    /// The fee rate.
     pub fee_rate: Option<u64>,
     /// `--priority-fee`: the storage-inclusive fee instead of the relay floor.
     pub priority_fee: bool,
-    /// Dry run.
+    /// Whether to plan and show only, without signing.
     pub dry_run: bool,
-    /// Sign without asking.
+    /// Whether to sign without asking.
     pub yes: bool,
-    /// JSON output.
+    /// Whether to print JSON.
     pub json: bool,
-    /// Where signed transactions go.
+    /// The directory that signed transactions go to.
     pub out_dir: Option<PathBuf>,
-    /// Registry file.
+    /// The registry file.
     pub registry: Option<PathBuf>,
     key_file: Option<PathBuf>,
     key_env: String,
 }
 
-/// The network rule of the trading commands: [`crate::common::resolve_network`] (`--network`, else the deployment build's own
-/// network, else an error). The plan and the confirmation name the network, and the node must run it (`flow::check_network_first`).
+/// The network rule of the trading commands, as [`crate::common::resolve_network`] has it.
+///
+/// It is `--network`, else the network of the deployment build, else an error. The plan and the
+/// confirmation name the network, and the node must run it, see `flow::check_network_first`.
 pub fn network_of(given: Option<&str>) -> Result<String, String> {
     crate::common::resolve_network(given.unwrap_or("").trim())
 }
 
 impl Common {
-    /// From parsed arguments.
+    /// Reads the shared settings from parsed arguments.
     pub fn from(p: &Parsed) -> Result<Common, String> {
         let network = network_of(p.get("--network"))?;
         let fee_rate = match p.get("--fee-rate") {
@@ -169,7 +176,9 @@ impl Common {
         })
     }
 
-    /// The fee mode of the plan: the relay floor, or the storage-inclusive priority fee with `--priority-fee`.
+    /// The fee mode of the plan.
+    ///
+    /// It is the relay floor, or with `--priority-fee` the storage-inclusive fee.
     pub fn fee_mode(&self) -> FeeMode {
         if self.priority_fee {
             FeeMode::Priority
@@ -178,12 +187,12 @@ impl Common {
         }
     }
 
-    /// The fee options every builder of the command gets.
+    /// The fee options that every builder of the command gets.
     pub fn fee_options(&self) -> FeeOptions {
         FeeOptions { fee_rate: self.fee_rate, fee_mode: self.fee_mode() }
     }
 
-    /// The node, required.
+    /// The node, or an error when it is not set.
     pub fn need_node(&self) -> Result<&str, String> {
         if self.node.is_empty() {
             return Err(format!("--node (or ${}) is required", crate::wrpc::NODE_ENV));
@@ -191,7 +200,7 @@ impl Common {
         Ok(&self.node)
     }
 
-    /// The indexer, required.
+    /// The indexer, or an error when it is not set.
     pub fn need_indexer(&self) -> Result<&str, String> {
         self.indexer.as_deref().ok_or_else(|| {
             format!(
@@ -202,7 +211,9 @@ impl Common {
         })
     }
 
-    /// The signing key: `--key-file`, else the environment variable. Refused when its hex appears among `argv`.
+    /// The signing key from `--key-file`, else from the environment variable.
+    ///
+    /// It is refused when its hex appears among `argv`.
     pub fn signer(&self, argv: &[String]) -> Result<Signer, String> {
         let raw = match &self.key_file {
             Some(p) => std::fs::read_to_string(p).map_err(|e| format!("cannot read the key file {}: {e}", p.display()))?,
@@ -219,19 +230,23 @@ impl Common {
     }
 }
 
-/// Ask before signing: `--yes` proceeds, a terminal is asked, anything else is refused.
+/// Asks before signing: `--yes` proceeds, a terminal is asked, and anything else is refused.
 pub fn confirm(c: &Common, what: &str) -> Result<(), String> {
     confirm_with(c.yes, &c.network, what)
 }
 
-/// Whether [`confirm_with`] would put a question to a person (no `--yes`, and a terminal to ask): what the command is about to
+/// Whether [`confirm_with`] would put a question to a person.
+///
+/// That is the case without `--yes` and with a terminal to ask. Then what the command is about to
 /// do is worth showing first.
 pub fn would_ask(yes: bool) -> bool {
     !yes && std::io::stdin().is_terminal()
 }
 
-/// [`confirm`] for the commands that keep their own options (`kob token create`, `kob recover`, `kob order`): the same
-/// rule, the same prompt and the same refusal.
+/// [`confirm`] for the commands that keep their own options, such as `kob token create`,
+/// `kob recover` and `kob order`.
+///
+/// The rule, the prompt and the refusal are the same.
 pub fn confirm_with(yes: bool, network: &str, what: &str) -> Result<(), String> {
     if yes {
         return Ok(());
@@ -269,7 +284,7 @@ mod tests {
         let e = parse(&v("--key 3333"), &[], &[]).unwrap_err();
         assert!(e.contains("--key-file") && e.contains("KOB_KEY"), "{e}");
         assert!(parse(&v("--yes --dry-run"), &[], &[]).is_err());
-        // the key from a file; refused when its hex is on the command line too
+        // The key from a file is refused when its hex is on the command line too.
         let dir = std::env::temp_dir().join(format!("kob-cli-key-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("k");
@@ -280,7 +295,7 @@ mod tests {
         let mut leak = args.clone();
         leak.push("33".repeat(32));
         assert!(c.signer(&leak).unwrap_err().contains("command line"));
-        // the environment variable
+        // The environment variable.
         let c = Common::from(&parse(&v("--key-env KOB_TEST_KEY_UNSET_X --network testnet-10"), &[], &[]).unwrap()).unwrap();
         assert!(c.signer(&[]).unwrap_err().contains("KOB_TEST_KEY_UNSET_X"));
     }
@@ -296,10 +311,10 @@ mod tests {
         let c = Common::from(&parse(&v("--network testnet-10 --priority-fee"), &[], &[]).unwrap()).unwrap();
         assert!(c.priority_fee);
         assert_eq!(c.fee_options(), FeeOptions { fee_rate: None, fee_mode: FeeMode::Priority });
-        // together with a rate: the rate is the one the storage-inclusive mass is charged at
+        // Together with a rate, the rate is the one that the storage-inclusive mass is charged at.
         let c = Common::from(&parse(&v("--network testnet-10 --fee-rate 150 --priority-fee"), &[], &[]).unwrap()).unwrap();
         assert_eq!(c.fee_options(), FeeOptions { fee_rate: Some(150), fee_mode: FeeMode::Priority });
-        // a switch: no value, and the rate rules stand
+        // It is a switch: it takes no value, and the rules of the rate stand.
         assert!(parse(&v("--priority-fee=1"), &[], &[]).unwrap_err().contains("takes no value"));
         assert!(Common::from(&parse(&v("--network testnet-10 --fee-rate 5 --priority-fee"), &[], &[]).unwrap()).is_err());
         assert!(COMMON_HELP.contains("--priority-fee"));
@@ -309,7 +324,8 @@ mod tests {
     fn the_network_is_named_or_the_deployment_builds() {
         assert_eq!(network_of(Some("testnet-10")).unwrap(), "testnet-10");
         assert_eq!(network_of(Some("mainnet")).unwrap(), "mainnet");
-        // only a deployment build implies a network (any command, a signing one included); it refuses another one
+        // Only a deployment build implies a network, for any command including a signing one, and
+        // it refuses another one.
         match kob_protocol::artifacts::deployment_network() {
             Some(n) => {
                 assert_eq!(network_of(None).unwrap(), n);
@@ -327,7 +343,8 @@ mod tests {
     #[test]
     fn confirmation_without_a_terminal_is_refused() {
         let c = Common::from(&parse(&v("--network testnet-10"), &[], &[]).unwrap()).unwrap();
-        // the test harness's stdin is not a terminal (or `--yes` is absent): refused, never signed
+        // Without a terminal, and without `--yes`, nothing is signed. The stdin of the test
+        // harness is normally not a terminal.
         if !std::io::stdin().is_terminal() {
             assert!(confirm(&c, "this").unwrap_err().contains("--yes"));
         }
