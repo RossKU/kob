@@ -1,24 +1,32 @@
-//! The KOB matcher (`docs/spec/matcher.md`).
+//! The KOB matcher, as specified in `docs/spec/matcher.md`.
 //!
-//! | Module | Contents |
-//! |---|---|
-//! | [`book`] | the [`book::OrderBookView`] trait the indexer implements, the in-memory / snapshot book |
-//! | [`family`] | token families: per-program slot limits, the family adapters that lower plans |
-//! | [`candidate`] | orders normalised at `t`: quotes, eligibility, exclusions, priority classes, trigger evidence, updatable stops |
-//! | [`batch`] | the global batch planner: one transaction over every book and pair order (netting first, FOK / IOC, auctions, merges, stops triggered by the batch's own fills and the updates arming the others) |
-//! | [`auction`] | the auction tick of a fill: every auction leg at the earliest tick at which the batch pays (§3.3) |
-//! | [`planner`] | plan types (fills, updates) and settings, the physical limits, fee and update-cost estimates |
-//! | [`lower`] | plan → `kob_protocol` batch request, budgets, exact accounting |
-//! | [`chain`] | chained steps: the book after a transaction (continuations for the next transaction of the tick) |
-//! | [`pair`] | pair orders (token A for token B): netting participants and the two route legs through both KAS books, pair trigger evidence |
-//! | [`engine`] | one matcher tick: batches planned, built, signed and validated in the v2.1.0 engine until nothing crosses |
-//! | [`select`] | weighted work selection among competing executors (§3.6): Kaspa-style sampling of the work units, the share the races set |
-//! | [`node`] | node access over JSON wRPC (submission, DAA score, VSPC v2 acceptance) |
-//! | [`wallet`] | the hot key (environment or permission-checked file, never argv) and funding |
-//! | [`submit`] | submission, mempool-conflict handling, acceptance tracking and rollback |
-//! | [`journal`] | the in-flight journal: the tracked transactions on disk, so that a restart does not forget the mempool |
-//! | [`run`] | the `kobd match` / `keep` loop, book sources, metrics |
-//! | [`cli`] | command-line arguments and entry points |
+//! # Modules
+//!
+//! - [`book`]: the [`book::OrderBookView`] trait the indexer implements, and the in-memory and
+//!   snapshot books.
+//! - [`family`]: token families, their slot limits per program, and the adapters that lower plans.
+//! - [`candidate`]: orders normalised at `t`, with quotes, eligibility, exclusions, priority
+//!   classes, trigger evidence and the stops a batch may update.
+//! - [`batch`]: the global batch planner. It plans one transaction over every book and pair order,
+//!   with netting first, FOK and IOC, auctions, merges, and the stops the batch triggers or arms.
+//! - [`auction`]: the auction tick of a fill, the earliest tick at which the batch pays (§3.3).
+//! - [`planner`]: plan types and settings, the physical limits, and the fee and update-cost
+//!   estimates.
+//! - [`lower`]: a plan lowered to a `kob_protocol` batch request, with budgets and exact
+//!   accounting.
+//! - [`chain`]: chained steps, the book that a transaction leaves for the next one of the tick.
+//! - [`pair`]: pair orders (token A for token B), with netting, the two route legs through both
+//!   KAS books, and pair trigger evidence.
+//! - [`engine`]: one matcher tick. Batches are planned, built, signed and validated in the
+//!   rusty-kaspa v2.1.0 engine until nothing crosses.
+//! - [`select`]: weighted work selection among competing executors (§3.6).
+//! - [`node`]: node access over JSON wRPC, for submission, the DAA score and acceptance.
+//! - [`wallet`]: the hot key, from the environment or a permission-checked file, and funding.
+//! - [`submit`]: submission, mempool conflicts, acceptance tracking and rollback.
+//! - [`journal`]: the in-flight journal, which keeps the tracked transactions on disk across a
+//!   restart.
+//! - [`run`]: the `kobd match` and `keep` loops, the book sources and the metrics.
+//! - [`cli`]: command-line arguments and entry points.
 
 pub mod auction;
 pub mod batch;

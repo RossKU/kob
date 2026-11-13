@@ -1,16 +1,26 @@
-//! Normalises listed orders into matching candidates at time `t` (`docs/spec/matcher.md` §2).
+//! Matching candidates, the listed orders normalised at time `t` (`docs/spec/matcher.md` §2).
 //!
-//! A candidate is one order on one leg with its executable quote at `t` (§2.1, sompi per whole token of its `scale`), the
-//! base units it can take now, the hard eligibility rules of §2.2 (activation, TWAP / DCA age and `maxFill`, arming, the
-//! minimum fill, FOK completeness, repeat merges), and the honest-matcher exclusions of §2.3 (soft expiry, IOC / FOK kill,
-//! 90 days idle, day-order deadline by the UTC clock). Everything mirrors the covenant arithmetic through
-//! `kob_protocol::state` (`quote_of`, `BidState::buying_power`, ...), so a candidate the planner fills is one the covenant
+//! A candidate is one order on one leg. It carries its executable quote at `t` (§2.1), in sompi
+//! per whole token of its `scale`, and the base units it can take now. Candidate generation
+//! applies the hard eligibility rules of §2.2:
+//! - activation, TWAP and DCA age, and `maxFill`;
+//! - arming;
+//! - the minimum fill and FOK completeness;
+//! - repeat merges.
+//!
+//! It also applies the honest-matcher exclusions of §2.3. These are soft expiry, the IOC and FOK
+//! kill, 90 days idle, and the day-order deadline by the UTC clock.
+//!
+//! The arithmetic is the covenants', through `kob_protocol::state` (`quote_of`,
+//! `BidState::buying_power` and the like). So a candidate the planner fills is one the covenant
 //! accepts, and every KAS amount of a fill ([`Cand::value`]) is the exact rounded covenant value.
 //!
-//! Triggers (§4): an unarmed stop leg or stop entry is a candidate that carries what it needs from its trigger evidence
-//! ([`TouchNeed`]); it is fillable only in a batch that also fills a qualifying plain resting order ([`TouchSrc`], the
-//! covenants' `touch`), which the planner checks (`super::batch`). The orders a batch may arm or ratchet without filling
-//! them are listed by [`updatable`].
+//! # Triggers
+//!
+//! An unarmed stop leg or stop entry (§4) is a candidate that carries what it needs from its
+//! trigger evidence ([`TouchNeed`]). It is fillable only in a batch that also fills a qualifying
+//! plain resting order ([`TouchSrc`], the covenants' `touch`). The planner in `super::batch`
+//! checks that. [`updatable`] lists the orders a batch may arm or ratchet without filling them.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,104 +44,148 @@ pub enum Side {
 pub enum Class {
     /// IOC, FOK, market and streaming orders (`tif` 1 or 2).
     Immediate = 1,
-    /// Armed stop legs and stop entries, or unarmed ones triggered in this very transaction by a plain resting fill of
-    /// the batch (their evidence).
+    /// Armed stop legs and stop entries.
+    ///
+    /// It also holds unarmed ones that a plain resting fill of the same batch triggers in this very
+    /// transaction, as their evidence.
     Triggered = 2,
     /// Every other crossing order.
     Resting = 3,
 }
 
-/// One order on one leg, normalised for the planner. Quantities are base units of the candidate's token.
+/// One order on one leg, normalised for the planner.
+///
+/// Quantities are base units of the candidate's token.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cand {
     /// Index of the order in the book slice the candidates were made from.
     pub order: usize,
+    /// Covenant id of the order.
     pub id: CovId,
+    /// Template of the order, in its family and the build of its token program.
     pub kind: TemplateId,
+    /// Side of the book the candidate trades on.
     pub side: Side,
-    /// Conditional leg (0 take-profit / limit, 1 stop); 0 for other kinds.
+    /// Conditional leg, 0 for take-profit or limit and 1 for stop. 0 for other kinds.
     pub leg: u8,
+    /// Priority class (§3.1).
     pub class: Class,
-    /// Executable quote at `t`, sompi per whole token (`scale` base units), §2.1. A pair order leg: its implied quote (§3.5).
+    /// Executable quote at `t`, in sompi per whole token (`scale` base units), §2.1.
+    ///
+    /// A pair order leg carries its implied quote (§3.5).
     pub quote: i64,
-    /// Priority tip, sompi per whole token.
+    /// Priority tip, in sompi per whole token.
     pub tip: i64,
-    /// Base units per whole token: the denominator of `quote` and `tip` (a pair order leg: the base units of its token that
-    /// one whole A of the order stands for, so that `quote / scale` is sompi per base unit of the leg's token).
+    /// Base units per whole token, the denominator of `quote` and `tip`.
+    ///
+    /// For a pair order leg it is the base units of the leg's token that one whole A of the order
+    /// stands for. So `quote / scale` is sompi per base unit of the leg's token.
     pub scale: i64,
-    /// UTXO DAA score (older first).
+    /// UTXO DAA score. Older orders come first.
     pub age: u64,
-    /// DAA at which the view first listed the order.
+    /// DAA score at which the view first listed the order.
     pub seen: u64,
-    /// Most base units fillable in one transaction now (the order's amount, its buying power, its `maxFill`).
+    /// Most base units fillable in one transaction now.
+    ///
+    /// It is bounded by the order's amount, its buying power and its `maxFill`.
     pub cap: i64,
     /// Least base units of one fill (`minFill`), unless the fill ends the order (see `rest_from`).
     pub min_fill: i64,
-    /// The smallest fill that ends the order and is therefore exempt from `min_fill`: `amountLeft`, or for a `KobBid` the
-    /// smallest fill after which less than one minimum fill of buying power is left (`i64::MAX`: no fill within `cap`).
+    /// Smallest fill that ends the order and is therefore exempt from `min_fill`.
+    ///
+    /// It is `amountLeft`. For a `KobBid` it is the smallest fill after which less than one
+    /// minimum fill of buying power is left. `i64::MAX` means no fill within `cap` ends the order.
     pub rest_from: i64,
-    /// Most base units of a fill that does not end the order (below `rest_from`): the KIP-9 bound of the outputs such a fill
-    /// leaves (a continuation, a remaining custody, the maker's payout, [`kip9_limits`]). A fill between it and `rest_from`
-    /// would leave dust and is never planned. `i64::MAX`: no bound below `cap`.
+    /// Most base units of a fill that does not end the order, which is a fill below `rest_from`.
+    ///
+    /// It is the KIP-9 bound of the outputs such a fill leaves: a continuation, a remaining
+    /// custody or the maker's payout ([`kip9_limits`]). A fill between it and `rest_from` would
+    /// leave dust and is never planned. `i64::MAX` means no bound below `cap`.
     pub part_cap: i64,
-    /// `amountLeft` (a bid: its buying power, `cap`): a fill below it leaves a remainder.
+    /// `amountLeft`, or a bid's buying power (`cap`). A fill below it leaves a remainder.
     pub left: i64,
-    /// FOK: the range of base units a complete fill may take (`[min, max]`); None otherwise.
+    /// For a FOK, the range `[min, max]` of base units a complete fill may take. None otherwise.
     pub fok: Option<(i64, i64)>,
-    /// IOC (remainder returned at once): must receive the largest fill the book allows.
+    /// An IOC, whose remainder is returned at once.
+    ///
+    /// It must receive the largest fill the book allows.
     pub ioc: bool,
-    /// An unarmed stop leg / stop entry: filled at its trigger price, and only next to a qualifying evidence fill of
-    /// the same batch (the planner checks it).
+    /// Trigger need of an unarmed stop leg or stop entry.
+    ///
+    /// Such a candidate is filled at its trigger price, and only next to a qualifying evidence fill
+    /// of the same batch. The planner checks that.
     pub trigger: Option<TouchNeed>,
-    /// Booked exit take-profit before `rptUntil`: the entry merged (re-armed) in the same transaction.
+    /// For a booked exit's take-profit before `rptUntil`, the entry merged (re-armed) in the same
+    /// transaction.
     pub merge: Option<CovId>,
-    /// The merged sell-first entry's custody (an extra token input and output).
+    /// The merged sell-first entry has a custody, an extra token input and output.
     pub merge_custody: bool,
-    /// A booked exit's entry: never in the same transaction except as this fill's merge (§6.1).
+    /// A booked exit's entry.
+    ///
+    /// The entry never shares the transaction, except as this fill's merge (§6.1).
     pub parent: Option<CovId>,
-    /// Plain `KobAsk` / `KobBid` without decay, accepted with a known DAA score: its fill is trigger evidence for the
-    /// stops of its book it qualifies for (§4).
+    /// Trigger evidence the fill offers to the stops of its book that it qualifies for (§4).
+    ///
+    /// Only a plain `KobAsk` or `KobBid` without decay, accepted with a known DAA score, has it.
     pub touch: Option<TouchSrc>,
-    /// The covenant path of this fill does not read the order UTXO's DAA score, so the fill can be
-    /// chained onto an unconfirmed parent (§7; the mempool reports unaccepted UTXOs with DAA u64::MAX).
+    /// The covenant path of this fill does not read the order UTXO's DAA score.
+    ///
+    /// So the fill can be chained onto an unconfirmed parent (§7). The mempool reports unaccepted
+    /// UTXOs with DAA score `u64::MAX`.
     pub chain_safe: bool,
-    /// Estimated serialized bytes the leg adds (inputs, signature scripts, outputs).
+    /// Estimated serialized bytes the leg adds: inputs, signature scripts and outputs.
     pub bytes: u64,
-    /// The book the candidate trades in (a pair order leg: the market of the token it sells or buys, scale 0).
+    /// The book the candidate trades in.
+    ///
+    /// For a pair order leg it is the market of the token the leg sells or buys, with scale 0.
     pub book: BookKey,
-    /// The legs that stand for one pair order in the global batch (`super::pair`); None for every KAS-book order.
+    /// The pair order this leg stands for in the global batch (`super::pair`).
+    ///
+    /// None for every KAS-book order.
     pub pair: Option<PairLeg>,
 }
 
 /// Which side of a pair order a leg stands for (`super::pair`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PairRole {
-    /// The token S the order releases (its custody): sold to the plain KAS bids of S, or to opposite pair orders (netting).
+    /// The token S the order releases from its custody.
+    ///
+    /// It is sold to the plain KAS bids of S, or to opposite pair orders by netting.
     Sell,
-    /// The token T the order receives: bought from the plain KAS asks of T, or from opposite pair orders (netting).
+    /// The token T the order receives.
+    ///
+    /// It is bought from the plain KAS asks of T, or from opposite pair orders by netting.
     Buy,
-    /// A netting surplus of one token (released by the netted pair orders beyond what they receive), offered to the plain
-    /// KAS bids of that token: the tokens are already in the transaction, so its KAS value is zero; what the bids leave goes
-    /// to the pair asks that buy the token (their deliveries are minimums).
+    /// A netting surplus of one token, offered to the plain KAS bids of that token.
+    ///
+    /// The netted pair orders release it beyond what they receive. The tokens are already in the
+    /// transaction, so the leg's KAS value is zero. What the bids leave goes to the pair asks that
+    /// buy the token, because their deliveries are minimums.
     Surplus,
 }
 
-/// A pair order leg: its role and the order it belongs to (shared by its legs).
+/// A pair order leg, as its role and the order it belongs to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PairLeg {
+    /// Side of the pair order the leg stands for.
     pub role: PairRole,
+    /// The pair order, shared by all its legs.
     pub info: std::sync::Arc<super::pair::PairInfo>,
 }
 
 impl PairLeg {
-    /// The leg whose quantity is the order's fill n (the base units of its base token A): an ask's sale, a bid's purchase.
+    /// Whether this leg's quantity is the order's fill `n`, in base units of its base token A.
+    ///
+    /// That is an ask's sale or a bid's purchase.
     pub fn is_primary(&self) -> bool {
         self.role != PairRole::Surplus && self.info.primary() == self.role
     }
 }
 
 impl Cand {
-    /// True for a plain `KobAsk` / `KobBid` (either family): the only KAS-book orders a pair order route may use.
+    /// True for a plain `KobAsk` or `KobBid` of either family.
+    ///
+    /// These are the only KAS-book orders a pair order route may use.
     pub fn is_plain(&self) -> bool {
         self.pair.is_none() && matches!(self.kind.base(), TemplateId::KobAsk | TemplateId::KobBid)
     }
@@ -141,8 +195,9 @@ impl Cand {
         self.pair.as_ref().map(|x| x.role)
     }
 
-    /// The all-in rate as sompi per `scale` base units: what a bid pays (`quote + tip`) or an ask receives (`quote − tip`),
-    /// §2.1.
+    /// All-in rate in sompi per `scale` base units (§2.1).
+    ///
+    /// It is what a bid pays (`quote + tip`) or what an ask receives (`quote − tip`).
     pub fn all_in(&self) -> i64 {
         match self.side {
             Side::Bid => self.quote.saturating_add(self.tip),
@@ -150,8 +205,9 @@ impl Cand {
         }
     }
 
-    /// The all-in price per token base unit as a fraction (sompi over base units). A pair order leg carries its implied
-    /// route price.
+    /// All-in price per token base unit, as a fraction of sompi over base units.
+    ///
+    /// A pair order leg carries its implied route price.
     pub fn per_base(&self) -> (i128, i128) {
         (self.all_in() as i128, self.scale.max(1) as i128)
     }
@@ -161,9 +217,11 @@ impl Cand {
         (self.quote as i128, self.scale.max(1) as i128)
     }
 
-    /// The exact KAS of a fill of `n` base units, as the covenants compute it (`quoteOf`): what a bid pays,
-    /// `floor(n × (quote + tip) / scale)`, or what an ask receives, `ceil(n × (quote − tip) / scale)`. `None` for a pair
-    /// order leg (its KAS is its tip, `super::pair::PairInfo::tip_kas`) and where the covenant arithmetic fails.
+    /// Exact KAS of a fill of `n` base units, as the covenants compute it (`quoteOf`).
+    ///
+    /// A bid pays `floor(n × (quote + tip) / scale)`, and an ask receives
+    /// `ceil(n × (quote − tip) / scale)`. Returns `None` where the covenant arithmetic fails, and
+    /// for a pair order leg, whose KAS is its tip (`super::pair::PairInfo::tip_kas`).
     pub fn value(&self, n: i64) -> Option<i64> {
         if self.pair.is_some() || n < 0 {
             return None;
@@ -174,13 +232,15 @@ impl Cand {
         }
     }
 
-    /// Whether a fill of `n` base units ends the order (and is therefore exempt from its minimum fill).
+    /// Whether a fill of `n` base units ends the order, which exempts it from the minimum fill.
     pub fn ends(&self, n: i64) -> bool {
         n >= self.rest_from
     }
 
-    /// Whether a fill of `n` base units satisfies the candidate's quantity rules (FOK, the minimum fill, the KIP-9 bound of a
-    /// partial fill's outputs).
+    /// Whether a fill of `n` base units satisfies the candidate's quantity rules.
+    ///
+    /// The rules are the cap, the FOK range, the minimum fill and the KIP-9 bound of a partial
+    /// fill's outputs.
     pub fn quantity_ok(&self, n: i64) -> bool {
         if n <= 0 || n > self.cap {
             return false;
@@ -194,28 +254,36 @@ impl Cand {
     }
 }
 
-/// What the fill of a plain resting order offers as trigger evidence (mirrors `kob_protocol::build::touch_of`): the
-/// token is the candidate's book's.
+/// Trigger evidence that the fill of a plain resting order offers.
+///
+/// It mirrors `kob_protocol::build::touch_of`. The token is that of the candidate's book.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchSrc {
-    /// [`SIDE_ASK`] (a resting ask sold at its quote) or [`SIDE_BID`] (a resting bid bought at its quote).
+    /// [`SIDE_ASK`] for a resting ask sold at its quote, or [`SIDE_BID`] for a resting bid bought
+    /// at its quote.
     pub side: i64,
-    /// The resting order's quote (sompi per whole token).
+    /// The resting order's quote, in sompi per whole token.
     pub price: i64,
-    /// The resting order's scale (a stop reads only evidence of its own scale).
+    /// The resting order's scale. A stop reads only evidence of its own scale.
     pub scale: i64,
-    /// `max(UTXO DAA + interval, custody DAA (asks), activeFrom)`.
+    /// `max(UTXO DAA + interval, custody DAA, activeFrom)`, where the custody DAA counts for asks
+    /// only.
     pub exposed_since: i64,
 }
 
-/// What an unarmed stop reads from its trigger evidence (the covenants' `touch`): a plain resting order of its token
-/// and scale filled in the same transaction, on the trigger side and at or through the stop, at least `min_touch`
-/// base units, exposed for at least `min_rest` DAA before the lock time.
+/// What an unarmed stop reads from its trigger evidence, the covenants' `touch`.
+///
+/// The evidence is a plain resting order of the stop's token and scale, filled in the same
+/// transaction on the trigger side, at or through the stop. The fill is at least `min_touch` base
+/// units, and the order was exposed for at least `min_rest` DAA before the lock time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TouchNeed {
-    /// The evidence side: [`SIDE_ASK`] for a sell stop (a resting ask filled at or below `stop`), [`SIDE_BID`] for a
-    /// buy stop (a resting bid filled at or above `stop`).
+    /// The evidence side.
+    ///
+    /// It is [`SIDE_ASK`] for a sell stop, a resting ask filled at or below `stop`. It is
+    /// [`SIDE_BID`] for a buy stop, a resting bid filled at or above `stop`.
     pub side: i64,
+    /// The stop price, in sompi per whole token.
     pub stop: i64,
     /// The stop's scale.
     pub scale: i64,
@@ -225,8 +293,10 @@ pub struct TouchNeed {
     pub min_rest: i64,
 }
 
-/// Whether a fill of `n` base units of `src` is enough evidence (`minTouch`) exposed long enough (`minRestDaa`) at lock
-/// time `t` (`kob_protocol::build::Touch::check`; the caller keeps the token and scale equal).
+/// Whether a fill of `n` base units of `src` is enough evidence, exposed long enough, at time `t`.
+///
+/// Enough is `minTouch`, and long enough is `minRestDaa`, as in
+/// `kob_protocol::build::Touch::check`. The caller keeps the token and the scale equal.
 pub fn touch_ok(src: &TouchSrc, n: i64, min_touch: i64, min_rest: i64, t: i64) -> bool {
     n >= min_touch && src.exposed_since.saturating_add(min_rest) <= t
 }
@@ -241,12 +311,12 @@ impl TouchNeed {
     }
 }
 
-/// A trailing stop's ratchet: the conditional order's state (its `trail_steps`).
+/// A trailing stop's ratchet, as the conditional order's state and its `trail_steps`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TrailOf {
-    /// A `KobCondAsk` (sell stop): ratchets up on a resting BID filled.
+    /// A `KobCondAsk`, a sell stop. It ratchets up when a resting bid is filled.
     Ask(CondAskState),
-    /// A `KobCondBid` (buy stop): ratchets down on a resting ASK filled.
+    /// A `KobCondBid`, a buy stop. It ratchets down when a resting ask is filled.
     Bid(CondBidState),
 }
 
@@ -258,7 +328,7 @@ impl TrailOf {
             TrailOf::Bid(_) => SIDE_ASK,
         }
     }
-    /// Steps a quote `price` of the ratcheting side justifies (0: none).
+    /// Steps that a quote `price` of the ratcheting side justifies, 0 for none.
     pub fn steps(&self, price: i64) -> i64 {
         match self {
             TrailOf::Ask(s) => s.trail_steps(price),
@@ -267,28 +337,42 @@ impl TrailOf {
     }
 }
 
-/// A listed order a batch may arm or ratchet WITHOUT filling it, next to its evidence fill (`BatchUpdate`, the order's
-/// `update` entry; the batch's change takes its `keeperTip`).
+/// A listed order that a batch may arm or ratchet without filling it, next to its evidence fill.
+///
+/// The batch calls the order's `update` entry (`BatchUpdate`), and the batch's change takes the
+/// order's `keeperTip`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpCand {
+    /// Covenant id of the order.
     pub id: CovId,
+    /// The book the order is listed in.
     pub book: BookKey,
+    /// The order UTXO.
     pub outpoint: Outpoint,
-    /// The arm of a KAS conditional (trigger-side evidence at or through the stop); None for a pair order.
+    /// The arm of a KAS conditional, by trigger-side evidence at or through the stop.
+    ///
+    /// None for a pair order.
     pub arm: Option<TouchNeed>,
-    /// A trailing stop whose UTXO is `trailWait` old at `t` (CSV): ratcheted by opposite-side evidence.
+    /// A trailing stop whose UTXO is `trailWait` old at `t` (CSV), ratcheted by opposite-side
+    /// evidence.
     pub trail: Option<TrailOf>,
-    /// A pair conditional or pair stop entry (`super::pair`): its evidence is two KAS-book fills or a resting pair fill.
+    /// A pair conditional or pair stop entry (`super::pair`).
+    ///
+    /// Its evidence is two KAS-book fills or a resting pair fill.
     pub pair: Option<std::sync::Arc<super::pair::PairUp>>,
-    /// A booked exit's entry: the update never shares a transaction with it (the exit refuses, §6.1).
+    /// A booked exit's entry.
+    ///
+    /// The update never shares a transaction with it, because the exit refuses that (§6.1).
     pub parent: Option<CovId>,
-    /// `keeperTip`: what the batch takes.
+    /// `keeperTip`, which the batch takes.
     pub tip: i64,
-    /// UTXO value (the continuation keeps `value − tip`).
+    /// UTXO value. The continuation keeps `value − tip`.
     pub value: i64,
-    /// Estimated serialized bytes the update adds (the order input and its continuation).
+    /// Estimated serialized bytes the update adds, for the order input and its continuation.
     pub bytes: u64,
-    /// Measured marginal fee of one update at the minimum fee rate (`keeper_tips.json` `updateFee` of the token program).
+    /// Measured marginal fee of one update at the minimum fee rate.
+    ///
+    /// It is the `updateFee` of the token program in `keeper_tips.json`.
     pub fee_floor: i64,
 }
 
@@ -296,21 +380,25 @@ pub struct UpCand {
 pub struct CandCtx<'a> {
     /// Lock time `t` (§3.3).
     pub t: i64,
-    /// UTC clock (day-order deadlines).
+    /// UTC clock, for day-order deadlines.
     pub utc: u64,
-    /// Order ids spent by pending transactions or backed off: never candidates.
+    /// Order ids spent by pending transactions or backed off. They are never candidates.
     pub excluded: &'a BTreeSet<CovId>,
-    /// Every listed order by id (for merges: the booked exit's entry).
+    /// Every listed order by id. Merges look up the booked exit's entry here.
     pub by_id: &'a BTreeMap<CovId, ListedOrder>,
-    /// Orders whose UTXO is not accepted yet (a chained step): their DAA is unknown.
+    /// Orders whose UTXO is not accepted yet, in a chained step. Their DAA score is unknown.
     pub unaccepted: &'a BTreeSet<CovId>,
-    /// Pair auctions quoted at an earlier tick than `t` (the engine's earliest-tick search, [`super::auction`]; at most `t`):
-    /// only their quote moves, their eligibility is judged at `t`. None: every order at `t`.
+    /// Pair auctions quoted at a tick earlier than `t`.
+    ///
+    /// The ticks come from the engine's earliest-tick search ([`super::auction`]) and are at most
+    /// `t`. Only the quote of these orders moves, and their eligibility is judged at `t`. None
+    /// quotes every order at `t`.
     pub pair_ticks: Option<&'a BTreeMap<CovId, i64>>,
 }
 
 impl CandCtx<'_> {
-    /// The tick a pair order's auction is quoted at: its entry of [`CandCtx::pair_ticks`], never after `t`.
+    /// Tick at which a pair order's auction is quoted: its entry of [`CandCtx::pair_ticks`], never
+    /// after `t`.
     pub fn pair_tick(&self, id: &CovId) -> i64 {
         self.pair_ticks.and_then(|m| m.get(id)).map_or(self.t, |&x| x.min(self.t))
     }
@@ -327,13 +415,13 @@ pub fn redeem_len(id: TemplateId) -> u64 {
     }
 }
 
-/// Byte estimate of a transaction output (value, P2SH script, covenant binding).
+/// Byte estimate of a transaction output: value, P2SH script and covenant binding.
 pub const OUTPUT_BYTES: u64 = 90;
-/// Byte estimate of a covenant input besides its redeem script (outpoint, sequence, budget, args).
+/// Byte estimate of a covenant input besides its redeem script: outpoint, sequence, budget, args.
 pub const INPUT_BYTES: u64 = 180;
 /// Byte estimate of the transaction envelope, the funding input and the change output.
 pub const BASE_BYTES: u64 = 420;
-/// Leader `next_states` per token output (112-byte state + push).
+/// Bytes of the leader's `next_states` per token output, a 112-byte state and its push.
 pub const NEXT_STATE_BYTES: u64 = 115;
 
 /// Bytes of a token input of `program`.
@@ -341,9 +429,11 @@ pub fn token_input_bytes(program: Option<TemplateId>) -> u64 {
     INPUT_BYTES + program.map(redeem_len).unwrap_or(2_500)
 }
 
-/// §2.3 honest-matcher exclusions (fills only; merges are always allowed).
+/// Whether the honest-matcher exclusions of §2.3 by time refuse a fill of the order at `t`.
+///
+/// They apply to fills only. Merges are always allowed.
 pub fn excluded_by_expiry(o: &ListedOrder, t: i64, utc: u64) -> bool {
-    // An unaccepted continuation (chained step) will be accepted at or after `t`.
+    // An unaccepted continuation of a chained step is accepted at or after `t`.
     let udaa = if o.utxo_daa() == u64::MAX { t } else { o.utxo_daa() as i64 };
     let due = o.order.state.refund_due(udaa).unwrap_or(i64::MAX);
     if t >= due {
@@ -352,9 +442,11 @@ pub fn excluded_by_expiry(o: &ListedOrder, t: i64, utc: u64) -> bool {
     matches!(o.deadline, Some(d) if utc >= d)
 }
 
-/// The unarmed stop legs / stop entries (and trailing stops) of the view a batch may arm (or ratchet) with an `update`
-/// next to an evidence fill: accepted with a known DAA score at or before `t`, active, not expired, not excluded, in a
-/// book. Whether a batch's evidence serves one is the planner's to decide.
+/// Stops of the view that a batch may arm or ratchet with an `update`, next to an evidence fill.
+///
+/// These are unarmed stop legs, unarmed stop entries and trailing stops. Each is accepted with a
+/// known DAA score at or before `t`, active, not expired, not excluded and in a book. The planner
+/// decides whether a batch's evidence serves one.
 pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
     let t = cx.t;
     let mut out = vec![];
@@ -401,13 +493,14 @@ pub fn updatable(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<UpCand> {
         }
         let Some(mut tip) = o.order.state.keeper_tip() else { continue };
         if let AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) = &o.order.state {
-            // a buy stop pays its keeper only from what its buy does not need (at the current stop: a lower bound of what a
-            // ratchet frees)
+            // A buy stop pays its keeper only from what its buy does not need. Taken at the current
+            // stop, this is a lower bound of what a ratchet frees.
             let Some(t) = s.keeper_take(o.order.utxo.amount.min(i64::MAX as u64) as i64, s.stop_price) else { continue };
             tip = t;
         }
-        // the continuation (the order's value less the keeper's take) must clear the covenant-output bound, or the builder
-        // refuses the whole transaction it is attached to (a hostile `keeperTip` near the order's value)
+        // The continuation, the order's value less the keeper's take, must clear the
+        // covenant-output bound. Otherwise the builder refuses the whole transaction it is attached
+        // to. This guards against a hostile `keeperTip` near the order's value.
         if o.order.utxo.amount.min(i64::MAX as u64) as i64 - tip < COV_OUTPUT_MIN {
             continue;
         }
@@ -436,7 +529,8 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
     Cand {
         order: idx,
         id: o.id(),
-        // the kind of the order's family, in the build of its token program (KRON id_type 0 holders: `*KronD0`)
+        // The kind in the order's family and the build of its token program. KRON holders of
+        // id_type 0 get `*KronD0`.
         kind: match o.order.state.token_tpl_hash() {
             Some(h) => kind.for_token_hash(o.order.state.family(), &h),
             None => kind.in_family(o.order.state.family()),
@@ -468,21 +562,26 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
     }
 }
 
-/// Program of the order's token (None if it is not a supported program of the order's family).
+/// Program of the order's token.
+///
+/// None if it is not a supported program of the order's family.
 pub fn token_program(s: &AnyState) -> Option<TemplateId> {
     kob_protocol::artifacts::token_template_by_hash(&s.token_tpl_hash()?).filter(|t| t.family == s.family()).map(|t| t.id)
 }
 
-/// The smallest fill in `1..=cap` after which the bid of escrow `v` can no longer continue (less than one minimum fill of
-/// buying power left: the covenant's termination, exempt from `minFill`), or `i64::MAX` when every fill within `cap`
-/// leaves it able to continue. `can_continue(v − used(n))` only turns false as `n` grows, so a bisection finds it.
+/// Smallest fill in `1..=cap` after which the bid with escrow `v` can no longer continue.
+///
+/// After such a fill less than one minimum fill of buying power is left. That is the covenant's
+/// termination, and it is exempt from `minFill`. Returns `i64::MAX` when every fill within `cap`
+/// leaves the bid able to continue. `can_continue(v − used(n))` only turns false as `n` grows, so a
+/// bisection finds the fill.
 pub fn bid_rest_from(s: &BidState, v: i64, cap: i64) -> i64 {
     let ends = |n: i64| s.used(n).and_then(|u| v.checked_sub(u)).is_none_or(|left| !s.can_continue(left));
     if cap <= 0 || !ends(cap) {
         return i64::MAX;
     }
     let (mut lo, mut hi) = (0i64, cap);
-    // invariant: !ends(lo) (or lo = 0), ends(hi)
+    // Invariant: lo is 0 or !ends(lo), and ends(hi).
     while hi - lo > 1 {
         let mid = lo + (hi - lo) / 2;
         if ends(mid) {
@@ -494,13 +593,17 @@ pub fn bid_rest_from(s: &BidState, v: i64, cap: i64) -> i64 {
     hi
 }
 
-/// Every candidate (order × leg) of the orders at `t`, of any number of books. Orders are indexed as in `orders`.
+/// Every candidate (order × leg) of the orders at `t`, in any number of books.
+///
+/// Orders are indexed as in `orders`.
 pub fn candidates(orders: &[ListedOrder], cx: &CandCtx) -> Vec<Cand> {
     let refs: Vec<&ListedOrder> = orders.iter().collect();
     candidates_of(&refs, cx)
 }
 
-/// [`candidates`] over borrowed orders (the global batch reads every book of the view without copying it).
+/// [`candidates`] over borrowed orders.
+///
+/// The global batch reads every book of the view through it without copying the book.
 pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
     let mut out = vec![];
     let t = cx.t;
@@ -509,10 +612,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
         if o.order.utxo.covenant_id.is_none() || cx.excluded.contains(&id) || !o.custody_ok() {
             continue;
         }
-        // an order that belongs to no book (a pair order, an unknown extension) is not a KAS-book candidate
+        // An order in no book, such as a pair order or an unknown extension, is no KAS-book
+        // candidate.
         let Some(bk) = book_key(o) else { continue };
         let unaccepted = cx.unaccepted.contains(&id) || o.order.utxo.block_daa_score == u64::MAX;
-        // An order UTXO accepted after `t` cannot prove anything at `t` (activation, freshness).
+        // An order UTXO accepted after `t` cannot prove activation or freshness at `t`.
         if !unaccepted && o.utxo_daa() as i64 > t {
             continue;
         }
@@ -524,7 +628,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
         let rl = |k: TemplateId| redeem_len(k.in_family(fam));
         let program = token_program(&o.order.state);
         let tok_in = token_input_bytes(program);
-        // The KRON kinds carry the typed states of their KCC-20 counterparts: match on those.
+        // The KRON kinds carry the typed states of their KCC-20 counterparts. Match on those.
         let state = o.order.state.clone().into_family(Family::Kcc20);
         let custody_bytes = |has: bool| if has { tok_in + NEXT_STATE_BYTES } else { 0 };
         let v = o.order.utxo.amount.min(i64::MAX as u64) as i64;
@@ -547,7 +651,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.rest_from = s.amount_left;
                 c.class = if s.tif == TIF_GTC { Class::Resting } else { Class::Immediate };
                 c.ioc = s.tif == TIF_IOC;
-                // the outputs a fill leaves clear their KIP-9 dust bounds (a partial fill's payout, continuation, custody)
+                // The outputs a fill leaves must clear their KIP-9 dust bounds. These are a partial
+                // fill's payout, continuation and custody.
                 let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
                 if !c.set_rules(plain_kip9(&state, v, cust, q, c.rules())) {
                     continue;
@@ -558,7 +663,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     }
                     c.fok = Some((s.amount_left, s.amount_left));
                 }
-                // trigger evidence: the covenants read the order's and its custody's DAA scores (exposure)
+                // Trigger evidence. The covenants read the DAA scores of the order and its custody
+                // for the exposure.
                 let cdaa = o.custody.as_ref().map(|x| x.utxo.block_daa_score).unwrap_or(u64::MAX);
                 if s.slope == 0 && !unaccepted && cdaa != u64::MAX && cdaa as i64 <= t {
                     c.touch = Some(TouchSrc {
@@ -579,9 +685,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if s.interval > 0 && (unaccepted || t < udaa + s.interval) {
                     continue;
                 }
-                // The buying power keeps the maker's delivery carrier on the delivery output (a smaller output raises the
-                // storage mass) and the reserve: the largest n whose consumed budget ceil(n·(pMax + tip)/scale) leaves both.
-                // A bid's quantity is free (its escrow bounds it): never more than the token amounts can hold.
+                // The buying power keeps the maker's delivery carrier on the delivery output, since
+                // a smaller output raises the storage mass, and it keeps the reserve. It is the
+                // largest n whose consumed budget ceil(n·(pMax + tip)/scale) leaves both. A bid's
+                // quantity is free, bounded only by its escrow, so it is capped at what token
+                // amounts can hold.
                 let power = s.buying_power(v).min(i64::MAX / 4);
                 let cap = if s.max_fill > 0 { power.min(s.max_fill) } else { power };
                 if cap <= 0 {
@@ -598,12 +706,14 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.rest_from = bid_rest_from(s, v, cap);
                 c.class = if s.tif == TIF_GTC { Class::Resting } else { Class::Immediate };
                 c.ioc = s.tif == TIF_IOC;
-                // the outputs a fill leaves clear their KIP-9 dust bounds (the continuation, the delivery)
+                // The outputs a fill leaves must clear their KIP-9 dust bounds. These are the
+                // continuation and the delivery.
                 if !c.set_rules(plain_kip9(&state, v, 0, q, c.rules())) {
                     continue;
                 }
                 if s.tif == TIF_FOK {
-                    // Complete: less than one minimum fill of buying power left after the fill (the covenant's rule).
+                    // Complete means less than one minimum fill of buying power is left after the
+                    // fill, as the covenant rules.
                     if c.rest_from > c.cap {
                         continue;
                     }
@@ -625,8 +735,9 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if t < s.active_from || s.amount_left <= 0 {
                     continue;
                 }
-                // KIP-9: a partial fill keeps the continuation (`v`) and the custody and pays the maker its proceeds (less the
-                // merged entry's budget); the fill of everything left pays the carriers too (to the entry when it merges)
+                // KIP-9. A partial fill keeps the continuation (`v`) and the custody, and pays the
+                // maker its proceeds less the merged entry's budget. The fill of everything left
+                // also pays the carriers, to the entry when it merges.
                 let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
                 let kip9 = |c: &mut Cand| -> bool {
                     let cv = c.clone();
@@ -672,7 +783,7 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                                         && s.tp_price - s.tip > s.rpt_price =>
                                 {
                                     c.merge = Some(s.parent);
-                                    // the merge argument -(k·2^53 + m) carries m < 2^53
+                                    // The merge argument -(k·2^53 + m) carries m < 2^53.
                                     c.cap = c.cap.min(MERGE_SHIFT - 1);
                                     c.chain_safe = false;
                                     c.bytes += INPUT_BYTES + rl(TemplateId::KobIfdBid) + OUTPUT_BYTES;
@@ -704,7 +815,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                             out.push(c);
                         }
                     } else if !unaccepted {
-                        // triggered by a resting ask filled at or below the stop in the same batch (the planner checks)
+                        // A resting ask filled at or below the stop in the same batch triggers it.
+                        // The planner checks that.
                         c.trigger = Some(TouchNeed {
                             side: SIDE_ASK,
                             stop: s.stop_price,
@@ -725,8 +837,9 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if t < s.active_from || s.amount_left <= 0 {
                     continue;
                 }
-                // KIP-9: a partial fill delivers on `deliveryCarrier` and keeps the continuation `v - spend - deliveryCarrier`;
-                // the fill of everything left delivers `v - spend` (a merge pays the entry instead: the builder's rules)
+                // KIP-9. A partial fill delivers on `deliveryCarrier` and keeps the continuation
+                // `v - spend - deliveryCarrier`. The fill of everything left delivers `v - spend`.
+                // A merge pays the entry instead, and the builder's rules apply to it.
                 let kip9 = |c: &mut Cand| -> bool {
                     if c.merge.is_some() {
                         return true;
@@ -751,8 +864,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     c.left = s.amount_left;
                     c.min_fill = s.min_fill;
                     c.rest_from = s.amount_left;
-                    // Largest affordable fill (the escrow covers the whole amount at the worst leg); a bisection, O(log
-                    // amountLeft) whatever `amountLeft` claims.
+                    // Largest affordable fill. The escrow covers the whole amount at the worst leg.
+                    // The bisection takes O(log amountLeft) steps, whatever `amountLeft` claims.
                     c.cap = largest_fit(s.amount_left, |n| {
                         s.spend(n, quote)
                             .and_then(|sp| v.checked_sub(sp))
@@ -781,10 +894,10 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                                     if c.merge_custody {
                                         c.bytes += tok_in;
                                     }
-                                    // the merge argument -(k·2^53 + m) carries m < 2^53
+                                    // The merge argument -(k·2^53 + m) carries m < 2^53.
                                     c.cap = c.cap.min(MERGE_SHIFT - 1);
-                                    // The exit's continuation keeps what its remaining amount needs:
-                                    // v − ceil(n·rptPrice/scale) − ceil(n·rptPre/scale) > 0.
+                                    // The exit's continuation keeps what its remaining amount
+                                    // needs, v − ceil(n·rptPrice/scale) − ceil(n·rptPre/scale) > 0.
                                     if c.cap < s.amount_left {
                                         c.cap = largest_fit(c.cap, |n| match (s.rpt_proceeds(n), s.rpt_prefund(n)) {
                                             (Some(p), Some(q)) => (v as i128) - (p as i128) - (q as i128) > 0,
@@ -817,7 +930,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                             out.push(c);
                         }
                     } else if !unaccepted {
-                        // triggered by a resting bid filled at or above the stop in the same batch (the planner checks)
+                        // A resting bid filled at or above the stop in the same batch triggers it.
+                        // The planner checks that.
                         let Some(q) = s.stop_at(true, t, udaa) else { continue };
                         let mut c = mk(1, q);
                         c.class = Class::Triggered;
@@ -863,7 +977,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                         if unaccepted {
                             continue;
                         }
-                        // a buy-stop entry: a resting bid filled at or above its trigger in the same batch
+                        // A buy-stop entry. A resting bid filled at or above its trigger in the
+                        // same batch triggers it.
                         c.trigger = Some(TouchNeed {
                             side: SIDE_BID,
                             stop: s.entry_stop,
@@ -877,7 +992,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 } else {
                     c.quote = s.price;
                 }
-                // Affordability: the entry keeps a delivery carrier and (continuing) an exit carrier.
+                // Affordability. The entry keeps a delivery carrier, and an exit carrier when it
+                // continues.
                 let quote = c.quote;
                 let fits = |n: i64| {
                     let Some(left) = s.spend(n, quote).and_then(|sp| v.checked_sub(sp)) else { return false };
@@ -890,11 +1006,12 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 };
                 let mut limit = s.amount_left;
                 if s.rpt_amount > 0 {
-                    // a booking (rptAmount > n) carries n < 2^53 in its exit's merge argument
+                    // A booking (rptAmount > n) carries n < 2^53 in its exit's merge argument.
                     limit = limit.min(MERGE_SHIFT - 1);
                 }
                 if let Some(m) = rpt_fill_max(s.rpt_amount, s.min_fill) {
-                    // while a minimum fill of re-arms is left, a fill takes at most the re-arms left (it is booked)
+                    // While a minimum fill of re-arms is left, a fill takes at most the re-arms
+                    // left, and it is booked.
                     limit = limit.min(m);
                 }
                 let n = largest_fit(limit, fits);
@@ -902,9 +1019,10 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if n <= 0 {
                     continue;
                 }
-                // KIP-9: the delivery (to the exit) and the exit carrier are covenant outputs, and so is the continuation
-                // `v - spend - deliveryCarrier - exitCarrier` of an entry that continues (a partial fill, or any fill of a
-                // repeating entry); the last fill of a non-repeating entry puts `v - spend - deliveryCarrier` on its exit
+                // KIP-9. The delivery to the exit and the exit carrier are covenant outputs. So is
+                // the continuation `v - spend - deliveryCarrier - exitCarrier` of an entry that
+                // continues, after a partial fill or any fill of a repeating entry. The last fill
+                // of a non-repeating entry puts `v - spend - deliveryCarrier` on its exit.
                 let (dc, ec, rpt) = (s.delivery_carrier, s.exit_carrier, s.rpt_amount > 0);
                 let left = |n: i64| s.spend(n, quote).and_then(|sp| v.checked_sub(sp)).map(|l| l.saturating_sub(dc));
                 let cont_ok = |n: i64| left(n).is_some_and(|l| l.saturating_sub(ec) >= COV_OUTPUT_MIN);
@@ -963,7 +1081,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                         if unaccepted {
                             continue;
                         }
-                        // a sell-stop entry: a resting ask filled at or below its trigger in the same batch
+                        // A sell-stop entry. A resting ask filled at or below its trigger in the
+                        // same batch triggers it.
                         c.trigger = Some(TouchNeed {
                             side: SIDE_ASK,
                             stop: s.entry_stop,
@@ -977,7 +1096,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 } else {
                     c.quote = s.price;
                 }
-                // The entry continuation keeps its carrier: v − ceil(n·prefund/scale) − exitCarrier > 0.
+                // The entry continuation keeps its carrier:
+                // v − ceil(n·prefund/scale) − exitCarrier > 0.
                 let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
                 let fits = |n: i64| {
                     if n < s.amount_left || s.rpt_amount > 0 {
@@ -999,9 +1119,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 if n <= 0 || s.proceeds(1, c.quote).is_none() {
                     continue;
                 }
-                // KIP-9: an entry that continues keeps `v - prefund - exitCarrier` (with its custody's carrier once it has
-                // sold everything) and, after a partial fill, its custody; its exit (a covenant output) holds the proceeds, the
-                // prefund and the exit carrier; the last fill of a non-repeating entry puts everything on its exit
+                // KIP-9. An entry that continues keeps `v - prefund - exitCarrier`, plus its
+                // custody's carrier once it has sold everything. After a partial fill it also keeps
+                // its custody. Its exit is a covenant output and holds the proceeds, the prefund
+                // and the exit carrier. The last fill of a non-repeating entry puts everything on
+                // its exit.
                 let (ec, rpt, quote) = (s.exit_carrier, s.rpt_amount > 0, c.quote);
                 let exit_ok = |n: i64| match (s.proceeds(n, quote), s.prefund_of(n)) {
                     (Some(p), Some(pre)) => p.saturating_add(pre).saturating_add(ec) >= COV_OUTPUT_MIN,
@@ -1034,19 +1156,22 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     + 3 * OUTPUT_BYTES;
                 out.push(c);
             }
-            // pair orders are planned by `super::pair`; the KRON kinds were normalised to their KCC-20 twins above
+            // `super::pair` plans the pair orders. The KRON kinds are normalised to their KCC-20
+            // twins above.
             _ => {}
         }
     }
-    // a fill must be worth something to its maker: an ask's all-in above its tip, a bid's all-in positive
+    // A fill must be worth something to its maker, so its all-in rate must be positive.
     out.retain(|c| c.cap > 0 && c.all_in() > 0 && c.scale > 0);
     out
 }
 
-/// Largest `n` in `0..=max` for which `fits(n)` holds, where `fits` is the covenant's affordability test of a fill of `n`
-/// base units: evaluated at `max` itself (which may differ: the fill that takes everything skips the continuation
-/// carriers) and otherwise monotone in `n` (a cost that only grows with `n`), so a bisection finds the answer in O(log
-/// max) evaluations whatever an order's amount claims.
+/// Largest `n` in `0..=max` for which `fits(n)` holds.
+///
+/// `fits` is the covenant's affordability test of a fill of `n` base units. It is evaluated at
+/// `max` itself, where it may differ because the fill that takes everything skips the continuation
+/// carriers. Below `max` it is monotone in `n`, a cost that only grows with `n`. So a bisection
+/// finds the answer in O(log max) evaluations, whatever an order's amount claims.
 pub fn largest_fit(max: i64, fits: impl Fn(i64) -> bool) -> i64 {
     if max <= 0 {
         return 0;
@@ -1054,7 +1179,7 @@ pub fn largest_fit(max: i64, fits: impl Fn(i64) -> bool) -> i64 {
     if fits(max) {
         return max;
     }
-    // below `max` the test is monotone in n: true up to a threshold
+    // Below `max` the test is monotone in n, true up to a threshold.
     let mut hi = max - 1;
     if hi == 0 {
         return 0;
@@ -1074,37 +1199,55 @@ pub fn largest_fit(max: i64, fits: impl Fn(i64) -> bool) -> i64 {
     lo
 }
 
-/// The least KAS a plain output of a fill can hold (a maker's payout, P2PK): below it the output's KIP-9 storage mass alone
-/// exceeds the block limit ([`kob_protocol::tx::DUST_OUTPUT_MIN`]).
+/// Least KAS that a plain output of a fill can hold, such as a maker's P2PK payout.
+///
+/// Below it the output's KIP-9 storage mass alone exceeds the block limit
+/// ([`kob_protocol::tx::DUST_OUTPUT_MIN`]).
 pub const KAS_OUTPUT_MIN: i64 = kob_protocol::tx::DUST_OUTPUT_MIN as i64;
-/// The least KAS an output with a covenant id can hold (an order continuation, a custody, a delivery, an exit): two KIP-9
-/// storage units, four times the plain bound ([`kob_protocol::tx::COVENANT_OUTPUT_MIN`]).
+/// Least KAS that an output with a covenant id can hold, four times the plain bound.
+///
+/// Such outputs are order continuations, custodies, deliveries and exits
+/// ([`kob_protocol::tx::COVENANT_OUTPUT_MIN`]).
 pub const COV_OUTPUT_MIN: i64 = kob_protocol::tx::COVENANT_OUTPUT_MIN as i64;
 
-/// The quantity rules of an order's fills: the most it takes now, its minimum fill, the smallest fill that ends it and the
-/// largest fill that does not ([`Cand`]'s fields of the same names).
+/// Quantity rules of an order's fills.
+///
+/// They are the most it takes now, its minimum fill, the smallest fill that ends it and the largest
+/// fill that does not. Each is the [`Cand`] field of the same name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QtyRules {
+    /// Most base units fillable now ([`Cand::cap`]).
     pub cap: i64,
+    /// Least base units of a fill that does not end the order ([`Cand::min_fill`]).
     pub min_fill: i64,
+    /// Smallest fill that ends the order ([`Cand::rest_from`]).
     pub rest_from: i64,
+    /// Largest fill that does not end the order ([`Cand::part_cap`]).
     pub part_cap: i64,
 }
 
-/// What the outputs of an order's fills need to clear their KIP-9 dust bounds (`docs/spec/matcher.md` §2.2): a transaction
-/// with an output below its bound (0.02 KAS plain, 0.08 KAS with a covenant id) is refused by consensus, so the builder
-/// refuses the fill and a planner that ignored it would plan that fill again every tick.
+/// Quantity rules under which the outputs of an order's fills clear their KIP-9 dust bounds.
 ///
-/// * `part_fixed`: the outputs a partial fill (one that does not end the order) leaves at a value that does not depend on
-///   the fill (the order UTXO's carrier on a continuation, a remaining custody, a delivery carrier) clear their bounds;
-/// * `part_up(n)`: the outputs of a partial fill of `n` that grow with `n` (the maker's payout) clear theirs: false below a
-///   threshold, true above it;
-/// * `part_down(n)`: those that shrink with `n` (a bid's or an entry's continuation) clear theirs: true up to a threshold;
-/// * `end_ok(n)`: the outputs of a fill of `n` that ends the order clear theirs: true up to a threshold.
+/// See `docs/spec/matcher.md` §2.2. Consensus refuses a transaction with an output below its
+/// bound, which is 0.02 KAS for a plain output and 0.08 KAS for one with a covenant id. So the
+/// builder refuses the fill, and a planner that ignored the bound would plan that fill again every
+/// tick.
 ///
-/// The partial fills become `[max(minFill, threshold of part_up), threshold of part_down]` (`part_cap`; none: 0), the fills
-/// that end the order `[rest_from, threshold of end_ok]` (none: `rest_from = i64::MAX`, and the cap falls to `part_cap`).
-/// `None` when no fill is left.
+/// The tests are:
+/// - `part_fixed`: the outputs that a partial fill leaves at a value independent of the fill clear
+///   their bounds. A partial fill does not end the order. These outputs are the order UTXO's
+///   carrier on a continuation, a remaining custody and a delivery carrier.
+/// - `part_up(n)`: the outputs of a partial fill of `n` that grow with `n`, such as the maker's
+///   payout, clear theirs. It is false below a threshold and true above it.
+/// - `part_down(n)`: the outputs that shrink with `n`, such as a bid's or an entry's continuation,
+///   clear theirs. It is true up to a threshold.
+/// - `end_ok(n)`: the outputs of a fill of `n` that ends the order clear theirs. It is true up to
+///   a threshold.
+///
+/// The partial fills become `[max(minFill, threshold of part_up), threshold of part_down]`, and
+/// `part_cap` is 0 when there are none. The fills that end the order become
+/// `[rest_from, threshold of end_ok]`. When there are none, `rest_from` is `i64::MAX` and the cap
+/// falls to `part_cap`. Returns `None` when no fill is left.
 pub fn kip9_limits(
     r: QtyRules,
     part_fixed: bool,
@@ -1138,7 +1281,7 @@ pub fn kip9_limits(
     (r.cap > 0).then_some(r)
 }
 
-/// The largest `n` in `lo..=hi` with `f(n)`, for an `f` true up to a threshold; `lo − 1` when none.
+/// Largest `n` in `lo..=hi` with `f(n)`, for an `f` true up to a threshold, or `lo − 1` when none.
 fn last_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
     if hi < lo || !f(lo) {
         return lo - 1;
@@ -1158,7 +1301,7 @@ fn last_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
     a
 }
 
-/// The smallest `n` in `lo..=hi` with `f(n)`, for an `f` false below a threshold and `f(hi)` true.
+/// Smallest `n` in `lo..=hi` with `f(n)`, for an `f` false below a threshold and `f(hi)` true.
 fn first_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
     if f(lo) {
         return lo;
@@ -1175,15 +1318,16 @@ fn first_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
     b
 }
 
-/// [`kip9_limits`] of a plain `KobAsk` / `KobBid` (either family) at quote `quote` (sompi per whole token), with the order
-/// UTXO's value `v` and its custody's `cust`, mirroring the builder's outputs (`kob_protocol::build`, `Leg::Ask` /
-/// `Leg::Bid`):
+/// [`kip9_limits`] of a plain `KobAsk` or `KobBid` of either family at `quote`.
 ///
-/// * an ask's partial fill: GTC keeps its continuation (`v`) and its custody (`cust`) and pays the maker its proceeds; an IOC
-///   returns the custody to the maker and pays the proceeds with `v`; the fill of everything left pays all three;
-/// * a bid's fill delivers the tokens on `deliveryCarrier + used(n) − spend(n)` and keeps the continuation
-///   `v − used(n) − deliveryCarrier` while it can continue (GTC); a fill that ends it (or any IOC / FOK fill) delivers
-///   `v − spend(n)`.
+/// The quote is in sompi per whole token, `v` is the order UTXO's value and `cust` its custody's.
+/// The tests mirror the builder's outputs (`Leg::Ask` and `Leg::Bid` in `kob_protocol::build`):
+/// - A GTC ask's partial fill keeps its continuation (`v`) and its custody (`cust`), and pays the
+///   maker its proceeds. An IOC returns the custody to the maker and pays the proceeds with `v`.
+///   The fill of everything left pays all three.
+/// - A bid's fill delivers the tokens on `deliveryCarrier + used(n) − spend(n)`. A GTC bid keeps
+///   the continuation `v − used(n) − deliveryCarrier` while it can continue. A fill that ends it,
+///   and any IOC or FOK fill, delivers `v − spend(n)`.
 pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> Option<QtyRules> {
     match s {
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => {
@@ -1202,7 +1346,7 @@ pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> O
             let used = |n: i64| b.used(n);
             let closing = |n: i64| spend(n).is_some_and(|sp| v.saturating_sub(sp) >= COV_OUTPUT_MIN);
             if b.tif != TIF_GTC {
-                // an IOC / FOK bid never continues: every fill delivers what its escrow keeps
+                // An IOC or FOK bid never continues. Every fill delivers what its escrow keeps.
                 return kip9_limits(r, true, |_| true, closing, closing);
             }
             kip9_limits(
@@ -1224,7 +1368,7 @@ impl Cand {
     fn rules(&self) -> QtyRules {
         QtyRules { cap: self.cap, min_fill: self.min_fill, rest_from: self.rest_from, part_cap: self.part_cap }
     }
-    /// Takes the KIP-9 limits ([`kip9_limits`]) into the candidate; false when no fill is left.
+    /// Takes the KIP-9 limits ([`kip9_limits`]) into the candidate. False when no fill is left.
     fn set_rules(&mut self, r: Option<QtyRules>) -> bool {
         match r {
             Some(r) => {
@@ -1236,7 +1380,10 @@ impl Cand {
     }
 }
 
-/// A repeating entry can be merged: listed, not spent by a pending transaction, custody valid.
+/// Whether a repeating entry can be merged.
+///
+/// It must be listed, not spent by a pending transaction, accepted at or before `t`, and have a
+/// valid custody.
 fn merge_entry_ok(e: &ListedOrder, cx: &CandCtx) -> bool {
     !cx.excluded.contains(&e.id())
         && e.custody_ok()
