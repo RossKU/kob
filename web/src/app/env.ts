@@ -210,10 +210,16 @@ export async function readHoldingsPart(
   if (!token.program) throw new Error(`token ${token.ticker} is not tradable in this build`);
   // standalone mode (data/standalone.ts): the wallet's orders in the book the planner gets are the ones that book lists (seen on the node, or resolved from
   // the wallet's receipts); no indexer is asked
-  const sa = s.standalone?.state.active ? s.standalone : null;
-  const mine = sa
-    ? Promise.resolve(sa.ownOrders(wallet.pubkey, token.covenantId))
-    : s.indexer && !o.offline ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(() => null) : Promise.resolve([]);
+  const c = s.standalone ?? null;
+  const own = () => c!.ownOrders(wallet.pubkey, token.covenantId);
+  const mine = c?.state.active
+    ? Promise.resolve(own())
+    : s.indexer && !o.offline
+      ? s.indexer.allOrders({ maker: wallet.pubkey, token: token.covenantId, status: 'active' }).catch(async (e: unknown) => {
+          // the indexer is down: once standalone mode is on (the failed read starts its check), its book lists the wallet's orders
+          return c && typeof c.readFailed === 'function' && (await c.readFailed(e)) ? own() : null;
+        })
+      : Promise.resolve([]);
   const [tokenUtxos, orders] = await Promise.all([s.tracker.tokenUtxosFor(wallet.pubkey, { covenantId: token.covenantId, program: token.program }), mine]);
   return { tokenUtxos, ownOrders: orders ? ownOrderRefs(market, orders) : null };
 }

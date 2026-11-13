@@ -141,7 +141,7 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
   if (o.standalone !== undefined) standalone = o.standalone;
   else if (o.indexer === undefined && typeof node.subscribeBlocks === 'function' && (indexer || config.standalone.manual)) {
     standalone = new StandaloneController({
-      kob, node, network: config.network, prefs: config.standalone, ...(failover ? { enterCheckMs: ENTER_CHECK_FAILOVER_MS } : {}),
+      kob, node, network: config.network, prefs: config.standalone, ...(failover ? { enterCheckMs: ENTER_CHECK_FAILOVER_MS, fastFallback: false } : {}),
       toAddress: (spk) => spkStringToAddress(sdk, spk, config.network),
       indexer: indexer ?? { health: async () => Promise.reject(standaloneUnavailable('no indexer is configured: this')) },
       registry: (token) => {

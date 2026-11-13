@@ -7,6 +7,10 @@
 // the claimed state (kob-wasm `tokenScriptPublicKey`), the node must list the outpoint there, and the covenant id must match. An indexer or a
 // storage entry can therefore be stale or wrong, never dangerous.
 //
+// The indexer's last answer is kept in memory for the session: while the indexer cannot be read (down, or standalone mode) its candidates are
+// still the ones it gave last, verified on the node like any other (one that was spent since is not listed there, so it is not offered, and it is
+// forgotten), so a wallet can still sell what it holds while the app trades through the node.
+//
 // Balances read every token the wallet holds, not only the registry's (`heldTokens`): the indexer tracks the holdings of every token of
 // a pinned program (a token received from another trading app, a launchpad or a bridge), and each candidate is verified the same way. The script
 // is derived from the program kob-wasm pins, so a look-alike program or an output whose state the indexer misreports never verifies.
@@ -155,6 +159,8 @@ export class TokenTracker {
   private readonly graceMs: number;
   /** two misses count as separate checks only this far apart (also bounds how often a miss is written to the store) */
   private readonly missSpacingMs: number;
+  /** the indexer's last candidates per owner and token (`*`: every token of the owner), for reads while it cannot answer */
+  private readonly lastFromIndexer = new Map<string, TrackedToken[]>();
 
   constructor(d: TokenTrackerDeps) {
     this.kob = d.kob;
@@ -361,11 +367,13 @@ export class TokenTracker {
    */
   private async fromIndexer(pubkey: Hex, token: TokenRef): Promise<{ answered: boolean; items: TrackedToken[] }> {
     if (!this.indexer) return { answered: false, items: [] };
+    const key = `${pubkey}|${token.covenantId}`;
     let views: TokenUtxoView[] | null;
     try {
       views = await this.indexer.tokenUtxos({ owner: pubkey, token: token.covenantId, spent: false });
     } catch {
-      return { answered: false, items: [] };
+      // the indexer cannot be read: what it gave last (verified on the node below like any candidate)
+      return { answered: false, items: this.lastFromIndexer.get(key) ?? [] };
     }
     if (!views) return { answered: false, items: [] };
     const out: TrackedToken[] = [];
@@ -379,7 +387,22 @@ export class TokenTracker {
       const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: token.covenantId, program, state, carrier: v.value, addedAt: this.now() }, this.now());
       if (c) out.push(c);
     }
+    this.remember(key, out);
     return { answered: true, items: out };
+  }
+
+  private remember(key: string, items: TrackedToken[]): void {
+    this.lastFromIndexer.delete(key);
+    this.lastFromIndexer.set(key, items);
+    while (this.lastFromIndexer.size > 200) this.lastFromIndexer.delete(this.lastFromIndexer.keys().next().value!);
+  }
+
+  /** The kept indexer candidates of `key` the node did not verify are forgotten (spent since the indexer listed them). */
+  private forgetUnverified(key: string, verified: ReadonlySet<string>): void {
+    const kept = this.lastFromIndexer.get(key);
+    if (!kept) return;
+    const next = kept.filter((c) => verified.has(outpointKey(c.transactionId, c.index)));
+    if (next.length !== kept.length) this.lastFromIndexer.set(key, next);
   }
 
   /**
@@ -393,7 +416,7 @@ export class TokenTracker {
     const me = pubkey.toLowerCase();
     const covId = token.covenantId.toLowerCase();
     const localForToken = this.load(me).filter((t) => t.tokenCovId === covId);
-    const { items: fromIndexer } = await this.fromIndexer(me, { ...token, covenantId: covId });
+    const { answered: indexerAnswered, items: fromIndexer } = await this.fromIndexer(me, { ...token, covenantId: covId });
     // an outpoint the indexer also lists stays in the local list: after an indexer reset (fresh database) such holdings are known to
     // neither source otherwise. They dedupe in the map below and are pruned like any other candidate once spent.
 
@@ -403,6 +426,7 @@ export class TokenTracker {
     if (candidates.length === 0) return [];
 
     const { verified: result, contradicted, answered } = await this.verifyOnNode(candidates);
+    if (!indexerAnswered && fromIndexer.length) this.forgetUnverified(`${me}|${covId}`, new Set(result.keys()));
     this.settle(me, covId, { queried: new Set(localForToken.map((t) => outpointKey(t.transactionId, t.index))), verified: new Set(result.keys()), contradicted, answerEmpty: !answered });
     return [...result.values()].map(({ program: _p, ...u }) => u as TokenUtxo).sort(byAmountDesc);
   }
@@ -503,7 +527,8 @@ export class TokenTracker {
     try {
       views = await this.indexer.tokenUtxos({ owner: me, spent: false });
     } catch {
-      return [];
+      // the indexer cannot be read: what it gave last (verified on the node by the caller)
+      return this.lastFromIndexer.get(`${me}|*`) ?? [];
     }
     const out: TrackedToken[] = [];
     for (const v of views ?? []) {
@@ -513,6 +538,7 @@ export class TokenTracker {
       const c = sanitizeTracked({ transactionId: v.txid, index: v.index, tokenCovId: v.token.toLowerCase(), program, state: v.state, carrier: v.value, addedAt: this.now() }, this.now());
       if (c) out.push(c);
     }
+    if (views) this.remember(`${me}|*`, out);
     return out;
   }
 

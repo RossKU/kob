@@ -1,11 +1,15 @@
 // What the page already read from the indexer in this session, kept for standalone mode (data/standalone.ts). When the page goes standalone (the
 // switch in Settings, or the automatic fallback when the indexer cannot be used) it does not drop that: the candles, trades and 24 h figures of a
 // market already loaded, the token facts of the list (an open-list token's decimals come from the indexer's market scale) and the activity rows
-// stay, marked "indexer data until HH:MM", and what the node shows afterwards is merged into them. Nothing is asked of the indexer here: this only
-// remembers answers it already gave (`modeIndexer` records them while the indexer is in use), so the trust is the one those answers had before the
-// switch. The book is NOT kept (a stale indexer book must not be offered); the indexer's data wins again once it is back (the node's collected data
-// is dropped, the carry goes on recording what the indexer says).
-import type { CandleInterval, CandleView, CandlesView, IndexerTokenView, StatsView, TradeView, TradesView } from './indexer-types';
+// stay, and what the node shows afterwards is merged into them. Nothing is asked of the indexer here: this only remembers answers it already gave
+// (`modeIndexer` records them while the indexer is in use), so the trust is the one those answers had before the switch.
+//
+// The resting orders of a market are kept too (its `/v1/orders?token=&status=active` answer, read beside its book, and every `/v1/orders/{id}` answer):
+// standalone mode starts its book from them instead of from nothing. That is never trust in the indexer's word: the mode lists such an order only while
+// the node holds it (each one is checked on the node at once and again with every recheck, a spend in a block takes it out), and an order is taken only
+// after the book check confirms it on the node again (app/book-verify.ts). The indexer's data wins again once it is back (the node's collected data is
+// dropped, the carry goes on recording what the indexer says).
+import type { CandleInterval, CandleView, CandlesView, IndexerTokenView, OrderView, StatsView, TradeView, TradesView } from './indexer-types';
 import type { Hex } from '../kob/types';
 import type { RegistryFacts } from './stream-book';
 
@@ -13,6 +17,10 @@ import type { RegistryFacts } from './stream-book';
 const MAX_BARS = 1500;
 /** Most markets whose figures are kept (the least recently read go first). */
 const MAX_MARKETS = 200;
+/** Most resting orders kept per market. */
+const MAX_ORDERS = 500;
+/** The resting orders of a market are read again at most this often (a read of its book asks for them). */
+export const ORDERS_READ_MS = 60_000;
 /** Most parked stores of the activity log. */
 const MAX_PARKED = 24;
 const DAY_MS = 86_400_000;
@@ -27,6 +35,13 @@ interface MarketCarry {
   stats: StatsView | null;
 }
 
+const hasCustody = (v: OrderView): boolean => !!v.custody?.utxo;
+const sameOutpoint = (a: OrderView, b: OrderView): boolean => !!a.current && !!b.current && a.current.txid === b.current.txid && a.current.index === b.current.index;
+
+/** An order of `token`'s KAS book that rests (open or partly filled, listed). */
+const isResting = (v: OrderView, token: Hex): boolean =>
+  typeof v.covenant_id === 'string' && typeof v.token === 'string' && v.token.toLowerCase() === token && (v.status === 'open' || v.status === 'partial') && v.listed !== false && v.in_book !== false && !v.expired;
+
 const posBig = (s: string): bigint | null => (/^[1-9]\d*$/.test(s) ? BigInt(s) : null);
 const isPow10 = (n: number): boolean => Number.isInteger(n) && n >= 1 && n <= 1_000_000_000 && /^10*$/.test(String(n));
 
@@ -35,6 +50,8 @@ export class IndexerCarry {
   private tokensRead: number | null = null;
   private readonly markets = new Map<Hex, MarketCarry>();
   private readonly parkedStores = new Map<string, unknown>();
+  private readonly orderViews = new Map<Hex, { at: number; views: Map<Hex, OrderView> }>();
+  private readonly ordersAsked = new Map<Hex, number>();
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -91,7 +108,73 @@ export class IndexerCarry {
     if (m) m.stats = v;
   }
 
+  /**
+   * The resting orders of a market the indexer gave (`/v1/orders?token=&status=active`): they replace what was kept of it. The list does not carry an
+   * ask's custody (only `/v1/orders/{id}` does): a kept view of the same order at the same outpoint that has it stays (`needsCustody` names the others).
+   */
+  recordOrders(token: Hex, views: readonly OrderView[]): void {
+    const id = token.toLowerCase() as Hex;
+    const old = this.orderViews.get(id)?.views;
+    const m = new Map<Hex, OrderView>();
+    for (const v of views) {
+      if (!isResting(v, id) || m.size >= MAX_ORDERS) continue;
+      const key = v.covenant_id.toLowerCase() as Hex;
+      const kept = old?.get(key);
+      m.set(key, kept && hasCustody(kept) && !hasCustody(v) && sameOutpoint(kept, v) ? kept : v);
+    }
+    this.orderViews.delete(id);
+    this.orderViews.set(id, { at: this.now(), views: m });
+    while (this.orderViews.size > MAX_MARKETS) this.orderViews.delete(this.orderViews.keys().next().value!);
+  }
+
+  /** One order the indexer gave (`/v1/orders/{id}`): its newest view is kept while it rests, an order that no longer rests is forgotten. */
+  recordOrder(v: OrderView | null): void {
+    if (!v || typeof v.token !== 'string') return;
+    const token = v.token.toLowerCase() as Hex;
+    const id = v.covenant_id.toLowerCase() as Hex;
+    const m = this.orderViews.get(token);
+    if (!isResting(v, token)) return void m?.views.delete(id);
+    if (m) {
+      if (m.views.has(id) || m.views.size < MAX_ORDERS) m.views.set(id, v);
+    } else this.orderViews.set(token, { at: this.now(), views: new Map([[id, v]]) });
+  }
+
+  /** The best (lowest priced) kept asks of `token` without their custody, at most `n`: their full views are read one by one. */
+  needsCustody(token: Hex, n: number): Hex[] {
+    const m = this.orderViews.get(token.toLowerCase() as Hex);
+    if (!m) return [];
+    const price = (v: OrderView): bigint => (/^\d+$/.test(v.price ?? '') ? BigInt(v.price!) : 0n);
+    return [...m.views.values()]
+      .filter((v) => v.side === 1 && !hasCustody(v))
+      .sort((a, b) => (price(a) < price(b) ? -1 : price(a) > price(b) ? 1 : 0))
+      .slice(0, n)
+      .map((v) => v.covenant_id);
+  }
+
+  /** Whether the resting orders of `token` are to be read now (none were for ORDERS_READ_MS); true marks them asked. */
+  ordersDue(token: Hex): boolean {
+    const id = token.toLowerCase() as Hex;
+    const at = this.ordersAsked.get(id);
+    if (at !== undefined && this.now() - at < ORDERS_READ_MS) return false;
+    this.ordersAsked.set(id, this.now());
+    if (this.ordersAsked.size > MAX_MARKETS) this.ordersAsked.delete(this.ordersAsked.keys().next().value!);
+    return true;
+  }
+  /** The read of `ordersDue` failed: it may be made again at the next read of the book. */
+  ordersFailed(token: Hex): void {
+    this.ordersAsked.delete(token.toLowerCase() as Hex);
+  }
+
   // ------------------------------------------------------------------------------------------ reading (standalone mode)
+
+  /** The resting orders kept, of every market (the indexer's views, as it gave them). */
+  orders(): OrderView[] {
+    return [...this.orderViews.values()].flatMap((m) => [...m.views.values()]);
+  }
+  /** When the resting orders of `id` were read from the indexer, ms; null: none were. */
+  ordersAt(id: Hex): number | null {
+    return this.orderViews.get(id.toLowerCase() as Hex)?.at ?? null;
+  }
 
   /** The tokens the indexer listed (as it gave them). */
   tokens(): IndexerTokenView[] {

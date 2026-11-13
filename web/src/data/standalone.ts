@@ -4,21 +4,26 @@
 // (kob/node-verify.ts `confirmSnapshotsOnNode`: the order UTXO, and an ask's custody, unspent at the scripts its state derives under the templates
 // this build pins; the same check the book gets before an order is taken, app/book-verify.ts). The wallet's own orders are added from its receipts
 // once the node resolved them (`adopt`). Trades, candles, the 24 h figures and the depth are built from what was seen (data/stream-market.ts); a fill
-// counts once the node shows an output of its transaction. Everything is PARTIAL: an order placed before the mode started, and not touched since, is
-// not seen (no server and no other party is asked; covenant-id lookups on the node do not exist yet): the views say "since HH:MM".
+// counts once the node shows an output of its transaction.
+//
+// The book does not start empty: the resting orders the page last read from the indexer (data/stream-carry.ts) are its first entries, each one asked on
+// the node at once and again with every recheck; one the node no longer holds, or that a block shows spent, leaves the book. An order placed while
+// the indexer could not be read and before the mode followed the blocks is not seen (no server and no other party is asked; covenant-id lookups on
+// the node do not exist yet). Nothing is taken on this book's word: the book check asks the node again before an order is planned (app/book-verify.ts).
 //
 // When (the user's three settings, `StandalonePrefs`):
 //   * `manual`: on from the start, whatever the indexer does; the app then sends the indexer no market request and does not poll its health;
 //   * `auto` (default on): the health of the indexer in use (`report`, from the status poll, ui/shell/status.ts) that is `bad` (down, stale, on another
-//     network, without its node) is asked once more after ENTER_CHECK_MS; still bad, standalone mode starts. With failover (data/indexer-failover.ts)
-//     the report is about the active indexer: a usable backup keeps the app on the indexers;
-//   * `autoReturn` (default on): the first report that the indexer is usable again (`ok`, or `warn`: reachable, minutes behind) ends an automatic
-//     standalone mode and the indexer's book is read again (its book wins). Off: the mode stays and `indexerBack` says it may end
-//     (`returnToIndexer`, the button of the bell's entry).
+//     network, without its node), or the FIRST market read that finds it down (`readFailed`), is asked once more after ENTER_CHECK_MS; still bad,
+//     standalone mode starts, and the read that failed is answered from it. With failover (data/indexer-failover.ts) the report is about the active
+//     indexer and the failover gets its time first (`fastFallback` off): a usable backup keeps the app on the indexers;
+//   * `autoReturn` (default on): a report that the indexer is usable again (`ok`, or `warn`: reachable, minutes behind) is checked once more after
+//     RETURN_CHECK_MS (the mode asks the indexer's health itself every few seconds); still usable, an automatic mode ends and the indexer's book is
+//     read again (its book wins). Off: the mode stays and `indexerBack` says it may end (`returnToIndexer`, the button of the bell's entry).
 //
 // What the page already read from the indexer in this session is KEPT, not dropped (data/stream-carry.ts: the candles, trades and 24 h figures of the
-// markets it loaded, the token list with the facts of open-list tokens, the activity rows): the views merge what the node shows afterwards into it and
-// say "indexer data until HH:MM". The book is never kept: a stale indexer book must not be offered.
+// markets it loaded, the token list with the facts of open-list tokens, the activity rows, the resting orders): the views merge what the node shows
+// afterwards into it.
 //
 // While active, the app's indexer (`modeIndexer`) answers the book, the orders of the book, the token list and the market data from here; what
 // needs the indexer's records (pair books, holders and token UTXOs, the order lists of My orders and the notifications) fails as it does with the
@@ -28,10 +33,10 @@ import { IndexerError } from './indexer';
 import type { BookView, CandleInterval, CandlesView, EventView, HealthView, IndexerTokenView, OrderView, StatsView, TradesView } from './indexer-types';
 import type { BlockSubscription, NodeApi } from './node';
 import type { StreamBlock } from './block-stream';
-import { StreamBook, bookViewOf, listingOf, orderViewOf, tokensViewOf, type ListingContext, type RegistryFacts } from './stream-book';
+import { StreamBook, bookViewOf, listingOf, orderViewOf, tokensViewOf, type ListingContext, type RegistryFacts, type StreamOrigin } from './stream-book';
 import { IndexerCarry, mergeCandles, mergeStats, mergeTokens, mergeTrades } from './stream-carry';
 import { MAX_FILLS_PER_TOKEN, candlesView, depthView, statsView, tradesView, type SeenFill } from './stream-market';
-import { SnapshotError, type OrderSnapshot } from '../kob/cancel';
+import { SnapshotError, snapshotFromOrderView, type OrderSnapshot } from '../kob/cancel';
 import { confirmSnapshotsOnNode, fetchNodeInputFacts, outpointKey, type OutpointRef } from '../kob/node-verify';
 import { describeOrder } from '../kob/order-facts';
 import { fillOf, followSpend, isStreamKind, revealSpend, snapshotOfPlacement, txFacts, type StreamFill } from '../kob/stream-orders';
@@ -47,8 +52,10 @@ export interface StandalonePrefs {
 }
 export const DEFAULT_STANDALONE: Readonly<StandalonePrefs> = Object.freeze({ manual: false, auto: true, autoReturn: true });
 
-/** A bad report is checked once more after this long before the mode starts (a blip does not start it). */
-export const ENTER_CHECK_MS = 5_000;
+/** A bad report (or a failed read) is checked once more after this long before the mode starts (a blip does not start it). */
+export const ENTER_CHECK_MS = 1_000;
+/** A usable report is checked once more after this long before an automatic mode ends (an indexer that flickers does not end it). */
+export const RETURN_CHECK_MS = 5_000;
 /** With further indexers the failover gets this long to find a usable one first (its re-checks and one round of probes take about 12 s). */
 export const ENTER_CHECK_FAILOVER_MS = 20_000;
 /** That check of the indexer is cut off after this long. */
@@ -107,6 +114,8 @@ export interface StandaloneDeps {
   prefs?: Partial<StandalonePrefs>;
   /** how long a bad report is waited on before the indexer is asked again (default ENTER_CHECK_MS; longer with failover, which switches first) */
   enterCheckMs?: number;
+  /** a market read that finds the indexer down starts the check at once and waits for it (default on; off with failover, which switches first) */
+  fastFallback?: boolean;
   /** the registry's facts of a token: its orders are listed only with them, and its scale is the price basis */
   registry?: (token: Hex) => RegistryFacts | null;
   now?: () => number;
@@ -115,6 +124,12 @@ export interface StandaloneDeps {
 }
 
 const isUsable = (a: HealthAssessment): boolean => a.level === 'ok' || a.level === 'warn';
+
+/** An indexer read that failed because the indexer is down (no answer, a timeout, a server error), not a refusal, a cancel or a missing route. */
+export function isIndexerDown(e: unknown): boolean {
+  if (!(e instanceof IndexerError) || e.code === 'standalone_mode' || e.kind === 'aborted') return false;
+  return e.kind === 'network' || e.kind === 'timeout' || (e.kind === 'http' && e.status >= 500);
+}
 
 /** The error every read that needs the indexer gets in standalone mode. */
 export function standaloneUnavailable(what = 'this'): IndexerError {
@@ -139,6 +154,7 @@ export class StandaloneController {
   private readonly clearTimer: (h: unknown) => void;
   private prefsNow: StandalonePrefs;
   private readonly enterCheckMs: number;
+  private readonly fastFallback: boolean;
   private readonly book = new StreamBook();
   private readonly listeners = new Set<(s: StandaloneState) => void>();
   private snap: StandaloneState = { active: false, reason: null, phase: 'off', sinceMs: null, version: 0, orders: 0, indexerBack: false };
@@ -148,6 +164,17 @@ export class StandaloneController {
   private subscribeFails = 0;
   private lastBlockMs = 0;
   private enterTimer: unknown = null;
+  /** the second look before an automatic mode starts is under way */
+  private entering = false;
+  /** reads waiting for that look (`readFailed`) */
+  private waiters: (() => void)[] = [];
+  private returnTimer: unknown = null;
+  /** counts the return checks: a bad report in between makes a pending one void */
+  private returnSeq = 0;
+  /** the mode's own look at the indexer's health is under way */
+  private watching = false;
+  /** entries started from the kept resting orders, not asked on the node yet */
+  private readonly carried = new Set<Hex>();
   private verifyTimer: unknown = null;
   private tickTimer: unknown = null;
   private retryTimer: unknown = null;
@@ -179,6 +206,7 @@ export class StandaloneController {
     this.clearTimer = d.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
     this.prefsNow = { ...DEFAULT_STANDALONE, ...(d.prefs ?? {}) };
     this.enterCheckMs = d.enterCheckMs ?? ENTER_CHECK_MS;
+    this.fastFallback = d.fastFallback ?? true;
     this.indexer = standaloneIndexer(this);
     if (this.prefsNow.manual) this.enter('manual');
   }
@@ -212,26 +240,77 @@ export class StandaloneController {
     else if (this.snap.indexerBack && this.prefsNow.autoReturn) this.exit();
   }
 
-  /** The health of the indexer in use (the status poll): starts an automatic mode when it stays bad, ends it (or offers to) when it is usable again. */
+  /** The health of the indexer in use (the status poll): starts an automatic mode when it stays bad, ends it (or offers to) when it stays usable. */
   report(a: HealthAssessment): void {
     if (this.disposed || this.manual) return;
     if (isUsable(a)) {
-      this.cancel('enterTimer');
+      if (!this.entering) {
+        this.cancel('enterTimer');
+        this.release();
+      }
       if (!this.snap.active) return;
-      if (this.prefsNow.autoReturn) this.exit();
+      if (this.prefsNow.autoReturn) this.armReturn();
       else if (!this.snap.indexerBack) this.set({ indexerBack: true });
       return;
     }
     if (a.level !== 'bad') return;
+    this.disarmReturn();
     if (this.snap.indexerBack) this.set({ indexerBack: false });
-    if (this.snap.active || !this.prefsNow.auto || this.enterTimer !== null) return;
+    this.armEnter();
+  }
+
+  /**
+   * A market read of the indexer failed (`modeIndexer`): when the indexer is down, the second look starts now instead of after the next status poll.
+   * Resolves once it is decided: true when the mode is on (the read is answered from it), false when it is not.
+   */
+  readFailed(e: unknown): Promise<boolean> {
+    if (this.snap.active) return Promise.resolve(true);
+    if (this.disposed || !this.fastFallback || !this.prefsNow.auto || !isIndexerDown(e)) return Promise.resolve(false);
+    this.armEnter();
+    return new Promise((resolve) => this.waiters.push(() => resolve(this.snap.active)));
+  }
+
+  /** The second look at a bad indexer: still bad after ENTER_CHECK_MS, an automatic mode starts. */
+  private armEnter(): void {
+    if (this.snap.active || !this.prefsNow.auto || this.enterTimer !== null || this.entering) return;
     const gen = this.gen;
     this.enterTimer = this.setTimer(() => {
       this.enterTimer = null;
+      this.entering = true;
       void this.probe().then((b) => {
+        this.entering = false;
         if (b.level === 'bad' && gen === this.gen && !this.snap.active && !this.disposed && this.prefsNow.auto) this.enter('auto');
+        this.release();
       });
     }, this.enterCheckMs);
+  }
+
+  /** The reads waiting for the second look are answered (the mode is on, or it is not). */
+  private release(): void {
+    const w = this.waiters;
+    this.waiters = [];
+    for (const f of w) f();
+  }
+
+  /** The second look at an indexer that is usable again: still usable after RETURN_CHECK_MS, an automatic mode ends (or offers to). */
+  private armReturn(): void {
+    if (this.returnTimer !== null) return;
+    const seq = ++this.returnSeq;
+    const gen = this.gen;
+    this.returnTimer = this.setTimer(() => {
+      void this.probe().then((b) => {
+        if (seq !== this.returnSeq) return;
+        this.returnTimer = null;
+        if (gen !== this.gen || !this.snap.active || this.snap.reason !== 'auto' || this.disposed || !isUsable(b)) return;
+        if (this.prefsNow.autoReturn) this.exit();
+        else if (!this.snap.indexerBack) this.set({ indexerBack: true });
+      });
+    }, RETURN_CHECK_MS);
+  }
+
+  private disarmReturn(): void {
+    this.returnSeq++;
+    this.cancel('returnTimer');
   }
 
   /** Ends an automatic mode (the user switches back once the indexer answers again). */
@@ -273,6 +352,7 @@ export class StandaloneController {
     this.disposed = true;
     this.exit();
     this.cancel('enterTimer');
+    this.release();
     this.listeners.clear();
   }
 
@@ -373,6 +453,7 @@ export class StandaloneController {
 
   private reset(): void {
     this.book.clear();
+    this.carried.clear();
     this.due.clear();
     this.daa = 0n;
     this.queue = [];
@@ -386,16 +467,48 @@ export class StandaloneController {
     this.reset();
     this.subscribeFails = 0;
     this.lastRecheckMs = this.now();
+    this.cancel('enterTimer');
+    this.disarmReturn();
+    this.seed();
     this.snap = { active: true, reason, phase: 'connecting', sinceMs: this.now(), version: this.snap.version + 1, orders: 0, indexerBack: false };
+    this.publish(false);
     this.emit();
     void this.connect(this.gen);
     this.scheduleTick();
+    this.release();
+  }
+
+  /**
+   * The book starts from the resting orders the page last read from the indexer: listed as they were a moment ago and asked on the node at once (one it
+   * no longer holds leaves the book; a block that spends one moves it as it moves any order). The book check asks the node again before an order is
+   * planned, so an entry that is gone by then is never taken.
+   */
+  private seed(): void {
+    const now = this.now();
+    for (const v of this.carry.orders()) {
+      let snap: OrderSnapshot;
+      try {
+        const { foreign: _foreign, foreignUnproven: _unproven, ...s } = snapshotFromOrderView(v);
+        snap = { ...s, strays: [] };
+      } catch {
+        continue;
+      }
+      if (!isStreamKind(snap.order.state.kind) || this.book.get(snap.covenantId)) continue;
+      const g = v.genesis;
+      const e = this.book.put(snap, { origin: 'indexer', nowMs: now, confirmed: true, genesis: { txid: g?.txid ?? null, out: g?.out ?? null, daa: BigInt(g?.daa ?? 0) } });
+      this.noteScale(snap);
+      this.carried.add(e.snap.covenantId);
+      const daa = typeof v.last_daa === 'number' && v.last_daa > 0 ? BigInt(v.last_daa) : 0n;
+      if (daa > this.daa) this.daa = daa;
+    }
+    if (this.carried.size) this.scheduleVerify(0);
   }
 
   private exit(): void {
     const wasActive = this.snap.active;
     this.gen++;
     for (const k of ['verifyTimer', 'tickTimer', 'retryTimer'] as const) this.cancel(k);
+    this.disarmReturn();
     const sub = this.sub;
     this.sub = null;
     void sub?.close().catch(() => undefined);
@@ -403,9 +516,10 @@ export class StandaloneController {
     if (!wasActive) return;
     this.snap = { active: false, reason: null, phase: 'off', sinceMs: null, version: this.snap.version + 1, orders: 0, indexerBack: false };
     this.emit();
+    this.release();
   }
 
-  private cancel(k: 'enterTimer' | 'verifyTimer' | 'tickTimer' | 'retryTimer'): void {
+  private cancel(k: 'enterTimer' | 'verifyTimer' | 'tickTimer' | 'retryTimer' | 'returnTimer'): void {
     if (this[k] !== null) this.clearTimer(this[k]);
     this[k] = null;
   }
@@ -481,6 +595,14 @@ export class StandaloneController {
         this.onGap();
       }
       if (now - this.lastRecheckMs >= RECHECK_MS) this.scheduleVerify(0);
+      // an automatic mode looks at the indexer itself (the status poll is slower): usable again, the mode ends after one more look (`armReturn`)
+      if (this.snap.reason === 'auto' && !this.watching && this.returnTimer === null) {
+        this.watching = true;
+        void this.probe().then((a) => {
+          this.watching = false;
+          if (gen === this.gen) this.report(a);
+        });
+      }
       // an order that expired or reached its deadline leaves the book on the clock alone
       this.publish(false);
       this.scheduleTick();
@@ -549,7 +671,7 @@ export class StandaloneController {
     const daa = b.daaScore;
     const now = this.now();
     let changed = false;
-    const put = (snap: OrderSnapshot, origin: 'stream' | 'receipt', genesis?: { txid: Hex | null; out: number | null; daa: bigint }) => {
+    const put = (snap: OrderSnapshot, origin: StreamOrigin, genesis?: { txid: Hex | null; out: number | null; daa: bigint }) => {
       const e = this.book.put(snap, { origin, nowMs: now, ...(genesis ? { genesis } : {}) });
       this.noteScale(snap);
       this.due.set(e.snap.covenantId, now + VERIFY_DELAY_MS);
@@ -628,17 +750,26 @@ export class StandaloneController {
       const now = this.now();
       const pending = [...this.book.entries()].filter((e) => !e.confirmed && (this.due.get(e.snap.covenantId) ?? 0) <= now);
       const rechecking = now - this.lastRecheckMs >= RECHECK_MS;
-      const recheck = rechecking ? [...this.book.entries()].filter((e) => e.confirmed).slice(0, RECHECK_BATCH) : [];
+      // the entries started from the kept orders are asked at once, all of them
+      const carried = [...this.carried].flatMap((id) => {
+        const e = this.book.get(id);
+        return e && e.confirmed ? [e] : [];
+      });
+      this.carried.clear();
+      const recheck = rechecking ? [...this.book.entries()].filter((e) => e.confirmed && !carried.includes(e)).slice(0, RECHECK_BATCH) : [];
       if (rechecking) this.lastRecheckMs = now;
-      const all = [...pending, ...recheck];
+      const all = [...pending, ...carried, ...recheck];
       for (let i = 0; i < all.length && gen === this.gen; i += VERIFY_CHUNK) {
         const part = all.slice(i, i + VERIFY_CHUNK);
         let res: (OrderSnapshot | SnapshotError)[];
         try {
           res = await confirmSnapshotsOnNode(this.kob, this.node, part.map((e) => e.snap), this.toAddress);
         } catch {
-          // the node could not be asked: nothing is counted against the orders, the pending ones are asked again
-          for (const e of part) if (!e.confirmed) this.due.set(e.snap.covenantId, this.now() + VERIFY_RETRY_MS[0]!);
+          // the node could not be asked: nothing is counted against the orders, the pending (and the kept) ones are asked again
+          for (const e of part) {
+            if (!e.confirmed) this.due.set(e.snap.covenantId, this.now() + VERIFY_RETRY_MS[0]!);
+            else if (carried.includes(e)) this.carried.add(e.snap.covenantId);
+          }
           continue;
         }
         if (gen !== this.gen) return;
@@ -665,7 +796,7 @@ export class StandaloneController {
       this.verifying = false;
     }
     if (gen !== this.gen) return;
-    const next = [...this.due.values(), ...this.pendingFills.map((f) => f.due)];
+    const next = [...this.due.values(), ...this.pendingFills.map((f) => f.due), ...(this.carried.size ? [this.now() + VERIFY_RETRY_MS[0]!] : [])];
     if (next.length) this.scheduleVerify(Math.max(200, Math.min(...next) - this.now()));
   }
 
@@ -740,11 +871,21 @@ function standaloneIndexer(c: StandaloneController): IndexerApi {
   };
 }
 
+/** The best asks of a market whose full view (with the custody) is read beside its resting orders. */
+const CUSTODY_READS = 20;
+
+/** The reads standalone mode answers itself: one of them that finds the indexer down is answered from the mode once it is on. */
+const SERVED: ReadonlySet<string | symbol> = new Set(['tokens', 'book', 'order', 'trades', 'candles', 'stats', 'depth']);
+
 /**
  * The app's indexer with standalone mode: the indexer (`real`, the failover proxy or the single indexer) while it is in use, the standalone views
- * while the mode is active. `health` goes to the indexer unless the mode is on by the setting (the status poll must see it come back).
+ * while the mode is active. `health` goes to the indexer unless the mode is on by the setting (the status poll must see it come back). A read that
+ * finds the indexer down starts the check of an automatic mode at once (`readFailed`); a read the mode serves is then answered from it.
  */
-export function modeIndexer(real: IndexerApi, c: Pick<StandaloneController, 'state' | 'indexer'> & { carry?: IndexerCarry }): IndexerApi {
+export function modeIndexer(
+  real: IndexerApi,
+  c: Pick<StandaloneController, 'state' | 'indexer'> & { carry?: IndexerCarry; readFailed?: (e: unknown) => Promise<boolean> },
+): IndexerApi {
   return new Proxy({} as IndexerApi, {
     get: (_t, prop) => {
       const useReal = (prop === 'health' && c.state.reason !== 'manual') || !c.state.active;
@@ -752,15 +893,29 @@ export function modeIndexer(real: IndexerApi, c: Pick<StandaloneController, 'sta
       const v = target[prop];
       if (typeof v !== 'function') return v;
       const call = (v as (...x: unknown[]) => unknown).bind(target);
+      if (!useReal) return call;
       // what the indexer in use answers is remembered, to be kept when standalone mode starts (data/stream-carry.ts)
-      return useReal && c.carry ? recording(c.carry, prop, call) : call;
+      const rec = c.carry ? recording(c.carry, prop, call, real) : call;
+      const readFailed = c.readFailed;
+      if (prop === 'health' || !readFailed) return rec;
+      const served = SERVED.has(prop);
+      return async (...a: unknown[]) => {
+        try {
+          return await rec(...a);
+        } catch (e) {
+          const on = readFailed.call(c, e);
+          if (!served || !(await on)) throw e;
+          const alt = (c.indexer as unknown as Record<string | symbol, (...x: unknown[]) => unknown>)[prop]!;
+          return alt.apply(c.indexer, a);
+        }
+      };
     },
     has: (_t, prop) => prop in real,
   });
 }
 
-/** `call` of the indexer, its answers to the market reads remembered in `carry` (the others pass through). */
-function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unknown[]) => unknown): (...x: unknown[]) => unknown {
+/** `call` of the indexer, its answers to the market reads remembered in `carry` (the others pass through); a read of a book has the market's resting orders read. */
+function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unknown[]) => unknown, real?: IndexerApi): (...x: unknown[]) => unknown {
   const noted = (read: (r: never) => void) => async (...a: unknown[]) => {
     const r = await call(...a);
     try {
@@ -779,6 +934,34 @@ function recording(carry: IndexerCarry, prop: string | symbol, call: (...x: unkn
       return (...a) => noted((r: CandlesView | null) => carry.recordCandles(a[0] as Hex, a[1] as { interval: CandleInterval; from?: number }, r))(...a);
     case 'stats':
       return (...a) => noted((r: StatsView | null) => carry.recordStats(a[0] as Hex, r))(...a);
+    case 'order':
+      return noted((r: OrderView | null) => carry.recordOrder(r));
+    case 'allOrders':
+      return (...a) =>
+        noted((r: OrderView[]) => {
+          const q = (a[0] ?? {}) as { token?: Hex; maker?: Hex; status?: string };
+          if (q.token && !q.maker && q.status === 'active') carry.recordOrders(q.token, r);
+          else for (const v of r) carry.recordOrder(v);
+        })(...a);
+    case 'book':
+      return (...a) =>
+        noted(() => {
+          // the resting orders of the market, with their states, read beside its book (at most once per ORDERS_READ_MS): standalone mode starts its book from them
+          const token = a[0] as Hex;
+          if (!real || !carry.ordersDue(token)) return;
+          void real.allOrders({ token, status: 'active', limit: 200 }, { maxPages: 3, priority: 'low' }).then(
+            async (r) => {
+              carry.recordOrders(token, r);
+              // the list has no custody of an ask: the best asks are read one by one (only new or moved ones: a kept view at the same outpoint stays)
+              const ids = carry.needsCustody(token, CUSTODY_READS);
+              for (let i = 0; i < ids.length; i += 4) {
+                const got = await Promise.all(ids.slice(i, i + 4).map((id) => real.order(id, { priority: 'low' }).catch(() => null)));
+                for (const v of got) carry.recordOrder(v);
+              }
+            },
+            () => carry.ordersFailed(token),
+          ).catch(() => undefined);
+        })(...a);
     default:
       return call;
   }

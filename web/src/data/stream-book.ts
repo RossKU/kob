@@ -1,10 +1,12 @@
-// The partial order book of standalone mode (data/standalone.ts): the orders the browser saw placed (or followed) in the node's new blocks since the
-// stream started, and the wallet's own orders resolved from its receipts, each CONFIRMED on the node before it is listed. Pure: no timers, no node.
+// The order book of standalone mode (data/standalone.ts): the resting orders the indexer gave before the mode (asked on the node at once), the orders
+// the browser saw placed (or followed) in the node's new blocks since the stream started, and the wallet's own orders resolved from its receipts; a
+// placement is CONFIRMED on the node before it is listed. Pure: no timers, no node.
 //
 // What is listed, per token (the indexer's `/v1/books` rules as far as the browser can apply them, crates/kobd/src/indexer/reads.rs and
 // tokens.rs `ListingRules`): a plain ask or bid (kob/stream-orders.ts `STREAM_KINDS`) that the node confirmed, good till cancelled (no IOC / FOK: they
 // do not rest), without an auction (its price is its limit), active and not expired at the newest block's DAA score, before its day-order deadline,
-// worth at least MIN_ORDER_VALUE_SOMPI (the executor's default `min_order_value_sompi`), an ask with its custody; an order of a registry token only
+// worth at least MIN_ORDER_VALUE_SOMPI (the executor's default `min_order_value_sompi`; an order the indexer listed before the mode keeps the verdict of
+// the executor it reads), an ask with its custody; an order of a registry token only
 // with the registry's program, extension commitment and scale. Everything else stays out: a smaller book is the safe side.
 //
 // The views have the indexer's response shapes (`BookView`, `OrderView`, `IndexerTokenView`), so the market page, the order ticket and the book check
@@ -23,8 +25,8 @@ export const MIN_ORDER_VALUE_SOMPI = 100_000_000n;
 /** Most orders a streamed book holds; past it the oldest unconfirmed, then the oldest confirmed ones are forgotten. */
 export const MAX_STREAM_ORDERS = 2_000;
 
-/** `stream`: seen placed (or followed) in a block; `receipt`: the wallet's own order, resolved on the node from its receipt. */
-export type StreamOrigin = 'stream' | 'receipt';
+/** `stream`: seen placed (or followed) in a block; `receipt`: the wallet's own order, resolved on the node from its receipt; `indexer`: a resting order the indexer gave before the mode (data/stream-carry.ts), asked on the node at once. */
+export type StreamOrigin = 'stream' | 'receipt' | 'indexer';
 
 export interface StreamEntry {
   snap: OrderSnapshot;
@@ -90,13 +92,15 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
     if (reg.scale !== null && reg.scale !== d.scale) return null;
   }
   const value = BigInt(e.snap.order.amount);
+  // an order the indexer listed (kept from before the mode) passed the listing rule of the executor it reads: its own minimum, not the default one
+  const min = e.origin === 'indexer' ? 1n : MIN_ORDER_VALUE_SOMPI;
   if (d.side === 'sell') {
     if (!e.snap.custody) return null;
     const amount = BigInt(e.snap.custody.state.amount);
-    if (amount <= 0n || quoteOf(amount, d.price, d.scale, 'down') < MIN_ORDER_VALUE_SOMPI) return null;
+    if (amount <= 0n || quoteOf(amount, d.price, d.scale, 'down') < min) return null;
     return { entry: e, token: d.tokenCovId, side: 'sell', price: d.price, scale: d.scale, amount, estimated: false };
   }
-  if (value < MIN_ORDER_VALUE_SOMPI) return null;
+  if (value < min) return null;
   let amount: bigint;
   try {
     amount = ctx.kob.bidBuyingPower(st, value);
