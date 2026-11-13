@@ -1,4 +1,6 @@
-//! Facilitator configuration: a strict JSON file (unknown fields are rejected) plus CLI overrides.
+//! The facilitator configuration: a strict JSON file plus CLI overrides.
+//!
+//! Unknown fields are rejected. Operator guide: `docs/ops/executor.md`, A.6 and A.7. Example:
 //!
 //! ```json
 //! {
@@ -12,15 +14,18 @@
 //!   "minAmountSompi": 1000,
 //!   "swap": true,
 //!   "registry": "builtin",
-//!   "tokens": [ { "covenantId": "<64 hex>", "programTemplateHash": "<64 hex>", "extensionCommitment": "<64 hex>",
-//!                 "custody": "issuer-controlled", "ticker": "USDX", "decimals": 6 } ],
+//!   "tokens": [ { "covenantId": "<64 hex>", "programTemplateHash": "<64 hex>",
+//!                 "extensionCommitment": "<64 hex>", "custody": "issuer-controlled",
+//!                 "ticker": "USDX", "decimals": 6 } ],
 //!   "allowIssuerControlled": false,
 //!   "merchants": [ { "id": "shop-1", "apiKeySha256": "<64 hex sha256 of the API key>",
 //!                    "allowedPayTo": ["kaspatest:..."], "allowedAssets": ["KAS"],
 //!                    "rateLimit": { "burst": 20, "perSecond": 5 } } ],
 //!   "adminKeySha256": "<64 hex>",
-//!   "rateLimit": { "perIp": { "burst": 30, "perSecond": 10 }, "perSite": { "burst": 150, "perSecond": 50 },
-//!                  "anonymous": { "burst": 1000, "perSecond": 300 }, "invoicePay": { "burst": 200, "perSecond": 50 },
+//!   "rateLimit": { "perIp": { "burst": 30, "perSecond": 10 },
+//!                  "perSite": { "burst": 150, "perSecond": 50 },
+//!                  "anonymous": { "burst": 1000, "perSecond": 300 },
+//!                  "invoicePay": { "burst": 200, "perSecond": 50 },
 //!                  "perMerchant": { "burst": 60, "perSecond": 20 } },
 //!   "maxBodyBytes": 1048576,
 //!   "bodyDeadlineMs": 10000,
@@ -49,9 +54,11 @@
 //! }
 //! ```
 //!
-//! `intents` (intent-based swap-and-pay, `kob-intent-v1`) needs the book: it is served only inside
-//! `kobd --executor` (`--x402-config`), where the indexer's book is at hand; the stand-alone `kobd x402`
-//! refuses it. `invoices` works in both.
+//! # Intents and invoices
+//!
+//! `intents` (intent-based swap-and-pay, `kob-intent-v1`) needs the indexer's book. It is served
+//! only inside `kobd --executor` (`--x402-config`), and the stand-alone `kobd x402` refuses it.
+//! `invoices` works in both.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -83,9 +90,11 @@ fn err<T>(m: impl Into<String>) -> Result<T, ConfigError> {
 pub enum AuthMode {
     /// Every `/verify` and `/settle` needs a merchant API key (default).
     Required,
-    /// No authentication, for a local operator only: accepted only when listening on a loopback address, without
-    /// `trustedProxies` and with `openAuthNoProxy: true` (nothing on the host relays to `listen`); a request from another host or
-    /// with a forwarding header is refused. A same-host relay that adds no header cannot be detected: never use one with it.
+    /// No authentication, for a local operator only.
+    ///
+    /// It is accepted only when listening on a loopback address, without `trustedProxies` and with
+    /// `openAuthNoProxy: true`. A request from another host, or with a forwarding header, is
+    /// refused. A same-host relay that adds no header cannot be detected, so never use one with it.
     Open,
 }
 
@@ -103,20 +112,32 @@ impl RateCfg {
     }
 }
 
-/// Request limits. A request without a merchant key takes a token of its client (`perIp`; IPv6 per `ipv6PrefixBits`), of its
-/// IPv6 site (`perSite`; all /64s of one `ipv6SitePrefixBits` prefix together) and of the bucket all such requests share
-/// (`anonymous`; the expensive `POST /invoices/{id}/pay` has the bucket `invoicePay` of its own instead, so it cannot starve the
-/// other routes), in this order (a client that is already limited takes nothing from the shared buckets); a request with a
-/// merchant key takes a token of its merchant (`perMerchant` or the merchant's own `rateLimit`). Half of each shared bucket is kept
-/// for quiet clients: a client above a quarter of its `perIp` rate (and half its burst) can take from a shared bucket only while that
-/// is more than half full, so many busy addresses cannot drain it for the quiet ones.
+/// Request limits, as token buckets.
+///
+/// A request without a merchant key takes a token from each of these, in this order:
+///
+/// - its client's bucket (`perIp`, with IPv6 clients grouped by `ipv6PrefixBits`);
+/// - its IPv6 site's bucket (`perSite`, all /64s of one `ipv6SitePrefixBits` prefix together);
+/// - the bucket all such requests share (`anonymous`).
+///
+/// A client that is already limited takes nothing from the shared buckets. The expensive
+/// `POST /invoices/{id}/pay` has its own shared bucket, `invoicePay`, so it cannot starve the other
+/// routes.
+///
+/// A request with a merchant key takes a token of its merchant instead (`perMerchant`, or the
+/// merchant's own `rateLimit`).
+///
+/// Half of each shared bucket is kept for quiet clients. A client above a quarter of its `perIp`
+/// rate and half its burst can take from a shared bucket only while that bucket is more than half
+/// full. So many busy addresses cannot drain it for the quiet ones. See `docs/ops/executor.md`,
+/// Part B, "Rate limiting and proxies".
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct RateLimits {
     pub per_ip: RateCfg,
     pub per_site: RateCfg,
     pub anonymous: RateCfg,
-    /// The shared bucket of `POST /invoices/{id}/pay` (a full verification against the node per call).
+    /// The shared bucket of `POST /invoices/{id}/pay`, which verifies against the node per call.
     pub invoice_pay: RateCfg,
     pub per_merchant: RateCfg,
 }
@@ -148,19 +169,22 @@ pub struct MerchantCfg {
     pub rate_limit: Option<RateCfg>,
 }
 
-/// An operator-listed token (added to the registry-derived allowlist).
+/// An operator-listed token, added to the registry-derived allowlist.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TokenCfg {
     pub covenant_id: String,
-    /// Template hash of the pinned token program of either family (must be a program built into this
-    /// binary: the KCC-20 programs, KaspaCom's included, and the KRON programs).
+    /// Template hash of the pinned token program of either family.
+    ///
+    /// It must be a program built into this binary: a KCC-20 program, KaspaCom's included, or a
+    /// KRON program.
     pub program_template_hash: String,
-    /// `kcc20` (default) or `kron`; must be the family of the program. A KRON token is only accepted
-    /// as a swap-and-pay pay asset.
+    /// `kcc20` (default) or `kron`, which must be the family of the program.
+    ///
+    /// A KRON token is accepted only as a swap-and-pay pay asset.
     #[serde(default)]
     pub family: Option<String>,
-    /// 64 lowercase hex; a KRON token has none (omit it or give all zeros).
+    /// 64 lowercase hex. A KRON token has none: omit it or give all zeros.
     #[serde(default)]
     pub extension_commitment: String,
     /// `unconditional` or `issuer-controlled`.
@@ -176,16 +200,21 @@ pub struct TokenCfg {
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct IntentCfg {
     pub enabled: bool,
-    /// x-only key (64 hex) receiving what token intents leave to the keeper (spread, the intent's unused KAS) and their
-    /// filler outputs. The facilitator never signs with it.
+    /// X-only key, 64 hex, that receives what token intents leave to the keeper and their filler
+    /// outputs.
+    ///
+    /// What they leave is the spread and the intent's unused KAS. The facilitator never signs with
+    /// this key.
     pub keeper_pubkey: String,
-    /// Value of an output that only holds an index open (paid to the payer for KasToToken, to the keeper otherwise).
+    /// Value of an output that only holds an index open.
+    ///
+    /// It is paid to the payer for KasToToken, and to the keeper otherwise.
     pub filler_sompi: u64,
     /// Executions tried per intent before it is given up.
     pub max_attempts: usize,
     /// Candidate executions built per planning pass.
     pub max_builds: usize,
-    /// Orders considered per side (best price first).
+    /// Orders considered per side, best price first.
     pub max_candidates: usize,
     /// An execution proves the virtual DAA score minus this margin (CLTV).
     pub lock_margin_daa: u64,
@@ -205,21 +234,27 @@ impl Default for IntentCfg {
     }
 }
 
-/// Invoices (`/invoices`).
+/// Invoices, served under `/invoices`.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct InvoiceCfg {
     pub enabled: bool,
-    /// Store path (`:memory:` = volatile; relative to the configuration file's directory); default: the ledger path with
-    /// `.invoices.jsonl` appended.
+    /// Store path, or `:memory:` for a volatile store.
+    ///
+    /// A relative path is relative to the configuration file's directory. The default is the ledger
+    /// path with `.invoices.jsonl` appended.
     pub store: Option<String>,
     /// Longest invoice lifetime accepted at registration.
     pub max_lifetime_seconds: u64,
-    /// Public base URL of this facilitator (`https://pay.example.com`): registration answers `<publicUrl>/invoices/<id>`.
+    /// Public base URL of this facilitator, such as `https://pay.example.com`.
+    ///
+    /// Registration answers `<publicUrl>/invoices/<id>`.
     pub public_url: Option<String>,
     /// Most unexpired invoices per merchant.
     pub max_open_per_merchant: usize,
-    /// Most refused payments (duplicate or late; one per spent output) kept as evidence per invoice.
+    /// Most refused payments kept as evidence per invoice.
+    ///
+    /// A refused payment is a duplicate or a late one, and one is kept per spent output.
     pub max_extra_payments_per_invoice: usize,
 }
 
@@ -240,37 +275,55 @@ impl Default for InvoiceCfg {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase", default)]
 pub struct X402Config {
-    /// `kaspa:mainnet` or `kaspa:testnet-10`. Absent: the build's deployment network ([`X402Config::fill_defaults`]); the
+    /// `kaspa:mainnet` or `kaspa:testnet-10`.
+    ///
+    /// When absent it is the build's deployment network ([`X402Config::fill_defaults`]). The
     /// reference build requires it.
     pub network: String,
-    /// The node's wRPC endpoint: JSON (`ws://`, `wss://`), Borsh (a `.../borsh` path or a default Borsh port,
-    /// `crate::rpc::bridge`) or `resolver` (a public node, `crate::rpc::resolver`). Absent: the local node's JSON port of the
-    /// network (`ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10).
+    /// The node's wRPC endpoint.
+    ///
+    /// It is one of:
+    ///
+    /// - JSON (`ws://` or `wss://`);
+    /// - Borsh, as a `.../borsh` path or a default Borsh port (`crate::rpc::bridge`);
+    /// - `resolver`, a public node (`crate::rpc::resolver`).
+    ///
+    /// When absent it is the local node's JSON port of the network: `ws://127.0.0.1:18110` on
+    /// mainnet and `ws://127.0.0.1:18210` on testnet-10.
     pub node: String,
     pub listen: String,
-    /// The replay ledger (`:memory:` = volatile). A relative path is relative to the configuration file's directory
-    /// ([`X402Config::load`]), as are `invoices.store`, `registry` and `killSwitchFile`.
+    /// The replay ledger, or `:memory:` for a volatile one.
+    ///
+    /// A relative path is relative to the configuration file's directory ([`X402Config::load`]), as
+    /// are `invoices.store`, `registry` and `killSwitchFile`.
     pub ledger: String,
     pub auth: AuthMode,
-    /// Required with `auth: "open"`: the operator asserts that nothing on this host relays connections to `listen` (no
-    /// reverse proxy, TLS terminator, port forwarder or tunnel). Such a relay connects from the loopback address and need not
-    /// add any header, so the facilitator cannot tell it from a local caller; with one, use `auth: "required"`.
+    /// Required with `auth: "open"`. The operator asserts that nothing on this host relays
+    /// connections to `listen`, such as a reverse proxy, TLS terminator, port forwarder or tunnel.
+    ///
+    /// Such a relay connects from the loopback address and need not add any header. The facilitator
+    /// cannot tell it from a local caller, so with one, use `auth: "required"`.
     pub open_auth_no_proxy: bool,
     pub allow_mainnet: bool,
     pub confirmations_daa: u64,
-    /// The weakest finality a settlement is answered at (`accepted` or `confirmed`, default `confirmed`): the stronger of it and
-    /// the offer's. `accepted` answers once the transaction is in the virtual chain (depth 0: a payer can still race a
-    /// conflicting spend through another node); `confirmed` waits `confirmationsDaa` more (about 10 s at the default 100).
+    /// The weakest finality a settlement is answered at: `accepted` or `confirmed` (default).
+    ///
+    /// The settlement uses the stronger of this and the offer's. `accepted` answers once the
+    /// transaction is in the virtual chain, at depth 0, so a payer can still race a conflicting
+    /// spend through another node. `confirmed` waits `confirmationsDaa` more, about 10 s at the
+    /// default 100.
     pub min_finality: String,
     pub max_fee_sompi: u64,
     pub min_amount_sompi: u64,
     pub swap: bool,
-    /// `builtin` (the registry shipped with this binary) or a path to a registry JSON; absent = no registry tokens.
+    /// `builtin` (the registry shipped with this binary) or a path to a registry JSON.
+    ///
+    /// When absent there are no registry tokens.
     pub registry: Option<String>,
     pub tokens: Vec<TokenCfg>,
     pub allow_issuer_controlled: bool,
     pub merchants: Vec<MerchantCfg>,
-    /// SHA-256 (hex) of an admin key that may read `/metrics` from a non-loopback address.
+    /// SHA-256, in hex, of an admin key that may read `/metrics` from a non-loopback address.
     pub admin_key_sha256: Option<String>,
     pub rate_limit: RateLimits,
     pub max_body_bytes: usize,
@@ -278,58 +331,79 @@ pub struct X402Config {
     pub header_timeout_ms: u64,
     pub settle_wait_ms: u64,
     pub poll_interval_ms: u64,
-    /// Re-submissions of the same verified transaction when the node could not be reached on submit (idempotent: the
-    /// node answers a transaction it already has as known), before the settlement is left `ambiguous`. 0..=10.
+    /// Re-submissions of the same verified transaction when the node could not be reached on
+    /// submit, before the settlement is left `ambiguous`. 0..=10.
+    ///
+    /// A re-submission is idempotent: the node answers a transaction it already has as known.
     pub submit_retries: u32,
-    /// Re-broadcasts of the same transaction while a settle observes it and it left the mempool unaccepted (an eviction).
-    /// 0..=10.
+    /// Re-broadcasts of the same transaction while a settle observes it and it left the mempool
+    /// unaccepted, which is an eviction. 0..=10.
     pub rebroadcasts: u32,
     pub node_timeout_ms: u64,
     pub reorg_watch_daa: u64,
     pub reconcile_interval_seconds: u64,
-    /// Failed ledger entries are forgotten this long after they failed (default 7 days). They protect nothing (their
-    /// outpoints are released) and anonymous invoice payments can create them.
+    /// Failed ledger entries are forgotten this long after they failed. The default is 7 days.
+    ///
+    /// They protect nothing, because their outpoints are released, and anonymous invoice payments
+    /// can create them.
     pub failed_retention_seconds: u64,
-    /// At most this many failed ledger entries are kept (default 10,000); the oldest are forgotten first.
+    /// At most this many failed ledger entries are kept (default 10,000). The oldest go first.
     pub max_failed_entries: usize,
     pub max_concurrent_settles: usize,
-    /// Most settlements one merchant may have in flight: the global cap alone lets one merchant hold every slot for
-    /// `settleWaitMs` each with transactions that conflict with each other. Clamped to `maxConcurrentSettles`.
+    /// Most settlements one merchant may have in flight, clamped to `maxConcurrentSettles`.
+    ///
+    /// The global cap alone would let one merchant hold every slot for `settleWaitMs` each, with
+    /// transactions that conflict with each other.
     pub max_settles_per_merchant: usize,
-    /// Most anonymous `POST /invoices/{id}/pay` calls running at once. A pool of their own: they never take `/settle` slots.
+    /// Most anonymous `POST /invoices/{id}/pay` calls running at once.
+    ///
+    /// They have a pool of their own and never take `/settle` slots.
     pub max_concurrent_invoice_pays: usize,
     /// Most `/verify` calls running at once (each runs the script engine on a blocking thread).
     pub max_concurrent_verifies: usize,
     pub max_connections: usize,
-    /// Open connections per socket peer (IPv6: per `ipv6PrefixBits` prefix; `trustedProxies` exempt), so one host cannot hold
-    /// every one of `maxConnections`; 0 = no per-address cap.
+    /// Open connections per socket peer, so one host cannot hold every one of `maxConnections`.
+    /// 0 means no per-address cap.
+    ///
+    /// IPv6 peers are grouped by `ipv6PrefixBits`, and `trustedProxies` are exempt.
     pub max_connections_per_ip: usize,
-    /// Open connections per IPv6 site (all /64s of one `ipv6SitePrefixBits` prefix together; `trustedProxies` exempt); 0 = no
-    /// site cap.
+    /// Open connections per IPv6 site, with all /64s of one `ipv6SitePrefixBits` prefix together.
+    /// 0 means no site cap.
+    ///
+    /// `trustedProxies` are exempt.
     pub max_connections_per_site: usize,
-    /// IPv6 clients are counted per this many leading address bits (64: one subscriber) by the connection cap and `perIp`.
+    /// IPv6 clients are counted per this many leading address bits by the connection cap and
+    /// `perIp`. The default 64 is one subscriber.
     pub ipv6_prefix_bits: u8,
-    /// Leading bits of an IPv6 site (48) for `maxConnectionsPerSite` and `rateLimit.perSite`; 0 disables both site limits.
+    /// Leading bits of an IPv6 site, 48 by default, for `maxConnectionsPerSite` and
+    /// `rateLimit.perSite`. 0 disables both site limits.
     pub ipv6_site_prefix_bits: u8,
-    /// A response write that makes no progress for this long (the client stopped reading) closes the connection; 0 = off.
+    /// A response write that makes no progress for this long closes the connection, because the
+    /// client stopped reading. 0 turns it off.
     pub write_timeout_ms: u64,
     /// Relative to the configuration file's directory ([`X402Config::load`]).
     pub kill_switch_file: Option<String>,
-    /// The process's pause file (`kobd --executor --pause-file`); not a configuration key.
+    /// The process's pause file (`kobd --executor --pause-file`). It is not a configuration key.
     #[serde(skip)]
     pub pause_file: Option<std::path::PathBuf>,
-    /// Reverse proxies (CIDR or bare IP) whose forwarded-client header is believed. Behind a proxy on the same host
-    /// EVERY request comes from 127.0.0.1: without this the per-IP limits are one shared bucket, and with it `/metrics` no longer
-    /// trusts the loopback peer (the operator uses the admin key).
+    /// Reverse proxies, as CIDRs or bare IPs, whose forwarded-client header is believed.
+    ///
+    /// Behind a proxy on the same host every request comes from 127.0.0.1. Without this setting the
+    /// per-IP limits are one shared bucket. With it, `/metrics` does not trust the loopback peer,
+    /// and the operator uses the admin key.
     pub trusted_proxies: Vec<String>,
-    /// Header carrying the client address behind a trusted proxy (`x-forwarded-for`: right-most address that is not a proxy).
+    /// Header carrying the client address behind a trusted proxy.
+    ///
+    /// For `x-forwarded-for` the client is the right-most address that is not a proxy.
     pub client_ip_header: String,
-    /// Serve `/metrics` to a loopback peer without the admin key. Ignored (off) when `trustedProxies` is set or when the request
-    /// carries any forwarding header.
+    /// Serve `/metrics` to a loopback peer without the admin key.
+    ///
+    /// It is ignored, and off, when `trustedProxies` is set or the request carries any forwarding
+    /// header.
     pub metrics_loopback: bool,
-    /// Intent-based swap-and-pay (absent = off).
+    /// Intent-based swap-and-pay. Absent means off.
     pub intents: IntentCfg,
-    /// Invoices (absent = off).
+    /// Invoices. Absent means off.
     pub invoices: InvoiceCfg,
 }
 
@@ -416,7 +490,7 @@ pub struct Built {
 }
 
 impl X402Config {
-    /// Transport bounds of the HTTP server (`crate::api::conn`).
+    /// The transport bounds of the HTTP server (`crate::api::conn`).
     pub fn conn_limits(&self) -> crate::api::conn::ConnLimits {
         crate::api::conn::ConnLimits {
             header_timeout: std::time::Duration::from_millis(self.header_timeout_ms.max(1)),
@@ -430,11 +504,17 @@ impl X402Config {
         }
     }
 
-    /// Fills an absent `network` with the build's deployment network (`crate::config::resolve_network`: none on the reference
-    /// build, which then requires it) and an absent `node` with the local node's JSON wRPC endpoint of that network. Never an
-    /// implicit testnet-10, never a testnet node on a mainnet build. A deployment build refuses another network here, at the
-    /// standalone facilitator's startup ([`super::X402Args::config`]; inside `run` the facilitator serves the indexer's network,
-    /// which `build_config` resolved the same way), not in [`X402Config::build`], which validates the document alone.
+    /// Fills an absent `network` and an absent `node` with their defaults.
+    ///
+    /// The default network is the build's deployment network
+    /// (`crate::config::resolve_network`). The reference build has none and requires it. The
+    /// default node is the local JSON wRPC endpoint of that network. There is never an implicit
+    /// testnet-10, and never a testnet node on a mainnet build.
+    ///
+    /// A deployment build refuses another network here, at the standalone facilitator's startup
+    /// ([`super::X402Args::config`]). Inside `run` the facilitator serves the indexer's network,
+    /// which `build_config` resolved the same way. [`X402Config::build`] does not check it, because
+    /// it validates the document alone.
     pub fn fill_defaults(&mut self) -> Result<(), ConfigError> {
         if self.network.trim().is_empty() {
             let n = crate::config::resolve_network(None).map_err(ConfigError)?;
@@ -451,28 +531,30 @@ impl X402Config {
         Ok(())
     }
 
-    /// Parses a config document (unknown fields are rejected).
+    /// Parses a config document and rejects unknown fields.
     pub fn from_json(text: &str) -> Result<X402Config, ConfigError> {
         serde_json::from_str(text).map_err(|e| ConfigError(e.to_string()))
     }
 
     /// Reads and parses a config file.
-    /// Reads the configuration file. A relative `killSwitchFile` is resolved against the file's directory (not the process's
-    /// working directory, which is `/` under systemd).
+    ///
+    /// Every relative path in it is resolved against the file's directory, never against the
+    /// working directory.
     pub fn load(path: impl AsRef<Path>) -> Result<X402Config, ConfigError> {
         let path = path.as_ref();
         let text = std::fs::read_to_string(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
         let mut cfg = Self::from_json(&text)?;
         let abs = std::path::absolute(path).map_err(|e| ConfigError(format!("{}: {e}", path.display())))?;
         let dir = abs.parent().unwrap_or(Path::new("/")).to_path_buf();
-        // every file the configuration names is relative to the configuration file's directory, never to the working directory
-        // (under systemd that is `/`): otherwise a start from another directory opens a fresh, empty ledger
+        // Every file the configuration names is relative to the configuration file's directory.
+        // Under systemd the working directory is `/`, and a start from another directory would
+        // otherwise open a fresh, empty ledger.
         let rebase = |field: &str, v: &mut Option<String>| -> Result<(), ConfigError> {
             let Some(p) = v.as_deref().filter(|p| !p.trim().is_empty() && *p != ":memory:" && Path::new(p).is_relative()) else {
                 return Ok(());
             };
             let next = dir.join(p);
-            // a store a build before this one created next to the working directory is not left behind silently
+            // A store left next to the working directory is refused, not silently abandoned.
             let old = std::path::absolute(p).map_err(|e| ConfigError(format!("{field} {p:?}: {e}")))?;
             if old != next && old.exists() && !next.exists() {
                 return Err(ConfigError(format!(
@@ -489,7 +571,7 @@ impl X402Config {
         rebase("ledger", &mut ledger)?;
         cfg.ledger = ledger.unwrap_or_default();
         rebase("invoices.store", &mut cfg.invoices.store)?;
-        // an input the facilitator only reads: a wrong place fails loudly at startup
+        // The registry is only read, so a wrong place fails loudly at startup.
         if let Some(r) = cfg.registry.as_deref().filter(|r| *r != "builtin" && Path::new(r).is_relative()) {
             cfg.registry = Some(dir.join(r).to_string_lossy().into_owned());
         }
@@ -513,7 +595,7 @@ impl X402Config {
         if network == Network::Mainnet && !self.allow_mainnet {
             return err("mainnet needs \"allowMainnet\": true (the binding's mainnet enablement requires independently corroborated chain evidence)");
         }
-        // absent: the network's local endpoint ([`X402Config::fill_defaults`])
+        // An absent node is the network's local endpoint ([`X402Config::fill_defaults`]).
         let node_ok =
             self.node.starts_with("ws://") || self.node.starts_with("wss://") || crate::rpc::resolver::is_resolver(&self.node);
         if !self.node.is_empty() && !node_ok {
@@ -732,9 +814,10 @@ impl X402Config {
             };
             let custody = Custody::parse(&t.custody)
                 .ok_or_else(|| ConfigError(format!("token {}: custody must be unconditional or issuer-controlled", t.ticker)))?;
-            // the class is the PROGRAM's (x402-kcc20-profile.md 4.1): a program with any registry capability (mint authority,
-            // public mint, burn, freeze, seize, blacklist) is issuer-controlled; a label can only tighten it, as the payer's
-            // and the merchant's builders refuse
+            // The custody class is the program's (`docs/spec/x402-kcc20-profile.md` 4.1). A program
+            // with any registry capability is issuer-controlled: mint authority, public mint, burn,
+            // freeze, seize or blacklist. A label can only tighten it, as the payer's and the
+            // merchant's builders refuse a looser one.
             if custody == Custody::Unconditional && program_has_capabilities(&hash) {
                 return Err(ConfigError(format!(
                     "token {}: the program has issuer capabilities in the registry (mint, burn, freeze, seize or blacklist); it cannot be labelled unconditional",
@@ -756,7 +839,7 @@ impl X402Config {
     }
 }
 
-/// True when the SHIPPED registry lists a capability of the token program `hash` (any, `TokenAllowlist::from_registry`).
+/// True when the shipped registry lists a capability of the token program `hash`.
 fn program_has_capabilities(hash: &[u8; 32]) -> bool {
     Registry::default_registry().templates.iter().any(|t| parse_hex32(&t.template_hash) == Some(*hash) && !t.capabilities.is_empty())
 }
@@ -768,7 +851,7 @@ fn check_rate(what: &str, r: RateCfg) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// SHA-256 of an API key (what `apiKeySha256` holds).
+/// SHA-256 of an API key, which is what `apiKeySha256` holds.
 pub fn api_key_hash(key: &str) -> [u8; 32] {
     Sha256::digest(key.as_bytes()).into()
 }
@@ -787,7 +870,7 @@ mod tests {
     }
 
     fn doc(extra: &str) -> String {
-        // an explicit network (the reference build implies none) unless the case sets its own
+        // An explicit network, as the reference build implies none, unless the case sets its own.
         let net = if extra.contains("\"network\"") { "" } else { r#","network":"kaspa:testnet-10""# };
         format!(r#"{{"merchants":[{}]{net}{extra}}}"#, merchant_json("secret"))
     }
@@ -801,7 +884,7 @@ mod tests {
         assert_eq!(b.cfg.body_deadline(), Duration::from_secs(10));
         assert!(b.policy.tokens.iter().next().is_none());
         assert!(b.policy.swap_enabled);
-        // a settlement is answered at `confirmed` unless the operator lowers it
+        // A settlement is answered at `confirmed` unless the operator lowers it.
         assert_eq!(b.policy.min_finality, Finality::Confirmed);
         let a = X402Config::from_json(&doc(r#","minFinality":"accepted""#)).unwrap().build().unwrap();
         assert_eq!(a.policy.min_finality, Finality::Accepted);
@@ -827,7 +910,8 @@ mod tests {
                 .unwrap()
                 .build();
         assert!(ok.is_ok());
-        // a same-host relay without forwarding headers cannot be told from a local caller: the operator must state there is none
+        // A same-host relay without forwarding headers cannot be told from a local caller.
+        // So the operator must state that there is none.
         let e = X402Config::from_json(r#"{"network":"kaspa:testnet-10","auth":"open","listen":"127.0.0.1:8402"}"#)
             .unwrap()
             .build()
@@ -850,7 +934,7 @@ mod tests {
             .is_ok());
         let e = X402Config::from_json(&doc(r#","auth":"open","openAuthNoProxy":true"#)).unwrap().build().unwrap_err();
         assert!(e.0.contains("contradict"));
-        // behind a reverse proxy (declared as trusted) open auth would serve every caller
+        // Behind a reverse proxy, declared as trusted, open auth would serve every caller.
         let e = X402Config::from_json(
             r#"{"network":"kaspa:testnet-10","auth":"open","openAuthNoProxy":true,"listen":"127.0.0.1:8402","trustedProxies":["127.0.0.1"]}"#,
         )
@@ -863,7 +947,7 @@ mod tests {
     #[test]
     fn the_shipped_example_config_is_valid() {
         let cfg = X402Config::from_json(include_str!("../../x402.example.json")).unwrap();
-        // the builtin registry targets one network: the example must build against it
+        // The builtin registry targets one network, and the example must build against it.
         let b = cfg.build();
         let reg_net = Registry::default_registry().network;
         if reg_net == "testnet-10" {
@@ -886,7 +970,7 @@ mod tests {
         std::fs::write(&path, format!(r#"{base},"killSwitchFile":"x402.kill"}}"#)).unwrap();
         let c = X402Config::load(&path).unwrap();
         assert_eq!(c.kill_switch_file.as_deref().map(std::path::PathBuf::from), Some(cfg_dir.join("x402.kill")));
-        // absolute on every platform (`/var/...` has no drive on Windows, so it would be relative there)
+        // Absolute on every platform. `/var/...` has no drive on Windows and would be relative.
         let abs = d.path().join("lib").join("x402.kill");
         let abs = abs.to_str().unwrap();
         std::fs::write(&path, format!(r#"{base},"killSwitchFile":{}}}"#, serde_json::to_string(abs).unwrap())).unwrap();
@@ -895,8 +979,8 @@ mod tests {
         assert_eq!(X402Config::load(&path).unwrap().kill_switch_file, None);
     }
 
-    /// The ledger and the invoice store are next to the configuration file too, whatever the working directory (under systemd:
-    /// `/`); a store a build before found next to the working directory is not left behind silently.
+    /// The ledger and the invoice store are next to the configuration file too, whatever the
+    /// working directory is. A store left next to the working directory is refused.
     #[test]
     fn relative_ledger_and_store_are_next_to_the_configuration_file() {
         let d = tempfile::tempdir().unwrap();
@@ -906,13 +990,13 @@ mod tests {
         let c = X402Config::load(&path).unwrap();
         assert_eq!(std::path::PathBuf::from(&c.ledger), d.path().join("state/ledger.jsonl"));
         assert_eq!(c.invoices.store.as_deref().map(std::path::PathBuf::from), Some(d.path().join("inv.jsonl")));
-        // absolute and volatile paths are kept; the default ledger name is next to the file as well
+        // Absolute and volatile paths are kept. The default ledger name is next to the file too.
         std::fs::write(&path, format!(r#"{base},"ledger":":memory:","invoices":{{"store":":memory:"}}}}"#)).unwrap();
         let c = X402Config::load(&path).unwrap();
         assert_eq!((c.ledger.as_str(), c.invoices.store.as_deref()), (":memory:", Some(":memory:")));
         std::fs::write(&path, format!("{base}}}")).unwrap();
         assert_eq!(std::path::PathBuf::from(X402Config::load(&path).unwrap().ledger), d.path().join("x402-ledger.jsonl"));
-        // an existing ledger relative to the working directory, none next to the configuration file: refused
+        // A ledger in the working directory with none next to the configuration file is refused.
         let cwd = std::env::current_dir().unwrap();
         let here = tempfile::tempdir_in(&cwd).unwrap();
         let name = here.path().file_name().unwrap().to_string_lossy().into_owned();
@@ -949,7 +1033,8 @@ mod tests {
 
     #[test]
     fn the_network_is_explicit_or_the_deployment_builds_and_the_node_follows_it() {
-        // no network in the file: the build's deployment network, none on the reference build (never an implicit testnet-10)
+        // No network in the file means the build's deployment network. The reference build has
+        // none, and there is never an implicit testnet-10.
         let mut c = X402Config::from_json(r#"{"auth":"open","openAuthNoProxy":true}"#).unwrap();
         assert_eq!((c.network.as_str(), c.node.as_str()), ("", ""));
         let e = c.build().unwrap_err();
@@ -961,8 +1046,8 @@ mod tests {
                 assert_eq!(c.network, format!("kaspa:{n}"));
             }
         }
-        // the node defaults to the local endpoint of the network (mainnet's on mainnet, testnet-10's on testnet-10); a deployment
-        // build refuses the other network at startup
+        // The node defaults to the local endpoint of its network. A deployment build refuses the
+        // other network at startup.
         let build = kob_protocol::artifacts::deployment_network();
         for (net, url) in [("mainnet", "ws://127.0.0.1:18110"), ("testnet-10", "ws://127.0.0.1:18210")] {
             let mut c = X402Config::from_json(&format!(r#"{{"network":"kaspa:{net}"}}"#)).unwrap();
@@ -971,7 +1056,7 @@ mod tests {
                 _ => {
                     c.fill_defaults().unwrap();
                     assert_eq!(c.node, url);
-                    // a configured node is kept
+                    // A configured node is kept.
                     let mut k = X402Config::from_json(&format!(r#"{{"network":"kaspa:{net}","node":"ws://10.0.0.5:1"}}"#)).unwrap();
                     k.fill_defaults().unwrap();
                     assert_eq!(k.node, "ws://10.0.0.5:1");
@@ -1026,7 +1111,7 @@ mod tests {
             let cfg = X402Config::from_json(&format!(r#"{{"network":"kaspa:testnet-10","merchants":[{m}]}}"#)).unwrap();
             assert!(cfg.build().is_err(), "{m}");
         }
-        // duplicate ids / shared keys
+        // Duplicate ids and shared keys are refused.
         let cfg = X402Config::from_json(&format!(r#"{{"network":"kaspa:testnet-10","merchants":[{good},{good}]}}"#)).unwrap();
         assert!(cfg.build().is_err());
         let other = good.replace("shop-1", "shop-2");
@@ -1040,13 +1125,13 @@ mod tests {
         let net = reg.network.clone();
         let cfg = X402Config::from_json(&doc(r#","registry":"builtin""#)).unwrap();
         let built = cfg.build();
-        // the builtin registry targets a specific network; the config network must match it
+        // The builtin registry targets a specific network, and the config network must match it.
         if net == "testnet-10" {
             assert!(built.is_ok(), "{:?}", built.err());
         } else {
             assert!(built.is_err());
         }
-        // an operator token needs a pinned token program
+        // An operator token needs a pinned token program.
         let cfg = X402Config::from_json(&doc(&format!(
             r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","extensionCommitment":"{}","custody":"issuer-controlled","ticker":"T","decimals":2}}]"#,
             "aa".repeat(32),
@@ -1066,7 +1151,7 @@ mod tests {
         let b = cfg.build().unwrap();
         let t = b.policy.tokens.find(&[0xaa; 32]).unwrap();
         assert_eq!(t.custody, Custody::IssuerControlled);
-        // a template that is not a token program (an order template) is refused
+        // A template that is not a token program, such as an order template, is refused.
         let ask = kob_protocol::artifacts::template(kob_protocol::artifacts::TemplateId::KobAsk);
         let cfg = X402Config::from_json(&doc(&format!(
             r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","extensionCommitment":"{}","custody":"unconditional"}}]"#,
@@ -1087,27 +1172,28 @@ mod tests {
                 r#","tokens":[{{"covenantId":"{}","programTemplateHash":"{}","custody":"{}","ticker":"T"{extra}}}]"#,
                 cov.repeat(32),
                 hex(&token_template(prog).hash),
-                // KRON and KaspaCom programs have registry capabilities (mint authority, public mint, burn)
+                // KRON and KaspaCom programs have registry capabilities, such as mint authority,
+                // public mint and burn.
                 if matches!(prog, TemplateId::Kcc20Ref8x8) { "unconditional" } else { "issuer-controlled" }
             )
         };
-        // a KRON token: the family is the program's, no extension commitment, a pay asset only
+        // A KRON token has the program's family, no extension commitment, and is a pay asset only.
         let b = X402Config::from_json(&doc(&tok("aa", TemplateId::KronToken2433, ""))).unwrap().build().unwrap();
         let t = b.policy.tokens.find(&[0xaa; 32]).unwrap();
         assert_eq!((t.family, t.extension_commitment, t.is_merchant_capable()), (Family::Kron, [0; 32], false));
-        // ... which may say its family, but not a wrong one
+        // It may state its family, but not a wrong one.
         let ok = tok("aa", TemplateId::KronToken2732, r#","family":"kron""#);
         assert!(X402Config::from_json(&doc(&ok)).unwrap().build().is_ok());
         let wrong = tok("aa", TemplateId::KronToken2732, r#","family":"kcc20""#);
         assert!(X402Config::from_json(&doc(&wrong)).unwrap().build().unwrap_err().0.contains("kron program"));
         let junk = tok("aa", TemplateId::KronToken2732, r#","family":"erc20""#);
         assert!(X402Config::from_json(&doc(&junk)).unwrap().build().is_err());
-        // a KRON token has no extension commitment
+        // A KRON token has no extension commitment.
         let with_ext = tok("aa", TemplateId::KronToken2433, &format!(r#","extensionCommitment":"{}""#, "cc".repeat(32)));
         assert!(X402Config::from_json(&doc(&with_ext)).unwrap().build().is_err());
-        // a KCC-20 token needs one
+        // A KCC-20 token needs one.
         assert!(X402Config::from_json(&doc(&tok("aa", TemplateId::Kcc20Ref8x8, ""))).unwrap().build().is_err());
-        // KaspaCom's template is an ordinary KCC-20 program of the strict list
+        // KaspaCom's template is an ordinary KCC-20 program of the strict list.
         let kc = tok("bb", TemplateId::Kcc20KaspaCom025, &format!(r#","extensionCommitment":"{}""#, "cc".repeat(32)));
         let b = X402Config::from_json(&doc(&kc)).unwrap().build().unwrap();
         let t = b.policy.tokens.find(&[0xbb; 32]).unwrap();
@@ -1115,7 +1201,9 @@ mod tests {
         assert_eq!(t.custody, Custody::IssuerControlled);
     }
 
-    /// x402-kcc20-profile.md 4.1: the custody class is the program's; an operator label can tighten it, never loosen it.
+    /// The custody class is the program's, so an operator label can tighten it and never loosen it.
+    ///
+    /// See `docs/spec/x402-kcc20-profile.md` 4.1.
     #[test]
     fn an_issuer_capable_program_cannot_be_labelled_unconditional() {
         use kob_protocol::artifacts::{token_template, TemplateId};
@@ -1132,7 +1220,7 @@ mod tests {
             assert!(e.0.contains("cannot be labelled unconditional"), "{prog:?}: {e:?}");
             assert!(X402Config::from_json(&tok(prog, "issuer-controlled")).unwrap().build().is_ok(), "{prog:?}");
         }
-        // a program without capabilities takes either label
+        // A program without capabilities takes either label.
         for custody in ["unconditional", "issuer-controlled"] {
             assert!(X402Config::from_json(&tok(TemplateId::Kcc20Ref, custody)).unwrap().build().is_ok(), "{custody}");
         }
