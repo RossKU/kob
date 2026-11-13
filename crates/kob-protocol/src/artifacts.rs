@@ -1,27 +1,32 @@
 //! Contract artifacts with template-hash pinning.
 //!
-//! Every KOB order kind (in each token family) and every supported token program is one template:
-//! a fixed prefix and suffix around a fixed-size state span. KCC-20 programs and the KOB order
-//! kinds are SilverScript artifacts; the KRON token programs are raw pinned bytes
-//! (`contracts/adapters/kron/templates/*.bin`, [`TokenTemplate`]). The committed `silverc` artifacts under
-//! `contracts/artifacts` are embedded at compile time (the wasm build needs no I/O) and checked on
-//! first use:
+//! Every KOB order kind, in each token family, and every supported token program is one template: a
+//! fixed prefix and suffix around a fixed-size state span. KCC-20 programs and the KOB order kinds
+//! are SilverScript artifacts. The KRON token programs are raw pinned bytes
+//! (`contracts/adapters/kron/templates/*.bin`, [`TokenTemplate`]).
 //!
-//! * the artifact's recorded template hash equals `template_hash(prefix, suffix)` recomputed from
-//!   its bytecode (blake3 over `len(prefix) ‖ prefix ‖ len(suffix) ‖ suffix`, the rule the
-//!   covenants use to authenticate each other);
-//! * that hash equals the hash pinned in [`PINNED`] (a changed artifact is a changed protocol);
-//! * the build constants each template inlines (the evidence templates KobAsk / KobBid of the
-//!   conditional and if-done kinds, the exit templates, the pair orders' evidence and exit templates) match the other
-//!   embedded templates.
+//! # Checks
+//!
+//! The committed `silverc` artifacts under `contracts/artifacts` are embedded at compile time, so
+//! the wasm build needs no I/O. They are checked on first use:
+//! - The artifact's recorded template hash equals `template_hash(prefix, suffix)` recomputed from
+//!   its bytecode. That is blake3 over `len(prefix) ‖ prefix ‖ len(suffix) ‖ suffix`, the rule the
+//!   covenants use to authenticate each other.
+//! - That hash equals the hash pinned in [`PINNED`], since a changed artifact is a changed
+//!   protocol.
+//! - The build constants each template inlines match the other embedded templates. These are the
+//!   evidence templates KobAsk and KobBid of the conditional and if-done kinds, the exit templates,
+//!   and the pair orders' evidence and exit templates.
 //!
 //! [`load_artifact`] applies the same checks to an artifact supplied at run time.
 //!
-//! No template depends on a network or a genesis (a stop is armed by a fill in the same
-//! transaction, there is no receipt covenant), so these artifacts are the same on every network.
-//! The `deploy-tn10` and `deploy-mainnet` features only record the network the binaries are built for
-//! ([`deployment_network`], `contracts/deploy/testnet-10`, `contracts/deploy/mainnet`); the mainnet record also pins
-//! the token registry the build embeds ([`deployment_registry_sha256`]).
+//! # Networks
+//!
+//! No template depends on a network or a genesis, since a stop is armed by a fill in the same
+//! transaction. These artifacts are therefore the same on every network. The `deploy-tn10` and
+//! `deploy-mainnet` features only record the network the binaries are built for
+//! ([`deployment_network`], `contracts/deploy/testnet-10`, `contracts/deploy/mainnet`). The mainnet
+//! record also pins the token registry the build embeds ([`deployment_registry_sha256`]).
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -58,9 +63,12 @@ pub enum ArtifactError {
     Constant(String),
 }
 
-/// Adversarial tests only (feature `adversarial`, never in a release build): a per-thread record of every P2SH script
-/// public key this library derives (order, token and router templates) with the template and the state span it was
-/// derived from, so a test that mutates transactions can name the owner and the state of every output it sees.
+/// A per-thread record of every P2SH script public key this library derives, for adversarial tests
+/// only.
+///
+/// It needs feature `adversarial` and is never in a release build. It records the order, token and
+/// router templates with the template and the state span each key was derived from, so a test that
+/// mutates transactions can name the owner and the state of every output it sees.
 #[cfg(feature = "adversarial")]
 pub mod spk_trace {
     use std::cell::RefCell;
@@ -110,8 +118,9 @@ pub mod spk_trace {
     }
 }
 
-// The token-program variants of `TemplateId` and their embedded sources come from the profile table `data/programs.json`
-// (`build.rs`, `crate::profile`): adding a program of an existing codec family is a profile entry, not code.
+// The token-program variants of `TemplateId` and their embedded sources come from the profile table
+// `data/programs.json` (`build.rs`, `crate::profile`). Adding a program of an existing codec family
+// is a profile entry, not code.
 include!(concat!(env!("OUT_DIR"), "/token_programs.rs"));
 
 /// Number of KOB order kinds (`TemplateId` variants that are not token programs).
@@ -122,9 +131,13 @@ macro_rules! define_template_id {
         kcc20: [$(($kv:ident, $kn:literal, $kd:literal)),* $(,)?],
         kron: [$(($rv:ident, $rn:literal, $rd:literal)),* $(,)?]
     ) => {
-        /// Every template the library knows: the KOB order kinds (artifact file names) and the token programs of the profile
-        /// table (`data/programs.json`; serde and [`TemplateId::name`] use the profile `name`). Variant order: the KCC-20 order
-        /// kinds and pair kinds, the KCC-20-codec programs, the KRON order kinds, the KRON-codec programs (each in table order).
+        /// Every template the library knows: the KOB order kinds and the token programs of the
+        /// profile table.
+        ///
+        /// Order kinds are named by their artifact file names. Token programs come from
+        /// `data/programs.json`, and serde and [`TemplateId::name`] use the profile `name`. The
+        /// variants are in this order, each group in table order: the KCC-20 order kinds and pair
+        /// kinds, the KCC-20-codec programs, the KRON order kinds, the KRON-codec programs.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         pub enum TemplateId {
             KobAsk,
@@ -133,14 +146,19 @@ macro_rules! define_template_id {
             KobCondBid,
             KobIfdBid,
             KobIfdAsk,
-            /// Plain order of a token/token pair A/B (ask or bid, IOC / FOK, decay, TWAP / DCA): ONE template for both sides and
-            /// both families of A and B (state fields `side`, `sFamily`, `tFamily`). Kind code 0x08.
+            /// Plain order of a token/token pair A/B. Kind code 0x08.
+            ///
+            /// It covers ask or bid, IOC / FOK, decay and TWAP / DCA, in one template for both
+            /// sides and both families of A and B (state fields `side`, `sFamily`, `tFamily`).
             KobPair,
-            /// Conditional order of a pair (stop, stop-limit, trailing, take-profit / limit leg, OCO; the exits of
-            /// `KobIfdPair`): one template for both sides and families. Kind code 0x09.
+            /// Conditional order of a pair, and the exits of `KobIfdPair`. Kind code 0x09.
+            ///
+            /// It covers stop, stop-limit, trailing, take-profit / limit leg and OCO, in one
+            /// template for both sides and families.
             KobCondPair,
-            /// If-done entry of a pair (IFD / IFO / bracket / repeat; buy-first and sell-first): one template for both sides and
-            /// families. Kind code 0x0a.
+            /// If-done entry of a pair, buy-first and sell-first. Kind code 0x0a.
+            ///
+            /// It covers IFD, IFO, bracket and repeat, in one template for both sides and families.
             KobIfdPair,
             $( #[doc = $kd] #[serde(rename = $kn)] $kv, )*
             // ---- KRON family (46-byte token state)
@@ -150,8 +168,9 @@ macro_rules! define_template_id {
             KobCondBidKron,
             KobIfdBidKron,
             KobIfdAskKron,
-            // ---- KRON family, maker deliveries of id_type 0 (the `TYPE_DELIVERY = 0x00` builds of the six KRON kinds, for
-            // token programs whose holders are id_type 0: [`TemplateId::for_program`])
+            // ---- KRON family, maker deliveries of id_type 0
+            // These are the `TYPE_DELIVERY = 0x00` builds of the six KRON kinds, for token programs
+            // whose holders are id_type 0 (`TemplateId::for_program`).
             KobAskKronD0,
             KobBidKronD0,
             KobCondAskKronD0,
@@ -189,10 +208,11 @@ macro_rules! define_template_id {
                 $( TemplateId::$rv, )*
             ];
 
-            /// The token programs (both codec families), in variant order: one per profile of `data/programs.json`.
+            /// The token programs of both codec families, in variant order, one per profile of
+            /// `data/programs.json`.
             pub const TOKEN_PROGRAMS: [TemplateId; TOKEN_PROGRAM_COUNT] = [$( TemplateId::$kv, )* $( TemplateId::$rv, )*];
 
-            /// Name: the artifact file stem of an order kind, the profile `name` of a token program.
+            /// Name: an order kind's artifact file stem, a token program's profile `name`.
             pub fn name(self) -> &'static str {
                 match self {
                     TemplateId::KobAsk => "KobAsk",
@@ -226,9 +246,12 @@ macro_rules! define_template_id {
                 matches!(self, $( TemplateId::$kv )|* $( | TemplateId::$rv )*)
             }
 
-            /// Token family of this template (order kinds: the family whose tokens they escrow; token programs: the profile
-            /// `codec`). The pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) serve both families (an instance's family is
-            /// the family of its base token A, a state field): they report KCC-20 here, see [`TemplateId::serves`].
+            /// Token family of this template.
+            ///
+            /// For an order kind it is the family whose tokens it escrows, for a token program the
+            /// profile `codec`. The pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) serve both
+            /// families, and an instance's family is the family of its base token A, a state field.
+            /// They report KCC-20 here, see [`TemplateId::serves`].
             pub fn family(self) -> Family {
                 match self {
                     TemplateId::KobAskKron
@@ -254,7 +277,8 @@ macro_rules! define_template_id {
 with_token_programs!(define_template_id);
 
 impl TemplateId {
-    /// The KCC-20 counterpart of a KRON order kind, of either delivery build (identity for everything else).
+    /// The KCC-20 counterpart of a KRON order kind, of either delivery build; identity for
+    /// everything else.
     pub fn base(self) -> TemplateId {
         match self.canonical() {
             TemplateId::KobAskKron => TemplateId::KobAsk,
@@ -267,7 +291,9 @@ impl TemplateId {
         }
     }
 
-    /// The default build of a KRON order kind: a `*KronD0` kind is its `*Kron` kind (identity for everything else).
+    /// The default build of a KRON order kind, i.e. a `*KronD0` kind is its `*Kron` kind.
+    ///
+    /// Identity for everything else.
     pub fn canonical(self) -> TemplateId {
         match self {
             TemplateId::KobAskKronD0 => TemplateId::KobAskKron,
@@ -280,7 +306,9 @@ impl TemplateId {
         }
     }
 
-    /// The delivery id_type 0 build of a KRON order kind (`KobAskKron` -> `KobAskKronD0`; identity for everything else).
+    /// The delivery id_type 0 build of a KRON order kind (`KobAskKron` -> `KobAskKronD0`).
+    ///
+    /// Identity for everything else.
     pub fn delivery0(self) -> TemplateId {
         match self {
             TemplateId::KobAskKron => TemplateId::KobAskKronD0,
@@ -293,15 +321,19 @@ impl TemplateId {
         }
     }
 
-    /// True for the delivery id_type 0 builds of the KRON kinds (`*KronD0`). They serve token programs whose holders are
-    /// id_type 0 (KForge, testnet-10); the mainnet deployment record does not list them.
+    /// True for the delivery id_type 0 builds of the KRON kinds (`*KronD0`).
+    ///
+    /// They serve token programs whose holders are id_type 0 (KForge, testnet-10). The mainnet
+    /// deployment record does not list them.
     pub fn is_delivery0(self) -> bool {
         self.canonical() != self
     }
 
-    /// The owner value an order kind gives the token outputs it delivers to a maker (KCC-20 `owner_scheme` 0; KRON `id_type`
-    /// 3, or 0 for the `*KronD0` builds); `None` for a token program. The pair kinds deliver a KCC-20 token with scheme 0 and
-    /// a KRON token with id_type 3 (they report the KCC-20 value here).
+    /// The owner value an order kind gives the token outputs it delivers to a maker.
+    ///
+    /// It is KCC-20 `owner_scheme` 0, or KRON `id_type` 3, or 0 for the `*KronD0` builds, and
+    /// `None` for a token program. The pair kinds deliver a KCC-20 token with scheme 0 and a KRON
+    /// token with id_type 3, and report the KCC-20 value here.
     pub fn delivery_owner(self) -> Option<u8> {
         self.kind_code()?;
         Some(if self.is_delivery0() {
@@ -313,9 +345,11 @@ impl TemplateId {
         })
     }
 
-    /// The order kind (`self`, of any family or build) as instantiated for tokens of `program`: the kind of the program's
-    /// family, in the build whose maker deliveries carry the program's holder owner (profile `owners.holder`; a KRON program
-    /// with id_type 0 holders takes the `*KronD0` builds). A pair kind, a token program and a `program` that is not a token
+    /// The order kind `self`, of any family or build, as instantiated for tokens of `program`.
+    ///
+    /// It is the kind of the program's family, in the build whose maker deliveries carry the
+    /// program's holder owner (profile `owners.holder`). A KRON program with id_type 0 holders
+    /// takes the `*KronD0` builds. A pair kind, a token program and a `program` that is not a token
     /// program are returned unchanged.
     pub fn for_program(self, program: TemplateId) -> TemplateId {
         match program.profile() {
@@ -324,8 +358,9 @@ impl TemplateId {
         }
     }
 
-    /// [`TemplateId::for_program`] for the token program whose template hash is `token_hash`; a hash of no embedded program
-    /// of `family` gives the default build of `family`.
+    /// [`TemplateId::for_program`] for the token program whose template hash is `token_hash`.
+    ///
+    /// A hash of no embedded program of `family` gives the default build of `family`.
     pub fn for_token_hash(self, family: Family, token_hash: &[u8; 32]) -> TemplateId {
         match crate::profile::by_hash(token_hash) {
             Some(p) if p.codec == family => self.for_profile(p),
@@ -333,8 +368,10 @@ impl TemplateId {
         }
     }
 
-    /// True for a token program the pair kinds serve: they deliver a KRON token with id_type 3 (address presence), so a KRON
-    /// program whose holders are another owner type (KForge: id_type 0) has no pair template.
+    /// True for a token program the pair kinds serve.
+    ///
+    /// The pair kinds deliver a KRON token with id_type 3 (address presence), so a KRON program
+    /// whose holders are another owner type, e.g. KForge with id_type 0, has no pair template.
     pub fn serves_pairs(self) -> bool {
         self.profile().is_some_and(|p| p.codec != Family::Kron || p.owners.holder == crate::family::KRON_TYPE_ADDR)
     }
@@ -351,9 +388,10 @@ impl TemplateId {
         }
     }
 
-    /// The same order kind in `family` (`KobAsk` in `Kron` is `KobAskKron`, the default build; [`TemplateId::for_program`]
-    /// picks a token program's build); token programs and the pair kinds (one template for both families) are returned
-    /// unchanged.
+    /// The same order kind in `family`, e.g. `KobAsk` in `Kron` is `KobAskKron`, the default build.
+    ///
+    /// [`TemplateId::for_program`] picks a token program's build. Token programs and the pair
+    /// kinds, which are one template for both families, are returned unchanged.
     pub fn in_family(self, family: Family) -> TemplateId {
         let b = self.base();
         if family == Family::Kcc20 {
@@ -370,8 +408,9 @@ impl TemplateId {
         }
     }
 
-    /// True when instances of this order template may escrow tokens of `family` (the pair kinds: both families; a
-    /// `*KronD0` build: KRON).
+    /// True when instances of this order template may escrow tokens of `family`.
+    ///
+    /// The pair kinds serve both families, and a `*KronD0` build serves KRON.
     pub fn serves(self, family: Family) -> bool {
         self.kind_code().is_some() && self.in_family(family) == self.canonical()
     }
@@ -385,8 +424,10 @@ impl TemplateId {
         }
     }
 
-    /// True for templates compiled from a SilverScript source (the order kinds, the token programs pinned as `silverc`
-    /// artifacts); false for a token program pinned as a raw redeem script (the KRON programs).
+    /// True for templates compiled from a SilverScript source.
+    ///
+    /// These are the order kinds and the token programs pinned as `silverc` artifacts. It is false
+    /// for a token program pinned as a raw redeem script, i.e. the KRON programs.
     pub fn is_artifact(self) -> bool {
         self.profile().is_none_or(|p| p.source.kind == crate::profile::SourceKind::SilvercArtifact)
     }
@@ -396,26 +437,35 @@ impl TemplateId {
         TemplateId::ALL.into_iter().find(|t| t.name() == name)
     }
 
-    /// Compiler-owned context fields at the head of the program's state (Argent `runtime_states` field roles), which the
-    /// KCC-1 actor-type handle fixes in the template prefix (profile `source.context_fields`: `gen__kcc20_template` of the
-    /// `KCC20` actor of the published `KCC20PublicMint` app, which holds the program's own Sil template hash in every UTXO).
-    /// Empty for every other template.
+    /// Compiler-owned context fields at the head of the program's state (Argent `runtime_states`
+    /// field roles).
+    ///
+    /// The KCC-1 actor-type handle fixes them in the template prefix (profile
+    /// `source.context_fields`). An example is `gen__kcc20_template` of the `KCC20` actor of the
+    /// published `KCC20PublicMint` app, which holds the program's own Sil template hash in every
+    /// UTXO. Empty for every other template.
     pub fn context_fields(self) -> &'static [String] {
         self.profile().map(|p| p.source.context_fields.as_slice()).unwrap_or(&[])
     }
 
-    /// Per-transaction token input / output slots of a token program (KCC-20: leader included; profile `slots`).
+    /// Per-transaction token input and output slots of a token program (profile `slots`).
+    ///
+    /// For KCC-20 the leader is included.
     pub fn token_slots(self) -> Option<(usize, usize)> {
         self.profile().map(|p| (p.slots.inputs, p.slots.outputs))
     }
 
-    /// Smallest KAS value (sompi) a token program accepts on a token output it authorises (profile `carrier_floor`; `None`
-    /// for a template that is not a token program). Measured in the script engine for every program (`kob-tests`
-    /// `c6_diff`, `c6_7_token_output_floors_are_measured`): KaspaCom's KCC20 0.2.5 refuses a token output below 0.5 KAS;
-    /// the reference programs, P2 and the KRON programs take any value. Every builder refuses a token output below it, and
-    /// [`crate::build::check_new_order`] refuses order terms whose token outputs (delivery and exit carriers) would be.
-    /// The storage-mass bound of a small output is separate ([`crate::tx::COVENANT_OUTPUT_MIN`] for a token output, which
-    /// carries a covenant id).
+    /// Smallest KAS value (sompi) a token program accepts on a token output it authorises.
+    ///
+    /// It is the profile `carrier_floor`, and `None` for a template that is not a token program. It
+    /// is measured in the script engine for every program (`kob-tests` `c6_diff`,
+    /// `c6_7_token_output_floors_are_measured`). KaspaCom's KCC20 0.2.5 refuses a token output
+    /// below 0.5 KAS, and the reference programs, P2 and the KRON programs take any value.
+    ///
+    /// Every builder refuses a token output below it, and [`crate::build::check_new_order`] refuses
+    /// order terms whose token outputs (delivery and exit carriers) would be. The storage-mass
+    /// bound of a small output is separate, and for a token output, which carries a covenant id, it
+    /// is [`crate::tx::COVENANT_OUTPUT_MIN`].
     pub fn min_token_output(self) -> Option<u64> {
         self.profile().map(|p| p.carrier_floor)
     }
@@ -430,15 +480,18 @@ impl TemplateId {
         crate::profile::by_record_code(code).and_then(|p| TemplateId::from_name(&p.name))
     }
 
-    /// The constant pushes a token input of this program carries after its witness column (profile
-    /// `witness.trailing_pushes`, `kron-columns` only; empty for every other template).
+    /// The constant pushes a token input of this program carries after its witness column.
+    ///
+    /// They are profile `witness.trailing_pushes`, for `kron-columns` only, and empty for every
+    /// other template.
     pub fn witness_trailing(self) -> Vec<Vec<u8>> {
         self.profile().map(|p| p.witness.trailing()).unwrap_or_default()
     }
 
-    /// One-byte code used by the `KOB1` payload for the KOB order templates. A KRON kind has the
-    /// code of its KCC-20 counterpart (the payload's family byte tells them apart). `0x07` (the retired
-    /// trade receipt) stays reserved: no kind will ever reuse it ([`RETIRED_KIND_CODES`]).
+    /// One-byte code used by the `KOB1` payload for the KOB order templates.
+    ///
+    /// A KRON kind has the code of its KCC-20 counterpart, and the payload's family byte tells them
+    /// apart. `0x07` is reserved, and no kind ever reuses it ([`RETIRED_KIND_CODES`]).
     pub fn kind_code(self) -> Option<u8> {
         Some(match self.base() {
             TemplateId::KobAsk => 0x01,
@@ -454,25 +507,29 @@ impl TemplateId {
         })
     }
 
-    /// True for the pair kinds (one template for both sides and both families, two tokens per order).
+    /// True for the pair kinds, one template for both sides and both families, with two tokens per
+    /// order.
     pub fn is_pair(self) -> bool {
         matches!(self, TemplateId::KobPair | TemplateId::KobCondPair | TemplateId::KobIfdPair)
     }
 
-    /// Inverse of [`TemplateId::kind_code`] within a family over the pinned templates (`None` for a reserved code; `0x08`,
-    /// `0x09`, `0x0a` are the pair kinds in both families). A KRON code names the default build: an instance's build follows
-    /// from its token program ([`TemplateId::for_token_hash`], [`crate::state::AnyState::template_id`]).
+    /// Inverse of [`TemplateId::kind_code`] within a family over the pinned templates.
+    ///
+    /// Returns `None` for a reserved code. `0x08`, `0x09` and `0x0a` are the pair kinds in both
+    /// families. A KRON code names the default build, and an instance's build follows from its
+    /// token program ([`TemplateId::for_token_hash`], [`crate::state::AnyState::template_id`]).
     pub fn from_kind_code(family: Family, code: u8) -> Option<TemplateId> {
         TemplateId::ALL.into_iter().find(|t| t.kind_code() == Some(code) && t.serves(family))
     }
 }
 
-/// `KOB1` order-kind codes that are retired and reserved forever: `0x07` was the trade receipt
-/// (`KobReceipt` / `KobReceiptKron`), which no longer exists.
+/// `KOB1` order-kind codes that are reserved forever and never reused.
 pub const RETIRED_KIND_CODES: [u8; 1] = [0x07];
 
-/// Template hashes of the KOB order kinds pinned by this protocol version (hex). A different artifact is a different
-/// protocol and fails to load. The token programs are pinned by their profiles (`template_hash` of `data/programs.json`).
+/// Template hashes of the KOB order kinds pinned by this protocol version (hex).
+///
+/// A different artifact is a different protocol and fails to load. The token programs are pinned by
+/// their profiles (`template_hash` of `data/programs.json`).
 pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobAsk, "070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c"),
     (TemplateId::KobBid, "dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef"),
@@ -497,8 +554,9 @@ pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobIfdAskKronD0, "7ae3d8b793c2c97aad575a50577c045b4c881e6777d4d63de7020246f3daf345"),
 ];
 
-/// The embedded artifact of an artifact-backed template (an order kind, or a token program whose profile source is a
-/// `silverc` artifact).
+/// The embedded artifact of an artifact-backed template.
+///
+/// That is an order kind, or a token program whose profile source is a `silverc` artifact.
 fn embedded_json(id: TemplateId) -> &'static str {
     match id {
         TemplateId::KobAsk => include_str!("../../../contracts/artifacts/KobAsk.json"),
@@ -529,8 +587,10 @@ fn embedded_json(id: TemplateId) -> &'static str {
     }
 }
 
-/// The raw bytes of a token program pinned as a raw redeem script (profile source `raw-redeem`: the redeem script of one
-/// instance, `prefix ‖ state ‖ suffix`).
+/// The raw bytes of a token program pinned as a raw redeem script.
+///
+/// The profile source is `raw-redeem`: the redeem script of one instance,
+/// `prefix ‖ state ‖ suffix`.
 fn raw_program_bytes(id: TemplateId) -> &'static [u8] {
     match embedded_program_source(id.name()) {
         Some(EmbeddedSource::Raw(b)) => b,
@@ -538,7 +598,8 @@ fn raw_program_bytes(id: TemplateId) -> &'static [u8] {
     }
 }
 
-// Length of the KRON token state span (`0x20 owner | 0x01 id_type | 0x08 amount | 0x01 is_minter`).
+/// Length of the KRON token state span (`0x20 owner | 0x01 id_type | 0x08 amount | 0x01
+/// is_minter`).
 pub const KRON_STATE_LEN: usize = 46;
 
 /// Constructor files that carry build constants (checked against the templates).
@@ -557,9 +618,10 @@ const KRON_D0_CTOR_COND_BID: &str = include_str!("../../../contracts/orders/kron
 const KRON_D0_CTOR_IFD_BID: &str = include_str!("../../../contracts/orders/kron/delivery0/KobIfdBidKronD0.ctor.json");
 const KRON_D0_CTOR_IFD_ASK: &str = include_str!("../../../contracts/orders/kron/delivery0/KobIfdAskKronD0.ctor.json");
 
-/// A pinned token program of either family: the redeem script of a token UTXO is
-/// `prefix ‖ state ‖ suffix`. KCC-20 programs come from their artifacts, KRON programs from the raw
-/// pinned bytes.
+/// A pinned token program of either family.
+///
+/// The redeem script of a token UTXO is `prefix ‖ state ‖ suffix`. KCC-20 programs come from their
+/// artifacts, KRON programs from the raw pinned bytes.
 #[derive(Clone, Debug)]
 pub struct TokenTemplate {
     pub id: TemplateId,
@@ -622,9 +684,11 @@ pub struct Template {
     pub state_len: usize,
     /// blake3 template hash (see the module docs).
     pub hash: [u8; 32],
-    /// Template hash of the compiler's state cut (`compiled.template_hash` of the artifact). Equal to [`Template::hash`]
-    /// except for a program whose state begins with compiler-owned context fields ([`TemplateId::context_fields`]):
-    /// KOB moves them into the prefix (the KCC-1 actor-type handle), and `hash` is the handle's.
+    /// Template hash of the compiler's state cut (`compiled.template_hash` of the artifact).
+    ///
+    /// It equals [`Template::hash`] except for a program whose state begins with compiler-owned
+    /// context fields ([`TemplateId::context_fields`]). KOB moves those into the prefix as the
+    /// KCC-1 actor-type handle, and `hash` is the handle's.
     pub sil_hash: [u8; 32],
 }
 
@@ -694,9 +758,10 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
     let mut state_len = len;
     let context = id.context_fields();
     if !context.is_empty() {
-        // The actor-type handle (KCC-1 template view): the leading compiler-owned fields, each a `byte[32]` template
-        // commitment whose canonical value is the program's own Sil template hash, move into the prefix in their canonical
-        // encoding (`0x20 ‖ hash`); the rest of the state stays open.
+        // The actor-type handle (KCC-1 template view). The leading compiler-owned fields are each a
+        // `byte[32]` template commitment whose canonical value is the program's own Sil template
+        // hash. They move into the prefix in their canonical encoding (`0x20 ‖ hash`), and the rest
+        // of the state stays open.
         let fields = &contract.runtime_state.fields;
         let ctx_err = |m: String| ArtifactError::Constant(format!("{}: {m}", id.name()));
         let mut at = offset;
@@ -730,8 +795,10 @@ pub fn template_from_artifact(id: TemplateId, artifact: SilAbiArtifact) -> Resul
     })
 }
 
-/// Parse an artifact produced by `silverc` (see `scripts/build-contracts.sh`), or an Argent app-bundle artifact (see
-/// [`parse_sil_abi`]).
+/// Parses an artifact produced by `silverc` (see `scripts/build-contracts.sh`), or an Argent app
+/// bundle.
+///
+/// See [`parse_sil_abi`] for the bundle.
 pub fn parse_artifact(json: &str) -> Result<SilAbiArtifact, ArtifactError> {
     Ok(parse_sil_abi(json)?.0)
 }
@@ -741,14 +808,19 @@ pub fn parse_artifact(json: &str) -> Result<SilAbiArtifact, ArtifactError> {
 pub enum ArtifactSchema {
     /// The compiler's own ABI artifact (`schema_version, compiler_version, structs, contracts`).
     Silverc,
-    /// An Argent app bundle (`schema_version, id, generator, app, ..., argent, sil_abi`): the compiler artifact is its
-    /// `sil_abi` member (the bundle records the compiler in `generator`, not in a `compiler_version` field).
+    /// An Argent app bundle (`schema_version, id, generator, app, ..., argent, sil_abi`).
+    ///
+    /// The compiler artifact is its `sil_abi` member. The bundle records the compiler in
+    /// `generator`, not in a `compiler_version` field.
     Argent,
 }
 
-/// Parses a program artifact of either schema and returns the compiler artifact and the schema found. An object with a
-/// `sil_abi` object and an `argent` member and no `contracts` of its own is an Argent bundle; anything else is read as a
-/// silverc artifact (so a malformed one still reports its own missing field).
+/// Parses a program artifact of either schema, and returns the compiler artifact and the schema
+/// found.
+///
+/// An object with a `sil_abi` object and an `argent` member, and no `contracts` of its own, is an
+/// Argent bundle. Anything else is read as a silverc artifact, so a malformed one still reports its
+/// own missing field.
 pub fn parse_sil_abi(json: &str) -> Result<(SilAbiArtifact, ArtifactSchema), serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(json)?;
     let is_bundle = value
@@ -761,8 +833,10 @@ pub fn parse_sil_abi(json: &str) -> Result<(SilAbiArtifact, ArtifactSchema), ser
     Ok((serde_json::from_value(value)?, ArtifactSchema::Silverc))
 }
 
-/// Loads an artifact supplied at run time and requires its template hash to be the pinned hash
-/// of `id` (hash pinning for artifacts not taken from this build).
+/// Loads an artifact supplied at run time and requires its template hash to be the pinned hash of
+/// `id`.
+///
+/// This is hash pinning for artifacts not taken from this build.
 pub fn load_artifact(id: TemplateId, json: &str) -> Result<Template, ArtifactError> {
     let t = template_from_artifact(id, parse_artifact(json)?)?;
     let pinned = pinned_hash(id);
@@ -804,7 +878,10 @@ fn ctor_int(v: &ArtifactValue) -> i64 {
     }
 }
 
-/// `d0`: the delivery id_type 0 builds of the KRON kinds (`fam` KRON), a template chain of their own.
+/// Checks the build constants of `fam`'s templates against each other.
+///
+/// With `d0` it checks the delivery id_type 0 builds of the KRON kinds (`fam` KRON), a template
+/// chain of their own.
 fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family, d0: bool) -> Result<(), ArtifactError> {
     fn err<T>(m: String) -> Result<T, ArtifactError> {
         Err(ArtifactError::Constant(m))
@@ -829,23 +906,25 @@ fn check_constants(t: &BTreeMap<TemplateId, Template>, fam: Family, d0: bool) ->
             }
             Ok(())
         };
-    // Conditional orders: the evidence templates (the plain ask, then the plain bid of their family).
+    // Conditional orders: the evidence templates, the plain ask and then the plain bid of their
+    // family.
     let ca = ctor(c_cond_ask);
     let cb = ctor(c_cond_bid);
     for (args, who) in [(&ca, id(TemplateId::KobCondAsk)), (&cb, id(TemplateId::KobCondBid))] {
         tpl_ref(args, 0, id(TemplateId::KobAsk), true, who)?;
         tpl_ref(args, 3, id(TemplateId::KobBid), true, who)?;
     }
-    // If-done entries: exit template (hash, prefix, suffix), then the evidence template of their stop
-    // entry (a buy-stop entry reads a resting bid, a sell-stop entry a resting ask).
+    // If-done entries: the exit template (hash, prefix, suffix), then the evidence template of
+    // their stop entry. A buy-stop entry reads a resting bid, a sell-stop entry a resting ask.
     let ib = ctor(c_ifd_bid);
     let ia = ctor(c_ifd_ask);
     tpl_ref(&ib, 0, id(TemplateId::KobCondAsk), true, id(TemplateId::KobIfdBid))?;
     tpl_ref(&ia, 0, id(TemplateId::KobCondBid), true, id(TemplateId::KobIfdAsk))?;
     tpl_ref(&ib, 3, id(TemplateId::KobBid), true, id(TemplateId::KobIfdBid))?;
     tpl_ref(&ia, 3, id(TemplateId::KobAsk), true, id(TemplateId::KobIfdAsk))?;
-    // Pair kinds (one template for both families, checked once). KobCondPair: the trigger evidence templates ASK
-    // (KobAsk), ASK_KRON, BID (KobBid), BID_KRON, PAIR (KobPair); KobIfdPair: COND (the exit KobCondPair), then the same five.
+    // Pair kinds, one template for both families, checked once. KobCondPair has the trigger
+    // evidence templates ASK (KobAsk), ASK_KRON, BID (KobBid), BID_KRON and PAIR (KobPair).
+    // KobIfdPair has COND (the exit KobCondPair), then the same five.
     let evidence_refs = [TemplateId::KobAsk, TemplateId::KobAskKron, TemplateId::KobBid, TemplateId::KobBidKron, TemplateId::KobPair];
     let cp = ctor(CTOR_COND_PAIR);
     let ip = ctor(CTOR_IFD_PAIR);
@@ -903,7 +982,7 @@ fn raw_token_template(id: TemplateId) -> Result<TokenTemplate, ArtifactError> {
 }
 
 fn build_registry() -> Result<Registry, ArtifactError> {
-    // the profile table (shape and uniqueness)
+    // The profile table: shape and uniqueness.
     crate::profile::ProfileFile::parse(crate::profile::PROGRAMS_JSON).map_err(|e| ArtifactError::Constant(e.to_string()))?;
     let mut templates = BTreeMap::new();
     let mut tokens = BTreeMap::new();
@@ -916,7 +995,7 @@ fn build_registry() -> Result<Registry, ArtifactError> {
     }
     for (id, t) in &templates {
         if let Some(p) = id.profile() {
-            // every profile fact against the bytes (layout, hash, state, entries)
+            // Every profile fact against the bytes: layout, hash, state and entries.
             p.check_bytes(&EmbeddedSource::Artifact(embedded_json(*id))).map_err(|e| ArtifactError::Constant(e.to_string()))?;
             tokens.insert(
                 *id,
@@ -943,14 +1022,16 @@ fn registry() -> &'static Registry {
     REG.get_or_init(|| build_registry().unwrap_or_else(|e| panic!("embedded artifacts: {e}")))
 }
 
-/// Checks every embedded artifact (hash pinning and build constants) without panicking, so
-/// front ends can report a broken build.
+/// Checks every embedded artifact, hash pinning and build constants, without panicking.
+///
+/// Front ends use it to report a broken build.
 pub fn self_check() -> Result<(), String> {
     build_registry().map(|_| ()).map_err(|e| e.to_string())
 }
 
-/// An embedded artifact-backed template (order kinds, KCC-20 programs). The raw KRON token
-/// programs have no artifact: use [`token_template`].
+/// An embedded artifact-backed template (order kinds, KCC-20 programs).
+///
+/// The raw KRON token programs have no artifact; use [`token_template`] for them.
 pub fn template(id: TemplateId) -> &'static Template {
     registry().templates.get(&id).unwrap_or_else(|| panic!("{} is not an artifact-backed template (see token_template)", id.name()))
 }
@@ -983,8 +1064,10 @@ pub fn token_template_by_hash(hash: &[u8; 32]) -> Option<&'static TokenTemplate>
 #[cfg(all(feature = "deploy-tn10", feature = "deploy-mainnet"))]
 compile_error!("the deployment features deploy-tn10 and deploy-mainnet are exclusive: build one network per binary");
 
-/// Network of the deployment build compiled in (`Some("testnet-10")` with `deploy-tn10`, `Some("mainnet")` with
-/// `deploy-mainnet`), `None` for the reference build. The templates are the same in all (nothing depends on a network).
+/// Network of the deployment build compiled in, `None` for the reference build.
+///
+/// It is `Some("testnet-10")` with `deploy-tn10` and `Some("mainnet")` with `deploy-mainnet`. The
+/// templates are the same in all, since nothing depends on a network.
 pub fn deployment_network() -> Option<&'static str> {
     #[cfg(any(feature = "deploy-tn10", feature = "deploy-mainnet"))]
     return Some(deployment::NETWORK);
@@ -992,15 +1075,19 @@ pub fn deployment_network() -> Option<&'static str> {
     None
 }
 
-/// The deployment records of both networks (`contracts/deploy/<network>/deployment.json`), embedded in every build.
+/// The deployment records of both networks, embedded in every build.
+///
+/// They are `contracts/deploy/<network>/deployment.json`.
 const MAINNET_RECORD: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
 const TESTNET_RECORD: &str = include_str!("../../../contracts/deploy/testnet-10/deployment.json");
 
-/// The default indexer of `network`: the `indexer_url` of its `deployment.json` (the official index-only server whose API a
-/// client reads books, orders and the live feed from), `None` for another network and while the record leaves it `null` (not
-/// decided yet). Every build carries both records, so a reference build reads the one of the network it is run for. A client uses
-/// it only when neither `--indexer` nor `$KOB_INDEXER_URL` names one. Both records are checked by [`check_indexer_url`] in the
-/// tests.
+/// The default indexer of `network`, the `indexer_url` of its `deployment.json`.
+///
+/// It is the official index-only server whose API a client reads books, orders and the live feed
+/// from. Returns `None` for another network, and while the record leaves it `null`. Every build
+/// carries both records, so a reference build reads the one of the network it is run for. A client
+/// uses it only when neither `--indexer` nor `$KOB_INDEXER_URL` names one. The tests check both
+/// records with [`check_indexer_url`].
 pub fn deployment_indexer_url(network: &str) -> Option<String> {
     let record = match network {
         "mainnet" => MAINNET_RECORD,
@@ -1010,9 +1097,11 @@ pub fn deployment_indexer_url(network: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(record).ok()?.get("indexer_url")?.as_str().map(str::to_owned)
 }
 
-/// The rule for the `indexer_url` of a deployment record on `network`: an `https://` URL on mainnet (`http://` or `https://`
-/// elsewhere), with a host, without credentials, query or fragment (a base path is allowed). `scripts/lib/deploy.mjs` applies the
-/// same rule when it writes the record.
+/// The rule for the `indexer_url` of a deployment record on `network`.
+///
+/// It is an `https://` URL on mainnet, and `http://` or `https://` elsewhere, with a host and
+/// without credentials, query or fragment. A base path is allowed. `scripts/lib/deploy.mjs` applies
+/// the same rule when it writes the record.
 pub fn check_indexer_url(network: &str, url: &str) -> Result<(), String> {
     let rest = match url.strip_prefix("https://") {
         Some(r) => r,
@@ -1032,9 +1121,11 @@ pub fn check_indexer_url(network: &str, url: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The registry the deployment build pins (`registry` of its `deployment.json`): its lowercase hex sha256 over the
-/// LF-normalised bytes. `Some` only in a build whose record pins one (`deploy-mainnet`); the embedded default registry
-/// ([`crate::registry::DEFAULT_REGISTRY_JSON`]) hashes to it (checked by this module's tests).
+/// The registry the deployment build pins (`registry` of its `deployment.json`), as a sha256 hex.
+///
+/// It is the lowercase hex sha256 over the LF-normalised bytes. It is `Some` only in a build whose
+/// record pins one (`deploy-mainnet`). The embedded default registry
+/// ([`crate::registry::DEFAULT_REGISTRY_JSON`]) hashes to it, which this module's tests check.
 pub fn deployment_registry_sha256() -> Option<&'static str> {
     #[cfg(feature = "deploy-mainnet")]
     return Some(deployment::REGISTRY_SHA256);
@@ -1042,33 +1133,44 @@ pub fn deployment_registry_sha256() -> Option<&'static str> {
     None
 }
 
-/// The testnet-10 deployment record (`contracts/deploy/testnet-10`, written and verified by
-/// `scripts/build-deploy.sh testnet-10`): the network and the template hashes deployed there, which are
-/// the reference ones (no template depends on a genesis).
+/// The testnet-10 deployment record (`contracts/deploy/testnet-10`).
+///
+/// `scripts/build-deploy.sh testnet-10` writes and verifies it. It holds the network and the
+/// template hashes deployed there, which are the reference ones, since no template depends on a
+/// genesis.
 #[cfg(feature = "deploy-tn10")]
 pub mod deployment {
     /// Network id of the deployment.
     pub const NETWORK: &str = "testnet-10";
-    /// `deployment.json` of the build (network, template hashes; checked against the embedded templates).
+    /// `deployment.json` of the build: network and template hashes, checked against the embedded
+    /// templates.
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/testnet-10/deployment.json");
 }
 
-/// The mainnet deployment record (`contracts/deploy/mainnet`, written and verified by `scripts/build-deploy.sh mainnet`):
-/// the network, the template hashes (the reference ones) and the pinned token registry (`registry/tokens.json`, which
-/// [`crate::registry::DEFAULT_REGISTRY_JSON`] embeds). There is no genesis step: the build is reproducible from source.
+/// The mainnet deployment record (`contracts/deploy/mainnet`).
+///
+/// `scripts/build-deploy.sh mainnet` writes and verifies it. It holds the network, the template
+/// hashes (the reference ones) and the pinned token registry (`registry/tokens.json`, which
+/// [`crate::registry::DEFAULT_REGISTRY_JSON`] embeds). There is no genesis step, and the build is
+/// reproducible from source.
 #[cfg(feature = "deploy-mainnet")]
 pub mod deployment {
     /// Network id of the deployment.
     pub const NETWORK: &str = "mainnet";
-    /// `deployment.json` of the build (network, template hashes, registry pin; checked against what the build embeds).
+    /// `deployment.json` of the build: network, template hashes and registry pin, checked against
+    /// the build.
     pub const MANIFEST: &str = include_str!("../../../contracts/deploy/mainnet/deployment.json");
-    /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins: the `registry.sha256` of [`MANIFEST`]
-    /// and [`crate::registry::default_registry_sha256`] (checked by the tests).
+    /// sha256 (lowercase hex, LF-normalised bytes) of the registry the record pins.
+    ///
+    /// It is the `registry.sha256` of [`MANIFEST`] and
+    /// [`crate::registry::default_registry_sha256`], which the tests check.
     pub const REGISTRY_SHA256: &str = "a8949e77a76165535e70115e26020f4b4b6165d6167271ae3419e3d4668a20d8";
 }
 
-/// The order templates a network's deployment record lists (`scripts/build-deploy.sh`): every embedded order kind; on mainnet
-/// without the `*KronD0` builds, which serve only token programs with id_type 0 holders (KForge, testnet-10).
+/// The order templates a network's deployment record lists (`scripts/build-deploy.sh`).
+///
+/// That is every embedded order kind. On mainnet the `*KronD0` builds are left out, since they
+/// serve only token programs with id_type 0 holders (KForge, testnet-10).
 pub fn deployed_order_kinds(network: &str) -> Vec<TemplateId> {
     TemplateId::ALL.into_iter().filter(|t| t.kind_code().is_some() && (network != "mainnet" || !t.is_delivery0())).collect()
 }
@@ -1152,7 +1254,7 @@ mod tests {
             let c = t.contract();
             assert_eq!(t.redeem(&c.compiled.bytecode[t.prefix.len()..t.prefix.len() + t.state_len]), c.compiled.bytecode);
         }
-        // The retired receipt kind code decodes to nothing in either family.
+        // The retired kind codes decode to nothing in either family.
         for code in RETIRED_KIND_CODES {
             assert!(TemplateId::from_kind_code(Family::Kcc20, code).is_none());
             assert!(TemplateId::from_kind_code(Family::Kron, code).is_none());
@@ -1172,9 +1274,11 @@ mod tests {
         assert_eq!(deployment_registry_sha256().is_some(), cfg!(feature = "deploy-mainnet"));
     }
 
-    /// The mainnet record (checked in every build, whatever the features): it lists exactly the order templates deployed on
-    /// mainnet (every embedded one but the testnet-only `*KronD0` builds) and pins the registry this crate embeds, so a template
-    /// or registry change without `scripts/build-deploy.sh mainnet` fails here.
+    /// The mainnet record, checked in every build whatever the features.
+    ///
+    /// It lists exactly the order templates deployed on mainnet, every embedded one but the
+    /// testnet-only `*KronD0` builds. It also pins the registry this crate embeds, so a template or
+    /// registry change without `scripts/build-deploy.sh mainnet` fails here.
     #[test]
     fn the_indexer_url_rule_and_the_records() {
         assert!(check_indexer_url("mainnet", "https://index.example.org").is_ok());
@@ -1193,7 +1297,7 @@ mod tests {
         ] {
             assert!(check_indexer_url(net, bad).is_err(), "{net} {bad}");
         }
-        // both records carry the field (null until the address is decided) and a value obeys the rule
+        // Both records carry the field, `null` while no address is set, and a value obeys the rule.
         for (net, text) in [("mainnet", MAINNET_RECORD), ("testnet-10", TESTNET_RECORD)] {
             let m: serde_json::Value = serde_json::from_str(text).unwrap();
             let v = m.get("indexer_url").unwrap_or_else(|| panic!("{net}: no indexer_url in the record"));
@@ -1203,7 +1307,7 @@ mod tests {
                 assert!(v.is_null(), "{net}: indexer_url is a string or null");
             }
         }
-        // the reader returns what the record says, and nothing for a network without one
+        // The reader returns what the record says, and nothing for a network without one.
         for (net, text) in [("mainnet", MAINNET_RECORD), ("testnet-10", TESTNET_RECORD)] {
             let want = serde_json::from_str::<serde_json::Value>(text).unwrap()["indexer_url"].as_str().map(str::to_owned);
             assert_eq!(deployment_indexer_url(net), want);
@@ -1232,7 +1336,8 @@ mod tests {
         assert_eq!(d.network, "mainnet");
         let strict: Vec<&str> = reg["strict_templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
         assert_eq!(strict, d.strict_templates().map(|t| t.id.as_str()).collect::<Vec<_>>());
-        // the token entries with their genesis-check fact (no listing state or standing: the registry makes no judgement)
+        // The token entries with their genesis-check fact. There is no listing state or standing,
+        // since the registry makes no judgement.
         assert!(reg.get("listed").is_none());
         let tokens: Vec<(&str, &str, Option<bool>)> = reg["tokens"]
             .as_array()
@@ -1247,7 +1352,9 @@ mod tests {
         assert_eq!(deployment::REGISTRY_SHA256, pinned, "update deployment::REGISTRY_SHA256 with the record");
     }
 
-    /// The testnet-10 record (checked in every build): every embedded order template, the `*KronD0` builds included.
+    /// The testnet-10 record, checked in every build.
+    ///
+    /// It lists every embedded order template, the `*KronD0` builds included.
     #[test]
     fn testnet_deployment_record_lists_every_embedded_order_template() {
         let m: serde_json::Value = serde_json::from_str(include_str!("../../../contracts/deploy/testnet-10/deployment.json")).unwrap();
@@ -1270,7 +1377,8 @@ mod tests {
         use deployment::*;
         self_check().unwrap();
         assert_eq!(deployment_network(), Some(NETWORK));
-        // deployment.json (written by scripts/build-deploy.sh) lists exactly the embedded order templates.
+        // deployment.json, written by scripts/build-deploy.sh, lists exactly the embedded order
+        // templates.
         let m: serde_json::Value = serde_json::from_str(MANIFEST).unwrap();
         assert_eq!(m["network"], NETWORK);
         assert!(m.get("receipt_covenant_id").is_none(), "no receipt genesis since v2.6");
