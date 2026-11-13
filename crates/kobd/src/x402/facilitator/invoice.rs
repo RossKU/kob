@@ -1,24 +1,41 @@
-//! Invoices (`kob-invoice-v1`): a merchant registers an invoice (its x402 requirements, a reference and an
-//! expiry), anyone fetches it at `GET /invoices/<id>` (the URL a QR code carries), a payer pays it once at
-//! `POST /invoices/<id>/pay`, and anyone reads its invoice-level status.
+//! Invoices (`kob-invoice-v1`): payment requests that anyone can fetch and a payer pays once.
 //!
-//! Registration is merchant-authenticated (the facilitator's API keys) and checked: the invoice is
-//! structurally valid, every `accepts` entry is one this facilitator settles (profile, allowlisted tokens,
-//! enabled routes) and is within the merchant's allowed `payTo` / assets. The id is the invoice's content
-//! hash, so the URL is self-verifying.
+//! A merchant registers an invoice (its x402 requirements, a reference and an expiry). Anyone
+//! fetches it at `GET /invoices/<id>`, the URL a QR code carries. A payer pays it once at
+//! `POST /invoices/<id>/pay`. Anyone reads its invoice-level status.
 //!
-//! **One invoice is paid once.** Under a per-invoice lock: a payment whose transaction is already an
-//! attempt of the invoice resumes (an identical retry); otherwise, when an attempt is accepted the payment
-//! is a **duplicate**, when one is in flight it is refused as pending (retryable), and at or after
-//! `expiresAt` it is **late**. A refused payment is verified first (a forged one is just rejected) and kept
-//! as evidence with its merchant output (or intent outpoint); the periodic reconcile reports it if it
-//! reaches the chain anyway (the payer broadcast it), so the merchant can refund it. A payment is settled
-//! with the invoice id as its request hash and the invoice's merchant; an intent executes no later than
-//! `expiresAt`.
+//! # Registration
 //!
-//! The store is an append-only JSONL log (one record per change, the last line of an id wins), written and read like
-//! the replay ledger: a failed write is cut back off the file and fails the operation; on open an unfinished last line
-//! (no newline) is dropped and any other line that does not parse refuses to start.
+//! Registration is merchant-authenticated (the facilitator's API keys) and checked.
+//!
+//! - The invoice is structurally valid.
+//! - Every `accepts` entry is one this facilitator settles (profile, allowlisted tokens, enabled
+//!   routes) and is within the merchant's allowed `payTo` and assets.
+//!
+//! The id is the invoice's content hash, so the URL is self-verifying.
+//!
+//! # One invoice is paid once
+//!
+//! Payments are decided under a per-invoice lock.
+//!
+//! - A payment whose transaction is already an attempt of the invoice resumes (an identical retry).
+//! - Otherwise, when an attempt is accepted, the payment is a **duplicate**.
+//! - When an attempt is in flight, the payment is refused as pending (retryable).
+//! - At or after `expiresAt`, the payment is **late**.
+//!
+//! A refused payment is verified first (a forged one is just rejected). It is kept as evidence
+//! with its merchant output (or intent outpoint). The periodic reconcile reports it if it reaches
+//! the chain anyway (the payer broadcast it), so the merchant can refund it.
+//!
+//! A payment is settled with the invoice id as its request hash and the invoice's merchant. An
+//! intent executes no later than `expiresAt`.
+//!
+//! # Store
+//!
+//! The store is an append-only JSONL log with one record per change. The last line of an id wins.
+//! It is written and read like the replay ledger. A failed write is cut back off the file and
+//! fails the operation. On open, an unfinished last line (no newline) is dropped, and any other
+//! line that does not parse refuses to start.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -47,30 +64,38 @@ pub struct InvoiceCtx {
     pub expires_ms: u64,
 }
 
-/// A payment refused for an invoice (duplicate or late), or released after an ambiguous outcome (C5 X-9), kept as evidence.
+/// A refused or released invoice payment, kept as evidence.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtraRecord {
-    /// `duplicate`, `late`, or `released` (an attempt whose outcome stayed unknown: failed, still watched).
+    /// `duplicate`, `late` or `released`.
+    ///
+    /// `released` is an attempt with an unknown outcome that was failed and is still watched.
     pub kind: String,
     /// The payment transaction (an intent: its creation).
     pub txid: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payer: Option<String>,
-    /// The output that would pay the merchant (direct payments) or the intent output (intents), with its script.
+    /// The output that would pay the merchant (direct payments) or the intent output (intents),
+    /// with its script.
     pub watch_txid: String,
     pub watch_index: u32,
     pub watch_spk: String,
     /// True when the watched output is an intent (the merchant is paid only by an execution).
     #[serde(default)]
     pub intent: bool,
-    /// `refused`, `accepted` (a direct payment reached the chain), `intent-on-chain` (the payer broadcast the creation).
+    /// What was observed: `refused`, `accepted` or `intent-on-chain`.
+    ///
+    /// - `refused`: the value when the payment is first kept.
+    /// - `accepted`: a direct payment reached the chain.
+    /// - `intent-on-chain`: the payer broadcast the creation.
     pub observed: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_daa: Option<u64>,
     pub at_ms: u64,
-    /// The outpoints a refused payment spends (`txid:index`, sorted): a refused payment spending exactly the same ones (a
-    /// fee variant of the same funding; at most one of them can ever reach the chain) is not kept again.
+    /// The outpoints a refused payment spends (`txid:index`, sorted). A refused payment that spends
+    /// exactly the same ones is not kept again. It is a fee variant of the same funding, and at
+    /// most one of them can ever reach the chain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub spends: Vec<String>,
 }
@@ -90,7 +115,8 @@ pub struct InvoiceRecord {
 
 struct StoreInner {
     file: Option<File>,
-    /// Set when a failed append could not be cut back off the file: nothing more is appended until a restart.
+    /// Set when a failed append could not be cut back off the file.
+    /// Nothing more is appended until a restart.
     broken: Option<String>,
     records: HashMap<String, InvoiceRecord>,
 }
@@ -113,7 +139,7 @@ impl InvoiceStore {
         InvoiceStore { inner: Mutex::new(StoreInner { file: None, broken: None, records: HashMap::new() }), _lock: None, path: None }
     }
 
-    /// Opens (creating if needed) the log at `path` and replays it.
+    /// Opens the log at `path`, creating it if needed, and replays it.
     pub fn open(path: impl AsRef<Path>) -> std::result::Result<InvoiceStore, String> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -138,7 +164,8 @@ impl InvoiceStore {
             line_no += 1;
             let end = raw[pos..].iter().position(|b| *b == b'\n').map(|i| pos + i).unwrap_or(raw.len());
             let line = &raw[pos..end];
-            // the last line, still without its newline: an unfinished write that was never acknowledged
+            // The last line, still without its newline, is an unfinished write that was never
+            // acknowledged.
             let unfinished = end >= raw.len();
             if line.iter().all(u8::is_ascii_whitespace) {
                 good = (end + 1).min(raw.len());
@@ -195,7 +222,8 @@ impl InvoiceStore {
         if let Some(f) = g.file.as_mut() {
             let mut line = serde_json::to_string(&json!({ "invoice": r })).map_err(io)?;
             line.push('\n');
-            // a failed write is cut back off the file (the record is not acknowledged and nothing is glued to it)
+            // A failed write is cut back off the file. The record is not acknowledged and nothing
+            // is glued to it.
             if let Err(fail) = crate::x402::ledger::append_record(f, line.as_bytes()) {
                 if !fail.undone {
                     g.broken = Some(fail.error.to_string());
@@ -207,7 +235,8 @@ impl InvoiceStore {
         Ok(r)
     }
 
-    /// Inserts a new record; an existing id returns the stored record (registration is idempotent).
+    /// Inserts a new record.
+    /// An existing id returns the stored record, so registration is idempotent.
     pub fn insert(&self, r: InvoiceRecord) -> Result<(InvoiceRecord, bool)> {
         let mut g = self.lock();
         if let Some(e) = g.records.get(&r.id) {
@@ -257,8 +286,9 @@ pub struct InvoiceRuntime {
     pub public_url: Option<String>,
     /// Most unexpired invoices per merchant.
     pub max_open_per_merchant: usize,
-    /// Most refused payments (duplicate or late) kept as evidence per invoice; further ones are rejected without being
-    /// recorded. Anyone may submit them, so this bounds the record, its rewrites and the reconcile watch list.
+    /// Most refused payments (duplicate or late) kept as evidence per invoice. Further ones are
+    /// rejected without being recorded. Anyone may submit them, so this bounds the record, its
+    /// rewrites and the reconcile watch list.
     pub max_extra_payments: usize,
 }
 
@@ -274,7 +304,8 @@ impl Facilitator {
         self.invoices.as_ref().ok_or_else(invoices_off)
     }
 
-    /// Checks that this facilitator can settle a requirement (profile, routes, tokens), without a payment.
+    /// Checks that this facilitator can settle a requirement (profile, routes, tokens), without a
+    /// payment.
     fn offerable(&self, r: &PaymentRequirements) -> Result<()> {
         let net = r.network()?;
         if net != self.policy.network {
@@ -324,8 +355,8 @@ impl Facilitator {
         }
     }
 
-    /// `POST /invoices` (merchant-authenticated; `allowed` checks the merchant's `payTo` / asset allowlist).
-    /// Returns `{ id, url, invoice, created }`.
+    /// `POST /invoices`, merchant-authenticated. `allowed` checks the merchant's `payTo` / asset
+    /// allowlist. Returns `{ id, url, invoice, created }`.
     pub fn register_invoice(&self, merchant: &str, inv: Invoice, allowed: &dyn Fn(&PaymentRequirements) -> bool) -> Result<Value> {
         let rt = self.inv_rt()?;
         let now = self.clock.now_ms();
@@ -353,7 +384,7 @@ impl Facilitator {
             extra: vec![],
         })?;
         if rec.merchant != merchant {
-            // the same content registered by another merchant: the id is taken
+            // The same content registered by another merchant: the id is taken.
             return Err(X402Error::state(Diag::Replay, "this invoice is registered by another merchant"));
         }
         if created {
@@ -403,7 +434,8 @@ impl Facilitator {
             })
             .collect();
         let accepted: Vec<&crate::x402::ledger::Entry> = entries.iter().filter(|e| e.state == State::Accepted).collect();
-        // more than one settled attempt (only possible through a reorg race): the later ones are duplicates
+        // More than one settled attempt is possible only through a reorg race. The later ones are
+        // duplicates.
         for e in accepted.iter().skip(1) {
             extra.push(ExtraPayment {
                 kind: "duplicate".into(),
@@ -464,16 +496,17 @@ impl Facilitator {
     fn refuse(&self, rec: &InvoiceRecord, req: &FacilitatorRequest, kind: &str, err: X402Error) -> Result<SettlementResponse> {
         let rt = self.inv_rt()?;
         Metrics::inc(&self.metrics.invoice_refused);
-        // Verifying means looking the payer's addresses up on the node (up to eight, from hints the sender chose), and a paid or expired
-        // invoice is public: the evidence is kept only while the invoice has room for it, for a payment this invoice has not kept, and at
-        // most a burst per window per invoice (audit 2026-10-30 X5)
+        // Verifying looks the payer's addresses up on the node (up to eight, from hints the sender
+        // chose), and a paid or expired invoice is public. So evidence is kept only while the
+        // invoice has room for it, only for a payment this invoice has not kept, and at most a
+        // burst per window per invoice.
         let cur = rt.store.get(&rec.id).unwrap_or_else(|| rec.clone());
         if cur.extra.iter().filter(|e| e.kind != "released").count() >= rt.max_extra_payments {
             Metrics::inc(&self.metrics.invoice_evidence_dropped);
             return Err(err);
         }
-        // what the transaction says by itself, with no node read: a payment this invoice kept, or one that spends the very outputs of a kept
-        // one (a fee variant), leaves no new evidence
+        // What the transaction says by itself, with no node read: a payment this invoice kept, or
+        // one that spends the very outputs of a kept one (a fee variant), leaves no new evidence.
         let parsed = kob_x402::common::parse_tx(
             &kob_x402::verify::VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy },
             &req.payment_payload,
@@ -492,19 +525,22 @@ impl Facilitator {
         }
         let ctx = kob_x402::verify::VerifyCtx { chain: &*self.chain, clock: &*self.clock, policy: &self.policy };
         let rh = req.request_hash.clone().unwrap_or_default();
-        // A late payment's authorization may itself have expired: verify with the clock at the invoice's expiry
-        // would be a lie; only a currently valid payment is evidence worth keeping, others are rejected as they are.
+        // A late payment's authorization may itself have expired. Verifying with the clock at the
+        // invoice's expiry would be a lie, so only a currently valid payment is evidence worth
+        // keeping. Others are rejected as they are.
         let verified = kob_x402::verify::verify_payment(&ctx, &req.payment_requirements, &req.payment_payload, &rh);
         if let Ok(v) = verified {
-            // Kept once per funding (spent outputs) and at most `max_extra_payments` per invoice: anyone can submit refused payments
-            // (one funded output gives endless fee variants, each a new txid), and every kept one rewrites the record and
-            // joins the reconcile watch list. The caller holds the invoice lock: re-read the record under it.
+            // Kept once per funding (spent outputs) and at most `max_extra_payments` per invoice.
+            // Anyone can submit refused payments, and one funded output gives endless fee variants,
+            // each a new txid. Every kept one rewrites the record and joins the reconcile watch
+            // list. The caller holds the invoice lock, so re-read the record under it.
             let cur = rt.store.get(&rec.id).unwrap_or_else(|| rec.clone());
             let txid = hex(&v.txid);
             let mut spends: Vec<String> = v.consumed.iter().map(|o| o.to_string()).collect();
             spends.sort();
             let refused = cur.extra.iter().filter(|e| e.kind != "released").count();
-            // a fee variant of a kept payment spends the same outputs (only one of them can reach the chain)
+            // A fee variant of a kept payment spends the same outputs, and only one of them can
+            // reach the chain.
             let known = cur.extra.iter().any(|e| e.txid == txid || (!spends.is_empty() && e.spends == spends));
             if known || refused >= rt.max_extra_payments {
                 if !known {
@@ -562,8 +598,9 @@ impl Facilitator {
             request_hash: Some(id.clone()),
             resource: None,
         };
-        // Never wait for the lock: a payment of this invoice being decided (or observed, for up to the settle wait) answers
-        // every other request at once, so requests for one invoice cannot pile up behind it.
+        // Never wait for the lock. A payment of this invoice being decided (or observed, for up to
+        // the settle wait) answers every other request at once, so requests for one invoice cannot
+        // pile up behind it.
         let Some(_g) = self.invoice_locks.try_lock(&id) else {
             return Err(
                 X402Error::state(Diag::InvoicePending, "a payment of this invoice is being settled; check its status").retryable()
@@ -597,9 +634,10 @@ impl Facilitator {
         Ok(self.settle_for(&rec.merchant, &req, Some(&ctx)))
     }
 
-    /// C5 X-9: fails an `ambiguous` direct payment the node does not know (its outpoints are released) and, for an invoice
-    /// payment, keeps watching its merchant output as a `released` extra payment, so its late acceptance is still reported.
-    /// True when the entry was failed.
+    /// Fails an `ambiguous` direct payment the node does not know, which releases its outpoints.
+    ///
+    /// For an invoice payment it also keeps watching the merchant output as a `released` extra
+    /// payment, so a late acceptance is still reported. Returns true when the entry was failed.
     pub(super) fn release_ambiguous(&self, e: &crate::x402::ledger::Entry, now: u64) -> bool {
         let reason = "ambiguous: unknown to the node after the grace period (not in the mempool, merchant output not on chain); outpoints released";
         if self.ledger.transition(&e.txid, State::Failed, Some(reason.into()), now).is_err() {
