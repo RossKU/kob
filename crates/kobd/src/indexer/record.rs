@@ -638,8 +638,16 @@ pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
 /// There is one [`Leader`] per pinned token program that can read every span as its own state,
 /// each with the script public key it produces. Nothing is believed here: the caller keeps a state
 /// only where that script is the output's. The result is empty for any other payload.
-pub fn genesis_leaders(payload: &[u8]) -> Vec<Leader> {
+///
+/// It is empty too for a payload that names more states than the transaction has covenant outputs,
+/// `cov_outputs`: a genesis names one per token output. Each state is hashed under a token program
+/// of up to about 25 KB, and a payload of 255 states would cost some 20 MB of hashing per
+/// transaction, for about 29 KB of payload.
+pub fn genesis_leaders(payload: &[u8], cov_outputs: usize) -> Vec<Leader> {
     let Some(spans) = kob_protocol::genesis_states::decode(payload) else { return vec![] };
+    if spans.len() > cov_outputs {
+        return vec![];
+    }
     TemplateId::TOKEN_PROGRAMS
         .into_iter()
         .filter_map(|tid| {
@@ -664,6 +672,8 @@ pub struct PreTx {
     pub reveals: HashMap<u32, Option<Reveal>>,
     /// Authorising inputs of covenant outputs: their transfer leader, if they are one.
     pub leaders: HashMap<u32, Option<Leader>>,
+    /// The [`genesis_leaders`] of the payload, when an authorising input is no leader.
+    pub genesis: Option<Vec<Leader>>,
     /// `payload::recover_orders` of each single ORDER record of the payload, keyed by the
     /// single-record payload bytes.
     pub placements: HashMap<Vec<u8>, Result<Vec<payload::RecoveredOrder>, String>>,
@@ -694,6 +704,9 @@ impl PreTx {
                 .entry(c.authorizing_input)
                 .or_insert_with(|| tx.inputs.get(c.authorizing_input as usize).and_then(|i| leader_of(&i.signature_script.0)));
         }
+        if pre.leaders.values().any(Option::is_none) {
+            pre.genesis = Some(genesis_leaders(&tx.payload.0, cov_outputs(tx)));
+        }
         if has_kob1 {
             if let Ok(Some(p)) = payload::decode(&tx.payload.0) {
                 let shape = raw_record(tx);
@@ -706,6 +719,11 @@ impl PreTx {
         }
         Some(pre)
     }
+}
+
+/// The covenant outputs of a transaction.
+fn cov_outputs(tx: &Tx) -> usize {
+    tx.outputs.iter().filter(|o| o.covenant.is_some()).count()
 }
 
 /// The reduced shape of a raw transaction, as far as `processor::tx_json` reads it.
@@ -1008,8 +1026,11 @@ impl Extractor<'_> {
             // No leader: a token genesis names the states of its outputs in its payload instead
             // (`genesis_states`), as one list of candidate states per pinned token program. Each is
             // believed only if its P2SH is the output's script public key.
-            let genesis_cands: &[Leader] =
-                if leader.is_none() { genesis.get_or_insert_with(|| genesis_leaders(&tx.payload.0)).as_slice() } else { &[] };
+            let genesis_cands: &[Leader] = match (leader.is_none(), pre.and_then(|p| p.genesis.as_deref())) {
+                (false, _) => &[],
+                (true, Some(g)) => g,
+                (true, None) => genesis.get_or_insert_with(|| genesis_leaders(&tx.payload.0, cov_outputs(tx))).as_slice(),
+            };
             let want = parse_spk(&o.script_public_key.0);
             'found: for (li, (tid, states)) in leader.iter().chain(genesis_cands.iter()).enumerate() {
                 for (i, (s, spk)) in states.iter().enumerate() {
@@ -1271,6 +1292,17 @@ mod tests {
         let rec = ex.extract(&tx(outs.clone(), names(&[&mine, &wrong])), 0).unwrap().expect("one output is proven");
         assert_eq!(rec.holds, want[..1].to_vec());
         assert!(ex.extract(&tx(vec![outs[1].clone()], names(&[&mine, &wrong])), 0).unwrap().is_none());
+        // More names than covenant outputs: refused unhashed, even where one would prove its output.
+        assert!(ex.extract(&tx(vec![outs[0].clone()], names(&[&mine, &theirs])), 0).unwrap().is_none());
+        assert!(genesis_leaders(&names(&[&mine, &theirs]), 1).is_empty());
+        assert!(!genesis_leaders(&names(&[&mine, &theirs]), 2).is_empty());
+        // The parallel precompute does the hashing, and the database pass reads it.
+        let t = tx(outs.clone(), names(&[&mine, &theirs]));
+        let pre = PreTx::compute(&t).expect("covenant outputs");
+        assert_eq!(pre.genesis.as_ref().map(Vec::len), Some(genesis_leaders(&t.payload.0, 2).len()));
+        assert_eq!(ex.extract_with(&t, 0, Some(&pre)).unwrap().expect("relevant").holds, want);
+        let over = tx(vec![outs[0].clone()], names(&[&mine, &theirs]));
+        assert_eq!(PreTx::compute(&over).and_then(|p| p.genesis).map(|g| g.len()), Some(0));
         // The same state under another pinned program is another script: it is proven under THAT
         // program only.
         let look_alike =
