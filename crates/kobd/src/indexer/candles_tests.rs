@@ -1,6 +1,9 @@
-//! The maintained candle aggregates answer exactly what the fills do (the reference path, `market::scan_candles`): random histories
-//! with multi-fill transactions, several scales, reverts, a changed price basis and windows that start or end inside a bucket; and
-//! the same over a history of a million fills with the timings of every interval.
+//! Tests that the maintained candle aggregates answer exactly what the fills do.
+//!
+//! The reference is the fold of the fills, `market::scan_candles`. The tests cover random histories
+//! with multi-fill transactions, several scales, reverts, a changed price basis and windows that
+//! start or end inside a bucket. They also cover a history of a million fills, with the timings of
+//! every interval.
 
 use super::*;
 use crate::indexer::db::{open_memory, open_writer};
@@ -45,7 +48,10 @@ fn add_order(conn: &Connection, cov: u8, tok: u8, scale: i64, genesis_block: i64
     .unwrap();
 }
 
-/// One transaction of `fills` fills (order, side, amount, price) at `ts`, in block `seq`, marking the buckets as the processor does.
+/// Adds one transaction of `fills` fills at `ts`, in block `seq`, marking the buckets as the
+/// processor does.
+///
+/// A fill is (order, side, amount, price).
 fn add_tx(conn: &Connection, txid: u64, seq: i64, ts: i64, tok: u8, fills: &[(u8, i64, i64, i64)]) {
     for (cov, side, amount, price) in fills {
         crate::indexer::ids::intern(conn, &[tok; 32]).unwrap();
@@ -64,8 +70,10 @@ fn revert(conn: &Connection, seq: i64) {
     conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq]).unwrap();
 }
 
-/// The aggregates equal the reference over `[from, to)`; `None` from the aggregates is allowed only where the reference path is the
-/// designed answer (a window inside one bucket).
+/// The aggregates equal the reference over `[from, to)`.
+///
+/// `None` from the aggregates is allowed only where the reference path is the designed answer, for
+/// a window inside one bucket.
 fn same(conn: &Connection, tokens: &TokenAllowlist, tok: &Hash32, iv: i64, from: i64, to: i64, keep: usize) {
     let basis = token_basis(conn, tokens, tok).unwrap();
     let want = scan_candles(conn, tok, basis, iv, from, to, keep).unwrap();
@@ -83,7 +91,7 @@ fn random_histories_reverts_and_windows_match_the_reference() {
     for seed in 1..=6u64 {
         let conn = open_memory("testnet-10").unwrap();
         let mut r = Rng(seed * 7919);
-        // two tokens; token 1 has orders of two scales, so a fill converts
+        // Two tokens. Token 1 has orders of two scales, so a fill converts.
         add_order(&conn, 1, 1, 100_000_000, 1, 10);
         add_order(&conn, 2, 1, 1_000, 2, 20);
         add_order(&conn, 3, 2, 1_000_000, 1, 30);
@@ -93,7 +101,7 @@ fn random_histories_reverts_and_windows_match_the_reference() {
         let mut txid = 0u64;
         for step in 0..260 {
             if r.below(9) == 0 && !live_blocks.is_empty() {
-                // a reorg of the newest block (and sometimes the one before)
+                // A reorg of the newest block, and sometimes of the one before.
                 for _ in 0..1 + r.below(2) {
                     if let Some(s) = live_blocks.pop() {
                         revert(&conn, s);
@@ -102,7 +110,7 @@ fn random_histories_reverts_and_windows_match_the_reference() {
             } else {
                 seq += 1;
                 live_blocks.push(seq);
-                // time moves forward by anything from 0 ms (same bucket, same ts) to a few days
+                // Time moves forward by anything from 0 ms (same bucket, same ts) to a few days.
                 ts += match r.below(6) {
                     0 => 0,
                     1 => r.below(2_000) as i64,
@@ -131,7 +139,8 @@ fn random_histories_reverts_and_windows_match_the_reference() {
                 for t in [token(1), token(2)] {
                     for iv in IVS {
                         let end = ts + 1;
-                        // aligned windows ending at the newest bucket, and arbitrary (unaligned) ones
+                        // Aligned windows ending at the newest bucket, and arbitrary unaligned
+                        // ones.
                         let aligned_end = (ts.div_euclid(iv) + 1) * iv;
                         for keep in [1usize, 3, 500] {
                             same(&conn, &tokens, &t, iv, aligned_end - iv * 20, aligned_end, keep);
@@ -146,7 +155,7 @@ fn random_histories_reverts_and_windows_match_the_reference() {
                 }
             }
         }
-        // the whole history, by interval: the API view equals the reference too
+        // The whole history, by interval: the API view equals the reference too.
         for t in [token(1), token(2)] {
             for (name, iv) in [("1m", IVS[0]), ("5m", IVS[1]), ("1h", IVS[2]), ("1d", IVS[3])] {
                 let basis = token_basis(&conn, &tokens, &t).unwrap();
@@ -173,8 +182,10 @@ fn random_histories_reverts_and_windows_match_the_reference() {
     }
 }
 
-/// A token whose price basis changed (its first order is now one of another scale, as when its decimals become known) is answered
-/// from the fills until its next fill rebuilds the rows at the new basis; the numbers are the new basis's either way.
+/// A token whose price basis changed is answered from the fills until its next fill.
+///
+/// Its first order is now one of another scale, as when its decimals become known. The next fill
+/// rebuilds the rows at the new basis, and the numbers are the new basis's either way.
 #[test]
 fn a_changed_basis_is_never_answered_from_rows_of_the_old_one() {
     let tokens = TokenAllowlist::from_entries([]);
@@ -190,13 +201,13 @@ fn a_changed_basis_is_never_answered_from_rows_of_the_old_one() {
     assert_eq!(old, 1_000);
     assert_eq!(meta_basis(&conn, &t.0).unwrap(), Some(1_000));
     same(&conn, &tokens, &t, IVS[1], t0 - 1_000_000, t0 + 4_000_000, 500);
-    // an order of another scale, older than the first: the basis is now its scale
+    // An order of another scale, older than the first: the basis is now its scale.
     add_order(&conn, 2, 1, 100_000_000, 1, 10);
     let new = token_basis(&conn, &tokens, &t).unwrap();
     assert_eq!(new, 100_000_000);
     assert!(read(&conn, &t, new, IVS[1], t0 - 1_000_000, t0 + 4_000_000, 500).unwrap().is_none(), "the old rows do not answer");
     same(&conn, &tokens, &t, IVS[1], t0 - 1_000_000, t0 + 4_000_000, 500);
-    // the next fill rebuilds the token at the new basis
+    // The next fill rebuilds the token at the new basis.
     add_tx(&conn, 99, 99, t0 + 40 * 61_000, 1, &[(1, 1, 5, 1_300)]);
     refresh(&conn, &tokens).unwrap();
     assert_eq!(meta_basis(&conn, &t.0).unwrap(), Some(new));
@@ -225,9 +236,12 @@ fn a_lean_store_keeps_no_aggregates() {
     assert!(read(&conn, &t, 1_000, IVS[0], 0, 1 << 50, 5).unwrap().is_none());
 }
 
-/// A million fills (about 330,000 transactions of one token over eleven days): the backfill builds the rows, every interval's chart is
-/// the reference's byte for byte, and each takes well under 100 ms. `KOB_CANDLE_FILLS` sets the size (default 150,000 so that CI is
-/// quick; the soak-sized run is `KOB_CANDLE_FILLS=1000000 cargo test -p kobd --lib candles::tests::a_large -- --nocapture`).
+/// A million fills, about 330,000 transactions of one token over eleven days.
+///
+/// The backfill builds the rows, every interval's chart is the reference's byte for byte, and each
+/// takes well under 100 ms. `KOB_CANDLE_FILLS` sets the size. The default is 150,000 so that CI is
+/// quick. The soak-sized run is `KOB_CANDLE_FILLS=1000000 cargo test -p kobd --lib
+/// candles::tests::a_large -- --nocapture`.
 #[test]
 fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     use std::time::Instant;
@@ -235,10 +249,12 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("big.db");
     let conn = open_writer(&path, "testnet-10").unwrap();
-    // 300 orders over two scales for one token; the fills: three per transaction, one transaction a second
+    // 300 orders over two scales for one token. The fills are three per transaction, one
+    // transaction a second.
     let t0 = 1_700_000_000_000i64;
-    // the orders the fills name (their covenant ids are the zero-padded numbers below); an event refers to its order by `orders.id`, so
-    // the orders come first. Orders 1 and 3 (all-0x01 / all-0x03 ids) are the ones the later `add_tx` fills name.
+    // The orders the fills name. Their covenant ids are the zero-padded numbers below. An event
+    // refers to its order by `orders.id`, so the orders come first. Orders 1 and 3, with the
+    // all-0x01 and all-0x03 ids, are the ones the later `add_tx` fills name.
     let pinned = kob_protocol::artifacts::pinned_hash(kob_protocol::artifacts::TemplateId::KobBid).to_vec();
     let (pinned_id, maker_id, token_id) = (
         crate::indexer::ids::intern(&conn, &pinned).unwrap(),
@@ -254,7 +270,8 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
         params![pinned_id, token_id, maker_id],
     )
     .unwrap();
-    // after the 300 above in the first-order rule (genesis block 2), so the token's price basis is still theirs
+    // These come after the 300 above in the first-order rule (genesis block 2), so the token's
+    // price basis is still theirs.
     add_order(&conn, 1, 1, 1_000, 2, 1);
     add_order(&conn, 3, 1, 1_000, 2, 1);
     crate::indexer::ids::intern(&conn, &[1u8; 32]).unwrap();
@@ -304,18 +321,18 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
                 )
             );
         }
-        // the whole history, and an unaligned window
+        // The whole history, and an unaligned window.
         same(&conn, &tokens, &tok, iv, 0, end, 1_000_000);
         same(&conn, &tokens, &tok, iv, t0 + 12_345, t0 + 3 * iv + 777, 500);
     }
-    // the 24 h statistics read the newest 20,000 fills of the window at most
+    // The 24 h statistics read at most the newest 20,000 fills of the window.
     let ctx = reads::ReadCtx { node_daa: Some(1 << 40), settle_depth_daa: 10, now_unix: None };
     let t = Instant::now();
     let stats = crate::indexer::market::stats(&conn, &ctx, &tok, None).unwrap();
     let took = t.elapsed();
     eprintln!("candles  24h stats: {took:?} ({} trades in the window)", stats.trades_24h);
     assert!(took < std::time::Duration::from_secs(1), "stats took {took:?}");
-    // keeping up: a new transaction updates the buckets in a few queries
+    // Keeping up: a new transaction updates the buckets in a few queries.
     let t = Instant::now();
     let ts = t0 + (n as i64 / 3 + 5) * 1000;
     add_tx(&conn, 9_000_000, 9_000, ts, 1, &[(1, 1, 10, 1_500), (3, 2, 4, 1_400)]);
@@ -324,7 +341,7 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     for iv in IVS {
         same(&conn, &tokens, &tok, iv, ts - 3 * iv, ts + 10 * iv, 500);
     }
-    // a reorg of that block
+    // A reorg of that block.
     revert(&conn, 9_000);
     refresh(&conn, &tokens).unwrap();
     for iv in IVS {
@@ -332,8 +349,10 @@ fn a_large_history_is_charted_in_milliseconds_and_equals_the_reference() {
     }
 }
 
-/// A rollback to an earlier build (which writes fills without maintaining the aggregates) and a second upgrade: the stale rows are
-/// discarded and rebuilt at the start, never served.
+/// A rollback to a build that does not maintain the aggregates, and a second upgrade.
+///
+/// The rollback writes fills without touching the aggregates. At the start the stale rows are
+/// discarded and rebuilt, never served.
 #[test]
 fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at_the_next_start() {
     let tokens = TokenAllowlist::from_entries([]);
@@ -346,7 +365,7 @@ fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at
     refresh(&conn, &tokens).unwrap();
     let tok = token(1);
     assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default(), "up to date: nothing to do");
-    // the earlier build: a new fill and a reverted one, no aggregates touched
+    // The older build: a new fill and a reverted one, no aggregates touched.
     conn.execute("DELETE FROM order_events WHERE block_seq = 10", []).unwrap();
     conn.execute(
         "INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price, closes) \
@@ -354,7 +373,7 @@ fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at
         params![vec![1u8; 32], t0 + 700_000, vec![0xabu8; 32], vec![1u8; 32]],
     )
     .unwrap();
-    // the second upgrade: the stale rows are dropped and rebuilt
+    // The second upgrade: the stale rows are dropped and rebuilt.
     let report = backfill(&conn, &tokens).unwrap();
     assert_eq!(report.tokens, 1);
     for iv in IVS {
@@ -366,8 +385,11 @@ fn fills_written_by_a_build_that_does_not_maintain_the_aggregates_are_rebuilt_at
     assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default());
 }
 
-/// A change of the price rule rebuilds every token's rows, and a chart read while that runs is never empty, partial or answered from the
-/// fills: each token's rows are replaced in one transaction, nothing is deleted before (the public chart API stays continuous).
+/// A change of the price rule rebuilds every token's rows, and a chart read meanwhile is never
+/// empty, partial or answered from the fills.
+///
+/// Each token's rows are replaced in one transaction and nothing is deleted before, so the public
+/// chart API stays continuous.
 #[test]
 fn a_rule_rebuild_never_leaves_a_reader_without_the_old_rows() {
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -403,11 +425,11 @@ fn a_rule_rebuild_never_leaves_a_reader_without_the_old_rows() {
         reads
     });
     for _ in 0..5 {
-        // the rule marker of the earlier build: every token is rebuilt, one transaction each
+        // The rule marker of the older build: every token is rebuilt, one transaction each.
         conn.execute("DELETE FROM meta WHERE k = 'candles_rule'", []).unwrap();
         assert_eq!(backfill(&conn, &tokens).unwrap().tokens, 2);
         assert_eq!(meta_get(&conn, "candles_rule").unwrap().as_deref(), Some(PRICE_RULE));
-        // marked: the next start has nothing to do
+        // Marked: the next start has nothing to do.
         assert_eq!(backfill(&conn, &tokens).unwrap(), Backfill::default());
     }
     stop.store(true, Ordering::Relaxed);
