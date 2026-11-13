@@ -1,20 +1,24 @@
 //! Checking a window fetched from a node other than the primary (`rpc::multi`).
 //!
-//! The primary node is the authority for the selected chain: the follower plans its windows on the primary's chain hashes
-//! and takes every reorg decision from it. A window of transaction bodies may come from any configured node; before the
-//! follower sees it, it is checked against what the primary says and against the hashes it was asked for:
+//! The primary node is the authority for the selected chain. The follower plans its windows on
+//! the primary's chain hashes and takes every reorg decision from it. A window of transaction
+//! bodies may come from any configured node. Before the follower sees it, the window is checked
+//! against what the primary says and against the hashes it was asked for:
+//! - The chain blocks are the primary's (`getVirtualChainFromBlock` from the same start), with no
+//!   removed block.
+//! - Every chain block header hashes to the block hash it was asked for. `Full` verbosity carries
+//!   the whole header, so its DAA score, blue score and timestamp are the real ones.
+//! - Every chain block accepted exactly the transactions the primary reports for it, in the same
+//!   order. The primary's answer carries only the accepted transaction ids, which is far smaller
+//!   than the bodies.
+//! - Every transaction hashes to its id. `Full` verbosity carries the version, lock time,
+//!   subnetwork and gas, so the outpoints, outputs (covenant bindings included) and payload are
+//!   the real ones.
 //!
-//! * the chain blocks are the primary's (`getVirtualChainFromBlock` from the same start), with no removed block;
-//! * every chain block header hashes to the block hash it was asked for (`Full` verbosity carries the whole header), so its
-//!   DAA score, blue score and timestamp are the real ones;
-//! * every chain block accepted exactly the transactions the primary reports for it, in the same order (the primary's
-//!   accepted transaction ids, about 70 bytes per transaction against kilobytes for the bodies);
-//! * every transaction hashes to its id (`Full` verbosity carries the version, lock time, subnetwork and gas), so its
-//!   outpoints, outputs (covenant bindings included) and payload are the real ones.
-//!
-//! What no hash covers: signature scripts (outside the transaction id) and the spent outputs a node attaches to each input.
-//! The follower therefore takes those of every transaction that can matter to KOB from the primary before it applies the
-//! window (`indexer::trust`); for everything else a node could only alter data the indexer ignores.
+//! No hash covers the signature scripts, which are outside the transaction id, or the spent
+//! outputs a node attaches to each input. The follower therefore takes those of every transaction
+//! that can matter to KOB from the primary before it applies the window (`indexer::trust`). For
+//! every other transaction, a node could only alter data the indexer ignores.
 
 use crate::hex::Hash32;
 use crate::rpc::types::{ChainBlockHeader, ChainIds, RawChainBlock, RawVspcResponse, SpentUtxo, Tx, TxInput};
@@ -30,7 +34,7 @@ fn kh(h: Hash32) -> Hash {
     Hash::from_bytes(h.0)
 }
 
-/// The hash of a header with every field (`Full` verbosity); `None` when a field is missing.
+/// The hash of a header with every field (`Full` verbosity), or `None` when a field is missing.
 pub fn header_hash(h: &ChainBlockHeader) -> Option<Hash32> {
     let header = Header::new_finalized(
         h.version?,
@@ -49,13 +53,15 @@ pub fn header_hash(h: &ChainBlockHeader) -> Option<Hash32> {
     Some(Hash32(header.hash.as_bytes()))
 }
 
-/// Script public key from the wire form (version, two bytes big-endian, then the script).
+/// Script public key from the wire form: the version as two big-endian bytes, then the script.
 fn spk(b: &[u8]) -> Option<ScriptPublicKey> {
     let (v, script) = (b.get(..2)?, &b[2..]);
     Some(ScriptPublicKey::from_vec(u16::from_be_bytes([v[0], v[1]]), script.to_vec()))
 }
 
-/// The id of a transaction with every field the id covers (`Full` verbosity); `None` when a field is missing.
+/// The id of a transaction with every field the id covers (`Full` verbosity).
+///
+/// `None` when a field is missing.
 pub fn tx_id(t: &Tx) -> Option<Hash32> {
     let subnetwork: [u8; 20] = t.subnetwork_id.as_ref()?.0.as_slice().try_into().ok()?;
     let inputs = t
@@ -63,7 +69,7 @@ pub fn tx_id(t: &Tx) -> Option<Hash32> {
         .iter()
         .map(|i| {
             let op = TransactionOutpoint::new(kh(i.previous_outpoint.transaction_id), i.previous_outpoint.index);
-            // the id leaves out the signature script and the compute commitment
+            // The id leaves out the signature script and the compute commitment.
             Some(TransactionInput::new(op, vec![], i.sequence?, 0))
         })
         .collect::<Option<Vec<_>>>()?;
@@ -85,17 +91,21 @@ pub fn tx_id(t: &Tx) -> Option<Hash32> {
 /// Why a window from another node was not used.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rejection {
-    /// The node contradicts a hash or the primary's acceptance data for the same chain block: it lies (or is broken). It is
-    /// dropped.
+    /// The node contradicts a hash or the primary's acceptance data for the same chain block.
+    /// It lies or is broken, and it is dropped.
     Lie(String),
-    /// The node is on another chain than the primary right now (behind, or on a side of a reorg): not used for a while.
+    /// The node is on another chain than the primary right now, because it is behind or on a side
+    /// of a reorg. It is not used for a while.
     OutOfSync(String),
-    /// The primary itself no longer has `start` on its selected chain: the plan is stale (the follower re-plans).
+    /// The primary itself no longer has `start` on its selected chain. The plan is stale and the
+    /// follower re-plans.
     ChainMoved,
 }
 
-/// Check a `Full` window `raw` from another node against the primary's acceptance data `ids` from the same start. Returns
-/// how many leading chain blocks were verified (the caller drops the rest: blocks the primary did not report yet).
+/// Checks a `Full` window `raw` from another node against the primary's acceptance data `ids`.
+///
+/// Both are from the same start. Returns how many leading chain blocks were verified. The caller
+/// drops the rest, which are blocks the primary did not report yet.
 pub fn verify_window(raw: &RawVspcResponse, ids: &ChainIds) -> Result<usize, Rejection> {
     if !ids.removed_chain_block_hashes.is_empty() {
         return Err(Rejection::ChainMoved);
@@ -156,31 +166,43 @@ fn verify_block(hash: Hash32, blk: &RawChainBlock, expected: &[Hash32]) -> Resul
     Ok(())
 }
 
-/// How far the authority's answer `raw` (any verbosity) agrees with another node's acceptance data `ids` from the same start
-/// (`rpc::multi`, a resolver pair: the second node vouches for the authority's data before it is indexed).
+/// How far the authority's answer `raw` (any verbosity) agrees with another node's acceptance
+/// data `ids` from the same start.
+///
+/// This is the second node of a resolver pair vouching for the authority's data before it is
+/// indexed (`rpc::multi`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agreement {
-    /// Leading chain blocks of `raw` the indexer may apply: all of them when nothing is contradicted (blocks the other node
-    /// does not report yet, being a little behind, contradict nothing), else those before the first contradiction.
+    /// Leading chain blocks of `raw` the indexer may apply.
+    ///
+    /// That is all of them when nothing is contradicted. Blocks the other node does not report
+    /// yet, because it is a little behind, contradict nothing. Otherwise it is the blocks before
+    /// the first contradiction.
     pub keep: usize,
-    /// The first contradiction: another chain block at the same position of the selected chain, other accepted transactions
-    /// for the same chain block, or a disagreement about whether the start left the selected chain.
+    /// The first contradiction.
+    ///
+    /// It is another chain block at the same position of the selected chain, other accepted
+    /// transactions for the same chain block, or a disagreement about whether the start left the
+    /// selected chain.
     pub contradiction: Option<String>,
-    /// The contradiction is only a different chain block among the newest ones both nodes report (their tips differ for a
-    /// moment: not yet agreed, not a contradiction of agreed history). Always false without a contradiction.
+    /// The contradiction is only a different chain block among the newest ones both nodes report.
+    ///
+    /// Their tips differ for a moment, so it is not yet agreed and not a contradiction of agreed
+    /// history. Always false without a contradiction.
     pub at_tip: bool,
 }
 
-/// How many of the newest chain blocks both nodes report may differ without it being a contradiction of agreed history.
+/// How many of the newest chain blocks may differ between the nodes without contradicting
+/// agreed history.
 pub const TIP_BLOCKS: usize = 10;
 
-/// The [`Agreement`] of `raw` with `ids`.
+/// Compares `raw` with `ids` and returns their [`Agreement`].
 pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
     let all = raw.added_chain_block_hashes.len().min(raw.chain_block_accepted_transactions.len());
     if raw.removed_chain_block_hashes != ids.removed_chain_block_hashes {
         return Agreement {
             keep: 0,
-            // a shallow difference at the cursor is a reorg one node has seen before the other (the tips differing)
+            // A shallow difference at the cursor is a reorg one node has seen before the other.
             at_tip: raw.removed_chain_block_hashes.len().max(ids.removed_chain_block_hashes.len()) <= TIP_BLOCKS,
             contradiction: Some(format!(
                 "the start left the selected chain for one node ({} removed blocks) and not for the other ({})",
@@ -221,7 +243,8 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
 
 fn spent_eq(a: Option<&SpentUtxo>, b: Option<&SpentUtxo>) -> bool {
     match (a, b) {
-        // the DAA score of the creating block is not used (and reported null) and may differ between verbosity levels
+        // The DAA score of the creating block is not used and is reported null.
+        // It may differ between verbosity levels.
         (Some(a), Some(b)) => a.amount == b.amount && a.script_public_key == b.script_public_key && a.covenant_id == b.covenant_id,
         (None, None) => true,
         _ => false,
@@ -239,9 +262,12 @@ fn input_eq(a: &TxInput, b: &TxInput) -> bool {
         && spent_eq(spent(a), spent(b))
 }
 
-/// The first difference between the same chain block from another node (`a`, `Full`) and from the primary (`b`, `High`), in
-/// everything the indexer reads: the header fields it stores, and per transaction the id, inputs (signature scripts and
-/// spent outputs included), outputs and payload. `None`: they agree.
+/// The first difference between the same chain block from another node (`a`, `Full`) and from the
+/// primary (`b`, `High`), or `None` when they agree.
+///
+/// It compares everything the indexer reads. That is the header fields it stores, and per
+/// transaction the id, the inputs (signature scripts and spent outputs included), the outputs
+/// and the payload.
 pub fn body_difference(a: &RawChainBlock, b: &RawChainBlock) -> Option<String> {
     let (ha, hb) = (&a.chain_block_header, &b.chain_block_header);
     if (ha.hash, ha.daa_score, ha.blue_score, ha.timestamp) != (hb.hash, hb.daa_score, hb.blue_score, hb.timestamp) {
@@ -298,8 +324,8 @@ mod tests {
         }
     }
 
-    /// The id is the consensus id of the same transaction built with the consensus types (v0 and v1), and every field the
-    /// id covers changes it; the signature script does not.
+    /// The id is the consensus id of the same transaction built with the consensus types (v0 and
+    /// v1). Every field the id covers changes it, and the signature script does not.
     #[test]
     fn tx_ids_follow_consensus() {
         for version in [0u16, 1] {
@@ -361,18 +387,19 @@ mod tests {
         }
     }
 
-    /// A different chain block among the newest ones both report is the tips differing for a moment (`at_tip`); one deep
-    /// inside the answer, a different accepted set or a deep reorg seen by one side only are contradictions of agreed history.
+    /// A different chain block among the newest ones both report is the tips differing for a
+    /// moment (`at_tip`). A different block deep inside the answer, a different accepted set, or
+    /// a deep reorg seen by one side only are contradictions of agreed history.
     #[test]
     fn a_disagreement_at_the_newest_blocks_is_told_from_one_in_agreed_history() {
-        // the last of five differs (the live case: applied 4 of 5)
+        // The last of five differs.
         let a = agreement(&raw(&[1, 2, 3, 4, 5]), &ids(&[1, 2, 3, 4, 9]));
         assert_eq!((a.keep, a.at_tip), (4, true));
         assert!(a.contradiction.is_some());
-        // the very next block differs in a short answer: nothing applied, still the tips
+        // The very next block differs in a short answer: nothing applied, still the tips.
         let a = agreement(&raw(&[1, 2]), &ids(&[7, 8]));
         assert_eq!((a.keep, a.at_tip), (0, true));
-        // as deep as TIP_BLOCKS is still the tip, one deeper is history
+        // As deep as TIP_BLOCKS is still the tip, one deeper is history.
         let long: Vec<u8> = (1..=40).collect();
         let mut other = long.clone();
         other[40 - TIP_BLOCKS] = 200;
@@ -381,16 +408,17 @@ mod tests {
         other[40 - TIP_BLOCKS - 1] = 200;
         let a = agreement(&raw(&long), &ids(&other));
         assert_eq!((a.keep, a.at_tip), (40 - TIP_BLOCKS - 1, false));
-        // the other node is behind: nothing contradicted
+        // The other node is behind: nothing contradicted.
         let a = agreement(&raw(&[1, 2, 3]), &ids(&[1, 2]));
         assert_eq!((a.keep, a.contradiction, a.at_tip), (3, None, false));
-        // the same chain block with other accepted transactions is never a tip effect
+        // The same chain block with other accepted transactions is never a tip effect.
         let mut r = raw(&[1, 2, 3]);
         r.chain_block_accepted_transactions[2].accepted_transactions.push(Tx::default());
         let a = agreement(&r, &ids(&[1, 2, 3]));
         assert_eq!((a.keep, a.at_tip), (2, false));
         assert!(a.contradiction.is_some());
-        // a start that left the selected chain for one node only: a shallow reorg is the tips again, a deep one is history
+        // A start that left the selected chain for one node only.
+        // A shallow reorg is the tips again, a deep one is history.
         let mut r = raw(&[1]);
         r.removed_chain_block_hashes = vec![h(5)];
         let a = agreement(&r, &ids(&[1]));
