@@ -1226,7 +1226,7 @@ committed batch, revert, operator import and possibly-frozen flag). The key is t
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
 byte for byte what the request would have computed.
 Concurrent requests of one key wait for one read; a failed read is not kept. At most 1,024 bodies and 32 MiB per generation are
-held. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
+held; a new key past either bound evicts the least recently used bodies. This is invisible to clients except as lower latency: it adds no header and no staleness beyond the store's own.
 
 ### 5.7 Cache-Control
 

@@ -1886,7 +1886,8 @@ possibly-frozen flag, so between two commits every client of a market gets the s
 the request's parameters and, for the reads that depend on the clock, the node's DAA score and the wall-clock second, so a
 kept body is byte for byte what the request would have read. Concurrent requests of one key wait for one read; a read that
 fails or whose client went away is not kept. Memory: at most 1,024 bodies and 32 MiB per generation, the previous
-generation's dropped. Measured through the API router on the soak copy, sixteen concurrent identical requests: 500 hourly
+generation's dropped; a new key past either bound evicts the least recently used bodies, so distinct parameters never
+flush the hot reads. Measured through the API router on the soak copy, sixteen concurrent identical requests: 500 hourly
 candles 0.61 s for all (16 distinct ones: 4.2 s), stats 71 ms, tokens 51 ms, books 4 ms (16 distinct depths: 71 ms).
 
 **Read pool.** `api.read_pool_size` connections (default 4) serve every read; one more, the **light lane**

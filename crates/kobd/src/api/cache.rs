@@ -7,9 +7,10 @@
 //! answer is byte for byte the one the request would have computed. Concurrent requests of one key compute it once (the
 //! others wait for it); a read that fails, or whose client goes away, is not kept and the next request computes it again.
 //!
-//! Memory is bounded: a new generation drops the previous one's entries, and a generation that reaches [`MAX_ENTRIES`] or
-//! [`MAX_BYTES`] (many distinct parameters, or a store that has not committed for a long time while the clock moved) starts
-//! over empty.
+//! Memory is bounded: a new generation drops the previous one's entries, and within a generation at most [`MAX_ENTRIES`]
+//! responses and [`MAX_BYTES`] bytes are kept. A new key past either bound evicts the least recently used entries, so many
+//! distinct parameters (or a store that has not committed for a long time while the clock moved) push out the rare keys and
+//! never the hot ones.
 
 use axum::body::Bytes;
 use std::collections::HashMap;
@@ -28,11 +29,32 @@ pub struct ResponseCache {
     inner: Mutex<Inner>,
 }
 
+/// One kept response: the cell its requests share, when it was last asked for, and its size once computed.
+struct Entry {
+    cell: Arc<OnceCell<Bytes>>,
+    used: u64,
+    bytes: usize,
+}
+
 #[derive(Default)]
 struct Inner {
     generation: u64,
-    cells: HashMap<String, Arc<OnceCell<Bytes>>>,
+    cells: HashMap<String, Entry>,
     bytes: usize,
+    /// A counter of the lookups, the recency of [`Entry::used`].
+    tick: u64,
+}
+
+impl Inner {
+    /// Evicts the least recently used entries until a new one fits both bounds.
+    fn make_room(&mut self) {
+        while !self.cells.is_empty() && (self.cells.len() >= MAX_ENTRIES || self.bytes >= MAX_BYTES) {
+            let Some(oldest) = self.cells.iter().min_by_key(|(_, e)| e.used).map(|(k, _)| k.clone()) else { break };
+            if let Some(e) = self.cells.remove(&oldest) {
+                self.bytes = self.bytes.saturating_sub(e.bytes);
+            }
+        }
+    }
 }
 
 impl ResponseCache {
@@ -45,12 +67,24 @@ impl ResponseCache {
     {
         let cell = {
             let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if generation > g.generation || g.cells.len() >= MAX_ENTRIES || g.bytes >= MAX_BYTES {
-                g.generation = g.generation.max(generation);
+            if generation > g.generation {
+                g.generation = generation;
                 g.cells.clear();
                 g.bytes = 0;
             }
-            (generation == g.generation).then(|| g.cells.entry(key).or_default().clone())
+            if generation == g.generation {
+                g.tick += 1;
+                let tick = g.tick;
+                if !g.cells.contains_key(&key) {
+                    g.make_room();
+                    g.cells.insert(key.clone(), Entry { cell: Arc::default(), used: tick, bytes: 0 });
+                }
+                let e = g.cells.get_mut(&key).expect("present");
+                e.used = tick;
+                Some(e.cell.clone())
+            } else {
+                None
+            }
         };
         let Some(cell) = cell else { return compute().await };
         let mut computed = false;
@@ -63,7 +97,10 @@ impl ResponseCache {
             .clone();
         if computed {
             let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            if g.generation == generation {
+            let g = &mut *g;
+            // Counted only while the entry is still the one computed (not evicted or dropped with its generation).
+            if let Some(e) = g.cells.get_mut(&key).filter(|e| Arc::ptr_eq(&e.cell, &cell)) {
+                e.bytes = body.len();
                 g.bytes = g.bytes.saturating_add(body.len());
             }
         }
@@ -73,7 +110,13 @@ impl ResponseCache {
     /// Entries kept now.
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).cells.values().filter(|c| c.initialized()).count()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).cells.values().filter(|c| c.cell.initialized()).count()
+    }
+
+    /// Bytes kept now.
+    #[cfg(test)]
+    fn bytes(&self) -> usize {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).bytes
     }
 }
 
@@ -147,10 +190,45 @@ mod tests {
         for i in 0..MAX_ENTRIES + 10 {
             c.get_or_compute(7, format!("k{i}"), || async { body("v") }).await.unwrap();
         }
-        assert!(c.len() <= MAX_ENTRIES, "{}", c.len());
+        assert_eq!(c.len(), MAX_ENTRIES);
         let big = Bytes::from(vec![0u8; MAX_BYTES]);
         c.get_or_compute(7, "big".into(), || async { Ok::<_, ()>(big.clone()) }).await.unwrap();
+        assert!(c.bytes() >= MAX_BYTES);
         c.get_or_compute(7, "next".into(), || async { body("v") }).await.unwrap();
-        assert_eq!(c.len(), 1, "the byte bound started the generation over");
+        assert!(c.bytes() < MAX_BYTES, "the byte bound evicted down to fit: {}", c.bytes());
+        assert!(c.len() <= MAX_ENTRIES);
+    }
+
+    /// Many distinct keys evict the least recently used entries one by one, never the whole cache: a key that keeps being
+    /// asked for stays, computed once.
+    #[tokio::test]
+    async fn distinct_keys_evict_the_least_recently_used_and_keep_the_hot_ones() {
+        let c = ResponseCache::default();
+        let hot = AtomicUsize::new(0);
+        let get_hot = || async {
+            c.get_or_compute(3, "hot".into(), || async {
+                hot.fetch_add(1, Ordering::SeqCst);
+                body("h")
+            })
+            .await
+            .unwrap()
+        };
+        for i in 0..3 * MAX_ENTRIES {
+            c.get_or_compute(3, format!("k{i}"), || async { body("v") }).await.unwrap();
+            assert_eq!(get_hot().await, "h");
+        }
+        assert_eq!(hot.load(Ordering::SeqCst), 1, "the hot key was never evicted");
+        assert_eq!(c.len(), MAX_ENTRIES);
+        // The newest of the cold keys are still kept and the oldest are gone.
+        let runs = AtomicUsize::new(0);
+        for k in [format!("k{}", 3 * MAX_ENTRIES - 1), "k0".to_string()] {
+            c.get_or_compute(3, k, || async {
+                runs.fetch_add(1, Ordering::SeqCst);
+                body("v")
+            })
+            .await
+            .unwrap();
+        }
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "only the evicted k0 was computed again");
     }
 }
