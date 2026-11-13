@@ -1,17 +1,22 @@
-//! The `kobd match` / `keep` loop.
+//! The `kobd match` and `kobd keep` loop.
 //!
-//! One [`Runner::step`] per tick (default 1 s, `docs/spec/matcher.md` §3):
+//! The runner takes one [`Runner::step`] per tick, every second by default
+//! (`docs/spec/matcher.md` §3):
 //!
-//! 1. node: synced? virtual DAA score; acceptance of our transactions from the VSPC v2 cursor
-//!    (reorgs roll back to pending, final after `final_depth` DAA);
-//! 2. book: a fresh snapshot from the [`BookSource`] (the indexer's [`OrderBookView`]);
-//! 3. funding: the operator's P2PK UTXOs from the node, minus everything pending transactions spend;
-//! 4. matcher tick (plans, chains, engine-validated transactions) and keeper tick;
-//! 5. submission through the [`Tracker`]: benign double spends back off, nothing is replaced
-//!    blindly, chained steps are only sent after their parent was accepted into the mempool; a kill or refund
-//!    of this process that stays unaccepted is rebuilt at a higher rate and replaced ([`Runner::replace_stuck`]).
+//! 1. Node. Whether it is synced, its virtual DAA score, and the acceptance of our transactions
+//!    from the VSPC v2 cursor. A reorg rolls a transaction back to pending, and it is final after
+//!    `final_depth` DAA.
+//! 2. Book. A fresh snapshot from the [`BookSource`], the indexer's [`OrderBookView`].
+//! 3. Funding. The operator's P2PK UTXOs from the node, minus everything pending transactions
+//!    spend.
+//! 4. The matcher tick, which plans, chains and validates transactions in the engine, and the
+//!    keeper tick.
+//! 5. Submission through the [`Tracker`]. Benign double spends back off, and nothing is replaced
+//!    blindly. A chained step is sent only after its parent was accepted into the mempool. A kill
+//!    or refund of this process that stays unaccepted is rebuilt at a higher rate and replaced
+//!    ([`Runner::replace_stuck`]).
 //!
-//! The kill switch is a file (`--pause-file`): while it exists nothing is built or submitted,
+//! The kill switch is a file (`--pause-file`). While it exists nothing is built or submitted, and
 //! acceptance tracking continues.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,8 +34,10 @@ use super::submit::{ResendClock, Tracked, Tracker, TrackerConfig};
 use super::wallet::{address_of, p2pk_spk_string, Signer};
 use crate::keepers::{tick_with_subsidy as keeper_tick, JobKind, KeeperConfig, KeeperInput, SubsidyAllowance, SubsidyBudget};
 
-/// An event at DEBUG when `$quiet` holds, at INFO otherwise: what a dry run builds again on every tick is detail, what a live
-/// run submits is a state change (the log keeps the periodic status line and the state changes at INFO, as kaspad does).
+/// An event at DEBUG when `$quiet` holds, and at INFO otherwise.
+///
+/// What a dry run builds again on every tick is detail, and what a live run submits is a state
+/// change. As in kaspad, the log keeps the periodic status line and the state changes at INFO.
 macro_rules! info_unless {
     ($quiet:expr, $($t:tt)*) => {
         if $quiet {
@@ -41,7 +48,9 @@ macro_rules! info_unless {
     };
 }
 
-/// A read of the book that blocks on a database: the runner runs it on the blocking thread pool, never on a runtime worker.
+/// A read of the book that blocks on a database.
+///
+/// The runner runs it on the blocking thread pool, never on a runtime worker.
 pub type BookRead = Box<dyn FnOnce() -> anyhow::Result<MemoryBook> + Send>;
 
 /// Where the book comes from each tick.
@@ -49,91 +58,118 @@ pub trait BookSource: Send {
     /// A consistent snapshot of the listed orders and the operator's tokens.
     fn snapshot(&mut self, operator: &[u8; 32]) -> anyhow::Result<MemoryBook>;
 
-    /// [`BookSource::snapshot`] as a read the runner runs on the blocking thread pool (a source that reads a database:
-    /// the indexer's store). `None`, the default: the runner calls `snapshot` in place (a file, a memory book).
+    /// [`BookSource::snapshot`] as a read that the runner runs on the blocking thread pool.
+    ///
+    /// A source that reads a database, such as the indexer's store, returns one. `None`, the
+    /// default, makes the runner call `snapshot` in place, for a file or a memory book.
     fn snapshot_read(&mut self, _operator: &[u8; 32]) -> Option<BookRead> {
         None
     }
 
-    /// `Err(why)` while the source lags the chain (the indexer after a restart, catching up, or cut off from the node): the
-    /// runner plans nothing (matcher, keepers, maintenance) and keeps tracking acceptance. The default: always ready.
+    /// `Err(why)` while the source lags the chain.
+    ///
+    /// That is the indexer after a restart, while it catches up, or while it is cut off from the
+    /// node. The runner then plans nothing, for the matcher, the keepers or maintenance, and keeps
+    /// tracking acceptance. The default is always ready.
     fn ready(&mut self) -> Result<(), String> {
         Ok(())
     }
 
-    /// Called with the id of a transaction just before it is submitted, so a source that follows the
-    /// chain itself (the indexer) sees its acceptance even if a block arrives within milliseconds.
+    /// Called with the id of a transaction just before it is submitted.
+    ///
+    /// So a source that follows the chain itself, the indexer, sees its acceptance even if a block
+    /// arrives within milliseconds.
     fn watch(&mut self, _txid: [u8; 32]) {}
 
-    /// Where the selected chain accepts each of `tracked` now (transaction id to accepting chain block
-    /// and its DAA score; absent: not accepted), when the source follows the chain itself. `None`: the
-    /// source does not, and the runner follows acceptance through the node (`getVirtualChainFromBlockV2`).
-    /// In-process the indexer answers, so there is exactly one VSPC follower and one truth about which
-    /// transactions are accepted: the one the book was built from.
+    /// Where the selected chain accepts each of `tracked` now, when the source follows the chain.
+    ///
+    /// The map goes from transaction id to the accepting chain block and its DAA score, and a
+    /// missing id is not accepted. `None` means the source does not follow the chain, and the
+    /// runner follows acceptance through the node (`getVirtualChainFromBlockV2`). In-process the
+    /// indexer answers. So there is exactly one VSPC follower and one truth about which
+    /// transactions are accepted, the one the book was built from.
     fn acceptance(&mut self, _tracked: &[[u8; 32]]) -> Option<BTreeMap<[u8; 32], (String, u64)>> {
         None
     }
 
-    /// Live orders the indexer proved but does not LIST (a token outside the allowlist, an exit of an unlisted entry, a carrier
-    /// below the listing minimum, ...): never matched, but the keepers kill, refund and close them when that pays (their
-    /// makers would otherwise wait for nobody; the maker's own cancel works either way). Besides the snapshot's own
-    /// `keeper_only` (the indexer's snapshot and a `--book-file` carry them there). The default: none.
+    /// Live orders the indexer proved but does not list.
+    ///
+    /// Examples are a token outside the allowlist, an exit of an unlisted entry, or a carrier below
+    /// the listing minimum. They are never matched, but the keepers kill, refund and close them
+    /// when that pays. Otherwise their makers would wait for nobody, though the maker's own cancel
+    /// works either way. They come in addition to the snapshot's own `keeper_only`, where the
+    /// indexer's snapshot and a `--book-file` carry them. The default is none.
     fn keeper_only_orders(&mut self) -> Vec<ListedOrder> {
         vec![]
     }
 
-    /// The operator's own key-owned token UTXOs (accepted, with their programs) for the maintenance jobs
-    /// ([`crate::maintenance`]). The default: none (no maintenance).
+    /// The operator's own key-owned token UTXOs, accepted and with their programs.
+    ///
+    /// The maintenance jobs use them ([`crate::maintenance`]). The default is none, so no
+    /// maintenance.
     fn operator_tokens(&mut self, _operator: &[u8; 32]) -> Vec<crate::maintenance::OwnToken> {
         vec![]
     }
 
-    /// The tick's outcome for orders a token program may refuse to move: `flagged` (id, reason) failed their engine
-    /// pre-simulation at the token program, `cleared` passed it. A source that stores the flag ("possibly frozen") keeps it
-    /// off the books; the default ignores both.
+    /// The tick's outcome for orders that a token program may refuse to move.
+    ///
+    /// `flagged` lists (id, reason) of the orders whose engine pre-simulation failed at the token
+    /// program, and `cleared` those whose pre-simulation passed. A source that stores the flag
+    /// ("possibly frozen") keeps the order off the books. The default ignores both.
     fn report_frozen(&mut self, _daa: u64, _flagged: &[(CovId, String)], _cleared: &[CovId]) {}
 
-    /// Extra Prometheus lines for the metrics file (the in-process indexer's follower state). The default: none.
+    /// Extra Prometheus lines for the metrics file, such as the in-process indexer's follower
+    /// state.
+    ///
+    /// The default is none.
     fn metrics(&mut self) -> String {
         String::new()
     }
 
-    /// The book's part of the console status line ([`status_line`]; the in-process indexer's state and lag). The default:
-    /// none.
+    /// The book's part of the console status line ([`status_line`]).
+    ///
+    /// For the in-process indexer it is its state and lag. The default is none.
     fn status(&mut self) -> Option<String> {
         None
     }
 
-    /// Why the process should end so that a supervisor restarts it (the in-process indexer halted or cannot write its
-    /// database, or its read API stopped, `HealthSnapshot::halted`): `(at once, why)`. The runner exits with an error when
-    /// it lasts `RunConfig::halt_exit_after` (at once for the first element true). The default: never.
+    /// Why the process should end so that a supervisor restarts it, as `(at once, why)`.
+    ///
+    /// The causes are an in-process indexer that halted or cannot write its database, or a read
+    /// API that stopped (`HealthSnapshot::halted`). The runner exits with an error when the cause
+    /// lasts `RunConfig::halt_exit_after`, or at once when the first element is true. The default
+    /// is never.
     fn fatal(&mut self) -> Option<(bool, String)> {
         None
     }
 
-    /// The runner's facts after each step, for `/v1/health` (`executor`) and the runner's metrics for `/v1/metrics` (the
-    /// in-process indexer's API serves them). The default: dropped.
+    /// The runner's facts after each step, for `/v1/health` (`executor`) and `/v1/metrics`.
+    ///
+    /// The in-process indexer's API serves them. The default drops them.
     fn report_executor(&mut self, _health: crate::indexer::status::ExecutorHealth, _metrics: String) {}
 }
 
 /// How long the step in flight may go on once the runner was asked to stop ([`Runner::run`]).
 pub const STEP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// DAA scores (10 per second) an order whose planning panicked, or that the builder refused on its own, stays out of the
-/// book: one hour.
+/// DAA scores that a quarantined order stays out of the book, one hour at 10 per second.
+///
+/// An order is quarantined when its planning panicked or the builder refused it on its own.
 pub const QUARANTINE_DAA: u64 = 36_000;
 
-/// DAA scores (10 per second) before an order flagged possibly frozen is probed again: 5 minutes.
+/// DAA scores before an order flagged possibly frozen is probed again, 5 minutes at 10 per second.
 pub const FROZEN_RECHECK_DAA: u64 = 3_000;
 
-/// DAA scores (10 per second) a keeper job that failed to build stays out of the keepers' queue the first time: 1 minute,
-/// doubling with every further failure of the same order outpoint up to [`KEEPER_FAILED_MAX_DAA`].
+/// DAA scores that a keeper job which failed to build first stays out of the keepers' queue.
+///
+/// That is 1 minute at 10 per second. It doubles with every further failure of the same order
+/// outpoint, up to [`KEEPER_FAILED_MAX_DAA`].
 pub const KEEPER_FAILED_RECHECK_DAA: u64 = 600;
 
-/// Longest keeper backoff of an order outpoint whose jobs keep failing: one hour.
+/// Longest keeper backoff of an order outpoint whose jobs keep failing, one hour.
 pub const KEEPER_FAILED_MAX_DAA: u64 = 36_000;
 
-/// Any [`OrderBookView`] (the indexer in-process) is a book source.
+/// Any [`OrderBookView`], such as the in-process indexer, as a book source.
 pub struct ViewSource<V: OrderBookView + Send>(pub V);
 
 impl<V: OrderBookView + Send> BookSource for ViewSource<V> {
@@ -147,13 +183,17 @@ impl<V: OrderBookView + Send> BookSource for ViewSource<V> {
     }
 }
 
-/// A JSON snapshot file ([`MemoryBook`]), re-read when it changes (written by an indexer export).
+/// A JSON snapshot file ([`MemoryBook`]), read again when it changes.
+///
+/// An indexer export writes it.
 pub struct FileSource {
+    /// Path of the snapshot file.
     pub path: PathBuf,
     cached: Option<(SystemTime, MemoryBook)>,
 }
 
 impl FileSource {
+    /// A source that reads the snapshot file at `path`.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         FileSource { path: path.into(), cached: None }
     }
@@ -182,14 +222,18 @@ impl BookSource for FileSource {
 /// Roles of the process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Roles {
+    /// The process matches orders.
     pub matcher: bool,
+    /// The process runs the keepers.
     pub keeper: bool,
 }
 
 impl Roles {
-    /// The roles of `kobd --executor` as `/v1/health` names them (`HealthSnapshot::roles`): `executor` while the matcher or
-    /// the keepers work, and `indexer` when the store keeps the history (`lean = false`): over a lean store the process is the
-    /// Executor alone, over a full one it is the Executor and the Indexer.
+    /// The roles of `kobd --executor` as `/v1/health` names them (`HealthSnapshot::roles`).
+    ///
+    /// They are `executor` while the matcher or the keepers work, and `indexer` when the store
+    /// keeps the history (`lean = false`). So over a lean store the process is the Executor alone,
+    /// and over a full one it is the Executor and the Indexer.
     pub fn health_roles(self, lean: bool) -> Vec<&'static str> {
         let mut v = vec![];
         if self.matcher || self.keeper {
@@ -205,54 +249,77 @@ impl Roles {
 /// Loop settings.
 #[derive(Clone, Debug)]
 pub struct RunConfig {
+    /// The network the process runs on.
     pub network: String,
+    /// Roles of the process.
     pub roles: Roles,
+    /// Matcher engine settings.
     pub engine: EngineConfig,
+    /// Keeper settings.
     pub keeper: KeeperConfig,
-    /// The operator's own tokens: merge and sell (`crate::maintenance`), with the matcher role.
+    /// Merges and sales of the operator's own tokens (`crate::maintenance`), with the matcher role.
     pub maintenance: crate::maintenance::MaintenanceConfig,
+    /// Submission and acceptance tracking settings.
     pub tracker: TrackerConfig,
     /// Build and validate, never submit.
     pub dry_run: bool,
+    /// Time between steps.
     pub tick: Duration,
     /// Kill switch: while this file exists nothing is built or submitted.
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`*.prom`).
     pub metrics_file: Option<PathBuf>,
-    /// Where the surplus-inventory policy's use of its period is kept (`maxFee`, `tokens[].maxAmount`), so a restart does
-    /// not start the budgets again. `None`: in memory only.
+    /// Where the surplus-inventory policy's use of its period is kept.
+    ///
+    /// The use is of `maxFee` and `tokens[].maxAmount`, so a restart does not start the budgets
+    /// again. `None` keeps it in memory only.
     pub inventory_state: Option<PathBuf>,
-    /// Alert threshold: funding below this many sompi is reported (`kob_operator_low_funds`).
+    /// Alert threshold. Funding below this many sompi is reported (`kob_operator_low_funds`).
     pub low_funds: u64,
-    /// Plan nothing while the book is more than this many DAA behind the node (a lagging indexer would
-    /// offer spent orders). Acceptance tracking continues. `None`: no check (snapshot files).
+    /// Plan nothing while the book is more than this many DAA behind the node.
+    ///
+    /// A lagging indexer would offer spent orders. Acceptance tracking continues. `None` means no
+    /// check, for snapshot files.
     pub max_book_lag: Option<u64>,
-    /// Ask the node which listed orders it still holds ([`gone_orders`]) only while the book is at least this many DAA behind
-    /// the node (10 per second): the query costs a node round trip every tick, which loses races to other executors, and it
-    /// only matters while the book can list orders the chain has already spent. 0: ask every step.
+    /// Lag of the book behind the node, in DAA, from which the node is asked which listed orders it
+    /// still holds ([`gone_orders`]).
+    ///
+    /// The query costs a node round trip every tick, which loses races to other executors. It
+    /// only matters while the book can list orders the chain has already spent. 0 asks every step.
     pub verify_live_min_lag: u64,
-    /// The fee policy (`crate::fee`): each step that plans reads the node's fee estimate (at most every `refresh_ms`) and
-    /// sets the tick's rates of the matcher, the keepers and the maintenance jobs. Their configured `fee_rate`s stay the
-    /// lowest rate each pays.
+    /// The fee policy (`crate::fee`).
+    ///
+    /// Each step that plans reads the node's fee estimate, at most every `refresh_ms`. It sets the
+    /// tick's rates of the matcher, the keepers and the maintenance jobs. Their configured
+    /// `fee_rate`s stay the lowest rate each pays.
     pub fee_policy: crate::fee::FeePolicy,
-    /// Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6, [`super::select`]). Off by default
-    /// in the library (the reference planner); the live commands turn it on.
+    /// Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6).
+    ///
+    /// See [`super::select`]. It is off by default in the library, which gives the reference
+    /// planner, and the live commands turn it on.
     pub select: SelectConfig,
-    /// Log a one-line status ([`status_line`]) this often (`--status-secs`); `None`: never.
+    /// Log a one-line status ([`status_line`]) this often (`--status-secs`). `None` means never.
     pub status_every: Option<Duration>,
-    /// Where the runner keeps what must survive a restart (the Executor's data directory): the in-flight journal
-    /// ([`super::journal`]), the keepers' subsidy window and the count of starts. `None`: in memory only. Never used in a dry
-    /// run (nothing is submitted).
+    /// Where the runner keeps what must survive a restart, the Executor's data directory.
+    ///
+    /// It holds the in-flight journal ([`super::journal`]), the keepers' subsidy window and the
+    /// count of starts. `None` keeps them in memory only. A dry run never uses it, since nothing is
+    /// submitted.
     pub state_dir: Option<PathBuf>,
-    /// The local clock may differ from the chain's (the newest chain block's timestamp) by this many seconds before an alarm,
-    /// and day orders near their deadline are left alone (0: no check).
+    /// Seconds the local clock may differ from the chain's before an alarm, 0 for no check.
+    ///
+    /// The chain's clock is the newest chain block's timestamp. Beyond the bound, day orders near
+    /// their deadline are also left alone.
     pub clock_skew_max_secs: u64,
-    /// How long a halted book source (`BookSource::fatal`) is waited for before the runner ends with an error, so that a
-    /// supervisor restarts the process.
+    /// How long the runner waits for a halted book source (`BookSource::fatal`).
+    ///
+    /// After that it ends with an error, so that a supervisor restarts the process.
     pub halt_exit_after: Duration,
-    /// Hand the operator's balance to the book source's `/v1/health` and `/v1/metrics` (`BookSource::report_executor`).
-    /// `false` (a read API other hosts can reach, `crate::config::ApiConfig::shows_executor_funds`): the amounts are left out
-    /// there; the metrics file keeps them.
+    /// Hand the operator's balance to the book source's `/v1/health` and `/v1/metrics`.
+    ///
+    /// The balance goes through `BookSource::report_executor`. It is `false` for a read API that
+    /// other hosts can reach (`crate::config::ApiConfig::shows_executor_funds`). The amounts are
+    /// then left out there, and the metrics file keeps them.
     pub report_funds: bool,
 }
 
@@ -262,29 +329,41 @@ pub const STARTS_FILE: &str = "executor-starts";
 pub const SUBSIDY_FILE: &str = "keeper-subsidy.json";
 /// How often the local clock is compared with the chain's.
 pub const CLOCK_CHECK_EVERY: Duration = Duration::from_secs(60);
-/// The clock samples kept (one per [`CLOCK_CHECK_EVERY`]), and how many are needed before their median is judged.
+/// The clock samples kept, one per [`CLOCK_CHECK_EVERY`].
 pub const CLOCK_SAMPLES: usize = 5;
+/// Samples needed before their median is judged against the bound itself.
 pub const CLOCK_SAMPLES_MIN: usize = 3;
-/// Until [`CLOCK_SAMPLES_MIN`] samples exist (after every start), a sample is taken this often instead, so the check judges
-/// within seconds of a start, not minutes (audit round 4 R4-L-5).
+/// Time between samples until [`CLOCK_SAMPLES_MIN`] samples exist after a start.
+///
+/// So the check judges within seconds of a start, not minutes.
 pub const CLOCK_START_EVERY: Duration = Duration::from_secs(5);
-/// On fewer than [`CLOCK_SAMPLES_MIN`] samples the median is judged against this many times the bound: only a skew far
-/// beyond it raises the alarm that early, one within the bound clears it, and one in between waits for the samples.
+/// Factor of the bound that the median is judged against on fewer than [`CLOCK_SAMPLES_MIN`]
+/// samples.
+///
+/// So only a skew far beyond the bound raises the alarm that early. A skew within the bound clears
+/// it, and one in between waits for the samples.
 pub const CLOCK_EARLY_FACTOR: u64 = 2;
-/// Local time the samples must span before they tell whether the chain advances (whether every node stands still).
+/// Local time the samples must span before they tell whether the chain advances.
+///
+/// That tells whether every node stands still.
 pub const CLOCK_ADVANCE_SPAN_MS: u64 = 10_000;
 
-/// What a clock skew beyond the bound most likely means (the alarm's wording, [`clock_cause`]).
+/// What a clock skew beyond the bound most likely means, for the alarm's wording ([`clock_cause`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClockCause {
-    /// Every node's newest block is ahead of the local clock: the local clock is behind.
+    /// Every node's newest block is ahead of the local clock, so the local clock is behind.
     ClockBehind,
-    /// The chain advances, and every node's newest block lags the local clock by the same amount: the local clock is ahead.
+    /// The chain advances, and every node's newest block lags the local clock by the same amount.
+    ///
+    /// So the local clock is ahead.
     ClockAhead,
-    /// Every node's newest block is behind the local clock and the chain did not advance across the samples: the nodes are
-    /// behind the network (a stall or a partition), not the local clock.
+    /// Every node's newest block is behind the local clock, and the chain did not advance across
+    /// the samples.
+    ///
+    /// So the nodes are behind the network, by a stall or a partition, not the local clock.
     NodesBehind,
-    /// Every node's newest block is behind the local clock, and the samples do not span enough time yet to tell why.
+    /// Every node's newest block is behind the local clock, and the samples do not span enough time
+    /// yet to tell why.
     AheadOrNodesBehind,
 }
 
@@ -323,8 +402,10 @@ impl ClockCause {
     }
 }
 
-/// Why the skew `skew` (the median of the samples) is off, from the samples `points` (the local time in ms, the sample in
-/// seconds, oldest first): a sample is the local clock minus the newest chain block's time, so while the chain stands still
+/// Why the skew `skew`, the median of the samples, is off.
+///
+/// `points` are the samples oldest first, as the local time in ms and the sample in seconds. A
+/// sample is the local clock minus the newest chain block's time. So while the chain stands still
 /// it grows with the local time, and while the local clock is merely off it stays.
 pub fn clock_cause(skew: i64, points: &std::collections::VecDeque<(u64, i64)>) -> ClockCause {
     if skew < 0 {
@@ -335,7 +416,8 @@ pub fn clock_cause(skew: i64, points: &std::collections::VecDeque<(u64, i64)>) -
     if span_ms < CLOCK_ADVANCE_SPAN_MS {
         return ClockCause::AheadOrNodesBehind;
     }
-    // how far the chain's newest block moved over the span, in seconds: the local time passed minus the sample's growth
+    // How far the chain's newest block moved over the span, in seconds. That is the local time
+    // passed minus the sample's growth.
     let span = (span_ms / 1000) as i64;
     let advanced = span - (last.1 - first.1);
     if advanced * 2 < span {
@@ -345,15 +427,17 @@ pub fn clock_cause(skew: i64, points: &std::collections::VecDeque<(u64, i64)>) -
     }
 }
 
-/// One clock sample (seconds, the local clock minus the chain's) from the tip timestamps of the nodes `tips` at the local
-/// time `local_ms`: the one nearest the local clock. A block's timestamp is set by its miner, so no node's alone decides: a
-/// node whose timestamp lies (or that stopped advancing) is outvoted by any node that agrees with the local clock, and only
-/// a skew every node shows counts. `None`: no tip known.
+/// One clock sample, in seconds of the local clock minus the chain's.
+///
+/// It is taken from the tip timestamps `tips` of the nodes at the local time `local_ms`, as the one
+/// nearest the local clock. A block's timestamp is set by its miner, so no node alone decides. A
+/// node whose timestamp lies, or that stopped advancing, is outvoted by any node that agrees with
+/// the local clock. Only a skew that every node shows counts. `None` means no tip is known.
 pub fn chain_skew_secs(local_ms: u64, tips: &[u64]) -> Option<i64> {
     tips.iter().map(|t| (local_ms as i64 - *t as i64) / 1000).min_by_key(|s| s.unsigned_abs())
 }
 
-/// The median of `v` (the lower one of the two middle values); `None` when empty.
+/// The median of `v`, the lower one of the two middle values. `None` when empty.
 pub fn median(v: &std::collections::VecDeque<i64>) -> Option<i64> {
     let mut s: Vec<i64> = v.iter().copied().collect();
     s.sort_unstable();
@@ -363,7 +447,8 @@ pub fn median(v: &std::collections::VecDeque<i64>) -> Option<i64> {
 impl Default for RunConfig {
     fn default() -> Self {
         RunConfig {
-            // tests and embedders only: every command sets the network it resolved (`crate::config::resolve_network`)
+            // For tests and embedders only. Every command sets the network it resolved
+            // (`crate::config::resolve_network`).
             network: "testnet-10".into(),
             roles: Roles { matcher: true, keeper: false },
             engine: EngineConfig::default(),
@@ -389,11 +474,13 @@ impl Default for RunConfig {
     }
 }
 
-/// The runner's series that carry the operator's balance: left out of what a read API other hosts can reach serves
-/// ([`RunConfig::report_funds`]).
+/// The runner's series that carry the operator's balance.
+///
+/// A read API that other hosts can reach leaves them out ([`RunConfig::report_funds`]).
 pub const FUNDS_SERIES: &[&str] = &["kob_matcher_funding_sompi", "kob_matcher_funding_total_sompi"];
 
-/// `metrics` (Prometheus text) without the series [`FUNDS_SERIES`] (their `# HELP` and `# TYPE` lines included).
+/// `metrics`, in Prometheus text, without the series [`FUNDS_SERIES`] and their `# HELP` and
+/// `# TYPE` lines.
 pub fn without_funds(metrics: &str) -> String {
     let name = |line: &str| -> String {
         let l = line.strip_prefix("# HELP ").or_else(|| line.strip_prefix("# TYPE ")).unwrap_or(line);
@@ -405,141 +492,212 @@ pub fn without_funds(metrics: &str) -> String {
 /// What one step did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StepReport {
+    /// The node's virtual DAA score.
     pub daa: u64,
+    /// Whether the node is synced.
     pub synced: bool,
+    /// Whether the kill switch was on.
     pub paused: bool,
     /// The book was too far behind the node to plan against (`RunConfig::max_book_lag`).
     pub book_stale: bool,
-    /// DAA score the book was synced to (0: no book read).
+    /// DAA score the book was synced to, 0 when no book was read.
     pub book_daa: u64,
-    /// The book source was not ready (`BookSource::ready`): why. Nothing was planned.
+    /// Why the book source was not ready (`BookSource::ready`). Nothing was planned.
     pub not_ready: Option<String>,
     /// (kind, txid, operator profit) of every transaction built this step.
     pub built: Vec<(String, [u8; 32], i64)>,
+    /// Transactions the node took this step, or already knew.
     pub submitted: Vec<[u8; 32]>,
+    /// Transactions that lost a race, because another transaction spent one of their inputs.
     pub conflicts: Vec<[u8; 32]>,
+    /// Transactions the node refused, with its verdict.
     pub rejected: Vec<([u8; 32], SubmitOutcome)>,
-    /// Transactions whose submit got no verdict (tracked as pending, resent).
+    /// Transactions whose submit got no verdict. They are tracked as pending and resent.
     pub unknown: Vec<[u8; 32]>,
+    /// Books and jobs skipped, with the reason.
     pub skipped: Vec<String>,
-    /// Orders left out of the matcher's book this step (numbers refused by the sanity gate, planning panicked, or the builder
-    /// refused the order).
+    /// Orders left out of the matcher's book this step.
+    ///
+    /// Their numbers failed the sanity gate, their planning panicked, or the builder refused the
+    /// order.
     pub quarantined: usize,
+    /// Tracked transactions accepted this step.
     pub accepted: usize,
+    /// Tracked transactions final this step.
     pub finalized: usize,
+    /// Tracked transactions a reorg moved back to pending this step.
     pub rolled_back: usize,
-    /// The operator's spendable funding read this step (`None`: not read, nothing was planned): its P2PK UTXOs that no
-    /// pending transaction or reservation holds.
+    /// The operator's spendable funding read this step.
+    ///
+    /// It is the P2PK UTXOs that no pending transaction or reservation holds. `None` means it was
+    /// not read, and nothing was planned.
     pub funding: Option<u64>,
-    /// The operator's whole P2PK balance read this step, the UTXOs pending transactions hold included (they stay the
-    /// operator's until spent, and their change returns): what the low-funds alert judges.
+    /// The operator's whole P2PK balance read this step, which the low-funds alert judges.
+    ///
+    /// It includes the UTXOs that pending transactions hold, because they stay the operator's until
+    /// spent and their change returns.
     pub funding_total: Option<u64>,
-    /// Listed orders left out of this step because the node no longer holds their UTXO (spent in a block the book has not
-    /// reached yet, [`gone_orders`]; always 0 while the book lags by less than `RunConfig::verify_live_min_lag`).
+    /// Listed orders left out of this step because the node no longer holds their UTXO.
+    ///
+    /// The UTXO was spent in a block the book has not reached yet ([`gone_orders`]). It is always 0
+    /// while the book lags by less than `RunConfig::verify_live_min_lag`.
     pub gone: usize,
-    /// Stuck kills and refunds of this process replaced at a higher rate this step: (replaced txid, new txid).
+    /// Stuck kills and refunds of this process replaced at a higher rate this step.
+    ///
+    /// Each is (replaced txid, new txid).
     pub replaced: Vec<([u8; 32], [u8; 32])>,
-    /// Pending transactions the node refused when they were checked again ([`Tracker::recheck_pending`]): dropped.
+    /// Pending transactions the node refused when they were checked again, and so dropped.
+    ///
+    /// See [`Tracker::recheck_pending`].
     pub dropped: Vec<[u8; 32]>,
 }
 
-/// A kill or refund this process submitted and may still replace at a higher rate ([`Runner::replace_stuck`]). Only
-/// transactions the node took from this process are ever recorded: nobody else's transaction is replaced. Kept in the
-/// in-flight journal ([`super::journal`]) with its transaction, so a restart can still replace it.
+/// A kill or refund this process submitted and may still replace at a higher rate.
+///
+/// See [`Runner::replace_stuck`]. Only transactions the node took from this process are ever
+/// recorded, so nobody else's transaction is replaced. The job is kept in the in-flight journal
+/// ([`super::journal`]) with its transaction, so a restart can still replace it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InFlightJob {
+    /// What the keeper job does.
     pub kind: JobKind,
+    /// The order the job spends.
     pub order: CovId,
-    /// The builder request of the submitted transaction (its rate is replaced, nothing else).
+    /// The builder request of the submitted transaction. A replacement changes only its rate.
     pub action: kob_protocol::build::Action,
     /// Replacements so far.
     pub replacements: u32,
-    /// DAA score of the last submission (the original or the last replacement).
+    /// DAA score of the last submission, the original or the last replacement.
     pub sent_daa: u64,
-    /// The operator's subsidy of the submitted transaction (sompi).
+    /// The operator's subsidy of the submitted transaction, in sompi.
     pub subsidy: u64,
-    /// No further replacement (refused by the node, no verdict, or no higher rate fits).
+    /// No further replacement.
+    ///
+    /// The node refused one, a submit had no verdict, or no higher rate fits.
     pub done: bool,
 }
 
-/// The matcher / keeper process.
+/// The matcher and keeper process.
 pub struct Runner<N: NodeApi, S: BookSource> {
+    /// The node the process talks to.
     pub node: N,
+    /// Where the book comes from.
     pub source: S,
+    /// The operator's key.
     pub signer: Box<dyn Signer>,
+    /// The builders of each token family.
     pub families: Families,
+    /// Submission and acceptance tracking.
     pub tracker: Tracker,
+    /// Loop settings.
     pub cfg: RunConfig,
+    /// What the last step did.
     pub last: StepReport,
+    /// Steps taken so far.
     pub steps: u64,
-    /// Orders flagged possibly frozen and the DAA score before which the matcher does not probe them again.
+    /// Orders flagged possibly frozen, and the DAA score before which the matcher does not probe
+    /// them again.
     pub frozen_until: BTreeMap<CovId, u64>,
-    /// Orders whose planning panicked (the matcher's last line of defence) or that the builder refused on their own, and the
-    /// DAA score before which they stay out of the book: one malformed order costs a skipped order, never the process or the
-    /// other books.
+    /// Quarantined orders, and the DAA score before which they stay out of the book.
+    ///
+    /// An order is quarantined when its planning panicked, the matcher's last line of defence, or
+    /// when the builder refused it on its own. So one malformed order costs a skipped order, never
+    /// the process or the other books.
     pub quarantined_until: BTreeMap<CovId, u64>,
-    /// Refunds found unprofitable at their fixed tip, by (order, order outpoint): not built again.
+    /// Refunds found unprofitable at their fixed tip, by (order, order outpoint). They are not
+    /// built again.
     pub keeper_unprofitable: BTreeSet<(CovId, super::book::Outpoint)>,
-    /// The keepers' floor fee rate when the entries of `keeper_unprofitable` were found: a lower floor forgets them (a refund
-    /// that did not pay at the old floor may pay at the new one).
+    /// The keepers' floor fee rate when the entries of `keeper_unprofitable` were found.
+    ///
+    /// A lower floor forgets them, since a refund that did not pay at the old floor may pay at the
+    /// new one.
     pub keeper_unprofitable_floor: u64,
-    /// Keeper jobs that failed to build, by order outpoint: (DAA before which it is not built again, failures so far).
+    /// Keeper jobs that failed to build, by order outpoint.
+    ///
+    /// Each holds the DAA score before which the job is not built again, and the failures so far.
     pub keeper_failed: BTreeMap<super::book::Outpoint, (u64, u32)>,
-    /// Diagnostics and tests: every transaction submitted (or built, in a dry run) is also pushed here.
-    /// `None` (the default) keeps nothing.
+    /// For diagnostics and tests, every transaction submitted, or built in a dry run.
+    ///
+    /// `None`, the default, keeps nothing.
     pub capture: Option<Vec<kob_protocol::tx::SignedTx>>,
-    /// Outpoints that transactions of another part of the process spend while in flight (the x402 facilitator's swap-and-pay
-    /// settlements, signed by their payers over the same book): the batches plan around them like around the runner's own
-    /// pending transactions.
+    /// Outpoints that transactions of another part of the process spend while in flight.
+    ///
+    /// These are the x402 facilitator's swap-and-pay settlements, signed by their payers over the
+    /// same book. The batches plan around them as around the runner's own pending transactions.
     pub reservations: Option<Reservations>,
-    /// Why the book source is not ready, while the runner waits for it (logged once per wait).
+    /// Why the book source is not ready, while the runner waits for it. It is logged once per wait.
     pub waiting: Option<String>,
-    /// The funding of the last step that read it (the metrics keep it while a step reads none).
+    /// The spendable funding of the last step that read it.
+    ///
+    /// The metrics keep it while a step reads none.
     pub last_funding: Option<u64>,
+    /// The whole P2PK balance of the last step that read it.
     pub last_funding_total: Option<u64>,
-    /// What the surplus-inventory policy used in its current period (`maxFee`, `tokens[].maxAmount`).
+    /// What the surplus-inventory policy used in its current period, of `maxFee` and
+    /// `tokens[].maxAmount`.
     pub inventory_use: super::planner::InventoryUse,
     /// The node's fee estimate between steps (`crate::fee`).
     pub fee_state: crate::fee::FeeState,
-    /// The rates of the last step that planned (the floor before the first).
+    /// The rates of the last step that planned, or the floor before the first.
     pub fee_rates: crate::fee::FeeRates,
-    /// The matcher's configured rate (`engine.planner.fee_rate` at start): the lowest rate a batch is planned at.
+    /// The matcher's configured rate, `engine.planner.fee_rate` at start.
+    ///
+    /// It is the lowest rate a batch is planned at.
     pub plan_base_rate: u64,
-    /// Where the rates are published for the rest of the process (the x402 facilitator of `kobd --executor`).
+    /// Where the rates are published for the rest of the process, the x402 facilitator of
+    /// `kobd --executor`.
     pub fee_board: Option<crate::fee::FeeBoard>,
-    /// Kills and refunds this process submitted that are not accepted yet, by txid ([`Runner::replace_stuck`]).
+    /// Kills and refunds this process submitted that are not accepted yet, by txid.
+    ///
+    /// See [`Runner::replace_stuck`].
     pub keeper_inflight: BTreeMap<[u8; 32], InFlightJob>,
-    /// Keeper jobs submitted with an operator subsidy, and the sompi of those subsidies (metrics).
+    /// Keeper jobs submitted with an operator subsidy, for the metrics.
     pub keeper_subsidised: u64,
+    /// The sompi of those subsidies.
     pub keeper_subsidy_sompi: u64,
-    /// The operator subsidies of the rolling window (`KeeperConfig::subsidy_budget`): every subsidy of a kill or refund this
-    /// process submitted, the increase of each replacement included. In memory: a restart starts with an empty window.
+    /// The operator subsidies of the rolling window (`KeeperConfig::subsidy_budget`).
+    ///
+    /// It holds every subsidy of a kill or refund this process submitted, including the increase of
+    /// each replacement. It is kept in `RunConfig::state_dir`, so a restart continues the window.
+    /// Without a state directory it is in memory only.
     pub keeper_subsidy: SubsidyBudget,
-    /// Stuck kills and refunds replaced at a higher rate, and replacements the node refused (metrics).
+    /// Stuck kills and refunds replaced at a higher rate, for the metrics.
     pub keeper_replaced: u64,
+    /// Replacements the node refused, for the metrics.
     pub keeper_replace_refused: u64,
-    /// The weighted selection's random source, the share of each role and its counters (`kob_select_*`).
+    /// The weighted selection's random source, the share of each role and its counters
+    /// (`kob_select_*`).
     pub selector: Selector,
-    /// Orders the selection left for later, with the outpoint they had and the DAA score they were left at: one that another
-    /// transaction takes before this process does counts as ceded (`kob_select_ceded_total`).
+    /// Orders the selection left for later, with the outpoint they had and the DAA score they were
+    /// left at.
+    ///
+    /// One that another transaction takes before this process does counts as ceded
+    /// (`kob_select_ceded_total`).
     pub ceded_watch: BTreeMap<CovId, (super::book::Outpoint, u64)>,
-    /// The in-flight journal (`RunConfig::state_dir`; never in a dry run).
+    /// The in-flight journal in `RunConfig::state_dir`. Never in a dry run.
     pub journal: Option<super::journal::Journal>,
-    /// Earlier starts of this data directory (`RunConfig::state_dir`; 0 without one).
+    /// Earlier starts of this data directory (`RunConfig::state_dir`), 0 without one.
     pub restarts: u64,
-    /// The local clock minus the chain's in seconds at the last check ([`Runner::check_clock`]), and when that was.
+    /// The local clock minus the chain's in seconds at the last check ([`Runner::check_clock`]).
     pub clock_skew: Option<i64>,
+    /// When the clock was last checked.
     pub clock_checked: Option<std::time::Instant>,
     clock_logged: Option<std::time::Instant>,
-    /// The last clock samples ([`chain_skew_secs`], seconds, oldest first; at most [`CLOCK_SAMPLES`]).
+    /// The last clock samples ([`chain_skew_secs`]), in seconds and oldest first.
+    ///
+    /// At most [`CLOCK_SAMPLES`] are kept.
     pub clock_samples: std::collections::VecDeque<i64>,
-    /// The same samples with the local time each was taken at (ms): whether the chain advances ([`clock_cause`]).
+    /// The same samples with the local time in ms each was taken at.
+    ///
+    /// They tell whether the chain advances ([`clock_cause`]).
     clock_points: std::collections::VecDeque<(u64, i64)>,
-    /// Why the skew is off while it is beyond the bound ([`clock_cause`]).
+    /// Why the skew is off, while it is beyond the bound ([`clock_cause`]).
     pub clock_cause: Option<ClockCause>,
-    /// Day orders left alone this step because the clock is off and their deadline is near ([`RunConfig::clock_skew_max_secs`]).
+    /// Day orders left alone this step because the clock is off and their deadline is near.
+    ///
+    /// See [`RunConfig::clock_skew_max_secs`].
     pub deadline_near: BTreeSet<CovId>,
-    /// Steps that failed (the node unreachable, the network wrong, ...).
+    /// Steps that failed, for example with the node unreachable or the network wrong.
     pub tick_errors: u64,
     /// The last step's error, until a step succeeds.
     pub last_tick_error: Option<String>,
@@ -548,7 +706,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
 /// A source of reserved outpoints ([`Runner::reservations`]).
 pub type Reservations = std::sync::Arc<dyn Fn() -> BTreeSet<super::book::Outpoint> + Send + Sync>;
 
-/// Counts a start of the runner over `dir` (a small file holding the number of starts): returns the starts before this one.
+/// Counts a start of the runner over `dir` and returns the starts before this one.
+///
+/// The count is a small file that holds the number of starts.
 fn count_start(dir: &Path) -> u64 {
     let p = dir.join(STARTS_FILE);
     let before = std::fs::read_to_string(&p).ok().and_then(|s| s.trim().parse::<u64>().ok()).unwrap_or(0);
@@ -575,8 +735,10 @@ fn busy_orders(orders: &[ListedOrder], spent: &BTreeSet<super::book::Outpoint>) 
         .collect()
 }
 
-/// The order each input of a matcher transaction belongs to: an order UTXO (its covenant id is the order's), and the custody
-/// of a listed order the transaction spends ([`Tracked::owners`]: a mempool double spend backs off that order alone).
+/// The order each input of a matcher transaction belongs to ([`Tracked::owners`]).
+///
+/// An input is an order UTXO, whose covenant id is the order's, or the custody of a listed order
+/// the transaction spends. So a mempool double spend backs off that order alone.
 fn input_owners(p: &super::engine::Prepared, orders: &[ListedOrder]) -> BTreeMap<super::book::Outpoint, CovId> {
     let ids = p.plan.spent_ids();
     let mut owners = BTreeMap::new();
@@ -593,8 +755,9 @@ fn input_owners(p: &super::engine::Prepared, orders: &[ListedOrder]) -> BTreeMap
     owners
 }
 
-/// The address of every input `owners` names (from the script the input spends), for the node's view of which of them are
-/// still unspent after a missing-input refusal.
+/// The address of every input that `owners` names, from the script the input spends.
+///
+/// After a missing-input refusal the node is asked which of them are still unspent.
 fn input_addresses(
     p: &super::engine::Prepared,
     owners: &BTreeMap<super::book::Outpoint, CovId>,
@@ -614,13 +777,17 @@ fn input_addresses(
     out
 }
 
-/// The listed orders whose current UTXO the node no longer holds, from one answer of the node to an address query of every
-/// order (`utxos`: what it holds at those addresses). The book lags the chain by the indexer's lag (seconds to tens of seconds
-/// on a busy network), so an order filled, amended or cancelled meanwhile is still listed; a batch over it is refused
-/// (`MissingInput`) and costs every other crossing of the batch a tick, which kept takers unfilled (and their auctions moving)
-/// for tens of seconds on the soak. Only an order accepted at or before the node's virtual DAA score `node_daa` is judged (a
-/// node behind the book cannot hold a newer one), and an answer that holds none of the queried orders is no evidence (a node
-/// whose address index cannot serve the query): nothing is taken as spent then.
+/// The listed orders whose current UTXO the node no longer holds.
+///
+/// `utxos` is one answer of the node to an address query of every order, what it holds at those
+/// addresses. The book lags the chain by the indexer's lag, seconds to tens of seconds on a busy
+/// network. So an order filled, amended or cancelled meanwhile is still listed. A batch over it is
+/// refused (`MissingInput`) and costs every other crossing of the batch a tick.
+///
+/// Only an order accepted at or before the node's virtual DAA score `node_daa` is judged, since a
+/// node behind the book cannot hold a newer one. An answer that holds none of the queried orders is
+/// no evidence, because the node's address index may not serve the query. Nothing is taken as spent
+/// then.
 pub fn gone_orders(
     orders: &[ListedOrder],
     addresses: &BTreeMap<CovId, String>,
@@ -635,7 +802,7 @@ pub fn gone_orders(
     judged.into_iter().filter(|o| !held.contains(&outpoint(&o.order.utxo))).map(|o| o.id()).collect()
 }
 
-/// The address of every listed order's current UTXO (its covenant script with the listed state).
+/// The address of every listed order's current UTXO, its covenant script with the listed state.
 fn order_addresses(orders: &[ListedOrder], network: &str) -> BTreeMap<CovId, String> {
     orders
         .iter()
@@ -659,20 +826,24 @@ fn listed_outpoints(orders: &[ListedOrder]) -> BTreeSet<super::book::Outpoint> {
     s
 }
 
-/// DAA (five minutes) a maintenance sale may still be sent again after it was planned: its price was the book's of that
-/// tick, and a later sale is planned anew (`crate::maintenance`), never resent at a stale price.
+/// DAA after its planning that a maintenance sale may still be sent again, five minutes.
+///
+/// Its price was the book's at that tick. A later sale is planned anew (`crate::maintenance`),
+/// never resent at a stale price.
 pub const MAINTENANCE_SALE_FRESH_DAA: u64 = 3_000;
 
-/// What bounds a resend of a transaction that fills the orders `ids` of the book, planned at `daa` (`docs/spec/matcher.md`
-/// §2.3; `Tracker::stale`): the earliest day-order deadline (UTC) and the earliest soft expiry (DAA) of those orders. An order
-/// already past its soft expiry when planned is merged, not filled: it bounds nothing.
+/// What bounds a resend of a transaction that fills the orders `ids` of the book, planned at `daa`.
+///
+/// The bounds are the earliest day-order deadline (UTC) and the earliest soft expiry (DAA) of those
+/// orders (`docs/spec/matcher.md` §2.3, `Tracker::stale`). An order already past its soft expiry
+/// when planned is merged, not filled, so it bounds nothing.
 fn fill_bounds(orders: &[ListedOrder], ids: &BTreeSet<CovId>, daa: u64) -> (Option<u64>, Option<u64>) {
     let (mut deadline, mut until): (Option<u64>, Option<u64>) = (None, None);
     for o in orders.iter().filter(|o| ids.contains(&o.id())) {
         if let Some(d) = o.deadline {
             deadline = Some(deadline.map_or(d, |x| x.min(d)));
         }
-        // an unaccepted continuation (a chained step) is accepted at or after `daa`
+        // An unaccepted continuation of a chained step is accepted at or after `daa`.
         let udaa = if o.utxo_daa() == u64::MAX { daa } else { o.utxo_daa() };
         let due = o.order.state.refund_due(i64::try_from(udaa).unwrap_or(i64::MAX)).unwrap_or(i64::MAX);
         if let Ok(due) = u64::try_from(due) {
@@ -685,6 +856,7 @@ fn fill_bounds(orders: &[ListedOrder], ids: &BTreeSet<CovId>, daa: u64) -> (Opti
 }
 
 impl<N: NodeApi, S: BookSource> Runner<N, S> {
+    /// A runner over `node` and `source`, with what the state directory kept from the last run.
     pub fn new(node: N, source: S, signer: Box<dyn Signer>, cfg: RunConfig) -> Self {
         let tracker = Tracker::new(cfg.tracker.clone());
         let fee_rates = cfg.fee_policy.rates(None);
@@ -698,7 +870,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         };
         let plan_base_rate = cfg.engine.planner.fee_rate;
         let selector = Selector::new(cfg.select.clone());
-        // what must survive a restart: never in a dry run (it submits nothing, and must not resend what a live run left)
+        // What must survive a restart. Never in a dry run, which submits nothing and must not
+        // resend what a live run left.
         let state_dir = cfg.state_dir.clone().filter(|_| !cfg.dry_run);
         let restarts = state_dir.as_deref().map(count_start).unwrap_or(0);
         let keeper_subsidy = match state_dir.as_deref().map(|d| SubsidyBudget::load(&d.join(SUBSIDY_FILE))) {
@@ -713,7 +886,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         {
             Some(Ok((j, r))) => (Some(j), r),
             Some(Err(e)) => {
-                // what it holds is still reserved (and settled with the node), when it can be read at all: never planned over
+                // What the journal holds is still reserved and settled with the node, when it can
+                // be read at all. It is never planned over.
                 let path = state_dir.as_deref().map(|d| d.join(super::journal::FILE_NAME)).unwrap_or_default();
                 let restored = super::journal::read(&path).unwrap_or_default();
                 tracing::error!(
@@ -790,19 +964,27 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// Replace-by-fee of this process's own stuck kills and refunds (`docs/ops/executor.md`, fee policy): one that no chain
-    /// block accepted `keeper.replace_after_daa` DAA after its last submission is rebuilt from its own request (the same order
-    /// inputs and funding; one `spare` funding UTXO added when it had none and the operator subsidises) at its urgency's
-    /// current rate, at least a quarter above its rate, within the policy's highest rate and the total cap
-    /// ([`crate::keepers::reprice`]), and sent with `submitTransactionReplacement`; at most `keeper.max_replacements` times.
-    /// Only transactions the node took from this process are candidates ([`Runner::keeper_inflight`]); one whose outputs a
-    /// tracked transaction spends (a chained keeper job), whose submit had no verdict, or that a chain block accepted is left
-    /// alone. A refused replacement (the original was accepted meanwhile, another transaction spent the order, ...) ends the
-    /// replacements of that job: the tracker's pending timeout and backoff handle it as before.
+    /// Replace-by-fee of this process's own stuck kills and refunds (`docs/ops/executor.md`, fee
+    /// policy).
     ///
-    /// A replacement may add subsidy only within the rolling budget (`KeeperConfig::subsidy_budget`, [`Runner::keeper_subsidy`])
-    /// and the step's subsidised-job cap (`subsidy_max_jobs`): past either, it must be paid by the job's own tip and the
-    /// subsidy it already has. Returns how many replacements added subsidy (they count toward the step's cap).
+    /// A job that no chain block accepted `keeper.replace_after_daa` DAA after its last submission
+    /// is rebuilt from its own request, with the same order inputs and funding. One `spare` funding
+    /// UTXO is added when it had none and the operator subsidises. It is rebuilt at its urgency's
+    /// current rate, at least a quarter above its rate, within the policy's highest rate and the
+    /// total cap ([`crate::keepers::reprice`]). It is sent with `submitTransactionReplacement`, at
+    /// most `keeper.max_replacements` times.
+    ///
+    /// Only transactions the node took from this process are candidates
+    /// ([`Runner::keeper_inflight`]). A job is left alone when a tracked transaction spends its
+    /// outputs, as a chained keeper job does, when its submit had no verdict, or when a chain block
+    /// accepted it. A refused replacement ends the replacements of that job, for example when the
+    /// original was accepted meanwhile or another transaction spent the order. The tracker's
+    /// pending timeout and backoff then handle it.
+    ///
+    /// A replacement may add subsidy only within the rolling budget
+    /// (`KeeperConfig::subsidy_budget`, [`Runner::keeper_subsidy`]) and the step's subsidised-job
+    /// cap (`subsidy_max_jobs`). Past either, the job's own tip and the subsidy it already has must
+    /// pay it. Returns how many replacements added subsidy, which count toward the step's cap.
     pub async fn replace_stuck(&mut self, daa: u64, spare: &[KeyUtxo], rep: &mut StepReport) -> anyhow::Result<usize> {
         let tracker = &self.tracker;
         self.keeper_inflight.retain(|id, _| tracker.txs.get(id).is_some_and(|t| t.accepted.is_none()));
@@ -811,7 +993,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if kc.max_replacements == 0 || self.cfg.dry_run {
             return Ok(subsidised);
         }
-        // transactions whose outputs a tracked transaction spends: replacing one would orphan its child
+        // Transactions whose outputs a tracked transaction spends. Replacing one would orphan its
+        // child.
         let parents: BTreeSet<[u8; 32]> = self.tracker.txs.values().flat_map(|t| t.spends.iter().map(|op| op.0)).collect();
         let due: Vec<[u8; 32]> = self
             .keeper_inflight
@@ -836,7 +1019,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let hex_old = kob_protocol::json::to_hex(&old);
             let want = kc.fees.rate(j.kind.urgency(), kc.fee_rate);
             let rate = want.max(t.fee_rate.saturating_add((t.fee_rate / 4).max(1))).min(ceiling);
-            // the subsidy this replacement may have: what the job has, plus what the budget and the step's cap still allow
+            // The subsidy this replacement may have: what the job has, plus what the budget and the
+            // step's cap still allow.
             let more = if subsidised < kc.subsidy_max_jobs { self.keeper_subsidy.left(&kc, daa) } else { 0 };
             let jc = KeeperConfig { subsidy_max: kc.subsidy_max.min(j.subsidy.saturating_add(more)), ..kc.clone() };
             let job = if rate <= t.fee_rate {
@@ -870,7 +1054,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 ..t.clone()
             };
             self.source.watch(new);
-            // write-ahead: a kill now leaves the replacement in the journal for the next start to settle
+            // Write-ahead. A kill now leaves the replacement in the journal for the next start to
+            // settle.
             if let Some(jn) = self.journal.as_mut() {
                 jn.add(&replacement, None);
             }
@@ -918,13 +1103,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     }
                 }
                 Err(e) => {
-                    // no verdict: the node may hold either one; both are followed (the replacement as an unconfirmed submit
-                    // the tracker resends idempotently), whichever a chain block accepts settles the order
+                    // No verdict, so the node may hold either one. Both are followed, the
+                    // replacement as an unconfirmed submit that the tracker resends idempotently.
+                    // Whichever a chain block accepts settles the order.
                     tracing::warn!(txid = %hex_old, error = %e, "replacement without a verdict; following both");
                     if let Some(e) = self.keeper_inflight.get_mut(&old) {
                         e.done = true;
                     }
-                    // the replacement may be accepted: its added subsidy counts against the budget
+                    // The replacement may be accepted, so its added subsidy counts against the
+                    // budget.
                     if added > 0 {
                         self.charge_subsidy(daa, added);
                         subsidised += 1;
@@ -937,8 +1124,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         Ok(subsidised)
     }
 
-    /// Charges `sompi` of operator subsidy to the rolling budget (kept in `RunConfig::state_dir`: a restart continues the
-    /// window); logs when that uses it up.
+    /// Charges `sompi` of operator subsidy to the rolling budget, and logs when that uses it up.
+    ///
+    /// The budget is kept in `RunConfig::state_dir`, so a restart continues the window.
     fn charge_subsidy(&mut self, daa: u64, sompi: u64) {
         let kc = &self.cfg.keeper;
         let before = self.keeper_subsidy.left(kc, daa);
@@ -968,8 +1156,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// Counts the watched orders another transaction took (their outpoint is no longer listed and no transaction of this
-    /// process spends it) and forgets those watched for long (taken by nobody, or by this process after all).
+    /// Counts the watched orders that another transaction took, and forgets those watched for long.
+    ///
+    /// An order was taken by another transaction when its outpoint is no longer listed and no
+    /// transaction of this process spends it. An order watched for long was taken by nobody, or by
+    /// this process after all.
     fn watch_ceded(&mut self, listed: &BTreeSet<super::book::Outpoint>, daa: u64) {
         if self.ceded_watch.is_empty() {
             return;
@@ -989,7 +1180,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.selector.stats.ceded += ceded;
     }
 
-    /// Outpoints no plan may spend: the tracker's pending and unfinalized transactions and the reservations.
+    /// Outpoints no plan may spend.
+    ///
+    /// They are the inputs of the tracker's pending and unfinalized transactions, and the
+    /// reservations.
     fn reserved_or_spent(&self) -> BTreeSet<super::book::Outpoint> {
         let mut s = self.tracker.spent_outpoints();
         if let Some(r) = &self.reservations {
@@ -1013,8 +1207,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         for id in &ev.rolled_back {
             tracing::warn!(txid = %kob_protocol::json::to_hex(id), "rolled back by a reorg; re-checking");
         }
-        // Idempotent resend of rolled-back transactions still possible. Not while the kill switch is on: `--pause-file` means
-        // nothing leaves the process.
+        // Resend the rolled-back transactions that are still possible, idempotently. Not while the
+        // kill switch is on, because `--pause-file` means nothing leaves the process.
         if !self.cfg.dry_run && !self.paused() {
             let resend: Vec<Tracked> = ev.rolled_back.iter().filter_map(|id| self.tracker.txs.get(id).cloned()).collect();
             for t in resend {
@@ -1024,7 +1218,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     }
 
     async fn follow_chain(&mut self, daa: u64, rep: &mut StepReport) -> Result<(), RpcError> {
-        // The book source follows the chain itself (the indexer): one follower, one truth.
+        // The book source, the indexer, follows the chain itself: one follower, one truth.
         let tracked: Vec<[u8; 32]> = self.tracker.txs.keys().copied().collect();
         if let Some(view) = self.source.acceptance(&tracked) {
             let ev = self.tracker.observe(&view, daa);
@@ -1046,7 +1240,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 Ok(())
             }
             Err(RpcError::Node(m)) => {
-                // The cursor block is unknown (pruned or reorged away): restart from the sink.
+                // The cursor block is unknown, pruned or reorged away. Restart from the sink.
                 tracing::warn!(error = %m, "VSPC cursor lost; restarting from the sink");
                 self.tracker.cursor = None;
                 Ok(())
@@ -1055,7 +1249,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// The spendable funding (P2PK UTXOs not in `spent`), the whole P2PK balance and the outpoints of every P2PK coin.
+    /// The spendable funding, the whole P2PK balance and the outpoints of every P2PK coin.
+    ///
+    /// The spendable funding is the P2PK UTXOs not in `spent`.
     async fn funding(
         &self,
         spent: &BTreeSet<super::book::Outpoint>,
@@ -1089,18 +1285,27 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         Ok((free, total, coins))
     }
 
-    /// Compares the local clock with the chain's at most every [`CLOCK_CHECK_EVERY`]: day-order deadlines are UTC times of
-    /// the placement record that a matcher judges on its own clock (`docs/spec/matcher.md` §2.3; no covenant compares
-    /// anything with real time: a day order's on-chain bound is its `expiryDaa`, a DAA score). This is only a check of that
-    /// clock, never a clock of its own: a block's timestamp is its miner's, so each sample takes the node tip nearest the
-    /// local clock ([`chain_skew_secs`]: one node agreeing outvotes a lying or stopped one), and only the median of the last
-    /// [`CLOCK_SAMPLES`] samples is judged: from the first sample after a start, with samples [`CLOCK_START_EVERY`] apart until
-    /// there are [`CLOCK_SAMPLES_MIN`] and [`CLOCK_EARLY_FACTOR`] times the bound meanwhile, then every [`CLOCK_CHECK_EVERY`]
-    /// against the bound. The alarm names the likely cause ([`clock_cause`]: the local clock, or every node behind the
-    /// network). Beyond `clock_skew_max_secs` the skew is
-    /// logged (an error, again every ten minutes while it lasts), shown on the status line, in `/v1/health` and the metrics,
-    /// and [`Runner::deadline_near`] keeps the day orders whose deadline is within the skew (plus the bound) of the local clock
-    /// out of every plan (audit 2026-11-11 M-14).
+    /// Compares the local clock with the chain's, at most every [`CLOCK_CHECK_EVERY`].
+    ///
+    /// Day-order deadlines are UTC times of the placement record, which a matcher judges on its
+    /// own clock (`docs/spec/matcher.md` §2.3). No covenant compares anything with real time. A day
+    /// order's on-chain bound is its `expiryDaa`, a DAA score. This only checks the local clock and
+    /// never replaces it.
+    ///
+    /// A block's timestamp is its miner's. So each sample takes the node tip nearest the local
+    /// clock ([`chain_skew_secs`]), and one node that agrees outvotes a lying or stopped one. Only
+    /// the median of the last [`CLOCK_SAMPLES`] samples is judged:
+    /// - From the first sample after a start, samples are [`CLOCK_START_EVERY`] apart until there
+    ///   are [`CLOCK_SAMPLES_MIN`], and the median is judged against [`CLOCK_EARLY_FACTOR`] times
+    ///   the bound meanwhile.
+    /// - Then a sample is taken every [`CLOCK_CHECK_EVERY`] and judged against the bound.
+    ///
+    /// The alarm names the likely cause ([`clock_cause`]): the local clock, or every node behind
+    /// the network. Beyond `clock_skew_max_secs` the skew is logged as an error, again every ten
+    /// minutes while it lasts. It is shown on the status line, in `/v1/health` and in the metrics.
+    /// [`Runner::deadline_near`] then keeps out of every plan the day orders whose deadline is
+    /// within the skew plus the bound of the local clock. Operations: `docs/ops/executor.md`,
+    /// Part C, "Monitoring".
     async fn check_clock(&mut self) {
         let every = if self.clock_samples.len() < CLOCK_SAMPLES_MIN { CLOCK_START_EVERY } else { CLOCK_CHECK_EVERY };
         if self.cfg.clock_skew_max_secs == 0 || self.clock_checked.is_some_and(|t| t.elapsed() < every) {
@@ -1122,7 +1327,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
         let Some(skew) = median(&self.clock_samples) else { return };
         let max = self.cfg.clock_skew_max_secs as i64;
-        // a block's timestamp is its miner's: on fewer samples only a skew far beyond the bound counts (or one within it)
+        // A block's timestamp is its miner's. On fewer samples only a skew far beyond the bound, or
+        // one within it, counts.
         if self.clock_samples.len() < CLOCK_SAMPLES_MIN {
             let far = skew.unsigned_abs() > self.cfg.clock_skew_max_secs.saturating_mul(CLOCK_EARLY_FACTOR);
             if !far && skew.abs() > max {
@@ -1152,8 +1358,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.cfg.clock_skew_max_secs > 0 && self.clock_skew.is_some_and(|s| s.unsigned_abs() > self.cfg.clock_skew_max_secs)
     }
 
-    /// The day orders of `orders` whose deadline is within the clock's skew plus the bound of the local time `utc`, while the
-    /// clock is off ([`Runner::clock_alarm`]): whichever clock is right, a fill could fall after the maker's deadline.
+    /// The day orders of `orders` whose deadline is within the skew plus the bound of the local
+    /// time `utc`, while the clock is off ([`Runner::clock_alarm`]).
+    ///
+    /// Whichever clock is right, a fill of them could fall after the maker's deadline.
     fn near_deadline(&self, orders: &[ListedOrder], utc: u64) -> BTreeSet<CovId> {
         if !self.clock_alarm() {
             return BTreeSet::new();
@@ -1162,8 +1370,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         orders.iter().filter(|o| o.deadline.is_some_and(|d| d.abs_diff(utc) <= margin)).map(|o| o.id()).collect()
     }
 
-    /// The fee rates of a step that plans (`crate::fee`): the node's estimate is read at most every `refresh_ms`, the last good
-    /// one used up to `max_age_ms`, then the floor. Sets the rates of the matcher, the keepers and the maintenance jobs.
+    /// Sets the fee rates of a step that plans (`crate::fee`).
+    ///
+    /// The node's estimate is read at most every `refresh_ms`. The last good one is used up to
+    /// `max_age_ms`, then the floor. The rates go to the matcher, the keepers and the maintenance
+    /// jobs.
     async fn refresh_fees(&mut self) {
         let policy = self.cfg.fee_policy.clone();
         let now = std::time::Instant::now();
@@ -1192,7 +1403,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// [`gone_orders`] of the book, asked of the node in one query (no answer: nothing is taken as spent).
+    /// [`gone_orders`] of the book, asked of the node in one query.
+    ///
+    /// Without an answer nothing is taken as spent.
     async fn gone(&self, orders: &[ListedOrder], daa: u64) -> BTreeSet<CovId> {
         let addresses = order_addresses(orders, &self.cfg.network);
         if addresses.is_empty() {
@@ -1213,7 +1426,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let kind = t.kind.clone();
         let (fee, fee_rate) = (t.fee, t.fee_rate);
         self.source.watch(txid);
-        // write-ahead (`super::journal`): a kill between here and the node's answer leaves the entry for the next start to settle
+        // Write-ahead (`super::journal`). A kill between here and the node's answer leaves the
+        // entry for the next start to settle.
         if let Some(j) = self.journal.as_mut() {
             j.add(&t, None);
         }
@@ -1258,8 +1472,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.finish(&rep);
             return Ok(rep);
         }
-        // A submit that got no answer may have reached the node: settle the doubt before planning anything over its inputs. A
-        // resend is checked first (`Tracker::stale`): the planning gates saw the transaction when it was planned, not now.
+        // A submit that got no answer may have reached the node. Settle the doubt before planning
+        // anything over its inputs. A resend is checked first (`Tracker::stale`), because the
+        // planning gates saw the transaction when it was planned, not now.
         if !self.cfg.dry_run {
             let margin = self.cfg.clock_skew_max_secs.saturating_add(self.clock_skew.unwrap_or(0).unsigned_abs());
             let resend = ResendClock { daa, utc: utc_now(), margin_secs: margin };
@@ -1271,8 +1486,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     _ => {}
                 }
             }
-            // a pending transaction no block accepted for a while: the node says whether it still holds it (never forgotten
-            // while it does: its funding coin would refuse every later batch as a mempool double spend)
+            // A pending transaction that no block accepted for a while. The node says whether it
+            // still holds it. It is never forgotten while the node does, or its funding coin would
+            // refuse every later batch as a mempool double spend.
             let r = self.tracker.recheck_pending(&self.node, &resend, true).await;
             for (t, why) in &r.dropped {
                 tracing::warn!(
@@ -1291,9 +1507,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 tracing::debug!(kept = r.kept.len(), "pending transactions still held by the node");
             }
         }
-        // Nothing is planned over a store that lags the chain: after a restart the store is where the last run left it (seconds
-        // to hours behind), so the orders and the operator's tokens it lists may be spent already (the soak's restarts lost
-        // maintenance sells to `MissingInput` that way). Acceptance tracking above continues.
+        // Nothing is planned over a store that lags the chain. After a restart the store is where
+        // the last run left it, seconds to hours behind. So the orders and the operator's tokens it
+        // lists may be spent already, and a transaction over them fails with `MissingInput`.
+        // Acceptance tracking above continues.
         if let Err(why) = self.source.ready() {
             if self.waiting.is_none() {
                 tracing::info!(%why, "waiting for the indexer to catch up; planning nothing");
@@ -1306,8 +1523,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         if let Some(why) = self.waiting.take() {
             tracing::info!(was = %why, "the indexer caught up; planning");
         }
-        // a retired transaction that no node's mempool holds any more (twice in a row) is not waited for until its hold
-        // ends: its inputs are free again (audit round 3 R3-L-4); an unsure answer keeps the hold
+        // A retired transaction that no node's mempool holds any more, twice in a row, is not
+        // waited for until its hold ends. Its inputs are free again. An unsure answer keeps the
+        // hold.
         for id in self.tracker.retired_to_check(daa) {
             let held = self.node.in_mempool(id).await.ok();
             if let Some(t) = self.tracker.retired_checked(&id, held, daa) {
@@ -1318,7 +1536,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 );
             }
         }
-        // the store is current: a retired transaction it does not show accepted by now was not mined
+        // The store is current, so a retired transaction it does not show accepted by now was not
+        // mined.
         for t in self.tracker.forget_retired(daa) {
             tracing::info!(
                 txid = %kob_protocol::json::to_hex(&t.txid),
@@ -1338,7 +1557,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.finish(&rep);
             return Ok(rep);
         }
-        // A pending transaction whose order input the book no longer lists lost its race: its other orders are free again.
+        // A pending transaction whose order input the book no longer lists lost its race: its other
+        // orders are free again.
         let listed = listed_outpoints(&book.orders);
         let mut match_lost = 0usize;
         for txid in self.tracker.drop_lost(&self.node, &listed, daa).await {
@@ -1350,7 +1570,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.refresh_fees().await;
         let mut spent = self.reserved_or_spent();
         let (funding, total, coins) = self.funding(&spent).await?;
-        // a held funding coin the node no longer lists is released (its spender was mined)
+        // A held funding coin that the node no longer lists is released, since its spender was
+        // mined.
         self.tracker.note_operator_coins(coins, daa);
         rep.funding = Some(funding.iter().map(|k| k.utxo.amount).sum());
         rep.funding_total = Some(total);
@@ -1359,8 +1580,9 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.check_clock().await;
         let clock = Clock { daa, utc: utc_now() };
         self.deadline_near = self.near_deadline(&book.orders, clock.utc);
-        // the orders the node no longer holds (the book lags the chain): never planned, by the matcher or the keepers
-        // (only while the book lags by `verify_live_min_lag`: the node round trip costs races when the book is current)
+        // The orders the node no longer holds, because the book lags the chain. Neither the matcher
+        // nor the keepers plan them. The node is asked only while the book lags by
+        // `verify_live_min_lag`, since the round trip costs races when the book is current.
         let verify = info.has_utxo_index && daa.saturating_sub(book.daa_score) >= self.cfg.verify_live_min_lag;
         let gone = if verify {
             let all: Vec<ListedOrder> = book.orders.iter().chain(&book.keeper_only).cloned().collect();
@@ -1379,7 +1601,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         excluded.extend(self.deadline_near.iter().copied());
 
         if self.cfg.roles.matcher {
-            // the inventory policy's budgets of the period (they bound what the tick may keep)
+            // The inventory policy's budgets of the period, which bound what the tick may keep.
             let period = self.cfg.engine.planner.inventory.period_daa;
             self.inventory_use.roll(daa, period);
             self.cfg.engine.planner.inventory.used = self.inventory_use.clone();
@@ -1405,8 +1627,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 }
                 rep.quarantined += 1;
             }
-            // Orders a token program refuses in the engine pre-simulation are flagged and probed again later; those whose
-            // pre-simulation passed lose the flag.
+            // Orders that a token program refuses in the engine pre-simulation are flagged and
+            // probed again later. Those whose pre-simulation passed lose the flag.
             let mut flagged: Vec<(CovId, String)> = vec![];
             for s in &report.suspects {
                 if !flagged.iter().any(|(id, _)| *id == s.id) {
@@ -1498,13 +1720,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
 
         if self.cfg.roles.keeper {
-            // this process's stuck kills and refunds first: their replacements keep their inputs (and may take a funding UTXO)
+            // This process's stuck kills and refunds go first. Their replacements keep their
+            // inputs, and may take a funding UTXO.
             let spare: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
             let replaced_subsidised = self.replace_stuck(daa, &spare, &mut rep).await?;
             spent = self.reserved_or_spent();
             let funding: Vec<KeyUtxo> = funding.iter().filter(|k| !spent.contains(&outpoint(&k.utxo))).cloned().collect();
-            // the listed orders plus the proven unlisted ones (kill / refund / close only: the keepers never match): the
-            // snapshot's `keeper_only` (an indexer's, or a `--book-file`'s) and the source's
+            // The listed orders plus the proven unlisted ones, for kills, refunds and closes only,
+            // since the keepers never match. The unlisted ones are the snapshot's `keeper_only`, of
+            // an indexer or a `--book-file`, and the source's.
             let mut orders = book.orders.clone();
             let mut seen: BTreeSet<CovId> = orders.iter().map(|o| o.id()).collect();
             for o in book.keeper_only.iter().cloned().chain(self.source.keeper_only_orders()) {
@@ -1515,9 +1739,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let mut excluded = self.tracker.backed_off(daa);
             excluded.extend(gone.iter().copied());
             excluded.extend(busy_orders(&orders, &spent));
-            // a token program refused to move these in the matcher's pre-simulation: a refund would fail the same way
+            // A token program refused to move these in the matcher's pre-simulation, so a refund
+            // would fail the same way.
             excluded.extend(self.frozen_until.keys().copied());
-            // forget the orders that moved on
+            // Forget the orders that moved on.
             let live: BTreeSet<(CovId, super::book::Outpoint)> = orders.iter().map(|o| (o.id(), outpoint(&o.order.utxo))).collect();
             let live_outpoints: BTreeSet<super::book::Outpoint> = live.iter().map(|(_, op)| *op).collect();
             self.keeper_unprofitable.retain(|k| live.contains(k));
@@ -1537,7 +1762,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 excluded_outpoints,
                 known_unprofitable: self.keeper_unprofitable.clone(),
             };
-            // the subsidy this step may still hand out: the rolling budget left, the step's cap less the replacements'
+            // The subsidy this step may still hand out: the rolling budget left, and the step's cap
+            // less the replacements'.
             let allowance = SubsidyAllowance {
                 sompi: self.keeper_subsidy.left(&self.cfg.keeper, daa),
                 jobs: self.cfg.keeper.subsidy_max_jobs.saturating_sub(replaced_subsidised),
@@ -1565,7 +1791,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 self.defer(&inp.orders, &report.deferred, daa);
             }
             let (mut keep_lost, mut keep_sent) = (0usize, 0usize);
-            // bounded retry of jobs that failed to build: a growing backoff per order outpoint (a new outpoint starts over)
+            // Bounded retry of jobs that failed to build, with a growing backoff per order
+            // outpoint. A new outpoint starts over.
             for (_, op) in &report.failed {
                 let e = self.keeper_failed.entry(*op).or_insert((0, 0));
                 e.1 = e.1.saturating_add(1);
@@ -1612,7 +1839,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     keep_sent += 1;
                     self.ceded_watch.remove(&j.order);
                 }
-                // a submit without a verdict may still be accepted: its subsidy counts against the budget too
+                // A submit without a verdict may still be accepted, so its subsidy counts against
+                // the budget too.
                 if j.subsidy > 0 && (sent || rep.unknown.last() == Some(&txid)) {
                     self.charge_subsidy(daa, j.subsidy);
                 }
@@ -1653,8 +1881,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         Ok(rep)
     }
 
-    /// The maintenance jobs (`crate::maintenance`): the operator's token UTXOs merged or sold, after the matcher's and the
-    /// keepers' transactions of the tick (whose inputs are left alone).
+    /// The maintenance jobs (`crate::maintenance`), which merge or sell the operator's token UTXOs.
+    ///
+    /// They run after the matcher's and the keepers' transactions of the tick, and leave their
+    /// inputs alone.
     async fn maintenance(
         &mut self,
         orders: &[ListedOrder],
@@ -1714,7 +1944,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 continue;
             }
             let filled: BTreeSet<CovId> = j.order.into_iter().collect();
-            // a sale fills a bid at the book's price of this tick: never sent again once that price is stale
+            // A sale fills a bid at the book's price of this tick. It is never sent again once that
+            // price is stale.
             let (deadline, mut resend_until) = fill_bounds(orders, &filled, daa);
             if matches!(j.kind, crate::maintenance::MaintKind::Sell) {
                 let fresh = daa.saturating_add(MAINTENANCE_SALE_FRESH_DAA);
@@ -1754,8 +1985,10 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         self.publish(rep);
     }
 
-    /// The journal brought in line with the tracker, the metrics file written and the runner's facts handed to the book source
-    /// (`/v1/health`, `/v1/metrics`): after every step, a failed one included.
+    /// Publishes the step's state after every step, a failed one included.
+    ///
+    /// It brings the journal in line with the tracker, writes the metrics file, and hands the
+    /// runner's facts to the book source for `/v1/health` and `/v1/metrics`.
     fn publish(&mut self, rep: &StepReport) {
         if let Some(j) = self.journal.as_mut() {
             j.sync(&self.tracker.txs, &self.keeper_inflight);
@@ -1803,19 +2036,24 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         }
     }
 
-    /// Runs until `shutdown` resolves. A step in flight when it does (a request to a node that does not answer can take its
-    /// whole timeout) gets [`STEP_GRACE`] to end, for a transaction being submitted, and is dropped after that.
+    /// Runs until `shutdown` resolves.
+    ///
+    /// A step in flight at that moment gets [`STEP_GRACE`] to end, for a transaction being
+    /// submitted, and is dropped after that. A request to a node that does not answer could
+    /// otherwise take its whole timeout.
     pub async fn run(&mut self, shutdown: impl std::future::Future<Output = ()>) -> anyhow::Result<()> {
         tokio::pin!(shutdown);
-        // the first status line comes after the first tick, then one every `status_every`
+        // The first status line comes after the first tick, then one every `status_every`.
         let mut status_at: Option<std::time::Instant> = None;
-        // when and at what balance the low-funds warning was last logged (the status line shows the funds every `--status-secs`)
+        // When and at what balance the low-funds warning was last logged. The status line shows
+        // the funds every `--status-secs`.
         let mut low_funds_logged: Option<(std::time::Instant, u64)> = None;
-        // since when the book source has been halted (`BookSource::fatal`)
+        // Since when the book source has been halted (`BookSource::fatal`).
         let mut halted_since: Option<std::time::Instant> = None;
-        // the reasons of the last tick's skipped books and jobs: a new reason is logged at INFO, a repeated one at DEBUG
+        // The reasons of the last tick's skipped books and jobs. A new reason is logged at INFO,
+        // and a repeated one at DEBUG.
         let mut skipped_before: BTreeSet<String> = BTreeSet::new();
-        // the build, once (the status line no longer repeats it)
+        // The build, logged once. The status line does not repeat it.
         tracing::info!("{}", crate::version::build_line());
         loop {
             let res = {
@@ -1841,7 +2079,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             match res {
                 Ok(r) => {
                     if !r.built.is_empty() || !r.skipped.is_empty() {
-                        // the per-tick detail (the submissions themselves are logged at INFO where they are sent)
+                        // The per-tick detail. The submissions themselves are logged at INFO where
+                        // they are sent.
                         tracing::debug!(
                             daa = r.daa,
                             built = r.built.len(),
@@ -1852,19 +2091,21 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                             "tick"
                         );
                     }
-                    // why a book or job was skipped (an engine rejection, unprofitable, too large): the operator's only
-                    // trace of a batch that keeps failing (the soak's cross-limit budget finding needed it). A reason is
-                    // logged at INFO when it appears, at DEBUG while it repeats tick after tick.
+                    // Why a book or job was skipped, such as an engine rejection, unprofitable or
+                    // too large. It is the operator's only trace of a batch that keeps failing. A
+                    // reason is logged at INFO when it appears, and at DEBUG while it repeats tick
+                    // after tick.
                     for why in &r.skipped {
                         info_unless!(skipped_before.contains(why), why = %why, "skipped");
                     }
                     skipped_before = r.skipped.iter().cloned().collect();
-                    // only a funding actually read is judged (a step that planned nothing read none: not `0`), and on the
-                    // whole balance: coins pending transactions hold are still the operator's (a busy operator's free
-                    // coins are often a few KAS while its balance is large)
+                    // Only a funding actually read is judged. A step that planned nothing read
+                    // none, which is not `0`. The judgement is on the whole balance, because coins
+                    // that pending transactions hold are still the operator's. A busy operator's
+                    // free coins are often a few KAS while its balance is large.
                     let low = r.funding_total.filter(|f| *f < self.cfg.low_funds && !self.cfg.dry_run);
                     if low.is_none() && r.funding_total.is_some() {
-                        // funded again: the next fall below the threshold is reported at once
+                        // Funded again, so the next fall below the threshold is reported at once.
                         low_funds_logged = None;
                     }
                     if let Some(f) = low.filter(|f| low_funds_due(low_funds_logged, *f, std::time::Instant::now())) {
@@ -1879,15 +2120,16 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "tick failed");
-                    // a failed step still writes the metrics and the health (the failure counted), so a monitor sees it
+                    // A failed step still writes the metrics and the health, with the failure
+                    // counted, so a monitor sees it.
                     self.tick_errors += 1;
                     self.last_tick_error = Some(e.to_string());
                     let last = self.last.clone();
                     self.publish(&last);
                 }
             }
-            // a halted indexer (or a dead read API) does not come back by itself: end, so that the supervisor restarts the
-            // process (audit 2026-11-11 M-4)
+            // A halted indexer, or a dead read API, does not come back by itself. End, so that the
+            // supervisor restarts the process.
             match self.source.fatal() {
                 Some((now, why)) => {
                     let since = *halted_since.get_or_insert_with(std::time::Instant::now);
@@ -1916,43 +2158,61 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
 /// How long the low-funds warning stays quiet after it was logged, unless the balance moves a lot.
 const LOW_FUNDS_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(600);
 
-/// Whether the low-funds warning for `funding` (sompi) is due: the first time, every ten minutes after, or when the balance is
-/// a quarter (at least 1 KAS) above or below the one last reported. `last`: when and at what balance it was last logged.
+/// Whether the low-funds warning for `funding`, in sompi, is due.
+///
+/// It is due the first time, every ten minutes after, or when the balance is a quarter, and at
+/// least 1 KAS, above or below the one last reported. `last` is when and at what balance it was
+/// last logged.
 fn low_funds_due(last: Option<(std::time::Instant, u64)>, funding: u64, now: std::time::Instant) -> bool {
     let Some((at, then)) = last else { return true };
     now.saturating_duration_since(at) >= LOW_FUNDS_LOG_EVERY || funding.abs_diff(then) >= (then / 4).max(100_000_000)
 }
 
-/// What the console status line ([`status_line`]) reports: the book source's own line, the last step's state, the
-/// tracker's totals since the start and the operator's funds.
+/// What the console status line ([`status_line`]) reports.
+///
+/// That is the book source's own line, the last step's state, the tracker's totals since the start
+/// and the operator's funds.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StatusFacts {
+    /// The book source's own part of the line.
     pub source: Option<String>,
+    /// Whether the node is synced.
     pub synced: bool,
+    /// Whether the kill switch is on.
     pub paused: bool,
+    /// Why the book source is not ready.
     pub not_ready: Option<String>,
+    /// The book lags the node too far to plan against.
     pub book_stale: bool,
+    /// Transactions submitted since the start.
     pub submitted: u64,
+    /// Transactions final since the start.
     pub finalized: u64,
+    /// Operator profit of the final transactions, in sompi.
     pub profit_sompi: i64,
+    /// Transactions pending now.
     pub pending: usize,
+    /// Transactions the node rejected since the start.
     pub rejected: u64,
+    /// The operator's whole P2PK balance, when read.
     pub funding_total: Option<u64>,
+    /// The low-funds threshold, in sompi.
     pub low_funds: u64,
-    /// The operator's address, named in the low-funds warning (where to send KAS).
+    /// The operator's address, named in the low-funds warning as where to send KAS.
     pub funding_address: Option<String>,
+    /// A dry run, which submits nothing.
     pub dry_run: bool,
-    /// The last tick failed (the node unreachable, the network wrong): why.
+    /// Why the last tick failed, for example with the node unreachable or the network wrong.
     pub tick_error: Option<String>,
-    /// Transactions given up since the start (refused when checked again, lost races).
+    /// Transactions given up since the start, refused when checked again or lost races.
     pub dropped: u64,
     /// Seconds the oldest pending transaction has waited.
     pub oldest_pending_secs: u64,
-    /// The local clock's skew from the chain's while it is beyond the bound (seconds).
+    /// The local clock's skew from the chain's in seconds, while it is beyond the bound.
     pub clock_skew_alarm: Option<i64>,
-    /// What that skew most likely means ([`clock_cause`]; `None`: no alarm).
+    /// What that skew most likely means ([`clock_cause`]). `None` means no alarm.
     pub clock_cause: Option<ClockCause>,
-    /// The build ([`crate::version::build_line`]); `None`: not shown.
+    /// The build ([`crate::version::build_line`]). `None` means it is not shown.
     pub build: Option<String>,
 }
 
@@ -1983,7 +2243,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             oldest_pending_secs: t.oldest_pending_daa(rep.daa) / 10,
             clock_skew_alarm: self.clock_skew.filter(|_| self.clock_alarm()),
             clock_cause: self.clock_cause.filter(|_| self.clock_alarm()),
-            // the build is logged once at the start, not on every status line
+            // The build is logged once at the start, not on every status line.
             build: None,
         }
     }
@@ -2002,14 +2262,17 @@ pub fn kas_text(sompi: i64) -> String {
     }
 }
 
-/// The one-line status an operator watching the console reads (`kobd --executor --status-secs`, every 10 s by default, as kaspad
-/// prints its "Processed N blocks in the last 10s" line): where the book is, what the executor sent and earned since the start,
-/// its funds, the mode, and what needs attention. What does not change (the build, the configuration) is logged once at the
-/// start instead. The metrics file (`--metrics-file`) carries the same facts for monitoring.
+/// The one-line status that an operator watching the console reads.
+///
+/// `kobd --executor --status-secs` logs it, every 10 s by default, as kaspad prints its "Processed
+/// N blocks in the last 10s" line. It says where the book is, what the executor sent and earned
+/// since the start, its funds, the mode, and what needs attention. What does not change, such as
+/// the build and the configuration, is logged once at the start instead. The metrics file
+/// (`--metrics-file`) carries the same facts for monitoring.
 pub fn status_line(f: &StatusFacts) -> String {
     let mut parts = vec![];
     if f.dry_run {
-        // the operator's choice, not a warning
+        // The operator's choice, not a warning.
         parts.push("dry run (nothing is submitted)".to_string());
     }
     if let Some(s) = &f.source {
@@ -2061,7 +2324,7 @@ pub fn status_line(f: &StatusFacts) -> String {
     parts.join(" | ")
 }
 
-/// Prometheus textfile-collector metrics.
+/// The runner's metrics in the Prometheus text format, for the textfile collector.
 pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepReport) -> String {
     let t = &r.tracker;
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
@@ -2140,7 +2403,8 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
         "1 while the local clock is beyond the bound from the chain's (day orders near their deadline are not filled).",
         (r.clock_alarm() as u8).to_string(),
     );
-    // the last funding read (a step that waited read none); unknown before the first read: no alert
+    // The last funding read, since a step that waited read none. It is unknown before the first
+    // read, which raises no alert.
     let funding = rep.funding.or(r.last_funding);
     let total = rep.funding_total.or(r.last_funding_total);
     g(
@@ -2238,7 +2502,7 @@ fn write_metrics<N: NodeApi, S: BookSource>(p: &Path, r: &mut Runner<N, S>, rep:
     let tmp = p.with_extension("prom.tmp");
     let mut extra = r.source.metrics();
     if extra.is_empty() {
-        // a book source without metrics of its own (a book file): the build is still named
+        // A book source without metrics of its own, such as a book file. The build is still named.
         extra = crate::version::build_info_metric();
     }
     std::fs::write(&tmp, metrics_text(r, rep) + &extra)?;
@@ -2291,7 +2555,7 @@ mod tests {
             "indexer following, caught up (2 DAA behind the node), 9 orders indexed | sent 14, final 12, pending 1, profit 0.42 KAS \
              | funds 182.4 KAS | no warnings"
         );
-        // a dry run is a mode, not a warning
+        // A dry run is a mode, not a warning.
         f.dry_run = true;
         assert!(
             status_line(&f).starts_with("dry run (nothing is submitted) | indexer following")
@@ -2312,7 +2576,7 @@ mod tests {
             ),
             "{s}"
         );
-        // with the address known, the warning says where to send KAS
+        // With the address known, the warning says where to send KAS.
         f.funding_address = Some("kaspa:qqexample".into());
         assert!(status_line(&f).contains("funds low (50 KAS, below 100 KAS; send KAS to kaspa:qqexample)"));
         f.funding_address = None;
