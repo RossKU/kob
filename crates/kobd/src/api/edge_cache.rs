@@ -43,9 +43,10 @@ pub const BYPASS_PARAM: &str = "_nc";
 const CLOSED_AFTER_MS: i64 = 3_600_000;
 
 /// The `Cache-Control` choice for one answer.
+///
+/// `NoStore` is `no-store`. `Public` is a public lifetime.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Policy {
-    /// `no-store`.
     NoStore,
     /// `public, max-age=N, s-maxage=N` and `stale-while-revalidate=M` when `M` is not 0.
     Public {
