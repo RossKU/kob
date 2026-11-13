@@ -1,28 +1,60 @@
-//! The Indexer's node failover (`[failover] fallback = "resolver"`): the configured nodes first, the public Kaspa nodes as a
-//! cross-checked pair (`rpc::resolver`, `rpc::multi`) when the configured node stops answering, and back once it is healthy.
+//! The Indexer's node failover, enabled by `[failover] fallback = "resolver"`.
 //!
-//! Two node lists ("tiers") behind one [`ChainSource`]: tier 0 is the configured primary with its `nodes`, tier 1 the
-//! fallback. Every call goes to the active tier only; the other one opens no connection except for the checks below.
+//! The configured nodes serve first. When they stop answering, the public Kaspa nodes serve as a
+//! cross-checked pair (`rpc::resolver`, `rpc::multi`). The configured nodes serve again once they
+//! are healthy.
 //!
-//! * **Away from the primary.** A call the configured primary fails on the wire (transport, timeout, an undecodable answer,
-//!   a node in IBD; a node error such as an unknown hash is an answer, not a failure) counts; any answer resets the count.
-//!   After `after_failures` such calls in a row **and** `after` without any answer, the fallback is checked (the right
-//!   network, synced, it knows the cursor) and, when it passes, becomes the chain source. A slow primary whose small calls
-//!   still answer never switches.
-//! * **Back to the primary.** On the fallback, the primary is probed every `probe_every` in the background (the right
-//!   network, synced, it knows the cursor, its sink at most `max_behind_blue` behind the fallback's); after
-//!   `return_after_probes` healthy probes in a row it is the chain source again.
-//! * **No divergent chain view is taken silently.** Right after a switch the new tier is *settling*: its first answer from the
-//!   cursor may remove at most `max_reorg_blocks` chain blocks (a reorg the old node had not seen yet), and a cursor it does
-//!   not know is not walked back over (`indexer::follower` would rewind the store to the newest block it knows). Either is
-//!   refused (logged as an error, counted as `refused` in `/v1/health`, nothing applied); a refused return to the primary
-//!   goes back to the fallback at once and probes the primary again only after ten probe intervals. The tier settles with
-//!   its first answer that continues the cursor. An answer of a tier that stopped being the chain source while it travelled
-//!   is not applied either (the follower asks again). After it settles the follower's own rules apply as for any node: a
-//!   `removed` list that contradicts the stored chain stops the indexer (`gap`), and the fallback pair applies only what
-//!   both of its public nodes report (`rpc::multi`).
+//! # Tiers
 //!
-//! Every switch and every refusal is logged with its reason; `/v1/health` reports the state under `node_source`.
+//! Two node lists, the tiers, sit behind one [`ChainSource`]. Tier 0 is the configured primary with
+//! its `nodes`. Tier 1 is the fallback. Every call goes to the active tier. The other tier opens no
+//! connection except for the checks below.
+//!
+//! # Away from the primary
+//!
+//! A call counts as failed when the configured primary fails it on the wire. That means a transport
+//! error, a timeout, an undecodable answer or a node in initial block download. A node error such
+//! as an unknown hash is an answer and not a failure. Any answer resets the count.
+//!
+//! The fallback is checked after `after_failures` failed calls in a row and `after` without any
+//! answer. The check wants the right network, a synced node and a node that knows the cursor. When
+//! the fallback passes, it becomes the chain source. A slow primary whose small calls still answer
+//! never switches.
+//!
+//! The primary can fail its chain requests while its small calls answer. The follower then reports
+//! a failing authority (`ChainSource::authority_failing`). The active tier first hands the chain
+//! authority to another of its own nodes (`rpc::multi`). When the configured nodes cannot do that,
+//! the fallback is checked as above and becomes the chain source if it passes.
+//!
+//! # Back to the primary
+//!
+//! While the fallback serves, a background probe of the primary runs every `probe_every`. The probe
+//! wants the right network, a synced node and a node that knows the cursor. Its sink may be at most
+//! `max_behind_blue` behind the sink of the fallback. After `return_after_probes` healthy probes in
+//! a row the primary is the chain source again.
+//!
+//! # Settling
+//!
+//! A tier is settling right after a switch. It never takes a divergent chain view silently.
+//!
+//! - Its first answer from the cursor may remove at most `max_reorg_blocks` chain blocks. A longer
+//!   removal may be a reorg the old node had not seen yet.
+//! - A cursor the tier does not know is not walked back over. `indexer::follower` would rewind the
+//!   store to the newest block the tier knows.
+//!
+//! A refused answer is logged as an error and counted as `refused` in `/v1/health`. Nothing is
+//! applied. A refused return to the primary goes back to the fallback at once. The primary is
+//! probed again only after ten probe intervals.
+//!
+//! The tier settles with its first answer that continues the cursor. An answer of a tier that
+//! stopped being the chain source while it travelled is not applied, and the follower asks again.
+//! After the tier settles, the follower's own rules apply as for any node.
+//!
+//! - A `removed` list that contradicts the stored chain stops the indexer (`gap`).
+//! - The fallback pair applies only what both of its public nodes report (`rpc::multi`).
+//!
+//! Every switch and every refusal is logged with its reason. `/v1/health` reports the state under
+//! `node_source`.
 
 use super::multi::NodeStatus;
 use super::types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, VspcRequest};
@@ -42,7 +74,8 @@ pub struct FailoverPolicy {
     pub return_after_probes: u32,
     pub max_reorg_blocks: usize,
     pub max_behind_blue: u64,
-    /// One check of a tier (the fallback before a switch, a probe of the primary) may take this long.
+    /// How long one check of a tier may take. A check is the fallback before a switch or a probe of
+    /// the primary.
     pub check_timeout: Duration,
 }
 
@@ -73,7 +106,8 @@ pub struct FailoverStatus {
     pub last_switch_unix_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_switch_reason: Option<String>,
-    /// The tier now serving has not yet shown that its chain continues the cursor (right after a switch).
+    /// Whether the serving tier has yet to show that its chain continues the cursor. True right
+    /// after a switch.
     pub settling: bool,
     /// Calls the active tier failed in a row.
     pub consecutive_failures: u32,
@@ -90,10 +124,11 @@ struct State {
     settling: bool,
     failures: u32,
     last_ok: Instant,
-    /// No check of the fallback (on the primary) or probe of the primary (on the fallback) before this.
+    /// No check of the fallback (on the primary) or probe of the primary (on the fallback) before
+    /// this time.
     next_check: Instant,
     probes_ok: u32,
-    /// The start of the last answer from the cursor that was applied: the cursor a tier must know.
+    /// The start of the last applied answer from the cursor. It is the cursor a tier must know.
     last_start: Option<Hash32>,
     switches: u64,
     last_switch_unix_ms: Option<u64>,
@@ -128,8 +163,8 @@ fn unix_ms() -> u64 {
 }
 
 impl<S: ChainSource> Failover<S> {
-    /// `primary`: the configured nodes (shown as `primary_shown`); `fallback`: the fallback (shown as `fallback_shown`).
-    /// `network`: what both must report.
+    /// `primary` is the configured nodes, shown as `primary_shown`. `fallback` is the fallback,
+    /// shown as `fallback_shown`. `network` is the network both must report.
     pub fn new(
         primary: Arc<S>,
         fallback: Arc<S>,
@@ -223,8 +258,9 @@ impl<S: ChainSource> Inner<S> {
         }
     }
 
-    /// Whether tier `t` can serve: the right network, synced, it knows the cursor, and (`against`) its sink at most
-    /// `max_behind_blue` behind that tier's.
+    /// Whether tier `t` can serve. It needs the right network, a synced node and a node that knows
+    /// the cursor. With `against`, its sink may be at most `max_behind_blue` behind the sink of
+    /// that tier.
     async fn healthy(&self, t: usize, against: Option<usize>) -> Result<(), String> {
         let node = self.tiers[t].clone();
         let cursor = self.with(|s| s.last_start);
@@ -303,8 +339,8 @@ impl<S: ChainSource> Inner<S> {
         }
     }
 
-    /// After a call of tier `t`: count a failure, or an answer; enough failures of the primary check the fallback (in the
-    /// background).
+    /// After a call of tier `t`, counts a failure or an answer. Enough failures of the primary
+    /// check the fallback in the background.
     fn observe<T>(self: &Arc<Self>, t: usize, r: &Result<T, RpcError>) {
         let p = &self.policy;
         let check = self.with(|s| {
@@ -346,8 +382,9 @@ impl<S: ChainSource> Inner<S> {
         (t, r)
     }
 
-    /// An answer of tier `t` from `start` (the cursor) refused: counted and logged; a refused return to the primary goes back to
-    /// the fallback and probes the primary again only after ten probe intervals.
+    /// An answer of tier `t` from `start` (the cursor) was refused. It is counted and logged. A
+    /// refused return to the primary goes back to the fallback. The primary is probed again only
+    /// after ten probe intervals.
     fn refuse(&self, t: usize, why: String) -> RpcError {
         self.with(|s| {
             s.refused += 1;
@@ -394,7 +431,8 @@ impl<S: ChainSource> Inner<S> {
         }
     }
 
-    /// Tier `t` answered from `start` in a way that continues it: settled, and `start` is the cursor to check from now on.
+    /// Tier `t` answered from `start` in a way that continues it. The tier is settled, and `start`
+    /// is the cursor to check from now on.
     fn settled(&self, t: usize, start: Hash32) {
         let was = self.with(|s| {
             if s.active != t {
@@ -462,8 +500,9 @@ impl<S: ChainSource> ChainSource for Failover<S> {
         let t = (origin.tier as usize).min(1);
         self.inner.tiers[t].report_lie(Origin { tier: 0, ..origin }, why);
     }
-    /// The active tier hands the authority over within itself first (`rpc::multi`); when the configured nodes cannot, the
-    /// fallback is checked and, when it can serve, becomes the chain source (settling as after any switch).
+    /// Hands the authority over within the active tier first (`rpc::multi`). When the configured
+    /// nodes cannot, the fallback is checked. If it can serve, it becomes the chain source and
+    /// settles as after any switch.
     async fn authority_failing(&self, at: Hash32, why: &str) -> bool {
         let t = self.active();
         if self.inner.tiers[t].authority_failing(at, why).await {
