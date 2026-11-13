@@ -1,5 +1,6 @@
-// Composition root: builds every service the UI needs from an `AppConfig`. The UI never constructs data-layer objects itself; it receives
-// `Services` (through the Preact context in app/context.tsx) so tests can substitute any part.
+// Composition root. It builds every service the UI needs from an `AppConfig`. The UI never
+// constructs data-layer objects itself. It receives `Services` through the Preact context in
+// app/context.tsx, so tests can substitute any part.
 import { indexerKey, type AppConfig } from '../config';
 import { createFeeService, type FeeService } from '../kob/fee-policy';
 import { HttpIndexer, IndexerFeed, type IndexerApi } from '../data/indexer';
@@ -14,40 +15,52 @@ import { parseRegistry, type TokenRegistry } from '../kob/registry';
 import type { KobWasm } from '../kob/wasm';
 import { loadKob } from '../kob/wasm.browser';
 
+/** Everything the UI reads from the data layer. */
 export interface Services {
   config: AppConfig;
   kob: KobWasm;
   sdk: KaspaSdk;
   node: NodeApi;
   /**
-   * null when `config.indexerUrl` is empty: market/orders views degrade to node-only features. With `extraIndexerUrls` this is the ACTIVE indexer: the
-   * primary while it is healthy, else a healthy backup (see `failover`); one call goes to one indexer.
+   * Null when `config.indexerUrl` is empty, and then the market and order views degrade to
+   * node-only features. With `extraIndexerUrls` this is the active indexer: the primary while it
+   * is healthy, else a healthy backup (see `failover`). One call goes to one indexer.
    */
   indexer: IndexerApi | null;
   feed: IndexerFeed | null;
-  /** empty registry (no tokens) when loading failed: see `registryError` */
+  /** An empty registry, with no tokens, when loading failed (see `registryError`). */
   registry: TokenRegistry;
   registryError: string | null;
   /**
-   * the indexers key facts are cross-checked against: the further indexers (config `extraIndexerUrls`) while the primary is active; on a backup, the
-   * other ones and the primary while it answers. Empty = a single indexer, unverified. A getter with failover: read it when it is used.
+   * The indexers that key facts are cross-checked against. While the primary is active these are
+   * the further indexers (config `extraIndexerUrls`). On a backup they are the other backups and
+   * the primary while it answers. Empty means a single indexer, unverified. With failover this is
+   * a getter, so read it when it is used.
    */
   verifiers: { label: string; api: IndexerApi }[];
-  /** the failover between the primary indexer and the further ones (null: a single indexer, or one given by the caller) */
+  /**
+   * The failover between the primary indexer and the further ones. Null for a single indexer, or
+   * one given by the caller.
+   */
   failover: IndexerFailover | null;
-  /** `indexer` as it is NOW (not the proxy): a read of several parts that must come from one indexer pins it first */
+  /**
+   * `indexer` as it is now, not the proxy. A read of several parts that must come from one
+   * indexer pins it first.
+   */
   pinnedIndexer(): IndexerApi | null;
   utxos: UtxoService;
   tracker: TokenTracker;
-  /** the dynamic fee policy (from `config.fees`) and the oracle that reads the node's fee estimate */
+  /** The fee policy (from `config.fees`) and the oracle that reads the node's fee estimate. */
   fees: FeeService;
   /**
-   * standalone mode (data/standalone.ts): the market from the node's blocks while the indexer cannot be used, or always (`config.standalone`); while it
-   * is active `indexer` answers from it. null when the node cannot follow blocks or the caller supplied its own indexer.
+   * Standalone mode (data/standalone.ts) builds the market from the node's blocks while the
+   * indexer cannot be used, or always (`config.standalone`). While it is active, `indexer` answers
+   * from it. Null when the node cannot follow blocks or the caller supplied its own indexer.
    */
   standalone?: StandaloneController | null;
 }
 
+/** Parts a caller may supply instead of the ones `createServices` builds, mostly for tests. */
 export interface CreateServicesOverrides {
   kob?: KobWasm;
   sdk?: KaspaSdk;
@@ -75,7 +88,10 @@ async function loadRegistry(
   }
 }
 
-/** The fee policy of `config.fees` and, when it is dynamic, an oracle over the node's `getFeeEstimate` (a node without it answers null: the floor). */
+/**
+ * The fee policy of `config.fees` and, when it is dynamic, an oracle over the node's
+ * `getFeeEstimate`. A node without it answers null, and then the floor applies.
+ */
 export function feeServiceFor(config: Pick<AppConfig, 'fees'>, node: Pick<NodeApi, 'getFeeEstimate'>): FeeService {
   return createFeeService(config.fees, node);
 }
@@ -86,7 +102,7 @@ export function independentIndexers(config: Pick<AppConfig, 'indexerUrl' | 'extr
   return config.extraIndexerUrls.filter((u) => indexerKey(u) !== primary);
 }
 
-/** The indexer of an app without one (standalone mode switched on in Settings): every read says so. */
+/** The indexer of an app without one, when Settings turn standalone mode on. Reads all say so. */
 function noIndexer(): IndexerApi {
   return new Proxy({} as IndexerApi, {
     get: () => async () => {
@@ -95,18 +111,23 @@ function noIndexer(): IndexerApi {
   });
 }
 
-/** Loads kob-wasm and the kaspa SDK, connects the node (lazily: a failing node does not block the UI), reads the registry. */
+/**
+ * Loads kob-wasm and the kaspa SDK, connects the node and reads the registry. The node connects
+ * lazily, so a failing node does not block the UI.
+ */
 export async function createServices(config: AppConfig, o: CreateServicesOverrides = {}): Promise<Services> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const [kob, sdk] = await Promise.all([
     o.kob ? Promise.resolve(o.kob) : loadKob(),
     o.sdk ? Promise.resolve(o.sdk) : loadKaspaSdk({ exposeForTests: config.features.test }),
   ]);
-  // the offline mock node (an http(s) node URL) only in a test build or on the vite dev server
+  // The offline mock node, an http(s) node URL, only in a test build or on the vite dev server.
   const node = o.node ?? createNode({ network: config.network, nodeUrl: config.nodeUrl, allowMock: config.features.test || import.meta.env.DEV === true }, sdk);
-  // the primary indexer in another spelling (case, default port, trailing slash) is not an independent verifier
+  // The primary indexer in another spelling (case, default port, trailing slash) is not an
+  // independent verifier.
   const extras = independentIndexers(config);
-  // failover (data/indexer-failover.ts) only for the indexers the configuration names: a caller that supplies its own indexer, feed or verifiers keeps them
+  // Failover (data/indexer-failover.ts) applies only to the indexers the configuration names. A
+  // caller that supplies its own indexer, feed or verifiers keeps them.
   const withFailover = !!config.indexerUrl && extras.length > 0 && o.indexer === undefined && o.feed === undefined && o.verifiers === undefined;
   const primaryApi: IndexerApi | null = config.indexerUrl ? new HttpIndexer({ baseUrl: config.indexerUrl }) : null;
   const extraApis = extras.map((u) => ({ label: u, api: new HttpIndexer({ baseUrl: u }) as IndexerApi }));
@@ -123,9 +144,11 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
     failover = f;
     indexer = failoverIndexer(f, apis);
     pinned = () => pinnedIndexer(f, apis);
-    // the feed follows the active indexer: its first open there is a reconnect with a resync, so every live view reads again
+    // The feed follows the active indexer. Its first open there is a reconnect with a resync, so
+    // every live view reads again.
     f.subscribe((st) => feed.retarget(labels[st.active]!));
-    // one array per set of verifiers (a view's dependency list sees a change only when the set changes)
+    // One array per set of verifiers, so a view's dependency list sees a change only when the set
+    // changes.
     let cache: { key: string; list: { label: string; api: IndexerApi }[] } = { key: '', list: [] };
     verifiersOf = () => {
       const idx = f.state.verifiers;
@@ -136,7 +159,8 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
   }
   const { registry, error } = await loadRegistry(config, kob, fetchFn);
   const utxos = createUtxoService({ node, sdk, network: config.network });
-  // standalone mode over the configured indexer (or none: then only when it is switched on in Settings)
+  // Standalone mode over the configured indexer, or over none, in which case it applies only when
+  // it is switched on in Settings.
   let standalone: StandaloneController | null = null;
   if (o.standalone !== undefined) standalone = o.standalone;
   else if (o.indexer === undefined && typeof node.subscribeBlocks === 'function' && (indexer || config.standalone.manual)) {
@@ -163,10 +187,11 @@ export async function createServices(config: AppConfig, o: CreateServicesOverrid
     const inner = pinned;
     pinned = () => (sa.state.active ? sa.indexer : inner());
     const baseVerifiers = verifiersOf;
-    // the book is the node's: no indexer is asked to cross-check it (one empty list: a view's dependency list sees no change)
+    // The book is the node's, so no indexer is asked to cross-check it. One shared empty list
+    // means a view's dependency list sees no change.
     const none: { label: string; api: IndexerApi }[] = [];
     verifiersOf = () => (sa.state.active ? none : baseVerifiers());
-    // switched on in Settings: no indexer connection for the market, the feed included
+    // Switched on in Settings: no indexer connection for the market, the feed included.
     const quiet = () => {
       if (sa.manual) feed?.close();
     };

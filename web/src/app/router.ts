@@ -1,45 +1,64 @@
-// Hash router: `#/market`, `#/market/<covenantId>` (the token's KAS market), `#/market/<baseCovenantId>/<quoteCovenantId>` (a token/token pair), `#/activity` (`?market=<id>` or `?market=<base>/<quote>`: one market), `#/portfolio` (`/<tab>`, `/recover`), `#/create`,
-// `#/settings`, `#/disclaimer`, `#/support` (the market list while there is no donation address: ui/support/support-model.ts). An empty hash is the landing screen (`home`: config `home`, by default the landing page, src/ui/landing; an operator may set a chart or the list); an unknown one is the market list.
-// The parsing / formatting is pure (tested in router.test.ts); only `useRoute` / `navigate` touch `window`.
+// Hash router. The routes are:
+// - `#/market` is the market list.
+// - `#/market/<covenantId>` is a token's KAS market.
+// - `#/market/<baseCovenantId>/<quoteCovenantId>` is a token/token pair.
+// - `#/activity` is the activity log. `?market=<id>` or `?market=<base>/<quote>` narrows it to one
+//   market.
+// - `#/portfolio` is the Portfolio page. `#/portfolio/<tab>` and `#/portfolio/recover` open a tab.
+// - `#/settings`, `#/disclaimer` and `#/support`. Support shows the market list while there is no
+//   donation address (ui/support/support-model.ts).
+// An empty hash is the landing screen (`home`). Config `home` chooses it: by default the landing
+// page (src/ui/landing), or a chart or the list. An unknown hash is the market list.
+//
+// Parsing and formatting are pure and tested in router.test.ts. Only `useRoute` and `navigate`
+// touch `window`.
 import { useEffect, useState } from 'preact/hooks';
 
+/** A parsed location hash. */
 export type Route =
-  /** the landing screen (empty hash): resolved by the app from config `home` (the landing page by default, or a chart, a pair or the market list) */
+  /** The landing screen (empty hash). The app resolves it from config `home`. */
   | { name: 'home'; covenantId?: undefined }
   | { name: 'market'; covenantId?: undefined; invalidToken?: string }
   /**
-   * `ticket`: the order ticket opens on this preset (`?ticket=sell&amount=N`: sell N base units at market, the close of a buy-first position;
-   * `?ticket=cover&amount=N`: buy N base units back at market, the close of a sell-first position; `?ticket=close`: the "close (sell all)" type)
+   * `ticket` opens the order ticket on a preset.
+   * - `?ticket=sell&amount=N` sells N base units at market, the close of a buy-first position.
+   * - `?ticket=cover&amount=N` buys N base units back at market, the close of a sell-first one.
+   * - `?ticket=close` is the "close (sell all)" type.
    */
   | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
-  /** token/token pair BASE/QUOTE (pair orders of every type, prices in QUOTE per BASE): `#/market/<base>/<quote>` */
+  /** Token/token pair BASE/QUOTE (`#/market/<base>/<quote>`), with prices in QUOTE per BASE. */
   | { name: 'pair'; base: string; quote: string; covenantId?: undefined }
   /**
-   * `#/activity`: the activity log of every market; `?market=<covenant id>` narrows it to one token's KAS book, `?market=<base>/<quote>` to one pair (a link
-   * that can be shared)
+   * `#/activity` is the activity log of every market. `?market=<covenant id>` narrows it to one
+   * token's KAS book and `?market=<base>/<quote>` to one pair. Such a link can be shared.
    */
   | { name: 'activity'; market?: ActivityMarket; covenantId?: undefined }
   /**
-   * `#/portfolio` (the Portfolio page): `#/portfolio/<tab>` opens one of its tabs (balances, open orders, order history, fills); none: its first, Balances.
-   * `#/portfolio/recover`: the page with its folded section of strays, automatic refunds and recovery open
+   * `#/portfolio` is the Portfolio page. `#/portfolio/<tab>` opens one of its tabs (balances, open
+   * orders, order history, fills), and the first tab, Balances, is the default.
+   * `#/portfolio/recover` opens the page with its folded section of strays, automatic refunds and
+   * recovery.
    */
   | { name: 'portfolio'; tab?: PortfolioTab; recover?: true; covenantId?: undefined }
   | { name: 'create' | 'settings' | 'disclaimer' | 'support'; covenantId?: undefined };
 
-/** The Portfolio page's tabs, in their order (ui/orders/OrdersView.tsx). */
+/** The Portfolio page's tabs, in order (ui/orders/OrdersView.tsx). */
 export const PORTFOLIO_TABS = ['balances', 'open', 'history', 'fills'] as const;
+/** One tab of the Portfolio page. */
 export type PortfolioTab = (typeof PORTFOLIO_TABS)[number];
 
 /** The market an activity link names: one token's KAS book or one token/token pair. */
 export type ActivityMarket = { kind: 'token'; token: string } | { kind: 'pair'; base: string; quote: string };
 
+/** The name of a route. */
 export type RouteName = Route['name'];
 
 /** Order-ticket presets a link may ask for. */
 export const TICKET_PRESETS = ['close', 'cover', 'sell'] as const;
-/** Presets that carry an amount (`&amount=N`, base units). */
+/** Presets that carry an amount (`&amount=N`, in base units). */
 const AMOUNT_PRESETS: readonly TicketPreset[] = ['cover', 'sell'];
 const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined && AMOUNT_PRESETS.includes(p);
+/** One order-ticket preset. */
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
 
 const HEX64 = /^[0-9a-f]{64}$/i;
@@ -54,7 +73,7 @@ export function parseHash(hash: string): Route {
   if (cut >= 0) h = h.slice(0, cut);
   const preset = query?.get('ticket') ?? null;
   const ticket = (TICKET_PRESETS as readonly string[]).includes(preset ?? '') ? (preset as TicketPreset) : undefined;
-  // an amount in base units (1..10^18) for the cover / sell presets; anything else is dropped
+  // An amount in base units (1..10^18) for the cover and sell presets. Anything else is dropped.
   const amountRaw = query?.get('amount') ?? '';
   const amount = takesAmount(ticket) && /^[1-9][0-9]{0,17}$/.test(amountRaw) ? amountRaw : undefined;
   const parts = h.split('/').filter((p) => p !== '');
@@ -68,12 +87,13 @@ export function parseHash(hash: string): Route {
       return v ?? '';
     }
   };
-  // a third segment that is neither `kas` nor an id is ignored (as before): `#/market/<id>/anything` is the token market
+  // A third segment that is neither `kas` nor an id is ignored, so `#/market/<id>/anything` is the
+  // token market.
   const quoteSeg = page === 'market' && third !== undefined && (third.toLowerCase() === 'kas' || HEX64.test(dec(third)));
   if (quoteSeg) {
     const b = dec(second);
     const q = dec(third);
-    // `#/market/<token>/kas` is the token's own KAS market
+    // `#/market/<token>/kas` is the token's own KAS market.
     if (page === 'market' && HEX64.test(b) && q.toLowerCase() === 'kas') return { name: 'token', covenantId: b.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}) };
     if (HEX64.test(b) && HEX64.test(q) && b.toLowerCase() !== q.toLowerCase()) return { name: 'pair', base: b.toLowerCase(), quote: q.toLowerCase() };
     return { name: 'market', invalidToken: `${b}/${q}`.slice(0, 80) };
@@ -101,7 +121,7 @@ export function parseHash(hash: string): Route {
   return { name: 'market' };
 }
 
-/** Route -> hash (with the leading `#`). `parseHash(routeToHash(r))` gives `r` back for every valid route. */
+/** Route to hash, with the leading `#`. `parseHash(routeToHash(r))` returns `r` if valid. */
 export function routeToHash(route: Route): string {
   switch (route.name) {
     case 'token':
@@ -121,41 +141,52 @@ export function routeToHash(route: Route): string {
   }
 }
 
-/** `?market=` of an activity link: `<covenant id>` (a token's KAS book) or `<base>/<quote>` (a pair); anything else is no market (null). */
+/**
+ * The market of an activity link's `?market=`: a covenant id (a token's KAS book) or
+ * `<base>/<quote>` (a pair). Anything else is null.
+ */
 export function activityMarketOf(m: string): ActivityMarket | null {
   const [a, b, extra] = m.split('/');
   if (extra !== undefined || !a || !HEX64.test(a)) return null;
   if (b === undefined) return { kind: 'token', token: a.toLowerCase() };
   return HEX64.test(b) && a.toLowerCase() !== b.toLowerCase() ? { kind: 'pair', base: a.toLowerCase(), quote: b.toLowerCase() } : null;
 }
+/** The `?market=` value of an activity market. */
 export const activityMarketParam = (m: ActivityMarket): string => (m.kind === 'token' ? m.token.toLowerCase() : `${m.base.toLowerCase()}/${m.quote.toLowerCase()}`);
+/** The route of the activity page, narrowed to `market` when given. */
 export const activityRoute = (market?: ActivityMarket | null): Route => (market ? { name: 'activity', market } : { name: 'activity' });
 
-/** Which top-level nav entry a route belongs to: the market list is Market, a token's or a pair's market is Trade. */
+/** The top-level nav entry of a route. A token's or pair's market is Trade, the list is Market. */
 export const navOf = (route: Route): 'market' | 'trade' | 'activity' | 'portfolio' | 'create' | 'settings' | 'disclaimer' | 'support' =>
   route.name === 'token' || route.name === 'pair' ? 'trade' : route.name === 'home' ? 'market' : route.name;
 
+/** The route of a token's KAS market, with an optional ticket preset and amount. */
 export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({
   name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(takesAmount(ticket) && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),
 });
+/** The route of a token/token pair. */
 export const pairRoute = (base: string, quote: string): Route => ({ name: 'pair', base: base.toLowerCase(), quote: quote.toLowerCase() });
 
 const currentHash = (): string => (typeof window === 'undefined' ? '' : window.location.hash);
 
+/** Sets the location hash to `route`. */
 export function navigate(route: Route): void {
   if (typeof window === 'undefined') return;
   const h = routeToHash(route);
   if (window.location.hash !== h) window.location.hash = h;
 }
 
-/** As `navigate`, replacing the current history entry (a page that corrects its own address: Back does not return to it). */
+/**
+ * As `navigate`, replacing the current history entry. A page that corrects its own address uses
+ * it, so Back does not return to it.
+ */
 export function replaceRoute(route: Route): void {
   if (typeof window === 'undefined') return;
   const h = routeToHash(route);
   if (window.location.hash !== h) window.location.replace(h);
 }
 
-/** Current route; re-renders on `hashchange`. */
+/** The current route. Re-renders on `hashchange`. */
 export function useRoute(): Route {
   const [route, setRoute] = useState<Route>(() => parseHash(currentHash()));
   useEffect(() => {

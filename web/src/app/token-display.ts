@@ -1,16 +1,31 @@
-// How a token is SHOWN (never how it is traded or verified): its amounts in whole tokens and its name, also for a token the registry does not list
-// (founder decision 2026-10-17: never "base units" in front of a user). The FACTS (name, ticker, decimals) come from the chain first (founder
-// decision 2026-10-19: KOB holds no authoritative token-metadata database): the token's KCC-23 declaration, verified against its covenant id
-// (data/token-declarations.ts). The registry is a pinned snapshot of the facts, not curation (KOB makes no per-token judgement; curation belongs to
-// external community lists the user chooses): where it and the declaration disagree on a fact, the on-chain value is shown and the disagreement is flagged (`declarationConflicts`), never silently resolved
-// for the registry; trading such a token waits until they agree when the decimals differ (app/env.ts). Without a declaration (a token created
-// before KCC-23: its id cannot commit to one) the order is as before: the registry; else the default decimals of its token program (a launchpad's
-// convention for the tokens of its program that declare none, KaspaRocket 3: programs.generated.ts `defaultDecimals`; the program is the one the
-// indexer lists the token under or the wallet's holdings of it verified under, data/token-declarations.ts `tokenProgramOf`); else the exponent of the price
-// scale an order of it names or its market trades with (`scale`, `marketDecimalsOf`, 10^decimals: what the market page and the ticket trade it with); else
-// this browser's issuance of it (data/issued-decimals.ts: decimals, ticker and name the issuer chose). The order of the ticket (kob/open-token.ts). Where nothing
-// states them none are invented: `decimalsSource: 'assumed'` with 0 decimals shows the chain's integer amount, said so. A token shown on any of these carries
-// `decimalsSource`, and the places that name it add a small marker (`decimalsNote`); its name is the declared ticker, else the issued one, else its covenant id (8 + 8 hex).
+// How a token is shown, never how it is traded or verified: its amounts in whole tokens and its
+// name, also for a token the registry does not list. The user never sees "base units".
+//
+// The facts (name, ticker, decimals) come from the chain first. KOB holds no authoritative
+// token-metadata database. The source is the token's KCC-23 declaration, verified against its
+// covenant id (data/token-declarations.ts). The registry is a pinned snapshot of the facts and
+// not a curation, because curation belongs to external community lists the user chooses.
+// Where the registry and the declaration disagree on a fact, the on-chain value is shown and the
+// disagreement is flagged (`declarationConflicts`), never silently resolved for the registry.
+// Trading such a token waits until they agree when the decimals differ (app/env.ts).
+//
+// A token without a declaration, such as one created before KCC-23, whose id cannot commit to
+// one, takes its decimals from the first source that has them.
+// - The registry.
+// - The default decimals of its token program, a launchpad's convention for the tokens of its
+//   program that declare none (programs.generated.ts `defaultDecimals`). The program is the one
+//   the indexer lists the token under, or the wallet's holdings of it were verified under
+//   (data/token-declarations.ts `tokenProgramOf`).
+// - The exponent of the price scale that an order of it names or its market trades with (`scale`,
+//   `marketDecimalsOf`). That is 10^decimals, what the market page and the ticket trade with.
+// - This browser's issuance of it (data/issued-decimals.ts), with the decimals, ticker and name
+//   the issuer chose.
+// The ticket's order is in kob/open-token.ts.
+//
+// Where nothing states the decimals, none are invented. `decimalsSource: 'assumed'` with 0
+// decimals shows the chain's integer amount, and says so. A token shown on any of these sources
+// carries `decimalsSource`, and the places that name it add a small marker (`decimalsNote`).
+// Its name is the declared ticker, else the issued one, else its covenant id (8 + 8 hex).
 import { issuedToken } from '../data/issued-decimals';
 import { declarationConflicts, declaredToken, listedTickerOf, marketDecimalsOf, tokenProgramOf } from '../data/token-declarations';
 import { programDefaultDecimals } from '../kob/programs.generated';
@@ -21,10 +36,12 @@ import { RAW_TOKEN_DECIMALS, setTokenAmountFormatter, t } from '../i18n';
 import { formatTokenAmount } from '../kob/units';
 
 /**
- * The token for display: the registry's entry (with its declaration's facts where they disagree, flagged), else a display-only entry from the
- * token's declaration, its program's default decimals, the scale of an order or its market, this browser's issuance of it, or none. `decimalsSource` marks the display-only
- * ones; they are not tradable and never stand in for a registry entry where a token is verified or planned. `program`: the token's program when the
- * caller knows it (else the one it was seen under, `tokenProgramOf`).
+ * The token for display: the registry's entry, with its declaration's facts where they disagree
+ * and flagged. Otherwise a display-only entry built from the token's declaration, its program's
+ * default decimals, the scale of an order or its market, or this browser's issuance of it. Or
+ * undefined. `decimalsSource` marks the display-only entries. They are not tradable and never
+ * stand in for a registry entry where a token is verified or planned. `program` is the token's
+ * program when the caller knows it, else the one it was seen under (`tokenProgramOf`).
  */
 export function displayToken(
   registry: Pick<TokenRegistry, 'byCovenantId'>,
@@ -41,7 +58,8 @@ export function displayToken(
   if (known) {
     const conflicts = declarationConflicts(known, declared);
     if (!declared || conflicts.length === 0) return known;
-    // the chain's facts, flagged: the registry entry disagrees with what the token recorded at its creation
+    // The chain's facts, flagged. The registry entry disagrees with what the token recorded at its
+    // creation.
     return {
       ...known,
       ticker: declared.symbol ?? known.ticker, name: declared.name ?? known.name, decimals: declared.decimals ?? known.decimals,
@@ -52,7 +70,8 @@ export function displayToken(
   const fromScale = exponentOf(scale);
   if (declared && declared.decimals !== null) {
     const ticker = declared.symbol ?? (issued?.ticker || longId(id));
-    // the market's price scale is the decimals its first order named: one that is not the declared decimals is a disagreement too
+    // The market's price scale is the decimals its first order named. One that is not the declared
+    // decimals is a disagreement too.
     const conflicts = fromScale !== null && fromScale !== Math.min(declared.decimals, 9) ? (['decimals'] as const) : [];
     return {
       ...base(id, ticker, declared.name ?? ticker, declared.decimals), decimalsSource: 'declared',
@@ -60,7 +79,7 @@ export function displayToken(
     };
   }
   const name = declared?.symbol ?? (issued?.ticker || (sanitizeUntrusted(listedTickerOf(network, id) ?? '', 24) || longId(id)));
-  // a token of a program with default decimals (KaspaRocket: 3, its convention), shown with them and their source
+  // A token of a program with default decimals (KaspaRocket: 3) shows them and their source.
   const convention = programDefaultDecimals(program ?? tokenProgramOf(network, id));
   if (convention) {
     return { ...base(id, name, declared?.name ?? (issued?.name || name), convention.decimals), decimalsSource: 'program', decimalsConvention: convention.source };
@@ -80,15 +99,17 @@ function base(id: Hex, ticker: string, name: string, decimals: number): TokenInf
 
 /** The exponent of a power of ten up to 10^18 (a price scale), else null. */
 function exponentOf(scale: bigint | null | undefined): number | null {
-  // a scale of 1 is also what an order model holds when it does not know the scale: not evidence of 0 decimals
+  // A scale of 1 is also what an order model holds when it does not know the scale, so it is not
+  // evidence of 0 decimals.
   if (!scale || scale <= 1n) return null;
   for (let d = 0, p = 1n; d <= 18; d++, p *= 10n) if (p === scale) return d;
   return null;
 }
 
 /**
- * The marker next to a token shown on its declaration, its issuance record, the scale of its market or its raw amount, or whose registry entry and declaration
- * disagree (null for an agreeing registry token): its text and its tooltip. A disagreement takes precedence.
+ * The marker next to a token shown on its declaration, its issuance record, the scale of its
+ * market or its raw amount, or whose registry entry and declaration disagree. It has a text and a
+ * tooltip. It is null for an agreeing registry token. A disagreement takes precedence.
  */
 export function decimalsNote(
   token: Pick<TokenInfo, 'decimalsSource' | 'decimals' | 'declarationConflicts' | 'decimalsConvention'> | null | undefined,
@@ -113,9 +134,17 @@ export function decimalsNote(
 export type DecimalsOrigin = 'registry' | 'declared' | 'program' | 'issued' | 'scale' | 'entered' | 'assumed';
 
 /**
- * Where a token's decimals come from: its KCC-23 declaration (also for a registry entry that disagrees with it: the on-chain value is shown), the
- * registry, its token program's default (a launchpad's convention), this browser's issuance record, the price scale of its market (an open-list token's orders), the decimals entered for its first order,
- * else assumed. The open-list banner of a market says it in words (`market.open.decimals.<origin>`), so it never claims a source the token does not have.
+ * Where a token's decimals come from. The sources are:
+ * - its KCC-23 declaration, also for a registry entry that disagrees with it, since the on-chain
+ *   value is shown;
+ * - the registry;
+ * - its token program's default, a launchpad's convention;
+ * - this browser's issuance record;
+ * - the price scale of its market, for an open-list token's orders;
+ * - the decimals entered for its first order;
+ * - otherwise assumed.
+ * The open-list banner of a market says it in words (`market.open.decimals.<origin>`), so it
+ * never claims a source the token does not have.
  */
 export function decimalsOrigin(token: Pick<TokenInfo, 'decimalsSource' | 'declarationConflicts' | 'openList' | 'openScale'>): DecimalsOrigin {
   if (token.decimalsSource) return token.decimalsSource;
@@ -125,8 +154,10 @@ export function decimalsOrigin(token: Pick<TokenInfo, 'decimalsSource' | 'declar
 }
 
 /**
- * Makes every sentence of the app that names an amount of a token (i18n `tokenAmountText`: the findings of the planners and the cancel) say it
- * as this module shows the token: whole tokens with its name, or its raw amount where nothing states its decimals. Called once with the app's registry.
+ * Makes every sentence of the app that names an amount of a token say it as this module shows the
+ * token. That covers i18n `tokenAmountText`, used by the findings of the planners and the cancel.
+ * The amount is in whole tokens with its name, or raw where nothing states the decimals. Called
+ * once with the app's registry.
  */
 export function installTokenAmounts(registry: Pick<TokenRegistry, 'byCovenantId'>, network: string): void {
   setTokenAmountFormatter((token, units) => {
