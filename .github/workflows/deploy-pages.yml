@@ -20,7 +20,7 @@ name: deploy-pages
 # project through the Pages API when it is not attached yet, and says exactly what is left to do in the dashboard when it cannot do it
 # (the DNS CNAME, a domain that is still attached to another project).
 #
-# One site can serve both networks: KOB_PAGES_NETWORKS (KOB_PAGES_MAINNET_NETWORKS for the mainnet site) gives config.json the servers of the other network, and
+# One site can serve both networks: KOB_PAGES_NETWORKS (KOB_PAGES_MAINNET_NETWORKS for the internal mainnet app) gives config.json the servers of the other network, and
 # KOB_PAGES_HOST_NETWORKS (KOB_PAGES_MAINNET_HOST_NETWORKS) the default network of each host name (docs/ops/web-hosting.md, "One deployment for both
 # networks"). Both are optional; unset, config.json is what it was without them.
 #

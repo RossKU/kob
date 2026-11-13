@@ -13,8 +13,8 @@ spread. There is no bridge, no sequencer, no admin key, no oracle and no protoco
 To trade, open the testnet-10 web app, [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag), with KasWare or Kaspire. Its tokens are test
 tokens with no value. See the [user guide](docs/user-guide.md).
 
-[kob.kaspa.ag](https://kob.kaspa.ag) is the production front page. Mainnet is in preparation, so it shows the landing page only,
-with no app and no wallet connection. It links to the testnet app.
+[kob.kaspa.ag](https://kob.kaspa.ag) serves the same testnet-10 app today: both hosts are one deployment, and kob-tn10.kaspa.ag is an alias of it.
+Mainnet is not launched. At launch, kob.kaspa.ag opens on mainnet by default and the header network switch is turned on; testnet-10 stays one click away.
 
 To run `kobd` on testnet-10, install Git, [rustup](https://rustup.rs) and a C compiler. `kobd` is either an Indexer, which is
 keyless, or an Executor, which matches orders.

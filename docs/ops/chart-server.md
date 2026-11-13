@@ -38,7 +38,7 @@ address needs a domain, so do it in this order:
 Cloudflare tunnel (the same `/v1/...` API, CORS open, WebSocket at `/v1/ws`): `https://kob-api-tn10.kaspa.ag` for testnet-10 (the
 `indexer_url` of the testnet-10 deployment record, which `kob` reads by default) and `https://kob-api.kaspa.ag` for mainnet (the
 `indexer_url` of the mainnet record). The web apps are served from Cloudflare Pages (`docs/ops/web-hosting.md`): `https://kob-tn10.kaspa.ag`
-for testnet-10; `https://kob.kaspa.ag` is the production front page, the landing page only until mainnet launches (`docs/ops/web-hosting.md`, section 4b). The old relay paths of `kob.kaspa.ag` are gone, with no redirect: an older `kob`, whose default was
+for testnet-10, and `https://kob.kaspa.ag` serves the same testnet-10 app (the same deployment; it opens on mainnet by default at the launch, `docs/ops/web-hosting.md`, section 4b). The old relay paths of `kob.kaspa.ag` are gone, with no redirect: an older `kob`, whose default was
 `https://kob.kaspa.ag/indexer` or (testnet-10) `https://kob-api.kaspa.ag`, needs `--indexer https://kob-api-tn10.kaspa.ag` (or `KOB_INDEXER_URL`). A temporary quick tunnel
 (a `trycloudflare.com` address) changes whenever `cloudflared` restarts: never publish one as a permanent `KOB_PAGES_INDEXER_URL` or
 `indexer_url`.

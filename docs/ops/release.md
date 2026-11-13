@@ -133,7 +133,7 @@ otherwise the frame shows every token as unverified ("decimals assumed 8"). `npm
 The page's link preview (title, description, Open Graph and Twitter tags, icons, `manifest.webmanifest`, `og.png`) is in `web/index.html` and `web/public/`.
 Two build-time variables complete it (`web/head-meta.mjs`): `KOB_PUBLIC_URL=https://kob.example.org` (the public origin; `og:url` and `og:image` need absolute
 URLs, so they are emitted only when it is set) and `KOB_NETWORK=testnet-10` (a testnet build prefixes the title with "Testnet · "; default `mainnet`).
-`KOB_LANDING_ONLY=1` builds the landing-only front page of a network that has not launched (no app, wallet or connection; `docs/ops/web-hosting.md` section 4b); `deploy-pages.yml` sets it for the mainnet site. Unset, the build is independent of any host (the `reproducible` job builds without them). `public/robots.txt` allows `/` and disallows `/indexer/` and `/node/`
+There is no landing-only build: every deployment is the app. The build is independent of any host (the `reproducible` job builds without them). `public/robots.txt` allows `/` and disallows `/indexer/` and `/node/`
 (the relays of a host that serves its own indexer and node, such as the soak's `serve-ui.mjs`).
 
 ## 5. Tests before tagging

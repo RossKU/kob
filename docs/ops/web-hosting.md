@@ -71,10 +71,10 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_NETWORKS` | no | the servers of the site's other network, as JSON: `config.json` `networks` (section 4d). Only `testnet-10` on a mainnet site; unset = none |
 | `KOB_PAGES_HOST_NETWORKS` | no | the default network of each host name, as JSON: `config.json` `hostNetworks` (section 4d); unset = the site's network on every host |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
-| `KOB_PAGES_MAINNET_PROJECT` | no | the mainnet site's Pages project (e.g. `kob-web-mainnet`): a second site, built with network `mainnet` and, until mainnet launches, **landing-only** (section 4b: the front page, no app). Unset = no mainnet site (nothing mainnet is built or published). The workflow creates the project on its first run |
-| `KOB_PAGES_MAINNET_INDEXER_URL` | no | the mainnet site's indexer. The landing-only page connects to nothing, so it is not needed (and ignored) until the mainnet app is deployed; set without `KOB_PAGES_MAINNET_PROJECT` it fails the run |
-| `KOB_PAGES_MAINNET_INTERNAL` | no | `1` = also deploy the internal mainnet app, the full app as a preview of the mainnet project on the branch `internal`, and state that the project's previews are behind Cloudflare Access (section 4c: set it only after enabling the access policy). Needs `KOB_PAGES_MAINNET_PROJECT` and `KOB_PAGES_MAINNET_INDEXER_URL`; any other value fails the run |
-| `KOB_PAGES_MAINNET_PUBLIC_URL`, `KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS`, `KOB_PAGES_MAINNET_NODE_URL`, `KOB_PAGES_MAINNET_EXPLORER_URL`, `KOB_PAGES_MAINNET_TOKEN_NAMES_URL`, `KOB_PAGES_MAINNET_NETWORKS`, `KOB_PAGES_MAINNET_HOST_NETWORKS` | no | the mainnet site's own values of the variables above (nothing is inherited from the testnet-10 site; the branch is shared) |
+| `KOB_PAGES_MAINNET_PROJECT` | no | the Pages project of the **internal mainnet app** only (e.g. `kob-web-mainnet`, section 4c). There is no public mainnet site: set without `KOB_PAGES_MAINNET_INTERNAL=1` it fails the run. Create the project empty first (section 4c, step 1) |
+| `KOB_PAGES_MAINNET_INDEXER_URL` | no | the indexer of the internal mainnet app (section 4c); set without `KOB_PAGES_MAINNET_PROJECT` it fails the run |
+| `KOB_PAGES_MAINNET_INTERNAL` | no | `1` = also deploy the internal mainnet app, the full app as a preview of its own project on the branch `internal`, and state that the project's previews are behind Cloudflare Access (section 4c: set it only after enabling the access policy). Needs `KOB_PAGES_MAINNET_PROJECT` and `KOB_PAGES_MAINNET_INDEXER_URL`; any other value fails the run |
+| `KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS`, `KOB_PAGES_MAINNET_NODE_URL`, `KOB_PAGES_MAINNET_EXPLORER_URL`, `KOB_PAGES_MAINNET_TOKEN_NAMES_URL`, `KOB_PAGES_MAINNET_NETWORKS`, `KOB_PAGES_MAINNET_HOST_NETWORKS` | no | the internal mainnet app's own values of the variables above (nothing is inherited from the public site; the branch is shared). There is no `KOB_PAGES_MAINNET_PUBLIC_URL`: the internal app has no public URL |
 | `KOB_PAGES_PUBLIC_URL` | no | the origin the app is served from, `https://...` (the custom domain of section 5, e.g. `https://kob-tn10.kaspa.ag`): the link preview's `og:url` and `og:image` need it; empty = no absolute preview links |
 
 ### Further indexers: cross-check and failover
@@ -319,45 +319,33 @@ on *Actions* > *deploy-pages* > *Run workflow*:
    `/signer.html` and `/signer` send the signer's own policy and `X-Frame-Options: SAMEORIGIN`, never the app's; `/assets/*`
    sends `Access-Control-Allow-Origin: *`; every built file is served byte for byte. Any failure fails the run.
 
-With `KOB_PAGES_MAINNET_PROJECT` set, job `deploy` is a matrix of two sites (`testnet`, `mainnet`) that run the same steps with their own project, network, indexer and public URL; the mainnet one is always built with network `mainnet` and is landing-only (section 4b). With `KOB_PAGES_MAINNET_INTERNAL=1` a third entry, `mainnet-internal`, uploads the full mainnet app as a protected preview on the branch `internal` (section 4c); its post-deploy check is the protection check instead of the headers and files one. A site's custom domain (section 5) is the host of its public URL: the last step, `web/scripts/pages-domain.mjs`, attaches it to the project through the Pages API when it is not attached yet.
+Job `deploy` is a matrix with one entry, `testnet` (project `KOB_PAGES_PROJECT`, network `KOB_PAGES_NETWORK`, today `testnet-10`): the one public site. With `KOB_PAGES_MAINNET_INTERNAL=1` a second entry, `mainnet-internal`, uploads the full mainnet app as a protected preview of its own project on the branch `internal` (section 4c); its post-deploy check is the protection check instead of the headers and files one. The site's custom domain (section 5) is the host of `KOB_PAGES_PUBLIC_URL`: the last step, `web/scripts/pages-domain.mjs`, attaches it to the project through the Pages API when it is not attached yet.
 
 One deployment runs at a time; a newer push cancels an older run. The job has read access to the repository only.
 
-### 4b. The mainnet front page (landing-only)
+### 4b. Hosts today, and what the mainnet launch changes
 
-`https://kob.kaspa.ag` is the production site, but mainnet is not launched: covenants are active on Kaspa mainnet, so a mainnet app would let a visitor lock real
-KAS before the release gates are met. The mainnet site is therefore the **landing page only**, built with `KOB_LANDING_ONLY=1` (`web/src/app/landing-only.ts`;
-the testnet-10 app, `https://kob-tn10.kaspa.ag`, is built without it and is unchanged). The flag is set on the mainnet entry of the matrix in
-`deploy-pages.yml` (`landing: "1"`), not by a repository variable: launching mainnet is the reviewed commit that removes it.
+**Today** `https://kob.kaspa.ag` and `https://kob-tn10.kaspa.ag` serve the same Cloudflare Pages project (`kob-web`, `KOB_PAGES_PROJECT`): the same deployment and the same files, the testnet-10 app. Its `config.json` names `testnet-10`, the testnet-10 indexer (`https://kob-api-tn10.kaspa.ag`) and `"lockNetwork": true`, so both hosts open on testnet-10 with no network switch. `kob-tn10.kaspa.ag` is the host of `KOB_PAGES_PUBLIC_URL`; it is an alias of the same deployment, not a second site. The page at `#/` is the app's own front page (`web/src/ui/landing/`), part of the app: wallets connect and orders can be placed from every address.
 
-What a visitor gets: the landing page with a "Mainnet — in preparation" chip in the header and beside the kicker, a note that nothing on the site can hold funds and
-that KOB runs on testnet-10 with test tokens, and **Try it on testnet** (header, hero, final call to action, footer) leading to
-`https://kob-tn10.kaspa.ag/#/market`. The rest of the page (how it works, the decoded signature, bots and the CLI, the trust model) is unchanged; its terminal
-example shows `--network testnet-10`, and its disclaimer says mainnet is in preparation, not that real funds are at risk. Every other address (`#/market`,
-`#/token/…`, `#/pair/…`, `#/activity`, `#/orders`, `#/settings`, anything) shows the same page and the address is cleaned to the page itself.
+The repository variables behind it: `KOB_PAGES_PROJECT=kob-web`, `KOB_PAGES_PUBLIC_URL=https://kob-tn10.kaspa.ag`, `KOB_PAGES_NETWORK=testnet-10`, `KOB_PAGES_INDEXER_URL=https://kob-api-tn10.kaspa.ag`. `KOB_PAGES_MAINNET_PROJECT` is not set. There is no landing-only mainnet front page ("Mainnet in preparation") and no separate mainnet site: an earlier design for one (`KOB_LANDING_ONLY`) was never deployed and has been removed.
 
-What the build leaves out, not merely hides: the build has its own entry (`web/src/main-landing.tsx`, swapped in for `src/main.tsx` by `vite.config.ts`), so the
-router, the services, the wallet layer, the wasm engine, the Kaspa SDK, the indexer client, the trading views and the app shell are not in the
-bundle (one script and one stylesheet; the dictionaries are the bulk of the script) and the private-key signer page is not built. The page's CSP is the app's with
-`connect-src 'none'` (no request but its own files; the header of `_headers` is unchanged), it reads no `config.json` (none is written), registers no service
-worker, and its manifest opens the site at `./`. `web/src/app/landing-only.test.ts` keeps the import graph of the entry free of the app, and `npm run e2e:landing`
-(`web/e2e/landing`, run by `ci.yml` and by the deploy job of the landing-only site, against its own build in `web/dist-landing`) checks that `#/market` shows the
-landing page, that there is no Connect button, that the testnet link is there and that nothing but the page's own files is requested.
+**The mainnet launch** changes that one deployment (section 4d has the details):
 
-Going live, in order: set `KOB_PAGES_MAINNET_PROJECT` (the Pages project, e.g. `kob-web-mainnet`) and `KOB_PAGES_MAINNET_PUBLIC_URL=https://kob.kaspa.ag`; in
-Cloudflare move the custom domain `kob.kaspa.ag` away from the project that holds it now (the workflow never moves a domain: its last step prints what is
-left, section 5) and put the testnet app on `kob-tn10.kaspa.ag` (`KOB_PAGES_PUBLIC_URL`). Launching the mainnet app later is a change to `deploy-pages.yml`
-(the `landing: "1"` of the mainnet entry), the mainnet indexer variables and a release decision (`docs/ops/release.md`), not a switch. To test the full mainnet app meanwhile, without opening it to anyone, use the protected internal preview (section 4c).
+1. `kob.kaspa.ag` opens on mainnet by default and `kob-tn10.kaspa.ag` stays on testnet-10, through `hostNetworks` of `config.json` (`KOB_PAGES_HOST_NETWORKS`, with `KOB_PAGES_NETWORK=mainnet`, the mainnet indexer in `KOB_PAGES_INDEXER_URL` and the testnet-10 servers in `KOB_PAGES_NETWORKS`);
+2. the header network switch is turned on (`KOB_PAGES_NETWORK_SWITCH=1`): until then every site gets `"lockNetwork": true`;
+3. the launch commit passes `KOB_PAGES_NETWORK_SWITCH` through the workflow (it does not yet), the variables are set after the release gates (`docs/ops/release.md`), and the testnet app stays on `kob.kaspa.ag` behind the switch. No new Pages project and no domain move is needed.
+
+To test the full mainnet app before that, without opening it to anyone, use the protected internal preview (section 4c).
 
 ### 4c. The internal mainnet app (a protected preview)
 
-The founder needs the full mainnet app to test with, while `https://kob.kaspa.ag` stays the front page. With `KOB_PAGES_MAINNET_INTERNAL=1` the workflow adds a
-third site, `mainnet-internal`: the normal app (not landing-only), network `mainnet`, the mainnet indexer (`KOB_PAGES_MAINNET_INDEXER_URL`, e.g.
-`https://kob-api.kaspa.ag`, and the other `KOB_PAGES_MAINNET_*` values), uploaded to the **same Pages project as the mainnet front page** as a **preview**
+The founder needs the full mainnet app to test with, while the public site stays on testnet-10. With `KOB_PAGES_MAINNET_INTERNAL=1` the workflow adds a
+second site, `mainnet-internal`: the normal app, network `mainnet`, the mainnet indexer (`KOB_PAGES_MAINNET_INDEXER_URL`, e.g.
+`https://kob-api.kaspa.ag`, and the other `KOB_PAGES_MAINNET_*` values), uploaded to **its own Pages project** (`KOB_PAGES_MAINNET_PROJECT`, never the public one) as a **preview**
 deployment on the branch `internal` (`--branch=internal`; the project's production branch, `KOB_PAGES_BRANCH`, must not be `internal`, and the run fails if the
 upload does not come out as a preview). It is served at `https://<hash>.<subdomain>.pages.dev` and, as the branch alias, at `https://internal.<subdomain>.pages.dev`,
 where `<subdomain>` is the project's pages.dev name (it may carry a suffix, section 1; copy it from the project page). It has no custom domain and no public URL
-(`KOB_PAGES_MAINNET_PUBLIC_URL` is not used for it), and nothing public links to it: the front page links to the testnet app only. It is kept out of search engines:
+and nothing public links to it. It is kept out of search engines:
 `robots.txt` disallows everything and its `_headers` adds `X-Robots-Tag: noindex, nofollow`.
 
 **It is protected by the Pages project's access policy, which is a setting in the Cloudflare dashboard, not in this repository.** The variable
@@ -369,18 +357,19 @@ and its summary says the internal app is NOT protected. Then enable the policy, 
 
 Setup, in order (the labels are Cloudflare's current ones and may move):
 
-1. Set `KOB_PAGES_MAINNET_PROJECT` (and `KOB_PAGES_MAINNET_PUBLIC_URL`) and run the workflow once: the mainnet front page deploys, which creates the project.
-   Do not set `KOB_PAGES_MAINNET_INTERNAL` yet.
+1. Create the project empty, so that nothing is uploaded before step 5: Cloudflare dashboard > *Workers & Pages* > *Create* > *Pages* > *Direct Upload*, or
+   `npx wrangler pages project create <name> --production-branch=main`. Set `KOB_PAGES_MAINNET_PROJECT` to its name. Do not set `KOB_PAGES_MAINNET_INTERNAL` yet
+   (a project without it fails the run, which is intended).
 2. Cloudflare dashboard > *Zero Trust* (set it up once if the account has not: a team name; the free plan is enough for a few users). *Settings* >
    *Authentication* > *Login methods*: **One-time PIN** must be on (it is by default).
 3. *Workers & Pages* > the mainnet project > *Settings* > *General* > **Access policy** > **Enable access policy**. Cloudflare creates an Access application
    for the project's preview deployments (`*.<subdomain>.pages.dev`). Choose *Manage* (the Zero Trust application): edit its policy so that *Action: Allow*,
    *Include: Emails* lists the addresses that may open it (yours, and nobody else), with One-time PIN as the login method. The default policy admits everyone with an
    e-mail address on your Cloudflare account's domain, which is not what you want for a public mail provider. The policy covers previews only: the production
-   deployment and the custom domain `kob.kaspa.ag` (the landing-only page) stay public.
+   deployment stays public, and this project has no custom domain.
 4. Check it before anything is uploaded: `curl -sI https://internal.<subdomain>.pages.dev/` must answer a redirect (`302`) whose `location` is on
    `cloudflareaccess.com` (every hostname under `<subdomain>.pages.dev` is covered, including one that does not exist yet). If it answers `200`, `404` or the
-   front page, the policy is not in force: stop here.
+   app, the policy is not in force: stop here.
 5. Set the repository variables `KOB_PAGES_MAINNET_INDEXER_URL` (the mainnet indexer, `https://...`) and `KOB_PAGES_MAINNET_INTERNAL=1`, and run the workflow (the
    deploy job's environment `production` may need your approval, section 4a). Open `https://internal.<subdomain>.pages.dev/`: Access asks for your e-mail, mails
    you a PIN, and the app opens on mainnet. Use only funds you can afford to lose: the specification is not final.
@@ -389,7 +378,7 @@ Unset `KOB_PAGES_MAINNET_INTERNAL` to stop updating it; the last internal deploy
 
 ### 4d. One deployment for both networks
 
-At the mainnet launch `kob.kaspa.ag` and `kob-tn10.kaspa.ag` serve the same deployment: the same bundle and the same `config.json`. Two optional
+Today `kob.kaspa.ag` and `kob-tn10.kaspa.ag` already serve the same deployment (section 4b): the same bundle and the same `config.json`. At the mainnet launch they keep doing so, and the config tells them apart by host. Two optional
 `config.json` fields make that work (`web/src/config.ts`). Both are read from `config.json` and `window.__KOB_CONFIG__` only, never from a link or a
 stored setting.
 
@@ -406,15 +395,13 @@ Which network a page opens on: a link (`?network=`, only with `allowQueryOverrid
 switch, saved in this browser for this host), then `hostNetworks`, then `network`. A server the visitor saved in Settings, or a link names, still wins
 over the deployment's on any network. Unknown networks, bad hosts and bad URLs in either field are ignored, and the bell lists them with the other configuration warnings.
 
-The workflow writes them from `KOB_PAGES_NETWORKS` and `KOB_PAGES_HOST_NETWORKS` (`KOB_PAGES_MAINNET_*` for the mainnet site), both JSON. An
+The workflow writes them from `KOB_PAGES_NETWORKS` and `KOB_PAGES_HOST_NETWORKS` (`KOB_PAGES_MAINNET_*` for the internal mainnet app), both JSON. An
 entry of `KOB_PAGES_NETWORKS` takes `indexerUrl` (required), `extraIndexerUrls`, `nodeUrl` and `explorerUrl`, checked like the site's own variables.
 Only `testnet-10` on a mainnet site is accepted (a testnet-10 site replaces the shipped mainnet registry); the script gives it the token-program list
 as `registry/testnet-10/tokens.json` and sets its `registryUrl`. With both variables unset, `config.json` is byte for byte what it was before.
 
-The old `kob-web` testnet project is kept for a while after the launch as a fallback, in case the shared deployment has to be rolled back.
-
-The launch config, for the mainnet project, with `KOB_PAGES_MAINNET_NETWORKS={"testnet-10": {"indexerUrl": "https://kob-api-tn10.kaspa.ag"}}` and
-`KOB_PAGES_MAINNET_HOST_NETWORKS={"kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10"}`:
+The launch config, for the one public project (`KOB_PAGES_PROJECT`, with `KOB_PAGES_NETWORK=mainnet`), with `KOB_PAGES_NETWORKS={"testnet-10": {"indexerUrl": "https://kob-api-tn10.kaspa.ag"}}` and
+`KOB_PAGES_HOST_NETWORKS={"kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10"}`:
 
 ```json
 {
@@ -439,15 +426,12 @@ A visitor's choice is stored per origin, so a choice on one host does not follow
 
 Nothing changes until the launch. The launch commit has to:
 
-1. drop `landing: "1"` from the mainnet entry of `deploy-pages.yml` (and the tests that pin it, `web/test/pages-deploy.test.ts`), section 4b;
-2. turn the header switch on for that site: the workflow does not pass `KOB_PAGES_NETWORK_SWITCH` today, so every site gets `"lockNetwork": true`;
-3. decide what the testnet-10 project (`KOB_PAGES_PROJECT`) does: it still builds its own testnet-10 site, while `kob-tn10.kaspa.ag` moves to the
-   mainnet project. The workflow attaches only the host of `KOB_PAGES_MAINNET_PUBLIC_URL`, so the second domain is moved by hand (section 5);
-4. accept that the shared bundle is built with `KOB_NETWORK=mainnet`: the page title has no "Testnet ·" prefix and `og:url` names
-   `kob.kaspa.ag` on both hosts.
+1. turn the header switch on for the site: the workflow does not pass `KOB_PAGES_NETWORK_SWITCH` today, so every site gets `"lockNetwork": true` (pass the variable through the matrix, as `KOB_PAGES_NETWORKS` is);
+2. accept that the shared bundle is built with `KOB_NETWORK=mainnet` (from `KOB_PAGES_NETWORK`): the page title has no "Testnet ·" prefix and `og:url` names
+   `kob.kaspa.ag` (`KOB_PAGES_PUBLIC_URL`) on both hosts.
 
-The repository variables (`KOB_PAGES_MAINNET_INDEXER_URL`, `KOB_PAGES_MAINNET_NETWORKS`, `KOB_PAGES_MAINNET_HOST_NETWORKS`) and the domain move are
-set by hand, not by the commit. Both indexers must answer CORS for both hosts (`cors_allow_origin = "*"` does, `docs/ops/chart-server.md` section 3).
+The repository variables (`KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL`, `KOB_PAGES_NETWORKS`, `KOB_PAGES_HOST_NETWORKS`, `KOB_PAGES_PUBLIC_URL`) are set by hand, not by the
+commit, and no Pages project or domain changes: both hosts stay attached to `kob-web`. The previous deployment stays available for a rollback (section 8). Both indexers must answer CORS for both hosts (`cors_allow_origin = "*"` does, `docs/ops/chart-server.md` section 3).
 
 ### 4a. The deploy gate
 
@@ -477,7 +461,7 @@ Settings, so the hosts cannot be pinned (README, *Deployment headers*).
 
 ## 5. Custom domain
 
-The workflow does this for the host of `KOB_PAGES_PUBLIC_URL` (and `KOB_PAGES_MAINNET_PUBLIC_URL`): the last step of job `deploy` adds the domain to the project through the Pages API (the token of section 2 is enough) and, when the token may also edit DNS, creates the proxied `CNAME`; with a token limited to Pages it prints the record to add in the dashboard (the job summary says which). A domain that is still attached to another project is never moved by the workflow (the other site would go down): remove it there first, then run the workflow again. By hand:
+The workflow does this for the host of `KOB_PAGES_PUBLIC_URL`: the last step of job `deploy` adds the domain to the project through the Pages API (the token of section 2 is enough) and, when the token may also edit DNS, creates the proxied `CNAME`; with a token limited to Pages it prints the record to add in the dashboard (the job summary says which). A domain that is still attached to another project is never moved by the workflow (the other site would go down): remove it there first, then run the workflow again. By hand:
 
 Pages project > *Custom domains* > *Set up a custom domain*, e.g. `kob.example.org`. With the domain's DNS on Cloudflare the
 record is created for you; elsewhere add a `CNAME kob.example.org -> kob-web.pages.dev` at your DNS provider (the target is the project's own pages.dev address, which may carry a suffix: copy it from the project page; the workflow reads it from the Pages API, `subdomain`, and prints the record with it). The certificate
