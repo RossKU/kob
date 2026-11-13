@@ -1,8 +1,13 @@
-//! `kob token create`: fixed-supply KCC-20 issuance (by default the published public-mint build of the reference, the
-//! de-facto standard KCC-20 program, 3/3; or, named with `--program 3x3`, the standalone 3/3 reference program; owner
-//! scheme 0x04 enabled, borrow disabled), created under KCC-23:
-//! a preparation transaction declares the metadata, the genesis spends its output (`kob_protocol::issue::build_creation`).
-//! `kob token resume` sends a creation whose genesis did not go out; `kob token verify-declaration` checks a launch proof.
+//! `kob token create`, `kob token resume` and `kob token verify-declaration`.
+//!
+//! `create` issues a fixed-supply KCC-20 token under KCC-23. By default it issues the published
+//! public-mint build of the reference program, the standard KCC-20 program with 3 token inputs and
+//! 3 outputs. `--program 3x3` names the standalone 3/3 reference program instead. Owner scheme
+//! 0x04 is enabled, and borrow is disabled unless `--allow-borrow` is given.
+//!
+//! A creation is two transactions. The preparation declares the metadata, and the genesis spends
+//! its output (`kob_protocol::issue::build_creation`). `resume` sends a creation whose genesis did
+//! not go out. `verify-declaration` checks a launch proof.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -286,9 +291,11 @@ pub fn parse_fund(s: &str) -> Result<FundArg, String> {
     })
 }
 
-/// The key of the older commands (`token create`, `recover`, `order`) from `--key-file PATH`, `--key-env NAME` or the
-/// deprecated `--key HEX | env:VAR | file:PATH` (which says on stderr what to write instead; it never prints the key). A second
-/// key option is refused.
+/// The signing key of `token create`, `recover` and `order`.
+///
+/// The key comes from `--key-file PATH`, `--key-env NAME` or the deprecated
+/// `--key HEX | env:VAR | file:PATH`. The deprecated form prints the new spelling on stderr and
+/// never the key. A second key option is refused.
 pub(crate) fn key_option(flag: &str, value: &str, have: bool) -> Result<KeySource, String> {
     if have {
         return Err("give the key once: --key-file PATH or --key-env NAME".into());
@@ -326,6 +333,7 @@ pub(crate) fn default_key() -> Option<KeySource> {
         .map(|_| KeySource::Env(crate::trade::opts::KEY_ENV.into()))
 }
 
+/// Classify a `--key` value as an `env:` name, a `file:` path or a hex key.
 pub(crate) fn parse_key_source(s: &str) -> KeySource {
     if let Some(v) = s.strip_prefix("env:") {
         KeySource::Env(v.to_string())
@@ -341,7 +349,7 @@ pub fn parse_issue_args(args: &[String]) -> Result<IssueArgs, String> {
     parse_issue_args_with(args, default_key())
 }
 
-/// [`parse_issue_args`] with the key a run that signs falls back to when none is named (`$KOB_KEY`).
+/// [`parse_issue_args`] with the key a signing run falls back to when none is named (`$KOB_KEY`).
 pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -> Result<IssueArgs, String> {
     let mut a = IssueArgs {
         name: String::new(),
@@ -460,7 +468,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
     }
-    // a dry run signs only when a key is named; a run that submits falls back to $KOB_KEY
+    // A dry run signs only when a key is named. A run that submits falls back to $KOB_KEY.
     if !a.dry_run && a.key.is_none() {
         a.key = fallback_key;
     }
@@ -472,6 +480,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
     Ok(a)
 }
 
+/// Read the secret key from its source.
 pub(crate) fn read_key(src: &KeySource) -> Result<SecretKey, String> {
     let raw = match src {
         KeySource::Hex(h) => h.clone(),
@@ -564,7 +573,7 @@ pub fn run_issue(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[ISSUE_USAGE], false) {
         return code;
     }
-    // a mistake in the arguments is a usage error (2); what the run meets after that is 1
+    // A mistake in the arguments is a usage error (2). Anything the run meets after that is 1.
     let a = match parse_issue_args(args) {
         Ok(a) => a,
         Err(e) => {
@@ -643,8 +652,9 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     if g.spec.program == IssueProgram::Ref3x3 {
         println!("note         --program 3x3: a transfer of this token costs less than the default public-mint build, but other indexers (e.g. kascov.io) do not recognise it as a KCC-20 token");
     }
-    // a submitting run asks first (the same rule as every other submitting command: `--yes`, or a terminal; else nothing is
-    // written or sent), then always keeps the signed transactions: they are what `kob token resume` sends
+    // A submitting run asks first, by the rule of every submitting command: `--yes`, or a
+    // terminal, else nothing is written or sent. It then always keeps the signed transactions,
+    // because `kob token resume` sends them.
     if !a.dry_run {
         crate::trade::opts::confirm_with(
             a.yes,
@@ -672,10 +682,10 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     wrpc::check_node_network(node, &a.network, Duration::from_secs(30))?;
     let ids = (plan.prep.txid().to_string(), g.txid().to_string());
     submit_creation(node, (&rpc_transaction_json(&plan.prep.tx), &ids.0), (&g.rpc_transaction_json(), &ids.1), &dir, false)?;
-    // the genesis outputs the funding key holds (scheme 0): recorded so that `kob send`, `kob place` and `kob merge` can
-    // spend them before the indexer has the genesis. The genesis names the states of its outputs in its payload, so an indexer of
-    // this build lists them to the owner on any machine (`GET /v1/token-utxos`); this record only bridges the indexer's lag
-    // and an indexer that has not been upgraded.
+    // Record the genesis outputs that the funding key holds (scheme 0), so that `kob send`,
+    // `kob place` and `kob merge` can spend them before the indexer has the genesis. The indexer
+    // lists them to their owner from the genesis payload (`GET /v1/token-utxos`), so this record
+    // only bridges the lag of the indexer.
     let funder = a.fund[0].owner;
     let token: [u8; 32] = g.covenant_id.as_bytes();
     let own: Vec<([u8; 32], u32, kob_protocol::state::TokenState)> = g
@@ -696,7 +706,7 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         })
         .collect();
     crate::recent::record_outputs(&a.network, &funder, own, &g.txid().to_string());
-    // what the creation declared (decimals, symbol, name), so that `kob send` names the token without an indexer
+    // The declared decimals, symbol and name, so that `kob send` names the token with no indexer.
     crate::recent::record_issued(
         &a.network,
         &token,
@@ -705,13 +715,18 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     Ok(())
 }
 
-/// How many times the genesis is offered to the node, and the pause between: the node normally takes it at once (its input is the
-/// preparation it just accepted into its mempool); a node that has not yet seen the preparation gets a few seconds.
+/// How often the genesis is offered to the node, and the pause between attempts.
+///
+/// The node normally takes it at once, because its input is the preparation that the node just
+/// accepted. A node that has not yet seen the preparation gets a few seconds.
 const GENESIS_ATTEMPTS: u32 = 6;
 const GENESIS_RETRY: Duration = Duration::from_secs(2);
 
-/// Sends the preparation, then the genesis (retried a few times). `resuming`: a node error on the preparation is reported and
-/// the genesis is still tried (the preparation may be on chain already). On failure the error says how to resume from `dir`.
+/// Send the preparation, then the genesis, which is retried a few times.
+///
+/// With `resuming`, a node error on the preparation is reported and the genesis is still tried,
+/// because the preparation may be on chain already. On failure the error says how to resume from
+/// `dir`.
 fn submit_creation(node: &str, prep: (&Value, &str), genesis: (&Value, &str), dir: &Path, resuming: bool) -> Result<(), String> {
     let resume_hint = format!(
         "the preparation output stays an ordinary UTXO of the funding key; send the saved genesis with `kob token resume {} --node <URL>`",
@@ -766,7 +781,7 @@ pub fn run_resume(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[RESUME_USAGE], true) {
         return code;
     }
-    // a mistake in the arguments is a usage error (2); what the run meets after that is 1
+    // A mistake in the arguments is a usage error (2). Anything the run meets after that is 1.
     let parse = || -> Result<(PathBuf, String, String), String> {
         let mut dir = None;
         let mut node = None;
@@ -811,7 +826,7 @@ pub fn run_resume(args: &[String]) -> i32 {
         if genesis["inputs"].as_array().map(Vec::len) != Some(1) || g["transactionId"].as_str() != Some(prep_id) || g["index"] != 0 {
             return Err("genesis_tx.json does not spend output 0 of preparation_tx.json".into());
         }
-        // a signature commits to no network: the node must run the one named
+        // A signature commits to no network, so the node must run the named one.
         wrpc::check_node_network(&node, &network, Duration::from_secs(30))?;
         submit_creation(&node, (&prep, prep_id), (&genesis, genesis_id), &dir, true)
     };
@@ -919,17 +934,17 @@ mod tests {
             |extra: &str, fallback: Option<KeySource>| parse_issue_args_with(&v(&format!("{run} {extra}")), fallback).map(|a| a.key);
         assert_eq!(src("--key-file k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
         assert_eq!(src("--key-env MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
-        // the older spellings still work
+        // The older spellings still work.
         assert_eq!(src("--key file:k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
         assert_eq!(src("--key env:MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
         assert_eq!(src("--key 07", None).unwrap(), Some(KeySource::Hex("07".into())));
-        // one key only
+        // One key only.
         assert!(src("--key-file a --key-env B", None).unwrap_err().contains("once"));
-        // without one: the fallback ($KOB_KEY) when the run signs, nothing in a dry run
+        // Without a key: the fallback ($KOB_KEY) when the run signs, nothing in a dry run.
         let kob_key = Some(KeySource::Env("KOB_KEY".into()));
         assert_eq!(src("", kob_key.clone()).unwrap(), kob_key);
         assert_eq!(src("--dry-run", kob_key).unwrap(), None);
-        // the warning names the new spelling and never the key
+        // The warning names the new spelling and never the key.
         let w = |s: &str| deprecation(&parse_key_source(s));
         assert!(w("file:/tmp/k").contains("--key-file /tmp/k"));
         assert!(w("env:MY_KEY").contains("--key-env MY_KEY"));
@@ -985,7 +1000,7 @@ mod tests {
         let reg: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("registry_entry.json")).unwrap()).unwrap();
         assert_eq!(reg["ticker"], "TEST");
         assert_eq!(reg["template_id"], "kcc20-ref-public-mint", "the default issuance is the published public-mint build");
-        // the emitted entry is a valid registry token against the shipped templates
+        // The emitted entry is a valid registry token against the shipped templates.
         let mut registry = kob_protocol::registry::Registry::default_registry();
         registry.tokens.push(serde_json::from_value(reg.clone()).expect("registry entry parses as a registry token"));
         registry.validate().expect("issued token validates in the registry");
@@ -999,7 +1014,8 @@ mod tests {
             "two token outputs, no change: the preparation output funds it exactly"
         );
         assert_ne!(tx["inputs"][0]["signatureScript"], "");
-        // the genesis names the states of its two outputs (KOBG), so the issuer's key finds them from any machine through an indexer
+        // The genesis names the states of its two outputs (KOBG), so an indexer finds them for the
+        // issuer's key.
         let named = kob_protocol::genesis_states::decode(&kob_protocol::json::from_hex(tx["payload"].as_str().unwrap()).unwrap())
             .expect("a genesis-states payload");
         assert_eq!(named.len(), 2);
@@ -1016,7 +1032,7 @@ mod tests {
         assert_eq!(tx["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
         assert_eq!(tx["inputs"][0]["previousOutpoint"]["index"], 0);
         assert_eq!(sup["kcc23"]["preparation_txid"], ids["preparation_txid"]);
-        // the launch proof verifies from the file, as anyone would check it
+        // The launch proof verifies from the file, as anyone would check it.
         assert_eq!(run_verify_declaration(&[dir.join("launch_proof.json").display().to_string()]), 0);
         let mut proof: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("launch_proof.json")).unwrap()).unwrap();
         proof["covenantId"] = Value::String("11".repeat(32));
@@ -1025,22 +1041,22 @@ mod tests {
         assert_eq!(run_verify_declaration(&[forged.display().to_string()]), 1);
         let req: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("submit_request.json")).unwrap()).unwrap();
         assert_eq!(req["method"], "submitTransaction");
-        // unsigned dry run needs no key
+        // An unsigned dry run needs no key.
         let cmd2 = format!(
             "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 5 --dry-run --network testnet-10",
             hex(&pk)
         );
         assert_eq!(run_issue(&v(&cmd2)), 0);
-        // the standalone 3 / 3 program is issued only when it is named
+        // The standalone 3/3 program is issued only when it is named.
         let dir3 = std::env::temp_dir().join(format!("kob-issue-test-3x3-{}", std::process::id()));
         assert_eq!(run_issue(&v(&format!("{cmd2} --program 3x3 --out-dir {}", dir3.display()))), 0);
         let reg3: Value = serde_json::from_str(&std::fs::read_to_string(dir3.join("registry_entry.json")).unwrap()).unwrap();
         assert_eq!(reg3["template_id"], "kcc20-ref-3x3");
         let _ = std::fs::remove_dir_all(dir3);
-        // wrong key refused
+        // A wrong key is refused.
         let cmd3 = format!("{cmd2} --key 5555555555555555555555555555555555555555555555555555555555555555");
         assert_eq!(run_issue(&v(&cmd3)), 1);
-        // supply mismatch refused
+        // A supply mismatch is refused.
         let cmd4 = format!("{cmd2} --holder self:0:4");
         assert_eq!(run_issue(&v(&cmd4)), 1);
         let _ = std::fs::remove_dir_all(dir);
@@ -1063,7 +1079,7 @@ mod tests {
             .token_metadata()
             .json()
             .ends_with(r#""image":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
-        // --logo and --icon are deprecated spellings of --image
+        // `--logo` and `--icon` are deprecated spellings of `--image`.
         for old in ["--logo", "--icon"] {
             let a = parse_issue_args(&v(&format!("{} --supply 1 {old} https://e.org/a.png", base()))).unwrap();
             assert_eq!(a.icon.as_deref(), Some("https://e.org/a.png"));
@@ -1085,11 +1101,12 @@ mod tests {
         assert_eq!(a.image_hash.as_deref(), Some(want.as_str()));
         let json = to_spec(&a).unwrap().token_metadata().json();
         assert!(json.contains(&format!(r#""image":"https://e.org/a.png","image_hash":"{want}""#)), "{json}");
-        // the hash given directly (any case, lowercased), alone or agreeing with the file
+        // The hash given directly (any case, lowercased), alone or agreeing with the file.
         let a = args(&format!("--image-hash {}", want.to_uppercase())).unwrap();
         assert_eq!(a.image_hash.as_deref(), Some(want.as_str()));
         assert!(args(&format!("--image-file {} --image-hash {want}", png.display())).is_ok());
-        // refused: a disagreeing pair, a malformed hash, an SVG, a missing file, a hash without an address
+        // Refused: a disagreeing pair, a malformed hash, an SVG, a missing file, and a hash
+        // without an address.
         assert!(args(&format!("--image-file {} --image-hash {}", png.display(), "ab".repeat(32))).is_err());
         assert!(args("--image-hash abcd").is_err());
         assert!(args(&format!("--image-file {}", svg.display())).is_err());
@@ -1109,7 +1126,7 @@ mod tests {
         assert!(a.yes && !a.dry_run);
     }
 
-    /// A submitting run sends the preparation, then the genesis spending it; `kob token resume` sends the saved pair again.
+    /// A submitting run sends the preparation, then the genesis. `resume` sends the pair again.
     #[test]
     fn submit_sends_the_preparation_then_the_genesis_and_resume_resends_them() {
         let sk = "3333333333333333333333333333333333333333333333333333333333333333";
@@ -1124,7 +1141,7 @@ mod tests {
             hex(&pk),
             dir.display()
         );
-        // without --yes and without a terminal nothing is written and nothing is sent
+        // Without `--yes` and without a terminal nothing is written and nothing is sent.
         if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             assert_eq!(run_issue(&v(&cmd)), 1, "refused without --yes");
             assert!(state.lock().unwrap().submitted.is_empty(), "nothing submitted");
@@ -1136,13 +1153,13 @@ mod tests {
         assert_eq!(sent.len(), 2, "preparation, then genesis");
         assert!(sent[0]["payload"].as_str().unwrap().starts_with("007b"));
         assert_eq!(sent[1]["inputs"][0]["previousOutpoint"]["transactionId"], ids["preparation_txid"]);
-        // the genesis names the state of its one token output (KOBG | 1 | 1 | 112 | the state span)
+        // The genesis names the state of its one token output: KOBG, 1, 1, 112, the state span.
         assert!(sent[1]["payload"].as_str().unwrap().starts_with("4b4f4247010170"), "{}", sent[1]["payload"]);
         assert_eq!(run_resume(&v(&format!("{} --node {url} --network testnet-10", dir.display()))), 0);
         let sent = state.lock().unwrap().submitted.clone();
         assert_eq!(sent.len(), 4);
         assert_eq!((&sent[2], &sent[3]), (&sent[0], &sent[1]), "resume sends the saved, signed pair unchanged");
-        // a dry run without a key writes unsigned transactions: resume refuses them
+        // A dry run without a key writes unsigned transactions, and resume refuses them.
         let dry = std::env::temp_dir().join(format!("kob-create-dry-{}", std::process::id()));
         let cmd = format!(
             "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 5 --dry-run --network testnet-10 --out-dir {}",
