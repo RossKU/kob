@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn the_time_of_a_line_is_utc_to_the_millisecond() {
         assert_eq!(utc_millis_text(0), "1970-01-01 00:00:00.000Z");
-        // 2026-11-11 08:44:28.529 UTC.
+        // The same instant in UTC, to the millisecond.
         assert_eq!(utc_millis_text(1_794_386_668_529), "2026-11-11 08:44:28.529Z");
         // A leap day.
         assert_eq!(utc_millis_text(951_782_400_000), "2000-02-29 00:00:00.000Z");
