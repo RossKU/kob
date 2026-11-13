@@ -1,87 +1,84 @@
-//! The global batch planner (`docs/spec/matcher.md` §3): one transaction over every book of the view.
+//! The global batch planner: one transaction over every book (`docs/spec/matcher.md` §3).
 //!
-//! A batch is not per book. Every candidate of every book (every order × leg at `t`, [`super::candidate`]) and both legs
-//! of every eligible pair order ([`super::pair`]) take part in one allocation; the transaction it describes may fill
-//! several token books at once (X/KAS N:M, Y/KAS N:M, ...) together with the pair orders that net against each other or
-//! route through them. Each token keeps its own slot accounting (its program's inputs / outputs, `MAX_TOK_IN` of its
-//! family, one extension commitment); the only shared resources are the transaction's size and mass and the one input per
+//! A batch is not per book. Every candidate of every book (every order × leg at `t`,
+//! [`super::candidate`]) and both legs of every eligible pair order ([`super::pair`]) take part in
+//! one allocation. The transaction it describes may fill several token books at once, together
+//! with the pair orders that net against each other or route through them. Each token keeps its own
+//! slot accounting: its program's inputs and outputs, `MAX_TOK_IN` of its family and one extension
+//! commitment. The only shared resources are the transaction's size and mass and the one input per
 //! covenant id.
 //!
-//! Per plan, at `t = lockTime`:
+//! # Plan at `t = lockTime`
 //!
-//! 1. **Netting** (§3.5) runs first in every allocation: the pair orders selling token X for token Y and those selling Y
-//!    for X are netted against each other, best limits first, any number per side, each at its exact covenant amounts
-//!    ([`Alloc::net_pairs`]); the surplus the netted orders release beyond what they receive goes to the pair asks buying
-//!    that token, or is offered to the plain KAS bids of that token ([`PairRole::Surplus`]), or, under the opt-in
-//!    surplus-inventory policy ([`super::planner::InventoryPolicy`]), what the bids do not take goes to the operator's key
-//!    and counts at its policy value ([`Alloc::kept`]). What is left of a netted order is routed below. Netting moves no
-//!    KAS: the operator earns the orders' KAS tips, what the surplus fetches and the value of what it keeps.
-//! 2. **Classes** (§3.1), in this order over all books: class 1 (IOC, FOK, market, streaming, and IOC / FOK pair orders),
-//!    class 2 (triggered stops and stop entries), class 3 (every resting crossing). Each active order walks the opposite
-//!    side of its book in price → tip → age order and takes every crossing chunk it can; a lower class only uses what the
-//!    higher classes left. A routed pair order is an ask in the books of the token it sells and a bid in the books of the
-//!    token it buys at its implied quotes ([`super::pair`]), ranked with the direct orders of its class by price → tip → age.
-//! 3. **Books share the transaction greedily by profit.** The books are grouped into components (books of one token, and
-//!    the two tokens of every pair order); within each class the components are visited in decreasing order of the profit
-//!    per byte they make on their own, so when the whole book set does not fit one transaction the most profitable batch is
-//!    filled first. The rest is planned into the next transaction of the tick (`super::engine`).
-//! 4. **Hard rules** are kept on every allocation step: FOK all-or-none, the minimum fill of both orders of a chunk (below
-//!    it only when the chunk ends that order: takes its rest, or a `KobBid`'s last minimum fill of buying power), `maxFill`
-//!    (TWAP / DCA), one input per covenant id (merged entries and updated orders included), positional outputs, the token
-//!    slots of every program, no token left to the operator (with the inventory policy off the reference planner holds no
-//!    inventory: a token's surplus needs a pair ask buying it, whose delivery takes it; with it on, the operator may take
-//!    that surplus instead, the ask keeping exactly its floor) and the byte budget (the physical limit,
-//!    [`super::planner::PHYSICAL_TX_BYTES`], or the operator's cap). Every routed pair order is bounded beforehand by the
-//!    largest fill its route could pay on its own, or left out of routing when none can and it has no netting partner
-//!    ([`route_cap`]). A purchase of a pair ask's token buys exactly what its delivery needs, more only when an ask's
-//!    minimum fill forces it (the excess rides on the maker's delivery); a pair bid's purchase is exact.
-//! 5. **Triggers** (§4, protocol v2.6: a stop reads its trigger evidence from a plain resting fill of the SAME
-//!    transaction, the covenants' `touch`). After the class walks, the fills of plain `KobAsk` / `KobBid` orders without
-//!    decay whose UTXO (and custody) DAA scores are known are the batch's evidence. Then, in class-2 order (first seen,
-//!    quote, tip, age, id):
-//!    * **triggered fills**: every unarmed stop leg / stop entry whose evidence the batch holds (same book; a resting ask
-//!      filled at or below a sell stop, a resting bid at or above a buy stop, of the stop's scale; `n ≥ minTouch`; exposed at
-//!      least `minRestDaa` before the lock time) walks the liquidity the other classes left, at its trigger price
-//!      (`stop_at(true, ..)` / `price_at(true, ..)`), and is lowered with `evidence` = the leg index of the first such
-//!      fill. A stop is sequenced after the trade that triggers it, as on an exchange: it never takes the liquidity of its
-//!      own evidence, so the evidence cannot vanish under it. Unarmed pair stops (`KobCondPair`, `KobIfdPair` stop entries)
-//!      read two evidence modes: two KAS-book fills of the batch (a plain resting order of A and one of B, the implied
-//!      rate) or a resting `KobPair` of the same pair filled in it; a triggered pair stop is routed;
-//!    * **updates** (`BatchUpdate`, [`PlannerConfig::arm`]): every other listed unarmed stop / stop entry the evidence
-//!      serves, and every trailing stop whose UTXO is `trailWait` old that an opposite-side evidence ratchets (the most
-//!      steps), is armed / ratcheted whenever it fits the byte budget, highest tip first (never a booked exit next to its
-//!      own entry: the exit refuses an update in a transaction that spends its entry): arming is the default, and an
-//!      update is a leg of the batch like any other (its cost, [`super::planner::update_cost`]: its bytes at the fee
-//!      rate, at least the measured `updateFee`, is charged against the batch objective; its `keeperTip`, possibly 0,
-//!      is income). Updates are dropped only while the batch would otherwise fall below `min_profit`, the worst tip
-//!      minus cost first. A batch whose fills pay no spread is a standalone arming transaction: each update needs
-//!      `keeperTip >= cost`.
+//! 1. **Netting** (§3.5) runs first in every allocation. Pair orders selling token X for token Y
+//!    net against those selling Y for X, best limits first, each at its exact covenant amounts
+//!    ([`Alloc::net_pairs`]). What the netted orders release beyond what they receive goes to the
+//!    pair asks that buy that token, or is offered to the plain KAS bids of that token
+//!    ([`PairRole::Surplus`]). Under the opt-in surplus-inventory policy
+//!    ([`super::planner::InventoryPolicy`]), what the bids do not take goes to the operator's key
+//!    and counts at its policy value ([`Alloc::kept`]). What is left of a netted order is routed
+//!    in the later steps. Netting moves no KAS. The operator earns the orders' KAS tips, what the
+//!    surplus fetches and the value of what it keeps.
+//! 2. **Classes** (§3.1) run in this order over all books. Class 1 is IOC, FOK, market, streaming
+//!    and IOC / FOK pair orders. Class 2 is triggered stops and stop entries. Class 3 is every
+//!    resting crossing. Each active order walks the opposite side of its book in price, tip, age
+//!    order and takes every crossing chunk it can. A lower class only uses what the higher classes
+//!    left. A routed pair order is an ask in the books of the token it sells and a bid in the books
+//!    of the token it buys, at its implied quotes ([`super::pair`]). It ranks with the direct
+//!    orders of its class by price, tip and age.
+//! 3. **Books share the transaction greedily by profit.** The books are grouped into components:
+//!    the books of one token, and the two tokens of every pair order. Within each class the
+//!    components are visited in decreasing order of the profit per byte they make on their own. So
+//!    when the book set does not fit one transaction, the most profitable batch is filled first.
+//!    The rest is planned into the next transaction of the tick (`super::engine`).
+//! 4. **Hard rules** (§3.2) hold on every allocation step. Every routed pair order is bounded
+//!    beforehand by the largest fill its route could pay on its own. It is left out of routing
+//!    when no fill can pay and it has no netting partner ([`route_cap`]). A purchase of a pair
+//!    ask's token buys exactly what the delivery needs. It buys more only when an ask's minimum
+//!    fill forces it, and the excess rides on the maker's delivery. A pair bid's purchase is exact.
+//!    With the inventory policy off, the planner leaves no token to the operator: a token's
+//!    surplus needs a pair ask buying it, whose delivery takes it. With the policy on, the
+//!    operator may take that surplus instead, and the ask keeps exactly its floor.
+//! 5. **Triggers** (§4) read their evidence from a plain resting fill of the same transaction.
+//!    After the class walks, the fills of plain `KobAsk` / `KobBid` orders without decay, whose
+//!    UTXO and custody DAA scores are known, are the batch's evidence. Then, in class-2 order
+//!    (first seen, quote, tip, age, id):
+//!    - **Triggered fills.** Every unarmed stop leg or stop entry whose evidence the batch holds
+//!      walks the liquidity the other classes left, at its trigger price. It is lowered with
+//!      `evidence` set to the leg index of the first such fill. A stop is sequenced after the
+//!      trade that triggers it and never takes the liquidity of its own evidence, so the evidence
+//!      cannot vanish under it. Unarmed pair stops read either two KAS-book fills of the batch or
+//!      a resting `KobPair` of the same pair filled in it, and a triggered pair stop is routed.
+//!    - **Updates** ([`PlannerConfig::arm`]) arm or ratchet the other listed stops that the
+//!      evidence serves. [`Alloc::plan_updates`] describes them.
 //!
-//!    Everything is recomputed on every allocation, so a fill only ever carries evidence that is in the same allocation.
-//! 6. **Quantity repair and route reconciliation**: an order left violating its quantity rule is excluded and the walks
-//!    re-run; the two legs of every pair order are reconciled to one fill (the token it sells exact, the token it buys
-//!    covering its receipt) by lowering its cap until both legs agree (a fixed point: caps only decrease).
-//! 7. **Profit**: `Σ crossing spread + Σ tips + Σ update tips (+ Σ kept inventory at its policy value, less the fee of its
-//!    token output) − network fee` over the whole transaction, every KAS amount
-//!    the exact rounded covenant value of its leg (`Cand::value`: a bid pays `floor(n·(p + tip)/scale)`, an ask receives
-//!    `ceil(n·(p − tip)/scale)`, a pair order releases `floor(n·tip/scale(A))`); a walk never adds a direct chunk whose
-//!    rounded amounts lose (a tiny chunk at a thin spread). Fills whose marginal profit is negative (their chunks' spread
-//!    and tips less the fee of their bytes and of the counterparties only they use) are tried for dropping, several at
-//!    once while that raises the profit, class 1 only when the batch would otherwise lose, never shrinking an IOC's fill;
-//!    a pair order is dropped with both its legs, never a leg of it alone. A dropped pair order takes with it the losing
-//!    pair orders that only took its place (on the same liquidity); every allocation is settled afresh from what the profit
-//!    step dropped, so a pair order the reconciliation left out because a dropped fill held its token competes again. A
-//!    drop is accepted only when the whole batch's profit rises, so a thin plain crossing that is the evidence of
-//!    profitable triggered fills or updates stays (without it they vanish), and a batch whose crossing alone would not pay
-//!    its fee is built when the triggered fills and update tips it carries make it profitable.
+//!    Everything is recomputed on every allocation, so a fill only carries evidence that is in the
+//!    same allocation.
+//! 6. **Quantity repair and route reconciliation.** An order left violating its quantity rule is
+//!    excluded and the walks run again. The two legs of every pair order are reconciled to one
+//!    fill by lowering its cap until both legs agree. The token it sells is exact and the token it
+//!    buys covers its receipt. Caps only decrease, so this reaches a fixed point.
+//! 7. **Profit.** It is `Σ crossing spread + Σ tips + Σ update tips (+ Σ kept inventory at its
+//!    policy value, less the fee of its token output) − network fee` over the whole transaction.
+//!    Every KAS amount is the exact rounded covenant value of its leg ([`Cand::value`]). A walk
+//!    never adds a direct chunk whose rounded amounts lose. Fills with a negative marginal profit
+//!    are tried for dropping, and a drop is accepted only when the profit of the whole batch
+//!    rises. A pair order is dropped with both its legs. A dropped pair order takes with it the
+//!    losing pair orders that only took its place on the same liquidity. Every allocation is
+//!    settled afresh from what the profit step dropped. The reference algorithm is in §3.2.
 //!
-//! Complexity: candidates are sorted once per plan; each walk scans its passive list from the first live entry and stops at
-//! the first position from which nothing can cross it any more (a suffix bound on the all-in prices), and once the
-//! transaction has no room for a new leg only the legs already in it are considered. Netting is a two-pointer walk over
-//! each token pair's sorted pair orders. No candidate cap is needed; the wall-clock deadline alone bounds a hostile book.
-//! Every choice is a pure function of the view, `t` and the configuration up to the deadline, so two honest matchers with
-//! the same view build the same batch. Which components a tick plans when executors compete is the weighted selection's
-//! choice (§3.6, `super::select`, from the standalone allocation of [`work_units`]); it never changes how one is planned.
+//! # Cost
+//!
+//! Candidates are sorted once per plan. Each walk scans its passive list from the first live entry
+//! and stops at the first position from which nothing can cross it any more (a suffix bound on the
+//! all-in prices). Once the transaction has no room for a new leg, only the legs already in it are
+//! considered. Netting is a two-pointer walk over each token pair's sorted pair orders. No
+//! candidate cap is needed, because the wall-clock deadline alone bounds a hostile book.
+//!
+//! Every choice is a pure function of the view, `t` and the configuration, up to the deadline. So
+//! two honest matchers with the same view build the same batch. Which components a tick plans when
+//! executors compete is the weighted selection's choice (§3.6, `super::select`, from the standalone
+//! allocation of [`work_units`]). It never changes how one component is planned.
 
 use std::cell::Cell;
 use std::cmp::Ordering;
@@ -101,24 +98,31 @@ use super::planner::{
 
 /// Everything one batch plan reads.
 pub struct BatchInput<'a> {
+    /// Every listed order of the view, by covenant id.
     pub by_id: &'a BTreeMap<CovId, ListedOrder>,
+    /// The lock time `t` the batch is planned at.
     pub lock_time: u64,
+    /// The UTC clock, for the deadlines of day orders.
     pub utc: u64,
-    /// Orders never planned (pending, backed off, quarantined, dropped by an earlier attempt).
+    /// Orders never planned: pending, backed off, quarantined or dropped by an earlier attempt.
     pub excluded: &'a BTreeSet<CovId>,
-    /// Orders whose UTXO is an unaccepted continuation of an earlier transaction of the tick (§7): only chain-safe fills,
-    /// never trigger evidence and never updated.
+    /// Orders whose UTXO is an unaccepted continuation of an earlier transaction of the tick (§7).
+    ///
+    /// Only chain-safe fills are planned for them. They are never trigger evidence and never
+    /// updated.
     pub unaccepted: &'a BTreeSet<CovId>,
     /// Token families this build can lower.
     pub families: &'a BTreeSet<Family>,
     /// Byte budget of the transaction.
     pub max_bytes: u64,
-    /// Plan only these books (panic isolation); None: every book.
+    /// Plan only these books (panic isolation). `None` plans every book.
     pub only: Option<&'a BTreeSet<BookKey>>,
     /// No fill is added after this instant.
     pub deadline: Option<Instant>,
-    /// Pair auctions quoted at an earlier tick than the lock time (§3.3, the engine's earliest-tick search,
-    /// [`super::auction`]): their fills carry that tick. None: every order at the lock time.
+    /// Pair auctions quoted at an earlier tick than the lock time (§3.3).
+    ///
+    /// The engine's earliest-tick search sets them ([`super::auction`]), and their fills carry that
+    /// tick. `None` quotes every order at the lock time.
     pub pair_ticks: Option<&'a BTreeMap<CovId, i64>>,
 }
 
@@ -126,12 +130,14 @@ fn cmp_frac(a: (i128, i128), b: (i128, i128)) -> Ordering {
     (a.0 * b.1).cmp(&(b.0 * a.1))
 }
 
-/// A passive list: candidates of one side in priority order, with the bound that stops a walk early.
+/// A passive list: candidates of one side in priority order, with the bound that stops a walk
+/// early.
 struct List {
     /// Side of the candidates in the list.
     side: Side,
     items: Vec<usize>,
-    /// Suffix bound of the all-in price per base unit: the lowest ask (the highest bid) from each position on.
+    /// Suffix bound of the all-in price per base unit: the lowest ask (the highest bid) from each
+    /// position on.
     bound: Vec<(i128, i128)>,
     /// Bytes of the smallest leg in the list (room check).
     min_bytes: u64,
@@ -166,8 +172,9 @@ struct TokInfo {
     limits: TokenLimits,
 }
 
-/// The pair orders of one token pair that may net: those selling X (for Y) and those selling Y (for X), each in priority
-/// order (the lowest ratio of what they receive to what they release first, then class, tip, age, id).
+/// The pair orders of one token pair that may net: those selling X (for Y) and those selling Y (for
+/// X), each in priority order (the lowest ratio of what they receive to what they release first,
+/// then class, tip, age, id).
 struct NetBook {
     g1: Vec<usize>,
     g2: Vec<usize>,
@@ -195,9 +202,11 @@ struct Universe {
     walks: Vec<Option<usize>>,
     /// Class 1 and 2 walkers (armed stops), in (class, first seen, priority) order.
     actives: Vec<usize>,
-    /// Unarmed stops (class 2, [`Cand::trigger`]): they walk after every other class, and only next to their evidence.
+    /// Unarmed stops (class 2, [`Cand::trigger`]): they walk after every other class, and only next
+    /// to their evidence.
     touched: Vec<usize>,
-    /// Unarmed pair stops (indices into `porders`), in class-2 order: routed next to their evidence.
+    /// Unarmed pair stops (indices into `porders`), in class-2 order: routed next to their
+    /// evidence.
     pair_touched: Vec<usize>,
     /// Orders a batch may arm or ratchet with an update, highest tip first.
     ups: Vec<UpCand>,
@@ -215,17 +224,18 @@ struct Universe {
     porder_of: Vec<Option<usize>>,
     /// Netting groups.
     nets: Vec<NetBook>,
-    /// The plain resting KAS bids of every market, best first (candidate indices): what a netting surplus may fetch, each
-    /// bid only in an amount its own quantity rules accept.
+    /// The plain resting KAS bids of every market, best first (candidate indices): what a netting
+    /// surplus may fetch, each bid only in an amount its own quantity rules accept.
     surplus_bids: BTreeMap<Market, Vec<usize>>,
     /// The surplus-inventory policy (off: no token is ever kept).
     inv: InventoryPolicy,
-    /// The best plain resting KAS quotes of every market, per base unit (the `refPrice` sanity band).
+    /// The best plain resting KAS quotes of every market, per base unit (the `refPrice` sanity
+    /// band).
     quotes: BTreeMap<(Market, Side), (i128, i128)>,
     /// The netting group of each pair order and whether it sells the group's first token (X).
     net_of: Vec<Option<(usize, bool)>>,
-    /// The route bound of every pair order that may net (`i64::MAX`: none): what it may route on top of its netted part
-    /// ([`route_cap`]; set by [`plan_batch`]).
+    /// The route bound of every pair order that may net (`i64::MAX`: none): what it may route on
+    /// top of its netted part ([`route_cap`]; set by [`plan_batch`]).
     rcap: Vec<i64>,
     /// Candidates per covenant id (exclusion).
     by_id: BTreeMap<CovId, Vec<usize>>,
@@ -235,7 +245,8 @@ struct Universe {
     net_steps: Cell<u64>,
 }
 
-/// The signed quote per base unit of an active walker (asks ascending, bids descending: lower is better on both sides).
+/// The signed quote per base unit of an active walker (asks ascending, bids descending: lower is
+/// better on both sides).
 fn active_key(c: &Cand) -> (i128, i128) {
     let (q, s) = c.quote_frac();
     match c.side {
@@ -244,13 +255,15 @@ fn active_key(c: &Cand) -> (i128, i128) {
     }
 }
 
-/// Priority of two actives by quote: the quote per base unit (a pair order leg's implied one), best first on each side.
+/// Priority of two actives by quote: the quote per base unit (a pair order leg's implied one), best
+/// first on each side.
 fn active_quote(x: &Cand, y: &Cand) -> Ordering {
     cmp_frac(active_key(x), active_key(y))
 }
 
-/// Priority within a book (§3.1): quote per base unit (best first; one book has one scale, so this is the quote), tip
-/// (higher first), age (older first), then id and leg. A pair order leg ranks at its implied quote.
+/// Priority within a book (§3.1): quote per base unit (best first; one book has one scale, so this
+/// is the quote), tip (higher first), age (older first), then id and leg. A pair order leg ranks at
+/// its implied quote.
 fn cmp_in_book(cands: &[Cand], a: usize, b: usize) -> Ordering {
     let (x, y) = (&cands[a], &cands[b]);
     let q = match x.side {
@@ -260,7 +273,8 @@ fn cmp_in_book(cands: &[Cand], a: usize, b: usize) -> Ordering {
     q.then(y.tip.cmp(&x.tip)).then(x.age.cmp(&y.age)).then(x.id.cmp(&y.id)).then(x.leg.cmp(&y.leg)).then(x.role().cmp(&y.role()))
 }
 
-/// Priority across the books of a market (a pair order leg walking): all-in per base unit (best first), tip, age, id.
+/// Priority across the books of a market (a pair order leg walking): all-in per base unit (best
+/// first), tip, age, id.
 fn cmp_in_market(cands: &[Cand], a: usize, b: usize) -> Ordering {
     let (x, y) = (&cands[a], &cands[b]);
     let p = match x.side {
@@ -270,8 +284,9 @@ fn cmp_in_market(cands: &[Cand], a: usize, b: usize) -> Ordering {
     p.then(y.tip.cmp(&x.tip)).then(x.age.cmp(&y.age)).then(x.id.cmp(&y.id)).then(x.leg.cmp(&y.leg))
 }
 
-/// Netting priority of two pair orders selling the same token for the same other token: the lower ratio of what they
-/// receive to what they release (the better offer) first, then class, tip, age, id, leg.
+/// Netting priority of two pair orders selling the same token for the same other token: the lower
+/// ratio of what they receive to what they release (the better offer) first, then class, tip, age,
+/// id, leg.
 fn cmp_net(a: &PairInfo, ca: &Cand, b: &PairInfo, cb: &Cand) -> Ordering {
     let (sa, ta) = a.whole();
     let (sb, tb) = b.whole();
@@ -285,7 +300,8 @@ fn cmp_net(a: &PairInfo, ca: &Cand, b: &PairInfo, cb: &Cand) -> Ordering {
         .then(ca.leg.cmp(&cb.leg))
 }
 
-/// Keeps the `cap` best-priority candidates of every (book, class, side) group (the optional operator knob).
+/// Keeps the `cap` best-priority candidates of every (book, class, side) group (the optional
+/// operator knob).
 fn cap_candidates(cands: Vec<Cand>, cap: usize) -> Vec<Cand> {
     let mut groups: BTreeMap<(BookKey, Class, Side), Vec<usize>> = BTreeMap::new();
     for (i, c) in cands.iter().enumerate() {
@@ -304,7 +320,8 @@ fn cap_candidates(cands: Vec<Cand>, cap: usize) -> Vec<Cand> {
     cands.into_iter().zip(keep).filter_map(|(c, k)| k.then_some(c)).collect()
 }
 
-/// A covenant-id-like marker of the surplus offer of a market (never an order id: the marker is not a hash).
+/// A covenant-id-like marker of the surplus offer of a market (never an order id: the marker is not
+/// a hash).
 fn surplus_marker(m: &Market) -> CovId {
     let mut id = [0xffu8; 32];
     for (k, b) in m.token.iter().enumerate() {
@@ -317,7 +334,8 @@ fn surplus_marker(m: &Market) -> CovId {
 impl Universe {
     fn new(inp: &BatchInput, cfg: &PlannerConfig) -> Universe {
         let t = inp.lock_time as i64;
-        // Every order once, in covenant id order: the plan does not depend on the order of the view.
+        // Every order once, in covenant id order: the plan does not depend on the order of the
+        // view.
         let orders: Vec<&ListedOrder> = inp.by_id.values().filter(|o| !inp.excluded.contains(&o.id())).collect();
         let supported = |m: &Market| inp.families.contains(&m.family) && token_limits(m.family, &m.template).is_some();
         let wanted = |b: &BookKey| supported(&b.market()) && inp.only.is_none_or(|s| s.contains(b));
@@ -333,7 +351,8 @@ impl Universe {
         let mut direct: Vec<Cand> = candidates_of(&direct_orders, &cx)
             .into_iter()
             .filter(|c| wanted(&c.book))
-            // a chained step: an unaccepted continuation only on a covenant path that ignores its parent's DAA score
+            // A chained step: an unaccepted continuation only on a covenant path that ignores its
+            // parent's DAA score.
             .filter(|c| c.chain_safe || !inp.unaccepted.contains(&c.id))
             .collect();
         if cfg.max_candidates_per_group > 0 {
@@ -361,7 +380,7 @@ impl Universe {
             for (s, b) in super::pair::legs(&pair_orders, &cands, &cx) {
                 let Some(xs) = &s.pair else { continue };
                 let (ma, mb) = (xs.info.a, xs.info.b);
-                // both markets planned (panic isolation plans a subset of the books)
+                // Both markets planned (panic isolation plans a subset of the books).
                 if !supported(&ma) || !supported(&mb) {
                     continue;
                 }
@@ -378,7 +397,8 @@ impl Universe {
                 porders.push((i, i + 1));
             }
         }
-        // netting groups: per unordered pair of markets, the pair orders selling each of them for the other
+        // Netting groups: per unordered pair of markets, the pair orders selling each of them for
+        // the other.
         let mut groups: BTreeMap<(Market, Market), (Vec<usize>, Vec<usize>)> = BTreeMap::new();
         for (p, &(s, _)) in porders.iter().enumerate() {
             let x = &cands[s].pair.as_ref().expect("pair leg").info;
@@ -431,7 +451,7 @@ impl Universe {
             porder_of[s] = Some(p);
             porder_of[b] = Some(p);
         }
-        // tokens
+        // Tokens.
         let mut tok_ix: BTreeMap<[u8; 32], usize> = BTreeMap::new();
         let mut toks: Vec<TokInfo> = vec![];
         let mut tok = vec![0usize; n];
@@ -443,7 +463,7 @@ impl Universe {
             });
             tok[i] = k;
         }
-        // components: tokens joined by pair orders
+        // Components: tokens joined by pair orders.
         let mut parent: Vec<usize> = (0..toks.len()).collect();
         fn find(p: &mut [usize], x: usize) -> usize {
             let mut r = x;
@@ -473,7 +493,7 @@ impl Universe {
         };
         let mut comp_of_root: BTreeMap<usize, usize> = BTreeMap::new();
         let mut comp_key: Vec<[u8; 32]> = vec![];
-        // tokens in id order: component ids follow the smallest token id of each component
+        // Tokens in id order: component ids follow the smallest token id of each component.
         for &k in tok_ix.values() {
             let r = find(&mut parent, k);
             if let std::collections::btree_map::Entry::Vacant(e) = comp_of_root.entry(r) {
@@ -482,12 +502,12 @@ impl Universe {
             }
         }
         let comp: Vec<usize> = (0..n).map(|i| comp_of_root[&find(&mut parent, tok[i])]).collect();
-        // lists: per book (direct orders of the book, the route legs and surplus offers of its market), per market (plain
-        // orders)
+        // Lists: per book (direct orders of the book, the route legs and surplus offers of its
+        // market), per market (plain orders).
         let mut book_asks: BTreeMap<BookKey, Vec<usize>> = BTreeMap::new();
         let mut book_bids: BTreeMap<BookKey, Vec<usize>> = BTreeMap::new();
         for (i, c) in cands.iter().enumerate() {
-            // an unarmed stop is never passive liquidity: it only walks, after its evidence (§4)
+            // An unarmed stop is never passive liquidity: it only walks, after its evidence (§4).
             if c.pair.is_none() && c.trigger.is_none() {
                 match c.side {
                     Side::Ask => book_asks.entry(c.book).or_default().push(i),
@@ -600,7 +620,8 @@ impl Universe {
                     continue;
                 }
                 if let Some(w) = walks[b] {
-                    // a direct bid walks its book; a pair order's purchase walks the plain asks of its market (once)
+                    // A direct bid walks its book; a pair order's purchase walks the plain asks of
+                    // its market (once).
                     if walking.insert(b) {
                         resting[comp[b]].push((b, w));
                     }
@@ -643,8 +664,9 @@ impl Universe {
         }
     }
 
-    /// Whether a `refPrice` is in line with the plain KAS book of its token: at most [`REF_PRICE_BAND`] times its best ask and
-    /// at least its best bid divided by that factor (a side the book does not have bounds nothing).
+    /// Whether a `refPrice` is in line with the plain KAS book of its token: at most
+    /// [`REF_PRICE_BAND`] times its best ask and at least its best bid divided by that factor (a
+    /// side the book does not have bounds nothing).
     fn ref_in_line(&self, m: &Market, p: &UnitPrice) -> bool {
         let (rs, rp) = (p.sompi as i128, p.per as i128);
         // ref = rs / rp per base unit; a quote is n / d per base unit
@@ -677,8 +699,9 @@ impl Universe {
         }
     }
 
-    /// Caps of an allocation: the candidates' own, a pair order's legs at its reconciled fill (the S it releases, the T
-    /// it receives), the surplus offers none (each allocation sets them from its netting).
+    /// Caps of an allocation: the candidates' own, a pair order's legs at its reconciled fill (the
+    /// S it releases, the T it receives), the surplus offers none (each allocation sets them from
+    /// its netting).
     fn caps(&self, st: &State) -> Vec<i64> {
         let xcap = &st.xcap;
         let mut caps: Vec<i64> = self.cands.iter().zip(&st.dcap).map(|(c, &d)| c.cap.min(d)).collect();
@@ -705,9 +728,11 @@ struct Tok {
     bought: i128,
     legs: u32,
     ext: [u8; 32],
-    /// Pair asks buying this token (their deliveries are minimums: the batch's surplus of the token goes to them).
+    /// Pair asks buying this token (their deliveries are minimums: the batch's surplus of the token
+    /// goes to them).
     absorb: u32,
-    /// Ask-side legs (asks, pair sales) that keep a remainder output (a chunk that sells one out frees an output).
+    /// Ask-side legs (asks, pair sales) that keep a remainder output (a chunk that sells one out
+    /// frees an output).
     rests: u32,
 }
 
@@ -733,8 +758,9 @@ impl Tok {
         self.absorb -= d.absorb;
         self.rests -= d.rests;
     }
-    /// Tokens the batch would leave to the operator: released beyond what the legs take with no pair ask buying them. The
-    /// reference planner holds no inventory: such an allocation is never built.
+    /// Tokens the batch would leave to the operator: released beyond what the legs take with no
+    /// pair ask buying them. The reference planner holds no inventory: such an allocation is never
+    /// built.
     fn op_out(&self) -> bool {
         self.sold > self.bought && self.absorb == 0
     }
@@ -749,7 +775,8 @@ enum Undo {
     Head(usize, usize),
 }
 
-/// A planned update: the index in [`Universe::ups`], the evidence candidates, what it does, the steps and its cost.
+/// A planned update: the index in [`Universe::ups`], the evidence candidates, what it does, the
+/// steps and its cost.
 #[derive(Clone, Copy, Debug)]
 struct Up {
     up: usize,
@@ -779,8 +806,9 @@ struct Alloc<'u> {
     ev_of: BTreeMap<usize, usize>,
     /// Triggered pair stops: the evidence of each pair order.
     pev_of: BTreeMap<usize, PairEv>,
-    /// Pair orders netted in a group that pays for itself (its tips and surplus value cover its bytes): the profit step
-    /// judges them as a group, never one by one (a participant's own marginal misses the surplus it enables).
+    /// Pair orders netted in a group that pays for itself (its tips and surplus value cover its
+    /// bytes): the profit step judges them as a group, never one by one (a participant's own
+    /// marginal misses the surplus it enables).
     netted: BTreeSet<usize>,
     /// Updates (§4) and what they add: bytes and the keeper tips the batch takes.
     ups: Vec<Up>,
@@ -846,8 +874,8 @@ impl<'u> Alloc<'u> {
         self.evidence_in(&c.book).find(|(_, n, src)| need.served_by(src, *n, t)).map(|(e, _, _)| e)
     }
 
-    /// The fills of the allocation a pair stop may read as evidence: the KAS-book touches (mode 0) and the resting
-    /// `KobPair` fills whose legs agree (mode 1), in allocation order.
+    /// The fills of the allocation a pair stop may read as evidence: the KAS-book touches (mode 0)
+    /// and the resting `KobPair` fills whose legs agree (mode 1), in allocation order.
     fn pair_touches(&self) -> (Vec<KasTouch>, Vec<PairFillTouch>) {
         let u = self.u;
         let mut kas = vec![];
@@ -873,7 +901,8 @@ impl<'u> Alloc<'u> {
         (kas, pairs)
     }
 
-    /// Triggered fills (§4): every unarmed stop the batch's evidence serves walks what the other classes left.
+    /// Triggered fills (§4): every unarmed stop the batch's evidence serves walks what the other
+    /// classes left.
     fn trigger_walks(&mut self) {
         let u = self.u;
         for &a in &u.touched {
@@ -891,7 +920,8 @@ impl<'u> Alloc<'u> {
                 self.ev_of.insert(a, e);
             }
         }
-        // unarmed pair stops: armed in this fill by two KAS-book fills or a resting pair fill of the batch, routed
+        // Unarmed pair stops: armed in this fill by two KAS-book fills or a resting pair fill of
+        // the batch, routed.
         for &p in &u.pair_touched {
             let (s, b) = u.porders[p];
             if !self.live[s] || self.qty[s] > 0 || self.qty[b] > 0 {
@@ -919,12 +949,18 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// Updates (§4): the listed stops the batch's evidence arms or ratchets without filling them, highest tip first, while
-    /// the transaction has room. Arming is the default: an update is part of the batch's objective like any other leg (its
-    /// cost is charged, its tip is income), so a zero tip arms when the crossing spread pays for it. Updates are dropped
-    /// only when the batch would otherwise fall below `min_profit`: the ones with the worst tip minus cost first (the later
-    /// in tip order on a tie), while that raises the profit. A batch whose fills pay no spread is only an arming
-    /// transaction of its own: each of its updates must be paid by its tip (`tip >= cost`).
+    /// Updates (§4): the listed stops the batch's evidence arms or ratchets without filling them.
+    ///
+    /// Updates are added highest tip first, while the transaction has room. A trailing stop takes
+    /// the evidence that ratchets it the most steps, the first such fill on a tie. An update is
+    /// part of the batch's objective like any other leg. Its cost is charged and its tip is income,
+    /// so a zero tip arms when the crossing spread pays for it. A booked exit is never updated next
+    /// to its own entry.
+    ///
+    /// Updates are dropped only while the batch would otherwise fall below `min_profit`. The update
+    /// with the worst tip minus cost goes first, the later one in tip order on a tie. A batch whose
+    /// fills pay no spread is only an arming transaction of its own, so each of its updates must be
+    /// paid by its tip (`tip >= cost`).
     fn plan_updates(&mut self) {
         let u = self.u;
         let t = u.t;
@@ -965,7 +1001,7 @@ impl<'u> Alloc<'u> {
                             })
                             .map(|(e, _, src)| (tr.steps(src.price), e))
                             .filter(|(k, _)| *k >= 1)
-                            // the most steps; the first such fill on a tie
+                            // The most steps; the first such fill on a tie.
                             .fold(None::<(i64, usize)>, |b, (k, e)| if b.is_none_or(|(bk, _)| k > bk) { Some((k, e)) } else { b });
                         match best {
                             Some((steps, e)) => (e, None, UpdateKind::Trail, steps),
@@ -979,7 +1015,7 @@ impl<'u> Alloc<'u> {
             self.up_bytes += x.bytes;
             self.tips = self.tips.saturating_add(x.tip);
         }
-        // below `min_profit`: drop the updates that cost more than their tip, worst first
+        // Below `min_profit`: drop the updates that cost more than their tip, worst first.
         let mut profit = self.profit(u.fee_rate);
         if profit >= u.min_profit {
             return;
@@ -1036,12 +1072,13 @@ impl<'u> Alloc<'u> {
                     d.bought = n as i128;
                     d.absorb = u32::from(!x.info.buy_exact());
                 }
-                // the surplus's tokens are already in the transaction (released by the netted orders' sales)
+                // The surplus's tokens are already in the transaction (released by the netted
+                // orders' sales).
                 PairRole::Surplus => {}
             },
             (None, Side::Ask) => {
                 d.tin = 1;
-                // custody remainder (or an IOC's tokens back to its maker)
+                // Custody remainder (or an IOC's tokens back to its maker).
                 d.tout = u32::from(n < c.left);
                 d.rests = d.tout;
                 d.sold = n as i128;
@@ -1070,8 +1107,9 @@ impl<'u> Alloc<'u> {
         !self.live[i] || self.qty[i] >= self.caps[i] || (self.u.cands[i].fok.is_some() && self.qty[i] > 0)
     }
 
-    /// The KRON output amount cap of the candidate's token at a total of `q`: every token output the leg makes (a
-    /// delivery, a custody rest) holds at most the program's largest output amount.
+    /// The KRON output amount cap of the candidate's token at a total of `q`: every token output
+    /// the leg makes (a delivery, a custody rest) holds at most the program's largest output
+    /// amount.
     fn amount_ok(&self, i: usize, q: i64) -> bool {
         let c = &self.u.cands[i];
         let Some(cap) = self.u.toks[self.u.tok[i]].limits.max_output_amount else { return true };
@@ -1085,7 +1123,8 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// Whether adding `adds` (candidate, quantity) of one token keeps the transaction within every rule.
+    /// Whether adding `adds` (candidate, quantity) of one token keeps the transaction within every
+    /// rule.
     fn fits(&self, adds: &[(usize, i64)]) -> bool {
         let t = self.u.tok[adds[0].0];
         let mut tok = self.toks[t];
@@ -1104,7 +1143,7 @@ impl<'u> Alloc<'u> {
                 if tok.legs > 0 && c.book.extension != tok.ext {
                     return false;
                 }
-                // an order's bytes count once (its legs share its input)
+                // An order's bytes count once (its legs share its input).
                 if !self.holder.contains_key(&c.id) && counted.insert(c.id) {
                     leg_bytes += c.bytes;
                 }
@@ -1174,15 +1213,19 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// Σ bid-side spends − Σ ask-side proceeds of the direct legs, each the exact rounded covenant value of the leg's
-    /// whole fill (`Cand::value`), plus the KAS tips the pair orders release (`floor(n·tip/scale(A))`; their legs move no
-    /// other KAS of their own: a route's KAS is the bids' and the asks').
+    /// The KAS margin of the allocation before fees.
+    ///
+    /// It is Σ bid-side spends − Σ ask-side proceeds of the direct legs, each the exact rounded
+    /// covenant value of the leg's whole fill ([`Cand::value`]). It adds the KAS tips the pair
+    /// orders release (`floor(n·tip/scale(A))`). Their legs move no other KAS of their own, because
+    /// a route's KAS is the bids' and the asks'.
     fn margin(&self) -> i64 {
         let m: i128 = self.seq.iter().map(|&i| leg_kas(&self.u.cands[i], self.qty[i])).sum();
         m.clamp(i64::MIN as i128, i64::MAX as i128) as i64
     }
 
-    /// The estimated fee: the fills' bytes at the fee rate and each update's cost ([`update_cost`]).
+    /// The estimated fee: the fills' bytes at the fee rate and each update's cost
+    /// ([`update_cost`]).
     fn fee(&self, fee_rate: u64) -> i64 {
         let ups: i64 = self.ups.iter().fold(0i64, |a, x| a.saturating_add(x.cost));
         est_fee(self.bytes() - self.up_bytes, fee_rate).saturating_add(ups)
@@ -1196,9 +1239,11 @@ impl<'u> Alloc<'u> {
         self.margin().saturating_add(self.tips).saturating_add(self.kept_worth()).saturating_sub(self.fee(fee_rate))
     }
 
-    /// The token surpluses this allocation keeps as the operator's inventory ([`InventoryPolicy`]): every token a pair ask
-    /// of the allocation buys (whose delivery would otherwise take the surplus) with a surplus the policy values above the
-    /// fee of the operator's token output: (token, base units, value after the haircut).
+    /// The token surpluses this allocation keeps as the operator's inventory ([`InventoryPolicy`]).
+    ///
+    /// These are the tokens that a pair ask of the allocation buys, whose delivery would otherwise
+    /// take the surplus, and whose surplus the policy values above the fee of the operator's token
+    /// output. Each entry is (token, base units, value after the haircut).
     fn kept(&self) -> Vec<(usize, Market, i64, i128)> {
         let u = self.u;
         let mut out = vec![];
@@ -1229,28 +1274,34 @@ impl<'u> Alloc<'u> {
         w.clamp(0, i64::MAX as i128) as i64
     }
 
-    /// What `q` base units of market `m`'s token are worth kept as the operator's inventory under the policy, after the
-    /// haircut; 0 when the policy does not accept the token or the amount.
+    /// What `q` base units of market `m`'s token are worth kept as the operator's inventory.
     ///
-    /// The value is the owner's `refPrice`, or else what the plain resting KAS bids of `m` pay for `q` (best first, each up
-    /// to what it has left: its cap less what this allocation fills of it, less `used`, the in-transaction sales a netting
-    /// estimate already counts), each only for an amount its own quantity rules accept (at least its minimum fill, or all it
-    /// has left, the rule `surplus_value` sells by): a bid that could never take the amount does not value it, whatever it
-    /// quotes. The best KAS bid alone never values a surplus: its depth and quantity rules bound what counts. Without
-    /// `refPrice` the amount must be at least the smallest minimum fill of the bids valued (no unsellable dust), and at least
-    /// `minAmount` when that is larger (`minAmount` never lowers the dust rule).
+    /// The value is after the policy's haircut. It is 0 when the policy does not accept the token
+    /// or the amount.
+    ///
+    /// The value is the owner's `refPrice` if there is one. Otherwise it is what the plain resting
+    /// KAS bids of `m` pay for `q`, best first. Each bid pays only for what it has left: its cap
+    /// less what this allocation fills of it, less `used`, the in-transaction sales that a netting
+    /// estimate already counts. It pays only for an amount its own quantity rules accept: at least
+    /// its minimum fill, or all it has left, which is the rule `surplus_value` sells by. A bid that
+    /// could never take the amount does not value it, whatever it quotes. So the best KAS bid alone
+    /// never values a surplus, because the depth and quantity rules of the bids bound what counts.
+    ///
+    /// Without `refPrice` the amount must be at least the smallest minimum fill of the bids valued,
+    /// so that no unsellable dust counts. It must also be at least `minAmount` when that is larger.
+    /// `minAmount` never lowers the dust rule.
     fn keep_value(&self, m: &Market, q: i64, used: Option<&BTreeMap<usize, i64>>) -> i128 {
         let u = self.u;
         let Some(r) = u.inv.rule(&m.token) else { return 0 };
         if q <= 0 {
             return 0;
         }
-        // the operator's token output holds at most the program's largest output amount (KRON)
+        // The operator's token output holds at most the program's largest output amount (KRON).
         let limit = token_limits(m.family, &m.template).and_then(|l| l.max_output_amount);
         if limit.is_some_and(|cap| q as i128 > cap as i128) {
             return 0;
         }
-        // the period's budget of the token: a batch keeps all of the surplus or none
+        // Over the period's budget of the token, the batch keeps none of the surplus.
         if q > u.inv.room(r) {
             return 0;
         }
@@ -1275,8 +1326,8 @@ impl<'u> Alloc<'u> {
             if left <= 0 {
                 continue;
             }
-            // only an amount the bid's own quantity rules accept (its minimum fill, or all it has left): a bid that could never
-            // take this amount does not value it, whatever it quotes
+            // Only an amount the bid's own quantity rules accept (its minimum fill, or all it has
+            // left): a bid that could never take this amount does not value it, whatever it quotes.
             let take = rest.min(left);
             if !c.quantity_ok(take) {
                 continue;
@@ -1286,15 +1337,17 @@ impl<'u> Alloc<'u> {
             rest -= take;
             dust = dust.min(c.min_fill.max(1).min(c.cap));
         }
-        // `minAmount` raises the dust rule, it never lowers it
+        // `minAmount` raises the dust rule and never lowers it.
         if v <= 0 || q < r.min_amount.unwrap_or(0).max(dust) {
             return 0;
         }
         u.inv.haircut(v)
     }
 
-    /// Whether `a` and `p` may trade with each other at all (sides, books, covenant relations, the route rules: a pair order
-    /// leg trades with the plain KAS orders of its token, never with another pair leg, which nets instead).
+    /// Whether `a` and `p` may trade with each other at all.
+    ///
+    /// This checks sides, books, covenant relations and the route rules. A pair order leg trades
+    /// with the plain KAS orders of its token, and never with another pair leg, which nets instead.
     fn pair_ok(&self, a: usize, p: usize) -> bool {
         let (ca, cp) = (&self.u.cands[a], &self.u.cands[p]);
         if cp.side == ca.side
@@ -1322,9 +1375,11 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// The chunk `a` and `p` can trade now: (quantity of `a`, quantity of `p`) in base units of their token (the same
-    /// number: one token changes hands), or None. The passive's minimum fill holds after the chunk unless the chunk ends
-    /// it; the active's is checked when its walk ends (it may still take more).
+    /// The chunk `a` and `p` can trade now, as (quantity of `a`, quantity of `p`), or `None`.
+    ///
+    /// Both quantities are the same number of base units of their token, because one token changes
+    /// hands. The passive's minimum fill holds after the chunk unless the chunk ends it. The
+    /// active's is checked when its walk ends, because it may still take more.
     fn chunk(&self, a: usize, p: usize) -> Option<(i64, i64)> {
         let (bid, ask) = if self.u.cands[a].side == Side::Bid { (a, p) } else { (p, a) };
         let (cb, cs) = (&self.u.cands[bid], &self.u.cands[ask]);
@@ -1337,15 +1392,16 @@ impl<'u> Alloc<'u> {
             return None;
         }
         if let Some(x) = cb.pair.as_ref().filter(|x| x.role == PairRole::Buy) {
-            // A pair order's purchase: exactly what its receipt still needs, from an ask in any amount of at least the ask's
-            // minimum fill (or all it has left); a pair ask's purchase may take more when a minimum fill forces it (the
-            // excess rides on its delivery), a bid's never.
+            // A pair order's purchase takes exactly what its receipt still needs, from an ask in
+            // any amount of at least the ask's minimum fill (or all it has left). A pair ask's
+            // purchase may take more when a minimum fill forces it, and the excess rides on its
+            // delivery. A pair bid's purchase never does.
             let exact = x.info.buy_exact();
             let rem_ask = self.caps[ask] - self.qty[ask];
             let need = self.caps[bid] - self.qty[bid];
             let mut q = need.min(rem_ask);
             if let Some((_, hi)) = cs.fok {
-                // a FOK ask is consumed whole or not at all
+                // A FOK ask is consumed whole or not at all.
                 if self.qty[ask] > 0 || hi > rem_ask || (exact && hi > need) {
                     return None;
                 }
@@ -1380,15 +1436,17 @@ impl<'u> Alloc<'u> {
         if q <= 0 {
             return None;
         }
-        // the passive's minimum fill: a chunk that leaves it below only when the chunk ends it
+        // The passive's minimum fill holds after the chunk unless the chunk ends it.
         if self.qty[p] + q < cp.min_fill && !cp.ends(self.qty[p] + q) {
             return None;
         }
         Some((q, q))
     }
 
-    /// The exact KAS a direct chunk adds to the batch: the rounded value of both legs after the chunk less before (each
-    /// leg's whole fill is rounded once, so this is the chunk's true effect on the margin). None with a pair order leg.
+    /// The exact KAS a direct chunk adds to the batch, or `None` with a pair order leg.
+    ///
+    /// It is the rounded value of both legs after the chunk less before. Each leg's whole fill is
+    /// rounded once, so this is the chunk's true effect on the margin.
     fn chunk_gain(&self, bid: usize, ask: usize, q: i64) -> Option<i128> {
         let (cb, cs) = (&self.u.cands[bid], &self.u.cands[ask]);
         if cb.pair.is_some() || cs.pair.is_some() {
@@ -1400,7 +1458,7 @@ impl<'u> Alloc<'u> {
         Some(paid - owed)
     }
 
-    /// Can the walker `a` (side of `a`) still cross anything from list position `k` on?
+    /// Whether the walker `a` can still cross anything from list position `k` on.
     fn can_cross_from(&self, a: usize, list: &List, k: usize) -> bool {
         let pa = self.u.cands[a].per_base();
         let b = list.bound[k];
@@ -1410,9 +1468,11 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// A necessary condition for a chunk that adds `asks` new ask-side and `bids` new bid-side legs to the token of `i`, and
-    /// `extra` bytes, to fit: a new ask always takes a token input; a new bid takes an output unless the chunk sells out a leg
-    /// that keeps a remainder (one at most per chunk). Used to stop scanning once the transaction is full.
+    /// A necessary condition for a chunk to fit. It stops the scan once the transaction is full.
+    ///
+    /// The chunk adds `asks` new ask-side and `bids` new bid-side legs to the token of `i`, and
+    /// `extra` bytes. A new ask always takes a token input. A new bid takes an output unless the
+    /// chunk sells out a leg that keeps a remainder, which frees one output at most per chunk.
     fn room(&self, i: usize, asks: u32, bids: u32, extra: u64) -> bool {
         let t = &self.toks[self.u.tok[i]];
         let lim = &self.u.toks[self.u.tok[i]].limits;
@@ -1422,7 +1482,9 @@ impl<'u> Alloc<'u> {
             && self.bytes() + extra <= self.max_bytes
     }
 
-    /// Match active candidate `a` against list `l` (already in priority order): every crossing chunk it can take.
+    /// Matches active candidate `a` against list `l`, which is in priority order.
+    ///
+    /// It takes every crossing chunk it can.
     fn walk(&mut self, a: usize, l: usize) {
         if !self.usable(a) {
             return;
@@ -1437,7 +1499,7 @@ impl<'u> Alloc<'u> {
         let u = self.u;
         let list = &u.lists[l];
         let mark = self.log.len();
-        // the head of the list: skip what no walk can use any more
+        // The head of the list: skip what no walk can use any more.
         let mut h = self.head[l];
         while h < list.items.len() && self.dead(list.items[h]) {
             h += 1;
@@ -1463,7 +1525,7 @@ impl<'u> Alloc<'u> {
                 self.try_pair(a, p);
             }
         } else {
-            // no room for another leg: only the legs already in the transaction, in list order
+            // No room for another leg: only the legs already in the transaction, in list order.
             let mut ps: Vec<(usize, usize)> =
                 self.seq.iter().filter_map(|&p| list.pos.get(&p).map(|&k| (k, p))).filter(|(k, _)| *k >= h).collect();
             ps.sort_unstable();
@@ -1474,7 +1536,8 @@ impl<'u> Alloc<'u> {
                 self.try_pair(a, p);
             }
         }
-        // Hard quantity rules of the active order: roll the whole walk back (a pair order's legs are reconciled instead).
+        // Hard quantity rules of the active order: roll the whole walk back (a pair order's legs
+        // are reconciled instead).
         let n = self.qty[a];
         if n > 0 && self.u.cands[a].pair.is_none() && !self.u.cands[a].quantity_ok(n) {
             self.rollback(mark);
@@ -1488,7 +1551,7 @@ impl<'u> Alloc<'u> {
         }
         let Some((na, np)) = self.chunk(a, p) else { return };
         let (bid, ask, q) = if self.u.cands[a].side == Side::Bid { (a, p, na) } else { (p, a, np) };
-        // a direct chunk whose rounded amounts lose (a tiny chunk at a thin spread) is never added
+        // A direct chunk whose rounded amounts lose (a tiny chunk at a thin spread) is never added.
         if self.chunk_gain(bid, ask, q).is_some_and(|g| g < 0) {
             return;
         }
@@ -1502,8 +1565,10 @@ impl<'u> Alloc<'u> {
         self.log.push(Undo::Chunk);
     }
 
-    /// Whether pair order `p`'s legs agree on one fill n (the S it releases exactly, the T it buys covering its receipt,
-    /// its quantity rules).
+    /// Whether the legs of pair order `p` agree on one fill `n`.
+    ///
+    /// The token it sells (S) is released exactly and the token it buys (T) covers its receipt. The
+    /// order's quantity rules hold.
     fn pair_consistent(&self, p: usize) -> bool {
         let u = self.u;
         let (s, b) = u.porders[p];
@@ -1520,10 +1585,13 @@ impl<'u> Alloc<'u> {
             }
     }
 
-    /// Netting (§3.5): in every token pair, the pair orders selling X for Y against those selling Y for X, best first, any
-    /// number per side; each participant's fill is taken at its covenant amounts, the group's token balances kept exact (a
-    /// surplus only where a pair ask buys that token). The netted quantities are added to both legs of every participant;
-    /// their surplus is offered to the plain KAS bids of its token.
+    /// Netting (§3.5): in every token pair, pair orders selling X for Y against those selling Y for
+    /// X.
+    ///
+    /// The orders net best first, any number per side. Each participant's fill is taken at its
+    /// covenant amounts and the group's token balances stay exact. A surplus arises only where a
+    /// pair ask buys that token. The netted quantities are added to both legs of every participant,
+    /// and their surplus is offered to the plain KAS bids of its token.
     fn net_pairs(&mut self) {
         let u = self.u;
         for nb in &u.nets {
@@ -1539,9 +1607,10 @@ impl<'u> Alloc<'u> {
                         out.insert(p);
                     }
                     NetResult::Done(parts, steps, sx, sy) => {
-                        // a netting moves no KAS: the orders' tips and what the surplus may fetch at the best KAS bids pay
-                        // its bytes, or the group nets only its self-funding orders, or not at all (a book of untipped
-                        // crossing pair orders must not cost every allocation the profit step's drops)
+                        // A netting moves no KAS. The orders' tips and what the surplus may fetch
+                        // at the best KAS bids pay its bytes. Otherwise the group nets only its
+                        // self-funding orders, or not at all. A book of untipped crossing pair
+                        // orders must not cost every allocation the profit step's drops.
                         if self.net_value(nb, &parts, sx, sy) < 0 {
                             if pruned {
                                 break;
@@ -1559,7 +1628,7 @@ impl<'u> Alloc<'u> {
                             self.netted.extend(parts.iter().map(|x| x.0));
                             break;
                         }
-                        // the group does not fit the transaction: leave its last participant out
+                        // The group does not fit the transaction: leave its last participant out.
                         match parts.last() {
                             Some(&(p, _, _)) => {
                                 out.insert(p);
@@ -1572,8 +1641,8 @@ impl<'u> Alloc<'u> {
         }
     }
 
-    /// What a netting group earns on its own: the orders' KAS tips and its surplus at the best plain KAS bids, less the fee
-    /// of the orders' bytes.
+    /// What a netting group earns on its own: the orders' KAS tips and its surplus at the best
+    /// plain KAS bids, less the fee of the orders' bytes.
     fn net_value(&self, nb: &NetBook, parts: &[(usize, i64, bool)], sx: i64, sy: i64) -> i128 {
         let u = self.u;
         let mut v: i128 = 0;
@@ -1586,7 +1655,8 @@ impl<'u> Alloc<'u> {
             let mut used: BTreeMap<usize, i64> = BTreeMap::new();
             let (sold, kas) = self.surplus_value(m, q, &mut used);
             v += kas;
-            // what the bids cannot take goes to a pair ask's delivery, or (policy) to the operator's inventory
+            // What the bids cannot take goes to a pair ask's delivery or, under the policy, to the
+            // operator's inventory.
             let keep = self.keep_value(m, q - sold, Some(&used));
             let out = est_fee(KEPT_OUTPUT_BYTES, u.fee_rate) as i128;
             if keep > out {
@@ -1596,10 +1666,14 @@ impl<'u> Alloc<'u> {
         v - est_fee(bytes, u.fee_rate) as i128
     }
 
-    /// The KAS `q` base units of a netting surplus of market `m` fetch at the plain KAS bids of `m`, best first, each bid
-    /// taking only an amount its own quantity rules accept (at least its minimum fill, or everything it has left), and the
-    /// base units sold (`used`: per bid). A surplus below every bid's minimum fill fetches nothing: it goes to the delivery
-    /// of a pair ask and pays no fee (or, under the inventory policy, to the operator's inventory, [`Alloc::keep_value`]).
+    /// The KAS that `q` base units of a netting surplus of market `m` fetch, and the base units
+    /// sold.
+    ///
+    /// The surplus is sold to the plain KAS bids of `m`, best first. Each bid takes only an amount
+    /// its own quantity rules accept: at least its minimum fill, or everything it has left. `used`
+    /// records the base units taken from each bid. A surplus below every bid's minimum fill fetches
+    /// nothing. It goes to the delivery of a pair ask and pays no fee, or, under the inventory
+    /// policy, to the operator's inventory ([`Alloc::keep_value`]).
     fn surplus_value(&self, m: &Market, q: i64, used: &mut BTreeMap<usize, i64>) -> (i64, i128) {
         let u = self.u;
         let mut rest = q;
@@ -1640,7 +1714,8 @@ impl<'u> Alloc<'u> {
         let mut n: BTreeMap<usize, i64> = BTreeMap::new();
         let (mut sx, mut bx, mut sy, mut by) = (0i128, 0i128, 0i128, 0i128);
         let (mut abs_x, mut abs_y) = (false, false);
-        // ids the participants spend (an order, a merged entry, a booked exit's entry): one input per covenant id
+        // Ids the participants spend (an order, a merged entry, a booked exit's entry): one input
+        // per covenant id.
         let mut ids: BTreeSet<CovId> = BTreeSet::new();
         let ids_of = |p: usize| -> Vec<CovId> {
             let c = &u.cands[u.porders[p].0];
@@ -1651,8 +1726,9 @@ impl<'u> Alloc<'u> {
                 || n.get(&p).copied().unwrap_or(0) >= self.ncap(p)
                 || (!n.contains_key(&p) && ids_of(p).iter().any(|i| ids.contains(i)))
         };
-        // the token slots bound a group: a seller of X takes an input of X and an output of Y, a seller of Y the other way
-        // round, so no more of either side than both tokens' slots hold (the group never grows past one transaction)
+        // The token slots bound a group: a seller of X takes an input of X and an output of Y, a
+        // seller of Y the other way round, so no more of either side than both tokens' slots hold
+        // (the group never grows past one transaction).
         let (gx, gy) = match (nb.g1.first(), nb.g2.first()) {
             (Some(&i), Some(&j)) => {
                 let (lx, ly) = (&u.toks[u.tok[u.porders[i].0]].limits, &u.toks[u.tok[u.porders[j].0]].limits);
@@ -1685,7 +1761,8 @@ impl<'u> Alloc<'u> {
                 break;
             }
             let (xi, xj) = (u.info(i), u.info(j));
-            // compatible: what i asks per unit of X it sells is at most what j pays per unit of X it buys
+            // Compatible: what i asks per unit of X it sells is at most what j pays per unit of X
+            // it buys.
             let ((si, ti), (sj, tj)) = (xi.whole(), xj.whole());
             if (ti as i128) * (tj as i128) > (si as i128) * (sj as i128) {
                 break;
@@ -1744,7 +1821,8 @@ impl<'u> Alloc<'u> {
         if n.is_empty() {
             return NetResult::Empty;
         }
-        // the netted part of every participant keeps its quantity rules on its own (a route may add to it later)
+        // The netted part of every participant keeps its quantity rules on its own (a route may add
+        // to it later).
         for &p in &order {
             if !u.info(p).quantity_ok(n[&p]) {
                 return NetResult::Exclude(p);
@@ -1754,12 +1832,13 @@ impl<'u> Alloc<'u> {
         NetResult::Done(parts, steps, (sx - bx).max(0) as i64, (sy - by).max(0) as i64)
     }
 
-    /// Adds a netting group's quantities to the allocation (both legs of every participant, token by token), with the
-    /// surplus offers' caps; false (nothing added) when the group does not fit.
+    /// Adds a netting group's quantities to the allocation (both legs of every participant, token
+    /// by token), with the surplus offers' caps; false (nothing added) when the group does not fit.
     fn inject(&mut self, nb: &NetBook, parts: &[(usize, i64, bool)], steps: &[(usize, usize)], sx: i64, sy: i64) -> bool {
         let u = self.u;
         let mark = self.log.len();
-        // token X: the sales of the g1 participants and the purchases of the g2 ones; token Y the other way round
+        // Token X: the sales of the g1 participants and the purchases of the g2 ones; token Y the
+        // other way round.
         let mut xs: Vec<(usize, i64)> = vec![];
         let mut ys: Vec<(usize, i64)> = vec![];
         for &(p, n, g1) in parts {
@@ -1786,8 +1865,8 @@ impl<'u> Alloc<'u> {
                 self.add(i, q);
             }
         }
-        // the partners of the chunks (for the marginal profit): the pairs the greedy walk matched, in both tokens (linear in
-        // the group's size)
+        // The partners of the chunks (for the marginal profit): the pairs the greedy walk matched,
+        // in both tokens (linear in the group's size).
         for &(i, j) in steps {
             let ((si, bi), (sj, bj)) = (u.porders[i], u.porders[j]);
             for (b, s) in [(bj, si), (bi, sj)] {
@@ -1807,14 +1886,17 @@ enum NetResult {
     Empty,
     /// Leave this participant out and net again (its netted part breaks its quantity rules).
     Exclude(usize),
-    /// The participants (pair order, n, sells X) in netting order, the pairs the walk matched (X seller, Y seller), and the
-    /// surplus of X and of Y.
+    /// The participants (pair order, n, sells X) in netting order, the pairs the walk matched (X
+    /// seller, Y seller), and the surplus of X and of Y.
     Done(Vec<(usize, i64, bool)>, Vec<(usize, usize)>, i64, i64),
 }
 
-/// The KAS a leg filling `n` base units moves for the operator: a direct bid's exact payment (`+`), a direct ask's exact
-/// proceeds (`−`), a pair order's released tip on its primary leg (`+`; its other leg, and a surplus offer, move no KAS of
-/// their own). A value the covenant cannot compute is never built: it counts as a loss of everything.
+/// The KAS a leg filling `n` base units moves for the operator.
+///
+/// A direct bid's exact payment counts as `+` and a direct ask's exact proceeds as `−`. A pair
+/// order's released tip counts as `+` on its primary leg. Its other leg and a surplus offer move
+/// no KAS of their own. A value the covenant cannot compute is never built, so it counts as a loss
+/// of everything.
 fn leg_kas(c: &Cand, n: i64) -> i128 {
     match (&c.pair, c.side) {
         (Some(x), _) if x.is_primary() => x.info.tip_kas(n) as i128,
@@ -1839,7 +1921,8 @@ fn allocate<'u>(
     for (r, &c) in order.iter().enumerate() {
         rank[c] = r;
     }
-    // §3.5: netting first; what a netted order may route on top is bounded by its route's own profit
+    // §3.5: netting first; what a netted order may route on top is bounded by its route's own
+    // profit
     al.net_pairs();
     for (p, &r) in u.rcap.iter().enumerate() {
         if r == i64::MAX {
@@ -1854,7 +1937,8 @@ fn allocate<'u>(
         }
     }
     let mut actives = u.actives.clone();
-    // classes first, then the component order (the most profitable books take the transaction first)
+    // Classes first, then the component order (the most profitable books take the transaction
+    // first).
     actives.sort_by_key(|&a| (u.cands[a].class, rank[u.comp[a]]));
     for a in actives {
         if !live[a] {
@@ -1884,9 +1968,11 @@ fn allocate<'u>(
     al
 }
 
-/// The allocation state an attempt carries: liveness, the pair orders' reconciled caps and the direct candidates' caps (a
-/// fill the walk took into the KIP-9 gap of an order, between its `part_cap` and the fills that end it, comes back at
-/// `part_cap`).
+/// The allocation state an attempt carries: liveness, the pair orders' reconciled caps and the
+/// direct candidates' caps.
+///
+/// A fill that the walk took into the KIP-9 gap of an order comes back at the order's `part_cap`.
+/// The gap lies between `part_cap` and the fills that end the order.
 #[derive(Clone)]
 struct State {
     live: Vec<bool>,
@@ -1908,14 +1994,16 @@ struct Settled {
     caps: Vec<i64>,
 }
 
-/// Runs the class walks until the quantity rules hold and every pair order's legs agree (caps only decrease).
+/// Runs the class walks until the quantity rules hold and every pair order's legs agree (caps only
+/// decrease).
 fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline: Option<Instant>) -> Settled {
     const ROUNDS: usize = 64;
     for round in 0..=ROUNDS {
         let caps = u.caps(&st);
         let al = allocate(u, &caps, &st.live, order, max_bytes, deadline);
-        // a direct fill in the KIP-9 gap of its order (more than its largest partial fill, less than a fill that ends it)
-        // comes back at that largest partial fill; any other broken quantity rule drops the order
+        // A direct fill in the KIP-9 gap of its order (more than its largest partial fill, less
+        // than a fill that ends it) comes back at that largest partial fill; any other broken
+        // quantity rule drops the order.
         let mut bad: Vec<CovId> = vec![];
         let mut capped = false;
         for &i in &al.seq {
@@ -1960,9 +2048,9 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
                 if agree {
                     continue;
                 }
-                // the largest fill both legs reached (the S sold exactly, the receipt covered), within the order's own
-                // quantity rules (FOK, its minimum fill unless it takes everything left, the partial fills its carriers
-                // fund); caps only decrease
+                // The largest fill both legs reached (the S sold exactly, the receipt covered),
+                // within the order's own quantity rules (FOK, its minimum fill unless it takes
+                // everything left, the partial fills its carriers fund); caps only decrease.
                 let m = x.fit_down(n);
                 let new = if m > 0 && m < target && round < ROUNDS { m } else { 0 };
                 if new == 0 {
@@ -1982,7 +2070,8 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
     Settled { caps, st }
 }
 
-/// A removable unit of an allocation: one direct leg, a pair order with both its legs, or a surplus offer.
+/// The removable units of an allocation: each direct leg, each pair order with both its legs, and
+/// each surplus offer.
 fn units_of(u: &Universe, al: &Alloc) -> Vec<Vec<usize>> {
     let mut out = vec![];
     let mut done = BTreeSet::new();
@@ -2002,8 +2091,10 @@ fn units_of(u: &Universe, al: &Alloc) -> Vec<Vec<usize>> {
     out
 }
 
-/// The units of an allocation with the pair orders netted together merged into one (a netting group stands or falls as a
-/// group: one participant's own marginal misses the surplus and the partners it enables).
+/// The units of an allocation, with the pair orders netted together merged into one unit.
+///
+/// A netting group stands or falls as a group. One participant's own marginal misses the surplus
+/// and the partners it enables.
 fn netting_units(u: &Universe, al: &Alloc, units: Vec<Vec<usize>>) -> Vec<Vec<usize>> {
     let (mut group, mut out): (Vec<usize>, Vec<Vec<usize>>) = (vec![], vec![]);
     for un in units {
@@ -2020,13 +2111,16 @@ fn netting_units(u: &Universe, al: &Alloc, units: Vec<Vec<usize>>) -> Vec<Vec<us
     out
 }
 
-/// Marginal profit of removing a unit: the margin of its chunks (and a pair order's tip) less the fee of its bytes and of
-/// the counterparties only it trades with. Units of direct legs that also trade with a pair order leg are left to the pair
-/// order's own unit (None).
+/// Marginal profit of removing a unit, or `None` for a unit that is left to a pair order's unit.
+///
+/// It is the margin of the unit's chunks, plus a pair order's tip, less the fee of its bytes and of
+/// the counterparties only it trades with. Units of direct legs that also trade with a pair order
+/// leg are left to the pair order's own unit.
 fn marginal(u: &Universe, al: &Alloc, unit: &[usize], fee_rate: u64) -> Option<i64> {
     let is_pair = unit.iter().any(|&i| u.cands[i].pair.is_some());
     let mut margin: i128 = unit.iter().map(|&i| if u.cands[i].pair.is_some() { leg_kas(&u.cands[i], al.qty[i]) } else { 0 }).sum();
-    // the netting group carries the inventory its surplus leaves the operator (the policy's value less its output's fee)
+    // The netting group carries the inventory its surplus leaves the operator (the policy's value
+    // less its output's fee).
     if unit.iter().any(|&i| u.porder_of[i].is_some_and(|p| al.netted.contains(&p))) {
         margin += al.kept_worth() as i128;
     }
@@ -2042,14 +2136,15 @@ fn marginal(u: &Universe, al: &Alloc, unit: &[usize], fee_rate: u64) -> Option<i
         }
         let cb = &u.cands[b];
         let cs = &u.cands[s];
-        // the chunk at the legs' exact rounded rates (a chunk of a pair order leg: the direct side only)
+        // The chunk at the legs' exact rounded rates (a chunk of a pair order leg: the direct side
+        // only).
         let mb = if cb.pair.is_none() { cb.value(qb).map(|v| v as i128).unwrap_or(i64::MIN as i128) } else { 0 };
         let ms = if cs.pair.is_none() { cs.value(qs).map(|v| v as i128).unwrap_or(i64::MAX as i128) } else { 0 };
         margin += mb - ms;
         let other = if in_b { s } else { b };
         partners.entry(other).or_insert(true);
     }
-    // a partner that also trades with someone else stays
+    // A partner that also trades with someone else stays.
     for &(b, s, _, _) in &al.chunks {
         for (x, y) in [(b, s), (s, b)] {
             if let Some(only) = partners.get_mut(&x) {
@@ -2069,10 +2164,14 @@ fn marginal(u: &Universe, al: &Alloc, unit: &[usize], fee_rate: u64) -> Option<i
     Some((margin - est_fee(bytes, fee_rate) as i128).clamp(i64::MIN as i128, i64::MAX as i128) as i64)
 }
 
-/// Most breakpoints [`route_cap`] evaluates for one pair order; beyond it the order keeps its whole size.
+/// The most breakpoints [`route_cap`] evaluates for one pair order.
+///
+/// Beyond it the order keeps its whole size.
 const MAX_STANDALONE_STEPS: usize = 4_096;
 
-/// One side of a pair order's route as cumulative base units and exact KAS over the orders of a list (best first).
+/// One side of a pair order's route as cumulative base units and exact KAS.
+///
+/// The ladder runs over the orders of a list, best first.
 struct Ladder<'a> {
     items: Vec<&'a Cand>,
     /// (base units, KAS) taken from the orders before index k, each order whole.
@@ -2094,9 +2193,12 @@ impl<'a> Ladder<'a> {
     fn total(&self) -> i128 {
         self.cum[self.cum.len() - 1].0
     }
-    /// The KAS of `want` base units along the ladder: the whole orders before the one `want` ends in, and that one's part at
-    /// its exact rounded value (with `forced`: at least its minimum fill, or all it has: the minimum fill an ask imposes on
-    /// a pair ask's purchase). None when the ladder does not hold `want`.
+    /// The KAS of `want` base units along the ladder, or `None` when the ladder does not hold
+    /// `want`.
+    ///
+    /// The whole orders before the one `want` ends in count in full. That order's part counts at
+    /// its exact rounded value. With `forced`, the part is at least its minimum fill, or all it
+    /// has, which is the minimum fill an ask imposes on a pair ask's purchase.
     fn kas(&self, want: i128, forced: bool) -> Option<i128> {
         if want <= 0 {
             return Some(0);
@@ -2119,26 +2221,32 @@ impl<'a> Ladder<'a> {
 fn may_net(u: &Universe, p: usize) -> bool {
     let Some((k, in_g1)) = u.net_of[p] else { return false };
     let nb = &u.nets[k];
-    // the opposite side is sorted best first: its first order is the most compatible
+    // The opposite side is sorted best first: its first order is the most compatible.
     let Some(&q) = (if in_g1 { nb.g2.first() } else { nb.g1.first() }) else { return false };
     let ((si, ti), (sj, tj)) = (u.info(p).whole(), u.info(q).whole());
     (ti as i128) * (tj as i128) <= (si as i128) * (sj as i128)
 }
 
-/// The largest fill of pair order `p` whose route could pay on its own, or None when no fill can (`docs/spec/matcher.md`
-/// §3.5).
+/// The largest fill of pair order `p` whose route could pay on its own, or `None` when no fill can
+/// (`docs/spec/matcher.md` §3.5).
 ///
-/// The deeper a route reaches the worse its prices (bids of the token it sells best first, asks of the token it buys best
-/// first), an ask's minimum fill may force a pair ask's purchase beyond its delivery, and the implied quotes that rank the
-/// legs are only the prices at the top of both books: without a bound such an order takes liquidity, token slots and the
-/// other orders' tokens and sinks the batch it is in. The bound: the S sold along the plain bids of S (best first, each at
-/// its exact rounded value; no slot cap), the T bought along the plain asks of T (best first, an ask's part at least its
-/// minimum fill for a pair ask), plus the KAS tip, less the fee of the order's own bytes, against `min_profit`. It is
-/// evaluated at every breakpoint of the two ladders and refined within the highest segment that pays. A FOK order is only
-/// tried at its whole size; an auction whose price still moves only at the largest fill the books reach. Pure; numbers too
-/// large to judge, or more than [`MAX_STANDALONE_STEPS`] breakpoints, keep the whole size. An order with a netting partner
-/// is bounded only in what it routes on top of its netted part ([`Universe::rcap`]); an unarmed pair stop (routed only next
-/// to its evidence) keeps its whole size.
+/// The deeper a route reaches, the worse its prices get. An ask's minimum fill may force a pair
+/// ask's purchase beyond its delivery. The implied quotes that rank the legs are only the prices at
+/// the top of both books. Without a bound, such an order takes liquidity, token slots and the other
+/// orders' tokens, and sinks the batch it is in.
+///
+/// The bound is computed from two ladders. The S sold goes along the plain bids of S, best first,
+/// each at its exact rounded value, with no slot cap. The T bought goes along the plain asks of T,
+/// best first, where an ask's part is at least its minimum fill for a pair ask. The route's margin
+/// is these two plus the KAS tip, less the fee of the order's own bytes, and it is judged against
+/// `min_profit`. It is evaluated at every breakpoint of the two ladders and refined within the
+/// highest segment that pays.
+///
+/// A FOK order is only tried at its whole size. An order whose price still moves is judged only at
+/// the largest fill the books reach. Numbers too large to judge, or more than
+/// [`MAX_STANDALONE_STEPS`] breakpoints, keep the whole size. An order with a netting partner is
+/// bounded only in what it routes on top of its netted part ([`Universe::rcap`]). An unarmed pair
+/// stop, which is routed only next to its evidence, keeps its whole size. The function is pure.
 fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
     let (s, b) = u.porders[p];
     let x = u.info(p);
@@ -2152,14 +2260,14 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
         return whole;
     };
     let clamp = |v: i128| v.clamp(0, i64::MAX as i128) as i64;
-    // the largest fill the books reach: the S the bids take, whose receipt the asks hold
+    // The largest fill the books reach: the S the bids take, whose receipt the asks hold.
     let n_cap = (x.cap as i128).min(x.n_of_sell(clamp(bids.total())) as i128).min(x.n_of_buy(clamp(asks.total())) as i128);
     if n_cap <= 0 {
         return None;
     }
     let fee = est_fee(BASE_BYTES + c.bytes, cfg.fee_rate) as i128;
     let forced = !x.buy_exact();
-    // the route's margin at a fill of n (None: too large to judge or not held by the books)
+    // The route's margin at a fill of n (None: too large to judge or not held by the books).
     let margin = |n: i128| -> Option<i128> {
         let n64 = i64::try_from(n).ok()?;
         let sold = x.sell_qty(n64)? as i128;
@@ -2168,8 +2276,8 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
     };
     let pays = |n: i128| margin(n).map(|m| m >= cfg.min_profit as i128);
     if x.whole_only() {
-        // only the whole size (FOK, or a pair order whose prefunded carriers fund no partial fill): it pays, or the order
-        // is left out
+        // Only the whole size (FOK, or a pair order whose prefunded carriers fund no partial fill):
+        // it pays, or the order is left out.
         return match pays(x.cap as i128) {
             Some(true) if x.cap as i128 <= n_cap => whole,
             Some(_) => None,
@@ -2177,13 +2285,14 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
         };
     }
     if x.relaxing {
-        // judged at the largest reach only (its price moves until the route pays it)
+        // Judged at the largest reach only (its price moves until the route pays it).
         return match pays(n_cap) {
             Some(false) => None,
             _ => Some(n_cap as i64),
         };
     }
-    // breakpoints: where a bid of S ends, where the receipt of a fill ends an ask of T, and the reach
+    // Breakpoints: where a bid of S ends, where the receipt of a fill ends an ask of T, and the
+    // reach.
     let mut pts: Vec<i128> = bids.cum.iter().map(|&(units, _)| x.n_of_sell(clamp(units)) as i128).collect();
     for &(units, _) in &asks.cum {
         pts.push(x.n_of_buy(clamp(units)) as i128);
@@ -2195,7 +2304,8 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
     if pts.len() > MAX_STANDALONE_STEPS {
         return whole;
     }
-    // the highest breakpoint that pays, and the next one above it (the margin is close to linear between them)
+    // The highest breakpoint that pays, and the next one above it (the margin is close to linear
+    // between them).
     let mut best: Option<i128> = None;
     let mut above: Option<i128> = None;
     for k in (0..pts.len()).rev() {
@@ -2210,7 +2320,8 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
         }
     }
     let mut lo = best?;
-    // refine within the segment above it: the largest fill that still pays (a bisection; the segment is near-linear)
+    // Refine within the segment above it: the largest fill that still pays (a bisection; the
+    // segment is near-linear).
     if let Some(mut hi) = above {
         while hi - lo > 1 {
             let mid = lo + (hi - lo) / 2;
@@ -2221,8 +2332,8 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
             }
         }
     }
-    // the order's own quantity rules: a fill below its minimum fill only when it takes everything left, a partial fill only
-    // as large as its carriers fund
+    // The order's own quantity rules: a fill below its minimum fill only when it takes everything
+    // left, a partial fill only as large as its carriers fund.
     let n = lo as i64;
     if !x.quantity_ok(n) {
         let m = x.fit_down(n);
@@ -2238,9 +2349,11 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
     Some(n)
 }
 
-/// Orders an allocation must not keep: a quantity rule broken, a pair order whose two legs disagree (the S released
-/// exactly at its reconciled cap, its receipt covered), or tokens left to the operator. Empty for every settled
-/// allocation; the deadline can cut a settlement short.
+/// Orders an allocation must not keep.
+///
+/// These are orders with a broken quantity rule, pair orders whose two legs disagree (the S
+/// released exactly at the reconciled cap, the receipt covered), and tokens left to the operator.
+/// The result is empty for every settled allocation, but the deadline can cut a settlement short.
 fn offenders(u: &Universe, al: &Alloc) -> Vec<CovId> {
     let mut v = vec![];
     for &i in &al.seq {
@@ -2258,9 +2371,10 @@ fn offenders(u: &Universe, al: &Alloc) -> Vec<CovId> {
             v.push(u.cands[s].id);
         }
     }
-    // no token left to the operator, no token delivered that was not released; a KRON token's surplus fits the delivery of
-    // every pair ask that may take it (the builder keeps the excess of a KRON delivery above the program's output limit with
-    // the taker: the operator)
+    // No token is left to the operator, and no token is delivered that was not released. A KRON
+    // token's surplus fits the delivery of every pair ask that may take it. The builder keeps the
+    // excess of a KRON delivery above the program's output limit with the taker, who is the
+    // operator.
     for (k, t) in al.toks.iter().enumerate() {
         let surplus = t.sold - t.bought;
         let kron_over = |i: usize| {
@@ -2280,7 +2394,9 @@ fn offenders(u: &Universe, al: &Alloc) -> Vec<CovId> {
     v
 }
 
-/// IOC fills of an allocation (never shrunk to fatten a batch, §3.2): a pair order's by its fill n.
+/// The IOC fills of an allocation by covenant id, which are never shrunk to fatten a batch (§3.2).
+///
+/// A pair order's fill is its fill `n`.
 fn ioc_fills(u: &Universe, al: &Alloc) -> BTreeMap<CovId, i64> {
     al.seq
         .iter()
@@ -2289,8 +2405,8 @@ fn ioc_fills(u: &Universe, al: &Alloc) -> BTreeMap<CovId, i64> {
         .collect()
 }
 
-/// The component order: decreasing profit per byte of each component on its own (the allocation with no byte budget),
-/// then the component key.
+/// The component order: decreasing profit per byte of each component on its own (the allocation
+/// with no byte budget), then the component key.
 fn density_order(u: &Universe, al: &Alloc, fee_rate: u64) -> Vec<usize> {
     let nc = u.comp_key.len();
     let mut margin = vec![0i128; nc];
@@ -2314,27 +2430,31 @@ fn density_order(u: &Universe, al: &Alloc, fee_rate: u64) -> Vec<usize> {
     order
 }
 
-/// What planning cost, in units that do not depend on the machine: a regression that makes the planner do far more work shows
-/// in these counts on every machine, where a wall-clock bound only shows it on a fast one (`tests/tick_cost_bound.rs`).
-/// Deterministic for a given view and configuration as long as no deadline cut a plan short (`cut_short` 0).
+/// What planning cost, in units that do not depend on the machine.
+///
+/// A regression that makes the planner do far more work shows in these counts on every machine,
+/// where a wall-clock bound only shows it on a fast one (`tests/tick_cost_bound.rs`). The counts
+/// are deterministic for a given view and configuration as long as no deadline cut a plan short
+/// (`cut_short` is 0).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlanWork {
     /// Plans run.
     pub plans: u64,
-    /// Allocation passes: one run of the class walks (netting, routes, direct walks, triggers) over the view. Settling,
-    /// ordering the components and the profit step's drops each cost one or more; a plan's work is this count times the
-    /// cost of one pass.
+    /// Allocation passes: one run of the class walks (netting, routes, direct walks, triggers) over
+    /// the view. Settling, ordering the components and the profit step's drops each cost one or
+    /// more; a plan's work is this count times the cost of one pass.
     pub allocations: u64,
     /// Candidate pairs the walks tried (the inner step of a pass).
     pub pair_tries: u64,
     /// Steps of the netting walks (one opposite pair order tried against a netting group).
     pub net_steps: u64,
-    /// Plans whose deadline (the book budget, or the tick budget) had passed when they returned: the planner ran out of
-    /// time and handed over what it had.
+    /// Plans whose deadline (the book budget, or the tick budget) had passed when they returned:
+    /// the planner ran out of time and handed over what it had.
     pub cut_short: u64,
 }
 
 impl PlanWork {
+    /// Adds the counts of `o` to these.
     pub fn add(&mut self, o: PlanWork) {
         self.plans += o.plans;
         self.allocations += o.allocations;
@@ -2344,7 +2464,9 @@ impl PlanWork {
     }
 }
 
-/// Plans the most profitable transaction over every book of the view, or None when nothing profitable crosses.
+/// Plans the most profitable transaction over every book of the view.
+///
+/// Returns `None` when nothing profitable crosses.
 pub fn plan_batch(inp: &BatchInput, cfg: &PlannerConfig) -> Option<Plan> {
     plan_batch_counted(inp, cfg).0
 }
@@ -2363,29 +2485,33 @@ pub fn plan_batch_counted(inp: &BatchInput, cfg: &PlannerConfig) -> (Option<Plan
     (plan, work)
 }
 
-/// A work unit of the view (`docs/spec/matcher.md` §3.6): one component (the books of one token, joined by the pair orders
-/// between tokens, §3.1) and what the reference planner does with it on its own.
+/// A work unit of the view (`docs/spec/matcher.md` §3.6): one component (the books of one token,
+/// joined by the pair orders between tokens, §3.1) and what the reference planner does with it on
+/// its own.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkUnit {
-    /// The token covenant ids of the component: every listed order of these tokens (a pair order: of both its tokens)
-    /// belongs to it.
+    /// The token covenant ids of the component: every listed order of these tokens (a pair order:
+    /// of both its tokens) belongs to it.
     pub tokens: BTreeSet<[u8; 32]>,
     /// The orders its standalone allocation fills or updates.
     pub orders: BTreeSet<CovId>,
-    /// Its standalone profit: the margin and tips of its fills and the keeper tips of its updates, less the fee of their
-    /// bytes (sompi; the envelope and funding of a transaction not included).
+    /// Its standalone profit: the margin and tips of its fills and the keeper tips of its updates,
+    /// less the fee of their bytes (sompi; the envelope and funding of a transaction not included).
     pub profit: i64,
     /// The bytes of its legs and updates.
     pub bytes: u64,
-    /// It fills class 1 (immediate) or class 2 (triggered) work: always planned (§3.1).
+    /// Whether it fills class 1 (immediate) or class 2 (triggered) work, which is always planned
+    /// (§3.1).
     pub urgent: bool,
-    /// The DAA score from which its oldest crossing has been visible: the later of the two orders' first listing of its
-    /// earliest chunk (a netting group: of its latest order). Its age bounds the deferral (`max_defer_daa`).
+    /// The DAA score from which its oldest crossing has been visible: the later of the two orders'
+    /// first listing of its earliest chunk (a netting group: of its latest order). Its age bounds
+    /// the deferral (`max_defer_daa`).
     pub since: u64,
 }
 
-/// The work units of the view: every component with a standalone allocation, in the reference order (decreasing profit per
-/// byte, then the smallest token id). The allocation is the one that orders the components (§3.1), with no byte budget.
+/// The work units of the view: every component with a standalone allocation, in the reference order
+/// (decreasing profit per byte, then the smallest token id). The allocation is the one that orders
+/// the components (§3.1), with no byte budget.
 pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
     let mut u = Universe::new(inp, cfg);
     if u.cands.is_empty() {
@@ -2422,7 +2548,8 @@ pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
             units[k].urgent = true;
         }
     }
-    // the inventory a netting group keeps counts at its policy value, less its output's fee (as in the batch's profit)
+    // The inventory a netting group keeps counts at its policy value, less its output's fee (as in
+    // the batch's profit).
     for (t, _, _, v) in al.kept() {
         if let Some(i) = (0..u.cands.len()).find(|&i| u.tok[i] == t) {
             margin[u.comp[i]] += v - est_fee(KEPT_OUTPUT_BYTES, cfg.fee_rate) as i128;
@@ -2437,7 +2564,7 @@ pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
         margin[k] += c.tip as i128;
         costs[k] += x.cost as i128;
     }
-    // the crossing of a chunk is visible once both of its orders are listed
+    // The crossing of a chunk is visible once both of its orders are listed.
     let seen = |i: usize| u.cands[i].seen;
     for &(b, s, _, _) in &al.chunks {
         let (rb, rs) = (u.cands[b].role(), u.cands[s].role());
@@ -2450,7 +2577,7 @@ pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
         let k = u.comp[b];
         units[k].since = units[k].since.min(since);
     }
-    // a netting group (no chunks): visible once its latest order is listed
+    // A netting group (no chunks): visible once its latest order is listed.
     for (k, unit) in units.iter_mut().enumerate() {
         if unit.since == u64::MAX && used[k] {
             unit.since = al
@@ -2471,8 +2598,9 @@ pub fn work_units(inp: &BatchInput, cfg: &PlannerConfig) -> Vec<WorkUnit> {
     order.into_iter().filter(|&k| used[k]).map(|k| units[k].clone()).collect()
 }
 
-/// Step 0 of a plan: every routed pair order at most the largest fill its route could pay on its own; out when no fill can
-/// and it has no netting partner; an order that may net routes at most that bound on top of its netted part.
+/// Step 0 of a plan: every routed pair order at most the largest fill its route could pay on its
+/// own; out when no fill can and it has no netting partner; an order that may net routes at most
+/// that bound on top of its netted part.
 fn standalone_bounds(u: &mut Universe, cfg: &PlannerConfig) -> State {
     let n = u.cands.len();
     let mut st0 = State { live: vec![true; n], xcap: (0..u.porders.len()).map(|p| u.info(p).cap).collect(), dcap: vec![i64::MAX; n] };
@@ -2501,12 +2629,13 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
     if u.cands.is_empty() {
         return None;
     }
-    // 0. every routed pair order at most the largest fill its route could pay on its own (`standalone_bounds`)
+    // 0. every routed pair order at most the largest fill its route could pay on its own
+    //    (`standalone_bounds`)
     let st0 = standalone_bounds(u, cfg);
     let u = &*u;
     let natural: Vec<usize> = (0..u.comp_key.len()).collect();
-    // 1. every component on its own (no byte budget): the profit per byte that orders the components (at most half of the
-    //    time left)
+    // 1. every component on its own (no byte budget): the profit per byte that orders the
+    //    components (at most half of the time left)
     let order = if u.comp_key.len() > 1 {
         let half = inp.deadline.map(|d| {
             let now = Instant::now();
@@ -2518,16 +2647,18 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
     } else {
         natural
     };
-    // 2. the transaction. `dropped` is what the profit step decided (the standalone bounds and the units it dropped); every
-    //    allocation is settled from it afresh, so a pair order the reconciliation left out only because another leg held its
-    //    token (a fill the profit step then drops) competes again in the next settlement.
+    // 2. the transaction. `dropped` is what the profit step decided (the standalone bounds and the
+    //    units it dropped); every allocation is settled from it afresh, so a pair order the
+    //    reconciliation left out only because another leg held its token (a fill the profit step
+    //    then drops) competes again in the next settlement.
     let mut dropped = st0.clone();
     let mut cur = settle(u, st0, inp.max_bytes, &order, inp.deadline);
     fn run_on<'u>(u: &'u Universe, s: &'u Settled, order: &[usize], max_bytes: u64, deadline: Option<Instant>) -> Alloc<'u> {
         allocate(u, &s.caps, &s.st.live, order, max_bytes, deadline)
     }
     let (mb, dl) = (inp.max_bytes, inp.deadline);
-    // 3. drop fills with negative marginal profit; class 1 is protected while the batch is profitable
+    // 3. drop fills with negative marginal profit; class 1 is protected while the batch is
+    //    profitable
     let out_of_time = || inp.deadline.is_some_and(|d| Instant::now() >= d);
     for protect in [true, false] {
         let mut kept: BTreeSet<Vec<usize>> = BTreeSet::new();
@@ -2570,7 +2701,7 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
                 }
                 st
             };
-            // all of them at once, else one at a time (most negative first)
+            // All of them at once, else one at a time (most negative first).
             if neg.len() > 1 {
                 let all: Vec<&Vec<usize>> = neg.iter().map(|(_, un)| un).collect();
                 let st = without(&all);
@@ -2585,11 +2716,12 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
                 if out_of_time() {
                     break;
                 }
-                // A losing pair order may leave its liquidity to another pair order of the same tokens that loses on it as
-                // well (the next in price order, worse prices than its own): drop those substitutes with it, all of them.
-                // No cap: every pass excludes at least one more pair order, so the passes are bounded by their number (and
-                // the deadline). A cap of 8 gave up a paying route behind ten losing cross limits on one bid (TN10 soak
-                // 2026-10-02).
+                // A losing pair order may leave its liquidity to another pair order of the same
+                // tokens that loses on it as well, the next in price order at worse prices than its
+                // own. Those substitutes are dropped with it, all of them. There is no cap: every
+                // pass excludes at least one more pair order, so the passes are bounded by their
+                // number and the deadline. A cap would give up a paying route that sits behind many
+                // losing cross limits on one bid.
                 let mut st = without(&[un]);
                 let mut s1 = settle(u, st.clone(), inp.max_bytes, &order, inp.deadline);
                 while !accept(&s1) && un.len() == 2 && !out_of_time() {
@@ -2624,7 +2756,8 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
             break;
         }
     }
-    // 4. a settlement the deadline cut short may leave a quantity rule or a route unreconciled: drop those orders
+    // 4. a settlement the deadline cut short may leave a quantity rule or a route unreconciled:
+    //    drop those orders
     for attempt in 0.. {
         let al = run_on(u, &cur, &order, mb, dl);
         let off = offenders(u, &al);
@@ -2653,8 +2786,9 @@ fn plan_universe(u: &mut Universe, inp: &BatchInput, cfg: &PlannerConfig) -> Opt
 }
 
 fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i64>>, cfg: &PlannerConfig) -> Plan {
-    // pair order fills lead the transaction (one per order: its primary leg carries the fill n), then the rest in
-    // allocation order; surplus offers are no legs (their tokens are the netted orders')
+    // Pair order fills lead the transaction (one per order: its primary leg carries the fill n),
+    // then the rest in allocation order; surplus offers are no legs (their tokens are the netted
+    // orders').
     let mut order: Vec<usize> = vec![];
     let mut seen_p: BTreeSet<usize> = BTreeSet::new();
     for &i in &al.seq {
@@ -2665,8 +2799,8 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i
         }
     }
     order.extend(al.seq.iter().copied().filter(|&i| u.cands[i].pair.is_none()));
-    // a fill's index in the plan is its leg index in the lowered batch (the evidence references); a pair order's legs both
-    // map to its fill
+    // A fill's index in the plan is its leg index in the lowered batch (the evidence references); a
+    // pair order's legs both map to its fill.
     let mut at: BTreeMap<usize, usize> = order.iter().enumerate().map(|(k, &i)| (i, k)).collect();
     for (k, &i) in order.iter().enumerate() {
         if let Some(t) = u.twin[i] {
@@ -2680,7 +2814,8 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i
                 Some(&(e, eb)) => (at.get(&e).copied(), eb.and_then(|x| at.get(&x).copied())),
                 None => (al.ev_of.get(&i).and_then(|e| at.get(e).copied()), None),
             };
-            // a pair auction quoted at an earlier tick (the engine's earliest-tick search) is priced there
+            // A pair auction quoted at an earlier tick (the engine's earliest-tick search) is
+            // priced there.
             let c = &u.cands[i];
             let t = ticks.filter(|_| c.pair.is_some()).and_then(|m| m.get(&c.id)).map(|&x| x.clamp(0, lock as i64) as u64);
             Fill { cand: c.clone(), amount: al.qty[i], evidence, evidence_b, t: t.filter(|&x| x < lock) }
@@ -2704,7 +2839,7 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i
             }
         })
         .collect();
-    // the inventory kept: one operator token output each (its bytes and fee on top of the legs')
+    // The inventory kept: one operator token output each (its bytes and fee on top of the legs').
     let kept: Vec<Kept> = al
         .kept()
         .into_iter()
@@ -2734,11 +2869,12 @@ mod tok_tests {
         let lim = TokenLimits { max_in: 8, max_out: 8, max_output_amount: None };
         let base = Tok { tin: 2, tout: 2, sold: 10, bought: 10, legs: 2, ..Tok::default() };
         assert!(base.ok(&lim));
-        // the legs take less than the batch releases and no pair ask buys the token: the rest would be inventory
+        // The legs take less than the batch releases and no pair ask buys the token: the rest would
+        // be inventory.
         assert!(!Tok { bought: 9, ..base }.ok(&lim));
-        // a pair ask buying the token takes the surplus on its delivery
+        // A pair ask buying the token takes the surplus on its delivery.
         assert!(Tok { bought: 9, absorb: 1, ..base }.ok(&lim));
-        // never more delivered than released
+        // Never more delivered than released.
         assert!(!Tok { bought: 11, absorb: 1, ..base }.ok(&lim));
     }
 }
