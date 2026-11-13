@@ -1,20 +1,39 @@
-//! The order planner of the trading commands: a port of the web app's planning layer (`web/src/kob/plan.ts`,
-//! `orders/simple.ts`, `orders/cond*.ts`, `orders/pair-simple.ts`, `orders/common.ts`, `orders/pair-common.ts`, `guards.ts`,
-//! `daa.ts`, `funding.ts`) for the order kinds `kob place` offers, so the CLI places the same states, the same `createOrder`
-//! requests and therefore the same transactions and `KOB1` placement records as the wallet for the same inputs:
+//! The order planner of the trading commands.
 //!
-//! * the wallet defaults (`docs/spec/matcher.md` §10): minimum fill worth 10 KAS at the limit (1 for IOC / FOK / market,
-//!   `ceil(amount / 4)` for if-done entries), 1 KAS on every covenant UTXO, tip 0, GTC = 90 days, IOC / FOK life 300 DAA,
-//!   market auctions from the touch over 200 DAA to a 3 % bound starting 30 DAA after placement, stop bands 3 % over
-//!   300 DAA, trigger threshold max(minimum fill, 25 % of the amount), rest time 50 DAA, the program's refund / keeper tips;
-//! * the guards: tick, amount and value bounds, 90-day horizon, self-trade, FOK depth, crossing limits (auction / limit /
-//!   reject), price bands, market-start checks against the last fill;
-//! * the coin selection (largest KAS first with a fee reserve that grows by the reported shortfall; the smallest single
-//!   token UTXO that covers the amount, else the largest first within the program's inputs) and the recover-and-compare
-//!   self-check of the placement record.
+//! This is a port of the planning layer of the web app (`web/src/kob/plan.ts`, `orders/simple.ts`,
+//! `orders/cond*.ts`, `orders/pair-simple.ts`, `orders/common.ts`, `orders/pair-common.ts`,
+//! `guards.ts`, `daa.ts` and `funding.ts`) for the order kinds that `kob place` offers. The CLI so
+//! places the same states, the same `createOrder` requests and therefore the same transactions and
+//! `KOB1` placement records as the wallet for the same inputs.
 //!
-//! Every number is the covenant's own arithmetic (`kob_protocol::state`); prices are the state's (quote units per `scale`
-//! base units), amounts base units, KAS sompi.
+//! # Wallet defaults
+//!
+//! They are those of `docs/spec/matcher.md` §10:
+//! - Minimum fill: the amount worth 10 KAS at the limit, 1 for IOC, FOK and market orders, and
+//!   `ceil(amount / 4)` for if-done entries.
+//! - 1 KAS on every covenant UTXO, tip 0, GTC = 90 days, and a life of 300 DAA for IOC and FOK.
+//! - Market auctions from the touch over 200 DAA to a 3 % bound, starting 30 DAA after placement.
+//! - Stop bands of 3 % over 300 DAA, a trigger threshold of max(minimum fill, 25 % of the amount)
+//!   and a rest time of 50 DAA.
+//! - The refund and keeper tips of the program.
+//!
+//! # Guards
+//!
+//! - Tick, amount and value bounds, and the 90-day horizon.
+//! - Self-trade, FOK depth, crossing limits (auction, limit or reject) and price bands.
+//! - Market-start checks against the last fill.
+//!
+//! # Coin selection
+//!
+//! KAS is selected largest first, with a fee reserve that grows by the reported shortfall. Of the
+//! token UTXOs the smallest single one that covers the amount is taken, else the largest first
+//! within the inputs of the program. A recover-and-compare self-check of the placement record
+//! follows.
+//!
+//! # Units
+//!
+//! Every number is the covenant's own arithmetic (`kob_protocol::state`). Prices are those of the
+//! state (quote units per `scale` base units), amounts are base units and KAS is in sompi.
 
 use kob_protocol::build::{build, Action, CreateOrder};
 use kob_protocol::defaults::{
@@ -29,62 +48,65 @@ use kob_protocol::Family;
 
 use super::market::TokenMarket;
 
-// ------------------------------------------------------------------------------------------------ constants (daa.ts)
+// ------------------------------------------------------------------------------ constants (daa.ts)
 
-/// 90 days at 10 DAA/s: the covenants' `MAX_IDLE`.
+/// 90 days at 10 DAA/s, the `MAX_IDLE` of the covenants.
 pub const MAX_IDLE_DAA: i64 = 77_760_000;
-/// The covenant kill of an IOC / FOK (DAA after it became fillable).
+/// The covenant kill of an IOC or FOK, in DAA after it became fillable.
 pub const IOC_KILL_DAA: i64 = 600;
-/// Wallet life of an IOC / FOK.
+/// The wallet life of an IOC or FOK, in DAA.
 pub const IOC_LIFE_DAA: i64 = 300;
-/// Market auction length, activation delay and slippage bound.
+/// Length of a market auction, in DAA.
 pub const MARKET_AUCTION_DAA: i64 = 200;
-/// Market activation delay.
+/// Market activation delay, in DAA.
 pub const MARKET_ACTIVATION_DAA: i64 = 30;
-/// Market / stop slippage bound (bps).
+/// Slippage bound of a market order or a stop, in basis points.
 pub const SLIPPAGE_BPS: i64 = 300;
-/// Stop auction length.
+/// Length of a stop auction, in DAA.
 pub const STOP_BAND_DAA: i64 = 300;
-/// Trigger rest time.
+/// Trigger rest time, in DAA.
 pub const MIN_REST_DAA: i64 = 50;
-/// Default network-fee reserve of a placement (`funding.ts`).
+/// Default network-fee reserve of a placement, in sompi (`funding.ts`).
 pub const DEFAULT_FEE_RESERVE: i128 = 5_000_000;
 /// Most KAS inputs of one placement.
 pub const MAX_FUNDING_INPUTS: usize = 50;
 /// Most token inputs of any transaction.
 pub const MAX_TOKEN_INPUTS: usize = 8;
-/// Fills a resting bid budgets a delivery carrier for by default.
+/// Fills for which a resting bid budgets a delivery carrier by default.
 pub const DEFAULT_BID_FILLS: i64 = 3;
-/// Most delivery carriers a resting pair order budgets by default.
+/// Most delivery carriers that a resting pair order budgets by default.
 pub const MAX_DEFAULT_PAIR_FILLS: i64 = 64;
 /// 2^62: every quote of an order stays below it.
 pub const QUOTE_LIMIT: i128 = 1 << 62;
-/// A market order worth this much (100 KAS) with no independent reference for its start is held until acknowledged.
+/// A market order worth this much (100 KAS) is held until acknowledged if its start has no
+/// independent reference.
 pub const MARKET_START_UNVERIFIED_MIN_SOMPI: i128 = 100 * 100_000_000;
-/// Tolerance of a market start against the last fill (bps).
+/// Tolerance of a market start against the last fill, in basis points (10 %).
 pub const MARKET_START_TOLERANCE_BPS: i128 = 1_000;
 /// KRON outputs hold at most this many base units.
 pub const KRON_MAX_OUTPUT_AMOUNT: i64 = kob_protocol::registry::KRON_MAX_OUTPUT_AMOUNT;
-/// `expiryDaa` of an if-done exit with the default GTC: "90 days idle from the exit's creation" (`cond-common.ts`).
+/// `expiryDaa` of an if-done exit with the default GTC (`cond-common.ts`).
+///
+/// The exit lives 90 days idle from its own creation.
 pub const GTC_EXIT_EXPIRY_DAA: i64 = 1 << 62;
-/// Trailing: the default update interval (10 minutes) and the shortest accepted (60 s).
+/// The default trailing update interval, in DAA (10 minutes).
 pub const DEFAULT_TRAIL_WAIT_DAA: i64 = 6_000;
-/// Shortest trailing interval.
+/// The shortest accepted trailing interval, in DAA (60 s).
 pub const MIN_TRAIL_WAIT_DAA: i64 = 600;
-/// Trail updates pre-funded by default, and the most accepted.
+/// Trail updates that are pre-funded by default.
 pub const DEFAULT_EXPECTED_UPDATES: i64 = 20;
-/// Most pre-funded trail updates.
+/// Most trail updates that can be pre-funded.
 pub const MAX_EXPECTED_UPDATES: i64 = 1_000;
-/// Repeat: "unlimited" is K large enough that only the 90-day bound ends it.
+/// The repeat count for "unlimited", large enough that only the 90-day bound ends it.
 pub const UNLIMITED_REPEAT_COUNT: i64 = 10_000_000;
-/// The KAS one repeat merge costs (buy-first / sell-first), spread over the smallest take-profit fill.
+/// The KAS cost of one repeat merge, buy-first, spread over the smallest take-profit fill.
 pub const MERGE_COST_BUY_FIRST: i64 = 1_000_000;
-/// Sell-first merge cost.
+/// The KAS cost of one repeat merge, sell-first.
 pub const MERGE_COST_SELL_FIRST: i64 = 1_500_000;
-/// A repeating stop entry pre-funds at most this many arming updates.
+/// Most arming updates that a repeating stop entry pre-funds.
 pub const MAX_ENTRY_ARM_UPDATES: i64 = 10;
 
-// ------------------------------------------------------------------------------------------------ vocabulary
+// -------------------------------------------------------------------------------------- vocabulary
 
 /// Side of the placed order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,7 +278,8 @@ pub struct Env {
     pub token_utxos: Vec<TokenUtxo>,
     /// Explicit fee rate (sompi per gram); `None`: the relay floor.
     pub fee_rate: Option<u64>,
-    /// How the fee is sized: the relay floor (default) or the storage-inclusive priority fee (`--priority-fee`).
+    /// How the fee is sized: the relay floor (default) or the storage-inclusive priority fee
+    /// (`--priority-fee`).
     pub fee_mode: FeeMode,
     /// KAS on every covenant UTXO (default 1 KAS).
     pub carrier: Option<u64>,
@@ -362,8 +385,8 @@ pub struct MarketIntent {
     pub slippage_bps: Option<i64>,
     /// FOK.
     pub all_or_nothing: bool,
-    /// A sell's floor, the user's own: the least price per whole token the auction reaches (none: the slippage bound
-    /// alone, from the indexer's best bid).
+    /// A sell's floor, set by the user: the least price per whole token that the auction reaches.
+    /// With none, only the slippage bound from the best bid of the indexer applies.
     pub floor: Option<i64>,
 }
 
@@ -395,7 +418,9 @@ pub struct Trail {
     pub updates: Option<i64>,
 }
 
-/// Optional stop-leg knobs (`StopSpec`): band length, keeper tip, trigger rest time; `None` = the wallet default.
+/// Optional stop-leg knobs (`StopSpec`): band length, keeper tip and trigger rest time.
+///
+/// `None` means the wallet default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StopKnobs {
     /// Auction length of the stop band (default 300 DAA).
@@ -406,7 +431,9 @@ pub struct StopKnobs {
     pub min_rest: Option<i64>,
 }
 
-/// If-done options beyond the plain IFD / IFO: a stop entry, the exit's band, trailing and expiry, repeat.
+/// If-done options beyond the plain IFD and IFO.
+///
+/// They are a stop entry, and the band, trailing and expiry of the exit, and repeat.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IfdMore {
     /// Stop entry: the trigger (buy: at most the entry price, sell: at least).
@@ -427,7 +454,8 @@ pub struct IfdMore {
     pub exit_min_fill: Option<i64>,
     /// A dated exit (DAA); `None`: GTC from each exit's creation.
     pub exit_expiry_daa: Option<i64>,
-    /// Repeat: `None` = no repeat; `Some(None)` = unlimited (90-day bound); `Some(Some(k))` = k re-arms.
+    /// Repeat. `None` is no repeat, `Some(None)` is unlimited (bound by 90 days) and
+    /// `Some(Some(k))` is k re-arms.
     pub repeat: Option<Option<i64>>,
 }
 
@@ -497,7 +525,8 @@ pub struct IfdIntent {
     pub more: IfdMore,
 }
 
-/// Streaming / quote-and-execute: an auction from the price the user saw, within the user's tolerance.
+/// Streaming (quote and execute): an auction from the price the user saw, within the tolerance of
+/// the user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamingIntent {
     /// Side.
@@ -527,12 +556,13 @@ pub struct CloseIntent {
     pub slippage_bps: Option<i64>,
     /// FOK.
     pub all_or_nothing: bool,
-    /// A sell's floor, the user's own: the least price per whole token the auction reaches (none: the slippage bound
-    /// alone, from the indexer's best bid).
+    /// A sell's floor, set by the user: the least price per whole token that the auction reaches.
+    /// With none, only the slippage bound from the best bid of the indexer applies.
     pub floor: Option<i64>,
 }
 
-/// TWAP (sell) / DCA (buy): at most `slice` per `interval_daa`, optionally each slice its own auction.
+/// TWAP (sell) or DCA (buy): at most `slice` per `interval_daa`, optionally each slice as its own
+/// auction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScheduleIntent {
     /// DCA (buy) instead of TWAP (sell).
@@ -561,7 +591,9 @@ pub struct ScheduleIntent {
     pub max_fills: Option<i64>,
 }
 
-/// Dutch decay (sell) / rising bid (buy): from `price` to `price_end` over `duration_daa`, then resting there.
+/// Dutch decay (sell) or rising bid (buy).
+///
+/// The price runs from `price` to `price_end` over `duration_daa` and then rests there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DutchIntent {
     /// Side.
@@ -588,8 +620,10 @@ pub struct DutchIntent {
     pub max_fills: Option<i64>,
 }
 
-/// Every intent `kob place` plans. With `env.pair` set every kind is planned on the pair A/B (prices B per whole A, the
-/// tip KAS): `KobPair`, `KobCondPair`, `KobIfdPair`.
+/// Every intent that `kob place` plans.
+///
+/// With `env.pair` set every kind is planned on the pair A/B, with prices in B per whole A and the
+/// tip in KAS: `KobPair`, `KobCondPair` and `KobIfdPair`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Intent {
     /// Limit.
@@ -642,7 +676,8 @@ pub struct Disclosure {
     pub limit_price: Option<i64>,
     /// All-in price per whole token (a pair: the limit).
     pub all_in_price: Option<i64>,
-    /// All-in total of the whole amount at the limit (a sell receives at least, a buy pays at most; a pair: in B).
+    /// All-in total of the whole amount at the limit.
+    /// A sell receives at least it and a buy pays at most it. For a pair it is in B.
     pub all_in_total: Option<i64>,
     /// Expected (the touch, an auction start).
     pub expected_price: Option<i64>,
@@ -699,7 +734,7 @@ pub(crate) fn failed(issues: Vec<Issue>) -> Plan {
     Plan { ok: false, issues, states: vec![], request: None, built: None, disclosure: None }
 }
 
-// ------------------------------------------------------------------------------------------------ integer helpers
+// --------------------------------------------------------------------------------- integer helpers
 
 pub(crate) fn ceil_div(a: i128, b: i128) -> i128 {
     (a + b - 1) / b
@@ -718,7 +753,7 @@ pub(crate) fn round_to_tick(price: i64, tick: i64, up: bool) -> i64 {
     i64::try_from(if up { ceil_div(p, t) } else { p / t } * t).unwrap_or(price)
 }
 
-// ------------------------------------------------------------------------------------------------ time (daa.ts)
+// ----------------------------------------------------------------------------------- time (daa.ts)
 
 /// The rate in milli-DAA per second within the accepted range.
 pub fn clamp_rate(r: i64) -> i64 {
@@ -747,8 +782,10 @@ pub(crate) fn unix_to_daa(c: &Clock, unix: i64) -> i64 {
         c.daa - seconds_to_daa(c, -delta)
     }
 }
-/// The DAA score of a date on the side of the intent: the earlier of the measured and nominal rate for an end, the later
-/// for a start.
+/// The DAA score of a date, on the side of the intent.
+///
+/// For an end it is the earlier of the DAA scores at the measured and the nominal rate, for a start
+/// the later.
 pub fn unix_to_daa_bound(c: &Clock, unix: i64, end: bool) -> i64 {
     let measured = unix_to_daa(c, unix);
     let nominal = unix_to_daa(&Clock { rate_milli: 10_000, ..*c }, unix);
@@ -791,7 +828,7 @@ pub(crate) fn resolve_lifetime(c: &Clock, lt: Lifetime, pre: &mut Vec<Issue>) ->
     }
 }
 
-// ------------------------------------------------------------------------------------------------ guards (guards.ts)
+// ------------------------------------------------------------------------------ guards (guards.ts)
 
 pub(crate) fn crosses(sell: (i64, i64), buy: (i64, i64)) -> bool {
     buy.0 as i128 + buy.1 as i128 >= sell.0 as i128 - sell.1 as i128
@@ -1038,7 +1075,8 @@ pub(crate) fn check_bps(bps: i64, pre: &mut Vec<Issue>) {
 /// Worst price of an auction from `touch`.
 pub fn auction_bound(side: Side, touch: i64, bps: i64, tick: i64) -> i64 {
     let mv = (touch as i128 * bps as i128 / 10_000) as i64;
-    // a touch near the i64 limit (an indexer's number) saturates instead of overflowing; the builders refuse such a price
+    // A touch near the i64 limit (a number from an indexer) saturates instead of overflowing. The
+    // builders refuse such a price.
     match side {
         Side::Sell => round_to_tick(touch.saturating_sub(mv), tick, true).min(touch),
         Side::Buy => round_to_tick(touch.saturating_add(mv), tick, false).max(touch),
@@ -1054,7 +1092,7 @@ pub fn decay_slope(from: i64, to: i64, duration: i64, step: i64) -> i64 {
     ceil_div(diff, ceil_div(duration as i128, step as i128)) as i64
 }
 
-// ------------------------------------------------------------------------------------------------ coin selection (funding.ts)
+// --------------------------------------------------------------------- coin selection (funding.ts)
 
 pub(crate) fn outpoint_key(u: &kob_protocol::tx::Utxo) -> ([u8; 32], u32) {
     (u.transaction_id, u.index)
@@ -1100,7 +1138,9 @@ pub(crate) fn insufficient_kas(needed: i128, have: i128) -> Issue {
     )
 }
 
-/// The token UTXOs covering `amount`: the smallest single one that suffices, else the largest first, within `max_inputs`.
+/// The token UTXOs covering `amount` within `max_inputs`.
+///
+/// It is the smallest single UTXO that suffices, else the largest first.
 pub fn select_tokens(utxos: &[TokenUtxo], amount: i64, max_inputs: usize, label: &str) -> Result<Vec<TokenUtxo>, Issue> {
     let usable: Vec<&TokenUtxo> = utxos.iter().filter(|u| u.state.is_user() && u.state.amount() > 0).collect();
     let have: i128 = usable.iter().map(|u| u.state.amount() as i128).sum();
@@ -1154,13 +1194,16 @@ pub fn token_carrier_floor(m: &TokenMarket) -> i64 {
     m.program.min_token_output().unwrap_or(1).max(DUST_OUTPUT_MIN) as i64
 }
 
-/// The least KAS a carrier of a new order holds when it becomes a token output of `m`'s program (its custody, a delivery):
-/// the token output's floor and the KIP-9 bound of a covenant output (`tx::COVENANT_OUTPUT_MIN`, matcher.md 10.1).
+/// The least KAS that a carrier of a new order holds when it becomes a token output of the program
+/// of `m`, for example its custody or a delivery.
+///
+/// It is the floor of the token output and the KIP-9 bound of a covenant output
+/// (`tx::COVENANT_OUTPUT_MIN`, matcher.md 10.1).
 pub fn order_carrier_floor(m: &TokenMarket) -> i64 {
     token_carrier_floor(m).max(COVENANT_OUTPUT_MIN as i64)
 }
 
-// ------------------------------------------------------------------------------------------------ building (common.ts)
+// ---------------------------------------------------------------------------- building (common.ts)
 
 pub(crate) struct CreateSpec {
     order: AnyState,
@@ -1185,7 +1228,8 @@ pub(crate) fn carrier_issues(env: &Env, order: &AnyState, token_carrier: i64) ->
     let m = &env.market;
     let mut out = vec![];
     let mut check = |field: &str, v: i64, token: bool| {
-        // every carrier of a new order becomes an output with a covenant id (a token output, an exit order UTXO)
+        // Every carrier of a new order becomes an output with a covenant id: a token output or an
+        // exit order UTXO.
         let floor = if token { order_carrier_floor(m) } else { COVENANT_OUTPUT_MIN as i64 };
         if v < floor {
             out.push(error(
@@ -1259,7 +1303,9 @@ pub(crate) fn build_create(env: &Env, spec: &CreateSpec) -> CreateResult {
     res
 }
 
-/// Funding selection with an adaptive fee reserve: the reserve grows by the shortfall the builder reports.
+/// Funding selection with an adaptive fee reserve.
+///
+/// The reserve grows by the shortfall that the builder reports.
 pub(crate) fn build_with_reserve(
     env: &Env,
     need: i128,
@@ -1296,7 +1342,10 @@ pub(crate) fn build_with_reserve(
     Err(error("BUILD_REJECTED", "could not size the network fee"))
 }
 
-/// The placement record of `built` must yield the planned state, value, deadline and every custody amount.
+/// Checks that the placement record of `built` yields the planned state, value, deadline and every
+/// custody amount.
+///
+/// It returns why not when it does not.
 pub(crate) fn verify_built(
     built: &BuiltTx,
     order: &AnyState,
@@ -1342,7 +1391,7 @@ pub(crate) fn verify_built(
     None
 }
 
-// ------------------------------------------------------------------------------------------------ plain kinds (simple.ts)
+// ------------------------------------------------------------------------- plain kinds (simple.ts)
 
 pub(crate) fn make_ask(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
     let m = &env.market;
@@ -1528,7 +1577,7 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
     let res = build_create(env, &CreateSpec { order: order.clone(), value, token_amount, deadline: d.deadline });
     issues.extend(res.issues.clone());
     let Some(built) = res.built.clone() else { return Plan { states: vec![order], ..failed(issues) } };
-    // disclosure (makeDisclosure)
+    // The disclosure (`makeDisclosure`).
     let mut carriers = vec![];
     let (tip, refund_tip, all_in_total);
     match &order {
@@ -1558,7 +1607,7 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
         _ => unreachable!("plain kinds"),
     }
     let kas_locked: i128 = carriers.iter().filter(|c| !c.kept).map(|c| c.amount * c.count as i128).sum();
-    // the carriers alone: a bid's escrow is its value, not a carrier (every bid warned)
+    // The carriers alone. The escrow of a bid is its value, not a carrier.
     let carrier_kas: i128 = carriers.iter().filter(|c| !c.kept && c.kind != "escrow").map(|c| c.amount * c.count as i128).sum();
     if all_in_total.is_some_and(|t| carrier_kas > t as i128) {
         issues.push(warning(
@@ -1603,7 +1652,9 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
     }
 }
 
-/// A price of the order's own book: on a pair (B per whole A) only positive (the KAS tick of A does not apply).
+/// Checks a price of the order's own book.
+///
+/// On a pair (B per whole A) it only has to be positive, because the KAS tick of A does not apply.
 pub(crate) fn price_check(env: &Env, p: i64, field: &str) -> Vec<Issue> {
     if env.pair.is_some() {
         if p <= 0 {
@@ -1631,7 +1682,7 @@ pub(crate) fn place_draft(env: &Env, d: Draft, pre: Vec<Issue>) -> Plan {
     }
 }
 
-/// Timed activation of a draft; whether it lies in the future.
+/// Sets the timed activation of a draft and returns whether it lies in the future.
 pub(crate) fn set_activation(env: &Env, d: &mut Draft, a: Option<Activation>) -> bool {
     let requested = activation_daa(&env.clock, a);
     let future = requested.is_some_and(|r| r > env.clock.daa);
@@ -1663,7 +1714,7 @@ pub(crate) fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
         _ => "gtd",
     });
     if pair {
-        // resting pair orders: one delivery carrier per possible fill (at most 64) unless asked
+        // Resting pair orders: one delivery carrier per possible fill (at most 64) unless asked.
         d.fills = None;
         d.fills_requested = i.max_fills;
         d.worst_price = Some(i.price);
@@ -1674,7 +1725,7 @@ pub(crate) fn plan_limit(env: &Env, i: &LimitIntent) -> Plan {
         }
     }
     pre.extend(check_price_band(reference_price(&env.book), i.side, i.price));
-    // a pair order's tip is KAS: it never makes a B price cross
+    // The tip of a pair order is KAS, so it never makes a B price cross.
     let touch = if future { None } else { crossing_touch(&env.book, i.side, i.price, if pair { 0 } else { i.tip }) };
     if let Some(t) = touch {
         let start = if i.side == Side::Sell { t.max(i.price) } else { t.min(i.price) };
@@ -1739,7 +1790,7 @@ pub(crate) fn plan_immediate(env: &Env, i: &ImmediateIntent) -> Plan {
     place_draft(env, d, pre)
 }
 
-/// An IOC / FOK auction from `reference` to the slippage bound (`planAuction`).
+/// An IOC or FOK auction from `reference` to the slippage bound (`planAuction`).
 pub(crate) struct AuctionReq {
     pub(crate) side: Side,
     pub(crate) amount: i64,
@@ -1937,7 +1988,7 @@ pub(crate) fn plan_schedule(env: &Env, i: &ScheduleIntent) -> Plan {
         pre.push(info("TWAP_SINGLE_SLICE", "every slice is larger than the whole order: it is placed as one slice"));
     }
     let slices = ceil_div(i.amount as i128, d.max_fill.max(1) as i128) as i64;
-    // the first slice opens `interval` after placement and every fill restarts the clock
+    // The first slice opens `interval` after placement, and every fill restarts the clock.
     let start = if future { d.active_from } else { env.clock.daa };
     if start as i128 + slices as i128 * i.interval_daa as i128 > d.expiry_daa as i128 {
         pre.push(error(
@@ -1957,7 +2008,8 @@ pub(crate) fn plan_schedule(env: &Env, i: &ScheduleIntent) -> Plan {
         d.worst_price = Some(i.price);
     }
     d.notes.extend([if i.dca { "dca" } else { "twap" }, if exp.kind == "day" { "dayOrder" } else { "gtc" }]);
-    // every slice is a fill with its own delivery: one carrier per slice (a DCA may budget more)
+    // Every slice is a fill with its own delivery, so there is one carrier per slice (a DCA may
+    // budget more).
     if side == Side::Buy || pair {
         let wanted = if i.dca { i.max_fills } else { None };
         if wanted.is_some_and(|w| w < slices) {
@@ -1995,7 +2047,8 @@ pub(crate) fn plan_dutch(env: &Env, i: &DutchIntent) -> Plan {
     }
     let mut d = blank(i.side, i.amount, i.price, i.tip, i.min_fill);
     let future = set_activation(env, &mut d, i.active_from);
-    // the decay origin IS activeFrom: a real DAA score (0 would put the price at its end at once)
+    // The decay origin is `activeFrom`, so it must be a real DAA score. 0 would put the price at
+    // its end at once.
     if !future {
         d.active_from = env.clock.daa + MARKET_ACTIVATION_DAA;
     }
@@ -2021,7 +2074,7 @@ pub(crate) fn plan_dutch(env: &Env, i: &DutchIntent) -> Plan {
     place_draft(env, d, pre)
 }
 
-// ------------------------------------------------------------------------------------------------ conditional kinds (cond*.ts)
+// -------------------------------------------------------------------- conditional kinds (cond*.ts)
 
 pub(crate) struct Legs {
     pub(crate) tp: i64,
@@ -2207,7 +2260,7 @@ pub(crate) fn resolve_legs(
             return None;
         }
         (trail_step, trail_gap, trail_wait) = (t.step, t.gap, wait);
-        // the arm that follows a trail is one more update
+        // The arm that follows a trail is one more update.
         expected = upd + 1;
     }
     Some(Legs {
@@ -2665,7 +2718,10 @@ pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     )
 }
 
-/// Which exit legs each if-done kind demands (`checkExitShape`): IFD one leg, IFO both, a repeat needs the take-profit.
+/// Checks which exit legs each if-done kind demands (`checkExitShape`).
+///
+/// An if-done order needs at least one exit leg (IFD one, IFO both), a stop-limit needs a stop, and
+/// a repeat needs the take-profit.
 pub(crate) fn check_exit_shape(i: &IfdIntent, log: &mut Vec<Issue>) -> bool {
     if i.stop_limit.is_some() && i.stop.is_none() {
         log.push(error("COND_EXIT_LIMIT_NEEDS_STOP", "an exit stop-limit needs an exit stop"));
@@ -2695,12 +2751,16 @@ pub(crate) fn exit_leg_input(i: &IfdIntent) -> LegInput {
     }
 }
 
-/// The merge cost as a tip rate that pays `cost` even on the smallest take-profit fill: `ceil(cost * scale / minFill)`.
+/// The merge cost as a tip rate that pays `cost` even on the smallest take-profit fill.
+///
+/// It is `ceil(cost * scale / minFill)`.
 pub fn merge_tip_rate(cost: i64, scale: i64, min_fill: i64) -> i64 {
     ceil_div(cost as i128 * scale as i128, min_fill.max(1) as i128) as i64
 }
 
-/// `rptAmount` of a repeat (`1 + K * N`; 0 without a repeat) and the count asked for (`None`: unlimited), or the error.
+/// `rptAmount` of a repeat and the repeat count asked for, or the error.
+///
+/// `rptAmount` is `1 + K * N`, and 0 without a repeat. A count of `None` means unlimited.
 pub(crate) fn repeat_amount(repeat: Option<Option<i64>>, amount: i64, log: &mut Vec<Issue>) -> Option<(i64, Option<i64>)> {
     let Some(k) = repeat else { return Some((0, None)) };
     if k.is_some_and(|k| k < 1) {
@@ -2720,7 +2780,10 @@ pub(crate) fn repeat_amount(repeat: Option<Option<i64>>, amount: i64, log: &mut 
     Some((1 + kk * amount, k))
 }
 
-/// The exit's own expiry: GTC = `GTC_EXIT_EXPIRY_DAA` (90 days idle from each exit's creation), or a date.
+/// The own expiry of an exit.
+///
+/// GTC is `GTC_EXIT_EXPIRY_DAA`, which is 90 days idle from the creation of each exit. Otherwise it
+/// is a date.
 pub(crate) fn exit_expiry(env: &Env, log: &mut Vec<Issue>, daa: Option<i64>) -> Option<i64> {
     let Some(d) = daa else { return Some(GTC_EXIT_EXPIRY_DAA) };
     let bad: Vec<Issue> = check_times(&env.clock, 0, d, None)
@@ -2734,18 +2797,22 @@ pub(crate) fn exit_expiry(env: &Env, log: &mut Vec<Issue>, daa: Option<i64>) -> 
     Some(d)
 }
 
-/// The entry's stop parameters, checked (a limit entry: all zero but the rest time).
+/// The checked stop parameters of an entry.
+///
+/// For a limit entry all are zero but the rest time.
 pub(crate) struct EntryStop {
     pub(crate) stop: i64,
     pub(crate) band: i64,
     pub(crate) keeper_tip: i64,
     pub(crate) min_touch: i64,
     pub(crate) min_rest: i64,
-    /// Arming updates pre-funded (a repeating stop entry re-arms each cycle).
+    /// Arming updates that are pre-funded. A repeating stop entry re-arms each cycle.
     pub(crate) arm_updates: i64,
 }
 
-/// The stop entry of `i` at entry limit `price` (`count`: the repeat count asked for).
+/// The stop entry of `i` at entry limit `price`.
+///
+/// `count` is the repeat count asked for.
 pub(crate) fn entry_stop_of(
     i: &IfdIntent,
     price: i64,
@@ -2789,7 +2856,8 @@ pub(crate) fn entry_stop_of(
     Some(EntryStop { stop, band, keeper_tip, min_touch, min_rest, arm_updates })
 }
 
-/// The entry stop must be on the near side of the entry limit (buy: at most, sell: at least).
+/// The entry stop must be on the near side of the entry limit: at most it for a buy, at least it
+/// for a sell.
 pub(crate) fn check_entry_stop(i: &IfdIntent, log: &mut Vec<Issue>) -> bool {
     if let Some(st) = i.more.entry_stop {
         let buy = i.side == Side::Buy;
@@ -2860,7 +2928,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if !check_exit_shape(i, &mut log) {
         return failed(log);
     }
-    // ---- entry
+    // The entry.
     log.extend(check_price(m, i.price, "the entry price"));
     if let Some(st) = i.more.entry_stop {
         log.extend(check_price(m, st, "the entry stop"));
@@ -2879,9 +2947,9 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         return failed(log);
     }
     let fills = ceil_div(i.amount as i128, min_fill as i128) as i64;
-    // ---- repeat: rptAmount = 1 + K * N
+    // The repeat: rptAmount = 1 + K * N.
     let Some((rpt_amount, count)) = repeat_amount(i.more.repeat, i.amount, &mut log) else { return failed(log) };
-    // ---- exit (built first: the entry commits to it, its minimum fill included)
+    // The exit is built first, because the entry commits to it, its minimum fill included.
     if i.exit_tip < 0 {
         log.push(error("TIP_NEGATIVE", "the exit tip cannot be negative"));
         return failed(log);
@@ -2893,7 +2961,8 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // a repeat's exit tip carries the merge cost, paid even by the smallest take-profit fill
+    // The exit tip of a repeat carries the merge cost, which even the smallest take-profit fill
+    // pays.
     let merge_tip = if repeat {
         merge_tip_rate(if buy_first { MERGE_COST_BUY_FIRST } else { MERGE_COST_SELL_FIRST }, m.scale, exit_min_fill)
     } else {
@@ -2910,7 +2979,8 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // ---- economics: a repeat re-arms only on a profitable take-profit; a plain IFD may knowingly exit at a loss
+    // Economics. A repeat re-arms only on a profitable take-profit. A plain IFD may knowingly exit
+    // at a loss.
     if legs.tp > 0 {
         let tp_all_in = if buy_first { legs.tp - exit_tip } else { legs.tp + exit_tip };
         let profit = if buy_first { tp_all_in - entry_all_in } else { entry_all_in - tp_all_in };
@@ -2929,7 +2999,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // ---- self-trade: the entry is a real order now; the exit only later (warning)
+    // Self-trade. The entry is a real order now and the exit only later, so the exit only warns.
     log.extend(check_self_trade(&env.own, i.side, entry_all_in, 0));
     let exit_worst_all_in = if buy_first { ask_worst(&legs) - exit_tip } else { bid_worst(&legs) + exit_tip };
     for mut w in check_self_trade(&env.own, exit_side, exit_worst_all_in, 0) {
@@ -2946,7 +3016,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     if has_error(&log) {
         return failed(log);
     }
-    // ---- entry stop parameters
+    // The entry stop parameters.
     let Some(es) = entry_stop_of(i, i.price, min_fill, count, m.keeper_tip, &mut log) else { return failed(log) };
     let stop_entry = es.stop > 0;
     let keeper_reserve = es.keeper_tip * es.arm_updates;
@@ -2984,7 +3054,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for one order"));
             return failed(log);
         };
-        // a repeating entry outlives its last fill: one more exit carrier of its own
+        // A repeating entry outlives its last fill, so it has one more exit carrier of its own.
         let exit_carriers = fills + i64::from(repeat);
         lines.push(CarrierLine {
             kind: "escrow",
@@ -3051,7 +3121,8 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             lines.push(CarrierLine { kind: "prefund", amount: prefund_kas, count: 1, kept: false });
         }
         lines.push(CarrierLine { kind: "exit carrier", amount: carrier as i128, count: fills, kept: false });
-        // the arming keeper is paid from the entry's carrier: it must stay a carrier (the exit and the refund need it too)
+        // The arming keeper is paid from the carrier of the entry, at most half of it. The rest
+        // must stay a carrier, because the exit and the refund need it too.
         if keeper_reserve * 2 > carrier {
             log.push(error("COND_KEEPER_FUNDING_TOO_LARGE", "the entry keeper reserve does not fit the carrier"));
             return failed(log);
@@ -3062,7 +3133,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         };
         (o, x, Some(prefund))
     };
-    // exit keepers are paid from the exit's own carrier
+    // Exit keepers are paid from the own carrier of the exit, at most half of it.
     if legs.stop > 0 && legs.keeper_tip * legs.expected_updates * 2 > carrier {
         log.push(error("COND_KEEPER_FUNDING_TOO_LARGE", "the exit keeper reserve does not fit the carrier"));
         return failed(log);
@@ -3097,7 +3168,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     )
 }
 
-// ------------------------------------------------------------------------------------------------ pair limit (pair-*.ts)
+// -------------------------------------------------------------------------- pair limit (pair-*.ts)
 
 pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<Issue>) -> Plan {
     let a = &env.market;
@@ -3235,7 +3306,7 @@ pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<I
     )
 }
 
-// ------------------------------------------------------------------------------------------------ entry point (plan.ts)
+// --------------------------------------------------------------------------- entry point (plan.ts)
 
 pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
     let mut out = vec![];
@@ -3262,10 +3333,15 @@ pub(crate) fn env_issues(env: &Env) -> Vec<Issue> {
     out
 }
 
-/// The start of a market / close auction is the indexer's best price, which the node cannot confirm; the CLI has no
-/// reference independent of that indexer (the last fill comes from it too). A start far on the costly side of the last
-/// fill waits for `--ack-market-start`; so does a sell, whatever its value (a wrong bid sells at its price), unless the
-/// user's own `--floor-price` bounds it; a buy worth 100 KAS or more waits too.
+/// The findings about the start of a market or close auction.
+///
+/// The start is the best price of the indexer, which the node cannot confirm. The CLI has no
+/// reference independent of that indexer, because the last fill comes from it too. These wait for
+/// `--ack-market-start`:
+/// - A start far on the costly side of the last fill.
+/// - A sell, whatever its value, because a wrong bid sells at its price. The user's own
+///   `--floor-price` bounds it and removes the wait.
+/// - A buy worth 100 KAS or more.
 pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) -> Vec<Issue> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let Some(start) = d.expected_price.filter(|s| *s > 0) else { return vec![] };
@@ -3311,7 +3387,8 @@ pub(crate) fn market_start_issues(env: &Env, plan: &Plan, floor: Option<i64>) ->
             ),
         }];
     }
-    // the KAS value at the start; a pair converts B at its KAS reference (unknown: held as unverified)
+    // The KAS value at the start. A pair converts B at its KAS reference, and when that is unknown
+    // the order is held as unverified.
     let quote = d.amount as i128 * start as i128 / d.scale as i128;
     let value = match &env.pair {
         None => Some(quote),
@@ -3372,7 +3449,9 @@ pub(crate) fn stop_evidence_issues(env: &Env, plan: &Plan) -> Vec<Issue> {
         .collect()
 }
 
-/// Plans an order. Never panics for user input: problems are issues (`ok: false` when one is an error).
+/// Plans an order.
+///
+/// It never panics for user input. Problems are issues, and `ok` is false when one is an error.
 pub fn plan_order(env: &Env, intent: &Intent) -> Plan {
     if let Some(p) = &env.pair {
         if p.quote.cov == env.market.cov {
