@@ -113,7 +113,7 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
                 "in  #{i}  order {} {} `cancel` (older contract version {}, cancel only; {} on it)",
                 template.name(),
                 inp.utxo.covenant_id.map(|c| show_id(&c, "")).unwrap_or_default(),
-                &kob_protocol::json::to_hex(retired)[..8],
+                kob_protocol::json::to_hex(retired),
                 kas(value)
             ),
         };
@@ -164,20 +164,12 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
                 },
             }
         } else {
-            format!("out #{o}  {} to script {}", kas(value), short_script(&out.script_public_key))
+            format!("out #{o}  {} to script {}", kas(value), out.script_public_key)
         };
         d.outputs.push(line);
     }
     d.token_net.retain(|_, v| *v != 0);
     d
-}
-
-fn short_script(s: &str) -> String {
-    if s.len() > 24 {
-        format!("{}..{}", &s[..12], &s[s.len() - 8..])
-    } else {
-        s.to_string()
-    }
 }
 
 fn token_in(d: &mut Decoded, i: usize, st: &TokenState, cov: [u8; 32], value: i128, me: &[u8; 32], units: &Units) -> String {

@@ -264,20 +264,19 @@ impl TokenMarket {
         TokenUnit { ticker: self.ticker.clone(), decimals: self.decimals }
     }
 
-    /// The ticker and short id of the token, see [`show_id`].
+    /// The ticker and full covenant id of the token, see [`show_id`].
     pub fn name(&self) -> String {
         show_id(&self.cov, &self.ticker)
     }
 }
 
-/// `TICKER (abcdef01..12345678)`, or the short id alone when the ticker is empty.
+/// `TICKER (<64 hex digits>)`, or the full id alone when the ticker is empty.
 pub fn show_id(cov: &[u8; 32], ticker: &str) -> String {
     let h = to_hex(cov);
-    let short = format!("{}..{}", &h[..8], &h[56..]);
     if ticker.is_empty() {
-        short
+        h
     } else {
-        format!("{ticker} ({short})")
+        format!("{ticker} ({h})")
     }
 }
 

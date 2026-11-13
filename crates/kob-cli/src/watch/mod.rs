@@ -35,7 +35,7 @@ USAGE
   kob watch health                     the indexer's progress (a line per published batch and a health line every 15 s)
 
   TOKEN is a ticker or a covenant id. Every watch also reports chain reorganisations. One line per event: the time (UTC), the
-  kind, the amount and price in the token's decimals, short ids, the transaction id. With --json, one JSON document per line
+  kind, the amount and price in the token's decimals, full ids, the transaction id. With --json, one JSON document per line
   (NDJSON): every frame the server sends as it is, `snapshot` lines for what a notice made it read again, and `note` lines for
   reconnects. Notes and errors otherwise go to stderr.
 

@@ -72,9 +72,9 @@ impl Kind {
     pub fn name(&self) -> String {
         match self {
             Kind::Fills(None) => "fills".into(),
-            Kind::Fills(Some(t)) => format!("fills of {}", frames::short(&to_hex(t))),
-            Kind::Book(a, None) => format!("the book of {}", frames::short(&to_hex(a))),
-            Kind::Book(a, Some(b)) => format!("the book of {} / {}", frames::short(&to_hex(a)), frames::short(&to_hex(b))),
+            Kind::Fills(Some(t)) => format!("fills of {}", to_hex(t)),
+            Kind::Book(a, None) => format!("the book of {}", to_hex(a)),
+            Kind::Book(a, Some(b)) => format!("the book of {} / {}", to_hex(a), to_hex(b)),
             Kind::Orders(ids) => format!("{} order(s)", ids.len()),
             Kind::Health => "health".into(),
         }
@@ -477,11 +477,11 @@ impl Watch {
                         );
                     }
                     Ok((404, _)) => out.event(
-                        &format!("order  {} is not known to the indexer (never seen, or reverted)", frames::short(&hex)),
+                        &format!("order  {} is not known to the indexer (never seen, or reverted)", hex),
                         &json!({"channel": channel, "type": "snapshot", "data": null}),
                     ),
-                    Ok((status, _)) => out.error(&format!("order {}: indexer answered HTTP {status}", frames::short(&hex))),
-                    Err(e) => out.error(&format!("order {}: {e}", frames::short(&hex))),
+                    Ok((status, _)) => out.error(&format!("order {}: indexer answered HTTP {status}", hex)),
+                    Err(e) => out.error(&format!("order {}: {e}", hex)),
                 }
             }
         }

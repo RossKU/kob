@@ -84,7 +84,7 @@ pub fn maker_of(p: &Parsed, c: &Common, argv: &[String]) -> Result<[u8; 32], Str
 
 /// The display facts of a token from the registry and the indexer lists.
 ///
-/// When neither knows the token, only its short id is shown.
+/// When neither knows the token, only its full id is shown.
 pub(crate) fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> (TokenUnit, bool) {
     let f = reg.iter().find(|t| t.cov == *cov).or_else(|| idx.iter().find(|t| t.cov == *cov));
     match f {

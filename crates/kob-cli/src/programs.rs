@@ -99,7 +99,7 @@ pub fn run_programs(args: &[&str]) -> i32 {
         return 0;
     }
     println!(
-        "{:<22} {:<24} {:<6} {:<10} {:>6} {:>5} {:>10} {:<14} review",
+        "{:<22} {:<24} {:<6} {:<64} {:>6} {:>5} {:>10} {:<14} review",
         "name", "registry id", "codec", "hash", "cut", "slots", "floor", "witness"
     );
     for p in profiles() {
@@ -110,11 +110,11 @@ pub fn run_programs(args: &[&str]) -> i32 {
             kob_protocol::profile::WitnessScheme::Kcc1Tagged => format!("kcc1-tagged/{}", p.witness.entries.len()),
         };
         println!(
-            "{:<22} {:<24} {:<6} {:<10} {:>6} {:>5} {:>10} {:<14} {}",
+            "{:<22} {:<24} {:<6} {:<64} {:>6} {:>5} {:>10} {:<14} {}",
             p.name,
             p.registry_id,
             p.codec.as_str(),
-            &p.template_hash[..8],
+            p.template_hash,
             format!("{}+{}", p.layout.prefix_len, p.layout.state_len),
             format!("{}/{}", p.slots.inputs, p.slots.outputs),
             p.carrier_floor,

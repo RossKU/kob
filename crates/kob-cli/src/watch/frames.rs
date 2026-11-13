@@ -24,15 +24,6 @@ pub fn clock(unix_secs: u64) -> String {
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
 
-/// `abcd1234..9876abcd` for a long hex id. Anything shorter is shown whole.
-pub fn short(id: &str) -> String {
-    if id.len() > 20 && id.is_char_boundary(8) && id.is_char_boundary(id.len() - 8) {
-        format!("{}..{}", &id[..8], &id[id.len() - 8..])
-    } else {
-        id.to_string()
-    }
-}
-
 fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
@@ -59,7 +50,7 @@ pub fn fill_line(data: &Value, info: Option<&TokenInfo>) -> String {
         Some(2) => "bid",
         _ => "?",
     };
-    let token = text(data, "token").map(short);
+    let token = text(data, "token").map(str::to_string);
     let amount = int(data, "amount");
     let price = int(data, "price");
     let (amount_text, price_text) = match info {
@@ -83,7 +74,7 @@ pub fn fill_line(data: &Value, info: Option<&TokenInfo>) -> String {
     if let Some(p) = int(data, "payout") {
         line.push_str(&format!("  paid {}", units::kas(p)));
     }
-    line.push_str(&format!("  order {}", text(data, "order").map_or("?".into(), short)));
+    line.push_str(&format!("  order {}", text(data, "order").unwrap_or("?")));
     line.push_str(&format!("  tx {}", text(data, "txid").unwrap_or("?")));
     if let Some(d) = int(data, "daa") {
         line.push_str(&format!("  daa {d}"));
@@ -168,11 +159,9 @@ mod tests {
     }
 
     #[test]
-    fn the_clock_and_the_short_ids() {
+    fn the_clock() {
         assert_eq!(clock(0), "00:00:00");
         assert_eq!(clock(1_793_761_724), "03:08:44");
-        assert_eq!(short(&"ab".repeat(32)), "abababab..abababab");
-        assert_eq!(short("abc"), "abc");
     }
 
     #[test]
@@ -182,7 +171,8 @@ mod tests {
         assert_eq!(
             fill_line(&d, Some(&tusd())),
             format!(
-                "fill  ask  2.5 TUSD @ 2.5 KAS per TUSD  paid 6.25 KAS  order 6a6a6a6a..6a6a6a6a  tx {}  daa 995",
+                "fill  ask  2.5 TUSD @ 2.5 KAS per TUSD  paid 6.25 KAS  order {}  tx {}  daa 995",
+                "6a".repeat(32),
                 "62".repeat(32)
             )
         );
@@ -200,12 +190,13 @@ mod tests {
                        "txid": "62".repeat(32), "daa": 1});
         let l = fill_line(&d, None);
         assert!(
-            l.starts_with("fill  ask  99980049 base units of 55555555..55555555 @ raw price 3333445595 (decimals unknown)"),
+            l.starts_with("fill  ask  99980049 base units of 5555555555555555555555555555555555555555555555555555555555555555 @ raw price 3333445595 (decimals unknown)"),
             "{l}"
         );
-        // A token known by decimals only is named by its short id.
+        // A token known by decimals only is named by its full id.
         let info = TokenInfo { ticker: String::new(), decimals: 2, scale: 100 };
-        assert!(fill_line(&d, Some(&info)).contains("999800.49 55555555..55555555 @ 33.33445595 KAS per token"));
+        assert!(fill_line(&d, Some(&info))
+            .contains("999800.49 5555555555555555555555555555555555555555555555555555555555555555 @ 33.33445595 KAS per token"));
     }
 
     #[test]

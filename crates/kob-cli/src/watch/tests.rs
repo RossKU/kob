@@ -295,9 +295,10 @@ fn fills_frames_reconnect_and_server_notices() {
     let r = watch(&server, &["fills"], false, |o, _| o.matches("fill  ask").count() >= 2);
     assert_eq!(r.code, 0, "{}", r.err);
     // The line has the time (UTC), the kind, the amount and price in the decimals of the token,
-    // the short order id and the full txid.
+    // the full order id and the full txid.
     let want = format!(
-        "03:08:44  fill  ask  2.5 WATCHT @ 2.5 KAS per WATCHT  paid 6.25 KAS  order a1a1a1a1..a1a1a1a1  tx {}  daa 995",
+        "03:08:44  fill  ask  2.5 WATCHT @ 2.5 KAS per WATCHT  paid 6.25 KAS  order {}  tx {}  daa 995",
+        "a1".repeat(32),
         "62".repeat(32)
     );
     assert!(r.out.contains(&want), "{}", r.out);
