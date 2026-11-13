@@ -1,8 +1,10 @@
-//! The KOB protocol model as the indexer sees it: which templates are orders, which entry a
-//! dispatch tag selects, how an entry's arguments decode, and which fields of an order are
-//! mutable. Everything protocol-specific comes from `kob-protocol` (pinned templates, typed states);
-//! this module only adds the classification the indexer needs. Both token families are covered: a KRON
-//! kind (`KobAskKron`, ...) is classified like its KCC-20 counterpart (`TemplateId::base`).
+//! The KOB protocol model as the indexer sees it.
+//!
+//! The module classifies which templates are orders, which entry a dispatch tag selects, how an
+//! entry's arguments decode, and which fields of an order are mutable. Everything
+//! protocol-specific comes from `kob-protocol` (pinned templates, typed states). This module only
+//! adds the classification the indexer needs. Both token families are covered. A KRON kind
+//! (`KobAskKron`, ...) is classified like its KCC-20 counterpart (`TemplateId::base`).
 
 use kob_protocol::artifacts::{template, token_template, TemplateId};
 use kob_protocol::family::Family;
@@ -38,12 +40,15 @@ pub const ORDER_KINDS: [TemplateId; 21] = [
     TemplateId::KobIfdPair,
 ];
 
+/// True for the order kinds of both families.
 pub fn is_order(id: TemplateId) -> bool {
     ORDER_KINDS.contains(&id)
 }
 
-/// 1: the order sells the token (holds tokens in custody), 2: buys the token (holds KAS), 0: other. The pair kinds are one
-/// template for both sides: [`side_of`] reads the side from the state.
+/// The side of a KAS-book kind: 1 if the order sells the token (holds tokens in custody), 2 if it
+/// buys the token (holds KAS), 0 for other kinds.
+///
+/// The pair kinds are one template for both sides. [`side_of`] reads their side from the state.
 pub fn side(id: TemplateId) -> u8 {
     match id.base() {
         TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk => 1,
@@ -52,8 +57,11 @@ pub fn side(id: TemplateId) -> u8 {
     }
 }
 
-/// The side of an order (1 sells its base token, 2 buys it): the kind's for the KAS kinds, the state's `side` for a pair
-/// order (ASK 1 sells A for B, BID 2 buys A with B; a sell-first `KobIfdPair` is 1, a buy-first one 2).
+/// The side of an order: 1 sells its base token, 2 buys it.
+///
+/// It is the kind's side for the KAS kinds and the state's `side` for a pair order. A pair `ASK`
+/// (1) sells A for B and a pair `BID` (2) buys A with B. A sell-first `KobIfdPair` is 1 and a
+/// buy-first one is 2.
 pub fn side_of(s: &AnyState) -> u8 {
     match s {
         AnyState::KobPair(p) => side_code(p.side),
@@ -71,8 +79,10 @@ fn side_code(side: i64) -> u8 {
     }
 }
 
-/// A resting limit order with a plain `price` (appears in the books). A pair order is in no KAS book (it has no KAS price):
-/// it appears in the pair books (`/v1/pairs`).
+/// A resting limit order with a plain `price`, which appears in the books.
+///
+/// A pair order is in no KAS book, because it has no KAS price. It appears in the pair books
+/// (`/v1/pairs`).
 pub fn in_book(id: TemplateId) -> bool {
     matches!(id.base(), TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobIfdAsk | TemplateId::KobIfdBid)
 }
@@ -94,7 +104,7 @@ fn entry_table() -> &'static EntryTable {
     static T: OnceLock<EntryTable> = OnceLock::new();
     T.get_or_init(|| {
         let mut m = HashMap::new();
-        // artifact-backed templates only: the raw KRON token programs have no ABI
+        // Artifact-backed templates only. The raw KRON token programs have no ABI.
         for id in TemplateId::ALL.into_iter().filter(|t| t.is_artifact()) {
             for (name, e) in &template(id).contract().entries {
                 m.insert((id, *e.dispatch_tag.as_bytes()), name.clone());
@@ -109,15 +119,20 @@ pub fn entry_name(id: TemplateId, tag: [u8; 4]) -> Option<&'static str> {
     entry_table().get(&(id, tag)).map(|s| s.as_str())
 }
 
-/// Identifies a revealed redeem script (the last push of a covenant input's signature script) as an
-/// instance of one of the pinned artifact-backed templates (order kinds and KCC-20 programs of both
-/// families' orders) and returns its state span. KRON token programs are [`identify_kron_token`].
+/// Identifies a revealed redeem script as an instance of one of the pinned artifact-backed
+/// templates and returns its state span.
+///
+/// The redeem script is the last push of a covenant input's signature script. The templates are the
+/// order kinds and the KCC-20 programs of both families' orders. KRON token programs are
+/// [`identify_kron_token`].
 pub fn identify_redeem(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
     TemplateId::ALL.into_iter().filter(|t| t.is_artifact()).find_map(|id| template(id).state_of(redeem).map(|s| (id, s)))
 }
 
-/// Identifies a revealed redeem script as one of the token programs pinned as raw redeem scripts (profile source
-/// `raw-redeem`: the KRON programs), which [`identify_redeem`] does not cover.
+/// Identifies a revealed redeem script as one of the token programs pinned as raw redeem scripts.
+///
+/// These are the KRON programs (profile source `raw-redeem`), which [`identify_redeem`] does not
+/// cover.
 pub fn identify_kron_token(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
     TemplateId::TOKEN_PROGRAMS
         .into_iter()
@@ -125,10 +140,12 @@ pub fn identify_kron_token(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
         .find_map(|id| token_template(id).state_of(redeem).map(|s| (id, s)))
 }
 
-// One-byte code of an order template in the record log: the KOB1 kind code, with the high bit set for the
-/// KRON kinds (which share the codes of their KCC-20 twins) and bit `0x40` for the delivery id_type 0 builds of the KRON
-/// kinds (`*KronD0`). Logs written before the KRON family existed only hold codes below `0x80`, logs written before the
-/// `*KronD0` builds none with `0x40`: both read back unchanged.
+/// One-byte code of an order template in the record log.
+///
+/// It is the KOB1 kind code. The high bit (`0x80`) is set for the KRON kinds, which share the codes
+/// of their KCC-20 twins. Bit `0x40` is set for the delivery id_type 0 builds of the KRON kinds
+/// (`*KronD0`). So a code below `0x80` is a KCC-20 kind, and a code without `0x40` is a plain
+/// build.
 pub fn wire_code(t: TemplateId) -> u8 {
     t.kind_code().expect("order template")
         | if t.family() == Family::Kron { 0x80 } else { 0 }
@@ -146,7 +163,7 @@ pub fn from_wire_code(code: u8) -> Option<TemplateId> {
     }
 }
 
-/// The family of a token program template hash (`None`: not a supported program).
+/// The family of a token program template hash, or `None` when it is not a supported program.
 pub fn token_family(tpl_hash: &[u8; 32]) -> Option<Family> {
     kob_protocol::artifacts::token_template_by_hash(tpl_hash).map(|t| t.family)
 }
@@ -178,16 +195,20 @@ pub fn nb(push: &[u8]) -> Option<Nb> {
     })
 }
 
-/// The mutable fields of an order (the splice windows of `docs/spec/matcher.md` §1.1). A field an
-/// order kind does not have is ignored.
+/// The mutable fields of an order, the splice windows of `docs/spec/matcher.md` section 1.1.
+///
+/// A field an order kind does not have is ignored.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Mutable {
     /// `amountLeft` (base units).
     pub amount: Option<i64>,
+    /// `armed`.
     pub armed: Option<i64>,
+    /// `stopPrice`.
     pub stop: Option<i64>,
+    /// `rptAmount`.
     pub rpt: Option<i64>,
-    /// A pair order's exact custody (`custody`: the S it holds; an entry's B escrow / prefund).
+    /// A pair order's exact custody (`custody`): the S it holds, or an entry's B escrow or prefund.
     pub custody: Option<i64>,
 }
 
@@ -320,24 +341,32 @@ pub fn with_mutable(s: &AnyState, m: Mutable) -> AnyState {
     s
 }
 
-/// Scale, minimum fill, price (the limit or start price), tip and time gates, whichever the kind has.
+/// Scale, minimum fill, price (the limit or start price), tip and time gates, whichever the kind
+/// has.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Terms {
     /// Base units per whole token (the price denominator).
     pub scale: i64,
     /// Smallest fill in base units (unless the fill takes everything left).
     pub min_fill: i64,
-    /// The quote of a resting order, sompi per whole token (`None` for the conditional kinds, which have leg prices
-    /// instead, and for the pair kinds, whose prices are in token B: [`pair_price`]).
+    /// The quote of a resting order, sompi per whole token.
+    ///
+    /// It is `None` for the conditional kinds, which have leg prices instead, and for the pair
+    /// kinds, whose prices are in token B ([`pair_price`]).
     pub price: Option<i64>,
     /// Priority tip, sompi per whole token (a pair order: per whole A, released to the filler).
     pub tip: i64,
+    /// Time in force, for the kinds that have one.
     pub tif: Option<i64>,
+    /// `activeFrom`.
     pub active_from: i64,
+    /// `expiryDaa`.
     pub expiry_daa: i64,
+    /// `refundTip`.
     pub refund_tip: i64,
 }
 
+/// The terms of an order state, whichever fields its kind has.
 pub fn terms_of(s: &AnyState) -> Terms {
     match s {
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => Terms {
@@ -400,7 +429,8 @@ pub fn terms_of(s: &AnyState) -> Terms {
             expiry_daa: a.expiry_daa,
             refund_tip: a.refund_tip,
         },
-        // A pair order has no KAS quote: its price is B base units per whole A; its tip is KAS per whole A.
+        // A pair order has no KAS quote. Its price is B base units per whole A, and its tip is KAS
+        // per whole A.
         AnyState::KobPair(a) => Terms {
             scale: a.a_scale(),
             min_fill: a.min_fill,
@@ -434,8 +464,10 @@ pub fn terms_of(s: &AnyState) -> Terms {
     }
 }
 
-/// Extension commitment recorded in the state (every KAS-book kind names it: an ask and a conditional ask the one of
-/// its custody, a sell-first entry in its committed exit, a bid-side kind the one it delivers).
+/// Extension commitment recorded in the state.
+///
+/// Every KAS-book kind names it. An ask and a conditional ask name the one of its custody, a
+/// sell-first entry names it in its committed exit, and a bid-side kind names the one it delivers.
 pub fn extension_of(s: &AnyState) -> Option<[u8; 32]> {
     match s {
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => Some(a.extension_commitment),
@@ -448,8 +480,10 @@ pub fn extension_of(s: &AnyState) -> Option<[u8; 32]> {
     }
 }
 
-/// The limit price of a pair order in token B (B base units per whole A): a `KobPair`'s `price` (the start price when
-/// decaying), a `KobIfdPair`'s `price`; `None` for a `KobCondPair` (leg prices) and the KAS kinds.
+/// The limit price of a pair order in token B (B base units per whole A).
+///
+/// It is a `KobPair`'s `price` (the start price when decaying) or a `KobIfdPair`'s `price`. It is
+/// `None` for a `KobCondPair` (leg prices) and the KAS kinds.
 pub fn pair_price(s: &AnyState) -> Option<i64> {
     match s {
         AnyState::KobPair(p) => Some(p.price),
@@ -508,8 +542,9 @@ mod tests {
 
     #[test]
     fn mutable_fields_are_the_spliced_windows() {
-        // a template's compiled state; an if-done entry's committed exit placeholder (its last field, a PUSHDATA2) replaced
-        // by its exit kind's compiled state prefix at the entry's scales (the entries decode their committed exit)
+        // A template's compiled state. An if-done entry's committed exit placeholder (its last
+        // field, a PUSHDATA2) is replaced by its exit kind's compiled state prefix at the entry's
+        // scales, because the entries decode their committed exit.
         fn compiled(id: TemplateId) -> AnyState {
             let t = template(id);
             let mut b = t.contract().compiled.bytecode[1..1 + t.state_len].to_vec();
@@ -550,8 +585,9 @@ mod tests {
         }
     }
 
-    /// With `deploy-tn10` / `deploy-mainnet` the build only records its network (no template depends on a genesis): the
-    /// indexer identifies exactly the templates the deployment record lists, by redeem script and by hash.
+    /// With `deploy-tn10` or `deploy-mainnet` the build only records its network, and no template
+    /// depends on a genesis. The indexer identifies exactly the templates the deployment record
+    /// lists, by redeem script and by hash.
     #[cfg(any(feature = "deploy-tn10", feature = "deploy-mainnet"))]
     #[test]
     fn deployment_templates_are_the_ones_identified() {
