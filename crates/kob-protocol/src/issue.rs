@@ -1,42 +1,61 @@
-//! Fixed-supply KCC-20 issuance: program pinning, genesis transaction builder, verification and the
-//! off-chain documents (supply, metadata, registry entry) that describe the issued token.
+//! Fixed-supply KCC-20 issuance: program pinning, the genesis transaction builder and verification.
 //!
-//! What is issued ([`IssueProgram`]): by default (since 2026-11-04) the `KCC20` actor of upstream's published
-//! `KCC20PublicMint` app (`contracts/third-party/kcc20-reference`, registry `kcc20-ref-public-mint`, 3 token inputs / 3
-//! token outputs per transfer), the de-facto standard KCC-20 program that indexers such as kascov.io list as a KCC-20 token.
-//! Its holders carry the compiler-owned context `gen__kcc20_template` (the program's own Sil template hash) before the
-//! 112-byte state: the genesis holds only `KCC20` holders of that app (no `PublicMint`, no `TokenSeed`), which every
-//! wallet of the app reads as its own token. Explicit second choice: the standalone single-actor 3 / 3 build of the reference
-//! (argent kcc20-reference c8a0871, `contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`), which costs less per
-//! transfer (1 -> 1 on testnet-10, 2026-11-04: 0.00678 KAS against 0.00901 KAS) but that other indexers do not recognise.
-//! Neither program has a mint, burn or public-mint entry usable without a minter actor, and a creation makes none, so the
-//! supply is exactly the sum of the genesis outputs, fixed forever. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype: the CLI
-//! issues it only when it is named `8x8-prototype`, the wasm surface and the web app never. Proposal P2 and `KCC20Opt`
-//! are not used.
+//! The module also builds the off-chain documents (supply, metadata, registry entry) that describe
+//! the issued token.
 //!
-//! A creation ([`build_creation`]) is TWO transactions under KCC-23 ([`crate::kcc23`]): the *preparation* spends the creator's
-//! P2PK funding into output 0 (P2PK of the creator, exactly the genesis's carriers and fee) and change, its payload declaring the
-//! token metadata (`0x00` + JSON: name, symbol, decimals, ...); the *genesis* spends that output 0 alone. Because the covenant id
-//! commits to the authorising outpoint, it commits to the declaration. Output 0 is an ordinary UTXO of the creator: a creation
-//! whose genesis is never sent leaves it in their wallet. Both are signed together ([`CreationPlan::sign`]) and the genesis is
-//! sent after the preparation; the txid does not depend on signature scripts, so the genesis is built and signed before the
-//! preparation is on chain.
+//! # What is issued
 //!
-//! The genesis: a plain P2PK funding input (input 0) authorises a KIP-20 genesis
-//! group of 1..N token outputs whose covenant id is derived exactly as consensus does
-//! ([`kaspa_consensus_core::hashing::covenant_id::covenant_id`]: the authorising outpoint plus the
-//! index, value and script public key of every output in the group). Every issued output is one
-//! token UTXO in the reference program's 112-byte state:
+//! [`IssueProgram`] names the program. By default it is the `KCC20` actor of the published
+//! `KCC20PublicMint` app of upstream (`contracts/third-party/kcc20-reference`, registry
+//! `kcc20-ref-public-mint`, 3 token inputs and 3 token outputs per transfer). Indexers such as
+//! kascov.io list it as a KCC-20 token. Its holders carry the compiler-owned context
+//! `gen__kcc20_template` (the Sil template hash of the program itself) before the 112-byte state.
+//! The genesis holds only `KCC20` holders of that app, with no `PublicMint` and no `TokenSeed`.
+//! Every wallet of the app reads them as its own token.
+//!
+//! The explicit second choice is the standalone single-actor 3 / 3 build of the reference
+//! (`contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`). It costs less per transfer, but
+//! other indexers do not recognise it. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype. The
+//! CLI issues it only when it is named `8x8-prototype`, and the wasm surface and the web app never
+//! do. Neither program has a mint, burn or public-mint entry that is usable without a minter
+//! actor, and a creation makes none. So the supply is exactly the sum of the genesis outputs,
+//! fixed forever. The choice of programs and the measured fees are in
+//! `docs/spec/token-programs.md`, section 8.
+//!
+//! # A creation is two transactions
+//!
+//! [`build_creation`] builds TWO transactions under KCC-23 ([`crate::kcc23`]).
+//! - The *preparation* spends the P2PK funding of the creator into output 0 and change. Output 0 is
+//!   a P2PK output of the creator with exactly the carriers and the fee of the genesis. The payload
+//!   of the preparation declares the token metadata (`0x00` + JSON: name, symbol, decimals, ...).
+//! - The *genesis* spends that output 0 alone.
+//!
+//! The covenant id commits to the authorising outpoint, so it commits to the declaration. Output 0
+//! is an ordinary UTXO of the creator, and a creation whose genesis is never sent leaves it in
+//! their wallet. [`CreationPlan::sign`] signs both together, and the genesis is sent after the
+//! preparation. The txid does not depend on signature scripts, so the genesis is built and signed
+//! before the preparation is on chain.
+//!
+//! # The genesis
+//!
+//! A plain P2PK funding input (input 0) authorises a KIP-20 genesis group of 1..N token outputs.
+//! Its covenant id is derived exactly as consensus does
+//! ([`kaspa_consensus_core::hashing::covenant_id::covenant_id`]): the authorising outpoint plus
+//! the index, value and script public key of every output in the group. Every issued output is one
+//! token UTXO in the 112-byte state of the reference program:
 //!
 //! ```text
-//! 0x08 amount(LE i64) | 0x20 owner | 0x01 owner_scheme | 0x01 borrow_scheme | 0x20 borrow_guard | 0x20 extension_commitment
+//! 0x08 amount(LE i64) | 0x20 owner | 0x01 owner_scheme | 0x01 borrow_scheme
+//!   | 0x20 borrow_guard | 0x20 extension_commitment
 //! ```
 //!
-//! Rules enforced here (see `docs` in the CLI): owner scheme 0x04 (covenant id) states are always
-//! issued with `borrow_scheme = 0x00`, `borrow_guard = 0^32` (borrows churn the outpoint
-//! and break outpoint-bound claims); every other output defaults to borrow disabled too, and a
-//! non-zero borrow scheme needs the explicit `allow_borrow` flag. The compiled program is
-//! self-tested for owner scheme 0x04 before anything is produced ([`verify_scheme4_enabled`]).
+//! Rules enforced here (see `docs` in the CLI):
+//! - A state of owner scheme 0x04 (covenant id) is always issued with `borrow_scheme = 0x00` and
+//!   `borrow_guard = 0^32`, because borrows churn the outpoint and break outpoint-bound claims.
+//! - Every other output defaults to borrow disabled too. A non-zero borrow scheme needs the
+//!   explicit `allow_borrow` flag.
+//! - The compiled program is self-tested for owner scheme 0x04 before anything is produced
+//!   ([`verify_scheme4_enabled`]).
 
 use std::collections::BTreeMap;
 
@@ -63,46 +82,60 @@ use crate::kcc23;
 
 /// KCC-20 owner scheme ids: the canonical KCC-2 authority-scheme bytes ([`crate::kcc2`]).
 pub const SCHEME_P2PK_SCHNORR: u8 = crate::kcc2::P2PK_SCHNORR;
-/// Owner is `Hash(pubkey)` (unkeyed BLAKE3, KCC-2 `p2pkh-schnorr/v1`) of a 32-byte Schnorr public key.
+/// Owner is `Hash(pubkey)` (unkeyed BLAKE3, KCC-2 `p2pkh-schnorr/v1`) of a 32-byte Schnorr public
+/// key.
 pub const SCHEME_P2PKH_SCHNORR: u8 = crate::kcc2::P2PKH_SCHNORR;
-/// Owner is `Hash(pubkey)` (unkeyed BLAKE3, KCC-2 `p2pkh-ecdsa/v1`) of a compressed 33-byte ECDSA public key.
+/// Owner is `Hash(pubkey)` (unkeyed BLAKE3, KCC-2 `p2pkh-ecdsa/v1`) of a compressed 33-byte ECDSA
+/// public key.
 pub const SCHEME_P2PKH_ECDSA: u8 = crate::kcc2::P2PKH_ECDSA;
 /// Owner is the KCC-1 P2SH commitment `Blake2b(R)` of one exact redeem script (KCC-2 `p2sh/v1`).
 pub const SCHEME_P2SH: u8 = crate::kcc2::P2SH;
 /// Owner is a KIP-20 covenant id (custody by a covenant such as a KOB order).
 pub const SCHEME_COVENANT_ID: u8 = crate::kcc2::COVENANT_ID;
-/// Owner schemes the issued program accepts, as recorded in the registry: every assigned KCC-2 scheme, no custom one.
+/// Owner schemes the issued program accepts, as recorded in the registry.
+///
+/// They are every assigned KCC-2 scheme, and no custom one.
 pub const OWNER_SCHEMES_ENABLED: [u8; 5] = crate::kcc2::ASSIGNED;
 
 /// Largest supply the tool issues. Order arithmetic multiplies token amounts by prices
 /// terms in 64-bit script integers, so KOB keeps token amounts far below `i64::MAX`.
 pub const MAX_SUPPLY: u64 = 2_900_000_000_000_000_000;
 /// Default KAS carried by every token UTXO of the genesis group: 10 KAS. Not the order carrier
-/// (`defaults::DEFAULT_ORDER_CARRIER`, 1 KAS): a genesis group puts many token outputs in one transaction, and a token
-/// output's KIP-9 storage mass is `4 × 10^12 / carrier` (plurality 2) against the [`MAX_STANDARD_MASS`] this tool keeps
-/// a genesis within, so 10 KAS outputs fit 24 holders and 1 KAS outputs only 2 (`genesis_holders_at_the_default_carrier`).
-/// The relay fee does not depend on it.
+/// (`defaults::DEFAULT_ORDER_CARRIER`, 1 KAS): a genesis group puts many token outputs in one
+/// transaction, and a token output's KIP-9 storage mass is `4 × 10^12 / carrier` (plurality 2)
+/// against the [`MAX_STANDARD_MASS`] this tool keeps a genesis within, so 10 KAS outputs fit 24
+/// holders and 1 KAS outputs only 2 (`genesis_holders_at_the_default_carrier`). The relay fee does
+/// not depend on it.
 pub const DEFAULT_CARRIER: u64 = 1_000_000_000;
-/// Default fee rate, sompi per gram: the node's relay floor `rate * max(compute, 2 * size)`
-/// ([`crate::tx::min_fee`]; storage mass needs no relay fee).
+/// Default fee rate, sompi per gram.
+///
+/// It is the relay floor of the node, `rate * max(compute, 2 * size)` ([`crate::tx::min_fee`]).
+/// Storage mass needs no relay fee.
 pub const DEFAULT_FEE_RATE: u64 = 100;
-/// Default `extension_commitment` of a fixed-supply standard token: 32 zero bytes, the value the
-/// KCC-20 conformance vectors use for a token without extended state.
+/// Default `extension_commitment` of a fixed-supply standard token: 32 zero bytes.
+///
+/// It is the value that the KCC-20 conformance vectors use for a token without extended state.
 pub const EXTENSION_FIXED_SUPPLY: [u8; 32] = [0u8; 32];
-/// Hard cap on token outputs in one genesis group (a warning is raised above the program's output slot limit).
+/// Hard cap on token outputs in one genesis group (a warning is raised above the program's output
+/// slot limit).
 pub const MAX_GENESIS_OUTPUTS: usize = 64;
 /// Standard transaction mass limit (relay policy).
 pub const MAX_STANDARD_MASS: u64 = 100_000;
 /// Registry class of the extension commitment used by the tool.
 pub const EXTENSION_CLASS: &str = "fixed-supply-standard";
-/// Id of the standalone 3 / 3 build in `registry/tokens.json` ([`IssueProgram::Ref3x3`], issued only when named).
+/// Id of the standalone 3 / 3 build in `registry/tokens.json` ([`IssueProgram::Ref3x3`], issued
+/// only when named).
 pub const REGISTRY_TEMPLATE_ID: &str = "kcc20-ref-3x3";
-/// Id of the published public-mint build in `registry/tokens.json` ([`IssueProgram::PublicMint`], the default issuance).
+/// Id of the published public-mint build in `registry/tokens.json`.
+///
+/// It is the id of [`IssueProgram::PublicMint`], the default issuance.
 pub const REGISTRY_TEMPLATE_ID_PUBLIC_MINT: &str = "kcc20-ref-public-mint";
 /// Id of the 8 / 8 prototype in `registry/tokens.json` ([`IssueProgram::Ref8x8Prototype`]).
 pub const REGISTRY_TEMPLATE_ID_8X8_PROTOTYPE: &str = "kcc20-ref-8x8";
-/// Template id of KaspaRocket's program in the registry ([`IssueProgram::KaspaRocketTestnet`]; the profile's
-/// `registry_id`).
+/// Template id of the program of KaspaRocket in the registry
+/// ([`IssueProgram::KaspaRocketTestnet`]).
+///
+/// It is the `registry_id` of the profile.
 pub const REGISTRY_TEMPLATE_ID_KASPAROCKET: &str = "kasparocket-token-11458";
 
 const SIGOP_SCRIPT_UNITS: u64 = 100_000;
@@ -120,20 +153,23 @@ const KASPAROCKET_NAME: &str = "KaspaRocketToken11458";
 /// The token program an issuance runs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IssueProgram {
-    /// The standalone reference KCC-20 program in its default configuration, 3 / 3 slots (`KCC20Ref`, registry
-    /// `kcc20-ref-3x3`): cheaper per transfer than the default, but other indexers (kascov.io) do not recognise it. Issued
-    /// only when named (`--program 3x3`).
+    /// The standalone reference KCC-20 program in its default configuration, 3 / 3 slots
+    /// (`KCC20Ref`, registry `kcc20-ref-3x3`): cheaper per transfer than the default, but other
+    /// indexers (kascov.io) do not recognise it. Issued only when named (`--program 3x3`).
     Ref3x3,
-    /// The default issuance: the `KCC20` actor of upstream's published `KCC20PublicMint` app, 3 / 3 slots
-    /// (`KCC20PublicMint`, registry `kcc20-ref-public-mint`): a fixed-supply genesis of holders of that app, with no minter.
+    /// The default issuance: the `KCC20` actor of upstream's published `KCC20PublicMint` app, 3 / 3
+    /// slots (`KCC20PublicMint`, registry `kcc20-ref-public-mint`): a fixed-supply genesis of
+    /// holders of that app, with no minter.
     #[default]
     PublicMint,
-    /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`, registry
-    /// `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and every plan carries a warning.
+    /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`,
+    /// registry `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and
+    /// every plan carries a warning.
     Ref8x8Prototype,
-    /// Third-party, testnet-10 only, not KOB's issuance: the token program of the KaspaRocket launchpad, the public-mint
-    /// `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`, reviewed; `contracts/third-party/kasparocket`).
-    /// Issued only on testnet-10 and only when named `kasparocket-testnet`, to test KOB against that launchpad's tokens.
+    /// Third-party, testnet-10 only, not KOB's issuance: the token program of the KaspaRocket
+    /// launchpad, the public-mint `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`,
+    /// reviewed; `contracts/third-party/kasparocket`). Issued only on testnet-10 and only when
+    /// named `kasparocket-testnet`, to test KOB against that launchpad's tokens.
     KaspaRocketTestnet,
 }
 
@@ -202,7 +238,8 @@ pub enum IssueError {
         /// Declared supply.
         declared: u64,
     },
-    /// A covenant-held (scheme 0x04) state, or any state without `--allow-borrow`, tried to enable borrowing.
+    /// A covenant-held (scheme 0x04) state, or any state without `--allow-borrow`, tried to enable
+    /// borrowing.
     #[error("borrow rule violated: {0}")]
     Borrow(String),
     /// The funding inputs do not cover carriers plus fee.
@@ -321,10 +358,12 @@ pub struct Program {
 }
 
 impl Program {
-    /// The reference KCC-20 program with its standard 3/3 slots (KOB's standard), loaded from the committed artifact.
+    /// The reference KCC-20 program with its standard 3/3 slots (KOB's standard), loaded from the
+    /// committed artifact.
     ///
     /// The splice codec of [`TokenState::encode`] is cross-checked against the artifact's own
-    /// bytecode (whose constructor state is `1000 | 0x03^32 | scheme 4 | borrow 0 | 0^32 | 0xee^32`).
+    /// bytecode (whose constructor state is `1000 | 0x03^32 | scheme 4 | borrow 0 | 0^32 |
+    /// 0xee^32`).
     pub fn kcc20_standard() -> Result<Self> {
         Self::load(IssueProgram::Ref3x3)
     }
@@ -334,9 +373,11 @@ impl Program {
         Self::load(IssueProgram::Ref8x8Prototype)
     }
 
-    /// The `KCC20` actor of upstream's published `KCC20PublicMint` app (3 / 3 slots), loaded from the committed artifact
-    /// and cut as its KCC-1 actor-type handle: the prefix ends with the context push `0x20 ‖ Sil template hash`
-    /// (`gen__kcc20_template`), so [`Program::redeem`] writes the context every holder of the app carries.
+    /// The `KCC20` actor of the published `KCC20PublicMint` app of upstream (3 / 3 slots).
+    ///
+    /// It is loaded from the committed artifact and cut as its KCC-1 actor-type handle. The prefix
+    /// ends with the context push `0x20 ‖ Sil template hash` (`gen__kcc20_template`), so
+    /// [`Program::redeem`] writes the context that every holder of the app carries.
     pub fn kcc20_public_mint() -> Result<Self> {
         Self::load(IssueProgram::PublicMint)
     }
@@ -418,7 +459,8 @@ impl Program {
         pay_to_script_hash_script(&self.redeem(state))
     }
 
-    /// Signature script of a `transfer` (leader) call: next states and the owner witness, then the redeem script.
+    /// Signature script of a `transfer` (leader) call: next states and the owner witness, then the
+    /// redeem script.
     pub fn leader_sig_script(&self, redeem: &[u8], next: &[TokenState], witness: Vec<u8>) -> Result<Vec<u8>> {
         let args = [ArtifactValue::Array(next.iter().map(TokenState::to_abi).collect()), witness.into()];
         let mut s = encode_contract_entry_sig_script(&self.artifact, &self.contract, "transfer", &args)
@@ -505,9 +547,12 @@ pub struct IssueSpec {
     pub change_spk: Option<ScriptPublicKey>,
     /// Free-form metadata.
     pub description: Option<String>,
-    /// Optional picture URL (https:// or ipfs://; KOB's KCC-23 field `image`, registry `display.icon`).
+    /// Optional picture URL (https:// or ipfs://; KOB's KCC-23 field `image`, registry
+    /// `display.icon`).
     pub icon: Option<String>,
-    /// Optional SHA-256 of the picture file's bytes (64 lowercase hex; KCC-23 field `image_hash`, written right after `image`).
+    /// Optional SHA-256 of the picture file's bytes: 64 lowercase hex characters.
+    ///
+    /// It is the KCC-23 field `image_hash`, written right after `image`.
     pub image_hash: Option<String>,
     /// Optional website URL (https://).
     pub website: Option<String>,
@@ -548,7 +593,8 @@ impl IssueSpec {
         }
     }
 
-    /// The KCC-23 token metadata of this issuance (KOB's convention, `docs/spec/token-metadata.md`).
+    /// The KCC-23 token metadata of this issuance (KOB's convention,
+    /// `docs/spec/token-metadata.md`).
     pub fn token_metadata(&self) -> kcc23::TokenMetadata {
         kcc23::TokenMetadata {
             name: self.name.clone(),
@@ -708,9 +754,12 @@ fn p2pk_spk(pk: &[u8; 32]) -> ScriptPublicKey {
     ScriptPublicKey::new(0, s.into())
 }
 
-/// The payload of a genesis transaction: the encoded states of its token outputs, in output order ([`crate::genesis_states`]). It lets
-/// anyone who sees the genesis (an indexer, the issuer's wallet in another browser, the CLI) read the states of the issued outputs, which
-/// are otherwise known only to the issuer until the first spend; each is believed only when the P2SH of its state equals the output.
+/// The payload of a genesis transaction: the encoded states of its token outputs, in output order.
+///
+/// See [`crate::genesis_states`]. It lets anyone who sees the genesis (an indexer, the wallet of
+/// the issuer in another browser, the CLI) read the states of the issued outputs, which are
+/// otherwise known only to the issuer until the first spend. Each state is believed only when the
+/// P2SH of its state equals the output.
 pub fn genesis_payload(states: &[TokenState]) -> Vec<u8> {
     let spans: Vec<Vec<u8>> = states.iter().map(TokenState::encode).collect();
     crate::genesis_states::encode(&spans).unwrap_or_default()
@@ -774,16 +823,16 @@ fn contextual_storage_mass(tx: &Transaction, entries: &[UtxoEntry]) -> u64 {
     crate::tx::masses(tx, entries).storage
 }
 
-/// `(compute, storage, size, relay fee mass, the mass checked against MAX_STANDARD_MASS)`: the fee is
-/// the node's relay floor on `max(compute, normalized transient)`; the issuance policy limit keeps
-/// counting every dimension.
+/// `(compute, storage, size, relay fee mass, the mass checked against MAX_STANDARD_MASS)`: the fee
+/// is the node's relay floor on `max(compute, normalized transient)`; the issuance policy limit
+/// keeps counting every dimension.
 fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> (u64, u64, u64, u64, u64) {
     let m = crate::tx::masses(tx, entries);
     (m.compute, m.storage, m.size, m.fee_mass, m.compute.max(m.transient).max(m.storage))
 }
 
-/// The parts of a genesis that do not depend on its fee: program, token states, outputs (bound to the covenant id of the funding
-/// outpoint), funding inputs and entries.
+/// The parts of a genesis that do not depend on its fee: program, token states, outputs (bound to
+/// the covenant id of the funding outpoint), funding inputs and entries.
 struct GenesisDraft {
     program: Program,
     states: Vec<TokenState>,
@@ -814,7 +863,8 @@ impl GenesisDraft {
         let entries = spec.funding.iter().map(|f| UtxoEntry::new(f.amount, p2pk_spk(&f.owner_pubkey), 0, false, None)).collect();
         let inputs = spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, vec![], 0, budget)).collect();
         let change_spk = spec.change_spk.clone().unwrap_or_else(|| p2pk_spk(&spec.funding[0].owner_pubkey));
-        // token outputs and the genesis id (covers index, value and spk of every output of the group)
+        // token outputs and the genesis id (covers index, value and spk of every output of the
+        // group)
         let mut outputs: Vec<TransactionOutput> = states
             .iter()
             .map(|s| TransactionOutput { value: spec.carrier, script_public_key: program.spk(s), covenant: None })
@@ -845,17 +895,19 @@ impl GenesisDraft {
         genesis_payload(&self.states)
     }
 
-    /// The relay floor with or without a change output. It rests on compute and transient mass only, which do not depend on the
-    /// values (fixed-size fields), so any change value measures the same.
+    /// The relay floor with or without a change output. It rests on compute and transient mass
+    /// only, which do not depend on the values (fixed-size fields), so any change value measures
+    /// the same.
     fn min_fee(&self, with_change: bool, rate: u64) -> u64 {
         let (_, _, _, fee_mass, _) = masses(&self.assemble(with_change.then_some(1)), &self.entries);
         crate::tx::relay_fee_for_mass(fee_mass, rate)
     }
 }
 
-/// How the fee and the change of a plain spend are settled: `slack` = inputs minus the fixed outputs. With an explicit `fee` it is
-/// used as given (at least the floor of the shape it ends in); without one the floor is paid and the rest is change, unless the
-/// change would be below `dust`, in which case it is added to the fee. Returns `(fee, change)` or the funds needed.
+/// How the fee and the change of a plain spend are settled: `slack` = inputs minus the fixed
+/// outputs. With an explicit `fee` it is used as given (at least the floor of the shape it ends
+/// in); without one the floor is paid and the rest is change, unless the change would be below
+/// `dust`, in which case it is added to the fee. Returns `(fee, change)` or the funds needed.
 fn settle_fee(
     slack: u64,
     explicit: Option<u64>,
@@ -894,15 +946,17 @@ enum SettleError {
     Short { need_over_fixed: u64 },
 }
 
-/// Smallest change output KOB keeps: a tenth of the carrier (at most 1 KAS). A smaller change would weigh more in storage mass
-/// than it is worth and is added to the fee.
+/// Smallest change output KOB keeps: a tenth of the carrier (at most 1 KAS). A smaller change would
+/// weigh more in storage mass than it is worth and is added to the fee.
 fn dust_bound(spec: &IssueSpec) -> u64 {
     spec.carrier.min(DEFAULT_CARRIER) / 10
 }
 
-/// Plan a genesis transaction alone (unsigned; call [`GenesisPlan::sign`] to sign the funding inputs). It declares no metadata:
-/// KOB creates tokens with [`build_creation`] (KCC-23: a preparation transaction carrying the metadata, then this genesis spending
-/// its output); this builder is the second step of that, and stays for tests and tools that issue without a declaration.
+/// Plan a genesis transaction alone (unsigned; call [`GenesisPlan::sign`] to sign the funding
+/// inputs). It declares no metadata: KOB creates tokens with [`build_creation`] (KCC-23: a
+/// preparation transaction carrying the metadata, then this genesis spending its output); this
+/// builder is the second step of that, and stays for tests and tools that issue without a
+/// declaration.
 ///
 /// Token outputs come first (indices `0..holders.len()`), then the change output. All token
 /// outputs form one genesis group authorised by input 0.
@@ -926,7 +980,8 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
             return Err(IssueError::InsufficientFunds { need: need_base.saturating_add(need_over_fixed), have: total_in })
         }
     };
-    // what the fee took beyond what was asked (the floor, or the explicit fee): a change below the dust bound
+    // what the fee took beyond what was asked (the floor, or the explicit fee): a change below the
+    // dust bound
     let asked = spec.fee.unwrap_or(min_without);
     if change_value.is_none() && fee > asked {
         warnings.push(format!("change of {} sompi is below the dust bound and is added to the fee", fee - asked));
@@ -967,11 +1022,15 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
     })
 }
 
-// ------------------------------------------------------------------------------------------------ KCC-23 creation
+// ------------------------------------------------------------------------------------------------
+// KCC-23 creation
 
-/// The KCC-23 preparation transaction of a creation: the funding inputs pay output 0 (P2PK of the creator, exactly the genesis's
-/// carriers and fee) and the change, and the payload carries the token metadata. Output 0 is an ordinary UTXO of the creator: if
-/// the genesis is never sent it stays in their wallet, spendable like any other.
+/// The KCC-23 preparation transaction of a creation.
+///
+/// The funding inputs pay output 0 and the change, and the payload carries the token metadata.
+/// Output 0 is a P2PK output of the creator with exactly the carriers and the fee of the genesis.
+/// It is an ordinary UTXO of the creator. If the genesis is never sent it stays in their wallet,
+/// spendable like any other.
 #[derive(Debug, Clone)]
 pub struct PrepPlan {
     /// The transaction (signature scripts empty until [`CreationPlan::sign`]).
@@ -980,7 +1039,8 @@ pub struct PrepPlan {
     pub entries: Vec<UtxoEntry>,
     /// The declared metadata.
     pub metadata: kcc23::TokenMetadata,
-    /// Value of output 0 (the genesis's funding): the carriers of every token output plus the genesis fee.
+    /// Value of output 0 (the genesis's funding): the carriers of every token output plus the
+    /// genesis fee.
     pub value: u64,
     /// Change output index and value, when there is change.
     pub change: Option<(usize, u64)>,
@@ -1010,8 +1070,11 @@ impl PrepPlan {
     }
 }
 
-/// A token creation under KCC-23: the preparation transaction ([`PrepPlan`]) and the genesis ([`GenesisPlan`]) that spends its
-/// output 0 (authorising the genesis group), so the token's covenant id commits to the declared metadata.
+/// A token creation under KCC-23: the preparation transaction and the genesis that spends it.
+///
+/// The preparation is a [`PrepPlan`] and the genesis is a [`GenesisPlan`]. The genesis spends
+/// output 0 of the preparation, which authorises the genesis group. So the covenant id of the token
+/// commits to the declared metadata.
 #[derive(Debug, Clone)]
 pub struct CreationPlan {
     /// Step 1: the declaration.
@@ -1020,9 +1083,10 @@ pub struct CreationPlan {
     pub genesis: GenesisPlan,
 }
 
-/// Plan a token creation: [`PrepPlan`] then [`GenesisPlan`] (both unsigned; [`CreationPlan::sign`] signs both). The creator is the
-/// owner of `spec.funding[0]`; every funding UTXO must be theirs. `spec.fee`, when set, is the genesis fee (at least its floor);
-/// the preparation pays the relay floor at `spec.fee_rate`. The change of the funding returns to `spec.change_spk` (default: the
+/// Plan a token creation: [`PrepPlan`] then [`GenesisPlan`] (both unsigned; [`CreationPlan::sign`]
+/// signs both). The creator is the owner of `spec.funding[0]`; every funding UTXO must be theirs.
+/// `spec.fee`, when set, is the genesis fee (at least its floor); the preparation pays the relay
+/// floor at `spec.fee_rate`. The change of the funding returns to `spec.change_spk` (default: the
 /// creator) from the preparation.
 pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     let mut warnings = spec.validate()?;
@@ -1035,7 +1099,8 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     let carriers =
         spec.carrier.checked_mul(spec.holders.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
 
-    // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the explicit one
+    // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the
+    // explicit one
     let probe_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_bytes([0u8; 32]), index: 0 };
     let probe = IssueSpec {
         funding: vec![FundingUtxo { outpoint: probe_outpoint, amount: carriers.saturating_add(DEFAULT_CARRIER), owner_pubkey: maker }],
@@ -1154,7 +1219,8 @@ impl CreationPlan {
         self.prep.signed && self.genesis.signed
     }
 
-    /// Sign every input of both transactions with `secret` (Schnorr, SIGHASH_ALL): the creator's key.
+    /// Sign every input of both transactions with `secret` (Schnorr, SIGHASH_ALL): the creator's
+    /// key.
     pub fn sign(&mut self, secret: &SecretKey) -> Result<()> {
         let secp = Secp256k1::new();
         let kp = Keypair::from_secret_key(&secp, secret);
@@ -1186,10 +1252,14 @@ impl CreationPlan {
             .collect()
     }
 
-    /// Everything [`GenesisPlan::verify`] checks, plus: the preparation is version 1 with exactly the declared payload, its output
-    /// 0 is the creator's P2PK of the genesis's funding value, it commits its storage mass, fits the standard mass and pays at
-    /// least the relay floor; once signed, its inputs run in the script engine; the genesis spends that output and nothing else;
-    /// and the KCC-23 binding of the declaration to the covenant id verifies.
+    /// Everything [`GenesisPlan::verify`] checks, plus the preparation and the binding.
+    ///
+    /// - The preparation is version 1 with exactly the declared payload.
+    /// - Its output 0 is the P2PK of the creator with the funding value of the genesis.
+    /// - It commits its storage mass, fits the standard mass and pays at least the relay floor.
+    /// - Once signed, its inputs run in the script engine.
+    /// - The genesis spends that output and nothing else.
+    /// - The KCC-23 binding of the declaration to the covenant id verifies.
     pub fn verify(&self) -> Result<VerifyReport> {
         let fail = |m: String| Err(IssueError::Verify(m));
         let p = &self.prep;
@@ -1252,12 +1322,16 @@ impl CreationPlan {
         Ok(report)
     }
 
-    /// The KCC-23 launch proof of the creation (both transactions in the fields their ids commit to).
+    /// The KCC-23 launch proof of the creation (both transactions in the fields their ids commit
+    /// to).
     pub fn launch_proof(&self) -> kcc23::LaunchProof {
         kcc23::LaunchProof::of(&self.prep.tx, &self.genesis.tx, self.genesis.covenant_id)
     }
 
-    /// `supply.json` of the genesis plus the declaration: the preparation's id, outpoint, payload and fee, and the total fee.
+    /// `supply.json` of the genesis plus the declaration.
+    ///
+    /// The declaration adds the id, outpoint, payload and fee of the preparation, and the total
+    /// fee.
     pub fn supply_json(&self) -> Value {
         let mut v = self.genesis.supply_json();
         let o = v.as_object_mut().expect("supply.json is an object");
@@ -1278,7 +1352,8 @@ impl CreationPlan {
 }
 
 impl GenesisPlan {
-    /// Sign every funding input with `secret` (Schnorr, SIGHASH_ALL). The key must own every funding UTXO.
+    /// Sign every funding input with `secret` (Schnorr, SIGHASH_ALL). The key must own every
+    /// funding UTXO.
     pub fn sign(&mut self, secret: &SecretKey) -> Result<()> {
         let secp = Secp256k1::new();
         let kp = Keypair::from_secret_key(&secp, secret);
@@ -1307,9 +1382,12 @@ impl GenesisPlan {
         (0..self.states.len()).map(|i| TransactionOutpoint { transaction_id: id, index: i as u32 }).collect()
     }
 
-    /// Consensus-level verification: covenant context (genesis group), covenant id recomputation,
-    /// exact token scripts, supply, and (when signed) execution of every funding input in the script
-    /// engine with the compute budget set on the transaction. Also self-tests owner scheme 0x04.
+    /// Consensus-level verification of the genesis.
+    ///
+    /// It checks the covenant context (genesis group), the covenant id recomputation, the exact
+    /// token scripts and the supply. When the genesis is signed, it also executes every funding
+    /// input in the script engine with the compute budget set on the transaction. It also
+    /// self-tests owner scheme 0x04.
     pub fn verify(&self) -> Result<VerifyReport> {
         let fail = |m: String| Err(IssueError::Verify(m));
         verify_scheme4_enabled(&self.program)?;
@@ -1434,25 +1512,32 @@ impl GenesisPlan {
         })
     }
 
-    /// The token metadata as a JSON object: KOB's KCC-23 fields (`name`, `symbol`, `decimals`, then the optional `description`,
-    /// `image`, `image_hash`, `website`, `x`, `telegram`; field names are KOB's convention, KCC-23 leaves them open). A creation
-    /// ([`build_creation`]) declares exactly [`GenesisPlan::metadata_payload`] on chain; a genesis built alone declares nothing.
+    /// The token metadata as a JSON object, with the KCC-23 fields of KOB.
+    ///
+    /// The fields are `name`, `symbol`, `decimals`, then the optional `description`, `image`,
+    /// `image_hash`, `website`, `x` and `telegram`. The field names are the convention of KOB,
+    /// because KCC-23 leaves them open. A creation ([`build_creation`]) declares exactly
+    /// [`GenesisPlan::metadata_payload`] on chain. A genesis built alone declares nothing.
     pub fn metadata_json(&self) -> Value {
         serde_json::from_str(&self.spec.token_metadata().json()).expect("metadata json")
     }
 
-    /// KCC-23 payload bytes of [`GenesisPlan::metadata_json`]: codec byte `0x00`, then the compact UTF-8 JSON in KOB's fixed
-    /// member order (what [`build_creation`] puts in the preparation transaction).
+    /// KCC-23 payload bytes of [`GenesisPlan::metadata_json`].
+    ///
+    /// They are the codec byte `0x00`, then the compact UTF-8 JSON in the fixed member order of
+    /// KOB. [`build_creation`] puts them in the preparation transaction.
     pub fn metadata_payload(&self) -> Vec<u8> {
         let json = self.spec.token_metadata().json();
         [&[kcc23::CODEC_JSON][..], json.as_bytes()].concat()
     }
 
-    /// The token's facts as a registry entry in the shape of `registry/tokens.schema.json` (`crate::registry::Token`):
-    /// `verified` false (nothing was checked against the chain yet), program = the pinned template of the issued program
-    /// (`kcc20-ref-3x3` or `kcc20-ref-public-mint`). For tools and community token lists that read the registry format; it is
-    /// no listing request (KOB lists no token: one of a supported program trades without any entry). Supply and borrow facts
-    /// live in `supply.json`.
+    /// The token's facts as a registry entry in the shape of `registry/tokens.schema.json`.
+    ///
+    /// The entry is a [`crate::registry::Token`]. `verified` is false, because nothing was checked
+    /// against the chain yet. The program is the pinned template of the issued program
+    /// (`kcc20-ref-3x3` or `kcc20-ref-public-mint`). It is for tools and community token lists that
+    /// read the registry format. It is no listing request: KOB lists no token, and a token of a
+    /// supported program trades without any entry. Supply and borrow facts live in `supply.json`.
     pub fn registry_entry(&self) -> Value {
         let mut display = serde_json::Map::new();
         if let Some(d) = &self.spec.description {
@@ -1503,7 +1588,8 @@ pub struct VerifyReport {
     pub size: u64,
 }
 
-/// `RpcTransaction` JSON (camelCase) of a transaction, as accepted by `submitTransaction` over wRPC.
+/// `RpcTransaction` JSON (camelCase) of a transaction, as accepted by `submitTransaction` over
+/// wRPC.
 pub fn rpc_transaction_json(tx: &Transaction) -> Value {
     let inputs: Vec<Value> = tx
         .inputs
@@ -1549,8 +1635,9 @@ pub fn rpc_transaction_json(tx: &Transaction) -> Value {
 // ------------------------------------------------------------------------------------------------
 // Program self-test
 
-/// Execute a real transfer in the script engine that moves tokens into a covenant-owned (scheme
-/// 0x04) state with borrowing disabled. Fails if the program does not accept owner scheme 0x04.
+/// Executes a real transfer in the script engine into a covenant-owned (scheme 0x04) state.
+///
+/// Borrowing is disabled. Fails if the program does not accept owner scheme 0x04.
 pub fn verify_scheme4_enabled(program: &Program) -> Result<()> {
     let secp = Secp256k1::new();
     let kp = Keypair::from_secret_key(&secp, &SecretKey::from_slice(&[0x22u8; 32]).expect("key"));
@@ -1649,8 +1736,9 @@ mod tests {
         }
     }
 
-    /// KOB issues the published public-mint build by default (the standalone 3 / 3 only when named); the 8 / 8 variant is a
-    /// prototype the CLI issues only by its explicit name, and every plan of it says so.
+    /// KOB issues the published public-mint build by default (the standalone 3 / 3 only when
+    /// named); the 8 / 8 variant is a prototype the CLI issues only by its explicit name, and every
+    /// plan of it says so.
     #[test]
     fn public_mint_is_the_default_and_8x8_is_a_prototype() {
         assert_eq!(IssueSpec::new("N", "T", 0, 1, vec![], vec![]).program, IssueProgram::PublicMint);
@@ -1699,8 +1787,9 @@ mod tests {
         assert!(plan.tx.inputs[0].compute_commit.compute_budget().unwrap() > 0);
     }
 
-    /// KaspaRocket's testnet-10 program (the public-mint actor at 10 / 10): named only as `kasparocket-testnet`, refused off
-    /// testnet-10, its genesis holders are instances of the pinned `KaspaRocketToken11458` and every plan says what it is.
+    /// KaspaRocket's testnet-10 program (the public-mint actor at 10 / 10): named only as
+    /// `kasparocket-testnet`, refused off testnet-10, its genesis holders are instances of the
+    /// pinned `KaspaRocketToken11458` and every plan says what it is.
     #[test]
     fn kasparocket_testnet_genesis_holds_holders_of_its_program() {
         use crate::artifacts::{token_template, TemplateId};
@@ -1725,8 +1814,9 @@ mod tests {
         assert!(plan.warnings.iter().any(|w| w.contains("KaspaRocket")));
     }
 
-    /// The published public-mint build: the program is the actor-type handle (the context push ends the prefix), every
-    /// genesis output is a holder of that app the order templates and the registry recognise, and the self-test runs.
+    /// The published public-mint build: the program is the actor-type handle (the context push ends
+    /// the prefix), every genesis output is a holder of that app the order templates and the
+    /// registry recognise, and the self-test runs.
     #[test]
     fn public_mint_genesis_holds_holders_of_the_published_app() {
         use crate::artifacts::{token_template, TemplateId};
@@ -1751,7 +1841,8 @@ mod tests {
         assert_eq!(plan.registry_entry()["template_id"], "kcc20-ref-public-mint");
         assert_eq!(plan.supply_json()["program"]["template_prefix_len"], 34);
         assert!(plan.warnings.is_empty());
-        // four holders exceed the 3-output transfer limit of both standard builds (the 8x8 prototype takes them)
+        // four holders exceed the 3-output transfer limit of both standard builds (the 8x8
+        // prototype takes them)
         let mut four = spec((0..4).map(|k| Holder::new([k + 1; 32], 0, 250)).collect(), 1000);
         assert!(build_genesis(&four).unwrap().warnings.iter().any(|w| w.contains("3-output transfer limit")));
         four.program = IssueProgram::PublicMint;
@@ -1762,9 +1853,10 @@ mod tests {
         assert!(IssueProgram::parse("public").is_err());
     }
 
-    /// The default issuance (the published public-mint build) leaves no public minter and no seed: KOB's own genesis check
-    /// accepts the group as holders only, with no mint allowance, no minter output and a proven-empty set of live minters (a
-    /// minter can only be created by a minter, so none can appear later). Fixed supply, as the 3 / 3 issuance.
+    /// The default issuance (the published public-mint build) leaves no public minter and no seed:
+    /// KOB's own genesis check accepts the group as holders only, with no mint allowance, no minter
+    /// output and a proven-empty set of live minters (a minter can only be created by a minter, so
+    /// none can appear later). Fixed supply, as the 3 / 3 issuance.
     #[test]
     fn the_default_issuance_leaves_no_public_minter() {
         use crate::registry::{verify_genesis_of, GenesisOutput, Registry};
@@ -1847,8 +1939,9 @@ mod tests {
         assert!(matches!(spec(too_many, 65).validate().unwrap_err(), IssueError::Invalid(_)));
     }
 
-    /// Why the genesis carrier stays at 10 KAS while the order carrier is 1 KAS: the most holders a genesis can have within
-    /// MAX_STANDARD_MASS (storage mass `4 × 10^12 / carrier` per token output).
+    /// Why the genesis carrier stays at 10 KAS while the order carrier is 1 KAS: the most holders a
+    /// genesis can have within MAX_STANDARD_MASS (storage mass `4 × 10^12 / carrier` per token
+    /// output).
     #[test]
     fn genesis_holders_at_the_default_carrier() {
         let most = |carrier: u64| {
@@ -1886,8 +1979,9 @@ mod tests {
         assert!(matches!(build_genesis(&s).unwrap_err(), IssueError::FeeTooLow { .. }));
     }
 
-    /// A wallet that holds only a little more than the carrier gets a plan that verifies (storage mass grows as the change
-    /// shrinks; the relay-floor fee does not depend on it, and a plan whose funds cannot pay it is an InsufficientFunds error).
+    /// A wallet that holds only a little more than the carrier gets a plan that verifies (storage
+    /// mass grows as the change shrinks; the relay-floor fee does not depend on it, and a plan
+    /// whose funds cannot pay it is an InsufficientFunds error).
     #[test]
     fn fee_is_settled_at_the_final_change_value() {
         let (sk, pk) = key();
@@ -1962,7 +2056,8 @@ mod tests {
             assert!(r.get(k).is_some(), "registry entry misses {k}");
         }
         assert_eq!(r["family"], "kcc20");
-        // facts only: no listing state (KOB lists no token), and the entry parses as a registry token
+        // facts only: no listing state (KOB lists no token), and the entry parses as a registry
+        // token
         assert!(r.get("status").is_none() && r.get("official").is_none());
         serde_json::from_value::<crate::registry::Token>(r.clone()).expect("a registry token");
         assert_eq!((r["template_id"].as_str(), r["max_token_inputs"].as_u64()), (Some("kcc20-ref-public-mint"), Some(3)));
@@ -1978,7 +2073,8 @@ mod tests {
         assert!(rpc["outputs"][0]["scriptPublicKey"].as_str().unwrap().starts_with("0000aa20"), "P2SH spk");
     }
 
-    // -------------------------------------------------------------------------------------------- KCC-23 creation
+    // --------------------------------------------------------------------------------------------
+    // KCC-23 creation
 
     fn creation_spec() -> IssueSpec {
         let (_, pk) = key();
@@ -1992,9 +2088,10 @@ mod tests {
         s
     }
 
-    /// The genesis names the states of its token outputs in its payload, so anyone who sees it (an indexer, the issuer's wallet in
-    /// another browser, the CLI) can read the issued outputs; the covenant id does not commit to the payload; a payload that is not
-    /// those states fails the verification.
+    /// The genesis names the states of its token outputs in its payload, so anyone who sees it (an
+    /// indexer, the issuer's wallet in another browser, the CLI) can read the issued outputs; the
+    /// covenant id does not commit to the payload; a payload that is not those states fails the
+    /// verification.
     #[test]
     fn the_genesis_payload_names_the_states_of_its_outputs() {
         let (sk, _) = key();
@@ -2012,7 +2109,8 @@ mod tests {
             s.amount += 1;
             assert_ne!(g.tx.outputs[i].script_public_key, g.program.spk(&s));
         }
-        // the covenant id is the consensus one over the outpoint and the group: the payload is not part of it
+        // the covenant id is the consensus one over the outpoint and the group: the payload is not
+        // part of it
         let group = g.tx.outputs[..g.states.len()].iter().enumerate().map(|(i, o)| (i as u32, o));
         assert_eq!(covenant_id(g.tx.inputs[0].previous_outpoint, group), g.covenant_id);
         // a genesis alone (no preparation) carries the same payload
@@ -2032,7 +2130,8 @@ mod tests {
         let s = creation_spec();
         let mut c = build_creation(&s).unwrap();
         let (p, g) = (&c.prep, &c.genesis);
-        // the preparation: version 1, payload = 0x00 + KOB's compact metadata, output 0 = the creator's P2PK of the genesis funding
+        // the preparation: version 1, payload = 0x00 + KOB's compact metadata, output 0 = the
+        // creator's P2PK of the genesis funding
         assert_eq!(p.tx.version, 1);
         assert_eq!(p.tx.payload[0], 0x00);
         let json = std::str::from_utf8(&p.tx.payload[1..]).unwrap().to_string();
@@ -2079,11 +2178,12 @@ mod tests {
         assert!(r["display"]["kcc23"].get("totalSupply").is_none(), "facts the chain states are not declared again");
     }
 
-    /// Before KCC-23 a creation was one genesis; now it is a preparation plus a genesis. Prints both (`--nocapture`).
+    /// Compares the fee of a creation with the fee of a bare genesis. Prints both (`--nocapture`).
     #[test]
     fn creation_fees_before_and_after() {
         let (_, pk) = key();
-        // the web default (one holder, name, symbol and decimals only) and a full one (two holders, every optional field)
+        // the web default (one holder, name, symbol and decimals only) and a full one (two holders,
+        // every optional field)
         let minimal = spec(vec![Holder::new(pk, 0, 1000)], 1000);
         for (label, s) in [("one holder, no optional field", minimal), ("two holders, every optional field", creation_spec())] {
             let one = build_genesis(&s).unwrap();
@@ -2099,7 +2199,8 @@ mod tests {
                 two.genesis.compute_mass,
                 two.total_fee()
             );
-            // the genesis alone is smaller than before (one input, no change); the preparation adds a plain spend with the payload
+            // the genesis alone is smaller than before (one input, no change); the preparation adds
+            // a plain spend with the payload
             assert!(two.genesis.fee < one.fee);
             assert!(two.total_fee() > one.fee && two.total_fee() < 3 * one.fee);
         }
@@ -2107,7 +2208,8 @@ mod tests {
 
     #[test]
     fn the_preparation_output_is_an_ordinary_utxo_of_the_creator() {
-        // a creation whose genesis is never sent: the creator spends output 0 back like any P2PK UTXO
+        // a creation whose genesis is never sent: the creator spends output 0 back like any P2PK
+        // UTXO
         let (sk, pk) = key();
         let mut c = build_creation(&creation_spec()).unwrap();
         c.sign(&sk).unwrap();
@@ -2159,7 +2261,8 @@ mod tests {
         let c = build_creation(&s).unwrap();
         assert_eq!(c.genesis.fee, floor + 12_345);
         c.verify().unwrap();
-        // funding that leaves a change below the dust bound: added to the preparation fee, the genesis is unchanged
+        // funding that leaves a change below the dust bound: added to the preparation fee, the
+        // genesis is unchanged
         let base = build_creation(&creation_spec()).unwrap();
         let mut s = creation_spec();
         s.funding = vec![funding(base.prep.value + base.prep.fee + 1_000, pk)];

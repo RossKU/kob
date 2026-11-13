@@ -344,3 +344,13 @@ review only, 2026-11-05): tradable on mainnet.
 * `record_code` values are persisted by every indexer: never reuse or renumber one (1..=11 are taken).
 * The `TemplateId` variant order is the order kinds of the KCC-20 family, the KCC-20-codec programs, the KRON order kinds,
   the KRON-codec programs, each in table order: append new programs at the end of their codec group.
+
+## 8. What KOB issues
+
+`kob issue` (`crates/kob-protocol/src/issue.rs`) creates fixed-supply KCC-20 tokens. The program is chosen by `IssueProgram`.
+
+* **Default: the `KCC20` actor of the published `KCC20PublicMint` app** (`contracts/third-party/kcc20-reference`, registry id `kcc20-ref-public-mint`, 3 token inputs and 3 token outputs per transfer). It is the de-facto standard KCC-20 program that indexers such as kascov.io list as a KCC-20 token. Its holders carry the compiler-owned context `gen__kcc20_template` (the Sil template hash of the program itself) before the 112-byte state. The genesis holds only `KCC20` holders of the app, with no `PublicMint` and no `TokenSeed`, so every wallet of the app reads the tokens as its own. This is the default since 2026-11-04.
+* **Second choice: the standalone single-actor 3 / 3 build of the reference** (argent kcc20-reference `c8a0871`, `contracts/kcc20/KCC20Ref.sil`, registry id `kcc20-ref-3x3`). It costs less per transfer (a 1 -> 1 transfer on testnet-10, measured 2026-11-04: 0.00678 KAS against 0.00901 KAS for the default), but other indexers do not recognise it.
+* **Prototype: the 8 / 8 slot variant** (`KCC20Ref_8x8`). The CLI issues it only when it is named `8x8-prototype`. The wasm surface and the web app never issue it.
+
+Neither the default nor the standalone program has a mint, burn or public-mint entry that is usable without a minter actor, and a creation makes none. So the supply is exactly the sum of the genesis outputs, fixed forever. Proposal P2 and `KCC20Opt` are not used.
