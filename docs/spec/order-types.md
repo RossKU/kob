@@ -12,8 +12,8 @@ earns the crossing spread plus the tips. Every order type exists on a token's KA
 ## Amounts, prices and rounding
 
 This section is normative for every covenant and for all off-chain code (protocol library, builders, indexer, planner,
-SDK, wallet): off-chain code computes exactly what the covenants compute. The covenant source of the rule is the
-`KobAsk` header (`contracts/orders/KobAsk.sil`); every other template refers to it.
+SDK, wallet): off-chain code computes exactly what the covenants compute. In the covenants the rule is `quoteOf` of
+`KobAsk` (`contracts/orders/KobAsk.sil`), and every other template refers to it.
 
 **One rule.** An order is an `amount` of its **base token**, in base units (any positive amount; there are no lots), at
 a limit `price` in its **quote token** per WHOLE base token: `price` quote units per `scale` base units, where
@@ -63,7 +63,7 @@ With `n = q·scale + m` and `r = Q·scale + R`, `n·r / scale = q·r + m·Q + m�
 the rounding applies only to the last one, and the result is exactly `⌊n·r / scale⌋` (c = 0) or `⌈n·r / scale⌉`
 (c = scale − 1) for `n, r ≥ 0`. The intermediates are bounded: `q·r` and `m·(r / scale)` never exceed the result, and
 `m·(r mod scale) + c ≤ (scale − 1)·scale`. The formula is therefore exact whenever `scale·(scale − 1) < 2^63` (the contract
-headers state the simpler `scale² < 2^63`, `scale ≤ 3,037,000,499`) and the result itself fits in a signed 64-bit
+comments state the simpler `scale² < 2^63`, `scale ≤ 3,037,000,499`) and the result itself fits in a signed 64-bit
 integer. Off-chain code mirrors it (in 128-bit arithmetic or with the same split) and its tests assert equality with the
 covenants.
 

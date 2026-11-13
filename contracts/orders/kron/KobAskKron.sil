@@ -1,17 +1,25 @@
 pragma silverscript ^0.1.0;
 
-// KRON twin of contracts/orders/KobAsk.sil (limit sell of a token for KAS, protocol v3, no lots); differences:
-//  - Token codec: the KRON state is 46 B, `0x20 owner[32] | 0x01 id_type | 0x08 amount (LE i64) |
-//    0x01 is_minter` at template offset 0 (owner[1..33), id_type[34], amount[36..44), is_minter[45]),
-//    not the 112 B KCC-20 state; there are no borrow or extension fields.
-//  - Owner types: the custody is id_type 2 (owner = this order's covenant id), is_minter 0, both
-//    checked on tokenIn and pinned on the GTC rest. Maker payouts (refund, IOC return) are id_type 3
-//    (address presence, TYPE_DELIVERY), the type KRON wallets use for user balances.
-//  - Stray guard: MAX_TOK_IN = 4 (KRON allows at most 4 token inputs; KobAsk: 8), so noStrays unrolls
-//    4 slots, and it reads the owner at sigscript_len + 1 - 46 - tplSuffixLen.
-// Everything else is identical: entries, constructor and state layout (amountLeft is still payload
-// [236..244)), amounts and prices (base units at sompi per whole token, quoteOf rounding in the maker's
-// favour), minimum fill, decay / TWAP, IOC/FOK, positional rules. See contracts/orders/kron/README.md.
+// KobAskKron: a limit order that sells a KRON token for KAS.
+//
+// This is the KRON version of contracts/orders/KobAsk.sil, with the same
+// entries and the same rules. This header lists the differences.
+// contracts/orders/kron/README.md describes the family.
+//
+// Token codec. The KRON state is 46 B at template offset 0, with
+// owner[1..33), id_type[34], amount[36..44) and is_minter[45]. It replaces
+// the 112 B KCC-20 state and has no borrow or extension fields. So this order
+// has no extensionCommitment field, and its other state fields are those of
+// KobAsk. amountLeft is still the payload [236..244) of the redeem script.
+//
+// Owner types. The custody is id_type 2, owned by this order's covenant id,
+// with is_minter 0. All three are checked on tokenIn and pinned on the GTC
+// rest. Maker payouts, the refund and the IOC return, are id_type 3 (address
+// presence, TYPE_DELIVERY), the type KRON wallets use for user balances.
+//
+// Stray guard. MAX_TOK_IN is 4, the KRON limit, where KobAsk has 8. So
+// noStrays unrolls 4 slots, and it reads the owner at
+// sigscript_len + 1 - 46 - tplSuffixLen.
 contract KobAskKron(
     pubkey init_maker,
     byte[32] init_tokenCovId,
@@ -63,36 +71,47 @@ contract KobAskKron(
     }
 
     byte constant TYPE_COVID = 0x02;
-    // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
-    // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
-    // change this one constant and rebuild to switch (see contracts/orders/kron/README.md).
+    // Maker deliveries, the refund and the IOC return, are KRON id_type 3,
+    // address presence. KRON's wallets and SDK use that type for user
+    // balances. The alternative is type 0, a token-level signature.
+    // scripts/build-contracts.sh also builds this source as KobAskKronD0, with
+    // this one constant set to 0x00, see contracts/orders/kron/README.md.
     byte constant TYPE_DELIVERY = 0x03;
     byte constant SIGHASH_ALL = 0x01;
     int constant TIF_GTC = 0;
     int constant TIF_FOK = 2;
     // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
-    // IOC/FOK kill: refundable by anyone 60 s (10 DAA/s) after it became fillable.
+    // The IOC/FOK kill. Refundable by anyone 60 s (10 DAA/s) after the order
+    // became fillable.
     int constant IOC_LIFE = 600;
-    // Most token inputs a settle transaction may carry (the KRON limit); a larger batch is refused.
-    // The scan over these slots is unrolled by hand (one line per slot): raising the cap needs as many lines.
+    // The most token inputs a settle transaction may carry, the KRON limit.
+    // A larger batch is refused. The scan over these slots is unrolled by
+    // hand, one line per slot, so raising the cap needs as many lines.
     int constant MAX_TOK_IN = 4;
 
-    // Quote value of n base units at rate r (quote units per scale base units), rounded down (c = 0) or up
-    // (c = scale - 1): with n = q * scale + m and r = rh * scale + rl, n * r / scale = q * r + m * rh + m * rl / scale,
-    // and every partial product is below max(q * r, scale^2, the result): exact without a 128-bit product.
-    // n, r >= 0 (truncating division is then floor).
+    // Quote value of n base units at rate r, in quote units per scale base
+    // units. c = 0 rounds down and c = scale - 1 rounds up.
+    //
+    // With n = q * scale + m and r = rh * scale + rl, n * r / scale is
+    // q * r + m * rh + m * rl / scale. q * r and m * rh never exceed the
+    // result, and m * rl + c is below scale^2. So the value is exact without
+    // a 128-bit product while scale^2 < 2^63 (scale <= 3,037,000,499) and the
+    // result fits. The builders allow scale <= 10^9.
+    //
+    // The engine fails the script on an overflow, it never wraps. n and r are
+    // never negative here, so truncating division is floor.
     function quoteOf(int n, int r, int c) : int {
         int m = n % scale;
         int q = n / scale;
         return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
     }
 
-    // Authenticate input idx as an instance of template (pre, stLen, suf, tpl) like
-    // readInputStateWithTemplate (P2SH of the redeem script + blake3 template hash) and return
-    // its whole redeem script. Hand-written because the builtin re-derives the offset per field;
-    // the caller slices the state and builds the token output from the same authenticated
-    // prefix and suffix, as validateOutputStateWithInputTemplate would.
+    // Check that input idx is an instance of template (pre, stLen, suf, tpl),
+    // as readInputStateWithTemplate does, and return its whole redeem script.
+    // The builtin re-derives the offset for every field, so this is written by
+    // hand. The caller builds the token output from the same authenticated
+    // prefix and suffix.
     function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
         int base = OpTxInputScriptSigLen(idx) - size;
@@ -102,11 +121,17 @@ contract KobAskKron(
         return rs;
     }
 
-    // Stray guard: no token input other than `custody` may be owned by covenant id `me`. Every
-    // input carrying the token's covenant id is a genuine holder of the one token template
-    // (redeem = prefix || 46 B state || suffix, last sigscript push, P2SH-checked by consensus
-    // for that input), so its owner (state bytes [1..33)) is at a fixed distance from the end of
-    // its sigscript. Unrolled by hand over MAX_TOK_IN slots (one line per token input k < cnt).
+    // Stray guard. The KRON program authorises every token UTXO owned by this
+    // covenant id whenever this input is spent, so settle refuses any token
+    // input owned by `me` other than `custody`. Strays are inert. Only the
+    // maker's cancel can move them.
+    //
+    // Every input with the token's covenant id is an instance of the token
+    // template. Its redeem script, prefix || 46 B state || suffix, is the last
+    // sigscript push, and consensus checks its P2SH. So its owner, state bytes
+    // [1..33), sits at a fixed distance from the end of its sigscript. The
+    // scan is unrolled by hand over MAX_TOK_IN slots, one line per token input
+    // k < cnt.
     function noStrays(byte[32] me, int custody) {
         int cnt = OpCovInputCount(tokenCovId);
         require(cnt <= MAX_TOK_IN);
@@ -117,8 +142,9 @@ contract KobAskKron(
         if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); if (x3 != custody) { int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); } }
     }
 
-    // P2SH of this script with amountLeft replaced: the 8 payload bytes [236..244) of the redeem
-    // script (1-byte prefix + 243 B state; amountLeft is the last state field).
+    // P2SH of this script with amountLeft replaced. amountLeft is the 8
+    // payload bytes [236..244) of the redeem script, after the 1-byte prefix
+    // and at the end of the 243 B state.
     function contSpk(int newLeft) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
@@ -134,19 +160,26 @@ contract KobAskKron(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
 
+        // Custody. One KRON UTXO owned by this order's covenant id, id_type 2
+        // and not a minter, holding exactly amountLeft base units. Every
+        // settle checks it, so a fill, a refund and an IOC end all refuse a
+        // stand-in.
         require(OpInputCovenantId(tokenIn) == tokenCovId);
-        // KRON state: owner[1..33) id_type[34] amount[36..44) is_minter[45]; the bytes at 33, 35
-        // and 44 are the push opcodes 0x01 0x08 0x01. Custody = covenant-id owner (type 2), not a minter.
+        // KRON state: owner[1..33) id_type[34] amount[36..44) is_minter[45].
+        // The bytes at 33, 35 and 44 are the push opcodes 0x01 0x08 0x01.
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 46, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 46);
         require(byte[32](tin.slice(1, 33)) == selfId);
         require(tin.slice(33, 36) == byte[](0x010208));
         require(tin.slice(44, 46) == byte[](0x0100));
         int tinAmount = int(byte[8](tin.slice(36, 44)));
-        // the custody is the token UTXO holding exactly amountLeft, and the only one owned here
+        // The custody is known by its exact amount, so a stray or dust UTXO
+        // sent to this id can never stand in for it as tokenIn.
         require(tinAmount == amountLeft);
         noStrays(selfId, tokenIn);
 
+        // The carriers are the KAS on the order and custody UTXOs. They stay
+        // in the continuation or return to the maker.
         int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;
         int outAmount = tinAmount;
         byte[32] outOwner = byte[32](maker);
@@ -155,7 +188,11 @@ contract KobAskKron(
         int utxoDaa = OpTxInputDaaScore(self);
 
         if (n == 0) {
-            // refundable from min(expiryDaa, utxoDaa + MAX_IDLE, IOC/FOK: max(activeFrom, utxoDaa) + IOC_LIFE)
+            // Refund. Due at the earliest of expiryDaa, 90 days idle and, for
+            // IOC and FOK, IOC_LIFE after the order became fillable. On chain
+            // every tif but GTC has the kill. A covenant cannot prove an upper
+            // time bound on a fill, so the kill is a refund that anyone may
+            // send. A fill that lands first still pays the all-in limit.
             int idleEnd = utxoDaa + MAX_IDLE;
             if (tif != TIF_GTC) {
                 int kill = utxoDaa;
@@ -165,21 +202,39 @@ contract KobAskKron(
             }
             if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
             require(tx.daa >= idleEnd);
+            // The order ends. An output still bound to its covenant id could
+            // move later strays. The maker gets both carriers back, less at
+            // most refundTip.
             require(refundTip >= 0);
             require(OpCovOutputCount(selfId) == 0);
             require(tx.outputs[self].value + refundTip >= carriers);
         } else {
             require(tx.daa >= activeFrom);
             require(n > 0);
+            // Nothing checks the state when the order is created, so a fill
+            // checks the fields it relies on.
             require(scale > 0);
             require(tip >= 0);
+            // Conditional orders read n as trigger evidence, so a fill cannot
+            // claim more than the ask holds.
             require(n <= amountLeft);
+            // Minimum fill. A fill takes at least minFill unless it takes all
+            // that is left. That bounds the number of fills, and so the
+            // payouts, TWAP slices and continuations a filler can force on
+            // the maker.
             require(n >= minFill || n == amountLeft);
+            // TWAP. With interval > 0 the order UTXO must be interval DAA old
+            // (CSV), and every fill creates a new one. maxFill > 0 caps n.
             if (interval > 0) {
                 require(this.ageDaa >= interval);
             }
             require(maxFill == 0 || n <= maxFill);
             int p = price;
+            // Decay. The price falls by slope every decayStep DAA after origin,
+            // down to priceEnd. origin is activeFrom, or for a TWAP the opening
+            // of the current slice when that is later, so every slice is its
+            // own auction. The filler chooses t, and CLTV proves tx.daa >= t.
+            // slope must be positive, so understating t only raises the price.
             if (slope != 0) {
                 require(slope > 0);
                 require(decayStep > 0);
@@ -193,13 +248,21 @@ contract KobAskKron(
                 p = price - slope * ((t - origin) / decayStep);
                 if (p < priceEnd) { p = priceEnd; }
             }
+            // All-in price. A fill of n pays the maker at least
+            // allIn = ceil(n * (p - tip) / scale). Whatever a buyer pays above
+            // that, the crossing spread and the tip, is the matcher's. A fill
+            // at a price below the tip is refused.
             require(p >= tip);
-            // the seller's all-in proceeds, rounded up (the maker's favour)
             int allIn = quoteOf(n, p - tip, scale - 1);
             outAmount = tinAmount - n;
+            // Positional rule. The maker's KAS for the order at input i is
+            // paid at output i, so one output can never serve two orders.
             require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
             if (outAmount > 0 && tif == TIF_GTC) {
-                // rest: this script with amountLeft - n, same covenant id, carriers kept in place
+                // The rest continues this script with amountLeft - n. The
+                // continuation is the only output bound to this covenant id,
+                // and both carriers stay in place. The token rest may sit at
+                // any index, because only this order can spend it.
                 require(OpCovOutputCount(selfId) == 1);
                 int selfOut = OpCovOutputIdx(selfId, 0);
                 require(tx.outputs[selfOut].scriptPubKey == contSpk(amountLeft - n));
@@ -210,12 +273,15 @@ contract KobAskKron(
                 outType = TYPE_COVID;
                 outIdx = tokOut;
             } else {
-                // sold out, or IOC/FOK: terminate
+                // The order ends when it sells out or is not GTC. FOK needs a
+                // full fill. No output may stay bound to the covenant id.
                 require(tif != TIF_FOK || outAmount == 0);
                 require(OpCovOutputCount(selfId) == 0);
                 if (outAmount > 0) {
-                    // IOC: unsold tokens go back to the maker with their carrier at the
-                    // custody's own index (positional rule, see KobAsk)
+                    // IOC return. The unsold tokens go back to the maker with
+                    // their carrier at the index of the custody input. No
+                    // other order can claim that slot, because custody inputs
+                    // are distinct per order and are never an order input.
                     require(tokOut == tokenIn);
                     require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
                     require(tx.outputs[self].value >= allIn + tx.inputs[self].value);
@@ -239,6 +305,8 @@ contract KobAskKron(
         }
     }
 
+    // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
+    // maker routes the custody and any strays.
     entry cancel(sig s) {
         byte[] sb = byte[](s);
         require(sb.length == 65);
