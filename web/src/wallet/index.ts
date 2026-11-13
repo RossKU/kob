@@ -1,4 +1,5 @@
-// Wallet layer entry point: the adapters bound to `window`, plus the pieces the UI and the signing pipeline use.
+// Wallet layer entry point: the adapters bound to `window`, plus the pieces the UI and the signing
+// pipeline use.
 import type { ExtensionWalletId, WalletAdapter } from './types';
 import { createKaswareAdapter } from './kasware';
 import { createKaspireAdapter } from './kaspire';
@@ -13,14 +14,16 @@ export { SIGN_TIMEOUT_MS, extractSignature, errText, isUserRejection, normalizeP
 export { createAdapters, discoverWallets, watchWallets, type WalletHost } from './discover';
 export { signAndSubmit, waitForAcceptance, expectedOutputs, SignFlowError } from './sign';
 
-/** Default adapters reading `window.kasware` / `window.kaspire` / `window.kastle` at call time. */
+/**
+ * The default adapters. They read `window.kasware`, `window.kaspire`, `window.kastle` when called.
+ */
 export const ADAPTERS: Record<ExtensionWalletId, WalletAdapter> = {
   kasware: createKaswareAdapter(),
   kaspire: createKaspireAdapter(),
   kastle: createKastleAdapter(),
 };
 
-/** Adapters offered to the user: Kastle only behind `features.kastle`. */
+/** The adapters offered to the user. Kastle is included only behind `features.kastle`. */
 export function enabledAdapters(features: { kastle: boolean }): WalletAdapter[] {
   return [ADAPTERS.kasware, ADAPTERS.kaspire, ...(features.kastle ? [ADAPTERS.kastle] : [])];
 }

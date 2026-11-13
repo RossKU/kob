@@ -1,12 +1,13 @@
-// Wallet discovery. Browser extensions inject their provider AFTER the page loads (and sometimes after `DOMContentLoaded`), so a single
-// check at start-up misses them: `watchWallets` polls for a while and also reacts to Kaspire's `kaspire#initialized` event.
-// Kastle is only offered when `features.kastle` is on.
+// Wallet discovery. Browser extensions inject their provider after the page loads, and sometimes
+// after `DOMContentLoaded`, so a single check at start-up misses them. `watchWallets` polls for a
+// while and also reacts to Kaspire's `kaspire#initialized` event. Kastle is only offered when
+// `features.kastle` is on.
 import type { WalletAdapter, WalletId } from './types';
 import { createKaswareAdapter, type KaswareProvider } from './kasware';
 import { createKaspireAdapter, type KaspireDeps, type KaspireProvider } from './kaspire';
 import { createKastleAdapter, type KastleProvider } from './kastle';
 
-/** The part of `window` the wallets live on (injectable for tests). */
+/** The part of `window` the wallets live on. It can be injected for tests. */
 export interface WalletHost {
   kasware?: KaswareProvider;
   kaspire?: KaspireProvider;
@@ -15,20 +16,21 @@ export interface WalletHost {
   removeEventListener?(type: string, cb: () => void): void;
 }
 
+/** Options of the wallet discovery functions. */
 export interface DiscoverOptions {
-  /** default `window` (or `globalThis`) */
+  /** The host to read. Default `window`, or `globalThis`. */
   host?: WalletHost;
-  /** offer Kastle (`features.kastle`) */
+  /** Offer Kastle (`features.kastle`). */
   kastle?: boolean;
   intervalMs?: number;
-  /** stop polling after this long, ms (default 5 s; 0 = poll until stopped) */
+  /** Stop polling after this long, in ms. Default 5 s, and 0 polls until stopped. */
   timeoutMs?: number;
   kaspire?: Pick<KaspireDeps, 'dispatchTag' | 'mode'>;
 }
 
 const defaultHost = (): WalletHost => (typeof window !== 'undefined' ? (window as unknown as WalletHost) : (globalThis as unknown as WalletHost));
 
-/** Adapters bound to a host (all of them; `detect()` says which are installed). */
+/** Adapters bound to a host. All of them are returned, and `detect()` says which are installed. */
 export function createAdapters(o: Pick<DiscoverOptions, 'host' | 'kastle' | 'kaspire'> = {}): WalletAdapter[] {
   const host = o.host ?? defaultHost();
   const list = [
@@ -40,8 +42,9 @@ export function createAdapters(o: Pick<DiscoverOptions, 'host' | 'kastle' | 'kas
 }
 
 /**
- * Calls `onChange` with the detected adapters whenever that set changes (first call as soon as one is found). Returns a stop function.
- * Polling ends after `timeoutMs`; late injections after that are caught by the `kaspire#initialized` listener until stopped.
+ * Calls `onChange` with the detected adapters whenever that set changes, the first time as soon as
+ * one is found. Returns a stop function. Polling ends after `timeoutMs`. Late injections after
+ * that are caught by the `kaspire#initialized` listener until stopped.
  */
 export function watchWallets(onChange: (detected: WalletAdapter[]) => void, o: DiscoverOptions = {}): () => void {
   const host = o.host ?? defaultHost();
@@ -75,14 +78,15 @@ export function watchWallets(onChange: (detected: WalletAdapter[]) => void, o: D
   };
 }
 
+/** Options of `discoverWallets`. */
 export interface DiscoverWalletsOptions extends DiscoverOptions {
-  /** after the first wallet shows up, wait this long for more, ms (default 300) */
+  /** After the first wallet shows up, wait this long for more, in ms. Default 300. */
   settleMs?: number;
 }
 
 /**
- * Resolves with the installed wallets: as soon as one is found (plus a short settle time for a second one), or with `[]` when none
- * appears within `timeoutMs` (default 2.5 s).
+ * Resolves with the installed wallets. That is as soon as one is found, plus a short settle time
+ * for a second one, or `[]` when none appears within `timeoutMs` (default 2.5 s).
  */
 export function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<WalletAdapter[]> {
   return new Promise((resolve) => {
@@ -108,4 +112,5 @@ export function discoverWallets(o: DiscoverWalletsOptions = {}): Promise<WalletA
   });
 }
 
+/** The ids of the extension wallets, in the order they are offered. */
 export const WALLET_IDS: readonly WalletId[] = ['kasware', 'kaspire', 'kastle'];

@@ -1,17 +1,21 @@
-// Shared helpers of the wallet adapters: signature extraction from wallet-signed transactions, timeouts, error classification, key and
-// network normalisation. Pure (no DOM): everything the adapters need to talk to a provider object without knowing where it came from.
+// Shared helpers of the wallet adapters: signature extraction from wallet-signed transactions,
+// timeouts, error classification, and key and network normalisation. They are pure and use no DOM.
+// They let the adapters talk to a provider object without knowing where it came from.
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import { WalletError } from './types';
 
+/** How long a wallet popup may stay unanswered while signing, in ms. */
 export const SIGN_TIMEOUT_MS = 180_000;
+/** How long a wallet popup may stay unanswered while connecting, in ms. */
 export const CONNECT_TIMEOUT_MS = 60_000;
-/** re-reading an already connected wallet is silent: it either answers at once or it is gone */
+/** Re-reading an already connected wallet is silent. It either answers at once or it is gone. */
 export const REFRESH_TIMEOUT_MS = 15_000;
 
-// ------------------------------------------------------------------------------------------------ bytes
+// Bytes.
 
 const HEX = /^[0-9a-f]*$/i;
 
+/** Decodes a hex string. Throws when it is not hex or has an odd length. */
 export function hexToBytes(hex: string): Uint8Array {
   if (hex.length % 2 || !HEX.test(hex)) throw new Error('not a hex string');
   const out = new Uint8Array(hex.length / 2);
@@ -19,11 +23,13 @@ export function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
+/** Encodes bytes as lowercase hex. */
 export const bytesToHex = (b: Uint8Array): string => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 
 /**
- * Data pushes of a signature script, in order. Non-push opcodes are skipped (a wallet-assembled sigscript may contain small-integer
- * opcodes); a truncated push ends the parse (never throws: a hostile / odd wallet response must not crash the app).
+ * The data pushes of a signature script, in order. Non-push opcodes are skipped, because a
+ * wallet-assembled signature script may contain small-integer opcodes. A truncated push ends the
+ * parse. It never throws, because a hostile or odd wallet response must not crash the app.
  */
 export function parsePushes(script: Uint8Array): Uint8Array[] {
   const out: Uint8Array[] = [];
@@ -56,7 +62,7 @@ export function parsePushes(script: Uint8Array): Uint8Array[] {
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ signature extraction
+// Signature extraction.
 
 function asTxObject(v: unknown, depth = 0): { inputs?: { signatureScript?: unknown }[] } | null {
   let x = v;
@@ -70,7 +76,7 @@ function asTxObject(v: unknown, depth = 0): { inputs?: { signatureScript?: unkno
   if (typeof x !== 'object' || x === null) return null;
   const o = x as Record<string, unknown>;
   if (Array.isArray(o.inputs)) return o as { inputs: { signatureScript?: unknown }[] };
-  // wallets wrap the transaction differently
+  // Wallets wrap the transaction differently.
   if (depth < 2) {
     for (const k of ['psktTransactionJson', 'transaction', 'tx', 'signedTx', 'signedTransaction', 'result']) {
       if (k in o) {
@@ -83,14 +89,18 @@ function asTxObject(v: unknown, depth = 0): { inputs?: { signatureScript?: unkno
 }
 
 /**
- * The Schnorr signature of input `inputIndex` in a wallet-signed transaction (safe JSON, as string or object, possibly wrapped in a
- * response object). The wallet shapes seen on TN10 (tools/wallet-gate/RESULTS.md):
- *   * `push(sig65)` = 66 bytes (KasWare and Kastle for P2SH inputs, P2PK inputs of every wallet): the FIRST 65-byte push;
- *   * `<sig65><redeem>` / `<args..><sig65>...` (Kaspire's modes, Kastle with the redeem script): first 65-byte push again;
- *   * KCC-20 owner witness `0x00 || sig65` (66-byte push);
- *   * a bare 64-byte signature.
- * Returns hex of 65 bytes (sig + sighash byte) or 64 bytes; kob-wasm `finalize` verifies it against the digest, so this only LOCATES it.
- * Throws `WalletError('no-signature')` when the input carries none (e.g. Kastle without `scripts` returns an empty signature script).
+ * The Schnorr signature of input `inputIndex` in a wallet-signed transaction. The transaction is
+ * safe JSON, as a string or an object, possibly wrapped in a response object. The wallet shapes
+ * seen on TN10 (tools/wallet-gate/RESULTS.md) are:
+ * - `push(sig65)`, a 66-byte script: KasWare and Kastle for P2SH inputs, and P2PK inputs of every
+ *   wallet. It is the first 65-byte push.
+ * - `<sig65><redeem>` or `<args..><sig65>...`: Kaspire's modes, and Kastle with the redeem script.
+ *   It is again the first 65-byte push.
+ * - The KCC-20 owner witness `0x00 || sig65`, a 66-byte push.
+ * - A bare 64-byte signature.
+ * Returns hex of 65 bytes (signature plus sighash byte) or 64 bytes. kob-wasm `finalize` verifies
+ * it against the digest, so this only locates it. Throws `WalletError('no-signature')` when the
+ * input carries none. Kastle without `scripts` returns an empty signature script.
  */
 export function extractSignature(signedTx: unknown, inputIndex: number): Hex {
   const tx = asTxObject(signedTx);
@@ -124,7 +134,7 @@ export function collectSignatures(built: BuiltTx, signedTx: unknown, label: stri
       if (e instanceof WalletError && e.code === 'no-signature') throw new WalletError('no-signature', `${label}: ${e.message}`);
       throw e;
     }
-    // SIGHASH_ALL only: another type would sign different data than the confirmation screen showed
+    // SIGHASH_ALL only. Another type would sign different data than the confirmation screen showed.
     if (signature.length === 130 && signature.slice(128) !== '01') {
       throw new WalletError('other', `${label} signed input ${req.inputIndex} with an unexpected signature hash type (${signature.slice(128)}).`);
     }
@@ -132,9 +142,9 @@ export function collectSignatures(built: BuiltTx, signedTx: unknown, label: stri
   });
 }
 
-// ------------------------------------------------------------------------------------------------ errors and timeouts
+// Errors and timeouts.
 
-/** Readable text of whatever a wallet threw (`{code, message}` objects, strings, Errors). */
+/** Readable text of whatever a wallet threw: `{code, message}` objects, strings or Errors. */
 export function errText(e: unknown): string {
   if (e && typeof e === 'object') {
     const o = e as { code?: unknown; message?: unknown };
@@ -144,7 +154,10 @@ export function errText(e: unknown): string {
   return String(e);
 }
 
-/** The user closed or declined the wallet popup (EIP-1193 style code 4001, or the usual wording). */
+/**
+ * Whether the user closed or declined the wallet popup (code 4001, as in EIP-1193, or the usual
+ * wording).
+ */
 export function isUserRejection(e: unknown): boolean {
   if (e instanceof WalletError) return e.code === 'rejected';
   const code = e && typeof e === 'object' ? (e as { code?: unknown }).code : undefined;
@@ -179,9 +192,12 @@ export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise
   return Promise.race([p, limit]).finally(() => clearTimeout(t));
 }
 
-// ------------------------------------------------------------------------------------------------ keys
+// Keys.
 
-/** x-only public key (64 hex chars) from what wallets return: 32-byte x-only, 33-byte compressed (Kastle), optional 0x prefix. */
+/**
+ * The x-only public key (64 hex chars) from what wallets return: 32-byte x-only, or 33-byte
+ * compressed (Kastle), with an optional 0x prefix.
+ */
 export function normalizePubkey(p: unknown): Hex {
   if (typeof p !== 'string') throw new WalletError('other', 'The wallet returned no public key.');
   const h = p.trim().replace(/^0x/i, '').toLowerCase();
