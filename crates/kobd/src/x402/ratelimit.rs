@@ -1,8 +1,10 @@
 //! Token-bucket rate limiting keyed by caller (client IP, merchant id).
 //!
-//! Time is passed in (`now_ms`) so tests are deterministic. Memory is bounded: buckets that are full
-//! again (idle callers) are swept when the table is at capacity, and a table that is still full after the
-//! sweep refuses new keys (fail closed) instead of growing.
+//! Time is passed in as `now_ms`, so tests are deterministic.
+//!
+//! Memory is bounded. When the table is at capacity, buckets that are full again (idle callers)
+//! are swept. A table that is still full after the sweep refuses new keys instead of growing, so
+//! it fails closed.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -44,15 +46,18 @@ impl<K: Hash + Eq + Clone> Limiter<K> {
         self.check_with(key, self.default, now_ms)
     }
 
-    /// Takes one token for `key` using `rate` (a per-key override, for example one merchant's limit).
-    /// `Err(retry_after_seconds)` when the bucket is empty (at least 1).
+    /// Takes one token for `key` using `rate`, a per-key override such as one merchant's limit.
+    ///
+    /// When the bucket is empty it returns `Err(retry_after_seconds)`, which is at least 1.
     pub fn check_with(&self, key: &K, rate: Rate, now_ms: u64) -> Result<(), u64> {
         self.take(key, rate, now_ms, 0.0).map(|_| ())
     }
 
-    /// Takes one token for `key` using the limiter's default rate and answers the share of the burst left, unless that would leave
-    /// less than `reserve` (a share of the burst, 0..1) in the bucket: the last `reserve` of a shared bucket is for callers that ask
-    /// for it with a smaller reserve.
+    /// Takes one token for `key` at the default rate and returns the share of the burst left.
+    ///
+    /// It refuses when that would leave less than `reserve` in the bucket. `reserve` is a share of
+    /// the burst, 0..1. The last `reserve` of a shared bucket is for callers that ask with a
+    /// smaller reserve.
     pub fn check_reserving(&self, key: &K, now_ms: u64, reserve: f64) -> Result<f64, u64> {
         self.take(key, self.default, now_ms, reserve)
     }
@@ -108,7 +113,7 @@ mod tests {
         assert!(l.check(&"a", 999).is_err());
         assert!(l.check(&"a", 1_000).is_ok());
         assert!(l.check(&"a", 1_000).is_err());
-        // a long pause refills at most `burst`
+        // A long pause refills at most `burst`.
         for _ in 0..3 {
             assert!(l.check(&"a", 3_600_000).is_ok());
         }
@@ -134,12 +139,12 @@ mod tests {
     #[test]
     fn a_reserve_is_kept_for_callers_that_do_not_ask_for_it() {
         let l = Limiter::new(Rate::new(10, 1.0), 10);
-        // a caller that reserves half the burst can take 5 of the 10 tokens, then is refused
+        // A caller that reserves half the burst can take 5 of the 10 tokens, then is refused.
         for _ in 0..5 {
             assert!(l.check_reserving(&(), 0, 0.5).is_ok());
         }
         assert!(l.check_reserving(&(), 0, 0.5).is_err());
-        // a caller with no reserve still gets the other half
+        // A caller with no reserve still gets the other half.
         for _ in 0..5 {
             assert!(l.check_reserving(&(), 0, 0.0).is_ok());
         }
@@ -151,10 +156,10 @@ mod tests {
         let l = Limiter::new(Rate::new(1, 0.001), 2);
         assert!(l.check(&"a", 0).is_ok());
         assert!(l.check(&"b", 0).is_ok());
-        // both buckets are empty, so nothing can be evicted: a third key is refused
+        // Both buckets are empty, so nothing can be evicted and a third key is refused.
         assert!(l.check(&"c", 0).is_err());
         assert_eq!(l.len(), 2);
-        // after a long time the idle buckets are full again and get swept
+        // After a long time the idle buckets are full again and get swept.
         assert!(l.check(&"c", 10_000_000).is_ok());
         assert!(l.len() <= 2);
     }

@@ -1,26 +1,41 @@
-//! The facilitator HTTP service (axum 0.7).
+//! The facilitator HTTP service, built on axum 0.7.
 //!
-//! Routes (and nothing else; there is deliberately no reservation or await endpoint):
+//! # Routes
 //!
-//! | Route | Access |
-//! |---|---|
-//! | `GET /supported` | public: what can be settled now (empty while paused or the node is unreachable; no intents while the book lags) |
-//! | `POST /verify` | merchant API key |
-//! | `POST /settle` | merchant API key |
-//! | `GET /health` | public, no chain access (the last node probe of `/supported`) |
-//! | `GET /metrics` | admin key or loopback peer |
-//! | `POST /invoices` | merchant API key (invoices enabled) |
-//! | `GET /invoices/{id}` | public: the invoice (its canonical JSON hashes to `id`) |
-//! | `GET /invoices/{id}/status` | public: invoice-level status (a read, never an await) |
-//! | `POST /invoices/{id}/pay` | public: settles one payment of the invoice (per-IP, per-site and anonymous rate limits; invoice-pay slots) |
+//! These are the only routes. There is deliberately no reservation or await endpoint.
 //!
-//! Admission of a POST, in this order and before any verification or chain access:
-//! kill switch (503) -> per-IP rate limit (429 + Retry-After) -> content type (415) -> Bearer API key
-//! (401) -> per-merchant rate limit (429) -> declared body length (413) -> streamed body under **one**
-//! overall deadline (408 / 413) -> JSON structural depth and parse (400) -> the merchant's allowed
-//! `payTo` / asset (403). Results of verification and settlement are HTTP 200 with `isValid: false` /
-//! `success: false` in the body. Unauthenticated callers reach the ledger only through `POST /invoices/{id}/pay`, and
-//! only with a payment that verifies completely against a registered, unexpired, unpaid invoice.
+//! - `GET /supported` is public. It lists what can be settled now. The list is empty while the
+//!   facilitator is paused or the node is unreachable, and has no intents while the book lags.
+//! - `POST /verify` and `POST /settle` need a merchant API key.
+//! - `GET /health` is public and needs no chain access. It reports the last node probe of
+//!   `/supported`.
+//! - `GET /metrics` needs the admin key or a loopback peer.
+//! - `POST /invoices` needs a merchant API key and invoices enabled.
+//! - `GET /invoices/{id}` is public. The canonical JSON of the invoice hashes to `id`.
+//! - `GET /invoices/{id}/status` is public. It is a read of the invoice-level status, never an
+//!   await.
+//! - `POST /invoices/{id}/pay` is public. It settles one payment of the invoice, under the per-IP,
+//!   per-site and anonymous rate limits and the invoice-pay slots.
+//!
+//! # Admission of a POST
+//!
+//! Admission runs before any verification or chain access, in this order:
+//!
+//! 1. Kill switch (503).
+//! 2. Per-IP rate limit (429 with `Retry-After`). A request with a valid merchant key skips it.
+//! 3. Content type (415).
+//! 4. Bearer API key (401).
+//! 5. Per-merchant rate limit (429).
+//! 6. Declared body length (413).
+//! 7. Streamed body under one overall deadline (408 or 413).
+//! 8. JSON structural depth and parse (400).
+//! 9. The merchant's allowed `payTo` and asset (403).
+//!
+//! Verification and settlement results are HTTP 200 with `isValid: false` or `success: false` in
+//! the body.
+//!
+//! Unauthenticated callers reach the ledger only through `POST /invoices/{id}/pay`, and only with
+//! a payment that verifies completely against a registered, unexpired, unpaid invoice.
 
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -59,11 +74,13 @@ pub struct AppState {
     pub max_body: usize,
     pub body_deadline: Duration,
     ip_limiter: Limiter<IpAddr>,
-    /// The quiet allowance of a client: a quarter of its rate (see [`QUIET_FRACTION`]); a client that exhausts it is busy.
+    /// The quiet allowance of a client, a quarter of its rate (see [`QUIET_FRACTION`]).
+    ///
+    /// A client that exhausts it is busy.
     quiet_limiter: Limiter<IpAddr>,
     /// IPv6 sites (`ipv6_site_bits` prefix): the /64s of one allocation share one budget.
     site_limiter: Limiter<IpAddr>,
-    /// One bucket shared by every request without a merchant key (but `POST /invoices/{id}/pay`).
+    /// One bucket shared by every request without a merchant key, except `POST /invoices/{id}/pay`.
     anonymous_limiter: Limiter<()>,
     /// The bucket of the expensive `POST /invoices/{id}/pay` alone.
     pay_limiter: Limiter<()>,
@@ -72,8 +89,10 @@ pub struct AppState {
     merchant_limiter: Limiter<String>,
     merchant_default: Rate,
     settle_slots: Arc<Semaphore>,
-    /// Slots of the anonymous `POST /invoices/{id}/pay`: a pool of their own, so anonymous requests never hold the merchants'
-    /// `/settle` slots.
+    /// Slots of the anonymous `POST /invoices/{id}/pay`.
+    ///
+    /// They are a pool of their own, so anonymous requests never hold the merchants' `/settle`
+    /// slots.
     invoice_pay_slots: Arc<Semaphore>,
     /// Per-merchant settle slots, created on first use.
     merchant_slots: std::sync::Mutex<std::collections::HashMap<String, Arc<Semaphore>>>,
@@ -142,7 +161,7 @@ fn routes() -> Vec<Route> {
     ]
 }
 
-/// `(method, path)` of every route the service exposes (the router is built from the same table).
+/// `(method, path)` of every route the service exposes. The router is built from the same table.
 pub fn route_list() -> Vec<(&'static str, &'static str)> {
     routes().iter().map(|r| (r.method, r.path)).collect()
 }
@@ -189,13 +208,17 @@ fn peer_ip(req: &Request) -> Option<IpAddr> {
     req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip())
 }
 
-/// The client a request is attributed to: the forwarded-client header when the peer is a trusted proxy, else the peer.
+/// The client a request is attributed to.
+///
+/// It is the forwarded-client header when the peer is a trusted proxy, and the peer otherwise.
 fn client_addr(st: &AppState, req: &Request) -> IpAddr {
     let peer = peer_ip(req).unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
     crate::api::client_ip::unmap(st.resolver.resolve(peer, req.headers()))
 }
 
-/// Headers a reverse proxy typically adds: a request that carries one did not come from a local operator.
+/// Headers a reverse proxy typically adds.
+///
+/// A request that carries one did not come from a local operator.
 const FORWARDING_HEADERS: [&str; 8] = [
     "x-forwarded-for",
     "x-forwarded-host",
@@ -221,7 +244,7 @@ fn key_hash(token: &str) -> [u8; 32] {
     Sha256::digest(token.as_bytes()).into()
 }
 
-/// The merchant a Bearer key belongs to (constant-time over every configured key).
+/// The merchant a Bearer key belongs to, compared in constant time over every configured key.
 fn authenticate<'a>(st: &'a AppState, headers: &HeaderMap) -> Option<&'a Merchant> {
     let token = bearer(headers)?;
     let h = key_hash(&token);
@@ -242,7 +265,7 @@ fn is_json_content_type(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// False if the JSON text nests deeper than `max` (strings and escapes are skipped correctly).
+/// False if the JSON text nests deeper than `max`. Strings and escapes are skipped correctly.
 pub fn json_depth_ok(bytes: &[u8], max: usize) -> bool {
     let (mut depth, mut in_str, mut esc) = (0usize, false, false);
     for &b in bytes {
@@ -277,8 +300,9 @@ enum BodyError {
     Broken,
 }
 
-/// Reads the body with a streamed byte limit under one overall deadline (a per-chunk timeout would let
-/// a slow-loris client hold the connection forever).
+/// Reads the body with a streamed byte limit under one overall deadline.
+///
+/// A per-chunk timeout would let a slow-loris client hold the connection forever.
 async fn read_body(body: Body, max: usize, deadline: Duration) -> Result<Bytes, BodyError> {
     let read = async {
         let mut body = body;
@@ -305,11 +329,16 @@ fn rate_limited(st: &AppState, retry: u64) -> Response {
     error_response(StatusCode::TOO_MANY_REQUESTS, "rate_limited", "too many requests", Diag::RateLimited, Some(retry))
 }
 
-/// A client is quiet while it stays within a quarter of its per-client rate (and half its burst): a payer, a monitor, a browser tab.
-/// Above that it is busy (see [`FAIR_RESERVE`]).
+/// A client is quiet while it stays within a quarter of its per-client rate and half its burst.
+///
+/// A payer, a monitor or a browser tab is quiet. Above that a client is busy (see
+/// [`FAIR_RESERVE`]).
 const QUIET_FRACTION: f64 = 0.25;
-/// The share of a shared bucket only quiet clients may draw on (audit 2026-10-30 X6): busy clients stop when the bucket is half full,
-/// so a few dozen addresses at their per-client rate cannot empty it for everyone else.
+/// The share of a shared bucket only quiet clients may draw on.
+///
+/// Busy clients stop when the bucket is half full, so a few dozen addresses at their per-client
+/// rate cannot empty it for everyone else. The audit finding is listed in
+/// `docs/security/AUDIT-2026-10.md`.
 const FAIR_RESERVE: f64 = 0.5;
 
 /// Which shared bucket a request without a merchant key draws on.
@@ -321,9 +350,12 @@ enum Shared {
     InvoicePay,
 }
 
-/// The limits of a request without a merchant key: its client, its IPv6 site, then the bucket all of them share (each only
-/// charged once the narrower ones passed, so a client that is already limited cannot drain the shared ones). A busy client (above
-/// a quarter of its per-client rate) takes from the shared bucket only while it is more than half full.
+/// Checks the limits of a request without a merchant key.
+///
+/// It takes a token from the client's bucket, its IPv6 site's bucket, then the bucket all of them
+/// share. Each is charged only once the narrower ones passed, so a client that is already limited
+/// cannot drain the shared ones. A busy client, above a quarter of its per-client rate, takes from
+/// the shared bucket only while it is more than half full.
 fn ip_check(st: &AppState, req: &Request) -> Result<(), Response> {
     ip_check_for(st, req, Shared::Anonymous)
 }
@@ -356,7 +388,7 @@ fn killed_response(st: &AppState) -> Response {
     )
 }
 
-/// Everything before dispatch: returns the authenticated merchant and the parsed request.
+/// Everything before dispatch. Returns the authenticated merchant and the parsed request.
 async fn admit(st: &Arc<AppState>, req: Request) -> Result<(Merchant, FacilitatorRequest), Response> {
     let (merchant, bytes) = admit_raw(st, req, true).await?;
     let parsed: FacilitatorRequest = match serde_json::from_slice(&bytes) {
@@ -390,18 +422,22 @@ async fn admit(st: &Arc<AppState>, req: Request) -> Result<(Merchant, Facilitato
     Ok((merchant, parsed))
 }
 
-/// Admission up to a structurally sane JSON body: kill switch, rate limits, content type, the API key
-/// (`keyed_route`: merchant routes; otherwise the caller is anonymous and only the per-IP bucket applies), body size and
-/// deadline, JSON depth. Returns the merchant (`Merchant::open()` for anonymous callers) and the body.
+/// Admission up to a structurally sane JSON body.
+///
+/// It covers the kill switch, rate limits, content type, the API key, body size and deadline, and
+/// JSON depth. On a `keyed_route` (a merchant route) the caller needs a key. Otherwise the caller
+/// is anonymous and only the per-IP buckets apply. It returns the merchant, which is
+/// `Merchant::open()` for anonymous callers, and the body.
 async fn admit_raw(st: &Arc<AppState>, req: Request, keyed_route: bool) -> Result<(Merchant, Bytes), Response> {
     if st.fac.killed() {
         return Err(killed_response(st));
     }
-    // The per-IP bucket is the defence against ANONYMOUS traffic: a request with a valid merchant key is limited by its merchant's
-    // bucket instead, so junk from a shared address (a proxy that is not declared, a NAT) cannot starve the merchants.
+    // The per-IP bucket defends against anonymous traffic. A request with a valid merchant key is
+    // limited by its merchant's bucket instead, so junk from a shared address cannot starve the
+    // merchants. Such an address is a proxy that is not declared, or a NAT.
     let keyed = keyed_route && st.auth == AuthMode::Required && authenticate(st, req.headers()).is_some();
     if !keyed {
-        // the unkeyed POST route is the invoice payment: it draws on its own bucket
+        // The unkeyed POST route is the invoice payment, and it draws on its own bucket.
         ip_check_for(st, &req, if keyed_route { Shared::Anonymous } else { Shared::InvoicePay })?;
     }
     if !is_json_content_type(req.headers()) {
@@ -417,8 +453,8 @@ async fn admit_raw(st: &Arc<AppState>, req: Request, keyed_route: bool) -> Resul
     let merchant = match st.auth {
         _ if !keyed_route => Merchant::open(),
         AuthMode::Open => {
-            // open auth is for a local operator: a request relayed by a proxy (on this host or not) or from another host
-            // would use the facilitator without a key
+            // Open auth is for a local operator. A request relayed by a proxy, on this host or not,
+            // or from another host would use the facilitator without a key.
             let local = peer_ip(&req).is_some_and(|ip| crate::api::client_ip::unmap(ip).is_loopback());
             if forwarded(req.headers()) || !local {
                 Metrics::inc(&st.metrics().http_unauthorized);
@@ -518,7 +554,8 @@ async fn supported_h(State(st): State<Arc<AppState>>, req: Request) -> Response 
     if let Err(r) = ip_check(&st, &req) {
         return r;
     }
-    // `supported` probes the node (at most once per `FacilitatorConfig::health_cache`): off the async workers
+    // `supported` probes the node, at most once per `FacilitatorConfig::health_cache`. It runs off
+    // the async workers.
     let fac = st.fac.clone();
     match tokio::task::spawn_blocking(move || fac.supported()).await {
         Ok(v) => json_response(StatusCode::OK, &v),
@@ -541,8 +578,9 @@ async fn metrics_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
     if let Err(r) = ip_check(&st, &req) {
         return r;
     }
-    // A loopback peer is the operator only when nothing sits in front of the facilitator: never with `trustedProxies`, never when
-    // the request carries a forwarding header, and never when the operator switched it off.
+    // A loopback peer is the operator only when nothing sits in front of the facilitator. That
+    // excludes `trustedProxies`, a request with a forwarding header, and an operator who switched
+    // it off.
     let loopback = st.metrics_loopback && !forwarded(req.headers()) && peer_ip(&req).is_some_and(|ip| ip.is_loopback());
     let admin = st.admin_key.is_some_and(|k| bearer(req.headers()).is_some_and(|t| bool::from(key_hash(&t).ct_eq(&k))));
     if !(loopback || admin) {
@@ -588,7 +626,7 @@ async fn settle_h(State(st): State<Arc<AppState>>, req: Request) -> Response {
         Ok(x) => x,
         Err(r) => return r,
     };
-    // per-merchant slots first: one merchant cannot hold the whole pool
+    // Per-merchant slots come first, so one merchant cannot hold the whole pool.
     let mslots = st
         .merchant_slots
         .lock()
@@ -766,7 +804,7 @@ async fn invoice_pay_h(
         );
     };
     let fac = st.fac.clone();
-    // like /settle: the settlement outlives a disconnecting client
+    // As in `/settle`, the settlement outlives a disconnecting client.
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         fac.pay_invoice(&id, payload)
@@ -787,9 +825,11 @@ async fn invoice_pay_h(
 
 // ----------------------------------------------------------------------------------------- server
 
-/// Serves `app` on `listener` until `shutdown` resolves: HTTP/1 with a header-read and a write-stall deadline, a total
-/// and a per-address connection cap (over a cap: a `503` and close) and the peer address attached to every request
-/// (`crate::api::conn`, shared with the read API).
+/// Serves `app` on `listener` until `shutdown` resolves.
+///
+/// It speaks HTTP/1 with a header-read deadline and a write-stall deadline. It caps connections in
+/// total and per address, and answers `503` and closes over a cap. It attaches the peer address to
+/// every request. The server is `crate::api::conn`, shared with the read API.
 pub async fn serve(
     listener: TcpListener,
     app: Router,
