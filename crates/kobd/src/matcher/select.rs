@@ -1,32 +1,33 @@
 //! Weighted work selection among competing executors (`docs/spec/matcher.md` §3.6).
 //!
-//! The reference planner is deterministic: two executors with the same view build the same batch, and with several of them
-//! running (the long-term plan: miners run executors) all but one transaction of every race are refused (`MissingInput` /
-//! `DoubleSpend`). Kaspa's node avoids the same waste for block templates: when the mempool frontier holds more than a block,
-//! each miner samples its transactions with probability proportional to `feerate^ALPHA` without replacement, so parallel
-//! blocks of the DAG carry different transactions; when the frontier fits one block it takes everything
-//! (rusty-kaspa v2.1.0 `mining/src/mempool/model/frontier.rs:379-390` `Frontier::build_selector`: `TakeAllSelector`, else
-//! `sample_inplace` or the `MutatingTreeSelector` of `frontier/selectors.rs:284-376`, which draws (`:349-350`) `rng.gen::<f64>() ·
-//! total_weight` and removes the drawn key; the weight `(fee / mass)^ALPHA` is `frontier/feerate_key.rs:31`, `ALPHA = 3`
-//! `frontier/selectors.rs:18`).
+//! The reference planner is deterministic. Two executors with the same view build the same batch,
+//! so when several run, all but one transaction of every race are refused (`MissingInput` /
+//! `DoubleSpend`). Kaspa's node avoids the same waste for block templates: when the mempool
+//! frontier holds more than a block, each miner samples its transactions without replacement with
+//! probability proportional to `feerate^ALPHA`. The references into rusty-kaspa v2.1.0 are in
+//! §3.6.
 //!
-//! The executor mirrors that at the level of the work units it can take independently, the components of the view (the
-//! books of one token, joined by the pair orders between tokens, §3.1):
+//! The executor mirrors that for the work units it can take independently: the components of the
+//! view, which are the books of one token joined by the pair orders between tokens (§3.1).
 //!
-//! * a unit's weight is its standalone profit per byte (the executor's "fee rate") to the power `alpha` (1 by default, see
-//!   [`DEFAULT_ALPHA`] for why not Kaspa's 3);
-//! * per tick the executor takes every *mandatory* unit (it holds class 1 or class 2 work, or a crossing visible for at least
-//!   `max_defer_daa`: the starvation bound) and samples a share of the others without replacement, proportionally to their
-//!   weight ([`sample`]); the units it leaves wait for the next tick, when another executor has usually taken them;
-//! * the share is the executor's fair share `1 / n̂` of the work, `n̂` the number of executors racing for it, estimated
-//!   from the share of its own transactions that lose races ([`Selector::observe`], [`fair_share`]). It starts at 1 (take
-//!   everything, as Kaspa's `TakeAllSelector` when the frontier fits: a lone executor plans exactly as the reference) and
-//!   returns to 1 once the losses stop; it never falls below `min_share`.
+//! - A unit's weight is its standalone profit per byte (the "fee rate" of the executor) to the
+//!   power `alpha`. The default is 1, see [`DEFAULT_ALPHA`] for why it is not Kaspa's 3.
+//! - Per tick the executor takes every mandatory unit. A unit is mandatory when it holds class 1
+//!   or class 2 work, or a crossing visible for at least `max_defer_daa` (the starvation bound).
+//!   It samples a share of the other units without replacement, proportionally to their weight
+//!   ([`sample`]). The units it leaves wait for the next tick, when another executor has usually
+//!   taken them.
+//! - The share is the fair share `1 / n̂` of the work, where `n̂` is the number of executors racing
+//!   for it. The executor estimates `n̂` from the share of its own transactions that lose races
+//!   ([`Selector::observe`], [`fair_share`]). The share starts at 1 and returns to 1 once the
+//!   losses stop, and a lone executor then plans exactly as the reference planner does. It never
+//!   falls below `min_share`.
 //!
-//! Nothing inside a unit is random: its priority classes, price → tip → age, netting and routing are the reference planner's
-//! (a selected unit is planned exactly as the reference planner plans it alone). The keepers sample their kills, refunds and
-//! closes the same way (`crate::keepers`), weighted by their tip per byte. Selection is not consensus: the covenants accept any
-//! valid fill, and no user's terms depend on it.
+//! Nothing inside a unit is random. Its priority classes, price → tip → age, netting and routing
+//! are the reference planner's, so a selected unit is planned exactly as the reference planner
+//! plans it alone. The keepers sample their kills, refunds and closes the same way
+//! (`crate::keepers`), weighted by their tip per byte. Selection is not consensus: the covenants
+//! accept any valid fill, and no user's terms depend on it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,19 +35,23 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 
-/// The weighted selection of one tick (matcher or keepers), set by the runner on the engine's and the keepers' configuration
-/// every step. Integers so that the configurations stay `Eq`.
+/// The weighted selection of one tick (matcher or keepers).
+///
+/// The runner sets it on the configuration of the engine and of the keepers every step. It holds
+/// integers only, so that those configurations stay `Eq`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct TickSelect {
-    /// Seed of the tick's random source (drawn by the runner from its own, OS-seeded or `--select-seed`).
+    /// Seed of the random source of the tick. The runner draws it from its own source.
     pub seed: u64,
-    /// The share of the optional units to take, parts per million (1,000,000 or more: every unit, no sampling).
+    /// The share of the optional units to take, in parts per million. 1,000,000 or more takes every
+    /// unit, with no sampling.
     pub share_ppm: u32,
-    /// Weight exponent, thousandths (1,000: proportional to the profit per byte; Kaspa's `ALPHA = 3` is 3,000; 0: uniform among
-    /// the optional units).
+    /// Weight exponent in thousandths: 1,000 is proportional to the profit per byte, Kaspa's
+    /// `ALPHA = 3` is 3,000, and 0 is uniform among the optional units.
     pub alpha_milli: u32,
-    /// A crossing (a refund) visible for this many DAA is taken by every executor (the starvation bound).
+    /// A crossing (a refund) visible for this many DAA is taken by every executor: the starvation
+    /// bound.
     pub max_defer_daa: u64,
 }
 
@@ -56,17 +61,18 @@ impl Default for TickSelect {
     }
 }
 
-/// One whole share, parts per million.
+/// One whole share, in parts per million.
 pub const PPM: u32 = 1_000_000;
 
 /// Default starvation bound: 30 DAA (3 s at 10 blocks per second).
 pub const DEFAULT_MAX_DEFER_DAA: u64 = 30;
 
-/// Default weight exponent: 1, the probability proportional to the profit per byte. Kaspa weighs `feerate^3`
-/// (`frontier/selectors.rs:18`) because a miner wants the fees and a transaction two parallel blocks carry costs nothing; a
-/// work unit two executors take costs one of them its transaction, and an exponent of 3 sends every executor to the same
-/// best units. Measured on the race of `tests/matcher_select.rs` (`explore_selection_parameters`): five executors lose 41 %
-/// of their transactions at 1, 61 % at 3 (the reference: 80 %).
+/// Default weight exponent: 1, which makes the probability proportional to the profit per byte.
+///
+/// Kaspa weighs `feerate^3` (`frontier/selectors.rs:18`). A miner wants the fees, and a transaction
+/// that two parallel blocks carry costs nothing. A work unit that two executors take costs one of
+/// them its transaction, and an exponent of 3 sends every executor to the same best units.
+/// Measurements: `docs/spec/matcher.md` §3.6.
 pub const DEFAULT_ALPHA: f64 = 1.0;
 
 impl TickSelect {
@@ -74,10 +80,11 @@ impl TickSelect {
     pub fn share(&self) -> f64 {
         (self.share_ppm.min(PPM) as f64) / PPM as f64
     }
-    /// Whether the tick samples at all (a share below one).
+    /// Whether the tick samples at all, which is when the share is below one.
     pub fn samples(&self) -> bool {
         self.share_ppm < PPM
     }
+    /// The weight exponent as a float.
     pub fn alpha(&self) -> f64 {
         self.alpha_milli as f64 / 1_000.0
     }
@@ -87,21 +94,23 @@ impl TickSelect {
     }
 }
 
-/// Runner settings (`--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`, `--select-min-share`,
-/// `--select-seed`).
+/// Runner settings (`--no-weighted-select`, `--select-alpha`, `--select-max-defer-daa`,
+/// `--select-min-share`, `--select-seed`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectConfig {
-    /// Off: the reference planner and keepers, deterministic (the library default; the live commands turn it on).
+    /// Whether the selection is on. Off means the deterministic reference planner and keepers. The
+    /// library default is off, and the live commands turn it on.
     pub enabled: bool,
-    /// Weight exponent ([`DEFAULT_ALPHA`]; Kaspa: 3).
+    /// Weight exponent ([`DEFAULT_ALPHA`]; Kaspa uses 3).
     pub alpha: f64,
-    /// The starvation bound, DAA.
+    /// The starvation bound in DAA.
     pub max_defer_daa: u64,
-    /// The lowest share the races may push the executor to (the most executors it makes room for: `1 / min_share`).
+    /// The lowest share the races may push the executor to. It makes room for `1 / min_share`
+    /// executors.
     pub min_share: f64,
     /// Weight of a step in the moving average of the lost fraction, in (0, 1].
     pub smoothing: f64,
-    /// Seed of the runner's random source (tests); None: OS randomness.
+    /// Seed of the random source of the runner (for tests). None means OS randomness.
     pub seed: Option<u64>,
 }
 
@@ -122,7 +131,8 @@ impl Default for SelectConfig {
 }
 
 impl SelectConfig {
-    /// The checks of the command line: a finite exponent in `[0, 16]`, a minimum share in `(0, 1]`.
+    /// Checks the settings: a finite exponent in `[0, 16]`, a minimum share in `(0, 1]` and a
+    /// smoothing in `(0, 1]`.
     pub fn check(&self) -> Result<(), String> {
         if !self.alpha.is_finite() || !(0.0..=16.0).contains(&self.alpha) {
             return Err(format!("--select-alpha {} outside [0, 16]", self.alpha));
@@ -137,23 +147,27 @@ impl SelectConfig {
     }
 }
 
-/// Command-line options of the weighted selection (`kobd --executor`, `match`, `keep`; on by default).
+/// Command-line options of the weighted selection (`kobd --executor`, `match` and `keep`). It is on
+/// by default.
 #[derive(clap::Args, Debug, Clone)]
 pub struct SelectArgs {
-    /// Plan deterministically, as the reference planner and keepers: every executor with the same view builds the same
-    /// transactions (`docs/spec/matcher.md`, section 3.6).
+    /// Plan deterministically, as the reference planner and keepers do: every executor with the
+    /// same view builds the same transactions (`docs/spec/matcher.md` §3.6).
     #[arg(long)]
     pub no_weighted_select: bool,
-    /// Weight exponent of the selection: a work unit (a due keeper job) is drawn with probability proportional to its
-    /// profit (tip) per byte to this power (1: proportional; Kaspa's template selection uses 3; 0: uniform).
+    /// Weight exponent of the selection. A work unit (a due keeper job) is drawn with probability
+    /// proportional to its profit (tip) per byte to this power: 1 is proportional, Kaspa's template
+    /// selection uses 3, and 0 is uniform.
     #[arg(long, default_value_t = DEFAULT_ALPHA)]
     pub select_alpha: f64,
-    /// A crossing (a due keeper job) visible for this many DAA is taken by every executor, deterministically: the bound on
-    /// how long the selection may leave work for others (10 DAA per second).
+    /// A crossing (a due keeper job) visible for this many DAA is taken by every executor,
+    /// deterministically. It bounds how long the selection may leave work for others (10 DAA per
+    /// second).
     #[arg(long, default_value_t = DEFAULT_MAX_DEFER_DAA)]
     pub select_max_defer_daa: u64,
-    /// The lowest share of the optional work the executor takes per tick. The share is the executor's estimate of its fair
-    /// share (one over the executors racing for the work, from the races it loses): 1 for a lone executor.
+    /// The lowest share of the optional work the executor takes per tick. The share is the
+    /// estimate of its fair share: one over the executors racing for the work, from the races it
+    /// loses. It is 1 for a lone executor.
     #[arg(long, default_value_t = DEFAULT_MIN_SHARE)]
     pub select_min_share: f64,
     /// Seed of the selection's random source (reproducible runs). Default: OS randomness.
@@ -162,7 +176,7 @@ pub struct SelectArgs {
 }
 
 impl SelectArgs {
-    /// The runner's selection settings, checked.
+    /// The runner's selection settings, checked with [`SelectConfig::check`].
     pub fn config(&self) -> Result<SelectConfig, String> {
         let c = SelectConfig {
             enabled: !self.no_weighted_select,
@@ -177,56 +191,70 @@ impl SelectArgs {
     }
 }
 
-/// Who selects: the matcher's batches or the keepers' jobs (each has its own share: their races are separate).
+/// Who selects: the matcher's batches or the keepers' jobs. Each has its own share, because their
+/// races are separate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Role {
+    /// The batches of the matcher.
     Match,
+    /// The jobs of the keepers.
     Keep,
 }
 
-/// The runner's selection state: its random source and the share of each role, and what the selection did (metrics).
+/// The selection state of the runner: its random source, the share of each role, and metrics of
+/// what the selection did.
 #[derive(Debug)]
 pub struct Selector {
+    /// The settings.
     pub cfg: SelectConfig,
     rng: StdRng,
+    /// Share of the optional matcher work taken.
     pub share_match: f64,
+    /// Share of the optional keeper work taken.
     pub share_keep: f64,
-    /// Moving averages of the fraction of each role's transactions that lose races.
+    /// Moving average of the fraction of matcher transactions that lose races.
     pub lost_match: f64,
+    /// Moving average of the fraction of keeper transactions that lose races.
     pub lost_keep: f64,
-    /// Units (matcher) and jobs (keepers) the selection judged, took, left for later, and took because they were overdue.
+    /// Counters of what the selection judged, took, left for later and took because it was overdue.
     pub stats: SelectStats,
-    /// The DAA score from which each order has been crossable, as the matcher's sampling ticks saw it (in a work unit's
-    /// standalone allocation, taken or left): the starvation bound counts from it (`EngineConfig::select_since`).
+    /// The DAA score from which each order has been crossable, as the sampling ticks of the matcher
+    /// saw it in the standalone allocation of a work unit, taken or left. The starvation bound
+    /// counts from it (`EngineConfig::select_since`).
     pub history: BTreeMap<[u8; 32], u64>,
 }
 
-/// Counters of the selection (cumulative, `kob_select_*` metrics).
+/// Counters of the selection: cumulative, exported as `kob_select_*` metrics.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SelectStats {
-    /// Ticks that sampled (a share below one).
+    /// Ticks that sampled, which is when the share was below one.
     pub sampled_ticks: u64,
     /// Matcher units judged in sampling ticks, mandatory ones included.
     pub units: u64,
-    /// Matcher units taken because they were overdue (the starvation bound) and not otherwise mandatory.
+    /// Matcher units taken because they were overdue (the starvation bound) and not otherwise
+    /// mandatory.
     pub overdue: u64,
     /// Optional matcher units taken by the sample.
     pub taken: u64,
     /// Optional matcher units left for later.
     pub deferred: u64,
-    /// Keeper jobs taken by the sample, left for later, and taken because they were overdue.
+    /// Keeper jobs taken by the sample.
     pub keeper_taken: u64,
+    /// Keeper jobs left for later.
     pub keeper_deferred: u64,
+    /// Keeper jobs taken because they were overdue.
     pub keeper_overdue: u64,
-    /// Orders this executor left for later that another transaction took before it did (the races it did not run: a proxy
-    /// of the collisions avoided).
+    /// Orders this executor left for later that another transaction took before it did. It is a
+    /// proxy of the collisions avoided: the races it did not run.
     pub ceded: u64,
-    /// Steps that lost a race (matcher, keepers).
+    /// Matcher steps that lost a race.
     pub lost_steps_match: u64,
+    /// Keeper steps that lost a race.
     pub lost_steps_keep: u64,
 }
 
 impl Selector {
+    /// A selector with shares of 1, no losses and an empty history.
     pub fn new(cfg: SelectConfig) -> Self {
         let rng = match cfg.seed {
             Some(s) => StdRng::seed_from_u64(s),
@@ -244,6 +272,7 @@ impl Selector {
         }
     }
 
+    /// The current share of `role`.
     pub fn share(&self, role: Role) -> f64 {
         match role {
             Role::Match => self.share_match,
@@ -251,7 +280,7 @@ impl Selector {
         }
     }
 
-    /// The selection of the next tick of `role` (None when the selection is off).
+    /// The selection of the next tick of `role`. None when the selection is off.
     pub fn tick(&mut self, role: Role) -> Option<TickSelect> {
         if !self.cfg.enabled {
             return None;
@@ -265,9 +294,10 @@ impl Selector {
         })
     }
 
-    /// Records the orders a matcher tick found crossable at `daa` (every order of its work units, [`TickSelect`] ticks only;
-    /// none for a tick that did not sample): each keeps the score it first became crossable at, the others leave the history
-    /// (an order that stops crossing starts again when it crosses again).
+    /// Records the orders a matcher tick found crossable at `daa`: every order of its work units,
+    /// on ticks that sample only (none for a tick that did not). Each keeps the score it first
+    /// became crossable at, and the others leave the history. An order that stops crossing starts
+    /// again when it crosses again.
     pub fn record(&mut self, crossable: &[[u8; 32]], daa: u64) {
         let now: BTreeSet<&[u8; 32]> = crossable.iter().collect();
         self.history.retain(|id, _| now.contains(id));
@@ -276,10 +306,13 @@ impl Selector {
         }
     }
 
-    /// What a step of `role` saw: `lost` transactions that lost a race (refused as a double spend or missing input, or dropped
-    /// because another transaction spent an input), `sent` taken into the mempool. The step's lost fraction enters the
-    /// role's moving average, and the share becomes the fair share that average implies ([`fair_share`]), never below
-    /// `min_share`. A step that submitted nothing changes nothing.
+    /// Records what a step of `role` saw: `lost` transactions that lost a race (refused as a
+    /// double spend or missing input, or dropped because another transaction spent an input), and
+    /// `sent` taken into the mempool.
+    ///
+    /// The lost fraction of the step enters the moving average of the role, and the share becomes
+    /// the fair share that average implies ([`fair_share`]), never below `min_share`. A step that
+    /// submitted nothing changes nothing.
     pub fn observe(&mut self, role: Role, lost: usize, sent: usize) {
         if !self.cfg.enabled || lost + sent == 0 {
             return;
@@ -304,14 +337,18 @@ impl Selector {
 /// Below this average lost fraction the executor counts as alone: share 1, the reference planner.
 pub const ALONE_LOST_FRACTION: f64 = 0.02;
 
-/// The fair share of an executor that took a share `s` of the optional work and lost a fraction `lost` of its transactions.
+/// The fair share of an executor that took a share `s` of the optional work and lost a fraction
+/// `lost` of its transactions.
 ///
-/// A unit the executor takes is also taken by `K` others, `K` about Poisson with mean `λ = (n − 1)·s` when the `n − 1` other
-/// executors take the same share; the transactions reach the node in a random order, so the executor loses a unit with
-/// probability `E[K / (K + 1)] = 1 − (1 − e^−λ) / λ`. The observed fraction gives `λ`, hence `n = 1 + λ / s` and the fair
-/// share `1 / n = s / (s + λ)`. Two executors settle at one half each, three at one third; a lone executor (no losses) at
-/// one. Against an executor that takes everything the loss stays at one half whatever the share, and the share falls to
-/// `min_share`.
+/// A unit the executor takes is also taken by `K` others. `K` is about Poisson with mean
+/// `λ = (n − 1)·s` when the `n − 1` other executors take the same share. The transactions reach
+/// the node in a random order, so the executor loses a unit with probability
+/// `E[K / (K + 1)] = 1 − (1 − e^−λ) / λ`. The observed fraction gives `λ`, hence `n = 1 + λ / s`
+/// and the fair share `1 / n = s / (s + λ)`.
+///
+/// Two executors settle at one half each, three at one third, and a lone executor (no losses) at
+/// one. Against an executor that takes everything the loss stays at one half whatever the share,
+/// and the share falls to `min_share`.
 pub fn fair_share(s: f64, lost: f64) -> f64 {
     if !lost.is_finite() || lost < ALONE_LOST_FRACTION {
         return 1.0;
@@ -332,9 +369,12 @@ pub fn fair_share(s: f64, lost: f64) -> f64 {
     (s / (s + lam)).clamp(0.0, 1.0)
 }
 
-/// The weight of a unit (a job): its profit per byte relative to the best of its tick, to the power `alpha`. Relative so that
-/// the floating point never overflows (Kaspa keeps `feerate^3` in f64 for the same range, `frontier.rs:241-248`); every weight
-/// stays positive, so every optional unit keeps a chance.
+/// The weight of a unit (a job): its profit per byte relative to the best of its tick, to the power
+/// `alpha`.
+///
+/// The weight is relative so that the floating point never overflows (Kaspa keeps `feerate^3` in
+/// f64 for the same range, `frontier.rs:241-248`). Every weight stays positive, so every optional
+/// unit keeps a chance.
 pub fn weights(rates: &[f64], alpha: f64) -> Vec<f64> {
     let top = rates.iter().copied().filter(|r| r.is_finite()).fold(0.0f64, f64::max);
     rates
@@ -351,13 +391,14 @@ pub fn weights(rates: &[f64], alpha: f64) -> Vec<f64> {
         .collect()
 }
 
-/// Profit per byte of a unit or job (a profit below one sompi counts as one: still a candidate).
+/// Profit per byte of a unit or job. A profit below one sompi counts as one, so it is still a
+/// candidate.
 pub fn rate(profit: i64, bytes: u64) -> f64 {
     profit.max(1) as f64 / bytes.max(1) as f64
 }
 
-/// How many of `m` optional units a tick takes at `share`: `share · m` rounded at random (its expectation is exactly
-/// `share · m`), at most `m`.
+/// How many of `m` optional units a tick takes at `share`: `share · m` rounded at random, so that
+/// its expectation is exactly `share · m`, and at most `m`.
 pub fn take_count(share: f64, m: usize, rng: &mut impl Rng) -> usize {
     let x = share.clamp(0.0, 1.0) * m as f64;
     let base = x.floor();
@@ -365,10 +406,12 @@ pub fn take_count(share: f64, m: usize, rng: &mut impl Rng) -> usize {
     ((base as usize) + extra).min(m)
 }
 
-/// Weighted sampling without replacement: `k` indices of `weights`, each draw proportional to the weights of the indices not
-/// drawn yet (Kaspa's `MutatingTreeSelector::select_transactions`: a uniform query in `[0, total weight)` picks the key whose
-/// prefix weight covers it, and the key leaves the tree). The order of the result is the draw order. The units of a tick are
-/// few (one per token component), so a linear scan replaces Kaspa's search tree.
+/// Weighted sampling without replacement: `k` indices of `weights`, in draw order.
+///
+/// Each draw is proportional to the weights of the indices not drawn yet. This is Kaspa's
+/// `MutatingTreeSelector::select_transactions`: a uniform query in `[0, total weight)` picks the
+/// key whose prefix weight covers it, and the key leaves the tree. The units of a tick are few
+/// (one per token component), so a linear scan replaces the search tree of Kaspa.
 pub fn sample(weights: &[f64], k: usize, rng: &mut impl Rng) -> Vec<usize> {
     let mut left: Vec<usize> = (0..weights.len()).collect();
     let mut out = Vec::with_capacity(k.min(weights.len()));
@@ -398,8 +441,8 @@ pub fn sample(weights: &[f64], k: usize, rng: &mut impl Rng) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    /// The draws follow the weights: the first draw of a heavy unit is about as frequent as its weight's share, and every
-    /// unit, the lightest included, is drawn sometimes.
+    /// The draws follow the weights: the first draw of a heavy unit is about as frequent as the
+    /// share of its weight, and every unit, the lightest included, is drawn sometimes.
     #[test]
     fn draws_follow_the_weights_and_every_unit_keeps_a_chance() {
         let w = [8.0, 4.0, 2.0, 1.0, 1.0];
@@ -423,7 +466,8 @@ mod tests {
             assert!((got - want).abs() < 0.01, "unit {i}: first draw {got:.3}, weight share {want:.3}");
             assert!(any[i] > 0);
         }
-        // the heaviest unit is in the sample at least as often as the share of the units the sample takes (2 of 5)
+        // The heaviest unit is in the sample at least as often as the share of the units the
+        // sample takes (2 of 5).
         assert!(any[0] as f64 / n as f64 >= 0.4);
     }
 
@@ -443,7 +487,8 @@ mod tests {
         assert_eq!(take_count(0.5, 0, &mut rng), 0);
     }
 
-    /// Weights are relative to the best rate, positive and finite at any exponent; exponent 0 is uniform.
+    /// Weights are relative to the best rate, and positive and finite at any exponent. Exponent 0
+    /// is uniform.
     #[test]
     fn weights_are_relative_positive_and_finite() {
         let w = weights(&[1e12, 1.0, 0.0, f64::NAN], 3.0);
@@ -453,8 +498,8 @@ mod tests {
         assert!((weights(&[4.0, 2.0], 1.0)[1] - 0.5).abs() < 1e-12);
     }
 
-    /// The command line: on by default with the documented defaults; `--no-weighted-select` turns it off; out-of-range values
-    /// are refused.
+    /// The command line: on by default with the documented defaults, `--no-weighted-select` turns
+    /// it off, and out-of-range values are refused.
     #[test]
     fn the_command_line_turns_it_on_by_default() {
         use clap::Parser;
@@ -474,7 +519,8 @@ mod tests {
         }
     }
 
-    /// The fair share: one alone, one half against one other executor taking the same share, one third against two.
+    /// The fair share: one alone, one half against one other executor taking the same share, and
+    /// one third against two.
     #[test]
     fn the_fair_share_counts_the_executors() {
         let poisson_loss = |lam: f64| 1.0 - (1.0 - (-lam).exp()) / lam;
@@ -484,14 +530,15 @@ mod tests {
             let lost = poisson_loss((n - 1.0) * s);
             assert!((fair_share(s, lost) - 1.0 / n).abs() < 1e-6, "{n} executors at their fair share stay there");
         }
-        // from everything (one transaction against another executor's identical one: half lost) to below a half
+        // From everything (one transaction against another executor's identical one: half lost) to
+        // below a half.
         let s1 = fair_share(1.0, 0.5);
         assert!(s1 > 0.3 && s1 < 0.5, "{s1}");
         assert!(fair_share(0.1, 0.5) < 0.1, "an executor that takes everything pushes the share down");
     }
 
-    /// The share: one at the start, lowered by the races the executor loses, back to one once they stop; never below the
-    /// minimum; the same seed gives the same ticks.
+    /// The share: one at the start, lowered by the races the executor loses and back to one once
+    /// they stop, never below the minimum. The same seed gives the same ticks.
     #[test]
     fn the_share_follows_the_races_and_the_seed_reproduces_the_ticks() {
         let cfg = SelectConfig { enabled: true, seed: Some(42), ..SelectConfig::default() };
