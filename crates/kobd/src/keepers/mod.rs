@@ -752,8 +752,9 @@ fn spends_of(built: &BuiltTx) -> BTreeSet<Outpoint> {
 /// Among the kills, refunds and closes due at most `max_defer_daa` ago, `share` of them in
 /// expectation are drawn without replacement. A job due longer is built by every keeper (the
 /// starvation bound). The probability is proportional to `(tip per byte)^alpha`, as in Kaspa's
-/// template selection ([`crate::matcher::select`]). Returns the orders whose jobs wait for the next
-/// tick.
+/// template selection ([`crate::matcher::select`]). The due jobs may be many (one per order), so they
+/// are drawn with [`crate::matcher::select::sample_keyed`], in `O(n log n)`. Returns the orders whose
+/// jobs wait for the next tick.
 fn select_jobs(orders: &[&ListedOrder], inp: &KeeperInput, cfg: &KeeperConfig, report: &mut KeeperReport) -> BTreeSet<CovId> {
     use crate::matcher::candidate::{redeem_len, INPUT_BYTES, OUTPUT_BYTES};
     let Some(sel) = cfg.select.filter(|s| s.samples()) else { return BTreeSet::new() };
@@ -787,7 +788,7 @@ fn select_jobs(orders: &[&ListedOrder], inp: &KeeperInput, cfg: &KeeperConfig, r
     let k = crate::matcher::select::take_count(sel.share(), optional.len(), &mut rng);
     let rates: Vec<f64> = optional.iter().map(|x| x.1).collect();
     let picks: BTreeSet<usize> =
-        crate::matcher::select::sample(&crate::matcher::select::weights(&rates, sel.alpha()), k, &mut rng).into_iter().collect();
+        crate::matcher::select::sample_keyed(&crate::matcher::select::weights(&rates, sel.alpha()), k, &mut rng).into_iter().collect();
     report.sampled = optional.len();
     report.taken = picks.len();
     let out: BTreeSet<CovId> = optional.iter().enumerate().filter(|(i, _)| !picks.contains(i)).map(|(_, (id, _))| *id).collect();

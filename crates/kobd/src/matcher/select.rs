@@ -410,8 +410,9 @@ pub fn take_count(share: f64, m: usize, rng: &mut impl Rng) -> usize {
 ///
 /// Each draw is proportional to the weights of the indices not drawn yet. This is Kaspa's
 /// `MutatingTreeSelector::select_transactions`: a uniform query in `[0, total weight)` picks the
-/// key whose prefix weight covers it, and the key leaves the tree. The units of a tick are few
-/// (one per token component), so a linear scan replaces the search tree of Kaspa.
+/// key whose prefix weight covers it, and the key leaves the tree. The matcher's units of a tick
+/// are few (one per token component), so a linear scan replaces the search tree of Kaspa. It costs
+/// about `k · n`. The keepers, with one unit per due job, use [`sample_keyed`].
 pub fn sample(weights: &[f64], k: usize, rng: &mut impl Rng) -> Vec<usize> {
     let mut left: Vec<usize> = (0..weights.len()).collect();
     let mut out = Vec::with_capacity(k.min(weights.len()));
@@ -437,9 +438,90 @@ pub fn sample(weights: &[f64], k: usize, rng: &mut impl Rng) -> Vec<usize> {
     out
 }
 
+/// [`sample`] for many units: the same distribution in `O(n log n)`.
+///
+/// Each index gets the key `ln(weight) + G`, where `G = −ln(−ln u)` is a Gumbel variable of a
+/// uniform `u` in `(0, 1]`, and the `k` largest keys are drawn, largest first. This is the
+/// Gumbel-top-k form of the Efraimidis–Spirakis weighted sampling. Its draws have exactly the
+/// probabilities of [`sample`]: each in turn proportional to the weights of the indices not drawn
+/// yet. It takes one random number per index, not one per draw, so the same seed selects
+/// differently than [`sample`] does. A weight that is not positive and finite counts as the
+/// smallest positive one, as [`weights`] makes it.
+pub fn sample_keyed(weights: &[f64], k: usize, rng: &mut impl Rng) -> Vec<usize> {
+    let k = k.min(weights.len());
+    if k == 0 {
+        return vec![];
+    }
+    let mut keyed: Vec<(f64, usize)> = weights
+        .iter()
+        .enumerate()
+        .map(|(i, &w)| {
+            let w = if w.is_finite() && w > 0.0 { w } else { f64::MIN_POSITIVE };
+            // u = 1 gives +inf, the best key; u is never 0, so every key is above −inf
+            let u = 1.0 - rng.gen::<f64>();
+            (w.ln() - (-u.ln()).ln(), i)
+        })
+        .collect();
+    let best_first = |a: &(f64, usize), b: &(f64, usize)| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1));
+    if k < keyed.len() {
+        keyed.select_nth_unstable_by(k - 1, best_first);
+        keyed.truncate(k);
+    }
+    keyed.sort_unstable_by(best_first);
+    keyed.into_iter().map(|(_, i)| i).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`sample_keyed`] draws with the distribution of [`sample`]: the first draw follows the weights, and so do the
+    /// second (the weights of the indices left) and the inclusion of each index. It handles a hundred thousand units at
+    /// once, which the linear scan of [`sample`] cannot in a tick (about `k · n`, here 5e9).
+    #[test]
+    fn the_keyed_sample_has_the_distribution_of_the_linear_one() {
+        let w = [8.0, 4.0, 2.0, 1.0, 1.0];
+        let n = 60_000;
+        let freq = |f: &dyn Fn(&mut StdRng) -> Vec<usize>, seed: u64| {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let (mut first, mut second, mut any) = ([0f64; 5], [0f64; 5], [0f64; 5]);
+            for _ in 0..n {
+                let s = f(&mut rng);
+                assert_eq!(s.len(), 2);
+                assert_ne!(s[0], s[1], "without replacement");
+                first[s[0]] += 1.0 / n as f64;
+                second[s[1]] += 1.0 / n as f64;
+                for i in s {
+                    any[i] += 1.0 / n as f64;
+                }
+            }
+            (first, second, any)
+        };
+        let linear = freq(&|r| sample(&w, 2, r), 7);
+        let keyed = freq(&|r| sample_keyed(&w, 2, r), 8);
+        let total: f64 = w.iter().sum();
+        for i in 0..5 {
+            assert!((keyed.0[i] - w[i] / total).abs() < 0.01, "unit {i}: first draw {:.3}", keyed.0[i]);
+            // the exact probability of a second draw: the sum over the first draw j of p(j) · w[i] / (total − w[j])
+            let p2: f64 = (0..5).filter(|j| *j != i).map(|j| w[j] / total * w[i] / (total - w[j])).sum();
+            assert!((keyed.1[i] - p2).abs() < 0.01, "unit {i}: second draw {:.3}, exact {p2:.3}", keyed.1[i]);
+            assert!((keyed.1[i] - linear.1[i]).abs() < 0.015 && (keyed.2[i] - linear.2[i]).abs() < 0.015, "unit {i}");
+        }
+        // the edges: none, all, more than there are
+        let mut rng = StdRng::seed_from_u64(1);
+        assert!(sample_keyed(&w, 0, &mut rng).is_empty() && sample_keyed(&[], 3, &mut rng).is_empty());
+        let mut all = sample_keyed(&w, 9, &mut rng);
+        all.sort();
+        assert_eq!(all, vec![0, 1, 2, 3, 4]);
+        let odd = sample_keyed(&[f64::NAN, -1.0, f64::INFINITY, 1.0], 4, &mut rng);
+        assert_eq!(odd.len(), 4);
+        // a hundred thousand due jobs, half taken
+        let many: Vec<f64> = (0..100_000).map(|i| 1.0 + (i % 7) as f64).collect();
+        let t0 = std::time::Instant::now();
+        let picks = sample_keyed(&many, 50_000, &mut rng);
+        assert!(t0.elapsed() < std::time::Duration::from_secs(10), "{:?}", t0.elapsed());
+        assert_eq!(picks.iter().collect::<BTreeSet<_>>().len(), 50_000);
+    }
 
     /// The draws follow the weights: the first draw of a heavy unit is about as frequent as the
     /// share of its weight, and every unit, the lightest included, is drawn sometimes.
