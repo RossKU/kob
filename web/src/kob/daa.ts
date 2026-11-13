@@ -1,41 +1,58 @@
-// DAA score <-> wall clock, order lifetimes and the protocol timing defaults (docs/spec/matcher.md section 10, items 2-4 and 10).
+// Converts between DAA score and wall clock, and holds order lifetimes and the protocol timing
+// defaults (docs/spec/matcher.md section 10, items 2 to 4 and 10).
 //
-// The chain has no clock: covenants see DAA scores (about 10 per second at 10 BPS). The wallet reads the node's virtual DAA score D0
-// and the UTC wall clock T0 together (`Clock`), maps wall-clock wishes to DAA with the measured rate r (clamped to 9.5..10.5 DAA/s)
-// and shows "expires around" for the way back. The day-order rule itself lives in Rust (`kob.dayOrder`, defaults.rs): never re-derive it.
+// The chain has no clock. Covenants see DAA scores, about 10 per second at 10 BPS. The wallet reads
+// the node's virtual DAA score and the UTC wall clock together (`Clock`). It maps wall-clock wishes
+// to DAA with the measured rate, clamped to 9.5..10.5 DAA/s, and shows "expires around" for the way
+// back. The day-order rule lives in Rust (`kob.dayOrder`, defaults.rs). It is never re-derived
+// here.
 import type { Clock } from './plan-types';
 import type { KobWasm } from './wasm';
 import { ceilDiv, roundDiv } from './units';
 
-// ------------------------------------------------------------------------------------------------ protocol constants (mirror defaults.rs / contracts)
+// --- Protocol constants, mirroring defaults.rs and the contracts ---
 
-/** Nominal DAA rate in milli-DAA per second (10 DAA/s) and the accepted measurement range (matcher.md 10.10). */
+/** The nominal DAA rate in milli-DAA per second, which is 10 DAA/s. */
 export const DAA_RATE_NOMINAL = 10_000;
+/** The lowest measured DAA rate accepted, in milli-DAA per second (matcher.md 10, item 10). */
 export const DAA_RATE_MIN = 9_500;
+/** The highest measured DAA rate accepted, in milli-DAA per second. */
 export const DAA_RATE_MAX = 10_500;
 
-/** `MAX_IDLE` of the covenants: 90 days at 10 DAA/s. An order untouched this long is refundable by anyone. */
+/** `MAX_IDLE` of the covenants, 90 days at 10 DAA/s. Anyone can refund an order idle this long. */
 export const MAX_IDLE_DAA = 77_760_000n;
-/** Covenant IOC / FOK kill: refundable this many DAA after the order became fillable (60 s). */
+/**
+ * The covenant IOC and FOK kill. The order is refundable this many DAA after it is fillable (60 s).
+ */
 export const IOC_KILL_DAA = 600n;
-/** Wallet life of an IOC / FOK order (30 s, matcher.md 10.4): the covenant kill is at IOC_KILL_DAA. */
+/** The wallet life of an IOC or FOK order, 30 s (matcher.md 10, item 4). The kill comes later. */
 export const IOC_LIFE_DAA = 300n;
-/** Market order: auction length from the touch to the slippage bound (20 s), activation delay, slippage bound (matcher.md 10.2). */
+/**
+ * Length of a market auction from the touch to the slippage bound, 20 s (matcher.md 10, item 2).
+ */
 export const MARKET_AUCTION_DAA = 200n;
+/** Delay before a market order activates. */
 export const MARKET_ACTIVATION_DAA = 30n;
+/** Slippage bound of a market order in basis points. */
 export const SLIPPAGE_BPS = 300n;
-/** Stop auction length (30 s) and trigger rest time R (5 s: the evidence order's exposure, matcher.md §4 / §10); used by the conditional planner. */
+/** Length of a stop auction, 30 s. The conditional planner uses it. */
 export const STOP_BAND_DAA = 300n;
+/** Trigger rest time, 5 s, which is the exposure of the evidence order (matcher.md section 4). */
 export const MIN_REST_DAA = 50n;
 
+/** Seconds in a day. */
 export const DAY_SECONDS = 86_400n;
+/** Life of a GTC order in days. */
 export const GTC_DAYS = 90n;
-/** A GTC order should be renewed (cancel-replace) before this day of its 90-day life (matcher.md 10.10). */
+/** The day of a GTC order's life before which it should be renewed by cancel and replace. */
 export const GTC_RENEW_DAY = 85n;
 
-// ------------------------------------------------------------------------------------------------ rate and conversions
+// --- Rate and conversions ---
 
-/** Integer milli-DAA/s within the accepted range; a missing or non-finite measurement falls back to the nominal 10 DAA/s. */
+/**
+ * Returns an integer milli-DAA/s in the accepted range. A missing or non-finite rate gives 10
+ * DAA/s.
+ */
 export function clampRate(rateMilli: number | null | undefined): number {
   if (rateMilli == null || !Number.isFinite(rateMilli)) return DAA_RATE_NOMINAL;
   return Math.min(DAA_RATE_MAX, Math.max(DAA_RATE_MIN, Math.round(rateMilli)));
@@ -43,7 +60,7 @@ export function clampRate(rateMilli: number | null | undefined): number {
 
 const rateOf = (clock: Clock): bigint => BigInt(clampRate(clock.rateMilli));
 
-/** DAA elapsed in `seconds` at the clock's rate, rounded up (a wish for "at least this long"). */
+/** DAA elapsed in `seconds` at the clock's rate, rounded up so the span is at least that long. */
 export const secondsToDaa = (clock: Clock, seconds: bigint): bigint => {
   if (seconds < 0n) throw new RangeError('secondsToDaa: negative duration');
   return ceilDiv(seconds * rateOf(clock), 1000n);
@@ -58,25 +75,28 @@ export const daaToSeconds = (clock: Clock, daa: bigint): bigint => {
 /** A span of time given either in DAA (protocol units) or in seconds (what a user types). */
 export type Duration = { daa: bigint } | { seconds: bigint };
 
+/** Converts a Duration to DAA. */
 export const durationToDaa = (clock: Clock, d: Duration): bigint => ('daa' in d ? d.daa : secondsToDaa(clock, d.seconds));
 
-/** Wall-clock time (UTC unix seconds) at which the chain reaches `daa`: "expires around". Works for past scores too. */
+/** Returns the UTC unix seconds at which the chain reaches `daa`. It works for past scores too. */
 export function daaToUnix(clock: Clock, daa: bigint): bigint {
   const delta = daa - clock.daa;
   return delta >= 0n ? clock.unixSeconds + daaToSeconds(clock, delta) : clock.unixSeconds - daaToSeconds(clock, -delta);
 }
 
-/** DAA score the chain will have at UTC time `unix` (rounded so the order does not end early). Works for past times too. */
+/** Returns the DAA score at UTC time `unix`, rounded so an order does not end early. */
 export function unixToDaa(clock: Clock, unix: bigint): bigint {
   const delta = unix - clock.unixSeconds;
   return delta >= 0n ? clock.daa + secondsToDaa(clock, delta) : clock.daa - secondsToDaa(clock, -delta);
 }
 
 /**
- * The DAA score for a user's date, on the side of the user's intent: the score at the measured rate and at the nominal 10 DAA/s, the
- * earlier of the two for an end (`'end'`: a GTD expiry never lets honest matchers fill past the date unless the chain is slower than
- * both rates) and the later for a start (`'start'`: a timed activation never opens before the date unless the chain is faster than
- * both). With a rate measured over hours the two differ little; a stale or wrong rate cannot move the date the wrong way.
+ * Returns the DAA score for a user's date, on the safe side of the user's intent.
+ *
+ * It takes the score at the measured rate and at the nominal 10 DAA/s. For an `'end'`, such as a
+ * GTD expiry, it takes the earlier one, so honest matchers do not fill past the date. For a
+ * `'start'`, such as a timed activation, it takes the later one, so the order does not open early.
+ * A stale or wrong rate therefore cannot move the date the wrong way.
  */
 export function unixToDaaBound(clock: Clock, unix: bigint, side: 'start' | 'end'): bigint {
   const measured = unixToDaa(clock, unix);
@@ -85,38 +105,44 @@ export function unixToDaaBound(clock: Clock, unix: bigint, side: 'start' | 'end'
   return side === 'end' ? (measured < nominal ? measured : nominal) : measured > nominal ? measured : nominal;
 }
 
-// ------------------------------------------------------------------------------------------------ lifetimes
+// --- Lifetimes ---
 
+/** The lifetime kinds of an order. */
 export type ExpiryKind = 'gtc' | 'gtd' | 'day' | 'ioc' | 'fok';
 
+/** The resolved lifetime of an order. */
 export interface Expiry {
   kind: ExpiryKind;
-  /** `expiryDaa` of the order state */
+  /** The `expiryDaa` of the order state. */
   expiryDaa: bigint;
-  /** day orders: the wall-clock deadline (UTC unix seconds) of the placement record; otherwise null */
+  /**
+   * For a day order, the wall-clock deadline (UTC unix seconds) of the placement record, else null.
+   */
   deadline: bigint | null;
-  /** approximate UTC unix seconds at `expiryDaa` ("expires around") */
+  /** Approximate UTC unix seconds at `expiryDaa`, shown as "expires around". */
   approxUnixSeconds: bigint;
 }
 
+/** Inputs of `expiryFor`. Which fields are read depends on the kind. */
 export interface ExpiryOptions {
-  /** required for 'day' (the rule lives in kob-wasm) */
+  /** Required for 'day', because the rule lives in kob-wasm. */
   kob?: KobWasm;
-  /** 'gtd': the user's date, UTC unix seconds */
+  /** For 'gtd', the user's date in UTC unix seconds. */
   at?: bigint;
-  /** 'ioc' / 'fok': life in DAA counted from `activeFrom` (default IOC_LIFE_DAA) */
+  /** For 'ioc' and 'fok', the life in DAA counted from `activeFrom`. Defaults to IOC_LIFE_DAA. */
   lifeDaa?: bigint;
-  /** 'ioc' / 'fok': DAA from which the order is fillable (default: now) */
+  /** For 'ioc' and 'fok', the DAA from which the order is fillable. Defaults to now. */
   activeFrom?: bigint;
 }
 
 /**
- * Maps a lifetime kind to the on-chain `expiryDaa` (and the day-order deadline).
- *  - gtc: placement + MAX_IDLE (the covenant also refunds after 90 days without activity);
- *  - gtd: the user's date, the earlier of the measured and the nominal rate (`unixToDaaBound`); NOT clamped here (guards.checkExpiry
- *    refuses dates beyond 90 days);
- *  - day: `kob.dayOrder` (until the next 00:00 UTC, 1% margin, deadline in the placement record);
- *  - ioc / fok: `activeFrom + life` (default 300 DAA, the covenant kills at 600 after it became fillable).
+ * Maps a lifetime kind to the on-chain `expiryDaa` and, for a day order, the deadline.
+ *
+ * - gtc: placement plus MAX_IDLE. The covenant also refunds after 90 days without activity.
+ * - gtd: the user's date via `unixToDaaBound`. It is not clamped here, because
+ *   guards.checkExpiry refuses dates beyond 90 days.
+ * - day: `kob.dayOrder`, which runs until the next 00:00 UTC with a 1% margin.
+ * - ioc and fok: `activeFrom` plus the life, 300 DAA by default. The covenant kills at 600.
  */
 export function expiryFor(kind: ExpiryKind, clock: Clock, opt: ExpiryOptions = {}): Expiry {
   let expiryDaa: bigint;
@@ -144,27 +170,27 @@ export function expiryFor(kind: ExpiryKind, clock: Clock, opt: ExpiryOptions = {
   return { kind, expiryDaa, deadline, approxUnixSeconds: daaToUnix(clock, expiryDaa) };
 }
 
-/** Day order until the next 00:00 UTC, computed by kob-wasm (matcher.md 10.10). */
+/** Computes the expiry and deadline of a day order, which ends at the next 00:00 UTC. */
 export function dayOrderFor(kob: KobWasm, clock: Clock): { expiryDaa: bigint; deadline: bigint } {
   const d = kob.dayOrder(clock.daa, clock.unixSeconds, BigInt(clampRate(clock.rateMilli)));
   return { expiryDaa: BigInt(d.expiryDaa), deadline: BigInt(d.deadline) };
 }
 
-/** Seconds left until the next 00:00 UTC. */
+/** Returns the seconds left until the next 00:00 UTC. */
 export const secondsToNextMidnight = (unix: bigint): bigint => (unix / DAY_SECONDS + 1n) * DAY_SECONDS - unix;
 
-/** Day 85 of a GTC order placed at `placementUnix`: the date to remind the user to renew (cancel-replace). */
+/** Returns the day to remind the user to renew a GTC order placed at `placementUnix`. */
 export const gtcRenewalUnix = (placementUnix: bigint): bigint => placementUnix + GTC_RENEW_DAY * DAY_SECONDS;
 
-/** Renewal reminder for an existing order from its on-chain `expiryDaa` (five days before it, i.e. day 85 of 90). */
+/** Returns the renewal reminder of an existing order, five days before its on-chain `expiryDaa`. */
 export const renewalUnixForExpiry = (clock: Clock, expiryDaa: bigint): bigint =>
   daaToUnix(clock, expiryDaa) - (GTC_DAYS - GTC_RENEW_DAY) * DAY_SECONDS;
 
-// ------------------------------------------------------------------------------------------------ display
+// --- Display ---
 
 const two = (n: number): string => String(n).padStart(2, '0');
 
-/** `2026-09-30 00:00 UTC`: locale-independent UTC timestamp for the disclosure screens. */
+/** Formats a UTC timestamp like `2030-01-31 00:00 UTC`, independent of the locale. */
 export function formatUtc(unix: bigint): string {
   const d = new Date(Number(unix) * 1000);
   return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
@@ -177,17 +203,20 @@ function localParts(unix: bigint, timeZone?: string): Record<string, string> {
   return Object.fromEntries(f.formatToParts(new Date(Number(unix) * 1000)).map((p) => [p.type, p.value]));
 }
 
-/** `2026-09-30 09:00 GMT+9`: the same instant in the reader's own time zone (`timeZone`: an IANA name, for tests; default the browser's). */
+/**
+ * Formats an instant in the reader's own time zone, like `2030-01-31 09:00 GMT+9`.
+ * `timeZone` is an IANA name and defaults to the browser's.
+ */
 export function formatLocal(unix: bigint, timeZone?: string): string {
   const p = localParts(unix, timeZone);
   return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${p.timeZoneName}`;
 }
 
-/** `09:00 GMT+9`: the clock time of an instant in the reader's own time zone. */
+/** Formats only the clock time of an instant in the reader's own time zone, like `09:00 GMT+9`. */
 export function formatLocalTime(unix: bigint, timeZone?: string): string {
   const p = localParts(unix, timeZone);
   return `${p.hour}:${p.minute} ${p.timeZoneName}`;
 }
 
-/** The next 00:00 UTC after `nowMs` (unix seconds): when a day order placed now ends. */
+/** Returns the next 00:00 UTC after `nowMs` in unix seconds, when a day order placed now ends. */
 export const nextUtcMidnight = (nowMs: number): bigint => BigInt(Math.floor(nowMs / 86_400_000) + 1) * 86_400n;

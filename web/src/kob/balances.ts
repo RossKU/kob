@@ -1,10 +1,13 @@
-// Balances that wallets do not show: tokens in 0x04 custody, stray tokens, and KAS locked in the maker's orders (matcher.md 1.2, 10.9).
+// Balances that wallets do not show: tokens in 0x04 custody, stray tokens, and KAS locked in the
+// maker's orders (matcher.md 1.2 and 10.9).
 //
-//   escrowedBalances(orders)            per token: custody / strays / KAS escrow / KAS carriers, from live OrderViews and/or OrderSnapshots
-//                                       (a pair order counts its custody of A under A and of B under B, its KAS under its base token A)
-//   withFreeBalances(escrowed, utxos)   adds the free (maker P2PK-owned) token balance, and KRON tokens the maker's key holds in a way KOB
-//                                       cannot spend (id_type 0 / 1) -> TokenBalance[]
-// Pure and DOM-free; all amounts bigint (token base units, sompi).
+// - `escrowedBalances(orders)` gives custody, strays, KAS escrow and KAS carriers per token, from
+//   live OrderViews and OrderSnapshots. A pair order counts its custody of A under A and of B
+//   under B, and its KAS under its base token A.
+// - `withFreeBalances(escrowed, utxos)` adds the free token balance owned by the maker's key. It
+//   also adds KRON tokens the key holds in a way KOB cannot spend (id_type 0 or 1).
+//
+// The module is pure and DOM-free. All amounts are bigint, in token base units or sompi.
 import type { OrderView } from '../data/indexer-types';
 import type { OrderSnapshot } from './cancel';
 import { asOrderState, big, custodiesOf, describeOrder, tokenCovIdOf } from './order-facts';
@@ -12,26 +15,38 @@ import { pairOfView } from './pair-view';
 import { isKeyOwned, isKronUnspendable } from './token-state';
 import type { Hex, OrderState, TokenProgram, TokenUtxo } from './types';
 
+/** What the live orders of one token hold in escrow. */
 export interface EscrowedBalance {
   token: Hex;
-  /** tokens in 0x04 custody of live orders (wallets do not show them), base units */
+  /** Tokens in 0x04 custody of live orders, in base units. Wallets do not show them. */
   custody: bigint;
-  /** stray tokens owned by live orders' covenant ids: recoverable only by the maker's cancel, base units */
+  /**
+   * Stray tokens owned by live orders' covenant ids, in base units. Only the maker's cancel
+   * recovers them.
+   */
   strays: bigint;
-  /** KAS budget of bid-side orders (order value minus carriers, reserves and tips), sompi */
+  /** KAS budget of bid-side orders, which is the order value minus carriers, reserves and tips. */
   kasEscrow: bigint;
-  /** KAS locked that is not trading budget: ask carriers, custody / stray token carriers, refund and keeper tips, entry reserves */
+  /**
+   * KAS locked that is not trading budget, in sompi.
+   * It covers ask carriers, custody and stray token carriers, refund and keeper tips, and entry
+   * reserves.
+   */
   kasCarriers: bigint;
-  /** kasEscrow + kasCarriers */
+  /** `kasEscrow` plus `kasCarriers`, in sompi. */
   kasLocked: bigint;
-  /** live orders counted */
+  /** The number of live orders counted. */
   orders: number;
 }
 
+/** The free and escrowed holdings of the maker for one token. */
 export interface TokenBalance {
   token: Hex;
   free: bigint;
-  /** KRON tokens of the maker held by pubkey / script hash (`id_type` 0 / 1): theirs, but the builders do not spend them; not in `free` */
+  /**
+   * KRON tokens held by pubkey or script hash (`id_type` 0 or 1). The builders cannot spend them,
+   * and `free` excludes them.
+   */
   notSpendable: bigint;
   escrowed: bigint;
   strays: bigint;
@@ -41,10 +56,12 @@ export interface TokenBalance {
   orderCount: number;
 }
 
+/** An order that could not be counted, with the reason. */
 export interface SkippedOrder { covenantId: Hex; reason: 'terminal' | 'state-unknown' | 'no-current-utxo' }
+/** The escrowed balances per token and the orders left out of them. */
 export interface EscrowedResult { balances: EscrowedBalance[]; skipped: SkippedOrder[] }
 
-// `killed`: an IOC / FOK / market order whose unfilled rest was returned (indexer processor.rs `(None, Some("kill")) => "killed"`)
+// `killed` is an IOC, FOK or market order whose unfilled rest was returned.
 const TERMINAL = new Set(['filled', 'cancelled', 'refunded', 'killed', 'closed']);
 type Input = OrderView | OrderSnapshot;
 const isView = (o: Input): o is OrderView => 'covenant_id' in o;
@@ -52,9 +69,9 @@ const isView = (o: Input): o is OrderView => 'covenant_id' in o;
 interface Normalised {
   covenantId: Hex;
   state: OrderState;
-  /** order UTXO KAS */
+  /** KAS of the order UTXO. */
   value: bigint;
-  /** custody UTXOs (token, amount, KAS carrier) known (a pair order: of A and / or of B) */
+  /** The known custody UTXOs with token, amount and KAS carrier. A pair order may have A and B. */
   custodies: { token: Hex; amount: bigint; kas: bigint }[];
   strays: { token: Hex; amount: bigint; kas: bigint }[];
 }
@@ -84,7 +101,9 @@ function normalise(o: Input): Normalised | SkippedOrder {
   };
 }
 
-/** Same as {@link escrowedBalances} plus the orders that could not be counted (terminal, state not proven, no current outpoint). */
+/**
+ * Like {@link escrowedBalances}, plus the orders left out (terminal, unproven state, no outpoint).
+ */
 export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
   const by = new Map<Hex, EscrowedBalance>();
   const skipped: SkippedOrder[] = [];
@@ -100,7 +119,8 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
       by.get(t) ?? (by.set(t, { token: t, custody: 0n, strays: 0n, kasEscrow: 0n, kasCarriers: 0n, kasLocked: 0n, orders: 0 }).get(t) as EscrowedBalance);
     const b = row(token);
     b.orders++;
-    // tokens: each custody UTXO's own amount; a custody the input does not show counts what the state says it must hold (per token)
+    // Count each custody UTXO's own amount. A custody the input does not show counts what the
+    // state says it must hold.
     let carriers = 0n;
     const seen = new Set<Hex>();
     for (const c of n.custodies) {
@@ -113,9 +133,9 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
       row(s.token).strays += s.amount;
       carriers += s.kas;
     }
-    // a pair order trades tokens only: its whole value is carriers and its tip prefund (never a KAS trading budget)
+    // A pair order trades tokens only. Its whole value is carriers and its tip prefund.
     if (d.side === 'sell' || d.pair) {
-      // ask kinds: the order UTXO is a carrier (plus prefund / refund tip inside it), never trading budget
+      // For ask kinds the order UTXO is a carrier, with the prefund and refund tip inside it.
       carriers += n.value;
     } else {
       const tips = d.refundTip + (d.trigger?.keeperTip ?? d.entry?.keeperTip ?? 0n);
@@ -133,17 +153,22 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
 }
 
 /**
- * Per token: tokens in custody, strays and KAS locked across LIVE orders. OrderViews and OrderSnapshots may be mixed; terminal orders and
- * views without a proven state are skipped (see {@link escrowedBalancesDetailed} for the list).
+ * Sums custody, strays and locked KAS per token across live orders.
+ * OrderViews and OrderSnapshots may be mixed. Terminal orders and views without a proven state are
+ * skipped, and {@link escrowedBalancesDetailed} lists them.
  */
 export function escrowedBalances(orders: Input[]): EscrowedBalance[] {
   return escrowedBalancesDetailed(orders).balances;
 }
 
 /**
- * Adds the maker's free tokens: the sum of key-owned (KCC-20 owner_scheme 0, KRON address presence; owner == maker) token UTXOs per token covenant id,
- * and apart from it (`notSpendable`) KRON UTXOs of the maker held by pubkey (`id_type` 0) or script hash (1), which the builders do not spend. UTXOs of
- * other owners and covenant-owned ones (custody, strays) are ignored. Tokens present on one side only still appear. Sorted by token id.
+ * Adds the maker's free tokens to the escrowed balances.
+ *
+ * Free is the sum per token covenant id of key-owned token UTXOs whose owner is the maker. That
+ * means KCC-20 owner_scheme 0 or KRON address presence. `notSpendable` is the sum of the maker's
+ * KRON UTXOs held by pubkey (`id_type` 0) or script hash (1), which the builders do not spend.
+ * UTXOs of other owners and covenant-owned ones, such as custody and strays, are ignored. Tokens
+ * present on one side only still appear. The result is sorted by token id.
  */
 export function withFreeBalances(
   escrowed: EscrowedBalance[],
@@ -156,10 +181,11 @@ export function withFreeBalances(
   const seen = new Set<string>();
   for (const u of freeUtxos) {
     if (u.state.owner !== maker || !u.covenantId) continue;
-    // one outpoint counts once (sources may overlap)
+    // Sources may overlap, so each outpoint counts once.
     const k = `${u.transactionId}:${u.index}`;
     if (seen.has(k)) continue;
-    // KRON: the program's holder owner is spendable (address presence, or id_type 0 for a program whose holders are id_type 0)
+    // For KRON the program's holder owner is spendable. That is address presence, or id_type 0 for
+    // a program whose holders are id_type 0.
     const program = programOf(u.covenantId);
     const into = isKeyOwned(u.state, program) ? free : isKronUnspendable(u.state, program) ? other : null;
     if (!into) continue;
@@ -177,7 +203,9 @@ export function withFreeBalances(
   });
 }
 
-/** KAS view: spendable balance, KAS sitting in the maker's orders (all tokens), and the total. */
+/**
+ * Returns the free KAS, the KAS locked in the maker's orders across all tokens, and their total.
+ */
 export function kasBalanceSummary(freeKas: bigint, balances: TokenBalance[]): { free: bigint; locked: bigint; total: bigint } {
   const locked = balances.reduce((s, b) => s + b.kasLocked, 0n);
   return { free: freeKas, locked, total: freeKas + locked };
