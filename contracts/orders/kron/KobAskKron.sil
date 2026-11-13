@@ -293,10 +293,13 @@ contract KobAskKron(
         }
 
         if (outAmount > 0) {
-            // Pin the only token output this order allows: the custody's own template (prefix and
-            // suffix authenticated above) with KronState { owner: outOwner, id_type: outType, amount:
-            // outAmount, is_minter: NOT_MINTER } in canonical push encoding (0x20 owner 0x01 id_type
-            // 0x08 amount 0x01 is_minter): what validateOutputStateWithInputTemplate(outIdx, ..., tokenIn, ...) checks.
+            // Pin the only token output this order allows. It is the
+            // custody's own template, whose prefix and suffix are checked
+            // above, with the state { owner: outOwner, id_type: outType,
+            // amount: outAmount, is_minter: 0 } in canonical push encoding:
+            // 0x20 owner, 0x01 id_type, 0x08 amount, 0x01 is_minter. The
+            // token program checks the same output with
+            // validateOutputStateWithInputTemplate.
             require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                 trs.slice(0, tplPrefixLen) + byte[](0x20) + byte[](outOwner) + byte[](0x01) + byte[](outType) + byte[](0x08)
                     + byte[](outAmount as byte[8]) + byte[](0x0100) + trs.slice(tplPrefixLen + 46, trs.length)
