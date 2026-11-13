@@ -1,41 +1,64 @@
-//! Swap-and-pay (`extra.route`, binding `kob-swap-v1`): the payer pays with token A (or KAS), the
-//! merchant receives KAS or KCC-20 token B, settled through KOB orders in ONE transaction.
+//! The swap-and-pay verifier (`extra.route`, binding `kob-swap-v1`).
 //!
-//! Token A is any allowlisted token of either family (KCC-20 programs, KaspaCom's included, or a KRON
-//! token); token B is a KCC-20 token. Every leg follows the family of its token: KCC-20 orders
-//! (`KobAsk`, `KobBid`) trade KCC-20 tokens, KRON orders (`KobAskKron`, `KobBidKron`) trade KRON
-//! tokens, and one transaction may mix both (A KRON -> KAS -> B KCC-20). Templates, states and slot
-//! layouts come from `kob_protocol` (`TemplateId::ALL`, `token_template`, `TokenState`), never from a
-//! fixed list here.
+//! The payer pays with token A or with KAS, and the merchant receives KAS or a KCC-20 token B.
+//! KOB orders settle the exchange in one transaction. The spec is
+//! `docs/spec/x402-swap-and-pay.md`.
 //!
-//! The transaction is built by `kob_protocol::build::{Batch, SwapRoute}`: order inputs first (input `i`
-//! is paid at output `i`, the anti-aliasing layout), then token inputs (custodies, payer tokens), then
-//! payer KAS funding; outputs are the positional slots `0..k`, order continuations and custody
-//! remainders, KAS payments, the net token outputs and the payer's KAS change.
+//! # Tokens and orders
 //!
-//! What this verifier establishes (fail closed, everything recomputed from the trusted chain view):
+//! Token A is any allowlisted token of either family, a KCC-20 program (KaspaCom's included) or a
+//! KRON token. Token B is a KCC-20 token. Every leg follows the family of its token. KCC-20 orders
+//! (`KobAsk`, `KobBid`) trade KCC-20 tokens, and KRON orders (`KobAskKron`, `KobBidKron`) trade
+//! KRON tokens. One transaction may mix both, as in A KRON -> KAS -> B KCC-20. Templates, states
+//! and slot layouts come from `kob_protocol` (`TemplateId::ALL`, `token_template`, `TokenState`),
+//! never from a list here.
 //!
-//! * every input is classified from the trusted UTXO: a plain `KobAsk` / `KobBid` (template match on the
-//!   redeem script AND `P2SH(redeem) == UTXO script`), an allowlisted token input (a payer's key-owned
-//!   token or an ask's exact custody), or a payer P2PK KAS input; everything else is rejected;
-//! * order inputs are the first `k` inputs; outputs `0..k` are the orders' positional slots, and every
-//!   output bound to an order covenant id (continuations) or recomputed as a custody remainder is
-//!   claimed by an order and never counts as merchant gain (G3: no aliasing);
-//! * the merchant gains exactly `amount` (KAS: one unclaimed output to `payToScriptPublicKey`; token:
-//!   one unclaimed token output whose script is the recomputed `tokenScriptPublicKey`, carrier exact);
-//!   every other unclaimed output is payer-controlled (P2PK of a payer input key, or the payer's token
-//!   change whose script is recomputed);
-//! * borrow is disabled on every KCC-20 token input and every token state the merchant or payer receives
-//!   (G9); a KRON token input is never a minter (`is_minter` 0, the same guarantee) and is owned by a key
-//!   (address presence: the payer's P2PK input is in the transaction) or by the order that custodies it;
-//! * authorization is the payload commitment (`kob-x402-payload-commitment-v1`, `route.payAsset` is
-//!   committed), so every input authorizer's SIGHASH_ALL covers it;
-//! * the script engine executes every order covenant and every token program
+//! # Transaction layout
+//!
+//! `kob_protocol::build::{Batch, SwapRoute}` builds the transaction. Its inputs are, in order:
+//! - the order inputs, where input `i` is paid at output `i` (the anti-aliasing layout);
+//! - the token inputs, which are ask custodies and payer tokens;
+//! - the payer's KAS funding.
+//!
+//! The outputs are the positional slots `0..k`, order continuations and custody remainders, KAS
+//! payments, the net token outputs and the payer's KAS change. Spec section 7 has the layout.
+//!
+//! # What the verifier establishes
+//!
+//! The verifier fails closed and recomputes everything from the trusted chain view.
+//!
+//! - Every input is classified from its trusted UTXO, and an input of no known kind is rejected.
+//!   A payer KAS input is a P2PK UTXO without a covenant. An order input is a `KobAsk` or
+//!   `KobBid` of either family whose redeem script matches the template and hashes to the UTXO
+//!   script. A token input is an allowlisted token, either a payer's key-owned token or the exact
+//!   custody of an ask.
+//! - The order inputs are the first `k` inputs, and outputs `0..k` are their positional slots.
+//!   Order continuations, custody remainders and bid refunds are claimed by their orders too. A
+//!   claimed output never counts as merchant gain, so a fill of the merchant's own order cannot
+//!   pass as a payment (spec section 8.2).
+//! - The merchant gains exactly `amount`. For KAS that is one unclaimed output to
+//!   `payToScriptPublicKey`. For a token it is one unclaimed token output with the recomputed
+//!   `tokenScriptPublicKey` and the exact carrier.
+//! - Every other unclaimed output is payer-controlled. It pays P2PK to the key of a payer input,
+//!   or it is the payer's token change with a recomputed script.
+//! - Borrowing is disabled on every KCC-20 token input and on every token state the merchant or
+//!   the payer receives. A KRON token input is never a minter (`is_minter` 0), which gives the
+//!   same guarantee.
+//! - A KRON token input is owned by the order that custodies it or by a key. A key-owned KRON
+//!   token needs a P2PK input of that key in the transaction (address presence).
+//! - Every payer signature uses SIGHASH_ALL ([`crate::sighash`]).
+//! - The authorization is the payload commitment
+//!   ([`crate::wire::AUTH_VERSION_PAYLOAD`], `kob-x402-payload-commitment-v2`), which also
+//!   commits `route.payAsset`. Every input authorizer's SIGHASH_ALL covers it.
+//! - The script engine executes every order covenant and every token program
 //!   ([`crate::common::check_economics_and_scripts`]).
 //!
-//! An order (or continuation) that is no longer spendable is not a fraud signal but a race: the error is
-//! [`Diag::OrderConflict`], retryable, with the spent order outpoints in `details.orders`; the payer must
-//! re-quote and RE-SIGN (SIGHASH_ALL covers everything, the facilitator can never rebuild: G2).
+//! # Conflicts
+//!
+//! A named order that is no longer spendable is a race, not a fraud signal. The error is
+//! [`Diag::OrderConflict`], retryable, with the spent order outpoints in `details.orders`. The
+//! payer must re-quote and sign again. SIGHASH_ALL covers the whole transaction, so the
+//! facilitator can never rebuild it (spec section 10).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -63,10 +86,10 @@ use crate::wire::{
 /// Most `payAssets` entries an offer may carry.
 pub const MAX_PAY_ASSETS: usize = 16;
 
-/// `route.payAsset` value of a payer who pays with KAS (only when the merchant receives a token).
+/// `route.payAsset` of a payer who pays with KAS, allowed only when the merchant receives a token.
 pub const PAY_ASSET_KAS: &str = ASSET_KAS;
 
-/// Every order template of every family (a script that is none of these is unknown).
+/// Every order template of either family. A script that matches none of them is unknown.
 fn order_templates() -> impl Iterator<Item = TemplateId> {
     TemplateId::ALL.into_iter().filter(|t| !t.is_token())
 }
@@ -76,14 +99,16 @@ fn is_token_shape(redeem: &[u8]) -> bool {
     TemplateId::ALL.into_iter().filter(|t| t.is_token()).any(|t| token_template(t).state_of(redeem).is_some())
 }
 
-// ------------------------------------------------------------------------------------------ script pushes
+// ---------------------------------------------------------------------- script pushes
 
 static SMALL: [[u8; 1]; 17] = [[0], [1], [2], [3], [4], [5], [6], [7], [8], [9], [10], [11], [12], [13], [14], [15], [16]];
 static NEG1: [u8; 1] = [0x81];
 
-/// Splits a signature script into its data pushes. `None` if the script contains anything but pushes
-/// (a covenant / P2SH signature script is pushes only) or a push runs past the end. Small-number
-/// opcodes (`OP_0`, `OP_1NEGATE`, `OP_1`..`OP_16`) count as one-byte pushes.
+/// Splits a signature script into its data pushes.
+///
+/// A covenant or P2SH signature script is pushes only. `None` when the script holds another
+/// opcode or a push runs past the end. `OP_0` is an empty push. `OP_1NEGATE` and
+/// `OP_1`..`OP_16` count as one-byte pushes of their value.
 pub fn script_pushes(script: &[u8]) -> Option<Vec<&[u8]>> {
     let mut out: Vec<&[u8]> = Vec::new();
     let mut i = 0usize;
@@ -128,7 +153,9 @@ pub fn script_pushes(script: &[u8]) -> Option<Vec<&[u8]>> {
     Some(out)
 }
 
-/// The redeem script of a P2SH signature script (its last push).
+/// The redeem script of a P2SH signature script, which is its last push.
+///
+/// `None` when the script is not push-only or the last push is empty.
 pub fn redeem_of(script: &[u8]) -> Option<&[u8]> {
     script_pushes(script)?.last().copied().filter(|r| !r.is_empty())
 }
@@ -138,20 +165,24 @@ pub fn order_template_of(redeem: &[u8]) -> Option<TemplateId> {
     order_templates().find(|id| template(*id).state_of(redeem).is_some())
 }
 
-/// The fill quantity of an order input: its first push, the 8-byte base-unit amount n.
+/// The fill quantity `n` of an order input, in base units.
+///
+/// It is the first push of the signature script, an 8-byte little-endian integer.
 fn fill_arg(pushes: &[&[u8]]) -> Option<i64> {
     let b = pushes.first()?;
     (b.len() == 8).then(|| i64::from_le_bytes(b[..8].try_into().expect("8 bytes")))
 }
 
-// ------------------------------------------------------------------------------------------ the offer
+// ---------------------------------------------------------------------- the offer
 
 /// One `extra.route.payAssets` entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PayAssetOffer {
     /// Covenant id (64 lowercase hex) or `"KAS"`.
     pub asset: String,
+    /// Pinned program hash of a token, `None` for KAS.
     pub template_hash: Option<[u8; 32]>,
+    /// Pinned extension commitment of a token, `None` for KAS.
     pub extension_commitment: Option<[u8; 32]>,
 }
 
@@ -192,7 +223,8 @@ pub fn parse_route_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetOf
         }
         out.push(PayAssetOffer { asset: asset.to_string(), template_hash: th, extension_commitment: ec });
     }
-    // one entry per asset: a second one with other pins is never the one that applies (the first match is)
+    // One entry per asset. A second entry with other pins would never apply, because the first
+    // match wins.
     let mut seen = std::collections::HashSet::new();
     if !out.iter().all(|e| seen.insert(e.asset.as_str())) {
         return Err(req("extra.route.payAssets lists an asset twice"));
@@ -203,22 +235,30 @@ pub fn parse_route_offer(offered: &PaymentRequirements) -> Result<Vec<PayAssetOf
 /// The merchant token of a `kcc20` swap offer, recomputed from the allowlist and the offer.
 #[derive(Clone, Debug)]
 pub struct MerchantToken {
+    /// Covenant id of the token.
     pub id: [u8; 32],
+    /// The token's allowlist entry.
     pub allowed: AllowedToken,
-    /// x-only owner key (from `payTo`).
+    /// x-only owner key, from `payTo`.
     pub owner: [u8; 32],
+    /// KAS value of the merchant token output, in sompi.
     pub carrier: u64,
+    /// Recomputed state of the merchant token output.
     pub state: Kcc20State,
+    /// Recomputed script of the merchant token output.
     pub spk: ScriptPublicKey,
 }
 
-/// A candidate state with borrow enabled (`borrow_scheme` 1..=255, zero guard) whose script equals `spk`.
+/// True when `base` with borrowing enabled has the script `spk`.
+///
+/// It tries every `borrow_scheme` in `1..=255` and keeps the other fields of `base`.
 fn borrow_variant_matches(spk: &ScriptPublicKey, tpl: &kob_protocol::artifacts::Template, base: &Kcc20State) -> bool {
     (1..=255u8).any(|b| &Kcc20State { borrow_scheme: b, ..base.clone() }.spk_with(tpl) == spk)
 }
 
-/// Recomputes the merchant token output of a `kcc20` swap offer (the same rules as the token profile;
-/// this module does not depend on the token verifier).
+/// Recomputes the merchant token output of a `kcc20` swap offer.
+///
+/// It applies the rules of the token profile without depending on the token verifier.
 pub fn merchant_token(pol: &Policy, offered: &PaymentRequirements, env: &Envelope) -> Result<MerchantToken> {
     let id = lower_hex32(&offered.asset).ok_or_else(|| req("asset must be a 64-hex covenant id for the kcc20 profile"))?;
     let allowed = pol
@@ -285,21 +325,23 @@ pub fn merchant_token(pol: &Policy, offered: &PaymentRequirements, env: &Envelop
     Ok(MerchantToken { id, allowed, owner, carrier, state, spk })
 }
 
-// ------------------------------------------------------------------------------------------ facts
+// ---------------------------------------------------------------------- facts
 
 /// Kind of an order leg.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LegKind {
     /// The payer sells token A into a bid (the bid's escrow pays the KAS).
     Bid,
-    /// The payer buys token from an ask.
+    /// The payer buys tokens from an ask.
     Ask,
 }
 
 /// One verified order leg.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LegFact {
+    /// Outpoint of the order input.
     pub outpoint: Outpoint,
+    /// Whether the payer sells into a bid or buys from an ask.
     pub kind: LegKind,
     /// Token base units the leg moves (the order's fill argument n).
     pub units: u128,
@@ -314,10 +356,13 @@ pub struct SwapFacts {
     pub pay_asset: String,
     /// Order outpoints in input order.
     pub orders: Vec<Outpoint>,
+    /// The verified legs, in input order.
     pub legs: Vec<LegFact>,
-    /// Units of the pay asset the payer loses net of change (sompi for KAS, including the fee).
+    /// Units of the pay asset the payer gives up net of change.
+    ///
+    /// For KAS they are sompi, and they include the fee.
     pub payer_spent: u64,
-    /// Keys of the payer's inputs (P2PK KAS inputs and token owners).
+    /// Keys of the payer's inputs, which are P2PK KAS inputs and token owners.
     pub payer_keys: Vec<[u8; 32]>,
     /// Output index of the merchant's gain.
     pub merchant_output: u32,
@@ -338,24 +383,27 @@ struct Leg {
     /// Base units filled.
     amount: i64,
     token: [u8; 32],
-    /// An ask's custody (base units); 0 for a bid.
+    /// An ask's custody in base units, and 0 for a bid.
     amount_left: i64,
     tif: i64,
     maker: [u8; 32],
-    /// A bid: the most KAS its terminal fill can owe the maker as a refund output of its own (the escrow less the delivery
-    /// carrier and the least the fill can spend, `BidState::spend_at` at the lowest quote); 0 for an ask. The bid covenant
-    /// puts that refund at output `M - 1 - input` (M the number of outputs), a plain P2PK output of the maker holding at
-    /// least what the fill leaves. The verifier only uses it to know whether a refund may be due (`REFUND_MIN` or more).
+    /// For a bid, the most KAS its terminal fill can owe the maker as a refund. 0 for an ask.
+    ///
+    /// It is the escrow less the delivery carrier and less the least the fill can spend, which is
+    /// `BidState::spend_at` at the lowest quote. The bid covenant puts the refund at output
+    /// `M - 1 - input`, where `M` is the number of outputs. That is a plain P2PK output of the
+    /// maker holding at least what the fill leaves. The verifier only uses this cap to know whether
+    /// a refund may be due, which needs `REFUND_MIN` or more.
     refund_cap: i64,
 }
 
 enum InKind {
     Order,
-    /// Payer P2PK KAS input.
+    /// A payer P2PK KAS input.
     PayerKas([u8; 32]),
-    /// Payer key-owned token input (KCC-20 P2PK, KRON address presence).
+    /// A payer's key-owned token input, a KCC-20 P2PK owner or a key-held KRON token.
     PayerToken([u8; 32], TokenState),
-    /// Custody token of an ask order.
+    /// The custody token of an ask order.
     Custody(TokenState),
 }
 
@@ -409,8 +457,10 @@ fn token_input(pol: &Policy, entry: &UtxoEntry, redeem: &[u8]) -> Result<(Allowe
     Ok((allowed.clone(), state))
 }
 
-/// Checks an order's token fields against the allowlist and returns the token. `fam` is the family of
-/// the order kind: a KCC-20 order trades KCC-20 tokens and a KRON order KRON tokens.
+/// Checks an order's token fields against the allowlist and returns the token.
+///
+/// `fam` is the family of the order kind. A KCC-20 order trades KCC-20 tokens, and a KRON order
+/// trades KRON tokens.
 fn order_token<'a>(
     pol: &'a Policy,
     fam: Family,
@@ -468,7 +518,7 @@ pub fn verify_swap_facts(
     if !pol.swap_enabled {
         return Err(X402Error::new(Reason::UnsupportedScheme, Diag::RouteUnsupported, "swap-and-pay is not enabled on this verifier"));
     }
-    // 1. envelope, offer and payload route
+    // 1. Envelope, offer and payload route.
     let env = check_envelope(ctx, offered, payload, request_hash)?;
     let pay_offers = parse_route_offer(offered)?;
     let route = payload.payload.route.as_ref().ok_or_else(|| {
@@ -480,7 +530,7 @@ pub fn verify_swap_facts(
     if route.orders.len() > pol.limits.max_inputs {
         return Err(X402Error::payload(Diag::InvalidKaspaX402Payload, "payload.route.orders is too long"));
     }
-    // merchant gain kind
+    // Merchant gain kind.
     let merchant: Option<MerchantToken> = match env.profile {
         Profile::StandardNative => {
             if offered.asset != ASSET_KAS || offered.extra.contains_key("token") {
@@ -496,7 +546,7 @@ pub fn verify_swap_facts(
             return Err(X402Error::new(Reason::UnsupportedScheme, Diag::UnsupportedKaspaExactProfile, "additive is not supported"))
         }
     };
-    // pay asset
+    // Pay asset.
     if route.pay_asset != route.pay_asset.trim() || route.pay_asset.is_empty() {
         return Err(X402Error::payload(Diag::PayAssetNotAccepted, "route.payAsset is malformed"));
     }
@@ -537,8 +587,9 @@ pub fn verify_swap_facts(
         return Err(X402Error::payload(Diag::InvalidAuthorization, "a swap payment is authorized by the payload commitment only"));
     }
 
-    // 2. authorization: the digest commits to the claimed payment output index (checked against the
-    // transaction below), the pay asset, the offer, the payment identifier and the expiry
+    // 2. Authorization. The digest commits to the offer, the request, the pay asset, the payment
+    // identifier, the expiry and the claimed payment output index. The index is checked against the
+    // transaction below.
     let payment_identifier = payment_identifier(payload)?;
     let spk_hex = spk_to_hex(&env.pay_to_spk);
     let digest = payload_commit_digest(&PayloadCommit {
@@ -560,7 +611,7 @@ pub fn verify_swap_facts(
     }
     let expires_ms = check_expiry(ctx.clock.now_ms(), env.max_timeout_seconds, &auth.expires_at)?;
 
-    // 3. transaction shape
+    // 3. Transaction shape.
     let parsed = parse_tx(ctx, payload)?;
     let tx = &parsed.tx;
     if tx.version != 1 || tx.gas != 0 {
@@ -573,7 +624,8 @@ pub fn verify_swap_facts(
     if tx.lock_time > daa {
         return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, "the transaction lock time is in the future"));
     }
-    // classify by signature script BEFORE resolution, to tell a spent order from a spent payer input
+    // Classify by signature script before resolution, to tell a spent order from a spent payer
+    // input.
     let sig_pushes: Vec<Option<Vec<&[u8]>>> = tx.inputs.iter().map(|i| script_pushes(&i.signature_script)).collect();
     let order_hint: Vec<bool> = tx
         .inputs
@@ -587,7 +639,7 @@ pub fn verify_swap_facts(
 
     check_payload_commitment(tx, &digest)?;
 
-    // 4. trusted resolution, with order conflicts told apart
+    // 4. Trusted resolution, with order conflicts told apart.
     let entries = match resolve_entries(ctx, &parsed) {
         Ok(e) => e,
         Err(e) if e.diag == Diag::InvalidKaspaExactUtxo && e.reason == Reason::InvalidTransactionState => {
@@ -610,7 +662,7 @@ pub fn verify_swap_facts(
         Err(e) => return Err(e),
     };
 
-    // 5. classify every input from the trusted UTXO
+    // 5. Classify every input from the trusted UTXO.
     let mut kinds: Vec<InKind> = Vec::with_capacity(entries.len());
     let mut legs: Vec<Leg> = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
@@ -671,8 +723,9 @@ pub fn verify_swap_facts(
                     }
                 }
                 AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
-                    // The lowest quote a fill can take: the price, or for a rising bid priceEnd when that is lower (the
-                    // covenant clamps the quote to priceEnd). It gives the most a terminal fill can owe the maker.
+                    // The lowest quote a fill can take. It is the price, or `priceEnd` for a
+                    // rising bid whose `priceEnd` is lower, because the covenant clamps the
+                    // quote to `priceEnd`. It gives the most a terminal fill can owe the maker.
                     let p_min = if s.slope != 0 { s.price.min(s.price_end) } else { s.price };
                     let t = order_token(
                         pol,
@@ -695,7 +748,7 @@ pub fn verify_swap_facts(
                         tif: s.tif,
                         maker: s.maker,
                         refund_cap: {
-                            // an upper bound: a spend the arithmetic cannot price counts as none
+                            // An upper bound. A spend the arithmetic cannot price counts as zero.
                             let spend = s.spend_at(amount, p_min).unwrap_or(0).max(0);
                             i64::try_from(entry.amount)
                                 .ok()
@@ -740,7 +793,7 @@ pub fn verify_swap_facts(
     if legs.iter().map(|l| l.cov).collect::<BTreeSet<_>>().len() != k {
         return Err(unsupported("an order covenant id appears twice"));
     }
-    // custody: exactly one exact custody per ask, no strays
+    // Custody. Each ask has exactly one input holding its exact custody, and there are no strays.
     let mut custody_of: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, kind) in kinds.iter().enumerate() {
         if let InKind::Custody(st) = kind {
@@ -765,7 +818,7 @@ pub fn verify_swap_facts(
     if legs.iter().enumerate().any(|(li, l)| l.kind == LegKind::Ask && !custody_of.contains_key(&li)) {
         return Err(unsupported("an ask order without its custody input"));
     }
-    // leg roles against the pay asset and the merchant
+    // Leg roles against the pay asset.
     for l in &legs {
         match (l.kind, pay_asset) {
             (LegKind::Bid, PayAsset::Kas) => return Err(unsupported("a payer who pays KAS sells no token into bids")),
@@ -775,7 +828,7 @@ pub fn verify_swap_facts(
             _ => {}
         }
     }
-    // payer inputs and keys
+    // Payer inputs and keys.
     let mut payer_keys: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut flows: BTreeMap<[u8; 32], Flow> = BTreeMap::new();
     let mut payer_kas_in: u128 = 0;
@@ -805,10 +858,11 @@ pub fn verify_swap_facts(
     if payer_keys.is_empty() {
         return Err(unsupported("the transaction has no payer input"));
     }
-    // every payer signature is SIGHASH_ALL, checked on the signature scripts before the engine (which accepts the
-    // other hash types): P2PK funding inputs and the owner witnesses of the payer's KCC-20 token inputs. Order
-    // inputs and custody inputs carry no payer signature; a KRON token has none of its own (its owner's P2PK input
-    // is covered above).
+    // Every payer signature uses SIGHASH_ALL. It is checked on the signature scripts before the
+    // engine, because the engine accepts the other hash types. The payer signatures are those of
+    // the P2PK funding inputs and the owner witnesses of the payer's KCC-20 token inputs. Order
+    // and custody inputs carry no payer signature. A KRON token has none of its own, and its
+    // owner's P2PK input is checked as a funding input.
     crate::sighash::check_payer_inputs(
         tx,
         &entries,
@@ -818,7 +872,8 @@ pub fn verify_swap_facts(
             _ => None,
         }),
     )?;
-    // KRON address presence: the owner of a key-held KRON token authorises it with a P2PK input of its own
+    // KRON address presence. The owner of a key-held KRON token authorizes it with its own P2PK
+    // input.
     for (i, kind) in kinds.iter().enumerate() {
         if let InKind::PayerToken(key, TokenState::Kron(_)) = kind {
             if !kinds.iter().any(|k| matches!(k, InKind::PayerKas(kk) if kk == key)) {
@@ -838,12 +893,13 @@ pub fn verify_swap_facts(
         }
     }
 
-    // 6. outputs: claimed / merchant / payer-controlled
+    // 6. Outputs, each claimed, the merchant's or payer-controlled.
     let outs = &tx.outputs;
     if outs.len() < k {
         return Err(X402Error::payload(Diag::InvalidKaspaExactPaymentOutput, "fewer outputs than order inputs"));
     }
-    // expected custody remainders of the asks (claimed by their orders)
+    // The expected custody remainders of the asks, claimed by their orders. A GTC ask keeps the
+    // rest in custody, and any other ask returns it to its maker.
     struct Rest {
         token: [u8; 32],
         spk: ScriptPublicKey,
@@ -864,7 +920,7 @@ pub fn verify_swap_facts(
             rests.push(Rest { token: l.token, spk: st.spk_with(tpl), used: false });
         }
     }
-    // net token amounts (conservation): what the payer / merchant side receives
+    // Net token amounts by conservation, which is what the payer and the merchant side receive.
     let merchant_id = merchant.as_ref().map(|m| m.id);
     let mut change_expect: BTreeMap<[u8; 32], i128> = BTreeMap::new();
     let mut net_of: BTreeMap<[u8; 32], i128> = BTreeMap::new();
@@ -893,10 +949,12 @@ pub fn verify_swap_facts(
     let mut strays: Vec<usize> = Vec::new();
     let mut token_change_spent: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut claimed_spks: Vec<(usize, ScriptPublicKey)> = Vec::new();
-    // a bid that ends in this transaction (no continuation) returns the KAS beyond its delivery carrier to its maker from
-    // 1 KAS up, as a plain output at `M - 1 - input`: claimed by that bid (one output per bid input). The covenant only
-    // requires that output to hold at least the remainder, so it is claimed whatever its value: a surplus there counts
-    // as nothing for the merchant, and the output can never be the merchant's payment (section 8.2 of the spec).
+    // A bid that ends in this transaction, with no continuation, returns its KAS beyond the
+    // delivery carrier to its maker from 1 KAS up. The refund is a plain output at
+    // `M - 1 - input`, claimed by that bid, one output per bid input. The covenant only requires
+    // that output to hold at least the remainder, so it is claimed whatever its value. A surplus
+    // there counts as nothing for the merchant, and the output can never be the merchant's
+    // payment (spec section 8.2).
     let continued: BTreeSet<[u8; 32]> = outs.iter().filter_map(|o| o.covenant.map(|b| b.covenant_id.as_bytes())).collect();
     let mut refund_used: BTreeSet<usize> = BTreeSet::new();
     for (j, o) in outs.iter().enumerate() {
@@ -922,13 +980,13 @@ pub fn verify_swap_facts(
                 }
                 let allowed_tok = pol.tokens.find(&id).expect("allowlisted");
                 let tpl = token_template(allowed_tok.program);
-                // custody remainder of an ask
+                // Custody remainder of an ask.
                 if let Some(r) = rests.iter_mut().find(|r| !r.used && r.token == id && r.spk == o.script_public_key) {
                     r.used = true;
                     claimed_spks.push((j, o.script_public_key.clone()));
                     continue;
                 }
-                // merchant token
+                // Merchant token.
                 if let Some(m) = merchant.as_ref().filter(|m| m.id == id && m.spk == o.script_public_key) {
                     if merchant_at.is_some() {
                         merchant_dup = true;
@@ -943,7 +1001,7 @@ pub fn verify_swap_facts(
                     }
                     continue;
                 }
-                // payer change of this token
+                // Payer change of this token.
                 if let Some(want) = change_expect.get(&id).filter(|_| !token_change_spent.contains(&id)) {
                     let ok = payer_keys.iter().any(|key| {
                         TokenState::user(allowed_tok.family, *want as i64, *key, allowed_tok.extension_commitment).spk_with(tpl)
@@ -984,9 +1042,9 @@ pub fn verify_swap_facts(
             }
         }
     }
-    // merchant gain
+    // Merchant gain.
     let Some(mj) = merchant_at else {
-        // aliasing: the only output that pays the merchant is claimed by an order
+        // Aliasing, when the only output that pays the merchant is claimed by an order.
         let alias = match &merchant {
             None => claimed_spks.iter().any(|(_, s)| s == pay_spk),
             Some(m) => claimed_spks.iter().any(|(_, s)| *s == m.spk),
@@ -1051,7 +1109,7 @@ pub fn verify_swap_facts(
             format!("paymentOutputIndex must be {mj}, the merchant's output"),
         ));
     }
-    // hints must agree with the transaction
+    // The route hints must agree with the transaction.
     let derived: Vec<crate::wire::OutpointJson> = legs.iter().map(|l| l.outpoint.to_json()).collect();
     if route.orders != derived {
         return Err(X402Error::payload(
@@ -1059,7 +1117,7 @@ pub fn verify_swap_facts(
             "payload.route.orders differs from the orders the transaction spends",
         ));
     }
-    // payer spend
+    // Payer spend.
     let payer_spent: u128 = match pay_asset {
         PayAsset::Token(a) => {
             let f = flows
@@ -1074,10 +1132,10 @@ pub fn verify_swap_facts(
     }
     let payer_spent = u64::try_from(payer_spent).map_err(|_| unsupported("the payer's spend exceeds the uint64 range"))?;
 
-    // 7. the engine: every order covenant and every KCC-20 leader
+    // 7. The engine runs every input, including every order covenant and token program.
     let fee = check_economics_and_scripts(ctx, tx, &entries)?;
 
-    // 8. the verified result
+    // 8. The verified result.
     let txid = tx.id().as_bytes();
     let watched = &outs[mj];
     let orders: Vec<Outpoint> = legs.iter().map(|l| l.outpoint).collect();
@@ -1136,9 +1194,12 @@ pub fn verify_swap_facts(
     Ok((verified, facts))
 }
 
-/// Output index of the merchant's gain in a swap transaction, computed the way the verifier does it
-/// (the first output at index >= `k` that pays `payToScriptPublicKey` (KAS) or the merchant token
-/// script). Used by the payer SDK to know `paymentOutputIndex` before the digest is fixed.
+/// Output index of the merchant's gain in a swap transaction, for the payer SDK.
+///
+/// It is the first output at index `k` or later with the script `merchant_spk`, and with the value
+/// `want_value` when one is given. The SDK uses it to know `paymentOutputIndex` before the digest
+/// is fixed. Unlike the verifier, it does not skip outputs claimed by an order, such as a bid
+/// refund.
 pub fn merchant_output_index(tx: &Transaction, k: usize, merchant_spk: &ScriptPublicKey, want_value: Option<u64>) -> Option<usize> {
     tx.outputs
         .iter()
@@ -1148,7 +1209,7 @@ pub fn merchant_output_index(tx: &Transaction, k: usize, merchant_spk: &ScriptPu
         .map(|(j, _)| j)
 }
 
-/// Hex of a txid (helper for callers that log verified facts).
+/// Hex of the transaction id, for callers that log verified facts.
 pub fn txid_hex(v: &Verified) -> String {
     hex(&v.txid)
 }
