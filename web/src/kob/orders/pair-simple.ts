@@ -1,13 +1,28 @@
-// Planner of the plain pair kinds (`KobPair`, contracts/orders/KobPair.sil): the same intents as planSimple (intent-simple.ts) on a pair A/B: limit
-// GTC / GTD / day / timed activation with the crossing policy, IOC, FOK, market, streaming, close (IOC / FOK auctions from the pair book's touch to
-// the slippage bound), TWAP / DCA (interval / maxFill, optional per-slice auction), Dutch / rising.
+// Planner of the plain pair kinds (`KobPair`, contracts/orders/KobPair.sil).
 //
-// Units: `amount`, `minFill`, `sliceAmount` base units of A; `price`, `priceEnd`, `displayedPrice` B base units per WHOLE A; `tip` KAS (sompi per
-// whole A, prefunded on the order UTXO, never part of a B price). sell -> side 1 ASK (holds exactly the amount of A), buy -> side 2 BID (holds a B
-// escrow, kob-wasm `pairBidEscrow`: the whole amount at its highest price rounded down, plus one base unit). The order UTXO prefunds one delivery carrier per budgeted fill and the
-// tip of the whole amount (kob-wasm `pairKasValue`). Defaults: resting minFill = the amount of A worth 10 KAS on A's KAS book
-// (`defaultMinFillPair`, a quarter of the amount without a KAS reference), immediate orders 1; delivery carriers: resting one per possible fill, at most 64
-// (or `maxFills`; fewer carriers than possible fills make what is left after them fill only in full), IOC / FOK / auctions 1, TWAP / DCA one per slice.
+// It takes the same intents as planSimple (intent-simple.ts) on a pair A/B.
+// - Limit with GTC, GTD, day and timed activation, and the crossing policy.
+// - IOC, FOK, market, streaming and close, as auctions from the pair book's touch to the
+//   slippage bound.
+// - TWAP and DCA (interval, maxFill, optional per-slice auction).
+// - Dutch and rising.
+//
+// Units:
+// - `amount`, `minFill` and `sliceAmount` are base units of A.
+// - `price`, `priceEnd` and `displayedPrice` are B base units per whole A.
+// - `tip` is KAS (sompi per whole A), prefunded on the order UTXO and never part of a B price.
+//
+// A sell is side 1 (ASK) and holds exactly the amount of A. A buy is side 2 (BID) and holds a B
+// escrow (kob-wasm `pairBidEscrow`): the whole amount at its highest price rounded down, plus one
+// base unit. The order UTXO prefunds one delivery carrier per budgeted fill and the tip of the
+// whole amount (kob-wasm `pairKasValue`).
+//
+// Defaults:
+// - A resting minFill is the amount of A worth 10 KAS on A's KAS book (`defaultMinFillPair`, a
+//   quarter of the amount without a KAS reference). Immediate orders use 1.
+// - A resting order budgets one delivery carrier per possible fill, at most 64 (or `maxFills`).
+//   Fewer carriers than possible fills make what is left after them fill only in full.
+// - IOC, FOK and auctions budget 1, and TWAP and DCA one per slice.
 import type { PairOrderPlan, PairPlanEnv, PlanIssue } from '../plan-types';
 import type {
   CloseIntent, DcaIntent, DutchIntent, FokIntent, IocIntent, LimitIntent, MarketIntent, SimpleIntent, StreamingIntent, TwapIntent,
@@ -25,13 +40,13 @@ import {
 } from './pair-common';
 import { pairIssue, type PairIssueCode } from './pair-issues';
 
-/** Fully resolved plain pair order (planner terms: base units of A, B per whole A, KAS tip). */
+/** A fully resolved plain pair order: base units of A, B per whole A and a KAS tip. */
 interface Draft {
   side: 'sell' | 'buy';
   amount: bigint;
   /** the intent's minFill (null: the default) */
   minFill: bigint | null;
-  /** IOC / FOK / market / streaming / close: default minimum fill 1, one delivery */
+  /** IOC / FOK / market / streaming / close: the default minimum fill is 1, with one delivery */
   immediate: boolean;
   price: bigint;
   tip: bigint;
@@ -45,7 +60,7 @@ interface Draft {
   priceEnd: bigint;
   decayStep: bigint;
   deadline: bigint | null;
-  /** delivery carriers budgeted: a fixed number, or null = resting default one per possible fill (at most MAX_DEFAULT_PAIR_FILLS) unless `fillsRequested` */
+  /** delivery carriers budgeted: a fixed number, or null for the default (or `fillsRequested`) */
   fills: bigint | null;
   fillsRequested: bigint | undefined;
   /** the most aggressive price the order can trade at (limit, auction bound, decay end) */
@@ -69,7 +84,11 @@ const blank = (side: 'sell' | 'buy', amount: bigint, price: bigint, tip: bigint,
 
 const BAND_CODES: Record<string, PairIssueCode> = { PRICE_AGGRESSIVE_VS_MARKET: 'PAIR_PRICE_AGGRESSIVE_VS_MARKET', PRICE_FAR_FROM_MARKET: 'PAIR_PRICE_FAR_FROM_MARKET' };
 
-/** The price-band warnings of the shared guard, against the pair book's reference (B per whole A; the last trade rate when the book is empty), as pair codes. */
+/**
+ * The price-band warnings of the shared guard, as pair codes.
+ *
+ * The reference is the pair book's (B per whole A), or the last trade rate when the book is empty.
+ */
 export function pairBand(env: PairPlanEnv, side: 'sell' | 'buy', price: bigint, field = 'price'): PlanIssue[] {
   return checkMarketBand(env.book, env.lastFillPrice, side, price, field).map((i) => {
     const out = pairIssue(BAND_CODES[i.code] ?? 'PAIR_PRICE_FAR_FROM_MARKET', { ...(i.params ?? {}), ticker: env.pair.quote.ticker }, i.field);
@@ -78,7 +97,7 @@ export function pairBand(env: PairPlanEnv, side: 'sell' | 'buy', price: bigint, 
   });
 }
 
-// ------------------------------------------------------------------------------------------------ the common tail
+// ---- the common tail
 
 function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   const a = env.token;
@@ -88,7 +107,8 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   issues.push(...checkPairTip(env, d.amount, d.tip));
   issues.push(...checkTimes(env.clock, { activeFrom: d.activeFrom, expiryDaa: d.expiryDaa, requestedActiveFrom: d.requestedActiveFrom }));
   if (hasError(issues)) return failedPairPlan(issues);
-  // the default minimum fill: the amount of A worth 10 KAS on A's KAS book (a resting order), 1 (an immediate one); never above a TWAP slice
+  // The default minimum fill is the amount of A worth 10 KAS on A's KAS book (a resting order) or
+  // 1 (an immediate one). It is never above a TWAP slice.
   let minFill = d.minFill ?? (d.immediate ? 1n : env.kob.defaultMinFillPair(d.amount, env.pair.kasPerWholeA, a.scale));
   if (d.minFill === null && !d.immediate && env.pair.kasPerWholeA === null) issues.push(pairIssue('PAIR_KAS_REFERENCE_MISSING', { ticker: a.ticker }));
   if (d.minFill === null && d.maxFill > 0n && minFill > d.maxFill) minFill = d.maxFill;
@@ -102,7 +122,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
 
   const possible = ceilDiv(d.amount, minFill);
   const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
-  // fewer carriers than possible fills: after `fills - 1` partial fills what is left fills only in full (a resting order)
+  // With fewer carriers than possible fills, the rest fills only in full after `fills - 1` partials.
   if (d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const dc = pairCarrierOf(env);
   const tips = pairTipsOf(env);
@@ -113,19 +133,20 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   });
   let order = draft;
   if (d.side === 'buy') {
-    // the B escrow: the whole amount at the highest price rounded down, plus one base unit (kob-wasm pairBidEscrow: every fill pays its exact
-    // floor and floors are subadditive, so no slack per fill)
+    // The B escrow is the whole amount at the highest price rounded down, plus one base unit.
+    // Every fill pays its exact floor and floors are subadditive, so there is no slack per fill.
     const escrow = env.kob.pairBidEscrow(draft, d.amount, d.tif === 0 ? env.kob.pairMaxFills(draft) : 1n);
     if (escrow === null) return failedPairPlan([...issues, pairIssue('PAIR_NOTIONAL_TOO_LARGE', { ticker: b.ticker }, 'price')]);
     order = withCustody(draft, escrow);
   }
-  // at least the deliveries the protocol requires a new order to fund itself (kob-wasm pairFundedFills: a resting order a partial fill and the
-  // fill of its rest)
+  // At least the deliveries the protocol requires a new order to fund itself (kob-wasm
+  // pairFundedFills): for a resting order a partial fill and the fill of its rest.
   const funded = maxBig(fills, env.kob.pairFundedFills(order));
   const kas = pairKasLines(env, order, funded, dc);
   if (kas === null) return failedPairPlan([...issues, issue('TIP_TOO_LARGE', undefined, 'tip')]);
 
-  // B amounts, every one rounded by kob-wasm in the maker's favour: a sell receives at least ceil(n p / scale(A)), a buy pays floor(n p / scale(A))
+  // Every B amount is rounded by kob-wasm in the maker's favour. A sell receives at least
+  // ceil(n p / scale(A)) and a buy pays floor(n p / scale(A)).
   const sell = d.side === 'sell';
   const bOf = (n: bigint, p: bigint | null): bigint | null => (p === null ? null : sell ? env.kob.pairTOutMin(order, n, p) : env.kob.pairSOut(order, n, p));
   const worst = d.worstPrice ?? d.limitPrice;
@@ -164,7 +185,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   });
 }
 
-// ------------------------------------------------------------------------------------------------ limit
+// ---- limit
 
 function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   const pre: PlanIssue[] = [...checkPairPrice(i.price)];
@@ -185,7 +206,7 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   d.worstPrice = i.price;
   d.notes.push(exp.kind === 'gtc' ? 'gtc' : exp.kind === 'day' ? 'dayOrder' : 'gtd');
   pre.push(...pairBand(env, i.side, i.price));
-  // the crossing policy against the pair book (B prices, no tips: a KAS tip never makes a B price cross)
+  // The crossing policy against the pair book. A KAS tip never makes a B price cross.
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, 0n);
   if (x.crossing && x.touch !== null) {
     const policy = i.crossing ?? 'auction';
@@ -193,7 +214,7 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
     if (policy === 'reject') {
       pre.push(pairIssue('PAIR_MARKETABLE_REJECTED', { touch: x.touch, ticker }, 'price'));
     } else if (policy === 'auction' && start !== i.price) {
-      // an auction from the touch to the limit (an ASK decays down, a BID rises up), resting at the limit afterwards
+      // An auction from the touch to the limit (ASK decays down, BID rises up), then resting.
       d.price = start;
       d.priceEnd = i.price;
       d.slope = decaySlope(start, i.price, MARKET_AUCTION_DAA, 1n);
@@ -212,7 +233,7 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   return place(env, d, pre);
 }
 
-// ------------------------------------------------------------------------------------------------ IOC / FOK
+// ---- IOC / FOK
 
 function planImmediate(env: PairPlanEnv, i: IocIntent | FokIntent): PairOrderPlan {
   const pre: PlanIssue[] = [...checkPairPrice(i.price)];
@@ -235,7 +256,7 @@ function planImmediate(env: PairPlanEnv, i: IocIntent | FokIntent): PairOrderPla
   return place(env, d, pre);
 }
 
-// ------------------------------------------------------------------------------------------------ market / streaming / close
+// ---- market / streaming / close
 
 interface AuctionRequest {
   side: 'sell' | 'buy';
@@ -251,7 +272,7 @@ interface AuctionRequest {
   notes: string[];
 }
 
-/** An IOC (or FOK) auction from `reference` (the pair book's touch, or the displayed price) to the slippage bound: ASK decaying, BID rising. */
+/** An IOC or FOK auction from `reference` (the pair touch or displayed price) to the bound. */
 function planAuction(env: PairPlanEnv, r: AuctionRequest, pre: PlanIssue[]): PairOrderPlan {
   checkBps(r.bps, 'slippageBps', pre);
   const auctionDaa = positiveDuration(env, r.auction, MARKET_AUCTION_DAA, 'auction', pre);
@@ -261,7 +282,7 @@ function planAuction(env: PairPlanEnv, r: AuctionRequest, pre: PlanIssue[]): Pai
   if (r.reference === null) pre.push(issue('NO_LIQUIDITY', { counterparty: r.side === 'sell' ? 'bids' : 'asks' }));
   if (hasError(pre)) return failedPairPlan(pre);
   const touch = r.reference as bigint;
-  // no tick on a B price: the bound is the touch moved by floor(touch x bps / 10^4)
+  // A B price has no tick, so the bound is the touch moved by floor(touch x bps / 10^4).
   const end = auctionBound(r.side, touch, r.bps, 1n);
   const d = blank(r.side, r.amount, touch, r.tip, r.minFill);
   d.immediate = true;
@@ -312,7 +333,7 @@ function planClose(env: PairPlanEnv, i: CloseIntent): PairOrderPlan {
   }, []);
 }
 
-// ------------------------------------------------------------------------------------------------ TWAP / DCA
+// ---- TWAP / DCA
 
 function planSchedule(env: PairPlanEnv, i: TwapIntent | DcaIntent): PairOrderPlan {
   const side = i.type === 'twap' ? 'sell' : 'buy';
@@ -357,7 +378,7 @@ function planSchedule(env: PairPlanEnv, i: TwapIntent | DcaIntent): PairOrderPla
     d.worstPrice = i.price;
   }
   d.notes.push(i.type, exp.kind === 'day' ? 'dayOrder' : 'gtc');
-  // every slice is a fill with its own delivery: one carrier per slice (a DCA may budget more)
+  // Every slice is a fill with its own delivery, so one carrier per slice (a DCA may budget more).
   const wanted = i.type === 'dca' ? i.maxFills : undefined;
   if (wanted !== undefined && wanted < slices) pre.push(issue('MAX_FILLS_INVALID', undefined, 'maxFills'));
   d.fills = wanted !== undefined && wanted >= slices ? wanted : slices;
@@ -365,7 +386,7 @@ function planSchedule(env: PairPlanEnv, i: TwapIntent | DcaIntent): PairOrderPla
   return place(env, d, pre);
 }
 
-// ------------------------------------------------------------------------------------------------ Dutch / rising
+// ---- Dutch / rising
 
 function planDutch(env: PairPlanEnv, i: DutchIntent): PairOrderPlan {
   const pre: PlanIssue[] = [...checkPairPrice(i.price), ...checkPairPrice(i.priceEnd, 'priceEnd')];
@@ -380,7 +401,7 @@ function planDutch(env: PairPlanEnv, i: DutchIntent): PairOrderPlan {
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;
-  // the decay origin IS activeFrom: a real DAA score (0 would put the price at its end at once)
+  // The decay origin is activeFrom, a real DAA score (0 would put the price at its end at once).
   d.activeFrom = future ? (requested as bigint) : env.clock.daa + LEAD;
   d.activatesAt = future ? requested : null;
   const exp = resolveLifetime(env, i.lifetime, pre);
@@ -401,7 +422,7 @@ function planDutch(env: PairPlanEnv, i: DutchIntent): PairOrderPlan {
   return place(env, d, pre);
 }
 
-// ------------------------------------------------------------------------------------------------ entry point
+// ---- entry point
 
 /** Plans any plain intent on a pair (KobPair). Never throws for user-input problems. */
 export function planPairSimple(env: PairPlanEnv, intent: SimpleIntent): PairOrderPlan {

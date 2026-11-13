@@ -1,16 +1,27 @@
-// IFD / IFO / bracket and repeat IFD / IFO on a pair A/B (`KobIfdPair`, contracts/orders/KobIfdPair.sil; docs/spec/order-types.md "Pair if-done
-// entries"), from the same intents as cond-ifd.ts.
+// Planner of IFD, IFO, bracket and repeat IFD / IFO on a pair A/B (`KobIfdPair`,
+// contracts/orders/KobIfdPair.sil, docs/spec/order-types.md "Pair if-done entries"), from the same
+// intents as cond-ifd.ts.
 //
-//   buy-first (side BID):  holds a B escrow (the spend of its whole amount at its limit, kob-wasm `ifdPairBCustodyNeeded`) and buys A; every
-//                          fill of n creates a fresh `KobCondPair` ASK exit holding exactly those n of A
-//   sell-first (side ASK): holds the A amount and a B PREFUND (`prefund` B per whole A over the whole amount, plus one base unit per possible fill
-//                          but the last) and sells A; every fill creates a `KobCondPair` BID exit holding the B proceeds plus the prefund of n
+// - Buy-first (side BID) holds a B escrow (the spend of its whole amount at its limit, kob-wasm
+//   `ifdPairBCustodyNeeded`) and buys A. Every fill of n creates a fresh `KobCondPair` ASK exit
+//   holding exactly those n of A.
+// - Sell-first (side ASK) holds the A amount and a B prefund (`prefund` B per whole A over the
+//   whole amount, plus one base unit per possible fill but the last) and sells A. Every fill
+//   creates a `KobCondPair` BID exit holding the B proceeds plus the prefund of n.
 //
-// The exit is COMMITTED in the entry's `exitState` (kob-wasm `ifdPairCommitExit`: the KobCondPair state up to `armed`, 432 bytes); the entry
-// writes the exit's amount, custody and repeat fields. KAS: the entry UTXO holds per possible fill a delivery carrier (on the exit's custody) and
-// an exit carrier (on the exit UTXO), the tip of the whole amount, a repeating entry one more exit carrier (kob-wasm `pairKasValue`), and the
-// stop entry's keeper reserve. Each exit carrier funds its exit: `DEFAULT_EXIT_FILLS` delivery carriers, the exit's KAS tip of the whole amount
-// and the exit's keeper reserve. Prices are B per whole A; tips (the repeat's merge cost included) KAS per whole A.
+// The exit is committed in the entry's `exitState` (kob-wasm `ifdPairCommitExit`: the KobCondPair
+// state up to `armed`, 432 bytes). The entry writes the exit's amount, custody and repeat fields.
+//
+// The entry UTXO holds, in KAS:
+// - Per possible fill, a delivery carrier (on the exit's custody) and an exit carrier (on the exit
+//   UTXO).
+// - The tip of the whole amount.
+// - One more exit carrier for a repeating entry (kob-wasm `pairKasValue`).
+// - The stop entry's keeper reserve.
+//
+// Each exit carrier funds its exit: `DEFAULT_EXIT_FILLS` delivery carriers, the exit's KAS tip of
+// the whole amount and the exit's keeper reserve. Prices are B per whole A. Tips, the repeat's
+// merge cost included, are KAS per whole A.
 import { MAX_IDLE_DAA, MIN_REST_DAA, STOP_BAND_DAA } from '../daa';
 import type { IfdLikeIntent } from '../intent-cond';
 import { isRepeat } from '../intent-cond';
@@ -29,17 +40,29 @@ import {
 } from './pair-common';
 import { pairIssue } from './pair-issues';
 
-/** stop entries re-arm unarmed each cycle: pre-fund at most this many arming updates of a repeating stop entry (as the KAS kinds) */
+/** A repeating stop entry re-arms each cycle and prefunds at most this many arming updates. */
 const MAX_ENTRY_ARM_UPDATES = 10n;
 /**
- * The KAS one repeat merge adds to the exit's take-profit fill, measured (docs/spec/matcher.md 6.1 rule 7): a buy-first merge +11,862 B / 0.0237 KAS over
- * a plain take-profit, a sell-first merge into new custodies +8,428 B / 0.0169 KAS. `mergeTipRate` spreads it over the smallest take-profit fill.
+ * The KAS one repeat merge adds to a buy-first exit's take-profit fill.
+ *
+ * A buy-first merge adds 11,862 bytes and 0.0237 KAS over a plain take-profit, measured
+ * (docs/spec/matcher.md 6.1 rule 7). `mergeTipRate` spreads it over the smallest take-profit fill.
  */
 export const PAIR_MERGE_COST_BUY_FIRST = 2_370_000n;
+/**
+ * The KAS one repeat merge adds to a sell-first exit's take-profit fill.
+ *
+ * A sell-first merge into new custodies adds 8,428 bytes and 0.0169 KAS, measured.
+ */
 export const PAIR_MERGE_COST_SELL_FIRST = 1_690_000n;
-/** B token outputs of a sell-first repeating exit's partial take-profit that re-arms (custody rest, profit, prefund custody, filler's B) */
+/**
+ * B token outputs of a sell-first repeating exit's partial take-profit that re-arms.
+ *
+ * They are the custody rest, the profit, the prefund custody and the filler's B.
+ */
 export const PAIR_SELL_FIRST_MERGE_B_OUTPUTS = 4;
 
+/** Plans an if-done entry with its committed exit on a pair. Never throws for user input. */
 export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeIntent, tip: bigint, carrier: bigint): PairOrderPlan {
   const a = env.token;
   const b = env.pair.quote;
@@ -56,7 +79,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   if (entry === null) return fail();
   log.add(...checkPairTip(env, amount, tip));
 
-  // the entry's minimum fill (matcher.md 10.8: default ceil(amount / 4), kob-wasm defaultMinFillIfd)
+  // The entry's minimum fill (matcher.md 10.8: default ceil(amount / 4), defaultMinFillIfd).
   const minFill = intent.minFill ?? env.kob.defaultMinFillIfd(amount);
   if (minFill < 1n || minFill > amount) {
     log.cond('COND_MIN_FILL_INVALID', { amount }, 'minFill');
@@ -64,7 +87,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   }
   const fills = ceilDiv(amount, minFill);
 
-  // repeat: rptAmount = 1 + K * N (N < 2^53), at most an i64
+  // Repeat: rptAmount = 1 + K * N (N < 2^53) and at most an i64.
   let count: bigint | null = null;
   let kk = 0n;
   let rptAmount = 0n;
@@ -88,7 +111,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     rptAmount = 1n + kk * amount;
   }
 
-  // ---- exit (built first: the entry commits to it, its minimum fill included)
+  // ---- exit (built first because the entry commits to it, its minimum fill included)
   const exitIn = intent.exit;
   const exitTipBase = exitIn.tip ?? defaultPairTip(env, amount);
   if (exitTipBase < 0n) {
@@ -96,14 +119,18 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     return fail();
   }
   const exitInput = exitLegInput(exitIn);
-  // every exit holds one entry fill: its own default minimum fill is the pair default, at most the entry's minimum fill
+  // Every exit holds one entry fill, so its default minimum fill is the pair default, at most the
+  // entry's minimum fill.
   const exitMinDefault = env.kob.defaultMinFillPair(amount, env.pair.kasPerWholeA, a.scale);
-  // the smallest take-profit fill an exit can see (the merge tip and the default trigger threshold scale with it)
+  // The smallest take-profit fill an exit can see. The merge tip and the default trigger threshold
+  // scale with it.
   const exitMinBase = exitIn.minFill ?? (exitMinDefault < minFill ? exitMinDefault : minFill);
-  // Token slots (order-types.md, Pair if-done entries, AUD-33): a sell-first repeating exit's PARTIAL take-profit that re-arms moves four B
-  // outputs in one transaction; a B program with fewer token outputs (the KCC-20 reference 3/3, the public-mint build) cannot carry it, so
-  // while the entry lives such an exit takes profit only by a fill that sells it out: its minimum fill is its whole amount (the entry's
-  // amount bounds every exit's), so no partial take-profit is offered that no transaction can make
+  // Token slots (order-types.md, Pair if-done entries): a sell-first repeating exit's partial
+  // take-profit that re-arms moves four B outputs in one transaction. A B program with fewer token
+  // outputs (the KCC-20 reference 3/3, the public-mint build) cannot carry it. So while the entry
+  // lives, such an exit takes profit only by a fill that sells it out. Its minimum fill is its
+  // whole amount (the entry's amount bounds every exit's), and no partial take-profit is offered
+  // that no transaction can make.
   const wholeExit = !buyFirst && repeat && b.slots.outputs < PAIR_SELL_FIRST_MERGE_B_OUTPUTS;
   const exitMinFill = exitIn.minFill ?? (wholeExit ? amount : exitMinBase);
   if (wholeExit) {
@@ -112,18 +139,20 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   }
   log.add(...checkMinFill(exitMinFill, amount, 'exit.minFill'));
   if (log.failed) return fail();
-  // a repeat's exit tip (KAS) carries the merge cost, paid even by the smallest take-profit fill
+  // A repeat's exit tip (KAS) carries the merge cost, paid even by the smallest take-profit fill.
   const mergeTip = repeat ? mergeTipRate(buyFirst ? PAIR_MERGE_COST_BUY_FIRST : PAIR_MERGE_COST_SELL_FIRST, a.scale, exitMinBase) : 0n;
   const exitTip = exitTipBase + mergeTip;
   log.add(...checkPairTip(env, amount, exitTip, 'exit.tip'));
-  // the exit's trigger threshold scales with what it will sell or buy: at most the entry's amount, known now (its fills are not)
+  // The exit's trigger threshold scales with what it sells or buys. That is at most the entry's
+  // amount, which is known even though its fills are not.
   const legs = resolveLegs(lenv, log, exitSide, exitInput, 'exit.', exitMinBase, amount);
   const act = resolveActivation(lenv, log, intent.activeFrom);
   const entryExpiry = act === null ? null : resolveExpiry(lenv, log, intent.expiry, { field: 'expiry', activeFrom: act.activeFrom });
   const exitExpiry = resolveExpiry(lenv, log, exitIn.expiry, { field: 'exit.expiry', exit: true });
   if (legs === null || act === null || entryExpiry === null || exitExpiry === null || log.failed) return fail();
 
-  // ---- economics in B (the tips are KAS, outside the rates): the take-profit must beat the entry price (a repeat: an error)
+  // ---- economics in B (the tips are KAS, outside the rates)
+  // The take-profit must beat the entry price. For a repeat it is an error.
   let profitPerToken = 0n;
   if (legs.tpPrice > 0n) {
     profitPerToken = buyFirst ? legs.tpPrice - entry.price : entry.price - legs.tpPrice;
@@ -133,7 +162,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     }
   }
   const exitWorst = buyFirst ? askWorst(legs) : bidWorst(legs);
-  // sell-first: the B prefund (per whole A) beyond the entry price that covers the exit's worst buy-back
+  // Sell-first: the B prefund (per whole A) beyond the entry price covers the exit's worst buy-back.
   let prefund = 0n;
   if (!buyFirst) {
     const minPrefund = exitWorst > entry.price ? exitWorst - entry.price : 0n;
@@ -147,21 +176,21 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
       return fail();
     }
   }
-  // the 2^62 bound of every rate the entry and its exit carry (the builders refuse beyond it)
+  // Every rate the entry and its exit carry stays below 2^62 (the builders refuse more).
   const entryTop = entry.price > entry.stop ? entry.price : entry.stop;
   log.add(...checkPairNotional(env, amount, buyFirst ? entryTop : entryTop + prefund, 'entry.price'));
   const exitTop = [legs.tpPrice, legs.stopPrice, legs.stopWorst].reduce((x, y) => (x > y ? x : y));
   log.add(...checkPairNotional(env, amount, exitTop, 'exit.takeProfit'));
   if (log.failed) return fail();
 
-  // ---- self-trade: the entry is a real order now; the exit only later (warning)
+  // ---- self-trade (the entry is a real order, the exit is created later so it only warns)
   checkSelfTrade(env, log, intent.side, entry.price, { field: 'entry.price' });
   checkSelfTrade(env, log, exitSide, exitWorst, { exit: true, field: 'exit' });
   const touch = touchPrice(env.book, intent.side);
   if (entry.stop === 0n && touch !== null && (buyFirst ? touch <= entry.price : touch >= entry.price)) log.cond('COND_ENTRY_CROSSES', undefined, 'entry.price');
   if (log.failed) return fail();
 
-  // ---- entry stop parameters (as the KAS kinds; the keeper tip defaults to the pair's)
+  // ---- entry stop parameters (as the KAS kinds, but the keeper tip defaults to the pair's)
   const stopEntry = entry.stop > 0n;
   const entryBand = stopEntry && entry.stop !== entry.price ? intent.entry.bandDaa ?? STOP_BAND_DAA : 0n;
   const entryKeeperTip = stopEntry ? intent.entry.keeperTip ?? tips.keeperTip : 0n;
@@ -175,7 +204,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   const armUpdates = !stopEntry ? 0n : repeat ? (count === null || count + 1n > MAX_ENTRY_ARM_UPDATES ? MAX_ENTRY_ARM_UPDATES : count + 1n) : 1n;
   const keeperReserve = entryKeeperTip * armUpdates;
 
-  // ---- the exit, committed: its custody and amount are written by the entry per fill
+  // ---- the exit, committed (the entry writes its custody and amount per fill)
   const exitDraft = makeCondPairState(env, {
     side: exitSide, amount, minFill: exitMinFill, tip: exitTip, activeFrom: 0n, expiryDaa: exitExpiry.expiryDaa, refundTip: tips.refundTip, deliveryCarrier: carrier,
     custody: 0n,
@@ -185,7 +214,8 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     log.shared('TIP_TOO_LARGE', undefined, 'exit.tip');
     return fail();
   }
-  // the exit UTXO funds its own fills (a delivery carrier each, up to DEFAULT_EXIT_FILLS), its KAS tip and its keeper's updates
+  // The exit UTXO funds its own fills (a delivery carrier each, up to DEFAULT_EXIT_FILLS), its KAS
+  // tip and its keeper's updates.
   const exitFills = minBig(DEFAULT_EXIT_FILLS, ceilDiv(amount, exitMinFill));
   const exitKeeperReserve = legs.keeper?.reserve ?? 0n;
   const exitPlanned = carrier * exitFills + exitTipKas + exitKeeperReserve;
@@ -197,12 +227,14 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
       deliveryCarrier: carrier, exitCarrier, minFill, entryStop: entry.stop, bandDaa: entryBand, minTouch: entryTouch, minRestDaa: entryRestDaa,
       keeperTip: entryKeeperTip, custody: 0n, rptAmount, exitState,
     });
-  // never below what the protocol requires of every exit (kob-wasm ifdPairExitCarrierNeeded: the keeper reserve of an exit stop, then the exit's
-  // own deliveries and the tip of the whole amount, or its refund tip)
+  // Never below what the protocol requires of every exit (kob-wasm ifdPairExitCarrierNeeded): the
+  // keeper reserve of an exit stop, then the exit's own deliveries and the tip of the whole amount,
+  // or its refund tip.
   const needed = env.kob.ifdPairExitCarrierNeeded(draftWith(exitPlanned));
   const exitCarrier = needed !== null && needed > exitPlanned ? needed : exitPlanned;
   const draft = draftWith(exitCarrier);
-  // the B custody the entry needs (buy-first: its escrow; sell-first: its prefund), exactly kob-wasm ifdPairBCustodyNeeded
+  // The B custody the entry needs (buy-first: its escrow, sell-first: its prefund), as kob-wasm
+  // ifdPairBCustodyNeeded computes it.
   const bCustody = env.kob.ifdPairBCustodyNeeded(draft);
   if (bCustody === null) {
     log.add(pairIssue('PAIR_NOTIONAL_TOO_LARGE', { ticker: b.ticker }, buyFirst ? 'entry.price' : 'prefund'));
@@ -227,7 +259,8 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     return fail();
   }
 
-  // the exit a fill of the whole amount creates (listed in `states`): buy-first n of A; sell-first the proceeds plus the prefund of n, in B
+  // The exit a fill of the whole amount creates (listed in `states`). Buy-first it holds n of A.
+  // Sell-first it holds the proceeds plus the prefund of n, in B.
   const full = env.kob.ifdPairAmounts(order, amount, entry.price);
   const exitCustody = buyFirst ? amount : full.proceeds !== null && full.pre !== null ? full.proceeds + full.pre : null;
   if (exitCustody === null) {
@@ -238,7 +271,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
   const n1 = minFill < amount ? minFill : amount;
   const one = env.kob.ifdPairAmounts(order, n1, entry.price);
 
-  // ---- summaries (prices B per whole A; the KAS tip is outside them, so the all-in prices are the leg prices)
+  // ---- summaries (prices in B per whole A, outside the KAS tip, so all-in equals the leg price)
   const keeper: KeeperSummary | null = stopEntry ? { tip: entryKeeperTip, expectedUpdates: Number(armUpdates), reserve: keeperReserve, fundedFrom: 'escrow' } : null;
   const exitSummary: ExitSummary = {
     side: exitSide,
@@ -305,7 +338,8 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     deliveries: fills,
     deliveryCarrier: carrier,
     exitCarrier,
-    // what one minimum fill puts into its exit's custody: buy-first n of A, sell-first its proceeds plus its prefund in B
+    // What one minimum fill puts into its exit's custody. Buy-first it is n of A. Sell-first it is
+    // its proceeds plus its prefund in B.
     delivery: buyFirst ? { market: a, amount: n1 } : { market: b, amount: (one.proceeds ?? 0n) + (one.pre ?? 0n) },
     exitFacts: { kind: exitKind, takeProfit: legs.tpPrice > 0n ? legs.tpPrice : null, stop: legs.stopPrice > 0n ? legs.stopPrice : null, custodyPerFill: buyFirst ? 'baseAmount' : 'proceedsPlusPrefund' },
     repeat: repeat ? { count: kk, levels: 1n, rptAmount, unlimited: count === null } : null,

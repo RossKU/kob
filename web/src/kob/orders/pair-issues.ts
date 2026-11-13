@@ -1,17 +1,26 @@
-// Issue codes of the pair planner (token/token pairs A/B, kob/orders/pair-*.ts), same conventions as common-issues.ts: the UI translates by
-// `code` (i18n `plan.issue.<CODE>` / `issues.<CODE>`), `message` is the English fallback, `params` fill the placeholders.
+// Issue codes of the pair planner (token/token pairs A/B, kob/orders/pair-*.ts), with the
+// conventions of common-issues.ts.
 //
-// A pair order reuses the shared codes whose meaning and units are the same (SELF_TRADE, AMOUNT_*, PRICE_NOT_POSITIVE, PRICE_TOO_LARGE,
-// TIP_NEGATIVE, TIP_TOO_LARGE (the tip is KAS), EXPIRY_*, ACTIVE_*, FOK_*, NO_LIQUIDITY, MARKET_DEPTH_INSUFFICIENT, SLIPPAGE_*, INSUFFICIENT_KAS,
-// GUARDS_UNAVAILABLE, BUILD_REJECTED, PLAN_MISMATCH and the conditional codes COND_* without a KAS price). The codes below exist because their
-// numbers are B base units per whole A (never KAS) or because the finding only exists on a pair. Prices in params are B base units per whole A
-// (`price` raw integers, the UI formats them with B's decimals: `ticker` names B where a sentence needs it), amounts base units.
+// The UI translates by `code` (i18n key `issues.<CODE>`), `message` is the English fallback and
+// `params` fill the placeholders.
+//
+// A pair order reuses the shared codes whose meaning and units are the same:
+// - SELF_TRADE, AMOUNT_*, PRICE_NOT_POSITIVE, PRICE_TOO_LARGE, EXPIRY_*, ACTIVE_*, FOK_*.
+// - TIP_NEGATIVE and TIP_TOO_LARGE, because the tip is KAS.
+// - NO_LIQUIDITY, MARKET_DEPTH_INSUFFICIENT, SLIPPAGE_*, INSUFFICIENT_KAS, GUARDS_UNAVAILABLE.
+// - BUILD_REJECTED, PLAN_MISMATCH and the conditional codes COND_* without a KAS price.
+//
+// The codes below exist because their numbers are B base units per whole A (never KAS) or because
+// the finding only exists on a pair. Prices in params are raw integers in B base units per whole
+// A, which the UI formats with B's decimals. `ticker` names B where a sentence needs it. Amounts
+// are base units.
 import type { IssueSeverity, PlanIssue } from '../plan-types';
 import type { IssueParams } from './common-issues';
 
 interface CatalogEntry { severity: IssueSeverity; message: string }
 const e = (severity: IssueSeverity, message: string): CatalogEntry => ({ severity, message });
 
+/** Every issue code of the pair planner with its default severity and text. */
 export const PAIR_ISSUE_CATALOG = {
   PAIR_SAME_TOKEN: e('error', 'A pair needs two different tokens.'),
   PAIR_NOTIONAL_TOO_LARGE: e('error', 'The order value in {ticker} at this price is too large for the protocol: lower the amount or the price.'),
@@ -34,7 +43,9 @@ export const PAIR_ISSUE_CATALOG = {
   PAIR_KAS_REFERENCE_MISSING: e('info', 'The KAS value of {ticker} is unknown: the default minimum fill is a quarter of the amount.'),
 } as const satisfies Record<string, CatalogEntry>;
 
+/** The code of a pair catalogue entry. */
 export type PairIssueCode = keyof typeof PAIR_ISSUE_CATALOG;
+/** All codes of the pair catalogue. */
 export const PAIR_ISSUE_CODES = Object.keys(PAIR_ISSUE_CATALOG) as PairIssueCode[];
 
 function interpolate(template: string, params: IssueParams | undefined): string {

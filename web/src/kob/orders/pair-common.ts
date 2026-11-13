@@ -1,10 +1,18 @@
-// Shared plumbing of the pair planners (pair-simple.ts, pair-cond.ts, pair-ifd.ts): the pair order states (`KobPair`, `KobCondPair`,
-// `KobIfdPair`) built from the two TokenMarkets of a PairPlanEnv, the pair tips, the price / notional / tip checks in B, the `createOrder` build
-// that draws EACH custody from the maker's UTXOs of its own token (A from `env.tokenUtxos`, B from `env.pair.quoteTokenUtxos`), the self-check
-// of the built transaction (placement record, value, deadline, every custody at its amount and owned by its token) and the disclosure assembly.
+// Shared plumbing of the pair planners (pair-simple.ts, pair-cond.ts, pair-ifd.ts).
 //
-// Units: amounts base units of A (custodies: base units of their own token), prices B base units per WHOLE A (`scale(A)`), tips / carriers /
-// keeper tips KAS (sompi; `tip` sompi per whole A). Every rounded amount comes from kob-wasm (custodies, escrows, tips, B totals); TypeScript only
+// It builds the pair order states (`KobPair`, `KobCondPair`, `KobIfdPair`) from the two
+// TokenMarkets of a PairPlanEnv. It also holds the pair tips, the price, notional and tip checks
+// in B, and the `createOrder` build that draws each custody from the maker's UTXOs of its own
+// token (A from `env.tokenUtxos`, B from `env.pair.quoteTokenUtxos`). It self-checks the built
+// transaction (placement record, value, deadline, every custody at its amount and owned by its
+// token) and assembles the disclosure.
+//
+// Units:
+// - Amounts are base units of A. A custody is in base units of its own token.
+// - Prices are B base units per whole A (`scale(A)`).
+// - Tips, carriers and keeper tips are KAS in sompi, and `tip` is sompi per whole A.
+//
+// Every rounded amount (custodies, escrows, tips, B totals) comes from kob-wasm. TypeScript only
 // assembles states and requests.
 import type { CarrierLine, Disclosure, PairDisclosure, PairOrderPlan, PairPlanEnv, PairSideFacts, PlanEnv, PlanIssue, TokenMarket } from '../plan-types';
 import type { BuiltTx, CondPairState, CreateOrderRequest, Hex, IfdPairState, KeyUtxo, OrderState, PairState, TokenUtxo } from '../types';
@@ -22,39 +30,47 @@ import type { CondSummary } from './cond-common';
 import type { Legs } from './cond-legs';
 import { pairIssue } from './pair-issues';
 
+/** 32 zero bytes as hex. */
 export const ZERO32_HEX = '0'.repeat(64);
 /**
- * Most delivery carriers a resting pair order budgets by default: one per possible fill (`ceil(amount / minFill)`) up to this bound. A partial
- * fill must leave a continuation that funds its carrier and tip, so once the budgeted carriers are used up only the fill of everything left is
- * possible (the matcher then matches the order only in full); with the default minimum fill (10 KAS worth) the carriers of every possible fill
- * are at most 20 % of the order's notional, and they are delivered back to the maker with the tokens.
+ * Most delivery carriers a resting pair order budgets by default.
+ *
+ * It is one per possible fill (`ceil(amount / minFill)`) up to this bound. A partial fill must
+ * leave a continuation that funds its carrier and tip, so once the budgeted carriers are used up
+ * only the fill of everything left is possible and the matcher matches the order only in full.
+ * With the default minimum fill (10 KAS worth) the carriers of every possible fill are at most 20%
+ * of the order's notional, and they are delivered back to the maker with the tokens.
  */
 export const MAX_DEFAULT_PAIR_FILLS = 64n;
 
-/** The delivery carriers a resting pair order budgets by default: one per possible fill, at most MAX_DEFAULT_PAIR_FILLS. */
+/** The delivery carriers a resting pair order budgets: one per possible fill, capped. */
 export const defaultPairFills = (possible: bigint): bigint => (possible < MAX_DEFAULT_PAIR_FILLS ? possible : MAX_DEFAULT_PAIR_FILLS);
-/** Fills each if-done EXIT budgets a delivery carrier for inside its exitCarrier (a take-profit filled in up to two parts). */
+/** Fills each if-done exit budgets a delivery carrier for inside its exitCarrier. */
 export const DEFAULT_EXIT_FILLS = 2n;
 
-// ------------------------------------------------------------------------------------------------ tokens, tips, environment
+// ---- tokens, tips, environment
 
+/** The family code of a token in a pair state ('2' for KRON, '1' for KCC-20). */
 export const familyCode = (m: Pick<TokenMarket, 'family'>): string => (m.family === 'kron' ? '2' : '1');
 /** The extension commitment of NEW outputs of a token (zero for KRON, which has none). */
 export const extOf = (m: Pick<TokenMarket, 'family' | 'extensionCommitment'>): Hex => (m.family === 'kron' ? ZERO32_HEX : m.extensionCommitment);
 
+/** The identity of a pair token as the disclosure shows it. */
 export const sideFacts = (m: TokenMarket): PairSideFacts => ({ covenantId: m.covenantId, ticker: m.ticker, decimals: m.decimals, scale: m.scale, family: m.family, program: m.program });
 
-/** Default tips of a pair order of this pair (kob-wasm `pairTips` = `tipsFor` of a pair state: the pair table of the two programs). */
+/** Default tips of a pair order of this pair (kob-wasm `pairTips`, from the pair table). */
 export function pairTipsOf(env: PairPlanEnv): { refundTip: bigint; keeperTip: bigint } {
   const t = env.kob.pairTips(env.token.program, env.pair.quote.program);
   return { refundTip: BigInt(t.refundTip), keeperTip: BigInt(t.keeperTip) };
 }
 
 /**
- * The priority tip (KAS sompi per whole A) a pair order carries when the user sets none: the pair's keeper tip (the measured fee of one update,
- * doubled; `pair_keeper_tips.json`) over the whole amount, rounded up. The executor nets two crossing pair orders only when the tips pay the
- * netting's network fee (a netting moves no KAS), so an untipped crossing pair order would wait for a route through the KAS books. An explicit
- * tip, zero included, is kept as typed.
+ * The priority tip (sompi per whole A) a pair order carries when the user sets none.
+ *
+ * It is the pair's keeper tip (the measured fee of one update, doubled, `pair_keeper_tips.json`)
+ * over the whole amount, rounded up. The executor nets two crossing pair orders only when the tips
+ * pay the netting's network fee, because a netting moves no KAS. An untipped crossing pair order
+ * would wait for a route through the KAS books. An explicit tip, zero included, is kept as typed.
  */
 export function defaultPairTip(env: PairPlanEnv, amount: bigint): bigint {
   if (amount <= 0n) return 0n;
@@ -62,28 +78,30 @@ export function defaultPairTip(env: PairPlanEnv, amount: bigint): bigint {
   return (pairTipsOf(env).keeperTip * scale + amount - 1n) / amount;
 }
 
-/** A tip typed for a pair order whose total over `amount` is below the default's: a crossing pair order may then wait for a route through the KAS books. */
+/** True when a typed tip totals less over `amount` than the default one. */
 export function pairTipBelowDefault(env: PairPlanEnv, amount: bigint, tip: bigint | undefined): boolean {
   if (tip === undefined || amount <= 0n) return false;
   return (amount * tip) / env.token.scale < pairTipsOf(env).keeperTip;
 }
 
-/** The tip fields of an intent (`tip`, an if-done `exit.tip`) typed below what a netting fill needs: the ticket says a crossing pair order may wait. */
+/** The tip fields of an intent (`tip`, `exit.tip`) typed below what a netting fill needs. */
 export function lowPairTipFields(env: PairPlanEnv, intent: { amount?: bigint; tip?: bigint; exit?: { tip?: bigint } } | null): string[] {
   if (!intent || intent.amount === undefined) return [];
   return [pairTipBelowDefault(env, intent.amount, intent.tip) ? 'tip' : '', pairTipBelowDefault(env, intent.amount, intent.exit?.tip) ? 'exit.tip' : ''].filter(Boolean);
 }
 
 /**
- * The environment the shared leg / expiry helpers (cond-legs.ts, cond-common.ts) run in for a pair: prices are B per whole A, so the KAS tick
- * does not apply (tick 1), and the default keeper / refund tips are the pair's (kob-wasm `pairTips`).
+ * The environment the shared leg and expiry helpers (cond-legs.ts, cond-common.ts) use for a pair.
+ *
+ * Prices are B per whole A, so the KAS tick does not apply (tick 1). The default keeper and refund
+ * tips are the pair's (kob-wasm `pairTips`).
  */
 export function legEnvOf(env: PairPlanEnv): PlanEnv {
   const t = pairTipsOf(env);
   return { ...env, token: { ...env.token, tick: 1n, keeperTip: t.keeperTip, refundTip: t.refundTip } };
 }
 
-/** The KAS carrier of every covenant output of a pair order (deliveries, custodies, exits): the intent's, else the env's, else `DEFAULT_CARRIER` (1 KAS). */
+/** The KAS carrier of every covenant output of a pair order: the intent's, the env's or 1 KAS. */
 export const pairCarrierOf = (env: Pick<PlanEnv, 'carrier'>, want?: bigint): bigint => want ?? env.carrier ?? DEFAULT_CARRIER;
 
 /** The market of a pair token by covenant id (A or B), with the maker's UTXO list of that token. */
@@ -93,7 +111,7 @@ function tokenOf(env: PairPlanEnv, covId: Hex): { market: TokenMarket; utxos: To
   return null;
 }
 
-/** The maker's P2PK-owned plain UTXOs of `market` (same token, same extension commitment for KCC-20). */
+/** The maker's P2PK-owned plain UTXOs of `market` (same token, same extension for KCC-20). */
 export function usableUtxosOf(market: TokenMarket, maker: Hex, utxos: readonly TokenUtxo[]): TokenUtxo[] {
   return utxos.filter(
     (u) =>
@@ -105,34 +123,34 @@ export function usableUtxosOf(market: TokenMarket, maker: Hex, utxos: readonly T
   );
 }
 
-/** Base units of `market` the maker holds in usable UTXOs ("close all" of a pair: the A balance). */
+/** Base units of `market` the maker holds in usable UTXOs (the A balance for "close all"). */
 export const heldOf = (market: TokenMarket, maker: Hex, utxos: readonly TokenUtxo[]): bigint => usableUtxosOf(market, maker, utxos).reduce((s, u) => s + BigInt(u.state.amount), 0n);
 
-// ------------------------------------------------------------------------------------------------ checks in B
+// ---- checks in B
 
-/** A price in B base units per whole A: positive and an i64 (no tick: the KAS tick of A does not apply to a B price). */
+/** A price in B base units per whole A: positive and an i64. The KAS tick of A does not apply. */
 export function checkPairPrice(price: bigint, field = 'price'): PlanIssue[] {
   if (price <= 0n) return [issue('PRICE_NOT_POSITIVE', undefined, field)];
   if (!fitsI64(price)) return [issue('PRICE_TOO_LARGE', undefined, field)];
   return [];
 }
 
-/** The 2^62 bound of the order's B value at `rate` (kob-protocol `check_quote` with the scale of A). */
+/** Checks the 2^62 bound of the order's B value at `rate` (kob-protocol `check_quote`). */
 export function checkPairNotional(env: PairPlanEnv, amount: bigint, rate: bigint, field = 'price'): PlanIssue[] {
   if (amount <= 0n || rate <= 0n) return [];
   return (amount * rate + env.token.scale - 1n) / env.token.scale >= QUOTE_LIMIT ? [pairIssue('PAIR_NOTIONAL_TOO_LARGE', { ticker: env.pair.quote.ticker }, field)] : [];
 }
 
-/** The KAS tip (sompi per whole A): not negative and its total over the amount below 2^62. */
+/** Checks a KAS tip (sompi per whole A): not negative, and its total over the amount below 2^62. */
 export function checkPairTip(env: PairPlanEnv, amount: bigint, tip: bigint, field = 'tip'): PlanIssue[] {
   if (tip < 0n) return [issue('TIP_NEGATIVE', undefined, field)];
   if (!fitsI64(tip) || (amount * tip + env.token.scale - 1n) / env.token.scale >= QUOTE_LIMIT) return [issue('TIP_TOO_LARGE', undefined, field)];
   return [];
 }
 
-// ------------------------------------------------------------------------------------------------ states
+// ---- states
 
-/** S (sold, held) and T (bought) of a `KobPair` / `KobCondPair` of `side`: a sell sells A for B, a buy sells B for A. */
+/** The S (sold, held) and T (bought) fields of a pair state: a sell sells A for B. */
 function stFields(env: PairPlanEnv, side: 'sell' | 'buy') {
   const [s, t] = side === 'sell' ? [env.token, env.pair.quote] : [env.pair.quote, env.token];
   return {
@@ -142,6 +160,7 @@ function stFields(env: PairPlanEnv, side: 'sell' | 'buy') {
   };
 }
 
+/** Parameters of a new `KobPair` in planner terms. */
 export interface PairStateParams {
   side: 'sell' | 'buy';
   amount: bigint;
@@ -160,11 +179,11 @@ export interface PairStateParams {
   slope: bigint;
   priceEnd: bigint;
   decayStep: bigint;
-  /** the exact custody of S (an ask: the amount; a bid: its B escrow; 0 while the escrow is being computed) */
+  /** the exact custody of S: the amount (ask) or the B escrow (bid), 0 while it is computed */
   custody: bigint;
 }
 
-/** A new `KobPair` of the maker (side 1 ASK sells A, 2 BID buys A). */
+/** A new `KobPair` of the maker (side 1 is an ASK that sells A, side 2 a BID that buys A). */
 export function makePairState(env: PairPlanEnv, p: PairStateParams): OrderState {
   const st: PairState = {
     maker: env.maker,
@@ -189,6 +208,7 @@ export function makePairState(env: PairPlanEnv, p: PairStateParams): OrderState 
   return { kind: 'KobPair', state: st };
 }
 
+/** Parameters of a new `KobCondPair` in planner terms. */
 export interface CondPairParams {
   side: 'sell' | 'buy';
   amount: bigint;
@@ -198,11 +218,11 @@ export interface CondPairParams {
   expiryDaa: bigint;
   refundTip: bigint;
   deliveryCarrier: bigint;
-  /** an exit committed by an entry: 0 (the entry writes it); a placed order: its custody */
+  /** an exit committed by an entry: 0 (the entry writes it). A placed order: its custody. */
   custody: bigint;
 }
 
-/** A `KobCondPair` (side ASK sells A with a stop below the market; BID buys A with a stop above it) from validated legs; not armed, no repeat fields. */
+/** A `KobCondPair` from validated legs, not armed and with no repeat fields. */
 export function makeCondPairState(env: PairPlanEnv, p: CondPairParams, l: Legs): OrderState {
   const st: CondPairState = {
     maker: env.maker,
@@ -235,6 +255,7 @@ export function makeCondPairState(env: PairPlanEnv, p: CondPairParams, l: Legs):
   return { kind: 'KobCondPair', state: st };
 }
 
+/** Parameters of a new `KobIfdPair` entry in planner terms. */
 export interface IfdPairParams {
   /** the entry side: buy = buy-first (side 2 BID), sell = sell-first (side 1 ASK) */
   side: 'sell' | 'buy';
@@ -290,16 +311,19 @@ export function makeIfdPairState(env: PairPlanEnv, p: IfdPairParams): OrderState
   return { kind: 'KobIfdPair', state: st };
 }
 
-/** A copy of a pair state with another `custody` (the escrow is computed from the state itself, then written into it). */
+/** A copy of a pair state with another `custody`: the escrow is computed from the state first. */
 export function withCustody(o: OrderState, custody: bigint): OrderState {
   return { kind: o.kind, state: { ...o.state, custody: str(custody) } } as OrderState;
 }
 
-// ------------------------------------------------------------------------------------------------ KRON caps
+// ---- KRON caps
 
 /**
- * The KRON output cap (1e9 base units) of what the order holds and delivers: every custody of a KRON token (kob-wasm `custodies`), and the T a
- * minimum fill delivers (`tOfMinFill`, in `tMarket`'s base units) when T is KRON. The builders refuse both; this names the token.
+ * Issues for what the order holds or delivers above the KRON output cap (1e9 base units).
+ *
+ * It covers every custody of a KRON token (kob-wasm `custodies`) and the T a minimum fill delivers
+ * (`delivery`, in its market's base units) when T is KRON. The builders refuse both, and this names
+ * the token.
  */
 export function kronCapIssues(env: PairPlanEnv, order: OrderState, delivery: { market: TokenMarket; amount: bigint } | null): PlanIssue[] {
   const out: PlanIssue[] = [];
@@ -315,8 +339,9 @@ export function kronCapIssues(env: PairPlanEnv, order: OrderState, delivery: { m
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ building
+// ---- building
 
+/** One custody of a pair order and the token change its funding returns. */
 export interface PairCustodyDraw {
   token: Hex;
   market: TokenMarket;
@@ -326,6 +351,7 @@ export interface PairCustodyDraw {
   change: bigint;
 }
 
+/** The outcome of `buildPairCreate`: the request and built transaction, or error issues. */
 export interface PairCreateResult {
   request: CreateOrderRequest | null;
   built: BuiltTx | null;
@@ -339,9 +365,13 @@ const INSUFFICIENT_RE = /insufficient funds: need (\d+) sompi, have (\d+) sompi/
 const spendable = (u: KeyUtxo[]): bigint => u.filter((x) => !x.covenantId).reduce((s, x) => s + BigInt(x.amount), 0n);
 
 /**
- * Selects the custodies' tokens (each from the maker's UTXOs of its OWN token) and the funding, builds the `createOrder` transaction with kob-wasm
- * (adaptive fee reserve, the fee policy's total cap, a retry at the floor when the picked rate is unaffordable) and self-checks it. Never throws for
- * user problems: a shortfall or a protocol refusal comes back as an error issue with `built: null`.
+ * Selects the custodies' tokens and the funding, builds the `createOrder` transaction and
+ * self-checks it.
+ *
+ * Each custody is drawn from the maker's UTXOs of its own token. The build uses an adaptive fee
+ * reserve and the fee policy's total cap, and retries at the floor when the picked rate is
+ * unaffordable. It never throws for user problems. A shortfall or a protocol refusal comes back as
+ * an error issue with `built: null`.
  */
 export function buildPairCreate(env: PairPlanEnv, spec: { order: OrderState; value: bigint; deadline: bigint | null }): PairCreateResult {
   const res = buildPairCreateAt(env, spec);
@@ -360,13 +390,13 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
   for (const c of env.kob.custodies(spec.order)) {
     const t = tokenOf(env, c.token);
     if (!t) return fail(issue('PLAN_MISMATCH', { reason: `custody of an unknown token ${c.token}` }));
-    // the custody and the token change are token outputs of their program: the carrier must clear its floor
+    // The custody and the token change are token outputs, so the carrier must clear the floor.
     const floor = orderCarrierFloor(env.kob, t.market.templateHash);
     if (carrier < floor) return fail(issue('CARRIER_BELOW_FLOOR', { carrier, floor }, 'carrier'));
     let picked: TokenUtxo[];
     try {
-      // the covering set, then the spare slots take the smallest other UTXOs of that token (funding.ts selectTokens): one token change per token
-      // (kob-protocol build_create_pair), a KRON change kept under its per-output limit
+      // The covering set, then spare slots take the smallest other UTXOs of that token. That gives
+      // one token change per token, and a KRON change stays under its per-output limit.
       picked = selectTokens(usableUtxosOf(t.market, env.maker, t.utxos), c.amount, Math.min(t.market.slots.inputs, MAX_TOKEN_INPUTS), null, t.market.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
     } catch (e) {
       if (e instanceof InsufficientFunds) {
@@ -384,7 +414,7 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
     tokenInputsKas += picked.reduce((s, u) => s + BigInt(u.amount), 0n);
     outputsKas += carrier + (have > c.amount ? carrier : 0n);
   }
-  // outputs: the order, each custody (+ each token change); the token inputs' own KAS is recycled into them
+  // Outputs are the order, each custody and each token change. The token inputs' KAS is recycled.
   let need = spec.value + outputsKas;
   need = need > tokenInputsKas ? need - tokenInputsKas : 0n;
   const balance = spendable(env.funding);
@@ -434,9 +464,12 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
 }
 
 /**
- * Independent check that the built transaction is the planned order: the placement record recovered by kob-wasm `recoverOrders` (which trusts
- * nothing) yields the planned state, value and deadline, and every custody the state holds is an output of the transaction holding exactly its
- * amount, owned by the new covenant id, of its own token (the first custody, and a sell-first entry's B prefund). Returns a reason on mismatch.
+ * Independent check that the built transaction is the planned order.
+ *
+ * The placement record recovered by kob-wasm `recoverOrders` (which trusts nothing) must yield the
+ * planned state, value and deadline. Every custody the state holds must be an output holding
+ * exactly its amount, owned by the new covenant id and of its own token. That covers the first
+ * custody and a sell-first entry's B prefund. Returns a reason on mismatch.
  */
 export function verifyPairBuilt(env: PlanEnv, built: BuiltTx, spec: { order: OrderState; value: bigint; deadline: bigint | null }, draws: readonly PairCustodyDraw[]): string | null {
   let recovered;
@@ -467,9 +500,9 @@ export function verifyPairBuilt(env: PlanEnv, built: BuiltTx, spec: { order: Ord
   return null;
 }
 
-// ------------------------------------------------------------------------------------------------ placement and disclosure
+// ---- placement and disclosure
 
-/** Everything a pair order type decides; `placePair` checks, builds and discloses it. */
+/** Everything a pair order type decides. `placePair` checks, builds and discloses it. */
 export interface PairPlaceSpec {
   order: OrderState;
   /** the committed exit of an if-done entry (listed last in `states`) */
@@ -489,7 +522,7 @@ export interface PairPlaceSpec {
   tip: bigint;
   minTouch: bigint | null;
   keeperTip: bigint;
-  /** the B of the whole amount at the limit by the covenant's rule (a sell receives at least, a buy pays at most) */
+  /** the B of the whole amount at the limit by the covenant's rule (sell: least, buy: most) */
   allInTotal: bigint | null;
   receiveMinB: bigint | null;
   payMaxB: bigint | null;
@@ -499,16 +532,16 @@ export interface PairPlaceSpec {
   deliveries: bigint;
   deliveryCarrier: bigint;
   exitCarrier: bigint | null;
-  /** the T a minimum fill delivers at the order's highest price, for the KRON output cap (null: checked by kob-wasm only) */
+  /** the T a minimum fill delivers at the highest price, for the KRON cap (null: not checked) */
   delivery: { market: TokenMarket; amount: bigint } | null;
   exitFacts: PairDisclosure['exit'];
   repeat: PairDisclosure['repeat'];
-  /** generic disclosure tags (the KAS planners' tags where the meaning is the same) */
+  /** generic disclosure tags (those of the KAS planners where the meaning is the same) */
   notes: string[];
   /** pair disclosure tags */
   pairNotes: string[];
   cond: CondSummary | null;
-  /** KAS on each custody / token change output: the intent's carrier (default: the env's, else 1 KAS) */
+  /** KAS on each custody and token change output: the intent's, the env's or 1 KAS */
   carrier?: bigint;
 }
 
@@ -520,8 +553,11 @@ export const failedPairPlan = (issues: PlanIssue[], states: OrderState[] = [], c
 });
 
 /**
- * The common tail of every pair planner: the KRON caps, kob-wasm `checkNewOrder` (its message as BUILD_REJECTED) and `minOrderValue`, the build
- * (both custodies drawn from their own token's UTXOs), and the two disclosures. `issues` are the findings so far (warnings / infos).
+ * The common tail of every pair planner.
+ *
+ * It applies the KRON caps, kob-wasm `checkNewOrder` (its message becomes BUILD_REJECTED) and
+ * `minOrderValue`. It builds with both custodies drawn from their own token's UTXOs and assembles
+ * the two disclosures. `pre` holds the findings so far (warnings and infos).
  */
 export function placePair(env: PairPlanEnv, pre: PlanIssue[], spec: PairPlaceSpec): PairOrderPlan & { cond: CondSummary | null } {
   const issues = [...pre];
@@ -561,7 +597,7 @@ export function placePair(env: PairPlanEnv, pre: PlanIssue[], spec: PairPlaceSpe
     minFill: BigInt(st.minFill),
     minTouch: spec.minTouch,
     limitPrice: spec.limitPrice,
-    // the tip is KAS, never part of a B price: the all-in price is the limit itself
+    // The tip is KAS and never part of a B price, so the all-in price is the limit itself.
     allInPrice: spec.limitPrice,
     allInTotal: spec.allInTotal,
     expectedPrice: spec.expectedPrice,
@@ -602,7 +638,7 @@ export function placePair(env: PairPlanEnv, pre: PlanIssue[], spec: PairPlaceSpe
   return { ok: true, issues, states, request: res.request, built: res.built, disclosure, pair, cond: spec.cond };
 }
 
-/** A conditional with a stop leg, or a stop entry: kob-wasm `pairTriggerRule` describes it. */
+/** True for a conditional with a stop leg or a stop entry, which `pairTriggerRule` describes. */
 function hasStopState(o: OrderState): boolean {
   const s = o.state as unknown as Record<string, string>;
   if (o.kind === 'KobCondPair') return BigInt(s.stopPrice) > 0n;
@@ -610,7 +646,7 @@ function hasStopState(o: OrderState): boolean {
   return false;
 }
 
-/** KAS lines of a `KobPair` / `KobCondPair` order UTXO: `fills` delivery carriers and the tip prefund (kob-wasm `pairKasValue` = their sum). */
+/** KAS lines of a `KobPair` or `KobCondPair` order UTXO: delivery carriers and the tip prefund. */
 export function pairKasLines(env: PairPlanEnv, order: OrderState, fills: bigint, deliveryCarrier: bigint): { lines: CarrierLine[]; tipKasTotal: bigint } | null {
   const total = env.kob.pairKasValue(order, fills);
   if (total === null) return null;

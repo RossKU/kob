@@ -1,6 +1,9 @@
-// Test fixtures of the pair planner: two-token PairPlanEnvs (KCC-20 / KRON mixes) built on the shared planner fixtures (testing/fixtures.ts:
-// the real kob-wasm node bindings, the maker key, UTXO factories), and an independent BigInt model of the covenants' maker-favour rounding that
-// the tests check every disclosed amount against.
+// Test fixtures of the pair planner.
+//
+// They hold two-token PairPlanEnvs (KCC-20 and KRON mixes) built on the shared planner fixtures
+// (testing/fixtures.ts: the real kob-wasm node bindings, the maker key and the UTXO factories).
+// They also hold an independent BigInt model of the covenants' maker-favour rounding, which the
+// tests check every disclosed amount against.
 import type { PairBookView } from '../../data/indexer-types';
 import type { BookView as PlanBook, Clock, OwnOrderRef, PairPlanEnv, TokenMarket } from '../plan-types';
 import { CLOCK, FIXTURE_CARRIER, KAS, MAKER_PK, keyUtxo, kob, level, market3x3, market8x8, marketKron, tokenUtxo } from '../../testing/fixtures';
@@ -11,10 +14,14 @@ export { CLOCK, KAS, MAKER_PK, level };
 export const A_COV = '70'.repeat(32);
 /** Token B: the 8x8 program, 2 decimals (scale 100), covenant 71..71. */
 export const B_COV = '71'.repeat(32);
+/** Covenant id of a KRON token A. */
 export const KRON_A_COV = '72'.repeat(32);
+/** Covenant id of a KRON token B. */
 export const KRON_B_COV = '73'.repeat(32);
 
+/** Token A of the pairs. */
 export const tokenA = (): TokenMarket => market3x3({ ticker: 'AAA' });
+/** Token B of the pairs. */
 export const tokenB = (): TokenMarket => market8x8({ covenant_id: B_COV, ticker: 'BBB', decimals: 2 });
 /** KRON A: 3 decimals (scale 1000). */
 export const kronA = (): TokenMarket => marketKron({ covenant_id: KRON_A_COV, ticker: 'KRA', decimals: 3 });
@@ -29,6 +36,7 @@ export function pairBook(): PlanBook {
   };
 }
 
+/** Options of `makePairEnv`. */
 export interface PairEnvOptions {
   a?: TokenMarket;
   b?: TokenMarket;
@@ -76,17 +84,19 @@ export function makePairEnv(o: PairEnvOptions = {}): PairPlanEnv {
   const carrier = o.carrier === undefined ? FIXTURE_CARRIER : o.carrier;
   if (carrier !== null) env.carrier = carrier;
   if (o.lastFillPrice !== undefined) env.lastFillPrice = o.lastFillPrice;
-  // a further indexer that reports the same best prices: an independent reference for the start of market / close orders
+  // A further indexer that reports the same best prices is an independent reference for the start
+  // of market and close orders.
   if (o.independentReference !== false) {
     env.referenceTouches = [{ label: 'https://idx2.example', bestAsk: env.book.asks[0]?.price ?? null, bestBid: env.book.bids[0]?.price ?? null }];
   }
   return env;
 }
 
-// ------------------------------------------------------------------------------------------------ independent rounding model
+// ---- independent rounding model
 
-/** what a maker RECEIVES: ceil(n * p / scale) */
+/** What a maker receives: ceil(n * p / scale). */
 export const ceilQ = (n: bigint, p: bigint, scale: bigint): bigint => (n * p + scale - 1n) / scale;
-/** what a maker PAYS: floor(n * p / scale) */
+/** What a maker pays: floor(n * p / scale). */
 export const floorQ = (n: bigint, p: bigint, scale: bigint): bigint => (n * p) / scale;
+/** Ceiling division of non-negative bigints. */
 export const ceilDivM = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
