@@ -1,36 +1,52 @@
 //! Submission, mempool conflicts, acceptance tracking and rollback (`docs/spec/matcher.md` §1.3,
 //! §7, §8).
 //!
-//! * Every transaction is engine-validated before it reaches [`Tracker::submit`].
-//! * `RejectDoubleSpendInMempool` is benign (a competing matcher, a cancel, a refund): the order
-//!   whose input the node names backs off exponentially (every order of the transaction when the
-//!   input is no order's, [`Tracked::owners`]); nothing is ever replaced blindly (the matcher never
-//!   calls `submitTransactionReplacement`; the runner replaces only its own stuck keeper kills and
-//!   refunds, `crate::matcher::run::Runner::replace_stuck`).
-//! * A missing input (an orphan: the input's spend is already in a block the book has not shown
-//!   yet) names no outpoint: the tracker asks the node which of the order inputs are still unspent
-//!   ([`Tracked::addresses`]) and backs off the orders whose inputs are gone; the other orders of
-//!   the transaction are planned again at once (every order backs off only when the node cannot
-//!   tell).
-//! * Acceptance comes from `getVirtualChainFromBlockV2` (`Low`): a transaction is *accepted* when a
-//!   chain block accepts it and *final* (done) after `final_depth` more DAA; a `removed` chain
-//!   block moves its transactions back to pending (reorg), where they are re-checked.
-//! * While a transaction is pending or accepted-but-not-final, the outpoints it spends are
-//!   excluded from planning, so no order is planned twice. A pending transaction no chain block accepted
-//!   within `pending_timeout` DAA is not forgotten: it is resent to the node, which settles it
-//!   ([`Tracker::recheck_pending`]). "Already in the mempool" (or taken again): it stays pending, its inputs
-//!   stay reserved, and it is checked again after another `pending_timeout` (a node keeps the
-//!   transactions submitted to it until they are mined or evicted, so forgetting one would make its own
-//!   funding coin refuse every later batch as a mempool double spend). Refused (its inputs went
-//!   elsewhere): it is dropped (logged, `dropped_total`) and its orders back off.
-//!   A pending transaction one of whose order inputs the book no longer lists on two steps in a row
-//!   and the node confirms spent (another transaction spent it: the race is lost) is dropped at once
-//!   ([`Tracker::drop_lost`]): the order whose input is gone backs off, the others are planned again.
-//! * A mempool double spend of one of the operator's own funding coins (a transaction this process does
-//!   not know holds it: one from before a restart that the journal missed, a withdraw, a second process on
-//!   the same key) backs off no order: the coin is held out of the funding for `hold_daa`, or until the
-//!   node's UTXO set no longer lists it ([`Tracker::held`]), and the batch is planned again at once over
-//!   the other coins.
+//! Every transaction is engine-validated before it reaches [`Tracker::submit`].
+//!
+//! # Conflicts
+//!
+//! - `RejectDoubleSpendInMempool` is benign. A competing matcher, a cancel or a refund took the
+//!   input. The order whose input the node names backs off exponentially. When the input belongs to
+//!   no order ([`Tracked::owners`]), every order of the transaction backs off.
+//! - Nothing is replaced blindly. The matcher never calls `submitTransactionReplacement`. The
+//!   runner replaces only its own stuck keeper kills and refunds
+//!   (`crate::matcher::run::Runner::replace_stuck`).
+//! - A missing input is an orphan: its spend is already in a block the book has not shown yet. The
+//!   refusal names no outpoint, so the tracker asks the node which order inputs are still unspent
+//!   ([`Tracked::addresses`]). The orders whose inputs are gone back off, and the other orders of
+//!   the transaction are planned again at once. Every order backs off only when the node cannot
+//!   tell.
+//! - A mempool double spend of one of the operator's own funding coins backs off no order. The
+//!   spender is a transaction this process does not know: one from before a restart that the
+//!   journal missed, a withdraw, or a second process on the same key. The coin is held out of the
+//!   funding for `hold_daa`, or until the node's UTXO set no longer lists it ([`Tracker::held`]).
+//!   The batch is planned again at once over the other coins.
+//!
+//! # Acceptance
+//!
+//! - Acceptance comes from `getVirtualChainFromBlockV2` (`Low`). A transaction is accepted when a
+//!   chain block accepts it and final (done) `final_depth` DAA later.
+//! - A `removed` chain block moves its transactions back to pending (reorg), where they are
+//!   re-checked.
+//! - While a transaction is pending or accepted but not final, the outpoints it spends are excluded
+//!   from planning, so no order is planned twice.
+//!
+//! # Pending transactions
+//!
+//! A pending transaction that no chain block accepted within `pending_timeout` DAA is not
+//! forgotten. It is resent to the node, which settles it ([`Tracker::recheck_pending`]).
+//!
+//! - "Already in the mempool", or taken again: it stays pending with its inputs reserved, and is
+//!   checked again after another `pending_timeout`. A node keeps a transaction until it is mined or
+//!   evicted, so forgetting it would make its own funding coin refuse every later batch as a
+//!   mempool double spend.
+//! - Refused because its inputs went elsewhere: it is dropped (logged, `dropped_total`) and its
+//!   orders back off.
+//!
+//! A pending transaction is also dropped at once when the book no longer lists one of its order
+//! inputs on two steps in a row and the node confirms that input is spent. Another transaction won
+//! the race. The order whose input is gone backs off and the others are planned again
+//! ([`Tracker::drop_lost`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,19 +60,21 @@ use super::node::{classify_submit_error, ChainUpdate, NodeApi, RpcError, SubmitO
 pub struct TrackerConfig {
     /// DAA after acceptance at which a transaction is final (default 100, §1.3).
     pub final_depth: u64,
-    /// DAA after which an unaccepted transaction is checked with the node by an idempotent resend, and again every as many DAA
-    /// while the node holds it (default 600, a minute; [`Tracker::recheck_pending`]).
+    /// DAA after which an unaccepted transaction is resent to the node as a check. The check
+    /// repeats every `pending_timeout` DAA while the node holds it. Default 600, a minute
+    /// ([`Tracker::recheck_pending`]).
     pub pending_timeout: u64,
-    /// A submission without a verdict (one the in-flight journal brought back after a restart, or whose submit got no answer)
-    /// older than this (DAA, default 6000: ten times `pending_timeout`) is not sent again blindly: it is retired
-    /// ([`Tracker::retire`]).
+    /// Age in DAA past which a submission without a verdict is retired, not sent again
+    /// ([`Tracker::retire`]). Such a submission came back from the in-flight journal after a
+    /// restart, or its submit got no answer. Default 6000, ten times `pending_timeout`.
     pub max_resend_age: u64,
     /// First back-off of an order after a conflict (DAA; doubles per attempt).
     pub backoff_base: u64,
     /// Longest back-off (DAA).
     pub backoff_max: u64,
-    /// DAA a funding coin of the operator that a mempool transaction unknown to the tracker spends stays out of the funding
-    /// (default 3000, five minutes; earlier when the node's UTXO set no longer lists it).
+    /// DAA a funding coin of the operator stays out of the funding after a mempool transaction
+    /// unknown to the tracker spends it. The hold ends earlier when the node's UTXO set no longer
+    /// lists the coin. Default 3000, five minutes.
     pub hold_daa: u64,
 }
 
@@ -73,8 +91,10 @@ impl Default for TrackerConfig {
     }
 }
 
-/// Whether a node's refusal says the transaction is already in the chain (rusty-kaspa `RejectAlreadyAccepted`): accepted
-/// earlier, by a block this process may not have followed (before a restart).
+/// Whether a node's refusal says the transaction is already accepted by the chain.
+///
+/// That is rusty-kaspa's `RejectAlreadyAccepted`. A block this process may not have followed
+/// (before a restart) accepted the transaction.
 pub fn accepted_by_consensus(msg: &str) -> bool {
     msg.to_ascii_lowercase().contains("already accepted by the consensus")
 }
@@ -86,31 +106,34 @@ pub struct Recheck {
     pub kept: Vec<[u8; 32]>,
     /// Of `kept`, those the node did not hold any more and took again (re-broadcast).
     pub rebroadcast: Vec<[u8; 32]>,
-    /// Transactions the node refused (their inputs went elsewhere), with its answer: dropped, their orders back off.
+    /// Transactions the node refused, with its answer: dropped, and their orders back off.
     pub dropped: Vec<(Tracked, String)>,
-    /// Transactions the node reports already accepted by the chain (before this process followed it): done.
+    /// Transactions the node reports already accepted by the chain: done.
     pub accepted_earlier: Vec<Tracked>,
-    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]): retired.
+    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]).
     pub retired: Vec<[u8; 32]>,
 }
 
 /// A transaction the tracker follows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tracked {
+    /// Id of the transaction.
     pub txid: [u8; 32],
     /// Outpoints the transaction spends.
     pub spends: BTreeSet<Outpoint>,
     /// Order covenant ids it spends (legs, merged entries).
     pub orders: BTreeSet<CovId>,
-    /// The order each of its inputs belongs to, where known (an order's own UTXO, its custody): a mempool double spend of one
-    /// of these outpoints backs off that order only. Empty, or a conflict on any other input: every order of the transaction
-    /// backs off.
+    /// The order each input belongs to, where known (an order's own UTXO, its custody).
+    ///
+    /// A mempool double spend of one of these outpoints backs off that order only. A conflict on
+    /// any other input, or an empty map, backs off every order of the transaction.
     pub owners: BTreeMap<Outpoint, CovId>,
-    /// The address of each input `owners` names (where known): on a missing input the node is asked which of them are still
-    /// unspent.
+    /// The address of each input `owners` names, where known. On a missing input the node is asked
+    /// which of these are still unspent.
     pub addresses: BTreeMap<Outpoint, String>,
-    /// The transaction's own outpoints its children spend (chained steps).
+    /// The outpoints of this transaction that its children spend (chained steps).
     pub parent: Option<[u8; 32]>,
+    /// DAA score at which the transaction was submitted.
     pub submitted_daa: u64,
     /// `RpcTransaction` JSON, for an idempotent resend after a reorg.
     pub rpc_tx: Value,
@@ -120,30 +143,42 @@ pub struct Tracked {
     pub kind: String,
     /// Operator profit promised by the build (sompi).
     pub profit: i64,
-    /// Network fee paid (sompi) and its rate (sompi per gram, `crate::fee`).
+    /// Network fee paid (sompi).
     pub fee: u64,
+    /// Fee rate (sompi per gram, `crate::fee`).
     pub fee_rate: u64,
-    /// The submit call got no verdict (transport error / timeout): the node may hold the transaction. Cleared by the node's answer
-    /// to a resend or by the transaction's acceptance.
+    /// The submit call got no verdict (transport error or timeout), so the node may hold the
+    /// transaction. Cleared by the node's answer to a resend or by the transaction's acceptance.
     pub unconfirmed: bool,
-    /// The earliest UTC deadline (unix seconds) of the day orders the transaction fills: it is never sent again from then on,
-    /// nor within the clock margin before it (`docs/spec/matcher.md` §2.3: no fill after the deadline; [`Tracker::stale`]).
+    /// The earliest UTC deadline (unix seconds) of the day orders the transaction fills.
+    ///
+    /// The transaction is never sent again from the deadline on, nor within the clock margin before
+    /// it (`docs/spec/matcher.md` §2.3: no fill after the deadline; [`Tracker::stale`]).
     pub deadline: Option<u64>,
-    /// The DAA score from which the transaction is never sent again: the soft expiry of the first order it fills, or the end
-    /// of a maintenance sale's freshness (its price was the book's when it was planned).
+    /// The DAA score from which the transaction is never sent again.
+    ///
+    /// It is the soft expiry of the first order the transaction fills, or the end of a maintenance
+    /// sale's freshness (the sale's price was the book's when it was planned).
     pub resend_until: Option<u64>,
-    /// No longer sent ([`Tracker::retire`]): its inputs stay reserved until this DAA score, since a mempool may still hold it
-    /// (the chain then shows it, and it is followed to the end as any other); then it is forgotten
-    /// ([`Tracker::forget_retired`]).
+    /// Set when the transaction is no longer sent ([`Tracker::retire`]): the DAA score until which
+    /// its inputs stay reserved.
+    ///
+    /// A mempool may still hold the transaction. The chain then shows it and it is followed to the
+    /// end like any other. After that score it is forgotten ([`Tracker::forget_retired`]).
     pub retired: Option<u64>,
 }
 
-/// What a resend is checked against ([`Tracker::stale`]): the virtual DAA score, the local UTC time (unix seconds) and the
-/// clock margin a day order's deadline keeps (the clock check's bound plus the skew measured, `matcher::run`).
+/// What a resend is checked against ([`Tracker::stale`]).
+///
+/// It holds the virtual DAA score, the local UTC time (unix seconds) and the clock margin a day
+/// order's deadline keeps (the clock check's bound plus the measured skew, `matcher::run`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ResendClock {
+    /// Virtual DAA score.
     pub daa: u64,
+    /// Local UTC time, unix seconds.
     pub utc: u64,
+    /// Seconds a day order's deadline keeps clear of the local clock.
     pub margin_secs: u64,
 }
 
@@ -157,13 +192,19 @@ impl ResendClock {
 /// Events of one tracker step (for logs and metrics).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackerEvents {
+    /// Transactions a chain block accepted in this step.
     pub accepted: Vec<[u8; 32]>,
+    /// Transactions that became final.
     pub finalized: Vec<Tracked>,
+    /// Transactions whose accepting block was reorged away.
     pub rolled_back: Vec<[u8; 32]>,
 }
 
-/// The outpoint a node's double-spend rejection names: rusty-kaspa's `output (<txid>, <index>) already spent by transaction
-/// <txid> in the mempool` (`TransactionOutpoint` displays as `(<txid>, <index>)`), or `output <txid>:<index> ...`.
+/// The outpoint a node's double-spend rejection names.
+///
+/// The message is rusty-kaspa's `output (<txid>, <index>) already spent by transaction <txid> in
+/// the mempool`, where `TransactionOutpoint` displays as `(<txid>, <index>)`. The form `output
+/// <txid>:<index> ...` is read too.
 pub fn double_spent_outpoint(msg: &str) -> Option<Outpoint> {
     let at = msg.find("output ")? + "output ".len();
     let rest = &msg[at..];
@@ -177,8 +218,10 @@ pub fn double_spent_outpoint(msg: &str) -> Option<Outpoint> {
     Some((txid, index.trim().parse().ok()?))
 }
 
-/// The orders a lost race backs off: the one whose input a double spend names, else (a missing input) those whose inputs the
-/// node no longer holds, else every order of the transaction.
+/// The orders a lost race backs off.
+///
+/// They are the order whose input a double spend names. For a missing input they are the orders
+/// whose inputs the node no longer holds. Otherwise they are every order of the transaction.
 async fn lost_orders<N: NodeApi>(node: &N, t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BTreeSet<CovId> {
     if outcome == SubmitOutcome::MissingInput {
         if let Some(ids) = missing_owners(node, t).await {
@@ -188,9 +231,11 @@ async fn lost_orders<N: NodeApi>(node: &N, t: &Tracked, outcome: SubmitOutcome, 
     conflict_orders(t, outcome, msg)
 }
 
-/// The orders a refused submission backs off: on a mempool double spend of an input whose order is known
-/// ([`Tracked::owners`]), that order alone (the others in the transaction did nothing wrong and are planned again at once);
-/// otherwise every order of the transaction.
+/// The orders a refused submission backs off.
+///
+/// On a mempool double spend of an input whose order is known ([`Tracked::owners`]), that order
+/// alone backs off, and the others are planned again at once. Otherwise every order of the
+/// transaction backs off.
 fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BTreeSet<CovId> {
     if outcome == SubmitOutcome::DoubleSpend {
         if let Some(id) = msg.and_then(double_spent_outpoint).and_then(|op| t.owners.get(&op)) {
@@ -200,13 +245,18 @@ fn conflict_orders(t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>) -> BT
     t.orders.clone()
 }
 
-/// The orders a node's generic refusal ([`SubmitOutcome::Rejected`]) backs off. The refusal names no order, so the batch is
-/// searched by halves across ticks: half of a transaction with several orders sits out, the other half is planned again at
-/// once and, if the node refuses it again, loses half of itself the same way, until a single order is the one backed off. So one
-/// order that makes a node-only policy refuse every batch it is in costs the others at most one backoff each (audit 2026-10-30
-/// E2), never the whole batch every time. The half is chosen by a keyed hash of the order id and the refusal count, the key random
-/// per process: it was the lower half by id, which an order with a ground low covenant id (cheap to make) made a fixed victim
-/// of the lowest honest ids of every batch it was in (audit 2026-10-30 E3).
+/// The orders a node's generic refusal ([`SubmitOutcome::Rejected`]) backs off.
+///
+/// The refusal names no order, so the batch is searched by halves across ticks. Half of the orders
+/// sit out. The other half is planned again at once and, if the node refuses it again, loses half
+/// of itself the same way, until a single order is backed off. One order that makes a node-only
+/// policy refuse every batch it is in therefore costs the others at most one backoff each, never
+/// the whole batch every time.
+///
+/// The half is chosen by a hash of the order id and the refusal count, keyed by a key that is
+/// random per process. A fixed choice such as the lower half by id would make an order with a
+/// ground low covenant id (cheap to make) the permanent victim of the lowest honest ids of every
+/// batch it is in.
 fn rejected_orders(salt: &std::collections::hash_map::RandomState, round: u64, orders: &BTreeSet<CovId>) -> BTreeSet<CovId> {
     use std::hash::BuildHasher;
     let half = orders.len().div_ceil(2);
@@ -215,10 +265,16 @@ fn rejected_orders(salt: &std::collections::hash_map::RandomState, round: u64, o
     keyed.into_iter().take(half).map(|(_, id)| id).collect()
 }
 
-/// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input refusal: None when the
-/// node cannot tell (no address known, a node without its UTXO index (`--utxoindex`: an address query proves nothing
-/// there, so nothing is taken as spent), the query failed, or every order input is still there: the missing input is
-/// another one).
+/// The orders of `t` whose inputs the node no longer holds, asked by address after a missing-input
+/// refusal.
+///
+/// `None` when the node cannot tell:
+///
+/// - no address is known;
+/// - the node has no UTXO index (`--utxoindex`), so an address query proves nothing and nothing is
+///   taken as spent;
+/// - the query failed;
+/// - every order input is still there, so the missing input is another one.
 async fn missing_owners<N: NodeApi>(node: &N, t: &Tracked) -> Option<BTreeSet<CovId>> {
     let addrs: BTreeSet<&String> = t.owners.keys().filter_map(|op| t.addresses.get(op)).collect();
     if addrs.is_empty() {
@@ -238,72 +294,93 @@ async fn missing_owners<N: NodeApi>(node: &N, t: &Tracked) -> Option<BTreeSet<Co
 /// Follows submitted transactions until they are final.
 #[derive(Debug, Default)]
 pub struct Tracker {
+    /// Settings.
     pub cfg: TrackerConfig,
     /// Last chain block seen (VSPC cursor).
     pub cursor: Option<String>,
+    /// The followed transactions by id.
     pub txs: BTreeMap<[u8; 32], Tracked>,
     /// Order id -> (back off until DAA, attempts).
     pub backoff: BTreeMap<CovId, (u64, u32)>,
-    /// The key of the keyed hash that picks the half of a refused batch to back off ([`rejected_orders`]): random per process.
+    /// The key of the hash that picks the half of a refused batch to back off
+    /// ([`rejected_orders`]). Random per process.
     half_salt: std::collections::hash_map::RandomState,
-    /// Counters.
+    /// Submissions the node took.
     pub submitted: u64,
+    /// Submissions refused for a conflict: a mempool double spend, a missing input or a lost race.
     pub conflicts: u64,
+    /// Submissions the node refused with a generic refusal ([`SubmitOutcome::Rejected`]).
     pub rejected: u64,
-    /// Submits without a verdict.
+    /// Submissions without a verdict.
     pub unknown: u64,
+    /// Transactions that became final.
     pub finalized_count: u64,
+    /// Sum of the profit (sompi) of the final transactions.
     pub finalized_profit: i64,
-    /// Pending transactions one of whose order inputs the last book did not list ([`Tracker::drop_lost`]).
+    /// Pending transactions that had an order input missing from the last book
+    /// ([`Tracker::drop_lost`]).
     pub lost: BTreeSet<[u8; 32]>,
-    /// The operator's funding coins (its P2PK outpoints) at the last funding read ([`Tracker::note_operator_coins`]): a mempool
-    /// double spend naming one of them holds the coin instead of backing off the batch's orders.
+    /// The operator's funding coins (its P2PK outpoints) at the last funding read
+    /// ([`Tracker::note_operator_coins`]). A mempool double spend naming one of them holds the coin
+    /// instead of backing off the batch's orders.
     pub operator_coins: BTreeSet<Outpoint>,
-    /// Funding coins a mempool transaction unknown to the tracker spends, and the DAA score until which they stay out of the
-    /// funding (`TrackerConfig::hold_daa`; dropped earlier once the node's UTXO set no longer lists them).
+    /// Funding coins that a mempool transaction unknown to the tracker spends, with the DAA score
+    /// until which they stay out of the funding (`TrackerConfig::hold_daa`). A coin is dropped
+    /// earlier once the node's UTXO set no longer lists it.
     pub held: BTreeMap<Outpoint, u64>,
-    /// DAA score at which each pending transaction was last checked with the node ([`Tracker::recheck_pending`]).
+    /// DAA score at which each pending transaction was last checked with the node.
+    ///
+    /// See [`Tracker::recheck_pending`].
     pub checked: BTreeMap<[u8; 32], u64>,
-    /// Transactions given up: refused by the node at a recheck or a resend, or lost a race ([`Tracker::drop_lost`]).
+    /// Transactions given up: refused by the node at a recheck or a resend, or a lost race
+    /// ([`Tracker::drop_lost`]).
     pub dropped_total: u64,
     /// Funding coins held after a mempool double spend ([`Tracker::held`]).
     pub held_total: u64,
     /// Unix time (seconds) of the last submission the node took (0: none yet).
     pub last_submit_unix: u64,
-    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]: a day order's deadline, an
-    /// order's soft expiry, a maintenance sale's stale price, a journal entry too old to send blindly).
+    /// Transactions not sent again because they would no longer be valid ([`Tracker::stale`]): a
+    /// day order's deadline, an order's soft expiry, a maintenance sale's stale price, or a journal
+    /// entry too old to send blindly.
     pub resend_dropped_total: u64,
-    /// Submissions without a verdict the node refused for a missing input at a resend: possibly mined while this process was
-    /// down (their inputs are spent). Retired, not dropped: the store shows them accepted once it caught up, or they count as
-    /// dropped when forgotten ([`Tracker::forget_retired`]).
+    /// Submissions without a verdict that the node refused for a missing input at a resend, so they
+    /// were possibly mined while this process was down.
+    ///
+    /// They are retired, not dropped. The store shows them accepted once it has caught up, or they
+    /// count as dropped when forgotten ([`Tracker::forget_retired`]).
     pub doubtful: BTreeSet<[u8; 32]>,
-    /// Transactions the in-flight journal brought back at the start, until the node's first answer about each.
+    /// Transactions the in-flight journal brought back at start, until the node's first answer
+    /// about each.
     pub restored: BTreeSet<[u8; 32]>,
-    /// Retired transactions the node's mempool did not hold at the last check: the DAA score of that check and the misses in
-    /// a row ([`Tracker::retired_to_check`]).
+    /// Retired transactions the node's mempool did not hold at the last check: the DAA score of
+    /// that check and the number of misses in a row ([`Tracker::retired_to_check`]).
     pub retired_misses: BTreeMap<[u8; 32], (u64, u32)>,
 }
 
-/// A retired transaction's mempool is checked at most this often (DAA, about ten seconds), and ...
+/// A retired transaction's mempool is checked at most this often (DAA, about ten seconds).
 pub const RETIRED_CHECK_DAA: u64 = 100;
-/// ... it is forgotten before its hold ends after this many misses in a row: a transaction mined between two checks leaves the
-/// mempool too, and the chain shows it accepted (it is then followed as any other) before a second miss.
+/// Misses in a row after which a retired transaction is forgotten before its hold ends.
+///
+/// A transaction mined between two checks leaves the mempool too, so the chain shows it accepted
+/// (and it is followed as any other) before a second miss.
 pub const RETIRED_MISSES: u32 = 2;
 
 impl Tracker {
+    /// A tracker with no transactions.
     pub fn new(cfg: TrackerConfig) -> Self {
         Tracker { cfg, ..Default::default() }
     }
 
-    /// Outpoints no plan may spend (pending and accepted-but-not-final transactions, and held funding coins).
+    /// Outpoints no plan may spend: those of pending and accepted but not final transactions, and
+    /// held funding coins.
     pub fn spent_outpoints(&self) -> BTreeSet<Outpoint> {
         let mut s: BTreeSet<Outpoint> = self.txs.values().flat_map(|t| t.spends.iter().copied()).collect();
         s.extend(self.held.keys().copied());
         s
     }
 
-    /// The operator's funding coins as the node lists them now: a held coin the node no longer lists (its spender was mined, or
-    /// it is gone) and one whose hold ran out are released.
+    /// The operator's funding coins as the node lists them now. A held coin the node no longer
+    /// lists (its spender was mined, or it is gone) and one whose hold ran out are released.
     pub fn note_operator_coins(&mut self, coins: BTreeSet<Outpoint>, daa: u64) {
         self.held.retain(|op, until| *until > daa && coins.contains(op));
         self.operator_coins = coins;
@@ -314,14 +391,16 @@ impl Tracker {
         self.backoff.iter().filter(|(_, (until, _))| *until > daa).map(|(k, _)| *k).collect()
     }
 
-    /// Forgets the backoffs that ran out longer than `backoff_max` ago (their attempt count no longer doubles anything): the
-    /// map stays as small as the orders that recently lost a race.
+    /// Forgets the backoffs that ran out longer than `backoff_max` ago, since their attempt count
+    /// no longer doubles anything. The map stays as small as the set of orders that recently lost a
+    /// race.
     pub fn prune_backoff(&mut self, daa: u64) {
         let keep = self.cfg.backoff_max;
         self.backoff.retain(|_, (until, _)| until.saturating_add(keep) > daa);
     }
 
-    /// DAA the oldest pending (unaccepted) transaction has waited at `daa` (0: none pending). A retired one is not waited for.
+    /// DAA the oldest pending (unaccepted) transaction has waited at `daa` (0: none pending). A
+    /// retired transaction is not waited for.
     pub fn oldest_pending_daa(&self, daa: u64) -> u64 {
         self.txs
             .values()
@@ -331,11 +410,17 @@ impl Tracker {
             .unwrap_or(0)
     }
 
-    /// Why `t` must not be sent again now (`None`: it may): a day order it fills reached its deadline (or is within the clock
-    /// margin of it), an order it fills reached its soft expiry or a maintenance sale's price is no longer current
-    /// ([`Tracked::resend_until`]), or a submission without a verdict is older than `max_resend_age` (a journal entry from
-    /// before a long downtime: whatever it was planned on may have changed). The planning gates see only new plans; a resend
-    /// is checked here.
+    /// Why `t` must not be sent again now (`None`: it may be sent).
+    ///
+    /// The reasons are:
+    ///
+    /// - a day order it fills reached its deadline, or is within the clock margin of it;
+    /// - an order it fills reached its soft expiry, or a maintenance sale's price is no longer
+    ///   current ([`Tracked::resend_until`]);
+    /// - a submission without a verdict is older than `max_resend_age`. A journal entry from before
+    ///   a long downtime may have been planned on facts that changed.
+    ///
+    /// The planning gates see only new plans, so a resend is checked here.
     pub fn stale(&self, t: &Tracked, c: &ResendClock) -> Option<String> {
         if let Some(d) = t.deadline.filter(|d| c.utc.saturating_add(c.margin_secs) >= *d) {
             return Some(format!(
@@ -353,9 +438,11 @@ impl Tracker {
         None
     }
 
-    /// `id` is no longer sent (`why`): logged and counted ([`Tracker::resend_dropped_total`]); its inputs stay reserved for
-    /// `hold_daa`, since a mempool may still hold it (acceptance is followed meanwhile), then it is forgotten
-    /// ([`Tracker::forget_retired`]), or earlier once the nodes say twice in a row that their mempools do not hold it
+    /// Stops sending `id` (`why`): logged and counted ([`Tracker::resend_dropped_total`]).
+    ///
+    /// Its inputs stay reserved for `hold_daa`, since a mempool may still hold it, and its
+    /// acceptance is followed meanwhile. Then it is forgotten ([`Tracker::forget_retired`]), or
+    /// earlier once the nodes say twice in a row that their mempools do not hold it
     /// ([`Tracker::retired_checked`]).
     pub fn retire(&mut self, id: &[u8; 32], why: &str, daa: u64) {
         let hold = self.cfg.hold_daa;
@@ -373,7 +460,8 @@ impl Tracker {
         );
     }
 
-    /// Marks `id` retired until `hold_daa` from `daa` (`false`: not tracked, or retired already).
+    /// Marks `id` retired until `hold_daa` from `daa`. Returns `false` when it is not tracked or
+    /// already retired.
     fn hold_retired(&mut self, id: &[u8; 32], daa: u64) -> bool {
         let hold = self.cfg.hold_daa;
         let Some(t) = self.txs.get_mut(id).filter(|t| t.retired.is_none()) else { return false };
@@ -383,9 +471,11 @@ impl Tracker {
         true
     }
 
-    /// The retired transactions no chain block accepted by `daa` ([`Tracked::retired`]): forgotten, their inputs free again.
-    /// Called once the store has caught up (a transaction mined while this process was down shows as accepted first); a
-    /// doubtful one ([`Tracker::doubtful`]) counts as dropped then.
+    /// The retired transactions no chain block accepted by `daa` ([`Tracked::retired`]): forgotten,
+    /// so their inputs are free again.
+    ///
+    /// Call it once the store has caught up, since a transaction mined while this process was down
+    /// shows as accepted first. A doubtful one ([`Tracker::doubtful`]) counts as dropped then.
     pub fn forget_retired(&mut self, daa: u64) -> Vec<Tracked> {
         let gone: Vec<[u8; 32]> =
             self.txs.values().filter(|t| t.accepted.is_none() && t.retired.is_some_and(|r| daa >= r)).map(|t| t.txid).collect();
@@ -405,8 +495,10 @@ impl Tracker {
         out
     }
 
-    /// The retired transactions to ask the node's mempool about at `daa` (audit round 3 R3-L-4): unaccepted, their hold not
-    /// over, and not asked within [`RETIRED_CHECK_DAA`].
+    /// The retired transactions to ask the node's mempool about at `daa`.
+    ///
+    /// They are unaccepted, their hold is not over, and they were not asked within
+    /// [`RETIRED_CHECK_DAA`].
     pub fn retired_to_check(&self, daa: u64) -> Vec<[u8; 32]> {
         self.txs
             .values()
@@ -416,9 +508,12 @@ impl Tracker {
             .collect()
     }
 
-    /// The node's answer about retired `id` at `daa`: `Some(false)` it does not hold it, `Some(true)` it does, `None` unsure
-    /// (the hold stays). At [`RETIRED_MISSES`] misses in a row it is forgotten before its hold ends (returned; a doubtful one
-    /// counts as dropped, as [`Tracker::forget_retired`] does at the hold's end), its inputs free again.
+    /// Records the node's answer about retired `id` at `daa`.
+    ///
+    /// `Some(false)` means the node does not hold it, `Some(true)` that it does, and `None` that it
+    /// is unsure (the hold stays). At [`RETIRED_MISSES`] misses in a row the transaction is
+    /// forgotten before its hold ends and returned, and its inputs are free again. A doubtful one
+    /// counts as dropped then, as [`Tracker::forget_retired`] does at the hold's end.
     pub fn retired_checked(&mut self, id: &[u8; 32], held: Option<bool>, daa: u64) -> Option<Tracked> {
         if !self.txs.get(id).is_some_and(|t| t.accepted.is_none() && t.retired.is_some()) {
             self.retired_misses.remove(id);
@@ -426,7 +521,7 @@ impl Tracker {
         }
         let misses = match held {
             Some(false) => self.retired_misses.get(id).map_or(0, |m| m.1) + 1,
-            // held, or unsure: no miss in a row
+            // Held or unsure: no miss in a row.
             _ => 0,
         };
         if misses < RETIRED_MISSES {
@@ -441,8 +536,9 @@ impl Tracker {
         self.txs.remove(id)
     }
 
-    /// A mempool double spend of `t` that names one of the operator's funding coins (`msg`): the coin is held
-    /// ([`Tracker::held`]) and no order backs off. `false`: the double spend is about something else.
+    /// A mempool double spend of `t` that names one of the operator's funding coins (`msg`): the
+    /// coin is held ([`Tracker::held`]) and no order backs off. Returns `false` when the double
+    /// spend is about something else.
     fn hold_funding(&mut self, t: &Tracked, msg: Option<&str>, daa: u64) -> bool {
         let Some(op) = msg.and_then(double_spent_outpoint) else { return false };
         if !self.operator_coins.contains(&op) || t.owners.contains_key(&op) || !t.spends.contains(&op) {
@@ -475,7 +571,7 @@ impl Tracker {
     pub async fn submit<N: NodeApi>(&mut self, node: &N, t: Tracked, daa: u64) -> SubmitOutcome {
         if let Some(p) = t.parent {
             if !self.txs.contains_key(&p) {
-                // A chained step whose parent failed: never submit it.
+                // A chained step whose parent failed is never submitted.
                 return SubmitOutcome::MissingInput;
             }
         }
@@ -506,7 +602,8 @@ impl Tracker {
             }
             SubmitOutcome::Busy => self.back_off(&t.orders, daa),
             SubmitOutcome::Unknown => {
-                // The node may have taken it: never plan a conflicting transaction over the same inputs; follow it like a pending one.
+                // The node may have taken it. Follow it like a pending one, and never plan a
+                // conflicting transaction over the same inputs.
                 self.unknown += 1;
                 let mut t = t;
                 t.unconfirmed = true;
@@ -521,11 +618,20 @@ impl Tracker {
         outcome
     }
 
-    /// Resends every transaction whose submit got no verdict and that no chain block accepted yet (idempotent: the node answers
-    /// "already in the mempool" for one it holds). The node's answer settles the doubt: taken -> tracked normally; refused -> dropped
-    /// and its orders back off; still no answer -> stays unconfirmed. One that would no longer be valid ([`Tracker::stale`]) is
-    /// not sent: it is retired. A missing input (its inputs are spent: it may have been mined while this process was down) is
-    /// not counted as dropped yet: it is retired as doubtful until the store has caught up ([`Tracker::forget_retired`]).
+    /// Resends every transaction whose submit got no verdict and that no chain block accepted yet.
+    /// The resend is idempotent: the node answers "already in the mempool" for one it holds.
+    ///
+    /// The node's answer settles the doubt:
+    ///
+    /// - taken: tracked normally;
+    /// - refused: dropped, and its orders back off;
+    /// - no answer: it stays unconfirmed.
+    ///
+    /// A transaction that would no longer be valid ([`Tracker::stale`]) is retired, not sent. A
+    /// missing input means its inputs are spent, so it may have been mined while this process was
+    /// down. It is retired as doubtful, not counted as dropped, until the store has caught up
+    /// ([`Tracker::forget_retired`]).
+    ///
     /// Returns the answers.
     pub async fn resubmit_unconfirmed<N: NodeApi>(&mut self, node: &N, clock: &ResendClock) -> Vec<([u8; 32], SubmitOutcome)> {
         let daa = clock.daa;
@@ -553,7 +659,7 @@ impl Tracker {
             };
             match outcome {
                 SubmitOutcome::AlreadyKnown if msg.as_deref().is_some_and(accepted_by_consensus) => {
-                    // accepted by a block this process did not follow (before a restart): done
+                    // Accepted by a block this process did not follow (before a restart): done.
                     if let Some(t) = self.txs.remove(&id) {
                         self.done_earlier(&t);
                     }
@@ -568,7 +674,8 @@ impl Tracker {
                 }
                 SubmitOutcome::Unknown | SubmitOutcome::Busy => {}
                 SubmitOutcome::MissingInput if self.restored.contains(&id) => {
-                    // spent inputs: mined while this process was down, or a race lost; the store tells which
+                    // spent inputs: mined while this process was down, or a race lost. The store
+                    // tells which.
                     if self.hold_retired(&id, daa) {
                         self.doubtful.insert(id);
                         tracing::info!(
@@ -591,8 +698,8 @@ impl Tracker {
         out
     }
 
-    /// A tracked transaction the node refused (`outcome`, `msg`) at a resend: counted, and its orders back off (none for a held
-    /// funding coin).
+    /// A tracked transaction the node refused (`outcome`, `msg`) at a resend: counted, and its
+    /// orders back off (none for a held funding coin).
     async fn give_up<N: NodeApi>(&mut self, node: &N, t: &Tracked, outcome: SubmitOutcome, msg: Option<&str>, daa: u64) {
         self.dropped_total += 1;
         self.checked.remove(&t.txid);
@@ -610,7 +717,8 @@ impl Tracker {
         self.back_off(&ids, daa);
     }
 
-    /// A tracked transaction the node reports already in the chain: done, as a final one (its profit counts).
+    /// A tracked transaction the node reports already in the chain: done, as a final one (its
+    /// profit counts).
     fn done_earlier(&mut self, t: &Tracked) {
         self.checked.remove(&t.txid);
         self.finalized_count += 1;
@@ -623,14 +731,24 @@ impl Tracker {
         );
     }
 
-    /// Pending transactions no chain block accepted for `pending_timeout` DAA since their submission or their last check are
-    /// resent (idempotent) and the node's answer settles each: still held ("already in the mempool") or taken again: kept and
-    /// checked again later; already in the chain: done; refused (an input went elsewhere): dropped, its orders back off (no
-    /// order for a held funding coin); no verdict: tried again at the next check. Not while `may_send` is false (the kill
-    /// switch, a dry run): nothing leaves the process then, and nothing is dropped either. A transaction whose submission had
-    /// no verdict is settled by [`Tracker::resubmit_unconfirmed`] instead. One that would no longer be valid
-    /// ([`Tracker::stale`]: past a day order's deadline, an order's soft expiry, a sale's freshness) is not sent: it is retired
-    /// (a mempool that still holds it keeps it; nothing here replaces it).
+    /// Resends the pending transactions that no chain block accepted for `pending_timeout` DAA
+    /// since their submission or their last check. The resend is idempotent.
+    ///
+    /// The node's answer settles each transaction:
+    ///
+    /// - still held ("already in the mempool") or taken again: kept and checked again later;
+    /// - already in the chain: done;
+    /// - refused because an input went elsewhere: dropped, and its orders back off (no order for a
+    ///   held funding coin);
+    /// - no verdict: tried again at the next check.
+    ///
+    /// With `may_send` false (the kill switch, a dry run) nothing leaves the process and nothing is
+    /// dropped. A transaction whose submission had no verdict is settled by
+    /// [`Tracker::resubmit_unconfirmed`] instead.
+    ///
+    /// A transaction that would no longer be valid ([`Tracker::stale`]: past a day order's
+    /// deadline, an order's soft expiry or a sale's freshness) is retired, not sent. A mempool that
+    /// still holds it keeps it. Nothing here replaces it.
     pub async fn recheck_pending<N: NodeApi>(&mut self, node: &N, clock: &ResendClock, may_send: bool) -> Recheck {
         let daa = clock.daa;
         let mut r = Recheck::default();
@@ -688,13 +806,22 @@ impl Tracker {
         r
     }
 
-    /// Drops the pending transactions that lost their race: one of their order inputs ([`Tracked::owners`], listed when the
-    /// transaction was planned) is missing from the book `listed` (the outpoints of every listed order and custody) on two
-    /// calls in a row, no chain block accepted the transaction meanwhile, and the node confirms that input is spent. Another
-    /// transaction spent it, so this one can never be accepted: it is dropped, the owner of the spent input backs off, and the
-    /// other orders are free to be planned again (instead of waiting `pending_timeout` and backing off). A chained step (its
-    /// inputs are its parent's outputs) and a transaction the node cannot tell about are left to the timeout. Returns the
-    /// dropped transactions.
+    /// Drops the pending transactions that lost their race.
+    ///
+    /// A transaction lost when all of these hold:
+    ///
+    /// - one of its order inputs ([`Tracked::owners`], listed when the transaction was planned) is
+    ///   missing from the book `listed` (the outpoints of every listed order and custody) on two
+    ///   calls in a row;
+    /// - no chain block accepted the transaction meanwhile;
+    /// - the node confirms that input is spent.
+    ///
+    /// Another transaction spent the input, so this one can never be accepted. It is dropped, the
+    /// owner of the spent input backs off, and the other orders are free to be planned again at
+    /// once, not after `pending_timeout`. A chained step (its inputs are its parent's outputs) and
+    /// a transaction the node cannot tell about are left to the timeout.
+    ///
+    /// Returns the dropped transactions.
     pub async fn drop_lost<N: NodeApi>(&mut self, node: &N, listed: &BTreeSet<Outpoint>, daa: u64) -> Vec<[u8; 32]> {
         let now: BTreeSet<[u8; 32]> = self
             .txs
@@ -743,10 +870,11 @@ impl Tracker {
         self.settle(daa, ev)
     }
 
-    /// Acceptance as seen by a chain follower that is not this tracker (the indexer, in-process):
+    /// Acceptance as seen by a chain follower that is not this tracker (the indexer, in-process).
+    ///
     /// `view` maps a transaction id to the chain block that accepts it on the selected chain now
-    /// (absent: not accepted). It replaces the VSPC cursor: a transaction whose block was reorged
-    /// away is simply absent, and moves back to pending.
+    /// (absent: not accepted). It replaces the VSPC cursor. A transaction whose block was reorged
+    /// away is absent and moves back to pending.
     pub fn observe(&mut self, view: &BTreeMap<[u8; 32], (String, u64)>, daa: u64) -> TrackerEvents {
         let mut ev = TrackerEvents::default();
         for t in self.txs.values_mut() {
@@ -765,8 +893,8 @@ impl Tracker {
         self.settle(daa, ev)
     }
 
-    /// Final: accepted + depth. A transaction no chain block accepted is never given up here: [`Tracker::recheck_pending`]
-    /// asks the node about it.
+    /// Final means accepted plus `final_depth`. A transaction no chain block accepted is never
+    /// given up here: [`Tracker::recheck_pending`] asks the node about it.
     fn settle(&mut self, daa: u64, mut ev: TrackerEvents) -> TrackerEvents {
         for t in self.txs.values_mut() {
             if t.accepted.is_some() {
@@ -789,8 +917,8 @@ impl Tracker {
         ev
     }
 
-    /// Transactions rolled back by a reorg that are still pending: resend them (idempotent; a
-    /// double spend now means their inputs went elsewhere, and they are dropped at the timeout).
+    /// Transactions rolled back by a reorg that are still pending: resend them (idempotent). A
+    /// double spend then means their inputs went elsewhere, and they are dropped at the timeout.
     pub fn resend_candidates(&self) -> Vec<&Tracked> {
         self.txs.values().filter(|t| t.accepted.is_none()).collect()
     }
@@ -806,8 +934,9 @@ mod tests {
     use super::*;
     use crate::matcher::node::ChainBlock;
 
-    /// Audit 2026-10-30 E3: an order with a low (ground) covenant id is not a fixed victim of a refused batch: the half that sits out is
-    /// not the lower half by id, it differs from one refusal to the next, and the batch still converges on the one order.
+    /// An order with a low (ground) covenant id is not a fixed victim of a refused batch. The half
+    /// that sits out is not the lower half by id, it differs from one refusal to the next, and the
+    /// batch still converges on the one order.
     #[test]
     fn the_half_that_sits_out_is_not_the_lowest_ids() {
         let salt = std::collections::hash_map::RandomState::new();
@@ -823,7 +952,8 @@ mod tests {
             firsts.insert(out.into_iter().collect::<Vec<_>>());
         }
         assert!(seen_other && firsts.len() > 3, "the same half every time: {firsts:?}");
-        // a single order is the one backed off; searching converges on the one bad order of eight in at most three refusals
+        // A single order is the one backed off. Searching converges on the one bad order of eight
+        // in at most four refusals.
         assert_eq!(rejected_orders(&salt, 1, &[[9u8; 32]].into_iter().collect()), [[9u8; 32]].into_iter().collect());
         for bad in 1u8..=8 {
             let mut live = batch.clone();
@@ -883,7 +1013,8 @@ mod tests {
         let ev = t.apply(&ChainUpdate { removed: vec!["b1".into()], added: vec![] }, 1_020);
         assert_eq!(ev.rolled_back, vec![[1; 32]]);
         assert_eq!(t.pending(), 2);
-        // Re-accepted, then final after 100 DAA; the other one is never given up by a chain update (the node is asked).
+        // Re-accepted, then final after 100 DAA. The other transaction is never given up by a chain
+        // update (the node is asked).
         let up =
             ChainUpdate { removed: vec![], added: vec![ChainBlock { hash: "b2".into(), daa_score: 1_030, accepted: vec![[1; 32]] }] };
         t.apply(&up, 1_031);
@@ -894,7 +1025,8 @@ mod tests {
         assert_eq!(t.oldest_pending_daa(1_600), 600);
     }
 
-    /// A node for [`Tracker::recheck_pending`]: answers each submission from a queue (`None`: taken).
+    /// A node for [`Tracker::recheck_pending`]: answers each submission from a queue (`None`:
+    /// taken).
     #[derive(Default)]
     struct Answers(std::sync::Mutex<std::collections::VecDeque<Option<RpcError>>>, std::sync::atomic::AtomicUsize);
 
@@ -920,9 +1052,10 @@ mod tests {
         }
     }
 
-    /// Audit 2026-11-11 M-2: an unaccepted transaction is not forgotten after `pending_timeout`: the node is asked (a resend),
-    /// and only its refusal drops it. While it says "already in the mempool" the inputs stay reserved and it is checked again
-    /// one interval later; "already accepted by the consensus" ends it as done; nothing is sent while sending is off.
+    /// An unaccepted transaction is not forgotten after `pending_timeout`: the node is asked (a
+    /// resend), and only its refusal drops it. While the node says "already in the mempool" the
+    /// inputs stay reserved and the transaction is checked again one interval later. "Already
+    /// accepted by the consensus" ends it as done. Nothing is sent while sending is off.
     #[tokio::test]
     async fn an_unaccepted_transaction_is_rechecked_with_the_node_not_forgotten() {
         let node = Answers::default();
@@ -956,10 +1089,11 @@ mod tests {
         assert_eq!(t.oldest_pending_daa(2_200), 1_200);
     }
 
-    /// Audit round 2 R2-M-2: a resend is checked first. A pending transaction past a day order's deadline (or within the clock
-    /// margin of it), past an order's soft expiry or a sale's freshness, or a submission without a verdict older than
-    /// `max_resend_age`, is not sent: it is retired (counted), its inputs stay reserved for `hold_daa` and its acceptance is
-    /// still followed; then it is forgotten.
+    /// A resend is checked first. A pending transaction past a day order's deadline (or within the
+    /// clock margin of it), past an order's soft expiry or a sale's freshness, or a submission
+    /// without a verdict older than `max_resend_age`, is not sent. It is retired (counted), its
+    /// inputs stay reserved for `hold_daa` and its acceptance is still followed. Then it is
+    /// forgotten.
     #[tokio::test]
     async fn a_resend_that_would_no_longer_be_valid_is_not_sent() {
         let node = Answers::default();
@@ -971,7 +1105,8 @@ mod tests {
         for x in [day, expiring, fine] {
             t.txs.insert(x.txid, x);
         }
-        // the deadline is 30 s away, within the margin: not sent; the expired one neither; the third is
+        // The deadline is 30 s away, within the margin, so that transaction is not sent. The
+        // expired one is not sent either. The third is.
         let clock = ResendClock { daa: 1_600, utc: 9_970, margin_secs: 30 };
         let r = t.recheck_pending(&node, &clock, true).await;
         assert_eq!(r.retired, vec![[1; 32], [2; 32]]);
@@ -993,7 +1128,8 @@ mod tests {
         assert!(t.txs.contains_key(&[2; 32]) && !t.spent_outpoints().contains(&([1; 32], 0)));
         assert_eq!(t.dropped_total, 0, "not a refusal: counted apart");
 
-        // a submission without a verdict older than `max_resend_age` (a journal entry of a long downtime): not sent blindly
+        // A submission without a verdict older than `max_resend_age` (a journal entry of a long
+        // downtime) is not sent blindly.
         let mut t = Tracker::new(TrackerConfig::default());
         t.txs.insert([5; 32], Tracked { unconfirmed: true, ..tracked(5, 1_000) });
         t.txs.insert([6; 32], Tracked { unconfirmed: true, ..tracked(6, 7_000) });
@@ -1004,9 +1140,10 @@ mod tests {
         assert!(t.txs[&[5; 32]].retired.is_some());
     }
 
-    /// Audit round 2 R2-L-2: a journal entry refused for a missing input after a restart (its inputs are spent: it may have been
-    /// mined while the process was down) is not counted as dropped at once: it waits for the store, which shows it accepted (its
-    /// profit counts) or not (then it counts as dropped). A submission of this run refused the same way is given up as before.
+    /// A journal entry refused for a missing input after a restart (its inputs are spent, so it may
+    /// have been mined while the process was down) is not counted as dropped at once. It waits for
+    /// the store, which shows it accepted (its profit counts) or not (then it counts as dropped). A
+    /// submission of this run refused the same way is given up.
     #[tokio::test]
     async fn a_restored_transaction_mined_during_the_downtime_is_not_counted_as_dropped() {
         let node = Answers::default();
@@ -1033,8 +1170,9 @@ mod tests {
         assert!(t.txs.is_empty() && t.doubtful.is_empty());
     }
 
-    /// Audit 2026-11-11 M-2: a mempool double spend of the operator's own funding coin holds the coin (out of the funding) and
-    /// backs off no order; the hold ends when the node no longer lists the coin, or after `hold_daa`.
+    /// A mempool double spend of the operator's own funding coin holds the coin (out of the
+    /// funding) and backs off no order. The hold ends when the node no longer lists the coin, or
+    /// after `hold_daa`.
     #[tokio::test]
     async fn a_double_spend_of_a_funding_coin_holds_the_coin_not_the_orders() {
         let coin: Outpoint = ([0x77; 32], 1);
@@ -1064,7 +1202,7 @@ mod tests {
         assert!(t.held.is_empty());
     }
 
-    /// Audit 2026-11-11 L-5: backoffs that ran out long ago are forgotten.
+    /// Backoffs that ran out long ago are forgotten.
     #[test]
     fn expired_backoffs_are_pruned() {
         let mut t = Tracker::new(TrackerConfig::default());
@@ -1098,7 +1236,8 @@ mod tests {
         let ev = t.observe(&seen(&[]), 1_030);
         assert_eq!(ev.rolled_back, vec![[1; 32]]);
         assert_eq!(t.pending(), 2);
-        // accepted again, final 100 DAA later; the unaccepted one stays pending (the node is asked about it, not the view)
+        // Accepted again, final 100 DAA later. The unaccepted one stays pending (the node is asked
+        // about it, not the view).
         t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_041);
         let ev = t.observe(&seen(&[([1; 32], "b3", 1_040)]), 1_600);
         assert_eq!(ev.finalized.iter().map(|x| x.txid).collect::<Vec<_>>(), vec![[1; 32]]);
@@ -1109,7 +1248,8 @@ mod tests {
     fn a_double_spend_names_its_outpoint() {
         let id = "ab".repeat(32);
         let want = Some(([0xab; 32], 3));
-        // rusty-kaspa's mempool rule error (`TransactionOutpoint` displays as `(<txid>, <index>)`), as the RPC wraps it
+        // rusty-kaspa's mempool rule error, as the RPC wraps it. `TransactionOutpoint` displays as
+        // `(<txid>, <index>)`.
         let m = format!("Rejected transaction {id}: output ({id}, 3) already spent by transaction {} in the mempool", "cd".repeat(32));
         assert_eq!(double_spent_outpoint(&m), want);
         assert_eq!(double_spent_outpoint(&format!("output {id}:3 already spent by transaction ee in the mempool")), want);
@@ -1126,7 +1266,8 @@ mod tests {
         let named = ds(&format!("({}, 1)", "22".repeat(32)));
         let only = |ids: BTreeSet<CovId>| ids.into_iter().collect::<Vec<_>>();
         assert_eq!(only(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some(&named))), vec![[2; 32]]);
-        // an input no order owns (the operator's funding), an unparsable message, or no message: every order
+        // An input no order owns (the operator's funding), an unparsable message, or no message:
+        // every order.
         let funding = ds(&format!("({}, 0)", "99".repeat(32)));
         assert_eq!(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some(&funding)), t.orders);
         assert_eq!(conflict_orders(&t, SubmitOutcome::DoubleSpend, Some("double spend")), t.orders);
@@ -1149,9 +1290,10 @@ mod tests {
         assert_eq!(t.backoff[&[9; 32]].0, 700);
     }
 
-    /// Audit round 3 R3-L-4: a retired transaction's inputs are free before its hold ends once the nodes say twice in a row,
-    /// checks at least `RETIRED_CHECK_DAA` apart, that their mempools do not hold it. A held or an unsure answer keeps the hold
-    /// (and begins the misses again); an accepted one is never released this way.
+    /// A retired transaction's inputs are free before its hold ends once the nodes say twice in a
+    /// row, with checks at least `RETIRED_CHECK_DAA` apart, that their mempools do not hold it. A
+    /// held or an unsure answer keeps the hold (and begins the misses again). An accepted
+    /// transaction is never released this way.
     #[test]
     fn a_retired_transaction_no_mempool_holds_is_released_before_its_hold_ends() {
         let mut t = Tracker::new(TrackerConfig::default());
@@ -1168,7 +1310,8 @@ mod tests {
         assert!(t.retired_to_check(1_000 + RETIRED_CHECK_DAA - 1).is_empty());
         let later = 1_000 + RETIRED_CHECK_DAA;
         assert_eq!(t.retired_to_check(later), vec![[1; 32], [2; 32]]);
-        // the first: unsure (the node failed) keeps the hold and begins the misses again; the second: a second miss releases it
+        // First: unsure (the node failed) keeps the hold and begins the misses again. Second: a
+        // second miss releases it.
         assert!(t.retired_checked(&[1; 32], None, later).is_none());
         let gone = t.retired_checked(&[2; 32], Some(false), later).expect("released");
         assert_eq!(gone.txid, [2; 32]);
