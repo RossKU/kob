@@ -30,9 +30,9 @@ export function NetworkSwitch(props: { config: AppConfig; short?: boolean; narro
     window.location.reload();
   };
   const blockedFields = state.kind === 'blocked' ? state.fields : null;
-  // the deployment's servers are for its own network: on the other one the page has none (config.ts withoutDeploymentServers)
-  const home = config.deploymentNetwork;
-  const losesServers = config.network === home && config.indexerUrl !== '';
+  // the deployment has servers for `serverNetworks` only (config.ts): the note says so when the other network is not among them
+  const home = config.network;
+  const losesServers = config.serverNetworks.includes(home) && !config.serverNetworks.includes(otherNetwork(home)) && config.indexerUrl !== '';
   const statusBlock = (
     <div class="stack-xs" data-testid="status-popover">
       <div class="hp-heading">{t('shell.status.label')}</div>

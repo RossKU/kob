@@ -5,6 +5,9 @@
 //   4. localStorage `kob.settings` (the Settings screen)
 //   5. URL query `?indexer=&node=&network=&kastle=1`  ONLY when the merged config so far has `allowQueryOverrides: true`
 //      (default false: a link must not silently repoint the app at another indexer or node).
+// The deployment layers (2, 3) can also give each network its own servers (`networks`) and choose the default network by host name (`hostNetworks`,
+// see `deploymentNetwork`). The network in force: a link (when allowed) > a stored setting > `hostNetworks[location.hostname]` > the deployment's
+// `network` > mainnet.
 // `features.test` can only come from layer 3: it exposes the SDK to the test-only mock wallets and must never be switchable by a link,
 // a file next to the app, or a stored setting.
 //
@@ -87,12 +90,16 @@ export interface AppConfig {
    */
   standalone: StandaloneSettings;
   /**
-   * The network the deployment's own servers belong to (the `network` of config.json / `__KOB_CONFIG__`, else the default): its `indexerUrl`, `nodeUrl`,
-   * `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl` and a market-bound `home` are for THAT network. Computed, never read from a layer.
-   * When a stored setting or a link puts another `network` in force (`network` !== `deploymentNetwork`), the deployment's values of those fields are dropped
-   * (back to the defaults) unless the stored setting or the link names its own: another network is never read through the first one's servers.
+   * The network the deployment's top-level servers belong to (the `network` of config.json / `__KOB_CONFIG__`, else the default): its top-level
+   * `indexerUrl`, `nodeUrl`, `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`, `quoteTokens` and a market-bound `home` (the
+   * NETWORK_SERVER_FIELDS) are for THAT network. Computed, never read from a layer. It is also the default network, unless `hostNetworks` names one for the
+   * page's host. On another network X those fields come from `networks[X]` of the deployment (a field the entry leaves out is the default, never the
+   * top-level value); without `networks[X]` they are all the defaults: another network is never read through the first one's servers. What a stored
+   * setting or a link names itself still wins on any network.
    */
   deploymentNetwork: NetworkName;
+  /** The networks the deployment has servers for: `deploymentNetwork` and every network of `networks`. Computed, never read from a layer. */
+  serverNetworks: NetworkName[];
   /**
    * The deployment pins its network: the header chip offers no switch (the chip is a plain label). config.json / `__KOB_CONFIG__` only (a link or a stored
    * setting must not unlock or lock it); default false. It hides the header switch only: the Settings screen still saves a network.
@@ -136,6 +143,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   ipfsGatewayUrl: DEFAULT_IPFS_GATEWAY_URL,
   standalone: Object.freeze({ manual: false, auto: true, autoReturn: true }) as StandaloneSettings,
   deploymentNetwork: 'mainnet' as NetworkName,
+  serverNetworks: Object.freeze(['mainnet']) as unknown as NetworkName[],
   lockNetwork: false,
 });
 
@@ -207,6 +215,27 @@ export function parseNetwork(value: unknown): NetworkName | null {
   return n === 'mainnet' || n === 'testnet-10' ? n : null;
 }
 
+export const NETWORK_NAMES: readonly NetworkName[] = ['mainnet', 'testnet-10'];
+/** A network spelled exactly (the keys of `networks`, the values of `hostNetworks`), or null. */
+const exactNetwork = (v: unknown): NetworkName | null => ((NETWORK_NAMES as readonly unknown[]).includes(v) ? (v as NetworkName) : null);
+
+/** The fields that belong to one network: the top-level ones are `deploymentNetwork`'s, an entry of `networks` holds another network's. */
+export const NETWORK_SERVER_FIELDS = ['indexerUrl', 'extraIndexerUrls', 'nodeUrl', 'registryUrl', 'explorerUrl', 'logoBlocklistUrl', 'quoteTokens', 'home'] as const;
+const NETWORK_URL_FIELDS: readonly string[] = ['indexerUrl', 'extraIndexerUrls', 'nodeUrl', 'registryUrl', 'explorerUrl', 'logoBlocklistUrl'];
+/** One network's servers (an entry of `networks`): only fields that were present and valid are set. */
+export type NetworkServers = Pick<ConfigPatch, (typeof NETWORK_SERVER_FIELDS)[number]>;
+
+/** The NETWORK_SERVER_FIELDS that `src` sets. */
+function pickServers(src: ConfigPatch | AppConfig): NetworkServers {
+  const r = src as unknown as Record<string, unknown>;
+  return Object.fromEntries(NETWORK_SERVER_FIELDS.filter((f) => r[f] !== undefined).map((f) => [f, r[f]])) as NetworkServers;
+}
+
+/** A host name of `hostNetworks`: labels of lower-case letters, digits and dashes (no port, path or wildcard). */
+const HOST_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
+/** The form a host name is compared in: trimmed, lower-cased, without a trailing dot. */
+export const hostKey = (host: string): string => host.trim().toLowerCase().replace(/\.$/, '');
+
 
 /** `1` / `true` / `on` / `yes` -> true, `0` / `false` / `off` / `no` -> false, anything else -> null */
 function parseFlag(v: unknown): boolean | null {
@@ -243,6 +272,10 @@ export interface ConfigPatch {
   standaloneAuto?: boolean;
   standaloneAutoReturn?: boolean;
   lockNetwork?: boolean;
+  /** deployment only: the servers of each network (`networks`) */
+  networks?: Partial<Record<NetworkName, NetworkServers>>;
+  /** deployment only: the default network of a host name (`hostNetworks`, keys in `hostKey` form) */
+  hostNetworks?: Record<string, NetworkName>;
 }
 
 export interface ConfigWarning { layer: string; field: string; message: string }
@@ -358,6 +391,44 @@ export function sanitizeLayer(layer: string, raw: unknown, allowTest: boolean, w
       else bad('lockNetwork', 'flag');
     }
   }
+  if ('networks' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'networks', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else if (!isObj(raw.networks)) bad('networks', 'map of network -> servers');
+    else {
+      const networks: Partial<Record<NetworkName, NetworkServers>> = {};
+      const query = (x: unknown) => typeof x === 'string' && /[?#]/.test(x);
+      for (const [name, entry] of Object.entries(raw.networks)) {
+        const field = `networks.${name}`;
+        const n = exactNetwork(name);
+        if (!n) { bad(field, 'network (use mainnet or testnet-10)'); continue; }
+        if (!isObj(entry)) { bad(field, 'servers object'); continue; }
+        const sub: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(entry)) {
+          if (!(NETWORK_SERVER_FIELDS as readonly string[]).includes(k)) warnings.push({ layer, field: `${field}.${k}`, message: 'not a per-network field, ignored' });
+          else if (NETWORK_URL_FIELDS.includes(k) && (query(v) || (Array.isArray(v) && v.some(query)))) bad(`${field}.${k}`, 'URL (no query or fragment: config.json is public)');
+          else sub[k] = v;
+        }
+        const w: ConfigWarning[] = [];
+        networks[n] = pickServers(sanitizeLayer(layer, sub, false, w));
+        warnings.push(...w.map((x) => ({ ...x, field: `${field}.${x.field}` })));
+      }
+      out.networks = networks;
+    }
+  }
+  if ('hostNetworks' in raw) {
+    if (!deployment) warnings.push({ layer, field: 'hostNetworks', message: 'only honoured in config.json / window.__KOB_CONFIG__, ignored' });
+    else if (!isObj(raw.hostNetworks)) bad('hostNetworks', 'map of host name -> network');
+    else {
+      const hosts: Record<string, NetworkName> = {};
+      for (const [h, v] of Object.entries(raw.hostNetworks)) {
+        const n = exactNetwork(v);
+        if (!HOST_RE.test(hostKey(h))) bad(`hostNetworks.${h}`, 'host name (letters, digits, dots and dashes; no port, path or wildcard)');
+        else if (!n) bad(`hostNetworks.${h}`, 'network (use mainnet or testnet-10)');
+        else hosts[hostKey(h)] = n;
+      }
+      out.hostNetworks = hosts;
+    }
+  }
   if ('standalone' in raw) {
     if (isObj(raw.standalone)) {
       for (const [k, field] of [['manual', 'standaloneManual'], ['auto', 'standaloneAuto'], ['autoReturn', 'standaloneAutoReturn']] as const) {
@@ -423,6 +494,8 @@ export interface ConfigLayers {
   settings?: unknown;
   /** `location.search` (string with or without `?`) or URLSearchParams */
   query?: string | URLSearchParams;
+  /** `location.hostname`: picks the default network from `hostNetworks` */
+  host?: string;
 }
 
 /**
@@ -464,40 +537,55 @@ function apply(base: AppConfig, p: ConfigPatch): AppConfig {
       autoReturn: p.standaloneAutoReturn ?? base.standalone.autoReturn,
     },
     deploymentNetwork: base.deploymentNetwork,
+    serverNetworks: base.serverNetworks,
     lockNetwork: p.lockNetwork ?? base.lockNetwork,
   };
 }
 
 /**
- * `cfg` for a network the deployment has no servers for: the deployment's indexer, further indexers, node, registry, explorer, logo blocklist and a
- * market-bound landing screen go back to the defaults (no indexer, the SDK's public node for the network, the bundled registry, the explorer of the network),
- * except what `own` (the stored setting / the link, which name their own servers) sets.
+ * `cfg` without the deployment's top-level servers (for another network than `deploymentNetwork`): the indexer, further indexers, node, registry, explorer,
+ * logo blocklist, dollar token and a market-bound landing screen go back to the defaults (no indexer, the SDK's public node for the network, the bundled
+ * registry, the explorer of the network).
  */
-function withoutDeploymentServers(cfg: AppConfig, own: ConfigPatch): AppConfig {
+function withoutDeploymentServers(cfg: AppConfig): AppConfig {
   const bound = cfg.home.startsWith('usd:') || cfg.home.startsWith('market:');
   return {
     ...cfg,
-    indexerUrl: own.indexerUrl ?? DEFAULT_CONFIG.indexerUrl,
-    extraIndexerUrls: own.extraIndexerUrls ?? [...DEFAULT_CONFIG.extraIndexerUrls],
-    nodeUrl: own.nodeUrl ?? DEFAULT_CONFIG.nodeUrl,
-    registryUrl: own.registryUrl ?? DEFAULT_CONFIG.registryUrl,
+    indexerUrl: DEFAULT_CONFIG.indexerUrl,
+    extraIndexerUrls: [...DEFAULT_CONFIG.extraIndexerUrls],
+    nodeUrl: DEFAULT_CONFIG.nodeUrl,
+    registryUrl: DEFAULT_CONFIG.registryUrl,
     explorerUrl: DEFAULT_CONFIG.explorerUrl,
     logoBlocklistUrl: DEFAULT_CONFIG.logoBlocklistUrl,
     quoteTokens: {},
-    home: bound && own.home === undefined ? DEFAULT_CONFIG.home : cfg.home,
+    home: bound ? DEFAULT_CONFIG.home : cfg.home,
   };
 }
 
 /** Pure merge of all layers; invalid values are ignored and reported in `warnings`. */
 export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
   const warnings: ConfigWarning[] = [];
-  let cfg = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens }, standalone: { ...DEFAULT_CONFIG.standalone } }, {});
-  cfg = apply(cfg, sanitizeLayer('config.json', layers.file, false, warnings));
-  cfg = apply(cfg, sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings));
-  cfg = { ...cfg, deploymentNetwork: cfg.network };
-  const deployment = cfg;
+  const file = sanitizeLayer('config.json', layers.file, false, warnings);
+  const injected = sanitizeLayer('__KOB_CONFIG__', layers.injected, true, warnings);
+  let top = apply({ ...DEFAULT_CONFIG, features: { ...DEFAULT_CONFIG.features }, fees: { ...DEFAULT_CONFIG.fees }, quoteTokens: { ...DEFAULT_CONFIG.quoteTokens }, standalone: { ...DEFAULT_CONFIG.standalone } }, {});
+  top = apply(apply(top, file), injected);
+  // the top-level servers are the deployment network's; `networks` (field by field, __KOB_CONFIG__ over config.json) holds the others'
+  const deploymentNetwork = top.network;
+  const networks: Partial<Record<NetworkName, NetworkServers>> = {};
+  for (const n of NETWORK_NAMES) if (file.networks?.[n] || injected.networks?.[n]) networks[n] = { ...file.networks?.[n], ...injected.networks?.[n] };
+  const hostNetworks = { ...file.hostNetworks, ...injected.hostNetworks };
+  top = { ...top, deploymentNetwork, serverNetworks: [deploymentNetwork, ...NETWORK_NAMES.filter((n) => n !== deploymentNetwork && networks[n])] };
+  /** The deployment's configuration on network `n`: the top-level servers on `deploymentNetwork`, else the defaults; then `networks[n]`. */
+  const forNetwork = (n: NetworkName): AppConfig => {
+    const on = { ...top, network: n };
+    return apply(n === deploymentNetwork ? on : withoutDeploymentServers(on), networks[n] ?? {});
+  };
+  // the default network: the one `hostNetworks` names for the page's host, else the deployment's
+  const host = layers.host ? hostKey(layers.host) : '';
+  const hostNetwork = host && Object.prototype.hasOwnProperty.call(hostNetworks, host) ? hostNetworks[host] : undefined;
+  let deployment = forNetwork(hostNetwork ?? deploymentNetwork);
   const stored = sanitizeLayer('settings', layers.settings, false, warnings);
-  cfg = apply(cfg, stored);
+  let cfg = apply(deployment, stored);
   let queried: ConfigPatch = {};
   if (layers.query !== undefined && layers.query !== '') {
     if (cfg.allowQueryOverrides) {
@@ -509,8 +597,12 @@ export function resolveConfig(layers: ConfigLayers = {}): ResolvedConfig {
       if (used.length) warnings.push({ layer: 'query', field: used.join(','), message: 'query overrides are disabled (allowQueryOverrides is false), ignored' });
     }
   }
-  // another network than the deployment's: its own servers are for the first network, so they do not apply (what the stored setting or the link names does)
-  if (cfg.network !== deployment.network) cfg = withoutDeploymentServers(cfg, { ...stored, ...queried });
+  // a stored setting or a link chose another network than the default: the deployment's servers of THAT network (never the default one's), and what the
+  // stored setting or the link names itself on top
+  if (cfg.network !== deployment.network) {
+    deployment = forNetwork(cfg.network);
+    cfg = apply(apply(cfg, pickServers(deployment)), pickServers({ ...stored, ...queried }));
+  }
   // only a stored value that is still in force (a link did not replace it) and differs from the deployment's
   const storedOverrides: StoredOverride[] = (['indexerUrl', 'nodeUrl'] as const)
     .filter((f) => stored[f] !== undefined && stored[f] === cfg[f] && cfg[f] !== deployment[f])
@@ -621,6 +713,8 @@ export interface LoadConfigDeps {
   storage?: StorageLike | null;
   /** `location.search` (default: `globalThis.location`) */
   search?: string;
+  /** `location.hostname` (default: `globalThis.location`): the default network of `hostNetworks` */
+  hostname?: string;
   configUrl?: string;
   /** fetch timeout for config.json, ms */
   timeoutMs?: number;
@@ -644,12 +738,13 @@ async function fetchConfigJson(deps: LoadConfigDeps): Promise<unknown> {
 
 /** Reads every layer from the environment (all injectable) and merges them; also reports what was ignored. */
 export async function loadConfigWithWarnings(deps: LoadConfigDeps = {}): Promise<ResolvedConfig> {
-  const g = globalThis as { __KOB_CONFIG__?: unknown; location?: { search?: string } };
+  const g = globalThis as { __KOB_CONFIG__?: unknown; location?: { search?: string; hostname?: string } };
   const layers: ConfigLayers = {
     file: await fetchConfigJson(deps),
     injected: 'injected' in deps ? deps.injected : g.__KOB_CONFIG__,
     settings: readSettings(deps.storage === undefined ? defaultStorage() : deps.storage),
     query: deps.search !== undefined ? deps.search : g.location?.search ?? '',
+    host: deps.hostname !== undefined ? deps.hostname : g.location?.hostname ?? '',
   };
   return resolveConfig(layers);
 }

@@ -42,7 +42,7 @@ describe('mergeConfig', () => {
       features: { kastle: false, test: false, priorityFee: false }, fees: { dynamic: true, maxRate: 1000, maxFeeKas: 1 }, allowQueryOverrides: false,
       quoteTokens: {}, home: 'landing', explorerUrl: '', tokenNamesUrl: 'https://kascov.io/data', marketStartToleranceBps: 1000,
       logoBlocklistUrl: '', ipfsGatewayUrl: 'https://dweb.link/ipfs', standalone: { manual: false, auto: true, autoReturn: true },
-      deploymentNetwork: 'mainnet', lockNetwork: false,
+      deploymentNetwork: 'mainnet', serverNetworks: ['mainnet'], lockNetwork: false,
     });
     expect(DEFAULT_CONFIG.features.kastle).toBe(false);
   });
@@ -421,5 +421,116 @@ describe("the deployment's servers belong to the deployment's network", () => {
     expect(r.config.lockNetwork).toBe(false);
     expect(r.warnings.map((w) => w.field)).toEqual(['lockNetwork']);
     expect(resolveConfig({ file: { lockNetwork: 'maybe' } }).warnings.map((w) => w.field)).toEqual(['lockNetwork']);
+  });
+});
+
+describe('per-network servers (`networks`) and the default network by host name (`hostNetworks`)', () => {
+  const tusd = 'b'.repeat(64);
+  // the launch config: one deployment for both hosts, mainnet servers at the top level, testnet-10's in `networks`
+  const launch = {
+    network: 'mainnet', indexerUrl: 'https://kob-api.example', extraIndexerUrls: ['https://kob-api2.example'], nodeUrl: 'wss://node.example/kaspa/mainnet/wrpc/json',
+    explorerUrl: 'https://explorer.example', home: `market:${'a'.repeat(64)}`,
+    networks: {
+      'testnet-10': {
+        indexerUrl: 'https://kob-api-tn10.example', extraIndexerUrls: [], registryUrl: './registry/testnet-10/tokens.json', quoteTokens: { [tusd]: 'USD' }, home: 'kas-usd',
+      },
+    },
+    hostNetworks: { 'kob.example': 'mainnet', 'kob-tn10.example': 'testnet-10' },
+  };
+  const tn10 = {
+    network: 'testnet-10', deploymentNetwork: 'mainnet', serverNetworks: ['mainnet', 'testnet-10'], indexerUrl: 'https://kob-api-tn10.example', extraIndexerUrls: [], nodeUrl: '',
+    registryUrl: './registry/testnet-10/tokens.json', explorerUrl: '', logoBlocklistUrl: '', quoteTokens: { [tusd]: 'USD' }, home: 'kas-usd',
+  };
+  const main = {
+    network: 'mainnet', deploymentNetwork: 'mainnet', indexerUrl: 'https://kob-api.example', extraIndexerUrls: ['https://kob-api2.example'], nodeUrl: 'wss://node.example/kaspa/mainnet/wrpc/json',
+    registryUrl: './registry/tokens.json', explorerUrl: 'https://explorer.example', quoteTokens: {}, home: `market:${'a'.repeat(64)}`,
+  };
+
+  it('an old config.json (no `networks`, no `hostNetworks`) resolves as before, whatever the host', () => {
+    const old = { network: 'testnet-10', indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc', lockNetwork: true };
+    const r = resolveConfig({ file: old });
+    expect(r.warnings).toEqual([]);
+    expect(r.config).toMatchObject({ network: 'testnet-10', deploymentNetwork: 'testnet-10', serverNetworks: ['testnet-10'], indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc' });
+    expect(resolveConfig({ file: old, host: 'kob-tn10.kaspa.ag' })).toEqual(r);
+    expect(resolveConfig({ file: old, settings: { network: 'mainnet' }, host: 'kob.kaspa.ag' }).config).toMatchObject({ network: 'mainnet', indexerUrl: '', nodeUrl: '', serverNetworks: ['testnet-10'] });
+  });
+
+  it('the host picks the default network and its servers; the top-level ones never leak onto testnet-10 (a field the entry leaves out is the default)', () => {
+    const r = resolveConfig({ file: launch, host: 'kob-tn10.example' });
+    expect(r.warnings).toEqual([]);
+    expect(r.config).toMatchObject(tn10);
+    expect(r.storedOverrides).toEqual([]);
+    expect(resolveConfig({ file: launch, host: 'kob.example' }).config).toMatchObject(main);
+    // exact match (case and a trailing dot aside); another host gets the deployment's network
+    expect(resolveConfig({ file: launch, host: 'KOB-TN10.example.' }).config.network).toBe('testnet-10');
+    expect(resolveConfig({ file: launch, host: 'www.kob-tn10.example' }).config).toMatchObject(main);
+    expect(resolveConfig({ file: launch, host: 'localhost' }).config).toMatchObject(main);
+    expect(resolveConfig({ file: launch }).config).toMatchObject(main);
+  });
+
+  it('a network without an entry falls back to the defaults (no indexer, the public node, the bundled registry)', () => {
+    const { networks: _n, ...noMap } = launch;
+    expect(resolveConfig({ file: noMap, host: 'kob-tn10.example' }).config).toMatchObject({
+      network: 'testnet-10', serverNetworks: ['mainnet'], indexerUrl: '', extraIndexerUrls: [], nodeUrl: '', registryUrl: './registry/tokens.json', explorerUrl: '', quoteTokens: {}, home: 'landing',
+    });
+  });
+
+  it("an entry for the deployment's own network overrides the top-level fields it names", () => {
+    const c = resolveConfig({ file: { ...launch, networks: { mainnet: { nodeUrl: 'wss://other.example/wrpc' } } } }).config;
+    expect(c).toMatchObject({ ...main, nodeUrl: 'wss://other.example/wrpc', serverNetworks: ['mainnet'] });
+  });
+
+  it('a stored choice of network beats the host on that browser, both ways', () => {
+    expect(resolveConfig({ file: launch, host: 'kob-tn10.example', settings: { network: 'mainnet' } }).config).toMatchObject(main);
+    expect(resolveConfig({ file: launch, host: 'kob.example', settings: { network: 'testnet-10' } }).config).toMatchObject(tn10);
+    // a stored network equal to the host's changes nothing
+    expect(resolveConfig({ file: launch, host: 'kob-tn10.example', settings: { network: 'testnet-10' } }).config).toEqual(resolveConfig({ file: launch, host: 'kob-tn10.example' }).config);
+  });
+
+  it('a server the stored setting or a link names still wins, on a network of the map too', () => {
+    const r = resolveConfig({ file: launch, host: 'kob-tn10.example', settings: { indexerUrl: 'https://mine.example' } });
+    expect(r.config).toMatchObject({ ...tn10, indexerUrl: 'https://mine.example' });
+    expect(r.storedOverrides).toEqual([{ field: 'indexerUrl', value: 'https://mine.example', deployment: 'https://kob-api-tn10.example' }]);
+    const s = resolveConfig({ file: launch, host: 'kob.example', settings: { network: 'testnet-10', nodeUrl: 'wss://mynode.example/wrpc', home: 'list' } });
+    expect(s.config).toMatchObject({ ...tn10, nodeUrl: 'wss://mynode.example/wrpc', home: 'list' });
+    expect(s.storedOverrides).toEqual([{ field: 'nodeUrl', value: 'wss://mynode.example/wrpc', deployment: '' }]);
+    const q = resolveConfig({ file: { ...launch, allowQueryOverrides: true }, host: 'kob.example', query: '?network=testnet-10&indexer=https://q.example' });
+    expect(q.config).toMatchObject({ ...tn10, indexerUrl: 'https://q.example' });
+  });
+
+  it('__KOB_CONFIG__ overrides config.json entry by entry, field by field', () => {
+    const c = resolveConfig({ file: launch, injected: { networks: { 'testnet-10': { nodeUrl: 'wss://inj.example/wrpc' } }, hostNetworks: { 'kob.example': 'testnet-10' } }, host: 'kob.example' }).config;
+    expect(c).toMatchObject({ ...tn10, nodeUrl: 'wss://inj.example/wrpc' });
+  });
+
+  it('invalid entries are reported and ignored; both maps are deployment-only', () => {
+    const r = resolveConfig({
+      file: {
+        network: 'mainnet',
+        networks: {
+          testnet: { indexerUrl: 'https://x.example' },
+          'testnet-10': { indexerUrl: 'https://tn.example?key=1', nodeUrl: 'ftp://n.example', extraIndexerUrls: ['https://a.example#x'], registryUrl: './r.json', lockNetwork: true, network: 'mainnet' },
+          mainnet: 'https://m.example',
+        },
+        hostNetworks: { '*.kaspa.ag': 'mainnet', 'kob.kaspa.ag:443': 'mainnet', 'a.example/x': 'mainnet', 'b.example': 'testnet', 'C.example': 'testnet-10' },
+      },
+      host: 'c.example',
+    });
+    expect(r.warnings.map((w) => w.field)).toEqual([
+      'networks.testnet', 'networks.testnet-10.indexerUrl', 'networks.testnet-10.extraIndexerUrls', 'networks.testnet-10.lockNetwork', 'networks.testnet-10.network',
+      'networks.testnet-10.nodeUrl', 'networks.mainnet', 'hostNetworks.*.kaspa.ag', 'hostNetworks.kob.kaspa.ag:443', 'hostNetworks.a.example/x', 'hostNetworks.b.example',
+    ]);
+    expect(r.config).toMatchObject({ network: 'testnet-10', serverNetworks: ['mainnet', 'testnet-10'], indexerUrl: '', nodeUrl: '', extraIndexerUrls: [], registryUrl: './r.json' });
+    expect(resolveConfig({ file: { networks: [] } }).warnings.map((w) => w.field)).toEqual(['networks']);
+    expect(resolveConfig({ file: { hostNetworks: 'kob.example=mainnet' } }).warnings.map((w) => w.field)).toEqual(['hostNetworks']);
+    const stored = resolveConfig({ file: { network: 'mainnet' }, settings: { networks: { mainnet: { indexerUrl: 'https://s.example' } }, hostNetworks: { 'x.example': 'testnet-10' } }, host: 'x.example' });
+    expect(stored.warnings.map((w) => w.field)).toEqual(['networks', 'hostNetworks']);
+    expect(stored.config).toMatchObject({ network: 'mainnet', indexerUrl: '' });
+  });
+
+  it('loadConfig reads the host from location (or deps.hostname)', async () => {
+    const fetchJson = (async () => new Response(JSON.stringify(launch))) as unknown as typeof fetch;
+    const c = await loadConfig({ fetch: fetchJson, injected: undefined, storage: new MemStorage(), search: '', hostname: 'kob-tn10.example' });
+    expect(c).toMatchObject(tn10);
   });
 });

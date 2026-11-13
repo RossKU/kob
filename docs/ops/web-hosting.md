@@ -68,11 +68,13 @@ Repository *Settings* > *Secrets and variables* > *Actions*.
 | `KOB_PAGES_NODE_URL` | no | a `wss://` wRPC node **with its path** (see "The node and the SDK resolver"); empty (default) = a public node the Kaspa SDK resolver names, reached over Borsh |
 | `KOB_PAGES_EXPLORER_URL` | no | block explorer base, `https://...`; empty = kaspa.stream of the network |
 | `KOB_PAGES_TOKEN_NAMES_URL` | no | the source of token names and icons: the base of a kascov.io-shaped data set, `https://...` (default `https://kascov.io/data`); `off` = none (see "Token names and icons" below) |
+| `KOB_PAGES_NETWORKS` | no | the servers of the site's other network, as JSON: `config.json` `networks` (section 4d). Only `testnet-10` on a mainnet site; unset = none |
+| `KOB_PAGES_HOST_NETWORKS` | no | the default network of each host name, as JSON: `config.json` `hostNetworks` (section 4d); unset = the site's network on every host |
 | `KOB_PAGES_BRANCH` | no | the project's production branch, default `main` |
 | `KOB_PAGES_MAINNET_PROJECT` | no | the mainnet site's Pages project (e.g. `kob-web-mainnet`): a second site, built with network `mainnet` and, until mainnet launches, **landing-only** (section 4b: the front page, no app). Unset = no mainnet site (nothing mainnet is built or published). The workflow creates the project on its first run |
 | `KOB_PAGES_MAINNET_INDEXER_URL` | no | the mainnet site's indexer. The landing-only page connects to nothing, so it is not needed (and ignored) until the mainnet app is deployed; set without `KOB_PAGES_MAINNET_PROJECT` it fails the run |
 | `KOB_PAGES_MAINNET_INTERNAL` | no | `1` = also deploy the internal mainnet app, the full app as a preview of the mainnet project on the branch `internal`, and state that the project's previews are behind Cloudflare Access (section 4c: set it only after enabling the access policy). Needs `KOB_PAGES_MAINNET_PROJECT` and `KOB_PAGES_MAINNET_INDEXER_URL`; any other value fails the run |
-| `KOB_PAGES_MAINNET_PUBLIC_URL`, `KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS`, `KOB_PAGES_MAINNET_NODE_URL`, `KOB_PAGES_MAINNET_EXPLORER_URL`, `KOB_PAGES_MAINNET_TOKEN_NAMES_URL` | no | the mainnet site's own values of the variables above (nothing is inherited from the testnet-10 site; the branch is shared) |
+| `KOB_PAGES_MAINNET_PUBLIC_URL`, `KOB_PAGES_MAINNET_EXTRA_INDEXER_URLS`, `KOB_PAGES_MAINNET_NODE_URL`, `KOB_PAGES_MAINNET_EXPLORER_URL`, `KOB_PAGES_MAINNET_TOKEN_NAMES_URL`, `KOB_PAGES_MAINNET_NETWORKS`, `KOB_PAGES_MAINNET_HOST_NETWORKS` | no | the mainnet site's own values of the variables above (nothing is inherited from the testnet-10 site; the branch is shared) |
 | `KOB_PAGES_PUBLIC_URL` | no | the origin the app is served from, `https://...` (the custom domain of section 5, e.g. `https://kob-tn10.kaspa.ag`): the link preview's `og:url` and `og:image` need it; empty = no absolute preview links |
 
 ### Further indexers: cross-check and failover
@@ -385,6 +387,65 @@ Setup, in order (the labels are Cloudflare's current ones and may move):
 
 Unset `KOB_PAGES_MAINNET_INTERNAL` to stop updating it; the last internal deployment stays (still behind Access) until you delete it in the dashboard.
 
+### 4d. One deployment for both networks
+
+At the mainnet launch `kob.kaspa.ag` and `kob-tn10.kaspa.ag` serve the same deployment: the same bundle and the same `config.json`. Two optional
+`config.json` fields make that work (`web/src/config.ts`). Both are read from `config.json` and `window.__KOB_CONFIG__` only, never from a link or a
+stored setting.
+
+* `networks`: the servers of each network, e.g. `{"testnet-10": {"indexerUrl": "...", "registryUrl": "..."}}`. An entry holds the fields that belong to
+  one network: `indexerUrl`, `extraIndexerUrls`, `nodeUrl`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`, `quoteTokens` and `home`. The
+  top-level fields still are the servers of `network` (`deploymentNetwork`), so an old `config.json` works unchanged. On another network the page uses
+  that network's entry; a field the entry leaves out is the default, never the top-level value. Without an entry the page has no servers there (no
+  indexer, the SDK's public node, the bundled registry), as before. The URLs follow the rules of the top-level fields and carry no query or fragment.
+* `hostNetworks`: the default network of each host name, e.g. `{"kob.kaspa.ag": "mainnet"}`. The match is exact (case and a trailing dot aside): no
+  port, path or wildcard.
+
+Which network a page opens on: a link (`?network=`, only with `allowQueryOverrides`), then the visitor's stored choice (Settings or the header
+switch, saved in this browser for this host), then `hostNetworks`, then `network`. A server the visitor saved in Settings, or a link names, still wins
+over the deployment's on any network. Unknown networks, bad hosts and bad URLs in either field are ignored, and the bell lists them with the other configuration warnings.
+
+The workflow writes them from `KOB_PAGES_NETWORKS` and `KOB_PAGES_HOST_NETWORKS` (`KOB_PAGES_MAINNET_*` for the mainnet site), both JSON. An
+entry of `KOB_PAGES_NETWORKS` takes `indexerUrl` (required), `extraIndexerUrls`, `nodeUrl` and `explorerUrl`, checked like the site's own variables.
+Only `testnet-10` on a mainnet site is accepted (a testnet-10 site replaces the shipped mainnet registry); the script gives it the token-program list
+as `registry/testnet-10/tokens.json` and sets its `registryUrl`. With both variables unset, `config.json` is byte for byte what it was before.
+
+The launch config, for the mainnet project, with `KOB_PAGES_MAINNET_NETWORKS={"testnet-10": {"indexerUrl": "https://kob-api-tn10.kaspa.ag"}}` and
+`KOB_PAGES_MAINNET_HOST_NETWORKS={"kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10"}`:
+
+```json
+{
+  "network": "mainnet",
+  "indexerUrl": "https://<the mainnet indexer>",
+  "extraIndexerUrls": [],
+  "nodeUrl": "",
+  "networks": {
+    "testnet-10": {
+      "indexerUrl": "https://kob-api-tn10.kaspa.ag",
+      "extraIndexerUrls": [],
+      "nodeUrl": "",
+      "registryUrl": "./registry/testnet-10/tokens.json"
+    }
+  },
+  "hostNetworks": { "kob.kaspa.ag": "mainnet", "kob-tn10.kaspa.ag": "testnet-10" }
+}
+```
+
+`kob.kaspa.ag` then opens on mainnet and `kob-tn10.kaspa.ag` on testnet-10, each with its own indexer; the header switch reaches the other one.
+A visitor's choice is stored per origin, so a choice on one host does not follow them to the other.
+
+Nothing changes until the launch. The launch commit has to:
+
+1. drop `landing: "1"` from the mainnet entry of `deploy-pages.yml` (and the tests that pin it, `web/test/pages-deploy.test.ts`), section 4b;
+2. turn the header switch on for that site: the workflow does not pass `KOB_PAGES_NETWORK_SWITCH` today, so every site gets `"lockNetwork": true`;
+3. decide what the testnet-10 project (`KOB_PAGES_PROJECT`) does: it still builds its own testnet-10 site, while `kob-tn10.kaspa.ag` moves to the
+   mainnet project. The workflow attaches only the host of `KOB_PAGES_MAINNET_PUBLIC_URL`, so the second domain is moved by hand (section 5);
+4. accept that the shared bundle is built with `KOB_NETWORK=mainnet`: the page title has no "Testnet ·" prefix and `og:url` names
+   `kob.kaspa.ag` on both hosts.
+
+The repository variables (`KOB_PAGES_MAINNET_INDEXER_URL`, `KOB_PAGES_MAINNET_NETWORKS`, `KOB_PAGES_MAINNET_HOST_NETWORKS`) and the domain move are
+set by hand, not by the commit. Both indexers must answer CORS for both hosts (`cors_allow_origin = "*"` does, `docs/ops/chart-server.md` section 3).
+
 ### 4a. The deploy gate
 
 The signer page of this deployment is where users type private keys, so whoever can change what the workflow deploys can steal them.
@@ -443,17 +504,17 @@ node web/scripts/check-pages.mjs https://kob-web.pages.dev --dist web/dist
 
 Deploy only from a clean checkout of a pushed commit (`git status` clean), so the files match what anyone can rebuild.
 
-**Both networks.** One workflow run serves one network (one `KOB_PAGES_PROJECT`, one set of variables). To publish the testnet-10 and the
-mainnet app side by side, deploy the second network by hand to a second Pages project (`wrangler pages project create` with another
+**Both networks.** One site can serve both (`networks`, `hostNetworks`: section 4d). To publish the testnet-10 and the
+mainnet app as two sites instead, deploy the second network by hand to a second Pages project (`wrangler pages project create` with another
 name, then the commands above with its `KOB_PAGES_NETWORK`, `KOB_PAGES_INDEXER_URL` and `--project-name`) or fork the workflow; each needs its
 own indexer (`docs/ops/chart-server.md`, section 7). Users who saved a network or indexer in Settings keep it; the bell's current status names it.
 
 **The header's network switch.** The network chip in the header opens a small panel; choosing the other network saves it (like Settings) and reloads the
-page. The servers in `config.json` (`indexerUrl`, `nodeUrl`, `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`) belong to the network
-the file names: on the other network the page uses none of them (no indexer, the SDK's public node, the bundled registry) unless the visitor's own
-Settings name servers, so the book and the charts stay empty there. A browser that saved servers in Settings gets no switch (they would stay in force
+page. The top-level servers in `config.json` (`indexerUrl`, `nodeUrl`, `extraIndexerUrls`, `registryUrl`, `explorerUrl`, `logoBlocklistUrl`) belong to the
+network the file names: on the other network the page uses that network's entry of `networks` (section 4d) and, without one, none of them (no indexer,
+the SDK's public node, the bundled registry) unless the visitor's own Settings name servers, so the book and the charts stay empty there. A browser that saved servers in Settings gets no switch (they would stay in force
 on the other network) and is pointed to Settings. To pin a deployment to its network, add `"lockNetwork": true` to `config.json` (`window.__KOB_CONFIG__`):
-the chip is then a plain label. `scripts/pages-config.mjs` does not write it.
+the chip is then a plain label. `scripts/pages-config.mjs` writes it unless `KOB_PAGES_NETWORK_SWITCH=1`, which the workflow does not pass yet.
 
 ## 7. Checking a deployment
 

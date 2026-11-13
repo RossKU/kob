@@ -1,8 +1,9 @@
 // The header's network switch (pure): whether this page offers one, and what choosing a network saves. The network is fixed at load, so a choice is
 // saved like the Settings screen saves it (`settingsPatch(..., ['network'])`) and the page reloads (NetworkSwitch.tsx).
 //
-// The servers: config.ts `resolveConfig` drops the deployment's own indexer, node, registry ... when another network than the deployment's is in force, so
-// a switch never leaves the first network's servers in use. A server this BROWSER saved (Settings) cannot be told to belong to either network, and it would
+// The servers: config.ts `resolveConfig` gives each network the deployment's servers of THAT network (`networks`, or the top-level ones on
+// `deploymentNetwork`) and none otherwise, so a switch never leaves the first network's servers in use. The choice is stored (`kob.settings`, per origin),
+// so it beats the host's default network (`hostNetworks`) on this browser until Settings removes it. A server this BROWSER saved (Settings) cannot be told to belong to either network, and it would
 // stay in force on the other one, so the switch refuses until it is removed in Settings: `blocked`.
 import { readSettings, type AppConfig, type NetworkName } from '../../config';
 import { formFromConfig, settingsPatch, storedServerFields, validateSettings } from '../settings/settings-model';

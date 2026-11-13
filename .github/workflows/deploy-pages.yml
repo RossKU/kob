@@ -22,6 +22,10 @@ name: deploy-pages
 # project through the Pages API when it is not attached yet, and says exactly what is left to do in the dashboard when it cannot do it
 # (the DNS CNAME, a domain that is still attached to another project).
 #
+# One site can serve both networks: KOB_PAGES_NETWORKS (KOB_PAGES_MAINNET_NETWORKS for the mainnet site) gives config.json the servers of the other network, and
+# KOB_PAGES_HOST_NETWORKS (KOB_PAGES_MAINNET_HOST_NETWORKS) the default network of each host name (docs/ops/web-hosting.md, "One deployment for both
+# networks"). Both are optional; unset, config.json is what it was without them.
+#
 # Without the secrets CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID or the variables KOB_PAGES_PROJECT and KOB_PAGES_INDEXER_URL
 # (a fork, or before the setup) nothing is built: the job config says what is missing and the deploy job is skipped. A variable that
 # is set but invalid fails the job config.
@@ -106,6 +110,10 @@ jobs:
           MAIN_NAMES: ${{ vars.KOB_PAGES_MAINNET_TOKEN_NAMES_URL }}
           MAIN_PUBLIC: ${{ vars.KOB_PAGES_MAINNET_PUBLIC_URL }}
           MAIN_INTERNAL: ${{ vars.KOB_PAGES_MAINNET_INTERNAL }}
+          NETWORKS: ${{ vars.KOB_PAGES_NETWORKS }}
+          HOSTS: ${{ vars.KOB_PAGES_HOST_NETWORKS }}
+          MAIN_NETWORKS: ${{ vars.KOB_PAGES_MAINNET_NETWORKS }}
+          MAIN_HOSTS: ${{ vars.KOB_PAGES_MAINNET_HOST_NETWORKS }}
         run: |
           missing=()
           [ "$HAS_TOKEN" = true ] || missing+=("secret CLOUDFLARE_API_TOKEN")
@@ -162,13 +170,15 @@ jobs:
           fi
           # one matrix entry per site; every value is a repository variable (not a secret), but `landing`: the mainnet site is landing-only (KOB_LANDING_ONLY)
           # until mainnet launches, and that is decided here, in the workflow file, not by a variable. `branch` is the Pages branch the site is uploaded to
-          # (production: KOB_PAGES_BRANCH; the internal app: `internal`, a preview) and `internal` marks that preview
+          # (production: KOB_PAGES_BRANCH; the internal app: `internal`, a preview) and `internal` marks that preview. `networks` and `hosts` are the JSON
+          # of config.json `networks` / `hostNetworks` (empty = none)
           matrix=$(jq -nc \
             --arg p "$PROJECT" --arg n "${NETWORK:-testnet-10}" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" --arg br "$BRANCH" \
             --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mu "$MAIN_PUBLIC" --arg mint "$MAIN_INTERNAL" \
-            '{include: ([{site: "testnet", project: $p, network: $n, landing: "", branch: $br, internal: "", indexer: $i, extra: $e, node: $nd, explorer: $ex, names: $nm, public: $u}]
-              + (if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet", landing: "1", branch: $br, internal: "", indexer: $mi, extra: $me, node: $mnd, explorer: $mex, names: $mnm, public: $mu}] else [] end)
-              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", landing: "", branch: "internal", internal: "1", indexer: $mi, extra: $me, node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
+            --arg nw "$NETWORKS" --arg hn "$HOSTS" --arg mnw "$MAIN_NETWORKS" --arg mhn "$MAIN_HOSTS" \
+            '{include: ([{site: "testnet", project: $p, network: $n, landing: "", branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, node: $nd, explorer: $ex, names: $nm, public: $u}]
+              + (if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet", landing: "1", branch: $br, internal: "", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: $mu}] else [] end)
+              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", landing: "", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
           { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -189,6 +199,7 @@ jobs:
             KOB_PAGES_NETWORK=$(jq -r .network <<< "$site") KOB_PAGES_LANDING_ONLY=$(jq -r .landing <<< "$site") KOB_PAGES_INDEXER_URL=$(jq -r .indexer <<< "$site") \
             KOB_PAGES_EXTRA_INDEXER_URLS=$(jq -r .extra <<< "$site") KOB_PAGES_NODE_URL=$(jq -r .node <<< "$site") \
             KOB_PAGES_EXPLORER_URL=$(jq -r .explorer <<< "$site") KOB_PAGES_TOKEN_NAMES_URL=$(jq -r .names <<< "$site") \
+            KOB_PAGES_NETWORKS=$(jq -r .networks <<< "$site") KOB_PAGES_HOST_NETWORKS=$(jq -r .hosts <<< "$site") \
               node web/scripts/pages-config.mjs --check || rc=1
           done < <(jq -c '.include[]' <<< "$MATRIX")
           exit "$rc"
@@ -284,6 +295,8 @@ jobs:
           KOB_PAGES_NODE_URL: ${{ matrix.node }}
           KOB_PAGES_EXPLORER_URL: ${{ matrix.explorer }}
           KOB_PAGES_TOKEN_NAMES_URL: ${{ matrix.names }}
+          KOB_PAGES_NETWORKS: ${{ matrix.networks }}
+          KOB_PAGES_HOST_NETWORKS: ${{ matrix.hosts }}
           # the internal mainnet app also gets robots.txt (Disallow: /) and X-Robots-Tag: noindex in its _headers
           KOB_PAGES_INTERNAL: ${{ matrix.internal }}
         run: node scripts/pages-config.mjs --dist dist | tee "$RUNNER_TEMP/pages-config.txt"

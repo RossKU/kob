@@ -10,7 +10,7 @@ import { noindexDist, pagesConfig, programRegistry, writeDeployment } from '../s
 import { checkPages, checkProtected } from '../scripts/check-pages.mjs';
 import { ensureDomain, hostOf, pagesDevHost, zoneCandidates } from '../scripts/pages-domain.mjs';
 import { DEFAULT_REGISTRY_PATH } from '../registry-pin.mjs';
-import { sanitizeLayer, type ConfigWarning } from '../src/config';
+import { resolveConfig, sanitizeLayer, type ConfigWarning } from '../src/config';
 import { parseRegistry } from '../src/kob/registry';
 import { loadKobNode } from '../src/kob/wasm.node';
 
@@ -159,6 +159,90 @@ describe('pages-config: config.json from the repository variables', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  describe('one site for both networks: KOB_PAGES_NETWORKS and KOB_PAGES_HOST_NETWORKS (config.json `networks`, `hostNetworks`)', () => {
+    const TN = 'https://tn.example.org';
+    const launch = {
+      KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NETWORK_SWITCH: '1',
+      KOB_PAGES_NETWORKS: JSON.stringify({ 'testnet-10': { indexerUrl: `${TN}/`, extraIndexerUrls: ['https://tn2.example.org'], nodeUrl: 'wss://n.example.org/kaspa/testnet-10/wrpc/json' } }),
+      KOB_PAGES_HOST_NETWORKS: JSON.stringify({ 'KOB.example.org': 'mainnet', 'kob-tn10.example.org': 'testnet-10' }),
+    };
+
+    it('unset or empty: config.json is exactly what it was without them', () => {
+      const base = { KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX };
+      expect(pagesConfig({ ...base, KOB_PAGES_NETWORKS: '', KOB_PAGES_HOST_NETWORKS: ' ' })).toEqual(pagesConfig(base));
+      expect(JSON.stringify(pagesConfig(base).config)).toBe(JSON.stringify({ network: 'testnet-10', indexerUrl: IDX, extraIndexerUrls: [], nodeUrl: '', lockNetwork: true }));
+    });
+
+    it('a mainnet site with a testnet-10 entry and the host map; the app takes the file without a warning and opens each host on its network', () => {
+      const { config, errors } = pagesConfig(launch);
+      expect(errors).toEqual([]);
+      expect(config).toEqual({
+        network: 'mainnet', indexerUrl: IDX, extraIndexerUrls: [], nodeUrl: '',
+        networks: { 'testnet-10': { indexerUrl: TN, extraIndexerUrls: ['https://tn2.example.org'], nodeUrl: 'wss://n.example.org/kaspa/testnet-10/wrpc/json', registryUrl: './registry/testnet-10/tokens.json' } },
+        hostNetworks: { 'kob.example.org': 'mainnet', 'kob-tn10.example.org': 'testnet-10' },
+      });
+      const file = JSON.parse(JSON.stringify(config));
+      const tn = resolveConfig({ file, host: 'kob-tn10.example.org' });
+      expect(tn.warnings).toEqual([]);
+      expect(tn.config).toMatchObject({ network: 'testnet-10', indexerUrl: TN, registryUrl: './registry/testnet-10/tokens.json' });
+      expect(resolveConfig({ file, host: 'kob.example.org' }).config).toMatchObject({ network: 'mainnet', indexerUrl: IDX, registryUrl: './registry/tokens.json' });
+    });
+
+    it('writes the testnet-10 entry its program list beside the pinned mainnet registry', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'kob-pages-'));
+      try {
+        mkdirSync(join(dir, 'registry'));
+        writeFileSync(join(dir, 'registry', 'tokens.json'), 'pinned');
+        const out = writeDeployment(dir, pagesConfig(launch).config!);
+        expect(out.map((f) => f.path)).toEqual(['config.json', 'registry/testnet-10/tokens.json']);
+        expect(readFileSync(join(dir, 'registry', 'tokens.json'), 'utf8')).toBe('pinned');
+        const text = readFileSync(join(dir, 'registry', 'testnet-10', 'tokens.json'), 'utf8');
+        expect(parseRegistry(text, { kob: loadKobNode(), network: 'testnet-10' }).templateChecks.length).toBeGreaterThan(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('refuses what the app would refuse or misread: bad JSON, the own network, mainnet on a testnet-10 site, bad servers, unknown fields, bad hosts', () => {
+      const errs = (env: Record<string, string>) => pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, ...env }).errors;
+      expect(errs({ KOB_PAGES_NETWORKS: '{testnet-10: {}}' })[0]).toContain('KOB_PAGES_NETWORKS: not JSON');
+      expect(errs({ KOB_PAGES_NETWORKS: '[]' })).toEqual(['KOB_PAGES_NETWORKS: must be a JSON object']);
+      expect(errs({ KOB_PAGES_NETWORKS: '{"mainnet": {"indexerUrl": "https://m.example.org"}}' })[0]).toContain("the site's own network");
+      expect(pagesConfig({ KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_NETWORKS: '{"mainnet": {"indexerUrl": "https://m.example.org"}}' }).errors[0]).toContain('replaces the shipped mainnet registry');
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet": {}}' })[0]).toContain('is not a network');
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {}}' })).toEqual(['KOB_PAGES_NETWORKS.testnet-10.indexerUrl is empty: the app needs an indexer for the book, the charts and the orders']);
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {"indexerUrl": "https://tn.example.org?key=1"}}' })[0]).toContain('carries a query or fragment');
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {"indexerUrl": "http://localhost:8491"}}' })[0]).toContain('must use https');
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {"indexerUrl": "https://tn.example.org", "nodeUrl": "ws://n.example.org"}}' })[0]).toContain('must use wss');
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {"indexerUrl": "https://tn.example.org", "registryUrl": "./x.json", "lockNetwork": true}}' })).toEqual([
+        'KOB_PAGES_NETWORKS.testnet-10: unknown field(s) registryUrl, lockNetwork (use indexerUrl, extraIndexerUrls, nodeUrl, explorerUrl)',
+      ]);
+      expect(errs({ KOB_PAGES_NETWORKS: '{"testnet-10": {"indexerUrl": "https://tn.example.org", "extraIndexerUrls": "https://b.example.org"}}' })[0]).toContain('must be a list of URLs');
+      expect(errs({ KOB_PAGES_HOST_NETWORKS: '{"*.example.org": "mainnet", "kob.example.org:443": "mainnet", "https://kob.example.org": "mainnet", "localhost": "mainnet", "kob.local": "mainnet", "kob.example.org": "testnet"}' })).toHaveLength(6);
+      // a host on a network the site has no servers for is allowed, with a note
+      const r = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_HOST_NETWORKS: '{"kob-tn10.example.org": "testnet-10"}' });
+      expect(r.errors).toEqual([]);
+      expect(r.notes.join(' ')).toContain('opens on testnet-10, which the site has no servers for');
+      // the header switch off: the note says how the other network is reached
+      expect(pagesConfig({ ...launch, KOB_PAGES_NETWORK_SWITCH: '' }).notes.join(' ')).toContain('the header switch is off');
+    });
+
+    it('landing-only: both are ignored with a note', () => {
+      const r = pagesConfig({ ...launch, KOB_PAGES_LANDING_ONLY: '1' });
+      expect(r.config).toEqual({ network: 'mainnet', landingOnly: true });
+      expect(r.notes.join(' ')).toContain('KOB_PAGES_NETWORKS, KOB_PAGES_HOST_NETWORKS are ignored');
+    });
+
+    it('the workflow passes them (optional repository variables) from the matrix to the check and to config.json', () => {
+      const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
+      for (const name of ['KOB_PAGES_NETWORKS', 'KOB_PAGES_HOST_NETWORKS', 'KOB_PAGES_MAINNET_NETWORKS', 'KOB_PAGES_MAINNET_HOST_NETWORKS']) expect(wf).toContain(`vars.${name} }}`);
+      expect(wf.match(/networks: \$m?nw, hosts: \$m?hn,/g)).toHaveLength(3);
+      expect(wf).toContain('KOB_PAGES_NETWORKS=$(jq -r .networks <<< "$site") KOB_PAGES_HOST_NETWORKS=$(jq -r .hosts <<< "$site")');
+      expect(wf).toContain('KOB_PAGES_NETWORKS: ${{ matrix.networks }}');
+      expect(wf).toContain('KOB_PAGES_HOST_NETWORKS: ${{ matrix.hosts }}');
+    });
   });
 });
 

@@ -48,4 +48,22 @@ describe('network switch model', () => {
     expect(saveSettings(networkSwitchPatch(next, 'testnet-10'), st)).toBe(true);
     expect(resolveConfig({ file, settings: JSON.parse(st.getItem(SETTINGS_KEY)!) }).config).toMatchObject({ network: 'testnet-10', indexerUrl: 'https://tn.example', nodeUrl: 'wss://tn.example/wrpc' });
   });
+  it('on a host whose default network comes from `hostNetworks`, the switch stores the choice (per origin), which beats the host on the next load, both ways', () => {
+    const shared = {
+      network: 'mainnet', indexerUrl: 'https://main.example', networks: { 'testnet-10': { indexerUrl: 'https://tn.example' } },
+      hostNetworks: { 'kob.example': 'mainnet', 'kob-tn10.example': 'testnet-10' },
+    };
+    const load = (st: MemStorage) => resolveConfig({ file: shared, host: 'kob-tn10.example', settings: JSON.parse(st.getItem(SETTINGS_KEY) ?? 'null') ?? undefined }).config;
+    const st = new MemStorage();
+    const first = load(st);
+    expect(first).toMatchObject({ network: 'testnet-10', indexerUrl: 'https://tn.example', serverNetworks: ['mainnet', 'testnet-10'] });
+    expect(networkSwitchState(first, undefined)).toEqual({ kind: 'open' });
+    expect(saveSettings(networkSwitchPatch(first, 'mainnet'), st)).toBe(true);
+    const switched = load(st);
+    expect(switched).toMatchObject({ network: 'mainnet', indexerUrl: 'https://main.example' });
+    // back to the host's network: stored too (the switch writes the network it chose; Settings > reset servers removes it)
+    expect(saveSettings(networkSwitchPatch(switched, 'testnet-10'), st)).toBe(true);
+    expect(JSON.parse(st.getItem(SETTINGS_KEY)!)).toEqual({ network: 'testnet-10' });
+    expect(load(st)).toMatchObject({ network: 'testnet-10', indexerUrl: 'https://tn.example' });
+  });
 });
