@@ -1,5 +1,8 @@
-//! The common tail of every trading command: show the plan (findings, what the order is, the decoded transaction), stop on
-//! `--dry-run`, ask (or take `--yes`), sign with the wallet key, validate in the script engine, submit, report.
+//! The common tail of every trading command.
+//!
+//! It shows the plan, which is the findings, what the order is and the decoded transaction. It
+//! stops on `--dry-run`, asks for confirmation or takes `--yes`, signs with the wallet key,
+//! validates in the script engine, submits, and reports.
 
 use kob_protocol::json::to_hex;
 use kob_protocol::tx::BuiltTx;
@@ -12,9 +15,9 @@ use crate::common::{sign_validate_send, Signer};
 
 /// A planned action ready to show.
 pub struct Ready {
-    /// What it is (`place limit sell`, `cancel ...`).
+    /// What the action is, such as `place limit sell` or `cancel ...`.
     pub title: String,
-    /// Plan lines (already formatted).
+    /// The plan lines, already formatted.
     pub lines: Vec<String>,
     /// Findings.
     pub issues: Vec<Issue>,
@@ -34,7 +37,7 @@ fn sev(s: Severity) -> &'static str {
     }
 }
 
-/// Print findings (stderr) and return whether one is an error.
+/// Prints the findings to stderr and returns whether one of them is an error.
 pub fn print_issues(issues: &[Issue], json: bool) -> bool {
     if !json {
         for i in issues {
@@ -44,34 +47,37 @@ pub fn print_issues(issues: &[Issue], json: bool) -> bool {
     issues.iter().any(|i| i.severity == Severity::Error)
 }
 
-/// Issues as JSON.
+/// The findings as JSON.
 pub fn issues_json(issues: &[Issue]) -> Value {
     json!(issues.iter().map(|i| json!({"code": i.code, "severity": sev(i.severity), "message": i.message})).collect::<Vec<_>>())
 }
 
-/// The node a signing command plans from must run the network the command names: checked before anything is read from it
-/// for a plan (a node of another network has another UTXO set, so a planning error such as "not enough KAS" would hide the
-/// cause), and again in [`finish`] right before anything is shown as a plan of that network or signed.
+/// Checks that the node a signing command plans from runs the network the command names.
+///
+/// It runs before anything is read from the node for a plan. A node of another network has
+/// another UTXO set, so a planning error such as "not enough KAS" would hide the cause. [`finish`]
+/// checks again right before anything is shown as a plan of that network or signed.
 pub fn check_network_first(c: &Common) -> Result<(), String> {
     crate::wrpc::check_node_network(c.need_node()?, &c.network, crate::common::NODE_TIMEOUT)
 }
 
-/// Show, confirm, sign, submit. Returns the process exit code.
+/// Shows the plan, confirms, signs and submits, and returns the process exit code.
 pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &str) -> i32 {
-    // the plan was read from this node: it must run the network the command names before
-    // anything is shown as a plan of that network or signed
+    // The plan was read from this node, so it must run the network the command names before
+    // anything is shown as a plan of that network or signed.
     if let Err(e) = c.need_node().and_then(|n| crate::wrpc::check_node_network(n, &c.network, crate::common::NODE_TIMEOUT)) {
         eprintln!("error: {e}");
         return 1;
     }
-    // contended blocks and no --fee-rate / --priority-fee: one line on stderr (never in the --json document), the fee stays the relay minimum
+    // With contended blocks and no --fee-rate or --priority-fee, one line goes to stderr, never
+    // into the --json document. The fee stays the relay minimum.
     if let Some(n) = c.need_node().ok().and_then(|n| crate::congestion::note(n, c.fee_rate, c.priority_fee)) {
         eprintln!("{n}");
     }
     let decoded = show::decode(&r.built, &signer.pubkey, units);
     let failed = print_issues(&r.issues, c.json);
     let new_ids: Vec<String> = r.built.covenants.iter().map(|x| to_hex(&x.covenant_id)).collect();
-    // `result` is null until the transaction is submitted
+    // `result` is null until the transaction is submitted.
     let mut plan_json = json!({
         "action": r.title,
         "network": c.network,
@@ -81,8 +87,9 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
         "new_covenant_ids": new_ids,
         "result": Value::Null,
     });
-    // --json prints exactly one document on stdout, once the outcome is known (the plan, with the result in it when the
-    // transaction was submitted); a person at a terminal who is going to be asked reads the plan as text on stderr meanwhile
+    // --json prints exactly one document on stdout, once the outcome is known. It is the plan,
+    // with the result in it when the transaction was submitted. A person at a terminal who is
+    // going to be asked reads the plan as text on stderr meanwhile.
     let print_json = |doc: &Value| println!("{}", serde_json::to_string_pretty(doc).unwrap_or_default());
     let text_plan = |to_stderr: bool| {
         let mut out = vec![r.title.clone(), format!("  network: {}", c.network)];

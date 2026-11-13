@@ -1,6 +1,8 @@
-//! What a transaction does, decoded from the unsigned transaction and its signing plan alone (like the web app's confirm
-//! screen, `web/src/kob/decode.ts`): every input and output with its owner, the net effect on the wallet (KAS and each
-//! token), the fee and the signatures asked for.
+//! What a transaction does, decoded from the unsigned transaction and its signing plan alone.
+//!
+//! The decoding is like the confirm screen of the web app, `web/src/kob/decode.ts`. It lists
+//! every input and output with its owner, the net effect on the wallet (KAS and each token), the
+//! fee and the signatures asked for.
 
 use std::collections::BTreeMap;
 
@@ -13,7 +15,7 @@ use serde_json::{json, Value};
 use super::market::show_id;
 use super::units::{fmt_decimal, kas, TokenUnit};
 
-/// Display facts of the tokens a transaction may touch.
+/// The display facts of the tokens that a transaction may touch.
 pub type Units = BTreeMap<[u8; 32], TokenUnit>;
 
 fn tok(units: &Units, cov: &[u8; 32], amount: i128) -> String {
@@ -37,7 +39,7 @@ fn owner_of(st: &TokenState, me: &[u8; 32]) -> String {
     }
 }
 
-/// The decoded transaction.
+/// The decoded transaction, from the point of view of one key.
 #[derive(Debug, Clone)]
 pub struct Decoded {
     /// One line per input.
@@ -46,19 +48,20 @@ pub struct Decoded {
     pub outputs: Vec<String>,
     /// KAS into (+) or out of (-) the wallet's plain UTXOs, fee included.
     pub kas_net: i128,
-    /// Tokens into (+) or out of (-) the wallet's key-owned token UTXOs.
+    /// Tokens into (+) or out of (-) the token UTXOs that the wallet key owns.
     pub token_net: BTreeMap<[u8; 32], i128>,
-    /// Network fee.
+    /// The network fee.
     pub fee: u64,
-    /// The fee is the storage-inclusive priority fee (`--priority-fee`), not the relay floor.
+    /// Whether the fee is the storage-inclusive priority fee (`--priority-fee`), not the relay
+    /// floor.
     pub priority_fee: bool,
-    /// Inputs the wallet key signs.
+    /// The number of inputs that the wallet key signs.
     pub signatures: usize,
-    /// Signatures of other keys (refused by the signer).
+    /// The number of signatures of other keys, which the signer refuses.
     pub foreign_signatures: usize,
 }
 
-/// Decode `built` from the point of view of the key `me`.
+/// Decodes `built` from the point of view of the key `me`.
 pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
     let my_spk = spk_to_string(&p2pk_spk(me));
     let mut d = Decoded {
@@ -71,7 +74,8 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         signatures: built.sign.iter().filter(|s| s.pubkey == *me).count(),
         foreign_signatures: built.sign.iter().filter(|s| s.pubkey != *me).count(),
     };
-    // token output states per token, in output order (the leader / KRON plans carry the next states)
+    // Token output states per token, in output order. The leader and KRON plans carry the next
+    // states.
     let mut next: BTreeMap<[u8; 32], Vec<TokenState>> = BTreeMap::new();
     for (i, (inp, plan)) in built.tx.inputs.iter().zip(&built.plans).enumerate() {
         let value = inp.utxo.amount as i128;
@@ -115,7 +119,7 @@ pub fn decode(built: &BuiltTx, me: &[u8; 32], units: &Units) -> Decoded {
         };
         d.inputs.push(line);
     }
-    // orders spent by the transaction: an output under one of their covenant ids continues it
+    // Orders spent by the transaction. An output under one of their covenant ids continues it.
     let spent_orders: BTreeMap<[u8; 32], String> = built
         .tx
         .inputs
@@ -183,7 +187,7 @@ fn token_in(d: &mut Decoded, i: usize, st: &TokenState, cov: [u8; 32], value: i1
     format!("in  #{i}  {} of {} (carrier {})", tok(units, &cov, st.amount() as i128), owner_of(st, me), kas(value))
 }
 
-/// Lines of the decoded transaction and the net effect.
+/// The lines of the decoded transaction and its net effect.
 pub fn lines(d: &Decoded, units: &Units, txid: &[u8; 32]) -> Vec<String> {
     let mut v = vec![format!("transaction {} (unsigned): {} inputs, {} outputs", to_hex(txid), d.inputs.len(), d.outputs.len())];
     v.extend(d.inputs.iter().map(|l| format!("  {l}")));
@@ -219,7 +223,7 @@ pub fn json_of(d: &Decoded, built: &BuiltTx) -> Value {
         },
         "signatures": d.signatures,
     });
-    // only a priority fee is named: the document of a relay-floor plan is unchanged
+    // Only a priority fee is named, so the document of a relay-floor plan is unchanged.
     if d.priority_fee {
         v["fee_mode"] = json!("priority");
     }

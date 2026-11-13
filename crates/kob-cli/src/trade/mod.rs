@@ -1,9 +1,12 @@
-//! The trading commands: `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`, `kob send`, `kob merge`, and
-//! the read-only views `kob book`, `kob orders`, `kob balances`.
+//! The trading commands and the read-only views.
 //!
-//! Every command reads the node and the indexer, plans the transaction with the same rules and defaults as the web wallet
-//! (`plan`), shows what it does (`show`), and signs only after `--yes` or a terminal's confirmation, with a key read from
-//! a file or the environment. Every signed transaction is validated in the script engine before it is submitted.
+//! The trading commands are `kob place`, `kob replace`, `kob cancel`, `kob refund`, `kob take`,
+//! `kob send` and `kob merge`. The views are `kob book`, `kob orders` and `kob balances`.
+//!
+//! Every command reads the node and the indexer, plans the transaction with the same rules and
+//! defaults as the web wallet (`plan`), and shows what it does (`show`). It signs only after
+//! `--yes` or a confirmation at a terminal, with a key read from a file or the environment.
+//! Every signed transaction is validated in the script engine before it is submitted.
 
 pub mod actions;
 pub mod data;
