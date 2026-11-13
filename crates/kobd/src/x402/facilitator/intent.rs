@@ -31,8 +31,8 @@
 //!
 //! - Its deadline (the authorization's expiry, capped by an invoice's) passes with no execution
 //!   in flight (`intent_expired`).
-//! - It is spent outside this facilitator by a transaction that does not pay the merchant, such
-//!   as the payer's cancel (`intent_spent`).
+//! - It is spent outside this facilitator by anything but an execution that pays the merchant at
+//!   the router-pinned output, such as the payer's cancel (`intent_spent`).
 //! - `maxAttempts` executions failed (`intent_not_executable`).
 //!
 //! An intent that is given up but still on chain is then expired by the facilitator
@@ -47,7 +47,7 @@ use std::time::{Duration, Instant};
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, SpentOutput, SubmitError, Tracked, Txid};
 use kob_x402::error::{Diag, Reason, Result, X402Error};
-use kob_x402::intent::{build_execution, build_expiry, BookView, IntentFacts, KeeperParams};
+use kob_x402::intent::{build_execution, build_expiry, pinned_merchant_output, BookView, IntentFacts, KeeperParams};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
 use kob_x402::verify::VerifyCtx;
 use kob_x402::wire::{hex, parse_hash32, FacilitatorRequest, Finality, OutpointJson, SettlementResponse, BINDING_INTENT};
@@ -135,35 +135,42 @@ pub const EXPIRY_RETRY_MS: u64 = 600_000;
 /// The normal fee bucket aims at inclusion within the minute.
 pub const EXPIRY_BUMP_MS: u64 = 60_000;
 
-/// The indexes of the outputs of a foreign spend of an intent that pay the merchant what it
-/// promises, in output order.
+/// The index of the output of a foreign spend of an intent that pays the merchant what it
+/// promises, if there is one.
 ///
-/// An output pays the merchant when all of these hold:
+/// Only the output the router itself fixes for the merchant counts
+/// ([`kob_x402::intent::pinned_merchant_output`]). The spend must have run the intent's execution
+/// entry, and the output is at the router-pinned position relative to the intent's input
+/// `input_index`. Any other output of the transaction may belong to another of its inputs. The
+/// payer's cancel checks only the payer's signature, so it can sit next to the merchant's own ask
+/// fill (its payout to the merchant), a refund of the merchant's own bid, or a token delivery into
+/// the merchant's bid. None of those pays the intent.
+///
+/// The pinned output pays the merchant when all of these hold:
 ///
 /// - Its script is the merchant's. A token merchant's script is the token program's P2SH over the
 ///   merchant's state, hence over the token amount.
-/// - Its covenant id is the token's for a token merchant and none for a KAS merchant. The payer's
-///   own cancel can carry a plain copy of the token script and carrier, which is no token.
+/// - Its covenant id is the token's for a token merchant and none for a KAS merchant.
 /// - Its value is at least the promised one, because the router lets a keeper overpay. A token
 ///   merchant's output may carry less KAS than the facilitator's own carrier, down to the
 ///   policy's minimum carrier. The router pins only the token state, and a rival keeper
 ///   rationally pays the smallest carrier.
 ///
-/// An output pays ONE intent. The caller claims the (spender, index) pair it takes
-/// ([`Ledger::claim_execution`]) and moves on to the next index when another intent holds it.
-pub(crate) fn merchant_outputs_in<'a>(
-    facts: &'a IntentFacts,
-    merchant_spk: &'a ScriptPublicKey,
-    outputs: &'a [SpentOutput],
+/// The caller claims the (spender, index) pair ([`Ledger::claim_execution`]), so that an output
+/// pays one intent.
+pub(crate) fn pinned_merchant_output_in(
+    facts: &IntentFacts,
+    merchant_spk: &ScriptPublicKey,
+    input_index: u32,
+    sig_script: &[u8],
+    outputs: &[SpentOutput],
     min_carrier: u64,
-) -> impl Iterator<Item = usize> + 'a {
+) -> Option<usize> {
+    let at = pinned_merchant_output(facts, input_index, sig_script)?;
+    let o = outputs.get(at)?;
     let want = facts.state.merchant_token();
     let floor = if want.is_some() { facts.merchant_value.min(min_carrier) } else { facts.merchant_value };
-    outputs
-        .iter()
-        .enumerate()
-        .filter(move |(_, o)| o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want)
-        .map(|(i, _)| i)
+    (o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want).then_some(at)
 }
 
 fn intent_unsupported() -> X402Error {
@@ -869,23 +876,24 @@ impl Facilitator {
                     return Ok(Drive::Waiting("confirmations"));
                 }
             }
-            // Spent outside this facilitator. Another keeper's execution pays the merchant exactly
-            // as ours would, because the intent covenant sees to it and any party may execute an
-            // intent. So the payment is settled by the spending transaction when it pays the
-            // merchant the promised output, whoever broadcast it. The payer's cancel or expiry
-            // pays the payer instead.
+            // Spent outside this facilitator. Any party may execute an intent, and the router
+            // pins the merchant's output of an execution: at its position relative to the intent's
+            // input, with the promised script and value. So a spend that ran the execution entry
+            // and pays the merchant there settles the payment, whoever broadcast it. Nothing else
+            // does. The payer's cancel constrains no output but the payer's, and an output that
+            // pays the merchant elsewhere in that transaction can be the merchant's own money
+            // (its ask's payout, its bid's refund). A cancel or an expiry ends in `intent_spent`.
             match self.chain.spent_by(&intent_op) {
-                SpentBy::Spent { txid: spender, block_daa_score, outputs } => {
+                SpentBy::Spent { txid: spender, block_daa_score, input_index, sig_script, outputs } => {
                     let merchant_spk = spk_from_hex(&facts.merchant_spk)
                         .map_err(|_| X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, "bad merchant script"))?;
                     let min_carrier = self.policy.limits.min_carrier_sompi;
-                    let candidates: Vec<usize> = merchant_outputs_in(facts, &merchant_spk, &outputs, min_carrier).collect();
-                    if !candidates.is_empty() && !self.deep_enough(block_daa_score, required).map_err(node)? {
+                    let paid = pinned_merchant_output_in(facts, &merchant_spk, input_index, &sig_script, &outputs, min_carrier);
+                    if paid.is_some() && !self.deep_enough(block_daa_score, required).map_err(node)? {
                         return Ok(Drive::Waiting("confirmations"));
                     }
-                    // One output pays one intent: take the first matching output that no other
-                    // intent holds.
-                    for at in candidates {
+                    // One output pays one intent.
+                    if let Some(at) = paid {
                         let exec = ExecRecord {
                             txid: hex(&spender),
                             merchant_index: at as u32,

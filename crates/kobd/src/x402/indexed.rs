@@ -113,6 +113,8 @@ impl<C: ChainView> ChainView for IndexedChain<C> {
             Some(Some(s)) => SpentBy::Spent {
                 txid: s.txid.0,
                 block_daa_score: s.daa,
+                input_index: s.input_index,
+                sig_script: s.sig_script,
                 outputs: s
                     .outputs
                     .into_iter()

@@ -115,8 +115,9 @@ pub enum SpentBy {
     Unspent,
     /// A transaction of the current selected chain spent it, accepted at this DAA score.
     ///
-    /// `outputs` are the outputs of that transaction.
-    Spent { txid: Txid, block_daa_score: u64, outputs: Vec<SpentOutput> },
+    /// `input_index` is the input of that transaction that spent the outpoint, and `sig_script`
+    /// that input's signature script. `outputs` are all the outputs of the transaction, in order.
+    Spent { txid: Txid, block_daa_score: u64, input_index: u32, sig_script: Vec<u8>, outputs: Vec<SpentOutput> },
 }
 
 /// An output of a transaction that spent a watched outpoint.

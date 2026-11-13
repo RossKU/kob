@@ -226,6 +226,50 @@ impl IntentFacts {
     }
 }
 
+/// The entry of a router actor that a spend of an intent ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IntentEntry {
+    /// The actor's fill entry: the execution, which pays the merchant.
+    Execution,
+    /// `expire`, which returns the funds to the payer.
+    Expire,
+    /// `cancel`, the payer's signed spend, which constrains no other output.
+    Cancel,
+}
+
+/// The entry of `actor` that `sig_script`, the signature script of an input spending an intent of
+/// `actor`, runs.
+///
+/// The script is the entry's arguments, its dispatch tag and the redeem script, one push each. The
+/// redeem script dispatches on the tag, so an accepted spend ran the entry whose tag precedes the
+/// redeem push. `None` means the script is not push-only or that push is none of the actor's tags.
+pub fn intent_entry(actor: &Actor, sig_script: &[u8]) -> Option<IntentEntry> {
+    let pushes = crate::token::parse_pushes(sig_script)?;
+    let [.., crate::token::Push::Data(tag), crate::token::Push::Data(_redeem)] = pushes.as_slice() else { return None };
+    let is = |entry: &str| actor.dispatch_tag(entry).is_some_and(|t| t.as_slice() == *tag);
+    if is(actor.entry) {
+        Some(IntentEntry::Execution)
+    } else if is("expire") {
+        Some(IntentEntry::Expire)
+    } else if is("cancel") {
+        Some(IntentEntry::Cancel)
+    } else {
+        None
+    }
+}
+
+/// The output of a transaction that spent the intent of `f` at input `input_index` which the
+/// router fixes as the merchant's.
+///
+/// It is the router-pinned position ([`IntentKind::merchant_output`]) when the spend ran the
+/// execution entry. A cancel or an expiry pins no merchant output, so it is `None` then, and also
+/// when the entry cannot be told. Any other output of such a transaction can belong to another
+/// input, for example the payout of the merchant's own ask, and never pays the intent.
+pub fn pinned_merchant_output(f: &IntentFacts, input_index: u32, sig_script: &[u8]) -> Option<usize> {
+    let actor = f.actor().ok()?;
+    (intent_entry(actor, sig_script)? == IntentEntry::Execution).then(|| f.state.kind().merchant_output(input_index as usize))
+}
+
 fn amount_field(v: &Option<String>, what: &str) -> Result<i64> {
     let s =
         v.as_deref().ok_or_else(|| X402Error::payload(Diag::InvalidKaspaX402Payload, format!("route.intent.{what} is required")))?;

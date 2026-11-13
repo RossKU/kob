@@ -345,6 +345,9 @@ fn merchant_token_spk(offer: &PaymentRequirements) -> ScriptPublicKey {
 
 // ====================================================================================================================
 // X14 candidate: one merchant output credited to two intents (the payer's cancel of both intents in ONE transaction)
+//
+// Since review p6 (F1) a cancel settles no intent at all: only an execution pays the merchant, at the output the router pins.
+// So the merged cancel's merchant outputs back neither intent, one output or two.
 // ====================================================================================================================
 
 /// Two cancels of two TokenToKas intents (token A1 and token A2, so each lock is the first input of its own covenant group) in one
@@ -435,29 +438,24 @@ fn x14(amount: u64, pays: &[u64], first_second: bool) -> (bool, bool, Vec<u64>) 
     (ok1, ok2, held)
 }
 
-/// X14: one 5 KAS merchant output backs ONE intent, whichever is asked first.
+/// X14: one 5 KAS merchant output in the payers' merged cancel backs no intent, whichever is asked first.
 #[test]
-fn x14_one_merchant_output_settles_one_intent_only() {
+fn x14_one_merchant_output_in_a_merged_cancel_settles_no_intent() {
     for first_second in [true, false] {
         let (ok1, ok2, held) = x14(5 * KAS, &[5 * KAS], first_second);
         assert_eq!(held, vec![5 * KAS]);
-        assert_eq!(
-            u8::from(ok1) + u8::from(ok2),
-            1,
-            "exactly one intent is paid by one output (asked first: {first_second}): {ok1} {ok2}"
-        );
+        assert!(!ok1 && !ok2, "a cancel pays no intent (asked first: {first_second}): {ok1} {ok2}");
     }
 }
 
-/// X14 bypass: the merchant output is split in two, or doubled: a second intent finds its own unclaimed matching output.
+/// X14 bypass: the merchant output is split in two, or doubled. A cancel still pays no intent.
 #[test]
-fn x14_two_outputs_settle_two_intents() {
+fn x14_two_merchant_outputs_in_a_merged_cancel_settle_no_intent() {
     let (ok1, ok2, held) = x14(2 * KAS, &[2 * KAS, 2 * KAS], true);
     assert_eq!(held.len(), 2);
-    assert!(ok1 && ok2, "two matching outputs back two intents: {ok1} {ok2}");
-    // one output below the promised value and one at it: the small one pays nobody
+    assert!(!ok1 && !ok2, "two matching outputs of a cancel back no intent: {ok1} {ok2}");
     let (ok1, ok2, _) = x14(2 * KAS, &[2 * KAS - 1, 2 * KAS], true);
-    assert_eq!(u8::from(ok1) + u8::from(ok2), 1, "a short output backs no intent: {ok1} {ok2}");
+    assert!(!ok1 && !ok2, "{ok1} {ok2}");
 }
 
 // ====================================================================================================================

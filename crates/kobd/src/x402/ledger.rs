@@ -867,9 +867,8 @@ impl Ledger {
     /// Records another keeper's execution as the one that paid the merchant of intent entry `txid`.
     ///
     /// One output pays one intent. So nothing is recorded when another entry that is not failed
-    /// already holds the same output (the same spender and merchant output index). A cancel of two
-    /// intents in one transaction carries only one merchant output. Check and record are one step
-    /// under the ledger lock.
+    /// already holds the same output (the same spender and merchant output index). Check and
+    /// record are one step under the ledger lock.
     ///
     /// Returns `None` when the output belongs to another intent or the entry has no intent record.
     /// An entry that already holds the output is returned as it is.

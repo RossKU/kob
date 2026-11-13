@@ -123,8 +123,9 @@ pub mod hashtype {
     }
 }
 
-/// An accepted spend: the transaction, the DAA score of its block and its outputs (script, value).
-type Spend = (Txid, u64, Vec<SpentOutput>);
+/// An accepted spend: the transaction, the DAA score of its block, the spending input's index and
+/// signature script, and the transaction's outputs.
+type Spend = (Txid, u64, u32, Vec<u8>, Vec<SpentOutput>);
 
 #[derive(Default)]
 struct State {
@@ -137,7 +138,7 @@ struct State {
     replaces: u64,
     /// Accepted transaction ids.
     accepted: BTreeSet<Txid>,
-    /// The accepted transaction that spent each outpoint: (txid, DAA score of its block, outputs).
+    /// The accepted transaction that spent each outpoint, see [`Spend`].
     spenders: BTreeMap<Outpoint, Spend>,
     daa: u64,
     counter: u64,
@@ -239,9 +240,9 @@ impl MockChain {
                     covenant_id: o.covenant.map(|c| c.covenant_id.as_bytes()),
                 })
                 .collect();
-            for i in &tx.inputs {
+            for (k, i) in tx.inputs.iter().enumerate() {
                 let op = Outpoint::new(i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index);
-                s.spenders.insert(op, (txid, daa, outputs.clone()));
+                s.spenders.insert(op, (txid, daa, k as u32, i.signature_script.clone(), outputs.clone()));
                 s.utxos.remove(&op);
             }
             for (idx, o) in tx.outputs.iter().enumerate() {
@@ -316,7 +317,13 @@ impl ChainView for MockChain {
 
     fn spent_by(&self, out: &Outpoint) -> SpentBy {
         match self.state.lock().unwrap().spenders.get(out) {
-            Some((txid, daa, outputs)) => SpentBy::Spent { txid: *txid, block_daa_score: *daa, outputs: outputs.clone() },
+            Some((txid, daa, k, sig, outputs)) => SpentBy::Spent {
+                txid: *txid,
+                block_daa_score: *daa,
+                input_index: *k,
+                sig_script: sig.clone(),
+                outputs: outputs.clone(),
+            },
             None => SpentBy::Unspent,
         }
     }

@@ -220,3 +220,49 @@ fn swap_quotes_come_from_the_book_best_price_first() {
         .collect();
     assert_eq!(prices, vec![P260, P250, P255]);
 }
+
+/// The follower reports which input of the spending transaction spent a watched outpoint, that input's signature script, and
+/// every output in order, so that the facilitator can read the entry an intent ran and the output the router pins for its
+/// merchant (review p6, F1).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_follower_reports_the_spending_input_and_every_output_in_order() {
+    use kob_x402::chain::SpentBy;
+    use kobd::hex::HexBytes;
+    use kobd::rpc::types::{Outpoint as RpcOutpoint, TxOutput};
+    let hs = Harness::new(open_memory("testnet-10").unwrap(), None);
+    hs.sync().await;
+    let chain = Arc::new(MockChain::new());
+    let view = IndexedChain::new(chain.clone(), hs.ingest.clone());
+    let watched = Outpoint::new([0x33; 32], 2);
+    assert!(view.watch_spend(&watched));
+    assert_eq!(view.spent_by(&watched), SpentBy::Unspent);
+
+    // the watched outpoint is the second input; three outputs, the middle one with a short script
+    let mut t = noise_tx(3, false);
+    let mut second = t.inputs[0].clone();
+    second.previous_outpoint = RpcOutpoint { transaction_id: Hash32(watched.txid), index: watched.index };
+    second.signature_script = HexBytes(vec![0x04, 1, 2, 3, 4, 0x01, 0x51]);
+    t.inputs.push(second);
+    let first = t.outputs[0].clone();
+    t.outputs = vec![
+        first.clone(),
+        TxOutput { value: 7, script_public_key: HexBytes(vec![0]), covenant: None },
+        TxOutput { value: 9, ..first.clone() },
+    ];
+    t.verbose_data.transaction_id = Hash32([0x44; 32]);
+    hs.node.push_block(vec![t]);
+    hs.sync().await;
+    let SpentBy::Spent { txid, input_index, sig_script, outputs, .. } = view.spent_by(&watched) else {
+        panic!("the follower saw the spend")
+    };
+    assert_eq!(txid, [0x44; 32]);
+    assert_eq!(input_index, 1);
+    assert_eq!(sig_script, vec![0x04, 1, 2, 3, 4, 0x01, 0x51]);
+    // the list index is the output index, a malformed script included
+    assert_eq!(outputs.iter().map(|o| o.value).collect::<Vec<_>>(), vec![1_000, 7, 9]);
+    assert_eq!(outputs[2].script_public_key, p2pk_like(&first.script_public_key.0));
+}
+
+fn p2pk_like(spk: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
+    kaspa_consensus_core::tx::ScriptPublicKey::from_vec(u16::from_be_bytes([spk[0], spk[1]]), spk[2..].to_vec())
+}

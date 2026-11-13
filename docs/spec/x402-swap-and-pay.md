@@ -874,7 +874,13 @@ re-sends the creation while it may still execute, never signing a second one (x4
 - **Third-party keepers.** An intent is a public covenant: any party may execute it, and the merchant is
   paid either way. A facilitator that finds its intent spent by a transaction it did not submit reports
   `intent_spent`; it cannot tell a third-party execution from the payer's cancel without the spending
-  transaction. After the deadline the facilitator's own expiry ends the intent (section 17.7).
+  transaction. A facilitator that follows the chain and has the spending transaction (KOB: `kobd
+  --executor`) MAY settle on it, but only when the intent's input ran the execution entry (its dispatch
+  tag) and the output the program pins for the merchant (I3: `j`, or `j + 1` for KasToToken) pays the
+  merchant's terms. No other output of that transaction counts: the payer's cancel checks only the
+  payer's signature, so it can share a transaction with the merchant's own ask payout, its bid's
+  refund, or a token delivery into its bid, which would otherwise read as a payment (the section 8.6
+  attack). After the deadline the facilitator's own expiry ends the intent (section 17.7).
 - **Front-running a creation.** Section 17.6.
 - **Resource cost.** The dry run builds and validates up to a bounded number of candidate executions per
   request; rate-limit as in section 16.

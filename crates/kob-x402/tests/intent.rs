@@ -30,7 +30,10 @@ use kob_x402::client::intent::{cancel_intent, intent_requirements, pay_intent, I
 use kob_x402::client::swap::{MerchantGain, PayAssetSpec, PayerFunds, SwapOfferParams};
 use kob_x402::common::PayloadCommit;
 use kob_x402::error::{Diag, X402Error};
-use kob_x402::intent::{build_execution, intent_commit_digest, verify_intent, BookView, IntentFacts, KeeperParams};
+use kob_x402::intent::{
+    build_execution, build_expiry, intent_commit_digest, intent_entry, pinned_merchant_output, verify_intent, BookView, IntentEntry,
+    IntentFacts, KeeperParams,
+};
 use kob_x402::policy::{AllowedToken, Custody, Policy};
 use kob_x402::safe_tx::SafeTx;
 use kob_x402::testkit::MockChain;
@@ -178,8 +181,22 @@ impl Fx {
         self.chain.mine(1);
         let st = self.chain.output_status(&ex.merchant_output, &ex.merchant_spk).unwrap();
         assert!(matches!(st, OutputStatus::Accepted { .. }), "the merchant output is accepted");
+        // the merchant output is the one the router pins relative to the intent's input, and the intent ran its fill entry
+        let j = intent_input(&ex.tx, f);
+        let sig = &ex.tx.inputs[j].signature_script;
+        assert_eq!(intent_entry(f.actor().unwrap(), sig), Some(IntentEntry::Execution), "{}", f.actor);
+        assert_eq!(pinned_merchant_output(f, j as u32, sig), Some(ex.merchant_output.index as usize), "{}", f.actor);
         ex.merchant_output
     }
+}
+
+/// The index of the input of `tx` that spends the intent of `f`.
+fn intent_input(tx: &kaspa_consensus_core::tx::Transaction, f: &IntentFacts) -> usize {
+    let o = f.outpoint();
+    tx.inputs
+        .iter()
+        .position(|i| i.previous_outpoint.transaction_id.as_bytes() == o.txid && i.previous_outpoint.index == o.index)
+        .expect("the transaction spends the intent")
 }
 
 fn t2k_opts() -> IntentOptions {
@@ -292,13 +309,26 @@ fn the_payer_cancels_an_unexecuted_intent() {
     let f = fx();
     let offer = f.kas_offer(5 * KAS, MERCHANT);
     let p = f.pay(&offer, &hex(&TOKEN_COV), &t2k_opts()).unwrap();
-    let (v, _) = f.verify(&offer, &p.payload).unwrap();
+    let (v, facts) = f.verify(&offer, &p.payload).unwrap();
     f.chain.submit(&v.tx).unwrap();
     f.chain.mine(1);
     let built = cancel_intent(&p, None).unwrap();
     let sigs = sign_locally(&built, &keys()).unwrap();
     let signed = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: true }).unwrap();
     let (tx, _) = signed.tx.to_tx().unwrap();
+    // a cancel pins no merchant output, and neither does an expiry
+    let j = intent_input(&tx, &facts);
+    let sig = &tx.inputs[j].signature_script;
+    assert_eq!(intent_entry(facts.actor().unwrap(), sig), Some(IntentEntry::Cancel));
+    assert_eq!(pinned_merchant_output(&facts, j as u32, sig), None);
+    let (expiry, _) = build_expiry(&facts, &facts.intent, facts.lock.as_ref(), &kob_protocol::tx::FeeOptions::default()).unwrap();
+    let je = intent_input(&expiry, &facts);
+    let sig = &expiry.inputs[je].signature_script;
+    assert_eq!(intent_entry(facts.actor().unwrap(), sig), Some(IntentEntry::Expire));
+    assert_eq!(pinned_merchant_output(&facts, je as u32, sig), None);
+    // nor does a script whose tag is none of the actor's, or one that is not push-only
+    assert_eq!(intent_entry(facts.actor().unwrap(), &[0x04, 1, 2, 3, 4, 0x01, 0x00]), None);
+    assert_eq!(intent_entry(facts.actor().unwrap(), &[0x76]), None);
     f.chain.submit(&tx).unwrap();
     f.chain.mine(1);
     let intent = Outpoint::new(p.intent.transaction_id, p.intent.index);

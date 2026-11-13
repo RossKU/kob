@@ -152,6 +152,18 @@ impl IntentKind {
     pub fn merchant_gets_token(self) -> bool {
         !matches!(self, IntentKind::TokenToKas)
     }
+    /// The output the router pins for the merchant in an execution that spends the intent at
+    /// input `j`.
+    ///
+    /// The intent owns outputs `j` and `j + 1` (the positional anti-aliasing rule). The merchant's
+    /// token B is at `j + 1` for KasToToken. The merchant's KAS (TokenToKas) and token B
+    /// (TokenSwap) are at `j`.
+    pub fn merchant_output(self, j: usize) -> usize {
+        match self {
+            IntentKind::KasToToken => j + 1,
+            IntentKind::TokenToKas | IntentKind::TokenSwap => j,
+        }
+    }
 }
 
 /// The fill shape of one router actor.
@@ -266,6 +278,12 @@ impl Actor {
     /// The loaded, pinned template.
     pub fn template(&self) -> &'static RouterTemplate {
         &loaded().templates[self.name]
+    }
+    /// The dispatch tag of the actor's entry `entry`: `self.entry`, `expire` or `cancel`.
+    ///
+    /// A signature script of the actor pushes it right before the redeem script.
+    pub fn dispatch_tag(&self, entry: &str) -> Option<[u8; 4]> {
+        loaded().abi.contracts.get(self.name)?.entries.get(entry).map(|e| e.dispatch_tag.into_bytes())
     }
 }
 
@@ -1003,6 +1021,11 @@ mod tests {
             let kron = a.shape.a_family == Family::Kron;
             assert_eq!(prefix, if kron { format!("{}Kron", a.shape.kind.as_str()) } else { a.shape.kind.as_str().to_string() });
             assert_eq!(actor_by_hash(&a.template().hash).unwrap().name, a.name);
+            // a spender's entry is told apart by its dispatch tag
+            let tags: std::collections::BTreeSet<[u8; 4]> =
+                [a.entry, "expire", "cancel"].iter().map(|e| a.dispatch_tag(e).unwrap()).collect();
+            assert_eq!(tags.len(), 3, "{}: three distinct dispatch tags", a.name);
+            assert_eq!(a.dispatch_tag("transfer"), None);
         }
     }
 

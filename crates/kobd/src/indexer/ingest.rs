@@ -169,7 +169,11 @@ pub struct Spender {
     pub block: Hash32,
     /// DAA score of that chain block.
     pub daa: u64,
-    /// Its outputs.
+    /// The input that spent the watched outpoint.
+    pub input_index: u32,
+    /// That input's signature script.
+    pub sig_script: Vec<u8>,
+    /// All its outputs, in order: index `k` is output `k`.
     pub outputs: Vec<SpenderOutput>,
 }
 
@@ -481,26 +485,34 @@ impl Ingest {
                     if self.spend_watch.is_empty() {
                         continue;
                     }
-                    for i in &t.inputs {
+                    for (k, i) in t.inputs.iter().enumerate() {
                         let key = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
                         if let Some(slot) = self.spend_watch.get_mut(&key) {
+                            // Every output is kept, so that the list index is the output index. A
+                            // script public key too short for its version matches no script.
                             let outputs = t
                                 .outputs
                                 .iter()
-                                .filter_map(|o| {
+                                .map(|o| {
                                     let spk = &o.script_public_key.0;
-                                    Some(SpenderOutput {
-                                        version: u16::from_be_bytes([*spk.first()?, *spk.get(1)?]),
-                                        script: spk[2..].to_vec(),
+                                    let (version, script) = match spk.as_slice() {
+                                        [a, b, rest @ ..] => (u16::from_be_bytes([*a, *b]), rest.to_vec()),
+                                        _ => (u16::MAX, vec![]),
+                                    };
+                                    SpenderOutput {
+                                        version,
+                                        script,
                                         value: o.value,
                                         covenant_id: o.covenant.as_ref().map(|c| c.covenant_id),
-                                    })
+                                    }
                                 })
                                 .collect();
                             *slot = Some(Spender {
                                 txid: t.verbose_data.transaction_id,
                                 block: b.header.hash,
                                 daa: b.header.daa_score,
+                                input_index: k as u32,
+                                sig_script: i.signature_script.0.clone(),
                                 outputs,
                             });
                         }
