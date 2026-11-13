@@ -2067,9 +2067,9 @@ Poll `/v1/health`, or scrape `GET /v1/metrics` (the same numbers as Prometheus t
 | `state = stopped` or `halt_reason` set, `kob_indexer_halted` 1 | the follower halted (a record-log write failed, or a storage error); `kobd --executor` exits after 3 min (status 1) for its supervisor to restart; a store halted at a gap is not restarted (it needs you, 7.4) |
 | `api_error` set, `kob_api_failed` 1 | the read API stopped serving; `kobd --executor` exits at once (a port another process holds fails the start instead) |
 | `kob_indexer_deep_reorgs_total` above 0, `kob_indexer_lean_prune_failures_total` rising | a reorg deeper than the stored chain (its rows were not reverted: rebuild the store); lean pruning that keeps failing (the log says why) |
-| `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it; Part C, *Node*): it is never replaced, fix it; a cross-checking one is cut off from the pair meanwhile |
+| `node_alarms` non-empty, `kob_indexer_node_alarms` above 0 | a node named in the configuration is unusable (another network, no UTXO index, not synced for 2 min, hanging, behind the other node, contradicting it, chain requests that keep failing; Part C, *Node*): it is never replaced, fix it; a cross-checking one, or a primary whose role another node took over, is cut off from the pair meanwhile |
 | `kob_indexer_node_replaced_total` rising every few minutes | the public nodes keep failing; `nodes[].cut_reason` says which host and why |
-| `kob_indexer_authority_replaced_total` rising | public chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store); `nodes[].cut_reason` of the authority says why |
+| `kob_indexer_authority_replaced_total` rising | chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store, chain requests that keep failing: Part C, *A failing chain authority*); `nodes[].cut_reason` says why, `nodes[].promoted` which named node took over |
 | `lag_seconds` above 1 h / 6 h / 12 h / 24 h | approaching the node's retention; 12 h is consensus finality, 24 h leaves little of the default 30 h pruning window |
 | `last_progress_unix_ms` older than 60 s | the follower is stuck (progress is stamped on every successful poll, including "nothing new") |
 | `vspc_timeouts_total` rising, `batch_window_blue` small, `lag_blue` not falling | the link to the node is slower than the chain (section 3, *Bandwidth*): run the indexer next to its node |
@@ -3142,7 +3142,32 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
 public read server: faster, not shared, nobody between the operator and the chain). It is the one chain authority, with no
 cross-check unless `[[nodes]]` add one (Part B 3, *Several nodes*), and a single point of failure unless the failover below
 is on. A `[[nodes]]` entry with a fixed public URL is a further body node, checked against the primary and taking
-submissions; it is never the chain authority and does not take over when the primary is down.
+submissions. It becomes the chain authority only when the primary's chain requests keep failing (below).
+
+**A failing chain authority** (`indexer::follower`, `rpc::multi`; every role, the Executor's indexer included). A node can
+answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
+another node) time out or lose the connection: on 2026-11-13 such a primary held index-a still for over 18 minutes, its
+status `authority, ok`. When **2 chain requests in a row fail on the wire and the cursor has not moved for 3 minutes**
+(the local monotonic clock; `AUTHORITY_FAILURES`, `AUTHORITY_STALL`, not configurable), the authority is handed over:
+
+* **Own node with `[[nodes]]`:** the first other node, in the order of the list, that is not dropped, has no alarm, is not
+  behind, has not contradicted the authority within 10 minutes and shows within 30 s that it is on the right network,
+  synced, knows the cursor and has it on its selected chain becomes the chain authority. Since the stored chain is the
+  cursor's own chain of selected parents, such a node agrees with everything the store holds; its first answers may still
+  remove at most 100 chain blocks and must know the cursor, or they are refused and nothing is applied. The old primary
+  raises a node alarm (`its chain requests keep failing`, in `node_alarms` and `nodes[].cut_reason`) and is cut off
+  until its chain requests have answered again for a minute (probed with the health watch). It is then a secondary node:
+  the authority does not move back, unless the new one fails the same way.
+* **Public pair** (`rpc_url = "resolver"`): the authority's public node is given up, the other node of the pair is the
+  authority at once, and a replacement is resolved on a host neither in use nor failed lately (the same node again only
+  when the resolvers name no other).
+* **Single node:** nothing to hand over. It keeps its node alarm and the follower retries with its backoff, as before.
+  With `[failover]` the public pair is checked and, when it can serve, becomes the chain source.
+
+The handover is logged at warn (`another node is the chain authority now`, with both nodes), counted in
+`authority_replaced_total` (`kob_indexer_authority_replaced_total`) and the new authority's `nodes[].promoted`, and the
+status line names it (`<node> (authority, ok, took over 1x)`). The Executor's matcher still reads coins and fees from the
+configured `rpc_url` node.
 
 **Node failover** (`[failover]`, the Indexer only; `rpc::failover`). An Indexer on an own node can fall back to the public
 pair when that node stops answering, and come back when it is healthy again:
@@ -3155,8 +3180,9 @@ fallback = "resolver"              # the public Kaspa nodes as a cross-checked p
 ```
 
 * The configured node is given up after `after_failures` failed calls in a row (transport, timeout, an undecodable answer,
-  IBD) **and** `after_secs` without any answer; a slow node whose small calls still answer never switches. The public pair
-  is checked first (the right network, synced, it knows the cursor); only then is it the chain source.
+  IBD) **and** `after_secs` without any answer, or when its chain requests keep failing while the cursor stalls and no
+  configured node can take over (*A failing chain authority*, above). The public pair is checked first (the right network,
+  synced, it knows the cursor); only then is it the chain source.
 * On the pair, the configured node is probed every `probe_secs` (the right network, synced, it knows the cursor, its sink at
   most `max_behind_blue` behind the pair's) and taken back after `return_after_probes` healthy probes in a row.
 * No divergent chain is taken silently. Right after a switch the new source's first answer from the cursor may remove at most

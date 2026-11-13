@@ -178,6 +178,8 @@ fn multi(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Peer>)>) -> Multi {
         prefetch_max_bytes: 256 << 20,
         prefetch_min_lag_blue: 0,
         prefetch_initial_blocks: 6,
+        authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
+        authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
     };
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     Multi { follower, ingest, health }

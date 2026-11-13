@@ -119,7 +119,7 @@ pub struct Failover<S: ChainSource> {
 }
 
 /// A failed call that says the node is gone (not an answer such as an unknown hash).
-fn node_failure(e: &RpcError) -> bool {
+pub(crate) fn node_failure(e: &RpcError) -> bool {
     matches!(e, RpcError::Transport(_) | RpcError::Timeout(_) | RpcError::Decode(_)) || e.kind() == NodeErrorKind::TransitionalIbd
 }
 
@@ -461,6 +461,27 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn report_lie(&self, origin: Origin, why: &str) {
         let t = (origin.tier as usize).min(1);
         self.inner.tiers[t].report_lie(Origin { tier: 0, ..origin }, why);
+    }
+    /// The active tier hands the authority over within itself first (`rpc::multi`); when the configured nodes cannot, the
+    /// fallback is checked and, when it can serve, becomes the chain source (settling as after any switch).
+    async fn authority_failing(&self, at: Hash32, why: &str) -> bool {
+        let t = self.active();
+        if self.inner.tiers[t].authority_failing(at, why).await {
+            return true;
+        }
+        if t != 0 {
+            return false;
+        }
+        match self.inner.healthy(1, None).await {
+            Ok(()) => {
+                self.inner.switch(1, &format!("the configured node's chain requests keep failing ({why})"));
+                self.active() == 1
+            }
+            Err(e) => {
+                tracing::warn!(primary = %self.inner.shown[0], fallback = %self.inner.shown[1], "node failover: the configured node's chain requests keep failing, but the fallback cannot serve ({e}); staying");
+                false
+            }
+        }
     }
     fn node_stats(&self) -> Vec<NodeStatus> {
         self.inner.tiers[self.active()].node_stats()

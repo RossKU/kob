@@ -1488,6 +1488,8 @@ impl Harness {
             prefetch_max_bytes: 256 << 20,
             prefetch_min_lag_blue: 1_200,
             prefetch_initial_blocks: 64,
+            authority_failures: crate::indexer::follower::AUTHORITY_FAILURES,
+            authority_stall: crate::indexer::follower::AUTHORITY_STALL,
         };
         let mut fcfg = fcfg;
         adjust(&mut fcfg);

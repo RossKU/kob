@@ -162,6 +162,16 @@ pub trait ChainSource: Send + Sync + 'static {
         let _ = (at, why);
         StoreContradiction::Halt(None)
     }
+    /// The chain authority's chain requests (VSPC, chain hashes, its copies of chain blocks) keep failing on the wire while the
+    /// cursor `at` does not move (`why`; `indexer::follower` decides when). `true` when the source made another node the chain
+    /// authority (`multi::MultiNode::authority_failing`), so the follower asks it at once. The default: `false`, nothing to
+    /// hand over to (a single node; the follower retries with its backoff).
+    fn authority_failing(&self, at: Hash32, why: &str) -> impl Future<Output = bool> + Send {
+        async move {
+            let _ = (at, why);
+            false
+        }
+    }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
         vec![]

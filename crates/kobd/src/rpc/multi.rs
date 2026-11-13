@@ -52,6 +52,18 @@
 //! cut off from the pair until the alarm ends (the authority goes on alone meanwhile). Each node's `cut_reason` says why it
 //! was last cut off.
 //!
+//! **A failing authority.** A node can answer its small calls (`getServerInfo`, the sink) while its chain requests time out
+//! or lose the connection. When the follower finds that its chain requests keep failing while the cursor stalls
+//! (`indexer::follower`, *A failing chain authority*), it tells the source ([`MultiNode::authority_failing`]): a resolver entry
+//! gives its node up (the other node of the pair is the authority, a replacement is resolved on another host); among named
+//! nodes, the first other node that can lead becomes the chain authority (the roles swap: `NodeBoard::authority`). It must
+//! not be dropped, have an alarm, be behind, or have contradicted the authority within [`PROMOTE_CLEAN_FOR`], and it must
+//! show, within [`PROMOTE_CHECK_TIMEOUT`], that it is on the right network, synced, knows the cursor and has it on its
+//! selected chain. Its first answers from the cursor may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the
+//! cursor, else they are refused. The old authority raises an alarm and is cut off from the pair until it ends: its chain
+//! requests answer again (probed with the health watch) for `judge::ALARM_CLEAR_AFTER`. It is a secondary node then, and
+//! leads again only if the new authority fails the same way.
+//!
 //! `GET /v1/health` reports each node under `nodes`.
 
 use super::types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, Verbosity, VspcRequest};
@@ -59,6 +71,7 @@ use super::verify::{verify_window, Rejection};
 use super::{fetch_window_from, window_min_confirmations, ChainSource, Fetched, Origin, RpcError, WindowRequest};
 use crate::hex::Hash32;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -86,6 +99,9 @@ pub struct NodeStatus {
     pub node: Option<String>,
     /// How many times a resolver entry gave its node up (failed, or replaced after disagreeing).
     pub replaced: u32,
+    /// How many times this node was made the chain authority because the authority's chain requests kept failing
+    /// (`MultiNode::authority_failing`).
+    pub promoted: u32,
     /// Why the node was last cut off from the pair: for a resolver entry the public node it gave up and why (`host: reason`);
     /// for a node named in the configuration its alarms now (`rpc::judge`), or why it was dropped. `None`: never.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -134,6 +150,8 @@ struct PeerState {
     backoff_until: Option<Instant>,
     /// When a window last went to it.
     last_used: Option<Instant>,
+    /// When it last contradicted the authority as the cross-checking node (not the tips differing for a moment).
+    last_disagreement: Option<Instant>,
 }
 
 /// A node whose rate is below the best one's divided by this gets windows only when no faster node qualifies: in chain
@@ -147,6 +165,9 @@ pub struct NodeBoard {
     peers: Vec<Mutex<PeerState>>,
     /// The configured URL of each node (a resolver entry's pseudo URL: the node it uses is looked up when shown).
     entries: Vec<String>,
+    /// The node that is the chain authority now: node 0 (the configured primary) until its chain requests keep failing and
+    /// another node is promoted (`MultiNode::authority_failing`).
+    authority: AtomicUsize,
 }
 
 /// How a failure counts against a node.
@@ -181,7 +202,12 @@ impl NodeBoard {
                 })
             })
             .collect();
-        Arc::new(NodeBoard { peers, entries: specs.iter().map(|s| s.url.clone()).collect() })
+        Arc::new(NodeBoard { peers, entries: specs.iter().map(|s| s.url.clone()).collect(), authority: AtomicUsize::new(0) })
+    }
+
+    /// The node that is the chain authority now (0, the configured primary, unless another one was promoted).
+    pub fn authority(&self) -> usize {
+        self.authority.load(Ordering::Relaxed)
     }
 
     /// The configured URL of node `i`.
@@ -212,7 +238,7 @@ impl NodeBoard {
     /// A named node other than the primary with an alarm that cuts it off (`rpc::judge::cuts_off`): left out of the pair
     /// until the alarm ends. One that contradicted the primary is dropped instead (`dropped_reason`).
     fn cut(&self, i: usize) -> bool {
-        i > 0 && !super::resolver::is_resolver(&self.entries[i]) && super::judge::cuts_off(&self.entries[i])
+        i != self.authority() && !super::resolver::is_resolver(&self.entries[i]) && super::judge::cuts_off(&self.entries[i])
     }
 
     /// The cross-checking node `i` contradicted the primary.
@@ -224,6 +250,7 @@ impl NodeBoard {
             } else {
                 p.status.disagreements += 1;
                 p.status.last_error = Some(why.to_string());
+                p.last_disagreement = Some(Instant::now());
             }
         })
     }
@@ -294,6 +321,7 @@ impl NodeBoard {
     fn failed(&self, i: usize, fault: Fault, e: &str) {
         let url = self.url(i);
         let public = super::resolver::is_resolver(&self.entries[i]);
+        let authority = i == self.authority();
         if fault == Fault::Lie {
             // judged like any other failure (outside the node's lock: a resolver entry gives its node up for another, a named
             // node raises an alarm and, unless it is the primary, is dropped below)
@@ -309,7 +337,7 @@ impl NodeBoard {
                 Fault::Lie => {
                     s.lies += 1;
                     // a resolver entry's node was replaced: its successor is not dropped
-                    if i > 0 && !public && s.dropped_reason.is_none() {
+                    if !authority && !public && s.dropped_reason.is_none() {
                         tracing::error!(node = %url, reason = e, "node contradicts the primary: dropped");
                         s.dropped_reason = Some(e.to_string());
                     }
@@ -331,7 +359,7 @@ impl NodeBoard {
                     p.ewma_bps = p.ewma_bps.map(|b| b / 2.0);
                 }
             }
-            if i > 0 && fault != Fault::Lie {
+            if !authority && fault != Fault::Lie {
                 tracing::warn!(node = %url, error = e, "window from a secondary node failed; trying another node");
             }
         })
@@ -350,10 +378,10 @@ impl NodeBoard {
     /// Stop using node `i`: a resolver entry's node is replaced (the primary's too: the other node is the authority then); a
     /// named primary stays the authority, with an alarm.
     pub fn drop_node(&self, i: usize, why: &str) {
-        if i == 0 {
-            tracing::error!(reason = why, node = %self.shown(0), "the primary node's data was contradicted");
-            if let Some(node) = self.node_of(0) {
-                super::judge::contradicted(&self.entries[0], &node, why);
+        if i == self.authority() {
+            tracing::error!(reason = why, node = %self.shown(i), "the primary node's data was contradicted");
+            if let Some(node) = self.node_of(i) {
+                super::judge::contradicted(&self.entries[i], &node, why);
             }
             return;
         }
@@ -366,10 +394,12 @@ impl NodeBoard {
 
     pub fn snapshot(&self) -> Vec<NodeStatus> {
         let now = Instant::now();
+        let authority = self.authority();
         (0..self.peers.len())
             .map(|i| {
                 self.with(i, |p| {
                     let mut s = p.status.clone();
+                    s.role = if i == authority { "primary" } else { "secondary" }.into();
                     let cut = if super::resolver::is_resolver(&self.entries[i]) {
                         s.node = super::resolver::current(&self.entries[i]).map(|n| super::resolver::host(&n));
                         s.replaced = super::resolver::replacements(&self.entries[i]);
@@ -384,11 +414,11 @@ impl NodeBoard {
                     s.bytes_per_sec = p.ewma_bps.map(|b| b as u64);
                     s.state = if s.dropped_reason.is_some() {
                         "dropped"
-                    } else if cut && i > 0 {
+                    } else if cut && i != authority {
                         "cut"
                     } else if !wait.is_zero() {
                         "backoff"
-                    } else if !s.fetch && !s.submit && i > 0 {
+                    } else if !s.fetch && !s.submit && i != authority {
                         "idle"
                     } else {
                         "ok"
@@ -429,6 +459,14 @@ pub struct MultiNode<N: ChainSource> {
     /// Public chain authorities whose answer contradicted the store at one cursor: the cursor, the hosts, and how many times
     /// (`MultiNode::authority_contradicted`).
     store_contradictions: Mutex<Option<(Hash32, Vec<String>, u32)>>,
+    /// A node was promoted to chain authority and has not yet answered from the cursor in a way that continues it
+    /// (`MultiNode::settle`).
+    settling: AtomicBool,
+    /// The start of the last chain request to the authority (the follower's cursor): what a promoted node must continue, and
+    /// what a demoted node is probed from (`MultiNode::probe_demoted`).
+    last_start: Mutex<Option<Hash32>>,
+    /// A probe of demoted nodes runs now (one at a time).
+    probing: Arc<AtomicBool>,
 }
 
 /// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, whether a check runs
@@ -597,6 +635,25 @@ pub const INFLATED_CHECKS: u32 = 2;
 /// Public chain authorities that may contradict the store at one cursor before the store halts there (`gap`) however many
 /// hosts they were on: two on different hosts agreeing with each other halt it at once (the store is at fault, not the nodes).
 pub const STORE_CONTRADICTIONS_MAX: u32 = 3;
+/// How long a node may take to show that it can be the chain authority (`MultiNode::authority_failing`): the right network,
+/// synced, the cursor known and on its selected chain.
+pub const PROMOTE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
+/// A cross-checking node that contradicted the authority within this long is not promoted.
+pub const PROMOTE_CLEAN_FOR: Duration = Duration::from_secs(600);
+/// Right after a promotion, the new authority's first answer from the cursor may remove at most this many chain blocks (a
+/// reorg the old authority had not seen yet, about 10 s of chain); a deeper one, or a cursor it does not know, is refused.
+pub const SETTLE_MAX_REORG: usize = 100;
+/// How long a demoted node's chain request may take in the probe that ends its alarm (`MultiNode::probe_demoted`).
+pub const DEMOTED_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Nodes promoted to chain authority in this process (`MultiNode::authority_failing`, named nodes; a resolver entry's
+/// replacement is counted by `resolver::authority_replaced`). Part of `kob_indexer_authority_replaced_total`.
+static PROMOTIONS: AtomicU64 = AtomicU64::new(0);
+
+/// Named nodes promoted to chain authority since the start (see [`PROMOTIONS`]).
+pub fn promotions() -> u64 {
+    PROMOTIONS.load(Ordering::Relaxed)
+}
 
 impl<N: ChainSource> MultiNode<N> {
     /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
@@ -616,6 +673,9 @@ impl<N: ChainSource> MultiNode<N> {
             stalls: std::sync::atomic::AtomicU32::new(0),
             last_warn: Mutex::new(None),
             store_contradictions: Mutex::new(None),
+            settling: AtomicBool::new(false),
+            last_start: Mutex::new(None),
+            probing: Arc::new(AtomicBool::new(false)),
             // the first check one period after the start
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
@@ -662,20 +722,138 @@ impl<N: ChainSource> MultiNode<N> {
         if due {
             let (nodes, verifier, board, watch) = (self.nodes.clone(), self.verifier.clone(), self.board.clone(), self.watch.clone());
             rt.spawn(async move { watch_nodes(&nodes, &verifier, &board, &watch).await });
+            let at = *self.last_start.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(at) = at.filter(|_| self.probing.compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed).is_ok()) {
+                let (nodes, verifier, board, probing) =
+                    (self.nodes.clone(), self.verifier.clone(), self.board.clone(), self.probing.clone());
+                rt.spawn(async move {
+                    probe_demoted(&nodes, &verifier, &board, at).await;
+                    probing.store(false, Ordering::Release);
+                });
+            }
         }
     }
 
     /// One health check of every node now, on the caller's task (tests; the follower's requests start it on a task of its own
-    /// every [`WATCH_EVERY`]).
+    /// every [`WATCH_EVERY`]), and a probe of the demoted nodes ([`MultiNode::authority_failing`]).
     pub async fn check_health(&self) {
-        watch_nodes(&self.nodes, &self.verifier, &self.board, &self.watch).await
+        watch_nodes(&self.nodes, &self.verifier, &self.board, &self.watch).await;
+        let at = *self.last_start.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(at) = at {
+            probe_demoted(&self.nodes, &self.verifier, &self.board, at).await;
+        }
+    }
+
+    /// The chain authority now (node 0, the configured primary, unless another node was promoted).
+    fn primary(&self) -> &N {
+        &self.nodes[self.board.authority()]
+    }
+
+    /// The authority on connections of its own for the acceptance data and its copies of chain blocks: the configured
+    /// primary's second client, or a promoted node's own client (it has no second one).
+    fn checker(&self) -> &N {
+        match self.board.authority() {
+            0 => &self.verifier,
+            a => &self.nodes[a],
+        }
+    }
+
+    /// Remembers `start` as the cursor the authority was last asked from.
+    fn asked_from(&self, start: Hash32) {
+        *self.last_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
+    }
+
+    /// The authority's answer `r` from `start` (a single step, or the chain hashes): right after a promotion
+    /// ([`MultiNode::authority_failing`]) it may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the cursor (the
+    /// follower would rewind the store to the newest block it knows), else it is refused and nothing is applied. The first
+    /// answer that continues the cursor settles it. Any answer ends a chain alarm of the authority (`judge::chain_ok`).
+    fn settle<T>(&self, start: Hash32, r: Result<T, RpcError>, removed: impl Fn(&T) -> usize) -> Result<T, RpcError> {
+        let a = self.board.authority();
+        if r.is_ok() {
+            if let Some(node) = self.board.node_of(a) {
+                super::judge::chain_ok(self.board.entry(a), &node);
+            }
+        }
+        if !self.settling.load(Ordering::Relaxed) {
+            return r;
+        }
+        let refuse = match &r {
+            Ok(v) if removed(v) > SETTLE_MAX_REORG => Some(format!(
+                "it removes {} chain blocks at the cursor {start} (at most {SETTLE_MAX_REORG} right after it took over)",
+                removed(v)
+            )),
+            Err(e) if e.kind() == super::NodeErrorKind::UnknownHash => {
+                Some(format!("it does not know the cursor {start} (that would rewind the store)"))
+            }
+            _ => None,
+        };
+        if let Some(why) = refuse {
+            tracing::error!(authority = %self.board.shown(a), reason = %why, "the new chain authority's answer is refused, nothing is applied");
+            return Err(RpcError::Node(format!("the new chain authority {}: {why}; not applied", self.board.shown(a))));
+        }
+        if r.is_ok() && self.settling.swap(false, Ordering::Relaxed) {
+            tracing::info!(authority = %self.board.shown(a), cursor = %start, "the new chain authority continues the cursor");
+        }
+        r
+    }
+
+    /// The nodes that may become the chain authority instead of `a`, in the order of the list: not dropped (a node that
+    /// contradicted the authority), without an alarm (`rpc::judge`: another network, not synced, hanging, behind, frozen, a
+    /// contradiction, failing chain requests), not suspect (behind at the last health check), and, as the cross-checking
+    /// node, no contradiction of the authority within [`PROMOTE_CLEAN_FOR`].
+    fn candidates(&self, a: usize) -> Vec<usize> {
+        let now = Instant::now();
+        (0..self.nodes.len())
+            .filter(|&i| i != a)
+            .filter(|&i| {
+                let entry = self.board.entry(i);
+                let Some(node) = self.board.node_of(i) else { return false };
+                let contradicted =
+                    self.board.with(i, |p| p.last_disagreement.is_some_and(|t| now.duration_since(t) < PROMOTE_CLEAN_FOR));
+                !self.board.dropped(i) && !contradicted && super::judge::alarm_of(entry).is_none() && !super::judge::suspect(&node)
+            })
+            .collect()
+    }
+
+    /// Whether node `k` can be the chain authority from the cursor `at`, within [`PROMOTE_CHECK_TIMEOUT`]: the right network,
+    /// synced, it knows the cursor, and the cursor is on its selected chain (its chain hashes from it remove nothing). The
+    /// stored chain is the cursor's own chain of selected parents (fixed by the hashes of its headers), so such a node agrees
+    /// with everything the store holds.
+    async fn can_lead(&self, k: usize, at: Hash32) -> Result<(), String> {
+        let node = &*self.nodes[k];
+        let check = async {
+            let info = node.server_info().await.map_err(|e| format!("getServerInfo: {e}"))?;
+            let network = super::resolver::network();
+            if !network.is_empty() && info.network_id != network {
+                return Err(format!("it is on {}, not {network}", info.network_id));
+            }
+            if !info.is_synced {
+                return Err("it is not synced".into());
+            }
+            if !node.block_exists(at).await.map_err(|e| format!("getBlock: {e}"))? {
+                return Err(format!("it does not know the cursor {at}"));
+            }
+            let c = node.chain_hashes(at).await.map_err(|e| format!("its chain from the cursor: {e}"))?;
+            if !c.removed_chain_block_hashes.is_empty() {
+                return Err(format!(
+                    "the cursor {at} is not on its selected chain (it removes {} chain blocks there)",
+                    c.removed_chain_block_hashes.len()
+                ));
+            }
+            Ok(())
+        };
+        match tokio::time::timeout(PROMOTE_CHECK_TIMEOUT, check).await {
+            Ok(r) => r,
+            Err(_) => Err(format!("no answer within {} s", PROMOTE_CHECK_TIMEOUT.as_secs())),
+        }
     }
 
     /// The node that vouches for the primary's answers now: the first cross-checking one that is neither dropped, cut off
     /// (a named node with an alarm) nor backing off.
     fn cross_checker(&self) -> Option<usize> {
         let now = Instant::now();
-        (1..self.nodes.len()).find(|&i| {
+        let a = self.board.authority();
+        (0..self.nodes.len()).filter(|&i| i != a).find(|&i| {
             let entry = &self.specs[i].url;
             // a resolver entry being replaced has no node to ask: the primary goes on alone meanwhile, never waits for it
             let replacing = super::resolver::is_resolver(entry) && super::resolver::current(entry).is_none();
@@ -718,7 +896,19 @@ impl<N: ChainSource> MultiNode<N> {
     /// asked for the same range at the same time (the window's bounds are read from the primary first, as
     /// `fetch_window_from` would).
     async fn primary_window(&self, node: &N, w: &WindowRequest) -> Result<Fetched, RpcError> {
-        let Some(j) = self.cross_checker() else { return fetch_window_from(node, w, Verbosity::High, Origin::PRIMARY).await };
+        let a = self.board.authority();
+        let origin = Origin { node: a, ..Origin::PRIMARY };
+        let r = self.primary_window_from(node, w, origin).await;
+        if r.is_ok() {
+            if let Some(n) = self.board.node_of(a) {
+                super::judge::chain_ok(self.board.entry(a), &n);
+            }
+        }
+        r
+    }
+
+    async fn primary_window_from(&self, node: &N, w: &WindowRequest, origin: Origin) -> Result<Fetched, RpcError> {
+        let Some(j) = self.cross_checker() else { return fetch_window_from(node, w, Verbosity::High, origin).await };
         let end_blue = match w.end_blue {
             Some(b) => b,
             None => node
@@ -733,7 +923,7 @@ impl<N: ChainSource> MultiNode<N> {
         let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
         let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
         let (f, cross) = tokio::join!(
-            fetch_window_from(node, &mine, Verbosity::High, Origin::PRIMARY),
+            fetch_window_from(node, &mine, Verbosity::High, origin),
             self.cross_ids(Some(j), w.start, min, CROSS_CHECK_TIMEOUT)
         );
         let Fetched { raw, sink_blue, end_blue, elapsed, origin } = f?;
@@ -791,7 +981,7 @@ impl<N: ChainSource> MultiNode<N> {
         if n == STALLS_BEFORE_REPLACING {
             give_up(j);
         } else if n >= 2 * STALLS_BEFORE_REPLACING {
-            give_up(0);
+            give_up(self.board.authority());
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         }
         if a.at_tip {
@@ -824,7 +1014,8 @@ impl<N: ChainSource> MultiNode<N> {
         let first = self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cands: Vec<(usize, bool, Option<f64>)> = vec![];
         // a primary that does not serve windows still takes one no other node can
-        let fallback = !tried[0] && !self.specs[0].fetch;
+        let a = self.board.authority();
+        let fallback = !tried[a] && !self.specs[a].fetch;
         for k in 0..n {
             let i = (first + k) % n;
             if tried[i] || !self.specs[i].fetch || self.board.dropped(i) || self.board.cut(i) {
@@ -834,7 +1025,7 @@ impl<N: ChainSource> MultiNode<N> {
                 let stale = p.last_used.is_some_and(|t| now.saturating_duration_since(t) > REMEASURE);
                 (p.backoff_until.is_some_and(|t| t > now), p.ewma_bps.filter(|_| !stale))
             });
-            if i > 0 && backing_off {
+            if i != a && backing_off {
                 continue;
             }
             cands.push((i, self.permits[i].available_permits() > 0, rate));
@@ -850,7 +1041,7 @@ impl<N: ChainSource> MultiNode<N> {
                 best = Some(c);
             }
         }
-        best.map(|c| c.0).or(fallback.then_some(0))
+        best.map(|c| c.0).or(fallback.then_some(a))
     }
 
     /// The primary's sink blue score, at most a second old (`at_least`: refreshed when below it). It only bounds requests
@@ -860,7 +1051,7 @@ impl<N: ChainSource> MultiNode<N> {
         if let Some((_, b)) = cached.filter(|(t, b)| t.elapsed() < Duration::from_secs(1) && *b > at_least) {
             return Ok(b);
         }
-        let b = self.verifier.sink_blue_score().await?;
+        let b = self.checker().sink_blue_score().await?;
         *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), b));
         Ok(b)
     }
@@ -883,7 +1074,7 @@ impl<N: ChainSource> MultiNode<N> {
         let sink_blue = node.sink_blue_score().await.map_err(classify)?;
         let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
         let primary_sink = self.primary_sink(end_blue).await.map_err(Attempt::Window)?;
-        let ids = self.verifier.chain_with_ids(w.start, window_min_confirmations(primary_sink, end_blue, w.min_confirmations));
+        let ids = self.checker().chain_with_ids(w.start, window_min_confirmations(primary_sink, end_blue, w.min_confirmations));
         let (body, ids) = tokio::join!(fetch_window_from(node, &mine, Verbosity::Full, origin), ids);
         let f = body.map_err(classify)?;
         let ids = ids.map_err(Attempt::Window)?;
@@ -1189,36 +1380,40 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         let (start, min_confirmations) = (req.start_hash, req.min_confirmation_count);
         let j = self.cross_checker();
         self.health_watch();
+        self.asked_from(start);
         let (raw, cross) =
-            tokio::join!(self.nodes[0].vspc_v2(req), self.cross_ids(j, start, min_confirmations, CROSS_CHECK_STEP_TIMEOUT));
-        self.vouched(raw?, cross)
+            tokio::join!(self.primary().vspc_v2(req), self.cross_ids(j, start, min_confirmations, CROSS_CHECK_STEP_TIMEOUT));
+        let raw = self.settle(start, raw, |r| r.removed_chain_block_hashes.len())?;
+        self.vouched(raw, cross)
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
-        self.nodes[0].dag_info().await
+        self.primary().dag_info().await
     }
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
-        self.nodes[0].server_info().await
+        self.primary().server_info().await
     }
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
-        self.nodes[0].utxos_by_addresses(addresses).await
+        self.primary().utxos_by_addresses(addresses).await
     }
     async fn block_exists(&self, hash: Hash32) -> Result<bool, RpcError> {
-        self.nodes[0].block_exists(hash).await
+        self.primary().block_exists(hash).await
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
-        self.nodes[0].sink_blue_score().await
+        self.primary().sink_blue_score().await
     }
     async fn block_blue_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
-        self.nodes[0].block_blue_score(hash).await
+        self.primary().block_blue_score(hash).await
     }
     async fn block_daa_score(&self, hash: Hash32) -> Result<Option<u64>, RpcError> {
-        self.nodes[0].block_daa_score(hash).await
+        self.primary().block_daa_score(hash).await
     }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
-        self.nodes[0].chain_hashes(start).await
+        self.asked_from(start);
+        let r = self.primary().chain_hashes(start).await;
+        self.settle(start, r, |c| c.removed_chain_block_hashes.len())
     }
     async fn chain_with_ids(&self, start: Hash32, min_confirmations: Option<u64>) -> Result<ChainIds, RpcError> {
-        self.verifier.chain_with_ids(start, min_confirmations).await
+        self.checker().chain_with_ids(start, min_confirmations).await
     }
 
     async fn fetch_window(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
@@ -1229,7 +1424,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
 
     async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
         // on the verifier's connections: never behind the primary's own windows of the parallel fetch
-        self.primary_window(&*self.verifier, &w).await
+        self.primary_window(self.checker(), &w).await
     }
 
     fn report_lie(&self, origin: Origin, why: &str) {
@@ -1242,8 +1437,9 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     /// cause is the store (a corrupted cursor, a bug), and it halts there (`gap`) instead of giving up public node after public
     /// node. A node named in the configuration is not replaced: the store halts at once.
     fn authority_contradicted(&self, at: Hash32, why: &str) -> super::StoreContradiction {
-        let entry = self.board.entry(0).to_string();
-        let Some(node) = self.board.node_of(0).filter(|_| super::resolver::is_resolver(&entry)) else {
+        let a = self.board.authority();
+        let entry = self.board.entry(a).to_string();
+        let Some(node) = self.board.node_of(a).filter(|_| super::resolver::is_resolver(&entry)) else {
             return super::StoreContradiction::Halt(None);
         };
         let host = super::resolver::host(&node);
@@ -1271,11 +1467,96 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         super::StoreContradiction::Replaced
     }
 
+    /// The chain authority's chain requests keep failing while the cursor `at` does not move (`why`; the follower decides
+    /// when, `indexer::follower`). A resolver entry gives its public node up (`rpc::judge`, `rpc::resolver::replace`: the
+    /// other node of the pair is the authority at once unless the judge suspects it, and the entry resolves a replacement on
+    /// another host). A named node raises an alarm (`judge::chain_failing`), and the first other node that can lead
+    /// ([`MultiNode::candidates`], [`MultiNode::can_lead`]) is made the chain authority: the roles swap, the old authority
+    /// is a secondary node, cut off from the pair until its alarm ends (its chain requests answer again for
+    /// `judge::ALARM_CLEAR_AFTER`, [`probe_demoted`]). It is not made the authority again then: only when the new one fails
+    /// the same way (no flapping). `true`: another node is the authority now.
+    async fn authority_failing(&self, at: Hash32, why: &str) -> bool {
+        let a = self.board.authority();
+        let entry = self.board.entry(a).to_string();
+        // a resolver entry being replaced has no node to give up: it is being replaced already
+        let Some(node) = self.board.node_of(a) else { return false };
+        let why = format!("its chain requests keep failing ({why})");
+        super::judge::chain_failing(&entry, &node, &why);
+        // the pair's authority: the resolver state moved the role to the other node, or resolves a replacement
+        if entry == super::resolver::RESOLVER {
+            return super::resolver::current(&entry).as_deref() != Some(node.as_str());
+        }
+        // another resolver entry that took the role over earlier gave its node up: one of the others, or its replacement
+        let replaced = super::resolver::is_resolver(&entry) && super::resolver::current(&entry).as_deref() != Some(node.as_str());
+        let candidates = self.candidates(a);
+        if self.nodes.len() > 1 && candidates.is_empty() {
+            tracing::warn!(authority = %self.board.shown(a), "the chain authority's chain requests keep failing, and no other node can take over (each is dropped, has an alarm or is behind): staying");
+        }
+        for k in candidates {
+            match self.can_lead(k, at).await {
+                Ok(()) => {
+                    self.board.authority.store(k, Ordering::Relaxed);
+                    self.settling.store(true, Ordering::Relaxed);
+                    self.stalls.store(0, Ordering::Relaxed);
+                    // the cached sink was the old authority's
+                    *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    self.board.with(k, |p| {
+                        p.status.promoted += 1;
+                        p.failures = 0;
+                        p.backoff_until = None;
+                    });
+                    PROMOTIONS.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(
+                        from = %self.board.shown(a),
+                        to = %self.board.shown(k),
+                        cursor = %at,
+                        reason = %why,
+                        "the chain authority's chain requests keep failing: another node is the chain authority now"
+                    );
+                    return true;
+                }
+                Err(e) => {
+                    tracing::warn!(authority = %self.board.shown(a), candidate = %self.board.shown(k), reason = %e, "the chain authority's chain requests keep failing, but this node cannot take over")
+                }
+            }
+        }
+        if replaced {
+            // the entry's next node is unproven: its first answers from the cursor are checked
+            self.settling.store(true, Ordering::Relaxed);
+        }
+        replaced
+    }
+
     fn node_stats(&self) -> Vec<NodeStatus> {
         if self.nodes.len() > 1 {
             self.board.snapshot()
         } else {
             vec![]
+        }
+    }
+}
+
+/// The demoted nodes (named nodes other than the authority with a chain alarm, `judge::chain_failing`) asked for the chain from
+/// the cursor `at` again, each within [`DEMOTED_PROBE_TIMEOUT`]: an answer is a fine one (the alarm ends after
+/// `judge::ALARM_CLEAR_AFTER` of them without a break, and the node is a secondary of the pair again), a failure keeps the alarm.
+async fn probe_demoted<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board: &NodeBoard, at: Hash32) {
+    let a = board.authority();
+    for i in (0..nodes.len()).filter(|&i| i != a) {
+        let entry = board.entry(i);
+        let Some(node) = board.node_of(i) else { continue };
+        if super::resolver::is_resolver(entry) || !super::judge::chain_alarm(entry) {
+            continue;
+        }
+        // node 0 on the verifier's connections, as in the health watch
+        let src: &N = if i == 0 { verifier } else { &nodes[i] };
+        match tokio::time::timeout(DEMOTED_PROBE_TIMEOUT, src.chain_hashes(at)).await {
+            Ok(Ok(_)) => super::judge::chain_ok(entry, &node),
+            Ok(Err(e)) => super::judge::chain_failing(entry, &node, &format!("its chain requests keep failing (probe: {e})")),
+            Err(_) => super::judge::chain_failing(
+                entry,
+                &node,
+                &format!("its chain requests keep failing (probe: no answer within {} s)", DEMOTED_PROBE_TIMEOUT.as_secs()),
+            ),
         }
     }
 }
@@ -1287,10 +1568,11 @@ impl<N: ChainSource> MultiNode<N> {
         let mut last: Option<RpcError> = None;
         while let Some(i) = self.pick(&tried) {
             tried[i] = true;
+            let a = self.board.authority();
             let permit = self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed");
             self.board.begin(i);
-            let r = if i == 0 {
-                self.primary_window(&*self.nodes[0], &w).await.map_err(Attempt::Window)
+            let r = if i == a {
+                self.primary_window(&*self.nodes[a], &w).await.map_err(Attempt::Window)
             } else {
                 self.fetch_checked(i, &w).await
             };
@@ -1302,9 +1584,9 @@ impl<N: ChainSource> MultiNode<N> {
                     return Ok(f);
                 }
                 Err(Attempt::Window(e)) => {
-                    if i == 0 && !matches!(e, RpcError::TooLarge { .. }) {
+                    if i == a && !matches!(e, RpcError::TooLarge { .. }) {
                         // the primary is never skipped: counted only
-                        self.board.note_error(0, &e);
+                        self.board.note_error(a, &e);
                     }
                     return Err(e);
                 }
@@ -1526,6 +1808,29 @@ mod tests {
             StoreContradiction::Halt(None),
             "a node of one's own halts the store as before"
         );
+    }
+
+    /// A public chain authority whose chain requests keep failing (the follower's finding) is given up like any other: the
+    /// other node of the pair is the authority at once, the entry resolves a replacement on another host, and it is counted.
+    #[tokio::test]
+    // the guard only serialises the tests that share the process-wide resolver state (a current-thread runtime)
+    #[allow(clippy::await_holding_lock)]
+    async fn a_public_authority_whose_chain_requests_keep_failing_is_replaced() {
+        let _g = super::super::resolver::tests::serial();
+        super::super::resolver::tests::reset(|_, avoid| {
+            let nodes = ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh"];
+            let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+            Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+        });
+        let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
+        let m = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
+        let before = super::super::resolver::authority_replaced();
+        assert!(m.authority_failing(Hash32([1; 32]), "2 chain requests failed in a row").await);
+        assert_eq!(super::super::resolver::current("resolver"), Some(b), "the other node is the authority now");
+        let why = super::super::resolver::last_reason("resolver").unwrap();
+        assert!(why.starts_with(&super::super::resolver::host(&a)) && why.contains("chain requests keep failing"), "{why}");
+        assert_eq!(super::super::resolver::authority_replaced(), before + 1);
+        assert_eq!(m.board.authority(), 0, "the entries take other nodes; the authority's entry stays the first");
     }
 
     /// The pair's disagreement rules on the primary's single steps: the blocks both report are kept; a contradiction cuts the

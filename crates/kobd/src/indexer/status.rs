@@ -134,15 +134,17 @@ pub struct HealthSnapshot {
     /// Alarms for nodes named in the configuration, one `node: problem` string each.
     ///
     /// The problems (`rpc::judge`) are: another network, no UTXO index, not synced for long,
-    /// hanging, behind the other node, and contradicting it. A public node is replaced instead,
-    /// and its `nodes[].cut_reason` says why. Absent when there is none.
+    /// hanging, behind the other node, contradicting it, and chain requests that keep failing. A
+    /// public node is replaced instead, and its `nodes[].cut_reason` says why. Absent when there is
+    /// none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub node_alarms: Vec<String>,
-    /// Public chain authorities given up for a finding since the start.
+    /// Chain authorities given up for a finding since the start.
     ///
-    /// A finding is a judgement of useless, a disagreement that did not settle, or an answer that
-    /// contradicted the store (`rpc::resolver::authority_replaced`). A lost connection does not
-    /// count.
+    /// A finding is a judgement of useless, a disagreement that did not settle, an answer that
+    /// contradicted the store (`rpc::resolver::authority_replaced`), or chain requests that kept
+    /// failing while the cursor stalled, which also hands a named node's role to another node
+    /// (`rpc::multi::promotions`). A lost connection does not count.
     pub authority_replaced_total: u64,
     /// Whether the store holds every order the node's history still shows.
     ///
@@ -734,7 +736,7 @@ impl HealthSnapshot {
         m(
             "kob_indexer_authority_replaced_total",
             "counter",
-            "Public chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store); not lost connections.",
+            "Chain authorities given up for a finding (useless, a disagreement that did not settle, an answer contradicting the store, chain requests that kept failing while the cursor stalled); not lost connections.",
             self.authority_replaced_total,
         );
         if !self.nodes.is_empty() {
@@ -880,6 +882,9 @@ impl HealthSnapshot {
                         if let Some(why) = &n.cut_reason {
                             x.push_str(&format!(", last: {why}"));
                         }
+                    }
+                    if n.promoted > 0 {
+                        x.push_str(&format!(", took over {}x", n.promoted));
                     }
                     if n.disagreements > 0 {
                         x.push_str(&format!(", {} disagreements", n.disagreements));

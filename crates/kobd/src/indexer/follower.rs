@@ -36,6 +36,16 @@
 //! within the threshold, or once the chain after the tail of the plan is shorter than a first
 //! window. The windows already fetched are applied, and the single steps follow the sink from
 //! there.
+//!
+//! # A failing chain authority
+//!
+//! A node can stay reachable and answer its small calls while its chain requests (a VSPC batch,
+//! the chain hashes, its copy of a window from another node) time out or lose the connection.
+//! Once [`FollowerConfig::authority_failures`] of them failed in a row and the cursor has not
+//! moved for [`FollowerConfig::authority_stall`] (the local monotonic clock), the follower tells
+//! the source ([`ChainSource::authority_failing`]). With several nodes, another node that can lead
+//! becomes the chain authority (`rpc::multi`), and the follower asks it at once
+//! ([`StepOutcome::Handover`]). With a single node nothing changes: it retries with its backoff.
 
 /// The text of a gap reason that says the node pruned the history the cursor stood in.
 ///
@@ -63,6 +73,13 @@ use tokio::sync::{broadcast, watch};
 
 /// How often a halted follower repeats that it is halted, as an error line.
 pub const HALT_REMIND: Duration = Duration::from_secs(600);
+
+/// Chain requests of the authority that fail on the wire in a row (a timeout, a lost connection, an
+/// undecodable answer) ...
+pub const AUTHORITY_FAILURES: u32 = 2;
+/// ... while the cursor does not move for this long, before the source is told that the authority
+/// is failing (module documentation).
+pub const AUTHORITY_STALL: Duration = Duration::from_secs(180);
 
 /// Settings of a [`Follower`].
 #[derive(Debug, Clone)]
@@ -101,6 +118,11 @@ pub struct FollowerConfig {
     pub prefetch_min_lag_blue: u64,
     /// The first parallel window, in chain blocks. It adapts from there.
     pub prefetch_initial_blocks: usize,
+    /// Chain requests of the authority that fail on the wire in a row ... ([`AUTHORITY_FAILURES`])
+    pub authority_failures: u32,
+    /// ... while the cursor does not move for this long, before another node may take over as the
+    /// chain authority ([`AUTHORITY_STALL`], module documentation).
+    pub authority_stall: Duration,
 }
 
 impl FollowerConfig {
@@ -122,6 +144,8 @@ impl FollowerConfig {
             prefetch_max_bytes: c.prefetch_max_mb.saturating_mul(1 << 20),
             prefetch_min_lag_blue: c.prefetch_min_lag_blue,
             prefetch_initial_blocks: 64,
+            authority_failures: AUTHORITY_FAILURES,
+            authority_stall: AUTHORITY_STALL,
         }
     }
 
@@ -162,6 +186,9 @@ pub enum StepOutcome {
     /// stops and appends nothing more until the operator has fixed the cause and restarted. The
     /// `open` of the restart checks the log.
     Halted(String),
+    /// The authority's chain requests kept failing and another node is the chain authority now
+    /// (module documentation). Ask it at once.
+    Handover(String),
 }
 
 /// How a batch about to be committed was fetched.
@@ -198,6 +225,11 @@ pub struct Follower<S: ChainSource> {
     /// When the free space of the data directory and the size of the database are measured next,
     /// see [`Follower::disk_tick`].
     disk_next: Mutex<std::time::Instant>,
+    /// The authority's chain requests that failed on the wire in a row, and the last of them.
+    chain_failures: Mutex<(u32, String)>,
+    /// When the cursor last moved, or the authority last answered from it (the local monotonic
+    /// clock).
+    progress_at: Mutex<std::time::Instant>,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -249,7 +281,55 @@ impl<S: ChainSource> Follower<S> {
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
             pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
             disk_next: Mutex::new(std::time::Instant::now()),
+            chain_failures: Mutex::new((0, String::new())),
+            progress_at: Mutex::new(std::time::Instant::now()),
         }
+    }
+
+    /// A chain request of the authority (`what`) failed: counted when it failed on the wire.
+    fn chain_failed(&self, what: &str, e: &RpcError) {
+        if crate::rpc::failover::node_failure(e) {
+            self.count_chain_failure(format!("{what}: {e}"));
+        }
+    }
+
+    fn count_chain_failure(&self, what: String) {
+        let mut g = self.chain_failures.lock().unwrap_or_else(|e| e.into_inner());
+        g.0 = g.0.saturating_add(1);
+        g.1 = what;
+    }
+
+    /// The authority answered from the cursor, or the cursor moved: the failures in a row and the
+    /// stall begin again.
+    fn chain_answered(&self) {
+        self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
+        *self.progress_at.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
+    }
+
+    /// After a failed step: when the authority's chain requests failed often enough in a row and
+    /// the cursor stalled long enough, the source is told ([`ChainSource::authority_failing`]).
+    /// `Some`: another node is the authority now.
+    async fn hand_over(&self) -> Option<StepOutcome> {
+        let (n, last) = self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let stalled = self.progress_at.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
+        if n < self.cfg.authority_failures.max(1) || stalled < self.cfg.authority_stall {
+            return None;
+        }
+        let cursor = self.blocking(|i| i.cursor()).await.ok().flatten()?;
+        let why = format!("{n} chain requests failed in a row, the last {last}; the cursor has not moved for {} s", stalled.as_secs());
+        let moved = self.source.authority_failing(cursor.hash, &why).await;
+        // Whatever the source did, the count begins again: the next try needs as many failures.
+        self.chain_failures.lock().unwrap_or_else(|e| e.into_inner()).0 = 0;
+        if !moved {
+            return None;
+        }
+        *self.progress_at.lock().unwrap_or_else(|e| e.into_inner()) = std::time::Instant::now();
+        // The plan was made on the old authority's chain, and the window sized for its link.
+        self.prefetch.lock().await.discard();
+        *self.win() = self.cfg.window();
+        let msg = format!("the chain authority's chain requests kept failing ({why}): another node is the chain authority now");
+        self.set_state(FollowerState::CatchingUp, Some(msg.clone()));
+        Some(StepOutcome::Handover(msg))
     }
 
     /// Measures about once a minute the free bytes of the file system of the data directory and
@@ -524,7 +604,12 @@ impl<S: ChainSource> Follower<S> {
     /// With `fetch_parallel` > 1 and the cursor far behind, the batch is the next of the windows
     /// fetched ahead, see [`super::prefetch`].
     pub async fn step(&self) -> StepOutcome {
-        let outcome = if self.cfg.fetch_parallel > 1 { self.step_prefetch().await } else { self.step_sequential().await };
+        let mut outcome = if self.cfg.fetch_parallel > 1 { self.step_prefetch().await } else { self.step_sequential().await };
+        if matches!(outcome, StepOutcome::Retry(_)) {
+            if let Some(o) = self.hand_over().await {
+                outcome = o;
+            }
+        }
         let nodes = self.source.node_stats();
         let source = self.source.source_status();
         // The alarms of named nodes (`rpc::judge`), process-wide.
@@ -537,7 +622,7 @@ impl<S: ChainSource> Follower<S> {
                 h.node_source = source;
             }
             h.node_alarms = alarms;
-            h.authority_replaced_total = crate::rpc::resolver::authority_replaced();
+            h.authority_replaced_total = crate::rpc::resolver::authority_replaced() + crate::rpc::multi::promotions();
         });
         outcome
     }
@@ -599,6 +684,7 @@ impl<S: ChainSource> Follower<S> {
                 h.batch_window_blue = Some(window);
                 h.last_poll_unix_ms = now_ms();
             });
+            self.chain_answered();
             return StepOutcome::Widened { window };
         }
         let committed =
@@ -638,8 +724,11 @@ impl<S: ChainSource> Follower<S> {
                 Ok(c) if c.removed_chain_block_hashes.is_empty() && pf.worth_planning(&c.added_chain_block_hashes) => {
                     pf.start(cursor.hash, c.added_chain_block_hashes);
                 }
-                // A reorg at the cursor, nothing after it, or no answer: the single step handles
-                // each.
+                Err(e) => {
+                    self.chain_failed("the chain hashes", &e);
+                    return self.step_sequential().await;
+                }
+                // A reorg at the cursor, or nothing after it: the single step handles each.
                 _ => return self.step_sequential().await,
             }
         }
@@ -701,6 +790,9 @@ impl<S: ChainSource> Follower<S> {
                 tracing::warn!(blocks, timeout_scale, "prefetched VSPC window timed out; split it");
                 self.health.update(|h| h.vspc_timeouts_total += 1);
                 let msg = format!("VSPC window timed out (next: {blocks} chain blocks, timeout x{timeout_scale})");
+                // The primary's window or its acceptance data for another node's: a secondary that times out is skipped
+                // for the next node (`rpc::multi`).
+                self.count_chain_failure(msg.clone());
                 self.set_state(FollowerState::CatchingUp, Some(msg.clone()));
                 StepOutcome::Retry(msg)
             }
@@ -751,7 +843,10 @@ impl<S: ChainSource> Follower<S> {
         }
         // The primary's sink once, and the blue score of the end of each run from its checked
         // header.
-        let sink_blue = self.source.sink_blue_score().await.map_err(|e| format!("the primary's sink: {e}"))?;
+        let sink_blue = self.source.sink_blue_score().await.map_err(|e| {
+            self.chain_failed("the primary's sink", &e);
+            format!("the primary's sink: {e}")
+        })?;
         let hashes = &raw.added_chain_block_hashes;
         let blocks = &raw.chain_block_accepted_transactions;
         let fetches = runs.iter().map(|(prev, first, len)| {
@@ -766,7 +861,10 @@ impl<S: ChainSource> Follower<S> {
         });
         let answers = futures_util::future::join_all(fetches).await;
         for ((_, first, len), answer) in runs.iter().zip(answers) {
-            let f = answer.map_err(|e| format!("the primary's copy of {} chain blocks: {e}", len))?;
+            let f = answer.map_err(|e| {
+                self.chain_failed("its copy of a window", &e);
+                format!("the primary's copy of {} chain blocks: {e}", len)
+            })?;
             let p = &f.raw;
             if !p.removed_chain_block_hashes.is_empty() || p.added_chain_block_hashes.len() < *len {
                 return Err(format!("the primary no longer reports the {len} chain blocks after {}", hashes[*first]));
@@ -896,6 +994,7 @@ impl<S: ChainSource> Follower<S> {
                     }
                 });
                 self.note_catch_up();
+                self.chain_answered();
                 if !a.event.is_empty() {
                     let _ = self.events.send(Arc::new(a.event));
                 }
@@ -944,6 +1043,8 @@ impl<S: ChainSource> Follower<S> {
     }
 
     async fn on_rpc_error(&self, e: RpcError) -> StepOutcome {
+        // Every caller asked the chain authority.
+        self.chain_failed("a chain request", &e);
         match e.kind() {
             NodeErrorKind::UnknownHash => self.recover_unknown_cursor().await,
             NodeErrorKind::RetentionRootMissing => {
@@ -997,6 +1098,7 @@ impl<S: ChainSource> Follower<S> {
             return match self.blocking(move |i| i.rewind_to(seq, target)).await {
                 Ok(a) => {
                     tracing::warn!(to = %hash, reverted = a.reverted_rows_blocks, "cursor unknown to the node: rewound");
+                    self.chain_answered();
                     self.win().cursor_moved();
                     self.health.update(|h| {
                         h.cursor_hash = Some(hash);
@@ -1062,6 +1164,12 @@ impl<S: ChainSource> Follower<S> {
                 // No progress yet, but a different request is due at once. This is bounded, because
                 // the window doubles.
                 StepOutcome::Widened { .. } => Duration::ZERO,
+                // Another node is the chain authority now (the source warned): ask it at once.
+                StepOutcome::Handover(r) => {
+                    failures = 0;
+                    tracing::info!("{r}");
+                    Duration::ZERO
+                }
                 StepOutcome::Applied { .. } | StepOutcome::Idle => {
                     failures = 0;
                     self.cfg.poll_interval

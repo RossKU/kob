@@ -9,13 +9,15 @@
 //!   logged as a warning with the reason, which `/v1/health` shows per node as `cut_reason`): on another network, without the
 //!   UTXO index (when the process needs it, [`require_utxo_index`]), reporting not synced for [`UNSYNCED_GRACE`],
 //!   [`TIMEOUTS`] request timeouts within [`TIMEOUT_WINDOW`], behind the other node for a minute (a lag the node itself
-//!   confirmed, `rpc::multi`: never a node's own claim to be ahead), or contradicting it;
+//!   confirmed, `rpc::multi`: never a node's own claim to be ahead), contradicting it, or, as the chain authority, chain
+//!   requests that keep failing while the cursor stalls ([`chain_failing`]);
 //! * a **node the operator named** (a fixed URL) cannot be replaced: the same findings raise an **alarm** instead. It is
 //!   logged as an error when it begins, listed under `node_alarms` in `/v1/health` (and as the node's `cut_reason`), counted
 //!   by `kob_indexer_node_alarms` and appended to the status line, until the node is fine again (a lag or sync alarm: fine for
 //!   [`ALARM_CLEAR_AFTER`] without a break, so a node hovering at the bound does not flap). A cross-checking node with an
 //!   alarm is left out of the pair meanwhile (the authority carries on alone; one that contradicted the authority is
-//!   dropped by that pair until a restart, as before); the authority itself stays the authority.
+//!   dropped by that pair until a restart, as before); the authority itself stays the authority, except when its chain
+//!   requests keep failing: then another node of the list that can lead takes the role over (`rpc::multi`).
 //!
 //! A VSPC request that times out is not counted: the batch windows adapt to a slow link (`rpc::window`). The small calls
 //! (`getServerInfo`, `getBlock`, `getSinkBlueScore`, ...) are what a hanging node fails.
@@ -53,7 +55,7 @@ fn clear_after() -> Duration {
 
 /// The alarms that end only after [`ALARM_CLEAR_AFTER`] of fine answers (the others end with their finding).
 fn sticky(kind: Kind) -> bool {
-    matches!(kind, Kind::Lag | Kind::Sync)
+    matches!(kind, Kind::Lag | Kind::Sync | Kind::Chain)
 }
 
 /// What a finding is about: one alarm per named node and kind.
@@ -65,6 +67,8 @@ pub enum Kind {
     Timeouts,
     Lag,
     Contradiction,
+    /// Its chain requests keep failing while the cursor does not move (`rpc::multi`, `MultiNode::authority_failing`).
+    Chain,
 }
 
 #[derive(Default)]
@@ -273,6 +277,24 @@ pub fn frozen(url: &str, node: &str, why: &str) {
 /// until the process restarts (it is dropped from the pair for good, as before).
 pub fn contradicted(url: &str, node: &str, why: &str) {
     act(url, node, &[(Kind::Contradiction, Some(format!("it contradicted the other node: {why}")))]);
+}
+
+/// The chain requests of `node` keep failing (`why`) while the follower's cursor does not move (`rpc::multi`,
+/// `MultiNode::authority_failing`; a demoted node's probe, `multi::probe_demoted`): a public node is given up for another (the
+/// other node of the pair is the authority at once unless it is suspect), a named node raises an alarm (sticky: it ends after
+/// [`ALARM_CLEAR_AFTER`] of chain answers, [`chain_ok`]).
+pub fn chain_failing(url: &str, node: &str, why: &str) {
+    act(url, node, &[(Kind::Chain, Some(why.to_string()))]);
+}
+
+/// `node` answered a chain request: a fine answer for a chain alarm ([`chain_failing`]).
+pub fn chain_ok(url: &str, node: &str) {
+    act(url, node, &[(Kind::Chain, None)]);
+}
+
+/// Whether the named node `url` has a chain alarm now ([`chain_failing`]).
+pub fn chain_alarm(url: &str) -> bool {
+    lock().alarms.contains_key(&(url.to_string(), Kind::Chain))
 }
 
 /// Whether the judge suspects `node` now (it reports not synced, or it was behind the other node at the last check): such a
