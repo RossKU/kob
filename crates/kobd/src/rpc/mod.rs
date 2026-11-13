@@ -1,8 +1,15 @@
 //! Node access: the [`ChainSource`] trait and a JSON wRPC client.
 //!
-//! The indexer only needs four node calls, so instead of pulling in the node's RPC crates (which
-//! drift from the wire schema without a compile error) it speaks the node's JSON wRPC directly.
-//! The schema is checked against a live node by the integration test in `tests/tn10_follow.rs`.
+//! The indexer speaks the node's JSON wRPC directly. It does not pull in the node's RPC crates,
+//! because they drift from the wire schema without a compile error. The integration test in
+//! `tests/tn10_follow.rs` checks the schema against a live node.
+//!
+//! # Submodules
+//!
+//! - `multi`, `failover` and `resolver` combine several nodes into one source. `judge` decides when
+//!   a node counts as failed. `verify` checks a window from one node against another.
+//! - When the chain authority's requests keep failing, the source hands the role to another node
+//!   (`ChainSource::authority_failing`).
 
 pub mod borsh;
 pub mod bridge;
@@ -29,28 +36,33 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, Verbosity, VspcRequest};
 
-/// Node URLs as they may be shown or logged (credentials and API keys left out): [`kob_protocol::redact`].
+/// Node URLs as they may be shown or logged, with credentials and API keys left out
+/// ([`kob_protocol::redact`]).
 pub use kob_protocol::redact::redact_url;
 
+/// A failed node request.
 #[derive(Debug, thiserror::Error)]
 pub enum RpcError {
     /// The connection failed; the next call reconnects.
     #[error("transport: {0}")]
     Transport(String),
+    /// The node did not answer within the request's timeout.
     #[error("timeout after {0:?}")]
     Timeout(Duration),
     /// The node answered with an error.
     #[error("node error: {0}")]
     Node(String),
+    /// The answer is not what the schema says.
     #[error("cannot decode node response: {0}")]
     Decode(String),
-    /// The answer is larger than the request allowed (`VspcRequest::max_bytes`): refused as its frame header arrived, its
-    /// payload never buffered; the connection is closed.
+    /// The answer is larger than the request allowed (`VspcRequest::max_bytes`). It is refused as
+    /// its frame header arrives, its payload is never buffered, and the connection is closed.
     #[error("answer of {size} bytes exceeds the {limit}-byte limit of the request")]
     TooLarge { size: usize, limit: usize },
 }
 
-/// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else [`RpcError::Transport`].
+/// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else
+/// [`RpcError::Transport`].
 fn transport_error(e: tokio_tungstenite::tungstenite::Error) -> RpcError {
     use tokio_tungstenite::tungstenite::error::{CapacityError, Error};
     match e {
@@ -62,7 +74,8 @@ fn transport_error(e: tokio_tungstenite::tungstenite::Error) -> RpcError {
 /// What a node error means for the follower.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeErrorKind {
-    /// `cannot find header <hash>`: the node does not know the start hash (never had it, or pruned it).
+    /// `cannot find header <hash>`: the node does not know the start hash. It never had it, or it
+    /// pruned it.
     UnknownHash,
     /// `the queried hash does not have retention root on its chain`: the start hash is too old.
     RetentionRootMissing,
@@ -93,13 +106,15 @@ pub fn classify_node_message(m: &str) -> NodeErrorKind {
     }
 }
 
-/// What the source made of a chain authority's answer that contradicts the store ([`ChainSource::authority_contradicted`]).
+/// What the source made of a chain authority's answer that contradicts the store
+/// ([`ChainSource::authority_contradicted`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreContradiction {
     /// The node was given up for another one (a public node): the follower asks that one.
     Replaced,
-    /// The store halts at the contradiction (state `gap`). `Some(why)`: the source has reason to blame the store itself (two
-    /// public nodes on different hosts agree with each other against it), said in the gap reason.
+    /// The store halts at the contradiction (state `gap`). `Some(why)` means the source has reason
+    /// to blame the store itself, because two public nodes on different hosts agree with each other
+    /// against it. The gap reason says so.
     Halt(Option<String>),
 }
 
@@ -118,20 +133,21 @@ pub trait ChainSource: Send + Sync + 'static {
     fn sink_blue_score(&self) -> impl Future<Output = Result<u64, RpcError>> + Send;
     /// Blue score of a block the node knows (`None`: the node does not know it).
     fn block_blue_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send;
-    /// DAA score of a block the node knows (its header's `daaScore`; `None`: the node does not know it): the DAA of a cursor
-    /// set to that block (`kobd db rebase --to`).
+    /// DAA score of a block the node knows, from its header's `daaScore`. `None` means the node
+    /// does not know it. It is the DAA of a cursor set to that block (`kobd db rebase --to`).
     fn block_daa_score(&self, hash: Hash32) -> impl Future<Output = Result<Option<u64>, RpcError>> + Send {
         async move {
             let _ = hash;
             Err(RpcError::Node("getBlock (header daaScore) is not supported by this source".into()))
         }
     }
-    /// The selected chain from `start` as block hashes only (`getVirtualChainFromBlock` without transaction ids): what the
-    /// follower plans its parallel windows on.
+    /// The selected chain from `start` as block hashes only (`getVirtualChainFromBlock` without
+    /// transaction ids). The follower plans its parallel windows on it.
     fn chain_hashes(&self, start: Hash32) -> impl Future<Output = Result<ChainHashes, RpcError>> + Send;
-    /// The selected chain from `start` with the transaction ids every chain block accepted (`getVirtualChainFromBlock` with
-    /// ids), bounded like a VSPC request by `minConfirmationCount`: the acceptance data a window from another node is checked
-    /// against (`rpc::verify`).
+    /// The selected chain from `start` with the transaction ids every chain block accepted
+    /// (`getVirtualChainFromBlock` with ids). It is bounded like a VSPC request by
+    /// `minConfirmationCount`. A window from another node is checked against this acceptance data
+    /// (`rpc::verify`).
     fn chain_with_ids(
         &self,
         start: Hash32,
@@ -142,8 +158,9 @@ pub trait ChainSource: Send + Sync + 'static {
             Err(RpcError::Node("getVirtualChainFromBlock with transaction ids is not supported by this source".into()))
         }
     }
-    /// One window `(start, end]` of the selected chain the follower planned (`indexer::prefetch`), from whichever node the
-    /// source picks (a single node: itself). The answer is the primary's, or checked against it ([`Fetched::origin`]).
+    /// One window `(start, end]` of the selected chain the follower planned (`indexer::prefetch`),
+    /// from whichever node the source picks. A single node picks itself. The answer is the
+    /// primary's, or it is checked against the primary ([`Fetched::origin`]).
     fn fetch_window(&self, w: WindowRequest) -> impl Future<Output = Result<Fetched, RpcError>> + Send {
         async move { fetch_window_from(self, &w, Verbosity::High, Origin::PRIMARY).await }
     }
@@ -155,17 +172,25 @@ pub trait ChainSource: Send + Sync + 'static {
     fn report_lie(&self, origin: Origin, why: &str) {
         let _ = (origin, why);
     }
-    /// The chain authority's answer contradicts the store at the cursor `at` (`why`): [`StoreContradiction::Replaced`] when
-    /// the source gave that node up for another one (a public node, `rpc::resolver`), so the follower asks again instead of
-    /// halting. The default: halt (a node of one's own is not replaced; the store halts at the contradiction).
+    /// The chain authority's answer contradicts the store at the cursor `at` (`why`). The result is
+    /// [`StoreContradiction::Replaced`] when the source gave that node up for another one (a public
+    /// node, `rpc::resolver`), so the follower asks again instead of halting.
+    ///
+    /// The default halts. A node of one's own is not replaced, and the store halts at the
+    /// contradiction.
     fn authority_contradicted(&self, at: Hash32, why: &str) -> StoreContradiction {
         let _ = (at, why);
         StoreContradiction::Halt(None)
     }
-    /// The chain authority's chain requests (VSPC, chain hashes, its copies of chain blocks) keep failing on the wire while the
-    /// cursor `at` does not move (`why`; `indexer::follower` decides when). `true` when the source made another node the chain
-    /// authority (`multi::MultiNode::authority_failing`), so the follower asks it at once. The default: `false`, nothing to
-    /// hand over to (a single node; the follower retries with its backoff).
+    /// The chain authority's chain requests keep failing on the wire while the cursor `at` does not
+    /// move, as `why` says. The chain requests are VSPC, the chain hashes and its copies of chain
+    /// blocks. `indexer::follower` decides when.
+    ///
+    /// Returns `true` when the source made another node the chain authority
+    /// (`multi::MultiNode::authority_failing`). The follower then asks that node at once.
+    ///
+    /// The default returns `false`, because there is nothing to hand over to. A single node is
+    /// retried with the follower's backoff.
     fn authority_failing(&self, at: Hash32, why: &str) -> impl Future<Output = bool> + Send {
         async move {
             let _ = (at, why);
@@ -176,15 +201,19 @@ pub trait ChainSource: Send + Sync + 'static {
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
         vec![]
     }
-    /// Which node list serves now, behind a [`failover::Failover`] (`None`: no failover configured).
+    /// Which node list serves now, behind a [`failover::Failover`]. `None` means no failover is
+    /// configured.
     fn source_status(&self) -> Option<failover::FailoverStatus> {
         None
     }
 }
 
-/// Where a window came from: the index of the node in the source's list (0: the primary) and whether it is the primary's own
-/// answer (`trusted`) or another node's, checked against the primary (`rpc::verify`). `tier`: the node list it came from
-/// behind a [`failover::Failover`] (0: the configured nodes, 1: the fallback; always 0 without one).
+/// Where a window came from.
+///
+/// `node` is the position of the node in the source's list, with 0 for the primary. `trusted` says
+/// whether it is the primary's own answer or another node's, which is checked against the primary
+/// (`rpc::verify`). `tier` is the node list it came from behind a [`failover::Failover`]. It is 0
+/// for the configured nodes and 1 for the fallback, and always 0 without a failover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Origin {
     pub node: usize,
@@ -196,7 +225,8 @@ impl Origin {
     pub const PRIMARY: Origin = Origin { node: 0, trusted: true, tier: 0 };
 }
 
-/// One window of the parallel fetch: the chain blocks after `start` up to and including `end` (`indexer::prefetch`).
+/// One window of the parallel fetch: the chain blocks after `start` up to and including `end`
+/// (`indexer::prefetch`).
 #[derive(Debug, Clone, Copy)]
 pub struct WindowRequest {
     pub start: Hash32,
@@ -206,7 +236,8 @@ pub struct WindowRequest {
     pub min_confirmations: Option<u64>,
     /// The answer's size limit (`VspcRequest::max_bytes`).
     pub max_bytes: Option<usize>,
-    /// The blue score of `end` and of the node's sink when the caller knows them (the node is not asked).
+    /// The blue score of `end` and of the node's sink, when the caller knows them. The node is not
+    /// asked then.
     pub end_blue: Option<u64>,
     pub sink_blue: Option<u64>,
 }
@@ -220,15 +251,17 @@ impl WindowRequest {
 /// A window as a node returned it.
 pub struct Fetched {
     pub raw: RawVspcResponse,
-    /// Blue score of the node's sink and of the window's last chain block when the request was sent.
+    /// Blue score of the node's sink and of the window's last chain block when the request was
+    /// sent.
     pub sink_blue: u64,
     pub end_blue: u64,
     pub elapsed: Duration,
     pub origin: Origin,
 }
 
-/// Fetch one window from `src`: `(start, end]` at `verbosity`, bounded to end at `end` through `minConfirmationCount`
-/// relative to `src`'s own sink (blocks past `end` may still come back: the sink moves while the request travels).
+/// Fetches one window from `src`: `(start, end]` at `verbosity`. The request is bounded to end at
+/// `end` through `minConfirmationCount`, relative to the sink of `src`. Blocks past `end` may still
+/// come back, because the sink moves while the request travels.
 pub async fn fetch_window_from<S: ChainSource + ?Sized>(
     src: &S,
     w: &WindowRequest,
@@ -255,8 +288,9 @@ pub async fn fetch_window_from<S: ChainSource + ?Sized>(
     Ok(Fetched { raw, sink_blue, end_blue, elapsed: t0.elapsed(), origin })
 }
 
-/// `minConfirmationCount` that ends a request at the chain block of blue score `end_blue` while the sink is at `sink_blue`
-/// (the node keeps a chain block while `sink - blue > minConfirmationCount`), or the caller's `extra` when larger.
+/// The `minConfirmationCount` that ends a request at the chain block of blue score `end_blue` while
+/// the sink is at `sink_blue`, or the caller's `extra` when that is larger. The node keeps a chain
+/// block while `sink - blue > minConfirmationCount`.
 pub fn window_min_confirmations(sink_blue: u64, end_blue: u64, extra: Option<u64>) -> Option<u64> {
     match (sink_blue.saturating_sub(end_blue.saturating_add(1)), extra) {
         (0, e) => e,
@@ -266,19 +300,21 @@ pub fn window_min_confirmations(sink_blue: u64, end_blue: u64, extra: Option<u64
 
 #[derive(Debug, Clone)]
 pub struct WrpcConfig {
-    /// The node: a JSON wRPC URL, a Borsh one (`bridge::is_borsh_url`: every call in Borsh), or a resolver entry
-    /// (`resolver::is_resolver`: a public node, Borsh).
+    /// The node. It is a JSON wRPC URL, a Borsh one (`bridge::is_borsh_url`, every call in Borsh)
+    /// or a resolver entry (`resolver::is_resolver`, a public node, Borsh).
     pub url: String,
     pub request_timeout: Duration,
     pub connect_timeout: Duration,
     /// Upper bound for one response. A `High` VSPC batch is large (tens of MB on TN10).
     pub max_message_bytes: usize,
-    /// Connections reserved for `getVirtualChainFromBlockV2` (0: VSPC shares the one connection of every other call).
-    /// The follower fetches that many windows at once while it catches up; the other calls keep their own connection,
-    /// so a small call never waits behind a large batch.
+    /// Connections reserved for `getVirtualChainFromBlockV2`. With 0, VSPC shares the one
+    /// connection of every other call. The follower fetches that many windows at once while it
+    /// catches up. The other calls keep their own connection, so a small call never waits behind a
+    /// large batch.
     pub vspc_connections: usize,
-    /// The node's Borsh wRPC endpoint: with VSPC connections of its own, the windows of transaction bodies and the accepted
-    /// transaction ids travel in Borsh over it, a fraction of their JSON size ([`borsh`]); every other call stays JSON on `url`.
+    /// The node's Borsh wRPC endpoint. With VSPC connections of its own, the windows of transaction
+    /// bodies and the accepted transaction ids travel in Borsh over it, which is a fraction of
+    /// their JSON size ([`borsh`]). Every other call stays JSON on `url`.
     pub borsh_url: Option<String>,
 }
 
@@ -294,20 +330,21 @@ impl WrpcConfig {
         }
     }
 
-    /// Every call travels in Borsh (`url` is a Borsh endpoint or a resolver entry), not only the windows.
+    /// Every call travels in Borsh, not only the windows. `url` is a Borsh endpoint or a resolver
+    /// entry.
     pub fn all_borsh(&self) -> bool {
         all_borsh(&self.url)
     }
 }
 
-/// Whether a configured node URL takes every call in Borsh: a Borsh endpoint (`bridge::is_borsh_url`) or a resolver entry
-/// (public nodes serve Borsh only).
+/// Whether a configured node URL takes every call in Borsh. That holds for a Borsh endpoint
+/// (`bridge::is_borsh_url`) and for a resolver entry, because public nodes serve Borsh only.
 pub fn all_borsh(url: &str) -> bool {
     bridge::is_borsh_url(url) || resolver::is_resolver(url)
 }
 
-/// The node a configured URL stands for now ([`resolver::endpoint`]: itself, or a resolver entry's public node, resolved on
-/// the blocking pool).
+/// The node a configured URL stands for now ([`resolver::endpoint`]). It is the URL itself, or the
+/// public node of a resolver entry, resolved on the blocking pool.
 pub async fn endpoint(url: &str) -> Result<String, RpcError> {
     if !resolver::is_resolver(url) {
         return Ok(url.to_string());
@@ -332,7 +369,8 @@ pub struct WrpcClient {
     vspc: Vec<Slot>,
     next_vspc: std::sync::atomic::AtomicUsize,
     next_id: std::sync::atomic::AtomicU64,
-    /// The node the last connection went to (a resolver entry's public node; else the URL): what a failure reports.
+    /// The node the last connection went to, which is what a failure reports. It is the public node
+    /// of a resolver entry, else the URL.
     node: std::sync::Mutex<String>,
 }
 
@@ -397,7 +435,8 @@ impl WrpcClient {
         self.vspc[first % self.vspc.len()].lock().await
     }
 
-    /// A connection whose answers may be at most `cap` bytes (a frame or message above it fails as [`RpcError::TooLarge`]).
+    /// A connection whose answers may be at most `cap` bytes. A frame or message above it fails as
+    /// [`RpcError::TooLarge`].
     async fn connect(&self, url: &str, cap: usize) -> Result<Conn, RpcError> {
         let url = endpoint(url).await?;
         *self.node.lock().unwrap_or_else(|e| e.into_inner()) = url.clone();
@@ -412,8 +451,9 @@ impl WrpcClient {
         }
     }
 
-    /// A connection of a resolver entry to a node the entry no longer uses (it failed elsewhere in the process, or the
-    /// authority took the other node over): replaced before the next request.
+    /// A connection of a resolver entry to a node the entry no longer uses. It failed elsewhere in
+    /// the process, or the authority took the other node over. It is replaced before the next
+    /// request.
     fn stale(&self, node: &str) -> bool {
         resolver::is_resolver(&self.cfg.url) && resolver::current(&self.cfg.url).as_deref() != Some(node)
     }
@@ -428,9 +468,11 @@ impl WrpcClient {
         self.node.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
-    /// [`WrpcClient::call_raw`] with another timeout. A timeout drops the connection (a late answer must
-    /// never be read as the answer to the next request). These are the small calls: a timeout of one counts against the node
-    /// ([`judge::timed_out`]: a node that hangs), unlike a VSPC batch's, which the windows adapt to.
+    /// [`WrpcClient::call_raw`] with another timeout. A timeout drops the connection, so a late
+    /// answer is never read as the answer to the next request.
+    ///
+    /// These are the small calls. A timeout of one counts against the node ([`judge::timed_out`]).
+    /// A VSPC batch's timeout does not count, because the windows adapt to it.
     pub async fn call_raw_within(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
         let r = self.call_small(method, params, timeout).await;
         if matches!(r, Err(RpcError::Timeout(_))) {
@@ -457,8 +499,8 @@ impl WrpcClient {
         self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, self.cfg.max_message_bytes, parse).await
     }
 
-    /// The Borsh endpoint the VSPC connections use, if any (`None`: JSON; also when VSPC shares the JSON connection). A node
-    /// that takes every call in Borsh is its own.
+    /// The Borsh endpoint the VSPC connections use, if any. `None` means JSON, and also means VSPC
+    /// shares the JSON connection. A node that takes every call in Borsh is its own endpoint.
     pub fn borsh_url(&self) -> Option<&str> {
         if self.cfg.all_borsh() {
             return Some(self.cfg.url.as_str());
@@ -466,9 +508,11 @@ impl WrpcClient {
         self.cfg.borsh_url.as_deref().filter(|_| !self.vspc.is_empty())
     }
 
-    /// A failed connection, or one the node dropped (a transport error; a request that only took longer than its timeout is
-    /// not a lost connection: a VSPC batch's adapts the windows, `rpc::window`, and the small calls' are counted by
-    /// [`judge::timed_out`]): a resolver entry moves to another public node ([`resolver::failed`]).
+    /// A failed connection, or one the node dropped, is a transport error. A request that only took
+    /// longer than its timeout is not a lost connection. A VSPC batch's timeout adapts the windows
+    /// (`rpc::window`), and the small calls' timeouts are counted by [`judge::timed_out`].
+    ///
+    /// A resolver entry moves to another public node ([`resolver::failed`]).
     fn report(&self, e: &RpcError, node: Option<&str>) {
         let connecting = node.is_none();
         let node_failed = matches!(e, RpcError::Transport(_)) || (connecting && matches!(e, RpcError::Timeout(_)));
@@ -478,11 +522,16 @@ impl WrpcClient {
         }
     }
 
-    /// One request on the connection behind `guard`; `parse` reads the response's `params` in place (a VSPC batch is
-    /// tens of MB: it is parsed straight from the frame, not copied first). A request that times out, fails in
-    /// transport or is cancelled (its future dropped: the follower aborts prefetched windows it no longer needs)
-    /// closes its connection, so a late answer is never left in the socket. The answer may be at most `cap` bytes: a connection
-    /// opened with another limit is replaced first (a VSPC window of the prefetch asks for its own, `VspcRequest::max_bytes`).
+    /// One request on the connection behind `guard`. `parse` reads the response's `params` in
+    /// place. A VSPC batch is tens of MB, so it is parsed straight from the frame and not copied
+    /// first.
+    ///
+    /// A request that times out, fails in transport or is cancelled closes its connection, so a
+    /// late answer is never left in the socket. A request is cancelled when its future is dropped,
+    /// which happens when the follower aborts prefetched windows it no longer needs.
+    ///
+    /// The answer may be at most `cap` bytes. A connection opened with another limit is replaced
+    /// first. A VSPC window of the prefetch asks for its own limit (`VspcRequest::max_bytes`).
     async fn call_on<T>(
         &self,
         guard: tokio::sync::MutexGuard<'_, Option<Conn>>,
@@ -506,7 +555,8 @@ impl WrpcClient {
         if p.guard.as_ref().is_some_and(|(ws, node)| ws.get_config().max_message_size != Some(cap) || self.stale(node)) {
             *p.guard = None;
         }
-        // a connection is used for one encoding only (the JSON one, or a VSPC connection to the Borsh endpoint)
+        // A connection is used for one encoding only: the JSON one, or a VSPC connection to the
+        // Borsh endpoint.
         let url = match &wire {
             Wire::Json { .. } => self.cfg.url.as_str(),
             Wire::Borsh { .. } if self.cfg.all_borsh() => self.cfg.url.as_str(),
@@ -710,7 +760,8 @@ impl ChainSource for WrpcClient {
 
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
         let info: ServerInfo = self.call("getServerInfo", serde_json::json!({})).await?;
-        // a node that answers but is useless (another network, no UTXO index, not synced for long) is judged like a failed one
+        // A node that answers but is useless is judged like a failed one. That means another
+        // network, no UTXO index, or not synced for long.
         judge::server_info(&self.cfg.url, &self.node_in_use(), &info.network_id, info.is_synced, info.has_utxo_index)
             .map_err(RpcError::Node)?;
         Ok(info)
