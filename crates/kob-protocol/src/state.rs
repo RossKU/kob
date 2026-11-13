@@ -1,36 +1,40 @@
-//! State encode/decode for every KOB template (in both token families) and the token states, and the
-//! order arithmetic of protocol v3 (no lots).
+//! Typed order and token states, and the order arithmetic.
 //!
-//! Each typed state mirrors the contract's runtime state field by field (JSON keys are the
-//! contract field names). Encoding goes through the artifact's own ABI description
-//! (`silverscript_abi::encode_runtime_state_script`), so the bytes are exactly what the compiler
-//! would place in the state span; tests check that against every committed artifact.
+//! Each typed state mirrors the runtime state of its contract field by field, and its JSON keys
+//! are the contract's field names. Encoding goes through the ABI description of the artifact
+//! (`silverscript_abi::encode_runtime_state_script`), so the bytes are what the compiler places
+//! in the state span.
 //!
-//! # Amounts and prices (protocol v3)
+//! # Amounts and prices
 //!
-//! An order is an `amount` of its base token in base units (any positive amount) at a limit `price` in its
-//! quote token per WHOLE base token: `price` quote units per `scale` base units (`scale = 10^decimals` of the
-//! base token, a state field of every order). Plain orders quote KAS (sompi per whole token); a pair order A/B quotes B
-//! (base units of B per whole A, [`pair`]). Tips are always KAS, sompi per whole base token.
+//! An order holds an `amount` of its base token, in base units, at a limit `price` per whole
+//! base token. The price is in quote units per `scale` base units, where `scale` is
+//! `10^decimals` of the base token. Plain orders quote KAS in sompi. A pair order A/B quotes B,
+//! see [`pair`]. Tips are always in sompi per whole base token.
 //!
-//! The quote value of n base units at rate r is [`quote_of`]`(n, r, scale, round)`: `n * r / scale` rounded in the
-//! MAKER's favour, [`Round::Up`] for what a maker receives (ask proceeds, a pair ask's B delivery, merge returns, an
-//! exit's prefund, the budget a bid consumes from its escrow), [`Round::Down`] for what a maker pays (bid spend,
-//! conditional and if-done buy spend, a pair bid's B payment, the KAS tips). The helpers of each kind (`proceeds`, `used`, `spend`, `b_out_min`, ...) are
-//! exactly the covenant formulas: `None` wherever the covenant's own arithmetic would fail (an overflow fails the
-//! script, never wraps) or a `require` on the inputs of the formula refuses (a price below its tip).
+//! [`quote_of`] values `n` base units at rate `r` as `n * r / scale`, rounded in the maker's
+//! favour:
+//! - [`Round::Up`] for what a maker receives, e.g. ask proceeds or the budget a bid consumes.
+//! - [`Round::Down`] for what a maker pays, e.g. bid spend or the KAS tips.
 //!
-//! Ceil is superadditive and floor subadditive, so however an order is split into fills, every fill pays a seller at
-//! least, and charges a buyer at most, the exact value of its amount at the limit (the property tests of this module
-//! check it): rounding moves at most one quote unit per fill TO the maker and cannot be farmed.
+//! The helpers of each kind (`proceeds`, `used`, `spend`, `b_out_min`) are the covenant
+//! formulas. They return `None` where the covenant would fail: on an overflow, or on a refused
+//! input such as a price below its tip.
 //!
-//! **Minimum fill.** Every kind has `minFill` (base units): a fill is at least `minFill` unless it takes everything left
-//! (a `KobBid`: unless the bid terminates because less than one minimum fill of buying power is left). `fill_ok` of each
-//! kind is the covenant's rule.
+//! Splitting an order into fills cannot farm the rounding. Each fill moves at most one quote
+//! unit, and always to the maker. The proof is in `docs/spec/order-types.md`.
 //!
-//! **Numeric gate.** [`check_scale`] and [`check_quote`] (used by [`AnyState::check_numbers`] and the builders) refuse
-//! an order whose scale is not a power of ten in `1..=10^9`, or whose full fill at any rate it carries would be worth
-//! `2^62` quote units or more: such an order could never be filled completely by any covenant computation.
+//! # Minimum fill
+//!
+//! A fill is at least `minFill` base units unless it takes everything left. A `KobBid` also
+//! ends on a smaller fill when less than one minimum fill of buying power is left. `fill_ok`
+//! of each kind is the covenant's rule.
+//!
+//! # Numeric gate
+//!
+//! [`check_scale`] and [`check_quote`] refuse an order that no covenant computation could fill
+//! completely. That is a scale that is not a power of ten in `1..=10^9`, or a full fill worth
+//! `2^62` quote units or more. [`AnyState::check_numbers`] and the builders apply both.
 
 use std::collections::BTreeMap;
 
@@ -108,8 +112,10 @@ impl FieldValue for Vec<u8> {
     }
 }
 
-/// Contract field of the token extension commitment. KRON tokens have none: the KRON adapters have no
-/// such state field, and the typed states carry it as all zeros.
+/// Contract field of the token extension commitment.
+///
+/// KRON tokens have none. The KRON adapters have no such state field, and the typed states carry
+/// it as all zeros.
 pub(crate) const EXT_KEY: &str = "extensionCommitment";
 
 /// A typed state as the ABI's field map (contract field name -> value).
@@ -120,8 +126,10 @@ pub trait FieldMap: Sized + Clone {
     fn from_values(m: &BTreeMap<String, ArtifactValue>) -> Result<Self, StateError>;
 }
 
-/// Encodes a field map as the state span of the template `t`; `kron` drops the
-/// extension commitment (it must be zero), which the KRON bid-side kinds do not have.
+/// Encodes a field map as the state span of the template `t`.
+///
+/// With `kron` the extension commitment is dropped, and it must be zero, because no KRON template
+/// has that field.
 pub(crate) fn encode_fields(
     name: &'static str,
     t: &Template,
@@ -138,7 +146,9 @@ pub(crate) fn encode_fields(
     encode_runtime_state_script(&t.artifact, &t.contract().runtime_state, &v).map_err(|e| StateError::Codec(name, e.to_string()))
 }
 
-/// Decodes the state span of the template `t` into its field map (`kron`: an absent extension commitment reads as zero).
+/// Decodes the state span of the template `t` into its field map.
+///
+/// With `kron` an absent extension commitment reads as zero.
 pub(crate) fn decode_fields(
     name: &'static str,
     t: &Template,
@@ -158,13 +168,16 @@ pub(crate) fn decode_fields(
 
 /// Common interface of every typed state.
 ///
-/// A typed state is the KCC-20 layout of its kind; the KRON adapters have the same fields, except
-/// that `KobAsk`, `KobCondAsk` and the bid-side kinds (`KobBid`, `KobCondBid`, `KobIfdBid`) lack the token
-/// extension commitment: the typed state keeps the field (`[0; 32]` for KRON) and the KRON codec drops it.
-/// The `*_as` codecs take the template of the family; the plain ones are the KCC-20 templates.
-/// The pair kinds are one template for both families (state fields name the family of each token).
+/// A typed state is the KCC-20 layout of its kind. The KRON adapters have the same fields, except
+/// that `KobAsk`, `KobCondAsk` and the bid-side kinds (`KobBid`, `KobCondBid`, `KobIfdBid`) lack
+/// the token extension commitment. The typed state keeps the field, as `[0; 32]` for KRON, and the
+/// KRON codec drops it.
+///
+/// The `*_as` codecs take the template of the family, and the plain ones use the KCC-20 templates.
+/// The pair kinds are one template for both families, and their state fields name the family of
+/// each token.
 pub trait StateCodec: FieldMap {
-    /// Template whose runtime state this is (for KCC-20: the layout-defining reference program).
+    /// Template whose runtime state this is (for KCC-20, the layout-defining reference program).
     const TEMPLATE: TemplateId;
 
     /// The encoded state span (KCC-20 template).
@@ -201,7 +214,7 @@ pub trait StateCodec: FieldMap {
     }
 }
 
-/// Order states: one template per family (the pair kinds: one template for both).
+/// Order states: one template per family, and one template for both families for the pair kinds.
 pub trait OrderState: StateCodec {
     /// Redeem script of this instance (KCC-20 template).
     fn redeem(&self) -> Vec<u8> {
@@ -215,13 +228,17 @@ pub trait OrderState: StateCodec {
     fn from_redeem(redeem: &[u8]) -> Result<Self, StateError> {
         Self::from_redeem_for(Family::Kcc20, redeem)
     }
-    /// Template of this kind in `fam` (the default build: an instance's build is [`OrderState::template_of`]).
+    /// Default build of this kind in `fam`.
+    ///
+    /// The build of an instance is [`OrderState::template_of`].
     fn template_for(fam: Family) -> TemplateId {
         Self::TEMPLATE.in_family(fam)
     }
-    /// The template of this instance in `fam`: the build of the kind whose maker deliveries carry the holder owner of the
-    /// token program the state pins (`tokenTplHash`; a KRON program with id_type 0 holders: the `*KronD0` build,
-    /// [`TemplateId::for_token_hash`]).
+    /// The build of this instance in `fam`.
+    ///
+    /// It is the build whose maker deliveries carry the holder owner of the token program the state
+    /// pins (`tokenTplHash`). A KRON program with id_type 0 holders takes the `*KronD0` build, see
+    /// [`TemplateId::for_token_hash`].
     fn template_of(&self, fam: Family) -> TemplateId {
         match self.to_values().get("tokenTplHash") {
             Some(ArtifactValue::Bytes(b)) => match <[u8; 32]>::try_from(b.as_slice()) {
@@ -231,7 +248,9 @@ pub trait OrderState: StateCodec {
             _ => Self::template_for(fam),
         }
     }
-    /// Encoded state span under the template of `fam` (every build of a kind has the same state layout).
+    /// Encoded state span under the default template of `fam`.
+    ///
+    /// Every build of a kind has the same state layout.
     fn encode_for(&self, fam: Family) -> Vec<u8> {
         self.encode_as(Self::template_for(fam))
     }
@@ -245,8 +264,10 @@ pub trait OrderState: StateCodec {
         let id = self.template_of(fam);
         template(id).spk(&self.encode_as(id))
     }
-    /// Decodes an instance from its redeem script under its template in `fam` (either build of a KRON kind; the build must
-    /// be the one of the token program the state pins).
+    /// Decodes an instance from its redeem script under its template in `fam`.
+    ///
+    /// Either build of a KRON kind is accepted, but it must be the build of the token program the
+    /// state pins.
     fn from_redeem_for(fam: Family, redeem: &[u8]) -> Result<Self, StateError> {
         for id in [Self::template_for(fam), Self::template_for(fam).delivery0()] {
             if let Some(st) = template(id).state_of(redeem) {
@@ -323,7 +344,7 @@ macro_rules! kob_state {
 }
 
 kob_state!(
-    /// `KobAsk` (limit sell incl. IOC/FOK, timed activation, TWAP, Dutch decay and market auctions).
+    /// `KobAsk`: limit sell incl. IOC/FOK, timed activation, TWAP, Dutch decay and market auctions.
     AskState, TemplateId::KobAsk, "KobAsk", order: true, {
         /// Payout, token refund and cancel key (x-only).
         maker: [u8; 32] => "maker",
@@ -331,7 +352,7 @@ kob_state!(
         token_tpl_hash: [u8; 32] => "tokenTplHash",
         tpl_prefix_len: i64 => "tplPrefixLen",
         tpl_suffix_len: i64 => "tplSuffixLen",
-        /// Base units per whole token (`10^decimals`, capped at `10^9`): the price denominator.
+        /// Base units per whole token, the price denominator: `10^decimals`, capped at `10^9`.
         scale: i64 => "scale",
         /// Smallest fill in base units, unless the fill takes everything left.
         min_fill: i64 => "minFill",
@@ -353,14 +374,17 @@ kob_state!(
         decay_step: i64 => "decayStep",
         /// Base units in custody (mutable): the custody holds exactly `amountLeft`.
         amount_left: i64 => "amountLeft",
-        /// KCC-20 extension commitment of the custody (zero for KRON, whose template has no such field): the order takes
-        /// no custody of another commitment.
+        /// KCC-20 extension commitment of the custody, zero for KRON.
+        ///
+        /// The order takes no custody of another commitment.
         extension_commitment: [u8; 32] => "extensionCommitment",
     }
 );
 
 kob_state!(
-    /// `KobBid` (limit buy incl. IOC/FOK, DCA, rising bids and market auctions). Its quantity is its escrow.
+    /// `KobBid` (limit buy incl. IOC/FOK, DCA, rising bids and market auctions).
+    ///
+    /// Its quantity is its escrow.
     BidState, TemplateId::KobBid, "KobBid", order: true, {
         maker: [u8; 32] => "maker",
         token_cov_id: [u8; 32] => "tokenCovId",
@@ -369,7 +393,8 @@ kob_state!(
         tpl_suffix_len: i64 => "tplSuffixLen",
         extension_commitment: [u8; 32] => "extensionCommitment",
         scale: i64 => "scale",
-        /// Smallest fill in base units (> 0), unless less than one minimum fill of buying power is left.
+        /// Smallest fill in base units (> 0), unless less than one minimum fill of buying power is
+        /// left.
         min_fill: i64 => "minFill",
         price: i64 => "price",
         tip: i64 => "tip",
@@ -392,8 +417,9 @@ kob_state!(
 );
 
 kob_state!(
-    /// `KobCondAsk`: stop, stop-limit, stop-market, trailing, take-profit and OCO sell; every
-    /// buy-first if-done exit (with the repeat fields written by its entry).
+    /// `KobCondAsk`: stop, stop-limit, stop-market, trailing, take-profit and OCO sell.
+    ///
+    /// Every buy-first if-done exit is one too, with the repeat fields written by its entry.
     CondAskState, TemplateId::KobCondAsk, "KobCondAsk", order: true, {
         maker: [u8; 32] => "maker",
         token_cov_id: [u8; 32] => "tokenCovId",
@@ -413,14 +439,15 @@ kob_state!(
         trail_step: i64 => "trailStep",
         trail_gap: i64 => "trailGap",
         trail_wait: i64 => "trailWait",
-        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the same transaction.
+        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the
+        /// same transaction.
         min_touch: i64 => "minTouch",
         min_rest_daa: i64 => "minRestDaa",
         /// Mutable: 0 not armed, 1 armed (auction origin = this UTXO's DAA), >= 2 the origin.
         armed: i64 => "armed",
         /// Stop-leg auction length in DAA (0 = the whole band at once).
         band_daa: i64 => "bandDaa",
-        /// Most an arming / trailing keeper takes from the carrier.
+        /// Most an arming or trailing keeper takes from the carrier.
         keeper_tip: i64 => "keeperTip",
         /// Mutable: the custody holds exactly this many base units.
         amount_left: i64 => "amountLeft",
@@ -430,15 +457,17 @@ kob_state!(
         rpt_price: i64 => "rptPrice",
         /// Repeat IFD: from this DAA a take-profit may skip the entry.
         rpt_until: i64 => "rptUntil",
-        /// KCC-20 extension commitment of the custody (zero for KRON); an if-done exit: its entry's
-        /// `extensionCommitment`, written by the entry.
+        /// KCC-20 extension commitment of the custody, zero for KRON.
+        ///
+        /// In an if-done exit it is the entry's `extensionCommitment`, written by the entry.
         extension_commitment: [u8; 32] => "extensionCommitment",
     }
 );
 
 kob_state!(
-    /// `KobCondBid`: buy-stop, stop-limit, trailing, limit leg and OCO buy; every sell-first
-    /// if-done exit (with the repeat fields written by its entry).
+    /// `KobCondBid`: buy-stop, stop-limit, trailing, limit leg and OCO buy.
+    ///
+    /// Every sell-first if-done exit is one too, with the repeat fields written by its entry.
     CondBidState, TemplateId::KobCondBid, "KobCondBid", order: true, {
         maker: [u8; 32] => "maker",
         token_cov_id: [u8; 32] => "tokenCovId",
@@ -459,7 +488,8 @@ kob_state!(
         trail_step: i64 => "trailStep",
         trail_gap: i64 => "trailGap",
         trail_wait: i64 => "trailWait",
-        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the same transaction.
+        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the
+        /// same transaction.
         min_touch: i64 => "minTouch",
         min_rest_daa: i64 => "minRestDaa",
         /// Mutable: base units still to buy.
@@ -477,8 +507,9 @@ kob_state!(
 );
 
 kob_state!(
-    /// `KobIfdBid`: buy-first IFD / IFO entry (limit or stop entry, optionally repeating); every
-    /// fill creates a fresh committed `KobCondAsk` exit.
+    /// `KobIfdBid`: buy-first IFD / IFO entry, a limit or stop entry that may repeat.
+    ///
+    /// Every fill creates a fresh committed `KobCondAsk` exit.
     IfdBidState, TemplateId::KobIfdBid, "KobIfdBid", order: true, {
         maker: [u8; 32] => "maker",
         token_cov_id: [u8; 32] => "tokenCovId",
@@ -498,25 +529,28 @@ kob_state!(
         exit_carrier: i64 => "exitCarrier",
         /// Smallest fill except the one that takes the rest.
         min_fill: i64 => "minFill",
-        /// 0 = limit entry; else the buy-stop trigger price.
+        /// 0 = limit entry, else the buy-stop trigger price.
         entry_stop: i64 => "entryStop",
         band_daa: i64 => "bandDaa",
-        /// Smallest trigger evidence (base units of a plain order of the same scale filled in the same transaction).
+        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the
+        /// same transaction.
         min_touch: i64 => "minTouch",
         min_rest_daa: i64 => "minRestDaa",
         keeper_tip: i64 => "keeperTip",
         armed: i64 => "armed",
         /// Repeat: 0 = off, else 1 + base units of re-arms left.
         rpt_amount: i64 => "rptAmount",
-        /// The committed exit: the first 279 bytes of its `KobCondAsk` state (up to `amountLeft`,
-        /// which each fill replaces; the repeat fields are written by the entry).
+        /// The committed exit: the first 279 bytes of its `KobCondAsk` state, up to `amountLeft`.
+        ///
+        /// Each fill replaces `amountLeft`, and the entry writes the repeat fields.
         exit_state: Vec<u8> => "exitState",
     }
 );
 
 kob_state!(
-    /// `KobIfdAsk`: sell-first IFD / IFO entry (limit or stop entry, optionally repeating); every
-    /// fill creates a fresh `KobCondBid` exit with `amountLeft = n`.
+    /// `KobIfdAsk`: sell-first IFD / IFO entry, a limit or stop entry that may repeat.
+    ///
+    /// Every fill creates a fresh `KobCondBid` exit with `amountLeft = n`.
     IfdAskState, TemplateId::KobIfdAsk, "KobIfdAsk", order: true, {
         maker: [u8; 32] => "maker",
         token_cov_id: [u8; 32] => "tokenCovId",
@@ -533,10 +567,11 @@ kob_state!(
         prefund: i64 => "prefund",
         exit_carrier: i64 => "exitCarrier",
         min_fill: i64 => "minFill",
-        /// 0 = limit entry; else the sell-stop trigger price.
+        /// 0 = limit entry, else the sell-stop trigger price.
         entry_stop: i64 => "entryStop",
         band_daa: i64 => "bandDaa",
-        /// Smallest trigger evidence (base units of a plain order of the same scale filled in the same transaction).
+        /// Smallest trigger evidence: base units of a plain order of the same scale filled in the
+        /// same transaction.
         min_touch: i64 => "minTouch",
         min_rest_daa: i64 => "minRestDaa",
         keeper_tip: i64 => "keeperTip",
@@ -544,8 +579,10 @@ kob_state!(
         /// Mutable: the custody holds exactly this many base units (0 = a repeating entry waiting).
         amount_left: i64 => "amountLeft",
         rpt_amount: i64 => "rptAmount",
-        /// The committed exit: the first 321 bytes of its `KobCondBid` state (its `amountLeft` is
-        /// replaced by each fill's n; the repeat fields are written by the entry).
+        /// The committed exit: the first 321 bytes of its `KobCondBid` state.
+        ///
+        /// Each fill replaces its `amountLeft` with the fill's n, and the entry writes the repeat
+        /// fields.
         exit_state: Vec<u8> => "exitState",
     }
 );
@@ -567,12 +604,17 @@ kob_state!(
 pub const SCHEME_P2PK: u8 = 0x00;
 /// KCC-20 owner scheme: covenant id (KOB order custody).
 pub const SCHEME_COVID: u8 = 0x04;
-/// Order time-in-force values.
+/// Time in force: the order rests until it is filled, cancelled or refunded.
 pub const TIF_GTC: i64 = 0;
+/// Time in force: fill what crosses now and return the rest.
+///
+/// Anyone may refund the rest [`IOC_LIFE`] DAA after the order became fillable.
 pub const TIF_IOC: i64 = 1;
+/// Time in force: fill everything in one transaction, or nothing.
 pub const TIF_FOK: i64 = 2;
-/// Trigger-evidence sides: 1 = a resting ask is filled (a sell at its quote), 2 = a resting bid is filled.
+/// Trigger-evidence side: a resting ask is filled (a sell at its quote).
 pub const SIDE_ASK: i64 = 1;
+/// Trigger-evidence side: a resting bid is filled.
 pub const SIDE_BID: i64 = 2;
 /// Idle bound after which any order is refundable (90 days at 10 DAA/s).
 pub const MAX_IDLE: i64 = 77_760_000;
@@ -607,15 +649,17 @@ impl Kcc20State {
     }
 }
 
-/// KRON token state: the 46-byte span `0x20 owner | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter`
-/// at offset 0 of every KRON token program (JSON keys are the contract's field names).
+/// KRON token state, the 46-byte span at offset 0 of every KRON token program.
+///
+/// The span is `0x20 owner | 0x01 id_type | 0x08 amount (LE i64) | 0x01 is_minter`. JSON keys are
+/// the contract's field names.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KronState {
     /// Owner: an x-only key (`id_type` 0, 3), a script hash (1) or a covenant id (2).
     #[serde(with = "crate::json::field")]
     pub owner: [u8; 32],
-    /// 0 pubkey (token-level signature), 1 script hash, 2 covenant id (KOB custody), 3 address
-    /// presence (wallet balances, maker deliveries).
+    /// Owner type: 0 pubkey (token-level signature), 1 script hash, 2 covenant id (KOB custody),
+    /// 3 address presence (wallet balances, maker deliveries).
     #[serde(with = "crate::json::field")]
     pub id_type: u8,
     #[serde(with = "crate::json::field")]
@@ -626,13 +670,16 @@ pub struct KronState {
 }
 
 impl KronState {
-    /// Token state owned by a key by address presence (`id_type` 3): what KRON wallets hold and
-    /// KOB delivers to makers.
+    /// Token state owned by a key by address presence (`id_type` 3).
+    ///
+    /// KRON wallets hold these, and KOB delivers them to makers.
     pub fn addr(amount: i64, owner: [u8; 32]) -> Self {
         KronState { owner, id_type: KRON_TYPE_ADDR, amount, is_minter: 0 }
     }
-    /// Token state owned by a key that signs for it (`id_type` 0, a token-level signature): the holders of a program that
-    /// refuses address presence (KForge), what the `*KronD0` order builds deliver to makers.
+    /// Token state owned by a key that signs for it (`id_type` 0, a token-level signature).
+    ///
+    /// These are the holders of a program that refuses address presence (KForge), and what the
+    /// `*KronD0` order builds deliver to makers.
     pub fn pubkey(amount: i64, owner: [u8; 32]) -> Self {
         KronState { owner, id_type: crate::family::KRON_TYPE_PUBKEY, amount, is_minter: 0 }
     }
@@ -677,8 +724,10 @@ impl KronState {
     }
 }
 
-/// What fixes the owner value of a key-held token state: a token program (its profile's `owners.holder`) or a family (its
-/// default holder owner: KCC-20 `owner_scheme` 0, KRON `id_type` 3).
+/// What fixes the owner value of a key-held token state.
+///
+/// A token program fixes it through its profile's `owners.holder`. A family fixes it through its
+/// default holder owner: KCC-20 `owner_scheme` 0, KRON `id_type` 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HolderOf {
     Family(Family),
@@ -718,8 +767,9 @@ impl HolderOf {
     }
 }
 
-/// A token state of either family (JSON: the KCC-20 or the KRON layout; a state with `id_type` or
-/// `is_minter` is KRON).
+/// A token state of either family.
+///
+/// JSON uses the KCC-20 or the KRON layout. A state with `id_type` or `is_minter` is KRON.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenState {
     Kcc20(Kcc20State),
@@ -781,16 +831,20 @@ impl TokenState {
             TokenState::Kron(s) => s.owner,
         }
     }
-    /// Owned by a key: KCC-20 `owner_scheme` 0 (P2PK), KRON `id_type` 3 (address presence) or 0 (a token-level signature).
-    /// Which of the KRON two a program authorises is its holder owner: [`TokenState::is_holder`].
+    /// Owned by a key: KCC-20 `owner_scheme` 0 (P2PK), or KRON `id_type` 3 or 0.
+    ///
+    /// KRON `id_type` 3 is address presence and 0 a token-level signature. Which of the two a
+    /// program authorises is its holder owner, see [`TokenState::is_holder`].
     pub fn is_user(&self) -> bool {
         match self {
             TokenState::Kcc20(s) => s.owner_scheme == SCHEME_P2PK,
             TokenState::Kron(s) => s.id_type == KRON_TYPE_ADDR || s.id_type == crate::family::KRON_TYPE_PUBKEY,
         }
     }
-    /// Owned by a key with the holder owner of `of` (a token program: its profile's `owners.holder`; a family: its default),
-    /// i.e. a key-held state the builders spend for that program.
+    /// Owned by a key with the holder owner of `of`, i.e. a state the builders spend for it.
+    ///
+    /// For a token program the holder owner is its profile's `owners.holder`, for a family its
+    /// default.
     pub fn is_holder(&self, of: impl Into<HolderOf>) -> bool {
         let of = of.into();
         self.family() == of.family()
@@ -827,8 +881,11 @@ impl TokenState {
             TokenState::Kron(s) => s.is_minter == 0,
         }
     }
-    /// Token state owned by `owner` as a key, with the holder owner of `of` (a token program: its profile's `owners.holder`,
-    /// e.g. KRON id_type 0 for KForge; a family: its default, KCC-20 scheme 0 / KRON id_type 3). `ext` is ignored by KRON.
+    /// Token state owned by `owner` as a key, with the holder owner of `of`.
+    ///
+    /// For a token program the holder owner is its profile's `owners.holder`, e.g. KRON id_type 0
+    /// for KForge. For a family it is the default, KCC-20 scheme 0 or KRON id_type 3. KRON ignores
+    /// `ext`.
     pub fn user(of: impl Into<HolderOf>, amount: i64, owner: [u8; 32], ext: [u8; 32]) -> Self {
         let of = of.into();
         match of.family() {
@@ -850,12 +907,16 @@ impl TokenState {
             TokenState::Kron(s) => TokenState::Kron(KronState { amount, ..s.clone() }),
         }
     }
-    /// The same state owned by `owner` as a key with its family's default holder owner (KCC-20 scheme 0, KRON id_type 3).
+    /// The same state owned by `owner` as a key, with its family's default holder owner.
+    ///
+    /// The default is KCC-20 scheme 0 or KRON id_type 3.
     pub fn with_user_owner(&self, owner: [u8; 32]) -> Self {
         self.with_holder_owner(self.family(), owner)
     }
-    /// The same state owned by `owner` as a key with the holder owner of `of` (a token program: its profile's
-    /// `owners.holder`): a refund or delivery to the maker.
+    /// The same state owned by `owner` as a key with the holder owner of `of`.
+    ///
+    /// This is a refund or delivery to the maker. For a token program the holder owner is its
+    /// profile's `owners.holder`.
     pub fn with_holder_owner(&self, of: impl Into<HolderOf>, owner: [u8; 32]) -> Self {
         let id = of.into().owner_type();
         match self {
@@ -893,9 +954,11 @@ impl TokenState {
     }
 }
 
-// ---------------------------------------------------------------- the quote rule (mirrors the covenants)
+// ---------------------------------------------------------------- the quote rule
 
-/// Rounding of [`quote_of`]: in the maker's favour, so UP for what a maker receives and DOWN for what a maker pays.
+/// Rounding of [`quote_of`], always in the maker's favour.
+///
+/// It rounds up what a maker receives and down what a maker pays.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Round {
@@ -905,19 +968,26 @@ pub enum Round {
     Up,
 }
 
-/// Quote value of `n` base units at `rate` quote units per `scale` base units: `n * rate / scale` rounded per `round`,
-/// computed exactly as every KOB covenant's `quoteOf` does it,
+/// Quote value of `n` base units at `rate` quote units per `scale` base units.
+///
+/// The value is `n * rate / scale` rounded per `round`, computed exactly as the `quoteOf` of every
+/// KOB covenant:
 ///
 /// ```text
 /// q = n / scale; m = n % scale
-/// quoteOf = q * rate + m * (rate / scale) + (m * (rate % scale) + c) / scale      c = 0 (Down) or scale - 1 (Up)
+/// quoteOf = q * rate + m * (rate / scale) + (m * (rate % scale) + c) / scale
+/// c = 0 (Down) or scale - 1 (Up)
 /// ```
 ///
-/// with every product and sum checked (the engine fails the script on an overflow). `None` exactly where the covenant
-/// fails (an intermediate or the result outside `i64`), and for inputs the covenants never pass to it (a negative
-/// amount or rate, `scale <= 0`). Every intermediate is at most `max(result, scale * (scale - 1))`, so while
-/// `scale * (scale - 1) < 2^63` (the builders allow `scale <= 10^9`, a power of ten) the only failure is a result that does
-/// not fit in an `i64`.
+/// Every product and sum is checked, because the engine fails the script on an overflow.
+///
+/// Returns `None` exactly where the covenant fails, i.e. when an intermediate or the result does
+/// not fit in an `i64`. It also returns `None` for inputs the covenants never pass: a negative
+/// amount or rate, or `scale <= 0`.
+///
+/// Every intermediate is at most `max(result, scale * (scale - 1))`. While
+/// `scale * (scale - 1) < 2^63`, the only failure is a result that does not fit in an `i64`. The
+/// builders allow only powers of ten up to `10^9`, which satisfy this.
 pub fn quote_of(n: i64, rate: i64, scale: i64, round: Round) -> Option<i64> {
     if n < 0 || rate < 0 || scale <= 0 {
         return None;
@@ -933,7 +1003,9 @@ pub fn quote_of(n: i64, rate: i64, scale: i64, round: Round) -> Option<i64> {
     a.checked_add(b)?.checked_add(d)
 }
 
-/// The exact value of [`quote_of`] in 128-bit arithmetic (`None` for the same invalid inputs), not limited to `i64`.
+/// The exact value of [`quote_of`] in 128-bit arithmetic, not limited to `i64`.
+///
+/// Returns `None` for the same invalid inputs.
 pub fn quote_exact(n: i64, rate: i64, scale: i64, round: Round) -> Option<i128> {
     if n < 0 || rate < 0 || scale <= 0 {
         return None;
@@ -945,10 +1017,15 @@ pub fn quote_exact(n: i64, rate: i64, scale: i64, round: Round) -> Option<i128> 
     })
 }
 
-/// Largest scale the builders accept (`10^9`: 9 decimals; every larger `10^decimals` is capped here by the wallet).
+/// Largest scale the builders accept, `10^9` (9 decimals).
+///
+/// The wallet caps every larger `10^decimals` here.
 pub const MAX_SCALE: i64 = 1_000_000_000;
-/// A full fill of an order at any rate it carries must be worth less than this many quote units (`2^62`): far from the
-/// `i64` limit of the covenant arithmetic, with room for the sums the covenants add to it (carriers, budgets).
+/// Bound on the value of a full fill, in quote units (`2^62`).
+///
+/// A full fill of an order at any rate it carries must be worth less than this. That is far from
+/// the `i64` limit of the covenant arithmetic, and leaves room for the sums the covenants add to
+/// it, such as carriers and budgets.
 pub const QUOTE_LIMIT: i128 = 1 << 62;
 
 /// `scale` is a power of ten in `1..=`[`MAX_SCALE`].
@@ -966,8 +1043,9 @@ pub fn check_scale(scale: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// The full fill of `amount` base units at `rate` (`what` names the rate) is worth less than [`QUOTE_LIMIT`] quote units
-/// (rates and amounts must be >= 0).
+/// Whether the full fill of `amount` base units at `rate` is worth less than [`QUOTE_LIMIT`].
+///
+/// `what` names the rate in the error. Rates and amounts must be >= 0.
 pub fn check_quote(amount: i64, rate: i64, scale: i64, what: &str) -> Result<(), String> {
     if amount < 0 || rate < 0 {
         return Err(format!("{what}: amount and rate must be >= 0"));
@@ -984,28 +1062,42 @@ fn rate_sum(a: i64, b: i64) -> Option<i64> {
     a.checked_add(b)
 }
 
-// ---------------------------------------------------------------- economics (mirrors the covenants)
+// ---------------------------------------------------------------- economics
 
-/// IOC / FOK kill: an IOC or FOK order is refundable by anyone this many DAA after it became
-/// fillable (`max(UTXO DAA, activeFrom)`).
+/// IOC / FOK kill: anyone may refund an IOC or FOK order this many DAA after it became fillable.
+///
+/// It becomes fillable at `max(UTXO DAA, activeFrom)`.
 pub const IOC_LIFE: i64 = 600;
-/// Most token inputs a transaction that spends a KCC-20 KOB order may carry (every such order refuses more; KRON
-/// orders refuse more than 4: [`crate::Family::max_tok_in`], `family::MAX_TOK_IN_KRON`).
+/// Most token inputs a transaction that spends a KCC-20 KOB order may carry.
+///
+/// Every such order refuses more. KRON orders refuse more than 4, see
+/// [`crate::Family::max_tok_in`] and `family::MAX_TOK_IN_KRON`.
 pub const MAX_TOK_IN: usize = crate::family::MAX_TOK_IN_KCC20;
-/// Scale of the repeat merge argument `-(k · 2^53 + m)` (`MERGE_K` of the covenants): a booked exit's amount is below it.
+/// Scale of the repeat merge argument `-(k · 2^53 + m)`, the `MERGE_K` of the covenants.
+///
+/// The amount of a booked exit is below it.
 pub const MERGE_SHIFT: i64 = 1 << 53;
 /// Largest exit input index the merge argument can name (`k · 2^53 + m` must fit in 63 bits).
 pub const MERGE_MAX_INDEX: usize = 1023;
-/// Length of the committed exit prefix a buy-first entry stores (`KobCondAsk` state up to `amountLeft`).
+/// Length of the committed exit prefix a buy-first entry stores.
+///
+/// It is the `KobCondAsk` state up to `amountLeft`.
 pub const IFD_BID_EXIT_COMMIT: usize = 279;
-/// Length of the committed exit prefix a sell-first entry stores (`KobCondBid` state up to `keeperTip`).
+/// Length of the committed exit prefix a sell-first entry stores.
+///
+/// It is the `KobCondBid` state up to `keeperTip`.
 pub const IFD_ASK_EXIT_COMMIT: usize = 321;
-/// The same for a KRON entry: its `KobCondBidKron` exit has no extension commitment (33 bytes less).
+/// The same for a KRON entry, whose `KobCondBidKron` exit has no extension commitment.
+///
+/// It is 33 bytes shorter.
 pub const IFD_ASK_EXIT_COMMIT_KRON: usize = 288;
 
-/// Decay / rise origin: `activeFrom`, or for a TWAP / DCA (`interval > 0`) the opening of the
-/// current slice (`UTXO DAA + interval`) when later, so every slice is its own auction. `None` where the covenant's own
-/// sum overflows (the order is unfillable there: every fill computes it).
+/// Decay or rise origin.
+///
+/// It is `activeFrom`, or for a TWAP / DCA (`interval > 0`) the opening of the current slice
+/// (`UTXO DAA + interval`) when that is later, so every slice is its own auction. Returns `None`
+/// where the covenant's own sum overflows. The order is unfillable there, because every fill
+/// computes it.
 pub fn decay_origin(active_from: i64, interval: i64, utxo_daa: i64) -> Option<i64> {
     if interval > 0 {
         Some(active_from.max(utxo_daa.checked_add(interval)?))
@@ -1014,9 +1106,11 @@ pub fn decay_origin(active_from: i64, interval: i64, utxo_daa: i64) -> Option<i6
     }
 }
 
-/// Decayed ask quote at time `t` (never below `price_end`): `max(priceEnd, price - slope * floor((t - origin) / step))`,
-/// every operation checked as the covenant's (an overflow fails the script): `None` there, and for `step <= 0` (the
-/// covenant requires `decayStep > 0`).
+/// Decayed ask quote at time `t`, never below `price_end`.
+///
+/// The quote is `max(priceEnd, price - slope * floor((t - origin) / step))`. Every operation is
+/// checked as in the covenant, where an overflow fails the script. Returns `None` there, and for
+/// `step <= 0`, because the covenant requires `decayStep > 0`.
 pub fn decay_down(price: i64, price_end: i64, slope: i64, step: i64, origin: i64, t: i64) -> Option<i64> {
     if step <= 0 {
         return None;
@@ -1034,9 +1128,11 @@ pub fn rise_up(price: i64, price_end: i64, slope: i64, step: i64, origin: i64, t
     Some(price.checked_add(moved)?.min(price_end))
 }
 
-/// DAA score from which an order is refundable: its soft expiry, 90 days idle, or (IOC / FOK,
-/// `tif != 0`) the kill time `max(UTXO DAA, activeFrom) + 600`, whichever comes first. `i64::MAX` (never) where the
-/// covenant's own sums overflow: its refund path fails there (only the maker's cancel ends such an order).
+/// DAA score from which an order is refundable.
+///
+/// It is the earliest of the soft expiry, 90 days idle, and for IOC / FOK (`tif != 0`) the kill
+/// time `max(UTXO DAA, activeFrom) + 600`. Returns `i64::MAX` (never) where the covenant's own
+/// sums overflow. Its refund path fails there, and only the maker's cancel ends such an order.
 pub fn refund_due(expiry_daa: i64, tif: i64, active_from: i64, utxo_daa: i64) -> i64 {
     let Some(mut idle) = utxo_daa.checked_add(MAX_IDLE) else { return i64::MAX };
     if tif != TIF_GTC {
@@ -1046,17 +1142,24 @@ pub fn refund_due(expiry_daa: i64, tif: i64, active_from: i64, utxo_daa: i64) ->
     expiry_daa.min(idle)
 }
 
-/// `rptUntil` a repeating entry writes into a booked exit: `min(expiryDaa, UTXO DAA + 90 days)`, counted from the entry
-/// UTXO's DAA (its last activity), never from an argument of the filler (`None` where the covenant's sum overflows: such
-/// a booking fails).
+/// `rptUntil` a repeating entry writes into a booked exit.
+///
+/// It is `min(expiryDaa, UTXO DAA + 90 days)`, counted from the DAA of the entry UTXO (its last
+/// activity) and never from an argument of the filler. Returns `None` where the covenant's sum
+/// overflows, and such a booking fails.
 pub fn rpt_until(expiry_daa: i64, utxo_daa: i64) -> Option<i64> {
     Some(expiry_daa.min(utxo_daa.checked_add(MAX_IDLE)?))
 }
 
-/// The largest fill of a repeating entry while its re-arms last (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair`): `rptAmount - 1`
-/// (every fill up to it is booked) as long as at least one minimum fill of re-arms is left (`rptAmount - 1 >= minFill`);
-/// a larger fill would leave the rest of the re-arms unused for good, and the covenants refuse it. `None`: no bound (not
-/// repeating, the re-arms used up, or fewer left than one minimum fill).
+/// The largest fill of a repeating entry while its re-arms last.
+///
+/// This applies to `KobIfdBid`, `KobIfdAsk` and `KobIfdPair`. The bound is `rptAmount - 1`, and
+/// every fill up to it is booked, as long as at least one minimum fill of re-arms is left
+/// (`rptAmount - 1 >= minFill`). A larger fill would leave the rest of the re-arms unused for
+/// good, and the covenants refuse it.
+///
+/// Returns `None` when there is no bound: not repeating, the re-arms used up, or fewer left than
+/// one minimum fill.
 pub fn rpt_fill_max(rpt_amount: i64, min_fill: i64) -> Option<i64> {
     (rpt_amount > 1 && rpt_amount > min_fill).then(|| rpt_amount - 1)
 }
@@ -1070,9 +1173,11 @@ pub fn armed_origin(armed: i64, utxo_daa: i64) -> Option<i64> {
     }
 }
 
-/// Stop-band basis points at auction time `t`: the band opens linearly over `band_daa` from the
-/// origin (`band_daa = 0`: the whole band at once).
-/// `None` where the covenant's arithmetic overflows (`t - origin`, `slipBps * e`).
+/// Stop-band basis points at auction time `t`.
+///
+/// The band opens linearly over `band_daa` from the origin, and `band_daa = 0` opens the whole
+/// band at once. Returns `None` where the covenant's arithmetic overflows (`t - origin`,
+/// `slipBps * e`).
 pub fn band_bps(slip_bps: i64, band_daa: i64, origin: i64, t: i64) -> Option<i64> {
     if band_daa <= 0 {
         return Some(slip_bps);
@@ -1085,12 +1190,16 @@ pub fn band_bps(slip_bps: i64, band_daa: i64, origin: i64, t: i64) -> Option<i64
     }
 }
 
-/// Largest stop price the covenants accept on a stop leg: `stopPrice * slipBps` (slipBps <= 10000)
-/// must fit in an i64 (`MAX_STOP` in KobCondAsk / KobCondBid).
+/// Largest stop price the covenants accept on a stop leg.
+///
+/// `stopPrice * slipBps` with `slipBps <= 10000` must fit in an i64. This is `MAX_STOP` in
+/// KobCondAsk and KobCondBid.
 pub const MAX_STOP_PRICE: i64 = 922_337_203_685_477;
 
-/// The covenant's stop band of a stop leg: `floor(stop * bps / 10000)` with `stop <= MAX_STOP_PRICE` and `0 <= bps <=
-/// 10000` required (the covenants refuse a stop leg otherwise): `None` where the covenant refuses or fails.
+/// The covenant's stop band of a stop leg: `floor(stop * bps / 10000)`.
+///
+/// The covenants refuse a stop leg unless `stop <= MAX_STOP_PRICE` and `0 <= bps <= 10000`.
+/// Returns `None` where the covenant refuses or fails.
 pub fn stop_band(stop: i64, bps: i64) -> Option<i64> {
     if !(0..=MAX_STOP_PRICE).contains(&stop) || !(0..=10_000).contains(&bps) {
         return None;
@@ -1098,15 +1207,18 @@ pub fn stop_band(stop: i64, bps: i64) -> Option<i64> {
     Some(stop * bps / 10_000)
 }
 
-/// Stop band in sompi per whole token: `floor(stop * bps / 10000)`, multiply first as the covenants do.
-/// Rounded down, i.e. in the maker's favour on both sides. Saturates for a stop above
-/// [`MAX_STOP_PRICE`], whose stop leg the covenants refuse anyway.
+/// Stop band in sompi per whole token: `floor(stop * bps / 10000)`.
+///
+/// The multiplication comes first, as in the covenants. Rounding down is in the maker's favour on
+/// both sides. Saturates for a stop above [`MAX_STOP_PRICE`], whose stop leg the covenants refuse
+/// anyway.
 pub fn band(stop: i64, bps: i64) -> i64 {
     stop.checked_mul(bps).map(|p| p / 10_000).unwrap_or(i64::MAX)
 }
 
-/// `armed` written into a conditional's continuation after a fill on `leg` (`trigger`: armed by
-/// touch evidence in this very transaction).
+/// `armed` written into a conditional's continuation after a fill on `leg`.
+///
+/// `trigger` means the order is armed by touch evidence in this very transaction.
 fn cond_next_armed(armed: i64, band_daa: i64, leg: i64, trigger: bool, utxo_daa: i64) -> i64 {
     if leg == 1 && armed == 0 && trigger {
         return 1;
@@ -1134,8 +1246,9 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     a / b + i64::from(a % b != 0)
 }
 
-/// The minimum-fill rule of the kinds whose quantity is an explicit amount: `0 < n <= left` and `n >= minFill` unless
-/// `n` takes everything left.
+/// The minimum-fill rule of the kinds whose quantity is an explicit amount.
+///
+/// It is `0 < n <= left`, and `n >= minFill` unless `n` takes everything left.
 pub fn min_fill_ok(n: i64, left: i64, min_fill: i64) -> bool {
     n > 0 && n <= left && (n >= min_fill || n == left)
 }
@@ -1149,8 +1262,10 @@ impl AskState {
     pub fn origin(&self, utxo_daa: i64) -> Option<i64> {
         decay_origin(self.active_from, self.interval, utxo_daa)
     }
-    /// Quote at auction time `t` for the UTXO created at `utxo_daa` (the constant price when not
-    /// decaying; `None` where the covenant's decay arithmetic fails).
+    /// Quote at auction time `t` for the UTXO created at `utxo_daa`.
+    ///
+    /// It is the constant price when the order does not decay. Returns `None` where the covenant's
+    /// decay arithmetic fails.
     pub fn price_at(&self, t: i64, utxo_daa: i64) -> Option<i64> {
         if self.slope != 0 {
             decay_down(self.price, self.price_end, self.slope, self.decay_step, self.origin(utxo_daa)?, t)
@@ -1158,8 +1273,9 @@ impl AskState {
             Some(self.price)
         }
     }
-    /// Least the maker receives for n base units at quote `p`: `ceil(n * (p - tip) / scale)` (`None` if `p < tip` or the
-    /// covenant's arithmetic fails).
+    /// Least the maker receives for n base units at quote `p`: `ceil(n * (p - tip) / scale)`.
+    ///
+    /// Returns `None` if `p < tip` or the covenant's arithmetic fails.
     pub fn proceeds_at(&self, n: i64, p: i64) -> Option<i64> {
         if p < self.tip || self.tip < 0 {
             return None;
@@ -1170,14 +1286,17 @@ impl AskState {
     pub fn proceeds(&self, n: i64, t: i64, utxo_daa: i64) -> Option<i64> {
         self.proceeds_at(n, self.price_at(t, utxo_daa)?)
     }
-    /// The covenant's quantity rules for a fill of n: `0 < n <= amountLeft`, the minimum fill, the TWAP `maxFill`.
+    /// The covenant's quantity rules for a fill of n.
+    ///
+    /// They are `0 < n <= amountLeft`, the minimum fill and the TWAP `maxFill`.
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill) && (self.max_fill == 0 || n <= self.max_fill)
     }
 }
 
-/// Family code of a pair order's token (`sFamily`, `tFamily`, `aFamily`, `bFamily`): `1` KCC-20, `2` KRON (the payload family
-/// byte).
+/// Family of a pair order's token from its code: `1` KCC-20, `2` KRON.
+///
+/// The codes are those of `sFamily`, `tFamily`, `aFamily` and `bFamily`, the payload family byte.
 pub fn family_of_code(code: i64) -> Option<Family> {
     u8::try_from(code).ok().and_then(Family::from_code)
 }
@@ -1214,7 +1333,9 @@ impl BidState {
         }
         quote_of(n, self.budget_rate()?, self.scale, Round::Up)
     }
-    /// Most the maker pays for n base units at quote `p`: `floor(n * (p + tip) / scale)` (the covenant's `allIn`).
+    /// Most the maker pays for n base units at quote `p`: `floor(n * (p + tip) / scale)`.
+    ///
+    /// This is the covenant's `allIn`.
     pub fn spend_at(&self, n: i64, p: i64) -> Option<i64> {
         if self.tip < 0 {
             return None;
@@ -1225,16 +1346,20 @@ impl BidState {
     pub fn spend(&self, n: i64, t: i64, utxo_daa: i64) -> Option<i64> {
         self.spend_at(n, self.price_at(t, utxo_daa)?)
     }
-    /// Whether a bid whose escrow keeps `left` after a fill can continue: `left − deliveryCarrier − reserve >=
-    /// used(minFill)` (one more minimum fill of buying power).
+    /// Whether a bid whose escrow keeps `left` after a fill can continue.
+    ///
+    /// It can when one more minimum fill of buying power is left:
+    /// `left − deliveryCarrier − reserve >= used(minFill)`.
     pub fn can_continue(&self, left: i64) -> bool {
         match (self.used(self.min_fill), left.checked_sub(self.delivery_carrier).and_then(|x| x.checked_sub(self.reserve))) {
             (Some(u), Some(free)) => free >= u,
             _ => false,
         }
     }
-    /// Remaining buying power of an escrow of `value` sompi: the largest n with `used(n) <= value − deliveryCarrier −
-    /// reserve` (0 when not even one base unit is funded).
+    /// Remaining buying power of an escrow of `value` sompi.
+    ///
+    /// It is the largest n with `used(n) <= value − deliveryCarrier − reserve`, and 0 when not even
+    /// one base unit is funded.
     pub fn buying_power(&self, value: i64) -> i64 {
         let Some(rate) = self.budget_rate().filter(|r| *r > 0) else { return 0 };
         let budget = value as i128 - self.delivery_carrier as i128 - self.reserve as i128;
@@ -1243,15 +1368,17 @@ impl BidState {
         }
         // ceil(n * rate / scale) <= budget  <=>  n * rate <= budget * scale
         let n = (budget * self.scale as i128 / rate as i128).min(i64::MAX as i128) as i64;
-        // the covenant's own arithmetic must hold at that amount (it does whenever the result fits)
+        // The covenant's own arithmetic must hold at that amount. It does whenever the result fits.
         let mut n = n;
         while n > 0 && self.used(n).is_none_or(|u| u as i128 > budget) {
             n -= 1;
         }
         n
     }
-    /// The covenant's rules for a fill of n of an escrow of `value`: `n > 0`, `maxFill`, `used(n)` leaves at least the
-    /// reserve, and `n >= minFill` unless the bid then cannot continue (`minFill > 0`).
+    /// The covenant's rules for a fill of n of an escrow of `value`.
+    ///
+    /// They are `n > 0`, `maxFill`, `used(n)` leaves at least the reserve, and `n >= minFill`
+    /// unless the bid then cannot continue. They also require `minFill > 0`.
     pub fn fill_ok(&self, n: i64, value: i64) -> bool {
         if n <= 0 || self.min_fill <= 0 || (self.max_fill != 0 && n > self.max_fill) {
             return false;
@@ -1259,9 +1386,11 @@ impl BidState {
         let Some(left) = self.used(n).and_then(|u| value.checked_sub(u)) else { return false };
         left >= self.reserve && (n >= self.min_fill || !self.can_continue(left))
     }
-    /// Escrow for `amount` base units delivered in at most `fills` fills: `used(amount)` plus `fills − 1` sompi of rounding
-    /// (each fill's budget is rounded up, so any split of the amount into at most `fills` fills is funded), one
-    /// delivery carrier per fill and the reserve.
+    /// Escrow for `amount` base units delivered in at most `fills` fills.
+    ///
+    /// It is `used(amount)` plus `fills − 1` sompi of rounding, one delivery carrier per fill and
+    /// the reserve. Each fill's budget is rounded up, so any split of the amount into at most
+    /// `fills` fills is funded.
     pub fn escrow(&self, amount: i64, fills: i64) -> Option<i64> {
         let fills = fills.max(1);
         self.used(amount)?.checked_add(fills - 1)?.checked_add(fills.checked_mul(self.delivery_carrier)?)?.checked_add(self.reserve)
@@ -1277,8 +1406,10 @@ impl CondAskState {
     pub fn is_booked(&self) -> bool {
         self.parent != [0; 32]
     }
-    /// Stop-leg price for a fill at auction time `t` (`trigger`: armed by touch evidence in the same
-    /// transaction, which pays the stop itself when `bandDaa > 0`).
+    /// Stop-leg price for a fill at auction time `t`.
+    ///
+    /// `trigger` means the order is armed by touch evidence in the same transaction, which pays the
+    /// stop itself when `bandDaa > 0`.
     pub fn stop_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         let bps = match (trigger, armed_origin(self.armed, utxo_daa)) {
             (true, _) | (false, None) => {
@@ -1296,8 +1427,10 @@ impl CondAskState {
     pub fn stop_floor(&self) -> i64 {
         self.stop_price - band(self.stop_price, self.slip_bps)
     }
-    /// Leg price (0 = take-profit, 1 = stop) at time `t`.
-    /// Leg price (`None` where the covenant's stop arithmetic fails: a stop above `MAX_STOP_PRICE`, an overflow).
+    /// Leg price at time `t`: leg 0 is the take-profit, leg 1 the stop.
+    ///
+    /// Returns `None` where the covenant's stop arithmetic fails: a stop above `MAX_STOP_PRICE`, or
+    /// an overflow.
     pub fn leg_price(&self, leg: i64, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         if leg == 0 {
             Some(self.tp_price)
@@ -1305,15 +1438,18 @@ impl CondAskState {
             self.stop_at(trigger, t, utxo_daa)
         }
     }
-    /// Least the maker receives for n base units at a leg price: `ceil(n * (legPrice − tip) / scale)` (`None` when the
-    /// leg price is below the tip: the covenant refuses that fill).
+    /// Least the maker receives for n base units at a leg price:
+    /// `ceil(n * (legPrice − tip) / scale)`.
+    ///
+    /// Returns `None` when the leg price is below the tip, because the covenant refuses that fill.
     pub fn proceeds(&self, n: i64, leg_price: i64) -> Option<i64> {
         if leg_price < self.tip || self.tip < 0 {
             return None;
         }
         quote_of(n, leg_price - self.tip, self.scale, Round::Up)
     }
-    /// Repeat IFD: the budget a take-profit of n returns to the entry, `ceil(n * rptPrice / scale)`.
+    /// Repeat IFD: the budget a take-profit of n returns to the entry,
+    /// `ceil(n * rptPrice / scale)`.
     pub fn rpt_budget(&self, n: i64) -> Option<i64> {
         quote_of(n, self.rpt_price, self.scale, Round::Up)
     }
@@ -1325,8 +1461,9 @@ impl CondAskState {
     pub fn next_armed(&self, leg: i64, trigger: bool, utxo_daa: i64) -> i64 {
         cond_next_armed(self.armed, self.band_daa, leg, trigger, utxo_daa)
     }
-    /// Trailing ratchet from side-2 evidence (a resting bid filled) quoting `rp`: every step it justifies,
-    /// capped below `tpPrice` (0 = not justified).
+    /// Trailing ratchet from side-2 evidence (a resting bid filled) quoting `rp`.
+    ///
+    /// Returns every step it justifies, capped below `tpPrice`, and 0 when none is justified.
     pub fn trail_steps(&self, rp: i64) -> i64 {
         if self.trail_step <= 0 {
             return 0;
@@ -1340,6 +1477,7 @@ impl CondAskState {
 }
 
 impl CondBidState {
+    /// True for an exit booked by a repeating entry.
     pub fn is_booked(&self) -> bool {
         self.parent != [0; 32]
     }
@@ -1361,6 +1499,9 @@ impl CondBidState {
     pub fn stop_ceiling(&self) -> i64 {
         self.stop_price.saturating_add(band(self.stop_price, self.slip_bps))
     }
+    /// Leg price at time `t`: leg 0 is the `tpPrice` leg, leg 1 the stop.
+    ///
+    /// Returns `None` where the covenant's stop arithmetic fails.
     pub fn leg_price(&self, leg: i64, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         if leg == 0 {
             Some(self.tp_price)
@@ -1372,10 +1513,13 @@ impl CondBidState {
     pub fn worst(&self) -> i64 {
         self.tp_price.max(if self.stop_price > 0 { self.stop_ceiling() } else { 0 })
     }
-    /// What a keeper's `update` (arm, or trail to `new_stop`) may take of the order UTXO's `value` sompi, the covenant's
-    /// rule: at most `keeperTip`, and never what buying `amountLeft` in one fill at the dearest leg needs (the take-profit
-    /// / limit, or `new_stop` with its whole band: `floor(amountLeft × (worst + tip) / scale)` plus the delivery carrier);
-    /// 0 when the order holds no more than that. `None` where the covenant's arithmetic fails.
+    /// What a keeper's `update` may take of the order UTXO's `value` sompi, the covenant's rule.
+    ///
+    /// The update arms the order, or trails it to `new_stop`. The keeper takes at most `keeperTip`,
+    /// and never what buying `amountLeft` in one fill at the dearest leg needs. That leg is the
+    /// take-profit or limit, or `new_stop` with its whole band, and the need is
+    /// `floor(amountLeft × (worst + tip) / scale)` plus the delivery carrier. The take is 0 when
+    /// the order holds no more than that. Returns `None` where the covenant's arithmetic fails.
     pub fn keeper_take(&self, value: i64, new_stop: i64) -> Option<i64> {
         let mut worst = self.tp_price;
         if (0..=10_000).contains(&self.slip_bps) && new_stop <= MAX_STOP_PRICE {
@@ -1394,8 +1538,9 @@ impl CondBidState {
         }
         quote_of(n, rate_sum(leg_price, self.tip)?, self.scale, Round::Down)
     }
-    /// Repeat IFD: the entry's proceeds for a take-profit of n, `ceil(n * rptPrice / scale)` (the maker's output is at
-    /// least this minus the buy-back spend).
+    /// Repeat IFD: the entry's proceeds for a take-profit of n, `ceil(n * rptPrice / scale)`.
+    ///
+    /// The maker's output is at least this minus the buy-back spend.
     pub fn rpt_proceeds(&self, n: i64) -> Option<i64> {
         quote_of(n, self.rpt_price, self.scale, Round::Up)
     }
@@ -1407,6 +1552,7 @@ impl CondBidState {
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill)
     }
+    /// `armed` of the continuation after a fill.
     pub fn next_armed(&self, leg: i64, trigger: bool, utxo_daa: i64) -> i64 {
         cond_next_armed(self.armed, self.band_daa, leg, trigger, utxo_daa)
     }
@@ -1414,13 +1560,15 @@ impl CondBidState {
     pub fn max_fills(&self) -> i64 {
         ceil_div(self.amount_left, self.min_fill.max(1))
     }
-    /// Escrow for all `amountLeft` at the worst leg, delivered in at most `fills` fills: each fill's spend is rounded
-    /// down, so the spend of the whole amount covers any split.
+    /// Escrow for all `amountLeft` at the worst leg, delivered in at most `fills` fills.
+    ///
+    /// Each fill's spend is rounded down, so the spend of the whole amount covers any split.
     pub fn escrow(&self, fills: i64) -> Option<i64> {
         self.spend(self.amount_left, self.worst())?.checked_add(fills.max(1).checked_mul(self.delivery_carrier)?)
     }
-    /// Trailing ratchet from side-1 evidence (a resting ask filled) quoting `rp`: every step it justifies,
-    /// capped above `tpPrice` and 0 (0 = not justified).
+    /// Trailing ratchet from side-1 evidence (a resting ask filled) quoting `rp`.
+    ///
+    /// Returns every step it justifies, capped above `tpPrice` and 0, and 0 when none is justified.
     pub fn trail_steps(&self, rp: i64) -> i64 {
         if self.trail_step <= 0 {
             return 0;
@@ -1432,9 +1580,11 @@ impl CondBidState {
     }
 }
 
-/// Stop-entry price of an if-done entry at auction time `t`: an auction from `entry_stop` to the
-/// limit `price` over `band_daa` from the arming time.
-/// `None` where the covenant's arithmetic overflows (`t - origin`, `(price - entryStop) * e`).
+/// Stop-entry price of an if-done entry at auction time `t`.
+///
+/// The entry is an auction from `entry_stop` to the limit `price` over `band_daa` from the arming
+/// time. Returns `None` where the covenant's arithmetic overflows (`t - origin`,
+/// `(price - entryStop) * e`).
 fn entry_price(price: i64, entry_stop: i64, band_daa: i64, armed: i64, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
     if entry_stop <= 0 {
         return Some(price);
@@ -1458,9 +1608,11 @@ fn entry_price(price: i64, entry_stop: i64, band_daa: i64, armed: i64, trigger: 
     })
 }
 
-/// `armed` of an entry continued by a merge: an entry with nothing left restarts unarmed (a new cycle waits for a new
-/// trigger); one armed by `update` and not filled yet (`armed = 1`, band auction) records its auction origin, the armed
-/// UTXO's DAA, as a fill does, so the merge does not restart the band.
+/// `armed` of an entry continued by a merge.
+///
+/// An entry with nothing left restarts unarmed, so a new cycle waits for a new trigger. An entry
+/// armed by `update` and not filled yet (`armed = 1`, band auction) records its auction origin,
+/// the DAA of the armed UTXO, as a fill does. The merge then does not restart the band.
 fn entry_merged_armed(amount_left: i64, band_daa: i64, armed: i64, utxo_daa: i64) -> i64 {
     if amount_left == 0 {
         0
@@ -1482,8 +1634,9 @@ fn entry_next_armed(entry_stop: i64, band_daa: i64, armed: i64, utxo_daa: i64) -
     }
 }
 
-/// Encoded repeat fields appended by an entry (`0x20 parent`, `0x08 rptPrice`, [`0x08 rptPre`],
-/// `0x08 rptUntil`), exactly as the covenants splice them.
+/// Encoded repeat fields an entry appends, exactly as the covenants splice them.
+///
+/// The fields are `0x20 parent`, `0x08 rptPrice`, an optional `0x08 rptPre` and `0x08 rptUntil`.
 fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i64) -> Vec<u8> {
     let mut v = vec![0x20];
     v.extend_from_slice(&parent);
@@ -1498,8 +1651,10 @@ fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i6
     v
 }
 
-/// The extension commitment a buy-first entry writes behind the repeat fields of its `KobCondAsk` exit (`0x20 ext`: its
-/// own `extensionCommitment`, the commitment of the custody it delivers; zero for KRON, whose exit has no such field).
+/// The extension commitment a buy-first entry writes behind the repeat fields of its exit.
+///
+/// The span is `0x20 ext`, where `ext` is the entry's own `extensionCommitment`, the commitment of
+/// the custody it delivers. It is zero for KRON, whose exit has no such field.
 fn ext_tail(ext: [u8; 32]) -> Vec<u8> {
     let mut v = vec![0x20];
     v.extend_from_slice(&ext);
@@ -1530,8 +1685,10 @@ impl IfdBidState {
         }
         Ok(x)
     }
-    /// Whether `x` is exactly an exit this entry books with parent `me` (every immutable field; the
-    /// mutable `stopPrice`, `armed` and `amountLeft` aside): what the entry's merge requires.
+    /// Whether `x` is exactly an exit this entry books with parent `me`.
+    ///
+    /// Every immutable field must match, while the mutable `stopPrice`, `armed` and `amountLeft`
+    /// may differ. The entry's merge requires this.
     pub fn books_exit(&self, me: [u8; 32], x: &CondAskState) -> bool {
         let booking = Booking { parent: me, until: x.rpt_until };
         self.exit_for(x.amount_left, Some(booking))
@@ -1542,7 +1699,9 @@ impl IfdBidState {
     pub fn budget_rate(&self) -> Option<i64> {
         rate_sum(self.price, self.tip)
     }
-    /// Entry quote at time `t` (a stop entry's auction; the limit otherwise; `None` where the covenant's arithmetic fails).
+    /// Entry quote at time `t`: a stop entry's auction, or the limit otherwise.
+    ///
+    /// Returns `None` where the covenant's arithmetic fails.
     pub fn price_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         entry_price(self.price, self.entry_stop, self.band_daa, self.armed, trigger, t, utxo_daa)
     }
@@ -1573,9 +1732,11 @@ impl IfdBidState {
     pub fn max_fills(&self) -> i64 {
         ceil_div(self.amount_left, self.min_fill.max(1))
     }
-    /// Escrow: the spend of the whole amount at the limit (each fill's spend is rounded down, so it covers any split),
-    /// one delivery and one exit carrier per possible fill, plus the entry's own carrier when it repeats (it outlives
-    /// its last fill).
+    /// Escrow of the entry.
+    ///
+    /// It is the spend of the whole amount at the limit, one delivery and one exit carrier per
+    /// possible fill, and the entry's own carrier when it repeats, since it outlives its last fill.
+    /// Each fill's spend is rounded down, so the spend of the whole amount covers any split.
     pub fn escrow(&self) -> Option<i64> {
         self.spend(self.amount_left, self.price)?
             .checked_add(self.max_fills().checked_mul(self.delivery_carrier.checked_add(self.exit_carrier)?)?)?
@@ -1588,8 +1749,9 @@ impl IfdAskState {
     pub fn commit_exit(exit: &CondBidState) -> Vec<u8> {
         Self::commit_exit_for(Family::Kcc20, exit)
     }
-    /// The exit prefix a sell-first entry of `fam` commits to: 321 bytes (KCC-20) or 288 bytes (KRON,
-    /// whose exit has no extension commitment).
+    /// The exit prefix a sell-first entry of `fam` commits to.
+    ///
+    /// It is 321 bytes for KCC-20 and 288 bytes for KRON, whose exit has no extension commitment.
     pub fn commit_exit_for(fam: Family, exit: &CondBidState) -> Vec<u8> {
         let n = match fam {
             Family::Kcc20 => IFD_ASK_EXIT_COMMIT,
@@ -1627,8 +1789,10 @@ impl IfdAskState {
         }
         Ok(x)
     }
-    /// Whether `x` is exactly an exit this entry books with parent `me` (every immutable field; the
-    /// mutable `stopPrice`, `armed` and `amountLeft` aside): what the entry's merge requires.
+    /// Whether `x` is exactly an exit this entry books with parent `me`.
+    ///
+    /// Every immutable field must match, while the mutable `stopPrice`, `armed` and `amountLeft`
+    /// may differ. The entry's merge requires this.
     pub fn books_exit(&self, me: [u8; 32], x: &CondBidState) -> bool {
         let booking = Booking { parent: me, until: x.rpt_until };
         self.exit_for(x.amount_left, Some(booking))
@@ -1639,7 +1803,9 @@ impl IfdAskState {
     pub fn custody_amount(&self) -> i64 {
         self.amount_left
     }
-    /// The all-in proceeds rate at the limit, `price − tip` (sompi per whole token): a booked exit's `rptPrice`.
+    /// The all-in proceeds rate at the limit, `price − tip` in sompi per whole token.
+    ///
+    /// It is the `rptPrice` of a booked exit.
     pub fn proceeds_rate(&self) -> i64 {
         self.price - self.tip
     }
@@ -1647,6 +1813,7 @@ impl IfdAskState {
     pub fn price_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         entry_price(self.price, self.entry_stop, self.band_daa, self.armed, trigger, t, utxo_daa)
     }
+    /// `armed` of the continuation after a fill.
     pub fn next_armed(&self, utxo_daa: i64) -> i64 {
         entry_next_armed(self.entry_stop, self.band_daa, self.armed, utxo_daa)
     }
@@ -1654,20 +1821,25 @@ impl IfdAskState {
     pub fn merged_armed(&self, utxo_daa: i64) -> i64 {
         entry_merged_armed(self.amount_left, self.band_daa, self.armed, utxo_daa)
     }
-    /// Least proceeds of n base units at quote `p`: `ceil(n * (p − tip) / scale)` (the covenant requires
-    /// `price >= tip`, so `p >= price >= tip`; `None` otherwise).
+    /// Least proceeds of n base units at quote `p`: `ceil(n * (p − tip) / scale)`.
+    ///
+    /// The covenant requires `price >= tip`, so `p >= price >= tip`. Returns `None` otherwise.
     pub fn proceeds(&self, n: i64, p: i64) -> Option<i64> {
         if self.price < self.tip || p < self.tip || self.tip < 0 {
             return None;
         }
         quote_of(n, p - self.tip, self.scale, Round::Up)
     }
-    /// Prefund of n base units, `ceil(n * prefund / scale)` (moved to the exit on a fill, returned on a merge).
+    /// Prefund of n base units, `ceil(n * prefund / scale)`.
+    ///
+    /// A fill moves it to the exit, and a merge returns it.
     pub fn prefund_of(&self, n: i64) -> Option<i64> {
         quote_of(n, self.prefund, self.scale, Round::Up)
     }
-    /// What a merge returns from an exit that sells out holding `exit_value`: `max(prefund(m), exit_value −
-    /// ceil(m * (price − tip) / scale))` (the covenant's floor over the entry's own value).
+    /// What a merge returns from an exit that sells out holding `exit_value`.
+    ///
+    /// It is `max(prefund(m), exit_value − ceil(m * (price − tip) / scale))`, the covenant's floor
+    /// over the entry's own value.
     pub fn merge_sellout_back(&self, m: i64, exit_value: i64) -> Option<i64> {
         let pre = self.prefund_of(m)?;
         let proceeds = quote_of(m, self.proceeds_rate(), self.scale, Round::Up)?;
@@ -1677,11 +1849,14 @@ impl IfdAskState {
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill)
     }
+    /// Most fills the entry can take (`⌈amountLeft / minFill⌉`).
     pub fn max_fills(&self) -> i64 {
         ceil_div(self.amount_left, self.min_fill.max(1))
     }
-    /// Entry value: its carrier plus the prefund of the whole amount, `max_fills − 1` sompi of rounding (each fill's
-    /// prefund is rounded up, so any split is funded) and one exit carrier per possible fill.
+    /// Entry value: its carrier plus the prefund of the whole amount and its rounding.
+    ///
+    /// The rounding is `max_fills − 1` sompi, since each fill's prefund is rounded up, so any split
+    /// is funded. One exit carrier per possible fill is added.
     pub fn escrow(&self, carrier: i64) -> Option<i64> {
         let fills = self.max_fills();
         carrier
@@ -1693,10 +1868,10 @@ impl IfdAskState {
 
 /// Any order state, tagged by template name (JSON: `{"kind": "KobAsk", "state": {..}}`).
 ///
-/// The KRON kinds carry the same typed states as their KCC-20 counterparts (the KRON adapters have
-/// the same fields; see [`StateCodec`] for the extension commitment) and differ in the template
-/// they encode under, so the variant is what names the family. The pair kinds are one template for both
-/// families: an order's family is the family of its base token A.
+/// The KRON kinds carry the same typed states as their KCC-20 counterparts, since the KRON
+/// adapters have the same fields. See [`StateCodec`] for the extension commitment. They differ in
+/// the template they encode under, so the variant names the family. The pair kinds are one
+/// template for both families, and an order's family is the family of its base token A.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "state")]
 pub enum AnyState {
@@ -1718,9 +1893,11 @@ pub enum AnyState {
 }
 
 impl AnyState {
-    /// The order template of this instance. A KRON kind's build follows from the token program the state pins: the `*KronD0`
-    /// build (maker deliveries of id_type 0) for a program whose holders are id_type 0, the default build otherwise
-    /// ([`TemplateId::for_token_hash`]).
+    /// The order template of this instance.
+    ///
+    /// A KRON kind's build follows from the token program the state pins. A program whose holders
+    /// are id_type 0 takes the `*KronD0` build, whose maker deliveries are id_type 0. Any other
+    /// program takes the default build, see [`TemplateId::for_token_hash`].
     pub fn template_id(&self) -> TemplateId {
         let k = self.kind();
         match self.token_tpl_hash() {
@@ -1748,8 +1925,9 @@ impl AnyState {
             AnyState::KobIfdPair(_) => TemplateId::KobIfdPair,
         }
     }
-    /// Token family of this order (a pair order: the family of its base token A; KCC-20 for an invalid code, which
-    /// [`AnyState::validate`] refuses).
+    /// Token family of this order, for a pair order the family of its base token A.
+    ///
+    /// An invalid family code gives KCC-20, and [`AnyState::validate`] refuses it.
     pub fn family(&self) -> Family {
         match self.pair_tokens() {
             Some(t) => t.a.family_of().unwrap_or(Family::Kcc20),
@@ -1769,8 +1947,9 @@ impl AnyState {
     pub fn is_pair(&self) -> bool {
         self.template_id().is_pair()
     }
-    /// The same state as the kind of `fam` (`KobBid` -> `KobBidKron` and back). A pair order is returned unchanged: the
-    /// families of its tokens are state fields.
+    /// The same state as the kind of `fam` (`KobBid` -> `KobBidKron` and back).
+    ///
+    /// A pair order is returned unchanged, because the families of its tokens are state fields.
     pub fn into_family(self, fam: Family) -> AnyState {
         let kron = fam == Family::Kron;
         match self {
@@ -1819,8 +1998,10 @@ impl AnyState {
             s @ (AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_)) => s,
         }
     }
-    /// Token extension commitment the state carries (`None` for the kinds that do not: a sell-first entry names it in its
-    /// committed exit, [`AnyState::custody_ext`], a pair order per token).
+    /// Token extension commitment the state carries.
+    ///
+    /// Returns `None` for the kinds that carry none. A sell-first entry names it in its committed
+    /// exit, see [`AnyState::custody_ext`], and a pair order names it per token.
     pub fn extension_commitment(&self) -> Option<[u8; 32]> {
         match self {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
@@ -1831,11 +2012,15 @@ impl AnyState {
             _ => None,
         }
     }
-    /// The KCC-20 extension commitment the order's covenant requires of its custody of `token` (`None`: the order holds no
-    /// custody of that token, or the state cannot name one): `extensionCommitment` of a `KobAsk` / `KobCondAsk`, the
-    /// committed exit's of a `KobIfdAsk` (the token its exits buy back, and a merge's new custody), `sExt` / `aExt` /
-    /// `bExt` of the pair orders. Units of the token's covenant id with another commitment are another token: the
-    /// covenant refuses them as its custody. Zero for a KRON token (which has none).
+    /// The KCC-20 extension commitment the order's covenant requires of its custody of `token`.
+    ///
+    /// It is the `extensionCommitment` of a `KobAsk` or `KobCondAsk`, and that of the committed
+    /// exit of a `KobIfdAsk`, the token its exits buy back and a merge's new custody. For the pair
+    /// orders it is `sExt`, `aExt` or `bExt`. Units of the token's covenant id with another
+    /// commitment are another token, and the covenant refuses them as its custody. It is zero for a
+    /// KRON token, which has none.
+    ///
+    /// Returns `None` when the order holds no custody of that token, or the state cannot name one.
     pub fn custody_ext(&self, token: [u8; 32]) -> Option<[u8; 32]> {
         if let Some(t) = self.pair_tokens() {
             return if token == t.a.cov_id {
@@ -1856,10 +2041,13 @@ impl AnyState {
             _ => None,
         }
     }
-    /// Family consistency: a KRON kind carries no extension commitment (the field must be zero, the
-    /// KRON template has no such field), a sell-first KRON entry commits a KRON exit; a pair order has a valid side, valid
-    /// family codes, no extension commitment for a KRON token, two different tokens and (an entry) a committed exit of the
-    /// right width.
+    /// Family consistency of the state.
+    ///
+    /// - A KRON kind carries no extension commitment. The field must be zero, since the KRON
+    ///   template has no such field.
+    /// - A sell-first KRON entry commits a KRON exit.
+    /// - A pair order has a valid side, valid family codes, no extension commitment for a KRON
+    ///   token, two different tokens and, for an entry, a committed exit of the right width.
     pub fn validate(&self) -> Result<(), StateError> {
         if self.family() == Family::Kron && self.extension_commitment().is_some_and(|e| e != [0; 32]) {
             return Err(StateError::Codec(
@@ -1869,7 +2057,8 @@ impl AnyState {
         }
         match self {
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => {
-                // The committed exit is a fixed-width span: any other length makes the state unencodable.
+                // The committed exit is a fixed-width span: any other length makes the state
+                // unencodable.
                 if s.exit_state.len() != IFD_BID_EXIT_COMMIT {
                     return Err(StateError::Codec(
                         "AnyState",
@@ -1880,8 +2069,9 @@ impl AnyState {
                         ),
                     ));
                 }
-                // The merge amounts are computed at each side's own scale and the covenant compares the exit only to the
-                // committed bytes: an exit at another scale than its entry would leak on every merge.
+                // The merge amounts are computed at each side's own scale, and the covenant
+                // compares the exit only to the committed bytes. An exit at another scale than its
+                // entry would leak on every merge.
                 if s.exit()?.scale != s.scale {
                     return Err(StateError::Codec(
                         "AnyState",
@@ -1910,8 +2100,10 @@ impl AnyState {
         }
         Ok(())
     }
-    /// The encoded state, or the reason it cannot be encoded (a hostile / malformed state: wrong-width committed exit,
-    /// KRON extension commitment). Use this on any state that did not come from a builder of this crate.
+    /// The encoded state, or the reason it cannot be encoded.
+    ///
+    /// A hostile or malformed state fails, e.g. a committed exit of the wrong width or a KRON
+    /// extension commitment. Use this on any state that did not come from a builder of this crate.
     pub fn try_encode(&self) -> Result<Vec<u8>, StateError> {
         let id = self.template_id();
         match self {
@@ -1926,11 +2118,17 @@ impl AnyState {
             AnyState::KobIfdPair(s) => s.try_encode_as(id),
         }
     }
-    /// The encoded state; panics on a state [`AnyState::try_encode`] refuses. Every state that passed
-    /// [`AnyState::validate`] (all builder entry points and decoders do) encodes.
+    /// The encoded state. Panics on a state [`AnyState::try_encode`] refuses.
+    ///
+    /// Every state that passed [`AnyState::validate`] encodes, and all builder entry points and
+    /// decoders validate.
     pub fn encode(&self) -> Vec<u8> {
         self.try_encode().unwrap_or_else(|e| panic!("{e}"))
     }
+    /// Decodes the state span of an instance of the order template `id`.
+    ///
+    /// The state must pass [`AnyState::validate`], and `id` must be the build of the token program
+    /// the state pins.
     pub fn decode(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
         let s = match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
@@ -1957,8 +2155,9 @@ impl AnyState {
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
         };
         s.validate()?;
-        // The build of a KRON kind is the token program's (the state span of both builds is the same): an instance of one
-        // build whose state pins a program of the other is not an order KOB recognises (a delivery the maker could not spend).
+        // The build of a KRON kind is the token program's, and both builds have the same state
+        // span. An instance of one build whose state pins a program of the other is not an order
+        // KOB recognises, because it would be a delivery the maker could not spend.
         if s.template_id() != id {
             return Err(StateError::Codec(
                 "AnyState",
@@ -1971,8 +2170,10 @@ impl AnyState {
         }
         Ok(s)
     }
-    /// [`AnyState::decode`] of a state named by its kind (a `KOB1` record's family and kind code), whatever the build: the
-    /// template is then [`AnyState::template_id`] (the build of the token program the state pins).
+    /// [`AnyState::decode`] of a state named by its kind, whatever the build.
+    ///
+    /// A `KOB1` record names the kind by family and kind code. The template is then
+    /// [`AnyState::template_id`], the build of the token program the state pins.
     pub fn decode_kind(kind: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
         match AnyState::decode(kind, bytes) {
             Ok(s) => Ok(s),
@@ -1982,9 +2183,11 @@ impl AnyState {
             },
         }
     }
+    /// Redeem script of this instance under its template.
     pub fn redeem(&self) -> Vec<u8> {
         template(self.template_id()).redeem(&self.encode())
     }
+    /// P2SH script public key of this instance under its template.
     pub fn spk(&self) -> ScriptPublicKey {
         template(self.template_id()).spk(&self.encode())
     }
@@ -2002,8 +2205,10 @@ impl AnyState {
             AnyState::KobIfdPair(s) => s.maker,
         }
     }
-    /// True for the kinds that hold tokens in covenant-id custody (asks, conditional asks, sell-first entries, every pair
-    /// order but an entry with nothing in custody: [`AnyState::custodies`]).
+    /// True for the kinds that hold tokens in covenant-id custody.
+    ///
+    /// These are asks, conditional asks, sell-first entries, and every pair order but an entry with
+    /// nothing in custody, see [`AnyState::custodies`].
     pub fn holds_tokens(&self) -> bool {
         matches!(
             self,
@@ -2017,9 +2222,13 @@ impl AnyState {
                 | AnyState::KobCondPair(_)
         ) || matches!(self, AnyState::KobIfdPair(s) if s.amount_left > 0 && !s.is_buy_first() || s.custody > 0)
     }
-    /// The exact custodies a token-holding order holds, in record order: `(token covenant id, amount)`. A KAS kind: its
-    /// one custody (`amountLeft` of its token); `KobPair` / `KobCondPair`: the custody of S; `KobIfdPair`: buy-first the
-    /// B escrow, sell-first the A custody (`amountLeft`) then the B prefund (each only when non-zero).
+    /// The exact custodies a token-holding order holds, in record order:
+    /// `(token covenant id, amount)`.
+    ///
+    /// - A KAS kind has one custody, `amountLeft` of its token.
+    /// - `KobPair` and `KobCondPair` hold the custody of S.
+    /// - A buy-first `KobIfdPair` holds the B escrow. A sell-first one holds the A custody
+    ///   (`amountLeft`), then the B prefund. Each is listed only when non-zero.
     pub fn custodies(&self) -> Vec<([u8; 32], i64)> {
         match self {
             AnyState::KobPair(s) => vec![(s.s_cov_id, s.custody)],
@@ -2050,7 +2259,9 @@ impl AnyState {
             p => p.pair_tokens().expect("pair kind").a.cov_id,
         }
     }
-    /// Token template hash of an order (every order kind pins one; a pair order: of its base token A).
+    /// Token template hash of an order; every order kind pins one.
+    ///
+    /// For a pair order it is that of its base token A.
     pub fn token_tpl_hash(&self) -> Option<[u8; 32]> {
         Some(match self {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => s.token_tpl_hash,
@@ -2131,16 +2342,18 @@ impl AnyState {
             AnyState::KobBid(_) | AnyState::KobBidKron(_) => return None,
         })
     }
-    /// The exact amount of a token-holding order's first custody (a KAS kind: `amountLeft`; a pair order: the first of
-    /// [`AnyState::custodies`]).
+    /// The exact amount of a token-holding order's first custody.
+    ///
+    /// For a KAS kind it is `amountLeft`, for a pair order the first of [`AnyState::custodies`].
     pub fn custody_amount(&self) -> Option<i64> {
         if self.is_pair() {
             return self.custodies().first().map(|c| c.1);
         }
         self.holds_tokens().then(|| self.amount_left().expect("token-holding kinds have an amount"))
     }
-    /// DAA score from which anyone may refund the order whose UTXO was created at `utxo_daa`
-    /// (soft expiry, 90 days idle, IOC / FOK kill); every order kind has one.
+    /// DAA score from which anyone may refund the order whose UTXO was created at `utxo_daa`.
+    ///
+    /// It covers the soft expiry, 90 days idle and the IOC / FOK kill. Every order kind has one.
     pub fn refund_due(&self, utxo_daa: i64) -> Option<i64> {
         Some(match self {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => refund_due(s.expiry_daa, s.tif, s.active_from, utxo_daa),
@@ -2154,7 +2367,7 @@ impl AnyState {
             AnyState::KobIfdPair(s) => refund_due(s.expiry_daa, TIF_GTC, s.active_from, utxo_daa),
         })
     }
-    /// Keeper tip an arming / trailing update may take (orders with an `update` entry).
+    /// Keeper tip an arming or trailing update may take, for the orders with an `update` entry.
     pub fn keeper_tip(&self) -> Option<i64> {
         match self {
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => Some(s.keeper_tip),
@@ -2166,9 +2379,13 @@ impl AnyState {
             _ => None,
         }
     }
-    /// The numeric gate of a placed order (builders refuse what fails it; an indexer may flag it): the scale is a
-    /// power of ten in `1..=10^9` and, for the amount the order carries (a bid: none, its quantity is its escrow; a bid's
-    /// rates must still fit), the full fill at every rate it carries is worth less than `2^62` ([`check_quote`]).
+    /// The numeric gate of a placed order.
+    ///
+    /// Builders refuse what fails it, and an indexer may flag it.
+    ///
+    /// The scale must be a power of ten in `1..=10^9`. For the amount the order carries, the full
+    /// fill at every rate it carries must be worth less than `2^62` ([`check_quote`]). A bid
+    /// carries no amount, since its quantity is its escrow, but its rates must still fit.
     pub fn check_numbers(&self) -> Result<(), String> {
         match self {
             AnyState::KobPair(s) => return s.check_numbers(),
@@ -2185,7 +2402,7 @@ impl AnyState {
                 q(s.amount_left, s.price.max(s.price_end), "price")?;
             }
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
-                // a bid's amount is its escrow: what the rates must leave room for is the KAS of one fill
+                // A bid's amount is its escrow. The rates must leave room for the KAS of one fill.
                 sum(s.price_max(), s.tip, "pMax + tip")?;
             }
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => {
@@ -2216,11 +2433,12 @@ impl AnyState {
     }
 }
 
-/// Mutable fields of each order template and their bytecode payload windows `[start, end)` (the
-/// 8-byte values the covenants splice into their continuations; `docs/spec/matcher.md` §1.1).
-/// Every other byte of an order's redeem script is fixed for the life of its covenant id. The KRON
-/// bid-side kinds have no extension commitment, so their windows sit 33 bytes earlier. Both builds of a KRON kind have the
-/// same windows.
+/// Mutable fields of each order template and their bytecode payload windows `[start, end)`.
+///
+/// The windows hold the 8-byte values the covenants splice into their continuations, see
+/// `docs/spec/matcher.md` §1.1. Every other byte of an order's redeem script is fixed for the life
+/// of its covenant id. The KRON bid-side kinds have no extension commitment, so their windows sit
+/// 33 bytes earlier. Both builds of a KRON kind have the same windows.
 pub fn mutable_windows(id: TemplateId) -> &'static [(&'static str, usize, usize)] {
     match id.canonical() {
         TemplateId::KobAsk | TemplateId::KobAskKron => &[("amountLeft", 236, 244)],
