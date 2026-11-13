@@ -1201,8 +1201,8 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         crate::pause::is_set_opt(self.cfg.pause_file.as_deref())
     }
 
-    /// Reports a tracker step and resends what a reorg moved back to pending.
-    async fn on_events(&mut self, ev: super::submit::TrackerEvents, rep: &mut StepReport) {
+    /// Reports a tracker step at `daa` and resends what a reorg moved back to pending.
+    async fn on_events(&mut self, ev: super::submit::TrackerEvents, daa: u64, rep: &mut StepReport) {
         rep.accepted = ev.accepted.len();
         rep.finalized = ev.finalized.len();
         rep.rolled_back = ev.rolled_back.len();
@@ -1212,11 +1212,13 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         for id in &ev.rolled_back {
             tracing::warn!(txid = %kob_protocol::json::to_hex(id), "rolled back by a reorg; re-checking");
         }
-        // Resend the rolled-back transactions that are still possible, idempotently. Not while the
-        // kill switch is on, because `--pause-file` means nothing leaves the process.
+        // Resend the rolled-back transactions that are still possible, idempotently. One that would
+        // no longer be valid is retired instead (`Tracker::stale`). Not while the kill switch is on,
+        // because `--pause-file` means nothing leaves the process.
         if !self.cfg.dry_run && !self.paused() {
-            let resend: Vec<Tracked> = ev.rolled_back.iter().filter_map(|id| self.tracker.txs.get(id).cloned()).collect();
-            for t in resend {
+            let margin = self.cfg.clock_skew_max_secs.saturating_add(self.clock_skew.unwrap_or(0).unsigned_abs());
+            let clock = ResendClock { daa, utc: utc_now(), margin_secs: margin };
+            for t in self.tracker.resend_after_reorg(&ev.rolled_back, &clock) {
                 let _ = self.node.submit(t.rpc_tx.clone()).await;
             }
         }
@@ -1227,7 +1229,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         let tracked: Vec<[u8; 32]> = self.tracker.txs.keys().copied().collect();
         if let Some(view) = self.source.acceptance(&tracked) {
             let ev = self.tracker.observe(&view, daa);
-            self.on_events(ev, rep).await;
+            self.on_events(ev, daa, rep).await;
             return Ok(());
         }
         let cursor = match &self.tracker.cursor {
@@ -1241,7 +1243,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
         match self.node.chain_from(&cursor).await {
             Ok(u) => {
                 let ev = self.tracker.apply(&u, daa);
-                self.on_events(ev, rep).await;
+                self.on_events(ev, daa, rep).await;
                 Ok(())
             }
             Err(RpcError::Node(m)) => {
@@ -1628,7 +1630,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             for (id, why) in &report.quarantined {
                 tracing::error!(order = %kob_protocol::json::to_hex(id), %why, "order quarantined: left out of the matcher's book");
                 if why == super::engine::PLANNING_PANICKED || why.starts_with(super::engine::REFUSED_BY_THE_BUILDER) {
-                    self.quarantined_until.insert(*id, daa + QUARANTINE_DAA);
+                    self.quarantined_until.insert(*id, daa.saturating_add(QUARANTINE_DAA));
                 }
                 rep.quarantined += 1;
             }
@@ -1643,7 +1645,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             if !flagged.is_empty() || !report.cleared.is_empty() {
                 for (id, why) in &flagged {
                     tracing::warn!(order = %kob_protocol::json::to_hex(id), %why, "order possibly frozen: left out of the books");
-                    self.frozen_until.insert(*id, daa + FROZEN_RECHECK_DAA);
+                    self.frozen_until.insert(*id, daa.saturating_add(FROZEN_RECHECK_DAA));
                 }
                 let cleared: Vec<CovId> = report.cleared.iter().filter(|c| !flagged.iter().any(|(id, _)| id == *c)).copied().collect();
                 self.source.report_frozen(daa, &flagged, &cleared);

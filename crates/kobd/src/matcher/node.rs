@@ -459,7 +459,12 @@ pub fn parse_chain_update(p: &Value) -> Result<ChainUpdate, RpcError> {
                 return Err(RpcError::Decode(format!("chain block {h} carries header {hh}")));
             }
         }
-        let daa_score = header.get("daaScore").and_then(Value::as_u64).unwrap_or(0);
+        // A block without its DAA score is refused, as the Borsh path does (`rpc::borsh`). A score of
+        // 0 would make every transaction it accepts final at once.
+        let daa_score = header
+            .get("daaScore")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| RpcError::Decode(format!("chain block {h} without DAA score")))?;
         let accepted = b
             .get("acceptedTransactions")
             .and_then(Value::as_array)
@@ -953,5 +958,13 @@ mod tests {
         assert_eq!(u.added[1].daa_score, 11);
         let bad = json!({"addedChainBlockHashes": ["02"], "chainBlockAcceptedTransactions": []});
         assert!(parse_chain_update(&bad).is_err());
+        // a chain block without its DAA score is refused, not taken as DAA 0
+        for header in [json!({"hash": "02"}), Value::Null] {
+            let p = json!({
+                "addedChainBlockHashes": ["02"],
+                "chainBlockAcceptedTransactions": [{"chainBlockHeader": header, "acceptedTransactions": []}]
+            });
+            assert!(matches!(parse_chain_update(&p), Err(RpcError::Decode(m)) if m.contains("without DAA score")));
+        }
     }
 }

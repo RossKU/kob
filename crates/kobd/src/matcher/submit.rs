@@ -563,7 +563,7 @@ impl Tracker {
             let e = self.backoff.entry(*id).or_insert((0, 0));
             e.1 = e.1.saturating_add(1);
             let d = self.cfg.backoff_base.saturating_mul(1u64 << (e.1 - 1).min(16)).min(self.cfg.backoff_max);
-            e.0 = daa + d;
+            e.0 = daa.saturating_add(d);
         }
     }
 
@@ -907,7 +907,7 @@ impl Tracker {
         let done: Vec<[u8; 32]> = self
             .txs
             .iter()
-            .filter(|(_, t)| t.accepted.as_ref().is_some_and(|(_, d)| daa >= d + self.cfg.final_depth))
+            .filter(|(_, t)| t.accepted.as_ref().is_some_and(|(_, d)| daa >= d.saturating_add(self.cfg.final_depth)))
             .map(|(k, _)| *k)
             .collect();
         for k in done {
@@ -918,6 +918,24 @@ impl Tracker {
             ev.finalized.push(t);
         }
         ev
+    }
+
+    /// The transactions of `rolled_back` (a reorg moved them back to pending) to send again.
+    ///
+    /// A retired one is no longer sent. One that would no longer be valid ([`Tracker::stale`]: past
+    /// a day order's deadline, an order's soft expiry or a sale's freshness) is retired, not sent,
+    /// since the planning gates saw it only when it was planned.
+    pub fn resend_after_reorg(&mut self, rolled_back: &[[u8; 32]], clock: &ResendClock) -> Vec<Tracked> {
+        let mut out = vec![];
+        for id in rolled_back {
+            let Some(t) = self.txs.get(id).filter(|t| t.retired.is_none()) else { continue };
+            if let Some(why) = self.stale(t, clock) {
+                self.retire(id, &why, clock.daa);
+                continue;
+            }
+            out.push(t.clone());
+        }
+        out
     }
 
     /// Transactions rolled back by a reorg that are still pending: resend them (idempotent). A
@@ -977,6 +995,44 @@ mod tests {
             }
             assert!(refusals <= 4, "order {bad}: {refusals} refusals");
         }
+    }
+
+    /// Node-supplied DAA scores near the top of the range neither panic nor wrap: a backoff and the final depth saturate.
+    #[test]
+    fn daa_scores_near_the_top_saturate() {
+        let mut tr = Tracker::new(TrackerConfig::default());
+        let ids: BTreeSet<CovId> = [[1u8; 32]].into_iter().collect();
+        tr.back_off(&ids, u64::MAX - 1);
+        assert_eq!(tr.backoff[&[1u8; 32]].0, u64::MAX);
+        let mut t = tracked(2, 10);
+        t.accepted = Some(("b".into(), u64::MAX - 5));
+        tr.txs.insert(t.txid, t);
+        let ev = tr.settle(u64::MAX - 1, TrackerEvents::default());
+        assert!(ev.finalized.is_empty(), "accepted near the top: never final by wrapping");
+        assert_eq!(tr.txs.len(), 1);
+    }
+
+    /// A reorg resend is checked like any other resend: a transaction past an order's soft expiry or a day order's
+    /// deadline is retired, not sent again, and a retired one is not sent.
+    #[test]
+    fn a_reorg_resend_skips_what_is_no_longer_valid() {
+        let mut tr = Tracker::new(TrackerConfig::default());
+        let mut expired = tracked(1, 10);
+        expired.resend_until = Some(50);
+        let mut late = tracked(2, 10);
+        late.deadline = Some(1_000);
+        let fine = tracked(3, 10);
+        let mut gone = tracked(4, 10);
+        gone.retired = Some(500);
+        for t in [expired, late, fine, gone] {
+            tr.txs.insert(t.txid, t);
+        }
+        let clock = ResendClock { daa: 60, utc: 990, margin_secs: 15 };
+        let ids: Vec<[u8; 32]> = (1u8..=4).map(|n| [n; 32]).collect();
+        let resend = tr.resend_after_reorg(&ids, &clock);
+        assert_eq!(resend.iter().map(|t| t.txid).collect::<Vec<_>>(), vec![[3u8; 32]]);
+        assert!(tr.txs[&[1u8; 32]].retired.is_some() && tr.txs[&[2u8; 32]].retired.is_some(), "retired, inputs still reserved");
+        assert_eq!(tr.resend_dropped_total, 2);
     }
 
     fn tracked(n: u8, daa: u64) -> Tracked {
