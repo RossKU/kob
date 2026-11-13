@@ -26,8 +26,8 @@ fn retryable(r: &SettlementResponse) -> bool {
     r.extensions.as_ref().and_then(|e| e["kaspa"]["retryable"].as_bool()).unwrap_or(false)
 }
 
-/// Runs `f` on another thread `ms` after the next `submit` reaches the chain (so the action is ordered
-/// after the broadcast, not against the wall clock).
+/// Runs `f` on another thread `ms` after the next `submit` reaches the chain, so the action is
+/// ordered after the broadcast, not against the wall clock.
 fn after_submit(chain: &Arc<MockChain>, ms: u64, f: impl FnOnce(&MockChain) + Send + 'static) -> thread::JoinHandle<()> {
     let c = chain.clone();
     let base = c.submit_count();
@@ -50,7 +50,7 @@ fn txid_hex(tx: &Transaction) -> String {
     hex(&tx.id().as_bytes())
 }
 
-// ------------------------------------------------------------------------------------------ happy path
+// -------------------------------------------------------------------------------------- happy path
 
 #[test]
 fn kas_payment_settles_at_accepted_finality() {
@@ -89,13 +89,14 @@ fn identical_retry_after_success_returns_the_cached_response() {
     miner.join().unwrap();
     assert!(first.success);
     let calls = f.verifier.calls.load(Ordering::SeqCst);
-    // the input is spent by now: a re-verification would fail, the cached outcome does not
+    // The input is spent by now: a re-verification would fail, the cached outcome does not.
     let again = f.fac.settle("shop", &req);
     assert!(is_repeat_of(&again, &first), "{again:?}");
     assert_eq!(f.chain.submit_count(), 1, "never broadcast twice");
     assert_eq!(f.verifier.calls.load(Ordering::SeqCst), calls, "not re-verified");
-    // the same payment identifier and request through another transaction: not this payment, refused (the first
-    // settlement is never the answer for it), nothing broadcast, nothing recorded
+    // The same payment identifier and request through another transaction is not this payment.
+    // It is refused (the first settlement is never the answer for it), nothing is broadcast and
+    // nothing is recorded.
     let other_input = f.fund(500_000_000);
     let (req2, tx2) = f.payment(&[other_input], 100_000_000, ID1, 7);
     let other = f.fac.settle("shop", &req2);
@@ -104,10 +105,10 @@ fn identical_retry_after_success_returns_the_cached_response() {
     assert!(other.transaction.is_empty());
     assert_eq!(f.chain.submit_count(), 1);
     assert!(f.ledger.get(&txid_hex(&tx2)).is_none());
-    // /verify says the same
+    // /verify says the same.
     let v = f.fac.verify(&req2);
     assert!(!v.is_valid);
-    // the first transaction is still answered with its own outcome
+    // The first transaction is still answered with its own outcome.
     assert!(is_repeat_of(&f.fac.settle("shop", &req), &first));
 }
 
@@ -130,7 +131,8 @@ fn concurrent_identical_settles_broadcast_once() {
     assert_eq!(f.chain.submit_count(), 1);
 }
 
-/// `req` with another payment identifier (`None`: without the extension) and an authorization that signs nothing.
+/// `req` with another payment identifier and an authorization that signs nothing.
+/// `None` removes the extension.
 fn under_another_id(req: &kob_x402::wire::FacilitatorRequest, id: Option<&str>) -> kob_x402::wire::FacilitatorRequest {
     let mut r = req.clone();
     r.payment_payload.extensions =
@@ -149,17 +151,18 @@ fn a_settled_transaction_is_answered_only_under_its_payment_identifier() {
     let first = f.fac.settle("shop", &req);
     miner.join().unwrap();
     assert!(first.success, "{first:?}");
-    // the transaction as anyone reads it from the chain, under another identifier: not this payment
+    // The transaction as anyone reads it from the chain, under another identifier: not this
+    // payment.
     let other = f.fac.settle("shop", &under_another_id(&req, Some("another-id-000000000001")));
     assert!(!other.success, "{other:?}");
     assert_eq!(diag(&other), "kaspa_payment_identifier_conflict");
     assert!(other.transaction.is_empty());
     assert!(f.ledger.get_by_payment_id("another-id-000000000001").is_none(), "the other identifier is not bound");
-    // without any identifier
+    // Without any identifier.
     let none = f.fac.settle("shop", &under_another_id(&req, None));
     assert!(!none.success, "{none:?}");
     assert_eq!(f.chain.submit_count(), 1);
-    // the payer's own retry is answered, marked as a repeat
+    // The payer's own retry is answered, marked as a repeat.
     assert!(is_repeat_of(&f.fac.settle("shop", &req), &first));
 }
 
@@ -170,12 +173,12 @@ fn a_settlement_in_flight_is_resumed_only_under_its_payment_identifier() {
     let input = f.fund(500_000_000);
     let (req, tx) = f.payment(&[input], 100_000_000, ID1, 7);
     assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
-    // in the mempool: visible to anyone, still not answered under another identifier
+    // In the mempool: visible to anyone, still not answered under another identifier.
     f.chain.mine(0);
     let other = f.fac.settle("shop", &under_another_id(&req, Some(ID2)));
     assert_eq!(diag(&other), "kaspa_payment_identifier_conflict");
     assert!(f.ledger.get_by_payment_id(ID2).is_none());
-    // the payer's retry gets the first success answer (not marked)
+    // The payer's retry gets the first success answer (not marked).
     let own = f.fac.settle("shop", &req);
     assert!(own.success, "{own:?}");
     assert_eq!(own.transaction, txid_hex(&tx));
@@ -211,13 +214,13 @@ fn a_settlement_finalized_by_reconcile_is_answered_once_as_new() {
     assert_eq!(diag(&f.fac.settle("shop", &req)), "settlement_pending");
     f.chain.mine(0);
     assert_eq!(f.fac.reconcile().finalized, 1);
-    // the reconcile answered nobody: the payer's retry is the first answer
+    // The reconcile answered nobody: the payer's retry is the first answer.
     let r = f.fac.settle("shop", &req);
     assert!(r.success && r.extensions.as_ref().unwrap().pointer("/kob/replayed").is_none(), "{r:?}");
     assert!(is_repeat_of(&f.fac.settle("shop", &req), &r));
 }
 
-// --------------------------------------------------------------------------------------------- finality
+// ---------------------------------------------------------------------------------------- finality
 
 #[test]
 fn mempool_is_never_sufficient_and_a_retry_observes_without_reverifying() {
@@ -235,13 +238,13 @@ fn mempool_is_never_sufficient_and_a_retry_observes_without_reverifying() {
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast);
     let calls = f.verifier.calls.load(Ordering::SeqCst);
 
-    // still pending on an immediate retry, without broadcasting again or re-verifying
+    // Still pending on an immediate retry, without broadcasting again or re-verifying.
     let r2 = f.fac.settle("shop", &req);
     assert_eq!(diag(&r2), "settlement_pending");
     assert_eq!(f.chain.submit_count(), 1);
     assert_eq!(f.verifier.calls.load(Ordering::SeqCst), calls);
 
-    // mined: the retry succeeds although the inputs are spent now
+    // Mined: the retry succeeds although the inputs are spent now.
     f.chain.mine(0);
     let r3 = f.fac.settle("shop", &req);
     assert!(r3.success, "{r3:?}");
@@ -257,19 +260,19 @@ fn confirmed_finality_needs_the_configured_depth() {
     f.fac.set_settle_wait(Duration::from_millis(60));
     let input = f.fund(500_000_000);
     let (req, tx) = f.payment_with(&[input], 100_000_000, ID1, 7, Finality::Confirmed);
-    // accepted (in the virtual UTXO set) but not deep enough
+    // Accepted (in the virtual UTXO set) but not deep enough.
     let miner = mine_later(&f.chain, 10, 0);
     let r = f.fac.settle("shop", &req);
     miner.join().unwrap();
     assert!(!r.success);
     assert_eq!(diag(&r), "settlement_pending");
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast);
-    // 99 DAA deep: still not confirmed
+    // 99 DAA deep: still not confirmed.
     let block_daa = f.chain.utxo(&Outpoint::new(tx.id().as_bytes(), 0)).unwrap().block_daa_score;
     let now = f.chain.daa();
     f.chain.advance_daa(block_daa + 99 - now);
     assert!(!f.fac.settle("shop", &req).success);
-    // exactly `confirmations_daa` deep
+    // Exactly `confirmations_daa` deep.
     f.chain.advance_daa(1);
     let r = f.fac.settle("shop", &req);
     assert!(r.success, "{r:?}");
@@ -289,7 +292,7 @@ fn accepted_requirement_is_met_at_once_when_the_tx_is_in_the_virtual_utxo_set() 
     assert!(t.elapsed() < Duration::from_secs(3), "returns as soon as the output is accepted, not after the settle wait");
 }
 
-// ---------------------------------------------------------------------------------------------- verify
+// ------------------------------------------------------------------------------------------ verify
 
 #[test]
 fn verify_is_read_only() {
@@ -308,7 +311,7 @@ fn request_hash_is_mandatory_and_never_inferred() {
     let f = Fixture::new();
     let input = f.fund(500_000_000);
     let (mut req, _) = f.payment(&[input], 100_000_000, ID1, 7);
-    // absent
+    // Absent.
     let good = req.request_hash.take().unwrap();
     let v = f.fac.verify(&req);
     assert!(!v.is_valid);
@@ -316,10 +319,10 @@ fn request_hash_is_mandatory_and_never_inferred() {
     let s = f.fac.settle("shop", &req);
     assert!(!s.success);
     assert_eq!(s.error_reason.as_deref(), Some("invalid_payload"));
-    // malformed
+    // Malformed.
     req.request_hash = Some("nothex".into());
     assert!(!f.fac.verify(&req).is_valid);
-    // differs from the payload's hash
+    // Differs from the payload's hash.
     req.request_hash = Some(hex(&[8; 32]));
     let v = f.fac.verify(&req);
     assert!(!v.is_valid);
@@ -339,7 +342,7 @@ fn wrong_version_and_tampered_offer_are_rejected_without_state() {
     req.x402_version = 1;
     assert_eq!(f.fac.verify(&req).invalid_reason.as_deref(), Some("invalid_x402_version"));
     req.x402_version = 2;
-    // the payer changed the price: accepted differs from the merchant's offer
+    // The payer changed the price: accepted differs from the merchant's offer.
     req.payment_requirements.amount = "1".into();
     let s = f.fac.settle("shop", &req);
     assert!(!s.success);
@@ -356,7 +359,7 @@ fn verify_reports_replay_evidence_without_writing() {
     let miner = mine_later(&f.chain, 10, 0);
     assert!(f.fac.settle("shop", &req).success);
     miner.join().unwrap();
-    // another payment reusing the payment identifier with another request hash
+    // Another payment reusing the payment identifier with another request hash.
     let input2 = f.fund(500_000_000);
     let (req2, _) = f.payment(&[input2], 100_000_000, ID1, 9);
     let v = f.fac.verify(&req2);
@@ -365,7 +368,7 @@ fn verify_reports_replay_evidence_without_writing() {
     assert_eq!(f.ledger.len(), 1);
 }
 
-// ----------------------------------------------------------------------------------------- replay rules
+// ------------------------------------------------------------------------------------ replay rules
 
 #[test]
 fn payment_identifier_bound_to_the_request() {
@@ -400,7 +403,8 @@ fn an_outpoint_is_consumed_at_most_once() {
     assert!(!s2.success);
     assert_eq!(s2.error_reason.as_deref(), Some("invalid_transaction_state"));
     assert_eq!(diag(&s2), "replay");
-    // the first one was submitted once and re-submitted `submit_retries` times while the node was down
+    // The first one was submitted once and re-submitted `submit_retries` times while the node was
+    // down.
     assert_eq!(f.chain.submit_count(), 1 + u64::from(f.fac.config.submit_retries), "the conflicting spend was never broadcast");
     assert!(f.ledger.get(&txid_hex(&tx2)).is_none());
 }
@@ -413,11 +417,11 @@ fn same_transaction_for_another_request_or_merchant_conflicts() {
     let miner = mine_later(&f.chain, 10, 0);
     assert!(f.fac.settle("shop", &req).success);
     miner.join().unwrap();
-    // same transaction, another merchant asking
+    // Same transaction, another merchant asking.
     let s = f.fac.settle("other-shop", &req);
     assert!(!s.success);
     assert_eq!(diag(&s), "replay");
-    // same transaction with another request hash
+    // Same transaction with another request hash.
     let mut other = req.clone();
     other.request_hash = Some(hex(&[9; 32]));
     other.payment_payload.payload.request_hash = hex(&[9; 32]);
@@ -427,14 +431,14 @@ fn same_transaction_for_another_request_or_merchant_conflicts() {
     assert_eq!(f.chain.submit_count(), 1);
 }
 
-// ------------------------------------------------------------------------------------------------ expiry
+// ------------------------------------------------------------------------------------------ expiry
 
 #[test]
 fn expiry_is_rechecked_after_verification_and_before_any_state() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, _) = f.payment(&[a], 100_000_000, ID1, 7);
-    // verification "takes" 61 s: the authorization lapses during the awaited work
+    // Verification "takes" 61 s: the authorization lapses during the awaited work.
     *f.verifier.advance_clock.lock().unwrap() = Some((f.clock.clone(), 61_000));
     let s = f.fac.settle("shop", &req);
     assert!(!s.success);
@@ -471,7 +475,7 @@ fn an_expired_retry_still_resumes_an_accepted_attempt() {
     assert!(is_repeat_of(&f.fac.settle("shop", &req), &first), "expiry does not invalidate recovery of an accepted attempt");
 }
 
-// -------------------------------------------------------------------------------------- node outcomes
+// ----------------------------------------------------------------------------------- node outcomes
 
 #[test]
 fn node_outage_at_submit_is_ambiguous_and_recovers_on_retry() {
@@ -487,7 +491,7 @@ fn node_outage_at_submit_is_ambiguous_and_recovers_on_retry() {
     let e = f.ledger.get(&txid_hex(&tx)).unwrap();
     assert_eq!(e.state, State::Ambiguous, "the outcome is unknown: the evidence stays consumed");
     assert!(f.ledger.is_consumed(&Outpoint::new(tx.inputs[0].previous_outpoint.transaction_id.as_bytes(), 0)));
-    // node back: the identical request re-verifies and resubmits the same transaction
+    // Node back: the identical request re-verifies and resubmits the same transaction.
     f.chain.set_submit_failure(None);
     let miner = mine_later(&f.chain, 20, 0);
     let s = f.fac.settle("shop", &req);
@@ -497,8 +501,9 @@ fn node_outage_at_submit_is_ambiguous_and_recovers_on_retry() {
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
 }
 
-/// C5 X-9: an ambiguous payment the node still does not know after `ambiguous_grace` (not in the mempool, its merchant
-/// output not on chain) is failed and its outpoints released; before that it stays ambiguous (the evidence consumed).
+/// An ambiguous payment the node still does not know after `ambiguous_grace` is failed and its
+/// outpoints are released. It is not in the mempool and its merchant output is not on chain.
+/// Before the grace it stays ambiguous and its evidence stays consumed.
 #[test]
 fn an_ambiguous_payment_unknown_to_the_node_is_released_after_the_grace() {
     let f = Fixture::new();
@@ -510,13 +515,13 @@ fn an_ambiguous_payment_unknown_to_the_node_is_released_after_the_grace() {
     f.chain.set_submit_failure(None);
     let input = Outpoint::new(tx.inputs[0].previous_outpoint.transaction_id.as_bytes(), 0);
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
-    // within the grace (an hour by default): still ambiguous, the evidence stays consumed
+    // Within the grace (an hour by default): still ambiguous, the evidence stays consumed.
     f.clock.set(START_MS + 30 * 60_000);
     let rep = f.fac.reconcile();
     assert_eq!(rep.released_ambiguous, 0);
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
     assert!(f.ledger.is_consumed(&input));
-    // past it: failed, released
+    // Past it: failed, released.
     f.clock.set(START_MS + 61 * 60_000);
     let rep = f.fac.reconcile();
     assert_eq!(rep.released_ambiguous, 1);
@@ -547,7 +552,7 @@ fn node_going_away_while_observing_keeps_the_broadcast() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
-    // submit works, then every lookup fails
+    // Submit works, then every lookup fails.
     struct DieAfterSubmit(Arc<MockChain>);
     impl ChainView for DieAfterSubmit {
         fn utxos(&self, w: &[(Outpoint, ScriptPublicKey)]) -> Result<Vec<Option<ChainUtxo>>, ChainError> {
@@ -600,7 +605,7 @@ fn definitive_rejections_release_the_evidence() {
         assert!(!retryable(&s));
         assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed);
         assert!(!f.ledger.is_consumed(&Outpoint::new(tx.inputs[0].previous_outpoint.transaction_id.as_bytes(), 0)));
-        // released: the same payment can be attempted again once the node accepts it
+        // Released: the same payment can be attempted again once the node accepts it.
         f.chain.set_submit_failure(None);
         let miner = mine_later(&f.chain, 10, 0);
         let s = f.fac.settle("shop", &req);
@@ -614,7 +619,7 @@ fn already_known_by_the_node_is_benign() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
-    // the payer broadcast it themselves
+    // The payer broadcast it themselves.
     f.chain.submit(&tx).unwrap();
     let miner = mine_later(&f.chain, 10, 0);
     let s = f.fac.settle("shop", &req);
@@ -622,7 +627,7 @@ fn already_known_by_the_node_is_benign() {
     assert!(s.success, "{s:?}");
 }
 
-// --------------------------------------------------------------------------------------- crash recovery
+// ---------------------------------------------------------------------------------- crash recovery
 
 /// A chain view that "crashes" (panics) around the submit call.
 struct CrashChain {
@@ -672,7 +677,7 @@ fn crash_scenario(
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
     let fac = f.fac.clone();
     let r = req.clone();
-    // the "process" dies mid-settle
+    // The "process" dies mid-settle.
     assert!(thread::spawn(move || fac.settle("shop", &r)).join().is_err());
     (dir, path, chain, clock, req, tx)
 }
@@ -680,17 +685,17 @@ fn crash_scenario(
 #[test]
 fn crash_between_claim_and_broadcast_reconciles_instead_of_double_broadcasting() {
     let (_dir, path, chain, clock, req, tx) = crash_scenario(1);
-    // restart: a new process opens the same ledger
+    // Restart: a new process opens the same ledger.
     let ledger = Arc::new(Ledger::open(&path).unwrap());
     let e = ledger.get(&txid_hex(&tx)).expect("the claim was durable");
     assert_eq!(e.state, State::Pending);
     let f = Fixture::with_ledger(ledger.clone(), chain.clone(), clock);
-    // the evidence is still consumed: a different payment of the same input is refused
+    // The evidence is still consumed: a different payment of the same input is refused.
     let rep = f.fac.reconcile();
     assert_eq!(rep.unseen_pending, 1, "never reached the node: reported, kept pending");
     assert_eq!(ledger.get(&txid_hex(&tx)).unwrap().state, State::Pending);
     assert_eq!(chain.submit_count(), 0);
-    // the identical retry resumes: verified again, submitted once, observed
+    // The identical retry resumes: verified again, submitted once, observed.
     let miner = mine_later(&chain, 20, 0);
     let s = f.fac.settle("shop", &req);
     miner.join().unwrap();
@@ -701,7 +706,8 @@ fn crash_between_claim_and_broadcast_reconciles_instead_of_double_broadcasting()
 
 #[test]
 fn a_pending_entry_the_chain_never_saw_expires_after_the_grace_and_frees_its_outpoints() {
-    // nothing else resolves a claim whose transaction never reached the node and whose payer never retries
+    // Nothing else resolves a claim whose transaction never reached the node and whose payer never
+    // retries.
     let (_dir, path, chain, clock, req, tx) = crash_scenario(1);
     let ledger = Arc::new(Ledger::open(&path).unwrap());
     let f = Fixture::with_ledger(ledger.clone(), chain.clone(), clock.clone());
@@ -727,11 +733,12 @@ fn crash_after_the_node_took_the_transaction_never_rebroadcasts() {
     let ledger = Arc::new(Ledger::open(&path).unwrap());
     assert_eq!(ledger.get(&txid_hex(&tx)).unwrap().state, State::Pending, "the crash lost the broadcast record");
     let f = Fixture::with_ledger(ledger.clone(), chain.clone(), clock);
-    // reconcile finds it in the mempool
+    // Reconcile finds it in the mempool.
     let rep = f.fac.reconcile();
     assert_eq!(rep.seen, 1);
     assert_eq!(ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast);
-    // mined while the service was down: the retry finishes it without a second broadcast or re-verification
+    // Mined while the service was down: the retry finishes it without a second broadcast or
+    // re-verification.
     chain.mine(0);
     let s = f.fac.settle("shop", &req);
     assert!(s.success, "{s:?}");
@@ -751,7 +758,7 @@ fn crash_recovery_without_a_reconcile_pass_uses_the_ledger_on_retry() {
     assert_eq!(chain.submit_count(), 1);
 }
 
-// ------------------------------------------------------------------------------------------------ reorg
+// ------------------------------------------------------------------------------------------- reorg
 
 #[test]
 fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence() {
@@ -763,11 +770,11 @@ fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence()
     assert!(f.fac.settle("shop", &req).success);
     miner.join().unwrap();
     let out = Outpoint::new(tx.id().as_bytes(), 0);
-    // healthy: nothing to do
+    // Healthy: nothing to do.
     let rep = f.fac.reconcile();
     assert_eq!((rep.checked, rep.reorged), (1, 0));
-    // a reorg drops the block: the transaction's outputs are gone, the payer's input is unspent again and the transaction is not
-    // in the mempool
+    // A reorg drops the block: the transaction's outputs are gone, the payer's input is unspent
+    // again and the transaction is not in the mempool.
     f.chain.spend_externally(&out);
     f.chain.spend_externally(&Outpoint::new(tx.id().as_bytes(), 1));
     f.chain.insert_utxo(a, funding);
@@ -778,15 +785,16 @@ fn reconcile_marks_a_vanished_accepted_output_ambiguous_and_keeps_the_evidence()
     assert!(e.reason.unwrap().contains("vanished"));
     assert!(f.ledger.is_consumed(&Outpoint::new(tx.inputs[0].previous_outpoint.transaction_id.as_bytes(), 0)), "never reusable");
     assert_eq!(f.fac.metrics.reorgs_detected.load(Ordering::Relaxed), 1);
-    // and never released, however long it stays so
+    // And never released, however long it stays so.
     f.clock.set(START_MS + 10 * 3_600_000);
     let rep = f.fac.reconcile();
     assert_eq!(rep.released_ambiguous, 0);
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
 }
 
-/// Without an acceptance tracker (the standalone facilitator, or `run` after a restart) the merchant spending its paid output
-/// looks like a vanished output. The payment's own inputs are still spent, so it is no reorg: the entry stays accepted.
+/// Without an acceptance tracker (the standalone facilitator, or `run` after a restart), the
+/// merchant spending its paid output looks like a vanished output. The payment's own inputs are
+/// still spent, so it is no reorg: the entry stays accepted.
 #[test]
 fn a_merchant_spending_its_paid_output_is_not_a_reorg() {
     let f = Fixture::new();
@@ -807,8 +815,8 @@ fn a_merchant_spending_its_paid_output_is_not_a_reorg() {
     assert!(f.ledger.is_consumed(&a));
 }
 
-/// An invoice is paid only by a payment broadcast before it expires: one admitted before the expiry whose verification ends after it
-/// is not broadcast.
+/// An invoice is paid only by a payment broadcast before it expires. One admitted before the
+/// expiry whose verification ends after it is not broadcast.
 #[test]
 fn an_invoice_that_expires_during_the_settle_is_not_paid() {
     let fx = Fixture::with_invoices();
@@ -819,7 +827,8 @@ fn an_invoice_that_expires_during_the_settle_is_not_paid() {
     let a = fx.fund(500_000_000);
     let (tx, entries) = build_kas_payment(&fx.chain, PAYER_KEY, &[a], &p2pk_spk(&pubkey(MERCHANT_KEY)), 100_000_000);
     let req = request_for(&tx, &entries, &reqs, rh, "payment-id-invoice-0003");
-    // the payer's authorization outlives the invoice; the clock passes the invoice's expiry while the payment is verified
+    // The payer's authorization outlives the invoice. The clock passes the invoice's expiry while
+    // the payment is verified.
     fx.verifier.expires_at_ms.store(START_MS + 600_000, Ordering::SeqCst);
     *fx.verifier.advance_clock.lock().unwrap() = Some((fx.clock.clone(), 61_000));
     let r = fx.fac.pay_invoice(&id, req.payment_payload);
@@ -850,7 +859,7 @@ fn a_paid_invoice_stays_paid_when_the_merchant_spends_the_payment() {
     fx.clock.set(START_MS + 61 * 60_000);
     fx.fac.reconcile();
     assert_eq!(fx.fac.invoice_status(&id).unwrap().status, kob_x402::invoice::InvoiceState::Paid);
-    // a second, independent payment is refused before broadcast
+    // A second, independent payment is refused before broadcast.
     let b = fx.fund(500_000_000);
     let (tx2, entries2) = build_kas_payment(&fx.chain, PAYER_KEY, &[b], &p2pk_spk(&pubkey(MERCHANT_KEY)), 100_000_000);
     let mut second = request_for(&tx2, &entries2, &reqs, rh, "payment-id-invoice-0002");
@@ -924,19 +933,20 @@ fn reconcile_finalizes_broadcast_entries_and_a_lost_broadcast_is_resubmitted_on_
     let s = f.fac.settle("shop", &req);
     assert_eq!(diag(&s), "settlement_pending");
     f.fac.set_settle_wait(Duration::from_secs(5));
-    // the node restarts and forgets its mempool: the ledger still says broadcast
+    // The node restarts and forgets its mempool: the ledger still says broadcast.
     f.chain.evict_mempool();
     let rep = f.fac.reconcile();
     assert_eq!(rep.finalized, 0);
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast);
-    // the identical retry notices the chain does not know it any more and resubmits the same transaction
+    // The identical retry notices the chain does not know it any more and resubmits the same
+    // transaction.
     let miner = mine_later(&f.chain, 20, 0);
     let s = f.fac.settle("shop", &req);
     miner.join().unwrap();
     assert!(s.success, "{s:?}");
     assert_eq!(f.chain.submit_count(), 2);
 
-    // and an entry that got mined while nobody was watching is finalized by reconcile
+    // An entry that got mined while nobody was watching is finalized by reconcile.
     let b = f.fund(500_000_000);
     let (req2, tx2) = f.payment(&[b], 110_000_000, ID2, 9);
     f.fac.set_settle_wait(Duration::from_millis(60));
@@ -950,7 +960,7 @@ fn reconcile_finalizes_broadcast_entries_and_a_lost_broadcast_is_resubmitted_on_
     assert_eq!(f.chain.submit_count(), 3);
 }
 
-// -------------------------------------------------------------------------------------- swap-and-pay
+// ------------------------------------------------------------------------------------ swap-and-pay
 
 #[test]
 fn order_conflict_when_the_node_reports_a_conflict_on_an_order_payment() {
@@ -967,7 +977,7 @@ fn order_conflict_when_the_node_reports_a_conflict_on_an_order_payment() {
     assert!(retryable(&s), "the payer re-quotes and re-signs");
     let details = &s.extensions.as_ref().unwrap()["kaspa"]["details"];
     assert_eq!(details["orders"][0]["txid"], hex(&order.txid));
-    // the payer's inputs are released
+    // The payer's inputs are released.
     let e = f.ledger.get(&txid_hex(&tx)).unwrap();
     assert_eq!(e.state, State::Failed);
     assert!(!f.ledger.is_consumed(&order));
@@ -982,7 +992,7 @@ fn order_conflict_when_an_order_is_spent_and_the_transaction_never_gets_accepted
     let payer_in = f.fund(300_000_000);
     let (req, tx) = f.payment(&[order, payer_in], 100_000_000, ID1, 7);
     *f.verifier.orders.lock().unwrap() = vec![order];
-    // another taker fills the order after our broadcast
+    // Another taker fills the order after our broadcast.
     let spender = after_submit(&f.chain, 15, move |c| c.spend_externally(&order));
     let s = f.fac.settle("shop", &req);
     spender.join().unwrap();
@@ -997,7 +1007,7 @@ fn order_conflict_when_an_order_is_spent_and_the_transaction_never_gets_accepted
 
 #[test]
 fn an_unspent_order_is_only_pending_and_our_own_acceptance_is_no_conflict() {
-    // still-unspent order + no mining: pending, not a conflict
+    // Still-unspent order and no mining: pending, not a conflict.
     let f = Fixture::new();
     f.fac.set_settle_wait(Duration::from_millis(60));
     let order = f.fund(300_000_000);
@@ -1007,16 +1017,18 @@ fn an_unspent_order_is_only_pending_and_our_own_acceptance_is_no_conflict() {
     let s = f.fac.settle("shop", &req);
     assert_eq!(diag(&s), "settlement_pending");
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Broadcast);
-    // our transaction consumes the order when it is accepted: that is success, not an order conflict
+    // Our transaction consumes the order when it is accepted: that is success, not an order
+    // conflict.
     f.chain.mine(0);
     assert!(f.chain.utxo(&order).is_none());
     let s = f.fac.settle("shop", &req);
     assert!(s.success, "{s:?}");
 }
 
-/// A `confirmed` swap whose transaction is accepted but not yet `confirmationsDaa` deep: the orders it filled are gone from the
-/// UTXO set because OUR transaction spent them. That is pending (then success at the depth), never an order conflict that
-/// fails the entry while the merchant is paid.
+/// A `confirmed` swap whose transaction is accepted but not yet `confirmationsDaa` deep.
+/// The orders it filled are gone from the UTXO set because OUR transaction spent them. That is
+/// pending (then success at the depth), never an order conflict that fails the entry while the
+/// merchant is paid.
 #[test]
 fn a_confirmed_payment_that_consumed_its_orders_is_pending_until_deep_not_a_conflict() {
     let f = Fixture::new();
@@ -1034,7 +1046,7 @@ fn a_confirmed_payment_that_consumed_its_orders_is_pending_until_deep_not_a_conf
     let e = f.ledger.get(&txid_hex(&tx)).unwrap();
     assert_eq!(e.state, State::Broadcast);
     assert!(f.ledger.is_consumed(&payer_in), "the inputs stay reserved");
-    // at the configured depth: settled
+    // At the configured depth: settled.
     f.chain.advance_daa(100);
     let s = f.fac.settle("shop", &req);
     assert!(s.success, "{s:?}");
@@ -1042,7 +1054,7 @@ fn a_confirmed_payment_that_consumed_its_orders_is_pending_until_deep_not_a_conf
     assert_eq!(f.chain.submit_count(), 1);
 }
 
-// -------------------------------------------------------------------------------------- kill switch etc.
+// -------------------------------------------------------------------------------- kill switch etc.
 
 #[test]
 fn kill_switch_refuses_verify_and_settle_and_empties_supported() {
@@ -1081,8 +1093,8 @@ fn kill_switch_file_disables_the_facilitator() {
     assert!(!fac.killed());
 }
 
-/// `kobd --executor --pause-file` disables the facilitator like its own kill-switch file; a pause file whose state
-/// cannot be read counts as present.
+/// `kobd --executor --pause-file` disables the facilitator like its own kill-switch file; a pause
+/// file whose state cannot be read counts as present.
 #[test]
 fn the_process_pause_file_disables_the_facilitator() {
     let dir = tempfile::tempdir().unwrap();
@@ -1101,7 +1113,7 @@ fn the_process_pause_file_disables_the_facilitator() {
     assert!(fac.supported()["kinds"].as_array().unwrap().is_empty());
     std::fs::remove_file(&flag).unwrap();
     assert!(!fac.killed());
-    // a path below a regular file cannot be checked: paused
+    // A path below a regular file cannot be checked: paused.
     std::fs::write(dir.path().join("file"), b"").unwrap();
     let fac = Facilitator::new(
         f.fac.policy.clone(),
@@ -1113,8 +1125,9 @@ fn the_process_pause_file_disables_the_facilitator() {
     assert!(fac.killed());
 }
 
-/// A pause file that appears while a settle verifies (after its first check) still stops the broadcast: nothing is sent, the
-/// evidence is released, and the same payment settles once the pause is lifted.
+/// A pause file that appears while a settle verifies (after its first check) still stops the
+/// broadcast. Nothing is sent, the evidence is released, and the same payment settles once the
+/// pause is lifted.
 #[test]
 fn a_pause_set_during_a_settle_stops_its_broadcast() {
     let dir = tempfile::tempdir().unwrap();
@@ -1142,7 +1155,7 @@ fn a_pause_set_during_a_settle_stops_its_broadcast() {
     assert!(retryable(&r));
     assert_eq!(f.chain.submit_count(), 0, "nothing was broadcast");
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed, "the evidence is released");
-    // lifted: the same payment settles
+    // Lifted: the same payment settles.
     *f.verifier.during_verify.lock().unwrap() = None;
     std::fs::remove_file(&flag).unwrap();
     let miner = mine_later(&f.chain, 20, 0);
@@ -1158,7 +1171,7 @@ fn facilitator_with(policy: Policy) -> Facilitator {
 
 #[test]
 fn supported_advertises_only_what_is_configured() {
-    // KAS only
+    // KAS only.
     let fac = facilitator_with(Policy::new(Network::Testnet10));
     let s = fac.supported();
     let kinds = s["kinds"].as_array().unwrap();
@@ -1176,7 +1189,8 @@ fn supported_advertises_only_what_is_configured() {
     assert!(extra.get("routeBindings").is_none() && extra.get("tokens").is_none());
     assert!(!s.to_string().contains("additive"), "additive is never advertised");
 
-    // with a token: an issuer-controlled one is accepted (and advertised) only when the operator enabled them
+    // With a token: an issuer-controlled one is accepted (and advertised) only when the operator
+    // enabled them.
     let mut policy = Policy::new(Network::Testnet10);
     let prog = kob_protocol::artifacts::template(kob_protocol::artifacts::TemplateId::Kcc20Ref);
     policy.tokens.insert(AllowedToken::new([0xaa; 32], prog.id, [0xcc; 32], Custody::IssuerControlled, "TKN", 6)).unwrap();
@@ -1199,15 +1213,16 @@ fn supported_advertises_only_what_is_configured() {
     assert_eq!(t["decimals"], 6);
     assert!(!s.to_string().contains("additive"));
 
-    // swap disabled: no route binding
+    // Swap disabled: no route binding.
     policy.swap_enabled = false;
     let s = facilitator_with(policy).supported();
     assert!(s["kinds"][0]["extra"].get("routeBindings").is_none());
     assert_eq!(s["kinds"][0]["extra"]["profiles"], serde_json::json!(["standard-native", "kcc20"]));
 }
 
-/// `/supported` advertises only what can be settled now: nothing while the node does not answer, and no intent mode while the
-/// book it executes against is not ready (the indexer lags); the node probe is shared for `healthCache`.
+/// `/supported` advertises only what can be settled now. That is nothing while the node does not
+/// answer, and no intent mode while the book it executes against is not ready (the indexer lags).
+/// The node probe is shared for `healthCache`.
 #[test]
 fn supported_follows_the_node_and_the_book() {
     use super::facilitator::{FacilitatorConfig, IntentRuntime};
@@ -1249,7 +1264,8 @@ fn supported_follows_the_node_and_the_book() {
     assert!(s["kinds"][0]["extra"].get("router").is_some());
     assert!(fac0.settle_health().degraded().is_empty());
 
-    // the indexer lags: the intent mode (and its router) is not offered; everything settled from the node still is
+    // The indexer lags: the intent mode (and its router) is not offered, while everything settled
+    // from the node still is.
     lagging.store(true, Ordering::SeqCst);
     let s = fac0.supported();
     assert_eq!(s["kinds"][0]["extra"]["routeBindings"], serde_json::json!(["kob-swap-v1"]));
@@ -1258,7 +1274,7 @@ fn supported_follows_the_node_and_the_book() {
     assert!(fac0.settle_health().degraded()[0].starts_with("book not ready: indexer catching_up"));
     lagging.store(false, Ordering::SeqCst);
 
-    // the node does not answer: nothing can be verified or settled, nothing is advertised
+    // The node does not answer: nothing can be verified or settled, nothing is advertised.
     f.chain.set_unavailable(true);
     let s = fac0.supported();
     assert_eq!(kinds(&s), 0, "{s}");
@@ -1269,7 +1285,7 @@ fn supported_follows_the_node_and_the_book() {
     f.chain.set_unavailable(false);
     assert_eq!(kinds(&fac0.supported()), 1, "back as soon as the node answers");
 
-    // one probe serves `healthCache`: a node lost right after it is noticed at the next probe
+    // One probe serves `healthCache`: a node lost right after it is noticed at the next probe.
     let cached = fac(Duration::from_secs(3600));
     assert_eq!(kinds(&cached.supported()), 1);
     f.chain.set_unavailable(true);
@@ -1277,7 +1293,7 @@ fn supported_follows_the_node_and_the_book() {
     assert_eq!(kinds(&fac(Duration::ZERO).supported()), 0);
     f.chain.set_unavailable(false);
 
-    // paused: empty without probing the node
+    // Paused: empty without probing the node.
     fac0.set_kill(true);
     f.chain.set_unavailable(true);
     assert_eq!(kinds(&fac0.supported()), 0);
@@ -1328,7 +1344,8 @@ fn the_cached_health_does_not_wait_for_a_node_probe_in_flight() {
     let f2 = fac.clone();
     let probe = thread::spawn(move || f2.supported());
     thread::sleep(Duration::from_millis(200));
-    // `/health` reads the last probe on an async worker: it must not block behind the probe's node call
+    // `/health` reads the last probe on an async worker: it must not block behind the probe's node
+    // call.
     let t = std::time::Instant::now();
     let _ = fac.settle_health_cached();
     assert!(t.elapsed() < Duration::from_millis(500), "the cached health waited {:?} for the probe", t.elapsed());
@@ -1351,17 +1368,20 @@ fn metrics_text_counts_settlements_and_ledger_states() {
     assert!(text.contains("kob_x402_ledger_entries{state=\"accepted\"} 1"));
 }
 
-// ------------------------------------------------------------------------------- retry: re-submission, re-broadcast
+// -------------------------------------------------------------- retry: re-submission, re-broadcast
 
-/// A chain whose first `fail` submits answer `Unavailable`: `forward` decides whether the node took the transaction
-/// anyway (the answer was lost) and `then` what a later submit answers instead of the mock's own reply.
+/// A chain whose first `fail` submits answer `Unavailable`. `forward` decides whether the node took
+/// the transaction anyway (the answer was lost). `then` is what a later submit answers instead of
+/// the mock's own reply.
 struct FlakySubmit {
     inner: Arc<MockChain>,
     fail: std::sync::atomic::AtomicU32,
     forward: bool,
-    /// After the failures: answer this instead of submitting (a node refusing the repeat of a transaction it already mined).
+    /// After the failures, answer this instead of submitting, like a node refusing the repeat of a
+    /// transaction it already mined.
     then: std::sync::Mutex<Option<SubmitError>>,
-    /// Once `then` was answered, the chain cannot be read (`output_status` / `in_mempool` fail): a node that stays flaky.
+    /// Once `then` has been answered, the chain cannot be read (`output_status` / `in_mempool`
+    /// fail), like a node that stays flaky.
     blind_after_then: std::sync::atomic::AtomicBool,
     blind: std::sync::atomic::AtomicBool,
 }
@@ -1434,9 +1454,9 @@ fn a_submit_the_node_could_not_take_is_resubmitted_within_the_settle() {
     assert_eq!(s.transaction, txid_hex(&tx));
     assert_eq!(g.fac.metrics.submit_retries.load(Ordering::Relaxed), 2);
     assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Accepted);
-    // the same transaction every time: one merchant output
+    // The same transaction every time: one merchant output.
     assert_eq!(f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).len(), 1);
-    // with the retries spent the outcome stays unknown (ambiguous), never failed
+    // With the retries spent the outcome stays unknown (ambiguous), never failed.
     let b = f.fund(500_000_000);
     let (req2, tx2) = f.payment(&[b], 110_000_000, ID2, 8);
     let flaky = FlakySubmit::new(f.chain.clone(), 10, false);
@@ -1452,7 +1472,8 @@ fn a_refused_resubmit_of_a_transaction_that_went_through_is_not_a_failure() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
-    // the node took (and mined) the first try but its answer was lost; the repeat is refused as a double spend
+    // The node took (and mined) the first try but its answer was lost. The repeat is refused as a
+    // double spend.
     let flaky = FlakySubmit::new(f.chain.clone(), 1, true);
     *flaky.then.lock().unwrap() = Some(SubmitError::Conflict("input is not an unspent output".into()));
     let g = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky, f.clock.clone());
@@ -1467,18 +1488,19 @@ fn a_refused_resubmit_with_an_unreadable_chain_stays_unknown_never_failed() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
-    // the node took (and mined) the first try but its answer was lost; the repeat is refused as a double spend, and the chain
-    // cannot be read to tell whether the first try went through
+    // The node took (and mined) the first try but its answer was lost. The repeat is refused as a
+    // double spend, and the chain cannot be read to tell whether the first try went through.
     let flaky = FlakySubmit::new(f.chain.clone(), 1, true);
     *flaky.then.lock().unwrap() = Some(SubmitError::Conflict("input is not an unspent output".into()));
     flaky.blind_after_then.store(true, Ordering::SeqCst);
     let g = Fixture::with_view(f.ledger.clone(), f.chain.clone(), flaky, f.clock.clone());
     let s = g.fac.settle("shop", &req);
     assert!(!s.success);
-    // not `invalid_kaspa_exact_utxo` (a dead attempt the payer rebuilds): the outcome is unknown, the inputs stay reserved
+    // Not `invalid_kaspa_exact_utxo` (a dead attempt the payer rebuilds): the outcome is unknown,
+    // the inputs stay reserved.
     assert_eq!(diag(&s), "node_unavailable", "{s:?}");
     assert_eq!(g.ledger.get(&txid_hex(&tx)).unwrap().state, State::Ambiguous);
-    // the payment did go through
+    // The payment did go through.
     assert_eq!(f.chain.unspent_of(&p2pk_spk(&pubkey(MERCHANT_KEY))).len(), 1);
 }
 
@@ -1487,7 +1509,8 @@ fn a_transaction_evicted_while_observed_is_rebroadcast() {
     let f = Fixture::new();
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
-    // the node drops it from its mempool right after the broadcast; it is mined only once it is sent again
+    // The node drops it from its mempool right after the broadcast. It is mined only once it is
+    // sent again.
     let evict = after_submit(&f.chain, 1, |c| c.evict_mempool());
     let c = f.chain.clone();
     let miner = thread::spawn(move || {
@@ -1507,12 +1530,13 @@ fn a_transaction_evicted_while_observed_is_rebroadcast() {
     assert_eq!(f.chain.submit_count(), 2);
 }
 
-// ------------------------------------------------------------------------ accepted while nobody watched (F5, F6)
+// ------------------------------------------------------------------- accepted while nobody watched
 
-/// The standalone facilitator (no acceptance tracker): a settlement left `broadcast` (the settle wait ran out) is accepted
-/// while nobody watches and the merchant spends its output at once. The identical retry finds the exact transaction accepted
-/// by another of its outputs (the payer's change) and answers success, not `invalid_kaspa_exact_utxo` from a re-verification
-/// whose inputs are spent.
+/// The standalone facilitator (no acceptance tracker): a settlement left `broadcast` (the settle
+/// wait ran out) is accepted while nobody watches, and the merchant spends its output at once.
+/// The identical retry finds the exact transaction accepted by another of its outputs (the payer's
+/// change) and answers success, not `invalid_kaspa_exact_utxo` from a re-verification whose inputs
+/// are spent.
 #[test]
 fn a_retry_after_the_merchant_spent_its_output_finds_the_exact_transaction_accepted() {
     let f = Fixture::new();
@@ -1533,7 +1557,8 @@ fn a_retry_after_the_merchant_spent_its_output_finds_the_exact_transaction_accep
     assert_eq!(f.chain.submit_count(), 1, "nothing is broadcast again");
 }
 
-/// The same without a retry: the reconcile finalizes the `broadcast` entry from the payer's change output.
+/// The same without a retry: the reconcile finalizes the `broadcast` entry from the payer's change
+/// output.
 #[test]
 fn reconcile_finalizes_a_broadcast_entry_whose_merchant_output_is_already_spent() {
     let f = Fixture::new();
@@ -1548,14 +1573,15 @@ fn reconcile_finalizes_a_broadcast_entry_whose_merchant_output_is_already_spent(
     let e = f.ledger.get(&txid_hex(&tx)).unwrap();
     assert_eq!(e.state, State::Accepted);
     assert!(e.accepted_daa.is_some());
-    // the payer's retry is answered from the ledger
+    // The payer's retry is answered from the ledger.
     let s = f.fac.settle("shop", &req);
     assert!(s.success, "{s:?}");
 }
 
-/// A `broadcast` entry the node does not know any more and of which no output is left on chain (accepted and every output
-/// spent, or dropped) does not stay `broadcast` forever: after `ambiguous_grace` it becomes `ambiguous`, and the ambiguous
-/// rules take over (released after another grace when it never was seen accepted).
+/// A `broadcast` entry the node does not know any more, with no output left on chain (accepted and
+/// every output spent, or dropped), does not stay `broadcast` forever. After `ambiguous_grace` it
+/// becomes `ambiguous`, and the ambiguous rules take over (released after another grace when it
+/// was never seen accepted).
 #[test]
 fn a_stale_broadcast_entry_becomes_ambiguous_after_the_grace() {
     let f = Fixture::new();
@@ -1583,8 +1609,9 @@ fn a_stale_broadcast_entry_becomes_ambiguous_after_the_grace() {
     assert_eq!(f.ledger.get(&txid_hex(&tx)).unwrap().state, State::Failed);
 }
 
-/// A view that answers like the node (`NodeChain`): `output_status` reads the mempool first, and the transactions in `linger`
-/// stay in the mempool after their acceptance (rusty-kaspa v2.1.0 updates the mempool after the virtual UTXO set).
+/// A view that answers like the node (`NodeChain`): `output_status` reads the mempool first, and
+/// the transactions in `linger` stay in the mempool after their acceptance (rusty-kaspa v2.1.0
+/// updates the mempool after the virtual UTXO set).
 struct LingeringMempool {
     chain: Arc<MockChain>,
     linger: std::sync::Mutex<Vec<Txid>>,
@@ -1614,8 +1641,9 @@ impl ChainView for LingeringMempool {
     }
 }
 
-/// F6: a swap whose transaction is accepted (its outputs in the UTXO set, the order it fills spent by it) while the node still
-/// lists it in its mempool is a success, never an `order_conflict` that fails the entry while the merchant is paid.
+/// A swap whose transaction is accepted (its outputs in the UTXO set, the order it fills spent by
+/// it) while the node still lists it in its mempool is a success, never an `order_conflict` that
+/// fails the entry while the merchant is paid.
 #[test]
 fn an_accepted_swap_still_listed_in_the_mempool_is_not_an_order_conflict() {
     let chain = Arc::new(MockChain::new());
@@ -1635,14 +1663,17 @@ fn an_accepted_swap_still_listed_in_the_mempool_is_not_an_order_conflict() {
     assert_eq!(f.fac.metrics.order_conflicts.load(Ordering::Relaxed), 0);
 }
 
-/// F5: the merchant (or the payer) broadcasts the payment itself and it is accepted before `/settle`. A transaction this
-/// merchant had `/verify` verify for the same request is settled from what that verification established; anything else is
-/// refused as before (its inputs are spent, and the payload alone proves nothing about them: the embedded UTXOs and the
-/// authorization's key are the presenter's word, and an accepted transaction is public).
+/// The merchant (or the payer) broadcasts the payment itself and it is accepted before `/settle`.
+/// A transaction this merchant had `/verify` verify for the same request is settled from what that
+/// verification established.
+///
+/// Anything else is refused. Its inputs are spent, and the payload alone proves nothing about
+/// them. The embedded UTXOs and the authorization's key are the presenter's word, and an accepted
+/// transaction is public.
 #[test]
 fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
     let f = Fixture::new();
-    // never verified here: refused, nothing written
+    // Never verified here: refused, nothing written.
     let a = f.fund(500_000_000);
     let (req, tx) = f.payment(&[a], 100_000_000, ID1, 7);
     f.chain.submit(&tx).unwrap();
@@ -1652,13 +1683,13 @@ fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
     assert_eq!(diag(&s), "invalid_kaspa_exact_utxo");
     assert!(f.ledger.get(&txid_hex(&tx)).is_none());
 
-    // verified by /verify, then broadcast by the merchant and accepted before /settle
+    // Verified by /verify, then broadcast by the merchant and accepted before /settle.
     let b = f.fund(500_000_000);
     let (req2, tx2) = f.payment(&[b], 100_000_000, ID2, 8);
     assert!(f.fac.verify_for("shop", &req2).is_valid);
     f.chain.submit(&tx2).unwrap();
     f.chain.mine(0);
-    // another merchant, or the same transaction for another request: refused
+    // Another merchant, or the same transaction for another request: refused.
     assert_eq!(diag(&f.fac.settle("other", &req2)), "invalid_kaspa_exact_utxo");
     let mut other_request = req2.clone();
     other_request.request_hash = Some(hex(&[9; 32]));
@@ -1674,9 +1705,9 @@ fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
     assert!(f.ledger.is_consumed(&b));
     assert_eq!(f.fac.metrics.settle_found_accepted.load(Ordering::Relaxed), 1);
     assert_eq!(f.chain.submit_count(), 2, "the facilitator broadcast nothing");
-    // the retry is the cached answer, marked as a repeat
+    // The retry is the cached answer, marked as a repeat.
     assert!(is_repeat_of(&f.fac.settle("shop", &req2), &s));
-    // a plain /verify (no merchant) remembers nothing
+    // A plain /verify (no merchant) remembers nothing.
     let c = f.fund(500_000_000);
     let (req3, tx3) = f.payment(&[c], 100_000_000, "payment-id-0000000003", 10);
     assert!(f.fac.verify(&req3).is_valid);
@@ -1685,8 +1716,8 @@ fn a_payment_verified_then_broadcast_by_the_merchant_settles_once_accepted() {
     assert_eq!(diag(&f.fac.settle("shop", &req3)), "invalid_kaspa_exact_utxo");
 }
 
-/// F7: failed entries are bounded in number at once (whatever fails them: anonymous invoice payments too) and forgotten
-/// after the retention by the reconcile; live entries stay.
+/// Failed entries are bounded in number at once, whatever fails them (anonymous invoice payments
+/// too). The reconcile forgets them after the retention. Live entries stay.
 #[test]
 fn failed_entries_are_bounded_and_forgotten_after_the_retention() {
     let fx = Fixture::new();
