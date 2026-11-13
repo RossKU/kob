@@ -1521,13 +1521,23 @@ impl Processor {
             // The state is stored as its difference from the genesis state of the order, see
             // [`super::packed`]. The order row is written before its first UTXO. An output of a
             // covenant with no order row is not stored, because no read could see it.
+            //
+            // A stored row of the same outpoint is replaced while it is unspent. A spent one stays
+            // spent: an output of a block is written again only when its transaction is applied
+            // twice (a reorg deeper than the window, or a lying node), and a reset row would bring
+            // the spent order back to the book. The recovery operations (block 0) write outputs the
+            // node verified as unspent, and replace either.
             concat!(
-                "INSERT OR REPLACE INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
+                "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
                  SELECT ?1, ?2, g.id, ?4, ?5, kob_pack(?6, ",
                 sql_genesis!("g"),
                 "), ?7, ?8 FROM orders g",
                 sql_order_ids!("g"),
-                " WHERE g.covenant_id = ?3"
+                " WHERE g.covenant_id = ?3 \
+                 ON CONFLICT (txid, idx) DO UPDATE SET order_id = excluded.order_id, value = excluded.value, spk = excluded.spk, \
+                   state = excluded.state, created_block = excluded.created_block, created_daa = excluded.created_daa, spent_block = NULL, \
+                   spent_txid = NULL, spent_entry = NULL, spent_amount = NULL \
+                 WHERE order_utxos.spent_block IS NULL OR excluded.created_block = 0"
             ),
         )?
         .execute(params![&txid.0[..], idx, &cov.0[..], value as i64, spk, state, seq, daa as i64])?;
@@ -3270,5 +3280,45 @@ mod tests {
         assert!(p.contains("order_events_closes (order_id=?"), "{p}");
         let p = plan(STORED_FILLED_SQL);
         assert!(p.contains("order_state USING INTEGER PRIMARY KEY"), "{p}");
+    }
+
+    /// An order UTXO written again, as by its transaction applied twice (a reorg deeper than the
+    /// window, or a lying node), stays spent. `INSERT OR REPLACE` reset it to unspent and brought
+    /// the spent order back to the book. An unspent row is still replaced, and so is a spent one by
+    /// a recovery operation, whose output the node verified as unspent.
+    #[test]
+    fn an_order_utxo_written_again_stays_spent() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        conn.execute_batch("INSERT INTO ids (id, h) VALUES (1, zeroblob(32)), (2, randomblob(32));").unwrap();
+        let cov = Hash32([7; 32]);
+        conn.execute(
+            "INSERT INTO orders (id, covenant_id, contract, template_id, family, side, token_id, in_book, genesis_state, genesis_block, \
+             genesis_daa, listed) VALUES (1, ?1, 'KobAsk', 1, 1, 1, 2, 1, zeroblob(8), 1, 1, 1)",
+            [&cov.0[..]],
+        )
+        .unwrap();
+        let p = crate::testkit::processor();
+        let row = |txid: &Hash32| -> (Option<i64>, i64, i64) {
+            conn.query_row(
+                "SELECT spent_block, value, created_block FROM order_utxos WHERE txid = ?1 AND idx = 0",
+                [&txid.0[..]],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap()
+        };
+        let (spent, live) = (Hash32([1; 32]), Hash32([2; 32]));
+        for t in [&spent, &live] {
+            p.insert_utxo(&conn, &cov, t, 0, 1_000, &[0, 0], None, 5, 50).unwrap();
+        }
+        conn.execute("UPDATE order_utxos SET spent_block = 6, spent_txid = x'09' WHERE txid = ?1", [&spent.0[..]]).unwrap();
+        // The same outputs, applied again in a later block.
+        for t in [&spent, &live] {
+            p.insert_utxo(&conn, &cov, t, 0, 2_000, &[0, 0], None, 9, 90).unwrap();
+        }
+        assert_eq!(row(&spent), (Some(6), 1_000, 5), "a spent row stays spent");
+        assert_eq!(row(&live), (None, 2_000, 9), "an unspent row is replaced");
+        // A recovery operation (block 0) writes an output the node verified as unspent.
+        p.insert_utxo(&conn, &cov, &spent, 0, 3_000, &[0, 0], None, 0, 95).unwrap();
+        assert_eq!(row(&spent), (None, 3_000, 0));
     }
 }
