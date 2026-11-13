@@ -1,21 +1,26 @@
-// Merging the wallet's own plain token UTXOs of one token into one ("Merge tokens"; the UI answer to TOKEN_UTXOS_FRAGMENTED).
+// Merges the wallet's own plain token UTXOs of one token into one, for "Merge tokens", which is the
+// UI answer to TOKEN_UTXOS_FRAGMENTED. The module is pure and does no I/O.
 //
-//   * the inputs: the token UTXOs the wallet key owns by itself (KCC-20 scheme 0, KRON address presence), plain (no borrow / minter flag), of the
-//     token's extension commitment, never an order's custody or stray (those are owned by the order's covenant id) nor an outpoint the caller
-//     reserves; smallest first, ties by outpoint (the soak's `selectMergeChain` rule);
-//   * a CHAIN of `sendTokens` transfers to the wallet key: the first takes up to the program's token inputs (KOB's standard KCC20Ref: 3), every
-//     next one the previous output plus up to inputs - 1 more, so one pass ends with ONE UTXO (3 -> 1, then 1 + 2 -> 1, ...). Each link is a
-//     transfer of at most the program's inputs into one output, valid on its own. `planMerge`'s `maxLinks` bounds the chain: the web app plans
-//     exactly ONE link per click (a merge is manual and every link costs a fee, so the user decides each one: one click = one 3 -> 1 transaction
-//     of the smallest UTXOs, click again to merge more); the full chain stays available for callers that want it (tests; the CLI and the soak
-//     run their own merge code);
-//   * the merged output keeps the largest input carrier (at most the default 1 KAS carrier, at least the program's floor); the other carriers
-//     are freed and pay the fee, the rest returns as KAS change. Only when they do not cover it (or a KRON transfer, which needs a P2PK input of
-//     the owner) is a wallet KAS UTXO added;
-//   * fee: the LOW bucket of the fee policy (housekeeping, matcher.md 9; the soak's merges and the executor's maintenance pay the same).
-// A link after the first spends an output that exists only once the previous link is accepted: `planMerge` builds the whole chain against
-// provisional outpoints (the count, fee and result shown before anything is signed); a caller running a chain rebuilds each later link from the
-// node's UTXO after the previous one is accepted (`mergeCarry` + `buildMergeLink`). Pure (no I/O).
+// - The inputs are token UTXOs the wallet key owns by itself, meaning KCC-20 scheme 0 or KRON
+//   address presence. They are plain, with no borrow or minter flag, and carry the token's
+//   extension commitment. An order's custody or stray is never an input, because the order's
+//   covenant id owns it. Neither is an outpoint the caller reserves. Inputs go smallest first, and
+//   ties go by outpoint.
+// - A merge is a chain of `sendTokens` transfers to the wallet key. The first link takes up to the
+//   program's token inputs, 3 for KOB's standard KCC20Ref. Every next link takes the previous
+//   output plus up to inputs - 1 more, so one pass ends with one UTXO. Each link is valid alone.
+// - `maxLinks` of `planMerge` bounds the chain. The web app plans exactly one link per click,
+//   because a merge is manual and every link costs a fee. The user decides each one.
+// - The merged output keeps the largest input carrier, at most the default 1 KAS carrier and at
+//   least the program's floor. The other carriers are freed and pay the fee, and the rest returns
+//   as KAS change. A wallet KAS UTXO is added only when they do not cover the fee, or for a KRON
+//   transfer, which needs a P2PK input of the owner.
+// - The fee uses the low urgency of the fee policy, as housekeeping (matcher.md 9).
+//
+// A link after the first spends an output that exists only once the previous link is accepted.
+// `planMerge` builds the whole chain against provisional outpoints, so the count, fee and result
+// are known before anything is signed. A caller running the chain rebuilds each later link from the
+// node's UTXO after the previous one is accepted, with `mergeCarry` and `buildMergeLink`.
 import { buildWithCap, recordFee, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import { MAX_TOKEN_INPUTS } from './guards';
 import { DEFAULT_CARRIER, tokenCarrierFloor } from './orders/common';
@@ -25,27 +30,35 @@ import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, familyOfProgram, isKeyOwned, 
 import type { BuiltTx, FeeMode, Hex, KeyUtxo, SendTokensRequest, TokenProgram, TokenState, TokenUtxo } from './types';
 import { KobError, type KobWasm } from './wasm';
 
-/** Most transactions one merge runs (one signature each): a larger set is merged in several runs. */
+/**
+ * The most transactions one merge runs, each with one signature. A larger set takes several runs.
+ */
 export const MAX_MERGE_TXS = 10;
 const I64_MAX = (1n << 63n) - 1n;
 const ONE_KAS = 100_000_000n;
 
-/** The token to merge (a registry `TokenInfo` fits). */
+/** The token to merge. A registry `TokenInfo` fits. */
 export interface MergeToken {
   covenantId: Hex;
   program: TokenProgram;
   templateHash: Hex;
-  /** KCC-20: the token's extension commitment (null: any one, as long as all inputs share it); ignored for KRON */
+  /**
+   * For KCC-20, the extension commitment, or null to accept any that all inputs share. KRON ignores
+   * it.
+   */
   extensionCommitment: Hex | null;
   slots: { inputs: number };
 }
 
-/** What the merge builder needs (a `CancelEnv` fits). */
+/** What the merge builder needs. A `CancelEnv` fits. */
 export interface MergeEnv {
   kob: KobWasm;
-  /** the wallet's x-only key: owner of the inputs and of the merged output */
+  /** The wallet's x-only key, owner of the inputs and of the merged output. */
   maker: Hex;
-  /** P2PK KAS UTXOs of the wallet, used only when the freed carriers cannot pay the fee (and for KRON) */
+  /**
+   * P2PK KAS UTXOs of the wallet, used only when the freed carriers cannot pay the fee, and for
+   * KRON.
+   */
   funding?: KeyUtxo[];
   feeRate?: bigint;
   feeMode?: FeeMode;
@@ -53,54 +66,66 @@ export interface MergeEnv {
   feePick?: RatePick;
 }
 
+/** One built transfer of a merge chain. */
 export interface MergeLink {
-  /** the link's token inputs (from the second link on, the previous link's output first) */
+  /** The link's token inputs. From the second link on, the previous link's output comes first. */
   inputs: TokenUtxo[];
-  /** inputs of the wallet's original set merged by this link */
+  /** The inputs of the wallet's original set that this link merges. */
   fresh: TokenUtxo[];
   built: BuiltTx;
   request: SendTokensRequest;
   fundingUsed: KeyUtxo[];
-  /** the merged output */
+  /** The merged output. */
   output: { index: number; carrier: bigint; state: TokenState };
   fee: bigint;
   issues: PlanIssue[];
 }
 
+/** The result of `planMerge`: the groups, the built chain and what the merge yields. */
 export interface MergePlan {
   ok: boolean;
   issues: PlanIssue[];
-  /** the wallet's original UTXOs each link merges (link 0: up to `inputs`, then up to `inputs - 1`) */
+  /**
+   * The wallet's original UTXOs each link merges. Link 0 takes up to `inputs`, then up to `inputs -
+   * 1`.
+   */
   groups: TokenUtxo[][];
-  /** the chain built against provisional outpoints (link k > 0 spends link k - 1's output under its unsigned id) */
+  /** The chain built against provisional outpoints. Link k above 0 spends link k - 1's output. */
   links: MergeLink[];
-  /** mergeable UTXOs before / after the planned links (the merged output counts: it is mergeable again with the rest) */
+  /** The number of mergeable UTXOs before the planned links. */
   before: number;
+  /**
+   * The number of mergeable UTXOs after them. The merged output counts, because it merges again.
+   */
   after: number;
-  /** the wallet's original UTXOs the planned links merge (the sum of `groups`' lengths) */
+  /** The number of the wallet's original UTXOs the planned links merge. */
   merged: number;
   /**
-   * KAS the merge returns to the wallet: the carriers of the merged token UTXOs, less the one the merged output keeps, less the fees. The freed
-   * carriers are the point of a merge (each token UTXO carries a carrier, by default 1 KAS); a wallet KAS input added for the fee comes back as
-   * change, so it is not part of it. Negative when the fees exceed the freed carriers (tiny carriers, KRON).
+   * KAS the merge returns to the wallet.
+   * It is the carriers of the merged token UTXOs, less the one the merged output keeps, less the
+   * fees. Freeing carriers is the point of a merge, since each token UTXO carries one, by default
+   * 1 KAS. A wallet KAS input added for the fee comes back as change, so it is not counted.
+   * It is negative when the fees exceed the freed carriers, as with tiny carriers or KRON.
    */
   freed: bigint;
-  /** base units merged into the final output */
+  /** Base units merged into the final output. */
   amount: bigint;
-  /** sum of the links' fees (the signed transactions pay at most this: finalizing only shrinks the compute budgets) */
+  /** The sum of the links' fees. The signed transactions pay at most this. */
   fee: bigint;
 }
 
 const big = (v: string | number | bigint): bigint => BigInt(v);
+/** Returns a UTXO outpoint as `txid:index`. */
 export const outpointOf = (u: { transactionId: string; index: number }): string => `${u.transactionId}:${u.index}`;
 const issue = (code: string, severity: PlanIssue['severity'], message: string, params?: PlanIssue['params']): PlanIssue => ({ code, severity, message, ...(params ? { params } : {}) });
 
-/** Token inputs one link may take: the program's slots, never above the covenant input limit. */
+/** Returns the token inputs one link may take, the program's slots capped at the covenant limit. */
 export const mergeSlots = (token: Pick<MergeToken, 'slots'>): number => Math.min(token.slots.inputs, MAX_TOKEN_INPUTS);
 
 /**
- * The UTXOs a merge may spend: plain token UTXOs of `token` the wallet key owns by itself, with the token's extension commitment, a positive amount,
- * not in `reserved` (outpoints `txid:index`); smallest first, ties by outpoint.
+ * Returns the UTXOs a merge may spend, smallest first and ties by outpoint.
+ * They are plain token UTXOs of `token` that the wallet key owns by itself. They carry the token's
+ * extension commitment and a positive amount, and are not in `reserved`, a set of `txid:index`.
  */
 export function mergeCandidates(utxos: readonly TokenUtxo[], token: Pick<MergeToken, 'covenantId' | 'program' | 'extensionCommitment'>, maker: Hex, reserved: ReadonlySet<string> = new Set()): TokenUtxo[] {
   const kron = familyOfProgram(token.program) === 'kron';
@@ -126,15 +151,17 @@ export function mergeCandidates(utxos: readonly TokenUtxo[], token: Pick<MergeTo
 }
 
 /**
- * The fresh inputs of each link of the chain over `sorted` (mergeCandidates order): the first up to `maxInputs`, each next up to `maxInputs - 1`,
- * at most `maxTxs` links, the merged amount never above `cap` (KRON's output limit). Fewer than two candidates: no link.
+ * Splits `sorted` into the fresh inputs of each link of the chain.
+ * `sorted` is in `mergeCandidates` order. The first link takes up to `maxInputs` and each next one
+ * up to `maxInputs - 1`. There are at most `maxTxs` links, and the merged amount never exceeds
+ * `cap`, which is KRON's output limit. Fewer than two candidates give no link.
  */
 export function mergeGroups<T extends { state: { amount: string } }>(sorted: readonly T[], maxInputs: number, maxTxs = MAX_MERGE_TXS, cap = I64_MAX): T[][] {
   const groups: T[][] = [];
   if (maxInputs < 2) return groups;
   let total = 0n;
   let at = 0;
-  // the candidates the cap allows (smallest first, so the longest prefix)
+  // The cap allows a prefix of the candidates. Smallest first makes it the longest one.
   let usable = 0;
   for (const u of sorted) {
     if (total + big(u.state.amount) > cap) break;
@@ -151,7 +178,10 @@ export function mergeGroups<T extends { state: { amount: string } }>(sorted: rea
   return groups;
 }
 
-/** KAS the merged output carries: the largest input carrier, at most the default carrier, at least the program's floor. */
+/**
+ * Returns the KAS the merged output carries, the largest input carrier within the default and the
+ * floor.
+ */
 export function mergedCarrier(kob: KobWasm, token: Pick<MergeToken, 'templateHash'>, inputs: readonly TokenUtxo[]): bigint {
   const largest = inputs.reduce((m, u) => (big(u.amount) > m ? big(u.amount) : m), 0n);
   const floor = tokenCarrierFloor(kob, token.templateHash);
@@ -163,8 +193,10 @@ const INSUFFICIENT = /insufficient funds: need (\d+) sompi, have (\d+) sompi/;
 const FUNDING_HEADROOM = 500_000n;
 
 /**
- * One link: `inputs` (all of the wallet key, one token) into ONE output of the wallet key holding their whole amount. The freed carriers pay the
- * fee; when they cannot (or for KRON, which needs a P2PK input of the owner) wallet KAS UTXOs not in `spentFunding` are added.
+ * Builds one link, which merges `inputs` into one output of the wallet key holding their whole
+ * amount. All inputs are of the wallet key and one token. The freed carriers pay the fee. When they
+ * cannot, or for KRON, which needs a P2PK input of the owner, wallet KAS UTXOs not in
+ * `spentFunding` are added.
  */
 export function buildMergeLink(env0: MergeEnv, token: MergeToken, inputs: TokenUtxo[], fresh: TokenUtxo[], spentFunding: ReadonlySet<string> = new Set()): MergeLink | { error: PlanIssue } {
   const env = withUrgency(env0, 'low');
@@ -174,7 +206,8 @@ export function buildMergeLink(env0: MergeEnv, token: MergeToken, inputs: TokenU
   const pool = (env.funding ?? [])
     .filter((f) => f.pubkey === env.maker && !f.covenantId && !spentFunding.has(outpointOf(f)))
     .sort((a, b) => (big(b.amount) > big(a.amount) ? 1 : big(b.amount) < big(a.amount) ? -1 : 0));
-  // KRON: the owner's address presence is a P2PK input (the smallest of at least 1 KAS, else the largest)
+  // KRON needs a P2PK input of the owner for address presence. Take the smallest of at least 1 KAS,
+  // else the largest.
   const seed = kron ? ([...pool].reverse().find((f) => big(f.amount) >= ONE_KAS) ?? pool[0] ?? null) : null;
   if (kron && !seed) return { error: issue('merge.needs-funding', 'error', 'merging KRON tokens needs a KAS UTXO of the wallet in the transaction') };
   let used: KeyUtxo[] = seed ? [seed] : [];
@@ -213,7 +246,10 @@ export function buildMergeLink(env0: MergeEnv, token: MergeToken, inputs: TokenU
   return { error: issue('merge.insufficient-funds', 'error', 'could not fund the network fee within 8 attempts') };
 }
 
-/** The merged output of `link` as the next link's input, once its transaction `txid` is known (`node`: the node's view of that UTXO, when read). */
+/**
+ * Returns the merged output of `link` as the next link's input, once its transaction `txid` is
+ * known. `node` is the node's view of that UTXO, when it was read.
+ */
 export function mergeCarry(link: MergeLink, txid: Hex, token: Pick<MergeToken, 'covenantId'>, node?: { amount: string; blockDaaScore?: string }): TokenUtxo {
   return {
     transactionId: txid,
@@ -228,9 +264,11 @@ export function mergeCarry(link: MergeLink, txid: Hex, token: Pick<MergeToken, '
 const failedPlan = (issues: PlanIssue[], before: number): MergePlan => ({ ok: false, issues, groups: [], links: [], before, after: before, merged: 0, freed: 0n, amount: 0n, fee: 0n });
 
 /**
- * The merge of `token` for the wallet key: the candidates, the chain's groups (at most `maxLinks`), and every link built (the later ones against
- * the previous link's provisional outpoint), so the count, the result, the fee and the KAS freed are known before anything is signed. With
- * `maxLinks = 1` (the web app) it is ONE transaction of the smallest up-to-`inputs` candidates into one output; `after` then says how many
+ * Plans the merge of `token` for the wallet key.
+ * It picks the candidates, forms the chain's groups of at most `maxLinks` and builds every link,
+ * the later ones against the previous link's provisional outpoint. The count, result, fee and
+ * freed KAS are therefore known before anything is signed. With `maxLinks = 1`, as in the web app,
+ * it is one transaction of the smallest candidates into one output, and `after` says how many
  * mergeable UTXOs are left for the next click.
  */
 export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly TokenUtxo[], reserved: ReadonlySet<string> = new Set(), maxLinks: number = MAX_MERGE_TXS): MergePlan {

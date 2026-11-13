@@ -1,21 +1,30 @@
-// What a block's transaction does to the order book, read from the chain alone (standalone mode, data/standalone.ts). Nothing here is protocol logic
-// of its own:
-//   * placements are re-derived with kob-wasm `recoverOrders`, record by record as the indexer does (crates/kobd/src/indexer/processor.rs:
-//     each ORDER record of a payload alone, so one bad record does not hide the others);
-//   * a spend of an order is read from its input's signature script as a chain observer reads it (the indexer's `parse_reveal`): the redeem script
-//     (the last push) is accepted as an order of a template this build pins only when kob-wasm re-derives exactly that script from the state span it
-//     holds (`decodeState` then `redeemScript`); the entry is named by its dispatch tag (the push before it, kob-wasm `templates().entries`); a fill's
-//     size is its first argument (decode.ts `fillArg`, the 8-byte `nb` of `settle` / `fill`);
-//   * the continuation is the state the covenant leaves (an amend's recorded state, the same state, or `amountLeft - n` of an ask's fill), accepted
-//     only when its script is the output that continues the covenant id; else the candidate search a maker's receipt is resolved with (records.ts
-//     `resolveRecord`), against the outputs of that transaction instead of the node.
+// Reads what a block's transaction does to the order book from the chain alone, for standalone
+// mode (data/standalone.ts). The module has no protocol logic of its own.
 //
-// Only the KAS-book kinds of the indexer's `/v1/books` that can rest at a fixed price are followed: the plain ask and bid of either family
-// (`KobAsk`, `KobBid`, `KobAskKron`, `KobBidKron`). Conditional orders, if-done entries and pair orders are not part of a standalone book.
+// - Placements are re-derived with kob-wasm `recoverOrders`, one record at a time as the indexer
+//   does (crates/kobd/src/indexer/processor.rs). Each ORDER record of a payload is checked alone,
+//   so one bad record does not hide the others.
+// - A spend of an order is read from its input's signature script, as the indexer's
+//   `parse_reveal` does. The redeem script is the last push. It counts as an order of a pinned
+//   template only when kob-wasm re-derives exactly that script from the state it holds
+//   (`decodeState` then `redeemScript`).
+// - The entry is named by its dispatch tag, the push before the redeem script (kob-wasm
+//   `templates().entries`). A fill's size is its first argument, the 8-byte `nb` of `settle` or
+//   `fill` (decode.ts `fillArg`).
+// - The continuation is the state the covenant leaves. That is an amend's recorded state, the same
+//   state, or `amountLeft - n` after an ask's fill. It counts only when its script is the output
+//   that continues the covenant id. Otherwise the candidate search of records.ts `resolveRecord`
+//   runs against the outputs of that transaction instead of the node.
 //
-// Every snapshot made here is a CLAIM about the chain until the node confirms it (kob/node-verify.ts `confirmSnapshotsOnNode`, the check the book
-// gets before an order is taken): the transaction may never be accepted (a block outside the selected chain, a double spend), or its outputs may be
-// spent already. A fill is a claim too: the caller counts it once one of the transaction's covenant outputs is seen on the node.
+// Only the plain ask and bid of either family are followed (`KobAsk`, `KobBid`, `KobAskKron`,
+// `KobBidKron`), because they rest at a fixed price. Conditional orders, if-done entries and pair
+// orders are not part of a standalone book.
+//
+// Every snapshot made here is a claim about the chain until the node confirms it, with
+// `confirmSnapshotsOnNode` in kob/node-verify.ts. The transaction may never be accepted, for
+// example in a block outside the selected chain or after a double spend, and its outputs may
+// already be spent. A fill is a claim too. The caller counts it once one of the transaction's
+// covenant outputs is seen on the node.
 import type { NodeUtxo } from '../data/node';
 import { bytesToHex, hexToBytes, parsePushes } from '../wallet/sigs';
 import type { OrderSnapshot } from './cancel';
@@ -28,22 +37,27 @@ import type { KobWasm } from './wasm';
 
 /** The kinds a standalone book follows. */
 export const STREAM_KINDS: readonly OrderKind[] = ['KobAsk', 'KobBid', 'KobAskKron', 'KobBidKron'];
+/** True when `k` is a kind a standalone book follows. */
 export const isStreamKind = (k: string): boolean => (STREAM_KINDS as readonly string[]).includes(k);
-/** The entries that fill a followed order (an ask's `settle` with `nb > 0`, a bid's `fill`); `settle` with `nb = 0` is a refund. */
+/** The entries that fill a followed order, an ask's `settle` with `nb > 0` and a bid's `fill`. */
 const FILL_ENTRIES = new Set(['settle', 'fill']);
 
 /** What one transaction's records say about orders. */
 export interface TxFacts {
   txid: Hex;
-  /** the outpoints its inputs spend (`txid:index`) */
+  /** The outpoints its inputs spend, as `txid:index`. */
   spends: string[];
-  /** orders its placement records create, each record verified on its own (of the followed kinds only) */
+  /**
+   * The orders its placement records create. Each record is verified alone, followed kinds only.
+   */
   placements: RecoveredOrder[];
 }
 
 const isOrderRecord = (r: PayloadRecord): r is Extract<PayloadRecord, { type: 'order' }> => r.type === 'order';
 
-/** The KOB1 records of a transaction (none for any other payload, or one kob-wasm cannot read). */
+/**
+ * The KOB1 records of a transaction. Any other payload, or one kob-wasm cannot read, gives none.
+ */
 function recordsOf(kob: KobWasm, payload: Hex): PayloadRecord[] {
   if (!payload) return [];
   try {
@@ -53,13 +67,14 @@ function recordsOf(kob: KobWasm, payload: Hex): PayloadRecord[] {
   }
 }
 
-/** Reads the placement records of one transaction (pure given kob). */
+/** Reads the spends and placement records of one transaction. */
 export function txFacts(kob: KobWasm, tx: TxJson): TxFacts {
   const placements: RecoveredOrder[] = [];
   for (const r of recordsOf(kob, tx.payload)) {
     if (!isOrderRecord(r) || !isStreamKind(r.template)) continue;
     try {
-      // the record alone, as the indexer validates it: `recoverOrders` is all-or-nothing per payload
+      // The indexer validates each record alone, because `recoverOrders` is all-or-nothing per
+      // payload.
       const single = kob.encodePayload([r]);
       for (const ro of kob.recoverOrders({ ...tx, payload: single })) if (isStreamKind(ro.order.kind)) placements.push(ro);
     } catch {
@@ -69,7 +84,10 @@ export function txFacts(kob: KobWasm, tx: TxJson): TxFacts {
   return { txid: tx.id, spends: tx.inputs.map((i) => outpointKey(i.transactionId, i.index)), placements };
 }
 
-/** A placement as the snapshot it becomes once its transaction is accepted (block DAA `daa`). */
+/**
+ * Returns a placement as the snapshot it becomes once its transaction is accepted at block DAA
+ * `daa`.
+ */
 export function snapshotOfPlacement(r: RecoveredOrder, daa: bigint): OrderSnapshot {
   const st = r.order as OrderState;
   const token = custodiesOf(st)[0]?.token ?? tokenCovIdOf(st);
@@ -84,23 +102,26 @@ export function snapshotOfPlacement(r: RecoveredOrder, daa: bigint): OrderSnapsh
   };
 }
 
-/** The outpoints a snapshot holds (its order and custody UTXOs): a transaction spending one of them changes the order. */
+/**
+ * Returns the outpoints of a snapshot's order, custody and prefund UTXOs. Spending one changes the
+ * order.
+ */
 export const outpointsOf = (s: OrderSnapshot): string[] => [
   outpointKey(s.order.transactionId, s.order.index),
   ...(s.custody ? [outpointKey(s.custody.transactionId, s.custody.index)] : []),
   ...(s.prefund ? [outpointKey(s.prefund.transactionId, s.prefund.index)] : []),
 ];
 
-// ------------------------------------------------------------------------------------------------ spends
+// --- Spends ---
 
 /** An input that spends a followed order, as its signature script reveals it. */
 export interface RevealedSpend {
   input: number;
-  /** the state the spent order UTXO committed to (its redeem script is exactly kob-wasm's script of this state) */
+  /** The state the spent order UTXO committed to. Its redeem script is kob-wasm's script of it. */
   state: OrderState;
-  /** the entry its dispatch tag names (`settle`, `fill`, `cancel`, `refund`), null when the tag is none of the template's */
+  /** The entry its dispatch tag names, or null when the tag is none of the template's. */
   entry: string | null;
-  /** base units filled (a `settle` / `fill` with `nb > 0`), else null */
+  /** Base units filled by a `settle` or `fill` with `nb > 0`, else null. */
   n: bigint | null;
 }
 
@@ -111,7 +132,7 @@ const followedTemplates = (kob: KobWasm): TemplateInfo[] => {
   return t;
 };
 
-/** Reads input `i` of `tx` as a spend of a followed order; null for any other input. */
+/** Reads input `i` of `tx` as a spend of a followed order, or returns null for any other input. */
 export function revealSpend(kob: KobWasm, tx: TxJson, i: number): RevealedSpend | null {
   const sig = tx.inputs[i]?.signatureScript;
   if (!sig || sig.length < 8) return null;
@@ -140,22 +161,28 @@ export function revealSpend(kob: KobWasm, tx: TxJson, i: number): RevealedSpend 
   return null;
 }
 
-/** A fill of a followed order: what the market data of standalone mode is built from (data/stream-market.ts). */
+/**
+ * A fill of a followed order, the input of the market data of standalone mode
+ * (data/stream-market.ts).
+ */
 export interface StreamFill {
   txid: Hex;
-  /** the filled order's covenant id when known (the continuation's, or the followed order's) */
+  /** The filled order's covenant id when known, from the continuation or the followed order. */
   covenantId: Hex | null;
   token: Hex;
-  /** `sell`: an ask was filled (the aggressor bought); `buy`: a bid was filled */
+  /** `sell` when an ask was filled, so the aggressor bought. `buy` when a bid was filled. */
   side: 'sell' | 'buy';
-  /** base units filled */
+  /** Base units filled. */
   amount: bigint;
-  /** sompi per whole token (`scale` base units): the order's limit */
+  /** The order's limit in sompi per whole token, which is `scale` base units. */
   price: bigint;
   scale: bigint;
 }
 
-/** The fill a spend records (null for a cancel, a refund, or an order with an auction: its price at fill time is not its limit). */
+/**
+ * Returns the fill a spend records, or null for a cancel or a refund.
+ * An order with an auction also gives null, because its price at fill time is not its limit.
+ */
 export function fillOf(kob: KobWasm, s: RevealedSpend, txid: Hex, covenantId: Hex | null): StreamFill | null {
   if (s.n === null) return null;
   let d;
@@ -168,7 +195,10 @@ export function fillOf(kob: KobWasm, s: RevealedSpend, txid: Hex, covenantId: He
   return { txid, covenantId, token: d.tokenCovId, side: d.side, amount: s.n, price: d.price, scale: d.scale };
 }
 
-/** The outputs of `tx` as the UTXOs a node would list for them, keyed by their script (the "address" `resolveRecord` asks for is the script itself). */
+/**
+ * Lists the outputs of `tx` as the UTXOs a node would return for them.
+ * They are keyed by script, because the "address" `resolveRecord` asks for is the script itself.
+ */
 function localNode(tx: TxJson, daa: bigint): { getUtxosByAddresses(spks: string[]): Promise<NodeUtxo[]> } {
   const outs: NodeUtxo[] = tx.outputs.map((o, index) => ({
     address: o.scriptPublicKey, transactionId: tx.id, index, amount: o.value, scriptPublicKey: o.scriptPublicKey, blockDaaScore: daa.toString(), isCoinbase: false,
@@ -182,15 +212,29 @@ function localNode(tx: TxJson, daa: bigint): { getUtxosByAddresses(spks: string[
   };
 }
 
-/** Candidates `resolveRecord` derives per continuation when the fill size is not known (amounts walk every base unit up to this, else in minimum fills). */
+/**
+ * How many candidates `resolveRecord` derives per continuation when the fill size is unknown.
+ * Amounts walk every base unit up to this many, and beyond that they walk in minimum fills.
+ */
 const MAX_CANDIDATES = 2000;
 
 /**
- * Where an order a transaction spends lives on, from that transaction alone: null when it ends there (no output continues a covenant from the order's
- * input) or when its new state cannot be derived. `spend` is the revealed input; `known` the snapshot the book holds for it, if any (its covenant id
- * must be the continuation's, and its custody is kept when the transaction did not spend it). The continuation, in this order: an amend's recorded
- * state; the same state (a bid's fill, a sweep); an ask's fill of `n`, `amountLeft - n`; else the candidate continuations of the spent state
- * (`resolveRecord` over this transaction's outputs). The custody is the one the state implies, found among the outputs. The result is a claim: the
+ * Finds where an order spent by a transaction lives on, from that transaction alone.
+ * It returns null when the order ends there, meaning no output continues a covenant from the
+ * order's input, or when the new state cannot be derived.
+ *
+ * `spend` is the revealed input. `known` is the snapshot the book holds for it, if any. Its
+ * covenant id must be the continuation's, and its custody is kept when the transaction did not
+ * spend it.
+ *
+ * The continuation is tried in this order:
+ * - An amend's recorded state.
+ * - The same state, which covers a bid's fill and a sweep.
+ * - An ask's fill of `n`, which leaves `amountLeft - n`.
+ * - The candidate continuations of the spent state, through `resolveRecord` over this
+ *   transaction's outputs.
+ *
+ * The custody is the one the state implies, found among the outputs. The result is a claim, and the
  * node confirms it before the order is listed.
  */
 export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson, daa: bigint, network: string, known?: OrderSnapshot | null): Promise<OrderSnapshot | null> {
@@ -217,13 +261,15 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
       return null;
     }
   };
-  // the continuation `state` with its custody: the one its state implies among this transaction's outputs, else the one the transaction did not spend
+  // The continuation `state` with its custody. That is the one its state implies among this
+  // transaction's outputs, else the one the transaction did not spend.
   const withCustody = async (state: OrderState): Promise<OrderSnapshot | null> => {
     const r = await resolveIn(kob, tx, daa, network, cov, state);
     if (!r) return null;
     return at(state, r.custody ?? keep(known?.custody));
   };
-  // 1. an in-place amend: the record names the new state; it counts only when its script is the continuation's
+  // 1. An in-place amend. The record names the new state, which counts only when its script is the
+  //    continuation's.
   const amend = recordsOf(kob, tx.payload).find((r): r is Extract<PayloadRecord, { type: 'amend' }> => r.type === 'amend' && r.input === spend.input && r.output === out.index);
   if (amend) {
     try {
@@ -234,9 +280,10 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
       return null;
     }
   }
-  // 2. the same state (a bid's fill keeps its state and spends from its escrow; a sweep in place)
+  // 2. The same state. A bid's fill keeps its state and spends from its escrow, and a sweep stays
+  // in place.
   if (spkOf(st0) === out.o.scriptPublicKey) return keep(known?.custody) ? at(st0, keep(known?.custody)) : withCustody(st0);
-  // 3. an ask's fill of n: the covenant leaves amountLeft - n
+  // 3. An ask's fill of n. The covenant leaves amountLeft - n.
   const s = st0.state as unknown as Record<string, string | undefined>;
   if (spend.n !== null && s.amountLeft !== undefined) {
     const left = BigInt(s.amountLeft) - spend.n;
@@ -245,13 +292,17 @@ export async function followSpend(kob: KobWasm, spend: RevealedSpend, tx: TxJson
       if (spkOf(next) === out.o.scriptPublicKey) return withCustody(next);
     }
   }
-  // 4. any other continuation: the candidates of the spent state, matched against this transaction's outputs
+  // 4. Any other continuation. Match the candidates of the spent state against this transaction's
+  // outputs.
   const r = await resolveIn(kob, tx, daa, network, cov, st0, true);
   if (!r || !r.order || r.order.transactionId !== tx.id || r.order.index !== out.index) return null;
   return at(r.order.state, r.custody ?? keep(known?.custody));
 }
 
-/** `resolveRecord` of a record whose state is `state`, against the outputs of `tx` (no node is asked); `search`: walk the candidate continuations too. */
+/**
+ * Runs `resolveRecord` for a record of `state` against the outputs of `tx`, without asking a node.
+ * With `search` it also walks the candidate continuations.
+ */
 async function resolveIn(kob: KobWasm, tx: TxJson, daa: bigint, network: string, cov: Hex, state: OrderState, search = false) {
   const kind = state.kind as OrderKind;
   const templateHash = pinnedTemplateHash(kob, kind);

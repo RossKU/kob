@@ -190,7 +190,7 @@ export const renewalUnixForExpiry = (clock: Clock, expiryDaa: bigint): bigint =>
 
 const two = (n: number): string => String(n).padStart(2, '0');
 
-/** Formats a UTC timestamp like `2030-01-31 00:00 UTC`, independent of the locale. */
+/** Formats a UTC timestamp like `YYYY-MM-DD 00:00 UTC`, independent of the locale. */
 export function formatUtc(unix: bigint): string {
   const d = new Date(Number(unix) * 1000);
   return `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.getUTCDate())} ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
@@ -204,7 +204,7 @@ function localParts(unix: bigint, timeZone?: string): Record<string, string> {
 }
 
 /**
- * Formats an instant in the reader's own time zone, like `2030-01-31 09:00 GMT+9`.
+ * Formats an instant in the reader's own time zone, like `YYYY-MM-DD 09:00 GMT+9`.
  * `timeZone` is an IANA name and defaults to the browser's.
  */
 export function formatLocal(unix: bigint, timeZone?: string): string {
