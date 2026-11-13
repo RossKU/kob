@@ -1,6 +1,9 @@
-//! What the trading commands read from the node and the indexer (`web/src/app/env.ts`): the clock, the maker's KAS and
-//! token UTXOs, the book, the maker's own orders, the last fill, and the live order an action spends. Every UTXO the
-//! indexer names is looked up on the node (exact script, covenant id, outpoint) before anything is built from it.
+//! What the trading commands read from the node and the indexer, as in `web/src/app/env.ts`.
+//!
+//! That is the clock, the KAS and token UTXOs of the maker, the book, the own orders of the
+//! maker, the last fill, and the live order that an action spends. Every UTXO that the indexer
+//! names is looked up on the node before anything is built from it, by exact script, covenant id
+//! and outpoint.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -17,10 +20,10 @@ use super::plan::{Book, BookOrder, Clock, Level, OwnOrder, Side};
 use crate::common::{lookup, maker_funding, order_spk, order_template, spk_bytes, utxo_of, NODE_TIMEOUT};
 use crate::inputs;
 
-/// Timeout of one indexer request.
+/// The timeout of one indexer request.
 pub const INDEXER_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The node's virtual DAA score and the local UTC clock.
+/// The virtual DAA score of the node and the local UTC clock.
 pub fn clock(node: &str) -> Result<Clock, String> {
     let p = crate::wrpc::call(node, "getBlockDagInfo", json!({}), NODE_TIMEOUT).map_err(|e| crate::wrpc::node_failure(node, &e))?;
     let daa = match p.get("virtualDaaScore") {
@@ -33,12 +36,14 @@ pub fn clock(node: &str) -> Result<Clock, String> {
     Ok(Clock { daa, unix, rate_milli: 10_000 })
 }
 
-/// The maker's plain KAS UTXOs.
+/// The plain KAS UTXOs of the maker.
 pub fn funding(node: &str, network: &str, maker: &[u8; 32]) -> Result<Vec<KeyUtxo>, String> {
     maker_funding(node, network, maker)
 }
 
-/// The token list: the registry (`--registry`, else the embedded one when its network matches) and the indexer's.
+/// The token list, from the registry and the indexer.
+///
+/// The registry is `--registry`, else the embedded one when its network matches.
 pub fn token_lists(
     registry: Option<&std::path::Path>,
     network: &str,
@@ -66,10 +71,12 @@ pub fn token_lists(
     Ok((reg, idx))
 }
 
-/// The KCC-23 declaration of `cov` (`docs/spec/token-metadata.md` section 4): the launch proof the indexer serves
-/// (`GET /v1/tokens/{id}/declaration`), verified against the covenant id ([`market::declared_from_proof`]). A 404 is no
-/// declaration (a token created before KCC-23, or an indexer without the route); a proof that does not verify, or names
-/// another covenant id, is refused.
+/// The KCC-23 declaration of `cov`, see section 4 of `docs/spec/token-metadata.md`.
+///
+/// It is the launch proof that the indexer serves (`GET /v1/tokens/{id}/declaration`), verified
+/// against the covenant id with [`market::declared_from_proof`]. A 404 means no declaration, for
+/// a token created before KCC-23 or an indexer without the route. A proof that does not verify,
+/// or that names another covenant id, is refused.
 pub fn declaration(indexer: &str, cov: &[u8; 32]) -> Result<Option<market::Declared>, String> {
     let path = format!("/v1/tokens/{}/declaration", to_hex(cov));
     match http::get(indexer, &path, INDEXER_TIMEOUT)? {
@@ -82,16 +89,25 @@ pub fn declaration(indexer: &str, cov: &[u8; 32]) -> Result<Option<market::Decla
     }
 }
 
-/// The token program of `cov` that the key's own token UTXOs of it prove, for a token no list names (a declared token without
-/// orders): the candidates the indexer lists (`GET /v1/token-utxos`, under the program it proved) and this machine's record of
-/// the key's own outputs ([`crate::recent`]: a token created here, tried under every program of its family), each confirmed on
-/// the node (the state's script under the program, at that outpoint, carrying the covenant id). `None` when none is confirmed;
-/// refused when the confirmed UTXOs name more than one program.
+/// The token program of `cov` that the own token UTXOs of the key prove.
+///
+/// It is for a token that no list names, such as a declared token without orders. The candidates
+/// are:
+/// - The UTXOs that the indexer lists (`GET /v1/token-utxos`) under the program it proved.
+/// - The record of this machine of the own outputs of the key, see [`crate::recent`]. It covers a
+///   token created here, tried under every program of its family.
+///
+/// Each candidate is confirmed on the node: the script of its state under the program, at that
+/// outpoint, carrying the covenant id. The result is `None` when none is confirmed, and an error
+/// when the confirmed UTXOs name more than one program.
 pub fn held_program(indexer: &str, node: &str, network: &str, cov: &[u8; 32], owner: &[u8; 32]) -> Result<Option<TemplateId>, String> {
     held_program_from(Some(indexer), node, network, cov, owner)
 }
 
-/// [`held_program`] with the indexer optional: without one, only this machine's record of the key's own outputs names the candidates.
+/// [`held_program`] with the indexer optional.
+///
+/// Without one, only the record of this machine of the own outputs of the key names the
+/// candidates.
 pub fn held_program_from(
     indexer: Option<&str>,
     node: &str,
@@ -158,14 +174,19 @@ fn i64_of(v: Option<&Value>) -> Option<i64> {
     }
 }
 
-/// The maker's token UTXOs of `m`: listed by the indexer (`GET /v1/token-utxos`) or by the record of the key's own recent
-/// transactions ([`crate::recent`]: outputs the indexer may not have seen yet), each confirmed on the node.
+/// The token UTXOs of the maker for `m`, each confirmed on the node.
+///
+/// They are listed by the indexer (`GET /v1/token-utxos`) or by the record of the own recent
+/// transactions of the key, see [`crate::recent`]. The record has outputs that the indexer may
+/// not have seen yet.
 pub fn token_utxos(indexer: &str, node: &str, network: &str, m: &TokenMarket, owner: &[u8; 32]) -> Result<Vec<TokenUtxo>, String> {
     token_utxos_from(Some(indexer), node, network, m, owner)
 }
 
-/// [`token_utxos`] with the indexer optional: without one, only the record of the key's own recent transactions names the
-/// candidates (each still confirmed on the node).
+/// [`token_utxos`] with the indexer optional.
+///
+/// Without one, only the record of the own recent transactions of the key names the candidates,
+/// and each is still confirmed on the node.
 pub fn token_utxos_from(
     indexer: Option<&str>,
     node: &str,
@@ -198,8 +219,9 @@ pub fn token_utxos_from(
         };
         cands.push((st, txid, index as u32));
     }
-    // the key's own outputs the indexer has not seen yet (its token change of a transaction just sent): candidates like the
-    // indexer's, confirmed on the node below
+    // The own outputs of the key that the indexer has not seen yet, such as the token change of a
+    // transaction just sent. They are candidates like those of the indexer, confirmed on the node
+    // below.
     for (st, txid, index) in crate::recent::candidates(network, owner, &m.cov) {
         if st.family() == m.family
             && st.is_holder(m.program)
@@ -223,20 +245,22 @@ pub fn token_utxos_from(
     Ok(out)
 }
 
-/// The standard scale of the listed orders of `cov` (`market::standard_scale` of its per-order book), `None` without orders:
-/// the decimals of a token without a registry entry.
+/// The standard scale of the listed orders of `cov`, or `None` without orders.
+///
+/// It comes from `market::standard_scale` of the per-order book. It gives the decimals of a token
+/// without a registry entry.
 pub fn order_scale(indexer: &str, cov: &[u8; 32]) -> Result<Option<i64>, String> {
     let v = http::get_ok(indexer, &format!("/v1/books/{}?depth=100&aggregate=false", to_hex(cov)), INDEXER_TIMEOUT)?;
     Ok(market::standard_scale(&v))
 }
 
-/// The KAS book of `m` (per-order rows; orders of another scale are not part of it).
+/// The KAS book of `m`, as per-order rows. Orders of another scale are not part of it.
 pub fn book(indexer: &str, m: &TokenMarket) -> Result<Book, String> {
     let v = http::get_ok(indexer, &format!("/v1/books/{}?depth=100&aggregate=false", to_hex(&m.cov)), INDEXER_TIMEOUT)?;
     Ok(book_from_indexer(m.scale, &v))
 }
 
-/// The indexer book view (per order or aggregated) as the planners' book (`bookFromIndexer`).
+/// The indexer book view, per order or aggregated, as the book of the planners (`bookFromIndexer`).
 pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
     let side = |rows: Option<&Vec<Value>>| -> (Vec<Level>, Option<Vec<BookOrder>>) {
         let rows = rows.cloned().unwrap_or_default();
@@ -284,7 +308,9 @@ pub fn book_from_indexer(scale: i64, v: &Value) -> Book {
     Book { asks, bids, ask_orders, bid_orders }
 }
 
-/// The maker's live orders of `m` in its KAS book (self-trade prevention; pair orders and unpriced stops left out).
+/// The live orders of the maker for `m` in its KAS book, for self-trade prevention.
+///
+/// Pair orders and unpriced stops are left out.
 pub fn own_orders(indexer: &str, m: &TokenMarket, maker: &[u8; 32]) -> Result<Vec<OwnOrder>, String> {
     let path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(&m.cov));
     let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
@@ -314,7 +340,7 @@ pub fn own_orders(indexer: &str, m: &TokenMarket, maker: &[u8; 32]) -> Result<Ve
     Ok(out)
 }
 
-/// The price of the newest KAS trade of `m` (per whole token of its scale).
+/// The price of the newest KAS trade of `m`, per whole token of its scale.
 pub fn last_fill(indexer: &str, m: &TokenMarket) -> Result<Option<i64>, String> {
     let v = http::get_ok(indexer, &format!("/v1/trades/{}?limit=1", to_hex(&m.cov)), INDEXER_TIMEOUT)?;
     let basis = i64_of(v.get("price_basis")).filter(|b| *b > 0);
@@ -325,8 +351,10 @@ pub fn last_fill(indexer: &str, m: &TokenMarket) -> Result<Option<i64>, String> 
     })
 }
 
-/// A KAS reference of `m` a far-off quote cannot move (`firmReferencePrice`): the bid at which the bids are worth 10 KAS,
-/// midpointed with the best ask when that is at most twice the bid.
+/// A KAS reference price of `m` that a far-off quote cannot move (`firmReferencePrice`).
+///
+/// It is the bid at which the bids add up to 10 KAS. It is midpointed with the best ask when
+/// that ask is at least the bid and at most twice the bid.
 pub fn firm_reference(b: &Book, scale: i64) -> Option<i64> {
     let mut value = 0i128;
     let mut bid = None;
@@ -344,7 +372,9 @@ pub fn firm_reference(b: &Book, scale: i64) -> Option<i64> {
     }
 }
 
-/// The pair book of A/B as a book in B per whole A (`pairBookToBookView`: asks rounded up, bids down).
+/// The pair book of A/B as a book in B per whole A, as `pairBookToBookView` makes it.
+///
+/// Asks are rounded up and bids down.
 pub fn pair_book(indexer: &str, a: &TokenMarket, b: &TokenMarket) -> Result<Book, String> {
     let v = http::get_ok(indexer, &format!("/v1/pairs/{}/{}/book?depth=100", to_hex(&a.cov), to_hex(&b.cov)), INDEXER_TIMEOUT)?;
     Ok(pair_book_from(&v, a.scale))
@@ -365,7 +395,7 @@ pub fn pair_book_from(v: &Value, scale_a: i64) -> Book {
             if den <= 0 || amount <= 0 {
                 continue;
             }
-            // the indexer's numbers: an overflow drops the level
+            // These are numbers of the indexer, and an overflow drops the level.
             let Some(n) = num.checked_mul(scale_a as i128) else { continue };
             let Some(price) = (if up { n.checked_add(den - 1).map(|x| x / den) } else { Some(n / den) }) else { continue };
             let Ok(price) = i64::try_from(price) else { continue };
@@ -395,7 +425,7 @@ pub fn pair_book_from(v: &Value, scale_a: i64) -> Book {
     }
 }
 
-/// The maker's live pair orders of A/B.
+/// The live pair orders of the maker for A/B.
 pub fn own_pair_orders(indexer: &str, a: &TokenMarket, b: &TokenMarket, maker: &[u8; 32]) -> Result<Vec<OwnOrder>, String> {
     let path = format!("/v1/orders?maker={}&token={}&status=active&limit=200", to_hex(maker), to_hex(&a.cov));
     let v = http::get_ok(indexer, &path, INDEXER_TIMEOUT)?;
@@ -423,28 +453,34 @@ pub fn own_pair_orders(indexer: &str, a: &TokenMarket, b: &TokenMarket, maker: &
 
 // ------------------------------------------------------------------------------------------------ a live order
 
-/// A live order confirmed on the node: its UTXO and state, its custodies and the strays of its own token(s).
+/// A live order confirmed on the node.
+///
+/// It holds the UTXO and state of the order, its custodies and the strays of its own tokens.
 #[derive(Debug, Clone)]
 pub struct Live {
-    /// Covenant id.
+    /// The covenant id.
     pub cov: [u8; 32],
     /// The order UTXO.
     pub order: OrderUtxo<AnyState>,
-    /// The custody (a pair order: the first of its custodies).
+    /// The custody. For a pair order it is the first of its custodies.
     pub custody: Option<TokenUtxo>,
-    /// A sell-first pair entry's B prefund.
+    /// The B prefund of a sell-first pair entry.
     pub prefund: Option<TokenUtxo>,
-    /// Strays of its own token(s), confirmed on the node, with their extension commitment.
+    /// The strays of its own tokens, confirmed on the node, with their extension commitment.
     pub strays: Vec<TokenUtxo>,
-    /// Strays of other tokens (left where they are; only `kob cancel` returns them).
+    /// The number of strays of other tokens.
+    ///
+    /// They are left where they are, and only `kob cancel` returns them.
     pub foreign: usize,
-    /// A day order's deadline (placement record, as the indexer reports it).
+    /// The deadline of a day order, from the placement record as the indexer reports it.
     pub deadline: Option<u64>,
-    /// The DAA score of the order's placement (as the indexer reports it): tells a GTC from a dated order.
+    /// The DAA score of the placement of the order, as the indexer reports it.
+    ///
+    /// It tells a GTC order from a dated one.
     pub genesis_daa: Option<i64>,
 }
 
-/// `GET /v1/orders/{id}`, then the order UTXO, its custodies and its own-token strays on the node.
+/// Reads `GET /v1/orders/{id}`, then the order UTXO, its custodies and its strays on the node.
 pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> Result<Live, String> {
     let v = http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(cov)), INDEXER_TIMEOUT)?;
     let parsed = inputs::parse(&v, &format!("indexer order {}", to_hex(cov)), network)?;
@@ -467,7 +503,7 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     }
     let tpl = order_template(&view.template_hash).ok_or("the order's template is not pinned by this build")?;
     let ospk = order_spk(tpl, &state)?;
-    // custodies and own strays
+    // The custodies and the own strays.
     let targets = crate::recover::custody_targets(&state, *cov, view.ext)?;
     let mut spks = vec![ospk.clone()];
     spks.extend(targets.iter().map(|t| t.1.clone()));
