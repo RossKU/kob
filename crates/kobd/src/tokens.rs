@@ -1,20 +1,28 @@
-//! Token allowlist and listing rules.
+//! The token allowlist and the rules that decide which orders are listed.
 //!
-//! The allowlist is a config input (`--tokens registry/tokens.json`, produced by another branch).
-//! Its exact schema is owned by that branch, so the loader is deliberately tolerant: it accepts a
-//! bare array or an object with a `tokens` array and snake_case or camelCase keys (and their aliases); an unknown key
-//! is refused, so a misspelt pin is never dropped silently. Only the covenant id is mandatory.
+//! The allowlist is a configuration input, `--tokens registry/tokens.json`. The loader is
+//! tolerant. It accepts a bare array or an object with a `tokens` array, snake_case or camelCase
+//! keys and their aliases. Only the covenant id is mandatory. An unknown key is refused, so a
+//! misspelt pin is never dropped silently.
 //!
-//! **Strict templates, open tokens.** A registry document (`registry/tokens.json`) carries the STRICT template list (the token
-//! programs this build supports) and the token entries. Every order whose token program (template hash and family) is on the
-//! strict list is listed, whether or not its token has an entry (open token list); an entry adds facts only (decimals and so the
-//! standard scale, the program, the extension commitment, the genesis check). Nothing in a registry makes one token tradable and
-//! another not: KOB makes no per-token judgement (no official badge, no delisting). The token is identified by covenant id plus
-//! template hash, never by ticker.
+//! # Strict templates, open tokens
 //!
-//! Listing is a policy of the indexer, not of the chain: an order that fails a rule is still
-//! indexed (status by covenant id keeps working, makers can cancel) but is marked `listed = false`
-//! with a reason and stays out of the books.
+//! A registry document carries the strict template list, which names the token programs this build
+//! supports, and the token entries.
+//! - Every order whose token program is on the strict list is listed, whether or not its token has
+//!   an entry. A program is a template hash and a family.
+//! - An entry adds facts only: the decimals and so the standard scale, the program, the extension
+//!   commitment and the genesis check.
+//! - Nothing in a registry makes one token tradable and another not. KOB makes no per-token
+//!   judgement, so there is no official badge and no delisting.
+//!
+//! A token is identified by covenant id plus template hash, never by ticker.
+//!
+//! # Listing
+//!
+//! Listing is a policy of the indexer, not of the chain. An order that fails a rule is still
+//! indexed, so its status by covenant id keeps working and its maker can cancel it. It is marked
+//! `listed = false` with a reason and stays out of the books.
 
 use crate::hex::Hash32;
 use kob_protocol::family::Family;
@@ -22,38 +30,45 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// One token of the allowlist: its identity and the facts that the checks use.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TokenEntry {
+    /// Ticker of the token. Display only, never an identity.
     #[serde(alias = "symbol", alias = "name", default)]
     pub ticker: String,
+    /// Covenant id of the token, its identity together with the template hash.
     #[serde(alias = "covenantId", alias = "covenant_id", alias = "id")]
     pub covenant_id: Hash32,
     /// Template hash of the token program; when present, orders must quote the same hash.
     #[serde(alias = "templateHash", alias = "tokenTemplateHash", alias = "token_template_hash", default)]
     pub template_hash: Option<Hash32>,
+    /// Extension commitment of the token; when present, orders must quote the same one.
     #[serde(alias = "extensionCommitment", default)]
     pub extension_commitment: Option<Hash32>,
-    /// Decimals of the token: when present, an order is listed only if its `scale` (base units per whole token, the price
-    /// denominator) is the standard one, `10^decimals` capped at `10^9` ([`TokenEntry::scale`]), so every listed order of the
-    /// token quotes the same whole token.
+    /// Decimals of the token: when present, an order is listed only if its `scale` (base units per
+    /// whole token, the price denominator) is the standard one, `10^decimals` capped at `10^9`
+    /// ([`TokenEntry::scale`]), so every listed order of the token quotes the same whole token.
     #[serde(default)]
     pub decimals: Option<u32>,
-    /// Token program family (`kcc20`, `kron`); when present, orders must trade a token of that family.
+    /// Token program family (`kcc20`, `kron`); when present, orders must trade a token of that
+    /// family.
     #[serde(default)]
     pub family: Option<Family>,
+    /// Whether the entry counts. An entry with `enabled = false` is left out of the list.
     #[serde(default = "yes")]
     pub enabled: bool,
     /// Registry id of the token's program (`kron-2433`, ...), when known.
     #[serde(alias = "templateId", default)]
     pub template_id: Option<String>,
-    /// Capabilities of the token's program that reach holder balances or supply (`freeze`, `seize`, `blacklist`, `mint-authority`, ...).
+    /// Capabilities of the token's program that reach holder balances or supply (`freeze`, `seize`,
+    /// `blacklist`, `mint-authority`, ...).
     #[serde(default)]
     pub powers: Vec<String>,
 }
 
 impl TokenEntry {
-    /// The standard scale of the token's orders: `kob_protocol::defaults::default_scale(decimals)` (`10^decimals`, at most
-    /// `10^9`); `None` without `decimals`.
+    /// The standard scale of the token's orders: `kob_protocol::defaults::default_scale(decimals)`
+    /// (`10^decimals`, at most `10^9`); `None` without `decimals`.
     pub fn scale(&self) -> Option<i64> {
         self.decimals.map(kob_protocol::defaults::default_scale)
     }
@@ -64,6 +79,7 @@ impl TokenEntry {
 pub struct StrictTemplate {
     /// Registry id (`kcc20-kaspacom-0-2-5`).
     pub id: String,
+    /// Family of the program.
     pub family: Family,
     /// Capabilities of the program (registry `capabilities`).
     pub powers: Vec<String>,
@@ -73,9 +89,11 @@ fn yes() -> bool {
     true
 }
 
-/// Every key a [`TokenEntry`] of the list format may carry (its fields and their aliases, the `genesis_verified` flag read
-/// from the raw document, and the legacy `official` of older lists, read and ignored: KOB makes no per-token judgement, and an
-/// operator's list of the earlier shape keeps loading). Anything else is refused.
+/// Every key that a [`TokenEntry`] of the list format may carry. Anything else is refused.
+///
+/// That is its fields and their aliases, and the `genesis_verified` flag, which is read from the
+/// raw document. The key `official` is read and ignored, because KOB makes no per-token judgement
+/// and a list that still has the key keeps loading.
 const TOKEN_ENTRY_KEYS: &[&str] = &[
     "ticker",
     "symbol",
@@ -100,6 +118,7 @@ const TOKEN_ENTRY_KEYS: &[&str] = &[
     "genesisVerified",
 ];
 
+/// Why an allowlist file could not be loaded.
 #[derive(Debug, thiserror::Error)]
 pub enum TokenLoadError {
     #[error("cannot read {0}: {1}")]
@@ -108,20 +127,24 @@ pub enum TokenLoadError {
     Parse(String, serde_json::Error),
 }
 
+/// The tokens an indexer knows, with the strict template list and the registry facts.
 #[derive(Debug, Clone, Default)]
 pub struct TokenAllowlist {
     entries: HashMap<Hash32, TokenEntry>,
-    /// The strict template list by template hash (empty: a plain allowlist, only entries are listed).
+    /// The strict template list by template hash (empty: a plain allowlist, only entries are
+    /// listed).
     templates: HashMap<Hash32, StrictTemplate>,
-    /// The registry's `genesis_verified` per token: whether EVERY genesis output of the token was checked to be an
-    /// instance of the pinned program. A covenant id only commits to the genesis output hashes, so an unchecked genesis may hide an
-    /// output that mints look-alike tokens later.
+    /// The registry's `genesis_verified` per token: whether EVERY genesis output of the token was
+    /// checked to be an instance of the pinned program. A covenant id only commits to the genesis
+    /// output hashes, so an unchecked genesis may hide an output that mints look-alike tokens
+    /// later.
     genesis: HashMap<Hash32, bool>,
-    /// Tokens whose registry genesis record lists live mint-authority cells (`genesis.live_minters` non-empty): the recorded fact
-    /// behind the warning `live_mint_authority`.
+    /// Tokens whose registry genesis record lists live mint-authority cells (`genesis.live_minters`
+    /// non-empty): the recorded fact behind the warning `live_mint_authority`.
     live_minters: HashSet<Hash32>,
-    /// Where the document came from and its SHA-256: served with every token so a client can check which registry the facts
-    /// it is served (`genesis_verified`, the derived `warnings`) come from instead of trusting the operator's word.
+    /// Where the document came from and its SHA-256: served with every token so a client can check
+    /// which registry the facts it is served (`genesis_verified`, the derived `warnings`) come from
+    /// instead of trusting the operator's word.
     info: Option<RegistryInfo>,
 }
 
@@ -141,10 +164,12 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Warning code the API attaches to a token whose genesis has not been verified.
 pub const WARN_GENESIS_UNVERIFIED: &str = "genesis_unverified";
-/// Warning code the API attaches to a token whose registry genesis record lists a live mint authority (its supply can grow).
+/// Warning code the API attaches to a token whose registry genesis record lists a live mint
+/// authority (its supply can grow).
 pub const WARN_LIVE_MINT_AUTHORITY: &str = "live_mint_authority";
 
 impl TokenAllowlist {
+    /// A plain allowlist of the enabled `entries`, with no strict template list.
     pub fn from_entries(entries: impl IntoIterator<Item = TokenEntry>) -> Self {
         TokenAllowlist {
             entries: entries.into_iter().filter(|e| e.enabled).map(|e| (e.covenant_id, e)).collect(),
@@ -152,7 +177,8 @@ impl TokenAllowlist {
         }
     }
 
-    /// Adds the strict template list: from now on every token whose program is on it is listed (open token list).
+    /// Adds the strict template list: from now on every token whose program is on it is listed
+    /// (open token list).
     pub fn with_strict_templates(mut self, templates: impl IntoIterator<Item = (Hash32, StrictTemplate)>) -> Self {
         self.templates.extend(templates);
         self
@@ -176,8 +202,8 @@ impl TokenAllowlist {
     }
 
     /// Warnings a client must show for a token, derived from the registry's recorded facts (as
-    /// `kob_protocol::registry::Token::warnings`): its genesis is not verified (absent flag included: fail closed in the display),
-    /// and its genesis record lists a live mint authority.
+    /// `kob_protocol::registry::Token::warnings`): its genesis is not verified (absent flag
+    /// included: fail closed in the display), and its genesis record lists a live mint authority.
     pub fn warnings_for(&self, id: &Hash32) -> Vec<&'static str> {
         let mut w = vec![];
         if self.genesis_verified(id) != Some(true) {
@@ -189,7 +215,8 @@ impl TokenAllowlist {
         w
     }
 
-    /// True when a strict template list is loaded: tokens outside the entries are listed if their program is on it.
+    /// True when a strict template list is loaded: tokens outside the entries are listed if their
+    /// program is on it.
     pub fn is_open(&self) -> bool {
         !self.templates.is_empty()
     }
@@ -200,8 +227,9 @@ impl TokenAllowlist {
     }
 
     /// Parses an allowlist. A full token registry document (`schema_version` + `templates`, i.e.
-    /// `registry/tokens.json`) is validated by `kob_protocol::registry` and every token entry enters the list
-    /// ([`TokenAllowlist::from_registry`]); anything else is the tolerant list format.
+    /// `registry/tokens.json`) is validated by `kob_protocol::registry` and every token entry
+    /// enters the list ([`TokenAllowlist::from_registry`]); anything else is the tolerant list
+    /// format.
     pub fn parse(json: &str) -> Result<Self, serde_json::Error> {
         use serde::de::Error as _;
         let raw: serde_json::Value = serde_json::from_str(json)?;
@@ -215,7 +243,8 @@ impl TokenAllowlist {
             serde_json::Value::Array(a) => a.as_slice(),
             v => v.get("tokens").and_then(|t| t.as_array()).map(Vec::as_slice).unwrap_or(&[]),
         };
-        // a misspelt key (`templatHash`, `decimalz`) would silently drop the check it names: every key must be a known one
+        // A misspelt key (`templatHash`, `decimalz`) would silently drop the check it names: every
+        // key must be a known one.
         for (i, e) in entries.iter().enumerate() {
             if let Some(obj) = e.as_object() {
                 if let Some(k) = obj.keys().find(|k| !TOKEN_ENTRY_KEYS.contains(&k.as_str())) {
@@ -240,9 +269,10 @@ impl TokenAllowlist {
         Ok(list.with_genesis(genesis_flags(entries)))
     }
 
-    /// The tokens of a registry, facts only: identity, program template hash, family, decimals (the standard scale), the
-    /// program's capabilities; plus the registry's strict template list (the programs this build supports), which opens the list
-    /// to every token on those programs, and the live mint authorities its genesis records list.
+    /// The tokens of a registry, facts only: identity, program template hash, family, decimals (the
+    /// standard scale), the program's capabilities; plus the registry's strict template list (the
+    /// programs this build supports), which opens the list to every token on those programs, and
+    /// the live mint authorities its genesis records list.
     pub fn from_registry(reg: &kob_protocol::registry::Registry) -> Self {
         let parse = |s: &str| kob_protocol::registry::parse_hex32(s).map(Hash32);
         let entries = reg.tokens.iter().filter_map(|t| {
@@ -273,19 +303,22 @@ impl TokenAllowlist {
         Self::from_entries(entries).with_strict_templates(templates).with_live_minters(live)
     }
 
+    /// Reads and parses the allowlist file at `path`.
+    ///
+    /// The provenance names the file only, so that a directory of the operator, such as a home
+    /// folder, never reaches a reader of the API.
     pub fn load(path: &Path) -> Result<Self, TokenLoadError> {
         let p = path.display().to_string();
         let s = std::fs::read_to_string(path).map_err(|e| TokenLoadError::Io(p.clone(), e))?;
         let mut list = Self::parse(&s).map_err(|e| TokenLoadError::Parse(p.clone(), e))?;
-        // the public provenance names the file only: the operator's directories (a home folder, a user name) never reach an API reader
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         list.info = Some(RegistryInfo { source: format!("file:{name}"), sha256: sha256_hex(s.as_bytes()) });
         Ok(list)
     }
 
-    /// The registry the build embeds (`registry/tokens.json`, the mainnet registry), parsed like a loaded file. Its
-    /// provenance is `embedded:registry/tokens.json` with the sha256 of its LF-normalised bytes (the hash the mainnet
-    /// deployment record pins).
+    /// The registry the build embeds (`registry/tokens.json`, the mainnet registry), parsed like a
+    /// loaded file. Its provenance is `embedded:registry/tokens.json` with the sha256 of its
+    /// LF-normalised bytes (the hash the mainnet deployment record pins).
     pub fn embedded_default() -> Result<Self, TokenLoadError> {
         let text = kob_protocol::registry::DEFAULT_REGISTRY_JSON;
         let source = "embedded:registry/tokens.json".to_string();
@@ -299,18 +332,22 @@ impl TokenAllowlist {
         self.info.as_ref()
     }
 
+    /// The entry of the token with this covenant id.
     pub fn get(&self, covenant_id: &Hash32) -> Option<&TokenEntry> {
         self.entries.get(covenant_id)
     }
 
+    /// Whether the list has no entries.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// The number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// The entries, sorted by ticker and then covenant id.
     pub fn list(&self) -> Vec<&TokenEntry> {
         let mut v: Vec<_> = self.entries.values().collect();
         v.sort_by(|a, b| a.ticker.cmp(&b.ticker).then(a.covenant_id.cmp(&b.covenant_id)));
@@ -318,8 +355,8 @@ impl TokenAllowlist {
     }
 }
 
-/// The `genesis_verified` (or `genesisVerified`) booleans of raw token entries, by covenant id. Read from the raw JSON so the
-/// flag is honoured whatever typed schema the registry loader has.
+/// The `genesis_verified` (or `genesisVerified`) booleans of raw token entries, by covenant id.
+/// Read from the raw JSON so the flag is honoured whatever typed schema the registry loader has.
 fn genesis_flags(entries: &[serde_json::Value]) -> Vec<(Hash32, bool)> {
     entries
         .iter()
@@ -331,23 +368,25 @@ fn genesis_flags(entries: &[serde_json::Value]) -> Vec<(Hash32, bool)> {
         .collect()
 }
 
-/// Policy knobs. Defaults: 90-day maximum expiry, 1 KAS minimum order value.
+/// The listing rules. The defaults are a 90-day maximum expiry and a 1 KAS minimum order value.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ListingRules {
     /// When true (default) an empty allowlist lists nothing.
     pub require_allowlist: bool,
-    /// Minimum value of an order, in sompi: its amount at its quote, `quoteOf(amount, price, scale)` rounded down (a bid,
-    /// whose quantity is its escrow: the KAS of its output).
+    /// Minimum value of an order, in sompi: its amount at its quote, `quoteOf(amount, price,
+    /// scale)` rounded down (a bid, whose quantity is its escrow: the KAS of its output).
     pub min_order_value_sompi: i64,
-    /// Latest acceptable `expiryDaa` relative to the DAA score of the block that accepted the order.
+    /// Latest acceptable `expiryDaa` relative to the DAA score of the block that accepted the
+    /// order.
     pub max_expiry_span_daa: i64,
     /// Slack on top of the span for wallets that computed the expiry from an older DAA score.
     pub expiry_slack_daa: i64,
     /// Minimum value of the order's covenant output, in sompi (0 = off).
     pub min_carrier_sompi: u64,
-    /// List only tokens whose registry entry says `genesis_verified: true`. Off by default: the open token list
-    /// trades unverified tokens too, with the `genesis_unverified` warning in the API.
+    /// List only tokens whose registry entry says `genesis_verified: true`. Off by default: the
+    /// open token list trades unverified tokens too, with the `genesis_unverified` warning in the
+    /// API.
     pub require_genesis_verified: bool,
 }
 
@@ -367,36 +406,45 @@ impl Default for ListingRules {
 /// The order fields the rules look at.
 #[derive(Debug, Clone, Default)]
 pub struct ListingInput {
+    /// Covenant id of the order's token.
     pub token_cov_id: Option<Hash32>,
+    /// Template hash of the order's token program.
     pub token_tpl_hash: Option<Hash32>,
+    /// Extension commitment of the order's token.
     pub extension_commitment: Option<Hash32>,
     /// Family of the order's token program.
     pub family: Option<Family>,
     /// Base units per whole token of the order (the price denominator).
     pub scale: Option<i64>,
-    /// The scale every order of this token must quote when its decimals are known without any order (an open-list token: its
-    /// verified KCC-23 declaration, else the default of its program): `10^min(decimals, 9)`. `None`: nothing fixes it (the first
-    /// order of the token sets the market's scale), or the token has a registry entry (its own `scale` decides).
+    /// The scale every order of this token must quote when its decimals are known without any order
+    /// (an open-list token: its verified KCC-23 declaration, else the default of its program):
+    /// `10^min(decimals, 9)`. `None`: nothing fixes it (the first order of the token sets the
+    /// market's scale), or the token has a registry entry (its own `scale` decides).
     pub standard_scale: Option<i64>,
     /// The order's smallest fill, base units.
     pub min_fill: Option<i64>,
-    /// The order's amount in base units (`amountLeft`); `None` for a bid, whose quantity is its escrow (`carrier`).
+    /// The order's amount in base units (`amountLeft`); `None` for a bid, whose quantity is its
+    /// escrow (`carrier`).
     pub amount: Option<i64>,
-    /// The order's quote, sompi per whole token (a conditional order: its take-profit leg); `None` when it has no KAS quote
-    /// (a pair order).
+    /// The order's quote, sompi per whole token (a conditional order: its take-profit leg); `None`
+    /// when it has no KAS quote (a pair order).
     pub price: Option<i64>,
     /// Priority tip, sompi per whole token.
     pub tip: Option<i64>,
+    /// The `expiryDaa` of the order, if it has one.
     pub expiry_daa: Option<i64>,
+    /// DAA score of the block that accepted the order.
     pub genesis_daa: u64,
     /// KAS of the order's output (a bid's escrow).
     pub carrier: u64,
-    /// What a keeper's arming / trailing update may take from the order's output (`None`: the order has no update). The
-    /// continuation (`carrier - keeper_tip`) must clear the covenant-output bound, or the matcher's batch that carries the update
-    /// could never be built (audit 2026-10-30 E1).
+    /// What a keeper's arming or trailing update may take from the order's output (`None`: the
+    /// order has no update). The continuation (`carrier - keeper_tip`) must clear the
+    /// covenant-output bound. Otherwise the matcher could never build the batch that carries the
+    /// update.
     pub keeper_tip: Option<i64>,
-    /// The template hashes of the programs the chain proves the order's token has (its holdings, `reads::proven_programs`); empty:
-    /// nothing proves one. An order that pins another program is not listed (audit 2026-10-30 V1).
+    /// The template hashes of the programs the chain proves the order's token has (its holdings,
+    /// `reads::proven_programs`); empty: nothing proves one. An order that pins another program is
+    /// not listed.
     pub proven_tpls: Vec<Hash32>,
 }
 
@@ -406,8 +454,9 @@ impl ListingRules {
         let Some(tok_id) = o.token_cov_id else {
             return Err("no_token".into());
         };
-        // the strict template list (registry): the order's token program must be one this build supports, for tokens with and
-        // without an entry alike (a rule on the program: none of the rules here refuses a token for being that token)
+        // The strict template list (registry): the order's token program must be one this build
+        // supports, for tokens with and without an entry alike (a rule on the program: none of the
+        // rules here refuses a token for being that token).
         if tokens.is_open() {
             match (o.token_tpl_hash.as_ref().and_then(|h| tokens.strict_template(h)), o.family) {
                 (Some(t), Some(f)) if t.family == f => {}
@@ -426,9 +475,11 @@ impl ListingRules {
         match tokens.get(&tok_id) {
             None if self.require_allowlist && !tokens.is_open() => return Err("token_not_allowlisted".into()),
             None => {
-                // an open-list token: the decimals its creator declared on chain, else its program's convention, fix the scale the
-                // same way a registry entry does. Without this an order of any other scale (one cheap bid before the first honest
-                // order) set the market's scale beside decimals the clients refuse to trade against (audit 2026-10-29 F3)
+                // An open-list token. The decimals its creator declared on chain, else the
+                // convention of its program, fix the scale the same way a registry entry does.
+                // Without this an order of any other scale, such as one cheap bid before the first
+                // honest order, would set the market's scale beside decimals that the clients
+                // refuse to trade against.
                 if let (Some(want), Some(scale)) = (o.standard_scale, o.scale) {
                     if scale != want {
                         return Err("non_standard_scale".into());
@@ -452,15 +503,15 @@ impl ListingRules {
                     }
                 }
                 if let (Some(want), Some(scale)) = (t.scale(), o.scale) {
-                    // every listed order of a token quotes the same whole token
+                    // Every listed order of a token quotes the same whole token.
                     if scale != want {
                         return Err("non_standard_scale".into());
                     }
                 }
             }
         }
-        // the order's value: its amount at its quote (rounded down, i128: never overflows), a bid's escrow; an order without a
-        // KAS quote (a pair order) or a scale is not measured here
+        // The order's value: its amount at its quote (rounded down, i128: never overflows), a bid's
+        // escrow; an order without a KAS quote (a pair order) or a scale is not measured here.
         let value: Option<i128> = match (o.amount, o.price, o.scale) {
             (Some(amount), Some(price), Some(scale)) => {
                 Some(kob_protocol::state::quote_exact(amount, price, scale, kob_protocol::state::Round::Down).unwrap_or(0))
@@ -511,7 +562,8 @@ mod tests {
         assert!(TokenAllowlist::parse(&off).unwrap().is_empty());
     }
 
-    /// A misspelt key would drop the pin it names without a word: every key of an entry must be a known one.
+    /// A misspelt key would drop the pin it names without a word: every key of an entry must be a
+    /// known one.
     #[test]
     fn an_unknown_key_of_a_token_entry_is_refused() {
         for doc in [
@@ -524,7 +576,8 @@ mod tests {
         }
     }
 
-    /// The standard scale of a token is `10^decimals`, capped at `10^9` (the largest scale the builders accept).
+    /// The standard scale of a token is `10^decimals`, capped at `10^9` (the largest scale the
+    /// builders accept).
     #[test]
     fn the_standard_scale_is_ten_to_the_decimals_capped() {
         for (decimals, scale) in [(0u32, 1i64), (3, 1_000), (8, 100_000_000), (9, 1_000_000_000), (18, 1_000_000_000)] {
@@ -543,26 +596,31 @@ mod tests {
         }
     }
 
-    /// The registry file itself is a valid allowlist: every token entry, with the template hash, family and decimals (the
-    /// standard scale), and the listing rules work on it for both families.
+    /// The registry file itself is a valid allowlist: every token entry, with the template hash,
+    /// family and decimals (the standard scale), and the listing rules work on it for both
+    /// families.
     #[test]
     fn a_registry_document_is_an_allowlist_with_decimals_and_standard_scale() {
         let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/tokens.example.json")).unwrap();
-        // the example: two entries (facts, nothing checked against the chain), and the strict template list opens the list
+        // The example: two entries (facts, nothing checked against the chain), and the strict
+        // template list opens the list.
         let example = TokenAllowlist::parse(&text).unwrap();
         assert_eq!(example.len(), 2);
         assert!(example.is_open());
         assert!(example.list().iter().all(|t| example.warnings_for(&t.covenant_id) == [WARN_GENESIS_UNVERIFIED]));
-        // a registry of the earlier shape (listing state, official badge, warning text) loads as the same list: those are ignored
+        // A registry that still has a listing state, an official badge and a warning text loads as
+        // the same list, because those are ignored.
         let mut old: serde_json::Value = serde_json::from_str(&text).unwrap();
         old["tokens"][0]["status"] = "delisted".into();
         old["tokens"][0]["official"] = true.into();
         old["tokens"][1]["warning"] = "a maintainer note".into();
         let old = TokenAllowlist::parse(&old.to_string()).unwrap();
         assert_eq!(old.list(), example.list());
-        // the shipped registry: the eight KRON-family tokens of the census, every genesis output checked on mainnet data and no
-        // live mint authority (`registry/evidence/`, `kob registry verify-genesis`), so none carries a warning; the two KRON
-        // programs are reviewed with conditions (`crates/kob-tests/tests/audit/review_b2_kron.rs`), which opens the list to every token on them
+        // The shipped registry has eight KRON-family tokens. Every genesis output of them was
+        // checked on mainnet data and none has a live mint authority, see `registry/evidence/` and
+        // `kob registry verify-genesis`. So none carries a warning. The two KRON programs are
+        // reviewed with conditions, see `crates/kob-tests/tests/audit/review_b2_kron.rs`. That
+        // opens the list to every token on them.
         let shipped = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../registry/tokens.json")).unwrap();
         let shipped = TokenAllowlist::parse(&shipped).unwrap();
         assert_eq!(shipped.len(), 8);
@@ -573,7 +631,8 @@ mod tests {
         for t in doc["templates"].as_array_mut().unwrap() {
             t["review_status"] = "reviewed".into();
         }
-        // an entry checked against the chain and one that is not: both are entries alike (the check is a fact, no listing step)
+        // An entry checked against the chain and one that is not: both are entries alike (the check
+        // is a fact, no listing step).
         doc["tokens"][0]["verified"] = true.into();
         let listed = TokenAllowlist::parse(&doc.to_string()).unwrap();
         assert_eq!(listed.len(), 2);
@@ -584,14 +643,14 @@ mod tests {
         );
         assert!(kcc.template_hash.is_some() && kcc.extension_commitment.is_some());
 
-        // the KRON entry carries its own template, no extension commitment
+        // The KRON entry carries its own template, no extension commitment.
         doc["tokens"][1]["verified"] = true.into();
         let both = TokenAllowlist::parse(&doc.to_string()).unwrap();
         assert_eq!(both.len(), 2);
         let kron = both.list().into_iter().find(|t| t.ticker == "EXKRON").unwrap().clone();
         assert_eq!((kron.family, kron.scale(), kron.extension_commitment), (Some(Family::Kron), Some(100_000_000), None));
         let rules = ListingRules { max_expiry_span_daa: 1 << 40, ..ListingRules::default() };
-        // one whole token at 10 KAS per whole token, any minimum fill
+        // One whole token at 10 KAS per whole token, any minimum fill.
         let order = |tok: &TokenEntry, scale: i64, family: Family| ListingInput {
             token_cov_id: Some(tok.covenant_id),
             token_tpl_hash: tok.template_hash,
@@ -606,7 +665,8 @@ mod tests {
             carrier: 1,
             ..Default::default()
         };
-        // the standard scale of 8 decimals lists; any other scale is non-standard (prices would not be comparable)
+        // The standard scale of 8 decimals lists; any other scale is non-standard (prices would not
+        // be comparable).
         assert_eq!(rules.evaluate(&both, &order(&kcc, 100_000_000, Family::Kcc20)), Ok(()));
         for s in [1, 10_000_000, 1_000_000_000] {
             assert_eq!(rules.evaluate(&both, &order(&kcc, s, Family::Kcc20)), Err("non_standard_scale".into()), "{s}");
@@ -614,16 +674,16 @@ mod tests {
         assert_eq!(rules.evaluate(&both, &order(&kcc, 100_000_000, Family::Kron)), Err("token_family_mismatch".into()));
         assert_eq!(rules.evaluate(&both, &order(&kron, 100_000_000, Family::Kron)), Ok(()));
         assert_eq!(rules.evaluate(&both, &order(&kron, 1_000_000, Family::Kron)), Err("non_standard_scale".into()));
-        // an order quoting a program that is not on the strict list is refused
+        // An order quoting a program that is not on the strict list is refused.
         let mut o = order(&kron, 100_000_000, Family::Kron);
         o.token_tpl_hash = Some(h(3));
         assert_eq!(rules.evaluate(&both, &o), Err("token_template_not_strict".into()));
-        // an entry's token quoting another supported program is a template mismatch
+        // An entry's token quoting another supported program is a template mismatch.
         let mut o = order(&kron, 100_000_000, Family::Kron);
         o.token_tpl_hash = kcc.template_hash;
         o.family = Some(Family::Kcc20);
         assert_eq!(rules.evaluate(&both, &o), Err("token_template_mismatch".into()));
-        // a registry document that fails validation is a load error, not an empty list
+        // A registry document that fails validation is a load error, not an empty list.
         let mut bad = doc.clone();
         bad["tokens"][0]["decimals"] = 19.into();
         assert!(TokenAllowlist::parse(&bad.to_string()).is_err());
@@ -643,7 +703,7 @@ mod tests {
             powers: vec![],
         }]);
         let rules = ListingRules::default();
-        // one whole token (scale 1000) at 2.5 KAS
+        // One whole token (scale 1000) at 2.5 KAS.
         let ok = ListingInput {
             token_cov_id: Some(h(1)),
             token_tpl_hash: Some(h(9)),
@@ -671,7 +731,8 @@ mod tests {
         let mut o = ok.clone();
         o.scale = Some(100);
         assert_eq!(rules.evaluate(&toks, &o), Err("non_standard_scale".into()));
-        // any amount and minimum fill at the standard scale is standard: the scale is the only geometry an order has
+        // Any amount and minimum fill at the standard scale is standard: the scale is the only
+        // geometry an order has.
         for (amount, min_fill) in [(1000, 1), (5_000, 1000), (1_000_000, 10), (401, 401)] {
             let mut o = ok.clone();
             o.amount = Some(amount);
@@ -684,30 +745,32 @@ mod tests {
             o.scale = Some(scale);
             assert_eq!(rules.evaluate(&toks, &o), Err("non_standard_scale".into()), "{scale}");
         }
-        // no scale known: the scale rule cannot decide and does not fire (nor is the value measured)
+        // No scale known: the scale rule cannot decide and does not fire (nor is the value
+        // measured).
         let mut o = ok.clone();
         o.scale = None;
         o.price = Some(1);
         assert_eq!(rules.evaluate(&toks, &o), Ok(()));
-        // the order's value is its amount at its quote, rounded down
+        // The order's value is its amount at its quote, rounded down.
         let mut o = ok.clone();
         o.price = Some(1);
         assert_eq!(rules.evaluate(&toks, &o), Err("order_value_below_minimum".into()));
         let mut o = ok.clone();
-        // 999 base units at 100 100 sompi per whole token: 99 999.9 sompi
+        // 999 base units at 100 100 sompi per whole token: 99 999.9 sompi.
         (o.amount, o.price) = (Some(999), Some(100_100));
         assert_eq!(rules.evaluate(&toks, &o), Err("order_value_below_minimum".into()));
-        // at least 1 KAS: one base unit at 1000 KAS per whole token (exactly 1e8 sompi); 999 base units just above and just below
+        // At least 1 KAS: one base unit at 1000 KAS per whole token (exactly 1e8 sompi); 999 base
+        // units just above and just below.
         (o.amount, o.price) = (Some(1), Some(100_000_000_000));
         assert_eq!(rules.evaluate(&toks, &o), Ok(()));
         (o.amount, o.price) = (Some(999), Some(100_100_200));
         assert_eq!(rules.evaluate(&toks, &o), Ok(()), "999 x 100_100_200 / 1000 = 100_000_099.8, floor 100_000_099");
         (o.amount, o.price) = (Some(999), Some(100_100_100));
         assert_eq!(rules.evaluate(&toks, &o), Err("order_value_below_minimum".into()), "99_999_999.9 rounds down");
-        // a full fill worth more than an i64 never overflows the rule
+        // A full fill worth more than an i64 never overflows the rule.
         (o.amount, o.price) = (Some(i64::MAX), Some(i64::MAX));
         assert_eq!(rules.evaluate(&toks, &o), Ok(()));
-        // a bid has no amount: its value is its escrow (the KAS of its output)
+        // A bid has no amount: its value is its escrow (the KAS of its output).
         let mut b = ok.clone();
         b.amount = None;
         b.carrier = 99_999_999;
@@ -717,15 +780,17 @@ mod tests {
         let mut o = ok.clone();
         o.expiry_daa = Some(900_000 + 77_760_000 + 864_001);
         assert_eq!(rules.evaluate(&toks, &o), Err("expiry_beyond_maximum".into()));
-        // the entries' own template hashes are not on a strict list here (a plain allowlist): unchanged behaviour
+        // The entries' own template hashes are not on a strict list here (a plain allowlist):
+        // unchanged behaviour.
         let open = ListingRules { require_allowlist: false, ..Default::default() };
         let mut o = ok;
         o.token_cov_id = Some(h(2));
         assert_eq!(open.evaluate(&toks, &o), Ok(()));
     }
 
-    /// The open token list: every token whose program is on the strict template list is listed (unknown covenant ids included),
-    /// a program off the list is not. There is no token-level refusal.
+    /// The open token list: every token whose program is on the strict template list is listed
+    /// (unknown covenant ids included), a program off the list is not. There is no token-level
+    /// refusal.
     #[test]
     fn open_token_list_lists_every_token_of_a_strict_program() {
         let strict = |b: u8, f: Family, powers: &[&str]| {
@@ -759,23 +824,25 @@ mod tests {
             carrier: 1,
             ..Default::default()
         };
-        // an entry with its standard scale (0 decimals: 1), and an unknown token of a strict program with any scale
+        // An entry with its standard scale (0 decimals: 1), and an unknown token of a strict
+        // program with any scale.
         assert_eq!(rules.evaluate(&toks, &order(1, 8, Family::Kron)), Err("non_standard_scale".into()));
         assert_eq!(rules.evaluate(&toks, &order(2, 8, Family::Kron)), Ok(()));
         assert_eq!(rules.evaluate(&toks, &order(3, 9, Family::Kcc20)), Ok(()));
         assert_eq!(rules.evaluate(&toks, &ListingInput { scale: Some(1), ..order(1, 8, Family::Kron) }), Ok(()));
         assert_eq!(toks.strict_template(&h(9)).unwrap().powers, vec!["freeze".to_string()]);
-        // a program off the strict list, a family that is not the program's
+        // A program off the strict list, a family that is not the program's.
         assert_eq!(rules.evaluate(&toks, &order(2, 5, Family::Kron)), Err("token_template_not_strict".into()));
         assert_eq!(rules.evaluate(&toks, &order(2, 8, Family::Kcc20)), Err("token_family_mismatch".into()));
-        // without a strict list the plain allowlist (an operator's own list) decides
+        // Without a strict list the plain allowlist (an operator's own list) decides.
         let plain = TokenAllowlist::from_entries([entry(1, 8)]);
         assert!(!plain.is_open());
         assert_eq!(rules.evaluate(&plain, &order(2, 8, Family::Kron)), Err("token_not_allowlisted".into()));
     }
 
-    /// An open-list token whose decimals are known without any order (a declaration, a program default) lists only orders at the
-    /// scale they give; one whose decimals nothing fixes lists any scale (the first order sets the market's).
+    /// An open-list token whose decimals are known without any order (a declaration, a program
+    /// default) lists only orders at the scale they give; one whose decimals nothing fixes lists
+    /// any scale (the first order sets the market's).
     #[test]
     fn open_token_scale_follows_the_decimals_that_fix_it() {
         let strict = (h(8), StrictTemplate { id: "t8".into(), family: Family::Kcc20, powers: vec![] });
@@ -801,26 +868,27 @@ mod tests {
         assert_eq!(rules.evaluate(&toks, &order(1, None)), Ok(()));
     }
 
-    /// A covenant id only commits to the genesis output hashes, so the registry says per token whether every genesis
-    /// output was verified. The flag is read from the raw document (whatever the typed registry schema), drives the
-    /// `genesis_unverified` warning and the optional `require_genesis_verified` listing rule. The legacy `official` of an older
-    /// list is read and ignored: it changes nothing.
+    /// A covenant id only commits to the genesis output hashes, so the registry says per token
+    /// whether every genesis output was verified. The flag is read from the raw document, whatever
+    /// the typed registry schema is. It drives the `genesis_unverified` warning and the optional
+    /// `require_genesis_verified` listing rule. The `official` key of a list that still has it is
+    /// read and ignored.
     #[test]
     fn the_registry_genesis_flag_is_honoured() {
         let doc = |flag: &str| format!(r#"[{{"ticker":"A","covenantId":"{}"{flag}}},{{"ticker":"B","covenantId":"{}"}}]"#, h(1), h(2));
         let t = TokenAllowlist::parse(&doc(r#","genesis_verified":true"#)).unwrap();
         assert_eq!(t.genesis_verified(&h(1)), Some(true));
         assert!(t.warnings_for(&h(1)).is_empty());
-        // the registry does not say: the warning is shown (fail closed in the display)
+        // The registry does not say: the warning is shown (fail closed in the display).
         assert_eq!(t.genesis_verified(&h(2)), None);
         assert_eq!(t.warnings_for(&h(2)), vec![WARN_GENESIS_UNVERIFIED]);
-        // checked and not clean
+        // Checked and not clean.
         let t = TokenAllowlist::parse(&doc(r#","genesisVerified":false"#)).unwrap();
         assert_eq!(t.warnings_for(&h(1)), vec![WARN_GENESIS_UNVERIFIED]);
         let legacy = TokenAllowlist::parse(&doc(r#","official":true"#)).unwrap();
         assert_eq!(legacy.list(), TokenAllowlist::parse(&doc("")).unwrap().list());
         assert_eq!(legacy.warnings_for(&h(1)), vec![WARN_GENESIS_UNVERIFIED]);
-        // the listing rule
+        // The listing rule.
         let rules = ListingRules {
             require_genesis_verified: true,
             min_order_value_sompi: 0,
@@ -841,12 +909,12 @@ mod tests {
         assert_eq!(rules.evaluate(&t, &order(1)), Ok(()));
         assert_eq!(rules.evaluate(&t, &order(2)), Err("genesis_not_verified".into()));
         assert_eq!(rules.evaluate(&t, &order(9)), Err("genesis_not_verified".into()));
-        // off by default
+        // Off by default.
         assert!(!ListingRules::default().require_genesis_verified);
     }
 
-    /// A keeper tip that leaves the continuation of an arming update below the covenant-output bound is not listed (audit
-    /// 2026-10-30 E1: the update could never be built).
+    /// A keeper tip that leaves the continuation of an arming update below the covenant-output
+    /// bound is not listed, because the update could never be built.
     #[test]
     fn a_keeper_tip_that_leaves_a_dust_continuation_is_not_listed() {
         let rules =
@@ -865,7 +933,8 @@ mod tests {
             ..Default::default()
         };
         let reason = |o: ListingInput| rules.evaluate(&t, &o).err();
-        // no update, or a tip that leaves the bound: not this rule's business (the other rules may still refuse)
+        // No update, or a tip that leaves the bound: not this rule's business (the other rules may
+        // still refuse).
         assert_ne!(reason(order(bound + 1_000, Some(1_000))), Some("keeper_tip_leaves_dust".into()));
         assert_ne!(reason(order(bound + 1_000, None)), Some("keeper_tip_leaves_dust".into()));
         assert_eq!(reason(order(bound + 999, Some(1_000))), Some("keeper_tip_leaves_dust".into()));
@@ -873,7 +942,8 @@ mod tests {
         assert_eq!(reason(order(1, Some(i64::MAX))), Some("keeper_tip_leaves_dust".into()));
     }
 
-    /// The list says which registry document it was read from (path and SHA-256), so a client can check the operator's judgements.
+    /// The list says which registry document it was read from (path and SHA-256), so a client can
+    /// check the operator's judgements.
     #[test]
     fn a_loaded_registry_carries_its_source_and_hash() {
         let dir = std::env::temp_dir().join(format!("kob-reg-info-{}", std::process::id()));
