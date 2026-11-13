@@ -1,21 +1,23 @@
 # KOB: Kaspa Order Book
 
-A permissionless limit order book for KCC-20 tokens on Kaspa layer 1. Every order is its own covenant UTXO: the covenant
-enforces price, amount, custody and time in force on chain, and only the maker can cancel. Anyone can match crossing orders
-and earn the spread. No bridge, no sequencer, no admin key, no oracle, no protocol fee.
+A permissionless limit order book for KCC-20 tokens on Kaspa layer 1. Every order is its own covenant UTXO. The covenant enforces
+price, amount, custody and time in force on chain, and only the maker can cancel. Anyone can match crossing orders and earn the
+spread. There is no bridge, no sequencer, no admin key, no oracle and no protocol fee.
 
 > **Open review.** KOB has had no external security audit. The code is public, the specification is not final and reports
-> are welcome. Testnet-10 is the network for testing; on mainnet use only funds you can afford to lose. See
+> are welcome. Testnet-10 is the network for testing. On mainnet, use only funds you can afford to lose. See
 > [SECURITY.md](SECURITY.md).
 
 ## Quick start
 
-Trade: open the testnet-10 web app, [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag) (test tokens with no value), with KasWare or Kaspire, see the
-[user guide](docs/user-guide.md). [kob.kaspa.ag](https://kob.kaspa.ag) is the production front page: mainnet is in preparation, so it shows the landing page only
-(no app, no wallet connection) and links to the testnet app.
+To trade, open the testnet-10 web app, [kob-tn10.kaspa.ag](https://kob-tn10.kaspa.ag), with KasWare or Kaspire. Its tokens are test
+tokens with no value. See the [user guide](docs/user-guide.md).
 
-Run `kobd` (an Indexer, keyless; or an Executor that matches orders) on testnet-10, with Git, [rustup](https://rustup.rs)
-and a C compiler installed:
+[kob.kaspa.ag](https://kob.kaspa.ag) is the production front page. Mainnet is in preparation, so it shows the landing page only,
+with no app and no wallet connection. It links to the testnet app.
+
+To run `kobd` on testnet-10, install Git, [rustup](https://rustup.rs) and a C compiler. `kobd` is either an Indexer, which is
+keyless, or an Executor, which matches orders.
 
 ```
 git clone https://github.com/RossKU/kob.git && cd kob
@@ -26,13 +28,13 @@ mkdir ~/kob-tn10 && cp target/release/kobd ~/kob-tn10/ && cd ~/kob-tn10
 curl -s http://127.0.0.1:8090/v1/health
 ```
 
-Windows, the Executor, ports, files and logs: [docs/ops/run-from-source.md](docs/ops/run-from-source.md). Services, Docker,
-Android and upgrades: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md).
+- Windows, the Executor, ports, files and logs: [docs/ops/run-from-source.md](docs/ops/run-from-source.md).
+- Services, Docker, Android and upgrades: [docs/ops/executor-quickstart.md](docs/ops/executor-quickstart.md).
 
 ## Bots and AI agents
 
-The `kob` command line plans and signs exactly what the web wallet does, and every trading command prints one JSON document
-(`--json`) with documented exit codes, so a script or an agent can read the book, place and cancel orders and follow fills:
+The `kob` command line plans and signs exactly what the web wallet does. Every trading command prints one JSON document (`--json`)
+with documented exit codes. A script or an agent can read the book, place and cancel orders and follow fills.
 
 ```
 cargo build --release --bin kob
@@ -41,27 +43,30 @@ kob place limit --token TUSD --side buy --amount 100TUSD --price 0.24KAS --netwo
 kob watch fills --token TUSD --network testnet-10 --json        # NDJSON, one event per line
 ```
 
-Every command and kind: [crates/kob-cli](crates/kob-cli/README.md). The read API (HTTP and WebSocket, no key):
-[docs/api.md](docs/api.md).
+- Every command and kind: [crates/kob-cli](crates/kob-cli/README.md).
+- The read API, over HTTP and WebSocket with no key: [docs/api.md](docs/api.md).
 
 ## Review scope
 
-The live contracts are `contracts/orders/`; [contracts/README.md](contracts/README.md) states what is deployed, what to review, and what
-is a prototype or third-party.
+The live contracts are in `contracts/orders/`. [contracts/README.md](contracts/README.md) states what is deployed, what to review,
+and what is a prototype or third-party.
 
 ## Documentation
 
 * [docs/README.md](docs/README.md): the index of every document
 * [docs/spec/](docs/spec): order types, the matcher, the payload, token programs
-* [docs/development.md](docs/development.md): build the contracts, run the tests, the web UI in mock mode;
-  [docs/repository-map.md](docs/repository-map.md): what lives where
+* [docs/development.md](docs/development.md): build the contracts, run the tests, the web UI in mock mode
+* [docs/repository-map.md](docs/repository-map.md): what lives where
 
 ## Contributing, security, licence
 
-[CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md). This is
-experimental software that handles funds, provided as is, without warranty; the project operates no production service.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
-ISC, see [LICENSE](LICENSE). Third-party code keeps its own licence: [NOTICE](NOTICE).
+This is experimental software that handles funds. It is provided as is, without warranty, and the project operates no production
+service.
 
-KOB is built and run by volunteers. The donation address on the app's Support page is published here too, so you can check it: `kaspa:qq85cdj959gx33su28luhaymtq3yczx0jj40eufxwyxs77mk4vnpqd3m0nqqc` (real KAS on Kaspa
-mainnet; a voluntary gift, with no return, no rights and no refund).
+ISC, see [LICENSE](LICENSE). Third-party code keeps its own licence, see [NOTICE](NOTICE).
+
+KOB is built and run by volunteers. The donation address on the app's Support page is published here too, so you can check it:
+`kaspa:qq85cdj959gx33su28luhaymtq3yczx0jj40eufxwyxs77mk4vnpqd3m0nqqc`. It is a real KAS address on Kaspa mainnet. A donation is a
+voluntary gift, with no return, no rights and no refund.
