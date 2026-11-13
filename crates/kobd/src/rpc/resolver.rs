@@ -1,39 +1,66 @@
-//! Public Kaspa nodes through the Kaspa resolvers: `rpc_url = "resolver"` (`--rpc-url resolver`), always as a pair of
-//! nodes on two different hosts.
+//! Public Kaspa nodes through the Kaspa resolvers, always as a pair of nodes on two hosts.
 //!
-//! The public node network is reached through resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`, the groups
-//! `*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`), whose API (`rpc/wrpc/client/src/resolver.rs`) is
-//! `GET {resolver}/v2/kaspa/{network}/{tls|any}/wrpc/{borsh|json}` answering `{"uid": ..., "url": "wss://.../wrpc/borsh"}`.
-//! The public nodes serve Borsh wRPC only (`json` is `NOT FOUND` on every resolver, 2026-10-22), so a resolved node is always
-//! Borsh over TLS and every call to it goes through `rpc::bridge`. Some resolvers are down at any time: they are tried in a
-//! random order, each with a short timeout ([`QUERY_TIMEOUT`] for the whole answer, every address of its host tried), until
-//! one answers, all of them within [`RESOLVE_DEADLINE`].
+//! `rpc_url = "resolver"` (`--rpc-url resolver`) selects them. The public node network is reached
+//! through resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`, the groups `*.kaspa.stream`,
+//! `*.kaspa.red`, `*.kaspa.green` and `*.kaspa.blue`). Their API
+//! (`rpc/wrpc/client/src/resolver.rs`) is
+//! `GET {resolver}/v2/kaspa/{network}/{tls|any}/wrpc/{borsh|json}`, which answers
+//! `{"uid": ..., "url": "wss://.../wrpc/borsh"}`.
 //!
-//! **Entries.** A configured `resolver` is a pseudo URL: `resolver` is the chain authority's entry, and
-//! `index_cli::build_config` always adds a second one, `resolver:2`, the cross-checking node (`rpc::multi`: its acceptance data
-//! is compared with the authority's before anything is indexed, and it takes every submission too); a further
-//! `--extra-node resolver` gets `resolver:3`, ... Every client of the process given an entry (the indexer's connections, the
-//! matcher's, the x402 facilitator's, the setup's check) asks [`endpoint`] for the node it stands for, so all of them use the
-//! same node per entry, and the entries use different hosts.
+//! The public nodes serve Borsh wRPC only, so a resolved node is always Borsh over TLS and every
+//! call to it goes through `rpc::bridge`. Some resolvers are down at any time. They are tried in
+//! a random order, each with a short timeout ([`QUERY_TIMEOUT`] for the whole answer, every
+//! address of its host tried), until one answers. All of them together take at most
+//! [`RESOLVE_DEADLINE`].
 //!
-//! **Failure.** A client that cannot connect to its entry's node, or loses the connection, reports it ([`failed`]); a node
-//! that answers but is useless (on another network, without the UTXO index, not synced, hanging, behind the other node, or
-//! contradicting it) is judged by `rpc::judge` and given up the same way ([`replace`], with the reason, which `/v1/health`
-//! shows per node as `cut_reason`). Public
-//! nodes close connections now and then under load, so the first drop of a node gets a **grace reconnect**: the same node is
-//! tried once more, with a short connect timeout ([`GRACE_CONNECT_TIMEOUT`]). When it is the authority's node, the other
-//! node is the authority at once meanwhile (no resolution, no wait: the survivor keeps the indexer running) and the dropped
-//! node gets its retry as the cross-checking one. A survivor the judge suspects (not synced, or behind the other node lately:
-//! `rpc::judge::suspect`) is never promoted: the authority's entry resolves a node of its own instead. A node that drops again within [`DROP_WINDOW`] of its last drop (the
-//! retry failing included) is given up at once ([`replace`], also what a persistent disagreement does): the authority takes
-//! the other entry's node over, and the entries left without a node resolve a replacement on a host different from the ones
-//! in use and from the failed ones, in the background (a resolution that fails is tried again with the backoff below until it
-//! names a node, so an entry is never left without one). When no node is left, every entry resolves again on its next
-//! use, with a backoff (2 s doubling to 60 s) while the resolvers name none. Resolutions are rate-limited ([`CHURN_WINDOW`]:
-//! three per entry within ten minutes, then one per five minutes, and eight for all entries together; only resolutions that
-//! named a node count, and the authority's entry, or any entry while no entry has a node, is never held back), so a node
-//! that keeps being replaced cannot turn into a query storm on the public resolvers, and a network blip that took both nodes
-//! heals within the backoff. Every change is logged with the hosts.
+//! # Entries
+//!
+//! A configured `resolver` is a pseudo URL. `resolver` is the chain authority's entry.
+//! `index_cli::build_config` always adds a second one, `resolver:2`, the cross-checking node
+//! (`rpc::multi`). Its acceptance data is compared with the authority's before anything is
+//! indexed, and it takes every submission too. A further `--extra-node resolver` gets
+//! `resolver:3`, and so on.
+//!
+//! Every client of the process that is given an entry asks [`endpoint`] for the node it stands
+//! for. That covers the indexer's connections, the matcher's, the x402 facilitator's and the
+//! setup's check. All of them use the same node per entry, and the entries use different hosts.
+//!
+//! # Failure
+//!
+//! A client that cannot connect to its entry's node, or loses the connection, reports it
+//! ([`failed`]). A node that answers but is useless is judged by `rpc::judge` and given up the
+//! same way ([`replace`]). `/v1/health` shows the reason per node as `cut_reason`.
+//!
+//! Public nodes close connections now and then under load, so the first drop of a node gets a
+//! **grace reconnect**. The same node is tried once more, with a short connect timeout
+//! ([`GRACE_CONNECT_TIMEOUT`]). When it is the authority's node, the other node is the authority
+//! at once meanwhile. There is no resolution and no wait, so the survivor keeps the indexer
+//! running, and the dropped node gets its retry as the cross-checking one. A survivor the judge
+//! suspects (`rpc::judge::suspect`) is never promoted. The authority's entry resolves a node of
+//! its own instead.
+//!
+//! A node that drops again within [`DROP_WINDOW`] of its last drop is given up at once, and the
+//! failing retry counts as a drop. A persistent disagreement also calls [`replace`]. Then:
+//! - The authority takes the other entry's node over.
+//! - The entries left without a node resolve a replacement in the background, on a host
+//!   different from the ones in use and from the failed ones.
+//! - A resolution that fails is tried again with a backoff of 2 s doubling to 60 s, until it
+//!   names a node. An entry is never left without one for good.
+//! - When no node is left, every entry resolves again on its next use, with the same backoff
+//!   while the resolvers name none.
+//!
+//! Every change is logged with the hosts.
+//!
+//! # Rate limit
+//!
+//! A node that keeps being replaced must not turn into a query storm on the public resolvers.
+//! Resolutions are therefore rate-limited ([`CHURN_WINDOW`]):
+//! - An entry resolves [`CHURN_FREE`] times within the window, then at most once per
+//!   [`CHURN_SPACING`].
+//! - All entries together resolve at most [`CHURN_MAX`] times within the window.
+//! - Only resolutions that named a node count.
+//! - The authority's entry is never held back, and neither is any entry while no entry has a
+//!   node. A network blip that took both nodes heals within the backoff.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, OnceLock};
@@ -44,7 +71,7 @@ use rand::seq::SliceRandom;
 /// The configuration value that selects public nodes.
 pub const RESOLVER: &str = "resolver";
 
-/// The resolvers of rusty-kaspa `rpc/wrpc/client/Resolvers.toml` (the enabled groups, 2026-10-22).
+/// The resolvers of rusty-kaspa `rpc/wrpc/client/Resolvers.toml` (the enabled groups).
 pub const RESOLVERS: &[&str] = &[
     "https://eric.kaspa.stream",
     "https://maxim.kaspa.stream",
@@ -64,30 +91,46 @@ pub const RESOLVERS: &[&str] = &[
     "https://luke.kaspa.blue",
 ];
 
-/// One resolver's answer may take this long (the whole GET: every address of its host, and the answer read) ...
+/// How long one resolver may take to answer.
+///
+/// That is the whole GET: every address of its host, and the answer read.
 pub const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-/// ... and one resolution, every resolver and round, this long (the resolvers not asked by then are not asked).
+/// How long one resolution may take over every resolver and round.
+///
+/// The resolvers not asked by then are not asked.
 pub const RESOLVE_DEADLINE: Duration = Duration::from_secs(60);
 
-/// Rounds over every resolver before a node on a host already in use is accepted (the resolvers spread their answers over
-/// the nodes, so a second round usually names another host).
+/// Rounds over every resolver before a node on a host already in use is accepted.
+///
+/// The resolvers spread their answers over the nodes, so a second round usually names another
+/// host.
 pub const ROUNDS: usize = 3;
 
 /// The connect timeout of the one reconnect a dropped public node gets ([`failed`]).
 pub const GRACE_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A node that drops again within this long of its last drop is given up at once, without another reconnect.
+/// A node that drops again within this long of its last drop is given up at once.
+///
+/// It gets no other reconnect.
 pub const DROP_WINDOW: Duration = Duration::from_secs(120);
 
-/// Resolutions are rate-limited over this window (a node replaced over and over is not a node problem, and each resolution
-/// asks up to every resolver [`ROUNDS`] times): an entry resolves at most [`CHURN_FREE`] times within it before its next
-/// resolution waits [`CHURN_SPACING`] after its last, and all entries together at most [`CHURN_MAX`] times. Only resolutions
-/// that named a node count (a failed one waits its own backoff, 2 s doubling to 60 s), and the chain authority's entry, or any
-/// entry while no entry has a node, is never held back: after a network blip that took both nodes, the pair is back within
-/// the backoff once the resolvers answer again.
+/// The window over which resolutions are rate-limited.
+///
+/// A node replaced over and over is not a node problem, and each resolution asks up to every
+/// resolver [`ROUNDS`] times. An entry resolves at most [`CHURN_FREE`] times within the window
+/// before its next resolution waits [`CHURN_SPACING`] after its last. All entries together
+/// resolve at most [`CHURN_MAX`] times. Only resolutions that named a node count, because a
+/// failed one waits its own backoff.
+///
+/// The chain authority's entry is never held back, and neither is any entry while no entry has
+/// a node. After a network blip that took both nodes, the pair is back within the backoff once
+/// the resolvers answer again.
 pub const CHURN_WINDOW: Duration = Duration::from_secs(600);
+/// Resolutions one entry may make within [`CHURN_WINDOW`] before it is spaced.
 pub const CHURN_FREE: usize = 3;
+/// How long an entry's next resolution waits after its last one, once it used up [`CHURN_FREE`].
 pub const CHURN_SPACING: Duration = Duration::from_secs(300);
+/// Resolutions all entries together may make within [`CHURN_WINDOW`].
 pub const CHURN_MAX: usize = 8;
 
 /// Whether a configured node URL is a resolver entry.
@@ -109,7 +152,9 @@ pub fn query_url(resolver: &str, network: &str) -> String {
     format!("{}/v2/kaspa/{network}/tls/wrpc/borsh", resolver.trim_end_matches('/'))
 }
 
-/// The node URL of a resolver's answer (`{"uid": ..., "url": ...}`): a `wss://` URL (TLS was asked for).
+/// The node URL of a resolver's answer (`{"uid": ..., "url": ...}`).
+///
+/// It is a `wss://` URL, because TLS was asked for.
 pub fn parse_answer(body: &str) -> Result<String, String> {
     #[derive(serde::Deserialize)]
     struct NodeDescriptor {
@@ -139,13 +184,17 @@ fn short(s: &str) -> String {
 /// A node the resolvers named, and which resolver named it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
+    /// The `wss://` URL of the node.
     pub url: String,
+    /// The resolver that named the node.
     pub resolver: String,
 }
 
-/// Asks the resolvers in `order` for a node of `network`, one after the other, up to [`ROUNDS`] times over the list, until one
-/// names a node whose host is not in `avoid_hosts`; when every answer is on such a host, the first of them (there is no
-/// other). `get` is the HTTP GET (`tls::http_get`).
+/// Asks the resolvers in `order` for a node of `network`, one after the other.
+///
+/// It goes up to [`ROUNDS`] times over the list, until one names a node whose host is not in
+/// `avoid_hosts`. When every answer is on such a host, it returns the first of them, because
+/// there is no other. `get` is the HTTP GET (`tls::http_get`).
 pub fn resolve_in(
     order: &[String],
     network: &str,
@@ -171,7 +220,7 @@ pub fn resolve_in(
                 Err(_) => {}
             }
         }
-        // no resolver answers at all: another round asks the same ones in vain
+        // If no resolver answers at all, another round asks the same ones in vain.
         if !answered {
             break;
         }
@@ -179,9 +228,10 @@ pub fn resolve_in(
     fallback.ok_or_else(|| format!("no Kaspa resolver named a {network} node ({})", failures.join("; ")))
 }
 
-/// [`resolve_in`] over [`RESOLVERS`] (or the advanced override `$KOB_RESOLVERS`, comma-separated resolver URLs, for an operator
-/// who runs a private resolver over its own nodes) in a random order, with
-/// real HTTP.
+/// [`resolve_in`] over [`RESOLVERS`] in a random order, with real HTTP.
+///
+/// `$KOB_RESOLVERS` overrides the list with comma-separated resolver URLs. It is for an operator
+/// who runs a private resolver over its own nodes.
 pub fn resolve(network: &str, avoid_hosts: &[String]) -> Result<Resolved, String> {
     let mut order: Vec<String> = match std::env::var("KOB_RESOLVERS") {
         Ok(v) if !v.trim().is_empty() => v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
@@ -211,31 +261,36 @@ struct Backoff {
 /// The nodes the process uses through its resolver entries.
 struct State {
     network: String,
-    /// entry -> the node it uses now
+    /// Entry -> the node it uses now.
     current: HashMap<String, String>,
-    /// hosts that failed recently (avoided by the next resolutions; the oldest is forgotten first)
+    /// Hosts that failed recently, which the next resolutions avoid. The oldest is forgotten first.
     failed: VecDeque<String>,
-    /// entry -> how many times its node was given up
+    /// Entry -> how many times its node was given up.
     replaced: HashMap<String, u32>,
-    /// entry -> no resolution before this (the resolvers named nothing lately)
+    /// Entry -> no resolution before this, because the resolvers named nothing lately.
     backoff: HashMap<String, Backoff>,
-    /// entries resolving in the background now (one thread per entry at a time)
+    /// Entries resolving in the background now, one thread per entry at a time.
     pending: Vec<String>,
     resolve: ResolveFn,
-    /// replacements are resolved on a thread of their own (off in unit tests, which drive [`endpoint`] themselves)
+    /// Whether replacements are resolved on a thread of their own. Unit tests turn it off and
+    /// drive [`endpoint`] themselves.
     background: bool,
-    /// host -> when it last dropped a connection (its grace reconnect, [`failed`])
+    /// Host -> when it last dropped a connection, which gave it its grace reconnect ([`failed`]).
     dropped: HashMap<String, Instant>,
-    /// entry -> why its last node was given up (`host: reason`), for `/v1/health`
+    /// Entry -> why its last node was given up (`host: reason`), for `/v1/health`.
     reasons: HashMap<String, String>,
-    /// entry -> when it resolved within [`CHURN_WINDOW`] (oldest first)
+    /// Entry -> when it resolved within [`CHURN_WINDOW`], oldest first.
     resolutions: HashMap<String, VecDeque<Instant>>,
-    /// Chain authorities given up for a finding ([`replace`]; not a lost connection, [`failed`]): [`authority_replaced`].
+    /// Chain authorities given up for a finding, see [`authority_replaced`].
+    ///
+    /// A lost connection ([`failed`]) does not count.
     authority_replaced: u64,
 }
 
 impl State {
-    /// How long `url` must wait before it may resolve again ([`CHURN_WINDOW`]; zero: now). Old resolutions are forgotten.
+    /// How long `url` must wait before it may resolve again, or zero for now ([`CHURN_WINDOW`]).
+    ///
+    /// Old resolutions are forgotten.
     fn churn_wait(&mut self, url: &str, now: Instant) -> Duration {
         for q in self.resolutions.values_mut() {
             while q.front().is_some_and(|t| now.saturating_duration_since(*t) >= CHURN_WINDOW) {
@@ -276,7 +331,9 @@ fn state() -> &'static Mutex<State> {
     })
 }
 
-/// Forgets the resolutions made so far ([`CHURN_WINDOW`]): the operator asked for another try (the setup's check).
+/// Forgets the resolutions made so far ([`CHURN_WINDOW`]).
+///
+/// The operator asked for another try.
 pub fn forget_churn() {
     lock().resolutions.clear();
 }
@@ -285,7 +342,9 @@ fn lock() -> std::sync::MutexGuard<'static, State> {
     state().lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The network the resolver entries resolve for (the configuration's, `index_cli::build_config`; the setup's).
+/// Sets the network the resolver entries resolve for.
+///
+/// It is the configuration's (`index_cli::build_config`).
 pub fn set_network(network: &str) {
     let mut s = lock();
     if s.network != network {
@@ -295,25 +354,30 @@ pub fn set_network(network: &str) {
     }
 }
 
-/// The network the resolver entries resolve for (empty: not set): the network every node of the process must be on
-/// (`rpc::judge`).
+/// The network the resolver entries resolve for, or empty when not set.
+///
+/// Every node of the process must be on it (`rpc::judge`).
 pub fn network() -> String {
     lock().network.clone()
 }
 
-/// Why the resolver entry `url` last gave its node up (`host: reason`; `None`: never).
+/// Why the resolver entry `url` last gave its node up (`host: reason`), or `None` if never.
 pub fn last_reason(url: &str) -> Option<String> {
     lock().reasons.get(url).cloned()
 }
 
-/// The node a resolver entry uses now, without resolving (`None`: none yet, or it is being replaced).
+/// The node a resolver entry uses now, without resolving.
+///
+/// `None` means none yet, or it is being replaced.
 pub fn current(url: &str) -> Option<String> {
     lock().current.get(url).cloned()
 }
 
-/// How many times the chain authority's entry gave its node up for a finding since the start (judged useless by
-/// `rpc::judge`, a disagreement that did not settle, or an answer that contradicted the store; not a lost connection): the
-/// metric `kob_indexer_authority_replaced_total`.
+/// How many times the chain authority's entry gave its node up for a finding since the start.
+///
+/// A finding is a node judged useless by `rpc::judge`, a disagreement that did not settle, or an
+/// answer that contradicted the store. A lost connection does not count. This is the metric
+/// `kob_indexer_authority_replaced_total`.
 pub fn authority_replaced() -> u64 {
     lock().authority_replaced
 }
@@ -323,15 +387,19 @@ pub fn replacements(url: &str) -> u32 {
     lock().replaced.get(url).copied().unwrap_or(0)
 }
 
-/// The node behind a configured URL: the URL itself, or for a resolver entry the public node it uses now (resolved on first
-/// use and after its node failed, on a host no other entry uses and that did not fail lately). Blocking (HTTP to the
-/// resolvers): async callers run it on the blocking pool.
+/// The node behind a configured URL: the URL itself, or for a resolver entry the public node it
+/// uses now.
+///
+/// A resolver entry's node is resolved on first use and after its node failed, on a host no
+/// other entry uses and that did not fail lately. This blocks on HTTP to the resolvers, so async
+/// callers run it on the blocking pool.
 pub fn endpoint(url: &str) -> Result<String, String> {
     if !is_resolver(url) {
         return Ok(url.to_string());
     }
-    // the view of the other entries may change while the resolvers are asked (a failover, another client's resolution):
-    // a node another entry took meanwhile is not taken a second time, the resolution is repeated on the new view
+    // The view of the other entries may change while the resolvers are asked, because of a
+    // failover or another client's resolution. A node another entry took meanwhile is not taken
+    // a second time. The resolution is repeated on the new view.
     for attempt in 1..=3 {
         let (network, avoid, resolve_fn) = {
             let mut s = lock();
@@ -348,12 +416,13 @@ pub fn endpoint(url: &str) -> Result<String, String> {
                 ));
             }
             let now = Instant::now();
-            // one resolution per call (its repeats on a changed view are the same resolution); never held back while the
-            // chain authority's role is empty or no entry has a node at all (a network blip took both: recovering is no churn)
+            // One resolution per call, because its repeats on a changed view are the same
+            // resolution. It is never held back while the chain authority's role is empty or no
+            // entry has a node at all. A network blip took both, and recovering is no churn.
             let exempt = url == RESOLVER || s.current.is_empty();
             let churn = if attempt == 1 && !exempt { s.churn_wait(url, now) } else { Duration::ZERO };
             if !churn.is_zero() {
-                // the refill thread sleeps until then; the first warning names why
+                // The refill thread sleeps until then. The first warning names why.
                 let delay = s.backoff.get(url).map_or(Duration::from_secs(2), |b| b.delay);
                 s.backoff.insert(url.to_string(), Backoff { until: now + churn, delay });
                 tracing::warn!(
@@ -379,7 +448,7 @@ pub fn endpoint(url: &str) -> Result<String, String> {
             }
         };
         s.backoff.remove(url);
-        // another client of the same entry may have resolved meanwhile: keep one node per entry
+        // Another client of the same entry may have resolved meanwhile. Keep one node per entry.
         if let Some(u) = s.current.get(url) {
             return Ok(u.clone());
         }
@@ -392,7 +461,8 @@ pub fn endpoint(url: &str) -> Result<String, String> {
         }
         tracing::info!(entry = url, node = %h, resolver = %r.resolver, network = %network, role = role(url), "public Kaspa node (via the Kaspa resolver)");
         s.current.insert(url.to_string(), r.url.clone());
-        // only a resolution that named a node counts against the rate limit: a failed one has its own backoff
+        // Only a resolution that named a node counts against the rate limit.
+        // A failed one has its own backoff.
         s.resolutions.entry(url.to_string()).or_default().push_back(Instant::now());
         return Ok(r.url);
     }
@@ -412,10 +482,12 @@ fn role(url: &str) -> &'static str {
     }
 }
 
-/// A connection to `node` (the node the resolver entry `url` stood for) failed or was lost. Its first drop within
-/// [`DROP_WINDOW`] gets one reconnect to the same node (module documentation: the authority's role moves to the other node
-/// meanwhile, and the dropped node is retried as the cross-checking one); a second drop within the window gives it up
-/// ([`replace`]). A report about a node the entry no longer uses is ignored (another client reported it first).
+/// A connection to `node`, the node the resolver entry `url` stood for, failed or was lost.
+///
+/// The first drop within [`DROP_WINDOW`] gets one reconnect to the same node. Meanwhile the
+/// authority's role moves to the other node, and the dropped node is retried as the
+/// cross-checking one. A second drop within the window gives the node up ([`replace`]). A report
+/// about a node the entry no longer uses is ignored, because another client reported it first.
 pub fn failed(url: &str, node: &str) {
     if !is_resolver(url) {
         return;
@@ -429,7 +501,7 @@ pub fn failed(url: &str, node: &str) {
         let again = s.dropped.get(&h).is_some_and(|t| t.elapsed() < DROP_WINDOW);
         if !again {
             s.dropped.insert(h.clone(), Instant::now());
-            // a survivor the judge suspects (not synced, behind) is not promoted
+            // A survivor the judge suspects (not synced, behind) is not promoted.
             let survivor = (url == RESOLVER)
                 .then(|| {
                     s.current
@@ -440,7 +512,8 @@ pub fn failed(url: &str, node: &str) {
                 .flatten();
             match survivor {
                 Some((entry, n)) => {
-                    // the other node is the authority at once; the failed one gets its retry as the cross-check
+                    // The other node is the authority at once.
+                    // The failed one gets its retry as the cross-check.
                     s.current.insert(RESOLVER.to_string(), n.clone());
                     s.current.insert(entry.clone(), node.to_string());
                     tracing::warn!(failed = %h, authority = %host(&n), "a public node's connection failed or was lost: the other node is the chain authority now; reconnecting once to the failed one as the cross-check");
@@ -453,8 +526,10 @@ pub fn failed(url: &str, node: &str) {
     give_up(url, node, "its connection failed or was lost twice within 2 min", false);
 }
 
-/// The connect timeout of a client of the resolver entry `url`: [`GRACE_CONNECT_TIMEOUT`] while its node is on its grace
-/// reconnect (it dropped within [`DROP_WINDOW`]), else `default`.
+/// The connect timeout of a client of the resolver entry `url`.
+///
+/// It is [`GRACE_CONNECT_TIMEOUT`] while the node of the entry is on its grace reconnect, that
+/// is, it dropped within [`DROP_WINDOW`]. Otherwise it is `default`.
 pub fn connect_timeout(url: &str, default: Duration) -> Duration {
     if !is_resolver(url) {
         return default;
@@ -468,17 +543,20 @@ pub fn connect_timeout(url: &str, default: Duration) -> Duration {
     }
 }
 
-/// The resolver entry `url` gives `node` up at once for the reason `why` (a second drop within [`DROP_WINDOW`], a disagreement
-/// that does not settle or a contradiction, `rpc::multi`, or a finding of `rpc::judge`): the authority's entry takes over the
-/// node of another entry when there is one the judge does not suspect, and the entries without a node resolve replacements in
-/// the background (hosts different from the ones in use and from the failed ones). A report about a node the entry no longer
-/// uses is ignored.
+/// The resolver entry `url` gives `node` up at once for the reason `why`.
+///
+/// The reason is a second drop within [`DROP_WINDOW`], a disagreement that does not settle or a
+/// contradiction (`rpc::multi`), or a finding of `rpc::judge`. The authority's entry takes over
+/// the node of another entry when there is one the judge does not suspect. The entries without
+/// a node resolve replacements in the background, on hosts different from the ones in use and
+/// from the failed ones. A report about a node the entry no longer uses is ignored.
 pub fn replace(url: &str, node: &str, why: &str) {
     give_up(url, node, why, true)
 }
 
-/// [`replace`]; `finding`: for a finding about the node, not a lost connection (counted for the authority,
-/// [`authority_replaced`]).
+/// [`replace`] with `finding` set for a finding about the node, as opposed to a lost connection.
+///
+/// A finding counts for the authority ([`authority_replaced`]).
 fn give_up(url: &str, node: &str, why: &str, finding: bool) {
     if !is_resolver(url) {
         return;
@@ -501,17 +579,19 @@ fn give_up(url: &str, node: &str, why: &str, finding: bool) {
                 s.failed.pop_front();
             }
         }
-        // another entry on the same host lost its node too
+        // Another entry on the same host lost its node too.
         let same: Vec<String> = s.current.iter().filter(|(_, v)| host(v) == h).map(|(k, _)| k.clone()).collect();
         for k in &same {
             s.current.remove(k);
         }
-        // the entries left without a node: this one (or the survivor's once it is promoted) and those on the same host
+        // The entries left without a node are this one (or the survivor's once it is promoted)
+        // and those on the same host.
         let mut need = vec![url.to_string()];
         need.extend(same);
         if url == RESOLVER {
-            // the survivor becomes the chain authority at once (its entry resolves a replacement), unless the judge suspects
-            // it (not synced, behind): then the authority's entry resolves a node of its own
+            // The survivor becomes the chain authority at once and its entry resolves a
+            // replacement, unless the judge suspects it (not synced, behind). Then the
+            // authority's entry resolves a node of its own.
             let survivor = s
                 .current
                 .iter()
@@ -544,9 +624,10 @@ fn give_up(url: &str, node: &str, why: &str, finding: bool) {
     };
     for entry in refill {
         std::thread::spawn(move || {
-            // until the entry has a node: a resolution that fails backs off (2 s doubling to 60 s) and is tried again. No client
-            // asks for an entry that has no node (the pair goes on with the authority alone meanwhile), so one failed
-            // resolution would otherwise leave the pair un-cross-checked for good
+            // Resolve until the entry has a node. A failed resolution backs off (2 s doubling to
+            // 60 s) and is tried again. No client asks for an entry that has no node, and the pair
+            // goes on with the authority alone meanwhile, so one failed resolution would otherwise
+            // leave the pair un-cross-checked for good.
             while endpoint(&entry).is_err() {
                 let wait = lock().backoff.get(&entry).map(|b| b.until.saturating_duration_since(Instant::now()));
                 std::thread::sleep(wait.unwrap_or(Duration::from_secs(2)).max(Duration::from_millis(100)));
@@ -556,7 +637,7 @@ fn give_up(url: &str, node: &str, why: &str, finding: bool) {
     }
 }
 
-/// The resolver entries in use and their nodes' hosts, for the status line (`authority host, cross-check host`).
+/// The resolver entries in use as `(entry, host of its node, times replaced)`, for the status line.
 pub fn describe() -> Vec<(String, Option<String>, u32)> {
     let s = lock();
     let mut entries: Vec<String> = s.current.keys().chain(s.replaced.keys()).cloned().collect();
@@ -569,13 +650,13 @@ pub fn describe() -> Vec<(String, Option<String>, u32)> {
 pub(crate) mod tests {
     use super::*;
 
-    /// The resolver state is process-wide: its tests run one at a time.
+    /// The resolver state is process-wide, so its tests run one at a time.
     pub(crate) fn serial() -> std::sync::MutexGuard<'static, ()> {
         static M: Mutex<()> = Mutex::new(());
         M.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// A fake resolution: the first of `FAKE_NODES` whose host is not avoided, else the first.
+    /// A fake resolution: the first of its nodes whose host is not avoided, else the first.
     fn fake_resolve(_network: &str, avoid: &[String]) -> Result<Resolved, String> {
         let nodes = ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh", "wss://d.example/x/borsh"];
         let pick = nodes.iter().find(|n| !avoid.contains(&host(n))).unwrap_or(&nodes[0]);
@@ -598,14 +679,16 @@ pub(crate) mod tests {
         s.background = false;
     }
 
-    /// The entry `url` uses `node` now (a test sets the state it needs).
+    /// Makes the entry `url` use `node` now, so a test sets the state it needs.
     pub(crate) fn set_current(url: &str, node: &str) {
         lock().current.insert(url.to_string(), node.to_string());
     }
 
-    /// Resolutions are rate-limited: an entry resolves [`CHURN_FREE`] times within [`CHURN_WINDOW`], then waits
-    /// [`CHURN_SPACING`] after its last; all entries together resolve at most [`CHURN_MAX`] times within it. The operator's
-    /// own try again (the setup) forgets them.
+    /// Resolutions are rate-limited.
+    ///
+    /// An entry resolves [`CHURN_FREE`] times within [`CHURN_WINDOW`], then waits
+    /// [`CHURN_SPACING`] after its last. All entries together resolve at most [`CHURN_MAX`]
+    /// times within it. The operator's own try again (the setup) forgets them.
     #[test]
     fn resolutions_are_rate_limited() {
         let _g = serial();
@@ -621,17 +704,17 @@ pub(crate) mod tests {
         assert_eq!(s.churn_wait("resolver:2", last), CHURN_SPACING, "then spaced after the last");
         assert!(s.churn_wait("resolver", last).is_zero(), "another entry is not held back by this one");
         assert!(s.churn_wait("resolver:2", last + CHURN_SPACING).is_zero());
-        // all entries together
+        // All entries together.
         for k in 0..CHURN_MAX as u64 {
             s.resolutions.entry(format!("resolver:{}", 10 + k)).or_default().push_back(min(3));
         }
         assert_eq!(s.churn_wait("resolver", min(3)), CHURN_WINDOW, "{} in the window", CHURN_MAX);
-        // the window forgets them
+        // The window forgets them.
         assert!(s.churn_wait("resolver", min(3) + CHURN_WINDOW).is_zero());
         assert!(s.resolutions.values().all(|q| q.iter().all(|t| *t >= min(3))));
         drop(s);
-        // through endpoint: the fourth resolution of the cross-check's entry within the window waits, and says so (the
-        // authority has its node)
+        // Through endpoint: the fourth resolution of the cross-check's entry within the window
+        // waits, and says so. The authority has its node.
         reset(fake_resolve);
         endpoint("resolver").unwrap();
         for _ in 0..CHURN_FREE {
@@ -645,16 +728,18 @@ pub(crate) mod tests {
         lock().backoff.clear();
         forget_churn();
         assert!(endpoint("resolver:2").is_ok(), "the operator's try again");
-        // the authority's entry is never held back, however often it resolved
+        // The authority's entry is never held back, however often it resolved.
         lock().resolutions.insert("resolver".into(), (0..CHURN_MAX).map(|_| Instant::now()).collect());
         lock().current.remove("resolver");
         assert!(endpoint("resolver").is_ok(), "the chain authority's role is never left empty for the rate limit");
     }
 
-    /// Audit round 3 R3-M-1: a network blip of 15 to 30 s takes both nodes, and the resolvers cannot be reached while it lasts.
-    /// The failed resolutions do not count against the rate limit (they back off on their own, 2 s doubling, at most 60 s), and
-    /// while no entry has a node none is held back: once the resolvers answer, both entries have a node at their next attempt,
-    /// within a minute. No clock is waited for: the backoff's time is the test's to pass (it is cleared).
+    /// A network blip takes both nodes, and the resolvers cannot be reached while it lasts.
+    ///
+    /// The failed resolutions do not count against the rate limit. They back off on their own,
+    /// 2 s doubling, at most 60 s. While no entry has a node none is held back, so once the
+    /// resolvers answer, both entries have a node at their next attempt, within a minute. No
+    /// clock is waited for. The test clears the backoff to pass its time.
     #[test]
     fn a_network_blip_heals_within_the_backoff() {
         fn down(_: &str, _: &[String]) -> Result<Resolved, String> {
@@ -663,21 +748,21 @@ pub(crate) mod tests {
         let _g = serial();
         reset(fake_resolve);
         let (a, b) = (endpoint("resolver").unwrap(), endpoint("resolver:2").unwrap());
-        // some churn before the blip: the cross-check's entry is at the free bound
+        // Some churn before the blip: the cross-check's entry is at the free bound.
         lock().resolutions.get_mut("resolver:2").unwrap().extend([Instant::now(), Instant::now()]);
         let counted = || lock().resolutions.values().map(|q| q.len()).sum::<usize>();
         let before = counted();
-        // the link goes down: both nodes are given up (a second drop within the drop window each)
+        // The link goes down: both nodes are given up (a second drop within the drop window each).
         lock().resolve = down;
         replace("resolver", &a, "its connection failed or was lost twice within 2 min");
         let now_authority = current("resolver").unwrap();
         assert_eq!(now_authority, b, "the survivor took the role");
         replace("resolver", &b, "its connection failed or was lost twice within 2 min");
         assert!(lock().current.is_empty(), "no node left");
-        // 30 s of failed resolutions: each backs off, none is counted, the backoff stays within a minute
+        // Failed resolutions: each backs off, none is counted, the backoff stays within a minute.
         for _ in 0..6 {
             for entry in ["resolver", "resolver:2"] {
-                // its backoff has passed (the doubling is kept)
+                // Its backoff has passed. The doubling is kept.
                 if let Some(b) = lock().backoff.get_mut(entry) {
                     b.until = Instant::now();
                 }
@@ -689,7 +774,8 @@ pub(crate) mod tests {
             let delay = lock().backoff.get(entry).map(|b| b.delay).unwrap();
             assert_eq!(delay, Duration::from_secs(60), "{entry}: the backoff doubled to its cap, a minute, no further");
         }
-        // the link is back: the next attempt of each entry (after its backoff) names a node, the cross-check's too
+        // The link is back. The next attempt of each entry, after its backoff, names a node.
+        // That includes the cross-check's.
         lock().resolve = fake_resolve;
         lock().backoff.clear();
         let x = endpoint("resolver:2").expect("no entry had a node: not held back");
@@ -742,10 +828,11 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(r, Resolved { url: "wss://one.example/kaspa/testnet-10/wrpc/borsh".into(), resolver: "https://c".into() });
         assert_eq!(asked.len(), 3);
-        // the host in use is avoided while another is named
+        // The host in use is avoided while another is named.
         let r = resolve_in(&order, "testnet-10", &["one.example".into()], answers).unwrap();
         assert_eq!(r.url, "wss://two.example/kaspa/testnet-10/wrpc/borsh");
-        // a resolver that names another host only in a later round (it spreads its answers): asked again
+        // A resolver that names another host only in a later round is asked again, because it
+        // spreads its answers.
         let mut n = 0;
         let r = resolve_in(&order[2..3], "testnet-10", &["one.example".into()], |_| {
             n += 1;
@@ -753,10 +840,10 @@ pub(crate) mod tests {
         })
         .unwrap();
         assert_eq!((r.url.as_str(), n), ("wss://three.example/kaspa/testnet-10/wrpc/borsh", 3));
-        // every answer on a host in use, every round: the first of them (there is no other)
+        // Every answer on a host in use, every round: the first of them, because there is no other.
         let both = ["one.example".to_string(), "two.example".into()];
         assert_eq!(resolve_in(&order, "testnet-10", &both, answers).unwrap().url, "wss://one.example/kaspa/testnet-10/wrpc/borsh");
-        // none answers: every failure is named, one round only
+        // None answers: every failure is named, one round only.
         let mut calls = 0;
         let e = resolve_in(&order[..2], "mainnet", &[], |u| {
             calls += 1;
@@ -772,7 +859,9 @@ pub(crate) mod tests {
         assert_eq!(calls, 2);
     }
 
-    /// The real HTTP path against local resolvers: one down (connection refused), one answering `NOT FOUND`, one naming a node.
+    /// The real HTTP path against local resolvers.
+    ///
+    /// One is down (connection refused), one answers `NOT FOUND`, and one names a node.
     #[test]
     fn resolution_over_http_with_fallback() {
         use std::io::{Read, Write};
@@ -799,8 +888,10 @@ pub(crate) mod tests {
         assert_eq!(r, Resolved { url: "wss://alpha-10.kaspa.stream/kaspa/testnet-10/wrpc/borsh".into(), resolver: good });
     }
 
-    /// The pair: two entries resolve two different hosts; the authority's failure hands its role to the survivor at once
-    /// (no resolution in between); the replacement is on a third host, neither the survivor's nor the failed one's.
+    /// The pair: two entries resolve two different hosts.
+    ///
+    /// The authority's failure hands its role to the survivor at once, with no resolution in
+    /// between. The replacement is on a third host, neither the survivor's nor the failed one's.
     #[test]
     fn the_pair_fails_over_to_the_survivor_and_replaces_on_another_host() {
         let _g = serial();
@@ -810,10 +901,11 @@ pub(crate) mod tests {
         assert_eq!((host(&a), host(&b)), ("a.example".to_string(), "b.example".to_string()), "two different hosts");
         assert_eq!(endpoint("resolver").unwrap(), a, "one node per entry for every client");
         assert_eq!(endpoint("ws://127.0.0.1:18210").unwrap(), "ws://127.0.0.1:18210");
-        // a report about a node the entry no longer uses: ignored
+        // A report about a node the entry no longer uses is ignored.
         replace("resolver", "wss://z.example/x/borsh", "test");
         assert_eq!(current("resolver"), Some(a.clone()));
-        // the authority fails: the survivor is the authority immediately, the cross-check entry has no node until replaced
+        // The authority fails: the survivor is the authority immediately.
+        // The cross-check entry has no node until replaced.
         replace("resolver", &a, "test");
         assert_eq!(current("resolver"), Some(b.clone()), "failover to the survivor with no resolution");
         assert_eq!(current("resolver:2"), None);
@@ -821,7 +913,8 @@ pub(crate) mod tests {
         assert_eq!(host(&c), "c.example", "the replacement differs from the survivor and from the failed host");
         assert_eq!((replacements("resolver"), replacements("resolver:2")), (1, 0));
         assert_eq!(last_reason("resolver").as_deref(), Some("a.example: test"), "why, for /v1/health");
-        // the cross-check node fails: the authority keeps its node, the replacement avoids every host seen failing or in use
+        // The cross-check node fails: the authority keeps its node.
+        // The replacement avoids every host seen failing or in use.
         replace("resolver:2", &c, "test");
         assert_eq!(current("resolver"), Some(b.clone()));
         assert_eq!(host(&endpoint("resolver:2").unwrap()), "d.example");
@@ -830,12 +923,14 @@ pub(crate) mod tests {
         assert_eq!(d[1], ("resolver:2".to_string(), Some("d.example".to_string()), 1));
     }
 
-    /// A node another entry took while the resolvers were asked is not taken a second time; a failed host takes every entry
-    /// on it down, and the authority is never handed a node on the failed host.
+    /// A node another entry took while the resolvers were asked is not taken a second time.
+    ///
+    /// A failed host takes every entry on it down, and the authority is never handed a node on
+    /// the failed host.
     #[test]
     fn two_entries_never_end_on_one_host() {
         let _g = serial();
-        // the first answer is a host another entry takes meanwhile (as a failover would)
+        // The first answer is a host another entry takes meanwhile, as a failover would.
         fn racing(_: &str, avoid: &[String]) -> Result<Resolved, String> {
             let mut s = lock();
             if !s.current.contains_key("resolver") {
@@ -848,15 +943,18 @@ pub(crate) mod tests {
         reset(racing);
         let b = endpoint("resolver:2").unwrap();
         assert_eq!(host(&b), "b.example", "not the host the authority took meanwhile");
-        // both entries on one host (an old race, or the resolvers had no other): its failure clears both, nobody is promoted
+        // Both entries on one host, from a race or because the resolvers had no other.
+        // Its failure clears both and nobody is promoted.
         lock().current.insert("resolver:2".into(), "wss://a.example/x/borsh".into());
         replace("resolver", "wss://a.example/x/borsh", "test");
         assert_eq!((current("resolver"), current("resolver:2")), (None, None));
     }
 
-    /// A dropped connection gets one reconnect to the same node, with a short connect timeout: the authority's role moves to
-    /// the other node at once and the dropped node is retried as the cross-check; a second drop within the window gives it up
-    /// (a node on a third host replaces it); after the window a drop is a first drop again.
+    /// A dropped connection gets one reconnect to the same node, with a short connect timeout.
+    ///
+    /// The authority's role moves to the other node at once and the dropped node is retried as
+    /// the cross-check. A second drop within the window gives it up, and a node on a third host
+    /// replaces it. After the window a drop is a first drop again.
     #[test]
     fn a_first_drop_reconnects_once_a_second_one_replaces() {
         let _g = serial();
@@ -870,27 +968,29 @@ pub(crate) mod tests {
         assert_eq!(connect_timeout("resolver:2", long), GRACE_CONNECT_TIMEOUT, "the retry has a short connect timeout");
         assert_eq!(connect_timeout("resolver", long), long);
         assert_eq!(connect_timeout("ws://127.0.0.1:18210", long), long);
-        // the retry fails (or it drops again within the window): given up, replaced on a third host
+        // The retry fails, or it drops again within the window: given up, replaced on a third host.
         failed("resolver:2", &a);
         assert_eq!(current("resolver"), Some(b.clone()));
         assert_eq!(current("resolver:2"), None);
         let c = endpoint("resolver:2").unwrap();
         assert_eq!(host(&c), "c.example");
         assert_eq!(replacements("resolver:2"), 1);
-        // the cross-checking node's first drop: kept for its retry; its second: replaced
+        // The cross-checking node's first drop is kept for its retry. Its second is replaced.
         failed("resolver:2", &c);
         assert_eq!(current("resolver:2"), Some(c.clone()));
         failed("resolver:2", &c);
         assert_eq!(current("resolver:2"), None);
-        // a drop after the window is a first drop again
+        // A drop after the window is a first drop again.
         let d = endpoint("resolver:2").unwrap();
         lock().dropped.insert(host(&d), Instant::now() - DROP_WINDOW - Duration::from_secs(1));
         failed("resolver:2", &d);
         assert_eq!(current("resolver:2"), Some(d.clone()), "a reconnect again, the window has passed");
     }
 
-    /// A replacement whose resolution fails is tried again with the backoff until it names a node: the pair is never left
-    /// without its cross-checking node because one resolution failed (no client asks for an entry that has no node).
+    /// A replacement whose resolution fails is tried again with the backoff until it names a node.
+    ///
+    /// The pair is never left without its cross-checking node because one resolution failed. No
+    /// client asks for an entry that has no node.
     #[test]
     fn a_failed_replacement_is_resolved_again() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -921,7 +1021,9 @@ pub(crate) mod tests {
         assert!(CALLS.load(Ordering::SeqCst) >= 2);
     }
 
-    /// Both nodes gone and the resolvers silent: every entry backs off (no resolution storm), then resolves again.
+    /// Both nodes gone and the resolvers silent: every entry backs off, then resolves again.
+    ///
+    /// The backoff keeps this from being a resolution storm.
     #[test]
     fn with_no_node_left_resolution_backs_off() {
         let _g = serial();
