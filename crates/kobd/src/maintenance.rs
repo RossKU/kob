@@ -1,21 +1,35 @@
-//! Operator maintenance (`docs/ops/executor.md`, maintenance): the operator's own token UTXOs.
+//! Operator maintenance: merging and selling the operator's own token UTXOs.
 //!
-//! The operator can come to hold token UTXOs of its own key (a route delivers every base unit of B it buys, but tokens may
-//! still reach the operator's key, and the matcher's opt-in surplus-inventory policy, `PlannerConfig::inventory`,
-//! accumulates pair surpluses there on purpose), each with a KAS carrier on it (`EngineConfig::token_carrier`, 10 KAS by
-//! default; a kept surplus `InventoryPolicy::keep_carrier`, 2 KAS by default). Left alone they pile up: in the TN10 soak
-//! (2026-10-01) each executor held 22 to 28 of them after 51 minutes, 220 to 280 KAS of carriers locked for a few cents of
-//! tokens, while the bank's top-ups ran into them.
+//! The job is described in `docs/ops/executor.md`, "Maintenance".
 //!
-//! | Job | When | What |
-//! |---|---|---|
-//! | sell | the token is not held as surplus inventory (`inventory` lists it: the owner sells those off-matcher), the operator holds at least one minimum fill of a bid that is left after the matcher's tick, the bid pays at least `sell_floor_bps` (90 %) of what the book's resting asks charge for the same amount (no such asks: no sale), and selling into it pays more than the fee | its token UTXOs (as many as the program takes) are sold into the best such bid as a taker; the rest comes back as one token UTXO |
-//! | merge | otherwise, the operator holds at least `min_utxos` token UTXOs of one token | as many as the program takes become one (a listed inventory token's on `keep_carrier`): the other carriers return to the funding pool |
+//! The operator can come to hold token UTXOs of its own key. A route delivers every base unit of B
+//! it buys, but tokens may still reach the operator's key. The matcher's opt-in surplus-inventory
+//! policy (`PlannerConfig::inventory`) also accumulates pair surpluses there on purpose. Each
+//! holding has a KAS carrier on it. The carrier is `EngineConfig::token_carrier` (10 KAS by
+//! default), or `InventoryPolicy::keep_carrier` (2 KAS by default) for a kept surplus. Left alone,
+//! the holdings pile up and lock carriers for a few cents of tokens. They also get in the way of
+//! the bank's top-ups.
 //!
-//! Both are bounded per tick (`max_jobs`), built with the `kob_protocol` builders (a taker `Batch`, `SendTokens`), signed with
-//! the hot key and validated in the v2.1.0 engine before submission, like every matcher and keeper transaction. KRON tokens
-//! held by address presence need a P2PK input of the operator: those jobs take the smallest funding UTXO (its change returns
-//! it); KCC-20 jobs pay their fee from the carriers they free.
+//! There are two jobs:
+//!
+//! - **Sell** runs when the token is not held as surplus inventory, because the owner sells
+//!   `inventory` tokens off-matcher. It also needs a bid that is left after the matcher's tick,
+//!   of which the operator holds at least one minimum fill. The bid must pay at least
+//!   `sell_floor_bps` (90 % by default) of what the book's resting asks charge for the same
+//!   amount. With no such asks there is no sale, unless the floor is 0. Selling into the bid must
+//!   also pay more than the fee. The token UTXOs (as many as the program takes) are sold into the
+//!   best such bid as a taker. The rest comes back as one token UTXO.
+//! - **Merge** runs otherwise, when the operator holds at least `min_utxos` token UTXOs of one
+//!   token. As many as the program takes become one. A listed inventory token's merge goes on
+//!   `keep_carrier`. The other carriers return to the funding pool.
+//!
+//! Both are bounded per tick (`max_jobs`). They are built with the `kob_protocol` builders (a taker
+//! `Batch`, `SendTokens`), signed with the hot key and validated in the script engine before
+//! submission, like every matcher and keeper transaction.
+//!
+//! KRON tokens held by address presence need a P2PK input of the operator. Those jobs take the
+//! smallest funding UTXO, and its change returns it. KCC-20 jobs pay their fee from the carriers
+//! they free.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,7 +54,8 @@ pub struct MaintenanceConfig {
     pub enabled: bool,
     /// Merge the operator's token UTXOs of one token.
     pub merge: bool,
-    /// Sell the operator's tokens into the book (at least a bid's minimum fill) when that pays more than the fee.
+    /// Sell the operator's tokens into the book (at least a bid's minimum fill) when that pays
+    /// more than the fee.
     pub sell: bool,
     /// Smallest number of token UTXOs of one token worth a merge.
     pub min_utxos: usize,
@@ -48,23 +63,32 @@ pub struct MaintenanceConfig {
     pub max_jobs: usize,
     /// Smallest profit (proceeds − fee, sompi) of a sale.
     pub min_sell_profit: i64,
-    /// The price floor of a sale, basis points of what the book's resting asks of the token charge for the same amount (the
-    /// cheapest first, as many as it takes): the bid must pay at least this share of it, and with too few asks to price the
-    /// amount nothing is sold (the UTXOs are merged instead). Default 9,000 (90 %). 0: no floor (any bid that pays the fee).
+    /// The price floor of a sale, in basis points of what the book's resting asks of the token
+    /// charge for the same amount.
+    ///
+    /// The asks are taken cheapest first, as many as it takes. The bid must pay at least this
+    /// share of that price. With too few asks to price the amount nothing is sold, and the UTXOs
+    /// are merged instead. The default is 9,000 (90 %). 0 means no floor: any bid that pays the
+    /// fee.
     pub sell_floor_bps: u32,
     /// The lowest fee rate, sompi per gram.
     pub fee_rate: u64,
-    /// The tick's fee rates (`crate::fee`, set by the runner): every job is housekeeping and goes at the low rate, held to the
-    /// total cap; a sale is lowered to the highest rate it still pays (not below `fee_rate`). The default (the floor
-    /// everywhere, no cap) builds every job at `fee_rate`.
+    /// The tick's fee rates (`crate::fee`, set by the runner).
+    ///
+    /// Every job is housekeeping and goes at the low rate, held to the total cap. A sale is lowered
+    /// to the highest rate it still pays, not below `fee_rate`. The default (the floor everywhere,
+    /// no cap) builds every job at `fee_rate`.
     pub fees: crate::fee::FeeRates,
     /// KAS carrier on the token UTXO a job leaves (the merged one, a sale's remainder).
     pub token_carrier: u64,
     /// `t = DAA − margin` of a sale's lock time (the matcher's margin).
     pub safety_margin: u64,
+    /// Validate each signed job in the script engine before it is returned.
     pub validate: bool,
-    /// The matcher's surplus-inventory policy (`PlannerConfig::inventory`): a token it lists is accumulated inventory that
-    /// the owner sells off-matcher, so it is never sold here (merged only), whether or not the switch is on.
+    /// The matcher's surplus-inventory policy (`PlannerConfig::inventory`).
+    ///
+    /// A token it lists is accumulated inventory that the owner sells off-matcher. So it is never
+    /// sold here, whether or not the sell switch is on. It is only merged.
     pub inventory: crate::matcher::planner::InventoryPolicy,
 }
 
@@ -92,11 +116,14 @@ impl Default for MaintenanceConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MaintKind {
+    /// Sell the operator's tokens into the best bid.
     Sell,
+    /// Merge the operator's token UTXOs of one token into one.
     Merge,
 }
 
 impl MaintKind {
+    /// The lowercase name: `sell` or `merge`.
     pub fn name(self) -> &'static str {
         match self {
             MaintKind::Sell => "sell",
@@ -108,7 +135,9 @@ impl MaintKind {
 /// An operator token UTXO and the program of its token (the indexer's proven holding).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnToken {
+    /// The token's program.
     pub program: TemplateId,
+    /// The UTXO and its state.
     pub token: TokenUtxo,
 }
 
@@ -118,6 +147,7 @@ pub struct MaintenanceInput {
     pub tokens: Vec<OwnToken>,
     /// The book (the bids a sale may fill).
     pub orders: Vec<ListedOrder>,
+    /// The clock of the tick.
     pub clock: Clock,
     /// The operator's P2PK funding left after the tick's other transactions.
     pub funding: Vec<KeyUtxo>,
@@ -130,31 +160,42 @@ pub struct MaintenanceInput {
 /// A signed, validated maintenance transaction.
 #[derive(Clone, Debug)]
 pub struct MaintJob {
+    /// The kind of job.
     pub kind: MaintKind,
+    /// The covenant id of the token.
     pub token: [u8; 32],
     /// The bid a sale fills.
     pub order: Option<CovId>,
+    /// The builder request the transaction was made from.
     pub action: Action,
+    /// The unsigned transaction.
     pub built: BuiltTx,
+    /// The signed transaction.
     pub signed: SignedTx,
+    /// The engine's verdict, or `None` when validation is off.
     pub validation: Option<Validation>,
-    /// The operator's KAS after the job less before, its token carriers counted on both sides: a sale's proceeds less the
-    /// fee, a merge's −fee.
+    /// The operator's KAS after the job less before, its token carriers counted on both sides.
+    ///
+    /// For a sale that is its proceeds less the fee. For a merge it is −fee.
     pub profit: i64,
     /// Carrier KAS the job moves from the operator's token UTXOs to its funding (the change).
     pub released: i64,
+    /// The outpoints the transaction spends.
     pub spends: BTreeSet<Outpoint>,
 }
 
 /// Result of a maintenance tick.
 #[derive(Debug, Default)]
 pub struct MaintReport {
+    /// The jobs built, in token order.
     pub jobs: Vec<MaintJob>,
     /// (token, why) of the jobs not built.
     pub skipped: Vec<([u8; 32], String)>,
 }
 
-/// One token's holdings, grouped for a job: same covenant id, program and extension (KCC-20 transfers keep it).
+/// One token's holdings, grouped for a job: same covenant id, program and extension.
+///
+/// KCC-20 transfers keep the extension.
 type Group = ([u8; 32], TemplateId, [u8; 32]);
 
 fn build_sign(action: &Action, signer: &dyn Signer, validate: bool) -> Result<(BuiltTx, SignedTx, Option<Validation>), String> {
@@ -165,10 +206,12 @@ fn build_sign(action: &Action, signer: &dyn Signer, validate: bool) -> Result<(B
     Ok((built, signed, v))
 }
 
-/// `a` at its fee rate (`crate::fee`): the low rate, held to the total cap; with `profit` (a sale: the operator's KAS of the
-/// built job) to the highest rate that keeps `min_sell_profit`, at least the floor. Priced from an unsigned build at the floor
-/// and checked with one at the rate found (none while the low rate is the floor); a job that does not build or pay there
-/// goes at the floor.
+/// `a` at its fee rate (`crate::fee`): the low rate, held to the total cap.
+///
+/// With `profit` (a sale: the operator's KAS of the built job) the rate is lowered to the highest
+/// one that keeps `min_sell_profit`, at least the floor. The rate is priced from an unsigned build
+/// at the floor and checked with one at the rate found (none while the low rate is the floor). A
+/// job that does not build or pay there goes at the floor.
 fn priced(mut a: Action, cfg: &MaintenanceConfig, profit: impl Fn(&BuiltTx) -> Option<i64>) -> Action {
     let floor = cfg.fees.floor_of(cfg.fee_rate);
     let want = cfg.fees.rate(crate::fee::Urgency::Low, cfg.fee_rate);
@@ -194,8 +237,9 @@ fn priced(mut a: Action, cfg: &MaintenanceConfig, profit: impl Fn(&BuiltTx) -> O
     }
 }
 
-/// The operator's KAS balance change of a built job: change and token carrier outputs to the operator, less its funding
-/// and token inputs.
+/// The operator's KAS balance change of a built job.
+///
+/// It is the change and token carrier outputs to the operator, less its funding and token inputs.
 fn operator_kas(built: &BuiltTx, funding: &[KeyUtxo], tokens: &[TokenUtxo], carrier_out: u64) -> i64 {
     let change = built.fee.change_output.map(|i| built.tx.outputs[i as usize].value).unwrap_or(0);
     let fin: u64 = funding.iter().map(|k| k.utxo.amount).sum();
@@ -203,10 +247,12 @@ fn operator_kas(built: &BuiltTx, funding: &[KeyUtxo], tokens: &[TokenUtxo], carr
     change as i64 + carrier_out as i64 - fin as i64 - tin as i64
 }
 
-/// The best bid of the book a sale of the operator's tokens of `g` may fill, how many base units and what it pays: a plain,
-/// accepted, live `KobBid` of the token's market (program and extension), not excluded, whose quantity rules (its minimum
-/// fill unless the fill ends it, FOK) accept a fill of at most `held` base units. Highest all-in price per base unit first,
-/// then age and id.
+/// The best bid of the book that a sale of the operator's tokens of `g` may fill.
+///
+/// It returns the bid, how many base units to sell and what it pays. The bid is a plain, accepted,
+/// live `KobBid` of the token's market (program and extension), not excluded, whose quantity rules
+/// (its minimum fill unless the fill ends it, FOK) accept a fill of at most `held` base units. The
+/// highest all-in price per base unit wins, then age, then id.
 fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(ListedOrder, i64, i64)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -232,7 +278,8 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
             n = n.min(hi);
         }
         if n > c.part_cap && !c.ends(n) {
-            // a partial fill that would leave the bid a KIP-9 dust continuation: its largest partial fill instead
+            // A partial fill that would leave the bid a KIP-9 dust continuation: take its largest
+            // partial fill instead.
             n = c.part_cap;
         }
         if n <= 0 || !c.quantity_ok(n) {
@@ -250,11 +297,16 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
     best.map(|(_, _, _, _, k, n, pays)| (mine[k].clone(), n, pays))
 }
 
-/// What the book's resting plain asks of `g`'s market charge for `n` base units: the quote per base unit (sompi over base
-/// units) of the ask that completes `n` when the cheapest are taken first, each up to what it can deliver now; `None` when
-/// the asks hold less than `n`. The reference of a sale's price floor ([`MaintenanceConfig::sell_floor_bps`]): a holding is
-/// never sold below what buying the same amount back from the book would cost (less the floor's margin), so a low bid
-/// alone cannot take it, and an ask posted to lower the reference must itself offer the whole amount at that price.
+/// What the book's resting plain asks of the token's market charge for `n` base units.
+///
+/// It is the quote per base unit (sompi over base units) of the ask that completes `n` when the
+/// cheapest are taken first, each up to what it can deliver now. It is `None` when the asks hold
+/// less than `n`.
+///
+/// This is the reference of a sale's price floor ([`MaintenanceConfig::sell_floor_bps`]). A holding
+/// is never sold below what buying the same amount back from the book would cost, less the
+/// floor's margin. So a low bid alone cannot take it. An ask posted to lower the reference must
+/// itself offer the whole amount at that price.
 fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i128, i128)> {
     let (token, program, ext) = *g;
     let tpl = kob_protocol::artifacts::token_template(program).hash;
@@ -286,8 +338,9 @@ fn ask_reference(inp: &MaintenanceInput, g: &Group, n: i64, t: i64) -> Option<(i
     None
 }
 
-/// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker: the bid pays the operator's
-/// change, the unsold rest comes back as one token UTXO.
+/// The sale of `tokens` (one group) into `bid` for `amount` base units, the operator as taker.
+///
+/// The bid pays the operator's change. The unsold rest comes back as one token UTXO.
 fn sell_action(
     bid: &ListedOrder,
     amount: i64,
@@ -317,7 +370,8 @@ fn sell_action(
     }))
 }
 
-/// The merge of `tokens` (one group, `amount` base units in all) into one token UTXO of the operator.
+/// The merge of `tokens` (one group, `amount` base units in all) into one token UTXO of the
+/// operator.
 fn merge_action(
     g: &Group,
     tokens: &[TokenUtxo],
@@ -340,8 +394,10 @@ fn merge_action(
     })
 }
 
-/// Plans, builds, signs and validates the maintenance jobs of a snapshot: per token (by covenant id), a sale when one pays,
-/// else a merge, at most `max_jobs`. Deterministic.
+/// Plans, builds, signs and validates the maintenance jobs of a snapshot.
+///
+/// Per token (by covenant id) it builds a sale when one pays, else a merge, at most `max_jobs` in
+/// all. The result is deterministic.
 pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer) -> MaintReport {
     let mut report = MaintReport::default();
     if !cfg.enabled || (!cfg.merge && !cfg.sell) {
@@ -361,7 +417,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         let g = (o.token.utxo.covenant_id.unwrap_or_default(), o.program, s.extension());
         groups.entry(g).or_default().push(o.token.clone());
     }
-    // the smallest funding UTXO first (a KRON job only needs its presence; its change returns it)
+    // The smallest funding UTXO first (a KRON job only needs its presence; its change returns it).
     let mut pool: Vec<KeyUtxo> =
         inp.funding.iter().filter(|k| !inp.excluded_outpoints.contains(&outpoint(&k.utxo))).cloned().collect();
     pool.sort_by(|a, b| a.utxo.amount.cmp(&b.utxo.amount).then(outpoint(&a.utxo).cmp(&outpoint(&b.utxo))));
@@ -373,10 +429,11 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
             report.skipped.push((g.0, format!("unsupported token program {}", g.1.name())));
             continue;
         };
-        // as many as one transaction of the program takes, the oldest first
+        // As many as one transaction of the program takes, the oldest first.
         utxos.sort_by(|a, b| (a.utxo.block_daa_score, outpoint(&a.utxo)).cmp(&(b.utxo.block_daa_score, outpoint(&b.utxo))));
         utxos.truncate(lim.max_in.max(1));
-        // checked: a holding of a token whose genesis is not verified may carry any amounts; their sum leaves the group out
+        // Checked: a holding of a token whose genesis is not verified may carry any amounts. If
+        // their sum overflows, the group is left out.
         let Some(held) = utxos.iter().try_fold(0i64, |a, u| a.checked_add(u.state.amount())) else {
             report.skipped.push((g.0, "the holdings of this token overflow an i64: left alone".into()));
             continue;
@@ -389,14 +446,16 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
         }
         let carriers_in: i64 = utxos.iter().map(|u| u.utxo.amount as i64).sum();
         let mut job: Option<MaintJob> = None;
-        // surplus inventory the matcher accumulates is the owner's to sell, off-matcher: never sold here (a merge only)
+        // Surplus inventory the matcher accumulates is the owner's to sell off-matcher. It is never
+        // sold here, only merged.
         let held_inventory = cfg.inventory.holds(&g.0);
         if held_inventory && cfg.sell {
             report.skipped.push((g.0, "sell: surplus inventory (the owner sells it off-matcher)".into()));
         }
         if cfg.sell && !held_inventory {
             let best = best_bid(inp, &g, held, t as i64);
-            // the price floor: never below `sell_floor_bps` of what the book's asks charge for the same amount
+            // The price floor: never below `sell_floor_bps` of what the book's asks charge for the
+            // same amount.
             let floor_ok = |amount: i64, pays: i64| -> Result<(), String> {
                 if cfg.sell_floor_bps == 0 {
                     return Ok(());
@@ -404,7 +463,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                 let Some((q, s)) = ask_reference(inp, &g, amount, t as i64) else {
                     return Err(format!("sell: no resting asks for {amount} base units to price the sale against"));
                 };
-                // pays / amount >= floor × q / s
+                // pays / amount >= floor × q / s.
                 if pays as i128 * s * 10_000 < cfg.sell_floor_bps as i128 * q * amount as i128 {
                     return Err(format!(
                         "sell: the best bid pays {pays} sompi for {amount} base units, below {} bps of the asks' price",
@@ -432,7 +491,8 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
                     Ok((a, built, signed, v))
                 }) {
                     Ok((action, built, signed, validation)) => {
-                        // proceeds − fee (the carriers the sale frees are the operator's own KAS on both sides)
+                        // Proceeds − fee. The carriers the sale frees are the operator's own KAS on
+                        // both sides.
                         let profit = operator_kas(&built, &funding, &utxos, carrier_out);
                         if profit >= cfg.min_sell_profit {
                             let spends = built.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect();
@@ -457,7 +517,8 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
             }
         }
         if job.is_none() && cfg.merge && utxos.len() >= cfg.min_utxos.max(2) {
-            // a merge of inventory leaves it on the inventory carrier (`InventoryPolicy::keep_carrier`)
+            // A merge of inventory leaves it on the inventory carrier
+            // (`InventoryPolicy::keep_carrier`).
             let carrier = if held_inventory { cfg.inventory.keep_carrier } else { cfg.token_carrier };
             let action = priced(merge_action(&g, &utxos, held, &funding, operator, carrier, cfg), cfg, |_| None);
             match build_sign(&action, signer, cfg.validate) {
@@ -481,7 +542,7 @@ pub fn tick(inp: &MaintenanceInput, cfg: &MaintenanceConfig, signer: &dyn Signer
             }
         }
         if let Some(j) = job {
-            // a funding UTXO a job spends is gone for the next one (its change is not accepted yet)
+            // A funding UTXO a job spends is gone for the next one. Its change is not accepted yet.
             pool.retain(|k| !j.spends.contains(&outpoint(&k.utxo)));
             report.jobs.push(j);
         }
