@@ -1,4 +1,6 @@
-//! `kob place <kind>`: a new order, planned exactly like the web wallet's order ticket (`plan.rs`, `plan_pair.rs`).
+//! `kob place <kind>`: a new order, planned like the order ticket of the web wallet.
+//!
+//! The planners are `plan.rs` and `plan_pair.rs`.
 
 use kob_protocol::json::to_hex;
 use kob_protocol::state::AnyState;
@@ -18,7 +20,7 @@ use super::units::{
     self, parse_bps, parse_duration_daa, parse_kas, parse_kas_price, parse_pair_price, parse_token_amount, parse_when, When,
 };
 
-/// Help of `kob place`.
+/// The help text of `kob place`.
 pub const USAGE: &str = "\
 kob place: place a new order (the web wallet's planner: same defaults, same checks, same transaction)
 
@@ -129,14 +131,16 @@ const VALUE_FLAGS: &[&str] = &[
 ];
 const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
 
-/// Options every kind takes (`--decimals`: the first order of a token without a registry entry and without orders, any kind).
+/// The options that every kind takes.
+///
+/// `--decimals` is for the first order of a token without a registry entry and without orders.
 const ANY_KIND: &[&str] =
     &["--token", "--quote", "--side", "--amount", "--tip", "--carrier", "--ack-no-guards", "--ack-market-start", "--decimals"];
 const LIFE: &[&str] = &["--gtd", "--day", "--active-from"];
 const STOP_KNOBS: &[&str] = &["--min-touch", "--band", "--keeper-tip", "--min-rest"];
 const TRAIL: &[&str] = &["--trail-step", "--trail-gap", "--trail-wait", "--trail-updates"];
 
-/// The kind-specific options a kind takes (besides [`ANY_KIND`]).
+/// The kind-specific options that a kind takes, besides [`ANY_KIND`].
 fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
     let v = |xs: &[&[&'static str]]| Some(xs.concat());
     match kind {
@@ -175,11 +179,15 @@ fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
     }
 }
 
-/// The least carrier `--carrier` accepts: a token or order output carries a covenant id (KIP-9 storage plurality 2), so
-/// below 0.08 KAS its storage mass alone exceeds the block limit.
+/// The least carrier that `--carrier` accepts, 0.08 KAS.
+///
+/// A token or order output carries a covenant id, and below this value its KIP-9 storage mass
+/// alone exceeds the block limit. See `tx::COVENANT_OUTPUT_MIN` in `kob-protocol`.
 pub const MIN_CARRIER: u64 = 8_000_000;
 
-/// The side of `kind`: `--side`, or the side a kind implies (close and twap sell, dca buys).
+/// The side of `kind`: `--side`, or the side that the kind implies.
+///
+/// Close and twap sell, and dca buys.
 pub fn side_for(kind: &str, p: &Parsed) -> Result<Side, String> {
     let fixed = match kind {
         "close" | "twap" => Some(Side::Sell),
@@ -221,7 +229,7 @@ fn activation_of(p: &Parsed) -> Result<Option<Activation>, String> {
     }))
 }
 
-/// The kind is known, takes every option given, and has its side.
+/// Checks that the kind is known, takes every option given, and has a side.
 pub fn check_flags(kind: &str, p: &Parsed) -> Result<Side, String> {
     let Some(allowed) = kind_flags(kind) else { return Err(format!("unknown order kind `{kind}` (see `kob place --help`)")) };
     for k in VALUE_FLAGS.iter().chain(BOOL_FLAGS) {
@@ -235,7 +243,7 @@ pub fn check_flags(kind: &str, p: &Parsed) -> Result<Side, String> {
     side_for(kind, p)
 }
 
-/// The intent of `kind` from the arguments (`quote`: a pair's B).
+/// The intent of `kind` from the arguments. `quote` is the B token of a pair.
 pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMarket>) -> Result<Intent, String> {
     let side = check_flags(kind, p)?;
     if kind == "pair-limit" && quote.is_none() {
@@ -401,7 +409,7 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
             })
         }
         _ => {
-            // ifd, ifo, repeat-ifd, repeat-ifo
+            // These are ifd, ifo, repeat-ifd and repeat-ifo.
             let (tp, stop) = (price_of("--take-profit")?, price_of("--stop")?);
             match (kind, tp.is_some(), stop.is_some()) {
                 ("ifd", true, true) | ("ifd", false, false) => {
@@ -450,13 +458,15 @@ pub fn intent_of(kind: &str, p: &Parsed, m: &TokenMarket, quote: Option<&TokenMa
     })
 }
 
-/// A state tip (sompi per `scale` base units) as KAS per whole token (a token of more than 9 decimals has a scale of 10^9
-/// base units, less than one whole token).
+/// A state tip, in sompi per `scale` base units, as KAS per whole token.
+///
+/// A token of more than 9 decimals has a scale of 10^9 base units, which is less than one whole
+/// token.
 pub fn tip_per_whole(tip: i64, m: &TokenMarket) -> String {
     units::kas(tip as i128 * 10i128.pow(m.decimals) / m.scale as i128)
 }
 
-/// Plan lines of a placed order.
+/// The plan lines of a placed order.
 pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> Vec<String> {
     let Some(d) = &plan.disclosure else { return vec![] };
     let u = m.unit();
@@ -550,11 +560,13 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
     v
 }
 
-/// The planning environment of `kob place`, read from the node and the indexer, with the findings of the tokens'
-/// extension commitments ([`env_of`]).
+/// The planning environment of `kob place`, with the findings about the extension commitments of
+/// the tokens, see [`env_of`].
+///
+/// It is read from the node and the indexer.
 pub type PlaceEnv = (Env, TokenMarket, Option<TokenMarket>, Vec<Issue>);
 
-/// [`PlaceEnv`] of the command line `p`.
+/// The [`PlaceEnv`] of the command line `p`.
 pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<PlaceEnv, String> {
     let indexer = c.need_indexer()?.to_string();
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(&indexer))?;
@@ -578,7 +590,8 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
         Some(q) => Some(market::resolve_with(q, &reg, &idx, Some(&open(None)))?),
         None => None,
     };
-    // a commitment no source names: the one the wallet's own holdings of the token have (checked on the node), never assumed
+    // A commitment that no source names is the one that the own holdings of the wallet for the
+    // token have, checked on the node. It is never assumed.
     let mut found = vec![];
     for m in [Some(&mut a), b.as_mut()].into_iter().flatten().filter(|m| m.ext_source == market::ExtSource::Unknown) {
         let held = data::token_utxos(&indexer, c.need_node()?, &c.network, m, &maker)?;
@@ -588,7 +601,8 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     let side = side_for(kind, p)?;
     let if_done = matches!(kind, "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo");
     let carrier = carrier_arg(p)?;
-    // a sell (and a sell-first entry) holds tokens of A; a pair buy holds B, a sell-first pair entry a B prefund
+    // A sell, and a sell-first entry, holds tokens of A. A pair buy holds B, and a sell-first
+    // pair entry holds a B prefund.
     let needs = Needs { a: side == Side::Sell, b: b.is_some() && (side == Side::Buy || if_done) };
     let (mut env, mut notes) = env_of(c, &a, b.as_ref(), needs, maker)?;
     notes.extend(found);
@@ -598,7 +612,7 @@ pub fn env_for(c: &Common, p: &Parsed, kind: &str, maker: [u8; 32]) -> Result<Pl
     Ok((env, a, b, notes))
 }
 
-/// `--carrier`, checked against the covenant output minimum.
+/// `--carrier`, checked against the minimum of a covenant output.
 pub fn carrier_arg(p: &Parsed) -> Result<Option<u64>, String> {
     match p.get("--carrier") {
         Some(v) => {
@@ -615,20 +629,24 @@ pub fn carrier_arg(p: &Parsed) -> Result<Option<u64>, String> {
     }
 }
 
-/// Which of the maker's token UTXOs a plan needs: of A, of B.
+/// Which of the token UTXOs of the maker a plan needs, those of A and those of B.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Needs {
-    /// The maker's UTXOs of A.
+    /// Whether the plan needs the maker's UTXOs of A.
     pub a: bool,
-    /// The maker's UTXOs of B (a pair).
+    /// Whether the plan needs the maker's UTXOs of B, for a pair.
     pub b: bool,
 }
 
-/// The planning environment of an order of A (a pair: A/B) for `maker`, read from the node and the indexer: the clock,
-/// the KAS and token UTXOs, the book, the maker's own orders and the last fill (`web/src/app/env.ts`).
+/// The planning environment of an order of A, or of a pair A/B, for `maker`.
 ///
-/// With it, what the wallet's own holdings tell about an unlisted KCC-20 token's extension commitment (the indexer's): a
-/// mismatch is refused here; no holdings to compare with is a warning (the web app's unchecked commitment).
+/// It is read from the node and the indexer: the clock, the KAS and token UTXOs, the book, the
+/// own orders of the maker and the last fill, as in `web/src/app/env.ts`.
+///
+/// It also checks the extension commitment of an unlisted KCC-20 token, which is the one of the
+/// indexer, against what the wallet holds of the token. A mismatch is refused here. With no
+/// holdings to compare with, the result is a warning, as in the web app for an unchecked
+/// commitment.
 pub fn env_of(
     c: &Common,
     a: &TokenMarket,
@@ -642,17 +660,19 @@ pub fn env_of(
     let funding = data::funding(&node, &c.network, &maker)?;
     let mut guards = vec![];
     let token_utxos = if needs.a { data::token_utxos(&indexer, &node, &c.network, a, &maker)? } else { vec![] };
-    // an unlisted KCC-20 token's extension commitment is the indexer's: the wallet's own holdings of the token (their states
-    // confirmed on the node) are a reference without the indexer, and one of another commitment blocks (the web app's
-    // open-token-extension-mismatch); a buy would otherwise pin a commitment that only a look-alike genesis can fill. The
-    // indexer's commitment is never taken alone: without holdings to compare with, the plan says it is unchecked
+    // The extension commitment of an unlisted KCC-20 token is the one of the indexer. The own
+    // holdings of the wallet for the token, with their states confirmed on the node, are a
+    // reference without the indexer, and a holding of another commitment blocks, as the web app's
+    // open-token-extension-mismatch does. Otherwise a buy would pin a commitment that only a
+    // look-alike genesis can fill. The commitment of the indexer is never taken alone: with no
+    // holdings to compare with, the plan says it is unchecked.
     let mut notes = vec![];
     for m in [Some(a), b].into_iter().flatten() {
         if m.family != kob_protocol::Family::Kcc20 || m.listing != market::Listing::Unlisted {
             continue;
         }
         match m.ext_source {
-            // taken from these holdings (`env_for`), with its finding
+            // Taken from these holdings in `env_for`, with its finding.
             market::ExtSource::Holdings => continue,
             market::ExtSource::Unknown => {
                 return Err(format!("{}: its extension commitment is unknown (no source names it): nothing planned", m.name()))
@@ -754,7 +774,7 @@ pub fn env_of(
     Ok((env, notes))
 }
 
-/// Units of the plan's tokens.
+/// The units of the tokens of the plan.
 pub fn units_of(a: &TokenMarket, b: Option<&TokenMarket>) -> Units {
     let mut u = Units::new();
     u.insert(a.cov, a.unit());
@@ -784,7 +804,7 @@ pub fn ready(plan: &Plan, title: String, a: &TokenMarket, b: Option<&TokenMarket
 /// What `kob place` signs: the settings, the key, the plan and the markets.
 type Planned = (Common, crate::common::Signer, Plan, TokenMarket, Option<TokenMarket>);
 
-/// Run `kob place`.
+/// Runs `kob place`.
 pub fn run(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE, COMMON_HELP], true) {
         return code;
@@ -811,13 +831,15 @@ pub fn run(args: &[String]) -> i32 {
         super::flow::check_network_first(&c).map_err(|e| (1, e))?;
         let (env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
         let mut intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
-        // a pair order with no tip carries the pair's default (the web ticket's); a typed tip stays, zero included
+        // A pair order with no tip carries the default of the pair, as the web ticket does. A
+        // typed tip stays, zero included.
         if super::plan_pair::apply_pair_tip_defaults(&env, &mut intent, p.get("--tip").is_some(), p.get("--exit-tip").is_some()) {
             eprintln!("note: {}", super::plan_pair::PAIR_TIP_NOTE);
         }
         let mut plan = plan_order(&env, &intent);
         plan.issues.extend(notes);
-        // a registry token that is not tradable is refused, an unlisted one flagged (`web/src/kob/decode.ts` token-unlisted)
+        // A registry token that is not tradable is refused, and an unlisted one is flagged, as
+        // `token-unlisted` in `web/src/kob/decode.ts` does.
         for i in [Some(&a), b.as_ref()].into_iter().flatten().filter_map(|m| m.listing_issue(true)) {
             plan.ok &= i.severity != Severity::Error;
             plan.issues.push(i);
@@ -836,8 +858,8 @@ pub fn run(args: &[String]) -> i32 {
     match ready(&plan, title, &a, b.as_ref()) {
         Some(r) if plan.ok || plan.built.is_some() => {
             let code = finish(&c, &signer, r, &units_of(&a, b.as_ref()), "this order");
-            // a submitted first order of a token without a registry entry: its decimals for the next command of the token while
-            // the indexer has not seen the order (TN10 2026-10-15 O-1)
+            // After a submitted first order of a token without a registry entry, its decimals are
+            // recorded for the next command on the token, while the indexer has not seen the order.
             if code == 0 && !c.dry_run && matches!(a.decimals_from, market::DecimalsFrom::Entered | market::DecimalsFrom::Remembered) {
                 crate::recent::record_first_order_decimals(&c.network, &a.cov, a.decimals);
             }
@@ -856,7 +878,9 @@ mod tests {
     use super::*;
     use kob_protocol::artifacts::TemplateId;
 
-    /// The tip a pair order shows is the one typed, per whole token, also above 9 decimals (scale 10^9).
+    /// The tip of a pair order shows as the one typed, per whole token, also above 9 decimals.
+    ///
+    /// The scale is then 10^9.
     #[test]
     fn a_tip_shows_per_whole_token_above_nine_decimals() {
         let a = TokenMarket::new([0x70; 32], "BIG", 12, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
@@ -868,8 +892,10 @@ mod tests {
         assert_eq!(tip_per_whole(tip, &small), units::kas(1_000_000));
     }
 
-    /// `--decimals` (the first order of a token without orders) is taken by every kind: it was parsed but no kind listed it, so
-    /// every `kob place ... --decimals N` was refused (`--decimals does not apply to limit`).
+    /// Every kind takes `--decimals`, for the first order of a token without orders.
+    ///
+    /// Otherwise `kob place ... --decimals N` would be refused with `--decimals does not apply to
+    /// limit`.
     #[test]
     fn every_kind_takes_decimals_for_a_first_order() {
         let args = |kind: &str| -> Vec<String> {
