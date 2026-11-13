@@ -1,22 +1,21 @@
-// Third-party example, CLOSED ICC (inter-covenant composition): an app that imports the published
-// KOBOrders artifact (docs/argent/argent.md, "Importing KOBOrders").
+// A third-party example of closed ICC (inter-covenant composition). It
+// imports the published KOBOrders artifact, see docs/argent/argent.md,
+// "Importing KOBOrders from another Argent app".
 //
-// `PriceGate` is a KAS lock that can be spent only in a transaction where a KOB ask is partially
-// filled and quotes at most `max_price` sompi per whole token. A partial fill continues with
-// `amountLeft - n` (n > 0 base units taken, every other field unchanged); a refund or cancel leaves no
-// continuation. The gate therefore pins exactly that next state (a gate that required an unchanged
-// continuation could never be spent).
+// PriceGate is a KAS lock that can be spent only next to a partial fill of a
+// KOB ask with tif 0 and a price of at most max_price sompi per whole token.
+// The fill continues the ask with amountLeft - n and every other field
+// unchanged, so the gate pins exactly that next state. A gate that pinned an
+// unchanged continuation could never be spent.
 //
-// The ask is named by the imported handle KOBOrders::KobAsk: argentc links the published template
-// hash as a constant, records the KOBOrders artifact id and the interface fingerprint in this app's
-// artifact, and reads the ask's state with the published KobAskState layout.
+// The handle KOBOrders::KobAsk names the ask. argentc links its published
+// template hash and reads the ask's state with the published layout. The
+// import pins the artifact id (argentc patch 0002), because a forged artifact
+// with the same app name and ABI is self-consistent too. Pin the id you
+// reviewed with `sil2argent verify`.
 //
-// The import PINS the artifact id (`id "..."`, vendor/argent-upstream/patches/0002): argentc refuses an artifact with
-// any other id, and one without a pin, because a forged artifact with the same app name and ABI is
-// self-consistent too. Pin the id you reviewed (`sil2argent verify`).
-//
-// Compiled by scripts/build-argent.sh so it cannot rot (generated SilverScript:
-// contracts/argent/examples-out/closed_icc_gate/); it is not a KOB contract.
+// scripts/build-argent.sh compiles it and publishes its SilverScript in
+// contracts/argent/examples-out/closed_icc_gate/. It is not a KOB contract.
 
 import "../KOBOrders/artifact.json" id "aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907";
 

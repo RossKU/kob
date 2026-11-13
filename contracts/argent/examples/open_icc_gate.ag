@@ -1,19 +1,20 @@
-// Third-party example, OPEN ICC (inter-covenant composition): the ask template is data, not a link.
+// A third-party example of open ICC (inter-covenant composition). The ask
+// template is data in the state, not a link.
 //
-// Same `PriceGate` idea as closed_icc_gate.ag, but the ask handle is a state field of the actor,
-// `actor_type<KobAskState> ask_type`. The instance is created with the published KobAsk template hash
-// (contracts/argent/KOBOrders/artifact.json, actor KobAsk, actor_type_handle), and the contract
-// lowers the observation to readInputStateWithTemplate with that hash and witness-supplied
-// prefix/suffix lengths. It needs no artifact-backed import, hence not argentc patch 0002.
+// It is the PriceGate of closed_icc_gate.ag with the ask handle as a state
+// field, `actor_type<KobAskState> ask_type`. An instance is created with the
+// KobAsk actor_type_handle of contracts/argent/KOBOrders/artifact.json, and
+// argentc lowers the observation to readInputStateWithTemplate with it. It
+// needs no artifact-backed import, so no argentc patch 0002.
 //
-// The importer must declare the state layout itself, with the published state name (argent-runtime
-// matches an open handle by state name; the layout is published in the KOBOrders artifact,
-// argent.states). NOTE: the KobAskState below stops at priceEnd, whereas the published layout
-// (contracts/argent/KOBOrders.ag) has 20 fields and ends with decayStep, amountLeft and extensionCommitment; this example
-// only reads price and tif and is compile-checked only.
+// The importer declares the state itself, under the published state name,
+// because argent-runtime matches an open handle by state name. This example
+// only shows the syntax. Its KobAskState stops at priceEnd, where the
+// published layout has 20 fields, and it pins an unchanged continuation,
+// which a KobAsk never produces. It is compile-checked only.
 //
-// Compiled by scripts/build-argent.sh so it cannot rot (generated SilverScript:
-// contracts/argent/examples-out/open_icc_gate/); it is not a KOB contract.
+// scripts/build-argent.sh compiles it and publishes its SilverScript in
+// contracts/argent/examples-out/open_icc_gate/. It is not a KOB contract.
 
 state KobAskState {
     pubkey maker;
