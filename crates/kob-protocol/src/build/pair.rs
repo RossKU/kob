@@ -1,20 +1,36 @@
-//! Builders of the pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`; `crate::state::pair`): the order rules a new pair
-//! order must pass, and the matcher legs of every pair shape (fills, evidence-armed fills, updates, repeat merges, refunds).
+//! Builders of the pair orders `KobPair`, `KobCondPair` and `KobIfdPair` (`crate::state::pair`).
 //!
-//! Founder rules (option 2): a pair order enforces only its own guarantees, so the builders never require a particular
-//! counterparty. A batch may route a pair fill through the KAS books of both tokens (a pair ASK's A sold to `KobBid`s of A
-//! and its B bought from `KobAsk`s of B; a pair BID's B sold to `KobBid`s of B and its A bought from `KobAsk`s of A), net
-//! any number of opposite pair orders (pair ASKs and pair BIDs of the same pair in one transaction: the A one side releases
-//! is what the other receives, and the B likewise), or fill from the matcher's inventory (taker tokens). Every token
-//! amount is the covenant's exact rounded amount; a token surplus goes to the delivery of the first pair ASK buying that
-//! token (its guarantee is a minimum), else to the batch's taker. Trigger evidence of pair conditionals: two KAS-book legs
-//! (one of A, one of B: the implied rate) or a resting `KobPair` leg of the same pair; prices are recorded only from
-//! KAS-book fills (indexer rule, `docs/spec/matcher.md`).
+//! The module holds the order rules a new pair order must pass, and the matcher legs of every pair
+//! shape: fills, evidence-armed fills, updates, repeat merges and refunds.
+//!
+//! # Counterparties
+//!
+//! A pair order enforces only its own guarantees, so the builders never require a particular
+//! counterparty. See `docs/spec/order-types.md`, "Pair orders". A batch may fill a pair order in
+//! three ways:
+//! - Route it through the KAS books of both tokens. A pair ASK's A is sold to `KobBid`s of A and
+//!   its B bought from `KobAsk`s of B. A pair BID's B is sold to `KobBid`s of B and its A bought
+//!   from `KobAsk`s of A.
+//! - Net any number of opposite pair orders, i.e. pair ASKs and pair BIDs of the same pair in one
+//!   transaction. The A that one side releases is what the other receives, and likewise for B.
+//! - Fill from the matcher's inventory (taker tokens).
+//!
+//! Every token amount is the covenant's exact rounded amount. A token surplus goes to the delivery
+//! of the first pair ASK buying that token, whose guarantee is a minimum, and else to the batch's
+//! taker.
+//!
+//! # Trigger evidence
+//!
+//! Pair conditionals arm from two KAS-book legs, one of A and one of B, which give the implied
+//! rate, or from a resting `KobPair` leg of the same pair. Prices are recorded only from KAS-book
+//! fills, by the indexer rule of `docs/spec/matcher.md`.
 
 use super::*;
 
-/// The base token A and the quote token B of a pair order with their programs: each a supported program of the family
-/// its state names (template lengths included), two different tokens.
+/// The base token A and the quote token B of a pair order, with their programs.
+///
+/// Each is a supported program of the family its state names, template lengths included, and the
+/// two tokens differ.
 pub fn pair_programs(s: &AnyState) -> Result<(Token, Token)> {
     s.validate()?;
     let t = s.pair_tokens().ok_or_else(|| Error::Invalid(format!("{} is not a pair order", s.template_id().name())))?;
@@ -23,8 +39,9 @@ pub fn pair_programs(s: &AnyState) -> Result<(Token, Token)> {
         if Some(p.family()) != k.family_of() {
             return invalid(format!("pair order: token {what} program {} is not of the family its state names", p.name()));
         }
-        // the pair templates deliver a KRON token with id_type 3 (address presence, `KRON_DELIVERY`): a program whose holders
-        // are another owner type (KForge: id_type 0) has no pair template, its maker could never spend such a delivery
+        // The pair templates deliver a KRON token with id_type 3 (address presence,
+        // `KRON_DELIVERY`). A program whose holders are another owner type, e.g. KForge with
+        // id_type 0, has no pair template, because its maker could never spend such a delivery.
         if !p.serves_pairs() {
             return invalid(format!(
                 "pair order: token {what} program {} holds tokens with id_type {}; the pair templates deliver KRON tokens with \
@@ -55,8 +72,10 @@ fn side_name(ask: bool) -> &'static str {
     }
 }
 
-/// The order rules of a new pair order (builders refuse what would be unfillable, unrefundable or refused by the wallet
-/// rules; the covenants enforce the rest at fill time).
+/// The order rules of a new pair order.
+///
+/// The builders refuse what would be unfillable, unrefundable or refused by the wallet rules. The
+/// covenants enforce the rest at fill time.
 pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
     let (a, b) = pair_programs(s)?;
     s.check_numbers().map_err(Error::Invalid)?;
@@ -123,7 +142,7 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
                     ));
                 }
             }
-            // the T a minimum fill delivers fits one output of T
+            // The T a minimum fill delivers fits one output of T.
             let t_min = need(p.t_out_min(p.min_fill.min(p.amount_left), p.price_max()), "pair order: T of a minimum fill")?;
             kron_output(prog_of(p.t_cov_id).family(), t_min, "the T of a minimum fill")?;
             need(p.kas_value(1), "pair order: the KAS of one fill")?;
@@ -153,7 +172,7 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
                 if i.entry_stop > i.price {
                     return invalid("a buy-stop entry's trigger must not be above its limit");
                 }
-                // the exit's custody (n of A) carries deliveryCarrier
+                // The exit's custody (n of A) carries deliveryCarrier.
                 token_carrier("deliveryCarrier", i.delivery_carrier, a.1)?;
                 if e.side != SIDE_ASK {
                     return invalid("a buy-first entry's exit sells A (side ASK)");
@@ -171,7 +190,7 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
                 return invalid("exitCarrier is dust (the exit UTXO, a covenant output, carries it)");
             }
             if i.rpt_amount > 0 {
-                // a merge's new custody (of A or B) carries exitCarrier
+                // A merge's new custody (of A or B) carries exitCarrier.
                 token_carrier("exitCarrier", i.exit_carrier, a.1)?;
                 token_carrier("exitCarrier", i.exit_carrier, b.1)?;
             }
@@ -198,7 +217,7 @@ pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
                     i.exit_carrier
                 ));
             }
-            // the exit as a fill of one minimum fill creates it
+            // The exit as a fill of one minimum fill creates it.
             let n = i.min_fill.min(i.amount_left);
             let x_cust = if i.is_buy_first() {
                 n
@@ -275,7 +294,7 @@ fn check_new_cond_pair(c: &CondPairState, a: &Token, b: &Token, exit: bool) -> R
         ));
     }
     if exit && !c.is_ask() {
-        // a re-arming sell-first exit pays its profit on the custody's token
+        // A re-arming sell-first exit pays its profit on the custody's token.
         let s_prog = prog_of(c.s_cov_id);
         let floor = s_prog.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN) as i64;
         if c.delivery_carrier < floor {
@@ -289,11 +308,16 @@ fn check_new_cond_pair(c: &CondPairState, a: &Token, b: &Token, exit: bool) -> R
     Ok(())
 }
 
-/// Smallest KAS value of a new pair order UTXO: the delivery carriers it funds itself and the tip of its whole amount.
-/// An order that can rest after a fill funds a partial fill AND the fill of its rest (`funded_fills`: below that its
-/// first partial fill is impossible, or leaves a continuation that can never deliver), a TWAP / DCA order one delivery
-/// per `maxFill` slice; an IOC / FOK order, or one whose `minFill` takes everything, one. An entry: a delivery and an
-/// exit carrier per possible fill, the tip, a repeating entry's extra exit carrier.
+/// Smallest KAS value of a new pair order UTXO.
+///
+/// It is the delivery carriers the order funds itself and the tip of its whole amount:
+/// - An order that can rest after a fill funds a partial fill and the fill of its rest
+///   (`funded_fills`). Below that its first partial fill is impossible, or leaves a continuation
+///   that can never deliver.
+/// - A TWAP / DCA order funds one delivery per `maxFill` slice.
+/// - An IOC / FOK order, or one whose `minFill` takes everything, funds one.
+/// - An entry funds a delivery and an exit carrier per possible fill and the tip, and a repeating
+///   entry one extra exit carrier.
 pub(crate) fn min_pair_value(s: &AnyState) -> i64 {
     let sat = |v: Option<i64>| v.unwrap_or(i64::MAX);
     match s {
@@ -306,7 +330,9 @@ pub(crate) fn min_pair_value(s: &AnyState) -> i64 {
 
 // ---------------------------------------------------------------- matcher legs
 
-/// What a pair leg computes before the layout (its amounts; which of its custodies keep an output at their own index).
+/// What a pair leg computes before the layout.
+///
+/// That is its amounts, and which of its custodies keep an output at their own index.
 #[allow(clippy::large_enum_variant)] // one per leg of a batch
 pub(crate) enum PairCalc {
     Pair { t_arg: i64, f: PairFill },
@@ -323,9 +349,12 @@ pub(crate) struct CondCalc {
     tip_kas: i64,
     left: i64,
     out_amount: i64,
-    /// Re-arming: (proceeds = the entry's budget / proceeds of n, back = a sell-first entry's prefund of n).
+    /// Re-arming: (proceeds, back), the entry's budget or proceeds of n and a sell-first entry's
+    /// prefund of n.
     rearm: Option<(i64, i64)>,
-    /// The maker's token output: T delivery (`false`) or a re-arming BID exit's B profit on the custody's token (`true`).
+    /// Amount of the maker's token output.
+    /// The maker's token output is a re-arming BID exit's B profit on the custody's token (`true`),
+    /// or the T delivery (`false`).
     d_out: i64,
     d_s: bool,
 }
@@ -343,7 +372,7 @@ pub(crate) struct IfdCalc {
     exit: CondPairState,
 }
 
-/// The tokens of a pair leg: (A, B, the custody token S of a KobPair / KobCondPair, or the main custody token of an entry).
+/// The tokens A and B of a pair leg, or `None` for a leg that is not a pair order.
 pub(crate) fn leg_pair_tokens(l: &Leg) -> Result<Option<(Token, Token)>> {
     Ok(match l {
         Leg::Pair { order, .. } => Some(pair_programs(&AnyState::KobPair(order.state.clone()))?),
@@ -353,8 +382,10 @@ pub(crate) fn leg_pair_tokens(l: &Leg) -> Result<Option<(Token, Token)>> {
     })
 }
 
-/// The main token of a pair leg: the custody token of a KobPair / KobCondPair (S), an entry's A (sell-first) or B
-/// (buy-first).
+/// The main token of a pair leg.
+///
+/// It is the custody token S of a `KobPair` or `KobCondPair`, and the A of a sell-first entry or
+/// the B of a buy-first one.
 pub(crate) fn leg_main_token(l: &Leg, a: Token, b: Token) -> Token {
     let s_is_a = match l {
         Leg::Pair { order, .. } => order.state.is_ask(),
@@ -369,7 +400,9 @@ pub(crate) fn leg_main_token(l: &Leg, a: Token, b: Token) -> Token {
     }
 }
 
-/// The amounts of a pair leg (the covenant's arithmetic; refusals of what the covenant refuses).
+/// The amounts of a pair leg, by the covenant's arithmetic.
+///
+/// It refuses what the covenant refuses.
 pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCalc>> {
     let r = match l {
         Leg::Pair { order, custody, amount, t } => {
@@ -463,8 +496,8 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                 }
                 let proceeds = need(s.rpt_proceeds(n), "repeat proceeds")?;
                 if s.is_ask() {
-                    // the entry's B custody takes the budget; the maker's profit must be positive (deliver one more unit
-                    // of B when the rounded minimum leaves nothing)
+                    // The entry's B custody takes the budget. The maker's profit must be positive,
+                    // so deliver one more unit of B when the rounded minimum leaves nothing.
                     if t_out <= proceeds {
                         t_out = add(proceeds, 1, "repeat delivery")?;
                     }
@@ -474,7 +507,8 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                     d_s = true;
                     let back = need(s.rpt_back(n), "repeat prefund")?;
                     if left > 0 {
-                        // the maker's profit proceeds - sOut must be positive: pay at most proceeds - 1
+                        // The maker's profit proceeds - sOut must be positive, so pay at most
+                        // proceeds - 1.
                         s_out = s_out.min(proceeds - 1);
                         out_amount = s.custody - proceeds - back;
                         d_out = proceeds - s_out;
@@ -585,8 +619,10 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
     Ok(Some(r))
 }
 
-/// The custody inputs of a pair leg: `(slot, utxo, token, positional)`, positional when the transaction keeps an output of
-/// that token at the custody's own input index (its rest or return; a merged entry's existing custody).
+/// The custody inputs of a pair leg: `(slot, utxo, token, positional)`.
+///
+/// `positional` means the transaction keeps an output of that token at the custody's own input
+/// index: its rest or return, or a merged entry's existing custody.
 pub(crate) fn leg_custodies<'a>(l: &'a Leg, calc: &PairCalc, a: Token, b: Token) -> Result<Vec<(Slot, &'a TokenUtxo, Token, bool)>> {
     let mut v = vec![];
     match (l, calc) {
@@ -617,8 +653,10 @@ pub(crate) fn leg_custodies<'a>(l: &'a Leg, calc: &PairCalc, a: Token, b: Token)
     Ok(v)
 }
 
-/// The evidence arguments of a pair conditional: the evidence, `(evA, evB, tk, evMode)`. `ask_a`: the A leg must be an
-/// ask (mode 0: an ask of A and a bid of B; mode 1: a pair ASK); otherwise a bid of A and an ask of B, or a pair BID.
+/// The evidence arguments `(evA, evB, tk, evMode)` of a pair conditional.
+///
+/// With `ask_a` the A leg must be an ask: in mode 0 an ask of A and a bid of B, in mode 1 a pair
+/// ASK. Otherwise it is a bid of A and an ask of B, or a pair BID.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn pair_evidence(
     b: &Batch,
@@ -639,9 +677,9 @@ pub(crate) fn pair_evidence(
     let leg = b.legs.get(k).ok_or_else(|| Error::Invalid(format!("trigger evidence {k} is not a leg of the batch")))?;
     match ev_b {
         Some(kb) => {
-            // mode 0: a KAS-book leg of A and one of B, filled in this transaction
+            // Mode 0: a KAS-book leg of A and one of B, filled in this transaction.
             let lb = b.legs.get(kb).ok_or_else(|| Error::Invalid(format!("trigger evidence {kb} is not a leg of the batch")))?;
-            // a leg that cannot be evidence at all is that leg's refusal, not the reader's
+            // A leg that cannot be evidence at all is that leg's refusal, not the reader's.
             let ta = touch_of(leg).map_err(|e| blame("evidence", k, e))?;
             let tb = touch_of(lb).map_err(|e| blame("evidence", kb, e))?;
             let want_a = if ask_a { SIDE_ASK } else { SIDE_BID };
@@ -662,7 +700,7 @@ pub(crate) fn pair_evidence(
             Ok((PairEvidence::KasBooks { a: ta.price, b: tb.price }, [k as i64, kb as i64, tk as i64, 0]))
         }
         None => {
-            // mode 1: a resting KobPair of this pair, filled in this transaction
+            // Mode 1: a resting KobPair of this pair, filled in this transaction.
             let Leg::Pair { order, custody, amount, .. } = leg else {
                 return Err(blame(
                     "evidence",
@@ -685,7 +723,8 @@ pub(crate) fn pair_evidence(
                 return invalid("trigger evidence below the order's minTouch");
             }
             if s.interval < 0 {
-                // the covenant of this build refuses it too (a negative interval would shorten the rest time)
+                // The covenant of this build refuses it too, since a negative interval would
+                // shorten the rest time.
                 return Err(blame(
                     "evidence",
                     k,
@@ -701,7 +740,9 @@ pub(crate) fn pair_evidence(
     }
 }
 
-/// Whether the evidence's A leg is an ask (mode 0: the first leg is a KobAsk; mode 1: the pair leg sells A).
+/// Whether the evidence's A leg is an ask.
+///
+/// In mode 0 the first leg is then a KobAsk, and in mode 1 the pair leg sells A.
 fn evidence_ask_a(b: &Batch, ev: usize, ev_b: Option<usize>) -> Result<bool> {
     let l = b.legs.get(ev).ok_or_else(|| Error::Invalid(format!("trigger evidence {ev} is not a leg of the batch")))?;
     Ok(match (l, ev_b) {
@@ -720,7 +761,7 @@ fn first_in(lay: &Layout, t: Token, what: &str) -> Result<i64> {
         .ok_or_else(|| Error::Invalid(format!("{what}: no input of {} in the batch", t.1.name())))
 }
 
-/// The plan of a pair leg (its input, positional output, extras, token flows).
+/// The plan of a pair leg: its input, positional output, extras and token flows.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_leg(
     b: &Batch,
@@ -855,7 +896,8 @@ pub(crate) fn plan_leg(
             } else {
                 v + cv - c.tip_kas
             };
-            // the maker's token at output i: the T delivery, or a re-arming BID exit's B profit (custody's template)
+            // The maker's token at output i: the T delivery, or a re-arming BID exit's B profit on
+            // the custody's template.
             let pos_out = if c.d_s {
                 PosOut::Deliver(
                     kas_out(pos_value, "profit carrier")?,
@@ -902,7 +944,8 @@ pub(crate) fn plan_leg(
                     }
                     let entry_in = lay.merge_in[&i];
                     let mut new_custody = false;
-                    // the entry's custodies after the merge: an existing one at its index, a new one with exitCarrier
+                    // The entry's custodies after the merge: an existing one at its index, a new
+                    // one with exitCarrier.
                     let (ea_in, eb_in) = (lay.at.get(&(i, Slot::EntryA)).copied(), lay.at.get(&(i, Slot::EntryB)).copied());
                     if a_new > 0 {
                         kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
@@ -976,8 +1019,10 @@ pub(crate) fn plan_leg(
                             }
                         }
                     }
-                    // the exit's own flows (ASK exit: n of A released, the maker's B profit; BID exit: the B its custody
-                    // releases, the maker's B profit), then the entry's custodies (old amounts in, new amounts out)
+                    // The exit's own flows come first. An ASK exit releases n of A and pays the
+                    // maker's B profit. A BID exit releases the B of its custody and pays the
+                    // maker's B profit. The entry's custodies follow, with the old amounts in and
+                    // the new amounts out.
                     flows = if buy {
                         vec![(a, n, 0), (bt, 0, c.d_out)]
                     } else {
@@ -1098,7 +1143,7 @@ pub(crate) fn plan_leg(
             let n = *amount;
             let buy = s.is_buy_first();
             let v = order.utxo.amount as i64;
-            // the custodies: exactly what the entry holds
+            // The custodies: exactly what the entry holds.
             let a_held = if buy { 0 } else { s.amount_left };
             match (a_custody, a_held > 0) {
                 (Some(x), true) => {
@@ -1286,9 +1331,11 @@ pub(crate) fn plan_leg(
     }
 }
 
-/// Plans one [`BatchUpdate`] of a pair conditional or a pair stop entry (`settle` / `fill` with `nb = 0`, `upd = 1`):
-/// arm (k = 0) or trail (k >= 1, the maximal k the evidence justifies). Evidence: `evidence` and `evidenceB` (mode 0:
-/// a KAS-book leg of A and one of B) or `evidence` alone (mode 1: a KobPair leg of the pair).
+/// Plans one [`BatchUpdate`] of a pair conditional or a pair stop entry.
+///
+/// The update is `settle` or `fill` with `nb = 0` and `upd = 1`. It arms (k = 0) or trails (k >= 1,
+/// the maximal k the evidence justifies). The evidence is `evidence` and `evidenceB` in mode 0, a
+/// KAS-book leg of A and one of B, or `evidence` alone in mode 1, a KobPair leg of the pair.
 pub(crate) fn update_plan_pair(
     b: &Batch,
     lay: &Layout,
@@ -1417,8 +1464,9 @@ pub(crate) fn update_plan_pair(
     Ok((plan, role, sequence, next, take))
 }
 
-/// The refund of a pair order (anyone, after its expiry, 90 days idle or an IOC / FOK kill): the signing plan, the role
-/// and the custodies it returns `(input slot k, token)`.
+/// The signing plan and the role of the refund of a pair order.
+///
+/// Anyone may refund after the order's expiry, 90 days idle or an IOC / FOK kill.
 pub(crate) fn refund_plan(s: &AnyState, kill: bool) -> Result<(SigPlan, String)> {
     let (a, b) = pair_programs(s)?;
     let suffix = pair_suffix(a, b);
@@ -1434,7 +1482,8 @@ pub(crate) fn refund_plan(s: &AnyState, kill: bool) -> Result<(SigPlan, String)>
             (entry(TemplateId::KobCondPair, st, "settle", args), format!("KobCondPair.refund.{}{suffix}", side_name(c.is_ask())))
         }
         AnyState::KobIfdPair(i) => {
-            // custodies at inputs 1 (and 2): the A custody first (sell-first), then the B custody
+            // The custodies are at input 1, and at input 2 when there are two. The A custody
+            // (sell-first) comes first, then the B custody.
             let held = s.custodies();
             let a_in = held.iter().position(|c| c.0 == i.a_cov_id).map(|k| k as i64 + 1).unwrap_or(0);
             let b_in = held.iter().position(|c| c.0 == i.b_cov_id).map(|k| k as i64 + 1).unwrap_or(0);
