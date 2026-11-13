@@ -210,6 +210,8 @@ fn migrate_about() -> &'static str {
         )
     })
 }
+
+/// The tools of `kobd db`.
 #[derive(Subcommand)]
 pub enum DbSub {
     /// Rebuild a NEW database from the record log (the log is not modified), then follow the node
