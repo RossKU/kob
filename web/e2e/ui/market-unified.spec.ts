@@ -180,6 +180,9 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     const bid = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row').first();
     // displayed bids are the native asks (0.0251 ..): the grouped level's native price is at or above its highest ask
     const nativePrice = Number(await bid.getAttribute('data-native-price'));
+    // the ticket's side is the user's: shown Sell (native buy) chosen first, and the click keeps it
+    await page.getByTestId('order-side-sell').click();
+    await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'buy');
     await bid.click();
     await expect(page.getByTestId('order-ticket')).toHaveAttribute('data-side', 'buy');
     // the best displayed bid bucket is 39 tokens per KAS (native asks 0.0251 .. 0.0256 = 39.84 .. 39.06 fall into it): the buy it prefills must reach the highest of them
@@ -195,9 +198,9 @@ test.describe('the flip is complete: everything follows the displayed orientatio
     await page.goto(`/#/market/${base}`);
     const foot = page.locator('.ob-foot');
     // one short line; the whole sentences are its title
-    await expect(foot).toHaveAttribute('title', /an ask a buy of EXKCC, a bid a sell of EXKCC/);
+    await expect(foot).toHaveAttribute('title', /the ticket keeps its buy or sell side/);
     await page.getByTestId('market-flip').click();
-    await expect(foot).toHaveAttribute('title', /an ask a buy of KAS, a bid a sell of KAS/);
+    await expect(foot).toHaveAttribute('title', /the ticket keeps its buy or sell side/);
     await expect(foot).not.toHaveAttribute('title', /buy orders hold a KAS budget/);
   });
 

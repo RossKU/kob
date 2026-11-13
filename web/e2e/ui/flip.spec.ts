@@ -227,7 +227,7 @@ test.describe('the ticket in an inverted market', () => {
     expect(onChainTerms(flipped)).toEqual(onChainTerms(native));
   });
 
-  test('a click on a book level prefills the same native order, shown in the inverted units without re-rounding it', async ({ appPage: page, mock }) => {
+  test('a click on a book level fills the native price only (the ticket keeps its side), shown in the inverted units without re-rounding it', async ({ appPage: page, mock }) => {
     await fund(mock, 'alice');
     await openMarket(page, mock);
     await page.getByTestId('market-flip').click();
@@ -235,14 +235,18 @@ test.describe('the ticket in an inverted market', () => {
     // the best displayed bid is the native best ask (0.0251 KAS per EXKCC): hitting it sells KAS, i.e. buys EXKCC at exactly 0.0251
     const bids = page.getByTestId(TESTID.bookBids).getByTestId('book-bid-row');
     await expect(bids.first()).toHaveAttribute('data-native-price', '2510000');
+    await page.getByTestId(TESTID.orderSideSell).click();
+    await expect(ticket).toHaveAttribute('data-side', 'buy');
     await bids.first().click();
     await expect(ticket).toHaveAttribute('data-side', 'buy');
     await expect(ticket).toHaveAttribute('data-shown-side', 'sell');
     await expect(page.getByTestId('order-price-native')).toContainText('0.0251 KAS per EXKCC');
     const shown = num(await page.getByTestId(TESTID.orderPrice).inputValue());
     expect(close(shown, 1 / 0.0251, 1e-6)).toBe(true);
-    // an ask level (native bid 0.0249) sells EXKCC
+    // an ask level (native bid 0.0249) fills its price; the side stays the one chosen (shown Buy = native sell)
     const asks = page.getByTestId(TESTID.bookAsks).getByTestId('book-ask-row');
+    await page.getByTestId(TESTID.orderSideBuy).click();
+    await expect(ticket).toHaveAttribute('data-side', 'sell');
     await asks.last().click();
     await expect(ticket).toHaveAttribute('data-side', 'sell');
     await expect(ticket).toHaveAttribute('data-shown-side', 'buy');

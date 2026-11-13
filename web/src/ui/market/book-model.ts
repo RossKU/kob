@@ -124,7 +124,7 @@ export interface BookModelOptions {
 
 /**
  * The grouped price of a level: asks round UP, bids DOWN to a multiple of `group`. The grouped row therefore shows the worst price of its
- * orders (a click on an ask group prefills a buy that reaches every order in it; a bid group a sell that reaches every bid in it).
+ * orders (a click on an ask group fills the price of a buy that reaches every order in it; a bid group that of a sell that reaches every bid in it).
  */
 export function groupPrice(price: bigint, group: bigint, side: 'ask' | 'bid'): bigint {
   if (group <= 1n) return price;

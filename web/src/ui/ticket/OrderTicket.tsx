@@ -62,7 +62,7 @@ export interface OrderTicketProps {
   quote?: TokenInfo;
   /** optional prefill from the book (click on a level) */
   /** `price`: the state price (sompi per whole token); `amount`: base units */
-  prefill?: { side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: OrderTypeId };
+  prefill?: { side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: OrderTypeId; /** a click counter: a new value re-applies an unchanged prefill (a re-click of the same price after the field was edited) */ seq?: number };
   /**
    * the market is shown inverted (KAS/TOKEN): the ticket speaks the shown pair, whose base is KAS. The side buttons name the side of KAS (Buy = buy
    * KAS = sell the token), prices are tokens per KAS and amounts are KAS, converted at the order's price (form-state.ts, KAS amounts). The order
@@ -231,8 +231,8 @@ export function OrderTicket(props: OrderTicketProps) {
   const slowPending = useDelayedFlag(pending, PENDING_SHOW_MS);
   const pendingShown = editPending || slowPending;
 
-  // prefill from the book: a price implies a limit-style form, a side the matching order type
-  const prefillKey = props.prefill ? `${props.prefill.type ?? ''}|${props.prefill.side ?? ''}|${props.prefill.price ?? ''}|${props.prefill.amount ?? ''}` : '';
+  // prefill from the book: a price implies a limit-style form, a side the matching order type (a click on the book or the depth chart fills the price only and keeps the ticket's side)
+  const prefillKey = props.prefill ? `${props.prefill.seq ?? ''}|${props.prefill.type ?? ''}|${props.prefill.side ?? ''}|${props.prefill.price ?? ''}|${props.prefill.amount ?? ''}` : '';
   useEffect(() => {
     const p = props.prefill;
     if (!p) return;

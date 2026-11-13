@@ -36,13 +36,15 @@ async function hoverPrice(page: Page, depth: Locator, side: 'ask' | 'bid', fract
   return { x, y, price: Number(/(\d+\.\d+)\s/.exec(text)![1]) };
 }
 
-/** A click on the chart's `side` prefills the ticket with that side's order at a price within a step of the one the tooltip read. */
+/** A click on the chart's `side` fills the ticket's price (within a step of the one the tooltip read) and leaves the ticket's side as the user chose it (the opposite one here). */
 async function pickFrom(page: Page, depth: Locator, side: 'ask' | 'bid'): Promise<void> {
+  const want = side === 'ask' ? 'sell' : 'buy';
+  await page.getByTestId(want === 'buy' ? 'order-side-buy' : 'order-side-sell').click();
   const at = await hoverPrice(page, depth, side, 0.6);
   await expect(depth.locator('svg.depth-svg')).toHaveCSS('cursor', 'pointer');
   await page.mouse.click(at.x, at.y);
   const ticket = page.getByTestId('order-ticket');
-  await expect(ticket).toHaveAttribute('data-side', side === 'ask' ? 'buy' : 'sell');
+  await expect(ticket).toHaveAttribute('data-side', want);
   const price = Number(await page.getByTestId('order-price').inputValue());
   // the market's step is 0.0001: a buy rounds up to it, a sell down, so the order reaches what the pointer pointed at
   expect(Math.abs(price - at.price), `the ticket's ${price} against the ${at.price} under the pointer`).toBeLessThan(0.00015);

@@ -134,7 +134,7 @@ order ticket, and under them the market's **activity log** (section 4a). On a ph
 * **Buy** pays KAS and receives the token. **Sell** gives the token and receives KAS. Pick it with the **Buy / Sell** switch.
 * Prices are in KAS per whole token. The price is rounded to the market's price step "in your favour" and the page tells you when it
   rounded.
-* A click on a price in the book fills the ticket: an ask becomes a buy at that price, a bid a sell.
+* A click on a price in the book fills the ticket's price only; the ticket keeps the Buy or Sell side you chose.
 * The **flip** button next to the pair title shows the market the other way round (tokens per KAS). Buy and Sell then refer to KAS.
   The transaction built is the same.
 

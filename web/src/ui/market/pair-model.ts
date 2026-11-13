@@ -205,7 +205,7 @@ export function buildPairBook(view: PairBookView, base: PairToken, quote: PairTo
 }
 
 /**
- * The prefill of the ticket from a click on a level: an ask means "buy BASE at this price", a bid "sell BASE at this price"; the price is a state
+ * The pick of a click on a level: an ask means "buy BASE at this price", a bid "sell BASE at this price"; the ticket takes only the price (it keeps its side); the price is a state
  * price (QUOTE base units per whole BASE of `scale(BASE)` base units), rounded so the order reaches the level: a buy at the ask rounded up, a
  * sell at the bid rounded down (the same rounding as the price column).
  */

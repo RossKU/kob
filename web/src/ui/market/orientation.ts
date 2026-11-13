@@ -207,7 +207,7 @@ export interface BookRowView {
   amount: bigint;
   /** the level's NATIVE price (sompi per whole token): the identity of the level and what a click prefills */
   nativePrice: bigint;
-  /** the side a click prefills in the ticket, in NATIVE terms: an ask level means "buy the token at this price", a bid level "sell" */
+  /** the side a click would take, in NATIVE terms (an ask level: "buy the token at this price", a bid level "sell"); it picks the rounding of the price, the ticket keeps its own side */
   pick: 'buy' | 'sell';
   /** from the best price to this level (the hover read-out, review M-17): the average price (one digit finer than the column), the amount of the token and its value in KAS (the other way round in a flipped book: KAS, then the token) */
   cum: { avg: string; amount: string; total: string };

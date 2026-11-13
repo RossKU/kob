@@ -131,7 +131,8 @@ test('a click on a pair book level prefills the ticket; a pair limit buy escrows
   // the page settles once the ticket has measured its form (--tk-fit): the row, and with it the number of levels the book lists, changes then, so a click before it can land on the level that moved under the pointer
   await expect.poll(() => page.locator('.mkt-grid').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--tk-fit'))).toMatch(/px$/);
   await page.waitForTimeout(500);
-  // the best ask (0.0505 EXUSD per EXKCC): a buy at that price
+  // the best ask (0.0505 EXUSD per EXKCC): a click fills only the price, the ticket keeps its side (Buy, chosen first)
+  await page.getByTestId('order-side-buy').click();
   await book.locator('[data-testid="pair-level"][data-source="direct"][data-side="ask"]').last().click();
   const ticket = page.getByTestId('order-ticket');
   await expect(ticket).toHaveAttribute('data-side', 'buy');

@@ -74,7 +74,7 @@ export function PairPage(props: { base: string; quote: string }) {
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync: the chart reloads in full (TokenPage)
   const [resyncKey, setResyncKey] = useState(0);
-  const [prefill, setPrefill] = useState<{ side: 'buy' | 'sell'; price: bigint } | undefined>(undefined);
+  const [prefill, setPrefill] = useState<{ price: bigint; seq: number } | undefined>(undefined);
   const tokenList = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, standalone]);
   const declared = useDeclarationLookup();
   const rows = useMemo(() => buildTokenRows(registry, tokenList.data ?? null, [], declared), [registry, tokenList.data, declared]);
@@ -277,11 +277,11 @@ export function PairPage(props: { base: string; quote: string }) {
   const rangeNote = statsModel.high !== null ? t('pair.stats.srcRange') : null;
   const statsLoading = !!indexer && ((stats.data === undefined && stats.loading) || (candles.data === undefined && candles.loading) || (fills.data === undefined && fills.loading));
   const unavailable = !!indexer && book.data === null && !book.loading && !book.error;
-  const onPick = (row: PairLevelRow) => setPrefill(pickOf(row, base));
-  // a click on the depth chart prefills the ticket like a click on a book row (an ask a buy, a bid a sell) at the price under the pointer
+  const onPick = (row: PairLevelRow) => setPrefill((q) => ({ price: pickOf(row, base).price, seq: (q?.seq ?? 0) + 1 }));
+  // a click on the depth chart fills the ticket's price like a click on a book row (the ticket keeps its side) at the price under the pointer
   const onPickDepth = (side: 'bid' | 'ask', price: number) => {
     const p = pairDepthPick(side, price, base, quote);
-    if (p) setPrefill(p);
+    if (p) setPrefill((q) => ({ price: p.price, seq: (q?.seq ?? 0) + 1 }));
   };
   const depthChart = (
     <DepthChart

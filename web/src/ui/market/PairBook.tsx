@@ -1,7 +1,7 @@
 // The token/token book of a pair: asks above (best at the bottom), the spread row (the token book's: the last price, then mid and spread), bids below; columns price, amount, total
 // (QUOTE), like the token book's. Three sources are drawn apart, by a bar at the row's left edge and not by a word on every row (review M-09): `direct` (resting pair orders), `entry`
 // (if-done pair entries resting at their limit) and `route` (`via KAS`: implied through the two KAS books in one transaction; its price in italics); the legend under the book says
-// it once and a row's title names its source. A click on a level prefills the pair ticket: an ask means "buy BASE at this price", a bid "sell BASE at this price".
+// it once and a row's title names its source. A click on a level fills the pair ticket's price only (the ticket keeps its side); the price is rounded for the clicked side.
 import { t } from '../../i18n';
 import { unitParts } from '../kit';
 import { spreadLine, type PairBookModel, type PairLevelRow } from './pair-model';

@@ -89,7 +89,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   const keptMarketAt = carry?.marketAt(id) ?? null;
   // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
   // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
-  const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market' } | undefined>(
+  const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market'; seq?: number } | undefined>(
     props.ticket === 'close'
       ? { side: 'sell', type: 'close' }
       : props.ticket === 'cover' || props.ticket === 'sell'
@@ -353,12 +353,12 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
     openPair(next);
   };
 
-  // a click on the depth chart prefills the ticket like a click on a book row: the book's rule (an ask a buy, a bid a sell; on a flipped market the chart's bid side
+  // a click on the depth chart fills the ticket's price like a click on a book row (the side of the ticket stays); the price is computed with the clicked side's rounding (on a flipped market the chart's bid side
   // is the native ask side, so there the other way round) at the price under the pointer, on the market's price step
   const onPickDepth = (side: 'bid' | 'ask', price: number) => {
     if (scale === null) return;
     const p = tokenDepthPick(side, price, { inverted, decimals, scale: bookScale, tick: baseTick });
-    if (p) setPrefill(p);
+    if (p) setPrefill((q) => ({ price: p.price, seq: (q?.seq ?? 0) + 1 }));
   };
   const depthChart = (
     <DepthChart onPick={onPickDepth} fiat={inverted ? fiat : null} series={depthSeries} loading={!!indexer && depth.data === undefined && !depth.error} unavailable={!!depth.error && !!book.error && !depthSeries} ticker={inverted ? 'KAS' : name} priceUnit={inverted ? t('market.stats.unitOf', { base: 'KAS', quote: name }) : t('market.stats.unitOf', { base: name, quote: 'KAS' })} inverted={inverted} dp={dp} amountDp={inverted ? Math.min(tickKasFraction(baseTick), 4) : Math.min(decimals, 4)} source={depth.data ? 'depth' : 'book'} />
@@ -442,7 +442,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             <StaleSince since={bookStaleSince} />
             {indexer && (model ? !panelsOpen : book.loading) ? <BookFrame head={bookCtx.labels} rows={bookRows} fitRef={bookFit} data-testid="book-loading" /> : null}
             {panelsOpen && model && model.empty ? <p class="muted center" data-testid="book-empty">{t('market.book.empty')}</p> : null}
-            {panelsOpen && bookView ? <OrderBook view={bookView} rows={bookRows} fitRef={bookFit} last={last} inverted={inverted} token={name} onPick={(side, price) => setPrefill({ side, price })} /> : null}
+            {panelsOpen && bookView ? <OrderBook view={bookView} rows={bookRows} fitRef={bookFit} last={last} inverted={inverted} token={name} onPick={(_side, price) => setPrefill((p) => ({ price, seq: (p?.seq ?? 0) + 1 }))} /> : null}
           </BookPanelBody>
         </Section>
       }

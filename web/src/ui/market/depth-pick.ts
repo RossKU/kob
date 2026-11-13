@@ -1,5 +1,5 @@
 // A click on the depth chart as the order it prefills in the ticket: the chart's x is a price (a float, chart coordinates), the ticket takes a state price
-// (a bigint) and a side in NATIVE terms, exactly what a click on a book row prefills (OrderBook `onPick`, PairBook `pickOf`). The side is the book's rule, an
+// (a bigint) and a side in NATIVE terms, exactly what a click on a book row picks (OrderBook `onPick`, PairBook `pickOf`); the ticket takes only the price and keeps its own side, the side here picks the rounding. The side is the book's rule, an
 // ask a buy and a bid a sell; on a flipped (KAS/TOKEN) market the chart's bid side is the native ask side, so there the same rule reads the other way round,
 // as it does in the flipped book (`BookRowView.pick`). The price is rounded so the order reaches what the pointer points at: a buy up, a sell down (as
 // `pickOf`), to the market's tick where it has one (the steps the book's grouping is made of).
