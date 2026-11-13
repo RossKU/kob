@@ -1,10 +1,17 @@
-//! The CLI planner against the web wallet's planner: the same fixtures as `web/src/testing/fixtures.ts` (maker key 11..11,
-//! token 70..70 / extension ee..ee, 3 decimals, tick 100, DAA 1 000 000 at 15:00 UTC, 1 000 KAS of funding, 100 tokens, a
-//! 10 KAS fixture carrier, the default book 2.50 / 2.45 KAS) and the numbers the web planner tests assert for the same
-//! intents (`web/src/kob/orders/simple.test.ts`, `cond.test.ts`, `cond-ifd.test.ts`, `pair-simple.test.ts`), plus the
-//! golden vectors of `crates/kob-protocol/vectors/golden.json` the web tests compare their plans with (market orders,
-//! `create.bid`, `pair.create.ask` / `pair.create.bid`). Every plan is signed with the maker key, finalized, validated in the
-//! script engine and its placement record recovered from the transaction.
+//! The CLI planner against the planner of the web wallet.
+//!
+//! The fixtures are those of `web/src/testing/fixtures.ts`:
+//! - Maker key 11..11, token 70..70 with extension ee..ee, 3 decimals and tick 100.
+//! - DAA 1 000 000 at 15:00 UTC.
+//! - 1 000 KAS of funding, 100 tokens and a 10 KAS fixture carrier.
+//! - The default book 2.50 / 2.45 KAS.
+//!
+//! The tests assert the numbers of the web planner tests for the same intents
+//! (`web/src/kob/orders/simple.test.ts`, `cond.test.ts`, `cond-ifd.test.ts` and
+//! `pair-simple.test.ts`). They also compare with the golden vectors of
+//! `crates/kob-protocol/vectors/golden.json` that the web tests use: market orders, `create.bid`,
+//! `pair.create.ask` and `pair.create.bid`. Every plan is signed with the maker key, finalized and
+//! validated in the script engine, and its placement record is recovered from the transaction.
 
 use std::collections::BTreeMap;
 
@@ -92,7 +99,7 @@ pub(super) fn env(m: &TokenMarket) -> Env {
     }
 }
 
-/// Plans, expects success, signs, finalizes, validates in the engine and recovers the placement record.
+/// Plans, expects success, signs, finalizes, validates in the engine and recovers the record.
 pub(super) fn valid(e: &Env, i: Intent) -> Plan {
     let p = plan_order(e, &i);
     let errs: Vec<&Issue> = p.issues.iter().filter(|x| x.severity == Severity::Error).collect();
@@ -161,7 +168,7 @@ fn gtc_sell_on_every_program() {
             (maker(), m.cov, m.tpl_hash, 1000, 300_000_000, 100_000, 0)
         );
         assert_eq!((s.active_from, s.expiry_daa, s.refund_tip, s.amount_left, s.decay_step), (0, GTC, m.refund_tip, 10_000, 1));
-        // the amount worth 10 KAS at 3 KAS per token
+        // The amount worth 10 KAS at 3 KAS per token.
         assert_eq!(s.min_fill, 3334);
         let d = p.disclosure.unwrap();
         assert_eq!((d.limit_price, d.all_in_price, d.all_in_total), (Some(300_000_000), Some(299_900_000), Some(2_999_000_000)));
@@ -179,11 +186,13 @@ fn gtc_buy_is_the_golden_create_bid_escrow() {
     let p = valid(&env(&m), Intent::Limit(LimitIntent { tip: 100_000, ..limit(Side::Buy, 10 * TOK, 245_000_000) }));
     let s = bid(&p);
     assert_eq!((s.min_fill, s.delivery_carrier, s.reserve, s.refund_tip), (4082, C, 0, 3_500_000));
-    // used(10000) + 2 sompi of rounding + 3 delivery carriers: the Rust golden vector `create.bid`
+    // The value is used(10000) + 2 sompi of rounding + 3 delivery carriers, as in the Rust golden
+    // vector `create.bid`.
     let (g, gv) = golden("create.bid");
     assert_eq!(p.request.as_ref().unwrap().value, 5_451_000_002);
     assert_eq!(p.request.as_ref().unwrap().value, gv);
-    // the golden state differs only in what the vector fixes differently (maker, expiry, min fill, decay step)
+    // The golden state differs only where the vector fixes other values: maker, expiry, min fill
+    // and decay step.
     if let AnyState::KobBid(g) = g {
         assert_eq!(
             (g.price, g.tip, g.token_cov_id, g.token_tpl_hash, g.extension_commitment),
@@ -196,8 +205,8 @@ fn gtc_buy_is_the_golden_create_bid_escrow() {
     assert_eq!((d.all_in_price, d.all_in_total, d.kas_locked), (Some(245_100_000), Some(2_451_000_000), 5_451_000_002));
     assert_eq!(d.carriers[0].amount, 2_451_000_002);
     assert_eq!((d.carriers[1].amount, d.carriers[1].count), (C as i128, 3));
-    // the escrow is the bid's value, not a carrier: 3 delivery carriers exceed 2.451 KAS, but not 24.51 KAS (every bid warned
-    // CARRIERS_DOMINATE: TN10 2026-10-14)
+    // The escrow is the value of the bid, not a carrier. Three delivery carriers (30 KAS) exceed an
+    // escrow of 24.51 KAS but not one of 245 KAS. A bid of the first kind warns CARRIERS_DOMINATE.
     let dominates = |issues: &[Issue]| issues.iter().any(|i| i.code == "CARRIERS_DOMINATE");
     assert!(dominates(&p.issues));
     let big = valid(&env(&m), Intent::Limit(LimitIntent { tip: 100_000, ..limit(Side::Buy, 10 * TOK, 2_450_000_000) }));
@@ -224,20 +233,20 @@ fn defaults_fills_and_refusals_like_the_web_planner() {
         assert!(codes(&plan_order(&e, &Intent::Limit(LimitIntent { min_fill: Some(mf), ..limit(Side::Sell, 10 * TOK, p) })))
             .contains(&"MIN_FILL_INVALID"));
     }
-    // off the tick: refused with the nearest valid prices
+    // Off the tick: refused with the nearest valid prices.
     let off = plan_order(&e, &Intent::Limit(limit(Side::Sell, 10 * TOK, p + 50)));
     assert_eq!(codes(&off), vec!["PRICE_NOT_ON_TICK"]);
-    // not enough tokens / KAS
+    // Not enough tokens or KAS.
     let poor = Env { token_utxos: vec![token_utxo(&m, 2, TOK)], ..e.clone() };
     assert!(codes(&plan_order(&poor, &Intent::Limit(limit(Side::Sell, 10 * TOK, p)))).contains(&"INSUFFICIENT_TOKENS"));
     let broke = Env { funding: vec![key_utxo(1, KAS)], ..e.clone() };
     assert!(codes(&plan_order(&broke, &Intent::Limit(limit(Side::Buy, 10 * TOK, p)))).contains(&"INSUFFICIENT_KAS"));
-    // a guard that could not run blocks until acknowledged
+    // A guard that could not run blocks until acknowledged.
     let blind = Env { guards_unavailable: vec!["book".into()], ..e.clone() };
     assert!(codes(&plan_order(&blind, &Intent::Limit(limit(Side::Sell, 10 * TOK, p)))).contains(&"GUARDS_UNAVAILABLE"));
     let acked = Env { guards_acknowledged: true, ..blind };
     assert!(plan_order(&acked, &Intent::Limit(limit(Side::Sell, 10 * TOK, p))).ok);
-    // self-trade
+    // Self-trade.
     let own = OwnOrder { cov: [9; 32], side: Side::Buy, price: 260_000_000, tip: 0, amount_left: 1, active: true };
     let st = Env { own: vec![own], ..e.clone() };
     assert!(codes(&plan_order(&st, &Intent::Limit(limit(Side::Sell, 10 * TOK, 255_000_000)))).contains(&"SELF_TRADE"));
@@ -325,7 +334,8 @@ fn ioc_fok_and_the_crossing_policy() {
             }),
         );
         assert_eq!(codes(&short), vec!["FOK_INSUFFICIENT_DEPTH"]);
-        // a sell limit below the best bid crosses: an auction from the touch down to the limit (matcher.md 10.5)
+        // A sell limit below the best bid crosses. It is an auction from the touch down to the
+        // limit (matcher.md 10.5).
         let x = valid(&e, Intent::Limit(limit(Side::Sell, 3 * TOK, 240_000_000)));
         let s = ask(&x);
         assert_eq!((s.price, s.price_end, s.active_from, s.decay_step), (245_000_000, 240_000_000, CLOCK.daa + 30, 1));
@@ -385,7 +395,7 @@ fn market_orders_equal_the_golden_vectors() {
         assert_eq!(b.request.unwrap().value, gv);
         assert_eq!(gv, 1_989_200_000);
     }
-    // the start is held against the last fill unless acknowledged
+    // The start is held against the last fill unless acknowledged.
     let m = market(TemplateId::Kcc20Ref);
     let e = Env { market_start_ack: false, last_fill: Some(200_000_000), ..env(&m) };
     let p = plan_order(
@@ -427,7 +437,7 @@ pub(super) fn cond(kind: CondKind, side: Side, amount: i64) -> CondIntent {
 fn stops_take_profit_and_oco_like_the_web_planner() {
     let m = market(TemplateId::Kcc20Ref);
     let e = env(&m);
-    // stop-market sell: wallet defaults
+    // Stop-market sell: wallet defaults.
     let p = valid(&e, Intent::Cond(CondIntent { stop: Some(230_000_000), ..cond(CondKind::StopMarket, Side::Sell, 10 * TOK) }));
     let AnyState::KobCondAsk(s) = &p.states[0] else { panic!() };
     assert_eq!(
@@ -439,13 +449,13 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
         (d.limit_price, d.worst_price, d.expected_price, d.all_in_total, d.kas_locked),
         (Some(223_100_000), Some(223_100_000), Some(230_000_000), Some(2_231_000_000), 2 * C as i128)
     );
-    // stop-market buy: escrow at the stop ceiling, three delivery carriers, the arming tip
+    // Stop-market buy: escrow at the stop ceiling, three delivery carriers and the arming tip.
     let p = valid(&e, Intent::Cond(CondIntent { stop: Some(260_000_000), ..cond(CondKind::StopMarket, Side::Buy, 10 * TOK) }));
     let ceiling = 260_000_000 + 26_000 * 300;
     assert_eq!(p.request.unwrap().value as i64, 10 * ceiling + 3 * C + 2_200_000);
     let AnyState::KobCondBid(s) = &p.states[0] else { panic!() };
     assert_eq!((s.min_fill, s.min_touch), (3847, 3847));
-    // stop-limit: the largest band within the limit
+    // Stop-limit: the largest band within the limit.
     let p = valid(
         &e,
         Intent::Cond(CondIntent {
@@ -466,7 +476,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
     );
     let AnyState::KobCondBid(s) = &p.states[0] else { panic!() };
     assert_eq!(s.slip_bps, 307);
-    // take-profit buy: the limit all-in for the amount plus delivery carriers, no keeper
+    // Take-profit buy: the limit all-in for the amount plus delivery carriers, and no keeper.
     let p = valid(
         &e,
         Intent::Cond(CondIntent { take_profit: Some(200_000_000), tip: 20_000, ..cond(CondKind::TakeProfit, Side::Buy, 10 * TOK) }),
@@ -474,7 +484,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
     let AnyState::KobCondBid(s) = &p.states[0] else { panic!() };
     assert_eq!((s.tp_price, s.stop_price, s.keeper_tip, s.min_fill), (200_000_000, 0, 0, 5000));
     assert_eq!(p.request.as_ref().unwrap().value as i64, 10 * 200_020_000 + 2 * C);
-    // OCO sell: one covenant with both legs
+    // OCO sell: one covenant with both legs.
     let p = valid(
         &e,
         Intent::Cond(CondIntent {
@@ -494,7 +504,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
         }),
     );
     assert!(codes(&bad).contains(&"COND_TP_STOP_ORDER"));
-    // a stop of a token whose genesis is not verified is a warning
+    // A stop of a token whose genesis is not verified is a warning.
     assert!(codes(&valid(&e, Intent::Cond(CondIntent { stop: Some(230_000_000), ..cond(CondKind::StopMarket, Side::Sell, TOK) })))
         .contains(&"STOP_EVIDENCE_GENESIS_UNVERIFIED"));
 }
@@ -521,7 +531,7 @@ pub(super) fn ifd(side: Side, price: i64, tp: Option<i64>, stop: Option<i64>) ->
 fn if_done_entries_like_the_web_planner() {
     for m in markets() {
         let e = env(&m);
-        // buy first: 4 fills, each a delivery and an exit carrier
+        // Buy first: 4 fills, each with a delivery and an exit carrier.
         let p = valid(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(300_000_000), None)));
         assert_eq!(p.states.len(), 2);
         let (AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s)) = &p.states[0] else { panic!() };
@@ -533,14 +543,14 @@ fn if_done_entries_like_the_web_planner() {
         let (AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x)) = &p.states[1] else { panic!() };
         assert_eq!((x.tp_price, x.min_fill, x.expiry_daa, x.amount_left), (300_000_000, 2500, 1 << 62, 10_000));
         assert_eq!(s.exit().unwrap(), *x, "the committed exit round-trips");
-        // sell first: custody, prefund rounding of 3 sompi
+        // Sell first: custody, and a prefund rounding of 3 sompi.
         let p = valid(&e, Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
         let (AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s)) = &p.states[0] else { panic!() };
         assert_eq!((s.prefund, s.min_fill), (0, 2500));
         assert_eq!(p.request.as_ref().unwrap().value as i64, C + 4 * C + 3);
         let d = p.disclosure.unwrap();
         assert_eq!((d.all_in_total, d.kas_locked, d.tokens_escrowed), (Some(2_600_000_000), 6 * C as i128 + 3, 10_000));
-        // IFO: an OCO exit
+        // IFO: an OCO exit.
         let p = valid(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(300_000_000), Some(200_000_000))));
         let (AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x)) = &p.states[1] else { panic!() };
         assert_eq!((x.tp_price, x.stop_price, x.slip_bps), (300_000_000, 200_000_000, 300));
@@ -568,7 +578,8 @@ fn pair_limits_equal_the_golden_vectors() {
         let p = valid(&e, Intent::Limit(LimitIntent { min_fill: Some(1_000), max_fills: Some(9), ..limit(side, 10_000, 1_000) }));
         let (AnyState::KobPair(g), gv) = golden(name) else { panic!() };
         let AnyState::KobPair(s) = &p.states[0] else { panic!() };
-        // equal but for what the vector fixes differently: maker, expiry, decay step; the escrow is the floor plus one unit
+        // Equal but for what the vector fixes differently: maker, expiry and decay step. The escrow
+        // is the floor plus one unit.
         assert_eq!(
             *s,
             kob_protocol::state::PairState {
@@ -585,9 +596,12 @@ fn pair_limits_equal_the_golden_vectors() {
     }
 }
 
-/// A new order's carriers become outputs with a covenant id: the planner refuses a carrier below the KIP-9 covenant output
-/// bound (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`), the plain-output bound of 0.02 KAS included, before building (matcher.md
-/// 10.1), on a sell's custody carrier and a buy's delivery carriers alike; KaspaCom's own floor (0.5 KAS) stays above it.
+/// A new order's carriers become outputs with a covenant id, so the planner checks their floor.
+///
+/// Before building, it refuses a carrier below the KIP-9 covenant output bound (0.08 KAS,
+/// `tx::COVENANT_OUTPUT_MIN`, matcher.md 10.1). That includes the plain-output bound of 0.02 KAS.
+/// It does so for the custody carrier of a sell and the delivery carriers of a buy alike. The own
+/// floor of KaspaCom (0.5 KAS) stays above it.
 #[test]
 fn new_order_carriers_clear_the_covenant_output_minimum() {
     use kob_protocol::tx::{COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
@@ -604,8 +618,10 @@ fn new_order_carriers_clear_the_covenant_output_minimum() {
     }
 }
 
-/// A hostile indexer's numbers (prices and amounts at the i64 limits, sums that overflow) never panic the planner or the
-/// book readers: they are refused or flagged like any other bad book.
+/// A hostile indexer's numbers never panic the planner or the book readers.
+///
+/// Such numbers are prices and amounts at the i64 limits and sums that overflow. They are refused
+/// or flagged like any other bad book.
 #[test]
 fn a_hostile_book_never_panics() {
     let m = market(TemplateId::Kcc20Ref);
@@ -641,8 +657,9 @@ fn a_hostile_book_never_panics() {
     let _ = super::data::firm_reference(&b, 1);
 }
 
-/// `kob replace` of a stop-only sell (no take-profit leg) with a tip: the tip is bounded by the stop band's floor, not by a
-/// missing take-profit (it refused every amendment of such an order).
+/// `kob replace` of a stop-only sell (no take-profit leg) with a tip.
+///
+/// The tip is bounded by the floor of the stop band, not by a take-profit that does not exist.
 #[test]
 fn a_stop_only_sell_with_a_tip_can_be_amended() {
     let m = market(TemplateId::Kcc20Ref);
@@ -668,14 +685,17 @@ fn a_stop_only_sell_with_a_tip_can_be_amended() {
     let (rep, _, _) = super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap();
     let AnyState::KobCondAsk(c) = rep else { panic!("{rep:?}") };
     assert_eq!((c.stop_price, c.tip), (220_000_000, 1_000_000));
-    // a tip at the stop band's floor is still refused
+    // A tip at the floor of the stop band is still refused.
     let input = super::actions::AmendInput { tip: Some(230_000_000), ..Default::default() };
     assert!(super::actions::replacement(&live, &input, CLOCK.daa, 1).unwrap_err().contains("below every leg price"));
 }
 
-/// A market / close sell starts at the indexer's best bid, and the CLI has no reference independent of that indexer: the
-/// sell waits for the acknowledgement whatever its value (a small one, its start in line with the last fill, too), unless a
-/// floor price of the user's own bounds it. A small buy in line with the last fill stays a warning.
+/// A market or close sell waits for an acknowledgement or a floor.
+///
+/// It starts at the best bid of the indexer, and the CLI has no reference independent of that
+/// indexer. So the sell waits for the acknowledgement whatever its value, even a small one whose
+/// start is in line with the last fill. A floor price of the user's own bounds it and removes the
+/// wait. A small buy in line with the last fill stays a warning.
 #[test]
 fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
     let m = market(TemplateId::Kcc20Ref);
@@ -684,16 +704,17 @@ fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
     let mk = |side, floor| {
         Intent::Market(MarketIntent { side, amount: TOK, tip: 0, min_fill: None, slippage_bps: None, all_or_nothing: false, floor })
     };
-    // 1 token at 2.5 KAS: held all the same
+    // 1 token at 2.5 KAS: held all the same.
     let p = plan_order(&e, &mk(Side::Sell, None));
     assert!(!p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED"), "{:?}", codes(&p));
     let close = Intent::Close(CloseIntent { amount: Some(TOK), tip: 0, slippage_bps: None, all_or_nothing: false, floor: None });
     assert!(codes(&plan_order(&e, &close)).contains(&"MARKET_START_UNVERIFIED"));
-    // acknowledged
+    // Acknowledged.
     let acked = Env { market_start_ack: true, ..e.clone() };
     let p = plan_order(&acked, &mk(Side::Sell, None));
     assert!(p.ok && codes(&p).contains(&"MARKET_START_UNVERIFIED_ACKNOWLEDGED"), "{:?}", p.issues);
-    // a floor of the user's own: no acknowledgement, and the bound never below it (300 bps alone: 2.425 KAS)
+    // A floor of the user's own needs no acknowledgement, and the bound is never below it. The 300
+    // bps band alone gives 2.425 KAS.
     let p = plan_order(&e, &mk(Side::Sell, Some(245_000_000)));
     assert!(p.ok && codes(&p).contains(&"MARKET_START_FLOOR"), "{:?}", p.issues);
     assert_eq!(p.disclosure.as_ref().unwrap().worst_price, Some(245_000_000));
@@ -707,10 +728,10 @@ fn a_market_sell_needs_an_acknowledgement_or_a_floor() {
         }
     });
     assert!(plan_order(&e, &floored).ok);
-    // a floor above the best bid would never fill; a floor on a buy is refused
+    // A floor above the best bid would never fill, and a floor on a buy is refused.
     assert!(codes(&plan_order(&e, &mk(Side::Sell, Some(260_000_000)))).contains(&"MARKET_FLOOR_ABOVE_START"));
     assert!(codes(&plan_order(&e, &mk(Side::Buy, Some(245_000_000)))).contains(&"MARKET_FLOOR_SIDE"));
-    // a small buy in line with the last fill: a warning
+    // A small buy in line with the last fill is a warning.
     let p = plan_order(&e, &mk(Side::Buy, None));
     assert!(p.ok && codes(&p).contains(&"MARKET_START_NO_INDEPENDENT_REFERENCE"), "{:?}", p.issues);
 }
@@ -720,7 +741,8 @@ fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() 
     use kob_protocol::tx::{min_fee, priority_fee, FeeMode, MIN_FEE_RATE};
     let m = &markets()[0];
     let intent = || Intent::Limit(limit(Side::Sell, 10 * TOK, 300_000_000));
-    // a 1 KAS carrier: its storage mass (4 x 10^12 / carrier) is above the compute mass, so the priority fee is above the relay floor
+    // A 1 KAS carrier has a storage mass above the compute mass, so the priority fee is above the
+    // relay floor.
     let base = Env { carrier: Some(KAS as u64), ..env(m) };
     let relay_tx = valid(&base, intent()).built.unwrap();
     let relay = relay_tx.fee.clone();
@@ -734,10 +756,11 @@ fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() 
     assert_eq!(prio.min_fee, priority_fee(&prio.mass, MIN_FEE_RATE));
     assert!(prio.fee >= prio.min_fee && prio.min_fee > relay.min_fee, "{prio:?} vs {relay:?}");
     assert!(prio.fee > relay.fee);
-    // the fee mass (the relay floor) is the same transaction's: only the charged mass differs
+    // The fee mass (the relay floor) is the same for both. Only the charged mass differs.
     assert_eq!(prio.mass.fee_mass, relay.mass.fee_mass);
 
-    // the plan names a priority fee (text and JSON); a relay-floor plan reads and prints as before
+    // The plan names a priority fee in text and JSON. A relay-floor plan reads and prints as
+    // before.
     {
         use super::show::{decode, json_of, lines};
         let u = super::show::Units::new();
@@ -751,7 +774,7 @@ fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() 
         assert_eq!(json_of(&dp, &prio_tx)["fee_mode"], "priority");
     }
 
-    // at an explicit rate the priority fee is charged at that rate
+    // At an explicit rate the priority fee is charged at that rate.
     let at = valid(&Env { fee_rate: Some(200), fee_mode: FeeMode::Priority, ..base }, intent()).built.unwrap().fee;
     assert_eq!((at.fee_rate, at.fee_mode), (200, FeeMode::Priority));
     assert_eq!(at.min_fee, priority_fee(&at.mass, 200));

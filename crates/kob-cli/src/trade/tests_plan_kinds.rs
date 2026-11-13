@@ -1,8 +1,13 @@
-//! The order kinds `kob place` gained for parity with the web ticket, against the numbers the web planner tests assert for
-//! the same intents and fixtures (`web/src/kob/orders/simple.test.ts` streaming / close / TWAP / DCA / Dutch,
-//! `cond.test.ts` trailing stop, `cond-ifd.test.ts` stop entries and repeat IFD / IFO, `pair-cond.test.ts`,
-//! `pair-ifd.test.ts`), and the golden vectors (`create.ask.twap`, `create.bid.dca`, `create.ask.dutch`). Every plan is
-//! signed, finalized, validated in the script engine and its placement record recovered (`tests_plan::valid`).
+//! The extra order kinds of `kob place`, against the web ticket.
+//!
+//! The tests assert the numbers of the web planner tests for the same intents and fixtures:
+//! - `web/src/kob/orders/simple.test.ts`: streaming, close, TWAP, DCA and Dutch.
+//! - `cond.test.ts`: trailing stop. `cond-ifd.test.ts`: stop entries and repeat IFD / IFO.
+//! - `pair-cond.test.ts` and `pair-ifd.test.ts`.
+//!
+//! They also compare with the golden vectors `create.ask.twap`, `create.bid.dca` and
+//! `create.ask.dutch`. Every plan is signed, finalized and validated in the script engine, and its
+//! placement record is recovered (`tests_plan::valid`).
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::defaults::pair_tips;
@@ -94,7 +99,7 @@ fn close_sells_the_whole_balance_as_a_market_auction() {
     assert_eq!(d.amount, 10_250);
     assert!(d.notes.contains(&"close"));
     assert_eq!(p.built.as_ref().unwrap().tx.inputs.iter().filter(|i| i.utxo.covenant_id == Some(m.cov)).count(), 2);
-    // a partial close, dust, nothing held, more than held
+    // A partial close, dust, nothing held, more than held.
     let m = market(TemplateId::Kcc20Ref);
     assert_eq!(ask_of(&valid(&env(&m), close(Some(4 * TOK))).states[0]).amount_left, 4000);
     let dust = Env { token_utxos: vec![token_utxo(&m, 2, 999)], ..env(&m) };
@@ -126,7 +131,8 @@ fn sched(dca: bool, amount: i64, slice: i64, interval: i64, price: i64) -> Sched
 fn twap_and_dca_like_the_web_planner() {
     for m in markets() {
         let e = env(&m);
-        // TWAP: the 10-KAS minimum at the limit (4 tokens) is above the 2-token slice: capped at the slice
+        // TWAP: the 10 KAS minimum at the limit (4 tokens) is above the 2-token slice, so it is
+        // capped at the slice.
         let p = valid(&e, Intent::Schedule(ScheduleIntent { tip: 100_000, ..sched(false, 10 * TOK, 2 * TOK, 600, P) }));
         let s = ask_of(&p.states[0]);
         assert_eq!(
@@ -136,7 +142,7 @@ fn twap_and_dca_like_the_web_planner() {
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!(d.tokens_escrowed, 10_000);
         assert!(d.notes.contains(&"twap"));
-        // TWAP with a slice auction
+        // TWAP with a slice auction.
         let p = valid(
             &e,
             Intent::Schedule(ScheduleIntent {
@@ -153,7 +159,7 @@ fn twap_and_dca_like_the_web_planner() {
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.worst_price, d.expected_price), (Some(250_000_000), Some(260_000_000)));
         assert!(d.notes.contains(&"auction"));
-        // DCA: one delivery carrier per slice (golden bid.dca: 6225.5 KAS + 4 sompi of rounding)
+        // DCA: one delivery carrier per slice (golden bid.dca: 6225.5 KAS + 4 sompi of rounding).
         let p = valid(&e, Intent::Schedule(ScheduleIntent { tip: 100_000, ..sched(true, 5 * TOK, TOK, 600, 245_000_000) }));
         let s = bid_of(&p.states[0]);
         assert_eq!((s.interval, s.max_fill, s.min_fill, s.slope, s.tif), (600, 1000, 1000, 0, 0));
@@ -163,7 +169,7 @@ fn twap_and_dca_like_the_web_planner() {
             d.carriers.iter().map(|c| (c.kind, c.amount, c.count)).collect::<Vec<_>>(),
             vec![("escrow", 5 * 245_100_000 + 4, 1), ("delivery carrier", 10 * KAS as i128, 5)]
         );
-        // a rising slice auction budgets at the cap; extra fills add carriers
+        // A rising slice auction budgets at the cap. Extra fills add carriers.
         let p = valid(
             &e,
             Intent::Schedule(ScheduleIntent {
@@ -177,7 +183,7 @@ fn twap_and_dca_like_the_web_planner() {
         assert_eq!(value(&p), s.escrow(4 * TOK, 6).unwrap());
         let few = Intent::Schedule(ScheduleIntent { max_fills: Some(1), ..sched(true, 4 * TOK, 2 * TOK, 600, P) });
         assert!(codes(&plan_order(&e, &few)).contains(&"MAX_FILLS_INVALID"));
-        // one slice; a schedule beyond the order's life; bad inputs
+        // One slice, a schedule beyond the life of the order, and bad inputs.
         let one = valid(&e, Intent::Schedule(sched(false, 3 * TOK, 10 * TOK, 600, P)));
         assert_eq!(ask_of(&one.states[0]).max_fill, 3000);
         assert!(codes(&one).contains(&"TWAP_SINGLE_SLICE"));
@@ -203,7 +209,7 @@ fn twap_and_dca_equal_the_golden_vectors() {
         valid(&e, Intent::Schedule(ScheduleIntent { tip: 100_000, min_fill: Some(1000), ..sched(false, 10 * TOK, 2 * TOK, 600, P) }));
     let (AnyState::KobAsk(g), _) = golden("create.ask.twap") else { panic!() };
     let s = ask_of(&p.states[0]);
-    // equal but for what the vector fixes differently: maker, expiry, decay step
+    // Equal but for what the vector fixes differently: maker, expiry and decay step.
     assert_eq!(s, AskState { maker: s.maker, expiry_daa: s.expiry_daa, decay_step: s.decay_step, ..g });
     let p = valid(
         &e,
@@ -245,7 +251,7 @@ fn dutch_decay_and_rising_bid_like_the_web_planner() {
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.expected_price, d.worst_price, d.limit_price), (Some(300_000_000), Some(200_000_000), Some(200_000_000)));
         assert!(d.notes.contains(&"auction") && d.notes.contains(&"dutch"));
-        // the golden shape: step 1000 DAA, slope 1_000_000 over 100_000 DAA
+        // The golden shape: step 1000 DAA, slope 1_000_000 over 100_000 DAA.
         let p = valid(
             &e,
             Intent::Dutch(DutchIntent {
@@ -256,7 +262,7 @@ fn dutch_decay_and_rising_bid_like_the_web_planner() {
         );
         let s = ask_of(&p.states[0]);
         assert_eq!((s.slope, s.decay_step, s.price, s.price_end), (1_000_000, 1_000, 300_000_000, 200_000_000));
-        // a rising bid: escrow at the cap
+        // A rising bid: escrow at the cap.
         let p = valid(
             &e,
             Intent::Dutch(DutchIntent {
@@ -270,7 +276,7 @@ fn dutch_decay_and_rising_bid_like_the_web_planner() {
         assert_eq!(value(&p), s.escrow(5 * TOK, 2).unwrap());
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.expected_price, d.worst_price, d.all_in_price), (Some(200_000_000), Some(240_000_000), Some(240_000_000)));
-        // a timed start; the end on the wrong side; bad duration / step; a day order
+        // A timed start, an end on the wrong side, a bad duration or step, and a day order.
         let p = valid(
             &e,
             Intent::Dutch(DutchIntent {
@@ -292,7 +298,8 @@ fn dutch_decay_and_rising_bid_like_the_web_planner() {
         );
         assert_eq!(day.request.as_ref().unwrap().deadline, Some(1_790_726_400));
     }
-    // the golden dutch vector (its activation and minimum fill are fixed, the rest is the planner's)
+    // The golden dutch vector. Its activation and minimum fill are fixed and the rest is the
+    // planner's.
     let m = market(TemplateId::Kcc20Ref);
     let p = valid(
         &env(&m),
@@ -317,7 +324,7 @@ const TR: Trail = Trail { step: 1_000_000, gap: 5_000_000, wait: None, updates: 
 fn trailing_stops_like_the_web_planner() {
     let m = market(TemplateId::Kcc20Ref);
     let e = env(&m);
-    // sell: step, gap and wait in the state; 20 updates and the arm inside the 10 KAS carrier
+    // Sell: step, gap and wait in the state. 20 updates and the arm fit inside the 10 KAS carrier.
     let p = valid(&e, Intent::Cond(trailing(Side::Sell, 10 * TOK, 230_000_000, TR)));
     let s = cask(&p.states[0]);
     assert_eq!(
@@ -327,7 +334,7 @@ fn trailing_stops_like_the_web_planner() {
     let d = p.disclosure.as_ref().unwrap();
     assert_eq!(d.kas_locked, 2 * C as i128);
     assert!(d.notes.contains(&"trailing") && d.notes.contains(&"keeperReserve"));
-    // buy: the keeper reserve of 10 updates and the arm is added to the escrow
+    // Buy: the keeper reserve of 10 updates and the arm is added to the escrow.
     let p = valid(&e, Intent::Cond(trailing(Side::Buy, 5 * TOK, 260_000_000, Trail { wait: Some(3_000), updates: Some(10), ..TR })));
     let s = cbid(&p.states[0]);
     assert_eq!((s.trail_step, s.trail_gap, s.trail_wait), (1_000_000, 5_000_000, 3_000));
@@ -339,13 +346,14 @@ fn trailing_stops_like_the_web_planner() {
         .carriers
         .iter()
         .any(|c| c.kind == "keeper reserve" && c.amount == KT as i128 && c.count == 11));
-    // a take-profit caps the trail (a trailing OCO)
+    // A take-profit caps the trail (a trailing OCO).
     let p = valid(&e, Intent::Cond(CondIntent { take_profit: Some(300_000_000), ..trailing(Side::Sell, 2 * TOK, 230_000_000, TR) }));
     let s = cask(&p.states[0]);
     assert_eq!((s.tp_price, s.stop_price, s.trail_step), (300_000_000, 230_000_000, 1_000_000));
     let d = p.disclosure.as_ref().unwrap();
     assert_eq!((d.limit_price, d.worst_price), (Some(300_000_000), Some(223_100_000)));
-    // refusals: below the minimum interval, off the tick, a reserve beyond the carrier (fine on a larger one)
+    // Refusals: below the minimum interval, off the tick, and a reserve beyond the carrier (which
+    // is fine on a larger one).
     let bad = |t: Trail, e: &Env| errors(&plan_order(e, &Intent::Cond(trailing(Side::Sell, TOK, 230_000_000, t))));
     assert_eq!(bad(Trail { wait: Some(100), ..TR }, &e), vec!["COND_TRAIL_WAIT_TOO_SHORT"]);
     assert_eq!(bad(Trail { step: 1_000_050, gap: 0, wait: None, updates: None }, &e), vec!["PRICE_NOT_ON_TICK"]);
@@ -363,7 +371,8 @@ fn rep(side: Side, price: i64, tp: i64, count: Option<i64>) -> IfdIntent {
 fn stop_entries_and_repeats_like_the_web_planner() {
     let m = market(TemplateId::Kcc20Ref);
     let e = env(&m);
-    // a buy-stop entry: armed by a touch, an auction from the stop to the limit, the arming tip on top
+    // A buy-stop entry is armed by a touch. It is an auction from the stop to the limit, with the
+    // arming tip on top.
     let se = |price, stop| IfdIntent {
         more: IfdMore { entry_stop: Some(stop), ..Default::default() },
         ..ifd(Side::Buy, price, Some(300_000_000), None)
@@ -382,7 +391,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     let flat = valid(&e, Intent::Ifd(se(260_000_000, 260_000_000)));
     let (AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s)) = &flat.states[0] else { panic!() };
     assert_eq!((s.entry_stop, s.band_daa), (260_000_000, 0));
-    // the knobs
+    // The knobs.
     let knobs = IfdIntent {
         more: IfdMore {
             entry_stop: Some(255_000_000),
@@ -395,7 +404,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     let p = valid(&e, Intent::Ifd(knobs));
     let (AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s)) = &p.states[0] else { panic!() };
     assert_eq!((s.band_daa, s.keeper_tip, s.min_touch, s.min_rest_daa), (100, 1_000_000, 3000, 900));
-    // a sell-stop entry: the arming keeper is paid from the entry carrier
+    // A sell-stop entry: the arming keeper is paid from the entry carrier.
     let p = valid(
         &e,
         Intent::Ifd(IfdIntent {
@@ -406,9 +415,10 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     let (AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s)) = &p.states[0] else { panic!() };
     assert_eq!((s.entry_stop, s.band_daa, s.keeper_tip, s.min_touch, s.prefund), (244_000_000, 300, KT, 2500, 0));
     assert_eq!(value(&p), C + 4 * C + 3);
-    // a stop beyond the limit
+    // A stop beyond the limit.
     assert_eq!(errors(&plan_order(&e, &Intent::Ifd(se(260_000_000, 260_000_100)))), vec!["COND_ENTRY_STOP_BEYOND_LIMIT"]);
-    // a trailing stop-limit exit, sell first: the band within the limit, the prefund covers the worst buy-back
+    // A trailing stop-limit exit, sell first: the band is within the limit and the prefund covers
+    // the worst buy-back.
     let p = valid(
         &e,
         Intent::Ifd(IfdIntent {
@@ -426,7 +436,8 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     let (AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s)) = &p.states[0] else { panic!() };
     assert_eq!(s.prefund, 280_000_000 + 28_000 * 178 - 260_000_000);
 
-    // repeat buy-first: rptAmount = 1 + K * N, the merge cost in the exit tip, one more exit carrier
+    // Repeat buy-first: rptAmount = 1 + K * N, the merge cost is in the exit tip, and there is one
+    // more exit carrier.
     let mt_buy = merge_tip_rate(MERGE_COST_BUY_FIRST, 1000, 2_500);
     let mt_sell = merge_tip_rate(MERGE_COST_SELL_FIRST, 1000, 2_500);
     assert_eq!((mt_buy, mt_sell), (400_000, 600_000));
@@ -443,14 +454,15 @@ fn stop_entries_and_repeats_like_the_web_planner() {
         vec![("escrow", 2_400_000_000, 1), ("delivery carrier", C as i128, 4), ("exit carrier", C as i128, 5)]
     );
     assert!(["repeat", "repeatCounted", "repeatReBuys", "mergeTip", "cancelPosition"].iter().all(|n| d.notes.contains(n)));
-    // sell-first: the larger merge cost; the entry value has no extra carrier
+    // Sell-first: the merge cost is larger. The entry value has no extra carrier.
     let p = valid(&e, Intent::Ifd(rep(Side::Sell, 260_000_000, 240_000_000, Some(2))));
     let (AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s)) = &p.states[0] else { panic!() };
     assert_eq!(s.rpt_amount, 20_001);
     assert_eq!(cbid(&p.states[1]).tip, mt_sell);
     assert_eq!(s.exit().unwrap(), cbid(&p.states[1]));
     assert_eq!(value(&p), C + 4 * C + 3);
-    // the exit tip adds to the merge cost; unlimited; unprofitable take-profits; a count below one
+    // The exit tip adds to the merge cost. Also unlimited, unprofitable take-profits and a count
+    // below one.
     let p = valid(&e, Intent::Ifd(IfdIntent { exit_tip: 25_000, tip: 5_000, ..rep(Side::Buy, 240_000_000, 300_000_000, Some(2)) }));
     assert_eq!(cask(&p.states[1]).tip, mt_buy + 25_000);
     let p = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, None)));
@@ -475,7 +487,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
             vec!["COND_REPEAT_COUNT_INVALID"]
         );
     }
-    // a repeating stop entry pre-funds one arm per cycle (K + 1), at most ten
+    // A repeating stop entry prefunds one arm per cycle (K + 1), at most ten.
     let p = valid(
         &e,
         Intent::Ifd(IfdIntent {
@@ -484,7 +496,8 @@ fn stop_entries_and_repeats_like_the_web_planner() {
         }),
     );
     assert!(p.disclosure.as_ref().unwrap().carriers.iter().any(|c| c.kind == "keeper reserve" && c.count == 3));
-    // repeat IFO: a stop-loss next to the take-profit; the prefund covers the stop's worst buy-back with the merge tip
+    // Repeat IFO: a stop-loss next to the take-profit. The prefund covers the worst buy-back of the
+    // stop with the merge tip.
     let p = valid(
         &e,
         Intent::Ifd(IfdIntent {
@@ -498,7 +511,7 @@ fn stop_entries_and_repeats_like_the_web_planner() {
     assert_eq!((s.rpt_amount, s.prefund), (15_001, 288_400_000 + mts - 260_000_000));
 }
 
-// ------------------------------------------------------------------------------------------------ pairs
+// ------------------------------------------------------------------------------------------ pairs
 
 fn tok_b() -> TokenMarket {
     TokenMarket::new([0x71; 32], "BBB", 2, TemplateId::Kcc20Ref8x8, Some([0xee; 32]), None).unwrap()
@@ -513,7 +526,7 @@ fn pair_combos() -> Vec<(TokenMarket, TokenMarket)> {
     let a = TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) };
     vec![(a.clone(), tok_b()), (kron_a(), tok_b()), (a, kron_b()), (kron_a(), kron_b())]
 }
-/// The pair book of `pair-fixtures.ts`: best ask 1500, best bid 1450 (B per whole A).
+/// The pair book of `pair-fixtures.ts`: best ask 1500 and best bid 1450 (B per whole A).
 fn pair_env(a: &TokenMarket, b: &TokenMarket) -> Env {
     Env {
         book: Book {
@@ -557,7 +570,8 @@ fn pair_conditionals_like_the_web_planner() {
         let kt = pair_tips(a.program, b.program).unwrap().keeper_tip as i64;
         let amount = 9_001;
         let tip = 77_777;
-        // stop-market sell: side ASK holds the A amount, a 3 % band over 300 DAA, minTouch = minFill, the keeper on the order UTXO
+        // Stop-market sell: side ASK holds the A amount, with a 3 % band over 300 DAA and
+        // minTouch = minFill. The keeper is on the order UTXO.
         let p = valid(&e, Intent::Cond(CondIntent { stop: Some(1_401), tip, ..cond(CondKind::StopMarket, Side::Sell, amount) }));
         let s = cpair(&p);
         let mf = def_min(amount, a.scale);
@@ -576,14 +590,14 @@ fn pair_conditionals_like_the_web_planner() {
         );
         assert_eq!(d.all_in_total, Some(ceil_q(amount, worst, a.scale)));
         assert!(["stopTrigger", "stopAuction", "triggerExposure", "keeperReserve"].iter().all(|n| d.notes.contains(n)));
-        // stop-market buy: the B escrow at the band ceiling (rounded down) plus one unit
+        // Stop-market buy: the B escrow at the band ceiling, rounded down, plus one unit.
         let p = valid(&e, Intent::Cond(CondIntent { stop: Some(1_601), ..cond(CondKind::StopMarket, Side::Buy, amount) }));
         let s = cpair(&p);
         let worst = 1_601 + 1_601 * 300 / 10_000;
         assert_eq!((s.side, s.s_cov_id, s.t_cov_id), (2, b.cov, a.cov));
         assert_eq!(s.custody, floor_q(amount, worst, a.scale) + 1);
         assert_eq!(p.disclosure.as_ref().unwrap().quote_escrowed, s.custody);
-        // stop-limit, take-profit, OCO
+        // Stop-limit, take-profit and OCO.
         let p = valid(
             &e,
             Intent::Cond(CondIntent { stop: Some(1_400), limit: Some(1_380), ..cond(CondKind::StopLimit, Side::Sell, amount) }),
@@ -600,7 +614,8 @@ fn pair_conditionals_like_the_web_planner() {
         );
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.limit_price, d.worst_price, d.expected_price), (Some(1_700), Some(1_400 - 42), None));
-        // a trailing stop with a take-profit: 20 updates and the arm pre-funded on the order UTXO
+        // A trailing stop with a take-profit: 20 updates and the arm are prefunded on the order
+        // UTXO.
         let p = valid(
             &e,
             Intent::Cond(CondIntent {
@@ -618,7 +633,7 @@ fn pair_conditionals_like_the_web_planner() {
             .iter()
             .any(|c| c.kind == "keeper reserve" && c.amount == kt as i128 && c.count == 21));
     }
-    // presets, warnings and refusals
+    // Presets, warnings and refusals.
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
     let p = valid(
@@ -684,7 +699,8 @@ fn pair_if_done_like_the_web_planner() {
         let fills = (amount + min_fill - 1) / min_fill;
         let exit_min = def_min(amount, a.scale).min(min_fill);
         let exit_fills = 2.min((amount + exit_min - 1) / exit_min);
-        // IFD buy-first: the B escrow is the spend of the whole amount at the limit; every fill creates an ASK exit
+        // IFD buy-first: the B escrow is the spend of the whole amount at the limit. Every fill
+        // creates an ASK exit.
         let tip = 50_001;
         let p = valid(&e, Intent::Ifd(IfdIntent { amount, tip, ..ifd(Side::Buy, 1_401, Some(1_601), None) }));
         let s = ipair(&p);
@@ -707,10 +723,10 @@ fn pair_if_done_like_the_web_planner() {
         assert_eq!(value(&p), s.kas_value().unwrap());
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.all_in_total, d.quote_escrowed, d.tokens_escrowed), (Some(floor_q(amount, 1_401, a.scale)), s.custody, 0));
-        // IFO sell-first: A custody and a B prefund covering the exit's worst buy-back
+        // IFO sell-first: an A custody and a B prefund that covers the worst buy-back of the exit.
         let p = valid(&e, Intent::Ifd(IfdIntent { amount, ..ifd(Side::Sell, 1_599, Some(1_399), Some(1_700)) }));
         let s = ipair(&p);
-        // the worst buy-back: the stop band ceiling (above the take-profit)
+        // The worst buy-back is the ceiling of the stop band, which is above the take-profit.
         let prefund = 1_700 + 1_700 * 300 / 10_000 - 1_599;
         assert_eq!((s.side, s.price, s.prefund), (1, 1_599, prefund));
         assert_eq!(s.custody, ceil_q(amount, prefund, a.scale) + (fills - 1));
@@ -724,7 +740,8 @@ fn pair_if_done_like_the_web_planner() {
         assert_eq!(s.exit_carrier, C * exit_fills + kt);
         let d = p.disclosure.as_ref().unwrap();
         assert_eq!((d.tokens_escrowed, d.quote_escrowed, d.all_in_total), (amount, s.custody, Some(ceil_q(amount, 1_599, a.scale))));
-        // a stop entry (buy-first): the trigger, the band, one arm's keeper reserve on the entry UTXO
+        // A stop entry (buy-first): the trigger, the band and the keeper reserve of one arm on the
+        // entry UTXO.
         let p = valid(
             &e,
             Intent::Ifd(IfdIntent {
@@ -737,7 +754,7 @@ fn pair_if_done_like_the_web_planner() {
         assert_eq!((s.entry_stop, s.band_daa, s.min_touch, s.min_rest_daa, s.keeper_tip), (1_550, 300, min_fill, 50, kt));
         assert_eq!(value(&p), s.kas_value().unwrap() + kt);
     }
-    // repeat on a pair: rptAmount, the pair merge tip, one more exit carrier; a loss is refused
+    // Repeat on a pair: rptAmount, the pair merge tip and one more exit carrier. A loss is refused.
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
     let p = valid(
@@ -769,7 +786,8 @@ fn pair_if_done_like_the_web_planner() {
 fn every_simple_kind_runs_on_a_pair() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
-    // IOC, market (from the pair book's touch), TWAP, DCA and a Dutch decay are KobPair orders
+    // IOC, market (from the touch of the pair book), TWAP, DCA and Dutch decay are KobPair
+    // orders.
     let p = valid(
         &e,
         Intent::Immediate(ImmediateIntent {
@@ -802,7 +820,7 @@ fn every_simple_kind_runs_on_a_pair() {
     let p = valid(&e, Intent::Schedule(sched(false, 10_000, 2_000, 600, 1_600)));
     let AnyState::KobPair(s) = &p.states[0] else { panic!() };
     assert_eq!((s.interval, s.max_fill), (600, 2_000));
-    // one delivery carrier per slice
+    // One delivery carrier per slice.
     assert!(p.disclosure.as_ref().unwrap().carriers.iter().any(|c| c.kind == "delivery carrier" && c.count == 5));
     let p = valid(&e, Intent::Schedule(sched(true, 10_000, 5_000, 600, 1_400)));
     let AnyState::KobPair(s) = &p.states[0] else { panic!() };
@@ -810,7 +828,7 @@ fn every_simple_kind_runs_on_a_pair() {
     let p = valid(&e, Intent::Dutch(dutch(Side::Sell, 5_000, 1_700, 1_550, 1_000)));
     let AnyState::KobPair(s) = &p.states[0] else { panic!() };
     assert_eq!((s.price, s.price_end, s.active_from), (1_700, 1_550, CLOCK.daa + 30));
-    // FOK against the pair book: refused when the book cannot fill it
+    // FOK against the pair book: refused when the book cannot fill it.
     let fok = plan_order(
         &e,
         &Intent::Immediate(ImmediateIntent {
@@ -827,9 +845,11 @@ fn every_simple_kind_runs_on_a_pair() {
     assert!(codes(&fok).contains(&"FOK_INSUFFICIENT_DEPTH"));
 }
 
-/// `kob replace` re-plans an order from its own state (`replace-intent.ts`): with no change, the intent read back from
-/// a planned order plans the same order again (trailing stops, stop entries with trailing stop-limit exits, pair
-/// conditionals, pair if-done entries, pair TWAP); a change moves only what it names.
+/// `kob replace` re-plans an order from its own state (`replace-intent.ts`).
+///
+/// With no change, the intent read back from a planned order plans the same order again. This
+/// covers trailing stops, stop entries with trailing stop-limit exits, pair conditionals, pair
+/// if-done entries and pair TWAP. A change moves only what it names.
 #[test]
 fn replace_intents_round_trip() {
     use super::replan::{intent_from_order, lifetime_of, Changes};
@@ -876,12 +896,12 @@ fn replace_intents_round_trip() {
         }),
     );
     same(&pe, Intent::Limit(LimitIntent { min_fill: Some(1_000), ..limit(Side::Buy, 9_000, 1_400) }));
-    // a change: the trailing stop moves, its trail and take-profit stay
+    // A change: the trailing stop moves, and its trail and take-profit stay.
     let ch = Changes { stop: Some(231_000_000), ..Default::default() };
     let back = intent_from_order(&t.states[0], Lifetime::Gtc, CLOCK.daa, &ch).unwrap();
     let s = cask(&valid(&e, back).states[0]);
     assert_eq!((s.stop_price, s.tp_price, s.trail_step, s.trail_gap), (231_000_000, 300_000_000, 1_000_000, 5_000_000));
-    // a Dutch decay replaced later goes on from where it is now
+    // A Dutch decay replaced later goes on from where it is now.
     let d = valid(&pe, Intent::Dutch(dutch(Side::Sell, 5_000, 1_700, 1_500, 2_000)));
     let AnyState::KobPair(x) = &d.states[0] else { panic!() };
     let later = x.active_from + 100;
@@ -889,23 +909,27 @@ fn replace_intents_round_trip() {
     assert_eq!((di.price, di.price_end, x.slope), (1_600, 1_500, 1));
     let ended = intent_from_order(&d.states[0], Lifetime::Gtc, x.active_from + 5_000, &Changes::default()).unwrap();
     assert!(matches!(ended, Intent::Limit(LimitIntent { price: 1_500, .. })));
-    // refused: a repeating entry
+    // Refused: a repeating entry.
     let r = valid(&e, Intent::Ifd(rep(Side::Buy, 240_000_000, 300_000_000, Some(2))));
     assert!(intent_from_order(&r.states[0], Lifetime::Gtc, CLOCK.daa, &Changes::default()).unwrap_err().contains("repeating"));
 }
 
-// ------------------------------------------------------------------------------------------------ the pair tip default
+// ---------------------------------------------------------------------------- the pair tip default
 
-/// `kob place` of a pair order with no `--tip` carries the pair's keeper tip over the order's amount, as the web ticket does
-/// (`defaultPairTip` / `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`). The numbers are pinned for one KCC-20 pair
-/// (keeper tip 3_800_000 sompi in `pair_keeper_tips.json`, A with 3 decimals): they must equal what pair-common.ts computes
-/// for the same pair and amounts, `ceil(keeperTip * scale / amount)` and `floor(amount * tip / scale) < keeperTip`.
+/// `kob place` of a pair order with no `--tip` carries the keeper tip of the pair.
+///
+/// The tip is over the amount of the order, as in the web ticket (`defaultPairTip` and
+/// `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`). The numbers are pinned for one
+/// KCC-20 pair: a keeper tip of 3_800_000 sompi in `pair_keeper_tips.json` and 3 decimals on A.
+/// They must equal what pair-common.ts computes for the same pair and amounts:
+/// `ceil(keeperTip * scale / amount)` and `floor(amount * tip / scale) < keeperTip`.
 #[test]
 fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
     assert_eq!((pair_tips(a.program, b.program).unwrap().keeper_tip, a.scale), (3_800_000, 1000));
-    // pinned: the whole token (1000 base units) pays the whole keeper tip, 10_007 base units round up
+    // Pinned: the whole token (1000 base units) pays the whole keeper tip, and 10_007 base units
+    // round up.
     assert_eq!(default_pair_tip(&e, 1000), 3_800_000);
     assert_eq!(default_pair_tip(&e, 10_007), 379_735);
     assert_eq!(default_pair_tip(&e, 0), 0);
@@ -913,20 +937,21 @@ fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     assert!(pair_tip_below_default(&e, 10_007, 379_734));
     assert!(pair_tip_below_default(&e, 10_007, 0));
     assert!(!pair_tip_below_default(&e, 0, 0));
-    // a KAS-book order (no pair) has no default and says nothing
+    // An order on a KAS book (no pair) has no default and says nothing.
     let kas = env(&a);
     assert_eq!(default_pair_tip(&kas, 10_007), 0);
     let mut intent = Intent::Limit(limit(Side::Sell, 10_007, 1_550));
     assert!(!apply_pair_tip_defaults(&kas, &mut intent, false, false));
     assert!(matches!(intent, Intent::Limit(LimitIntent { tip: 0, .. })));
 
-    // no tip typed: the default, through the planner into the state (all in KAS sompi per whole A)
+    // No tip typed: the default goes through the planner into the state, in KAS sompi per whole A.
     let mut intent = Intent::Limit(limit(Side::Sell, 10_007, 1_550));
     assert!(!apply_pair_tip_defaults(&e, &mut intent, false, false));
     let p = valid(&e, intent);
     let AnyState::KobPair(s) = &p.states[0] else { panic!("{:?}", p.states[0]) };
     assert_eq!(s.tip, 379_735);
-    // a typed tip, zero included, is kept; below the default it asks for the note, at or above it does not
+    // A typed tip, zero included, is kept. Below the default it asks for the note, at or above it
+    // does not.
     for (typed, below) in [(0, true), (379_734, true), (379_735, false), (1_000_000, false)] {
         let mut intent = Intent::Limit(LimitIntent { tip: typed, ..limit(Side::Sell, 10_007, 1_550) });
         assert_eq!(apply_pair_tip_defaults(&e, &mut intent, true, false), below, "typed {typed}");
@@ -1023,19 +1048,19 @@ fn every_pair_kind_gets_the_default_tip_and_an_explicit_zero_stays() {
             assert_eq!(want, d);
         }
     }
-    // an explicit 0 (the exit's too) stays 0 and says the note is due
+    // An explicit 0 (the exit's too) stays 0 and says the note is due.
     for (name, mut intent, _) in kinds() {
         assert!(apply_pair_tip_defaults(&e, &mut intent, true, name == "ifd"), "{name}");
         assert_eq!(tips(&intent), (0, (name == "ifd").then_some(0)), "{name}");
     }
-    // an if-done order types one of the two: the other still defaults
+    // An if-done order types one of the two tips. The other still defaults.
     let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
     assert!(apply_pair_tip_defaults(&e, &mut intent, false, true));
     assert_eq!(tips(&intent), (d, Some(0)));
     let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
     assert!(apply_pair_tip_defaults(&e, &mut intent, true, false));
     assert_eq!(tips(&intent), (0, Some(d)));
-    // the defaulted pair if-done order plans
+    // The defaulted pair if-done order plans.
     let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
     apply_pair_tip_defaults(&e, &mut intent, false, false);
     assert_eq!(ipair(&valid(&e, intent)).tip, d);
