@@ -73,10 +73,11 @@ pub struct EngineConfig {
     /// The tick's fee rates (`crate::fee`), which the runner sets from the node's estimate.
     ///
     /// A batch that fills an immediate order (IOC, FOK, market, streaming) or a triggered stop is
-    /// built at the high rate when it stays profitable there. Otherwise it is built at the highest
-    /// rate that keeps it profitable, and at least at `planner.fee_rate`, the rate it was planned
-    /// at. Every batch is held to the total cap. The default, the floor everywhere and no cap,
-    /// builds every batch at `planner.fee_rate`.
+    /// built at the high rate when it stays profitable there, lowered to the highest rate that keeps
+    /// it profitable but not below `planner.fee_rate`, the rate it was planned at. Otherwise it is
+    /// built at `planner.fee_rate`. Every batch is held to the total cap, which may lower the rate
+    /// below `planner.fee_rate`, down to the policy floor (at least `MIN_FEE_RATE`). The default,
+    /// the floor everywhere and no cap, builds every batch at `planner.fee_rate`.
     pub fees: crate::fee::FeeRates,
     /// The weighted selection of this tick (`docs/spec/matcher.md` §3.6, [`super::select`]).
     ///
@@ -721,9 +722,9 @@ impl<'a> Tick<'a> {
             };
             // The batch's fee rate (`crate::fee`). It is the high rate when the batch fills an
             // immediate order or a triggered stop, whose deadlines are a minute away. Otherwise it
-            // is the rate the batch was planned at. The rate is held to the total cap, and lowered
-            // to the highest rate that keeps the batch profitable. It never goes below the planned
-            // rate, at which the planner found the batch profitable.
+            // is the rate the batch was planned at. The rate is lowered to the highest rate that
+            // keeps the batch profitable, never below the planned rate, at which the planner found
+            // the batch profitable. The total cap may lower it further, down to the policy floor.
             let plan_rate = cfg.planner.fee_rate;
             let mut rate = if high_ok && plan.fills.iter().any(|f| f.cand.class != Class::Resting) {
                 cfg.fees.rate(crate::fee::Urgency::High, plan_rate)

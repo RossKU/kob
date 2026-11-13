@@ -12,8 +12,9 @@
 //! 4. The matcher tick, which plans, chains and validates transactions in the engine, and the
 //!    keeper tick.
 //! 5. Submission through the [`Tracker`]. Benign double spends back off, and nothing is replaced
-//!    blindly. A chained step is sent only after its parent was accepted into the mempool. A kill
-//!    or refund of this process that stays unaccepted is rebuilt at a higher rate and replaced
+//!    blindly. A chained step of the matcher is sent only while its parent is tracked: the node
+//!    took the parent, or gave no verdict on it. Keeper jobs never chain. A kill or refund of this
+//!    process that stays unaccepted is rebuilt at a higher rate and replaced
 //!    ([`Runner::replace_stuck`]).
 //!
 //! The kill switch is a file (`--pause-file`). While it exists nothing is built or submitted, and
@@ -556,7 +557,11 @@ pub struct StepReport {
 ///
 /// See [`Runner::replace_stuck`]. Only transactions the node took from this process are ever
 /// recorded, so nobody else's transaction is replaced. The job is kept in the in-flight journal
-/// ([`super::journal`]) with its transaction, so a restart can still replace it.
+/// ([`super::journal`]) with its transaction, so a restart can still replace it. The journal
+/// rewrites an entry only when the job appears or goes or the transaction is retired
+/// (`Journal::sync`), so it keeps the job as first written: a later `done` is lost, and after a
+/// restart a job marked done (a replacement refused, without a verdict, or with no rate that fits)
+/// may be tried again.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct InFlightJob {
     /// What the keeper job does.

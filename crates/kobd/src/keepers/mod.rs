@@ -85,8 +85,10 @@ pub struct KeeperConfig {
     pub min_profit: i64,
     /// Most jobs per tick.
     pub max_jobs: usize,
-    /// Most jobs BUILT (signed and engine-validated) per tick, successful or not. A dust order is a
-    /// build attempt that yields no job, and building costs about 1.6 ms of CPU.
+    /// Most orders a tick attempts a job for, successful or not. A dust order is an attempt that
+    /// yields no job. One attempt may build several transactions: up to two unsigned ones to price
+    /// the rate, and up to five signed and engine-validated ones (subsidised, plain, and three
+    /// without the funding or the foreign strays). A signed build costs about 1.6 ms of CPU.
     pub max_attempts: usize,
     /// Validate each signed job in the engine.
     pub validate: bool,

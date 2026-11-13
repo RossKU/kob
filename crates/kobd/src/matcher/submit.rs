@@ -131,7 +131,8 @@ pub struct Tracked {
     /// The address of each input `owners` names, where known. On a missing input the node is asked
     /// which of these are still unspent.
     pub addresses: BTreeMap<Outpoint, String>,
-    /// The outpoints of this transaction that its children spend (chained steps).
+    /// The txid of the parent whose outputs this transaction spends (a chained step of the
+    /// matcher). It is submitted only while the parent is tracked ([`Tracker::submit`]).
     pub parent: Option<[u8; 32]>,
     /// DAA score at which the transaction was submitted.
     pub submitted_daa: u64,
