@@ -1,5 +1,7 @@
-//! The read paths that start from the live set or from an index in page order return exactly what the history-wide
-//! queries they replaced returned (rows, order, pages, cursors): random stores, every filter, every page.
+//! Equivalence tests for the read paths that start from the live set or an index in page order.
+//!
+//! The paths return exactly what the history-wide queries they replaced returned: rows, order,
+//! pages and cursors. The tests use random stores, every filter and every page.
 
 use super::*;
 use crate::indexer::db::open_memory;
@@ -31,15 +33,22 @@ fn tok(n: u8) -> Vec<u8> {
     vec![n; 32]
 }
 
-/// A store of `n` orders over tokens 1..=3 (pair orders quote 1 or 2, some of A / A), makers 1..=3, empty and none, ties of
-/// genesis blocks, every status (the current UTXO set exactly for `open` / `partial`, sometimes spent: a stale state),
-/// custody rows (none, one, two, the wrong amount), frozen flags, token identities and holdings (ties of created blocks).
+/// A random store of `n` orders, with ties and stale rows on purpose.
+///
+/// It covers:
+/// - Tokens 1..=3, with pair orders that quote 1 or 2 and some of A / A.
+/// - Makers 1..=3, empty and none.
+/// - Ties of genesis blocks.
+/// - Every status. `open` and `partial` match the current UTXO set exactly, or are sometimes spent
+///   (a stale state).
+/// - Custody rows: none, one, two, or the wrong amount.
+/// - Frozen flags, and token identities and holdings with ties of created blocks.
 fn store(seed: u64, n: usize) -> Connection {
     let conn = open_memory("testnet-10").unwrap();
     let mut r = Rng(seed);
     let contracts = ["KobAsk", "KobBid", "KobAskKron", "KobCondAsk", "KobIfdBid", "KobPair"];
     let makers: Vec<Option<Vec<u8>>> = vec![Some(vec![1; 32]), Some(vec![2; 32]), Some(vec![3; 32]), Some(vec![]), None];
-    // the blob columns of an order are ids of `ids` (schema 9)
+    // The blob columns of an order are ids of `ids`.
     let id = |v: Option<Vec<u8>>| v.map(|v| intern(&conn, &v).unwrap());
     for _ in 0..n {
         let cov = r.bytes();
@@ -51,8 +60,9 @@ fn store(seed: u64, n: usize) -> Connection {
         let price = r.pick(&[Some(price), None]);
         let (genesis_out_block, genesis_daa) = (r.below(12) as i64, r.below(1000) as i64);
         let listed = (r.below(4) != 0) as i64;
-        // the template the order was indexed under: the one this build pins for its contract, else (a database an older build
-        // indexed) another one, left out of every read
+        // The template the order was indexed under. It is the one this build pins for its contract,
+        // or else another one, as in a database indexed by an older build. Every read leaves out
+        // the other one.
         let pinned = TemplateId::from_name(contract).map(kob_protocol::artifacts::pinned_hash).unwrap();
         let template = if r.below(6) == 0 { vec![9u8; 32] } else { pinned.to_vec() };
         conn.execute(
@@ -107,7 +117,7 @@ fn store(seed: u64, n: usize) -> Connection {
         )
         .unwrap();
         if live {
-            // the current UTXO's row: unspent, spent (a stale state) or not stored
+            // The current UTXO's row: unspent, spent (a stale state) or not stored.
             if r.below(10) != 0 {
                 conn.execute(
                     "INSERT INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa, spent_block) \
@@ -126,7 +136,7 @@ fn store(seed: u64, n: usize) -> Connection {
             if r.below(10) == 0 {
                 conn.execute("INSERT INTO order_flags VALUES (?1,?2,?3,'frozen',1)", params![cov, txid, idx]).unwrap();
             }
-            // custody: none, one (right or wrong amount), two
+            // Custody: none, one (right or wrong amount), two.
             for _ in 0..r.pick(&[0u64, 1, 1, 1, 2]) {
                 intern(&conn, &tok(1)).unwrap();
                 conn.execute(
@@ -175,9 +185,11 @@ fn ctx() -> ReadCtx {
     ReadCtx { node_daa: Some(1_000), settle_depth_daa: 10, now_unix: Some(100) }
 }
 
-/// The orders list as it was: one query over the whole history, the token filter an OR of both columns.
+/// The reference orders list: one query over the whole history.
+///
+/// The token filter is an OR of both token columns.
 fn old_orders(conn: &Connection, ctx: &ReadCtx, f: &OrderFilter, limit: usize, cursor: Option<(i64, Vec<u8>)>) -> Page<OrderView> {
-    // never an order under a template this build does not pin (a rule the live reads have too)
+    // Never an order under a template this build does not pin. The live reads have the same rule.
     let mut conds: Vec<String> = vec![pinned_template().to_string()];
     let mut args: Vec<SqlValue> = Vec::new();
     if let Some(m) = &f.maker {
@@ -238,7 +250,7 @@ fn the_orders_list_pages_exactly_as_the_history_wide_query_did() {
         for maker in [None, Some(vec![1u8; 32]), Some(vec![])] {
             for token in [None, Some(Hash32(tok(1).try_into().unwrap())), Some(Hash32(tok(3).try_into().unwrap()))] {
                 for status in [None, Some("active"), Some("open"), Some("filled"), Some("closed"), Some("cancelled")] {
-                    // small pages read the history in order, large ones the live statuses (both strategies)
+                    // Small pages read the history in order, large ones the live statuses.
                     for limit in [1usize, 7, 60, 500] {
                         let f = OrderFilter { maker: maker.clone(), token, status: status.map(String::from) };
                         let mut cursor = None;
@@ -279,12 +291,12 @@ fn an_order_under_a_template_this_build_does_not_pin_is_in_no_read() {
             .unwrap();
         let unpinned: Vec<String> = all.iter().filter(|(_, t)| t[..] == [9u8; 32]).map(|(c, _)| hex::encode(c)).collect();
         assert!(!unpinned.is_empty() && unpinned.len() < all.len(), "seed {seed}: both kinds of rows");
-        // the single-order view: not found
+        // The single-order view: not found.
         for (cov, tpl) in &all {
             let found = order(&conn, &ctx, &Hash32(cov.clone().try_into().unwrap())).unwrap();
             assert_eq!(found.is_some(), tpl[..] != [9u8; 32], "seed {seed} order {}", hex::encode(cov));
         }
-        // the orders list, every page of every filter
+        // The orders list, every page of every filter.
         let f = OrderFilter::default();
         let listed = orders(&conn, &ctx, &f, 10_000, None).unwrap().items;
         assert_eq!(listed.len(), all.len() - unpinned.len(), "seed {seed}");
@@ -295,7 +307,7 @@ fn an_order_under_a_template_this_build_does_not_pin_is_in_no_read() {
                 assert!(page.items.iter().all(|o| !unpinned.contains(&o.covenant_id)), "seed {seed} {status}");
             }
         }
-        // the books: an unpinned live order the book would list otherwise is left out
+        // The books: an unpinned live order that the book would list otherwise is left out.
         let live = fillable_now(1_000, Some(100));
         for token in [1u8, 2, 3] {
             let t = Hash32(tok(token).try_into().unwrap());
@@ -347,7 +359,7 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
         for token in [1u8, 2, 3] {
             for side in [1i64, 2] {
                 let args3 = [SqlValue::Blob(tok(token)), SqlValue::Integer(side), SqlValue::Integer(5)];
-                // the per-order book (ordered, limited) and the levels' rows
+                // The per-order book (ordered, limited) and the levels' rows.
                 for (sel, tail) in [
                     (
                         "SELECT o.covenant_id, o.price, s.remaining_amount, u.state",
@@ -369,13 +381,13 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
                     }
                 }
             }
-            // the reads themselves run on it
+            // The reads themselves run on it.
             let t = Hash32(tok(token).try_into().unwrap());
             book(&conn, &ctx(), &t, 20, true).unwrap();
             book(&conn, &ctx(), &t, 20, false).unwrap();
             crate::indexer::market::stats(&conn, &ctx(), &t, None).unwrap();
         }
-        // the token list's counts
+        // The token list's counts.
         let counts = |from: &str| {
             format!(
                 "SELECT tk.h, o.side, COUNT(*) {from} JOIN ids tk ON tk.id = o.token_id WHERE o.listed = 1 AND o.in_book = 1 \
@@ -385,7 +397,7 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
             )
         };
         assert_eq!(sorted(rows(&conn, &counts(OLD_FROM), &[])), sorted(rows(&conn, &counts(LIVE_FROM), &[])));
-        // the matcher's live orders (listed and not), in the book's order
+        // The matcher's live orders (listed and not), in the book's order.
         for listed in [0i64, 1] {
             let old = format!(
                 "SELECT o.covenant_id, u.txid, u.idx FROM orders o JOIN order_state s ON s.order_id = o.id \
@@ -408,9 +420,10 @@ fn the_books_counts_and_live_orders_read_from_the_live_set_are_the_same_rows() {
 fn the_open_token_list_reads_the_rows_the_union_did() {
     for seed in [7u64, 8] {
         let conn = store(seed, 300);
-        // the union has no preference for tokens with a holding (the cap keeps those first, audit 2026-10-30 I17)
+        // Remove the holdings: the union has no preference for tokens with a holding, and the cap
+        // keeps those first.
         conn.execute("DELETE FROM token_holdings", []).unwrap();
-        // more distinct (token, program, family) rows of listed orders
+        // Add more distinct (token, program, family) rows of listed orders.
         for t in 10u8..40 {
             conn.execute(
                 "INSERT INTO orders (covenant_id, contract, template_id, family, side, token_id, token_tpl_id, in_book, \
@@ -443,11 +456,12 @@ fn the_open_token_list_reads_the_rows_the_union_did() {
             let got = open_token_rows(&conn, max).unwrap();
             let all = open_token_rows(&conn, 5_000).unwrap();
             if max.saturating_mul(4) >= all.len() {
-                // the scan reads every row: exactly the rows the union read
+                // The scan reads every row: exactly the rows the union read.
                 assert_eq!(got, want, "seed {seed} max {max}");
             } else {
-                // The scan stops after four times `max` rows, and the orders name their token and program by id, so it reads them in
-                // the order the ids were first seen, not the order of the hashes: the rows kept under the cap may differ from the
+                // The scan stops after four times `max` rows. The orders name their token and
+                // program by id, so it reads them in the order the ids were first seen, not the
+                // order of the hashes. The rows kept under the cap may therefore differ from the
                 // lowest hashes the union kept. Still exactly `max` rows, each one the union has.
                 assert_eq!(got.len(), want.len(), "seed {seed} max {max}");
                 assert!(got.iter().all(|r| all.contains(r)), "seed {seed} max {max}: a row the union does not have");
@@ -479,7 +493,7 @@ fn the_holdings_pages_are_the_same_through_the_live_indexes() {
                             None => break,
                         }
                     }
-                    // the oracle: every matching row, oldest first
+                    // The oracle: every matching row, oldest first.
                     let mut sql = "SELECT txid, idx FROM token_holdings WHERE 1".to_string();
                     let mut args = vec![];
                     if let Some(o) = &owner {
@@ -518,7 +532,8 @@ fn the_kept_counters_follow_inserts_replacements_and_deletes() {
         assert_eq!(serde_json::to_value(&kept).unwrap(), serde_json::to_value(&counted).unwrap());
     };
     check(&conn);
-    // a refresh replaces the state row with another status; a revert deletes orders, states, events and rejects
+    // A refresh replaces the state row with another status. A revert deletes orders, states,
+    // events and rejects.
     conn.execute("UPDATE order_state SET status = 'filled' WHERE rowid % 3 = 0", []).unwrap();
     conn.execute(
         "INSERT OR REPLACE INTO order_state (order_id, status, filled_amount, amount_exact, state_known, last_block, last_daa) \
@@ -540,7 +555,7 @@ fn the_kept_counters_follow_inserts_replacements_and_deletes() {
     conn.execute("DELETE FROM order_state WHERE rowid % 7 = 0", []).unwrap();
     conn.execute("DELETE FROM orders WHERE rowid % 6 = 0", []).unwrap();
     check(&conn);
-    // a database whose counters were never counted (an earlier build) counts them once at start-up
+    // A database whose counters were never counted counts them once at start-up.
     conn.execute_batch("DELETE FROM counters; DELETE FROM meta WHERE k = 'counters';").unwrap();
     assert!(kept_counters(&conn).unwrap().is_none());
     check(&conn);
@@ -550,10 +565,13 @@ fn the_kept_counters_follow_inserts_replacements_and_deletes() {
     check(&conn);
 }
 
-/// `GET /v1/orders` with no filter on a large store whose newest genesis block holds most of the orders (a bulk import, a
-/// rebase, a burst): a page is read in index order and stops at its end, where the plain `(genesis_block)` index made SQLite
-/// fetch and sort every order of that block (10 s and a 504 on a 770,000-order store). The plan has no sort, the page and the
-/// next ones are the newest orders in order, and a page costs milliseconds.
+/// A page of `GET /v1/orders` with no filter is read in index order, whatever one block holds.
+///
+/// The store is large, and its newest genesis block holds most of the orders (a bulk import, a
+/// rebase, a burst). The page is read in index order and stops at its end, so the plan has no
+/// sort, the page and the next ones are the newest orders in order, and a page costs
+/// milliseconds. With only a plain `(genesis_block)` index, SQLite would fetch and sort every
+/// order of that block.
 #[test]
 fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_holds() {
     let conn = open_memory("testnet-10").unwrap();
@@ -566,7 +584,7 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
         )
         .unwrap();
     let pinned_id = intern(&conn, &pinned).unwrap();
-    // the 50 makers and 7 tokens of the rows, interned once
+    // The 50 makers and 7 tokens of the rows, interned once.
     let makers: Vec<i64> = (0..50u8).map(|m| intern(&conn, &[m; 32]).unwrap()).collect();
     let tokens: Vec<i64> = (0..7u8).map(|t| intern(&conn, &[t; 32]).unwrap()).collect();
     let mut s2 = conn
@@ -579,7 +597,7 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
     for i in 0..n {
         let mut cov = vec![0u8; 32];
         cov[..8].copy_from_slice(&(i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).to_be_bytes());
-        // 200,000 orders in the newest block (1,000,000), the rest spread over older ones
+        // 200,000 orders in the newest block (1,000,000), the rest spread over older ones.
         let block = if i < 200_000 { 1_000_000 } else { 1_000 + (i - 200_000) / 3 };
         st.execute(params![cov, pinned_id, makers[(i % 50) as usize], tokens[(i % 7) as usize], block]).unwrap();
         s2.execute(params![cov]).unwrap();
@@ -601,13 +619,13 @@ fn the_unfiltered_orders_list_reads_a_page_in_index_order_whatever_one_block_hol
     assert_eq!(first.items.len(), 50);
     assert!(took < std::time::Duration::from_secs(2), "a page took {took:?}");
     println!("unfiltered page of a 240,000-order store with 200,000 orders in one block: {took:?}");
-    // the newest block, covenant ids descending; the cursor continues exactly there
+    // The newest block, covenant ids descending. The cursor continues exactly there.
     let ids: Vec<&str> = first.items.iter().map(|o| o.covenant_id.as_str()).collect();
     assert!(ids.windows(2).all(|w| w[0] > w[1]), "descending by covenant id inside one block");
     assert!(first.items.iter().all(|o| o.genesis.block_seq == 1_000_000));
     let second = orders(&conn, &ctx(), &f, 50, first.next_cursor.as_deref().and_then(parse_order_cursor)).unwrap();
     assert!(second.items[0].covenant_id.as_str() < ids[49]);
-    // the same rows as the reference query
+    // The same rows as the reference query.
     let old = old_orders(&conn, &ctx(), &f, 50, None);
     assert_eq!(serde_json::to_value(&first).unwrap(), serde_json::to_value(&old).unwrap());
 }

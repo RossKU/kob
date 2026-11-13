@@ -1,11 +1,19 @@
-//! The per-order and per-request reads stay fast on a store of the size the soak reached (audit 2026-10-30 I9): one token with
-//! over a million holdings (almost all spent), a token with hundreds of thousands of orders and no holding at all (a bid-only
-//! token), thousands of placement events, thousands of tokens, and order covenant ids that were sent thousands of stray token
-//! outputs. The store is a file (the upgrade path creates the indexes on it: `open_writer`), built with set-based SQL.
+//! Scale tests: the per-order and per-request reads stay fast on a soak-sized store.
 //!
-//! `KOB_SCALE_ROWS` sets the holdings of the big token (default 200,000 so that CI stays quick; the soak-sized run is
-//! `KOB_SCALE_ROWS=1100000 cargo test -p kobd --lib reads_scale -- --nocapture`). The time limits are generous multiples of
-//! what the indexed reads take (sub-millisecond to a few milliseconds); the scans they replaced took 40 ms to 18 s.
+//! The store has:
+//! - One token with over a million holdings, almost all spent.
+//! - A token with hundreds of thousands of orders and no holding at all (a bid-only token).
+//! - Thousands of placement events and thousands of tokens.
+//! - Order covenant ids that were sent thousands of stray token outputs.
+//!
+//! The store is a file, because the upgrade path creates the indexes on it (`open_writer`). It is
+//! built with set-based SQL.
+//!
+//! `KOB_SCALE_ROWS` sets the holdings of the big token. The default is 200,000, so that CI stays
+//! quick. The soak-sized run is
+//! `KOB_SCALE_ROWS=1100000 cargo test -p kobd --lib reads_scale -- --nocapture`. The time limits
+//! are generous multiples of what the indexed reads take, from sub-millisecond to a few
+//! milliseconds.
 
 use super::*;
 use crate::indexer::db::open_writer;
@@ -31,7 +39,8 @@ fn open_list() -> TokenAllowlist {
     )])
 }
 
-/// The indexes this fix adds: dropped after the load so that opening the store again is the upgrade of a store that lacks them.
+/// The indexes the tests drop after the load, so that opening the store again is the upgrade of a
+/// store that lacks them.
 const NEW_INDEXES: [&str; 5] = [
     "token_holdings_token_page",
     "token_holdings_owner_page",
@@ -45,9 +54,10 @@ fn load(path: &std::path::Path, n: usize) {
     let pinned = kob_protocol::artifacts::pinned_hash(TemplateId::KobBid).to_vec();
     let pinned_ask = kob_protocol::artifacts::pinned_hash(TemplateId::KobAsk).to_vec();
     let tx = conn.unchecked_transaction().unwrap();
-    // the blob columns of an order are rows of `ids` (schema 9): the pinned templates and the token program, the big token and the
-    // bid-only token, 2,000 other tokens and a few dozen makers (the orders of a store name few: every order of the store below takes
-    // one of 40, ids `maker_base ..`)
+    // The blob columns of an order are rows of `ids`: the pinned templates and the token program,
+    // the big token and the bid-only token, 2,000 other tokens and a few dozen makers. The orders
+    // of a store name few makers: every order of the store below takes one of 40, ids
+    // `maker_base ..`.
     let intern = |h: &[u8]| crate::indexer::ids::intern(&tx, h).unwrap();
     let (pinned_id, pinned_ask_id, tpl_id) = (intern(&pinned), intern(&pinned_ask), intern(&tpl_hash()));
     let maker_base = intern(&[0x4d; 32]);
@@ -65,8 +75,9 @@ fn load(path: &std::path::Path, n: usize) {
         [],
     )
     .unwrap();
-    // the big token's holdings: one owner holds a tenth of them, 19 in 20 are spent. The token and the owners are rows of `ids` (the
-    // owner `aa..` once, every other holding a fresh owner: ids `owner_base + i`)
+    // The big token's holdings: one owner holds a tenth of them, and 19 in 20 are spent. The token
+    // and the owners are rows of `ids`. The owner `aa..` is used once, and every other holding has
+    // a fresh owner: ids `owner_base + i`.
     let mut aa = [0u8; 32];
     aa[0] = 0xaa;
     let aa_id = crate::indexer::ids::intern(&tx, &aa).unwrap();
@@ -86,7 +97,8 @@ fn load(path: &std::path::Path, n: usize) {
         rusqlite::params![n as i64, t0_id, P8.name(), aa_id, owner_base],
     )
     .unwrap();
-    // orders: the big token has n / 3 resting-less filled ones; the bid-only token n / 3; 2,000 tokens have 20 listed ones each
+    // Orders: the big token has n / 3 filled ones with nothing resting, the bid-only token has
+    // n / 3, and 2,000 tokens have 20 listed ones each.
     let orders = |token: i64, count: usize, contract: &str, template: i64, side: i64, status: &str| {
         tx.execute(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
@@ -105,7 +117,7 @@ fn load(path: &std::path::Path, n: usize) {
     };
     orders(t0_id, n / 3, "KobBid", pinned_id, 2, "filled");
     orders(t1_id, n / 3, "KobBid", pinned_id, 2, "filled");
-    // 2,000 other tokens, 20 orders each (bids), open
+    // 2,000 other tokens, 20 orders each (bids), open.
     tx.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 40000) \
          INSERT INTO orders (covenant_id, contract, template_id, family, side, maker_id, token_id, token_tpl_id, scale, price, \
@@ -116,7 +128,7 @@ fn load(path: &std::path::Path, n: usize) {
         rusqlite::params![pinned_id, tpl_id, maker_base],
     )
     .unwrap();
-    // placement events of the bid-only token: a fresh commitment each (never pruned)
+    // Placement events of the bid-only token: a fresh commitment each, never pruned.
     tx.execute(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1) \
          INSERT INTO token_events (token_cov_id, tpl_hash, ext_commit, kind, txid, block_seq, daa) \
@@ -124,7 +136,7 @@ fn load(path: &std::path::Path, n: usize) {
         rusqlite::params![(n / 15).max(1000) as i64, &T1[..], tpl_hash()],
     )
     .unwrap();
-    // 60 live asks of the big token; two of their ids were sent 20,000 stray outputs each
+    // 60 live asks of the big token. Two of their ids were sent 20,000 stray outputs each.
     for k in 0..60i64 {
         let cov = vec![
             0xc0 + (k % 8) as u8,
@@ -222,7 +234,7 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     let t = Instant::now();
     load(&path, n);
     eprintln!("scale  loaded {n} holdings and the orders in {:.1?}", t.elapsed());
-    // the upgrade: open_writer creates the indexes the store lacks
+    // The upgrade: `open_writer` creates the indexes the store lacks.
     let t = Instant::now();
     let conn = open_writer(&path, "testnet-10").unwrap();
     let upgrade = t.elapsed();
@@ -236,20 +248,21 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     let fast = Duration::from_millis(50);
     let ms = |x: u64| Duration::from_millis(x);
 
-    // 1. the proven programs (twice per evaluated order, once per claimed token in the list)
+    // 1. The proven programs, twice per evaluated order and once per claimed token in the list.
     let proven = timed("proven_programs (big token)", fast, || proven_programs(&conn, &T0).unwrap());
     assert_eq!(proven, vec![tpl.0.to_vec()]);
     assert!(timed("proven_programs (token without holdings)", fast, || proven_programs(&conn, &T1).unwrap()).is_empty());
-    // 2. the standard scale an order is listed at, for a token with holdings and for a bid-only token (the ingest path per order)
+    // 2. The standard scale an order is listed at, for a token with holdings and for a bid-only
+    // token. The ingest path reads it per order.
     timed("open_standard_scale (big token)", fast, || open_standard_scale(&conn, &t0, Some(&tpl)).unwrap());
     timed("open_standard_scale (bid-only token)", fast, || open_standard_scale(&conn, &t1, Some(&tpl)).unwrap());
-    // 3. the market views' decimals (trades, candles, stats, depth)
+    // 3. The decimals of the market views (trades, candles, stats, depth).
     timed("token_decimals (big token)", fast, || token_decimals(&conn, &tokens, &t0).unwrap());
     timed("token_decimals (bid-only token)", fast, || token_decimals(&conn, &tokens, &t1).unwrap());
-    // 4. the open token list (recomputed every generation)
+    // 4. The open token list, recomputed every generation.
     let list = timed("token_list (2,002 open tokens)", ms(4_000), || token_list(&conn, &tokens).unwrap());
     assert!(list.len() >= 2_000, "{}", list.len());
-    // 5. the holdings pages with the spent ones: by token, by the owner of a tenth of them, by both
+    // 5. The holdings pages with the spent ones: by token, by the owner of a tenth, by both.
     let f_tok = HoldingFilter { owner: None, token: Some(t0), include_spent: true };
     let f_own = HoldingFilter {
         owner: Some(vec![0xaa, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
@@ -264,10 +277,11 @@ fn the_per_order_and_per_request_reads_stay_fast_on_a_store_of_soak_size() {
     timed("holdings?owner&spent=true (page 1)", fast, || holdings(&conn, &ctx, &f_own, 100, None).unwrap());
     let both = HoldingFilter { token: Some(t0), ..f_own.clone() };
     timed("holdings?owner&token&spent=true", fast, || holdings(&conn, &ctx, &both, 100, None).unwrap());
-    // 6. the book of the big token: every live ask checks its custody (two of them have 20,000 strays)
+    // 6. The book of the big token: every live ask checks its custody, and two of them have 20,000
+    // strays.
     let b = timed("book (60 live asks, 2 with 20,000 strays)", ms(500), || book(&conn, &ctx, &t0, 100, false).unwrap());
     assert!(matches!(b.asks, BookSide::Orders(ref o) if o.len() == 60), "all 60 asks are liquidity");
-    // 7. the placement identities of a bid-only token (the stats and trades read them)
+    // 7. The placement identities of a bid-only token, which the stats and trades read.
     timed("market_scale (bid-only token)", fast, || market_scale(&conn, &T1).unwrap());
     drop(conn);
     let _ = std::fs::remove_dir_all(&dir);
