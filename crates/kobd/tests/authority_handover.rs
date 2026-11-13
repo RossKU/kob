@@ -31,6 +31,9 @@ struct Flaky {
     chain_down: AtomicBool,
     alters: AtomicBool,
     chain_calls: AtomicUsize,
+    /// Serves its VSPC answers from this node instead (another view of the chain), while every other call answers from
+    /// `node`.
+    vspc_from: Mutex<Option<Arc<MockNode>>>,
 }
 
 impl Flaky {
@@ -40,6 +43,7 @@ impl Flaky {
             chain_down: AtomicBool::new(false),
             alters: AtomicBool::new(false),
             chain_calls: AtomicUsize::new(0),
+            vspc_from: Mutex::new(None),
         })
     }
 
@@ -56,7 +60,8 @@ impl ChainSource for Flaky {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         self.chain_gate()?;
         let full = req.data_verbosity_level == Verbosity::Full;
-        let mut r = self.node.vspc_v2(req).await?;
+        let from = self.vspc_from.lock().unwrap().clone().unwrap_or_else(|| self.node.clone());
+        let mut r = from.vspc_v2(req).await?;
         if full && self.alters.load(Ordering::Relaxed) {
             let tx = r.chain_block_accepted_transactions.iter_mut().flat_map(|b| b.accepted_transactions.iter_mut());
             if let Some(t) = tx.into_iter().find(|t| !t.outputs.is_empty()) {
@@ -399,4 +404,34 @@ async fn a_submit_only_node_is_never_promoted() {
     assert_eq!(r.health.snapshot().nodes[1].promoted, 0);
     assert_eq!(b.chain_calls.load(Ordering::Relaxed), 0, "never checked as a candidate");
     assert!(kobd::rpc::judge::alarm_of(ua).is_some_and(|w| w.contains("chain requests keep failing")), "the primary's alarm");
+}
+
+/// The new authority's answers stay checked until the cursor moves (`MultiNode::settle`). Its chain hashes from the cursor
+/// continue it, but its VSPC answer from the same cursor removes 130 chain blocks: refused, nothing reverted. Before, the
+/// chain hashes ended the check and the VSPC answer was applied as a reorg.
+#[tokio::test]
+async fn every_answer_from_the_handover_cursor_is_checked_not_only_the_first() {
+    let _g = serial().await;
+    // the same 200 chain blocks on both views (the mock's blocks are deterministic)
+    let (na, nb) = (MockNode::new("testnet-10"), MockNode::new("testnet-10"));
+    na.push_empty(200);
+    nb.push_empty(200);
+    let (a, b) = (Flaky::new(&na), Flaky::new(&na));
+    let (ua, ub) = ("ws://10.6.0.1:18210", "ws://10.6.0.2:18210");
+    let r = run(na.anchor(), vec![(spec(ua, true), a.clone()), (spec(ub, true), b.clone())], 2, Duration::from_millis(1));
+    r.until(2_000, "first sync", |r| r.cursor() == Some(na.tip())).await;
+    let cursor = na.tip();
+    // both grow alike, then the candidate's VSPC view reorganises the last 150 chain blocks away
+    na.push_empty(20);
+    nb.push_empty(20);
+    nb.reorg(150, vec![vec![]; 160]);
+    *b.vspc_from.lock().unwrap() = Some(nb.clone());
+    a.chain_down.store(true, Ordering::Relaxed);
+    let out = r.steps(60).await;
+    assert_eq!(r.source.board().authority(), 1, "promoted: its chain hashes from the cursor continue it");
+    let h = r.health.snapshot();
+    assert_eq!((h.reorgs_total, h.reverted_blocks_total), (0, 0), "nothing reverted: {out:?}");
+    assert_eq!(h.cursor_hash, Some(cursor));
+    let refused = |o: &StepOutcome| matches!(o, StepOutcome::Retry(m) if m.contains("at most 100 right after it took over"));
+    assert!(out.iter().any(refused), "{out:?}");
 }

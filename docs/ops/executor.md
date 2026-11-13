@@ -3163,7 +3163,8 @@ status `authority, ok`. When **2 chain requests in a row fail on the wire and th
   dropped, has no alarm, is not behind, has not contradicted the authority within 10 minutes and shows within 30 s that
   it is on the right network,
   synced, knows the cursor and has it on its selected chain becomes the chain authority. Since the stored chain is the
-  cursor's own chain of selected parents, such a node agrees with everything the store holds; its first answers may still
+  cursor's own chain of selected parents, such a node agrees with everything the store holds; its answers from that
+  cursor, until the cursor moves on, may still
   remove at most 100 chain blocks and must know the cursor, or they are refused and nothing is applied. The old primary
   raises a node alarm (`its chain requests keep failing`, in `node_alarms` and `nodes[].cut_reason`) and is cut off
   until its chain requests have answered again for a minute (probed with the health watch). It is then a secondary node:

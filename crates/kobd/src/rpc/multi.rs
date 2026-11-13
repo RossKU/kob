@@ -128,9 +128,10 @@
 //! - Within [`PROMOTE_CHECK_TIMEOUT`] it shows the right network and is synced. It knows the
 //!   cursor, and the cursor is on its selected chain.
 //!
-//! The new authority settles with its first answer from the cursor that passes this check: it may
-//! remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the cursor. An answer that fails
-//! it is refused. Only that one answer is checked.
+//! Every answer of the new authority from the cursor where it took over is checked, until the
+//! cursor moves on from there: it may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know
+//! the cursor. An answer that fails the check is refused. A resolver entry whose node changed, for
+//! whatever reason, is checked the same way.
 //!
 //! The old authority is a secondary node now. It is cut off from the pair until its alarm ends. The
 //! health watch probes it with chain requests. The alarm ends when they answered for
@@ -615,11 +616,15 @@ pub struct MultiNode<N: ChainSource> {
     ///
     /// It holds the cursor, the hosts and the count (`MultiNode::authority_contradicted`).
     store_contradictions: Mutex<Option<(Hash32, Vec<String>, u32)>>,
-    /// Whether the authority is not yet proven from the cursor.
+    /// The cursor from which the authority is not yet proven, if it is settling.
     ///
-    /// It is set when a node is promoted or a resolver entry's node is replaced. It stays set until
-    /// an answer from the cursor continues it (`MultiNode::settle`).
-    settling: AtomicBool,
+    /// It is set when a node is promoted or the authority's resolver entry uses another node. It
+    /// stays set until the follower asks from another cursor (`MultiNode::settle`).
+    settling: Mutex<Option<Hash32>>,
+    /// The node the authority used at its last answer. A change makes it settle.
+    authority_node: Mutex<Option<String>>,
+    /// The start of the follower's last single step, its cursor then.
+    last_step: Mutex<Option<Hash32>>,
     /// The cursor of the last chain request to the authority.
     ///
     /// A promoted node must continue it. A demoted node is probed from it (`probe_demoted`).
@@ -847,7 +852,8 @@ pub const STORE_CONTRADICTIONS_MAX: u32 = 3;
 pub const PROMOTE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cross-checking node that contradicted the authority within this long is not promoted.
 pub const PROMOTE_CLEAN_FOR: Duration = Duration::from_secs(600);
-/// The most chain blocks that the new authority's first answer from the cursor may remove.
+/// The most chain blocks that an answer of the new authority from the cursor where it took over
+/// may remove (`MultiNode::settle`).
 ///
 /// This is about 10 s of chain. It covers a reorg that the old authority had not seen yet. A deeper
 /// one is refused, and so is a cursor the node does not know.
@@ -887,7 +893,9 @@ impl<N: ChainSource> MultiNode<N> {
             stalls: std::sync::atomic::AtomicU32::new(0),
             last_warn: Mutex::new(None),
             store_contradictions: Mutex::new(None),
-            settling: AtomicBool::new(false),
+            settling: Mutex::new(None),
+            authority_node: Mutex::new(None),
+            last_step: Mutex::new(None),
             last_start: Mutex::new(None),
             probing: Arc::new(AtomicBool::new(false)),
             // The first check is one period after the start.
@@ -991,21 +999,45 @@ impl<N: ChainSource> MultiNode<N> {
         *self.last_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
     }
 
-    /// Checks the authority's answer `r` from `start`, a single step or the chain hashes.
+    /// The authority is unproven from the cursor `at` from now on ([`MultiNode::settle`]).
+    fn settle_from(&self, at: Hash32) {
+        self.settling.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(at);
+    }
+
+    /// Checks the authority's answer `r` from `start`, a single step (`step`) or the chain hashes.
     ///
-    /// While a node that took over is settling ([`MultiNode::authority_failing`]), an answer is
-    /// refused unless it removes at most [`SETTLE_MAX_REORG`] chain blocks and the node knows the
-    /// cursor. Otherwise the follower would rewind the store to the newest block the node knows. A
-    /// refused answer applies nothing. The first answer that continues the cursor ends the
-    /// settling. Any successful answer ends a chain alarm of the authority (`judge::chain_ok`).
-    fn settle<T>(&self, start: Hash32, r: Result<T, RpcError>, removed: impl Fn(&T) -> usize) -> Result<T, RpcError> {
+    /// While the authority is settling, after a node took over ([`MultiNode::authority_failing`])
+    /// or the authority's resolver entry moved to another node, an answer is refused unless it
+    /// removes at most [`SETTLE_MAX_REORG`] chain blocks and the node knows the cursor. Otherwise
+    /// the follower would apply a deep reorg the old authority never saw, or rewind the store to
+    /// the newest block the node knows. A refused answer applies nothing.
+    ///
+    /// Every answer is checked until the follower takes a single step from another cursor than the
+    /// one the authority took over at. The cursor moved on then, through answers that passed. Any
+    /// successful answer ends a chain alarm of the authority (`judge::chain_ok`).
+    fn settle<T>(&self, start: Hash32, r: Result<T, RpcError>, removed: impl Fn(&T) -> usize, step: bool) -> Result<T, RpcError> {
         let a = self.board.authority();
-        if r.is_ok() {
-            if let Some(node) = self.board.node_of(a) {
+        let node = self.board.node_of(a);
+        if let Some(node) = node {
+            if r.is_ok() {
                 super::judge::chain_ok(self.board.entry(a), &node);
             }
+            let changed = {
+                let mut seen = self.authority_node.lock().unwrap_or_else(|e| e.into_inner());
+                let changed = seen.as_ref().is_some_and(|s| *s != node);
+                *seen = Some(node);
+                changed
+            };
+            if changed {
+                // The follower's cursor is where its last single step began.
+                let at = if step { start } else { self.last_step.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(start) };
+                self.settle_from(at);
+            }
         }
-        if !self.settling.load(Ordering::Relaxed) {
+        let Some(at) = *self.settling.lock().unwrap_or_else(|e| e.into_inner()) else { return r };
+        if step && start != at {
+            *self.settling.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            tracing::info!(authority = %self.board.shown(a), cursor = %start, "the new chain authority continues the cursor");
             return r;
         }
         let refuse = match &r {
@@ -1013,17 +1045,14 @@ impl<N: ChainSource> MultiNode<N> {
                 "it removes {} chain blocks at the cursor {start} (at most {SETTLE_MAX_REORG} right after it took over)",
                 removed(v)
             )),
-            Err(e) if e.kind() == super::NodeErrorKind::UnknownHash => {
-                Some(format!("it does not know the cursor {start} (that would rewind the store)"))
+            Err(e) if matches!(e.kind(), super::NodeErrorKind::UnknownHash | super::NodeErrorKind::RetentionRootMissing) => {
+                Some(format!("it disowns the cursor {start} (that would rewind or halt the store)"))
             }
             _ => None,
         };
         if let Some(why) = refuse {
             tracing::error!(authority = %self.board.shown(a), reason = %why, "the new chain authority's answer is refused, nothing is applied");
             return Err(RpcError::Node(format!("the new chain authority {}: {why}; not applied", self.board.shown(a))));
-        }
-        if r.is_ok() && self.settling.swap(false, Ordering::Relaxed) {
-            tracing::info!(authority = %self.board.shown(a), cursor = %start, "the new chain authority continues the cursor");
         }
         r
     }
@@ -1692,9 +1721,10 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         let j = self.cross_checker();
         self.health_watch();
         self.asked_from(start);
+        *self.last_step.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
         let (raw, cross) =
             tokio::join!(self.primary().vspc_v2(req), self.cross_ids(j, start, min_confirmations, CROSS_CHECK_STEP_TIMEOUT));
-        let raw = self.settle(start, raw, |r| r.removed_chain_block_hashes.len())?;
+        let raw = self.settle(start, raw, |r| r.removed_chain_block_hashes.len(), true)?;
         self.vouched(raw, cross)
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
@@ -1743,7 +1773,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
         self.asked_from(start);
         let r = self.primary().chain_hashes(start).await;
-        self.settle(start, r, |c| c.removed_chain_block_hashes.len())
+        self.settle(start, r, |c| c.removed_chain_block_hashes.len(), false)
     }
     async fn chain_with_ids(&self, start: Hash32, min_confirmations: Option<u64>) -> Result<ChainIds, RpcError> {
         self.checker().chain_with_ids(start, min_confirmations).await
@@ -1838,7 +1868,12 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         // The pair's authority. The resolver state moved the role to the other node, or resolves a
         // replacement.
         if entry == super::resolver::RESOLVER {
-            return super::resolver::current(&entry).as_deref() != Some(node.as_str());
+            let moved = super::resolver::current(&entry).as_deref() != Some(node.as_str());
+            if moved {
+                // The other node of the pair, or a replacement, is unproven from the cursor.
+                self.settle_from(at);
+            }
+            return moved;
         }
         // Whether this resolver entry gave its node up above. It uses another node now.
         let replaced = super::resolver::is_resolver(&entry) && super::resolver::current(&entry).as_deref() != Some(node.as_str());
@@ -1850,7 +1885,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             match self.can_lead(k, at).await {
                 Ok(()) => {
                     self.board.authority.store(k, Ordering::Relaxed);
-                    self.settling.store(true, Ordering::Relaxed);
+                    self.settle_from(at);
                     self.stalls.store(0, Ordering::Relaxed);
                     // The cached sink was the old authority's.
                     *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -1875,8 +1910,8 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             }
         }
         if replaced {
-            // The entry's next node is unproven, so its first answers from the cursor are checked.
-            self.settling.store(true, Ordering::Relaxed);
+            // The entry's next node is unproven, so its answers from the cursor are checked.
+            self.settle_from(at);
         }
         replaced
     }
