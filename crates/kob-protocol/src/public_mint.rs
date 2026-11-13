@@ -148,8 +148,10 @@ impl IssuerVersion {
     }
 }
 
-/// `PublicMint` state span: `0x20 kcc20 tpl | 0x20 own tpl | 0x08 remaining | 0x08 mint_amount |
-/// 0x20 owner | 0x20 ext`.
+/// `PublicMint` state span length.
+///
+/// The span is `0x20 kcc20 tpl | 0x20 own tpl | 0x08 remaining | 0x08 mint_amount | 0x20 owner |
+/// 0x20 ext`.
 pub const PUBLIC_MINT_STATE_LEN: usize = 150;
 /// `TokenSeed` state span: `0x20 kcc20 tpl | 0x20 own tpl | 0x20 owner | 0x20 ext`.
 pub const TOKEN_SEED_STATE_LEN: usize = 132;
@@ -246,8 +248,9 @@ impl GenesisSupply {
         self.holders.checked_add(self.mint_allowance)
     }
 
-    /// Minted so far, given the `remaining` of every live minter (`None` when they exceed the
-    /// genesis allowance, which no transaction of the app can cause).
+    /// Minted so far, given the `remaining` of every live minter.
+    ///
+    /// `None` when they exceed the genesis allowance, which no transaction of the app can cause.
     pub fn minted(&self, live_remaining: &[i64]) -> Option<i64> {
         let live = live_remaining.iter().try_fold(0i64, |s, r| if *r < 0 { None } else { s.checked_add(*r) })?;
         if live > self.mint_allowance {

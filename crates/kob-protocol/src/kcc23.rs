@@ -678,8 +678,9 @@ fn issue(k: &str, why: &str) -> String {
 /// Format tag of a [`LaunchProof`].
 pub const PROOF_FORMAT: &str = "kob-kcc23-proof/1";
 
-/// One input of a proof transaction: what the version 1 transaction id commits to (no signature
-/// script, no compute budget).
+/// One input of a proof transaction: what the version 1 transaction id commits to.
+///
+/// It has no signature script and no compute budget.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProofInput {
@@ -791,8 +792,10 @@ impl ProofTx {
         }
     }
 
-    /// A transaction with these fields (empty signature scripts, zero compute budgets and storage
-    /// mass: none of them enters the id).
+    /// A transaction with these fields.
+    ///
+    /// It has empty signature scripts, zero compute budgets and zero storage mass, because none of
+    /// them enters the id.
     pub fn to_tx(&self) -> Result<Transaction, String> {
         use kaspa_consensus_core::subnets::SubnetworkId;
         use kaspa_consensus_core::tx::{CovenantBinding, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};

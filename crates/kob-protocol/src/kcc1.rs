@@ -82,8 +82,9 @@ pub fn hash_keyed(x: &[u8], key: &[u8]) -> R<[u8; 32]> {
 
 // Push forms, section 3.4.2.
 
-/// `PushMinimal(b)`: `OP_0` for empty, `OP_1..OP_16` / `OP_1NEGATE` for the one-byte numbers, else
-/// a length-based push.
+/// `PushMinimal(b)`: `OP_0` for empty, `OP_1..OP_16` / `OP_1NEGATE` for one-byte numbers.
+///
+/// Every other payload gets a length-based push.
 pub fn push_minimal(b: &[u8]) -> Vec<u8> {
     ScriptBuilder::new().add_data(b).expect("push within the script size limit").drain()
 }
@@ -320,8 +321,10 @@ pub fn contract_dispatch_tags(abi: &SilAbiArtifact, contract: &SilContractArtifa
         .collect()
 }
 
-/// A program's entrypoints together: every dispatch tag distinct (identical preimages and truncated
-/// collisions both rejected). `entries` are `(name, argument types)`.
+/// Checks the entrypoints of a program together: every dispatch tag is distinct.
+///
+/// Identical preimages and truncated collisions are both rejected. `entries` are `(name, argument
+/// types)`.
 pub fn check_entrypoints(entries: &[(String, Vec<TypeArtifact>)], records: &Records) -> R<()> {
     let mut seen: BTreeMap<[u8; 4], String> = BTreeMap::new();
     for (name, params) in entries {
