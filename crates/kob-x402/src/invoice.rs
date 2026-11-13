@@ -1,5 +1,7 @@
-//! Invoices (`kob-invoice-v1`, proposal `docs/spec/x402-swap-and-pay.md`, "Invoices"): the x402 payment
-//! requirements of one sale plus the merchant's reference and an expiry, served at a URL.
+//! Invoices (`kob-invoice-v1`): the x402 payment requirements of one sale plus the merchant's
+//! reference and an expiry, served at a URL.
+//!
+//! The wire format is specified in `docs/spec/x402-swap-and-pay.md`, "Invoices".
 //!
 //! ```json
 //! {
@@ -13,18 +15,32 @@
 //! }
 //! ```
 //!
-//! * The **id** is the SHA-256 of the invoice's canonical JSON (the binding's canonical JSON, as for the
-//!   requirements hash): the invoice is content-addressed, so a URL that carries the id is
-//!   self-verifying; a payer recomputes the id of what it fetched and refuses a mismatch. The facilitator
-//!   serves a registered invoice at `GET /invoices/<id>`; that URL is what a QR code carries.
-//! * The **request hash** of an invoice payment is the id: the payment's authorization commits to the
-//!   invoice (and so to its reference and expiry) and cannot be presented for another invoice or offer.
-//! * One invoice is paid once: the facilitator settles at most one payment per invoice; a second payment
-//!   (duplicate) or one submitted after `expiresAt` (late) is refused before broadcast and kept as
-//!   evidence, and if it reaches the chain anyway it is reported, so a refund can be made.
+//! # Id
 //!
-//! This module holds the types, the id, validation and the fallback `kaspa:` URI; the store and the
-//! endpoints live in `kobd` (`x402::invoices`).
+//! The id is the SHA-256 of the invoice's canonical JSON, the same canonical form as the
+//! requirements hash. The invoice is content-addressed, so a URL that carries the id is
+//! self-verifying. A payer recomputes the id of what it fetched and refuses a mismatch. The
+//! facilitator serves a registered invoice at `GET /invoices/<id>`, and that URL is what a QR code
+//! carries.
+//!
+//! # Request hash
+//!
+//! The request hash of an invoice payment is the id. The payment's authorization therefore commits
+//! to the invoice, its reference and its expiry. It cannot be presented for another invoice or
+//! offer.
+//!
+//! # Settlement
+//!
+//! One invoice is paid once. The facilitator settles at most one payment per invoice.
+//!
+//! - A second payment (duplicate) or one submitted after `expiresAt` (late) is refused before
+//!   broadcast and kept as evidence.
+//! - If such a payment reaches the chain anyway, it is reported so that a refund can be made.
+//!
+//! # Scope
+//!
+//! This module holds the types, the id, validation and the fallback `kaspa:` URI. The store and the
+//! endpoints live in `kobd` (`x402::facilitator::invoice`).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -43,21 +59,25 @@ pub const MAX_REFERENCE: usize = 128;
 /// Longest `memo` (characters).
 pub const MAX_MEMO: usize = 280;
 
-/// An invoice (see the module docs). Unknown fields are refused: everything is inside the id.
+/// An invoice (see the module docs).
+///
+/// Unknown fields are refused because everything is inside the id.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Invoice {
     pub x402_version: u64,
     pub invoice_version: String,
     pub network: String,
-    /// The merchant's own identifier of the sale (order number, ...).
+    /// The merchant's own identifier of the sale, such as an order number.
     pub reference: String,
-    /// ISO-8601 UTC with milliseconds; no payment is settled at or after it.
+    /// ISO-8601 UTC with milliseconds. No payment is settled at or after it.
     pub expires_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memo: Option<String>,
-    /// Ways to pay: exact requirements of any profile, payer-signed (`kob-swap-v1`) and intent
-    /// (`kob-intent-v1`) routes included. Any one of them pays the invoice.
+    /// Ways to pay: exact requirements of any profile.
+    ///
+    /// Payer-signed (`kob-swap-v1`) and intent (`kob-intent-v1`) routes are included. Any one of
+    /// them pays the invoice.
     pub accepts: Vec<PaymentRequirements>,
 }
 
@@ -101,9 +121,11 @@ impl Invoice {
         parse_iso_ms(&self.expires_at).ok_or_else(|| bad("expiresAt is not a millisecond ISO-8601 UTC timestamp"))
     }
 
-    /// Structural validation: version, network, reference, memo, expiry within `(now, now + horizon]`,
-    /// 1..=16 exact requirements on the same network. Whether the facilitator can settle each entry is
-    /// checked by the facilitator (allowlists, routes) when the invoice is registered.
+    /// Structural validation of the invoice.
+    ///
+    /// It checks version, network, reference, memo, expiry within `(now, now + horizon]` and
+    /// 1..=16 exact requirements on the same network. The facilitator checks at registration
+    /// whether it can settle each entry (allowlists, routes).
     pub fn validate(&self, network: Network, now_ms: u64, max_horizon_ms: u64) -> Result<u64> {
         if self.x402_version != X402_VERSION {
             return Err(bad("x402Version must be 2"));
@@ -139,7 +161,7 @@ impl Invoice {
             }
             r.amount_u64().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
             r.profile().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
-            // an entry without `paymentFlow: upfront` could never be paid (binding 1.0.0): refused at registration
+            // An entry without `paymentFlow: upfront` could never be paid, so it is refused.
             r.check_payment_flow().map_err(|e| bad(format!("accepts[{i}]: {}", e.message)))?;
         }
         for (i, a) in self.accepts.iter().enumerate() {
@@ -168,10 +190,12 @@ impl Invoice {
         Ok(None)
     }
 
-    /// The `kaspa:` payment URI of a KAS invoice (the first `standard-native` entry without a route):
-    /// `<payTo>?amount=<KAS>` with the amount in KAS (8 decimals, trailing zeros trimmed). A wallet that
-    /// pays it sends a plain KAS transaction the facilitator does not see: the merchant watches its
-    /// address (no invoice status). `None` when no entry is a plain KAS payment.
+    /// The `kaspa:` payment URI of a KAS invoice, or `None` when no entry is a plain KAS payment.
+    ///
+    /// It is built from the first `standard-native` entry without a route, as
+    /// `<payTo>?amount=<KAS>`. The amount has 8 decimals with trailing zeros trimmed. A wallet that
+    /// pays it sends a plain KAS transaction that the facilitator does not see, so the merchant
+    /// watches its own address and there is no invoice status.
     pub fn kaspa_uri(&self) -> Option<String> {
         let r = self
             .accepts
@@ -193,12 +217,12 @@ pub fn kas_decimal(sompi: u64) -> String {
     format!("{whole}.{}", f.trim_end_matches('0'))
 }
 
-/// The URL a registered invoice is served at (`<base>/invoices/<id>`): what a QR code carries.
+/// The URL a registered invoice is served at, `<base>/invoices/<id>`. A QR code carries it.
 pub fn invoice_url(base: &str, id_hex: &str) -> String {
     format!("{}/invoices/{}", base.trim_end_matches('/'), id_hex)
 }
 
-/// Checks that a fetched invoice is the one an URL (or id) names.
+/// Checks that a fetched invoice is the one a URL or id names.
 pub fn check_id(inv: &Invoice, id_hex: &str) -> Result<()> {
     let want = parse_hash32(id_hex).ok_or_else(|| bad("the invoice id is not 32-byte hex"))?;
     if inv.id()? != want {
@@ -211,15 +235,16 @@ pub fn check_id(inv: &Invoice, id_hex: &str) -> Result<()> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InvoiceState {
-    /// No payment was submitted (or every attempt was refused before broadcast) and it has not expired.
+    /// No payment was submitted, or every attempt was refused before broadcast, and it has not
+    /// expired.
     Unpaid,
-    /// A payment is being settled (broadcast, or an intent being executed); retry the status later.
+    /// A payment is being settled, by broadcast or by intent execution. Retry the status later.
     Pending,
     /// A payment reached the required finality.
     Paid,
     /// Expired without a payment.
     Expired,
-    /// The last attempt failed definitively; the invoice can still be paid until it expires.
+    /// The last attempt failed definitively. The invoice can still be paid until it expires.
     Failed,
 }
 
@@ -227,7 +252,7 @@ pub enum InvoiceState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvoicePayment {
-    /// The transaction that pays the merchant (an intent's execution, not its creation).
+    /// The transaction that pays the merchant. For an intent it is the execution, not the creation.
     pub transaction: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_daa_score: Option<String>,
@@ -240,11 +265,11 @@ pub struct InvoicePayment {
     pub response: Option<Value>,
 }
 
-/// One attempt to pay an invoice (what the facilitator's ledger says of it).
+/// One attempt to pay an invoice, as the facilitator's ledger records it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InvoiceAttempt {
-    /// The payment transaction (an intent: its creation).
+    /// The payment transaction. For an intent it is the creation.
     pub transaction: String,
     /// Ledger state: pending, broadcast, accepted, failed, ambiguous.
     pub state: String,
@@ -252,17 +277,21 @@ pub struct InvoiceAttempt {
     pub reason: Option<String>,
 }
 
-/// A payment the facilitator refused (duplicate or late) or did not settle, that it keeps watching.
+/// A payment the facilitator refused or did not settle, and keeps watching.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtraPayment {
-    /// `duplicate` (the invoice was paid or being paid) or `late` (submitted at or after `expiresAt`).
+    /// `duplicate` (the invoice was paid or being paid) or `late` (submitted at or after
+    /// `expiresAt`).
     pub kind: String,
     pub transaction: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payer: Option<String>,
-    /// `refused` (never broadcast by the facilitator), `accepted` (it reached the chain anyway: refund it),
-    /// `spent` (an intent of it was spent outside the facilitator: executed or cancelled).
+    /// What the facilitator observed.
+    ///
+    /// - `refused`: the facilitator never broadcast it.
+    /// - `accepted`: it reached the chain anyway, so refund it.
+    /// - `spent`: an intent of it was spent outside the facilitator, executed or cancelled.
     pub observed: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_daa_score: Option<String>,
@@ -315,7 +344,7 @@ mod tests {
         assert_eq!(inv.find(&r).unwrap(), Some(0));
         let twice = Invoice { accepts: vec![r.clone(), r.clone()], ..inv.clone() };
         assert!(twice.validate(Network::Testnet10, now, 86_400_000).is_err());
-        // an entry without the upfront payment flow is unpayable: refused
+        // An entry without the upfront payment flow is unpayable and is refused.
         let mut no_flow = r.clone();
         no_flow.extra.remove("paymentFlow");
         let e = Invoice { accepts: vec![no_flow], ..inv.clone() }.validate(Network::Testnet10, now, 86_400_000).unwrap_err();
@@ -323,7 +352,7 @@ mod tests {
         assert_eq!(kas_decimal(100_000_000), "1");
         assert_eq!(kas_decimal(1), "0.00000001");
         assert_eq!(invoice_url("https://f.example/", &id), format!("https://f.example/invoices/{id}"));
-        // unknown fields are refused (everything is inside the id)
+        // Unknown fields are refused because everything is inside the id.
         let mut v = serde_json::to_value(&inv).unwrap();
         v["extra"] = serde_json::json!(1);
         assert!(serde_json::from_value::<Invoice>(v).is_err());

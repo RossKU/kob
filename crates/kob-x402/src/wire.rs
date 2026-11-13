@@ -1,16 +1,18 @@
 //! x402 v2 wire types for the Kaspa binding.
 //!
 //! Field names follow the elldeeone/kaspa-x402 v1.0.1 schemas (`protocol/schemas/*.json`,
-//! `protocol/spec/kaspa-exact-v2.md`). Requirements and payloads keep unknown fields (`#[serde(flatten)]`)
-//! because the requirements hash covers the *complete* selected object.
+//! `protocol/spec/kaspa-exact-v2.md`). Requirements and payloads keep unknown fields
+//! (`#[serde(flatten)]`) because the requirements hash covers the complete selected object.
 //!
-//! KOB additions, both proposals to the binding (`docs/spec/x402-kcc20-profile.md`,
-//! `docs/spec/x402-swap-and-pay.md`):
+//! # KOB additions
 //!
-//! * profile `kcc20` next to `standard-native` / `additive`, with `asset` = KCC-20 covenant id and
-//!   `extra.token`;
-//! * `extra.route` (binding `kob-swap-v1`) on a requirement, and `payload.route`;
-//! * authorization version [`AUTH_VERSION_PAYLOAD`] (a commitment inside the transaction payload)
+//! Both are proposals to the binding (`docs/spec/x402-kcc20-profile.md`,
+//! `docs/spec/x402-swap-and-pay.md`).
+//!
+//! - Profile `kcc20` next to `standard-native` and `additive`. Its `asset` is the KCC-20
+//!   covenant id and it carries `extra.token`.
+//! - `extra.route` (binding `kob-swap-v1`) on a requirement, and `payload.route`.
+//! - Authorization version [`AUTH_VERSION_PAYLOAD`], a commitment inside the transaction payload,
 //!   next to the binding's Schnorr-signed [`AUTH_VERSION_SIGNED`].
 
 use std::fmt;
@@ -30,23 +32,33 @@ pub const TX_ENCODING: &str = "kaspa-sdk-safe-json-v2.0.0";
 pub const ASSET_KAS: &str = "KAS";
 /// Payload `type` of an exact payment.
 pub const PAYLOAD_EXACT_TX: &str = "exact-transaction";
-/// Authorization: Schnorr signature over the request digest by a standard P2PK input (the binding). Version 2 of the
-/// digest binds the payment identifier (`paymentPayload.extensions["payment-identifier"].info.id`).
+/// Authorization version of the binding: a Schnorr signature over the request digest.
+///
+/// A standard P2PK input signs it. The digest binds the payment identifier
+/// (`paymentPayload.extensions["payment-identifier"].info.id`).
 pub const AUTH_VERSION_SIGNED: &str = "kaspa-x402-exact-request-authorization-v2";
-/// Authorization: the digest is committed in the transaction payload, so every input authorizer's
-/// SIGHASH_ALL covers it (token profile, swap-and-pay). Version 2 binds the payment identifier, as the binding's v2 digest does.
+/// Authorization version of the token profile and swap-and-pay: a payload commitment.
+///
+/// The digest is committed in the transaction payload, so every input authorizer's SIGHASH_ALL
+/// covers it. Like the binding's digest, it binds the payment identifier.
 pub const AUTH_VERSION_PAYLOAD: &str = "kob-x402-payload-commitment-v2";
-/// `extra.paymentFlow` of every exact offer: the payment settles before the protected work begins. The binding requires
-/// it explicitly (an omitted flow is invalid). KOB's own profiles (`kcc20`, swap-and-pay and its intent mode) carry it too:
-/// their resource is likewise served only after the settlement is accepted.
+/// `extra.paymentFlow` of every exact offer: the payment settles before the protected work begins.
+///
+/// The binding requires it explicitly, so an omitted flow is invalid. KOB's own profiles (`kcc20`,
+/// swap-and-pay and its intent mode) carry it too, because their resource is likewise served only
+/// after the settlement is accepted.
 pub const PAYMENT_FLOW_UPFRONT: &str = "upfront";
 /// `extra.route.binding` of swap-and-pay.
 pub const BINDING_SWAP: &str = "kob-swap-v1";
-/// `extra.route.binding` of intent-based swap-and-pay: the payer signs a KOB router intent once and the facilitator
-/// executes it (`docs/spec/x402-swap-and-pay.md`, intent mode).
+/// `extra.route.binding` of intent-based swap-and-pay.
+///
+/// The payer signs a KOB router intent once and the facilitator executes it
+/// (`docs/spec/x402-swap-and-pay.md`, intent mode).
 pub const BINDING_INTENT: &str = "kob-intent-v1";
 
-/// A Kaspa network identifier (`kaspa:mainnet`, `kaspa:testnet-10`). Non-colon aliases are rejected.
+/// A Kaspa network identifier, `kaspa:mainnet` or `kaspa:testnet-10`.
+///
+/// Non-colon aliases are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Network {
     Mainnet,
@@ -171,7 +183,7 @@ pub struct PaymentRequirements {
     pub max_timeout_seconds: u64,
     #[serde(default)]
     pub extra: Map<String, Value>,
-    /// Unknown top-level fields: kept because the requirements hash covers them.
+    /// Unknown top-level fields. They are kept because the requirements hash covers them.
     #[serde(flatten)]
     pub other: Map<String, Value>,
 }
@@ -215,7 +227,8 @@ pub struct RoutePayload {
     pub binding: String,
     /// Covenant id (64 hex) of the token the payer pays with.
     pub pay_asset: String,
-    /// Order outpoints the payer names (hints; the verifier derives the orders from the transaction).
+    /// Order outpoints the payer names. They are hints, and the verifier derives the orders from
+    /// the transaction.
     #[serde(default)]
     pub orders: Vec<OutpointJson>,
     /// Intent mode only ([`BINDING_INTENT`]): the router actor and the payer's terms.
@@ -223,14 +236,17 @@ pub struct RoutePayload {
     pub intent: Option<IntentTerms>,
 }
 
-/// `payload.route.intent`: what the facilitator needs, besides the offer, to recompute the intent's script. Amounts are
-/// canonical decimal strings, keys 64 lowercase hex.
+/// `payload.route.intent`: what the facilitator needs, besides the offer, to recompute the script.
+///
+/// Amounts are canonical decimal strings and keys are 64 lowercase hex.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IntentTerms {
-    /// Router actor (`KasToToken_buy`, `TokenToKas_sell2`, ...): the fill shape the keeper uses.
+    /// Router actor, such as `KasToToken_buy` or `TokenToKas_sell2`.
+    ///
+    /// It is the fill shape the keeper uses.
     pub actor: String,
-    /// The payer's x-only key: KAS / token change, `cancel`.
+    /// The payer's x-only key, for KAS and token change and for `cancel`.
     pub payer: String,
     /// KasToToken: most sompi the asks may demand at their quotes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -244,8 +260,8 @@ pub struct IntentTerms {
     /// TokenToKas / TokenSwap: index of the locked token output in the creation transaction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock_output_index: Option<u32>,
-    /// TokenToKas / TokenSwap: units locked in the intent (at least `maxSell`; default `maxSell`). The rest returns to
-    /// the payer at execution.
+    /// TokenToKas / TokenSwap: units locked in the intent. At least `maxSell`, defaulting to
+    /// `maxSell`. The rest returns to the payer at execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lock_amount: Option<String>,
 }
@@ -345,7 +361,9 @@ pub struct SettlementResponse {
 }
 
 impl SettlementResponse {
-    /// A failed response for an error (`extensions.kaspa` carries the diagnostic, retryability, details).
+    /// A failed response for an error.
+    ///
+    /// `extensions.kaspa` carries the diagnostic, retryability and details.
     pub fn failure(network: Network, payer: Option<String>, err: &X402Error) -> SettlementResponse {
         SettlementResponse {
             success: false,
@@ -429,14 +447,16 @@ impl PaymentRequirements {
             )
         })
     }
-    /// The declared finality (`extra.finality`), the binding allows `accepted` and `confirmed`.
+    /// The declared finality (`extra.finality`). The binding allows `accepted` and `confirmed`.
     pub fn finality(&self) -> Result<Finality> {
         match Finality::parse(self.extra_str("finality").unwrap_or("")) {
             Some(f) if f >= Finality::Accepted => Ok(f),
             _ => Err(X402Error::requirements(Diag::InvalidKaspaExactFinality, "extra.finality must be accepted or confirmed")),
         }
     }
-    /// `extra.paymentFlow` is present and [`PAYMENT_FLOW_UPFRONT`] (an omitted flow, `authorization` or `escrow` is invalid).
+    /// Checks that `extra.paymentFlow` is [`PAYMENT_FLOW_UPFRONT`].
+    ///
+    /// An omitted flow, `authorization` or `escrow` is invalid.
     pub fn check_payment_flow(&self) -> Result<()> {
         match self.extra_str("paymentFlow") {
             Some(PAYMENT_FLOW_UPFRONT) => Ok(()),
@@ -451,7 +471,9 @@ impl PaymentRequirements {
     pub fn route_binding(&self) -> Option<&str> {
         self.extra.get("route").and_then(|r| r.get("binding")).and_then(Value::as_str)
     }
-    /// True if the offer is an intent-based swap-and-pay entry (`extra.route.binding` = [`BINDING_INTENT`]).
+    /// True if the offer is an intent-based swap-and-pay entry.
+    ///
+    /// That means `extra.route.binding` is [`BINDING_INTENT`].
     pub fn is_intent(&self) -> bool {
         self.route_binding() == Some(BINDING_INTENT)
     }
