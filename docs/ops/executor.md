@@ -1839,13 +1839,13 @@ history:
 
 | Read | Read through | Grows with |
 |---|---|---|
-| books, depth, the stats' best bid / ask and open counts, the `/v1/tokens` counts, pair books, `/v1/pairs`, the matcher's and keepers' book | `order_state_status` (`open`, `partial`: an order has a current UTXO exactly then), joined to the orders (`reads::LIVE_FROM`: `order_state` first, `CROSS JOIN` keeps that order) | the live orders |
+| books, depth, the stats' best bid / ask and open counts, the `/v1/tokens` counts, pair books, `/v1/pairs`, the matcher's and keepers' book | `order_state_status` (`open`, `partial`: an order has a current UTXO exactly then), joined to the orders (`reads::LIVE_FROM`: `order_state` first, `CROSS JOIN` keeps that order; joined the other way, the planner read every order of the token (`orders_book`) or of the whole history to find them: 0.2 to 2 s per read on a store of 300,000 orders) | the live orders |
 | `/v1/orders?token=` | `orders_token_genesis` and `orders_quote_genesis` in `(genesis_block, covenant_id)` order, merged (a pair order is listed under both its tokens) | the page |
 | `/v1/orders?maker=` | `orders_maker_genesis` | the page |
 | `/v1/orders` with no filter (newest first, the default ordering; `limit` 50, at most `max_page_size`) | `orders_genesis_page` `(genesis_block, covenant_id)`: the index is the whole sort order, so a page is read in order and stops at its end, however many orders share a genesis block (with the plain `(genesis_block)` index of earlier builds SQLite sorted every order of the newest block: 504 after 10 s on a 770,000-order store when most of them shared one block) | the page |
 | `/v1/orders` with `status=active`, `open`, `partial` (or any status few orders have: `n² <= (limit + 1) × orders`) | the orders of that status, sorted | the live orders |
-| the open part of `/v1/tokens` | `orders_listed_tokens`, one seek per distinct (token, program, family) of the listed orders | the tokens |
-| `/v1/token-utxos` (`spent=false`) | `token_holdings_live_owner` / `token_holdings_live_token` (indexes of the unspent rows only) | the page |
+| the open part of `/v1/tokens` | `orders_listed_tokens`, one seek per distinct (token, program, family) of the listed orders (a loose index scan: a row-value `>` seek steps over every duplicate, 0.7 s on 700,000 orders) | the tokens |
+| `/v1/token-utxos` (`spent=false`) | `token_holdings_live_owner` / `token_holdings_live_token` (indexes of the unspent rows only; `token_holdings_owner` on (owner, token) also holds every spent row of the pair, and reading it took 22,000 rows for 10 on the TN10 soak) | the page |
 | `/v1/health` counters | `counters`, kept by triggers in the transaction of every write (batch, revert, replay, import) | nothing |
 
 Still more than a page: the 24 h
