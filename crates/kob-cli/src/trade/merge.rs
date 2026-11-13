@@ -1,17 +1,30 @@
-//! `kob merge <TOKEN>`: merge the wallet's own plain token UTXOs of one token into one (the answer to
-//! `TOKEN_UTXOS_FRAGMENTED`), a port of `web/src/kob/merge.ts`:
+//! `kob merge <TOKEN>`: merges the plain token UTXOs of the wallet for one token into one.
 //!
-//! * the inputs: token UTXOs the key owns by itself, plain, of the token's extension commitment (never an order's custody
-//!   or stray), each confirmed on the node; smallest first, ties by outpoint;
-//! * a CHAIN of transfers to the key: the first takes up to the program's token inputs, every next one the previous
-//!   output plus up to inputs - 1 more, at most 10 transactions; each is a plain transfer (`sendTokens`) valid on its own;
-//! * the merged output keeps the largest input carrier (at most 1 KAS, at least the program's floor); the freed carriers
-//!   pay the fee, a KAS UTXO of the key is added only when they do not cover it (and always for KRON, whose transfer
-//!   needs a P2PK input of the owner).
+//! It is the answer to `TOKEN_UTXOS_FRAGMENTED` and a port of `web/src/kob/merge.ts`.
 //!
-//! The whole chain is built before anything is signed (each later link against the previous link's transaction id);
-//! after one confirmation every link is signed, validated in the script engine and submitted in order, a later link
-//! rebuilt on the node's view of the previous output once the node shows it (else on the submitted transaction).
+//! # Inputs
+//!
+//! The inputs are token UTXOs that the key owns by itself. They must be plain, with the
+//! extension commitment of the token, and so never the custody or stray of an order. Each is
+//! confirmed on the node. They are taken smallest first, ties by outpoint.
+//!
+//! # The chain
+//!
+//! A chain of transfers to the key does the merge, in at most 10 transactions:
+//! - The first transaction takes up to the token inputs of the program.
+//! - Every next one takes the previous output plus fresh inputs, up to the same total.
+//! - Each is a plain transfer (`sendTokens`) that is valid on its own.
+//!
+//! The merged output keeps the largest input carrier, at most 1 KAS and at least the floor of
+//! the program. The freed carriers pay the fee. A KAS UTXO of the key is added only when they do
+//! not cover it, and always for KRON, whose transfer needs a P2PK input of the owner.
+//!
+//! # Signing
+//!
+//! The whole chain is built before anything is signed, each later link against the transaction
+//! id of the previous one. After one confirmation, every link is signed, validated in the script
+//! engine and submitted in order. A later link is rebuilt on the view of the node of the previous
+//! output once the node shows it, and else on the submitted transaction.
 
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -33,7 +46,7 @@ use super::show::{self, Units};
 use super::units;
 use crate::common::{sign_validate_send, spk_bytes, Signer};
 
-/// Help of `kob merge`.
+/// The help text of `kob merge`.
 pub const MERGE_USAGE: &str = "\
 kob merge: merge the key's own token UTXOs of one token into one (a chain of transfers to the key itself)
 
@@ -47,7 +60,7 @@ USAGE
   rebuilt on it (else it spends the submitted, still unconfirmed output).
 ";
 
-/// Most transactions one merge runs.
+/// The most transactions that one merge runs.
 pub const MAX_MERGE_TXS: usize = 10;
 const ONE_KAS: u64 = 100_000_000;
 const FUNDING_HEADROOM: u64 = 500_000;
@@ -55,15 +68,15 @@ const FUNDING_HEADROOM: u64 = 500_000;
 /// One link of the chain.
 #[derive(Debug, Clone)]
 pub struct Link {
-    /// Token inputs (from the second link on, the previous link's output first).
+    /// The token inputs. From the second link on, the output of the previous link is first.
     pub inputs: Vec<TokenUtxo>,
-    /// Inputs of the key's original set this link merges.
+    /// The number of inputs of the original set of the key that this link merges.
     pub fresh: usize,
-    /// The transaction.
+    /// The transaction of the link.
     pub built: BuiltTx,
-    /// KAS UTXOs of the key spent.
+    /// The KAS UTXOs of the key that the link spends.
     pub funding: Vec<KeyUtxo>,
-    /// The merged output: index, carrier, state.
+    /// The merged output: index, carrier and state.
     pub output: (u32, u64, TokenState),
 }
 
@@ -71,16 +84,21 @@ fn outpoint(u: &Utxo) -> ([u8; 32], u32) {
     (u.transaction_id, u.index)
 }
 
-/// The UTXOs a merge may spend: plain UTXOs of `m` the key owns by itself (its extension commitment), positive; smallest
-/// first, ties by outpoint (`mergeCandidates`).
+/// The UTXOs that a merge may spend (`mergeCandidates`).
+///
+/// They are the plain UTXOs of `m` that the key owns by itself, with its extension commitment
+/// and a positive amount. They are sorted smallest first, ties by outpoint.
 pub fn candidates(m: &TokenMarket, maker: &[u8; 32], utxos: &[TokenUtxo]) -> Vec<TokenUtxo> {
     let mut v: Vec<TokenUtxo> = usable_token_utxos(m, maker, utxos).into_iter().filter(|u| u.state.amount() > 0).collect();
     v.sort_by(|a, b| a.state.amount().cmp(&b.state.amount()).then(outpoint(&a.utxo).cmp(&outpoint(&b.utxo))));
     v
 }
 
-/// The fresh inputs of each link over `sorted`: the first up to `max_inputs`, each next up to `max_inputs - 1`, at most
-/// `max_txs` links, the merged amount never above `cap` (`mergeGroups`). Fewer than two candidates: no link.
+/// The fresh inputs of each link over `sorted` (`mergeGroups`).
+///
+/// The first link takes up to `max_inputs`, and each next one up to `max_inputs - 1`, for at
+/// most `max_txs` links. The merged amount never goes above `cap`. With fewer than two
+/// candidates there is no link.
 pub fn groups(sorted: &[TokenUtxo], max_inputs: usize, max_txs: usize, cap: i64) -> Vec<Vec<TokenUtxo>> {
     let mut out: Vec<Vec<TokenUtxo>> = vec![];
     if max_inputs < 2 {
@@ -107,14 +125,19 @@ pub fn groups(sorted: &[TokenUtxo], max_inputs: usize, max_txs: usize, cap: i64)
     out
 }
 
-/// KAS the merged output carries: the largest input carrier, at most the default carrier, at least the program's floor.
+/// The KAS that the merged output carries.
+///
+/// It is the largest input carrier, at most the default carrier and at least the floor of the
+/// program.
 pub fn merged_carrier(m: &TokenMarket, inputs: &[TokenUtxo]) -> u64 {
     let largest = inputs.iter().map(|u| u.utxo.amount).max().unwrap_or(0);
     largest.min(DEFAULT_ORDER_CARRIER).max(token_carrier_floor(m) as u64)
 }
 
-/// One link: `inputs` (all of the key, one token) into ONE output of the key holding their whole amount; the freed
-/// carriers pay the fee, else KAS UTXOs of the key not in `spent` (`buildMergeLink`).
+/// One link (`buildMergeLink`): `inputs`, all of the key and one token, into one output of the key.
+///
+/// The output holds their whole amount. The freed carriers pay the fee, else KAS UTXOs of the
+/// key that are not in `spent`.
 pub fn build_link(
     m: &TokenMarket,
     maker: &[u8; 32],
@@ -133,7 +156,8 @@ pub fn build_link(
         .cloned()
         .collect();
     pool.sort_by(|a, b| b.utxo.amount.cmp(&a.utxo.amount));
-    // KRON: the owner's address presence is a P2PK input (the smallest of at least 1 KAS, else the largest)
+    // For KRON, the presence of the owner address is a P2PK input. It is the smallest UTXO of at
+    // least 1 KAS, else the largest.
     let seed = if kron { pool.iter().rev().find(|f| f.utxo.amount >= ONE_KAS).or(pool.first()).cloned() } else { None };
     if kron && seed.is_none() {
         return Err("merging KRON tokens needs a KAS UTXO of the key in the transaction".into());
@@ -190,8 +214,9 @@ pub fn build_link(
     Err("could not fund the network fee within 8 attempts".into())
 }
 
-/// The merged output of `link` as the next link's input, once its transaction `txid` is known (`node`: the node's view
-/// of it: amount and DAA score).
+/// The merged output of `link` as the input of the next link, once its transaction `txid` is known.
+///
+/// `node` is the view of the node of it, as amount and DAA score.
 pub fn carry(link: &Link, m: &TokenMarket, txid: [u8; 32], node: Option<(u64, u64)>) -> TokenUtxo {
     TokenUtxo {
         utxo: Utxo {
@@ -205,7 +230,9 @@ pub fn carry(link: &Link, m: &TokenMarket, txid: [u8; 32], node: Option<(u64, u6
     }
 }
 
-/// The whole chain over the key's UTXOs of `m`, every later link against the previous link's transaction id (`planMerge`).
+/// The whole chain over the UTXOs of the key for `m` (`planMerge`).
+///
+/// Every later link is built against the transaction id of the previous one.
 pub fn plan(
     m: &TokenMarket,
     maker: &[u8; 32],
@@ -234,7 +261,7 @@ pub fn plan(
     Ok(links)
 }
 
-/// Run `kob merge`.
+/// Runs `kob merge`.
 pub fn run(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[MERGE_USAGE, COMMON_HELP], false) {
         return code;
@@ -264,7 +291,8 @@ pub fn run(args: &[String]) -> i32 {
         return fail(e, 1);
     }
     let [key] = p.pos.as_slice() else { return fail("give exactly one token (ticker or covenant id)".into(), 2) };
-    // --json: the summary is held until the outcome is known and printed once, with the links submitted so far
+    // With --json, the summary is held until the outcome is known and printed once, with the links
+    // submitted so far.
     let held: std::cell::RefCell<Option<serde_json::Value>> = std::cell::RefCell::new(None);
     let links_done: std::cell::RefCell<Vec<serde_json::Value>> = std::cell::RefCell::new(vec![]);
     let r = (|| -> Result<i32, String> {
@@ -303,7 +331,8 @@ pub fn run(args: &[String]) -> i32 {
             "fee": fee_total.to_string(),
         });
         if c.json {
-            // one document on stdout, printed when the outcome is known (below): the summary with a `links` array
+            // One document goes to stdout, printed when the outcome is known below. It is the
+            // summary with a `links` array.
             *held.borrow_mut() = Some(summary.clone());
         } else {
             println!("merge {} of {}", units::tokens(amount as i128, &m.unit()), m.name());
@@ -350,7 +379,7 @@ pub fn run(args: &[String]) -> i32 {
         let mut spent: BTreeSet<([u8; 32], u32)> = BTreeSet::new();
         let total = links.len();
         for (k, planned) in links.into_iter().enumerate() {
-            // a later link is rebuilt on the previous output as the node shows it (or as submitted)
+            // A later link is rebuilt on the previous output as the node shows it, or as submitted.
             let link = match &prev {
                 None => planned,
                 Some((pl, txid)) => {
@@ -386,7 +415,9 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-/// The node's view (amount, DAA score) of a link's merged output, polled for up to `secs` seconds.
+/// The view of the node (amount, DAA score) of the merged output of a link.
+///
+/// It is polled for up to `secs` seconds.
 fn wait_for_output(c: &Common, link: &Link, m: &TokenMarket, txid: [u8; 32], secs: u64) -> Result<Option<(u64, u64)>, String> {
     let node = c.need_node()?;
     let spk = link.output.2.spk_with(token_template(m.program));
@@ -419,14 +450,14 @@ mod tests {
     fn groups_and_carriers() {
         let m = TokenMarket::new([0x70; 32], "TST", 3, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
         let us: Vec<TokenUtxo> = (1..=8).map(|n| tu(&m, n, n as i64 * 10, 30_000_000 * n as u64)).collect();
-        // 3 inputs, then the previous output + 2: 3 + 2 + 2 + 1
+        // 3 inputs, then the previous output plus 2: 3 + 2 + 2 + 1.
         let g = groups(&us, 3, 10, i64::MAX);
         assert_eq!(g.iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 2, 2, 1]);
         assert_eq!(groups(&us, 3, 2, i64::MAX).iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 2]);
-        // the cap: only the prefix whose sum fits (10 + 20 + 30 + 40 = 100)
+        // The cap allows only the prefix whose sum fits: 10 + 20 + 30 + 40 = 100.
         assert_eq!(groups(&us, 3, 10, 100).iter().map(Vec::len).collect::<Vec<_>>(), vec![3, 1]);
         assert!(groups(&us[..1], 3, 10, i64::MAX).is_empty());
-        // the largest input carrier, at most 1 KAS, at least the floor
+        // The largest input carrier, at most 1 KAS, at least the floor.
         assert_eq!(merged_carrier(&m, &us[..2]), 60_000_000);
         assert_eq!(merged_carrier(&m, &us), DEFAULT_ORDER_CARRIER);
         assert_eq!(merged_carrier(&m, &[tu(&m, 9, 1, 1)]), token_carrier_floor(&m) as u64);
