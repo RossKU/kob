@@ -1,68 +1,137 @@
-//! Several nodes behind one [`ChainSource`]: a primary that is the authority for the selected chain, and further nodes that
-//! serve transaction bodies (checked against the primary) and take submissions (`matcher::node::MultiSubmit`).
+//! Several nodes behind one [`ChainSource`].
 //!
-//! The primary answers every call the follower makes itself: the cursor's position, the chain hashes the windows are planned
-//! on, the single steps near the sink and every reorg decision. Only the windows of the parallel fetch
-//! (`indexer::prefetch`), the bulk of the bytes, are spread over the nodes:
+//! One node is the chain authority. It starts as node 0, the configured primary. The other nodes
+//! serve transaction bodies, which are checked against the authority, and they take submissions
+//! (`matcher::node::MultiSubmit`).
 //!
-//! * a window goes to the node with a free connection that delivered the most bytes per second lately (a node not measured
-//!   yet is tried first), the primary included;
-//! * a window from another node is asked for at `Full` verbosity and checked before the follower sees it
-//!   ([`super::verify`]): its chain blocks are the primary's, every header hashes to its block hash, every chain block
-//!   accepted exactly the transactions the primary reports (the primary's ids, fetched at the same time), and every
-//!   transaction hashes to its id. The follower takes the parts no hash covers for every transaction that can matter to
-//!   KOB from the primary before applying the window (`indexer::trust`);
-//! * a node that fails a window (transport, timeout, it does not know the window, another chain than the primary) is
-//!   skipped for a while (doubling backoff, at most two minutes) and the window goes to the next node, the primary last;
-//! * a node that contradicts a hash or the primary's acceptance data is dropped until the process restarts (`lies`).
+//! # Roles
 //!
-//! **A cross-checking node** (`NodeSpec::cross_check`; the second public node of a resolver pair, `rpc::resolver`) also
-//! vouches for the primary's own data: every answer of the primary the follower applies (its single steps near the sink and
-//! its windows) is compared with that node's acceptance data from the same start (`verify::agreement`: the same chain block
-//! at every position, the same accepted transactions in it). Only what both report is applied: at the first contradiction the
-//! answer is cut before it, and when the very next chain block is contradicted nothing is applied until the two agree (a race
-//! at the tip settles within seconds). A contradiction is logged and counted (`disagreements`; the tips differing for a
-//! moment are only counted apart, as `tip_differs`, and logged at debug); one that blocks the cursor three times in a row
-//! gives the cross-checking node up for another (its resolver entry resolves a replacement), and three
-//! more the primary's node (the cross-checking one becomes the authority, `resolver::replace`). A cross-checking node that
-//! cannot answer is skipped (backoff) and the primary goes on alone meanwhile: no stall, and no contradiction is ignored,
-//! only none can be seen while there is no second node. It has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink
-//! (a hanging node must not hold the book back) and [`CROSS_CHECK_TIMEOUT`] for a window; its timeouts count against it
-//! (`rpc::judge`).
+//! The authority answers every call the follower makes itself. These are the cursor's position, the
+//! chain hashes the windows are planned on, the single steps near the sink and every reorg
+//! decision. Only the windows of the parallel fetch (`indexer::prefetch`) are spread over the
+//! nodes. They carry the bulk of the bytes.
 //!
-//! **The health watch** checks every node of the list the same way, the authority and the others alike: every
-//! [`WATCH_EVERY`] each is asked `getServerInfo` (within [`WATCH_TIMEOUT`]). An answer is judged (`rpc::judge`: another
-//! network, no UTXO index, not synced for long), a timeout counts as one (a node that hangs), and a node more than [`LAG_DAA`]
-//! behind the most advanced one for [`LAG_CHECKS`] checks in a row is behind, **once it confirmed that lead itself**: a DAA
-//! is each node's own claim, and a node that over-reports must not put its honest partner behind. So the most advanced
-//! node's sink is taken at the first check of the streak and at the [`LAG_CHECKS`]-th, and the node behind is asked for it
-//! (`getBlock`) at each check after: once it knows both and each is more than [`LAG_DAA`] above its own DAA of that check, the
-//! lag is confirmed. A sink it does not learn within [`LAG_CONFIRM_CHECKS`] checks, or one not that far ahead, refutes the
-//! lead (warned about, nothing held against the node behind, which is not suspect either until it confirmed a lead). A node
-//! that stopped advancing never confirms a lead, so the DAG and the local monotonic clock judge it (never a block's
-//! timestamp, which its miner sets): its sink has not changed for [`FROZEN_AFTER`] while another node's changed within it
-//! (or for [`FROZEN_ALONE_AFTER`] when no other node answers); only a node whose sink was seen to change counts as advancing
-//! (one seen for the first time has no vote yet), and the finding is asserted again at every check while the sink stays
-//! where it was found frozen. A lead the DAG does not back counts against the node that
-//! claims it: its virtual DAA score more than [`LAG_DAA`] above its own sink's, as it and the node behind (which knows that
-//! block) both report it, at [`INFLATED_CHECKS`] checks in a row, is a contradiction. A node that contradicts the other (a
-//! hash, or the acceptance data) is judged too. Whichever node it is,
-//! a resolver entry gives it up for another public node (the authority's role moves to the other node at once, unless that
-//! one is suspect itself, `rpc::resolver`); a node named in the configuration raises an alarm, and a cross-checking one is
-//! cut off from the pair until the alarm ends (the authority goes on alone meanwhile). Each node's `cut_reason` says why it
-//! was last cut off.
+//! - A window goes to the node with a free connection that delivered the most bytes per second
+//!   lately. A node that is not measured yet is tried first. The authority takes part.
+//! - A window from another node is asked for at `Full` verbosity and checked before the follower
+//!   sees it ([`super::verify`]). Its chain blocks must be the authority's. Every header must hash
+//!   to its block hash. Every chain block must have accepted exactly the transactions the authority
+//!   reports, fetched at the same time. Every transaction must hash to its id.
+//! - The follower takes the parts no hash covers from the authority, for every transaction that can
+//!   matter to KOB. It does this before it applies the window (`indexer::trust`).
+//! - A node that fails a window is skipped for a while, and the window goes to the next node. A
+//!   failure is a transport error, a timeout or an undecodable answer. The pause starts at 5 s and
+//!   doubles up to 80 s. A node that does not know the window or follows another chain is paused
+//!   for 10 s.
+//! - A node that contradicts a hash or the authority's acceptance data is dropped until the process
+//!   restarts (`lies`).
 //!
-//! **A failing authority.** A node can answer its small calls (`getServerInfo`, the sink) while its chain requests time out
-//! or lose the connection. When the follower finds that its chain requests keep failing while the cursor stalls
-//! (`indexer::follower`, *A failing chain authority*), it tells the source ([`MultiNode::authority_failing`]): a resolver entry
-//! gives its node up (the other node of the pair is the authority, a replacement is resolved on another host); among named
-//! nodes, the first other node that can lead becomes the chain authority (the roles swap: `NodeBoard::authority`). It must
-//! not be dropped, have an alarm, be behind, or have contradicted the authority within [`PROMOTE_CLEAN_FOR`], and it must
-//! show, within [`PROMOTE_CHECK_TIMEOUT`], that it is on the right network, synced, knows the cursor and has it on its
-//! selected chain. Its first answers from the cursor may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the
-//! cursor, else they are refused. The old authority raises an alarm and is cut off from the pair until it ends: its chain
-//! requests answer again (probed with the health watch) for `judge::ALARM_CLEAR_AFTER`. It is a secondary node then, and
-//! leads again only if the new authority fails the same way.
+//! # A cross-checking node
+//!
+//! A node with `NodeSpec::cross_check` also vouches for the authority's own data. It is the second
+//! node of a resolver pair (`rpc::resolver`). Every answer of the authority that the follower
+//! applies is compared with this node's acceptance data from the same start. This covers the single
+//! steps near the sink and the windows (`verify::agreement`). Both nodes must report the same chain
+//! block at every position and the same accepted transactions in it.
+//!
+//! Only what both report is applied.
+//!
+//! - At the first contradiction the answer is cut before it.
+//! - When the very next chain block is contradicted, nothing is applied until the two agree. A race
+//!   at the tip settles within seconds.
+//! - A contradiction is logged and counted (`disagreements`). The tips differing for a moment are
+//!   only counted apart, as `tip_differs`, and logged at debug.
+//! - A contradiction that blocks the cursor [`STALLS_BEFORE_REPLACING`] times in a row gives the
+//!   cross-checking node up for another. Its resolver entry resolves a replacement.
+//! - After as many more, the authority's node is given up too. The cross-checking node becomes the
+//!   authority (`resolver::replace`).
+//!
+//! A cross-checking node that cannot answer is skipped with a backoff, and the authority goes on
+//! alone meanwhile. Nothing stalls. No contradiction is ignored, but none can be seen while there
+//! is no second node. The node has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink, so
+//! that a hanging node does not hold the book back. It has [`CROSS_CHECK_TIMEOUT`] for a window.
+//! Its timeouts count against it (`rpc::judge`).
+//!
+//! # The health watch
+//!
+//! The watch checks every node of the list the same way, the authority and the others alike. Every
+//! [`WATCH_EVERY`] each node is asked `getServerInfo` within [`WATCH_TIMEOUT`]. The answer is
+//! judged (`rpc::judge`). It can show another network, no UTXO index or a node that is not synced
+//! for long. A timeout counts as a finding too, for a node that hangs.
+//!
+//! A node is behind when it is more than [`LAG_DAA`] behind the most advanced node for
+//! [`LAG_CHECKS`] checks in a row and has confirmed that lead itself. A DAA score is each node's
+//! own claim, and a node that over-reports must not put its honest partner behind. So the lead is
+//! confirmed in these steps.
+//!
+//! - The most advanced node's sink is taken at the first check of the streak and at the
+//!   [`LAG_CHECKS`]-th.
+//! - The node behind is asked for each sink (`getBlock`) at every check after that.
+//! - Once it knows a sink, that block's DAA must be more than [`LAG_DAA`] above the node's own DAA
+//!   of the check. Both claims must be confirmed this way.
+//! - A sink the node does not learn within [`LAG_CONFIRM_CHECKS`] checks, or one that is not that
+//!   far ahead, refutes the lead. This is warned about at most every ten minutes. Nothing is held
+//!   against the node behind. It is not suspect either until it confirmed a lead.
+//!
+//! A node that stopped advancing never confirms a lead. The DAG and the local monotonic clock judge
+//! it instead, never a block's timestamp, which its miner sets. The node has stopped when its sink
+//! has not changed for [`FROZEN_AFTER`] while another node's sink changed within that time. When no
+//! other node answers, the limit is [`FROZEN_ALONE_AFTER`]. Only a node whose sink was seen to
+//! change counts as advancing. A node seen for the first time has no vote yet. The finding is
+//! asserted again at every check while the sink stays where it was found frozen.
+//!
+//! A lead that the DAG does not back counts against the node that claims it. It is a contradiction
+//! when the node's virtual DAA score is more than [`LAG_DAA`] above its own sink's, as the node and
+//! the node behind both report it. The node behind knows that block. The finding needs
+//! [`INFLATED_CHECKS`] checks in a row.
+//!
+//! A node that contradicts the other node, by a hash or by the acceptance data, is judged too. What
+//! follows depends on the node.
+//!
+//! - A resolver entry gives it up for another public node. The authority's role moves to the other
+//!   node at once, unless that node is suspect itself (`rpc::resolver`).
+//! - A node named in the configuration raises an alarm.
+//! - A cross-checking node is cut off from the pair until the alarm ends. The authority goes on
+//!   alone meanwhile.
+//!
+//! The `cut_reason` of each node says why it was last cut off.
+//!
+//! # A failing authority
+//!
+//! A node can answer its small calls (`getServerInfo`, the sink) while its chain requests time out
+//! or lose the connection. The follower finds this when 2 chain requests in a row fail on the wire
+//! and the cursor has not moved for 3 minutes (`indexer::follower`, "A failing chain authority").
+//! It then calls [`MultiNode::authority_failing`].
+//!
+//! The old authority gets a chain alarm (`judge::chain_failing`). What follows depends on the
+//! nodes.
+//!
+//! - A resolver entry gives its public node up. The other node of the pair is the authority at
+//!   once, unless the judge suspects it. The entry resolves a replacement on another host.
+//! - Among named nodes, the first other node that can lead becomes the authority, and the roles
+//!   swap (`NodeBoard::authority`).
+//! - A single node has nothing to promote. The alarm stays and the follower retries with its
+//!   backoff.
+//!
+//! A named node can lead when all of these hold.
+//!
+//! - It is not dropped, has no alarm and is not suspect.
+//! - It did not contradict the authority within [`PROMOTE_CLEAN_FOR`].
+//! - Within [`PROMOTE_CHECK_TIMEOUT`] it shows the right network and is synced. It knows the
+//!   cursor, and the cursor is on its selected chain.
+//!
+//! The first answers of the new authority from the cursor may remove at most [`SETTLE_MAX_REORG`]
+//! chain blocks and must know the cursor. Otherwise they are refused.
+//!
+//! The old authority is a secondary node now. It is cut off from the pair until its alarm ends. The
+//! health watch probes it with chain requests. The alarm ends when they answered for
+//! `judge::ALARM_CLEAR_AFTER`, which is 60 s, without a break. The node leads again only if the new
+//! authority fails the same way. So the role does not flap.
+//!
+//! A swap is logged at warn. It is counted in `nodes[].promoted` and in
+//! `kob_indexer_authority_replaced_total`.
+//!
+//! # Status
 //!
 //! `GET /v1/health` reports each node under `nodes`.
 
@@ -79,6 +148,7 @@ use tokio::sync::Semaphore;
 /// One node of the list.
 #[derive(Debug, Clone)]
 pub struct NodeSpec {
+    /// The configured URL. A resolver entry has a pseudo URL such as `resolver`.
     pub url: String,
     /// Serves windows of the parallel fetch.
     pub fetch: bool,
@@ -86,59 +156,96 @@ pub struct NodeSpec {
     pub submit: bool,
     /// Windows fetched from it at once.
     pub connections: usize,
-    /// It vouches for the primary's own answers too (see the module documentation): the second node of a resolver pair.
+    /// It vouches for the authority's own answers too (see the module documentation). This is the
+    /// second node of a resolver pair.
     pub cross_check: bool,
 }
 
 /// What `/v1/health` reports per node.
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct NodeStatus {
+    /// The URL with credentials and keys removed.
     pub url: String,
-    /// The host a resolver entry uses now (`None`: not a resolver entry, or it is being replaced).
+    /// The host a resolver entry uses now.
+    ///
+    /// It is `None` for a node that is not a resolver entry, and while an entry is being replaced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node: Option<String>,
-    /// How many times a resolver entry gave its node up (failed, or replaced after disagreeing).
+    /// How many times a resolver entry gave its node up, after a failure or a disagreement.
     pub replaced: u32,
-    /// How many times this node was made the chain authority because the authority's chain requests kept failing
-    /// (`MultiNode::authority_failing`).
+    /// How many times this node took over as chain authority from a failing one.
+    ///
+    /// See `MultiNode::authority_failing`.
     pub promoted: u32,
-    /// Why the node was last cut off from the pair: for a resolver entry the public node it gave up and why (`host: reason`);
-    /// for a node named in the configuration its alarms now (`rpc::judge`), or why it was dropped. `None`: never.
+    /// Why the node was last cut off from the pair, or `None` if it never was.
+    ///
+    /// A resolver entry shows the public node it gave up and why, as `host: reason`. A named node
+    /// shows its alarms now (`rpc::judge`) or the reason it was dropped.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cut_reason: Option<String>,
-    /// Answers of the primary it contradicted (a cross-checking node, `NodeSpec::cross_check`): other accepted transactions, a
-    /// different chain block deep in the answer, a deep reorg seen by one node only. Not the tips differing for a moment.
+    /// Answers of the authority that this node contradicted.
+    ///
+    /// Only a cross-checking node counts here (`NodeSpec::cross_check`). A contradiction is other
+    /// accepted transactions, a different chain block deep in the answer or a deep reorg seen by
+    /// one node only. The tips differing for a moment are not counted.
     pub disagreements: u64,
-    /// Times the two nodes' newest chain blocks differed for a moment (routine on a public pair; settles by the next poll).
+    /// Times the two nodes' newest chain blocks differed for a moment.
+    ///
+    /// This is routine on a public pair. It settles by the next poll.
     pub tip_differs: u64,
-    /// `primary` (the chain authority) or `secondary`.
+    /// `primary` for the chain authority, else `secondary`.
     pub role: String,
-    /// `ok`, `backoff` (failed lately: skipped until `backoff_secs`), `dropped` (contradicted the primary), `cut` (a named
-    /// node with an alarm, left out of the pair until it ends: `cut_reason`) or `idle` (neither fetches nor takes submissions).
+    /// The node's state, one of the values below.
+    ///
+    /// - `ok` is the normal state.
+    /// - `backoff` means it failed lately and is skipped for `backoff_secs`.
+    /// - `dropped` means it contradicted the authority.
+    /// - `cut` means a named node has an alarm and is left out of the pair until it ends (see
+    ///   `cut_reason`).
+    /// - `idle` means it neither fetches nor takes submissions.
     pub state: String,
+    /// Serves windows of the parallel fetch.
     pub fetch: bool,
+    /// Takes the executor's transactions.
     pub submit: bool,
+    /// Windows fetched from it at once.
     pub connections: usize,
     /// Windows fetched now.
     pub in_flight: u64,
+    /// Windows fetched successfully.
     pub windows_ok: u64,
+    /// Windows that failed.
     pub windows_failed: u64,
+    /// Chain blocks in the windows fetched.
     pub blocks: u64,
+    /// Accepted transactions in the windows fetched.
     pub txs: u64,
+    /// Bytes received for the windows fetched.
     pub bytes: u64,
-    /// Bytes per second of its recent windows (moving average; `None`: not measured yet).
+    /// Bytes per second of its recent windows, as a moving average.
+    ///
+    /// It is `None` until a window of at least 64 KiB was measured.
     pub bytes_per_sec: Option<u64>,
+    /// How long its last window took, in milliseconds.
     pub last_fetch_ms: u64,
+    /// Requests that timed out.
     pub timeouts: u64,
-    /// Windows refused because the node was on another chain than the primary or did not know the window.
+    /// Windows refused for a node on another chain than the authority's or without the window.
     pub out_of_sync: u64,
-    /// Contradictions of a hash or of the primary's data (the node is dropped at the first).
+    /// Contradictions of a hash or of the authority's data. The node is dropped at the first.
     pub lies: u64,
+    /// Why the node was dropped, if it was.
     pub dropped_reason: Option<String>,
+    /// Seconds until the node is tried again.
     pub backoff_secs: u64,
+    /// The last error the node caused.
     pub last_error: Option<String>,
-    /// Submissions the node took (accepted, or it already had the transaction from a peer or the chain), and refused.
+    /// Submissions the node took.
+    ///
+    /// A submission counts when the node accepted it, or already had the transaction from a peer or
+    /// the chain.
     pub submits_ok: u64,
+    /// Submissions the node refused.
     pub submits_failed: u64,
 }
 
@@ -150,38 +257,47 @@ struct PeerState {
     backoff_until: Option<Instant>,
     /// When a window last went to it.
     last_used: Option<Instant>,
-    /// When it last contradicted the authority as the cross-checking node (not the tips differing for a moment).
+    /// When it last contradicted the authority as the cross-checking node. Tips that differ for a
+    /// moment do not count.
     last_disagreement: Option<Instant>,
 }
 
-/// A node whose rate is below the best one's divided by this gets windows only when no faster node qualifies: in chain
-/// order, a slow window holds up every window behind it.
+/// A node whose rate is below the best rate divided by this gets windows only when no faster node
+/// qualifies. Windows are applied in chain order, so a slow window holds up every window behind it.
 const SLOW_FACTOR: f64 = 4.0;
-/// A node's rate is measured again (its next window counts as unmeasured) when it got no window for this long.
+/// A node's rate is measured again when it got no window for this long. Its next window then counts
+/// as unmeasured.
 const REMEASURE: Duration = Duration::from_secs(300);
 
 /// Per-node state shared by the chain source and the submitter.
 pub struct NodeBoard {
     peers: Vec<Mutex<PeerState>>,
-    /// The configured URL of each node (a resolver entry's pseudo URL: the node it uses is looked up when shown).
+    /// The configured URL of each node.
+    ///
+    /// A resolver entry has a pseudo URL. The node it uses is looked up when shown.
     entries: Vec<String>,
-    /// The node that is the chain authority now: node 0 (the configured primary) until its chain requests keep failing and
-    /// another node is promoted (`MultiNode::authority_failing`).
+    /// The index of the chain authority.
+    ///
+    /// It is node 0, the configured primary, until another node is promoted
+    /// (`MultiNode::authority_failing`).
     authority: AtomicUsize,
 }
 
 /// How a failure counts against a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Fault {
-    /// Transport, timeout, an undecodable answer: back off, doubling.
+    /// A transport error, a timeout or an undecodable answer. The node backs off, doubling each
+    /// time.
     Failed,
-    /// It does not know the window, or follows another chain right now: a short pause.
+    /// The node does not know the window or follows another chain right now. It pauses for 10 s.
     OutOfSync,
-    /// It contradicted a hash or the primary: dropped.
+    /// It contradicted a hash or the authority. The node is judged, and dropped unless it is the
+    /// authority or a resolver entry.
     Lie,
 }
 
 impl NodeBoard {
+    /// A board for the nodes of `specs`. Node 0 is the authority.
     pub fn new(specs: &[NodeSpec]) -> Arc<NodeBoard> {
         let peers = specs
             .iter()
@@ -189,7 +305,8 @@ impl NodeBoard {
             .map(|(i, s)| {
                 Mutex::new(PeerState {
                     status: NodeStatus {
-                        // shown on the public health and metrics routes and in logs: never credentials or keys
+                        // Shown on the public health and metrics routes and in logs, so it never
+                        // carries credentials or keys.
                         url: super::redact_url(&s.url),
                         role: if i == 0 { "primary" } else { "secondary" }.into(),
                         state: "ok".into(),
@@ -205,7 +322,9 @@ impl NodeBoard {
         Arc::new(NodeBoard { peers, entries: specs.iter().map(|s| s.url.clone()).collect(), authority: AtomicUsize::new(0) })
     }
 
-    /// The node that is the chain authority now (0, the configured primary, unless another one was promoted).
+    /// The index of the chain authority now.
+    ///
+    /// It is 0, the configured primary, unless another node was promoted.
     pub fn authority(&self) -> usize {
         self.authority.load(Ordering::Relaxed)
     }
@@ -215,7 +334,9 @@ impl NodeBoard {
         &self.entries[i]
     }
 
-    /// The host node `i` uses now, for logs and the status line: a resolver entry's public node, else the redacted URL.
+    /// The host node `i` uses now, for logs and the status line.
+    ///
+    /// A resolver entry shows its public node. Any other node shows its redacted URL.
     pub fn shown(&self, i: usize) -> String {
         let e = &self.entries[i];
         if super::resolver::is_resolver(e) {
@@ -225,7 +346,10 @@ impl NodeBoard {
         }
     }
 
-    /// The node entry `i` stands for now: a resolver entry's public node (`None`: being replaced), else the URL.
+    /// The node entry `i` stands for now.
+    ///
+    /// A resolver entry gives its public node, or `None` while it is being replaced. Any other
+    /// entry gives its URL.
     pub fn node_of(&self, i: usize) -> Option<String> {
         let e = &self.entries[i];
         if super::resolver::is_resolver(e) {
@@ -235,17 +359,20 @@ impl NodeBoard {
         }
     }
 
-    /// A named node other than the primary with an alarm that cuts it off (`rpc::judge::cuts_off`): left out of the pair
-    /// until the alarm ends. One that contradicted the primary is dropped instead (`dropped_reason`).
+    /// Whether the named node `i` is cut off from the pair by an alarm (`rpc::judge::cuts_off`).
+    ///
+    /// The authority and resolver entries are never cut off. A cut node is left out until the alarm
+    /// ends. A node that contradicted the authority is dropped instead (`dropped_reason`).
     fn cut(&self, i: usize) -> bool {
         i != self.authority() && !super::resolver::is_resolver(&self.entries[i]) && super::judge::cuts_off(&self.entries[i])
     }
 
-    /// The cross-checking node `i` contradicted the primary.
+    /// The cross-checking node `i` contradicted the authority.
     fn disagreed(&self, i: usize, why: &str, at_tip: bool) {
         self.with(i, |p| {
             if at_tip {
-                // the tips differing for a moment is no contradiction: counted apart, and no error to show
+                // Tips that differ for a moment are no contradiction. They are counted apart and
+                // show no error.
                 p.status.tip_differs += 1;
             } else {
                 p.status.disagreements += 1;
@@ -259,14 +386,17 @@ impl NodeBoard {
         f(&mut self.peers[i].lock().unwrap_or_else(|e| e.into_inner()))
     }
 
+    /// The number of nodes.
     pub fn len(&self) -> usize {
         self.peers.len()
     }
 
+    /// Whether there are no nodes.
     pub fn is_empty(&self) -> bool {
         self.peers.is_empty()
     }
 
+    /// The redacted URL of node `i`.
     pub fn url(&self, i: usize) -> String {
         self.with(i, |p| p.status.url.clone())
     }
@@ -310,7 +440,7 @@ impl NodeBoard {
             s.txs += txs as u64;
             s.bytes += bytes;
             s.last_fetch_ms = f.elapsed.as_millis() as u64;
-            // only answers of some size say anything about the link
+            // Only answers of some size say anything about the link.
             if bytes >= 64 * 1024 {
                 let bps = bytes as f64 / secs;
                 p.ewma_bps = Some(p.ewma_bps.map_or(bps, |o| 0.7 * o + 0.3 * bps));
@@ -323,8 +453,8 @@ impl NodeBoard {
         let public = super::resolver::is_resolver(&self.entries[i]);
         let authority = i == self.authority();
         if fault == Fault::Lie {
-            // judged like any other failure (outside the node's lock: a resolver entry gives its node up for another, a named
-            // node raises an alarm and, unless it is the primary, is dropped below)
+            // Judge it outside the node's lock. A resolver entry gives its node up for another. A
+            // named node raises an alarm and is dropped below, unless it is the authority.
             if let Some(node) = self.node_of(i) {
                 super::judge::contradicted(&self.entries[i], &node, e);
             }
@@ -336,7 +466,7 @@ impl NodeBoard {
             match fault {
                 Fault::Lie => {
                     s.lies += 1;
-                    // a resolver entry's node was replaced: its successor is not dropped
+                    // A resolver entry's node was replaced, so its successor is not dropped.
                     if !authority && !public && s.dropped_reason.is_none() {
                         tracing::error!(node = %url, reason = e, "node contradicts the primary: dropped");
                         s.dropped_reason = Some(e.to_string());
@@ -355,7 +485,7 @@ impl NodeBoard {
                         .saturating_mul(1u32 << p.failures.min(5).saturating_sub(1))
                         .min(Duration::from_secs(120));
                     p.backoff_until = Some(Instant::now() + d);
-                    // a slow or failing link should not keep its old rate
+                    // A slow or failing link should not keep its old rate.
                     p.ewma_bps = p.ewma_bps.map(|b| b / 2.0);
                 }
             }
@@ -375,8 +505,10 @@ impl NodeBoard {
         })
     }
 
-    /// Stop using node `i`: a resolver entry's node is replaced (the primary's too: the other node is the authority then); a
-    /// named primary stays the authority, with an alarm.
+    /// Stops using node `i`, or raises an alarm when it is the authority.
+    ///
+    /// A resolver entry's node is replaced. When that is the authority's node, the other node
+    /// becomes the authority. A named authority stays the authority and gets an alarm.
     pub fn drop_node(&self, i: usize, why: &str) {
         if i == self.authority() {
             tracing::error!(reason = why, node = %self.shown(i), "the primary node's data was contradicted");
@@ -392,6 +524,7 @@ impl NodeBoard {
         self.with(i, |p| p.status.dropped_reason.is_some())
     }
 
+    /// The status of every node, as `/v1/health` shows it.
     pub fn snapshot(&self) -> Vec<NodeStatus> {
         let now = Instant::now();
         let authority = self.authority();
@@ -433,44 +566,56 @@ impl NodeBoard {
 
 /// A failed attempt at a window on one node.
 enum Attempt {
-    /// About the window itself (too large) or the primary's own failure: no other node helps.
+    /// About the window itself (too large) or the authority's own failure. No other node helps.
     Window(RpcError),
-    /// About the node: try another one.
+    /// About the node. Try another one.
     Node(RpcError, Fault),
 }
 
-/// Several nodes as one [`ChainSource`] (see the module documentation). Node 0 is the primary.
+/// Several nodes as one [`ChainSource`].
+///
+/// Node 0 is the configured primary. It is the chain authority until another node is promoted. See
+/// the module documentation.
 pub struct MultiNode<N: ChainSource> {
     nodes: Vec<Arc<N>>,
-    /// The primary again, on connections of its own: the acceptance data windows from other nodes are checked against.
+    /// Node 0 again, on connections of its own.
+    ///
+    /// Windows from other nodes are checked against its acceptance data.
     verifier: Arc<N>,
     specs: Vec<NodeSpec>,
     permits: Vec<Arc<Semaphore>>,
     board: Arc<NodeBoard>,
     rr: std::sync::atomic::AtomicUsize,
-    /// The primary's sink blue score and when it was read (`MultiNode::primary_sink`).
+    /// The authority's sink blue score and when it was read (`MultiNode::primary_sink`).
     sink: Mutex<Option<(Instant, u64)>>,
     /// Contradictions in a row that left nothing to apply (`MultiNode::vouched`).
     stalls: std::sync::atomic::AtomicU32,
-    /// When a contradiction was last logged (one line per ten seconds; the counters keep every one).
+    /// When a contradiction was last logged. One line per ten seconds is logged, and the counters
+    /// keep every one.
     last_warn: Mutex<Option<Instant>>,
     /// The health watch (module documentation).
     watch: Arc<Mutex<Watch>>,
-    /// Public chain authorities whose answer contradicted the store at one cursor: the cursor, the hosts, and how many times
-    /// (`MultiNode::authority_contradicted`).
+    /// Public chain authorities that contradicted the store at one cursor.
+    ///
+    /// It holds the cursor, the hosts and the count (`MultiNode::authority_contradicted`).
     store_contradictions: Mutex<Option<(Hash32, Vec<String>, u32)>>,
-    /// A node was promoted to chain authority and has not yet answered from the cursor in a way that continues it
-    /// (`MultiNode::settle`).
+    /// Whether the authority is not yet proven from the cursor.
+    ///
+    /// It is set when a node is promoted or a resolver entry's node is replaced. It stays set until
+    /// an answer from the cursor continues it (`MultiNode::settle`).
     settling: AtomicBool,
-    /// The start of the last chain request to the authority (the follower's cursor): what a promoted node must continue, and
-    /// what a demoted node is probed from (`MultiNode::probe_demoted`).
+    /// The cursor of the last chain request to the authority.
+    ///
+    /// A promoted node must continue it. A demoted node is probed from it (`probe_demoted`).
     last_start: Mutex<Option<Hash32>>,
-    /// A probe of demoted nodes runs now (one at a time).
+    /// Whether a probe of the demoted nodes runs now. Only one runs at a time.
     probing: Arc<AtomicBool>,
 }
 
-/// The health watch's state: its period, how many checks in a row make a node behind, when it last ran, whether a check runs
-/// now, each node's lag, and when an unconfirmed lead was last warned about.
+/// The state of the health watch.
+///
+/// It holds the period, the number of checks in a row that make a node behind, when it last ran,
+/// whether a check runs now, each node's lag and when an unconfirmed lead was last warned about.
 struct Watch {
     every: Duration,
     lag_checks: u32,
@@ -478,32 +623,41 @@ struct Watch {
     busy: bool,
     lag: Vec<LagTrack>,
     last_refuted_warn: Option<Instant>,
-    /// The local monotonic clock (tests set another, `MultiNode::with_clock`): what elapsed time is measured on. A block's
-    /// timestamp is the miner's, never the referee.
+    /// The local monotonic clock that elapsed time is measured on. Tests set another one
+    /// (`MultiNode::with_clock`). A block's timestamp is set by its miner, so it never serves as
+    /// the referee.
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
-    /// Each node's sink at the last check, and since when (the local monotonic clock) it has not changed.
+    /// Each node's sink at the last check, and since when it has not changed on the local monotonic
+    /// clock.
     progress: Vec<Option<Progress>>,
-    /// The most advanced node and its checks in a row with a virtual DAA score above its own newest block's by more than
-    /// [`LAG_DAA`] (a lead it does not have).
+    /// The most advanced node and its checks in a row with a virtual DAA score more than
+    /// [`LAG_DAA`] above its own sink's.
+    ///
+    /// That is a lead it does not have.
     inflated: Option<(String, u32)>,
 }
 
-/// A node's sink and since when it has not changed (module documentation: a node that stopped advancing).
+/// A node's sink and since when it has not changed.
 #[derive(Debug, Clone)]
 struct Progress {
     node: String,
     sink: Hash32,
     since: Instant,
-    /// This stillness was reported already (once per sink; the finding is asserted again at every check while the sink stays
-    /// the same, so a named node's alarm does not end while it is still frozen).
+    /// Whether this stillness was reported already. It is reported once per sink. The finding is
+    /// asserted again at every check while the sink stays the same, so a named node's alarm does
+    /// not end while it is still frozen.
     reported: bool,
-    /// The sink was seen to change on this node (a record before this one, of the same node, had another sink). Only such a
-    /// node counts as advancing: one seen for the first time (a new node, a replacement, one that answers again) has no vote
-    /// until its sink changes, so a network stall does not make it look advancing next to a node that stands still.
+    /// Whether the sink was seen to change on this node.
+    ///
+    /// Only such a node counts as advancing. A node seen for the first time has no vote until its
+    /// sink changes. This covers a new node, a replacement and one that answers again. So a network
+    /// stall does not make it look advancing next to a node that stands still.
     moved: bool,
 }
 
-/// The most advanced node's lead over a node, as the answers of one check put it: kept until the node behind can confirm it.
+/// The most advanced node's lead over a node, as the answers of one check put it.
+///
+/// It is kept until the node behind can confirm it.
 #[derive(Debug, Clone, Copy)]
 struct Claim {
     /// The most advanced node's sink at the check.
@@ -512,15 +666,18 @@ struct Claim {
     own: u64,
     /// Checks since, while unconfirmed.
     age: u32,
-    /// `Some(lead)`: the node knows the sink now, and its DAA is `lead` above `own`; `None`: not yet.
+    /// `Some(lead)` once the node knows the sink. Its DAA is then `lead` above `own`. `None` before
+    /// that.
     lead: Option<u64>,
 }
 
-/// A node's checks in a row behind the most advanced answer, and the claims of that lead taken at the first of them and at
-/// the [`LAG_CHECKS`]-th (module documentation).
+/// A node's checks in a row behind the most advanced answer, and the claims of that lead.
+///
+/// The claims are taken at the first check of the streak and at the [`LAG_CHECKS`]-th (module
+/// documentation).
 #[derive(Debug, Clone, Default)]
 struct LagTrack {
-    /// The node the streak is about (a resolver entry that moved to another node begins again).
+    /// The node the streak is about. A resolver entry that moved to another node begins again.
     node: String,
     streak: u32,
     claims: Vec<Claim>,
@@ -531,29 +688,34 @@ struct LagTrack {
 enum LagVerdict {
     /// Not behind.
     Level,
-    /// Behind by the answers (DAA), not confirmed yet.
+    /// Behind by the answers (DAA) but not confirmed yet.
     Unconfirmed(u64),
-    /// The other node's lead was not borne out: its sink stayed unknown to this node for [`LAG_CONFIRM_CHECKS`] checks, or
-    /// it was not that far ahead (DAA claimed behind).
+    /// The other node's lead was not borne out. Its sink stayed unknown to this node for
+    /// [`LAG_CONFIRM_CHECKS`] checks, or it was not that far ahead.
     Refuted(u64),
-    /// Behind for the whole period, confirmed by this node itself (the smallest confirmed lead, DAA).
+    /// Behind for the whole period and confirmed by this node itself. It carries the smallest
+    /// confirmed lead, in DAA.
     Confirmed(u64),
 }
 
 impl LagTrack {
-    /// The streak begins again (the node stays).
+    /// The streak begins again. The node stays.
     fn clear(&mut self) {
         self.streak = 0;
         self.claims.clear();
     }
 
-    /// Whether this streak has evidence of its own that the node is behind (a lead it confirmed: the other node's sink is a
-    /// real block it placed, that far ahead): only then is it suspect (not promoted). The answers alone are a claim.
+    /// Whether this streak has evidence of its own that the node is behind.
+    ///
+    /// That is a lead the node confirmed. The other node's sink is a real block the node placed,
+    /// that far ahead. Only then is the node suspect and not promoted. The answers alone are a
+    /// claim.
     fn evidence(&self) -> bool {
         self.claims.iter().any(|c| c.lead.is_some_and(|l| l > LAG_DAA))
     }
 
-    /// The claims a streak needs before a lag is confirmed: one at its first check and one at its `checks`-th.
+    /// The claims a streak needs before a lag is confirmed. These are one at its first check and
+    /// one at its `checks`-th.
     fn needed(checks: u32) -> usize {
         if checks <= 1 {
             1
@@ -562,7 +724,8 @@ impl LagTrack {
         }
     }
 
-    /// One check: behind by the answers (`Some(daa)`) or not. Whether a new claim is wanted now.
+    /// Records one check, behind by the answers (`Some(daa)`) or not. Returns whether a new claim
+    /// is wanted now.
     fn observe(&mut self, behind: Option<u64>, checks: u32) -> bool {
         if behind.is_none() {
             self.clear();
@@ -573,8 +736,10 @@ impl LagTrack {
         n < Self::needed(checks) && (n == 0 || self.streak >= checks)
     }
 
-    /// The verdict after this check's claims and confirmations (`behind`: the answers' lag now, DAA). A refuted or a
-    /// confirmed streak begins again at the next check.
+    /// The verdict after this check's claims and confirmations.
+    ///
+    /// `behind` is the answers' lag now, in DAA. A refuted or a confirmed streak begins again at
+    /// the next check.
     fn verdict(&mut self, behind: Option<u64>, checks: u32) -> LagVerdict {
         let Some(behind) = behind else { return LagVerdict::Level };
         for c in self.claims.iter_mut().filter(|c| c.lead.is_none()) {
@@ -595,59 +760,90 @@ impl LagTrack {
     }
 }
 
-/// The start of the error when the two nodes' newest chain blocks differ and nothing can be applied yet (routine on a public
-/// pair: the next poll settles it); the follower does not warn about it until it repeats.
+/// The start of the error when the two nodes' newest chain blocks differ and nothing can be applied
+/// yet.
+///
+/// This is routine on a public pair, and the next poll settles it. The follower does not warn about
+/// it until it repeats.
 pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
 
-/// Contradictions in a row that block the cursor before the cross-checking node is given up for another (and twice this
-/// many before the primary's node is: `MultiNode::vouched`).
+/// Contradictions in a row that block the cursor before the cross-checking node is given up for
+/// another.
+///
+/// The authority's node is given up after twice this many (`MultiNode::vouched`).
 pub const STALLS_BEFORE_REPLACING: u32 = 3;
 
-/// How long the cross-checking node may take to vouch for one window before the primary goes on alone for it.
+/// How long the cross-checking node may take to vouch for one window. The authority goes on alone
+/// after that.
 pub const CROSS_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How long it may take to vouch for one single step near the sink (a few chain blocks): a hanging node must not hold the book
-/// back for long.
+/// How long it may take to vouch for one single step near the sink, which is a few chain blocks.
+///
+/// A hanging node must not hold the book back for long.
 pub const CROSS_CHECK_STEP_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The health watch's period, and how long one node's `getServerInfo` may take in it (module documentation).
+/// The health watch's period.
 pub const WATCH_EVERY: Duration = Duration::from_secs(10);
+/// How long one node's `getServerInfo` may take in a check of the health watch.
 pub const WATCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A node more than this far (DAA, about 30 s of chain) behind the most advanced node of the list ...
+/// A node more than this many DAA behind the most advanced node of the list may be behind.
+///
+/// This is about 30 s of chain.
 pub const LAG_DAA: u64 = 300;
-/// ... at this many health checks in a row (a minute) is behind: given up (a resolver entry) or an alarm (a named node), once
-/// it confirmed the lead itself (module documentation).
+/// Checks in a row, about a minute, after which such a node is behind.
+///
+/// A resolver entry gives the node up and a named node gets an alarm, once the node confirmed the
+/// lead itself (module documentation).
 pub const LAG_CHECKS: u32 = 6;
-/// Checks (five minutes) within which a node must learn the most advanced node's sink of a check that put it behind; a sink it
-/// never learns was not real, and nothing is held against the node.
+/// Checks, about five minutes, within which a node must learn the sink of a check that put it
+/// behind.
+///
+/// A sink it never learns was not real, and nothing is held against the node.
 pub const LAG_CONFIRM_CHECKS: u32 = 30;
-/// A node whose sink has not changed for this long of the local monotonic clock while another node's sink changed within it
-/// stopped advancing (the chain makes about ten blocks a second on mainnet and testnet-10 alike): given up or an alarm, whatever
-/// its DAA says. Its own answers decide: no other node can make an honest node's sink stand still.
+/// How long a node's sink may stand still while another node's sink changes.
+///
+/// It is measured on the local monotonic clock. A node over this limit stopped advancing, whatever
+/// its DAA says. The chain makes about ten blocks a second on mainnet and testnet-10 alike. The
+/// node's own answers decide, because no other node can make an honest node's sink stand still. A
+/// resolver entry gives such a node up and a named node gets an alarm.
 pub const FROZEN_AFTER: Duration = Duration::from_secs(120);
-/// ... and this long when no other node answers (nothing to compare it with).
+/// How long a node's sink may stand still when no other node answers and there is nothing to
+/// compare it with.
 pub const FROZEN_ALONE_AFTER: Duration = Duration::from_secs(600);
-/// Checks in a row at which the most advanced node reports a virtual DAA score more than [`LAG_DAA`] above the DAA score of
-/// its own sink, as it reports it AND as the node behind (which knows that block) reports it, before that counts against it as
-/// a contradiction: the block both sides place in the DAG does not back the lead it claims.
+/// Checks in a row after which an inflated lead counts against the most advanced node.
+///
+/// A lead is inflated when the node's virtual DAA score is more than [`LAG_DAA`] above the DAA
+/// score of its own sink. Both the node and the node behind, which knows that block, must report it
+/// so. The block both sides place in the DAG does not back the lead the node claims.
 pub const INFLATED_CHECKS: u32 = 2;
-/// Public chain authorities that may contradict the store at one cursor before the store halts there (`gap`) however many
-/// hosts they were on: two on different hosts agreeing with each other halt it at once (the store is at fault, not the nodes).
+/// Contradictions of the store at one cursor before the store halts there (`gap`).
+///
+/// The store also halts at once when two authorities on different hosts contradicted it at the same
+/// cursor. They agree with each other against the store, so the store is at fault and not the
+/// nodes.
 pub const STORE_CONTRADICTIONS_MAX: u32 = 3;
-/// How long a node may take to show that it can be the chain authority (`MultiNode::authority_failing`): the right network,
-/// synced, the cursor known and on its selected chain.
+/// How long a node may take to show that it can be the chain authority
+/// (`MultiNode::authority_failing`).
+///
+/// It must be on the right network and synced. It must know the cursor, and the cursor must be on
+/// its selected chain.
 pub const PROMOTE_CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// A cross-checking node that contradicted the authority within this long is not promoted.
 pub const PROMOTE_CLEAN_FOR: Duration = Duration::from_secs(600);
-/// Right after a promotion, the new authority's first answer from the cursor may remove at most this many chain blocks (a
-/// reorg the old authority had not seen yet, about 10 s of chain); a deeper one, or a cursor it does not know, is refused.
+/// The most chain blocks that the new authority's first answer from the cursor may remove.
+///
+/// This is about 10 s of chain. It covers a reorg that the old authority had not seen yet. A deeper
+/// one is refused, and so is a cursor the node does not know.
 pub const SETTLE_MAX_REORG: usize = 100;
-/// How long a demoted node's chain request may take in the probe that ends its alarm (`MultiNode::probe_demoted`).
+/// How long a demoted node's chain request may take in a probe (`probe_demoted`).
 pub const DEMOTED_PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Nodes promoted to chain authority in this process (`MultiNode::authority_failing`, named nodes; a resolver entry's
-/// replacement is counted by `resolver::authority_replaced`). Part of `kob_indexer_authority_replaced_total`.
+/// Nodes promoted to chain authority in this process.
+///
+/// This counts named nodes (`MultiNode::authority_failing`). A resolver entry's replacement is
+/// counted by `resolver::authority_replaced`. Both are part of
+/// `kob_indexer_authority_replaced_total`.
 static PROMOTIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Named nodes promoted to chain authority since the start (see [`PROMOTIONS`]).
@@ -656,7 +852,9 @@ pub fn promotions() -> u64 {
 }
 
 impl<N: ChainSource> MultiNode<N> {
-    /// `nodes[0]` is the primary; `verifier` a second client of the primary for the acceptance data.
+    /// A source over `nodes`, with `nodes[0]` as the primary.
+    ///
+    /// `verifier` is a second client of the primary. It serves the acceptance data.
     pub fn new(nodes: Vec<(NodeSpec, Arc<N>)>, verifier: Arc<N>) -> Self {
         assert!(!nodes.is_empty(), "a primary node");
         let specs: Vec<NodeSpec> = nodes.iter().map(|(s, _)| s.clone()).collect();
@@ -676,7 +874,7 @@ impl<N: ChainSource> MultiNode<N> {
             settling: AtomicBool::new(false),
             last_start: Mutex::new(None),
             probing: Arc::new(AtomicBool::new(false)),
-            // the first check one period after the start
+            // The first check is one period after the start.
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
                 lag_checks: LAG_CHECKS,
@@ -691,8 +889,10 @@ impl<N: ChainSource> MultiNode<N> {
         }
     }
 
-    /// The health watch every `every`, a node behind after `lag_checks` checks in a row (tests; the defaults are
-    /// [`WATCH_EVERY`] and [`LAG_CHECKS`]).
+    /// Sets the health watch period to `every` and the checks in a row that make a node behind to
+    /// `lag_checks`.
+    ///
+    /// This is for tests. The defaults are [`WATCH_EVERY`] and [`LAG_CHECKS`].
     pub fn with_watch(self, every: Duration, lag_checks: u32) -> Self {
         {
             let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());
@@ -701,14 +901,19 @@ impl<N: ChainSource> MultiNode<N> {
         self
     }
 
-    /// The local monotonic clock the health watch measures a node's stillness on (tests; the default is `Instant::now`).
+    /// Sets the local monotonic clock that the health watch measures a node's stillness on.
+    ///
+    /// This is for tests. The default is `Instant::now`.
     pub fn with_clock(self, clock: impl Fn() -> Instant + Send + Sync + 'static) -> Self {
         self.watch.lock().unwrap_or_else(|e| e.into_inner()).clock = Arc::new(clock);
         self
     }
 
-    /// Starts the health watch (module documentation) on a task of its own when it is due: the follower's request never waits
-    /// for it (a node that hangs costs the watch its timeout, not the book).
+    /// Starts the health watch (module documentation) on a task of its own when it is due.
+    ///
+    /// The follower's request never waits for it. A node that hangs costs the watch its timeout,
+    /// not the book. When a chain request of the authority was made, it also starts a probe of the
+    /// demoted nodes from its cursor (`probe_demoted`). Only one probe runs at a time.
     fn health_watch(&self) {
         let due = {
             let mut w = self.watch.lock().unwrap_or_else(|e| e.into_inner());
@@ -734,8 +939,10 @@ impl<N: ChainSource> MultiNode<N> {
         }
     }
 
-    /// One health check of every node now, on the caller's task (tests; the follower's requests start it on a task of its own
-    /// every [`WATCH_EVERY`]), and a probe of the demoted nodes ([`MultiNode::authority_failing`]).
+    /// Runs one health check of every node now, on the caller's task.
+    ///
+    /// This is for tests. The follower's requests start the check on a task of its own every
+    /// [`WATCH_EVERY`]. It also probes the demoted nodes ([`MultiNode::authority_failing`]).
     pub async fn check_health(&self) {
         watch_nodes(&self.nodes, &self.verifier, &self.board, &self.watch).await;
         let at = *self.last_start.lock().unwrap_or_else(|e| e.into_inner());
@@ -744,13 +951,18 @@ impl<N: ChainSource> MultiNode<N> {
         }
     }
 
-    /// The chain authority now (node 0, the configured primary, unless another node was promoted).
+    /// The chain authority now.
+    ///
+    /// It is node 0, the configured primary, unless another node was promoted.
     fn primary(&self) -> &N {
         &self.nodes[self.board.authority()]
     }
 
-    /// The authority on connections of its own for the acceptance data and its copies of chain blocks: the configured
-    /// primary's second client, or a promoted node's own client (it has no second one).
+    /// The authority on connections of its own, for the acceptance data and its copies of chain
+    /// blocks.
+    ///
+    /// For node 0 that is the verifier. A promoted node has no second client, so its own client is
+    /// used.
     fn checker(&self) -> &N {
         match self.board.authority() {
             0 => &self.verifier,
@@ -763,10 +975,13 @@ impl<N: ChainSource> MultiNode<N> {
         *self.last_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
     }
 
-    /// The authority's answer `r` from `start` (a single step, or the chain hashes): right after a promotion
-    /// ([`MultiNode::authority_failing`]) it may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the cursor (the
-    /// follower would rewind the store to the newest block it knows), else it is refused and nothing is applied. The first
-    /// answer that continues the cursor settles it. Any answer ends a chain alarm of the authority (`judge::chain_ok`).
+    /// Checks the authority's answer `r` from `start`, a single step or the chain hashes.
+    ///
+    /// While a node that took over is settling ([`MultiNode::authority_failing`]), an answer is
+    /// refused unless it removes at most [`SETTLE_MAX_REORG`] chain blocks and the node knows the
+    /// cursor. Otherwise the follower would rewind the store to the newest block the node knows. A
+    /// refused answer applies nothing. The first answer that continues the cursor ends the
+    /// settling. Any successful answer ends a chain alarm of the authority (`judge::chain_ok`).
     fn settle<T>(&self, start: Hash32, r: Result<T, RpcError>, removed: impl Fn(&T) -> usize) -> Result<T, RpcError> {
         let a = self.board.authority();
         if r.is_ok() {
@@ -797,10 +1012,17 @@ impl<N: ChainSource> MultiNode<N> {
         r
     }
 
-    /// The nodes that may become the chain authority instead of `a`, in the order of the list: not dropped (a node that
-    /// contradicted the authority), without an alarm (`rpc::judge`: another network, not synced, hanging, behind, frozen, a
-    /// contradiction, failing chain requests), not suspect (behind at the last health check), and, as the cross-checking
-    /// node, no contradiction of the authority within [`PROMOTE_CLEAN_FOR`].
+    /// The nodes that may become the chain authority instead of node `a`, in the order of the list.
+    ///
+    /// A node qualifies when all of these hold.
+    ///
+    /// - It has a node. A resolver entry that is being replaced has none.
+    /// - It is not dropped.
+    /// - It has no alarm (`rpc::judge`). An alarm can mean another network, not synced, hanging,
+    ///   behind, frozen, a contradiction or failing chain requests.
+    /// - It is not suspect, so it was not behind at the last health check.
+    /// - It did not contradict the authority within [`PROMOTE_CLEAN_FOR`]. Only a cross-checking
+    ///   node can have done so.
     fn candidates(&self, a: usize) -> Vec<usize> {
         let now = Instant::now();
         (0..self.nodes.len())
@@ -815,10 +1037,16 @@ impl<N: ChainSource> MultiNode<N> {
             .collect()
     }
 
-    /// Whether node `k` can be the chain authority from the cursor `at`, within [`PROMOTE_CHECK_TIMEOUT`]: the right network,
-    /// synced, it knows the cursor, and the cursor is on its selected chain (its chain hashes from it remove nothing). The
-    /// stored chain is the cursor's own chain of selected parents (fixed by the hashes of its headers), so such a node agrees
-    /// with everything the store holds.
+    /// Whether node `k` can be the chain authority from the cursor `at`.
+    ///
+    /// It has [`PROMOTE_CHECK_TIMEOUT`] to show all of these.
+    ///
+    /// - It is on the right network and synced.
+    /// - It knows the cursor.
+    /// - The cursor is on its selected chain, so its chain hashes from it remove nothing.
+    ///
+    /// The stored chain is the cursor's own chain of selected parents, fixed by the hashes of its
+    /// headers. So such a node agrees with everything the store holds.
     async fn can_lead(&self, k: usize, at: Hash32) -> Result<(), String> {
         let node = &*self.nodes[k];
         let check = async {
@@ -848,14 +1076,16 @@ impl<N: ChainSource> MultiNode<N> {
         }
     }
 
-    /// The node that vouches for the primary's answers now: the first cross-checking one that is neither dropped, cut off
-    /// (a named node with an alarm) nor backing off.
+    /// The node that vouches for the authority's answers now.
+    ///
+    /// It is the first cross-checking node that is not dropped, not cut off and not backing off.
     fn cross_checker(&self) -> Option<usize> {
         let now = Instant::now();
         let a = self.board.authority();
         (0..self.nodes.len()).filter(|&i| i != a).find(|&i| {
             let entry = &self.specs[i].url;
-            // a resolver entry being replaced has no node to ask: the primary goes on alone meanwhile, never waits for it
+            // A resolver entry being replaced has no node to ask. The authority goes on alone
+            // meanwhile and never waits for it.
             let replacing = super::resolver::is_resolver(entry) && super::resolver::current(entry).is_none();
             self.specs[i].cross_check
                 && !replacing
@@ -865,9 +1095,12 @@ impl<N: ChainSource> MultiNode<N> {
         })
     }
 
-    /// The cross-checking node's acceptance data from `start` (`None`: no such node now, or it could not answer within
-    /// `limit`: the primary goes on alone and the node backs off; a timeout counts against it, `rpc::judge`). Asked while the
-    /// primary answers the same request, so it costs no extra round trip.
+    /// The cross-checking node's acceptance data from `start`.
+    ///
+    /// It is `None` when there is no such node now or it could not answer within `limit`. The
+    /// authority goes on alone then, and the node backs off. A timeout counts against the node
+    /// (`rpc::judge`). The node is asked while the authority answers the same request, so it costs
+    /// no extra round trip.
     async fn cross_ids(
         &self,
         j: Option<usize>,
@@ -892,9 +1125,11 @@ impl<N: ChainSource> MultiNode<N> {
         }
     }
 
-    /// A window from the primary (`node`: its own client or the verifier's), vouched for by the cross-checking node, which is
-    /// asked for the same range at the same time (the window's bounds are read from the primary first, as
-    /// `fetch_window_from` would).
+    /// A window from the authority, vouched for by the cross-checking node.
+    ///
+    /// `node` is the authority's own client or the verifier. The cross-checking node is asked for
+    /// the same range at the same time. The window's bounds are read from the authority first, as
+    /// `fetch_window_from` would. A successful window ends a chain alarm of the authority.
     async fn primary_window(&self, node: &N, w: &WindowRequest) -> Result<Fetched, RpcError> {
         let a = self.board.authority();
         let origin = Origin { node: a, ..Origin::PRIMARY };
@@ -930,9 +1165,11 @@ impl<N: ChainSource> MultiNode<N> {
         Ok(Fetched { raw: self.vouched(raw, cross)?, sink_blue, end_blue, elapsed, origin })
     }
 
-    /// The primary's answer `raw` from `start`, as far as the cross-checking node vouches for it (module documentation):
-    /// whole when nothing is contradicted or no such node can answer now, cut before the first contradiction, an error when
-    /// the next chain block itself is contradicted.
+    /// The authority's answer `raw` from `start`, as far as the cross-checking node vouches for it.
+    ///
+    /// It is returned whole when nothing is contradicted or no such node can answer now. It is cut
+    /// before the first contradiction. It is an error when the next chain block itself is
+    /// contradicted (module documentation).
     fn vouched(&self, mut raw: RawVspcResponse, cross: Option<(usize, ChainIds)>) -> Result<RawVspcResponse, RpcError> {
         let Some((j, ids)) = cross else { return Ok(raw) };
         let a = super::verify::agreement(&raw, &ids);
@@ -951,8 +1188,8 @@ impl<N: ChainSource> MultiNode<N> {
             due
         };
         if a.at_tip {
-            // the tips differ for a moment (not yet agreed): routine on a public pair; a tip that never settles ends in
-            // replacing a node below, which is warned about
+            // The tips differ for a moment and are not agreed yet. This is routine on a public
+            // pair. A tip that never settles ends in replacing a node below, which is warned about.
             tracing::debug!(applied = a.keep, of = total, reason = %why, "the two nodes' tips differ: only the chain blocks both report are indexed");
         } else if log {
             tracing::warn!(
@@ -970,7 +1207,8 @@ impl<N: ChainSource> MultiNode<N> {
             return Ok(raw);
         }
         let n = self.stalls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        // a disagreement that does not settle: replace the cross-checking node, then the primary's (resolver entries only)
+        // A disagreement that does not settle replaces the cross-checking node, then the
+        // authority's. This applies to resolver entries only.
         let give_up = |i: usize| {
             let e = self.board.entry(i).to_string();
             if let Some(node) = super::resolver::current(&e) {
@@ -985,16 +1223,19 @@ impl<N: ChainSource> MultiNode<N> {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         }
         if a.at_tip {
-            // the follower logs this at debug until it repeats (`STALLS_BEFORE_REPLACING` times in a row)
+            // The follower logs this at debug until it repeats `STALLS_BEFORE_REPLACING` times in a
+            // row.
             return Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")));
         }
         Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
     }
 
+    /// The shared per-node state.
     pub fn board(&self) -> Arc<NodeBoard> {
         self.board.clone()
     }
 
+    /// The specs of the nodes.
     pub fn specs(&self) -> &[NodeSpec] {
         &self.specs
     }
@@ -1004,16 +1245,21 @@ impl<N: ChainSource> MultiNode<N> {
         self.specs.iter().filter(|s| s.fetch).map(|s| s.connections.max(1)).sum::<usize>().max(1)
     }
 
-    /// The node for the next attempt, among those not tried yet for this window, not dropped and not backing off (the
-    /// primary always qualifies): a node that is not slow (its rate at least a quarter of the best one's; an unmeasured
-    /// node counts as fast, and one idle for five minutes is measured again) before a slow one, then one with a free
-    /// connection, then the best rate.
+    /// The node for the next attempt at a window.
+    ///
+    /// It is chosen among the nodes not tried yet for this window that serve windows and are not
+    /// dropped, cut off or backing off. The authority always qualifies. The choice prefers, in this
+    /// order, a node that is not slow, then one with a free connection, then the best rate.
+    ///
+    /// A node is slow when its rate is below a quarter of the best one's ([`SLOW_FACTOR`]). An
+    /// unmeasured node counts as fast. A node idle for five minutes is measured again
+    /// ([`REMEASURE`]).
     fn pick(&self, tried: &[bool]) -> Option<usize> {
         let now = Instant::now();
         let n = self.nodes.len();
         let first = self.rr.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cands: Vec<(usize, bool, Option<f64>)> = vec![];
-        // a primary that does not serve windows still takes one no other node can
+        // An authority that does not serve windows still takes one that no other node can.
         let a = self.board.authority();
         let fallback = !tried[a] && !self.specs[a].fetch;
         for k in 0..n {
@@ -1044,8 +1290,11 @@ impl<N: ChainSource> MultiNode<N> {
         best.map(|c| c.0).or(fallback.then_some(a))
     }
 
-    /// The primary's sink blue score, at most a second old (`at_least`: refreshed when below it). It only bounds requests
-    /// for the primary's acceptance data: a stale sink makes the answer a few chain blocks longer, nothing else.
+    /// The authority's sink blue score, at most a second old.
+    ///
+    /// `at_least` makes it refresh when the cached value is not above it. The value only bounds
+    /// requests for the authority's acceptance data. A stale sink makes the answer a few chain
+    /// blocks longer and nothing else.
     async fn primary_sink(&self, at_least: u64) -> Result<u64, RpcError> {
         let cached = *self.sink.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((_, b)) = cached.filter(|(t, b)| t.elapsed() < Duration::from_secs(1) && *b > at_least) {
@@ -1056,10 +1305,12 @@ impl<N: ChainSource> MultiNode<N> {
         Ok(b)
     }
 
-    /// The window from secondary `i`, checked against the primary: the node's own position first (it must know the window
-    /// end), then its answer and the primary's acceptance data for the same start at once. The blue score of the window end
-    /// from the node only bounds the primary's answer (a wrong one makes it shorter, and fewer chain blocks are verified, or
-    /// longer).
+    /// The window from secondary `i`, checked against the authority.
+    ///
+    /// The node's own position is read first, and it must know the window end. Then its answer and
+    /// the authority's acceptance data for the same start are fetched at once. The blue score of
+    /// the window end from the node only bounds the authority's answer. A wrong one makes it
+    /// shorter, so fewer chain blocks are verified, or longer.
     async fn fetch_checked(&self, i: usize, w: &WindowRequest) -> Result<Fetched, Attempt> {
         let origin = Origin { node: i, trusted: false, tier: 0 };
         let node = &*self.nodes[i];
@@ -1099,11 +1350,13 @@ impl<N: ChainSource> MultiNode<N> {
     }
 }
 
-/// The health watch's check (module documentation): every node's `getServerInfo` at once, judged; then each node's DAA
-/// against the most advanced answer, a lag confirmed by the node behind before it counts.
+/// One check of the health watch (module documentation).
+///
+/// Every node's `getServerInfo` is asked at once and judged. Then each node's DAA is compared with
+/// the most advanced answer. A lag counts only once the node behind confirmed it.
 async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board: &NodeBoard, watch: &Mutex<Watch>) {
     let lock = || watch.lock().unwrap_or_else(|e| e.into_inner());
-    // one check at a time: a slow one (its timeouts) never overlaps the next
+    // One check at a time, so a slow one never overlaps the next.
     {
         let mut w = lock();
         if w.busy {
@@ -1121,7 +1374,7 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     let n = nodes.len();
     let network = super::resolver::network();
     let network = network.as_str();
-    // the primary on the verifier's connections: never behind its own windows
+    // Node 0 on the verifier's connections, so it is never behind its own windows.
     let src = |i: usize| -> &N {
         if i == 0 {
             verifier
@@ -1130,20 +1383,21 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         }
     };
     let ask = |i: usize| async move {
-        // a resolver entry being replaced has no node to ask
+        // A resolver entry being replaced has no node to ask.
         let node = board.node_of(i)?;
         let entry = board.entry(i);
         match tokio::time::timeout(WATCH_TIMEOUT, src(i).server_info()).await {
             Ok(Ok(info)) => {
                 let judged = super::judge::server_info(entry, &node, &info.network_id, info.is_synced, info.has_utxo_index);
-                // the DAA of another network says nothing about this one's
+                // The DAA of another network says nothing about this one's.
                 let comparable = network.is_empty() || info.network_id == network;
                 judged.ok().filter(|()| comparable)?;
-                // its sink: whether it advances (the DAG, not a number it reports)
+                // Its sink, to see whether it advances. This is the DAG, not a number the node
+                // reports.
                 let sink = tokio::time::timeout(WATCH_TIMEOUT, src(i).dag_info()).await.ok().and_then(Result::ok).map(|d| d.sink);
                 Some(((i, node, info.virtual_daa_score), sink))
             }
-            // a failed call is reported where it failed (the client's connection, the judge)
+            // A failed call is reported where it failed, in the client's connection and the judge.
             Ok(Err(_)) => None,
             Err(_) => {
                 super::judge::timed_out(entry, &node);
@@ -1154,8 +1408,8 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     let asked: Vec<((usize, String, u64), Option<Hash32>)> =
         futures_util::future::join_all((0..n).map(ask)).await.into_iter().flatten().collect();
     let answers: Vec<(usize, String, u64)> = asked.iter().map(|a| a.0.clone()).collect();
-    // A node whose sink stands still (the local monotonic clock) while another's advances stopped advancing, whatever it
-    // reports; alone, after a longer while
+    // A node whose sink stands still on the local monotonic clock while another node's advances has
+    // stopped advancing, whatever it reports. The limit is longer when the node is alone.
     let still = {
         let mut w = lock();
         w.progress.resize(n, None);
@@ -1172,7 +1426,7 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         let alone = asked.len() == 1;
         let mut out = vec![];
         for ((i, node, _), _) in &asked {
-            // another node of the list, as it answers now, whose sink was seen to change lately (audit round 4 R4-L-4)
+            // Another node of the list, as it answers now, whose sink was seen to change lately.
             let others_advance = asked.iter().any(|((j, other, _), _)| {
                 j != i && w.progress[*j].as_ref().is_some_and(|p| p.node == *other && p.moved && still_for(p) < FROZEN_AFTER)
             });
@@ -1186,7 +1440,8 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             if let Some(p) = w.progress[*i].as_mut().filter(|p| p.node == *node) {
                 let s = now.saturating_duration_since(p.since);
                 if p.reported {
-                    // still the sink it was found frozen at (audit round 4 R4-L-3): the finding stands, asserted again
+                    // This is still the sink it was found frozen at. The finding stands and is
+                    // asserted again.
                     out.push((*i, node.clone(), s.as_secs(), alone, true));
                 } else if limit.is_some_and(|l| s >= l) {
                     p.reported = true;
@@ -1196,7 +1451,7 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         }
         out
     };
-    // the nodes found frozen and still frozen: no fine answer of this check ends their finding
+    // The nodes found frozen and still frozen. No fine answer of this check ends their finding.
     let frozen: Vec<usize> = still.iter().map(|s| s.0).collect();
     for (i, node, secs, alone, again) in still {
         let why = if again {
@@ -1213,10 +1468,11 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     }
     let Some(&(top_i, _, top)) = answers.iter().max_by_key(|a| a.2).filter(|_| answers.len() > 1) else { return };
     let behind_of = |daa: u64| Some(top.saturating_sub(daa)).filter(|b| *b > LAG_DAA);
-    // A DAA is the node's own claim: a node that over-reports would put its honest partner behind. So a lag counts only once
-    // the node behind confirms it: the most advanced node's sink at the check must become known to it, and that far above its
-    // own DAA then (a sink it never learns was not real).
-    // the nodes that take a claim at this check
+    // A DAA is the node's own claim, and a node that over-reports would put its honest partner
+    // behind. So a lag counts only once the node behind confirms it. The most advanced node's sink
+    // at the check must become known to it, and sit that far above its own DAA. A sink it never
+    // learns was not real.
+    // The nodes that take a claim at this check.
     let wanting: Vec<usize> = {
         let mut w = lock();
         w.lag.resize(n, LagTrack::default());
@@ -1225,7 +1481,8 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             .iter()
             .filter(|(i, node, daa)| {
                 let t = &mut w.lag[*i];
-                // the entry stands for another node now: what was claimed about the last one says nothing about it
+                // The entry stands for another node now. What was claimed about the last one says
+                // nothing about it.
                 if t.node != *node {
                     *t = LagTrack { node: node.clone(), ..LagTrack::default() };
                 }
@@ -1236,8 +1493,8 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     };
     let lagging: Vec<usize> = answers.iter().filter(|(i, _, daa)| *i != top_i && behind_of(*daa).is_some()).map(|a| a.0).collect();
     let daa_of = |r: Result<Result<Option<u64>, RpcError>, tokio::time::error::Elapsed>| r.ok().and_then(Result::ok).flatten();
-    // while a node is behind: the most advanced node's sink (the claims'), and its DAA score as that node reports it and as
-    // the first node behind (which places it in its own DAG) does
+    // While a node is behind, the most advanced node's sink gives the claims. Its DAA score is read
+    // as that node reports it and as the first node behind does, which places it in its own DAG.
     let sink = match lagging.is_empty() {
         false => match tokio::time::timeout(WATCH_TIMEOUT, src(top_i).dag_info()).await {
             Ok(Ok(d)) => Some(d.sink),
@@ -1271,7 +1528,8 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
         for (k, sink) in claims {
             match tokio::time::timeout(WATCH_TIMEOUT, src(i).block_daa_score(sink)).await {
                 Ok(Ok(Some(daa))) => learned.push((i, k, daa)),
-                // not known yet (a later claim's sink is not either), or no answer: asked again at the next check
+                // Not known yet, and a later claim's sink is not either, or no answer. It is asked
+                // again at the next check.
                 _ => break,
             }
         }
@@ -1291,8 +1549,9 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
             let evidence = i != top_i && w.lag[i].evidence();
             verdicts.push((i, node, v, evidence));
         }
-        // the lead is not backed by the DAG: the most advanced node's own sink, a block the node behind knows too, is far below
-        // the virtual DAA score it reports, as both of them report that block
+        // The lead is not backed by the DAG when the most advanced node's own sink is far below the
+        // virtual DAA score it reports. That sink is a block the node behind knows too, and both
+        // report its DAA.
         let backed = |d: Option<u64>| d.is_some_and(|d| top <= d.saturating_add(LAG_DAA));
         let over = match (own_view, partner_view) {
             (Some(d), Some(_)) if !backed(own_view) && !backed(partner_view) => Some(d),
@@ -1332,13 +1591,15 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     }
     for (i, node, v, evidence) in verdicts {
         if frozen.contains(&i) {
-            // judged frozen above: a lag verdict (fine, refuted or unconfirmed) must not end or soften that
+            // Judged frozen above. A lag verdict, fine, refuted or unconfirmed, must not end or
+            // soften that.
             continue;
         }
         let entry = board.entry(i);
         match v {
             LagVerdict::Level => super::judge::lag(entry, &node, None, None),
-            // behind by the other node's claim only: not suspect until it has evidence of its own
+            // Behind by the other node's claim only. The node is not suspect until it has evidence
+            // of its own.
             LagVerdict::Unconfirmed(d) if evidence => super::judge::lag(entry, &node, Some(d), None),
             LagVerdict::Unconfirmed(_) => super::judge::unconfirmed(&node),
             LagVerdict::Refuted(d) => {
@@ -1360,8 +1621,10 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     }
 }
 
-/// Keep the first `n` chain blocks of a window (`wire_bytes` shrinks in proportion to the chain blocks and transactions
-/// kept: the size accounting of the prefetch).
+/// Keeps the first `n` chain blocks of a window.
+///
+/// `wire_bytes` shrinks in proportion to the chain blocks and transactions kept, for the size
+/// accounting of the prefetch.
 fn cut(raw: &mut RawVspcResponse, n: usize) {
     let total = raw.added_chain_block_hashes.len();
     if total > n {
@@ -1417,13 +1680,15 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     }
 
     async fn fetch_window(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
-        // the health watch runs while the cursor catches up too (it is due once per period, whichever window asks first)
+        // The health watch runs while the cursor catches up too. It is due once per period,
+        // whichever window asks first.
         self.health_watch();
         self.fetch_any(w).await
     }
 
     async fn fetch_window_primary(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
-        // on the verifier's connections: never behind the primary's own windows of the parallel fetch
+        // On connections of their own (the checker), so it never waits behind the authority's
+        // windows of the parallel fetch.
         self.primary_window(self.checker(), &w).await
     }
 
@@ -1431,11 +1696,14 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         self.board.drop_node(origin.node, why);
     }
 
-    /// A public chain authority (a resolver entry) that contradicts the store at the cursor `at` is given up for another
-    /// (`rpc::judge`): the follower asks the next one. Once a second authority on another host contradicts the store at the
-    /// same cursor (or [`STORE_CONTRADICTIONS_MAX`] authorities did), the two agree with each other against the store: the
-    /// cause is the store (a corrupted cursor, a bug), and it halts there (`gap`) instead of giving up public node after public
-    /// node. A node named in the configuration is not replaced: the store halts at once.
+    /// Handles a public chain authority that contradicts the store at the cursor `at`.
+    ///
+    /// A resolver entry's node is given up for another (`rpc::judge`), and the follower asks the
+    /// next one. A second authority on another host may contradict the store at the same cursor, or
+    /// [`STORE_CONTRADICTIONS_MAX`] contradictions may happen there. The nodes then agree with each
+    /// other against the store, so the cause is the store, such as a corrupted cursor or a bug. The
+    /// store halts there (`gap`) instead of giving up public node after public node. A node named
+    /// in the configuration is not replaced, and the store halts at once.
     fn authority_contradicted(&self, at: Hash32, why: &str) -> super::StoreContradiction {
         let a = self.board.authority();
         let entry = self.board.entry(a).to_string();
@@ -1467,26 +1735,42 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
         super::StoreContradiction::Replaced
     }
 
-    /// The chain authority's chain requests keep failing while the cursor `at` does not move (`why`; the follower decides
-    /// when, `indexer::follower`). A resolver entry gives its public node up (`rpc::judge`, `rpc::resolver::replace`: the
-    /// other node of the pair is the authority at once unless the judge suspects it, and the entry resolves a replacement on
-    /// another host). A named node raises an alarm (`judge::chain_failing`), and the first other node that can lead
-    /// ([`MultiNode::candidates`], [`MultiNode::can_lead`]) is made the chain authority: the roles swap, the old authority
-    /// is a secondary node, cut off from the pair until its alarm ends (its chain requests answer again for
-    /// `judge::ALARM_CLEAR_AFTER`, [`probe_demoted`]). It is not made the authority again then: only when the new one fails
-    /// the same way (no flapping). `true`: another node is the authority now.
+    /// Hands the chain authority over when its chain requests keep failing.
+    ///
+    /// The follower calls this when 2 chain requests in a row failed on the wire and the cursor
+    /// `at` has not moved for 3 minutes (`why` says what failed, `indexer::follower`). The old
+    /// authority gets a chain alarm (`judge::chain_failing`). What follows depends on the node.
+    ///
+    /// - A resolver entry gives its public node up (`rpc::resolver::replace`). The other node of
+    ///   the pair is the authority at once, unless the judge suspects it. The entry resolves a
+    ///   replacement on another host.
+    /// - Among named nodes, the first of [`MultiNode::candidates`] that passes
+    ///   [`MultiNode::can_lead`] becomes the authority, and the roles swap. A node that cannot lead
+    ///   is logged and skipped.
+    /// - A single node has nothing to promote. The alarm stays and the follower retries with its
+    ///   backoff.
+    ///
+    /// The new authority is settling, so its first answers from the cursor are checked
+    /// ([`MultiNode::settle`]). The old authority is a secondary node, cut off from the pair until
+    /// its alarm ends. The health watch probes it ([`probe_demoted`]), and the alarm ends when its
+    /// chain requests answered for `judge::ALARM_CLEAR_AFTER` without a break. It does not take the
+    /// role back then. It leads again only if the new authority fails the same way, so the role
+    /// does not flap.
+    ///
+    /// Returns `true` when another node is the authority now.
     async fn authority_failing(&self, at: Hash32, why: &str) -> bool {
         let a = self.board.authority();
         let entry = self.board.entry(a).to_string();
-        // a resolver entry being replaced has no node to give up: it is being replaced already
+        // A resolver entry being replaced has no node to give up. It is being replaced already.
         let Some(node) = self.board.node_of(a) else { return false };
         let why = format!("its chain requests keep failing ({why})");
         super::judge::chain_failing(&entry, &node, &why);
-        // the pair's authority: the resolver state moved the role to the other node, or resolves a replacement
+        // The pair's authority. The resolver state moved the role to the other node, or resolves a
+        // replacement.
         if entry == super::resolver::RESOLVER {
             return super::resolver::current(&entry).as_deref() != Some(node.as_str());
         }
-        // another resolver entry that took the role over earlier gave its node up: one of the others, or its replacement
+        // Whether this resolver entry gave its node up above. It uses another node now.
         let replaced = super::resolver::is_resolver(&entry) && super::resolver::current(&entry).as_deref() != Some(node.as_str());
         let candidates = self.candidates(a);
         if self.nodes.len() > 1 && candidates.is_empty() {
@@ -1498,7 +1782,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
                     self.board.authority.store(k, Ordering::Relaxed);
                     self.settling.store(true, Ordering::Relaxed);
                     self.stalls.store(0, Ordering::Relaxed);
-                    // the cached sink was the old authority's
+                    // The cached sink was the old authority's.
                     *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     self.board.with(k, |p| {
                         p.status.promoted += 1;
@@ -1521,7 +1805,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             }
         }
         if replaced {
-            // the entry's next node is unproven: its first answers from the cursor are checked
+            // The entry's next node is unproven, so its first answers from the cursor are checked.
             self.settling.store(true, Ordering::Relaxed);
         }
         replaced
@@ -1536,9 +1820,13 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     }
 }
 
-/// The demoted nodes (named nodes other than the authority with a chain alarm, `judge::chain_failing`) asked for the chain from
-/// the cursor `at` again, each within [`DEMOTED_PROBE_TIMEOUT`]: an answer is a fine one (the alarm ends after
-/// `judge::ALARM_CLEAR_AFTER` of them without a break, and the node is a secondary of the pair again), a failure keeps the alarm.
+/// Probes the demoted nodes with a chain request from the cursor `at`.
+///
+/// A demoted node is a named node other than the authority with a chain alarm
+/// (`judge::chain_failing`). Each is asked for the chain from `at` within
+/// [`DEMOTED_PROBE_TIMEOUT`]. An answer is a fine one. The alarm ends after
+/// `judge::ALARM_CLEAR_AFTER` of them without a break, and the node is a secondary of the pair
+/// again. A failure keeps the alarm.
 async fn probe_demoted<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board: &NodeBoard, at: Hash32) {
     let a = board.authority();
     for i in (0..nodes.len()).filter(|&i| i != a) {
@@ -1547,7 +1835,7 @@ async fn probe_demoted<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, boar
         if super::resolver::is_resolver(entry) || !super::judge::chain_alarm(entry) {
             continue;
         }
-        // node 0 on the verifier's connections, as in the health watch
+        // Node 0 on the verifier's connections, as in the health watch.
         let src: &N = if i == 0 { verifier } else { &nodes[i] };
         match tokio::time::timeout(DEMOTED_PROBE_TIMEOUT, src.chain_hashes(at)).await {
             Ok(Ok(_)) => super::judge::chain_ok(entry, &node),
@@ -1585,7 +1873,7 @@ impl<N: ChainSource> MultiNode<N> {
                 }
                 Err(Attempt::Window(e)) => {
                     if i == a && !matches!(e, RpcError::TooLarge { .. }) {
-                        // the primary is never skipped: counted only
+                        // The authority is never skipped. The error is only counted.
                         self.board.note_error(a, &e);
                     }
                     return Err(e);
@@ -1616,7 +1904,7 @@ mod tests {
             ("wss://a@b@node.example#f", "wss://node.example/..."),
             ("n0", "n0"),
             ("user:pw@host:1/x", "host:1/..."),
-            // a password with an unencoded '?', '#' or '/'
+            // A password with an unencoded '?', '#' or '/'.
             ("wss://user:pa?ss@node.example/x", "wss://node.example/..."),
             ("wss://user:pa#ss@node.example", "wss://node.example"),
             ("wss://user:p/ss@host", "wss://<redacted>/..."),
@@ -1626,8 +1914,8 @@ mod tests {
         }
     }
 
-    /// Node URLs with a password or an API key are configured for the connection, but the public health and metrics
-    /// routes and the logs show only the scheme, host and port.
+    /// A node URL can carry a password or an API key for the connection. The public health and
+    /// metrics routes and the logs show only the scheme, host and port.
     #[test]
     fn node_credentials_stay_out_of_health_and_metrics() {
         let secret = "wss://user:hunter2@node.example/wrpc/json?apikey=SECRETKEY";
@@ -1645,14 +1933,16 @@ mod tests {
         }
     }
 
-    /// A lag counts only once the node behind confirmed the lead itself: both claims (the streak's first check and its
-    /// `checks`-th) known to it later, each more than `LAG_DAA` above its own DAA then. A sink it never learns, or one not that
-    /// far ahead, refutes the lead and the streak begins again.
+    /// A lag counts only once the node behind confirmed the lead itself.
+    ///
+    /// Both claims, the streak's first check and its `checks`-th, must become known to it later,
+    /// each more than `LAG_DAA` above its own DAA then. A sink it never learns, or one that is not
+    /// that far ahead, refutes the lead and the streak begins again.
     #[test]
     fn a_lag_counts_only_once_the_node_behind_confirms_the_lead() {
         let claim = |own| Claim { sink: Hash32([5; 32]), own, age: 0, lead: None };
         let checks = 3;
-        // a real lag: a claim at the first check and at the third, both confirmed later
+        // A real lag has a claim at the first check and at the third, both confirmed later.
         let mut t = LagTrack::default();
         assert!(t.observe(Some(400), checks), "a claim at the streak's first check");
         t.claims.push(claim(100));
@@ -1667,7 +1957,8 @@ mod tests {
         t.claims[1].lead = Some(380);
         assert_eq!(t.verdict(Some(400), checks), LagVerdict::Confirmed(380), "the smallest confirmed lead");
         assert_eq!(t.streak, 0, "a finding begins the streak again");
-        // a sink the node behind never learns: refuted after LAG_CONFIRM_CHECKS checks, never a finding
+        // A sink the node behind never learns is refuted after LAG_CONFIRM_CHECKS checks and never
+        // a finding.
         let mut t = LagTrack::default();
         for k in 0..=LAG_CONFIRM_CHECKS {
             if t.observe(Some(5_000), checks) && t.claims.is_empty() {
@@ -1678,23 +1969,26 @@ mod tests {
             assert_eq!(v, want, "check {k}");
         }
         assert_eq!((t.streak, t.claims.len()), (0, 0));
-        // a sink it knows, but not that far ahead of it: refuted at once
+        // A sink it knows, but not that far ahead of it, is refuted at once.
         assert!(t.observe(Some(5_000), checks));
         t.claims.push(Claim { lead: Some(LAG_DAA), ..claim(100) });
         assert_eq!(t.verdict(Some(5_000), checks), LagVerdict::Refuted(5_000));
-        // level: nothing kept
+        // Level: nothing is kept.
         t.observe(Some(5_000), checks);
         t.claims.push(claim(100));
         assert!(!t.observe(None, checks));
         assert_eq!((t.streak, t.claims.len(), t.verdict(None, checks)), (0, 0, LagVerdict::Level));
-        // one check to a finding: one claim
+        // One check to a finding needs one claim.
         let mut t = LagTrack::default();
         assert!(t.observe(Some(400), 1));
         t.claims.push(Claim { lead: Some(400), ..claim(100) });
         assert_eq!(t.verdict(Some(400), 1), LagVerdict::Confirmed(400));
     }
 
-    /// A node of a fixed answer: the primary's chain blocks (`added`, no transactions) and the acceptance data it reports.
+    /// A node with a fixed answer.
+    ///
+    /// It reports the primary's chain blocks (`added`, no transactions) and the acceptance data
+    /// `ids`.
     struct Fixed {
         added: Vec<Hash32>,
         ids: Mutex<Result<ChainIds, String>>,
@@ -1762,8 +2056,10 @@ mod tests {
         VspcRequest::new(Hash32([0; 32]), Verbosity::High, None)
     }
 
-    /// Audit round 3 R3-L-2: a public chain authority whose answer contradicts the store is given up for another (the follower
-    /// asks that one instead of halting); a node named in the configuration is not.
+    /// A public chain authority whose answer contradicts the store is given up for another.
+    ///
+    /// The follower asks that one instead of halting. A node named in the configuration is not
+    /// given up.
     #[test]
     fn a_public_authority_that_contradicts_the_store_is_replaced() {
         let _g = super::super::resolver::tests::serial();
@@ -1781,8 +2077,9 @@ mod tests {
         assert_eq!(super::super::resolver::current("resolver"), Some(b.clone()), "the other node is the authority now");
         assert!(super::super::resolver::last_reason("resolver").unwrap().starts_with(&super::super::resolver::host(&a)));
         assert_eq!(super::super::resolver::authority_replaced(), before + 1, "counted (kob_indexer_authority_replaced_total)");
-        // audit round 4 R4-L-1: the new authority, on another host, contradicts the store at the same cursor too: the two agree
-        // with each other against the store, which halts (gap) instead of giving up public node after public node
+        // The new authority, on another host, contradicts the store at the same cursor too. The two
+        // agree with each other against the store, so the store halts (`gap`) instead of giving up
+        // public node after public node.
         match m.authority_contradicted(cursor, why) {
             StoreContradiction::Halt(Some(r)) => {
                 assert!(r.contains("a.example, b.example") && r.contains("the store is at fault"), "{r}")
@@ -1791,9 +2088,10 @@ mod tests {
         }
         assert_eq!(super::super::resolver::current("resolver"), Some(b.clone()), "not replaced: the store halts");
         assert_eq!(super::super::resolver::authority_replaced(), before + 1);
-        // a contradiction at another cursor is judged afresh (the store moved on)
+        // A contradiction at another cursor is judged afresh, because the store moved on.
         assert_eq!(m.authority_contradicted(other, why), StoreContradiction::Replaced);
-        // one host named again and again (the resolvers have no other): halted at the third contradiction at one cursor
+        // One host named again and again, as the resolvers have no other. The third contradiction
+        // at one cursor halts the store.
         let one = pair(Fixed::new(&[1], Ok(&[])), Fixed::new(&[], Ok(&[1])));
         *one.store_contradictions.lock().unwrap() = Some((cursor, vec![super::super::resolver::host(&b)], 1));
         super::super::resolver::tests::set_current("resolver", &b);
@@ -1810,10 +2108,13 @@ mod tests {
         );
     }
 
-    /// A public chain authority whose chain requests keep failing (the follower's finding) is given up like any other: the
-    /// other node of the pair is the authority at once, the entry resolves a replacement on another host, and it is counted.
+    /// A public chain authority whose chain requests keep failing is given up like any other.
+    ///
+    /// The other node of the pair is the authority at once. The entry resolves a replacement on
+    /// another host, and the replacement is counted.
     #[tokio::test]
-    // the guard only serialises the tests that share the process-wide resolver state (a current-thread runtime)
+    // The guard only serialises the tests that share the process-wide resolver state (a
+    // current-thread runtime).
     #[allow(clippy::await_holding_lock)]
     async fn a_public_authority_whose_chain_requests_keep_failing_is_replaced() {
         let _g = super::super::resolver::tests::serial();
@@ -1833,12 +2134,16 @@ mod tests {
         assert_eq!(m.board.authority(), 0, "the entries take other nodes; the authority's entry stays the first");
     }
 
-    /// The pair's disagreement rules on the primary's single steps: the blocks both report are kept; a contradiction cuts the
-    /// answer before it; one at the very next block applies nothing, and if it does not settle the cross-checking node and
-    /// then the primary's are given up for others (resolver entries); a cross-checking node that cannot answer leaves the
-    /// primary alone (no stall).
+    /// The pair's disagreement rules on the authority's single steps.
+    ///
+    /// - The blocks both nodes report are kept.
+    /// - A contradiction cuts the answer before it.
+    /// - A contradiction at the very next block applies nothing. If it does not settle, the
+    ///   cross-checking node is given up, and then the primary's node (resolver entries).
+    /// - A cross-checking node that cannot answer leaves the primary alone, with no stall.
     #[tokio::test]
-    // the guard only serialises the tests that share the process-wide resolver state (a current-thread runtime)
+    // The guard only serialises the tests that share the process-wide resolver state (a
+    // current-thread runtime).
     #[allow(clippy::await_holding_lock)]
     async fn the_pair_keeps_only_what_both_nodes_report_and_replaces_a_node_that_keeps_disagreeing() {
         let _g = super::super::resolver::tests::serial();
@@ -1849,25 +2154,27 @@ mod tests {
         });
         let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
 
-        // the other node is a block behind: nothing contradicted, the whole answer
+        // The other node is a block behind. Nothing is contradicted, so the whole answer applies.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2])));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 3);
         assert_eq!(m.board.snapshot()[1].disagreements, 0);
-        // another third block: the first two are kept
+        // Another third block, so the first two are kept.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2, 9])));
         let r = m.vspc_v2(req()).await.unwrap();
         assert_eq!(r.added_chain_block_hashes, vec![Hash32([1; 32]), Hash32([2; 32])]);
         assert_eq!(r.chain_block_accepted_transactions.len(), 2);
-        // the tips differing for a moment: counted apart, not a disagreement
+        // The tips differing for a moment are counted apart and are not a disagreement.
         assert_eq!((m.board.snapshot()[1].disagreements, m.board.snapshot()[1].tip_differs), (0, 1));
         assert_eq!(m.board.snapshot()[1].last_error, None);
-        // the cross-checking node does not answer: the primary goes on alone, the node backs off
+        // The cross-checking node does not answer. The primary goes on alone and the node backs
+        // off.
         let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Err("connection closed")));
         assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
         assert_eq!(m.board.snapshot()[1].state, "backoff");
 
-        // the very next block contradicted: nothing applied; the third time the cross-checking node is replaced, the sixth
-        // the primary's (the cross-checking node is the authority then)
+        // The very next block is contradicted, so nothing is applied. The third time the
+        // cross-checking node is replaced, and the sixth time the primary's. The cross-checking
+        // node is the authority then.
         let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Ok(&[7, 8])));
         for n in 1..=6u32 {
             let e = m.vspc_v2(req()).await.unwrap_err();
