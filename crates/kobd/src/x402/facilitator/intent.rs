@@ -47,7 +47,9 @@ use std::time::{Duration, Instant};
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kob_x402::chain::{ChainError, Outpoint, OutputStatus, SpentBy, SpentOutput, SubmitError, Tracked, Txid};
 use kob_x402::error::{Diag, Reason, Result, X402Error};
-use kob_x402::intent::{build_execution, build_expiry, pinned_merchant_output, BookView, IntentFacts, KeeperParams};
+use kob_x402::intent::{
+    build_execution, build_execution_outcome, build_expiry, pinned_merchant_output, BookView, Execution, IntentFacts, KeeperParams,
+};
 use kob_x402::safe_tx::{spk_from_hex, spk_to_hex};
 use kob_x402::verify::VerifyCtx;
 use kob_x402::wire::{hex, parse_hash32, FacilitatorRequest, Finality, OutpointJson, SettlementResponse, BINDING_INTENT};
@@ -173,6 +175,21 @@ pub(crate) fn pinned_merchant_output_in(
     (o.script_public_key == *merchant_spk && o.value >= floor && o.covenant_id == want).then_some(at)
 }
 
+/// [`build_execution`], logging why no candidate built when none did.
+fn logged_execution(
+    f: &IntentFacts,
+    book: &BookView,
+    exclude: &BTreeSet<Outpoint>,
+    lock_time: u64,
+    kp: &KeeperParams,
+) -> Result<Option<Execution>> {
+    let out = build_execution_outcome(f, book, exclude, lock_time, kp)?;
+    if let (None, Some(e)) = (&out.execution, &out.last_error) {
+        info!("x402 intent {}: no candidate execution builds ({} tried): {}", hex(&f.intent.transaction_id), out.tried, short(e));
+    }
+    Ok(out.execution)
+}
+
 fn intent_unsupported() -> X402Error {
     X402Error::new(Reason::UnsupportedScheme, Diag::RouteUnsupported, "intent-based swap-and-pay is not enabled on this facilitator")
 }
@@ -221,7 +238,7 @@ impl Facilitator {
                 None => return Ok(Some(ex)),
             }
         }
-        build_execution(f, book, exclude, lock_time, &rt.keeper)
+        logged_execution(f, book, exclude, lock_time, &rt.keeper)
     }
 
     /// The expiry at the rate of `urgency`, and the rate it pays.
@@ -382,7 +399,7 @@ impl Facilitator {
         }
         let book = (rt.book)().map_err(|e| unavailable(format!("the book is not available: {e}")))?;
         let lock_time = self.lock_time(rt).map_err(|e| unavailable(e.to_string()))?;
-        if build_execution(&facts, &book, &BTreeSet::new(), lock_time, &rt.keeper)?.is_none() {
+        if logged_execution(&facts, &book, &BTreeSet::new(), lock_time, &rt.keeper)?.is_none() {
             return Err(X402Error::state(
                 Diag::IntentNotExecutable,
                 "the book cannot execute this intent now (no orders fit its shape and limits); nothing was broadcast",

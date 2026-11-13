@@ -1185,7 +1185,7 @@ pub fn plan_executions(
 /// Builds and engine-validates the first candidate of [`plan_executions`] that funds itself.
 ///
 /// It raises the fee reserve of token intents until the fee is covered. `None` means the book
-/// cannot execute the intent now.
+/// cannot execute the intent now. [`build_execution_outcome`] also says why.
 pub fn build_execution(
     f: &IntentFacts,
     book: &BookView,
@@ -1193,6 +1193,32 @@ pub fn build_execution(
     lock_time: u64,
     kp: &KeeperParams,
 ) -> Result<Option<Execution>> {
+    Ok(build_execution_outcome(f, book, exclude, lock_time, kp)?.execution)
+}
+
+/// What [`build_execution_outcome`] found.
+#[derive(Clone, Debug)]
+pub struct BuildOutcome {
+    /// The first candidate that builds, or `None` when the book cannot execute the intent now.
+    pub execution: Option<Execution>,
+    /// The candidates tried.
+    pub tried: usize,
+    /// Why the last candidate tried did not build, when none did. `None` with no execution means
+    /// no candidate fits the intent at all.
+    pub last_error: Option<String>,
+}
+
+/// [`build_execution`], with what the candidates that failed reported.
+///
+/// The library does not log. A caller logs `tried` and `last_error` of an outcome without an
+/// execution where its operator reads them.
+pub fn build_execution_outcome(
+    f: &IntentFacts,
+    book: &BookView,
+    exclude: &BTreeSet<Outpoint>,
+    lock_time: u64,
+    kp: &KeeperParams,
+) -> Result<BuildOutcome> {
     let mut tried = 0usize;
     let mut last_err = None;
     for reserve in [5_000_000i64, 20_000_000, 60_000_000] {
@@ -1221,7 +1247,8 @@ pub fn build_execution(
                             "an execution pays another merchant script",
                         ));
                     }
-                    return Ok(Some(Execution { tx, entries, facts, orders, merchant_output: Outpoint::new(txid, mo), merchant_spk }));
+                    let execution = Execution { tx, entries, facts, orders, merchant_output: Outpoint::new(txid, mo), merchant_spk };
+                    return Ok(BuildOutcome { execution: Some(execution), tried, last_error: None });
                 }
                 Err(e) => last_err = Some(e),
             }
@@ -1230,10 +1257,7 @@ pub fn build_execution(
             break; // KasToToken funds itself from the intent (max_extra); a larger reserve changes nothing
         }
     }
-    if let Some(e) = last_err {
-        eprintln!("x402 intent: no candidate execution builds ({tried} tried): {e}");
-    }
-    Ok(None)
+    Ok(BuildOutcome { execution: None, tried, last_error: last_err.map(|e| e.to_string()) })
 }
 
 /// Builds the expiry transaction of a verified intent. It needs no signature.
