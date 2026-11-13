@@ -1,10 +1,12 @@
 // Node reconciliation of input facts.
 //
-// The maker's SIGHASH_ALL only commits to the KAS amount and script of the inputs the WALLET signs. Every covenant / token input (custody UTXO,
-// strays) is authorised by its script, so nothing but the chain itself ties its KAS value to the transaction. The indexer is not an authority
-// for those values: every input (and every snapshot UTXO before a cancel / amend is built) is re-read from the NODE, by address and outpoint,
-// and the app takes amount, script and covenant id from there. A UTXO the node does not know, or knows with another script / covenant id,
-// blocks the action.
+// The maker's SIGHASH_ALL only commits to the KAS amount and script of the inputs the wallet signs.
+// Every covenant or token input, such as a custody UTXO or a stray, is authorised by its script. So
+// nothing but the chain itself ties its KAS value to the transaction, and the indexer is not an
+// authority for those values. Every input, and every snapshot UTXO before a cancel or amend is
+// built, is re-read from the node by address and outpoint. The app takes amount, script and
+// covenant id from there. A UTXO the node does not know, or knows with another script or covenant
+// id, blocks the action.
 import type { NodeApi } from '../data/node';
 import type { OrderSnapshot } from './cancel';
 import { SnapshotError, ownTokenFacts } from './cancel';
@@ -12,23 +14,29 @@ import { custodiesOf } from './order-facts';
 import type { Hex, TokenProgram, TokenState, TokenUtxo, TxInputJson } from './types';
 import type { KobWasm } from './wasm';
 
+/** What the node holds on one outpoint. */
 export interface NodeInputFact {
   amount: bigint;
   scriptPublicKey: string;
   covenantId: Hex | null;
 }
-/** node-confirmed facts by outpoint (`txid:index`) */
+/** The node-confirmed facts by outpoint, keyed as `txid:index`. */
 export type NodeInputFacts = ReadonlyMap<string, NodeInputFact>;
 
+/** Returns the `txid:index` key of an outpoint. */
 export const outpointKey = (txid: string, index: number): string => `${txid}:${index}`;
 
+/** An outpoint together with the script it should hold, enough to find it on the node. */
 export interface OutpointRef {
   transactionId: Hex;
   index: number;
   scriptPublicKey: string;
 }
 
-/** Reads the given outpoints from the node (by the address of their script). Outpoints the node does not return are simply absent from the result. */
+/**
+ * Reads the given outpoints from the node by the address of their script.
+ * Outpoints the node does not return are absent from the result.
+ */
 export async function fetchNodeInputFacts(
   node: Pick<NodeApi, 'getUtxosByAddresses'>,
   refs: readonly OutpointRef[],
@@ -45,14 +53,18 @@ export async function fetchNodeInputFacts(
   return facts;
 }
 
+/** An input whose claimed facts differ from the node's. */
 export interface InputMismatch {
   index: number;
   reason: 'missing' | 'amount' | 'script' | 'covenant';
-  /** human-readable detail (claimed vs node) */
+  /** A readable detail comparing the claim with the node. */
   detail: string;
 }
 
-/** Compares the inputs of a transaction with node facts. Every input must be present and equal in amount, script and covenant id. */
+/**
+ * Compares the inputs of a transaction with node facts. Each must match in amount, script and
+ * covenant id.
+ */
 export function inputMismatches(inputs: readonly TxInputJson[], facts: NodeInputFacts): InputMismatch[] {
   const out: InputMismatch[] = [];
   inputs.forEach((inp, index) => {
@@ -65,7 +77,10 @@ export function inputMismatches(inputs: readonly TxInputJson[], facts: NodeInput
   return out;
 }
 
-/** Fetches the facts of every input of a transaction and returns them with the mismatches. Throws only when the node cannot be asked. */
+/**
+ * Fetches the facts of every input of a transaction and returns them with the mismatches. It throws
+ * only when the node cannot be asked.
+ */
 export async function confirmInputsOnNode(
   node: Pick<NodeApi, 'getUtxosByAddresses'>,
   inputs: readonly TxInputJson[],
@@ -75,7 +90,7 @@ export async function confirmInputsOnNode(
   return { facts, mismatches: inputMismatches(inputs, facts) };
 }
 
-// ------------------------------------------------------------------------------------------------ snapshots
+// --- Snapshots ---
 
 function tokenSpk(kob: KobWasm, tplHash: Hex, state: TokenState): string | null {
   const tpl = kob.templates().find((t) => t.hash === tplHash && t.tokenSlots);
@@ -88,10 +103,15 @@ function tokenSpk(kob: KobWasm, tplHash: Hex, state: TokenState): string | null 
 }
 
 /**
- * Re-reads the order UTXO, its custody UTXO(s) and its strays from the node and returns a snapshot whose amounts are the node's. Fails
- * (SnapshotError `node-mismatch`) when the order or a custody (a pair order: of A or of B, a sell-first entry's prefund too) is not on the node
- * with the script derived from its state (on its token's program) and the expected token covenant id; a stray the node does not hold in that
- * form is dropped (spent or invented: spending it would invalidate the transaction). A pair order's strays may be of either of its tokens.
+ * Re-reads the order UTXO, its custody UTXOs and its strays from the node and returns a snapshot
+ * with the node's amounts.
+ *
+ * It fails with SnapshotError `node-mismatch` when the order or a custody is not on the node with
+ * the script derived from its state and the expected token covenant id. A pair order has custodies
+ * of A and B, and a sell-first entry also has a prefund. A stray the node does not hold in that
+ * form is dropped, because it is spent or invented and spending it would invalidate the
+ * transaction. A pair order's strays may be of either of its tokens.
+ *
  * A snapshot whose amounts came from anywhere but the node must never reach a builder.
  */
 export async function confirmSnapshotOnNode(
@@ -105,9 +125,10 @@ export async function confirmSnapshotOnNode(
 }
 
 /**
- * Several snapshots confirmed with ONE node read (the outpoints of all of them in one `getUtxosByAddresses`). Each result is the node-confirmed
- * snapshot, or the `SnapshotError` (`node-mismatch`) of the one the node does not confirm: one bad order does not hide the others. Rejects only when
- * the node cannot be asked.
+ * Confirms several snapshots with one node read, using one `getUtxosByAddresses` for all outpoints.
+ * Each result is the node-confirmed snapshot, or the `SnapshotError` of the one the node does not
+ * confirm, so one bad order does not hide the others. It rejects only when the node cannot be
+ * asked.
  */
 export async function confirmSnapshotsOnNode(
   kob: KobWasm,
@@ -115,7 +136,7 @@ export async function confirmSnapshotsOnNode(
   snaps: readonly OrderSnapshot[],
   spkToAddress: (spk: string) => string,
 ): Promise<(OrderSnapshot | SnapshotError)[]> {
-  // a state the wasm cannot derive a script from is that snapshot's own failure (`bad-state`), not the batch's
+  // A state the wasm cannot derive a script from fails only its own snapshot with `bad-state`.
   const checks = snaps.map((s): SnapshotCheck | SnapshotError => {
     try {
       return snapshotCheck(kob, s);
@@ -135,25 +156,33 @@ export async function confirmSnapshotsOnNode(
   });
 }
 
-/** What `confirmSnapshotOnNode` reads from the node for one snapshot (`refs`) and how it judges the answer (`finish`: throws SnapshotError `node-mismatch`). */
+/** What `confirmSnapshotOnNode` reads for one snapshot and how it judges the answer. */
 export interface SnapshotCheck {
+  /** The outpoints to read from the node. */
   refs: OutpointRef[];
+  /**
+   * Judges the node's facts. It throws SnapshotError `node-mismatch` or returns the confirmed
+   * snapshot.
+   */
   finish(facts: ReadonlyMap<string, NodeInputFact>): OrderSnapshot;
 }
 
+/** Derives the outpoints a snapshot must have on the node and the check of the node's answer. */
 export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck {
   const st = snap.order.state;
   const own = ownTokenFacts(st);
   const tplOf = (token: Hex | null | undefined): Hex => own.find((t) => t.covenantId === token)?.tplHash ?? own[0]!.tplHash;
   const cs = custodiesOf(st);
-  // an order under a retired template (cancel only) sits at the script of that template
+  // An order under a retired template, which can only be cancelled, sits at that template's script.
   const orderSpk = snap.retired ? kob.retiredScriptPublicKey(snap.retired, st) : kob.scriptPublicKey(st);
-  // each custody on its own token's program (the first: custodies[0], the prefund: custodies[1])
+  // Each custody is on its own token's program. The first is custodies[0] and the prefund is
+  // custodies[1].
   const custodyToken = cs[0]?.token ?? own[0]!.covenantId;
   const prefundToken = cs[1]?.token ?? null;
   const custodySpk = snap.custody ? tokenSpk(kob, tplOf(custodyToken), snap.custody.state) : null;
   const prefundSpk = snap.prefund && prefundToken ? tokenSpk(kob, tplOf(prefundToken), snap.prefund.state) : null;
-  // the order's covenant id may own strays of any of its own tokens (a pair order: A and B): each checked against its token's program
+  // The order's covenant id may own strays of any of its own tokens, A and B for a pair order.
+  // Each is checked against its token's program.
   const strayToken = (s: TokenUtxo): { tpl: Hex; cov: Hex } => {
     const t = own.find((x) => x.covenantId === s.covenantId) ?? own[0]!;
     return { tpl: t.tplHash, cov: t.covenantId };
@@ -166,7 +195,8 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
     const spk = straySpks[i];
     if (spk) refs.push({ transactionId: s.transactionId, index: s.index, scriptPublicKey: spk });
   });
-  // foreign strays (other tokens owned by the order id): each checked against its OWN program (the indexer's proven one) and token covenant id
+  // Foreign strays are other tokens owned by the order id. Each is checked against its own program,
+  // the one the indexer proved, and its token covenant id.
   const programSpk = (program: TokenProgram, state: TokenState): string | null => {
     try {
       return kob.tokenScriptPublicKey(program, state);

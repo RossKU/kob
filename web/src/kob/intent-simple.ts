@@ -1,57 +1,79 @@
-// Intents of the plain order kinds (docs/spec/order-types.md): limit (GTC / GTD / day / timed activation), IOC, FOK, market, streaming,
-// close, TWAP, DCA, Dutch decay / rising bid. The UI builds these from form state; `planSimple` (orders/simple.ts) turns them into an
-// OrderPlan. All amounts are bigint: quantities in token BASE UNITS (any positive amount), prices and tips in SOMPI PER WHOLE TOKEN (the
-// state price: sompi per `scale` base units, see TokenMarket.scale; units.ts converts from the KAS-per-token text); wall-clock times are
-// UTC unix seconds, protocol times are DAA scores.
+// Intents of the plain order kinds (docs/spec/order-types.md). They are limit (GTC, GTD, day and
+// timed activation), IOC, FOK, market, streaming, close, TWAP, DCA, and Dutch decay or rising bid.
+// The UI builds them from form state, and `planSimple` (orders/simple.ts) turns them into an
+// OrderPlan.
+//
+// All amounts are bigint. Quantities are token base units, any positive amount. Prices and tips are
+// sompi per whole token, which is the state price in sompi per `scale` base units (see
+// TokenMarket.scale). units.ts converts from the KAS-per-token text. Wall-clock times are UTC unix
+// seconds, and protocol times are DAA scores.
 import type { Duration } from './daa';
 
-/** When a resting order ends. Default (omitted): GTC. */
+/** When a resting order ends. An omitted lifetime means GTC. */
 export type Lifetime =
-  /** good till cancelled: refundable after 90 days idle (renew before day 85) */
+  /** Good till cancelled. It is refundable after 90 days idle, so renew before day 85. */
   | { kind: 'gtc' }
-  /** good till date: refundable from `at` (UTC unix seconds, at most 90 days ahead) */
+  /** Good till date. It is refundable from `at`, in UTC unix seconds and at most 90 days ahead. */
   | { kind: 'gtd'; at: bigint }
-  /** day order: until the next 00:00 UTC */
+  /** A day order, which lasts until the next 00:00 UTC. */
   | { kind: 'day' };
 
-/** Timed activation: no fill before this moment. */
+/** Timed activation. No fill happens before this moment. */
 export type Activation = { unixSeconds: bigint } | { daa: bigint };
 
 /** What to do with a limit that already crosses the book at placement (matcher.md 10.5). */
 export type CrossingPolicy =
-  /** place it as an auction from the touch down/up to the limit, then resting at the limit (default) */
+  /**
+   * Place it as an auction from the touch to the limit, then resting at the limit. This is the
+   * default.
+   */
   | 'auction'
-  /** place it as a plain limit: it fills at its limit, a matcher keeps the difference (warning) */
+  /**
+   * Place it as a plain limit. It fills at its limit and a matcher keeps the difference, with a
+   * warning.
+   */
   | 'limit'
-  /** refuse */
+  /** Refuse it. */
   | 'reject';
 
 interface SimpleBase {
-  /** token base units */
+  /** Token base units. */
   amount: bigint;
-  /** optional priority tip, sompi per whole token (default 0): a sell receives limit - tip, a buy pays limit + tip */
+  /**
+   * Optional priority tip in sompi per whole token, 0 by default. A sell receives limit - tip and a
+   * buy pays limit + tip.
+   */
   tip?: bigint;
   /**
-   * the smallest fill (base units) unless a fill takes everything left (the order's `minFill`). Default: the amount worth 10 KAS at the
-   * limit (kob-wasm `defaultMinFill`) for resting orders, 1 for IOC / FOK / market / streaming / close.
+   * The smallest fill in base units, unless a fill takes everything left. It is the order's
+   * `minFill`. The default is the amount worth 10 KAS at the limit (kob-wasm `defaultMinFill`) for
+   * resting orders, and 1 for IOC, FOK, market, streaming and close.
    */
   minFill?: bigint;
 }
 
-/** Limit GTC / GTD / day, optionally with timed activation. sell -> KobAsk (tokens in custody), buy -> KobBid (KAS budget). */
+/**
+ * Limit GTC, GTD or day, optionally with timed activation. A sell is a KobAsk and a buy is a
+ * KobBid.
+ */
 export interface LimitIntent extends SimpleBase {
   type: 'limit';
   side: 'sell' | 'buy';
-  /** sompi per whole token */
+  /** Sompi per whole token. */
   price: bigint;
   lifetime?: Lifetime;
   activeFrom?: Activation;
   crossing?: CrossingPolicy;
-  /** buy only: fills the escrow budgets a delivery carrier for (default 3) */
+  /**
+   * For a buy only, the number of fills the escrow budgets a delivery carrier for. Defaults to 3.
+   */
   maxFills?: bigint;
 }
 
-/** IOC / FAK (tif 1): fills what crosses now, the rest is returned; default life 300 DAA (max 600). */
+/**
+ * IOC or FAK (tif 1). It fills what crosses now and returns the rest. The default life is 300 DAA,
+ * at most 600.
+ */
 export interface IocIntent extends SimpleBase {
   type: 'ioc';
   side: 'sell' | 'buy';
@@ -60,7 +82,10 @@ export interface IocIntent extends SimpleBase {
   activeFrom?: Activation;
 }
 
-/** FOK (tif 2): all or nothing in one transaction; refused when the visible book cannot fill it (matcher.md 10.4). */
+/**
+ * FOK (tif 2). It is all or nothing in one transaction, and refused when the visible book cannot
+ * fill it (matcher.md 10.4).
+ */
 export interface FokIntent extends SimpleBase {
   type: 'fok';
   side: 'sell' | 'buy';
@@ -70,42 +95,52 @@ export interface FokIntent extends SimpleBase {
 }
 
 interface AuctionOptions {
-  /** slippage bound in basis points from the reference price (default 300 = 3%) */
+  /** The slippage bound in basis points from the reference price. Defaults to 300 (3%). */
   slippageBps?: bigint;
-  /** auction length to reach the bound (default 200 DAA = 20 s) */
+  /** The auction length to reach the bound. Defaults to 200 DAA (20 s). */
   auction?: Duration;
-  /** DAA between placement and the auction start (default 30) */
+  /** The DAA between placement and the auction start. Defaults to 30. */
   activation?: bigint;
-  /** life after activation (default 300 DAA; at most 600) */
+  /** The life after activation. Defaults to 300 DAA, at most 600. */
   life?: Duration;
-  /** FOK instead of IOC: all or nothing */
+  /** Makes it FOK instead of IOC, so it is all or nothing. */
   allOrNothing?: boolean;
 }
 
 /**
- * Market: an IOC auction from the touch (best opposite price) to the slippage bound (matcher.md 10.2). Needs a non-empty opposite book.
- * `maxFills` > 1 (not with `allOrNothing`): the same auction as a short-lived RESTING order (tif 0) that keeps trading within the bound across up
- * to that many transactions (one transaction takes at most the token's slots of counterparties, 3 asks on KOB's standard program); what is not
- * filled when it expires shortly after the auction is refunded (orders/simple.ts `planAuction`).
+ * Market, an IOC auction from the touch to the slippage bound (matcher.md 10.2).
+ * The touch is the best opposite price, so the opposite book must not be empty.
+ *
+ * With `maxFills` above 1, and not with `allOrNothing`, the same auction is a short-lived resting
+ * order (tif 0). It keeps trading within the bound across up to that many transactions. One
+ * transaction takes at most the token's slots of counterparties, which is 3 asks on KOB's standard
+ * program. What is not filled when it expires shortly after the auction is refunded
+ * (orders/simple.ts `planAuction`).
  */
 export interface MarketIntent extends SimpleBase, AuctionOptions {
   type: 'market';
   side: 'sell' | 'buy';
-  /** fills (transactions) the order may take; default 1 = one IOC transaction. A buy budgets one delivery carrier per fill. */
+  /**
+   * The fills, meaning transactions, the order may take. The default 1 is one IOC transaction. A
+   * buy budgets one delivery carrier per fill.
+   */
   maxFills?: bigint;
 }
 
-/** Streaming / quote-and-execute (10.3): as market, but from the price the user saw, with their tolerance. */
+/**
+ * Streaming or quote-and-execute (matcher.md 10.3). It is a market order from the price the user
+ * saw, within their tolerance.
+ */
 export interface StreamingIntent extends SimpleBase, AuctionOptions {
   type: 'streaming';
   side: 'sell' | 'buy';
-  /** the displayed price the user accepted, sompi per whole token */
+  /** The displayed price the user accepted, in sompi per whole token. */
   displayedPrice: bigint;
-  /** tolerance in basis points (required: it is what the user agreed to) */
+  /** The tolerance in basis points. It is required, because it is what the user agreed to. */
   toleranceBps: bigint;
 }
 
-/** Close: a market sell of the held tokens. `amount` omitted = the whole balance. */
+/** Close, a market sell of the held tokens. An omitted `amount` means the whole balance. */
 export interface CloseIntent extends AuctionOptions {
   type: 'close';
   side?: 'sell';
@@ -114,55 +149,65 @@ export interface CloseIntent extends AuctionOptions {
 }
 
 interface ScheduleBase extends SimpleBase {
-  /** base units per slice (the on-chain `maxFill`) */
+  /** Base units per slice, which is the on-chain `maxFill`. */
   sliceAmount: bigint;
-  /** minimum time between fills (the on-chain `interval`) */
+  /** The minimum time between fills, which is the on-chain `interval`. */
   interval: Duration;
-  /** price of every slice (start price when `priceEnd` is set), sompi per whole token */
+  /** The price of every slice in sompi per whole token. With `priceEnd` it is the start price. */
   price: bigint;
-  /** optional: each slice is its own auction from `price` to `priceEnd` (sell: lower, buy: higher) */
+  /**
+   * Optional. Each slice is its own auction from `price` to `priceEnd`, lower for a sell and higher
+   * for a buy.
+   */
   priceEnd?: bigint;
-  /** length of each slice's auction (default 200 DAA), only with `priceEnd` */
+  /** The length of each slice's auction, 200 DAA by default. Only used with `priceEnd`. */
   sliceAuction?: Duration;
   lifetime?: Lifetime;
   activeFrom?: Activation;
 }
 
-/** TWAP (sell): at most `sliceAmount` per `interval`. */
+/** TWAP (sell), at most `sliceAmount` per `interval`. */
 export interface TwapIntent extends ScheduleBase {
   type: 'twap';
   side?: 'sell';
 }
 
-/** DCA (buy): as TWAP on the bid side; the escrow budgets one delivery carrier per slice unless `maxFills` says more. */
+/**
+ * DCA (buy), TWAP on the bid side. The escrow budgets one delivery carrier per slice unless
+ * `maxFills` says more.
+ */
 export interface DcaIntent extends ScheduleBase {
   type: 'dca';
   side?: 'buy';
   maxFills?: bigint;
 }
 
-/** Dutch / decay (sell) and rising bid (buy): the price moves step by step from `price` to `priceEnd` over `duration`, then rests there. */
+/**
+ * Dutch decay (sell) and rising bid (buy). The price moves step by step from `price` to `priceEnd`
+ * over `duration`, then rests there.
+ */
 export interface DutchIntent extends SimpleBase {
   type: 'dutch';
   side: 'sell' | 'buy';
-  /** start price, sompi per whole token */
+  /** The start price in sompi per whole token. */
   price: bigint;
-  /** end price: sell = lower than `price` (floor), buy = higher (cap) */
+  /** The end price. For a sell it is lower than `price`, a floor. For a buy it is higher, a cap. */
   priceEnd: bigint;
-  /** time to move from `price` to `priceEnd` */
+  /** The time to move from `price` to `priceEnd`. */
   duration: Duration;
-  /** DAA per price step (default 1) */
+  /** DAA per price step. Defaults to 1. */
   stepDaa?: bigint;
   lifetime?: Lifetime;
-  /** start of the auction (default: placement + 30 DAA) */
+  /** The start of the auction. Defaults to placement plus 30 DAA. */
   activeFrom?: Activation;
   maxFills?: bigint;
 }
 
+/** Every plain intent. */
 export type SimpleIntent = LimitIntent | IocIntent | FokIntent | MarketIntent | StreamingIntent | CloseIntent | TwapIntent | DcaIntent | DutchIntent;
 
 /** Every `type` planSimple handles. */
 export const SIMPLE_TYPES: readonly SimpleIntent['type'][] = ['limit', 'ioc', 'fok', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch'];
 
-/** Loose base shape (kept from the stub): what every simple intent has in common. */
+/** The loose base shape that every simple intent has in common. */
 export interface SimpleIntentBase { type: string; side?: 'sell' | 'buy'; amount?: bigint }

@@ -1,116 +1,165 @@
-// Intents of the conditional and if-done order types (docs/spec/order-types.md, matcher.md sections 4, 6, 6.1 and 10.6-10.9, 10.13):
-// stop-market, stop-limit, trailing stop, take-profit, OCO, IFD, IFO / bracket (incl. stop entries) and repeat IFD / IFO.
+// Intents of the conditional and if-done order types (docs/spec/order-types.md, and matcher.md
+// sections 4, 6, 6.1, 10.6 to 10.9 and 10.13). They are stop-market, stop-limit, trailing stop,
+// take-profit, OCO, IFD, IFO or bracket with stop entries, and repeat IFD and IFO.
 //
-// Conventions (same as the rest of the planning layer, see plan-types.ts):
-//   * prices are SOMPI PER WHOLE TOKEN (the state price: per `scale` base units) and must lie on the token's tick; `limit`-style prices are
-//     LEG prices (what the order trades at), the all-in value (tip included) is derived and disclosed;
-//   * quantities are token BASE UNITS (`amount`), all amounts / prices / DAA spans are `bigint`; `slipBps` is a small integer in basis points;
-//   * `side` is the side of the order that is PLACED: for `ifd` / `ifo` / `repeat*` it is the ENTRY side ('buy' = buy first and sell
-//     the exit later, 'sell' = sell first and buy back later). Every field named `exit` describes the opposite-side exit.
+// The conventions are those of the rest of the planning layer, see plan-types.ts.
+// - Prices are sompi per whole token, which is the state price per `scale` base units. They must
+//   lie on the token's tick. A `limit` price is a leg price, what the order trades at. The all-in
+//   value with the tip is derived and disclosed.
+// - Quantities are token base units in `amount`. All amounts, prices and DAA spans are `bigint`.
+//   `slipBps` is a small integer in basis points.
+// - `side` is the side of the order that is placed. For `ifd`, `ifo` and `repeat*` it is the entry
+//   side. 'buy' buys first and sells the exit later, and 'sell' sells first and buys back later.
+//   Every field named `exit` describes the opposite-side exit.
 //
-// Everything optional has a documented wallet default (matcher.md section 10). Unknown fields are ignored.
+// Everything optional has a documented wallet default (matcher.md section 10). Unknown fields are
+// ignored.
 
 import type { Activation } from './intent-simple';
 
-/** How long a placed order lives. Default `gtc`: refundable after 90 days without activity (no fixed date). */
+/** How long a placed order lives. The default is `gtc`, with no fixed date. */
 export type CondExpiry =
-  /** good till cancelled: refundable by anyone after 90 days idle (matcher.md 5) */
+  /** Good till cancelled. Anyone can refund it after 90 days idle (matcher.md 5). */
   | { kind: 'gtc' }
-  /** good till date: refundable from this UTC time (converted to DAA with the measured rate, section 10.10) */
+  /**
+   * Good till date. It is refundable from this UTC time, converted to DAA with the measured rate.
+   */
   | { kind: 'gtdUnix'; atUnixSeconds: bigint }
-  /** good till DAA score */
+  /** Good till DAA score. */
   | { kind: 'gtdDaa'; daa: bigint }
-  /** until the next 00:00 UTC (entries and plain conditionals only; an exit is created later, a day order cannot be committed) */
+  /**
+   * Until the next 00:00 UTC. Only entries and plain conditionals, since an exit is created later.
+   */
   | { kind: 'day' };
 
 /** Settings shared by every conditional intent. */
 export interface CondCommon {
   side: 'sell' | 'buy';
-  /** base units; for `ifd` / `ifo` / `repeat*` the amount of ONE cycle (N) */
+  /** Base units. For `ifd`, `ifo` and `repeat*` it is the amount of one cycle. */
   amount: bigint;
-  /** priority tip in sompi per whole token (default 0). A limit is all-in: a sell receives `price - tip`, a buy pays `price + tip`. */
+  /**
+   * Priority tip in sompi per whole token, 0 by default. A limit is all-in, so a sell receives
+   * `price - tip` and a buy pays `price + tip`.
+   */
   tip?: bigint;
   /**
-   * the smallest fill (base units) unless a fill takes everything left (the state's `minFill`). Default: the amount worth 10 KAS at the leg
-   * price (kob-wasm `defaultMinFill`); if-done entries: ceil(amount / 4) (kob-wasm `defaultMinFillIfd`).
+   * The smallest fill in base units, unless a fill takes everything left. It is the state's
+   * `minFill`. The default is the amount worth 10 KAS at the leg price (kob-wasm `defaultMinFill`).
+   * For if-done entries it is ceil(amount / 4) (kob-wasm `defaultMinFillIfd`).
    */
   minFill?: bigint;
-  /** default: gtc */
+  /** Defaults to gtc. */
   expiry?: CondExpiry;
   /**
-   * timed activation (same type and rules as the plain kinds): the covenant refuses every fill / arm before `tx.daa >= activeFrom`.
-   * Default: active at once. For `ifd` / `ifo` / `repeat*` it times the ENTRY only; the exits it creates stay immediately active.
+   * Timed activation, with the same type and rules as the plain kinds.
+   * The covenant refuses every fill and arm before `tx.daa >= activeFrom`. The default is active at
+   * once. For `ifd`, `ifo` and `repeat*` it times the entry only, and the exits stay active at
+   * once.
    */
   activeFrom?: Activation;
-  /** KAS per covenant UTXO (order, custody, delivery, exit). Default: `env.carrier`, else 1 KAS (`DEFAULT_CARRIER`). */
+  /**
+   * KAS per covenant UTXO (order, custody, delivery, exit). Defaults to `env.carrier`, else 1 KAS
+   * (`DEFAULT_CARRIER`).
+   */
   carrier?: bigint;
-  /** buy-side conditionals (stop / take-profit / OCO / trailing buy): separate fills to pre-fund a delivery carrier for (default 2, at most the fills the minimum fill allows) */
+  /**
+   * Separate fills to pre-fund a delivery carrier for, on buy-side conditionals.
+   * Those are stop, take-profit, OCO and trailing buy. The default is 2, at most the number of
+   * fills the minimum fill allows.
+   */
   maxFills?: bigint;
 }
 
 /** Trailing parameters of a stop leg (matcher.md 4.4, 10.7). */
 export interface TrailSpec {
-  /** the stop moves by every whole `step` the market justifies (sompi per whole token, on the tick) */
+  /**
+   * The stop moves by every whole `step` the market justifies, in sompi per whole token on the
+   * tick.
+   */
   step: bigint;
-  /** distance between the market and the stop that the trail keeps (sompi per whole token, >= 0) */
+  /**
+   * The distance the trail keeps between the market and the stop, in sompi per whole token, at
+   * least 0.
+   */
   gap: bigint;
-  /** at most one update per `wait` DAA (default 6000 = 10 minutes; at least 600 = 60 s) */
+  /**
+   * At most one update per `wait` DAA. The default is 6000 (10 minutes) and the minimum is 600 (60
+   * s).
+   */
   wait?: bigint;
-  /** updates to pre-fund from the order's carrier / escrow (`keeperTip` each; default 20) */
+  /** Updates to pre-fund from the order's carrier or escrow, `keeperTip` each. Defaults to 20. */
   expectedUpdates?: number;
 }
 
-/** Settings of a stop leg (the protective / trigger leg of stop, OCO, trailing and exits). */
+/** Settings of a stop leg, the protective or trigger leg of stop, OCO, trailing and exits. */
 export interface StopSpec {
-  /** trigger price (sompi per whole token): a sell stop arms on a fill of a resting ask quoting at or below it, a buy stop on a resting bid at or above it */
+  /**
+   * The trigger price in sompi per whole token.
+   * A sell stop arms on a fill of a resting ask quoting at or below it. A buy stop arms on a
+   * resting bid at or above it.
+   */
   stop: bigint;
-  /** stop-limit: the worst leg price the user accepts (sell: <= stop, buy: >= stop); converted to the largest `slipBps` within it (10.6) */
+  /**
+   * For a stop-limit, the worst leg price the user accepts, at most `stop` for a sell and at least
+   * `stop` for a buy. It is converted to the largest `slipBps` within it (matcher.md 10.6).
+   */
   limit?: bigint;
-  /** stop-market band in basis points (default 300 = 3%); ignored when `limit` is set */
+  /** The stop-market band in basis points, 300 (3%) by default. Ignored when `limit` is set. */
   slipBps?: number;
-  /** auction length in DAA (default 300 = 30 s) */
+  /** Auction length in DAA, 300 (30 s) by default. */
   bandDaa?: bigint;
-  /** fee the keeper may take to arm / trail (default: the token program's tip, 0.019 KAS for the reference programs) */
+  /**
+   * The fee the keeper may take to arm or trail. Defaults to the token program's tip, 0.019 KAS for
+   * the reference programs.
+   */
   keeperTip?: bigint;
   /**
-   * trigger threshold (touch): the smallest fill, in base units of a plain order of the same scale, of a resting order at or beyond the stop
-   * that arms it (the state's `minTouch`). Default: the larger of the order's minimum fill and a quarter of its amount (kob-wasm `defaultMinTouch`); the
-   * ticket offers min fill / 25% / 50% / 100% of the amount
+   * The trigger threshold, called the touch.
+   * It is the smallest fill of a resting order at or beyond the stop that arms it, in base units
+   * of a plain order of the same scale. It is the state's `minTouch`. The default is the larger of
+   * the order's minimum fill and a quarter of its amount (kob-wasm `defaultMinTouch`). The ticket
+   * offers the minimum fill, 25%, 50% and 100% of the amount.
    */
   minTouch?: bigint;
-  /** trigger rest time R in DAA: how long that resting order must have been exposed at its quote before the fill (default 50 = 5 s) */
+  /**
+   * The trigger rest time R in DAA: how long that resting order must have been exposed at its quote
+   * before the fill. Defaults to 50 (5 s).
+   */
   minRestDaa?: bigint;
-  /** make the stop trail (trailing stop) */
+  /** Makes the stop trail, which gives a trailing stop. */
   trail?: TrailSpec;
 }
 
-/** Stop-market: a stop leg with the default 3% band. */
+/** Stop-market, a stop leg with the default 3% band. */
 export interface StopMarketIntent extends CondCommon, Omit<StopSpec, 'limit' | 'trail'> {
   type: 'stopMarket';
 }
 
-/** Stop-limit: a stop leg whose band ends at `limit`. */
+/** Stop-limit, a stop leg whose band ends at `limit`. */
 export interface StopLimitIntent extends CondCommon, Omit<StopSpec, 'limit' | 'trail' | 'slipBps'> {
   type: 'stopLimit';
-  /** required: sell `limit <= stop`, buy `limit >= stop` */
+  /** Required. A sell needs `limit <= stop` and a buy needs `limit >= stop`. */
   limit: bigint;
 }
 
-/** Trailing stop; `takeProfit` optionally adds the limit leg (a trailing OCO). */
+/** Trailing stop. `takeProfit` optionally adds the limit leg, which makes a trailing OCO. */
 export interface TrailingStopIntent extends CondCommon, Omit<StopSpec, 'limit' | 'trail'> {
   type: 'trailingStop';
-  /** initial stop; it moves toward the market only */
+  /** The initial stop. It moves toward the market only. */
   trail: TrailSpec;
   takeProfit?: bigint;
 }
 
-/** Take-profit: a conditional limit leg (composes with OCO; fills at `price` or better). */
+/** Take-profit, a conditional limit leg that fills at `price` or better. It composes with OCO. */
 export interface TakeProfitIntent extends CondCommon {
   type: 'takeProfit';
   price: bigint;
 }
 
-/** OCO: ONE covenant with both legs; a fill of either keeps the other for the rest (partial fills keep both legs). */
+/**
+ * OCO, one covenant with both legs. A fill of either keeps the other for the rest, and a partial
+ * fill keeps both.
+ */
 export interface OcoIntent extends CondCommon, Omit<StopSpec, 'trail'> {
   type: 'oco';
   takeProfit: bigint;
@@ -118,62 +167,83 @@ export interface OcoIntent extends CondCommon, Omit<StopSpec, 'trail'> {
 
 /** The entry of an if-done order. */
 export interface EntrySpec {
-  /** limit price (sompi per whole token): the most a buy entry pays / the least a sell entry receives (before the tip) */
+  /**
+   * The limit price in sompi per whole token, before the tip. A buy entry pays at most it and a
+   * sell entry receives at least it.
+   */
   price: bigint;
-  /** stop entry: the trigger. buy: `stop <= price`, sell: `stop >= price`; the fill runs as an auction from the stop to `price` */
+  /**
+   * The trigger of a stop entry. A buy needs `stop <= price` and a sell needs `stop >= price`.
+   * The fill runs as an auction from the stop to `price`.
+   */
   stop?: bigint;
-  /** stop-entry auction length in DAA (default 300) */
+  /** Auction length of a stop entry in DAA. Defaults to 300. */
   bandDaa?: bigint;
   keeperTip?: bigint;
-  /** trigger threshold of a stop entry (base units; default: the entry's minimum fill) */
+  /** The trigger threshold of a stop entry in base units. Defaults to the entry's minimum fill. */
   minTouch?: bigint;
   minRestDaa?: bigint;
 }
 
-/** The exit(s) created by every entry fill. `ifd` needs exactly one of `takeProfit` / `stop`; `ifo` needs both. */
+/**
+ * The exits created by every entry fill. `ifd` needs exactly one of `takeProfit` and `stop`, and
+ * `ifo` needs both.
+ */
 export interface ExitSpec {
   takeProfit?: bigint;
   stop?: bigint;
-  /** stop-limit of the exit's stop leg */
+  /** The stop-limit of the exit's stop leg. */
   stopLimit?: bigint;
   slipBps?: number;
   bandDaa?: bigint;
   keeperTip?: bigint;
-  /** trigger threshold of the exit's stop (base units; default: the exit's minimum fill) */
+  /**
+   * The trigger threshold of the exit's stop in base units. Defaults to the exit's minimum fill.
+   */
   minTouch?: bigint;
   minRestDaa?: bigint;
   trail?: TrailSpec;
-  /** priority tip of the exit in sompi per whole token (default 0; a repeat adds the merge cost) */
+  /**
+   * The priority tip of the exit in sompi per whole token. Defaults to 0, and a repeat adds the
+   * merge cost.
+   */
   tip?: bigint;
-  /** the exit's minimum fill (base units; default: the amount worth 10 KAS at the exit's leg price, at most the cycle amount) */
+  /**
+   * The exit's minimum fill in base units. Defaults to the amount worth 10 KAS at the exit's leg
+   * price, at most the cycle amount.
+   */
   minFill?: bigint;
-  /** default gtc (90 days idle from each exit's creation); no `day` */
+  /** Defaults to gtc, which is 90 days idle from each exit's creation. There is no `day`. */
   expiry?: Exclude<CondExpiry, { kind: 'day' }>;
 }
 
 /** Repeat settings (matcher.md 6.1 and 10.13). */
 export interface RepeatSpec {
-  /** K: how many times each base unit re-arms. Omitted = unlimited within the 90-day bound. */
+  /** How many times each base unit re-arms. Omitted means unlimited within the 90-day bound. */
   count?: bigint;
 }
 
 interface IfdBase extends CondCommon {
-  /** the entry */
+  /** The entry. */
   entry: EntrySpec;
   exit: ExitSpec;
-  /** sell-first: KAS pre-funded per whole token beyond the entry proceeds for the exit's worst buy-back (default: the smallest sufficient amount) */
+  /**
+   * For sell-first, the KAS pre-funded per whole token beyond the entry proceeds for the exit's
+   * worst buy-back. The default is the smallest sufficient amount.
+   */
   prefund?: bigint;
 }
 
-/** IFD (if-done): entry -> one exit leg. */
+/** IFD (if-done), an entry followed by one exit leg. */
 export interface IfdIntent extends IfdBase { type: 'ifd' }
-/** IFO / bracket: entry -> exit = OCO (take-profit + stop). */
+/** IFO or bracket, an entry followed by an OCO exit of take-profit and stop. */
 export interface IfoIntent extends IfdBase { type: 'ifo' }
-/** Repeat IFD: the entry re-arms after every take-profit. */
+/** Repeat IFD. The entry re-arms after every take-profit. */
 export interface RepeatIfdIntent extends IfdBase { type: 'repeatIfd'; repeat?: RepeatSpec }
-/** Repeat IFO: as repeat IFD with an OCO exit (a stop-loss ends the repeat for that amount). */
+/** Repeat IFO, like repeat IFD with an OCO exit. A stop-loss ends the repeat for that amount. */
 export interface RepeatIfoIntent extends IfdBase { type: 'repeatIfo'; repeat?: RepeatSpec }
 
+/** Every conditional or if-done intent. */
 export type CondIntent =
   | StopMarketIntent
   | StopLimitIntent
@@ -185,11 +255,14 @@ export type CondIntent =
   | RepeatIfdIntent
   | RepeatIfoIntent;
 
-/** every `type` string handled by orders/cond.ts (plan.ts dispatches on this) */
+/** Every `type` string handled by orders/cond.ts. plan.ts dispatches on it. */
 export const COND_TYPES: readonly string[] = [
   'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco', 'ifd', 'ifo', 'repeatIfd', 'repeatIfo',
 ];
 
+/** The intents that have an entry and an exit. */
 export type IfdLikeIntent = IfdIntent | IfoIntent | RepeatIfdIntent | RepeatIfoIntent;
+/** True for an intent with an entry and an exit. */
 export const isIfdLike = (i: CondIntent): i is IfdLikeIntent => i.type === 'ifd' || i.type === 'ifo' || i.type === 'repeatIfd' || i.type === 'repeatIfo';
+/** True for a repeat intent. */
 export const isRepeat = (i: CondIntent): i is RepeatIfdIntent | RepeatIfoIntent => i.type === 'repeatIfd' || i.type === 'repeatIfo';

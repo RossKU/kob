@@ -1,26 +1,37 @@
-// Coin selection for placement transactions: KAS funding inputs and token inputs. Deterministic (ties broken by outpoint) and pure.
+// Coin selection for placement transactions, for KAS funding inputs and token inputs.
+// It is pure and deterministic, and ties break by outpoint.
 import { KRON_MAX_OUTPUT_AMOUNT, familyOfProgram, isKeyOwned } from './token-state';
 import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
 
-/** Default network-fee reserve added to the KAS a placement needs (0.05 KAS; the planner re-selects if the built fee turns out higher). */
+/**
+ * The default network-fee reserve added to the KAS a placement needs, 0.05 KAS.
+ * The planner selects again when the built fee turns out higher.
+ */
 export const DEFAULT_FEE_RESERVE = 5_000_000n;
-/** Most KAS inputs one placement uses: beyond it the transaction mass approaches the standard limit, the wallet must consolidate first. */
+/**
+ * The most KAS inputs one placement uses. Beyond it the mass nears the standard limit, so the
+ * wallet must consolidate first.
+ */
 export const MAX_FUNDING_INPUTS = 50;
 
 /**
- * Most token inputs (of one token) the spare-slot fill of `selectTokens` takes a placement to: KOB's standard program's slots (KCC20Ref 3 / 3).
- * A larger program's slots are not filled up: measured on the 8 / 8 prototype, a sell placement with 8 token inputs weighs 105,546 grams
- * (max(compute, normalized transient)), above the 100,000 standard mass KOB's own tools keep (kob-protocol issue.rs MAX_STANDARD_MASS; matcher.md
- * §3: rusty-kaspa v2.1.0 itself has no standard-mass cap below the block limits), and every extra input only adds fee; at 3 inputs it stays far
- * below (funding.test.ts measures it, and a pair placement taking 3 of each token). The covering set itself may still use every slot (unchanged).
+ * The most token inputs of one token that the spare-slot fill of `selectTokens` takes a placement
+ * to. It equals the slots of KOB's standard program, KCC20Ref 3 by 3. The spare slots of a larger
+ * program are not filled, because a sell placement with 8 token inputs exceeds the 100,000 standard
+ * mass that KOB's tools keep (kob-protocol issue.rs `MAX_STANDARD_MASS`), and every extra input
+ * only adds fee. At 3 inputs the mass stays far below it, as funding.test.ts measures. The covering
+ * set itself may still use every slot.
  */
 export const MAX_SPARE_TOKEN_INPUTS = 3;
 
+/** Why a selection failed. */
 export type InsufficientKind = 'kas' | 'tokens' | 'fragmented';
 
 /**
- * Thrown by selectFunding / selectTokens. `kind`: 'kas' and 'tokens' = the balance is short by `shortfall`; 'fragmented' = the balance
- * suffices but needs more inputs than one transaction may carry (`maxInputs`), so the UTXOs must be merged first.
+ * Thrown by `selectFunding` and `selectTokens`.
+ * For `kind` 'kas' and 'tokens' the balance is short by `shortfall`. For 'fragmented' the balance
+ * suffices but needs more inputs than one transaction may carry (`maxInputs`), so the UTXOs must be
+ * merged first.
  */
 export class InsufficientFunds extends Error {
   readonly kind: InsufficientKind;
@@ -54,26 +65,30 @@ const desc = <T extends { amount: string; transactionId: string; index: number }
 };
 
 /**
- * Plain P2PK KAS UTXOs covering `needSompi + reserve`, SMALLEST FIRST until covered (ties by outpoint), as the Kaspa SDK does: its
- * UtxoContext keeps the mature UTXOs ascending by amount and the Generator consumes them in that order until the target is reached
- * (rusty-kaspa wallet/core/src/utxo/context.rs:300, 483). When the smallest `maxInputs` do not cover it, the largest-first selection with
- * the fewest inputs (the former rule), and InsufficientFunds('fragmented') only when even that needs more than `maxInputs`; a balance below
- * the target is InsufficientFunds('kas').
+ * Selects plain P2PK KAS UTXOs covering `needSompi + reserve`, smallest first until covered.
+ * Ties break by outpoint. This is the order the Kaspa SDK spends in, since its UtxoContext keeps
+ * mature UTXOs ascending by amount (rusty-kaspa wallet/core/src/utxo/context.rs).
  *
- * The trade-off: smallest-first spends more inputs than largest-first (each a P2PK signature: more compute mass and fee, and more for an
- * external wallet to show), but every placement consolidates the wallet's dust into its change instead of leaving it to pile up.
+ * When the smallest `maxInputs` do not cover the target, it falls back to the largest-first
+ * selection with the fewest inputs. It throws InsufficientFunds('fragmented') only when even that
+ * needs more than `maxInputs`. A balance below the target throws InsufficientFunds('kas').
  *
- * UTXOs that are covenant outputs are never spent as funding. Always at least one input: the builders take the FIRST funding input as the
- * one that authorises the order genesis (kob-protocol `build_create_order`: `auth` = the first input after the token inputs; the new
- * covenant id is bound to its outpoint) and its key as the default change owner. Any P2PK input of the wallet key does both (the inputs
- * are all of that key), so the order of the selection only changes which outpoint the covenant id is derived from: it is deterministic.
+ * Smallest first spends more inputs than largest first. Each input adds a P2PK signature, so more
+ * compute mass, fee and lines for an external wallet to show. In return every placement
+ * consolidates the wallet's dust into its change.
+ *
+ * Covenant outputs are never spent as funding. There is always at least one input. The builders
+ * take the first funding input to authorise the order genesis, because the new covenant id is bound
+ * to its outpoint (kob-protocol `build_create_order`, `auth`). They also take its key as the
+ * default change owner. Any P2PK input of the wallet key does both, so the selection order only
+ * changes which outpoint the covenant id derives from, and it is deterministic.
  */
 export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigint = DEFAULT_FEE_RESERVE, maxInputs: number = MAX_FUNDING_INPUTS): KeyUtxo[] {
   const target = (needSompi > 0n ? needSompi : 0n) + (reserve > 0n ? reserve : 0n);
   const usable = utxos.filter((u) => !u.covenantId && amountOf(u) > 0n);
   const have = usable.reduce((s, u) => s + amountOf(u), 0n);
   if (have < target || usable.length === 0) throw new InsufficientFunds('kas', target, have);
-  // smallest first, at most `maxInputs`
+  // Smallest first, at most `maxInputs`.
   const asc = [...usable].sort((a, b) => (amountOf(a) === amountOf(b) ? outpointCmp(a, b) : amountOf(a) < amountOf(b) ? -1 : 1));
   const small: KeyUtxo[] = [];
   let sum = 0n;
@@ -83,7 +98,7 @@ export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigi
     sum += amountOf(u);
     if (sum >= target) return small;
   }
-  // the smallest `maxInputs` do not cover it: the fewest inputs, largest first
+  // The smallest `maxInputs` do not cover it, so take the fewest inputs, largest first.
   const picked: KeyUtxo[] = [];
   sum = 0n;
   for (const u of [...usable].sort(desc)) {
@@ -101,10 +116,12 @@ const usableTokens = (utxos: readonly TokenUtxo[], program: TokenProgram | null)
 const I64_MAX = (1n << 63n) - 1n;
 
 /**
- * The COVERING set of token UTXOs for `amount` base units, with the fewest inputs: the smallest single UTXO that suffices (least change), else
- * the largest ones first. Never more than `maxInputs` (the token program's input slots and the 8-input covenant limit): a balance that is large
- * enough but too fragmented throws InsufficientFunds('fragmented'). Only key-owned UTXOs are considered (custody and strays of orders are not
- * spendable this way). `selectTokens` starts from this set.
+ * Selects the covering set of token UTXOs for `amount` base units, with the fewest inputs.
+ * That is the smallest single UTXO that suffices, which leaves the least change, else the largest
+ * ones first. It never takes more than `maxInputs`, the token program's input slots and the
+ * 8-input covenant limit. A balance that is large enough but too fragmented throws
+ * InsufficientFunds('fragmented'). Only key-owned UTXOs count, because the custody and strays of
+ * orders are not spendable this way. `selectTokens` starts from this set.
  */
 export function coverTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] {
   if (amount <= 0n) throw new RangeError('selectTokens: amount must be positive');
@@ -127,17 +144,27 @@ export function coverTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: numbe
 }
 
 /**
- * Token inputs of a placement: the covering set (`coverTokens`, so whatever placed before still places: need 100 of [1, 1, 1, 200] still takes
- * the 200), then, while token input slots are spare (`maxInputs`, filled up to MAX_SPARE_TOKEN_INPUTS), the wallet's SMALLEST other usable
- * UTXOs of the token (ascending, ties by outpoint). The Kaspa SDK's Generator spends its UTXOs smallest-first (wallet/core/src/utxo/context.rs keeps them ascending); a token
- * placement cannot simply take UTXOs until covered (3 slots), so it covers first and spends the spare slots on the dust instead. The extras ride
- * on the order's token change: the builder (kob-protocol `build_create_order` / `build_create_pair`) returns everything above the custody as ONE
- * token output of the maker per token, and the extras' carriers are recycled into the outputs, the surplus coming back as KAS change. So each
- * placement consolidates the wallet's token UTXOs and frees their carriers' KAS (one more input of the token program each: more mass and fee).
+ * Selects the token inputs of a placement.
  *
- * Not added: an extra that would push the change above `changeCap` (KRON's per-output amount limit; the default for a KRON `program`), and a
- * SINGLE extra next to an exact covering set: it would come back as a new change UTXO of the same amount, re-creating the UTXO at a fee
- * (two or more extras, or a covering set with change, do reduce the wallet's UTXO count). `spare: false` returns the covering set alone.
+ * It starts with the covering set from `coverTokens`. For example, needing 100 of [1, 1, 1, 200]
+ * still takes the 200. While token input slots are spare, up to `maxInputs` and
+ * MAX_SPARE_TOKEN_INPUTS, it adds the wallet's smallest other usable UTXOs of the token, ascending
+ * and ties by outpoint. A token placement has only a few slots, so it cannot take UTXOs until
+ * covered as the Kaspa SDK does. It covers first and spends the spare slots on dust instead.
+ *
+ * The extras ride on the order's token change. The builder (kob-protocol `build_create_order` and
+ * `build_create_pair`) returns everything above the custody as one token output of the maker per
+ * token. The extras' carriers are recycled into the outputs, and the surplus comes back as KAS
+ * change. Each placement therefore consolidates the wallet's token UTXOs and frees their carriers'
+ * KAS, at the cost of more mass and fee per input.
+ *
+ * Two kinds of extra are not added.
+ * - One that would push the change above `changeCap`. That is KRON's per-output amount limit, which
+ *   is also the default for a KRON `program`.
+ * - A single extra next to an exact covering set. It would come back as a new change UTXO of the
+ *   same amount and re-create the UTXO at a fee. Two or more extras do reduce the UTXO count.
+ *
+ * `spare: false` returns the covering set alone.
  */
 export function selectTokens(
   utxos: TokenUtxo[],
