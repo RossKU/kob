@@ -1,16 +1,25 @@
-//! The node's Borsh wRPC encoding for the bulk calls: the windows of transaction bodies (`getVirtualChainFromBlockV2`) and
-//! the primary's accepted transaction ids (`getVirtualChainFromBlock` with ids).
+//! The Borsh wRPC encoding of the node for the bulk calls.
 //!
-//! The JSON wRPC answer of a VSPC window spends most of its bytes on field names, hex (every hash, script and signature
-//! twice its size) and decimal numbers: about 1.4 KB per plain transaction on TN10. The same answer in Borsh is a fraction
-//! of that, and on a link of a few MB/s the bytes per transaction decide whether the indexer keeps up with a busy chain
-//! (docs/ops/executor.md, *Borsh windows*). The small calls (status, blue scores, chain hashes, submissions) stay JSON.
+//! The bulk calls are the windows of transaction bodies (`getVirtualChainFromBlockV2`) and the
+//! accepted transaction ids of the primary (`getVirtualChainFromBlock` with ids). The small calls
+//! stay JSON. They are the status, blue scores, chain hashes and submissions.
 //!
-//! The message frame is workflow-rpc's: a request is `borsh(Option<u64> id, RpcApiOps op)` followed by the request body, an
-//! answer `borsh(Option<u64> id, ServerMessageKind kind, Option<RpcApiOps> op)` followed by the Borsh `Result` of the call (a
-//! `ServerError` when the kind is `Error`). Bodies are encoded and decoded with the node's own types (`kaspa-rpc-core`, the
-//! same release as the node), then converted to the indexer's wire types ([`super::types`]): the follower, the checks of
-//! other nodes (`rpc::verify`) and the extractor see exactly what the JSON path gives them.
+//! The JSON wRPC answer of a VSPC window spends most of its bytes on field names, hex and decimal
+//! numbers. Hex doubles the size of every hash, script and signature. The same answer in Borsh is
+//! a fraction of that. On a link of a few MB/s the bytes per transaction decide whether the
+//! indexer keeps up with a busy chain. See `docs/ops/executor.md`, *Borsh windows*.
+//!
+//! # Frames
+//!
+//! The message frame is the one of workflow-rpc.
+//! - A request is `borsh(Option<u64> id, RpcApiOps op)` followed by the request body.
+//! - An answer is `borsh(Option<u64> id, ServerMessageKind kind, Option<RpcApiOps> op)` followed
+//!   by the Borsh `Result` of the call. It is a `ServerError` when the kind is `Error`.
+//!
+//! Bodies are encoded and decoded with the own types of the node (`kaspa-rpc-core`, from the same
+//! release as the node). They are then converted to the wire types of the indexer
+//! ([`super::types`]). The follower, the checks of other nodes (`rpc::verify`) and the extractor
+//! see exactly what the JSON path gives them.
 
 use super::types::{
     AcceptedIds, ChainBlockHeader, ChainIds, CovenantBinding, InputVerbose, Outpoint, RawChainBlock, RawVspcResponse, SpentUtxo, Tx,
@@ -26,7 +35,7 @@ use kaspa_rpc_core::model::{
 };
 use workflow_serializer::prelude::{Deserializer, Serializer};
 
-/// workflow-rpc `ServerMessageKind`.
+// The values of the workflow-rpc `ServerMessageKind`.
 const KIND_SUCCESS: u8 = 0;
 const KIND_ERROR: u8 = 1;
 const KIND_NOTIFICATION: u8 = 0xff;
@@ -39,15 +48,17 @@ fn h32(h: kaspa_hashes::Hash) -> Hash32 {
     Hash32(h.as_bytes())
 }
 
-/// A request frame: header, then the body.
+/// A request frame, the header and then the body.
 fn frame(id: u64, op: RpcApiOps, body: &impl Serializer) -> Vec<u8> {
     let mut payload = Vec::with_capacity(64);
     Serializer::serialize(body, &mut payload).expect("a Vec never fails to grow");
     frame_bytes(id, op, &payload)
 }
 
-/// A request frame of an already encoded body: `borsh(Option<u64> id, op)`, then the body as a Borsh byte vector
-/// (workflow-serializer `Payload`: u32 length, then the bytes).
+/// A request frame for a body that is already encoded.
+///
+/// It is `borsh(Option<u64> id, op)`, then the body as a Borsh byte vector. That is a
+/// workflow-serializer `Payload`: a u32 length, then the bytes.
 pub(crate) fn frame_bytes(id: u64, op: RpcApiOps, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + payload.len());
     BorshSerialize::serialize(&(Some(id), op), &mut out).expect("a Vec never fails to grow");
@@ -64,13 +75,13 @@ fn verbosity(v: Verbosity) -> RpcDataVerbosityLevel {
     }
 }
 
-/// `getVirtualChainFromBlockV2` as a Borsh request frame.
+/// A `getVirtualChainFromBlockV2` request as a Borsh frame.
 pub fn vspc_v2_request(id: u64, start: Hash32, level: Verbosity, min_confirmation_count: Option<u64>) -> Vec<u8> {
     let req = GetVirtualChainFromBlockV2Request::new(kh(start), Some(verbosity(level)), min_confirmation_count);
     frame(id, RpcApiOps::GetVirtualChainFromBlockV2, &req)
 }
 
-/// `getVirtualChainFromBlock` with accepted transaction ids as a Borsh request frame.
+/// A `getVirtualChainFromBlock` request with accepted transaction ids, as a Borsh frame.
 pub fn chain_ids_request(id: u64, start: Hash32, min_confirmation_count: Option<u64>) -> Vec<u8> {
     let req = GetVirtualChainFromBlockRequest::new(kh(start), true, min_confirmation_count);
     frame(id, RpcApiOps::GetVirtualChainFromBlock, &req)
@@ -83,12 +94,15 @@ pub enum Reply<'a> {
     Ok { id: Option<u64>, body: &'a [u8] },
     /// The node refused request `id`, with its message.
     Err { id: Option<u64>, message: String },
-    /// A notification (never subscribed to; skipped).
+    /// A notification. The client never subscribes to one, so it is skipped.
     Notification,
 }
 
-/// Split an answer frame into header and body: `borsh(Option<u64> id, u8 kind, Option<RpcApiOps> op)`, then for a success
-/// the Borsh `Result` of the call (Ok: the body, a byte vector holding the answer), for an error the `ServerError`.
+/// Splits an answer frame into its header and body.
+///
+/// The header is `borsh(Option<u64> id, u8 kind, Option<RpcApiOps> op)`. For a success the rest
+/// is the Borsh `Result` of the call, where `Ok` holds the body, a byte vector with the answer.
+/// For an error the rest is the `ServerError`.
 pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     let mut rest = buf;
     let id = <Option<u64> as BorshDeserialize>::deserialize(&mut rest).map_err(|e| format!("Borsh answer header: {e}"))?;
@@ -97,10 +111,12 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     if kind == KIND_NOTIFICATION {
         return Ok(Reply::Notification);
     }
-    // the op the answer is about: not needed (the id says which request it answers), but it must be read past
+    // The op of the answer is not needed, because the id says which request it answers. It must
+    // still be read past.
     <Option<RpcApiOps> as BorshDeserialize>::deserialize(&mut rest).map_err(|e| format!("Borsh answer header: {e}"))?;
     match kind {
-        // a success carries a Borsh `Result<body, ServerError>` (workflow-rpc `ServerResult`): tag 1 Ok, 0 Err
+        // A success carries a Borsh `Result<body, ServerError>` (workflow-rpc `ServerResult`). The
+        // tag is 1 for `Ok` and 0 for `Err`.
         KIND_SUCCESS => match rest.split_first() {
             Some((1, body)) => Ok(Reply::Ok { id, body }),
             Some((0, err)) => Ok(Reply::Err { id, message: server_error_text(err) }),
@@ -111,7 +127,9 @@ pub fn parse_reply(buf: &[u8]) -> Result<Reply<'_>, String> {
     }
 }
 
-/// The text of a workflow-rpc `ServerError` (a Borsh enum; the node's RPC errors travel as its `Text` variant).
+/// The text of a workflow-rpc `ServerError`, which is a Borsh enum.
+///
+/// The RPC errors of the node travel as its `Text` variant.
 pub fn server_error_text(body: &[u8]) -> String {
     const UNIT: [&str; 10] = [
         "connection is closed",
@@ -130,11 +148,11 @@ pub fn server_error_text(body: &[u8]) -> String {
     };
     match tag {
         t if (t as usize) < UNIT.len() => UNIT[t as usize].into(),
-        // NotificationDeserialize, RespDeserialize, Text, WebSocketError: one string
+        // NotificationDeserialize, RespDeserialize, Text and WebSocketError hold one string.
         10 | 11 | 13 | 14 => {
             <String as BorshDeserialize>::deserialize(&mut rest).unwrap_or_else(|_| format!("node error (variant {tag})"))
         }
-        // Data: bytes
+        // Data holds bytes.
         12 => <Vec<u8> as BorshDeserialize>::deserialize(&mut rest)
             .map(|b| String::from_utf8_lossy(&b).into_owned())
             .unwrap_or_else(|_| "node error (data)".into()),
@@ -142,7 +160,9 @@ pub fn server_error_text(body: &[u8]) -> String {
     }
 }
 
-/// Script public key in the wire form of the JSON path: version (two bytes, big-endian), then the script.
+/// A script public key in the wire form of the JSON path.
+///
+/// That is the version as two bytes, big-endian, then the script.
 fn spk_bytes(s: &kaspa_consensus_core::tx::ScriptPublicKey) -> HexBytes {
     let mut v = Vec::with_capacity(2 + s.script().len());
     v.extend_from_slice(&s.version().to_be_bytes());
@@ -241,14 +261,18 @@ fn chain_block(b: RpcChainBlockAcceptedTransactions) -> Result<RawChainBlock, St
     })
 }
 
-/// The bytes of a workflow-serializer `Payload` (a Borsh byte vector: u32 length, then the bytes), without copying them.
+/// The bytes of a workflow-serializer `Payload`, without copying them.
+///
+/// A `Payload` is a Borsh byte vector: a u32 length, then the bytes.
 pub(crate) fn payload(body: &[u8]) -> Result<&[u8], String> {
     let (len, rest) = body.split_at_checked(4).ok_or("Borsh answer body shorter than its length")?;
     let len = u32::from_le_bytes(len.try_into().expect("four bytes")) as usize;
     rest.get(..len).ok_or_else(|| format!("Borsh answer body of {} bytes, its length says {len}", rest.len()))
 }
 
-/// The body of a `getVirtualChainFromBlockV2` answer as the indexer's wire type; `wire_bytes` is the frame's size.
+/// Decodes the body of a `getVirtualChainFromBlockV2` answer into the wire type of the indexer.
+///
+/// `wire_bytes` is the size of the frame.
 pub fn decode_vspc_v2(body: &[u8], wire_bytes: usize) -> Result<RawVspcResponse, String> {
     let mut r = payload(body)?;
     let resp = <GetVirtualChainFromBlockV2Response as Deserializer>::deserialize(&mut r)
@@ -262,7 +286,7 @@ pub fn decode_vspc_v2(body: &[u8], wire_bytes: usize) -> Result<RawVspcResponse,
     })
 }
 
-/// The body of a `getVirtualChainFromBlock` answer with ids.
+/// Decodes the body of a `getVirtualChainFromBlock` answer with ids.
 pub fn decode_chain_ids(body: &[u8]) -> Result<ChainIds, String> {
     let mut r = payload(body)?;
     let resp = <GetVirtualChainFromBlockResponse as Deserializer>::deserialize(&mut r)
@@ -281,9 +305,12 @@ pub fn decode_chain_ids(body: &[u8]) -> Result<ChainIds, String> {
     })
 }
 
-/// The Borsh endpoint of the node behind a JSON wRPC URL: a path ending in `/json` (public nodes:
-/// `wss://host/kaspa/testnet-10/wrpc/json`) becomes `.../borsh`; else a node's default JSON port `18xxx` becomes its Borsh
-/// port `17xxx` (`ws://host:18210` on TN10 serves Borsh on `17210`). `None` when neither applies.
+/// The Borsh endpoint of the node behind a JSON wRPC URL, or `None` when neither rule applies.
+///
+/// - A path ending in `/json` becomes `.../borsh`. Public nodes use it, as in
+///   `wss://host/kaspa/testnet-10/wrpc/json`.
+/// - Else the default JSON port `18xxx` of a node becomes its Borsh port `17xxx`. A node at
+///   `ws://host:18210` on TN10 serves Borsh on `17210`.
 pub fn borsh_url_for(json_url: &str) -> Option<String> {
     let (base, query) = match json_url.split_once('?') {
         Some((b, q)) => (b, Some(q)),
@@ -337,8 +364,8 @@ mod tests {
         kaspa_hashes::Hash::from_bytes([b; 32])
     }
 
-    /// A consensus transaction with a covenant input, a covenant output, a plain output and a payload, and its `Full` /
-    /// `High` RPC form.
+    /// A consensus transaction with a covenant input, a covenant output, a plain output and a
+    /// payload, and its `Full` and `High` RPC form.
     fn sample_tx(full: bool, seed: u8) -> (Transaction, RpcOptionalTransaction) {
         let spk = ScriptPublicKey::from_vec(0, vec![0xaa, 0x20, seed, 0x87]);
         let t = Transaction::new(
@@ -448,7 +475,8 @@ mod tests {
         }
     }
 
-    /// The same answer through the node's JSON and through Borsh gives the indexer identical data, at both levels it asks for.
+    /// The same answer through the JSON of the node and through Borsh gives the indexer identical
+    /// data, at both levels it asks for.
     #[test]
     fn borsh_and_json_answers_decode_alike() {
         for full in [false, true] {
@@ -470,8 +498,8 @@ mod tests {
         }
     }
 
-    /// A `Full` Borsh answer carries everything the checks of another node's window need: headers hash to their block hash,
-    /// transactions to their id.
+    /// A `Full` Borsh answer carries everything that the checks of the window of another node
+    /// need. The headers hash to their block hash and the transactions to their id.
     #[test]
     fn borsh_full_answers_verify() {
         let resp = sample_response(true);
@@ -506,7 +534,8 @@ mod tests {
         assert_eq!(ids.accepted_transaction_ids, json.accepted_transaction_ids);
     }
 
-    /// Frames are workflow-rpc's: the request header the node's server reads, the answer header it writes.
+    /// The frames are those of workflow-rpc: the request header that the server of the node reads
+    /// and the answer header that it writes.
     #[test]
     fn frames_round_trip() {
         let f = vspc_v2_request(7, Hash32([3; 32]), Verbosity::High, Some(12));
@@ -542,12 +571,12 @@ mod tests {
         BorshSerialize::serialize(&(Option::<u64>::None, KIND_NOTIFICATION), &mut note).unwrap();
         assert_eq!(parse_reply(&note).unwrap(), Reply::Notification);
 
-        // a body shorter than its length prefix is refused, not read past
+        // A body shorter than its length prefix is refused, not read past.
         assert!(decode_vspc_v2(&[9, 0, 0, 0, 1, 0], 6).is_err());
         assert!(decode_chain_ids(&[1, 0]).is_err());
     }
 
-    /// A captured answer frame of a live node (`KOB_BORSH_DUMP`): decodes.
+    /// A captured answer frame of a live node (`KOB_BORSH_DUMP`) decodes.
     #[test]
     #[ignore]
     fn decode_dumped_frame() {
