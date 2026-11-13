@@ -1,42 +1,68 @@
-//! What an executor's transaction left to its sender, and what it paid the miners (`executor_txs`, `GET /v1/stats`).
+//! What an executor's transaction left to its sender, and what it paid the miners.
 //!
-//! An executor (a matcher's batch, a keeper's refund, kill, expiry, arm or trail) spends KOB orders on terms their covenants fix:
-//! each order pays its maker, delivers, refunds or continues at outputs the covenant pins, and whatever its inputs release beyond
-//! that is the sender's (`docs/spec/matcher.md` 3.2: the crossing spread, auction margins, the priority tips, the keeper tips).
-//! So the **income** of the transaction is exact from the chain alone:
+//! The figures feed `executor_txs` and `GET /v1/stats`.
+//!
+//! # Income
+//!
+//! An executor is a matcher's batch or a keeper's refund, kill, expiry, arm or trail. It spends KOB
+//! orders on terms that their covenants fix. Each order pays its maker, delivers, refunds or
+//! continues at outputs the covenant pins. Whatever its inputs release beyond that is the sender's:
+//! the crossing spread, auction margins, priority tips and keeper tips (`docs/spec/matcher.md`
+//! 3.2). So the **income** of the transaction is exact from the chain alone:
 //!
 //! ```text
 //! income = KAS of the KOB inputs it spent (order UTXOs, their custody carriers and strays)
 //!        - KAS of the outputs the orders own or pay
 //! ```
 //!
-//! where the outputs the orders own or pay are every output that carries an order's covenant id (continuations, if-done exits,
-//! placements), every token output owned by an order id (custodies, a rest, the exit custody of an if-done buy), and the outputs
-//! each spent order's covenant pins by position ([`pinned`], read from the contracts in `contracts/orders/`): the maker's payout,
-//! delivery or refund at the order's own input index, a custody's return at its custody input index, a terminal bid's refund at
-//! output `M - 1 - i`. An output the covenants leave free is the sender's (its change, or anything it chose to pay). It is what
-//! the transaction leaves for its sender before the network fee, the same figure whichever outputs the sender kept.
+//! The outputs the orders own or pay are:
 //!
-//! A transaction in which the sender **trades for itself** (an own trade: `executor_txs.own_trade`) is not counted in the executors'
-//! income, so that it is what traders paid the executors for matching and keeping, never what an executor paid or got for tokens of its
-//! own. From the record alone, for all of the history: the transaction has a covenant input that is neither a tracked order UTXO nor an
-//! order's custody or stray (the sender's own tokens go in: an inventory sale, a taker selling), or a token output that no order owns and
-//! no spent order's covenant pins (tokens come out to the sender: an inventory buy, a taker buying, the rest of a route it keeps). A
-//! matcher's crossing, a route or netting between orders and a keeper's job move tokens only between orders and makers, and count. Not
-//! told apart (the record has no keys before 2026-11-09): an executor crossing one of its own orders against a trader's while no token
-//! comes to it (its own payout counts as an order's payout). The network fee of an own trade is counted like any other.
+//! - every output that carries an order's covenant id: continuations, if-done exits and placements;
+//! - every token output owned by an order id: custodies, a rest and the exit custody of an if-done
+//!   buy;
+//! - the outputs that each spent order's covenant pins by position ([`pinned`], read from the
+//!   contracts in `contracts/orders/`). These are the maker's payout, delivery or refund at the
+//!   order's own input index, a custody's return at its custody input index, and a terminal bid's
+//!   refund at output `M - 1 - i`.
 //!
-//! The **network fee** is what the inputs held (the node's own UTXO entries, `record::TxRecord::in_value`) minus the outputs.
-//! Either is unknown (`None`) when the chain data does not settle it, never estimated.
+//! An output the covenants leave free is the sender's: its change, or anything it chose to pay. The
+//! income is what the transaction leaves for its sender before the network fee, the same figure
+//! whichever outputs the sender kept.
+//!
+//! # Own trades
+//!
+//! A transaction in which the sender **trades for itself** (an own trade, `executor_txs.own_trade`)
+//! is not counted in the executors' income. The income is thus what traders paid the executors for
+//! matching and keeping, never what an executor paid or got for tokens of its own.
+//!
+//! An own trade is recognised from the record alone, for all of the history. The transaction has
+//! either of these:
+//!
+//! - a covenant input that is neither a tracked order UTXO nor an order's custody or stray, because
+//!   the sender's own tokens go in, as in an inventory sale or a taker selling;
+//! - a token output that no order owns and no spent order's covenant pins, because tokens come out
+//!   to the sender, as in an inventory buy, a taker buying or the rest of a route it keeps.
+//!
+//! A matcher's crossing, a route or netting between orders, and a keeper's job move tokens only
+//! between orders and makers, and count. One case is not told apart: an executor that crosses one
+//! of its own orders against a trader's while no token comes to it, because its own payout counts
+//! as an order's payout. Records written before payers were recorded have no keys for it. The
+//! network fee of an own trade is counted like any other.
+//!
+//! # Network fee
+//!
+//! The **network fee** is what the inputs held, from the node's own UTXO entries
+//! (`record::TxRecord::in_value`), minus the outputs. Either figure is unknown (`None`) when the
+//! chain data does not settle it, and is never estimated.
 
 use super::record::{RecOut, Reveal};
 use kob_protocol::state::{quote_of, AnyState, Round, SIDE_ASK};
 use kob_protocol::tx::REFUND_MIN;
 
-/// What a spent order input did (the processor's classification of its entry call).
+/// What a spent order input did, as the processor classifies its entry call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Spend {
-    /// A fill of `n` base units (a repeat exit's take-profit fill too).
+    /// A fill of `n` base units, including a repeat exit's take-profit fill.
     Fill(i64),
     /// A repeating entry re-armed by its exit's take-profit fill.
     Merge,
@@ -51,31 +77,40 @@ pub enum Spend {
 pub struct Leg<'a> {
     /// The order's state as spent (proven: the revealed redeem script hashes to the spent output).
     pub state: &'a AnyState,
+    /// What the input did.
     pub spend: Spend,
     /// The input's index.
     pub input: usize,
+    /// What the signature script of the input revealed.
     pub reveal: &'a Reveal,
     /// An output of the transaction carries the order's covenant id (it continues).
     pub continues: bool,
     /// The order is a repeat exit whose entry (`parent`) is spent in the same transaction.
     pub parent_spent: bool,
-    /// A fill's quote at its time argument (the processor's `fill_quote`): what a bid pays per whole token before its tip.
+    /// A fill's quote at its time argument (the processor's `fill_quote`).
+    ///
+    /// It is what a bid pays per whole token before its tip.
     pub quote: Option<i64>,
     /// The KAS of the spent order UTXO.
     pub value: i64,
 }
 
-/// The outputs the leg's covenant pins by position (`contracts/orders/*.sil`; the KRON twins have the same layouts), besides the ones
-/// the caller adds for every leg (an output carrying an order's covenant id, a token output owned by an order id). `None`: not known
-/// (a term out of range, an argument missing, a combination of kind and entry no covenant allows, a slot past the last output).
+/// The outputs the covenant of a leg pins by position.
+///
+/// The layouts are in `contracts/orders/*.sil`, and the KRON twins have the same ones. The result
+/// leaves out the outputs that the caller adds for every leg: an output carrying an order's
+/// covenant id and a token output owned by an order id. It is `None` when the answer is not known:
+/// a term is out of range, an argument is missing, the combination of kind and entry is one no
+/// covenant allows, or a slot is past the last output.
 pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
     use AnyState::*;
     let i = l.input;
     let arg = |k: usize| l.reveal.int(k).and_then(|v| usize::try_from(v).ok());
     let mut v = Vec::new();
     match (l.state, l.spend) {
-        // settle(nb, tokenIn, tokOut, t): the payout at i; the unsold rest (GTC, owned by the order) or the IOC return (the
-        // maker's, at the custody's own index) at tokOut. A refund returns the whole custody with every carrier at i.
+        // `settle(nb, tokenIn, tokOut, t)`: the payout at i. The unsold rest (GTC, owned by the
+        // order) or the IOC return (the maker's, at the custody's own index) goes at tokOut. A
+        // refund returns the whole custody with every carrier at i.
         (KobAsk(a) | KobAskKron(a), Spend::Fill(n)) => {
             v.push(i);
             if a.amount_left.checked_sub(n)? > 0 {
@@ -83,8 +118,9 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
             }
         }
         (KobAsk(_) | KobAskKron(_), Spend::Refund) => v.push(i),
-        // settle(nb, tokenIn, tokOut, leg, ...): the payout at i (a re-arming take-profit's carriers go to the entry's
-        // continuation), the rest at tokOut; a refund at i; an update pins only its continuation
+        // `settle(nb, tokenIn, tokOut, leg, ...)`: the payout at i. A re-arming take-profit's
+        // carriers go to the entry's continuation. The rest goes at tokOut and a refund at i. An
+        // update pins only its continuation.
         (KobCondAsk(c) | KobCondAskKron(c), Spend::Fill(n)) => {
             v.push(i);
             if c.amount_left.checked_sub(n)? > 0 {
@@ -93,12 +129,14 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         }
         (KobCondAsk(_) | KobCondAskKron(_), Spend::Refund) => v.push(i),
         (KobCondAsk(_) | KobCondAskKron(_), Spend::Update) => {}
-        // settle: a fill pays into its exit and keeps its rest in custody (both the caller's), a merge re-arms into its custody and
-        // continuation; a refund (settle(0) with the tokens, close() with the carrier) is the maker's at i
+        // `settle`: a fill pays into its exit and keeps its rest in custody, both the caller's. A
+        // merge re-arms into its custody and continuation. A refund, `settle(0)` with the tokens
+        // and `close()` with the carrier, is the maker's at i.
         (KobIfdAsk(_) | KobIfdAskKron(_), Spend::Refund) => v.push(i),
         (KobIfdAsk(_) | KobIfdAskKron(_), Spend::Fill(_) | Spend::Merge | Spend::Update) => {}
-        // fill(nb, tokenTplIn, t): the delivery at i; a terminal fill's unspent KAS beyond the delivery carrier, from REFUND_MIN up,
-        // at M - 1 - i (`refundTo`). refund(): the maker's at i.
+        // `fill(nb, tokenTplIn, t)`: the delivery at i. A terminal fill's unspent KAS beyond the
+        // delivery carrier goes at M - 1 - i (`refundTo`), from REFUND_MIN up. `refund()`: the
+        // maker's at i.
         (KobBid(b) | KobBidKron(b), Spend::Fill(n)) => {
             v.push(i);
             if !l.continues {
@@ -109,8 +147,9 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
             }
         }
         (KobBid(_) | KobBidKron(_), Spend::Refund) => v.push(i),
-        // settle(nb, tokenTplIn, leg, ...): the delivery at i, or (re-arming take-profit) the maker's profit at i; a terminal fill that
-        // does not re-arm sends what it did not spend beyond its delivery carrier, from REFUND_MIN up, to M - 1 - i
+        // `settle(nb, tokenTplIn, leg, ...)`: the delivery at i, or the maker's profit at i for a
+        // re-arming take-profit. A terminal fill that does not re-arm sends what it did not spend
+        // beyond its delivery carrier, from REFUND_MIN up, to M - 1 - i.
         (KobCondBid(c) | KobCondBidKron(c), Spend::Fill(n)) => {
             v.push(i);
             let rearm = l.parent_spent && l.reveal.int(2)? == 0;
@@ -124,11 +163,12 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         }
         (KobCondBid(_) | KobCondBidKron(_), Spend::Refund) => v.push(i),
         (KobCondBid(_) | KobCondBidKron(_), Spend::Update) => {}
-        // fill: the bought tokens at i, owned by the exit; refund(): the maker's at i
+        // `fill`: the bought tokens at i, owned by the exit. `refund()`: the maker's at i.
         (KobIfdBid(_) | KobIfdBidKron(_), Spend::Fill(_) | Spend::Refund) => v.push(i),
         (KobIfdBid(_) | KobIfdBidKron(_), Spend::Merge | Spend::Update) => {}
-        // settle(nb, custIn, tTplIn, t, sOut, tOut): the T delivery at i; the custody's rest (the order's) or return (the maker's)
-        // at custIn while some of it is left (custody - sOut > 0). A refund returns the whole custody at i.
+        // `settle(nb, custIn, tTplIn, t, sOut, tOut)`: the T delivery at i. The custody's rest, the
+        // order's, or return, the maker's, goes at custIn while some of it is left (custody - sOut
+        // > 0). A refund returns the whole custody at i.
         (KobPair(p), Spend::Fill(_)) => {
             v.push(i);
             if p.custody.checked_sub(l.reveal.int(4)?)? > 0 {
@@ -136,9 +176,11 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
             }
         }
         (KobPair(_), Spend::Refund) => v.push(i),
-        // settle(nb, custIn, tTplIn, t, sOut, tOut, leg, ..): the delivery (or a re-arming take-profit's profit) at i; the custody's rest
-        // or return at custIn while some is left: custody - sOut, or for a re-arming BID exit that continues custody - proceeds - back
-        // (one that sells out keeps nothing). A refund at i; an update pins only its continuation.
+        // `settle(nb, custIn, tTplIn, t, sOut, tOut, leg, ..)`: the delivery at i, or a re-arming
+        // take-profit's profit. The custody's rest or return goes at custIn while some is left.
+        // That is custody - sOut, or for a re-arming BID exit that continues custody - proceeds -
+        // back, and one that sells out keeps nothing. A refund goes at i. An update pins only its
+        // continuation.
         (KobCondPair(c), Spend::Fill(n)) => {
             v.push(i);
             let rearm = l.parent_spent && l.reveal.int(6)? == 0;
@@ -158,10 +200,11 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         }
         (KobCondPair(_), Spend::Refund) => v.push(i),
         (KobCondPair(_), Spend::Update) => {}
-        // fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, ..): the exit's custody at i (owned by the exit); a buy-first entry that
-        // ends returns the B it did not spend (custody - amt) at bIn. A refund pays the maker the entry's KAS at i and returns each
-        // custody at its own index (A held by a sell-first entry, the B escrow or prefund). A merge and an update pin only the
-        // entry's own custodies and continuation.
+        // `fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, ..)`: the exit's custody at i, owned by
+        // the exit. A buy-first entry that ends returns the B it did not spend (custody - amt) at
+        // bIn. A refund pays the maker the entry's KAS at i and returns each custody at its own
+        // index: A held by a sell-first entry, the B escrow or prefund. A merge and an update pin
+        // only the entry's own custodies and continuation.
         (KobIfdPair(e), Spend::Fill(_)) => {
             v.push(i);
             if !l.continues && e.is_buy_first() && e.custody.checked_sub(l.reveal.int(6)?)? > 0 {
@@ -183,8 +226,9 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
     v.iter().all(|&j| j < outputs).then_some(v)
 }
 
-/// `kob_in - Σ outputs[j]` over the distinct `kob_out` indexes, in sompi (`None`: an index past the last output, or a result
-/// outside 64 bits).
+/// `kob_in - Σ outputs[j]` over the distinct `kob_out` indexes, in sompi.
+///
+/// It is `None` when an index is past the last output, or the result is outside 64 bits.
 pub fn income(kob_in: i128, outputs: &[RecOut], kob_out: &std::collections::BTreeSet<usize>) -> Option<i64> {
     let mut out: i128 = 0;
     for &j in kob_out {
@@ -193,8 +237,10 @@ pub fn income(kob_in: i128, outputs: &[RecOut], kob_out: &std::collections::BTre
     i64::try_from(kob_in - out).ok()
 }
 
-/// The network fee: what the inputs held minus every output (`None`: the inputs' values are not known, or they hold less than the
-/// outputs, which no accepted transaction can).
+/// The network fee: what the inputs held minus every output.
+///
+/// It is `None` when the inputs' values are not known, or when they hold less than the outputs,
+/// which no accepted transaction can.
 pub fn miner_fee(in_value: Option<u64>, outputs: &[RecOut]) -> Option<i64> {
     let out: i128 = outputs.iter().map(|o| i128::from(o.value)).sum();
     let fee = i128::from(in_value?) - out;
@@ -212,7 +258,8 @@ mod tests {
             template: TemplateId::KobAsk,
             state: vec![],
             tag: [0; 4],
-            // 8-byte pushes, as the fixed `nb` argument is (a script number up to 8 bytes: these are all >= 0)
+            // 8-byte pushes, as the fixed `nb` argument is: a script number up to 8 bytes. These
+            // are all >= 0.
             args: args.iter().map(|a| a.to_le_bytes().to_vec()).collect(),
         }
     }
@@ -225,7 +272,8 @@ mod tests {
         Leg { state, spend, input, reveal: r, continues: false, parent_spent: false, quote: None, value: 0 }
     }
 
-    /// An ask's fill pins its payout at its input index, and its custody index only while tokens are left (rest or IOC return).
+    /// An ask's fill pins its payout at its input index, and its custody index only while tokens
+    /// are left (rest or IOC return).
     #[test]
     fn an_ask_pins_its_payout_and_its_rest() {
         let mut a = ask(1, 250_000);
@@ -233,24 +281,27 @@ mod tests {
         let st = AnyState::KobAsk(a);
         let r = reveal(&[4 * SCALE, 2, 2, 0]);
         assert_eq!(pinned(&leg(&st, Spend::Fill(4 * SCALE), 0, &r), 4), Some(vec![0, 2]));
-        // sold out: the custody index is free (the sender's)
+        // Sold out: the custody index is free, the sender's.
         assert_eq!(pinned(&leg(&st, Spend::Fill(10 * SCALE), 0, &r), 4), Some(vec![0]));
         assert_eq!(pinned(&leg(&st, Spend::Refund, 1, &r), 4), Some(vec![1]));
-        // an ask has no update: unknown, never a guess
+        // An ask has no update: unknown, never a guess.
         assert_eq!(pinned(&leg(&st, Spend::Update, 1, &r), 4), None);
-        // a slot past the last output: unknown
+        // A slot past the last output: unknown.
         assert_eq!(pinned(&leg(&st, Spend::Refund, 4, &r), 4), None);
     }
 
-    /// A terminal bid fill's refund slot, M - 1 - i, is pinned only when what it did not spend beyond its delivery carrier is
-    /// REFUND_MIN or more: below that the slot is free and may hold the sender's change.
+    /// A terminal bid fill's refund slot, M - 1 - i, is pinned only when what it did not spend
+    /// beyond its delivery carrier is REFUND_MIN or more.
+    ///
+    /// Below that the slot is free and may hold the sender's change.
     #[test]
     fn a_terminal_bid_pins_its_refund_from_one_kas() {
         let b = bid(1, 250_000);
         let (tip, carrier) = (b.tip, b.delivery_carrier);
         let st = AnyState::KobBid(b);
         let r = reveal(&[2 * SCALE, 1, 0]);
-        // 2 whole tokens at 240 000 + tip: floor(2 x (240 000 + tip)) sompi; the escrow holds that, the carrier and 1 KAS more
+        // 2 whole tokens at 240 000 + tip: floor(2 x (240 000 + tip)) sompi. The escrow holds that,
+        // the carrier and 1 KAS more.
         let spend = 2 * (240_000 + tip);
         let mut l = leg(&st, Spend::Fill(2 * SCALE), 1, &r);
         l.quote = Some(240_000);
@@ -261,13 +312,14 @@ mod tests {
         l.continues = true;
         l.value += 10 * REFUND_MIN as i64;
         assert_eq!(pinned(&l, 5), Some(vec![1]), "a bid that continues refunds nothing");
-        // a terminal fill without its quote: unknown
+        // A terminal fill without its quote: unknown.
         let mut l = leg(&st, Spend::Fill(2 * SCALE), 1, &r);
         l.value = 10 * REFUND_MIN as i64;
         assert_eq!(pinned(&l, 5), None);
     }
 
-    /// A conditional buy's re-arming take-profit pays the maker its profit at i and never a refund; otherwise as a bid.
+    /// A conditional buy's re-arming take-profit pays the maker its profit at i and never a refund.
+    /// Otherwise it is as a bid.
     #[test]
     fn a_conditional_bid_refunds_unless_it_rearms() {
         let c = cond_bid(1);
@@ -285,20 +337,24 @@ mod tests {
         assert_eq!(pinned(&l, 3), Some(vec![0, 2]), "a stop leg never re-arms");
     }
 
-    /// The figures, hand-computed: an ask (2 000 000 order UTXO + 1 000 000 custody carrier) and a bid (5 000 000 escrow) cross;
-    /// the ask's payout 1 500 000 + 3 000 000 carriers sold out, the bid's delivery 1 000 000 and continuation 2 900 000.
+    /// The figures, hand-computed.
+    ///
+    /// An ask (2 000 000 order UTXO + 1 000 000 custody carrier) and a bid (5 000 000 escrow)
+    /// cross. The ask's payout is 1 500 000 + 3 000 000 carriers sold out, and the bid's delivery
+    /// is 1 000 000 and its continuation 2 900 000.
     #[test]
     fn income_and_fee_are_exact() {
         let o = outs(&[4_500_000, 1_000_000, 2_900_000, 7_000_000]);
         let kob_in: i128 = 2_000_000 + 1_000_000 + 5_000_000;
         let s: std::collections::BTreeSet<usize> = [0, 1, 2].into();
-        // 8 000 000 in, 8 400 000 out to the orders: the sender put 400 000 of its own into this (a negative income)
+        // 8 000 000 in, 8 400 000 out to the orders: the sender put 400 000 of its own into this,
+        // which is a negative income.
         assert_eq!(income(kob_in, &o, &s), Some(-400_000));
         let s: std::collections::BTreeSet<usize> = [1, 2].into();
         assert_eq!(income(kob_in, &o, &s), Some(4_100_000));
         let s: std::collections::BTreeSet<usize> = [4].into();
         assert_eq!(income(kob_in, &o, &s), None);
-        // inputs 15 403 000 against outputs 15 400 000
+        // Inputs 15 403 000 against outputs 15 400 000.
         assert_eq!(miner_fee(Some(15_403_000), &o), Some(3_000));
         assert_eq!(miner_fee(None, &o), None);
         assert_eq!(miner_fee(Some(15_399_999), &o), None, "an input total below the outputs is no fee");
