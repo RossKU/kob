@@ -1,9 +1,13 @@
-// Browser loader of kob-wasm (wasm-bindgen `--target web` bindings copied to web/wasm/web by `npm run build:wasm`).
+// Browser loader of kob-wasm. It uses the wasm-bindgen `--target web` bindings that
+// `npm run build:wasm` copies to web/wasm/web.
 import { createKob, type KobWasm, type RawKobWasm } from './wasm';
 
 let cached: Promise<KobWasm> | null = null;
 
-/** Loads and initialises kob-wasm once; verifies the embedded templates (`selfCheck`) before returning. */
+/**
+ * Loads and initialises kob-wasm once, and verifies the embedded templates with `selfCheck` before
+ * returning.
+ */
 export function loadKob(): Promise<KobWasm> {
   cached ??= (async () => {
     const mod = (await import('../../wasm/web/kob_wasm.js')) as unknown as { default: (input?: unknown) => Promise<unknown> } & RawKobWasm;

@@ -1,17 +1,23 @@
-// Typed facade over kob-wasm (crates/kob-wasm). Every export takes/returns JSON strings; this file parses and stringifies so the rest
-// of the app deals in typed objects. All protocol logic (transaction builders, signing split, fees, budgets, KOB1 codec, state codec)
-// lives in Rust: TypeScript never re-implements it.
+// Typed facade over kob-wasm (crates/kob-wasm). Every export takes and returns JSON strings. This
+// file parses and stringifies them, so the rest of the app deals in typed objects. All protocol
+// logic lives in Rust: the transaction builders, signing split, fees, budgets, KOB1 codec and state
+// codec. TypeScript never re-implements it.
 //
-// Two ways to obtain an instance:
-//   * browser: `loadKob()` from `./wasm.browser` (bundled ES-module bindings in web/wasm/web, built by `npm run build:wasm`)
-//   * node (vitest, mock server, e2e harness): `loadKobNode()` from `./wasm.node` (web/wasm/node)
+// There are two ways to obtain an instance.
+// - In the browser, `loadKob()` from `./wasm.browser` uses the bundled ES-module bindings in
+//   web/wasm/web, built by `npm run build:wasm`.
+// - In node, for vitest, the mock server and the e2e harness, `loadKobNode()` from `./wasm.node`
+//   uses web/wasm/node.
 import type {
   ActionRequest, AnyState, BuiltTx, DayOrder, FinalizeOptions, Hex, InputSignature, MassReport, Payload, PayloadRecord,
   RecoveredAmend, RecoveredOrder, RetiredTemplateInfo, SignedTx, SigPlan, TemplateInfo, TemplateName, Tips, TokenProgram, TokenState,
   Touch, TxJson, PairEvidence, PairTokensInfo, PairTriggerRule, OrderState,
 } from './types';
 
-/** Raw module shape: what wasm-bindgen generates for crates/kob-wasm/src/lib.rs (all string in / string out). */
+/**
+ * The raw module shape wasm-bindgen generates for crates/kob-wasm/src/lib.rs. All arguments and
+ * results are strings.
+ */
 export interface RawKobWasm {
   version(): string;
   selfCheck(): void;
@@ -39,7 +45,8 @@ export interface RawKobWasm {
   keeperTips(): string;
   dayOrder(d0: string, t0: string, rateMilli: string): string;
   mutableWindows(kind: string): string;
-  // numbers and defaults (protocol v3): 64-bit integers as decimal strings, `undefined` where the covenant arithmetic fails
+  // Numbers and defaults. 64-bit integers are decimal strings, and `undefined` marks where the
+  // covenant arithmetic fails.
   quote(n: string, rate: string, scale: string, round: string): string | undefined;
   quoteExact(n: string, rate: string, scale: string, round: string): string | undefined;
   checkScale(scale: string): void;
@@ -53,7 +60,7 @@ export interface RawKobWasm {
   defaultMinTouch(minFill: string, amount?: string): string;
   defaultMinFillSompi(): string;
   defaultConstants(): string;
-  // per-kind helpers: the state JSON of the kind (either family) and base-unit amounts
+  // Per-kind helpers take the state JSON of the kind, of either family, and base-unit amounts.
   orderPriceAt(state: string, t: string, utxoDaa: string): string | undefined;
   askProceeds(state: string, n: string, t: string, utxoDaa: string): string | undefined;
   askProceedsAt(state: string, n: string, p: string): string | undefined;
@@ -78,7 +85,8 @@ export interface RawKobWasm {
   ifdAskPrefund(state: string, n: string): string | undefined;
   ifdAskMergeSelloutBack(state: string, m: string, exitValue: string): string | undefined;
   ifdAskEscrow(state: string, carrier: string): string | undefined;
-  // pair orders (KobPair, KobCondPair, KobIfdPair): prices B base units per whole A, tips / carriers KAS
+  // Pair orders (KobPair, KobCondPair, KobIfdPair). Prices are B base units per whole A, and tips
+  // and carriers are KAS.
   pairKeeperTips(): string;
   pairTips(programA: string, programB: string): string;
   tipsFor(state: string): string;
@@ -118,10 +126,11 @@ export interface RawKobWasm {
   minTouchB(minTouch: string, stop: string, aScale: string): string | undefined;
   pairEvidenceModes(): string;
   pairTriggerRule(state: string): string;
-  // Issuance functions are added to the bindings by the issuance work (see kob/issue.ts); absent in older bindings.
+  // The issuance functions of kob/issue.ts are present only when the bindings include them.
   [extra: string]: unknown;
 }
 
+/** An error raised by a kob-wasm call. `fn` names the call. */
 export class KobError extends Error {
   readonly fn: string;
   constructor(message: string, fn: string) {
@@ -131,21 +140,30 @@ export class KobError extends Error {
   }
 }
 
+/** The typed kob-wasm facade, built by `createKob`. */
 export interface KobWasm {
   readonly raw: RawKobWasm;
   version(): string;
   selfCheck(): void;
   templates(): TemplateInfo[];
   /**
-   * The trigger evidence a batch leg (`{"kind": "ask" | "bid", ...}` as kob-protocol's `Leg`) provides: a plain KobAsk / KobBid fill that
-   * does not decay. Throws for any other leg (cross limit, conditional and if-done fills are never evidence).
+   * Returns the trigger evidence a batch leg provides.
+   * The leg is `{"kind": "ask" | "bid", ...}` as kob-protocol's `Leg`. Only a plain KobAsk or
+   * KobBid fill that does not decay is evidence. It throws for any other leg, because cross-limit,
+   * conditional and if-done fills are never evidence.
    */
   touchOf(leg: object): Touch;
-  /** Builds any action into an unsigned transaction + signing plan. Throws KobError with the protocol's reason on invalid requests. */
+  /**
+   * Builds any action into an unsigned transaction + signing plan. Throws KobError with the
+   * protocol's reason on invalid requests.
+   */
   build(request: ActionRequest): BuiltTx;
   /** Verifies wallet signatures against the digests and assembles the signed transaction. */
   finalize(built: BuiltTx, signatures: InputSignature[], options?: FinalizeOptions): SignedTx;
-  /** Runs the signed tx through the in-wasm script engine with consensus rules (throws if any input fails). */
+  /**
+   * Runs the signed tx through the in-wasm script engine with consensus rules (throws if any input
+   * fails).
+   */
   validate(signed: SignedTx): unknown;
   masses(tx: TxJson): MassReport;
   encodeState(state: AnyState): Hex;
@@ -153,183 +171,261 @@ export interface KobWasm {
   redeemScript(state: AnyState): Hex;
   /** P2SH script public key in kaspa string form (`version(u16 BE hex) + script hex`). */
   scriptPublicKey(state: AnyState): string;
-  /** the cancel-only table: retired order templates (an order under one is only ever cancelled by its maker) */
+  /**
+   * The cancel-only table: retired order templates (an order under one is only ever cancelled by
+   * its maker).
+   */
   retiredTemplates(): RetiredTemplateInfo[];
-  /** P2SH script public key of an order state under the retired template `retired` (its hash, of the state's kind) */
+  /**
+   * P2SH script public key of an order state under the retired template `retired` (its hash, of the
+   * state's kind).
+   */
   retiredScriptPublicKey(retired: Hex, state: AnyState): string;
-  /** either family's layout (KRON: `id_type` / `is_minter`) */
+  /** Either family's layout (KRON: `id_type` / `is_minter`). */
   encodeTokenState(state: TokenState): Hex;
-  /** 46 bytes decode as KRON, 112 bytes as KCC-20 */
+  /** 46 bytes decode as KRON, 112 bytes as KCC-20. */
   decodeTokenState(hex: Hex): TokenState;
   tokenScriptPublicKey(program: TokenProgram, state: TokenState): string;
   encodePayload(records: PayloadRecord[]): Hex;
-  /** null when the payload is neither KOB1 nor legacy x402 */
+  /** Null when the payload is neither KOB1 nor legacy x402. */
   decodePayload(hex: Hex): Payload | null;
-  /** Re-derives the orders a genesis tx created from its KOB1 payload, trusting nothing (throws if a record does not verify). */
+  /**
+   * Re-derives the orders a genesis tx created from its KOB1 payload, trusting nothing (throws if a
+   * record does not verify).
+   */
   recoverOrders(tx: TxJson): RecoveredOrder[];
   /**
-   * Re-derives the in-place amends (AMEND records) of a transaction, trusting nothing but the previous state: of a SIGNED tx from its order
-   * inputs' signature scripts (`plans` omitted), of a built one from its signing plans (`built.plans`). Throws if a record does not verify.
+   * Re-derives the in-place amends (AMEND records) of a transaction, trusting nothing but the
+   * previous state: of a SIGNED tx from its order inputs' signature scripts (`plans` omitted), of a
+   * built one from its signing plans (`built.plans`). Throws if a record does not verify.
    */
   recoverAmends(tx: TxJson, plans?: SigPlan[]): RecoveredAmend[];
   budgetTable(): Record<string, number>;
   budgetFor(role: string): number;
-  /** default refund / keeper tips of the KAS kinds per token program */
+  /** Default refund / keeper tips of the KAS kinds per token program. */
   keeperTips(): Record<TokenProgram, Tips>;
-  /** default tips of the pair kinds per program pair (`<program of A>+<program of B>`) */
+  /** Default tips of the pair kinds per program pair (`<program of A>+<program of B>`). */
   pairKeeperTips(): Record<string, Tips>;
-  /** default tips of a pair order whose A runs `programA` and B `programB` */
+  /** Default tips of a pair order whose A runs `programA` and B `programB`. */
   pairTips(programA: TokenProgram, programB: TokenProgram): Tips;
-  /** default tips of an order by its kind (a pair order: the pair table; any other kind: its token program's) */
+  /**
+   * Default tips of an order by its kind (a pair order: the pair table; any other kind: its token
+   * program's).
+   */
   tipsFor(state: AnyState): Tips;
-  /** Day order until the next 00:00 UTC. d0 = node virtual DAA, t0 = UTC unix seconds read together, rateMilli = measured milli-DAA/s (null = 10 000). */
+  /**
+   * Day order until the next 00:00 UTC. d0 = node virtual DAA, t0 = UTC unix seconds read together,
+   * rateMilli = measured milli-DAA/s (null = 10 000).
+   */
   dayOrder(d0: bigint | string, t0: bigint | string, rateMilli?: bigint | string | null): DayOrder;
   mutableWindows(kind: TemplateName): [string, number, number][];
 
-  // ------------------------------------------------------------------ amounts and prices (protocol v3, docs/spec/order-types.md)
-  // Every quantity is token base units, every price / tip quote units per WHOLE token (`scale` base units). Helpers return null exactly where
-  // the covenant's own arithmetic fails (an overflow, a rate below the tip, ...).
+  // --- Amounts and prices (docs/spec/order-types.md) ---
+  // Every quantity is in token base units. Every price and tip is in quote units per whole token,
+  // which is `scale` base units. Helpers return null exactly where the covenant's own arithmetic
+  // fails, as with an overflow or a rate below the tip.
 
-  /** `n * rate / scale` rounded `up` (what a maker RECEIVES) or `down` (what a maker PAYS), the covenants' exact split multiplication. */
+  /**
+   * `n * rate / scale` rounded `up` (what a maker RECEIVES) or `down` (what a maker PAYS), the
+   * covenants' exact split multiplication.
+   */
   quote(n: Num, rate: Num, scale: Num, round: Round): bigint | null;
-  /** the same in 128-bit arithmetic (not limited to i64) */
+  /** The same in 128-bit arithmetic (not limited to i64). */
   quoteExact(n: Num, rate: Num, scale: Num, round: Round): bigint | null;
-  /** throws unless `scale` is a power of ten in 1..=10^9 */
+  /** Throws unless `scale` is a power of ten in 1..=10^9. */
   checkScale(scale: Num): void;
-  /** throws unless the full fill of `amount` at `rate` is worth less than 2^62 quote units (`what` names the rate) */
+  /**
+   * Throws unless the full fill of `amount` at `rate` is worth less than 2^62 quote units (`what`
+   * names the rate).
+   */
   checkQuote(amount: Num, rate: Num, scale: Num, what: string): void;
-  /** the numeric gate of a placed order (scale and the 2^62 bound of every rate it carries); throws with the reason */
+  /**
+   * The numeric gate of a placed order (scale and the 2^62 bound of every rate it carries); throws
+   * with the reason.
+   */
   checkNumbers(state: AnyState): void;
-  /** `0 < n <= left` and `n >= minFill` unless n takes everything left */
+  /** `0 < n <= left` and `n >= minFill` unless n takes everything left. */
   minFillOk(n: Num, left: Num, minFill: Num): boolean;
-  /** `10^min(decimals, 9)` */
+  /** `10^min(decimals, 9)`. */
   defaultScale(decimals: number): bigint;
-  /** wallet default minFill: the amount worth 10 KAS at `price`, clamped to 1..amount */
+  /** Wallet default minFill: the amount worth 10 KAS at `price`, clamped to 1..amount. */
   defaultMinFill(amount: Num, price: Num, scale: Num): bigint;
-  /** if-done entries: ceil(amount / 4) */
+  /** If-done entries: ceil(amount / 4). */
   defaultMinFillIfd(amount: Num): bigint;
-  /** pair orders: the amount of A worth 10 KAS on A's KAS book (`kasPerWholeA` sompi per whole A; null: ceil(amount / 4)) */
+  /**
+   * Pair orders: the amount of A worth 10 KAS on A's KAS book (`kasPerWholeA` sompi per whole A;
+   * null: ceil(amount / 4)).
+   */
   defaultMinFillPair(amount: Num, kasPerWholeA: Num | null, scale: Num): bigint;
-  /** the default stop touch: the order's own minFill (at least 1) */
-  /** a stop's default trigger threshold: the larger of its minimum fill and a quarter of its amount (omitted: the minimum fill) */
+  /** The default stop touch: the order's own minFill (at least 1). */
+  /**
+   * A stop's default trigger threshold: the larger of its minimum fill and a quarter of its amount
+   * (omitted: the minimum fill).
+   */
   defaultMinTouch(minFill: Num, amount?: Num): bigint;
   defaultMinFillSompi(): bigint;
   defaultConstants(): DefaultConstants;
-  /** price of an ask / bid at auction time `t` (decay / rise); a `KobPair`'s quote (B per whole A) */
+  /**
+   * Price of an ask / bid at auction time `t` (decay / rise); a `KobPair`'s quote (B per whole A).
+   */
   orderPriceAt(state: AnyState, t: Num, utxoDaa: Num): bigint | null;
-  /** ask: `ceil(n * (price(t) - tip) / scale)` paid to the maker */
+  /** Ask: `ceil(n * (price(t) - tip) / scale)` paid to the maker. */
   askProceeds(state: AnyState, n: Num, t: Num, utxoDaa: Num): bigint | null;
   askProceedsAt(state: AnyState, n: Num, p: Num): bigint | null;
-  /** bid: budget a fill of n consumes from the escrow, `ceil(n * (pMax + tip) / scale)` */
+  /** Bid: budget a fill of n consumes from the escrow, `ceil(n * (pMax + tip) / scale)`. */
   bidUsed(state: AnyState, n: Num): bigint | null;
-  /** bid: most the maker pays for n at time t, `floor(n * (price(t) + tip) / scale)` */
+  /** Bid: most the maker pays for n at time t, `floor(n * (price(t) + tip) / scale)`. */
   bidSpend(state: AnyState, n: Num, t: Num, utxoDaa: Num): bigint | null;
   bidSpendAt(state: AnyState, n: Num, p: Num): bigint | null;
-  /** bid: `pMax + tip`, sompi per whole token */
+  /** Bid: `pMax + tip`, sompi per whole token. */
   bidBudgetRate(state: AnyState): bigint | null;
-  /** bid: remaining buying power (base units) of an escrow worth `value` */
+  /** Bid: remaining buying power (base units) of an escrow worth `value`. */
   bidBuyingPower(state: AnyState, value: Num): bigint;
   bidCanContinue(state: AnyState, left: Num): boolean;
-  /** bid: escrow for `amount` base units in at most `fills` fills */
+  /** Bid: escrow for `amount` base units in at most `fills` fills. */
   bidEscrow(state: AnyState, amount: Num, fills: Num): bigint | null;
-  /** the covenant's quantity rules for a fill of n (a plain bid needs its escrow `value`) */
+  /** The covenant's quantity rules for a fill of n (a plain bid needs its escrow `value`). */
   fillOk(state: AnyState, n: Num, value?: Num): boolean;
   condAskProceeds(state: AnyState, n: Num, legPrice: Num): bigint | null;
   condAskRptBudget(state: AnyState, n: Num): bigint | null;
   condBidSpend(state: AnyState, n: Num, legPrice: Num): bigint | null;
   condBidRptProceeds(state: AnyState, n: Num): bigint | null;
   condBidRptPrefund(state: AnyState, n: Num): bigint | null;
-  /** conditional bid: escrow of all `amountLeft` at the worst leg in at most `fills` fills */
+  /** Conditional bid: escrow of all `amountLeft` at the worst leg in at most `fills` fills. */
   condBidEscrow(state: AnyState, fills: Num): bigint | null;
   ifdBidSpend(state: AnyState, n: Num, p: Num): bigint | null;
   ifdBidMergeBudget(state: AnyState, m: Num): bigint | null;
-  /** if-done buy entry: its escrow (limit spend of the whole amount, carriers per possible fill) */
+  /**
+   * If-done buy entry: its escrow (limit spend of the whole amount, carriers per possible fill).
+   */
   ifdBidEscrow(state: AnyState): bigint | null;
   ifdAskProceeds(state: AnyState, n: Num, p: Num): bigint | null;
   ifdAskPrefund(state: AnyState, n: Num): bigint | null;
   ifdAskMergeSelloutBack(state: AnyState, m: Num, exitValue: Num): bigint | null;
-  /** if-done sell entry: its value (carrier plus the prefund of the whole amount and the exit carriers) */
+  /**
+   * If-done sell entry: its value (carrier plus the prefund of the whole amount and the exit
+   * carriers).
+   */
   ifdAskEscrow(state: AnyState, carrier: Num): bigint | null;
 
-  // ------------------------------------------------------------------ pair orders (crates/kob-protocol/src/state/pair.rs)
-  // KobPair / KobCondPair / KobIfdPair: n = base units of A, prices B base units per WHOLE A, tips and carriers KAS (sompi).
+  // --- Pair orders (crates/kob-protocol/src/state/pair.rs) ---
+  // These cover KobPair, KobCondPair and KobIfdPair. `n` is base units of A, prices are B base
+  // units per whole A, and tips and carriers are KAS in sompi.
 
-  /** the two tokens of a pair order and its side (a buy-first entry is a `bid`) */
+  /** The two tokens of a pair order and its side (a buy-first entry is a `bid`). */
   pairTokens(state: AnyState): PairTokensInfo;
-  /** the token programs of A and B */
+  /** The token programs of A and B. */
   pairPrograms(state: AnyState): { a: { covId: Hex; program: TokenProgram }; b: { covId: Hex; program: TokenProgram } };
-  /** the exact custodies an order holds, in record order (a sell-first pair entry: its A custody, then its B prefund) */
+  /**
+   * The exact custodies an order holds, in record order (a sell-first pair entry: its A custody,
+   * then its B prefund).
+   */
   custodies(state: AnyState): { token: Hex; amount: bigint }[];
-  /** the builders' rules for a NEW order (throws with the first rule broken) */
+  /** The builders' rules for a NEW order (throws with the first rule broken). */
   checkNewOrder(state: AnyState): void;
-  /** the least KAS a new order UTXO must hold */
+  /** The least KAS a new order UTXO must hold. */
   minOrderValue(state: AnyState): bigint;
-  /** S released by a fill of n at quote p (`KobPair`, `KobCondPair`): an ask n, a bid `floor(n * p / scale(A))` of B */
+  /**
+   * S released by a fill of n at quote p (`KobPair`, `KobCondPair`): an ask n, a bid `floor(n * p /
+   * scale(A))` of B.
+   */
   pairSOut(state: AnyState, n: Num, p: Num): bigint | null;
-  /** least T the maker receives: an ask `ceil(n * p / scale(A))` of B, a bid n of A */
+  /** Least T the maker receives: an ask `ceil(n * p / scale(A))` of B, a bid n of A. */
   pairTOutMin(state: AnyState, n: Num, p: Num): bigint | null;
-  /** KAS tip a fill of n releases, `floor(n * tip / scale(A))` (every pair kind) */
+  /** KAS tip a fill of n releases, `floor(n * tip / scale(A))` (every pair kind). */
   pairTipKas(state: AnyState, n: Num): bigint | null;
-  /** the covenant's complete rule of a `KobPair` fill (throws with the reason when refused) */
+  /** The covenant's complete rule of a `KobPair` fill (throws with the reason when refused). */
   pairFill(state: AnyState, n: Num, p: Num, value: Num): PairFill;
-  /** the largest n anyone can take from a `KobPair` now at quote p (order UTXO `value` sompi; 0 = none) */
+  /**
+   * The largest n anyone can take from a `KobPair` now at quote p (order UTXO `value` sompi; 0 =
+   * none).
+   */
   pairMaxTakeable(state: AnyState, p: Num, value: Num): bigint;
-  /** a `KobPair`'s highest quote (a rising bid's `priceEnd`, else `price`) */
+  /** A `KobPair`'s highest quote (a rising bid's `priceEnd`, else `price`). */
   pairPriceMax(state: AnyState): bigint;
-  /** a `KobPair` BID's B escrow for `amount` of A: `floor(amount * pMax / scale(A)) + 1` (exact floors are subadditive; `fills` is ignored) */
+  /**
+   * A `KobPair` BID's B escrow for `amount` of A: `floor(amount * pMax / scale(A)) + 1` (exact
+   * floors are subadditive; `fills` is ignored).
+   */
   pairBidEscrow(state: AnyState, amount: Num, fills: Num): bigint | null;
-  /** KAS a pair order UTXO needs (`KobPair` / `KobCondPair`: `fills` delivery carriers + the tip of the amount; `KobIfdPair`: its carriers, ignores `fills`) */
+  /**
+   * KAS a pair order UTXO needs (`KobPair` / `KobCondPair`: `fills` delivery carriers + the tip of
+   * the amount; `KobIfdPair`: its carriers, ignores `fills`).
+   */
   pairKasValue(state: AnyState, fills: Num): bigint | null;
-  /** `ceil(amountLeft / minFill)` */
+  /** `ceil(amountLeft / minFill)`. */
   pairMaxFills(state: AnyState): bigint;
-  /** the deliveries a NEW `KobPair` / `KobCondPair` funds itself (1 when it never rests after a fill, else 2; TWAP / DCA one per slice); its least value is `pairKasValue(state, pairFundedFills(state))` */
+  /**
+   * The deliveries a NEW `KobPair` / `KobCondPair` funds itself (1 when it never rests after a
+   * fill, else 2; TWAP / DCA one per slice); its least value is `pairKasValue(state,
+   * pairFundedFills(state))`.
+   */
   pairFundedFills(state: AnyState): bigint;
-  /** `KobIfdPair`: the KAS every exit needs (the entry's `exitCarrier` at least) */
+  /** `KobIfdPair`: the KAS every exit needs (the entry's `exitCarrier` at least). */
   ifdPairExitCarrierNeeded(state: AnyState): bigint | null;
-  /** `KobCondPair` leg price (0 take-profit / limit, 1 stop) at time t; `trigger`: armed by this transaction's evidence */
+  /**
+   * `KobCondPair` leg price (0 take-profit / limit, 1 stop) at time t; `trigger`: armed by this
+   * transaction's evidence.
+   */
   condPairLegPrice(state: AnyState, leg: 0 | 1, trigger: boolean, t: Num, utxoDaa: Num): bigint | null;
-  /** `KobCondPair`: the band's worst stop, a BID's worst price, an ASK's lowest price */
+  /** `KobCondPair`: the band's worst stop, a BID's worst price, an ASK's lowest price. */
   condPairBounds(state: AnyState): { stopWorst: bigint; worst: bigint; lowest: bigint };
   condPairRptProceeds(state: AnyState, n: Num): bigint | null;
   condPairRptBack(state: AnyState, n: Num): bigint | null;
-  /** `KobCondPair` BID: B escrow for all of `amountLeft` at the worst leg in at most `fills` fills */
+  /**
+   * `KobCondPair` BID: B escrow for all of `amountLeft` at the worst leg in at most `fills` fills.
+   */
   condPairBidEscrow(state: AnyState, fills: Num): bigint | null;
-  /** whether the evidence arms a pair stop (`KobCondPair`, a `KobIfdPair` stop entry); null where the covenant's arithmetic fails */
+  /**
+   * Whether the evidence arms a pair stop (`KobCondPair`, a `KobIfdPair` stop entry); null where
+   * the covenant's arithmetic fails.
+   */
   pairArms(state: AnyState, evidence: PairEvidence): boolean | null;
-  /** the valid and maximal trailing ratchet k (null: none) */
+  /** The valid and maximal trailing ratchet k (null: none). */
   condPairTrailK(state: AnyState, evidence: PairEvidence): bigint | null;
   condPairTrailCheck(state: AnyState, evidence: PairEvidence, k: Num): boolean;
-  /** least B evidence (base units of B) of a two-KAS-book trigger at the current stop */
+  /** Least B evidence (base units of B) of a two-KAS-book trigger at the current stop. */
   pairMinTouchB(state: AnyState): bigint | null;
-  /** `KobIfdPair`: its committed exit (a `KobCondPair` state, amountLeft / custody / repeat fields 0) */
+  /**
+   * `KobIfdPair`: its committed exit (a `KobCondPair` state, amountLeft / custody / repeat fields
+   * 0).
+   */
   ifdPairExit(state: AnyState): OrderState;
-  /** `KobIfdPair`: the exit a fill of n creates holding `custody`, booked with `parent` / `until` when given */
+  /**
+   * `KobIfdPair`: the exit a fill of n creates holding `custody`, booked with `parent` / `until`
+   * when given.
+   */
   ifdPairExitFor(state: AnyState, n: Num, custody: Num, booking?: { parent: Hex; until: Num } | null): OrderState;
-  /** the `exitState` (hex, 432 bytes) an entry commits for the exit `exit` (a `KobCondPair` state) */
+  /**
+   * The `exitState` (hex, 432 bytes) an entry commits for the exit `exit` (a `KobCondPair` state).
+   */
   ifdPairCommitExit(exit: AnyState): Hex;
   ifdPairPriceAt(state: AnyState, trigger: boolean, t: Num, utxoDaa: Num): bigint | null;
-  /** `KobIfdPair` amounts of a fill of n at quote p (null where the arithmetic fails) */
+  /** `KobIfdPair` amounts of a fill of n at quote p (null where the arithmetic fails). */
   ifdPairAmounts(state: AnyState, n: Num, p: Num): { spend: bigint | null; proceeds: bigint | null; pre: bigint | null; mergeBudget: bigint | null };
-  /** `KobIfdPair`: the B custody a new entry needs */
+  /** `KobIfdPair`: the B custody a new entry needs. */
   ifdPairBCustodyNeeded(state: AnyState): bigint | null;
-  /** two-KAS-book evidence: the implied rate `a * scale(B) / b` is at most / at least `x` (B per whole A) */
+  /**
+   * Two-KAS-book evidence: the implied rate `a * scale(B) / b` is at most / at least `x` (B per
+   * whole A).
+   */
   impliedLe(a: Num, b: Num, x: Num, bScale: Num): boolean | null;
   impliedGe(a: Num, b: Num, x: Num, bScale: Num): boolean | null;
-  /** `ceil(minTouch * stop / scale(A))` */
+  /** `ceil(minTouch * stop / scale(A))`. */
   minTouchB(minTouch: Num, stop: Num, aScale: Num): bigint | null;
   pairEvidenceModes(): { mode: number; name: 'kasBooks' | 'pair'; description: string }[];
-  /** which resting sides arm (and trail) a pair stop; null without a stop */
+  /** Which resting sides arm (and trail) a pair stop; null without a stop. */
   pairTriggerRule(state: AnyState): PairTriggerRule | null;
 }
 
-/** kob-wasm `pairFill`: the covenant amounts of one `KobPair` fill. */
+/** The covenant amounts of one `KobPair` fill, from kob-wasm `pairFill`. */
 export interface PairFill { sOut: bigint; tOut: bigint; tipKas: bigint; rest: boolean; outAmount: bigint }
 
-/** A 64-bit integer argument: bigint, decimal string or a safe JS integer. */
+/** A 64-bit integer argument, as a bigint, a decimal string or a safe JS integer. */
 export type Num = bigint | string | number;
-/** `up` = what a maker receives, `down` = what a maker pays */
+/** The rounding of a quote. `up` is what a maker receives and `down` is what a maker pays. */
 export type Round = 'up' | 'down';
-/** kob-wasm `defaultConstants` (sompi / DAA / bps) */
+/** The constants of kob-wasm `defaultConstants`, in sompi, DAA and basis points. */
 export interface DefaultConstants {
   defaultOrderCarrier: bigint; defaultMinFillSompi: bigint; defaultMinFillImmediate: bigint; maxScale: bigint; quoteLimit: bigint; marketAuctionDaa: bigint; slippageBps: bigint;
   marketActivationDaa: bigint; iocLifeDaa: bigint; stopBandDaa: bigint; minRestDaa: bigint; daaRateMilli: bigint;
@@ -346,7 +442,7 @@ function wrap<T>(fn: string, f: () => T): T {
   }
 }
 
-/** Wraps a raw wasm-bindgen module. */
+/** Wraps a raw wasm-bindgen module in the typed facade. */
 export function createKob(raw: RawKobWasm): KobWasm {
   const s = (v: bigint | string | number) => v.toString();
   const J = (st: AnyState) => JSON.stringify(st);
