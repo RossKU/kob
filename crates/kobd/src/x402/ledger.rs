@@ -1,7 +1,6 @@
-//! The durable replay ledger: an append-only JSONL write-ahead log with an fsync per record and an
-//! in-memory index, replayed at startup.
+//! The durable replay ledger: an append-only JSONL write-ahead log with an in-memory index.
 //!
-//! One entry per transaction id moves through
+//! One entry per transaction id moves through these states.
 //!
 //! ```text
 //! pending -> broadcast -> accepted
@@ -10,28 +9,43 @@
 //!    +--> failed (definitive rejection before or without effect: outpoints are released)
 //! ```
 //!
-//! Every state change appends the complete entry as one line (`{"entry":{...}}`); on replay the last
-//! line of a transaction id wins. A record is acknowledged only once its whole line, newline included, is
-//! written and fsynced; a write or fsync that fails is cut back off the file ([`append_record`]) and the
-//! operation fails, so the next record never continues a partial one. On open, a last line without its newline
-//! that does not parse is such an unacknowledged write (a crash mid-append) and is discarded; any other line that
-//! does not parse, the last one included, refuses to start (fail closed, docs/ops/executor.md "Ledger recovery").
+//! From `ambiguous` an entry moves on to `broadcast`, `accepted` or `failed`.
 //!
-//! [`Ledger::claim`] is the atomic consume step of the settlement lifecycle:
+//! # Log format
 //!
-//! * an outpoint reserved by a *different* non-failed transaction id -> replay conflict;
-//! * the same transaction id, request hash and payment identifier -> the existing entry (idempotent; cached response);
-//! * the same transaction id and another request hash -> conflict; another payment identifier (or none where it had one)
-//!   -> `kaspa_payment_identifier_conflict` (a broadcast transaction is public, the identifier is not);
-//! * a `payment-identifier` is bound to (request hash, profile, transaction id): same id + other request hash ->
-//!   `kaspa_payment_identifier_conflict`; same id + same request + another transaction ->
-//!   `kaspa_payment_identifier_conflict` while the bound transaction is not failed (the cached outcome of one
-//!   transaction is never the answer for another); after it failed the new transaction is settled on its own;
-//! * `failed` releases the outpoints; `broadcast`, `accepted` and `ambiguous` never do.
+//! - Every state change appends the complete entry as one line (`{"entry":{...}}`).
+//!   On replay the last line of a transaction id wins.
+//! - A record is acknowledged only once its whole line, newline included, is written and fsynced.
+//! - A write or fsync that fails is cut back off the file ([`append_record`]) and the operation
+//!   fails. The next record never continues a partial one.
+//! - On open, a last line without its newline that does not parse is an unacknowledged write (a
+//!   crash mid-append). It is discarded.
+//! - Any other line that does not parse, the last one included, refuses to start (fail closed).
+//!   See docs/ops/executor.md, "Ledger recovery".
 //!
-//! Failed entries are kept for a bounded time and number ([`Ledger::prune_failed`]): anonymous invoice payments can create
-//! them, and they protect nothing (their outpoints are released). A pruned entry is forgotten with a `{"forget":{...}}`
-//! record; the next compaction drops both.
+//! # Claim
+//!
+//! [`Ledger::claim`] is the atomic consume step of the settlement lifecycle. Its rules:
+//!
+//! - An outpoint reserved by a *different* non-failed transaction id is a replay conflict.
+//! - The same transaction id, request hash and payment identifier return the existing entry
+//!   (idempotent, cached response).
+//! - The same transaction id with another request hash is a conflict. Another payment identifier,
+//!   or none where it had one, gives `kaspa_payment_identifier_conflict`. A broadcast transaction
+//!   is public and the identifier is not.
+//! - A `payment-identifier` is bound to (request hash, profile, merchant, transaction id). The same
+//!   id with another request hash, profile or merchant gives `kaspa_payment_identifier_conflict`.
+//! - The same id and request with another transaction gives the same error while the bound
+//!   transaction is not failed. The cached outcome of one transaction is never the answer for
+//!   another. After the bound transaction failed, the new one is settled on its own.
+//! - `failed` releases the outpoints. `broadcast`, `accepted` and `ambiguous` never do.
+//!
+//! # Pruning
+//!
+//! Failed entries are kept for a bounded time and number ([`Ledger::prune_failed`]). Anonymous
+//! invoice payments can create them, and they protect nothing because their outpoints are
+//! released. A pruned entry is forgotten with a `{"forget":{...}}` record. The next compaction
+//! drops both.
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
@@ -84,8 +98,8 @@ pub struct Watched {
     pub amount: u64,
 }
 
-/// A KOB order outpoint a swap-and-pay transaction spends, with the script it is locked by (needed to
-/// re-check that it is still unspent).
+/// A KOB order outpoint that a swap-and-pay transaction spends, with its locking script.
+/// The script is needed to re-check that the outpoint is still unspent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderRef {
     pub txid: String,
@@ -135,12 +149,14 @@ pub struct IntentRecord {
     /// DAA score of the block that accepted the creation, once the intent UTXO was seen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_daa: Option<u64>,
-    /// When the intent UTXO was first found spent while the chain follower had not yet reported who spent it (unix ms): the follower is given
-    /// a grace period to say whether another keeper's execution paid the merchant before the payment is given up.
+    /// When the intent UTXO was first found spent before the chain follower said who spent it (unix
+    /// ms). The follower gets a grace period to report whether another keeper's execution paid the
+    /// merchant. Only after that is the payment given up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gone_ms: Option<u64>,
-    /// The expiry of an intent that ended unexecuted (`intent_expired`): the facilitator expires it from its
-    /// deadline on, which returns the payer's KAS and tokens; the entry itself is already `failed`.
+    /// The expiry of an intent that ended unexecuted (`intent_expired`).
+    /// From its deadline on, the facilitator expires the intent, which returns the payer's KAS and
+    /// tokens. The entry itself is already `failed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expiry: Option<ExpiryRecord>,
 }
@@ -149,9 +165,10 @@ pub struct IntentRecord {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExpiryRecord {
-    /// Tried on every reconcile until this time (unix ms; counted from when the facilitator gave the intent up, never
-    /// before the deadline); after it the expiry is still retried while the intent stands, throttled to one try per
-    /// `EXPIRY_RETRY_MS` (`facilitator/intent.rs`).
+    /// Tried on every reconcile until this time (unix ms). The time counts from when the
+    /// facilitator gave the intent up, never from before the deadline. After it, the expiry is
+    /// still retried while the intent stands, at most once per `EXPIRY_RETRY_MS`
+    /// (`facilitator/intent.rs`).
     pub until_ms: u64,
     /// The last expiry transaction submitted (hex txid).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,12 +176,15 @@ pub struct ExpiryRecord {
     /// When the last expiry was built and submitted (unix ms).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_try_ms: Option<u64>,
-    /// The fee rate (sompi per gram) the submitted expiry pays: a replacement must pay more (C5 X-8).
+    /// The fee rate (sompi per gram) the submitted expiry pays. A replacement must pay more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<u64>,
-    /// How it ended: `expired` (our expiry accepted), `spent` (the intent was spent by another transaction),
-    /// `never_created` (the creation never reached the chain within the window) or `unbuildable: <why>` (no expiry can be
-    /// built, the payer's cancel remains). `abandoned` is written by older builds only. `None` while it is pending.
+    /// How it ended, or `None` while it is pending.
+    ///
+    /// - `expired`: our expiry was accepted.
+    /// - `spent`: another transaction spent the intent.
+    /// - `never_created`: the creation never reached the chain within the window.
+    /// - `unbuildable: <why>`: no expiry can be built, and the payer's cancel remains.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
 }
@@ -213,16 +233,17 @@ pub struct Entry {
     /// The cached settlement response (set with `accepted`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<Value>,
-    /// Intent payments (`kob-intent-v1`): the intent and its executions. `txid` is the creation's; `watched`
-    /// follows the latest execution's merchant output.
+    /// Intent payments (`kob-intent-v1`): the intent and its executions.
+    /// `txid` is the creation's. `watched` follows the latest execution's merchant output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub intent: Option<IntentRecord>,
     /// Invoice payments: the invoice id (hex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoice: Option<String>,
-    /// When `/settle` first answered this payment with its success (unix ms). Every later success answer for it carries
-    /// `extensions.kob.replayed = true`, so a resource server that lost its own memory (a restart) still tells the payer's
-    /// retry from a first delivery.
+    /// When `/settle` first answered this payment with its success (unix ms).
+    /// Every later success answer for it carries `extensions.kob.replayed = true`. So a resource
+    /// server that lost its own memory (a restart) still tells the payer's retry from a first
+    /// delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answered_ms: Option<u64>,
 }
@@ -240,9 +261,10 @@ impl Entry {
             .collect()
     }
 
-    /// True for an intent payment (`kob-intent-v1`): it carries an intent record or its kind names an intent. Such an entry
-    /// is paid only by an execution of its intent, never by the creation itself, so it is never finalized as a direct
-    /// payment.
+    /// True for an intent payment (`kob-intent-v1`).
+    ///
+    /// Such an entry carries an intent record or has an intent kind. Only an execution of its
+    /// intent pays it, never the creation, so it is never finalized as a direct payment.
     pub fn is_intent(&self) -> bool {
         self.intent.is_some() || self.kind.starts_with("intent")
     }
@@ -262,7 +284,8 @@ pub enum LedgerError {
          (docs/ops/executor.md, \"Ledger recovery\")"
     )]
     Corrupt { line: usize, msg: String },
-    /// A complete record in a format this build does not read (an intent payment recorded for an earlier router template).
+    /// A complete record in a format this build does not read, such as an intent payment of an
+    /// earlier router template.
     #[error(
         "ledger line {line} holds an intent payment in a format this build does not read ({msg}); stop, archive this ledger \
          (and its invoice store) and start with a new ledger path (docs/ops/executor.md, \"Ledger format\")"
@@ -282,7 +305,8 @@ impl From<std::io::Error> for LedgerError {
 
 impl From<LedgerError> for X402Error {
     fn from(e: LedgerError) -> Self {
-        // The ledger is the source of truth: when it cannot be written the payment must not proceed.
+        // The ledger is the source of truth. When it cannot be written the payment must not
+        // proceed.
         X402Error::new(Reason::UnexpectedSettleError, Diag::Internal, e.to_string()).retryable()
     }
 }
@@ -292,7 +316,8 @@ impl From<LedgerError> for X402Error {
 pub enum Claim {
     /// A new entry (or a failed one restarted), state `pending`.
     New(Entry),
-    /// An existing non-failed entry for the same request: the caller resumes or returns its outcome.
+    /// An existing non-failed entry for the same request. The caller resumes or returns its
+    /// outcome.
     Existing(Entry),
 }
 
@@ -306,15 +331,17 @@ struct IdBinding {
 #[derive(Default)]
 struct Inner {
     file: Option<File>,
-    /// Set when a failed append could not be cut back off the file: nothing more is appended until a restart
-    /// (which discards the unfinished last line).
+    /// Set when a failed append could not be cut back off the file.
+    /// Nothing more is appended until a restart, which discards the unfinished last line.
     broken: Option<String>,
     entries: HashMap<String, Entry>,
     by_outpoint: HashMap<Outpoint, String>,
     ids: HashMap<String, IdBinding>,
-    /// Invoice id -> the transaction ids of its payments (an invoice's lookup never scans the ledger).
+    /// Invoice id to the transaction ids of its payments, so an invoice lookup never scans the
+    /// ledger.
     by_invoice: HashMap<String, BTreeSet<String>>,
-    /// Failed entries by (last update, transaction id): the retention order of [`Ledger::prune_failed`].
+    /// Failed entries by (last update, transaction id), the retention order of
+    /// [`Ledger::prune_failed`].
     failed: BTreeSet<(u64, String)>,
     /// Records in the log file since it was last written whole (compaction trigger).
     lines: usize,
@@ -324,7 +351,8 @@ struct Inner {
 pub struct Ledger {
     inner: Mutex<Inner>,
     path: Option<PathBuf>,
-    /// Exclusive advisory lock (sidecar `<path>.lock`): two facilitators must never append to one ledger.
+    /// Exclusive advisory lock on the sidecar `<path>.lock`.
+    /// Two facilitators must never append to one ledger.
     _lock: Option<File>,
 }
 
@@ -341,7 +369,7 @@ impl Inner {
         if let Some(inv) = &e.invoice {
             self.by_invoice.entry(inv.clone()).or_default().insert(e.txid.clone());
         }
-        // consumed outpoints follow the state: failed releases, everything else reserves
+        // Consumed outpoints follow the state: failed releases, everything else reserves.
         for o in e.consumed_outpoints() {
             if e.state == State::Failed {
                 if self.by_outpoint.get(&o).is_some_and(|t| t == &e.txid) {
@@ -353,7 +381,7 @@ impl Inner {
         }
         if let Some(id) = &e.payment_id {
             let bind = self.ids.get(id);
-            // a failed entry never displaces the binding of a live one
+            // A failed entry never displaces the binding of a live one.
             if e.state != State::Failed || bind.is_none() || bind.is_some_and(|b| b.txid == e.txid) {
                 self.ids.insert(
                     id.clone(),
@@ -428,10 +456,12 @@ pub(crate) struct AppendFailure {
     pub undone: bool,
 }
 
-/// Appends one complete record (a line with its newline) to an append-only log and fsyncs it. On any write or fsync
-/// error the file is cut back to its length before the write (`set_len`), so a later record never continues a partial
-/// one, and the error is returned: the record is not acknowledged. `undone` is false when even the cut failed (the
-/// caller then stops appending; a restart discards the unfinished last line).
+/// Appends one complete record (a line with its newline) to an append-only log and fsyncs it.
+///
+/// On a write or fsync error the file is cut back to its length before the write (`set_len`), so
+/// a later record never continues a partial one. The error is returned and the record is not
+/// acknowledged. `undone` is false when even the cut failed. The caller then stops appending, and
+/// a restart discards the unfinished last line.
 pub(crate) fn append_record(f: &mut File, line: &[u8]) -> Result<(), AppendFailure> {
     use std::io::{Seek, SeekFrom};
     let start = f.seek(SeekFrom::End(0)).map_err(|error| AppendFailure { error, undone: true })?;
@@ -440,7 +470,7 @@ pub(crate) fn append_record(f: &mut File, line: &[u8]) -> Result<(), AppendFailu
     Err(AppendFailure { error, undone })
 }
 
-/// The fields a claim supplies (everything is derived from a verified payment).
+/// The fields a claim supplies, all derived from a verified payment.
 #[derive(Clone, Debug)]
 pub struct NewEntry {
     pub txid: [u8; 32],
@@ -469,8 +499,8 @@ impl Ledger {
         Ledger { inner: Mutex::new(Inner::default()), path: None, _lock: None }
     }
 
-    /// Opens (creating if needed) the log at `path`, replays it and compacts it when it carries much
-    /// superseded history.
+    /// Opens the log at `path`, creating it if needed, and replays it.
+    /// Compacts it when it carries much superseded history.
     pub fn open(path: impl AsRef<Path>) -> Result<Ledger, LedgerError> {
         let path = path.as_ref().to_path_buf();
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
@@ -504,16 +534,18 @@ impl Ledger {
                     records += 1;
                     good_len = end + usize::from(terminated);
                     if !terminated {
-                        // valid record whose newline was torn off: complete it below
+                        // A valid record whose newline was torn off: complete it below.
                         good_len = end;
                     }
                 }
                 Ok(None) => good_len = end + usize::from(terminated), // blank line
-                // a complete record of another format is never a torn tail: refuse wherever it is
+                // A complete record of another format is never a torn tail, so refuse it wherever
+                // it is.
                 Err(LineError::Unsupported(msg)) => return Err(LedgerError::Unsupported { line: line_no, msg }),
                 Err(LineError::Bad(msg)) if is_last && !terminated => {
-                    // an unfinished last write (crash mid-append; torn or zero-filled): never acknowledged, so drop it.
-                    // A newline-terminated line was written whole: one that does not parse is refused like any other.
+                    // An unfinished last write (a crash mid-append, torn or zero-filled) was never
+                    // acknowledged, so drop it. A newline-terminated line was written whole, so one
+                    // that does not parse is refused like any other.
                     warn!("ledger: discarding an unfinished last record at line {line_no}: {msg}");
                     break;
                 }
@@ -525,7 +557,7 @@ impl Ledger {
         if (good_len as u64) != raw.len() as u64 {
             file.set_len(good_len as u64)?;
         }
-        // position at the end; make sure the last record is newline-terminated
+        // Position at the end and make sure the last record is newline-terminated.
         use std::io::Seek;
         file.seek(std::io::SeekFrom::End(0))?;
         if good_len > 0 && raw.get(good_len - 1) != Some(&b'\n') {
@@ -573,11 +605,16 @@ impl Ledger {
         Ok(())
     }
 
-    /// Forgets failed entries updated before `now_ms - max_age_ms`, then the oldest ones beyond `max_count`, except those
-    /// `keep` names (the facilitator still acts on them: an intent whose expiry has not ended). A failed entry protects
-    /// nothing (its outpoints are released; an identical retry of its transaction is verified and claimed again as if it were
-    /// new), so it is only kept for diagnostics and the invoice status. Each pruned entry is forgotten durably (a `forget`
-    /// record); the log is compacted when it holds much superseded history. Returns how many were pruned.
+    /// Forgets failed entries updated before `now_ms - max_age_ms`, then the oldest beyond
+    /// `max_count`.
+    ///
+    /// Entries that `keep` names stay, because the facilitator still acts on them (an intent whose
+    /// expiry has not ended). A failed entry protects nothing. Its outpoints are released, and an
+    /// identical retry of its transaction is verified and claimed again as if it were new. So it is
+    /// kept only for diagnostics and the invoice status.
+    ///
+    /// Each pruned entry is forgotten durably with a `forget` record. The log is compacted when it
+    /// holds much superseded history. Returns how many were pruned.
     pub fn prune_failed(
         &self,
         now_ms: u64,
@@ -624,14 +661,14 @@ impl Ledger {
         let request_hash = hex(&n.request_hash);
         let mut g = self.lock();
 
-        // (b)/(c): the same transaction id
+        // The same transaction id.
         if let Some(e) = g.entries.get(&txid) {
             if e.request_hash != request_hash || e.merchant != n.merchant {
                 return Err(X402Error::state(Diag::Replay, "this transaction was already consumed by a different request"));
             }
             if e.state != State::Failed {
-                // the transaction is public once broadcast: only the payment identifier it was settled under (never on chain)
-                // names this payment
+                // A broadcast transaction is public. Only the payment identifier it was settled
+                // under, which is never on chain, names this payment.
                 if e.payment_id != n.payment_id {
                     return Err(X402Error::state(
                         Diag::KaspaPaymentIdentifierConflict,
@@ -641,7 +678,7 @@ impl Ledger {
                 return Ok(Claim::Existing(e.clone()));
             }
         }
-        // (d): the payment identifier
+        // The payment identifier.
         if let Some(id) = &n.payment_id {
             if let Some(b) = g.ids.get(id) {
                 if b.request_hash != request_hash || b.profile != n.profile || b.merchant != n.merchant {
@@ -650,8 +687,9 @@ impl Ledger {
                         "the payment identifier is bound to a different request, profile or merchant",
                     ));
                 }
-                // the identifier names one payment: another transaction under it is never answered with that
-                // payment's outcome (it is refused while the bound one stands, and settles on its own once it failed)
+                // The identifier names one payment. Another transaction under it is never answered
+                // with that payment's outcome. It is refused while the bound one stands, and
+                // settles on its own once that one failed.
                 if b.txid != txid && g.entries.get(&b.txid).is_some_and(|o| o.state != State::Failed) {
                     return Err(X402Error::state(
                         Diag::KaspaPaymentIdentifierConflict,
@@ -660,7 +698,7 @@ impl Ledger {
                 }
             }
         }
-        // (a): outpoints reserved by another live transaction
+        // Outpoints reserved by another live transaction.
         for o in &n.consumed {
             if let Some(t) = g.by_outpoint.get(o).filter(|t| **t != txid) {
                 return Err(X402Error::state(Diag::Replay, format!("outpoint {o} is already consumed by transaction {t}"))
@@ -734,8 +772,11 @@ impl Ledger {
         v
     }
 
-    /// KOB order outpoints that swap-and-pay settlements in flight spend (`pending`, `broadcast`, `ambiguous`): the payer
-    /// signed those routes over the book already, so the matcher of the same process plans its batches around them.
+    /// KOB order outpoints that swap-and-pay settlements in flight spend (`pending`, `broadcast`,
+    /// `ambiguous`).
+    ///
+    /// The payer signed those routes over the book already, so the matcher of the same process
+    /// plans its batches around them.
     pub fn reserved_order_outpoints(&self) -> std::collections::BTreeSet<([u8; 32], u32)> {
         self.entries_in(&[State::Pending, State::Broadcast, State::Ambiguous])
             .iter()
@@ -762,14 +803,23 @@ impl Ledger {
         self.lock().by_outpoint.get(o).cloned()
     }
 
-    /// Moves an entry to `to`. `failed` releases its outpoints; only the transitions of the module
-    /// diagram are legal (`failed` is only left through a new [`Ledger::claim`]).
+    /// Moves an entry to `to`, releasing its outpoints when `to` is `failed`.
+    ///
+    /// The legal transitions are:
+    ///
+    /// - `pending` to `broadcast`, `failed` or `ambiguous`.
+    /// - `broadcast` to `accepted`, `failed` or `ambiguous`.
+    /// - `ambiguous` to `broadcast`, `accepted` or `failed`.
+    /// - `accepted` to `ambiguous`.
+    ///
+    /// `failed` is left only through a new [`Ledger::claim`]. A move to the current state is a
+    /// no-op.
     pub fn transition(&self, txid: &str, to: State, reason: Option<String>, now_ms: u64) -> Result<Entry, LedgerError> {
         self.transition_with(txid, to, reason, now_ms, |_| {})
     }
 
-    /// [`Ledger::transition`] with an edit of the entry that is persisted in the same record (nothing is
-    /// changed in memory unless the transition is legal and the record is durable).
+    /// [`Ledger::transition`] with an edit of the entry that is persisted in the same record.
+    /// Nothing changes in memory unless the transition is legal and the record is durable.
     pub fn transition_with(
         &self,
         txid: &str,
@@ -804,7 +854,8 @@ impl Ledger {
         g.persist_and_index(e)
     }
 
-    /// Persists an edit of an entry without a state change (an intent's executions, its watched output).
+    /// Persists an edit of an entry without a state change (an intent's executions, its watched
+    /// output).
     pub fn update(&self, txid: &str, now_ms: u64, edit: impl FnOnce(&mut Entry)) -> Result<Entry, LedgerError> {
         let mut g = self.lock();
         let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
@@ -813,10 +864,15 @@ impl Ledger {
         g.persist_and_index(e)
     }
 
-    /// Records an execution of another keeper on the intent entry `txid` as the one that paid its merchant, unless another entry
-    /// that is not failed already holds the same output (the same spender and merchant output index): one output pays one intent
-    /// (audit 2026-10-30 X14: a cancel of two intents in one transaction carries one merchant output). Check and record are one
-    /// step under the ledger lock. `None`: the output belongs to another intent. An entry that already holds it is left as it is.
+    /// Records another keeper's execution as the one that paid the merchant of intent entry `txid`.
+    ///
+    /// One output pays one intent. So nothing is recorded when another entry that is not failed
+    /// already holds the same output (the same spender and merchant output index). A cancel of two
+    /// intents in one transaction carries only one merchant output. Check and record are one step
+    /// under the ledger lock.
+    ///
+    /// Returns `None` when the output belongs to another intent or the entry has no intent record.
+    /// An entry that already holds the output is returned as it is.
     pub fn claim_execution(&self, txid: &str, now_ms: u64, exec: ExecRecord) -> Result<Option<Entry>, LedgerError> {
         let mut g = self.lock();
         let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
@@ -834,7 +890,7 @@ impl Ledger {
         Ok(Some(g.persist_and_index(e)?))
     }
 
-    /// Entries of an invoice, oldest first (from the invoice index: no scan of the ledger).
+    /// Entries of an invoice, oldest first, from the invoice index without a scan of the ledger.
     pub fn entries_of_invoice(&self, invoice: &str) -> Vec<Entry> {
         let g = self.lock();
         let Some(txids) = g.by_invoice.get(invoice) else { return vec![] };
@@ -843,8 +899,10 @@ impl Ledger {
         v
     }
 
-    /// Records that `/settle` answers the entry's success now. Returns the time of the first answer when it was answered before
-    /// (the answer is a repeat), `None` for the first answer (recorded durably before it is returned).
+    /// Records that `/settle` answers the entry's success now.
+    ///
+    /// Returns the time of the first answer when there was one (the answer is a repeat), and `None`
+    /// for the first answer, which is recorded durably before it returns.
     pub fn mark_answered(&self, txid: &str, now_ms: u64) -> Result<Option<u64>, LedgerError> {
         let mut g = self.lock();
         let mut e = g.entries.get(txid).ok_or_else(|| LedgerError::Unknown(txid.to_string()))?.clone();
@@ -905,13 +963,15 @@ fn parse_line(line: &[u8]) -> Result<Option<Record>, LineError> {
         entry: Entry,
     }
     match serde_json::from_slice::<Rec>(line) {
-        // an intent payment is only ever acted on through its intent record: one without it is not replayed as anything else
+        // An intent payment is acted on only through its intent record, so one without it is not
+        // replayed as anything else.
         Ok(r) if r.entry.kind.starts_with("intent") && r.entry.intent.is_none() => {
             Err(LineError::Unsupported(format!("entry {} of kind {} has no intent record", r.entry.txid, r.entry.kind)))
         }
         Ok(r) => Ok(Some(Record::Entry(Box::new(r.entry)))),
         Err(e) => {
-            // a complete record whose intent record does not decode: written for an earlier router template
+            // A complete record whose intent record does not decode was written for another router
+            // template.
             let intent_fails = serde_json::from_slice::<Value>(line).ok().is_some_and(|v| {
                 v.get("entry")
                     .and_then(|x| x.get("intent"))
@@ -965,11 +1025,12 @@ mod tests {
         let l = Ledger::in_memory();
         let c = l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0), op(0xa1, 1)])).unwrap();
         assert!(matches!(c, Claim::New(ref e) if e.state == State::Pending));
-        // same txid + same request -> existing
+        // Same txid and same request: the existing entry.
         let c = l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0), op(0xa1, 1)])).unwrap();
         assert!(matches!(c, Claim::Existing(_)));
         assert_eq!(l.len(), 1);
-        // the same transaction under another payment identifier, or none: refused, nothing bound
+        // The same transaction under another payment identifier, or none, is refused and binds
+        // nothing.
         for id in [Some(ID2), None] {
             let e = l.claim(new_entry(1, 7, id, vec![op(0xa0, 0), op(0xa1, 1)])).unwrap_err();
             assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
@@ -997,7 +1058,7 @@ mod tests {
         done.order_inputs = vec![(op(0xb2, 1), "0000".into())];
         l.claim(done).unwrap();
         l.transition(&hex(&[2; 32]), State::Failed, None, 2_000).unwrap();
-        // the pending swap's two orders; the failed one released its order
+        // The pending swap's two orders are reserved, and the failed one released its order.
         let r = l.reserved_order_outpoints();
         assert_eq!(r, [([0xb0; 32], 2), ([0xb1; 32], 0)].into_iter().collect());
         l.transition(&hex(&[1; 32]), State::Broadcast, None, 3_000).unwrap();
@@ -1017,10 +1078,11 @@ mod tests {
     fn outpoint_reserved_by_other_txid_conflicts() {
         let l = Ledger::in_memory();
         l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0), op(0xa1, 0)])).unwrap();
-        // a different transaction spending one of the same outpoints (even for a different request)
+        // A different transaction spending one of the same outpoints is refused, even for another
+        // request.
         let e = l.claim(new_entry(2, 8, Some(ID2), vec![op(0xa1, 0), op(0xa2, 0)])).unwrap_err();
         assert_eq!(e.diag, Diag::Replay);
-        // and nothing of the rejected claim leaked into the index
+        // Nothing of the rejected claim leaked into the index.
         assert!(!l.is_consumed(&op(0xa2, 0)));
         assert!(l.get(&hex(&[2; 32])).is_none());
         assert!(l.payment_id_binding(ID2).is_none());
@@ -1030,24 +1092,25 @@ mod tests {
     fn payment_identifier_binding() {
         let l = Ledger::in_memory();
         l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap();
-        // same id, other request hash -> identifier conflict
+        // Same id, other request hash: identifier conflict.
         let e = l.claim(new_entry(2, 8, Some(ID1), vec![op(0xb0, 0)])).unwrap_err();
         assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
-        // same id, other profile -> identifier conflict
+        // Same id, other profile: identifier conflict.
         let mut other = new_entry(3, 7, Some(ID1), vec![op(0xb1, 0)]);
         other.profile = "kcc20".into();
         assert_eq!(l.claim(other).unwrap_err().diag, Diag::KaspaPaymentIdentifierConflict);
-        // same id, same request, different transaction -> identifier conflict (never the first one's outcome)
+        // Same id, same request, different transaction: identifier conflict, never the first one's
+        // outcome.
         let e = l.claim(new_entry(4, 7, Some(ID1), vec![op(0xb2, 0)])).unwrap_err();
         assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
         assert!(!l.is_consumed(&op(0xb2, 0)));
         assert!(l.get(&hex(&[4; 32])).is_none());
-        // ... also once the first one is accepted
+        // This holds once the first one is accepted too.
         l.transition(&hex(&[1; 32]), State::Broadcast, None, 2).unwrap();
         l.set_accepted(&hex(&[1; 32]), 5, serde_json::json!({"success": true}), 3).unwrap();
         let e = l.claim(new_entry(4, 7, Some(ID1), vec![op(0xb2, 0)])).unwrap_err();
         assert_eq!(e.diag, Diag::KaspaPaymentIdentifierConflict);
-        // the same transaction under the same id is the cached outcome
+        // The same transaction under the same id is the cached outcome.
         assert!(
             matches!(l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap(), Claim::Existing(ref e) if e.txid == hex(&[1; 32]))
         );
@@ -1071,10 +1134,11 @@ mod tests {
         l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap();
         l.transition(&hex(&[1; 32]), State::Failed, Some("rejected".into()), 2_000).unwrap();
         assert!(!l.is_consumed(&op(0xa0, 0)));
-        // another transaction may now spend the released outpoint
+        // Another transaction may now spend the released outpoint.
         assert!(matches!(l.claim(new_entry(2, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap(), Claim::New(_)));
         assert!(l.is_consumed(&op(0xa0, 0)));
-        // the failed transaction can be retried only after the other one is gone: the outpoint is taken
+        // The failed transaction can be retried only after the other one is gone, because the
+        // outpoint is taken.
         l.transition(&hex(&[2; 32]), State::Failed, None, 3_000).unwrap();
         assert!(
             matches!(l.claim(new_entry(1, 7, Some(ID1), vec![op(0xa0, 0)])).unwrap(), Claim::New(ref e) if e.state == State::Pending)
@@ -1090,7 +1154,7 @@ mod tests {
         l.transition(&hex(&[1; 32]), State::Ambiguous, Some("node vanished".into()), 3).unwrap();
         assert!(l.is_consumed(&op(0xa0, 0)));
         assert!(l.claim(new_entry(2, 7, None, vec![op(0xa0, 0)])).is_err());
-        // an ambiguous entry that was reconciled to accepted keeps them too
+        // An ambiguous entry reconciled to accepted keeps them too.
         l.set_accepted(&hex(&[1; 32]), 5, serde_json::json!({"success": true}), 4).unwrap();
         assert!(l.is_consumed(&op(0xa0, 0)));
         assert_eq!(l.get(&hex(&[1; 32])).unwrap().response.unwrap()["success"], true);
@@ -1124,7 +1188,7 @@ mod tests {
         assert_eq!(l.get(&hex(&[2; 32])).unwrap().state, State::Failed);
         assert!(l.is_consumed(&op(0xa0, 0)));
         assert!(!l.is_consumed(&op(0xb0, 0)));
-        // bindings survive the restart
+        // Bindings survive the restart.
         assert_eq!(l.claim(new_entry(9, 9, Some(ID1), vec![op(0xc0, 0)])).unwrap_err().diag, Diag::KaspaPaymentIdentifierConflict);
         assert_eq!(l.payment_id_binding(ID2).unwrap().0, hex(&[8; 32]));
     }
@@ -1138,7 +1202,7 @@ mod tests {
             l.claim(new_entry(1, 7, None, vec![op(0xa0, 0)])).unwrap();
             l.claim(new_entry(2, 7, None, vec![op(0xa1, 0)])).unwrap();
         }
-        // tear the last record in the middle
+        // Tear the last record in the middle.
         let raw = std::fs::read(&p).unwrap();
         let cut = raw.len() - 40;
         std::fs::write(&p, &raw[..cut]).unwrap();
@@ -1186,10 +1250,13 @@ mod tests {
         assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 2, .. })));
     }
 
-    /// An intent payment recorded for an earlier router template (the token-intent lock pin of 2026-10-06 added
-    /// `lockAmount` / `lockExtension` to the intent state), a record of an unknown intent format, or an intent entry without
-    /// its record: the ledger refuses to start and names the line and what to do, wherever the line is (the last line too: a
-    /// complete record is never discarded as a torn tail). Such an entry is never replayed as a direct payment.
+    /// An intent record the ledger cannot read refuses to start.
+    ///
+    /// That covers an intent payment of a router template whose intent state lacks `lockAmount` and
+    /// `lockExtension`, a record of an unknown intent format, and an intent entry without its
+    /// record. The error names the line and what to do, wherever the line is. The last line is no
+    /// exception, because a complete record is never discarded as a torn tail. Such an entry is
+    /// never replayed as a direct payment.
     #[test]
     fn an_intent_record_of_another_format_refuses_to_start() {
         let dir = tempfile::tempdir().unwrap();
@@ -1233,7 +1300,7 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(&p).unwrap(), text, "{what}: the ledger is left as it is");
             }
         }
-        // a really corrupt line is still reported as corruption, and a torn tail is still dropped
+        // A really corrupt line is still reported as corruption, and a torn tail is still dropped.
         std::fs::write(&p, format!("{}\n{}\n", serde_json::json!({"entry": {"txid": 5}}), lines[1])).unwrap();
         assert!(matches!(Ledger::open(&p), Err(LedgerError::Corrupt { line: 1, .. })));
         std::fs::write(&p, format!("{}\n{{\"entry\":{{\"intent\":{{\"fa", lines[0])).unwrap();
@@ -1277,9 +1344,9 @@ mod tests {
         l.transition(&hex(&[tx; 32]), State::Failed, Some("rejected".into()), at_ms).unwrap();
     }
 
-    /// Failed entries are kept for a bounded time and number: the old ones and the oldest beyond the count are forgotten,
-    /// durably (a restart does not bring them back); live entries and those the caller keeps (an intent whose expiry is
-    /// still driven) never.
+    /// Failed entries are kept for a bounded time and number. The old ones and the oldest beyond
+    /// the count are forgotten durably, so a restart does not bring them back. Live entries and
+    /// those the caller keeps (an intent whose expiry is still driven) are never forgotten.
     #[test]
     fn failed_entries_are_pruned_by_age_and_count_and_stay_pruned_after_a_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -1293,11 +1360,11 @@ mod tests {
         let kept = hex(&[1; 32]);
         let keep = |e: &Entry| e.txid == kept;
 
-        // by age: failed before 3_500 (2 and 3; 1 is kept by the caller)
+        // By age: failed before 3_500 (2 and 3; 1 is kept by the caller).
         assert_eq!(l.prune_failed(5_500, 2_000, 100, keep).unwrap(), 2);
         assert!(l.get(&hex(&[2; 32])).is_none() && l.get(&hex(&[3; 32])).is_none());
         assert!(l.get(&kept).is_some());
-        // by count: at most 3 failed entries: the oldest that are not kept go (4 and 5)
+        // By count: at most 3 failed entries remain, so the oldest that are not kept go (4 and 5).
         assert_eq!(l.prune_failed(5_500, 1_000_000, 3, keep).unwrap(), 2);
         assert_eq!(l.failed_count(), 3);
         for tx in [1u8, 6, 7, 8] {
@@ -1310,19 +1377,20 @@ mod tests {
         assert!(l.get(&hex(&[4; 32])).is_none());
         assert!(l.is_consumed(&op(8, 0)));
         assert!(l.payment_id_binding(ID1).is_some());
-        // a pruned transaction can be claimed again (as an identical retry of a failed one could before)
+        // A pruned transaction can be claimed again, as an identical retry of a failed one could.
         assert!(matches!(l.claim(new_entry(4, 4, None, vec![op(4, 0)])).unwrap(), Claim::New(_)));
         drop(l);
         let l = Ledger::open(&p).unwrap();
         assert_eq!(l.get(&hex(&[4; 32])).unwrap().state, State::Pending, "an entry after its forget record replays");
-        // compaction drops the forget records with the entries
+        // Compaction drops the forget records with the entries.
         l.compact().unwrap();
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(!text.contains("\"forget\""));
         assert_eq!(text.lines().count(), l.len());
     }
 
-    /// The invoice index answers an invoice's entries without a scan and follows claims, transitions and pruning.
+    /// The invoice index answers an invoice's entries without a scan.
+    /// It follows claims, transitions and pruning.
     #[test]
     fn the_invoice_index_follows_the_entries() {
         let l = Ledger::in_memory();
