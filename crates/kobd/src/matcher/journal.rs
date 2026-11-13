@@ -1,24 +1,41 @@
-//! The in-flight journal: the transactions this executor submitted and still tracks, kept on disk so that a restart (a
-//! crash, `kill -9`, a stop that cut a step) does not forget what the node's mempool holds (audit 2026-11-11 M-3).
+//! The in-flight journal: the transactions this executor submitted and still tracks, kept on disk.
 //!
-//! Without it the tracker ([`super::submit::Tracker`]) lives in memory only: after a restart the inputs of the previous run's
-//! mempool transactions look free, the next batch takes the same funding coin and the node refuses batch after batch as a
-//! mempool double spend, and a stuck kill or refund can no longer be replaced at a higher fee.
+//! A restart (a crash, `kill -9`, a stop that cut a step) must not forget what the node's mempool
+//! holds. Without the journal the tracker ([`super::submit::Tracker`]) lives in memory only. After
+//! a restart the inputs of the previous run's mempool transactions look free, the next batch takes
+//! the same funding coin and the node refuses batch after batch as a mempool double spend. A stuck
+//! kill or refund can no longer be replaced at a higher fee.
 //!
-//! The format is the smallest that survives a kill at any instant: one JSON object per line, appended,
+//! # Format
 //!
-//! * `{"op":"add","tx":{...},"job":{...}}` BEFORE a transaction is submitted (write-ahead: a kill between the write and the
-//!   submit leaves an entry for a transaction the node may never have seen, which the restart settles like any other), and
-//!   again when it becomes a keeper job that may be replaced (`job`); a later `add` of the same id replaces the earlier one;
-//! * `{"op":"remove","txid":"..."}` once the tracker no longer follows it (final, dropped, refused, replaced).
+//! The format is the smallest that survives a kill at any instant: one JSON object per line,
+//! appended.
 //!
-//! Lines are written without `fsync`: a killed process loses nothing the operating system has accepted (only a power loss
-//! can, and then the node's mempool is usually gone too). A torn last line is skipped. At the start the file is read, the
-//! entries still added are rewritten to a fresh file (compaction, also done when it grows past [`COMPACT_LINES`]), and each
-//! comes back to the tracker as a submission without a verdict (`unconfirmed`): the first step resends it, idempotently, and
-//! the node's answer settles it the way the tracker settles any doubtful submit ("already in the mempool": tracked; already in
-//! the chain: done; refused: dropped and its orders back off). A dry run and the kill switch send nothing, so neither
-//! resends (the entries simply stay reserved).
+//! - `{"op":"add","tx":{...},"job":{...}}` is written BEFORE a transaction is submitted
+//!   (write-ahead). A kill between the write and the submit leaves an entry for a transaction the
+//!   node may never have seen, which the restart settles like any other. It is written again when
+//!   the entry gains a keeper job that may be replaced (`job`) or is retired. A later `add` of the
+//!   same id replaces the earlier one.
+//! - `{"op":"remove","txid":"..."}` is written once the tracker no longer follows the transaction
+//!   (final, dropped, refused, replaced).
+//!
+//! Lines are written without `fsync`. A killed process loses nothing the operating system has
+//! accepted. Only a power loss can, and then the node's mempool is usually gone too. A torn last
+//! line is skipped.
+//!
+//! # Restart
+//!
+//! At the start the file is read and the entries still added are rewritten to a fresh file
+//! (compaction, also done when the file grows past [`COMPACT_LINES`]). Each entry comes back to the
+//! tracker as a submission without a verdict (`unconfirmed`). The first step resends it,
+//! idempotently, and the node's answer settles it the way the tracker settles any doubtful submit:
+//!
+//! - "already in the mempool": tracked;
+//! - already in the chain: done;
+//! - refused: dropped, and its orders back off.
+//!
+//! A dry run and the kill switch send nothing, so neither resends. The entries simply stay
+//! reserved.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -33,7 +50,11 @@ use super::submit::Tracked;
 /// The journal's file name in the executor's data directory.
 pub const FILE_NAME: &str = "executor-inflight.jsonl";
 
-/// Lines appended since the last compaction past which the file is rewritten with only the live entries.
+/// Lines appended since the last compaction past which the file is rewritten with only the live
+/// entries.
+///
+/// The file is compacted when the lines appended exceed this or four times the live entries,
+/// whichever is larger.
 pub const COMPACT_LINES: usize = 512;
 
 fn hex(b: &[u8; 32]) -> String {
@@ -55,22 +76,35 @@ fn op_of((t, i): &(String, u32)) -> Result<Outpoint, String> {
 /// A tracked transaction as the journal writes it (hex ids; maps as lists: JSON keys are strings).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Entry {
+    /// Transaction id, hex.
     pub txid: String,
+    /// Outpoints it spends: (transaction id hex, index).
     pub spends: Vec<(String, u32)>,
+    /// Order covenant ids it spends, hex.
     pub orders: Vec<String>,
+    /// `Tracked::owners` as a list.
     #[serde(default)]
     pub owners: Vec<((String, u32), String)>,
+    /// `Tracked::addresses` as a list.
     #[serde(default)]
     pub addresses: Vec<((String, u32), String)>,
+    /// `Tracked::parent`, hex.
     #[serde(default)]
     pub parent: Option<String>,
+    /// DAA score at submission.
     pub submitted_daa: u64,
+    /// `RpcTransaction` JSON, for the resend.
     pub rpc_tx: serde_json::Value,
+    /// What the transaction is (`Tracked::kind`).
     pub kind: String,
+    /// Operator profit promised by the build (sompi).
     pub profit: i64,
+    /// Network fee paid (sompi).
     pub fee: u64,
+    /// Fee rate (sompi per gram).
     pub fee_rate: u64,
-    /// `Tracked::deadline`, `Tracked::resend_until`, `Tracked::retired` (absent in a journal of an older build: none).
+    /// `Tracked::deadline`, `Tracked::resend_until` and `Tracked::retired`. A line that lacks them
+    /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -80,6 +114,7 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// The entry that records `t`.
     pub fn of(t: &Tracked) -> Entry {
         Entry {
             txid: hex(&t.txid),
@@ -100,7 +135,8 @@ impl Entry {
         }
     }
 
-    /// The tracked transaction, as a submission without a verdict (the restart resends it and the node settles it).
+    /// The tracked transaction, as a submission without a verdict: the restart resends it and the
+    /// node settles it.
     pub fn tracked(&self) -> Result<Tracked, String> {
         Ok(Tracked {
             txid: unhex(&self.txid)?,
@@ -124,7 +160,8 @@ impl Entry {
     }
 }
 
-/// One line of the journal (one is written per submission: the size of the variants does not matter).
+/// One line of the journal. One is written per submission, so the size of the variants does not
+/// matter.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -153,7 +190,8 @@ pub struct Restored {
 pub struct Journal {
     path: PathBuf,
     file: std::fs::File,
-    /// The ids the file holds as added, and whether that entry carries a keeper job and is retired (`Tracked::retired`).
+    /// The ids the file holds as added, and whether that entry carries a keeper job and is retired
+    /// (`Tracked::retired`).
     live: BTreeMap<[u8; 32], (bool, bool)>,
     appended: usize,
     /// The last write failed (logged once until a write succeeds).
@@ -185,8 +223,10 @@ fn read_lines(path: &Path) -> std::io::Result<(Live, usize)> {
     Ok((live, skipped))
 }
 
-/// What the journal at `path` holds, read only (nothing is written): the entries still added, as submissions without a
-/// verdict. An absent file holds nothing; a file that cannot be read is an error.
+/// What the journal at `path` holds, read only (nothing is written): the entries still added, as
+/// submissions without a verdict.
+///
+/// An absent file holds nothing. A file that cannot be read is an error.
 pub fn read(path: &Path) -> std::io::Result<Restored> {
     Ok(restore(read_lines(path)?).0)
 }
@@ -212,9 +252,12 @@ fn restore((entries, skipped): (Live, usize)) -> (Restored, BTreeMap<[u8; 32], (
 }
 
 impl Journal {
-    /// Opens (creates) the journal at `path`: returns what it held, rewritten to a compact file that is then appended to. A
-    /// rewrite that fails (a full disk; on Windows a scanner holding the file) keeps the file as it is and appends to it (the
-    /// next compaction tries again); only a file that cannot be read or appended to is an error.
+    /// Opens (creates) the journal at `path`. Returns what it held, rewritten to a compact file
+    /// that is then appended to.
+    ///
+    /// A rewrite that fails (a full disk, or on Windows a scanner holding the file) keeps the file
+    /// as it is and appends to it. The next compaction tries again. Only a file that cannot be read
+    /// or appended to is an error.
     pub fn open(path: &Path) -> std::io::Result<(Journal, Restored)> {
         let (restored, live, body) = restore(read_lines(path)?);
         let tmp = path.with_extension("jsonl.tmp");
@@ -226,6 +269,7 @@ impl Journal {
         Ok((Journal { path: path.to_path_buf(), file, live, appended: 0, failing: false }, restored))
     }
 
+    /// The journal file's path.
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -265,9 +309,13 @@ impl Journal {
         self.live.insert(t.txid, (job.is_some(), t.retired.is_some()));
     }
 
-    /// Brings the file in line with what the tracker follows (`txs`) and the keeper jobs that may be replaced (`jobs`): an entry
-    /// for every tracked transaction (with its job), a removal for every one it no longer tracks. Compacts the file when it
-    /// grew past [`COMPACT_LINES`].
+    /// Brings the file in line with what the tracker follows (`txs`) and the keeper jobs that may
+    /// be replaced (`jobs`).
+    ///
+    /// It writes an entry for every tracked transaction (with its job) that is new or whose job or
+    /// retirement changed, and a removal for every one the tracker no longer tracks. It compacts
+    /// the file when the lines appended pass [`COMPACT_LINES`] (or four times the live entries, if
+    /// that is more).
     pub fn sync(&mut self, txs: &BTreeMap<[u8; 32], Tracked>, jobs: &BTreeMap<[u8; 32], InFlightJob>) {
         let gone: Vec<[u8; 32]> = self.live.keys().filter(|k| !txs.contains_key(*k)).copied().collect();
         for id in gone {
@@ -334,15 +382,16 @@ mod tests {
             fee: 2_000,
             fee_rate: 100,
             unconfirmed: false,
-            // a day order's fill: what bounds its resend survives too
+            // A day order's fill: what bounds its resend survives too.
             deadline: (n == 3).then_some(1_790_000_000),
             resend_until: (n == 3).then_some(5_000),
             retired: None,
         }
     }
 
-    /// Everything the tracker needs survives the file: what was added and not removed comes back as a submission without a
-    /// verdict (unaccepted), in order of id; a torn last line (a kill mid-write) is skipped; the restart compacts the file.
+    /// Everything the tracker needs survives the file. What was added and not removed comes back as
+    /// a submission without a verdict (unaccepted), in order of id. A torn last line (a kill
+    /// mid-write) is skipped, and the restart compacts the file.
     #[test]
     fn what_is_in_flight_survives_a_restart() {
         let dir = tempfile::tempdir().unwrap();
@@ -354,10 +403,12 @@ mod tests {
         j.add(&b, None);
         j.add(&c, None);
         let mut txs: BTreeMap<[u8; 32], Tracked> = [a.clone(), c.clone()].into_iter().map(|t| (t.txid, t)).collect();
-        // b refused (no longer tracked); the keeper jobs' round trip is `tests/keeper_liveness.rs`
+        // b is refused and not tracked any more. The keeper jobs' round trip is
+        // `tests/keeper_liveness.rs`.
         j.sync(&txs, &BTreeMap::new());
         assert_eq!(j.live().copied().collect::<Vec<_>>(), vec![[1; 32], [3; 32]]);
-        // a retires (no longer sent): the journal says so, a restart does not send it again either
+        // a is retired (not sent again): the journal says so, and a restart does not send it again
+        // either.
         txs.get_mut(&[1; 32]).unwrap().retired = Some(4_000);
         j.sync(&txs, &BTreeMap::new());
         let a = txs[&[1; 32]].clone();
@@ -381,9 +432,10 @@ mod tests {
         assert!(r.txs.is_empty());
     }
 
-    /// Audit round 2 R2-L-1: a journal that cannot be rewritten at the start (here its temporary file's name is taken by a
-    /// directory, as a full disk would fail the write) is kept as it is and appended to, so what it held is never lost and this
-    /// run is journaled too; read only, it gives the same entries; an absent file holds nothing.
+    /// A journal that cannot be rewritten at the start (here its temporary file's name is taken by
+    /// a directory, as a full disk would fail the write) is kept as it is and appended to. What it
+    /// held is never lost and this run is journaled too. Read only, it gives the same entries. An
+    /// absent file holds nothing.
     #[test]
     fn a_journal_that_cannot_be_compacted_is_appended_to() {
         let dir = tempfile::tempdir().unwrap();
@@ -400,7 +452,8 @@ mod tests {
         assert!(read(&dir.path().join("absent.jsonl")).unwrap().txs.is_empty());
     }
 
-    /// A long run keeps the file small: it is rewritten with the live entries once enough lines were appended.
+    /// A long run keeps the file small: it is rewritten with the live entries once enough lines
+    /// were appended.
     #[test]
     fn the_file_is_compacted_as_it_grows() {
         let dir = tempfile::tempdir().unwrap();
@@ -418,7 +471,8 @@ mod tests {
             txs.remove(&t.txid);
             j.sync(&txs, &BTreeMap::new());
         }
-        // 1024 lines were appended: at most COMPACT_LINES since the last compaction, plus the live entry it wrote
+        // 1024 lines were appended: at most COMPACT_LINES since the last compaction, plus the live
+        // entry it wrote.
         let lines = std::fs::read_to_string(&p).unwrap().lines().count();
         assert!(lines <= COMPACT_LINES + 1, "{lines} lines");
         drop(j);

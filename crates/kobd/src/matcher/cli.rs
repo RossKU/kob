@@ -20,16 +20,19 @@ use crate::shutdown::shutdown_signal;
 /// Options shared by `match` and `keep`.
 #[derive(Args, Debug, Clone)]
 pub struct CommonArgs {
-    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build (no default); a deployment
-    /// build (`deploy-mainnet`, `deploy-tn10`) implies its own and refuses another. Not needed with `--offline`.
+    /// Network id the node must report (`mainnet`, `testnet-10`). Required on the reference build
+    /// (no default); a deployment build (`deploy-mainnet`, `deploy-tn10`) implies its own and
+    /// refuses another. Not needed with `--offline`.
     #[arg(long, env = "KOB_NETWORK")]
     pub network: Option<String>,
-    /// Node JSON wRPC endpoint (keep it on loopback). Default: the local node's port of the network (`ws://127.0.0.1:18110`
-    /// on mainnet, `ws://127.0.0.1:18210` on testnet-10). Command-line arguments are visible to other local users (`ps`): a URL
-    /// with a password or an API key belongs in `KOB_NODE_WRPC`; logs show it redacted.
+    /// Node JSON wRPC endpoint (keep it on loopback). Default: the local node's port of the network
+    /// (`ws://127.0.0.1:18110` on mainnet, `ws://127.0.0.1:18210` on testnet-10). Command-line
+    /// arguments are visible to other local users (`ps`): a URL with a password or an API key
+    /// belongs in `KOB_NODE_WRPC`; logs show it redacted.
     #[arg(long, env = "KOB_NODE_WRPC")]
     pub rpc_url: Option<String>,
-    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by `kobd db export-book --out FILE`.
+    /// Book snapshot (JSON, `MemoryBook`), re-read when it changes. Written by
+    /// `kobd db export-book --out FILE`.
     #[arg(long, env = "KOB_BOOK_FILE")]
     pub book_file: PathBuf,
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
@@ -45,14 +48,16 @@ pub struct CommonArgs {
     /// Tick period in milliseconds.
     #[arg(long, default_value_t = 1_000)]
     pub tick_ms: u64,
-    /// The lowest fee rate, sompi per gram (>= 100); with the node's fee estimate each transaction pays its urgency's bucket
-    /// within `--fee-max-rate` and `--fee-max-tx-kas` (`docs/ops/executor.md`, fee policy).
+    /// The lowest fee rate, sompi per gram (>= 100); with the node's fee estimate each transaction
+    /// pays its urgency's bucket within `--fee-max-rate` and `--fee-max-tx-kas`
+    /// (`docs/ops/executor.md`, fee policy).
     #[arg(long, default_value_t = 100)]
     pub fee_rate: u64,
     #[command(flatten)]
     pub fees: crate::fee::FeeArgs,
-    /// Kill switch: nothing is built or submitted while this file exists. A file whose state cannot be read (permission
-    /// denied) or whose directory does not exist counts as present. Keep it on persistent storage.
+    /// Kill switch: nothing is built or submitted while this file exists. A file whose state cannot
+    /// be read (permission denied) or whose directory does not exist counts as present. Keep it on
+    /// persistent storage.
     #[arg(long)]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).
@@ -61,8 +66,9 @@ pub struct CommonArgs {
     /// Warn (and set `kob_operator_low_funds`) below this many KAS of funding.
     #[arg(long, default_value_t = 100)]
     pub low_funds_kas: u64,
-    /// Plan nothing while the snapshot is more than this many DAA behind the node (`kob_matcher_book_stale`; a stale or
-    /// no longer refreshed file). 0: never wait. Default 300 (30 s), as `run`.
+    /// Plan nothing while the snapshot is more than this many DAA behind the node
+    /// (`kob_matcher_book_stale`; a stale or no longer refreshed file). 0: never wait. Default 300
+    /// (30 s), as `run`.
     #[arg(long, default_value_t = 300)]
     pub max_book_lag_daa: u64,
     #[command(flatten)]
@@ -77,26 +83,29 @@ pub struct MatchArgs {
     /// Smallest profit per batch after its fee, sompi.
     #[arg(long, default_value_t = 1)]
     pub min_profit: i64,
-    /// Optional cap on the size of one transaction, bytes. 0 (the default): the physical limit (250 000 bytes of transient
-    /// mass and the block mass limits of the built transaction); a larger batch only costs its own fee.
+    /// Optional cap on the size of one transaction, bytes. 0 (the default): the physical limit
+    /// (250 000 bytes of transient mass and the block mass limits of the built transaction); a
+    /// larger batch only costs its own fee.
     #[arg(long, default_value_t = 0)]
     pub max_tx_bytes: u64,
     /// Do not chain onto unaccepted parents (a partially filled order continues next tick).
     #[arg(long)]
     pub no_chain: bool,
-    /// Do not arm or ratchet stops with updates in the batches (docs/spec/matcher.md section 4.3; the stops the batch's plain fills trigger are
-    /// still filled next to their evidence).
+    /// Do not arm or ratchet stops with updates in the batches (docs/spec/matcher.md section 4.3;
+    /// the stops the batch's plain fills trigger are still filled next to their evidence).
     #[arg(long)]
     pub no_arm: bool,
-    /// Wall-clock budget of one matcher tick in milliseconds (0: unlimited); the books left wait for the next tick.
+    /// Wall-clock budget of one matcher tick in milliseconds (0: unlimited); the books left wait
+    /// for the next tick.
     #[arg(long, default_value_t = 20_000)]
     pub tick_budget_ms: u64,
-    /// Optional cap: best-priority candidates per (book, class, side) the planner looks at. 0 (the default): every candidate
-    /// (the walks are sorted and the tick budget bounds a hostile book).
+    /// Optional cap: best-priority candidates per (book, class, side) the planner looks at. 0 (the
+    /// default): every candidate (the walks are sorted and the tick budget bounds a hostile book).
     #[arg(long, default_value_t = 0)]
     pub max_candidates_per_group: usize,
-    /// The surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"): the pair surpluses the
-    /// operator may accumulate as inventory (never sold by maintenance). Default: none (off).
+    /// The surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"): the
+    /// pair surpluses the operator may accumulate as inventory (never sold by maintenance).
+    /// Default: none (off).
     #[arg(long)]
     pub inventory_policy: Option<PathBuf>,
     #[command(flatten)]
@@ -117,8 +126,9 @@ pub struct KeepArgs {
     /// Sweep strays of the operator's own orders in place (the order continues unchanged).
     #[arg(long)]
     pub sweep_own_strays: bool,
-    /// Keepers: return proven foreign strays (other tokens owned by an order id) to the maker inside the refund, kill or
-    /// close that ends the order (permissionless; dropped from a job that would not pay with them).
+    /// Keepers: return proven foreign strays (other tokens owned by an order id) to the maker
+    /// inside the refund, kill or close that ends the order (permissionless; dropped from a job
+    /// that would not pay with them).
     #[arg(long)]
     pub return_foreign_strays: bool,
     #[command(flatten)]
@@ -141,8 +151,9 @@ fn engine_cfg(a: &MatchArgs) -> EngineConfig {
 }
 
 impl CommonArgs {
-    /// The network and the node endpoint of a live run ([`crate::config::resolve_network`], [`crate::config::default_wrpc_url`]):
-    /// never an implicit testnet-10, never a testnet node on a mainnet build.
+    /// The network and the node endpoint of a live run ([`crate::config::resolve_network`],
+    /// [`crate::config::default_wrpc_url`]). It is never an implicit testnet-10, and never a
+    /// testnet node on a mainnet build.
     pub fn endpoint(&self) -> anyhow::Result<(String, String)> {
         let network = crate::config::resolve_network(self.network.as_deref()).map_err(anyhow::Error::msg)?;
         let url = match self.rpc_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
@@ -165,7 +176,7 @@ fn run_cfg(c: &CommonArgs, network: String, roles: Roles) -> RunConfig {
         low_funds: c.low_funds_kas * 100_000_000,
         fee_policy: c.fees.policy(c.fee_rate).unwrap_or_else(|_| crate::fee::FeePolicy::fixed(c.fee_rate)),
         max_book_lag: (c.max_book_lag_daa > 0).then_some(c.max_book_lag_daa),
-        // checked by the command before it gets here
+        // Checked by the command before it gets here.
         select: c.select.config().unwrap_or_default(),
         ..RunConfig::default()
     }
@@ -235,11 +246,12 @@ fn offline(book: &MemoryBook, engine: &EngineConfig, signer: &dyn Signer) -> any
     Ok(())
 }
 
-/// `kobd match`.
+/// Runs `kobd match`: the matcher, and the keepers too with `--keep`.
 pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
     a.common.select.config().map_err(anyhow::Error::msg)?;
-    // the network and the node first (`--offline` needs neither): nothing secret is read for a run that cannot start
+    // The network and the node first (`--offline` needs neither), so nothing secret is read for a
+    // run that cannot start.
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;
     let mut engine = engine_cfg(&a);
@@ -263,11 +275,11 @@ pub async fn run_match(a: MatchArgs) -> anyhow::Result<()> {
     r.run(shutdown_signal()).await
 }
 
-/// `kobd keep`.
+/// Runs `kobd keep`: the keepers alone.
 pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     a.common.fees.policy(a.common.fee_rate).map_err(anyhow::Error::msg)?;
     a.common.select.config().map_err(anyhow::Error::msg)?;
-    // `--offline` needs no node (and no network)
+    // `--offline` needs no node (and no network).
     let (network, rpc_url) = if a.common.offline { Default::default() } else { a.common.endpoint()? };
     let signer = load_key(&a.common)?;
     let mut cfg = run_cfg(&a.common, network, Roles { matcher: false, keeper: true });
@@ -283,7 +295,7 @@ pub async fn run_keep(a: KeepArgs) -> anyhow::Result<()> {
     if a.common.offline {
         let book = read_snapshot(&a.common.book_file)?;
         let inp = crate::keepers::KeeperInput {
-            // the listed orders and the proven unlisted ones the snapshot carries for the keepers
+            // The listed orders and the proven unlisted ones the snapshot carries for the keepers.
             orders: book.orders.into_iter().chain(book.keeper_only).collect(),
             clock: super::book::Clock { daa: book.daa_score, utc: super::book::utc_now() },
             funding: vec![],
