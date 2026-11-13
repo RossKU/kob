@@ -1,9 +1,10 @@
 //! Test support: an in-memory chain that runs submitted transactions through the script engine.
 //!
-//! [`MockChain`] mimics what the node gives the facilitator: an address-indexed UTXO set, a mempool,
-//! acceptance into "chain state" (`mine`), and consensus-style validation on `submit` (scripts with
-//! enforced compute budgets, exact storage-mass commitment, fee floor: `kob_protocol::verify`). It is
-//! deterministic and needs no network.
+//! [`MockChain`] mimics what the node gives the facilitator: an address-indexed UTXO set, a
+//! mempool,
+//! acceptance into "chain state" (`mine`), and consensus-style validation on `submit`. Validation
+//! covers scripts with enforced compute budgets, the exact storage-mass commitment and the fee
+//! floor (`kob_protocol::verify`). It is deterministic and needs no network.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
@@ -27,9 +28,11 @@ pub fn p2pk_spk(pubkey: &[u8; 32]) -> ScriptPublicKey {
     kob_protocol::script::p2pk_spk(pubkey)
 }
 
-/// Tooling of the SIGHASH_ALL conformance tests: finds every payer signature of a payment transaction and re-signs
-/// it under another hash type, so that a test can present a verifier with a transaction that the script engine
-/// ACCEPTS but that is not signed with SIGHASH_ALL (the rule is `crate::sighash`).
+/// Tooling of the SIGHASH_ALL conformance tests.
+///
+/// It finds every payer signature of a payment transaction and re-signs it under another hash type.
+/// A test can then present a verifier with a transaction that the script engine accepts but that is
+/// not signed with SIGHASH_ALL. The rule itself is in `crate::sighash`.
 pub mod hashtype {
     use std::collections::BTreeMap;
 
@@ -41,13 +44,19 @@ pub mod hashtype {
     use crate::sighash::{is_leader, p2pk_hash_type, token_owner_proof};
     use crate::wire::PaymentPayload;
 
-    /// Every hash type the script engine accepts besides SIGHASH_ALL: NONE, SINGLE and the three ANYONECANPAY forms.
+    /// Every hash type the script engine accepts besides SIGHASH_ALL.
+    ///
+    /// These are NONE, SINGLE and the three ANYONECANPAY forms.
     pub const NON_ALL: [u8; 5] = [0x02, 0x04, 0x81, 0x82, 0x84];
-    /// Trailing bytes that are no Kaspa hash type at all (the engine refuses them; the verifier must refuse them first).
+    /// Trailing bytes that are no Kaspa hash type at all.
+    ///
+    /// The engine refuses them, and the verifier must refuse them first.
     pub const BOGUS: [u8; 4] = [0x00, 0x03, 0x05, 0xff];
 
-    /// A payer signature of a transaction: the input, the key that made it and the offset of its 65 bytes inside the
-    /// input's signature script.
+    /// A payer signature of a transaction.
+    ///
+    /// It records the input, the key that made it and the offset of its 65 bytes inside the input's
+    /// signature script.
     #[derive(Clone, Copy, Debug)]
     pub struct Signer {
         pub input: usize,
@@ -55,9 +64,11 @@ pub mod hashtype {
         pub at: usize,
     }
 
-    /// The payer signatures of `tx`: P2PK funding inputs and KCC-20 owner witnesses (leader or delegator) whose 65
-    /// bytes verify under one of `keys` (public key -> secret key). Order inputs and covenant-owned custody inputs are
-    /// skipped.
+    /// The payer signatures of `tx`.
+    ///
+    /// These are P2PK funding inputs and KCC-20 owner witnesses (leader or delegator) whose 65
+    /// bytes verify under one of `keys` (public key to secret key). Order inputs and
+    /// covenant-owned custody inputs are skipped.
     pub fn signers(tx: &Transaction, entries: &[UtxoEntry], keys: &BTreeMap<[u8; 32], [u8; 32]>) -> Vec<Signer> {
         let mut out = vec![];
         for (i, entry) in entries.iter().enumerate() {
@@ -80,8 +91,10 @@ pub mod hashtype {
         out
     }
 
-    /// The transaction with the signature of `s` made under `hash_type` (a real signature over the digest of that hash
-    /// type, so the engine accepts it when the type is valid).
+    /// The transaction with the signature of `s` made under `hash_type`.
+    ///
+    /// It is a real signature over the digest of that hash type, so the engine accepts it when the
+    /// type is valid.
     pub fn resigned(tx: &Transaction, entries: &[UtxoEntry], s: &Signer, hash_type: u8) -> Transaction {
         let digest = sighash_typed(tx, entries, s.input, hash_type).expect("a Kaspa hash type");
         let sig = sign_digest_typed(&s.secret, &digest, hash_type).expect("sign");
@@ -90,8 +103,10 @@ pub mod hashtype {
         t
     }
 
-    /// The transaction with only the trailing hash type byte of the signature of `s` replaced (the signature itself is
-    /// left alone: the engine would refuse it, so the verifier must refuse it before the engine runs).
+    /// The transaction with only the trailing hash type byte of the signature of `s` replaced.
+    ///
+    /// The signature itself is left alone, so the engine would refuse it. The verifier must refuse
+    /// it before the engine runs.
     pub fn tampered_byte(tx: &Transaction, s: &Signer, hash_type: u8) -> Transaction {
         let mut t = tx.clone();
         t.inputs[s.input].signature_script[s.at + 64] = hash_type;
@@ -178,7 +193,9 @@ impl MockChain {
         self.state.lock().unwrap().utxos.get(op).cloned()
     }
 
-    /// True if `op` is in the UTXO set and no mempool transaction spends it (what a node reports as spendable).
+    /// True if `op` is in the UTXO set and no mempool transaction spends it.
+    ///
+    /// This is what a node reports as spendable.
     pub fn is_spendable(&self, op: &Outpoint) -> bool {
         let s = self.state.lock().unwrap();
         s.utxos.contains_key(op) && !s.mempool_spent.contains(op)
@@ -251,12 +268,12 @@ impl MockChain {
         s.mempool_spent.clear();
     }
 
-    /// Number of `submit` calls seen (including failed ones).
-    /// Number of `replace` calls (accepted or not).
+    /// Number of `replace` calls, accepted or not.
     pub fn replace_count(&self) -> u64 {
         self.state.lock().unwrap().replaces
     }
 
+    /// Number of `submit` calls seen, including failed ones.
     pub fn submit_count(&self) -> u64 {
         self.state.lock().unwrap().submits
     }
@@ -357,8 +374,11 @@ impl ChainView for MockChain {
         Ok(txid)
     }
 
-    /// Replace-by-fee as the node does it: `tx` must spend an input of a mempool transaction and pay a higher fee than
-    /// every transaction it replaces; those leave the mempool (their inputs are free again) and `tx` is submitted.
+    /// Replace-by-fee as the node does it.
+    ///
+    /// `tx` must spend an input of a mempool transaction and pay a higher fee than every
+    /// transaction it replaces. Those leave the mempool, so their inputs are free again, and `tx`
+    /// is submitted.
     fn replace(&self, tx: &Transaction) -> Result<Txid, SubmitError> {
         let fee_of = |s: &State, t: &Transaction| -> Option<u64> {
             let ins: Option<u64> = t
