@@ -1,21 +1,26 @@
-// Kastle adapter (`window.kastle`), reference wallet behind `features.kastle`. Proven on TN10 with Kastle 2.60.1:
-//   * `signTx(network, txJson, scripts)`: a plain call leaves P2SH (covenant) inputs UNSIGNED and reports no error (issue #353), so it MUST
-//     pass `scripts` for them: `[{ inputIndex, scriptHex: '', signType: 'All' }]` (the empty-script variant returns just `push(sig65)`);
-//   * `getAccount().publicKey` is 33 bytes (compressed): the x-only key is the last 32;
-//   * its popup shows misleading balance changes for covenant transactions (the P2SH input as "Change to your balance"): the app's own
-//     confirmation screen is the safety layer.
+// Kastle adapter (`window.kastle`), a reference wallet behind `features.kastle`. It was exercised
+// on TN10 with Kastle 2.60.1.
+// - `signTx(network, txJson, scripts)`. A plain call leaves P2SH (covenant) inputs unsigned and
+//   reports no error, so the call must pass `scripts` for them:
+//   `[{ inputIndex, scriptHex: '', signType: 'All' }]`. The empty-script variant returns just
+//   `push(sig65)`.
+// - `getAccount().publicKey` is 33 bytes, compressed. The x-only key is the last 32.
+// - Its popup shows misleading balance changes for covenant transactions, such as the P2SH input
+//   as "Change to your balance". The app's own confirmation screen is the safety layer.
 import type { BuiltTx, InputSignature } from '../kob/types';
 import { normalizeNetwork } from '../data/kaspa-sdk';
 import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
 import { CONNECT_TIMEOUT_MS, REFRESH_TIMEOUT_MS, SIGN_TIMEOUT_MS, extractSignature, collectSignatures, normalizePubkey, toWalletError, withTimeout } from './sigs';
 import { DEFAULT_POLL_MS, hasEmitter, listenProvider, pollProvider, type EmitterLike } from './events';
 
+/** One entry of Kastle's `scripts` argument of `signTx`, for a covenant input. */
 export interface KastleScript {
   inputIndex: number;
   scriptHex: string;
   signType: 'All';
 }
 
+/** The Kastle provider object, as the extension injects it. */
 export interface KastleProvider extends EmitterLike {
   connect(): Promise<boolean>;
   getAccount(): Promise<{ address: string; publicKey: string }>;
@@ -23,12 +28,14 @@ export interface KastleProvider extends EmitterLike {
   signTx(network: string, txJson: string, scripts?: KastleScript[]): Promise<unknown>;
 }
 
+/** What the Kastle adapter needs. */
 export interface KastleDeps {
   getProvider?: () => KastleProvider | null | undefined;
 }
 
 const LABEL = 'Kastle';
 
+/** The adapter for Kastle. It reads the provider at call time. */
 export function createKastleAdapter(deps: KastleDeps = {}): WalletAdapter {
   const provider = () => (deps.getProvider ? deps.getProvider() : (globalThis as { kastle?: KastleProvider }).kastle) ?? null;
   const need = (): KastleProvider => {
@@ -39,7 +46,8 @@ export function createKastleAdapter(deps: KastleDeps = {}): WalletAdapter {
   return {
     id: 'kastle',
     label: LABEL,
-    // builds with issue #353 return covenant inputs unsigned: probed once per account before the first order (C5-10)
+    // Some builds return covenant inputs unsigned, so this wallet is probed once per account before
+    // the first order.
     covenantSigning: 'unknown',
     detect: () => !!provider(),
 
@@ -92,8 +100,9 @@ export function createKastleAdapter(deps: KastleDeps = {}): WalletAdapter {
     subscribe(onEvent, o = {}) {
       const p = provider();
       if (!p) return () => undefined;
-      // Kastle's page API emits accountsChanged([address], or [] when the site lost its connection) and networkChanged(network id), plus
-      // the same as kas:account_changed / kas:network_changed; the first pair is enough
+      // Kastle's page API emits accountsChanged([address], or [] when the site lost its
+      // connection) and networkChanged(network id). It emits the same as kas:account_changed and
+      // kas:network_changed, so the first pair is enough.
       if (hasEmitter(p)) return listenProvider(p, { accounts: ['accountsChanged'], network: ['networkChanged'] }, onEvent);
       return pollProvider(
         async () => {
@@ -109,7 +118,7 @@ export function createKastleAdapter(deps: KastleDeps = {}): WalletAdapter {
       const p = need();
       const network = normalizeNetwork(opts.network ?? '');
       if (!network) throw new WalletError('unsupported', 'Kastle needs the network name to sign.');
-      // covenant inputs only: P2PK inputs are signed by a plain call
+      // Covenant inputs only. P2PK inputs are signed by a plain call.
       const scripts: KastleScript[] = built.sign.filter((s) => s.redeemScript !== null).map((s) => ({ inputIndex: s.inputIndex, scriptHex: '', signType: 'All' }));
       const txJson = JSON.stringify(built.tx);
       let response: unknown;
@@ -119,7 +128,8 @@ export function createKastleAdapter(deps: KastleDeps = {}): WalletAdapter {
       } catch (e) {
         throw toWalletError(e, LABEL);
       }
-      // #353: a covenant input Kastle did not sign comes back with an EMPTY signature script and no error: say what happened
+      // A covenant input Kastle did not sign comes back with an empty signature script and no
+      // error. Say what happened.
       for (const s of built.sign) {
         try {
           extractSignature(response, s.inputIndex);

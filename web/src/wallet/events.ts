@@ -1,18 +1,20 @@
-// Shared plumbing of the adapters' `subscribe`: provider event emitters (`on` / `removeListener`) and the visible-tab poll used when a
-// provider has none. Pure apart from `setInterval` / `document.visibilityState` (both guarded).
+// Shared plumbing of the adapters' `subscribe`. It covers provider event emitters (`on` and
+// `removeListener`) and the visible-tab poll used when a provider has none. It is pure apart from
+// `setInterval` and `document.visibilityState`, which are both guarded.
 import type { WalletEvent } from './types';
 
-/** The EventEmitter subset all three wallet providers expose (verified in the extensions' injected scripts: `on`, `removeListener`). */
+/** The EventEmitter subset all three wallet providers expose, as their injected scripts show. */
 export interface EmitterLike {
   on?: (event: string, handler: (...args: any[]) => void) => unknown;
   removeListener?: (event: string, handler: (...args: any[]) => void) => unknown;
   off?: (event: string, handler: (...args: any[]) => void) => unknown;
 }
 
+/** Whether a provider has an emitter that can both add and remove listeners. */
 export const hasEmitter = (p: EmitterLike | null | undefined): p is Required<Pick<EmitterLike, 'on'>> & EmitterLike =>
   !!p && typeof p.on === 'function' && (typeof p.removeListener === 'function' || typeof p.off === 'function');
 
-/** Provider event name -> WalletEvent. `accounts` and `network` handlers get the raw handler arguments. */
+/** The provider event names for each `WalletEvent` kind. Handlers get the raw arguments. */
 export interface EventMap {
   accounts: string[];
   network: string[];
@@ -22,8 +24,9 @@ export interface EventMap {
 const asAccounts = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : typeof v === 'string' ? [v] : []);
 
 /**
- * Registers `handler`s on the provider's emitter and returns an idempotent remover. Every handler is registered once per name, so a
- * second `subscribe` on the same provider adds its own pair and its remover takes out exactly that pair.
+ * Registers handlers on the provider's emitter and returns an idempotent remover. Every handler is
+ * registered once per name, so a second `subscribe` on the same provider adds its own pair, and
+ * its remover takes out exactly that pair.
  */
 export function listenProvider(p: EmitterLike, names: EventMap, emit: (e: WalletEvent) => void): () => void {
   const off = (event: string, h: (...a: any[]) => void) => (typeof p.removeListener === 'function' ? p.removeListener(event, h) : p.off?.(event, h));
@@ -46,18 +49,20 @@ export function listenProvider(p: EmitterLike, names: EventMap, emit: (e: Wallet
       try {
         off(event, h);
       } catch {
-        /* a provider that vanished has nothing left to remove */
+        /* A provider that vanished has nothing left to remove. */
       }
     }
     reg.length = 0;
   };
 }
 
+/** The poll interval of `pollProvider`, in ms. */
 export const DEFAULT_POLL_MS = 4000;
 
 /**
- * Fallback for a provider without events: reads `{account, network}` every `pollMs` while the tab is visible and reports differences.
- * The first read is the baseline (the caller has just connected), so nothing is emitted for the state the app already knows.
+ * Fallback for a provider without events. It reads `{account, network}` every `pollMs` while the
+ * tab is visible and reports differences. The first read is the baseline, because the caller has
+ * just connected, so nothing is emitted for the state the app already knows.
  */
 export function pollProvider(read: () => Promise<{ account: string; network: string }>, emit: (e: WalletEvent) => void, pollMs = DEFAULT_POLL_MS): () => void {
   let active = true;
@@ -76,7 +81,7 @@ export function pollProvider(read: () => Promise<{ account: string; network: str
       }
       last = now;
     } catch {
-      /* a wallet that cannot answer right now is retried on the next tick; the app re-reads on every event anyway */
+      /* A wallet that cannot answer now is retried on the next tick. The app re-reads on events. */
     } finally {
       busy = false;
     }

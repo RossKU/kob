@@ -1,11 +1,16 @@
-// Kaspire adapter (`window.kaspire.request({method, params})`, HUB21). Proven on TN10 with Kaspire 0.5.1 (provider 1.2.0):
-//   * `signPskt` takes `{ psktTransactionJson, submitTransaction: false, signInputs, scripts }`; for COVENANT (P2SH) inputs it needs a
-//     per-input `scripts` entry `{ inputIndex, scriptHex: <redeem>, signType, signatureScript }`, else it returns a bare signature;
-//   * `signatureScript.mode`: `ordered-args` (the wallet emits `args.. dispatch-tag redeem` itself: byte-identical to ours, which
-//     independently validates the ABI encoding) or `wrap-signature` (`<sig><redeem>`);
-//   * the address prefix changes with the network: accounts are requested again after a network switch.
-// Either way the app only EXTRACTS the signature and assembles the script itself through kob-wasm `finalize` (which verifies it), so a
-// wallet that mis-assembles cannot produce a wrong transaction.
+// Kaspire adapter (`window.kaspire.request({method, params})`, HUB21). It was exercised on TN10
+// with Kaspire 0.5.1 (provider 1.2.0).
+// - `signPskt` takes `{ psktTransactionJson, submitTransaction: false, signInputs, scripts }`. For
+//   covenant (P2SH) inputs it needs a per-input `scripts` entry
+//   `{ inputIndex, scriptHex: <redeem>, signType, signatureScript }`, else it returns a bare
+//   signature.
+// - `signatureScript.mode` is `ordered-args` or `wrap-signature`. With `ordered-args` the wallet
+//   emits `args.. dispatch-tag redeem` itself, byte-identical to ours, which independently
+//   validates the ABI encoding. With `wrap-signature` it emits `<sig><redeem>`.
+// - The address prefix changes with the network, so accounts are requested again after a network
+//   switch.
+// Either way the app only extracts the signature and assembles the script itself through kob-wasm
+// `finalize`, which verifies it. A wallet that mis-assembles cannot produce a wrong transaction.
 import type { BuiltTx, Hex, InputSignature, SignRequest, TemplateName } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { normalizeNetwork } from '../data/kaspa-sdk';
@@ -13,15 +18,18 @@ import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } fr
 import { CONNECT_TIMEOUT_MS, REFRESH_TIMEOUT_MS, SIGN_TIMEOUT_MS, collectSignatures, normalizePubkey, toWalletError, withTimeout } from './sigs';
 import { DEFAULT_POLL_MS, hasEmitter, listenProvider, pollProvider, type EmitterLike } from './events';
 
+/** The Kaspire provider object, as the extension injects it. */
 export interface KaspireProvider extends EmitterLike {
   request(args: { method: string; params?: unknown }): Promise<unknown>;
   version?: string;
 }
 
+/** How a covenant input's signature script is assembled by the wallet. */
 export type KaspireSignatureScript =
   | { mode: 'wrap-signature' }
   | { mode: 'ordered-args'; args: ({ type: 'signature'; prefixHex: string } | { type: 'data'; hex: string })[] };
 
+/** The per-input `scripts` entry of `signPskt` for a covenant input. */
 export interface KaspireScriptEntry {
   inputIndex: number;
   scriptHex: Hex;
@@ -29,17 +37,27 @@ export interface KaspireScriptEntry {
   signatureScript: KaspireSignatureScript;
 }
 
+/** What the Kaspire adapter needs. */
 export interface KaspireDeps {
   getProvider?: () => KaspireProvider | null | undefined;
-  /** dispatch tag (hex) of a template entry; enables `ordered-args` for entries whose only argument is the signature */
+  /**
+   * The dispatch tag (hex) of a template entry. It enables `ordered-args` for entries whose only
+   * argument is the signature.
+   */
   dispatchTag?: (template: TemplateName, entry: string) => Hex | null;
-  /** force one mode for every covenant input (default `auto`: ordered-args where derivable, else wrap-signature) */
+  /**
+   * Forces one mode for every covenant input. Default `auto`: `ordered-args` where derivable, else
+   * `wrap-signature`.
+   */
   mode?: 'auto' | 'wrap-signature';
 }
 
 const LABEL = 'Kaspire';
 
-/** Dispatch tags out of kob-wasm's template table (`TemplateInfo.entries`: entry name -> 4-byte tag hex). */
+/**
+ * The dispatch tags out of kob-wasm's template table (`TemplateInfo.entries`: entry name to 4-byte
+ * tag hex).
+ */
 export function dispatchTagFrom(kob: KobWasm): (template: TemplateName, entry: string) => Hex | null {
   let table: Map<string, Record<string, string>> | null = null;
   return (template, entry) => {
@@ -49,9 +67,11 @@ export function dispatchTagFrom(kob: KobWasm): (template: TemplateName, entry: s
 }
 
 /**
- * `ordered-args` mirrors the plan ONLY when that is trivial and certain: a template entry whose sole argument is the signature
- * (`cancel`): `[signature, dispatch tag]`. Everything else (int / bytes arguments, KCC-20 leader witnesses with field-wise state arrays)
- * would need the ABI encoder, which lives in Rust: those use `wrap-signature`.
+ * The signature script mode for one input. `ordered-args` mirrors the plan only when that is
+ * trivial and certain: a template entry whose sole argument is the signature (`cancel`), which
+ * gives `[signature, dispatch tag]`. Everything else would need the ABI encoder, which lives in
+ * Rust, and uses `wrap-signature`. That covers int and bytes arguments and KCC-20 leader
+ * witnesses with field-wise state arrays.
  */
 export function kaspireSignatureScript(built: BuiltTx, req: SignRequest, deps: Pick<KaspireDeps, 'dispatchTag' | 'mode'> = {}): KaspireSignatureScript {
   const plan = built.plans[req.inputIndex];
@@ -59,7 +79,8 @@ export function kaspireSignatureScript(built: BuiltTx, req: SignRequest, deps: P
     const tag = deps.dispatchTag(plan.template, plan.entry);
     if (tag) return { mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: tag }] };
   }
-  // the maker's cancel of an order under a retired template: the same `cancel(sig)` (kob-protocol checks that its ABI and tag are today's)
+  // The maker's cancel of an order under a retired template is the same `cancel(sig)`. kob-protocol
+  // checks that its ABI and tag are today's.
   if (deps.mode !== 'wrap-signature' && plan?.kind === 'retiredCancel' && deps.dispatchTag) {
     const tag = deps.dispatchTag(plan.template, 'cancel');
     if (tag) return { mode: 'ordered-args', args: [{ type: 'signature', prefixHex: '' }, { type: 'data', hex: tag }] };
@@ -67,6 +88,7 @@ export function kaspireSignatureScript(built: BuiltTx, req: SignRequest, deps: P
   return { mode: 'wrap-signature' };
 }
 
+/** The adapter for Kaspire. It reads the provider at call time. */
 export function createKaspireAdapter(deps: KaspireDeps = {}): WalletAdapter {
   const provider = () => (deps.getProvider ? deps.getProvider() : (globalThis as { kaspire?: KaspireProvider }).kaspire) ?? null;
   const need = (): KaspireProvider => {
@@ -77,7 +99,7 @@ export function createKaspireAdapter(deps: KaspireDeps = {}): WalletAdapter {
   return {
     id: 'kaspire',
     label: LABEL,
-    // signs covenant (P2SH) inputs: proven on TN10 (tools/wallet-gate)
+    // Signs covenant (P2SH) inputs, proven on TN10 (tools/wallet-gate).
     covenantSigning: 'proven',
     detect: () => {
       const p = provider();
@@ -112,7 +134,7 @@ export function createKaspireAdapter(deps: KaspireDeps = {}): WalletAdapter {
       const p = need();
       const call = <T>(method: string) => withTimeout(p.request({ method }) as Promise<T>, REFRESH_TIMEOUT_MS, `${LABEL}.${method}`);
       try {
-        // getAccounts is silent (requestAccounts would also fire `accountsChanged` back at us)
+        // getAccounts is silent. requestAccounts would also fire `accountsChanged` back at us.
         const accounts = await call<string[]>('getAccounts');
         if (!Array.isArray(accounts) || typeof accounts[0] !== 'string') throw new WalletError('other', `${LABEL} no longer exposes an account.`);
         const network = normalizeNetwork(await call<string>('getNetwork'));
@@ -126,8 +148,9 @@ export function createKaspireAdapter(deps: KaspireDeps = {}): WalletAdapter {
     subscribe(onEvent, o = {}) {
       const p = provider();
       if (!p || typeof p.request !== 'function') return () => undefined;
-      // Kaspire (provider 1.2.0) emits accountsChanged(string[]), networkChanged(name) and disconnect({code: 4900}); it also emits them
-      // for its own requestAccounts / switchNetwork calls, which is why the app compares every re-read with what it already has
+      // Kaspire (provider 1.2.0) emits accountsChanged(string[]), networkChanged(name) and
+      // disconnect({code: 4900}). It also emits them for its own requestAccounts and switchNetwork
+      // calls, which is why the app compares every re-read with what it already has.
       if (hasEmitter(p)) return listenProvider(p, { accounts: ['accountsChanged'], network: ['networkChanged'], disconnect: ['disconnect'] }, onEvent);
       return pollProvider(
         async () => {
