@@ -1,6 +1,8 @@
-//! `kob replace`, `kob cancel`, `kob refund`, `kob take` and `kob send`: actions on live orders and plain transfers, built
-//! like the web wallet does (`web/src/kob/cancel.ts`, `web/src/ui/orders/amend.ts`) and like the keepers refund
-//! (`kobd` keepers).
+//! `kob replace`, `kob cancel`, `kob refund`, `kob take` and `kob send`.
+//!
+//! These are actions on live orders and plain transfers. They are built like the web wallet
+//! builds them (`web/src/kob/cancel.ts`, `web/src/ui/orders/amend.ts`) and like the keepers of
+//! `kobd` refund.
 
 use kob_protocol::build::{
     build, Action, AmendOrder, Batch, CancelOrder, Leg, RefundOrder, Replacement, SendTokens, TokenRecipient, TokenRef,
@@ -25,19 +27,21 @@ use crate::common::Signer;
 pub use kob_protocol::payment::kas_payment;
 
 const ONE_KAS: u64 = 100_000_000;
-/// Headroom added to a reported shortfall when a funding UTXO is picked.
+/// The headroom added to a reported shortfall when a funding UTXO is picked.
 const FUNDING_HEADROOM: u64 = 500_000;
-/// Most KAS a builder may fold into the maker's new order instead of a change output.
+/// The most KAS that a builder may fold into the new order of the maker instead of a change output.
 const TINY_CHANGE_MAX: u64 = 5 * ONE_KAS;
-/// The lock time margin of a taker: the matchers' `now - 10 DAA`.
+/// The lock time margin of a taker, which is `now - 10 DAA` as the matchers use.
 pub const LOCK_MARGIN_DAA: i64 = 10;
 
 fn issue(code: &'static str, severity: Severity, message: impl Into<String>) -> Issue {
     Issue { code, severity, message: message.into() }
 }
 
-/// Builds with the order's own KAS first; on a shortfall adds the signer's UTXOs (the smallest one that covers it, else
-/// the largest) and retries, at most 8 times (`cancel.ts` `buildWithFunding`).
+/// Builds with the own KAS of the order first.
+///
+/// On a shortfall it adds a UTXO of the signer and retries, at most 8 times. It picks the
+/// smallest UTXO that covers the shortfall, else the largest (`cancel.ts` `buildWithFunding`).
 fn build_with_funding(
     pool: &[KeyUtxo],
     initial: Vec<KeyUtxo>,
@@ -85,8 +89,11 @@ fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) 
     Ok((p, c, s))
 }
 
-/// Why a command stopped before signing: `code` is the process exit code (the README's "Exit codes": 2 for a malformed argument,
-/// such as an amount that does not read, 1 for everything the command met while working).
+/// Why a command stopped before signing.
+///
+/// `code` is the process exit code, see "Exit codes" in `REFERENCE.md`. It is 2 for a malformed
+/// argument, such as an amount that does not read, and 1 for everything the command met while
+/// working.
 pub struct Fail {
     code: i32,
     message: String,
@@ -104,7 +111,7 @@ impl From<&str> for Fail {
     }
 }
 
-/// A malformed argument: exit code 2.
+/// A malformed argument, with exit code 2.
 fn usage(e: impl Into<String>) -> Fail {
     Fail { code: 2, message: e.into() }
 }
@@ -113,14 +120,17 @@ fn cov_arg(s: &str) -> Result<[u8; 32], String> {
     kob_protocol::registry::parse_hex32(s).ok_or_else(|| format!("`{s}` is not a covenant id (64 hex)"))
 }
 
-/// The markets an order trades (its token, a pair order's two tokens), from the registry and the indexer.
+/// The markets that an order trades, from the registry and the indexer.
+///
+/// They are its token, or the two tokens of a pair order.
 fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
     let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, c.indexer.as_deref())?;
     let toks: Vec<[u8; 32]> = match live.order.state.pair_tokens() {
         Some(p) => vec![p.a.cov_id, p.b.cov_id],
         None => vec![live.order.state.token_cov_id()],
     };
-    // a token without a registry entry: the scale its listed orders use, else this order's own (its base token's)
+    // A token without a registry entry uses the scale of its listed orders, else the scale of
+    // this order, which is the one of its base token.
     let (own_token, own_scale) = (live.order.state.token_cov_id(), live.order.state.scale());
     let order_scale = |cov: &[u8; 32]| -> Result<Option<i64>, String> {
         let listed = match c.indexer.as_deref() {
@@ -141,7 +151,8 @@ fn markets_of(c: &Common, live: &Live) -> Result<Vec<TokenMarket>, String> {
     };
     let mut ms: Vec<TokenMarket> =
         toks.iter().map(|t| market::resolve_with(&to_hex(t), &reg, &idx, Some(&open))).collect::<Result<_, _>>()?;
-    // a commitment no source names: the one the order's own state (read from the node) carries for the token
+    // A commitment that no source names is the one that the own state of the order, read from the
+    // node, carries for the token.
     for m in ms.iter_mut().filter(|m| m.ext_source == market::ExtSource::Unknown) {
         let s = &live.order.state;
         let own = s.custody_ext(m.cov).or_else(|| (s.token_cov_id() == m.cov).then(|| s.extension_commitment()).flatten());
@@ -172,9 +183,9 @@ fn order_lines(live: &Live, ms: &[TokenMarket]) -> Vec<String> {
     v
 }
 
-// ------------------------------------------------------------------------------------------------ replace
+// ---------------------------------------------------------------------------- replace
 
-/// Help of `kob replace`.
+/// The help text of `kob replace`.
 pub const REPLACE_USAGE: &str = "\
 kob replace: amend a live order (in place where the protocol allows it, else cancel + new order in one transaction)
 
@@ -197,26 +208,26 @@ USAGE
   stays a day order. Repeat entries and the exits they booked are not replaced (cancel the position instead).
 ";
 
-/// What the user changes.
+/// What the user changes in an amendment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AmendInput {
-    /// Limit / take-profit price.
+    /// The limit or take-profit price.
     pub price: Option<i64>,
-    /// Stop.
+    /// The stop price.
     pub stop: Option<i64>,
-    /// Stop-limit.
+    /// The stop-limit price.
     pub stop_limit: Option<i64>,
-    /// Base units.
+    /// The amount, in base units.
     pub amount: Option<i64>,
-    /// Tip.
+    /// The tip.
     pub tip: Option<i64>,
-    /// KAS added to a bid.
+    /// The KAS added to a bid.
     pub add_kas: u64,
-    /// Fresh 90-day expiry.
+    /// Whether to renew the order with a fresh 90-day expiry.
     pub renew: bool,
 }
 
-/// The replacement state and the KAS it holds (`amend.ts` `buildReplacement`).
+/// The replacement state and the KAS that it holds (`amend.ts` `buildReplacement`).
 pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Result<(AnyState, i64, Vec<String>), String> {
     let value = live.order.utxo.amount as i64;
     let mut notes = vec![];
@@ -373,7 +384,7 @@ pub fn replacement(live: &Live, i: &AmendInput, now_daa: i64, tick: i64) -> Resu
     }
 }
 
-/// Whether the amendment can be in place (`cancel.ts` `amendsInPlace`).
+/// Whether the amendment can be made in place (`cancel.ts` `amendsInPlace`).
 pub fn amends_in_place(live: &Live, rep: &AnyState) -> bool {
     let old = &live.order.state;
     if old.template_id() != rep.template_id() || !live.strays.is_empty() || live.foreign > 0 {
@@ -388,7 +399,9 @@ pub fn amends_in_place(live: &Live, rep: &AnyState) -> bool {
     }
 }
 
-/// The amend / cancel-replace transaction of `live` to `rep` holding `value` (`planAmendInPlace` / `planCancelReplace`).
+/// The amend or cancel-replace transaction of `live` to `rep`, holding `value`.
+///
+/// See `planAmendInPlace` and `planCancelReplace`.
 pub fn build_replace(
     live: &Live,
     rep: &AnyState,
@@ -432,7 +445,8 @@ pub fn build_replace(
         });
         return Ok((built, true, notes));
     }
-    // the tokens the replacement must hold, from the old custody, the strays and (when short) free tokens
+    // The tokens that the replacement must hold come from the old custody, the strays and, when
+    // short, free tokens.
     let mut tokens: Vec<TokenUtxo> = vec![];
     let mut strays = live.strays.clone();
     for (token, need) in rep.custodies().into_iter().filter(|c| c.1 > 0) {
@@ -534,7 +548,7 @@ const REPLACE_VALUE_FLAGS: &[&str] = &[
     "--carrier",
 ];
 
-/// Run `kob replace`.
+/// Runs `kob replace`.
 pub fn run_replace(args: &[String]) -> i32 {
     let (p, c, signer) = match ctx(args, REPLACE_VALUE_FLAGS, &["--renew", "--ack-no-guards"], REPLACE_USAGE) {
         Ok(x) => x,
@@ -615,7 +629,9 @@ pub fn run_replace(args: &[String]) -> i32 {
     }
 }
 
-/// The KAS on every covenant UTXO of an order (its delivery or exit carrier, else its custody's carrier).
+/// The KAS on every covenant UTXO of an order.
+///
+/// That is its delivery or exit carrier, else the carrier of its custody.
 fn order_carrier(live: &Live) -> Option<u64> {
     let c = match &live.order.state {
         AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => Some(x.delivery_carrier),
@@ -629,8 +645,10 @@ fn order_carrier(live: &Live) -> Option<u64> {
     c.map(|c| c as u64).or(live.custody.as_ref().map(|u| u.utxo.amount)).filter(|c| *c >= super::place::MIN_CARRIER)
 }
 
-/// `kob replace` of a trailing stop, an if-done entry or a pair order: the order as its intent with the changes, re-planned
-/// where the order's own KAS and custody come back, then cancelled and replaced in one transaction.
+/// `kob replace` of a trailing stop, an if-done entry or a pair order.
+///
+/// The order is taken as its intent with the changes, and re-planned so that the own KAS and
+/// custody of the order come back. It is then cancelled and replaced in one transaction.
 fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[TokenMarket]) -> Result<(Ready, Units), Fail> {
     use super::replan::{intent_from_order, lifetime_of, replace_env, Changes};
     let node = c.need_node()?;
@@ -681,7 +699,8 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     let expiry = s.expiry().map(|e| e.0).unwrap_or(0);
     let lifetime = lifetime_of(expiry, live.genesis_daa, live.deadline, ch.renew);
     let intent = intent_from_order(s, lifetime, clock.daa, &ch)?;
-    // what the replacement draws on: the order's own KAS and custody (stand-ins) and the maker's free tokens of A and B
+    // What the replacement draws on: the own KAS and custody of the order, as stand-ins, and the
+    // free tokens of A and B of the maker.
     let needs = super::place::Needs { a: true, b: b.is_some() };
     let (mut env, notes) = super::place::env_of(c, a, b, needs, signer.pubkey)?;
     env.carrier = super::place::carrier_arg(p).map_err(usage)?.or(order_carrier(live));
@@ -707,7 +726,8 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     lines.extend(super::place::plan_lines(&plan, a, b).into_iter().map(|l| format!("  {l}")));
     let mut issues: Vec<Issue> = plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned().collect();
     issues.extend(notes);
-    // a registry token that is not tradable (its program pending review: not supported) is refused here as for every amendment
+    // A registry token that is not tradable is refused here, as for every amendment. Its program
+    // is pending review, which is not supported.
     issues.extend(ms.iter().filter_map(|m| m.listing_issue(true)));
     issues.extend(more.into_iter().map(|n| issue("REPLACE_NOTE", Severity::Info, n)));
     let mut states = vec![serde_json::to_value(&rep).unwrap_or_default()];
@@ -725,9 +745,9 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     ))
 }
 
-// ------------------------------------------------------------------------------------------------ cancel
+// ---------------------------------------------------------------------------- cancel
 
-/// Help of `kob cancel`.
+/// The help text of `kob cancel`.
 pub const CANCEL_USAGE: &str = "\
 kob cancel: the maker's cancel of live orders by covenant id (the indexer's view, every UTXO checked on the node)
 
@@ -742,7 +762,7 @@ USAGE
   for it.
 ";
 
-/// Run `kob cancel`.
+/// Runs `kob cancel`.
 pub fn run_cancel(args: &[String]) -> i32 {
     let (p, c, signer) = match ctx(args, &[], &[], CANCEL_USAGE) {
         Ok(x) => x,
@@ -823,9 +843,9 @@ fn finish_or(c: &Common, signer: &Signer, r: Result<(Ready, Units), Fail>, what:
     }
 }
 
-// ------------------------------------------------------------------------------------------------ refund
+// ---------------------------------------------------------------------------- refund
 
-/// Help of `kob refund`.
+/// The help text of `kob refund`.
 pub const REFUND_USAGE: &str = "\
 kob refund: the permissionless refund of an order that has ended (expiry, 90 days idle, an IOC / FOK's kill time)
 
@@ -838,7 +858,7 @@ USAGE
   A refund never moves strays: the maker's cancel does.
 ";
 
-/// Run `kob refund`.
+/// Runs `kob refund`.
 pub fn run_refund(args: &[String]) -> i32 {
     let (p, c, signer) = match ctx(args, &[], &["--no-funding"], REFUND_USAGE) {
         Ok(x) => x,
@@ -943,9 +963,9 @@ pub fn run_refund(args: &[String]) -> i32 {
     finish_or(&c, &signer, r, "this refund")
 }
 
-// ------------------------------------------------------------------------------------------------ take
+// ---------------------------------------------------------------------------- take
 
-/// Help of `kob take`.
+/// The help text of `kob take`.
 pub const TAKE_USAGE: &str = "\
 kob take: fill a resting order as the taker, at its own price (an Executor's fill transaction with one order)
 
@@ -959,7 +979,7 @@ USAGE
   order is filled at its price at the transaction's lock time (now - 10 DAA). Pair orders and stops are not taken here.
 ";
 
-/// Run `kob take`.
+/// Runs `kob take`.
 pub fn run_take(args: &[String]) -> i32 {
     let (p, c, signer) = match ctx(args, &["--amount", "--carrier"], &[], TAKE_USAGE) {
         Ok(x) => x,
@@ -1052,7 +1072,8 @@ pub fn run_take(args: &[String]) -> i32 {
             records: vec![],
             fee: fee.clone(),
         };
-        // the fewest of the key's coins, largest first, that pay the fee and the carriers (x402 swap's rule)
+        // The fewest coins of the key, largest first, that pay the fee and the carriers, as the
+        // rule of the x402 swap has it.
         let mut coins = funding.clone();
         coins.sort_by(|a, b| b.utxo.amount.cmp(&a.utxo.amount));
         let mut built = None;
@@ -1093,7 +1114,7 @@ pub fn run_take(args: &[String]) -> i32 {
     finish_or(&c, &signer, r, "this fill")
 }
 
-/// The refund tip of any order kind.
+/// The refund tip of an order of any kind.
 pub fn refund_tip(s: &AnyState) -> i64 {
     match s {
         AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.refund_tip,
@@ -1120,9 +1141,9 @@ fn taker_price(s: &AnyState, t: i64, utxo_daa: i64) -> Option<i64> {
     }
 }
 
-// ------------------------------------------------------------------------------------------------ send
+// ---------------------------------------------------------------------------- send
 
-/// Help of `kob send`.
+/// The help text of `kob send`.
 pub const SEND_USAGE: &str = "\
 kob send: send KAS or a token
 
@@ -1163,7 +1184,7 @@ pub fn recipient(to: &str, network: &str) -> Result<(kaspa_consensus_core::tx::S
     Ok((spk, key))
 }
 
-/// Run `kob send`.
+/// Runs `kob send`.
 pub fn run_send(args: &[String]) -> i32 {
     let (p, c, signer) = match ctx(args, &["--carrier"], &[], SEND_USAGE) {
         Ok(x) => x,
@@ -1206,8 +1227,9 @@ pub fn run_send(args: &[String]) -> i32 {
                 Units::new(),
             ));
         }
-        // The indexer is optional here: without one, the registry, this machine's record of the tokens it issued and of the key's
-        // own recent token outputs (`crate::recent`, each confirmed on the node) name the token, its program and its holdings.
+        // The indexer is optional here. Without one, the registry, the record of this machine of
+        // the tokens it issued, and the record of the own recent token outputs of the key name the
+        // token, its program and its holdings. See `crate::recent`. Each is confirmed on the node.
         let indexer = c.indexer.as_deref();
         let without_indexer = |e: String| match indexer {
             Some(_) => e,
@@ -1246,7 +1268,8 @@ pub fn run_send(args: &[String]) -> i32 {
             return Err(usage(format!("--carrier must be at least {} for a token output of {}", units::kas(floor as i128), m.name())));
         }
         let mine = data::token_utxos_from(indexer, node, &c.network, &m, &signer.pubkey)?;
-        // a commitment no source names: the one the wallet's own holdings of the token have (checked on the node), never assumed
+        // A commitment that no source names is the one that the own holdings of the wallet for the
+        // token have, checked on the node. It is never assumed.
         let found =
             m.take_ext_from_holdings(&mine.iter().map(|u| u.state.extension()).collect::<Vec<_>>()).map_err(&without_indexer)?;
         let usable = usable_token_utxos(&m, &signer.pubkey, &mine);
