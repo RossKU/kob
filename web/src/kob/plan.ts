@@ -30,8 +30,8 @@ export const isCondIntent = (i: Intent): i is CondIntent => COND_TYPES.includes(
  * HIGH is an order that acts on the market now and that a keeper kills soon after it rests. These
  * are IOC, FOK, market, streaming and close (IOC auctions), and a limit that already crosses the
  * book, because a marketable limit becomes an auction. NORMAL is everything that rests. These are
- * GTC, GTD and day limits, TWAP, DCA and Dutch schedules, stops, take-profit, OCO, if-done,
- * bracket and repeat.
+ * GTC, GTD and day limits, TWAP, DCA and Dutch schedules, stops, take-profit, OCO, if-done, bracket
+ * and repeat.
  */
 export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, intent: Intent): Urgency {
   switch (intent.type) {
@@ -43,8 +43,8 @@ export function orderUrgency(env: Pick<PlanEnv, 'book'> & { pair?: unknown }, in
       return 'high';
     case 'limit':
       // A limit that crosses the book now and is not refused is placed as an auction or fills from
-      // its limit, so it trades now. A timed one rests first.
-      // A pair order's tip is KAS, so it never moves its B price toward the book.
+      // its limit, so it trades now. A timed one rests first. A pair order's tip is KAS, so it
+      // never moves its B price toward the book.
       return !intent.activeFrom && intent.crossing !== 'reject' && crossingTouch(env.book, intent.side, intent.price, env.pair ? 0n : intent.tip ?? 0n).crossing ? 'high' : 'normal';
     default:
       return 'normal';
@@ -143,8 +143,8 @@ export const MARKET_START_TOLERANCE_BPS = 1_000n;
  * on the costly side of one (above it for a buy, below it for a sell) is an error,
  * MARKET_START_VS_INDEXER, and the order cannot be placed.
  *
- * The last fill comes from the same indexer as the book, so it is no independent reference.
- * Without a further indexer the start is accepted.
+ * The last fill comes from the same indexer as the book, so it is no independent reference. Without
+ * a further indexer the start is accepted.
  */
 export function marketStartIssues(env: PlanEnv, intent: Intent, plan: OrderPlan): PlanIssue[] {
   if (intent.type !== 'market' && intent.type !== 'close') return [];

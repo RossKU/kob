@@ -5,8 +5,8 @@
 //
 // - An exit's `parent` is its entry's covenant id.
 // - The detail view of an entry lists `children`, the exit ids.
-// - `repeat` is `{role:'entry', rpt_amount, rearm_amount}` on a repeating entry, with
-//   `rearm_amount = rpt_amount - 1`, and `{role:'exit', parent}` on a booked exit.
+// - `repeat` is `{role:'entry', rpt_amount, rearm_amount}` on a repeating entry, with `rearm_amount
+//   = rpt_amount - 1`, and `{role:'exit', parent}` on a booked exit.
 //
 // Grouping uses all three, so it works on list views (no `children`) and on detail views.
 //

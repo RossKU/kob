@@ -3,8 +3,8 @@
 //
 // `planOrder(env, intent)` returns an `OrderPlan`. It does four things.
 //
-// - It validates the intent against the protocol rules and the wallet rules of
-//   docs/spec/matcher.md section 10.
+// - It validates the intent against the protocol rules and the wallet rules of docs/spec/matcher.md
+//   section 10.
 // - It maps the intent to the exact on-chain order states and a kob-wasm `createOrder` request,
 //   with funding and token UTXOs selected from the env.
 // - It runs kob-wasm `build` (unsigned tx and signing plan), so protocol-level rejections, fee and
@@ -297,9 +297,9 @@ export interface Disclosure {
   allInPrice: bigint | null;
   /**
    * All-in total of the whole amount at the limit, in KAS moved. It follows the covenant's quote
-   * rule. A sell receives at least ceil(amount x allIn / scale) and a buy pays at most
-   * floor(amount x allIn / scale) (kob-wasm `askProceedsAt` and `bidSpendAt`, and the conditional
-   * and if-done twins).
+   * rule. A sell receives at least ceil(amount x allIn / scale) and a buy pays at most floor(amount
+   * x allIn / scale) (kob-wasm `askProceedsAt` and `bidSpendAt`, and the conditional and if-done
+   * twins).
    */
   allInTotal: bigint | null;
   /** Best price expected now, in sompi per whole token. The touch for market orders. */
@@ -392,9 +392,9 @@ export interface PlanFills {
    * A buy only: the most the order's escrow lets the fills deliver (kob-wasm `bidBuyingPower` of
    * the escrow, the covenant's remaining buying power). A bid's quantity is its KAS escrow, not an
    * amount. The delivery carriers budgeted for fills that do not happen buy tokens at the bound
-   * price, so a book that lets one fill take everything delivers up to
-   * `amount + (budgeted - 1) x carrier / price`. This exceeds `amount` only for a multi-fill
-   * market buy, and the spend never exceeds the KAS locked.
+   * price, so a book that lets one fill take everything delivers up to `amount + (budgeted - 1) x
+   * carrier / price`. This exceeds `amount` only for a multi-fill market buy, and the spend never
+   * exceeds the KAS locked.
    */
   maxReceive?: bigint;
   /**
@@ -412,8 +412,7 @@ export interface PlanFills {
 /** The issues of a plan that have severity 'error'. */
 export const errors = (p: { issues: PlanIssue[] }): PlanIssue[] => p.issues.filter((i) => i.severity === 'error');
 
-// ------------------------------------------------------------------------------------------------
-// Token/token pairs (A/B)
+// ------------------------------------------------------------------------- Token/token pairs (A/B)
 //
 // In a pair A/B, `PlanEnv.token` is A (the base) and `PairEnvPart.quote` is B (the quote). Amounts
 // are base units of A. Prices are B base units per whole A (`scale(A)` base units of A). Tips,

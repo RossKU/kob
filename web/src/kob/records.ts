@@ -9,8 +9,8 @@
 //   (`recoverAmends`).
 // - `sweptRecords` keeps a swept order's record and moves its last proven state to the
 //   continuation, because a sweep never ends the order.
-// - `RecordStore` has memory and localStorage implementations. Every localStorage access is
-//   guarded against private mode, quota errors and corrupt data.
+// - `RecordStore` has memory and localStorage implementations. Every localStorage access is guarded
+//   against private mode, quota errors and corrupt data.
 // - Export and import use the indexer's maker-recovery format (docs/ops/executor.md, section 7.5)
 //   and a fuller KOB backup that also keeps the placed txs. Every import is re-validated with
 //   kob-wasm, so an import never adds a record the maker could not have placed.
@@ -21,15 +21,15 @@
 // new address. Only the covenant id continues. The search is therefore:
 //
 // 0. A record of a template this build neither pins nor keeps in the cancel-only table is never
-//    searched. Its script cannot be derived, so the answer is 'old-template'. A retired template
-//    of the cancel-only table is searched under its own script.
-// 1. Ask the node about the address of the record's original state and of its last proven state.
-//    A UTXO there carrying the record's covenant id means unchanged and live.
+//    searched. Its script cannot be derived, so the answer is 'old-template'. A retired template of
+//    the cancel-only table is searched under its own script.
+// 1. Ask the node about the address of the record's original state and of its last proven state. A
+//    UTXO there carrying the record's covenant id means unchanged and live.
 // 2. Otherwise enumerate candidate continuation states. They differ from the recorded one only in
 //    the fields that kob-wasm `mutableWindows(kind)` lists. Each candidate is derived by editing
-//    the decoded state and letting kob-wasm compute its script public key, with no byte splicing
-//    in TypeScript. A node UTXO counts only when it carries the covenant id and its script equals
-//    the candidate's script.
+//    the decoded state and letting kob-wasm compute its script public key, with no byte splicing in
+//    TypeScript. A node UTXO counts only when it carries the covenant id and its script equals the
+//    candidate's script.
 // 3. `hints` (UTXOs learned elsewhere, such as from the indexer) are matched against the same
 //    candidate set, so a hint can never smuggle in a state.
 // 4. For ask-side kinds the custody token UTXO is looked up at the address of the custody state
@@ -45,13 +45,13 @@
 //
 // The candidates are walked breadth first and bounded.
 //
-// - amountLeft and rptAmount walk jointly for repeat entries (rpt = rptOrig - filled,
-//   amount = amountOrig - filled + merged).
+// - amountLeft and rptAmount walk jointly for repeat entries (rpt = rptOrig - filled, amount =
+//   amountOrig - filled + merged).
 // - A trailing stop's stopPrice walks in trailStep steps.
 // - `armed` takes the values {recorded, 0, 1, last seen UTXO DAA, placement DAA}.
 //
-// Amounts are base units. Every value is tried while the amount is small. A larger amount is
-// walked in steps of the order's minimum fill, which covers fills of exactly minFill, and is never
+// Amounts are base units. Every value is tried while the amount is small. A larger amount is walked
+// in steps of the order's minimum fill, which covers fills of exactly minFill, and is never
 // exhaustive. The node alone then answers 'unknown' rather than 'spent'. The indexer's proven state
 // finds such an order at once.
 import type { OrderView } from '../data/indexer-types';
@@ -128,8 +128,7 @@ export interface PlacementRecord {
   origin?: 'placed' | 'indexer';
 }
 
-// ------------------------------------------------------------------------------------------------
-// validation helpers
+// ------------------------------------------------------------------------------ validation helpers
 
 const isHex = (v: unknown, bytes?: number): v is string =>
   typeof v === 'string' && /^([0-9a-f]{2})*$/.test(v) && (bytes === undefined || v.length === bytes * 2);
@@ -165,8 +164,7 @@ function pinnedHash(kob: KobWasm, kind: OrderKind): Hex {
   return t.hash;
 }
 
-// ------------------------------------------------------------------------------------------------
-// stores
+// ------------------------------------------------------------------------------------------ stores
 
 /** Storage of placement records by covenant id. */
 export interface RecordStore {
@@ -276,8 +274,7 @@ export class LocalStorageRecordStore implements RecordStore {
   }
 }
 
-// ------------------------------------------------------------------------------------------------
-// records from a built tx
+// ------------------------------------------------------------------------- records from a built tx
 
 /** The context of a placement that a record needs besides the built tx. */
 export interface RecordOpts {
@@ -315,11 +312,11 @@ export function recordsFromBuilt(kob: KobWasm, built: { tx: TxJson }, opts: Reco
  * The maker's records of the orders an in-place amend continues (kob-wasm `recoverAmends` over the
  * built tx and its signing plans, so nothing is trusted).
  *
- * Each record takes the amended state, because a node resolution starts from it and the old
- * state's script no longer exists. It also takes the continuation's value and the record's
- * deadline. The custody did not move, so its part of the record stays. The amend creates no
- * placement, so the record gets `txid: null` like an imported record. An import re-checks its
- * state and a resolution its UTXO. Orders without a record are skipped.
+ * Each record takes the amended state, because a node resolution starts from it and the old state's
+ * script no longer exists. It also takes the continuation's value and the record's deadline. The
+ * custody did not move, so its part of the record stays. The amend creates no placement, so the
+ * record gets `txid: null` like an imported record. An import re-checks its state and a resolution
+ * its UTXO. Orders without a record are skipped.
  */
 export async function amendedRecords(kob: KobWasm, built: { tx: TxJson; plans: SigPlan[] }, store: RecordStore, maker: Hex): Promise<PlacementRecord[]> {
   const out: PlacementRecord[] = [];
@@ -343,10 +340,10 @@ export async function amendedRecords(kob: KobWasm, built: { tx: TxJson; plans: S
  * by sweep.ts against the built tx and its signing plans.
  *
  * A sweep does not end the order. Its record stays, with identity, placement and custody part
- * unchanged, and only its last proven state moves to the continuation. That is the same state at
- * a new outpoint, with `daa` set to when the sweep was accepted, so a node resolution starts
- * there. A `cancelling` mark of this tx does not apply, because the order was not cancelled.
- * Orders without a record are skipped.
+ * unchanged, and only its last proven state moves to the continuation. That is the same state at a
+ * new outpoint, with `daa` set to when the sweep was accepted, so a node resolution starts there. A
+ * `cancelling` mark of this tx does not apply, because the order was not cancelled. Orders without
+ * a record are skipped.
  */
 export async function sweptRecords(kob: KobWasm, built: { tx: TxJson; plans: SigPlan[] }, store: RecordStore, maker: Hex, daa: U64 | number | bigint): Promise<PlacementRecord[]> {
   const out: PlacementRecord[] = [];
@@ -359,8 +356,7 @@ export async function sweptRecords(kob: KobWasm, built: { tx: TxJson; plans: Sig
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------
-// indexer recovery format
+// ------------------------------------------------------------------------- indexer recovery format
 
 /** The indexer's maker-recovery file. */
 export interface IndexerRecovery {
@@ -389,8 +385,8 @@ export const recordExt = (r: PlacementRecord): Hex | null => r.ext ?? (r.custody
  *
  * The state is the current script when the record knows a proven later state (`last`), else the
  * placed one. Ask-side entries carry the custody token's extension commitment, so that the custody
- * can be rebuilt and verified. Without it an importer can find the order but not its custody, and
- * a cancel cannot be built.
+ * can be rebuilt and verified. Without it an importer can find the order but not its custody, and a
+ * cancel cannot be built.
  */
 export function exportIndexerRecovery(records: PlacementRecord[], network: string): IndexerRecovery {
   return {
@@ -455,8 +451,7 @@ export function importIndexerRecovery(json: unknown, kob: KobWasm, opts: ImportO
   return res;
 }
 
-// ------------------------------------------------------------------------------------------------
-// full backup
+// ------------------------------------------------------------------------------------- full backup
 
 /** A KOB backup file: records and the txs that placed them. */
 export interface KobBackup {
@@ -478,10 +473,9 @@ export function exportBackup(records: PlacementRecord[], txs: Record<Hex, TxJson
 }
 
 /**
- * Imports a KOB backup. A record with its placed tx is re-derived from that tx. Its state,
- * covenant id, output, kind and maker must agree with what the file claims, and its custody,
- * value and deadline are taken from the tx. A record without a tx must pass the indexer-import
- * checks.
+ * Imports a KOB backup. A record with its placed tx is re-derived from that tx. Its state, covenant
+ * id, output, kind and maker must agree with what the file claims, and its custody, value and
+ * deadline are taken from the tx. A record without a tx must pass the indexer-import checks.
  */
 export function importBackup(json: unknown, kob: KobWasm, opts: { network: string; maker?: Hex }): ImportResult {
   if (!isObj(json) || json.format !== 'kob-backup' || json.version !== 1 || !Array.isArray(json.records) || !isObj(json.txs)) {
@@ -525,8 +519,7 @@ export function importBackup(json: unknown, kob: KobWasm, opts: { network: strin
   return res;
 }
 
-// ------------------------------------------------------------------------------------------------
-// resolve on a node
+// ------------------------------------------------------------------------------- resolve on a node
 
 /** What a node says about a record. */
 export interface ResolvedRecord {
@@ -580,9 +573,9 @@ export function pinnedTemplateHash(kob: KobWasm, kind: RecordKind): Hex | null {
 }
 
 /**
- * True when the record names an order template this build neither pins nor keeps in its
- * cancel-only table. This build can neither build for nor spend it. Its maker ends the order with
- * the release it was placed with, by a raw transaction that spends the order's own cancel entry.
+ * True when the record names an order template this build neither pins nor keeps in its cancel-only
+ * table. This build can neither build for nor spend it. Its maker ends the order with the release
+ * it was placed with, by a raw transaction that spends the order's own cancel entry.
  */
 export const isOldTemplate = (kob: KobWasm, r: PlacementRecord): boolean => recordCodec(kob, r) === null;
 
@@ -667,9 +660,9 @@ export function lastStateOf(kob: KobWasm, r: PlacementRecord): OrderState | null
  *
  * The dimensions are amount (amountLeft, joint with rptAmount on repeat entries), armed and
  * stopPrice (trailing stops only). The product is walked breadth first by the sum of the
- * per-dimension ranks, so small departures from `base` in every field come before large ones in
- * one field. Amounts walk every base unit while `amountLeft` fits the candidate budget. Otherwise
- * they walk in steps of the order's minimum fill, which is never exhaustive.
+ * per-dimension ranks, so small departures from `base` in every field come before large ones in one
+ * field. Amounts walk every base unit while `amountLeft` fits the candidate budget. Otherwise they
+ * walk in steps of the order's minimum fill, which is never exhaustive.
  */
 function candidates(
   kob: KobWasm,
@@ -697,8 +690,7 @@ function candidates(
     const amountOrig = hasAmount ? big(s.amountLeft) : 0n;
     const lo = isIfdKind(base.kind) ? 0n : 1n;
     // Every base unit while the amount fits the budget. Otherwise fills of exactly the minimum
-    // fill,
-    // which is a guess and never exhaustive.
+    // fill, which is a guess and never exhaustive.
     const minFill = s.minFill !== undefined && big(s.minFill) > 0n ? big(s.minFill) : 1n;
     const step = amountOrig <= BigInt(cap) ? 1n : minFill;
     if (step > 1n) complete = false;
@@ -755,8 +747,8 @@ function candidates(
   }
   const step = s.trailStep !== undefined ? big(s.trailStep) : 0n;
   if (fields.includes('stopPrice') && step > 0n) {
-    // A trailing stop moves in whole steps. A sell stop moves up, staying below its take-profit.
-    // A buy stop moves down, not below 0.
+    // A trailing stop moves in whole steps. A sell stop moves up, staying below its take-profit. A
+    // buy stop moves down, not below 0.
     const stop = big(s.stopPrice);
     const sell = sideOf(base) === 'sell';
     const tp = s.tpPrice !== undefined ? big(s.tpPrice) : s.price !== undefined ? big(s.price) : 0n;
@@ -815,8 +807,8 @@ function tokenProgramOf(kob: KobWasm, tplHash: Hex): TokenProgram | null {
 }
 
 /**
- * Asks a node what became of a recorded order and returns its current state and custody, 'spent'
- * or 'unknown'. The search is described at the top of this file.
+ * Asks a node what became of a recorded order and returns its current state and custody, 'spent' or
+ * 'unknown'. The search is described at the top of this file.
  */
 export async function resolveRecord(
   kob: KobWasm,
@@ -840,8 +832,8 @@ export async function resolveRecord(
     custodyIssue: ResolvedRecord['custodyIssue'] = null,
   ): ResolvedRecord => ({ status, covenantId: record.covenantId, order, custody, strays: [], stateChanged: changed, checked, custodyIssue, ...(codec?.retired ? { retired: codec.retired } : {}) });
   // 0. A template this build neither pins nor keeps for cancels. Its script cannot be derived, so
-  // it would never be found and would look spent. A retired template of the cancel-only table is
-  // searched under its own script.
+  //    it would never be found and would look spent. A retired template of the cancel-only table is
+  //    searched under its own script.
   const codec = recordCodec(kob, record);
   if (!codec) return result('old-template', null, null, false);
   const spkOf = (st: OrderState): string => codec.spanSpk(codec.encode(st));
@@ -864,7 +856,7 @@ export async function resolveRecord(
   if (direct) return live(direct, known.get(direct.scriptPublicKey)!, direct.scriptPublicKey !== baseSpk);
 
   // 2. Candidate continuations of the last proven state, else the placed one. The DAA of the last
-  // seen UTXO may be an `armed` value.
+  //    seen UTXO may be an `armed` value.
   const extraArmed = [record.last?.daa, record.placedAtDaa].filter((v): v is string => typeof v === 'string' && v !== '0');
   const { list, truncated, fields, jointCustody } = candidates(kob, last ?? base, max, extraArmed, spkOf);
   const bySpk = new Map(list.map((c) => [c.spk, c.state]));
@@ -888,9 +880,9 @@ export async function resolveRecord(
 
 /**
  * The custody token UTXOs of a live order, looked up at the address of the custody state its state
- * implies. There is one lookup per custody of kob-protocol `custodies`. A pair order has one of
- * its own token, A or B, on that token's program. A sell-first entry has A, then its B prefund.
- * The extension commitment is the one the record knows (the placed custody's) or the state names.
+ * implies. There is one lookup per custody of kob-protocol `custodies`. A pair order has one of its
+ * own token, A or B, on that token's program. A sell-first entry has A, then its B prefund. The
+ * extension commitment is the one the record knows (the placed custody's) or the state names.
  */
 async function findCustody(
   kob: KobWasm,
@@ -921,8 +913,7 @@ async function findCustody(
   return { utxo: first.utxo, prefund: second.utxo, issue: first.issue ?? second.issue };
 }
 
-// ------------------------------------------------------------------------------------------------
-// keeping records current
+// ------------------------------------------------------------------------- keeping records current
 
 /**
  * The record with its last proven state set to `state`, seen at the UTXO `at` (txid, index, daa).
