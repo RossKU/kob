@@ -1,8 +1,10 @@
+//! Tests of the typed order and token states, the order arithmetic and the state codecs.
+
 use super::*;
 use silverscript_abi::ArtifactValue;
 
-/// The stop band multiplies first, like the covenants; rounding keeps the maker's side; a stop above MAX_STOP_PRICE
-/// saturates.
+/// The stop band multiplies first, like the covenants; rounding keeps the maker's side; a stop
+/// above MAX_STOP_PRICE saturates.
 #[test]
 fn stop_band_multiplies_first() {
     assert_eq!(band(9_999, 300), 299);
@@ -15,8 +17,8 @@ fn stop_band_multiplies_first() {
 
 // ---------------------------------------------------------------- quoteOf
 
-/// The covenant's split formula, written out with checked i64 operations in the covenant's order (an independent copy of
-/// [`quote_of`] for the tests).
+/// The covenant's split formula, written out with checked i64 operations in the covenant's order
+/// (an independent copy of [`quote_of`] for the tests).
 fn covenant_split(n: i64, r: i64, scale: i64, c: i64) -> Option<i64> {
     let m = n % scale;
     let q = n / scale;
@@ -54,7 +56,8 @@ impl Rng {
     }
 }
 
-/// Brute force over small scales, amounts and rates: floor and ceil of n * r / scale, and the covenant split.
+/// Brute force over small scales, amounts and rates: floor and ceil of n * r / scale, and the
+/// covenant split.
 #[test]
 fn quote_of_is_floor_and_ceil_of_the_exact_quotient() {
     for scale in [1i64, 2, 3, 7, 10, 100, 1_000] {
@@ -77,8 +80,8 @@ fn quote_of_is_floor_and_ceil_of_the_exact_quotient() {
     assert_eq!(quote_of(5, 5, -10, Round::Down), None);
 }
 
-/// The limits: scale 1, 10^9 and 3,037,000,498; amounts and rates up to i64::MAX; results just below and above 2^63; a
-/// product that overflows u64 but whose result fits.
+/// The limits: scale 1, 10^9 and 3,037,000,498; amounts and rates up to i64::MAX; results just
+/// below and above 2^63; a product that overflows u64 but whose result fits.
 #[test]
 fn quote_of_limits() {
     let max = i64::MAX;
@@ -101,7 +104,8 @@ fn quote_of_limits() {
     // just below and just above 2^63: scale 1 and the largest amount
     assert_eq!(quote_of(max, 1, 1, Round::Up), Some(max));
     assert_eq!(quote_of(max, 2, 1, Round::Up), None);
-    // ceil of a quotient right at the top: (2^63 - 1) * 3 / 3 = 2^63 - 1 exactly, (2^63 - 1) * 3 / 2 does not fit
+    // ceil of a quotient right at the top: (2^63 - 1) * 3 / 3 = 2^63 - 1 exactly, (2^63 - 1) * 3 /
+    // 2 does not fit
     assert_eq!(quote_of(max, 3, 3, Round::Up), Some(max));
     assert_eq!(quote_of(max, 3, 2, Round::Down), None);
     // floor fits while ceil does not: n * r = 2^64 - 1 = (2^63 - 1) * 2 + 1, scale 2
@@ -114,8 +118,8 @@ fn quote_of_limits() {
         quote_of(999_999_999, max, 1_000_000_000, Round::Up).map(|x| x as i128),
         Some(exact(999_999_999, max, 1_000_000_000, Round::Up))
     );
-    // beyond the split's exactness bound (scale^2 + scale >= 2^63) the covenant fails although the result fits: the
-    // mirror fails with it
+    // beyond the split's exactness bound (scale^2 + scale >= 2^63) the covenant fails although the
+    // result fits: the mirror fails with it
     let big = 4_000_000_000i64;
     let (n, r) = (big - 1, big - 1);
     assert!(exact(n, r, big, Round::Up) < max as i128);
@@ -123,8 +127,8 @@ fn quote_of_limits() {
     assert_eq!(covenant_split(n, r, big, big - 1), None);
 }
 
-/// Random amounts and rates of every magnitude: the mirror equals the covenant split, and equals the exact result
-/// whenever that fits (scale <= 10^9).
+/// Random amounts and rates of every magnitude: the mirror equals the covenant split, and equals
+/// the exact result whenever that fits (scale <= 10^9).
 #[test]
 fn quote_of_random_magnitudes() {
     let mut g = Rng(0x9e37_79b9_7f4a_7c15);
@@ -140,8 +144,9 @@ fn quote_of_random_magnitudes() {
     }
 }
 
-/// The rounding rule: however an order is split into fills, every fill pays a seller at least (Up) and charges a buyer at
-/// most (Down) the exact value of its amount, and the sum over the fills is at least / at most the value of the total.
+/// The rounding rule: however an order is split into fills, every fill pays a seller at least (Up)
+/// and charges a buyer at most (Down) the exact value of its amount, and the sum over the fills is
+/// at least / at most the value of the total.
 #[test]
 fn split_fills_never_pay_a_seller_less_or_charge_a_buyer_more() {
     let mut g = Rng(0x1234_5678_9abc_def1);
@@ -192,7 +197,8 @@ fn bid() -> BidState {
     BidState::decode(&t.contract().compiled.bytecode[1..1 + t.state_len]).unwrap()
 }
 
-/// The bid's escrow arithmetic: used (ceil, budget rate), spend (floor, the quote), buying power, the minimum-fill rule.
+/// The bid's escrow arithmetic: used (ceil, budget rate), spend (floor, the quote), buying power,
+/// the minimum-fill rule.
 #[test]
 fn bid_budget_rules() {
     let b = BidState {
@@ -220,7 +226,8 @@ fn bid_budget_rules() {
     let small = 107 + b.used(400).unwrap();
     assert!(b.fill_ok(200, small)); // leaves less than one minimum fill: a terminating fill of any size
     assert!(!b.fill_ok(0, value));
-    // a terminating fill may use the budget down to the reserve: used(n) <= value - reserve = 1111, n <= 1098
+    // a terminating fill may use the budget down to the reserve: used(n) <= value - reserve = 1111,
+    // n <= 1098
     assert!(b.fill_ok(1_098, value) && !b.fill_ok(1_099, value));
     // escrow for an amount in k fills funds every split of it
     let e = b.escrow(1_000, 4).unwrap();
@@ -234,9 +241,9 @@ fn compiled_pair() -> PairState {
     PairState::decode(&t.contract().compiled.bytecode[1..1 + t.state_len]).unwrap()
 }
 
-/// A pair order's fill amounts: an ask receives the ceil of B, a bid pays exactly the floor from its escrow; the tip is
-/// the floor of KAS; decay moves an ask down to priceEnd and a bid up to it; a partial fill needs the KAS of its delivery
-/// and tip and a positive rest; FOK fills completely.
+/// A pair order's fill amounts: an ask receives the ceil of B, a bid pays exactly the floor from
+/// its escrow; the tip is the floor of KAS; decay moves an ask down to priceEnd and a bid up to it;
+/// a partial fill needs the KAS of its delivery and tip and a positive rest; FOK fills completely.
 #[test]
 fn pair_fill_amounts_round_for_the_maker() {
     let base = PairState {
@@ -279,7 +286,8 @@ fn pair_fill_amounts_round_for_the_maker() {
     assert_eq!(r.price_at(149, 0), Some(2_591));
     assert_eq!(r.price_at(1_000, 0), Some(2_601));
     assert_eq!(r.price_max(), 2_601);
-    // the bid escrow helper funds any split: the floor of the whole amount at the highest price plus one unit
+    // the bid escrow helper funds any split: the floor of the whole amount at the highest price
+    // plus one unit
     let e = r.bid_escrow(10_000, 4).unwrap();
     assert_eq!(e, 10_000 * 2_601 / 1_000 + 1);
     // takeability: the largest takeable amount
@@ -290,8 +298,8 @@ fn pair_fill_amounts_round_for_the_maker() {
     assert_eq!(poor.max_takeable(poor.price, 999), 0, "no KAS for a partial fill, and the cap forbids the whole amount");
 }
 
-/// The numeric gate of the pair kinds: both scales powers of ten up to 10^9, full fills below 2^62 at every rate, a KRON
-/// custody or amount at most 10^9 base units.
+/// The numeric gate of the pair kinds: both scales powers of ten up to 10^9, full fills below 2^62
+/// at every rate, a KRON custody or amount at most 10^9 base units.
 #[test]
 fn pair_numeric_gate() {
     let p = PairState { s_scale: 100_000_000, t_scale: 100_000_000, amount_left: 1_000, custody: 1_000, price: 5, ..compiled_pair() };
@@ -307,8 +315,9 @@ fn pair_numeric_gate() {
 
 // ---------------------------------------------------------------- codec
 
-/// A typed state of template `id` decoded WITHOUT `AnyState::validate` (the compiled example instances carry placeholder
-/// constructor values, e.g. an if-done entry committing an exit at another scale).
+/// A typed state of template `id` decoded WITHOUT `AnyState::validate` (the compiled example
+/// instances carry placeholder constructor values, e.g. an if-done entry committing an exit at
+/// another scale).
 fn typed(id: TemplateId, b: &[u8]) -> AnyState {
     match id.base() {
         TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, b).unwrap()).into_family(id.family()),
@@ -355,8 +364,9 @@ fn typed_states_roundtrip_committed_artifacts() {
             assert_eq!(s.redeem_with(t), *bc);
         } else {
             let s = typed(id, span);
-            // the compiled example instances of the if-done entries commit an exit at another scale (placeholder ctor
-            // values): the state decoder (AnyState::validate) refuses exactly those
+            // the compiled example instances of the if-done entries commit an exit at another scale
+            // (placeholder ctor values): the state decoder (AnyState::validate) refuses exactly
+            // those
             let entry = matches!(id.base(), TemplateId::KobIfdBid | TemplateId::KobIfdAsk);
             assert_eq!(AnyState::decode(id, span).is_ok(), !entry || s.validate().is_ok(), "{}", id.name());
             assert_eq!(s.encode(), span, "{}", id.name());
@@ -380,7 +390,8 @@ fn ctor_files_match_typed_states() {
     assert_eq!(ArtifactValue::Int(s.decay_step), ctor[17]);
     assert_eq!(ArtifactValue::Int(s.amount_left), ctor[18]);
     assert_eq!(ArtifactValue::Bytes(s.extension_commitment.to_vec()), ctor[19]);
-    // The hand-coded offsets the covenants read (the touch evidence of KobCondAsk & co.) match the encoding.
+    // The hand-coded offsets the covenants read (the touch evidence of KobCondAsk & co.) match the
+    // encoding.
     let st = s.encode();
     assert_eq!(st.len(), 276);
     assert_eq!(&st[34..66], &s.token_cov_id);
@@ -452,16 +463,16 @@ fn mutable_windows_match_the_encoding() {
             j["state"]["parent"] = serde_json::Value::String("ab".repeat(32));
             let rs = serde_json::from_value::<AnyState>(j).unwrap().redeem();
             assert_eq!(&rs[a + 1..a + 33], &[0xab; 32], "{}", id.name());
-            // the repeat fields end the state; a KobCondPair's sExt and a KobCondAsk's extensionCommitment (0x20 + 32 B)
-            // follow them
+            // the repeat fields end the state; a KobCondPair's sExt and a KobCondAsk's
+            // extensionCommitment (0x20 + 32 B) follow them
             let tail = if matches!(id, TemplateId::KobCondPair | TemplateId::KobCondAsk) { 33 } else { 0 };
             assert_eq!(b + tail, 1 + t.state_len, "{}: the repeat fields end the state", id.name());
         }
     }
 }
 
-/// KRON: same fields as KCC-20 except the KRON kinds have no extension commitment; the state
-/// codec drops it (and refuses a non-zero one), the committed exit of a KRON sell-first entry is 288 B.
+/// KRON: same fields as KCC-20 except the KRON kinds have no extension commitment; the state codec
+/// drops it (and refuses a non-zero one), the committed exit of a KRON sell-first entry is 288 B.
 #[test]
 fn kron_states_have_no_extension_commitment() {
     for (kcc, kron) in [
@@ -500,8 +511,8 @@ fn kron_states_have_no_extension_commitment() {
     assert!(AnyState::KobIfdAsk(ia).validate().is_err());
 }
 
-/// The pair kinds are one template each for both families: the family of an instance is its base token A's, `in_family`
-/// keeps the template, an invalid family code or A == B is refused.
+/// The pair kinds are one template each for both families: the family of an instance is its base
+/// token A's, `in_family` keeps the template, an invalid family code or A == B is refused.
 #[test]
 fn one_pair_template_for_both_families() {
     for id in [TemplateId::KobPair, TemplateId::KobCondPair, TemplateId::KobIfdPair] {
@@ -559,9 +570,10 @@ fn non_canonical_state_is_rejected() {
 
 // ---------------------------------------------------------------- checked covenant arithmetic
 
-/// Decay, rise, stop band, entry auction, refund time and rptUntil mirror the covenants' checked arithmetic: where a
-/// covenant would fail (an overflow), the helper says so (`None`, or "never" for a refund time) instead of panicking or
-/// wrapping, so a hostile order is unfillable, not a crash.
+/// Decay, rise, stop band, entry auction, refund time and rptUntil mirror the covenants' checked
+/// arithmetic: where a covenant would fail (an overflow), the helper says so (`None`, or "never"
+/// for a refund time) instead of panicking or wrapping, so a hostile order is unfillable, not a
+/// crash.
 #[test]
 fn covenant_arithmetic_is_checked_at_the_limits() {
     // decay / rise: slope * steps and price -/+ moved
