@@ -1,28 +1,33 @@
 //! The payload of a token genesis transaction: the states of its token outputs.
 //!
-//! A token output is a P2SH output, so its state (amount, owner, ...) is not readable from the chain: it is revealed by the
-//! transaction that creates it (a transfer's leader lists the `next_states`; [`crate::public_mint`] names the holder it creates).
-//! A genesis has no such leader, so until a genesis output was first spent nothing but the issuing wallet knew its state, and a
-//! wallet of the same key in another browser, or the CLI, could not find (list, sell) the issued tokens. A KOB genesis therefore
-//! carries its states in its payload:
+//! A token output is a P2SH output, so its state (amount, owner, ...) is not readable from the
+//! chain. The transaction that creates it reveals it: a transfer's leader lists the `next_states`,
+//! and [`crate::public_mint`] names the holder it creates. A genesis has no such leader, so only
+//! the issuing wallet would know its state until a genesis output was first spent. A wallet of the
+//! same key in another browser, or the CLI, could not find (list, sell) the issued tokens. A KOB
+//! genesis therefore carries its states in its payload:
 //!
 //! ```text
 //! "KOBG" | version (1) | count (1..=255) | count x ( length (1..=255) | state span )
 //! ```
 //!
-//! The state spans are the exact bytes a token program commits to (the 112-byte KCC-20 state, the 46-byte KRON state), in the
-//! order of the genesis's token outputs. The payload proves nothing by itself: a reader keeps a state only when the P2SH it
-//! produces under a pinned token program equals the output's script public key, exactly as it does for a transfer's states, so a
-//! wrong or hostile payload can only fail to be believed. The covenant id does not commit to the payload (it commits to the
-//! authorising outpoint and the output group), so the payload cannot change the token.
+//! The state spans are the exact bytes a token program commits to (the 112-byte KCC-20 state, the
+//! 46-byte KRON state), in the order of the token outputs of the genesis. The payload proves
+//! nothing by itself. A reader keeps a state only when the P2SH it produces under a pinned token
+//! program equals the script public key of the output, exactly as it does for the states of a
+//! transfer. So a wrong or hostile payload can only fail to be believed. The covenant id does not
+//! commit to the payload (it commits to the authorising outpoint and the output group), so the
+//! payload cannot change the token.
 
-/// The payload's four-byte tag (not the `KOB1` of a placement record: the two never meet in one transaction).
+/// The payload's four-byte tag (not the `KOB1` of a placement record: the two never meet in one
+/// transaction).
 pub const MAGIC: &[u8; 4] = b"KOBG";
 /// The payload version.
 pub const VERSION: u8 = 1;
 
-/// The payload for the given state spans, in output order; `None` when there are none, more than 255, or one is empty or longer
-/// than 255 bytes.
+/// The payload for the given state spans, in output order.
+///
+/// `None` when there are none, more than 255, or one is empty or longer than 255 bytes.
 pub fn encode(spans: &[Vec<u8>]) -> Option<Vec<u8>> {
     if spans.is_empty() || spans.len() > 255 || spans.iter().any(|s| s.is_empty() || s.len() > 255) {
         return None;
@@ -37,13 +42,16 @@ pub fn encode(spans: &[Vec<u8>]) -> Option<Vec<u8>> {
     Some(v)
 }
 
-/// Whether `payload` claims to be a genesis-states payload (starts with the tag): a cheap test before [`decode`].
+/// Whether `payload` claims to be a genesis-states payload (starts with the tag): a cheap test
+/// before [`decode`].
 pub fn is_genesis_states(payload: &[u8]) -> bool {
     payload.starts_with(MAGIC)
 }
 
-/// The state spans of a genesis-states payload; `None` when it is not one, has another version, or is not exactly the encoding
-/// (a trailing byte, a short span, a zero count are all refused).
+/// The state spans of a genesis-states payload.
+///
+/// `None` when it is not one, has another version, or is not exactly the encoding. A trailing byte,
+/// a short span and a zero count are all refused.
 pub fn decode(payload: &[u8]) -> Option<Vec<Vec<u8>>> {
     let rest = payload.strip_prefix(MAGIC)?;
     let (&version, rest) = rest.split_first()?;

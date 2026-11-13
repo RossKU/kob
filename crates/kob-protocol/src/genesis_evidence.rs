@@ -1,28 +1,42 @@
-//! Chain evidence behind the registry's per-token genesis check (condition C1) and live-mint-authority check (C2), and its
-//! verifier (`kob registry verify-genesis`).
+//! Chain evidence behind the genesis check (C1) and the live-mint-authority check (C2).
 //!
-//! The evidence file (`registry/evidence/<network>-genesis.json`, written by `web/scripts/registry-genesis-evidence.mjs`
-//! from a node and a block explorer) is UNTRUSTED input: every byte the verdict rests on is checked against a hash here.
+//! The verifier is `kob registry verify-genesis`. The evidence file
+//! (`registry/evidence/<network>-genesis.json`, written by
+//! `web/scripts/registry-genesis-evidence.mjs` from a node and a block explorer) is UNTRUSTED
+//! input. Every byte the verdict rests on is checked against a hash here.
 //!
-//! * The genesis transaction id is recomputed from the recorded transaction fields (`Transaction::id`, v1: everything but
-//!   signature scripts, payload digest separately). A wrong field, including the `sequence` / `lock_time` / `gas` values an
-//!   explorer does not publish, fails the check.
-//! * The genesis group (outputs bound to the token's covenant id) and its authorising input's previous outpoint feed
-//!   [`verify_genesis_of`], which recomputes the covenant id: so the outputs are exactly the token's complete genesis group,
-//!   and every output must carry the registry entry's extension commitment (a second class under the same id is refused).
-//! * Each redeem script (revealed by the spend of the output, or reconstructed for an unspent output) is checked against its
-//!   P2SH script public key, then decoded as an instance of the token's pinned program.
+//! - The genesis transaction id is recomputed from the recorded transaction fields
+//!   (`Transaction::id`, v1: everything but signature scripts, payload digest separately). A wrong
+//!   field fails the check, including the `sequence`, `lock_time` and `gas` values that an explorer
+//!   does not publish.
+//! - The genesis group is the outputs bound to the covenant id of the token. It and the previous
+//!   outpoint of its authorising input feed [`verify_genesis_of`], which recomputes the covenant
+//!   id. So the outputs are exactly the complete genesis group of the token, and every output must
+//!   carry the extension commitment of the registry entry. A second class under the same id is
+//!   refused.
+//! - Each redeem script is checked against its P2SH script public key, then decoded as an instance
+//!   of the pinned program of the token. The spend of the output reveals it, or it is reconstructed
+//!   for an unspent output.
 //!
-//! C2 follows from the genesis for the KRON programs: a token output with `is_minter != 0` can be created only by a
-//! transaction that spends a minter (every non-minter token input refuses minter outputs; `review_b2_kron` r_kr_01 and
-//! r_kr_15), and the only other source of outputs carrying a covenant id is its genesis. So a genesis without a minter output
-//! proves the token never has a live minter. The same holds for the reference KCC-20 programs KOB pins (the standalone
-//! builds and the published public-mint build): a holder transfer creates only holders of its own program, the delegator
-//! paths authorise no output, and in the public-mint app only a `PublicMint` creates a `PublicMint`
-//! ([`crate::public_mint`]); so a genesis of holders (and seeds) alone has a fixed supply. A genesis with a minter needs its
-//! lineage traced to the live cells ([`TokenEvidence::live_minters`]; for a public-mint token the live `PublicMint` cells
-//! with allowance left); without that trace C2 stays undetermined. KaspaCom's program keeps minter lanes behind the
-//! extension commitment, which this check cannot see: C2 always comes from the trace there.
+//! # C2 for the KRON programs
+//!
+//! A token output with `is_minter != 0` can be created only by a transaction that spends a minter.
+//! Every non-minter token input refuses minter outputs (`review_b2_kron` r_kr_01 and r_kr_15). The
+//! only other source of outputs carrying a covenant id is its genesis. So a genesis without a
+//! minter output proves that the token never has a live minter.
+//!
+//! # C2 for the reference KCC-20 programs
+//!
+//! The same holds for the standalone builds and the published public-mint build that KOB pins. A
+//! holder transfer creates only holders of its own program, the delegator paths authorise no
+//! output, and in the public-mint app only a `PublicMint` creates a `PublicMint`
+//! ([`crate::public_mint`]). So a genesis of holders (and seeds) alone has a fixed supply.
+//!
+//! A genesis with a minter needs its lineage traced to the live cells
+//! ([`TokenEvidence::live_minters`]). For a public-mint token these are the live `PublicMint` cells
+//! with allowance left. Without that trace C2 stays undetermined. KaspaCom's program keeps minter
+//! lanes behind the extension commitment, which this check cannot see, so C2 always comes from the
+//! trace there.
 
 use serde::{Deserialize, Serialize};
 
@@ -94,8 +108,9 @@ pub struct TokenEvidence {
     /// Genesis outputs the node still reports unspent.
     #[serde(default)]
     pub genesis_outputs_live: Vec<LiveCell>,
-    /// Live mint-authority cells found by following a genesis minter's lineage (only needed when the genesis has a minter);
-    /// `None` = not traced.
+    /// Live mint-authority cells found by following the lineage of a genesis minter.
+    ///
+    /// Only needed when the genesis has a minter. `None` means not traced.
     #[serde(default)]
     pub live_minters: Option<Vec<LiveCell>>,
     /// Collection error.
@@ -156,7 +171,9 @@ pub struct InputFields {
     pub index: u32,
     /// Sequence.
     pub sequence: u64,
-    /// Covenant id of the spent UTXO as the source reported it (informational; the covenant-id recomputation decides).
+    /// Covenant id of the spent UTXO as the source reported it.
+    ///
+    /// Informational: the covenant-id recomputation decides.
     #[serde(default)]
     pub covenant_id: Option<String>,
 }
@@ -256,7 +273,9 @@ fn hash32(s: &str, what: &str) -> Result<[u8; 32], String> {
     parse_hex32(s).ok_or_else(|| format!("{what}: expected 64 lowercase hex characters"))
 }
 
-/// Rebuilds the genesis transaction from its recorded fields (no signature scripts: the v1 id does not commit to them).
+/// Rebuilds the genesis transaction from its recorded fields.
+///
+/// It has no signature scripts, because the v1 id does not commit to them.
 pub fn rebuild_tx(f: &TxFields) -> Result<Transaction, String> {
     let inputs = f
         .inputs
@@ -301,8 +320,8 @@ pub fn rebuild_tx(f: &TxFields) -> Result<Transaction, String> {
     ))
 }
 
-/// Verifies one token's evidence against the registry: C1 (genesis) and C2 (live mint authority). `checked_at_daa` is the
-/// node's virtual DAA score of the evidence.
+/// Verifies one token's evidence against the registry: C1 (genesis) and C2 (live mint authority).
+/// `checked_at_daa` is the node's virtual DAA score of the evidence.
 pub fn verify_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> TokenVerdict {
     let verdict = |result| TokenVerdict { ticker: ev.ticker.clone(), covenant_id: ev.covenant_id.clone(), result };
     verdict(check_token(reg, ev, checked_at_daa))
@@ -349,7 +368,8 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
     let auth_input = tx.inputs.get(auth as usize).ok_or("authorising input out of range")?;
     let outpoint = (auth_input.previous_outpoint.transaction_id.as_bytes(), auth_input.previous_outpoint.index);
 
-    // 3. every output of the group, with its redeem script (checked against the P2SH hash inside verify_genesis)
+    // 3. every output of the group, with its redeem script (checked against the P2SH hash inside
+    //    verify_genesis)
     let mut outs = vec![];
     for (index, o) in &group {
         let redeem = match g.reveals.iter().find(|r| r.index == *index).and_then(|r| r.redeem_script.as_deref()) {
@@ -363,7 +383,8 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
             redeem_script: redeem,
         });
     }
-    // every output must be of the token's one class: the registry entry's extension commitment (KRON: none, all zero)
+    // every output must be of the token's one class: the registry entry's extension commitment
+    // (KRON: none, all zero)
     let ext = match tok.extension_commitment.as_deref() {
         Some(h) => hash32(h, "the registry's extension commitment")?,
         None => [0; 32],
@@ -373,15 +394,17 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
 
     // 4. C2: live mint authority
     let program = parse_hex32(&tpl.template_hash).and_then(|h| crate::artifacts::token_template_by_hash(&h)).map(|t| t.id);
-    // the profile's genesis rule (`genesis.minters` of data/programs.json): `genesis-only` for the KRON programs (review B2,
-    // `review_b2_kron` r_kr_15), the reference KCC-20 programs (no mint path at all) and the public-mint app (none without a
-    // genesis PublicMint); `unknown` for KaspaCom's (minter lanes behind the extension commitment) and P2
+    // the profile's genesis rule (`genesis.minters` of data/programs.json): `genesis-only` for the
+    // KRON programs (review B2, `review_b2_kron` r_kr_15), the reference KCC-20 programs (no mint
+    // path at all) and the public-mint app (none without a genesis PublicMint); `unknown` for
+    // KaspaCom's (minter lanes behind the extension commitment) and P2
     let no_mint_path_without_genesis_minter =
         program.and_then(|p| p.profile()).is_some_and(|p| p.genesis.minters == crate::profile::MinterSource::GenesisOnly);
     let live_minters = if report.minter_outputs.is_empty() && no_mint_path_without_genesis_minter {
-        // no genesis minter: the program never lets one appear later (verify_genesis accepted every output as an instance of
-        // an embedded program; the embedded KRON programs are exactly the two `review_b2_kron` r_kr_15 tests this on, and the
-        // reference KCC-20 programs have no mint path at all, the public-mint app none without a genesis PublicMint)
+        // no genesis minter: the program never lets one appear later (verify_genesis accepted every
+        // output as an instance of an embedded program; the embedded KRON programs are exactly the
+        // two `review_b2_kron` r_kr_15 tests this on, and the reference KCC-20 programs have no
+        // mint path at all, the public-mint app none without a genesis PublicMint)
         Some(vec![])
     } else {
         ev.live_minters.as_ref().map(|l| l.iter().map(|c| format!("{}:{}", c.txid, c.index)).collect())
@@ -407,7 +430,8 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
         daa_score: g.accepting_block_daa_score,
         outputs: group.iter().map(|(n, _)| *n).collect(),
         supply: report.supply,
-        // the allowance of the genesis PublicMint outputs; a bridge's minter has none KOB reads (it is no public mint)
+        // the allowance of the genesis PublicMint outputs; a bridge's minter has none KOB reads (it
+        // is no public mint)
         mint_allowance: (program.is_some_and(crate::public_mint::is_app_holder)
             && report.minter_outputs.iter().any(|m| !report.is_bridge_minter(*m)))
         .then_some(report.mint_allowance),
@@ -419,7 +443,8 @@ fn check_token(reg: &Registry, ev: &TokenEvidence, checked_at_daa: u64) -> Resul
     })
 }
 
-/// Verifies every token of an evidence file. Fails when the evidence is for another network than the registry.
+/// Verifies every token of an evidence file. Fails when the evidence is for another network than
+/// the registry.
 pub fn verify_evidence(reg: &Registry, ev: &Evidence) -> Result<Vec<TokenVerdict>, String> {
     if ev.network != reg.network {
         return Err(format!("evidence is for {}, the registry for {}", ev.network, reg.network));
@@ -427,7 +452,8 @@ pub fn verify_evidence(reg: &Registry, ev: &Evidence) -> Result<Vec<TokenVerdict
     Ok(ev.tokens.iter().map(|t| verify_token(reg, t, ev.sources.node.virtual_daa_score)).collect())
 }
 
-/// Where the registry disagrees with a verdict (the registry must say exactly what the evidence proves).
+/// Where the registry disagrees with a verdict (the registry must say exactly what the evidence
+/// proves).
 pub fn registry_mismatches(reg: &Registry, verdicts: &[TokenVerdict]) -> Vec<String> {
     let mut out = vec![];
     for v in verdicts {
@@ -446,7 +472,8 @@ pub fn registry_mismatches(reg: &Registry, verdicts: &[TokenVerdict]) -> Vec<Str
                 match &tok.genesis {
                     None => out.push(format!("{}: the registry has no genesis record", v.ticker)),
                     Some(g) => {
-                        // the source text and the liveness DAA are the maintainer's; the facts must match
+                        // the source text and the liveness DAA are the maintainer's; the facts must
+                        // match
                         let facts = |r: &GenesisRecord| {
                             (
                                 r.txid.clone(),
@@ -493,7 +520,8 @@ mod tests {
 
     #[test]
     fn shipped_registry_matches_the_mainnet_evidence() {
-        // C1 and C2 for every KRON token of the shipped registry, re-derived offline from the committed chain evidence
+        // C1 and C2 for every KRON token of the shipped registry, re-derived offline from the
+        // committed chain evidence
         let reg = Registry::parse(DEFAULT_REGISTRY_JSON).unwrap();
         let ev = evidence();
         let verdicts = verify_evidence(&reg, &ev).unwrap();

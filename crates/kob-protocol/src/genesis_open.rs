@@ -1,28 +1,38 @@
-//! Genesis check of a token that no registry lists (the web app's "Genesis verified" fact): the same rules as
+//! Genesis check of a token that no registry lists.
+//!
+//! It backs the "Genesis verified" fact of the web app. The rules are those of
 //! [`crate::registry::verify_genesis_with`], fed with the genesis group a data source supplied.
 //!
-//! The registry path ([`crate::genesis_evidence`]) starts from a registry entry that names the token's program and
-//! extension commitment. A token outside the registry has neither, so this module finds the program from the bytes
-//! themselves and lets the genesis group fix the extension class (every output must carry the first output's):
+//! The registry path ([`crate::genesis_evidence`]) starts from a registry entry that names the
+//! program and the extension commitment of the token. A token outside the registry has neither.
+//! This module therefore finds the program from the bytes themselves, and lets the genesis group
+//! fix the extension class: every output must carry the class of the first output.
 //!
-//! * The caller gives the covenant id, the genesis transaction id, the authorising outpoint and the complete group
-//!   (index, value, script public key and, where known, the redeem script of every output bound to the covenant id). The
-//!   KIP-20 covenant id commits to the outpoint and to the index, value and script public key of every group output, so a
-//!   source that leaves an output out, adds one or changes a byte can only make the check fail; it cannot make a wrong group
-//!   pass. A redeem script is checked against its output's P2SH hash. The source is a supplier of bytes, never an authority.
-//! * Every pinned token program is tried as the group's program; the outputs themselves decide which one it is (an output
-//!   that is an instance of a program's holder state names the program, a genesis of the published public-mint app that
-//!   holds only its issuance actors is named by them). When the data does not single a program out, the caller's hint (a
-//!   template hash from a third party) only picks among programs that verify.
-//! * An output whose redeem script no spend revealed is rebuilt when it can be: a `TokenSeed` of the published public-mint
-//!   app is fully determined by an owner key and an extension commitment that the group's other cells carry
-//!   ([`rebuild_seeds`]). The rebuild is a candidate for the hash check, never a state taken on trust: a candidate that does
-//!   not hash to the output's script public key proves nothing and is dropped.
+//! - The caller gives the covenant id, the genesis transaction id, the authorising outpoint and the
+//!   complete group. That is the index, value, script public key and, where known, the redeem
+//!   script of every output bound to the covenant id. The KIP-20 covenant id commits to the
+//!   outpoint and to the index, value and script public key of every group output. So a source that
+//!   leaves an output out, adds one or changes a byte can only make the check fail, and cannot make
+//!   a wrong group pass. A redeem script is checked against the P2SH hash of its output. The source
+//!   supplies bytes and is never an authority.
+//! - Every pinned token program is tried as the program of the group, and the outputs themselves
+//!   decide which one it is. An output that is an instance of the holder state of a program names
+//!   it. A genesis of the published public-mint app that holds only its issuance actors is named by
+//!   them. When the data does not single a program out, the caller's hint (a template hash from a
+//!   third party) only picks among programs that verify.
+//! - An output whose redeem script no spend revealed is rebuilt when it can be. A `TokenSeed` of
+//!   the published public-mint app is fully determined by an owner key and an extension commitment
+//!   that the other cells of the group carry ([`rebuild_seeds`]). The rebuild is a candidate for
+//!   the hash check and never a state taken on trust. A candidate that does not hash to the script
+//!   public key of the output proves nothing and is dropped.
 //!
-//! The outcome has three kinds. `Verified`: every output checked and clean (the report says what the genesis created and the
-//! allowance of any public minter). `Failed`: the data is internally consistent and the group is NOT clean, or the data does
-//! not match the covenant id or a hash (a wrong or tampered source). `Unavailable`: the check could not be done (a redeem
-//! script nobody revealed, a program this build does not pin, malformed input): never a verdict on the token.
+//! The outcome has three kinds:
+//! - `Verified`: every output is checked and clean. The report says what the genesis created and
+//!   the allowance of any public minter.
+//! - `Failed`: the data is internally consistent and the group is NOT clean, or the data does not
+//!   match the covenant id or a hash, which means a wrong or tampered source.
+//! - `Unavailable`: the check could not be done, for example a redeem script that nobody revealed,
+//!   a program this build does not pin, or malformed input. It is never a verdict on the token.
 
 use serde::Serialize;
 
@@ -52,16 +62,21 @@ pub struct OpenOutput {
 pub struct OpenGenesis {
     /// The token's covenant id, 64 lowercase hex characters.
     pub covenant_id: String,
-    /// The genesis transaction id, 64 lowercase hex characters (identity only: the covenant id is what authenticates).
+    /// The genesis transaction id, 64 lowercase hex characters.
+    ///
+    /// Identity only: the covenant id is what authenticates.
     pub genesis_txid: String,
     /// Previous outpoint of the input that authorised the group.
     pub authorizing_outpoint: ([u8; 32], u32),
     /// The complete genesis group, by strictly increasing index.
     pub outputs: Vec<OpenOutput>,
-    /// A template hash a third party named for the token's program (only breaks a tie between programs that verify).
+    /// A template hash a third party named for the token's program (only breaks a tie between
+    /// programs that verify).
     pub program_hint: Option<[u8; 32]>,
-    /// Keys the genesis transaction itself pays to (the x-only keys of its P2PK outputs: the creator's change): further
-    /// owners a `TokenSeed` may carry ([`rebuild_seeds`]). Candidates only: a rebuilt script must hash to its output.
+    /// Keys the genesis transaction itself pays to, as candidate owners of a `TokenSeed`.
+    ///
+    /// They are the x-only keys of its P2PK outputs, the creator's change. See [`rebuild_seeds`].
+    /// Candidates only: a rebuilt script must hash to its output.
     pub owner_hints: Vec<[u8; 32]>,
 }
 
@@ -69,11 +84,12 @@ pub struct OpenGenesis {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailCode {
-    /// The group does not recompute to the covenant id, or a redeem script does not hash to its output: the supplied data is
-    /// not the chain's (or is incomplete).
+    /// The group does not recompute to the covenant id, or a redeem script does not hash to its
+    /// output: the supplied data is not the chain's (or is incomplete).
     Mismatch,
-    /// The covenant id recomputed and the redeem scripts match their hashes, but an output is not an instance of the
-    /// program (or the group holds a second extension class, or an impossible state): the genesis is not clean.
+    /// The covenant id recomputed and the redeem scripts match their hashes, but an output is not
+    /// an instance of the program (or the group holds a second extension class, or an impossible
+    /// state): the genesis is not clean.
     Contaminated,
 }
 
@@ -81,7 +97,8 @@ pub enum FailCode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnavailableCode {
-    /// A genesis output's redeem script is not known (no spend revealed it and it cannot be rebuilt).
+    /// A genesis output's redeem script is not known (no spend revealed it and it cannot be
+    /// rebuilt).
     Unrevealed,
     /// The group fits none of the token programs this build pins.
     UnsupportedProgram,
@@ -113,9 +130,12 @@ pub enum OpenOutcome {
     Unavailable { code: UnavailableCode, message: String },
 }
 
-/// The owners and extension commitments a `TokenSeed` of the group may carry: those of every cell whose redeem script is known
-/// (the app's `PublicMint` and `TokenSeed` actors and the holders of any pinned KCC-20 program), the `hints` (keys the genesis
-/// transaction pays to) among the owners, and the zero class among the commitments (the class of a plain fixed-supply token).
+/// The owners and extension commitments a `TokenSeed` of the group may carry.
+///
+/// They are those of every cell whose redeem script is known: the app's `PublicMint` and
+/// `TokenSeed` actors and the holders of any pinned KCC-20 program. The `hints` (keys the genesis
+/// transaction pays to) are added among the owners, and the zero class (the class of a plain
+/// fixed-supply token) among the commitments.
 fn seed_candidates(outputs: &[OpenOutput], hints: &[[u8; 32]]) -> (Vec<[u8; 32]>, Vec<[u8; 32]>) {
     let (mut owners, mut classes): (Vec<[u8; 32]>, Vec<[u8; 32]>) = (vec![], vec![[0; 32]]);
     let mut add = |o: [u8; 32], c: [u8; 32]| {
@@ -153,9 +173,11 @@ fn seed_candidates(outputs: &[OpenOutput], hints: &[[u8; 32]]) -> (Vec<[u8; 32]>
     (owners, classes)
 }
 
-/// Fills in the redeem script of every group output that no spend revealed and that is a `TokenSeed` of the published
-/// public-mint app (either pinned build) in the owner and class of one of the group's known cells; returns the indices it
-/// rebuilt. A rebuilt script is kept only when it hashes to the output's script public key.
+/// Fills in the redeem script of every group output that no spend revealed and that can be rebuilt.
+///
+/// An output can be rebuilt when it is a `TokenSeed` of the published public-mint app (either
+/// pinned build) in the owner and class of one of the group's known cells. It returns the indices
+/// it rebuilt. A rebuilt script is kept only when it hashes to the output's script public key.
 pub fn rebuild_seeds(outputs: &mut [OpenOutput], owner_hints: &[[u8; 32]]) -> Vec<u32> {
     let (owners, classes) = seed_candidates(outputs, owner_hints);
     let mut rebuilt = vec![];
@@ -189,8 +211,9 @@ fn classify(e: &GenesisError) -> Result<FailCode, UnavailableCode> {
     }
 }
 
-/// Whether the group's revealed outputs name `id` as their program: some output is an instance of its holder state, or one of
-/// the companions its profile declares (the issuance actors of the published app, a launchpad's curve).
+/// Whether the group's revealed outputs name `id` as their program: some output is an instance of
+/// its holder state, or one of the companions its profile declares (the issuance actors of the
+/// published app, a launchpad's curve).
 fn names_program(id: TemplateId, outputs: &[OpenOutput]) -> bool {
     let (Some(tpl), Some(profile)) = (try_token_template(id), id.profile()) else { return false };
     outputs
@@ -199,7 +222,8 @@ fn names_program(id: TemplateId, outputs: &[OpenOutput]) -> bool {
         .any(|r| tpl.state_of(r).is_some() || matches!(crate::profile::match_companion(profile, r), Ok(Some(_))))
 }
 
-/// Checks a token's genesis group against the pinned token programs (see the module docs). Pure and deterministic.
+/// Checks a token's genesis group against the pinned token programs (see the module docs). Pure and
+/// deterministic.
 pub fn check_open_genesis(input: &OpenGenesis) -> OpenOutcome {
     let unavailable = |code, message: &str| OpenOutcome::Unavailable { code, message: message.to_string() };
     if parse_hex32(&input.covenant_id).is_none() || parse_hex32(&input.genesis_txid).is_none() {
@@ -225,7 +249,8 @@ pub fn check_open_genesis(input: &OpenGenesis) -> OpenOutcome {
 
     let programs: Vec<TemplateId> = TemplateId::ALL.into_iter().filter(|i| i.is_token()).collect();
     let named: Vec<TemplateId> = programs.iter().copied().filter(|id| names_program(*id, &outputs)).collect();
-    // the programs to try, best first: those the outputs name; else all (a hint breaks ties among the passing)
+    // the programs to try, best first: those the outputs name; else all (a hint breaks ties among
+    // the passing)
     let order: Vec<TemplateId> = if named.is_empty() { programs.clone() } else { named.clone() };
     let mut passing: Vec<OpenVerified> = vec![];
     let mut errors: Vec<(TemplateId, GenesisError)> = vec![];
@@ -246,15 +271,17 @@ pub fn check_open_genesis(input: &OpenGenesis) -> OpenOutcome {
         let pick = input.program_hint.and_then(|h| passing.iter().position(|p| parse_hex32(&p.program_hash) == Some(h))).unwrap_or(0);
         return OpenOutcome::Verified(passing.swap_remove(pick));
     }
-    // nothing passes. The group's own bytes decide whose error is the verdict:
-    //  * the covenant id does not recompute (the same under every program): the data is wrong;
+    // Nothing passes, so the bytes of the group decide whose error is the verdict. First, a
+    // covenant id that does not recompute (the same under every program) means the data is wrong.
     if let Some((_, e)) = errors.iter().find(|(_, e)| matches!(e, GenesisError::NotTheGroup(_))) {
         return OpenOutcome::Failed { code: FailCode::Mismatch, message: e.to_string() };
     }
-    //  * a program the outputs name: its error (a redeem script that does not hash, a contaminated output, an unrevealed one);
+    // Second, a program that the outputs name: its error, such as a redeem script that does not
+    // hash, a contaminated output or an unrevealed one.
     let pick = errors.iter().find(|(id, _)| named.contains(id)).or_else(|| {
-        //  * no output names a program: only the issuance actors of the published app can single one out; the hint, else
-        //    any error that is not "this output is not an instance" (that one is just "wrong program")
+        // Last, the hint, else the first error that is not "this output is not an instance",
+        // which only means "wrong program". Only the issuance actors of the published app can
+        // single a program out when no output names one.
         input
             .program_hint
             .and_then(|h| errors.iter().find(|(id, _)| id.profile().is_some_and(|p| p.hash() == h)))
@@ -286,8 +313,9 @@ mod tests {
         crate::json::to_hex(b)
     }
 
-    /// A genesis of the published app: one PublicMint (allowance 1000, 10 per mint) and one TokenSeed of the same owner and
-    /// class; `reveal_seed` false leaves the seed unrevealed (as an unspent seed is).
+    /// A genesis of the published app: one PublicMint (allowance 1000, 10 per mint) and one
+    /// TokenSeed of the same owner and class; `reveal_seed` false leaves the seed unrevealed (as an
+    /// unspent seed is).
     fn app_genesis(reveal_seed: bool) -> (OpenGenesis, Vec<u8>) {
         let ext = [9; 32];
         let v = IssuerVersion::F27f8403;
@@ -343,7 +371,8 @@ mod tests {
 
     #[test]
     fn a_seed_of_the_creators_key_is_rebuilt_from_the_hint_the_genesis_transaction_gives() {
-        // the seed belongs to a key no other cell of the group names (the creator's change key in the genesis transaction)
+        // the seed belongs to a key no other cell of the group names (the creator's change key in
+        // the genesis transaction)
         let v = IssuerVersion::F27f8403;
         let ext = [9; 32];
         let mint =
@@ -386,7 +415,8 @@ mod tests {
         let other = public_mint::seed_redeem_of(IssuerVersion::F27f8403, &SeedState { owner: [1; 32], extension_commitment: [2; 32] });
         let s = crate::script::p2sh_spk(&other);
         g.outputs[1].spk = s.script().to_vec();
-        // the group changed, so the covenant id no longer matches: a mismatch, not an unrevealed seed
+        // the group changed, so the covenant id no longer matches: a mismatch, not an unrevealed
+        // seed
         assert!(matches!(check_open_genesis(&g), OpenOutcome::Failed { code: FailCode::Mismatch, .. }));
         // an honest group whose seed belongs to an unknown owner is unavailable
         let (g, _) = app_genesis(false);
@@ -404,7 +434,8 @@ mod tests {
             f(&mut t);
             check_open_genesis(&t)
         };
-        // a changed value, an extra output, a missing output, another outpoint: the covenant id no longer recomputes
+        // a changed value, an extra output, a missing output, another outpoint: the covenant id no
+        // longer recomputes
         assert!(matches!(tamper(&|t| t.outputs[0].value += 1), OpenOutcome::Failed { code: FailCode::Mismatch, .. }));
         assert!(matches!(
             tamper(&|t| {
@@ -427,8 +458,8 @@ mod tests {
 
     #[test]
     fn a_hidden_output_makes_the_genesis_fail_as_contaminated() {
-        // an honest genesis plus one output whose script is not the program: the id commits to all of it, so the covenant
-        // id recomputes and the verdict is "contaminated", not a data error
+        // an honest genesis plus one output whose script is not the program: the id commits to all
+        // of it, so the covenant id recomputes and the verdict is "contaminated", not a data error
         let ext = [9; 32];
         let v = IssuerVersion::F27f8403;
         let mint =
@@ -463,7 +494,8 @@ mod tests {
         // and a group of unknown scripts only is "unsupported", not contaminated
         let mut u = g.clone();
         u.outputs.remove(0);
-        // (the id no longer matches the reduced group, which is a mismatch; the unsupported case needs its own id)
+        // (the id no longer matches the reduced group, which is a mismatch; the unsupported case
+        // needs its own id)
         assert!(matches!(check_open_genesis(&u), OpenOutcome::Failed { code: FailCode::Mismatch, .. }));
     }
 

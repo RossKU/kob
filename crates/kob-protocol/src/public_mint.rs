@@ -1,42 +1,59 @@
-//! The issuance actors of upstream's published `KCC20PublicMint` app (argent-lang/kcc20-reference, `contracts/public_mint.ag`
-//! and `contracts/token_seed.ag`), as the genesis check of a token of that app reads them, in both upstream builds KOB
-//! pins ([`IssuerVersion`]): `c8a0871` and `27f8403`.
+//! The issuance actors of the published `KCC20PublicMint` app, as the genesis check reads them.
+//!
+//! The app is upstream's argent-lang/kcc20-reference (`contracts/public_mint.ag` and
+//! `contracts/token_seed.ag`). KOB pins two upstream builds ([`IssuerVersion`]): `c8a0871` and
+//! `27f8403`.
 //!
 //! The app has three actors in one covenant family: `KCC20` (the holders, pinned by KOB as
-//! [`TemplateId::Kcc20PublicMint`]), `PublicMint` and `TokenSeed`. Upstream recommends issuing a token by a genesis that
-//! holds one `PublicMint` (the advertised supply as its allowance) and at least one `TokenSeed`, and no pre-minted
-//! balances. KOB takes their programs from upstream's published artifacts (`contracts/third-party/kcc20-reference/
-//! public-mint.artifact.json` for `c8a0871` and `public-mint.27f8403.artifact.json`, vendored unmodified and pinned by
-//! sha256 in `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`) and checks the Sil template hash of each against the
-//! constants below. The `KCC20` holder program is the same bytes in both builds (Sil hash [`KCC20_SIL_HASH`]); only the two
-//! issuers differ, so a token of either build is the same token program to every order.
+//! [`TemplateId::Kcc20PublicMint`]), `PublicMint` and `TokenSeed`. Upstream recommends issuing a
+//! token by a genesis that holds one `PublicMint` (the advertised supply as its allowance) and at
+//! least one `TokenSeed`, and no pre-minted balances.
 //!
-//! What the actors can do (the supply rules the genesis check rests on):
+//! KOB takes the programs from the published artifacts of upstream. They are vendored unmodified in
+//! `contracts/third-party/kcc20-reference/` (`public-mint.artifact.json` for `c8a0871` and
+//! `public-mint.27f8403.artifact.json`) and pinned by sha256 in
+//! `crates/kob-tests/tests/kcc20/kcc20_reference_tests.rs`. The Sil template hash of each is
+//! checked against the constants below. The `KCC20` holder program is the same bytes in both builds
+//! (Sil hash [`KCC20_SIL_HASH`]). Only the two issuers differ, so a token of either build is the
+//! same token program to every order.
 //!
-//! * `PublicMint { remaining, mint_amount, owner, extension_commitment }`: anyone mints `0 < amount <= min(mint_amount,
-//!   remaining)` into ONE new `KCC20` holder of the minter's extension commitment, and the minter continues with
-//!   `remaining - amount`; anyone splits `0 < take <= remaining / 2` off into a second minter; two minters of the same
-//!   `mint_amount` and commitment merge (`reclaim_into`, the retiring owner signs); an exhausted minter (`remaining == 0`)
-//!   is closed by its owner. Every path keeps `Σ remaining (live minters) + Σ amount (holders)` constant, and the only
-//!   source of a `PublicMint` is another `PublicMint` or the genesis.
-//! * `TokenSeed { owner, extension_commitment }`: anyone creates a zero-amount `KCC20` holder of the seed's commitment, or
-//!   another seed; seeds never carry or create an amount.
-//! * `27f8403` adds one entry to each issuer, `rebalance_value(owner_signature)`: the deposit owner signs a transaction that
-//!   spends exactly this issuer cell (no other input of the covenant id) and recreates exactly one output with the identical
-//!   script public key, so the whole state (allowance, per-mint limit, owner, extension commitment) is kept and only the
-//!   cell's KAS value may change. It mints nothing, creates no holder and no other issuer, and changes no allowance: it is
-//!   not a supply or mint-authority power (a lone seed's deposit can now be withdrawn through it, which `reclaim` forbids).
-//!   A reader that follows a minter's lineage must follow such a spend to the identical successor cell.
-//! * `KCC20`: transfers conserve the amount and create only `KCC20` holders.
+//! # Supply rules
 //!
-//! So a token's supply is bounded forever by its genesis: its **maximum supply** is the holders' amounts of the genesis plus
-//! the `remaining` allowance of its genesis minters ([`GenesisSupply`]), and at any later time the amount minted so far is
-//! that maximum less the `remaining` of the live minters. A genesis without a minter has a fixed supply.
+//! These are the rules the genesis check rests on.
 //!
-//! Each actor's state starts with compiler-owned template fields (`gen__kcc20_template`, then the actor's own), which
-//! decide which program the actor recognises as `KCC20` and as itself: a minter whose `gen__kcc20_template` named another
-//! program would mint outputs of that program. The genesis check therefore requires them to be exactly the Sil template
-//! hashes of the published app ([`decode_companion`]).
+//! - `PublicMint { remaining, mint_amount, owner, extension_commitment }`:
+//!   - Anyone mints `0 < amount <= min(mint_amount, remaining)` into ONE new `KCC20` holder of the
+//!     extension commitment of the minter, and the minter continues with `remaining - amount`.
+//!   - Anyone splits `0 < take <= remaining / 2` off into a second minter.
+//!   - Two minters of the same `mint_amount` and commitment merge (`reclaim_into`, the retiring
+//!     owner signs).
+//!   - The owner closes an exhausted minter (`remaining == 0`).
+//!   - Every path keeps `Σ remaining (live minters) + Σ amount (holders)` constant. The only source
+//!     of a `PublicMint` is another `PublicMint` or the genesis.
+//! - `TokenSeed { owner, extension_commitment }`: anyone creates a zero-amount `KCC20` holder of
+//!   the commitment of the seed, or another seed. A seed never carries or creates an amount.
+//! - `27f8403` adds one entry to each issuer, `rebalance_value(owner_signature)`. The deposit owner
+//!   signs a transaction that spends exactly this issuer cell (no other input of the covenant id)
+//!   and recreates exactly one output with the identical script public key. The whole state
+//!   (allowance, per-mint limit, owner, extension commitment) is kept, and only the KAS value of
+//!   the cell may change. It mints nothing, creates no holder and no other issuer, and changes no
+//!   allowance, so it is not a supply or mint-authority power. It can withdraw the deposit of a
+//!   lone seed, which `reclaim` forbids. A reader that follows the lineage of a minter must follow
+//!   such a spend to the identical successor cell.
+//! - `KCC20`: transfers conserve the amount and create only `KCC20` holders.
+//!
+//! So the supply of a token is bounded forever by its genesis. Its **maximum supply** is the
+//! amounts of the genesis holders plus the `remaining` allowance of the genesis minters
+//! ([`GenesisSupply`]). At any later time the amount minted so far is that maximum less the
+//! `remaining` of the live minters. A genesis without a minter has a fixed supply.
+//!
+//! # Template fields
+//!
+//! The state of each actor starts with compiler-owned template fields (`gen__kcc20_template`, then
+//! the actor's own). They decide which program the actor recognises as `KCC20` and as itself. A
+//! minter whose `gen__kcc20_template` named another program would mint outputs of that program. The
+//! genesis check therefore requires them to be exactly the Sil template hashes of the published
+//! app ([`decode_companion`]).
 
 use std::sync::OnceLock;
 
@@ -45,28 +62,35 @@ use serde_json::Value;
 use crate::artifacts::{template, TemplateId};
 use crate::kcc1::{int_from_state_payload, int_state_payload};
 
-/// Sil template hash of the `KCC20` actor of the published app (`gen__kcc20_template` in every UTXO of the app).
+/// Sil template hash of the `KCC20` actor of the published app (`gen__kcc20_template` in every UTXO
+/// of the app).
 pub const KCC20_SIL_HASH: &str = "9703112ee6e3555107cd168858992b77d3b74f655205b2b463b1f9ec2ec73cf7";
-/// Sil template hash of the `PublicMint` actor of the published app at `c8a0871` (`gen__public_mint_template`).
+/// Sil template hash of the `PublicMint` actor of the published app at `c8a0871`
+/// (`gen__public_mint_template`).
 pub const PUBLIC_MINT_SIL_HASH: &str = "14b0f06bc176b78c94f19292e409c622636f31dae6bb31ff3d4d3308a6053b49";
-/// Sil template hash of the `TokenSeed` actor of the published app at `c8a0871` (`gen__token_seed_template`).
+/// Sil template hash of the `TokenSeed` actor of the published app at `c8a0871`
+/// (`gen__token_seed_template`).
 pub const TOKEN_SEED_SIL_HASH: &str = "f79a3fccf6f87d7076662410a17e54d1531889d9b60f630f9fbb8465a384e62d";
-/// Sil template hash of the `PublicMint` actor of the published app at `27f8403` (with `rebalance_value`).
+/// Sil template hash of the `PublicMint` actor of the published app at `27f8403` (with
+/// `rebalance_value`).
 pub const PUBLIC_MINT_SIL_HASH_27F8403: &str = "8c87ce6e88755277c4d243cf4690e43d05eb4c4213d4a1824dcbefd13061ac53";
-/// Sil template hash of the `TokenSeed` actor of the published app at `27f8403` (with `rebalance_value`).
+/// Sil template hash of the `TokenSeed` actor of the published app at `27f8403` (with
+/// `rebalance_value`).
 pub const TOKEN_SEED_SIL_HASH_27F8403: &str = "6ea2c53a45cc4dcd6156bc7d135ca9b6466bd691465206d660d0ef29ebc6c2ec";
 
 const APP_ARTIFACT_C8A0871: &str = include_str!("../../../contracts/third-party/kcc20-reference/public-mint.artifact.json");
 const APP_ARTIFACT_27F8403: &str = include_str!("../../../contracts/third-party/kcc20-reference/public-mint.27f8403.artifact.json");
 
-/// An upstream build of the issuance actors (`PublicMint`, `TokenSeed`) that KOB pins. Both build the same `KCC20` holder
-/// program; they differ in the issuers' entries (`27f8403` adds `rebalance_value`), so their template hashes differ and a
-/// genesis is read against the build its actors are instances of.
+/// An upstream build of the issuance actors (`PublicMint`, `TokenSeed`) that KOB pins. Both build
+/// the same `KCC20` holder program; they differ in the issuers' entries (`27f8403` adds
+/// `rebalance_value`), so their template hashes differ and a genesis is read against the build its
+/// actors are instances of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum IssuerVersion {
-    /// argent-lang/kcc20-reference `c8a0871` (2026-10-07).
+    /// argent-lang/kcc20-reference `c8a0871`.
     C8a0871,
-    /// argent-lang/kcc20-reference `27f8403` (2026-10-21): the issuers also have the owner-signed `rebalance_value`.
+    /// argent-lang/kcc20-reference `27f8403`: the issuers also have the owner-signed
+    /// `rebalance_value`.
     F27f8403,
 }
 
@@ -82,7 +106,8 @@ impl IssuerVersion {
         }
     }
 
-    /// The name a genesis check reports (`GenesisReport::issuer`, the registry genesis record's `issuer`).
+    /// The name a genesis check reports (`GenesisReport::issuer`, the registry genesis record's
+    /// `issuer`).
     pub fn label(self) -> &'static str {
         match self {
             IssuerVersion::C8a0871 => "kcc20-reference@c8a0871",
@@ -123,7 +148,8 @@ impl IssuerVersion {
     }
 }
 
-/// `PublicMint` state span: `0x20 kcc20 tpl | 0x20 own tpl | 0x08 remaining | 0x08 mint_amount | 0x20 owner | 0x20 ext`.
+/// `PublicMint` state span: `0x20 kcc20 tpl | 0x20 own tpl | 0x08 remaining | 0x08 mint_amount |
+/// 0x20 owner | 0x20 ext`.
 pub const PUBLIC_MINT_STATE_LEN: usize = 150;
 /// `TokenSeed` state span: `0x20 kcc20 tpl | 0x20 own tpl | 0x20 owner | 0x20 ext`.
 pub const TOKEN_SEED_STATE_LEN: usize = 132;
@@ -220,8 +246,8 @@ impl GenesisSupply {
         self.holders.checked_add(self.mint_allowance)
     }
 
-    /// Minted so far, given the `remaining` of every live minter (`None` when they exceed the genesis allowance, which no
-    /// transaction of the app can cause).
+    /// Minted so far, given the `remaining` of every live minter (`None` when they exceed the
+    /// genesis allowance, which no transaction of the app can cause).
     pub fn minted(&self, live_remaining: &[i64]) -> Option<i64> {
         let live = live_remaining.iter().try_fold(0i64, |s, r| if *r < 0 { None } else { s.checked_add(*r) })?;
         if live > self.mint_allowance {
@@ -286,7 +312,8 @@ fn push_int(v: &mut Vec<u8>, x: i64) -> Option<()> {
     Some(())
 }
 
-/// Canonical state span of a `PublicMint` of the `c8a0871` build (the context fields set to the app's template hashes).
+/// Canonical state span of a `PublicMint` of the `c8a0871` build (the context fields set to the
+/// app's template hashes).
 pub fn minter_state_bytes(m: &MinterState) -> Option<Vec<u8>> {
     minter_state_bytes_of(IssuerVersion::C8a0871, m)
 }
@@ -303,7 +330,8 @@ pub fn minter_state_bytes_of(version: IssuerVersion, m: &MinterState) -> Option<
     Some(v)
 }
 
-/// Canonical state span of a `TokenSeed` of the `c8a0871` build (the context fields set to the app's template hashes).
+/// Canonical state span of a `TokenSeed` of the `c8a0871` build (the context fields set to the
+/// app's template hashes).
 pub fn seed_state_bytes(s: &SeedState) -> Vec<u8> {
     seed_state_bytes_of(IssuerVersion::C8a0871, s)
 }
@@ -362,10 +390,12 @@ fn context(st: &[u8], own: &str, actor: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Reads a redeem script as a `PublicMint` or `TokenSeed` of the published app, with the build it is an instance of.
+/// Reads a redeem script as a `PublicMint` or `TokenSeed` of the published app, with the build it
+/// is an instance of.
 ///
-/// `Ok(None)`: an instance of no pinned build's program. `Err`: an instance whose state is not canonical, or whose template
-/// fields are not the app's (a minter or seed that would create outputs of another program).
+/// `Ok(None)`: an instance of no pinned build's program. `Err`: an instance whose state is not
+/// canonical, or whose template fields are not the app's (a minter or seed that would create
+/// outputs of another program).
 pub fn decode_companion_versioned(redeem: &[u8]) -> Result<Option<(IssuerVersion, Companion)>, String> {
     for v in IssuerVersion::ALL {
         if let Some(st) = public_mint_of(v).state_of(redeem) {
@@ -407,15 +437,20 @@ fn app_abi(v: IssuerVersion) -> &'static silverscript_abi::SilAbiArtifact {
     })
 }
 
-/// The app's `KCC20` program (the Sil cut: its state span starts with `gen__kcc20_template`), what a `mint` / `create`
-/// call passes as `gen__kcc20_prefix` / `gen__kcc20_suffix`. The same bytes in both builds (checked by the tests).
+/// The `KCC20` program of the app, as the Sil cut.
+///
+/// Its state span starts with `gen__kcc20_template`. A `mint` / `create` call passes it as
+/// `gen__kcc20_prefix` / `gen__kcc20_suffix`. The bytes are the same in both builds, which the
+/// tests check.
 pub fn kcc20_program() -> &'static AppProgram {
     static P: OnceLock<AppProgram> = OnceLock::new();
     P.get_or_init(|| load(IssuerVersion::C8a0871, "KCC20", "KCC20", 145, KCC20_SIL_HASH))
 }
 
-/// Signature script of a `PublicMint::mint` call (minter `m` of the `c8a0871` build) creating the holder `recipient`
-/// (wallets and tests; KOB itself only reads such calls, [`created_holder`]).
+/// Signature script of a `PublicMint::mint` call that creates the holder `recipient`.
+///
+/// The minter `m` is of the `c8a0871` build. Wallets and tests build such calls. KOB itself only
+/// reads them ([`created_holder`]).
 pub fn mint_sigscript(m: &MinterState, recipient: &crate::state::Kcc20State) -> Option<Vec<u8>> {
     mint_sigscript_of(IssuerVersion::C8a0871, m, recipient)
 }
@@ -431,13 +466,16 @@ pub fn mint_sigscript_of(version: IssuerVersion, m: &MinterState, recipient: &cr
     Some(s)
 }
 
-/// The holder a `PublicMint::mint` or `TokenSeed::create` call creates (its `recipient_state` argument), from the calling
-/// input's signature script, with the holder program it is an output of ([`TemplateId::Kcc20PublicMint`]: the app's
-/// `KCC20`, which every canonical minter and seed names in `gen__kcc20_template`).
+/// The holder that a `PublicMint::mint` or `TokenSeed::create` call creates.
 ///
-/// `None` unless the redeem script is a canonical `PublicMint` / `TokenSeed` of either pinned build, the dispatch tag is that entry's
-/// and the arguments decode strictly. The state is a claim of the signature script: a reader proves it by comparing the
-/// P2SH it produces under the holder program with the output's script public key (as for a transfer's `next_states`).
+/// It is the `recipient_state` argument of the call, read from the signature script of the calling
+/// input. It comes with the holder program it is an output of ([`TemplateId::Kcc20PublicMint`]: the
+/// app's `KCC20`, which every canonical minter and seed names in `gen__kcc20_template`).
+///
+/// `None` unless the redeem script is a canonical `PublicMint` / `TokenSeed` of either pinned
+/// build, the dispatch tag is that entry's and the arguments decode strictly. The state is a claim
+/// of the signature script. A reader proves it by comparing the P2SH it produces under the holder
+/// program with the script public key of the output, as for a transfer's `next_states`.
 pub fn created_holder(signature_script: &[u8]) -> Option<(TemplateId, crate::state::Kcc20State)> {
     use crate::state::FieldMap;
     let (args, tag, redeem) = crate::kcc1::split_invocation(signature_script).ok()?;
@@ -458,16 +496,19 @@ pub fn created_holder(signature_script: &[u8]) -> Option<(TemplateId, crate::sta
     Some((TemplateId::Kcc20PublicMint, crate::state::Kcc20State::from_values(m).ok()?))
 }
 
-/// True when `id` is a holder program of the published app: its profile declares the app's actors as genesis companions
-/// (`genesis.companions` decoders `kcc20-public-mint/*` in `data/programs.json`), so its genesis may hold them and its
-/// genesis record carries the minters' `mint_allowance`.
+/// True when `id` is a holder program of the published app.
+///
+/// Its profile declares the app's actors as genesis companions (`genesis.companions` decoders
+/// `kcc20-public-mint/*` in `data/programs.json`). So its genesis may hold them, and its genesis
+/// record carries the minters' `mint_allowance`.
 pub fn is_app_holder(id: TemplateId) -> bool {
     id.profile().is_some_and(|p| {
         p.genesis.companions.iter().any(|c| c.decoder.as_deref().is_some_and(|d| d.starts_with("kcc20-public-mint/")))
     })
 }
 
-/// The pinned `KCC20` handle names the same Sil program as [`KCC20_SIL_HASH`] (checked by the tests).
+/// The pinned `KCC20` handle names the same Sil program as [`KCC20_SIL_HASH`] (checked by the
+/// tests).
 pub fn kcc20_sil_hash() -> [u8; 32] {
     template(TemplateId::Kcc20PublicMint).sil_hash
 }
@@ -491,7 +532,8 @@ mod tests {
         assert_eq!((s.prefix.len(), s.state_len, s.suffix.len()), (1, 132, 1_222));
     }
 
-    /// The `27f8403` build: the same holder program, issuers with one more entry (so longer, with other hashes).
+    /// The `27f8403` build: the same holder program, issuers with one more entry (so longer, with
+    /// other hashes).
     #[test]
     fn the_27f8403_build_has_the_same_holder_program_and_new_issuers() {
         use IssuerVersion::{C8a0871, F27f8403};
@@ -504,7 +546,8 @@ mod tests {
         for (i, a) in hashes.iter().enumerate() {
             assert!(hashes.iter().skip(i + 1).all(|b| a != b));
         }
-        // the KCC20 actor of the 27f8403 artifact is byte for byte the c8a0871 one (the holders do not change)
+        // the KCC20 actor of the 27f8403 artifact is byte for byte the c8a0871 one (the holders do
+        // not change)
         let kcc20 = |v: IssuerVersion| {
             let doc: Value = serde_json::from_str(v.artifact()).unwrap();
             let c = doc["sil_abi"]["contracts"]["KCC20"]["compiled"].clone();
@@ -521,8 +564,8 @@ mod tests {
         assert_eq!(IssuerVersion::from_label("kcc20-reference@0000000"), None);
     }
 
-    /// Each build decodes as itself; a program of one build holding the other build's own-template field is refused; the
-    /// two builds never read as one another.
+    /// Each build decodes as itself; a program of one build holding the other build's own-template
+    /// field is refused; the two builds never read as one another.
     #[test]
     fn both_builds_decode_as_themselves_and_not_as_each_other() {
         let m = MinterState { remaining: 5, mint_amount: 2, owner: [7; 32], extension_commitment: [0xee; 32] };
@@ -548,7 +591,8 @@ mod tests {
         assert_eq!(seed_redeem(&s), seed_redeem_of(IssuerVersion::C8a0871, &s));
     }
 
-    /// The hand codec equals the ABI encoder of the published artifact for both actors, in both builds.
+    /// The hand codec equals the ABI encoder of the published artifact for both actors, in both
+    /// builds.
     #[test]
     fn state_codec_matches_the_artifact_abi() {
         for v in IssuerVersion::ALL {
@@ -632,9 +676,11 @@ mod tests {
         assert_eq!(created_holder(&call("PublicMint", "mint", &minter)), Some((TemplateId::Kcc20PublicMint, holder.clone())));
         assert_eq!(created_holder(&mint_sigscript_of(v, &m, &holder).unwrap()), Some((TemplateId::Kcc20PublicMint, holder.clone())));
         assert_eq!(created_holder(&call("TokenSeed", "create", &seed)), Some((TemplateId::Kcc20PublicMint, holder.clone())));
-        // the entry must be the actor's: a seed's `create` arguments under a minter redeem script carry the other dispatch tag
+        // the entry must be the actor's: a seed's `create` arguments under a minter redeem script
+        // carry the other dispatch tag
         assert_eq!(created_holder(&call("TokenSeed", "create", &minter)), None);
-        // neither actor: a holder redeem script, or a minter whose template field names another program
+        // neither actor: a holder redeem script, or a minter whose template field names another
+        // program
         let mut foreign = minter.clone();
         foreign[2] ^= 1;
         assert_eq!(created_holder(&call("PublicMint", "mint", &foreign)), None);
