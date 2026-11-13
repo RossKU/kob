@@ -1,27 +1,49 @@
-//! The KAS/USD price (`GET /v1/price/kas-usd`, opt-in: `[api] usd_price`, `--usd-price`, `KOB_USD_PRICE=1`).
+//! The KAS/USD price served at `GET /v1/price/kas-usd`.
 //!
-//! The web app shows an approximate USD value next to KAS when the viewer asks for it. The browser must not call a price API itself (the
-//! CSP stays closed, and a viewer's address does not go to a third party), so the indexer fetches the price and serves it:
+//! The route is opt-in with `[api] usd_price`, `--usd-price` or `KOB_USD_PRICE=1`. The web app
+//! shows an approximate USD value next to KAS when the viewer asks for it. The browser must not
+//! call a price API itself, because the CSP stays closed and the address of a viewer must not go
+//! to a third party. The indexer fetches the price and serves it.
 //!
-//! * the primary is CoinGecko's keyless simple-price API (an aggregate over exchanges). The fallback is a volume-weighted average of the
-//!   last prices of several exchanges' KAS/USDT spot tickers ([`EXCHANGES`], one public request each, last price and 24 h quote volume):
-//!   `price = sum(last_i * volume_i) / sum(volume_i)`, after the sources more than [`OUTLIER`] (3 %) from the median of the sources are
-//!   dropped; fewer than [`MIN_EXCHANGES`] (2) left means no fallback value. USDT is taken as USD (an approximation the web app says so);
-//! * every source is a URL and a JSON path ([`Source`], [`Exchange`]); the calls go out in parallel over the blocking TLS client the node
-//!   resolver uses (`rpc::tls::http_get`: rustls, the webpki roots, a `User-Agent: kobd/<version>`), each with a 4 s connect/read timeout and a
-//!   5 s ceiling, so one slow exchange costs nothing but its own vote;
-//! * the answer is CoinGecko's when it answered, else the VWAP; when both answered and differ by more than [`DIVERGENCE`] (2 %) the server
-//!   logs a warning (never sent to the client). `source` names who answered: `coingecko`, or `vwap:<exchange>,<exchange>,...` (the ones used);
-//! * the upstreams are asked at most once per [`REFRESH`] (60 s) whatever the number of clients, and only when a client asks: with nobody
-//!   on USD they are never called. Concurrent requests share one round;
-//! * an upstream that fails or rate-limits (429) is left alone for twice as long after each failure in a row, up to [`MAX_BACKOFF`]
-//!   (10 min), and asked at the normal pace again after its first success: each source has its own count, so one rate-limited site does not
-//!   slow the others. An exchange's last reading counts in the average for five periods at most, so a source in its back-off is not voted
-//!   with an old price for long;
-//! * a round that yields nothing keeps the last good value with its own `at`, so a client can judge how old it is; before the first
-//!   success the route answers 503.
+//! # Sources
 //!
-//! The answer is `{"usd": <number>, "at": <unix seconds of the round>, "source": "<source>"}`.
+//! The primary is the keyless simple-price API of CoinGecko, an aggregate over exchanges.
+//!
+//! The fallback is a volume-weighted average of the KAS/USDT spot tickers of several exchanges
+//! ([`EXCHANGES`]). Each is one public request that returns the last price and the 24 h quote
+//! volume.
+//! - The price is `sum(last_i * volume_i) / sum(volume_i)`.
+//! - Sources more than [`OUTLIER`] (3 %) from the median of the sources are dropped first.
+//! - Fewer than [`MIN_EXCHANGES`] (2) left means no fallback value.
+//! - USDT is taken as USD, which is an approximation.
+//!
+//! Every source is a URL and a JSON path ([`Source`], [`Exchange`]). The calls go out in
+//! parallel over the blocking TLS client of the node resolver (`rpc::tls::http_get`). Each has a
+//! 4 s connect and read timeout and a 5 s ceiling, so one slow exchange costs nothing but its
+//! own vote.
+//!
+//! # Answer
+//!
+//! The answer is CoinGecko's when it answered, else the average. When both answered and differ
+//! by more than [`DIVERGENCE`] (2 %), the server logs a warning. The warning is never sent to the
+//! client. The body is `{"usd": <number>, "at": <unix seconds of the round>, "source":
+//! "<source>"}`. `source` is `coingecko`, or `vwap:<exchange>,<exchange>,...` with the exchanges
+//! used.
+//!
+//! A round that yields nothing keeps the last good value with its own `at`, so a client can
+//! judge how old it is. Before the first success the route answers 503.
+//!
+//! # Pace
+//!
+//! - The upstreams are asked at most once per [`REFRESH`] (60 s) whatever the number of
+//!   clients, and only when a client asks. With nobody on USD they are never called.
+//!   Concurrent requests share one round.
+//! - An upstream that fails or rate-limits (429) is left alone for twice as long after each
+//!   failure in a row, up to [`MAX_BACKOFF`] (10 min). After its first success it is asked at
+//!   the normal pace again. Each source has its own count, so one rate-limited site does not
+//!   slow the others.
+//! - The last reading of an exchange counts in the average for five periods at most, so a
+//!   source in its back-off does not vote with an old price for long.
 
 use super::{ApiError, App};
 use axum::extract::State;
@@ -32,21 +54,25 @@ use std::time::{Duration, Instant};
 
 /// The upstreams are called at most once per this long.
 pub const REFRESH: Duration = Duration::from_secs(60);
-/// The longest an upstream is left alone after failures in a row (the wait doubles from `REFRESH` with each one).
+/// The longest an upstream is left alone after failures in a row.
+///
+/// The wait doubles from `REFRESH` with each failure.
 pub const MAX_BACKOFF: Duration = Duration::from_secs(600);
 /// An exchange's last reading is used in the average for at most this many refresh periods.
 const READING_PERIODS: u32 = 5;
 /// Connect and read timeout of one upstream call.
 const CALL_TIMEOUT: Duration = Duration::from_secs(4);
-/// What one source may take in all (a peer that trickles bytes cannot hold a round longer).
+/// What one source may take in all, so a peer that trickles bytes cannot hold a round longer.
 const CEILING: Duration = Duration::from_secs(5);
-/// A price above this is refused as nonsense (KAS has never been near it): a wrong number is worse than none.
+/// A price at or above this is refused as not credible. A wrong number is worse than none.
 const MAX_USD: f64 = 1_000.0;
-/// An exchange whose last price is further than this (a fraction) from the median of the exchanges is left out of the average.
+/// The largest distance, as a fraction, of the last price of an exchange from the median.
+///
+/// An exchange further away is left out of the average.
 pub const OUTLIER: f64 = 0.03;
 /// The fewest exchanges the average needs (after the outliers are dropped).
 pub const MIN_EXCHANGES: usize = 2;
-/// The primary and the average differ by more than this (a fraction): a warning in the server log.
+/// The primary and the average differ by more than this fraction: the server logs a warning.
 pub const DIVERGENCE: f64 = 0.02;
 
 /// The primary source: one URL, the JSON path of the price in USD.
@@ -54,18 +80,27 @@ pub const DIVERGENCE: f64 = 0.02;
 pub struct Source {
     /// The `source` field of an answer it gave.
     pub name: &'static str,
+    /// The URL of the request.
     pub url: &'static str,
-    /// The keys from the JSON root to the price (a key, or an index into an array): a number, or a decimal string.
+    /// The keys from the JSON root to the price. A key is a field name or an index into an array.
+    ///
+    /// The value is a number or a decimal string.
     pub path: &'static [&'static str],
 }
 
-/// One exchange's KAS/USDT spot ticker: one URL, the paths of the last price and of the 24 h volume in USDT (quote volume).
+/// The KAS/USDT spot ticker of one exchange.
+///
+/// It is one URL, the path of the last price and the path of the 24 h volume in USDT, the quote
+/// volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Exchange {
     /// The name in `vwap:<names>`: lower case letters and digits.
     pub name: &'static str,
+    /// The URL of the request.
     pub url: &'static str,
+    /// The path of the last price.
     pub last: &'static [&'static str],
+    /// The path of the 24 h quote volume.
     pub volume: &'static [&'static str],
 }
 
@@ -76,8 +111,9 @@ pub const PRIMARY: Source = Source {
     path: &["kaspa", "usd"],
 };
 
-/// The exchanges of the fallback, each checked to list KAS/USDT spot with last price and quote volume in one public request (Binance does
-/// not list KAS spot; Bitget and HTX do and could be added).
+/// The exchanges of the fallback.
+///
+/// Each lists KAS/USDT spot with the last price and the quote volume in one public request.
 pub const EXCHANGES: [Exchange; 4] = [
     Exchange {
         name: "bybit",
@@ -108,7 +144,9 @@ pub const EXCHANGES: [Exchange; 4] = [
 /// The primary and the exchanges of the fallback.
 #[derive(Debug, Clone)]
 pub struct SourceSet {
+    /// The primary source.
     pub primary: Source,
+    /// The exchanges of the fallback.
     pub exchanges: Vec<Exchange>,
 }
 
@@ -121,12 +159,13 @@ impl SourceSet {
 
 /// What an upstream call returns: the HTTP status and the body, or a transport error.
 pub type FetchResult = Result<(u16, String), String>;
-/// The upstream call for a URL. Blocking (it runs on the blocking pool); tests inject a mock.
+/// The upstream call for a URL. It blocks, so it runs on the blocking pool. Tests inject a mock.
 pub type Fetch = Arc<dyn Fn(&str) -> FetchResult + Send + Sync>;
 
 /// One good quote.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Quote {
+    /// Price of one KAS in USD.
     pub usd: f64,
     /// Unix seconds of the round that produced it.
     pub at: u64,
@@ -134,7 +173,7 @@ pub struct Quote {
     pub source: String,
 }
 
-/// The pace of the refresh (tests use short ones).
+/// The pace of the refresh. Tests use short ones.
 #[derive(Debug, Clone, Copy)]
 pub struct Tuning {
     /// The upstreams are asked at most once per this long.
@@ -164,7 +203,10 @@ impl Health {
     fn ok(&mut self) {
         *self = Health::default();
     }
-    /// One more failure: the wait is twice as long as after the one before (from `2 * refresh`), at most `max_backoff`. Returns it.
+    /// Records one more failure and returns the wait.
+    ///
+    /// The wait is twice as long as after the failure before, starting at `2 * refresh`, and at
+    /// most `max_backoff`.
     fn failed(&mut self, now: Instant, t: &Tuning) -> Duration {
         self.fails = self.fails.saturating_add(1);
         let wait = t.refresh.saturating_mul(1u32 << self.fails.min(16)).min(t.max_backoff.max(t.refresh));
@@ -194,7 +236,7 @@ struct Inner {
     sources: SourceSet,
     tuning: Tuning,
     state: Mutex<Slot>,
-    /// One round at a time: the requests that find one due wait here and then find it done.
+    /// One round at a time. The requests that find one due wait here and then find it done.
     gate: tokio::sync::Mutex<()>,
 }
 
@@ -203,12 +245,12 @@ struct Inner {
 pub struct UsdPrice(Arc<Inner>);
 
 impl UsdPrice {
-    /// CoinGecko and the exchanges over the blocking TLS client.
+    /// The live price: CoinGecko and the exchanges over the blocking TLS client.
     pub fn live() -> Self {
         Self::with_fetch(Arc::new(|url| crate::rpc::tls::http_get(url, CALL_TIMEOUT)), SourceSet::live(), Tuning::LIVE)
     }
 
-    /// A price over any fetch, sources and pace (tests).
+    /// A price over any fetch, sources and pace. Tests use it.
     pub fn with_fetch(fetch: Fetch, sources: SourceSet, tuning: Tuning) -> Self {
         let slot = Slot { exchanges: vec![ExchangeState::default(); sources.exchanges.len()], ..Slot::default() };
         UsdPrice(Arc::new(Inner { fetch, sources, tuning, state: Mutex::new(slot), gate: tokio::sync::Mutex::new(()) }))
@@ -222,13 +264,15 @@ impl UsdPrice {
         self.lock().attempted.is_none_or(|t| t.elapsed() >= self.0.tuning.refresh)
     }
 
-    /// The last good quote, refreshed first when the upstreams have not been asked for a period. `None` before the first success.
+    /// The last good quote, refreshed first when the upstreams have not been asked for a period.
+    ///
+    /// `None` before the first success.
     pub async fn get(&self) -> Option<Quote> {
         if self.due() {
             let _one_at_a_time = self.0.gate.lock().await;
             if self.due() {
-                // detached: a request that is cancelled (the guard's timeout, a closed connection) must not lose the result,
-                // or leave the attempt marked with nothing stored
+                // Detached, so that a cancelled request (the guard timeout, a closed connection)
+                // neither loses the result nor leaves the attempt marked with nothing stored.
                 let this = self.clone();
                 let _ = tokio::spawn(async move { this.round().await }).await;
             }
@@ -236,7 +280,7 @@ impl UsdPrice {
         self.lock().good.clone()
     }
 
-    /// One call, on the blocking pool, within the ceiling.
+    /// One upstream call on the blocking pool, within the ceiling.
     async fn call(&self, url: &'static str) -> FetchResult {
         let fetch = self.0.fetch.clone();
         let ceiling = self.0.tuning.ceiling;
@@ -247,7 +291,7 @@ impl UsdPrice {
         }
     }
 
-    /// The call, unless its upstream is still in its back-off (`None`).
+    /// The call, or `None` when its upstream is still in its back-off.
     async fn call_if(&self, due: bool, url: &'static str) -> Option<FetchResult> {
         if due {
             Some(self.call(url).await)
@@ -256,7 +300,9 @@ impl UsdPrice {
         }
     }
 
-    /// Ask the primary and every exchange that is not in its back-off, all at once, and keep what they say.
+    /// Asks the primary and every exchange that is not in its back-off, all at once.
+    ///
+    /// It keeps what they say.
     async fn round(&self) {
         let t = self.0.tuning;
         let (primary, exchanges) = (self.0.sources.primary, &self.0.sources.exchanges);
@@ -300,7 +346,8 @@ impl UsdPrice {
                     }
                 }
             }
-            // what the average is made of: each exchange's last good reading while it is not too old
+            // The average is made of the last good reading of each exchange, while it is not too
+            // old.
             let fresh = t.refresh.saturating_mul(READING_PERIODS);
             for st in &g.exchanges {
                 if let Some((r, at)) = &st.reading {
@@ -343,9 +390,10 @@ impl UsdPrice {
     }
 }
 
-/// One exchange's reading.
+/// The reading of one exchange.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reading {
+    /// The name of the exchange.
     pub name: &'static str,
     /// Last price (USDT per KAS).
     pub last: f64,
@@ -356,7 +404,9 @@ pub struct Reading {
 /// The volume-weighted average of the exchanges and the ones it used.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vwap {
+    /// The average price in USD.
     pub usd: f64,
+    /// The exchanges that went into it.
     pub names: Vec<&'static str>,
 }
 
@@ -369,8 +419,11 @@ fn median(sorted: &[f64]) -> f64 {
     }
 }
 
-/// `sum(last * volume) / sum(volume)` over the readings that are not more than [`OUTLIER`] from the median of the readings' last prices
-/// (taken first, once, over every reading that has a positive finite price and volume); [`MIN_EXCHANGES`] left, else an error.
+/// The volume-weighted average `sum(last * volume) / sum(volume)` of the readings.
+///
+/// The median is taken once, over every reading with a positive finite price and volume. The
+/// readings more than [`OUTLIER`] from it are dropped. It is an error when fewer than
+/// [`MIN_EXCHANGES`] are left.
 pub fn vwap(readings: &[Reading]) -> Result<Vwap, String> {
     let ok: Vec<&Reading> =
         readings.iter().filter(|r| r.last.is_finite() && r.last > 0.0 && r.volume.is_finite() && r.volume > 0.0).collect();
@@ -396,12 +449,15 @@ pub fn vwap(readings: &[Reading]) -> Result<Vwap, String> {
     Ok(Vwap { usd, names: kept.iter().map(|r| r.name).collect() })
 }
 
-/// Whether two prices differ by more than `limit` (a fraction of the first).
+/// Whether two prices differ by more than `limit`, a fraction of the first.
 pub fn diverges(a: f64, b: f64, limit: f64) -> bool {
     (a - b).abs() / a > limit
 }
 
-/// The number at `path` of a JSON answer: keys, or indices into arrays; a JSON number or a decimal string.
+/// The number at `path` of a JSON answer.
+///
+/// A step of the path is a key, or an index into an array. The number is a JSON number or a
+/// decimal string.
 fn number_at(v: &serde_json::Value, path: &[&str]) -> Result<f64, String> {
     let mut at = v;
     for k in path {
@@ -443,7 +499,7 @@ pub fn parse_ticker(status: u16, body: &str, x: &Exchange) -> Result<(f64, f64),
     Ok((number_at(&v, x.last)?, number_at(&v, x.volume)?))
 }
 
-/// `GET /v1/price/kas-usd`.
+/// Handler of `GET /v1/price/kas-usd`.
 pub async fn kas_usd(State(app): State<Arc<App>>) -> Result<Response, ApiError> {
     let Some(price) = app.state.price.as_ref() else { return Err(ApiError::not_found("no such route")) };
     match price.get().await {
@@ -451,7 +507,8 @@ pub async fn kas_usd(State(app): State<Arc<App>>) -> Result<Response, ApiError> 
             let body = serde_json::json!({"usd": q.usd, "at": q.at, "source": q.source});
             Ok(([(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))], body.to_string()).into_response())
         }
-        // no Retry-After: the web client polls on its own schedule and falls back to KAS meanwhile (a Retry-After makes it wait and retry)
+        // No `Retry-After`. The web client polls on its own schedule and shows KAS meanwhile, and
+        // a `Retry-After` would make it wait and retry.
         None => Err(ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "price_unavailable", "no KAS price yet")),
     }
 }
@@ -483,7 +540,10 @@ pub(crate) mod tests {
 
     type Script = (String, Vec<FetchResult>, usize);
 
-    /// A mock upstream: per URL a script of answers (the last repeats) and an optional delay, and the calls it got. No network.
+    /// A mock upstream without network.
+    ///
+    /// Per URL it has a script of answers, where the last repeats, and an optional delay. It
+    /// records the calls it got.
     #[derive(Clone, Default)]
     pub(crate) struct Mock {
         scripts: Arc<Mutex<Vec<Script>>>,
@@ -532,7 +592,10 @@ pub(crate) mod tests {
         }
     }
 
-    /// A mock answering all four sources: the primary at `p` (None: down), the exchanges at 0.0300 / 0.0302 / 0.0301 with volumes 100 / 200 / 300.
+    /// A mock answering all four sources.
+    ///
+    /// The primary answers `p`, and `None` means it is down. The exchanges answer 0.0300, 0.0302
+    /// and 0.0301 with volumes 100, 200 and 300.
     pub(crate) fn full(p: Option<&str>) -> Mock {
         Mock::default()
             .on(P.url, vec![p.map_or(Err("down".into()), p_ok)])
@@ -541,7 +604,7 @@ pub(crate) mod tests {
             .on(Z.url, vec![t_ok("0.0301", "300")])
     }
 
-    /// A pace of `refresh_ms` with no back-off (the cap is the refresh itself): the plain cadence.
+    /// A pace of `refresh_ms` with no back-off. The cap is the refresh itself.
     pub(crate) fn flat(refresh_ms: u64) -> Tuning {
         let d = Duration::from_millis(refresh_ms);
         Tuning { refresh: d, ceiling: Duration::from_secs(2), max_backoff: d }
@@ -571,7 +634,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_live_sources_read_the_answers_the_apis_gave() {
-        // recorded answers (trimmed): a number, strings, an array in the path
+        // Recorded answers, trimmed: a number, strings, and an array in the path.
         assert_eq!(parse_number(200, r#"{"kaspa":{"usd":0.02980916}}"#, PRIMARY.path), Ok(0.02980916));
         let bybit = r#"{"retCode":0,"result":{"category":"spot","list":[{"symbol":"KASUSDT","lastPrice":"0.02989","turnover24h":"819695.2927411","volume24h":"27857931.29"}]}}"#;
         let kucoin =
@@ -617,10 +680,10 @@ pub(crate) mod tests {
     #[test]
     fn the_average_weights_each_exchange_by_its_volume() {
         let v = vwap(&[r("a", 0.0300, 100.0), r("b", 0.0306, 300.0)]).unwrap();
-        // (0.0300 * 100 + 0.0306 * 300) / 400
+        // The average is (0.0300 * 100 + 0.0306 * 300) / 400.
         assert!((v.usd - 0.03045).abs() < 1e-12, "{}", v.usd);
         assert_eq!(v.names, ["a", "b"]);
-        // equal volumes: the plain mean; one huge volume: nearly its price
+        // Equal volumes give the plain mean. One huge volume gives nearly its price.
         assert!((vwap(&[r("a", 0.0300, 1.0), r("b", 0.0306, 1.0)]).unwrap().usd - 0.0303).abs() < 1e-12);
         assert!((vwap(&[r("a", 0.0300, 1.0), r("b", 0.0306, 1e9)]).unwrap().usd - 0.0306).abs() < 1e-6);
     }
@@ -631,10 +694,11 @@ pub(crate) mod tests {
         let v = vwap(&rs).unwrap();
         assert_eq!(v.names, ["a", "b", "c"], "the huge-volume outlier does not drag the average");
         assert!((v.usd - 0.0301).abs() < 1e-12, "{}", v.usd);
-        // the median decides: a low outlier too, and a reading just inside the limit stays
+        // The median decides. A low outlier is dropped too, and a reading just inside the limit
+        // stays.
         let v = vwap(&[r("a", 0.0200, 50.0), r("b", 0.0300, 100.0), r("c", 0.0301, 100.0), r("d", 0.0309, 100.0)]).unwrap();
         assert_eq!(v.names, ["b", "c", "d"], "median 0.03005: 0.0309 is 2.8 % away, 0.0200 is 33 %");
-        // either side of the limit
+        // Either side of the limit.
         let v = vwap(&[r("a", 0.0300, 1.0), r("b", 0.0300, 1.0), r("c", 0.0308, 1.0)]).unwrap();
         assert_eq!(v.names, ["a", "b", "c"], "2.7 % off");
         let v = vwap(&[r("a", 0.0300, 1.0), r("b", 0.0300, 1.0), r("c", 0.0310, 1.0)]).unwrap();
@@ -648,9 +712,9 @@ pub(crate) mod tests {
         assert!(vwap(&[r("a", 0.03, 100.0), r("b", 0.03, 0.0)]).is_err(), "no volume: no vote");
         assert!(vwap(&[r("a", 0.03, 100.0), r("b", f64::NAN, 5.0)]).is_err());
         assert!(vwap(&[r("a", 0.03, 100.0), r("b", -1.0, 5.0)]).is_err());
-        // two far apart: the median is between them, both are over the limit
+        // Two far apart: the median is between them and both are over the limit.
         assert!(vwap(&[r("a", 0.0300, 100.0), r("b", 0.0330, 100.0)]).is_err());
-        // three where two outliers on both sides leave one
+        // Three where two outliers on both sides leave one.
         assert!(vwap(&[r("a", 0.0300, 1.0), r("b", 0.0200, 1.0), r("c", 0.0400, 1.0)]).is_err());
     }
 
@@ -683,9 +747,9 @@ pub(crate) mod tests {
         let m = full(None);
         let q = price(&m, 60_000).get().await.unwrap();
         assert_eq!(q.source, "vwap:x,y,z");
-        // (0.0300*100 + 0.0302*200 + 0.0301*300) / 600
+        // The average is (0.0300*100 + 0.0302*200 + 0.0301*300) / 600.
         assert!((q.usd - (0.0300 * 100.0 + 0.0302 * 200.0 + 0.0301 * 300.0) / 600.0).abs() < 1e-12, "{}", q.usd);
-        // one of them far off: not in the label
+        // One of them is far off, so it is not in the label.
         let m = full(None).on(Z.url, vec![t_ok("0.0450", "99999")]);
         let q = price(&m, 60_000).get().await.unwrap();
         assert_eq!(q.source, "vwap:x,y");
@@ -708,7 +772,7 @@ pub(crate) mod tests {
             started.elapsed()
         );
         assert_eq!(q.source, "vwap:x,z");
-        // the primary slow: the average answers
+        // The primary is slow, so the average answers.
         let m = full(Some("0.05")).slow(P.url, Duration::from_millis(600));
         let p = UsdPrice::with_fetch(
             m.fetch(),
@@ -716,7 +780,7 @@ pub(crate) mod tests {
             Tuning { refresh: Duration::from_secs(60), ceiling: Duration::from_millis(150), max_backoff: Duration::from_secs(600) },
         );
         assert!(p.get().await.unwrap().source.starts_with("vwap:"));
-        // two of the three slow: one left is no average, and no primary: no price
+        // Two of the three are slow. One left is no average, and with no primary there is no price.
         let m = full(None).slow(Y.url, Duration::from_millis(600)).slow(Z.url, Duration::from_millis(600));
         let p = UsdPrice::with_fetch(
             m.fetch(),
@@ -728,7 +792,8 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn both_answering_and_far_apart_still_serves_the_primary() {
-        // the average is 0.0301, the primary 0.05: a warning in the log, the primary's number to the client
+        // The average is 0.0301 and the primary 0.05. The log gets a warning and the client gets
+        // the number of the primary.
         let q = price(&full(Some("0.05")), 60_000).get().await.unwrap();
         assert_eq!((q.usd, q.source.as_str()), (0.05, "alpha"));
     }
@@ -779,7 +844,7 @@ pub(crate) mod tests {
         assert_eq!(p.get().await.unwrap().usd, 0.05);
     }
 
-    /// A pace for the back-off tests: 60 ms doubling to 240 ms.
+    /// A pace for the back-off tests, 60 ms doubling to 240 ms.
     const BACKOFF: Tuning =
         Tuning { refresh: Duration::from_millis(60), ceiling: Duration::from_secs(2), max_backoff: Duration::from_millis(240) };
 
@@ -811,18 +876,20 @@ pub(crate) mod tests {
         let g = m.gaps_of(P.url);
         assert_eq!(g.len(), 5, "{g:?}");
         let ms = |d: Duration| d.as_millis();
-        // after the 1st failure 2 x 60, after the 2nd 4 x 60 capped at 240, then the cap
+        // After the 1st failure 2 x 60, after the 2nd 4 x 60 capped at 240, then the cap.
         assert!(ms(g[0]) >= 120, "{g:?}");
         assert!(ms(g[1]) >= 240, "{g:?}");
         assert!(ms(g[2]) >= 240, "{g:?}");
         assert!(ms(g[3]) >= 240, "{g:?}");
-        // the cap holds: not a further doubling (generous for a loaded machine)
+        // The cap holds and there is no further doubling. The bound is generous for a loaded
+        // machine.
         assert!(ms(g[1]) < 1_000 && ms(g[2]) < 1_000 && ms(g[3]) < 1_000, "{g:?}");
-        // the 5th call succeeded: the next one is a normal period later, not the cap
+        // The 5th call succeeded, so the next one is a normal period later, not the cap.
         assert!(ms(g[4]) >= 60 && ms(g[4]) < 200, "{g:?}");
-        // the exchanges, which did not fail, were asked at the normal pace meanwhile: more often than the primary
+        // The exchanges did not fail. They were asked at the normal pace meanwhile, so more often
+        // than the primary.
         assert!(m.calls_to(X.url) > m.calls_to(P.url), "x {} p {}", m.calls_to(X.url), m.calls_to(P.url));
-        // and a price was served all along (the average of the exchanges), then CoinGecko's
+        // A price was served all along, first the average of the exchanges, then CoinGecko's.
         let q = p.get().await.unwrap();
         assert!(q.source == "alpha" || q.source.starts_with("vwap:"), "{q:?}");
     }
@@ -839,14 +906,15 @@ pub(crate) mod tests {
         assert_eq!((first.usd, first.source.as_str()), (0.05, "alpha"));
         drive(&p, Duration::from_millis(900), || false).await;
         assert_eq!(p.get().await, Some(first), "the same quote, its own time");
-        // 900 ms of 60 ms periods would be 15 rounds; with the back-off each source was asked a handful of times
+        // 900 ms of 60 ms periods would be 15 rounds. With the back-off each source is asked a
+        // handful of times.
         assert!(m.calls_to(P.url) <= 6, "{}", m.calls_to(P.url));
         assert!(m.calls_to(X.url) <= 6, "{}", m.calls_to(X.url));
     }
 
     #[tokio::test]
     async fn an_exchange_that_fails_is_skipped_and_its_old_reading_counts_for_five_periods_only() {
-        // the primary is down throughout, so the average is what is served
+        // The primary is down throughout, so the average is what is served.
         let m = Mock::default()
             .on(P.url, vec![Err("down".into())])
             .on(X.url, vec![t_ok("0.0300", "100"), Ok((429, String::new()))])
@@ -856,7 +924,8 @@ pub(crate) mod tests {
             Tuning { refresh: Duration::from_millis(50), ceiling: Duration::from_secs(2), max_backoff: Duration::from_millis(400) };
         let p = UsdPrice::with_fetch(m.fetch(), set(), tune);
         assert_eq!(p.get().await.unwrap().source, "vwap:x,y,z");
-        // its 429 follows: its reading from before still counts for a while (5 x 50 ms), and it is not asked again at once
+        // Its 429 follows. Its reading from before still counts for a while (5 x 50 ms), and it is
+        // not asked again at once.
         drive(&p, Duration::from_millis(100), || false).await;
         assert!(p.get().await.unwrap().source.starts_with("vwap:"));
         drive(&p, Duration::from_millis(900), || false).await;
