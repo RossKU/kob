@@ -104,6 +104,31 @@ impl Default for RateLimitConfig {
     }
 }
 
+impl RateLimitConfig {
+    /// Refuses the values that would panic the limiter or silently group addresses wrongly.
+    ///
+    /// A rate is 0 (off) or a finite number of at least 1e-6 per second: a smaller one makes a
+    /// wait of more than a lifetime, which `Duration::from_secs_f64` cannot hold. A prefix is
+    /// clamped to 16..=128 where it is used, so 0 would quietly group the whole /16.
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, v) in [("per_ip_rps", self.per_ip_rps), ("global_rps", self.global_rps), ("per_site_rps", self.per_site_rps)] {
+            if !(v == 0.0 || (v.is_finite() && v >= 1e-6)) {
+                return Err(format!("[api.rate_limit] {name} = {v}: must be 0 (off) or a rate of at least 0.000001 per second"));
+            }
+        }
+        if !(16..=128).contains(&self.ipv6_prefix_bits) {
+            return Err(format!("[api.rate_limit] ipv6_prefix_bits = {}: must be between 16 and 128", self.ipv6_prefix_bits));
+        }
+        if self.ipv6_site_prefix_bits != 0 && !(16..=self.ipv6_prefix_bits).contains(&self.ipv6_site_prefix_bits) {
+            return Err(format!(
+                "[api.rate_limit] ipv6_site_prefix_bits = {}: must be 0 (off) or between 16 and ipv6_prefix_bits ({})",
+                self.ipv6_site_prefix_bits, self.ipv6_prefix_bits
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 /// The `[api]` table: the read API and its limits.
@@ -717,7 +742,8 @@ impl IndexerConfig {
             std::io::ErrorKind::NotFound => ConfigError::NotFound(p.clone()),
             _ => ConfigError::Io(p.clone(), e),
         })?;
-        let cfg: IndexerConfig = toml::from_str(&s).map_err(|e| ConfigError::Parse(p, e.to_string()))?;
+        let cfg: IndexerConfig = toml::from_str(&s).map_err(|e| ConfigError::Parse(p.clone(), e.to_string()))?;
+        cfg.api.rate_limit.validate().map_err(|e| ConfigError::Parse(p, e))?;
         if cfg.receipts.is_some() {
             tracing::warn!("config: the [receipts] table is retired and ignored");
         }
@@ -936,6 +962,49 @@ url = \"wss://b\"
         let p = d.path().join("index.toml");
         std::fs::write(&p, "[api]\ntrusted_proxy = [\"127.0.0.1\"]\n").unwrap();
         assert!(matches!(IndexerConfig::load(&p), Err(ConfigError::Parse(..))));
+    }
+
+    #[test]
+    fn rate_limit_values_that_panic_or_misgroup_are_refused_at_load() {
+        let d = tempfile::tempdir().unwrap();
+        let p = d.path().join("index.toml");
+        let load = |body: &str| {
+            std::fs::write(
+                &p,
+                format!(
+                    "[api.rate_limit]
+{body}
+"
+                ),
+            )
+            .unwrap();
+            IndexerConfig::load(&p)
+        };
+        for (body, key) in [
+            ("per_ip_rps = 1e-300", "per_ip_rps"),
+            ("global_rps = 1e-9", "global_rps"),
+            ("per_site_rps = inf", "per_site_rps"),
+            ("per_ip_rps = nan", "per_ip_rps"),
+            ("per_ip_rps = -1.0", "per_ip_rps"),
+            ("ipv6_prefix_bits = 0", "ipv6_prefix_bits"),
+            ("ipv6_prefix_bits = 8", "ipv6_prefix_bits"),
+            ("ipv6_prefix_bits = 200", "ipv6_prefix_bits"),
+            ("ipv6_site_prefix_bits = 8", "ipv6_site_prefix_bits"),
+            ("ipv6_site_prefix_bits = 80", "ipv6_site_prefix_bits"),
+        ] {
+            let e = load(body).err().unwrap_or_else(|| panic!("accepted: {body}")).to_string();
+            assert!(matches!(e.as_str(), s if s.contains("invalid config") && s.contains(key)), "{body}: {e}");
+        }
+        for ok in [
+            "per_ip_rps = 0.0",
+            "per_ip_rps = 0.5
+global_rps = 0",
+            "ipv6_prefix_bits = 48
+ipv6_site_prefix_bits = 0",
+            "",
+        ] {
+            load(ok).unwrap_or_else(|e| panic!("refused {ok:?}: {e}"));
+        }
     }
 
     #[test]
