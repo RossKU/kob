@@ -523,6 +523,9 @@ impl<S: ChainSource> ChainSource for Failover<S> {
             }
         }
     }
+    async fn confirm_unknown_cursor(&self, at: Hash32, e: &RpcError) -> Result<NodeErrorKind, String> {
+        self.inner.tiers[self.active()].confirm_unknown_cursor(at, e).await
+    }
     fn node_stats(&self) -> Vec<NodeStatus> {
         self.inner.tiers[self.active()].node_stats()
     }

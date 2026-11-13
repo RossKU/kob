@@ -10,6 +10,9 @@
 //!   there. If none is known, or the node says `the queried hash does not have retention root on
 //!   its chain`, the downtime exceeded the retention of the node. The state is `gap`, there is no
 //!   further progress, and the operator bootstraps the store (see the docs).
+//! - With a cross-checking node (the public pair), `cannot find header` and `retention root` count
+//!   only when that node confirms them (`ChainSource::confirm_unknown_cursor`). Otherwise nothing
+//!   is rewound or halted, and the follower retries.
 //! - A `removed` list that contradicts the stored chain: state `gap`. This is a different node or
 //!   a bug, and the follower never guesses.
 //! - A record-log write that failed, for example on a full disk or an I/O error. The append is
@@ -1045,7 +1048,24 @@ impl<S: ChainSource> Follower<S> {
     async fn on_rpc_error(&self, e: RpcError) -> StepOutcome {
         // Every caller asked the chain authority.
         self.chain_failed("a chain request", &e);
-        match e.kind() {
+        let mut kind = e.kind();
+        if matches!(kind, NodeErrorKind::UnknownHash | NodeErrorKind::RetentionRootMissing) {
+            // The store is rewound or halted on this only when the source confirms it.
+            if let Some(cursor) = self.blocking(|i| i.cursor()).await.ok().flatten() {
+                match self.source.confirm_unknown_cursor(cursor.hash, &e).await {
+                    Ok(k) => kind = k,
+                    Err(why) => {
+                        let msg = format!(
+                            "the chain authority disowns the cursor {}, which is not confirmed ({why}): nothing is rewound or halted",
+                            cursor.hash
+                        );
+                        self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                        return StepOutcome::Retry(msg);
+                    }
+                }
+            }
+        }
+        match kind {
             NodeErrorKind::UnknownHash => self.recover_unknown_cursor().await,
             NodeErrorKind::RetentionRootMissing => {
                 let msg = format!("{PRUNED_GAP} the node's retention: {e}");

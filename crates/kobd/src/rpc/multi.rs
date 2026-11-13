@@ -38,6 +38,10 @@
 //!
 //! Only what both report is applied.
 //!
+//! - The authority alone never makes the store rewind or halt. Its `cannot find header` or
+//!   `retention root` about the cursor, and its "unknown" for a stored block in the walk back,
+//!   count only when the cross-checking node says the same (`ChainSource::confirm_unknown_cursor`).
+//!   When it knows the cursor, that is a contradiction like the others below.
 //! - At the first contradiction the answer is cut before it.
 //! - When the very next chain block is contradicted, nothing is applied until the two agree. A race
 //!   at the tip settles within seconds.
@@ -1219,9 +1223,22 @@ impl<N: ChainSource> MultiNode<N> {
             cut(&mut raw, a.keep);
             return Ok(raw);
         }
+        self.stalled(j);
+        if a.at_tip {
+            // The follower logs this at debug until it repeats `STALLS_BEFORE_REPLACING` times in a
+            // row.
+            return Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")));
+        }
+        Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
+    }
+
+    /// A contradiction with the cross-checking node `j` left nothing to apply.
+    ///
+    /// A disagreement that does not settle replaces the cross-checking node after
+    /// [`STALLS_BEFORE_REPLACING`] in a row, then the authority's after as many more. This applies
+    /// to resolver entries only.
+    fn stalled(&self, j: usize) {
         let n = self.stalls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        // A disagreement that does not settle replaces the cross-checking node, then the
-        // authority's. This applies to resolver entries only.
         let give_up = |i: usize| {
             let e = self.board.entry(i).to_string();
             if let Some(node) = super::resolver::current(&e) {
@@ -1235,12 +1252,15 @@ impl<N: ChainSource> MultiNode<N> {
             give_up(self.board.authority());
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
         }
-        if a.at_tip {
-            // The follower logs this at debug until it repeats `STALLS_BEFORE_REPLACING` times in a
-            // row.
-            return Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")));
-        }
-        Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
+    }
+
+    /// The configured cross-checking node, whatever its state now, if the list has one.
+    ///
+    /// It is the second node of a resolver pair. Unlike [`MultiNode::cross_checker`], a node that
+    /// backs off or is being replaced still counts: what it would have to confirm must wait for it.
+    fn cross_node(&self) -> Option<usize> {
+        let a = self.board.authority();
+        (0..self.nodes.len()).find(|&i| i != a && self.specs[i].cross_check)
     }
 
     /// The shared per-node state.
@@ -1686,8 +1706,30 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         self.primary().utxos_by_addresses(addresses).await
     }
+    /// Whether the authority knows the block.
+    ///
+    /// With a cross-checking node, "unknown" counts only when that node does not know the block
+    /// either. The follower's walk back rewinds the store on such answers. Any other outcome is an
+    /// error that rewinds nothing.
     async fn block_exists(&self, hash: Hash32) -> Result<bool, RpcError> {
-        self.primary().block_exists(hash).await
+        if self.primary().block_exists(hash).await? {
+            return Ok(true);
+        }
+        let Some(j) = self.cross_node() else { return Ok(false) };
+        let other = self.board.shown(j);
+        match tokio::time::timeout(CROSS_CHECK_STEP_TIMEOUT, self.nodes[j].block_exists(hash)).await {
+            Ok(Ok(false)) => Ok(false),
+            Ok(Ok(true)) => Err(RpcError::Node(format!(
+                "the chain authority does not know the block {hash}, but the cross-checking node {other} does"
+            ))),
+            Ok(Err(e)) => {
+                Err(RpcError::Node(format!("the cross-checking node {other} could not say whether it knows the block {hash}: {e}")))
+            }
+            Err(_) => Err(RpcError::Node(format!(
+                "the cross-checking node {other} did not say within {} s whether it knows the block {hash}",
+                CROSS_CHECK_STEP_TIMEOUT.as_secs()
+            ))),
+        }
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
         self.primary().sink_blue_score().await
@@ -1837,6 +1879,39 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             self.settling.store(true, Ordering::Relaxed);
         }
         replaced
+    }
+
+    /// Confirms the authority's claim with the cross-checking node, if the list has one.
+    ///
+    /// The node is asked for its chain from `at`. It confirms when it does not know `at` or has it
+    /// below its retention root too. When the two claims differ, the walk back is acted on, the
+    /// milder of the two. When it knows `at` and its chain, that is a contradiction: counted as a
+    /// disagreement, and replacing nodes as one that does not settle ([`MultiNode::stalled`]). When
+    /// it cannot answer, nothing is confirmed.
+    async fn confirm_unknown_cursor(&self, at: Hash32, e: &RpcError) -> Result<super::NodeErrorKind, String> {
+        use super::NodeErrorKind::{RetentionRootMissing, UnknownHash};
+        let kind = e.kind();
+        let Some(j) = self.cross_node() else { return Ok(kind) };
+        let other = self.board.shown(j);
+        match tokio::time::timeout(CROSS_CHECK_TIMEOUT, self.nodes[j].chain_hashes(at)).await {
+            Ok(Err(e2)) if matches!(e2.kind(), UnknownHash | RetentionRootMissing) => {
+                Ok(if e2.kind() == kind { kind } else { UnknownHash })
+            }
+            Ok(Ok(_)) => {
+                let why = format!("the cross-checking node {other} knows the cursor {at} and its chain");
+                tracing::warn!(
+                    authority = %self.board.shown(self.board.authority()),
+                    cross_check = %other,
+                    cursor = %at,
+                    "the chain authority disowns the cursor and the other node does not: nothing is rewound or halted"
+                );
+                self.board.disagreed(j, &why, false);
+                self.stalled(j);
+                Err(why)
+            }
+            Ok(Err(e2)) => Err(format!("the cross-checking node {other} could not confirm it ({e2})")),
+            Err(_) => Err(format!("the cross-checking node {other} did not answer within {} s", CROSS_CHECK_TIMEOUT.as_secs())),
+        }
     }
 
     fn node_stats(&self) -> Vec<NodeStatus> {

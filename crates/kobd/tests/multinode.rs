@@ -19,7 +19,7 @@ use kobd::rpc::multi::{MultiNode, NodeSpec};
 use kobd::rpc::types::*;
 use kobd::rpc::{ChainSource, RpcError, WindowRequest};
 use kobd::testkit::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -52,15 +52,30 @@ enum Mode {
     Oversize,
 }
 
+/// What a node forges about the cursor once `forge` is set: that it does not know it, or that it is below its retention
+/// root (the error texts of the node).
+const FORGES_UNKNOWN: u8 = 1;
+const FORGES_RETENTION: u8 = 2;
+
 struct Peer {
     node: Arc<MockNode>,
     mode: Mode,
     windows: AtomicUsize,
+    /// `FORGES_UNKNOWN` or `FORGES_RETENTION`: every chain request fails with that error, and no block is known.
+    forge: AtomicU8,
 }
 
 impl Peer {
     fn new(node: &Arc<MockNode>, mode: Mode) -> Arc<Peer> {
-        Arc::new(Peer { node: node.clone(), mode, windows: AtomicUsize::new(0) })
+        Arc::new(Peer { node: node.clone(), mode, windows: AtomicUsize::new(0), forge: AtomicU8::new(0) })
+    }
+
+    fn forged(&self, start: Hash32) -> Result<(), RpcError> {
+        match self.forge.load(Ordering::Relaxed) {
+            FORGES_UNKNOWN => Err(RpcError::Node(format!("cannot find header {start}"))),
+            FORGES_RETENTION => Err(RpcError::Node("the queried hash does not have retention root on its chain".into())),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -70,6 +85,7 @@ impl ChainSource for Peer {
         if windowed {
             self.windows.fetch_add(1, Ordering::Relaxed);
         }
+        self.forged(req.start_hash)?;
         if let Mode::Slow(d) = self.mode {
             tokio::time::sleep(d).await;
         }
@@ -125,6 +141,9 @@ impl ChainSource for Peer {
         self.node.utxos_by_addresses(a).await
     }
     async fn block_exists(&self, hash: Hash32) -> Result<bool, RpcError> {
+        if self.forge.load(Ordering::Relaxed) != 0 {
+            return Ok(false);
+        }
         self.node.block_exists(hash).await
     }
     async fn sink_blue_score(&self) -> Result<u64, RpcError> {
@@ -143,9 +162,11 @@ impl ChainSource for Peer {
         })
     }
     async fn chain_hashes(&self, start: Hash32) -> Result<ChainHashes, RpcError> {
+        self.forged(start)?;
         ChainSource::chain_hashes(&*self.node, start).await
     }
     async fn chain_with_ids(&self, start: Hash32, m: Option<u64>) -> Result<ChainIds, RpcError> {
+        self.forged(start)?;
         if self.mode == Mode::IdsTimeOutUnbounded && m.is_none() {
             return Err(RpcError::Timeout(Duration::from_secs(180)));
         }
@@ -457,4 +478,39 @@ async fn a_node_claiming_an_oversized_frame_is_charged_and_its_windows_go_elsewh
     assert!(l.windows_failed >= 1 && l.windows_ok == 0, "{l:?}");
     assert!(l.last_error.as_deref().is_some_and(|e| e.contains("exceeds")), "{l:?}");
     assert!(h.nodes[0].windows_ok > 0, "the primary took the windows: {:?}", h.nodes[0]);
+}
+
+/// With a cross-checking node (a resolver pair), the authority's word alone never rewinds or halts the store. An authority
+/// that says it does not know the cursor, or that the cursor is below its retention root, while the other node knows the
+/// cursor and its chain, is not believed: nothing is rewound, no gap, the disagreement is counted. Once the other node says
+/// the same, the follower acts as before (a walk back that finds no stored block known, or the retention gap).
+#[tokio::test]
+async fn an_authority_that_disowns_the_cursor_is_not_believed_without_the_cross_checking_node() {
+    for forge in [FORGES_UNKNOWN, FORGES_RETENTION] {
+        let c = Ctx::new();
+        let _ = chain(&c, 40);
+        let node = c.hs.node.clone();
+        let primary = Peer::new(&node, Mode::Honest);
+        let second = Peer::new(&node, Mode::Honest);
+        let m = multi(node.anchor(), vec![(spec("primary", true, 2), primary.clone()), (cross_check("second"), second.clone())]);
+        m.sync(2_000).await;
+        let before = m.snapshot();
+        primary.forge.store(forge, Ordering::Relaxed);
+        for _ in 0..20 {
+            let o = m.follower.step().await;
+            assert!(matches!(o, StepOutcome::Retry(_)), "forge {forge}: {o:?}");
+        }
+        let h = m.health.snapshot();
+        assert_eq!(h.cursor_hash, Some(node.tip()), "forge {forge}: the cursor stays");
+        assert_eq!((h.reorgs_total, h.reverted_blocks_total, h.gap_reason.clone()), (0, 0, None), "forge {forge}");
+        assert_eq!(m.snapshot(), before, "forge {forge}: nothing rewound");
+        assert!(h.nodes[1].disagreements > 0, "forge {forge}: {:?}", h.nodes[1]);
+        assert!(h.last_error.as_deref().is_some_and(|e| e.contains("not confirmed")), "forge {forge}: {:?}", h.last_error);
+
+        // both nodes say so: confirmed
+        second.forge.store(forge, Ordering::Relaxed);
+        let o = m.follower.step().await;
+        let StepOutcome::Gap(why) = o else { panic!("forge {forge}: {o:?}") };
+        assert!(kobd::indexer::follower::is_pruned_gap(&why), "forge {forge}: {why}");
+    }
 }

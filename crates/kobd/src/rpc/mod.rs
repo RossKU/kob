@@ -204,6 +204,21 @@ pub trait ChainSource: Send + Sync + 'static {
             false
         }
     }
+    /// The chain authority's error `e` says that it does not know the cursor `at` (`cannot find
+    /// header`) or that `at` is below its retention root. The follower would rewind or halt the
+    /// store on it (`indexer::follower`).
+    ///
+    /// `Ok(kind)` is the claim to act on. `Err(why)` means it is not confirmed: nothing is rewound
+    /// or halted, and the follower retries. The default confirms `e`, because a single node is the
+    /// only one to ask. A source with a cross-checking node asks that node too
+    /// (`multi::MultiNode`).
+    fn confirm_unknown_cursor(&self, at: Hash32, e: &RpcError) -> impl Future<Output = Result<NodeErrorKind, String>> + Send {
+        let kind = e.kind();
+        async move {
+            let _ = at;
+            Ok(kind)
+        }
+    }
     /// Per-node counters for `/v1/health` (empty for a single node).
     fn node_stats(&self) -> Vec<multi::NodeStatus> {
         vec![]
