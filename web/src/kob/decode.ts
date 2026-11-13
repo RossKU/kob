@@ -1,33 +1,50 @@
-// PRE-SIGN CONFIRMATION MODEL (safety-critical).
+// Pre-sign confirmation model. Safety-critical.
 //
-// Wallet popups are blind to token semantics (KasWare "Sign Transaction: Spend", Kaspire "covenant, cannot verify", Kastle misleading balance
-// changes), so this module is the user's only real check of what a signature authorises. `decodeSigning` re-derives EVERYTHING from the
-// built transaction (`built.tx` + `built.plans` + `built.sign`) and kob-wasm (`recoverOrders`, `decodePayload`, `decodeState`,
-// `scriptPublicKey`, `tokenScriptPublicKey`): never from planner or form state. Planner claims can be passed as `expected` and are only
-// COMPARED against the derived facts; any disagreement is a blocking finding.
+// Wallet popups are blind to token semantics (KasWare "Sign Transaction: Spend", Kaspire "covenant,
+// cannot verify", Kastle misleading balance changes). This module is therefore the user's only real
+// check of what a signature authorises.
 //
-// Output is plain data with stable `code`s and English `message`s (+ `params`) so the UI can translate. `blocking` findings mean the UI must
-// refuse to sign. What it checks, in short:
-//   * every input's script equals the script derived from its plan (order state / token state / P2PK key): a tx cannot claim to spend one
-//     thing and carry another;
-//   * every output is classified by RE-DERIVING its script public key (new order covenant, token custody, token change, KAS change, payment out,
-//     unknown); anything leaving the maker beyond planned orders / fee is blocking (payment or token transfer to another key), unless the planner
-//     listed it in `expected.transfers` / `expected.payments`;
-//   * placement records are re-verified (`recoverOrders` + spk re-derivation), order makers must be the wallet key, KAS and tokens must balance,
-//     the fee is recomputed from inputs minus outputs and bounded;
-//   * an in-place amend (AMEND record, `recoverAmends`) or sweep (SWEEP record, sweep.ts `verify_sweep` re-check: the SAME script continues the
-//     order input's covenant id) is the only way an order's covenant id may continue: any other continuation, or a record that does not verify,
-//     is blocking; a sweep's token outputs are its strays returned to the maker (anything to another key is blocking, as everywhere);
-//   * a conditional order or stop entry armed (or trailed) by the tx (a fill of its unarmed stop leg / stop entry, or `update`) shows its
-//     trigger evidence (touch): the input its `ev` argument names (and, for an ask, its custody `tk`), re-derived from that input's plan and
-//     checked against the order's rule (plain KobAsk / KobBid of the same token and scale, filled here, side, quote vs the stop, base units filled
-//     vs `minTouch`, exposure vs `minRestDaa`); evidence that is not a plain order of the token, or fails the rule, is blocking;
-//   * pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): both tokens are checked against the registry, a new order's terms against kob-wasm
-//     `checkNewOrder`, its custodies (one per token: a sell-first entry's A and its B prefund) against kob-wasm `custodies`; a spend reports
-//     what returns of A and of B (custodies and strays of both tokens); a pair stop armed / trailed by the tx shows its evidence in either mode
-//     (two KAS-book fills of A and B: the implied rate; or the fill of a resting `KobPair` of the same pair), checked with kob-wasm `pairArms` /
-//     `condPairTrailCheck` and the exposure / size / side rules of kob-wasm `pairTriggerRule`. Nothing of a pair order is a KAS price.
-// The Schnorr digests in `built.sign` are produced by kob-wasm; TypeScript cannot recompute them, `kob.finalize` verifies signatures against them.
+// `decodeSigning` re-derives everything from the built transaction (`built.tx`, `built.plans` and
+// `built.sign`) and kob-wasm (`recoverOrders`, `decodePayload`, `decodeState`, `scriptPublicKey`,
+// `tokenScriptPublicKey`), never from planner or form state. Planner claims can be passed as
+// `expected` and are only compared against the derived facts. Any disagreement is a blocking
+// finding.
+//
+// The output is plain data with stable `code`s and English `message`s (and `params`), so the UI can
+// translate. A blocking finding means the UI must refuse to sign. The checks are these.
+//
+// - Every input's script equals the script derived from its plan (order state, token state or P2PK
+//   key). A tx cannot claim to spend one thing and carry another.
+// - Every output is classified by re-deriving its script public key. The classes are new order
+//   covenant, token custody, token change, KAS change, payment out and unknown. Anything leaving
+//   the maker beyond planned orders and the fee is blocking, as a payment or token transfer to
+//   another key, unless the planner listed it in `expected.transfers` or `expected.payments`.
+// - Placement records are re-verified (`recoverOrders` and script re-derivation). Order makers must
+//   be the wallet key, KAS and tokens must balance, and the fee is recomputed from inputs minus
+//   outputs and bounded.
+// - An in-place amend (AMEND record, `recoverAmends`) or a sweep (SWEEP record, re-checked by
+//   sweep.ts `verify_sweep`, where the same script continues the order input's covenant id) is the
+//   only way an order's covenant id may continue. Any other continuation, or a record that does not
+//   verify, is blocking. A sweep's token outputs are its strays returned to the maker, and anything
+//   to another key is blocking, as everywhere.
+// - A conditional order or stop entry that the tx arms or trails shows its trigger evidence
+//   (touch). The tx arms it by a fill of its unarmed stop leg or stop entry, or by `update`. The
+//   evidence is the input that its `ev` argument names and, for an ask, its custody `tk`. It is
+//   re-derived from that input's plan and checked against the order's rule: a plain KobAsk or
+//   KobBid of the same token and scale, filled here, with the right side, a quote against the stop,
+//   base units filled against `minTouch` and exposure against `minRestDaa`. Evidence that is not a
+//   plain order of the token, or that fails the rule, is blocking.
+// - Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`) check both tokens against the registry, a
+//   new order's terms against kob-wasm `checkNewOrder`, and its custodies against kob-wasm
+//   `custodies`. There is one custody per token, and a sell-first entry has A and its B prefund. A
+//   spend reports what returns of A and of B, custodies and strays of both tokens. A pair stop that
+//   the tx arms or trails shows its evidence in either mode. One mode is two KAS-book fills of A
+//   and B, which give the implied rate. The other is the fill of a resting `KobPair` of the same
+//   pair. The checks use kob-wasm `pairArms` and `condPairTrailCheck`, and the exposure, size and
+//   side rules of kob-wasm `pairTriggerRule`. Nothing of a pair order is a KAS price.
+//
+// The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
+// and `kob.finalize` verifies signatures against them.
 import type { WalletId } from '../wallet/types';
 import {
   baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
@@ -47,25 +64,36 @@ import { extensionOfState, isCovenantOwned, isKeyOwned, ownerTypeOf } from './to
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
-// ------------------------------------------------------------------------------------------------ constants
+// --------------------------------------------------------------------------------------- constants
 
 const ONE_KAS = 100_000_000n;
-/** Below this a fee is never "excessive" whatever the amounts (a tiny cancel legitimately costs ~1% of a 1 KAS bid). */
+/**
+ * Below this a fee is never "excessive" whatever the amounts. A tiny cancel legitimately costs
+ * about 1% of a 1 KAS bid.
+ */
 export const FEE_FLOOR_OK = ONE_KAS / 10n;
-/** fee > FEE_FLOOR_OK and > 1% of the KAS the tx moves (locked, released, paid out) is blocking; huge trades may pay more than 1 KAS. */
+/**
+ * A fee above `FEE_FLOOR_OK` and above this percentage of the KAS the tx moves (locked, released,
+ * paid out) is blocking. Huge trades may pay more than 1 KAS.
+ */
 export const FEE_MAX_PERCENT = 1n;
 /**
- * Absolute fee ceiling, whatever the amounts: a builder (or a hostile input value) cannot skim more than this as "fee". The dearest golden
- * transaction (an 8x8 batch match) pays 0.104 KAS and every web-built cancel / order less than 0.04 KAS at the relay floor. In `priority`
- * (storage-inclusive) fee mode the ceiling is three times the builder's own minimum when that is higher.
+ * Absolute fee ceiling, whatever the amounts. A builder, or a hostile input value, cannot skim more
+ * than this as the fee. In `priority` (storage-inclusive) fee mode the ceiling is three times the
+ * builder's own minimum when that is higher.
  */
 export const FEE_ABSOLUTE_MAX = ONE_KAS / 2n;
-/** Warning when the fee is more than this multiple of the builder's own minimum (+ slack). */
+/**
+ * The fee draws a warning when it is more than this multiple of the builder's own minimum plus
+ * `FEE_WARN_SLACK`.
+ */
 export const FEE_WARN_FACTOR = 2n;
+/** Sompi added to the builder's minimum before the `FEE_WARN_FACTOR` comparison. */
 export const FEE_WARN_SLACK = 100_000n;
 
-// ------------------------------------------------------------------------------------------------ issue model
+// ------------------------------------------------------------------------------------- issue model
 
+/** Every code a signing finding can carry, grouped by level. The UI has a message for each. */
 export const SIGNING_ISSUE_CODES = [
   // blocking
   'malformed-built', 'recover-failed', 'order-spk-mismatch', 'order-not-maker', 'order-unrecorded', 'order-token-mismatch', 'input-script-mismatch', 'output-script-mismatch',
@@ -79,7 +107,9 @@ export const SIGNING_ISSUE_CODES = [
   // info
   'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place',
 ] as const;
+/** The code of a signing finding. */
 export type SigningIssueCode = (typeof SIGNING_ISSUE_CODES)[number];
+/** How a signing finding affects signing. A blocking one refuses it. */
 export type IssueLevel = 'blocking' | 'warning' | 'info';
 
 const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
@@ -93,6 +123,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
   ]),
 ) as Record<SigningIssueCode, IssueLevel>;
 
+/** One finding of the pre-sign decoder, with a stable `code` and English `message`. */
 export interface SigningIssue {
   code: SigningIssueCode;
   severity: IssueLevel;
@@ -102,18 +133,23 @@ export interface SigningIssue {
   output?: number;
 }
 
-// ------------------------------------------------------------------------------------------------ model types
+// ------------------------------------------------------------------------------------- model types
 
+/** A token as the pre-sign model names it. */
 export interface TokenRef {
   covenantId: Hex;
   ticker: string | null;
   decimals: number | null;
-  /** `TICKER (abcd...1234)` where a ticker is known, else its covenant id (8 + 8 hex): never a bare name */
+  /**
+   * `TICKER (abcd...1234)` where a ticker is known, else its covenant id (8 + 8 hex). Never a bare
+   * name.
+   */
   display: string;
   inRegistry: boolean;
   tradable: boolean;
 }
 
+/** One input of the transaction, classified. */
 export interface DecodedInput {
   index: number;
   role: string;
@@ -124,23 +160,34 @@ export interface DecodedInput {
   /** the wallet will be asked for a signature over this input (`built.sign`) */
   willSign: boolean;
   signer: Hex | null;
-  /** maker: the wallet's own funds; covenant: released from / spent by a covenant; other: another key's */
+  /**
+   * maker: the wallet's own funds; covenant: released from / spent by a covenant; other: another
+   * key's
+   */
   ownedBy: 'maker' | 'covenant' | 'other';
   /** P2SH redeem script hash of the input UTXO (null for P2PK) */
   redeemScriptHash: Hex | null;
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; leader: boolean; escrowOf: Hex | null; program: TokenProgram; witness: 'covenantId' | 'p2pk' };
   order: null | {
     kind: OrderKind; template: TemplateName; covenantId: Hex | null; entry: string;
-    /** cancel = maker cancel, refund = expiry / kill / close refund, fill = any matching entry, update = arm / trail */
+    /**
+     * cancel = maker cancel, refund = expiry / kill / close refund, fill = any matching entry,
+     * update = arm / trail
+     */
     action: 'cancel' | 'refund' | 'fill' | 'update' | 'other';
     description: OrderDescription | null; makerIsWallet: boolean;
-    /** the order is under a RETIRED template of the cancel-only table (an older contract version): its hash; only its maker's cancel is signed */
+    /**
+     * The hash of the retired template of the cancel-only table the order is under. Only its
+     * maker's cancel is signed.
+     */
     retired?: Hex;
   };
 }
 
+/** The KAS an order UTXO holds, split by purpose. */
 export interface LockedKas { total: bigint; carriers: bigint; escrow: bigint; refundTips: bigint; keeperTips: bigint; reserves: bigint }
 
+/** One output of the transaction, classified by its re-derived script. */
 export interface DecodedOutput {
   index: number;
   /** KAS on the output UTXO, sompi */
@@ -165,16 +212,22 @@ export interface DecodedOrder {
   locked: LockedKas;
   custody: null | { output: number; amount: bigint; carrier: bigint; ref: TokenRef };
   /**
-   * every custody the placement record names (a sell-first `KobIfdPair`: its A and its B prefund), in record order; `role` base = the order's
-   * token (A), quote = a pair order's B
+   * every custody the placement record names (a sell-first `KobIfdPair`: its A and its B prefund),
+   * in record order; `role` base = the order's token (A), quote = a pair order's B
    */
   custodies: { output: number; amount: bigint; carrier: bigint; ref: TokenRef; role: 'base' | 'quote' }[];
   deadline: bigint | null;
   /** the output script equals the P2SH of the recovered state */
   verified: boolean;
-  /** an in-place amend: the order input this output continues (the order keeps its covenant id and its custody) */
+  /**
+   * an in-place amend: the order input this output continues (the order keeps its covenant id and
+   * its custody)
+   */
   amendedFrom?: number;
-  /** a sweep in place (verified SWEEP record): the order input this output continues under the SAME script (same state, custody untouched) */
+  /**
+   * a sweep in place (verified SWEEP record): the order input this output continues under the SAME
+   * script (same state, custody untouched)
+   */
   sweptFrom?: number;
 }
 
@@ -183,45 +236,68 @@ export interface DecodedSpend {
   input: number;
   covenantId: Hex | null;
   description: OrderDescription | null;
-  /** `sweep`: the maker's cancel continued the order in place under the same script (a verified SWEEP record): only its strays move */
+  /**
+   * `sweep`: the maker's cancel continued the order in place under the same script (a verified
+   * SWEEP record): only its strays move
+   */
   action: NonNullable<DecodedInput['order']>['action'] | 'sweep';
   makerIsWallet: boolean;
   /** custody + stray tokens of the order's own token swept by the tx (base units) */
   tokensReleased: bigint;
   /** strays of the order's own token (base units) */
   strays: bigint;
-  /** strays of OTHER tokens owned by the order's covenant id and swept by this tx (a pair order's B; foreign strays) */
+  /**
+   * strays of OTHER tokens owned by the order's covenant id and swept by this tx (a pair order's B;
+   * foreign strays)
+   */
   otherStrays: { ref: TokenRef; amount: bigint; utxos?: number; foreign?: boolean }[];
   /**
-   * a pair order: per token (A then B) what this spend moves of the order's own tokens: `released` (every input of that token owned by the order's
-   * id), `custody` (what its state holds of that token) and `strays` (the excess, swept back); null for every other kind
+   * a pair order: per token (A then B) what this spend moves of the order's own tokens: `released`
+   * (every input of that token owned by the order's id), `custody` (what its state holds of that
+   * token) and `strays` (the excess, swept back); null for every other kind
    */
   pairTokens: { role: 'base' | 'quote'; ref: TokenRef; released: bigint; custody: bigint; strays: bigint }[] | null;
-  /** a sweep: the output the order continues at, the stray token UTXOs it returns and the KAS they carry */
+  /**
+   * a sweep: the output the order continues at, the stray token UTXOs it returns and the KAS they
+   * carry
+   */
   sweptTo?: { output: number; utxos: number; kas: bigint };
   /** the order is armed / trailed by this tx: its trigger evidence (null for every other spend) */
   trigger: DecodedTrigger | null;
-  /** the order is under a RETIRED template of the cancel-only table: its hash (the only spend of it this frame signs is its maker's cancel) */
+  /**
+   * the order is under a RETIRED template of the cancel-only table: its hash (the only spend of it
+   * this frame signs is its maker's cancel)
+   */
   retired?: Hex;
 }
 
 /**
- * A conditional order or stop entry armed (or trailed) by this tx, and its trigger evidence (touch, protocol v2.6): a plain resting KobAsk / KobBid
- * of the same token filled in THIS transaction. Everything is re-derived from `built.tx` / `built.plans`: the order's state and entry arguments
- * (`ev`, `tk`) from its plan, the evidence's state and fill size from the plan of input `ev`, DAA scores from the spent UTXOs, the time from the
- * lock time (the covenant proves `tx.daa >= exposedSince + minRestDaa` by CLTV against it). Prices are state prices (sompi per whole token of
- * `scale` base units, as `stopPrice`).
+ * A conditional order or stop entry armed or trailed by this tx, and its trigger evidence (touch).
+ * The evidence is a plain resting KobAsk or KobBid of the same token that is filled in this
+ * transaction.
+ *
+ * Everything is re-derived from `built.tx` and `built.plans`. The order's state and entry arguments
+ * (`ev`, `tk`) come from its plan. The evidence's state and fill size come from the plan of input
+ * `ev`. DAA scores come from the spent UTXOs. The time comes from the lock time, because the
+ * covenant proves `tx.daa >= exposedSince + minRestDaa` by CLTV against it. Prices are state
+ * prices, sompi per whole token of `scale` base units, as `stopPrice`.
  */
 export interface DecodedTrigger {
   /** the order input armed / trailed */
   input: number;
   covenantId: Hex | null;
   kind: OrderKind;
-  /** `fill`: arms inside a fill of its own stop leg / stop entry; `update`: arms (or trails) without a fill of the order */
+  /**
+   * `fill`: arms inside a fill of its own stop leg / stop entry; `update`: arms (or trails) without
+   * a fill of the order
+   */
   path: 'fill' | 'update';
   /** what the order needs (from its state) */
   rule: {
-    /** the evidence side(s) the order accepts on this path: `ask` = a resting ask filled, `bid` = a resting bid filled */
+    /**
+     * the evidence side(s) the order accepts on this path: `ask` = a resting ask filled, `bid` = a
+     * resting bid filled
+     */
     sides: ('ask' | 'bid')[];
     stop: bigint;
     /** the smallest evidence fill, base units of a plain order of the same scale */
@@ -248,9 +324,11 @@ export interface DecodedTrigger {
   effect: 'arm' | 'trail';
   trail: { steps: bigint; newStop: bigint } | null;
   /**
-   * a pair stop (`KobCondPair`, a `KobIfdPair` stop entry): its evidence mode (`kasBooks`: `evidence` is the KAS-book order of A, `evidenceB` the
-   * one of B, `price` their KAS quotes; `pair`: `evidence` is a resting `KobPair` of the pair, its `price` B per whole A), the least B evidence
-   * and the side of each leg the rule wants; null for the KAS kinds. Prices of the evidence are never recorded as a pair price.
+   * a pair stop (`KobCondPair`, a `KobIfdPair` stop entry): its evidence mode (`kasBooks`:
+   * `evidence` is the KAS-book order of A, `evidenceB` the one of B, `price` their KAS quotes;
+   * `pair`: `evidence` is a resting `KobPair` of the pair, its `price` B per whole A), the least B
+   * evidence and the side of each leg the rule wants; null for the KAS kinds. Prices of the
+   * evidence are never recorded as a pair price.
    */
   pair: null | {
     mode: 'kasBooks' | 'pair' | 'invalid';
@@ -265,6 +343,7 @@ export interface DecodedTrigger {
   ok: boolean;
 }
 
+/** Token movement of one token in the transaction. */
 export interface TokenNet {
   ref: TokenRef;
   /** the wallet's own token UTXOs spent */
@@ -280,6 +359,7 @@ export interface TokenNet {
   human: { fromWallet: string; released: string; toMaker: string; escrowed: string; toOthers: string; walletDelta: string };
 }
 
+/** What the transaction does to the wallet's balances. */
 export interface NetEffects {
   kas: {
     fromWallet: bigint;
@@ -295,9 +375,13 @@ export interface NetEffects {
   tokens: TokenNet[];
 }
 
-/** `sweep`: the maker's sweep of an order's strays in place (the order continues unchanged, only strays move). */
+/**
+ * `sweep` is the maker's sweep of an order's strays in place. The order continues unchanged and
+ * only strays move.
+ */
 export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'other';
 
+/** The decoded transaction: what it spends, what it creates and every finding. */
 export interface SigningSummary {
   txid: Hex;
   kind: SigningKind;
@@ -312,7 +396,10 @@ export interface SigningSummary {
   triggers: DecodedTrigger[];
   payload: { records: PayloadRecord[]; legacy: boolean; note: string | null } | null;
   net: NetEffects;
-  /** `minimum` = the fee the builder targeted in `mode` (the node's relay floor in `relay`); `mass` as the builder measured it (display only) */
+  /**
+   * `minimum` = the fee the builder targeted in `mode` (the node's relay floor in `relay`); `mass`
+   * as the builder measured it (display only)
+   */
   fee: { sompi: bigint; declared: bigint; minimum: bigint; formatted: string; mode: FeeMode; mass: { fee: number; priority: number; storage: number } };
   blocking: SigningIssue[];
   warnings: SigningIssue[];
@@ -326,25 +413,41 @@ export interface SigningSummary {
 /** What the planner claims; compared against the derived facts, any disagreement is blocking. */
 export interface ExpectedSigning {
   orders?: OrderState[];
-  /** KAS moved into covenants (order outputs + custody token outputs), see `decodeSigning` for the accepted definitions */
+  /**
+   * KAS moved into covenants (order outputs + custody token outputs), see `decodeSigning` for the
+   * accepted definitions
+   */
   kasLocked?: bigint;
-  /** base units of the orders' token moved into custodies (a pair order: of its base token A; B is `quoteEscrowed`) */
+  /**
+   * base units of the orders' token moved into custodies (a pair order: of its base token A; B is
+   * `quoteEscrowed`)
+   */
   tokensEscrowed?: bigint;
   /** covenant ids of orders spent by maker cancels / refunds */
   cancelIds?: Hex[];
   /** covenant ids of orders swept in place (verified SWEEP records): they are not cancelled */
   sweepIds?: Hex[];
-  /** outpoints (`txid:index`) the tx must NOT spend: the custody of a swept order (a sweep moves strays only) */
+  /**
+   * outpoints (`txid:index`) the tx must NOT spend: the custody of a swept order (a sweep moves
+   * strays only)
+   */
   untouched?: string[];
   maxFee?: bigint;
-  /** pair orders: B (quote token) base units moved into the new orders' custodies (a bid's escrow, a sell-first entry's prefund) */
+  /**
+   * pair orders: B (quote token) base units moved into the new orders' custodies (a bid's escrow, a
+   * sell-first entry's prefund)
+   */
   quoteEscrowed?: bigint;
-  /** token transfers to other keys the user asked for (send): anything else leaving to another key is blocking */
+  /**
+   * token transfers to other keys the user asked for (send): anything else leaving to another key
+   * is blocking
+   */
   transfers?: { pubkey: Hex; amount: bigint; covenantId?: Hex }[];
   /** plain KAS payments to other keys the user asked for (sompi) */
   payments?: { pubkey: Hex; amount: bigint }[];
 }
 
+/** The inputs of `decodeSigning`: the built tx, what the wallet knows and the planner's claims. */
 export interface DecodeInput {
   kob: KobWasm;
   built: BuiltTx;
@@ -353,23 +456,31 @@ export interface DecodeInput {
   registry?: TokenRegistry | null;
   expected?: ExpectedSigning;
   /**
-   * What the NODE says about the outpoints this tx spends (`confirmInputsOnNode`, keyed `txid:index`). Every input's amount, script and covenant
-   * id must equal it: the wallet's signature commits only to the inputs it signs, so an indexer-fed amount on a covenant / token input would
-   * otherwise make the fee shown here fiction. Without it (`undefined`) the tx is decoded but flagged `inputs-unverified`.
+   * What the NODE says about the outpoints this tx spends (`confirmInputsOnNode`, keyed
+   * `txid:index`). Every input's amount, script and covenant id must equal it: the wallet's
+   * signature commits only to the inputs it signs, so an indexer-fed amount on a covenant / token
+   * input would otherwise make the fee shown here fiction. Without it (`undefined`) the tx is
+   * decoded but flagged `inputs-unverified`.
    */
   nodeInputs?: NodeInputFacts | null;
   /**
-   * The wallet's fee policy. A dynamic fee at a busy moment is several times the relay floor, so with a DYNAMIC policy:
-   *   * the builder's declared `fee.feeRate` must be <= max(maxRate, floor) (the floor when the policy is off): a higher one is blocking (`fee-rate-excessive`);
-   *   * the absolute ceiling is raised to max(FEE_ABSOLUTE_MAX, maxFeeSompi) (a big batch at a high rate legitimately costs that);
-   *   * the "a small fee is never excessive" bound (1% of the KAS moved) is raised only to what THIS transaction should cost at its own declared rate
-   *     (minFee x FEE_WARN_FACTOR + FEE_WARN_SLACK), never to the whole cap: a fee far above that on a tiny move still blocks.
-   * Absent = the fixed bounds and no rate check.
+   * The wallet's fee policy. A dynamic fee at a busy moment is several times the relay floor. With
+   * a dynamic policy these hold.
+   *
+   * - The builder's declared `fee.feeRate` must be at most max(maxRate, floor), where the floor
+   *   applies when the policy is off. A higher one is blocking (`fee-rate-excessive`).
+   * - The absolute ceiling is raised to max(FEE_ABSOLUTE_MAX, maxFeeSompi), because a big batch at
+   *   a high rate legitimately costs that.
+   * - The bound that a small fee is never excessive (1% of the KAS moved) is raised only to what
+   *   this transaction should cost at its own declared rate (minFee x FEE_WARN_FACTOR +
+   *   FEE_WARN_SLACK), never to the whole cap. A fee far above that on a tiny move still blocks.
+   *
+   * Absent means the fixed bounds and no rate check.
    */
   feePolicy?: Pick<FeePolicy, 'dynamic' | 'floor' | 'maxRate' | 'maxFeeSompi'>;
 }
 
-// ------------------------------------------------------------------------------------------------ script helpers
+// ---------------------------------------------------------------------------------- script helpers
 
 const P2PK_RE = /^0000 ?20([0-9a-f]{64})ac$/;
 const P2SH_RE = /^0000aa20([0-9a-f]{64})87$/;
@@ -395,7 +506,10 @@ const addLocked = (a: LockedKas, b: LockedKas): LockedKas => ({
 const min = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 const max0 = (a: bigint): bigint => (a < 0n ? 0n : a);
 
-/** Splits the KAS of an order UTXO: refund tip and keeper tip (always inside the order), reserves, and carrier (asks) or trading escrow (bids). */
+/**
+ * Splits the KAS of an order UTXO: refund tip and keeper tip (always inside the order), reserves,
+ * and carrier (asks) or trading escrow (bids).
+ */
 function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
   const refundTips = min(d.refundTip, value);
   let rest = value - refundTips;
@@ -403,7 +517,8 @@ function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
   rest -= keeperTips;
   const reserves = min(d.reservedKas, rest);
   rest -= reserves;
-  // a pair order trades tokens only: its KAS is carriers (deliveries, exits) and its prefunded tip (the reserves), never a trading escrow
+  // a pair order trades tokens only: its KAS is carriers (deliveries, exits) and its prefunded tip
+  // (the reserves), never a trading escrow
   return d.side === 'sell' || d.pair
     ? { total: value, carriers: rest, escrow: 0n, refundTips, keeperTips, reserves }
     : { total: value, carriers: 0n, escrow: rest, refundTips, keeperTips, reserves };
@@ -415,8 +530,9 @@ function planSigner(p: SigPlan): Hex | null {
     case 'entry': return p.args.find((a) => a.kind === 'sig')?.value ?? null;
     case 'tokenLeader':
     case 'tokenDelegator': return p.witness.kind === 'p2pk' ? p.witness.value : null;
-    // a KRON token input carries no signature (address presence is a P2PK input of the owner elsewhere), except an id_type 0 holder's
-    // (a token-level signature in its signature column: KForge)
+    // a KRON token input carries no signature (address presence is a P2PK input of the owner
+    // elsewhere), except an id_type 0 holder's (a token-level signature in its signature column:
+    // KForge)
     case 'kronToken': return p.signer ?? null;
     // the maker's cancel of an order under a retired template: the maker's SIGHASH_ALL signature
     case 'retiredCancel': return p.maker;
@@ -432,8 +548,11 @@ function actionOfRole(role: string, entry: string): NonNullable<DecodedInput['or
   return 'other';
 }
 
-// ------------------------------------------------------------------------------------------------ decodeSigning
+// ----------------------------------------------------------------------------------- decodeSigning
 
+/**
+ * Decodes a built transaction into what a signature authorises, with every finding. Pure, no I/O.
+ */
 export function decodeSigning(input: DecodeInput): SigningSummary {
   const { kob, built, registry = null, expected } = input;
   const maker = input.maker.toLowerCase();
@@ -453,7 +572,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   if (tx.version !== 1) add('tx-version', `transaction version ${tx.version}: KOB transactions are version 1`);
 
   const signBy = new Map(built.sign.map((s) => [s.inputIndex, s]));
-  /** order states of the order inputs, decoded from their plans (their scripts are checked against the spent UTXOs) */
+  /**
+   * order states of the order inputs, decoded from their plans (their scripts are checked against
+   * the spent UTXOs)
+   */
   const orderStates = new Map<number, OrderState>();
 
   // ---------------------------------------------------------------- inputs
@@ -501,8 +623,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return { ...base, type: 'unknown', ownedBy: 'covenant', order: null };
     }
     if (plan.kind === 'retiredCancel') {
-      // an order under a RETIRED template (cancel-only table): its state decodes as today's kind of the same name, its script is the retired
-      // template's (kob-wasm derives it from the cancel-only table: an unknown hash derives nothing and the input does not match)
+      // an order under a RETIRED template (cancel-only table): its state decodes as today's kind of
+      // the same name, its script is the retired template's (kob-wasm derives it from the
+      // cancel-only table: an unknown hash derives nothing and the input does not match)
       let state: ReturnType<KobWasm['decodeState']> | null = null;
       let derivedSpk: string | null = null;
       try {
@@ -550,7 +673,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     };
   }
 
-  // signature requests must be for the wallet key, SIGHASH_ALL, on inputs whose plan wants exactly that signature
+  // signature requests must be for the wallet key, SIGHASH_ALL, on inputs whose plan wants exactly
+  // that signature
   for (const s of built.sign) {
     if (s.inputIndex < 0 || s.inputIndex >= tx.inputs.length) {
       add('sign-unexpected', `a signature is requested for input ${s.inputIndex}, which does not exist`, { input: s.inputIndex });
@@ -596,8 +720,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       add('payload-invalid', `the payload does not decode: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  // in-place amends (AMEND records): the order's covenant id continues with a new state, proven against the state the order input spends (its plan,
-  // whose script is checked against the spent UTXO above). A continuation without a verified record is an unknown covenant output (blocking).
+  // in-place amends (AMEND records): the order's covenant id continues with a new state, proven
+  // against the state the order input spends (its plan, whose script is checked against the spent
+  // UTXO above). A continuation without a verified record is an unknown covenant output (blocking).
   let amends: RecoveredAmend[] = [];
   if (payload?.records.some((r) => r.type === 'amend')) {
     try {
@@ -607,8 +732,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
   const amendByOutput = new Map(amends.map((a) => [a.output, a]));
-  // sweeps in place (SWEEP records): the maker's cancel continues the order under the SAME script, re-checked against the order input's plan
-  // (`verify_sweep`). A continuation without a verified record stays an unknown covenant output (blocking); a record that does not verify blocks.
+  // sweeps in place (SWEEP records): the maker's cancel continues the order under the SAME script,
+  // re-checked against the order input's plan (`verify_sweep`). A continuation without a verified
+  // record stays an unknown covenant output (blocking); a record that does not verify blocks.
   let sweeps: RecoveredSweep[] = [];
   if (payload?.records.some((r) => r.type === 'sweep')) {
     const r = recoverSweeps(kob, tx, built.plans);
@@ -618,7 +744,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   const sweepByOutput = new Map(sweeps.map((s) => [s.output, s]));
   const sweepByInput = new Map(sweeps.map((s) => [s.input, s]));
-  // only covenants proven by a verified placement record can be custody owners: `built.covenants` is builder-declared and never trusted here
+  // only covenants proven by a verified placement record can be custody owners: `built.covenants`
+  // is builder-declared and never trusted here
   const newCovenantIds = new Set<Hex>(recovered.map((r) => r.covenantId));
   const recoveredByOutput = new Map(recovered.map((r) => [r.output, r]));
   for (const c of built.covenants) {
@@ -628,8 +755,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
 
   // ---------------------------------------------------------------- outputs
-  // token outputs: the leader plan of each token lists the next states in output order; outputs bound to the token's covenant id map onto them
-  // (KRON has no leader: every token input carries the same next states, so the first one of each covenant id stands for the group)
+  // token outputs: the leader plan of each token lists the next states in output order; outputs
+  // bound to the token's covenant id map onto them (KRON has no leader: every token input carries
+  // the same next states, so the first one of each covenant id stands for the group)
   const tokenOutputs = new Map<number, { state: TokenState; program: TokenProgram; covenantId: Hex }>();
   const kronSeen = new Set<Hex>();
   built.plans.forEach((p, i) => {
@@ -651,7 +779,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
 
   const expectedTransfers = [...(expected?.transfers ?? [])];
   const expectedPayments = [...(expected?.payments ?? [])];
-  // the token an order pins (covenant id, template hash, prefix / suffix, extension commitment) must be exactly the registered token
+  // the token an order pins (covenant id, template hash, prefix / suffix, extension commitment)
+  // must be exactly the registered token
   const warnedTokens = new Set<Hex>();
   function warnToken(covenantId: Hex, output?: number) {
     if (warnedTokens.has(covenantId)) return;
@@ -675,11 +804,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (bad.length) add('order-token-mismatch', `output ${j}: the order's token pin (${bad.join(', ')}) differs from the registered ${displayName(tk)}: it would not trade that token`, { output: j, params: { covenantId: tk.covenantId } });
   }
   /**
-   * A pair order pins BOTH its tokens (covenant id, program template, prefix / suffix, family code, the extension commitment of new outputs it names)
-   * and holds custodies of one or both: each pin decides what the maker sells or receives. Per token: a family code its program contradicts, or a
-   * KRON token with an extension commitment, is blocking (`pair-family-mismatch`: the order could never settle); a token outside the registry is a
-   * warning; a pin (or a custody's extension commitment) that differs from the token's registry entry is blocking (`pair-token-mismatch`). The same
-   * token as A and B is blocking (`pair-terms-invalid`).
+   * A pair order pins both its tokens (covenant id, program template, prefix and suffix, family
+   * code, and the extension commitment of the new outputs it names) and holds custodies of one or
+   * both. Each pin decides what the maker sells or receives. Per token, these are blocking.
+   *
+   * - A family code that its program contradicts, or a KRON token with an extension commitment
+   *   (`pair-family-mismatch`: the order could never settle).
+   * - A pin, or a custody's extension commitment, that differs from the token's registry entry
+   *   (`pair-token-mismatch`).
+   * - The same token as A and B (`pair-terms-invalid`).
+   *
+   * A token outside the registry is a warning.
    */
   function checkPairTokens(j: number, os: OrderState, rec: Pick<RecoveredOrder, 'custody' | 'prefund'>) {
     const pf = pairFactsOf(os)!;
@@ -718,7 +853,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       }
     }
   }
-  /** A NEW pair order (a placement): kob-wasm's builder rules for a new order (prices, scales, numeric gate, minimum fill) and its least KAS. */
+  /**
+   * A NEW pair order (a placement): kob-wasm's builder rules for a new order (prices, scales,
+   * numeric gate, minimum fill) and its least KAS.
+   */
   function checkNewPairOrder(j: number, os: OrderState, value: bigint) {
     if (!isPairKind(os.kind)) return;
     try {
@@ -731,10 +869,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
 
   /**
-   * A NEW (or amended in place) KAS-quoted order: kob-wasm's rules for a new order (`check_new_order`: tips, slippage band, trailing terms, trigger
-   * threshold and exposure, carriers, and an if-done exit that is the maker's order of the same token at the entry's scale). The builders run the
-   * same rules; the decoder re-checks them so that what is shown never rests on the transaction having come from those builders (an exit that pays
-   * another key, for one, is never signed).
+   * A new, or amended in place, KAS-quoted order is checked against kob-wasm's rules for a new
+   * order (`check_new_order`). They cover tips, the slippage band, trailing terms, the trigger
+   * threshold and exposure, carriers, and an if-done exit that is the maker's order of the same
+   * token at the entry's scale. The builders run the same rules. The decoder re-checks them so that
+   * what is shown never rests on the transaction having come from those builders. An exit that pays
+   * another key, for one, is never signed.
    */
   function checkNewKasOrder(j: number, os: OrderState) {
     if (isPairKind(os.kind)) return;
@@ -767,7 +907,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       checkNewKasOrder(j, os);
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
-      // the custody parts of the record follow the state's custodies (a sell-first pair entry: A, then its B prefund), each of its own token
+      // the custody parts of the record follow the state's custodies (a sell-first pair entry: A,
+      // then its B prefund), each of its own token
       const parts = custodiesOf(os, kob);
       const custodies: DecodedOrder['custodies'] = [];
       [rec.custody, rec.prefund ?? null].forEach((c, k) => {
@@ -804,7 +945,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
     const sw = sweepByOutput.get(j);
     if (sw) {
-      // verified above: the same script as the order input's, bound to its covenant id from that input (the same order, unchanged)
+      // verified above: the same script as the order input's, bound to its covenant id from that
+      // input (the same order, unchanged)
       const os = sw.order;
       if (os.state.maker !== maker) add('order-not-maker', `output ${j}: the swept order names ${shortId(os.state.maker)} as maker, not the connected wallet key`, { output: j, params: { maker: os.state.maker } });
       const description = describeOrder(os, kob);
@@ -861,13 +1003,20 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     return { ...blank, kind: out.covenant ? 'unknown-covenant' : 'unknown', flagged: true };
   }
 
-  // ---------------------------------------------------------------- triggers (touch evidence of armed / trailed orders)
+  // ------------------------------------------- triggers (touch evidence of armed / trailed orders)
   /**
-   * The trigger of order input `i` spent through `plan`, or null when this spend arms nothing. Mirrors the covenants (contracts/orders KobCondAsk /
-   * KobCondBid / KobIfdBid / KobIfdAsk `settle` / `fill` / `update` and their `touch*` functions), whose entry signatures are
-   *   KobCondAsk.settle(nb, tokenIn, tokOut, leg, ev, tk, t)          KobCondBid.settle(nb, tokenTplIn, leg, ev, t)
-   *   KobIfdBid.fill(nb, tokenTplIn, exitOut, cPre, cSuf, ev, t)       KobIfdAsk.settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t)
-   *   update(ev, tk) (KobIfdBid: update(ev)); tk >= 0 = ask evidence with its custody at tk, otherwise bid evidence.
+   * The trigger of order input `i` spent through `plan`, or null when this spend arms nothing.
+   *
+   * It mirrors the covenants (contracts/orders KobCondAsk, KobCondBid, KobIfdBid and KobIfdAsk
+   * `settle`, `fill` and `update`, and their `touch*` functions), whose entry signatures are
+   *
+   *   KobCondAsk.settle(nb, tokenIn, tokOut, leg, ev, tk, t)
+   *   KobCondBid.settle(nb, tokenTplIn, leg, ev, t)
+   *   KobIfdBid.fill(nb, tokenTplIn, exitOut, cPre, cSuf, ev, t)
+   *   KobIfdAsk.settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t)
+   *
+   * and `update(ev, tk)`, or `update(ev)` for KobIfdBid. `tk >= 0` means ask evidence with its
+   * custody at `tk`, otherwise bid evidence.
    */
   function triggerOf(i: number, os: OrderState, plan: Extract<SigPlan, { kind: 'entry' }>, covenantId: Hex | null): DecodedTrigger | null {
     const s = os.state as unknown as Record<string, string>;
@@ -898,8 +1047,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       else if (base === 'KobIfdAsk' && plan.entry === 'settle' && big(s.entryStop) > 0n) [ev, tk, stop] = [int(6), int(7), big(s.entryStop)];
       else return null;
     }
-    // a sell stop / sell-stop entry arms on a resting ASK at or below its stop, a buy stop / buy-stop entry on a resting BID at or above it; an
-    // update of a stop ORDER also trails on the other side (KobCondAsk up on resting bids, KobCondBid down on resting asks)
+    // a sell stop / sell-stop entry arms on a resting ASK at or below its stop, a buy stop /
+    // buy-stop entry on a resting BID at or above it; an update of a stop ORDER also trails on the
+    // other side (KobCondAsk up on resting bids, KobCondBid down on resting asks)
     const armSide: 'ask' | 'bid' = base === 'KobCondAsk' || base === 'KobIfdAsk' ? 'ask' : 'bid';
     const sides: ('ask' | 'bid')[] = path === 'update' && (base === 'KobCondAsk' || base === 'KobCondBid') ? ['ask', 'bid'] : [armSide];
     const minTouch = big(s.minTouch);
@@ -907,18 +1057,21 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const lock = big(tx.lockTime);
     const nIn = BigInt(tx.inputs.length);
     const evIdx = ev !== null && ev >= 0n && ev < nIn && Number(ev) !== i ? Number(ev) : -1;
-    // the arguments name the side the covenant authenticates at ev: an ask when tk >= 0 (its custody at tk), a bid otherwise
+    // the arguments name the side the covenant authenticates at ev: an ask when tk >= 0 (its
+    // custody at tk), a bid otherwise
     const argSide: 'ask' | 'bid' = tk !== null && tk >= 0n ? 'ask' : 'bid';
     const fam = familyOfKind(os.kind);
     const eState = evIdx >= 0 ? orderStates.get(evIdx) : undefined;
     const ePlan = evIdx >= 0 ? built.plans[evIdx] : undefined;
-    // plain: a KobAsk / KobBid of the order's family (KobCross, conditional and if-done fills are never evidence)
+    // plain: a KobAsk / KobBid of the order's family (KobCross, conditional and if-done fills are
+    // never evidence)
     const plain = !!eState && (eState.kind === kindFor('KobAsk', fam) || eState.kind === kindFor('KobBid', fam));
     const es = plain ? (eState!.state as unknown as Record<string, string>) : null;
     const side: 'ask' | 'bid' | null = es ? (baseKind(eState!.kind) === 'KobAsk' ? 'ask' : 'bid') : null;
     // the same token AND the same scale (prices comparable)
     const sameToken = !!es && es.tokenCovId === s.tokenCovId && big(es.scale) === big(s.scale);
-    // the evidence is FILLED here: its own fill entry (KobAsk.settle / KobBid.fill) with n > 0 (its script enforces the fill for that n)
+    // the evidence is FILLED here: its own fill entry (KobAsk.settle / KobBid.fill) with n > 0 (its
+    // script enforces the fill for that n)
     const amount = es && ePlan?.kind === 'entry' && ePlan.entry === (side === 'ask' ? 'settle' : 'fill') ? fillArg(ePlan.args[0]) : null;
     const filled = amount !== null && amount > 0n;
     const evInput = evIdx >= 0 ? tx.inputs[evIdx]! : null;
@@ -945,7 +1098,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     let effect: 'arm' | 'trail' = 'arm';
     let trail: DecodedTrigger['trail'] = null;
     let priceOk = false;
-    // the side must be one the order accepts on this path AND the one its arguments name (the template the covenant reads)
+    // the side must be one the order accepts on this path AND the one its arguments name (the
+    // template the covenant reads)
     const sideOk = side !== null && side === argSide && sides.includes(side);
     if (sideOk && price !== null) {
       if (side === armSide) {
@@ -968,14 +1122,22 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     };
   }
   /**
-   * The trigger of a pair stop (`KobCondPair` stop leg, `KobIfdPair` stop entry) spent through `plan`, or null when this spend arms nothing.
-   * Entries (contracts/orders KobCondPair / KobIfdPair headers):
+   * The trigger of a pair stop (`KobCondPair` stop leg, `KobIfdPair` stop entry) spent through
+   * `plan`, or null when this spend arms nothing.
+   *
+   * The entries are, from the headers in contracts/orders,
+   *
    *   KobCondPair.settle(nb, custIn, tTplIn, t, sOut, tOut, leg, evA, evB, tk, evMode, upd, k)
-   *   KobIfdPair.fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, cPre, cSuf, evA, evB, tk, evMode, t, aOut, bOut, xc, upd)
-   * nb > 0 with upd 0 on an unarmed stop (a conditional's leg 1) arms in the fill; nb 0 with upd 1 is the update (a conditional's k = 0 arms, k >= 1
-   * trails by k steps). Evidence mode 0 (evMode 0): plain resting KAS-book orders of A (input evA) and of B (input evB) filled here, the ask leg's
-   * custody at tk; mode 1: a resting `KobPair` of this pair (A, B, both scales) filled here (input evA), its custody at tk. The rule (sides, least
-   * evidence, rest) is kob-wasm `pairTriggerRule`; the price test kob-wasm `pairArms` / `condPairTrailCheck`.
+   *   KobIfdPair.fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, cPre, cSuf, evA, evB, tk,
+   *                   evMode, t, aOut, bOut, xc, upd)
+   *
+   * `nb > 0` with `upd 0` on an unarmed stop (a conditional's leg 1) arms in the fill. `nb 0` with
+   * `upd 1` is the update, where a conditional's `k = 0` arms and `k >= 1` trails by k steps.
+   * Evidence mode 0 is plain resting KAS-book orders of A (input evA) and of B (input evB) filled
+   * here, with the ask leg's custody at tk. Mode 1 is a resting `KobPair` of this pair (A, B, both
+   * scales) filled here (input evA), with its custody at tk. The rule (sides, least evidence, rest)
+   * is kob-wasm `pairTriggerRule`, and the price test is kob-wasm `pairArms` and
+   * `condPairTrailCheck`.
    */
   function pairTriggerOf(i: number, os: OrderState, plan: Extract<SigPlan, { kind: 'entry' }>, covenantId: Hex | null): DecodedTrigger | null {
     const cond = os.kind === 'KobCondPair';
@@ -1023,7 +1185,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const minRestDaa = big(s.minRestDaa);
     const minTouchB = rule?.minTouchB != null ? big(rule.minTouchB) : null;
 
-    /** one evidence read: a plain KAS-book order of `token` (mode 0) or a resting KobPair of this pair (mode 1) at input ev */
+    /**
+     * one evidence read: a plain KAS-book order of `token` (mode 0) or a resting KobPair of this
+     * pair (mode 1) at input ev
+     */
     const read = (ev: number, token: PairTokenFacts | null): { e: DecodedTrigger['evidence']; plain: boolean; same: boolean; filled: boolean; custody: boolean; flat: boolean } => {
       const eState = ev >= 0 ? orderStates.get(ev) : undefined;
       const ePlan = ev >= 0 ? built.plans[ev] : undefined;
@@ -1053,10 +1218,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
           custodyToken = ef.side === 'sell' ? ef.a.covId : ef.b.covId;
         }
       }
-      // FILLED here: its own fill entry (KobAsk.settle, KobBid.fill, KobPair.settle) with n > 0 (its script enforces the fill for that n)
+      // FILLED here: its own fill entry (KobAsk.settle, KobBid.fill, KobPair.settle) with n > 0
+      // (its script enforces the fill for that n)
       const fillEntry = side === 'bid' && token ? 'fill' : 'settle';
       const amount = plain && ePlan?.kind === 'entry' && ePlan.entry === fillEntry ? fillArg(ePlan.args[0]) : null;
-      // its custody (an ask leg, a pair order): input tk, a token input of that token owned by the evidence's covenant id
+      // its custody (an ask leg, a pair order): input tk, a token input of that token owned by the
+      // evidence's covenant id
       let custody = true;
       let custodyInput: number | null = null;
       if (custodyToken !== null) {
@@ -1113,7 +1280,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       pair: { mode, evidenceB: B?.e ?? null, minTouchB, want: { a: wantA, b: wantB } },
     };
   }
-  /** Findings of a pair trigger: invalid evidence or an unmet rule is blocking; a valid one is shown (info). */
+  /**
+   * Findings of a pair trigger: invalid evidence or an unmet rule is blocking; a valid one is shown
+   * (info).
+   */
   function reportPairTrigger(t: DecodedTrigger, where: string, input: number) {
     const x = t.pair!;
     const params = { evidence: t.evidence.input, mode: x.mode };
@@ -1211,8 +1381,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const sum = (xs: DecodedInput[]): bigint => xs.reduce((a, t) => a + t.token!.amount, 0n);
       const sw = sweepByInput.get(d.index);
       const swept = !!sw && o.action === 'cancel';
-      // the order's own token(s): its token (a pair order: A and B, each with its custody per the state) and, apart, FOREIGN strays of any other
-      // token owned by the same id (matcher.md 1.2)
+      // the order's own token(s): its token (a pair order: A and B, each with its custody per the
+      // state) and, apart, FOREIGN strays of any other token owned by the same id (matcher.md 1.2)
       const pair = o.description?.pair ?? null;
       const ownToken = o.description?.tokenCovId ?? null;
       const quoteToken = pair && pair.quote.covId !== pair.base.covId ? pair.quote.covId : null;
@@ -1233,7 +1403,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       for (const t of owned) {
         if (mine.includes(t)) continue;
         const k = t.token!.ref.covenantId;
-        // B of a pair order is one of its own tokens: only its EXCESS over the custody the state holds is a stray
+        // B of a pair order is one of its own tokens: only its EXCESS over the custody the state
+        // holds is a stray
         if (k === quoteToken) continue;
         const cur = others.get(k) ?? { ref: t.token!.ref, amount: 0n, utxos: 0, foreign: true };
         cur.amount += t.token!.amount;
@@ -1245,8 +1416,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         const n = owned.filter((t) => t.token!.ref.covenantId === quoteToken).length;
         others.set(quote.ref.covenantId, { ref: quote.ref, amount: quote.strays, utxos: swept ? n : Math.max(n - (quote.custody > 0n ? 1 : 0), 0), foreign: false });
       }
-      // a verified sweep: the maker's cancel continued the order under the same script; every token input owned by it is a stray (its custody,
-      // owned by the same id, must stay where it is: `expected.untouched`)
+      // a verified sweep: the maker's cancel continued the order under the same script; every token
+      // input owned by it is a stray (its custody, owned by the same id, must stay where it is:
+      // `expected.untouched`)
       if (swept) {
         return {
           ...(o.retired ? { retired: o.retired } : {}),
@@ -1273,7 +1445,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       });
     }
   }
-  // a sweep moves strays only: an outpoint the plan names as the swept order's custody must not be spent
+  // a sweep moves strays only: an outpoint the plan names as the swept order's custody must not be
+  // spent
   for (const u of expected?.untouched ?? []) {
     const i = tx.inputs.findIndex((x) => `${x.transactionId}:${x.index}` === u);
     if (i >= 0) add('sweep-custody-spent', `input ${i}: the transaction spends ${shortId(u.split(':')[0] ?? '')}:${u.split(':')[1] ?? ''}, the swept order's custody, which a sweep must leave in place`, { input: i });
@@ -1348,7 +1521,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     });
   }
 
-  // ---------------------------------------------------------------- expected (planner claims) vs derived
+  // ---------------------------------------------------------- expected (planner claims) vs derived
   if (expected) {
     if (expected.maxFee !== undefined && derivedFee > expected.maxFee) {
       add('expected-max-fee', `the fee ${formatKas(derivedFee)} KAS exceeds the ${formatKas(expected.maxFee)} KAS the plan allowed`, { params: { fee: derivedFee, max: expected.maxFee } });
@@ -1362,7 +1535,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         add('expected-kas-locked', `the plan says ${formatKas(expected.kasLocked)} KAS are locked but the transaction locks ${formatKas(locked.total)} KAS`, { params: { expected: expected.kasLocked, actual: locked.total } });
       }
     }
-    // with a pair order the custodies count by role: A (the orders' token) against `tokensEscrowed`, B against `quoteEscrowed`
+    // with a pair order the custodies count by role: A (the orders' token) against
+    // `tokensEscrowed`, B against `quoteEscrowed`
     const byRole = orders.some((o) => o.description.pair);
     const roleSum = (role: 'base' | 'quote') => sum(orders.flatMap((o) => o.custodies.filter((c) => c.role === role).map((c) => c.amount)));
     if (expected.tokensEscrowed !== undefined) {
@@ -1379,7 +1553,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const e = [...expected.cancelIds].sort().join(',');
       if (a !== e) add('expected-cancel-ids', `the plan cancels ${expected.cancelIds.length} order(s) but the transaction spends ${actual.length}: ${actual.map(shortId).join(', ') || 'none'}`, { params: { expected: expected.cancelIds.length, actual: actual.length } });
     }
-    // a sweep plan names the orders it sweeps in place: the transaction must sweep exactly those (and a cancel plan none)
+    // a sweep plan names the orders it sweeps in place: the transaction must sweep exactly those
+    // (and a cancel plan none)
     const swept = spends.filter((s) => s.action === 'sweep').map((s) => s.covenantId ?? '');
     if (expected.sweepIds || (expected.cancelIds && swept.length)) {
       const want = expected.sweepIds ?? [];
@@ -1404,7 +1579,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (i >= 0) pool.splice(i, 1);
       else leftovers.push(e);
     }
-    // an if-done entry's committed exit is part of the plan's states but is created later by fills: it must match the entry's commitment
+    // an if-done entry's committed exit is part of the plan's states but is created later by fills:
+    // it must match the entry's commitment
     const exits = orders.map((o) => o.description.entry?.exit).filter((x): x is OrderDescription => !!x);
     const rest = leftovers.filter((e) => {
       const ix = exits.findIndex((x) => sameExit(x, describeOrder(e)));
@@ -1417,7 +1593,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     }
   }
   function sameExit(a: OrderDescription, b: OrderDescription): boolean {
-    // what a fill writes into the exit (amount, custody, repeat fields; a pair exit's tip prefund follows its amount) is not part of the commitment
+    // what a fill writes into the exit (amount, custody, repeat fields; a pair exit's tip prefund
+    // follows its amount) is not part of the commitment
     const strip = (d: OrderDescription) => ({
       ...d, amountLeft: null, tokenAmount: null, booked: null, entry: null,
       ...(d.pair ? { reservedKas: null, pair: { ...d.pair, custody: null, custodies: null, escrowA: null, escrowB: null, triggerRule: null } } : {}),
@@ -1434,7 +1611,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
   const kind: SigningKind = createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');
-  // an order under a retired template is only cancelled: no replacement, sweep or anything else in the same transaction
+  // an order under a retired template is only cancelled: no replacement, sweep or anything else in
+  // the same transaction
   if (spends.some((s) => s.retired) && kind !== 'cancel' && kind !== 'cancel-position') {
     add('retired-not-cancel', `an order under an older contract version is only cancelled by its maker, but this transaction is a ${kind}`);
   }
@@ -1455,7 +1633,9 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   };
 }
 
-/** What makes a token output more than plain ownership (a borrow guard or a minter flag), or null. */
+/**
+ * What makes a token output more than plain ownership (a borrow guard or a minter flag), or null.
+ */
 function unplainTokenState(st: TokenState): string | null {
   if ('is_minter' in st) return st.is_minter ? 'the minter flag' : null;
   if (st.borrow_scheme !== 0) return 'a borrow scheme';
@@ -1466,8 +1646,9 @@ function unplainTokenState(st: TokenState): string | null {
 const bigReplacer = (_k: string, v: unknown) => (typeof v === 'bigint' ? v.toString() : v);
 
 /**
- * The fill argument `nb` of a KobAsk / KobBid / conditional / if-done entry: an 8-byte little-endian push. Positive = base units filled; the top bit set
- * (a repeat merge's `-(i * 2^32 + n)`) or 0 (refund) is no fill. Null when the argument is not 8 bytes.
+ * The fill argument `nb` of a KobAsk, KobBid, conditional or if-done entry, an 8-byte little-endian
+ * push. A positive value is base units filled. A value with the top bit set (a repeat merge's `-(i
+ * * 2^32 + n)`) or 0 (refund) is no fill. Null when the argument is not 8 bytes.
  */
 export function fillArg(a: SigArg | undefined): bigint | null {
   if (!a || a.kind !== 'bytes' || !/^[0-9a-f]{16}$/i.test(a.value)) return null;
@@ -1477,9 +1658,11 @@ export function fillArg(a: SigArg | undefined): bigint | null {
 }
 
 /**
- * Trailing steps an update justifies (kob-protocol `CondAskState::trail_steps` / `CondBidState::trail_steps`): a sell stop ratchets UP on a resting
- * bid quoting `rp` (k = floor((rp - gap - stop) / step), capped below the take-profit), a buy stop DOWN on a resting ask (k = floor((stop - gap - rp)
- * / step), capped above the take-profit and 0). 0 = not justified.
+ * Trailing steps an update justifies (kob-protocol `CondAskState::trail_steps` and
+ * `CondBidState::trail_steps`). A sell stop ratchets up on a resting bid quoting `rp`, with k =
+ * floor((rp - gap - stop) / step), capped below the take-profit. A buy stop ratchets down on a
+ * resting ask, with k = floor((stop - gap - rp) / step), capped above the take-profit and 0. 0
+ * means not justified.
  */
 export function trailSteps(sellStop: boolean, s: Record<string, string>, rp: bigint): bigint {
   const step = big(s.trailStep);
@@ -1503,23 +1686,33 @@ export function trailSteps(sellStop: boolean, s: Record<string, string>, rp: big
   return k > 0n ? k : 0n;
 }
 
-// ------------------------------------------------------------------------------------------------ what the wallet popup will (not) show
+// ----------------------------------------------------------- what the wallet popup will (not) show
 
+/** A notice about what a wallet popup will not show. The UI translates it by `code`. */
 export interface WalletNotice { code: string; message: string; wallet?: WalletId; params?: Record<string, string | number> }
+/** One input and whether the wallet is asked to sign it. */
 export interface WalletInputHint { index: number; kind: 'p2pk' | 'covenant'; willSign: boolean; needsRedeemScript: boolean }
+/** What the wallet will be asked to sign and what its popup will not show. */
 export interface WalletDisclosure {
   inputs: WalletInputHint[];
   /** wallet signatures requested */
   signCount: number;
-  /** inputs the wallet is NOT asked to sign: covenant / token inputs authorised by their scripts, not by a key */
+  /**
+   * inputs the wallet is NOT asked to sign: covenant / token inputs authorised by their scripts,
+   * not by a key
+   */
   unsignedCovenantInputs: number;
-  /** things the popup does not (or wrongly) show, in user-facing English; the UI translates by `code` */
+  /**
+   * things the popup does not (or wrongly) show, in user-facing English; the UI translates by
+   * `code`
+   */
   notices: WalletNotice[];
 }
 
 /**
- * The blind-signing notice: which inputs the wallet is asked to sign and what its popup will NOT show. Behaviour observed on TN10
- * (tools/wallet-gate/RESULTS.md). `wallet` narrows the notices to one wallet; without it the generic ones are returned.
+ * The blind-signing notice, which says which inputs the wallet is asked to sign and what its popup
+ * will not show. It follows the behaviour observed in tools/wallet-gate/RESULTS.md. `wallet`
+ * narrows the notices to one wallet, and without it the generic ones are returned.
  */
 export function describeInputsForWallet(built: BuiltTx, wallet?: WalletId): WalletDisclosure {
   const signBy = new Map(built.sign.map((s) => [s.inputIndex, s]));
@@ -1534,7 +1727,8 @@ export function describeInputsForWallet(built: BuiltTx, wallet?: WalletId): Wall
     if (!wallet || !w || w === wallet) notices.push({ code, message, ...(w ? { wallet: w } : {}), ...(params ? { params } : {}) });
   };
   if (covenant.length) {
-    // the private-key signer decodes the transaction itself (src/signer): only the extension popups are blind
+    // the private-key signer decodes the transaction itself (src/signer): only the extension popups
+    // are blind
     if (wallet !== 'local-key') n('blind-tokens', 'Your wallet does not understand KOB orders or tokens. It will not show token amounts, order prices or where tokens go. Check this screen, not the popup.');
     n('kasware-spend', 'KasWare shows "Sign Transaction" with KAS amounts and a generic "Spend" output; it shows no token amount or owner change.', 'kasware');
     n('kaspire-covenant', 'Kaspire warns that an input is a covenant or non-standard script it cannot verify; that warning is expected here. Token semantics appear nowhere in it.', 'kaspire');
