@@ -1,25 +1,33 @@
-// KCC-23 readers over kob-wasm (crates/kob-protocol/src/kcc23.rs is the one implementation): a launch proof verified against its covenant id,
-// and a preparation payload decoded under KOB's token convention (docs/spec/token-metadata.md). A proof may come from anyone (the indexer, a
-// list, a file): `verifyLaunchProof` recomputes both transaction ids and the covenant id, so a supplier can withhold a declaration but never
-// forge one. Decoding alone binds nothing.
+// KCC-23 readers over kob-wasm. crates/kob-protocol/src/kcc23.rs is the one implementation.
+// They verify a launch proof against its covenant id, and decode a preparation payload under KOB's
+// token convention (docs/spec/token-metadata.md).
+// A proof may come from anyone (the indexer, a list, a file). `verifyLaunchProof` recomputes both
+// transaction ids and the covenant id, so a supplier can withhold a declaration but never forge
+// one. Decoding alone binds nothing.
 import type { Hex } from './types';
 import { KobError, type KobWasm } from './wasm';
 
-/** KOB's token fields of a declaration; a field absent, or present but not acceptable (named in `issues`), is null. */
+/**
+ * KOB's token fields of a declaration.
+ * A field that is absent, or present but not acceptable (named in `issues`), is null.
+ */
 export interface TokenDeclaration {
   name: string | null;
   symbol: string | null;
-  /** 0..=18; null = undeclared */
+  /** 0..=18; null = undeclared. */
   decimals: number | null;
   description: string | null;
-  /** `image` (or the older `logo`): an https:// or ipfs:// address */
+  /** `image` (or `logo`): an https:// or ipfs:// address. */
   image: string | null;
-  /** `image_hash`: 64 lowercase hex, the SHA-256 of the picture file's bytes (also read from an `image` of the form `sha256:<hex>`) */
+  /**
+   * `image_hash`: 64 lowercase hex, the SHA-256 of the picture file's bytes. Also read from an
+   * `image` of the form `sha256:<hex>`.
+   */
   imageHash: string | null;
   website: string | null;
   x: string | null;
   telegram: string | null;
-  /** fields present but not taken ("decimals: not an integer from 0 to 18") */
+  /** Fields present but not taken, for example "decimals: not an integer from 0 to 18". */
   issues: string[];
 }
 
@@ -28,7 +36,7 @@ export interface VerifiedDeclaration {
   covenantId: Hex;
   preparationTxid: Hex;
   genesisTxid: Hex;
-  /** the JSON text exactly as committed */
+  /** The JSON text exactly as committed. */
   json: string;
   token: TokenDeclaration;
 }
@@ -48,7 +56,10 @@ function raw(kob: KobWasm): RawKcc23 {
 
 const text = (v: unknown, max: number): string | null => (typeof v === 'string' && v.length > 0 && v.length <= max ? v : null);
 
-/** The token fields as kob-wasm returned them, re-checked for shape (a binding of another build must not put other types in the UI). */
+/**
+ * The token fields as kob-wasm returned them, re-checked for shape.
+ * A binding of another build must not put other types in the UI.
+ */
 function tokenOf(v: unknown): TokenDeclaration {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
   const d = o.decimals;
@@ -66,7 +77,10 @@ function tokenOf(v: unknown): TokenDeclaration {
   };
 }
 
-/** Verifies a launch proof (`kob-kcc23-proof/1`, the object or its JSON text). Throws KobError when it binds nothing to its covenant id. */
+/**
+ * Verifies a launch proof (`kob-kcc23-proof/1`, the object or its JSON text).
+ * Throws KobError when it binds nothing to its covenant id.
+ */
 export function verifyLaunchProof(kob: KobWasm, proof: unknown): VerifiedDeclaration {
   const r = raw(kob);
   let out: Record<string, unknown>;

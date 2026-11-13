@@ -1,19 +1,22 @@
-// The genesis check of a token no registry lists, over kob-wasm (crates/kob-protocol/src/genesis_open.rs is the one implementation).
+// The genesis check of a token no registry lists, over kob-wasm. The one implementation is
+// crates/kob-protocol/src/genesis_open.rs.
 //
-// A token's genesis group is the set of outputs of its first transaction that carry its covenant id. The covenant id commits to the authorising
-// outpoint and to the index, value and script public key of every one of them, so whoever supplied the bytes can make the check fail but never pass
-// a wrong group; each redeem script is hashed against its output and decoded as an instance of a pinned token program. This file only maps the
-// request and the answer; the rules (which program, the TokenSeed rebuild, contamination) live in Rust.
+// A token's genesis group is the set of outputs of its first transaction that carry its covenant
+// id. The covenant id commits to the authorising outpoint and to the index, value and script
+// public key of every one of them. So whoever supplied the bytes can make the check fail but never
+// pass a wrong group. Each redeem script is hashed against its output and decoded as an instance
+// of a pinned token program. This file only maps the request and the answer. The rules (which
+// program, the TokenSeed rebuild, contamination) live in Rust.
 import { KobError, type KobWasm } from './wasm';
 
 /** One output of the genesis group as a data source gave it. */
 export interface GenesisOutputData {
   index: number;
-  /** sompi, decimal string */
+  /** Sompi, decimal string. */
   value: string;
-  /** script public key bytes (hex) */
+  /** Script public key bytes (hex). */
   spk: string;
-  /** the revealed redeem script (hex); absent: not revealed */
+  /** The revealed redeem script (hex). Absent means not revealed. */
   redeemScript?: string | undefined;
 }
 
@@ -23,48 +26,66 @@ export interface GenesisRequest {
   genesisTxid: string;
   authorizingOutpoint: { txid: string; index: number };
   outputs: GenesisOutputData[];
-  /** a template hash a third party named for the token's program (breaks a tie between programs that verify, nothing more) */
+  /**
+   * A template hash a third party named for the token's program. It breaks a tie between programs
+   * that verify and does nothing more.
+   */
   programHint?: string | undefined;
-  /** x-only keys the genesis transaction pays to (candidate owners of an unspent TokenSeed) */
+  /** X-only keys the genesis transaction pays to (candidate owners of an unspent TokenSeed). */
   ownerHints?: string[] | undefined;
 }
 
+/** A genesis group that is an instance of a pinned token program. */
 export interface GenesisVerified {
   status: 'verified';
-  /** the pinned token program the group is an instance of (`KCC20PublicMint`, `KaspaRocketToken11458`, ...) */
+  /** The pinned token program the group is an instance of (`KCC20PublicMint`, ...). */
   program: string;
   programHash: string;
   txid: string;
   outputs: number[];
-  /** token units the genesis created in holders */
+  /** Token units the genesis created in holders. */
   supply: bigint;
-  /** genesis outputs that carry a mint authority (a `PublicMint` of the public-mint app, a KRON minter, a bridge's minter) */
+  /**
+   * Genesis outputs that carry a mint authority (a `PublicMint` of the public-mint app, a KRON
+   * minter, a bridge's minter).
+   */
   minterOutputs: number[];
-  /** the sum of the genesis `PublicMint` allowances: what anyone could still mint when the genesis was made (0 without one) */
+  /**
+   * The sum of the genesis `PublicMint` allowances: what anyone could still mint when the genesis
+   * was made (0 without one).
+   */
   mintAllowance: bigint;
   seedOutputs: number[];
   /**
-   * genesis outputs that are companions the program's profile pins by template hash, with their role (`bridge-minter`: a federated bridge's minter, kUSDT's
-   * BridgeMint, which mints against deposits on another chain and is also among `minterOutputs`)
+   * Genesis outputs that are companions the program's profile pins by template hash, with their
+   * role. `bridge-minter` is a federated bridge's minter, such as kUSDT's BridgeMint. It mints
+   * against deposits on another chain and is also among `minterOutputs`.
    */
   companionOutputs: { index: number; role: string }[];
-  /** the build of the public-mint app whose actors the genesis holds */
+  /** The build of the public-mint app whose actors the genesis holds. */
   issuer: string | null;
-  /** outputs whose redeem script was rebuilt (an unspent TokenSeed) */
+  /** Outputs whose redeem script was rebuilt (an unspent TokenSeed). */
   rebuilt: number[];
 }
-/** The data does not match the covenant id or a hash (`mismatch`), or an output is not an instance of the program (`contaminated`). */
+/**
+ * The data does not match the covenant id or a hash (`mismatch`), or an output is not an instance
+ * of the program (`contaminated`).
+ */
 export interface GenesisFailed {
   status: 'failed';
   code: 'mismatch' | 'contaminated';
   message: string;
 }
-/** The check could not be done: a redeem script nobody revealed, a program this build does not pin, malformed data. Never a verdict on the token. */
+/**
+ * The check could not be done: a redeem script nobody revealed, a program this build does not pin,
+ * or malformed data. It is never a verdict on the token.
+ */
 export interface GenesisUnavailable {
   status: 'unavailable';
   code: 'unrevealed' | 'unsupported_program' | 'malformed';
   message: string;
 }
+/** The answer of the genesis check. */
 export type GenesisVerdict = GenesisVerified | GenesisFailed | GenesisUnavailable;
 
 interface RawGenesis {
@@ -88,7 +109,8 @@ const big = (v: unknown): bigint => {
 };
 
 /**
- * Checks a genesis group against the pinned token programs. Throws KobError when the loaded bindings predate the export. Every fault of the DATA is an
+ * Checks a genesis group against the pinned token programs.
+ * Throws KobError when the loaded bindings predate the export. Every fault of the data is an
  * answer (`failed`, `unavailable`), never a throw.
  */
 export function verifyGenesis(kob: KobWasm, req: GenesisRequest): GenesisVerdict {
