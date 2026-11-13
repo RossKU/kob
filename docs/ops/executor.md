@@ -2944,6 +2944,10 @@ bucket of its urgency:
 * The x402 facilitator of the Executor prices with the runner's rates (inside the intent's own funds: an execution or expiry the
   intent cannot pay at the higher rate is built at the keeper's floor). The standalone `kobd x402` builds nothing at a
   rate of its own beyond the floor; it submits the payers' transactions as signed.
+* An IOC / FOK end is priced as a kill, whatever ends it. Wallets give an IOC / FOK order `expiryDaa` = start + 300 DAA,
+  before the covenant kill time (start + 600), so its end is always its expiry; the keeper still builds that job as a kill,
+  at the priority rate. On TN10 (10-07 to 10-09) every IOC / FOK end went out as a refund at the normal rate and waited up
+  to 106 minutes in a flooded mempool.
 * Why: under the TN10 flood of 10-02 the node estimated 140 to 194 sompi per gram for the normal buckets and 115 for the low
   one while every KOB transaction paid 100; orders, fills and IOC / FOK kills were accepted 2 to 4 minutes late
   (TN10 soak, 2026-10-02).
@@ -3435,3 +3439,27 @@ not cross-checked) was accepted on 2026-11-11 (Part C, *Node*).
 | L-6 | `--max-tx-bytes` defaults to 0. | The half-search recovers. |
 | L-8 | `kobd withdraw` reads the coins from one public node, not a cross-checked pair. | A forged UTXO only invalidates the signature. |
 | L-15 | The token-logo reports (`[logo_reports]`). | Off by default. |
+
+## Fixed findings of the product-readiness audit
+
+These fixed findings of the same audit were named in the comments of the matcher and the keepers. Each row gives the fix
+commit and where the rule lives now.
+
+| Id | Fix | Commit | Code |
+|---|---|---|---|
+| M-2 | A pending transaction is never forgotten while a mempool holds it; a mempool double spend of the operator's own funding coin holds that coin instead of backing off orders. | `ad643b6f7` | `matcher/submit.rs` |
+| M-3 | The in-flight journal: a restart does not forget what the node's mempool holds. | `ad643b6f7` | `matcher/journal.rs` |
+| M-4 | A halted indexer, or a read API that stopped, ends `kobd --executor` so that its supervisor restarts it. | `b1ee61e98` | `matcher/run.rs` (`Runner::run`) |
+| M-11 | On Windows a key file that another account, a named one included, may read is refused by default. | `6f2c518f8` | `matcher/wallet.rs` |
+| M-14 | The clock check takes the node tip nearest the local clock and judges the median of its samples; while the clock is off, day orders near their deadline are kept out of every plan. | `e950ac8a2` | `matcher/run.rs` (`check_clock`) |
+| L-2 | The default keeper subsidy window is 864,000 DAA (24 hours). | `83ecd85c3` | `keepers/mod.rs` |
+| L-5 | Backoffs that ran out long ago are forgotten. | `ad643b6f7` | `matcher/submit.rs` |
+| L-11 | A primary node's refusal does not drop a transaction that another node already holds. | `ad643b6f7` | `matcher/node.rs` |
+| R2-M-2 | A resend is checked first against the day-order deadline and the soft expiry of its orders. | `64414f4ed` | `matcher/submit.rs` (`Tracker::stale`) |
+| R2-L-1 | A journal that cannot be rewritten at the start is appended to. | `64414f4ed` | `matcher/journal.rs` |
+| R2-L-2 | A restored journal entry refused for a missing input waits for the store before it counts as dropped. | `64414f4ed` | `matcher/submit.rs` |
+| R3-L-4 | A retired transaction that no node's mempool holds, twice in a row, frees its inputs before its hold ends. | `7b903793b` | `matcher/submit.rs`, `matcher/run.rs` |
+| R4-L-5 | The clock check judges from the first samples after a start and names the nodes when every one is behind. | `8c4799247` | `matcher/run.rs` |
+
+Paths are under `crates/kobd/src`. The keeper rule that a job which loses money only through its funding input or the foreign
+strays it returns is rebuilt without them (finding K-7 of an earlier review) predates the public history.
