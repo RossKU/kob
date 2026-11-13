@@ -1,8 +1,9 @@
 //! Plain KAS payments from P2PK coins: the transactions `kob send KAS` and `kobd withdraw` build.
 //!
-//! A version-1 transaction whose inputs are the builders' P2PK inputs (budget role `p2pk`). [`kas_payment`] pays an amount and
-//! sends the change back to the sender; [`kas_sweep`] pays everything the coins hold minus the fee in one output. The fee is
-//! the node's relay floor (or the priority rate) at the requested rate, so `fee` equals `min_fee` of the [`FeeReport`] unless a
+//! A version-1 transaction whose inputs are the builders' P2PK inputs (budget role `p2pk`).
+//! [`kas_payment`] pays an amount and sends the change back to the sender; [`kas_sweep`] pays
+//! everything the coins hold minus the fee in one output. The fee is the node's relay floor (or the
+//! priority rate) at the requested rate, so `fee` equals `min_fee` of the [`FeeReport`] unless a
 //! change too small to be an output went to the fee.
 
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
@@ -45,7 +46,8 @@ impl<'a> Frame<'a> {
         tx
     }
 
-    /// The fee the transaction with `outs` must pay (with a signature-sized placeholder in every input).
+    /// The fee the transaction with `outs` must pay (with a signature-sized placeholder in every
+    /// input).
     fn need(&self, outs: &[TransactionOutput], fee: &FeeOptions) -> (u64, bool) {
         let t = self.tx_of(outs.to_vec(), &placeholder());
         let report = masses(&t, &self.entries);
@@ -88,15 +90,18 @@ fn rate_of(fee: &FeeOptions) -> u64 {
     fee.fee_rate.unwrap_or(MIN_FEE_RATE)
 }
 
-/// A Schnorr signature plus its sighash byte: the size of the signature script the fee is priced for.
+/// A Schnorr signature plus its sighash byte: the size of the signature script the fee is priced
+/// for.
 fn placeholder() -> Vec<u8> {
     let mut v = vec![0x41u8];
     v.extend([0u8; 65]);
     v
 }
 
-/// A plain KAS payment from P2PK coins of `me` (a version-1 transaction, the builders' P2PK inputs): the payment and
-/// the change back to `me` (no change when it would be dust); the fee is the relay floor at the requested rate.
+/// A plain KAS payment from P2PK coins of `me`, with the change back to `me`.
+///
+/// The transaction is a version-1 transaction over the builders' P2PK inputs. There is no change
+/// output when the change would be dust. The fee is the relay floor at the requested rate.
 pub fn kas_payment(coins: &[KeyUtxo], amount: u64, to: &ScriptPublicKey, me: &[u8; 32], fee: &FeeOptions) -> Result<BuiltTx, String> {
     let frame = Frame::new(coins)?;
     let total: u64 = coins.iter().map(|k| k.utxo.amount).sum();
@@ -132,8 +137,9 @@ pub fn kas_payment(coins: &[KeyUtxo], amount: u64, to: &ScriptPublicKey, me: &[u
         if total < amount.saturating_add(need) {
             return Err(format!("insufficient funds: need {} sompi, have {total} sompi", amount.saturating_add(need)));
         }
-        // a change that is not dust but did not fit (the transaction with it exceeds a block mass limit, e.g. the KIP-9
-        // storage mass of a payment just above the dust bound plus the change) is never paid to the network as fee
+        // a change that is not dust but did not fit (the transaction with it exceeds a block mass
+        // limit, e.g. the KIP-9 storage mass of a payment just above the dust bound plus the
+        // change) is never paid to the network as fee
         let surplus = total - amount - need;
         if !change_is_dust && surplus >= DUST_OUTPUT_MIN {
             return Err(format!(
@@ -147,12 +153,13 @@ pub fn kas_payment(coins: &[KeyUtxo], amount: u64, to: &ScriptPublicKey, me: &[u
     Ok(frame.built(outs, paid, change_output, fee))
 }
 
-/// Everything the coins hold, minus the fee, to `to` in one output and no change. Refused when the rest would be dust or
-/// the transaction exceeds a block mass limit (fewer coins then).
+/// Everything the coins hold, minus the fee, to `to` in one output and no change. Refused when the
+/// rest would be dust or the transaction exceeds a block mass limit (fewer coins then).
 pub fn kas_sweep(coins: &[KeyUtxo], to: &ScriptPublicKey, fee: &FeeOptions) -> Result<BuiltTx, String> {
     let frame = Frame::new(coins)?;
     let total: u64 = coins.iter().map(|k| k.utxo.amount).sum();
-    // the fee is a fixed point again: a smaller output has a larger KIP-9 storage mass, which can raise the priced fee
+    // the fee is a fixed point again: a smaller output has a larger KIP-9 storage mass, which can
+    // raise the priced fee
     let mut f = 0u64;
     for _ in 0..16 {
         let Some(value) = total.checked_sub(f).filter(|v| *v >= DUST_OUTPUT_MIN) else {

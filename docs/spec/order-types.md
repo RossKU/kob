@@ -128,7 +128,7 @@ below it, and a filler can at most spend its N budgeted fills on fills of that s
 delivered token UTXOs; the rest is refunded at the expiry, within a minute). A `KobBid`'s quantity is its KAS escrow, not an amount: the carriers budgeted for fills that never happen are buying power too (`BidState::buying_power` leaves only one carrier), so a multi-fill market buy whose book lets one fill take everything can deliver up to `amount + (fills - 1) x deliveryCarrier / worst price` (typed 0.6 TUSD at a worst price of 29.58 KAS and 2 fills delivered 0.6676 on TN10, 2026-10-27), never more KAS than it locks. The wallet states the bound (`PlanFills.maxReceive`: the ticket's Fills line, the signer's "You may receive up to" row) and the Fills value the minimum fill cut. At the default carrier the
 carriers a filler can make the maker lock are at most 20% of the order's notional, and one fill's fee (paid by the filler)
 is at most 0.6% of 10 KAS on every token program and 0.3% to 1.4% for a pair fill (KaspaCom on both sides the highest;
-`DEFAULT_MIN_FILL_SOMPI`).
+`DEFAULT_MIN_FILL_SOMPI`). The relay floor of one fill is 0.011 KAS on the KCC-20 reference, 0.009 KAS on KRON, 0.031 KAS on a 16/16 program and 0.056 KAS on KaspaCom. For a pair fill it is 0.28% of 10 KAS on KCC-20 / KRON and 1.4% on KaspaCom on both sides (its if-done entry). A smaller minimum would make small fills unprofitable to match before it saved the maker anything.
 
 ## Common semantics
 

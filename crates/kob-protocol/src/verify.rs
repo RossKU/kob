@@ -1,9 +1,9 @@
 //! Validation through the rusty-kaspa v2.1.0 script engine.
 //!
 //! Runs every input of a transaction the way consensus does (`check_scripts`): covenant context
-//! from the transaction, script-unit limit from the committed compute budget, sig-op price of
-//! 1,000 grams. On top of the scripts it checks the transaction-level rules the engine does not see:
-//! the exact storage-mass commitment, the relay fee floor, static sig-op bounds and block limits.
+//! from the transaction, script-unit limit from the committed compute budget, sig-op price of 1,000
+//! grams. On top of the scripts it checks the transaction-level rules the engine does not see: the
+//! exact storage-mass commitment, the relay fee floor, static sig-op bounds and block limits.
 
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
 use kaspa_consensus_core::tx::{PopulatedTransaction, Transaction, UtxoEntry};
@@ -68,15 +68,20 @@ pub struct Validation {
     pub budgets: Vec<u16>,
     /// Static sig-op upper bound of each input.
     pub sigops: Vec<u32>,
+    /// Mass of the transaction, with the storage-mass commitment.
     pub mass: MassReport,
+    /// Fee the transaction pays, in sompi.
     #[serde(with = "crate::json::field")]
     pub fee: u64,
+    /// Relay fee floor of the transaction, in sompi.
     #[serde(with = "crate::json::field")]
     pub min_fee: u64,
 }
 
-/// Full validation of a signed transaction: scripts with enforced budgets, storage-mass
-/// commitment, fee floor, static sig-op cap of 15 per input, block mass limits.
+/// Full validation of a signed transaction.
+///
+/// It checks the scripts with enforced budgets, the storage-mass commitment, the fee floor, the
+/// static sig-op cap of 15 per input and the block mass limits.
 pub fn validate(tx: &Transaction, entries: &[UtxoEntry]) -> Result<Validation> {
     let res = execute(tx, entries, true)?;
     let mut units = vec![];

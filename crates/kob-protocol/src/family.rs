@@ -4,23 +4,41 @@
 //! and nothing else: the token state codec, the owner types the order contracts use, how an input
 //! is authorised (signature script columns), the slot limits and the order templates (one adapter
 //! per family). The order logic, the builders' transaction layouts and the entry arguments are the
-//! same in every family; `contracts/orders/kron/README.md` lists the (small) differences.
+//! same in every family. `contracts/orders/kron/README.md` lists the small differences.
 //!
-//! | | `kcc20` | `kron` |
-//! |---|---|---|
-//! | token state | 112 B `amount owner owner_scheme borrow_scheme borrow_guard extension_commitment` | 46 B `owner id_type amount is_minter` |
-//! | order custody | `owner_scheme 0x04` (covenant id), borrow disabled | `id_type 2` (covenant id), `is_minter 0` |
-//! | maker / taker held tokens, deliveries | `owner_scheme 0x00` (P2PK, token-level signature) | `id_type 3` (address presence: a P2PK input of the owner is in the transaction) |
-//! | authorisation | leader (`transfer`) + delegators, owner witness inside the sigscript | one entry per input, shared next-state columns, one witness byte per token input naming the authorising input |
-//! | token inputs / outputs per transaction | 3 / 3 reference (what KOB issues), 8 / 8 prototype or third-party (KaspaCom KCC20 0.2.5, a 25.5 KB program: sweeps are bounded by block mass), 4 / 5, 16 / 16 | 4 / 5 |
-//! | orders' token input bound (`MAX_TOK_IN`) | 8 | 4 |
-//! | output amount | any positive | `1 ..= 1e9` |
-//! | extension commitment | yes (a token sub-type) | none |
+//! # `kcc20`
+//!
+//! - Token state: 112 bytes, `amount owner owner_scheme borrow_scheme borrow_guard
+//!   extension_commitment`.
+//! - Order custody: `owner_scheme 0x04` (covenant id), borrow disabled.
+//! - Maker and taker held tokens, deliveries: `owner_scheme 0x00` (P2PK, token-level signature).
+//! - Authorisation: a leader (`transfer`) and delegators, with the owner witness inside the
+//!   sigscript.
+//! - Token inputs and outputs per transaction: 3 / 3 for the reference program (what KOB issues),
+//!   8 / 8 for a prototype or third-party program (KaspaCom KCC20 0.2.5, a 25.5 KB program whose
+//!   sweeps are bounded by block mass), 4 / 5, or 16 / 16.
+//! - Token input bound of the orders (`MAX_TOK_IN`): 8.
+//! - Output amount: any positive amount.
+//! - Extension commitment: yes, a token sub-type.
+//!
+//! # `kron`
+//!
+//! - Token state: 46 bytes, `owner id_type amount is_minter`.
+//! - Order custody: `id_type 2` (covenant id), `is_minter 0`.
+//! - Maker and taker held tokens, deliveries: `id_type 3` (address presence: a P2PK input of the
+//!   owner is in the transaction).
+//! - Authorisation: one entry per input, shared next-state columns, and one witness byte per token
+//!   input that names the authorising input.
+//! - Token inputs and outputs per transaction: 4 / 5.
+//! - Token input bound of the orders (`MAX_TOK_IN`): 4.
+//! - Output amount: `1 ..= 1e9`.
+//! - Extension commitment: none.
 //!
 //! [`Family`] is the registry's family type (`registry/tokens.json` spells it `kcc20` / `kron`).
-//! Everything else that depends on the family hangs off the [`TemplateId`](crate::artifacts::TemplateId)
-//! of the token program ([`TemplateId::family`](crate::artifacts::TemplateId::family)) or off the
-//! order kind ([`AnyState::family`](crate::state::AnyState::family)).
+//! Everything else that depends on the family hangs off the
+//! [`TemplateId`](crate::artifacts::TemplateId) of the token program
+//! ([`TemplateId::family`](crate::artifacts::TemplateId::family)) or off the order kind
+//! ([`AnyState::family`](crate::state::AnyState::family)).
 
 pub use crate::registry::Family;
 
@@ -30,8 +48,9 @@ pub const KRON_TYPE_PUBKEY: u8 = 0;
 pub const KRON_TYPE_SCRIPT_HASH: u8 = 1;
 /// KRON `id_type`: owner is a covenant id (KOB order custody).
 pub const KRON_TYPE_COVID: u8 = 2;
-/// KRON `id_type`: address presence (owner's P2PK input must be in the transaction): wallet balances,
-/// maker deliveries.
+/// KRON `id_type`: address presence, the P2PK input of the owner is in the transaction.
+///
+/// Used for wallet balances and maker deliveries.
 pub const KRON_TYPE_ADDR: u8 = 3;
 
 /// Most token inputs a transaction that spends KOB KCC-20 orders may carry.
@@ -69,8 +88,9 @@ impl Family {
         }
     }
 
-    /// Most token inputs of one token a transaction spending KOB orders may carry (every order
-    /// refuses more; the covenants scan that many inputs for strays).
+    /// Most token inputs of one token that a transaction spending KOB orders may carry.
+    ///
+    /// Every order refuses more, and the covenants scan that many inputs for strays.
     pub fn max_tok_in(self) -> usize {
         match self {
             Family::Kcc20 => MAX_TOK_IN_KCC20,
@@ -86,7 +106,8 @@ impl Family {
         }
     }
 
-    /// Name of the order kind `base` (`"KobAsk"`, ...) in this family, as used in roles and artifacts.
+    /// Name of the order kind `base` (`"KobAsk"`, ...) in this family, as used in roles and
+    /// artifacts.
     pub fn kind_name(self, base: &str) -> String {
         format!("{base}{}", self.suffix())
     }

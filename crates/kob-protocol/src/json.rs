@@ -117,10 +117,12 @@ impl<T: JsonField> JsonField for Option<T> {
 pub mod field {
     use super::*;
 
+    /// Serializes `v` in its canonical JSON form.
     pub fn serialize<S: Serializer, T: JsonField>(v: &T, s: S) -> Result<S::Ok, S::Error> {
         v.to_json().serialize(s)
     }
 
+    /// Reads a value from its canonical JSON form.
     pub fn deserialize<'de, D: Deserializer<'de>, T: JsonField>(d: D) -> Result<T, D::Error> {
         let v = serde_json::Value::deserialize(d)?;
         T::from_json(&v).map_err(de::Error::custom)
@@ -131,10 +133,12 @@ pub mod field {
 pub mod field_vec {
     use super::*;
 
+    /// Serializes every element of `v` in its canonical JSON form.
     pub fn serialize<S: Serializer, T: JsonField>(v: &[T], s: S) -> Result<S::Ok, S::Error> {
         serde_json::Value::Array(v.iter().map(JsonField::to_json).collect()).serialize(s)
     }
 
+    /// Reads every element from its canonical JSON form.
     pub fn deserialize<'de, D: Deserializer<'de>, T: JsonField>(d: D) -> Result<Vec<T>, D::Error> {
         let v = Vec::<serde_json::Value>::deserialize(d)?;
         v.iter().map(|x| T::from_json(x).map_err(de::Error::custom)).collect()

@@ -1,21 +1,23 @@
 //! Wallet defaults (`docs/spec/matcher.md` §10) and the keeper tips derived from measured fees.
 //!
-//! **Tips.** A refund or an arm / trail update is sent by a keeper (an update: by a matcher, inside the batch
-//! that fills its evidence) and paid only by the order's
-//! own `refundTip` / `keeperTip`. The fee of that transaction depends on the token program (an
-//! ask-side refund pushes the whole token program in its custody input), so one constant cannot
-//! fit every token: 0.03 KAS covered a 3/3 refund but not a 4/5 or 8/8 one. The defaults are
-//! therefore per program and derived from measured fees: `data/keeper_tips.json` holds, for every
-//! supported program (both families), the largest fee floor of a keeper transaction (a funded keeper with its own
-//! change output, the costlier shape) over every KAS order kind (`KobAsk` .. `KobIfdAsk` and their KRON twins), measured
-//! by `tests/keeper_tips.rs` through the builders (`KOB_REGEN=1` rewrites it), and the default tip is twice that fee
-//! rounded up to 0.001 KAS: the keeper earns about one fee, and a keeper without capital (no funding, no change) is always
-//! covered.
+//! **Tips.** A keeper sends a refund or an arm / trail update, and the order's own `refundTip` or
+//! `keeperTip` pays for it. A matcher sends an update inside the batch that fills its evidence.
+//! The fee of that transaction depends on the token program, because an ask-side refund pushes
+//! the whole token program in its custody input. One constant cannot fit every token, so the
+//! defaults are per program and derived from measured fees.
 //!
-//! The pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) have their own table, `data/pair_keeper_tips.json`, per
-//! program PAIR (`<program of A>+<program of B>`): a pair order's keeper transaction carries both tokens' programs (a
-//! sell-first `KobIfdPair`'s refund returns two custodies), and its larger fees must not raise the tips of the KAS kinds.
-//! [`tips_for`] selects the table by the order's kind.
+//! `data/keeper_tips.json` holds, for every supported program of both families, the largest fee
+//! floor of a keeper transaction over every KAS order kind (`KobAsk` .. `KobIfdAsk` and their KRON
+//! twins). The measured shape is a funded keeper with its own change output, the costlier one.
+//! `tests/keeper_tips.rs` measures it through the builders, and `KOB_REGEN=1` rewrites the file.
+//! The default tip is twice that fee rounded up to 0.001 KAS. The keeper earns about one fee, and
+//! a keeper without capital (no funding, no change) is always covered.
+//!
+//! The pair kinds (`KobPair`, `KobCondPair`, `KobIfdPair`) have their own table,
+//! `data/pair_keeper_tips.json`, per program PAIR (`<program of A>+<program of B>`): a pair order's
+//! keeper transaction carries both tokens' programs (a sell-first `KobIfdPair`'s refund returns two
+//! custodies), and its larger fees must not raise the tips of the KAS kinds. [`tips_for`] selects
+//! the table by the order's kind.
 //!
 //! **Day orders.** [`day_order`] maps "until the next 00:00 UTC" to an on-chain `expiryDaa` with
 //! a 1% margin and the wall-clock `deadline` published in the placement record (§10.10).
@@ -38,48 +40,51 @@ pub const MARKET_ACTIVATION_DAA: i64 = 30;
 pub const IOC_LIFE_DAA: i64 = 300;
 /// Stop auction length (30 s).
 pub const STOP_BAND_DAA: i64 = 300;
-/// Trigger rest time R (5 s, founder 2026-09-30): the evidence order must have been exposed at its quote
-/// for at least this long before the transaction that fills it arms a stop (`minRestDaa`).
+/// Trigger rest time R (5 s), in DAA.
+///
+/// The evidence order must have been exposed at its quote for at least this long before the
+/// transaction that fills it arms a stop (`minRestDaa`).
 pub const MIN_REST_DAA: i64 = 50;
-/// Default order carrier (sompi): 1 KAS, the KAS a wallet puts on every covenant UTXO of a new order (the order UTXO, its
-/// custody, each `deliveryCarrier`, each `exitCarrier`; a pair entry's `exitCarrier` also funds its exit's deliveries,
-/// `IfdPairState::exit_carrier_needed`). Never below a token output's floor (`TemplateId::min_token_output`, KaspaCom
-/// KCC20 0.2.5: 0.5 KAS) nor the KIP-9 bound of a covenant output (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`); a user may choose
-/// another carrier per order (`kob take --carrier`, the ticket's carrier field).
+/// Default order carrier (sompi): 1 KAS on every covenant UTXO of a new order.
 ///
-/// The carrier is order state (`deliveryCarrier`, `exitCarrier`, the order UTXO's value), not part of any template: an
-/// order keeps the carrier it was placed with, and changing this default re-versions nothing.
+/// A wallet puts it on the order UTXO, its custody, each `deliveryCarrier` and each
+/// `exitCarrier`. A pair entry's `exitCarrier` also funds the deliveries of its exit
+/// (`IfdPairState::exit_carrier_needed`). It is never below a token output's floor
+/// (`TemplateId::min_token_output`, KaspaCom KCC20 0.2.5: 0.5 KAS) or the KIP-9 bound of a
+/// covenant output (0.08 KAS, `tx::COVENANT_OUTPUT_MIN`). A user may choose another carrier per
+/// order (`kob take --carrier`, the ticket's carrier field).
 ///
-/// What the carrier does and does not change (`tests/carrier_fees.rs`: every builder shape of the golden set on the 8
-/// token programs and 7 program pairs): a token or order output carries a covenant id, so its KIP-9 storage plurality is 2
-/// and its storage mass is `4 × 10^12 / carrier`. The relay fee (`rate × max(compute, normalized transient)`, what
-/// builders, the executor and the wallet pay by default) does not price storage mass, and a transaction fills the same
-/// number of orders at any carrier: no shape pays more relay fee at any carrier from 10 KAS down to 0.1 KAS. A lower
-/// carrier raises storage mass, which (a) lowers a transaction's block-template priority under congestion (the miner
-/// ranks by fee over the largest of compute, transient and storage mass; the storage-inclusive priority fee,
-/// [`crate::tx::FeeMode::Priority`], is opt-in and has no clean value below 10 KAS), and (b) can exceed the 500,000
-/// per-transaction storage limit on large batches (8/8 and 10/10 programs). Measured at 1 KAS (`tests/carrier_fees.rs`, 1,635
-/// builder shapes): every shape builds, the largest commits 357,188 (71%, an 8/8 pair 2 × 2 netting; 177,256 at 2 KAS), and
-/// the opt-in priority fee rises by at most 0.3077 KAS; the only refused shapes measured on a 10/10 program are KaspaRocket
-/// partial buys from 7-8 asks. At 0.5 KAS 75 of the shapes are refused. The builders refuse a transaction over the limit
-/// (a message that names the storage mass) and the matcher plans fewer fills
-/// (`kobd/tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
-/// 1.0, KForge 0.8-0.9) and halves the KAS a maker locks per fill.
+/// The carrier is order state (`deliveryCarrier`, `exitCarrier`, the order UTXO's value), not part
+/// of any template. An order keeps the carrier it was placed with, and changing this default
+/// re-versions nothing.
+///
+/// A lower carrier raises the storage mass of every token or order output, which is
+/// `4 × 10^12 / carrier`. The relay fee does not price storage mass, so no shape pays more relay
+/// fee at any carrier from 10 KAS down to 0.1 KAS. But a lower carrier lowers the block-template
+/// priority of a transaction under congestion, and it can push a large batch (8/8 and 10/10
+/// programs) over the 500,000 per-transaction storage limit. The builders then refuse the
+/// transaction and the matcher plans fewer fills. `tests/carrier_fees.rs` measures every builder
+/// shape of the golden set. Measurements: `docs/spec/matcher.md`, "Carrier of the orders".
 pub const DEFAULT_ORDER_CARRIER: u64 = 100_000_000;
-/// Default minimum fill, in sompi of quote value: 10 KAS of notional, independent of the carrier. The wallet's `minFill`
-/// is the amount worth this much at the order's limit price ([`default_min_fill`]). Every fill of a bid-side order moves a
-/// delivery carrier onto a new token UTXO and every fill restarts TWAP / DCA intervals, so the minimum bounds the fills
-/// (carriers, UTXOs) a filler can force on the maker to `ceil(amount / minFill)`: at the default carrier the carriers a
-/// filler can make the maker lock are at most 10% of the order's notional. The fee of one fill (relay floor, paid by the
-/// filler) is at most 0.6% of 10 KAS on every token program (KCC-20 reference 0.011 KAS, KRON 0.009 KAS, 16/16 0.031
-/// KAS, KaspaCom 0.056 KAS) and of a pair fill 0.28% (KCC-20 / KRON) to 1.4% (KaspaCom on both sides, its if-done entry):
-/// a smaller minimum would make small fills unprofitable to match before it saved the maker anything.
+/// Default minimum fill, in sompi of quote value: 10 KAS of notional, independent of the carrier.
+///
+/// The wallet's `minFill` is the amount worth this much at the order's limit price
+/// ([`default_min_fill`]). Every fill of a bid-side order moves a delivery carrier onto a new token
+/// UTXO, and every fill restarts TWAP / DCA intervals. The minimum therefore bounds the fills a
+/// filler can force on the maker to `ceil(amount / minFill)`. At the default carrier, the carriers
+/// a filler can make the maker lock are at most 10% of the order's notional. The relay floor of
+/// one fill, paid by the filler, is at most 0.6% of 10 KAS on every token program and at most
+/// 1.4% for a pair fill. A smaller minimum would make small fills unprofitable to match before it
+/// saved the maker anything. Figures: `docs/spec/order-types.md`.
 pub const DEFAULT_MIN_FILL_SOMPI: i64 = 1_000_000_000;
 
-/// Wallet default of an order's `minFill` (base units): `clamp(ceil(DEFAULT_MIN_FILL_SOMPI * scale / price), 1, amount)`,
-/// the amount worth [`DEFAULT_MIN_FILL_SOMPI`] at the limit `price` (sompi per whole token of `scale` base units), at least
-/// one base unit and at most the order's amount. IOC / FOK and market orders use 1 (they live one auction; nothing to
-/// grief). A non-positive price or amount gives 1.
+/// Wallet default of an order's `minFill`, in base units.
+///
+/// It is `clamp(ceil(DEFAULT_MIN_FILL_SOMPI * scale / price), 1, amount)`: the amount worth
+/// [`DEFAULT_MIN_FILL_SOMPI`] at the limit `price` (sompi per whole token of `scale` base units),
+/// at least one base unit and at most the order's amount. IOC / FOK and market orders use 1,
+/// because they live one auction and there is nothing to grief. A non-positive price or amount
+/// gives 1.
 pub fn default_min_fill(amount: i64, price: i64, scale: i64) -> i64 {
     if amount <= 0 || price <= 0 || scale <= 0 {
         return 1;
@@ -88,9 +93,10 @@ pub fn default_min_fill(amount: i64, price: i64, scale: i64) -> i64 {
     want.clamp(1, amount as i128) as i64
 }
 
-/// Wallet default of an if-done entry's `minFill`: `ceil(amount / 4)` (at most four fills: an entry prefunds a
-/// delivery and an exit carrier per possible fill, so a minimum of [`DEFAULT_MIN_FILL_SOMPI`] would prefund two carriers per
-/// 10 KAS of the entry).
+/// Wallet default of an if-done entry's `minFill`: `ceil(amount / 4)`, at most four fills.
+///
+/// An entry prefunds a delivery and an exit carrier per possible fill, so a minimum of
+/// [`DEFAULT_MIN_FILL_SOMPI`] would prefund two carriers per 10 KAS of the entry.
 pub fn default_min_fill_ifd(amount: i64) -> i64 {
     if amount <= 0 {
         return 1;
@@ -98,13 +104,16 @@ pub fn default_min_fill_ifd(amount: i64) -> i64 {
     (amount / 4 + i64::from(amount % 4 != 0)).max(1)
 }
 
-/// Wallet default of the `minFill` of IOC / FOK orders, market orders and pair market orders: 1 base unit (they live
-/// one auction; there is nothing to grief).
+/// Wallet default of the `minFill` of IOC / FOK orders, market orders and pair market orders.
+///
+/// It is 1 base unit. These orders live one auction, so there is nothing to grief.
 pub const DEFAULT_MIN_FILL_IMMEDIATE: i64 = 1;
 
-/// Wallet default of a pair order's `minFill` (base units of A): the amount of A worth [`DEFAULT_MIN_FILL_SOMPI`] on
-/// A's KAS book at placement, `kas_per_whole_a` being the KAS value (sompi per whole A) the caller quotes
-/// ([`default_min_fill`] at that price); without a quote, `ceil(amount / 4)`.
+/// Wallet default of a pair order's `minFill`, in base units of A.
+///
+/// It is the amount of A worth [`DEFAULT_MIN_FILL_SOMPI`] on A's KAS book at placement.
+/// `kas_per_whole_a` is the KAS value (sompi per whole A) the caller quotes, and the amount is
+/// [`default_min_fill`] at that price. Without a quote it is `ceil(amount / 4)`.
 pub fn default_min_fill_pair(amount: i64, kas_per_whole_a: Option<i64>, scale: i64) -> i64 {
     match kas_per_whole_a {
         Some(p) if p > 0 => default_min_fill(amount, p, scale),
@@ -112,16 +121,21 @@ pub fn default_min_fill_pair(amount: i64, kas_per_whole_a: Option<i64>, scale: i
     }
 }
 
-/// Share of a stop's own amount its default trigger threshold covers ([`default_min_touch`]), basis points: 25 %.
+/// Share of a stop's amount that its default trigger threshold covers, in basis points (25%).
+///
+/// See [`default_min_touch`].
 pub const DEFAULT_MIN_TOUCH_BPS: i64 = 2_500;
 
-/// Wallet default of a stop's `minTouch` (the smallest trigger evidence, base units of a plain order of the same scale):
-/// the larger of the order's own minimum fill and [`DEFAULT_MIN_TOUCH_BPS`] of its amount (`ceil(amount × 2500 / 10^4)`),
-/// at most the amount, at least 1. The threshold grows with the stop: a print of one minimum fill (10 KAS worth) no longer
-/// arms a stop of any size, the fill that arms it is at least a quarter of what it will sell or buy. A small stop (at
-/// most four minimum fills) keeps its minimum fill. `amount` 0 (unknown): the minimum fill. The user may choose another
-/// per order: the minimum fill, 25% / 50% / 100% of the order's amount (100% = strongest protection against stop hunting)
-/// or a custom amount.
+/// Wallet default of a stop's `minTouch`, the smallest trigger evidence in base units.
+///
+/// The unit is that of a plain order of the same scale.
+///
+/// It is the larger of the order's own minimum fill and [`DEFAULT_MIN_TOUCH_BPS`] of its amount
+/// (`ceil(amount × 2500 / 10^4)`), at most the amount and at least 1. The threshold grows with the
+/// stop, so a print of one minimum fill (10 KAS worth) does not arm a stop of any size. A small
+/// stop (at most four minimum fills) keeps its minimum fill, and `amount` 0 (unknown) gives the
+/// minimum fill. The user may choose another threshold per order: the minimum fill, 25%, 50% or
+/// 100% of the amount (100% is the strongest protection against stop hunting), or a custom amount.
 pub fn default_min_touch(min_fill: i64, amount: i64) -> i64 {
     let share = if amount > 0 { ((amount as i128 * DEFAULT_MIN_TOUCH_BPS as i128 + 9_999) / 10_000) as i64 } else { 0 };
     let t = min_fill.max(share).max(1);
@@ -132,13 +146,17 @@ pub fn default_min_touch(min_fill: i64, amount: i64) -> i64 {
     }
 }
 
-/// Wallet default of an order's `scale` (base units per whole token, the price denominator): `10^min(decimals, 9)`.
+/// Wallet default of an order's `scale`, the price denominator: `10^min(decimals, 9)`.
+///
+/// The scale is the number of base units per whole token.
 pub fn default_scale(decimals: u32) -> i64 {
     10i64.pow(decimals.min(9))
 }
-/// Nominal DAA rate, milli-DAA per second (10 DAA/s), and its accepted measurement range.
+/// Nominal DAA rate, in milli-DAA per second (10 DAA/s).
 pub const DAA_RATE_MILLI: u64 = 10_000;
+/// Lowest measured DAA rate [`day_order`] accepts, in milli-DAA per second.
 pub const DAA_RATE_MILLI_MIN: u64 = 9_500;
+/// Highest measured DAA rate [`day_order`] accepts, in milli-DAA per second.
 pub const DAA_RATE_MILLI_MAX: u64 = 10_500;
 /// Tips are rounded up to this many sompi (0.001 KAS).
 pub const TIP_ROUNDING: u64 = 100_000;
@@ -198,8 +216,10 @@ pub fn pair_tips(a: TemplateId, b: TemplateId) -> Result<Tips> {
     pair_tips_table().get(&k).copied().ok_or_else(|| Error::Invalid(format!("no keeper tips for the pair {k}")))
 }
 
-/// Default tips of an order, by its kind: a pair order's from the pair table (its two programs), any other kind's from the
-/// table of its token program.
+/// Default tips of an order, by its kind.
+///
+/// A pair order's come from the pair table (its two programs), any other kind's from the table of
+/// its token program.
 pub fn tips_for(s: &crate::state::AnyState) -> Result<Tips> {
     if s.is_pair() {
         let (a, b) = crate::build::pair_programs(s)?;
@@ -213,8 +233,9 @@ pub fn tips_for(s: &crate::state::AnyState) -> Result<Tips> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayOrder {
-    /// `D0 + ⌈Δ·r⌉ + ⌈0.01·Δ·r⌉`: the refund opens at or after midnight unless the DAA rate
-    /// beats `r` by more than 1%.
+    /// The expiry in DAA score: `D0 + ⌈Δ·r⌉ + ⌈0.01·Δ·r⌉`.
+    ///
+    /// The refund opens at or after midnight unless the DAA rate beats `r` by more than 1%.
     #[serde(with = "crate::json::field")]
     pub expiry_daa: u64,
     /// The next 00:00 UTC (unix seconds), for the placement record.
@@ -274,7 +295,8 @@ mod tests {
         assert_eq!(default_min_touch(1, 3), 1);
         assert_eq!(default_min_touch(5, 3), 3);
         assert_eq!(default_min_touch(1, i64::MAX), i64::MAX / 4 + 1);
-        // if-done entries: at most four fills; pair orders: 10 KAS of A at the quoted KAS price, else as an entry
+        // if-done entries: at most four fills; pair orders: 10 KAS of A at the quoted KAS price,
+        // else as an entry
         assert_eq!(
             (default_min_fill_ifd(10), default_min_fill_ifd(8), default_min_fill_ifd(1), default_min_fill_ifd(0)),
             (3, 2, 1, 1)
@@ -285,9 +307,10 @@ mod tests {
         assert_eq!(DEFAULT_MIN_FILL_IMMEDIATE, 1);
     }
 
-    /// The default order carrier clears every token program's floor and the covenant output bound, and still holds what a wallet
-    /// draws from it by default: a trailing sell's 20 keeper tips plus its refund tip (`KobCondAsk`, the largest program
-    /// tips), and an if-done exit's trailing reserve at most half its carrier (the web planners' rules).
+    /// The default order carrier clears every token program's floor and the covenant output bound.
+    /// It also holds what a wallet draws from it by default: a trailing sell's 20 keeper tips plus
+    /// its refund tip (`KobCondAsk`, the largest program tips), and at most half of an if-done
+    /// exit's carrier as its trailing reserve (the web planners' rules).
     #[test]
     fn the_default_order_carrier_clears_the_floors_and_the_keeper_reserve() {
         const { assert!(DEFAULT_ORDER_CARRIER >= crate::tx::COVENANT_OUTPUT_MIN) };

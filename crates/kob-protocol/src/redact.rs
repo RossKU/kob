@@ -1,11 +1,17 @@
-//! Node and indexer URLs as they may be shown or logged (the executor's logs, health and metrics routes, the `kob` CLI's
-//! messages and reports): a URL can carry a password or an API key, which never leaves the process.
+//! Node and indexer URLs as they may be shown or logged.
+//!
+//! The executor's logs, its health and metrics routes, and the messages and reports of the `kob`
+//! CLI show URLs only in this form. A URL can carry a password or an API key, which never leaves
+//! the process.
 
-/// A node URL as it may be shown or logged: `scheme://host[:port]`. User name and password, path, query and fragment are
-/// left out (they can hold credentials or API keys: `wss://user:pass@host/key?apikey=...`); a removed path or query is
-/// marked with `/...`. A value without a scheme keeps its host part only. A password written with an unencoded `?`, `#` or `/`
-/// does not leak: the user information ends at the last `@` before the first `/`, and a "host" that is not `host[:port]` (the
-/// part of a credential before an unencoded `/`) is shown as `<redacted>`.
+/// A node URL as it may be shown or logged: `scheme://host[:port]`.
+///
+/// User name, password, path, query and fragment are left out, because they can hold credentials
+/// or API keys (`wss://user:pass@host/key?apikey=...`). A removed path or query is marked with
+/// `/...`. A value without a scheme keeps its host part only. A password written with an unencoded
+/// `?`, `#` or `/` does not leak. The user information ends at the last `@` before the first `/`.
+/// A "host" that is not `host[:port]` (the part of a credential before an unencoded `/`) is shown
+/// as `<redacted>`.
 pub fn redact_url(url: &str) -> String {
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (Some(s), r),
@@ -20,8 +26,10 @@ pub fn redact_url(url: &str) -> String {
     }
 }
 
-/// The `host[:port]` of a URL without its scheme, and what follows it: the user information ends at the last `@` before the first
-/// `/` (a `?` or `#` before that `/` can belong to an unencoded password), the host at the first `?` or `#` after it.
+/// The `host[:port]` of a URL without its scheme, and what follows it.
+///
+/// The user information ends at the last `@` before the first `/`, because a `?` or `#` before
+/// that `/` can belong to an unencoded password. The host ends at the first `?` or `#` after it.
 pub fn url_host(rest: &str) -> (&str, &str) {
     let seg_end = rest.find('/').unwrap_or(rest.len());
     let start = rest[..seg_end].rfind('@').map_or(0, |i| i + 1);
@@ -47,8 +55,9 @@ fn host_like(h: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_')) && port_ok
 }
 
-/// `text` with every occurrence of `url` replaced by its [`redact_url`] form (an error message of a library that echoes the
-/// URL it was given).
+/// `text` with every occurrence of `url` replaced by its [`redact_url`] form.
+///
+/// It scrubs an error message of a library that echoes the URL it was given.
 pub fn scrub_url(text: &str, url: &str) -> String {
     if url.is_empty() {
         return text.to_string();

@@ -552,6 +552,7 @@ id.
   full batch over the 500,000 per-transaction storage limit: the builder refuses such a transaction and the engine plans
   fewer fills (`tests/matcher_default_carrier.rs`). 1 KAS is the market norm (KaspaCom and KRON 0.5, KaspaRocket buyer cell
   1.0, KForge 0.8-0.9) and halves the KAS a maker locks per fill against 2 KAS.
+  Measured at 1 KAS over 1,635 builder shapes (`tests/carrier_fees.rs`): every shape builds. The largest commits 357,188 of the 500,000 storage limit (71%, an 8 / 8 pair 2 × 2 netting; 177,256 at 2 KAS). The opt-in priority fee (`FeeMode::Priority`, which does price storage mass and has no clean value below 10 KAS) rises by at most 0.3077 KAS. The only refused shapes on a 10 / 10 program are KaspaRocket partial buys from 7-8 asks. At 0.5 KAS, 75 of the shapes are refused.
 - **standalone bound.** Before the walks, each routed pair order is capped at the largest fill its route could pay on its
   own and is left out of the batch when none can: the token it buys taken along the plain asks of that token (best first;
   an ask's minimum fill counted in full, its surplus going to the maker), the token it sells along the plain bids of that

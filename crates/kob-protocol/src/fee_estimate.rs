@@ -1,29 +1,37 @@
-//! The node's fee estimate (rusty-kaspa v2.1.0 `getFeeEstimate`) and the congestion rule drawn from it.
+//! The node's fee estimate (rusty-kaspa v2.1.0 `getFeeEstimate`) and the congestion rule drawn from
+//! it.
 //!
-//! The node answers three kinds of buckets in sompi per gram: a *priority* bucket (sub-second inclusion), *normal* buckets (the
-//! first: sub-minute) and *low* buckets (the first: sub-hour). The executor prices its transactions from them
-//! (`kobd`, `fee`); the command line and the web app use the same reading to tell a person that blocks are contended
-//! ([`FeeEstimate::contended`]).
+//! The node answers three kinds of buckets in sompi per gram: a *priority* bucket (sub-second
+//! inclusion), *normal* buckets (the first: sub-minute) and *low* buckets (the first: sub-hour).
+//! The executor prices its transactions from them (`kobd`, `fee`); the command line and the web app
+//! use the same reading to tell a person that blocks are contended ([`FeeEstimate::contended`]).
 
 use serde::{Deserialize, Serialize};
 
 use crate::tx::MIN_FEE_RATE;
 
-/// How far above the relay floor the first normal bucket must be before blocks count as contended, percent.
+/// How far above the relay floor the first normal bucket must be before blocks count as contended,
+/// percent.
 pub const CONTENDED_MARGIN_PERCENT: u64 = 10;
 
-/// The node's fee estimate, sompi per gram: the priority bucket, the first normal and the first low bucket.
+/// The node's fee estimate, sompi per gram: the priority bucket, the first normal and the first low
+/// bucket.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FeeEstimate {
+    /// Fee rate of the priority bucket, sompi per gram.
     pub priority: f64,
+    /// Fee rate of the first normal bucket, sompi per gram.
     pub normal: f64,
+    /// Fee rate of the first low bucket, sompi per gram.
     pub low: f64,
 }
 
 impl FeeEstimate {
-    /// Parses a `getFeeEstimate` response (`{"estimate": {"priorityBucket": {"feerate", "estimatedSeconds"}, "normalBuckets":
-    /// [...], "lowBuckets": [...]}}`, or the inner `estimate` object). An empty normal or low list takes the next faster
-    /// bucket. Every rate must be finite and positive.
+    /// Parses a `getFeeEstimate` response, or its inner `estimate` object.
+    ///
+    /// The response is `{"estimate": {"priorityBucket": {"feerate", "estimatedSeconds"},
+    /// "normalBuckets": [...], "lowBuckets": [...]}}`. An empty normal or low list takes the next
+    /// faster bucket. Every rate must be finite and positive.
     pub fn parse(v: &serde_json::Value) -> Result<FeeEstimate, String> {
         let e = v.get("estimate").unwrap_or(v);
         let rate = |b: &serde_json::Value| b.get("feerate").and_then(serde_json::Value::as_f64);
@@ -45,12 +53,18 @@ impl FeeEstimate {
         Ok(())
     }
 
-    /// Whether blocks are contended: the rate a normal-urgency transaction would pay (`ceil` of the first normal bucket, as the
-    /// executor rounds it) is at least [`CONTENDED_MARGIN_PERCENT`] above `floor` (the relay minimum, [`MIN_FEE_RATE`], or the
-    /// rate the caller pays if it is higher). At the relay floor a transaction then waits for a block with room, so a person
-    /// may want to pay more. Conservative on purpose: an idle node reports the floor in every bucket, and a normal bucket within
-    /// the margin of it is no reason to speak. The priority bucket alone (sub-second inclusion costs a little more even on a quiet
-    /// network) and the low bucket (always the slowest) are not read.
+    /// Whether blocks are contended.
+    ///
+    /// The rate a normal-urgency transaction would pay is the `ceil` of the first normal bucket, as
+    /// the executor rounds it. Blocks are contended when it is at least
+    /// [`CONTENDED_MARGIN_PERCENT`] above `floor`, which is the relay minimum ([`MIN_FEE_RATE`]) or
+    /// the rate the caller pays if that is higher. At the relay floor a transaction then waits for
+    /// a block with room, so a person may want to pay more.
+    ///
+    /// The rule is conservative on purpose. An idle node reports the floor in every bucket, and a
+    /// normal bucket within the margin of it is no reason to speak. The priority bucket alone
+    /// (sub-second inclusion costs a little more even on a quiet network) and the low bucket
+    /// (always the slowest) are not read.
     pub fn contended(&self, floor: u64) -> bool {
         let floor = floor.max(MIN_FEE_RATE);
         // `as u64` saturates and maps NaN to 0
@@ -70,7 +84,7 @@ mod tests {
 
     #[test]
     fn contended_at_ten_percent_above_the_floor() {
-        // the TN10 flood of 2026-10-02: normal buckets 140 to 194, low 115, while the floor is 100
+        // A congested network: normal buckets 140 to 194, low 115, while the floor is 100.
         assert!(est(194.0).contended(100));
         assert!(est(140.0).contended(100));
         // the margin: 110 is contended, 109.2 rounds up to 110 (the executor pays ceil), 109 is not

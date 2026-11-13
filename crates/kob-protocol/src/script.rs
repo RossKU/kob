@@ -1,11 +1,10 @@
 //! Script helpers and signature-script encoding.
 //!
-//! A KOB covenant input's signature script is `args… ‖ push(dispatch tag) ‖ push(redeem)`: the
-//! entry arguments in ABI order (encoded by `silverscript-abi`, the same encoder the compiler
-//! tests use and the one Kaspire's wallet reproduced byte-for-byte on TN10), the 4-byte dispatch
-//! tag, then the redeem script. KCC-20 inputs use the token program's `transfer` (leader) or
-//! `transfer_delegator` entry with an owner witness; KRON inputs use the single-entry column layout
-//! of [`kron_token_sigscript`]. A P2PK input is `push(sig65)`.
+//! A KOB covenant input's signature script is `args… ‖ push(dispatch tag) ‖ push(redeem)`. The
+//! entry arguments come in ABI order, encoded by `silverscript-abi`, the encoder the compiler tests
+//! use. Then come the 4-byte dispatch tag and the redeem script. KCC-20 inputs use the token
+//! program's `transfer` (leader) or `transfer_delegator` entry with an owner witness. KRON inputs
+//! use the single-entry column layout of [`kron_token_sigscript`]. A P2PK input is `push(sig65)`.
 
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_txscript::opcodes::codes::{OpCheckSig, OpData32};
@@ -60,18 +59,27 @@ pub fn leader_witness(sig: Option<&[u8]>) -> Vec<u8> {
     w
 }
 
-/// Signature script of a KRON token input (KRON SDK `transferSigScript` layout): the next-state
-/// columns of the whole covenant group (`owners`, `id_types`, `amounts`, `is_minters`, each one
-/// concatenated push), the signature column (`sigs`, only `id_type` 0 uses it; empty here), the
-/// witness column (one byte per token input of the token, in input order: the index of the input
-/// that authorises it) and the redeem script. There is no dispatch tag: the program has one entry.
+/// Signature script of a KRON token input (KRON SDK `transferSigScript` layout).
+///
+/// The columns are, in order:
+/// - the next-state columns of the whole covenant group (`owners`, `id_types`, `amounts`,
+/// `is_minters`), each one a concatenated push;
+/// - the signature column (`sigs`), of which only `id_type` 0 uses it and which is empty here;
+/// - the witness column, one byte per token input of the token in input order, the index of the
+/// input that authorises it;
+/// - the redeem script.
+///
+/// There is no dispatch tag, because the program has one entry.
 pub fn kron_token_sigscript(redeem: &[u8], next: &[KronState], sigs: &[u8], witnesses: &[u8]) -> Vec<u8> {
     kron_columns_sigscript(redeem, next, sigs, witnesses, &[])
 }
 
-/// The `kron-columns` witness scheme of a token-program profile ([`crate::profile::WitnessScheme::KronColumns`]): the
-/// columns of [`kron_token_sigscript`], then the profile's constant `trailing` pushes (an entry selector of a program with
-/// several entries, e.g. KForge's `OP_0`), then the redeem script.
+/// Signature script of the `kron-columns` witness scheme of a token-program profile.
+///
+/// See [`crate::profile::WitnessScheme::KronColumns`]. It is the columns of
+/// [`kron_token_sigscript`], then the constant `trailing` pushes of the profile, then the redeem
+/// script. A trailing push is an entry selector of a program with several entries, e.g. KForge's
+/// `OP_0`.
 pub fn kron_columns_sigscript(redeem: &[u8], next: &[KronState], sigs: &[u8], witnesses: &[u8], trailing: &[Vec<u8>]) -> Vec<u8> {
     let mut s = vec![];
     s.extend(push_data(&next.iter().flat_map(|x| x.owner.to_vec()).collect::<Vec<u8>>()));

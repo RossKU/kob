@@ -1,20 +1,30 @@
-//! The cancel-only table: order templates this build no longer pins, kept ONLY so their makers can cancel them
-//! (`docs/spec/template-retirement.md`).
+//! The cancel-only table: order templates this build does not pin, kept so their makers can cancel.
 //!
-//! A contract change gives the orders placed afterwards a new template, while every order placed before keeps its script until it
-//! is spent. Such an order is unknown to this build ([`crate::artifacts::PINNED`] does not list its template): nothing fills it,
-//! arms or trails its stop, merges its repeat or refunds it as a keeper, no book lists it and no placement record of it is
-//! accepted. What this table adds is exactly one thing: the maker's `cancel(sig)` of such an order (its custody, its strays and
-//! its carrier back to the maker, [`crate::build::CancelOrder::retired`], [`crate::build::CancelItem::retired`]). The signature
-//! plan of that input is [`crate::tx::SigPlan::RetiredCancel`]; no other entry of a retired template is ever built or signed.
+//! See `docs/spec/template-retirement.md`.
 //!
-//! Every retired template here shares the state layout and the `cancel(sig)` entry of today's kind of the same name (checked on
-//! first use: the state span length, and the cancel entry's ABI and dispatch tag of today's artifact), so its terms decode with
-//! today's codec ([`crate::state::AnyState::decode`]) and only its bytecode differs. The bytes are the compiled bytecode of the
-//! retired artifact, taken from the last commit that carried it (`data/retired/<Kind>.<hash prefix>.bin`,
-//! `scripts/extract-retired.mjs`); each template hash is recomputed from them (`template_hash(prefix, suffix)`), so a changed
-//! file fails to load. The script engine tests (`crates/kob-tests/tests/kob/retired_cancel_tests.rs`) validate the cancel of every
-//! retired template and show that its other entries are not reachable through this table.
+//! A contract change gives the orders placed afterwards a new template, while every order placed
+//! before keeps its script until it is spent. Such an order is unknown to this build
+//! ([`crate::artifacts::PINNED`] does not list its template). Nothing fills it, arms or trails its
+//! stop, merges its repeat or refunds it as a keeper. No book lists it, and no placement record of
+//! it is accepted.
+//!
+//! This table adds exactly one thing: the maker's `cancel(sig)` of such an order. Its custody, its
+//! strays and its carrier go back to the maker ([`crate::build::CancelOrder::retired`],
+//! [`crate::build::CancelItem::retired`]). The signature plan of that input is
+//! [`crate::tx::SigPlan::RetiredCancel`]. No other entry of a retired template is ever built or
+//! signed.
+//!
+//! Every retired template here shares the state layout and the `cancel(sig)` entry of today's kind
+//! of the same name. That is checked on first use: the state span length, and the ABI and dispatch
+//! tag of the cancel entry of today's artifact. So its terms decode with today's codec
+//! ([`crate::state::AnyState::decode`]), and only its bytecode differs.
+//!
+//! The bytes are the compiled bytecode of the retired artifact, taken from the last commit that
+//! carried it (`data/retired/<Kind>.<hash prefix>.bin`, `scripts/extract-retired.mjs`). Each
+//! template hash is recomputed from them (`template_hash(prefix, suffix)`), so a changed file
+//! fails to load. The script engine tests
+//! (`crates/kob-tests/tests/kob/retired_cancel_tests.rs`) validate the cancel of every retired
+//! template and show that its other entries are not reachable through this table.
 
 use std::sync::OnceLock;
 
@@ -37,9 +47,11 @@ pub const CANCEL_TAG: [u8; 4] = [0xa0, 0x89, 0x31, 0x09];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Retirement {
-    /// `acf39cf` (2026-11-03): a terminal bid fill returns the spare KAS to its maker; the last release carrying these is `59d9ea30`.
+    /// A terminal bid fill returns the spare KAS to its maker. Retired by `acf39cf`; the last
+    /// release carrying these is `59d9ea30`.
     BidRefund,
-    /// `da35841` (2026-10-29, audit F1): trigger evidence refuses a negative interval; the last commit carrying these is `60a4d11`.
+    /// Trigger evidence refuses a negative interval (`docs/security/AUDIT-2026-10.md`, section 12).
+    /// Retired by `da35841`; the last commit carrying these is `60a4d11`.
     F1,
 }
 
@@ -61,12 +73,14 @@ impl Retirement {
     }
 }
 
-/// One retired order template: today's kind whose state layout and cancel entry it shares, and its own bytecode.
+/// One retired order template: today's kind whose state layout and cancel entry it shares, and its
+/// own bytecode.
 #[derive(Clone, Debug)]
 pub struct RetiredTemplate {
     /// Today's order kind of the same name (state codec, cancel entry ABI, signing-plan roles).
     pub kind: TemplateId,
-    /// blake3 template hash (`template_hash(prefix, suffix)`), the hash its orders were placed under.
+    /// blake3 template hash (`template_hash(prefix, suffix)`), the hash its orders were placed
+    /// under.
     pub hash: [u8; 32],
     /// The change that retired it.
     pub retirement: Retirement,
@@ -108,13 +122,16 @@ impl RetiredTemplate {
         to_hex(&self.hash)
     }
 
-    /// `KobBid b995661f`: the kind and the template hash prefix, as `docs/spec/template-retirement.md` names it.
+    /// `KobBid b995661f`: the kind and the template hash prefix, as
+    /// `docs/spec/template-retirement.md` names it.
     pub fn label(&self) -> String {
         format!("{} {}", self.kind.name(), &self.hash_hex()[..8])
     }
 
-    /// The signature script of the maker's `cancel(sig)` of an order with this state span: `push(sig) ‖ push(CANCEL_TAG) ‖
-    /// push(redeem)`, ABI-encoded with today's `cancel` entry of `kind` (the same ABI: checked on load).
+    /// The signature script of the maker's `cancel(sig)` of an order with this state span.
+    ///
+    /// It is `push(sig) ‖ push(CANCEL_TAG) ‖ push(redeem)`, ABI-encoded with today's `cancel` entry
+    /// of `kind`. The ABI is the same, and that is checked on load.
     pub fn cancel_sigscript(&self, state: &[u8], sig: &[u8]) -> Result<Vec<u8>> {
         let redeem = self.redeem(state)?;
         entry_sigscript(template(self.kind), &redeem, CANCEL_ENTRY, &[ArtifactValue::Bytes(sig.to_vec())]).map_err(Error::Invalid)
@@ -127,11 +144,14 @@ impl RetiredTemplate {
 pub struct RetiredInfo {
     /// Today's kind (`KobBid`).
     pub kind: String,
+    /// Template hash.
     #[serde(with = "crate::json::field")]
     pub hash: [u8; 32],
     /// `KobBid b995661f`.
     pub label: String,
+    /// The commit that retired the template.
     pub retired_by: String,
+    /// The last commit that carries the template.
     pub last_release: String,
     /// Always `["cancel"]`: the only entry this build spends it through.
     pub entries: Vec<String>,
@@ -150,7 +170,8 @@ macro_rules! retired_table {
     };
 }
 
-// (today's kind, retirement, template hash prefix of the file name); the full hashes are below
+// Each row is today's kind, the retirement, and the template hash prefix of the file name. The
+// full hashes are below.
 retired_table![
     (KobBid, BidRefund, "b995661f"),
     (KobCondAsk, BidRefund, "770314aa"),
@@ -185,8 +206,8 @@ retired_table![
     (KobIfdAskKronD0, F1, "4ee20455"),
 ];
 
-/// The full template hashes of [`TABLE`], in its order: the hashes the retired orders were placed under (each recomputed from its
-/// bytes on load).
+/// The full template hashes of [`TABLE`], in its order: the hashes the retired orders were placed
+/// under. Each is recomputed from its bytes on load.
 const HASHES: [&str; 31] = [
     "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3",
     "770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247",
@@ -236,7 +257,8 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
         if kind.kind_code().is_none() {
             return Err(format!("{name}: {} is not an order kind", kind.name()));
         }
-        // today's kind: the same state span at the same place (the order kinds have no compiler-owned context fields)
+        // today's kind: the same state span at the same place (the order kinds have no
+        // compiler-owned context fields)
         let (offset, len) = (cur.prefix.len(), cur.state_len);
         if bytes.len() < offset + len {
             return Err(format!("{name}: {} bytes cannot hold a state span {offset}+{len}", bytes.len()));
@@ -259,7 +281,8 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
         if *entry.dispatch_tag.as_bytes() != CANCEL_TAG || !one_sig {
             return Err(format!("{}: today's cancel entry is not cancel(sig) with tag {}", kind.name(), to_hex(&CANCEL_TAG)));
         }
-        // the tag must be in the retired bytecode too (its dispatcher compares the pushed tag with it)
+        // the tag must be in the retired bytecode too (its dispatcher compares the pushed tag with
+        // it)
         if !bytes.windows(4).any(|w| w == CANCEL_TAG) {
             return Err(format!("{name}: the bytecode does not carry the cancel dispatch tag"));
         }
@@ -268,7 +291,9 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
     Ok(out)
 }
 
-/// Every retired template of the cancel-only table (checked on first use; a broken table panics, like a broken artifact).
+/// Every retired template of the cancel-only table.
+///
+/// The table is checked on first use. A broken table panics, like a broken artifact.
 pub fn retired() -> &'static [RetiredTemplate] {
     static T: OnceLock<Vec<RetiredTemplate>> = OnceLock::new();
     T.get_or_init(|| load().unwrap_or_else(|e| panic!("retired templates: {e}")))
@@ -284,7 +309,8 @@ pub fn retired_by_hash(hash: &[u8; 32]) -> Option<&'static RetiredTemplate> {
     retired().iter().find(|r| &r.hash == hash)
 }
 
-/// The retired template with this hash, which must be one of `kind` (the kind the order's state decodes as).
+/// The retired template with this hash, which must be one of `kind` (the kind the order's state
+/// decodes as).
 pub fn retired_for(hash: &[u8; 32], kind: TemplateId) -> Result<&'static RetiredTemplate> {
     let r = retired_by_hash(hash)
         .ok_or_else(|| Error::Invalid(format!("template {} is not in the cancel-only table of retired templates", to_hex(hash))))?;

@@ -1,20 +1,27 @@
-//! kUSDT (`contracts/third-party/kusdt/UPSTREAM.md`): a KCC-20 token of the published public-mint app's `KCC20` program
-//! (KOB's `KCC20PublicMint`, the same bytes) whose issuance is a federated bridge. Its genesis group holds a `BridgeMint` (the
-//! only issuer: it mints against USDT locked in EVM vaults when 3 of its 5 signers sign) and a `TokenSeed` of the app; a
-//! redemption sends kUSDT to a burn owner that names the payout on the EVM side.
+//! kUSDT, a KCC-20 token whose issuance is a federated bridge.
 //!
-//! What KOB reads of it, from the chain only:
+//! The token is described in `contracts/third-party/kusdt/UPSTREAM.md`. It runs the `KCC20` program
+//! of the published public-mint app (KOB's `KCC20PublicMint`, the same bytes). Its genesis group
+//! holds a `BridgeMint` and a `TokenSeed` of the app. The `BridgeMint` is the only issuer: it mints
+//! against USDT locked in EVM vaults when 3 of its 5 signers sign. A redemption sends kUSDT to a
+//! burn owner that names the payout on the EVM side.
 //!
-//! * **The `BridgeMint` companion.** It is pinned by its template hash over the KCC-1 actor-type cut (the 34-byte prefix with
-//!   the compiler-owned `gen__kcc20_template` context, which names the program it mints: the app's `KCC20`), as the
-//!   `bridge-minter` companion of `KCC20PublicMint` in `data/programs.json`. KOB does not review the bridge: the pin only
-//!   recognises the covenant, so a genesis holding it verifies, reports it as a mint authority, and the apps name the token's
-//!   issuance ("federated bridge") instead of counting a public mint. Its state is not read, except for the extension
-//!   commitment its mints carry ([`bridge_mint_extension`]), which the genesis check holds to the token's one class.
-//! * **Burned cells.** A burn owner is the `p2sh/v1` authority (owner scheme 3) of a 40-byte script `R` that starts with
-//!   `OP_RETURN` ([`burn_script`]): no input can ever satisfy it, so the tokens can never move again. A redemption carries the
-//!   preimages in its payload ([`redemption_entries`]); an output whose state hashes to one of them is burned ([`is_burned`]),
-//!   and the indexer keeps it out of the holdings. Without a payload a burn is not recognised (its owner is just a script hash).
+//! KOB reads two things of it, from the chain only.
+//!
+//! - **The `BridgeMint` companion.** It is pinned by its template hash over the KCC-1 actor-type
+//!   cut: the 34-byte prefix with the compiler-owned `gen__kcc20_template` context, which names
+//!   the program it mints (the app's `KCC20`). The pin is the `bridge-minter` companion of
+//!   `KCC20PublicMint` in `data/programs.json`. KOB does not review the bridge. The pin only
+//!   recognises the covenant, so a genesis holding it verifies and is reported as having a mint
+//!   authority. The apps name the issuance ("federated bridge") instead of counting a public
+//!   mint. Its state is not read, except for the extension commitment its mints carry
+//!   ([`bridge_mint_extension`]), which the genesis check holds to the token's one class.
+//! - **Burned cells.** A burn owner is the `p2sh/v1` authority (owner scheme 3) of a 40-byte script
+//!   `R` that starts with `OP_RETURN` ([`burn_script`]). No input can ever satisfy it, so the
+//!   tokens can never move again. A redemption carries the preimages in its payload
+//!   ([`redemption_entries`]). An output whose state hashes to one of them is burned
+//!   ([`is_burned`]), and the indexer keeps it out of the holdings. Without a payload a burn is
+//!   not recognised, because its owner is just a script hash.
 
 use crate::state::TokenState;
 
@@ -24,11 +31,15 @@ pub const REDEEM_TAG: &[u8; 15] = b"kUSDT/redeem/v1";
 pub const PAYLOAD_MAGIC: &[u8; 5] = b"KUSDT";
 /// Payload kind of a redemption.
 pub const PAYLOAD_REDEMPTION: u8 = 0x01;
-/// Length of the `BridgeMint` state span after the 34-byte prefix (eight 8-byte integers, a bool and three 32-byte fields, each
-/// with its push opcode); its extension commitment is the last field.
+/// Length of the `BridgeMint` state span after the 34-byte prefix.
+///
+/// The span is eight 8-byte integers, a bool and three 32-byte fields, each with its push opcode.
+/// Its extension commitment is the last field.
 pub const BRIDGE_MINT_STATE_LEN: usize = 173;
 
-/// The burn script `R(chain, address) = 6a 0f "kUSDT/redeem/v1" 01 chain 14 address[20]` (40 bytes; `6a` is `OP_RETURN`).
+/// The burn script `R(chain, address)`, 40 bytes.
+///
+/// It is `6a 0f "kUSDT/redeem/v1" 01 chain 14 address[20]`, where `6a` is `OP_RETURN`.
 pub fn burn_script(chain: u8, address: &[u8; 20]) -> [u8; 40] {
     let mut r = [0u8; 40];
     r[0] = 0x6a;
@@ -41,7 +52,8 @@ pub fn burn_script(chain: u8, address: &[u8; 20]) -> [u8; 40] {
     r
 }
 
-/// The owner of a burn state (owner scheme 3): `Blake2b(R)`, the `p2sh/v1` authority of [`burn_script`].
+/// The owner of a burn state (owner scheme 3): `Blake2b(R)`, the `p2sh/v1` authority of
+/// [`burn_script`].
 pub fn burn_owner(chain: u8, address: &[u8; 20]) -> [u8; 32] {
     crate::kcc2::p2sh_authority(&burn_script(chain, address))
 }
@@ -64,8 +76,10 @@ impl RedemptionEntry {
     }
 }
 
-/// The entries of a redemption payload `"KUSDT" 01 count (output_index chain address[20]){count}` (`count` 1 to 255, nothing
-/// after the entries); `None` for any other payload.
+/// The entries of a redemption payload, `None` for any other payload.
+///
+/// The payload is `"KUSDT" 01 count (output_index chain address[20]){count}`, with `count` 1 to 255
+/// and nothing after the entries.
 pub fn redemption_entries(payload: &[u8]) -> Option<Vec<RedemptionEntry>> {
     let rest = payload.strip_prefix(PAYLOAD_MAGIC.as_slice())?;
     let (&kind, rest) = rest.split_first()?;
@@ -80,15 +94,19 @@ pub fn redemption_entries(payload: &[u8]) -> Option<Vec<RedemptionEntry>> {
     )
 }
 
-/// True when `state`, the proven state of output `output` of a transaction with these redemption entries, is a burn: a KCC-20
-/// state of owner scheme 3 whose owner is the burn owner the entry for that output names.
+/// True when `state`, the proven state of output `output`, is a burn.
+///
+/// A burn is a KCC-20 state of owner scheme 3 whose owner is the burn owner that the entry for that
+/// output names. `entries` are the redemption entries of the transaction.
 pub fn is_burned(entries: &[RedemptionEntry], output: u32, state: &TokenState) -> bool {
     let Some(k) = state.as_kcc20() else { return false };
     k.owner_scheme == crate::kcc2::P2SH && entries.iter().any(|e| u32::from(e.output) == output && e.owner() == k.owner)
 }
 
-/// The extension commitment a `BridgeMint` state span (after the 34-byte prefix) gives every state it mints: its last field
-/// (`0x20` and 32 bytes). `None` when the span is not that length or the field is not pushed that way.
+/// The extension commitment that a `BridgeMint` state span gives every state it mints.
+///
+/// The span is the state after the 34-byte prefix. The commitment is its last field (`0x20` and 32
+/// bytes). `None` when the span is not that length or the field is not pushed that way.
 pub fn bridge_mint_extension(state: &[u8]) -> Option<[u8; 32]> {
     let tail = state.len().checked_sub(33).filter(|_| state.len() == BRIDGE_MINT_STATE_LEN).map(|i| &state[i..])?;
     (tail[0] == 0x20).then(|| tail[1..].try_into().expect("32"))
