@@ -1,15 +1,33 @@
-//! Genesis check of a token outside the registry for the wasm surface (`verifyGenesis`): JSON in and out around
-//! `kob_protocol::genesis_open::check_open_genesis`, which holds the rules.
+//! Genesis check of a token outside the registry, behind the wasm `verifyGenesis` binding.
 //!
-//! Request (kob-protocol JSON conventions, 64-bit integers as decimal strings):
-//! `{covenantId, genesisTxid, authorizingOutpoint: {txid, index}, outputs: [{index, value, spk, spkVersion?, redeemScript?}],
-//! programHint?, ownerHints?}`. `outputs` is the complete genesis group (every output bound to the covenant id) in increasing index order;
-//! `ownerHints` are x-only keys the genesis transaction pays to (candidate owners of an unspent `TokenSeed`); `spk` is the script public key bytes (hex), `redeemScript` the revealed redeem script (absent: not revealed).
+//! The module wraps `kob_protocol::genesis_open::check_open_genesis` in JSON, and that function
+//! holds the rules. Integers of 64 bits are decimal strings, as elsewhere in kob-protocol.
 //!
-//! Result: `{status: "verified", program, programHash, txid, outputs, supply, minterOutputs, mintAllowance, seedOutputs,
-//! companionOutputs, issuer, rebuilt}` | `{status: "failed", code: "mismatch" | "contaminated", message}` |
-//! `{status: "unavailable", code: "unrevealed" | "unsupported_program" | "malformed", message}`. A request that is not even
-//! JSON of this shape is an error (a caller bug); everything the data can do wrong is a `failed` / `unavailable` result.
+//! # Request
+//!
+//! ```text
+//! {covenantId, genesisTxid, authorizingOutpoint: {txid, index},
+//!  outputs: [{index, value, spk, spkVersion?, redeemScript?}], programHint?, ownerHints?}
+//! ```
+//!
+//! - `outputs` is the whole genesis group, which is every output bound to the covenant id, in
+//!   increasing index order.
+//! - `spk` is the script public key as hex. `redeemScript` is the revealed redeem script, and
+//!   it is absent when not revealed.
+//! - `ownerHints` are x-only keys that the genesis transaction pays to. They are the candidate
+//!   owners of an unspent `TokenSeed`.
+//!
+//! # Result
+//!
+//! ```text
+//! {status: "verified", program, programHash, txid, outputs, supply, minterOutputs,
+//!  mintAllowance, seedOutputs, companionOutputs, issuer, rebuilt}
+//! {status: "failed", code: "mismatch" | "contaminated", message}
+//! {status: "unavailable", code: "unrevealed" | "unsupported_program" | "malformed", message}
+//! ```
+//!
+//! A request that is not JSON of this shape is an error, because it is a caller bug. Anything the
+//! data can get wrong is a `failed` or `unavailable` result.
 
 use kob_protocol::genesis_open::{check_open_genesis, FailCode, OpenGenesis, OpenOutcome, OpenOutput, UnavailableCode};
 use kob_protocol::json;
@@ -53,10 +71,10 @@ fn unavailable(message: String) -> String {
     json!({ "status": "unavailable", "code": "malformed", "message": message }).to_string()
 }
 
-/// See the module docs.
+/// Checks a genesis group and returns the result JSON, see the module docs.
 pub fn verify_genesis(request: &str) -> Result<String, String> {
     let r: Request = serde_json::from_str(request).map_err(|e| format!("genesis request: {e}"))?;
-    // hex that does not decode is the data's fault: unavailable, not a caller bug
+    // Hex that does not decode is the data's fault, so it is `unavailable`, not an error.
     let mut outputs = Vec::with_capacity(r.outputs.len());
     for o in &r.outputs {
         let spk = match json::from_hex(&o.spk) {

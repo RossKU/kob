@@ -1,19 +1,32 @@
-//! Token issuance for the wasm surface: the `kob token create` flow as two `BuiltTx`, and the KCC-23 readers.
+//! Token issuance for the wasm surface, and the KCC-23 readers.
 //!
-//! A creation is two transactions under KCC-23 (`kob_protocol::issue::build_creation`): `prep`, the preparation (the wallet's
-//! P2PK funding -> output 0, the wallet's own P2PK of exactly the genesis's carriers and fee, + change; payload = `0x00` + the
-//! token metadata JSON), and `built`, the genesis spending `prep`'s output 0 alone (input 0 authorises the KIP-20 genesis group,
-//! so the covenant id commits to the declaration) -> 1..N token outputs of the `KCC20` actor of upstream's published
-//! `KCC20PublicMint` app (`KCC20PublicMint`, 3 / 3 slots, the default since 2026-11-04; no minter is created); or with
-//! `"program": "3x3"` the standalone reference program in its 3 / 3 configuration (`KCC20Ref`); the 8 / 8 prototype is not
-//! offered here), no change. Both are signed by the
-//! wallet's key; the genesis is built and signed before the preparation is on chain (a transaction id does not depend on
-//! signature scripts). `build_creation` does the planning and `CreationPlan::verify` the consensus-level checks (the KCC-23
-//! binding included); this module only maps JSON in and the plans out as normal [`BuiltTx`], so the existing `finalize` /
-//! `validate` exports and the wallet signing pipeline (written against `BuiltTx`) work on each unchanged.
+//! The `kob token create` flow is two transactions under KCC-23, planned by
+//! `kob_protocol::issue::build_creation`.
 //!
-//! Readers: [`kcc23_verify`] checks a launch proof (`kob-kcc23-proof/1`, from an indexer or any other source) and returns the
-//! declaration bound to its covenant id; [`kcc23_decode`] reads a preparation payload.
+//! - `prep` is the preparation. It spends the wallet's P2PK funding into output 0, which holds
+//!   exactly the carriers and fee of the genesis, plus change. Its payload is `0x00` followed by
+//!   the token metadata JSON.
+//! - `built` is the genesis. It spends output 0 of `prep` alone, and input 0 authorises the
+//!   KIP-20 genesis group, so the covenant id commits to the declaration. It creates one or more
+//!   token outputs and no change.
+//!
+//! The token outputs belong to the `KCC20` actor of the published `KCC20PublicMint` app, in its
+//! 3 / 3 slot configuration, and no minter is created. This is the default. With
+//! `"program": "3x3"` the outputs belong to the standalone reference program `KCC20Ref` in its
+//! 3 / 3 configuration. The 8 / 8 prototype is not offered here.
+//!
+//! The wallet's key signs both transactions. The genesis is built and signed before the
+//! preparation is on chain, because a transaction id does not depend on signature scripts.
+//!
+//! `build_creation` plans, and `CreationPlan::verify` runs the consensus-level checks, the KCC-23
+//! binding included. This module only maps JSON in and the plans out as [`BuiltTx`], so the
+//! `finalize` and `validate` exports and the wallet signing pipeline work on them unchanged.
+//!
+//! # Readers
+//!
+//! - [`kcc23_verify`] checks a launch proof (`kob-kcc23-proof/1`) and returns the declaration
+//!   bound to its covenant id.
+//! - [`kcc23_decode`] reads a preparation payload.
 
 use std::collections::BTreeSet;
 
@@ -33,7 +46,7 @@ use serde_json::{json, Value};
 
 type R<T> = Result<T, String>;
 
-/// Longest description / website / icon the registry accepts.
+/// Longest description, website or icon the registry accepts.
 const MAX_DISPLAY_CHARS: usize = 512;
 const MAX_NAME_CHARS: usize = 64;
 
@@ -51,7 +64,7 @@ struct HolderJson {
     borrow_guard: Option<[u8; 32]>,
 }
 
-/// Request of `issue` (kob-protocol JSON conventions).
+/// Request of `issue`, in the JSON conventions of kob-protocol.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueRequest {
@@ -68,32 +81,33 @@ struct IssueRequest {
     #[serde(with = "json::field", default)]
     fee_rate: Option<u64>,
     funding: Vec<KeyUtxo>,
-    /// x-only public key that receives the change (default: the owner of funding[0]).
+    /// x-only public key that receives the change. Default: the owner of `funding[0]`.
     #[serde(with = "json::field", default)]
     change_to: Option<[u8; 32]>,
-    /// Permit non-zero borrow schemes on non-0x04 holders (never set by the web app's default form).
+    /// Permits non-zero borrow schemes on holders that do not use owner scheme 0x04.
     #[serde(default)]
     allow_borrow: bool,
     #[serde(default)]
     description: Option<String>,
-    /// The picture's address (declared as `image`; registry `display.icon`).
+    /// Address of the picture. Declared as `image`, and it is the registry's `display.icon`.
     #[serde(default)]
     icon: Option<String>,
-    /// SHA-256 of the picture file's bytes, 64 hex characters (declared lowercase as `image_hash`; needs `icon`).
+    /// SHA-256 of the picture file, 64 hex characters. Declared in lowercase as `image_hash`. Needs
+    /// `icon`.
     #[serde(default)]
     image_hash: Option<String>,
     #[serde(default)]
     website: Option<String>,
-    /// X account: a handle or its address (declared as `https://x.com/<handle>`).
+    /// X account, as a handle or its address. Declared as `https://x.com/<handle>`.
     #[serde(default)]
     x: Option<String>,
-    /// Telegram: a handle or its address (declared as `https://t.me/<handle>`).
+    /// Telegram account, as a handle or its address. Declared as `https://t.me/<handle>`.
     #[serde(default)]
     telegram: Option<String>,
     #[serde(default)]
     network: Option<String>,
-    /// `public-mint` (default) or `3x3` (`kob_protocol::issue::IssueProgram::parse`); the `8x8-prototype` the CLI knows is
-    /// refused here.
+    /// `public-mint` (default) or `3x3`, as `kob_protocol::issue::IssueProgram::parse` reads them.
+    /// The `8x8-prototype` of the CLI is refused here.
     #[serde(default)]
     program: Option<String>,
 }
@@ -127,7 +141,7 @@ struct TokenInfo {
     decimals: u8,
     #[serde(with = "json::field")]
     supply: u64,
-    /// KAS (sompi) on every token output.
+    /// KAS, in sompi, on every token output.
     #[serde(with = "json::field")]
     carrier: u64,
     outputs: Vec<TokenOutput>,
@@ -139,20 +153,22 @@ struct Docs {
     supply: Value,
     metadata: Value,
     registry_entry: Value,
-    /// The KCC-23 launch proof (`kob-kcc23-proof/1`): both transactions in the fields their ids commit to.
+    /// The KCC-23 launch proof (`kob-kcc23-proof/1`), with both transactions in the fields their
+    /// ids commit to.
     launch_proof: Value,
 }
 
-/// The declaration the preparation carries.
+/// The declaration that the preparation carries.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Declaration {
     /// The JSON text, exactly as committed.
     json: String,
-    /// The preparation payload (`00` + the UTF-8 JSON), hex.
+    /// The preparation payload, hex: `00` followed by the UTF-8 JSON.
     #[serde(with = "json::field")]
     payload: Vec<u8>,
-    /// Sompi of the preparation's output 0: the genesis's carriers and fee (the wallet's own UTXO until the genesis spends it).
+    /// Sompi of output 0 of the preparation, which are the carriers and fee of the genesis. It is
+    /// the wallet's own UTXO until the genesis spends it.
     #[serde(with = "json::field")]
     funding: u64,
 }
@@ -160,9 +176,9 @@ struct Declaration {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueResult {
-    /// Step 1: the preparation (the KCC-23 declaration).
+    /// Step 1, the preparation that carries the KCC-23 declaration.
     prep: BuiltTx,
-    /// Step 2: the genesis, spending `prep`'s output 0.
+    /// Step 2, the genesis, which spends output 0 of `prep`.
     built: BuiltTx,
     declaration: Declaration,
     token: TokenInfo,
@@ -170,12 +186,14 @@ struct IssueResult {
     warnings: Vec<String>,
 }
 
-/// Characters the registry refuses in display text: control, zero-width and bidi controls.
+/// Whether `s` has a character the registry refuses in display text.
+///
+/// Those are control, zero-width and bidi control characters.
 fn has_bad_char(s: &str) -> bool {
     kcc23::has_bad_char(s)
 }
 
-/// The registry's display rules, applied up front so the emitted registry entry is always submittable.
+/// Applies the registry's display rules up front, so the emitted registry entry can be submitted.
 fn check_display(r: &IssueRequest) -> R<()> {
     if r.name.trim().is_empty() || r.name.chars().count() > MAX_NAME_CHARS || has_bad_char(&r.name) {
         return Err(format!(
@@ -210,7 +228,7 @@ fn check_display(r: &IssueRequest) -> R<()> {
     Ok(())
 }
 
-/// A social account of the request in its canonical address, `None` when absent or blank.
+/// A social account of the request in its canonical address, or `None` when absent or blank.
 fn social(v: &Option<String>, label: &str, canonical: fn(&str) -> Option<String>) -> R<Option<String>> {
     match v.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(s) => {
@@ -275,9 +293,11 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
     Ok(spec)
 }
 
-/// A transaction (as `TxJson`, with its UTXO entries) of P2PK inputs of `pubkeys` (one per input) as the shared `BuiltTx`: P2PK plans,
-/// SIGHASH_ALL sign requests and the fee report. `daa`: the real DAA scores of the inputs where known (the Schnorr sighash does
-/// not commit to them; `finalize` recomputes every digest from the JSON).
+/// Wraps a transaction of P2PK inputs as the shared `BuiltTx`.
+///
+/// `pubkeys` has one key per input. The result has P2PK plans, SIGHASH_ALL sign requests and the
+/// fee report. `daa` holds the DAA scores of the inputs where known. The Schnorr sighash does not
+/// commit to them, and `finalize` recomputes every digest from the JSON.
 fn to_built(
     mut tx_json: TxJson,
     pubkeys: &[[u8; 32]],
@@ -292,7 +312,7 @@ fn to_built(
     }
     let (unsigned, entries) = tx_json.to_tx().map_err(|e| e.to_string())?;
 
-    // Mass of the transaction as it will be signed (placeholder signatures have the final size).
+    // Mass of the transaction as it will be signed. Placeholder signatures have the final size.
     let dummy_sig = push_data(&[[0u8; 64].as_slice(), &[SIGHASH_ALL]].concat());
     let mut measured = unsigned.clone();
     for i in measured.inputs.iter_mut() {
@@ -328,7 +348,7 @@ fn to_built(
     })
 }
 
-/// The preparation and the genesis of `plan` as `BuiltTx` (funding DAA scores from the request).
+/// The preparation and the genesis of `plan` as `BuiltTx`, with the DAA scores of the funding.
 fn to_builts(plan: &CreationPlan, funding: &[KeyUtxo]) -> R<(BuiltTx, BuiltTx)> {
     let rate = plan.genesis.spec.fee_rate;
     let p = &plan.prep;
@@ -347,14 +367,15 @@ fn to_builts(plan: &CreationPlan, funding: &[KeyUtxo]) -> R<(BuiltTx, BuiltTx)> 
     Ok((prep, genesis))
 }
 
-/// Plans, verifies and describes a fixed-supply KCC-20 creation (see the module docs and `issue` in `lib.rs`).
+/// Plans, verifies and describes a fixed-supply KCC-20 creation, see the module docs.
 pub fn issue(spec_json: &str) -> R<String> {
     let req: IssueRequest = serde_json::from_str(spec_json).map_err(|e| format!("spec: {e}"))?;
     check_display(&req)?;
     let spec = to_spec(&req, req.fee_rate.unwrap_or(DEFAULT_FEE_RATE))?;
     let plan = build_creation(&spec).map_err(|e| e.to_string())?;
-    // both transactions, the KCC-23 binding, covenant context (genesis group), covenant id, exact scripts, supply,
-    // storage-mass commitments, mass bounds and the owner-scheme-0x04 self-test; script execution follows in `validate` once signed
+    // Verifies both transactions, the KCC-23 binding, the covenant context of the genesis group,
+    // the covenant id, the exact scripts, the supply, the storage-mass commitments, the mass bounds
+    // and the owner-scheme-0x04 self-test. Script execution follows in `validate` once signed.
     plan.verify().map_err(|e| e.to_string())?;
     let (prep, built) = to_builts(&plan, &req.funding)?;
     let g = &plan.genesis;
@@ -409,14 +430,16 @@ pub fn issue_limits() -> R<String> {
         "ticker": { "minLength": 2, "maxLength": 12, "pattern": "^[A-Z0-9]{2,12}$" },
         "name": { "minLength": 1, "maxLength": MAX_NAME_CHARS },
         "maxDisplayChars": MAX_DISPLAY_CHARS,
-        // the declaration's payload limit (codec byte included): name, symbol, decimals and the optional fields together
+        // Limit of the declaration payload, codec byte included. It covers the name, symbol,
+        // decimals and the optional fields.
         "maxMetadataBytes": kcc23::MAX_TOKEN_PAYLOAD,
         "ownerSchemes": OWNER_SCHEMES_ENABLED,
         "covenantOwnerScheme": issue::SCHEME_COVENANT_ID,
-        // the standalone 3 / 3 reference program (`"program": "3x3"` in the request): issued only when named
+        // The standalone 3 / 3 reference program. It is issued only when the request names
+        // `"program": "3x3"`.
         "program": "KCC20Ref",
         "registryTemplateId": REGISTRY_TEMPLATE_ID,
-        // the published public-mint build of the reference (the default issuance; `"program": "public-mint"` in the request)
+        // The published public-mint build of the reference, which is the default issuance.
         "publicMint": { "program": "KCC20PublicMint", "registryTemplateId": REGISTRY_TEMPLATE_ID_PUBLIC_MINT, "maxTokenInputs": 3, "maxTokenOutputs": 3 },
         "extensionClass": EXTENSION_CLASS,
         "extensionCommitment": hex(&EXTENSION_FIXED_SUPPLY),
@@ -424,17 +447,22 @@ pub fn issue_limits() -> R<String> {
     serde_json::to_string(&limits).map_err(|e| e.to_string())
 }
 
-/// Verifies a KCC-23 launch proof (`kob-kcc23-proof/1`, JSON) and returns the declaration bound to its covenant id:
-/// `{covenantId, preparationTxid, genesisTxid, json, token: {name, symbol, decimals, description, image, image_hash, website, x, telegram,
-/// issues}}`. Whoever supplied the proof, the ids are recomputed here: an error means it does not bind a declaration to that id.
+/// Verifies a KCC-23 launch proof and returns the declaration bound to its covenant id.
+///
+/// The proof is `kob-kcc23-proof/1` JSON. The result is `{covenantId, preparationTxid,
+/// genesisTxid, json, token: {name, symbol, decimals, description, image, image_hash, website, x,
+/// telegram, issues}}`. The ids are recomputed here whoever supplied the proof, and an error means
+/// the proof does not bind a declaration to that id.
 pub fn kcc23_verify(proof_json: &str) -> R<String> {
     let proof: kcc23::LaunchProof = serde_json::from_str(proof_json).map_err(|e| format!("proof: {e}"))?;
     let v = proof.verify()?;
     serde_json::to_string(&v).map_err(|e| e.to_string())
 }
 
-/// Decodes a preparation payload (hex) under KCC-23 and KOB's token convention: `{json, token}`; an error names why it is not a
-/// declaration. Decoding binds nothing: only [`kcc23_verify`] ties a declaration to a covenant id.
+/// Decodes a preparation payload (hex) under KCC-23 and the KOB token convention.
+///
+/// The result is `{json, token}`, and an error names why the payload is not a declaration.
+/// Decoding binds nothing. Only [`kcc23_verify`] ties a declaration to a covenant id.
 pub fn kcc23_decode(payload_hex: &str) -> R<String> {
     let payload = json::from_hex(payload_hex)?;
     let (text, obj) = kcc23::decode_limited(&payload, kcc23::MAX_READ_PAYLOAD).map_err(|e| e.to_string())?;
