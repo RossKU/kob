@@ -1,26 +1,33 @@
-//! The auction tick of a fill (`docs/spec/matcher.md` §3.3): the earliest tick at which the batch still pays.
+//! The earliest auction tick at which a batch still pays (`docs/spec/matcher.md` §3.3).
 //!
-//! Every auction covenant takes its auction time `t` as an argument of the fill and checks `origin <= t` and
-//! `tx.daa >= t` (CLTV): `t` is a lower bound of now that the transaction proves, and each auction leg of one transaction
-//! may carry its own (the builders check `origin <= t <= lockTime`, `kob_protocol::build`). The planner allocates at
-//! `t = lockTime` (the quotes its walks cross at, [`super::batch`]); the engine then prices the auction legs of the built
-//! batch at the earliest ticks at which it still pays its fee and the operator's `min_profit`, never at a tick that
-//! costs the batch money. A rising bid then pays the lowest price that covers the batch's costs, a decaying ask receives
-//! the highest: a market order fills at about its start price whatever the matcher's latency.
+//! Every auction covenant takes its auction time `t` as an argument of the fill. It checks
+//! `origin <= t` and `tx.daa >= t` (CLTV), so `t` is a lower bound of the current DAA score that
+//! the transaction proves. Each auction leg of one transaction may carry its own `t`. The builders
+//! check `origin <= t <= lockTime` (`kob_protocol::build`).
 //!
-//! * **KAS-book auctions** ([`KasAuction`]: decaying `KobAsk`, rising `KobBid`, TWAP / DCA slices, armed stop legs of
-//!   `KobCondAsk` / `KobCondBid` and armed stop entries of `KobIfdBid` / `KobIfdAsk` while their band opens) keep the
-//!   allocation: the same fills of the same orders, only their quotes move. Moving a leg's `t` changes only the KAS that
-//!   leg pays or receives (the operator's change takes the difference; every output of the maker grows), so
-//!   [`earliest_ticks`] prices them with the covenants' own amounts against the batch's exact surplus.
-//! * **Pair auctions** ([`pair_auction_from`]: a `KobPair` market or Dutch order, an armed `KobCondPair` stop leg or
-//!   `KobIfdPair` stop entry) move token amounts, which the batch must route again: the engine plans the batch again with
-//!   their quotes at earlier ticks ([`super::candidate::CandCtx::pair_ticks`]) and keeps the earliest at which the
-//!   planner still fills them in full and the batch pays.
+//! The planner allocates at `t = lockTime`, the tick its walks cross at ([`super::batch`]). The
+//! engine then prices the auction legs of the built batch at the earliest ticks at which it still
+//! pays its fee and the operator's `min_profit`. A rising bid then pays the lowest price that
+//! covers the batch's costs and a decaying ask receives the highest, so a market order fills at
+//! about its start price whatever the matcher's latency.
 //!
-//! Several auctions of one batch are moved together, at the same progress `e` from their earliest ticks (`t = min(lockTime,
-//! from + e)`, the smallest `e` that pays): one rule for every auction, a pure function of the plan and the batch's
-//! surplus, and a monotone one (every leg's KAS only grows with its `t`), so the search is a bisection.
+//! * **KAS-book auctions** ([`KasAuction`]) are decaying `KobAsk`, rising `KobBid`, TWAP / DCA
+//!   slices, armed stop legs of `KobCondAsk` / `KobCondBid` and armed stop entries of `KobIfdBid` /
+//!   `KobIfdAsk` while their band opens. They keep the allocation: the same fills of the same
+//!   orders, only their quotes move. Moving a leg's `t` changes only the KAS that leg pays or
+//!   receives. The operator's change takes the difference and every output of the maker grows. So
+//!   [`earliest_ticks`] prices them with the covenants' own amounts against the batch's exact
+//!   surplus.
+//! * **Pair auctions** ([`pair_auction_from`]) are a `KobPair` market or Dutch order, an armed
+//!   `KobCondPair` stop leg and a `KobIfdPair` stop entry. They move token amounts, which the batch
+//!   must route again. The engine plans the batch again with their quotes at earlier ticks
+//!   ([`super::candidate::CandCtx::pair_ticks`]). It keeps the earliest tick at which the planner
+//!   still fills them in full and the batch pays.
+//!
+//! Several auctions of one batch move together, at the same progress `e` from their earliest ticks:
+//! `t = min(lockTime, from + e)`, with the smallest `e` that pays. This is one rule for every
+//! auction and a pure function of the plan and the batch's surplus. It is monotone, since every
+//! leg's KAS only grows with its `t`, so the search is a bisection.
 
 use std::collections::BTreeMap;
 
@@ -67,9 +74,15 @@ impl KasAuction {
     }
 }
 
-/// The KAS-book auction of a fill, if its quote moves with `t` (`lock`: the batch's lock time). A pair order, an unarmed
-/// stop triggered in the batch (it trades at its trigger), a stop whose band is open at once and an order whose UTXO is an
-/// unaccepted continuation (its origin is not known yet) are none.
+/// The KAS-book auction of a fill, if its quote moves with `t`. `lock` is the batch's lock time.
+///
+/// These fills have no auction:
+///
+/// - a pair order,
+/// - a stop triggered in the batch, which trades at its trigger,
+/// - a fill that is trigger evidence,
+/// - an unarmed stop or a stop whose band is open at once,
+/// - an order whose UTXO is an unaccepted continuation, because its origin is not known yet.
 pub fn kas_auction(k: usize, f: &Fill, o: &ListedOrder, lock: i64) -> Option<KasAuction> {
     if f.cand.pair.is_some() || f.evidence.is_some() || f.cand.trigger.is_some() || o.utxo_daa() == u64::MAX {
         return None;
@@ -90,8 +103,11 @@ pub fn kas_auction(k: usize, f: &Fill, o: &ListedOrder, lock: i64) -> Option<Kas
     (from <= lock).then_some(KasAuction { fill: k, from, quote, udaa })
 }
 
-/// The earliest tick of a pair order's auction fill (the primary leg of a pair order in a plan), if its quote moves with `t`:
-/// a `KobPair` market or Dutch order, an armed `KobCondPair` stop leg or `KobIfdPair` stop entry whose band opens over time.
+/// The earliest tick of a pair order's auction fill, if its quote moves with `t`.
+///
+/// The fill is the primary leg of a pair order in a plan. The orders are a `KobPair` market or
+/// Dutch order, and an armed `KobCondPair` stop leg or `KobIfdPair` stop entry whose band opens
+/// over time.
 pub fn pair_auction_from(f: &Fill, o: &ListedOrder, lock: i64) -> Option<i64> {
     if f.cand.pair.is_none() || f.evidence.is_some() || o.utxo_daa() == u64::MAX {
         return None;
@@ -114,8 +130,10 @@ pub fn tick_at(from: i64, e: i64, lock: i64) -> i64 {
     from.saturating_add(e).min(lock)
 }
 
-/// The smallest `e` in `0..=span` for which `ok(e)` holds, `ok` monotone (false below some point, true from it on) and
-/// `ok(span)` assumed true; `None` when `ok` fails everywhere below `span` (the lock time stays).
+/// The smallest `e` in `0..=span` for which `ok(e)` holds.
+///
+/// `ok` must be monotone (false below some point, true from it on), and `ok(span)` is assumed true.
+/// Returns `None` when `ok` fails everywhere below `span`, which leaves the lock time in place.
 pub fn first_paying(span: i64, mut ok: impl FnMut(i64) -> bool) -> Option<i64> {
     let (mut lo, mut hi) = (0i64, span);
     let mut best = None;
@@ -131,19 +149,25 @@ pub fn first_paying(span: i64, mut ok: impl FnMut(i64) -> bool) -> Option<i64> {
     best
 }
 
-/// What a leg moves into the operator's change at quote `q` for its fill: a bid's payment (positive), an ask's proceeds
-/// (negative), the exact covenant amounts ([`super::candidate::Cand::value`]).
+/// What a leg moves into the operator's change at quote `q` for its fill.
+///
+/// A bid's payment is positive and an ask's proceeds are negative. The amounts are the covenant's
+/// own ([`super::candidate::Cand::value`]).
 fn kas_of(f: &Fill, q: i64) -> Option<i64> {
     let c = super::candidate::Cand { quote: q, ..f.cand.clone() };
     let v = c.value(f.amount)?;
     Some(if c.side == Side::Bid { v } else { -v })
 }
 
-/// The plan with its KAS-book auction legs at the earliest ticks the batch still pays at: every leg at the same progress
-/// `e` from its earliest tick (`t = min(lock, from + e)`), the smallest `e` at which what the legs give up against their
-/// lock-time quotes stays within `budget` (the batch's exact surplus above `min_profit`, sompi). Each moved fill carries its
-/// tick ([`Fill::t`]) and its quote there; the plan's margin drops by what the legs give up. `None`: no leg moves (no
-/// auction leg, no surplus, or none pays below the lock time).
+/// The plan with its KAS-book auction legs moved to the earliest ticks at which the batch still
+/// pays.
+///
+/// Every leg moves by the same progress `e` from its earliest tick (`t = min(lock, from + e)`). `e`
+/// is the smallest value at which what the legs give up against their lock-time quotes stays within
+/// `budget`, the batch's exact surplus above `min_profit` in sompi. Each moved fill carries its
+/// tick ([`Fill::t`]) and its quote there, and the plan's margin drops by what the legs give up.
+/// Returns `None` when no leg moves: there is no auction leg, no surplus, or none pays below the
+/// lock time.
 pub fn earliest_ticks(plan: &Plan, by_id: &BTreeMap<CovId, ListedOrder>, lock: u64, budget: i64) -> Option<Plan> {
     let lock = i64::try_from(lock).ok()?;
     if budget <= 0 {

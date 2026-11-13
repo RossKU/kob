@@ -1,16 +1,19 @@
-//! The next transactions of a tick: book sets and crossings larger than one transaction (`docs/spec/matcher.md` §3.4, §7).
+//! The next transactions of a tick, for book sets and crossings larger than one transaction.
 //!
-//! After a step is built, [`apply`] predicts the book the next step sees: closed orders leave,
-//! partially filled orders continue at their predicted outpoints (same covenant id, the
-//! continuation state the covenant writes), the operator's change becomes the next funding. The
-//! next step is then planned against that book with the continuations marked *unaccepted*: only
-//! fills whose covenant path does not read the parent's DAA score are allowed (the mempool reports
-//! an unaccepted UTXO's DAA as `u64::MAX`): an unaccepted continuation is never triggered, updated or trigger
-//! evidence (the covenants read its DAA score), and takes no merges or TWAP / DCA slices.
+//! See `docs/spec/matcher.md` §3.4 and §7. After a step is built, [`apply`] predicts the book the
+//! next step sees. Closed orders leave. Partially filled orders continue at their predicted
+//! outpoints, with the same covenant id and the continuation state the covenant writes. The
+//! operator's change becomes the next funding.
+//!
+//! The next step is planned against that book with the continuations marked *unaccepted*. The
+//! mempool reports the DAA score of an unaccepted UTXO as `u64::MAX`, and some covenant paths read
+//! the parent's DAA score. So only fills whose covenant path does not read it are allowed. An
+//! unaccepted continuation is never triggered, updated or trigger evidence, and takes no merges or
+//! TWAP / DCA slices.
 //!
 //! Atomicity holds per transaction, not across a chain: every step is valid on its own. IOC orders
-//! never continue (their remainder returns to the maker in the same transaction) and a FOK is
-//! either complete in one step or never filled, so neither is ever chained.
+//! never continue, because their remainder returns to the maker in the same transaction. A FOK is
+//! either complete in one step or never filled. So neither is ever chained.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +24,7 @@ use super::book::{CovId, ListedOrder};
 use super::candidate::token_program;
 use super::planner::Plan;
 
-/// DAA score the mempool reports for outputs of unaccepted transactions.
+/// The DAA score the mempool reports for outputs of unaccepted transactions.
 pub const UNACCEPTED_DAA: u64 = u64::MAX;
 
 fn out_utxo(built: &BuiltTx, idx: usize, cov: Option<[u8; 32]>) -> Utxo {
@@ -38,7 +41,7 @@ fn find_output(built: &BuiltTx, spk: &str, cov: Option<[u8; 32]>) -> Option<usiz
     built.tx.outputs.iter().position(|o| o.script_public_key == spk && o.covenant.as_ref().map(|c| c.covenant_id) == cov)
 }
 
-/// Predicted continuation of one filled order (None: closed, or not predictable for chaining).
+/// The predicted continuation of one filled order, or `None` if it is closed or cannot be chained.
 fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, built: &BuiltTx) -> Option<ListedOrder> {
     let id = o.id();
     let udaa = o.utxo_daa() as i64;
@@ -86,7 +89,7 @@ fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, bu
             }
             (AnyState::KobIfdAsk(IfdAskState { amount_left: rest, ..s.clone() }), Some(rest))
         }
-        // a pair order's continuation is not chained: its fill is never chain-safe (`super::pair`)
+        // A pair order is not chained: its fill is never chain-safe (`super::pair`).
         AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) => return None,
         _ => unreachable!("base_state is a KCC-20 kind"),
     };
@@ -96,7 +99,7 @@ fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, bu
         Some(amount) => {
             let c = o.custody.as_ref()?;
             let program = kob_protocol::artifacts::token_template(token_program(&o.order.state)?);
-            // the custody holds exactly `amountLeft` base units
+            // The custody holds exactly `amountLeft` base units.
             let st = c.state.with_amount(amount);
             let tidx = find_output(built, &kob_protocol::tx::spk_to_string(&st.spk_with(program)), c.utxo.covenant_id)?;
             Some(TokenUtxo { utxo: out_utxo(built, tidx, c.utxo.covenant_id), state: st })
@@ -115,10 +118,12 @@ fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, bu
     })
 }
 
-/// The book after a step: continuations replace their orders (marked unaccepted), everything else
-/// the step spent leaves (updated orders too: an armed continuation's auction starts at its own,
-/// still unknown, DAA score, so it waits for the next tick). Returns the ids of the continued orders
-/// and the operator's next funding.
+/// The book after a step.
+///
+/// Continuations replace their orders and are marked unaccepted. Everything else the step spent
+/// leaves, updated orders too: an armed continuation's auction starts at its own DAA score, which
+/// is not known yet, so it waits for the next tick. Returns the ids of the continued orders and the
+/// operator's next funding.
 pub fn apply(
     by_id: &mut BTreeMap<CovId, ListedOrder>,
     plan: &Plan,
