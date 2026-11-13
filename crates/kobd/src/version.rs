@@ -1,17 +1,21 @@
-//! The build this executor is: its crate version, and the git commit when the build says which one it is.
+//! The build this executor is: its crate version, and the git commit when the build says which one.
 //!
-//! The commit comes from the environment variable `KOB_GIT_COMMIT` at BUILD time (`option_env!`), set by the release
-//! workflow (`.github/workflows/release.yml`) and `crates/kobd/Dockerfile`; a plain `cargo build` has none, and a build is the same
-//! bytes with or without a git checkout around it: there is no build script, no `git` call, no timestamp. `GET /v1/health`
-//! reports both (`version`, `commit`), so an operator or a host can check which release an indexer runs
-//! (docs/ops/release.md, 7).
+//! The commit comes from the environment variable `KOB_GIT_COMMIT` at build time (`option_env!`).
+//! The release workflow (`.github/workflows/release.yml`) and `crates/kobd/Dockerfile` set it. A
+//! plain `cargo build` has none.
+//!
+//! A build is the same bytes with or without a git checkout around it. There is no build script,
+//! no `git` call and no timestamp.
+//!
+//! `GET /v1/health` reports both facts (`version`, `commit`). So an operator or a host can check
+//! which release an indexer runs (`docs/ops/release.md`, section 7).
 
 use serde_json::{json, Value};
 
 /// The crate version (the workspace's).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The commit the build was made from: `KOB_GIT_COMMIT` when it was set and not blank at build time.
+/// The commit the build was made from, when `KOB_GIT_COMMIT` was set and not blank at build time.
 pub fn commit() -> Option<&'static str> {
     commit_of(option_env!("KOB_GIT_COMMIT"))
 }
@@ -20,10 +24,12 @@ fn commit_of(env: Option<&'static str>) -> Option<&'static str> {
     env.map(str::trim).filter(|c| !c.is_empty())
 }
 
-/// The template generation of this build: the first 16 hex digits of the blake3 hash of the order templates it pins
-/// (`kob_protocol::artifacts::PINNED`, their template hashes in order). Two builds with the same generation fill the same
-/// orders; an executor whose generation differs from the release's misses the orders of the other (`docs/ops/release.md`, 7;
-/// `docs/spec/template-retirement.md`).
+/// The template generation of this build.
+///
+/// It is the first 16 hex digits of the blake3 hash of the template hashes of the order templates
+/// the build pins (`kob_protocol::artifacts::PINNED`, in order). Two builds with the same generation
+/// fill the same orders. An executor whose generation differs from the release's misses the orders
+/// of the other. See `docs/ops/release.md`, section 7, and `docs/spec/template-retirement.md`.
 pub fn template_generation() -> &'static str {
     static GEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     GEN.get_or_init(|| {
@@ -35,8 +41,9 @@ pub fn template_generation() -> &'static str {
     })
 }
 
-/// The retirements whose templates this build still serves in their cancel-only role (`kob_protocol::retired`): the commits
-/// that retired them, oldest last.
+/// The commits that retired the templates this build still serves in their cancel-only role.
+///
+/// Each commit is listed once, in the order of the table (`kob_protocol::retired`).
 pub fn cancel_only_generations() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = vec![];
     for r in kob_protocol::retired::retired() {
@@ -48,8 +55,10 @@ pub fn cancel_only_generations() -> Vec<&'static str> {
     v
 }
 
-/// The network this build is bound to, as `--version` names it: `testnet-10 build`, `mainnet build`, or `development build,
-/// no network` for the reference build (which takes the network from the configuration).
+/// The network this build is bound to, as `--version` names it.
+///
+/// It reads `testnet-10 build` or `mainnet build`. The reference build takes its network from the
+/// configuration and reads `development build, no network`.
 pub fn build_kind() -> String {
     match kob_protocol::artifacts::deployment_network() {
         Some(n) => format!("{n} build"),
@@ -57,8 +66,11 @@ pub fn build_kind() -> String {
     }
 }
 
-/// The version as `kobd --version` prints it after the name: `0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4,
-/// templates 1a2b3c4d5e6f7a8b)`. The start log and `/v1/health` carry the same facts.
+/// The version as `kobd --version` prints it after the name.
+///
+/// An example is `0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4, templates
+/// 1a2b3c4d5e6f7a8b)`. The commit is cut to 12 characters. The start log and `/v1/health` carry the
+/// same facts.
 pub fn long() -> &'static str {
     static LONG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     LONG.get_or_init(|| {
@@ -72,7 +84,7 @@ pub fn long() -> &'static str {
     })
 }
 
-/// One line for the start log: `kobd 0.1.0 (testnet-10 build, commit 9e877ae7c0de, payload v4, templates 1a2b3c4d5e6f7a8b)`.
+/// One line for the start log: `kobd ` followed by [`long`].
 pub fn build_line() -> String {
     format!("kobd {}", long())
 }
@@ -87,8 +99,10 @@ pub fn build_info_metric() -> String {
     )
 }
 
-/// `version` and `commit` as `/v1/health` serves them, the `KOB1` payload version this build writes and reads, its template
-/// generation and the retired generations it serves for their makers' cancel.
+/// The build facts `/v1/health` serves.
+///
+/// They are `version`, `commit`, the `KOB1` payload version this build writes and reads, its
+/// template generation and the retired generations it serves for their makers' cancel.
 pub fn health_fields() -> Value {
     json!({
         "version": VERSION,
@@ -113,13 +127,13 @@ mod tests {
         assert_eq!(v["version"], VERSION);
         assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
         assert_eq!(v["commit"].as_str(), commit());
-        // the template generation: 16 hex digits, stable, named in the build line and the metric
+        // The template generation is 16 hex digits and stable. The build line and the metric name it.
         let g = template_generation();
         assert_eq!(g.len(), 16);
         assert!(g.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(v["template_generation"], g);
         assert!(build_line().contains(g) && build_info_metric().contains(&format!("template_generation=\"{g}\"")));
-        // `--version` names the network the build is bound to (or none) and the commit
+        // `--version` names the network the build is bound to (or none) and the commit.
         assert!(long().starts_with(VERSION) && long().contains(&build_kind()) && long().contains("commit "), "{}", long());
         match kob_protocol::artifacts::deployment_network() {
             Some(n) => assert_eq!(build_kind(), format!("{n} build")),

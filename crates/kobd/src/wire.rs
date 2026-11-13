@@ -1,31 +1,42 @@
-//! Tiny binary writer/reader used by the record log (varints and length-prefixed byte strings).
+//! A small binary writer and reader for the record log.
 //!
 //! The log is the permanent store, so its encoding is compact and hand-rolled rather than a
-//! self-describing format: unsigned integers are LEB128 varints, byte strings carry a varint length,
-//! hashes are 32 raw bytes.
+//! self-describing format. The encoding is:
+//!
+//! - unsigned integers are LEB128 varints,
+//! - signed integers are zigzag varints,
+//! - byte strings carry a varint length,
+//! - hashes are 32 raw bytes.
 
 use crate::hex::Hash32;
 
+/// A malformed or truncated record. The message names what was wrong.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("malformed record: {0}")]
 pub struct WireError(pub &'static str);
 
+/// A result with a [`WireError`].
 pub type WireResult<T> = Result<T, WireError>;
 
+/// Appends values to a byte buffer in the record encoding.
 #[derive(Default)]
 pub struct Writer {
+    /// The bytes written so far.
     pub buf: Vec<u8>,
 }
 
 impl Writer {
+    /// An empty writer.
     pub fn new() -> Self {
         Writer { buf: Vec::with_capacity(256) }
     }
 
+    /// One raw byte.
     pub fn u8(&mut self, v: u8) {
         self.buf.push(v);
     }
 
+    /// An unsigned integer as a LEB128 varint.
     pub fn var(&mut self, mut v: u64) {
         while v >= 0x80 {
             self.buf.push((v as u8 & 0x7f) | 0x80);
@@ -39,19 +50,23 @@ impl Writer {
         self.var(((v << 1) ^ (v >> 63)) as u64);
     }
 
+    /// The bytes as they are, with no length.
     pub fn raw(&mut self, b: &[u8]) {
         self.buf.extend_from_slice(b);
     }
 
+    /// A byte string: a varint length, then the bytes.
     pub fn bytes(&mut self, b: &[u8]) {
         self.var(b.len() as u64);
         self.buf.extend_from_slice(b);
     }
 
+    /// A hash as 32 raw bytes.
     pub fn hash(&mut self, h: &Hash32) {
         self.buf.extend_from_slice(&h.0);
     }
 
+    /// An optional hash: a tag byte (0 absent, 1 present), then the hash when present.
     pub fn opt_hash(&mut self, h: &Option<Hash32>) {
         match h {
             Some(h) => {
@@ -63,26 +78,31 @@ impl Writer {
     }
 }
 
+/// Reads values from a byte slice in the record encoding.
 pub struct Reader<'a> {
     b: &'a [u8],
     p: usize,
 }
 
 impl<'a> Reader<'a> {
+    /// A reader at the start of `b`.
     pub fn new(b: &'a [u8]) -> Self {
         Reader { b, p: 0 }
     }
 
+    /// True when every byte has been read.
     pub fn done(&self) -> bool {
         self.p >= self.b.len()
     }
 
+    /// One raw byte.
     pub fn u8(&mut self) -> WireResult<u8> {
         let v = *self.b.get(self.p).ok_or(WireError("truncated"))?;
         self.p += 1;
         Ok(v)
     }
 
+    /// An unsigned LEB128 varint. A value that does not fit in 64 bits is an error.
     pub fn var(&mut self) -> WireResult<u64> {
         let mut v = 0u64;
         let mut shift = 0u32;
@@ -99,11 +119,13 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// A zigzag varint as a signed integer.
     pub fn svar(&mut self) -> WireResult<i64> {
         let z = self.var()?;
         Ok(((z >> 1) as i64) ^ -((z & 1) as i64))
     }
 
+    /// The next `n` bytes.
     pub fn raw(&mut self, n: usize) -> WireResult<&'a [u8]> {
         let end = self.p.checked_add(n).ok_or(WireError("length overflow"))?;
         let s = self.b.get(self.p..end).ok_or(WireError("truncated"))?;
@@ -117,15 +139,18 @@ impl<'a> Reader<'a> {
         self.b.get(start..start.checked_add(n)?)
     }
 
+    /// A byte string: a varint length, then the bytes.
     pub fn bytes(&mut self) -> WireResult<&'a [u8]> {
         let n = self.var()? as usize;
         self.raw(n)
     }
 
+    /// A hash of 32 raw bytes.
     pub fn hash(&mut self) -> WireResult<Hash32> {
         Hash32::from_slice(self.raw(32)?).ok_or(WireError("hash"))
     }
 
+    /// An optional hash. Any tag other than 0 or 1 is an error.
     pub fn opt_hash(&mut self) -> WireResult<Option<Hash32>> {
         match self.u8()? {
             0 => Ok(None),
