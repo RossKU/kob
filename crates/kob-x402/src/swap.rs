@@ -621,7 +621,7 @@ pub fn verify_swap_facts(
         .chain
         .virtual_daa_score()
         .map_err(|e| X402Error::new(Reason::UnexpectedSettleError, Diag::NodeUnavailable, e.to_string()).retryable())?;
-    if tx.lock_time > daa {
+    if !lock_time_passed(tx, daa) {
         return Err(X402Error::payload(Diag::InvalidKaspaExactTransaction, "the transaction lock time is in the future"));
     }
     // Classify by signature script before resolution, to tell a spent order from a spent payer
@@ -1192,6 +1192,22 @@ pub fn verify_swap_facts(
         merchant_output: mj as u32,
     };
     Ok((verified, facts))
+}
+
+/// True when the lock time of `tx` has passed at virtual DAA score `daa`.
+///
+/// It follows rusty-kaspa's `check_tx_is_finalized` (v2.1.0). A lock time of 0 is final. A lock
+/// time below `LOCK_TIME_THRESHOLD` is a DAA score, final strictly below the context's score, so a
+/// lock time equal to the virtual DAA score is not final yet. A lock time from the threshold on is
+/// a timestamp, checked against the past median time, which this check does not have, so it is
+/// refused.
+///
+/// The node also takes a transaction whose lock time has not passed as final when every input's
+/// sequence is `u64::MAX`. The verifier refuses that: the orders read the lock time as the time of
+/// the fill, and it would be a time that has not come.
+pub fn lock_time_passed(tx: &Transaction, daa: u64) -> bool {
+    let lt = tx.lock_time;
+    lt == 0 || (lt < kaspa_consensus_core::constants::LOCK_TIME_THRESHOLD && lt < daa)
 }
 
 /// Output index of the merchant's gain in a swap transaction, for the payer SDK.

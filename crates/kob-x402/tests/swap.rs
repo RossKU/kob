@@ -33,6 +33,7 @@ use kob_x402::common::{iso_from_ms, payload_commit_digest, PayloadCommit};
 use kob_x402::error::{Diag, X402Error};
 use kob_x402::policy::{AllowedToken, Custody, Policy};
 use kob_x402::safe_tx::SafeTx;
+use kob_x402::swap::lock_time_passed;
 use kob_x402::testkit::MockChain;
 use kob_x402::verify::{verify_payment, PaymentKind, Verified, VerifyCtx};
 use kob_x402::wire::{hex, parse_hash32, Finality, Network, PaymentPayload, PaymentRequirements, BINDING_SWAP};
@@ -433,6 +434,40 @@ fn sw1_token_a_sold_into_a_bid_pays_kas() {
     // the merchant output is spendable KAS: exactly one output pays the merchant key
     let paid: Vec<_> = v.tx.outputs.iter().filter(|o| o.script_public_key == p2pk_spk(&pk(MERCHANT))).collect();
     assert_eq!(paid.len(), 1);
+}
+
+/// A node takes a lock time as final strictly below its virtual DAA score (rusty-kaspa `check_tx_is_finalized`). A lock time
+/// equal to the score is not final yet, so the verifier refuses it instead of passing a payment the node then rejects. One DAA
+/// score lower is final and verifies.
+#[test]
+fn a_lock_time_at_the_virtual_daa_score_is_not_final_yet() {
+    let f = fx();
+    let offer = f.kas_offer(KAS);
+    let daa = f.chain.daa();
+    let at = Quote { lock_time: daa, ..f.sw1_quote(&f.bid1) };
+    let p = f.pay(&offer, &at, &f.funds(false)).unwrap();
+    let e = err_of(f.verify(&offer, &p.payload));
+    assert_eq!(e.diag, Diag::InvalidKaspaExactTransaction, "{e}");
+    assert!(e.to_string().contains("lock time"), "{e}");
+    let below = Quote { lock_time: daa - 1, ..f.sw1_quote(&f.bid1) };
+    let p = f.pay(&offer, &below, &f.funds(false)).unwrap();
+    let v = f.accept(&offer, &p.payload);
+    // the rule itself
+    let mut tx = v.tx.clone();
+    for (lt, at_daa, ok) in [(0, daa, true), (daa - 1, daa, true), (daa, daa, false), (daa + 1, daa, false)] {
+        tx.lock_time = lt;
+        assert_eq!(lock_time_passed(&tx, at_daa), ok, "lock time {lt} at DAA score {at_daa}");
+    }
+    // a timestamp lock time is checked against the median time, which the verifier does not have
+    let threshold = kaspa_consensus_core::constants::LOCK_TIME_THRESHOLD;
+    tx.lock_time = threshold;
+    assert!(!lock_time_passed(&tx, threshold + 1));
+    // an unpassed lock time made final by maxed sequences is refused too
+    tx.lock_time = daa;
+    for i in tx.inputs.iter_mut() {
+        i.sequence = u64::MAX;
+    }
+    assert!(!lock_time_passed(&tx, daa));
 }
 
 /// A terminal bid fill returns the KAS beyond its delivery carrier to the maker as an output of its own (the last output,
