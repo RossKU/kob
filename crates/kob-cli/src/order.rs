@@ -1,8 +1,9 @@
-//! `kob order sweep` and `kob order cancel`: the maker's sweep in place and the maker's cancel, from an indexer order view.
+//! `kob order sweep` and `kob order cancel`: the sweep in place and the cancel of the maker.
 //!
-//! The view names the order's current UTXO, its custody and its strays with their proven states; every one of them is
-//! looked up on the node (the exact script and covenant id) before anything is built, and a view whose order UTXO the
-//! node does not hold is refused as stale.
+//! Both work from an indexer order view. The view names the current UTXO of the order, its custody
+//! and its strays, with their proven states. Every one of them is looked up on the node, by exact
+//! script and covenant id, before anything is built. A view whose order UTXO the node does not hold
+//! is refused as stale.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -172,14 +173,14 @@ pub fn parse_args_with(op: Op, args: &[String], fallback_key: Option<KeySource>)
     Ok(a)
 }
 
-/// A stray the node confirmed, with its program.
+/// A stray that the node confirmed, with its program.
 #[derive(Debug, Clone)]
 struct Stray {
     utxo: TokenUtxo,
     program: TemplateId,
 }
 
-/// A stray (or custody) of a view, with the script its proven state implies under `program`.
+/// A stray or custody of a view, with the script that its proven state implies under `program`.
 pub(crate) fn stray_script(t: &TokenView, program: TemplateId) -> Result<(TokenState, ScriptPublicKey), String> {
     let st = t.state.clone().ok_or("no proven state in the view")?;
     let tt = token_template(program);
@@ -189,13 +190,14 @@ pub(crate) fn stray_script(t: &TokenView, program: TemplateId) -> Result<(TokenS
     Ok((st.clone(), st.spk_with(tt)))
 }
 
+/// The UTXO of a token entry of a view, if the node holds it at `spk` with its covenant id.
 pub(crate) fn on_node(at: &BTreeMap<Vec<u8>, Vec<crate::wrpc::NodeUtxo>>, spk: &ScriptPublicKey, t: &TokenView) -> Option<Utxo> {
     at.get(&spk_bytes(spk))
         .and_then(|v| v.iter().find(|u| u.txid == t.txid && u.index == t.index && u.covenant_id == Some(t.token)))
         .map(utxo_of)
 }
 
-/// Units and carriers per token of a set of token UTXOs.
+/// Units and carriers of each token in a set of token UTXOs.
 fn tally(utxos: &[&TokenUtxo]) -> Vec<Value> {
     let mut by: BTreeMap<[u8; 32], (i64, u64, usize)> = BTreeMap::new();
     for u in utxos {
@@ -230,7 +232,9 @@ fn describe(list: &[Value]) -> String {
 
 /// The outcome of one order.
 pub(crate) struct Outcome {
+    /// The status: `skipped`, `refused`, `failed`, `signed` or `submitted`.
     pub(crate) status: &'static str,
+    /// The JSON entry of the report.
     pub(crate) json: Value,
 }
 
@@ -249,14 +253,21 @@ fn process(v: &View, a: &Args, signer: &Signer) -> Outcome {
     }
 }
 
-/// A built (unsigned) sweep or cancel of one order, ready to show and sign.
+/// A built, unsigned sweep or cancel of one order, ready to show and sign.
 pub(crate) struct Prepared {
+    /// The transaction.
     pub built: kob_protocol::tx::BuiltTx,
+    /// The file name of the signed transaction.
     pub name: String,
+    /// The report info that goes with the transaction.
     pub info: Value,
+    /// The text shown to the maker before the confirmation.
     pub disclosure: String,
+    /// How the fee is paid.
     pub funding: Funding,
+    /// The units and carriers per token that return to the maker.
     pub returned: Vec<Value>,
+    /// The strays that the transaction does not take.
     pub left: Vec<Value>,
 }
 
@@ -267,7 +278,8 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
     };
     let Prepared { built, name, info, disclosure, funding, returned, left } = p;
     if !a.dry_run {
-        // the same rule as every other submitting command: `--yes`, or a terminal asks, else nothing is signed
+        // The same rule as every other submitting command: `--yes`, or a terminal asks, else
+        // nothing is signed.
         if crate::trade::opts::would_ask(a.yes) {
             eprintln!("{disclosure}");
         }
@@ -293,7 +305,9 @@ fn try_process(v: &View, a: &Args, signer: &Signer) -> Result<Outcome, String> {
     })
 }
 
-/// Builds the sweep / cancel of one view (`Err(outcome)`: skipped or refused, nothing built).
+/// Build the sweep or cancel of one view.
+///
+/// `Err(outcome)` means skipped or refused, and nothing is built.
 pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<Prepared, Outcome>, String> {
     let cov = v.covenant_id;
     let Some(state) = &v.state else { return Ok(Err(skip("the view has no proven state (state_known false)"))) };
@@ -322,7 +336,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         .ok_or("the order's token program is not supported")?;
     let b_token = b_token(state)?;
     let own = state.token_cov_id();
-    // the scripts to look up: the order, its custody (cancel), every usable stray
+    // The scripts to look up: the order, its custody (cancel) and every usable stray.
     let mut left: Vec<Value> = vec![];
     let mut cands: Vec<(TokenView, TemplateId, TokenState, ScriptPublicKey)> = vec![];
     for s in v.strays.iter().filter(|s| !s.spent) {
@@ -344,8 +358,9 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
             Err(e) => left.push(why(&e)),
         }
     }
-    // the custodies a cancel returns: one (a KAS kind), or a pair order's one per token it holds (the view's `custody` and,
-    // for a sell-first entry's B prefund, `pair.custodies[1]`), each under its token's program
+    // The custodies that a cancel returns. That is one for a KAS kind, or one per token for a pair
+    // order: the `custody` of the view and, for the B prefund of a sell-first entry,
+    // `pair.custodies[1]`. Each is under the program of its token.
     let program_of = |t: [u8; 32]| if t == own { Some(own_program) } else { b_token.filter(|b| b.0 == t).map(|b| b.1) };
     let targets = if a.op == Op::Cancel { custody_targets(state, cov, v.ext)? } else { vec![] };
     let mut custody_views: Vec<(TokenView, TokenState, ScriptPublicKey)> = vec![];
@@ -396,8 +411,9 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
             }
         }
     }
-    // within slots: per token the program's token inputs (the order's own token: also the family's cap, less the custody),
-    // one extension commitment per token (the custody's, else the first stray's)
+    // Within slots: per token, the token inputs of the program. For the own token of the order that
+    // is also the cap of the family, less the custody. One extension commitment per token: the
+    // custody's, else that of the first stray.
     let mut chosen: Vec<Stray> = vec![];
     let mut tokens: Vec<[u8; 32]> = vec![];
     for s in &confirmed {
@@ -414,7 +430,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         if t == own {
             cap = cap.min(program.family().max_tok_in());
         }
-        // a custody of this token takes one of its inputs and sets its extension commitment
+        // A custody of this token takes one of its inputs and sets its extension commitment.
         for c in custody.iter().chain(prefund.iter()).filter(|c| c.utxo.covenant_id == Some(t)) {
             cap = cap.saturating_sub(1);
             ext = c.state.extension();
@@ -486,7 +502,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         })?,
     };
     if a.op == Op::Sweep {
-        // the sweep continues the order: output 0 is the same script under the same covenant id
+        // The sweep continues the order: output 0 is the same script under the same covenant id.
         let o0 = built.tx.outputs.first().ok_or("the sweep has no outputs")?;
         if o0.script_public_key != spk_to_string(&order_spk) || o0.covenant.as_ref().map(|c| c.covenant_id) != Some(cov) {
             return Err("internal: the sweep's output 0 is not the order's continuation".into());
@@ -520,7 +536,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
                     .iter()
                     .chain(prefund.iter())
                     .map(|c| match b_token {
-                        // a pair order names each custody's token (it holds one of A or B, or both)
+                        // A pair order names the token of each custody. It holds A, B or both.
                         Some(_) => format!("the custody ({} units of {}), ", c.state.amount(), to_hex(&c.utxo.covenant_id.unwrap_or_default())),
                         None => format!("the custody ({} units), ", c.state.amount()),
                     })
@@ -533,7 +549,9 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
     Ok(Ok(Prepared { built, name, info, disclosure, funding, returned, left }))
 }
 
-/// Run the operation over every view; returns the report and whether nothing failed or was refused.
+/// Run the operation over every view.
+///
+/// Returns the report and whether nothing failed or was refused.
 pub fn execute(a: &Args) -> Result<(Value, bool), String> {
     let signer = Signer::load(a.key.as_ref().expect("checked"))?;
     let mut views = vec![];
@@ -568,7 +586,7 @@ pub fn execute(a: &Args) -> Result<(Value, bool), String> {
     Ok((report, ok))
 }
 
-/// Run `kob order sweep|cancel`; returns the process exit code.
+/// Run `kob order sweep|cancel` and return the process exit code.
 pub fn run(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE], true) {
         return code;
