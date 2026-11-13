@@ -59,7 +59,7 @@ pub const P2PK_SIGSCRIPT_LEN: usize = 66;
 /// KOB's own signers always use it. It is the only hash type that KOB's own profiles accept, which
 /// are `kcc20`, swap-and-pay and intents (`crate::sighash`). A standard-native payment accepts
 /// every consensus-supported hash type ([`crate::sighash::CONSENSUS_HASH_TYPES`]), as the
-/// binding's 1.0.0 verifiers do.
+/// binding's verifiers (v1.0.1) do.
 pub const SIGHASH_ALL: u8 = 0x01;
 
 /// Verifies a `standard-native` payment (see `crate::verify`).
@@ -184,7 +184,7 @@ pub fn verify_native(
     // Every input is a standard Schnorr P2PK of the payer. Its signature script is one 65-byte push
     // whose trailing byte is a consensus-supported hash type.
     //
-    // The binding (1.0.0) honors each signature's encoded type, so the signer chooses its scope.
+    // The binding (v1.0.1) honors each signature's encoded type, so the signer chooses its scope.
     // The exact merchant output, the recipient script, the profile and the request authorization
     // stay mandatory below. A weaker scope only risks the payer's own funds. The facilitator
     // settles exactly the verified transaction, whose id commits to every output, and watches its
