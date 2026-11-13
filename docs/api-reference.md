@@ -782,8 +782,9 @@ curl -s "$API/v1/trades/$TOKEN?limit=2"
 directly); `quote` is the same fills' sompi at their quotes, rounded down per fill. The **resting** side is the side whose orders
 are older (smaller genesis DAA, a tie goes to the asks): its volume-weighted price is the trade `price` (sompi per `price_basis`
 base units), and `side` names the **aggressor**: `buy` when the asks rested, else `sell`. `id` is the smallest fill id of the
-trade. `fills` is the number of fills in the trade (number). `next_cursor` may be present on a page that looks complete when the
-read hit its row bound; continue with `before`.
+trade. `fills` is the number of fills in the trade (number). `next_cursor` may be present on a page that looks complete, or that holds
+fewer than `limit` trades, when the read hit its row bound; continue with `before`. A page always ends at a whole trade, so
+a transaction with many fills is one item, never split across pages (one of more than 20,000 fills is served in parts).
 
 ### 3.16 `GET /v1/candles/{token}`
 

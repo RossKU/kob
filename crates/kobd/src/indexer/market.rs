@@ -493,14 +493,34 @@ pub fn trades(
     limit: usize,
 ) -> DbResult<TradesView> {
     let basis = price_basis(conn, token, decimals)?;
-    // Over-fetch, because a trade has several fills. The row limit may cut the oldest group, so it
-    // is dropped unless the data ended.
+    // Over-fetch, because a trade has several fills.
     let want_rows = (limit + 1) * 12;
-    let rows = fills_before(conn, token, before, want_rows)?;
-    let exhausted = rows.len() < want_rows;
+    let mut rows = fills_before(conn, token, before, want_rows)?;
+    // Older fills may exist, and the row limit may have cut the oldest trade.
+    let mut older = rows.len() == want_rows;
+    let mut cut = older;
+    // The rest of the fills of the oldest trade are read, so a page ends at a whole trade. A
+    // transaction with more fills than the page reads would otherwise be dropped from every page,
+    // leaving an empty page without a cursor. The fills of one transaction are stored together, so
+    // they are the run of that txid right before the rows read. At most [`MAX_FILL_ROWS`] rows are
+    // read in all.
+    while cut && rows.len() < MAX_FILL_ROWS {
+        let n = want_rows.min(MAX_FILL_ROWS - rows.len());
+        let txid = rows[0].txid.clone();
+        let more = fills_before(conn, token, Some(rows[0].id), n)?;
+        let same = more.iter().rev().take_while(|r| r.txid == txid).count();
+        let ended = more.len() < n;
+        older = !ended || same < more.len();
+        cut = !ended && same == more.len();
+        // `more` is oldest first, so the run of the trade is its end.
+        let skip = more.len() - same;
+        rows.splice(0..0, more.into_iter().skip(skip));
+    }
     let first_txid = rows.first().map(|r| r.txid.clone());
     let mut ts = trades_of(rows, basis);
-    if !exhausted {
+    // A trade still cut at the bound is dropped, unless it is the only one: then it is shown in
+    // part, and the next page starts at its older fills.
+    if cut && ts.len() > 1 {
         if let (Some(t0), Some(first)) = (ts.first(), first_txid) {
             if t0.txid == first {
                 ts.remove(0);
@@ -508,7 +528,7 @@ pub fn trades(
         }
     }
     ts.reverse();
-    let more = ts.len() > limit || !exhausted;
+    let more = ts.len() > limit || older;
     ts.truncate(limit);
     let next_cursor = if more { ts.last().map(|t| t.id.to_string()) } else { None };
     Ok(TradesView {
@@ -930,6 +950,40 @@ mod tests {
         let mut st = conn.prepare(&format!("EXPLAIN QUERY PLAN {FILL_SELECT}")).unwrap();
         let plan: Vec<String> = st.query_map([vec![0u8; 32]], |r| r.get::<_, String>(3)).unwrap().map(|r| r.unwrap()).collect();
         assert!(plan.iter().any(|p| p.contains("order_events_amends")), "{plan:?}");
+    }
+
+    /// One transaction with more fills than a trades page reads is served whole, with a cursor to
+    /// the older trades, instead of an empty page without one.
+    #[test]
+    fn a_trade_with_more_fills_than_a_page_reads_is_served_whole() {
+        let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
+        let token = Hash32([0x51; 32]);
+        conn.execute("INSERT INTO ids (h) VALUES (?1), (x'00')", [&token.0[..]]).unwrap();
+        conn.execute(
+            "INSERT INTO orders (covenant_id, contract, template_id, family, side, token_id, scale, in_book, genesis_state, genesis_block, genesis_daa, listed) \
+             VALUES (x'01', 'KobAsk', (SELECT id FROM ids WHERE h = x'00'), 1, 1, (SELECT id FROM ids WHERE h = ?1), 100, 1, x'00', 1, 1, 1)",
+            [&token.0[..]],
+        )
+        .unwrap();
+        // An older transaction of 3 fills, then one of 200: more than the 72 rows a page of 5 reads.
+        let fills = |tx: u8, n: i64, ts: i64| {
+            conn.execute(
+                "WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < ?1) \
+                 INSERT INTO order_events (order_id, block_seq, daa, ts, txid, tx_pos, kind, token_id, side, amount, price) \
+                 SELECT (SELECT id FROM orders), 1, ?2, ?2, ?3, 0, 'fill', (SELECT id FROM ids WHERE h = ?4), 1, 10, 250 FROM k",
+                rusqlite::params![n, ts, vec![tx; 32], &token.0[..]],
+            )
+            .unwrap();
+        };
+        fills(0xaa, 3, 1_000);
+        fills(0xbb, 200, 2_000);
+        let ctx = ReadCtx { node_daa: None, settle_depth_daa: 100, now_unix: None };
+        let page = trades(&conn, &ctx, &token, None, None, 5).unwrap();
+        assert_eq!(page.items.iter().map(|t| (t.fills, t.amount.as_str())).collect::<Vec<_>>(), [(200, "2000")]);
+        let next = page.next_cursor.expect("a cursor to the older trade");
+        let page = trades(&conn, &ctx, &token, None, next.parse().ok(), 5).unwrap();
+        assert_eq!(page.items.iter().map(|t| (t.fills, t.amount.as_str())).collect::<Vec<_>>(), [(3, "30")]);
+        assert_eq!(page.next_cursor, None);
     }
 
     #[test]
