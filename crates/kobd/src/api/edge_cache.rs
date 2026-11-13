@@ -79,6 +79,10 @@ fn query_value<'a>(query: &'a str, key: &str) -> Option<&'a str> {
     query.split('&').filter_map(|kv| kv.split_once('=').or(Some((kv, "")))).find(|(k, _)| *k == key).map(|(_, v)| v)
 }
 
+fn has_repeated(query: &str, key: &str) -> bool {
+    query.split('&').filter(|kv| kv.split_once('=').map_or(*kv, |(k, _)| k) == key).count() > 1
+}
+
 /// The policy of a successful answer to `method path?query`.
 ///
 /// `now_ms` is the wall clock in unix milliseconds.
@@ -95,9 +99,12 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
         ["v1", "stats"] => Policy::Public { secs: 10, stale: 10 },
         ["v1", "stats", _] => public(2),
         ["v1", "candles", _] | ["v1", "pairs", _, _, "candles"] => {
-            let closed = query_value(query, "to")
-                .and_then(|v| v.parse::<i64>().ok())
-                .is_some_and(|to| to <= now_ms.saturating_sub(CLOSED_AFTER_MS));
+            // The handler reads the LAST `to` of a repeated key, so the policy never trusts a
+            // repeated one: `?to=1&to=<now>` must not cache live candles as closed.
+            let closed = !has_repeated(query, "to")
+                && query_value(query, "to")
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .is_some_and(|to| to <= now_ms.saturating_sub(CLOSED_AFTER_MS));
             public(if closed { 3_600 } else { 3 })
         }
         // Books, depth, orders, fills, trades, strays, token UTXOs and events, the pair book and
@@ -174,6 +181,9 @@ mod tests {
             assert_eq!(get(p, &format!("interval=1m&from=5&to={}", NOW - 3_600_000)), closed);
             assert_eq!(get(p, &format!("to={}&interval=1d", NOW - 86_400_000)), closed);
             assert_eq!(get(p, "to=soon"), open, "a `to` that is not a number is the server's 400, never cached long");
+            let (old, now) = (NOW - 86_400_000, NOW);
+            assert_eq!(get(p, &format!("to={old}&to={now}")), open, "a repeated `to`: the handler reads the last one");
+            assert_eq!(get(p, &format!("to={now}&to={old}")), open, "a repeated `to` is never cached long");
         }
     }
 
