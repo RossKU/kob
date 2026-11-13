@@ -514,33 +514,33 @@ pub type HeldProgram<'a> = &'a dyn Fn(&[u8; 32]) -> Result<Option<TemplateId>, S
 /// It holds the network of the command and the decimals, when neither the registry nor the indexer
 /// names them.
 pub struct OpenToken<'a> {
-        /// The network. On mainnet a token without a registry entry must have a `reviewed` program,
-        /// because prototypes are not traded.
+    /// The network. On mainnet a token without a registry entry must have a `reviewed` program,
+    /// because prototypes are not traded.
     pub network: &'a str,
-        /// The standard scale of the open orders of the token ([`standard_scale`] of the book of
-        /// the indexer), `None` without orders. It is read when the token list of the indexer
-        /// reports no market scale, as with an older indexer or a token without orders.
+    /// The standard scale of the open orders of the token ([`standard_scale`] of the book of
+    /// the indexer), `None` without orders. It is read when the token list of the indexer
+    /// reports no market scale, as with an older indexer or a token without orders.
     pub order_scale: OrderScale<'a>,
-        /// `--decimals N` for the first order of the token (0..=9). It is used only when no order
-        /// of the token tells its scale.
+    /// `--decimals N` for the first order of the token (0..=9). It is used only when no order
+    /// of the token tells its scale.
     pub entered: Option<u32>,
-        /// The decimals that `--decimals` named for the first order of the token placed from this
-        /// machine (`crate::recent`). Within the lag of the indexer they stand in for `--decimals`,
-        /// and a `--decimals` of another scale is refused.
+    /// The decimals that `--decimals` named for the first order of the token placed from this
+    /// machine (`crate::recent`). Within the lag of the indexer they stand in for `--decimals`,
+    /// and a `--decimals` of another scale is refused.
     pub remembered: Option<Remembered<'a>>,
-        /// A view (`kob book`). A token whose decimals nothing tells resolves with none
-        /// ([`DecimalsFrom::Unknown`], base units) instead of being refused.
+    /// A view (`kob book`). A token whose decimals nothing tells resolves with none
+    /// ([`DecimalsFrom::Unknown`], base units) instead of being refused.
     pub view: bool,
-        /// The KCC-23 declaration of the token: the launch proof of the indexer, verified against
-        /// the covenant id. It is asked for a token that the token list of the indexer marks
-        /// declared or does not list.
-        ///
-        /// Its facts come first (`docs/spec/token-metadata.md` section 4). Its decimals give the
-        /// scale of its orders, and a registry entry or a market that disagrees is refused.
+    /// The KCC-23 declaration of the token: the launch proof of the indexer, verified against
+    /// the covenant id. It is asked for a token that the token list of the indexer marks
+    /// declared or does not list.
+    ///
+    /// Its facts come first (`docs/spec/token-metadata.md` section 4). Its decimals give the
+    /// scale of its orders, and a registry entry or a market that disagrees is refused.
     pub declaration: Option<Declaration<'a>>,
-        /// The token program of a declared token that no list names (no registry entry, no order
-        /// yet). The token UTXOs of the wallet prove it on the node. Without it, or without such
-        /// UTXOs, the token program is unknown and the token is refused.
+    /// The token program of a declared token that no list names (no registry entry, no order
+    /// yet). The token UTXOs of the wallet prove it on the node. Without it, or without such
+    /// UTXOs, the token program is unknown and the token is refused.
     pub held_program: Option<HeldProgram<'a>>,
 }
 
