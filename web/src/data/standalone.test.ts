@@ -10,7 +10,8 @@ import { assessIndexerHealth } from '../ui/shell/health';
 import type { StreamBlock } from './block-stream';
 import type { IndexerApi } from './indexer';
 import type { BookOrderView, HealthView, LevelView } from './indexer-types';
-import { ENTER_CHECK_MS, RECHECK_MS, StandaloneController, VERIFY_DELAY_MS, modeIndexer, type StandalonePrefs } from './standalone';
+import { IndexerError } from './indexer';
+import { ENTER_CHECK_MS, RECHECK_MS, RETURN_CHECK_MS, StandaloneController, VERIFY_DELAY_MS, isIndexerDown, modeIndexer, type StandalonePrefs } from './standalone';
 import { StreamBook, bookViewOf, listingOf, MIN_ORDER_VALUE_SOMPI, orderViewOf, tokensViewOf } from './stream-book';
 
 const kob = loadKobNode();
@@ -61,17 +62,55 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('the mode', () => {
-  it('starts when the indexer stays bad (asked once more), ends when it is usable again', async () => {
+  it('starts when the indexer stays bad (asked once more), ends when it stays usable (asked once more)', async () => {
     const h = harness();
     h.c.report(bad);
     expect(h.c.state.active).toBe(false);
     await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
     expect(h.real.health).toHaveBeenCalledTimes(1);
-    expect(h.c.state).toMatchObject({ active: true, reason: 'auto', phase: 'live', sinceMs: Date.parse('2026-11-05T12:00:05.000Z') });
+    expect(h.c.state).toMatchObject({ active: true, reason: 'auto', phase: 'live', sinceMs: Date.parse('2026-11-05T12:00:01.000Z') });
     expect(h.node.subscribeBlocks).toHaveBeenCalledTimes(1);
+    h.setHealth(health('following'));
     h.c.report(good);
+    expect(h.c.state.active).toBe(true);
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
     expect(h.c.state).toMatchObject({ active: false, reason: null, phase: 'off' });
     expect(h.subs).toHaveLength(0);
+  });
+
+  it('a flickering indexer does not end the mode: a bad look before the second one keeps it', async () => {
+    const h = harness();
+    h.c.report(bad);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    h.c.report(good);
+    h.c.report(bad);
+    h.setHealth(health('following'));
+    await vi.advanceTimersByTimeAsync(RETURN_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(true);
+    // the mode looks at the indexer itself: usable twice in a row, it ends without the status poll
+    await vi.advanceTimersByTimeAsync(5_000 + RETURN_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(false);
+  });
+
+  it('the first market read that finds the indexer down starts it and is answered from it; a refusal or a missing route does not', async () => {
+    const h = harness();
+    const down = new IndexerError('http', 503, 'unavailable', 'down');
+    const real = {
+      health: vi.fn(async () => Promise.reject(down)),
+      book: vi.fn(async () => Promise.reject(down)),
+      stats: vi.fn(async () => Promise.reject(new IndexerError('http', 404, 'not_found', 'no such token'))),
+    } as unknown as IndexerApi;
+    const ix = modeIndexer(real, h.c);
+    await expect(ix.stats(TOKEN)).rejects.toMatchObject({ status: 404 });
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    expect(h.c.state.active).toBe(false);
+    const p = ix.book(TOKEN);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 10);
+    await expect(p).resolves.toMatchObject({ asks: [], bids: [] });
+    expect(h.c.state).toMatchObject({ active: true, reason: 'auto' });
+    expect(isIndexerDown(down)).toBe(true);
+    expect(isIndexerDown(new IndexerError('aborted', 0, 'aborted', 'cancelled'))).toBe(false);
+    expect(isIndexerDown(new IndexerError('http', 429, 'rate_limited', 'slow down'))).toBe(false);
   });
 
   it('a blip does not start it: the indexer answers the second look', async () => {
@@ -238,6 +277,75 @@ describe('the book from the node', () => {
     h.c.setPrefs({ manual: false });
     h.c.setPrefs({ manual: true });
     expect(h.c.bookView(TOKEN).asks).toEqual([]);
+  });
+});
+
+describe('the book starts from the resting orders the indexer gave', () => {
+  /** the views the indexer gave of an ask and a bid (the views of a book that saw them placed) */
+  async function restingViews() {
+    const src = harness({ manual: true });
+    await vi.advanceTimersByTimeAsync(0);
+    const ask = placeGolden(kob, 'create.ask');
+    const bid = placeGolden(kob, 'create.bid');
+    for (const p of [ask, bid]) src.chain.applyTx(p.signed.tx);
+    src.block([ask.signed.tx, bid.signed.tx]);
+    await vi.advanceTimersByTimeAsync(VERIFY_DELAY_MS + 10);
+    const askId = ask.recovered[0]!.covenantId;
+    const bidId = bid.recovered[0]!.covenantId;
+    return { ask, askId, bidId, views: [src.c.orderView(askId)!, src.c.orderView(bidId)!] };
+  }
+
+  it('listed at once and asked on the node at once: one spent before the switch leaves, one a block spends leaves', async () => {
+    const { ask, askId, bidId, views } = await restingViews();
+    const h = harness();
+    // this node holds the ask; the bid was spent after the indexer's last answer
+    h.chain.applyTx(ask.signed.tx);
+    const down = new IndexerError('network', 0, 'network', 'unreachable');
+    let up = true;
+    const real = {
+      health: vi.fn(async () => Promise.reject(down)),
+      allOrders: vi.fn(async () => (up ? views : Promise.reject(down))),
+      book: vi.fn(async () => (up ? { token: TOKEN, aggregated: true, node_daa: 1, asks: [], bids: [] } : Promise.reject(down))),
+    } as unknown as IndexerApi;
+    const ix = modeIndexer(real, h.c);
+    // a read of the book has the market's resting orders read beside it (once a minute at most)
+    await ix.book(TOKEN, { aggregate: true });
+    await ix.book(TOKEN, { aggregate: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(real.allOrders).toHaveBeenCalledTimes(1);
+    expect(real.allOrders).toHaveBeenCalledWith({ token: TOKEN, status: 'active', limit: 200 }, expect.objectContaining({ maxPages: 3 }));
+    expect(h.c.carry.orders().map((v) => v.covenant_id).sort()).toEqual([askId, bidId].sort());
+
+    up = false;
+    const p = ix.book(TOKEN);
+    await vi.advanceTimersByTimeAsync(ENTER_CHECK_MS + 5);
+    const first = await p;
+    expect(first.asks.map((r) => (r as BookOrderView).covenant_id)).toEqual([askId]);
+    expect(first.bids.map((r) => (r as BookOrderView).covenant_id)).toEqual([bidId]);
+    // the node check of the kept orders: the spent bid leaves, the ask stays (as the node holds it: what the book check confirms)
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.c.bookView(TOKEN).bids).toEqual([]);
+    expect(h.c.bookView(TOKEN).asks).toHaveLength(1);
+    const [confirmed] = await confirmSnapshotsOnNode(kob, h.chain, [{ ...snapshotFromOrderView(h.c.orderView(askId)!), strays: [] }], testAddress);
+    expect(confirmed).toMatchObject({ covenantId: askId });
+    // a block spends the ask: out at once
+    const spend = { ...ask.signed.tx, id: 'cd'.repeat(32), inputs: [{ ...ask.signed.tx.inputs[0]!, transactionId: ask.signed.tx.id, index: ask.recovered[0]!.output }], outputs: [] };
+    h.block([spend]);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.c.bookView(TOKEN).asks).toEqual([]);
+  });
+
+  it('an order the node does not hold is listed for a moment at most, and the book check never confirms it', async () => {
+    const { askId, views } = await restingViews();
+    const h = harness();
+    h.c.carry.recordOrders(TOKEN, views);
+    h.c.setPrefs({ manual: true });
+    // listed before the node answered: the book check still asks the node, which does not hold it
+    const [r] = await confirmSnapshotsOnNode(kob, h.chain, [{ ...snapshotFromOrderView(h.c.orderView(askId)!), strays: [] }], testAddress);
+    expect(r).toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(h.c.bookView(TOKEN).asks).toEqual([]);
+    expect(h.c.orderView(askId)).toBeNull();
   });
 });
 

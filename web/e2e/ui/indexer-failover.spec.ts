@@ -109,8 +109,9 @@ test.describe('indexer failover', () => {
     await withExtras(page, [wrongNet.url, wrongPayload.url]);
     await mock.setHealth('node_unavailable');
     await page.goto('/#/market');
-    // the primary's own entry says what is wrong; no backup entry appears
-    await expect(await statusEntry(page, 'banner-indexer')).toBeVisible({ timeout: 60_000 });
+    // no usable backup: the page switches to the node (one calm entry), no backup entry appears
+    await openBell(page);
+    await expect(page.getByTestId('notify-status').getByTestId(/^banner-(switching|standalone)$/)).toBeVisible({ timeout: 60_000 });
     await page.waitForTimeout(8_000);
     await expect(await statusEntry(page, 'banner-backup-indexer')).toHaveCount(0);
   });

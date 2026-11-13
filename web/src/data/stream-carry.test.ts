@@ -1,7 +1,7 @@
 // What the page read from the indexer, kept for standalone mode (data/stream-carry.ts): the recording and the merging with what the node saw.
 import { describe, expect, it } from 'vitest';
-import type { CandleView, CandlesView, IndexerTokenView, StatsView, TradeView, TradesView } from './indexer-types';
-import { IndexerCarry, mergeCandles, mergeStats, mergeTokens, mergeTrades } from './stream-carry';
+import type { CandleView, CandlesView, IndexerTokenView, OrderView, StatsView, TradeView, TradesView } from './indexer-types';
+import { IndexerCarry, ORDERS_READ_MS, mergeCandles, mergeStats, mergeTokens, mergeTrades } from './stream-carry';
 
 const TOKEN = '70'.repeat(32);
 const OTHER = '71'.repeat(32);
@@ -129,5 +129,37 @@ describe('merging with what the node saw', () => {
     expect(out[0]).toMatchObject({ ticker: 'TUSD', decimals: 6, scale: 1_000_000, open_asks: 0, open_bids: 0 });
     expect(out[1]).toMatchObject({ template_hash: 'ef'.repeat(32), open_asks: 1, market_scale: 1_000_000 });
     expect(out[2]).toMatchObject({ open_asks: 4 });
+  });
+});
+
+describe('the resting orders of a market', () => {
+  const order = (id: string, over: Partial<OrderView> = {}): OrderView => ({ covenant_id: id, token: TOKEN, status: 'open', listed: true, in_book: true, expired: false, ...over }) as unknown as OrderView;
+
+  it('keeps what rests (open or partly filled, listed, of the market); a later list replaces it; one order read alone follows it', () => {
+    let now = NOW;
+    const c = new IndexerCarry(() => now);
+    expect(c.ordersAt(TOKEN)).toBeNull();
+    c.recordOrders(TOKEN, [order('aa'.repeat(32)), order('ab'.repeat(32), { status: 'partial' }), order('ac'.repeat(32), { status: 'filled' }), order('ad'.repeat(32), { listed: false }), order('ae'.repeat(32), { token: OTHER })]);
+    expect(c.orders().map((o) => o.covenant_id)).toEqual(['aa'.repeat(32), 'ab'.repeat(32)]);
+    expect(c.ordersAt(TOKEN)).toBe(NOW);
+    // a single read: a new state is kept, one that no longer rests is forgotten
+    c.recordOrder(order('ab'.repeat(32), { status: 'cancelled' }));
+    c.recordOrder(order('af'.repeat(32)));
+    expect(c.orders().map((o) => o.covenant_id)).toEqual(['aa'.repeat(32), 'af'.repeat(32)]);
+    now += 1000;
+    c.recordOrders(TOKEN, [order('b0'.repeat(32))]);
+    expect(c.orders().map((o) => o.covenant_id)).toEqual(['b0'.repeat(32)]);
+  });
+
+  it('is read at most once a minute per market, sooner again after a failed read', () => {
+    let now = NOW;
+    const c = new IndexerCarry(() => now);
+    expect(c.ordersDue(TOKEN)).toBe(true);
+    expect(c.ordersDue(TOKEN)).toBe(false);
+    expect(c.ordersDue(OTHER)).toBe(true);
+    now += ORDERS_READ_MS;
+    expect(c.ordersDue(TOKEN)).toBe(true);
+    c.ordersFailed(TOKEN);
+    expect(c.ordersDue(TOKEN)).toBe(true);
   });
 });

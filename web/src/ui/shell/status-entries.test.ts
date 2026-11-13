@@ -94,20 +94,27 @@ describe('statusEntries', () => {
     expect(partial.text).toContain(t('shell.banner.backupPartial'));
   });
 
-  it('standalone mode: a warning when automatic, info by the setting; the connecting line, the way back and the link; the indexer has no entry of its own', () => {
+  it('standalone mode: one calm line (automatic or by the setting), the connecting line, the way back and the link; the indexer has no entry of its own', () => {
     const unreachable = bad({ code: 'unreachable' });
-    const auto = one({ standalone: standalone(), indexer: unreachable });
-    expect(auto).toMatchObject({ testid: 'banner-standalone', tone: 'warn', standalone: { connecting: false, back: false }, link: { href: '#/settings', text: t('shell.banner.standaloneSettings') } });
-    expect(one({ standalone: standalone({ reason: 'manual' }) }).tone).toBe('info');
+    const auto = one({ standalone: standalone({ sinceMs: Date.parse('2026-11-13T09:30:00') }), indexer: unreachable });
+    expect(auto).toMatchObject({ testid: 'banner-standalone', tone: 'info', class: 'banner-compact', standalone: { connecting: false, back: false }, link: { href: '#/settings', text: t('shell.banner.standaloneSettings') } });
+    expect(auto.text).toBe(t('shell.banner.standaloneAuto', { time: '09:30' }));
+    expect(auto.title).toBeUndefined();
+    expect(one({ standalone: standalone({ reason: 'manual' }) })).toMatchObject({ tone: 'info', text: t('shell.banner.standalone') });
     expect(one({ standalone: standalone({ phase: 'connecting', indexerBack: true }) }).standalone).toEqual({ connecting: true, back: true });
     expect(ids({ standalone: standalone({ active: false }), indexer: unreachable })).toEqual(['banner-indexer']);
   });
 
-  it('the indexer: none configured, unreachable, and warn / bad by its level; a healthy or still loading one has no entry', () => {
+  it('the indexer: none configured, switching to the node, unreachable, and by its level; never an error; a healthy or still loading one has no entry', () => {
     expect(one({ indexer: { ...healthy, level: 'unknown', code: 'not-configured' } as HealthAssessment })).toMatchObject({ testid: 'banner-no-indexer', tone: 'info', text: t('shell.banner.noIndexer') });
-    expect(one({ indexer: bad({ code: 'unreachable' }) })).toMatchObject({ testid: 'banner-indexer', tone: 'error', title: t('shell.banner.indexerTitle'), text: t('shell.banner.unreachable') });
-    expect(one({ indexer: bad({ code: 'stale', lagSeconds: 700 }) })).toMatchObject({ tone: 'error' });
-    expect(one({ indexer: bad({ level: 'warn', code: 'lagging', lagSeconds: 200 }) })).toMatchObject({ tone: 'warn' });
+    // standalone mode takes over: one calm line until it has
+    expect(one({ indexer: bad({ code: 'unreachable' }), fallback: true })).toMatchObject({ testid: 'banner-switching', tone: 'info', text: t('shell.banner.switching') });
+    expect(one({ indexer: bad({ code: 'stale', lagSeconds: 700 }), fallback: true })).toMatchObject({ testid: 'banner-switching' });
+    // no fallback: the indexer's own entry, a warning at worst
+    expect(one({ indexer: bad({ code: 'unreachable' }) })).toMatchObject({ testid: 'banner-indexer', tone: 'warn', title: t('shell.banner.indexerTitle'), text: t('shell.banner.unreachable') });
+    expect(one({ indexer: bad({ code: 'stale', lagSeconds: 700 }) })).toMatchObject({ tone: 'warn' });
+    expect(one({ indexer: bad({ level: 'warn', code: 'lagging', lagSeconds: 200 }) })).toMatchObject({ testid: 'banner-indexer', tone: 'info' });
+    expect(one({ indexer: bad({ level: 'warn', code: 'lagging', lagSeconds: 200 }), fallback: true })).toMatchObject({ testid: 'banner-indexer', tone: 'info' });
     expect(ids({ indexer: { ...healthy, level: 'unknown', code: 'loading' } as HealthAssessment })).toEqual([]);
   });
 

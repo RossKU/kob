@@ -6,7 +6,7 @@ import { tradableRegistryJson } from '../testing/chain-fixtures';
 import { parseRegistry } from '../kob/registry';
 import { planOrder } from '../kob/plan';
 import { isPairEnv } from '../kob/plan-types';
-import { bookFromIndexer, buildPairPlanEnv, buildPlanEnv, kasReferenceOf, ownOrderRefs } from './env';
+import { bookFromIndexer, buildPairPlanEnv, buildPlanEnv, kasReferenceOf, ownOrderRefs, readHoldingsPart } from './env';
 
 const m = market3x3(); // 3 decimals: scale 1000 base units = one whole token
 const row = (price: string, over: Partial<BookOrderView> = {}): BookOrderView => ({
@@ -43,6 +43,25 @@ describe('bookFromIndexer', () => {
     const book = bookFromIndexer(m, { asks: [lv('5000', '2000', 1000), lv('5000', '3000', 1000, 2), lv('6000', '1000', 1000), lv('9', '5000', 100)], bids: [] });
     expect(book.asks).toEqual([{ price: 5000n, amount: 5000n, orders: 3 }, { price: 6000n, amount: 1000n, orders: 1 }]);
     expect(book.askOrders).toBeUndefined();
+  });
+});
+
+describe('readHoldingsPart while the indexer goes away', () => {
+  const token = { ticker: 'T', covenantId: m.covenantId, program: 'KCC20Ref' } as unknown as Parameters<typeof readHoldingsPart>[2];
+  const own = { covenant_id: 'cc'.repeat(32), side: 1, token: m.covenantId, status: 'open', price: '5000', quote: null, tip: '0', scale: 1000, amount_left: '2000', initial_amount: '2000', expired: false } as unknown as OrderView;
+  const deps = (switches: boolean) => ({
+    indexer: { allOrders: async () => Promise.reject(new Error('down')) },
+    tracker: { tokenUtxosFor: async () => [] },
+    standalone: { state: { active: false }, readFailed: async () => switches, ownOrders: () => [own] },
+  }) as unknown as Parameters<typeof readHoldingsPart>[0];
+
+  it('the own orders come from standalone mode once the failed read has it on: no guard left unread in the switch', async () => {
+    const h = await readHoldingsPart(deps(true), { pubkey: MAKER_PK }, token, m);
+    expect(h.ownOrders).toEqual([expect.objectContaining({ covenantId: own.covenant_id, side: 'sell' })]);
+  });
+
+  it('without the mode the own orders stay unread (the planner refuses until they are)', async () => {
+    expect((await readHoldingsPart(deps(false), { pubkey: MAKER_PK }, token, m)).ownOrders).toBeNull();
   });
 });
 

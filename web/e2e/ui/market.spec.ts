@@ -343,7 +343,7 @@ test.describe('health status', () => {
   // the indexer's own entries and marks: the automatic standalone fallback (e2e/ui/standalone.spec.ts) would replace them once a bad state persists
   test.use({ autoOpen: false, appConfig: { standalone: { auto: false } } });
 
-  test('a lagging or stale indexer is announced and the book is marked as possibly out of date', async ({ appPage, mock }) => {
+  test('a lagging or stale indexer is one entry of the bell and the dot (red: no fallback to the node here); the book carries no mark of its own', async ({ appPage, mock }) => {
     await mock.setHealth('following', 20_000); // 2000 s behind
     await appPage.goto('/#/market');
     await expect(await statusEntry(appPage, 'banner-indexer')).toContainText('behind');
@@ -352,8 +352,8 @@ test.describe('health status', () => {
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'bad');
     const { id } = await seeded(mock);
     await appPage.goto(`/#/market/${id}`);
-    await expect(appPage.getByTestId('book-stale')).toBeVisible();
     await expect(appPage.getByTestId(TESTID.bookAsks)).toBeVisible(); // degraded, not blank
+    await expect(appPage.getByTestId('book-stale')).toHaveCount(0);
   });
 
   test('the lag warning shows only when the indexer is more than 2 min behind (whatever state it reports)', async ({ appPage, mock }) => {
@@ -362,7 +362,6 @@ test.describe('health status', () => {
     await appPage.goto(`/#/market/${id}`);
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
     await expect(await statusEntry(appPage, 'banner-indexer')).toHaveCount(0);
-    await expect(appPage.getByTestId('book-stale')).toHaveCount(0);
     await mock.setHealth('following', 1190); // 119 s
     await appPage.reload();
     await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-indexer-level', 'ok');
@@ -370,7 +369,9 @@ test.describe('health status', () => {
     await mock.setHealth('following', 1300); // 130 s: announced
     await appPage.reload();
     await expect(await statusEntry(appPage, 'banner-indexer')).toContainText('behind');
-    await expect(appPage.getByTestId('book-stale')).toBeVisible();
+    await closeBell(appPage);
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-level', 'warn');
+    await expect(appPage.getByTestId('status-dot')).toHaveAttribute('data-trading', 'lagging');
   });
 
   test('an unreachable node says so with what to do, never "checking..." for ever', async ({ appPage }) => {

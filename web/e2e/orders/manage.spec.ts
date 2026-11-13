@@ -336,7 +336,9 @@ test.describe('recovery', () => {
     await page.goto('/#/portfolio');
     await page.reload();
     await connectWallet(page);
-    await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
+    // the page knows the indexer is gone (the header's dot says it; no warning of its own on the page)
+    await expect(page.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable', { timeout: 30_000 });
+    await expect(page.getByTestId('orders-indexer-down')).toHaveCount(0);
     await openOrdersSettings(page);
     await expect(page.getByTestId('recover-count')).toContainText('0 placement');
     await page.getByTestId('orders-tab-active').click(); // the page opens on Balances; the order rows are under Open orders
@@ -368,7 +370,8 @@ test.describe('recovery', () => {
     await page.reload();
     await connectWallet(page);
     await gotoOrders(page);
-    await expect(page.getByTestId('orders-indexer-down')).toBeVisible();
+    await expect(page.getByTestId('status-dot')).toHaveAttribute('data-indexer-code', 'unreachable', { timeout: 30_000 });
+    await expect(page.getByTestId('orders-indexer-down')).toHaveCount(0);
     const row = page.getByTestId(`order-row-${id}`);
     await expect(row).toBeVisible();
     await expect(row).toHaveAttribute('data-status', 'open');

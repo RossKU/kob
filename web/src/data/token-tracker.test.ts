@@ -253,6 +253,24 @@ describe('TokenTracker with the indexer as first source', () => {
     }
   });
 
+  it('while the indexer cannot be read its last candidates are used, verified on the node: one spent since is not offered, and forgotten', async () => {
+    const bag: { down: boolean; views: TokenUtxoView[] } = { down: false, views: [] };
+    const w = world({ indexer: { tokenUtxos: async () => { if (bag.down) throw new Error('indexer down'); return bag.views; } } });
+    const a = liveToken(w, 0x81, 40n);
+    const b = liveToken(w, 0x82, 60n);
+    bag.views = [view(a, true), view(b, true)];
+    expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['60', '40']);
+    bag.down = true;
+    expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['60', '40']);
+    // spent on chain while the indexer is away: the node no longer lists it, so it is not offered (and not asked again)
+    w.node.removeUtxo(b.transactionId, b.index);
+    expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['40']);
+    w.node.addUtxo({ address: spkStringToAddress(sdk, kob.tokenScriptPublicKey(TOKEN_PROGRAM, b.state), NET), transactionId: b.transactionId, index: b.index, amount: CARRIER, scriptPublicKey: kob.tokenScriptPublicKey(TOKEN_PROGRAM, b.state), covenantId: TOKEN_COV_ID });
+    expect((await w.tracker.tokenUtxosFor(MAKER_PK, TOKEN)).map((x) => x.state.amount)).toEqual(['40']);
+    // nothing of it reached the local store
+    expect(w.tracker.list(MAKER_PK)).toEqual([]);
+  });
+
   it('the same outpoint from both sources is returned once', async () => {
     const w = world();
     const o = liveToken(w, 0x61, 5n);
