@@ -65,7 +65,11 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(4);
 /// What one source may take in all, so a peer that trickles bytes cannot hold a round longer.
 const CEILING: Duration = Duration::from_secs(5);
 /// A price at or above this is refused as not credible. A wrong number is worse than none.
-const MAX_USD: f64 = 1_000.0;
+///
+/// KAS has never traded above about 0.2 USD, so 10 USD is 50 times its all-time high: far enough
+/// that a real rally passes, near enough that a unit mix-up (cents or a wrong pair, which show up
+/// as 100 to 1000 times too large) is refused and the caller keeps the fallback.
+const MAX_USD: f64 = 10.0;
 /// The largest distance, as a fraction, of the last price of an exchange from the median.
 ///
 /// An exchange further away is left out of the average.
@@ -636,6 +640,10 @@ pub(crate) mod tests {
     fn the_live_sources_read_the_answers_the_apis_gave() {
         // Recorded answers, trimmed: a number, strings, and an array in the path.
         assert_eq!(parse_number(200, r#"{"kaspa":{"usd":0.02980916}}"#, PRIMARY.path), Ok(0.02980916));
+        assert!(parse_number(200, r#"{"kaspa":{"usd":10.0}}"#, PRIMARY.path).is_err(), "at the ceiling");
+        assert!(parse_number(200, r#"{"kaspa":{"usd":29.8}}"#, PRIMARY.path).is_err(), "a price 1000 times too high");
+        assert!(vwap(&[r("a", 29.8, 100.0), r("b", 29.9, 100.0)]).is_err(), "the average is held to the ceiling too");
+        assert!(parse_number(200, r#"{"kaspa":{"usd":0.5}}"#, PRIMARY.path).is_ok());
         let bybit = r#"{"retCode":0,"result":{"category":"spot","list":[{"symbol":"KASUSDT","lastPrice":"0.02989","turnover24h":"819695.2927411","volume24h":"27857931.29"}]}}"#;
         let kucoin =
             r#"{"code":"200000","data":{"symbol":"KAS-USDT","last":"0.02988","volValue":"773382.37126766","vol":"26072393.273"}}"#;
