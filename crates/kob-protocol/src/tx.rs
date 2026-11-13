@@ -1,19 +1,22 @@
 //! Transaction model, the fee pass and the wallet-signing split.
 //!
-//! Every builder produces a [`BuiltTx`]:
+//! # Built transactions
 //!
-//! 1. an **unsigned** version-1 transaction (kaspa-wasm "safe JSON" layout, every input carrying
-//!    its UTXO entry, signature scripts empty, compute budgets from the budget table, exact
-//!    storage-mass commitment, final fee and change);
-//! 2. one [`SigPlan`] per input describing how its signature script is assembled;
-//! 3. the [`SignRequest`]s: which inputs need a Schnorr signature by which key, with the SIGHASH_ALL
-//!    digest each wallet must sign.
+//! Every builder produces a [`BuiltTx`] with three parts:
+//! 1. An unsigned version-1 transaction in the kaspa-wasm "safe JSON" layout. Every input carries
+//!    its UTXO entry, the signature scripts are empty, and the compute budgets come from the budget
+//!    table. The storage-mass commitment, the fee and the change are final.
+//! 2. One [`SigPlan`] per input, which describes how its signature script is assembled.
+//! 3. The [`SignRequest`]s. They name the inputs that need a Schnorr signature, the key, and the
+//!    SIGHASH_ALL digest each wallet must sign.
 //!
-//! Wallets (KasWare, Kaspire, Kastle) sign the unsigned transaction and return **signatures only**.
+//! # Signing
+//!
+//! Wallets (KasWare, Kaspire, Kastle) sign the unsigned transaction and return signatures only.
 //! [`finalize`] checks each signature against its digest and key, assembles every signature script
-//! from its plan and returns the signed transaction, optionally re-measuring the exact compute
-//! budget of every input in the script engine (a v1 sighash does not commit to the budget or to the
-//! storage mass, so neither invalidates the signatures).
+//! from its plan and returns the signed transaction. It can also re-measure the exact compute
+//! budget of every input in the script engine. A v1 sighash commits neither to the budget nor to
+//! the storage mass, so neither change invalidates the signatures.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,36 +43,52 @@ use crate::registry::KRON_MAX_OUTPUT_AMOUNT;
 use crate::script::{entry_sigscript, kcc20_state_value, kron_columns_sigscript, leader_witness, p2pk_spk, push_data, SIGHASH_ALL};
 use crate::state::{Kcc20State, KronState, TokenState};
 
-/// Minimum relay fee rate, sompi per gram (rusty-kaspa v2.1.0 `DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE`,
-/// 100,000 sompi per kilogram).
+/// Minimum relay fee rate in sompi per gram, i.e. 100,000 sompi per kilogram.
+///
+/// This is rusty-kaspa v2.1.0 `DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE`.
 pub const MIN_FEE_RATE: u64 = 100;
-/// Mainnet mass parameters (rusty-kaspa v2.1.0).
+/// Mass per transaction byte (rusty-kaspa v2.1.0 mainnet).
 pub const MASS_PER_TX_BYTE: u64 = 1;
+/// Mass per script-public-key byte (rusty-kaspa v2.1.0 mainnet).
 pub const MASS_PER_SPK_BYTE: u64 = 10;
+/// KIP-9 storage mass parameter `C` (rusty-kaspa v2.1.0 mainnet).
 pub const STORAGE_MASS_PARAMETER: u64 = 1_000_000_000_000;
-/// Block mass limits (compute, storage, transient).
+/// Block compute mass limit.
 pub const BLOCK_COMPUTE_LIMIT: u64 = 500_000;
+/// Block storage mass limit.
 pub const BLOCK_STORAGE_LIMIT: u64 = 500_000;
+/// Block transient mass limit.
 pub const BLOCK_TRANSIENT_LIMIT: u64 = 1_000_000;
-/// Smallest output value (sompi, 0.02 KAS) whose KIP-9 storage mass alone (`storage_mass_parameter / value`) fits the
-/// block storage limit. A payout or carrier below it makes the transaction unminable unless the inputs' own term offsets
-/// it (rarely: only tiny inputs do), so order terms and builders refuse it as dust (the mempool has no separate dust
-/// threshold).
+/// Smallest output value whose KIP-9 storage mass alone fits the block storage limit (0.02 KAS).
+///
+/// The storage mass of a plain output is `storage_mass_parameter / value`. A payout or carrier
+/// below this bound makes the transaction unminable unless the inputs' own term offsets it, which
+/// only tiny inputs do. Order terms and builders therefore refuse it as dust. The mempool has no
+/// separate dust threshold.
 pub const DUST_OUTPUT_MIN: u64 = 2_000_000;
-/// Smallest value (sompi, 0.08 KAS) of an output that carries a covenant id (an order UTXO and its continuation, a token
-/// output: a 35-byte P2SH script public key) whose KIP-9 storage mass alone fits the block storage limit. The stored UTXO
-/// (63 bytes, the script and the 32-byte covenant id) takes two 100-byte units (rusty-kaspa v2.1.0 `utxo_plurality`), so
-/// its storage mass is `4 × storage_mass_parameter / value`: four times that of a plain output of the same value
-/// ([`DUST_OUTPUT_MIN`]). A fill that would leave such an output smaller is refused by consensus.
+/// Smallest value (0.08 KAS) of an output with a covenant id whose KIP-9 storage mass alone fits
+/// the block limit.
+///
+/// Such outputs are order UTXOs, their continuations and token outputs, each with a 35-byte P2SH
+/// script public key. The stored UTXO (63 bytes, the script and the 32-byte covenant id) takes two
+/// 100-byte units (rusty-kaspa v2.1.0 `utxo_plurality`). Its storage mass is therefore
+/// `4 × storage_mass_parameter / value`, four times that of a plain output of the same value
+/// ([`DUST_OUTPUT_MIN`]). Consensus refuses a fill that would leave such an output smaller.
 pub const COVENANT_OUTPUT_MIN: u64 = 4 * STORAGE_MASS_PARAMETER / BLOCK_STORAGE_LIMIT;
-/// Smallest KAS beyond its delivery carrier that a terminal bid fill (KobBid, KobCondBid and their KRON twins) sends back to the
-/// bid's maker as an output of its own (1 KAS, the contracts' `REFUND_MIN`): a plain output of v sompi has KIP-9 storage mass
-/// `storage_mass_parameter / v`, so a smaller remainder stays on the delivery. The refund sits at output `M - 1 - i` (M the
-/// number of outputs, i the bid's input index), see [`Draft::add_refund`].
+/// Smallest remainder that a terminal bid fill returns to the bid's maker in an output of its own
+/// (1 KAS).
+///
+/// The remainder is the KAS beyond the delivery carrier, and the bids are KobBid, KobCondBid and
+/// their KRON twins. This is the contracts' `REFUND_MIN`. A plain output of v sompi has KIP-9
+/// storage mass `storage_mass_parameter / v`, so a smaller remainder stays on the delivery. The
+/// refund sits at output `M - 1 - i`, where M is the number of outputs and i the bid's input index,
+/// see [`Draft::add_refund`].
 pub const REFUND_MIN: u64 = 100_000_000;
 
-/// The KIP-9 storage mass an output alone commits (`storage_mass_parameter × plurality² / value`; rusty-kaspa v2.1.0
-/// `calc_storage_mass`, before the inputs are credited), `u64::MAX` for a zero value.
+/// The KIP-9 storage mass an output alone commits, or `u64::MAX` for a zero value.
+///
+/// It is `storage_mass_parameter × plurality² / value`, as rusty-kaspa v2.1.0 `calc_storage_mass`
+/// computes it before the inputs are credited.
 pub fn output_storage_mass(o: &TransactionOutput) -> u64 {
     if o.value == 0 {
         return u64::MAX;
@@ -98,6 +117,7 @@ pub struct Utxo {
 }
 
 impl Utxo {
+    /// The outpoint of this UTXO.
     pub fn outpoint(&self) -> TransactionOutpoint {
         TransactionOutpoint { transaction_id: TransactionId::from_bytes(self.transaction_id), index: self.index }
     }
@@ -141,7 +161,8 @@ pub struct FeeOptions {
     /// Sompi per gram (at least [`MIN_FEE_RATE`]; default 100).
     #[serde(with = "crate::json::field", default)]
     pub fee_rate: Option<u64>,
-    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`] (storage-inclusive).
+    /// [`FeeMode::Relay`] (default, the node's relay floor) or [`FeeMode::Priority`]
+    /// (storage-inclusive).
     #[serde(default)]
     pub fee_mode: FeeMode,
 }
@@ -169,12 +190,15 @@ pub enum Arg {
 
 /// How a token input is authorised by its owner.
 ///
-/// KCC-20: `CovenantId` (owner scheme 0x04) needs the owning covenant spent in the same transaction;
-/// `P2pk` (scheme 0x00) carries a SIGHASH_ALL Schnorr signature by the key inside the token input.
-/// KRON: `CovenantId` (`id_type` 2) and `P2pk` of an `id_type` 3 state (address presence) name another input of the
-/// transaction, resolved when the transaction is sealed: the input carrying the owner covenant id, respectively a P2PK
-/// input of the owner key. `P2pk` of an `id_type` 0 state (a program whose holders are id_type 0, KForge) carries a
-/// SIGHASH_ALL Schnorr signature by the key in the input's signature column.
+/// In KCC-20, `CovenantId` (owner scheme 0x04) needs the owning covenant spent in the same
+/// transaction. `P2pk` (scheme 0x00) carries a SIGHASH_ALL Schnorr signature by the key inside the
+/// token input.
+///
+/// In KRON, `CovenantId` (`id_type` 2) and `P2pk` of an `id_type` 3 state (address presence) name
+/// another input of the transaction, resolved when the transaction is sealed. That is the input
+/// carrying the owner covenant id, or a P2PK input of the owner key. `P2pk` of an `id_type` 0 state
+/// carries a SIGHASH_ALL Schnorr signature by the key in the input's signature column. Such states
+/// belong to a program whose holders are id_type 0, e.g. KForge.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum Witness {
@@ -208,12 +232,16 @@ pub enum SigPlan {
     /// KCC-20 delegator (`transfer_delegator`).
     #[serde(rename_all = "camelCase")]
     TokenDelegator { template: TemplateId, state: Kcc20State, witness: Witness },
-    /// KRON token input: no leader. Every token input of the token carries the next states of the
-    /// whole covenant group (`next_states`, in output order) and one witness byte per token input
-    /// of the token (`witnesses`, in input order), each the index of the input that authorises it.
-    /// An input of `id_type` 2 or 3 needs no signature of its own (address presence is a P2PK input of the owner
-    /// elsewhere in the transaction); an `id_type` 0 input (a token-level signature) carries the SIGHASH_ALL signature of
-    /// `signer`, its owner, in the signature column (its witness byte names the input itself).
+    /// KRON token input, which has no leader.
+    ///
+    /// Every token input of the token carries the next states of the whole covenant group
+    /// (`next_states`, in output order). It also carries one witness byte per token input of the
+    /// token (`witnesses`, in input order), each the index of the input that authorises it.
+    ///
+    /// An input of `id_type` 2 or 3 needs no signature of its own, since address presence is a P2PK
+    /// input of the owner elsewhere in the transaction. An `id_type` 0 input, a token-level
+    /// signature, carries the SIGHASH_ALL signature of `signer`, its owner, in the signature
+    /// column. Its witness byte names the input itself.
     #[serde(rename_all = "camelCase")]
     KronToken {
         template: TemplateId,
@@ -224,9 +252,12 @@ pub enum SigPlan {
         #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
         signer: Option<[u8; 32]>,
     },
-    /// The maker's `cancel(sig)` of an order under a RETIRED template (`crate::retired`, the cancel-only table): the redeem script
-    /// is the retired template's `prefix ‖ state ‖ suffix` (`template`: today's kind whose state layout and cancel entry it
-    /// shares). No other entry of a retired template is ever built: this plan names no entry.
+    /// The maker's `cancel(sig)` of an order under a retired template.
+    ///
+    /// Retired templates are in the cancel-only table (`crate::retired`). The redeem script is the
+    /// retired template's `prefix ‖ state ‖ suffix`, and `template` is the current kind whose state
+    /// layout and cancel entry it shares. No other entry of a retired template is ever built, so
+    /// this plan names no entry.
     #[serde(rename_all = "camelCase")]
     RetiredCancel {
         template: TemplateId,
@@ -287,8 +318,10 @@ impl SigPlan {
         }
     }
 
-    /// The plan names embedded templates of the right kind (a hostile `BuiltTx` could name a raw token program as an
-    /// artifact template, which the accessors below would panic on).
+    /// Checks that the plan names embedded templates of the right kind.
+    ///
+    /// A hostile `BuiltTx` could name a raw token program as an artifact template, which the
+    /// accessors below would panic on.
     pub fn check(&self) -> Result<()> {
         let artifact = |t: TemplateId| {
             try_template(t).map(|_| ()).ok_or_else(|| Error::Invalid(format!("{} is not an artifact-backed template", t.name())))
@@ -323,7 +356,8 @@ impl SigPlan {
                 state.spk_with(template(*t))
             }
             SigPlan::KronToken { template: t, state, .. } => state.spk_with(token_template(*t)),
-            // an unknown actor or a malformed state gives an unspendable empty script (`check` refuses such a plan)
+            // An unknown actor or a malformed state gives an unspendable empty script, and `check`
+            // refuses such a plan.
             SigPlan::Router { .. } | SigPlan::RetiredCancel { .. } => self
                 .redeem()
                 .map(|r| kaspa_txscript::pay_to_script_hash_script(&r))
@@ -331,8 +365,9 @@ impl SigPlan {
         }
     }
 
-    /// The signature script, given the input's signature (65 bytes incl. sighash type) if it
-    /// needs one.
+    /// The signature script, given the input's signature if it needs one.
+    ///
+    /// The signature is 65 bytes, including the sighash type.
     pub fn sigscript(&self, sig: Option<&[u8]>) -> Result<Vec<u8>> {
         let need = |what: &str| -> Result<&[u8]> { sig.ok_or_else(|| Error::Invalid(format!("{what}: signature missing"))) };
         match self {
@@ -403,14 +438,17 @@ pub struct SignRequest {
     /// The Schnorr SIGHASH_ALL digest of this input.
     #[serde(with = "crate::json::field")]
     pub sighash: [u8; 32],
-    /// Redeem script of a P2SH input (what Kastle needs in its `scripts` option; wallets that
-    /// display scripts show it). None for P2PK inputs.
+    /// Redeem script of a P2SH input, `None` for P2PK inputs.
+    ///
+    /// Kastle needs it in its `scripts` option, and wallets that display scripts show it.
     #[serde(with = "crate::json::field")]
     pub redeem_script: Option<Vec<u8>>,
 }
 
-/// A signature returned by a wallet: 64 bytes, 65 bytes (with the 0x01 type byte), or the
-/// 66-byte `push(sig65)` script KasWare returns for P2SH inputs.
+/// A signature returned by a wallet.
+///
+/// It is 64 bytes, 65 bytes with the 0x01 type byte, or the 66-byte `push(sig65)` script that
+/// KasWare returns for P2SH inputs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputSignature {
@@ -471,8 +509,9 @@ pub struct TxOutputJson {
     pub covenant: Option<CovenantJson>,
 }
 
-/// A transaction in kaspa-wasm's "safe JSON" layout (`Transaction.deserializeFromSafeJSON`):
-/// 64-bit values as strings, bytes as hex, every input carrying its UTXO entry.
+/// A transaction in kaspa-wasm's "safe JSON" layout (`Transaction.deserializeFromSafeJSON`).
+///
+/// 64-bit values are strings, bytes are hex, and every input carries its UTXO entry.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TxJson {
@@ -601,15 +640,19 @@ impl TxJson {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FeeMode {
-    /// The node's relay floor: `rate × max(compute, normalized transient)` ([`MassReport::fee_mass`]).
+    /// The node's relay floor: `rate × max(compute, normalized transient)`
+    /// ([`MassReport::fee_mass`]).
+    ///
     /// A rusty-kaspa v2.1.0 node accepts and relays the transaction at exactly this fee
-    /// (`mining/src/mempool/check_transaction_standard.rs`): storage mass needs no relay fee.
+    /// (`mining/src/mempool/check_transaction_standard.rs`). Storage mass needs no relay fee.
     #[default]
     Relay,
     /// Storage-inclusive: `rate × max(compute, normalized transient, storage)`
-    /// ([`MassReport::priority_mass`]). Block templates rank transactions by fee over their normalized
-    /// mass including storage, so under contention this fee keeps the requested feerate over every
-    /// mass dimension. Never below the relay floor.
+    /// ([`MassReport::priority_mass`]).
+    ///
+    /// Block templates rank transactions by fee over their normalized mass including storage. Under
+    /// contention this fee therefore keeps the requested fee rate over every mass dimension. It is
+    /// never below the relay floor.
     Priority,
 }
 
@@ -621,29 +664,35 @@ pub struct MassReport {
     pub size: u64,
     /// Compute mass (size + 10 × script-public-key bytes + 100 × Σ compute budget).
     pub compute: u64,
-    /// Transient mass (4 × size) and its value normalized to the compute scale with the node's mempool
-    /// mass cofactors (`ceil(transient × compute limit / transient limit)` = 2 × size).
+    /// Transient mass (4 × size).
+    ///
+    /// [`MassReport::fee_mass`] uses its value normalized to the compute scale with the node's
+    /// mempool mass cofactors, `ceil(transient × compute limit / transient limit)`, which is 2 ×
+    /// size.
     pub transient: u64,
     pub transient_normalized: u64,
     /// Persistent storage mass (KIP-9), committed in the transaction.
     pub storage: u64,
-    /// max(compute, normalized transient): the mass the node's relay floor is charged on (storage mass
-    /// is not part of it).
+    /// max(compute, normalized transient), the mass the node's relay floor is charged on.
+    ///
+    /// Storage mass is not part of it.
     pub fee_mass: u64,
-    /// max(compute, normalized transient, storage): the mass of the storage-inclusive
-    /// [`FeeMode::Priority`] fee.
+    /// max(compute, normalized transient, storage), the mass of the [`FeeMode::Priority`] fee.
     #[serde(default)]
     pub priority_mass: u64,
 }
 
 impl MassReport {
+    /// Whether every mass dimension is within the block mass limits.
     pub fn within_block_limits(&self) -> bool {
         self.compute <= BLOCK_COMPUTE_LIMIT && self.storage <= BLOCK_STORAGE_LIMIT && self.transient <= BLOCK_TRANSIENT_LIMIT
     }
 }
 
-/// The consensus parameters masses are computed with: rusty-kaspa v2.1.0 mainnet (testnet-10 has the
-/// same mass parameters and block mass limits; `tests/fee_floor.rs` checks both).
+/// The consensus parameters masses are computed with, those of rusty-kaspa v2.1.0 mainnet.
+///
+/// Testnet-10 has the same mass parameters and block mass limits, and `tests/fee_floor.rs` checks
+/// both.
 pub fn mass_params() -> &'static Params {
     &MAINNET_PARAMS
 }
@@ -652,17 +701,19 @@ pub fn mass_params() -> &'static Params {
 pub const BLOCK_MASS_LIMITS: BlockMassLimits =
     BlockMassLimits { compute: BLOCK_COMPUTE_LIMIT, storage: BLOCK_STORAGE_LIMIT, transient: BLOCK_TRANSIENT_LIMIT };
 
-/// Computes every mass dimension of a transaction with its entries, with rusty-kaspa's own mass
-/// calculator and the node's mempool mass cofactors.
+/// Computes every mass dimension of a transaction with its entries.
+///
+/// It uses rusty-kaspa's own mass calculator and the node's mempool mass cofactors.
 pub fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> MassReport {
     let params = mass_params();
     let mc = MassCalculator::new_with_consensus_params(params);
     let nc = mc.calc_non_contextual_masses(tx);
-    // KIP-9 storage mass exists only for a transaction consensus can take: rusty-kaspa's calculator divides by every
-    // output's value (and by the input count), and `PopulatedTransaction` asserts one entry per input. Consensus refuses a
-    // transaction without inputs or with a zero-value output before computing masses; a hostile one handed to this
-    // library (kob-wasm `masses` / `validate`, an x402 payload, a builder fed hostile order values) must be refused too,
-    // not panic: its storage mass is beyond every limit.
+    // KIP-9 storage mass exists only for a transaction consensus can take. rusty-kaspa's calculator
+    // divides by every output's value and by the input count, and `PopulatedTransaction` asserts
+    // one entry per input. Consensus refuses a transaction without inputs or with a zero-value
+    // output before computing masses. A hostile one handed to this library must be refused too, not
+    // panic, and its storage mass is beyond every limit. Such transactions come from kob-wasm
+    // `masses` or `validate`, an x402 payload, or a builder fed hostile order values.
     let storage = if tx.inputs.is_empty() || entries.len() != tx.inputs.len() || tx.outputs.iter().any(|o| o.value == 0) {
         u64::MAX
     } else {
@@ -670,8 +721,8 @@ pub fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> MassReport {
         mc.calc_contextual_masses(&populated).map(|c| c.storage_mass).unwrap_or(u64::MAX)
     };
     let size = transaction_estimated_serialized_size(tx);
-    // mining/src/mempool/check_transaction_standard.rs:71-75: the mempool normalizes the transient mass
-    // with the cofactors of its block mass limits (the consensus block mass limits).
+    // The mempool normalizes the transient mass with the cofactors of its block mass limits, which
+    // are the consensus block mass limits (mining/src/mempool/check_transaction_standard.rs:71-75).
     let transient_normalized = nc.normalized_transient(&params.block_mass_cofactors());
     let fee_mass = nc.compute_mass.max(transient_normalized);
     MassReport {
@@ -685,8 +736,10 @@ pub fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> MassReport {
     }
 }
 
-/// The node's minimum relay fee for `mass` grams at `rate` sompi per gram, computed as rusty-kaspa
-/// v2.1.0 does it (`Mempool::minimum_required_transaction_relay_fee`, whose rate is in sompi per kilogram).
+/// The node's minimum relay fee for `mass` grams at `rate` sompi per gram.
+///
+/// It is computed as rusty-kaspa v2.1.0 does it, in
+/// `Mempool::minimum_required_transaction_relay_fee`, whose rate is in sompi per kilogram.
 pub fn relay_fee_for_mass(mass: u64, rate: u64) -> u64 {
     let per_kg = rate.saturating_mul(1000);
     let mut fee = mass.saturating_mul(per_kg) / 1000;
@@ -696,14 +749,17 @@ pub fn relay_fee_for_mass(mass: u64, rate: u64) -> u64 {
     fee.min(MAX_SOMPI)
 }
 
-/// Minimum fee, the node's relay floor: `rate × max(compute, normalized transient)`. At
-/// [`MIN_FEE_RATE`] a rusty-kaspa v2.1.0 node relays a transaction paying at least this and rejects one
-/// paying less (`RejectInsufficientComputeFee` / `RejectInsufficientTransientFee`).
+/// Minimum fee, the node's relay floor: `rate × max(compute, normalized transient)`.
+///
+/// At [`MIN_FEE_RATE`] a rusty-kaspa v2.1.0 node relays a transaction paying at least this and
+/// rejects one paying less (`RejectInsufficientComputeFee` or `RejectInsufficientTransientFee`).
 pub fn min_fee(report: &MassReport, rate: u64) -> u64 {
     relay_fee_for_mass(report.fee_mass, rate)
 }
 
-/// The storage-inclusive fee `rate × max(compute, normalized transient, storage)` ([`FeeMode::Priority`]).
+/// The storage-inclusive fee `rate × max(compute, normalized transient, storage)`.
+///
+/// This is the fee of [`FeeMode::Priority`].
 pub fn priority_fee(report: &MassReport, rate: u64) -> u64 {
     relay_fee_for_mass(report.priority_mass, rate)
 }
@@ -723,7 +779,9 @@ pub struct FeeReport {
     /// Fee paid (Σ inputs − Σ outputs).
     #[serde(with = "crate::json::field")]
     pub fee: u64,
-    /// Fee the builder targeted at the requested rate and mode (in [`FeeMode::Relay`], the node's relay floor).
+    /// Fee the builder targeted at the requested rate and mode.
+    ///
+    /// In [`FeeMode::Relay`] it is the node's relay floor.
     #[serde(with = "crate::json::field")]
     pub min_fee: u64,
     #[serde(with = "crate::json::field")]
@@ -774,8 +832,9 @@ pub struct FinalizeOptions {
     pub tighten_budgets: bool,
 }
 
-/// A signed transaction, ready for `submitTransaction` over node RPC (never REST: REST drops the
-/// compute budget).
+/// A signed transaction, ready for `submitTransaction` over node RPC.
+///
+/// Never submit it over REST, which drops the compute budget.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SignedTx {
@@ -800,9 +859,11 @@ pub fn sighash(tx: &Transaction, entries: &[UtxoEntry], idx: usize) -> [u8; 32] 
     sighash_typed(tx, entries, idx, SIGHASH_ALL).expect("sighash all")
 }
 
-/// Schnorr digest of input `idx` under an explicit hash type byte (`None` when the byte is not a Kaspa hash
-/// type). Every payer builder signs SIGHASH_ALL ([`sighash`]); this exists for the verifiers' negative tests
-/// and for tools that must forge a deliberately non-ALL signature.
+/// Schnorr digest of input `idx` under an explicit hash type byte.
+///
+/// Returns `None` when the byte is not a Kaspa hash type. Every payer builder signs SIGHASH_ALL
+/// ([`sighash`]). This function exists for the verifiers' negative tests and for tools that must
+/// forge a deliberately non-ALL signature.
 pub fn sighash_typed(tx: &Transaction, entries: &[UtxoEntry], idx: usize, hash_type: u8) -> Option<[u8; 32]> {
     let mt = MutableTransaction::with_entries(tx.clone(), entries.to_vec());
     let reused = SigHashReusedValuesUnsync::new();
@@ -826,7 +887,9 @@ pub fn sign_digest(secret_key: &[u8; 32], digest: &[u8; 32]) -> Result<Vec<u8>> 
     sign_digest_typed(secret_key, digest, SIGHASH_ALL)
 }
 
-/// [`sign_digest`] with an explicit trailing hash type byte (the digest must be the matching [`sighash_typed`]).
+/// [`sign_digest`] with an explicit trailing hash type byte.
+///
+/// The digest must be the matching [`sighash_typed`].
 pub fn sign_digest_typed(secret_key: &[u8; 32], digest: &[u8; 32], hash_type: u8) -> Result<Vec<u8>> {
     let secp = secp256k1::Secp256k1::new();
     let kp = secp256k1::Keypair::from_seckey_slice(&secp, secret_key).map_err(|e| Error::Invalid(format!("secret key: {e}")))?;
@@ -966,30 +1029,37 @@ pub(crate) struct Draft {
     pub fee_rate: u64,
     pub fee_mode: FeeMode,
     pub covenants: Vec<NewCovenant>,
-    /// Tokens of the transaction (covenant id, program), in first-use order. Each token has its
-    /// own KCC-20 leader (its first token input) and slot limits.
+    /// Tokens of the transaction (covenant id, program), in first-use order.
+    ///
+    /// Each token has its own KCC-20 leader, its first token input, and its own slot limits.
     pub tokens: Vec<([u8; 32], TemplateId)>,
-    /// Output indices reserved for a positional output filled later (an IOC ask's return sits at
-    /// its custody input's index): appended outputs skip them.
+    /// Output indices reserved for a positional output filled later. Appended outputs skip them.
+    ///
+    /// For example, an IOC ask's return sits at its custody input's index.
     pub pinned: BTreeSet<usize>,
     /// The order output that takes the change instead of a change output ([`Absorber`]).
     pub absorber: Option<Absorber>,
-    /// Refund outputs of terminal bid fills: (bid input index, value, maker key). Each is a plain P2PK output of the maker at
-    /// output `M - 1 - i` (M the number of outputs of the sealed transaction), so the refunds close the transaction in the
-    /// reverse order of their inputs, which must be inputs 0..k (`seal` refuses anything else): the covenants pin exactly this
-    /// slot (contracts/orders/KobBid.sil `refundTo`).
+    /// Refund outputs of terminal bid fills: (bid input index, value, maker key, token).
+    ///
+    /// Each is a plain P2PK output of the maker at output `M - 1 - i`, where M is the number of
+    /// outputs of the sealed transaction. The refunds therefore close the transaction in the
+    /// reverse order of their inputs, which must be inputs 0..k, and `seal` refuses anything else.
+    /// The covenants pin exactly this slot (contracts/orders/KobBid.sil `refundTo`).
     pub refunds: Vec<(usize, u64, [u8; 32], [u8; 32])>,
 }
 
-/// An order output of the transaction that takes what would otherwise be a change output (the change rule of
-/// `docs/spec/kob1-payload.md` "Change"):
-/// * `pays` (a maker's in-place amend without funding): the output pays the fee itself, its value becomes
-///   `value − fee` and never falls below `pays`;
-/// * otherwise only a TINY change is taken: one whose own storage mass (KIP-9: 10^12 / value) would exceed the
-///   transaction's fee mass, i.e. a change below 10^12 / feeMass sompi (0.55 KAS on an 8/8 cancel-replace, 2.2 KAS on
-///   an in-place amend). It costs no relay fee but makes storage the transaction's largest mass (a storage-inclusive fee
-///   pays for it, a block holds few such transactions); the maker gets it back with the order instead. At most
-///   `max_add` sompi (a bid takes no more than keeps its buying power, the amount its escrow funds).
+/// An order output of the transaction that takes what would otherwise be a change output.
+///
+/// This is the change rule of `docs/spec/kob1-payload.md`, "Change".
+/// - With `pays`, a maker's in-place amend without funding, the output pays the fee itself. Its
+///   value becomes `value − fee` and never falls below `pays`.
+/// - Otherwise it takes only a tiny change, one whose own storage mass (KIP-9: 10^12 / value) would
+///   exceed the transaction's fee mass. That is a change below 10^12 / feeMass sompi, e.g. 0.55 KAS
+///   on an 8/8 cancel-replace or 2.2 KAS on an in-place amend. Such a change costs no relay fee,
+///   but it makes storage the transaction's largest mass. A storage-inclusive fee pays for it, and
+///   a block holds few such transactions. The maker gets it back with the order instead. It takes
+///   at most `max_add` sompi, and a bid takes no more than keeps its buying power, the amount its
+///   escrow funds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Absorber {
     pub output: usize,
@@ -997,8 +1067,10 @@ pub(crate) struct Absorber {
     pub pays: Option<u64>,
 }
 
-/// A 32-byte x-only key written into an output (maker, recipient, holder, change) must be a curve point, otherwise the
-/// output is unspendable and the funds are burnt.
+/// Checks that a 32-byte x-only key written into an output is a curve point.
+///
+/// The key is a maker, recipient, holder or change key. Otherwise the output is unspendable and the
+/// funds are burnt.
 pub fn check_key(key: &[u8; 32], what: &str) -> Result<()> {
     secp256k1::XOnlyPublicKey::from_slice(key).map(|_| ()).map_err(|_| {
         Error::Invalid(format!("{what} {} is not a valid x-only public key: the output would be unspendable", to_hex(key)))
@@ -1006,6 +1078,7 @@ pub fn check_key(key: &[u8; 32], what: &str) -> Result<()> {
 }
 
 impl Draft {
+    /// A new draft with lock time `lock_time`, the fee options and the change key.
     pub fn new(lock_time: u64, fee: &FeeOptions, change: Option<[u8; 32]>) -> Result<Draft> {
         if let Some(c) = &change {
             check_key(c, "change key")?;
@@ -1030,11 +1103,13 @@ impl Draft {
         })
     }
 
+    /// Adds an input spent by `plan`, with its budget role and sequence.
     pub fn add_input(&mut self, utxo: &Utxo, plan: SigPlan, role: impl Into<String>, sequence: u64) -> usize {
         self.inputs.push(DInput { utxo: utxo.clone(), plan: DPlan::Plain(plan), sequence, role: role.into() });
         self.inputs.len() - 1
     }
 
+    /// Adds a P2PK funding input.
     pub fn add_p2pk(&mut self, k: &KeyUtxo) -> usize {
         self.add_input(&k.utxo, SigPlan::P2pk { pubkey: k.pubkey }, "p2pk", SEQUENCE_NONFINAL)
     }
@@ -1077,7 +1152,7 @@ impl Draft {
         self.pinned.insert(idx);
     }
 
-    /// Appends empty reserved slots until the next appended output would not land on a pinned index.
+    /// Appends empty reserved slots until the next output would not land on a pinned index.
     fn skip_pinned(&mut self) {
         while self.pinned.contains(&self.outputs.len()) {
             self.outputs.push(DOutput { value: 0, spk: ScriptPublicKey::new(0, Default::default()), cov: None, token: None });
@@ -1091,14 +1166,17 @@ impl Draft {
         }
     }
 
+    /// Appends a plain output, skipping the pinned slots.
     pub fn add_output(&mut self, value: u64, spk: ScriptPublicKey, cov: Option<(u16, [u8; 32])>) -> usize {
         self.skip_pinned();
         self.outputs.push(DOutput { value, spk, cov, token: None });
         self.outputs.len() - 1
     }
 
-    /// A terminal bid fill's refund of `value` sompi to `maker` (P2PK), for the bid at input `input`: placed by `seal` at the
-    /// end of the outputs (see [`Draft::refunds`]).
+    /// A terminal bid fill's refund of `value` sompi to `maker` (P2PK), for the bid at input
+    /// `input`.
+    ///
+    /// `seal` places it at the end of the outputs (see [`Draft::refunds`]).
     pub fn add_refund(&mut self, input: usize, value: u64, maker: [u8; 32], token: [u8; 32]) {
         self.refunds.push((input, value, maker, token));
     }
@@ -1119,8 +1197,8 @@ impl Draft {
             return invalid(format!("a {:?} token state under the {} program", state.family(), token.1.name()));
         }
         if state.is_covenant_owned() && state.owner() == token.0 {
-            // A token UTXO owned by the token's own covenant id is unlocked by any input of the token, i.e. by
-            // anyone never deliver there.
+            // A token UTXO owned by the token's own covenant id is unlocked by any input of the
+            // token, i.e. by anyone. Never deliver there.
             return invalid("a token output owned by the token's own covenant id is spendable by anyone: refused");
         }
         if state.family() == Family::Kron && !(1..=KRON_MAX_OUTPUT_AMOUNT).contains(&state.amount()) {
@@ -1158,9 +1236,12 @@ impl Draft {
         Ok(id)
     }
 
-    /// Changes the value of the single-output genesis at `idx` and re-derives what hangs on its covenant id (the id is
-    /// keyed by the output's value): the binding, the covenant record, and every token output owned by the old id (the
-    /// new order's custody), whose state names the new id.
+    /// Changes the value of the single-output genesis at `idx`, and re-derives what hangs on its
+    /// covenant id.
+    ///
+    /// The id is keyed by the output's value. The binding, the covenant record and every token
+    /// output owned by the old id (the new order's custody) change, and those token states name the
+    /// new id.
     fn set_genesis_value(&mut self, idx: usize, value: u64) -> Result<()> {
         let Some((auth, old)) = self.outputs[idx].cov else { return invalid("not a genesis output") };
         let op = self.inputs[auth as usize].utxo.outpoint();
@@ -1225,9 +1306,11 @@ impl Draft {
         self.inputs.iter().position(|i| matches!(i.plan, DPlan::Token { cov: c, .. } if c == cov))
     }
 
-    /// Index of the input that authorises the KRON token input `own` with owner witness `w` (the input
-    /// carrying the owner covenant id, a P2PK input of the owner key, or for an `id_type` 0 state the token input itself, whose
-    /// signature column carries the owner's signature).
+    /// Index of the input that authorises the KRON token input `own` with owner witness `w`.
+    ///
+    /// It is the input carrying the owner covenant id, or a P2PK input of the owner key. For an
+    /// `id_type` 0 state it is the token input itself, whose signature column carries the owner's
+    /// signature.
     fn kron_witness_index(&self, own: usize, state: &KronState, w: &Witness) -> Result<u8> {
         let found = match w {
             Witness::CovenantId => {
@@ -1248,7 +1331,8 @@ impl Draft {
                 to_hex(k)
             )),
         })?;
-        // The witness is one script-number byte: indices above 127 read as negative and can never authorise.
+        // The witness is one script-number byte. Indices above 127 read as negative and can never
+        // authorise.
         u8::try_from(idx).ok().filter(|i| *i <= 127).ok_or_else(|| Error::Invalid(format!("KRON witness index {idx} exceeds 127")))
     }
 
@@ -1292,8 +1376,9 @@ impl Draft {
                             }
                         }
                     }
-                    // An id_type 0 input reads its signature from the signature column; how a program indexes that column
-                    // with several such inputs is not established, so an id_type 0 input is its token's only input.
+                    // An id_type 0 input reads its signature from the signature column. How a
+                    // program indexes that column with several such inputs is not established, so
+                    // an id_type 0 input is its token's only input.
                     if signed > 0 && witnesses.len() > 1 {
                         return invalid(
                             "a KRON token input of id_type 0 (a token-level signature) must be the only input of its token in the \
@@ -1327,8 +1412,8 @@ impl Draft {
         if self.inputs.is_empty() {
             return invalid("a transaction needs at least one input");
         }
-        // An empty reserved slot (a positional slot below an IOC return, say) takes the change output when there is one; any
-        // other empty slot is a builder error.
+        // An empty reserved slot, e.g. a positional slot below an IOC return, takes the change
+        // output when there is one. Any other empty slot is a builder error.
         let empty = |o: &DOutput| o.token.is_none() && o.cov.is_none() && o.value == 0 && o.spk.script().is_empty();
         let gaps: Vec<usize> = self.outputs.iter().enumerate().filter(|(_, o)| empty(o)).map(|(k, _)| k).collect();
         if gaps.len() > 1 || (gaps.len() == 1 && self.change.is_none()) {
@@ -1357,7 +1442,8 @@ impl Draft {
                 return invalid("KCC-20 transfers need at least one token output");
             }
         }
-        // Every token output carries at least what its token program accepts (KaspaCom 0.2.5: 0.5 KAS).
+        // Every token output carries at least what its token program accepts, e.g. 0.5 KAS for
+        // KaspaCom 0.2.5.
         for (k, o) in self.outputs.iter().enumerate() {
             let Some((cov, _)) = &o.token else { continue };
             let Some(tpl) = self.tokens.iter().find(|(c, _)| c == cov).map(|(_, t)| *t) else { continue };
@@ -1424,17 +1510,19 @@ impl Draft {
             .filter(|o| !empty(o))
             .map(|o| TransactionOutput { value: o.value, script_public_key: o.spk.clone(), covenant: token_binding(o) })
             .collect();
-        // Refund outputs close the transaction (output M - 1 - i for the bid at input i): the bids are inputs 0..k, so the
-        // refund of input 0 is the last output. The covenants also refuse a slot that is the positional output of another
-        // order input (a covenant input that is not a token input): spare outputs to the change key move the slots up
-        // until none is.
+        // Refund outputs close the transaction, at output M - 1 - i for the bid at input i. The
+        // bids are inputs 0..k, so the refund of input 0 is the last output. The covenants also
+        // refuse a slot that is the positional output of another order input, i.e. a covenant input
+        // that is not a token input. Spare outputs to the change key move the slots up until none
+        // is.
         let mut sorted_refunds = self.refunds.clone();
         sorted_refunds.sort_by_key(|r| std::cmp::Reverse(r.0));
         let tail_n = sorted_refunds.len();
         if sorted_refunds.iter().enumerate().any(|(k, r)| r.0 != tail_n - 1 - k) {
             return invalid("terminal bid fills with a refund must be the first inputs of the transaction");
         }
-        // (the covenants let a refund slot sit on a plain key input or an input of the bid's own token only)
+        // The covenants let a refund slot sit only on a plain key input or an input of the bid's
+        // own token.
         let claimed = |at: usize, token: &[u8; 32]| -> bool {
             self.inputs.get(at).is_some_and(|i| i.utxo.covenant_id.is_some_and(|c| c != *token))
         };
@@ -1458,7 +1546,7 @@ impl Draft {
                 outputs.push(TransactionOutput { value: *value, script_public_key: p2pk_spk(maker), covenant: None });
             }
         }
-        // the change output: in the empty slot if there is one, else before the refunds
+        // The change output goes in the empty slot if there is one, else before the refunds.
         let with_change = |outs: &mut Vec<TransactionOutput>, o: TransactionOutput| -> usize {
             match gap {
                 Some(k) => {
@@ -1490,13 +1578,15 @@ impl Draft {
         let fee_of = |tx: &Transaction| target_fee(&masses(tx, &entries), self.fee_rate, self.fee_mode);
         let fee_without = fee_of(&mk(outputs.clone()));
         let mut change_output = None;
-        // The absorber's position among the final outputs (empty reserved slots are not outputs). A transaction with a
-        // reserved gap needs its change output there: no absorber then.
+        // The absorber's position among the final outputs, where empty reserved slots are not
+        // outputs. A transaction with a reserved gap needs its change output there, and then has no
+        // absorber.
         let absorber = match (self.absorber, gap) {
             (Some(a), None) => Some((a, a.output - self.outputs[..a.output].iter().filter(|o| empty(o)).count())),
             _ => None,
         };
-        // Fixed point of the absorber's value: `base + slack − fee` (storage mass moves with the value), from the upper bound.
+        // Fixed point of the absorber's value, `base + slack − fee`, from the upper bound. Storage
+        // mass moves with the value.
         let absorbed = |outs: &[TransactionOutput], at: usize, slack: u64, floor: u64| -> Option<Vec<TransactionOutput>> {
             let base = outs[at].value;
             let mut v = (base + slack).checked_sub(fee_of(&mk(outs.to_vec())))?;
@@ -1512,7 +1602,7 @@ impl Draft {
             None
         };
         if let Some((a, at)) = absorber.filter(|(a, _)| a.pays.is_some()) {
-            // the order pays the fee out of its own value: no funding, no change
+            // The order pays the fee out of its own value, with no funding and no change.
             let floor = a.pays.expect("pays");
             match absorbed(&outputs, at, slack, floor) {
                 Some(o) => outputs = o,
@@ -1522,7 +1612,7 @@ impl Draft {
                 }
             }
         } else if let Some(pk) = self.change {
-            // Fixed point c = slack − fee(c); fee(c) falls as c grows (storage mass ∝ 1/c), so
+            // Fixed point c = slack − fee(c). fee(c) falls as c grows (storage mass ∝ 1/c), so
             // iterating from the upper bound converges from above or goes negative.
             let spk = p2pk_spk(&pk);
             let mut c = slack.saturating_sub(fee_without);
@@ -1540,7 +1630,7 @@ impl Draft {
                     break;
                 }
                 if next > c {
-                    // cannot happen with a monotone fee; keep the smaller (safe) value
+                    // This cannot happen with a monotone fee. Keep the smaller, safe value.
                     ok = true;
                     break;
                 }
@@ -1549,12 +1639,12 @@ impl Draft {
             if ok && c > 0 {
                 // The relay floor does not price storage mass, so nothing else keeps a small change
                 // output (storage mass ~ 10^12 / value) from pushing the transaction over the block
-                // storage limit: such a change is folded into the fee instead.
+                // storage limit. Such a change is folded into the fee instead.
                 let mut outs = outputs.clone();
                 with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
                 let m = masses(&mk(outs), &entries);
-                // a tiny change (its own storage mass, KIP-9 C / value, would exceed the fee mass) goes into the absorber
-                // instead, if it fits
+                // A tiny change, whose own storage mass (KIP-9 C / value) would exceed the fee
+                // mass, goes into the absorber instead if it fits.
                 let tiny = mass_params().storage_mass_parameter / c > m.fee_mass;
                 let folded = absorber
                     .filter(|_| tiny)
@@ -1562,9 +1652,10 @@ impl Draft {
                 if let Some(o) = folded {
                     let (a, at) = absorber.expect("folded");
                     if self.covenants.iter().any(|c| c.outputs == [a.output as u32]) {
-                        // A genesis output: its value is part of its covenant id (and the id owns the order's custody).
-                        // Re-derive both with the new value and seal again without a change output; the fixed point
-                        // left nothing over (any rounding goes to the fee).
+                        // A genesis output's value is part of its covenant id, and the id owns the
+                        // order's custody. Re-derive both with the new value and seal again without
+                        // a change output. The fixed point left nothing over, and any rounding goes
+                        // to the fee.
                         let value = o[at].value;
                         let mut d = self;
                         d.set_genesis_value(a.output, value)?;
@@ -1594,9 +1685,9 @@ impl Draft {
         tx.set_storage_mass(report.storage);
         let report = masses(&tx, &entries);
         if report.storage > BLOCK_STORAGE_LIMIT {
-            // KIP-9: a small output's storage mass is ~ storage_mass_parameter × plurality² / value; name the outputs whose own
-            // storage mass exceeds the limit (a plain output below DUST_OUTPUT_MIN, one with a covenant id below
-            // COVENANT_OUTPUT_MIN)
+            // KIP-9: a small output's storage mass is ~ storage_mass_parameter × plurality² /
+            // value. Name the outputs whose own storage mass exceeds the limit: a plain output
+            // below DUST_OUTPUT_MIN, or one with a covenant id below COVENANT_OUTPUT_MIN.
             let dust: Vec<String> = tx
                 .outputs
                 .iter()
@@ -1605,7 +1696,8 @@ impl Draft {
                 .map(|(k, o)| format!("output {k} ({} sompi)", o.value))
                 .collect();
             if dust.is_empty() {
-                // no output is dust on its own: the many small covenant outputs (each `4 × 10^12 / value`) add up
+                // No output is dust on its own, but the many small covenant outputs (each
+                // `4 × 10^12 / value`) add up.
                 return invalid(format!(
                     "the transaction's storage mass {} exceeds the block limit {BLOCK_STORAGE_LIMIT} (KIP-9): its covenant outputs are too small in total, so it could never be mined; fill fewer orders in one transaction or use a larger carrier",
                     report.storage
@@ -1663,8 +1755,10 @@ mod tests {
     use super::*;
     use crate::state::TokenState;
 
-    /// A token UTXO owned (owner_scheme 4 / KRON id_type 2) by the token's OWN covenant id is unlocked
-    /// by any input of the token, i.e. by anyone. No builder may create one.
+    /// A token UTXO owned by the token's own covenant id is unlocked by any input of the token.
+    ///
+    /// The owner is owner_scheme 4 or KRON id_type 2. Anyone can therefore spend it, and no builder
+    /// may create one.
     #[test]
     fn no_token_output_owned_by_its_own_covenant_id() {
         let fee = FeeOptions::default();
@@ -1676,14 +1770,17 @@ mod tests {
             assert!(e.to_string().contains("own covenant id"), "{e}");
             let at = d.reserve_output();
             assert!(d.fill_token_output(at, (tok, tpl), own, 1_000).is_err());
-            // any other covenant owner (an order's custody) and a key owner are fine
+            // Any other covenant owner, e.g. an order's custody, and a key owner are fine.
             assert!(d.add_token_output((tok, tpl), TokenState::custody(fam, 5, [0x71; 32], [0; 32]), 1_000).is_ok());
             assert!(d.add_token_output((tok, tpl), TokenState::user(fam, 5, [0x72; 32], [0; 32]), 1_000).is_ok());
         }
     }
 
-    /// An output with a covenant id (an order continuation, a token output) takes two KIP-9 storage units: the least value
-    /// whose own storage mass fits the block limit is four times the plain dust bound, 0.08 KAS.
+    /// An output with a covenant id (an order continuation, a token output) takes two KIP-9 storage
+    /// units.
+    ///
+    /// The least value whose own storage mass fits the block limit is four times the plain dust
+    /// bound, 0.08 KAS.
     #[test]
     fn a_covenant_output_needs_four_times_the_plain_dust_bound() {
         assert_eq!(COVENANT_OUTPUT_MIN, 8_000_000);
@@ -1693,7 +1790,8 @@ mod tests {
             script_public_key: crate::script::p2sh_spk(&[0x51; 40]),
             covenant: cov.then(|| CovenantBinding { authorizing_input: 0, covenant_id: Hash::from_bytes([7; 32]) }),
         };
-        // (consensus rounds each output's mass down: the exact thresholds are a few sompi below the round bounds)
+        // Consensus rounds each output's mass down, so the exact thresholds are a few sompi below
+        // the round bounds.
         assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN, true)) <= BLOCK_STORAGE_LIMIT);
         assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN - 16, true)) > BLOCK_STORAGE_LIMIT);
         assert!(output_storage_mass(&out(COVENANT_OUTPUT_MIN - 1, false)) <= BLOCK_STORAGE_LIMIT / 3);
