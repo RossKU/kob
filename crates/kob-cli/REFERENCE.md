@@ -15,6 +15,7 @@ still change until a release says otherwise.
 - [Fees](#fees)
 - [Network, node and safety checks](#network-node-and-safety-checks)
 - [Order kinds: every option](#order-kinds-every-option)
+- [kob take: the price bound](#kob-take-the-price-bound)
 - [JSON output](#json-output)
 - [Exit codes](#exit-codes)
 - [kob watch details](#kob-watch-details)
@@ -184,6 +185,70 @@ its amount, or for a buy; otherwise a cancel-replace). Conditionals take `--pric
 if-done entries and every pair order are re-planned from their terms with `--price`, `--take-profit`, `--stop`,
 `--stop-limit`, `--exit-tip`, `--trail-step`, `--trail-gap`, `--entry-stop`. Repeat entries are not replaced (cancel instead).
 
+## kob take: the price bound
+
+`kob take <ID> --amount A` fills one resting order as the taker, in one transaction you build and sign yourself (an
+Executor's fill with one order). It fills at the order's terms at the transaction's lock time, `now - 10 DAA` from the
+node's DAA clock. Two things can move that price between your decision and the signature, and the covenant guards only the
+order's own terms:
+
+- the maker can amend the order (a sell order is amended in place: same covenant id, new price);
+- a Dutch ask, a rising bid or a decaying IOC auction is priced at the lock time, so a node whose clock lags (or lies) signs
+  an earlier lock time, at which a Dutch ask is dearer and a rising bid pays less.
+
+The bound:
+
+| Option | When | The fill is refused when |
+|---|---|---|
+| `--max-price P` | the fill buys tokens (taking a sell order: limit / IOC / FOK / Dutch sell, take-profit sell, sell-first entry) | it pays more than P per whole token |
+| `--min-price P` | the fill sells tokens (taking a buy order: limit / rising buy, take-profit buy, buy-first entry) | it receives less than P per whole token |
+
+- **P** reads as `--price` of `kob place`: KAS per whole token with a unit (`0.24KAS`, `24000000sompi`). It need not be on
+  the order's tick, because it is only compared.
+- **The price compared** is the one this fill settles at, per whole token: the order's price at the lock time the
+  transaction is signed with, **less the order's tip** when you buy and **plus the order's tip** when you sell. You are the
+  fill's executor, so the tip is yours: the maker of a sell order receives `price - tip` and that is what you pay; a buy
+  order pays `price + tip` out of its escrow and you receive it. This is the web wallet's "worst price (all-in)": the KAS
+  per token that moves between you and the maker. Not in it, as in the web wallet: the network fee, the carrier of your
+  token output (it stays yours), and the covenant's rounding of the total (less than 1 sompi for the whole fill, in the
+  maker's favour: up for what a sell order receives, down for what a buy order pays).
+- **Auctions** are priced at the signed lock time itself (`lockTime` in the plan), not at the indexer's view or at the
+  time you looked. A take-profit leg and an if-done entry without an entry stop are priced at their limit.
+- **At exactly the bound** the fill passes. A worse price is an `error` finding, so nothing is signed: exit 1,
+  `error: the plan has errors: nothing signed` on stderr, and with `--json` the one plan document with `result` `null`
+  and the finding in `issues`: code `TAKE_PRICE_ABOVE_MAX` or `TAKE_PRICE_BELOW_MIN`, a message that names the price, the
+  order's price at the lock time, the tip and your bound. `--dry-run` refuses the same way (exit 1).
+- **`--yes` needs a bound.** `kob take ... --yes` without `--max-price` or `--min-price` is a usage mistake (exit 2:
+  `a price bound is required when the confirmation is skipped`), checked before the node is asked anything. So are both
+  bounds at once, the bound of the other side (`--min-price` on a fill that buys, exit 2 once the order is read) and a
+  bound without a unit. Without `--yes` the bound is optional: the plan, shown before the prompt, gives the order's price
+  at the lock time, the tip, what you pay or receive per token and in total, and the bound (or none).
+- **No `--slippage`.** `--slippage` of `kob place` bounds an auction relative to a reference price. A take has no
+  reference to slip from but the order itself, which is what can change: put your margin into the bound (for an order shown
+  at 0.25 KAS that you accept up to 1 % worse, `--max-price 0.2525KAS`).
+
+```sh
+kob take <id> --amount 4TUSD --max-price 0.26KAS --yes --json   # buy from a sell order, at most 0.26 KAS per TUSD
+kob take <id> --amount 4TUSD --min-price 0.24KAS --yes --json   # sell into a buy order, at least 0.24 KAS per TUSD
+kob take <id> --amount 4TUSD --max-price 0.26KAS --dry-run      # show the plan and check the bound, sign nothing
+```
+
+A refusal with `--json` (abridged):
+
+```json
+{
+  "action": "take <64 hex> (buy from a sell order)",
+  "plan": { "order": "<64 hex>", "amount": "4000", "lockTime": 999990, "price": "310000000", "tip": "0", "kas": "1240000000",
+            "bound": { "kind": "max", "per_token": "300000000" } },
+  "issues": [{ "code": "TAKE_PRICE_ABOVE_MAX", "severity": "error",
+               "message": "this fill pays 3.1 KAS per TST (the order's price 3.1 KAS per TST at the lock time (DAA 999990), less its tip 0 KAS per TST that you keep), above your --max-price 3 KAS per TST: nothing signed" }],
+  "result": null
+}
+```
+
+When the fill cannot be built either (for example you lack the KAS for the raised price), stdout stays empty and the
+refusal is the error on stderr (exit 1).
+
 ## JSON output
 
 `--json` is a flag of `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `book`, `orders` and `balances`.
@@ -251,7 +316,7 @@ One JSON document on stdout once a transaction has been built: the plan, with th
 | `replace` | `order` (covenant id), `inPlace` (boolean), `replacement` (the new state), `value` (string, sompi on the replacement); a re-planned cancel-replace (trailing stop, if-done entry, pair order) adds `states` |
 | `cancel` | `action` (`"cancel"`), `covenant_id`, `kind` (template name), `returned` (array of `{"token", "units", "utxos", "kas"}`: the strays it takes back; `utxos` is a number) |
 | `refund` | `order`, `due` (number, DAA), `earned` (string, sompi, negative when the refund costs KAS) |
-| `take` | `order`, `amount` (string, base units), `lockTime` (number) |
+| `take` | `order`, `amount` (string, base units), `lockTime` (number), `price` (string: the order's state price at `lockTime`), `tip` (string, state units), `kas` (string, sompi the fill pays the maker of a sell order or receives from a buy order, or `null` where it does not compute), `bound` (`null`, or `{"kind": "max" | "min", "per_token": string}`: `--max-price` / `--min-price` in sompi per whole token) |
 | `send` of KAS | `to` (as typed), `amount` (string, sompi) |
 | `send` of a token | `to`, `token` (covenant id), `amount` (string, base units), `carrier` (string, sompi on the recipient's token output) |
 
@@ -391,10 +456,11 @@ The code separates three outcomes; the finer cause is in the message on stderr, 
 | Code | Meaning |
 |---|---|
 | 0 | success: the work was done, `--dry-run` stopped after the plan, a view was printed, or `--help` / `--version` |
-| 1 | the command ran and did not do its work: a node, indexer or network-check error, a planning error, a plan with an `error` issue, a transaction needing another key's signature, a signing / script-engine / submission failure, **or a refusal to sign** (no `--yes` without a terminal, or an answer other than `yes`) |
-| 2 | usage: an unknown command or option, a missing or malformed argument, no signing key, a key on the command line (`--key` of a trading command), `--yes` with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a missing required option of the kind) in `place`, `replace`, `take`, `send` and `refund` |
+| 1 | the command ran and did not do its work: a node, indexer or network-check error, a planning error, a plan with an `error` issue, a transaction needing another key's signature, a signing / script-engine / submission failure, a `kob take` whose price is worse than its `--max-price` / `--min-price` (`TAKE_PRICE_ABOVE_MAX` / `TAKE_PRICE_BELOW_MIN` in `issues`), **or a refusal to sign** (no `--yes` without a terminal, or an answer other than `yes`) |
+| 2 | usage: an unknown command or option, a missing or malformed argument, no signing key, a key on the command line (`--key` of a trading command), `--yes` with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a missing required option of the kind) in `place`, `replace`, `take`, `send` and `refund`; `kob take --yes` without `--max-price` or `--min-price`, both of them, or the one of the other side |
 
-So a refusal, a plan error, a node error and a declined prompt are all 1. Read stderr (`error: ...` for failures,
+So a refusal, a plan error, a price bound a take does not meet, a node error and a declined prompt are all 1 (there is no
+exit code of its own for a price refusal: read `issues`). Read stderr (`error: ...` for failures,
 `not signed: ...` for a refusal or a declined prompt) or the `issues` array. A mistake in the arguments is 2 on every command,
 the views (`book`, `orders`, `balances`) included (no token, `--depth 0`, no key and no `--maker`); their indexer and node
 failures are 1.

@@ -14,6 +14,7 @@ use kob_protocol::state::{AnyState, CondAskState, CondBidState};
 use kob_protocol::tx::{BuiltTx, FeeOptions, KeyUtxo, OrderUtxo, TokenUtxo};
 use serde_json::json;
 
+use super::bound;
 use super::data::{self, Live};
 use super::flow::{finish, Ready};
 use super::market::{self, show_id, TokenMarket};
@@ -72,6 +73,18 @@ fn build_with_funding(
 }
 
 fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) -> Result<(Parsed, Common, Signer), i32> {
+    ctx_checked(args, value_flags, bool_flags, usage, |_| Ok(()))
+}
+
+/// [`ctx`] with a check of the parsed arguments that runs before the key is read or the node is
+/// asked anything; its `Err` is a usage mistake (exit 2).
+fn ctx_checked(
+    args: &[String],
+    value_flags: &[&str],
+    bool_flags: &[&str],
+    usage: &str,
+    check: impl Fn(&Parsed) -> Result<(), String>,
+) -> Result<(Parsed, Common, Signer), i32> {
     if let Some(code) = crate::help::help_or_usage(args, &[usage, COMMON_HELP], false) {
         return Err(code);
     }
@@ -80,6 +93,7 @@ fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) 
         2
     };
     let p = parse(args, value_flags, bool_flags).map_err(fail)?;
+    check(&p).map_err(fail)?;
     let c = Common::from(&p).map_err(fail)?;
     let s = c.signer(args).map_err(fail)?;
     super::flow::check_network_first(&c).map_err(|e| {
@@ -970,22 +984,34 @@ pub const TAKE_USAGE: &str = "\
 kob take: fill a resting order as the taker, at its own price (an Executor's fill transaction with one order)
 
 USAGE
-  kob take <COVENANT_ID> --amount AMOUNT [--carrier KAS] [options]
+  kob take <COVENANT_ID> --amount AMOUNT [--max-price P | --min-price P] [--carrier KAS] [options]
 
-  An order that sells (a limit / IOC / FOK / Dutch sell, a take-profit sell, a sell-first entry): you pay its price plus
-  tip in KAS from your KAS UTXOs and receive AMOUNT of the token (on a token output carrying --carrier, default 1KAS).
+  An order that sells (a limit / IOC / FOK / Dutch sell, a take-profit sell, a sell-first entry): you pay the maker its
+  price less its tip in KAS from your KAS UTXOs (the tip is the executor's, and here you are the executor) and receive
+  AMOUNT of the token (on a token output carrying --carrier, default 1KAS).
   An order that buys (a limit buy, a take-profit buy, a buy-first entry): you deliver AMOUNT of your tokens and receive
-  its price plus tip in KAS. The fill must respect the order's minimum fill, its slices and its activation; a decaying
-  order is filled at its price at the transaction's lock time (now - 10 DAA). Pair orders and stops are not taken here.
+  its price plus its tip in KAS. The fill must respect the order's minimum fill, its slices and its activation; a
+  decaying or rising order is filled at its price at the transaction's lock time (now - 10 DAA, from the node's DAA
+  clock). Pair orders and stops are not taken here.
+
+PRICE BOUND
+  --max-price P   a fill that buys (taking a sell order) pays at most P per whole token
+  --min-price P   a fill that sells (taking a buy order) receives at least P per whole token
+                  P as --price of `kob place` (0.24KAS or 24000000sompi). The price compared is the one the fill
+                  settles at: the order's price at the signed lock time, less its tip (buying) or plus its tip
+                  (selling); the network fee is not in it. A worse price is refused before signing. The maker can
+                  amend an order and an auction moves with the lock time, so --yes needs a bound.
 ";
 
 /// Runs `kob take`.
 pub fn run_take(args: &[String]) -> i32 {
-    let (p, c, signer) = match ctx(args, &["--amount", "--carrier"], &[], TAKE_USAGE) {
+    let flags = ["--amount", "--carrier", bound::MAX_FLAG, bound::MIN_FLAG];
+    let (p, c, signer) = match ctx_checked(args, &flags, &[], TAKE_USAGE, |p| bound::parse_bound(p).map(|_| ())) {
         Ok(x) => x,
         Err(code) => return code,
     };
     let r = (|| -> Result<(Ready, Units), Fail> {
+        let price_bound = bound::parse_bound(&p).map_err(usage)?;
         let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
         let cov = cov_arg(id).map_err(usage)?;
         let node = c.need_node()?;
@@ -1047,65 +1073,111 @@ pub fn run_take(args: &[String]) -> i32 {
                 .into())
             }
         };
-        let funding = data::funding(node, &c.network, &signer.pubkey)?;
-        let taker_tokens = if sells {
-            vec![]
-        } else {
-            let mine = data::token_utxos(indexer, node, &c.network, m, &signer.pubkey)?;
-            let usable = usable_token_utxos(m, &signer.pubkey, &mine);
-            select_tokens(&usable, amount, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()).map_err(|e| e.message)?
-        };
-        let fee = c.fee_options();
-        let make = |f: Vec<KeyUtxo>| Batch {
-            lock_time: lock as u64,
-            legs: vec![leg.clone()],
-            updates: vec![],
-            taker_tokens: taker_tokens.clone(),
-            taker: Some(signer.pubkey),
-            taker_token_carrier: carrier,
-            keep_surplus: vec![],
-            keep_carrier: None,
-            receivers: vec![],
-            payments: vec![],
-            funding: f,
-            change: Some(signer.pubkey),
-            records: vec![],
-            fee: fee.clone(),
-        };
-        // The fewest coins of the key, largest first, that pay the fee and the carriers, as the
-        // rule of the x402 swap has it.
-        let mut coins = funding.clone();
-        coins.sort_by(|a, b| b.utxo.amount.cmp(&a.utxo.amount));
-        let mut built = None;
-        let mut last = String::new();
-        for n in 0..=coins.len().min(super::plan::MAX_FUNDING_INPUTS) {
-            match build(&Action::Batch(make(coins[..n].to_vec()))) {
-                Ok(b) => {
-                    built = Some(b);
-                    break;
+        // The price of this fill at the lock time it is signed with, against the taker's bound.
+        let scale = live.order.state.scale();
+        let terms = bound::terms(&live.order.state, lock, live.order.utxo.block_daa_score as i64)
+            .filter(|t| t.taker_buys == sells)
+            .ok_or("the order's price at the lock time does not compute: the covenant would refuse the fill")?;
+        let refusal = bound::check(price_bound, &terms, scale, &m.unit()).map_err(usage)?;
+        // A fill that cannot be built at a refused price fails with the refusal as its reason.
+        let built = (|| -> Result<BuiltTx, Fail> {
+            let funding = data::funding(node, &c.network, &signer.pubkey)?;
+            let taker_tokens = if sells {
+                vec![]
+            } else {
+                let mine = data::token_utxos(indexer, node, &c.network, m, &signer.pubkey)?;
+                let usable = usable_token_utxos(m, &signer.pubkey, &mine);
+                select_tokens(&usable, amount, m.slots.0.min(MAX_TOKEN_INPUTS), &m.name()).map_err(|e| e.message)?
+            };
+            let fee = c.fee_options();
+            let make = |f: Vec<KeyUtxo>| Batch {
+                lock_time: lock as u64,
+                legs: vec![leg.clone()],
+                updates: vec![],
+                taker_tokens: taker_tokens.clone(),
+                taker: Some(signer.pubkey),
+                taker_token_carrier: carrier,
+                keep_surplus: vec![],
+                keep_carrier: None,
+                receivers: vec![],
+                payments: vec![],
+                funding: f,
+                change: Some(signer.pubkey),
+                records: vec![],
+                fee: fee.clone(),
+            };
+            // The fewest coins of the key, largest first, that pay the fee and the carriers, as the
+            // rule of the x402 swap has it.
+            let mut coins = funding.clone();
+            coins.sort_by(|a, b| b.utxo.amount.cmp(&a.utxo.amount));
+            let mut built = None;
+            let mut last = String::new();
+            for n in 0..=coins.len().min(super::plan::MAX_FUNDING_INPUTS) {
+                match build(&Action::Batch(make(coins[..n].to_vec()))) {
+                    Ok(b) => {
+                        built = Some(b);
+                        break;
+                    }
+                    Err(e @ kob_protocol::Error::InsufficientFunds { .. }) => last = e.to_string(),
+                    Err(e) if n == 0 && !coins.is_empty() => last = e.to_string(),
+                    Err(e) => return Err(format!("the protocol refused the fill: {e}").into()),
                 }
-                Err(e @ kob_protocol::Error::InsufficientFunds { .. }) => last = e.to_string(),
-                Err(e) if n == 0 && !coins.is_empty() => last = e.to_string(),
-                Err(e) => return Err(format!("the protocol refused the fill: {e}").into()),
             }
-        }
-        let built = built.ok_or_else(|| format!("cannot fund the fill: {last}"))?;
+            Ok(built.ok_or_else(|| format!("cannot fund the fill: {last}"))?)
+        })()
+        .map_err(|e| match &refusal {
+            Some(i) => Fail::from(i.message.clone()),
+            None => e,
+        })?;
+        let unit = m.unit();
+        let kas = terms.kas(amount, scale);
         let mut lines = order_lines(&live, &ms);
         lines.push(format!(
-            "you {} {} at the order's price at DAA {lock}",
+            "you {} {} at the order's price at DAA {lock} (the lock time)",
             if sells { "buy" } else { "sell" },
-            units::tokens(amount as i128, &m.unit())
+            units::tokens(amount as i128, &unit)
         ));
-        if let Some(pr) = taker_price(&live.order.state, lock, live.order.utxo.block_daa_score as i64) {
-            lines.push(format!("order price now: {}", units::price_per_whole(pr, &m.unit(), live.order.state.scale(), 8, "KAS")));
-        }
+        lines.push(format!(
+            "order price now: {} (tip {}, yours as the executor)",
+            units::price_per_whole(terms.price, &unit, scale, units::KAS_DECIMALS, "KAS"),
+            units::price_per_whole(terms.tip, &unit, scale, units::KAS_DECIMALS, "KAS")
+        ));
+        lines.push(format!(
+            "you {} {}: {} {} the maker",
+            if sells { "pay" } else { "receive" },
+            bound::rate_text(&terms, scale, &unit),
+            kas.map(|k| units::kas(k as i128)).unwrap_or_else(|| "?".into()),
+            if sells { "to" } else { "from" }
+        ));
+        lines.push(match price_bound {
+            Some(b) => format!(
+                "your bound: {} {} ({})",
+                if sells { "at most" } else { "at least" },
+                bound::bound_text(b, &unit),
+                if refusal.is_some() { "NOT met: refused" } else { "met" }
+            ),
+            None => "your bound: none (--max-price / --min-price; required with --yes)".into(),
+        });
+        let mut issues: Vec<Issue> = ms.iter().filter_map(|m| m.listing_issue(true)).collect();
+        issues.extend(refusal);
+        let bound_json = price_bound.map(
+            |b| json!({"kind": if matches!(b, bound::Bound::Max(_)) { "max" } else { "min" }, "per_token": b.per_token().to_string()}),
+        );
         Ok((
             Ready {
                 title: format!("take {} {}", to_hex(&cov), if sells { "(buy from a sell order)" } else { "(sell into a buy order)" }),
                 lines,
-                issues: ms.iter().filter_map(|m| m.listing_issue(true)).collect(),
+                issues,
                 file: format!("{}.take.json", to_hex(&cov)),
-                json: json!({"order": to_hex(&cov), "amount": amount.to_string(), "lockTime": lock}),
+                json: json!({
+                    "order": to_hex(&cov),
+                    "amount": amount.to_string(),
+                    "lockTime": lock,
+                    "price": terms.price.to_string(),
+                    "tip": terms.tip.to_string(),
+                    "kas": kas.map(|k| k.to_string()),
+                    "bound": bound_json,
+                }),
                 built,
             },
             units_of(&ms),
@@ -1126,18 +1198,6 @@ pub fn refund_tip(s: &AnyState) -> i64 {
         AnyState::KobPair(x) => x.refund_tip,
         AnyState::KobCondPair(x) => x.refund_tip,
         AnyState::KobIfdPair(x) => x.refund_tip,
-    }
-}
-
-fn taker_price(s: &AnyState, t: i64, utxo_daa: i64) -> Option<i64> {
-    match s {
-        AnyState::KobAsk(x) | AnyState::KobAskKron(x) => x.price_at(t, utxo_daa),
-        AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.price_at(t, utxo_daa),
-        AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => Some(x.tp_price),
-        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => Some(x.tp_price),
-        AnyState::KobIfdBid(x) | AnyState::KobIfdBidKron(x) => Some(x.price),
-        AnyState::KobIfdAsk(x) | AnyState::KobIfdAskKron(x) => Some(x.price),
-        _ => None,
     }
 }
 

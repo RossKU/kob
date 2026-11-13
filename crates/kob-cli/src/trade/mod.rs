@@ -9,6 +9,7 @@
 //! Every signed transaction is validated in the script engine before it is submitted.
 
 pub mod actions;
+pub mod bound;
 pub mod data;
 pub mod flow;
 pub mod http;

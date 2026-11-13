@@ -105,7 +105,7 @@ One rule for every command that takes a key:
 | `kob replace <ID>` | amend a live order in place, or cancel-replace it in one transaction |
 | `kob cancel <ID>...` | the maker's cancel: custody, strays and KAS back to the maker |
 | `kob refund <ID>` | refund an ended order; any key may send it and keeps the refund tip, less the fee |
-| `kob take <ID> --amount A` | fill a resting order as the taker |
+| `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price`; one is required with `--yes`) |
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token or KAS |
 | `kob merge <TOKEN>` | merge your UTXOs of one token into one |
 | `kob book <TOKEN> [--quote B] [--depth N]` | the order book on KAS or of a pair (depth default 20, max 500) |
@@ -171,6 +171,16 @@ Every option per kind: [REFERENCE.md](REFERENCE.md#order-kinds-every-option).
 independent checks. A `market` or `close` sell needs `--ack-market-start` on its own command line
 (`--yes` is not enough), or `--floor-price P`.
 
+**A take with `--yes` needs a price bound.** `kob take` fills a resting order at the order's terms
+at the transaction's lock time. The maker can amend the order before you sign, and a Dutch ask or a
+rising bid moves with the lock time, which comes from the node's DAA clock. So `kob take ... --yes`
+needs `--max-price P` (taking a sell order: you buy) or `--min-price P` (taking a buy order: you
+sell); without `--yes` the bound is optional. The price compared is what this fill settles at per
+whole token: the order's price at the signed lock time, less its tip when you buy and plus its tip
+when you sell (you are the executor and keep the tip). A worse price is refused before signing,
+with exit 1 and the reason `TAKE_PRICE_ABOVE_MAX` / `TAKE_PRICE_BELOW_MIN` in `issues`. There
+is no `--slippage` for a take: put your margin into the bound.
+
 ## Examples
 
 ```sh
@@ -199,7 +209,9 @@ kob replace <covenant id> --price 0.255KAS $N
 kob replace <covenant id> --amount 20TUSD --renew $N
 kob cancel <covenant id> <covenant id> $N
 kob refund <covenant id> $N
-kob take <covenant id> --amount 4TUSD $N
+kob take <covenant id> --amount 4TUSD $N                          # shows the price and asks
+kob take <covenant id> --amount 4TUSD --max-price 0.26KAS --yes $N # buy from a sell order, at most 0.26 KAS
+kob take <covenant id> --amount 4TUSD --min-price 0.24KAS --yes $N # sell into a buy order, at least 0.24 KAS
 # send and merge
 kob send KAS  kaspatest:qq... 2.5KAS $N
 kob send TUSD kaspatest:qq... 12.5TUSD $N
@@ -238,8 +250,8 @@ kob watch health                                # indexer progress; a health lin
 | Exit | Meaning |
 |---|---|
 | 0 | done, `--dry-run` stopped after the plan, or a view was printed |
-| 1 | the command ran but did not do its work: node / indexer / plan error, or a refusal to sign (no `--yes`, or a declined prompt) |
-| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` on a trading command, `--yes` with `--dry-run` |
+| 1 | the command ran but did not do its work: node / indexer / plan error, a take whose price is worse than its bound, or a refusal to sign (no `--yes`, or a declined prompt) |
+| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` on a trading command, `--yes` with `--dry-run`, `kob take --yes` without `--max-price` / `--min-price` |
 
 `--help` prints on stdout and exits 0. A usage printed because of a mistake (`kob place` with no
 arguments) goes to stderr and exits 2. The reason is on stderr (`error: ...` or `not signed: ...`)
