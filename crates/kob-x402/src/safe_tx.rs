@@ -237,8 +237,10 @@ impl SafeTx {
         Ok(ParsedTx { tx, hints })
     }
 
-    /// Projection of a consensus transaction with its UTXO entries as hints (`amount` and
-    /// `scriptPublicKey`, like the binding's vectors; the covenant id is added for covenant inputs).
+    /// Projects a consensus transaction, with its UTXO entries as input hints.
+    ///
+    /// The hints carry `amount` and `scriptPublicKey`, like the binding's vectors, plus the
+    /// covenant id for covenant inputs.
     pub fn from_consensus(tx: &Transaction, entries: &[UtxoEntry]) -> SafeTx {
         SafeTx {
             id: Some(hex(&tx.id().as_bytes())),

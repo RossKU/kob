@@ -1,20 +1,27 @@
-//! The verification entry point: `verify_payment` runs the complete pre-broadcast verification of an
-//! `exact-transaction` payment for every profile this crate knows and returns the facts the
-//! facilitator needs to settle it ([`Verified`]).
+//! The verification entry point, `verify_payment`, and its result type [`Verified`].
 //!
-//! Dispatch:
+//! `verify_payment` runs the whole pre-broadcast verification of an `exact-transaction` payment for
+//! every profile this crate knows. It returns the facts the facilitator needs to settle the
+//! payment.
 //!
-//! * `route.binding` `kob-intent-v1` (payload or offer) -> intent-based swap-and-pay ([`crate::intent`]);
-//! * `payload.route` / `accepted.extra.route` present otherwise -> swap-and-pay ([`crate::swap`]);
-//! * profile `standard-native` -> [`crate::exact`] (the binding, KAS);
-//! * profile `kcc20` -> [`crate::token`] (KOB token profile);
-//! * profile `additive` -> not supported here (`unsupported_kaspa_exact_profile`; KOB advertises only
-//!   the profiles it implements in `/supported`).
+//! # Dispatch
 //!
-//! Every verifier follows the binding's step list ("Verification", steps 1 to 11): shape checks,
-//! `payToScriptPublicKey` re-derivation, size bounds, canonical decoding and id recomputation,
-//! trusted UTXO resolution, hint comparison, signature / witness execution through the script
-//! engine, exact merchant gain, fee and mass recomputation, request authorization.
+//! - `route.binding` `kob-intent-v1` in the payload or the offer goes to [`crate::intent`].
+//! - Any other `payload.route` or `accepted.extra.route` goes to [`crate::swap`].
+//! - Profile `standard-native` goes to [`crate::exact`] (the binding, KAS).
+//! - Profile `kcc20` goes to [`crate::token`] (the KOB token profile).
+//! - Profile `additive` is refused with `unsupported_kaspa_exact_profile`. KOB advertises only the
+//!   profiles it implements in `/supported`.
+//!
+//! # Steps
+//!
+//! Every verifier follows the binding's step list ("Verification", steps 1 to 11).
+//!
+//! - Shape checks and `payToScriptPublicKey` re-derivation.
+//! - Size bounds, canonical decoding and id recomputation.
+//! - Trusted UTXO resolution and hint comparison.
+//! - Signature and witness execution through the script engine.
+//! - Exact merchant gain, fee and mass recomputation, and request authorization.
 
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
 use serde_json::{Map, Value};
@@ -36,7 +43,9 @@ pub enum PaymentKind {
     SwapToKas,
     /// Swap-and-pay, merchant receives a KCC-20 token.
     SwapToToken,
-    /// Intent-based swap-and-pay, merchant receives KAS (the verified transaction is the intent creation).
+    /// Intent-based swap-and-pay, merchant receives KAS.
+    ///
+    /// The verified transaction creates the intent.
     IntentToKas,
     /// Intent-based swap-and-pay, merchant receives a KCC-20 token.
     IntentToToken,
@@ -79,10 +88,14 @@ pub struct Verified {
     pub authorization_expires_at_ms: u64,
     pub request_hash: [u8; 32],
     pub requirements_hash: [u8; 32],
-    /// The `payment-identifier` extension id of the payload (mandatory, validated, bound by the authorization digest).
+    /// The payload's `payment-identifier` extension id.
+    ///
+    /// It is mandatory and validated, and the authorization digest binds it.
     pub payment_identifier: String,
-    /// Fields for `SettlementResponse.extensions.kaspa` (binding, profile, paymentOutputIndex,
-    /// finality, transactionEncoding, and profile specifics).
+    /// Fields for `SettlementResponse.extensions.kaspa`.
+    ///
+    /// These are binding, profile, paymentOutputIndex, finality, transactionEncoding and the
+    /// profile specifics.
     pub response_extension: Map<String, Value>,
 }
 
@@ -95,7 +108,7 @@ pub struct VerifyCtx<'a> {
 
 /// Verifies `payload` against the server-offered requirements `offered`.
 ///
-/// `request_hash` is the resource server's independently computed 32-byte fingerprint; it must
+/// `request_hash` is the resource server's independently computed 32-byte fingerprint. It must
 /// equal the payload's and the one the authorization commits to.
 pub fn verify_payment(
     ctx: &VerifyCtx,
