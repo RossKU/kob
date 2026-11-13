@@ -1,34 +1,40 @@
-//! Transaction builders for every user action and every matcher shape (protocol v3: amounts in base units, no lots).
+//! Transaction builders for every user action and every matcher shape.
 //!
-//! Each builder takes a serde request (the same JSON the wasm API accepts), lays out inputs and
-//! outputs exactly as the covenants require, and hands the draft to the fee pass
-//! ([`crate::tx::Draft::seal`]). Layout rules shared by all builders:
+//! Each builder takes a serde request, the same JSON the wasm API accepts. It lays out the inputs
+//! and outputs exactly as the covenants require, and hands the draft to the fee pass
+//! ([`crate::tx::Draft::seal`]). Amounts are in base units.
 //!
-//! * **Anti-aliasing (payout at output i).** An order spent at input *i* is paid, delivered or
-//!   refunded at output *i*. Order inputs therefore come first and outputs `0..n` are their
-//!   positional outputs; extras (continuations, token remainders, exits, merged entries,
-//!   update continuations, payments, the taker's tokens) follow, and the change output is always last.
-//! * **One leader per token.** Token inputs follow the order inputs; the first input of
-//!   each token is its leader and authorises every output of that token (KCC-20: its `next_states`
-//!   list them in output order and the others are delegators; KRON: every input carries the same
-//!   next-state columns and a witness byte naming its authorising input). A transaction may trade
-//!   several tokens (two-token routes, pair orders); each token has its own leader and slot limits.
-//! * **Token families.** The family of a leg is the family of its order's token program (`kcc20` or
-//!   `kron`, see [`crate::family`]); every layout rule, entry argument and economic rule is the same, only the
-//!   templates, the token states and the token input authorisation differ. KRON tokens held by a key are
-//!   authorised by *address presence*: a P2PK input of that key must be in the transaction (funding).
-//! * **Exact custody, no strays.** An ask-side custody must hold exactly `amountLeft` base units and be
-//!   owned by its order; taker tokens must be key-owned; a transaction carries at most
-//!   [`Family::max_tok_in`] inputs of a token whose orders it spends. Only the maker's cancel sweeps strays.
-//! * **Amounts.** Every leg names `amount`, the base units it fills. Every KAS amount a covenant checks is computed
-//!   with the exact per-kind helpers of [`crate::state`] (the quote rule, rounded in the maker's favour), and every
-//!   builder refuses a fill the covenant refuses: the minimum fill (`minFill`), the TWAP / DCA `maxFill`, a price below
-//!   its tip, an arithmetic overflow.
-//! * **Makers get exactly their bound.** Asks are paid exactly their all-in minimum, bid
-//!   continuations carry exactly the unused budget, merged entries get back exactly what their
-//!   covenants require; everything else (spread, tips) goes to the change output, i.e. the
-//!   matcher or taker. The fee pass never touches a covenant output, except the maker's own new
-//!   order of an amend ([`absorber_for`]: a tiny change, or the fee of an in-place amend, rides on it).
+//! # Layout rules
+//!
+//! - **Anti-aliasing.** An order spent at input *i* is paid, delivered or refunded at output *i*.
+//!   Order inputs therefore come first, and outputs `0..n` are their positional outputs. Extras
+//!   follow: continuations, token remainders, exits, merged entries, update continuations, payments
+//!   and the taker's tokens. The change output is always last.
+//! - **One leader per token.** Token inputs follow the order inputs. The first input of each token
+//!   is its leader and authorises every output of that token. In KCC-20 its `next_states` list them
+//!   in output order, and the other inputs are delegators. In KRON every input carries the same
+//!   next-state columns and a witness byte naming its authorising input. A transaction may trade
+//!   several tokens, as two-token routes and pair orders do, and each token has its own leader and
+//!   slot limits.
+//! - **Token families.** The family of a leg is the family of its order's token program (`kcc20` or
+//!   `kron`, see [`crate::family`]). Every layout rule, entry argument and economic rule is the
+//!   same. Only the templates, the token states and the token input authorisation differ. KRON
+//!   tokens held by a key are authorised by *address presence*: a P2PK input of that key must be in
+//!   the transaction, as funding.
+//! - **Exact custody, no strays.** An ask-side custody must hold exactly `amountLeft` base units
+//!   and be owned by its order. Taker tokens must be key-owned. A transaction carries at most
+//!   [`Family::max_tok_in`] inputs of a token whose orders it spends. Only the maker's cancel
+//!   sweeps strays.
+//! - **Amounts.** Every leg names `amount`, the base units it fills. Every KAS amount a covenant
+//!   checks is computed with the exact per-kind helpers of [`crate::state`], which round in the
+//!   maker's favour. Every builder refuses a fill the covenant refuses: below the minimum fill
+//!   (`minFill`), above the TWAP / DCA `maxFill`, a price below its tip, or an arithmetic overflow.
+//! - **Makers get exactly their bound.** Asks are paid exactly their all-in minimum, bid
+//!   continuations carry exactly the unused budget, and merged entries get back exactly what their
+//!   covenants require. Everything else, the spread and the tips, goes to the change output, i.e.
+//!   to the matcher or taker. The fee pass never touches a covenant output, except the maker's own
+//!   new order of an amend, on which a tiny change or the fee of an in-place amend rides
+//!   ([`absorber_for`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -79,10 +85,13 @@ fn pos(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
-/// A KAS amount a fill or a new order puts on an output with a covenant id (a pair order's continuation, its exit order UTXO,
-/// the carrier of its delivery; a new order's value and custody carrier): KIP-9 dust is refused here, naming the output,
-/// because `seal` refuses the whole transaction for it (the output's storage mass alone exceeds the block limit: two storage
-/// units, [`crate::tx::COVENANT_OUTPUT_MIN`]) without knowing which leg made it.
+/// Checks a KAS amount that a fill or a new order puts on an output with a covenant id.
+///
+/// Such outputs are a pair order's continuation, its exit order UTXO and the carrier of its
+/// delivery, or a new order's value and custody carrier. KIP-9 dust is refused here, naming the
+/// output. `seal` would refuse the whole transaction for it without knowing which leg made it,
+/// because the output's storage mass alone exceeds the block limit (two storage units,
+/// [`crate::tx::COVENANT_OUTPUT_MIN`]).
 fn kas_out(v: i64, what: &str) -> Result<u64> {
     if v < crate::tx::COVENANT_OUTPUT_MIN as i64 {
         return invalid(format!(
@@ -93,8 +102,10 @@ fn kas_out(v: i64, what: &str) -> Result<u64> {
     Ok(v as u64)
 }
 
-/// The repeat entries' fill bound ([`rpt_fill_max`]): a fill of more than the re-arms left, while at least one minimum
-/// fill of them is left, would leave the rest unused for good; the covenants refuse it.
+/// The fill bound of the repeat entries ([`rpt_fill_max`]).
+///
+/// A fill of more than the re-arms left, while at least one minimum fill of them is left, would
+/// leave the rest unused for good, and the covenants refuse it.
 fn rpt_fill_rule(rpt_amount: i64, min_fill: i64, n: i64) -> Result<()> {
     match rpt_fill_max(rpt_amount, min_fill) {
         Some(m) if n > m => invalid(format!(
@@ -104,8 +115,10 @@ fn rpt_fill_rule(rpt_amount: i64, min_fill: i64, n: i64) -> Result<()> {
     }
 }
 
-/// A covenant amount the builder computed with a `state` helper: `None` is where the covenant fails (an overflow, a
-/// price below its tip), so the builder refuses the fill.
+/// A covenant amount the builder computed with a `state` helper.
+///
+/// `None` is where the covenant fails, on an overflow or a price below its tip, so the builder
+/// refuses the fill.
 fn need(v: Option<i64>, what: &str) -> Result<i64> {
     v.ok_or_else(|| Error::Invalid(format!("{what}: the covenant arithmetic fails here (an overflow, or a price below its tip)")))
 }
@@ -123,8 +136,10 @@ fn nb(n: i64) -> Arg {
     Arg::Bytes(n.to_le_bytes().to_vec())
 }
 
-/// Repeat merge argument `-(k · 2^53 + m)` as a fixed 8-byte script number (sign-magnitude,
-/// little endian): the booked exit at input `k` (`k <= 1023`) takes profit on `m` base units (`0 < m < 2^53`).
+/// Repeat merge argument `-(k · 2^53 + m)` as a fixed 8-byte script number.
+///
+/// The number is sign-magnitude and little endian. The booked exit at input `k` (`k <= 1023`) takes
+/// profit on `m` base units (`0 < m < 2^53`).
 pub fn merge_arg(k: usize, m: i64) -> Result<Vec<u8>> {
     if !(1..MERGE_SHIFT).contains(&m) || k > MERGE_MAX_INDEX {
         return invalid("merge: the amount must be within 1..2^53 and the exit index at most 1023");
@@ -151,8 +166,10 @@ pub fn token_program(tpl_hash: &[u8; 32], prefix_len: i64, suffix_len: i64) -> R
 
 type Token = ([u8; 32], TemplateId);
 
-/// The token of an order and its program (a pair order: its base token A). Also checks that the order kind is of the
-/// family of that program (a `KobBidKron` trades a KRON token) and that the state is consistent with the family.
+/// The token of an order and its program, for a pair order its base token A.
+///
+/// It also checks that the order kind is of the family of that program, e.g. a `KobBidKron` trades
+/// a KRON token, and that the state is consistent with the family.
 fn order_token(s: &AnyState) -> Result<Token> {
     s.validate()?;
     let (p, x) = s.token_tpl_lens();
@@ -169,12 +186,15 @@ fn order_token(s: &AnyState) -> Result<Token> {
     Ok((s.token_cov_id(), program))
 }
 
-/// The token programs an existing order pins, resolved exactly as every builder that spends the order resolves them: a
-/// supported program whose template hash and prefix / suffix lengths the state names, of the family the order kind trades
-/// (a pair order: both tokens, each of the family its state names, two different tokens). Returns the program of the
-/// order's token (a pair order: of A) and, for a pair order, the program of B. An order that fails this can never be filled,
-/// refunded or closed by these builders, whatever else its numbers say: the executor's sanity gate applies it before an order
-/// is listed or planned.
+/// The token programs an existing order pins, resolved as every builder that spends the order does.
+///
+/// Each is a supported program whose template hash and prefix and suffix lengths the state names,
+/// of the family the order kind trades. A pair order names both tokens, each of the family its
+/// state names, and the two must differ. Returns the program of the order's token (for a pair
+/// order, of A) and, for a pair order, the program of B.
+///
+/// These builders can never fill, refund or close an order that fails this, whatever else its
+/// numbers say. The executor's sanity gate applies it before an order is listed or planned.
 pub fn order_programs(s: &AnyState) -> Result<(TemplateId, Option<TemplateId>)> {
     if s.is_pair() {
         let (a, b) = pair::pair_programs(s)?;
@@ -183,8 +203,10 @@ pub fn order_programs(s: &AnyState) -> Result<(TemplateId, Option<TemplateId>)> 
     Ok((order_token(s)?.1, None))
 }
 
-/// A refusal of the batch builder that depends on the order of leg `i` alone (its token programs, its family): the message
-/// names the leg (`order of leg <i>: ...`), so a caller that planned the batch can tell which order to leave out.
+/// A refusal of the batch builder that depends on the order of leg `i` alone.
+///
+/// Such a refusal concerns its token programs or its family. The message names the leg
+/// (`order of leg <i>: ...`), so a caller that planned the batch can tell which order to leave out.
 fn leg_order_error(i: usize, e: Error) -> Error {
     match e {
         Error::Invalid(m) if attributed(&m) => Error::Invalid(m),
@@ -194,9 +216,12 @@ fn leg_order_error(i: usize, e: Error) -> Error {
     }
 }
 
-/// A refusal of the batch builder of the fill a pair leg `i` asks for (its quantity, its continuation, its evidence): the
-/// message names the leg (`fill of leg <i>: ...`), so a caller that planned the batch can leave that fill out and keep the
-/// other legs. Unlike [`leg_order_error`] it depends on what the plan chose, not on the order alone.
+/// A refusal of the batch builder of the fill a pair leg `i` asks for.
+///
+/// Such a refusal concerns its quantity, its continuation or its evidence. The message names the
+/// leg (`fill of leg <i>: ...`), so a caller that planned the batch can leave that fill out and
+/// keep the other legs. Unlike [`leg_order_error`] it depends on what the plan chose, not on the
+/// order alone.
 fn leg_fill_error(i: usize, e: Error) -> Error {
     match e {
         Error::Invalid(m) if attributed(&m) => Error::Invalid(m),
@@ -206,9 +231,11 @@ fn leg_fill_error(i: usize, e: Error) -> Error {
     }
 }
 
-/// A refusal of leg `i` that another leg or order of the batch causes (`evidence of leg <k>`: the evidence leg's own state;
-/// `entry of leg <k>`: the custodies of the entry leg `k`'s fill merges): the message names that one instead, so a caller
-/// leaves out the order at fault and not the leg that reads it.
+/// A refusal of leg `i` that another leg or order of the batch causes.
+///
+/// The message names that one instead, so a caller leaves out the order at fault and not the leg
+/// that reads it. `evidence of leg <k>` names the evidence leg's own state, and `entry of leg <k>`
+/// the custodies that the fill of entry leg `k` merges.
 fn blame(prefix: &str, k: usize, e: Error) -> Error {
     match e {
         Error::Invalid(m) if !attributed(&m) => Error::Invalid(format!("{prefix} of leg {k}: {m}")),
@@ -222,7 +249,7 @@ fn attributed(m: &str) -> bool {
     ["order of leg ", "fill of leg ", "evidence of leg ", "entry of leg "].iter().any(|p| m.starts_with(p))
 }
 
-/// Order state of a leg, as the kind of the family of its token program.
+/// Family of the supported token program whose template hash is `h`.
 fn family_of_token_hash(h: &[u8; 32]) -> Result<Family> {
     token_template_by_hash(h)
         .map(|t| t.family)
@@ -237,10 +264,13 @@ fn kron_output(fam: Family, amount: i64, what: &str) -> Result<()> {
     Ok(())
 }
 
-/// Protocol sanity of a new order: rules that would otherwise make the order unfillable or
-/// unrefundable, and the normative wallet rules of `docs/spec/matcher.md` §10 that the covenants
-/// cannot check (the covenants enforce the rest at fill time; builders refuse to create duds), and the numeric gate
-/// ([`AnyState::check_numbers`]: a power-of-ten scale up to 10^9, every full fill worth less than 2^62).
+/// Protocol sanity of a new order.
+///
+/// It checks the rules that would otherwise make the order unfillable or unrefundable, and the
+/// normative wallet rules of `docs/spec/matcher.md` §10 that the covenants cannot check. The
+/// covenants enforce the rest at fill time, and builders refuse to create duds. It also applies the
+/// numeric gate ([`AnyState::check_numbers`]): a power-of-ten scale up to 10^9, and every full fill
+/// worth less than 2^62.
 pub fn check_new_order(s: &AnyState) -> Result<()> {
     if s.is_pair() {
         return pair::check_new_pair(s);
@@ -249,9 +279,10 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
     // Family and extension-commitment consistency of the order and its token program.
     let program = order_token(s)?.1;
     s.check_numbers().map_err(Error::Invalid)?;
-    // Every carrier of a new order becomes an output with a covenant id: a token output of `program` (a delivery, a new
-    // custody) must clear the program's floor and the KIP-9 bound of a covenant output (`tx::COVENANT_OUTPUT_MIN`); an
-    // exit order UTXO the covenant output bound.
+    // Every carrier of a new order becomes an output with a covenant id. A token output of
+    // `program`, i.e. a delivery or a new custody, must clear the program's floor and the KIP-9
+    // bound of a covenant output (`tx::COVENANT_OUTPUT_MIN`). An exit order UTXO must clear the
+    // covenant output bound.
     let token_carrier = |what: &str, v: i64, program: TemplateId| -> Result<()> {
         let floor = program.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN);
         if v < floor as i64 {
@@ -280,7 +311,8 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         if tip < 0 || refund_tip < 0 {
             return invalid("tip and refundTip must be >= 0");
         }
-        // a KRON fill moves at most the program's output limit: a minimum fill above it could never fill partially
+        // A KRON fill moves at most the program's output limit, so a minimum fill above it could
+        // never fill partially.
         kron_output(fam, min_fill, "minFill")?;
         Ok(())
     };
@@ -293,7 +325,8 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         }
         Ok(())
     };
-    // a TWAP / DCA cap below the minimum fill: every fill is either below minFill or above maxFill, the order never fills
+    // With a TWAP / DCA cap below the minimum fill, every fill is either below minFill or above
+    // maxFill, and the order never fills.
     let caps = |min_fill: i64, max_fill: i64| -> Result<()> {
         if max_fill > 0 && max_fill < min_fill {
             return invalid(format!("maxFill {max_fill} is below minFill {min_fill}: the order could never fill"));
@@ -332,8 +365,9 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
         }
         Ok(())
     };
-    // the trailing gap and wait and the trigger exposure the pair builder refuses below zero (`check_new_cond_pair`): a negative
-    // gap ratchets a stop through the market (it arms at once), a negative wait or exposure means none
+    // The trailing gap and wait and the trigger exposure must not be negative, as in the pair
+    // builder (`check_new_cond_pair`). A negative gap ratchets a stop through the market, so it
+    // arms at once. A negative wait or exposure means none.
     let trail_rules = |gap: i64, wait: i64, rest: i64| -> Result<()> {
         if gap < 0 || wait < 0 || rest < 0 {
             return invalid("trailGap, trailWait and minRestDaa must be >= 0");
@@ -427,7 +461,8 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
                 return invalid("a sell-stop entry's trigger must not be below its limit");
             }
             kron_output(fam, i.amount_left, "the custody")?;
-            // a repeating entry that sold out takes its exitCarrier back as the carrier of a new custody
+            // A repeating entry that sold out takes its exitCarrier back as the carrier of a new
+            // custody.
             token_carrier("exitCarrier", i.exit_carrier, program)?;
             let e = i.exit()?;
             check_new_order(
@@ -439,8 +474,9 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
             if e.scale != i.scale {
                 return invalid("if-done exit must quote at the entry's scale");
             }
-            // The exit holds the proceeds plus the prefund of its amount: enough for its worst leg (rates per whole token;
-            // the exit's spend is rounded down and the entry's proceeds and prefund up, so the rates bound every fill).
+            // The exit holds the proceeds plus the prefund of its amount, which must cover its
+            // worst leg. The rates are per whole token. The exit's spend is rounded down and the
+            // entry's proceeds and prefund up, so the rates bound every fill.
             if i.proceeds_rate() + i.prefund < e.worst() + e.tip {
                 return invalid("prefund does not cover the exit's worst buy-back (its stop band or limit)");
             }
@@ -456,8 +492,10 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
     Ok(())
 }
 
-/// Smallest order value that keeps a new order fillable (bids: one minimum fill; if-done entries: their
-/// whole escrow; a pair order: the KAS of its fills, `pair::min_pair_value`).
+/// Smallest order value that keeps a new order fillable.
+///
+/// For a bid it is one minimum fill, for an if-done entry its whole escrow, and for a pair order
+/// the KAS of its fills (`pair::min_pair_value`).
 pub fn min_order_value(s: &AnyState) -> i64 {
     let sat = |v: Option<i64>| v.unwrap_or(i64::MAX);
     match s {
@@ -471,10 +509,12 @@ pub fn min_order_value(s: &AnyState) -> i64 {
 }
 // ---------------------------------------------------------------- user actions
 
-/// Create any order kind in one transaction: the order genesis (authorised by the first funding
-/// input) and, for token-holding kinds, the move of exactly `amountLeft` base units of the maker's tokens
-/// into 0x04 custody of the new covenant id (a pair order: each custody it holds, [`AnyState::custodies`], of its own
-/// token; `tokens` may then hold both tokens), plus the `KOB1` placement record.
+/// Create any order kind in one transaction.
+///
+/// The transaction holds the order genesis, authorised by the first funding input, and the `KOB1`
+/// placement record. For token-holding kinds it also moves exactly `amountLeft` base units of the
+/// maker's tokens into 0x04 custody of the new covenant id. A pair order moves each custody it
+/// holds ([`AnyState::custodies`]) of its own token, and `tokens` may then hold both tokens.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateOrder {
@@ -494,8 +534,9 @@ pub struct CreateOrder {
     pub change: Option<[u8; 32]>,
     #[serde(with = "crate::json::field", default)]
     pub lock_time: u64,
-    /// Day orders: the wall-clock deadline (UTC unix seconds) published in the placement record
-    /// (see [`crate::defaults::day_order`]).
+    /// Day orders: the wall-clock deadline, in UTC unix seconds, published in the placement record.
+    ///
+    /// See [`crate::defaults::day_order`].
     #[serde(with = "crate::json::field", default)]
     pub deadline: Option<u64>,
     /// Extra payload records (x402 reference, client note).
@@ -510,24 +551,30 @@ pub struct CreateOrder {
 #[serde(rename_all = "camelCase")]
 pub struct CancelOrder {
     pub order: OrderUtxo<AnyState>,
-    /// The order is under a RETIRED template (`crate::retired`, the cancel-only table): its template hash, of the kind the state
-    /// decodes as. Only the maker's plain cancel is built for it ([`SigPlan::RetiredCancel`]): no replacement, no top-up, no
-    /// records.
+    /// The hash of the retired template the order is under, of the kind the state decodes as.
+    ///
+    /// Retired templates are in the cancel-only table (`crate::retired`). Only the maker's plain
+    /// cancel is built for such an order ([`SigPlan::RetiredCancel`]), with no replacement, no
+    /// top-up and no records.
     #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
     pub retired: Option<[u8; 32]>,
-    /// Token-holding kinds: the custody token UTXO (a pair order: the first of [`AnyState::custodies`]).
+    /// Token-holding kinds: the custody token UTXO.
+    ///
+    /// For a pair order it is the first of [`AnyState::custodies`].
     #[serde(default)]
     pub custody: Option<TokenUtxo>,
     /// A sell-first `KobIfdPair`'s B prefund custody (the second of [`AnyState::custodies`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefund: Option<TokenUtxo>,
-    /// Stray token UTXOs owned by the order's covenant id: the cancel is the only path that
-    /// moves them; they are swept to the maker. A pair order's strays may be of either of its
-    /// tokens (A or B): each token is swept in its own output.
+    /// Stray token UTXOs owned by the order's covenant id, swept to the maker.
+    ///
+    /// The cancel is the only path that moves them. A pair order's strays may be of either of its
+    /// tokens, A or B, and each token is swept in its own output.
     #[serde(default)]
     pub strays: Vec<TokenUtxo>,
-    /// Foreign strays (tokens of other covenant ids owned by the order id, `matcher.md` §1.2): returned to the maker, one
-    /// output per token.
+    /// Foreign strays, returned to the maker in one output per token.
+    ///
+    /// These are tokens of other covenant ids owned by the order id (`matcher.md` §1.2).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foreign: Vec<ForeignStrays>,
     /// Extra maker tokens (P2PK) for a replacement that needs more tokens (a top-up).
@@ -549,8 +596,10 @@ pub struct CancelOrder {
     pub fee: FeeOptions,
 }
 
-/// The new order of a cancel-replace. Token kinds take `amountLeft` base units from the old custody,
-/// the strays and the top-up tokens; the rest returns to the maker.
+/// The new order of a cancel-replace.
+///
+/// Token kinds take `amountLeft` base units from the old custody, the strays and the top-up tokens,
+/// and the rest returns to the maker.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Replacement {
@@ -563,19 +612,26 @@ pub struct Replacement {
     pub deadline: Option<u64>,
 }
 
-/// Amend a plain ask IN PLACE (maker, SIGHASH_ALL `cancel`): the order's covenant id continues with the new
-/// state at output 0 and the custody, owned by that id, stays where it is, so the token program is never
-/// revealed (an 8/8 ask amend is a fifth of a cancel-replace). Only the terms [`payload::check_amend_terms`]
-/// allows change (price, tip, minimum fill, time-in-force, timing, decay; not the maker, the token, the scale or `amountLeft`:
-/// those re-custody, use [`CancelOrder::replace`]). The `KOB1` payload carries an `AMEND` record.
+/// Amend a plain ask in place, by the maker's SIGHASH_ALL `cancel`.
 ///
-/// A plain bid is amended the same way: it owns no tokens, its quantity is its escrow, so it keeps the maker, the
-/// token and the scale and may change every other term; the continuation must still fund one minimum fill at the new terms
-/// ([`min_order_value`]), and a larger escrow (a top-up) needs `funding` and `value`.
+/// The order's covenant id continues with the new state at output 0, and the custody, owned by that
+/// id, stays where it is. The token program is therefore never revealed, and an 8/8 ask amend is a
+/// fifth of a cancel-replace. Only the terms [`payload::check_amend_terms`] allows may change:
+/// price, tip, minimum fill, time in force, timing and decay. The maker, the token, the scale and
+/// `amountLeft` cannot, because they re-custody; use [`CancelOrder::replace`] for them. The `KOB1`
+/// payload carries an `AMEND` record.
 ///
-/// Fee: without `funding` the order's own carrier (a bid: its escrow) pays it (the continuation holds the order's
-/// value minus the fee, at least [`MIN_AMEND_CARRIER`] and a bid's one-minimum-fill floor); with funding, the continuation holds `value` (default: the order's
-/// value) and the change returns to the maker unless it is tiny (then it rides on the order, see [`absorber_for`]).
+/// A plain bid is amended the same way. It owns no tokens and its quantity is its escrow, so it
+/// keeps the maker, the token and the scale and may change every other term. The continuation must
+/// still fund one minimum fill at the new terms ([`min_order_value`]), and a larger escrow (a
+/// top-up) needs `funding` and `value`.
+///
+/// Fee:
+/// - Without `funding`, the order's own carrier pays it, for a bid its escrow. The continuation
+///   holds the order's value minus the fee, at least [`MIN_AMEND_CARRIER`] and, for a bid, the
+///   one-minimum-fill floor.
+/// - With funding, the continuation holds `value`, by default the order's value. The change returns
+///   to the maker unless it is tiny, and then it rides on the order (see [`absorber_for`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AmendOrder {
@@ -601,12 +657,16 @@ pub struct AmendOrder {
     pub fee: FeeOptions,
 }
 
-/// Least KAS an in-place amend that pays its fee from the order's carrier leaves on the order (0.1 KAS, and never
-/// less than the order's `refundTip`, which a refund keeper takes from the carriers); a smaller carrier needs funding.
+/// Least KAS an in-place amend that pays its fee from the order's carrier leaves on the order.
+///
+/// It is 0.1 KAS, and never less than the order's `refundTip`, which a refund keeper takes from the
+/// carriers. A smaller carrier needs funding.
 pub const MIN_AMEND_CARRIER: u64 = 10_000_000;
 
-/// Refund an order after its soft expiry, 90 days idle or (IOC / FOK) its kill time (anyone;
-/// the keeper keeps at most `refundTip`). An empty repeating `KobIfdAsk` is refunded by `close`.
+/// Refund an order after its soft expiry, 90 days idle or its IOC / FOK kill time.
+///
+/// Anyone may refund, and the keeper keeps at most `refundTip`. An empty repeating `KobIfdAsk` is
+/// refunded by `close`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefundOrder {
@@ -617,9 +677,12 @@ pub struct RefundOrder {
     /// A sell-first `KobIfdPair`'s B prefund custody.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefund: Option<TokenUtxo>,
-    /// Foreign strays (`matcher.md` §1.2) the refund returns to the MAKER, one output per token: their programs authorise
-    /// them with any spend of the order and no refund path reads another token, so a keeper may carry them out of an order
-    /// that is about to end (after which nothing could ever move them). Never the order's own token (the refund refuses it).
+    /// Foreign strays (`matcher.md` §1.2) the refund returns to the maker, one output per token.
+    ///
+    /// Their programs authorise them with any spend of the order, and no refund path reads another
+    /// token. A keeper may therefore carry them out of an order that is about to end, after which
+    /// nothing could ever move them. The order's own token is never one of them, and the refund
+    /// refuses it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub foreign: Vec<ForeignStrays>,
     /// Current DAA score; must be >= the order's refund time ([`AnyState::refund_due`]).
@@ -634,8 +697,10 @@ pub struct RefundOrder {
     pub fee: FeeOptions,
 }
 
-/// Stray UTXOs of ONE token other than the order's own (a foreign stray, `matcher.md` §1.2), all owned by the order's
-/// covenant id, with the token's program (the builders need it to move them). They are swept to the maker in one output.
+/// Stray UTXOs of one token other than the order's own, all owned by the order's covenant id.
+///
+/// These are foreign strays (`matcher.md` §1.2). The token's program comes with them, because the
+/// builders need it to move them. They are swept to the maker in one output.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ForeignStrays {
@@ -643,15 +708,21 @@ pub struct ForeignStrays {
     pub utxos: Vec<TokenUtxo>,
 }
 
-/// The maker's SWEEP of an order's strays IN PLACE (maker, SIGHASH_ALL `cancel`): the order's covenant id continues with
-/// the SAME state (the same script) at output 0 and its custody, owned by that id, stays where it is; the strays (of its
-/// own token, of either token of a pair order, and foreign ones) go back to the maker, one output per token. A `SWEEP` record
-/// (`kob1-payload.md`) names the continuation so indexers keep the order live; nothing about the order changes except its
-/// UTXO (its DAA score restarts the 90-day idle window, as any continuation does). Strays of one token must share one
-/// extension commitment and fit the program's token inputs: sweep the rest in another sweep (the order is still there).
+/// The maker's sweep of an order's strays in place, by the maker's SIGHASH_ALL `cancel`.
 ///
-/// Fee: without `funding` the order's own carrier pays it (the continuation keeps at least [`MIN_AMEND_CARRIER`] and the
-/// order's `refundTip`; a bid keeps its whole escrow, so a bid's sweep needs funding).
+/// The order's covenant id continues with the same state, i.e. the same script, at output 0, and
+/// its custody, owned by that id, stays where it is. The strays go back to the maker, one output
+/// per token. They may be of the order's own token, of either token of a pair order, or foreign.
+///
+/// A `SWEEP` record (`kob1-payload.md`) names the continuation, so indexers keep the order live.
+/// Nothing about the order changes except its UTXO, whose DAA score restarts the 90-day idle
+/// window, as any continuation does. Strays of one token must share one extension commitment and
+/// fit the program's token inputs. The rest can go in another sweep, since the order is still
+/// there.
+///
+/// Fee: without `funding` the order's own carrier pays it, and the continuation keeps at least
+/// [`MIN_AMEND_CARRIER`] and the order's `refundTip`. A bid keeps its whole escrow, so a bid's
+/// sweep needs funding.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SweepOrder {
@@ -741,9 +812,11 @@ pub struct TokenPayee {
     pub pubkey: [u8; 32],
 }
 
-/// How a token input of `program` is authorised: a covenant-owned state by its covenant's input, a key-held state with the
-/// program's holder owner by its key (KCC-20 and KRON id_type 0: a signature in the input; KRON id_type 3: a P2PK input of
-/// the key).
+/// How a token input of `program` is authorised.
+///
+/// A covenant-owned state is authorised by its covenant's input. A key-held state with the
+/// program's holder owner is authorised by its key: in KCC-20 and KRON id_type 0 by a signature in
+/// the input, in KRON id_type 3 by a P2PK input of the key.
 fn token_witness(s: &TokenState, program: TemplateId) -> Result<Witness> {
     match s {
         TokenState::Kcc20(k) => match k.owner_scheme {
@@ -784,11 +857,13 @@ fn check_token_input(t: &TokenUtxo, token: Token) -> Result<()> {
     Ok(())
 }
 
-/// The custody of an order: owned by the order's covenant id and holding exactly `amount`
-/// (anything else owned by the id is a stray and never stands in for the custody).
+/// The custody of an order: owned by the order's covenant id and holding exactly `amount`.
+///
+/// Anything else owned by the id is a stray and never stands in for the custody.
 fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amount: i64) -> Result<()> {
     check_token_input(c, token)?;
-    // a KRON token UTXO holds at most 10^9 base units (both pinned KRON programs refuse more): such a custody cannot exist
+    // A KRON token UTXO holds at most 10^9 base units, since both pinned KRON programs refuse more,
+    // so such a custody cannot exist.
     kron_output(token.1.family(), c.state.amount(), "a KRON custody")?;
     if Some(c.state.owner()) != order_cov || !c.state.is_covenant_owned() {
         return invalid("custody token is not owned by its order");
@@ -802,8 +877,10 @@ fn check_custody(c: &TokenUtxo, order_cov: Option<[u8; 32]>, token: Token, amoun
     Ok(())
 }
 
-/// An order's custody carries the extension commitment the order pins (KCC-20; a KRON token has none): units of the
-/// token's covenant id with another commitment are another token, and the order's covenant refuses them.
+/// An order's custody carries the extension commitment the order pins.
+///
+/// This applies to KCC-20, since a KRON token has none. Units of the token's covenant id with
+/// another commitment are another token, and the order's covenant refuses them.
 pub(crate) fn check_custody_ext(c: &TokenUtxo, ext: [u8; 32]) -> Result<()> {
     if matches!(c.state, TokenState::Kcc20(_)) && c.state.extension() != ext {
         return invalid("the custody carries another extension commitment than the order pins");
@@ -816,6 +893,7 @@ pub(crate) fn pinned_ext(s: &AnyState, token: [u8; 32]) -> Option<[u8; 32]> {
     s.custody_ext(token)
 }
 
+/// Builds a [`CreateOrder`].
 pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     check_new_order(&r.order)?;
     if r.order.is_pair() {
@@ -848,7 +926,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
             }
             d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
-        // the custody carries the commitment the order pins (its covenant refuses any other)
+        // The custody carries the commitment the order pins, since its covenant refuses any other.
         if fam == Family::Kcc20 && pinned_ext(&r.order, token.0).is_some_and(|e| Some(e) != ext) {
             return invalid("the token inputs carry another extension commitment than the order pins for its custody");
         }
@@ -887,8 +965,10 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
     d.seal(budgets)
 }
 
-/// [`build_create_order`] of a pair order: one custody output per custody it holds (of its own token, with that token's
-/// change), the placement record with its custody parts.
+/// [`build_create_order`] of a pair order.
+///
+/// It adds one custody output per custody the order holds, each of its own token with that token's
+/// change, and the placement record with its custody parts.
 fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let (a, b) = pair_programs(&r.order)?;
     if r.funding.is_empty() {
@@ -905,7 +985,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
     let tok_of = |cov: [u8; 32]| if cov == a.0 { a } else { b };
-    // the maker's tokens, per token: (token, total, extension, first owner)
+    // The maker's tokens, per token: (token, total, extension, first owner).
     let mut groups: Vec<(Token, i64, [u8; 32], [u8; 32])> = vec![];
     for t in &r.tokens {
         let tok = match t.utxo.covenant_id {
@@ -943,7 +1023,7 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         if g.1 < *amount {
             return invalid(format!("token inputs hold {} < the {amount} base units of the custody", g.1));
         }
-        // the custody carries the commitment the order pins (its covenant refuses any other)
+        // The custody carries the commitment the order pins, since its covenant refuses any other.
         if tok.1.family() == Family::Kcc20 && pinned_ext(&r.order, *cov).is_some_and(|e| e != g.2) {
             return invalid("the token inputs carry another extension commitment than the order pins for its custody");
         }
@@ -963,9 +1043,9 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     d.seal(budgets)
 }
 
-/// The order's own tokens (a pair order: A and B; a KAS kind: its token), its custodies (token, exact amount) and the
-/// program suffix of its roles.
-/// An order's own tokens, its custodies and its role suffix ([`own_tokens`]).
+/// An order's own tokens, its custodies (token, exact amount) and the program suffix of its roles.
+///
+/// A pair order owns A and B, and a KAS kind its token. See [`own_tokens`].
 type OwnTokens = (Vec<Token>, Vec<(Token, i64)>, String);
 
 fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
@@ -979,6 +1059,7 @@ fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
     Ok((vec![token], custodies, format!("@{}", token.1.name())))
 }
 
+/// Builds a [`CancelOrder`], the maker's cancel with an optional replacement.
 pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let o = &r.order;
     let id = o.state.template_id();
@@ -1009,9 +1090,11 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
     cancel_with(subject, &o.utxo, parts, budgets)
 }
 
-/// The signing plan of the maker's cancel of an order: its template's `cancel(sig)`, or, for an order under a retired template
-/// (`retired`: its template hash), [`SigPlan::RetiredCancel`] of that template, which must be in the cancel-only table and of the
-/// kind the state decodes as.
+/// The signing plan of the maker's cancel of an order.
+///
+/// It is the template's `cancel(sig)`. For an order under a retired template (`retired`, its
+/// template hash) it is [`SigPlan::RetiredCancel`] of that template, which must be in the
+/// cancel-only table and of the kind the state decodes as.
 fn cancel_plan(s: &AnyState, retired: Option<[u8; 32]>) -> Result<SigPlan> {
     let id = s.template_id();
     Ok(match retired {
@@ -1038,8 +1121,10 @@ struct CancelParts<'a> {
     fee: &'a FeeOptions,
 }
 
-/// What the maker's cancel of one order needs: its maker, its own tokens (a pair order: A and B), the custodies it holds
-/// (token, exact amount), the order input's signing plan and budget role.
+/// What the maker's cancel of one order needs.
+///
+/// That is its maker, its own tokens (A and B for a pair order), the custodies it holds (token,
+/// exact amount), and the order input's signing plan and budget role.
 struct CancelSubject {
     maker: [u8; 32],
     tokens: Vec<Token>,
@@ -1048,14 +1133,16 @@ struct CancelSubject {
     role: String,
 }
 
-/// The maker's cancel of an order (custody, strays of either of its tokens, foreign strays and the carrier back to the
-/// maker), optionally replacing it (`r.replace`).
+/// The maker's cancel of an order, optionally replacing it (`r.replace`).
+///
+/// The custody, the strays of either of its tokens, the foreign strays and the carrier go back to
+/// the maker.
 fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets: BudgetFn) -> Result<BuiltTx> {
     let CancelSubject { maker, tokens, custodies, plan, role } = subject;
     let mut d = Draft::new(r.lock_time, r.fee, Some(r.change.unwrap_or(maker)))?;
     let oi = d.add_input(utxo, plan, role, 0);
     let order_cov = utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
-    // one group per own token: (token, units, extension, carriers)
+    // One group per own token: (token, units, extension, carriers).
     type Group = (Token, i64, Option<[u8; 32]>, Vec<u64>);
     let mut groups: Vec<Group> = tokens.iter().map(|t| (*t, 0, None, vec![])).collect();
     fn put(groups: &mut [Group], t: &TokenUtxo, what: &str) -> Result<Token> {
@@ -1126,7 +1213,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
         }
         kas_out(rep.value as i64, "the replacement value")?;
         let (outs, new_id) = d.add_genesis(oi, vec![(rep.value, rep.order.spk())], Some(rep.order.template_id()))?;
-        // a tiny change rides on the replacement (the change rule of the amend builders)
+        // A tiny change rides on the replacement, as in the amend builders.
         d.absorber = absorber_for(&rep.order, rep.value, outs[0]);
         let default_carrier = groups.iter().find_map(|g| g.3.first().copied()).unwrap_or(0);
         let mut parts = vec![];
@@ -1161,17 +1248,23 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     d.seal(budgets)
 }
 
-/// The change rule of the amend builders (cancel-replace and in-place amend; `docs/spec/kob1-payload.md`, *Change*):
-/// the maker's new order output takes a TINY change instead of a change output ([`crate::tx::Absorber`]). A plain
-/// ask's order UTXO is a carrier (it returns to the maker with the order's proceeds or tokens, and no covenant rule
-/// reads more than its floor), so it takes any tiny change; a plain bid's is its escrow, so it takes at most what
-/// keeps its buying power ([`BidState::buying_power`]: the most a fill can buy) unchanged; every other kind keeps the change output (their values fund keeper tips, exits or prefunded deliveries).
+/// The change rule of the amend builders, cancel-replace and in-place amend.
+///
+/// The maker's new order output takes a tiny change instead of a change output
+/// ([`crate::tx::Absorber`]). See `docs/spec/kob1-payload.md`, *Change*.
+///
+/// - A plain ask's order UTXO is a carrier. It returns to the maker with the order's proceeds or
+///   tokens, and no covenant rule reads more than its floor, so it takes any tiny change.
+/// - A plain bid's order UTXO is its escrow, so it takes at most what keeps its buying power
+///   unchanged ([`BidState::buying_power`], the most a fill can buy).
+/// - Every other kind keeps the change output, because its value funds keeper tips, exits or
+///   prefunded deliveries.
 pub(crate) fn absorber_for(s: &AnyState, value: u64, output: usize) -> Option<crate::tx::Absorber> {
     let max_add = match s {
         AnyState::KobAsk(_) | AnyState::KobAskKron(_) => u64::MAX,
         AnyState::KobBid(b) | AnyState::KobBidKron(b) => {
-            // buying_power(v) = floor(budget * scale / rate), budget = v - deliveryCarrier - reserve: it stays while
-            // budget + x <= used(power + 1) - 1
+            // buying_power(v) = floor(budget * scale / rate) with budget = v - deliveryCarrier -
+            // reserve. It stays the same while budget + x <= used(power + 1) - 1.
             let budget = (value as i64).checked_sub(b.delivery_carrier)?.checked_sub(b.reserve).filter(|f| *f >= 0)?;
             let next = b.used(b.buying_power(value as i64).checked_add(1)?)?;
             u64::try_from(next.checked_sub(1)?.checked_sub(budget)?).ok()?
@@ -1181,6 +1274,7 @@ pub(crate) fn absorber_for(s: &AnyState, value: u64, output: usize) -> Option<cr
     (max_add > 0).then_some(crate::tx::Absorber { output, max_add, pays: None })
 }
 
+/// Builds an [`AmendOrder`], the in-place amend of a plain ask or bid.
 pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let o = &r.order;
     let id = o.state.template_id();
@@ -1193,8 +1287,9 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let maker = o.state.maker();
     let order_cov = o.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
     let funded = !r.funding.is_empty();
-    // a bid's escrow is its quantity: the continuation must still fund one minimum fill at the new terms (as a cancel-replace's
-    // replacement must); an explicit value above the order's without funding cannot be paid (insufficient funds)
+    // A bid's escrow is its quantity, so the continuation must still fund one minimum fill at the
+    // new terms, as a cancel-replace's replacement must. Without funding, an explicit value above
+    // the order's cannot be paid (insufficient funds).
     let bid_floor =
         matches!(&r.amended, AnyState::KobBid(_) | AnyState::KobBidKron(_)).then(|| min_order_value(&r.amended).max(0) as u64);
     if let Some(floor) = bid_floor {
@@ -1219,7 +1314,8 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         d.add_p2pk(f);
     }
     let value = r.value.unwrap_or(o.utxo.amount);
-    // the continuation: the order's covenant id, authorised by the order input (its custody stays owned by that id)
+    // The continuation: the order's covenant id, authorised by the order input. Its custody stays
+    // owned by that id.
     let out = d.add_output(value, r.amended.spk(), Some((oi as u16, order_cov)));
     d.absorber = if funded {
         absorber_for(&r.amended, value, out)
@@ -1229,7 +1325,8 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             AnyState::KobBid(b) | AnyState::KobBidKron(b) => b.refund_tip.max(0) as u64,
             _ => 0,
         };
-        // a bid pays the fee out of its escrow: never below what funds one minimum fill at the new terms
+        // A bid pays the fee out of its escrow, but never goes below what funds one minimum fill at
+        // the new terms.
         let floor = MIN_AMEND_CARRIER.max(tip).max(bid_floor.unwrap_or(0));
         Some(crate::tx::Absorber { output: out, max_add: u64::MAX, pays: Some(floor) })
     };
@@ -1244,7 +1341,7 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
 #[serde(rename_all = "camelCase")]
 pub struct CancelItem {
     pub order: OrderUtxo<AnyState>,
-    /// The order is under a RETIRED template (`crate::retired`): its template hash ([`CancelOrder::retired`]).
+    /// The hash of the retired template the order is under ([`CancelOrder::retired`]).
     #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
     pub retired: Option<[u8; 32]>,
     #[serde(default)]
@@ -1256,9 +1353,11 @@ pub struct CancelItem {
     pub strays: Vec<TokenUtxo>,
 }
 
-/// Cancel several orders of one maker and token (a pair position: one pair of tokens) in ONE transaction (`matcher.md`
-/// §10.9, §10.13): an if-done entry with all its exits, a repeat with its booked exits ("cancel all"). Every token
-/// (custodies, strays) returns to the maker in one output per token.
+/// Cancel several orders of one maker and token in one transaction.
+///
+/// For a pair position the orders share one pair of tokens. Typical positions are an if-done entry
+/// with all its exits, and a repeat with its booked exits ("cancel all", `matcher.md` §10.9 and
+/// §10.13). Every token, custodies and strays, returns to the maker in one output per token.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelPosition {
@@ -1277,6 +1376,7 @@ pub struct CancelPosition {
     pub fee: FeeOptions,
 }
 
+/// Builds a [`CancelPosition`].
 pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<BuiltTx> {
     let first = r.orders.first().ok_or_else(|| Error::Invalid("nothing to cancel".into()))?;
     let maker = first.order.state.maker();
@@ -1296,7 +1396,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
         d.add_input(&it.order.utxo, cancel_plan(s, it.retired)?, format!("{}.cancel{suffix}", id.name()), 0);
         items.push((it, custodies));
     }
-    // per token: (units, extension, first carrier)
+    // Per token: (units, extension, first carrier).
     let mut groups: Vec<(Token, i64, Option<[u8; 32]>, u64)> = tokens.iter().map(|t| (*t, 0, None, 0)).collect();
     for (it, custodies) in items {
         let cov = it.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -1352,7 +1452,8 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         return invalid("nothing to sweep: no strays");
     }
     let funded = !r.funding.is_empty();
-    // without funding only a plain ask's carrier pays (every other kind's value is an escrow, a prefund or keeper tips)
+    // Without funding only a plain ask's carrier pays. Every other kind's value is an escrow, a
+    // prefund or keeper tips.
     let carrier_pays = matches!(&o.state, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
     if !funded && !carrier_pays {
         return invalid(format!("a {} sweep needs funding (its value is not a plain carrier)", id.name()));
@@ -1361,7 +1462,7 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let (tokens, _, suffix) = own_tokens(&o.state)?;
     let oi =
         d.add_input(&o.utxo, entry(id, o.state.encode(), "cancel", vec![Arg::Sig(maker)]), format!("{}.cancel{suffix}", id.name()), 0);
-    // the order's own token (a pair order: A and B): one group each, swept to the maker
+    // The order's own tokens (A and B for a pair order), one group each, swept to the maker.
     let mut own_groups: Vec<ForeignOut> = vec![];
     for t in tokens.iter().copied() {
         let group: Vec<&TokenUtxo> = r.strays.iter().filter(|s| s.utxo.covenant_id == Some(t.0)).collect();
@@ -1398,8 +1499,8 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     for f in &r.funding {
         d.add_p2pk(f);
     }
-    // the continuation: the same script under the order's covenant id, authorised by the order input (a custody, owned by
-    // that id, stays where it is)
+    // The continuation: the same script under the order's covenant id, authorised by the order
+    // input. A custody, owned by that id, stays where it is.
     let out = d.add_output(o.utxo.amount, o.state.spk(), Some((oi as u16, order_cov)));
     if !funded {
         let tip = match &o.state {
@@ -1419,12 +1520,16 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     d.seal(budgets)
 }
 
-/// One group of foreign strays, laid out: the token, the units and the KAS carriers it holds, its extension commitment.
+/// One laid-out group of foreign strays.
+///
+/// It holds the token, the units, the KAS carriers it holds and its extension commitment.
 type ForeignOut = (Token, i64, u64, [u8; 32]);
 
-/// Adds the inputs of foreign stray groups owned by `order_cov` (tokens other than `exclude`, the order's own); the outputs
-/// that return them ([`add_foreign_outputs`]) come after the transaction's positional outputs. Each group is one token, its
-/// UTXOs share one extension commitment and fit the program's token inputs.
+/// Adds the inputs of the foreign stray groups owned by `order_cov`.
+///
+/// The groups are of tokens other than `exclude`, the order's own. The outputs that return them
+/// ([`add_foreign_outputs`]) come after the transaction's positional outputs. Each group is one
+/// token, and its UTXOs share one extension commitment and fit the program's token inputs.
 fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 32], exclude: &[[u8; 32]]) -> Result<Vec<ForeignOut>> {
     let mut out: Vec<ForeignOut> = vec![];
     for g in foreign {
@@ -1460,7 +1565,8 @@ fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 
     Ok(out)
 }
 
-/// The maker's outputs of [`add_foreign_inputs`]: each token's units, with the KAS its strays carried.
+/// The maker's outputs of [`add_foreign_inputs`]: each token's units with the KAS its strays
+/// carried.
 fn add_foreign_outputs(d: &mut Draft, groups: Vec<ForeignOut>, maker: [u8; 32]) -> Result<()> {
     for (t, units, kas, e) in groups {
         d.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(kas as i64, "foreign stray carrier")?)?;
@@ -1468,6 +1574,7 @@ fn add_foreign_outputs(d: &mut Draft, groups: Vec<ForeignOut>, maker: [u8; 32]) 
     Ok(())
 }
 
+/// Builds a [`RefundOrder`].
 pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     if r.order.state.is_pair() {
         return build_refund_pair(r, budgets);
@@ -1481,8 +1588,9 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
     }
     let id = o.state.template_id();
     let maker = o.state.maker();
-    // Funding without a change key would burn the whole funding as fee: the change goes back to the first
-    // funding key. Without funding the tip is the fee (the keeper takes the difference elsewhere).
+    // Funding without a change key would burn the whole funding as fee, so the change goes back to
+    // the first funding key. Without funding the tip is the fee, and the keeper takes the
+    // difference elsewhere.
     let mut d = Draft::new(r.lock_time, &r.fee, r.change.or(r.funding.first().map(|f| f.pubkey)))?;
     let state = o.state.encode();
     let custody_amount = o.state.custody_amount();
@@ -1550,8 +1658,11 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
     d.seal(budgets)
 }
 
-/// The refund of a pair order: `KobPair` / `KobCondPair` return their custody to the maker at output 0 with every carrier
-/// (minus refundTip); `KobIfdPair` pays its KAS to the maker at output 0 and returns each custody at its own index.
+/// The refund of a pair order.
+///
+/// `KobPair` and `KobCondPair` return their custody to the maker at output 0 with every carrier,
+/// minus `refundTip`. `KobIfdPair` pays its KAS to the maker at output 0 and returns each custody
+/// at its own index.
 fn build_refund_pair(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let o = &r.order;
     let (_, tip) = o.state.expiry().expect("order");
@@ -1605,6 +1716,7 @@ fn build_refund_pair(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     d.seal(budgets)
 }
 
+/// Builds a [`SendTokens`] transfer.
 pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     let token = (r.token.covenant_id, r.token.program);
     if r.tokens.is_empty() || r.recipients.is_empty() {
@@ -1659,10 +1771,12 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
 
 // ---------------------------------------------------------------- matcher shapes
 
-/// One order filled by a batch. `amount` is the base units the leg fills (a bid's delivery, an ask's sale, a pair
-/// order's base units of A). `t` is the auction / cycle time the covenant proves against the
-/// lock time (CLTV); it defaults to the batch's `lockTime` (the matcher's `now − margin`, the
-/// best price for the maker and the longest `rptUntil`).
+/// One order filled by a batch.
+///
+/// `amount` is the base units the leg fills: a bid's delivery, an ask's sale, or a pair order's
+/// base units of A. `t` is the auction or cycle time the covenant proves against the lock time
+/// (CLTV). It defaults to the batch's `lockTime`, the matcher's `now − margin`, which gives the
+/// best price for the maker and the longest `rptUntil`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 #[allow(clippy::large_enum_variant)] // a request value, built once per transaction
@@ -1696,7 +1810,8 @@ pub enum Leg {
         #[serde(with = "crate::json::field")]
         amount: i64,
         leg: u8,
-        /// Trigger evidence of an unarmed stop leg: index of a plain `Ask` leg of this batch (touch).
+        /// Trigger evidence of an unarmed stop leg: the index of a plain `Ask` leg of this batch
+        /// (touch).
         #[serde(default)]
         evidence: Option<usize>,
         #[serde(with = "crate::json::field", default)]
@@ -1705,15 +1820,18 @@ pub enum Leg {
         #[serde(default)]
         merge: Option<OrderUtxo<IfdBidState>>,
     },
-    /// Conditional buy; a booked sell-first exit's take-profit re-arms its entry with `merge`
-    /// (the bought tokens go into the entry's custody).
+    /// Conditional buy.
+    ///
+    /// A booked sell-first exit's take-profit re-arms its entry with `merge`, and the bought tokens
+    /// go into the entry's custody.
     #[serde(rename_all = "camelCase")]
     CondBid {
         order: OrderUtxo<CondBidState>,
         #[serde(with = "crate::json::field")]
         amount: i64,
         leg: u8,
-        /// Trigger evidence of an unarmed stop leg: index of a plain `Bid` leg of this batch (touch).
+        /// Trigger evidence of an unarmed stop leg: the index of a plain `Bid` leg of this batch
+        /// (touch).
         #[serde(default)]
         evidence: Option<usize>,
         #[serde(with = "crate::json::field", default)]
@@ -1721,14 +1839,15 @@ pub enum Leg {
         #[serde(default)]
         merge: Option<SellFirstEntry>,
     },
-    /// If-done buy entry (limit or stop entry, optionally repeating): creates a fresh exit
-    /// holding the bought tokens.
+    /// If-done buy entry, a limit or stop entry that may repeat.
+    ///
+    /// It creates a fresh exit holding the bought tokens.
     #[serde(rename_all = "camelCase")]
     IfdBid {
         order: OrderUtxo<IfdBidState>,
         #[serde(with = "crate::json::field")]
         amount: i64,
-        /// Evidence arming an unarmed buy-stop entry in this fill: index of a plain `Bid` leg (touch).
+        /// Evidence arming an unarmed buy-stop entry in this fill: a plain `Bid` leg index (touch).
         #[serde(default)]
         evidence: Option<usize>,
         #[serde(with = "crate::json::field", default)]
@@ -1741,27 +1860,33 @@ pub enum Leg {
         custody: TokenUtxo,
         #[serde(with = "crate::json::field")]
         amount: i64,
-        /// Evidence arming an unarmed sell-stop entry in this fill: index of a plain `Ask` leg (touch).
+        /// Evidence arming an unarmed sell-stop entry in this fill: a plain `Ask` leg index
+        /// (touch).
         #[serde(default)]
         evidence: Option<usize>,
         #[serde(with = "crate::json::field", default)]
         t: Option<i64>,
     },
-    /// Pair order (`KobPair`, ask or bid): fills `amount` base units of A at its quote (a decaying order at `t`): an ask
-    /// releases exactly `amount` of A and receives at least the ceil of B at its positional output (the batch's surplus of
-    /// B, if any, rides on it), a bid pays exactly the floor of B from its escrow and receives exactly `amount` of A.
+    /// Pair order (`KobPair`, ask or bid), filling `amount` base units of A at its quote.
+    ///
+    /// A decaying order quotes at `t`. An ask releases exactly `amount` of A and receives at least
+    /// the ceil of B at its positional output, and the batch's surplus of B, if any, rides on it. A
+    /// bid pays exactly the floor of B from its escrow and receives exactly `amount` of A.
     #[serde(rename_all = "camelCase")]
     Pair {
         order: OrderUtxo<PairState>,
-        /// The custody of S (A for an ask, B for a bid): exactly the state's `custody`, owned by the order.
+        /// The custody of S (A for an ask, B for a bid), exactly the state's `custody`, owned by
+        /// the order.
         custody: TokenUtxo,
         #[serde(with = "crate::json::field")]
         amount: i64,
         #[serde(with = "crate::json::field", default)]
         t: Option<i64>,
     },
-    /// Pair conditional (`KobCondPair`) on leg 0 (take-profit / limit) or 1 (stop: armed, or armed in this fill by the
-    /// evidence). A booked exit's take-profit re-arms its `KobIfdPair` entry with `merge`.
+    /// Pair conditional (`KobCondPair`) on leg 0 (take-profit / limit) or leg 1 (stop).
+    ///
+    /// The stop leg is armed, or armed in this fill by the evidence. A booked exit's take-profit
+    /// re-arms its `KobIfdPair` entry with `merge`.
     #[serde(rename_all = "camelCase")]
     CondPair {
         order: OrderUtxo<CondPairState>,
@@ -1770,7 +1895,9 @@ pub enum Leg {
         #[serde(with = "crate::json::field")]
         amount: i64,
         leg: u8,
-        /// Trigger evidence of an unarmed stop leg: with `evidenceB`, a KAS-book leg of A and one of B (mode 0); alone, a
+        /// Trigger evidence of an unarmed stop leg.
+        ///
+        /// With `evidenceB` it is a KAS-book leg of A and one of B (mode 0). Alone it is a
         /// `KobPair` leg of the same pair (mode 1).
         #[serde(default)]
         evidence: Option<usize>,
@@ -1781,15 +1908,18 @@ pub enum Leg {
         #[serde(default)]
         merge: Option<PairEntryMerge>,
     },
-    /// Pair if-done entry (`KobIfdPair`): creates a fresh `KobCondPair` exit holding the bought A (buy-first) or the
-    /// proceeds plus the prefund of the fill (sell-first).
+    /// Pair if-done entry (`KobIfdPair`), which creates a fresh `KobCondPair` exit.
+    ///
+    /// The exit holds the bought A for a buy-first entry, or the proceeds plus the prefund of the
+    /// fill for a sell-first one.
     #[serde(rename_all = "camelCase")]
     IfdPair {
         order: OrderUtxo<IfdPairState>,
         /// A sell-first entry's A custody (exactly `amountLeft`).
         #[serde(default)]
         a_custody: Option<TokenUtxo>,
-        /// The entry's B custody (buy-first: the escrow; sell-first: the prefund), when it holds one.
+        /// The entry's B custody, when it holds one: the escrow if buy-first, the prefund if
+        /// sell-first.
         #[serde(default)]
         b_custody: Option<TokenUtxo>,
         #[serde(with = "crate::json::field")]
@@ -1804,8 +1934,10 @@ pub enum Leg {
     },
 }
 
-/// A repeating pair entry (`KobIfdPair`) merged by its exit's take-profit, with the custodies it holds (a sell-first entry:
-/// its A custody when it holds A, its B prefund when it holds one; a buy-first entry: its B escrow when it holds one).
+/// A repeating pair entry (`KobIfdPair`) merged by its exit's take-profit, with its custodies.
+///
+/// A sell-first entry lists its A custody when it holds A, and its B prefund when it holds one. A
+/// buy-first entry lists its B escrow when it holds one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairEntryMerge {
@@ -1816,8 +1948,9 @@ pub struct PairEntryMerge {
     pub b_custody: Option<TokenUtxo>,
 }
 
-/// A repeating sell-first entry merged by its exit's take-profit, with its custody (when it
-/// still holds tokens).
+/// A repeating sell-first entry merged by its exit's take-profit.
+///
+/// It comes with its custody when it still holds tokens.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SellFirstEntry {
@@ -1826,19 +1959,25 @@ pub struct SellFirstEntry {
     pub custody: Option<TokenUtxo>,
 }
 
-/// An arm or trailing ratchet of a conditional order, or the arm of a stop entry, WITHOUT a fill of that
-/// order (its `update` entry), next to the fill of the plain leg `evidence` of the same batch (touch: the
-/// evidence exists only in that transaction, so arming is done by matchers inside their batches). The batch's
-/// change key (the matcher) takes up to the order's `keeperTip`. A booked exit is never updated in a transaction
-/// that also spends its repeat entry (the covenants refuse it).
+/// An arm or trailing ratchet of an order without a fill of that order, by its `update` entry.
+///
+/// It arms or trails a conditional order, or arms a stop entry, next to the fill of the plain leg
+/// `evidence` of the same batch. The touch evidence exists only in that transaction, so matchers
+/// arm inside their batches. The batch's change key, the matcher, takes up to the order's
+/// `keeperTip`. A booked exit is never updated in a transaction that also spends its repeat entry,
+/// because the covenants refuse it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchUpdate {
-    /// A `KobCondAsk` / `KobCondBid` / `KobCondPair` (arm or trail) or an unarmed stop entry (`KobIfdBid`, `KobIfdAsk`,
-    /// `KobIfdPair`).
+    /// The order to update.
+    ///
+    /// It is a `KobCondAsk`, `KobCondBid` or `KobCondPair` to arm or trail, or an unarmed stop
+    /// entry (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair`).
     pub order: OrderUtxo<AnyState>,
-    /// Index of the plain `Ask` / `Bid` leg whose fill is the evidence (a pair order: the KAS-book leg of A with
-    /// `evidenceB`, or a `KobPair` leg of the same pair alone).
+    /// Index of the plain `Ask` or `Bid` leg whose fill is the evidence.
+    ///
+    /// For a pair order it is the KAS-book leg of A together with `evidenceB`, or a `KobPair` leg
+    /// of the same pair alone.
     pub evidence: usize,
     /// Pair orders, evidence mode 0: the KAS-book leg of B (the leg `evidence` is the one of A).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1848,10 +1987,15 @@ pub struct BatchUpdate {
     pub take: Option<i64>,
 }
 
-/// An N:M matcher batch, a taker transaction, or any mix: orders at their own all-in prices,
-/// auctions, conditional trigger fills and updates armed by a plain fill of the same batch (touch),
-/// IFD/IFO partial and stop-entry fills, repeat merges, TWAP/DCA/Dutch; legs may trade several tokens
-/// (routes).
+/// An N:M matcher batch, a taker transaction, or any mix of them.
+///
+/// A batch may hold:
+/// - orders at their own all-in prices, and auctions,
+/// - conditional trigger fills, and updates armed by a plain fill of the same batch (touch),
+/// - IFD / IFO partial and stop-entry fills, and repeat merges,
+/// - TWAP, DCA and Dutch fills.
+///
+/// Legs may trade several tokens (routes).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Batch {
@@ -1871,15 +2015,20 @@ pub struct Batch {
     /// KAS carrier on each of the taker's token outputs.
     #[serde(with = "crate::json::field", default)]
     pub taker_token_carrier: u64,
-    /// Tokens (covenant ids) whose surplus the taker keeps: the base units the batch releases beyond what its legs take go to
-    /// the taker's token output (`taker`, or the token's `receivers` entry) instead of the delivery of the first pair ask
-    /// buying the token. A pair ask's guarantee is a floor (`contracts/orders/KobPair.sil`: `tOut >= ceil`), so its delivery
-    /// is then exactly what its covenant amount needs. Empty (the default): the surplus goes to the pair ask.
+    /// Tokens (covenant ids) whose surplus the taker keeps.
+    ///
+    /// The base units the batch releases beyond what its legs take go to the taker's token output
+    /// (`taker`, or the token's `receivers` entry) instead of the delivery of the first pair ask
+    /// buying the token. A pair ask's guarantee is a floor (`contracts/orders/KobPair.sil`:
+    /// `tOut >= ceil`), so its delivery is then exactly what its covenant amount needs. When this
+    /// is empty, the default, the surplus goes to the pair ask.
     #[serde(with = "crate::json::field_vec", default, skip_serializing_if = "Vec::is_empty")]
     pub keep_surplus: Vec<[u8; 32]>,
-    /// KAS carrier on the taker's token output of a kept token (one named in `keep_surplus`); default (`None`):
-    /// `taker_token_carrier`. An inventory output only has to clear its program's floor and the dust bound, so an operator
-    /// may lock less KAS on it than on its other token outputs (`docs/spec/matcher.md` §3.5).
+    /// KAS carrier on the taker's token output of a kept token, one named in `keep_surplus`.
+    ///
+    /// By default (`None`) it is `taker_token_carrier`. An inventory output only has to clear its
+    /// program's floor and the dust bound, so an operator may lock less KAS on it than on its other
+    /// token outputs (`docs/spec/matcher.md` §3.5).
     #[serde(with = "crate::json::field", default, skip_serializing_if = "Option::is_none")]
     pub keep_carrier: Option<u64>,
     /// Per-token receivers overriding `taker` (e.g. a route's bought token paid to a merchant).
@@ -1938,8 +2087,9 @@ pub(crate) enum Extra {
     Cont(u64, kaspa_consensus_core::tx::ScriptPublicKey),
     /// A token output at any index; `patch`: (input, argument) receiving its index.
     Tok { value: u64, state: TokenState, token: Token, patch: Option<(usize, usize)> },
-    /// A token output at the index of the leg's custody input `slot` (a rest or return the covenant pins there); `patch`
-    /// as for `Tok`.
+    /// A token output at the index of the leg's custody input `slot`.
+    ///
+    /// It is a rest or return the covenant pins there. `patch` is as for `Tok`.
     AtInput { slot: Slot, value: u64, state: TokenState, token: Token, patch: Option<(usize, usize)> },
     /// A fresh exit authorised by the leg input (its index goes into argument `arg` of the leg).
     Exit { value: u64, spk: kaspa_consensus_core::tx::ScriptPublicKey, tpl: TemplateId, arg: usize },
@@ -1955,22 +2105,26 @@ pub(crate) struct LegPlan {
     sequence: u64,
     plan: SigPlan,
     extras: Vec<Extra>,
-    /// Token base units the leg adds to (`sold`) and takes from (`bought`) the transaction's free balance, per token.
+    /// Per token, the base units the leg adds to (`sold`) and takes from (`bought`) the free
+    /// balance.
     flows: Vec<(Token, i64, i64)>,
     /// Merged entry input (plan, role, utxo).
     merge: Option<(SigPlan, String, Utxo)>,
-    /// A pair ask's delivery that takes the batch's surplus of the token it buys: (token, the plan's argument of the
-    /// delivered amount).
+    /// A pair ask's delivery that takes the batch's surplus of the token it buys.
+    ///
+    /// It holds the token and the plan's argument of the delivered amount.
     adjust: Option<(Token, usize)>,
 }
 
-/// What a conditional order reads from its trigger evidence: a plain `KobAsk` / `KobBid` leg filled in
-/// the same transaction (mirrors `touch` in `KobCondAsk` & co.). Pair, conditional and if-done fills are never evidence
-/// of the KAS kinds (pair conditionals read pair orders: [`pair::pair_evidence`]).
+/// What a conditional order reads from its trigger evidence.
+///
+/// The evidence is a plain `KobAsk` or `KobBid` leg filled in the same transaction, mirroring
+/// `touch` in `KobCondAsk` and the other conditionals. Pair, conditional and if-done fills are
+/// never evidence for the KAS kinds. Pair conditionals read pair orders ([`pair::pair_evidence`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Touch {
-    /// [`SIDE_ASK`] (a resting ask sold at its quote) or [`SIDE_BID`] (a resting bid bought at its quote).
+    /// [`SIDE_ASK`] (a resting ask sold at its quote) or [`SIDE_BID`] (a resting bid bought).
     pub side: i64,
     #[serde(with = "crate::json::field")]
     pub token_cov_id: [u8; 32],
@@ -1980,13 +2134,16 @@ pub struct Touch {
     pub price: i64,
     /// Base units traded (the evidence fill's n).
     pub amount: i64,
-    /// Latest of the order UTXO's DAA plus its TWAP / DCA interval, its custody's DAA (ask) and its activeFrom.
+    /// Latest of the order UTXO's DAA plus its TWAP / DCA interval, its custody's DAA (ask) and its
+    /// `activeFrom`.
     pub exposed_since: i64,
 }
 
 impl Touch {
-    /// Evidence rules of an order (`minTouch`, `minRestDaa`) in a transaction whose lock time is
-    /// `lock` (the covenant proves `tx.daa >= exposedSince + minRestDaa` by CLTV).
+    /// Evidence rules of an order (`minTouch`, `minRestDaa`) in a transaction with lock time
+    /// `lock`.
+    ///
+    /// The covenant proves `tx.daa >= exposedSince + minRestDaa` by CLTV.
     pub fn check(&self, token: [u8; 32], scale: i64, min_touch: i64, min_rest: i64, lock: i64) -> Result<()> {
         if self.token_cov_id != token || self.scale != scale {
             return invalid("trigger evidence is of another token or scale");
@@ -2001,8 +2158,9 @@ impl Touch {
     }
 }
 
-/// The touch a plain leg filling `amount` base units provides (an error for any other leg and for decaying
-/// / rising orders, whose price is not a quote).
+/// The touch a plain leg filling `amount` base units provides.
+///
+/// Any other leg is an error, and so are decaying or rising orders, whose price is not a quote.
 pub fn touch_of(leg: &Leg) -> Result<Touch> {
     match leg {
         Leg::Ask { order, custody, amount, .. } => {
@@ -2049,8 +2207,10 @@ pub fn touch_of(leg: &Leg) -> Result<Touch> {
     }
 }
 
-/// The evidence leg `k` of a batch, its touch and its covenant arguments `(ev, tk)`: the input index of the
-/// evidence order (a leg's input index is its leg index) and of its custody (asks; `-1` for a bid).
+/// The evidence leg `k` of a batch, its touch and its covenant arguments `(ev, tk)`.
+///
+/// `ev` is the input index of the evidence order, which equals its leg index. `tk` is the input
+/// index of its custody for an ask, and `-1` for a bid.
 fn evidence(b: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> {
     let l = b.legs.get(k).ok_or_else(|| Error::Invalid(format!("trigger evidence {k} is not a leg of the batch")))?;
     let t = touch_of(l).map_err(|e| blame("evidence", k, e))?;
@@ -2058,8 +2218,10 @@ fn evidence(b: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> {
     Ok((t, k as i64, tk))
 }
 
-/// The order state of a leg as the kind of its token's family (the family follows from the token
-/// program the state pins by template hash; a pair order is one template for both families).
+/// The order state of a leg as the kind of its token's family.
+///
+/// The family follows from the token program the state pins by template hash. A pair order is one
+/// template for both families.
 fn leg_state(l: &Leg) -> Result<AnyState> {
     let s = match l {
         Leg::Ask { order, .. } => AnyState::KobAsk(order.state.clone()),
@@ -2116,8 +2278,10 @@ enum TokIn {
     Taker(usize),
 }
 
-/// One custody input of a leg: (leg, slot, utxo, token, positional). `positional`: the transaction keeps an output of that
-/// token at the custody's own input index (an IOC return, a pair order's rest or return, a merged pair entry's custody).
+/// One custody input of a leg: (leg, slot, utxo, token, positional).
+///
+/// `positional` means the transaction keeps an output of that token at the custody's own input
+/// index: an IOC return, a pair order's rest or return, or a merged pair entry's custody.
 type CustIn<'a> = (usize, Slot, &'a TokenUtxo, Token, bool);
 
 /// Input indices of a batch (inputs: legs, merged entries, token inputs, updates, funding).
@@ -2131,11 +2295,15 @@ pub(crate) struct Layout {
     update_base: usize,
 }
 
-/// The input layout. Order inputs first (legs, then merged entries), then the token inputs: FIRST every custody whose
-/// output must sit at its own input index (of any token: an IOC ask's return, a pair order's rest or return, a merged pair
-/// entry's custodies), right after the order inputs, so those positional outputs follow the positional slots of the legs
-/// and the extras directly and no output slot below them is ever left empty, whichever token they are of; then, token by
-/// token, the other custodies and the taker's tokens.
+/// The input layout.
+///
+/// Order inputs come first, the legs and then the merged entries. The token inputs follow them:
+/// - First every custody whose output must sit at its own input index, of any token: an IOC ask's
+///   return, a pair order's rest or return, or a merged pair entry's custodies. They come right
+///   after the order inputs. Those positional outputs then directly follow the positional slots of
+///   the legs and the extras, so no output slot below them is ever left empty, whichever token they
+///   are of.
+/// - Then, token by token, the other custodies and the taker's tokens.
 fn layout(b: &Batch, tokens: Vec<Token>, custs: &[CustIn]) -> Result<Layout> {
     let n_legs = b.legs.len();
     let mut next = n_legs;
@@ -2198,14 +2366,18 @@ fn auction_t(t: Option<i64>, lock: i64, origin: i64, what: &str) -> Result<i64> 
     Ok(t)
 }
 
+/// Builds a [`Batch`].
 pub fn build_batch(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch_mode(b, budgets, true)
 }
 
-/// Adversarial tests only (feature `adversarial`, never in a release build): [`build_batch`] WITHOUT some of the
-/// builder's own refusals (pair activation, covenant-owned taker tokens, a repeat entry's fill beyond its re-arms). It lays
-/// out transactions the covenants must reject, so the engine-level suites can show that the covenant, not the builder,
-/// refuses them; those suites mutate the built transactions for everything else.
+/// [`build_batch`] without some of the builder's own refusals, for adversarial tests only.
+///
+/// It needs feature `adversarial` and is never in a release build. It skips the refusals of pair
+/// activation, of covenant-owned taker tokens and of a repeat entry's fill beyond its re-arms. It
+/// lays out transactions the covenants must reject, so the engine-level suites can show that the
+/// covenant, not the builder, refuses them. Those suites mutate the built transactions for
+/// everything else.
 #[cfg(feature = "adversarial")]
 pub fn build_batch_unchecked(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch_mode(b, budgets, false)
@@ -2218,9 +2390,12 @@ enum Pass {
     Reorder(Vec<usize>),
 }
 
-/// The order of legs the refund slots need, `None` when the legs are in it. A terminal bid fill with a refund sends its unspent
-/// KAS to the maker at output `M - 1 - i` (i its input index, M the number of outputs): the fills with a refund are inputs
-/// 0..k, so their refunds are the last k outputs, in the reverse order of their inputs. The other legs keep their order.
+/// The order of legs the refund slots need, or `None` when the legs are already in it.
+///
+/// A terminal bid fill with a refund sends its unspent KAS to the maker at output `M - 1 - i`,
+/// where i is its input index and M the number of outputs. The fills with a refund are inputs 0..k,
+/// so their refunds are the last k outputs, in the reverse order of their inputs. The other legs
+/// keep their order.
 fn refund_order(refunds: &[Option<(u64, [u8; 32])>]) -> Option<Vec<usize>> {
     let k = refunds.iter().filter(|r| r.is_some()).count();
     if refunds[..k].iter().all(|r| r.is_some()) {
@@ -2229,8 +2404,10 @@ fn refund_order(refunds: &[Option<(u64, [u8; 32])>]) -> Option<Vec<usize>> {
     Some((0..refunds.len()).filter(|i| refunds[*i].is_some()).chain((0..refunds.len()).filter(|i| refunds[*i].is_none())).collect())
 }
 
-/// The batch with its legs in the order `perm` (new position `j` holds the original leg `perm[j]`): the legs' and updates'
-/// evidence indices follow their legs.
+/// The batch with its legs in the order `perm`.
+///
+/// New position `j` holds the original leg `perm[j]`, and the evidence indices of the legs and
+/// updates follow their legs.
 fn permute_batch(b: &Batch, perm: &[usize]) -> Batch {
     let mut inv = vec![0usize; perm.len()];
     for (j, o) in perm.iter().enumerate() {
@@ -2263,7 +2440,9 @@ fn permute_batch(b: &Batch, perm: &[usize]) -> Batch {
     out
 }
 
-/// A refusal of the reordered batch names the legs by their new positions: the original ones instead (`leg <j>` -> `leg <perm[j]>`).
+/// Renames the legs in a refusal of the reordered batch back to their original positions.
+///
+/// `leg <j>` becomes `leg <perm[j]>`.
 fn unpermute_error(e: Error, perm: &[usize]) -> Error {
     let Error::Invalid(m) = e else { return e };
     let mut out = String::new();
@@ -2313,7 +2492,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         check_key(&p.pubkey, "token receiver")?;
     }
     let mut d = Draft::new(b.lock_time, &b.fee, change)?;
-    // the tokens of each leg: its main token, and a pair leg's (A, B) and amounts
+    // The tokens of each leg: its main token, and a pair leg's (A, B) and amounts.
     let mut leg_tokens: Vec<Token> = vec![];
     let mut pair_toks: Vec<Option<(Token, Token)>> = vec![];
     let mut calcs: Vec<Option<pair::PairCalc>> = vec![];
@@ -2331,7 +2510,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
-    // every token the legs trade, in first-use order
+    // Every token the legs trade, in first-use order.
     let mut tokens: Vec<Token> = vec![];
     for (i, t) in leg_tokens.iter().enumerate() {
         for x in std::iter::once(*t).chain(pair_toks[i].map(|(a, bt)| [a, bt]).into_iter().flatten()) {
@@ -2345,7 +2524,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             return invalid("one token covenant id with two different programs");
         }
     }
-    // the custody inputs of every leg
+    // The custody inputs of every leg.
     let mut custs: Vec<CustIn> = vec![];
     for (i, l) in b.legs.iter().enumerate() {
         let tok = leg_tokens[i];
@@ -2372,8 +2551,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     let lay = layout(b, tokens, &custs)?;
     let n_legs = b.legs.len();
 
-    // Covenant ids spent by the batch: each order at most once; a booked exit's entry only in
-    // its own merge.
+    // Covenant ids spent by the batch. Each order is spent at most once, and a booked exit's entry
+    // only in its own merge.
     let mut spent_ids: BTreeSet<[u8; 32]> = BTreeSet::new();
     for l in &b.legs {
         let id = l_utxo(l).covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -2409,7 +2588,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     };
 
     let mut plans: Vec<LegPlan> = Vec::with_capacity(n_legs);
-    // terminal bid fills whose unspent KAS returns to the maker as an output of its own: (value, maker) per leg
+    // Terminal bid fills whose unspent KAS returns to the maker in an output of its own: (value,
+    // maker) per leg.
     let mut refunds: Vec<Option<(u64, [u8; 32])>> = vec![None; n_legs];
     for (i, l) in b.legs.iter().enumerate() {
         let tok = leg_tokens[i];
@@ -2528,8 +2708,9 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                     if s.tif == TIF_FOK && can_continue {
                         return invalid("FOK bid must be filled completely");
                     }
-                    // the KAS the bid does not spend beyond the delivery carrier returns to the maker at the end of the
-                    // transaction once it is REFUND_MIN or more; below that it rides on the delivery
+                    // The KAS the bid does not spend beyond the delivery carrier returns to the
+                    // maker at the end of the transaction once it is REFUND_MIN or more. Below that
+                    // it rides on the delivery.
                     let rem = sub(v - spend, s.delivery_carrier, "bid refund")?;
                     if rem >= crate::tx::REFUND_MIN as i64 {
                         refunds[i] = Some((rem as u64, s.maker));
@@ -2794,7 +2975,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                             let c =
                                 m.custody.as_ref().ok_or_else(|| Error::Invalid("the merged entry's custody is required".into()))?;
                             check_custody(c, e.utxo.covenant_id, tok, es.custody_amount())?;
-                            // the entry's custody carries its committed exit's commitment (this exit's)
+                            // The entry's custody carries its committed exit's commitment, i.e.
+                            // this exit's.
                             check_custody_ext(c, s.extension_commitment)?;
                             merge_ext(tok.0, c.state.extension())?;
                             (c.state.with_amount(new_amount), c.utxo.amount, lay.at[&(i, Slot::Entry)])
@@ -2814,8 +2996,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                             token: tok,
                             patch: Some((lay.merge_in[&i], 2)),
                         });
-                        // Sell-out: everything the exit held beyond the maker's proceeds, never less than
-                        // the prefund of n (KobIfdAsk merge floor).
+                        // Sell-out: everything the exit held beyond the maker's proceeds, never
+                        // less than the prefund of n (the KobIfdAsk merge floor).
                         let back = if n == s.amount_left { need(es.merge_sellout_back(n, v), "merge return")? } else { pre };
                         let back = back - if es.amount_left == 0 { es.exit_carrier } else { 0 };
                         let cont = IfdAskState {
@@ -3085,12 +3267,14 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         plans.push(p);
     }
     deliver_pair_surplus(b, &mut plans)?;
-    // The covenants pin a refund at output M - 1 - i for the bid at input i: the fills with a refund are the first legs.
+    // The covenants pin a refund at output M - 1 - i for the bid at input i, so the fills with a
+    // refund are the first legs.
     if let Some(perm) = refund_order(&refunds) {
         return Ok(Pass::Reorder(perm));
     }
 
-    // Inputs: legs, merged entries, token inputs (positional custodies first, see `layout`), updates, funding.
+    // Inputs: legs, merged entries, token inputs (positional custodies first, see `layout`),
+    // updates and funding.
     for (i, l) in b.legs.iter().enumerate() {
         let p = &plans[i];
         d.add_input(l_utxo(l), p.plan.clone(), format!("{}{}", p.role, p.suffix), p.sequence);
@@ -3120,7 +3304,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
-    // Updates (arm / trail without a fill), after the token inputs: their evidence is a leg of this batch.
+    // Updates (arm or trail without a fill) come after the token inputs. Their evidence is a leg of
+    // this batch.
     let mut update_outs = vec![];
     for (k, u) in b.updates.iter().enumerate() {
         let (plan, role, sequence, next, take) = update_plan(b, &lay, u, &spent_ids)?;
@@ -3132,12 +3317,13 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         d.add_p2pk(f);
     }
 
-    // Outputs: positional slots, extras per leg, update continuations, payments, the taker's tokens.
+    // Outputs: positional slots, extras per leg, update continuations, payments and the taker's
+    // tokens.
     for _ in 0..n_legs {
         d.reserve_output();
     }
-    // Outputs pinned at a custody input's index (IOC returns, pair rests and returns, merged pair entries' custodies):
-    // reserved now so the extras skip them.
+    // Outputs pinned at a custody input's index (IOC returns, pair rests and returns, merged pair
+    // entries' custodies) are reserved now, so the extras skip them.
     for (i, p) in plans.iter().enumerate() {
         for x in &p.extras {
             if let Extra::AtInput { slot, .. } = x {
@@ -3148,8 +3334,8 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     type Pinned = (usize, u64, TokenState, Token, Option<(usize, usize)>);
     let mut returns: Vec<Pinned> = vec![];
     let mut patches: Vec<(usize, usize, usize)> = vec![];
-    // the leg each output belongs to (its positional output, its extras), to name the leg of a refusal of `seal` that names
-    // an output
+    // The leg each output belongs to (its positional output, its extras), so that a refusal of
+    // `seal` that names an output can name the leg.
     let mut owner: BTreeMap<usize, usize> = (0..n_legs).map(|i| (i, i)).collect();
     for (i, l) in b.legs.iter().enumerate() {
         let cov = l_utxo(l).covenant_id.expect("checked");
@@ -3188,8 +3374,9 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     for (k, (at, next, take)) in update_outs.into_iter().enumerate() {
         let u = &b.updates[k];
         let cov = u.order.utxo.covenant_id.expect("checked");
-        // a continuation below the covenant-output bound could never be mined: refused here, naming the update (`seal` would
-        // refuse the whole transaction without knowing which update made it)
+        // A continuation below the covenant-output bound could never be mined. It is refused here,
+        // naming the update, because `seal` would refuse the whole transaction without knowing
+        // which update made it.
         let cont = u.order.utxo.amount as i64 - take;
         if cont < crate::tx::COVENANT_OUTPUT_MIN as i64 {
             return invalid(format!(
@@ -3214,7 +3401,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             let to = b.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(b.taker).or(change);
             let to = to.ok_or_else(|| Error::Invalid("no receiver for the taker's tokens".into()))?;
             let e = exts.get(&t.0).copied().ok_or_else(|| Error::Invalid("no token state in the batch".into()))?;
-            // a kept surplus (inventory) carries `keep_carrier` when the request names one
+            // A kept surplus (inventory) carries `keep_carrier` when the request names one.
             let carrier = match b.keep_carrier {
                 Some(c) if b.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
                 _ => pos(b.taker_token_carrier as i64, "takerTokenCarrier")?,
@@ -3258,8 +3445,11 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
 }
 
-/// A refusal of `seal` for KIP-9 dust (`dust payout: output k (...)`) names outputs, not legs: the first named output a leg
-/// made names that leg (`fill of leg <i>: ...`), so the caller leaves out the fill that made it and not another one.
+/// Names the leg of a `seal` refusal for KIP-9 dust.
+///
+/// Such a refusal (`dust payout: output k (...)`) names outputs, not legs. The first named output
+/// that a leg made names that leg (`fill of leg <i>: ...`), so the caller leaves out the fill that
+/// made it and not another one.
 fn dust_leg(e: Error, owner: &BTreeMap<usize, usize>) -> Error {
     let Error::Invalid(m) = &e else { return e };
     if !m.starts_with("dust payout:") {
@@ -3279,8 +3469,10 @@ fn dust_leg(e: Error, owner: &BTreeMap<usize, usize>) -> Error {
     }
 }
 
-/// Base units of token `t` the legs release into the transaction (`sold`: asks, pair custodies, ...) and take out of it
-/// (`bought`: bid deliveries, pair deliveries, exit custodies).
+/// Base units of token `t` the legs release into the transaction and take out of it.
+///
+/// `sold` comes from asks, pair custodies and the like. `bought` goes to bid deliveries, pair
+/// deliveries and exit custodies.
 fn token_flow(plans: &[LegPlan], t: Token) -> Result<(i64, i64)> {
     let mut sold = 0i64;
     let mut bought = 0i64;
@@ -3293,8 +3485,10 @@ fn token_flow(plans: &[LegPlan], t: Token) -> Result<(i64, i64)> {
     Ok((sold, bought))
 }
 
-/// The extension commitments a pair leg's token outputs carry: its custodies' (copied to their rests and returns) and the
-/// state's (T deliveries, an entry's new outputs).
+/// The extension commitments a pair leg's token outputs carry.
+///
+/// They are its custodies' commitments, copied to their rests and returns, and the state's, for T
+/// deliveries and an entry's new outputs.
 fn pair_exts(l: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], [u8; 32]) -> Result<()>) -> Result<()> {
     let ext = |t: Token, e: [u8; 32]| if t.1.family() == Family::Kcc20 { e } else { [0; 32] };
     match l {
@@ -3329,11 +3523,14 @@ fn pair_exts(l: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], 
     Ok(())
 }
 
-/// The tokens a batch releases beyond what its legs take go to the pair asks that buy them: the surplus of each token goes
-/// to the delivery of the first pair ask (`KobPair`, `KobCondPair`) of the batch buying it, whose guarantee is a minimum
-/// (the covenant pins the delivered amount the filler names). Taker tokens of a token mean the matcher fills from its
-/// inventory, and [`Batch::keep_surplus`] names the tokens the taker takes into inventory: their surplus then stays with the
-/// taker. A KRON delivery above the program's output limit keeps the excess with the taker.
+/// Gives the tokens a batch releases beyond what its legs take to the pair asks that buy them.
+///
+/// The surplus of each token goes to the delivery of the first pair ask (`KobPair`, `KobCondPair`)
+/// of the batch that buys it. Its guarantee is a minimum, and the covenant pins the delivered
+/// amount the filler names. Taker tokens of a token mean the matcher fills from its inventory, and
+/// [`Batch::keep_surplus`] names the tokens the taker takes into inventory. Their surplus then
+/// stays with the taker. A KRON delivery above the program's output limit keeps the excess with the
+/// taker.
 fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
     let mut bought: Vec<Token> = vec![];
     for t in plans.iter().filter_map(|p| p.adjust.map(|(t, _)| t)) {
@@ -3368,9 +3565,10 @@ fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
     Ok(())
 }
 
-/// Trigger, auction time and evidence arguments `(ev, tk)` of an if-done entry fill: an unarmed stop entry
-/// needs trigger evidence (a plain leg of the batch, checked by `check`) and fills at its trigger; an armed
-/// one runs its auction at `t`.
+/// Trigger, auction time and evidence arguments `(ev, tk)` of an if-done entry fill.
+///
+/// An unarmed stop entry needs trigger evidence, a plain leg of the batch checked by `check`, and
+/// fills at its trigger. An armed one runs its auction at `t`.
 #[allow(clippy::too_many_arguments)]
 fn ifd_trigger(
     b: &Batch,
@@ -3402,8 +3600,11 @@ fn ifd_trigger(
     Ok((false, 0, 0, 0))
 }
 
-/// What `update` of a stop entry requires besides the evidence: an amount to fill (an entry whose amount all sits in its
-/// exits has nothing an arm could serve) and the stop on the limit's side (else no fill can ever follow the arm).
+/// What `update` of a stop entry requires besides the evidence.
+///
+/// The entry needs an amount to fill, since an entry whose whole amount sits in its exits has
+/// nothing an arm could serve. The stop must be on the limit's side, or no fill can ever follow the
+/// arm.
 fn arm_entry_rules(amount_left: i64, stop_beyond_limit: bool) -> Result<()> {
     if amount_left <= 0 {
         return invalid("an entry with nothing left cannot be armed (its amount is in its exits)");
@@ -3414,11 +3615,13 @@ fn arm_entry_rules(amount_left: i64, stop_beyond_limit: bool) -> Result<()> {
     Ok(())
 }
 
-/// Plans one [`BatchUpdate`]: the `update` input (sigscript plan, role, sequence), the order's next state
-/// and the keeper's take. The evidence rules are the conditional leg's (`Touch::check`); an arm needs the
-/// trigger side, a trailing ratchet the opposite side and at least one justified step. A booked exit is never updated next
-/// to its repeat entry (`spent`: the covenant ids the batch spends; the covenants refuse `update` when the parent is
-/// among the inputs).
+/// Plans one [`BatchUpdate`].
+///
+/// It returns the `update` input (sigscript plan, role, sequence), the order's next state and the
+/// keeper's take. The evidence rules are the conditional leg's (`Touch::check`). An arm needs the
+/// trigger side, and a trailing ratchet the opposite side and at least one justified step. A booked
+/// exit is never updated next to its repeat entry. `spent` holds the covenant ids the batch spends,
+/// and the covenants refuse `update` when the parent is among the inputs.
 fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 32]>) -> Result<(SigPlan, String, u64, AnyState, i64)> {
     if u.order.state.is_pair() {
         return pair::update_plan_pair(b, lay, u, spent);
@@ -3517,7 +3720,7 @@ fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 3
         _ => return invalid("only conditional orders and stop entries are updated"),
     };
     let max_take = match (&o.state, &next) {
-        // a buy stop's tip never comes out of what buying its amount needs (KobCondBid.update)
+        // A buy stop's tip never comes out of what buying its amount needs (KobCondBid.update).
         (AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s), AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x)) => {
             need(s.keeper_take(o.utxo.amount.min(i64::MAX as u64) as i64, x.stop_price), "the keeper's take of a conditional bid")?
         }
@@ -3536,10 +3739,12 @@ fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 3
 
 // ---------------------------------------------------------------- two-token routes
 
-/// A two-token route A → KAS → B in ONE transaction: the payer's token A is sold into A's bids,
-/// the KAS it releases (plus any funding) buys token B from B's asks, and B goes to `receiver`
-/// (e.g. a merchant for swap-and-pay). Each token keeps its own KCC-20 leader and slot limits; the
-/// transaction is atomic, so the payer never ends up holding KAS or a partial route.
+/// A two-token route A → KAS → B in one transaction.
+///
+/// The payer's token A is sold into A's bids, the KAS it releases (plus any funding) buys token B
+/// from B's asks, and B goes to `receiver`, e.g. a merchant for swap-and-pay. Each token keeps its
+/// own KCC-20 leader and slot limits. The transaction is atomic, so the payer never ends up holding
+/// KAS or a partial route.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwapRoute {
@@ -3619,6 +3824,7 @@ pub fn route_batch(r: &SwapRoute) -> Result<Batch> {
     })
 }
 
+/// Builds a [`SwapRoute`] as the batch [`route_batch`] lowers it to.
 pub fn build_swap_route(r: &SwapRoute, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch(&route_batch(r)?, budgets)
 }
@@ -3674,10 +3880,10 @@ mod leg_naming_tests {
         ));
         let named = dust_leg(e, &owner).to_string();
         assert!(named.contains("fill of leg 1: dust payout: output 4"), "{named}");
-        // an output no leg made (the change) leaves the refusal as it is
+        // An output no leg made (the change) leaves the refusal as it is.
         let e = Error::Invalid("dust payout: output 9 (5 sompi) below 2000000 sompi".into());
         assert!(!dust_leg(e, &owner).to_string().contains("of leg"));
-        // other refusals are left alone
+        // Other refusals are left alone.
         let e = Error::Invalid("output 4 (1 sompi)".into());
         assert!(!dust_leg(e, &owner).to_string().contains("of leg"));
     }
