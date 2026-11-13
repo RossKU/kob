@@ -124,9 +124,8 @@ impl FeePolicy {
     }
 }
 
-/// Command-line options of the fee policy (`kobd --executor`, `match`, `keep`).
-///
-/// The floor is the command's `--fee-rate`.
+/// Command-line options of the fee policy (`kobd --executor`, `match`, `keep`); the floor is the
+/// command's `--fee-rate`.
 #[derive(clap::Args, Debug, Clone)]
 pub struct FeeArgs {
     /// Do not read the node's fee estimate: every transaction pays `--fee-rate`.
