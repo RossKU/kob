@@ -126,7 +126,8 @@
 //! - It is not dropped, has no alarm and is not suspect.
 //! - It did not contradict the authority within [`PROMOTE_CLEAN_FOR`].
 //! - Within [`PROMOTE_CHECK_TIMEOUT`] it shows the right network and is synced. It knows the
-//!   cursor, and the cursor is on its selected chain.
+//!   cursor, and the cursor is on its selected chain. When the role reads funds from the authority
+//!   (`judge::require_utxo_index`, the Executor), it has a UTXO index.
 //!
 //! Every answer of the new authority from the cursor where it took over is checked, until the
 //! cursor moves on from there: it may remove at most [`SETTLE_MAX_REORG`] chain blocks and must know
@@ -1088,6 +1089,8 @@ impl<N: ChainSource> MultiNode<N> {
     /// It has [`PROMOTE_CHECK_TIMEOUT`] to show all of these.
     ///
     /// - It is on the right network and synced.
+    /// - It has a UTXO index, when the role needs one (`judge::require_utxo_index`). The
+    ///   authority's node answers the UTXO queries ([`ChainSource::utxos_by_addresses`]).
     /// - It knows the cursor.
     /// - The cursor is on its selected chain, so its chain hashes from it remove nothing.
     ///
@@ -1103,6 +1106,9 @@ impl<N: ChainSource> MultiNode<N> {
             }
             if !info.is_synced {
                 return Err("it is not synced".into());
+            }
+            if super::judge::utxo_index_required() && !info.has_utxo_index {
+                return Err("it has no UTXO index (the Executor reads its funds there)".into());
             }
             if !node.block_exists(at).await.map_err(|e| format!("getBlock: {e}"))? {
                 return Err(format!("it does not know the cursor {at}"));

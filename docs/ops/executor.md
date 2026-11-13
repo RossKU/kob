@@ -3182,7 +3182,8 @@ The primary (`rpc_url`, or the entry with `role = "primary"`) may always lead ag
 answers (network, sync, the cursor on its chain), so the setting is the operator's say in which nodes the store may
 follow: set `may_lead = false` on a node listed only for its bandwidth, such as a fixed public node. Another node cannot
 make the authority's chain requests fail: they are bounded by the authority's own blue scores, never by a number another
-node reports.
+node reports. On `kobd --executor` a candidate must also have a UTXO index, as every node there must; this is checked
+at the handover, not only at the next health check.
 
 The handover is logged at warn (`another node is the chain authority now`, with both nodes), counted in
 `authority_replaced_total` (`kob_indexer_authority_replaced_total`) and the new authority's `nodes[].promoted`, and the

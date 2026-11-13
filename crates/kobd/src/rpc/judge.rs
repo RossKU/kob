@@ -223,6 +223,11 @@ pub fn require_utxo_index() {
     NEED_UTXO_INDEX.store(true, Ordering::Relaxed);
 }
 
+/// Whether the process needs the UTXO index of its nodes ([`require_utxo_index`]).
+pub fn utxo_index_required() -> bool {
+    NEED_UTXO_INDEX.load(Ordering::Relaxed)
+}
+
 /// Acts on the findings about `node`, the node the configured `url` stands for. The first finding
 /// gives a resolver entry's node up, and the node is returned. For a named node the alarms begin
 /// and end with the findings. It is never called with the judge's lock held, because

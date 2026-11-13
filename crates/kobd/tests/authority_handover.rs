@@ -31,6 +31,8 @@ struct Flaky {
     chain_down: AtomicBool,
     alters: AtomicBool,
     chain_calls: AtomicUsize,
+    /// Reports no UTXO index.
+    no_utxo_index: AtomicBool,
     /// Serves its VSPC answers from this node instead (another view of the chain), while every other call answers from
     /// `node`.
     vspc_from: Mutex<Option<Arc<MockNode>>>,
@@ -43,6 +45,7 @@ impl Flaky {
             chain_down: AtomicBool::new(false),
             alters: AtomicBool::new(false),
             chain_calls: AtomicUsize::new(0),
+            no_utxo_index: AtomicBool::new(false),
             vspc_from: Mutex::new(None),
         })
     }
@@ -74,7 +77,9 @@ impl ChainSource for Flaky {
         self.node.dag_info().await
     }
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
-        self.node.server_info().await
+        let mut info = self.node.server_info().await?;
+        info.has_utxo_index &= !self.no_utxo_index.load(Ordering::Relaxed);
+        Ok(info)
     }
     async fn utxos_by_addresses(&self, a: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         self.node.utxos_by_addresses(a).await
@@ -434,4 +439,26 @@ async fn every_answer_from_the_handover_cursor_is_checked_not_only_the_first() {
     assert_eq!(h.cursor_hash, Some(cursor));
     let refused = |o: &StepOutcome| matches!(o, StepOutcome::Retry(m) if m.contains("at most 100 right after it took over"));
     assert!(out.iter().any(refused), "{out:?}");
+}
+
+/// When the role reads its funds from the chain authority's node (the Executor, `judge::require_utxo_index`), a candidate
+/// without a UTXO index is not promoted. The judge's alarm for it would come only with the next health check.
+#[tokio::test]
+async fn a_candidate_without_a_utxo_index_is_not_promoted_when_the_role_needs_one() {
+    let _g = serial().await;
+    // process-wide for this test binary: every other node here has a UTXO index
+    kobd::rpc::judge::require_utxo_index();
+    let node = MockNode::new("testnet-10");
+    node.push_empty(20);
+    let (a, b) = (Flaky::new(&node), Flaky::new(&node));
+    b.no_utxo_index.store(true, Ordering::Relaxed);
+    let (ua, ub) = ("ws://10.7.0.1:18210", "ws://10.7.0.2:18210");
+    let r = run(node.anchor(), vec![(spec(ua, true), a.clone()), (spec(ub, true), b.clone())], 1, Duration::from_millis(1));
+    r.until(500, "first sync", |r| r.cursor() == Some(node.tip())).await;
+    a.chain_down.store(true, Ordering::Relaxed);
+    node.push_empty(5);
+    r.steps(40).await;
+    assert_eq!(r.source.board().authority(), 0, "not promoted");
+    assert_eq!(r.health.snapshot().nodes[1].promoted, 0);
+    assert_eq!(r.health.snapshot().cursor_hash, Some(node.chain()[20].hash));
 }
