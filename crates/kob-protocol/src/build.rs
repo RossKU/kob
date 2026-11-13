@@ -2636,6 +2636,698 @@ fn spent_covenant_ids(b: &Batch) -> Result<BTreeSet<[u8; 32]>> {
     Ok(spent_ids)
 }
 
+/// The extension commitment of each token of a batch.
+///
+/// Every token input and output of a token shares it.
+#[derive(Default)]
+struct Exts(BTreeMap<[u8; 32], [u8; 32]>);
+
+impl Exts {
+    /// Records commitment `e` for token `tok`, which must agree with the one already recorded.
+    fn merge(&mut self, tok: [u8; 32], e: [u8; 32]) -> Result<()> {
+        if *self.0.entry(tok).or_insert(e) != e {
+            return invalid("orders and tokens of different extension commitments cannot share a batch");
+        }
+        Ok(())
+    }
+}
+
+/// The facts of one leg of a batch that its planner reads.
+#[derive(Clone, Copy)]
+struct LegCtx<'a> {
+    batch: &'a Batch,
+    lay: &'a Layout,
+    /// The leg's position in the batch.
+    index: usize,
+    /// The leg's main token.
+    token: Token,
+    family: Family,
+    /// The base units the leg fills.
+    amount: i64,
+    lock: i64,
+    /// The order UTXO.
+    utxo: &'a Utxo,
+    utxo_daa: i64,
+    /// The order UTXO's KAS.
+    value: i64,
+    cov_id: [u8; 32],
+    strict: bool,
+}
+
+impl LegCtx<'_> {
+    /// The input index of the first input of the leg's token.
+    fn first_tok(&self, what: &str) -> Result<usize> {
+        self.lay
+            .first_token_in
+            .get(&self.token.0)
+            .copied()
+            .ok_or_else(|| Error::Invalid(format!("{what}: no input of its token in the batch")))
+    }
+}
+
+/// Plans a `KobAsk` fill: the maker's payment, and the rest or the IOC return of its custody.
+fn plan_ask(cx: &LegCtx, order: &OrderUtxo<AskState>, custody: &TokenUtxo, t: Option<i64>, exts: &mut Exts) -> Result<LegPlan> {
+    let LegCtx { lay, index: i, token: tok, family: fam, amount: n, lock, utxo, utxo_daa: udaa, value: v, cov_id, .. } = *cx;
+    let s = &order.state;
+    check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+    check_custody_ext(custody, s.extension_commitment)?;
+    exts.merge(tok.0, custody.state.extension())?;
+    if lock < s.active_from {
+        return invalid(format!("ask at leg {i} is not active before DAA {}", s.active_from));
+    }
+    let t = if s.slope != 0 { auction_t(t, lock, need(s.origin(udaa), "decay origin")?, "decaying ask")? } else { 0 };
+    if !s.fill_ok(n) {
+        return invalid(format!(
+            "leg {i}: an ask fill of {n} needs n <= amountLeft {}, n >= minFill {} unless it takes everything left, and n <= maxFill {} (0 = no cap)",
+            s.amount_left, s.min_fill, s.max_fill
+        ));
+    }
+    let proceeds = need(s.proceeds(n, t, udaa), "ask proceeds")?;
+    let rest = s.amount_left - n;
+    let mut extras = vec![];
+    let (payout, branch) = if rest > 0 && s.tif == TIF_GTC {
+        extras.push(Extra::Cont(utxo.amount, AskState { amount_left: rest, ..s.clone() }.spk_for(fam)));
+        extras.push(Extra::Tok {
+            value: custody.utxo.amount,
+            state: custody.state.with_amount(rest),
+            token: tok,
+            patch: Some((i, 2)),
+        });
+        (proceeds, "rest")
+    } else if rest > 0 {
+        if s.tif == TIF_FOK {
+            return invalid("FOK ask must be filled completely");
+        }
+        let st = custody.state.with_amount(rest).with_holder_owner(tok.1, s.maker);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: tok, patch: Some((i, 2)) });
+        (add(proceeds, v, "ask payout")?, "ioc")
+    } else {
+        (add(add(proceeds, v, "ask payout")?, custody.utxo.amount as i64, "ask payout")?, "close")
+    };
+    let mut role = format!("{}.settle.{branch}", TemplateId::KobAsk.for_program(tok.1).name());
+    if s.interval > 0 {
+        role.push_str(".twap");
+    }
+    if s.slope != 0 {
+        role.push_str(".decay");
+    }
+    Ok(LegPlan {
+        pos: PosOut::Pay(pos(payout, "ask payout")?, s.maker),
+        role,
+        sequence: s.interval.max(0) as u64,
+        plan: entry(
+            TemplateId::KobAsk.for_program(tok.1),
+            s.encode_for(fam),
+            "settle",
+            vec![nb(n), Arg::Int(lay.at[&(i, Slot::Custody)] as i64), Arg::Int(0), Arg::Int(t)],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, n, 0)],
+        merge: None,
+        adjust: None,
+    })
+}
+
+/// Plans a `KobBid` fill: the delivery, and the continuation or the refund of its KAS.
+fn plan_bid(
+    cx: &LegCtx,
+    order: &OrderUtxo<BidState>,
+    t: Option<i64>,
+    exts: &mut Exts,
+    refund_slot: &mut Option<(u64, [u8; 32])>,
+) -> Result<LegPlan> {
+    let LegCtx { index: i, token: tok, family: fam, amount: n, lock, utxo_daa: udaa, value: v, .. } = *cx;
+    let s = &order.state;
+    if lock < s.active_from {
+        return invalid(format!("bid at leg {i} is not active before DAA {}", s.active_from));
+    }
+    let t = if s.slope != 0 { auction_t(t, lock, need(s.origin(udaa), "rise origin")?, "rising bid")? } else { 0 };
+    if s.max_fill > 0 && n > s.max_fill {
+        return invalid("amount above the DCA maxFill");
+    }
+    if s.min_fill <= 0 {
+        return invalid("a bid with minFill <= 0 never fills (the covenant requires minFill > 0)");
+    }
+    let used = need(s.used(n), "bid budget")?;
+    let spend = need(s.spend(n, t, udaa), "bid spend")?;
+    let left = sub(v, used, "bid escrow")?;
+    if left < s.reserve {
+        return invalid(format!("leg {i}: the bid cannot afford {n} base units"));
+    }
+    let can_continue = s.can_continue(left);
+    if n < s.min_fill && can_continue {
+        return invalid(format!(
+            "leg {i}: a bid fill of {n} is below minFill {} while the bid could continue (only its last fill may be smaller)",
+            s.min_fill
+        ));
+    }
+    kron_output(fam, n, "bid delivery")?;
+    let mut extras = vec![];
+    let (delivery, branch) = if s.tif == TIF_GTC && can_continue {
+        extras.push(Extra::Cont(pos(left - s.delivery_carrier, "bid continuation")?, s.spk_for(fam)));
+        (add(s.delivery_carrier, used - spend, "bid delivery")?, "cont")
+    } else {
+        if s.tif == TIF_FOK && can_continue {
+            return invalid("FOK bid must be filled completely");
+        }
+        // The KAS the bid does not spend beyond the delivery carrier returns to the
+        // maker at the end of the transaction once it is REFUND_MIN or more. Below that
+        // it rides on the delivery.
+        let rem = sub(v - spend, s.delivery_carrier, "bid refund")?;
+        if rem >= crate::tx::REFUND_MIN as i64 {
+            *refund_slot = Some((rem as u64, s.maker));
+            (s.delivery_carrier, "close")
+        } else {
+            (v - spend, "close")
+        }
+    };
+    let mut role = format!("{}.fill.{branch}", TemplateId::KobBid.for_program(tok.1).name());
+    if s.interval > 0 {
+        role.push_str(".dca");
+    }
+    if s.slope != 0 {
+        role.push_str(".rising");
+    }
+    exts.merge(tok.0, s.extension_commitment)?;
+    Ok(LegPlan {
+        pos: PosOut::Deliver(pos(delivery, "bid delivery")?, TokenState::user(tok.1, n, s.maker, s.extension_commitment), tok),
+        role,
+        sequence: s.interval.max(0) as u64,
+        plan: entry(
+            TemplateId::KobBid.for_program(tok.1),
+            s.encode_for(fam),
+            "fill",
+            vec![nb(n), Arg::Int(cx.first_tok("bid")? as i64), Arg::Int(t)],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, 0, n)],
+        merge: None,
+        adjust: None,
+    })
+}
+
+/// Plans a `KobCondAsk` fill on its take-profit or stop leg, and the merge of a booked exit's entry.
+#[allow(clippy::too_many_arguments)]
+fn plan_cond_ask(
+    cx: &LegCtx,
+    order: &OrderUtxo<CondAskState>,
+    custody: &TokenUtxo,
+    leg: u8,
+    ev: Option<usize>,
+    t: Option<i64>,
+    merge: Option<&OrderUtxo<IfdBidState>>,
+    exts: &mut Exts,
+) -> Result<LegPlan> {
+    let LegCtx { batch: b, lay, index: i, token: tok, family: fam, amount: n, lock, utxo, utxo_daa: udaa, value: v, cov_id, .. } = *cx;
+    let s = &order.state;
+    check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+    check_custody_ext(custody, s.extension_commitment)?;
+    exts.merge(tok.0, custody.state.extension())?;
+    if lock < s.active_from {
+        return invalid("conditional ask not active yet");
+    }
+    if !s.fill_ok(n) {
+        return invalid(format!(
+            "leg {i}: a conditional ask fill of {n} needs n <= amountLeft {} and n >= minFill {} unless it takes everything left",
+            s.amount_left, s.min_fill
+        ));
+    }
+    let leg = leg as i64;
+    let mut trigger = false;
+    let mut t_arg = 0;
+    let (mut ev_arg, mut tk_arg) = (0, 0);
+    match leg {
+        0 if s.tp_price > 0 => {}
+        1 if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) => {
+            if s.armed == 0 {
+                let k = ev.ok_or_else(|| Error::Invalid("unarmed stop leg needs trigger evidence".into()))?;
+                let (e, a, tk) = evidence(b, lay, k)?;
+                e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
+                if e.side != SIDE_ASK || e.price > s.stop_price {
+                    return invalid("a stop sell triggers only on a resting ask filled at or below the stop");
+                }
+                (ev_arg, tk_arg) = (a, tk);
+                trigger = true;
+            } else if s.band_daa > 0 {
+                t_arg = auction_t(t, lock, armed_origin(s.armed, udaa).expect("armed"), "stop auction")?;
+            }
+        }
+        _ => return invalid("invalid conditional leg for this order"),
+    }
+    let leg_price = need(s.leg_price(leg, trigger, t_arg, udaa), "conditional ask leg price")?;
+    let proceeds = need(s.proceeds(n, leg_price), "conditional ask proceeds")?;
+    let rest = s.amount_left - n;
+    let carriers = add(v, custody.utxo.amount as i64, "carriers")?;
+    let mut extras = vec![];
+    if rest > 0 {
+        let next = CondAskState { amount_left: rest, armed: s.next_armed(leg, trigger, udaa), ..s.clone() };
+        extras.push(Extra::Cont(utxo.amount, next.spk_for(fam)));
+        extras.push(Extra::Tok {
+            value: custody.utxo.amount,
+            state: custody.state.with_amount(rest),
+            token: tok,
+            patch: Some((i, 2)),
+        });
+    }
+    check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
+    let (payout, merge_plan) = match merge {
+        None => (if rest > 0 { proceeds } else { add(proceeds, carriers, "payout")? }, None),
+        Some(e) => {
+            if e.utxo.covenant_id != Some(s.parent) {
+                return invalid("the merged entry is not this exit's parent");
+            }
+            let es = &e.state;
+            if es.token_cov_id != s.token_cov_id || !es.books_exit(s.parent, s) {
+                return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
+            }
+            let budget = need(s.rpt_budget(n), "repeat budget")?;
+            let back = if rest == 0 { add(budget, carriers, "merge")? } else { budget };
+            let cont = IfdBidState {
+                amount_left: add(es.amount_left, n, "merged amount")?,
+                armed: es.merged_armed(e.utxo.block_daa_score as i64),
+                ..es.clone()
+            };
+            extras.push(Extra::EntryCont(u(add(e.utxo.amount as i64, back, "merged entry")?, "merge")?, cont.spk_for(fam), s.parent));
+            let args = vec![
+                Arg::Bytes(merge_arg(i, n)?),
+                Arg::Int(cx.first_tok("merge")? as i64),
+                Arg::Int(0),
+                Arg::Bytes(vec![]),
+                Arg::Bytes(vec![]),
+                Arg::Int(0),
+                Arg::Int(0),
+            ];
+            let plan = entry(TemplateId::KobIfdBid.for_program(tok.1), es.encode_for(fam), "fill", args);
+            (
+                proceeds - budget,
+                Some((
+                    plan,
+                    format!(
+                        "{}.fill.merge{}",
+                        TemplateId::KobIfdBid.for_program(tok.1).name(),
+                        if rest == 0 { ".sellout" } else { "" }
+                    ),
+                    e.utxo.clone(),
+                )),
+            )
+        }
+    };
+    let role = format!(
+        "{}.settle.leg{leg}{}{}{}.{}",
+        TemplateId::KobCondAsk.for_program(tok.1).name(),
+        if trigger { ".trigger" } else { "" },
+        if t_arg != 0 { ".auction" } else { "" },
+        if merge.is_some() { ".merge" } else { "" },
+        if rest > 0 { "rest" } else { "close" }
+    );
+    Ok(LegPlan {
+        pos: PosOut::Pay(pos(payout, "payout")?, s.maker),
+        role,
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobCondAsk.for_program(tok.1),
+            s.encode_for(fam),
+            "settle",
+            vec![
+                nb(n),
+                Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
+                Arg::Int(0),
+                Arg::Int(leg),
+                Arg::Int(ev_arg),
+                Arg::Int(tk_arg),
+                Arg::Int(t_arg),
+            ],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, n, 0)],
+        merge: merge_plan,
+        adjust: None,
+    })
+}
+
+/// Plans a `KobCondBid` fill on its take-profit or stop leg, and the merge of a booked exit's entry.
+#[allow(clippy::too_many_arguments)]
+fn plan_cond_bid(
+    cx: &LegCtx,
+    order: &OrderUtxo<CondBidState>,
+    leg: u8,
+    ev: Option<usize>,
+    t: Option<i64>,
+    merge: Option<&SellFirstEntry>,
+    exts: &mut Exts,
+    refund_slot: &mut Option<(u64, [u8; 32])>,
+) -> Result<LegPlan> {
+    let LegCtx { batch: b, lay, index: i, token: tok, family: fam, amount: n, lock, utxo_daa: udaa, value: v, .. } = *cx;
+    let s = &order.state;
+    if lock < s.active_from {
+        return invalid("conditional bid not active yet");
+    }
+    if !s.fill_ok(n) {
+        return invalid(format!(
+            "leg {i}: a conditional bid fill of {n} needs n <= amountLeft {} and n >= minFill {} unless it takes everything left",
+            s.amount_left, s.min_fill
+        ));
+    }
+    let leg = leg as i64;
+    let mut trigger = false;
+    let mut t_arg = 0;
+    let mut ev_arg = 0;
+    match leg {
+        0 if s.tp_price > 0 => {}
+        1 if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) => {
+            if s.armed == 0 {
+                let k = ev.ok_or_else(|| Error::Invalid("unarmed stop leg needs trigger evidence".into()))?;
+                let (e, a, _) = evidence(b, lay, k)?;
+                e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
+                if e.side != SIDE_BID || e.price < s.stop_price {
+                    return invalid("a buy stop triggers only on a resting bid filled at or above the stop");
+                }
+                ev_arg = a;
+                trigger = true;
+            } else if s.band_daa > 0 {
+                t_arg = auction_t(t, lock, armed_origin(s.armed, udaa).expect("armed"), "stop auction")?;
+            }
+        }
+        _ => return invalid("invalid conditional leg for this order"),
+    }
+    let spend = need(s.spend(n, need(s.leg_price(leg, trigger, t_arg, udaa), "conditional bid leg price")?), "conditional bid spend")?;
+    let left = sub(v, spend, "conditional bid escrow")?;
+    let rest = s.amount_left - n;
+    let next = CondBidState { amount_left: rest, armed: s.next_armed(leg, trigger, udaa), ..s.clone() };
+    check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
+    exts.merge(tok.0, s.extension_commitment)?;
+    let mut extras = vec![];
+    let (pos_out, merge_plan) = match merge {
+        None => {
+            kron_output(fam, n, "conditional bid delivery")?;
+            if rest > 0 {
+                extras.push(Extra::Cont(pos(left - s.delivery_carrier, "continuation")?, next.spk_for(fam)));
+            }
+            let rem = sub(left, s.delivery_carrier, "conditional bid refund")?;
+            let refund = rest == 0 && rem >= crate::tx::REFUND_MIN as i64;
+            if refund {
+                *refund_slot = Some((rem as u64, s.maker));
+            }
+            let delivery = if rest > 0 || refund { s.delivery_carrier } else { left };
+            (PosOut::Deliver(pos(delivery, "delivery")?, TokenState::user(tok.1, n, s.maker, s.extension_commitment), tok), None)
+        }
+        Some(m) => plan_cond_bid_merge(cx, order, m, rest, &next, spend, &mut extras, exts)?,
+    };
+    let role = format!(
+        "{}.settle.leg{leg}{}{}{}.{}",
+        TemplateId::KobCondBid.for_program(tok.1).name(),
+        if trigger { ".trigger" } else { "" },
+        if t_arg != 0 { ".auction" } else { "" },
+        if merge.is_some() { ".merge" } else { "" },
+        if rest > 0 { "cont" } else { "close" }
+    );
+    Ok(LegPlan {
+        pos: pos_out,
+        role,
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobCondBid.for_program(tok.1),
+            s.encode_for(fam),
+            "settle",
+            vec![nb(n), Arg::Int(cx.first_tok("conditional bid")? as i64), Arg::Int(leg), Arg::Int(ev_arg), Arg::Int(t_arg)],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, 0, n)],
+        merge: merge_plan,
+        adjust: None,
+    })
+}
+
+/// A merged entry's input: (sigscript plan, role, UTXO).
+type MergeInput = (SigPlan, String, Utxo);
+
+/// Plans the merge of a booked `KobCondBid` exit's sell-first entry.
+///
+/// It adds the exit's continuation, the entry's custody and continuation to `extras`, and returns
+/// the maker's take-profit payment and the entry's input.
+#[allow(clippy::too_many_arguments)]
+fn plan_cond_bid_merge(
+    cx: &LegCtx,
+    order: &OrderUtxo<CondBidState>,
+    m: &SellFirstEntry,
+    rest: i64,
+    next: &CondBidState,
+    spend: i64,
+    extras: &mut Vec<Extra>,
+    exts: &mut Exts,
+) -> Result<(PosOut, Option<MergeInput>)> {
+    let LegCtx { lay, index: i, token: tok, family: fam, amount: n, value: v, .. } = *cx;
+    let s = &order.state;
+    let e = &m.entry;
+    if e.utxo.covenant_id != Some(s.parent) {
+        return invalid("the merged entry is not this exit's parent");
+    }
+    let es = &e.state;
+    if es.token_cov_id != s.token_cov_id || !es.books_exit(s.parent, s) {
+        return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
+    }
+    let proceeds = need(s.rpt_proceeds(n), "repeat proceeds")?;
+    let pre = need(s.rpt_prefund(n), "repeat prefund")?;
+    if rest > 0 {
+        let keep = sub(sub(v, proceeds, "exit continuation")?, pre, "exit continuation")?;
+        extras.push(Extra::Cont(pos(keep, "exit continuation")?, next.spk_for(fam)));
+    }
+    // The entry's custody after the merge: exactly amountLeft + n.
+    let new_amount = add(es.amount_left, n, "merged amount")?;
+    kron_output(fam, new_amount, "the merged entry's custody")?;
+    let (cust_state, cust_value, token_in) = if es.amount_left > 0 {
+        let c = m.custody.as_ref().ok_or_else(|| Error::Invalid("the merged entry's custody is required".into()))?;
+        check_custody(c, e.utxo.covenant_id, tok, es.custody_amount())?;
+        // The entry's custody carries its committed exit's commitment, i.e.
+        // this exit's.
+        check_custody_ext(c, s.extension_commitment)?;
+        exts.merge(tok.0, c.state.extension())?;
+        (c.state.with_amount(new_amount), c.utxo.amount, lay.at[&(i, Slot::Entry)])
+    } else {
+        if m.custody.is_some() {
+            return invalid("an empty entry has no custody (a token UTXO owned by it is a stray)");
+        }
+        (
+            TokenState::custody(fam, new_amount, s.parent, s.extension_commitment),
+            u(es.exit_carrier, "exitCarrier")?,
+            cx.first_tok("merge")?,
+        )
+    };
+    extras.push(Extra::Tok { value: cust_value, state: cust_state, token: tok, patch: Some((lay.merge_in[&i], 2)) });
+    // Sell-out: everything the exit held beyond the maker's proceeds, never
+    // less than the prefund of n (the KobIfdAsk merge floor).
+    let back = if n == s.amount_left { need(es.merge_sellout_back(n, v), "merge return")? } else { pre };
+    let back = back - if es.amount_left == 0 { es.exit_carrier } else { 0 };
+    let cont = IfdAskState { amount_left: new_amount, armed: es.merged_armed(e.utxo.block_daa_score as i64), ..es.clone() };
+    extras.push(Extra::EntryCont(u(add(e.utxo.amount as i64, back, "merged entry")?, "merged entry")?, cont.spk_for(fam), s.parent));
+    let args = vec![
+        Arg::Bytes(merge_arg(i, n)?),
+        Arg::Int(token_in as i64),
+        Arg::Int(0),
+        Arg::Int(0),
+        Arg::Bytes(vec![]),
+        Arg::Bytes(vec![]),
+        Arg::Int(0),
+        Arg::Int(0),
+        Arg::Int(0),
+    ];
+    let plan = entry(TemplateId::KobIfdAsk.for_program(tok.1), es.encode_for(fam), "settle", args);
+    let role = format!(
+        "{}.settle.merge{}{}",
+        TemplateId::KobIfdAsk.for_program(tok.1).name(),
+        if es.amount_left == 0 { ".new" } else { "" },
+        if n == s.amount_left { ".sellout" } else { "" }
+    );
+    Ok((PosOut::Pay(pos(proceeds - spend, "take-profit")?, s.maker), Some((plan, role, e.utxo.clone()))))
+}
+
+/// Plans a `KobIfdBid` entry fill, which delivers into the custody of the exit it creates.
+fn plan_ifd_bid(cx: &LegCtx, order: &OrderUtxo<IfdBidState>, ev: Option<usize>, t: Option<i64>, exts: &mut Exts) -> Result<LegPlan> {
+    let LegCtx { batch: b, lay, token: tok, family: fam, amount: n, lock, utxo_daa: udaa, value: v, cov_id, strict, .. } = *cx;
+    let s = &order.state;
+    if lock < s.active_from {
+        return invalid("if-done bid not active yet");
+    }
+    if !s.fill_ok(n) {
+        return invalid("if-done fill: n <= amountLeft and n >= minFill unless it takes everything left");
+    }
+    kron_output(fam, n, "the exit's custody")?;
+    let (trigger, t_arg, ev_arg, _) = ifd_trigger(b, lay, s.entry_stop, s.armed, s.band_daa, ev, t, lock, udaa, |e| {
+        e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
+        if e.side != SIDE_BID || e.price < s.entry_stop {
+            return invalid("a buy-stop entry triggers only on a resting bid filled at or above its trigger");
+        }
+        Ok(())
+    })?;
+    let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, t, lock, strict)?;
+    let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
+    let spend = need(s.spend(n, p), "if-done bid spend")?;
+    let left = sub(sub(v, spend, "if-done bid escrow")?, s.delivery_carrier, "if-done bid escrow")?;
+    let rest = s.amount_left - n;
+    let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
+    let exit = s.exit_for(n, booking)?;
+    let cont = rest > 0 || s.rpt_amount > 0;
+    let mut extras = vec![];
+    if cont {
+        let next = IfdBidState {
+            amount_left: rest,
+            armed: s.next_armed(udaa),
+            rpt_amount: if booked { s.rpt_amount - n } else { s.rpt_amount },
+            ..s.clone()
+        };
+        extras.push(Extra::Cont(pos(left - s.exit_carrier, "entry continuation")?, next.spk_for(fam)));
+        extras.push(Extra::Exit {
+            value: u(s.exit_carrier, "exit carrier")?,
+            spk: exit.spk_for(fam),
+            tpl: TemplateId::KobCondAsk.for_program(tok.1),
+            arg: 2,
+        });
+    } else {
+        extras.push(Extra::Exit {
+            value: pos(left, "exit value")?,
+            spk: exit.spk_for(fam),
+            tpl: TemplateId::KobCondAsk.for_program(tok.1),
+            arg: 2,
+        });
+    }
+    exts.merge(tok.0, s.extension_commitment)?;
+    let c = template(TemplateId::KobCondAsk.for_program(tok.1));
+    Ok(LegPlan {
+        pos: PosOut::DeliverToExit {
+            value: u(s.delivery_carrier, "delivery carrier")?,
+            amount: n,
+            ext: s.extension_commitment,
+            token: tok,
+        },
+        role: format!(
+            "{}.fill{}{}{}.{}",
+            TemplateId::KobIfdBid.for_program(tok.1).name(),
+            if trigger { ".trigger" } else { "" },
+            if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
+            if booked { ".book" } else { "" },
+            entry_branch(rest > 0, cont)
+        ),
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobIfdBid.for_program(tok.1),
+            s.encode_for(fam),
+            "fill",
+            vec![
+                nb(n),
+                Arg::Int(cx.first_tok("if-done bid")? as i64),
+                Arg::Int(0),
+                Arg::Bytes(c.prefix.clone()),
+                Arg::Bytes(c.suffix.clone()),
+                Arg::Int(ev_arg),
+                Arg::Int(t_arg),
+            ],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, 0, n)],
+        merge: None,
+        adjust: None,
+    })
+}
+
+/// Plans a `KobIfdAsk` entry fill, whose positional output is the exit it creates.
+fn plan_ifd_ask(
+    cx: &LegCtx,
+    order: &OrderUtxo<IfdAskState>,
+    custody: &TokenUtxo,
+    ev: Option<usize>,
+    t: Option<i64>,
+    exts: &mut Exts,
+) -> Result<LegPlan> {
+    let LegCtx { batch: b, lay, index: i, token: tok, family: fam, amount: n, lock, utxo_daa: udaa, value: v, cov_id, strict, .. } =
+        *cx;
+    let s = &order.state;
+    check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
+    check_custody_ext(custody, s.exit()?.extension_commitment)?;
+    exts.merge(tok.0, custody.state.extension())?;
+    if lock < s.active_from {
+        return invalid("if-done ask not active yet");
+    }
+    if !s.fill_ok(n) {
+        return invalid("if-done fill: n <= amountLeft and n >= minFill unless it takes everything left");
+    }
+    let (trigger, t_arg, ev_arg, tk_arg) = ifd_trigger(b, lay, s.entry_stop, s.armed, s.band_daa, ev, t, lock, udaa, |e| {
+        e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
+        if e.side != SIDE_ASK || e.price > s.entry_stop {
+            return invalid("a sell-stop entry triggers only on a resting ask filled at or below its trigger");
+        }
+        Ok(())
+    })?;
+    let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, t, lock, strict)?;
+    let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
+    let proceeds = need(s.proceeds(n, p), "if-done ask proceeds")?;
+    let pre = need(s.prefund_of(n), "if-done ask prefund")?;
+    let rest = s.amount_left - n;
+    let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
+    let exit = s.exit_for(n, booking)?;
+    let cont = rest > 0 || s.rpt_amount > 0;
+    let mut extras = vec![];
+    let exit_value = if cont {
+        let next = IfdAskState {
+            amount_left: rest,
+            armed: s.next_armed(udaa),
+            rpt_amount: if booked { s.rpt_amount - n } else { s.rpt_amount },
+            ..s.clone()
+        };
+        let keep = v - pre - s.exit_carrier + if rest == 0 { custody.utxo.amount as i64 } else { 0 };
+        extras.push(Extra::Cont(pos(keep, "entry continuation")?, next.spk_for(fam)));
+        if rest > 0 {
+            extras.push(Extra::Tok {
+                value: custody.utxo.amount,
+                state: custody.state.with_amount(rest),
+                token: tok,
+                patch: Some((i, 2)),
+            });
+        }
+        add(add(proceeds, pre, "exit value")?, s.exit_carrier, "exit value")?
+    } else {
+        add(add(proceeds, v, "exit value")?, custody.utxo.amount as i64, "exit value")?
+    };
+    let c = template(TemplateId::KobCondBid.for_program(tok.1));
+    Ok(LegPlan {
+        pos: PosOut::Exit(pos(exit_value, "exit value")?, exit.spk_for(fam), TemplateId::KobCondBid.for_program(tok.1)),
+        role: format!(
+            "{}.settle{}{}{}.{}",
+            TemplateId::KobIfdAsk.for_program(tok.1).name(),
+            if trigger { ".trigger" } else { "" },
+            if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
+            if booked { ".book" } else { "" },
+            entry_branch(rest > 0, cont)
+        ),
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobIfdAsk.for_program(tok.1),
+            s.encode_for(fam),
+            "settle",
+            vec![
+                nb(n),
+                Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
+                Arg::Int(0),
+                Arg::Int(i as i64),
+                Arg::Bytes(c.prefix.clone()),
+                Arg::Bytes(c.suffix.clone()),
+                Arg::Int(ev_arg),
+                Arg::Int(tk_arg),
+                Arg::Int(t_arg),
+            ],
+        ),
+        extras,
+        suffix: format!("@{}", tok.1.name()),
+        flows: vec![(tok, n, 0)],
+        merge: None,
+        adjust: None,
+    })
+}
+
 fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
     if b.legs.is_empty() {
         return invalid("empty batch");
@@ -2660,14 +3352,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     let n_legs = b.legs.len();
     let spent_ids = spent_covenant_ids(b)?;
 
-    // Extension commitment per token (every token input and output of a token shares it).
-    let mut exts: BTreeMap<[u8; 32], [u8; 32]> = BTreeMap::new();
-    let mut merge_ext = |tok: [u8; 32], e: [u8; 32]| -> Result<()> {
-        if *exts.entry(tok).or_insert(e) != e {
-            return invalid("orders and tokens of different extension commitments cannot share a batch");
-        }
-        Ok(())
-    };
+    let mut exts = Exts::default();
 
     let mut plans: Vec<LegPlan> = Vec::with_capacity(n_legs);
     // Terminal bid fills whose unspent KAS returns to the maker in an output of its own: (value,
@@ -2678,629 +3363,35 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         let fam = tok.1.family();
         let n = leg_amount(l);
         pos(n, "amount")?;
-        let first_tok = |what: &str| -> Result<usize> {
-            lay.first_token_in
-                .get(&tok.0)
-                .copied()
-                .ok_or_else(|| Error::Invalid(format!("{what}: no input of its token in the batch")))
-        };
         let utxo = l_utxo(l);
-        let udaa = utxo.block_daa_score as i64;
-        let v = utxo.amount as i64;
-        let cov_id = utxo.covenant_id.expect("checked");
+        let cx = LegCtx {
+            batch: b,
+            lay: &lay,
+            index: i,
+            token: tok,
+            family: fam,
+            amount: n,
+            lock,
+            utxo,
+            utxo_daa: utxo.block_daa_score as i64,
+            value: utxo.amount as i64,
+            cov_id: utxo.covenant_id.expect("checked"),
+            strict,
+        };
         let p = match l {
-            Leg::Ask { order, custody, t, .. } => {
-                let s = &order.state;
-                check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
-                check_custody_ext(custody, s.extension_commitment)?;
-                merge_ext(tok.0, custody.state.extension())?;
-                if lock < s.active_from {
-                    return invalid(format!("ask at leg {i} is not active before DAA {}", s.active_from));
-                }
-                let t = if s.slope != 0 { auction_t(*t, lock, need(s.origin(udaa), "decay origin")?, "decaying ask")? } else { 0 };
-                if !s.fill_ok(n) {
-                    return invalid(format!(
-                        "leg {i}: an ask fill of {n} needs n <= amountLeft {}, n >= minFill {} unless it takes everything left, and n <= maxFill {} (0 = no cap)",
-                        s.amount_left, s.min_fill, s.max_fill
-                    ));
-                }
-                let proceeds = need(s.proceeds(n, t, udaa), "ask proceeds")?;
-                let rest = s.amount_left - n;
-                let mut extras = vec![];
-                let (payout, branch) = if rest > 0 && s.tif == TIF_GTC {
-                    extras.push(Extra::Cont(utxo.amount, AskState { amount_left: rest, ..s.clone() }.spk_for(fam)));
-                    extras.push(Extra::Tok {
-                        value: custody.utxo.amount,
-                        state: custody.state.with_amount(rest),
-                        token: tok,
-                        patch: Some((i, 2)),
-                    });
-                    (proceeds, "rest")
-                } else if rest > 0 {
-                    if s.tif == TIF_FOK {
-                        return invalid("FOK ask must be filled completely");
-                    }
-                    let st = custody.state.with_amount(rest).with_holder_owner(tok.1, s.maker);
-                    extras.push(Extra::AtInput {
-                        slot: Slot::Custody,
-                        value: custody.utxo.amount,
-                        state: st,
-                        token: tok,
-                        patch: Some((i, 2)),
-                    });
-                    (add(proceeds, v, "ask payout")?, "ioc")
-                } else {
-                    (add(add(proceeds, v, "ask payout")?, custody.utxo.amount as i64, "ask payout")?, "close")
-                };
-                let mut role = format!("{}.settle.{branch}", TemplateId::KobAsk.for_program(tok.1).name());
-                if s.interval > 0 {
-                    role.push_str(".twap");
-                }
-                if s.slope != 0 {
-                    role.push_str(".decay");
-                }
-                LegPlan {
-                    pos: PosOut::Pay(pos(payout, "ask payout")?, s.maker),
-                    role,
-                    sequence: s.interval.max(0) as u64,
-                    plan: entry(
-                        TemplateId::KobAsk.for_program(tok.1),
-                        s.encode_for(fam),
-                        "settle",
-                        vec![nb(n), Arg::Int(lay.at[&(i, Slot::Custody)] as i64), Arg::Int(0), Arg::Int(t)],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, n, 0)],
-                    merge: None,
-                    adjust: None,
-                }
-            }
-            Leg::Bid { order, t, .. } => {
-                let s = &order.state;
-                if lock < s.active_from {
-                    return invalid(format!("bid at leg {i} is not active before DAA {}", s.active_from));
-                }
-                let t = if s.slope != 0 { auction_t(*t, lock, need(s.origin(udaa), "rise origin")?, "rising bid")? } else { 0 };
-                if s.max_fill > 0 && n > s.max_fill {
-                    return invalid("amount above the DCA maxFill");
-                }
-                if s.min_fill <= 0 {
-                    return invalid("a bid with minFill <= 0 never fills (the covenant requires minFill > 0)");
-                }
-                let used = need(s.used(n), "bid budget")?;
-                let spend = need(s.spend(n, t, udaa), "bid spend")?;
-                let left = sub(v, used, "bid escrow")?;
-                if left < s.reserve {
-                    return invalid(format!("leg {i}: the bid cannot afford {n} base units"));
-                }
-                let can_continue = s.can_continue(left);
-                if n < s.min_fill && can_continue {
-                    return invalid(format!(
-                        "leg {i}: a bid fill of {n} is below minFill {} while the bid could continue (only its last fill may be smaller)",
-                        s.min_fill
-                    ));
-                }
-                kron_output(fam, n, "bid delivery")?;
-                let mut extras = vec![];
-                let (delivery, branch) = if s.tif == TIF_GTC && can_continue {
-                    extras.push(Extra::Cont(pos(left - s.delivery_carrier, "bid continuation")?, s.spk_for(fam)));
-                    (add(s.delivery_carrier, used - spend, "bid delivery")?, "cont")
-                } else {
-                    if s.tif == TIF_FOK && can_continue {
-                        return invalid("FOK bid must be filled completely");
-                    }
-                    // The KAS the bid does not spend beyond the delivery carrier returns to the
-                    // maker at the end of the transaction once it is REFUND_MIN or more. Below that
-                    // it rides on the delivery.
-                    let rem = sub(v - spend, s.delivery_carrier, "bid refund")?;
-                    if rem >= crate::tx::REFUND_MIN as i64 {
-                        refunds[i] = Some((rem as u64, s.maker));
-                        (s.delivery_carrier, "close")
-                    } else {
-                        (v - spend, "close")
-                    }
-                };
-                let mut role = format!("{}.fill.{branch}", TemplateId::KobBid.for_program(tok.1).name());
-                if s.interval > 0 {
-                    role.push_str(".dca");
-                }
-                if s.slope != 0 {
-                    role.push_str(".rising");
-                }
-                merge_ext(tok.0, s.extension_commitment)?;
-                LegPlan {
-                    pos: PosOut::Deliver(
-                        pos(delivery, "bid delivery")?,
-                        TokenState::user(tok.1, n, s.maker, s.extension_commitment),
-                        tok,
-                    ),
-                    role,
-                    sequence: s.interval.max(0) as u64,
-                    plan: entry(
-                        TemplateId::KobBid.for_program(tok.1),
-                        s.encode_for(fam),
-                        "fill",
-                        vec![nb(n), Arg::Int(first_tok("bid")? as i64), Arg::Int(t)],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, 0, n)],
-                    merge: None,
-                    adjust: None,
-                }
-            }
+            Leg::Ask { order, custody, t, .. } => plan_ask(&cx, order, custody, *t, &mut exts)?,
+            Leg::Bid { order, t, .. } => plan_bid(&cx, order, *t, &mut exts, &mut refunds[i])?,
             Leg::CondAsk { order, custody, leg, evidence: ev, t, merge, .. } => {
-                let s = &order.state;
-                check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
-                check_custody_ext(custody, s.extension_commitment)?;
-                merge_ext(tok.0, custody.state.extension())?;
-                if lock < s.active_from {
-                    return invalid("conditional ask not active yet");
-                }
-                if !s.fill_ok(n) {
-                    return invalid(format!(
-                        "leg {i}: a conditional ask fill of {n} needs n <= amountLeft {} and n >= minFill {} unless it takes everything left",
-                        s.amount_left, s.min_fill
-                    ));
-                }
-                let leg = *leg as i64;
-                let mut trigger = false;
-                let mut t_arg = 0;
-                let (mut ev_arg, mut tk_arg) = (0, 0);
-                match leg {
-                    0 if s.tp_price > 0 => {}
-                    1 if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) => {
-                        if s.armed == 0 {
-                            let k = ev.ok_or_else(|| Error::Invalid("unarmed stop leg needs trigger evidence".into()))?;
-                            let (e, a, tk) = evidence(b, &lay, k)?;
-                            e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
-                            if e.side != SIDE_ASK || e.price > s.stop_price {
-                                return invalid("a stop sell triggers only on a resting ask filled at or below the stop");
-                            }
-                            (ev_arg, tk_arg) = (a, tk);
-                            trigger = true;
-                        } else if s.band_daa > 0 {
-                            t_arg = auction_t(*t, lock, armed_origin(s.armed, udaa).expect("armed"), "stop auction")?;
-                        }
-                    }
-                    _ => return invalid("invalid conditional leg for this order"),
-                }
-                let leg_price = need(s.leg_price(leg, trigger, t_arg, udaa), "conditional ask leg price")?;
-                let proceeds = need(s.proceeds(n, leg_price), "conditional ask proceeds")?;
-                let rest = s.amount_left - n;
-                let carriers = add(v, custody.utxo.amount as i64, "carriers")?;
-                let mut extras = vec![];
-                if rest > 0 {
-                    let next = CondAskState { amount_left: rest, armed: s.next_armed(leg, trigger, udaa), ..s.clone() };
-                    extras.push(Extra::Cont(utxo.amount, next.spk_for(fam)));
-                    extras.push(Extra::Tok {
-                        value: custody.utxo.amount,
-                        state: custody.state.with_amount(rest),
-                        token: tok,
-                        patch: Some((i, 2)),
-                    });
-                }
-                check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
-                let (payout, merge_plan) = match merge {
-                    None => (if rest > 0 { proceeds } else { add(proceeds, carriers, "payout")? }, None),
-                    Some(e) => {
-                        if e.utxo.covenant_id != Some(s.parent) {
-                            return invalid("the merged entry is not this exit's parent");
-                        }
-                        let es = &e.state;
-                        if es.token_cov_id != s.token_cov_id || !es.books_exit(s.parent, s) {
-                            return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
-                        }
-                        let budget = need(s.rpt_budget(n), "repeat budget")?;
-                        let back = if rest == 0 { add(budget, carriers, "merge")? } else { budget };
-                        let cont = IfdBidState {
-                            amount_left: add(es.amount_left, n, "merged amount")?,
-                            armed: es.merged_armed(e.utxo.block_daa_score as i64),
-                            ..es.clone()
-                        };
-                        extras.push(Extra::EntryCont(
-                            u(add(e.utxo.amount as i64, back, "merged entry")?, "merge")?,
-                            cont.spk_for(fam),
-                            s.parent,
-                        ));
-                        let args = vec![
-                            Arg::Bytes(merge_arg(i, n)?),
-                            Arg::Int(first_tok("merge")? as i64),
-                            Arg::Int(0),
-                            Arg::Bytes(vec![]),
-                            Arg::Bytes(vec![]),
-                            Arg::Int(0),
-                            Arg::Int(0),
-                        ];
-                        let plan = entry(TemplateId::KobIfdBid.for_program(tok.1), es.encode_for(fam), "fill", args);
-                        (
-                            proceeds - budget,
-                            Some((
-                                plan,
-                                format!(
-                                    "{}.fill.merge{}",
-                                    TemplateId::KobIfdBid.for_program(tok.1).name(),
-                                    if rest == 0 { ".sellout" } else { "" }
-                                ),
-                                e.utxo.clone(),
-                            )),
-                        )
-                    }
-                };
-                let role = format!(
-                    "{}.settle.leg{leg}{}{}{}.{}",
-                    TemplateId::KobCondAsk.for_program(tok.1).name(),
-                    if trigger { ".trigger" } else { "" },
-                    if t_arg != 0 { ".auction" } else { "" },
-                    if merge.is_some() { ".merge" } else { "" },
-                    if rest > 0 { "rest" } else { "close" }
-                );
-                LegPlan {
-                    pos: PosOut::Pay(pos(payout, "payout")?, s.maker),
-                    role,
-                    sequence: 0,
-                    plan: entry(
-                        TemplateId::KobCondAsk.for_program(tok.1),
-                        s.encode_for(fam),
-                        "settle",
-                        vec![
-                            nb(n),
-                            Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
-                            Arg::Int(0),
-                            Arg::Int(leg),
-                            Arg::Int(ev_arg),
-                            Arg::Int(tk_arg),
-                            Arg::Int(t_arg),
-                        ],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, n, 0)],
-                    merge: merge_plan,
-                    adjust: None,
-                }
+                plan_cond_ask(&cx, order, custody, *leg, *ev, *t, merge.as_ref(), &mut exts)?
             }
             Leg::CondBid { order, leg, evidence: ev, t, merge, .. } => {
-                let s = &order.state;
-                if lock < s.active_from {
-                    return invalid("conditional bid not active yet");
-                }
-                if !s.fill_ok(n) {
-                    return invalid(format!(
-                        "leg {i}: a conditional bid fill of {n} needs n <= amountLeft {} and n >= minFill {} unless it takes everything left",
-                        s.amount_left, s.min_fill
-                    ));
-                }
-                let leg = *leg as i64;
-                let mut trigger = false;
-                let mut t_arg = 0;
-                let mut ev_arg = 0;
-                match leg {
-                    0 if s.tp_price > 0 => {}
-                    1 if s.stop_price > 0 && s.stop_price <= MAX_STOP_PRICE && (0..=10_000).contains(&s.slip_bps) => {
-                        if s.armed == 0 {
-                            let k = ev.ok_or_else(|| Error::Invalid("unarmed stop leg needs trigger evidence".into()))?;
-                            let (e, a, _) = evidence(b, &lay, k)?;
-                            e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
-                            if e.side != SIDE_BID || e.price < s.stop_price {
-                                return invalid("a buy stop triggers only on a resting bid filled at or above the stop");
-                            }
-                            ev_arg = a;
-                            trigger = true;
-                        } else if s.band_daa > 0 {
-                            t_arg = auction_t(*t, lock, armed_origin(s.armed, udaa).expect("armed"), "stop auction")?;
-                        }
-                    }
-                    _ => return invalid("invalid conditional leg for this order"),
-                }
-                let spend = need(
-                    s.spend(n, need(s.leg_price(leg, trigger, t_arg, udaa), "conditional bid leg price")?),
-                    "conditional bid spend",
-                )?;
-                let left = sub(v, spend, "conditional bid escrow")?;
-                let rest = s.amount_left - n;
-                let next = CondBidState { amount_left: rest, armed: s.next_armed(leg, trigger, udaa), ..s.clone() };
-                check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
-                merge_ext(tok.0, s.extension_commitment)?;
-                let mut extras = vec![];
-                let (pos_out, merge_plan) = match merge {
-                    None => {
-                        kron_output(fam, n, "conditional bid delivery")?;
-                        if rest > 0 {
-                            extras.push(Extra::Cont(pos(left - s.delivery_carrier, "continuation")?, next.spk_for(fam)));
-                        }
-                        let rem = sub(left, s.delivery_carrier, "conditional bid refund")?;
-                        let refund = rest == 0 && rem >= crate::tx::REFUND_MIN as i64;
-                        if refund {
-                            refunds[i] = Some((rem as u64, s.maker));
-                        }
-                        let delivery = if rest > 0 || refund { s.delivery_carrier } else { left };
-                        (
-                            PosOut::Deliver(
-                                pos(delivery, "delivery")?,
-                                TokenState::user(tok.1, n, s.maker, s.extension_commitment),
-                                tok,
-                            ),
-                            None,
-                        )
-                    }
-                    Some(m) => {
-                        let e = &m.entry;
-                        if e.utxo.covenant_id != Some(s.parent) {
-                            return invalid("the merged entry is not this exit's parent");
-                        }
-                        let es = &e.state;
-                        if es.token_cov_id != s.token_cov_id || !es.books_exit(s.parent, s) {
-                            return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
-                        }
-                        let proceeds = need(s.rpt_proceeds(n), "repeat proceeds")?;
-                        let pre = need(s.rpt_prefund(n), "repeat prefund")?;
-                        if rest > 0 {
-                            let keep = sub(sub(v, proceeds, "exit continuation")?, pre, "exit continuation")?;
-                            extras.push(Extra::Cont(pos(keep, "exit continuation")?, next.spk_for(fam)));
-                        }
-                        // The entry's custody after the merge: exactly amountLeft + n.
-                        let new_amount = add(es.amount_left, n, "merged amount")?;
-                        kron_output(fam, new_amount, "the merged entry's custody")?;
-                        let (cust_state, cust_value, token_in) = if es.amount_left > 0 {
-                            let c =
-                                m.custody.as_ref().ok_or_else(|| Error::Invalid("the merged entry's custody is required".into()))?;
-                            check_custody(c, e.utxo.covenant_id, tok, es.custody_amount())?;
-                            // The entry's custody carries its committed exit's commitment, i.e.
-                            // this exit's.
-                            check_custody_ext(c, s.extension_commitment)?;
-                            merge_ext(tok.0, c.state.extension())?;
-                            (c.state.with_amount(new_amount), c.utxo.amount, lay.at[&(i, Slot::Entry)])
-                        } else {
-                            if m.custody.is_some() {
-                                return invalid("an empty entry has no custody (a token UTXO owned by it is a stray)");
-                            }
-                            (
-                                TokenState::custody(fam, new_amount, s.parent, s.extension_commitment),
-                                u(es.exit_carrier, "exitCarrier")?,
-                                first_tok("merge")?,
-                            )
-                        };
-                        extras.push(Extra::Tok {
-                            value: cust_value,
-                            state: cust_state,
-                            token: tok,
-                            patch: Some((lay.merge_in[&i], 2)),
-                        });
-                        // Sell-out: everything the exit held beyond the maker's proceeds, never
-                        // less than the prefund of n (the KobIfdAsk merge floor).
-                        let back = if n == s.amount_left { need(es.merge_sellout_back(n, v), "merge return")? } else { pre };
-                        let back = back - if es.amount_left == 0 { es.exit_carrier } else { 0 };
-                        let cont = IfdAskState {
-                            amount_left: new_amount,
-                            armed: es.merged_armed(e.utxo.block_daa_score as i64),
-                            ..es.clone()
-                        };
-                        extras.push(Extra::EntryCont(
-                            u(add(e.utxo.amount as i64, back, "merged entry")?, "merged entry")?,
-                            cont.spk_for(fam),
-                            s.parent,
-                        ));
-                        let args = vec![
-                            Arg::Bytes(merge_arg(i, n)?),
-                            Arg::Int(token_in as i64),
-                            Arg::Int(0),
-                            Arg::Int(0),
-                            Arg::Bytes(vec![]),
-                            Arg::Bytes(vec![]),
-                            Arg::Int(0),
-                            Arg::Int(0),
-                            Arg::Int(0),
-                        ];
-                        let plan = entry(TemplateId::KobIfdAsk.for_program(tok.1), es.encode_for(fam), "settle", args);
-                        let role = format!(
-                            "{}.settle.merge{}{}",
-                            TemplateId::KobIfdAsk.for_program(tok.1).name(),
-                            if es.amount_left == 0 { ".new" } else { "" },
-                            if n == s.amount_left { ".sellout" } else { "" }
-                        );
-                        (PosOut::Pay(pos(proceeds - spend, "take-profit")?, s.maker), Some((plan, role, e.utxo.clone())))
-                    }
-                };
-                let role = format!(
-                    "{}.settle.leg{leg}{}{}{}.{}",
-                    TemplateId::KobCondBid.for_program(tok.1).name(),
-                    if trigger { ".trigger" } else { "" },
-                    if t_arg != 0 { ".auction" } else { "" },
-                    if merge.is_some() { ".merge" } else { "" },
-                    if rest > 0 { "cont" } else { "close" }
-                );
-                LegPlan {
-                    pos: pos_out,
-                    role,
-                    sequence: 0,
-                    plan: entry(
-                        TemplateId::KobCondBid.for_program(tok.1),
-                        s.encode_for(fam),
-                        "settle",
-                        vec![nb(n), Arg::Int(first_tok("conditional bid")? as i64), Arg::Int(leg), Arg::Int(ev_arg), Arg::Int(t_arg)],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, 0, n)],
-                    merge: merge_plan,
-                    adjust: None,
-                }
+                plan_cond_bid(&cx, order, *leg, *ev, *t, merge.as_ref(), &mut exts, &mut refunds[i])?
             }
-            Leg::IfdBid { order, evidence: ev, t, .. } => {
-                let s = &order.state;
-                if lock < s.active_from {
-                    return invalid("if-done bid not active yet");
-                }
-                if !s.fill_ok(n) {
-                    return invalid("if-done fill: n <= amountLeft and n >= minFill unless it takes everything left");
-                }
-                kron_output(fam, n, "the exit's custody")?;
-                let (trigger, t_arg, ev_arg, _) = ifd_trigger(b, &lay, s.entry_stop, s.armed, s.band_daa, *ev, *t, lock, udaa, |e| {
-                    e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
-                    if e.side != SIDE_BID || e.price < s.entry_stop {
-                        return invalid("a buy-stop entry triggers only on a resting bid filled at or above its trigger");
-                    }
-                    Ok(())
-                })?;
-                let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, *t, lock, strict)?;
-                let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
-                let spend = need(s.spend(n, p), "if-done bid spend")?;
-                let left = sub(sub(v, spend, "if-done bid escrow")?, s.delivery_carrier, "if-done bid escrow")?;
-                let rest = s.amount_left - n;
-                let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
-                let exit = s.exit_for(n, booking)?;
-                let cont = rest > 0 || s.rpt_amount > 0;
-                let mut extras = vec![];
-                if cont {
-                    let next = IfdBidState {
-                        amount_left: rest,
-                        armed: s.next_armed(udaa),
-                        rpt_amount: if booked { s.rpt_amount - n } else { s.rpt_amount },
-                        ..s.clone()
-                    };
-                    extras.push(Extra::Cont(pos(left - s.exit_carrier, "entry continuation")?, next.spk_for(fam)));
-                    extras.push(Extra::Exit {
-                        value: u(s.exit_carrier, "exit carrier")?,
-                        spk: exit.spk_for(fam),
-                        tpl: TemplateId::KobCondAsk.for_program(tok.1),
-                        arg: 2,
-                    });
-                } else {
-                    extras.push(Extra::Exit {
-                        value: pos(left, "exit value")?,
-                        spk: exit.spk_for(fam),
-                        tpl: TemplateId::KobCondAsk.for_program(tok.1),
-                        arg: 2,
-                    });
-                }
-                merge_ext(tok.0, s.extension_commitment)?;
-                let c = template(TemplateId::KobCondAsk.for_program(tok.1));
-                LegPlan {
-                    pos: PosOut::DeliverToExit {
-                        value: u(s.delivery_carrier, "delivery carrier")?,
-                        amount: n,
-                        ext: s.extension_commitment,
-                        token: tok,
-                    },
-                    role: format!(
-                        "{}.fill{}{}{}.{}",
-                        TemplateId::KobIfdBid.for_program(tok.1).name(),
-                        if trigger { ".trigger" } else { "" },
-                        if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
-                        if booked { ".book" } else { "" },
-                        entry_branch(rest > 0, cont)
-                    ),
-                    sequence: 0,
-                    plan: entry(
-                        TemplateId::KobIfdBid.for_program(tok.1),
-                        s.encode_for(fam),
-                        "fill",
-                        vec![
-                            nb(n),
-                            Arg::Int(first_tok("if-done bid")? as i64),
-                            Arg::Int(0),
-                            Arg::Bytes(c.prefix.clone()),
-                            Arg::Bytes(c.suffix.clone()),
-                            Arg::Int(ev_arg),
-                            Arg::Int(t_arg),
-                        ],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, 0, n)],
-                    merge: None,
-                    adjust: None,
-                }
-            }
-            Leg::IfdAsk { order, custody, evidence: ev, t, .. } => {
-                let s = &order.state;
-                check_custody(custody, Some(cov_id), tok, s.custody_amount())?;
-                check_custody_ext(custody, s.exit()?.extension_commitment)?;
-                merge_ext(tok.0, custody.state.extension())?;
-                if lock < s.active_from {
-                    return invalid("if-done ask not active yet");
-                }
-                if !s.fill_ok(n) {
-                    return invalid("if-done fill: n <= amountLeft and n >= minFill unless it takes everything left");
-                }
-                let (trigger, t_arg, ev_arg, tk_arg) =
-                    ifd_trigger(b, &lay, s.entry_stop, s.armed, s.band_daa, *ev, *t, lock, udaa, |e| {
-                        e.check(s.token_cov_id, s.scale, s.min_touch, s.min_rest_daa, lock)?;
-                        if e.side != SIDE_ASK || e.price > s.entry_stop {
-                            return invalid("a sell-stop entry triggers only on a resting ask filled at or below its trigger");
-                        }
-                        Ok(())
-                    })?;
-                let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, *t, lock, strict)?;
-                let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
-                let proceeds = need(s.proceeds(n, p), "if-done ask proceeds")?;
-                let pre = need(s.prefund_of(n), "if-done ask prefund")?;
-                let rest = s.amount_left - n;
-                let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
-                let exit = s.exit_for(n, booking)?;
-                let cont = rest > 0 || s.rpt_amount > 0;
-                let mut extras = vec![];
-                let exit_value = if cont {
-                    let next = IfdAskState {
-                        amount_left: rest,
-                        armed: s.next_armed(udaa),
-                        rpt_amount: if booked { s.rpt_amount - n } else { s.rpt_amount },
-                        ..s.clone()
-                    };
-                    let keep = v - pre - s.exit_carrier + if rest == 0 { custody.utxo.amount as i64 } else { 0 };
-                    extras.push(Extra::Cont(pos(keep, "entry continuation")?, next.spk_for(fam)));
-                    if rest > 0 {
-                        extras.push(Extra::Tok {
-                            value: custody.utxo.amount,
-                            state: custody.state.with_amount(rest),
-                            token: tok,
-                            patch: Some((i, 2)),
-                        });
-                    }
-                    add(add(proceeds, pre, "exit value")?, s.exit_carrier, "exit value")?
-                } else {
-                    add(add(proceeds, v, "exit value")?, custody.utxo.amount as i64, "exit value")?
-                };
-                let c = template(TemplateId::KobCondBid.for_program(tok.1));
-                LegPlan {
-                    pos: PosOut::Exit(pos(exit_value, "exit value")?, exit.spk_for(fam), TemplateId::KobCondBid.for_program(tok.1)),
-                    role: format!(
-                        "{}.settle{}{}{}.{}",
-                        TemplateId::KobIfdAsk.for_program(tok.1).name(),
-                        if trigger { ".trigger" } else { "" },
-                        if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
-                        if booked { ".book" } else { "" },
-                        entry_branch(rest > 0, cont)
-                    ),
-                    sequence: 0,
-                    plan: entry(
-                        TemplateId::KobIfdAsk.for_program(tok.1),
-                        s.encode_for(fam),
-                        "settle",
-                        vec![
-                            nb(n),
-                            Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
-                            Arg::Int(0),
-                            Arg::Int(i as i64),
-                            Arg::Bytes(c.prefix.clone()),
-                            Arg::Bytes(c.suffix.clone()),
-                            Arg::Int(ev_arg),
-                            Arg::Int(tk_arg),
-                            Arg::Int(t_arg),
-                        ],
-                    ),
-                    extras,
-                    suffix: format!("@{}", tok.1.name()),
-                    flows: vec![(tok, n, 0)],
-                    merge: None,
-                    adjust: None,
-                }
-            }
+            Leg::IfdBid { order, evidence: ev, t, .. } => plan_ifd_bid(&cx, order, *ev, *t, &mut exts)?,
+            Leg::IfdAsk { order, custody, evidence: ev, t, .. } => plan_ifd_ask(&cx, order, custody, *ev, *t, &mut exts)?,
             Leg::Pair { .. } | Leg::CondPair { .. } | Leg::IfdPair { .. } => {
                 let (a, bt) = pair_toks[i].expect("pair leg");
-                pair_exts(l, a, bt, &mut merge_ext)?;
+                pair_exts(l, a, bt, &mut |t, e| exts.merge(t, e))?;
                 pair::plan_leg(b, &lay, i, l, calcs[i].as_ref().expect("pair calc"), a, bt, lock).map_err(|e| leg_fill_error(i, e))?
             }
         };
@@ -3338,7 +3429,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                 if strict && !tk.state.is_holder(t.1) {
                     return invalid("taker tokens must be key-owned (a token owned by an order id is a stray)");
                 }
-                merge_ext(t.0, tk.state.extension())?;
+                exts.merge(t.0, tk.state.extension())?;
                 let w = if tk.state.is_user() { token_witness(&tk.state, t.1)? } else { Witness::CovenantId };
                 d.add_token_input(tk, *t, w)?;
             }
@@ -3440,7 +3531,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         if net > 0 {
             let to = b.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(b.taker).or(change);
             let to = to.ok_or_else(|| Error::Invalid("no receiver for the taker's tokens".into()))?;
-            let e = exts.get(&t.0).copied().ok_or_else(|| Error::Invalid("no token state in the batch".into()))?;
+            let e = exts.0.get(&t.0).copied().ok_or_else(|| Error::Invalid("no token state in the batch".into()))?;
             // A kept surplus (inventory) carries `keep_carrier` when the request names one.
             let carrier = match b.keep_carrier {
                 Some(c) if b.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
