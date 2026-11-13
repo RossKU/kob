@@ -125,13 +125,16 @@ This section is independent of KOB. An **order** is an unspent output locked by 
   payout or delivery at output `i`.
 - **(O3) Identifiable residue.** Whatever else the order forces is identifiable from trusted data:
   a continuation carries the order's covenant id in its covenant binding; a custody remainder is a
-  token output owned by the order's covenant id.
+  token output owned by the order's covenant id. An order that ends may also return what is left
+  to its maker at an output the program fixes by index: a return of unsold tokens, or a refund of
+  unspent KAS. The program may only require such an output to hold at least what is left. It is
+  claimed whatever it holds, so a surplus there never counts as a payment.
 
 An implementation of this extension needs a **claim function**: given the transaction and the
 trusted UTXO entries of its inputs (never payer hints), it returns for every output whether it is
-**claimed by an order** (a positional slot `0..k-1`, a continuation, or a custody remainder) or
-**unclaimed**. Positional slots are claimed by definition, whatever they contain. The extension's
-verifier rules (section 8) consume only this function. An order book that cannot provide a claim
+**claimed by an order** (a positional slot `0..k-1`, a continuation, a custody remainder, or an
+end-of-fill return to the maker) or **unclaimed**. Positional slots are claimed by definition,
+whatever they contain. The extension's verifier rules (section 8) consume only this function. An order book that cannot provide a claim
 function, or whose orders do not satisfy O1 to O3, cannot implement the extension safely.
 
 ## 5. Payload
@@ -318,7 +321,16 @@ Compute the claim function of section 4 from trusted data:
 - every output with a covenant binding whose covenant id is the id of an order input is claimed
   (continuation);
 - every token output owned by the covenant id of an order input (owner scheme `0x04`) is claimed
-  (custody remainder).
+  (custody remainder);
+- an ask that ends with tokens unsold (IOC) returns them to its maker. The return is a token output
+  held by the maker's key, at the index of the ask's custody input. It is claimed (IOC return);
+- a bid at input `i` that ends in the transaction (no continuation) may owe its maker the KAS it
+  did not spend, beyond its delivery carrier. From 1 KAS (`REFUND_MIN`) up, the covenant sends
+  that KAS to P2PK(maker) at output `M-1-i`, where `M` is the number of outputs. The covenant
+  only requires that output to hold at least the remainder. So when the remainder can reach 1 KAS
+  and output `M-1-i` pays P2PK(maker), it is claimed whatever its value (bid refund). A surplus
+  on it is not a payment to anyone. If the merchant is the bid's maker and no other output pays
+  it, the payment is `route_aliasing` (section 8.3).
 
 ### 8.3 Exact merchant gain over unclaimed outputs only (anti-aliasing)
 

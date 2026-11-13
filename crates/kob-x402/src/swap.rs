@@ -342,9 +342,10 @@ struct Leg {
     amount_left: i64,
     tif: i64,
     maker: [u8; 32],
-    /// A bid: the most KAS its terminal fill can send back to the maker as a refund output of its own (the escrow less the
-    /// delivery carrier and the least the fill can spend, `BidState::spend_at` at the order price); 0 for an ask. The bid
-    /// covenant puts that refund at output `M - 1 - input` (M the number of outputs), a plain P2PK output of the maker.
+    /// A bid: the most KAS its terminal fill can owe the maker as a refund output of its own (the escrow less the delivery
+    /// carrier and the least the fill can spend, `BidState::spend_at` at the lowest quote); 0 for an ask. The bid covenant
+    /// puts that refund at output `M - 1 - input` (M the number of outputs), a plain P2PK output of the maker holding at
+    /// least what the fill leaves. The verifier only uses it to know whether a refund may be due (`REFUND_MIN` or more).
     refund_cap: i64,
 }
 
@@ -670,6 +671,9 @@ pub fn verify_swap_facts(
                     }
                 }
                 AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
+                    // The lowest quote a fill can take: the price, or for a rising bid priceEnd when that is lower (the
+                    // covenant clamps the quote to priceEnd). It gives the most a terminal fill can owe the maker.
+                    let p_min = if s.slope != 0 { s.price.min(s.price_end) } else { s.price };
                     let t = order_token(
                         pol,
                         state.family(),
@@ -690,11 +694,15 @@ pub fn verify_swap_facts(
                         amount_left: 0,
                         tif: s.tif,
                         maker: s.maker,
-                        refund_cap: s
-                            .spend_at(amount, s.price)
-                            .and_then(|spend| i64::try_from(entry.amount).ok()?.checked_sub(spend)?.checked_sub(s.delivery_carrier))
-                            .unwrap_or(0)
-                            .max(0),
+                        refund_cap: {
+                            // an upper bound: a spend the arithmetic cannot price counts as none
+                            let spend = s.spend_at(amount, p_min).unwrap_or(0).max(0);
+                            i64::try_from(entry.amount)
+                                .ok()
+                                .and_then(|v| v.checked_sub(spend)?.checked_sub(s.delivery_carrier))
+                                .unwrap_or(0)
+                                .max(0)
+                        },
                     }
                 }
                 other => {
@@ -886,7 +894,9 @@ pub fn verify_swap_facts(
     let mut token_change_spent: BTreeSet<[u8; 32]> = BTreeSet::new();
     let mut claimed_spks: Vec<(usize, ScriptPublicKey)> = Vec::new();
     // a bid that ends in this transaction (no continuation) returns the KAS beyond its delivery carrier to its maker from
-    // 1 KAS up, as a plain output at `M - 1 - input`: claimed by that bid (one output per bid input)
+    // 1 KAS up, as a plain output at `M - 1 - input`: claimed by that bid (one output per bid input). The covenant only
+    // requires that output to hold at least the remainder, so it is claimed whatever its value: a surplus there counts
+    // as nothing for the merchant, and the output can never be the merchant's payment (section 8.2 of the spec).
     let continued: BTreeSet<[u8; 32]> = outs.iter().filter_map(|o| o.covenant.map(|b| b.covenant_id.as_bytes())).collect();
     let mut refund_used: BTreeSet<usize> = BTreeSet::new();
     for (j, o) in outs.iter().enumerate() {
@@ -953,7 +963,6 @@ pub fn verify_swap_facts(
                         && !refund_used.contains(&l.input)
                         && outs.len().checked_sub(1 + l.input) == Some(j)
                         && l.refund_cap >= kob_protocol::tx::REFUND_MIN as i64
-                        && o.value <= l.refund_cap as u64
                         && p2pk_key(&o.script_public_key) == Some(l.maker)
                 });
                 if let Some(li) = refund_of {
@@ -985,7 +994,7 @@ pub fn verify_swap_facts(
         if alias {
             return Err(X402Error::payload(
                 Diag::RouteAliasing,
-                "the only output that pays the merchant is an order's own payout (positional slot or continuation)",
+                "the only output that pays the merchant is an order's own payout (positional slot, continuation, custody return or bid refund)",
             ));
         }
         if let Some(m) = &merchant {

@@ -320,14 +320,22 @@ fn digest_for(offer: &PaymentRequirements, pay_asset: &str, idx: u32, expires_at
 }
 
 /// A payment from a hand-built batch: `claimed_idx` is the payment output index the payer claims.
-fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usize, claimed_idx: u32) -> PaymentPayload {
+fn manual(offer: &PaymentRequirements, pay_asset: &str, batch: Batch, k: usize, claimed_idx: u32) -> PaymentPayload {
+    let prep = manual_prep(offer, pay_asset, batch, k, claimed_idx);
+    let sigs = sign_locally(&prep.built, &keys()).unwrap();
+    let (tx, entries) = assemble(&prep.built, &sigs).unwrap();
+    prep.assemble_payload(&tx, &entries).unwrap()
+}
+
+/// The unsigned [`manual`] payment, for an [`attack`] to edit.
+fn manual_prep(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usize, claimed_idx: u32) -> PreparedSwap {
     let expires_at = iso_from_ms(NOW_MS + 60_000);
     let digest = digest_for(offer, pay_asset, claimed_idx, &expires_at);
     batch.records = vec![Record::X402 { reference: digest.to_vec() }];
     let built = build_batch(&batch, &kob_protocol::budget::lookup).unwrap();
     let orders: Vec<Outpoint> = built.tx.inputs.iter().take(k).map(|i| Outpoint::new(i.transaction_id, i.index)).collect();
-    let prep = PreparedSwap {
-        built: built.clone(),
+    PreparedSwap {
+        built,
         offer: offer.clone(),
         request_hash: RH.into(),
         pay_asset: pay_asset.into(),
@@ -340,10 +348,7 @@ fn manual(offer: &PaymentRequirements, pay_asset: &str, mut batch: Batch, k: usi
         payer_address: None,
         warnings: vec![],
         payment_identifier: MANUAL_PID.into(),
-    };
-    let sigs = sign_locally(&built, &keys()).unwrap();
-    let (tx, entries) = assemble(&built, &sigs).unwrap();
-    prep.assemble_payload(&tx, &entries).unwrap()
+    }
 }
 
 fn base_batch(legs: Vec<Leg>) -> Batch {
@@ -832,6 +837,126 @@ fn aliasing_merchant_is_the_maker_of_the_filled_ask_is_rejected() {
     assert_eq!(tx.outputs[1].value, payout);
     assert_eq!(tx.outputs[1].script_public_key, p2pk_spk(&pk(MERCHANT)));
     f.policy.swap_enabled = true;
+    assert_eq!(diag(f.verify(&offer, &p)), Diag::RouteAliasing);
+}
+
+/// A bid of A made by the merchant's own key, with `value` sompi of escrow, put on the chain.
+fn merchant_bid(f: &Fx, tag: u8, covb: u8, state: BidState, value: u64) -> OrderUtxo<BidState> {
+    assert_eq!(state.maker, pk(MERCHANT), "fixture: the merchant makes the bid");
+    let bid = common::order(tag, value, common::cov(covb), 1_000, state);
+    put_bid(&f.chain, &bid);
+    bid
+}
+
+/// SW1-shaped batch that fills 3 whole tokens of `bid` (which ends it) and pays the merchant `amount` KAS.
+fn ending_fill_batch(f: &Fx, bid: &OrderUtxo<BidState>, amount: u64) -> Batch {
+    Batch {
+        legs: vec![Leg::Bid { order: bid.clone(), amount: 3 * WHOLE, t: None }],
+        taker_tokens: vec![f.payer_tok.clone()],
+        taker: Some(pk(PAYER)),
+        payments: vec![kas_payment(amount)],
+        ..base_batch(vec![])
+    }
+}
+
+/// The attack on a merchant who also makes the bid the payer sells into. The bid ends and refunds `rem` to the
+/// merchant's key at its refund slot, the last output. The payer drops the payment output, tops the refund slot up to
+/// the offered `amount` (the bid covenant only wants at least `rem` there) and keeps `rem` in its own change. The
+/// merchant receives `amount`, but `rem` of it is its own escrow. Returns the payment and the trusted UTXO entries.
+fn pad_refund_into_payment(
+    f: &Fx,
+    offer: &PaymentRequirements,
+    bid: &OrderUtxo<BidState>,
+    amount: u64,
+) -> (PaymentPayload, Vec<UtxoEntry>) {
+    let pay_asset = hex(&TOKEN_COV);
+    let n = manual_prep(offer, &pay_asset, ending_fill_batch(f, bid, amount), 1, 0).built.tx.outputs.len();
+    // the merchant output becomes the last output once the payment output is dropped
+    let prep = manual_prep(offer, &pay_asset, ending_fill_batch(f, bid, amount), 1, (n - 2) as u32);
+    let mut trusted = vec![];
+    let p = attack(&prep, |tx, entries, _| {
+        let merchant = p2pk_spk(&pk(MERCHANT));
+        let last = tx.outputs.len() - 1;
+        assert_eq!(tx.outputs[last].script_public_key, merchant, "fixture: the refund closes the transaction");
+        let rem = tx.outputs[last].value;
+        assert!(rem < amount, "fixture: the payment needs more than the refund");
+        let mi = tx.outputs.iter().position(|o| o.script_public_key == merchant && o.value == amount).expect("payment output");
+        assert!(mi < last);
+        let payer = p2pk_spk(&pk(PAYER));
+        let ci = tx.outputs.iter().position(|o| o.script_public_key == payer && o.covenant.is_none()).expect("payer KAS change");
+        tx.outputs[ci].value += rem;
+        tx.outputs[last].value = amount;
+        tx.outputs.remove(mi);
+        trusted = entries.clone();
+    });
+    (p, trusted)
+}
+
+fn signed_tx(p: &PaymentPayload) -> Transaction {
+    SafeTx::parse(&p.payload.transaction, 1 << 20).unwrap().to_consensus().unwrap().tx
+}
+
+/// The merchant's IOC bid ends in the payment and refunds 3 KAS at its slot `M - 1 - 0`. The payer pads that slot up
+/// to the offered 5 KAS and drops the payment: the bid covenant accepts it (the slot holds at least the remainder),
+/// but the merchant gains only 2 KAS. The verifier claims the slot for the bid whatever its value, so the only output
+/// that pays the merchant is the bid's own refund: aliasing.
+#[test]
+fn aliasing_a_bid_refund_padded_into_the_payment_is_rejected() {
+    let f = fx();
+    let bs = BidState { tif: 1, ..common::bid(MERCHANT, P245, T) };
+    let value = (bs.used(3 * WHOLE).expect("budget") + DC) as u64 + 3 * KAS;
+    let bid = merchant_bid(&f, 50, 0xc1, bs, value);
+    let offer = f.kas_offer(5 * KAS);
+    let (p, entries) = pad_refund_into_payment(&f, &offer, &bid, 5 * KAS);
+    let tx = signed_tx(&p);
+    let last = tx.outputs.last().unwrap();
+    assert_eq!((last.script_public_key.clone(), last.value), (p2pk_spk(&pk(MERCHANT)), 5 * KAS));
+    assert_eq!(tx.outputs.iter().filter(|o| o.script_public_key == p2pk_spk(&pk(MERCHANT))).count(), 1);
+    kob_protocol::verify::validate(&tx, &entries).expect("the bid covenant accepts the padded refund");
+    assert_eq!(diag(f.verify(&offer, &p)), Diag::RouteAliasing);
+}
+
+/// The honest payment for the same bid: the refund holds exactly the remainder and the merchant is paid at an output of
+/// its own. Both outputs pay the merchant's key; the refund is the bid's, the other one is the payment.
+#[test]
+fn a_bid_refund_of_exactly_the_remainder_to_the_merchant_still_verifies() {
+    let f = fx();
+    let bs = BidState { tif: 1, ..common::bid(MERCHANT, P245, T) };
+    let value = (bs.used(3 * WHOLE).expect("budget") + DC) as u64 + 3 * KAS;
+    let bid = merchant_bid(&f, 50, 0xc1, bs, value);
+    let offer = f.kas_offer(5 * KAS);
+    let p = f.pay(&offer, &f.sw1_quote(&bid), &f.funds(false)).unwrap();
+    let v = f.accept(&offer, &p.payload);
+    let outs = &v.tx.outputs;
+    let last = outs.last().unwrap();
+    assert_eq!((last.script_public_key.clone(), last.value), (p2pk_spk(&pk(MERCHANT)), 3 * KAS), "the refund is exactly rem");
+    assert_eq!(v.merchant_output.amount, 5 * KAS);
+    assert!((v.payment_output_index as usize) < outs.len() - 1, "the payment is not the refund");
+}
+
+/// A rising bid whose priceEnd is below its price fills at priceEnd, so its refund is larger than the order price
+/// suggests (here 3 KAS where the price would leave none). The verifier still claims the refund slot: the honest
+/// payment verifies, and the padded refund is aliasing.
+#[test]
+fn a_rising_bid_clamped_below_its_price_still_claims_its_refund() {
+    let f = fx();
+    let bs = BidState { tif: 1, price: P245 + KAS as i64, price_end: P245, slope: 1, ..common::bid(MERCHANT, P245, T) };
+    // the escrow funds the fill at the order price, so the price leaves no remainder; the fill pays priceEnd
+    let value = (bs.used(3 * WHOLE).expect("budget") + DC) as u64;
+    assert_eq!(bs.spend_at(3 * WHOLE, bs.price), bs.used(3 * WHOLE), "fixture: nothing left at the order price");
+    let bid = merchant_bid(&f, 51, 0xc2, bs, value);
+    let offer = f.kas_offer(5 * KAS);
+    let honest = manual(&offer, &hex(&TOKEN_COV), ending_fill_batch(&f, &bid, 5 * KAS), 1, 1);
+    let tx = signed_tx(&honest);
+    assert_eq!(tx.outputs[1].value, 5 * KAS, "fixture: the payment is output 1");
+    let last = tx.outputs.last().unwrap();
+    assert_eq!((last.script_public_key.clone(), last.value), (p2pk_spk(&pk(MERCHANT)), 3 * KAS), "the refund at priceEnd");
+    let v = f.verify(&offer, &honest).unwrap_or_else(|e| panic!("verification failed: {e}"));
+    kob_protocol::verify::validate(&v.tx, &v.entries).expect("engine validation");
+    assert_eq!(v.payment_output_index, 1);
+
+    let (p, entries) = pad_refund_into_payment(&f, &offer, &bid, 5 * KAS);
+    kob_protocol::verify::validate(&signed_tx(&p), &entries).expect("the bid covenant accepts the padded refund");
     assert_eq!(diag(f.verify(&offer, &p)), Diag::RouteAliasing);
 }
 
