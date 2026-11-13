@@ -18,8 +18,9 @@
 //!
 //! The fallback is checked after `after_failures` failed calls in a row and `after` without any
 //! answer. The check wants the right network, a synced node and a node that knows the cursor. When
-//! the fallback passes, it becomes the chain source. A slow primary whose small calls still answer
-//! never switches.
+//! the fallback passes, it becomes the chain source. Its answers reset the count, so a slow primary
+//! whose small calls still answer is not switched away from this way. Its failing chain requests
+//! can still switch it, as the next paragraph says.
 //!
 //! The primary can fail its chain requests while its small calls answer. The follower then reports
 //! a failing authority (`ChainSource::authority_failing`). The active tier first hands the chain
