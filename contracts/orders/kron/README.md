@@ -47,7 +47,7 @@ State (template offset 0, 46 B): `0x20 owner[32] | 0x01 id_type | 0x08 amount (L
   `owners.holder`; KForge, testnet-10, which refuses address presence): the build of an order follows from the token
   program its state pins (`TemplateId::for_program`, `AnyState::template_id`), and an instance of the other build is
   not an order KOB recognises. They are testnet only (the testnet-10 deployment record lists them, the mainnet one
-  does not). The pair templates have no such build: they refuse a token whose holders are id_type 0.
+  does not). The pair templates have no such build and hard-code `KRON_DELIVERY = 0x03`, so a token whose holders are id_type 0 would refuse every return to the maker, and only the maker's cancel frees the custody (it fails closed). KOB's builders refuse to create such an order; nothing on chain does.
 - **Never accepted**: `is_minter = 1`, foreign owners, `id_type 0/1` on custody or continuation outputs.
 
 ## KRON token limits that shape the orders

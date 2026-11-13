@@ -201,6 +201,8 @@ each pair template is one template for both families of each of its tokens (its 
 
 Every order type below exists on a pair too (*Pair orders*); the table names the KAS-quoted covenants.
 
+On chain, every `tif` other than 0 (GTC) and 2 (FOK) behaves as IOC (decision D7). KOB's software (`kobd::sanity::check`) does not list, fill or refund an order with `tif` outside {0, 1, 2}; its maker can still cancel it, and anyone can still fill or refund it on chain.
+
 | Order type | Side | Covenant and key fields | Execution | What the user sees |
 |---|---|---|---|---|
 | Limit GTC | sell / buy | `KobAsk` / `KobBid`, tif 0 | rests; any crossing fills at the limit or better | fills at the limit or better; lives until cancelled or 90 days idle |
@@ -259,6 +261,11 @@ returns the full budget (buy-first) or at least the prefund of the re-armed amou
 costs the entry.
 
 The pair entries (`KobIfdPair`) repeat the same way in the quote token B (*Pair if-done entries*).
+
+**Keeper tip per cycle.** On every repeating entry (`KobIfdBid`, `KobIfdAsk`, `KobIfdPair` and their KRON twins) `update` pays
+`keeperTip` out of the entry's own KAS, and the placement amounts do not include it. Each re-arm cycle (fill, take profit,
+merge, keeper `update`) therefore costs the entry one keeper tip, up to 0.022 KAS. After many cycles a fill may need the
+filler to top up the carriers, or the entry waits for its refund. Nothing is stolen.
 
 ## Stop entries (IFD / IFO)
 
@@ -349,8 +356,10 @@ same pair (*Pair trigger rule*, evidence mode 1).
 The logic of `KobCondAsk` (side ASK) / `KobCondBid` (side BID) with the price in B per whole A and the settlement of
 `KobPair`: one UTXO, both legs, partial fills keep both.
 
-- **ASK** (sells A; its custody is exactly `amountLeft` of A): stop leg BELOW the market (sell stop), take-profit leg above
+- **ASK** (sells A; KOB's builders place exactly `amountLeft` of A in its custody): stop leg BELOW the market (sell stop), take-profit leg above
   it. A fill of n pays the maker `tOut ≥ ⌈n·legPrice / scale(A)⌉` of B at output i.
+  Unlike `KobPair`, the covenant does not require `custody == amountLeft`. A hand-built order with a different custody
+  only affects its maker: a surplus returns to the maker on the last fill, and a shortfall fails the fills that would overdraw it.
 - **BID** (buys A; its custody is a B escrow): stop leg ABOVE the market (buy stop), limit leg below it. A fill of n
   delivers exactly n of A at output i and releases at most `⌊n·legPrice / scale(A)⌋` of B. The builders refuse an escrow
   below `⌊amountLeft·worst / scale(A)⌋` (`worst` = the highest leg price, the stop band included); the wallet adds one
