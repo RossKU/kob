@@ -1,11 +1,16 @@
-//! The write path: one atomic commit per VSPC batch.
+//! The write path of the indexer: one atomic commit per VSPC batch.
 //!
-//! A commit contains, in one SQLite transaction: the reverts for `removed` chain blocks (tip-first),
-//! the applied `added` blocks (in the order the node returned them), the new cursor, the pruning of
-//! chain-block rows older than the reorg window (and of the KCC-23 candidates older than the declaration window), and the
-//! record-log position. The log frame (the
-//! extracted KOB records of the batch) is appended and fsynced just before the commit; if the commit
-//! fails the frame is cut off again. The cursor never advances on any error.
+//! A commit is one SQLite transaction. It holds:
+//! - The reverts for the `removed` chain blocks, tip-first.
+//! - The applied `added` blocks, in the order the node returned them.
+//! - The new cursor.
+//! - The pruning of chain-block rows older than the reorg window, and of the KCC-23 candidates
+//!   older than the declaration window.
+//! - The position of the record log.
+//!
+//! The log frame, which holds the extracted KOB records of the batch, is appended and fsynced just
+//! before the commit. If the commit fails, the frame is cut off again. The cursor never advances on
+//! any error.
 
 use super::db::{meta_get, meta_set, DbError, DbResult};
 use super::processor::{revert_block, Delta, OpReport, Processor};
@@ -16,6 +21,7 @@ use crate::rpc::types::{AddedBlock, ChainBlockHeader, VspcBatch};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use std::collections::HashMap;
 
+/// Why a batch was not committed.
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
     #[error(transparent)]
@@ -38,49 +44,74 @@ impl From<rusqlite::Error> for IngestError {
     }
 }
 
+/// The chain block the store has followed up to, with its DAA score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
+    /// Hash of the chain block.
     pub hash: Hash32,
+    /// DAA score of the chain block.
     pub daa: u64,
 }
 
+/// What one commit did.
 #[derive(Debug)]
 pub struct Applied {
+    /// The event sent to the subscribers.
     pub event: IndexEvent,
+    /// Chain blocks the node reported as removed.
     pub removed_hashes: usize,
+    /// Removed chain blocks whose rows were reverted.
     pub reverted_rows_blocks: usize,
-    /// Removed chain blocks this store does not hold (older than its reorg window, or before its start): nothing of theirs
-    /// can be reverted. Consensus finality bounds a reorg to the window (`IngestConfig::reorg_window_daa`, 12 h by default),
-    /// so this is reported (a warning) rather than guessed at.
+    /// Removed chain blocks this store does not hold.
+    ///
+    /// They are older than its reorg window or before its start, so nothing of theirs can be
+    /// reverted. Consensus finality bounds a reorg to the window (`IngestConfig::reorg_window_daa`,
+    /// 12 h by default). The count is reported, as a warning, rather than guessed at.
     pub unknown_removed: usize,
+    /// Chain blocks applied.
     pub added: usize,
+    /// Transactions of the batch that touched KOB state.
     pub relevant_txs: u64,
+    /// Orders created by the batch.
     pub new_orders: u64,
-    /// A placement of the batch announced a release newer than this build (`super::release`): the notice may have changed.
+    /// A placement of the batch announced a release newer than this build, so the notice may have
+    /// changed (`super::release`).
     pub release_noticed: bool,
+    /// Transactions of the batch recorded as rejects.
     pub rejects: u64,
-    /// Log frame number and size, when a frame was written.
+    /// Log frame number, when a frame was written.
     pub log_n: Option<u64>,
+    /// Size of the log frame in bytes.
     pub log_bytes: u64,
+    /// The cursor after the commit.
     pub cursor: Cursor,
+    /// What the operator operations of the commit did.
     pub ops: OpReport,
 }
 
 /// Tunables of the write path.
 #[derive(Debug, Clone, Copy)]
 pub struct IngestConfig {
-    /// Chain blocks older than this many DAA behind the cursor are deleted (the reorg / finality window).
+    /// Chain blocks older than this many DAA behind the cursor are deleted. This is the reorg and
+    /// finality window.
     pub reorg_window_daa: u64,
-    /// A batch with nothing to record is still logged when the cursor moved this far since the last
-    /// logged cursor, so a rebuild from the log resumes close to the tip.
+    /// A batch with nothing to record is still logged when the cursor moved this far since the
+    /// last logged cursor, so a rebuild from the log resumes close to the tip.
     pub checkpoint_daa: u64,
-    /// KCC-23 candidate preparations older than this many DAA behind the cursor are pruned (`super::kcc23::prune`).
+    /// KCC-23 candidate preparations older than this many DAA behind the cursor are pruned, see
+    /// `super::kcc23::prune`.
     pub declaration_window_daa: u64,
-    /// Threads of the pure per-batch work done before the single database pass (`record::precompute`): 1 does it inline.
+    /// Threads for the pure per-batch work that precedes the single database pass.
+    ///
+    /// The work is `record::precompute`, and 1 does it inline.
     pub verify_threads: usize,
-    /// Lean storage ([`super::lean`]): the batches `Ingest::lean_prune` deletes; `None`: the store keeps its history.
+    /// Lean storage ([`super::lean`]), which `Ingest::lean_prune` applies in batches.
+    ///
+    /// `None` means the store keeps its history.
     pub lean: Option<super::lean::LeanConfig>,
-    /// Archive pruning ([`super::archive`]) of a store that keeps its history; `None`: nothing is pruned (a lean store prunes by `lean`).
+    /// Archive pruning ([`super::archive`]) of a store that keeps its history.
+    ///
+    /// `None` means nothing is pruned. A lean store prunes by `lean`.
     pub archive: Option<super::archive::ArchiveConfig>,
 }
 
@@ -97,8 +128,10 @@ impl Default for IngestConfig {
     }
 }
 
-/// The verification threads for a configured value: 0 is the available parallelism, at most 4 (the database pass stays one
-/// thread; four keep the pure work well ahead of it on a KOB-heavy chain).
+/// The verification threads for a configured value.
+///
+/// 0 is the available parallelism, at most 4. The database pass stays one thread, and four keep
+/// the pure work well ahead of it on a KOB-heavy chain.
 pub fn verify_threads(configured: usize) -> usize {
     match configured {
         0 => std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(4),
@@ -130,43 +163,52 @@ impl Watcher {
 /// The transaction of the selected chain that spent a watched outpoint ([`Ingest::watch_spend`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Spender {
+    /// Id of the spending transaction.
     pub txid: Hash32,
-    /// The chain block that accepted it, and its DAA score.
+    /// The chain block that accepted it.
     pub block: Hash32,
+    /// DAA score of that chain block.
     pub daa: u64,
     /// Its outputs.
     pub outputs: Vec<SpenderOutput>,
 }
 
-/// An output of a [`Spender`]: script public key version, script, KAS value and the covenant id the output is bound to.
+/// An output of a [`Spender`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpenderOutput {
+    /// Script public key version.
     pub version: u16,
+    /// Script public key script.
     pub script: Vec<u8>,
+    /// Value in sompi.
     pub value: u64,
+    /// The covenant id the output is bound to.
     pub covenant_id: Option<Hash32>,
 }
 
 /// Most outpoints whose spend is followed at once.
 const MAX_SPEND_WATCHES: usize = 4_096;
 
-/// A watched transaction: where the selected chain accepted it now, and the consumers following it.
+/// A watched transaction: where the selected chain accepts it now, and the consumers following it.
 #[derive(Clone, Copy, Debug)]
 struct Watch {
     acc: Option<Acceptance>,
     owners: u8,
 }
 
+/// The single writer of the indexer database and the record log.
 pub struct Ingest {
     pub(crate) conn: Connection,
     pub(crate) proc: Processor,
     log: Option<RecordLog>,
     cfg: IngestConfig,
-    /// Transactions consumers (the matcher) asked to have followed, and where the selected chain
-    /// accepted them now. In memory only: updated after each commit, reorgs included.
+    /// Transactions that consumers, such as the matcher, asked to have followed, and where the
+    /// selected chain accepted them now. In memory only. It is updated after each commit, reorgs
+    /// included.
     watch: HashMap<Hash32, Watch>,
-    /// Outpoints (intent UTXOs of the x402 facilitator) whose spender consumers asked to have followed, and the transaction of the
-    /// selected chain that spent each now. In memory only, like `watch`; bounded by [`MAX_SPEND_WATCHES`].
+    /// Outpoints whose spender consumers asked to have followed, and the transaction of the
+    /// selected chain that spent each now. The outpoints are intent UTXOs of the x402 facilitator.
+    /// In memory only, like `watch`, and bounded by [`MAX_SPEND_WATCHES`].
     spend_watch: HashMap<(Hash32, u32), Option<Spender>>,
     /// Bumped after every commit (`super::DataGeneration`).
     generation: super::DataGeneration,
@@ -184,12 +226,12 @@ fn set_cursor(conn: &Connection, c: &Cursor) -> DbResult<()> {
     Ok(())
 }
 
-/// The stored `history_from_daa` marker (see [`Ingest::history_from_daa`]).
+/// The stored `history_from_daa` marker, see [`Ingest::history_from_daa`].
 pub fn history_from_daa(conn: &Connection) -> DbResult<Option<u64>> {
     Ok(meta_get(conn, "history_from_daa")?.and_then(|d| d.parse().ok()))
 }
 
-/// Position of the record log the database has committed (frames `0..n`).
+/// The position of the record log that the database has committed, as frames `0..n`.
 pub fn records_next_n(conn: &Connection) -> DbResult<u64> {
     Ok(meta_get(conn, "records_next_n")?.and_then(|d| d.parse().ok()).unwrap_or(0))
 }
@@ -228,6 +270,7 @@ impl Blocks<'_> {
 }
 
 impl Ingest {
+    /// Wraps a connection, a processor and an optional record log, with the default config.
     pub fn new(conn: Connection, proc: Processor, log: Option<RecordLog>) -> Self {
         Ingest {
             conn,
@@ -240,36 +283,44 @@ impl Ingest {
         }
     }
 
-    /// Builds the candle aggregates of every token that has fills and none ([`super::candles::backfill`]).
+    /// Builds the candle aggregates of every token that has fills and no aggregates.
+    ///
+    /// See [`super::candles::backfill`].
     pub fn backfill_candles(&self) -> DbResult<super::candles::Backfill> {
         super::candles::backfill(&self.conn, &self.proc.tokens)
     }
 
+    /// Sets the write-path tunables.
     pub fn with_config(mut self, cfg: IngestConfig) -> Self {
         self.cfg = cfg;
         self
     }
 
+    /// The database connection of the writer.
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
 
-    /// The store's data generation, bumped after every commit of this write path ([`super::DataGeneration`]).
+    /// The data generation of the store, bumped after every commit ([`super::DataGeneration`]).
     pub fn generation(&self) -> &super::DataGeneration {
         &self.generation
     }
 
-    /// Lean storage: the store prunes (`lean_prune`).
+    /// Whether this is a lean store, which prunes with `lean_prune`.
     pub fn is_lean(&self) -> bool {
         self.cfg.lean.is_some()
     }
 
-    /// The store prunes (lean or archive): the follower runs [`Ingest::prune_batch`] between its steps.
+    /// Whether the store prunes, lean or archive.
+    ///
+    /// The follower then runs [`Ingest::prune_batch`] between its steps.
     pub fn prunes(&self) -> bool {
         self.cfg.lean.is_some() || self.cfg.archive.is_some()
     }
 
-    /// One bounded pruning batch of the store's kind (lean, else archive); `None` when the store does not prune.
+    /// Runs one bounded pruning batch of the store's kind, lean or else archive.
+    ///
+    /// It returns `None` when the store does not prune.
     pub fn prune_batch(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
         if self.cfg.lean.is_some() {
             return self.lean_prune(node_daa);
@@ -277,8 +328,11 @@ impl Ingest {
         self.archive_prune(node_daa)
     }
 
-    /// One bounded batch of the archive pruning ([`super::archive::prune`]) at the node position `node_daa` (the cursor's, when
-    /// unknown); `None` when the store does not prune so. A batch that deleted something bumps the data generation.
+    /// Runs one bounded batch of the archive pruning ([`super::archive::prune`]).
+    ///
+    /// `node_daa` is the position of the node, and the cursor's when unknown. It returns `None`
+    /// when the store has no archive pruning. A batch that deleted something bumps the data
+    /// generation.
     pub fn archive_prune(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
         let Some(a) = self.cfg.archive else { return Ok(None) };
         let Some(cursor) = get_cursor(&self.conn)? else { return Ok(None) };
@@ -289,8 +343,10 @@ impl Ingest {
         Ok(Some(rep))
     }
 
-    /// The archive pruning until a batch finds nothing more, at the cursor (`kobd db replay`: the rebuilt store holds what a pruned one
-    /// does). Returns the rows deleted.
+    /// Runs the archive pruning at the cursor until a batch finds nothing more.
+    ///
+    /// `kobd db replay` uses it so that the rebuilt store holds what a pruned one does. It returns
+    /// the rows deleted.
     pub fn archive_prune_all(&mut self) -> Result<usize, IngestError> {
         let mut rows = 0;
         while let Some(rep) = self.archive_prune(None)? {
@@ -302,15 +358,17 @@ impl Ingest {
         Ok(rows)
     }
 
-    /// Lean storage: changes the size cap in bytes (0: none) of a lean store (tests).
+    /// Changes the size cap in bytes of a lean store, for tests. 0 means no cap.
     pub fn set_lean_cap(&mut self, bytes: u64) {
         if let Some(l) = self.cfg.lean.as_mut() {
             l.max_db_bytes = bytes;
         }
     }
 
-    /// One bounded batch of the lean pruning ([`super::lean::prune`]) at the node position `node_daa` (the cursor's, when
-    /// unknown); `None` when the store is not lean. A batch that deleted something bumps the data generation.
+    /// Runs one bounded batch of the lean pruning ([`super::lean::prune`]).
+    ///
+    /// `node_daa` is the position of the node, and the cursor's when unknown. It returns `None`
+    /// when the store is not lean. A batch that deleted something bumps the data generation.
     pub fn lean_prune(&mut self, node_daa: Option<u64>) -> Result<Option<super::lean::LeanReport>, IngestError> {
         let Some(lean) = self.cfg.lean else { return Ok(None) };
         let Some(cursor) = get_cursor(&self.conn)? else { return Ok(None) };
@@ -321,19 +379,22 @@ impl Ingest {
         Ok(Some(rep))
     }
 
-    /// Follow the acceptance of `txid` for the matcher from now on (call before submitting it, so no
-    /// block is missed).
+    /// Follows the acceptance of `txid` for the matcher from now on.
+    ///
+    /// Call it before submitting the transaction, so that no block is missed.
     pub fn watch_tx(&mut self, txid: Hash32) {
         self.watch_tx_for(Watcher::Matcher, txid)
     }
 
-    /// Follow the acceptance of `txid` for `who` from now on.
+    /// Follows the acceptance of `txid` for `who` from now on.
     pub fn watch_tx_for(&mut self, who: Watcher, txid: Hash32) {
         self.watch.entry(txid).or_insert(Watch { acc: None, owners: 0 }).owners |= who.bit();
     }
 
-    /// Follow which transaction of the selected chain spends `out` from now on (a spend accepted before the call is not seen).
-    /// `false` when the table is full and `out` is not followed.
+    /// Follows which transaction of the selected chain spends `out` from now on.
+    ///
+    /// A spend accepted before the call is not seen. It returns `false` when the table is full and
+    /// `out` is not followed.
     pub fn watch_spend(&mut self, out: (Hash32, u32)) -> bool {
         if self.spend_watch.contains_key(&out) {
             return true;
@@ -345,18 +406,20 @@ impl Ingest {
         false
     }
 
-    /// Stop following the spend of `out`.
+    /// Stops following the spend of `out`.
     pub fn unwatch_spend(&mut self, out: &(Hash32, u32)) {
         self.spend_watch.remove(out);
     }
 
-    /// The spender of a watched outpoint: `None` when it is not watched, `Some(None)` when watched and not spent (or its accepting block
-    /// was reorged away).
+    /// The spender of a watched outpoint.
+    ///
+    /// It returns `None` when the outpoint is not watched. It returns `Some(None)` when it is
+    /// watched and not spent, or its accepting block was reorged away.
     pub fn spender_of(&self, out: &(Hash32, u32)) -> Option<Option<Spender>> {
         self.spend_watch.get(out).cloned()
     }
 
-    /// Stop following `txid` for `who` (other consumers keep their watch).
+    /// Stops following `txid` for `who`. Other consumers keep their watch.
     pub fn unwatch_tx_for(&mut self, who: Watcher, txid: &Hash32) {
         if let Some(w) = self.watch.get_mut(txid) {
             w.owners &= !who.bit();
@@ -366,15 +429,19 @@ impl Ingest {
         }
     }
 
-    /// Where the selected chain accepted a watched transaction: `None` when nobody watches it,
-    /// `Some(None)` when it is watched and not accepted (or its block was reorged away).
+    /// Where the selected chain accepted a watched transaction.
+    ///
+    /// It returns `None` when nobody watches it. It returns `Some(None)` when it is watched and
+    /// not accepted, or its block was reorged away.
     pub fn acceptance_of(&self, txid: &Hash32) -> Option<Option<Acceptance>> {
         self.watch.get(txid).map(|w| w.acc)
     }
 
-    /// The matcher's view: stop following every transaction of the matcher not in `keep`; returns
-    /// where the selected chain accepted each kept one now (`None`: not accepted, or its block was
-    /// reorged away).
+    /// Keeps the matcher's watches to those in `keep` and reports where each is accepted.
+    ///
+    /// The matcher stops following every transaction not in `keep`. For each kept one the result
+    /// holds where the selected chain accepted it now. `None` means it is not accepted, or its
+    /// block was reorged away.
     pub fn watched_acceptance(&mut self, keep: &[Hash32]) -> Vec<(Hash32, Option<Acceptance>)> {
         let keep_set: std::collections::HashSet<&Hash32> = keep.iter().collect();
         let bit = Watcher::Matcher.bit();
@@ -387,8 +454,10 @@ impl Ingest {
         keep.iter().map(|t| (*t, self.watch.get(t).filter(|w| w.owners & bit != 0).and_then(|w| w.acc))).collect()
     }
 
-    /// After a commit: transactions of removed chain blocks lose their acceptance, transactions of
-    /// the added blocks gain it (a transaction re-accepted by the new chain does both).
+    /// Updates the watches after a commit.
+    ///
+    /// Transactions of removed chain blocks lose their acceptance, and transactions of the added
+    /// blocks gain it. A transaction re-accepted by the new chain does both.
     fn track_acceptance(&mut self, removed: &[Hash32], blocks: &Blocks<'_>) {
         if self.watch.is_empty() && self.spend_watch.is_empty() {
             return;
@@ -441,42 +510,49 @@ impl Ingest {
         }
     }
 
+    /// The processor that applies the records.
     pub fn processor(&self) -> &Processor {
         &self.proc
     }
 
+    /// The stored cursor, or `None` for a database that has none yet.
     pub fn cursor(&self) -> DbResult<Option<Cursor>> {
         get_cursor(&self.conn)
     }
 
-    /// Set the cursor of a fresh database (start mode) without touching any rows.
+    /// Sets the cursor of a fresh database, for the start mode, without touching any rows.
     pub fn init_cursor(&self, c: &Cursor) -> DbResult<()> {
         set_cursor(&self.conn, c)
     }
 
-    /// Where the history of this store begins when it does not begin at the node's pruning point (`HealthSnapshot::history_from_daa`);
-    /// `None`: it read everything the node retained.
+    /// Where the history of this store begins, when it does not begin at the pruning point.
+    ///
+    /// `None` means it read everything the node retained. See `HealthSnapshot::history_from_daa`.
     pub fn history_from_daa(&self) -> DbResult<Option<u64>> {
         history_from_daa(&self.conn)
     }
 
-    /// Records that orders created before `daa` may be missing from this store (a start at the sink or at a block, a rebase past
-    /// unread chain). Only ever moves forward. Returns the value now stored.
+    /// Records that orders created before `daa` may be missing from this store.
+    ///
+    /// That happens after a start at the sink or at a block, and after a rebase past unread chain.
+    /// The marker only ever moves forward. It returns the value now stored.
     pub fn mark_history_from(&self, daa: u64) -> DbResult<u64> {
         let now = history_from_daa(&self.conn)?.map_or(daa, |d| d.max(daa));
         meta_set(&self.conn, "history_from_daa", &now.to_string())?;
         Ok(now)
     }
 
+    /// The number of the next record-log frame, or `None` without a log.
     pub fn records_next(&self) -> Option<u64> {
         self.log.as_ref().map(|r| r.next_n())
     }
 
+    /// The number of orders in the database.
     pub fn order_count(&self) -> DbResult<u64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM orders", [], |r| r.get::<_, i64>(0))? as u64)
     }
 
-    /// The newer release seen on chain often enough to tell the operator (`super::release`).
+    /// The newer release seen on chain often enough to tell the operator, see `super::release`.
     pub fn newer_release_seen(&self) -> DbResult<Option<super::release::NewerRelease>> {
         super::release::newer_seen(&self.conn)
     }
@@ -499,14 +575,14 @@ impl Ingest {
         Ok(conn.query_row("SELECT COALESCE(MAX(seq), 0) FROM blocks", [], |r| r.get(0))?)
     }
 
-    /// Apply one VSPC response requested from `start` (which must be the cursor).
+    /// Applies one VSPC response requested from `start`, which must be the cursor.
     pub fn apply_batch(&mut self, start: Hash32, batch: &VspcBatch) -> Result<Applied, IngestError> {
         let cursor = get_cursor(&self.conn)?.ok_or(IngestError::NoCursor)?;
         if start != cursor.hash {
             return Err(IngestError::Stale { requested: start, cursor: cursor.hash });
         }
         if batch.removed.is_empty() && batch.added.is_empty() {
-            // at the sink: nothing to commit (no fsync per idle poll)
+            // At the sink there is nothing to commit, so an idle poll costs no fsync.
             return Ok(Applied {
                 event: IndexEvent::default(),
                 removed_hashes: 0,
@@ -534,7 +610,7 @@ impl Ingest {
         self.commit_batch(Some(start), &batch.removed, Blocks::Live(&batch.added), None, true, &[], false, None)
     }
 
-    /// Shared by live batches, replays and rewinds.
+    /// Commits a batch. Live batches, replays and rewinds share it.
     #[allow(clippy::too_many_arguments)]
     fn commit_batch(
         &mut self,
@@ -572,7 +648,8 @@ impl Ingest {
         let mut log_blocks = Vec::new();
         match &blocks {
             Blocks::Live(added) => {
-                // the pure work of the whole batch first, on several threads; the database pass below stays single-threaded
+                // The pure work of the whole batch comes first, on several threads. The database
+                // pass below stays single-threaded.
                 let txs: Vec<&[crate::rpc::types::Tx]> = added.iter().map(|b| b.txs.as_slice()).collect();
                 let pre = super::record::precompute(&txs, self.cfg.verify_threads);
                 for b in *added {
@@ -610,15 +687,17 @@ impl Ingest {
         for op in ops {
             self.proc.apply_op(&tx, op, cursor.daa, &mut delta, &mut op_report)?;
         }
-        // the candle aggregates follow the fills this transaction wrote or reverted
+        // The candle aggregates follow the fills this transaction wrote or reverted.
         super::candles::refresh(&tx, &self.proc.tokens)?;
         set_cursor(&tx, &cursor)?;
-        // the reorg window: chain blocks older than it are final and no longer kept
+        // Chain blocks older than the reorg window are final and no longer kept.
         tx.execute("DELETE FROM blocks WHERE daa < ?1", [cursor.daa.saturating_sub(self.cfg.reorg_window_daa) as i64])?;
-        // the recorded outputs no later input can need (spent and final, or unspent past their retention)
+        // Delete the recorded outputs that no later input can need: spent and final, or unspent
+        // past their retention.
         super::outputs::prune(&tx, cursor.daa, self.cfg.reorg_window_daa)?;
-        // KCC-23 candidate preparations no genesis spent within the declaration window (a logged genesis carries the
-        // preparations it binds, so a replay, which prunes at the logged cursors only, never depends on this table for it)
+        // Delete the KCC-23 candidate preparations that no genesis spent within the declaration
+        // window. A logged genesis carries the preparations it binds, so a replay never depends on
+        // this table for them. A replay prunes at the logged cursors only.
         super::kcc23::prune(&tx, cursor.daa.saturating_sub(self.cfg.declaration_window_daa))?;
 
         let checkpoint_due = blocks.len() > 0 && cursor.daa >= logged_daa(&tx)?.saturating_add(self.cfg.checkpoint_daa);
@@ -630,7 +709,8 @@ impl Ingest {
             let log = self.log.as_mut().expect("checked");
             let rec = LogBatch {
                 start: start.or(old_cursor.map(|c| c.hash)).unwrap_or_default(),
-                // a reorg that touched no KOB row is not recorded: replay has no rows to revert either
+                // A reorg that touched no KOB row is not recorded, because replay has no rows to
+                // revert either.
                 removed: if reverted_relevant { removed.to_vec() } else { vec![] },
                 cursor: LogCursor { hash: cursor.hash, daa: cursor.daa },
                 blocks: log_blocks,
@@ -642,15 +722,17 @@ impl Ingest {
             log_n = Some(n);
             log_len = len;
         } else if let Some(n) = replayed {
-            // a replayed frame moves the position in the same transaction that applies it: a replay that stops part way
-            // (interrupted, a full disk, a frame that fails) resumes after the last frame it committed
+            // A replayed frame moves the position in the same transaction that applies it. A replay
+            // that stops part way, by an interruption, a full disk or a failing frame, resumes
+            // after the last frame it committed.
             meta_set(&tx, "records_next_n", &(n + 1).to_string())?;
             meta_set(&tx, "log_cursor_daa", &cursor.daa.to_string())?;
         }
         if let Err(e) = tx.commit() {
             if let (Some(n), Some(log)) = (log_n, self.log.as_mut()) {
                 if let Err(t) = log.truncate_to(n) {
-                    // the log keeps a frame the database never committed: no further append may follow it
+                    // The log keeps a frame the database never committed, so no further append may
+                    // follow it.
                     tracing::error!(commit = %e, "database commit failed after the record-log append");
                     return Err(IngestError::Log(t));
                 }
@@ -660,7 +742,8 @@ impl Ingest {
         self.generation.bump();
         self.track_acceptance(removed, &blocks);
         if unknown_removed > 0 {
-            // a reorg deeper than the stored chain: the rows of those blocks (and operator imports stamped block 0) stay
+            // The reorg is deeper than the stored chain. The rows of those blocks stay, and so do
+            // operator imports stamped block 0.
             tracing::warn!(
                 unknown_removed,
                 window_daa = self.cfg.reorg_window_daa,
@@ -693,8 +776,10 @@ impl Ingest {
         })
     }
 
-    /// Revert every stored block newer than `target_seq` and move the cursor to `target`. Used when the
-    /// node no longer knows the cursor and an older stored block is still known to it.
+    /// Reverts every stored block newer than `target_seq` and moves the cursor to `target`.
+    ///
+    /// It is used when the node no longer knows the cursor and an older stored block is still known
+    /// to it.
     pub fn rewind_to(&mut self, target_seq: i64, target: Cursor) -> Result<Applied, IngestError> {
         let mut hashes = Vec::new();
         for (seq, hash, _) in self.stored_blocks_desc(usize::MAX >> 1)? {
@@ -705,25 +790,32 @@ impl Ingest {
         self.commit_batch(None, &hashes, Blocks::Live(&[]), Some(target), true, &[], false, None)
     }
 
-    /// Apply operator operations (recovery import, gap reconciliation) in one logged commit. With
-    /// `new_cursor` the cursor moves too (rebase after a gap); otherwise it stays.
+    /// Applies operator operations in one logged commit.
+    ///
+    /// The operations are a recovery import or a gap reconciliation. With `new_cursor` the cursor
+    /// moves too, as in a rebase after a gap. Otherwise it stays.
     pub fn apply_ops(&mut self, ops: Vec<LogOp>, new_cursor: Option<Cursor>) -> Result<Applied, IngestError> {
         let cur = get_cursor(&self.conn)?;
         let forced = new_cursor.or(cur).ok_or(IngestError::NoCursor)?;
         self.commit_batch(None, &[], Blocks::Live(&[]), Some(forced), true, &ops, true, None)
     }
 
-    /// Rebuild this (empty) database from record-log frames. Returns (frames, relevant txs, orders).
+    /// Rebuilds this empty database from record-log frames.
+    ///
+    /// It returns the number of frames, the relevant transactions and the orders.
     pub fn replay(&mut self, records: Vec<(u64, LogBatch)>) -> Result<(u64, u64, u64), IngestError> {
         let frames = records.last().map_or(0, |(n, _)| n + 1);
         self.replay_frames(records, frames)
     }
 
-    /// [`Ingest::replay`] of a log of `frames` frames, some of which this build skipped (`recordlog::Replay::skipped`): the
-    /// database ends at the log's end either way, so the follower appends after the last frame.
+    /// [`Ingest::replay`] of a log of `frames` frames, some of which this build may have skipped.
     ///
-    /// Each frame is applied in one transaction together with the position after it (`records_next_n`), so a replay that
-    /// stops part way can be run again: it continues from the first frame not committed.
+    /// The skipped frames are `recordlog::Replay::skipped`. The database ends at the end of the log
+    /// either way, so the follower appends after the last frame.
+    ///
+    /// Each frame is applied in one transaction together with the position after it
+    /// (`records_next_n`). A replay that stops part way can therefore be run again, and it
+    /// continues from the first frame not committed.
     pub fn replay_frames(&mut self, records: Vec<(u64, LogBatch)>, frames: u64) -> Result<(u64, u64, u64), IngestError> {
         let mut run = ReplayRun::default();
         for (n, rec) in records {
@@ -732,8 +824,10 @@ impl Ingest {
         self.replay_finish(run, frames)
     }
 
-    /// Apply record-log frame `n` of a replay, in one transaction together with the position after it: the step of
-    /// [`Ingest::replay_frames`] for frames streamed from the log one at a time (`recordlog::for_each_from`).
+    /// Applies record-log frame `n` of a replay, in one transaction with the position after it.
+    ///
+    /// It is the step of [`Ingest::replay_frames`] for frames streamed from the log one at a time,
+    /// see `recordlog::for_each_from`.
     pub fn replay_frame(&mut self, run: &mut ReplayRun, n: u64, rec: LogBatch) -> Result<(), IngestError> {
         let cursor = Cursor { hash: rec.cursor.hash, daa: rec.cursor.daa };
         run.last_daa = Some(cursor.daa);
@@ -751,8 +845,11 @@ impl Ingest {
         Ok(())
     }
 
-    /// End a replay of a log of `frames` frames: the database ends at the log's end, frames this build skipped after the
-    /// last applied one included. Returns (frames, relevant txs, orders).
+    /// Ends a replay of a log of `frames` frames.
+    ///
+    /// The database ends at the end of the log, which includes the frames this build skipped after
+    /// the last applied one. It returns the number of frames, the relevant transactions and the
+    /// orders.
     pub fn replay_finish(&mut self, run: ReplayRun, frames: u64) -> Result<(u64, u64, u64), IngestError> {
         meta_set(&self.conn, "records_next_n", &frames.to_string())?;
         if let Some(daa) = run.last_daa {
@@ -762,7 +859,7 @@ impl Ingest {
     }
 }
 
-/// A replay in progress ([`Ingest::replay_frame`]): what it applied so far.
+/// A replay in progress, and what it applied so far ([`Ingest::replay_frame`]).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ReplayRun {
     relevant: u64,
