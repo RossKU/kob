@@ -1,26 +1,27 @@
-// Registry token entry -> TokenMarket (the parameters every planner needs). The registry loader is another work item: this module only
-// depends on the STRUCTURAL shape of `registry/tokens.json` (snake_case), so it works with whatever the loader returns.
+// Turns a registry token entry into a TokenMarket, the parameters every planner needs.
+// The module depends only on the shape of `registry/tokens.json` (snake_case), so it works with
+// whatever the registry loader returns.
 import type { Family, Hex, TokenProgram } from './types';
 import { PROGRAM_OF_REGISTRY_ID } from './programs.generated';
 import { familyOfProgram } from './token-state';
 import type { TokenMarket } from './plan-types';
 import type { KobWasm } from './wasm';
 
-/** The fields of a `registry/tokens.json` token entry that market parameters derive from (extra fields are ignored). */
+/** The fields of a `registry/tokens.json` token entry that market parameters derive from. */
 export interface RegistryTokenLike {
   ticker: string;
   covenant_id: Hex;
   template_id: string;
   extension_commitment: Hex | null;
   decimals: number;
-  /** minimum price increment, sompi per whole token; null = none (1 sompi). The registry's `lot_size` (protocol v2.6) is ignored. */
+  /** Minimum price increment in sompi per whole token. Null means 1 sompi. */
   tick?: number | string | bigint | null;
   family?: string;
-  /** registry `genesis_verified`: every genesis output of the token was checked (absent / false: NOT verified; every open-list token) */
+  /** True when every genesis output of the token was checked. Absent or false means unverified. */
   genesis_verified?: boolean;
 }
 
-/** The fields of a `registry/tokens.json` template entry used to pin the token program (optional: built-in ids cover the shipped ones). */
+/** The fields of a `registry/tokens.json` template entry used to pin the token program. */
 export interface RegistryTemplateLike {
   id: string;
   template_hash: Hex;
@@ -31,9 +32,10 @@ export interface RegistryTemplateLike {
   family?: string;
 }
 
-/** Registry template ids of the token programs kob-wasm embeds (generated from the profile table). */
+/** Maps the registry template ids of the token programs kob-wasm embeds to their program names. */
 export const TEMPLATE_ID_PROGRAM: Readonly<Record<string, TokenProgram>> = PROGRAM_OF_REGISTRY_ID;
 
+/** Raised for a registry token that KOB cannot trade or that contradicts the embedded program. */
 export class TokenMarketError extends Error {
   constructor(message: string) {
     super(message);
@@ -51,12 +53,15 @@ const big = (v: number | string | bigint, what: string): bigint => {
 const strip0x = (h: string): string => (h.startsWith('0x') ? h.slice(2) : h).toLowerCase();
 
 /**
- * Builds the TokenMarket of a registry token for the embedded kob-wasm: program, template hash and lengths from `kob.templates()`,
- * default refund tip from `kob.keeperTips()`, the order scale from `kob.defaultScale(decimals)`. Throws TokenMarketError for tokens KOB cannot trade (
- * unknown program or a family the registry entry contradicts).
+ * Builds the TokenMarket of a registry token for the embedded kob-wasm.
  *
- * `templates` (the registry's `templates` array) is optional: when given, the template hash of `token.template_id` must equal the
- * embedded program's pinned hash, so a registry / build mismatch fails loudly instead of building orders against the wrong program.
+ * Program, template hash and lengths come from `kob.templates()`, the keeper tips from
+ * `kob.keeperTips()` and the order scale from `kob.defaultScale(decimals)`. Throws TokenMarketError
+ * for an unknown program or a family the registry entry contradicts.
+ *
+ * `templates` is the registry's template array. When given, the entry of `token.template_id` must
+ * match the embedded program, so a registry and build mismatch fails instead of building orders
+ * against the wrong program.
  */
 export function toTokenMarket(kob: KobWasm, token: RegistryTokenLike, templates?: readonly RegistryTemplateLike[]): TokenMarket {
   const tk = token.ticker;

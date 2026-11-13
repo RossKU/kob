@@ -1,21 +1,22 @@
-// Adapter over the `pair` object of an indexer order view (docs/ops/executor.md 5.4, `GET /v1/orders/{id}` of a pair order). Read through
-// `pairOfView` only, so a field the doc does not fix (or a view of an older indexer without `pair`) is handled in one place.
+// Adapter over the `pair` object of an indexer order view, see `GET /v1/orders/{id}` in
+// docs/ops/executor.md 5.4. Read it through `pairOfView` only, so a missing field or a view without
+// `pair` is handled in one place.
 import type { OrderView, TokenUtxoView } from '../data/indexer-types';
 import type { Hex } from './types';
 
-/** One custody of a pair order's current state, in record order (a sell-first entry: its A, then its B prefund). */
+/** One custody of a pair order's current state, in record order. */
 export interface PairCustodyView {
   token: Hex;
-  /** `base` = A, `quote` = B */
+  /** `base` is token A and `quote` is token B. */
   role: 'base' | 'quote';
-  /** decimal string, base units of `token` */
+  /** A decimal string in base units of `token`. */
   expected_amount: string;
-  /** the live custody UTXO (single-order lookups and the live orders of a `maker=` list) */
+  /** The live custody UTXO, present in single-order lookups and live orders of a `maker=` list. */
   utxo?: TokenUtxoView | null;
   ok?: boolean;
 }
 
-/** The `pair` object of a pair order's view: both tokens, prices in B base units per whole A, custodies. */
+/** The `pair` object of a pair order's view: both tokens, the prices and the custodies. */
 export interface PairOrderView {
   base: Hex;
   quote: Hex;
@@ -26,25 +27,29 @@ export interface PairOrderView {
   base_scale: number;
   quote_scale: number;
   side: 'ask' | 'bid';
-  /** B base units per whole A: a KobPair's price (a decay's start), a KobIfdPair's limit, a KobCondPair's take-profit / limit leg (null without one) */
+  /**
+   * Price in B base units per whole A.
+   * It is the price of a KobPair (the start of a decay), the limit of a KobIfdPair, or the
+   * take-profit or limit leg of a KobCondPair. It is null when there is no such leg.
+   */
   price: string | null;
   price_num?: string | null;
   price_den?: string | null;
-  /** a conditional's stop or an entry's entryStop */
+  /** The stop of a conditional, or the `entryStop` of an entry. */
   stop_price?: string | null;
-  /** the auction price now, else `price` */
+  /** The current auction price, else `price`. */
   quote_now?: string | null;
   amount_left?: string | null;
-  /** a sell-first entry's B prefund per whole A */
+  /** The B prefund per whole A of a sell-first entry. */
   prefund?: string | null;
   delivery_carrier?: string | null;
-  /** empty once closed */
+  /** Empty once the order is closed. */
   custodies: PairCustodyView[];
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** The view's `pair` object (a pair order), or null (a KAS-quoted order, or a view without it). */
+/** The view's `pair` object, or null for a KAS-quoted order or a view without it. */
 export function pairOfView(v: OrderView | null | undefined): PairOrderView | null {
   const p = v ? (v as unknown as { pair?: unknown }).pair : null;
   if (!isObj(p) || typeof p.base !== 'string' || typeof p.quote !== 'string') return null;

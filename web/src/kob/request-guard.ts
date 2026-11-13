@@ -1,25 +1,28 @@
 // Ties every destination key of a build request to the wallet.
 //
-// No protocol builder of Rust decides who the wallet is: an order `maker`, a `change` key or a replacement maker that is a FOREIGN key builds fine, its
-// placement record verifies, and only the funder signs. The web layer therefore checks, before `kob.build`, that every such key is the wallet key
-// (or the explicit change address the user chose), and passes the same list to kob-wasm as `ownKeys` so the Rust side refuses a mismatch too.
+// The Rust builders do not know who the wallet is. An order `maker`, a `change` key or a
+// replacement maker that belongs to someone else builds fine, and only the funder signs. The web
+// layer therefore checks before `kob.build` that every such key is the wallet key or the change
+// address the user chose. It passes the same list to kob-wasm as `ownKeys`, so the Rust side
+// refuses a mismatch too.
 import type { Hex, OrderState } from './types';
 import { KobError } from './wasm';
 
+/** The keys a build request may name as destinations. */
 export interface OwnKeys {
-  /** the wallet's x-only key */
+  /** The wallet's x-only key. */
   maker: Hex;
-  /** an explicit change address chosen by the user (Settings / plan option), allowed as a change destination */
+  /** A change address the user chose explicitly. It is allowed as a change destination only. */
   changeTo?: Hex | null;
 }
 
-/** A request as the planners assemble it (any of the builder actions, including the refund request that is not in `ActionRequest`). */
+/** A request as the planners assemble it, for any builder action including the refund request. */
 type AnyRequest = Record<string, unknown> & { action?: unknown };
 
 const asKey = (v: unknown): Hex | null => (typeof v === 'string' ? v : null);
 const makerOf = (o: unknown): Hex | null => asKey(((o as OrderState | undefined)?.state as { maker?: unknown } | undefined)?.maker);
 
-/** Human-readable problem when some destination key of `req` is not one of the wallet's keys, else null. Pure. */
+/** Returns a readable problem when a destination key of `req` is not the wallet's, else null. */
 export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
   const r = req as AnyRequest;
   const own = new Set<Hex>([keys.maker]);
@@ -32,12 +35,12 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
   if (r.action === 'createOrder') problems.push(bad('order maker', makerOf(order), own));
   const replace = r.replace as { order?: unknown } | null | undefined;
   if (replace) problems.push(bad('replacement order maker', makerOf(replace.order), own));
-  // orders being cancelled must belong to the wallet: a cancel signs with the wallet key only
+  // A cancel signs with the wallet key only, so the order must belong to the wallet.
   if (r.action === 'cancelOrder' || r.action === 'sweepOrder') {
     const m = makerOf((r.order as { state?: unknown } | undefined)?.state);
     problems.push(m !== null && m !== keys.maker ? `the order to ${r.action === 'sweepOrder' ? 'sweep' : 'cancel'} belongs to ${m.slice(0, 8)}..., not to the wallet` : null);
   }
-  // an in-place amend: the order belongs to the wallet (its cancel signs with the wallet key) and stays the wallet's
+  // An amend must start from the wallet's order and leave it with the wallet.
   if (r.action === 'amendOrder') {
     const m = makerOf((r.order as { state?: unknown } | undefined)?.state);
     problems.push(m !== null && m !== keys.maker ? `the order to amend belongs to ${m.slice(0, 8)}..., not to the wallet` : null);
@@ -56,8 +59,8 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
 }
 
 /**
- * Checks the request and returns it with `ownKeys` set for kob-wasm (which refuses maker / change / replacement maker outside that list).
- * Throws a KobError (the planners turn it into a plan issue) when a destination key is foreign.
+ * Checks the request and returns it with `ownKeys` set for kob-wasm.
+ * Throws a KobError, which the planners turn into a plan issue, when a destination key is foreign.
  */
 export function guardRequest<T extends object>(req: T, keys: OwnKeys): T & { ownKeys: Hex[] } {
   const problem = requestKeyProblem(req, keys);
