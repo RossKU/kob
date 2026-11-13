@@ -306,7 +306,8 @@ pub struct KeeperInput {
     pub orders: Vec<ListedOrder>,
     /// The chain clock.
     pub clock: Clock,
-    /// The operator's funding coins.
+    /// The operator's funding coins, accepted ones (the node's UTXO set). Each funds at most one job
+    /// of the tick ([`tick`]).
     pub funding: Vec<KeyUtxo>,
     /// Orders no job is built for in this tick.
     pub excluded: BTreeSet<CovId>,
@@ -796,8 +797,12 @@ fn select_jobs(orders: &[&ListedOrder], inp: &KeeperInput, cfg: &KeeperConfig, r
 
 /// Plans, builds, signs and validates every keeper job of a snapshot.
 ///
-/// Funding is chained through each job's change output (a P2PK spend never depends on its parent's
-/// DAA score). The tick's subsidies are bounded by one window's budget and the per-step job cap
+/// Each funded job spends one of the accepted funding coins of [`KeeperInput::funding`], and no
+/// job spends another job's change. Every job is therefore a transaction of its own: one that loses
+/// its race takes no other job with it, and the runner can replace each one on its own
+/// (`crate::matcher::run::Runner::replace_stuck`). Once the coins are used up, the remaining jobs
+/// are built without funding, paid by their own tips, and a job that does not pay without funding
+/// waits for the next tick. The tick's subsidies are bounded by one window's budget and the per-step job cap
 /// ([`SubsidyAllowance::of`]). The runner uses [`tick_with_subsidy`] with what its rolling budget
 /// still allows.
 pub fn tick(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Signer) -> KeeperReport {
@@ -844,6 +849,9 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
             report.foreign_strays.push(id);
         }
         let funding = pool.front().cloned();
+        // The tick's coins are all taken by its earlier jobs. This job goes without funding, and
+        // one that does not pay so waits for a coin instead of being remembered as unbuildable.
+        let starved = funding.is_none() && !inp.funding.is_empty();
         let funding_vec: Vec<KeyUtxo> = funding.iter().cloned().collect();
         let mut attempt: Option<(JobKind, Action)> = None;
         let known = |o: &ListedOrder| inp.known_unprofitable.contains(&(o.id(), outpoint(&o.order.utxo)));
@@ -910,17 +918,6 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         });
         if let Some((a, (built, signed, validation, profit))) = subsidised {
             pool.pop_front();
-            if let Some(i) = built.fee.change_output {
-                let v = built.tx.outputs[i as usize].value;
-                let u = kob_protocol::tx::Utxo {
-                    transaction_id: built.tx.id,
-                    index: i,
-                    amount: v,
-                    block_daa_score: UNACCEPTED_DAA,
-                    covenant_id: None,
-                };
-                pool.push_back(KeyUtxo { utxo: u, pubkey: operator });
-            }
             let spends = spends_of(&built);
             let subsidy = if profit < 0 { profit.unsigned_abs() } else { 0 };
             allowance.take(subsidy);
@@ -960,26 +957,22 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         match result {
             Ok((built, signed, validation, profit)) => {
                 if kind != JobKind::Sweep && profit < cfg.min_profit {
+                    if starved {
+                        report.skipped.push((id, format!("{}: no funding coin left in this tick", kind.name())));
+                        continue;
+                    }
                     report.skipped.push((id, format!("{}: tip does not cover the fee ({profit})", kind.name())));
                     report.unprofitable.push((id, outpoint(&o.order.utxo)));
                     continue;
                 }
                 if funding.is_some() {
                     pool.pop_front();
-                    if let Some(i) = built.fee.change_output {
-                        let v = built.tx.outputs[i as usize].value;
-                        let u = kob_protocol::tx::Utxo {
-                            transaction_id: built.tx.id,
-                            index: i,
-                            amount: v,
-                            block_daa_score: UNACCEPTED_DAA,
-                            covenant_id: None,
-                        };
-                        pool.push_back(KeyUtxo { utxo: u, pubkey: operator });
-                    }
                 }
                 let spends = spends_of(&built);
                 report.jobs.push(Job { kind, order: id, action, built, signed, validation, profit, subsidy: 0, spends });
+            }
+            Err(e) if starved => {
+                report.skipped.push((id, format!("{}: no funding coin left in this tick ({e})", kind.name())));
             }
             Err(e) => {
                 report.skipped.push((id, format!("{}: {e}", kind.name())));

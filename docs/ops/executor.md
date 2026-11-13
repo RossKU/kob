@@ -2922,7 +2922,11 @@ bucket of its urgency:
   highest rate its tip pays as above). It is built at the highest rate up to its urgency's that the tip plus that amount
   pays, still within `--fee-max-rate` and `--fee-max-tx-kas`. The order's outputs are what the covenant requires whatever
   the fee (the maker receives `value - refundTip`, its custodies and strays as before): the top-up comes only out of the
-  operator's P2PK funding input, which the job must carry (a job without funding is never subsidised). An order whose tip
+  operator's P2PK funding input, which the job must carry (a job without funding is never subsidised). Each funded keeper
+  job spends an accepted funding coin of its own and no job spends another's change, so one lost race takes no other job
+  with it and every stuck job can be replaced; past the free coins of a tick, jobs go without funding, paid by their own
+  tips, and one that does not pay so waits for the next tick. A tick therefore subsidises at most as many jobs as the
+  operator has free accepted coins: keep several coins for bursts of kills under fee pressure. An order whose tip
   does not pay even the floor is not subsidised (a maker cannot make the operator pay for its order's end), and closes and
   sweeps never are. With the default subsidy a kill (about 10,400 grams, 0.0104 KAS at the floor, a default refund tip of
   twice that) reaches about 680 sompi per gram. Subsidised jobs are logged (`keeper job subsidised from the operator's
@@ -2970,8 +2974,7 @@ funding UTXO) at its urgency's current rate, at least a quarter above its stuck 
 RBF: the node takes it only when exactly one mempool transaction spends one of its inputs, here our own original, and the
 replacement pays a strictly higher fee rate; the original is removed). Only transactions recorded at their own successful
 submission are candidates: a competitor's transaction (ours was refused as a double spend) is never replaced, nor a matcher
-batch, a close, a sweep, a maintenance job, a submit that had no verdict, or a job whose change output funds another
-pending job. A refused replacement (the original was accepted meanwhile, another transaction spent the order, the rate did
+batch, a close, a sweep, a maintenance job or a submit that had no verdict. A refused replacement (the original was accepted meanwhile, another transaction spent the order, the rate did
 not satisfy the node) ends the replacements of that job, and the original falls back to the pending timeout and backoff as
 before; a replacement without a verdict is followed beside the original (whichever a block accepts settles the order). Each
 replacement is logged (`stuck keeper job replaced at a higher rate`, with the old and new rates) and counted:

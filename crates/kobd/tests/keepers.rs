@@ -21,19 +21,20 @@ use kobd::matcher::book::{Clock, ListedOrder};
 const K3: TemplateId = TemplateId::KronToken2433;
 
 fn keep(orders: Vec<ListedOrder>, daa: u64, cfg: &KeeperConfig) -> KeeperReport {
-    keep_with(orders, daa, cfg, true)
+    keep_with(orders, daa, cfg, true, 1)
 }
 
 /// A tick over pair orders: no KRON twin (a pair order names two tokens; the tests run each family pair).
 fn keep_pair(orders: Vec<ListedOrder>, daa: u64, cfg: &KeeperConfig) -> KeeperReport {
-    keep_with(orders, daa, cfg, false)
+    keep_with(orders, daa, cfg, false, 1)
 }
 
-fn keep_with(orders: Vec<ListedOrder>, daa: u64, cfg: &KeeperConfig, twin: bool) -> KeeperReport {
+/// A tick over `orders` with `coins` funding coins of 20 KAS (each funds at most one job).
+fn keep_with(orders: Vec<ListedOrder>, daa: u64, cfg: &KeeperConfig, twin: bool, coins: usize) -> KeeperReport {
     let inp = KeeperInput {
         orders,
         clock: Clock { daa, utc: UTC },
-        funding: vec![funding(20 * KAS)],
+        funding: (0..coins).map(|_| funding(20 * KAS)).collect(),
         excluded: BTreeSet::new(),
         excluded_outpoints: BTreeSet::new(),
         known_unprofitable: BTreeSet::new(),
@@ -214,7 +215,8 @@ fn keepers_never_move_strays_of_others_and_sweep_their_own_on_request() {
     let mut entry = l_ifd_bid(3, IfdBidState { rpt_amount: 9 * WHOLE, ..ifd_bid(MATCHER, P260, 4 * WHOLE, T3) }, 1_000);
     entry.strays = vec![custody(2 * WHOLE, cid(3), 1_500)];
     let cfg = KeeperConfig { sweep_own_strays: true, ..KeeperConfig::default() };
-    let r = keep(vec![own, entry], NOW, &cfg);
+    // two coins: the entry's sweep needs a funding input of its own (only a plain ask pays from its carrier)
+    let r = keep_with(vec![own, entry], NOW, &cfg, true, 2);
     let mut k = kinds(&r);
     k.sort();
     assert_eq!(k, vec![(JobKind::Sweep, cid(2)), (JobKind::Sweep, cid(3))]);
@@ -572,4 +574,48 @@ fn a_pair_orders_strays_are_never_moved_by_a_keeper_refund_and_unfunded_tips_are
     let r = keep_pair(vec![l_pair(3, T8, T8, poor, 1_000)], EXPIRY as u64, &KeeperConfig { min_profit: 1, ..KeeperConfig::default() });
     assert!(r.jobs.is_empty());
     assert_eq!(r.skipped.len(), 1);
+}
+
+/// Each funded job spends an accepted funding coin of its own, and no job spends another job's change: every job is a
+/// transaction of its own. Jobs chained through change made one lost race orphan every later job of the chain, and only the
+/// last job of a chain could be replaced. Past the coins, the jobs are built without funding, paid by their own tips.
+#[test]
+fn no_keeper_job_spends_another_jobs_change() {
+    let orders: Vec<ListedOrder> = (1..=6u32)
+        .map(|n| {
+            let mut s = ask(1, P250, 5 * WHOLE, T3);
+            s.tif = TIF_IOC;
+            s.expiry_daa = NO_EXPIRY;
+            s.refund_tip = 10 * KAS as i64;
+            listed(cid(n), AnyState::KobAsk(s), CARRIER, 5_000)
+        })
+        .collect();
+    let coins = vec![funding(20 * KAS), funding(20 * KAS)];
+    let coin_ops: BTreeSet<_> = coins.iter().map(|k| (k.utxo.transaction_id, k.utxo.index)).collect();
+    let inp = KeeperInput {
+        orders,
+        clock: Clock { daa: 5_600, utc: UTC },
+        funding: coins,
+        excluded: BTreeSet::new(),
+        excluded_outpoints: BTreeSet::new(),
+        known_unprofitable: BTreeSet::new(),
+    };
+    let r = tick(&inp, &KeeperConfig::default(), &signer());
+    assert_eq!(r.jobs.len(), 6, "{:?}", r.skipped);
+    let ids: BTreeSet<[u8; 32]> = r.jobs.iter().map(|j| j.signed.tx.id).collect();
+    for j in &r.jobs {
+        assert!(j.spends.iter().all(|op| !ids.contains(&op.0)), "{:?} of {} spends another job's output", j.kind, j.order[0]);
+        assert!(j.validation.is_some());
+    }
+    // the two coins fund one job each; the other four go without funding
+    let funded: Vec<_> = r.jobs.iter().flat_map(|j| j.spends.iter().filter(|op| coin_ops.contains(op))).collect();
+    assert_eq!(funded.len(), 2, "each coin funds exactly one job");
+    assert_eq!(funded.iter().collect::<BTreeSet<_>>().len(), 2);
+    for j in &r.jobs {
+        let Action::RefundOrder(req) = &j.action else { panic!() };
+        assert!(req.funding.len() <= 1 && req.funding.iter().all(|f| coin_ops.contains(&(f.utxo.transaction_id, f.utxo.index))));
+        assert!(j.profit >= 0, "the tip pays every job: {}", j.profit);
+    }
+    // nothing is remembered as unprofitable or unbuildable because the coins ran out
+    assert!(r.unprofitable.is_empty() && r.failed.is_empty());
 }

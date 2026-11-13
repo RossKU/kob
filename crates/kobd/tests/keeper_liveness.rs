@@ -157,6 +157,12 @@ struct State {
     replace_replies: VecDeque<Result<(), String>>,
     funding: Vec<AddressUtxo>,
     fee: Option<Value>,
+    /// An order outpoint another executor spends first: a transaction over it is refused as a mempool double spend.
+    contested: Option<([u8; 32], u32)>,
+    /// The ids (hex) of the transactions refused: a transaction spending one of their outputs is an orphan.
+    refused: BTreeSet<String>,
+    /// The id of the transaction being submitted (`BookSource::watch`, when the source reports it).
+    next: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -184,6 +190,12 @@ impl MockNode {
         }
         n
     }
+    /// `n` accepted funding coins. A tick funds one job per coin (a subsidy needs a funding input).
+    fn coins(&self, n: u8) {
+        let mut s = self.0.lock().unwrap();
+        let f = s.funding[0].clone();
+        s.funding = (0..n).map(|i| AddressUtxo { transaction_id: [0xf0 ^ i; 32], ..f.clone() }).collect();
+    }
     fn set_daa(&self, daa: u64) {
         self.0.lock().unwrap().daa = daa;
     }
@@ -209,10 +221,36 @@ impl NodeApi for MockNode {
     }
     async fn submit(&self, tx: Value) -> Result<[u8; 32], RpcError> {
         let mut s = self.0.lock().unwrap();
+        let next = s.next.take();
+        let prev: Vec<(String, u64)> = tx["inputs"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .map(|i| {
+                        let o = &i["previousOutpoint"];
+                        (o["transactionId"].as_str().unwrap_or_default().to_string(), o["index"].as_u64().unwrap_or(0))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         s.submits.push(tx);
-        match s.submit_replies.pop_front() {
-            Some(Err(m)) => Err(RpcError::Node(m)),
-            _ => Ok([0; 32]),
+        let contested = s.contested.map(|(t, i)| (kob_protocol::json::to_hex(&t), i as u64));
+        let verdict = if prev.iter().any(|(t, _)| s.refused.contains(t)) {
+            Some("transaction is an orphan where orphan is disallowed".to_string())
+        } else if let Some((t, i)) = contested.filter(|c| prev.contains(c)) {
+            Some(format!("output ({t}, {i}) already spent by transaction {} in the mempool", "cd".repeat(32)))
+        } else {
+            match s.submit_replies.pop_front() {
+                Some(Err(m)) => Some(m),
+                _ => None,
+            }
+        };
+        match verdict {
+            Some(m) => {
+                s.refused.extend(next);
+                Err(RpcError::Node(m))
+            }
+            None => Ok([0; 32]),
         }
     }
     async fn submit_replacement(&self, tx: Value) -> Result<[u8; 32], RpcError> {
@@ -540,11 +578,7 @@ async fn the_subsidy_budget_bounds_the_operator_across_ticks_and_rolls_with_the_
     let node = MockNode::new(KILL_DAA, 1_000.0);
     // funding for every tick (the node keeps reporting the UTXOs; the runner leaves out those its pending jobs spend), so
     // only the budget can deny a subsidy
-    {
-        let mut s = node.0.lock().unwrap();
-        let f = s.funding[0].clone();
-        s.funding = (0..12u8).map(|i| AddressUtxo { transaction_id: [0xf0 ^ i; 32], ..f.clone() }).collect();
-    }
+    node.coins(12);
     let mut orders: Vec<ListedOrder> = (1..=5).map(|n| ioc_at(n, tip, 5_000)).collect();
     orders.extend((11..=13).map(|n| ioc_at(n, tip, 5_100))); // due at 5,700 (inside the window)
     orders.extend((21..=23).map(|n| ioc_at(n, tip, 6_000))); // due at 6,600 (the first charges left the window)
@@ -586,18 +620,21 @@ async fn a_zero_budget_or_job_cap_means_no_subsidy_and_the_cap_bounds_one_step()
     let s1 = full_subsidy(tip, 1_000);
     // budget 0: exactly the subsidy_max = 0 behaviour
     let node = MockNode::new(KILL_DAA, 1_000.0);
+    node.coins(3);
     let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, 0, 36_000);
     r.step().await.unwrap();
     assert_eq!(jobs_at(&r, KILL_DAA, &[1, 2, 3]), vec![(plain, 0); 3]);
     assert_eq!((r.keeper_subsidised, r.keeper_subsidy_sompi), (0, 0));
     // job cap 0: the same
     let node = MockNode::new(KILL_DAA, 1_000.0);
+    node.coins(3);
     let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, KAS, 36_000);
     r.cfg.keeper.subsidy_max_jobs = 0;
     r.step().await.unwrap();
     assert_eq!(jobs_at(&r, KILL_DAA, &[1, 2, 3]), vec![(plain, 0); 3]);
     // job cap 1: one subsidised kill per step, whatever the budget left
     let node = MockNode::new(KILL_DAA, 1_000.0);
+    node.coins(3);
     let mut r = budgeted(node, (1..=3).map(|n| ioc_at(n, tip, 5_000)).collect(), 0, KAS, 36_000);
     r.cfg.keeper.subsidy_max_jobs = 1;
     r.step().await.unwrap();
@@ -636,4 +673,58 @@ async fn a_replacement_is_charged_its_added_subsidy_and_refused_past_the_budget(
             assert_eq!((tracked(&r).1, spent), (400, s400), "the original stays, nothing more charged");
         }
     }
+}
+
+/// A book source that tells the mock node the id of each transaction before it is submitted, so the node can refuse a
+/// child of a transaction it refused (an orphan).
+struct Watched(ViewSource<MemoryBook>, MockNode);
+
+impl kobd::matcher::run::BookSource for Watched {
+    fn snapshot(&mut self, operator: &[u8; 32]) -> anyhow::Result<MemoryBook> {
+        kobd::matcher::run::BookSource::snapshot(&mut self.0, operator)
+    }
+    fn watch(&mut self, txid: [u8; 32]) {
+        self.1 .0.lock().unwrap().next = Some(kob_protocol::json::to_hex(&txid));
+    }
+}
+
+/// Job 3 of six due kills loses its race to another executor. The other five are sent and taken: none of them spends job
+/// 3's change, so none is an orphan, and the one lost race is the only one counted (the keeper share sees one loss) and the
+/// only order that backs off. Jobs chained through change turned one lost race into a cascade of orphans, each counted as a
+/// lost race.
+#[tokio::test]
+async fn one_lost_keeper_race_takes_no_other_job_with_it() {
+    let node = MockNode::new(KILL_DAA, 200.0);
+    let orders: Vec<ListedOrder> = (1..=6).map(|n| ioc_at(n, 10 * KAS as i64, 5_000)).collect();
+    let third = &orders[2];
+    node.0.lock().unwrap().contested = Some((third.order.utxo.transaction_id, third.order.utxo.index));
+    let mut b = book(orders);
+    b.daa_score = KILL_DAA;
+    let mut cfg = RunConfig {
+        roles: K,
+        fee_policy: FeePolicy { refresh_ms: 0, max_age_ms: u64::MAX / 4, max_rate: 1_000, ..FeePolicy::default() },
+        max_book_lag: None,
+        ..RunConfig::default()
+    };
+    cfg.keeper.max_replacements = 3;
+    let mut r = Runner::new(node.clone(), Watched(ViewSource(b), node.clone()), Box::new(signer()), cfg);
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.built.len(), 6, "{:?}", rep.skipped);
+    let third_tx = rep.built[2].1;
+    assert_eq!(rep.conflicts, vec![third_tx], "exactly one lost race: the contested job's");
+    assert_eq!(rep.submitted.len(), 5, "the others are sent and taken");
+    assert_eq!(node.0.lock().unwrap().refused.len(), 1, "no orphan");
+    let built: BTreeSet<[u8; 32]> = rep.built.iter().map(|b| b.1).collect();
+    for t in r.tracker.txs.values() {
+        assert!(t.spends.iter().all(|op| !built.contains(&op.0)), "a sent job spends another job's output");
+        assert!(t.parent.is_none());
+    }
+    assert_eq!(r.tracker.backed_off(KILL_DAA), [cid(3)].into_iter().collect(), "only the contested order backs off");
+    assert_eq!(r.tracker.conflicts, 1);
+    // every sent kill stands on its own, so every one may be replaced
+    assert_eq!(r.keeper_inflight.len(), 5);
+    node.set_daa(KILL_DAA + 100);
+    r.source.0 .0.daa_score = KILL_DAA + 100;
+    let rep = r.step().await.unwrap();
+    assert_eq!(rep.replaced.len(), 5, "each stuck kill is replaced, not only the last of a chain");
 }
