@@ -1,5 +1,7 @@
-//! Shared pieces of the order commands: templates, addresses, node lookups, the maker's funding and the
-//! sign / engine-validate / write / submit pipeline.
+//! Shared pieces of the order commands.
+//!
+//! It holds the templates, the addresses, the node lookups, the funding of the maker and the
+//! pipeline that signs, validates in the script engine, writes and submits a transaction.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -25,14 +27,19 @@ pub const NODE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Most funding UTXOs tried (smallest first) before giving up.
 const FUNDING_TRIES: usize = 16;
 
-/// The network a build uses when none is named: mainnet, like kaspad. A test network is chosen at run time (`--testnet`,
-/// `--netsuffix=10`, `--network testnet-10`); never an implicit testnet-10.
+/// The network a build uses when none is named: mainnet, like kaspad.
+///
+/// A test network is chosen at run time (`--testnet`, `--netsuffix=10` or `--network testnet-10`).
+/// It is never an implicit testnet-10.
 pub const DEFAULT_NETWORK: &str = "mainnet";
 
-/// The network of a command: `--network` when given (empty: not given), else the build's deployment network
-/// (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature `deploy-tn10`, `mainnet` with
-/// `deploy-mainnet`), else [`DEFAULT_NETWORK`]. A deployment build refuses another network. Every plan and confirmation names
-/// the network, and a node of another network is refused before anything is planned or signed.
+/// The network of a command.
+///
+/// It is `--network` when given (an empty value is not given), else the deployment network of the
+/// build (`kob_protocol::artifacts::deployment_network`: `testnet-10` with the feature
+/// `deploy-tn10`, `mainnet` with `deploy-mainnet`), else [`DEFAULT_NETWORK`]. A deployment build
+/// refuses another network. Every plan and confirmation names the network, and a node of another
+/// network is refused before anything is planned or signed.
 pub fn resolve_network(given: &str) -> Result<String, String> {
     resolve_network_for(given, kob_protocol::artifacts::deployment_network())
 }
@@ -52,9 +59,11 @@ pub fn resolve_network_for(given: &str, build: Option<&str>) -> Result<String, S
     Ok(n)
 }
 
-/// The arguments with the kaspad-style network switches turned into `--network`: `--testnet` and `--netsuffix=10` (or
-/// `--netsuffix 10`) name `testnet-10`, the only test network KOB runs on. They may stand anywhere; naming another network too
-/// (`--network mainnet`) is a contradiction.
+/// The arguments with the kaspad-style network switches turned into `--network`.
+///
+/// `--testnet` and `--netsuffix=10` (or `--netsuffix 10`) name `testnet-10`, the only test network
+/// KOB runs on. They may stand anywhere. Naming another network too, such as `--network mainnet`,
+/// is a contradiction.
 pub fn network_switches(args: &[String]) -> Result<Vec<String>, String> {
     const TESTNET: &str = "testnet-10";
     let (mut out, mut testnet, mut named) = (Vec::with_capacity(args.len()), false, None::<String>);
@@ -93,7 +102,7 @@ pub fn network_switches(args: &[String]) -> Result<Vec<String>, String> {
     }
 }
 
-/// Address prefix of a network name (`mainnet`, `testnet-10`, `simnet`, `devnet`).
+/// Address prefix of a network name (`mainnet`, `testnet-10`, `simnet` or `devnet`).
 pub fn prefix_for_network(network: &str) -> Result<Prefix, String> {
     if network.starts_with("mainnet") {
         Ok(Prefix::Mainnet)
@@ -122,8 +131,10 @@ pub fn spk_bytes(spk: &ScriptPublicKey) -> Vec<u8> {
     b
 }
 
-/// The order template with this hash, when this build pins it (`None`: not an order template this build pins; an order
-/// of any other template is unknown here).
+/// The order template with this hash, if this build pins it.
+///
+/// `None` means that this is not an order template that this build pins, so an order of any other
+/// template is unknown here.
 pub fn order_template(hash: &[u8; 32]) -> Option<TemplateId> {
     template_by_hash(hash).filter(|t| t.id.kind_code().is_some()).map(|t| t.id)
 }
@@ -150,13 +161,15 @@ pub fn order_spk(id: TemplateId, s: &AnyState) -> Result<ScriptPublicKey, String
     Ok(template(id).spk(&encode_state(id, s)?))
 }
 
-/// The template an order sits under: one this build pins, or a RETIRED one of its cancel-only table
-/// (`kob_protocol::retired`), for which only the maker's cancel is ever built.
+/// The template an order sits under: one this build pins, or a retired one of its cancel-only list.
+///
+/// The retired templates are in `kob_protocol::retired`. For them only the cancel of the maker is
+/// ever built.
 #[derive(Clone, Copy, Debug)]
 pub enum OrderScript {
     /// A pinned order kind.
     Pinned(TemplateId),
-    /// A retired template (its kind is today's kind of the same state layout).
+    /// A retired template. Its kind is the current kind of the same state layout.
     Retired(&'static kob_protocol::retired::RetiredTemplate),
 }
 
@@ -194,12 +207,13 @@ impl OrderScript {
     }
 }
 
-/// The template of an order with this template hash: [`order_template`], else a retired template of the cancel-only table.
+/// The template of an order with this hash: [`order_template`], else a retired cancel-only one.
 pub fn order_script(hash: &[u8; 32]) -> Option<OrderScript> {
     order_template(hash).map(OrderScript::Pinned).or_else(|| kob_protocol::retired::retired_by_hash(hash).map(OrderScript::Retired))
 }
 
-/// Base units still open (`amountLeft`), and for a bid its remaining buying power in an escrow of `value` sompi.
+/// Base units still open (`amountLeft`). For a bid, its remaining buying power in an escrow of
+/// `value` sompi.
 pub fn amount_left_in(s: &AnyState, value: u64) -> Option<i64> {
     match s {
         AnyState::KobBid(b) | AnyState::KobBidKron(b) => Some(b.buying_power(i64::try_from(value).unwrap_or(i64::MAX))),
@@ -207,7 +221,9 @@ pub fn amount_left_in(s: &AnyState, value: u64) -> Option<i64> {
     }
 }
 
-/// The second token of an order and its program: a pair order's quote token B (`None` for the KAS kinds).
+/// The second token of an order and its program: the quote token B of a pair order.
+///
+/// It is `None` for the KAS kinds.
 pub fn b_token(s: &AnyState) -> Result<Option<([u8; 32], TemplateId)>, String> {
     if !s.is_pair() {
         return Ok(None);
@@ -215,7 +231,9 @@ pub fn b_token(s: &AnyState) -> Result<Option<([u8; 32], TemplateId)>, String> {
     pair_programs(s).map(|(_, b)| Some(b)).map_err(|e| e.to_string())
 }
 
-/// The same state with another `amountLeft` (base units; `None` for a bid, whose quantity is its escrow).
+/// The same state with another `amountLeft` in base units.
+///
+/// It is `None` for a bid, whose quantity is its escrow.
 pub fn with_amount_left(s: &AnyState, n: i64) -> Option<AnyState> {
     let mut s = s.clone();
     match &mut s {
@@ -224,7 +242,8 @@ pub fn with_amount_left(s: &AnyState, n: i64) -> Option<AnyState> {
         AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => x.amount_left = n,
         AnyState::KobIfdBid(x) | AnyState::KobIfdBidKron(x) => x.amount_left = n,
         AnyState::KobIfdAsk(x) | AnyState::KobIfdAskKron(x) => x.amount_left = n,
-        // a pair order: an ask (and a sell-first entry) holds exactly its amount left; a bid's escrow is not guessed
+        // A pair ask, and a sell-first entry, holds exactly its amount left. The escrow of a bid
+        // is not guessed.
         AnyState::KobPair(x) => {
             if x.is_ask() {
                 x.custody = n;
@@ -243,21 +262,27 @@ pub fn with_amount_left(s: &AnyState, n: i64) -> Option<AnyState> {
     Some(s)
 }
 
-/// Whether a kind's script changes only in `amountLeft` (or never): its states differ in that one 8-byte window
-/// and no other field needs guessing. The search over amounts is still NOT exhaustive for such a kind: any amount at
-/// least `minFill` may have been filled.
+/// Whether the script of a kind changes only in `amountLeft`, or never.
+///
+/// Its states differ in that one 8-byte window, and no other field needs guessing. The search over
+/// amounts is still not exhaustive for such a kind, because any amount of at least `minFill` may
+/// have been filled.
 pub fn amount_is_the_only_mutable_field(id: TemplateId) -> bool {
     kob_protocol::state::mutable_windows(id).iter().all(|(name, ..)| *name == "amountLeft")
 }
 
-/// Whether a state's script never changes after placement, so one candidate is the whole search (a bid: its quantity is
-/// its escrow).
+/// Whether the script of a state never changes after placement.
+///
+/// Then one candidate is the whole search. A bid is such a state: its quantity is its escrow.
 pub fn script_is_fixed(s: &AnyState) -> bool {
     kob_protocol::state::mutable_windows(s.template_id()).is_empty()
 }
 
-/// A token amount in base units: a plain integer is base units; a decimal such as `1.5` is whole tokens and needs the
-/// token's `scale` (`10^decimals`, base units per whole token) and at most `decimals` fractional digits. Positive only.
+/// A token amount in base units.
+///
+/// A plain integer is in base units. A decimal such as `1.5` is in whole tokens, and needs the
+/// token's `scale` (`10^decimals`, base units per whole token) and at most `decimals` fractional
+/// digits. The amount must be positive.
 pub fn parse_amount(s: &str, scale: Option<i64>) -> Result<i64, String> {
     let bad = || format!("`{s}` is not an amount (base units, or a decimal amount of whole tokens)");
     if s.is_empty() || s.matches('.').count() > 1 || !s.chars().all(|c| c.is_ascii_digit() || c == '.') {
@@ -302,7 +327,7 @@ pub fn outpoint_str(txid: &[u8; 32], index: u32) -> String {
     format!("{}:{index}", to_hex(txid))
 }
 
-/// The node's unspent outputs at a set of scripts: script bytes -> entries.
+/// The unspent outputs of the node at a set of scripts, as a map from script bytes to entries.
 pub fn lookup(node: &str, network: &str, spks: &[ScriptPublicKey]) -> Result<BTreeMap<Vec<u8>, Vec<NodeUtxo>>, String> {
     let mut addrs: BTreeSet<String> = BTreeSet::new();
     let mut wanted: BTreeSet<Vec<u8>> = BTreeSet::new();
@@ -314,7 +339,7 @@ pub fn lookup(node: &str, network: &str, spks: &[ScriptPublicKey]) -> Result<BTr
     let entries = wrpc::utxos_by_addresses(node, &addrs, NODE_TIMEOUT).map_err(|e| wrpc::node_failure(node, &e))?;
     let mut out: BTreeMap<Vec<u8>, Vec<NodeUtxo>> = BTreeMap::new();
     for e in entries {
-        // keyed by the script the node reports: an entry counts only for the exact script it carries
+        // Keyed by the script the node reports. An entry counts only for the exact script it has.
         if wanted.contains(&e.spk) {
             let v = out.entry(e.spk.clone()).or_default();
             if !v.iter().any(|x| x.txid == e.txid && x.index == e.index) {
@@ -325,7 +350,7 @@ pub fn lookup(node: &str, network: &str, spks: &[ScriptPublicKey]) -> Result<BTr
     Ok(out)
 }
 
-/// The maker's plain KAS UTXOs (P2PK, no covenant id), smallest first.
+/// The plain KAS UTXOs of the maker (P2PK, no covenant id, not coinbase), smallest first.
 pub fn maker_funding(node: &str, network: &str, maker: &[u8; 32]) -> Result<Vec<KeyUtxo>, String> {
     let spk = p2pk_spk(maker);
     let mut found = lookup(node, network, std::slice::from_ref(&spk))?.remove(&spk_bytes(&spk)).unwrap_or_default();
@@ -343,8 +368,11 @@ pub enum Funding {
     Key(KeyUtxo),
 }
 
-/// Build without funding when `try_unfunded`; when that fails for lack of funds (or is not tried), add the smallest of the
-/// maker's P2PK UTXOs that makes the build succeed.
+/// Build the transaction, funded by the maker's UTXOs only if needed.
+///
+/// With `try_unfunded` the build is tried without funding first. When that fails for lack of
+/// funds, or is not tried, the smallest P2PK UTXO of the maker that makes the build succeed is
+/// added.
 pub fn build_funded(
     try_unfunded: bool,
     node: &str,
@@ -385,7 +413,7 @@ pub struct Signer {
     pub pubkey: [u8; 32],
 }
 
-/// Never prints the secret.
+/// The debug output never prints the secret.
 impl std::fmt::Debug for Signer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Signer").field("pubkey", &to_hex(&self.pubkey)).field("secret", &"<redacted>").finish()
@@ -415,8 +443,12 @@ pub struct Sent {
     pub submitted: Option<String>,
 }
 
-/// Sign every request of `built` with the signer (refusing a transaction that needs another key), finalize, validate in the
-/// script engine (nothing is written or submitted unless this passes), write `<out_dir>/<file_name>`, submit unless `dry_run`.
+/// Sign, validate, write and submit one transaction.
+///
+/// Every request of `built` is signed with `signer`, and a transaction that needs another key is
+/// refused. The signed transaction is finalized and validated in the script engine, and nothing is
+/// written or submitted unless that passes. It is written to `<out_dir>/<file_name>` and submitted
+/// unless `dry_run`.
 pub fn sign_validate_send(
     built: &BuiltTx,
     signer: &Signer,
@@ -431,7 +463,8 @@ pub fn sign_validate_send(
         return Err(format!("input {} needs the signature of {}, not of this key", r.input_index, to_hex(&r.pubkey)));
     }
     if !dry_run {
-        // a signature commits to no network: never sign for one network what a node of another would accept
+        // A signature commits to no network. Never sign for one network what a node of another
+        // would accept.
         wrpc::check_node_network(node, network, NODE_TIMEOUT)?;
     }
     let keys = BTreeMap::from([(signer.pubkey, signer.secret)]);
@@ -464,7 +497,8 @@ pub fn sign_validate_send(
         if id != txid {
             eprintln!("warning: the node reported transaction id {id}, expected {txid}");
         }
-        // the key's own token outputs, for the next command within the indexer's lag (confirmed on the node before use)
+        // Record the own token outputs of the key for the next command within the lag of the
+        // indexer. They are confirmed on the node before use.
         crate::recent::record(network, &signer.pubkey, built, &txid);
         Some(id)
     };
@@ -495,13 +529,14 @@ mod tests {
 
     #[test]
     fn the_network_is_named_or_the_builds_or_mainnet() {
-        // no deployment: mainnet like kaspad (never an implicit testnet-10); a test network is named
+        // No deployment: mainnet like kaspad, never an implicit testnet-10. A test network is
+        // named.
         assert_eq!(resolve_network_for("", None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("  ", None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("mainnet", None).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("testnet-10", None).unwrap(), "testnet-10");
         assert!(resolve_network_for("nonsense", None).is_err());
-        // a deployment build implies its network and refuses another
+        // A deployment build implies its network and refuses another.
         assert_eq!(resolve_network_for("", Some("mainnet")).unwrap(), "mainnet");
         assert_eq!(resolve_network_for("", Some("testnet-10")).unwrap(), "testnet-10");
         let e = resolve_network_for("testnet-10", Some("mainnet")).unwrap_err();
@@ -519,12 +554,12 @@ mod tests {
         assert_eq!(sw("book TUSD --netsuffix=10").unwrap(), v("book TUSD --network testnet-10"));
         assert_eq!(sw("book TUSD --netsuffix 10").unwrap(), v("book TUSD --network testnet-10"));
         assert_eq!(sw("book --testnet --netsuffix=10 TUSD").unwrap(), v("book TUSD --network testnet-10"));
-        // the long form stays, alone or together
+        // The long form stays, alone or together.
         assert_eq!(sw("book TUSD --network testnet-10").unwrap(), v("book TUSD --network testnet-10"));
         assert_eq!(sw("book TUSD --testnet --network testnet-10").unwrap(), v("book TUSD --network testnet-10"));
         assert_eq!(sw("book TUSD --testnet --network=testnet-10").unwrap(), v("book TUSD --network=testnet-10"));
         assert_eq!(sw("book TUSD --network mainnet").unwrap(), v("book TUSD --network mainnet"));
-        // contradictions and unknown suffixes
+        // Contradictions and unknown suffixes.
         assert!(sw("book TUSD --testnet --network mainnet").unwrap_err().contains("different networks"));
         assert!(sw("book TUSD --network=mainnet --testnet").unwrap_err().contains("different networks"));
         assert!(sw("book TUSD --netsuffix=11").unwrap_err().contains("testnet-10 only"));
@@ -543,25 +578,25 @@ mod tests {
 
     #[test]
     fn amounts_are_base_units_or_decimals_of_the_tokens_decimals() {
-        // a plain integer is base units, with or without a known scale
+        // A plain integer is base units, with or without a known scale.
         assert_eq!(parse_amount("150000000", None), Ok(150_000_000));
         assert_eq!(parse_amount("150000000", Some(100_000_000)), Ok(150_000_000));
-        // a decimal is whole tokens: 8 decimals
+        // A decimal is whole tokens: 8 decimals.
         assert_eq!(parse_amount("1.5", Some(100_000_000)), Ok(150_000_000));
         assert_eq!(parse_amount("0.00000001", Some(100_000_000)), Ok(1));
         assert_eq!(parse_amount(".5", Some(1_000)), Ok(500));
         assert_eq!(parse_amount("5.", Some(1_000)), Ok(5_000));
         assert_eq!(parse_amount("6.500", Some(1_000)), Ok(6_500));
-        // more decimals than the token has, or no decimals known
+        // More decimals than the token has, or no decimals known.
         assert!(parse_amount("1.0001", Some(1_000)).is_err());
         assert!(parse_amount("1.5", None).is_err());
         assert!(parse_amount("1.5", Some(1)).is_err(), "a token without decimals has no fractions");
         assert!(parse_amount("1.5", Some(1_500)).is_err(), "the scale must be a power of ten");
-        // not an amount
+        // Not an amount.
         for bad in ["", ".", "-1", "+1", "1e3", "1.2.3", " 5", "0x10", "1,5", "abc"] {
             assert!(parse_amount(bad, Some(1_000)).is_err(), "`{bad}`");
         }
-        // positive only, and it must fit
+        // Positive only, and it must fit.
         assert!(parse_amount("0", None).is_err());
         assert!(parse_amount("0.000", Some(1_000)).is_err());
         assert_eq!(parse_amount("9223372036854775807", None), Ok(i64::MAX));
