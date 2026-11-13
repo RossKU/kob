@@ -1,33 +1,42 @@
 //! Numeric sanity of decoded order states.
 //!
-//! `AnyState::decode` is total over `i64`: an order UTXO can carry any numbers, because the covenant
-//! only polices them when the order is *spent*. The economics helpers of `kob_protocol::state` mirror the script
-//! (checked arithmetic, `None` where the covenant fails), but the matcher, the keepers and the indexer also form sums and
-//! products of their own, so a hostile value (`decayStep = 0` with a slope, `scale = 0`, `amountLeft = 9e18`, a stop leg
-//! quoting one sompi, a full fill worth more than an `i64`) would make them stall or mislead. [`check`] is the gate every
-//! order state passes before it is listed, planned or kept: the protocol's numeric gate
-//! (`kob_protocol::state::AnyState::check_numbers`: `scale` a power of ten in `1..=10^9`, every full fill worth less than
-//! `2^62` quote units), the covenant's own acceptance rules (`minFill >= 0`, a bid's `minFill > 0`, `tip >= 0`,
-//! `slope >= 0`, `decayStep > 0` when decaying, ...) and bounds on every field so that no sum or product the matcher forms
-//! can overflow. The bounds are far beyond any real order (the whole KAS supply is 2^61.3 sompi), so an honest order never
-//! trips one; a state that does is left unlisted (`bad_state:<field>`), still indexed and cancellable by its maker. Last, the
-//! token program(s) the state pins must resolve as the builders resolve them (`kob_protocol::build::order_programs`: template
-//! hash, prefix / suffix lengths, family), so that no order the planner accepts is one the builder refuses.
+//! `AnyState::decode` is total over `i64`, so an order UTXO can carry any numbers. The covenant
+//! only polices them when the order is spent. The economics helpers of `kob_protocol::state`
+//! mirror the script, with checked arithmetic and `None` where the covenant fails. But the
+//! matcher, the keepers and the indexer also form sums and products of their own. A hostile value
+//! would make them stall or mislead. Examples are `decayStep = 0` with a slope, `scale = 0`,
+//! `amountLeft = 9e18`, a stop leg quoting one sompi, and a full fill worth more than an `i64`.
+//!
+//! [`check`] is the gate every order state passes before it is listed, planned or kept. It checks:
+//!
+//! - the protocol's numeric gate (`kob_protocol::state::AnyState::check_numbers`: `scale` a power
+//!   of ten in `1..=10^9`, every full fill worth less than `2^62` quote units),
+//! - the covenant's own acceptance rules (`minFill >= 0`, a bid's `minFill > 0`, `tip >= 0`,
+//!   `slope >= 0`, `decayStep > 0` when decaying, ...),
+//! - bounds on every field, so that no sum or product the matcher forms can overflow,
+//! - that the token programs the state pins resolve as the builders resolve them
+//!   (`kob_protocol::build::order_programs`: template hash, prefix and suffix lengths, family),
+//!   so that no order the planner accepts is one the builder refuses.
+//!
+//! The bounds are far beyond any real order. The whole KAS supply is 2^61.3 sompi. So an honest
+//! order never trips one. A state that does is left unlisted (`bad_state:<field>:<why>`). It is
+//! still indexed and cancellable by its maker.
 
 use kob_protocol::state::*;
 
-/// Most sompi in any single money field (about 1.15e18, a third of the whole supply).
+/// Most sompi in any single money field (about 1.15e18, about 40 % of the whole supply).
 pub const MONEY_MAX: i128 = 1 << 60;
 /// Most sompi an order can ever move over all its fills (its full fill at its rates, its carriers).
 pub const NOTIONAL_MAX: i128 = 1 << 61;
 /// Most sompi per whole token (quotes, take-profits, trailing steps, tips).
 pub const PRICE_MAX: i64 = 1 << 60;
-/// Latest DAA-like field value (activation, interval, waits): about 3.6e7 years at 10 DAA/s.
+/// Latest DAA-like field value (activation, interval, waits): about 3.6e6 years at 10 DAA/s.
 pub const DAA_MAX: i64 = 1 << 50;
 /// Longest stop-band auction, DAA.
 pub const BAND_MAX: i64 = 1 << 22;
-/// Longest auction window the decay/rise arithmetic must survive (about 545 years at 10 DAA/s): the bound of an order whose
-/// own window (`expiryDaa - activeFrom`, see [`window`]) is longer.
+/// Longest auction window the decay and rise arithmetic must survive (about 54 years at 10 DAA/s).
+///
+/// It bounds an order whose own window (`expiryDaa - activeFrom`, see [`window`]) is longer.
 pub const T_MAX: i128 = 1 << 34;
 /// Most base units of a token amount any output may hold (an `i64`).
 const AMOUNT_MAX: i64 = i64::MAX;
@@ -43,7 +52,7 @@ impl Ck {
     /// `lo <= v <= hi`.
     fn range(&mut self, name: &str, v: i64, lo: i64, hi: i64) {
         if v == i64::MIN {
-            // no canonical 8-byte state push carries it: no builder could encode the state
+            // No canonical 8-byte state push carries it, so no builder could encode the state.
             self.fail("encoding", "unencodable");
             return;
         }
@@ -56,7 +65,8 @@ impl Ck {
             self.fail(name, "overflow");
         }
     }
-    /// The full value of `amount` base units at `rate` per `scale` (rounded up) is at most `hi` (an invalid input fails).
+    /// Fails `name` unless `amount` base units at `rate` per `scale`, rounded up, are worth at most
+    /// `hi`. An invalid input fails too.
     fn quote_le(&mut self, name: &str, amount: i64, rate: i128, scale: i64, hi: i128) {
         let ok = match i64::try_from(rate) {
             Ok(r) => quote_exact(amount, r, scale, Round::Up).is_some_and(|v| v <= hi),
@@ -92,7 +102,8 @@ fn common(c: &mut Ck, s: Common) {
     c.range("expiryDaa", s.expiry_daa, 0, i64::MAX);
 }
 
-/// Fields of every pair order: both tokens (scales, template lengths, family codes), the common numbers.
+/// Fields of every pair order: both tokens (scales, template lengths, family codes) and the
+/// common numbers.
 fn pair_common(c: &mut Ck, t: &PairTokens, min_fill: i64, tip: i64, active_from: i64, expiry_daa: i64, refund_tip: i64) {
     common(
         c,
@@ -107,24 +118,29 @@ fn pair_common(c: &mut Ck, t: &PairTokens, min_fill: i64, tip: i64, active_from:
     c.range("bFamily", t.b.family, 1, 2);
 }
 
-/// The window over which the matcher, the keepers and the indexer ever evaluate an order's decay / rise path, DAA: `t - origin`
-/// with `origin >= activeFrom` (the activation, or a later TWAP / DCA slice opening) and `t < refund_due <= expiryDaa` (the
-/// matcher excludes an order from its refund time on: `matcher::candidate::excluded_by_expiry`; IOC / FOK die even earlier), at
-/// most [`T_MAX`]. The covenant itself does not clamp `t - origin` (`price - slope * floor((t - origin) / decayStep)`, then
-/// the `priceEnd` clamp); the filler chooses `t` and a fill whose product overflows the script's integers fails on chain, so
-/// the bound that matters is the window this executor evaluates. Bounding by [`T_MAX`] alone refused every auction of a
-/// high-priced token (protocol v3 prices per whole token: TBTC ~2e14 sompi, a 3 % market auction over 300 DAA moves 2e10
-/// sompi per DAA, above the 2^26 that `slope * 2^34 <= 2^60` allows) although its path over its own minutes fits easily.
+/// The window over which the executor evaluates an order's decay or rise path, in DAA.
+///
+/// It is `t - origin` with `origin >= activeFrom` (the activation, or a later TWAP or DCA slice
+/// opening) and `t < refund_due <= expiryDaa`. The matcher excludes an order from its refund time
+/// on (`matcher::candidate::excluded_by_expiry`), and IOC and FOK orders die even earlier. The
+/// window is at most [`T_MAX`].
+///
+/// The covenant does not clamp `t - origin`. The filler chooses `t`, and a fill whose product
+/// overflows the script's integers fails on chain. So the bound that matters is the window this
+/// executor evaluates. A fixed bound of [`T_MAX`] would refuse every auction of a high-priced
+/// token, whose slope is large although its path over its own window fits easily.
 fn window(active_from: i64, expiry_daa: i64) -> i128 {
     (expiry_daa as i128 - active_from as i128).clamp(0, T_MAX)
 }
 
-/// Decay / rise path of an ask or bid (`slope` 0 = a constant price) over `window` DAA: the highest quote the path reaches.
+/// Decay or rise path of an ask or bid over `window` DAA. Returns the highest quote it reaches.
+///
+/// A `slope` of 0 is a constant price.
 fn path(c: &mut Ck, price: i64, price_end: i64, slope: i64, decay_step: i64, window: i128) -> i64 {
     c.range("price", price, 1, PRICE_MAX);
     c.range("slope", slope, 0, i64::MAX);
     if slope == 0 {
-        // not read without a slope, but an 8-byte state push cannot carry i64::MIN
+        // Not read without a slope, but an 8-byte state push cannot carry i64::MIN.
         c.range("priceEnd", price_end, i64::MIN + 1, i64::MAX);
         c.range("decayStep", decay_step, i64::MIN + 1, i64::MAX);
         return price;
@@ -137,19 +153,23 @@ fn path(c: &mut Ck, price: i64, price_end: i64, slope: i64, decay_step: i64, win
     price.max(price_end)
 }
 
-/// Most fills an amount can take at a minimum fill (`ceil(amount / max(minFill, 1))`), as i128.
+/// Most fills an amount can take at a minimum fill, `ceil(amount / max(minFill, 1))`, as i128.
 fn fills(amount: i64, min_fill: i64) -> i128 {
     let (a, m) = (amount.max(0) as i128, min_fill.max(1) as i128);
     (a + m - 1) / m
 }
 
-/// Checks a decoded order state (any family). `Ok` means the protocol's numeric gate holds, every sum and product the
-/// matcher, keepers and indexer form from it fits, no divisor is zero, the numbers satisfy the covenant's own
-/// acceptance rules, and the token program(s) the state pins are ones the builders can spend it with.
+/// Checks a decoded order state (any family).
+///
+/// `Ok` means the protocol's numeric gate holds and every sum and product the matcher, keepers and
+/// indexer form from the state fits. It also means no divisor is zero, the numbers satisfy the
+/// covenant's own acceptance rules, and the token programs the state pins are ones the builders
+/// can spend it with.
 pub fn check(state: &AnyState) -> Result<(), String> {
-    // A state built in memory (not decoded from the chain) may be unencodable: a malformed committed exit or a KRON
-    // extension commitment (`validate`), or a number the 8-byte state pushes cannot carry (i64::MIN, which the range
-    // checks below refuse in every field). Encoding the state here would cost more than all the rest of planning.
+    // A state built in memory (not decoded from the chain) may be unencodable. That is a malformed
+    // committed exit or KRON extension commitment (`validate`), or a number the 8-byte state
+    // pushes cannot carry (i64::MIN, which the range checks below refuse in every field). Encoding
+    // the state here would cost more than all the rest of planning.
     if state.validate().is_err() {
         return Err("bad_state:encoding:unencodable".into());
     }
@@ -188,7 +208,8 @@ pub fn check(state: &AnyState) -> Result<(), String> {
                     refund_tip: s.refund_tip,
                 },
             );
-            // the covenant requires minFill > 0 (its termination rule reads one minimum fill of buying power)
+            // The covenant requires minFill > 0. Its termination rule reads one minimum fill of
+            // buying power.
             c.range("minFill", s.min_fill, 1, AMOUNT_MAX);
             c.range("tif", s.tif, 0, 2);
             c.range("interval", s.interval, 0, DAA_MAX);
@@ -197,7 +218,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             c.range("deliveryCarrier", s.delivery_carrier, 0, MONEY_MAX as i64);
             let pmax = path(&mut c, s.price, s.price_end, s.slope, s.decay_step, window(s.active_from, s.expiry_daa));
             c.le("budgetRate", pmax as i128 + s.tip as i128, MONEY_MAX);
-            // one minimum fill's budget must be computable (the covenant's continuation rule)
+            // One minimum fill's budget must be computable (the covenant's continuation rule).
             c.quote_le("minFillBudget", s.min_fill, pmax as i128 + s.tip as i128, s.scale, NOTIONAL_MAX);
         }
         AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => {
@@ -247,7 +268,8 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             c.range("rptPrice", s.rpt_price, 0, PRICE_MAX);
             c.range("rptPre", s.rpt_pre, 0, PRICE_MAX);
             c.range("rptUntil", s.rpt_until, 0, i64::MAX);
-            // multiply first, like the covenants (`stopPrice * bps / 10000`): dividing first would underestimate the ceiling
+            // Multiply first, like the covenants (`stopPrice * bps / 10000`). Dividing first would
+            // underestimate the ceiling.
             let ceil = s.stop_price as i128 + s.stop_price as i128 * s.slip_bps.clamp(0, 10_000) as i128 / 10_000;
             let pmax = (s.tp_price as i128).max(ceil);
             let rate = pmax + s.tip as i128 + s.rpt_price as i128 + s.rpt_pre as i128;
@@ -268,7 +290,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
                 },
             );
             entry(&mut c, s.price, s.entry_stop, s.band_daa, s.armed, s.min_touch, s.min_rest_daa, s.keeper_tip);
-            // a buy-stop trigger above the limit can be armed but never filled
+            // A buy-stop trigger above the limit can be armed but never filled.
             if s.entry_stop > s.price {
                 c.fail("entryStop", "beyond_limit");
             }
@@ -303,7 +325,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
                 },
             );
             entry(&mut c, s.price, s.entry_stop, s.band_daa, s.armed, s.min_touch, s.min_rest_daa, s.keeper_tip);
-            // a sell-stop trigger below the limit can be armed but never filled
+            // A sell-stop trigger below the limit can be armed but never filled.
             if s.entry_stop > 0 && s.entry_stop < s.price {
                 c.fail("entryStop", "beyond_limit");
             }
@@ -331,7 +353,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             c.range("interval", s.interval, 0, DAA_MAX);
             c.range("maxFill", s.max_fill, 0, AMOUNT_MAX);
             c.range("deliveryCarrier", s.delivery_carrier, 0, MONEY_MAX as i64);
-            // the price is B base units per whole A (any token amount, not sompi)
+            // The price is B base units per whole A (any token amount, not sompi).
             c.range("price", s.price, 1, AMOUNT_MAX);
             c.range("slope", s.slope, 0, i64::MAX);
             if s.slope == 0 {
@@ -377,7 +399,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
             pair_common(&mut c, &t, s.min_fill, s.tip, s.active_from, s.expiry_daa, s.refund_tip);
             c.range("side", s.side, 1, 2);
             entry(&mut c, s.price, s.entry_stop, s.band_daa, s.armed, s.min_touch, s.min_rest_daa, s.keeper_tip);
-            // a stop entry whose trigger is beyond its limit can be armed but never filled
+            // A stop entry whose trigger is beyond its limit can be armed but never filled.
             let buy = s.is_buy_first();
             if s.entry_stop > 0 && ((buy && s.entry_stop > s.price) || (!buy && s.entry_stop < s.price)) {
                 c.fail("entryStop", "beyond_limit");
@@ -404,15 +426,16 @@ pub fn check(state: &AnyState) -> Result<(), String> {
         }
     }
     if c.0.is_ok() {
-        // the protocol's own gate (scale, every full fill below 2^62): never wider than the bounds above, checked last so
-        // that a failing field is named first
+        // The protocol's own gate (scale, every full fill below 2^62). It is never wider than the
+        // bounds above, and it is checked last so that a failing field is named first.
         if state.check_numbers().is_err() {
             c.fail("numbers", "outside_the_numeric_gate");
         }
     }
     if c.0.is_ok() && kob_protocol::build::order_programs(state).is_err() {
-        // the token program(s) the order pins, resolved as the builders resolve them (template hash, prefix / suffix lengths,
-        // family; a pair order: both tokens): an order the builders cannot spend is never listed or planned
+        // The token programs the order pins, resolved as the builders resolve them (template hash,
+        // prefix and suffix lengths, family; a pair order: both tokens). An order the builders
+        // cannot spend is never listed or planned.
         c.fail("tokenProgram", "not_the_pinned_program");
     }
     c.0
@@ -421,7 +444,7 @@ pub fn check(state: &AnyState) -> Result<(), String> {
 #[allow(clippy::too_many_arguments)]
 fn cond_legs(c: &mut Ck, tp: i64, stop: i64, slip_bps: i64, trail_step: i64, trail_gap: i64, armed: i64, band_daa: i64) {
     c.range("tpPrice", tp, 0, PRICE_MAX);
-    // the covenants refuse a stop leg whose `stopPrice * slipBps` does not fit an i64
+    // The covenants refuse a stop leg whose `stopPrice * slipBps` does not fit an i64.
     c.range("stopPrice", stop, 0, MAX_STOP_PRICE);
     c.range("slipBps", slip_bps, 0, 10_000);
     c.range("trailStep", trail_step, 0, PRICE_MAX);
@@ -441,7 +464,9 @@ fn entry(c: &mut Ck, price: i64, entry_stop: i64, band_daa: i64, armed: i64, min
     c.range("keeperTip", keeper_tip, 0, MONEY_MAX as i64);
 }
 
-/// `state.custody_amount()` of a state that passes [`check`] (`None` for a state that holds no tokens or fails it).
+/// `state.custody_amount()` of a state that passes [`check`].
+///
+/// `None` for a state that holds no tokens or fails the check.
 pub fn custody_amount(state: &AnyState) -> Option<i64> {
     check(state).ok()?;
     state.custody_amount()
