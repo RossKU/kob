@@ -74,8 +74,10 @@
 //     TokenSwap   out j = merchant delivery (B) out j+1 = payer change (A)
 // Output j+1 is the last output of the token group the intent observes.
 // Output j is checked by index, and in TokenSwap it is the last output of the
-// token B group. An order pays, delivers or refunds at its own input index,
-// so the intent must be the last input (tx.inputs.length == j + 1).
+// token B group. An order pays or delivers at its own input index. A bid's
+// end-of-fill refund sits at output M-1-i and a resting ask's change at any
+// index. The bid's own covenant check keeps its refund off output j. The
+// intent must be the last input (tx.inputs.length == j + 1).
 // Otherwise an unobserved bid of the merchant or payer at j + 1 could take
 // the router's token output as its delivery, and an observed ask's refund
 // could take it as its return. So no output can serve two rules. Two intents
@@ -140,8 +142,10 @@ state KronTokenState {
 // and for a KCC-20 token A by `lock_extension`, its extension commitment.
 // The payer's creation sets both, and every entry that spends the lock
 // (fill, expire, cancel) requires both. A substitute of exactly lock_amount
-// units with the same commitment gives the payer the lock's whole worth, at
-// the substituter's expense. docs/argent/argent.md, "Lock pin".
+// units with the same commitment gives the payer the lock's whole worth in
+// token units, at the substituter's expense. The real lock's KAS carrier stays
+// frozen, and an expiry returns the stand-in's carrier instead.
+// docs/argent/argent.md, "Lock pin".
 //
 // B PIN. A KCC-20 token is (covenant id, program, extension commitment), so
 // units of one covenant id with another commitment are another token. A
@@ -295,8 +299,9 @@ fn own_kron(byte[32] owner, byte id_type, byte is_minter, byte[32] intent_id) {
 // One bid leg. The bid buys the token the intent sells, and `n` base units,
 // more than 0, go into it. The bid enforces its own minimum fill and pins its
 // delivery at n, and the router pins the same output. A rising bid never
-// pays less than its quote, and the router bounds what the payer gets, not
-// what a bid pays. So the payer's bounds hold at any t.
+// pays less than its quote, and the router bounds what the payer gives
+// (max_sell) and what the merchant gets, not what a bid pays. So the payer's
+// bounds hold at any t.
 fn bid_fits(byte[32] b_token, byte[32] token, int n) {
     require(b_token == token);
     require(n > 0);

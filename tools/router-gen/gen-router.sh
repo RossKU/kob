@@ -109,7 +109,8 @@ bid_obs() { # $1 = group name, $2 = covid expr, $3 = rest|out, $4 = family of th
 
 join() { local IFS="$1"; shift; echo "$*"; }
 
-# Every entry: the intent is the LAST input (output me + 1 is then no input's positional slot).
+# Every fill entry: the intent is the LAST input (output me + 1 is then no input's positional slot).
+# A token intent's expire and cancel put the lock at me + 1 instead.
 prologue() {
   echo "        require(tx.inputs.length == me + 1);"
 }

@@ -392,8 +392,10 @@ everything it owes goes there.**
 
 Output j is checked by index; output j+1 is the last output of the token group the intent observes
 (`OpCovOutputIdx(token, count - 1) == j + 1`; `count` is fixed per entry). Output j+1 is also the
-positional slot of whatever input sits at j + 1 (an order pays, delivers or refunds at its own input
-index), so **the intent must be the last input** (`tx.inputs.length == j + 1`, every entry).
+positional slot of whatever input sits at j + 1 (an order pays or delivers at its own input index; a
+bid's end-of-fill refund sits at output M-1-i and a resting ask's change at any index, and the bid's own
+covenant check keeps its refund off output j), so **the intent must be the last input**
+(`tx.inputs.length == j + 1`, every fill entry; a token intent's expire and cancel put the lock at j + 1).
 Without that requirement two attacks work: a KobBid of the merchant or payer placed at j + 1,
 which the router does not observe, has its delivery satisfied by the router's own token output
 (the keeper takes the bid's KAS), and an observed ask refunded at j + 1 returns its custody into
