@@ -1,21 +1,20 @@
 //! `kobd --executor`: the indexer, the matcher and the keepers in one process over one store.
 //!
-//! * the follower (VSPC v2, `High`) indexes the chain into SQLite and serves the read API, as
-//!   `kobd --indexer` does;
-//! * the runner (`matcher::run`) plans against the same store through [`IndexerSource`]: a single
-//!   consistent read per tick ([`crate::indexer::book::snapshot`]), so the matcher never trades an
-//!   order the API would not list;
-//! * "done" means accepted: the transactions the runner submits are watched by the indexer's own
-//!   follower ([`Ingest::watch_tx`]) and their acceptance, reorgs included, comes from the chain blocks
-//!   the store was built from. There is no second VSPC follower in this process.
+//! - The follower (VSPC v2, `High`) indexes the chain into SQLite and serves the read API, as
+//!   `kobd --indexer` does.
+//! - The runner (`matcher::run`) plans against the same store through [`IndexerSource`]. It does a
+//!   single consistent read per tick ([`crate::indexer::book::snapshot`]), so the matcher never
+//!   trades an order the API would not list.
+//! - "Done" means accepted. The indexer's own follower watches the transactions the runner submits
+//!   ([`Ingest::watch_tx`]). Their acceptance, reorgs included, comes from the chain blocks the
+//!   store was built from. There is no second VSPC follower in this process.
+//! - With `--x402-config`, the x402 facilitator serves in the same process. It uses node RPC for
+//!   UTXO facts and submission, and the same follower's acceptance tracking for finality
+//!   ([`crate::x402::indexed::IndexedChain`]). It holds no key.
 //!
-//! * with `--x402-config`, the x402 facilitator serves in the same process: node RPC for UTXO facts
-//!   and submission, and the same follower's acceptance tracking for finality
-//!   ([`crate::x402::indexed::IndexedChain`]); it holds no key.
-//!
-//! The roles that hold a key (`--no-match` / `--no-keep` switch either off) run in the same process as
-//! the public read API; deployments that want them apart run `index` and `match --book-file` /
-//! `keep --book-file` instead (`docs/ops/executor.md`).
+//! The roles that hold a key (`--no-match` and `--no-keep` switch either off) run in the same
+//! process as the public read API. Deployments that want them apart run `index` and
+//! `match --book-file` or `keep --book-file` instead (`docs/ops/executor.md`).
 
 use crate::hex::Hash32;
 use crate::index_cli::{build_config, node_client, shutdown_signal, IndexOpts};
@@ -41,10 +40,12 @@ use std::time::Duration;
 /// The runner's book source over the indexer's store and chain follower.
 pub struct IndexerSource {
     ingest: Arc<Mutex<Ingest>>,
-    /// The follower's health: the source is ready only while the store is caught up with the node or within its lag tolerance.
+    /// The follower's health. The source is ready only while the store is caught up with the node
+    /// or within its lag tolerance.
     health: Option<Arc<HealthState>>,
-    /// A read-only connection of the source's own the book is read on ([`IndexerSource::with_reader`]); without one, the
-    /// writer's connection under the ingest lock.
+    /// A read-only connection of the source's own that the book is read on
+    /// ([`IndexerSource::with_reader`]). Without one, the book is read on the writer's connection
+    /// under the ingest lock.
     reader: Option<Arc<Mutex<rusqlite::Connection>>>,
 }
 
@@ -54,19 +55,24 @@ impl IndexerSource {
         IndexerSource { ingest, health: None, reader: None }
     }
 
-    /// Read the book on `conn`, a read-only connection to the store's file (`db::open_reader`), on the blocking thread pool
-    /// ([`BookSource::snapshot_read`]), instead of on the writer's connection under the ingest lock. The read is one read
-    /// transaction, so it sees one committed batch, as before: the follower commits each batch in one transaction, nothing
-    /// the book reads is ever left uncommitted between batches, and the matcher's own state the lock guards (the watched
-    /// transactions, `Ingest::watch_tx`) is not part of the book. What changes: the follower commits while the book is read
-    /// (WAL), where it used to wait for the read, and the read no longer stalls a runtime worker.
+    /// Reads the book on `conn`, a read-only connection to the store's file (`db::open_reader`).
+    ///
+    /// The read runs on the blocking thread pool ([`BookSource::snapshot_read`]), not on the
+    /// writer's connection under the ingest lock. It is one read transaction, so it sees one
+    /// committed batch. The follower commits each batch in one transaction, and nothing the book
+    /// reads is left uncommitted between batches. The matcher's own state that the lock guards (the
+    /// watched transactions, `Ingest::watch_tx`) is not part of the book.
+    ///
+    /// The follower can commit while the book is read (WAL), and the read does not stall a runtime
+    /// worker.
     pub fn with_reader(mut self, conn: rusqlite::Connection) -> Self {
         self.reader = Some(Arc::new(Mutex::new(conn)));
         self
     }
 
-    /// Ready only while the follower reports the store caught up ([`HealthSnapshot::caught_up`]) or within the lag tolerance
-    /// the health state carries ([`HealthSnapshot::within_lag_tolerance`], `max_lag_secs`).
+    /// Ready only while the follower reports the store caught up
+    /// ([`HealthSnapshot::caught_up`]) or within the lag tolerance the health state carries
+    /// ([`HealthSnapshot::within_lag_tolerance`], `max_lag_secs`).
     ///
     /// [`HealthSnapshot::caught_up`]: crate::indexer::status::HealthSnapshot::caught_up
     pub fn with_health(mut self, health: Arc<HealthState>) -> Self {
@@ -75,8 +81,8 @@ impl IndexerSource {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Ingest> {
-        // The follower commits under this lock for a few milliseconds per batch; a poisoned lock
-        // (a panic in a commit) leaves SQLite consistent, so reading on is right.
+        // The follower commits under this lock for a few milliseconds per batch. A poisoned lock (a
+        // panic in a commit) leaves SQLite consistent, so reading on is right.
         self.ingest.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
@@ -141,7 +147,8 @@ impl BookSource for IndexerSource {
             }
         }
         if !flagged.is_empty() || !cleared.is_empty() {
-            // the books, counts and order views read the flags: a new data generation for the API's response cache
+            // The books, counts and order views read the flags: a new data generation for the API's
+            // response cache.
             guard.generation().bump();
         }
     }
@@ -174,7 +181,8 @@ impl BookSource for IndexerSource {
     }
 }
 
-/// One consistent read of the book ([`book::snapshot`]: one read transaction) on a reader connection.
+/// One consistent read of the book ([`book::snapshot`], one read transaction) on a reader
+/// connection.
 fn read_book(reader: &Mutex<rusqlite::Connection>, operator: Option<[u8; 32]>) -> Result<MemoryBook> {
     let conn = reader.lock().unwrap_or_else(|e| e.into_inner());
     Ok(book::snapshot(&conn, operator)?)
@@ -188,7 +196,8 @@ pub struct RunArgs {
     /// File holding the operator's secret key (64 hex, mode 0600). Not the key itself.
     #[arg(long, env = "KOB_OPERATOR_KEY_FILE", help_heading = "Executor")]
     pub key_file: Option<PathBuf>,
-    /// Build and validate everything, submit nothing (nothing goes to the network: the x402 facilitator is not served either).
+    /// Build and validate everything, submit nothing (nothing goes to the network: the x402
+    /// facilitator is not served either).
     #[arg(long, help_heading = "Executor")]
     pub dry_run: bool,
     /// Do not run the matcher (keepers only).
@@ -200,16 +209,18 @@ pub struct RunArgs {
     /// Tick period in milliseconds.
     #[arg(long, default_value_t = 1_000, help_heading = "Executor")]
     pub tick_ms: u64,
-    /// The lowest fee rate, sompi per gram (>= 100): what every transaction pays without a fee estimate (`--no-fee-estimate`,
-    /// or the node answers none). With one, each transaction pays its urgency's bucket within `--fee-max-rate` and
-    /// `--fee-max-tx-kas` (`docs/ops/executor.md`, fee policy).
+    /// The lowest fee rate, sompi per gram (>= 100): what every transaction pays without a fee
+    /// estimate (`--no-fee-estimate`, or the node answers none). With one, each transaction pays
+    /// its urgency's bucket within `--fee-max-rate` and `--fee-max-tx-kas` (`docs/ops/executor.md`,
+    /// fee policy).
     #[arg(long, default_value_t = 100, help_heading = "Fees")]
     pub fee_rate: u64,
     #[command(flatten, next_help_heading = "Fees")]
     pub fees: crate::fee::FeeArgs,
-    /// Kill switch: nothing is built or submitted while this file exists (the matcher, the keepers and the x402
-    /// facilitator). A file whose state cannot be read (permission denied) or whose directory does not exist counts as present.
-    /// Keep it on persistent storage, outside the data directory (a rebuild deletes that).
+    /// Kill switch: nothing is built or submitted while this file exists (the matcher, the keepers
+    /// and the x402 facilitator). A file whose state cannot be read (permission denied) or whose
+    /// directory does not exist counts as present. Keep it on persistent storage, outside the data
+    /// directory (a rebuild deletes that).
     #[arg(long, help_heading = "Executor")]
     pub pause_file: Option<PathBuf>,
     /// Prometheus textfile-collector output (`.prom`).
@@ -218,40 +229,45 @@ pub struct RunArgs {
     /// Warn (and set `kob_operator_low_funds`) below this many KAS of funding.
     #[arg(long, default_value_t = 100, help_heading = "Executor")]
     pub low_funds_kas: u64,
-    /// Plan nothing while the indexer is more than this many DAA behind the node (0: never wait). Default: the indexer's
-    /// lag tolerance (`max_lag_secs`, 30 s = 300 DAA), 300 when that is 0.
+    /// Plan nothing while the indexer is more than this many DAA behind the node (0: never wait).
+    /// Default: the indexer's lag tolerance (`max_lag_secs`, 30 s = 300 DAA), 300 when that is 0.
     #[arg(long, help_heading = "Executor")]
     pub max_book_lag_daa: Option<u64>,
     /// Matcher: smallest profit per batch after its fee, sompi.
     #[arg(long, default_value_t = 1, help_heading = "Matcher")]
     pub min_profit: i64,
-    /// Matcher: optional cap on the size of one transaction, bytes (0, the default: the physical limit).
+    /// Matcher: optional cap on the size of one transaction, bytes (0, the default: the physical
+    /// limit).
     #[arg(long, default_value_t = 0, help_heading = "Matcher")]
     pub max_tx_bytes: u64,
     /// Matcher: do not chain steps onto unaccepted parents.
     #[arg(long, help_heading = "Matcher")]
     pub no_chain: bool,
-    /// Matcher: do not arm or ratchet stops with updates in the batches (the stops a batch's plain fills trigger are
-    /// still filled next to their evidence).
+    /// Matcher: do not arm or ratchet stops with updates in the batches (the stops a batch's plain
+    /// fills trigger are still filled next to their evidence).
     #[arg(long, help_heading = "Matcher")]
     pub no_arm: bool,
-    /// Matcher: wall-clock budget of one tick in milliseconds (0: unlimited); what is left waits for the next tick.
+    /// Matcher: wall-clock budget of one tick in milliseconds (0: unlimited); what is left waits
+    /// for the next tick.
     #[arg(long, default_value_t = 20_000, help_heading = "Matcher")]
     pub tick_budget_ms: u64,
-    /// Matcher: optional cap on the candidates per (book, class, side) the planner looks at (0, the default: all).
+    /// Matcher: optional cap on the candidates per (book, class, side) the planner looks at (0, the
+    /// default: all).
     #[arg(long, default_value_t = 0, help_heading = "Matcher")]
     pub max_candidates_per_group: usize,
     /// Matcher: most funding inputs of one batch (the largest UTXOs first until the batch is paid).
     #[arg(long, default_value_t = 8, help_heading = "Matcher")]
     pub max_funding_inputs: usize,
-    /// Matcher: above this many funding UTXOs each batch also merges the smallest into its change (see
-    /// `--consolidate-funding`).
+    /// Matcher: above this many funding UTXOs each batch also merges the smallest into its change
+    /// (see `--consolidate-funding`).
     #[arg(long, default_value_t = 4, help_heading = "Matcher")]
     pub funding_target_utxos: usize,
-    /// Matcher: most extra funding UTXOs one batch merges into its change while the pool is fragmented (0: off).
+    /// Matcher: most extra funding UTXOs one batch merges into its change while the pool is
+    /// fragmented (0: off).
     #[arg(long, default_value_t = 2, help_heading = "Matcher")]
     pub consolidate_funding: usize,
-    /// Do not run the maintenance jobs on the operator's own token UTXOs (merge, sell; with the matcher).
+    /// Do not run the maintenance jobs on the operator's own token UTXOs (merge, sell; with the
+    /// matcher).
     #[arg(long, help_heading = "Maintenance")]
     pub no_maintenance: bool,
     /// Maintenance: merge the operator's token UTXOs only, never sell them into the book.
@@ -260,8 +276,9 @@ pub struct RunArgs {
     /// Maintenance: most transactions per tick.
     #[arg(long, default_value_t = 2, help_heading = "Maintenance")]
     pub maintenance_max_jobs: usize,
-    /// Matcher and maintenance: the surplus-inventory policy (strict JSON, `docs/ops/executor.md`, "Surplus inventory"):
-    /// the pair surpluses the operator may accumulate as inventory (never sold by maintenance). Default: none (off).
+    /// Matcher and maintenance: the surplus-inventory policy (strict JSON, `docs/ops/executor.md`,
+    /// "Surplus inventory"): the pair surpluses the operator may accumulate as inventory (never
+    /// sold by maintenance). Default: none (off).
     #[arg(long, help_heading = "Matcher")]
     pub inventory_policy: Option<PathBuf>,
     /// Keepers: do not refund / kill / close.
@@ -270,8 +287,9 @@ pub struct RunArgs {
     /// Keepers: sweep strays of the operator's own orders in place (the order continues unchanged).
     #[arg(long, help_heading = "Keepers")]
     pub sweep_own_strays: bool,
-    /// Keepers: return proven foreign strays (other tokens owned by an order id) to the maker inside the refund, kill or
-    /// close that ends the order (permissionless; dropped from a job that would not pay with them).
+    /// Keepers: return proven foreign strays (other tokens owned by an order id) to the maker
+    /// inside the refund, kill or close that ends the order (permissionless; dropped from a job
+    /// that would not pay with them).
     #[arg(long, help_heading = "Keepers")]
     pub return_foreign_strays: bool,
     /// Keepers: smallest profit (tip - fee) per job, sompi.
@@ -281,16 +299,19 @@ pub struct RunArgs {
     pub liveness: crate::keepers::LivenessArgs,
     #[command(flatten, next_help_heading = "Work selection among executors (advanced)")]
     pub select: crate::matcher::select::SelectArgs,
-    /// Also serve the x402 facilitator (strict JSON configuration, `crates/kobd/x402.example.json`).
-    /// Its `node` is the indexer's `--rpc-url`; its `network` must be the indexer's. Not served with `--dry-run`; with it the
-    /// first start has no fast start (its book is bound to one store).
+    /// Also serve the x402 facilitator (strict JSON configuration,
+    /// `crates/kobd/x402.example.json`). Its `node` is the indexer's `--rpc-url`; its `network`
+    /// must be the indexer's. Not served with `--dry-run`; with it the first start has no fast
+    /// start (its book is bound to one store).
     #[arg(long, env = "KOB_X402_CONFIG", help_heading = "Executor")]
     pub x402_config: Option<PathBuf>,
 }
 
 impl RunArgs {
-    /// The x402 facilitator's configuration, when it is served: never in a dry run (`--dry-run` sends nothing to the network,
-    /// and the facilitator settles payers' transactions there).
+    /// The x402 facilitator's configuration, when it is served.
+    ///
+    /// It is never served in a dry run. `--dry-run` sends nothing to the network, and the
+    /// facilitator settles payers' transactions there.
     pub fn x402(&self) -> Option<&std::path::Path> {
         self.x402_config.as_deref().filter(|_| !self.dry_run)
     }
@@ -355,7 +376,9 @@ impl RunArgs {
     }
 }
 
-/// Runs the indexer (follower and API) and the runner on `chain` / `node` until `shutdown` resolves.
+/// Runs the indexer (follower and API) and the runner on `chain` and `node` until `shutdown`
+/// resolves.
+///
 /// The runner reads the indexer's store and follows acceptance through it.
 pub async fn run_with<C, N, S>(
     indexer: Indexer,
@@ -373,8 +396,9 @@ where
     run_with_x402(indexer, chain, node, signer, cfg, None, shutdown).await
 }
 
-/// [`run_with`] plus, when given, the x402 facilitator `x402` (built over the indexer's acceptance
-/// tracking, see [`x402_service`]) serving until the same `shutdown`.
+/// [`run_with`] plus, when given, the x402 facilitator `x402` serving until the same `shutdown`.
+///
+/// The facilitator is built over the indexer's acceptance tracking, see [`x402_service`].
 pub async fn run_with_x402<C, N, S>(
     indexer: Indexer,
     chain: Arc<C>,
@@ -389,12 +413,13 @@ where
     N: NodeApi,
     S: Future<Output = ()>,
 {
-    // the swap-and-pay settlements in flight reserve their orders: the matcher's batches plan around them
+    // The swap-and-pay settlements in flight reserve their orders. The matcher's batches plan
+    // around them.
     let reservations: Option<crate::matcher::run::Reservations> = x402.as_ref().map(|svc| {
         let fac = svc.fac.clone();
         std::sync::Arc::new(move || fac.ledger.reserved_order_outpoints()) as crate::matcher::run::Reservations
     });
-    // the runner's fee rates price the facilitator's intent executions and expiries
+    // The runner's fee rates price the facilitator's intent executions and expiries.
     let fee_board = x402.as_ref().map(|svc| svc.fac.fees.clone());
     let facilitator = match x402 {
         Some(svc) => {
@@ -410,7 +435,8 @@ where
     let (roles, lean) = (cfg.roles, indexer.cfg.lean);
     indexer.health.update(|h| h.roles = roles.health_roles(lean));
     let running = indexer.spawn(chain)?;
-    // the book is read on a connection of its own, off the ingest lock and off the runtime's workers
+    // The book is read on a connection of its own, off the ingest lock and off the runtime's
+    // workers.
     let reader = crate::indexer::db::open_reader(&indexer.cfg.db_path(), &indexer.cfg.network)?;
     let source = IndexerSource::new(indexer.ingest.clone()).with_health(indexer.health.clone()).with_reader(reader);
     let mut runner = Runner::new(node, source, signer, cfg);
@@ -432,10 +458,13 @@ where
 }
 
 /// The x402 facilitator of `kobd --executor`: the configuration at `path` with the indexer's node
-/// and network, over [`IndexedChain`](crate::x402::indexed::IndexedChain) (node RPC + the indexer's
-/// acceptance tracking). `pause_file` (`--pause-file`) disables it like its own `killSwitchFile`: nothing is verified,
-/// settled or broadcast while it exists. With the indexer's `health`, intents are executed only against a book that is caught
-/// up or within the lag tolerance (the same gate as the matcher's), and `/supported` offers them only then.
+/// and network.
+///
+/// It runs over [`IndexedChain`](crate::x402::indexed::IndexedChain) (node RPC and the indexer's
+/// acceptance tracking). `pause_file` (`--pause-file`) disables it like its own `killSwitchFile`:
+/// nothing is verified, settled or broadcast while it exists. With the indexer's `health`, intents
+/// are executed only against a book that is caught up or within the lag tolerance (the same gate as
+/// the matcher's), and `/supported` offers them only then.
 pub fn x402_service(
     path: &std::path::Path,
     index: &crate::config::IndexerConfig,
@@ -445,7 +474,8 @@ pub fn x402_service(
 ) -> Result<crate::x402::Service> {
     use crate::x402::config::X402Config;
     let mut xcfg = X402Config::load(path)?;
-    // absent from the file: the indexer's network (which `build_config` resolved), never an implicit one
+    // Absent from the file: the indexer's network (which `build_config` resolved), never an
+    // implicit one.
     if xcfg.network.trim().is_empty() {
         xcfg.network = format!("kaspa:{}", index.network);
     }
@@ -456,7 +486,8 @@ pub fn x402_service(
     if built.network.registry_name() != index.network {
         bail!("x402: the facilitator is configured for {}, the indexer follows {}", built.network, index.network);
     }
-    // its submissions go to every node of the indexer that takes them, as the matcher's do (a resolver pair: both nodes)
+    // Its submissions go to every node of the indexer that takes them, as the matcher's do (a
+    // resolver pair: both nodes).
     let peers: Vec<String> = index.secondaries().iter().filter(|n| n.submit).map(|n| n.url.clone()).collect();
     let node = crate::x402::node_chain(&xcfg, &built)
         .map_err(anyhow::Error::msg)?
@@ -468,11 +499,12 @@ pub fn x402_service(
         }) as crate::x402::facilitator::BookReadiness
     });
     let book_ready = ready.clone();
-    // the intents' book is read on a connection of its own as well (one read transaction; never the writer's, never under
-    // the ingest lock)
+    // The intents' book is read on a connection of its own as well: one read transaction, never the
+    // writer's, never under the ingest lock.
     let book_reader = Mutex::new(crate::indexer::db::open_reader(&index.db_path(), &index.network)?);
     let book: crate::x402::BookFn = Arc::new(move || {
-        // a lagging store may list orders that are spent by now: no intent is planned against it
+        // A lagging store may list orders that are spent by now, so no intent is planned
+        // against it.
         if let Some(r) = &book_ready {
             r()?;
         }
@@ -483,9 +515,12 @@ pub fn x402_service(
     crate::x402::prepare_with(built, Arc::new(chain), Some(book), ready).map_err(anyhow::Error::msg)
 }
 
-/// An open facilitator (`auth: "open"`) is for a host where nothing relays connections to it. A read API that listens on a
-/// public address, or that is configured behind a reverse proxy (`trusted_proxies`), says that this host serves the outside:
-/// the facilitator of the same process is then refused unless it uses merchant keys.
+/// Refuses an open facilitator (`auth: "open"`) beside a read API that serves the outside.
+///
+/// An open facilitator is for a host where nothing relays connections to it. A read API that
+/// listens on a public address, or that is configured behind a reverse proxy (`trusted_proxies`),
+/// says that this host serves the outside. The facilitator of the same process is then refused
+/// unless it uses merchant keys.
 pub fn open_auth_beside_api(auth: crate::x402::config::AuthMode, api: &crate::config::ApiConfig) -> Result<()> {
     if auth == crate::x402::config::AuthMode::Open
         && api.enabled
@@ -500,8 +535,10 @@ pub fn open_auth_beside_api(auth: crate::x402::config::AuthMode, api: &crate::co
     Ok(())
 }
 
-/// The runner's node: transactions go to every node that takes submissions (the primary's verdict counts), every other call to
-/// the primary.
+/// The runner's node.
+///
+/// Transactions go to every node that takes submissions (the primary's verdict counts). Every other
+/// call goes to the primary.
 fn multi_submit(
     cfg: &crate::config::IndexerConfig,
     chain: &crate::rpc::multi::MultiNode<crate::rpc::WrpcClient>,
@@ -517,11 +554,16 @@ fn multi_submit(
     MultiSubmit::new(WrpcNode::new(WrpcConfig::new(cfg.primary_url().to_string())), others, Some(chain.board()))
 }
 
-/// The node failover (`[failover]`) is the Indexer's only: refused here rather than ignored. The Executor signs and submits:
-/// its matcher reads the operator's coins, the fee estimate and the sync state from the configured node and its submissions
-/// and acceptance tracking are bound to the nodes it was started with, so a switch of the chain source under it would mix two
-/// views mid-trade. An Executor that should survive the loss of its node runs on the public pair itself (`rpc_url =
-/// "resolver"`, which fails over within the pair), or on its own node with public `nodes` that take its submissions.
+/// Refuses the node failover (`[failover]`), which is the Indexer's only.
+///
+/// It is refused here rather than ignored. The Executor signs and submits. Its matcher reads the
+/// operator's coins, the fee estimate and the sync state from the configured node. Its submissions
+/// and acceptance tracking are bound to the nodes it was started with. So a switch of the chain
+/// source under it would mix two views mid-trade.
+///
+/// An Executor that should survive the loss of its node runs on the public pair itself (`rpc_url =
+/// "resolver"`, which fails over within the pair). Or it runs on its own node with public `nodes`
+/// that take its submissions.
 pub fn refuse_failover(cfg: &crate::config::IndexerConfig) -> Result<()> {
     if cfg.failover.enabled() {
         bail!(
@@ -531,8 +573,11 @@ pub fn refuse_failover(cfg: &crate::config::IndexerConfig) -> Result<()> {
     Ok(())
 }
 
-/// `path` as an absolute path without `.` and `..` components (relative to the working directory: the configuration's), in the
-/// case Windows ignores: what [`inside`] compares. Lexical only: nothing needs to exist.
+/// `path` as an absolute path without `.` and `..` components, relative to the working directory
+/// (the configuration's).
+///
+/// On Windows the result is lowercased, because Windows ignores case. [`inside`] compares the
+/// result. It is lexical only: nothing needs to exist.
 fn lexical(path: &std::path::Path) -> PathBuf {
     use std::path::Component;
     let abs = if path.is_absolute() { path.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(path) };
@@ -559,11 +604,14 @@ fn inside(file: &std::path::Path, dir: &std::path::Path) -> bool {
     f != d && f.starts_with(&d)
 }
 
-/// The key file and the pause file must not lie inside the data directory (audit M-10): the data directory is what an operator
-/// deletes or moves aside to rebuild the store (quickstart 7, step 6), and either file would go with it. The key file there is
-/// refused (its funds would go with it). A pause file there (the setup of a build before 2026-11-11 wrote `kob-data/pause`)
-/// is warned about while the data directory exists, and refused when it does not: the directory was deleted, so a pause the
-/// operator had set went with it, and the start would recreate the directory and trade.
+/// Refuses a key file or a pause file inside the data directory.
+///
+/// The data directory is what an operator deletes or moves aside to rebuild the store
+/// (`docs/ops/executor-quickstart.md`, section 7), and either file would go with it. A key file
+/// there is refused, because its funds would go with it. A pause file there is warned about while
+/// the data directory exists. It is refused when the directory does not exist. The directory was
+/// deleted, so a pause the operator had set went with it, and the start would recreate the
+/// directory and trade.
 pub(crate) fn refuse_files_in_data_dir(
     key_file: Option<&std::path::Path>,
     pause_file: Option<&std::path::Path>,
@@ -593,7 +641,7 @@ pub(crate) fn refuse_files_in_data_dir(
     Ok(())
 }
 
-/// `kobd --executor`.
+/// Runs `kobd --executor`.
 pub async fn run(a: RunArgs) -> Result<()> {
     if a.no_match && a.no_keep {
         bail!("both roles are off: the Indexer alone is `kobd --indexer`");
@@ -604,9 +652,11 @@ pub async fn run(a: RunArgs) -> Result<()> {
     let cfg = build_config(&a.index)?;
     refuse_failover(&cfg)?;
     refuse_files_in_data_dir(a.key_file.as_deref(), a.pause_file.as_deref(), &cfg.data_dir)?;
-    // the operator's funds are read from the nodes' UTXO index: a node without it is unusable (`rpc::judge`)
+    // The operator's funds are read from the nodes' UTXO index: a node without it is unusable
+    // (`rpc::judge`).
     crate::rpc::judge::require_utxo_index();
-    // listening before the slow part (opening the store, the first calls to the node): a Ctrl+C there is not lost
+    // Listen before the slow part (opening the store, the first calls to the node), so a Ctrl+C
+    // there is not lost.
     let shutdown = shutdown_signal();
     let signer = HotKey::load(a.key_file.as_deref())?;
     let mut run_cfg = a.run_config(&cfg.network);
@@ -621,24 +671,27 @@ pub async fn run(a: RunArgs) -> Result<()> {
         );
         run_cfg.engine.planner.inventory = p.clone();
         run_cfg.maintenance.inventory = p;
-        // the period's use survives a restart (a small file next to the database)
+        // The period's use survives a restart (a small file next to the database).
         run_cfg.inventory_state = Some(cfg.data_dir.join("inventory-use.json"));
     }
     if a.max_book_lag_daa.is_none() && cfg.lag_tolerance_daa() > 0 {
-        // one bound for both gates: a store within the tolerance is a book the runner may plan against
+        // One bound for both gates: a store within the tolerance is a book the runner may plan
+        // against.
         run_cfg.max_book_lag = Some(cfg.lag_tolerance_daa());
     }
     run_cfg.verify_live_min_lag = cfg.verify_live_min_lag_daa();
-    // the in-flight journal, the keepers' subsidy window and the start count live next to the database (audit 2026-11-11
-    // M-3, L-2)
+    // The in-flight journal, the keepers' subsidy window and the start count live next to the
+    // database.
     run_cfg.state_dir = Some(cfg.data_dir.clone());
-    // the hot key's balance is not on the read API unless the operator asks for it (`api.executor_funds`): a loopback
-    // listener may be the public's through a proxy or a tunnel on this host
+    // The hot key's balance is not on the read API unless the operator asks for it
+    // (`api.executor_funds`). A loopback listener may be the public's through a proxy or a tunnel
+    // on this host.
     run_cfg.report_funds = cfg.api.shows_executor_funds();
     if run_cfg.report_funds && cfg.api.enabled {
         tracing::warn!(listen = %cfg.api.listen, "api.executor_funds is on: /v1/health and /v1/metrics show the hot key's balance to whoever reaches the read API");
     }
-    // a journal that cannot be read would let this run plan over the inputs of the last run's mempool transactions
+    // A journal that cannot be read would let this run plan over the inputs of the last run's
+    // mempool transactions.
     if !run_cfg.dry_run {
         let path = cfg.data_dir.join(crate::matcher::journal::FILE_NAME);
         crate::matcher::journal::read(&path).with_context(|| {
@@ -668,7 +721,7 @@ pub async fn run(a: RunArgs) -> Result<()> {
     }
     let mut fast = crate::faststart::plan(&cfg);
     if fast != crate::faststart::Plan::Normal && a.x402().is_some() {
-        // the facilitator's acceptance tracking and book are bound to one store
+        // The facilitator's acceptance tracking and book are bound to one store.
         tracing::warn!("no fast start with the x402 facilitator: the indexer first catches up with the chain (up to some hours on a new data directory); the matcher and keepers plan nothing until it has");
         fast = crate::faststart::Plan::Normal;
     }
@@ -699,9 +752,10 @@ pub async fn run(a: RunArgs) -> Result<()> {
 mod tests {
     use super::*;
 
-    /// Audit M-10: a key file inside the data directory is refused; a pause file there is refused when the data directory is
-    /// gone (a pause set there went with it) and only warned about while it exists; files next to it pass. `..` and `.` are
-    /// resolved before the comparison, and a sibling whose name starts with the directory's is not inside it.
+    /// A key file inside the data directory is refused. A pause file there is refused when the data
+    /// directory is gone (a pause set there went with it) and only warned about while it exists.
+    /// Files next to it pass. `..` and `.` are resolved before the comparison, and a sibling whose
+    /// name starts with the directory's is not inside it.
     #[test]
     fn a_key_or_pause_file_inside_the_data_directory_is_refused() {
         let dir = tempfile::tempdir().unwrap();
@@ -714,7 +768,7 @@ mod tests {
         assert!(e.contains("does not exist") && e.contains("pause_file = \"kob-pause\""), "{e}");
         std::fs::create_dir(&data).unwrap();
         assert!(refuse_files_in_data_dir(None, Some(&pause), &data).is_ok(), "warned about while the directory exists");
-        // next to it, or a sibling with a longer name: outside
+        // Next to it, or a sibling with a longer name: outside.
         let next = dir.path().join("kob-pause");
         assert!(refuse_files_in_data_dir(Some(&dir.path().join("kob-operator.key")), Some(&next), &data).is_ok());
         assert!(!inside(&dir.path().join("kob-data2").join("k"), &data));
