@@ -1,89 +1,36 @@
 pragma silverscript ^0.1.0;
 
-// KobIfdAsk: IF-DONE SELL entry (sell-first IFD / IFO / bracket) with partial fills, optionally repeating (protocol
-// v3, no lots). Same shape as KobIfdBid with the sides swapped: tokens held in custody are sold at a limit (or
-// sell-stop) price, and every fill of n base units creates its own exit, a fresh KobCondBid that buys back those n
-// base units on the committed legs. Amounts, prices and rounding as in KobAsk (base units, sompi per whole token,
-// the maker's favour).
+// KobIfdAsk: an if-done entry that sells a KCC-20 token for KAS.
+//
+// It holds tokens in custody and sells them at a limit or sell-stop price.
+// Every fill of n base units creates its own exit, a fresh KobCondBid that
+// buys back those n base units on the committed legs. That gives sell-first
+// IFD, IFO and bracket orders, optionally repeating. KobIfdBid has the same
+// shape with the sides swapped. The KRON version is kron/KobIfdAskKron.sil.
+// The specification is docs/spec/order-types.md.
 //
 // Entries:
-//   settle(nb > 0, ...)  anyone: sell n = nb base units (n <= amountLeft; n >= minFill unless it sells out); creates
-//                        the exit.
-//   settle(nb == 0, ...) anyone, REFUND after expiryDaa or 90 days idle: tokens and carriers back to the maker
-//                        (minus refundTip); only while tokens are held (amountLeft > 0, else close).
-//   settle(nb < 0, ...)  anyone, MERGE: re-arm m base units, spent together with the take-profit fill of the booked
-//                        exit at input k; nb = -(k * 2^53 + m). The bought-back tokens go into this entry's custody.
-//   close()              anyone, after expiry or 90 days idle: refund of a repeating entry with nothing left
-//                        (no custody); the carrier goes back to the maker minus refundTip.
-//   update(ev, tk)       anyone (keeper): arm a stop entry next to the fill of a resting KobAsk at input ev, whose
-//                        custody is at input tk; the keeper may take up to keeperTip from this UTXO's carrier.
-//   cancel(sig)          maker, SIGHASH_ALL.
+//   settle(nb, tokenIn, tokOut, exitOut, cPre, cSuf, ev, tk, t), n = int(nb)
+//     n > 0   Sell n base units and create the exit. Anyone, once
+//             tx.daa >= activeFrom.
+//     n == 0  Refund the custody and the carriers to the maker, while
+//             amountLeft > 0. Anyone, once
+//             tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
+//     n < 0   Merge. Re-arm m base units next to the take-profit fill of the
+//             booked exit at input k, with n = -(k * 2^53 + m). Anyone.
+//   close()
+//     Refund a repeating entry that has nothing left. Anyone, from the same
+//     time as a refund.
+//   update(ev, tk)
+//     Arm a stop entry next to an evidence fill. Anyone, and the keeper may
+//     take up to keeperTip.
+//   cancel(sig)
+//     Maker only, signed with SIGHASH_ALL.
 //
-// State (init_* constructor args, in this order; offsets are redeem-script offsets, the state starts at byte 1):
-//   mutable:   armed [245..253), amountLeft [254..262), rptAmount [263..271) (the windows contSpk splices)
-//   immutable: maker; token identity (tokenCovId, tokenTplHash, tplPrefixLen, tplSuffixLen); scale, price,
-//              tip, activeFrom, expiryDaa, refundTip, prefund, exitCarrier, minFill; stop parameters
-//              (entryStop, bandDaa, minTouch, minRestDaa, keeperTip);
-//              exitState = the KobCondBid state of every exit up to its repeat fields (321 B; settle overwrites amountLeft).
-// Build constants: COND_BID_TPL/PRE/SUF = KobCondBid template hash and prefix/suffix lengths (the exit);
-// ASK_TPL/PRE/SUF = KobAsk (trigger evidence).
-//
-// Custody: the token UTXO owned by this covenant id (owner_scheme 0x04) holding EXACTLY amountLeft base units, of the
-// extension commitment of the committed exit (exitState [118..150), the token the exit buys back; a merge's new custody
-// carries it too): units of the token's covenant id with another commitment are another token. The entry sells at
-// all-in price - tip per whole token or better (tip >= 0, optional priority tip): a fill of n pays the exit at least
-// proceeds(n) = ceil(n * (p - tip) / scale), p >= tip. Stop entry
-// (entryStop > 0, requires entryStop >= price): ARMED by touch evidence, the fill in the same transaction of a
-// resting KobAsk of this token (same scale, its custody of the entry's commitment) quoting <= entryStop (see touchAsk); once armed, the price is a descending auction
-// from entryStop down to `price` over bandDaa DAA from the arming time (bandDaa 0: `price` at once); the auction
-// time t is proven by CLTV. `armed` is 0 / 1 / auction origin as in KobIfdBid (1 = origin is this UTXO's DAA).
-//
-// Fill of n base units creates ONE exit: a fresh covenant whose script is exactly
-//   P2SH(KobCondBid prefix || exitState with amountLeft := n || repeat fields || suffix)
-// (template bytes supplied by the filler, checked against COND_BID_TPL). The exit holds the all-in proceeds of its n
-// plus prefund(n) = ceil(n * prefund / scale) (the maker's pre-funded buy-back budget beyond the proceeds, prefund in
-// sompi per whole token) and exitCarrier, both taken from this
-// UTXO. When a non-repeating entry sells out, everything left (prefund and carriers) goes to the last exit. The
-// designated exit carries the whole obligation of the fill (its value is pinned); an extra genesis output a filler adds
-// would be funded by the filler, not by this order.
-//
-// Repeat (trap-repeat): rptAmount > 0; rptAmount - 1 = base units of re-arms left (0 = not repeating).
-//   - A fill of n with rptAmount > n BOOKS its exit (n < 2^53, the merge argument): rptAmount -= n; the exit gets
-//     parent = this covenant id, rptPrice = price - tip (the proceeds rate owed to the maker), rptPre = prefund and
-//     rptUntil = min(expiryDaa, entry UTXO DAA + 90 days). Any other exit gets parent = rptPrice =
-//     rptPre = rptUntil = 0. While at least one minimum fill of re-arms is left (rptAmount - 1 >= minFill), a fill
-//     takes at most rptAmount - 1 (it is booked): a larger one would leave the rest of the re-arms unused for good.
-//   - The booked exit's take-profit fill of m must run this entry's settle as MERGE: the m bought-back base units join
-//     the custody (exactly amountLeft + m afterwards; a new custody when none was left), the continuation is this
-//     script with amountLeft + m at the ORIGINAL parameters and takes prefund(m) back, or, when the exit sells out,
-//     everything the exit held beyond the maker's proceeds; the maker keeps the profit (paid by the exit).
-//   - A repeating entry never terminates on a fill: sold out, it waits with amountLeft 0 and no custody (the carrier
-//     stays in this UTXO) for its exits, and ends by close, cancel, or refund while it holds tokens. Stop-loss exits do
-//     not re-arm.
-//
-// Key invariants:
-//   - Stop ordering: a stop entry needs entryStop >= price; settle (n > 0) and update both require it, and update also
-//     requires amountLeft > 0 (a stop entry with nothing left cannot be armed).
-//   - Armed encoding 0 / 1 / origin. A fill of an armed entry with bandDaa > 0 and armed == 1 writes the origin
-//     (armed := this UTXO's DAA) into the continuation, and so does a MERGE into an armed, not yet filled entry
-//     (armed == 1, bandDaa > 0): neither restarts the auction. A merge into an entry with nothing left resets armed to 0
-//     (a new trigger is needed).
-//   - t is a CLTV-proven lower bound of now (tx.daa >= t, t >= origin): understating it only raises the price.
-//   - The exit is a fresh covenant. Genesis outputs are invisible to OpAuthOutput* (covenant contexts only hold
-//     continuations), so settle recomputes the consensus genesis id
-//       blake2b_32(key "CovenantID"; outpoint txid || index u32 || 1 u64 || exitOut u32 || value u64 ||
-//                  spk version u16 || spk length u64 || spk script)
-//     and requires OpOutputCovenantId(exitOut) == it. Consensus accepts such an id only on an output authorised by THIS
-//     input as a one-output group, so no existing covenant can be passed off as the exit and no other entry can claim it.
-//   - Every token output (remainder, refund to the maker, custody after a merge) is pinned to the exact state, built on the
-//     custody's own authenticated template.
-//   - Trigger evidence is read, never consumed; it must be a fill of a resting KobAsk of this scale that does not decay
-//     and has rested >= minRestDaa, with its custody at tk. Nothing persists after the transaction.
-//   - Strays: settle refuses any token input owned by this covenant id other than the custody; update refuses any such
-//     input, close any token input at all. Strays sent to this id are inert (see KobAsk). The scan is unrolled over
-//     MAX_TOK_IN = 8 token inputs; more inputs are refused.
-//   - Merge accepts only an input k that is exactly an exit as settle books it (see the merge branch), and that exit's own
-//     settle names this entry and its n; a look-alike exit can only give, never take.
+// Only armed, amountLeft and rptAmount are mutable. exitState is the state
+// of every exit up to its repeat fields, and a fill writes n into its
+// amountLeft. The exit and evidence templates, KobCondBid and KobAsk of this
+// family, are build constants.
 contract KobIfdAsk(
     byte[32] COND_BID_TPL,
     int COND_BID_PRE,
@@ -139,10 +86,13 @@ contract KobIfdAsk(
     int rptAmount = init_rptAmount;        // repeat: 0 = off, else 1 + base units of re-arms left (mutable)
     byte[321] exitState = init_exitState;  // KobCondBid state of every exit up to its repeat fields
 
-    // KCC-20 token state, 112 B on the wire: 0x08 amount[8] | 0x20 owner[32] | 0x01 owner_scheme | 0x01
-    // borrow_scheme | 0x20 borrow_guard[32] | 0x20 extension_commitment[32] (owner at [10..42), scheme and
-    // borrow_scheme pushes at [42..46), guard [47..79), extension [80..112)). The code below reads and writes it
-    // byte-wise; the struct documents the layout.
+    // KCC-20 token state, 112 B on the wire:
+    //   0x08 amount[8] | 0x20 owner[32] | 0x01 owner_scheme
+    //   | 0x01 borrow_scheme | 0x20 borrow_guard[32]
+    //   | 0x20 extension_commitment[32]
+    // The owner is at [10..42), the scheme and borrow_scheme pushes at
+    // [42..46), the guard at [47..79) and the extension at [80..112). The code
+    // reads and writes it byte-wise, and the struct documents the layout.
     struct KCC20State {
         int amount;
         byte[32] owner;
@@ -155,26 +105,36 @@ contract KobIfdAsk(
     byte constant SCHEME_P2PK = 0x00;
     byte constant SCHEME_COVID = 0x04;
     byte constant SIGHASH_ALL = 0x01;
-    // MAX_IDLE: 90 days of DAA. ASK_STATE_LEN: KobAsk state. EXIT_STATE_LEN: KobCondBid state with repeat fields.
+    // MAX_IDLE is 90 days of DAA, at 10 DAA/s. ASK_STATE_LEN is the KobAsk
+    // state. EXIT_STATE_LEN is the KobCondBid state with its repeat fields.
     int constant MAX_IDLE = 77760000;
     int constant ASK_STATE_LEN = 276;
     int constant EXIT_STATE_LEN = 381;
-    // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
+    // The most token inputs a transaction may carry, the KCC-20 limit. More
+    // are refused. The scan over these slots is unrolled by hand, one line per
+    // slot, so raising the cap needs as many lines.
     int constant MAX_TOK_IN = 8;
-    // Merge argument -(k * MERGE_K + m): input index k < 1024, amount m < MERGE_K (2^53).
+    // The merge argument is -(k * MERGE_K + m), for an input index k < 1024
+    // and an amount m < MERGE_K = 2^53.
     int constant MERGE_K = 9007199254740992;
     byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
 
-    // Quote value of n base units at rate r, rounded down (c = 0) or up (c = scale - 1): see KobAsk.quoteOf.
+    // Quote value of n base units at rate r. c = 0 rounds down and
+    // c = scale - 1 rounds up. Prices are in sompi per whole token, which is
+    // `scale` base units, and every amount is rounded in the maker's favour.
+    // KobAsk.quoteOf states when it is exact.
     function quoteOf(int n, int r, int c) : int {
         int m = n % scale;
         int q = n / scale;
         return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
     }
 
-    // Authenticates input idx as a P2SH spend of the template (hash of prefix and suffix, lengths included) and
-    // returns the whole redeem script: the caller slices the state span and builds the token output from the same
-    // authenticated prefix and suffix (what validateOutputStateWithInputTemplate would re-read and hash again).
+    // Check that input idx is an instance of template (pre, stLen, suf, tpl),
+    // as readInputStateWithTemplate does, and return its whole redeem script.
+    // The template hash covers the prefix and suffix with their lengths. The
+    // caller slices the state and builds the token output from the same
+    // authenticated prefix and suffix, which
+    // validateOutputStateWithInputTemplate would read and hash again.
     function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
         int base = OpTxInputScriptSigLen(idx) - size;
@@ -184,7 +144,7 @@ contract KobIfdAsk(
         return rs;
     }
 
-    // As tplRs, returning only the state span.
+    // As tplRs, but return only the state span.
     function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
         int base = OpTxInputScriptSigLen(idx) - size;
@@ -194,22 +154,32 @@ contract KobIfdAsk(
         return rs.slice(pre, pre + stLen);
     }
 
-    // TRIGGER EVIDENCE (touch). Input ev must be a resting KobAsk of this token that this transaction FILLS:
-    // authenticated by template hash + P2SH (tplState), and its sigscript starts with the 8-byte push of its fill
-    // argument n > 0 (only the fill entries of KobAsk / KobBid start with an 8-byte item, and that order's own
-    // script enforces the fill for that n). It must quote at this scale, not decay (slope 0: a decaying price is not
-    // a quote), trade n >= minTouch base units, and have rested at its quote >= minRestDaa DAA before
-    // this transaction (CLTV): exposed = the latest of (its UTXO DAA + its TWAP / DCA interval), its activeFrom
-    // and its custody's DAA. A resting ask is sold at its quote or better, so the quote is a conservative print.
-    // The evidence is read, never consumed (any number of orders may read one fill). KobCross, conditional and
-    // if-done fills are never evidence (other templates).
-    // The ask's custody (input tk) is identified by its owner: a holder UTXO of this token's program (template hash +
-    // P2SH: an input of another program carrying tokenCovId never stands in for it), and the ask admits no other token
-    // input owned by its id in a fill, so the token input owned by the ask's id (owner_scheme 0x04) is its custody.
-    // The custody is of THIS entry's commitment (exitState [118..150), the custody's own): units of tokenCovId of
-    // another commitment are another token, whose quotes cost nothing to fake for whoever holds it.
+    // Trigger evidence, see docs/spec/order-types.md, "Common semantics",
+    // Triggers. Input ev is a plain resting KobAsk of this token that this
+    // transaction fills. Its template is checked by hash and P2SH. Its
+    // sigscript starts with the fixed 8-byte push of its fill argument n > 0.
+    // Only the fill entries of KobAsk and KobBid start that way, and that
+    // order's own script enforces the fill.
+    //
+    // The evidence quotes at this scale and does not decay, because a decaying
+    // price is not a quote. It trades n >= minTouch base units and has rested
+    // at its quote for minRestDaa DAA. The rest starts at the latest of its
+    // UTXO DAA plus its TWAP interval, its activeFrom and its custody's DAA. A
+    // resting ask sells at its quote or better, so the quote is a conservative
+    // print. The evidence is read, never consumed, so any number of orders may
+    // read one fill.
+    //
+    // The ask's custody, input tk, is the token UTXO of this token's program
+    // that the ask's covenant id owns with owner_scheme 0x04. The program is
+    // checked by template hash and P2SH, so an input of another program never
+    // stands in for it. The ask's fill admits no other token input owned by
+    // its id. The custody must carry this entry's commitment, exitState
+    // [118..150). Units of another commitment are another token, whose quotes
+    // cost its holder nothing to fake.
+    //
     // KobAsk state offsets: tokenCovId[34..66) scale[118..126) price[136..144)
     // activeFrom[163..171) interval[190..198) slope[208..216).
+    //
     // Returns the evidence ask's quote.
     function touchAsk(int ev, int tk) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
@@ -220,7 +190,8 @@ contract KobIfdAsk(
         require(int(byte[8](o.slice(118, 126))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(208, 216))) == 0);
-        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        // The interval is the evidence order's own state, and an order built
+        // by hand can carry a negative one. It must not shorten the rest.
         int iv = int(byte[8](o.slice(190, 198)));
         require(iv >= 0);
         int exposed = OpTxInputDaaScore(ev) + iv;
@@ -236,9 +207,11 @@ contract KobIfdAsk(
         return int(byte[8](o.slice(136, 144)));
     }
 
-    // P2SH of this script with armed, amountLeft and rptAmount replaced. Redeem-script offsets (the state starts at
-    // byte 1): armed [245..253), amountLeft [254..262), rptAmount [263..271); bytes 253 and 262 are the 0x08 push
-    // opcodes of amountLeft and rptAmount.
+    // P2SH of this script with armed, amountLeft and rptAmount replaced, the
+    // only mutable fields. The state starts at redeem script offset 1. The
+    // payload windows are armed [245..253), amountLeft [254..262) and
+    // rptAmount [263..271). Bytes 253 and 262 are the 0x08 push opcodes of
+    // amountLeft and rptAmount.
     function contSpk(int newArmed, int newLeft, int newRpt) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
@@ -249,9 +222,11 @@ contract KobIfdAsk(
         ));
     }
 
-    // Stray guard (see KobAsk): no token input other than the custody may be owned by `me`. The owner sits at
-    // state offset 10, found from the end of the token input's sigscript (112 B state, then the template suffix).
-    // Unrolled by hand over the MAX_TOK_IN slots (one line per token input k < cnt).
+    // Stray guard, as KobAsk.noStrays. No token input other than `custody`
+    // may be owned by `me`. The owner sits at state offset 10, found from the
+    // end of the token input's sigscript, which ends with the 112 B state and
+    // the template suffix. The scan is unrolled by hand over MAX_TOK_IN slots,
+    // one line per token input k < cnt.
     function noStrays(byte[32] me, int custody) {
         int cnt = OpCovInputCount(tokenCovId);
         require(cnt <= MAX_TOK_IN);
@@ -266,18 +241,25 @@ contract KobIfdAsk(
         if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
     }
 
-    // nb: base units (8-byte LE; 0 = refund; -(k * 2^53 + m) = merge of the exit at input k buying m
-    // base units); tokenIn: the order's token input (merge into an empty entry: any token input, the
-    // template source); tokOut: token output for the remainder (merge: the custody after it);
-    // exitOut: the exit output; cPre/cSuf: KobCondBid template prefix and suffix (fill only);
-    // ev/tk: the evidence ask and its custody (touch; unarmed stop entry only); t: auction / cycle
-    // time (CLTV).
+    // nb is the amount in base units, 8 bytes LE. It is 0 for a refund, and
+    // -(k * 2^53 + m) for the merge of the exit at input k that bought back m
+    // base units. tokenIn is the custody input. A merge into an empty entry
+    // takes any token input as the template source. tokOut is the token output
+    // of the rest, or of the custody after a merge. exitOut is the exit output.
+    // cPre and cSuf are the KobCondBid template prefix and suffix, for a fill.
+    // ev and tk are the evidence ask and its custody, for an unarmed stop
+    // entry. t is the auction time, proven by CLTV.
     entry settle(byte[8] nb, int tokenIn, int tokOut, int exitOut, byte[] cPre, byte[] cSuf, int ev, int tk, int t) {
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
 
+        // Custody. One KCC-20 UTXO owned by this order's covenant id, with
+        // owner scheme 0x04 and borrowing disabled, holding exactly amountLeft
+        // base units. Its extension commitment is that of the committed exit,
+        // exitState [118..150), the token the exit buys back. A merge's new
+        // custody carries it too.
         require(OpInputCovenantId(tokenIn) == tokenCovId);
         byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
         byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
@@ -286,23 +268,28 @@ contract KobIfdAsk(
         int tinAmount = amountLeft;
         int custody = tokenIn;
         if (n < 0 && amountLeft == 0) {
-            // merge into an empty entry: no custody yet, tokenIn is only the template source
+            // A merge into an empty entry. There is no custody yet, and tokenIn
+            // is only the template source.
             custody = 0 - 1;
             guard = ZERO32;
         } else {
             require(byte[32](tin.slice(10, 42)) == selfId);
             require(tin.slice(43, 46) == byte[](0x040100));
             require(int(byte[8](tin.slice(1, 9))) == tinAmount);
-            // the custody carries the commitment of the committed exit (another commitment is another token)
+            // A KCC-20 token is (covenant id, program, extension commitment).
+            // Units of the same covenant id with another commitment are another
+            // token.
             require(ext == byte[32](byte[](exitState).slice(118, 150)));
         }
         noStrays(selfId, custody);
+        // The carriers are the KAS on the entry and custody UTXOs.
         int carriers = tx.inputs[self].value + tx.inputs[tokenIn].value;
         int outAmount = tinAmount;
         byte[32] outOwner = byte[32](maker);
         byte outScheme = SCHEME_P2PK;
         int outIdx = self;
-        // continuation (if any): this script with these values, holding at least `floor`
+        // The continuation, if any, is this script with these values, holding
+        // at least `floor`.
         bool cont = false;
         int newArmed = armed;
         int newLeft = amountLeft;
@@ -310,36 +297,46 @@ contract KobIfdAsk(
         int floor = 0;
 
         if (n == 0) {
-            // refund: tokens + carriers (minus keeper tip) back to the maker
+            // Refund. Due at the earliest of expiryDaa and 90 days idle.
+            // Expiry is soft, so a fill that lands first still pays the all-in
+            // limit.
             int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
             if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
             require(tx.daa >= idleEnd);
             require(refundTip >= 0);
-            // the tokens return to the maker at output self with every carrier: an entry with nothing left (a
-            // repeating entry waiting for its exits) has no custody and would leave output self unpinned, so it
-            // ends by close(), which pins it to the maker
+            // The tokens return to the maker at output i with every carrier,
+            // less at most refundTip. A repeating entry that waits for its
+            // exits with nothing left has no custody, and would leave output i
+            // unpinned. It ends by close, which pins output i to the maker.
             require(amountLeft > 0);
             require(tx.outputs[self].value + refundTip >= carriers);
         } else {
             if (n < 0) {
-                // MERGE: re-arm m base units bought back by the take-profit leg of the booked exit at
+                // Merge. Re-arm the m base units that the take-profit fill of
+                // the booked exit bought back. That exit is at
                 // input k
                 require(scale > 0);
                 int v = 0 - n;
                 int k = v / MERGE_K;
                 int m = v % MERGE_K;
                 require(m > 0);
-                // input k: an exit exactly as settle books it (a covenant id does not reveal its genesis
-                // outpoint, see KobIfdBid): the committed exitState outside the mutable stopPrice [223..231),
-                // amountLeft [286..294) and armed [295..303) windows (state offsets), then parent = this entry,
-                // rptPrice and rptPre = this entry's (rptUntil [373..381) is not compared). A look-alike exit
-                // someone else funds pays THIS maker on THIS maker's terms and returns at least the prefund of
-                // the amount it re-arms.
+                // Input k must be an exit exactly as settle books it, because a
+                // covenant id does not reveal its genesis outpoint. It carries
+                // the committed exitState outside the mutable windows stopPrice
+                // [223..231), amountLeft [286..294) and armed [295..303), in
+                // state offsets. Then [321..373) holds the parent push
+                // (0x20 + 32 B), which is this entry, the rptPrice and rptPre
+                // pushes (0x08 + 8 B each), which are this entry's, and the
+                // push opcode of rptUntil. rptUntil [373..381) is not compared.
+                // A look-alike exit that someone else funds pays this maker on
+                // this maker's terms, and returns at least the prefund of the
+                // amount it re-arms. See docs/spec/order-types.md, "Repeat IFD
+                // in detail".
                 byte[] x = tplState(k, COND_BID_PRE, EXIT_STATE_LEN, COND_BID_SUF, COND_BID_TPL);
                 byte[] st = byte[](exitState);
                 require(x.slice(0, 223) == st.slice(0, 223));
-                // the exit quotes at this entry's scale (exitState [151..159)): both compute the merge's rounded
-                // amounts alike
+                // The exit quotes at this entry's scale, exitState [151..159),
+                // so both compute the rounded amounts of the merge alike.
                 require(int(byte[8](st.slice(151, 159))) == scale);
                 require(x.slice(231, 286) == st.slice(231, 286));
                 require(x.slice(294, 295) == st.slice(294, 295));
@@ -347,22 +344,27 @@ contract KobIfdAsk(
                 int rate = price - tip;
                 require(x.slice(321, 373) == byte[](0x20) + byte[](selfId) + byte[](0x08) + byte[](rate as byte[8]) + byte[](0x08)
                     + byte[](prefund as byte[8]) + byte[](0x08));
-                // m is this exit's n: its sigscript starts with the 8-byte push of its settle's n (cancel starts with
-                // this maker's own 65-byte signature, refund refuses token inputs, which a merge always has, and
-                // update refuses to run next to this entry)
+                // m is this exit's n. The exit's sigscript starts with the
+                // 8-byte push of the n of its settle. Its other entries cannot
+                // pass for it. Cancel starts with this maker's own 65-byte
+                // signature, refund refuses token inputs, which a merge always
+                // has, and update refuses to run next to this entry.
                 require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));
                 require(int(byte[8](OpTxInputScriptSigSubstr(k, 1, 9))) == m);
-                // the prefund and proceeds the exit releases for m (KobCondBid computes the same, rounded up)
+                // The entry takes back the prefund the exit releases for m.
+                // KobCondBid computes the same amount, rounded up.
                 floor = tx.inputs[self].value + quoteOf(m, prefund, scale - 1);
                 if (int(byte[8](x.slice(286, 294))) == m) {
-                    // the exit sells out: everything it held beyond the maker's proceeds, and never less
-                    // than the prefund of m (a merge never costs the entry)
+                    // The exit sells out. The entry takes everything the exit
+                    // held beyond the maker's proceeds, and never less than the
+                    // prefund of m, so a merge never costs the entry.
                     int all = tx.inputs[self].value + tx.inputs[k].value - quoteOf(m, rate, scale - 1);
                     if (all > floor) { floor = all; }
                 }
                 int keepCarrier = tx.inputs[tokenIn].value;
                 if (amountLeft == 0) {
-                    // a new custody: the exit's extension commitment (token sub-type) and exitCarrier from here
+                    // A new custody, with the exit's extension commitment and
+                    // exitCarrier from this UTXO.
                     ext = byte[32](x.slice(118, 150));
                     keepCarrier = exitCarrier;
                     floor = floor - exitCarrier;
@@ -370,12 +372,15 @@ contract KobIfdAsk(
                 require(tx.outputs[tokOut].value >= keepCarrier);
                 outAmount = tinAmount + m;
                 newLeft = amountLeft + m;
+                // A merge into an entry with nothing left resets armed to 0,
+                // so a new trigger is needed.
                 if (amountLeft == 0) {
                     newArmed = 0;
                 } else {
                     if (armed == 1 && bandDaa > 0) {
-                        // armed by update, not filled yet: fix the auction origin (the armed UTXO's DAA) as a fill
-                        // does, so the merge does not restart the band
+                        // Armed by update and not filled yet. Fix the auction
+                        // origin at the armed UTXO's DAA, as a fill does, so
+                        // the merge does not restart the band.
                         newArmed = OpTxInputDaaScore(self);
                     }
                 }
@@ -389,8 +394,14 @@ contract KobIfdAsk(
                 require(n <= amountLeft);
                 outAmount = tinAmount - n;
                 newLeft = amountLeft - n;
+                // Minimum fill. A fill takes at least minFill unless it sells
+                // out, as in KobAsk.
                 require(n >= minFill || outAmount == 0);
                 int p = price;
+                // Stop entry. It needs entryStop >= price, and update requires
+                // the same. An unarmed entry arms on a fill of a resting ask
+                // quoting at most entryStop, see touchAsk. With bandDaa > 0
+                // that fill sells at entryStop itself.
                 if (entryStop > 0) {
                     require(entryStop >= price);
                     if (armed == 0) {
@@ -400,6 +411,14 @@ contract KobIfdAsk(
                             p = entryStop;
                         }
                     } else {
+                        // Once armed, the price falls from entryStop to price
+                        // over bandDaa DAA after the origin, a descending
+                        // auction. With bandDaa 0 it is price at once. armed is
+                        // 0, 1 or the origin. 1 means the origin is the DAA of
+                        // this UTXO, and a fill writes it into the
+                        // continuation, so partial fills do not restart the
+                        // auction. The filler chooses t, and CLTV proves
+                        // tx.daa >= t. Understating t only raises the price.
                         if (bandDaa > 0) {
                             if (armed == 1) {
                                 newArmed = OpTxInputDaaScore(self);
@@ -413,35 +432,49 @@ contract KobIfdAsk(
                         }
                     }
                 }
-                // the seller's all-in proceeds (rounded up) and the buy-back prefund of n (rounded up): the exit's
-                // price >= tip (then p >= price >= tip as well): a booked exit's rptPrice = price - tip is never negative
+                // All-in price. A fill of n pays the exit at least
+                // proceeds = ceil(n * (p - tip) / scale), plus the buy-back
+                // prefund ceil(n * prefund / scale). price >= tip, so
+                // p >= price >= tip as well, and a booked exit's rptPrice of
+                // price - tip is never negative.
                 require(price >= tip);
                 int proceeds = quoteOf(n, p - tip, scale - 1);
                 int pre = quoteOf(n, prefund, scale - 1);
 
-                // Repeat: book this exit (it re-arms these n base units on its take-profit) while re-arms last.
+                // Repeat. rptAmount is 0 for an entry that does not repeat, and
+                // otherwise 1 plus the base units of re-arms left. A fill of n
+                // with rptAmount > n books its exit, which re-arms these n base
+                // units on its take-profit. Any other exit gets zero repeat
+                // fields. See docs/spec/order-types.md, "Repeat IFD in detail".
                 byte[32] xParent = ZERO32;
                 int xPrice = 0;
                 int xPre = 0;
                 int xUntil = 0;
                 if (rptAmount > n) {
-                    // a booked exit's amount fits the merge argument
+                    // A booked exit's amount fits the merge argument.
                     require(n < MERGE_K);
                     newRpt = rptAmount - n;
                     xParent = selfId;
                     xPrice = price - tip;
                     xPre = prefund;
-                    // the cycle counts from this entry's UTXO DAA (its last activity), never from an argument the filler chooses
+                    // The cycle counts from this entry's UTXO DAA, its last
+                    // activity, never from an argument the filler chooses.
                     int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
                     xUntil = expiryDaa < idleEnd ? expiryDaa : idleEnd;
                 } else {
-                    // a fill of more than the re-arms left would leave them unused for good: while at least one minimum fill
-                    // of re-arms is left, a fill takes at most that many (and is booked)
+                    // A fill of more than the re-arms left would leave them
+                    // unused for good. While at least one minimum fill of
+                    // re-arms is left, a fill takes at most that many, and is
+                    // booked.
                     require(rptAmount <= 1 || rptAmount - 1 < minFill);
                 }
 
-                // The exit: committed KobCondBid state with amountLeft (state [286..294)) := n, then the repeat
-                // fields parent (0x20 + 32 B), rptPrice, rptPre, rptUntil (0x08 + 8 B each) written here.
+                // The exit. Its script is exactly the P2SH of the KobCondBid
+                // prefix, the committed state with amountLeft (state
+                // [286..294)) set to n, the repeat fields and the suffix. The
+                // repeat fields are parent (0x20 + 32 B), then rptPrice, rptPre
+                // and rptUntil (0x08 + 8 B each). The filler supplies the
+                // template bytes, which are checked against COND_BID_TPL.
                 require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == COND_BID_TPL);
                 byte[] st = byte[](exitState);
                 byte[] exitSpk = byte[](new ScriptPubKeyP2SHFromRedeemScript(
@@ -450,7 +483,19 @@ contract KobIfdAsk(
                         + byte[](xUntil as byte[8]) + cSuf
                 ));
                 require(tx.outputs[exitOut].scriptPubKey == exitSpk);
-                // fresh covenant: its genesis id, recomputed (see the header) for a one-output group authorised by this input
+                // The exit is a fresh covenant. Genesis outputs are invisible
+                // to OpAuthOutput*, because covenant contexts hold only
+                // continuations. So settle recomputes the consensus genesis id
+                //   blake2b_32(key "CovenantID"; outpoint txid || index u32 ||
+                //              1 u64 || exitOut u32 || value u64 ||
+                //              spk version u16 || spk length u64 || spk script)
+                // and requires it on exitOut. Consensus accepts that id only on
+                // an output that this input authorises as a one-output group.
+                // So no existing covenant can pass for the exit, and no other
+                // entry can claim it. This exit's value is pinned below and
+                // carries the whole obligation of the fill. An extra genesis
+                // output that a filler adds is funded by the filler, not by
+                // this order.
                 require(OpOutputCovenantId(exitOut) == blake2bWithKey(
                     byte[](OpOutpointTxId(self)) + byte[](OpOutpointIndex(self) as byte[4]) + byte[](1 as byte[8])
                         + byte[](exitOut as byte[4]) + byte[](tx.outputs[exitOut].value as byte[8]) + exitSpk.slice(0, 2)
@@ -458,8 +503,10 @@ contract KobIfdAsk(
                     byte[]("CovenantID")
                 ));
                 if (outAmount > 0 || rptAmount > 0) {
-                    // rest (or a repeating entry sold out, keeping the custody carrier): this script, one exit
-                    // for n
+                    // The entry continues with the rest, or as a repeating
+                    // entry that sold out and keeps the custody carrier. The
+                    // exit holds the proceeds of its n, prefund(n) and
+                    // exitCarrier, the last two taken from this UTXO.
                     cont = true;
                     floor = tx.inputs[self].value - pre - exitCarrier;
                     if (outAmount > 0) {
@@ -469,7 +516,8 @@ contract KobIfdAsk(
                     }
                     require(tx.outputs[exitOut].value >= proceeds + pre + exitCarrier);
                 } else {
-                    // sold out: the last exit takes everything left
+                    // A non-repeating entry sold out. The last exit takes
+                    // everything left, the prefund and the carriers.
                     require(tx.outputs[exitOut].value >= proceeds + carriers);
                 }
             }
@@ -480,6 +528,8 @@ contract KobIfdAsk(
             }
         }
 
+        // The continuation is the only output bound to this covenant id. A
+        // refund, or a fill that ends the entry, leaves none.
         if (cont) {
             require(OpCovOutputCount(selfId) == 1);
             int c = OpCovOutputIdx(selfId, 0);
@@ -490,11 +540,13 @@ contract KobIfdAsk(
         }
 
         if (outAmount > 0) {
-            // Pin the only token output this order allows (refund to the maker, remainder, or the custody
-            // after a merge).
-            // (hand-written validateOutputStateWithInputTemplate on (outIdx, <state>, tokenIn, tplPrefixLen, tplSuffixLen,
-            // tokenTplHash): the custody's own template, prefix and suffix of the redeem script authenticated above,
-            // around the state's canonical push encoding)
+            // Pin the only token output this order allows: the refund to the
+            // maker, the rest, or the custody after a merge. It is the
+            // custody's own template, whose prefix and suffix are authenticated
+            // above, around the state's canonical push encoding, bound to the
+            // token's covenant id. This is what
+            // validateOutputStateWithInputTemplate(outIdx, <state>, tokenIn,
+            // tplPrefixLen, tplSuffixLen, tokenTplHash) would check.
             require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                 trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](outAmount as byte[8]) + byte[](0x20) + byte[](outOwner)
                     + byte[](0x01) + byte[](outScheme) + byte[](0x010020) + guard + byte[](0x20) + ext
@@ -504,8 +556,10 @@ contract KobIfdAsk(
         }
     }
 
-    // Refund of a repeating entry with nothing left (no custody): soft expiry or 90 days idle,
-    // anyone; the carrier (minus the keeper tip) back to the maker.
+    // Refund of a repeating entry with nothing left and so no custody. Anyone
+    // may send it at the earliest of expiryDaa and 90 days idle. The carrier
+    // goes back to the maker at output i, less at most refundTip. It spends no
+    // token input at all, so strays sent to this id stay put.
     entry close() {
         int self = this.activeInputIndex;
         require(amountLeft == 0);
@@ -521,16 +575,21 @@ contract KobIfdAsk(
         require(tx.outputs[self].value + refundTip >= tx.inputs[self].value);
     }
 
-    // Arm a stop entry without a fill of this entry (anyone), next to the evidence fill at input ev
-    // (touch; its custody at tk); the keeper may take up to keeperTip from this UTXO's carrier. The
-    // entry's token UTXO must not be spent here (no token input owned by this covenant id: this
-    // path pins no token output; the evidence fill brings token inputs of its own).
-    // An exit never reads it as a merge: the merge argument is negative, a valid ev is not.
+    // Arm a stop entry without a fill of this entry, next to the evidence fill
+    // at input ev, with its custody at tk. Anyone may send it, and the keeper
+    // may take up to keeperTip from this UTXO's carrier. An exit never reads
+    // it as a merge, because the merge argument is negative and a valid ev is
+    // not.
     entry update(int ev, int tk) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
+        // No token input owned by this covenant id may be spent, the custody
+        // included, because this path pins no token output. The evidence fill
+        // brings token inputs of its own.
         noStrays(selfId, -1);
+        // A stop entry needs entryStop >= price, as a fill does. One with
+        // nothing left cannot be armed.
         require(entryStop > 0);
         require(entryStop >= price);
         require(amountLeft > 0);
@@ -544,6 +603,8 @@ contract KobIfdAsk(
         require(tx.outputs[c].value >= tx.inputs[self].value - keeperTip);
     }
 
+    // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
+    // maker routes the custody and any strays.
     entry cancel(sig s) {
         byte[] sb = byte[](s);
         require(sb.length == 65);
