@@ -49,13 +49,13 @@ pub fn parse_pushes(script: &[u8]) -> Option<Vec<Vec<u8>>> {
     Some(out)
 }
 
-/// The P2SH script public key of `redeem` as the node prints it: version (2 bytes, big endian)
-/// followed by the script.
+/// The P2SH script public key of `redeem`, in the byte form of [`spk_bytes`].
 pub fn p2sh_spk(redeem: &[u8]) -> Vec<u8> {
     let spk = kaspa_txscript::pay_to_script_hash_script(redeem);
     spk_bytes(&spk)
 }
 
+/// A script public key as the node prints it: version (2 bytes, big endian), then the script.
 pub fn spk_bytes(spk: &ScriptPublicKey) -> Vec<u8> {
     let mut v = Vec::with_capacity(2 + spk.script().len());
     v.extend_from_slice(&spk.version().to_be_bytes());
@@ -63,6 +63,7 @@ pub fn spk_bytes(spk: &ScriptPublicKey) -> Vec<u8> {
     v
 }
 
+/// The script public key of [`spk_bytes`] output, or `None` when shorter than the 2-byte version.
 pub fn parse_spk(bytes: &[u8]) -> Option<ScriptPublicKey> {
     if bytes.len() < 2 {
         return None;

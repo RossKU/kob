@@ -1,5 +1,8 @@
-//! Disk facts for monitoring (audit 2026-11-11 M-5): the free space of the data directory's file system and the size of the
-//! database. No dependency: `statvfs` on Unix, `GetDiskFreeSpaceExW` on Windows; `None` elsewhere or on failure.
+//! Disk facts for monitoring.
+//!
+//! Two numbers are measured. They are the free space of the data directory's file system and the
+//! size of the database. The free space comes from `statvfs` on Unix and `GetDiskFreeSpaceExW` on
+//! Windows, so no extra dependency is needed. It is `None` on other platforms or on failure.
 
 use std::path::Path;
 
@@ -9,8 +12,8 @@ use std::path::Path;
 pub fn free_bytes(dir: &Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
     let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
-    // SAFETY: an all-zero `statvfs` is a valid value of the plain C struct, and `statvfs` writes it from a NUL-terminated path
-    // that lives for the call.
+    // SAFETY: an all-zero `statvfs` is a valid value of the plain C struct. `statvfs` fills it
+    // from a NUL-terminated path that lives for the call.
     let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 {
         return None;
@@ -29,17 +32,21 @@ pub fn free_bytes(dir: &Path) -> Option<u64> {
     let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
     let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
     let mut available = 0u64;
-    // SAFETY: a NUL-terminated wide path that lives for the call; the two counts not asked for may be null.
+    // SAFETY: the wide path is NUL-terminated and lives for the call. The two counts not asked for
+    // may be null.
     let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, std::ptr::null_mut(), std::ptr::null_mut()) };
     (ok != 0).then_some(available)
 }
 
+/// Always `None`: this platform has no free-space call.
 #[cfg(not(any(unix, windows)))]
 pub fn free_bytes(_dir: &Path) -> Option<u64> {
     None
 }
 
-/// Bytes of the SQLite database at `db` with its write-ahead log and shared-memory file; `None` when the file is missing.
+/// Bytes of the SQLite database at `db` with its write-ahead log and shared-memory file.
+///
+/// `None` when the database file is missing. A missing side file counts as 0.
 pub fn db_bytes(db: &Path) -> Option<u64> {
     let main = std::fs::metadata(db).ok()?.len();
     let side = |suffix: &str| {

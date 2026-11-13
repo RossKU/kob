@@ -1,5 +1,7 @@
-//! `kobd` library: the indexer, the matcher, the keepers and the x402 facilitator (one
-//! binary, role subcommands; `run` hosts them in one process over one store).
+//! The `kobd` library: the indexer, the matcher, the keepers and the x402 facilitator.
+//!
+//! One binary serves all roles through subcommands. `run` hosts them in one process over one
+//! store.
 
 pub mod api;
 pub mod app;

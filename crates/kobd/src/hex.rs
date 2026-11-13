@@ -10,10 +10,12 @@ use std::fmt;
 #[error("invalid hex: {0}")]
 pub struct HexError(pub String);
 
+/// Lowercase hex of `bytes`, without a prefix.
 pub fn encode(bytes: &[u8]) -> String {
     faster_hex::hex_string(bytes)
 }
 
+/// Bytes of a hex string, with an optional `0x` prefix. An odd length is an error.
 pub fn decode(s: &str) -> Result<Vec<u8>, HexError> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if !s.len().is_multiple_of(2) {
@@ -29,21 +31,26 @@ pub fn decode(s: &str) -> Result<Vec<u8>, HexError> {
 pub struct Hash32(pub [u8; 32]);
 
 impl Hash32 {
+    /// The all-zero hash.
     pub const ZERO: Hash32 = Hash32([0u8; 32]);
 
+    /// The hash of exactly 32 bytes, or `None` for any other length.
     pub fn from_slice(b: &[u8]) -> Option<Hash32> {
         <[u8; 32]>::try_from(b).ok().map(Hash32)
     }
 
+    /// Parse 64 hex characters, with an optional `0x` prefix.
     pub fn parse(s: &str) -> Result<Hash32, HexError> {
         let v = decode(s)?;
         Hash32::from_slice(&v).ok_or_else(|| HexError(format!("expected 32 bytes, got {}", v.len())))
     }
 
+    /// The 32 bytes.
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
+    /// Lowercase hex, 64 characters.
     pub fn to_hex(&self) -> String {
         encode(&self.0)
     }
