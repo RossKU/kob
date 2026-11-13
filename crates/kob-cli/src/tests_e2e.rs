@@ -1,9 +1,12 @@
-//! End to end against a mock wRPC node (no network): real orders built with kob-protocol, a kob-backup, an export file and
-//! indexer views on disk, `kob recover` (search, report, `--cancel --dry-run`, submit) and `kob order sweep|cancel`.
-//! Every signed transaction is re-validated in the rusty-kaspa engine from the file the command wrote.
+//! End-to-end tests against a mock wRPC node, with no network.
 //!
-//! Amounts are base units and prices sompi per whole token. The fixtures use `SCALE = 1000` base units per whole token (a
-//! token of three decimals).
+//! The fixtures are real orders built with kob-protocol, a kob-backup, an export file and indexer
+//! views on disk. The tests run `kob recover` (search, report, `--cancel --dry-run`, submit) and
+//! `kob order sweep|cancel`. Every signed transaction is re-validated in the rusty-kaspa engine
+//! from the file that the command wrote.
+//!
+//! Amounts are base units and prices are sompi per whole token. The fixtures use `SCALE = 1000`
+//! base units per whole token, which is a token of three decimals.
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +64,7 @@ fn rtip() -> i64 {
     kob_protocol::defaults::tips(P).map(|t| t.refund_tip as i64).unwrap_or(10_000_000)
 }
 
-/// A plain ask of `amount` base units at 0.25 KAS per whole token, no smaller fill than one whole token.
+/// A plain ask of `amount` base units at 0.25 KAS per whole token, with a minimum fill of 1 token.
 fn ask(maker: u8, amount: i64) -> AskState {
     let (h, p, s) = tok_fields(P);
     AskState {
@@ -115,8 +118,9 @@ fn bid(maker: u8) -> BidState {
     }
 }
 
-/// A pair order of 10 whole TOKEN (A) for TOKEN_B (B) at 1000 base units of B per whole A: an ASK (custody 10 000 of A) or a
-/// BID (custody: the B escrow of four fills).
+/// A pair order of 10 whole TOKEN (A) for TOKEN_B (B) at 1000 base units of B per whole A.
+///
+/// It is an ASK with a custody of 10 000 of A, or a BID with the B escrow of four fills as custody.
 fn pair_order(maker: u8, ask: bool) -> PairState {
     let (h, p, s) = tok_fields(P);
     let (sc, tc) = if ask { (TOKEN, TOKEN_B) } else { (TOKEN_B, TOKEN) };
@@ -159,8 +163,10 @@ fn pair_order(maker: u8, ask: bool) -> PairState {
     x
 }
 
-/// A sell-first pair entry of 10 whole TOKEN (A) at 1000 B per whole A with a prefund of 200 B per whole A: it holds two
-/// custodies (its A and its B prefund). Its exit buys A back (limit 800, stop 1100).
+/// A sell-first pair entry of 10 whole TOKEN (A) at 1000 B per whole A, with a prefund of 200 B per
+/// whole A.
+///
+/// It holds two custodies, its A and its B prefund. Its exit buys A back at limit 800, stop 1100.
 fn ifd_sell_first(maker: u8) -> IfdPairState {
     let (h, p, s) = tok_fields(P);
     let b = pair_order(maker, false);
@@ -279,7 +285,8 @@ struct Fixture {
     a6: AnyState,
     a7_placed: AnyState,
     a7_now: AnyState,
-    /// A plain ask partly filled to 6500 base units: not on the `amountLeft - k x minFill` grid of its placed state.
+    /// A plain ask partly filled to 6500 base units, which is not on the `amountLeft - k x minFill`
+    /// grid of its placed state.
     a9_placed: AnyState,
     a9_now: AnyState,
     bid_value: u64,
@@ -303,27 +310,28 @@ fn fixture() -> Fixture {
         node_utxo(&a1.spk(), 0x11, 0, CARRIER, Some(A1)),
         token_node_utxo(P, TOKEN, 0x12, 10 * SCALE, A1),
         node_utxo(&a2.spk(), 0x21, 0, bid_value, Some(A2)),
-        // a partially filled ask whose carrier is too small to pay its cancel: funding comes from the node
+        // A partially filled ask whose carrier is too small to pay its cancel. Funding comes from
+        // the node.
         node_utxo(&a3_now.spk(), 0x31, 0, 5_000, Some(A3)),
         token_node_utxo(P, TOKEN, 0x32, 7 * SCALE, A3),
         node_utxo(&a6.spk(), 0x61, 0, CARRIER, Some(A6)),
         token_node_utxo(P, TOKEN, 0x62, 10 * SCALE, A6),
         node_utxo(&a7_now.spk(), 0x71, 0, CARRIER, Some(A7)),
         token_node_utxo(P, TOKEN, 0x72, 6 * SCALE, A7),
-        // the ask partly filled to 6500 base units
+        // The ask partly filled to 6500 base units.
         node_utxo(&a9_now.spk(), 0xc1, 0, CARRIER, Some(A9)),
         token_node_utxo(P, TOKEN, 0xc2, 6_500, A9),
-        // the maker's plain KAS: a dust-sized one (tried first, too small) and a sufficient one
+        // The maker's plain KAS: a dust-sized one (tried first, too small) and a sufficient one.
         node_utxo(&p2pk_spk(&pk(1)), 0x92, 0, 1_000, None),
         node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None),
-        // strays of A1: two of its own token, one foreign (KRON)
+        // Strays of A1: two of its own token, one foreign (KRON).
         token_node_utxo(P, TOKEN, 0x13, 3, A1),
         token_node_utxo(P, TOKEN, 0x14, 4, A1),
         token_node_utxo(PF, TOKEN_F, 0x15, 9, A1),
-        // a stray of A2 (bid)
+        // A stray of A2 (bid).
         token_node_utxo(P, TOKEN, 0x23, 5, A2),
     ];
-    // an unrelated output at the same address as A5 but without A5's covenant id: never counts
+    // An unrelated output at the same address as A5 but without A5's covenant id: never counts.
     utxos.push(node_utxo(&a5.spk(), 0x51, 0, CARRIER, Some([0x55; 32])));
     Fixture { a1, a2, a3_placed, a3_now, a5, a6, a7_placed, a7_now, a9_placed, a9_now, bid_value, utxos }
 }
@@ -353,8 +361,11 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
-/// The backup (A1 with its custody state, A3 as placed, A5, A7 with a later `last`) and the export (A2, A6, A1 again, A9 as
-/// placed, a template this build does not pin, two malformed entries).
+/// The backup and the export.
+///
+/// The backup holds A1 with its custody state, A3 as placed, A5, and A7 with a later `last`. The
+/// export holds A2, A6, A1 again, A9 as placed, a template this build does not pin and two
+/// malformed entries.
 fn files(f: &Fixture, dir: &Path) -> (PathBuf, PathBuf) {
     let ask_hash = template(TemplateId::KobAsk).hash;
     let mut r1 = record(A1, "KobAsk", ask_hash, &hex_state(&f.a1), pk(1));
@@ -402,7 +413,7 @@ fn recover_finds_cancels_and_submits() {
     let base =
         format!("--from {} --from {} --node {url} --network {NET} --maker {}", backup.display(), export.display(), to_hex(&pk(1)));
 
-    // the search
+    // The search.
     let a = recover::parse_args(&v(&base)).unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok);
@@ -430,11 +441,12 @@ fn recover_finds_cancels_and_submits() {
     assert_eq!(st(A7), "live");
     assert_eq!(by_cov(&report, A7)["amount_left"], "6000", "the last proven state is a candidate");
     assert_eq!(by_cov(&report, A7)["found_by"], VIA_KNOWN);
-    // 6500 is not on the amountLeft - k x minFill grid of the placed state: not found without a hint, and honest about it
+    // 6500 is not on the `amountLeft - k x minFill` grid of the placed state. It is not found
+    // without a hint, and the report says so.
     assert_eq!(st(A9), "not_found");
     let note = by_cov(&report, A9)["note"].as_str().unwrap().to_string();
     assert!(note.contains("--amount-left") && note.contains("not exhaustive"), "{note}");
-    // a template this build does not pin is unknown: unsupported, never searched
+    // A template this build does not pin is unknown: unsupported, never searched.
     assert_eq!(st([0xb0; 32]), "unsupported");
     assert_eq!(by_cov(&report, [0xb0; 32])["note"], "template is neither pinned by this build nor in its cancel-only table");
     assert_eq!(by_cov(&report, [0xb0; 32])["candidates"], 0);
@@ -445,7 +457,7 @@ fn recover_finds_cancels_and_submits() {
     assert!(by_cov(&report, A1)["source"].as_str().unwrap().contains("export.json"));
     assert!(node.lock().unwrap().submitted.is_empty());
 
-    // --cancel --dry-run: engine-validated signed cancels written, nothing submitted
+    // --cancel --dry-run: engine-validated signed cancels written, nothing submitted.
     let out = dir.join("signed");
     let a = recover::parse_args(&v(&format!(
         "{base} --cancel --dry-run --key {} --out-dir {} --out {}",
@@ -468,7 +480,8 @@ fn recover_finds_cancels_and_submits() {
     assert_eq!(by_cov(&report, A3)["cancel"]["funding"], format!("{}:0", to_hex(&[0x91; 32])), "the smallest SUFFICIENT UTXO");
     assert!(node.lock().unwrap().submitted.is_empty(), "a dry run submits nothing");
 
-    // submit without --yes: with no terminal to ask, every cancel is refused and nothing is signed or sent
+    // Submit without `--yes`: with no terminal to ask, every cancel is refused and nothing is
+    // signed or sent.
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         let a = recover::parse_args(&v(&format!("{base} --cancel --key {}", to_hex(&sk(1))))).unwrap();
         let (report, ok) = recover::execute(&a).unwrap();
@@ -477,7 +490,7 @@ fn recover_finds_cancels_and_submits() {
         assert!(by_cov(&report, A1)["cancel"]["reason"].as_str().unwrap().contains("pass --yes"), "{report}");
         assert!(node.lock().unwrap().submitted.is_empty(), "nothing submitted");
     }
-    // with --yes: one transaction per live order of the key
+    // With --yes: one transaction per live order of the key.
     let a = recover::parse_args(&v(&format!("{base} --cancel --yes --key {}", to_hex(&sk(1))))).unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok, "{report}");
@@ -485,7 +498,8 @@ fn recover_finds_cancels_and_submits() {
     assert!(by_cov(&report, [0xb0; 32]).get("cancel").is_none());
     assert_eq!(node.lock().unwrap().submitted.len(), 4);
 
-    // without --maker: another maker's order is found live, and its cancel is skipped, never attempted with this key
+    // Without `--maker`, the order of another maker is found live. Its cancel is skipped and never
+    // attempted with this key.
     let a = recover::parse_args(&v(&format!(
         "--from {} --node {url} --network {NET} --cancel --dry-run --key {}",
         export.display(),
@@ -496,7 +510,7 @@ fn recover_finds_cancels_and_submits() {
     assert!(ok);
     assert_eq!(by_cov(&report, A6)["status"], "live");
     assert_eq!(by_cov(&report, A6)["cancel"]["status"], "skipped");
-    // the exit code path end to end, with the report file
+    // The exit code path end to end, with the report file.
     let code = recover::run(&v(&format!("{base} --out {}", dir.join("r2.json").display())));
     assert_eq!(code, 0);
     let r2: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("r2.json")).unwrap()).unwrap();
@@ -519,9 +533,10 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
         .unwrap();
         recover::execute(&a).unwrap().0
     };
-    // no hint: the fallback grid (10000, 9000, ..., 1000) does not reach 6500
+    // No hint: the fallback grid (10000, 9000, ..., 1000) does not reach 6500.
     assert_eq!(by_cov(&run(""), A9)["status"], "not_found");
-    // base units or whole tokens (the order's own scale gives the decimals), for this order or for every order
+    // Base units or whole tokens, for this order or for every order. The scale of the order gives
+    // the decimals.
     for hint in
         [format!("{}=6500", to_hex(&A9)), "6500".to_string(), format!("{}=6.5", to_hex(&A9)), "6.5".to_string(), "6.500".to_string()]
     {
@@ -533,24 +548,23 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
         assert_eq!(o["state"], hex_state(&f.a9_now));
         assert_eq!(o["custody"]["status"], "verified");
         assert_eq!(o["custody"]["amount"], "6500");
-        // the orders found without a hint stay as they were
+        // The orders found without a hint stay as they were.
         assert_eq!(by_cov(&report, A1)["found_by"], VIA_KNOWN);
     }
-    // a hint for another order does not apply to this one
+    // A hint for another order does not apply to this one.
     assert_eq!(by_cov(&run(&format!("--amount-left {}=6500", to_hex(&A1))), A9)["status"], "not_found");
-    // more decimals than the token has (3): ignored, and said so
+    // More decimals than the token has (3): ignored, and said so.
     let report = run("--amount-left 6.5001");
     assert_eq!(by_cov(&report, A9)["status"], "not_found");
     assert!(by_cov(&report, A9)["note"].as_str().unwrap().contains("--amount-left ignored"), "{report}");
-    // the hinted order is cancellable like any other
+    // The hinted order is cancellable like any other.
     let out = dir.join("signed");
     let report = run(&format!("--amount-left 6.5 --cancel --dry-run --key {} --out-dir {}", to_hex(&sk(1)), out.display()));
     let c = &by_cov(&report, A9)["cancel"];
     assert_eq!(c["status"], "signed", "{c}");
     let s = signed_from(c["file"].as_str().unwrap());
     assert_eq!(s.tx.inputs.len(), 2, "order + custody of 6500");
-    // arguments
-    // --yes belongs to --cancel and excludes --dry-run
+    // Arguments. `--yes` belongs to `--cancel` and excludes `--dry-run`.
     let e = recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --yes")).unwrap_err();
     assert!(e.contains("belong to --cancel"), "{e}");
     let e =
@@ -643,7 +657,7 @@ fn a1_view(f: &Fixture, cur: (u8, u32)) -> Value {
 #[test]
 fn order_and_recover_take_the_priority_fee_flag() {
     use kob_protocol::tx::FeeMode;
-    // parsing: off by default, a switch without a value; `kob recover` takes it with --cancel only
+    // Parsing: off by default, a switch without a value. `kob recover` takes it with --cancel only.
     let o = |extra: &str| {
         order::parse_args(order::Op::Cancel, &v(&format!("--view a.json --key 00 --node ws://x:1 --network {NET} {extra}")))
     };
@@ -656,7 +670,7 @@ fn order_and_recover_take_the_priority_fee_flag() {
     assert!(r("--priority-fee").unwrap_err().contains("belong to --cancel"));
     assert!(order::USAGE.contains("--priority-fee") && recover::USAGE.contains("--priority-fee"));
 
-    // the fee actually built: a bid's sweep pays its fee from a plain UTXO of the maker
+    // The fee actually built: a bid's sweep pays its fee from a plain UTXO of the maker.
     let f = fixture();
     let (url, _node) = mock::start(f.utxos.clone());
     let dir = tmp("order-priority");
@@ -689,7 +703,8 @@ fn order_and_recover_take_the_priority_fee_flag() {
     let prio = sweep("--priority-fee");
     assert_eq!(relay.fee.fee_mode, FeeMode::Relay);
     assert_eq!(prio.fee.fee_mode, FeeMode::Priority);
-    // the priority fee is the relay floor or above it, charged on the storage-inclusive mass, at the default rate
+    // The priority fee is the relay floor or above it, charged on the storage-inclusive mass at the
+    // default rate.
     assert_eq!(prio.fee.min_fee, kob_protocol::tx::priority_fee(&prio.fee.mass, relay.fee.fee_rate));
     assert!(prio.fee.min_fee >= relay.fee.min_fee && prio.fee.fee >= relay.fee.fee, "{:?} {:?}", prio.fee, relay.fee);
     let _ = std::fs::remove_dir_all(dir);
@@ -714,7 +729,7 @@ fn order_sweep_and_cancel_from_views() {
         order::execute(&a).unwrap()
     };
 
-    // an ask with own and foreign strays: swept in place, paid by its carrier
+    // An ask with own and foreign strays: swept in place, paid by its carrier.
     let p = write(&dir, "a1.json", &a1_view(&f, (0x11, 0)));
     let (report, ok) = sweep(&p, "--dry-run");
     assert!(ok, "{report}");
@@ -729,7 +744,8 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(s.tx.outputs[0].covenant.as_ref().unwrap().covenant_id, A1);
     assert_eq!(s.tx.inputs.len(), 4, "order + 2 own strays + 1 foreign, no custody, no funding");
 
-    // a bid's sweep needs funding: the smallest sufficient plain KAS UTXO of the maker from the node
+    // The sweep of a bid needs funding: the smallest sufficient plain KAS UTXO of the maker, from
+    // the node.
     let bid_view = view(
         A2,
         template(TemplateId::KobBid).hash,
@@ -747,7 +763,7 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&f.a2.spk()));
     assert_eq!(s.tx.outputs[0].value, f.bid_value, "a funded sweep keeps the bid's escrow");
 
-    // a stale view (the order moved on): refused, nothing built
+    // A stale view (the order moved on): refused, nothing built.
     let (report, ok) = sweep(&write(&dir, "stale.json", &a1_view(&f, (0x11, 5))), "--dry-run");
     assert!(!ok);
     assert_eq!(report["orders"][0]["status"], "refused");
@@ -760,7 +776,7 @@ fn order_sweep_and_cancel_from_views() {
         1
     );
 
-    // a page: the key's order is swept and submitted, another maker's is skipped
+    // A page: the key's order is swept and submitted, another maker's is skipped.
     let other = view(
         A6,
         template(TemplateId::KobAsk).hash,
@@ -772,7 +788,8 @@ fn order_sweep_and_cancel_from_views() {
     );
     let page = json!({"items": [a1_view(&f, (0x11, 0)), other], "next_cursor": null});
     let pagef = write(&dir, "page.json", &page);
-    // without --yes and without a terminal the sweep is refused: nothing is signed or sent (the other maker's order is skipped)
+    // Without `--yes` and without a terminal the sweep is refused, and nothing is signed or sent.
+    // The order of the other maker is skipped.
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         let (report, ok) = sweep(&pagef, "");
         assert!(!ok, "a refusal is an exit code 1: {report}");
@@ -787,7 +804,7 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(report["orders"][1]["status"], "skipped");
     assert_eq!(node.lock().unwrap().submitted.len(), 1);
 
-    // the maker's cancel: refused without --yes, submitted with it
+    // The maker's cancel: refused without --yes, submitted with it.
     let cancel = |extra: &str| {
         let a = order::parse_args(
             order::Op::Cancel,
@@ -804,12 +821,12 @@ fn order_sweep_and_cancel_from_views() {
     let (report, ok) = cancel("-y");
     assert!(ok && report["orders"][0]["status"] == "submitted", "{report}");
     assert_eq!(node.lock().unwrap().submitted.len(), 2);
-    // --yes and --dry-run exclude each other
+    // --yes and --dry-run exclude each other.
     let e = order::parse_args(order::Op::Cancel, &v(&format!("--view {} --key {key} --node {url} --yes --dry-run", p.display())))
         .unwrap_err();
     assert!(e.contains("exclude each other"), "{e}");
 
-    // the maker's cancel from the view: custody, own and foreign strays back to the maker
+    // The maker's cancel from the view: custody, own and foreign strays back to the maker.
     let a = order::parse_args(
         order::Op::Cancel,
         &v(&format!(
@@ -827,7 +844,7 @@ fn order_sweep_and_cancel_from_views() {
     assert_eq!(s.tx.inputs.len(), 5, "order + custody + 2 own strays + 1 foreign");
     assert!(o["disclosure"].as_str().unwrap().contains("the custody (10000 units)"));
 
-    // an order of a template this build does not pin is unknown: neither cancelled nor swept
+    // An order of a template this build does not pin is unknown: neither cancelled nor swept.
     let mut unpinned = a1_view(&f, (0x11, 0));
     unpinned["template_hash"] = json!(to_hex(&[0x98; 32]));
     let up = write(&dir, "unpinned.json", &unpinned);
@@ -846,7 +863,7 @@ fn order_sweep_and_cancel_from_views() {
     let (report, _) = sweep(&up, "--dry-run");
     assert_eq!(report["orders"][0]["status"], "skipped");
 
-    // a key that is not the maker builds nothing
+    // A key that is not the maker builds nothing.
     let a = order::parse_args(
         order::Op::Cancel,
         &v(&format!("--view {} --key {} --node {url} --network {NET} --dry-run", p.display(), to_hex(&sk(2)))),
@@ -854,7 +871,7 @@ fn order_sweep_and_cancel_from_views() {
     .unwrap();
     let (report, _) = order::execute(&a).unwrap();
     assert_eq!(report["orders"][0]["status"], "skipped");
-    // a backup is not a view
+    // A backup is not a view.
     let (b, _) = files(&f, &dir);
     let a =
         order::parse_args(order::Op::Sweep, &v(&format!("--view {} --key {key} --node {url} --network {NET}", b.display()))).unwrap();
@@ -880,7 +897,7 @@ fn input_formats_and_bad_input() {
     let e = inputs::read_file(&export, NET).unwrap();
     assert_eq!((e.entries.len(), e.rejected.len()), (5, 2));
     assert!(e.rejected.iter().any(|r| r.reason.contains("covenant_id")));
-    // a view and a page
+    // A view and a page.
     let p = inputs::parse(&a1_view(&f, (0x11, 0)), "v", NET).unwrap();
     assert_eq!(p.views.len(), 1);
     let vw = &p.views[0];
@@ -897,11 +914,11 @@ fn input_formats_and_bad_input() {
     let mut bad = a1_view(&f, (0x11, 0));
     bad["strays"][0]["program"] = json!("KobAsk");
     assert_eq!(inputs::parse(&bad, "v", NET).unwrap().rejected.len(), 1, "a stray's program must be a token program");
-    // an unproven view has no state
+    // An unproven view has no state.
     let mut unproven = a1_view(&f, (0x11, 0));
     unproven["state_known"] = json!(false);
     assert!(inputs::parse(&unproven, "v", NET).unwrap().views[0].state.is_none());
-    // documents that are none of the three
+    // Documents that are none of the three.
     for doc in [
         json!([1, 2]),
         json!({"hello": 1}),
@@ -915,16 +932,17 @@ fn input_formats_and_bad_input() {
     std::fs::write(dir.join("nope.json"), "not json").unwrap();
     assert!(inputs::read_file(&dir.join("nope.json"), NET).unwrap_err().contains("not JSON"));
     assert!(inputs::read_file(&dir.join("missing.json"), NET).is_err());
-    // merging: one order per covenant id, every distinct span kept, the later entry first
+    // Merging: one order per covenant id, every distinct span kept, the later entry first.
     let mut all = inputs::read_file(&backup, NET).unwrap().entries;
     all.extend(inputs::read_file(&export, NET).unwrap().entries);
     let (merged, notes) = inputs::merge(all);
     assert_eq!(merged.len(), 8);
     assert!(notes.is_empty());
     assert_eq!(merged.iter().find(|e| e.covenant_id == A1).unwrap().spans.len(), 1);
-    // arguments
+    // Arguments.
     assert!(recover::parse_args(&v("--node ws://x:1")).is_err(), "needs --from");
-    // no --node and no $KOB_NODE_WRPC: the public nodes of the network (named by the Kaspa resolvers when a node is first asked)
+    // No `--node` and no `$KOB_NODE_WRPC`: the public nodes of the network. The Kaspa resolvers
+    // name them when a node is first asked.
     if std::env::var(crate::wrpc::NODE_ENV).is_err() {
         let a = recover::parse_args(&v("--from a.json --network testnet-10")).unwrap();
         assert_eq!(a.node, "resolver:testnet-10");
@@ -935,7 +953,7 @@ fn input_formats_and_bad_input() {
         recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel"), None).is_err(),
         "--cancel needs a key"
     );
-    // the new spellings, and one key only
+    // The new spellings, and one key only.
     let k =
         recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt"), None).unwrap();
     assert_eq!(k.key, Some(crate::token::KeySource::File("k.txt".into())));
@@ -950,7 +968,7 @@ fn input_formats_and_bad_input() {
         recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
         "--dry-run belongs to --cancel"
     );
-    // no --network: the build's own network, else mainnet (never testnet-10 by default)
+    // No --network: the build's own network, else mainnet (never testnet-10 by default).
     let want = kob_protocol::artifacts::deployment_network().unwrap_or("mainnet");
     assert_eq!(recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap().network, want);
     assert_eq!(order::parse_args(order::Op::Cancel, &v("--view a.json --key 00 --node ws://x:1")).unwrap().network, want);
@@ -959,7 +977,7 @@ fn input_formats_and_bad_input() {
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
     assert!(order::parse_args_with(order::Op::Sweep, &v("--view a.json --node ws://x:1"), None).is_err(), "needs a key");
-    // no --node: the public nodes (unless $KOB_NODE_WRPC names one)
+    // No --node: the public nodes (unless $KOB_NODE_WRPC names one).
     if std::env::var(crate::wrpc::NODE_ENV).is_err() {
         let a = order::parse_args(order::Op::Sweep, &v("--view a.json --key 00 --network testnet-10")).unwrap();
         assert_eq!(a.node, "resolver:testnet-10");
@@ -972,7 +990,7 @@ fn candidate_search() {
     let tpl = TemplateId::KobAsk;
     let placed = AnyState::KobAsk(ask(1, 10 * SCALE));
     let amounts = |c: &[recover::Candidate]| c.iter().map(|c| c.state.amount_left().unwrap()).collect::<Vec<_>>();
-    // the known state, then amountLeft - k x minFill (minFill = 1000): 9000 .. 1000
+    // The known state, then amountLeft - k x minFill (minFill = 1000): 9000 .. 1000.
     let c = recover::candidates(tpl, std::slice::from_ref(&placed), &[]);
     assert_eq!(c.len(), 10, "known + 9000 .. 1000");
     assert_eq!(c[0].state, placed);
@@ -980,45 +998,50 @@ fn candidate_search() {
     assert_eq!(amounts(&c), (1..=10).rev().map(|k| k * SCALE).collect::<Vec<_>>());
     assert!(c[1..].iter().all(|c| c.via == VIA_FALLBACK));
     assert_eq!(c[9].state.amount_left(), Some(SCALE));
-    // the maker's hints come right after the known states, before the fallback; a hint on the grid is not repeated
+    // The hints of the maker come right after the known states, before the fallback. A hint on the
+    // grid is not repeated.
     let c = recover::candidates(tpl, std::slice::from_ref(&placed), &[6_500, 7_000]);
     assert_eq!(c.len(), 11, "known + two hints + the fallback grid without the 7000 the hint already gave");
     assert_eq!(amounts(&c)[..3], [10_000, 6_500, 7_000]);
     assert_eq!((c[1].via, c[2].via), (VIA_HINT, VIA_HINT));
     assert!(c[3..].iter().all(|c| c.via == VIA_FALLBACK));
-    // a later state first, no duplicate scripts
+    // A later state first, no duplicate scripts.
     let later = AnyState::KobAsk(ask(1, 6 * SCALE));
     let c = recover::candidates(tpl, &[later.clone(), placed.clone()], &[]);
     assert_eq!(c.len(), 10);
     assert_eq!((c[0].state.amount_left(), c[1].state.amount_left()), (Some(6000), Some(10000)));
-    // capped
+    // Capped.
     let big = AnyState::KobAsk(ask(1, 1_000 * SCALE));
     assert_eq!(recover::candidates(tpl, &[big], &[]).len(), recover::MAX_CANDIDATES);
-    // a bid has no amount left (its quantity is its escrow) and a fixed script: one candidate, hints or not
+    // A bid has no amount left, because its quantity is its escrow, and its script is fixed. It has
+    // one candidate, with or without hints.
     let bid_state = AnyState::KobBid(bid(1));
     assert_eq!(recover::candidates(TemplateId::KobBid, std::slice::from_ref(&bid_state), &[5_000]).len(), 1);
     assert!(crate::common::script_is_fixed(&bid_state));
     assert!(!crate::common::script_is_fixed(&placed));
     assert!(crate::common::amount_is_the_only_mutable_field(TemplateId::KobAsk));
     assert!(!crate::common::amount_is_the_only_mutable_field(TemplateId::KobCondAsk));
-    // template resolution: only the order templates this build pins
+    // Template resolution: only the order templates this build pins.
     assert_eq!(order_template(&template(TemplateId::KobAsk).hash), Some(TemplateId::KobAsk));
     assert_eq!(order_template(&token_template(P).hash), None, "a token program is not an order template");
     assert_eq!(order_template(&[0x99; 32]), None);
-    // a non-canonical or foreign span does not decode, and a state is encoded only under the template of its own kind
+    // A non-canonical or foreign span does not decode. A state is encoded only under the template
+    // of its own kind.
     assert!(decode_state(tpl, &[0u8; 3]).is_err());
     assert_eq!(decode_state(tpl, &placed.encode()).unwrap(), placed);
     assert!(encode_state(TemplateId::KobBid, &placed).is_err());
-    // the custody a state implies: KCC-20 needs the extension commitment, a bid none
+    // The custody a state implies: KCC-20 needs the extension commitment, a bid none.
     assert!(recover::custody_target(&placed, A1, None).is_err());
     let (st, _) = recover::custody_target(&placed, A1, Some(EXT)).unwrap().unwrap();
     assert_eq!((st.amount(), st.owner()), (10 * SCALE, A1));
     assert!(recover::custody_target(&bid_state, A2, None).unwrap().is_none());
 }
 
-/// An order under a RETIRED template of the cancel-only table (`KobBid` b995661f, the bid re-version): `kob order cancel` (from the
-/// indexer's single-order view, `cancel_only`) and `kob recover --cancel` (from a backup record) cancel it through that template's
-/// own script, engine-validated; `kob order sweep` skips it; nothing is submitted in a dry run.
+/// An order under a retired template of the cancel-only table (`KobBid` b995661f).
+///
+/// `kob order cancel` (from the single-order view of the indexer, `cancel_only`) and
+/// `kob recover --cancel` (from a backup record) cancel it through the own script of that
+/// template, engine-validated. `kob order sweep` skips it. Nothing is submitted in a dry run.
 #[test]
 fn retired_template_orders_are_cancelled_from_views_and_backups() {
     const AR: [u8; 32] = [0xd1; 32];
@@ -1057,7 +1080,8 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
     let (report, _) = run(order::Op::Sweep);
     assert_eq!(report["orders"][0]["status"], "skipped", "{report}");
 
-    // the web wallet's backup record of it: found on the node under the retired script and cancelled with --cancel
+    // The backup record of the web wallet for it is found on the node under the retired script and
+    // cancelled with `--cancel`.
     let rec = record(AR, "KobBid", r.hash, &hex_state(&s), pk(1));
     let backup = write(
         &dir,
@@ -1083,9 +1107,12 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// Pair orders (protocol v3): a sell-first `KobIfdPair` holds TWO custodies (its A and its B prefund) and a `KobPair` BID a
-/// custody of token B. `kob order cancel` returns both custodies and a stray of token B (the order's own token) from an
-/// indexer view; `kob recover` finds the entry and verifies both custodies, and its cancel carries the prefund.
+/// Pair orders: a sell-first `KobIfdPair` holds two custodies (its A and its B prefund), and a
+/// `KobPair` BID holds a custody of token B.
+///
+/// `kob order cancel` returns both custodies, and a stray of token B (the order's own token), from
+/// an indexer view. `kob recover` finds the entry and verifies both custodies, and its cancel
+/// carries the prefund.
 #[test]
 fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     const B1: [u8; 32] = [0xb2; 32];
@@ -1113,7 +1140,8 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     let dir = tmp("pair");
     let key = to_hex(&sk(1));
 
-    // the entry's view: the A custody at `custody`, the B prefund at `pair.custodies[1]`, a stray of B
+    // The view of the entry: the A custody at `custody`, the B prefund at `pair.custodies[1]` and a
+    // stray of B.
     let mut ca = tview(P, TOKEN, 0xd2, 10 * SCALE, B1, false, true);
     ca["role"] = json!("custody");
     let mut cb = tview(P, TOKEN_B, 0xd3, prefund, B1, false, true);
@@ -1151,14 +1179,14 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     }
     let d = o["disclosure"].as_str().unwrap();
     assert!(d.contains("the custody (10000 units of") && d.contains("the custody (2009 units of"), "{d}");
-    // a view without the prefund custody is refused (the cancel must return both)
+    // A view without the prefund custody is refused (the cancel must return both).
     let mut no_b = bv.clone();
     no_b["pair"] = json!({"custodies": [{"token": to_hex(&TOKEN), "utxo": no_b["custody"]["utxo"].clone()}]});
     let (report, ok) = order::execute(&cancel_args(&write(&dir, "b1x.json", &no_b))).unwrap();
     assert!(!ok);
     assert_eq!(report["orders"][0]["status"], "refused");
 
-    // a pair BID: its custody is the B escrow (token B's program)
+    // A pair BID: its custody is the B escrow (token B's program).
     let mut cy = tview(P, TOKEN_B, 0xe2, y_escrow, B2, false, true);
     cy["role"] = json!("custody");
     let yv = view(B2, template(TemplateId::KobPair).hash, any_json(&y), (0xe1, 0), CARRIER + 8 * KAS, Some(cy), vec![]);
@@ -1167,7 +1195,8 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     let s = signed_from(report["orders"][0]["file"].as_str().unwrap());
     assert!(s.tx.inputs.iter().any(|i| i.transaction_id == [0xe2; 32]), "the escrow custody is spent");
 
-    // recover: an export entry of each; both custodies of the entry verified, the cancel carries the prefund
+    // Recover: an export entry of each. Both custodies of the entry are verified, and the cancel
+    // carries the prefund.
     let entry = |cov: [u8; 32], tpl: [u8; 32], s: &AnyState| json!({"template_hash": to_hex(&tpl), "state": hex_state(s), "covenant_id": to_hex(&cov), "extension_commitment": to_hex(&EXT)});
     let export = json!({"version": 2, "network": NET, "orders": [
         entry(B1, template(TemplateId::KobIfdPair).hash, &ev),
