@@ -1979,7 +1979,8 @@ impl Processor {
         if let Some(p) = &pair_fill {
             p.insert(conn, seq, daa, ts, &txid, rec.pos as i64, &s.cov, s.order.template)?;
         }
-        refresh_order_state(conn, &s.cov)?;
+        let added = events.iter().filter(|e| e.0 == "fill").fold(0i64, |a, e| a.saturating_add(e.1.unwrap_or(0).max(0)));
+        refresh_order_state_adding(conn, &s.cov, added)?;
         delta.orders.insert(s.cov);
         if let Some(t) = s.order.token {
             delta.tokens.insert(t);
@@ -2384,12 +2385,27 @@ const TIP_UTXO_SQL: &str = concat!(
     " AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
 );
 
-/// The fill amounts of one order, see [`refresh_order_state`] for the `+kind`.
+/// The fill amounts of one order.
 ///
 /// They are summed in Rust, saturating. The base-unit amounts of hostile orders can sum past an
 /// `i64`, where the SQLite `SUM` fails, and a failed refresh would stall the follower.
+///
+/// `+kind` keeps the query on the events of the order itself, through `order_events_cov`. On
+/// `kind = 'fill'` alone the planner picks the market index, `order_events_fill_ts`, and reads
+/// every fill of every token.
 pub(crate) const FILLED_AMOUNT_SQL: &str =
     concat!("SELECT amount FROM order_events WHERE order_id = ", order_of!("?1"), " AND +kind = 'fill'");
+
+/// The filled amount the `order_state` row of an order holds.
+const STORED_FILLED_SQL: &str = concat!("SELECT filled_amount FROM order_state WHERE order_id = ", order_of!("?1"));
+
+/// The newest event of an order, one seek of `order_events_cov`.
+const LAST_EVENT_SQL: &str =
+    concat!("SELECT block_seq, daa FROM order_events WHERE order_id = ", order_of!("?1"), " ORDER BY id DESC LIMIT 1");
+
+/// The newest closing event of an order, one seek of `order_events_closes`.
+const CLOSING_EVENT_SQL: &str =
+    concat!("SELECT kind, amount FROM order_events WHERE order_id = ", order_of!("?1"), " AND closes = 1 ORDER BY id DESC LIMIT 1");
 
 /// Base units filled from one order: the sum of its fill events, saturating at `i64::MAX`.
 fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
@@ -2402,38 +2418,64 @@ fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
     Ok(sum.min(i64::MAX as i128) as i64)
 }
 
+/// How a refresh gets the filled amount of the order.
+#[derive(Debug, Clone, Copy)]
+enum Filled {
+    /// The sum of the order's fill events. It costs one read per fill of the order.
+    Recount,
+    /// The stored amount plus `n` base units: the fill events a spend has just added.
+    Add(i64),
+}
+
 /// Re-derives the `order_state` row of one order from the base tables.
 ///
-/// It is called after every change and after every revert, so it is the single definition of
-/// "status".
+/// It is called after every revert and every gap operation, so it is the single definition of
+/// "status". The filled amount is summed from the fill events of the order, once. A spend adds its
+/// fill to the stored amount instead, see [`refresh_order_state_adding`].
 pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
+    refresh_with(conn, cov, Filled::Recount)
+}
+
+/// [`refresh_order_state`] after a spend whose events added `n` filled base units (0 for none).
+///
+/// The filled amount is a running total: the stored one plus `n`, saturating at `i64::MAX`. That
+/// is the saturating sum of the fill events, as a recount gives, because every write of the events
+/// refreshes the row in the same transaction: a spend adds, and a revert recounts. The pruning
+/// deletes the events of an order only with its `order_state` row. Without a stored row it recounts.
+///
+/// A fill thus costs the same however many fills the order had. A recount on every fill cost one
+/// read per earlier fill, so a maker filling its own big ask one unit at a time made the follower's
+/// work quadratic in the fills.
+pub fn refresh_order_state_adding(conn: &Connection, cov: &Hash32, n: i64) -> DbResult<()> {
+    refresh_with(conn, cov, Filled::Add(n))
+}
+
+fn refresh_with(conn: &Connection, cov: &Hash32, how: Filled) -> DbResult<()> {
     let Some(order) = load_order_full(conn, cov)? else {
         conn.execute(concat!("DELETE FROM order_state WHERE order_id = ", order_of!("?1")), [&cov.0[..]])?;
         return Ok(());
     };
-    // `+kind` keeps the query on the events of the order itself, through `order_events_cov`. On
-    // `kind = 'fill'` alone the planner picks the market index, `order_events_fill_ts`, over the
-    // fills. It then reads every fill of every token, on every fill and placement, and the cost of
-    // the refresh grows with the fill count of the chain.
-    let filled = filled_amount(conn, cov)?;
+    let stored = match how {
+        Filled::Recount => None,
+        Filled::Add(n) => conn
+            .prepare_cached(STORED_FILLED_SQL)?
+            .query_row([&cov.0[..]], |r| r.get::<_, i64>(0))
+            .optional()?
+            .map(|f| f.saturating_add(n.max(0))),
+    };
+    let filled = match stored {
+        Some(f) => f,
+        None => filled_amount(conn, cov)?,
+    };
     let tip: Option<TipRow> =
         conn.prepare_cached(TIP_UTXO_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
-    let last: Option<(i64, i64)> = conn
-        .prepare_cached(concat!(
-            "SELECT block_seq, daa FROM order_events WHERE order_id = ",
-            order_of!("?1"),
-            " ORDER BY id DESC LIMIT 1"
-        ))?
-        .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
-    let closing: Option<(String, Option<i64>)> = conn
-        .prepare_cached(concat!(
-            "SELECT kind, amount FROM order_events WHERE order_id = ",
-            order_of!("?1"),
-            " AND closes = 1 ORDER BY id DESC LIMIT 1"
-        ))?
-        .query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))
-        .optional()?;
+    let last: Option<(i64, i64)> =
+        conn.prepare_cached(LAST_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+    // Only a closed order reads its closing event: an open one has none to find.
+    let closing: Option<(String, Option<i64>)> = match tip {
+        Some(_) => None,
+        None => conn.prepare_cached(CLOSING_EVENT_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?))).optional()?,
+    };
     let status = match (&tip, closing.as_ref().map(|c| c.0.as_str())) {
         (Some(_), _) if filled > 0 => "partial",
         (Some(_), _) => "open",
@@ -3199,17 +3241,17 @@ mod tests {
         };
         let p = plan(FILLED_AMOUNT_SQL);
         assert!(p.contains("order_events_cov"), "{p}");
-        for sql in [
-            TIP_UTXO_SQL,
-            concat!("SELECT block_seq, daa FROM order_events WHERE order_id = ", order_of!("?1"), " ORDER BY id DESC LIMIT 1"),
-            concat!(
-                "SELECT kind, amount FROM order_events WHERE order_id = ",
-                order_of!("?1"),
-                " AND closes = 1 ORDER BY id DESC LIMIT 1"
-            ),
-        ] {
-            let p = plan(sql);
-            assert!(p.contains("_cov (order_id=?"), "{sql}: {p}");
-        }
+        let p = plan(LAST_EVENT_SQL);
+        assert!(p.contains("order_events_cov (order_id=?"), "{p}");
+        // The reads of every refresh are one seek each, whatever the order's history: the live UTXO
+        // through the partial index of the unspent ones, and the closing event through the one of
+        // the closing events. On `order_utxos_cov` and `order_events_cov` they read every UTXO and
+        // every event the order ever had.
+        let p = plan(TIP_UTXO_SQL);
+        assert!(p.contains("order_utxos_live (order_id=?") && !p.contains("TEMP B-TREE"), "{p}");
+        let p = plan(CLOSING_EVENT_SQL);
+        assert!(p.contains("order_events_closes (order_id=?"), "{p}");
+        let p = plan(STORED_FILLED_SQL);
+        assert!(p.contains("order_state USING INTEGER PRIMARY KEY"), "{p}");
     }
 }

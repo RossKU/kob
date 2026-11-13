@@ -2308,7 +2308,9 @@ page indexes; schema 10: a fill event's fee and executor, `order_events.fee` and
 triggers keep, `activity` and `actors`; schema 11: the executors' transactions with their income and network fee, `executor_txs`, and
 totals the lean pruning does not take back; schema 12: the KAS of an order's genesis output, `orders.genesis_value`, and a pruning that keeps
 the proof of a token's program; schema 13: the plain outputs of the recorded transactions, `recorded_outputs`, from which the network fee of
-a record without input values is resolved, 7.6a). A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
+a record without input values is resolved, 7.6a). Two partial indexes came later within schema 13, `order_utxos_live` (the unspent order UTXOs)
+and `order_events_closes` (the closing events), which keep a fill's refresh one seek each however many fills its order had: the first start
+of a build that has them builds them (`CREATE INDEX IF NOT EXISTS`), with no migration and no version change. A database written before schema 5 (its `orders` table has the old `lot_units` column) is refused untouched by every
 writer and reader: move it aside and replay (above). **A database of schema 5 to 12 is refused untouched as well** (`database ... is of schema N: this build reads
 schema 13 only`): its tables have other columns, so no start-up repair can bring it forward. `kobd db migrate` (7.6a) brings it to schema 13 in one offline run, and
 **from then on a build of an older schema refuses the store** (a newer schema is refused by every build), so the way back to the older build is the

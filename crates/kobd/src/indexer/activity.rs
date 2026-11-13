@@ -281,7 +281,8 @@ mod tests {
         let p = plan("SELECT COUNT(*) FROM actors WHERE kind = 1 AND last_block >= 5");
         assert!(p.contains("actors_last"), "{p}");
         let p = plan("SELECT COALESCE(SUM(value), 0) FROM order_utxos WHERE spent_block IS NULL");
-        assert!(p.contains("order_utxos_spent"), "{p}");
+        // Either index of the unspent rows.
+        assert!(p.contains("order_utxos_spent") || p.contains("order_utxos_live"), "{p}");
         // The triggers' recounts on a revert: one seek each.
         let p = plan("SELECT MAX(block_seq) FROM order_events WHERE kind = 'fill' AND executor_id = 5");
         assert!(p.contains("order_events_executor"), "{p}");

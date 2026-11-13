@@ -110,6 +110,9 @@ CREATE TABLE IF NOT EXISTS order_utxos (
 CREATE INDEX IF NOT EXISTS order_utxos_cov ON order_utxos (order_id);
 CREATE INDEX IF NOT EXISTS order_utxos_created ON order_utxos (created_block);
 CREATE INDEX IF NOT EXISTS order_utxos_spent ON order_utxos (spent_block);
+-- The live UTXO of each order, newest first: the tip read of every refresh (`processor::TIP_UTXO_SQL`). An order keeps every UTXO it
+-- had until the archive pruning, so `order_utxos_cov` would read all of them on every fill.
+CREATE INDEX IF NOT EXISTS order_utxos_live ON order_utxos (order_id, created_block, idx) WHERE spent_block IS NULL;
 
 -- Lifecycle events. kind: create | fill | cancel | amend | refund | kill | arm | trail | rearm | unknown
 CREATE TABLE IF NOT EXISTS order_events (
@@ -143,6 +146,9 @@ CREATE INDEX IF NOT EXISTS order_events_fills ON order_events (token_id, id) WHE
 -- The in-place amends of an order (a few per order, if any): the price rule of the trades reads the latest one before a fill (`market::FILL_SELECT`),
 -- so a fill of an order with a long history of fills does not walk that history back to the amend.
 CREATE INDEX IF NOT EXISTS order_events_amends ON order_events (order_id, id) WHERE kind = 'amend';
+-- The closing event of an order (one, if any): the status of a closed order reads the latest one (`processor::refresh_order_state`)
+-- without walking the order's other events.
+CREATE INDEX IF NOT EXISTS order_events_closes ON order_events (order_id, id) WHERE closes = 1;
 
 -- In-place amends (AMEND record): the order row's terms BEFORE the amend of block `block_seq` (restored on revert).
 CREATE TABLE IF NOT EXISTS order_amends (
@@ -169,7 +175,7 @@ CREATE INDEX IF NOT EXISTS order_amends_block ON order_amends (block_seq);
 CREATE TABLE IF NOT EXISTS order_state (
     order_id       INTEGER PRIMARY KEY,   -- orders.id
     status         TEXT NOT NULL,         -- open | partial | filled | cancelled | refunded | killed | closed
-    filled_amount  INTEGER NOT NULL,      -- base units filled (the sum of the fill events, saturating)
+    filled_amount  INTEGER NOT NULL,      -- base units filled (the sum of the fill events, saturating; kept as a running total)
     remaining_amount INTEGER,             -- base units left (a bid: its buying power); NULL when unknown
     amount_exact   INTEGER NOT NULL DEFAULT 0, -- 1: read from the tip state (amountLeft), 0: estimated (bids)
     cur_txid       BLOB,
