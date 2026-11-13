@@ -1,49 +1,36 @@
 pragma silverscript ^0.1.0;
 
-// KobPair: a plain order of a token/token pair A/B (protocol v3): an amount of the BASE token A at a limit price in the
-// QUOTE token B per whole A, the same rule as every KOB order (KobAsk header). One template for both sides and both
-// token families:
-//   side ASK (1): sells base A, buys quote B: the maker receives at least ceil(n * price(t) / scale(A)) of B for n of A;
-//   side BID (2): buys base A, pays quote B: the maker receives exactly n of A for exactly floor(n * price(t) / scale(A))
-//                 of B out of its escrow custody.
-// The order holds the token it SELLS (S: A for an ask, B for a bid) in an exact custody and receives the token it BUYS
-// (T) at its positional output. It enforces only its own guarantees: what it receives and pays, its exact custody, the
-// stray guards of both tokens and its positional outputs. How the counterparty side is settled is free: a matcher may
-// route through the KAS books of both tokens, net opposite pair orders (any number) or fill from its own tokens; the
-// maker's terms hold in every case. (Prices are recorded only from KAS-book order fills, docs/spec/matcher.md.)
+// KobPair: a limit order on a pair of tokens A/B.
+//
+// A is the base token and B the quote token. The order is an amount of A at a
+// limit price in base units of B per whole A. One template serves both sides
+// and both token families. It holds the token it sells, S, in an exact
+// custody and receives the token it buys, T, at its own output.
+//   side 1, ASK  Sells A for B. S is A and T is B.
+//   side 2, BID  Buys A with B. S is a B escrow and T is A.
+// The specification is docs/spec/order-types.md, "Pair orders".
 //
 // Entries:
-//   settle(nb, custIn, tTplIn, t, sOut, tOut)
-//     n = int(nb) > 0   fill n base units of A: anyone, once tx.daa >= activeFrom. sOut: the S the order releases
-//                       (ASK: exactly n; BID: exactly the floor above); tOut: the T delivered to the maker at output i
-//                       (ASK: at least the ceil above; BID: exactly n). t: decay time (CLTV).
-//     n == 0            refund: anyone, once DAA >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill); the whole
-//                       custody returns to the maker at output i
-//     custIn: the custody input (token S); tTplIn: any token-T input, the source of the T template bytes (hash-checked).
-//     n is the fixed 8-byte FIRST argument (sigscript [0] = 0x08, [1..9) = n), as in every KOB fill entry.
-//   cancel(sig)         maker only, SIGHASH_ALL
+//   settle(nb, custIn, tTplIn, t, sOut, tOut), with n = int(nb)
+//     n > 0   Fill n base units of A. Anyone, once tx.daa >= activeFrom.
+//     n == 0  Refund the whole custody to the maker at output i. Anyone, once
+//             tx.daa >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill).
+//   cancel(sig)
+//     Maker only, signed with SIGHASH_ALL.
 //
-// State: per-order values in the state span; mutable amountLeft (base units of A still to trade) and custody (the
-// exact amount of S held): a partial fill continues with both spliced in; then sExt, the KCC-20 extension commitment of
-// the custody of S (zero for KRON).
+// custIn is the custody input, and tTplIn any input of T, the source of its
+// template bytes. sOut is the S a fill releases and tOut the T the maker
+// receives. t is the decay time, proven by CLTV. nb is a fixed 8-byte push
+// and the first argument, so pair conditionals can read n at sigscript[1..9).
 //
-// Key invariants:
-//  - Takeable quotes: every quote a pair order shows can be taken by anyone at that quote (an ask's custody is its whole
-//    remaining amount, a bid pays exactly its quote from its escrow, the order funds its own delivery carrier and tip),
-//    so a fill of a resting pair order is real trigger evidence for pair conditionals (KobCondPair, KobIfdPair).
-//  - Rounding (the maker's favour, KobAsk header): an ask receives the ceil, a bid pays the floor (the bid's custody is
-//    the B escrow; it is funded by the wallet at the ceil of its budget rate, with one base unit of slack per fill);
-//    the KAS tip (sompi per whole A, prefunded on the order UTXO) is the floor.
-//  - Minimum fill: n >= minFill unless n takes all that is left. TWAP / DCA: interval (CSV), maxFill.
-//  - Decay: ASK price(t) = max(priceEnd, price - slope * floor((t - origin) / decayStep)); BID price(t) = min(priceEnd,
-//    price + slope * ...); origin = activeFrom or the TWAP / DCA slice opening (KobAsk / KobBid).
-//  - Custody: the token-S UTXO owned by this covenant id holding exactly `custody` (KCC-20: of the commitment sExt); settle refuses any other S input
-//    owned by this id and any T input owned by this id (strays of either token are inert: only the maker's cancel
-//    moves them), and a refund carries no T input at all.
-//  - Positional outputs: the maker's T at output i (this input's index); the S rest (owned by this id) or return
-//    (owned by the maker) at the custody's index; the continuation is the only output carrying this id.
-//  - IOC / FOK, soft expiry and the 90-day idle bound as in KobAsk; the order's KAS UTXO prefunds deliveryCarrier per
-//    fill and the tip.
+// Only amountLeft, the base units of A still to trade, and custody, the exact
+// amount of S held, are mutable. sExt is the KCC-20 extension commitment of
+// the custody, zero for KRON.
+//
+// The order checks only its own terms: what it receives and pays, its
+// custody, the stray guards of both tokens and its own outputs. A matcher may
+// fill it through the KAS books, against opposite pair orders or from its own
+// tokens.
 contract KobPair(
     pubkey init_maker,
     int init_side,
@@ -120,23 +107,32 @@ contract KobPair(
     int constant TIF_FOK = 2;
     int constant FAM_KCC20 = 1;
     int constant FAM_KRON = 2;
+    // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
+    // The IOC/FOK kill. Refundable by anyone 60 s (10 DAA/s) after the order
+    // became fillable.
     int constant IOC_LIFE = 600;
-    // Most token inputs of one token a fill may carry (the KCC-20 limit; a KRON program accepts fewer). The scans are
-    // unrolled by hand (one line per slot).
+    // The most token inputs of one token a settle transaction may carry, the
+    // KCC-20 limit. A KRON program accepts fewer. The scans over these slots
+    // are unrolled by hand, one line per slot, so raising the cap needs as
+    // many lines.
     int constant MAX_TOK_IN = 8;
-    // 1-byte prefix + 447 B state: amountLeft [398..406) and custody [407..415), then sExt [416..448) (immutable). A
-    // continuation splices [398..415).
+    // The redeem script is a 1-byte prefix and the 447 B state. amountLeft
+    // [398..406) and custody [407..415) are the mutable payloads, so a
+    // continuation splices [398..415). The immutable sExt [416..448) follows.
     int constant STATE_END = 415;
 
-    // Quote value of n base units at rate r per d base units, rounded down (c = 0) or up (c = d - 1): KobAsk.quoteOf
-    // with an explicit denominator.
+    // Quote value of n base units at rate r per d base units. c = 0 rounds
+    // down and c = d - 1 rounds up. This is KobAsk.quoteOf with an explicit
+    // denominator, exact while d^2 < 2^63 and the result fits.
     function quoteOf(int n, int r, int d, int c) : int {
         int m = n % d;
         int q = n / d;
         return q * r + m * (r / d) + (m * (r % d) + c) / d;
     }
 
+    // Check that input idx is an instance of template (pre, stLen, suf, tpl),
+    // as KobAsk.tplRs does, and return its whole redeem script.
     function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
         int base = OpTxInputScriptSigLen(idx) - size;
@@ -146,9 +142,11 @@ contract KobPair(
         return rs;
     }
 
-    // Stray guard: no input of token `tok` other than `cust` may be owned by covenant id `me` (`off`: the owner's
-    // distance from the end of a holder's sigscript in that token's family). Every input carrying `tok` is a genuine
-    // holder of its one template, so its owner sits at a fixed distance from the end of its sigscript.
+    // Stray guard, as KobAsk.noStrays, for token `tok`. No input of `tok`
+    // other than `cust` may be owned by `me`. Every input of `tok` is an
+    // instance of its one template, so its owner sits at a fixed distance
+    // `off` from the end of its sigscript, set by the token's family. The scan
+    // is unrolled by hand over MAX_TOK_IN slots, one line per input k < cnt.
     function noStrays(byte[32] tok, byte[32] me, int cust, int off) {
         int cnt = OpCovInputCount(tok);
         require(cnt <= MAX_TOK_IN);
@@ -162,8 +160,12 @@ contract KobPair(
         if (cnt > 7) { int x7 = OpCovInputIdx(tok, 7); if (x7 != cust) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
     }
 
-    // The token state of `fam` holding `amount` for `owner` in canonical push encoding (KCC-20: scheme 0x04 covenant /
-    // 0x00 key, borrow disabled, the given guard and extension; KRON: id_type 0x02 covenant / 0x03 address, not minter).
+    // The token state of family `fam` holding `amount` for `owner`, in
+    // canonical push encoding. cov selects a covenant owner over a key or an
+    // address.
+    //   KCC-20  owner_scheme 0x04 or 0x00, borrowing disabled, then the given
+    //           guard and extension commitment.
+    //   KRON    id_type 0x02 or 0x03, is_minter 0.
     function tokenState(int fam, int amount, byte[32] owner, bool cov, byte[] guard, byte[] ext) : byte[] {
         byte[] st = byte[](0x00);
         if (fam == FAM_KRON) {
@@ -185,8 +187,12 @@ contract KobPair(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
 
-        // the custody of S, by family (KCC-20 112 B: amount[1..9) owner[10..42) scheme[43] guard[47..79) ext[80..112);
-        // KRON 46 B: owner[1..33) id_type[34] amount[36..44) is_minter[45])
+        // Custody. One UTXO of S owned by this order's covenant id, with the
+        // covenant marker, holding exactly `custody`. Every settle checks it,
+        // so a fill, a refund and an IOC/FOK end all refuse a stand-in.
+        // KCC-20 state, 112 B: amount[1..9) owner[10..42) scheme[43]
+        // guard[47..79) ext[80..112). KRON state, 46 B: owner[1..33)
+        // id_type[34] amount[36..44) is_minter[45].
         require(OpInputCovenantId(custIn) == sCovId);
         int sLen = 112;
         int sOff = 10 - 112 - sSuf;
@@ -211,19 +217,27 @@ contract KobPair(
             held = int(byte[8](tin.slice(1, 9)));
             guard = tin.slice(47, 79);
             ext = tin.slice(80, 112);
-            // the custody carries the commitment the order names: units of S's covenant id with another commitment
-            // are another token
+            // A KCC-20 token is (covenant id, program, extension commitment).
+            // Units of S's covenant id with another commitment are another
+            // token.
             require(byte[32](ext) == sExt);
         }
-        // a pair order always holds a positive custody (it terminates when it is used up): every path then pins
-        // its output i to the maker
+        // A pair order always holds a positive custody, because it ends when
+        // the custody is used up. So every path pins output i to the maker,
+        // a refund included.
         require(custody > 0);
-        // both scales positive (quoteOf divides by them; a non-positive scale would round against the maker)
+        // quoteOf divides by both scales, and a non-positive scale would
+        // round against the maker.
         require(sScale > 0);
         require(tScale > 0);
+        // The custody is known by its exact amount, so a stray or dust UTXO
+        // sent to this id can never stand in for it. Settle refuses any other
+        // S input owned by this id. Strays are inert, and only the maker's
+        // cancel can move them.
         require(held == custody);
         noStrays(sCovId, selfId, custIn, sOff);
 
+        // The carriers are the KAS on the order and custody UTXOs.
         int carriers = tx.inputs[self].value + tx.inputs[custIn].value;
         int outAmount = custody;
         byte[32] outOwner = byte[32](maker);
@@ -232,6 +246,11 @@ contract KobPair(
         int utxoDaa = OpTxInputDaaScore(self);
 
         if (n == 0) {
+            // Refund. Due at the earliest of expiryDaa, 90 days idle and, for
+            // every tif but GTC, IOC_LIFE after the order became fillable. A
+            // covenant cannot prove an upper time bound on a fill, so the
+            // IOC/FOK kill is a refund that anyone may send. A fill that lands
+            // first still pays the maker's limit.
             int idleEnd = utxoDaa + MAX_IDLE;
             if (tif != TIF_GTC) {
                 int kill = utxoDaa;
@@ -241,6 +260,9 @@ contract KobPair(
             }
             if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
             require(tx.daa >= idleEnd);
+            // The order ends. An output still bound to its covenant id could
+            // move later strays. The maker gets both carriers back, less at
+            // most refundTip.
             require(refundTip >= 0);
             require(OpCovOutputCount(selfId) == 0);
             // T strays owned by this id stay put (A == B is refused at placement)
@@ -250,14 +272,29 @@ contract KobPair(
             require(tx.daa >= activeFrom);
             require(n > 0);
             require(n <= amountLeft);
+            // Minimum fill. A fill takes at least minFill unless it takes all
+            // that is left. That bounds the number of fills, and so the
+            // deliveries and continuations a filler can force on the maker.
             require(n >= minFill || n == amountLeft);
+            // Nothing checks the state when the order is created, so a fill
+            // checks the fields it relies on.
             require(tip >= 0);
             require(deliveryCarrier >= 0);
+            // TWAP or DCA. With interval > 0 the order UTXO must be interval
+            // DAA old (CSV), and every fill creates a new one. maxFill > 0
+            // caps n.
             if (interval > 0) {
                 require(this.ageDaa >= interval);
             }
             require(maxFill == 0 || n <= maxFill);
             int p = price;
+            // Decay. Every decayStep DAA after origin the price moves by slope
+            // towards priceEnd, down for an ASK and up for a BID. origin is
+            // activeFrom, or for a TWAP or DCA the opening of the current
+            // slice when that is later, so every slice is its own auction. The
+            // filler chooses t, and CLTV proves tx.daa >= t. slope must be
+            // positive, so understating t only moves the price towards the
+            // maker.
             if (slope != 0) {
                 require(slope > 0);
                 require(decayStep > 0);
@@ -277,28 +314,37 @@ contract KobPair(
                     if (p > priceEnd) { p = priceEnd; }
                 }
             }
+            // At a price of zero an ask would give its tokens away.
             require(p > 0);
             int baseScale = tScale;
             if (side == SIDE_ASK) {
-                // sells n of A, receives at least the ceil of B
+                // ASK. It sells exactly n of A and receives at least
+                // ceil(n * p / scale(A)) of B, rounded in the maker's favour.
                 baseScale = sScale;
                 require(sOut == n);
-                // the custody is the whole remaining amount: every displayed amount can be taken
+                // Takeable quotes. The custody is the whole amount left, so
+                // anyone can take every amount the ask shows.
                 require(custody == amountLeft);
                 require(tOut >= quoteOf(n, p, sScale, sScale - 1));
             } else {
-                // receives exactly n of A, pays at most the floor of B
+                // BID. It receives exactly n of A and pays exactly
+                // floor(n * p / scale(A)) of B, rounded in the maker's favour.
                 require(side == SIDE_BID);
                 require(tOut == n);
-                // pays exactly its quote out of the custody: a bid shows only quotes its escrow funds, so a fill of it
-                // (trigger evidence of pair conditionals) is a real trade anyone could have taken
+                // Takeable quotes. The bid pays exactly its quote out of its
+                // escrow, so it shows only quotes the escrow funds. Pair
+                // conditionals read its fill as trigger evidence, which must
+                // be a real trade that anyone could have taken.
                 require(sOut == quoteOf(n, p, tScale, 0));
             }
+            // The tip is KAS, in sompi per whole A, rounded down. The order
+            // UTXO prefunds it.
             int tipKas = quoteOf(n, tip, baseScale, 0);
             outAmount = custody - sOut;
             require(outAmount >= 0);
 
-            // no T input owned by this id (T strays are inert)
+            // Stray guard on T. Settle refuses every input of T owned by this
+            // id, and T strays are inert.
             int tOff = 10 - 112 - tSuf;
             int tLen = 112;
             if (tFamily == FAM_KRON) {
@@ -309,7 +355,11 @@ contract KobPair(
             }
             noStrays(tCovId, selfId, -1, tOff);
 
-            // the maker's T at output i, a genuine T UTXO it owns, on T's template (read from tTplIn, hash-checked)
+            // Positional rule. The maker's T is delivered at output i, this
+            // input's index, so one output can never serve two orders. It is
+            // owned by the maker, on T's template, with a zero borrow guard
+            // and the commitment tExt. The template bytes come from tTplIn and
+            // are checked by hash, so they need no P2SH check of tTplIn.
             require(OpInputCovenantId(tTplIn) == tCovId);
             int tbase = OpTxInputScriptSigLen(tTplIn) - (tPre + tLen + tSuf);
             byte[] tpre = OpTxInputScriptSigSubstr(tTplIn, tbase, tbase + tPre);
@@ -321,7 +371,9 @@ contract KobPair(
             require(OpOutputCovenantId(self) == tCovId);
 
             if (amountLeft - n > 0 && tif == TIF_GTC) {
-                // rest: this script with amountLeft - n and custody - sOut; the custody rest at custIn
+                // The rest continues this script with amountLeft - n and
+                // custody - sOut. The continuation is the only output bound to
+                // this covenant id, and the custody rest stays at custIn.
                 require(outAmount > 0);
                 require(OpCovOutputCount(selfId) == 1);
                 int selfOut = OpCovOutputIdx(selfId, 0);
@@ -340,7 +392,12 @@ contract KobPair(
                 rest = true;
                 outIdx = custIn;
             } else {
-                // done, IOC or FOK: terminate; what is left of the custody returns to the maker at its index
+                // The order ends when it is done or is not GTC. FOK needs a
+                // full fill. No output may stay bound to the covenant id. What
+                // is left of the custody returns to the maker at the custody's
+                // index with its carrier. No other order can claim that slot,
+                // because custody inputs are distinct per order. Output i then
+                // keeps the order's KAS, less the tip.
                 require(tif != TIF_FOK || amountLeft == n);
                 require(OpCovOutputCount(selfId) == 0);
                 if (outAmount > 0) {
@@ -348,13 +405,16 @@ contract KobPair(
                     require(tx.outputs[self].value >= tx.inputs[self].value - tipKas);
                     outIdx = custIn;
                 } else {
+                    // No S is left. Output i gets both carriers, less the tip.
                     require(tx.outputs[self].value >= carriers - tipKas);
                 }
             }
         }
 
         if (outAmount > 0) {
-            // the only token-S output this order allows (refund, rest or return), on the custody's own template
+            // Pin the only output of S this order allows: the refund, the rest
+            // or the return. It is on the custody's own template, with the
+            // custody's guard and extension, and bound to S's covenant id.
             require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                 trs.slice(0, sPre) + tokenState(sFamily, outAmount, outOwner, rest, guard, ext) + trs.slice(sPre + sLen, trs.length)
             )));
@@ -362,6 +422,8 @@ contract KobPair(
         }
     }
 
+    // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
+    // maker routes the custody and any strays.
     entry cancel(sig s) {
         byte[] sb = byte[](s);
         require(sb.length == 65);
