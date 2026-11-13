@@ -720,8 +720,9 @@ impl<S: ChainSource> Follower<S> {
     /// (`ChainSource::report_lie`). Any failure leaves the window unapplied, and the `Err` says
     /// why.
     async fn confirm_with_primary(&self, start: Hash32, raw: &RawVspcResponse, origin: Origin) -> Result<(), String> {
+        let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
         let ctx = self
-            .blocking(|i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone()))
+            .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
             .await
             .map_err(|e| format!("database: {e}"))?;
         let flags = ctx.flag(&raw.chain_block_accepted_transactions);
