@@ -68,6 +68,14 @@ pub enum RpcError {
 /// itself (`multi`).
 pub const MAX_MESSAGE_BYTES: usize = 1 << 30;
 
+/// The largest answer a small call takes, 16 MiB.
+///
+/// These are the status, blue scores, a block header, the DAG info and the chain hashes (at most
+/// a few thousand). Their answers are a few KB to a few hundred KB. A node that sends more is
+/// refused as the frame header arrives, instead of being buffered up to [`MAX_MESSAGE_BYTES`].
+/// The UTXO queries and the windows keep their own limits.
+pub const SMALL_CALL_MAX_BYTES: usize = 16 << 20;
+
 /// A transport error that is the request's size limit ([`RpcError::TooLarge`]), else
 /// [`RpcError::Transport`].
 fn transport_error(e: tokio_tungstenite::tungstenite::Error) -> RpcError {
@@ -494,16 +502,32 @@ impl WrpcClient {
     /// answer is never read as the answer to the next request.
     ///
     /// These are the small calls. A timeout of one counts against the node ([`judge::timed_out`]).
-    /// A VSPC batch's timeout does not count, because the windows adapt to it.
+    /// A VSPC batch's timeout does not count, because the windows adapt to it. An answer may be at
+    /// most [`SMALL_CALL_MAX_BYTES`].
     pub async fn call_raw_within(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
-        let r = self.call_small(method, params, timeout).await;
+        self.call_raw_capped(method, params, timeout, SMALL_CALL_MAX_BYTES).await
+    }
+
+    /// [`WrpcClient::call_raw_within`] whose answer may be at most `cap` bytes.
+    ///
+    /// The small calls share one connection, and a connection opened with another limit is
+    /// replaced first. So a call with another limit costs a reconnect. Only the UTXO queries have
+    /// one, and they are rare outside the Executor's own client (`matcher::node`).
+    async fn call_raw_capped(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+        cap: usize,
+    ) -> Result<String, RpcError> {
+        let r = self.call_small(method, params, timeout, cap.min(self.cfg.max_message_bytes)).await;
         if matches!(r, Err(RpcError::Timeout(_))) {
             judge::timed_out(&self.cfg.url, &self.node_in_use());
         }
         r
     }
 
-    async fn call_small(&self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<String, RpcError> {
+    async fn call_small(&self, method: &str, params: serde_json::Value, timeout: Duration, cap: usize) -> Result<String, RpcError> {
         if self.cfg.all_borsh() {
             // the same JSON in and out, over Borsh (`bridge`)
             let enc = bridge::encode(method, &params).map_err(RpcError::Decode)?;
@@ -512,13 +536,13 @@ impl WrpcClient {
                 Reply::Json(_) => Err(RpcError::Decode("a JSON answer to a Borsh request".into())),
             };
             let wire = Wire::Borsh { frame: Box::new(move |id| enc.frame(id)) };
-            return self.call_on(self.conn.lock().await, wire, timeout, self.cfg.max_message_bytes, parse).await;
+            return self.call_on(self.conn.lock().await, wire, timeout, cap, parse).await;
         }
         let parse = |p: Reply<'_>| match p {
             Reply::Json(p) => Ok(p.to_string()),
             Reply::Borsh { .. } => Err(RpcError::Decode("a Borsh answer to a JSON request".into())),
         };
-        self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, self.cfg.max_message_bytes, parse).await
+        self.call_on(self.conn.lock().await, Wire::Json { method, params }, timeout, cap, parse).await
     }
 
     /// The Borsh endpoint the VSPC connections use, if any. `None` means JSON, and also means VSPC
@@ -671,7 +695,11 @@ impl WrpcClient {
     }
 
     async fn call<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value) -> Result<T, RpcError> {
-        let raw = self.call_raw(method, params).await?;
+        self.call_capped(method, params, SMALL_CALL_MAX_BYTES).await
+    }
+
+    async fn call_capped<T: DeserializeOwned>(&self, method: &str, params: serde_json::Value, cap: usize) -> Result<T, RpcError> {
+        let raw = self.call_raw_capped(method, params, self.cfg.request_timeout, cap).await?;
         serde_json::from_str(&raw).map_err(|e| RpcError::Decode(format!("{method}: {e}")))
     }
 }
@@ -795,7 +823,9 @@ impl ChainSource for WrpcClient {
             #[serde(default)]
             entries: Vec<AddressUtxo>,
         }
-        let r: Resp = self.call("getUtxosByAddresses", serde_json::json!({ "addresses": addresses })).await?;
+        // An address with many outputs answers with many MB: the client's own limit.
+        let r: Resp =
+            self.call_capped("getUtxosByAddresses", serde_json::json!({ "addresses": addresses }), self.cfg.max_message_bytes).await?;
         Ok(r.entries)
     }
 

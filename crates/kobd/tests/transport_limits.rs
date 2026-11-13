@@ -7,6 +7,8 @@
 //! - read API: IPv6 /64 rotation inside one site does not exhaust the global bucket;
 //! - WebSocket: a session that only auto-answers server Pings is closed at the idle limit, one sending `{"op":"ping"}`
 //!   stays.
+//! - node client: a small call refuses an answer above its own limit (16 MiB) as the frame header arrives; a UTXO query
+//!   takes it.
 
 use axum::body::Body;
 use axum::extract::ConnectInfo;
@@ -284,5 +286,41 @@ async fn ws_session_without_application_messages_is_closed_at_the_idle_limit() {
     let lived = tokio::time::timeout(Duration::from_secs(2), silent).await.expect("the silent session was closed").unwrap();
     assert!(lived < Duration::from_millis(1_500), "closed near the idle limit ({lived:?})");
     assert!(!chatty_rx.is_finished(), "a session sending application pings stays open");
+    server.abort();
+}
+
+/// A node that answers a small call (`getSinkBlueScore`) with more than 16 MiB is refused as the frame header arrives
+/// (`rpc::SMALL_CALL_MAX_BYTES`), instead of being buffered up to the 1 GiB the client takes at all. A UTXO query, whose
+/// answer can be that large for a busy address, takes the same answer.
+#[tokio::test]
+async fn a_small_node_call_refuses_an_answer_above_its_own_limit() {
+    use kobd::rpc::{ChainSource, RpcError, WrpcClient, WrpcConfig, SMALL_CALL_MAX_BYTES};
+    use tokio_tungstenite::tungstenite::Message;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    // Every request is answered with its id, a blue score and padding above the limit.
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((s, _)) = listener.accept().await else { return };
+            tokio::spawn(async move {
+                let Ok(mut ws) = tokio_tungstenite::accept_async(s).await else { return };
+                while let Some(Ok(Message::Text(t))) = ws.next().await {
+                    let req: serde_json::Value = serde_json::from_str(t.as_str()).unwrap();
+                    let pad = "x".repeat(SMALL_CALL_MAX_BYTES + 1);
+                    let answer = serde_json::json!({ "id": req["id"], "params": { "blueScore": 7, "pad": pad } });
+                    if ws.send(Message::text(answer.to_string())).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
+    let client = WrpcClient::new(WrpcConfig::new(format!("ws://{addr}")));
+    match client.sink_blue_score().await {
+        Err(RpcError::TooLarge { size, limit }) => assert!(limit == SMALL_CALL_MAX_BYTES && size > limit, "{size} {limit}"),
+        r => panic!("{r:?}"),
+    }
+    let utxos = client.utxos_by_addresses(&["kaspatest:none".to_string()]).await.expect("a UTXO query takes a large answer");
+    assert!(utxos.is_empty());
     server.abort();
 }
