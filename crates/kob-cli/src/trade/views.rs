@@ -1,6 +1,11 @@
-//! The read-only trading commands: `kob book` (a token's KAS book or a pair book), `kob orders` (the maker's orders, as
-//! "My orders" lists them) and `kob balances` (free KAS and tokens, and what the maker's live orders hold: custody,
-//! strays, KAS locked; `web/src/kob/balances.ts`). Nothing is signed; no key is needed when `--maker` names the owner.
+//! The read-only trading commands.
+//!
+//! - `kob book` shows the KAS book of a token or a pair book.
+//! - `kob orders` lists the orders of the maker, as "My orders" does.
+//! - `kob balances` shows the free KAS and tokens, and what the live orders of the maker hold:
+//!   custody, strays and locked KAS. See `web/src/kob/balances.ts`.
+//!
+//! Nothing is signed, and no key is needed when `--maker` names the owner.
 
 use std::collections::BTreeMap;
 
@@ -15,7 +20,7 @@ use super::opts::{parse, Common, Parsed, COMMON_HELP};
 use super::plan::{Book, Level};
 use super::units::{self, TokenUnit};
 
-/// Help of `kob book`.
+/// The help text of `kob book`.
 pub const BOOK_USAGE: &str = "\
 kob book: a token's order book on KAS, or the book of a pair (the indexer's view; nothing is signed)
 
@@ -26,7 +31,7 @@ USAGE
   aggregated by price, asks above the spread, bids below; the last fill closes the view.
 ";
 
-/// Help of `kob orders`.
+/// The help text of `kob orders`.
 pub const ORDERS_USAGE: &str = "\
 kob orders: the maker's orders (the indexer's view, as the web wallet's My orders lists them)
 
@@ -37,7 +42,7 @@ USAGE
   public key is used). Each line: covenant id, kind, side, what is left, the price or legs, status and expiry.
 ";
 
-/// Help of `kob balances`.
+/// The help text of `kob balances`.
 pub const BALANCES_USAGE: &str = "\
 kob balances: free KAS and tokens of the maker, and what the maker's live orders hold
 
@@ -54,7 +59,7 @@ fn bail(e: String, code: i32) -> i32 {
     code
 }
 
-/// Parsed arguments and settings of a read-only command (`--help` prints `usage`).
+/// The parsed arguments and settings of a read-only command. `--help` prints `usage`.
 fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) -> Result<(Parsed, Common), i32> {
     if let Some(code) = crate::help::help_or_usage(args, &[usage, COMMON_HELP], false) {
         return Err(code);
@@ -64,7 +69,9 @@ fn ctx(args: &[String], value_flags: &[&str], bool_flags: &[&str], usage: &str) 
     Ok((p, c))
 }
 
-/// The owner a view is about: `--maker` (an x-only key or a P2PK address of the network), else the signing key's.
+/// The owner that a view is about.
+///
+/// It is `--maker`, an x-only key or a P2PK address of the network, else the signing key.
 pub fn maker_of(p: &Parsed, c: &Common, argv: &[String]) -> Result<[u8; 32], String> {
     match p.get("--maker") {
         Some(m) => match super::actions::recipient(m, &c.network)? {
@@ -75,7 +82,9 @@ pub fn maker_of(p: &Parsed, c: &Common, argv: &[String]) -> Result<[u8; 32], Str
     }
 }
 
-/// Display facts of a token from the registry and the indexer lists (the short id alone when neither knows it).
+/// The display facts of a token from the registry and the indexer lists.
+///
+/// When neither knows the token, only its short id is shown.
 pub(crate) fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> (TokenUnit, bool) {
     let f = reg.iter().find(|t| t.cov == *cov).or_else(|| idx.iter().find(|t| t.cov == *cov));
     match f {
@@ -110,9 +119,9 @@ fn hex32(v: Option<&Value>) -> Option<[u8; 32]> {
     v.and_then(Value::as_str).and_then(kob_protocol::registry::parse_hex32)
 }
 
-// ------------------------------------------------------------------------------------------------ book
+// ---------------------------------------------------------------------------- book
 
-/// The text lines of a book (asks highest first, the spread, bids highest first).
+/// The text lines of a book: asks highest first, the spread, then bids highest first.
 pub fn book_lines(book: &Book, price: &dyn Fn(i64) -> String, amount: &dyn Fn(i64) -> String, last: Option<i64>) -> Vec<String> {
     let row = |l: &Level| {
         format!("    {:>28}  {:>28}  {} order{}", price(l.price), amount(l.amount), l.orders, if l.orders == 1 { "" } else { "s" })
@@ -123,7 +132,8 @@ pub fn book_lines(book: &Book, price: &dyn Fn(i64) -> String, amount: &dyn Fn(i6
     }
     v.extend(book.asks.iter().rev().map(row));
     match (book.asks.first(), book.bids.first()) {
-        // a momentarily crossed book is normal (an executor is about to match it): never a negative spread
+        // A momentarily crossed book is normal, because an executor is about to match it. The
+        // spread is never negative.
         (Some(a), Some(b)) if b.price > a.price => {
             v.push(format!("  -- crossed by {} (best ask {}, best bid {})", price(b.price - a.price), price(a.price), price(b.price)))
         }
@@ -157,7 +167,7 @@ fn levels_json(levels: &[Level], price: &dyn Fn(i64) -> String) -> Value {
         .collect::<Vec<_>>())
 }
 
-/// Print a view: its JSON with `--json`, else its lines.
+/// Prints a view: its JSON with `--json`, else its lines.
 fn print_view(c: &Common, r: Result<(Value, Vec<String>), String>) -> i32 {
     match r {
         Ok((v, lines)) => {
@@ -174,20 +184,22 @@ fn print_view(c: &Common, r: Result<(Value, Vec<String>), String>) -> i32 {
     }
 }
 
-/// Run `kob book`.
+/// Runs `kob book`.
 pub fn run_book(args: &[String]) -> i32 {
     let (p, c) = match ctx(args, &["--quote", "--depth"], &[], BOOK_USAGE) {
         Ok(x) => x,
         Err(code) => return code,
     };
-    // a mistake in the arguments is a usage error (2), whatever the indexer would have said
+    // A mistake in the arguments is a usage error (2), whatever the indexer would have said.
     if let Err(e) = book_args(&p) {
         return bail(e, 2);
     }
     print_view(&c, book_view(&c, &p))
 }
 
-/// The arguments of `kob book` that need no network: the token (ticker or covenant id) and the depth.
+/// The arguments of `kob book` that need no network.
+///
+/// They are the token, as ticker or covenant id, and the depth.
 fn book_args(p: &Parsed) -> Result<(&str, u32), String> {
     let [key] = p.pos.as_slice() else { return Err("give exactly one token (ticker or covenant id)".into()) };
     let depth: u32 = match p.get("--depth") {
@@ -203,9 +215,9 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         let (key, depth) = book_args(p)?;
         let indexer = c.need_indexer()?;
         let (reg, idx) = data::token_lists(c.registry.as_deref(), &c.network, Some(indexer))?;
-        // a token without a registry entry: its decimals from the scale of its market (`kob place`'s open token); a token
-        // without orders whose decimals nothing tells has an empty book, shown without them (TN10 2026-10-15 O-2: the view
-        // asked for a --decimals it does not take)
+        // A token without a registry entry gets its decimals from the scale of its market, as the
+        // open token of `kob place` does. A token without orders, whose decimals nothing tells,
+        // has an empty book, which is shown without them.
         let order_scale = |cov: &[u8; 32]| data::order_scale(indexer, cov);
         let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
         let open = market::OpenToken { remembered: Some(&remembered), view: true, ..market::OpenToken::new(&c.network, &order_scale) };
@@ -267,9 +279,9 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
     }
 }
 
-// ------------------------------------------------------------------------------------------------ orders
+// ---------------------------------------------------------------------------- orders
 
-/// The maker's orders of the indexer (`GET /v1/orders`, every page up to 20).
+/// The orders of the maker from the indexer (`GET /v1/orders`), every page up to 20.
 pub fn fetch_orders(indexer: &str, maker: &[u8; 32], token: Option<&[u8; 32]>, all: bool) -> Result<Vec<Value>, String> {
     let mut out = vec![];
     let mut cursor: Option<String> = None;
@@ -295,7 +307,9 @@ pub fn fetch_orders(indexer: &str, maker: &[u8; 32], token: Option<&[u8; 32]>, a
     Ok(out)
 }
 
-/// What one order trades, in words: its side, what is left, its price or legs (`order-facts.ts` in short).
+/// What one order trades, in words: its side, what is left, and its price or legs.
+///
+/// It is `order-facts.ts` in short.
 pub fn describe(s: &AnyState, unit: &(TokenUnit, bool), quote: &(TokenUnit, bool), pair: bool) -> String {
     let (qd, qn) = if pair { (quote.0.decimals, quote.0.ticker.clone()) } else { (units::KAS_DECIMALS, "KAS".to_string()) };
     let p = |x: i64| units::price_per_whole(x, &unit.0, s.scale(), qd, &qn);
@@ -365,7 +379,7 @@ fn ifd_text(p: &dyn Fn(i64) -> String, price: i64, stop: i64, exit: Option<(i64,
     v.join(", ")
 }
 
-/// One order view of the indexer as `kob orders` shows it (also `kob watch order`): its JSON row.
+/// One order view of the indexer as `kob orders` shows it, and `kob watch order`: its JSON row.
 pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
     let cov = hex32(o.get("covenant_id")).map(|x| to_hex(&x)).unwrap_or_default();
     let contract = o.get("contract").and_then(Value::as_str).unwrap_or("?").to_string();
@@ -426,7 +440,7 @@ pub fn order_row_line(r: &Value) -> String {
     )
 }
 
-/// Run `kob orders`.
+/// Runs `kob orders`.
 pub fn run_orders(args: &[String]) -> i32 {
     let (p, c) = match ctx(args, &["--token", "--maker"], &["--all"], ORDERS_USAGE) {
         Ok(x) => x,
@@ -435,7 +449,8 @@ pub fn run_orders(args: &[String]) -> i32 {
     if let Some(x) = p.pos.first() {
         return bail(format!("unexpected argument `{x}`"), 2);
     }
-    // no owner (no --maker, no key) is a usage error (2), not a failure of the indexer or the node
+    // No owner, with no --maker and no key, is a usage error (2), not a failure of the indexer or
+    // the node.
     if let Err(e) = maker_of(&p, &c, args) {
         return bail(e, 2);
     }
@@ -474,30 +489,36 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
     }
 }
 
-// ------------------------------------------------------------------------------------------------ balances
+// ---------------------------------------------------------------------------- balances
 
-/// What the maker's live orders hold of one token (`EscrowedBalance`).
+/// What the live orders of the maker hold of one token (`EscrowedBalance`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Escrowed {
-    /// Tokens in custody (base units).
+    /// Tokens in custody, in base units.
     pub custody: i128,
-    /// Stray tokens owned by live orders.
+    /// Stray tokens that live orders own.
     pub strays: i128,
-    /// KAS budget of buy-side orders.
+    /// The KAS budget of buy-side orders.
     pub kas_escrow: i128,
-    /// KAS locked that is not budget: carriers, tips, reserves.
+    /// The KAS locked that is not budget: carriers, tips and reserves.
     pub kas_carriers: i128,
-    /// Live orders counted (under the order's token; a pair order under A).
+    /// The number of live orders counted, under the token of the order.
+    ///
+    /// A pair order counts under A.
     pub orders: usize,
 }
 
-/// An order the balances do not count: covenant id and why (`terminal`, `state-unknown`, `no-current-utxo`).
+/// An order that the balances do not count, as covenant id and reason.
+///
+/// The reason is `terminal`, `state-unknown` or `no-current-utxo`.
 pub type Skipped = (String, &'static str);
 
 const TERMINAL: &[&str] = &["filled", "cancelled", "refunded", "killed", "closed"];
 
-/// Per token: what live orders hold (`escrowedBalancesDetailed` over indexer order views); the orders not counted
-/// (terminal, state not proven, no current outpoint) are returned by covenant id with the reason.
+/// What live orders hold, per token (`escrowedBalancesDetailed` over indexer order views).
+///
+/// The orders that are not counted are returned by covenant id with the reason. They are
+/// terminal ones, ones whose state is not proven, and ones without a current outpoint.
 pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>) {
     let mut by: BTreeMap<[u8; 32], Escrowed> = BTreeMap::new();
     let mut skipped = vec![];
@@ -539,7 +560,7 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
             carriers += i64_of(u.get("value")).unwrap_or(0) as i128;
             seen.push(t);
         }
-        // a custody the view does not show counts what the state says it must hold
+        // A custody that the view does not show counts what the state says it must hold.
         for (t, amount) in s.custodies() {
             if !seen.contains(&t) {
                 by.entry(t).or_default().custody += amount as i128;
@@ -558,7 +579,8 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
         let b = by.entry(token).or_default();
         let (sell, reserved) = reserved_kas(&s);
         if sell || s.is_pair() {
-            // ask kinds and pair orders: the order UTXO is carriers, prefunds and tips, never a KAS trading budget
+            // For ask kinds and pair orders, the order UTXO is carriers, prefunds and tips, and
+            // never a KAS trading budget.
             carriers += value;
         } else {
             let non_budget = reserved.min(value);
@@ -570,8 +592,9 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
     (by, skipped)
 }
 
-/// Whether an order sells, and the KAS of a buy's order UTXO that is not trading budget (its tips, delivery / exit
-/// carriers and reserve).
+/// Whether an order sells, and the KAS of a buy's order UTXO that is not trading budget.
+///
+/// That KAS is the tips, the delivery and exit carriers, and the reserve.
 fn reserved_kas(s: &AnyState) -> (bool, i128) {
     let r = |x: &[i64]| x.iter().map(|v| (*v).max(0) as i128).sum::<i128>();
     match s {
@@ -584,7 +607,9 @@ fn reserved_kas(s: &AnyState) -> (bool, i128) {
     }
 }
 
-/// The maker's free token holdings the indexer lists (`GET /v1/token-utxos?owner=`): per token, base units and UTXOs.
+/// The free token holdings of the maker that the indexer lists (`GET /v1/token-utxos?owner=`).
+///
+/// The result is, per token, the base units and the number of UTXOs.
 fn indexer_holdings(indexer: &str, maker: &[u8; 32]) -> Result<BTreeMap<[u8; 32], (i128, usize)>, String> {
     let mut out: BTreeMap<[u8; 32], (i128, usize)> = BTreeMap::new();
     let mut cursor: Option<String> = None;
@@ -620,7 +645,7 @@ fn indexer_holdings(indexer: &str, maker: &[u8; 32]) -> Result<BTreeMap<[u8; 32]
     Ok(out)
 }
 
-/// Run `kob balances`.
+/// Runs `kob balances`.
 pub fn run_balances(args: &[String]) -> i32 {
     let (p, c) = match ctx(args, &["--maker"], &[], BALANCES_USAGE) {
         Ok(x) => x,
@@ -656,7 +681,8 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
         for t in tokens {
             let u = unit_of(&t, &reg, &idx);
-            // free tokens: confirmed on the node when the token's market is known, else the indexer's figure
+            // Free tokens are confirmed on the node when the market of the token is known, else the
+            // figure of the indexer is used.
             let resolved: Option<TokenMarket> = market::resolve_with(&to_hex(&t), &reg, &idx, Some(&open)).ok();
             let (free, verified, utxos) = match &resolved {
                 Some(m) => {
@@ -737,7 +763,8 @@ mod tests {
         assert!(row("260p") < row("250p") && row("250p") < spread && spread < row("245p"), "{l:?}");
         assert!(l.last().unwrap().contains("last fill: 248p"));
         assert!(!is_crossed(&book));
-        // a crossed book (best bid above best ask) says by how much, never a negative spread
+        // A crossed book, with the best bid above the best ask, says by how much and never shows a
+        // negative spread.
         let crossed = Book {
             asks: vec![Level { price: 250, amount: 5, orders: 1, tip: 0 }],
             bids: vec![Level { price: 260, amount: 3, orders: 1, tip: 0 }],
@@ -747,14 +774,14 @@ mod tests {
         let l = book_lines(&crossed, &|p| format!("{p}p"), &|a| format!("{a}a"), None);
         assert!(l.iter().any(|x| x.contains("crossed by 10p (best ask 250p, best bid 260p)")), "{l:?}");
         assert!(!l.iter().any(|x| x.contains("spread")), "{l:?}");
-        // a locked book (bid = ask) is a spread of zero, not crossed
+        // A locked book, with bid equal to ask, has a spread of zero and is not crossed.
         let locked = Book {
             asks: vec![Level { price: 250, amount: 5, orders: 1, tip: 0 }],
             bids: vec![Level { price: 250, amount: 3, orders: 1, tip: 0 }],
             ..Default::default()
         };
         assert!(!is_crossed(&locked));
-        // a terminal order and one without a proven state are skipped
+        // A terminal order and one without a proven state are skipped.
         let (by, skipped) = escrowed(&[
             json!({"covenant_id": "aa", "status": "filled"}),
             json!({"covenant_id": "bb", "status": "open", "state_known": false}),
