@@ -116,7 +116,7 @@ export function checkFills(fills: bigint, pre: PlanIssue[]): void {
   if (fills < 1n) pre.push(issue('MAX_FILLS_INVALID', undefined, 'maxFills'));
 }
 
-/** Worst price of an auction from `touch`: sell minus the bound (up to tick), buy plus it (down). */
+/** Worst price of an auction from `touch`: sell is touch minus the bound, buy is touch plus it. */
 export function auctionBound(side: 'sell' | 'buy', touch: bigint, bps: bigint, tick: bigint): bigint {
   const move = bpsFloor(touch, bps);
   if (side === 'sell') {

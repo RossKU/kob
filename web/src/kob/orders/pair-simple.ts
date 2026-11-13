@@ -122,7 +122,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
 
   const possible = ceilDiv(d.amount, minFill);
   const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
-  // With fewer carriers than possible fills, the rest fills only in full after `fills - 1` partials.
+  // With fewer carriers than possible fills, the rest fills only in full after the partial fills.
   if (d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const dc = pairCarrierOf(env);
   const tips = pairTipsOf(env);

@@ -27,7 +27,7 @@ export interface Checked {
   recovered: RecoveredOrder[];
 }
 
-/** Plans, expects success and consensus validity, and checks the placement record against the plan. */
+/** Plans, expects success and consensus validity, and checks the placement record of the plan. */
 export function planOk(env: PlanEnv, intent: CondIntent): Checked {
   const plan = planCond(env, intent);
   expect(plan.issues.filter((i) => i.severity === 'error'), JSON.stringify(plan.issues, (_k, v) => (typeof v === 'bigint' ? v.toString() : v))).toEqual([]);

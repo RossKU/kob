@@ -162,7 +162,7 @@ export function planPairIfd(env: PairPlanEnv, log: IssueLog, intent: IfdLikeInte
     }
   }
   const exitWorst = buyFirst ? askWorst(legs) : bidWorst(legs);
-  // Sell-first: the B prefund (per whole A) beyond the entry price covers the exit's worst buy-back.
+  // Sell-first: the B prefund (per whole A) beyond the entry price covers the exit's worst case.
   let prefund = 0n;
   if (!buyFirst) {
     const minPrefund = exitWorst > entry.price ? exitWorst - entry.price : 0n;
