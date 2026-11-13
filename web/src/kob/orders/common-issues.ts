@@ -1,15 +1,24 @@
-// Stable issue codes of the order planners (plan-types.ts `PlanIssue.code`), with their default severity and English fallback text.
+// Stable issue codes of the order planners (`PlanIssue.code` in plan-types.ts), with their default
+// severity and English fallback text.
 //
-// The UI translates by `code` (i18n key `plan.issue.<CODE>`) and fills the placeholders from `params`; `message` is only the fallback.
-// Placeholders: `{name}` inserts params.name, `{name:kas}` formats a sompi bigint as KAS, `{name:bps}` a basis-point value as a percent.
-// Conditional-order codes (stops, OCO, if-done, repeat) live in the conditional planner's own catalogue; this file holds the codes of the
-// shared layer (guards, funding, building) and of the simple orders.
+// The UI translates by `code` (i18n key `plan.issue.<CODE>`) and fills the placeholders from
+// `params`. The `message` is only the fallback.
+//
+// Placeholders:
+// - `{name}` inserts params.name.
+// - `{name:kas}` formats a sompi bigint as KAS.
+// - `{name:bps}` formats a basis-point bigint as a percent.
+//
+// This file holds the codes of the shared layer (guards, funding, building) and of the simple
+// orders. Conditional-order codes (stops, OCO, if-done, repeat) live in the conditional planner's
+// own catalogue.
 import type { IssueSeverity, PlanIssue } from '../plan-types';
 import { formatBps, formatKas } from '../units';
 
 interface CatalogEntry { severity: IssueSeverity; message: string }
 const e = (severity: IssueSeverity, message: string): CatalogEntry => ({ severity, message });
 
+/** Every issue code of the shared and simple-order planners with its default severity and text. */
 export const ISSUE_CATALOG = {
   // ---- intent shape
   INTENT_UNKNOWN_TYPE: e('error', 'Unknown order type "{type}".'),
@@ -79,7 +88,9 @@ export const ISSUE_CATALOG = {
   PLAN_MISMATCH: e('error', 'The built transaction does not match the planned order ({reason}): not signing.'),
 } as const satisfies Record<string, CatalogEntry>;
 
+/** The code of a catalogue entry. */
 export type IssueCode = keyof typeof ISSUE_CATALOG;
+/** Values a placeholder can take in an issue message. */
 export type IssueParams = Record<string, string | number | bigint>;
 
 function interpolate(template: string, params: IssueParams | undefined): string {
@@ -92,7 +103,7 @@ function interpolate(template: string, params: IssueParams | undefined): string 
   });
 }
 
-/** Creates a PlanIssue of the catalogue: default severity and English text, `params` for the placeholders, `field` for inline errors. */
+/** Creates a PlanIssue of the catalogue with its default severity and English text. */
 export function issue(code: IssueCode, params?: IssueParams, field?: string, severity?: IssueSeverity): PlanIssue {
   const c: CatalogEntry = ISSUE_CATALOG[code];
   const out: PlanIssue = { code, severity: severity ?? c.severity, message: interpolate(c.message, params) };
@@ -101,7 +112,7 @@ export function issue(code: IssueCode, params?: IssueParams, field?: string, sev
   return out;
 }
 
-/** Free-form issue for codes outside the catalogue (the conditional planner's own catalogue). */
+/** Free-form issue for a code outside this catalogue (the conditional planner's own one). */
 export function customIssue(code: string, severity: IssueSeverity, message: string, params?: IssueParams, field?: string): PlanIssue {
   const out: PlanIssue = { code, severity, message };
   if (params) out.params = params;
@@ -109,4 +120,5 @@ export function customIssue(code: string, severity: IssueSeverity, message: stri
   return out;
 }
 
+/** True when any of the issues has error severity. */
 export const hasError = (issues: readonly PlanIssue[]): boolean => issues.some((i) => i.severity === 'error');

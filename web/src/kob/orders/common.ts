@@ -1,8 +1,12 @@
-// Shared plumbing of the order planners (simple and conditional): state construction with the token's identity, KAS/token selection,
-// the `createOrder` build with adaptive fee reserve, the recover-and-compare self-check and the Disclosure numbers.
+// Shared plumbing of the order planners (simple and conditional).
 //
-// A planner does: validate (guards) -> map to an exact OrderState -> `buildCreate` -> `makeDisclosure` -> `finishPlan`.
-// All protocol logic (tx layout, state encoding, fees, signing digests) stays in kob-wasm: this module only prepares requests.
+// It covers state construction with the token's identity, KAS and token selection, the
+// `createOrder` build with an adaptive fee reserve, the recover-and-compare self-check and the
+// Disclosure numbers.
+//
+// A planner validates (guards), maps the intent to an exact OrderState, calls `buildCreate`, then
+// `makeDisclosure` and `finishPlan`. All protocol logic (tx layout, state encoding, fees, signing
+// digests) stays in kob-wasm. This module only prepares requests.
 import type { CarrierLine, Disclosure, OrderPlan, PlanEnv, PlanIssue } from '../plan-types';
 import type { AskState, BidState, BuiltTx, CreateOrderRequest, KeyUtxo, OrderState, PayloadRecord, TokenUtxo } from '../types';
 import { atFloor, buildWithCap, recordFee } from '../fee-policy';
@@ -19,28 +23,35 @@ export { issue, customIssue, hasError, ISSUE_CATALOG } from './common-issues';
 export type { IssueCode } from './common-issues';
 
 /**
- * Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 1 KAS (kob-wasm `defaultConstants().defaultOrderCarrier`,
- * kob-protocol `DEFAULT_ORDER_CARRIER`, order-types.md, defaults: the relay fee and the fills per transaction do not depend on it; a lower
- * carrier raises storage mass, so a lower block-template priority under congestion and, on large 8/8 and 10/10 batches, a storage mass over
- * the 500,000 limit; KaspaCom's 0.5 KAS floor is below it).
+ * Default KAS carrier of every covenant UTXO (order, custody, delivery, exit): 1 KAS.
+ *
+ * Mirrors kob-wasm `defaultConstants().defaultOrderCarrier` and kob-protocol
+ * `DEFAULT_ORDER_CARRIER`. A lower carrier raises the storage mass. That lowers the block-template
+ * priority under congestion and, on large 8/8 and 10/10 batches, can push the storage mass over
+ * the 500,000 limit. KaspaCom's 0.5 KAS token-output floor is below it.
  */
 export const DEFAULT_CARRIER = 100_000_000n;
-/** Fills a plain GTC bid budgets delivery carriers for by default (each fill of a continuing bid pays one carrier out of the escrow). */
+/** Fills a plain GTC bid budgets delivery carriers for by default, one carrier per fill. */
 export const DEFAULT_BID_FILLS = 3n;
 
+/** The order carrier of a plan environment: its own override or DEFAULT_CARRIER. */
 export const carrierOf = (env: Pick<PlanEnv, 'carrier'>): bigint => env.carrier ?? DEFAULT_CARRIER;
 
-/** Smallest output (sompi, 0.02 KAS) whose KIP-9 storage mass alone fits the block limit (kob-protocol `tx::DUST_OUTPUT_MIN`). */
+/** Smallest output (0.02 KAS) whose KIP-9 storage mass alone fits the block limit. */
 export const DUST_OUTPUT_MIN = 2_000_000n;
 /**
- * Smallest output with a covenant id (sompi, 0.08 KAS: an order UTXO, a custody, a delivery) whose KIP-9 storage mass alone fits the block limit
- * (kob-protocol `tx::COVENANT_OUTPUT_MIN`, four times the plain bound): the least KAS of every carrier of a new order (matcher.md 10.1).
+ * Smallest output with a covenant id (0.08 KAS) whose KIP-9 storage mass fits the block limit.
+ *
+ * It is four times the plain bound (kob-protocol `tx::COVENANT_OUTPUT_MIN`) and the least KAS of
+ * every carrier of a new order (matcher.md 10.1).
  */
 export const COVENANT_OUTPUT_MIN = 8_000_000n;
 
 /**
- * The least KAS a token output of the program `tplHash` can carry: the program's own floor (kob-wasm `templates`, `minTokenOutput`;
- * KaspaCom's KCC20 0.2.5 refuses token outputs below 0.5 KAS) and the dust bound, whichever is larger (a transfer, a merge).
+ * The least KAS a token output of the program `tplHash` can carry (a transfer, a merge).
+ *
+ * It is the larger of the program's own floor (kob-wasm `templates`, `minTokenOutput`) and the
+ * dust bound.
  */
 export function tokenCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint {
   const t = kob.templates().find((x) => x.hash === tplHash && x.tokenSlots);
@@ -49,15 +60,17 @@ export function tokenCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint 
 }
 
 /**
- * The least KAS a carrier of a new order can hold when it becomes a token output of the program `tplHash` (its custody, a delivery): the token
- * output's floor and the KIP-9 covenant output bound, whichever is larger (kob-protocol check_new_order, matcher.md 10.1).
+ * The least KAS a carrier of a new order can hold when it becomes a token output of `tplHash`.
+ *
+ * That applies to the custody and to a delivery. It is the larger of the token output's floor and
+ * the KIP-9 covenant output bound (kob-protocol `check_new_order`, matcher.md 10.1).
  */
 export function orderCarrierFloor(kob: PlanEnv['kob'], tplHash: string): bigint {
   const floor = tokenCarrierFloor(kob, tplHash);
   return floor > COVENANT_OUTPUT_MIN ? floor : COVENANT_OUTPUT_MIN;
 }
 
-/** The carriers of a new order that become token outputs (with their program) or exit order UTXOs, checked against their floors. */
+/** Checks the carriers of a new order against their floors (token outputs and exit UTXOs). */
 function carrierIssues(env: PlanEnv, order: OrderState, tokenCarrier: bigint): PlanIssue[] {
   const out: PlanIssue[] = [];
   const s = order.state as unknown as Record<string, string>;
@@ -73,11 +86,12 @@ function carrierIssues(env: PlanEnv, order: OrderState, tokenCarrier: bigint): P
   if (isKind(order, 'KobIfdAsk')) check('exitCarrier', s.exitCarrier, own);
   return out;
 }
+/** Decimal string of a bigint, the form order-state fields take. */
 export const str = (v: bigint): string => v.toString();
 
-// ------------------------------------------------------------------------------------------------ order states
+// ---- order states
 
-/** Parameters of a KobAsk in planner terms: bigint, amounts in base units, prices in sompi per whole token (the state's units). */
+/** Parameters of a KobAsk in planner terms: bigint, base-unit amounts, sompi per whole token. */
 export interface AskParams {
   /** base units (the custody) */
   amount: bigint;
@@ -89,7 +103,7 @@ export interface AskParams {
   tif?: 0 | 1 | 2;
   activeFrom?: bigint;
   expiryDaa: bigint;
-  /** at least the token program's default (kob-wasm keeperTips, matcher.md §5): a lower value is raised to it */
+  /** at least the token program's default (matcher.md §5): a lower value is raised to it */
   refundTip?: bigint;
   interval?: bigint;
   /** TWAP / DCA: most base units per fill (0 = off) */
@@ -101,12 +115,15 @@ export interface AskParams {
 }
 
 /**
- * The refund tip a new order carries: the caller's, but never below the program's default (matcher.md §5: wallets MUST set at
- * least the defaults, derived from measured refund fees; a lower tip leaves the order to the maker's own refund or cancel).
+ * The refund tip a new order carries: the caller's, but never below the program's default.
+ *
+ * Wallets must set at least the default (matcher.md §5). A lower tip leaves the order to the
+ * maker's own refund or cancel.
  */
 export const refundTipFor = (m: Pick<PlanEnv['token'], 'refundTip'>, want?: bigint): bigint =>
   want !== undefined && want > m.refundTip ? want : m.refundTip;
 
+/** Builds the KobAsk state of an order for the token in `env`. */
 export function makeAsk(env: PlanEnv, p: AskParams): OrderState {
   const m = env.token;
   const st: AskState = {
@@ -134,12 +151,13 @@ export function makeAsk(env: PlanEnv, p: AskParams): OrderState {
   return { kind: kindFor('KobAsk', m.family), state: st } as OrderState;
 }
 
-/** Parameters of a KobBid: like AskParams plus the budget knobs. The quantity is not a state field: it is the escrow (kob-wasm `bidEscrow`). */
+/** Parameters of a KobBid: AskParams plus the budget knobs. Its quantity is the escrow. */
 export interface BidParams extends Omit<AskParams, 'amount'> {
   reserve?: bigint;
   deliveryCarrier?: bigint;
 }
 
+/** Builds the KobBid state of an order for the token in `env`. */
 export function makeBid(env: PlanEnv, p: BidParams): OrderState {
   const m = env.token;
   const st: BidState = {
@@ -169,8 +187,10 @@ export function makeBid(env: PlanEnv, p: BidParams): OrderState {
 }
 
 /**
- * Budget rate of a bid: the all-in price at its CAP, `priceMax + tip` sompi per whole token (a rising bid's cap is priceEnd). A fill of n
- * consumes `ceil(n * rate / scale)` of the escrow (kob-wasm `bidUsed`), whatever the auction price was.
+ * Budget rate of a bid: the all-in price at its cap, `priceMax + tip` sompi per whole token.
+ *
+ * A rising bid's cap is its priceEnd. A fill of n consumes `ceil(n * rate / scale)` of the escrow
+ * (kob-wasm `bidUsed`), whatever the auction price was.
  */
 export function bidBudgetRate(price: bigint, tip: bigint, slope: bigint, priceEnd: bigint): bigint {
   const cap = slope > 0n && priceEnd > price ? priceEnd : price;
@@ -178,24 +198,28 @@ export function bidBudgetRate(price: bigint, tip: bigint, slope: bigint, priceEn
 }
 
 /**
- * KAS to put on a bid (its whole escrow) for `amount` base units in at most `fills` fills (kob-wasm `bidEscrow` = kob-protocol
- * `BidState::escrow`: `used(amount) + (fills - 1) + fills * deliveryCarrier + reserve`). Every fill pays one delivery carrier out of the
- * escrow (the delivered token UTXO needs KAS); the last fill's carrier rides on the delivery; each fill's budget is rounded up, hence one
- * sompi of slack per extra fill. Fewer budgeted fills than actually happen means the tail of the order cannot be filled: budget generously.
- * null when the covenant arithmetic overflows.
+ * KAS to put on a bid (its whole escrow) for `amount` base units in at most `fills` fills.
+ *
+ * The result is kob-wasm `bidEscrow`, equal to kob-protocol `BidState::escrow`:
+ * `used(amount) + (fills - 1) + fills * deliveryCarrier + reserve`. Every fill pays one delivery
+ * carrier out of the escrow. The last fill's carrier rides on the delivery. Each fill's budget is
+ * rounded up, hence one sompi of slack per extra fill. Budgeting fewer fills than happen leaves
+ * the tail of the order unfillable. Returns null when the covenant arithmetic overflows.
  */
 export const bidEscrowOf = (kob: PlanEnv['kob'], bid: OrderState, amount: bigint, fills: bigint): bigint | null => kob.bidEscrow(bid, amount, fills);
 
 /**
- * The wallet's default minimum fill of a resting order (kob-wasm `defaultMinFill`): the amount worth 10 KAS (a notional, not a carrier) at the
- * limit `price`, at least 1 base unit and at most the amount. IOC / FOK / market orders use 1 (they live one auction).
+ * The wallet's default minimum fill of a resting order (kob-wasm `defaultMinFill`).
+ *
+ * It is the amount worth 10 KAS at the limit `price` (a notional, not a carrier), at least 1 base
+ * unit and at most the amount. IOC, FOK and market orders use 1 because they live one auction.
  */
 export const defaultMinFillFor = (env: Pick<PlanEnv, 'kob' | 'token'>, amount: bigint, price: bigint): bigint =>
   amount <= 0n ? 1n : env.kob.defaultMinFill(amount, price > 0n ? price : 0n, env.token.scale);
 
-// ------------------------------------------------------------------------------------------------ selecting and building
+// ---- selecting and building
 
-/** The maker's P2PK-owned token UTXOs that can fund an order of this token (same token, same extension commitment, no borrowing). */
+/** The maker's P2PK-owned token UTXOs that can fund an order (same token and extension). */
 export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUtxos'>): TokenUtxo[] {
   const m = env.token;
   return env.tokenUtxos.filter(
@@ -208,9 +232,10 @@ export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUt
   );
 }
 
-/** Base units held in usable UTXOs (for "close all"). */
+/** Base units held in usable token UTXOs (for "close all"). */
 export const heldAmount = (env: PlanEnv): bigint => usableTokenUtxos(env).reduce((s, u) => s + BigInt(u.state.amount), 0n);
 
+/** What `buildCreate` needs to create one order: the state, the KAS on it and the custody. */
 export interface CreateSpec {
   order: OrderState;
   /** KAS on the order UTXO: carrier (token kinds) or the whole escrow (bid kinds) */
@@ -222,6 +247,7 @@ export interface CreateSpec {
   records?: PayloadRecord[];
 }
 
+/** The outcome of `buildCreate`: the request and built transaction, or error issues. */
 export interface CreateResult {
   request: CreateOrderRequest | null;
   built: BuiltTx | null;
@@ -238,16 +264,17 @@ const INSUFFICIENT_RE = /insufficient funds: need (\d+) sompi, have (\d+) sompi/
 const spendable = (u: KeyUtxo[]): bigint => u.filter((x) => !x.covenantId).reduce((s, x) => s + BigInt(x.amount), 0n);
 
 /**
- * Selects tokens and funding, builds the `createOrder` transaction with kob-wasm and self-checks it. Never throws for user problems:
- * a shortfall or a protocol refusal comes back as an error issue with `built: null`.
+ * Selects tokens and funding, builds the `createOrder` transaction and self-checks it.
  *
- * Fee handling: the network fee depends on the number of inputs and the token program, so the reserve added to the KAS need starts
- * at DEFAULT_FEE_RESERVE and grows by the shortfall kob-wasm reports until the build succeeds or the wallet cannot pay.
+ * It never throws for user problems. A shortfall or a protocol refusal comes back as an error
+ * issue with `built: null`. The network fee depends on the number of inputs and the token program,
+ * so the reserve added to the KAS need starts at DEFAULT_FEE_RESERVE. It grows by the shortfall
+ * kob-wasm reports until the build succeeds or the wallet cannot pay.
  */
 export function buildCreate(env: PlanEnv, spec: CreateSpec): CreateResult {
   const res = buildCreateAt(env, spec);
   if (res.built) return res;
-  // the wallet cannot pay the fee at the picked rate: try the floor before giving up (the estimate must not make a payable order impossible)
+  // Retry at the fee floor so a fee estimate never makes a payable order impossible.
   const low = res.issues.some((i) => i.code === 'INSUFFICIENT_KAS') ? atFloor(env) : null;
   return low ? buildCreateAt(low, spec) : res;
 }
@@ -256,7 +283,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
   const issues: PlanIssue[] = [];
   const fail = (extra: PlanIssue): CreateResult => ({ request: null, built: null, tokenCarrier: 0n, tokenChange: 0n, tokenInputsKas: 0n, issues: [...issues, extra] });
   const carrier = carrierOf(env);
-  // a carrier below its program's floor or the dust bound makes every fill unminable: refuse it here, with its own message
+  // A carrier below its floor makes every fill unminable, so refuse it here with its own message.
   const low = carrierIssues(env, spec.order, spec.tokenAmount > 0n ? carrier : 0n);
   if (low.length > 0) return { request: null, built: null, tokenCarrier: 0n, tokenChange: 0n, tokenInputsKas: 0n, issues: [...issues, ...low] };
   let tokens: TokenUtxo[] = [];
@@ -267,8 +294,9 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
 
   if (spec.tokenAmount > 0n) {
     try {
-      // the covering set, then the spare slots take the wallet's smallest other UTXOs of the token (funding.ts selectTokens): they ride on the ONE
-      // token change (kob-protocol build_create_order), their carriers recycled below (tokenInputsKas), the surplus back as KAS change
+      // The covering set, then spare slots take the wallet's smallest other UTXOs of the token.
+      // They ride on the one token change, their carriers are recycled (tokenInputsKas) and the
+      // surplus returns as KAS change.
       tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
     } catch (e) {
       if (e instanceof InsufficientFunds) {
@@ -284,7 +312,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
     const have = tokens.reduce((s, u) => s + BigInt(u.state.amount), 0n);
     tokenChange = have - spec.tokenAmount;
     tokenInputsKas = tokens.reduce((s, u) => s + BigInt(u.amount), 0n);
-    // outputs: order + custody (+ token change); the token inputs' own KAS is recycled into them
+    // Outputs are the order, the custody and the token change. The token inputs' KAS is recycled.
     need = spec.value + tokenCarrier + (tokenChange > 0n ? tokenCarrier : 0n);
     need = need > tokenInputsKas ? need - tokenInputsKas : 0n;
   }
@@ -320,7 +348,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
     }
     const first = mk(funding);
     try {
-      // the total fee cap: a fee above it is rebuilt once at a lower rate (fee-policy.ts)
+      // A fee above the policy cap is rebuilt once at a lower rate (fee-policy.ts).
       const { built, request, rate } = buildWithCap(env.fees?.policy, first, (r) => env.kob.build(guardRequest(r, { maker: env.maker, changeTo: env.changeTo })));
       const mismatch = verifyBuilt(env, built, spec);
       if (mismatch) return fail(issue('PLAN_MISMATCH', { reason: mismatch }));
@@ -339,8 +367,10 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
 }
 
 /**
- * Independent check that what was built is what was planned: the KOB1 placement record recovered from the transaction
- * (kob-wasm `recoverOrders`, which trusts nothing) must yield the planned state, value and deadline. Returns a reason on mismatch.
+ * Independent check that what was built is what was planned.
+ *
+ * The KOB1 placement record recovered from the transaction (kob-wasm `recoverOrders`, which trusts
+ * nothing) must yield the planned state, value and deadline. Returns a reason on mismatch.
  */
 export function verifyBuilt(env: PlanEnv, built: BuiltTx, spec: CreateSpec): string | null {
   let recovered;
@@ -359,8 +389,9 @@ export function verifyBuilt(env: PlanEnv, built: BuiltTx, spec: CreateSpec): str
   return null;
 }
 
-// ------------------------------------------------------------------------------------------------ disclosure
+// ---- disclosure
 
+/** Inputs of `makeDisclosure`: the planned order and the prices to show. */
 export interface DescribeParams {
   /** the order (ask or bid) the disclosure is about */
   order: OrderState;
@@ -379,9 +410,11 @@ export interface DescribeParams {
 }
 
 /**
- * The numbers the entry screen shows, derived from the planned state and the built tx (never from form text).
- * Carrier lines (returned on cancel / refund / fill) itemise every KAS the order locks; `kasLocked` sums the lines that are locked
- * (the token-change carrier stays in a UTXO the wallet owns and is marked `kept`).
+ * The numbers the entry screen shows, derived from the planned state and the built tx.
+ *
+ * They never come from form text. Carrier lines (returned on cancel, refund or fill) itemise every
+ * KAS the order locks. `kasLocked` sums the locked lines. The token-change carrier stays in a UTXO
+ * the wallet owns and is marked `kept`.
  */
 export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParams): Disclosure {
   const o = p.order;
@@ -392,8 +425,8 @@ export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParam
   let refundTip: bigint;
   let expiryDaa: bigint;
   let tokensEscrowed = 0n;
-  // the all-in total of the whole amount at the limit, by the covenant's quote rule: an ask RECEIVES at least ceil(n (p - tip) / scale), a
-  // bid PAYS at most floor(n (p + tip) / scale)
+  // All-in total of the whole amount at the limit by the covenant's quote rule. An ask receives at
+  // least ceil(n (p - tip) / scale). A bid pays at most floor(n (p + tip) / scale).
   let allInTotal: bigint | null = null;
   if (isKind(o, 'KobAsk')) {
     side = 'sell';
@@ -416,7 +449,7 @@ export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParam
     const fills = p.fills ?? 1n;
     const carrier = BigInt(s.deliveryCarrier);
     const reserve = BigInt(s.reserve);
-    // the escrow is exactly kob-wasm bidEscrow: the budget of the amount at the cap (+ one sompi of rounding per extra fill), the carriers, the reserve
+    // The escrow is kob-wasm bidEscrow: the budget at the cap, the carriers and the reserve.
     const total = res.request ? BigInt(res.request.value) : (env.kob.bidEscrow(o, p.amount, fills) ?? 0n);
     carriers.push({ kind: 'escrow', amount: total - carrier * fills - reserve, count: 1 });
     carriers.push({ kind: 'deliveryCarrier', amount: carrier, count: Number(fills) });
@@ -459,7 +492,7 @@ export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParam
 }
 
 
-// ------------------------------------------------------------------------------------------------ plan assembly
+// ---- plan assembly
 
 /** A plan that failed before anything was built. */
 export const failedPlan = (issues: PlanIssue[], states: OrderState[] = []): OrderPlan => ({ ok: false, issues, states, request: null, built: null, disclosure: null });
