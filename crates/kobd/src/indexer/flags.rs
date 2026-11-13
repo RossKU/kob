@@ -1,17 +1,24 @@
-//! "Possibly frozen" flags: orders whose engine pre-simulation failed at a token program.
+//! "Possibly frozen" flags on orders whose engine pre-simulation failed at a token program.
 //!
-//! KOB has no freeze / seize mechanism of its own (`registry/README.md`): a token program that freezes a balance or blacklists an
-//! address simply rejects the transaction, atomically. What KOB does is not to list such an order as live liquidity. The matcher
-//! pre-executes every transaction it builds in the rusty-kaspa engine; when the token program rejects one, the order it can
-//! attribute the rejection to is flagged here. The book, the depth and the token counts leave it out (`NOT_FROZEN` in
-//! `reads`), the order view carries `possibly_frozen` and the reason, and the matcher re-probes it now and then: a probe that
-//! passes clears the flag. A flag belongs to one order UTXO, so it lapses when the order moves.
+//! KOB has no freeze or seize mechanism of its own (`registry/README.md`). A token program that
+//! freezes a balance or blacklists an address rejects the transaction, atomically. KOB does not
+//! list such an order as live liquidity. The matcher pre-executes every transaction it builds in
+//! the rusty-kaspa engine. When the token program rejects one, the order it can attribute the
+//! rejection to is flagged here.
+//!
+//! - The book, the depth and the token counts leave a flagged order out (`NOT_FROZEN` in
+//!   `reads`).
+//! - The order view carries `possibly_frozen` and the reason.
+//! - The matcher re-probes the order now and then. A probe that passes clears the flag.
+//! - A flag belongs to one order UTXO, so it lapses when the order moves.
 
 use super::db::DbResult;
 use super::ids::order_of;
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// Flags the order at its current UTXO. Returns false when the order has no known current UTXO (nothing to flag).
+/// Flags the order at its current UTXO and returns true.
+///
+/// Returns false when the order has no known current UTXO, so there is nothing to flag.
 pub fn set(conn: &Connection, order: &[u8; 32], reason: &str, daa: u64) -> DbResult<bool> {
     let cur: Option<(Vec<u8>, i64)> = conn
         .query_row(
@@ -30,7 +37,9 @@ pub fn set(conn: &Connection, order: &[u8; 32], reason: &str, daa: u64) -> DbRes
     Ok(true)
 }
 
-/// Removes the flag (a later pre-simulation passed). Returns whether a flag was there.
+/// Removes the flag and returns whether there was one.
+///
+/// The matcher calls it when a later pre-simulation passes.
 pub fn clear(conn: &Connection, order: &[u8; 32]) -> DbResult<bool> {
     Ok(conn.execute("DELETE FROM order_flags WHERE covenant_id = ?1", [&order[..]])? > 0)
 }

@@ -1,29 +1,47 @@
-//! What the inputs of a recorded transaction held, from the outputs the store itself recorded: the network fee of an executor's
-//! transaction whose record has no input values (`record::TxRecord::in_value`, written since 2026-11-12: every older frame, and so a
-//! `kobd db replay` of the history).
+//! What the inputs of a recorded transaction held, resolved from the outputs the store recorded.
 //!
-//! An input is resolved by the output it spends: a tracked order UTXO (`order_utxos`), an order's custody or stray (`token_utxos`), a
-//! proven token holding (`token_holdings`), or a plain output of an earlier recorded transaction (`recorded_outputs`): an Executor's
-//! change, which funds its next transaction, a maker's payout or refund that funds a placement. A transaction's input total is known
-//! only when every one of its inputs resolves (its first funding, from outside KOB, does not).
+//! It gives the network fee of an executor transaction whose record has no input values
+//! (`record::TxRecord::in_value`). Every frame written before that field existed lacks it, so a
+//! `kobd db replay` of the history needs this module.
 //!
-//! `recorded_outputs` stays small: a row is the plain output of a recorded transaction, stamped with its block (a revert deletes it
-//! and un-spends what its block spent); a spent row goes once its spend is final (out of the reorg window), and an unspent one once it is
-//! older than [`RETENTION_DAA`] (a payout its maker keeps, a delivery's carrier: most plain outputs of KOB transactions are never spent
-//! by one). A lookup ignores a row older than the retention at the spending block's DAA score, so when the pruning ran makes no
-//! difference: the live path and a replay resolve the same inputs.
+//! An input is resolved by the output it spends. That output is one of:
+//! - a tracked order UTXO (`order_utxos`),
+//! - an order's custody or stray (`token_utxos`),
+//! - a proven token holding (`token_holdings`), or
+//! - a plain output of an earlier recorded transaction (`recorded_outputs`), such as an
+//!   Executor's change that funds its next transaction, or a maker's payout or refund that funds
+//!   a placement.
+//!
+//! The input total of a transaction is known only when every one of its inputs resolves. The first
+//! funding, which comes from outside KOB, does not resolve.
+//!
+//! `recorded_outputs` stays small:
+//! - A row is a plain output of a recorded transaction, stamped with its block. A revert deletes
+//!   it and un-spends what its block spent.
+//! - A spent row goes once its spend is final, that is, out of the reorg window.
+//! - An unspent row goes once it is older than [`RETENTION_DAA`]. Most plain outputs of KOB
+//!   transactions are never spent by another one, such as a payout its maker keeps or the
+//!   carrier of a delivery.
+//!
+//! A lookup ignores a row older than the retention at the DAA score of the spending block. So the
+//! time at which the pruning ran makes no difference, and the live path and a replay resolve the
+//! same inputs.
 
 use super::db::DbResult;
 use super::record::TxRecord;
 use crate::hex::Hash32;
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// How long an unspent recorded output is kept and resolves an input: 7 days at 10 DAA per second. An Executor spends its change within
-/// minutes; a funding UTXO left longer is resolved by the node's own input values from 2026-11-12 on.
+/// How long an unspent recorded output is kept and resolves an input: 7 days at 10 DAA per second.
+///
+/// An Executor spends its change within minutes. A funding UTXO left longer is resolved by the
+/// input values the node reports.
 pub const RETENTION_DAA: u64 = 7 * 86_400 * 10;
 
-/// The value of the output `txid:idx` that an input of a transaction of the block at `daa` spends, when the store knows it: an order's
-/// custody or stray, a token holding (unspent rows), or a recorded plain output within the retention.
+/// Value of the output `txid:idx` that an input at DAA score `daa` spends, if the store knows it.
+///
+/// The store knows an order's custody or stray, an unspent token holding, and a recorded plain
+/// output within the retention.
 pub fn input_value(conn: &Connection, txid: &Hash32, idx: u32, daa: u64) -> DbResult<Option<i64>> {
     for sql in [
         "SELECT value FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
@@ -41,7 +59,9 @@ pub fn input_value(conn: &Connection, txid: &Hash32, idx: u32, daa: u64) -> DbRe
         .optional()?)
 }
 
-/// The record's inputs spend recorded outputs, and its plain outputs are recorded (block `seq`, DAA score `daa`).
+/// Records a transaction: its inputs spend recorded outputs and its plain outputs are recorded.
+///
+/// `seq` is the block and `daa` its DAA score.
 pub fn record(conn: &Connection, rec: &TxRecord, seq: i64, daa: u64) -> DbResult<()> {
     for i in &rec.inputs {
         conn.prepare_cached(
@@ -58,14 +78,16 @@ pub fn record(conn: &Connection, rec: &TxRecord, seq: i64, daa: u64) -> DbResult
     Ok(())
 }
 
-/// Undoes block `seq` (a revert): its outputs go, what it spent is unspent.
+/// Undoes block `seq` after a revert: its outputs go and what it spent is unspent.
 pub fn revert(conn: &Connection, seq: i64) -> DbResult<usize> {
     let n = conn.execute("DELETE FROM recorded_outputs WHERE created_block = ?1", [seq])?;
     Ok(n + conn.execute("UPDATE recorded_outputs SET spent_block = NULL, spent_daa = NULL WHERE spent_block = ?1", [seq])?)
 }
 
-/// Drops what no later input can need at cursor DAA `daa`: the rows spent before the reorg window (`window` DAA) and the unspent ones past
-/// the retention.
+/// Drops the rows that no later input can need at cursor DAA score `daa`.
+///
+/// These are the rows spent before the reorg window of `window` DAA, and the unspent rows past the
+/// retention.
 pub fn prune(conn: &Connection, daa: u64, window: u64) -> DbResult<usize> {
     let n = conn
         .execute("DELETE FROM recorded_outputs WHERE spent_daa IS NOT NULL AND spent_daa < ?1", [daa.saturating_sub(window) as i64])?;
@@ -95,8 +117,9 @@ mod tests {
         }
     }
 
-    /// A recorded output resolves an input until it is spent or older than the retention (whenever the pruning ran); a revert
-    /// un-spends; the pruning drops what is spent and final, and what is unspent past the retention.
+    /// A recorded output resolves an input until it is spent or older than the retention,
+    /// whenever the pruning ran. A revert un-spends. The pruning drops what is spent and final, and
+    /// what is unspent past the retention.
     #[test]
     fn recorded_outputs_resolve_until_spent_or_old() {
         let c = crate::indexer::db::open_memory("testnet-10").unwrap();
@@ -105,16 +128,17 @@ mod tests {
         assert_eq!((v(0, 2_000), v(1, 2_000), v(2, 2_000)), (Some(700), Some(300), None));
         assert_eq!(v(0, 1_000 + RETENTION_DAA), Some(700));
         assert_eq!(v(0, 1_001 + RETENTION_DAA), None, "past the retention, pruned or not");
-        // block 2 spends output 0
+        // Block 2 spends output 0.
         record(&c, &rec(2, &[(1, 0)], &[650]), 2, 2_000).unwrap();
         assert_eq!(v(0, 3_000), None);
         assert_eq!(revert(&c, 2).unwrap(), 2, "its output goes, the spend is undone");
         assert_eq!(v(0, 3_000), Some(700));
         record(&c, &rec(2, &[(1, 0)], &[650]), 3, 2_000).unwrap();
-        // the spend of block 3 is in the window at 2 100 (window 500): kept; final at 2 600: pruned
+        // The spend of block 3 is in the window at 2 100 (window 500) and kept. It is final at
+        // 2 600 and pruned.
         assert_eq!(prune(&c, 2_100, 500).unwrap(), 0);
         assert_eq!(prune(&c, 2_600, 500).unwrap(), 1);
-        // the unspent ones go past the retention
+        // The unspent rows go past the retention.
         assert_eq!(prune(&c, 2_000 + RETENTION_DAA, 500).unwrap(), 1, "output 1 of the first");
         let left: i64 = c.query_row("SELECT COUNT(*) FROM recorded_outputs", [], |r| r.get(0)).unwrap();
         assert_eq!(left, 1, "the second's change, created at 2 000");
