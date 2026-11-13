@@ -65,6 +65,11 @@ test.describe('the page', () => {
     await expect(rows.nth(0).locator('td').last()).toHaveText('7');
     await expect(rows.nth(1)).toContainText('Guardian');
     await expect(rows.nth(1).locator('td').last()).toHaveText('4');
+    // the title badge: a decorative emoji, then the name; the address whole (the end is cut by CSS only where it cannot fit, never the middle)
+    await expect(rows.nth(0).locator('.support-badge [aria-hidden="true"]')).toHaveText('👑');
+    await expect(rows.nth(0).locator('code')).toHaveText(TEST_KEYS.carol.mainnetAddress);
+    await expect(rows.nth(0).locator('code')).toHaveAttribute('title', TEST_KEYS.carol.mainnetAddress);
+    await expect(rows.nth(0).getByRole('button')).toHaveCount(0);
     await expect(page.getByTestId('support-executors')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'no horizontal scroll').toBe(true);
   });

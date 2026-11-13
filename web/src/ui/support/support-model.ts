@@ -16,23 +16,33 @@ declare global {
 export const SUPPORT_ADDRESS: string = 'kaspa:qq85cdj959gx33su28luhaymtq3yczx0jj40eufxwyxs77mk4vnpqd3m0nqqc';
 
 /** The contributors' titles, in order of rank: the first `places` people get the first title, the next `places` the second, and so on. Below the table: no title. */
-export const SUPPORT_TITLES: readonly { name: string; places: number }[] = [
-  { name: 'Archguardian', places: 1 },
-  { name: 'Guardian', places: 2 },
-  { name: 'Warden', places: 4 },
-  { name: 'Sentinel', places: 8 },
-  { name: 'Watcher', places: 16 },
-  { name: 'Lookout', places: 32 },
+export const SUPPORT_TITLES: readonly { name: string; places: number; emoji: string }[] = [
+  { name: 'Archguardian', places: 1, emoji: '👑' },
+  { name: 'Guardian', places: 2, emoji: '🛡️' },
+  { name: 'Warden', places: 4, emoji: '🗝️' },
+  { name: 'Sentinel', places: 8, emoji: '⚔️' },
+  { name: 'Watcher', places: 16, emoji: '🔭' },
+  { name: 'Lookout', places: 32, emoji: '🏮' },
 ];
 
-/** The title of rank `rank` (1 = first), null past the end of the table. */
-export function titleOfRank(rank: number): string | null {
+/** The title (name and emoji) of rank `rank` (1 = first), null past the end of the table. */
+export function titleEntryOfRank(rank: number): { name: string; emoji: string } | null {
   let last = 0;
   for (const t of SUPPORT_TITLES) {
     last += t.places;
-    if (rank <= last) return t.name;
+    if (rank <= last) return t;
   }
   return null;
+}
+
+/** The title name of rank `rank` (1 = first), null past the end of the table. */
+export function titleOfRank(rank: number): string | null {
+  return titleEntryOfRank(rank)?.name ?? null;
+}
+
+/** The row tint of the top ranks: gold for the first, silver for 2-3, bronze for 4-7 (styles.css `--tier-*`); none below. */
+export function tierOfRank(rank: number): 'gold' | 'silver' | 'bronze' | null {
+  return rank === 1 ? 'gold' : rank <= 3 ? 'silver' : rank <= 7 ? 'bronze' : null;
 }
 
 /** The address the page runs with: `SUPPORT_ADDRESS`, under test the injected one; '' when there is none or it is not an address. */

@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeAddress } from '../../../mock/address.mjs';
 import { parseHash, routeToHash } from '../../app/router';
 import { contributionsUrl, rankContributors } from '../../data/contributors';
-import { routeWithSupport, SUPPORT_ADDRESS, SUPPORT_TITLES, supportAddressOf, titleOfRank } from './support-model';
+import { routeWithSupport, SUPPORT_ADDRESS, SUPPORT_TITLES, supportAddressOf, tierOfRank, titleOfRank } from './support-model';
 
 // made-up, of the right shape: not a real address
 const TEST_ADDRESS = `kaspatest:${'q'.repeat(61)}`;
@@ -15,14 +15,18 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('the titles go by rank', () => {
   it('1, 2, 4, 8, 16 and 32 places, in this order', () => {
-    expect(SUPPORT_TITLES.map((t) => [t.name, t.places])).toEqual([
-      ['Archguardian', 1],
-      ['Guardian', 2],
-      ['Warden', 4],
-      ['Sentinel', 8],
-      ['Watcher', 16],
-      ['Lookout', 32],
+    expect(SUPPORT_TITLES.map((t) => [t.name, t.places, t.emoji])).toEqual([
+      ['Archguardian', 1, '👑'],
+      ['Guardian', 2, '🛡️'],
+      ['Warden', 4, '🗝️'],
+      ['Sentinel', 8, '⚔️'],
+      ['Watcher', 16, '🔭'],
+      ['Lookout', 32, '🏮'],
     ]);
+  });
+
+  it('the top ranks are tinted: gold, silver, bronze', () => {
+    expect([1, 2, 3, 4, 7, 8].map(tierOfRank)).toEqual(['gold', 'silver', 'silver', 'bronze', 'bronze', null]);
   });
 
   it('every boundary, on both sides', () => {

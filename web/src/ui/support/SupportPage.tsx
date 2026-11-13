@@ -5,10 +5,10 @@ import { readContributions, type Contributions } from '../../data/contributors';
 import { t } from '../../i18n';
 import { formatRowDate } from '../kit/format';
 import { formatKas } from '../../kob/units';
-import { CopyText, shortAddress, Table, TableMessage, useAsync } from '../kit';
+import { CopyText, Table, TableMessage, useAsync } from '../kit';
 import { README_URL } from '../landing/landing-model';
 import { qrPath } from './qr';
-import { supportAddressOf, titleOfRank } from './support-model';
+import { supportAddressOf, tierOfRank, titleEntryOfRank } from './support-model';
 
 /** Screen pixels per module: a whole number keeps the modules sharp. */
 const QR_SCALE = 4;
@@ -30,17 +30,28 @@ function ContributorRows(props: { data: Contributions | undefined }) {
   if (rows.length === 0) return <TableMessage colSpan={5} data-testid="support-contributors-empty">{t('support.contributors.empty')}</TableMessage>;
   return (
     <>
-      {rows.map((c, i) => (
-        <tr key={c.address} data-testid="support-contributor">
-          <td class="num">{i + 1}</td>
-          <td>{titleOfRank(i + 1) ?? ''}</td>
-          <td>
-            <CopyText value={c.address} text={shortAddress(c.address)} />
-          </td>
-          <td>{formatRowDate(c.first)}</td>
-          <td class="right num">{formatKas(c.total, { group: ',', maxFraction: 2 })}</td>
-        </tr>
-      ))}
+      {rows.map((c, i) => {
+        const title = titleEntryOfRank(i + 1);
+        const tier = tierOfRank(i + 1);
+        return (
+          <tr key={c.address} class={tier ? `support-tier support-tier-${tier}` : undefined} data-testid="support-contributor">
+            <td class="num support-rank">{i + 1}</td>
+            <td class="support-title">
+              {title ? (
+                <span class="support-badge">
+                  <span aria-hidden="true">{title.emoji}</span>
+                  {title.name}
+                </span>
+              ) : null}
+            </td>
+            <td class="support-addr">
+              <code class="mono support-addr-text" title={c.address}>{c.address}</code>
+            </td>
+            <td class="support-first" data-label={t('support.contributors.first')}>{formatRowDate(c.first)}</td>
+            <td class="right num support-total" data-label={t('support.contributors.total')}>{formatKas(c.total, { group: ',', maxFraction: 2 })}</td>
+          </tr>
+        );
+      })}
     </>
   );
 }
@@ -54,10 +65,10 @@ function Contributors(props: { address: string }) {
         <p class="muted" data-testid="support-contributors-failed">{t('support.contributors.failed')}</p>
       ) : (
         <>
-          <Table dense data-testid="support-contributors-table">
+          <Table dense class="support-table-wrap" data-testid="support-contributors-table">
             <thead>
               <tr>
-                <th>{t('support.contributors.rank')}</th>
+                <th class="support-rank">{t('support.contributors.rank')}</th>
                 <th>{t('support.contributors.titleColumn')}</th>
                 <th>{t('support.contributors.address')}</th>
                 <th>{t('support.contributors.first')}</th>

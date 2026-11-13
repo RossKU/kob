@@ -28,6 +28,10 @@
   --buy-bg: rgba(10, 150, 95, 0.12);
   --sell: #b8283e;
   --sell-bg: rgba(220, 50, 75, 0.11);
+  --tier-gold-bg: rgba(212, 160, 23, 0.20);
+  --tier-silver-bg: rgba(120, 130, 140, 0.15);
+  --tier-bronze-bg: rgba(176, 108, 50, 0.15);
+  --tier-gold-edge: #b8860b;
   --ok: #0a6e44;
   --ok-bg: #e2f5ea;
   --warn: #7e5200;
@@ -68,6 +72,10 @@
 /* Dark palette: the `data-theme` attribute set by src/ui/shell/theme.ts (header toggle, remembered), or the OS preference before the app runs. */
 :root[data-theme='dark'] {
   color-scheme: dark;
+  --tier-gold-bg: rgba(240, 185, 40, 0.18);
+  --tier-silver-bg: rgba(190, 200, 210, 0.12);
+  --tier-bronze-bg: rgba(205, 127, 50, 0.16);
+  --tier-gold-edge: #e0b030;
   --bg: #070707;
   --surface: #141414;
   --surface-2: #1e1e1e;
@@ -105,6 +113,10 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
+    --tier-gold-bg: rgba(240, 185, 40, 0.18);
+    --tier-silver-bg: rgba(190, 200, 210, 0.12);
+    --tier-bronze-bg: rgba(205, 127, 50, 0.16);
+    --tier-gold-edge: #e0b030;
     --bg: #070707;
     --surface: #141414;
     --surface-2: #1e1e1e;
@@ -768,7 +780,39 @@ a.explorer-link:hover { color: var(--primary); border-bottom-color: var(--primar
 /* the support page: the QR code keeps its own white ground in both themes (ui/support/SupportPage.tsx) */
 .support-pay { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin: 0 0 12px; }
 .support-qr { display: block; flex: none; max-width: 100%; height: auto; border-radius: 6px; }
-.support-address { flex: 1 1 220px; min-width: 0; }
+.support-address { flex: 0 1 auto; min-width: 0; }
+/* the contributors' table is as wide as its content (no flexible empty column): the whole address, the date and the total. Where that is wider than the 720 px text column it is centred on it and
+   grows only as far as it needs; the address ends with an ellipsis only where even the screen is too narrow. A phone gets a card per row. */
+@media (min-width: 800px) {
+  .support-table-wrap { width: max-content; max-width: calc(100vw - 64px); position: relative; left: 50%; transform: translateX(-50%); }
+  .support-addr-text { max-width: calc(100vw - 500px); }
+}
+.support-table-wrap .table { width: auto; table-layout: auto; }
+.support-table-wrap .table th, .support-table-wrap .table td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
+.support-addr-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.support-badge { display: inline-flex; align-items: center; gap: 5px; padding: 1px 9px 1px 6px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface-2); font-size: 0.85em; }
+.support-tier-gold td { background: var(--tier-gold-bg); font-weight: 600; }
+.support-tier-gold td:first-child { box-shadow: inset 3px 0 0 var(--tier-gold-edge); }
+.support-tier-silver td { background: var(--tier-silver-bg); }
+.support-tier-bronze td { background: var(--tier-bronze-bg); }
+@media (max-width: 639px) {
+  .support-table-wrap .table thead { display: none; }
+  .support-table-wrap .table, .support-table-wrap .table tbody { display: block; }
+  .support-table-wrap .table tr.support-tier, .support-table-wrap .table tbody tr { display: grid; grid-template-columns: auto 1fr auto; gap: 1px 8px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .support-table-wrap .table td { display: block; padding: 0; border: 0; width: auto; max-width: none; background: none; }
+  .support-table-wrap .table tr.support-tier td { background: none; }
+  .support-table-wrap .table tr.support-tier-gold { background: var(--tier-gold-bg); box-shadow: inset 3px 0 0 var(--tier-gold-edge); }
+  .support-table-wrap .table tr.support-tier-gold td:first-child { box-shadow: none; }
+  .support-table-wrap .table tr.support-tier-silver { background: var(--tier-silver-bg); }
+  .support-table-wrap .table tr.support-tier-bronze { background: var(--tier-bronze-bg); }
+  .support-table-wrap .table td.support-rank { grid-column: 1; }
+  .support-table-wrap .table td.support-title { grid-column: 2 / 4; }
+  .support-table-wrap .table td.support-addr { grid-column: 1 / 4; min-width: 0; }
+  .support-addr-text { max-width: 100%; font-size: 0.84em; }
+  .support-table-wrap .table td.support-first { grid-column: 1 / 3; color: var(--muted); font-size: 0.85em; }
+  .support-table-wrap .table td.support-total { grid-column: 3; text-align: right; }
+  .support-table-wrap .table td[data-label]::before { content: attr(data-label) ': '; color: var(--muted); font-size: 0.85em; font-weight: 400; }
+}
 
 /* the one muted line that says what the USD display is (or why KAS is shown); under the Portfolio's summary strip it belongs to the strip */
 .fiat-note { margin: 4px 0 8px; line-height: 1.35; }
