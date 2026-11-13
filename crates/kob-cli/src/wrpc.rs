@@ -1,22 +1,35 @@
-//! Minimal blocking Kaspa wRPC (JSON encoding) client: `submitTransaction`, `getUtxosByAddresses` and a generic `call`.
+//! A minimal blocking Kaspa wRPC client (JSON encoding).
 //!
-//! Protocol (workflow-rpc 0.18 JSON framing, rusty-kaspa v2.1.0 `RpcApiOps`, camelCase):
+//! It offers `submitTransaction`, `getUtxosByAddresses` and a generic `call`.
+//!
+//! # Protocol
+//!
+//! The framing is workflow-rpc 0.18 JSON with the camelCase `RpcApiOps` of rusty-kaspa v2.1.0.
 //!
 //! ```text
-//! -> {"id":1,"method":"submitTransaction","params":{"transaction":{<RpcTransaction>},"allowOrphan":false}}
+//! -> {"id":1,"method":"submitTransaction","params":{"transaction":{<RpcTransaction>},
+//!                                          "allowOrphan":false}}
 //! <- {"id":1,"method":"submitTransaction","params":{"transactionId":"<hex>"}}
 //! <- {"id":1,"error":{"code":0,"message":"...","data":null}}
 //! -> {"id":2,"method":"getUtxosByAddresses","params":{"addresses":["kaspatest:..."]}}
 //! <- {"id":2,"method":"getUtxosByAddresses","params":{"entries":[{"address":"kaspatest:...",
 //!       "outpoint":{"transactionId":"<hex>","index":0},
-//!       "utxoEntry":{"amount":1000,"scriptPublicKey":"0000<script hex>","blockDaaScore":1,"isCoinbase":false,
+//!       "utxoEntry":{"amount":1000,"scriptPublicKey":"0000<script hex>","blockDaaScore":1,
+//!                    "isCoinbase":false,
 //!                    "covenantId":"<hex>"|null}}]}}
 //! ```
 //!
-//! The node RPC is used rather than the public REST API because the REST API drops the per-input
-//! `computeBudget`, which a v1 transaction needs. A node is a JSON wRPC endpoint (`ws://host:18110`), a Borsh one (`ws://host:17110`,
-//! `wss://host/.../borsh`: [`crate::nodelink`] carries the same calls over Borsh), or the default: the Kaspa resolvers name two
-//! public nodes (`--node resolver`, [`crate::nodelink::pair`]). `getUtxosByAddresses` needs a node started with `--utxoindex`.
+//! # Nodes
+//!
+//! The node RPC is used rather than the public REST API, because the REST API drops the per-input
+//! `computeBudget`, which a v1 transaction needs. A node is one of these:
+//! - A JSON wRPC endpoint, such as `ws://host:18110`.
+//! - A Borsh endpoint, such as `ws://host:17110` or `wss://host/.../borsh`. [`crate::nodelink`]
+//!   carries the same calls over Borsh.
+//! - The default, the two public nodes that the Kaspa resolvers name (`--node resolver`,
+//!   [`crate::nodelink::pair`]).
+//!
+//! `getUtxosByAddresses` needs a node that was started with `--utxoindex`.
 
 use std::net::TcpStream;
 use std::time::Duration;
@@ -29,17 +42,22 @@ use tungstenite::{Message, WebSocket};
 /// Addresses per `getUtxosByAddresses` request.
 pub const ADDRESS_CHUNK: usize = 50;
 
-/// The node endpoint when `--node` is not given (the executor's name for the same endpoint). Command-line arguments are
-/// visible to other local users (`ps`): a URL with a password or an API key belongs here, not in `--node`.
+/// The node endpoint when `--node` is not given.
+///
+/// It is the name that the executor uses for the same endpoint. Command-line arguments are visible
+/// to other local users (`ps`), so a URL with a password or an API key belongs here, not in
+/// `--node`.
 pub const NODE_ENV: &str = "KOB_NODE_WRPC";
 
-/// `--node` if given, else [`NODE_ENV`] (`env` is its value; empty or blank counts as unset).
+/// `--node` if given, else [`NODE_ENV`]. `env` is its value, and a blank one counts as unset.
 pub fn node_or_env(flag: Option<String>, env: Option<String>) -> Option<String> {
     flag.filter(|v| !v.trim().is_empty()).or_else(|| env.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
 }
 
-/// The node of a command on `network`: `--node`, else `$KOB_NODE_WRPC`, else the public nodes the Kaspa resolvers name
-/// (`resolver`, which `--node resolver` names too).
+/// The node of a command on `network`.
+///
+/// It is `--node`, else `$KOB_NODE_WRPC`, else the public nodes that the Kaspa resolvers name,
+/// which `--node resolver` names too.
 pub fn node_for(flag: Option<String>, network: &str) -> String {
     node_for_env(flag, std::env::var(NODE_ENV).ok(), network)
 }
@@ -53,8 +71,10 @@ pub fn node_for_env(flag: Option<String>, env: Option<String>, network: &str) ->
     }
 }
 
-/// A node URL as messages and reports show it: scheme, host and port only ([`kob_protocol::redact::redact_url`]); the public
-/// nodes as `the public nodes (Kaspa resolvers)`.
+/// A node URL as messages and reports show it.
+///
+/// That is the scheme, host and port only ([`kob_protocol::redact::redact_url`]). The public nodes
+/// show as `resolver (public nodes)`.
 pub fn shown(url: &str) -> String {
     if crate::nodelink::resolver::network_of(url).is_some() {
         return "resolver (public nodes)".into();
@@ -79,12 +99,14 @@ pub enum WrpcError {
     Protocol(String),
 }
 
-/// The target of a plain `ws://` URL ([`crate::nodelink::client::target`]); `None` for any other scheme.
+/// The target of a plain `ws://` URL ([`crate::nodelink::client::target`]), else `None`.
 fn plain_target(url: &str) -> Option<Result<crate::nodelink::client::Target, String>> {
     url.starts_with("ws://").then(|| crate::nodelink::client::target(url))
 }
 
-/// A node error as a sentence: `node <url>: <error>`, except that a failed connection already names the node.
+/// A node error as a sentence: `node <url>: <error>`.
+///
+/// A failed connection already names the node, so its message is used as it is.
 pub fn node_failure(node: &str, e: &WrpcError) -> String {
     match e {
         WrpcError::Socket(m) if m.starts_with("cannot connect to the node") => m.clone(),
@@ -155,8 +177,9 @@ impl Conn {
         if crate::nodelink::bridge::is_borsh_url(url) {
             return Ok(Conn { link: Link::Borsh(crate::nodelink::client::BorshConn::connect(url, timeout)?), next_id: 1 });
         }
-        // a plain `ws://` socket is opened here, so that a refused or timed-out connection says why (tungstenite reports only
-        // that it could not connect); the handshake runs over it with the same timeouts
+        // A plain `ws://` socket is opened here, so that a refused or timed-out connection says
+        // why. tungstenite reports only that it could not connect. The handshake runs over the
+        // socket with the same timeouts.
         if let Some(plain) = plain_target(url) {
             let t = plain.map_err(WrpcError::Socket)?;
             let stream = crate::tls::connect(false, &t.host, t.port, timeout)
@@ -179,7 +202,7 @@ impl Conn {
                 }
             };
         }
-        // tungstenite echoes the URL it could not reach: the message names the node by its redacted URL
+        // tungstenite echoes the URL it could not reach, so the message uses the redacted URL.
         let (mut ws, _) = tungstenite::connect(url).map_err(|e| {
             WrpcError::Socket(match e {
                 tungstenite::Error::Url(tungstenite::error::UrlError::UnableToConnect(_)) => {
@@ -247,9 +270,10 @@ pub fn call(url: &str, method: &str, params: Value, timeout: Duration) -> Result
     r
 }
 
-/// A network name in the CLI's canonical form (`mainnet`, `testnet-10`, `simnet`, `devnet`): what `getBlockDagInfo` reports
-/// (`mainnet`, `testnet-10`) and spellings such as `kaspa-testnet-10` or `Testnet_10` compare equal (the web app's
-/// `normalizeNetwork`).
+/// A network name in the canonical form of the CLI: `mainnet`, `testnet-10`, `simnet` or `devnet`.
+///
+/// What `getBlockDagInfo` reports (`mainnet`, `testnet-10`) and spellings like `kaspa-testnet-10`
+/// or `Testnet_10` compare equal. It matches `normalizeNetwork` of the web app.
 pub fn normalize_network(raw: &str) -> String {
     let s = raw.trim().to_ascii_lowercase();
     let s = s.strip_prefix("kaspa").map(|r| r.trim_start_matches([':', '_', '-', ' '])).unwrap_or(&s).replace(['_', ' '], "-");
@@ -264,10 +288,11 @@ pub fn normalize_network(raw: &str) -> String {
     }
 }
 
-/// The network the node at `url` runs: `getBlockDagInfo`'s `network` (rusty-kaspa `NetworkId`, `mainnet` / `testnet-10`),
-/// normalized ([`normalize_network`]).
+/// The network the node at `url` runs, normalized by [`normalize_network`].
+///
+/// It is the `network` of `getBlockDagInfo` (a rusty-kaspa `NetworkId`, such as `mainnet`).
 pub fn node_network(url: &str, timeout: Duration) -> Result<String, WrpcError> {
-    // the public nodes: both of the pair must report the same network
+    // For the public nodes, both of the pair must report the same network.
     if let Some(net) = crate::nodelink::resolver::network_of(url) {
         return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::network(io, timeout));
     }
@@ -279,8 +304,10 @@ pub fn node_network(url: &str, timeout: Duration) -> Result<String, WrpcError> {
         .ok_or_else(|| WrpcError::Protocol("getBlockDagInfo names no network".into()))
 }
 
-/// Refuses a node that runs another network than `network`. A signature commits to no network: a transaction signed for
-/// testnet-10 against a mainnet node spends mainnet coins of the same key, so every signing command checks the node first.
+/// Refuse a node that runs another network than `network`.
+///
+/// A signature commits to no network. A transaction signed for testnet-10 and sent to a mainnet
+/// node would spend mainnet coins of the same key, so every signing command checks the node first.
 pub fn check_node_network(url: &str, network: &str, timeout: Duration) -> Result<(), String> {
     let got = node_network(url, timeout).map_err(|e| match &e {
         WrpcError::Socket(m) if m.starts_with("cannot connect to the node") => m.clone(),
@@ -296,7 +323,7 @@ pub fn check_node_network(url: &str, network: &str, timeout: Duration) -> Result
     Ok(())
 }
 
-/// Submit a transaction (RPC JSON shape) to the node at `url` and return the accepted transaction id.
+/// Submit a transaction (RPC JSON shape) to the node at `url` and return its transaction id.
 pub fn submit_transaction(url: &str, transaction: &Value, allow_orphan: bool, timeout: Duration) -> Result<String, WrpcError> {
     if let Some(net) = crate::nodelink::resolver::network_of(url) {
         return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::submit(io, transaction, allow_orphan, timeout));
@@ -305,12 +332,12 @@ pub fn submit_transaction(url: &str, transaction: &Value, allow_orphan: bool, ti
     transaction_id(&p)
 }
 
-/// The unspent outputs at `addresses` (one connection, requests of [`ADDRESS_CHUNK`] addresses).
+/// The unspent outputs at `addresses`, in requests of [`ADDRESS_CHUNK`] addresses on one link.
 pub fn utxos_by_addresses(url: &str, addresses: &[String], timeout: Duration) -> Result<Vec<NodeUtxo>, WrpcError> {
     if addresses.is_empty() {
         return Ok(vec![]);
     }
-    // the public nodes: both of the pair must list the same outputs
+    // For the public nodes, both of the pair must list the same outputs.
     if let Some(net) = crate::nodelink::resolver::network_of(url) {
         return crate::nodelink::pair::with_real(net, |io| crate::nodelink::pair::utxos(io, addresses, timeout));
     }
@@ -359,7 +386,7 @@ fn u64_of(v: Option<&Value>, what: &str) -> Result<u64, WrpcError> {
     }
 }
 
-/// Script public key of an entry: the hex string `version (u16 BE) ‖ script`, or `{version, script}`.
+/// Script public key of an entry: the hex `version (u16 BE) ‖ script`, or `{version, script}`.
 fn spk_of(v: &Value) -> Result<Vec<u8>, WrpcError> {
     let bad = || WrpcError::Protocol(format!("unexpected scriptPublicKey {v}"));
     match v {
@@ -381,7 +408,7 @@ fn spk_of(v: &Value) -> Result<Vec<u8>, WrpcError> {
     }
 }
 
-/// Parse the `params` of a `getUtxosByAddresses` response (no `entries`: none).
+/// Parse the `params` of a `getUtxosByAddresses` response. A missing `entries` is an empty list.
 pub fn parse_utxo_entries(params: &Value) -> Result<Vec<NodeUtxo>, WrpcError> {
     let entries = match params.get("entries") {
         None | Some(Value::Null) => return Ok(vec![]),
@@ -430,7 +457,9 @@ pub fn utxo_entry_json(u: &NodeUtxo) -> Value {
 
 #[cfg(test)]
 pub mod mock {
-    //! A mock wRPC node for tests: answers `getUtxosByAddresses` from a fixed UTXO set and records `submitTransaction`.
+    //! A mock wRPC node for tests.
+    //!
+    //! It answers `getUtxosByAddresses` from a fixed UTXO set and records `submitTransaction`.
 
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
@@ -507,7 +536,7 @@ pub mod mock {
                                 _ => json!({"id": id, "error": {"code": 0, "message": "unknown method", "data": null}}),
                             }
                         };
-                        // a notification first: the client must skip frames of other ids
+                        // A notification first: the client must skip frames of other ids.
                         let _ = ws.send(Message::text(r#"{"method":"notification","params":{"x":1}}"#));
                         if ws.send(Message::text(reply.to_string())).is_err() {
                             break;
@@ -548,7 +577,7 @@ mod tests {
         assert!(matches!(parse_reply(r#"{"id":1}"#, 1), Err(WrpcError::Protocol(_))));
     }
 
-    /// One-shot mock node: accepts a websocket, checks the request, sends a notification first, then `reply(id)`.
+    /// One-shot mock node: accepts a websocket, checks the request, sends a notification, replies.
     fn mock_node(reply: fn(u64) -> String) -> (String, thread::JoinHandle<Value>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
@@ -590,7 +619,7 @@ mod tests {
     #[test]
     fn unreachable_node_is_a_socket_error() {
         let e = submit_transaction("ws://127.0.0.1:1", &json!({}), false, Duration::from_millis(500)).unwrap_err();
-        // an English sentence naming the node once, with the reason: never the system language's own text
+        // An English sentence that names the node once, with the reason. Never the system language.
         let WrpcError::Socket(m) = e else { panic!("{e:?}") };
         assert!(m.starts_with("cannot connect to the node ws://127.0.0.1:1 ("), "{m}");
         assert!(m.ends_with("(connection refused)") || m.ends_with("(timed out)"), "{m}");
@@ -667,11 +696,11 @@ mod tests {
         assert_eq!(u[0].covenant_id, Some([0x22; 32]));
         assert_eq!((u[1].amount, u[1].daa, u[1].spk.clone(), u[1].covenant_id), (2000, 8, vec![0, 0, 0xbb], None));
         assert_eq!((u[2].address.clone(), u[2].covenant_id), (None, None));
-        // round trip through the node shape
+        // Round trip through the node shape.
         assert_eq!(parse_utxo_entries(&json!({"entries": [utxo_entry_json(&u[0])]})).unwrap()[0], u[0]);
         assert!(parse_utxo_entries(&json!({})).unwrap().is_empty());
         assert!(parse_utxo_entries(&json!({"entries": null})).unwrap().is_empty());
-        // malformed entries are errors, never silently dropped
+        // Malformed entries are errors and are never silently dropped.
         for bad in [
             json!({"entries": 5}),
             json!({"entries": [{"utxoEntry": {}}]}),
