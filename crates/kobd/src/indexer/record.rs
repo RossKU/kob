@@ -1,28 +1,40 @@
 //! Extracted transaction records: the only chain data the indexer keeps.
 //!
-//! A raw VSPC response is about 15 GB per day on TN10 at `High` verbosity (signature scripts carry
-//! whole KCC-20 programs). Nothing of it is stored. For every transaction that touches KOB the
-//! extractor keeps a *reduced transaction*: outpoints, output values and covenant bindings, the
-//! KOB1 placement payload, and, for every spent KOB order input, the revealed template,
-//! its state span, the entry that was called and the small arguments. Signature scripts, token
-//! programs and everything unrelated to KOB are dropped. The reduced form is exactly what the
-//! processor consumes, so the live path and a rebuild from the permanent record log run the same code.
+//! A raw VSPC response is about 15 GB per day on TN10 at `High` verbosity, because signature
+//! scripts carry whole KCC-20 programs (docs/ops/executor.md, "Storage"). Nothing of it is stored.
+//! For every transaction that touches KOB the extractor keeps a *reduced transaction*:
 //!
-//! Relevance (what is kept) is decided against the database at extraction time:
-//! * the payload is a KOB1 placement record (or claims to be and does not decode: kept as a reject),
-//! * an input spends a tracked order or token UTXO,
-//! * a token output is owned (scheme `0x04`) by a tracked or freshly created order id: custody
+//! - outpoints, output values and covenant bindings,
+//! - the KOB1 placement payload,
+//! - for every spent KOB order input, the revealed template, its state span, the entry that was
+//!   called and the small arguments.
+//!
+//! Signature scripts, token programs and everything unrelated to KOB are dropped. The reduced form
+//! is exactly what the processor consumes, so the live path and a rebuild from the permanent record
+//! log run the same code.
+//!
+//! # Relevance
+//!
+//! What is kept is decided against the database at extraction time. A transaction is kept when:
+//!
+//! - its payload is a KOB1 placement record, or claims to be one and does not decode (kept as a
+//!   reject),
+//! - an input spends a tracked order or token UTXO,
+//! - a token output is owned (scheme `0x04`) by a tracked or freshly created order id: custody
 //!   after a fill, a delivery to an if-done exit, or a stray (`docs/spec/matcher.md` §1.2). The
-//!   token output states are read from the transfer leader's `next_states` argument and each one
+//!   token output states are read from the transfer leader's `next_states` argument, and each one
 //!   is checked against the output's script public key,
-//! * an output of ANY token of a pinned token program (listed or not, traded by an order or not) whose state the
-//!   creating input reveals (a transfer leader's `next_states`, the columns of a KRON token input, the `recipient_state`
-//!   of a public-mint app's `mint` / `create`) and the output's script public key proves: a *holding* (`HeldOut`),
-//!   whoever owns it; an input that spends a tracked holding is relevant too (it marks the holding spent). Outputs of a
-//!   program this build does not pin, or of a look-alike, prove nothing and are not kept; nor are burned outputs (a state
-//!   at a burn owner the transaction's kUSDT redemption payload names, `kob_protocol::kusdt::is_burned`: it can never move),
-//! * the transaction is a KCC-23 candidate preparation or a verified genesis of one (`super::kcc23`): its record carries a
-//!   declaration section (the transaction's id-relevant fields), and nothing else unless it is relevant to KOB too.
+//! - an output of ANY token of a pinned token program (listed or not, traded by an order or not) is
+//!   a *holding* (`HeldOut`), whoever owns it. The creating input must reveal its state (a
+//!   transfer leader's `next_states`, the columns of a KRON token input, or the `recipient_state`
+//!   of a public-mint app's `mint` / `create`), and the output's script public key must prove it.
+//!   An input that spends a tracked holding is relevant too, because it marks the holding spent.
+//!   Outputs of a program this build does not pin, or of a look-alike, prove nothing and are not
+//!   kept. Neither are burned outputs: a state at a burn owner that the transaction's kUSDT
+//!   redemption payload names (`kob_protocol::kusdt::is_burned`) can never move,
+//! - the transaction is a KCC-23 candidate preparation or a verified genesis of one
+//!   (`super::kcc23`). Its record carries a declaration section (the transaction's id-relevant
+//!   fields), and nothing else unless it is relevant to KOB too.
 
 use super::db::DbResult;
 use super::kcc23::DeclSection;
@@ -37,12 +49,13 @@ use kob_protocol::state::{AnyState, Kcc20State, KronState, TokenState};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
-/// Arguments longer than this are elided (template prefix / suffix pushes and signatures).
+/// Arguments longer than this are elided: template prefix and suffix pushes and signatures.
 const MAX_ARG_BYTES: usize = 40;
 
 /// A spent KOB order input: what its signature script revealed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Reveal {
+    /// Template of the spent order script.
     pub template: TemplateId,
     /// The state span of the spent script (exact; the redeem script hashes to the spent output).
     pub state: Vec<u8>,
@@ -53,6 +66,7 @@ pub struct Reveal {
 }
 
 impl Reveal {
+    /// Name of the entry that was called, when the tag is known.
     pub fn entry(&self) -> Option<&'static str> {
         model::entry_name(self.template, self.tag)
     }
@@ -62,24 +76,31 @@ impl Reveal {
         crate::script::script_int(self.args.get(i)?)
     }
 
+    /// The first argument as an `nb` push ([`model::nb`]).
     pub fn nb(&self) -> Option<model::Nb> {
         model::nb(self.args.first()?)
     }
 }
 
+/// An input of a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecIn {
+    /// Transaction id of the spent output.
     pub txid: Hash32,
+    /// Index of the spent output.
     pub index: u32,
     /// Covenant id of the spent output.
     pub cov: Option<Hash32>,
     /// DAA score of the block that created the spent output (covenant inputs only).
     pub daa: u64,
+    /// The reveal of the input's signature script, when it spends a tracked order.
     pub reveal: Option<Reveal>,
 }
 
+/// An output of a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecOut {
+    /// Value in sompi.
     pub value: u64,
     /// Version (2 bytes) + script; kept for covenant-bound outputs only.
     pub spk: Vec<u8>,
@@ -90,62 +111,88 @@ pub struct RecOut {
 /// A token output of a pinned token program whose state was proven against its script public key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeldOut {
+    /// Index of the output.
     pub out: u32,
     /// The token program the output's script belongs to.
     pub program: TemplateId,
+    /// The proven state.
     pub state: TokenState,
 }
 
-/// One-byte record-log code of a token program (its profile's `record_code`, `kob_protocol::profile`: persisted, never
-/// reused).
+/// One-byte record-log code of a token program.
+///
+/// It is the `record_code` of the program's profile (`kob_protocol::profile`). Codes are
+/// persisted and never reused.
 pub fn program_code(t: TemplateId) -> Option<u8> {
     t.record_code()
 }
 
+/// The token program of a record-log code, when this build has it.
 pub fn program_from_code(c: u8) -> Option<TemplateId> {
     TemplateId::from_record_code(c)
 }
 
-// A token output owned by an order covenant id (owner scheme `0x04`).
+/// A token output owned by an order covenant id (owner scheme `0x04`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokOut {
+    /// Index of the output.
     pub out: u32,
+    /// Token amount in base units.
     pub amount: i64,
+    /// Covenant id of the owning order.
     pub owner: Hash32,
 }
 
+/// A reduced transaction: what the extractor keeps of a transaction that is relevant to KOB.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxRecord {
+    /// Transaction id.
     pub txid: Hash32,
     /// Position in the chain block's accepted-transaction list.
     pub pos: u32,
     /// The KOB1 payload (placement records), empty otherwise.
     pub payload: Vec<u8>,
+    /// The inputs, in transaction order.
     pub inputs: Vec<RecIn>,
+    /// The outputs, in transaction order.
     pub outputs: Vec<RecOut>,
+    /// Token outputs owned by an order covenant id.
     pub tok_outs: Vec<TokOut>,
-    /// Proven states of tracked-token outputs (see the module docs). Logs written before this field existed decode
-    /// with an empty list: the flag is the top bit of `pos` (a block never holds 2^31 transactions).
+    /// Proven states of tracked-token outputs (see the module docs).
+    ///
+    /// A frame without the section decodes with an empty list. The flag is the top bit of the
+    /// encoded `pos`, because a block never holds 2^31 transactions.
     pub holds: Vec<HeldOut>,
-    /// The KCC-23 declaration section (`super::kcc23`): a candidate preparation, or a genesis with the preparations it binds.
-    /// Flagged by bit 30 of the encoded `pos`; a frame holding one is written as record-log format 3 (`recordlog::FORMAT_KCC23`).
+    /// The KCC-23 declaration section (`super::kcc23`).
+    ///
+    /// It is a candidate preparation, or a genesis with the preparations it binds. It is flagged by
+    /// bit 30 of the encoded `pos`. A frame holding one is written as record-log format 3
+    /// (`recordlog::FORMAT_KCC23`).
     pub kcc23: Option<DeclSection>,
-    /// Who funded the transaction: the script public key (version + script) of the output its first input that spends no
-    /// covenant output spent (the submitter's own funds: an Executor's P2PK funding). Kept for a transaction that spends a
-    /// tracked order and has such an input, `None` otherwise and in every record written before 2026-11-09 (the submitter is
-    /// then unknown). Flagged by bit 29 of the encoded `pos`; a frame holding one is written as record-log format 4
+    /// The script public key (version and script) of the output that funded the transaction.
+    ///
+    /// That output is the one spent by the first input that spends no covenant output, the
+    /// submitter's own funds such as an Executor's P2PK funding. It is kept for a transaction that
+    /// spends a tracked order and has such an input. It is `None` otherwise, and in a record
+    /// written before this section existed, where the submitter is unknown. It is flagged by bit 29
+    /// of the encoded `pos`. A frame holding one is written as record-log format 4
     /// (`recordlog::FORMAT_PAYER`).
     pub payer: Option<Vec<u8>>,
-    /// What the transaction's inputs held in all: the sum of the values of the outputs it spent, as the node reported each one
-    /// (VSPC v2 `utxoEntry.amount`, `High` verbosity), so that its network fee is that minus the sum of its outputs (which the
-    /// record keeps, every one). Kept for a transaction that spends a tracked order when the node reported the value of every
-    /// input, `None` otherwise and in every record written before 2026-11-12 (its fee is then unknown). Flagged by bit 28 of the
-    /// encoded `pos`; a frame holding one is written as record-log format 5 (`recordlog::FORMAT_IN_VALUE`).
+    /// The sum of the values of the outputs that the transaction spent.
+    ///
+    /// The node reports each value (VSPC v2 `utxoEntry.amount`, `High` verbosity). The network fee
+    /// is this sum minus the sum of the outputs, which the record keeps in full. It is kept for a
+    /// transaction that spends a tracked order when the node reported the value of every input. It
+    /// is `None` otherwise, and in a record written before this section existed, where the fee is
+    /// unknown. It is flagged by bit 28 of the encoded `pos`. A frame holding one is written as
+    /// record-log format 5 (`recordlog::FORMAT_IN_VALUE`).
     pub in_value: Option<u64>,
 }
 
-/// Stand-in stored for a KOB1 payload that did not decode (`KOB1` and a version byte no reader supports): the record keeps the
-/// fact of the reject, not the junk. The processor reports it as `payload:undecodable`.
+/// Stand-in stored for a KOB1 payload that did not decode.
+///
+/// It is `KOB1` and a version byte no reader supports. The record keeps the fact of the reject,
+/// not the junk. The processor reports it as `payload:undecodable`.
 pub const UNDECODABLE_PAYLOAD: &[u8] = b"KOB1\xff";
 
 /// Set in the encoded `pos` when the record has a `holds` section.
@@ -156,18 +203,24 @@ const KCC23_FLAG: u64 = 1 << 30;
 const PAYER_FLAG: u64 = 1 << 29;
 /// Set in the encoded `pos` when the record has an input-value section ([`TxRecord::in_value`]).
 const IN_VALUE_FLAG: u64 = 1 << 28;
-/// The longest payer script kept (a standard script public key is at most 37 bytes with its version; a longer one is not kept).
+/// The longest payer script kept, in bytes.
+///
+/// A standard script public key is at most 37 bytes with its version. A longer one is not kept.
 pub const MAX_PAYER_SPK: usize = 64;
 
 fn code_of(t: TemplateId) -> u8 {
     model::wire_code(t)
 }
 
-/// A frame's template table (record-log format 2): wire code -> template hash of every template the frame refers to.
+/// A frame's template table (record-log format 2).
+///
+/// It maps the wire code to the template hash of every template the frame refers to.
 pub type TemplateTable = std::collections::BTreeMap<u8, [u8; 32]>;
 
-/// What decoding a frame had to drop because this build does not know the layout it was written with. The frame
-/// itself is kept in the log (it is hash-chained and never rewritten); a later build that knows the layout reads it.
+/// What decoding a frame had to drop, because this build does not know its layout.
+///
+/// The frame itself is kept in the log, which is hash-chained and never rewritten. A later build
+/// that knows the layout reads it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DecodeStats {
     /// Order reveals of a template this build does not pin, dropped.
@@ -179,6 +232,7 @@ pub struct DecodeStats {
 }
 
 impl DecodeStats {
+    /// Adds the counts of `o`.
     pub fn add(&mut self, o: &DecodeStats) {
         self.unknown_reveals += o.unknown_reveals;
         self.unknown_holds += o.unknown_holds;
@@ -210,7 +264,9 @@ impl<'a> DecodeCtx<'a> {
         DecodeCtx { orders: Some(orders), programs: Some(programs), stats: DecodeStats::default() }
     }
 
-    /// The pinned template an order code of the frame refers to (`None`: a template this build does not pin).
+    /// The pinned template that an order code of the frame refers to.
+    ///
+    /// It is `None` for a template this build does not pin.
     fn order_layout(&self, code: u8) -> WireResult<Option<TemplateId>> {
         let current = model::from_wire_code(code);
         let Some(table) = self.orders else { return Ok(current) };
@@ -226,7 +282,9 @@ impl<'a> DecodeCtx<'a> {
         Ok(current.filter(|p| &token_template(*p).hash == hash))
     }
 
-    /// Reads a reveal (after its flag): `Some` when this build can interpret it, `None` when it was dropped.
+    /// Reads a reveal after its flag.
+    ///
+    /// It is `Some` when this build can interpret the reveal, and `None` when it was dropped.
     fn reveal(&mut self, r: &mut Reader<'_>) -> WireResult<Option<Reveal>> {
         let code = r.u8()?;
         let state = r.bytes()?.to_vec();
@@ -279,8 +337,11 @@ fn read_args(r: &mut Reader<'_>) -> WireResult<Vec<Vec<u8>>> {
 }
 
 impl TxRecord {
-    /// Encodes the record in record-log format 2 (length-prefixed states; the frame carries the template tables, see
-    /// [`TxRecord::templates`]); with a KCC-23 declaration section, its frame is format 3 (`recordlog::FORMAT_KCC23`).
+    /// Encodes the record in record-log format 2.
+    ///
+    /// States are length-prefixed, and the frame carries the template tables
+    /// ([`TxRecord::templates`]). With a KCC-23 declaration section, the frame is format 3
+    /// (`recordlog::FORMAT_KCC23`).
     pub fn encode(&self, w: &mut Writer) {
         w.hash(&self.txid);
         w.var(
@@ -346,7 +407,9 @@ impl TxRecord {
         }
     }
 
-    /// Adds the templates the record refers to (order reveals, holding programs) to a frame's tables.
+    /// Adds the templates the record uses to a frame's tables.
+    ///
+    /// They are the order reveals and the holding programs.
     pub fn templates(&self, orders: &mut TemplateTable, programs: &mut TemplateTable) {
         for r in self.inputs.iter().filter_map(|i| i.reveal.as_ref()) {
             orders.insert(code_of(r.template), template(r.template).hash);
@@ -361,6 +424,9 @@ impl TxRecord {
         TxRecord::decode_in(r, &mut DecodeCtx::current())
     }
 
+    /// Decodes a record with the template tables of `ctx`.
+    ///
+    /// Items that this build cannot read are dropped and counted in `ctx`.
     pub fn decode_in(r: &mut Reader<'_>, ctx: &mut DecodeCtx<'_>) -> WireResult<TxRecord> {
         let txid = r.hash()?;
         let raw_pos = r.var()?;
@@ -422,8 +488,10 @@ impl TxRecord {
         Ok(TxRecord { txid, pos, payload, inputs, outputs, tok_outs, holds, kcc23, payer, in_value })
     }
 
-    /// The record of a transaction relevant only for its KCC-23 declaration section: nothing of KOB, so no payload, inputs or
-    /// outputs (the section carries the transaction's fields).
+    /// The record of a transaction relevant only for its KCC-23 declaration section.
+    ///
+    /// It has nothing of KOB: no payload, inputs or outputs, because the section carries the
+    /// transaction's fields.
     pub fn declaration_only(txid: Hash32, pos: u32, d: DeclSection) -> TxRecord {
         TxRecord {
             txid,
@@ -448,6 +516,7 @@ impl TxRecord {
             && self.holds.is_empty()
     }
 
+    /// Length of the encoded record in bytes.
     pub fn encoded_len(&self) -> usize {
         let mut w = Writer::new();
         self.encode(&mut w);
@@ -455,12 +524,13 @@ impl TxRecord {
     }
 }
 
-// ---------------------------------------------------------------------------------------------
-// lookups
+// ----------------------------------------------------------------------------------------- lookups
 
-/// DAA score of the chain block that created a tracked, unspent order UTXO (what `OpTxInputDaaScore`
-/// reads: the accepting block's DAA score). The node does not report it per input (`blockDaaScore` is
-/// `null` in VSPC v2 at every verbosity), so the indexer keeps it from the block that created the UTXO.
+/// DAA score of the chain block that created a tracked, unspent order UTXO.
+///
+/// It is what `OpTxInputDaaScore` reads: the accepting block's DAA score. The node does not report
+/// it per input (`blockDaaScore` is `null` in VSPC v2 at every verbosity), so the indexer keeps it
+/// from the block that created the UTXO.
 pub fn order_utxo_daa(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Option<i64>> {
     Ok(conn
         .prepare_cached("SELECT created_daa FROM order_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
@@ -468,24 +538,28 @@ pub fn order_utxo_daa(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Op
         .optional()?)
 }
 
+/// Whether `txid:idx` is a tracked, unspent token UTXO of an order.
 pub fn token_utxo_tracked(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached("SELECT 1 FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
         .exists(params![&txid.0[..], idx])?)
 }
 
+/// Whether an order with covenant id `cov` is in the database.
 pub fn order_known(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     Ok(conn.prepare_cached("SELECT 1 FROM orders WHERE covenant_id = ?1")?.exists([&cov.0[..]])?)
 }
 
+/// Whether `txid:idx` is a tracked, unspent token holding.
 pub fn holding_tracked(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached("SELECT 1 FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
         .exists(params![&txid.0[..], idx])?)
 }
 
-/// A token some order trades: the token of an order, or token B of a pair order (so strays of B sent to a pair order's id
-/// are recorded as strays of that order).
+/// Whether some order trades the token, as the token of an order or as token B of a pair order.
+///
+/// So strays of B sent to a pair order's id are recorded as strays of that order.
 pub fn token_known(conn: &Connection, token: &Hash32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached("SELECT 1 FROM orders WHERE token_id = (SELECT id FROM ids WHERE h = ?1) LIMIT 1")?
@@ -495,15 +569,13 @@ pub fn token_known(conn: &Connection, token: &Hash32) -> DbResult<bool> {
             .exists([&token.0[..]])?)
 }
 
-// ---------------------------------------------------------------------------------------------
-// extraction
+// -------------------------------------------------------------------------------------- extraction
 
 fn spent_of(inp: &TxInput) -> Option<&crate::rpc::types::SpentUtxo> {
     inp.verbose_data.as_ref().and_then(|v| v.utxo_entry.as_ref())
 }
 
-/// What a covenant input's signature script reveals about a KOB order, verified against
-/// the spent script public key.
+/// The reveal of a covenant input's signature script, verified against the spent script public key.
 pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
     let pushes = parse_pushes(sigscript)?;
     if pushes.len() < 2 {
@@ -511,8 +583,8 @@ pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
     }
     let redeem = pushes.last()?;
     let tag: [u8; 4] = pushes[pushes.len() - 2].as_slice().try_into().ok()?;
-    // identify first (prefix and suffix compared with the pinned templates): only an order's redeem script is hashed, never
-    // the token program a transfer input reveals (up to 25 KB)
+    // Identify first (prefix and suffix compared with the pinned templates). Only an order's redeem
+    // script is hashed, never the token program that a transfer input reveals (up to 25 KB).
     let (id, state) = model::identify_redeem(redeem)?;
     if !model::is_order(id) {
         return None;
@@ -524,8 +596,10 @@ pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
     Some(Reveal { template: id, state: state.to_vec(), tag, args })
 }
 
-/// True for the reveal of a plain resting `KobAsk` / `KobBid` (either family) or a resting `KobPair` spent by a fill (`n > 0`):
-/// trigger evidence (a `KobPair` is the mode-1 evidence of the pair conditionals of its pair).
+/// Whether the reveal is a fill that is trigger evidence.
+///
+/// That is a plain resting `KobAsk` / `KobBid` (either family), or a resting `KobPair`, spent by a
+/// fill (`n > 0`). A `KobPair` is the mode-1 evidence of the pair conditionals of its pair.
 fn is_evidence_fill(r: &Reveal) -> bool {
     matches!(
         r.template.canonical(),
@@ -533,13 +607,16 @@ fn is_evidence_fill(r: &Reveal) -> bool {
     ) && matches!(r.nb(), Some(model::Nb::Fill(n)) if n > 0)
 }
 
-/// A token transfer's leader as the extractor matches it against outputs: the program and every next state with the P2SH
-/// script public key it produces (computed once per state, not once per output and state).
+/// A token transfer's leader as the extractor matches it against outputs.
+///
+/// It is the program and every next state with the P2SH script public key it produces, computed
+/// once per state and not once per output and state.
 pub type Leader = (TemplateId, Vec<(TokenState, kaspa_consensus_core::tx::ScriptPublicKey)>);
 
-/// The states a covenant input authorises (a token transfer's [`token_next_states`], else the holder a public-mint app's
-/// `mint` / `create` call creates, [`kob_protocol::public_mint::created_holder`]), each with its script public key under
-/// the program.
+/// The states a covenant input authorises, each with its script public key under the program.
+///
+/// These are a token transfer's [`token_next_states`], else the holder that a public-mint app's
+/// `mint` / `create` call creates ([`kob_protocol::public_mint::created_holder`]).
 pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
     let (tid, states) = token_next_states(sigscript)
         .or_else(|| kob_protocol::public_mint::created_holder(sigscript).map(|(id, s)| (id, vec![TokenState::Kcc20(s)])))?;
@@ -556,9 +633,11 @@ pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
     ))
 }
 
-/// The candidate states a token genesis names in its payload ([`kob_protocol::genesis_states`]), one [`Leader`] per pinned token
-/// program that can read every span as its own state, each with the script public key it produces. Nothing is believed here: the
-/// caller keeps a state only where that script is the output's. Empty for any other payload.
+/// The candidate states a token genesis names in its payload ([`kob_protocol::genesis_states`]).
+///
+/// There is one [`Leader`] per pinned token program that can read every span as its own state,
+/// each with the script public key it produces. Nothing is believed here: the caller keeps a state
+/// only where that script is the output's. The result is empty for any other payload.
 pub fn genesis_leaders(payload: &[u8]) -> Vec<Leader> {
     let Some(spans) = kob_protocol::genesis_states::decode(payload) else { return vec![] };
     TemplateId::TOKEN_PROGRAMS
@@ -574,16 +653,19 @@ pub fn genesis_leaders(payload: &[u8]) -> Vec<Leader> {
         .collect()
 }
 
-/// The database-free work of one transaction (signature-script parsing, script hashing, placement verification), done
-/// before the single-threaded database pass, in parallel over a batch ([`precompute`]). Every entry is a pure function of
-/// the transaction, so a cache hit gives exactly what the database pass would have computed itself.
+/// The database-free work of one transaction, done before the single-threaded database pass.
+///
+/// It covers signature-script parsing, script hashing and placement verification, and runs in
+/// parallel over a batch ([`precompute`]). Every entry is a pure function of the transaction, so a
+/// cache hit gives exactly what the database pass would have computed itself.
 #[derive(Debug, Default)]
 pub struct PreTx {
-    /// Covenant inputs whose redeem script is an order template: the reveal (`None`: not an order input).
+    /// Reveal of each covenant input; `None` when the redeem script is not an order template.
     pub reveals: HashMap<u32, Option<Reveal>>,
     /// Authorising inputs of covenant outputs: their transfer leader, if they are one.
     pub leaders: HashMap<u32, Option<Leader>>,
-    /// `payload::recover_orders` of each single ORDER record of the payload, keyed by the single-record payload bytes.
+    /// `payload::recover_orders` of each single ORDER record of the payload, keyed by the
+    /// single-record payload bytes.
     pub placements: HashMap<Vec<u8>, Result<Vec<payload::RecoveredOrder>, String>>,
 }
 
@@ -591,7 +673,9 @@ pub struct PreTx {
 pub type PreBatch = HashMap<Hash32, PreTx>;
 
 impl PreTx {
-    /// The pure work of `tx` (nothing for a transaction without a KOB1 payload or covenant input / output).
+    /// The pure work of `tx`.
+    ///
+    /// It is `None` for a transaction without a KOB1 payload or covenant input / output.
     pub fn compute(tx: &Tx) -> Option<PreTx> {
         let has_kob1 = tx.payload.0.starts_with(payload::MAGIC);
         let any_cov_in = tx.inputs.iter().any(|i| spent_of(i).is_some_and(|u| u.covenant_id.is_some()));
@@ -624,8 +708,10 @@ impl PreTx {
     }
 }
 
-/// The reduced shape of a raw transaction as far as `processor::tx_json` reads it for placement verification (outpoints,
-/// covenant ids of the spent outputs, output values, scripts of covenant outputs and bindings).
+/// The reduced shape of a raw transaction, as far as `processor::tx_json` reads it.
+///
+/// `processor::tx_json` reads it for placement verification: outpoints, covenant ids of the spent
+/// outputs, output values, and scripts and bindings of covenant outputs.
 fn raw_record(tx: &Tx) -> TxRecord {
     TxRecord {
         txid: tx.verbose_data.transaction_id,
@@ -660,8 +746,9 @@ fn raw_record(tx: &Tx) -> TxRecord {
     }
 }
 
-/// [`PreTx::compute`] for every transaction of `blocks`, on up to `threads` threads (inline below 64 candidate transactions,
-/// where a thread costs more than it saves).
+/// [`PreTx::compute`] for every transaction of `blocks`, on up to `threads` threads.
+///
+/// It runs inline below 64 candidate transactions, where a thread costs more than it saves.
 pub fn precompute(blocks: &[&[Tx]], threads: usize) -> PreBatch {
     let txs: Vec<&Tx> = blocks
         .iter()
@@ -697,11 +784,13 @@ pub fn token_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<TokenState
         .or_else(|| kron_next_states(sigscript).map(|(id, v)| (id, v.into_iter().map(TokenState::Kron).collect())))
 }
 
-/// The next states of a KRON token input (`kob_protocol::script::kron_columns_sigscript`): the columns
-/// `owners`, `id_types`, `amounts`, `is_minters` of the whole covenant group, the signature column, the
-/// witness column, the program's constant trailing pushes (profile `witness.trailing_pushes`: none for the KRON
-/// programs, an entry selector for a multi-entry program) and the redeem script. Every token input of the token carries
-/// the same columns.
+/// The next states of a KRON token input, from its signature script.
+///
+/// The script is built by `kob_protocol::script::kron_columns_sigscript`. Its pushes are the
+/// columns `owners`, `id_types`, `amounts` and `is_minters` of the whole covenant group, the
+/// signature column, the witness column, the program's constant trailing pushes (profile
+/// `witness.trailing_pushes`: none for the KRON programs, an entry selector for a multi-entry
+/// program) and the redeem script. Every token input of the token carries the same columns.
 pub fn kron_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<KronState>)> {
     let pushes = parse_pushes(sigscript)?;
     let redeem = pushes.last()?;
@@ -729,9 +818,10 @@ pub fn kron_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<KronState>)
 
 /// The output states a KCC-20 `transfer` (leader) call authorises, from its signature script.
 ///
-/// The `State[]` argument is a KCC-1 record array (one push per field: amounts as 8-byte signed magnitude,
-/// owners, owner schemes, borrow schemes, borrow guards, extension commitments), then the witness, the
-/// dispatch tag and the redeem script; [`kob_protocol::kcc20::transfer_next_states`] decodes it strictly.
+/// The `State[]` argument is a KCC-1 record array: one push per field, namely amounts as 8-byte
+/// signed magnitude, owners, owner schemes, borrow schemes, borrow guards and extension
+/// commitments. Then come the witness, the dispatch tag and the redeem script.
+/// [`kob_protocol::kcc20::transfer_next_states`] decodes it strictly.
 fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20State>)> {
     let pushes = parse_pushes(sigscript)?;
     if pushes.len() != 9 {
@@ -747,31 +837,38 @@ fn kcc20_leader_next_states(sigscript: &[u8]) -> Option<(TemplateId, Vec<Kcc20St
     Some((id, kob_protocol::kcc20::transfer_next_states(tpl, sigscript)?))
 }
 
-/// The script public key the first input of `tx` that spends no covenant output spent (the submitter's own funds), when the node
-/// reported it and it is of a standard length ([`MAX_PAYER_SPK`]).
+/// The script public key of the output spent by the first input of `tx` that spends no covenant.
+///
+/// That is the submitter's own funds. It is returned when the node reported it and it is of a
+/// standard length ([`MAX_PAYER_SPK`]).
 pub fn payer_of(tx: &Tx) -> Option<Vec<u8>> {
     let u = tx.inputs.iter().filter_map(spent_of).find(|u| u.covenant_id.is_none())?;
     let spk = &u.script_public_key.0;
     (!spk.is_empty() && spk.len() <= MAX_PAYER_SPK).then(|| spk.clone())
 }
 
-/// The sum of the values of the outputs `tx` spends, when the node reported every one (`None` otherwise: the fee is then unknown).
+/// The sum of the values of the outputs `tx` spends, when the node reported every one.
+///
+/// It is `None` otherwise, and the fee is then unknown.
 pub fn in_value_of(tx: &Tx) -> Option<u64> {
     tx.inputs.iter().try_fold(0u64, |s, i| s.checked_add(spent_of(i)?.amount?))
 }
 
 /// Turns accepted transactions into records, consulting the database for relevance.
 pub struct Extractor<'a> {
+    /// The database that relevance is decided against.
     pub conn: &'a Connection,
 }
 
 impl Extractor<'_> {
-    /// `Ok(None)` when the transaction is unrelated to KOB.
+    /// Extracts the record of `tx`, which is `Ok(None)` when the transaction is unrelated to KOB.
     pub fn extract(&self, tx: &Tx, pos: u32) -> DbResult<Option<TxRecord>> {
         self.extract_with(tx, pos, None)
     }
 
-    /// [`Extractor::extract`] with the transaction's precomputed pure work ([`PreTx`]); without it everything is computed here.
+    /// [`Extractor::extract`] with the transaction's precomputed pure work ([`PreTx`]).
+    ///
+    /// Without it, everything is computed here.
     pub fn extract_with(&self, tx: &Tx, pos: u32, pre: Option<&PreTx>) -> DbResult<Option<TxRecord>> {
         let reveal_of = |i: usize, inp: &TxInput, spk: &[u8]| -> Option<Reveal> {
             match pre.and_then(|p| p.reveals.get(&(i as u32))) {
@@ -782,7 +879,7 @@ impl Extractor<'_> {
         let has_kob1 = tx.payload.0.starts_with(payload::MAGIC);
         let any_cov_in = tx.inputs.iter().any(|i| spent_of(i).is_some_and(|u| u.covenant_id.is_some()));
         let any_cov_out = tx.outputs.iter().any(|o| o.covenant.is_some());
-        // KCC-23: a candidate preparation or a verified genesis, whatever else the transaction is
+        // KCC-23: a candidate preparation or a verified genesis, whatever else the transaction is.
         let kcc23 = super::kcc23::extract(self.conn, tx)?;
         let txid = tx.verbose_data.transaction_id;
         if !has_kob1 && !any_cov_in && !any_cov_out {
@@ -792,17 +889,20 @@ impl Extractor<'_> {
         // Placement records: which orders (and tokens) this transaction announces.
         let mut relevant = false;
         let mut payload_tokens: HashSet<Hash32> = HashSet::new();
-        // What of the payload the record keeps: the log is permanent and replayed on every rebuild, so a payload is
-        // never stored as sent. Only the placement (order) records survive, at most one per output of the transaction and
-        // re-encoded canonically; an undecodable payload is replaced by a five-byte stand-in that the processor rejects.
+        // What of the payload the record keeps. The log is permanent and replayed on every rebuild,
+        // so a payload is never stored as sent. Only the order, amend and sweep records survive,
+        // and a release record when it is newer than this build. At most one record per output of
+        // the transaction is kept, re-encoded canonically. An undecodable payload is replaced by a
+        // five-byte stand-in that the processor rejects.
         let mut kept: Vec<Record> = vec![];
         let mut undecodable = false;
         if has_kob1 {
             match payload::decode(&tx.payload.0) {
                 Ok(Some(p)) => {
-                    // the release a placement announces, kept with it only when it is newer than this build (the update
-                    // notice, `super::release`): a build that replays the log later is this one or newer, for which an
-                    // older release never matters, so the log is the same as before whenever there is nothing to tell
+                    // The release a placement announces is kept with it only when it is newer than
+                    // this build (the update notice, `super::release`). A build that replays the
+                    // log later is this one or newer, for which an older release never matters, so
+                    // the log is unchanged whenever there is nothing to tell.
                     let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
                     for r in p.records {
                         if let Record::Order { template: t, state, .. } = &r {
@@ -817,7 +917,8 @@ impl Extractor<'_> {
                                 kept.push(r.clone());
                             }
                         } else if matches!(r, Record::Amend { .. } | Record::Sweep { .. }) && kept.len() < tx.outputs.len().max(1) {
-                            // an in-place amend or sweep matters only next to a tracked order input (relevant through it)
+                            // An in-place amend or sweep matters only next to a tracked order
+                            // input, which makes the transaction relevant.
                             kept.push(r);
                         }
                     }
@@ -836,7 +937,8 @@ impl Extractor<'_> {
 
         // Inputs.
         let mut inputs = Vec::with_capacity(tx.inputs.len());
-        // untracked covenant inputs: possible trigger evidence, read only if the transaction turns out relevant
+        // Untracked covenant inputs: possible trigger evidence, read only if the transaction turns
+        // out relevant.
         let mut untracked = Vec::new();
         for (i, inp) in tx.inputs.iter().enumerate() {
             let prev = &inp.previous_outpoint;
@@ -882,17 +984,19 @@ impl Extractor<'_> {
         let mut leaders: HashMap<u32, Option<Leader>> = HashMap::new();
         let mut genesis: Option<Vec<Leader>> = None;
         let mut used: HashSet<(u32, usize)> = HashSet::new();
-        // the burns a kUSDT redemption payload names: an output proven to hold such a state is burned (its owner is the hash of a
-        // script that starts with OP_RETURN), not a holding
+        // The burns a kUSDT redemption payload names. An output proven to hold such a state is
+        // burned (its owner is the hash of a script that starts with OP_RETURN), not a holding.
         let burns = kob_protocol::kusdt::redemption_entries(&tx.payload.0).unwrap_or_default();
         for (j, o) in tx.outputs.iter().enumerate() {
             let Some(c) = &o.covenant else { continue };
             let token = c.covenant_id;
             let order_gate = payload_tokens.contains(&token) || token_known(self.conn, &token)?;
-            // Every token output is a holding candidate (a wallet's balance of a token no order trades, received from another
-            // trading app, a launchpad or a bridge), and may be owned by an order id: a FOREIGN stray (matcher.md 1.2), which the indexer
-            // must flag. The leader is read for every output except one of a token no order trades whose authorising input is
-            // a tracked order (an order's continuation is never a token output): one signature-script parse per token transfer.
+            // Every token output is a holding candidate (a wallet's balance of a token no order
+            // trades, received from another trading app, a launchpad or a bridge). It may also be
+            // owned by an order id, a FOREIGN stray (matcher.md 1.2), which the indexer must flag.
+            // The leader is read for every output except one of a token no order trades whose
+            // authorising input is a tracked order, because an order's continuation is never a
+            // token output. That is one signature-script parse per token transfer.
             if !order_gate && inputs.get(c.authorizing_input as usize).is_some_and(|i: &RecIn| i.reveal.is_some() || i.daa > 0) {
                 continue;
             }
@@ -901,8 +1005,9 @@ impl Extractor<'_> {
                     Some(l) => l.clone(),
                     None => tx.inputs.get(c.authorizing_input as usize).and_then(|i| leader_of(&i.signature_script.0)),
                 });
-            // No leader: a token genesis names the states of its outputs in its payload instead (`genesis_states`), one list of
-            // candidate states per pinned token program, each believed only if its P2SH is the output's script public key
+            // No leader: a token genesis names the states of its outputs in its payload instead
+            // (`genesis_states`), as one list of candidate states per pinned token program. Each is
+            // believed only if its P2SH is the output's script public key.
             let genesis_cands: &[Leader] =
                 if leader.is_none() { genesis.get_or_insert_with(|| genesis_leaders(&tx.payload.0)).as_slice() } else { &[] };
             let want = parse_spk(&o.script_public_key.0);
@@ -912,7 +1017,7 @@ impl Extractor<'_> {
                     if used.contains(&(c.authorizing_input, k)) || want.as_ref() != Some(spk) {
                         continue;
                     }
-                    // the state is proven: the P2SH it produces is this output's script public key
+                    // The state is proven: the P2SH it produces is this output's script public key.
                     used.insert((c.authorizing_input, k));
                     if kob_protocol::kusdt::is_burned(&burns, j as u32, s) {
                         break 'found;
@@ -922,13 +1027,14 @@ impl Extractor<'_> {
                         && if order_gate {
                             fresh.contains(&owner) || order_known(self.conn, &owner)?
                         } else {
-                            // a token no order trades: a foreign stray of an order the indexer already knows
+                            // A token no order trades: a foreign stray of an order the indexer
+                            // already knows.
                             order_known(self.conn, &owner)?
                         };
                     if order_owned {
                         tok_outs.push(TokOut { out: j as u32, amount: s.amount(), owner });
                     }
-                    // every proven output is a holding, whoever owns it
+                    // Every proven output is a holding, whoever owns it.
                     holds.push(HeldOut { out: j as u32, program: *tid, state: s.clone() });
                     relevant = true;
                     break 'found;
@@ -938,9 +1044,11 @@ impl Extractor<'_> {
         if !relevant {
             return Ok(kcc23.map(|d| TxRecord::declaration_only(txid, pos, d)));
         }
-        // A fill of a plain KobAsk / KobBid this indexer does not track (no placement record): the covenants accept it as trigger
-        // evidence all the same (they check its template, not a record), so its quote is kept for the tracked conditional orders
-        // of the transaction (a trailing ratchet is derived from it). It does not make the transaction relevant by itself.
+        // A fill of a plain KobAsk / KobBid that this indexer does not track (no placement
+        // record). The covenants accept it as trigger evidence all the same, because they check
+        // its template, not a record. So its quote is kept for the tracked conditional orders of
+        // the transaction (a trailing ratchet is derived from it). It does not make the
+        // transaction relevant by itself.
         for i in untracked {
             let inp = &tx.inputs[i];
             let spk = spent_of(inp).map(|u| u.script_public_key.0.as_slice()).unwrap_or(&[]);
@@ -953,9 +1061,10 @@ impl Extractor<'_> {
         } else {
             payload::encode(&kept).unwrap_or_else(|_| UNDECODABLE_PAYLOAD.to_vec())
         };
-        // who funded it, when it spends a tracked order (a fill, a cancel, a keeper's call): the first input that spends no covenant
-        // output (an Executor's funding), its script as the node reports it
-        // and what its inputs held (its network fee is that minus its outputs, `activity`)
+        // Who funded the transaction, when it spends a tracked order (a fill, a cancel, a keeper's
+        // call): the script of the first input that spends no covenant output (an Executor's
+        // funding), as the node reports it. Also what its inputs held, whose difference with its
+        // outputs is its network fee (`activity`).
         let spends_order = inputs.iter().any(|i| i.daa > 0 || i.reveal.is_some());
         let payer = if spends_order { payer_of(tx) } else { None };
         let in_value = if spends_order { in_value_of(tx) } else { None };
@@ -1008,15 +1117,16 @@ mod tests {
 
     #[test]
     fn kron_reveals_survive_the_record_log_and_old_codes_read_unchanged() {
-        // every order template has its own wire code; the KRON kinds share the KCC-20 kind codes with the high bit set
+        // Every order template has its own wire code. The KRON kinds share the KCC-20 kind codes
+        // with the high bit set.
         for id in crate::model::ORDER_KINDS {
             let code = crate::model::wire_code(id);
             assert_eq!(crate::model::from_wire_code(code), Some(id), "{}", id.name());
             assert_eq!(code & 0x80 != 0, id.family() == kob_protocol::family::Family::Kron);
         }
-        // a log written before the KRON family existed only has codes below 0x80
+        // A log written before the KRON family existed only has codes below 0x80.
         assert_eq!(crate::model::wire_code(TemplateId::KobAsk), 1);
-        // the v2.4 receipt codes decode to no template
+        // The codes of the retired receipt template decode to no template.
         assert_eq!(crate::model::from_wire_code(7), None);
         assert_eq!(crate::model::from_wire_code(0x87), None);
         assert_eq!(crate::model::wire_code(TemplateId::KobCondBidKron), 0x84);
@@ -1045,8 +1155,10 @@ mod tests {
         assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec);
     }
 
-    /// A public-mint app's `mint` reveals the holder it creates: the minted output is a holding from its first block (no
-    /// transfer needed), for a token no order trades and no allowlist names. A claimed state its output does not prove is not.
+    /// A public-mint app's `mint` reveals the holder it creates.
+    ///
+    /// The minted output is a holding from its first block, with no transfer needed, for a token no
+    /// order trades and no allowlist names. A claimed state that its output does not prove is not.
     #[test]
     fn a_minted_holder_is_a_holding_and_an_unproven_claim_is_not() {
         use crate::rpc::types::*;
@@ -1088,7 +1200,8 @@ mod tests {
             rec.holds,
             vec![HeldOut { out: 0, program: TemplateId::Kcc20PublicMint, state: TokenState::Kcc20(holder.clone()) }]
         );
-        // the same claim next to an output of another amount (or another program) proves nothing: not relevant at all
+        // The same claim next to an output of another amount (or another program) proves nothing:
+        // not relevant at all.
         let other =
             TokenState::Kcc20(Kcc20State::p2pk(401, [3; 32], [0xee; 32])).spk_with(token_template(TemplateId::Kcc20PublicMint));
         assert!(ex.extract(&tx(crate::script::spk_bytes(&other)), 0).unwrap().is_none());
@@ -1096,9 +1209,11 @@ mod tests {
         assert!(ex.extract(&tx(crate::script::spk_bytes(&look_alike)), 0).unwrap().is_none());
     }
 
-    /// A token genesis has no transfer leader: it names the states of its outputs in its payload (`genesis_states`). Each is a holding
-    /// when the P2SH of its state under a pinned program is the output's script (whatever the order of the names), and nothing is
-    /// believed otherwise: another amount, a payload that is not the exact encoding or no payload leave the transaction unrelated.
+    /// A token genesis names the states of its outputs in its payload (`genesis_states`).
+    ///
+    /// A state is a holding when the P2SH of its state under a pinned program is the output's
+    /// script, whatever the order of the names. Nothing is believed otherwise: another amount, a
+    /// payload that is not the exact encoding or no payload leave the transaction unrelated.
     #[test]
     fn a_genesis_names_its_outputs_and_an_unproven_claim_is_not_believed() {
         use crate::rpc::types::*;
@@ -1111,7 +1226,7 @@ mod tests {
         let tx = |outs: Vec<Vec<u8>>, payload: Vec<u8>| Tx {
             inputs: vec![TxInput {
                 previous_outpoint: Outpoint { transaction_id: Hash32([1; 32]), index: 0 },
-                // a plain P2PK spend: no leader, no token program in the signature script
+                // A plain P2PK spend: no leader, no token program in the signature script.
                 signature_script: crate::hex::HexBytes(vec![0x41; 65]),
                 sequence: Some(0),
                 verbose_data: Some(InputVerbose {
@@ -1151,18 +1266,19 @@ mod tests {
             let rec = ex.extract(&tx(outs.clone(), named), 0).unwrap().expect("a genesis that names its outputs is relevant");
             assert_eq!(rec.holds, want);
         }
-        // a name that is not the output's state proves nothing (the second output stays unnamed)
+        // A name that is not the output's state proves nothing (the second output stays unnamed).
         let wrong = Kcc20State::p2pk(301, [4; 32], [0xee; 32]);
         let rec = ex.extract(&tx(outs.clone(), names(&[&mine, &wrong])), 0).unwrap().expect("one output is proven");
         assert_eq!(rec.holds, want[..1].to_vec());
         assert!(ex.extract(&tx(vec![outs[1].clone()], names(&[&mine, &wrong])), 0).unwrap().is_none());
-        // the same state under another pinned program is another script: it is proven under THAT program only
+        // The same state under another pinned program is another script: it is proven under THAT
+        // program only.
         let look_alike =
             crate::script::spk_bytes(&TokenState::Kcc20(mine.clone()).spk_with(token_template(TemplateId::Kcc20PublicMint)));
         let rec =
             ex.extract(&tx(vec![look_alike], names(&[&mine])), 0).unwrap().expect("a public-mint holder is a holding of that program");
         assert_eq!(rec.holds[0].program, TemplateId::Kcc20PublicMint);
-        // no payload, a payload that is not the encoding, or one with trailing bytes: unrelated
+        // No payload, a payload that is not the encoding, or one with trailing bytes: unrelated.
         assert!(ex.extract(&tx(outs.clone(), vec![]), 0).unwrap().is_none());
         let mut trailing = names(&[&mine, &theirs]);
         trailing.push(0);
@@ -1181,7 +1297,7 @@ mod tests {
         assert_eq!((id, got.clone()), (TemplateId::KronToken2433, next.clone()));
         let (_, any) = token_next_states(&sig).unwrap();
         assert_eq!(any, next.into_iter().map(TokenState::Kron).collect::<Vec<_>>());
-        // not a KRON token input: a P2PK signature push
+        // Not a KRON token input: a P2PK signature push.
         assert!(token_next_states(&crate::script::parse_pushes(&[0x01, 0x00]).map(|_| vec![0x01u8, 0x00]).unwrap()).is_none());
     }
 }
