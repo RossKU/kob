@@ -21,9 +21,17 @@
 //! The sightings are kept in the database (`meta.release_sightings`, a few hundred bytes of
 //! JSON), so a restart keeps the notice. They are written in the transaction of the block that
 //! carried them. A reorg does not revert them, because a reorged-away placement may have counted.
-//! Only releases newer than the build are stored, and at most [`MAX_VERSIONS`] of them. The
-//! lowest are kept, since the real next release is the closest one. Once the operator runs that
-//! release, it is no longer newer and the notice is gone.
+//! Only releases newer than the build are stored, and at most [`MAX_VERSIONS`] of them. A release
+//! not yet seen takes the slot of the release below the bar that was seen least recently. So
+//! made-up releases cannot hold every slot with one placement each and keep the real one out: they
+//! would have to be placed again after every placement of the real release. A release past the bar
+//! keeps its slot. When every slot holds one, the lowest are kept, since the real next release is
+//! the closest one, and the notice already shows. Once the operator runs that release, it is no
+//! longer newer and the notice is gone.
+//!
+//! Anyone can still raise the notice for a made-up release, with three placements of two makers.
+//! It says only that someone places with that release. The operator checks a release against its
+//! tag and checksums (`docs/ops/release.md`).
 
 use super::db::{meta_get, meta_set, DbResult};
 use crate::hex::Hash32;
@@ -35,7 +43,7 @@ use serde::{Deserialize, Serialize};
 pub const MIN_PLACEMENTS: usize = 3;
 /// Distinct makers of those placements.
 pub const MIN_MAKERS: usize = 2;
-/// Newer releases tracked at most (the lowest are kept).
+/// Newer releases tracked at most.
 pub const MAX_VERSIONS: usize = 8;
 
 const META_KEY: &str = "release_sightings";
@@ -59,6 +67,9 @@ struct Seen {
     first_seen_daa: u64,
     txids: Vec<Hash32>,
     makers: Vec<Hash32>,
+    /// DAA score of the latest placement seen with it (0 in a row of an earlier build).
+    #[serde(default)]
+    last_seen_daa: u64,
 }
 
 impl Seen {
@@ -86,13 +97,32 @@ impl Sightings {
         let at = match self.versions.binary_search_by(|s| s.version.cmp(&version)) {
             Ok(i) => i,
             Err(i) => {
+                let mut i = i;
                 if self.versions.len() >= MAX_VERSIONS {
-                    if i >= MAX_VERSIONS {
-                        return false; // higher than every release kept: the closest ones matter
+                    // The release below the bar seen least recently gives up its slot (ties: the
+                    // highest). With every slot past the bar, the lowest are kept.
+                    let victim = self
+                        .versions
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, s)| !s.confirmed())
+                        .min_by_key(|(k, s)| (s.last_seen_daa, std::cmp::Reverse(*k)))
+                        .map(|(k, _)| k);
+                    match victim {
+                        Some(k) => {
+                            self.versions.remove(k);
+                            if k < i {
+                                i -= 1;
+                            }
+                        }
+                        None if i >= MAX_VERSIONS => return false, // higher than every release kept
+                        None => {
+                            self.versions.pop();
+                        }
                     }
-                    self.versions.pop();
                 }
-                self.versions.insert(i, Seen { version, first_seen_daa: daa, txids: vec![txid], makers: vec![maker] });
+                let seen = Seen { version, first_seen_daa: daa, txids: vec![txid], makers: vec![maker], last_seen_daa: daa };
+                self.versions.insert(i, seen);
                 return true;
             }
         };
@@ -100,6 +130,11 @@ impl Sightings {
         let mut changed = false;
         if daa < s.first_seen_daa {
             s.first_seen_daa = daa;
+            changed = true;
+        }
+        // Only a release below the bar can lose its slot, so only its recency is kept.
+        if !s.confirmed() && !s.txids.contains(&txid) && daa > s.last_seen_daa {
+            s.last_seen_daa = daa;
             changed = true;
         }
         if s.txids.len() < MIN_PLACEMENTS && !s.txids.contains(&txid) {
@@ -259,19 +294,59 @@ mod tests {
         assert_eq!(s.newer(b, false), None);
     }
 
+    /// One placement each of made-up releases fills every slot, below the real next release (which
+    /// would hide it before this build) or above it. The real release still takes a slot and passes
+    /// the bar as its placements come, with a few made-up ones in between, and keeps its slot after.
     #[test]
-    fn at_most_the_lowest_releases_are_kept() {
-        let mut s = Sightings::default();
-        // A flood of made-up high releases does not crowd out the real next one.
-        for k in 0..20u64 {
-            s.note(CORE, false, Release::new(9, k, 0), h(1), h(k as u8), 1);
+    fn made_up_releases_cannot_hold_every_slot_against_the_real_one() {
+        for low in [true, false] {
+            let mut s = Sightings::default();
+            let junk = |k: u64| if low { Release::new(0, 1, 1 + k) } else { Release::new(9, k, 0) };
+            for k in 0..20u64 {
+                s.note(CORE, false, junk(k), h(1), h(k as u8), 10 + k);
+            }
+            assert_eq!(s.versions.len(), MAX_VERSIONS);
+            let real = Release::new(0, 5, 0);
+            for (k, m) in [(100u8, 1u8), (101, 2), (102, 3)] {
+                assert!(s.note(CORE, false, real, h(m), h(k), 100 + k as u64), "{low} {k}");
+                for j in 0..3u64 {
+                    s.note(CORE, false, junk(100 + 10 * k as u64 + j), h(1), h(200 + j as u8), 100 + k as u64);
+                }
+            }
+            assert_eq!(s.versions.len(), MAX_VERSIONS);
+            assert_eq!(s.newer(CORE, false).map(|n| n.version), Some(real), "{low}");
+            for k in 0..50u64 {
+                s.note(CORE, false, junk(5_000 + k), h(9), h(250), 1_000 + k);
+            }
+            assert_eq!(s.newer(CORE, false).map(|n| n.version), Some(real), "{low}: past the bar it keeps its slot");
         }
-        assert_eq!(s.versions.len(), MAX_VERSIONS);
+    }
+
+    #[test]
+    fn with_every_slot_past_the_bar_the_lowest_are_kept() {
+        let mut s = Sightings::default();
+        for v in 0..MAX_VERSIONS as u64 {
+            for (k, m) in [(0u8, 1u8), (1, 2), (2, 1)] {
+                s.note(CORE, false, Release::new(1, v, 0), h(m), h(10 * v as u8 + k), 5);
+            }
+        }
+        assert!(s.versions.iter().all(Seen::confirmed));
         let next = Release::new(0, 1, 1);
-        assert!(s.note(CORE, false, next, h(1), h(100), 5));
-        assert_eq!(s.versions.len(), MAX_VERSIONS);
-        assert_eq!(s.versions[0].version, next);
-        assert!(!s.note(CORE, false, Release::new(99, 0, 0), h(1), h(101), 5), "above every kept release");
+        assert!(s.note(CORE, false, next, h(1), h(200), 6));
+        assert_eq!((s.versions.len(), s.versions[0].version), (MAX_VERSIONS, next));
+        for (m, t) in [(2u8, 201u8), (1, 202)] {
+            s.note(CORE, false, next, h(m), h(t), 6);
+        }
+        assert!(s.versions.iter().all(Seen::confirmed));
+        assert!(!s.note(CORE, false, Release::new(99, 0, 0), h(1), h(203), 7), "above every kept release");
+    }
+
+    /// A row an earlier build stored, without `last_seen_daa`, still loads.
+    #[test]
+    fn a_row_without_the_last_sighting_loads() {
+        let row = r#"{"versions":[{"version":"0.1.1","first_seen_daa":5,"txids":[],"makers":[]}]}"#;
+        let s: Sightings = serde_json::from_str(row).unwrap();
+        assert_eq!(s.versions[0].last_seen_daa, 0);
     }
 
     #[test]
