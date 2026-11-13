@@ -615,8 +615,9 @@ pub struct Replacement {
 /// Amend a plain ask in place, by the maker's SIGHASH_ALL `cancel`.
 ///
 /// The order's covenant id continues with the new state at output 0, and the custody, owned by that
-/// id, stays where it is. The token program is therefore never revealed, and an 8/8 ask amend is a
-/// fifth of a cancel-replace. Only the terms [`payload::check_amend_terms`] allows may change:
+/// id, stays where it is. The token program is therefore never revealed, and an 8/8 ask amend
+/// costs about a quarter of a cancel-replace (2,168 B against 8,818 B), and about 40% on the
+/// reference program. Only the terms [`payload::check_amend_terms`] allows may change:
 /// price, tip, minimum fill, time in force, timing and decay. The maker, the token, the scale and
 /// `amountLeft` cannot, because they re-custody; use [`CancelOrder::replace`] for them. The `KOB1`
 /// payload carries an `AMEND` record.

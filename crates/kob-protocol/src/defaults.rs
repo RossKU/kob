@@ -71,10 +71,12 @@ pub const DEFAULT_ORDER_CARRIER: u64 = 100_000_000;
 /// The wallet's `minFill` is the amount worth this much at the order's limit price
 /// ([`default_min_fill`]). Every fill of a bid-side order moves a delivery carrier onto a new token
 /// UTXO, and every fill restarts TWAP / DCA intervals. The minimum therefore bounds the fills a
-/// filler can force on the maker to `ceil(amount / minFill)`. At the default carrier, the carriers
-/// a filler can make the maker lock are at most 10% of the order's notional. The relay floor of
-/// one fill, paid by the filler, is at most 0.6% of 10 KAS on every token program and at most
-/// 1.4% for a pair fill. A smaller minimum would make small fills unprofitable to match before it
+/// filler can force on the maker to `ceil(amount / minFill)`. With the default 1 KAS carrier
+/// and this minimum, the carriers a filler can make the maker lock are at most `ceil(N / 10)` KAS
+/// for an order of notional `N` KAS. That is up to nearly 20% of the notional just above 10 KAS
+/// and tends to 10% for large orders. If-done entries can lock up to 8 carriers whatever the size.
+/// The relay floor of one fill, paid by the filler, is at most 0.6% of 10 KAS on every token
+/// program and at most 1.4% for a pair fill. A smaller minimum would make small fills unprofitable to match before it
 /// saved the maker anything. Figures: `docs/spec/order-types.md`.
 pub const DEFAULT_MIN_FILL_SOMPI: i64 = 1_000_000_000;
 

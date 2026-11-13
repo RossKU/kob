@@ -16,7 +16,7 @@ pub fn to_hex(bytes: &[u8]) -> String {
     String::from_utf8(out).expect("hex is ascii")
 }
 
-/// Hex decoding (either case, no `0x` prefix).
+/// Hex decoding. Accepts either case and an optional `0x` prefix.
 pub fn from_hex(s: &str) -> Result<Vec<u8>, String> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     if !s.len().is_multiple_of(2) {
