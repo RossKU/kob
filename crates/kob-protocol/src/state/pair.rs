@@ -1,26 +1,41 @@
-//! Pair orders (protocol v3): an order of a token/token pair A/B is an amount of the BASE token A at a price in the QUOTE
-//! token B per WHOLE A (`price` base units of B per `scale(A)` base units of A), with the maker-favour rounding of every KOB
-//! order (the ceil for what the maker receives, the floor for what it pays). Tips, keeper tips and carriers are KAS (tips:
-//! sompi per whole A, rounded down).
+//! Pair orders: orders of a token/token pair A/B.
 //!
-//! Three templates, each ONE template for both sides and both token families (`contracts/orders/KobPair.sil`,
-//! `KobCondPair.sil`, `KobIfdPair.sil`; the headers are the reference):
+//! A pair order holds an amount of the base token A at a price in the quote token B per whole A,
+//! i.e. `price` base units of B per `scale(A)` base units of A. It rounds in the maker's favour
+//! like every KOB order: up for what the maker receives, down for what it pays. Tips, keeper tips
+//! and carriers are in KAS, and tips are sompi per whole A, rounded down.
 //!
-//! * [`PairState`] (`KobPair`, kind 0x08): plain ask / bid with IOC / FOK, Dutch / rising decay, TWAP / DCA, close. Side
-//!   ASK (1) sells A (its custody S = A) for B (T = B); side BID (2) holds a B escrow (S = B) and buys A (T = A).
-//! * [`CondPairState`] (`KobCondPair`, 0x09): stop, stop-limit, trailing, take-profit / limit leg, OCO, and the exits of
-//!   `KobIfdPair` (repeat fields). Same S / T convention.
-//! * [`IfdPairState`] (`KobIfdPair`, 0x0a): IFD / IFO / bracket / repeat entries, tokens named A and B. Side BID
-//!   (buy-first) holds a B escrow; side ASK (sell-first) holds A (exactly `amountLeft`) and a B PREFUND custody.
+//! # Templates
 //!
-//! Option (2) of the founder rules: each pair order enforces only its own guarantees (what it receives and pays, its exact
-//! custodies, the stray guards of both tokens, its positional outputs). Fillers may route through the KAS books, net any
-//! number of opposite pair orders, or fill from inventory. Pair conditionals arm from trigger evidence in one of two modes:
-//! two KAS-book fills of A and B in the same transaction (the implied rate, [`implied_le`] / [`implied_ge`]) or a fill of a
-//! resting `KobPair` of the same pair ([`PairEvidence`]).
+//! There are three templates. Each is one template for both sides and both token families, and the
+//! contract headers in `contracts/orders/KobPair.sil`, `KobCondPair.sil` and `KobIfdPair.sil` are
+//! the reference.
 //!
-//! Every helper is the covenant's own arithmetic (the split `quoteOf` of [`quote_of`], exact for scales up to 10^9): `None`
-//! wherever the covenant would fail (an overflow, a refused input).
+//! - [`PairState`] (`KobPair`, kind 0x08) is a plain ask or bid with IOC / FOK, Dutch or rising
+//!   decay, TWAP / DCA and close. Side ASK (1) sells A, so its custody S is A and it buys T = B.
+//!   Side BID (2) holds a B escrow (S = B) and buys A (T = A).
+//! - [`CondPairState`] (`KobCondPair`, 0x09) is a stop, stop-limit, trailing, take-profit / limit
+//!   leg or OCO order, and the exit of a `KobIfdPair`, with repeat fields. It uses the same S / T
+//!   convention.
+//! - [`IfdPairState`] (`KobIfdPair`, 0x0a) is an IFD, IFO, bracket or repeat entry, with tokens
+//!   named A and B. Side BID (buy-first) holds a B escrow. Side ASK (sell-first) holds exactly
+//!   `amountLeft` of A and a B prefund custody.
+//!
+//! # Guarantees and evidence
+//!
+//! Each pair order enforces only its own guarantees: what it receives and pays, its exact
+//! custodies, the stray guards of both tokens and its positional outputs. Fillers may route through
+//! the KAS books, net any number of opposite pair orders, or fill from inventory. See
+//! `docs/spec/order-types.md`, "Pair orders".
+//!
+//! Pair conditionals arm from trigger evidence in one of two modes:
+//! - Two KAS-book fills of A and B in the same transaction, which give the implied rate
+//!   ([`implied_le`], [`implied_ge`]).
+//! - A fill of a resting `KobPair` of the same pair ([`PairEvidence`]).
+//!
+//! Every helper is the covenant's own arithmetic, the split `quoteOf` of [`quote_of`], which is
+//! exact for scales up to 10^9. It returns `None` wherever the covenant would fail, on an overflow
+//! or a refused input.
 
 use crate::artifacts::TemplateId;
 use crate::family::Family;
@@ -33,10 +48,12 @@ use super::{
 };
 
 kob_state!(
-    /// `KobPair`: plain order of a pair A/B. Side ASK sells A (custody S = A, exactly `amountLeft`) and receives at least
-    /// `ceil(n * price(t) / scale(A))` of B at its positional output; side BID pays exactly `floor(n * price(t) / scale(A))`
-    /// of B from its escrow custody (S = B) and receives exactly n of A. The order UTXO prefunds the delivery carrier of
-    /// every fill and the KAS tip.
+    /// `KobPair`: plain order of a pair A/B.
+    ///
+    /// Side ASK sells A from its custody S = A, which holds exactly `amountLeft`. It receives at
+    /// least `ceil(n * price(t) / scale(A))` of B at its positional output. Side BID pays exactly
+    /// `floor(n * price(t) / scale(A))` of B from its escrow custody (S = B) and receives exactly n
+    /// of A. The order UTXO prefunds the delivery carrier of every fill and the KAS tip.
     PairState, TemplateId::KobPair, "KobPair", order: true, {
         /// T deliveries, S refunds and returns, cancel key (x-only).
         maker: [u8; 32] => "maker",
@@ -85,16 +102,19 @@ kob_state!(
         amount_left: i64 => "amountLeft",
         /// Mutable: the exact custody of S (an ask: `== amountLeft`).
         custody: i64 => "custody",
-        /// KCC-20 extension commitment of the custody of S (zero for a KRON S): the order takes no custody of another
-        /// commitment.
+        /// KCC-20 extension commitment of the custody of S, zero for a KRON S.
+        ///
+        /// The order takes no custody of another commitment.
         s_ext: [u8; 32] => "sExt",
     }
 );
 
 kob_state!(
-    /// `KobCondPair`: conditional order of a pair A/B (stop, stop-limit, trailing, take-profit / limit leg, OCO) and the
-    /// exit of every `KobIfdPair` fill (repeat fields written by its entry). Side ASK sells A (S = A) with a stop BELOW
-    /// the market; side BID holds a B escrow (S = B) and buys A with a stop ABOVE it.
+    /// `KobCondPair`: conditional order of a pair A/B, and the exit of every `KobIfdPair` fill.
+    ///
+    /// The conditionals are stop, stop-limit, trailing, take-profit / limit leg and OCO. An exit
+    /// carries repeat fields written by its entry. Side ASK sells A (S = A) with a stop below the
+    /// market. Side BID holds a B escrow (S = B) and buys A with a stop above it.
     CondPairState, TemplateId::KobCondPair, "KobCondPair", order: true, {
         maker: [u8; 32] => "maker",
         side: i64 => "side",
@@ -139,20 +159,27 @@ kob_state!(
         custody: i64 => "custody",
         /// Repeat IFD: covenant id of the entry this exit re-arms (0 = none).
         parent: [u8; 32] => "parent",
-        /// Repeat IFD: ASK exit the entry's budget rate, BID exit its proceeds rate (B per whole A).
+        /// Repeat IFD: for an ASK exit the entry's budget rate, for a BID exit its proceeds rate.
+        ///
+        /// The rate is in B per whole A.
         rpt_price: i64 => "rptPrice",
         /// Repeat IFD: BID exit the entry's prefund rate (0 for an ASK exit).
         rpt_pre: i64 => "rptPre",
         rpt_until: i64 => "rptUntil",
-        /// KCC-20 extension commitment of the custody of S (zero for a KRON S); an exit: its entry's `aExt` / `bExt`.
+        /// KCC-20 extension commitment of the custody of S, zero for a KRON S.
+        ///
+        /// In an exit it is the entry's `aExt` or `bExt`.
         s_ext: [u8; 32] => "sExt",
     }
 );
 
 kob_state!(
-    /// `KobIfdPair`: if-done entry of a pair A/B. Side BID (buy-first) holds a B escrow (`custody`) and buys A into a
-    /// fresh `KobCondPair` ASK exit per fill; side ASK (sell-first) holds A (exactly `amountLeft`) and a B prefund
-    /// (`custody`) and sells A into a fresh `KobCondPair` BID exit holding the proceeds plus the prefund of the fill.
+    /// `KobIfdPair`: if-done entry of a pair A/B.
+    ///
+    /// Side BID (buy-first) holds a B escrow (`custody`) and buys A into a fresh `KobCondPair` ASK
+    /// exit per fill. Side ASK (sell-first) holds exactly `amountLeft` of A and a B prefund
+    /// (`custody`). It sells A into a fresh `KobCondPair` BID exit that holds the proceeds plus the
+    /// prefund of the fill.
     IfdPairState, TemplateId::KobIfdPair, "KobIfdPair", order: true, {
         maker: [u8; 32] => "maker",
         /// 2 BID (buy-first), 1 ASK (sell-first).
@@ -163,7 +190,7 @@ kob_state!(
         a_suf: i64 => "aSuf",
         a_family: i64 => "aFamily",
         a_scale: i64 => "aScale",
-        /// KCC-20 extension commitment of NEW A outputs (zero for KRON).
+        /// KCC-20 extension commitment of new A outputs, zero for KRON.
         a_ext: [u8; 32] => "aExt",
         b_cov_id: [u8; 32] => "bCovId",
         b_tpl_hash: [u8; 32] => "bTplHash",
@@ -207,8 +234,11 @@ kob_state!(
 /// Length of the committed exit a `KobIfdPair` stores (`KobCondPair` state up to `armed`).
 pub const IFD_PAIR_EXIT_COMMIT: usize = 432;
 
-/// One token of a pair order as its state names it (covenant id, program template hash and lengths, family code, scale)
-/// and, where the state carries one, the extension commitment of the outputs the order creates of that token.
+/// One token of a pair order as its state names it.
+///
+/// The state names the covenant id, the program template hash and lengths, the family code and the
+/// scale. Where the state carries one, it also holds the extension commitment of the outputs the
+/// order creates of that token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairToken {
     pub cov_id: [u8; 32],
@@ -244,8 +274,10 @@ fn token(cov_id: [u8; 32], tpl_hash: [u8; 32], pre: i64, suf: i64, family: i64, 
     PairToken { cov_id, tpl_hash, prefix_len: pre, suffix_len: suf, family, scale, ext }
 }
 
-/// Validation shared by the pair states: a valid side, valid family codes, a KRON token carries no extension commitment,
-/// two different tokens.
+/// Validation shared by the pair states.
+///
+/// The side and the family codes must be valid, a KRON token carries no extension commitment, and
+/// the two tokens differ.
 fn check_pair_tokens(name: &str, side: i64, t: &PairTokens) -> Result<(), StateError> {
     let bad = |m: String| Err(StateError::Codec("AnyState", format!("{name}: {m}")));
     if !side_ok(side) {
@@ -266,7 +298,8 @@ fn check_pair_tokens(name: &str, side: i64, t: &PairTokens) -> Result<(), StateE
     Ok(())
 }
 
-/// A KRON token output holds at most `10^9` base units (both pinned KRON programs refuse more).
+/// A KRON token output holds at most `10^9` base units, since both pinned KRON programs refuse
+/// more.
 fn kron_cap(fam: Option<Family>, amount: i64, what: &str) -> Result<(), String> {
     if fam == Some(Family::Kron) && amount > KRON_MAX_OUTPUT_AMOUNT {
         return Err(format!("{what}: a KRON token UTXO holds at most {KRON_MAX_OUTPUT_AMOUNT} base units (got {amount})"));
@@ -274,14 +307,18 @@ fn kron_cap(fam: Option<Family>, amount: i64, what: &str) -> Result<(), String> 
     Ok(())
 }
 
-// ---------------------------------------------------------------- trigger evidence (both conditionals)
+// ---------------------------------------------------------------- trigger evidence
 
-/// Trigger evidence of a pair conditional (`pairEv` of `KobCondPair` / `stopTouch` of `KobIfdPair`), argument `evMode`.
+/// Trigger evidence of a pair conditional, the `evMode` argument.
+///
+/// It is `pairEv` of `KobCondPair` and `stopTouch` of `KobIfdPair`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase")]
 pub enum PairEvidence {
-    /// Mode 0: a resting KAS-book order of A quoting `a` (sompi per whole A) and one of B quoting `b` (sompi per whole B),
-    /// both filled in the transaction. The implied rate is `a * scale(B) / b` B base units per whole A.
+    /// Mode 0: a resting KAS-book order of A and one of B, both filled in the transaction.
+    ///
+    /// The order of A quotes `a` (sompi per whole A) and the one of B quotes `b` (sompi per whole
+    /// B). The implied rate is `a * scale(B) / b` B base units per whole A.
     #[serde(rename_all = "camelCase")]
     KasBooks {
         #[serde(with = "crate::json::field")]
@@ -289,7 +326,9 @@ pub enum PairEvidence {
         #[serde(with = "crate::json::field")]
         b: i64,
     },
-    /// Mode 1: a resting `KobPair` of the same pair quoting `price` (B base units per whole A), filled in the transaction.
+    /// Mode 1: a resting `KobPair` of the same pair, filled in the transaction.
+    ///
+    /// It quotes `price`, in B base units per whole A.
     #[serde(rename_all = "camelCase")]
     Pair {
         #[serde(with = "crate::json::field")]
@@ -305,8 +344,9 @@ impl PairEvidence {
             PairEvidence::Pair { .. } => 1,
         }
     }
-    /// The covenant's `(a, b)`: mode 0 the two quotes, mode 1 `(price, scale(B))` (every comparison `a <= floor(x * b /
-    /// sB)` then reads `price <= x`).
+    /// The covenant's `(a, b)`: in mode 0 the two quotes, in mode 1 `(price, scale(B))`.
+    ///
+    /// In mode 1 every comparison `a <= floor(x * b / sB)` then reads `price <= x`.
     pub fn ab(&self, b_scale: i64) -> (i64, i64) {
         match *self {
             PairEvidence::KasBooks { a, b } => (a, b),
@@ -315,7 +355,9 @@ impl PairEvidence {
     }
 }
 
-/// `a <= floor(x * b / sB)`: the implied rate is at most `x` (B per whole A). `None` where the covenant's `quoteOf` fails.
+/// `a <= floor(x * b / sB)`: the implied rate is at most `x` (B per whole A).
+///
+/// Returns `None` where the covenant's `quoteOf` fails.
 pub fn implied_le(a: i64, b: i64, x: i64, b_scale: i64) -> Option<bool> {
     if b <= 0 {
         return None;
@@ -323,7 +365,9 @@ pub fn implied_le(a: i64, b: i64, x: i64, b_scale: i64) -> Option<bool> {
     Some(a <= quote_of(x, b, b_scale, Round::Down)?)
 }
 
-/// `a >= ceil(x * b / sB)`: the implied rate is at least `x`. `None` where the covenant's `quoteOf` fails.
+/// `a >= ceil(x * b / sB)`: the implied rate is at least `x`.
+///
+/// Returns `None` where the covenant's `quoteOf` fails.
 pub fn implied_ge(a: i64, b: i64, x: i64, b_scale: i64) -> Option<bool> {
     if b <= 0 {
         return None;
@@ -331,8 +375,9 @@ pub fn implied_ge(a: i64, b: i64, x: i64, b_scale: i64) -> Option<bool> {
     Some(a >= quote_of(x, b, b_scale, Round::Up)?)
 }
 
-/// The least B evidence fill (base units of B) of a mode-0 trigger at the stop `stop`: `ceil(minTouch * stop / scale(A))`,
-/// the B value of the A threshold at the stop.
+/// The least B evidence fill (base units of B) of a mode-0 trigger at the stop `stop`.
+///
+/// It is `ceil(minTouch * stop / scale(A))`, the B value of the A threshold at the stop.
 pub fn min_touch_b(min_touch: i64, stop: i64, a_scale: i64) -> Option<i64> {
     quote_of(min_touch, stop, a_scale, Round::Up)
 }
@@ -350,18 +395,22 @@ pub struct PairFill {
     pub tip_kas: i64,
     /// The order continues (GTC with something left).
     pub rest: bool,
-    /// S left in the custody after the fill (its rest, or its return to the maker; 0: nothing at the custody's index).
+    /// S left in the custody after the fill, as its rest or its return to the maker.
+    ///
+    /// 0 means there is nothing at the custody's index.
     pub out_amount: i64,
 }
 
 impl PairState {
+    /// True for side ASK, which sells A.
     pub fn is_ask(&self) -> bool {
         self.side == SIDE_ASK
     }
-    /// The S token (held) and the T token (bought).
+    /// The S token, which the order holds.
     pub fn s_token(&self) -> PairToken {
         token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, Some(self.s_ext))
     }
+    /// The T token, which the order buys.
     pub fn t_token(&self) -> PairToken {
         token(self.t_cov_id, self.t_tpl_hash, self.t_pre, self.t_suf, self.t_family, self.t_scale, Some(self.t_ext))
     }
@@ -381,12 +430,16 @@ impl PairState {
             self.t_scale
         }
     }
-    /// Decay origin of the UTXO created at `utxo_daa` (`activeFrom`, or the opening of the TWAP / DCA slice).
+    /// Decay origin of the UTXO created at `utxo_daa`.
+    ///
+    /// It is `activeFrom`, or the opening of the TWAP / DCA slice.
     pub fn origin(&self, utxo_daa: i64) -> Option<i64> {
         decay_origin(self.active_from, self.interval, utxo_daa)
     }
-    /// The quote at auction time `t`: an ask decays down to `priceEnd`, a bid rises up to it; the constant price without
-    /// decay. `None` where the covenant's arithmetic fails.
+    /// The quote at auction time `t`.
+    ///
+    /// An ask decays down to `priceEnd` and a bid rises up to it. Without decay it is the constant
+    /// price. Returns `None` where the covenant's arithmetic fails.
     pub fn price_at(&self, t: i64, utxo_daa: i64) -> Option<i64> {
         if self.slope == 0 {
             return Some(self.price);
@@ -401,7 +454,10 @@ impl PairState {
             self.price.checked_add(moved)?.min(self.price_end)
         })
     }
-    /// The highest quote a bid can pay (`priceEnd` of a rising bid, else `price`); for an ask its highest quote.
+    /// The highest quote the order can reach.
+    ///
+    /// A rising bid reaches `priceEnd`, a decaying ask starts at the larger of `price` and
+    /// `priceEnd`, and an order without decay quotes `price`.
     pub fn price_max(&self) -> i64 {
         if self.slope != 0 {
             if self.is_ask() {
@@ -421,7 +477,9 @@ impl PairState {
             quote_of(n, p, self.t_scale, Round::Down)
         }
     }
-    /// The least T the maker receives for n base units of A at quote p (ASK `ceil(n * p / scale(A))`, BID n).
+    /// The least T the maker receives for n base units of A at quote p.
+    ///
+    /// It is `ceil(n * p / scale(A))` for an ask and n for a bid.
     pub fn t_out_min(&self, n: i64, p: i64) -> Option<i64> {
         if self.is_ask() {
             quote_of(n, p, self.s_scale, Round::Up)
@@ -433,14 +491,21 @@ impl PairState {
     pub fn tip_kas(&self, n: i64) -> Option<i64> {
         quote_of(n, self.tip, self.a_scale(), Round::Down)
     }
-    /// The covenant's quantity rules: `0 < n <= amountLeft`, the minimum fill, the TWAP / DCA `maxFill`.
+    /// The covenant's quantity rules.
+    ///
+    /// They are `0 < n <= amountLeft`, the minimum fill and the TWAP / DCA `maxFill`.
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill) && (self.max_fill == 0 || n <= self.max_fill)
     }
-    /// The complete covenant rule of a fill of n at quote p of an order UTXO holding `value` sompi: the quantity rules, a
-    /// positive quote, an ask's custody holding its whole amount, an escrow that pays the quote, a continuation that keeps
-    /// something of S and is funded (`value >= deliveryCarrier + tip`), FOK completeness. The amounts it moves, or why it
-    /// is refused.
+    /// The complete covenant rule of a fill of n at quote p of an order UTXO holding `value` sompi.
+    ///
+    /// The rule covers:
+    /// - the quantity rules and a positive quote,
+    /// - an ask's custody holding its whole amount, or an escrow that pays the quote,
+    /// - a continuation that keeps something of S and is funded (`value >= deliveryCarrier + tip`),
+    /// - FOK completeness.
+    ///
+    /// Returns the amounts the fill moves, or why it is refused.
     pub fn fill(&self, n: i64, p: i64, value: i64) -> Result<PairFill, String> {
         if !self.fill_ok(n) {
             return Err(format!(
@@ -484,17 +549,19 @@ impl PairState {
         }
         Ok(PairFill { s_out, t_out, tip_kas, rest, out_amount })
     }
-    /// Whether anyone can take n base units now (the quote is takeable, [`PairState::fill`]).
+    /// Whether anyone can take n base units now, i.e. the quote is takeable ([`PairState::fill`]).
     pub fn takeable(&self, n: i64, t: i64, utxo_daa: i64, value: i64) -> bool {
         self.price_at(t, utxo_daa).is_some_and(|p| self.fill(n, p, value).is_ok())
     }
-    /// The largest n anyone can take now at quote p (0 when nothing is takeable): the whole amount if possible, else the
-    /// largest partial fill the covenant accepts.
+    /// The largest n anyone can take now at quote p, and 0 when nothing is takeable.
+    ///
+    /// It is the whole amount if possible, else the largest partial fill the covenant accepts.
     pub fn max_takeable(&self, p: i64, value: i64) -> i64 {
         if self.fill(self.amount_left, p, value).is_ok() {
             return self.amount_left;
         }
-        // partial fills: every rule is monotone in n (the tip, the escrow and maxFill grow with it)
+        // Partial fills. Every rule is monotone in n, since the tip, the escrow and maxFill grow
+        // with it.
         let (mut lo, mut hi) = (0i64, self.amount_left - 1);
         if self.max_fill > 0 {
             hi = hi.min(self.max_fill);
@@ -514,20 +581,27 @@ impl PairState {
             0
         }
     }
-    /// A bid's B escrow for `amount` base units of A: `floor(amount * pMax / scale(A)) + 1`. Each fill pays exactly
-    /// `floor(n * p / scale(A))` with `p <= pMax`, and floors are subadditive, so the floor of the whole amount pays every
-    /// split; the one unit keeps the rest of every partial fill positive (the covenant's rest needs a custody). `_fills` is
-    /// not used (no slack per fill: none is consumed); it stays for the callers.
+    /// A bid's B escrow for `amount` base units of A: `floor(amount * pMax / scale(A)) + 1`.
+    ///
+    /// Each fill pays exactly `floor(n * p / scale(A))` with `p <= pMax`, and floors are
+    /// subadditive, so the floor of the whole amount pays every split. The one unit keeps the rest
+    /// of every partial fill positive, because the covenant's rest needs a custody. `_fills` is
+    /// unused, since no slack per fill is consumed, and the parameter stays for the callers.
     pub fn bid_escrow(&self, amount: i64, _fills: i64) -> Option<i64> {
         quote_of(amount, self.price_max(), self.t_scale, Round::Down)?.checked_add(1)
     }
-    /// KAS an order UTXO needs for `fills` fills: one delivery carrier each and the tip of the whole amount.
+    /// KAS an order UTXO needs for `fills` fills.
+    ///
+    /// It is one delivery carrier per fill and the tip of the whole amount.
     pub fn kas_value(&self, fills: i64) -> Option<i64> {
         fills.max(1).checked_mul(self.delivery_carrier)?.checked_add(self.tip_kas(self.amount_left)?)
     }
-    /// The deliveries a new order must fund itself: one when it never rests after a fill (IOC / FOK, or `minFill` takes
-    /// everything), else a partial fill and the fill of its rest (a continuation pays each of its deliveries and needs a
-    /// positive value), a TWAP / DCA order at least one per `maxFill` slice.
+    /// The deliveries a new order must fund itself.
+    ///
+    /// - One, when it never rests after a fill (IOC / FOK, or `minFill` takes everything).
+    /// - Else two, a partial fill and the fill of its rest. A continuation pays each of its
+    ///   deliveries and needs a positive value.
+    /// - A TWAP / DCA order at least one per `maxFill` slice.
     pub fn funded_fills(&self) -> i64 {
         if self.tif != TIF_GTC || self.min_fill >= self.amount_left {
             1
@@ -561,15 +635,19 @@ impl PairState {
 // ---------------------------------------------------------------- KobCondPair
 
 impl CondPairState {
+    /// True for side ASK, which sells A.
     pub fn is_ask(&self) -> bool {
         self.side == SIDE_ASK
     }
+    /// The S token, which the order holds.
     pub fn s_token(&self) -> PairToken {
         token(self.s_cov_id, self.s_tpl_hash, self.s_pre, self.s_suf, self.s_family, self.s_scale, Some(self.s_ext))
     }
+    /// The T token, which the order buys.
     pub fn t_token(&self) -> PairToken {
         token(self.t_cov_id, self.t_tpl_hash, self.t_pre, self.t_suf, self.t_family, self.t_scale, Some(self.t_ext))
     }
+    /// The base token A and the quote token B.
     pub fn tokens(&self) -> PairTokens {
         if self.is_ask() {
             PairTokens { a: self.s_token(), b: self.t_token() }
@@ -577,6 +655,7 @@ impl CondPairState {
             PairTokens { a: self.t_token(), b: self.s_token() }
         }
     }
+    /// Base units per whole A, the price denominator.
     pub fn a_scale(&self) -> i64 {
         if self.is_ask() {
             self.s_scale
@@ -584,6 +663,7 @@ impl CondPairState {
             self.t_scale
         }
     }
+    /// Base units per whole B.
     pub fn b_scale(&self) -> i64 {
         if self.is_ask() {
             self.t_scale
@@ -595,8 +675,10 @@ impl CondPairState {
     pub fn is_booked(&self) -> bool {
         self.parent != [0; 32]
     }
-    /// Stop-leg price for a fill at auction time `t` (`trigger`: armed by the evidence of this very transaction, which
-    /// trades at the stop itself when `bandDaa > 0`). ASK `stop - band`, BID `stop + band` (band rounded down).
+    /// Stop-leg price for a fill at auction time `t`: ASK `stop - band`, BID `stop + band`.
+    ///
+    /// The band is rounded down. `trigger` means the order is armed by the evidence of this very
+    /// transaction, which trades at the stop itself when `bandDaa > 0`.
     pub fn stop_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         let bps = match (trigger || self.armed == 0, self.armed) {
             (true, _) => {
@@ -618,7 +700,9 @@ impl CondPairState {
             self.stop_price.checked_add(b)
         }
     }
-    /// Leg price (0 = take-profit / limit, 1 = stop) at time `t` (`None` where the covenant's stop arithmetic fails).
+    /// Leg price at time `t`: leg 0 is the take-profit / limit, leg 1 the stop.
+    ///
+    /// Returns `None` where the covenant's stop arithmetic fails.
     pub fn leg_price(&self, leg: i64, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         if leg == 0 {
             Some(self.tp_price)
@@ -649,7 +733,10 @@ impl CondPairState {
             (None, None) => 0,
         }
     }
-    /// S released for n at leg price `lp` (ASK n; BID at most `floor(n * lp / scale(A))`, the most the maker pays).
+    /// S released for n at leg price `lp`.
+    ///
+    /// It is n for an ask. For a bid it is at most `floor(n * lp / scale(A))`, the most the maker
+    /// pays.
     pub fn s_out(&self, n: i64, lp: i64) -> Option<i64> {
         if self.is_ask() {
             Some(n)
@@ -657,7 +744,9 @@ impl CondPairState {
             quote_of(n, lp, self.a_scale(), Round::Down)
         }
     }
-    /// The least T the maker receives for n at leg price `lp` (ASK `ceil(n * lp / scale(A))`; BID n).
+    /// The least T the maker receives for n at leg price `lp`.
+    ///
+    /// It is `ceil(n * lp / scale(A))` for an ask and n for a bid.
     pub fn t_out_min(&self, n: i64, lp: i64) -> Option<i64> {
         if self.is_ask() {
             quote_of(n, lp, self.a_scale(), Round::Up)
@@ -669,7 +758,9 @@ impl CondPairState {
     pub fn tip_kas(&self, n: i64) -> Option<i64> {
         quote_of(n, self.tip, self.a_scale(), Round::Down)
     }
-    /// Repeat IFD: `ceil(n * rptPrice / scale(A))` (ASK exit: the entry's budget; BID exit: the entry's proceeds).
+    /// Repeat IFD: `ceil(n * rptPrice / scale(A))`.
+    ///
+    /// For an ASK exit this is the entry's budget, for a BID exit the entry's proceeds.
     pub fn rpt_proceeds(&self, n: i64) -> Option<i64> {
         quote_of(n, self.rpt_price, self.a_scale(), Round::Up)
     }
@@ -677,6 +768,7 @@ impl CondPairState {
     pub fn rpt_back(&self, n: i64) -> Option<i64> {
         quote_of(n, self.rpt_pre, self.a_scale(), Round::Up)
     }
+    /// The covenant's quantity rule for a fill of n.
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill)
     }
@@ -684,21 +776,28 @@ impl CondPairState {
     pub fn next_armed(&self, leg: i64, trigger: bool, utxo_daa: i64) -> i64 {
         cond_next_armed(self.armed, self.band_daa, leg, trigger, utxo_daa)
     }
+    /// Most fills the order can take (`ceil(amountLeft / minFill)`).
     pub fn max_fills(&self) -> i64 {
         ceil_div(self.amount_left, self.min_fill.max(1))
     }
-    /// BID: the B escrow for all of `amountLeft` at the worst leg plus one base unit: each fill pays at most its floor, so
-    /// the floor of the whole amount covers any split, and the one unit keeps the rest of every partial fill positive.
-    /// `_fills` is not used (no slack per fill: none is consumed); it stays for the callers.
+    /// BID: the B escrow for all of `amountLeft` at the worst leg, plus one base unit.
+    ///
+    /// Each fill pays at most its floor, so the floor of the whole amount covers any split. The one
+    /// unit keeps the rest of every partial fill positive. `_fills` is unused, since no slack per
+    /// fill is consumed, and the parameter stays for the callers.
     pub fn bid_escrow(&self, _fills: i64) -> Option<i64> {
         quote_of(self.amount_left, self.worst(), self.a_scale(), Round::Down)?.checked_add(1)
     }
-    /// KAS an order UTXO needs for `fills` fills: one delivery carrier each and the tip of the whole amount.
+    /// KAS an order UTXO needs for `fills` fills.
+    ///
+    /// It is one delivery carrier per fill and the tip of the whole amount.
     pub fn kas_value(&self, fills: i64) -> Option<i64> {
         fills.max(1).checked_mul(self.delivery_carrier)?.checked_add(self.tip_kas(self.amount_left)?)
     }
-    /// The deliveries a new order (or an exit) must fund itself: one when `minFill` takes everything, else a partial fill
-    /// and the fill of its rest (a continuation pays each of its deliveries and needs a positive value).
+    /// The deliveries a new order or an exit must fund itself.
+    ///
+    /// It is one when `minFill` takes everything. Else it is two, a partial fill and the fill of
+    /// its rest, since a continuation pays each of its deliveries and needs a positive value.
     pub fn funded_fills(&self) -> i64 {
         if self.min_fill >= self.amount_left {
             1
@@ -706,9 +805,14 @@ impl CondPairState {
             2
         }
     }
-    /// Whether the evidence arms the stop leg: ASK (sell stop) the rate fell to at most the stop (an ask of A and a bid of
-    /// B, or a pair ASK), BID (buy stop) the rate rose to at least the stop (a bid of A and an ask of B, or a pair BID).
-    /// `None` where the covenant's arithmetic fails.
+    /// Whether the evidence arms the stop leg.
+    ///
+    /// - ASK (sell stop): the rate fell to at most the stop. The evidence is an ask of A and a bid
+    ///   of B, or a pair ASK.
+    /// - BID (buy stop): the rate rose to at least the stop. The evidence is a bid of A and an ask
+    ///   of B, or a pair BID.
+    ///
+    /// Returns `None` where the covenant's arithmetic fails.
     pub fn arms(&self, ev: PairEvidence) -> Option<bool> {
         let (a, b) = ev.ab(self.b_scale());
         if self.is_ask() {
@@ -717,10 +821,14 @@ impl CondPairState {
             implied_ge(a, b, self.stop_price, self.b_scale())
         }
     }
-    /// The trailing ratchet the evidence justifies: the k the covenant accepts (valid and maximal), or `None` (no step is
-    /// justified, or the covenant's arithmetic fails). ASK trails UP on a high rate (a bid of A and an ask of B, or a pair
-    /// BID): `s' = stop + k * step` with `s' + gap <= rate`, below `tpPrice`; BID trails DOWN on a low rate (an ask of A
-    /// and a bid of B, or a pair ASK): `s' = stop - k * step` with `s' - gap >= rate`, above `max(tpPrice, 0)`.
+    /// The trailing ratchet the evidence justifies: the k the covenant accepts, valid and maximal.
+    ///
+    /// - ASK trails up on a high rate, from a bid of A and an ask of B, or a pair BID. The new stop
+    ///   is `s' = stop + k * step` with `s' + gap <= rate`, below `tpPrice`.
+    /// - BID trails down on a low rate, from an ask of A and a bid of B, or a pair ASK. The new
+    ///   stop is `s' = stop - k * step` with `s' - gap >= rate`, above `max(tpPrice, 0)`.
+    ///
+    /// Returns `None` when no step is justified, or the covenant's arithmetic fails.
     pub fn trail_k(&self, ev: PairEvidence) -> Option<i64> {
         let (step, gap, s) = (self.trail_step, self.trail_gap, self.stop_price);
         if step <= 0 || gap < 0 || s <= 0 {
@@ -732,7 +840,8 @@ impl CondPairState {
             return None;
         }
         let k = if self.is_ask() {
-            // a >= ceil(x * b / sB)  <=>  x * b <= a * sB  <=>  x <= floor(a * sB / b), x = s + k * step + gap
+            // a >= ceil(x * b / sB)  <=>  x * b <= a * sB  <=>  x <= floor(a * sB / b),
+            // where x = s + k * step + gap
             let x_max = (a as i128 * sb as i128) / b as i128;
             let mut k = (x_max - gap as i128 - s as i128).div_euclid(step as i128);
             if self.tp_price > 0 {
@@ -740,7 +849,8 @@ impl CondPairState {
             }
             k
         } else {
-            // a <= floor(x * b / sB)  <=>  x * b >= a * sB  <=>  x >= ceil(a * sB / b), x = s - k * step - gap >= 0
+            // a <= floor(x * b / sB)  <=>  x * b >= a * sB  <=>  x >= ceil(a * sB / b),
+            // where x = s - k * step - gap >= 0
             let x_min = (a as i128 * sb as i128 + b as i128 - 1) / b as i128;
             let floor_p = self.tp_price.max(0) as i128;
             let lower = (floor_p + 1).max(x_min + gap as i128);
@@ -749,7 +859,9 @@ impl CondPairState {
         let k = i64::try_from(k).ok().filter(|k| *k >= 1)?;
         self.trail_check(ev, k).then_some(k)
     }
-    /// The covenant's trailing rule for a given k: VALID and MAXIMAL (mirrors `KobCondPair.settle`, `update` with k >= 1).
+    /// The covenant's trailing rule for a given k: valid and maximal.
+    ///
+    /// It mirrors `KobCondPair.settle` and `update` with k >= 1.
     pub fn trail_check(&self, ev: PairEvidence, k: i64) -> bool {
         let (step, gap) = (self.trail_step, self.trail_gap);
         if k <= 0 || step <= 0 || gap < 0 || self.stop_price <= 0 {
@@ -790,7 +902,9 @@ impl CondPairState {
             cap || quote_of(y, b, sb, Round::Down).is_some_and(|q2| a > q2)
         }
     }
-    /// The least B evidence fill of a mode-0 trigger at the current stop (`ceil(minTouch * stop / scale(A))`).
+    /// The least B evidence fill of a mode-0 trigger at the current stop.
+    ///
+    /// It is `ceil(minTouch * stop / scale(A))`.
     pub fn min_touch_b(&self) -> Option<i64> {
         min_touch_b(self.min_touch, self.stop_price, self.a_scale())
     }
@@ -819,8 +933,10 @@ impl CondPairState {
 
 // ---------------------------------------------------------------- KobIfdPair
 
-/// The fields an entry writes behind the committed exit (`0x08 amountLeft 0x08 custody 0x20 parent 0x08 rptPrice
-/// 0x08 rptPre 0x08 rptUntil 0x20 sExt`), exactly as `KobIfdPair.fill` splices them.
+/// The fields an entry writes behind the committed exit, exactly as `KobIfdPair.fill` splices them.
+///
+/// They are `0x08 amountLeft 0x08 custody 0x20 parent 0x08 rptPrice 0x08 rptPre 0x08 rptUntil 0x20
+/// sExt`.
 fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pre: i64, until: i64, s_ext: [u8; 32]) -> Vec<u8> {
     let mut v = vec![0x08];
     v.extend_from_slice(&amount.to_le_bytes());
@@ -838,22 +954,27 @@ fn exit_tail(amount: i64, custody: i64, parent: [u8; 32], rpt_price: i64, rpt_pr
 }
 
 impl IfdPairState {
-    /// Buy-first (side BID: buys A with its B escrow; the exit sells it).
+    /// True for buy-first, side BID, which buys A with its B escrow; the exit sells it.
     pub fn is_buy_first(&self) -> bool {
         self.side == SIDE_BID
     }
+    /// The base token A and the quote token B.
     pub fn tokens(&self) -> PairTokens {
         PairTokens {
             a: token(self.a_cov_id, self.a_tpl_hash, self.a_pre, self.a_suf, self.a_family, self.a_scale, Some(self.a_ext)),
             b: token(self.b_cov_id, self.b_tpl_hash, self.b_pre, self.b_suf, self.b_family, self.b_scale, Some(self.b_ext)),
         }
     }
-    /// The exit prefix an entry commits to (the exit's state up to `armed`; it must not be booked).
+    /// The exit prefix an entry commits to: the exit's state up to `armed`.
+    ///
+    /// The exit must not be booked.
     pub fn commit_exit(exit: &CondPairState) -> Vec<u8> {
         exit.encode()[..IFD_PAIR_EXIT_COMMIT].to_vec()
     }
-    /// The extension commitment of an exit's custody: A (a buy-first entry's exit sells A), B (a sell-first entry's exit holds
-    /// B).
+    /// The extension commitment of an exit's custody.
+    ///
+    /// It is A for a buy-first entry, whose exit sells A, and B for a sell-first entry, whose exit
+    /// holds B.
     pub fn exit_s_ext(&self) -> [u8; 32] {
         if self.is_buy_first() {
             self.a_ext
@@ -861,26 +982,34 @@ impl IfdPairState {
             self.b_ext
         }
     }
-    /// The committed exit order (amountLeft, custody and the repeat fields zero).
+    /// The committed exit order, with `amountLeft`, `custody` and the repeat fields zero.
     pub fn exit(&self) -> Result<CondPairState, StateError> {
         if self.exit_state.len() != IFD_PAIR_EXIT_COMMIT {
             return Err(StateError::Codec("KobIfdPair", format!("exitState must be {IFD_PAIR_EXIT_COMMIT} bytes")));
         }
         CondPairState::decode(&[self.exit_state.clone(), exit_tail(0, 0, [0; 32], 0, 0, 0, self.exit_s_ext())].concat())
     }
-    /// The KAS an exit needs (its UTXO value is `exitCarrier`), from the exit's own rules: a keeper arming its stop leg
-    /// takes up to its `keeperTip` (an update keeps `value - keeperTip`); then it funds its deliveries itself (a partial
-    /// fill and the fill of its rest when its `minFill` is below the entry's amount, else one) and the tip of the
-    /// largest amount it can hold (the entry's whole amount), or its refund (`refundTip`). Trailing updates draw on the
-    /// same value (each up to `keeperTip`): a maker who lets the stop trail funds more.
+    /// The KAS an exit needs, from the exit's own rules. Its UTXO value is `exitCarrier`.
+    ///
+    /// A keeper arming its stop leg takes up to its `keeperTip`, so an update keeps
+    /// `value - keeperTip`. The exit then funds its own deliveries and the tip of the largest
+    /// amount it can hold, which is the entry's whole amount, or its refund (`refundTip`). The
+    /// deliveries are a partial fill and the fill of its rest when its `minFill` is below the
+    /// entry's amount, else one.
+    ///
+    /// Trailing updates draw on the same value, each up to `keeperTip`, so a maker who lets the
+    /// stop trail funds more.
     pub fn exit_carrier_needed(&self) -> Option<i64> {
         let e = CondPairState { amount_left: self.amount_left, ..self.exit().ok()? };
         let fills = e.kas_value(e.funded_fills())?;
         let reserve = if e.stop_price > 0 { e.keeper_tip.max(0) } else { 0 };
         reserve.checked_add(fills.max(e.refund_tip.max(0)))
     }
-    /// The exit a fill of n creates holding `custody` (BID: n of A; ASK: the proceeds plus the prefund of n, in B), booked
-    /// when the entry repeats and `rptAmount > n` (`rptPrice = price`, `rptPre = prefund` for a sell-first entry).
+    /// The exit a fill of n creates holding `custody`.
+    ///
+    /// The custody is n of A for a buy-first entry, and the proceeds plus the prefund of n, in B,
+    /// for a sell-first one. The exit is booked when the entry repeats and `rptAmount > n`, with
+    /// `rptPrice = price`, and `rptPre = prefund` for a sell-first entry.
     pub fn exit_for(&self, n: i64, custody: i64, booking: Option<Booking>) -> Result<CondPairState, StateError> {
         let mut x = CondPairState { amount_left: n, custody, ..self.exit()? };
         if let Some(b) = booking {
@@ -891,22 +1020,29 @@ impl IfdPairState {
         }
         Ok(x)
     }
-    /// Whether `x` is exactly an exit this entry books with parent `me`: what the entry's merge compares (every byte of the
-    /// committed exit outside the mutable stopPrice / armed, parent, rptPrice, rptPre; amountLeft, custody and rptUntil
-    /// are not compared).
+    /// Whether `x` is exactly an exit this entry books with parent `me`.
+    ///
+    /// The entry's merge compares every byte of the committed exit outside the mutable `stopPrice`
+    /// and `armed`, and `parent`, `rptPrice` and `rptPre`. It does not compare `amountLeft`,
+    /// `custody` and `rptUntil`.
     pub fn books_exit(&self, me: [u8; 32], x: &CondPairState) -> bool {
         let booking = Booking { parent: me, until: x.rpt_until };
         self.exit_for(x.amount_left, x.custody, Some(booking))
             .map(|e| CondPairState { stop_price: x.stop_price, armed: x.armed, ..e } == *x)
             .unwrap_or(false)
     }
-    /// Entry quote at time `t` (a stop entry's auction from `entryStop` to `price`; the limit otherwise).
+    /// Entry quote at time `t`.
+    ///
+    /// A stop entry runs an auction from `entryStop` to `price`, and a limit entry quotes the
+    /// limit.
     pub fn price_at(&self, trigger: bool, t: i64, utxo_daa: i64) -> Option<i64> {
         entry_price(self.price, self.entry_stop, self.band_daa, self.armed, trigger, t, utxo_daa)
     }
+    /// `armed` of the continuation after a fill.
     pub fn next_armed(&self, utxo_daa: i64) -> i64 {
         entry_next_armed(self.entry_stop, self.band_daa, self.armed, utxo_daa)
     }
+    /// `armed` of the continuation after a merge.
     pub fn merged_armed(&self, utxo_daa: i64) -> i64 {
         entry_merged_armed(self.amount_left, self.band_daa, self.armed, utxo_daa)
     }
@@ -918,7 +1054,9 @@ impl IfdPairState {
     pub fn proceeds(&self, n: i64, p: i64) -> Option<i64> {
         quote_of(n, p, self.a_scale, Round::Up)
     }
-    /// ASK: the prefund of n, `ceil(n * prefund / scale(A))` (moved to the exit on a fill, returned on a merge).
+    /// ASK: the prefund of n, `ceil(n * prefund / scale(A))`.
+    ///
+    /// A fill moves it to the exit, and a merge returns it.
     pub fn pre_of(&self, n: i64) -> Option<i64> {
         quote_of(n, self.prefund, self.a_scale, Round::Up)
     }
@@ -930,15 +1068,20 @@ impl IfdPairState {
     pub fn tip_kas(&self, n: i64) -> Option<i64> {
         quote_of(n, self.tip, self.a_scale, Round::Down)
     }
+    /// The covenant's quantity rule for a fill of n.
     pub fn fill_ok(&self, n: i64) -> bool {
         min_fill_ok(n, self.amount_left, self.min_fill)
     }
+    /// Most fills the entry can take (`ceil(amountLeft / minFill)`).
     pub fn max_fills(&self) -> i64 {
         ceil_div(self.amount_left, self.min_fill.max(1))
     }
-    /// The B custody a new entry needs: BID the spend of the whole amount at the limit (each fill releases at most its
-    /// floor, so the floor of the whole amount covers any split); ASK the prefund of the whole amount plus one base unit
-    /// per possible fill but the last (each fill takes its ceil).
+    /// The B custody a new entry needs.
+    ///
+    /// - BID: the spend of the whole amount at the limit. Each fill releases at most its floor, so
+    ///   the floor of the whole amount covers any split.
+    /// - ASK: the prefund of the whole amount plus one base unit per possible fill but the last,
+    ///   since each fill takes its ceil.
     pub fn b_custody_needed(&self) -> Option<i64> {
         if self.is_buy_first() {
             self.spend(self.amount_left, self.price)
@@ -946,16 +1089,21 @@ impl IfdPairState {
             self.pre_of(self.amount_left)?.checked_add((self.max_fills() - 1).max(0))
         }
     }
-    /// KAS an entry UTXO needs: per possible fill one delivery carrier (the exit's custody) and one exit carrier, the tip
-    /// of the whole amount, and a repeating entry one more exit carrier (a merge's new custody).
+    /// KAS an entry UTXO needs.
+    ///
+    /// It is one delivery carrier (the exit's custody) and one exit carrier per possible fill, and
+    /// the tip of the whole amount. A repeating entry needs one more exit carrier, for a merge's
+    /// new custody.
     pub fn kas_value(&self) -> Option<i64> {
         self.max_fills()
             .checked_mul(self.delivery_carrier.checked_add(self.exit_carrier)?)?
             .checked_add(self.tip_kas(self.amount_left)?)?
             .checked_add(if self.rpt_amount > 0 { self.exit_carrier } else { 0 })
     }
-    /// Whether the evidence arms the stop entry: BID (buy stop) the rate rose to at least `entryStop`, ASK (sell stop) it
-    /// fell to at most `entryStop`.
+    /// Whether the evidence arms the stop entry.
+    ///
+    /// For BID (buy stop) the rate rose to at least `entryStop`, for ASK (sell stop) it fell to at
+    /// most `entryStop`.
     pub fn arms(&self, ev: PairEvidence) -> Option<bool> {
         let (a, b) = ev.ab(self.b_scale);
         if self.is_buy_first() {
@@ -1014,8 +1162,10 @@ mod tests {
         S::decode(&t.contract().compiled.bytecode[1..1 + t.state_len]).unwrap()
     }
 
-    /// The hand-coded offsets the covenants read match the typed encoding (`KobCondPair.rd` reads a KobPair's side, S, T
-    /// and their scales; the entry's merge compares the committed exit up to stopPrice).
+    /// The hand-coded offsets the covenants read match the typed encoding.
+    ///
+    /// `KobCondPair.rd` reads a KobPair's side, S, T and their scales, and the entry's merge
+    /// compares the committed exit up to `stopPrice`.
     #[test]
     fn covenant_offsets_match_the_encoding() {
         let p: PairState = compiled(TemplateId::KobPair);
@@ -1049,7 +1199,8 @@ mod tests {
         assert_eq!((x.amount_left, x.custody, x.parent, x.rpt_price, x.rpt_until), (7, 9, [5; 32], i.price, 11));
         assert!(i.books_exit([5; 32], &CondPairState { stop_price: 3, armed: 1, ..x.clone() }));
         assert!(!i.books_exit([6; 32], &x));
-        // the exit's sExt is the entry's commitment of the exit's custody token (KobIfdPair merge compares it)
+        // The exit's sExt is the entry's commitment of the exit's custody token. The KobIfdPair
+        // merge compares it.
         assert_eq!(x.s_ext, i.exit_s_ext());
         assert!(!i.books_exit([5; 32], &CondPairState { s_ext: [0x5a; 32], ..x.clone() }));
     }
@@ -1057,7 +1208,7 @@ mod tests {
     #[test]
     fn trailing_k_is_valid_and_maximal() {
         let c: CondPairState = compiled(TemplateId::KobCondPair);
-        // ASK: stop 1000, step 10, gap 5, B scale 1000 (pair mode reads the rate directly)
+        // ASK: stop 1000, step 10, gap 5, B scale 1000. Pair mode reads the rate directly.
         let ask = CondPairState {
             side: SIDE_ASK,
             stop_price: 1_000,
