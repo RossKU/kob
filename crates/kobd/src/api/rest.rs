@@ -1,4 +1,4 @@
-//! REST handlers. Each reads the database through the pool and returns JSON.
+//! REST handlers of the read API. Each reads the database through the pool and returns JSON.
 
 use super::{ApiError, App};
 use crate::hex::{self, Hash32};
@@ -21,9 +21,11 @@ fn json_ok<T: Serialize>(v: T) -> ApiResult {
     Ok(Json(v).into_response())
 }
 
-/// A hot read through the response cache ([`super::cache`]): the JSON body of `read` kept for the store's data generation
-/// under `key`, the request's parameters (with the node's DAA score and the wall-clock second for the reads that depend on
-/// them). The body is the one `Json` would send.
+/// A hot read through the response cache ([`super::cache`]).
+///
+/// The JSON body of `read` is kept for the data generation of the store under `key`. The key is
+/// made of the parameters of the request, with the DAA score of the node and the wall-clock
+/// second for the reads that depend on them. The body is the one `Json` would send.
 async fn cached<T, F>(app: &Arc<App>, key: String, read: F) -> ApiResult
 where
     T: Serialize + Send + 'static,
@@ -75,6 +77,7 @@ fn flag(q: &HashMap<String, String>, key: &str) -> Result<Option<bool>, ApiError
     }
 }
 
+/// `GET /v1/health`: the follower state, the lag and alarms, and the counters of the store.
 pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
     let lag_daa = snap.lag_daa();
@@ -88,28 +91,33 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
         .collect();
     let running = matches!(snap.state, FollowerState::Following | FollowerState::CatchingUp);
     let ok = running && alarms.is_empty();
-    // Counters are informational: a busy database must not turn the health endpoint into an error. A few rows (kept by the
-    // write path), read on the light lane: never behind the heavy reads.
+    // The counters are informational. A busy database must not turn the health endpoint into an
+    // error. They are a few rows, kept by the write path, and are read on the light lane, so
+    // never behind the heavy reads.
     let counters = app.state.pool.with_light(reads::counters).await.ok();
-    // a lean store (the Executor's) prunes old closed orders: where its trade history is complete from (null: a full store)
+    // A lean store, the one of the Executor, prunes old closed orders. This is the time from
+    // which its trade history is complete. It is null for a full store.
     let history_from = if snap.lean { app.state.pool.with_light(reads::history_from).await.ok().flatten() } else { None };
     let mut v = serde_json::to_value(&snap).unwrap_or(Value::Null);
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), json!(ok));
         o.insert("caught_up".into(), json!(snap.caught_up()));
-        // what the matcher, keepers and maintenance gate on: caught up, or within `max_lag_secs` of the node
+        // What the matcher, keepers and maintenance gate on: caught up, or within `max_lag_secs`
+        // of the node.
         o.insert("within_lag_tolerance".into(), json!(snap.within_lag_tolerance()));
         o.insert("lag_daa".into(), json!(lag_daa));
         o.insert("lag_seconds".into(), json!(lag_seconds));
         o.insert("bytes_per_tx".into(), json!(snap.bytes_per_tx()));
         o.insert("alarms".into(), json!(alarms));
         o.insert("settle_depth_daa".into(), json!(app.state.settle_depth_daa));
-        // the smallest order the executor lists (sompi, a decimal string like every amount): a smaller one is indexed, never listed
+        // The smallest order the executor lists, in sompi, as a decimal string like every amount.
+        // A smaller order is indexed and never listed.
         o.insert("min_order_value_sompi".into(), json!(app.state.min_order_value_sompi.to_string()));
         o.insert("counters".into(), json!(counters));
         o.insert("history_from".into(), json!(history_from));
-        // which build answers: the crate version, the commit it was built from (null when the build did not say), and the KOB1
-        // payload version it reads and writes (docs/ops/release.md, 7)
+        // Which build answers: the crate version, the commit it was built from (null when the
+        // build did not say), and the KOB1 payload version it reads and writes. See
+        // `docs/ops/release.md`, section 7.
         if let Some(b) = crate::version::health_fields().as_object() {
             o.extend(b.clone());
         }
@@ -117,15 +125,20 @@ pub async fn health(State(app): State<Arc<App>>) -> ApiResult {
     json_ok(v)
 }
 
-/// `GET /v1/metrics`: the follower's state in the Prometheus text format (the same numbers `/v1/health` serves).
+/// `GET /v1/metrics`: the follower state in the Prometheus text format.
+///
+/// The numbers are the ones `/v1/health` serves.
 pub async fn metrics(State(app): State<Arc<App>>) -> ApiResult {
-    // the indexer's series, then the Executor's own (its runner's, `kobd --executor`)
+    // The series of the indexer, then those of the Executor runner (`kobd --executor`).
     let snap = app.state.health.snapshot();
     let text = snap.metrics_text() + &snap.executor_metrics;
     Ok(([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], text).into_response())
 }
 
-/// Load-balancer probe: 200 only while following (or catching up) with lag below the smallest alarm.
+/// `GET /v1/health/ready`: the load-balancer probe.
+///
+/// It answers 200 only while the follower is following or catching up, with a lag below the
+/// smallest alarm. Otherwise it answers 503.
 pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     let snap = app.state.health.snapshot();
     let lag_seconds = snap.lag_daa().map(|d| d / app.state.daa_per_second.max(1));
@@ -142,19 +155,24 @@ pub async fn ready(State(app): State<Arc<App>>) -> ApiResult {
     Ok((status, Json(json!({"ready": ready, "reason": reason, "state": snap.state, "lag_seconds": lag_seconds}))).into_response())
 }
 
+/// `GET /v1/tokens`: the token list.
 pub async fn tokens(State(app): State<Arc<App>>) -> ApiResult {
     let allow = app.state.tokens.clone();
     cached(&app, "tokens".into(), move |c| Ok(json!({ "tokens": reads::token_list(c, &allow)? }))).await
 }
 
-/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof of the covenant id (`kob_protocol::kcc23::LaunchProof`,
-/// format `kob-kcc23-proof/1`: the preparation and genesis transactions in the fields their ids commit to). The indexer kept it
-/// only after `LaunchProof::verify` accepted it, and a client verifies it again itself: an indexer can withhold a declaration,
-/// never forge one. One primary-key lookup, on the light lane; 404 when the indexer holds none.
+/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof of the covenant id.
+///
+/// The proof is a `kob_protocol::kcc23::LaunchProof` in the format `kob-kcc23-proof/1`. It holds
+/// the preparation and genesis transactions in the fields their ids commit to. The indexer
+/// stores a proof only after `LaunchProof::verify` accepts it, and a client verifies it again
+/// itself. An indexer can withhold a declaration and cannot forge one.
+///
+/// It is one primary-key lookup on the light lane. It answers 404 when the indexer holds none.
 pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_hash("covenant_id", &id)?;
     match app.state.pool.with_light(move |c| crate::indexer::kcc23::proof_json(c, &id)).await? {
-        // stored as `serde_json::to_string(&proof)`: served as it is
+        // The proof is stored as `serde_json::to_string(&proof)` and served as it is.
         Some(json) => {
             Ok(([(axum::http::header::CONTENT_TYPE, axum::http::HeaderValue::from_static("application/json"))], json).into_response())
         }
@@ -162,6 +180,7 @@ pub async fn token_declaration(State(app): State<Arc<App>>, Path(id): Path<Strin
     }
 }
 
+/// `GET /v1/books/{token}?depth=&aggregate=`: the KAS book of a token. Pair orders are not in it.
 pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
@@ -171,17 +190,22 @@ pub async fn book(State(app): State<Arc<App>>, Path(token): Path<String>, Query(
     cached(&app, key, move |c| reads::book(c, &ctx, &token, depth, aggregate)).await
 }
 
-/// `GET /v1/pairs?token=`: pairs with listed live pair orders (`indexer::pairs::pairs`), a JSON array.
+/// `GET /v1/pairs?token=`: the pairs with listed live pair orders, a JSON array.
+///
+/// See `indexer::pairs::pairs`.
 pub async fn pairs(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let token = opt_hash(&q, "token")?;
     let ctx = app.ctx();
-    // through the response cache like the books: a pair read checks the custody of every live pair order (audit 2026-10-30 I5, I9)
+    // Through the response cache like the books, because a pair read checks the custody of every
+    // live pair order.
     let key = format!("pairs {token:?} {:?} {:?}", ctx.node_daa, ctx.now_unix);
     cached(&app, key, move |c| crate::indexer::pairs::pairs(c, &ctx, token.as_ref())).await
 }
 
-/// `GET /v1/pairs/{base}/{quote}/book?depth=`: the pair orders' levels (`direct` KobPair, `entry` KobIfdPair) and the implied
+/// `GET /v1/pairs/{base}/{quote}/book?depth=`: the levels of the pair orders and the implied
 /// quotes of the KAS route.
+///
+/// The levels are `direct` for `KobPair` and `entry` for `KobIfdPair`.
 pub async fn pair_book(State(app): State<Arc<App>>, Path((base, quote)): Path<(String, String)>, Query(q): Params) -> ApiResult {
     let (base, quote) = pair_path(&base, &quote)?;
     let depth = limit(&q, "depth", 20, app.state.cfg.max_page_size)?;
@@ -199,8 +223,10 @@ fn pair_path(base: &str, quote: &str) -> Result<(Hash32, Hash32), ApiError> {
     Ok((base, quote))
 }
 
-/// `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`: pair candles derived from the KAS series of the two
-/// tokens (`indexer::pairs::pair_candles`; never from pair fills).
+/// `GET /v1/pairs/{base}/{quote}/candles?interval=&from=&to=&limit=`: the pair candles.
+///
+/// They are derived from the KAS series of the two tokens, never from pair fills. See
+/// `indexer::pairs::pair_candles`.
 pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path<(String, String)>, Query(q): Params) -> ApiResult {
     let (base, quote) = pair_path(&base, &quote)?;
     let interval = q.get("interval").cloned().unwrap_or_else(|| "5m".into());
@@ -225,8 +251,10 @@ pub async fn pair_candles(State(app): State<Arc<App>>, Path((base, quote)): Path
     json_ok(v)
 }
 
-/// `GET /v1/pairs/{base}/{quote}/fills?limit=&before=`: pair-order fills of the pair, newest first, and the 24 h pair volume
-/// (`counterparty` route / netting / inventory, `price_source` none).
+/// `GET /v1/pairs/{base}/{quote}/fills?limit=&before=`: the pair-order fills, newest first, and
+/// the 24 h pair volume.
+///
+/// A fill names its `counterparty` (route, netting or inventory) and has `price_source` none.
 pub async fn pair_fills(State(app): State<Arc<App>>, Path((base, quote)): Path<(String, String)>, Query(q): Params) -> ApiResult {
     let (base, quote) = pair_path(&base, &quote)?;
     let before = opt_i64(&q, "before")?;
@@ -236,17 +264,20 @@ pub async fn pair_fills(State(app): State<Arc<App>>, Path((base, quote)): Path<(
     json_ok(v)
 }
 
+/// `GET /v1/orders/{covenant_id}`: one order.
 pub async fn order(State(app): State<Arc<App>>, Path(id): Path<String>) -> ApiResult {
     let id = parse_hash("covenant_id", &id)?;
     let ctx = app.ctx();
-    // one order: a few index lookups, on the light lane
+    // One order is a few index lookups, on the light lane.
     match app.state.pool.with_light(move |c| reads::order(c, &ctx, &id)).await? {
-        // the genesis warning of its token(s) (docs/spec/matcher.md 1.2a: on every order view of that token)
+        // The genesis warning of its tokens is on every order view of that token, see
+        // `docs/spec/matcher.md` section 1.2a.
         Some(o) => json_ok(o.with_warnings(|t| app.state.tokens.warnings_for(t))),
         None => Err(ApiError::not_found("unknown covenant id")),
     }
 }
 
+/// `GET /v1/orders?maker=&token=&status=&limit=&cursor=`: a page of orders.
 pub async fn orders(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let maker = match q.get("maker") {
         None => None,
@@ -270,6 +301,7 @@ pub async fn orders(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult 
     json_ok(v)
 }
 
+/// `GET /v1/orders/{covenant_id}/events`: the events of one order.
 pub async fn order_events(State(app): State<Arc<App>>, Path(id): Path<String>, Query(q): Params) -> ApiResult {
     let id = parse_hash("covenant_id", &id)?;
     let after = opt_i64(&q, "after")?;
@@ -291,6 +323,7 @@ pub async fn order_events(State(app): State<Arc<App>>, Path(id): Path<String>, Q
     }
 }
 
+/// `GET /v1/fills?token=&side=&limit=&before=`: a page of fills.
 pub async fn fills(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let token = opt_hash(&q, "token")?;
     let side = match q.get("side").map(String::as_str) {
@@ -306,6 +339,9 @@ pub async fn fills(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     json_ok(v)
 }
 
+/// `GET /v1/strays?maker=&limit=`: the stray token UTXOs, newest first.
+///
+/// A stray is a token UTXO sent to an order id outside the protocol.
 pub async fn strays(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let maker = match q.get("maker") {
         None => None,
@@ -317,6 +353,7 @@ pub async fn strays(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult 
     json_ok(json!({ "items": v }))
 }
 
+/// `GET /v1/token-events?token=&limit=`: the token registry events of one token or of all.
 pub async fn token_events(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let token = opt_hash(&q, "token")?;
     let n = limit(&q, "limit", 50, app.state.cfg.max_page_size)?;
@@ -324,7 +361,9 @@ pub async fn token_events(State(app): State<Arc<App>>, Query(q): Params) -> ApiR
     json_ok(json!({ "items": v }))
 }
 
-/// The 32-byte owner a `owner=` parameter names: an x-only public key or covenant id in hex, or a Kaspa P2PK address.
+/// The 32-byte owner that an `owner=` parameter names.
+///
+/// It is an x-only public key or a covenant id in hex, or a Kaspa P2PK address.
 fn parse_owner(s: &str) -> Result<Vec<u8>, ApiError> {
     if let Ok(h) = Hash32::parse(s) {
         return Ok(h.0.to_vec());
@@ -336,7 +375,9 @@ fn parse_owner(s: &str) -> Result<Vec<u8>, ApiError> {
     }
 }
 
-/// Token UTXOs of tracked tokens with proven states, by owner and/or token (`docs/ops/executor.md`, Part B 5.1).
+/// `GET /v1/token-utxos`: the token UTXOs of tracked tokens with proven states.
+///
+/// They are selected by owner, by token or by both. See `docs/ops/executor.md`, Part B 5.1.
 pub async fn token_utxos(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let owner = q.get("owner").map(|s| parse_owner(s)).transpose()?;
     let token = opt_hash(&q, "token")?;
@@ -355,11 +396,12 @@ pub async fn token_utxos(State(app): State<Arc<App>>, Query(q): Params) -> ApiRe
     json_ok(v)
 }
 
-// ------------------------------------------------------------------------------------------------ market data (B 5.3)
+// Market data, see `docs/ops/executor.md`, Part B 5.3.
 
-// The market views' price basis is the token's standard scale: its decimals from its KCC-23 declaration, else its registry entry,
-// else its program's default ([`reads::token_decimals`]); without any the scale of its first order. Each read resolves them in
-// its own database connection.
+// The price basis of the market views is the standard scale of the token. It is the decimals
+// from its KCC-23 declaration, else its registry entry, else the default of its program (see
+// [`reads::token_decimals`]). Without any of them it is the scale of its first order. Each
+// read resolves the scale in its own database connection.
 
 /// `GET /v1/trades/{token}?limit=&before=`: trades (fills grouped per transaction), newest first.
 pub async fn trades(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
@@ -379,7 +421,9 @@ pub async fn trades(State(app): State<Arc<App>>, Path(token): Path<String>, Quer
     json_ok(v)
 }
 
-/// `GET /v1/candles/{token}?interval=1m|5m|1h|1d&from=&to=&limit=`: OHLCV, ascending, empty buckets omitted.
+/// `GET /v1/candles/{token}?interval=1m|5m|1h|1d&from=&to=&limit=`: OHLCV candles.
+///
+/// The candles are in ascending order, and empty buckets are omitted.
 pub async fn candles(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let interval = q.get("interval").cloned().unwrap_or_else(|| "5m".into());
@@ -414,8 +458,11 @@ pub async fn stats(State(app): State<Arc<App>>, Path(token): Path<String>) -> Ap
     .await
 }
 
-/// `GET /v1/stats?since=<unix ms>`: the activity totals (orders placed, traders, fees paid to fillers, the KAS locked in live orders) of
-/// the range from `since` (rounded down to the minute) to the newest block, or of all time.
+/// `GET /v1/stats?since=<unix ms>`: the activity totals.
+///
+/// The totals are the orders placed, the traders, the fees paid to fillers and the KAS locked in
+/// live orders. The range runs from `since`, rounded down to the minute, to the newest block.
+/// Without `since` it is all time.
 pub async fn activity(State(app): State<Arc<App>>, Query(q): Params) -> ApiResult {
     let since = match opt_i64(&q, "since")? {
         None => None,
@@ -425,7 +472,8 @@ pub async fn activity(State(app): State<Arc<App>>, Query(q): Params) -> ApiResul
     let lean = app.state.health.snapshot().lean;
     cached(&app, format!("activity {since:?}"), move |c| {
         let mut v = serde_json::to_value(crate::indexer::activity::activity(c, since)?).unwrap_or(Value::Null);
-        // a lean store's totals cover what it still holds: from when (unix ms, `reads::history_from`; null for a full store)
+        // The totals of a lean store cover what it still holds. `history_from` is the time it
+        // holds them from, in unix ms (`reads::history_from`). It is null for a full store.
         if let Some(o) = v.as_object_mut() {
             o.insert("history_from".into(), json!(if lean { reads::history_from(c)? } else { None }));
         }
@@ -434,7 +482,9 @@ pub async fn activity(State(app): State<Arc<App>>, Query(q): Params) -> ApiResul
     .await
 }
 
-/// `GET /v1/depth/{token}?levels=`: cumulative depth of the listed book, levels merged by per-basis price.
+/// `GET /v1/depth/{token}?levels=`: the cumulative depth of the listed book.
+///
+/// Levels are merged by the price per basis.
 pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
     let token = parse_hash("token", &token)?;
     let n = limit(&q, "levels", 50, app.state.cfg.max_page_size)?;
@@ -448,9 +498,11 @@ pub async fn depth(State(app): State<Arc<App>>, Path(token): Path<String>, Query
     .await
 }
 
-// ------------------------------------------------------------------------------------------------ token-logo reports
+// Token-logo reports.
 
-/// A report body is a covenant id, a reason and perhaps an issue number: nothing larger is read.
+/// The largest body read for a logo report, in bytes.
+///
+/// A report is a covenant id, a reason and perhaps an issue number.
 pub const LOGO_REPORT_MAX_BYTES: usize = 1024;
 
 #[derive(serde::Deserialize)]
@@ -469,10 +521,15 @@ struct LogoReportBody {
     reference: Option<u32>,
 }
 
-/// `POST /v1/logo-reports`: `{covenant_id, reason: "illegal"|"impersonation"|"other", source?: "github", ref?: <issue number>}`.
-/// `200 {"result":"hidden"|"recorded","covenant_id":..}` (the first report of a token hides its logo at once; one for a token the
-/// operator restored, inside the cooldown, is only recorded). No free text is accepted. Rate limited per client and per day
-/// (`[logo_reports]`); 429 with `Retry-After` beyond.
+/// `POST /v1/logo-reports`: reports the logo of a token.
+///
+/// The body is `{covenant_id, reason: "illegal"|"impersonation"|"other", source?: "github",
+/// ref?: <issue number>}`. No free text is accepted.
+///
+/// The answer is `200 {"result":"hidden"|"recorded","covenant_id":..}`. The first report of a
+/// token hides its logo at once. A report for a token that the operator restored, inside the
+/// cooldown, is only recorded. Reports are rate limited per client and per day
+/// (`[logo_reports]`). Beyond the limit the answer is 429 with `Retry-After`.
 pub async fn logo_report(
     State(app): State<Arc<App>>,
     axum::Extension(client): axum::Extension<super::ClientIp>,
@@ -510,7 +567,9 @@ pub async fn logo_report(
     }
 }
 
-/// `GET /v1/logo-blocklist`: `{"hidden":[covenant ids],"updated_ms":..}`, the tokens whose logo the web app does not load. Cached for 5 seconds.
+/// `GET /v1/logo-blocklist`: the tokens whose logo the web app does not load.
+///
+/// The body is `{"hidden":[covenant ids],"updated_ms":..}`. It is cached for 5 seconds.
 pub async fn logo_blocklist(State(app): State<Arc<App>>) -> ApiResult {
     let logo = app.state.logo.clone().ok_or_else(|| ApiError::not_found("no such route"))?;
     let body = tokio::task::spawn_blocking(move || logo.blocklist_body())
