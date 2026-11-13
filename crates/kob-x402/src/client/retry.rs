@@ -1,34 +1,42 @@
-//! Safe retry of one x402 payment (`docs/spec/x402-retry.md`): the same rules as the TS SDK's `KobX402Client`
-//! (`packages/kob-x402/src/retry.ts`), for a Rust payer that brings its own transport (HTTP to a merchant, or straight
-//! to a facilitator's `/settle`).
+//! Safe retry of one x402 payment, for a Rust payer that brings its own transport.
 //!
-//! A failed attempt is followed by one of three steps ([`Next`]):
+//! The transport can be HTTP to a merchant or a direct call to a facilitator's `/settle`. The rules
+//! are the ones in `docs/spec/x402-retry.md`. They match the TS SDK's `retry.ts`.
 //!
-//! * [`Next::Resend`]: the outcome is unknown (no answer, a timeout, a 5xx, `settlement_pending`, `node_unavailable`) or the
-//!   same signed payment may still go through later (`rate_limited`, `intent_not_executable`). The SAME signed payment is
-//!   sent again: same payment id, same transaction. The facilitator answers an identical retry from its ledger (the cached
-//!   settlement, `extensions.kob.replayed = true`), so a payment that went through while its answer was lost is found, never
-//!   paid again.
-//! * [`Next::Rebuild`]: the facilitator reported the attempt dead and released its inputs (`order_conflict`: an order was
-//!   taken by someone else; the node refused the transaction; the authorization expired). A NEW attempt is built from the
-//!   chain state of the moment (a fresh quote for a swap), held again to every limit of the payer and preflighted, under a
-//!   fresh payment id.
-//! * [`Next::Stop`]: retrying cannot help (a policy refusal, an invalid offer, a payment id conflict, an unknown diagnostic).
+//! # Steps
 //!
-//! **No double payment.** Every attempt of one payment spends the same *anchor*: one payer-owned input of the first attempt.
-//! Two transactions that spend one outpoint exclude each other on chain, so at most one attempt of a payment can ever be
-//! accepted, whatever a merchant does with the attempts it holds, and the facilitator's ledger refuses a second attempt
-//! while the first one's anchor is reserved. A rebuild happens only while the anchor is still unspent (an anchor that is
-//! gone may have been spent by an earlier attempt that went through: the driver stops, the caller reconciles), and a rebuilt
-//! attempt that does not spend the anchor is never sent.
+//! A failed attempt is followed by one of three steps ([`Next`]). The diagnostic table is in
+//! section 1 of the spec.
 //!
-//! Bounds ([`RetryPolicy`]): at most `max_attempts` signed attempts (default 3), at most `max_resends` re-sends of each
-//! (default 4), exponential backoff with jitter between steps, and an overall deadline: the shorter of `budget_ms` and the
-//! offer's `maxTimeoutSeconds`.
+//! - [`Next::Resend`] sends the SAME signed payment again, with the same payment id and the same
+//!   transaction. It applies when the outcome is unknown or the payment may still go through. An
+//!   identical retry is answered from the facilitator's ledger, so a payment whose answer was lost
+//!   is found and never paid twice.
+//! - [`Next::Rebuild`] builds a NEW attempt from the chain state of the moment, under a fresh
+//!   payment id. It applies when the facilitator reported the attempt dead and released its inputs.
+//!   The new attempt is held again to every limit of the payer and preflighted.
+//! - [`Next::Stop`] ends the retry because retrying cannot help.
 //!
-//! **Intent payments** ([`pay_intent_with_retry`], [`ResendTransport`]): the payer signs one creation and the facilitator
-//! re-plans the execution itself, so the creation is only ever re-sent (also within the intent's own deadline), never
-//! rebuilt: a failure that would need a new signature ends the retry ([`GiveUp::NoRebuild`]).
+//! # No double payment
+//!
+//! Every attempt of one payment spends the same anchor, which is one payer-owned input of the first
+//! attempt. Two transactions that spend one outpoint exclude each other on chain, so at most one
+//! attempt of a payment can ever be accepted. A rebuild happens only while the anchor is unspent,
+//! and a rebuilt attempt that does not spend the anchor is never sent. Spec section 2 gives the
+//! full argument.
+//!
+//! # Bounds
+//!
+//! [`RetryPolicy`] bounds the signed attempts (`max_attempts`, default 3), the re-sends of each
+//! attempt (`max_resends`, default 4) and the backoff between steps. The overall deadline is the
+//! shorter of `budget_ms` and the offer's `maxTimeoutSeconds`. Spec section 4 lists the defaults.
+//!
+//! # Intent payments
+//!
+//! [`pay_intent_with_retry`] and [`ResendTransport`] cover intent payments. The payer signs one
+//! creation and the facilitator re-plans the execution, so the creation is only re-sent, within
+//! the intent's own deadline. A failure that would need a new signature ends the retry with
+//! [`GiveUp::NoRebuild`]. Spec section 5 has the details.
 
 use std::collections::BTreeSet;
 
@@ -39,9 +47,13 @@ use crate::wire::SettlementResponse;
 /// What follows a failed attempt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Next {
-    /// Send the same signed payment again (its outcome is unknown, or it may still succeed as it is).
+    /// Send the same signed payment again.
+    ///
+    /// Its outcome is unknown, or it may still succeed as it is.
     Resend,
-    /// The attempt is dead: build a new one from the current chain state (anchored, limits re-checked).
+    /// The attempt is dead. Build a new one from the current chain state.
+    ///
+    /// The new attempt spends the anchor and every limit is checked again.
     Rebuild,
     /// Retrying cannot succeed.
     Stop,
@@ -61,7 +73,7 @@ impl Next {
 pub const RESEND_DIAGNOSTICS: &[&str] =
     &["settlement_pending", "node_unavailable", "rate_limited", "intent_not_executable", "invoice_pending"];
 
-/// Diagnostics of an attempt the facilitator failed (its inputs released) that a new attempt may get past.
+/// Diagnostics of an attempt the facilitator failed and released that a new attempt may get past.
 pub const REBUILD_DIAGNOSTICS: &[&str] = &[
     "order_conflict",
     "order_not_spendable",
@@ -73,8 +85,10 @@ pub const REBUILD_DIAGNOSTICS: &[&str] = &[
     "expired",
 ];
 
-/// The step after a facilitator / merchant failure with `diagnostic` (`extensions.kaspa.diagnostic`) and its `retryable`
-/// flag. `internal` follows the flag (the operator's pause is retryable: resend); anything not listed stops.
+/// The step after a facilitator or merchant failure with `diagnostic` and its `retryable` flag.
+///
+/// The diagnostic is `extensions.kaspa.diagnostic`. `internal` follows the flag, because the
+/// operator's pause is retryable and gets a resend. Anything not listed stops.
 pub fn classify(diagnostic: &str, retryable: bool) -> Next {
     if RESEND_DIAGNOSTICS.contains(&diagnostic) {
         Next::Resend
@@ -87,9 +101,12 @@ pub fn classify(diagnostic: &str, retryable: bool) -> Next {
     }
 }
 
-/// The step after an HTTP answer to a paid request (a merchant's paywall or a facilitator) that is not a verified success.
-/// `status` 0 means no answer at all (connection error, timeout). No answer, a 5xx and a 2xx without a settlement leave the
-/// outcome unknown: resend. A `402` (corrective challenge) and a `409` follow the diagnostic; any other 4xx stops.
+/// The step after an HTTP answer to a paid request that is not a verified success.
+///
+/// The answer comes from a merchant's paywall or a facilitator. `status` 0 means no answer at all,
+/// such as a connection error or a timeout. No answer, a 5xx and a 2xx without a settlement leave
+/// the outcome unknown, so they resend. A `402` (corrective challenge) and a `409` follow the
+/// diagnostic. Any other 4xx stops.
 pub fn classify_status(status: u16, diagnostic: Option<&str>, retryable: bool) -> Next {
     match status {
         0 => Next::Resend,
@@ -114,7 +131,7 @@ pub struct RetryPolicy {
     /// First backoff step (ms); it doubles per step up to `max_delay_ms`.
     pub base_delay_ms: u64,
     pub max_delay_ms: u64,
-    /// Overall time budget (ms) from the first send; further capped by the offer's `maxTimeoutSeconds`.
+    /// Overall time budget (ms) from the first send, capped by the offer's `maxTimeoutSeconds`.
     pub budget_ms: u64,
 }
 
@@ -130,23 +147,28 @@ impl RetryPolicy {
         RetryPolicy { max_attempts: 1, max_resends: 0, ..Self::default() }
     }
 
-    /// Backoff before step `n` (1-based), "equal jitter": half of the exponential step fixed, half scaled by `unit` (a
-    /// uniform draw in `[0, 1)`), so parallel payers spread out and no step is shorter than half its base.
+    /// Backoff before step `n` (1-based), with "equal jitter".
+    ///
+    /// Half of the exponential step is fixed and half is scaled by `unit`, a uniform draw in
+    /// `[0, 1)`. Parallel payers spread out, and no step is shorter than half its base.
     pub fn delay_ms(&self, n: u32, unit: f64) -> u64 {
         let exp = self.base_delay_ms.saturating_mul(1u64 << n.saturating_sub(1).min(20)).min(self.max_delay_ms);
         let unit = if unit.is_finite() { unit.clamp(0.0, 1.0) } else { 0.5 };
         exp / 2 + ((exp - exp / 2) as f64 * unit) as u64
     }
 
-    /// The deadline (unix ms) of a payment that starts at `start_ms` for an offer of `max_timeout_seconds`.
+    /// The deadline (unix ms) of a payment that starts at `start_ms` for an offer of
+    /// `max_timeout_seconds`.
     pub fn deadline_ms(&self, start_ms: u64, max_timeout_seconds: u64) -> u64 {
         start_ms.saturating_add(self.budget_ms.min(max_timeout_seconds.saturating_mul(1000)))
     }
 }
 
-/// The anchor of a payment: the first input of the first attempt that the payer owns (`payer_owned`: the payer's own KAS
-/// and token UTXOs it built from; order inputs are not the payer's). `None` when it spends none (nothing ties a rebuilt
-/// attempt to it: such a payment is only ever re-sent, never rebuilt).
+/// The anchor of a payment: the first input of the first attempt that the payer owns.
+///
+/// `payer_owned` holds the payer's own KAS and token UTXOs it built from. Order inputs are not the
+/// payer's. The result is `None` when the attempt spends no such input. Nothing ties a rebuilt
+/// attempt to the first one then, so such a payment is only re-sent, never rebuilt.
 pub fn choose_anchor(consumed: &[Outpoint], payer_owned: &BTreeSet<Outpoint>) -> Option<Outpoint> {
     consumed.iter().find(|o| payer_owned.contains(o)).copied()
 }
@@ -167,7 +189,8 @@ pub struct Built<P> {
 /// The answer to one send.
 #[derive(Clone, Debug)]
 pub enum Sent {
-    /// A verified success for exactly this attempt (the transport checks the settlement against what it signed).
+    /// A verified success for exactly this attempt (the transport checks the settlement against
+    /// what it signed).
     Settled(SettlementResponse),
     /// A failure with its diagnostic; `next` overrides the classification (an HTTP transport passes
     /// [`classify_status`]); `None` classifies `diagnostic` with [`classify`].
@@ -179,13 +202,16 @@ pub enum Sent {
 /// What the driver needs from the payer and its transport.
 pub trait RetryTransport {
     type Payment: Clone;
-    /// Builds and signs attempt `n` (1-based) from the chain state of the moment: a fresh quote, the payer's limits and the
-    /// preflight run again. For `n > 1`, `anchor` names the outpoint the attempt must spend (the driver checks it). An error
-    /// is final (a limit, a refused approval, no funds): it is never retried.
+    /// Builds and signs attempt `n` (1-based) from the chain state of the moment.
+    ///
+    /// A swap gets a fresh quote, and the payer's limits and the preflight run again. For `n > 1`,
+    /// `anchor` names the outpoint the attempt must spend, and the driver checks it. An error is
+    /// final (a limit, a refused approval, no funds) and is never retried.
     fn build(&mut self, n: u32, anchor: Option<&Outpoint>) -> Result<Built<Self::Payment>, X402Error>;
     /// Sends one signed attempt (the first time, or again: the identical payment).
     fn send(&mut self, attempt: &Built<Self::Payment>) -> Sent;
-    /// Which of `outpoints` are unspent now on the node (in the UTXO set and not spent by a mempool transaction).
+    /// Which of `outpoints` are unspent now on the node (in the UTXO set and not spent by a mempool
+    /// transaction).
     fn unspent(&mut self, outpoints: &[Outpoint]) -> Result<BTreeSet<Outpoint>, X402Error>;
     fn now_ms(&mut self) -> u64;
     fn sleep_ms(&mut self, ms: u64);
@@ -204,14 +230,19 @@ pub enum GiveUp {
     Exhausted,
     /// The overall deadline would pass before the next step.
     Deadline,
-    /// The anchor is no longer unspent: an earlier attempt may have been accepted. Nothing was rebuilt; reconcile the attempts.
+    /// The anchor has been spent, so an earlier attempt may have been accepted.
+    ///
+    /// Nothing is rebuilt. Reconcile the attempts.
     AnchorSpent,
     /// The rebuilt attempt does not spend the anchor (the payer's coins changed): it was not sent.
     Unanchored,
     /// The first attempt spends no payer-owned input: it can be re-sent, never rebuilt.
     NoAnchor,
-    /// An intent creation ([`pay_intent_with_retry`]) failed in a way only a new signature could get past: it is never
-    /// re-signed (a second creation would be a second intent). Cancel the intent or let it expire.
+    /// An intent creation ([`pay_intent_with_retry`]) failed in a way only a new signature could
+    /// get past.
+    ///
+    /// It is never re-signed, because a second creation would be a second intent. Cancel the intent
+    /// or let it expire.
     NoRebuild,
     /// Building an attempt failed (a limit, a refused approval, no funds, the preflight).
     Build,
@@ -227,13 +258,16 @@ pub struct Receipt<P> {
     pub attempts: u32,
     /// Re-sends over all attempts.
     pub resends: u32,
-    /// Payment ids of the earlier attempts: dead now (the paying attempt spent their anchor).
+    /// Payment ids of the earlier attempts. They are dead because the paying attempt spent their
+    /// anchor.
     pub superseded: Vec<String>,
     pub anchor: Option<Outpoint>,
 }
 
-/// The driver gave up. `outcome_unknown` is set when the last attempt's outcome was never learnt (it may still be
-/// settled: reconcile it with an identical re-send, or revoke it).
+/// The driver gave up.
+///
+/// `outcome_unknown` is set when the last attempt's outcome was never learnt. That attempt may
+/// still be settled. Reconcile it with an identical re-send, or revoke it.
 #[derive(Clone, Debug)]
 pub struct RetryError<P> {
     pub why: GiveUp,
@@ -242,7 +276,9 @@ pub struct RetryError<P> {
     pub attempts: u32,
     pub resends: u32,
     pub outcome_unknown: bool,
-    /// Every attempt that was signed, the last one last (keep them: they are signed payments a merchant may hold).
+    /// Every attempt that was signed, the last one last.
+    ///
+    /// Keep them, because they are signed payments a merchant may hold.
     pub signed: Vec<Built<P>>,
     pub anchor: Option<Outpoint>,
 }
@@ -261,7 +297,9 @@ fn state(diag: crate::error::Diag, msg: impl Into<String>) -> X402Error {
     X402Error::state(diag, msg)
 }
 
-/// The remote failure as an error of this crate (an unknown diagnostic becomes `internal`, its spelling kept in `details`).
+/// The remote failure as an error of this crate.
+///
+/// An unknown diagnostic becomes `internal`, and its spelling is kept in `details`.
 fn last_of(diagnostic: &str, retryable: bool, message: &str) -> X402Error {
     let d = crate::error::Diag::parse(diagnostic);
     let mut e = X402Error::state(d.unwrap_or(crate::error::Diag::Internal), message.to_string());
@@ -272,8 +310,9 @@ fn last_of(diagnostic: &str, retryable: bool, message: &str) -> X402Error {
     e
 }
 
-/// Pays with retry: builds the first attempt, sends it, and resends / rebuilds per [`classify`] within `policy`. See the
-/// module docs for the guarantees.
+/// Pays with retry: builds the first attempt, sends it, and resends or rebuilds per [`classify`].
+///
+/// The steps stay within `policy`. See the module docs for the guarantees.
 pub fn pay_with_retry<T: RetryTransport>(
     policy: &RetryPolicy,
     max_timeout_seconds: u64,
@@ -340,7 +379,8 @@ pub fn pay_with_retry<T: RetryTransport>(
                     return give_up(GiveUp::Deadline, last, signed, resends_total, false, anchor);
                 }
                 t.sleep_ms(wait);
-                // the earlier attempts are dead only while the anchor is unspent: one that is gone may have paid
+                // The earlier attempts are dead only while the anchor is unspent. A gone anchor may
+                // have paid.
                 match t.unspent(&[a]) {
                     Ok(u) if u.contains(&a) => {}
                     Ok(_) => {
@@ -371,10 +411,11 @@ pub fn pay_with_retry<T: RetryTransport>(
     }
 }
 
-// ------------------------------------------------------------------------------------------ intent payments
+// --------------------------------------------------------------------------------- intent payments
 
-/// What [`pay_intent_with_retry`] needs: the transport of ONE signed intent creation (it is never rebuilt, so nothing is built
-/// here and no anchor is read).
+/// What [`pay_intent_with_retry`] needs: the transport of ONE signed intent creation.
+///
+/// The creation is never rebuilt, so nothing is built here and no anchor is read.
 pub trait ResendTransport {
     type Payment: Clone;
     /// Sends the signed creation (the first time, or again: the identical payment).
@@ -387,15 +428,25 @@ pub trait ResendTransport {
     }
 }
 
-/// Pays an intent (`kob-intent-v1`, `docs/spec/x402-retry.md` section 5) with retry: the payer signed ONE creation
-/// (`creation`, e.g. [`crate::client::intent::IntentPayment::attempt`]); re-planning against the book is the facilitator's
-/// job. The creation is re-sent while its outcome is unknown or it may still execute ([`Next::Resend`]: no answer,
-/// `settlement_pending`, `node_unavailable`, `rate_limited`, `intent_not_executable`, ...), at most `max_resends` times,
-/// with backoff, before the shorter of the policy's budget, the offer's `maxTimeoutSeconds` and the intent's own deadline
-/// (`deadline_ms`, unix ms: its authorization's expiry). It is NEVER rebuilt: a failure that would need a new signature
-/// ([`Next::Rebuild`]) ends the retry with [`GiveUp::NoRebuild`], a refusal with [`GiveUp::Stopped`]. When it gives up the
-/// creation may still have been broadcast: cancel the intent ([`crate::client::intent::cancel_intent`]) once it is no longer
-/// executed, or let the facilitator (or anyone, its expiry) end it at its deadline.
+/// Pays an intent (`kob-intent-v1`) with retry. See `docs/spec/x402-retry.md` section 5.
+///
+/// The payer signed ONE creation, `creation`, for example from
+/// [`crate::client::intent::IntentPayment::attempt`]. Re-planning against the book is the
+/// facilitator's job.
+///
+/// The creation is re-sent while its outcome is unknown or it may still execute ([`Next::Resend`]).
+/// That covers no answer, `settlement_pending`, `node_unavailable`, `rate_limited` and
+/// `intent_not_executable`. It is re-sent at most `max_resends` times, with backoff, and only
+/// before the earliest of three limits. They are the policy's budget, the offer's
+/// `maxTimeoutSeconds` and the intent's own deadline (`deadline_ms`, unix ms, its authorization's
+/// expiry).
+///
+/// It is NEVER rebuilt. A failure that would need a new signature ([`Next::Rebuild`]) ends the
+/// retry with [`GiveUp::NoRebuild`], and a refusal ends it with [`GiveUp::Stopped`].
+///
+/// When it gives up, the creation may still have been broadcast. Cancel the intent
+/// ([`crate::client::intent::cancel_intent`]) once the facilitator no longer executes it, or let
+/// the facilitator (or anyone, at its expiry) end it at its deadline.
 pub fn pay_intent_with_retry<T: ResendTransport>(
     policy: &RetryPolicy,
     max_timeout_seconds: u64,
@@ -455,7 +506,7 @@ mod tests {
 
     #[test]
     fn classification_table() {
-        // every listed spelling is a diagnostic of this crate
+        // Every listed spelling is a diagnostic of this crate.
         for d in RESEND_DIAGNOSTICS.iter().chain(REBUILD_DIAGNOSTICS) {
             assert!(crate::error::Diag::parse(d).is_some(), "{d}");
         }
@@ -617,7 +668,7 @@ mod tests {
         let e = pay_with_retry(&RetryPolicy::default(), 60, &mut s).unwrap_err();
         assert_eq!((e.why, s.sent.len()), (GiveUp::Stopped, 1));
 
-        // a worse re-quote above the payer's limit: the build refuses, nothing more is sent
+        // A worse re-quote above the payer's limit: the build refuses and nothing more is sent.
         let mut s = script(vec![vec![op(1)]], vec![failed("order_conflict", true)]);
         s.builds.push_back(Err(X402Error::requirements(crate::error::Diag::Overpayment, "above maxPay")));
         let e = pay_with_retry(&RetryPolicy::default(), 60, &mut s).unwrap_err();
@@ -662,7 +713,8 @@ mod tests {
 
     #[test]
     fn an_intent_creation_is_re_sent_while_it_may_execute_never_rebuilt() {
-        // the keeper cannot execute yet, the answer is lost, the execution is pending, then it settles: one creation
+        // The keeper cannot execute yet, the answer is lost and the execution is pending. Then it
+        // settles. One creation throughout.
         let mut t = resends(vec![
             failed("intent_not_executable", true),
             Sent::Unknown("timeout".into()),
@@ -674,14 +726,14 @@ mod tests {
         assert_eq!(r.attempt.payment_id, "creation");
         assert!(r.superseded.is_empty() && r.anchor.is_none());
 
-        // a failure that would need a new signature ends it: nothing is rebuilt
+        // A failure that would need a new signature ends it. Nothing is rebuilt.
         for d in ["order_conflict", "invalid_kaspa_exact_utxo", "expired_authorization"] {
             let mut t = resends(vec![failed(d, true)]);
             let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
             assert_eq!((e.why, e.attempts, e.signed.len(), t.sent), (GiveUp::NoRebuild, 1, 1, 1), "{d}");
             assert!(!e.outcome_unknown);
         }
-        // a refusal stops
+        // A refusal stops.
         let mut t = resends(vec![failed("intent_spent", false)]);
         let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
         assert_eq!((e.why, t.sent), (GiveUp::Stopped, 1));
@@ -692,7 +744,8 @@ mod tests {
         let mut t = resends(vec![failed("settlement_pending", true); 10]);
         let e = pay_intent_with_retry(&RetryPolicy::default(), 600, u64::MAX, creation(), &mut t).unwrap_err();
         assert_eq!((e.why, e.resends, t.sent), (GiveUp::Exhausted, 4, 5));
-        // the intent's own deadline (its authorization's expiry) comes before the offer's and the budget
+        // The intent's own deadline (its authorization's expiry) comes before the offer's and the
+        // budget.
         let mut t = resends(vec![Sent::Unknown("down".into()); 10]);
         let e = pay_intent_with_retry(&RetryPolicy::default(), 600, 1_500, creation(), &mut t).unwrap_err();
         assert_eq!(e.why, GiveUp::Deadline);
@@ -710,7 +763,7 @@ mod tests {
         let e = pay_with_retry(&RetryPolicy::default(), 600, &mut s).unwrap_err();
         assert_eq!((e.why, s.sent.len()), (GiveUp::Exhausted, 5));
         assert!(e.outcome_unknown);
-        // a 2 s offer: the backoff steps run into the deadline first
+        // A 2 s offer: the backoff steps run into the deadline first.
         let mut s = script(vec![vec![op(1)]], vec![Sent::Unknown("down".into()); 10]);
         let e = pay_with_retry(&RetryPolicy::default(), 2, &mut s).unwrap_err();
         assert_eq!(e.why, GiveUp::Deadline);
