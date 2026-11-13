@@ -2367,6 +2367,50 @@ fn auction_t(t: Option<i64>, lock: i64, origin: i64, what: &str) -> Result<i64> 
     Ok(t)
 }
 
+/// The merge rules of a conditional exit's fill.
+///
+/// Until `rptUntil` a booked exit takes profit (leg 0) only together with its entry's merge. Only
+/// a booked exit's take-profit merges its entry.
+fn check_booked_merge(booked: bool, leg: i64, merges: bool, lock: i64, rpt_until: i64) -> Result<()> {
+    if booked && leg == 0 && !merges && lock < rpt_until {
+        return invalid("a booked exit takes profit only with its entry's merge until rptUntil");
+    }
+    if merges && (leg != 0 || !booked) {
+        return invalid("only a booked exit's take-profit merges its entry");
+    }
+    Ok(())
+}
+
+/// Whether an if-done entry fill of `n` books its exit, and the fill's time argument.
+///
+/// A fill below `rptAmount` books its exit. A booked fill without an auction time runs at `t`,
+/// which defaults to the lock time.
+fn booked_cycle(rpt_amount: i64, min_fill: i64, n: i64, t_arg: i64, t: Option<i64>, lock: i64, strict: bool) -> Result<(bool, i64)> {
+    let booked = rpt_amount > n;
+    if booked && n >= MERGE_SHIFT {
+        return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
+    }
+    if strict {
+        rpt_fill_rule(rpt_amount, min_fill, n)?;
+    }
+    let t_arg = if booked && t_arg == 0 { t.unwrap_or(lock) } else { t_arg };
+    if booked && t_arg > lock {
+        return invalid("cycle time t must be <= lockTime");
+    }
+    Ok((booked, t_arg))
+}
+
+/// The role branch of an if-done entry fill: it continues, waits for its exits, or closes.
+fn entry_branch(rest: bool, cont: bool) -> &'static str {
+    if rest {
+        "cont"
+    } else if cont {
+        "wait"
+    } else {
+        "close"
+    }
+}
+
 /// Builds a [`Batch`].
 pub fn build_batch(b: &Batch, budgets: BudgetFn) -> Result<BuiltTx> {
     build_batch_mode(b, budgets, true)
@@ -2800,12 +2844,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                         patch: Some((i, 2)),
                     });
                 }
-                if s.is_booked() && leg == 0 && merge.is_none() && lock < s.rpt_until {
-                    return invalid("a booked exit takes profit only with its entry's merge until rptUntil");
-                }
-                if merge.is_some() && (leg != 0 || !s.is_booked()) {
-                    return invalid("only a booked exit's take-profit merges its entry");
-                }
+                check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
                 let (payout, merge_plan) = match merge {
                     None => (if rest > 0 { proceeds } else { add(proceeds, carriers, "payout")? }, None),
                     Some(e) => {
@@ -2925,12 +2964,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                 let left = sub(v, spend, "conditional bid escrow")?;
                 let rest = s.amount_left - n;
                 let next = CondBidState { amount_left: rest, armed: s.next_armed(leg, trigger, udaa), ..s.clone() };
-                if s.is_booked() && leg == 0 && merge.is_none() && lock < s.rpt_until {
-                    return invalid("a booked exit takes profit only with its entry's merge until rptUntil");
-                }
-                if merge.is_some() && (leg != 0 || !s.is_booked()) {
-                    return invalid("only a booked exit's take-profit merges its entry");
-                }
+                check_booked_merge(s.is_booked(), leg, merge.is_some(), lock, s.rpt_until)?;
                 merge_ext(tok.0, s.extension_commitment)?;
                 let mut extras = vec![];
                 let (pos_out, merge_plan) = match merge {
@@ -3073,17 +3107,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                     }
                     Ok(())
                 })?;
-                let booked = s.rpt_amount > n;
-                if booked && n >= MERGE_SHIFT {
-                    return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
-                }
-                if strict {
-                    rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
-                }
-                let t_arg = if booked && t_arg == 0 { t.unwrap_or(lock) } else { t_arg };
-                if booked && t_arg > lock {
-                    return invalid("cycle time t must be <= lockTime");
-                }
+                let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, *t, lock, strict)?;
                 let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
                 let spend = need(s.spend(n, p), "if-done bid spend")?;
                 let left = sub(sub(v, spend, "if-done bid escrow")?, s.delivery_carrier, "if-done bid escrow")?;
@@ -3129,13 +3153,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                         if trigger { ".trigger" } else { "" },
                         if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
                         if booked { ".book" } else { "" },
-                        if rest > 0 {
-                            "cont"
-                        } else if cont {
-                            "wait"
-                        } else {
-                            "close"
-                        }
+                        entry_branch(rest > 0, cont)
                     ),
                     sequence: 0,
                     plan: entry(
@@ -3178,17 +3196,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                         }
                         Ok(())
                     })?;
-                let booked = s.rpt_amount > n;
-                if booked && n >= MERGE_SHIFT {
-                    return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
-                }
-                if strict {
-                    rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
-                }
-                let t_arg = if booked && t_arg == 0 { t.unwrap_or(lock) } else { t_arg };
-                if booked && t_arg > lock {
-                    return invalid("cycle time t must be <= lockTime");
-                }
+                let (booked, t_arg) = booked_cycle(s.rpt_amount, s.min_fill, n, t_arg, *t, lock, strict)?;
                 let p = need(s.price_at(trigger, t_arg, udaa), "if-done entry price")?;
                 let proceeds = need(s.proceeds(n, p), "if-done ask proceeds")?;
                 let pre = need(s.prefund_of(n), "if-done ask prefund")?;
@@ -3227,13 +3235,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
                         if trigger { ".trigger" } else { "" },
                         if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
                         if booked { ".book" } else { "" },
-                        if rest > 0 {
-                            "cont"
-                        } else if cont {
-                            "wait"
-                        } else {
-                            "close"
-                        }
+                        entry_branch(rest > 0, cont)
                     ),
                     sequence: 0,
                     plan: entry(
