@@ -1,30 +1,48 @@
-//! Archive pruning: a store that keeps its history (`lean = false`) with `archive_pruning` on (the default) deletes the rows that no
-//! read of the API and no later write needs, in small periodic batches ([`prune`], run by the follower between its steps like the lean
-//! pruning, and only while the store follows the node). Everything the API answers stays the same, bar one documented retention:
+//! Archive pruning for stores that keep their history.
 //!
-//! * **spent order UTXOs** (`order_utxos`) and **spent token UTXOs of orders** (`token_utxos`) of orders that are no longer live, once
-//!   final (spent in a chain block out of the reorg window): every read and every write of the follower reads an order's UTXOs only while
-//!   they are unspent (its tip, its custody, the outpoints a block spends). The rows of a live order (open or partly filled) all stay; an
-//!   order's rows go when the spend that closed it is final. A re-listing reads the genesis output's KAS from the order
-//!   (`orders.genesis_value`, schema 12); an order without it keeps its genesis row. Rows a gap closed (`spent_block = 0`) stay: a
-//!   recovery import can revive the order at them (`processor::revive`);
-//! * **in-place amends** (`order_amends`) of final blocks: the rows are what a revert of their block restores, and nothing else reads them;
-//! * **spent token holdings** (`token_holdings`) created more than `spent_holdings_retention_days` (30 by default) before the node's
-//!   position, once final (`GET /v1/token-utxos?spent=true` lists the spent holdings of that window), except the custody of a live order
-//!   ([`super::lean::live_order_holding`]). The proof that a token has a program stays (`holding_programs`, schema 12).
+//! A store with `lean = false` and `archive_pruning` on (the default) deletes the rows that no API
+//! read and no later write needs. [`prune`] does it in small periodic batches. The follower runs it
+//! between its steps, like the lean pruning, and only while the store follows the node. Everything
+//! the API answers stays the same, bar the one retention noted below.
 //!
-//! Orders, events, fills, candles, pair fills and the activity totals are never touched, so the trades, candles, statistics, books,
-//! orders and their events read the same. A batch runs with the `meta` key `pruning`, as the lean pruning does (no delete trigger
-//! takes back what it counted), and a revert inside the window is exact: nothing stamped with a block of the window is deleted.
+//! # What goes
 //!
-//! The UTXO rows are visited once, by the block that spent them: the `meta` key `archive_seq` is the first chain block (`blocks.seq`) not
-//! yet visited. A batch takes the orders that had a UTXO row spent in the next stretch of final blocks, and deletes all the final spent rows
-//! of those that are no longer live (an order that was live when its earlier rows were visited is taken again by the spend that closed
-//! it). `kobd db replay` applies the same pruning once its frames are in, and the follower goes on from there, so a rebuilt store holds
-//! the rows a pruned one does (`tests/archive_prune.rs`; the decisions depend only on the store's rows and its window).
+//! - **Spent order UTXOs** (`order_utxos`) and **spent token UTXOs of orders** (`token_utxos`), for
+//!   orders that are no longer live and whose closing spend is final (in a chain block out of the
+//!   reorg window). The follower reads an order's UTXOs only while they are unspent: its tip, its
+//!   custody and the outpoints a block spends. The rows of a live order (open or partly filled) all
+//!   stay. A re-listing reads the genesis output's KAS from `orders.genesis_value`, and an order
+//!   without it keeps its genesis row. Rows a gap closed (`spent_block = 0`) stay, because a
+//!   recovery import can revive the order at them (`processor::revive`).
+//! - **In-place amends** (`order_amends`) of final blocks. The rows are what a revert of their
+//!   block restores, and nothing else reads them.
+//! - **Spent token holdings** (`token_holdings`) created more than `spent_holdings_retention_days`
+//!   (30 by default) before the node's position, once final. `GET /v1/token-utxos?spent=true` lists
+//!   the spent holdings of that window. The custody of a live order stays
+//!   ([`super::lean::live_order_holding`]), and so does the proof that a token has a program
+//!   (`holding_programs`).
 //!
-//! The file does not shrink by itself (a store that keeps its history is not created with incremental vacuum): the freed pages are used
-//! again by new rows, so it stops growing for a while; `kobd db vacuum` gives them back once (docs/ops/executor.md).
+//! Orders, events, fills, candles, pair fills and the activity totals are never touched. So the
+//! trades, candles, statistics, books, orders and their events read the same. A batch runs with the
+//! `meta` key `pruning`, as the lean pruning does, so no delete trigger takes back what it counted.
+//! A revert inside the window is exact, because nothing stamped with a block of the window is
+//! deleted.
+//!
+//! # How a batch walks the rows
+//!
+//! The UTXO rows are visited once, by the block that spent them. The `meta` key `archive_seq` is
+//! the first chain block (`blocks.seq`) not yet visited. A batch takes the orders that had a UTXO
+//! row spent in the next stretch of final blocks, and deletes all the final spent rows of those
+//! that are no longer live. An order that was live when its earlier rows were visited is taken
+//! again by the spend that closed it.
+//!
+//! `kobd db replay` applies the same pruning once its frames are in, and the follower goes on from
+//! there. A rebuilt store therefore holds the rows a pruned one does, because the decisions depend
+//! only on the store's rows and its window (`tests/archive_prune.rs`).
+//!
+//! The file does not shrink by itself, because a store that keeps its history is not created with
+//! incremental vacuum. New rows reuse the freed pages, so the file stops growing for a while.
+//! `kobd db vacuum` gives the pages back once (docs/ops/executor.md).
 
 use super::db::{meta_get, meta_set, DbResult};
 use super::lean::{cutoffs, live_order_holding, LeanReport};
@@ -34,28 +52,37 @@ use std::time::{Duration, Instant};
 /// The `meta` key of the first chain block whose spent UTXO rows a batch has not visited yet.
 pub const MARK_KEY: &str = "archive_seq";
 
-/// How much one batch deletes at most, and how long it may take (one write transaction of small steps that stops when its time budget
-/// is spent, as the lean pruning).
+/// Limits of one batch: how much it deletes and how long it may take.
+///
+/// A batch is one write transaction of small steps. It stops when its time budget is spent, as the
+/// lean pruning does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArchiveConfig {
-    /// Spent holdings created this many DAA before the node's position or more go once final (never less than the reorg window).
+    /// Spent holdings created this many DAA before the node's position or more go once final.
+    ///
+    /// Never less than the reorg window.
     pub holdings_retention_daa: u64,
-    /// Rows deleted per batch at most, all tables (a step that began finishes: the orders of a stretch of blocks go whole).
+    /// Rows deleted per batch at most, all tables. A step that began finishes, so the orders of a
+    /// stretch of blocks go whole.
     pub rows_per_batch: usize,
-    /// The time a batch may take (at least one step runs).
+    /// The time a batch may take. At least one step runs.
     pub budget: Duration,
     /// Spent UTXO rows of a stretch of blocks, amends and holdings per step.
     pub step_rows: usize,
 }
 
 impl ArchiveConfig {
+    /// Default limits for the given holdings retention: 20,000 rows, 12 ms and 200 rows per step.
     pub fn new(holdings_retention_daa: u64) -> Self {
         ArchiveConfig { holdings_retention_daa, rows_per_batch: 20_000, budget: Duration::from_millis(12), step_rows: 200 }
     }
 }
 
-/// The one index only this pruning reads: the spent holdings by the DAA they were created at (the lean pruning's own, the same
-/// definition). Built when the indexer opens a store that prunes (a few seconds on a store of millions of holdings).
+/// Creates the one index only this pruning reads, if it is missing.
+///
+/// The index lists the spent holdings by the DAA they were created at. It is the lean pruning's own
+/// definition. The indexer builds it when it opens a store that prunes, which takes a few seconds
+/// on a store of millions of holdings.
 pub fn ensure_indexes(conn: &Connection) -> DbResult<()> {
     conn.execute_batch(
         "CREATE INDEX IF NOT EXISTS token_holdings_spent_daa ON token_holdings (created_daa) WHERE spent_block IS NOT NULL;",
@@ -63,7 +90,7 @@ pub fn ensure_indexes(conn: &Connection) -> DbResult<()> {
     Ok(())
 }
 
-/// One bounded batch; see the module documentation for what is deleted.
+/// Runs one bounded batch. The module documentation says what is deleted.
 pub fn prune(
     conn: &mut Connection,
     cfg: &ArchiveConfig,
@@ -86,7 +113,8 @@ pub fn prune(
     let (mut amends_more, mut holdings_more) = (true, true);
     loop {
         let mut progressed = false;
-        // 1. the orders a UTXO row of which was spent in the next stretch of final blocks: their final spent rows, unless they are live
+        // 1. Orders with a UTXO row spent in the next stretch of final blocks: delete their final
+        // spent rows, unless they are live.
         if mark < final_seq && left > 0 {
             let lo: Option<i64> = tx.query_row(
                 "SELECT MIN(b) FROM (SELECT MIN(spent_block) AS b FROM order_utxos WHERE spent_block >= ?1 AND spent_block < ?2 \
@@ -97,7 +125,8 @@ pub fn prune(
             match lo {
                 None => mark = final_seq,
                 Some(lo) => {
-                    // the stretch ends where either table has more than a step of rows past its start (a block with more stays whole)
+                    // The stretch ends where either table has more than a step of rows past its
+                    // start. A block with more stays whole.
                     let mut hi = final_seq;
                     for t in ["order_utxos", "token_utxos"] {
                         let at: Option<i64> = tx
@@ -123,8 +152,9 @@ pub fn prune(
                             params![lo, hi],
                         )?;
                     }
-                    // a live order keeps its rows, and so does one whose closing a revert could still undo (its last block is in the
-                    // window: the spend of that block, final later, takes it again)
+                    // A live order keeps its rows. So does one whose closing a revert could still
+                    // undo, because its last block is in the window: the spend of that block takes
+                    // it again once final.
                     tx.execute(
                         "DELETE FROM archive_batch WHERE EXISTS (SELECT 1 FROM order_state s WHERE s.order_id = archive_batch.id \
                          AND (s.status IN ('open','partial') OR s.last_block >= ?1))",
@@ -148,7 +178,7 @@ pub fn prune(
             }
             progressed = true;
         }
-        // 2. the amends of final blocks (what a revert of their block would restore)
+        // 2. Amends of final blocks, which a revert of their block would restore.
         let want = cfg.step_rows.min(left);
         if want > 0 && amends_more {
             let n = tx.execute(
@@ -160,7 +190,7 @@ pub fn prune(
             progressed |= n > 0;
             amends_more = n >= want;
         }
-        // 3. the spent holdings past the retention, final, but a live order's custody
+        // 3. Spent holdings past the retention and final, except a live order's custody.
         let want = cfg.step_rows.min(left);
         if want > 0 && holdings_more {
             let n = tx.execute(
