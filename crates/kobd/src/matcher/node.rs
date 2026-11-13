@@ -1,12 +1,20 @@
 //! Node access over the node's JSON wRPC (rusty-kaspa v2.1.0 `RpcApiOps`, camelCase).
 //!
-//! The matcher needs five calls: `getServerInfo` (network, sync, virtual DAA score),
-//! `getBlockDagInfo` (sink, the acceptance cursor), `submitTransaction` (v1 transactions with
-//! per-input compute budgets: the REST API drops them), `getVirtualChainFromBlockV2` at `Low`
-//! verbosity (accepted transaction ids per chain block, and `removed` blocks for reorgs) and
-//! `getUtxosByAddresses` (the operator's funding; needs `--utxoindex`), and `getFeeEstimate` for the fee policy
-//! (`crate::fee`). JSON wRPC by default; a Borsh URL or a resolver entry (a public node) takes every call in Borsh
-//! (`crate::rpc::bridge`, `crate::rpc::resolver`), with the same JSON in and out of [`WrpcNode::call`].
+//! The matcher needs these calls:
+//!
+//! - `getServerInfo`: network, sync state, virtual DAA score.
+//! - `getBlockDagInfo`: the sink, which is the acceptance cursor.
+//! - `submitTransaction`: v1 transactions with per-input compute budgets, which the REST API drops.
+//! - `getVirtualChainFromBlockV2` at `Low` verbosity: accepted transaction ids per chain block, and
+//!   `removed` blocks for reorgs.
+//! - `getUtxosByAddresses`: the operator's funding. It needs `--utxoindex`.
+//! - `getFeeEstimate`: input of the fee policy (`crate::fee`).
+//!
+//! [`NodeApi`] adds replace-by-fee, tip timestamps and mempool lookups.
+//!
+//! The transport is JSON wRPC by default. A Borsh URL or a resolver entry (a public node) takes
+//! every call in Borsh (`crate::rpc::bridge`, `crate::rpc::resolver`), with the same JSON in and
+//! out of [`WrpcNode::call`].
 
 use std::future::Future;
 use std::time::Duration;
@@ -22,13 +30,16 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 /// Errors of a node call.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RpcError {
+    /// The connection failed.
     #[error("transport: {0}")]
     Transport(String),
+    /// The node did not answer within the timeout.
     #[error("timeout after {0:?}")]
     Timeout(Duration),
     /// The node answered with an error message.
     #[error("node: {0}")]
     Node(String),
+    /// The node's answer could not be decoded.
     #[error("cannot decode node response: {0}")]
     Decode(String),
 }
@@ -48,9 +59,11 @@ pub enum SubmitOutcome {
     MissingInput,
     /// The mempool is full: retry later.
     Busy,
-    /// No verdict: the request failed on the wire (transport error, timeout, undecodable answer), so the node may or may not have
-    /// taken the transaction. It is tracked as pending, its inputs stay reserved, and it is resent idempotently until
-    /// the node answers or the pending timeout drops it.
+    /// No verdict: the request failed on the wire (transport error, timeout, undecodable answer),
+    /// so the node may or may not have taken the transaction.
+    ///
+    /// It is tracked as pending and its inputs stay reserved. It is resent idempotently until the
+    /// node answers or the pending timeout drops it.
     Unknown,
     /// Any other rejection (a bug or a stale plan): logged, never resent unchanged.
     Rejected,
@@ -76,12 +89,17 @@ pub fn classify_submit_error(msg: &str) -> SubmitOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerInfo {
+    /// The node's software version.
     #[serde(default)]
     pub server_version: String,
+    /// The node's network id.
     pub network_id: String,
+    /// Whether the node says it is synced.
     pub is_synced: bool,
+    /// Whether the node has a UTXO index (`--utxoindex`).
     #[serde(default)]
     pub has_utxo_index: bool,
+    /// The node's virtual DAA score.
     pub virtual_daa_score: u64,
 }
 
@@ -89,17 +107,23 @@ pub struct ServerInfo {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DagInfo {
+    /// The node's network name.
     #[serde(default)]
     pub network: String,
+    /// Hash of the sink, the newest chain block.
     pub sink: String,
+    /// The node's virtual DAA score.
     pub virtual_daa_score: u64,
 }
 
 /// One added chain block with the ids of the transactions it accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChainBlock {
+    /// Hash of the chain block.
     pub hash: String,
+    /// DAA score of the chain block.
     pub daa_score: u64,
+    /// Ids of the transactions the block accepted.
     pub accepted: Vec<[u8; 32]>,
 }
 
@@ -115,47 +139,66 @@ pub struct ChainUpdate {
 /// One P2PK UTXO of an address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddressUtxo {
+    /// Id of the transaction that created the output.
     pub transaction_id: [u8; 32],
+    /// Output index.
     pub index: u32,
+    /// Amount in sompi.
     pub amount: u64,
     /// `version ‖ script` hex.
     pub script_public_key: String,
+    /// DAA score of the UTXO's block.
     pub block_daa_score: u64,
+    /// Covenant id of the output, if it has one.
     pub covenant_id: Option<[u8; 32]>,
 }
 
 /// Everything the matcher and keepers ask of a node. Implemented by [`WrpcNode`] and by test nodes.
 pub trait NodeApi: Send + Sync {
+    /// The node's `getServerInfo`.
     fn server_info(&self) -> impl Future<Output = Result<ServerInfo, RpcError>> + Send;
+    /// The node's `getBlockDagInfo`.
     fn dag_info(&self) -> impl Future<Output = Result<DagInfo, RpcError>> + Send;
     /// Submits an `RpcTransaction` JSON; returns the transaction id or the node's message.
     fn submit(&self, tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send;
+    /// One `getVirtualChainFromBlockV2` step starting at `start_hash`.
     fn chain_from(&self, start_hash: &str) -> impl Future<Output = Result<ChainUpdate, RpcError>> + Send;
+    /// The UTXOs of `addresses` (`getUtxosByAddresses`).
     fn utxos_by_addresses(&self, addresses: &[String]) -> impl Future<Output = Result<Vec<AddressUtxo>, RpcError>> + Send;
-    /// The node's fee estimate (`getFeeEstimate`, `crate::fee`). The default: none (the fee policy pays its floor).
+    /// The node's fee estimate (`getFeeEstimate`, `crate::fee`). The default is none: the fee
+    /// policy then pays its floor.
     fn fee_estimate(&self) -> impl Future<Output = Result<crate::fee::FeeEstimate, RpcError>> + Send {
         async { Err(RpcError::Node("no fee estimate".into())) }
     }
-    /// Replace-by-fee (`submitTransactionReplacement`, rusty-kaspa v2.1.0 `RbfPolicy::Mandatory`): the node takes `tx` only
-    /// when exactly one mempool transaction spends an input of `tx` and `tx` pays a strictly higher fee rate; that
-    /// transaction (and its mempool descendants) is removed. Returns the new transaction id or the node's refusal. The default:
-    /// refused (a node client without replacement; the runner then waits for the pending timeout as before).
+    /// Replace-by-fee (`submitTransactionReplacement`, rusty-kaspa v2.1.0 `RbfPolicy::Mandatory`).
+    ///
+    /// The node takes `tx` only when exactly one mempool transaction spends an input of `tx` and
+    /// `tx` pays a strictly higher fee rate. That transaction and its mempool descendants are
+    /// removed. Returns the new transaction id or the node's refusal. The default is a refusal (a
+    /// node client without replacement), and the runner then waits for the pending timeout.
     fn submit_replacement(&self, _tx: Value) -> impl Future<Output = Result<[u8; 32], RpcError>> + Send {
         async { Err(RpcError::Node("submitTransactionReplacement is not supported by this node client".into())) }
     }
-    /// The timestamp (unix milliseconds) in the header of the node's sink, the newest chain block: the chain's clock, which
-    /// the runner compares with the local one (day-order deadlines are judged on the local clock). The default: unknown.
+    /// The timestamp (unix milliseconds) in the header of the node's sink, the newest chain block.
+    ///
+    /// It is the chain's clock, which the runner compares with the local one, since day-order
+    /// deadlines are judged on the local clock. The default is unknown.
     fn tip_timestamp_ms(&self) -> impl Future<Output = Result<u64, RpcError>> + Send {
         async { Err(RpcError::Node("no tip timestamp from this node client".into())) }
     }
-    /// The tip timestamps of every node the client asks (`MultiSubmit`: the primary and the others; one node: its own): a
-    /// timestamp is the miner's, so the runner never trusts one alone (`matcher::run::chain_skew_secs`). Empty: none known.
+    /// The tip timestamps of every node the client asks (`MultiSubmit`: the primary and the others;
+    /// with one node, its own).
+    ///
+    /// A timestamp is the miner's, so the runner never trusts one alone
+    /// (`matcher::run::chain_skew_secs`). Empty: none known.
     fn tip_timestamps_ms(&self) -> impl Future<Output = Vec<u64>> + Send {
         async { self.tip_timestamp_ms().await.ok().into_iter().collect() }
     }
-    /// Whether the node's mempool (its orphan pool included) holds the transaction `txid` (`getMempoolEntry`): `Ok(false)`
-    /// only when the node says it does not (`Transaction <id> not found`); anything else is an error (unsure). The default:
-    /// unsure.
+    /// Whether the node's mempool (its orphan pool included) holds the transaction `txid`
+    /// (`getMempoolEntry`).
+    ///
+    /// `Ok(false)` only when the node says it does not (`Transaction <id> not found`). Anything
+    /// else is an error, which means unsure. The default is unsure.
     fn in_mempool(&self, txid: [u8; 32]) -> impl Future<Output = Result<bool, RpcError>> + Send {
         async move {
             let _ = txid;
@@ -164,8 +207,10 @@ pub trait NodeApi: Send + Sync {
     }
 }
 
-/// Whether a node's refusal of `getMempoolEntry` for `txid` says the mempool does not hold it (rusty-kaspa
-/// `RpcError::TransactionNotFound`: `Transaction <id> not found`), not another failure (an unknown method, a bad request).
+/// Whether a node's refusal of `getMempoolEntry` for `txid` says the mempool does not hold it.
+///
+/// rusty-kaspa answers `RpcError::TransactionNotFound`, `Transaction <id> not found`. Another
+/// failure (an unknown method, a bad request) is not a miss.
 pub fn mempool_miss(msg: &str, txid: &[u8; 32]) -> bool {
     let m = msg.to_ascii_lowercase();
     m.contains("not found") && m.contains(&kob_protocol::json::to_hex(txid))
@@ -174,13 +219,18 @@ pub fn mempool_miss(msg: &str, txid: &[u8; 32]) -> bool {
 /// Connection settings.
 #[derive(Debug, Clone)]
 pub struct WrpcConfig {
+    /// Node URL: a wRPC URL or a resolver entry.
     pub url: String,
+    /// Timeout of one request (default 30 s).
     pub request_timeout: Duration,
+    /// Timeout of one connection attempt (default 10 s).
     pub connect_timeout: Duration,
+    /// Largest WebSocket message and frame accepted (default 256 MiB).
     pub max_message_bytes: usize,
 }
 
 impl WrpcConfig {
+    /// Settings for `url` with the default timeouts and message size.
     pub fn new(url: impl Into<String>) -> Self {
         WrpcConfig {
             url: url.into(),
@@ -198,10 +248,13 @@ pub struct WrpcNode {
     cfg: WrpcConfig,
     conn: tokio::sync::Mutex<Option<Ws>>,
     next_id: std::sync::atomic::AtomicU64,
-    /// The node of the current connection (a resolver entry's public node; else the URL): what a failure reports.
+    /// The node of the current connection (a resolver entry's public node, else the URL): what a
+    /// failure reports.
     node: std::sync::Mutex<String>,
-    /// Bounds each `chain_from` batch (`crate::rpc::window`): a matcher that fell behind under a flood
-    /// pages through the backlog instead of asking for all of it and timing out forever.
+    /// Bounds each `chain_from` batch (`crate::rpc::window`).
+    ///
+    /// A matcher that fell behind under a flood pages through the backlog instead of asking for all
+    /// of it and timing out forever.
     window: std::sync::Mutex<crate::rpc::window::BatchWindow>,
 }
 
@@ -222,6 +275,7 @@ pub fn parse_frame(text: &str, id: u64) -> Result<Option<Value>, RpcError> {
 }
 
 impl WrpcNode {
+    /// A client for `cfg`. It connects on the first call.
     pub fn new(cfg: WrpcConfig) -> Self {
         let window = std::sync::Mutex::new(crate::rpc::window::BatchWindow::for_timeout(cfg.request_timeout));
         let node = std::sync::Mutex::new(cfg.url.clone());
@@ -232,8 +286,8 @@ impl WrpcNode {
         self.window.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// The window of a `chain_from` request (unbounded when the node does not know `start`: the request
-    /// then fails fast and the runner restarts from the sink).
+    /// The window of a `chain_from` request. It is unbounded when the node does not know `start`:
+    /// the request then fails fast and the runner restarts from the sink.
     async fn chain_plan(&self, start_hash: &str) -> Result<crate::rpc::window::WindowPlan, RpcError> {
         let unbounded = crate::rpc::window::WindowPlan { min_confirmations: None, until_blue: None, span: u64::MAX, timeout_scale: 1 };
         let start_blue = match self.call("getBlock", json!({"hash": start_hash, "includeTransactions": false})).await {
@@ -258,7 +312,8 @@ impl WrpcNode {
             .max_message_size(Some(self.cfg.max_message_bytes))
             .max_frame_size(Some(self.cfg.max_message_bytes));
         let fut = tokio_tungstenite::connect_async_with_config(url.as_str(), Some(ws_cfg), false);
-        // a dropped public node's one reconnect has a short timeout (`crate::rpc::resolver::failed`)
+        // A dropped public node's one reconnect has a short timeout
+        // (`crate::rpc::resolver::failed`).
         let limit = crate::rpc::resolver::connect_timeout(&self.cfg.url, self.cfg.connect_timeout);
         match tokio::time::timeout(limit, fut).await {
             Err(_) => Err(RpcError::Timeout(limit)),
@@ -267,8 +322,11 @@ impl WrpcNode {
         }
     }
 
-    /// One request; returns the response `params`. These are the small calls: a timeout counts against the node
-    /// (`crate::rpc::judge::timed_out`: a node that hangs), unlike a `chain_from` batch's or the short fee estimate's.
+    /// One request; returns the response `params`.
+    ///
+    /// These are the small calls. A timeout counts against the node
+    /// (`crate::rpc::judge::timed_out`: a node that hangs), unlike a `chain_from` batch's or the
+    /// short fee estimate's.
     pub async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         let r = self.call_within(method, params, self.cfg.request_timeout).await;
         if matches!(r, Err(RpcError::Timeout(_))) {
@@ -277,7 +335,7 @@ impl WrpcNode {
         r
     }
 
-    /// The node of the current connection (a resolver entry's public node; else the URL).
+    /// The node of the current connection (a resolver entry's public node, else the URL).
     fn node_in_use(&self) -> String {
         self.node.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -285,10 +343,11 @@ impl WrpcNode {
     /// [`WrpcNode::call`] with another timeout.
     pub async fn call_within(&self, method: &str, params: Value, timeout: Duration) -> Result<Value, RpcError> {
         let borsh = crate::rpc::all_borsh(&self.cfg.url);
-        // a call this client cannot carry in Borsh is refused before the wire (nothing was sent)
+        // A call this client cannot carry in Borsh is refused before the wire, so nothing was sent.
         let encoded = if borsh { Some(crate::rpc::bridge::encode(method, &params).map_err(RpcError::Decode)?) } else { None };
         let mut guard = self.conn.lock().await;
-        // a resolver entry's connection to a node the entry gave up (it failed elsewhere, or the authority moved) is replaced
+        // A resolver entry's connection to a node the entry gave up (it failed elsewhere, or the
+        // authority moved) is replaced.
         if guard.is_some() && crate::rpc::resolver::is_resolver(&self.cfg.url) {
             let node = self.node.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if crate::rpc::resolver::current(&self.cfg.url).as_deref() != Some(node.as_str()) {
@@ -409,7 +468,8 @@ fn decode<T: serde::de::DeserializeOwned>(method: &str, v: Value) -> Result<T, R
 impl NodeApi for WrpcNode {
     async fn server_info(&self) -> Result<ServerInfo, RpcError> {
         let info: ServerInfo = decode("getServerInfo", self.call("getServerInfo", json!({})).await?)?;
-        // a node that answers but is useless (another network, no UTXO index, not synced for long) is judged like a failed one
+        // A node that answers but is useless (another network, no UTXO index, not synced for long)
+        // is judged like a failed one.
         crate::rpc::judge::server_info(&self.cfg.url, &self.node_in_use(), &info.network_id, info.is_synced, info.has_utxo_index)
             .map_err(RpcError::Node)?;
         Ok(info)
@@ -451,7 +511,8 @@ impl NodeApi for WrpcNode {
         };
         let u = parse_chain_update(&p)?;
         if plan.by_window() && u.added.is_empty() {
-            // the next chain block lies beyond the window: widen it, apply nothing (the next tick asks again)
+            // The next chain block lies beyond the window: widen it and apply nothing. The next
+            // tick asks again.
             self.win().on_empty();
             return Ok(ChainUpdate::default());
         }
@@ -480,14 +541,16 @@ impl NodeApi for WrpcNode {
     }
 
     async fn fee_estimate(&self) -> Result<crate::fee::FeeEstimate, RpcError> {
-        // a small answer: a short timeout, so a stalled node delays a tick by seconds, not by the request timeout
+        // A small answer: a short timeout, so a stalled node delays a tick by seconds, not by the
+        // request timeout.
         let p = self.call_within("getFeeEstimate", json!({}), self.cfg.request_timeout.min(Duration::from_secs(5))).await?;
         crate::fee::FeeEstimate::parse(&p).map_err(RpcError::Decode)
     }
 
     async fn utxos_by_addresses(&self, addresses: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
         let p = self.call("getUtxosByAddresses", json!({"addresses": addresses})).await?;
-        // an answer without its entries is not "no UTXOs": the caller would take every queried output as spent
+        // An answer without its entries is not "no UTXOs": the caller would take every queried
+        // output as spent.
         let entries =
             p.get("entries").and_then(Value::as_array).cloned().ok_or_else(|| RpcError::Decode(format!("no entries in {p}")))?;
         let mut out = vec![];
@@ -510,24 +573,29 @@ impl NodeApi for WrpcNode {
     }
 }
 
-/// The matcher's node with more nodes for submissions (`rpc::multi`): every call goes to the primary, and a transaction is
-/// submitted to every node at once. The first node that takes it answers the matcher; the others go on in the background
-/// (propagation: the transaction reaches the miners through several peers). When none takes it, the primary's rejection is
-/// the answer (it decides double spends and missing inputs), unless the primary failed on the wire and another node gave a
-/// verdict.
+/// The matcher's node with more nodes for submissions (`rpc::multi`).
+///
+/// Every call goes to the primary, and a transaction is submitted to every node at once. The first
+/// node that takes it answers the matcher. The others go on in the background for propagation, so
+/// the transaction reaches the miners through several peers. When none takes it, the primary's
+/// rejection is the answer, since it decides double spends and missing inputs, unless the primary
+/// failed on the wire and another node gave a verdict.
 pub struct MultiSubmit<N: NodeApi + 'static> {
     primary: std::sync::Arc<N>,
-    /// `(index in the node board, node)`.
+    /// `(index in the node board, node)` of every other node.
     others: Vec<(usize, std::sync::Arc<N>)>,
     board: Option<std::sync::Arc<crate::rpc::multi::NodeBoard>>,
 }
 
 impl<N: NodeApi + 'static> MultiSubmit<N> {
+    /// A client that submits to `primary` and to `others`, with an optional board that counts the
+    /// outcomes.
     pub fn new(primary: N, others: Vec<(usize, N)>, board: Option<std::sync::Arc<crate::rpc::multi::NodeBoard>>) -> Self {
         let others = others.into_iter().map(|(i, n)| (i, std::sync::Arc::new(n))).collect();
         MultiSubmit { primary: std::sync::Arc::new(primary), others, board }
     }
 
+    /// The primary node.
     pub fn primary(&self) -> &N {
         &self.primary
     }
@@ -557,7 +625,7 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         }
         drop(send);
         let board = self.board.clone();
-        // a node that already has the transaction (from a peer, or the chain) took it too
+        // A node that already has the transaction (from a peer, or the chain) took it too.
         let note = move |i: usize, r: &Result<[u8; 32], RpcError>| {
             if let Some(b) = &board {
                 let known = matches!(r, Err(RpcError::Node(m)) if classify_submit_error(m) == SubmitOutcome::AlreadyKnown);
@@ -568,13 +636,14 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         while let Some((i, r)) = recv.recv().await {
             note(i, &r);
             match r {
-                // a node that holds the transaction already (or the chain does): it is out there, whatever another node says
-                // (the primary's refusal must not drop a transaction a mempool holds, audit 2026-11-11 L-11)
+                // A node that holds the transaction already (or the chain does): it is out there,
+                // whatever another node says. The primary's refusal must not drop a transaction a
+                // mempool holds.
                 Err(RpcError::Node(m)) if classify_submit_error(&m) == SubmitOutcome::AlreadyKnown => {
                     known.get_or_insert(RpcError::Node(m));
                 }
                 Ok(id) => {
-                    // the rest go on for propagation; their outcomes are only counted
+                    // The rest go on for propagation. Their outcomes are only counted.
                     tokio::spawn(async move {
                         while let Some((i, r)) = recv.recv().await {
                             note(i, &r);
@@ -600,8 +669,8 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         })
     }
 
-    /// The primary decides (it holds the replaced transaction); the other nodes get the replacement in the background (their
-    /// verdicts are only counted).
+    /// The primary decides, since it holds the replaced transaction. The other nodes get the
+    /// replacement in the background, and their verdicts are only counted.
     async fn submit_replacement(&self, tx: Value) -> Result<[u8; 32], RpcError> {
         let r = self.primary.submit_replacement(tx.clone()).await;
         if r.is_ok() {
@@ -634,8 +703,10 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         self.primary.tip_timestamp_ms().await
     }
 
-    /// Held by any node the transaction was submitted to: `Ok(false)` only when every node says it does not hold it (it went
-    /// to all of them); an error from any node, with none holding it, is unsure.
+    /// Held by any node the transaction was submitted to.
+    ///
+    /// `Ok(false)` only when every node says it does not hold it, since the transaction went to all
+    /// of them. An error from any node, with none holding it, is unsure.
     async fn in_mempool(&self, txid: [u8; 32]) -> Result<bool, RpcError> {
         let all = std::iter::once(self.primary.clone()).chain(self.others.iter().map(|(_, n)| n.clone()));
         let answers = futures_util::future::join_all(all.map(|n| async move { n.in_mempool(txid).await })).await;
@@ -648,7 +719,7 @@ impl<N: NodeApi + 'static> NodeApi for MultiSubmit<N> {
         }
     }
 
-    /// Every node's tip timestamp (each within 5 s; one that does not answer is left out).
+    /// Every node's tip timestamp (each within 5 s). A node that does not answer is left out.
     async fn tip_timestamps_ms(&self) -> Vec<u64> {
         let ask = |n: std::sync::Arc<N>| async move {
             tokio::time::timeout(Duration::from_secs(5), n.tip_timestamp_ms()).await.ok().and_then(Result::ok)
@@ -688,8 +759,9 @@ mod tests {
         }
     }
 
-    /// Submissions go to every node; the first that takes the transaction answers; with no taker the primary's verdict
-    /// counts, unless the primary failed on the wire and another node gave one.
+    /// Submissions go to every node. The first that takes the transaction answers. With no taker
+    /// the primary's verdict counts, unless the primary failed on the wire and another node gave
+    /// one.
     #[tokio::test]
     async fn multi_submit_first_taker_answers_and_every_node_gets_the_transaction() {
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -706,7 +778,7 @@ mod tests {
                 })
                 .collect::<Vec<_>>(),
         );
-        // a slow primary, a fast taker: the fast one answers at once, the primary still gets it
+        // A slow primary, a fast taker: the fast one answers at once, the primary still gets it.
         let m = MultiSubmit::new(
             fake(Ok([1; 32]), 300),
             vec![(1, fake(Ok([1; 32]), 5)), (2, fake(Err(RpcError::Transport("down".into())), 1))],
@@ -719,25 +791,25 @@ mod tests {
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3, "every node got the transaction");
         let st = board.snapshot();
         assert_eq!((st[0].submits_ok, st[1].submits_ok, st[2].submits_failed), (1, 1, 1), "{st:?}");
-        // nobody takes it: the primary's verdict
+        // Nobody takes it: the primary's verdict.
         let ds = RpcError::Node("output already spent by transaction x in the mempool".into());
         let m = MultiSubmit::new(fake(Err(ds.clone()), 1), vec![(1, fake(Err(RpcError::Node("orphan".into())), 1))], None);
         assert_eq!(m.submit(json!({})).await, Err(ds.clone()));
-        // the primary failed on the wire: another node's verdict
+        // The primary failed on the wire: another node's verdict.
         let m = MultiSubmit::new(
             fake(Err(RpcError::Timeout(Duration::from_secs(1))), 1),
             vec![(1, fake(Err(RpcError::Node("transaction x is already in the mempool".into())), 1))],
             None,
         );
         assert_eq!(m.submit(json!({})).await, Err(RpcError::Node("transaction x is already in the mempool".into())));
-        // the primary refuses, another node already holds it: the transaction is out there (audit 2026-11-11 L-11)
+        // The primary refuses, another node already holds it: the transaction is out there.
         let m = MultiSubmit::new(
             fake(Err(ds.clone()), 1),
             vec![(1, fake(Err(RpcError::Node("transaction x is already in the mempool".into())), 5))],
             None,
         );
         assert_eq!(m.submit(json!({})).await, Err(RpcError::Node("transaction x is already in the mempool".into())));
-        // a single node: exactly that node
+        // A single node: exactly that node.
         let m: MultiSubmit<Fake> = MultiSubmit::new(fake(Ok([2; 32]), 1), vec![], None);
         assert_eq!(m.submit(json!({})).await, Ok([2; 32]));
     }
