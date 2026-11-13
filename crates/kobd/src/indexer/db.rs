@@ -127,6 +127,7 @@ pub fn open_writer_with(path: &Path, network: &str, lean: bool) -> DbResult<Conn
     // Before anything is created or altered, an older database is refused as it is.
     refuse_pre_v3(&conn, path)?;
     refuse_old_layout(&conn, path)?;
+    refuse_newer_or_foreign(&conn, network)?;
     if lean {
         // A lean store keeps its WAL smaller still: 8 MiB instead of the default 64 MiB.
         conn.pragma_update(None, "journal_size_limit", 8 * 1024 * 1024)?;
@@ -162,6 +163,28 @@ pub fn refuse_old_layout(conn: &Connection, path: &Path) -> DbResult<()> {
         if v < SCHEMA_VERSION {
             return Err(DbError::OldLayout(path.display().to_string(), v));
         }
+    }
+    Ok(())
+}
+
+/// Refuses a store of a newer schema than this build's, or of another network, untouched.
+///
+/// The check runs before the schema, the migrations and the lean rewrite, so an older build never
+/// creates its tables and indexes in a newer store or rewrites its rows, and no build writes into a
+/// store of another network. [`init_meta`] checks the same after a fresh store is created.
+fn refuse_newer_or_foreign(conn: &Connection, network: &str) -> DbResult<()> {
+    let has_meta: bool = conn.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'")?.exists([])?;
+    if !has_meta {
+        return Ok(());
+    }
+    let Some(v) = meta_get(conn, "schema_version")? else { return Ok(()) };
+    let found: i64 = v.parse().unwrap_or(0);
+    if found > SCHEMA_VERSION {
+        return Err(DbError::SchemaTooNew { found, supported: SCHEMA_VERSION });
+    }
+    let net = meta_get(conn, "network")?.unwrap_or_default();
+    if net != network {
+        return Err(DbError::NetworkMismatch { found: net, expected: network.to_string() });
     }
     Ok(())
 }
@@ -868,6 +891,38 @@ mod tests {
         assert!(matches!(open_writer(&p, "mainnet"), Err(DbError::NetworkMismatch { .. })));
         let c = open_writer(&p, "testnet-10").unwrap();
         assert_eq!(meta_get(&c, "a").unwrap().as_deref(), Some("b"));
+    }
+
+    /// A store of a newer schema, or of another network, is refused before this build's schema and
+    /// migrations run, so nothing is created or rewritten in it.
+    #[test]
+    fn a_newer_or_foreign_store_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("x.sqlite3");
+        {
+            let c = open_writer(&p, "testnet-10").unwrap();
+            // What a newer build's store lacks of this one's: an index this build's schema creates.
+            c.execute_batch("DROP INDEX orders_genesis_page").unwrap();
+        }
+        let index = |p: &Path| {
+            Connection::open(p)
+                .unwrap()
+                .prepare("SELECT 1 FROM sqlite_master WHERE name = 'orders_genesis_page'")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        };
+        assert!(matches!(open_writer(&p, "mainnet"), Err(DbError::NetworkMismatch { .. })));
+        assert!(matches!(open_writer_with(&p, "mainnet", true), Err(DbError::NetworkMismatch { .. })));
+        assert!(!index(&p), "nothing was created in a store of another network");
+        meta_set(&Connection::open(&p).unwrap(), "schema_version", &(SCHEMA_VERSION + 1).to_string()).unwrap();
+        assert!(matches!(open_writer(&p, "testnet-10"), Err(DbError::SchemaTooNew { .. })));
+        assert!(matches!(open_writer_with(&p, "testnet-10", true), Err(DbError::SchemaTooNew { .. })));
+        assert!(!index(&p), "nothing was created in a newer store");
+        let c = Connection::open(&p).unwrap();
+        assert_eq!(meta_get(&c, "schema_version").unwrap(), Some((SCHEMA_VERSION + 1).to_string()));
+        // The lean rewrite did not run either.
+        assert_eq!(c.query_row("PRAGMA auto_vacuum", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
     }
 
     /// A database written before protocol v3 is refused by the writer and the reader.
