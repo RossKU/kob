@@ -1,13 +1,21 @@
-// Token issuance ("kob token create" in the browser): form model, validation and planning over the kob-wasm `issue` export.
+// Token issuance ("kob token create" in the browser): form model, validation and planning over
+// the kob-wasm `issue` export.
 //
-// A creation is TWO transactions under KCC-23 (docs/spec/token-metadata.md): `prep`, the preparation (the wallet's P2PK funding -> output 0,
-// the wallet's own P2PK of exactly the genesis's carriers and fee, + change; its payload declares the token metadata: 0x00 + JSON with name,
-// symbol, decimals and the optional description, image, image_hash, website, x, telegram), and `built`, the genesis spending that output 0 (input 0
-// authorises the KIP-20 genesis group, so the covenant id commits to the declaration) -> 1..N token outputs of the fixed-supply KCC-20
-// reference, by default the published public-mint build `KCC20PublicMint` (the de-facto standard KCC-20 program, 3 / 3; no minter is created)
-// or, chosen in the form, the standalone 3 / 3 build `KCC20Ref`, no change. All protocol logic lives in Rust (`kob-protocol::issue`); this module only turns a human form into the wasm
-// spec, selects funding and types the result. Both are ordinary `BuiltTx`, so `kob.finalize` and `kob.validate` handle each unchanged;
-// wallet/create.ts signs both under one confirmation and sends the preparation first.
+// A creation is two transactions under KCC-23 (docs/spec/token-metadata.md).
+// - `prep`, the preparation, spends the wallet's P2PK funding. Output 0 is the wallet's own P2PK of
+//   exactly the genesis's carriers and fee, and the rest is change. Its payload declares the token
+//   metadata: 0x00 + JSON with name, symbol, decimals and the optional description, image,
+//   image_hash, website, x and telegram.
+// - `built`, the genesis, spends that output 0. Input 0 authorises the KIP-20 genesis group, so
+//   the covenant id commits to the declaration. It creates 1..N token outputs of the fixed-supply
+//   KCC-20 reference and no change. The default program is the published public-mint build
+//   `KCC20PublicMint` (3 / 3, no minter is created). The form can choose the standalone 3 / 3
+//   build `KCC20Ref`.
+//
+// All protocol logic lives in Rust (`kob-protocol::issue`). This module only turns a human form
+// into the wasm spec, selects funding and types the result. Both transactions are ordinary
+// `BuiltTx`, so `kob.finalize` and `kob.validate` handle each unchanged. wallet/create.ts signs
+// both under one confirmation and sends the preparation first.
 import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
@@ -15,9 +23,12 @@ import { normalizeTicker } from './registry';
 import type { BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
-// ------------------------------------------------------------------------------------------------ kob-wasm boundary
+// ------------------------------------------------------------------------------- kob-wasm boundary
 
-/** Constants and rules exported by `kob.raw.issueLimits()`: the UI reads them instead of hard-coding them. */
+/**
+ * Constants and rules exported by `kob.raw.issueLimits()`.
+ * The UI reads them instead of hard-coding them.
+ */
 export interface IssueLimits {
   maxSupply: U64;
   maxGenesisOutputs: number;
@@ -31,23 +42,27 @@ export interface IssueLimits {
   ticker: { minLength: number; maxLength: number; pattern: string };
   name: { minLength: number; maxLength: number };
   maxDisplayChars: number;
-  /** the declaration's payload limit in bytes (codec byte included); absent on older bindings */
+  /** The declaration's payload limit in bytes, codec byte included. Absent on older bindings. */
   maxMetadataBytes?: number;
   ownerSchemes: number[];
   covenantOwnerScheme: number;
-  /** the standalone 3 / 3 reference program (request `program: '3x3'`): issued only when chosen */
+  /** The standalone 3 / 3 reference program (request `program: '3x3'`). Issued only when chosen. */
   program: 'KCC20Ref';
   registryTemplateId: string;
-  /** the published public-mint build of the reference, the default issuance (request `program: 'public-mint'`): 3 / 3 slots */
+  /**
+   * The published public-mint build of the reference, the default issuance (request
+   * `program: 'public-mint'`), with 3 / 3 slots.
+   */
   publicMint: { program: 'KCC20PublicMint'; registryTemplateId: string; maxTokenInputs: number; maxTokenOutputs: number };
   extensionClass: string;
   extensionCommitment: Hex;
 }
 
+/** One holder of the initial supply, in the units of the wasm spec. */
 export interface IssueHolderSpec {
   owner: Hex;
   ownerScheme: number;
-  /** base units */
+  /** Base units. */
   amount: U64;
   borrowScheme?: number;
   borrowGuard?: Hex;
@@ -58,32 +73,39 @@ export interface IssueSpec {
   name: string;
   ticker: string;
   decimals: number;
-  /** base units */
+  /** Base units. */
   supply: U64;
   holders: IssueHolderSpec[];
   extensionCommitment?: Hex;
-  /** KAS (sompi) on every token output */
+  /** KAS (sompi) on every token output. */
   carrier?: U64;
   feeRate?: U64;
   funding: KeyUtxo[];
-  /** x-only key that receives the change (default: the owner of funding[0]) */
+  /** The x-only key that receives the change (default: the owner of funding[0]). */
   changeTo?: Hex;
   allowBorrow?: boolean;
   description?: string;
-  /** the picture's address (declared as `image`, registry `display.icon`) */
+  /** The picture's address, declared as `image` (registry `display.icon`). */
   icon?: string;
-  /** SHA-256 of the picture file's bytes, 64 hex characters (declared lowercase as `image_hash`, right after `image`; needs `icon`) */
+  /**
+   * SHA-256 of the picture file's bytes, 64 hex characters. Declared lowercase as `image_hash`,
+   * right after `image`. Needs `icon`.
+   */
   imageHash?: string;
   website?: string;
-  /** the token's X account: a handle or its address (declared as `https://x.com/<handle>`) */
+  /** The token's X account: a handle or its address. Declared as `https://x.com/<handle>`. */
   x?: string;
-  /** the token's Telegram: a handle or its address (declared as `https://t.me/<handle>`) */
+  /** The token's Telegram: a handle or its address. Declared as `https://t.me/<handle>`. */
   telegram?: string;
   network?: string;
-  /** `public-mint` (default, `KCC20PublicMint`, the published build of the reference) or `3x3` (`KCC20Ref`, the standalone 3 / 3) */
+  /**
+   * `public-mint` (default, `KCC20PublicMint`, the published build of the reference) or `3x3`
+   * (`KCC20Ref`, the standalone 3 / 3).
+   */
   program?: '3x3' | 'public-mint';
 }
 
+/** One token output of the issued genesis. */
 export interface IssueTokenOutput {
   index: number;
   amount: U64;
@@ -93,6 +115,7 @@ export interface IssueTokenOutput {
   borrowGuard: Hex;
 }
 
+/** The issued token's facts as the genesis creates them. */
 export interface IssueToken {
   covenantId: Hex;
   program: 'KCC20Ref' | 'KCC20PublicMint';
@@ -101,17 +124,19 @@ export interface IssueToken {
   name: string;
   ticker: string;
   decimals: number;
-  /** base units */
+  /** Base units. */
   supply: U64;
-  /** KAS (sompi) on every token output */
+  /** KAS (sompi) on every token output. */
   carrier: U64;
   outputs: IssueTokenOutput[];
 }
 
 /**
- * The issued token's facts in the format of a `registry/tokens.json` entry (`registry/tokens.schema.json`, `$defs.token`): covenant id, program,
- * extension commitment, decimals and what it declared, for tools and community token lists that read that format. Not a listing request: KOB keeps
- * no list of approved tokens, and the token trades without any entry.
+ * The issued token's facts in the format of a `registry/tokens.json` entry
+ * (`registry/tokens.schema.json`, `$defs.token`).
+ * It holds the covenant id, program, extension commitment, decimals and what the token declared,
+ * for tools and community token lists that read that format. It is not a listing request. KOB
+ * keeps no list of approved tokens, and the token trades without any entry.
  */
 export interface RegistryTokenEntry {
   ticker: string;
@@ -122,40 +147,51 @@ export interface RegistryTokenEntry {
   extension_commitment: Hex | null;
   extension_class: string;
   decimals: number;
-  /** legacy (protocol v2): not emitted for a new token (the registry reads and ignores them) */
+  /** Legacy fields. They are not emitted for a new token, and the registry ignores them. */
   lot_size?: number | null;
   tick?: number | null;
   max_token_inputs?: number;
   max_token_outputs?: number;
-  /** not yet checked against a chain UTXO by whoever adopts the entry */
+  /** Not yet checked against a chain UTXO by whoever adopts the entry. */
   verified: false;
   display?: { description?: string; website?: string; icon?: string; x?: string; telegram?: string; kcc23?: Record<string, unknown> };
 }
 
+/** The documents an issuance produces. */
 export interface IssueDocs {
-  /** `supply.json` (kob-token-supply/1): what was issued and where (its `kcc23` names the preparation) */
+  /**
+   * `supply.json` (kob-token-supply/1): what was issued and where.
+   * Its `kcc23` names the preparation.
+   */
   supply: Record<string, unknown>;
-  /** the token metadata the preparation declares on chain (KCC-23; KOB's field names) */
+  /** The token metadata the preparation declares on chain (KCC-23; KOB's field names). */
   metadata: Record<string, unknown>;
   registryEntry: RegistryTokenEntry;
-  /** the KCC-23 launch proof (`kob-kcc23-proof/1`): both transactions in the fields their ids commit to; anyone can verify it */
+  /**
+   * The KCC-23 launch proof (`kob-kcc23-proof/1`): both transactions in the fields their ids
+   * commit to. Anyone can verify it.
+   */
   launchProof: Record<string, unknown>;
 }
 
 /** What the preparation declares. */
 export interface IssueDeclaration {
-  /** the JSON text, exactly as committed */
+  /** The JSON text, exactly as committed. */
   json: string;
-  /** the payload, hex: `00` + the UTF-8 JSON */
+  /** The payload, hex: `00` + the UTF-8 JSON. */
   payload: Hex;
-  /** sompi of the preparation's output 0 (the wallet's own until the genesis spends it): the genesis's carriers and fee */
+  /**
+   * Sompi of the preparation's output 0, which is the wallet's own until the genesis spends it.
+   * It is the genesis's carriers and fee.
+   */
   funding: U64;
 }
 
+/** The two planned transactions of an issuance, with the token and its documents. */
 export interface IssueResult {
-  /** step 1: the preparation, declaring the metadata (KCC-23) */
+  /** Step 1: the preparation, declaring the metadata (KCC-23). */
   prep: BuiltTx;
-  /** step 2: the genesis, spending `prep`'s output 0 */
+  /** Step 2: the genesis, spending `prep`'s output 0. */
   built: BuiltTx;
   declaration: IssueDeclaration;
   token: IssueToken;
@@ -168,7 +204,7 @@ interface RawIssue {
   issueLimits(): string;
 }
 
-/** Typed access to the issuance exports through `kob.raw` (older bindings do not have them). */
+/** Typed access to the issuance exports through `kob.raw`. Older bindings do not have them. */
 function rawIssue(kob: KobWasm): RawIssue {
   const r = kob.raw as unknown as Partial<RawIssue>;
   if (typeof r.issue !== 'function' || typeof r.issueLimits !== 'function') {
@@ -179,7 +215,7 @@ function rawIssue(kob: KobWasm): RawIssue {
 
 const limitsCache = new WeakMap<object, IssueLimits>();
 
-/** Limits and rules of the issuance flow (maximum supply, ticker rules, default carrier ...). */
+/** Limits and rules of the issuance flow (maximum supply, ticker rules, default carrier, ...). */
 export function issueLimits(kob: KobWasm): IssueLimits {
   let l = limitsCache.get(kob.raw);
   if (!l) {
@@ -194,7 +230,10 @@ export function issueLimits(kob: KobWasm): IssueLimits {
   return l;
 }
 
-/** Plans an issuance from an already-resolved spec: `kob.raw.issue` with typed input and output. Throws KobError with the protocol's reason. */
+/**
+ * Plans an issuance from an already-resolved spec: `kob.raw.issue` with typed input and output.
+ * Throws KobError with the protocol's reason.
+ */
 export function issueRaw(kob: KobWasm, spec: IssueSpec): IssueResult {
   const raw = rawIssue(kob);
   try {
@@ -205,15 +244,18 @@ export function issueRaw(kob: KobWasm, spec: IssueSpec): IssueResult {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ amounts and tickers
+// ----------------------------------------------------------------------------- amounts and tickers
 
-/** Decimal text to an integer scaled by 10^fractionDigits. `precision` = more fractional digits than allowed. */
+/**
+ * Decimal text to an integer scaled by 10^fractionDigits.
+ * The `precision` error means more fractional digits than allowed.
+ */
 export function parseDecimal(text: string, fractionDigits: number): { value: bigint } | { error: 'syntax' | 'precision' } {
   const m = /^(\d+)(?:\.(\d+))?$/.exec(text.trim());
   if (!m) return { error: 'syntax' };
   const frac = m[2] ?? '';
   if (frac.length > fractionDigits) {
-    // trailing zeros beyond the precision carry no information ("1.500" with 2 decimals is 1.5)
+    // Trailing zeros beyond the precision carry no information ("1.500" with 2 decimals is 1.5).
     if (/[^0]/.test(frac.slice(fractionDigits))) return { error: 'precision' };
   }
   const scaled = frac.slice(0, fractionDigits).padEnd(fractionDigits, '0');
@@ -228,10 +270,16 @@ export function formatUnits(value: bigint, decimals: number): string {
   return frac ? `${whole}.${frac}` : whole;
 }
 
-/** Homoglyph normalisation of tickers (registry.ts), for the look-alike WARNING below: a shared ticker never blocks an issuance. */
+/**
+ * Homoglyph normalisation of tickers (registry.ts), for the look-alike warning below.
+ * A shared ticker never blocks an issuance.
+ */
 export { normalizeTicker };
 
-/** Zero-width, bidi and control characters the registry refuses in display text (`registry.rs::has_bad_char`). */
+/**
+ * Characters the registry refuses in display text: zero-width, bidi and control characters
+ * (`registry.rs::has_bad_char`).
+ */
 const BAD_CHARS = /[\p{Cc}​-‏‪-‮⁠-⁤⁦-⁩﻿]/u;
 
 const HEX32 = /^[0-9a-f]{64}$/;
@@ -245,52 +293,68 @@ function isXOnlyKey(hex: Hex): boolean {
   }
 }
 
-// ------------------------------------------------------------------------------------------------ form
+// -------------------------------------------------------------------------------------------- form
 
+/** One holder of the issuance form: an owner and an amount in whole tokens. */
 export interface IssueHolderForm {
-  /** 64 hex chars: x-only key (scheme 0), key hash / script hash (1..3) or covenant id (4) */
+  /** 64 hex chars: an x-only key (scheme 0), a key or script hash (1..3) or a covenant id (4). */
   owner: Hex;
   ownerScheme: number;
-  /** whole tokens, decimal text (up to `decimals` fractional digits) */
+  /** Whole tokens, decimal text (up to `decimals` fractional digits). */
   amount: string;
   borrowScheme?: number;
   borrowGuard?: Hex;
 }
 
-/** The program a form issues: the reference's published public-mint build (the default, 3 / 3) or the standalone 3 / 3 build (`KCC20Ref`; cheaper transfers, but other indexers do not recognise it). */
+/**
+ * The program a form issues: the published public-mint build of the reference (the default,
+ * 3 / 3) or the standalone 3 / 3 build (`KCC20Ref`). The standalone build has cheaper transfers,
+ * but other indexers do not recognise it.
+ */
 export type IssueProgramChoice = 'public-mint' | '3x3';
 
+/** The issuance form as the user fills it: text for the fields, decimal text for amounts. */
 export interface IssueForm {
-  /** absent = `public-mint` */
+  /** Absent = `public-mint` */
   program?: IssueProgramChoice;
   name: string;
-  /** exactly as it will be issued: 2..12 characters A-Z 0-9 */
+  /** Exactly as it will be issued: 2..12 characters A-Z 0-9. */
   ticker: string;
   decimals: number;
-  /** whole tokens, decimal text (up to `decimals` fractional digits); the total supply is fixed forever */
+  /** Whole tokens, decimal text (up to `decimals` fractional digits). The supply is fixed. */
   supply: string;
-  /** empty = the whole supply to the maker */
+  /** Empty = the whole supply to the maker. */
   holders: IssueHolderForm[];
-  /** KAS carried by every token output, decimal text; empty = the default (10 KAS) */
+  /** KAS carried by every token output, decimal text. Empty means the default carrier. */
   carrier: string;
   description: string;
   icon: string;
-  /** SHA-256 of the picture file (64 hex; empty = none); needs `icon` */
+  /** SHA-256 of the picture file (64 hex). Empty means none. Needs `icon`. */
   imageHash?: string;
   website: string;
-  /** the token's X (Twitter) account: a handle (`@name`) or its https:// address; optional (registry entry and metadata only) */
+  /**
+   * The token's X (Twitter) account: a handle (`@name`) or its https:// address. Optional. It
+   * reaches the registry entry and the metadata only.
+   */
   x?: string;
-  /** the token's Telegram: a handle or its https://t.me/ address; optional (registry entry and metadata only) */
+  /**
+   * The token's Telegram: a handle or its https://t.me/ address. Optional. It reaches the
+   * registry entry and the metadata only.
+   */
   telegram?: string;
-  /** permit a non-zero borrow scheme on non-covenant holders (never set by the default form) */
+  /** Permit a non-zero borrow scheme on non-covenant holders (never set by the default form). */
   allowBorrow?: boolean;
 }
 
+/** A blank form with the default decimals. */
 export function emptyIssueForm(): IssueForm {
   return { name: '', ticker: '', decimals: 8, supply: '', holders: [], carrier: '', description: '', icon: '', website: '' };
 }
 
-/** A form after parsing: everything in base units / sompi. `holders` is empty when the form uses the default (all to the maker). */
+/**
+ * A form after parsing, in base units and sompi.
+ * `holders` is empty when the form uses the default (all to the maker).
+ */
 interface ParsedForm {
   supply: bigint;
   holders: { owner: Hex; ownerScheme: number; amount: bigint; borrowScheme: number; borrowGuard: Hex }[];
@@ -303,7 +367,10 @@ function issue(code: string, message: string, field?: string, params?: PlanIssue
   return { code, severity, message, ...(field ? { field } : {}), ...(params ? { params } : {}) };
 }
 
-/** Validation with the parsed values (null when the numbers do not parse). Same rules as `kob-protocol::issue` and `registry.rs`. */
+/**
+ * Validation with the parsed values (null when the numbers do not parse).
+ * The rules are those of `kob-protocol::issue` and `registry.rs`.
+ */
 function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable<string> = []): { issues: PlanIssue[]; parsed: ParsedForm | null } {
   const issues: PlanIssue[] = [];
   let ok = true;
@@ -325,8 +392,9 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   } else if (!new RegExp(limits.ticker.pattern).test(t)) {
     err('ticker.chars', 'The ticker uses only capital letters A-Z and digits 0-9.', 'ticker');
   } else {
-    // a warning, never a refusal: tickers are not unique, the covenant id is the identity, and refusing a ticker because another token
-    // carries it (or one like it) would be KOB choosing between tokens (curation). The issuer sees it before choosing.
+    // A warning, never a refusal. Tickers are not unique and the covenant id is the identity.
+    // Refusing a ticker because another token carries it (or one like it) would be KOB choosing
+    // between tokens (curation). The issuer sees the warning before choosing.
     const norm = normalizeTicker(t);
     const warn = (code: string, message: string, params: PlanIssue['params']) => issues.push(issue(code, message, 'ticker', params, 'warning'));
     for (const existing of registryTickers) {
@@ -352,7 +420,7 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   const ps = parseDecimal(form.supply, decimals);
   if ('error' in ps) {
     if (!decimalsOk && ps.error === 'precision') {
-      // the decimals error already explains it
+      // The decimals error already explains it.
     } else if (ps.error === 'precision') err('supply.precision', `The supply has more than ${decimals} decimal places.`, 'supply', { decimals });
     else err('supply.invalid', 'Enter the supply as a number, for example 1000000.', 'supply');
   } else if (ps.value === 0n) {
@@ -395,7 +463,7 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     if (!HEX32.test(owner)) {
       herr('holder.owner.invalid', `Holder ${i + 1}: the owner is 64 hexadecimal characters.`, f('owner'));
     } else if (h.ownerScheme === 0 && !isXOnlyKey(owner)) {
-      // an unspendable key would burn the tokens
+      // An unspendable key would burn the tokens.
       herr('holder.owner.not_a_key', `Holder ${i + 1}: the owner is not a valid public key, the tokens could never be spent.`, f('owner'));
     }
     const pa = parseDecimal(h.amount, decimals);
@@ -413,7 +481,7 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     if (!Number.isInteger(borrowScheme) || borrowScheme < 0 || borrowScheme > 3) {
       herr('holder.borrow.scheme', `Holder ${i + 1}: unknown borrow scheme.`, f('borrowScheme'));
     } else if (h.ownerScheme === limits.covenantOwnerScheme && (borrowScheme !== 0 || borrowGuard !== ZERO32)) {
-      // borrows churn the outpoint and break outpoint-bound claims
+      // Borrows churn the outpoint and break outpoint-bound claims.
       herr('holder.borrow.covenant', `Holder ${i + 1}: tokens held by a covenant cannot enable borrowing.`, f('borrowScheme'));
     } else if (borrowScheme !== 0 && !form.allowBorrow) {
       herr('holder.borrow.flag', `Holder ${i + 1}: borrowing needs the explicit allow-borrow option.`, f('borrowScheme'));
@@ -449,15 +517,16 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
     }
   }
 
-  // the declaration on chain (KCC-23): name, symbol and decimals, then the optional fields, at most `maxMetadataBytes` (the Rust rule, measured
-  // the way it serialises: the same fields in the same order)
+  // The declaration on chain (KCC-23): name, symbol and decimals, then the optional fields, at most
+  // `maxMetadataBytes`. The Rust rule is measured the way it serialises, with the same fields in
+  // the same order.
   const maxBytes = limits.maxMetadataBytes;
   if (maxBytes) {
     const bytes = metadataBytes(form);
     if (bytes > maxBytes) err('metadata.too_large', `The token details take ${bytes} bytes on chain, at most ${maxBytes}: shorten the description or the links.`, 'description', { bytes, max: maxBytes });
   }
 
-  // display text (the registry's rules, so the proposed entry is accepted)
+  // Display text follows the registry's rules, so the proposed entry is accepted.
   const disp = (v: string, field: 'description' | 'website' | 'icon') => {
     const s = v.trim();
     if (s === '') return;
@@ -472,13 +541,15 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   disp(form.description, 'description');
   disp(form.website, 'website');
   disp(form.icon, 'icon');
-  // the picture's hash (KCC-0021's `image_hash`): the SHA-256 of the file, 64 hex characters, only next to an address
+  // The picture's hash (KCC-0021's `image_hash`): the SHA-256 of the file, 64 hex characters, only
+  // next to an address.
   const imageHash = (form.imageHash ?? '').trim();
   if (imageHash !== '') {
     if (!/^[0-9a-fA-F]{64}$/.test(imageHash)) err('imagehash.invalid', 'The picture hash must be 64 hexadecimal characters (the SHA-256 of the image file).', 'imageHash');
     else if (form.icon.trim() === '') err('imagehash.needs_icon', 'A picture hash needs the picture address.', 'imageHash');
   }
-  // the token's social accounts: a handle or the account's https:// address (the registry keeps the address)
+  // The token's social accounts: a handle or the account's https:// address. The registry keeps
+  // the address.
   for (const kind of ['x', 'telegram'] as const) {
     const v = (form[kind] ?? '').trim();
     if (v !== '' && socialUrl(kind, v) === null) {
@@ -489,7 +560,10 @@ function analyze(form: IssueForm, limits: IssueLimits, registryTickers: Iterable
   return { issues, parsed: ok && supply !== null ? { supply, holders, carrier } : null };
 }
 
-/** Bytes of the declaration a form makes (codec byte included): KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them. */
+/**
+ * Bytes of the declaration a form makes (codec byte included).
+ * KOB's fields in KOB's order, as kob-protocol `TokenMetadata::json` writes them.
+ */
 export function metadataBytes(form: Pick<IssueForm, 'name' | 'ticker' | 'decimals' | 'description' | 'icon' | 'imageHash' | 'website' | 'x' | 'telegram'>): number {
   const opt = (k: string, v: string | null | undefined) => (v && v.trim() ? `,"${k}":${JSON.stringify(v.trim())}` : '');
   const x = form.x ? socialUrl('x', form.x) : null;
@@ -505,13 +579,17 @@ export function slotsOf(form: Pick<IssueForm, 'program'>, limits: IssueLimits): 
   return form.program === '3x3' ? limits : limits.publicMint;
 }
 
-/** Validates an issuance form: `error` issues block the plan, `warning` issues are shown. `registryTickers` = tickers already in the registry. */
+/**
+ * Validates an issuance form. `error` issues block the plan and `warning` issues are shown.
+ * `registryTickers` are the tickers already in the registry.
+ */
 export function validateIssueForm(form: IssueForm, limits: IssueLimits, registryTickers?: Iterable<string>): PlanIssue[] {
   return analyze(form, limits, registryTickers).issues;
 }
 
-// ------------------------------------------------------------------------------------------------ planning
+// ---------------------------------------------------------------------------------------- planning
 
+/** Thrown by `planIssue` for an invalid form or insufficient funds. */
 export class IssueFormError extends Error {
   readonly issues: PlanIssue[];
   constructor(issues: PlanIssue[]) {
@@ -521,47 +599,61 @@ export class IssueFormError extends Error {
   }
 }
 
+/** Options of `planIssue`. */
 export interface PlanIssueOptions {
-  /** the wallet's spendable P2PK KAS UTXOs (coinbase maturity already applied by the caller) */
+  /** The wallet's spendable P2PK KAS UTXOs. The caller has applied coinbase maturity. */
   funding: KeyUtxo[];
-  /** the wallet's x-only key: default sole holder, signer of every funding input */
+  /** The wallet's x-only key: the default sole holder and the signer of every funding input. */
   maker: Hex;
   network: string;
-  /** sompi per mass unit (default = the relay minimum from the limits). An explicit rate: the fee policy (`fees`) is then not asked. */
+  /**
+   * Sompi per mass unit (default: the relay minimum from the limits). With an explicit rate the
+   * fee policy (`fees`) is not asked.
+   */
   feeRate?: bigint;
-  /** dynamic fee policy + the node's estimate (kob/fee-policy.ts): the issuance pays the NORMAL bucket; absent = the relay minimum */
+  /**
+   * Dynamic fee policy and the node's estimate (kob/fee-policy.ts). The issuance pays the normal
+   * bucket. Absent means the relay minimum.
+   */
   fees?: FeeContext;
-  /** set by the planner: the pick behind `feeRate` */
+  /** Set by the planner: the pick behind `feeRate` */
   feePick?: RatePick;
-  /** where change returns (default: maker) */
+  /** Where change returns (default: maker). */
   changeTo?: Hex;
-  /** tickers already in the registry, for the shared / look-alike ticker warning (never a refusal) */
+  /** Tickers already in the registry, for the shared and look-alike ticker warning. */
   registryTickers?: Iterable<string>;
-  /** default: `issueLimits(kob)` */
+  /** Default: `issueLimits(kob)`. */
   limits?: IssueLimits;
 }
 
+/** A planned issuance: the two transactions plus the spec sent to kob-wasm and the fee. */
 export interface IssuePlan extends IssueResult {
-  /** the spec sent to kob-wasm (with the funding actually used) */
+  /** The spec sent to kob-wasm (with the funding actually used). */
   spec: IssueSpec;
-  /** network fee in sompi: the preparation's and the genesis's together */
+  /** Network fee in sompi: the preparation's and the genesis's together. */
   fee: bigint;
 }
 
-/** Rough mass of a creation (the preparation with its payload, the genesis with `outputs` token outputs), used only to size the funding selection (the exact fees come from kob-wasm). */
+/**
+ * Rough mass of a creation: the preparation with its payload and the genesis with `outputs` token
+ * outputs. It only sizes the funding selection. The exact fees come from kob-wasm.
+ */
 const estimateFeeMass = (outputs: number): bigint => 5_000n + 1_500n * BigInt(outputs);
 
 /**
- * Validates the form, selects funding (largest UTXOs first: fewest inputs; covering all carriers plus a fee reserve, growing the selection
- * while kob-wasm reports a shortfall) and plans the genesis. Throws `IssueFormError` for invalid forms and insufficient funds, `KobError`
- * for protocol rejections. Nothing is signed or sent here.
+ * Validates the form, selects funding and plans the genesis.
+ * Funding takes the largest UTXOs first, so it uses the fewest inputs. It covers all carriers plus
+ * a fee reserve and grows while kob-wasm reports a shortfall.
+ * Throws `IssueFormError` for invalid forms and insufficient funds, and `KobError` for protocol
+ * rejections. Nothing is signed or sent here.
  */
 export function planIssue(kob: KobWasm, form: IssueForm, opts0: PlanIssueOptions): IssuePlan {
   const opts = withUrgency(opts0, 'normal');
   try {
     return planIssueAt(kob, form, opts);
   } catch (e) {
-    // the wallet cannot pay the fee at the picked rate: try the floor before giving up (the estimate must not make a payable issuance impossible)
+    // The wallet cannot pay the fee at the picked rate, so try the floor before giving up.
+    // The estimate must not make a payable issuance impossible.
     const low = e instanceof IssueFormError && e.issues.some((i) => i.code === 'funds.insufficient') ? atFloor(opts) : null;
     if (!low) throw e;
     try {
@@ -591,7 +683,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       : [{ owner: maker, ownerScheme: 0, amount: parsed.supply.toString() }];
   const outputs = BigInt(holders.length);
 
-  // Only plain P2PK UTXOs of the maker can fund the genesis: the wallet signs every input with its one key.
+  // Only plain P2PK UTXOs of the maker can fund the genesis, because the wallet signs every input
+  // with its one key.
   const candidates = opts.funding
     .filter((u) => u.pubkey.toLowerCase() === maker && !u.covenantId)
     .sort((a, b) => (BigInt(a.amount) === BigInt(b.amount) ? 0 : BigInt(a.amount) > BigInt(b.amount) ? -1 : 1));
@@ -608,7 +701,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     ]);
   if (have < carriers) throw shortfall();
 
-  // smallest largest-first prefix covering the carriers and an estimated fee; grown on demand
+  // The smallest largest-first prefix covering the carriers and an estimated fee. It grows on
+  // demand.
   const reserve = feeRate * estimateFeeMass(holders.length);
   let count = 0;
   let acc = 0n;
@@ -637,7 +731,8 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     try {
       let r = issueRaw(kob, spec);
       const total = (x: IssueResult) => BigInt(x.prep.fee.fee) + BigInt(x.built.fee.fee);
-      // the total fee cap (both transactions): a fee above it is rebuilt once at a lower rate (fee-policy.ts)
+      // The total fee cap (both transactions). A fee above it is rebuilt once at a lower rate
+      // (fee-policy.ts).
       const next = opts.fees ? capForTotal(opts.fees.policy, feeRate, total(r)) : null;
       if (next !== null) {
         try {
@@ -665,7 +760,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
   }
 }
 
-// ------------------------------------------------------------------------------------------------ results
+// ----------------------------------------------------------------------------------------- results
 
 /** Where a social account lives: its handle rule and its canonical https:// address. */
 const SOCIAL = {
@@ -674,8 +769,9 @@ const SOCIAL = {
 } as const;
 
 /**
- * A social account as the registry entry keeps it: its canonical https:// address (`https://x.com/name`, `https://t.me/name`), from a handle
- * (`@name`, `name`) or an address of the account; null when it is neither.
+ * A social account as the registry entry keeps it: its canonical https:// address
+ * (`https://x.com/name`, `https://t.me/name`).
+ * The input is a handle (`@name`, `name`) or an address of the account. Anything else gives null.
  */
 export function socialUrl(kind: 'x' | 'telegram', input: string): string | null {
   const s = input.trim();
@@ -685,8 +781,9 @@ export function socialUrl(kind: 'x' | 'telegram', input: string): string | null 
 }
 
 /**
- * The issued token's facts in the registry format (`RegistryTokenEntry`): `verified: false`, program = the pinned template of the issued program
- * (`kcc20-ref-public-mint`, or `kcc20-ref-3x3`). Checks that the docs describe this token before handing them out.
+ * The issued token's facts in the registry format (`RegistryTokenEntry`).
+ * It has `verified: false` and the pinned template of the issued program (`kcc20-ref-public-mint`
+ * or `kcc20-ref-3x3`). It checks that the docs describe this token before handing them out.
  */
 export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): RegistryTokenEntry {
   const e = docs.registryEntry;
@@ -696,14 +793,20 @@ export function registryEntryFromIssue(token: IssueToken, docs: IssueDocs): Regi
   return { ...e, verified: false };
 }
 
-/** Whether `built` (a genesis) spends exactly output 0 of `prep` (its one input, with that output's amount and script). */
+/**
+ * Whether `built` (a genesis) spends exactly output 0 of `prep`.
+ * That is its one input, with that output's amount and script.
+ */
 export function spendsPreparation(prep: BuiltTx, built: BuiltTx): boolean {
   const i = built.tx.inputs;
   const o = prep.tx.outputs[0];
   return i.length === 1 && i[0]!.transactionId === prep.tx.id && i[0]!.index === 0 && !!o && BigInt(i[0]!.utxo.amount) === BigInt(o.value) && i[0]!.utxo.scriptPublicKey === o.scriptPublicKey;
 }
 
-/** The token outputs of the genesis as token UTXOs with decoded state, for the token tracker (outputs `0..n` of `built.tx.id`). */
+/**
+ * The genesis token outputs (outputs `0..n` of `built.tx.id`) as token UTXOs with decoded state,
+ * for the token tracker.
+ */
 export function issuedTokenUtxos(plan: { built: BuiltTx; token: IssueToken }): TokenUtxo[] {
   const { built, token } = plan;
   return token.outputs.map((o) => {
