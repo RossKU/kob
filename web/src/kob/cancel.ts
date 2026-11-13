@@ -1,20 +1,30 @@
-// Cancel, cancel-replace, cancel-all (position), sweep and refund builders, plus the OrderSnapshot they consume (matcher.md 10.9, 5, 1.2).
+// Cancel, cancel-replace, cancel-all (position), sweep and refund builders, and the OrderSnapshot
+// they consume (docs/spec/matcher.md sections 1.2 and 10).
 //
-//   * every builder returns a kob-wasm request AND the built (unsigned) tx: protocol-level rejections surface before the user signs;
-//   * only the maker's spends move strays (tokens sent to an order from outside): the maker's SWEEP in place (`planSweep`: the order continues
-//     unchanged, only its strays return) and the cancel, which sweeps the custody and every stray of the order in the same tx; each token returns to
-//     the maker in ONE token output. FOREIGN strays (other tokens owned by the order id, with the program the indexer proved them under) ride
-//     along, one output per token; foreign strays without a proven state are reported, never built;
-//   * pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`) own TWO tokens, A and B: their custodies follow kob-protocol `custodies` (a sell-first
-//     entry holds A and a B prefund: `custody` + `prefund`), their strays may be of either token, and every builder treats each of A and B as one
-//     transfer (its own program, slots and extension commitment); a position cancel (an if-done pair entry with its exits) covers one pair;
-//   * fee: kob-wasm pays the fee out of the released carriers when they suffice (no P2PK funding input, so nothing extra to sign);
-//     when they do not (a tiny bid), maker funding UTXOs are added automatically; a change too small to be worth its storage mass rides on the
-//     new order instead of coming back as a dust output (kob-protocol's change rule of the amend builders);
-//   * an amendment of a plain ask that keeps its scale and amount, or of a plain bid that keeps its scale, is IN PLACE (`amendsInPlace`): the maker's
-//     cancel continues the covenant id, an ask's custody never moves (the order's carrier pays the fee) and a bid's escrow pays the fee or is topped up;
-//   * TypeScript never re-implements a protocol rule: the builder (crates/kob-protocol/src/build.rs) is the reference and its rejections
-//     are reported as `PlanIssue`s.
+// - Every builder returns a kob-wasm request and the built, unsigned tx, so protocol-level
+//   rejections surface before the user signs.
+// - Only the maker's spends move strays, which are tokens sent to an order from outside. These are
+//   the maker's sweep in place (`planSweep`), where the order continues unchanged and only its
+//   strays return, and the cancel, which sweeps the custody and every stray of the order in the
+//   same tx. Each token returns to the maker in one token output. Foreign strays, which are other
+//   tokens owned by the order id with the program the indexer proved them under, ride along with
+//   one output per token. Foreign strays without a proven state are reported and never built.
+// - Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`) own two tokens, A and B. Their custodies
+//   follow kob-protocol `custodies`. A sell-first entry holds A and a B prefund (`custody` and
+//   `prefund`). Their strays may be of either token, and every builder treats each of A and B as
+//   one transfer with its own program, slots and extension commitment. A position cancel, an
+//   if-done pair entry with its exits, covers one pair.
+// - Fee: kob-wasm pays the fee out of the released carriers when they suffice, so there is no P2PK
+//   funding input and nothing extra to sign. When they do not suffice (a tiny bid), maker funding
+//   UTXOs are added automatically. A change too small to be worth its storage mass rides on the
+//   new order instead of coming back as a dust output (kob-protocol's change rule of the amend
+//   builders).
+// - An amendment of a plain ask that keeps its scale and amount, or of a plain bid that keeps its
+//   scale, is in place (`amendsInPlace`). The maker's cancel continues the covenant id. An ask's
+//   custody never moves and the order's carrier pays the fee. A bid's escrow pays the fee or is
+//   topped up.
+// - TypeScript never re-implements a protocol rule. The builder (crates/kob-protocol/src/build.rs)
+//   is the reference, and its rejections are reported as `PlanIssue`s.
 import type { OrderView, TokenUtxoView } from '../data/indexer-types';
 import type { ExpectedSigning } from './decode';
 import {
@@ -34,50 +44,72 @@ import { guardRequest } from './request-guard';
 import { KobError, type KobWasm } from './wasm';
 
 const ONE_KAS = 100_000_000n;
-/** Headroom added when picking funding UTXOs for the (still unknown) fee of the enlarged tx; the surplus returns as change. */
+/**
+ * Headroom added when picking funding UTXOs for the (still unknown) fee of the enlarged tx; the
+ * surplus returns as change.
+ */
 const FUNDING_HEADROOM = 500_000n;
 /**
- * Most KAS a builder may fold into the maker's new order instead of a change output: kob-protocol takes a change only while its storage mass
- * (10^12 / value) exceeds the transaction's fee mass, i.e. below 10^12 / feeMass sompi, and every KOB transaction has a fee mass above 2,000 grams.
+ * Most KAS a builder may fold into the maker's new order instead of a change output.
+ *
+ * kob-protocol takes a change only while its storage mass (10^12 / value) exceeds the transaction's
+ * fee mass, which is below 10^12 / feeMass sompi. Every KOB transaction has a fee mass above 2,000
+ * grams.
  */
 const TINY_CHANGE_MAX = 5n * ONE_KAS;
 
-// ------------------------------------------------------------------------------------------------ snapshot
+// ------------------------------------------------------------------------------------------------
+// snapshot
 
 /**
- * Everything needed to spend one live order: its current covenant UTXO with decoded state, its custody token UTXO(s) (ask kinds and pair orders
- * holding tokens) and the strays owned by its covenant id. Built from the indexer's `OrderView` or from a `PlacementRecord` resolved on a node.
+ * Everything needed to spend one live order. It holds the current covenant UTXO with its decoded
+ * state, the custody token UTXOs (ask kinds and pair orders that hold tokens) and the strays owned
+ * by the covenant id. It is built from the indexer's `OrderView` or from a `PlacementRecord`
+ * resolved on a node.
  */
 export interface OrderSnapshot {
   covenantId: Hex;
   order: OrderUtxo<OrderState>;
-  /** the custody (a pair order: the FIRST of kob-protocol `custodies`, of A or of B) */
+  /** The custody. A pair order gives the first of kob-protocol `custodies`, of A or of B. */
   custody: TokenUtxo | null;
-  /** a sell-first `KobIfdPair`'s B prefund custody (the second of `custodies`) */
+  /** A sell-first `KobIfdPair`'s B prefund custody, the second of `custodies`. */
   prefund?: TokenUtxo | null;
-  /** strays of the order's own token(s) (a pair order: of A and of B) */
+  /** Strays of the order's own token or tokens. A pair order has them of A and of B. */
   strays: TokenUtxo[];
-  /** DAA from which anyone may refund (indexer `refund_due_daa`); informational, kob-wasm re-checks at build time */
+  /**
+   * DAA from which anyone may refund (indexer `refund_due_daa`). Informational, because kob-wasm
+   * re-checks at build time.
+   */
   refundDueDaa: bigint | null;
-  /** day-order deadline (UTC unix seconds) from the placement record */
+  /** Day-order deadline in UTC unix seconds, from the placement record. */
   deadline: bigint | null;
   source: 'indexer' | 'record' | 'chain';
-  /** the order's strays could not be (fully) read: a cancel may leave strays behind, the plan warns (C5 W-13) */
+  /**
+   * True when the order's strays could not be fully read. A cancel may then leave strays behind,
+   * and the plan warns.
+   */
   straysUnknown?: boolean;
   /**
-   * FOREIGN strays (matcher.md 1.2): tokens of other covenant ids owned by the order id, one group per token with the program the indexer proved
-   * their state under. The maker's cancel and sweep return them to the maker (one output per token); after the order ends nothing can move them.
+   * Foreign strays (docs/spec/matcher.md section 1.2). These are tokens of other covenant ids owned
+   * by the order id, one group per token with the program the indexer proved their state under.
+   * The maker's cancel and sweep return them to the maker, one output per token. After the order
+   * ends nothing can move them.
    */
   foreign?: ForeignStrays[];
-  /** foreign strays without a proven state or program: nothing can build their spend, they stay with the order id (reported) */
+  /**
+   * Foreign strays without a proven state or program. Nothing can build their spend, so they stay
+   * with the order id and are reported.
+   */
   foreignUnproven?: UnprovenStray[];
   /**
-   * the order is under a RETIRED template of the cancel-only table (kob-wasm `retiredTemplates`): its hash. Only its maker's plain cancel is
-   * built (`planCancel`, `planCancelAll`); every other planner refuses it (`cancel.retired-cancel-only`)
+   * The hash of the retired template of the cancel-only table (kob-wasm `retiredTemplates`) the
+   * order is under. Only its maker's plain cancel is built, by `planCancel` and `planCancelAll`.
+   * Every other planner refuses it with `cancel.retired-cancel-only`.
    */
   retired?: Hex | null;
 }
 
+/** Raised when an order cannot be turned into a snapshot. `code` says why. */
 export class SnapshotError extends Error {
   readonly code: 'state-unknown' | 'no-current-utxo' | 'no-extension-commitment' | 'bad-state' | 'not-live' | 'node-mismatch' | 'old-template';
   constructor(code: SnapshotError['code'], message: string) {
@@ -93,12 +125,15 @@ function tokenUtxoFromView(v: TokenUtxoView, owner: Hex, ext: Hex | null, family
   return { transactionId: v.txid, index: v.index, amount: v.value, blockDaaScore: String(v.created_daa), covenantId: v.token, state };
 }
 
-/** One token an order's own transfers move: its program (template hash), family and the extension commitment the state names for it (if any). */
+/**
+ * One token an order's own transfers move: its program (template hash), family and the extension
+ * commitment its state names for it, if any.
+ */
 export interface OwnToken { covenantId: Hex; tplHash: Hex; family: Family; ext: Hex | null; role: 'base' | 'quote' }
 
 /**
- * The tokens an order's own transfers move: a KAS-quoted order's token; a pair order's A and B (each with the program, family and the extension
- * commitment its state names).
+ * The tokens an order's own transfers move. This is a KAS-quoted order's token, or a pair order's A
+ * and B, each with the program, family and extension commitment its state names.
  */
 export function ownTokenFacts(st: OrderState): OwnToken[] {
   const pf = pairFactsOf(st);
@@ -120,9 +155,11 @@ export function secondTokenOf(st: OrderState): { covenantId: Hex; tplHash: Hex; 
 }
 
 /**
- * OrderView (indexer) -> snapshot. Needs the decoded `state` of the CURRENT utxo, `current`, and the custody UTXO(s) the state holds; the token
- * states of custodies and strays are taken from the view (`state`) or rebuilt from owner + amount + extension commitment. A pair order's custodies
- * come from the view's `pair.custodies` (record order: a sell-first entry's A, then its B prefund), its strays may be of A or of B.
+ * Turns an indexer `OrderView` into a snapshot. It needs the decoded `state` of the current UTXO,
+ * `current`, and the custody UTXOs the state holds. The token states of custodies and strays are
+ * taken from the view (`state`) or rebuilt from owner, amount and extension commitment. A pair
+ * order's custodies come from the view's `pair.custodies`, in record order (a sell-first entry's
+ * A, then its B prefund), and its strays may be of A or of B.
  */
 export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   const st = asOrderState(view.state);
@@ -132,7 +169,8 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   const famOf = (token: Hex): Family => toks.find((t) => t.covenantId === token)?.family ?? familyOfKind(st.kind);
   const cs: CustodyFact[] = custodiesOf(st);
   const pv = pairOfView(view);
-  // the custody UTXO views in record order: a pair view lists them all; otherwise the single `custody`
+  // The custody UTXO views in record order. A pair view lists them all, otherwise it is the single
+  // `custody`.
   const cuViews: (TokenUtxoView | null)[] = pv
     ? cs.map((c, k) => {
         const x = pv.custodies[k];
@@ -143,7 +181,7 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
     const u = k !== null ? cuViews[k] : null;
     const fromUtxo = u?.state ? extensionOfState(u.state) : null;
     const named = pairExtFor(st, token);
-    // the view's `extension_commitment` is the first custody's (a KAS order: its token's)
+    // The view's `extension_commitment` is the first custody's, or the token's for a KAS order.
     const first = k === 0 || (k === null && token === (cs[0]?.token ?? tokenCovIdOf(st))) ? (view.extension_commitment ?? null) : null;
     return fromUtxo ?? named ?? first ?? (token === tokenCovIdOf(st) ? extensionOf(st) : null) ?? null;
   };
@@ -154,7 +192,8 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   };
   const custody = live(0);
   const prefund = cs.length > 1 ? live(1) : null;
-  // strays of any OTHER token are foreign: kept apart, with the program their state was proven under
+  // Strays of any other token are foreign. They are kept apart, with the program their state was
+  // proven under.
   const split = splitStrayViews((view.strays ?? []).filter((s) => !s.spent), st);
   const custodyExt = (token: Hex): Hex | null => {
     const k = cs.findIndex((c) => c.token === token);
@@ -179,13 +218,18 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   };
 }
 
-/** A foreign stray nothing can move (no proven state / program): reported, never built. */
+/**
+ * A foreign stray nothing can move, because it has no proven state or program. It is reported and
+ * never built.
+ */
 export interface UnprovenStray { outpoint: string; token: Hex; amount: bigint }
 
 /**
- * Splits an order's stray views into its OWN tokens' (a pair order: A and B) and FOREIGN ones (the indexer's `foreign` flag, or any other token).
- * A foreign stray joins a group of its token only with a proven state, a token program name and a covenant-owned state of the program's family
- * owned by the order id; anything else is `unproven` (nothing could build its spend).
+ * Splits an order's stray views into those of its own tokens (a pair order: A and B) and foreign
+ * ones, which carry the indexer's `foreign` flag or are of any other token. A foreign stray joins
+ * a group of its token only with a proven state, a token program name and a covenant-owned state
+ * of the program's family owned by the order id. Anything else is `unproven`, because nothing
+ * could build its spend.
  */
 export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
   const ownTokens = ownTokensOf(st);
@@ -193,7 +237,8 @@ export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState)
   const foreign: ForeignStrays[] = [];
   const unproven: UnprovenStray[] = [];
   for (const v of views) {
-    // the order's own tokens are never foreign, whatever a flag says: the builders sweep them with the order's own transfers
+    // The order's own tokens are never foreign, whatever a flag says. The builders sweep them with
+    // the order's own transfers.
     if (ownTokens.includes(v.token)) {
       own.push(v);
       continue;
@@ -214,7 +259,10 @@ export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState)
   return { own, foreign, unproven };
 }
 
-/** Resolved placement record (records.ts `resolveRecord`, status 'live') -> snapshot; `strays` come from the indexer when known. */
+/**
+ * Turns a resolved placement record (records.ts `resolveRecord`, status 'live') into a snapshot.
+ * `strays` come from the indexer when known.
+ */
 export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[] = [], deadline: bigint | null = null): OrderSnapshot {
   if (resolved.status !== 'live' || !resolved.order) throw new SnapshotError('not-live', `order ${resolved.covenantId} is ${resolved.status}, nothing to spend`);
   return {
@@ -223,7 +271,10 @@ export function snapshotFromRecord(resolved: ResolvedRecord, strays: TokenUtxo[]
   };
 }
 
-/** Snapshot straight from a kob-wasm `CancelItem` (order UTXO + custody + strays), e.g. for tests and CLI-provided data. */
+/**
+ * Builds a snapshot straight from a kob-wasm `CancelItem` (order UTXO, custody and strays), for
+ * tests and CLI-provided data.
+ */
 export function snapshotFromItem(item: CancelItem): OrderSnapshot {
   const covenantId = item.order.covenantId;
   if (!covenantId) throw new SnapshotError('bad-state', 'order UTXO has no covenant id');
@@ -233,45 +284,66 @@ export function snapshotFromItem(item: CancelItem): OrderSnapshot {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ plan types
+// ------------------------------------------------------------------------------------------------
+// plan types
 
+/** What the cancel, amend, sweep and refund planners need from the outside world. */
 export interface CancelEnv {
   kob: KobWasm;
-  /** the wallet's x-only key: maker of every cancelled order, owner of funding and top-up tokens */
+  /**
+   * The wallet's x-only key. It is the maker of every cancelled order and owns funding and top-up
+   * tokens.
+   */
   maker: Hex;
-  /** where change returns (default: maker) */
+  /** Where change returns. Defaults to the maker. */
   changeTo?: Hex;
-  /** P2PK KAS UTXOs of the maker, used only when the released carriers cannot pay the fee */
+  /** P2PK KAS UTXOs of the maker, used only when the released carriers cannot pay the fee. */
   funding?: KeyUtxo[];
-  /** P2PK-owned token UTXOs of the maker (of any token: each top-up takes its own token's): automatic top-up source of a cancel-replace */
+  /**
+   * P2PK-owned token UTXOs of the maker, of any token. Each top-up takes its own token's. It is the
+   * automatic top-up source of a cancel-replace.
+   */
   tokenUtxos?: TokenUtxo[];
-  /** current DAA + UTC clock (refunds need the DAA as lockTime) */
+  /** Current DAA and UTC clock. Refunds need the DAA as lockTime. */
   clock?: { daa: bigint; unixSeconds?: bigint };
-  /** sompi per mass unit (default 100 = relay minimum). An explicit rate: the fee policy (`fees`) is then not asked. */
+  /**
+   * Sompi per mass unit, 100 (the relay minimum) by default. An explicit rate means the fee policy
+   * (`fees`) is not asked.
+   */
   feeRate?: bigint;
-  /** `priority` = storage-inclusive fee (default `relay`: exactly the node's relay floor) */
+  /**
+   * `priority` means a storage-inclusive fee. The default is `relay`, exactly the node's relay
+   * floor.
+   */
   feeMode?: FeeMode;
-  /** dynamic fee policy + the node's estimate (kob/fee-policy.ts): every cancel / amend / refund pays the NORMAL bucket; absent = the floor */
+  /**
+   * Dynamic fee policy and the node's estimate (kob/fee-policy.ts). Every cancel, amend and refund
+   * pays the NORMAL bucket. Absent means the floor.
+   */
   fees?: FeeContext;
-  /** set by the planner: the pick behind `feeRate` (disclosure) */
+  /** Set by the planner: the pick behind `feeRate`, for the disclosure. */
   feePick?: RatePick;
 }
 
+/** Options of the cancel planners. */
 export interface CancelOptions {
-  /** when strays do not fit the token program's input slots: cancel anyway and abandon (lose) the smallest strays instead of refusing */
+  /**
+   * When strays do not fit the token program's input slots, cancel anyway and abandon (lose) the
+   * smallest strays instead of refusing.
+   */
   allowAbandonStrays?: boolean;
-  /** cancelAll: at most this many orders per transaction (default 8) */
+  /** `planCancelAll`: at most this many orders per transaction. Defaults to 8. */
   maxOrdersPerTx?: number;
-  /** planCancelReplace: always cancel + re-place, even where an in-place amend would do */
+  /** `planCancelReplace`: always cancel and re-place, even where an in-place amend would do. */
   noInPlace?: boolean;
 }
 
-/** `refundOrder` request of kob-wasm (not in the shared `ActionRequest` union). */
+/** The `refundOrder` request of kob-wasm. It is not in the shared `ActionRequest` union. */
 export interface RefundOrderRequest {
   action: 'refundOrder';
   order: OrderUtxo<OrderState>;
   custody?: TokenUtxo | null;
-  /** a sell-first `KobIfdPair`'s B prefund custody */
+  /** A sell-first `KobIfdPair`'s B prefund custody. */
   prefund?: TokenUtxo | null;
   lockTime: U64;
   funding?: KeyUtxo[];
@@ -280,42 +352,56 @@ export interface RefundOrderRequest {
   ownKeys?: Hex[];
 }
 
+/** A kob-wasm request that spends orders: cancel, amend, position cancel, refund or sweep. */
 export type CancelRequest = CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | RefundOrderRequest | SweepOrderRequest;
 
+/** The result of planning a cancel, amend, sweep or refund. */
 export interface CancelPlan {
   ok: boolean;
   issues: PlanIssue[];
   request: CancelRequest | null;
   built: BuiltTx | null;
-  /** covenant ids spent by maker cancels / refunds of this tx */
+  /** Covenant ids spent by maker cancels and refunds of this tx. */
   cancelIds: Hex[];
-  /** feed for decodeSigning({expected}) */
+  /** Feed for `decodeSigning({expected})`. */
   expected: ExpectedSigning;
-  /** tokens of the order's token (a pair order: A) returning to the maker as ONE P2PK token output (custody + strays + unused top-up), base units */
+  /**
+   * Base units of the order's token (a pair order: A) returning to the maker as one P2PK token
+   * output (custody, strays and unused top-up).
+   */
   tokensReturned: bigint;
-  /** a pair order: its quote token B returning to the maker (custody / prefund + strays + unused top-up), base units of B */
+  /**
+   * A pair order: base units of its quote token B returning to the maker (custody or prefund,
+   * strays and unused top-up).
+   */
   quoteReturned?: bigint;
-  /** KAS released from covenants (order + custody + stray inputs), sompi */
+  /** KAS released from covenants (order, custody and stray inputs), in sompi. */
   kasReleased: bigint;
-  /** maker funding UTXOs that had to be added to pay the fee */
+  /** Maker funding UTXOs that had to be added to pay the fee. */
   fundingUsed: KeyUtxo[];
-  /** foreign strays returned to the maker (one token output each): token, base units, UTXOs */
+  /** Foreign strays returned to the maker, one token output each: token, base units and UTXOs. */
   foreignReturned?: { covenantId: Hex; amount: bigint; utxos: number }[];
-  /** a sweep in place (`planSweep`): what returns and what stays for a later sweep */
+  /** A sweep in place (`planSweep`): what returns and what stays for a later sweep. */
   sweep?: SweepSummary;
 }
 
-/** What a sweep moves (per token) and leaves; the pre-sign decoder derives the same from the transaction itself. */
+/**
+ * What a sweep moves, per token, and what it leaves. The pre-sign decoder derives the same from the
+ * transaction itself.
+ */
 export interface SweepSummary {
   covenantId: Hex;
-  /** stray UTXOs moved */
+  /** Stray UTXOs moved. */
   utxos: number;
-  /** KAS carried by the swept strays (returns with them) */
+  /** KAS carried by the swept strays, which returns with them. */
   kas: bigint;
   tokens: { covenantId: Hex; amount: bigint; utxos: number; foreign: boolean }[];
-  /** strays left with the order for a later sweep (another extension commitment, over the program's inputs) */
+  /**
+   * Strays left with the order for a later sweep, because of another extension commitment or the
+   * program's input limit.
+   */
   later: number;
-  /** foreign strays without a proven state: nothing can move them */
+  /** Foreign strays without a proven state. Nothing can move them. */
   unproven: number;
 }
 
@@ -328,8 +414,9 @@ const failed = (issues: PlanIssue[], cancelIds: Hex[] = []): CancelPlan => ({
 const feeOpts = (env: CancelEnv) => ({ feeRate: env.feeRate != null ? env.feeRate.toString() : null, ...(env.feeMode ? { feeMode: env.feeMode } : {}) });
 
 /**
- * A change key other than the maker is an explicit user choice: the plan announces that payment (recipient key, amount read from the built change
- * output) so the pre-sign decoder does not flag it, while any OTHER redirection of funds stays blocking.
+ * Announces a change key other than the maker. Such a key is an explicit user choice. The plan
+ * announces that payment, with the recipient key and the amount read from the built change output,
+ * so the pre-sign decoder does not flag it. Any other redirection of funds stays blocking.
  */
 function withChange(env: CancelEnv, built: BuiltTx, expected: ExpectedSigning): ExpectedSigning {
   const ci = built.fee.changeOutput;
@@ -342,21 +429,28 @@ const kobBuild = (env: CancelEnv, r: CancelRequest): BuiltTx => {
   return env.kob.build(g as unknown as ActionRequest);
 };
 
-/** Slot limits of the token program that an order's token template hash names (from the pinned templates of the wasm build). */
+/**
+ * Slot limits of the token program that an order's token template hash names, from the pinned
+ * templates of the wasm build.
+ */
 export function tokenSlotsFor(kob: KobWasm, tokenTplHash: Hex): { inputs: number; outputs: number } | null {
   const t = kob.templates().find((x) => x.hash === tokenTplHash && x.tokenSlots);
   return t?.tokenSlots ? { inputs: t.tokenSlots[0], outputs: t.tokenSlots[1] } : null;
 }
 
-/** Token input slots of a token program by NAME (foreign strays carry their program's name), null for anything that is not a pinned token program. */
+/**
+ * Token input slots of a token program by name, since foreign strays carry their program's name.
+ * Null for anything that is not a pinned token program.
+ */
 export function programSlots(kob: KobWasm, program: string): number | null {
   const t = kob.templates().find((x) => x.name === program && x.tokenSlots);
   return t?.tokenSlots ? t.tokenSlots[0] : null;
 }
 
 /**
- * One token's strays as one transfer can take them: those sharing `ext` (default: the first one's), the largest first, at most `room`. The rest
- * is returned apart (another extension commitment / over the program's inputs).
+ * One token's strays as one transfer can take them. These share `ext` (default: the first one's),
+ * largest first, at most `room`. The rest is returned apart, because of another extension
+ * commitment or the program's input limit.
  */
 function pickStrays(utxos: readonly TokenUtxo[], ext: Hex | null | undefined, room: number): { take: TokenUtxo[]; otherExt: TokenUtxo[]; over: TokenUtxo[] } {
   if (!utxos.length) return { take: [], otherExt: [], over: [] };
@@ -370,11 +464,14 @@ function pickStrays(utxos: readonly TokenUtxo[], ext: Hex | null | undefined, ro
 
 const outpointOf = (u: { transactionId: Hex; index: number }): string => `${u.transactionId}:${u.index}`;
 
-// ------------------------------------------------------------------------------------------------ funding loop
+// ------------------------------------------------------------------------------------------------
+// funding loop
 
 /**
- * Builds with no P2PK funding first; when kob-wasm reports insufficient funds (carriers smaller than the fee) adds maker UTXOs (smallest
- * single one that covers the shortfall, else largest-first) and retries. Any other build error is returned as an issue.
+ * Builds with no P2PK funding first. When kob-wasm reports insufficient funds, because the
+ * carriers are smaller than the fee, it adds maker UTXOs and retries. It picks the smallest single
+ * UTXO that covers the shortfall, else the largest first. Any other build error is returned as an
+ * issue.
  */
 function buildWithFunding(
   env: CancelEnv,
@@ -383,7 +480,8 @@ function buildWithFunding(
 ): { built: BuiltTx; request: CancelRequest; fundingUsed: KeyUtxo[]; issues: PlanIssue[] } | { error: PlanIssue } {
   const r = buildWithFundingAt(env, make, initial);
   if (!('error' in r)) return r;
-  // the wallet cannot pay the fee at the picked rate: try the floor before giving up (the estimate must not make a payable cancel impossible)
+  // The wallet cannot pay the fee at the picked rate. Try the floor before giving up, so the
+  // estimate cannot make a payable cancel impossible.
   const low = atFloor(env);
   if (!low) return r;
   const floorRequest = (funding: KeyUtxo[]): CancelRequest => {
@@ -404,7 +502,7 @@ function buildWithFundingAt(
   for (let attempt = 0; attempt < 8; attempt++) {
     const first = make(used);
     try {
-      // the total fee cap: a fee above it is rebuilt once at a lower rate (fee-policy.ts)
+      // The total fee cap. A fee above it is rebuilt once at a lower rate (fee-policy.ts).
       const { built, request, rate } = buildWithCap(env.fees?.policy, first, (r) => kobBuild(env, r));
       recordFee(env, built, rate);
       const issues = used.length > initial.length ? [issue('cancel.funding-added', 'info', 'the released carriers do not cover the network fee: a maker funding UTXO pays it', { inputs: used.length })] : [];
@@ -426,10 +524,13 @@ function buildWithFundingAt(
   return { error: issue('cancel.insufficient-funds', 'error', 'could not fund the network fee within 8 attempts') };
 }
 
-// ------------------------------------------------------------------------------------------------ helpers over snapshots
+// ------------------------------------------------------------------------------------------------
+// helpers over snapshots
 
 const totalAmount = (xs: TokenUtxo[]): bigint => xs.reduce((s, x) => s + big(x.state.amount), 0n);
-/** The token a list of token UTXOs is of, as a finding param (none when they are of several or none). */
+/**
+ * The token a list of token UTXOs is of, as a finding param. None when they are of several or none.
+ */
 const tokenOfAll = (xs: readonly { covenantId?: Hex | null }[]): { token?: Hex } => (xs.length && xs[0]!.covenantId && xs.every((x) => x.covenantId === xs[0]!.covenantId) ? { token: xs[0]!.covenantId } : {});
 const custodyUtxos = (s: { custody?: TokenUtxo | null; prefund?: TokenUtxo | null }): TokenUtxo[] => [s.custody ?? null, s.prefund ?? null].filter((x): x is TokenUtxo => !!x);
 const kasOf = (s: OrderSnapshot): bigint =>
@@ -438,23 +539,32 @@ const kasOf = (s: OrderSnapshot): bigint =>
 const foreignReturnedOf = (gs: readonly ForeignStrays[]): CancelPlan['foreignReturned'] =>
   gs.length ? gs.map((g) => ({ covenantId: g.token.covenantId, amount: totalAmount(g.utxos), utxos: g.utxos.length })) : undefined;
 
-/** One own token of a prepared order: its program's input slots, the extension commitment of its transfer (null: no input), its inputs. */
+/**
+ * One own token of a prepared order: its program's input slots, the extension commitment of its
+ * transfer (null for no input) and its inputs.
+ */
 interface TokenGroup { token: Hex; role: 'base' | 'quote'; slots: number; ext: Hex | null; inputs: number; program: TokenProgram | null }
 interface Prepared {
   item: CancelItem; snap: OrderSnapshot; issues: PlanIssue[];
-  /** the order token's (A's) slots and extension commitment */
+  /** The order token's (A's) slots and extension commitment. */
   slots: number; ext: Hex | null;
-  /** every own token (a pair order: A and B) */
+  /** Every own token. A pair order has A and B. */
   groups: TokenGroup[];
   foreign: ForeignStrays[];
 }
 
-/** The custody UTXOs of a snapshot that hold `token` (by the state's custodies: the first is `custody`, the second `prefund`). */
+/**
+ * The custody UTXOs of a snapshot that hold `token`. By the state's custodies, the first is
+ * `custody` and the second `prefund`.
+ */
 function custodiesOfToken(snap: OrderSnapshot, cs: readonly CustodyFact[], token: Hex): TokenUtxo[] {
   return [cs[0]?.token === token ? snap.custody : null, cs[1]?.token === token ? (snap.prefund ?? null) : null].filter((x): x is TokenUtxo => !!x);
 }
 
-/** What returns to the maker per role when the custodies and strays of a prepared order are released: base (A) and quote (B). */
+/**
+ * What returns to the maker per role when the custodies and strays of a prepared order are
+ * released: base (A) and quote (B).
+ */
 function returnedOf(item: CancelItem, snap: OrderSnapshot): { base: bigint; quote: bigint } {
   const toks = ownTokenFacts(snap.order.state);
   const roleOf = (u: TokenUtxo, k: number | null): 'base' | 'quote' => {
@@ -476,8 +586,10 @@ function returnedOf(item: CancelItem, snap: OrderSnapshot): { base: bigint; quot
 }
 
 /**
- * Foreign strays a CANCEL takes (it is the last spend of the order: after it nothing can move them): per token those sharing one extension
- * commitment within the program's inputs; the rest, and every foreign stray without a proven state / program, is reported (left behind).
+ * Foreign strays a cancel takes. A cancel is the last spend of the order, and after it nothing can
+ * move them. Per token it takes those sharing one extension commitment within the program's
+ * inputs. The rest, and every foreign stray without a proven state or program, is reported as left
+ * behind.
  */
 function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, issues: PlanIssue[]): ForeignStrays[] | { error: PlanIssue[] } {
   const left = (u: { outpoint: string; amount: bigint; token?: Hex | null }) =>
@@ -488,7 +600,7 @@ function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions
   for (const g of snap.foreign ?? []) {
     const room = programSlots(env.kob, g.token.program);
     if (room === null || own.includes(g.token.covenantId)) {
-      // not a pinned token program: nothing here can build its spend
+      // Not a pinned token program, so nothing here can build its spend.
       for (const u of g.utxos) left({ outpoint: outpointOf(u), amount: big(u.state.amount) });
       continue;
     }
@@ -509,8 +621,10 @@ function prepareForeign(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions
 }
 
 /**
- * Checks maker / custodies / strays of one snapshot and trims strays to what one transaction can carry: per own token (a pair order: A and B,
- * each its own transfer with its own program slots and extension commitment). `extra` = top-up inputs per token (cancel-replace).
+ * Checks maker, custodies and strays of one snapshot and trims strays to what one transaction can
+ * carry. The trimming is per own token. A pair order has A and B, each its own transfer with its
+ * own program slots and extension commitment. `extra` is the top-up inputs per token, for a
+ * cancel-replace.
  */
 function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra: ReadonlyMap<Hex, number> = new Map()): Prepared | { error: PlanIssue[] } {
   const issues: PlanIssue[] = [];
@@ -527,8 +641,9 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   }
   const toks = ownTokenFacts(st);
   const ownIds = toks.map((t) => t.covenantId);
-  // a stray of another token (none of the order's own) cannot join the order's own transfers: the builder would refuse the whole cancel, so it is
-  // left behind (reported) instead of making the order uncancellable
+  // A stray of another token, none of the order's own, cannot join the order's own transfers. The
+  // builder would refuse the whole cancel, so the stray is left behind and reported instead of
+  // making the order uncancellable.
   const own = snap.strays.filter((s) => {
     if (ownIds.includes(s.covenantId ?? '')) return true;
     issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
@@ -542,10 +657,12 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   for (const t of toks) {
     const held = custodiesOfToken(snap, cs, t.covenantId);
     const mine = own.filter((s) => s.covenantId === t.covenantId);
-    // the transfer's extension commitment: the custody's (strays must share it), else the one the state names when a stray carries it, else the first stray's
+    // The transfer's extension commitment is the custody's, else the one the state names when a
+    // stray carries it, else the first stray's.
     const named = t.ext !== null && mine.some((s) => extensionMatches(s.state, t.ext)) ? t.ext : null;
     const ext = (held[0] ? extensionOfState(held[0].state) : null) ?? named ?? (mine[0] ? extensionOfState(mine[0].state) : null) ?? (t.role === 'base' ? extensionOf(st) : null);
-    // strays with another extension commitment cannot share one transfer with the rest (kob-wasm rule); they are reported, not silently moved
+    // Strays with another extension commitment cannot share one transfer with the rest (a kob-wasm
+    // rule). They are reported and not silently moved.
     let strays = mine.filter((s) => {
       if (!extensionMatches(s.state, ext)) {
         issues.push(issue('cancel.stray-other-extension', 'warning', 'a stray token with another extension commitment cannot be swept together with the rest and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
@@ -579,7 +696,10 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
 
 const isErr = (p: Prepared | { error: PlanIssue[] }): p is { error: PlanIssue[] } => 'error' in p;
 
-/** An order under a retired template is only cancelled by its maker: every other planner refuses it with this plan. */
+/**
+ * An order under a retired template is only cancelled by its maker. Every other planner refuses it
+ * with this plan.
+ */
 const retiredOnly = (snap: OrderSnapshot): CancelPlan | null =>
   snap.retired
     ? failed([issue('cancel.retired-cancel-only', 'error', 'this order is under an older contract version: this app only cancels it', { covenantId: snap.covenantId })], [snap.covenantId])
@@ -588,9 +708,13 @@ const retiredOnly = (snap: OrderSnapshot): CancelPlan | null =>
 /** `quoteReturned` of a plan when the order owns a quote token (a pair order), else nothing. */
 const quoteField = (snap: OrderSnapshot, quote: bigint): { quoteReturned?: bigint } => (ownTokenFacts(snap.order.state).some((t) => t.role === 'quote') ? { quoteReturned: quote } : {});
 
-// ------------------------------------------------------------------------------------------------ planCancel
+// ------------------------------------------------------------------------------------------------
+// planCancel
 
-/** Cancels one order (maker signature, SIGHASH_ALL). Custodies and strays (a pair order: of A and of B) are swept to the maker in the same tx. */
+/**
+ * Cancels one order with the maker's signature (SIGHASH_ALL). Custodies and strays, of A and of B
+ * for a pair order, are swept to the maker in the same tx.
+ */
 export function planCancel(env0: CancelEnv, order: OrderSnapshot, opts: CancelOptions = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
   const p = prepare(env, order, opts);
@@ -610,24 +734,31 @@ export function planCancel(env0: CancelEnv, order: OrderSnapshot, opts: CancelOp
   };
 }
 
-// ------------------------------------------------------------------------------------------------ planCancelReplace
+// ------------------------------------------------------------------------------------------------
+// planCancelReplace
 
+/** What a cancel-replace places in place of the old order. */
 export interface ReplacementSpec {
   order: OrderState;
-  /** KAS on the new order UTXO (carrier / escrow) */
+  /** KAS on the new order UTXO (carrier or escrow). */
   value: bigint;
-  /** KAS on the new custody + token change outputs (default: the carrier of the old custody) */
+  /**
+   * KAS on the new custody and token change outputs. Defaults to the carrier of the old custody.
+   */
   tokenCarrier?: bigint | null;
-  /** day orders: deadline (UTC unix seconds) for the placement record */
+  /** Day orders: the deadline in UTC unix seconds, for the placement record. */
   deadline?: bigint | null;
 }
 
 /**
- * Cheapest set of maker P2PK token UTXOs of `token` (fewest inputs, smallest sufficient single first) covering `amount`. Unlike a placement
- * (funding.ts `selectTokens`) a top-up does NOT fill the spare slots with the wallet's smallest UTXOs: its slots (`maxInputs`) are what the old
- * custody and the swept strays leave of the program's input slots, and the stray trimming re-runs with the top-up counted (`prepare(..., topUps)`),
- * so an extra wallet UTXO would push a stray out of the sweep (it would stay behind on the cancelled order's id). A top-up is rare (only a
- * replacement larger than what the order holds) and a merge consolidates the wallet anyway.
+ * Picks the cheapest set of maker P2PK token UTXOs of `token` that covers `amount`. It uses the
+ * fewest inputs and prefers the smallest sufficient single UTXO.
+ *
+ * Unlike a placement (funding.ts `selectTokens`), a top-up does not fill the spare slots with the
+ * wallet's smallest UTXOs. Its slots (`maxInputs`) are what the old custody and the swept strays
+ * leave of the program's input slots, and the stray trimming re-runs with the top-up counted
+ * (`prepare(..., topUps)`). An extra wallet UTXO would push a stray out of the sweep, and the
+ * stray would stay behind on the cancelled order's id.
  */
 function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] | null {
   const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && t.state.owner === maker && extensionMatches(t.state, ext));
@@ -645,24 +776,34 @@ function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | nu
   return null;
 }
 
-/** Order-state fields an in-place amend keeps (kob-protocol `payload::check_amend_terms`): an ask's custody, owned by the order's id, stays exact and of
- * the extension commitment the state pins. */
+/**
+ * Order-state fields an in-place amend keeps (kob-protocol `payload::check_amend_terms`). An ask's
+ * custody, owned by the order's id, stays exact and of the extension commitment the state pins.
+ */
 const AMEND_KEEPS = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale', 'amountLeft'] as const;
-/** A plain bid owns no custody (its quantity is its escrow): it keeps its maker, its token (with the pinned delivery extension) and its scale. */
+/**
+ * A plain bid owns no custody, because its quantity is its escrow. It keeps its maker, its token
+ * (with the pinned delivery extension) and its scale.
+ */
 const AMEND_KEEPS_BID = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale'] as const;
 
 /**
- * Whether an amendment can be IN PLACE (kob-protocol `AmendOrder`): a plain ask amended to the same kind, keeping the maker, the token, the scale and
- * `amountLeft` (price, tip, minimum fill, time in force, timing and decay may change), with its custody known and no strays (only a cancel sweeps strays, an
- * in-place amend leaves them where they are) and no top-up tokens. The maker's cancel then continues the order's covenant id and the custody never
- * moves: no token program is revealed (an 8/8 ask amend is a fifth of a cancel-replace). Pair orders are never amended in place (cancel-replace).
+ * Whether an amendment can be in place (kob-protocol `AmendOrder`).
+ *
+ * That holds for a plain ask amended to the same kind that keeps the maker, the token, the scale
+ * and `amountLeft`. Price, tip, minimum fill, time in force, timing and decay may change. The
+ * custody must be known, there must be no strays and no top-up tokens. Only a cancel sweeps
+ * strays, and an in-place amend leaves them where they are. The maker's cancel then continues the
+ * order's covenant id and the custody never moves, so no token program is revealed. Pair orders
+ * are never amended in place, they use cancel-replace.
  */
 export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens?: TokenUtxo[]): boolean {
   const old = order.order.state;
   if (old.kind !== rep.kind) return false;
   const a = old.state as unknown as Record<string, string>;
   const b = rep.state as unknown as Record<string, string>;
-  // a bid: same safety rules as an ask without the custody (nothing to keep exact), strays stay where they are so only a cancel-replace sweeps them
+  // A bid follows the same safety rules as an ask without the custody, because there is nothing to
+  // keep exact. Strays stay where they are, so only a cancel-replace sweeps them.
   const foreign = (order.foreign ?? []).length > 0;
   if (isKind(old, 'KobBid')) return !order.strays.length && !foreign && !order.straysUnknown && (extraTokens?.length ?? 0) === 0 && AMEND_KEEPS_BID.every((k) => a[k] === b[k]);
   if (!isKind(old, 'KobAsk')) return false;
@@ -670,13 +811,17 @@ export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens
   return AMEND_KEEPS.every((k) => a[k] === b[k]);
 }
 
-/** The in-place amend: the maker's cancel continues the order's covenant id with the new state; the order's carrier pays the fee (no change). */
+/**
+ * The in-place amend. The maker's cancel continues the order's covenant id with the new state, and
+ * the order's carrier pays the fee, so there is no change.
+ */
 function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: ReplacementSpec): CancelPlan {
   if (order.order.state.state.maker !== env.maker) {
     return failed([issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can amend it', { covenantId: order.covenantId })]);
   }
-  // a bid topped up (more escrow than the order holds) states its value even before funding is added: the builder then reports the shortfall and the
-  // funding loop adds maker UTXOs; otherwise the order's own value pays the fee and the continuation keeps the rest
+  // A bid topped up (more escrow than the order holds) states its value even before funding is
+  // added. The builder then reports the shortfall and the funding loop adds maker UTXOs.
+  // Otherwise the order's own value pays the fee and the continuation keeps the rest.
   const topUp = replacement.value > big(order.order.amount);
   const make = (funding: KeyUtxo[]): CancelRequest => ({
     action: 'amendOrder', order: order.order, amended: replacement.order, value: funding.length || topUp ? replacement.value.toString() : null, funding,
@@ -684,7 +829,8 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
   });
   const r = buildWithFunding(env, make);
   if ('error' in r) return failed([r.error], [order.covenantId]);
-  // the continuation is output 0: the order's value less the fee it paid (no funding), or the planned value plus at most a tiny change it took
+  // The continuation is output 0. Its value is the order's value less the fee it paid (no funding),
+  // or the planned value plus at most a tiny change it took.
   const kasLocked = big(r.built.tx.outputs[0].value);
   const base = r.fundingUsed.length ? replacement.value : big(order.order.amount);
   if (kasLocked < base - big(r.built.fee.fee) || kasLocked > base + TINY_CHANGE_MAX) {
@@ -702,10 +848,14 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
 }
 
 /**
- * Cancel + new placement in ONE atomic transaction (an amendment). The replacement takes its tokens from the old custodies, the swept strays and,
- * when those are not enough, maker tokens (`extraTokens`, or picked from `env.tokenUtxos`), per token (a pair order: A and B; the replacement must
- * trade the same pair). An armed stop is replaced UNARMED (matcher.md 10.9). A plain ask whose new terms keep its custody exact is amended IN PLACE
- * instead ([`amendsInPlace`]; `opts.noInPlace` forces the cancel-replace).
+ * Cancel and new placement in one atomic transaction, which is an amendment.
+ *
+ * The replacement takes its tokens from the old custodies, the swept strays and, when those are
+ * not enough, maker tokens (`extraTokens`, or picked from `env.tokenUtxos`), per token. A pair
+ * order has A and B, and the replacement must trade the same pair. An armed stop is replaced
+ * unarmed (docs/spec/matcher.md section 10, rule 9). A plain ask whose new terms keep its custody
+ * exact is amended in place instead (`amendsInPlace`), and `opts.noInPlace` forces the
+ * cancel-replace.
  */
 export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replacement: ReplacementSpec, extraTokens?: TokenUtxo[], opts: CancelOptions = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
@@ -727,7 +877,7 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   } else if ('armed' in old.state && big((old.state as { armed: string }).armed) !== 0n && ('armed' in rep.state)) {
     issues.push(issue('cancel.replacement-restarts-unarmed', 'info', 'an amended stop starts unarmed and must trigger again'));
   }
-  // what the replacement must hold, per token (a pair order: its custodies of A and / or B)
+  // What the replacement must hold, per token. A pair order has custodies of A, B or both.
   const needs = new Map<Hex, bigint>();
   for (const c of custodiesOf(newState)) if (c.amount > 0n) needs.set(c.token, (needs.get(c.token) ?? 0n) + c.amount);
   const p0 = prepare(env, order, opts);
@@ -751,7 +901,8 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
     topUps.set(token, picked.length);
     issues.push(issue('cancel.top-up', 'info', 'the replacement needs more tokens than the order holds: free tokens are added', { amount: totalAmount(picked) }));
   }
-  // top-up inputs share the token transfer: re-run the stray trimming with the extra token inputs counted
+  // Top-up inputs share the token transfer, so the stray trimming re-runs with the extra token
+  // inputs counted.
   const p = prepare(env, order, opts, topUps);
   if (isErr(p)) return failed(p.error, [order.covenantId]);
   const firstCustody = p.item.custody ?? p.item.prefund ?? null;
@@ -765,7 +916,8 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   });
   const r = buildWithFunding(env, make);
   if ('error' in r) return failed([...issues, ...p.issues, r.error], [order.covenantId]);
-  // the replacement is output 0; it holds `replacement.value`, or more when a tiny change rode on it (kob-protocol's change rule)
+  // The replacement is output 0. It holds `replacement.value`, or more when a tiny change rode on
+  // it (kob-protocol's change rule).
   const extra = big(r.built.tx.outputs[0].value) - replacement.value;
   if (extra < 0n || extra > TINY_CHANGE_MAX) {
     return failed([issue('cancel.build-failed', 'error', `the built replacement holds ${extra} sompi more than planned`)], [order.covenantId]);
@@ -788,21 +940,27 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   };
 }
 
-// ------------------------------------------------------------------------------------------------ planCancelAll
+// ------------------------------------------------------------------------------------------------
+// planCancelAll
 
 /**
- * Cancels several orders (a position: an if-done entry with all its exits, a repeat with its booked exits, or any set) with the fewest
- * transactions: kob-wasm `cancelPosition` covers ONE maker and ONE token (a pair position: ONE pair, A and B) per tx, so orders are grouped by
- * their own tokens (and the extension commitments of their transfers), and a group is split when any token's inputs exceed its program's input
- * slots or `maxOrdersPerTx`. A group of one order is a plain cancel. Returns one plan per transaction (submit them in order; they spend disjoint
- * UTXOs, maker funding included: a funding UTXO used by one plan is not offered to the later ones).
+ * Cancels several orders with the fewest transactions. The orders are a position (an if-done entry
+ * with all its exits, or a repeat with its booked exits) or any set.
+ *
+ * kob-wasm `cancelPosition` covers one maker and one token per tx, and one pair (A and B) for a
+ * pair position. Orders are therefore grouped by their own tokens and the extension commitments of
+ * their transfers. A group is split when any token's inputs exceed its program's input slots or
+ * `maxOrdersPerTx`. A group of one order is a plain cancel. The result is one plan per
+ * transaction. They are submitted in order and spend disjoint UTXOs, maker funding included, so a
+ * funding UTXO used by one plan is not offered to the later ones.
  */
 export function planCancelAll(env0: CancelEnv, orders: OrderSnapshot[], opts: CancelOptions = {}): CancelPlan[] {
   const env = withUrgency(env0, 'normal');
   if (!orders.length) return [failed([issue('cancel.nothing', 'error', 'nothing to cancel')])];
   const maxOrders = Math.max(opts.maxOrdersPerTx ?? 8, 1);
   const plans: CancelPlan[] = [];
-  // groups of orders that one cancelPosition can take: the same own tokens, and per token one extension commitment (null: no input of that token)
+  // Groups of orders that one cancelPosition can take. They have the same own tokens and, per
+  // token, one extension commitment (null for no input of that token).
   const groups: { key: string; exts: Map<Hex, Hex | null>; members: Prepared[] }[] = [];
   for (const o of orders) {
     const p = prepare(env, o, opts);
@@ -810,7 +968,8 @@ export function planCancelAll(env0: CancelEnv, orders: OrderSnapshot[], opts: Ca
       plans.push(failed(p.error, [o.covenantId]));
       continue;
     }
-    // an order with foreign strays (a plain cancelOrder returns them; cancelPosition moves no other token) is cancelled in a transaction of its own
+    // An order with foreign strays is cancelled in a transaction of its own, because a plain
+    // cancelOrder returns them and cancelPosition moves no other token.
     if (p.foreign.length) {
       groups.push({ key: `own:${o.covenantId}`, exts: new Map(), members: [p] });
       continue;
@@ -822,8 +981,9 @@ export function planCancelAll(env0: CancelEnv, orders: OrderSnapshot[], opts: Ca
       for (const t of p.groups) if (t.ext !== null) fits.exts.set(t.token, t.ext);
     } else groups.push({ key, exts: new Map(p.groups.map((t) => [t.token, t.ext])), members: [p] });
   }
-  // the transactions of one cancel-all are submitted one after the other: a maker funding UTXO spent by one plan must not be offered to
-  // the next (it would be "already spent" and stop the sequence at step 2)
+  // The transactions of one cancel-all are submitted one after the other. A maker funding UTXO
+  // spent by one plan must not be offered to the next, because it would be already spent and stop
+  // the sequence at step 2.
   const spent = new Set<string>();
   const key = (u: KeyUtxo): string => `${u.transactionId}:${u.index}`;
   for (const group of groups) {
@@ -872,16 +1032,27 @@ function buildPosition(env: CancelEnv, chunk: Prepared[]): CancelPlan {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ planSweep
+// ------------------------------------------------------------------------------------------------
+// planSweep
 
 /**
- * The maker's SWEEP of an order's strays IN PLACE (kob-protocol `SweepOrder`, matcher.md 1.2): the maker's cancel continues the order under the
- * SAME script (same state, price, amount, custodies; only its UTXO, so its 90-day idle window restarts) and returns its strays to the maker, one
- * token output per token: strays of its own token(s) (a pair order: A and B, each one extension commitment within its program's inputs) and
- * FOREIGN strays (other tokens owned by its id, with the program their state was proven under). What one sweep cannot take (another extension
- * commitment, more than the program's inputs) stays with the order for a later sweep (the order is still there); foreign strays without a proven
- * state are reported. Fee: a plain ask's carrier pays it without funding; every other kind's value is an escrow, a prefund, carriers or keeper
- * tips, so one maker funding UTXO is added from the start (more when the fee needs it).
+ * The maker's sweep of an order's strays in place (kob-protocol `SweepOrder`,
+ * docs/spec/matcher.md section 1.2).
+ *
+ * The maker's cancel continues the order under the same script, with the same state, price,
+ * amount and custodies. Only its UTXO changes, so its 90-day idle window restarts. The cancel
+ * returns the strays to the maker, one token output per token. These are strays of its own
+ * tokens (a pair order has A and B, each one extension commitment within its program's inputs)
+ * and foreign strays (other tokens owned by its id, with the program their state was proven
+ * under).
+ *
+ * What one sweep cannot take stays with the order for a later sweep, because the order is still
+ * there. That is another extension commitment or more than the program's inputs. Foreign strays
+ * without a proven state are reported.
+ *
+ * Fee: a plain ask's carrier pays it without funding. Every other kind's value is an escrow, a
+ * prefund, carriers or keeper tips, so one maker funding UTXO is added from the start, and more
+ * when the fee needs it.
  */
 export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   const env = withUrgency(env0, 'normal');
@@ -917,7 +1088,8 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
     unproven++;
     issues.push(issue('sweep.stray-unproven', 'warning', 'a stray of another token has no proven state: nothing can move it, it stays with the order', { outpoint: u.outpoint, amount: u.amount, ...(u.token ? { token: u.token } : {}) }));
   };
-  // a stray of another token passed among the order's own (a caller's snapshot): never built as one, reported
+  // A stray of another token passed among the order's own, from a caller's snapshot, is never built
+  // as one and is reported.
   for (const s of snap.strays.filter((x) => !ownIds.includes(x.covenantId ?? ''))) unprovenIssue({ outpoint: outpointOf(s), amount: big(s.state.amount), token: s.covenantId ?? null });
   for (const u of snap.foreignUnproven ?? []) unprovenIssue(u);
   const foreign: ForeignStrays[] = [];
@@ -936,7 +1108,8 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   const strays = picks.flatMap((x) => x.pick.take);
   if (!strays.length && !foreign.length) return failed([...issues, issue('sweep.nothing', 'error', 'this order has no stray tokens this app can sweep')], [cov]);
 
-  // a plain ask's carrier pays the fee; every other kind needs a maker funding UTXO from the start (the smallest of at least 1 KAS, else the largest)
+  // A plain ask's carrier pays the fee. Every other kind needs a maker funding UTXO from the start,
+  // the smallest of at least 1 KAS, else the largest.
   const carrierPays = baseKind(st.kind) === 'KobAsk';
   const pool = (env.funding ?? []).filter((f) => f.pubkey === env.maker).sort((x, y) => (big(x.amount) < big(y.amount) ? -1 : big(x.amount) > big(y.amount) ? 1 : 0));
   const seed = carrierPays ? null : (pool.find((f) => big(f.amount) >= ONE_KAS) ?? pool[pool.length - 1] ?? null);
@@ -950,7 +1123,8 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   });
   const r = buildWithFunding(env, make, initial);
   if ('error' in r) return failed([...issues, r.error], [cov]);
-  // the continuation is output 0 under the SAME script: with funding it keeps the order's whole value, without it the fee comes off the carrier
+  // The continuation is output 0 under the same script. With funding it keeps the order's whole
+  // value, and without it the fee comes off the carrier.
   const cont = r.built.tx.outputs[0];
   const kept = cont ? big(cont.value) : -1n;
   const value = big(snap.order.amount);
@@ -978,18 +1152,25 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   };
 }
 
-// ------------------------------------------------------------------------------------------------ planRefund
+// ------------------------------------------------------------------------------------------------
+// planRefund
 
 /**
- * The maker refunds their OWN order once it is refundable (expiry / 90 days idle / IOC-FOK kill). Refunds are permissionless and their fee is
- * paid from the order's `refundTip`:
- *   * default: NO signature at all (the contracts authorise it); the whole tip is spent as the network fee (a change output of a few 0.01 KAS
- *     costs more storage mass than it returns);
- *   * `reclaimTip`: one maker funding UTXO (>= 1 KAS, the smallest) is added so the tip minus the minimum fee returns to the maker as change:
- *     costs one wallet signature and saves ~0.02 KAS.
- * A refund never moves strays (they stay with the order id: cancel instead if there are any). A sell-first pair entry's refund returns both its
- * custodies (A and the B prefund).
- * Whether the order is due yet is decided by kob-wasm (`lockTime` = current DAA); a refusal comes back as `refund.not-yet`.
+ * The maker refunds their own order once it is refundable, after expiry, 90 days idle or the
+ * IOC or FOK kill. Refunds are permissionless and their fee is paid from the order's `refundTip`.
+ *
+ * - Default: no signature at all, because the contracts authorise it. The whole tip is spent as
+ *   the network fee, since a change output of a few 0.01 KAS costs more storage mass than it
+ *   returns.
+ * - `reclaimTip`: one maker funding UTXO (at least 1 KAS, the smallest) is added, so the tip minus
+ *   the minimum fee returns to the maker as change. This costs one wallet signature and saves
+ *   about 0.02 KAS.
+ *
+ * A refund never moves strays. They stay with the order id, so cancel instead if there are any. A
+ * sell-first pair entry's refund returns both its custodies (A and the B prefund).
+ *
+ * Whether the order is due yet is decided by kob-wasm (`lockTime` is the current DAA). A refusal
+ * comes back as `refund.not-yet`.
  */
 export function planRefund(env0: CancelEnv, order: OrderSnapshot, opts: { reclaimTip?: boolean } = {}): CancelPlan {
   const env = withUrgency(env0, 'normal');
