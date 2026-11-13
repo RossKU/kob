@@ -1,21 +1,27 @@
-//! Which chain blocks of a window from a node other than the primary must be taken from the primary before the window is
-//! applied (`rpc::multi`, `rpc::verify`).
+//! Decides which chain blocks of a window from a non-primary node are re-read from the primary.
 //!
-//! A checked window from another node carries the primary's chain blocks, headers that hash to them, exactly the accepted
-//! transactions the primary reports and transactions that hash to their ids. Two parts of a transaction are outside every
-//! hash: its signature scripts and the spent outputs the node attaches to its inputs. The indexer reads both for the
-//! transactions it tracks (order reveals, covenant ids of spent outputs), so every chain block holding a transaction that
-//! can matter to KOB is compared with the primary's copy first. A transaction can matter when, by the parts the hashes
-//! cover or by the store (nothing the other node says alone):
+//! See `rpc::multi` and `rpc::verify` for the callers. A checked window from another node carries
+//! the primary's chain blocks, headers that hash to them, exactly the accepted transactions the
+//! primary reports, and transactions that hash to their ids. Two parts of a transaction are
+//! outside every hash: its signature scripts and the spent outputs the node attaches to its
+//! inputs. The indexer reads both for the transactions it tracks (order reveals, and covenant ids
+//! of spent outputs). So every chain block that holds a transaction that can matter to KOB is
+//! compared with the primary's copy first.
 //!
-//! * its payload is a KOB1 record,
-//! * an input spends an output the store tracks (an order, a token output, a holding), or an output of such a transaction
-//!   earlier in the same window (chains of KOB transactions inside one window),
-//! * an output carries the covenant binding of a token some order trades or the allowlist tracks.
+//! A transaction can matter when one of these holds. Only the parts the hashes cover and the
+//! store decide it, never the other node alone.
 //!
-//! Left to the other node: token transfers of a token nobody trades sent to an order id (a "foreign stray" the indexer flags
-//! for information only; a lying node could hide one), and the trigger evidence of untracked fills, which the indexer reads
-//! only from transactions that matter by the rules above (compared then).
+//! - Its payload is a KOB1 record.
+//! - An input spends an output the store tracks (an order, a token output or a holding), or an
+//!   output of such a transaction earlier in the same window.
+//! - An output carries the covenant binding of a token that some order trades or the allowlist
+//!   tracks.
+//!
+//! Two things are left to the other node:
+//! - Token transfers of a token nobody trades, sent to an order id (a "foreign stray"). The
+//!   indexer flags them for information only, and a lying node could hide one.
+//! - The trigger evidence of untracked fills. The indexer reads it only from transactions that
+//!   matter by the rules above, and compares those then.
 
 use super::db::DbResult;
 use crate::hex::Hash32;
@@ -38,6 +44,7 @@ fn hash_at(r: &rusqlite::Row, i: usize) -> rusqlite::Result<Hash32> {
 }
 
 impl TrustContext {
+    /// Reads the unspent tracked outpoints and the traded token ids from the store.
     pub fn load(conn: &Connection, allowlist: Arc<TokenAllowlist>) -> DbResult<TrustContext> {
         let mut outpoints = HashSet::new();
         for table in ["order_utxos", "token_utxos", "token_holdings"] {
@@ -57,7 +64,9 @@ impl TrustContext {
         Ok(TrustContext { outpoints, tokens, allowlist })
     }
 
-    /// Per chain block of `blocks`: whether it holds a transaction that can matter to KOB (see the module documentation).
+    /// Per chain block of `blocks`: whether it holds a transaction that can matter to KOB.
+    ///
+    /// See the module documentation for what matters.
     pub fn flag(&self, blocks: &[RawChainBlock]) -> Vec<bool> {
         let mut created: HashSet<(Hash32, u32)> = HashSet::new();
         blocks
