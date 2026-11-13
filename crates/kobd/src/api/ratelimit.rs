@@ -1,7 +1,7 @@
 //! Token-bucket rate limiting with one bucket per client, one per IPv6 site and one global bucket.
 //!
 //! Memory is bounded. Idle client buckets expire after `bucket_ttl_secs`. When a table reaches
-//! `max_tracked_clients`, the oldest buckets are evicted. An address-spray flood can therefore
+//! `max_tracked_clients`, the buckets that have refilled the most (least state lost) are evicted. An address-spray flood can therefore
 //! only churn entries and never grow the table.
 //!
 //! The clock is injectable for tests.
@@ -142,7 +142,7 @@ impl RateLimiter {
             let key = rate_key(ip, self.cfg.ipv6_prefix_bits);
             let burst = self.cfg.per_ip_burst.max(1) as f64;
             let mut c = self.clients.lock().unwrap_or_else(|e| e.into_inner());
-            self.maintain(&mut c, now, &key);
+            self.maintain(&mut c, now, &key, self.cfg.per_ip_rps, burst);
             let b = c.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
             b.take(now, self.cfg.per_ip_rps, burst, cost).map_err(secs)?;
         }
@@ -156,7 +156,7 @@ impl RateLimiter {
             let key = rate_key(ip, self.cfg.ipv6_site_prefix_bits);
             let burst = self.cfg.per_site_burst.max(1) as f64;
             let mut s = self.sites.lock().unwrap_or_else(|e| e.into_inner());
-            self.maintain(&mut s, now, &key);
+            self.maintain(&mut s, now, &key, self.cfg.per_site_rps, burst);
             let b = s.map.entry(key).or_insert_with(|| Bucket::full(burst, now));
             b.take(now, self.cfg.per_site_rps, burst, cost).map_err(secs)?;
         }
@@ -168,7 +168,7 @@ impl RateLimiter {
         Ok(())
     }
 
-    fn maintain(&self, c: &mut Clients, now: u64, key: &IpAddr) {
+    fn maintain(&self, c: &mut Clients, now: u64, key: &IpAddr, rps: f64, burst: f64) {
         let ttl = self.cfg.bucket_ttl_secs.max(1) * 1_000_000_000;
         if now.saturating_sub(c.last_sweep_ns) >= ttl / 4 {
             c.map.retain(|_, b| now.saturating_sub(b.last_ns) < ttl);
@@ -178,12 +178,20 @@ impl RateLimiter {
         if c.map.len() >= cap && !c.map.contains_key(key) {
             c.map.retain(|_, b| now.saturating_sub(b.last_ns) < ttl);
             if c.map.len() >= cap {
-                // Evict the oldest tenth, at least one, in one pass. A spray attack then pays
-                // O(n) rarely.
+                // Evict a tenth, at least one, in one pass. A spray attack then pays O(n) rarely.
+                // An eviction resets a bucket to full, so the victims are the buckets that
+                // have refilled the most (an idle client loses nothing, a client that is
+                // being limited right now keeps its debt); ties go to the oldest. A spray of
+                // fresh addresses therefore cannot wash away the bucket of a limited client.
                 let evict = (cap / 10).max(1);
-                let mut ages: Vec<(u64, IpAddr)> = c.map.iter().map(|(k, b)| (b.last_ns, *k)).collect();
-                ages.sort_unstable_by_key(|(t, _)| *t);
-                for (_, k) in ages.into_iter().take(evict) {
+                let fill = |b: &Bucket| {
+                    let refilled = now.saturating_sub(b.last_ns) as f64 / 1e9 * rps;
+                    ((b.tokens + refilled).min(burst) / burst * 1e6) as u64
+                };
+                let mut ages: Vec<(std::cmp::Reverse<u64>, u64, IpAddr)> =
+                    c.map.iter().map(|(k, b)| (std::cmp::Reverse(fill(b)), b.last_ns, *k)).collect();
+                ages.sort_unstable_by_key(|(f, t, _)| (*f, *t));
+                for (_, _, k) in ages.into_iter().take(evict) {
                     c.map.remove(&k);
                 }
             }
@@ -197,7 +205,8 @@ impl RateLimiter {
 }
 
 fn secs(s: f64) -> Duration {
-    Duration::from_secs_f64(s.max(0.0))
+    // Config load refuses rates that make this huge; the clamp keeps a bad value from panicking.
+    Duration::from_secs_f64(if s.is_finite() { s.clamp(0.0, 86_400.0) } else { 86_400.0 })
 }
 
 /// The `Retry-After` header value for a wait: whole seconds, at least 1.
@@ -354,5 +363,20 @@ mod tests {
         clock.advance(Duration::from_secs(1000));
         let _ = l.check(ip("9.9.9.9"));
         assert_eq!(l.tracked_clients(), 1);
+    }
+
+    #[test]
+    fn a_spray_does_not_wash_away_a_limited_client() {
+        let mut c = cfg(0.1, 2, 0.0, 1);
+        c.max_tracked_clients = 20;
+        let (l, clock) = limiter(c);
+        let victim = ip("2.2.2.2");
+        while l.check(victim).is_ok() {}
+        // The limited client is the OLDEST bucket; a spray of fresh addresses must still not evict it.
+        for i in 0..200u32 {
+            clock.advance(Duration::from_millis(1));
+            let _ = l.check(IpAddr::V4(std::net::Ipv4Addr::from(0x0a00_0000 + i)));
+        }
+        assert!(l.check(victim).is_err(), "the limited bucket survived the spray");
     }
 }
