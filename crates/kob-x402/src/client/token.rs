@@ -1,25 +1,32 @@
-//! Payer / merchant SDK: `kcc20` token payments.
+//! Payer and merchant SDK for `kcc20` token payments.
 //!
-//! Merchant side: [`kcc20_requirements`] builds the `accepts` entry for an allowlisted token.
+//! # Merchant side
 //!
-//! Payer side:
+//! [`kcc20_requirements`] builds the `accepts` entry for an allowlisted token.
 //!
-//! * [`pay_kcc20`] / [`pay_kcc20_with`]: select the token inputs, build the payment with
-//!   [`kob_protocol::build::SendTokens`], commit the payload-commitment digest in the transaction
-//!   payload BEFORE signing (the merchant output index is known: `SendTokens` lays recipients first),
-//!   sign locally, finalize with tightened budgets and return the `PaymentPayload`;
-//! * [`build_kcc20_unsigned`] + [`finish_kcc20`]: the same in two steps for wallets that hold the keys
-//!   (the TS SDK): the wallet signs the `sign` requests of the returned [`BuiltTx`] and returns
-//!   signatures only;
-//! * [`preflight_kcc20`]: runs the verifier's own logic against a [`ChainView`] before the payload is
-//!   disclosed to anyone;
-//! * [`revoke_kcc20`]: self-spend of one input of an issued payment, so the signed payment can never
-//!   confirm (the payer's TTL enforcement: the signed payload cannot be un-signed, only made unspendable).
+//! # Payer side
 //!
-//! The payer never spends borrow-enabled or non-P2PK-owned token UTXOs (a borrow or a covenant owner
-//! can invalidate or redirect a signed transaction), and prefers the fewest token inputs that cover the
-//! amount within the program's slot limit. Funding inputs are added only when the token carriers cannot
-//! pay the fee (the fee of a token payment is normally covered by the carrier slack).
+//! - [`pay_kcc20`] and [`pay_kcc20_with`] select the token inputs and build the payment with
+//!   [`kob_protocol::build::SendTokens`]. They commit the payload-commitment digest in the
+//!   transaction payload before signing. The merchant output index is known at that point because
+//!   `SendTokens` lays recipients first. They then sign locally, finalize with tightened budgets
+//!   and return the `PaymentPayload`.
+//! - [`build_kcc20_unsigned`] and [`finish_kcc20`] do the same in two steps for wallets that hold
+//!   the keys, such as the TS SDK. The wallet signs the `sign` requests of the returned [`BuiltTx`]
+//!   and returns the signatures only.
+//! - [`preflight_kcc20`] runs the verifier's own logic against a [`ChainView`] before the payload
+//!   is disclosed to anyone.
+//! - [`revoke_kcc20`] self-spends one input of an issued payment, so that the signed payment can
+//!   never confirm. A signed payload cannot be un-signed, only made unspendable.
+//!
+//! # Input selection
+//!
+//! The payer never spends borrow-enabled or non-P2PK-owned token UTXOs, because a borrow or a
+//! covenant owner can invalidate or redirect a signed transaction. It prefers the fewest token
+//! inputs that cover the amount within the program's slot limit.
+//!
+//! Funding inputs are added only when the token carriers cannot pay the fee. Normally the carrier
+//! slack covers the fee of a token payment.
 
 use std::collections::BTreeMap;
 
@@ -53,7 +60,7 @@ use crate::wire::{
     AUTH_VERSION_PAYLOAD, BINDING_EXACT, PAYLOAD_EXACT_TX, PAYMENT_FLOW_UPFRONT, SCHEME_EXACT, TX_ENCODING, X402_VERSION,
 };
 
-// ------------------------------------------------------------------------------------------ merchant
+// ---------------------------------------------------------------------------------------- merchant
 
 /// Builds the `accepts` entry for `amount` units of `token`, paid to the merchant's Schnorr P2PK
 /// address `pay_to_address`, with the merchant token output carrying exactly `carrier` sompi.
@@ -116,7 +123,7 @@ pub fn kcc20_requirements(
         extra,
         other: Map::new(),
     };
-    // self-check: the requirement must parse back to exactly what was asked for
+    // Self-check: the requirement must parse back to exactly what was asked for.
     let facts = parse_offer(&req)?;
     debug_assert_eq!((facts.amount, facts.carrier, facts.program), (amount, carrier, token.program));
     Ok(req)
@@ -129,22 +136,29 @@ pub fn kcc20_requirements(
 pub struct Kcc20Options {
     /// Sompi per gram (default and floor: the relay minimum).
     pub fee_rate: Option<u64>,
-    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`] (storage-inclusive).
+    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`]
+    /// (storage-inclusive).
     pub fee_mode: FeeMode,
     /// KAS value of the payer's token change output (default: the offer's carrier).
     pub token_change_carrier: Option<u64>,
     /// Authorization lifetime in seconds (default and maximum useful value: `maxTimeoutSeconds`).
     pub ttl_seconds: Option<u64>,
-    /// `payment-identifier` extension id (`^[A-Za-z0-9_-]{16,128}$`, required by the default policy); by default a fresh
-    /// random one ([`crate::client::native::random_payment_id`]).
+    /// `payment-identifier` extension id, matching `^[A-Za-z0-9_-]{16,128}$`.
+    ///
+    /// The default policy requires one. Default: a fresh random id
+    /// ([`crate::client::native::random_payment_id`]).
     pub payment_id: Option<String>,
     /// Refuse a payment whose fee exceeds this many sompi (payer-side bound).
     pub max_fee_sompi: u64,
-    /// Refuse an offer whose merchant carrier (KAS the payer funds into the merchant token output), or a payer token
-    /// change carrier, exceeds this many sompi (default [`Limits::default`]'s `max_carrier_sompi`).
+    /// Refuse an offer whose merchant or payer token change carrier exceeds this many sompi.
+    ///
+    /// The merchant carrier is the KAS the payer funds into the merchant token output. Default:
+    /// `max_carrier_sompi` of [`Limits::default`].
     pub max_carrier_sompi: u64,
-    /// The most KAS (sompi) the payment may take from the payer's coins: the merchant carrier plus the network fee
-    /// (`None`: bounded only by `max_carrier_sompi` and `max_fee_sompi` apart).
+    /// The most KAS (sompi) the payment may take from the payer's coins, that is the merchant
+    /// carrier plus the network fee.
+    ///
+    /// `None` leaves only `max_carrier_sompi` and `max_fee_sompi` as separate bounds.
     pub max_kas_sompi: Option<u64>,
 }
 
@@ -163,8 +177,8 @@ impl Default for Kcc20Options {
     }
 }
 
-/// Everything of the `PaymentPayload` except the signed transaction: what a wallet flow carries from
-/// [`build_kcc20_unsigned`] to [`finish_kcc20`].
+/// Everything of the `PaymentPayload` except the signed transaction: what a wallet flow carries
+/// from [`build_kcc20_unsigned`] to [`finish_kcc20`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PayloadTemplate {
@@ -228,7 +242,7 @@ fn select_tokens(
     if total < need {
         return Err(why(""));
     }
-    // one input: the smallest that covers (an exact input avoids the change output)
+    // One input: the smallest that covers. An exact input avoids the change output.
     if let Some(one) = eligible.iter().filter(|t| t.state.amount() >= need).min_by_key(|t| t.state.amount()) {
         return Ok(vec![one.clone()]);
     }
@@ -297,8 +311,8 @@ fn build_unsigned_with(
     let (max_in, _) = facts.program.token_slots().expect("token program");
     let tokens = select_tokens(&facts, token_utxos, max_in, have_key)?;
 
-    // the payment identifier first (the commitment binds it), then the commitment, BEFORE the transaction exists: the
-    // merchant output is output 0 (recipients first)
+    // The payment identifier comes first because the commitment binds it. The commitment comes
+    // before the transaction exists. The merchant output is output 0 because recipients go first.
     let id = crate::common::resolve_payment_id(opts.payment_id.as_deref())?;
     let ttl = opts.ttl_seconds.unwrap_or(offer.max_timeout_seconds);
     let expires_at = iso_from_ms(now_ms.saturating_add(ttl.saturating_mul(1_000)));
@@ -359,7 +373,7 @@ fn build_unsigned_with(
             format!("the fee {} exceeds the payer bound {}", built.fee.fee, opts.max_fee_sompi),
         ));
     }
-    // the KAS the payment takes beyond the tokens: the carrier it funds into the merchant output and the fee
+    // The KAS the payment takes beyond the tokens is the merchant carrier it funds plus the fee.
     let kas = facts.carrier.saturating_add(built.fee.fee);
     if let Some(max) = opts.max_kas_sompi.filter(|m| kas > *m) {
         return Err(X402Error::payload(
@@ -367,7 +381,7 @@ fn build_unsigned_with(
             format!("the payment takes {kas} sompi (carrier {} + fee {}), above the payer bound {max}", facts.carrier, built.fee.fee),
         ));
     }
-    // the merchant output must be exactly what the offer asks for, at the committed index
+    // The merchant output must be exactly what the offer asks for, at the committed index.
     let out0 = built
         .tx
         .outputs
@@ -407,9 +421,9 @@ fn facts_owner_address(tokens: &[TokenUtxo], network: Network) -> Option<String>
     tokens.first().and_then(|t| crate::common::address_of(&p2pk_spk(&t.state.owner()), network))
 }
 
-/// Finalizes a built payment with the wallet's (or local) signatures: checks every signature against
-/// its digest, tightens the compute budgets, checks that the transaction still commits to the
-/// authorization digest, and assembles the `PaymentPayload`.
+/// Finalizes a built payment with the wallet's (or local) signatures: checks every signature
+/// against its digest, tightens the compute budgets, checks that the transaction still commits to
+/// the authorization digest, and assembles the `PaymentPayload`.
 pub fn finish_kcc20(built: &BuiltTx, template: &PayloadTemplate, signatures: &[InputSignature]) -> Result<PaymentPayload> {
     let signed = finalize(built, signatures, FinalizeOptions { tighten_budgets: true }).map_err(protocol_err)?;
     let (tx, entries) = signed.tx.to_tx().map_err(protocol_err)?;
@@ -448,8 +462,8 @@ pub fn pay_kcc20(
     pay_kcc20_with(offer, request_hash, payer_secrets, token_utxos, funding, now_ms, &Kcc20Options::default())
 }
 
-/// Builds, signs locally and finalizes a payment for `offer`. `payer_secrets` maps x-only public keys
-/// to secret keys (the owners of the token inputs and of the funding inputs).
+/// Builds, signs locally and finalizes a payment for `offer`. `payer_secrets` maps x-only public
+/// keys to secret keys (the owners of the token inputs and of the funding inputs).
 pub fn pay_kcc20_with(
     offer: &PaymentRequirements,
     request_hash: &str,
@@ -466,8 +480,8 @@ pub fn pay_kcc20_with(
     finish_kcc20(&built, &template, &signatures)
 }
 
-/// Payer-side preflight: the verifier's own logic (the payer's policy and trusted chain view) run over
-/// the payload before it is disclosed. A payload that does not pass here must not be sent.
+/// Payer-side preflight: the verifier's own logic (the payer's policy and trusted chain view) run
+/// over the payload before it is disclosed. A payload that does not pass here must not be sent.
 pub fn preflight_kcc20(
     chain: &dyn ChainView,
     clock: &dyn Clock,
@@ -479,7 +493,7 @@ pub fn preflight_kcc20(
     verify_kcc20(&VerifyCtx { chain, clock, policy }, offer, payload, request_hash)
 }
 
-// -------------------------------------------------------------------------------------------- revoke
+// ------------------------------------------------------------------------------------------ revoke
 
 /// The input a revocation spends.
 #[derive(Clone, Debug)]
@@ -491,10 +505,12 @@ pub enum RevokeInput {
     Token { token: TokenRef, utxo: TokenUtxo },
 }
 
-/// Builds and signs a transaction that spends one input of an issued payment back to its owner, so
-/// the payment (which spends the same outpoint) can never confirm. Broadcast it before the
-/// authorization expires or whenever the payer decides not to pay; once the payment is accepted
-/// on chain the outpoint is gone and this is a no-op conflict.
+/// Builds and signs a transaction that spends one input of an issued payment back to its owner.
+///
+/// The payment spends the same outpoint, so it can never confirm once the revocation does.
+/// Broadcast the revocation before the authorization expires, or whenever the payer decides not to
+/// pay. Once the payment is accepted on chain the outpoint is gone and the revocation conflicts
+/// with it and does nothing.
 pub fn revoke_kcc20(input: &RevokeInput, payer_secrets: &BTreeMap<[u8; 32], [u8; 32]>, fee_rate: Option<u64>) -> Result<SignedTx> {
     match input {
         RevokeInput::Token { token, utxo } => {
@@ -547,7 +563,8 @@ fn revoke_kas(k: &KeyUtxo, secrets: &BTreeMap<[u8; 32], [u8; 32]>, fee_rate: u64
     };
     let placeholder = push_data(&[0u8; 65]);
     let entries = std::slice::from_ref(&entry);
-    // fixed point: value = amount - fee(value); the storage mass falls as the value grows
+    // The value is a fixed point of `value = amount - fee(value)`. The storage mass falls as the
+    // value grows.
     let mut value = k.utxo.amount;
     for _ in 0..32 {
         let fee = min_fee(&masses(&mk(value, placeholder.clone()), entries), fee_rate);

@@ -1,18 +1,24 @@
-//! Payer / merchant SDK for KAS `standard-native` payments (the elldeeone binding).
+//! Payer and merchant SDK for KAS `standard-native` payments.
 //!
-//! Merchant side: [`native_requirements`] builds an offer (with the independently derived
-//! `payToScriptPublicKey`), [`payment_required`] wraps offers into a `402` body that requires the
-//! `payment-identifier` extension, and the `*_header` helpers encode / decode the three HTTP headers.
+//! # Merchant side
 //!
-//! Payer side: [`pay_native`] validates the offer against the payer's own limits, builds a version-0
-//! transaction (one merchant output, optional change output back to the payer, no payload, fee at the
-//! relay floor computed from the exact masses), signs every P2PK input with SIGHASH_ALL, signs the
-//! request authorization digest (which binds the payment identifier) with the funding key and returns the `PAYMENT-SIGNATURE` object.
+//! [`native_requirements`] builds an offer with the independently derived `payToScriptPublicKey`.
+//! [`payment_required`] wraps offers into a `402` body that requires the `payment-identifier`
+//! extension. The `*_header` helpers encode and decode the three HTTP headers.
+//!
+//! # Payer side
+//!
+//! [`pay_native`] checks the offer against the payer's own limits and builds a version-0
+//! transaction. The transaction has one merchant output, an optional change output back to the
+//! payer and no payload. Its fee is the relay floor of the exact masses. The function signs every
+//! P2PK input with SIGHASH_ALL, signs the authorization digest (which binds the payment
+//! identifier) with the funding key and returns the `PAYMENT-SIGNATURE` object.
+//!
 //! [`preflight_native`] runs the verifier's own checks against a chain view before the payload is
-//! disclosed, and [`revoke_native`] builds the self-spend that makes a disclosed but unsettled payment
-//! unconfirmable (the payer-side kill switch for an ambiguous settlement).
+//! disclosed. [`revoke_native`] builds a self-spend that makes a disclosed but unsettled payment
+//! unconfirmable. It is the payer's kill switch when a settlement is ambiguous.
 //!
-//! Nothing here broadcasts: the caller (or the facilitator) submits.
+//! Nothing here broadcasts. The caller or the facilitator submits.
 
 use std::collections::BTreeSet;
 
@@ -76,7 +82,7 @@ pub enum NativeError {
     Verify(#[from] X402Error),
 }
 
-// ------------------------------------------------------------------------------------------ merchant
+// ---------------------------------------------------------------------------------------- merchant
 
 /// Builds a standard-native offer. `pay_to` is the merchant's address on `network`; the script
 /// public key is derived from it here and re-derived independently by every verifier.
@@ -119,8 +125,9 @@ pub fn native_requirements(
     })
 }
 
-/// The `402` body: the offers plus the `payment-identifier` extension marked required (the binding
-/// requires it for exact).
+/// The `402` body: the offers plus the `payment-identifier` extension, marked required.
+///
+/// The `exact` binding requires that extension.
 pub fn payment_required(resource: Resource, accepts: Vec<PaymentRequirements>, error: Option<String>) -> PaymentRequired {
     PaymentRequired {
         x402_version: X402_VERSION,
@@ -158,8 +165,10 @@ pub fn parse_payment_response(header: &str) -> X402Result<SettlementResponse> {
     header_decode(header)
 }
 
-/// The success `SettlementResponse` of a verified (and, by the caller, observed) native payment:
-/// the recomputed transaction id, network, payer, amount and `extensions.kaspa`.
+/// The success `SettlementResponse` of a verified native payment.
+///
+/// The caller has observed the payment on chain. The response carries the recomputed transaction
+/// id, network, payer, amount and `extensions.kaspa`.
 pub fn settlement_response(v: &Verified, network: Network) -> SettlementResponse {
     SettlementResponse {
         success: true,
@@ -172,7 +181,7 @@ pub fn settlement_response(v: &Verified, network: Network) -> SettlementResponse
     }
 }
 
-// ---------------------------------------------------------------------------------------------- payer
+// ------------------------------------------------------------------------------------------- payer
 
 /// Payer-side policy for one payment.
 #[derive(Clone, Debug)]
@@ -181,24 +190,29 @@ pub struct PayOptions {
     pub max_amount_sompi: u64,
     /// Fee rate in sompi per gram (at least the relay floor [`MIN_FEE_RATE`]).
     pub fee_rate: u64,
-    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`] (storage-inclusive).
+    /// [`FeeMode::Relay`] (default: the node's relay floor) or [`FeeMode::Priority`]
+    /// (storage-inclusive).
     pub fee_mode: FeeMode,
     /// The most the payer is willing to pay in fee.
     pub max_fee_sompi: u64,
-    /// The most the payment may take from the payer's coins, the merchant amount and the fee together (`None`: bounded
-    /// by `max_amount_sompi` and `max_fee_sompi` apart).
+    /// The most the payment may take from the payer's coins, the merchant amount and the fee
+    /// together (`None`: bounded by `max_amount_sompi` and `max_fee_sompi` apart).
     pub max_total_sompi: Option<u64>,
     /// Change below this is folded into the fee (a tiny change output inflates the storage mass).
     pub min_change_sompi: u64,
     /// Most inputs the transaction may spend.
     pub max_inputs: usize,
-    /// Explicit `payment-identifier`; by default a fresh random one ([`random_payment_id`]). A retry of the same
-    /// payment re-sends the stored payload (same id, same transaction); a new transaction takes a new id.
+    /// Explicit `payment-identifier`. Default: a fresh random one ([`random_payment_id`]).
+    ///
+    /// A retry of the same payment re-sends the stored payload with the same id. A new transaction
+    /// takes a new id.
     pub payment_id: Option<String>,
     /// Echoed in `paymentPayload.resource`.
     pub resource: Option<Resource>,
-    /// Authorization lifetime in seconds (default: the offer's `maxTimeoutSeconds`, which a merchant may set to ~136 years:
-    /// payer SDKs pass a short one). Longer than `maxTimeoutSeconds` is refused by the verifier.
+    /// Authorization lifetime in seconds. Default: the offer's `maxTimeoutSeconds`.
+    ///
+    /// A merchant may set `maxTimeoutSeconds` to about 136 years, so payer SDKs should pass a short
+    /// value. A value above `maxTimeoutSeconds` is refused by the verifier.
     pub ttl_seconds: Option<u64>,
 }
 
@@ -271,8 +285,8 @@ fn check_offer(offer: &PaymentRequirements, max_amount: u64) -> Result<Offer, Na
     Ok(Offer { network, amount, pay_to_spk })
 }
 
-/// A fresh `payment-identifier` id: 24 random bytes (`pay_` + 48 hex). Nobody else can name it before the payer
-/// discloses the payment, and every new transaction gets its own.
+/// A fresh `payment-identifier` id: 24 random bytes (`pay_` + 48 hex). Nobody else can name it
+/// before the payer discloses the payment, and every new transaction gets its own.
 pub fn random_payment_id() -> String {
     let bytes: [u8; 24] = secp256k1::rand::random();
     format!("pay_{}", hex(&bytes))
@@ -290,7 +304,8 @@ fn placeholder_sigscript() -> Vec<u8> {
     s
 }
 
-/// A version-0 P2PK transaction with placeholder signature scripts and the exact committed storage mass.
+/// A version-0 P2PK transaction with placeholder signature scripts and the exact committed storage
+/// mass.
 fn skeleton(inputs: &[&KeyUtxo], outputs: Vec<TransactionOutput>) -> (Transaction, Vec<UtxoEntry>) {
     let entries: Vec<UtxoEntry> =
         inputs.iter().map(|k| UtxoEntry::new(k.utxo.amount, p2pk_spk(&k.pubkey), k.utxo.block_daa_score, false, None)).collect();
@@ -305,8 +320,10 @@ fn floor_fee(tx: &Transaction, entries: &[UtxoEntry], rate: u64, mode: FeeMode) 
     target_fee(&masses(tx, entries), rate, mode)
 }
 
-/// Fixed point of `fee = floor(tx with `free = total - fixed - fee`)`: the smallest fee that covers the
-/// relay floor of the transaction it leaves behind. `build(free)` returns the candidate transaction.
+/// The smallest fee that covers the relay floor of the transaction it leaves behind.
+///
+/// The free output is `total - fixed - fee`, so the fee is a fixed point. `build(free)` returns the
+/// candidate transaction for a free amount.
 fn solve_fee(total: u64, fixed: u64, rate: u64, mode: FeeMode, build: &dyn Fn(u64) -> (Transaction, Vec<UtxoEntry>)) -> Option<u64> {
     let mut fee = 0u64;
     for _ in 0..64 {
@@ -317,7 +334,7 @@ fn solve_fee(total: u64, fixed: u64, rate: u64, mode: FeeMode, build: &dyn Fn(u6
         let (tx, entries) = build(free);
         let f = floor_fee(&tx, &entries, rate, mode);
         if f <= fee {
-            // lowering the fee only grows the free output, which cannot raise the floor
+            // Lowering the fee only grows the free output, which cannot raise the floor.
             let free = total.checked_sub(fixed)?.checked_sub(f)?;
             let (tx, entries) = build(free);
             return (floor_fee(&tx, &entries, rate, mode) <= f).then_some(f);
@@ -346,8 +363,8 @@ fn plan(inputs: &[&KeyUtxo], merchant: &Offer, opts: &PayOptions) -> Result<Buil
         let change = total - merchant.amount - fee;
         if change >= opts.min_change_sompi.max(1) && fee <= opts.max_fee_sompi {
             let (tx, entries) = with_change(change);
-            // the relay floor does not price storage mass: a change output so small that the
-            // transaction exceeds the block storage limit is folded into the fee instead
+            // The relay floor does not price storage mass. A change output so small that the
+            // transaction exceeds the block storage limit is folded into the fee instead.
             if masses(&tx, &entries).within_block_limits() {
                 return Ok(Built { tx, entries, fee });
             }
@@ -383,9 +400,10 @@ fn sign_inputs(mut tx: Transaction, entries: &[UtxoEntry], secret: &[u8; 32]) ->
 
 /// Builds and signs the `PAYMENT-SIGNATURE` object for a standard-native offer.
 ///
-/// * `request_hash` is the resource server's request fingerprint (32-byte hex) the authorization commits to;
-/// * `utxos` are the payer's P2PK coins (all locked to the key of `payer_secret`);
-/// * the authorization expires at `now_ms + opts.ttl_seconds` (default `maxTimeoutSeconds`).
+/// - `request_hash` is the resource server's request fingerprint (32-byte hex). The authorization
+///   commits to it.
+/// - `utxos` are the payer's P2PK coins, all locked to the key of `payer_secret`.
+/// - The authorization expires at `now_ms + opts.ttl_seconds` (default `maxTimeoutSeconds`).
 ///
 /// The result is not broadcast. Run [`preflight_native`] before disclosing it.
 pub fn pay_native(
@@ -444,7 +462,7 @@ pub fn pay_native(
     let expires_at = iso_from_ms(now_ms.saturating_add(ttl.saturating_mul(1000)));
     let req_hash = requirements_hash(offer)?;
     let input_index = 0u32;
-    // the id is chosen first: the authorization digest binds it
+    // The id comes first because the authorization digest binds it.
     let id = resolve_payment_id(opts.payment_id.as_deref()).map_err(|e| NativeError::Build(e.message))?;
     let digest = signed_auth_digest(&SignedAuth {
         network: o.network,
@@ -489,9 +507,10 @@ pub fn pay_native(
     })
 }
 
-/// Payer-side check before disclosure: the verifier's own logic against a chain view (trusted UTXOs,
-/// fee and mass, scripts, authorization, expiry). A payload that fails here would fail at the
-/// facilitator too.
+/// Payer-side check before disclosure, using the verifier's own logic against a chain view.
+///
+/// It checks the trusted UTXOs, fee and mass, scripts, authorization and expiry. A payload that
+/// fails here would fail at the facilitator too.
 pub fn preflight_native(
     ctx: &VerifyCtx,
     offer: &PaymentRequirements,
@@ -511,10 +530,12 @@ pub struct Revocation {
     pub fee: u64,
 }
 
-/// Builds the payer-side revocation of a signed payment: spends its largest input back to the payer's
-/// own key at the relay-floor fee. If it confirms, the payment can never confirm (the inputs are
-/// shared); if the payment confirms first, the revocation is void and nothing is lost. The caller
-/// submits it (for example through [`crate::chain::ChainView::submit`]).
+/// Builds the payer-side revocation of a signed payment.
+///
+/// It spends the payment's largest payer input back to the payer's own key at the relay-floor fee.
+/// Both transactions spend that outpoint, so whichever confirms first wins. If the payment
+/// confirms first, the revocation is void and nothing is lost. The caller submits the revocation,
+/// for example through [`crate::chain::ChainView::submit`].
 pub fn revoke_native(
     payload: &PaymentPayload,
     payer_secret: &[u8; 32],
@@ -569,8 +590,8 @@ pub fn revoke_native(
     })
 }
 
-/// The first offer of a `402` the payer can and will pay: standard-native, KAS, on `network`, within
-/// `max_amount_sompi`, with a re-derivable recipient script.
+/// The first offer of a `402` the payer can and will pay: standard-native, KAS, on `network`,
+/// within `max_amount_sompi`, with a re-derivable recipient script.
 pub fn select_native_offer(pr: &PaymentRequired, network: Network, max_amount_sompi: u64) -> Option<&PaymentRequirements> {
     pr.accepts.iter().find(|o| o.network == network.as_str() && check_offer(o, max_amount_sompi).is_ok())
 }
