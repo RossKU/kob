@@ -10,4 +10,3 @@ e2e-real/.env
 *.log
 e2e-real/.ext/
 dist-real/
-dist-landing/

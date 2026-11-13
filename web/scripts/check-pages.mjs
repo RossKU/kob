@@ -2,7 +2,7 @@
 // Post-deploy check of a hosted web app (.github/workflows/deploy-pages.yml, docs/ops/web-hosting.md): the host must send what
 // public/_headers asks for, and serve exactly the built files.
 //
-//   node scripts/check-pages.mjs <base url> [--dist dist] [--landing-only]
+//   node scripts/check-pages.mjs <base url> [--dist dist]
 //   node scripts/check-pages.mjs --protected <url> [<url> ...]     (the internal mainnet app: unauthenticated requests must meet Cloudflare Access, never the app)
 //
 // * `/`: Content-Security-Policy equal to CSP_HEADER of csp.mjs (with `frame-ancestors 'none'`), X-Frame-Options DENY,
@@ -13,7 +13,6 @@
 // * a file under `/assets/`: Access-Control-Allow-Origin `*` (the sandboxed signer loads its bundle cross-origin).
 // * with --dist: every built file (except the host's own `_headers` / `_redirects`) is fetched and its sha256 compared with the
 //   local file, so a host that rewrites pages (an injected analytics script, minification, an old deployment) is caught.
-// * --landing-only (the landing-only site, web/src/app/landing-only.ts, has no signer page): the signer checks are skipped.
 // Redirects are followed (Pages sends `/index.html` to `/`). Prints one line per check; exits 1 when any fails.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -43,7 +42,7 @@ export function distFiles(dir) {
  * (only the first request is retried: a wrong header on a reachable deployment is a failure, not a delay).
  * @returns {Promise<{ ok: boolean, lines: string[] }>}
  */
-export async function checkPages(base, { dist, landingOnly = false, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
+export async function checkPages(base, { dist, fetchFn = fetch, attempts = 6, delayMs = 5000 } = {}) {
   const root = new URL(base.endsWith('/') ? base : base + '/');
   const lines = [];
   let ok = true;
@@ -81,7 +80,7 @@ export async function checkPages(base, { dist, landingOnly = false, fetchFn = fe
     expect('/', index, 'referrer-policy', 'no-referrer');
   }
 
-  for (const path of landingOnly ? [] : ['/signer.html', '/signer']) {
+  for (const path of ['/signer.html', '/signer']) {
     const res = await get(path);
     if (res.status !== 200) {
       fail(`${path} answered HTTP ${res.status}`);
@@ -188,10 +187,10 @@ async function main(argv) {
   const base = argv.find((a) => !a.startsWith('--') && argv[argv.indexOf(a) - 1] !== '--dist');
   const i = argv.indexOf('--dist');
   if (!base || !/^https?:\/\//.test(base)) {
-    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist] [--landing-only]');
+    console.error('usage: node scripts/check-pages.mjs <base url> [--dist dist]');
     return 2;
   }
-  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined, landingOnly: argv.includes('--landing-only') });
+  const { ok, lines } = await checkPages(base, { dist: i >= 0 ? argv[i + 1] : undefined });
   for (const l of lines) console.log(l);
   console.log(ok ? `${base}: every check passed` : `${base}: CHECK FAILED`);
   return ok ? 0 : 1;

@@ -1,4 +1,4 @@
-// The pieces of the frame that need no services (the landing-only page, src/main-landing.tsx, has none and must not pull the app's contexts into its bundle):
+// The pieces of the frame that need no services (no contexts of the app: they are data in, markup out):
 // the brand lockup, the theme toggle, the skip link, the header row and the footer drawn from its data. Frame.tsx re-exports them and adds the footer that reads them from the services.
 import type { ComponentChildren, Ref } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
@@ -167,8 +167,8 @@ export interface FooterData {
 }
 
 /**
- * The footer from its data alone (no services): the app's and the landing page's, and the landing-only page's, which has no services at all.
- * The landing page (and the landing-only page) keep the full footer: the brand, the tagline, the links and the network's disclaimer paragraph. An app page gets ONE
+ * The footer from its data alone (no services): the app's and the landing page's.
+ * The landing page keeps the full footer: the brand, the tagline, the links and the network's disclaimer paragraph. An app page gets ONE
  * compact line (review L-04): the brand, the version, the open review lead, a few links (the Disclaimer, the security policy, GitHub), the indexer trust and the
  * chart library's attribution. The paragraph's words are on the Disclaimer page and the landing page, one link away.
  */

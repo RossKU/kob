@@ -310,8 +310,7 @@ jobs:
   web:
     # The web app (web/) except the mock-stack e2e (job web-e2e): kob-wasm bindings, the official kaspa-wasm v2.1.0 SDK (fetched from the
     # rusty-kaspa release, the npm package is stale), typecheck, unit tests, the release bundle (vite build plus dist/registry/tokens.json)
-    # with its hashes, and the landing-only e2e (its own build in dist-landing/, the mainnet front page: the landing page at every address,
-    # no request but its own files). The real-wallet TN10 run (web/e2e-real) needs browser extensions, funded keys and a reachable TN10 node:
+    # with its hashes. The real-wallet TN10 run (web/e2e-real) needs browser extensions, funded keys and a reachable TN10 node:
     # it is manual / nightly, never part of this workflow.
     needs: changes
     if: needs.changes.outputs.web == 'true'
@@ -346,16 +345,6 @@ jobs:
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
         run: bash scripts/release-hashes.sh
-      - run: npx playwright install --with-deps chromium
-      # the landing-only build (KOB_LANDING_ONLY, the mainnet front page): its own build in dist-landing/, the landing page at every address, no request but its own files
-      - run: npm run e2e:landing
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-playwright-report
-          path: |
-            web/test-results
-            web/playwright-report
 
   web-build:
     # The app under test, built once for the web-e2e shards: the kob-wasm bindings (web/wasm, which the mock server also loads) and the plain

@@ -8,17 +8,15 @@ name: deploy-pages
 # the signer page's own policy) and every file byte for byte (web/scripts/check-pages.mjs); any difference fails the job. The job
 # summary lists the deployment URL and the sha256 of every deployed file.
 #
-# Two sites: the testnet-10 app (project KOB_PAGES_PROJECT, variables KOB_PAGES_*, https://kob-tn10.kaspa.ag) and the mainnet site (project
-# KOB_PAGES_MAINNET_PROJECT, https://kob.kaspa.ag, always built with network mainnet). Mainnet is not launched, so the mainnet site is the LANDING-ONLY
-# front page (KOB_LANDING_ONLY, web/src/app/landing-only.ts): "Mainnet - in preparation", a link to the testnet app, no trading UI, no wallet, no node or
-# indexer connection, no signer page. That is set below, in this file, on the mainnet matrix entry (landing: "1"), not by a repository variable: the launch of
-# mainnet is the reviewed commit that removes it (docs/ops/web-hosting.md, "The mainnet front page"). The landing-only page connects to nothing, so the
-# mainnet site needs only KOB_PAGES_MAINNET_PROJECT; KOB_PAGES_MAINNET_INDEXER_URL (and _EXTRA_INDEXER_URLS, _NODE_URL, _EXPLORER_URL, _TOKEN_NAMES_URL)
-# are optional and ignored until then. With the project unset nothing mainnet is built or published. A third site, the INTERNAL mainnet app
-# (KOB_PAGES_MAINNET_INTERNAL=1, which also needs KOB_PAGES_MAINNET_INDEXER_URL), is the full mainnet app uploaded to the same project as a preview deployment on the
-# branch `internal`, for the founder's own testing: the variable says the project's previews are behind Cloudflare Access (docs/ops/web-hosting.md, 4c), and the
-# job fails when an unauthenticated request to it is not sent to Access (it also sends X-Robots-Tag: noindex and a robots.txt that disallows everything). Each site's custom domain is the host
-# of its public URL (KOB_PAGES_PUBLIC_URL, KOB_PAGES_MAINNET_PUBLIC_URL): after the deployment web/scripts/pages-domain.mjs adds it to the
+# One public site: the app, project KOB_PAGES_PROJECT, variables KOB_PAGES_*. Today it is built for testnet-10 and served at both kob.kaspa.ag and
+# https://kob-tn10.kaspa.ag (the host of KOB_PAGES_PUBLIC_URL; kob.kaspa.ag is a second custom domain of the same project and deployment, attached by hand).
+# There is no separate mainnet site and no landing-only page. The mainnet launch is a change of this same site: the variables KOB_PAGES_NETWORK=mainnet,
+# KOB_PAGES_NETWORKS and KOB_PAGES_HOST_NETWORKS (kob.kaspa.ag opens on mainnet, kob-tn10.kaspa.ag on testnet-10) and the header network switch
+# (KOB_PAGES_NETWORK_SWITCH, which this file does not pass yet), docs/ops/web-hosting.md 4b and 4d. An optional second site, the INTERNAL mainnet app
+# (KOB_PAGES_MAINNET_INTERNAL=1, which also needs KOB_PAGES_MAINNET_PROJECT and KOB_PAGES_MAINNET_INDEXER_URL), is the full mainnet app uploaded to its own
+# Pages project as a preview deployment on the branch `internal`, for the founder's own testing: the variable says the project's previews are behind
+# Cloudflare Access (docs/ops/web-hosting.md, 4c), and the job fails when an unauthenticated request to it is not sent to Access (it also sends X-Robots-Tag:
+# noindex and a robots.txt that disallows everything). The site's custom domain is the host of its public URL (KOB_PAGES_PUBLIC_URL): after the deployment web/scripts/pages-domain.mjs adds it to the
 # project through the Pages API when it is not attached yet, and says exactly what is left to do in the dashboard when it cannot do it
 # (the DNS CNAME, a domain that is still attached to another project).
 #
@@ -108,7 +106,6 @@ jobs:
           MAIN_NODE: ${{ vars.KOB_PAGES_MAINNET_NODE_URL }}
           MAIN_EXPLORER: ${{ vars.KOB_PAGES_MAINNET_EXPLORER_URL }}
           MAIN_NAMES: ${{ vars.KOB_PAGES_MAINNET_TOKEN_NAMES_URL }}
-          MAIN_PUBLIC: ${{ vars.KOB_PAGES_MAINNET_PUBLIC_URL }}
           MAIN_INTERNAL: ${{ vars.KOB_PAGES_MAINNET_INTERNAL }}
           NETWORKS: ${{ vars.KOB_PAGES_NETWORKS }}
           HOSTS: ${{ vars.KOB_PAGES_HOST_NETWORKS }}
@@ -142,9 +139,13 @@ jobs:
           if ! [[ "$BRANCH" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]]; then
             echo "::error::KOB_PAGES_BRANCH \`$BRANCH\` is not a branch name"; exit 1
           fi
-          # the mainnet site: the project alone (the landing-only page needs no indexer); an indexer without a project is a mistake
+          # the mainnet project exists only for the internal mainnet app (there is no public mainnet site): an indexer without a project is a mistake, and a project
+          # without KOB_PAGES_MAINNET_INTERNAL=1 would build nothing
           if [ -z "$MAIN_PROJECT" ] && [ -n "$MAIN_INDEXER" ]; then
             echo "::error::KOB_PAGES_MAINNET_INDEXER_URL is set without KOB_PAGES_MAINNET_PROJECT"; exit 1
+          fi
+          if [ -n "$MAIN_PROJECT" ] && [ "$MAIN_INTERNAL" != 1 ]; then
+            echo "::error::KOB_PAGES_MAINNET_PROJECT is only the project of the internal mainnet app: set KOB_PAGES_MAINNET_INTERNAL=1 (after enabling the access policy) or unset the project"; exit 1
           fi
           if [ -n "$MAIN_PROJECT" ]; then
             if ! [[ "$MAIN_PROJECT" =~ ^[a-z0-9][a-z0-9-]{0,57}$ ]]; then
@@ -168,17 +169,15 @@ jobs:
               echo "::error::KOB_PAGES_BRANCH must not be \`internal\`: that branch is the protected preview of the internal mainnet app"; exit 1
             fi
           fi
-          # one matrix entry per site; every value is a repository variable (not a secret), but `landing`: the mainnet site is landing-only (KOB_LANDING_ONLY)
-          # until mainnet launches, and that is decided here, in the workflow file, not by a variable. `branch` is the Pages branch the site is uploaded to
+          # one matrix entry per site; every value is a repository variable (not a secret). `branch` is the Pages branch the site is uploaded to
           # (production: KOB_PAGES_BRANCH; the internal app: `internal`, a preview) and `internal` marks that preview. `networks` and `hosts` are the JSON
           # of config.json `networks` / `hostNetworks` (empty = none)
           matrix=$(jq -nc \
             --arg p "$PROJECT" --arg n "${NETWORK:-testnet-10}" --arg i "$INDEXER" --arg e "$EXTRA" --arg nd "$NODE" --arg ex "$EXPLORER" --arg nm "$NAMES" --arg u "$PUBLIC" --arg br "$BRANCH" \
-            --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mu "$MAIN_PUBLIC" --arg mint "$MAIN_INTERNAL" \
+            --arg mp "$MAIN_PROJECT" --arg mi "$MAIN_INDEXER" --arg me "$MAIN_EXTRA" --arg mnd "$MAIN_NODE" --arg mex "$MAIN_EXPLORER" --arg mnm "$MAIN_NAMES" --arg mint "$MAIN_INTERNAL" \
             --arg nw "$NETWORKS" --arg hn "$HOSTS" --arg mnw "$MAIN_NETWORKS" --arg mhn "$MAIN_HOSTS" \
-            '{include: ([{site: "testnet", project: $p, network: $n, landing: "", branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, node: $nd, explorer: $ex, names: $nm, public: $u}]
-              + (if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet", landing: "1", branch: $br, internal: "", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: $mu}] else [] end)
-              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", landing: "", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
+            '{include: ([{site: "testnet", project: $p, network: $n, branch: $br, internal: "", indexer: $i, extra: $e, networks: $nw, hosts: $hn, node: $nd, explorer: $ex, names: $nm, public: $u}]
+              + (if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi, extra: $me, networks: $mnw, hosts: $mhn, node: $mnd, explorer: $mex, names: $mnm, public: ""}] else [] end))}')
           { echo "ready=true"; echo "branch=$BRANCH"; echo "matrix=$matrix"; } >> "$GITHUB_OUTPUT"
       - if: steps.gate.outputs.ready == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -196,7 +195,7 @@ jobs:
           rc=0
           while IFS= read -r site; do
             echo "== $(jq -r .site <<< "$site")"
-            KOB_PAGES_NETWORK=$(jq -r .network <<< "$site") KOB_PAGES_LANDING_ONLY=$(jq -r .landing <<< "$site") KOB_PAGES_INDEXER_URL=$(jq -r .indexer <<< "$site") \
+            KOB_PAGES_NETWORK=$(jq -r .network <<< "$site") KOB_PAGES_INDEXER_URL=$(jq -r .indexer <<< "$site") \
             KOB_PAGES_EXTRA_INDEXER_URLS=$(jq -r .extra <<< "$site") KOB_PAGES_NODE_URL=$(jq -r .node <<< "$site") \
             KOB_PAGES_EXPLORER_URL=$(jq -r .explorer <<< "$site") KOB_PAGES_TOKEN_NAMES_URL=$(jq -r .names <<< "$site") \
             KOB_PAGES_NETWORKS=$(jq -r .networks <<< "$site") KOB_PAGES_HOST_NETWORKS=$(jq -r .hosts <<< "$site") \
@@ -243,19 +242,6 @@ jobs:
       - run: npm test
       # the app's e2e suite is not run again here: ci.yml runs it on the same commit (sharded), and the step "ci passed for this commit" below waits for
       # that run before anything is uploaded
-      - if: matrix.landing != ''
-        run: npx playwright install --with-deps chromium
-      # the landing-only site: its own build (dist-landing/) must show the landing page at every address, offer no way into the app and request nothing but
-      # its own files (web/e2e/landing); it runs for the entry that is landing-only
-      - if: matrix.landing != ''
-        run: npm run e2e:landing
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: web-playwright-report-${{ matrix.site }}
-          path: |
-            web/test-results
-            web/playwright-report
 
       # the release bundle (vite build plus dist/registry/tokens.json, docs/ops/release.md 4); the link-preview head (web/head-meta.mjs) takes the
       # network and, when set, the public origin the deployment is served from (og:url, og:image)
@@ -263,7 +249,6 @@ jobs:
         env:
           KOB_NETWORK: ${{ matrix.network }}
           KOB_PUBLIC_URL: ${{ matrix.public }}
-          KOB_LANDING_ONLY: ${{ matrix.landing }}
       - name: Release hashes (the deployment record reproduces, the bundle embeds and ships the registry the mainnet record pins)
         working-directory: .
         run: |
@@ -286,10 +271,9 @@ jobs:
           echo "::error::ci did not finish within an hour"; exit 1
 
       # the deployment: config.json from the repository variables
-      - name: config.json from the repository variables (none for the landing-only site, whose page reads none)
+      - name: config.json from the repository variables
         env:
           KOB_PAGES_NETWORK: ${{ matrix.network }}
-          KOB_PAGES_LANDING_ONLY: ${{ matrix.landing }}
           KOB_PAGES_INDEXER_URL: ${{ matrix.indexer }}
           KOB_PAGES_EXTRA_INDEXER_URLS: ${{ matrix.extra }}
           KOB_PAGES_NODE_URL: ${{ matrix.node }}
@@ -331,7 +315,7 @@ jobs:
           DEPLOYMENT_ID: ${{ steps.deploy.outputs.pages-deployment-id }}
         run: |
           {
-            echo "## Cloudflare Pages deployment: ${{ matrix.site }} (${{ matrix.network }}${{ matrix.landing != '' && ', landing-only' || '' }}, project ${{ matrix.project }})"
+            echo "## Cloudflare Pages deployment: ${{ matrix.site }} (${{ matrix.network }}, project ${{ matrix.project }})"
             echo
             echo "- deployment: $URL"
             [ -z "$ALIAS" ] || echo "- alias: $ALIAS"
@@ -397,14 +381,10 @@ jobs:
         if: matrix.internal == ''
         env:
           URL: ${{ steps.deploy.outputs.deployment-url }}
-          LANDING: ${{ matrix.landing }}
         run: |
           case "$URL" in https://*) ;; *) echo "::error::no https deployment URL from wrangler: \`$URL\`"; exit 1 ;; esac
-          # the landing-only site has no signer page to check
-          flags=()
-          if [ -n "$LANDING" ]; then flags+=(--landing-only); fi
           set +e
-          node scripts/check-pages.mjs "$URL" --dist dist "${flags[@]}" > "$RUNNER_TEMP/check.txt" 2>&1
+          node scripts/check-pages.mjs "$URL" --dist dist > "$RUNNER_TEMP/check.txt" 2>&1
           rc=$?
           set -e
           cat "$RUNNER_TEMP/check.txt"

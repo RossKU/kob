@@ -28,10 +28,6 @@
 //                                 "kob-tn10.kaspa.ag": "testnet-10"}: exact host names, no port, path or wildcard. A visitor's stored choice still wins. Unset = the
 //                                 site opens on KOB_PAGES_NETWORK on every host.
 //
-//   KOB_PAGES_LANDING_ONLY        `1` / `true`: the site is the landing-only front page of a network that has not launched (web/src/app/landing-only.ts; the workflow
-//                                 sets it for the mainnet site). The page reads no config.json and connects to nothing, so no indexer is required, the variables
-//                                 above are ignored (a note says so) and no config.json is written.
-//
 //   KOB_PAGES_NETWORK_SWITCH      `1` / `true`: the header's network chip offers the switch to the other network (web/src/ui/shell/NetworkSwitch.tsx). Unset: the
 //                                 site is pinned to its network (config.json `lockNetwork: true`, the chip a plain label): a site of one network has no servers of
 //                                 the other, and switching a public site to mainnet is the mainnet launch (founder 2026-11-11: pinned until then).
@@ -97,15 +93,6 @@ export function pagesConfig(env) {
   const network = (env.KOB_PAGES_NETWORK ?? '').trim() || 'testnet-10';
   if (!NETWORKS.includes(network)) errors.push(`KOB_PAGES_NETWORK: \`${network}\` must be testnet-10 or mainnet`);
 
-  const landing = (env.KOB_PAGES_LANDING_ONLY ?? '').trim().toLowerCase();
-  if (!['', '0', 'false', '1', 'true'].includes(landing)) errors.push(`KOB_PAGES_LANDING_ONLY: \`${landing}\` must be empty, 0, false, 1 or true`);
-  if (landing === '1' || landing === 'true') {
-    // the landing-only page connects to nothing: no indexer, node or explorer to validate, and no config.json for it to read
-    const ignored = ['INDEXER_URL', 'EXTRA_INDEXER_URLS', 'NODE_URL', 'EXPLORER_URL', 'TOKEN_NAMES_URL', 'NETWORKS', 'HOST_NETWORKS'].filter((k) => (env[`KOB_PAGES_${k}`] ?? '').trim());
-    if (ignored.length) notes.push(`KOB_PAGES_LANDING_ONLY: the landing-only page connects to nothing, so KOB_PAGES_${ignored.join(', KOB_PAGES_')} ${ignored.length > 1 ? 'are' : 'is'} ignored`);
-    if (errors.length) return { config: null, errors, notes };
-    return { config: { network, landingOnly: true }, errors, notes };
-  }
 
   const { indexerUrl, extraIndexerUrls, nodeUrl, explorerUrl } = siteServers(
     { indexer: 'KOB_PAGES_INDEXER_URL', extra: 'KOB_PAGES_EXTRA_INDEXER_URLS', node: 'KOB_PAGES_NODE_URL', explorer: 'KOB_PAGES_EXPLORER_URL' },
@@ -262,10 +249,9 @@ export function programRegistry(registryText, network) {
   return JSON.stringify({ ...rest, network, tokens: [] }, null, 2) + '\n';
 }
 
-/** Writes config.json (and the testnet-10 program list, at registry/testnet-10/tokens.json for a `networks` entry) into `dist`; returns the paths written with their sha256. A landing-only site has no config.json: nothing is written. */
+/** Writes config.json (and the testnet-10 program list, at registry/testnet-10/tokens.json for a `networks` entry) into `dist`; returns the paths written with their sha256. */
 export function writeDeployment(dist, config, registryPath = DEFAULT_REGISTRY_PATH) {
   const out = [];
-  if (config.landingOnly) return out;
   const put = (rel, text) => {
     const p = join(dist, rel);
     mkdirSync(join(p, '..'), { recursive: true });

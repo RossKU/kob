@@ -1,23 +1,19 @@
 // The landing page's content: the hero, how it works, the decoded signature, bots, the trust model and the final call to action, under the shared frame's
-// header row. It takes what it needs as props (the network, or "in preparation" for the landing-only build) and reads nothing from the app's services, so the
-// landing-only build (src/main-landing.tsx) draws it without the app; LandingPage.tsx gives it the configured network and the app's footer.
+// header row. It takes what it needs as props (the network and the footer) and reads nothing from the app's services; LandingPage.tsx gives it the configured
+// network and the app's footer.
 // The founder's approved design (prototype E), rebuilt as components: the motion is in use-reveal.ts, the look in landing.css (dark / light follow the
 // app's theme, `data-theme` on <html>). No inline script or HTML string: CSP and Trusted Types as everywhere else in the app.
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef } from 'preact/hooks';
-import { TESTNET_APP_URL } from '../../app/landing-only';
 import { appTitle, useDocumentTitle } from '../../app/page-title';
 import { t } from '../../i18n';
 import { Brand, GitHubIcon, Logo, SiteHeader, SkipLink, ThemeToggle } from '../shell/frame-parts';
 import { NetworkChip } from '../shell/NetworkBadge';
 import { TIGHT_QUERY, useMedia } from '../shell/narrow';
 import type { NetworkName } from '../../config';
-import { APP_HASH, feedbackActions, landingNetworkText, landingSoonText, REPO_URL, siteName, type LandingNetworkText } from './landing-model';
+import { APP_HASH, feedbackActions, landingNetworkText, REPO_URL, siteName } from './landing-model';
 import { useHeroGo, useReveal } from './use-reveal';
 import './landing.css';
-
-/** A phone's width: the header's button takes its short text. */
-const PHONE_QUERY = '(max-width: 559px)';
 
 function ArrowIcon() {
   return (
@@ -44,15 +40,11 @@ function Ln(props: { d?: 1 | 2 | 3; class?: string; children: ComponentChildren;
   );
 }
 
-/** What the page is for: `app` (a deployment with the app: "Open the app", in the page's own hash) or `soon` (landing-only: "in preparation", the way in is the testnet app). */
-export type LandingMode = 'app' | 'soon';
-
-function Ctas(props: { class?: string; mode: LandingMode }) {
-  const soon = props.mode === 'soon';
+function Ctas(props: { class?: string }) {
   return (
     <div class={`lp-ctas${props.class ? ` ${props.class}` : ''}`}>
-      <a class="lp-pill lp-pill-solid" href={soon ? TESTNET_APP_URL : APP_HASH} data-testid="landing-cta">
-        <span class="btn-label">{t(soon ? 'landing.soon.try' : 'landing.openApp')}</span> <ArrowIcon />
+      <a class="lp-pill lp-pill-solid" href={APP_HASH} data-testid="landing-cta">
+        <span class="btn-label">{t('landing.openApp')}</span> <ArrowIcon />
       </a>
       <a class="lp-pill lp-pill-line" href={REPO_URL}>
         <GitHubIcon class="lp-ico" />
@@ -64,10 +56,8 @@ function Ctas(props: { class?: string; mode: LandingMode }) {
 
 /** The landing page's header: the shared frame's row (the app's height, column, brand and controls) with GitHub, the network chip, "Open the app" and the
  *  theme toggle (the app's, one stored preference). A phone keeps the brand, the chip, "Open the app" and the toggle (GitHub is in the hero and the footer). */
-function Nav(props: { network: string; mode: LandingMode }) {
+function Nav(props: { network: string }) {
   const tight = useMedia(TIGHT_QUERY);
-  const phone = useMedia(PHONE_QUERY);
-  const soon = props.mode === 'soon';
   return (
     <SiteHeader context="landing" testid="landing-nav" brand={<Brand testid="landing-brand" onClick={toTop} label={t('landing.toTop')} />}>
       <nav class="header-tools" aria-label={t('landing.nav.label')}>
@@ -75,15 +65,9 @@ function Nav(props: { network: string; mode: LandingMode }) {
           <GitHubIcon />
           <span class="btn-label">{t('landing.github')}</span>
         </a>
-        {soon ? (
-          <span class="net-chip net-chip-warn" title={t('landing.soon.chipTip')} data-testid="landing-soon-chip">
-            <span class="chip-label">{t(tight ? 'landing.soon.chip.short' : 'landing.soon.chip')}</span>
-          </span>
-        ) : (
-          <NetworkChip network={props.network} short={tight} />
-        )}
-        <a class="btn btn-sm btn-pill" href={soon ? TESTNET_APP_URL : APP_HASH} data-testid="landing-open-app">
-          <span class="btn-label">{t(soon ? (phone ? 'landing.soon.try.short' : 'landing.soon.try') : 'landing.openApp')}</span>
+        <NetworkChip network={props.network} short={tight} />
+        <a class="btn btn-sm btn-pill" href={APP_HASH} data-testid="landing-open-app">
+          <span class="btn-label">{t('landing.openApp')}</span>
         </a>
         <ThemeToggle />
       </nav>
@@ -159,13 +143,10 @@ function botExample(network: string): string {
 }
 
 /**
- * The page. `network` is the deployment's (the app's config); `mode` `soon` is the landing-only build's: the network chip and "Open the app" become "Mainnet -
- * in preparation" and "Try it on testnet", the sentences are the `soon` ones, and the bots' terminal shows testnet-10 (the network a visitor can use).
- * `footer` is the page's footer (LandingPage.tsx: the app's; the landing-only entry: its own).
+ * The page. `network` is the deployment's (the app's config); `footer` is the page's footer (LandingPage.tsx: the app's).
  */
-export function LandingContent(props: { network: string; mode: LandingMode; footer: ComponentChildren }) {
-  const { network, mode } = props;
-  const soon = mode === 'soon';
+export function LandingContent(props: { network: string; footer: ComponentChildren }) {
+  const { network } = props;
   useDocumentTitle(appTitle());
   const root = useRef<HTMLDivElement>(null);
   useReveal(root);
@@ -173,7 +154,7 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
   const finalHead = useRef<HTMLDivElement>(null);
   useFitLines(finalHead);
   const site = siteName(typeof location === 'undefined' ? '' : location.hostname);
-  const net: LandingNetworkText = soon ? landingSoonText(site) : landingNetworkText(network as NetworkName, site);
+  const net = landingNetworkText(network as NetworkName, site);
 
   // the page's own background behind overscroll (the body is the app's otherwise); it opens at its top, and the app page a link leads to opens at
   // its top too (a hash change keeps the scroll position, and this page is much taller than the app's)
@@ -189,8 +170,8 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
   return (
     <>
       <SkipLink />
-      <Nav network={network} mode={mode} />
-      <div class="lp" ref={root} data-testid="landing" data-network={soon ? 'mainnet' : network} data-mode={mode}>
+      <Nav network={network} />
+      <div class="lp" ref={root} data-testid="landing" data-network={network}>
         <main class="lp-main" id="main" tabIndex={-1} data-testid="main" data-route="#/">
           <section class={`lp-hero${go ? ' lp-go' : ''}`} data-testid="landing-hero">
             <div class="lp-wrap">
@@ -214,13 +195,8 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
                 <p>
                   <b>{t('landing.hero.lead')}</b> {t('landing.hero.body')}
                 </p>
-                <Ctas mode={mode} />
+                <Ctas />
               </div>
-              {soon ? (
-                <p class="lp-soon-note lp-fade" data-testid="landing-soon-note">
-                  {t('landing.soon.note')}
-                </p>
-              ) : null}
             </div>
           </section>
 
@@ -339,7 +315,7 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
                     <span>{t('landing.bots.head')}</span>
                     <b>{t('landing.bots.json')}</b>
                   </div>
-                  <pre>{botExample(soon ? 'testnet-10' : network)}</pre>
+                  <pre>{botExample(network)}</pre>
                 </div>
               </div>
             </div>
@@ -365,7 +341,7 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
                   {t('landing.trust.custody.body')}
                 </Row>
                 <Row k={t('landing.trust.operator')} v={t('landing.trust.none')} vClass="lp-none">
-                  {t(soon ? 'landing.soon.operator.body' : 'landing.trust.operator.body', { site })}
+                  {t('landing.trust.operator.body', { site })}
                 </Row>
                 <Row k={t('landing.trust.offswitch')} v={t('landing.trust.none')} vClass="lp-none">
                   <span data-testid="landing-offswitch">{t('landing.trust.offswitch.body')}</span>
@@ -403,7 +379,7 @@ export function LandingContent(props: { network: string; mode: LandingMode; foot
                   <Logo />
                 </span>
               </div>
-              <Ctas class="lp-rv lp-d2" mode={mode} />
+              <Ctas class="lp-rv lp-d2" />
             </div>
           </section>
         </main>

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { resolveConfig } from '../../config';
 import { navOf, parseHash, routeToHash } from '../../app/router';
 import { has, t } from '../../i18n';
-import { APP_HASH, FEEDBACK_CONTACT_URL, feedbackActions, homeTargetOf, LANDING_NETWORKS, landingNetworkText, landingSoonText, publicApiUrl, showsLanding, siteName } from './landing-model';
+import { APP_HASH, FEEDBACK_CONTACT_URL, feedbackActions, homeTargetOf, LANDING_NETWORKS, landingNetworkText, publicApiUrl, showsLanding, siteName } from './landing-model';
 
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
@@ -119,33 +119,6 @@ describe('landing network text', () => {
   });
 });
 
-describe('landing-only text (the mainnet front page, src/app/landing-only.ts)', () => {
-  const n = landingSoonText('kob.kaspa.ag');
-
-  it('says "in preparation" instead of a network and its open-review chip', () => {
-    expect(n.chip).toBe('Mainnet — in preparation');
-    expect(n.discLead).toBe('Mainnet · in preparation.');
-    expect(t('landing.soon.chip.short')).toBe('In preparation');
-    expect(t('landing.soon.try')).toBe('Try it on testnet');
-    for (const v of Object.values(n)) expect(v).not.toMatch(/^[a-z]+\.[a-z.]+$/); // no untranslated key
-  });
-
-  it('claims nothing live: no real funds at risk, no app to open; it says what is and is not there, and that testnet tokens have no value', () => {
-    for (const v of [...Object.values(n), t('landing.soon.note'), t('landing.soon.operator.body', { site: 'kob.kaspa.ag' })]) {
-      expect(v).not.toMatch(/real funds|is live|now live|open the app|launch/i);
-      expect(v).not.toMatch(/audit yet|pre-audit|not yet audited/i);
-    }
-    expect(n.chipTip).toContain('not live');
-    expect(n.auditBody).toContain('Mainnet is being built');
-    expect(n.auditBody).toMatch(/no review can show the code is free of bugs/i);
-    expect(n.discBody).toContain('Nothing here can lock funds yet');
-    expect(n.discBody).toContain('kob.kaspa.ag publishes software and information only');
-    expect(n.discBody).toMatch(/no review can show the code is free of bugs/i);
-    expect(t('landing.soon.note')).toContain('nothing on this site can hold funds');
-    expect(t('landing.soon.operator.body', { site: 'kob.kaspa.ag' })).toContain('only publishes this page');
-  });
-});
-
 describe('the trust us row', () => {
   it('a security report, an issue and a message on X; no message action without a channel', () => {
     expect(FEEDBACK_CONTACT_URL).toBe('https://x.com/kaspaorderbook');
@@ -170,7 +143,7 @@ describe('the trust us row', () => {
 
 describe('landing page source', () => {
   it('in-app links only for the app (a self-hosted copy stays on its host), no inline HTML', () => {
-    for (const f of ['LandingPage.tsx', 'LandingContent.tsx', 'LandingOnly.tsx']) {
+    for (const f of ['LandingPage.tsx', 'LandingContent.tsx']) {
       const page = src(`ui/landing/${f}`);
       expect(page, f).not.toContain('kob.kaspa.ag');
       expect(page, f).not.toMatch(/dangerouslySetInnerHTML|innerHTML/);

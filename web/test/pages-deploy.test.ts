@@ -112,33 +112,6 @@ describe('pages-config: config.json from the repository variables', () => {
     expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_INDEXER_URL: IDX, KOB_PAGES_EXTRA_INDEXER_URLS: IDX }).config).toBeNull();
   });
 
-  it('landing-only (the mainnet front page): no indexer is required, the other variables are ignored with a note, and no config.json is written', () => {
-    const r = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_LANDING_ONLY: '1' });
-    expect(r.errors).toEqual([]);
-    expect(r.config).toEqual({ network: 'mainnet', landingOnly: true });
-    for (const v of ['1', 'true', ' TRUE ']) expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_LANDING_ONLY: v }).config).toEqual({ network: 'mainnet', landingOnly: true });
-    // a stale indexer variable is not validated, it is ignored (the page connects to nothing)
-    const stale = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_LANDING_ONLY: '1', KOB_PAGES_INDEXER_URL: 'http://localhost:1', KOB_PAGES_NODE_URL: 'nonsense' });
-    expect(stale.errors).toEqual([]);
-    expect(stale.notes.join(' ')).toContain('KOB_PAGES_INDEXER_URL, KOB_PAGES_NODE_URL are ignored');
-    // off (empty, 0, false): the app, which needs its indexer as before
-    for (const v of ['', '0', 'false']) {
-      const app = pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_LANDING_ONLY: v });
-      expect(app.config).toBeNull();
-      expect(app.errors.join(' ')).toContain('KOB_PAGES_INDEXER_URL is empty');
-    }
-    // a typo is an error, and so is a bad network
-    expect(pagesConfig({ KOB_PAGES_NETWORK: 'mainnet', KOB_PAGES_LANDING_ONLY: 'yes' }).errors.join(' ')).toContain('KOB_PAGES_LANDING_ONLY');
-    expect(pagesConfig({ KOB_PAGES_NETWORK: 'nope', KOB_PAGES_LANDING_ONLY: '1' }).config).toBeNull();
-    const dir = mkdtempSync(join(tmpdir(), 'kob-pages-'));
-    try {
-      expect(writeDeployment(dir, r.config!)).toEqual([]);
-      expect(existsSync(join(dir, 'config.json'))).toBe(false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it('pins the site to its network unless KOB_PAGES_NETWORK_SWITCH asks for the header switch (founder 2026-11-11: no mainnet switch on a public site before the launch)', () => {
     const base = { KOB_PAGES_NETWORK: 'testnet-10', KOB_PAGES_INDEXER_URL: IDX };
     expect(pagesConfig(base).config?.lockNetwork).toBe(true);
@@ -229,16 +202,10 @@ describe('pages-config: config.json from the repository variables', () => {
       expect(pagesConfig({ ...launch, KOB_PAGES_NETWORK_SWITCH: '' }).notes.join(' ')).toContain('the header switch is off');
     });
 
-    it('landing-only: both are ignored with a note', () => {
-      const r = pagesConfig({ ...launch, KOB_PAGES_LANDING_ONLY: '1' });
-      expect(r.config).toEqual({ network: 'mainnet', landingOnly: true });
-      expect(r.notes.join(' ')).toContain('KOB_PAGES_NETWORKS, KOB_PAGES_HOST_NETWORKS are ignored');
-    });
-
     it('the workflow passes them (optional repository variables) from the matrix to the check and to config.json', () => {
       const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
       for (const name of ['KOB_PAGES_NETWORKS', 'KOB_PAGES_HOST_NETWORKS', 'KOB_PAGES_MAINNET_NETWORKS', 'KOB_PAGES_MAINNET_HOST_NETWORKS']) expect(wf).toContain(`vars.${name} }}`);
-      expect(wf.match(/networks: \$m?nw, hosts: \$m?hn,/g)).toHaveLength(3);
+      expect(wf.match(/networks: \$m?nw, hosts: \$m?hn,/g)).toHaveLength(2);
       expect(wf).toContain('KOB_PAGES_NETWORKS=$(jq -r .networks <<< "$site") KOB_PAGES_HOST_NETWORKS=$(jq -r .hosts <<< "$site")');
       expect(wf).toContain('KOB_PAGES_NETWORKS: ${{ matrix.networks }}');
       expect(wf).toContain('KOB_PAGES_HOST_NETWORKS: ${{ matrix.hosts }}');
@@ -481,27 +448,6 @@ describe('check-pages: the deployed headers and files', () => {
     expect(lines.join('\n')).toContain('/index.html served bytes differ from the build');
   });
 
-  it('landing-only: a site without a signer page passes with the flag (the app policy on /, the files byte for byte), and fails without it', async () => {
-    const landing = mkdtempSync(join(tmpdir(), 'kob-pages-landing-'));
-    try {
-      mkdirSync(join(landing, 'assets'));
-      writeFileSync(join(landing, 'index.html'), '<!doctype html><script type="module" src="./assets/main-1.js"></script>');
-      writeFileSync(join(landing, 'assets', 'main-1.js'), 'console.log(1)');
-      writeFileSync(join(landing, '_headers'), HEADERS);
-      const base = await serve(pagesHost(landing, HEADERS));
-      const ok = await checkPages(base, { dist: landing, landingOnly: true, attempts: 1 });
-      expect(ok.lines.filter((l) => l.startsWith('FAIL'))).toEqual([]);
-      expect(ok.ok).toBe(true);
-      expect(ok.lines.join('\n')).not.toContain('signer');
-      expect(ok.lines.join('\n')).toContain('all 2 built files are served byte for byte');
-      const app = await checkPages(base, { dist: landing, attempts: 1 });
-      expect(app.ok).toBe(false);
-      expect(app.lines.join('\n')).toContain('/signer.html answered HTTP 404');
-    } finally {
-      rmSync(landing, { recursive: true, force: true });
-    }
-  });
-
   it('fails when the host is unreachable', async () => {
     const { ok, lines } = await checkPages('http://127.0.0.1:9/', { attempts: 1 });
     expect(ok).toBe(false);
@@ -530,13 +476,13 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
     for (const name of ['KOB_PAGES_PROJECT', 'KOB_PAGES_INDEXER_URL', 'KOB_PAGES_BRANCH', 'KOB_PAGES_NETWORK', 'KOB_PAGES_EXTRA_INDEXER_URLS', 'KOB_PAGES_NODE_URL', 'KOB_PAGES_EXPLORER_URL', 'KOB_PAGES_TOKEN_NAMES_URL']) expect(wf).toContain(`vars.${name}`);
   });
 
-  it('the mainnet site is a matrix entry only when its project variable is set (its indexer is optional, but not alone), and is always built with network mainnet', () => {
+  it('there is no public mainnet site: the mainnet project is only the internal app, so a project without KOB_PAGES_MAINNET_INTERNAL=1 (or an indexer without a project) fails the run', () => {
     expect(job('deploy')).toContain('matrix: ${{ fromJSON(needs.config.outputs.matrix) }}');
     expect(job('config')).toContain('if [ -z "$MAIN_PROJECT" ] && [ -n "$MAIN_INDEXER" ]; then');
-    expect(job('config')).toContain('if [ -n "$MAIN_PROJECT" ]; then');
-    expect(job('config')).not.toContain('must be set together');
-    expect(job('config')).toContain('(if $mp != "" then [{site: "mainnet", project: $mp, network: "mainnet"');
-    for (const name of ['KOB_PAGES_MAINNET_PROJECT', 'KOB_PAGES_MAINNET_INDEXER_URL', 'KOB_PAGES_MAINNET_PUBLIC_URL']) expect(wf).toContain(`vars.${name}`);
+    expect(job('config')).toContain('if [ -n "$MAIN_PROJECT" ] && [ "$MAIN_INTERNAL" != 1 ]; then');
+    expect(job('config')).not.toContain('site: "mainnet",');
+    for (const name of ['KOB_PAGES_MAINNET_PROJECT', 'KOB_PAGES_MAINNET_INDEXER_URL']) expect(wf).toContain(`vars.${name}`);
+    expect(wf).not.toContain('KOB_PAGES_MAINNET_PUBLIC_URL');
     // the wrangler commands keep their options apart (an earlier edit glued the project name to `--branch`)
     expect(wf).toMatch(/pages project create \$\{\{ matrix\.project \}\} --production-branch=/);
     expect(wf).toMatch(/--project-name=\$\{\{ matrix\.project \}\} --branch=/);
@@ -545,37 +491,21 @@ describe('the deploy workflow gate (the signer page it ships takes private keys)
   });
 });
 
-describe('the mainnet site is the landing-only front page until mainnet launches (docs/ops/web-hosting.md, "The mainnet front page")', () => {
+describe('there is no landing-only site (docs/ops/web-hosting.md, 4b): one public app, the same build on every host', () => {
   const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
   const ci = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
 
-  it('the workflow file itself marks the mainnet entry landing-only (no variable can lift it) and the testnet entry is the app', () => {
-    expect(wf).toContain('{site: "mainnet", project: $mp, network: "mainnet", landing: "1",');
-    expect(wf).toContain('{site: "testnet", project: $p, network: $n, landing: "",');
-    expect(wf).not.toMatch(/vars\.KOB_[A-Z_]*LANDING/);
-    expect(wf.match(/{site: "[a-z]+", [^}]*landing: "/g)).toHaveLength(2);
+  it('neither workflow knows a landing flag, and the only matrix entries are the testnet app and the internal mainnet app', () => {
+    for (const text of [wf, ci]) expect(text.replace(/^[ 	]*#.*$/gm, '')).not.toMatch(/landing/i);
+    expect(wf.match(/{site: "[a-z-]+", /g)).toHaveLength(2);
+    expect(wf).toContain('{site: "testnet", project: $p, network: $n, branch: $br,');
   });
 
-  it("the site's landing flag reaches the check of the variables, the release build, config.json, the Pages check and a landing e2e run", () => {
-    expect(wf).toContain('KOB_PAGES_LANDING_ONLY=$(jq -r .landing <<< "$site")');
-    expect(wf).toContain('KOB_LANDING_ONLY: ${{ matrix.landing }}');
-    expect(wf).toContain('KOB_PAGES_LANDING_ONLY: ${{ matrix.landing }}');
-    expect(wf).toMatch(/- if: matrix\.landing != ''\n\s+run: npm run e2e:landing/);
-    expect(wf).toContain('if [ -n "$LANDING" ]; then flags+=(--landing-only); fi');
-    expect(wf).toContain('node scripts/check-pages.mjs "$URL" --dist dist "${flags[@]}"');
-    // the release bundle step is the one that gets the flag (the e2e build before it is the app's)
-    const build = wf.slice(wf.indexOf('- run: npm run build:release'));
-    expect(build.slice(0, build.indexOf('- name:'))).toContain('KOB_LANDING_ONLY');
-    expect(wf.slice(0, wf.indexOf('- run: npm run build:release'))).not.toMatch(/KOB_LANDING_ONLY: /);
-  });
-
-  it('CI runs the landing-only e2e on every push, against its own build directory', () => {
-    expect(ci).toContain('- run: npm run e2e:landing');
+  it('the build has no landing entry: no e2e:landing script, no landing Playwright config', () => {
     const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { scripts: Record<string, string> };
-    expect(pkg.scripts['e2e:landing']).toBe('playwright test --config playwright.landing.config.ts');
-    const cfg = readFileSync(fileURLToPath(new URL('../playwright.landing.config.ts', import.meta.url)), 'utf8');
-    expect(cfg).toContain("env: { KOB_LANDING_ONLY: '1', KOB_NETWORK: 'mainnet' }");
-    expect(cfg).toContain('--outDir dist-landing');
+    expect(Object.keys(pkg.scripts).filter((k) => /landing/.test(k))).toEqual([]);
+    expect(existsSync(fileURLToPath(new URL('../playwright.landing.config.ts', import.meta.url)))).toBe(false);
+    expect(existsSync(fileURLToPath(new URL('../src/main-landing.tsx', import.meta.url)))).toBe(false);
   });
 });
 
@@ -583,12 +513,12 @@ describe('the internal mainnet app: a preview of the mainnet project behind Clou
   const wf = readFileSync(fileURLToPath(new URL('../../.github/workflows/deploy-pages.yml', import.meta.url)), 'utf8');
   const deploy = wf.slice(wf.indexOf('\n  deploy:\n'));
 
-  it('is a third matrix entry only with KOB_PAGES_MAINNET_INTERNAL=1 and the mainnet project: the full mainnet app (not landing-only), on the branch `internal`, no public URL', () => {
+  it('is the second matrix entry, only with KOB_PAGES_MAINNET_INTERNAL=1 and the mainnet project: the full mainnet app, on the branch `internal`, no public URL', () => {
     expect(wf).toContain('MAIN_INTERNAL: ${{ vars.KOB_PAGES_MAINNET_INTERNAL }}');
-    expect(wf).toContain('(if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", landing: "", branch: "internal", internal: "1", indexer: $mi,');
+    expect(wf).toContain('(if $mp != "" and $mint == "1" then [{site: "mainnet-internal", project: $mp, network: "mainnet", branch: "internal", internal: "1", indexer: $mi,');
     expect(wf).toContain('names: $mnm, public: ""}] else [] end))}');
     // the production entries upload to KOB_PAGES_BRANCH
-    expect(wf.match(/branch: \$br, internal: ""/g)).toHaveLength(2);
+    expect(wf.match(/branch: \$br, internal: ""/g)).toHaveLength(1);
     expect(deploy).toContain('--branch=${{ matrix.branch }}');
     expect(deploy).not.toContain('--branch=${{ needs.config.outputs.branch }}');
   });

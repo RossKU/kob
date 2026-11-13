@@ -1,18 +1,13 @@
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { defineConfig, type Plugin } from 'vite';
 import { DEFAULT_REGISTRY_PATH } from './registry-pin.mjs';
 import { rowsOfRegistryJson, tableHash } from './src/signer/table';
 import preact from '@preact/preset-vite';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { CSP_META, LANDING_CSP_META, SIGNER_CSP_HEADER, SIGNER_CSP_META } from './csp.mjs';
-import { applyHead, LANDING_ONLY_DESCRIPTION } from './head-meta.mjs';
-import { parseLandingOnly } from './src/app/landing-only';
+import { CSP_META, SIGNER_CSP_HEADER, SIGNER_CSP_META } from './csp.mjs';
+import { applyHead } from './head-meta.mjs';
 import { parseMirror } from './src/app/mirror';
-
-// The landing-only mode (src/app/landing-only.ts): KOB_LANDING_ONLY=1 builds the production front page of a network that has not launched. Unknown values fail the build.
-const landingOnly = parseLandingOnly(process.env.KOB_LANDING_ONLY);
 
 const isSignerPage = (path: string) => /(^|\/)signer\.html$/.test(path);
 
@@ -22,7 +17,7 @@ const kobCsp = () => ({
   name: 'kob-csp',
   apply: 'build' as const,
   transformIndexHtml: (_html: string, ctx: { path: string }) => [
-    { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: isSignerPage(ctx.path) ? SIGNER_CSP_META : landingOnly ? LANDING_CSP_META : CSP_META }, injectTo: 'head-prepend' as const },
+    { tag: 'meta', attrs: { 'http-equiv': 'Content-Security-Policy', content: isSignerPage(ctx.path) ? SIGNER_CSP_META : CSP_META }, injectTo: 'head-prepend' as const },
   ],
 });
 
@@ -32,35 +27,9 @@ const kobHead = (): Plugin => ({
   name: 'kob-head',
   transformIndexHtml: {
     order: 'pre',
-    handler: (html: string, ctx: { path: string }) => (isSignerPage(ctx.path) ? html : applyHead(html, { network: process.env.KOB_NETWORK, publicUrl: process.env.KOB_PUBLIC_URL, landingOnly })),
+    handler: (html: string, ctx: { path: string }) => (isSignerPage(ctx.path) ? html : applyHead(html, { network: process.env.KOB_NETWORK, publicUrl: process.env.KOB_PUBLIC_URL })),
   },
 });
-
-// Landing-only (KOB_LANDING_ONLY): the page loads its own entry, src/main-landing.tsx (the landing page and nothing else), instead of src/main.tsx, so the router, the
-// services, the wallet layer, the wasm engine and the trading views are not in the bundle at all; and the web app manifest opens the site at `./` (not the market list) with the "in preparation" description.
-const kobLandingOnly = (): Plugin => {
-  let outDir = '';
-  return {
-    name: 'kob-landing-only',
-    configResolved: (c) => {
-      outDir = resolve(c.root, c.build.outDir);
-    },
-    transformIndexHtml: {
-      order: 'pre',
-      handler: (html: string, ctx: { path: string }) => (isSignerPage(ctx.path) ? html : html.replace('/src/main.tsx', '/src/main-landing.tsx')),
-    },
-    closeBundle: {
-      order: 'post',
-      handler() {
-        const file = resolve(outDir, 'manifest.webmanifest');
-        const manifest = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-        manifest.start_url = './';
-        manifest.description = LANDING_ONLY_DESCRIPTION;
-        writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n');
-      },
-    },
-  };
-};
 
 // `vite preview` (the e2e target) serves what public/_headers asks of a production host for the signer: its page's header policy (with
 // `frame-ancestors 'self'`), and CORS on /assets/*: the signer runs in an opaque origin (sandboxed frame), so its module scripts, stylesheet and
@@ -118,8 +87,8 @@ const mirror = parseMirror(process.env.KOB_MIRROR);
 // Static, client-side build: `vite build` -> dist/ (serve from any static host; relative asset URLs).
 export default defineConfig({
   base: './',
-  define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash), __KOB_MIRROR__: JSON.stringify(mirror), __KOB_LANDING_ONLY__: JSON.stringify(landingOnly) },
-  plugins: [preact(), kobHead(), kobCsp(), kobStableMapRefs(), kobSignerHeaders(), ...(landingOnly ? [kobLandingOnly()] : [])],
+  define: { __KOB_REGISTRY_TABLE_HASH__: JSON.stringify(registryTableHash), __KOB_MIRROR__: JSON.stringify(mirror) },
+  plugins: [preact(), kobHead(), kobCsp(), kobStableMapRefs(), kobSignerHeaders()],
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   // keepNames: the official kaspa-wasm SDK identifies its JS classes (Transaction, TransactionOutput, Hash ...) by their `name` when it converts
   // request objects (rpc.submitTransaction: "Error converting property `covenant`" once a minifier renamed them). Found by the real-wallet TN10 run.
@@ -129,8 +98,7 @@ export default defineConfig({
     sourcemap: true,
     chunkSizeWarningLimit: 4000,
     rolldownOptions: {
-      // landing-only: no signer page (it is where private keys are typed; nothing on this site signs)
-      input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), ...(landingOnly ? {} : { signer: fileURLToPath(new URL('./signer.html', import.meta.url)) }) },
+      input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), signer: fileURLToPath(new URL('./signer.html', import.meta.url)) },
       output: { keepNames: true },
     },
   },
