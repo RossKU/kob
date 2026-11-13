@@ -1,5 +1,6 @@
-// A token's KCC-23 declaration in a view: looked up once (data/token-declarations.ts: from the indexer, verified against the covenant id), and
-// the view re-renders when any declaration becomes known (the shown name, ticker and decimals follow; app/token-display.ts).
+// A token's KCC-23 declaration in a view. It is looked up once (data/token-declarations.ts), from
+// the indexer and verified against the covenant id. The view re-renders when any declaration
+// becomes known, so the shown name, ticker and decimals follow (app/token-display.ts).
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from './context';
 import { declaredToken, loadDeclaration, restoreDeclarations, subscribeDeclarations, type DeclaredToken } from '../data/token-declarations';
@@ -12,7 +13,10 @@ export function useDeclarationsVersion(): number {
   return v;
 }
 
-/** The verified declarations known so far, as a lookup by covenant id; a new function each time one becomes known (memo key). */
+/**
+ * The verified declarations known so far, as a lookup by covenant id. It is a new function each
+ * time one becomes known, so it can key a memo.
+ */
 export function useDeclarationLookup(): (covenantId: Hex) => DeclaredToken | null | undefined {
   const { config } = useServices();
   const v = useDeclarationsVersion();
@@ -21,9 +25,11 @@ export function useDeclarationLookup(): (covenantId: Hex) => DeclaredToken | nul
 }
 
 /**
- * The verified declaration of `covenantId`: null when it has none, undefined while unknown. It is asked of the indexer only when `ask` (the
- * indexer marks the token as declared: `GET /v1/tokens` `declaration`), so a token without one costs no request (and no 404 in the console);
- * one known otherwise (kept in this browser, this browser's own creation) is returned either way.
+ * The verified declaration of `covenantId`: null when it has none, undefined while unknown.
+ * The indexer is asked only when `ask` is true, which callers set when the indexer marks the token
+ * as declared (`GET /v1/tokens` `declaration`). A token without one then costs no request and no
+ * 404 in the console. A declaration known otherwise, such as one kept in this browser or created
+ * by it, is returned either way.
  */
 export function useDeclaration(covenantId: Hex | null | undefined, ask = true): DeclaredToken | null | undefined {
   const { kob, indexer, config } = useServices();

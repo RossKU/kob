@@ -1,12 +1,19 @@
-// The viewer's display currency (Settings, "Display currency"): KAS (the default) or USD, per browser, live (no reload), kept in localStorage `kob.currency`
-// (`usd` when USD, absent for KAS), like the icon choices (app/icon-pref.ts). USD is a DISPLAY choice: the order book, the ticket, the order and fill tables,
-// the Activity feed and everything signed stay in KAS, and no figure the user types or signs is ever converted (app/fiat.ts).
+// The viewer's display currency, KAS (the default) or USD. It is chosen under Settings, "Display
+// currency", kept per browser in localStorage `kob.currency` (`usd` for USD, absent for KAS), and
+// applies live without a reload. The icon choices work the same way (app/icon-pref.ts).
 //
-// Not authority: the page works the same without storage (the choice then lasts until the page is closed).
+// USD is a display choice only. The order book, the ticket, the order and fill tables, the
+// Activity feed and everything signed stay in KAS. No figure the user types or signs is converted
+// (app/fiat.ts).
+//
+// The stored value is a convenience, not authority. Without storage the page works the same and
+// the choice lasts until the page is closed.
 import { useEffect, useState } from 'preact/hooks';
 
+/** The localStorage key of the display currency. */
 export const CURRENCY_PREF_KEY = 'kob.currency';
 
+/** What values are shown in. */
 export type DisplayCurrency = 'kas' | 'usd';
 
 type Store = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -21,7 +28,7 @@ const browserStore = (): Store | null => {
 const listeners = new Set<(c: DisplayCurrency) => void>();
 let memory: DisplayCurrency | null = null;
 
-/** The stored choice: USD only when the stored value says so, KAS for anything else and for an unreadable store. */
+/** The stored choice. USD only when the stored value says so, KAS otherwise or if unreadable. */
 export function readCurrencyPref(store: Store | null = browserStore()): DisplayCurrency {
   try {
     return store?.getItem(CURRENCY_PREF_KEY) === 'usd' ? 'usd' : 'kas';
@@ -32,7 +39,7 @@ export function readCurrencyPref(store: Store | null = browserStore()): DisplayC
 
 const current = (): DisplayCurrency => memory ?? readCurrencyPref();
 
-/** Stores the choice and tells every open view; false when the browser refused the write (the choice then lasts until the page is closed). */
+/** Stores the choice and tells every open view. False when the browser refused the write. */
 export function writeCurrencyPref(c: DisplayCurrency, store: Store | null = browserStore()): boolean {
   memory = c;
   for (const l of listeners) l(c);
@@ -46,7 +53,7 @@ export function writeCurrencyPref(c: DisplayCurrency, store: Store | null = brow
   }
 }
 
-/** `[currency, set]`: the choice, kept in step across the Settings page and every view that shows values. */
+/** `[currency, set]`. The choice stays in step across Settings and every view that shows values. */
 export function useDisplayCurrency(): [DisplayCurrency, (c: DisplayCurrency) => void] {
   const [c, setC] = useState<DisplayCurrency>(current);
   useEffect(() => {
@@ -57,7 +64,7 @@ export function useDisplayCurrency(): [DisplayCurrency, (c: DisplayCurrency) => 
   return [c, (v) => void writeCurrencyPref(v)];
 }
 
-/** Forgets the in-page value (tests). */
+/** Forgets the in-page value. For tests. */
 export function resetCurrencyPrefMemory(): void {
   memory = null;
 }
