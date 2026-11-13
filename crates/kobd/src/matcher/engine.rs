@@ -1,16 +1,26 @@
-//! One matcher tick: the global batch ([`super::batch`]) over every book and pair order of the view, lowered, built,
-//! signed and validated through the rusty-kaspa v2.1.0 engine; then the next batch on the book that transaction leaves
-//! (§7: untouched orders as they are, the continuations of the transaction unaccepted and chain-safe only), until nothing
-//! profitable crosses or the tick's wall-clock budget runs out. Stops are triggered and armed inside these batches, next to the
-//! plain fills that are their evidence (§4): there is no separate trigger transaction.
+//! One matcher tick, a sequence of batches that are each planned, built, signed and validated.
 //!
-//! A batch is sized against the physical limits of a transaction ([`super::planner::PHYSICAL_TX_BYTES`] and the block mass
-//! limits of the built transaction), not against a fixed count: when a built batch overruns a limit the byte budget of the
-//! next attempt is scaled down by the overrun and the batch re-planned.
+//! A batch is the global batch of [`super::batch`] over every book and pair order of the view. It
+//! is lowered, built, signed and validated through the rusty-kaspa v2.1.0 engine. The next batch
+//! plans on the book that the transaction leaves (§7). Untouched orders stay as they are. The
+//! continuations of the transaction are unaccepted, and only their chain-safe fills are planned.
+//! The tick ends when nothing profitable crosses or its wall-clock budget runs out.
 //!
-//! Every transaction the matcher submits has passed [`kob_protocol::verify::validate_signed`]
-//! (scripts with enforced budgets, covenant context, storage-mass commitment, fee floor): the
-//! covenants are the reference (`docs/spec/matcher.md` §8).
+//! Stops are triggered and armed inside these batches, next to the plain fills that are their
+//! evidence (§4). There is no separate trigger transaction.
+//!
+//! # Size
+//!
+//! A batch is sized against the physical limits of a transaction, not against a fixed count. The
+//! limits are [`super::planner::PHYSICAL_TX_BYTES`] and the block mass limits of the built
+//! transaction. When a built batch overruns a limit, the byte budget of the next attempt is scaled
+//! down by the overrun and the batch is planned again.
+//!
+//! # Validation
+//!
+//! Every transaction the matcher submits has passed [`kob_protocol::verify::validate_signed`]. It
+//! runs the scripts with enforced budgets and checks the covenant context, the storage-mass
+//! commitment and the fee floor. The covenants are the reference (`docs/spec/matcher.md` §8).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -36,52 +46,74 @@ use super::wallet::Signer;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EngineConfig {
+    /// Planner settings.
     pub planner: PlannerConfig,
-    /// KAS on the operator's token outputs (the reference planner leaves the operator no tokens).
+    /// KAS on the operator's token outputs.
+    ///
+    /// The reference planner leaves the operator no tokens.
     pub token_carrier: u64,
     /// Validate every signed transaction in the script engine before it is returned.
     pub validate: bool,
-    /// Plan chained steps onto unaccepted parents (§7). Off: a partially filled order continues next tick; the orders a
-    /// transaction did not touch still go into the tick's next transactions.
+    /// Plan chained steps onto unaccepted parents (§7).
+    ///
+    /// When off, a partially filled order continues next tick. The orders a transaction did not
+    /// touch still go into the tick's next transactions.
     pub chain_unconfirmed: bool,
-    /// Wall-clock budget of one whole tick, milliseconds: the defence against a hostile book. What is
-    /// left when it runs out waits for the next tick. 0: unlimited (tests).
+    /// Wall-clock budget of one whole tick in milliseconds, the defence against a hostile book.
+    ///
+    /// What is left when it runs out waits for the next tick. 0 means unlimited, for tests.
     pub tick_budget_ms: u64,
-    /// Wall-clock budget of one batch's planning, milliseconds; the planner stops refining at it and hands over what it
-    /// has (the historical name is kept for configuration files).
+    /// Wall-clock budget of one batch's planning in milliseconds.
+    ///
+    /// The planner stops refining at it and hands over what it has. The name says "book" because
+    /// configuration files use it.
     pub book_budget_ms: u64,
     /// How a batch picks the operator's funding UTXOs.
     pub funding: FundingConfig,
-    /// The tick's fee rates (`crate::fee`, set by the runner from the node's estimate): a batch that fills an immediate
-    /// order (IOC, FOK, market, streaming) or a triggered stop is built at the high rate when it stays profitable there (else
-    /// at the highest rate that keeps it profitable, at least `planner.fee_rate`, the rate it was planned at); every batch
-    /// is held to the total cap. The default (the floor everywhere, no cap) builds every batch at `planner.fee_rate`.
+    /// The tick's fee rates (`crate::fee`), which the runner sets from the node's estimate.
+    ///
+    /// A batch that fills an immediate order (IOC, FOK, market, streaming) or a triggered stop is
+    /// built at the high rate when it stays profitable there. Otherwise it is built at the highest
+    /// rate that keeps it profitable, and at least at `planner.fee_rate`, the rate it was planned
+    /// at. Every batch is held to the total cap. The default, the floor everywhere and no cap,
+    /// builds every batch at `planner.fee_rate`.
     pub fees: crate::fee::FeeRates,
-    /// The weighted selection of this tick (`docs/spec/matcher.md` §3.6, [`super::select`]), set by the runner every step.
-    /// None (the default), or a share of one: the reference planner, every unit of the view in one transaction sequence.
-    /// A share below one: the tick plans the mandatory units and a weighted sample of the others, each unit in transactions
-    /// of its own (a lost race then costs that unit alone).
+    /// The weighted selection of this tick (`docs/spec/matcher.md` §3.6, [`super::select`]).
+    ///
+    /// The runner sets it every step. None, the default, or a share of one gives the reference
+    /// planner, with every unit of the view in one transaction sequence. With a share below one the
+    /// tick plans the mandatory units and a weighted sample of the others, each unit in
+    /// transactions of its own. A lost race then costs that unit alone.
     pub select: Option<TickSelect>,
-    /// The DAA score from which each order has been crossable (in a work unit's standalone allocation) by the runner's own
-    /// observation ([`super::select::Selector::history`]): a unit holding an order crossable for `max_defer_daa` is planned
-    /// by every executor. An order the history does not hold became crossable now. None: no history (one tick on its own),
-    /// the unit's crossings count from the listing of their orders ([`WorkUnit::since`]).
+    /// The DAA score from which each order has been crossable, by the runner's own observation.
+    ///
+    /// Crossable means crossable in a work unit's standalone allocation, and the observation is
+    /// [`super::select::Selector::history`]. Every executor plans a unit that holds an order
+    /// crossable for `max_defer_daa`. An order the history does not hold became crossable now.
+    /// None means no history, for one tick on its own. The unit's crossings then count from the
+    /// listing of their orders ([`WorkUnit::since`]).
     #[serde(skip)]
     pub select_since: Option<BTreeMap<CovId, u64>>,
 }
 
-/// How a batch picks the operator's P2PK funding (`docs/ops/executor.md`, funding). Deterministic: the pool is ordered by
-/// amount (largest first, then outpoint), the change outputs of the tick's earlier transactions after it.
+/// How a batch picks the operator's P2PK funding (`docs/ops/executor.md`, funding).
+///
+/// The choice is deterministic. The pool is ordered by amount, largest first, then by outpoint.
+/// The change outputs of the tick's earlier transactions come after it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct FundingConfig {
-    /// Most funding inputs of one batch. A batch takes the UTXOs of the pool in order until the builder's need is covered;
-    /// a batch the first `max_inputs` cannot pay is left for later.
+    /// Most funding inputs of one batch.
+    ///
+    /// A batch takes the UTXOs of the pool in order until the builder's need is covered. A batch
+    /// that the first `max_inputs` cannot pay is left for later.
     pub max_inputs: usize,
-    /// The pool counts as fragmented above this many accepted UTXOs: every batch then also spends up to `consolidate` of
-    /// the smallest, merged into its one change output (only while the batch stays profitable with them).
+    /// The pool counts as fragmented above this many accepted UTXOs.
+    ///
+    /// Every batch then also spends up to `consolidate` of the smallest, merged into its one change
+    /// output. It does so only while the batch stays profitable with them.
     pub target_utxos: usize,
-    /// Most extra UTXOs one batch consolidates (0: off).
+    /// Most extra UTXOs one batch consolidates, 0 for off.
     pub consolidate: usize,
 }
 
@@ -91,11 +123,15 @@ impl Default for FundingConfig {
     }
 }
 
-/// Serialized bytes of one P2PK funding input with its signature script (outpoint, sequence, budget, 66-byte push).
+/// Serialized bytes of one P2PK funding input with its signature script.
+///
+/// That is the outpoint, the sequence, the budget and a 66-byte push.
 const FUNDING_INPUT_BYTES: u64 = 120;
 
-/// How far a built transaction is over its physical limits (the block masses) and the operator's byte cap (`knob`, 0:
-/// none): the largest ratio; above 1 it does not fit.
+/// How far a built transaction is over its limits, as the largest ratio.
+///
+/// The limits are the block masses and the operator's byte cap `knob`, where 0 means none. Above 1
+/// the transaction does not fit.
 fn overrun(l: &Lowered, a: &Accounting, knob: u64) -> f64 {
     let m = l.built.fee.mass;
     [
@@ -108,8 +144,10 @@ fn overrun(l: &Lowered, a: &Accounting, knob: u64) -> f64 {
     .fold(0.0, f64::max)
 }
 
-/// The funding of a batch from `pool` (in pool order): UTXOs until their sum reaches `need` (at least one, at most
-/// `max_inputs`); then, when `consolidate` and the pool holds more than `target_utxos` accepted UTXOs, up to
+/// The funding of a batch from `pool`, taken in pool order.
+///
+/// It takes UTXOs until their sum reaches `need`, at least one and at most `max_inputs`. Then, when
+/// `consolidate` is set and the pool holds more than `target_utxos` accepted UTXOs, it adds up to
 /// `cfg.consolidate` of the smallest accepted ones not taken yet. Pure and deterministic.
 pub fn select_funding(pool: &[KeyUtxo], need: u64, consolidate: bool, cfg: &FundingConfig) -> Vec<KeyUtxo> {
     let max = cfg.max_inputs.max(1);
@@ -159,9 +197,11 @@ impl Default for EngineConfig {
 
 /// Snapshot the tick plans against.
 pub struct TickInput {
+    /// The listed orders of the view.
     pub orders: Vec<ListedOrder>,
+    /// The clock the tick plans at.
     pub clock: Clock,
-    /// The operator's spendable P2PK UTXOs (none reserved by pending transactions).
+    /// The operator's spendable P2PK UTXOs. None of them is reserved by a pending transaction.
     pub funding: Vec<KeyUtxo>,
     /// Orders spent by pending transactions or backed off.
     pub excluded: BTreeSet<CovId>,
@@ -170,84 +210,128 @@ pub struct TickInput {
 /// A signed, validated transaction ready for submission.
 #[derive(Clone, Debug)]
 pub struct Prepared {
-    /// The book of the plan's first fill ([`Plan::books`] lists every book the transaction trades).
+    /// The book of the plan's first fill.
+    ///
+    /// [`Plan::books`] lists every book the transaction trades.
     pub book: BookKey,
-    /// Position of the transaction in the tick (0: the first).
+    /// Position of the transaction in the tick, 0 for the first.
     pub step: usize,
-    /// The latest earlier transaction of the tick whose outputs this one spends (funding change or order continuations).
+    /// The latest earlier transaction of the tick whose outputs this one spends.
+    ///
+    /// Those outputs are funding change or order continuations.
     pub parent: Option<[u8; 32]>,
+    /// The plan the transaction carries out.
     pub plan: Plan,
+    /// The plan as built by the builders of its family.
     pub lowered: Lowered,
+    /// The signed transaction.
     pub signed: SignedTx,
+    /// The exact KAS accounting of the transaction.
     pub accounting: Accounting,
+    /// The engine's validation result, when validation is on.
     pub validation: Option<Validation>,
 }
 
 impl Prepared {
+    /// Transaction id.
     pub fn txid(&self) -> [u8; 32] {
         self.signed.tx.id
     }
 }
 
-/// An order the engine pre-simulation says the token program will not let move (frozen, blacklisted, or a program that changed its
-/// rules): flagged "possibly frozen" and left out of the books (`indexer::flags`).
+/// An order whose tokens the token program will not let move, by the engine's pre-simulation.
+///
+/// The cause may be a frozen or blacklisted balance, or a program that changed its rules. The order
+/// is flagged "possibly frozen" and left out of the books (`indexer::flags`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Suspect {
+    /// Covenant id of the order.
     pub id: CovId,
+    /// The book of the batch that failed.
     pub book: BookKey,
+    /// Why the order is suspected.
     pub reason: String,
 }
 
 /// Result of a tick.
 #[derive(Default, Debug)]
 pub struct TickReport {
-    /// Orders whose pre-simulation was rejected by a token program (attributed to the order: its custody input failed, or dropping
-    /// it made the same plan pass).
+    /// Orders whose pre-simulation a token program rejected.
+    ///
+    /// The rejection is attributed to the order when its custody input failed, or when dropping it
+    /// made the same plan pass.
     pub suspects: Vec<Suspect>,
-    /// Orders in the transactions prepared this tick: their pre-simulation passed, so any flag they carry is stale.
+    /// Orders in the transactions prepared this tick.
+    ///
+    /// Their pre-simulation passed, so any flag they carry is stale.
     pub cleared: Vec<CovId>,
+    /// The transactions prepared this tick, in order.
     pub prepared: Vec<Prepared>,
     /// Books skipped, and why.
     pub skipped: Vec<(BookKey, String)>,
-    /// Orders left out of this and later ticks: their numbers fail the sanity gate ([`crate::sanity`]), planning them
-    /// panicked (the last line of defence, [`PLANNING_PANICKED`]), or the builder refused the order on its own
-    /// ([`REFUSED_BY_THE_BUILDER`]). The runner keeps the ids of the last two out of the book for [`super::run::QUARANTINE_DAA`].
+    /// Orders left out of this and later ticks.
+    ///
+    /// An order is quarantined when:
+    /// - its numbers fail the sanity gate ([`crate::sanity`]);
+    /// - planning it panicked, the last line of defence ([`PLANNING_PANICKED`]);
+    /// - the builder refused the order on its own ([`REFUSED_BY_THE_BUILDER`]).
+    ///
+    /// The runner keeps the ids of the last two out of the book for [`super::run::QUARANTINE_DAA`].
     pub quarantined: Vec<(CovId, String)>,
-    /// Plans the builders or the engine refused (a planner defect, or a chained step that must
-    /// wait for its parent). Logged; the batch is retried without the offending fill.
+    /// Plans the builders or the engine refused.
+    ///
+    /// The cause is a planner defect, or a chained step that must wait for its parent. They are
+    /// logged, and the batch is retried without the offending fill.
     pub anomalies: Vec<(BookKey, usize, String)>,
-    /// Builds of this tick that had to be retried with measured compute budgets (the table of `kob-protocol` was short for
-    /// that shape, [`super::lower::measured_floors`]). Per tick, unlike the process-wide
+    /// Builds of this tick that had to be retried with measured compute budgets.
+    ///
+    /// The budget table of `kob-protocol` was short for that shape
+    /// ([`super::lower::measured_floors`]). The count is per tick, unlike the process-wide
     /// [`super::lower::budget_slack_retries`] counter.
     pub slack_retries: usize,
-    /// What the tick's batch plans cost ([`PlanWork`]: plans, allocation passes, candidate pairs tried, plans the book budget
-    /// cut short), summed over the tick. Machine-independent: the cost bounds of `tests/tick_cost_bound.rs` are stated in it.
+    /// What the tick's batch plans cost ([`PlanWork`]), summed over the tick.
+    ///
+    /// It counts plans, allocation passes, candidate pairs tried and plans the book budget cut
+    /// short. It is machine-independent, and the cost bounds of `tests/tick_cost_bound.rs` are
+    /// stated in it.
     pub work: PlanWork,
-    /// What the weighted selection did ([`EngineConfig::select`]); None when the tick did not sample.
+    /// What the weighted selection did ([`EngineConfig::select`]). None when the tick did not
+    /// sample.
     pub selection: Option<SelectionReport>,
 }
 
 /// The weighted selection of a tick (`docs/spec/matcher.md` §3.6).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelectionReport {
-    /// Work units of the view (components with a standalone allocation).
+    /// Work units of the view, the components with a standalone allocation.
     pub units: usize,
-    /// Units every executor plans: they hold class 1 or class 2 work, or a crossing visible for `max_defer_daa`.
+    /// Units every executor plans.
+    ///
+    /// They hold class 1 or class 2 work, or a crossing visible for `max_defer_daa`.
     pub mandatory: usize,
-    /// Of those, the units mandatory only because of their age (the starvation bound).
+    /// Mandatory units that are mandatory only because of their age, the starvation bound.
     pub overdue: usize,
-    /// Units the sample chose from, and those it took.
+    /// Units the sample chose from.
     pub optional: usize,
+    /// Units the sample took.
     pub taken: usize,
-    /// The units planned, in planning order (mandatory first, then the sample in draw order): their tokens.
+    /// The tokens of each planned unit, in planning order.
+    ///
+    /// The mandatory units come first, then the sample in draw order.
     pub planned: Vec<BTreeSet<[u8; 32]>>,
-    /// The orders the units left for later fill on their own (the runner watches whether another transaction takes them).
+    /// Orders that the units left for later fill on their own.
+    ///
+    /// The runner watches whether another transaction takes them.
     pub deferred: Vec<CovId>,
-    /// Every order the units fill on their own: crossable now (the runner's history, [`EngineConfig::select_since`]).
+    /// Every order the units fill on their own, which makes it crossable now.
+    ///
+    /// The runner keeps it as its history ([`EngineConfig::select_since`]).
     pub crossable: Vec<CovId>,
 }
 
-/// The pre-submission validation of a signed transaction: the script engine ([`validate_signed`]). Tests inject their own.
+/// The pre-submission validation of a signed transaction.
+///
+/// The default is the script engine ([`validate_signed`]). Tests inject their own.
 pub type Validator<'a> = &'a dyn Fn(&SignedTx) -> Result<Validation, String>;
 
 fn engine_validator(signed: &SignedTx) -> Result<Validation, String> {
@@ -270,8 +354,10 @@ pub(super) fn sign_and_validate(
     Ok((signed, v))
 }
 
-/// The input an engine rejection names (`input 3: ...`) when the input runs a TOKEN program (its budget role is
-/// `<TokenProgram>.<entry>...`, an order's is `KobAsk.settle.x@<TokenProgram>`).
+/// The input an engine rejection names (`input 3: ...`), when that input runs a token program.
+///
+/// A token input's budget role is `<TokenProgram>.<entry>...`, and an order's is
+/// `KobAsk.settle.x@<TokenProgram>`.
 pub(super) fn token_input_failure(err: &str, lowered: &Lowered) -> Option<usize> {
     let at = err.find("input ")? + "input ".len();
     let digits: String = err[at..].chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -293,9 +379,12 @@ pub(super) fn custody_owner(plan: &Plan, lowered: &Lowered, by_id: &BTreeMap<Cov
     })
 }
 
-/// The order a validation error names: the fill whose order input the engine names (order inputs lead the transaction in
-/// fill order), or the updated order whose `update` input it names. A batch of many books loses only the leg (or the
-/// update) at fault; an error that names neither is searched for by [`bisect`].
+/// The order a validation error names.
+///
+/// That is the fill whose order input the engine names, since order inputs lead the transaction in
+/// fill order. Or it is the updated order whose `update` input the engine names. So a batch of many
+/// books loses only the leg or the update at fault. [`bisect`] searches for the order behind an
+/// error that names neither.
 fn named_victim(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
     let named = err.find("input ").and_then(|at| {
         let at = at + "input ".len();
@@ -312,12 +401,19 @@ fn named_victim(plan: &Plan, lowered: &Lowered, err: &str) -> Option<CovId> {
     None
 }
 
-/// What an attempt does after a refusal that names no order: the fills it leaves out (`probe`) only to find the one the
-/// refusal comes from. A plan of one fill names it (`Some`: that order sits out the batch, and the fills left out only to
-/// find it are planned again); a larger plan leaves out the lower-priority half of its fills for the next attempt, and a
-/// plan that then passes is the batch (the fills left out are planned in the next batches of the tick). So no order a
-/// refusal does not come from sits out more than the attempts that look for it, never the tick (`None`: nothing left).
-/// The arming updates of the plan are suspects too, after the fills (a refusal an update causes names no fill).
+/// What an attempt does after a refusal that names no order.
+///
+/// `probe` holds the fills left out only to find the one the refusal comes from.
+/// - A plan of one fill names it as `Some(Some(id))`. That order sits out the batch, and the fills
+///   left out only to find it are planned again.
+/// - A larger plan leaves out the lower-priority half of its fills for the next attempt, as
+///   `Some(None)`. A plan that then passes is the batch, and the fills left out are planned in the
+///   next batches of the tick.
+/// - `None` means nothing is left.
+///
+/// So an order the refusal does not come from sits out only the attempts that look for it, never
+/// the tick. The arming updates of the plan are suspects too, after the fills, because a refusal
+/// that an update causes names no fill.
 fn bisect(plan: &Plan, probe: &mut BTreeSet<CovId>) -> Option<Option<CovId>> {
     let ids: Vec<CovId> = plan.fills.iter().map(|f| f.cand.id).chain(plan.updates.iter().map(|u| u.id)).collect();
     match ids.len() {
@@ -333,39 +429,50 @@ fn bisect(plan: &Plan, probe: &mut BTreeSet<CovId>) -> Option<Option<CovId>> {
     }
 }
 
-/// The fill a failed attempt gives up: the lowest-priority one that is not class 1.
+/// The fill a failed attempt gives up, the lowest-priority one that is not class 1.
 fn victim(plan: &Plan) -> Option<CovId> {
     plan.fills.iter().rev().find(|f| f.cand.class != Class::Immediate).or(plan.fills.last()).map(|f| f.cand.id)
 }
 
 /// Reason of an order quarantined because its planning panicked ([`TickReport::quarantined`]).
 pub const PLANNING_PANICKED: &str = "planning panicked";
-/// Reason prefix of an order quarantined because the builder refused it on its own (`order of leg <i>: ...`, see
-/// [`lowering_leg`]): such an order fails the same way every time it is planned.
+/// Reason prefix of an order quarantined because the builder refused it on its own.
+///
+/// The builder's error reads `order of leg <i>: ...`, see [`lowering_leg`]. Such an order fails the
+/// same way every time it is planned.
 pub const REFUSED_BY_THE_BUILDER: &str = "refused by the builder";
 
-/// The leg a lowering error names as the order at fault: the batch builder (`kob_protocol::build`) names the leg of a refusal
-/// that depends on that order alone (its token programs, its family) as `order of leg <i>: ...`; leg `i` is `plan.fills[i]`
-/// ([`super::lower::lower_batch`]).
+/// The leg that a lowering error names as the order at fault.
+///
+/// The batch builder (`kob_protocol::build`) names the leg of a refusal that depends on that order
+/// alone, such as its token programs or its family, as `order of leg <i>: ...`. Leg `i` is
+/// `plan.fills[i]` ([`super::lower::lower_batch`]).
 pub fn lowering_leg(err: &str) -> Option<usize> {
     leg_named(err, "order of leg ")
 }
 
-/// The leg a lowering error names as the fill at fault: the batch builder names the leg of a refusal of the fill the plan
-/// chose for a pair order (its quantity, its continuation, its evidence) as `fill of leg <i>: ...`. That order is left out of
-/// the batch (not quarantined: another fill of it may be built), and the other legs are planned again without it.
+/// The leg that a lowering error names as the fill at fault.
+///
+/// The batch builder names the leg of a refusal of the fill the plan chose for a pair order as
+/// `fill of leg <i>: ...` or `evidence of leg <i>: ...`. The refusal is about the fill's quantity,
+/// continuation or evidence. That order is left out of the batch but not quarantined, because
+/// another fill of it may build. The other legs are planned again without it.
 pub fn lowering_fill_leg(err: &str) -> Option<usize> {
     leg_named(err, "fill of leg ").or_else(|| leg_named(err, "evidence of leg "))
 }
 
-/// The leg whose merged entry a lowering error names as at fault (`entry of leg <i>: ...`: the custodies of the entry
-/// that the booked exit of leg `i` re-arms). That entry is left out of the batch, so the exit is not merged into it.
+/// The leg whose merged entry a lowering error names as at fault.
+///
+/// The error reads `entry of leg <i>: ...` and is about the custodies of the entry that the booked
+/// exit of leg `i` re-arms. That entry is left out of the batch, so the exit is not merged into it.
 pub fn lowering_entry_leg(err: &str) -> Option<usize> {
     leg_named(err, "entry of leg ")
 }
 
-/// The update (`plan.updates[i]`) whose continuation the builder refused (`arming update <i>: ...`, a continuation below the
-/// covenant-output bound). That order is left out of the batch.
+/// The update `plan.updates[i]` whose continuation the builder refused.
+///
+/// The error reads `arming update <i>: ...` and is about a continuation below the covenant-output
+/// bound. That order is left out of the batch.
 pub fn lowering_update(err: &str) -> Option<usize> {
     leg_named(err, "arming update ")
 }
@@ -381,7 +488,7 @@ fn leg_named(err: &str, prefix: &str) -> Option<usize> {
 
 /// Most attempts (plan, build, validate) per batch before the tick gives up on it.
 const MAX_ATTEMPTS: usize = 24;
-/// Most single-order removals tried to isolate a panicking batch (each is a full attempt).
+/// Most single-order removals tried to isolate a panicking batch. Each is a full attempt.
 const MAX_ISOLATION_TRIES: usize = 48;
 
 /// The tick's view and what it has decided so far.
@@ -397,26 +504,34 @@ struct Tick<'a> {
     tick_deadline: Option<Instant>,
     /// The book as the transactions of the tick so far leave it.
     by_id: BTreeMap<CovId, ListedOrder>,
-    /// Continuations of this tick's transactions (unaccepted) and how many transactions each order was in.
+    /// Continuations of this tick's transactions, which are unaccepted.
     unaccepted: BTreeSet<CovId>,
+    /// How many transactions of the tick each order was in.
     depth: BTreeMap<CovId, usize>,
     pool: Vec<KeyUtxo>,
-    /// Never planned this tick: the input's exclusions, quarantined orders, skipped books.
+    /// Orders never planned this tick: the input's exclusions, quarantined orders and skipped
+    /// books.
     excluded: BTreeSet<CovId>,
-    /// What the surplus-inventory policy has used in its period, the batches prepared this tick included: each batch is
-    /// planned against what the earlier ones left of `maxFee` and `tokens[].maxAmount`, not against the tick's start.
+    /// What the surplus-inventory policy has used in its period, including this tick's batches.
+    ///
+    /// Each batch is planned against what the earlier ones left of `maxFee` and
+    /// `tokens[].maxAmount`, not against the tick's start.
     inventory_used: super::planner::InventoryUse,
-    /// The orders of the work unit being planned (weighted selection, §3.6): every other order sits out its transactions.
-    /// None: the whole view.
+    /// The orders of the work unit being planned, for the weighted selection (§3.6).
+    ///
+    /// Every other order sits out its transactions. None means the whole view.
     scope: Option<BTreeSet<CovId>>,
 }
 
 /// What one batch attempt loop produced.
 enum Batch {
     Prepared(Box<Prepared>),
-    /// Nothing (more) to plan.
+    /// Nothing, or nothing more, to plan.
     Nothing,
-    /// Every attempt failed: the last error, and the orders the attempts gave up (they sit out the rest of the tick).
+    /// Every attempt failed.
+    ///
+    /// It carries the last error and the orders the attempts gave up. They sit out the rest of the
+    /// tick.
     Failed(BookKey, String, Vec<CovId>),
 }
 
@@ -439,18 +554,22 @@ impl<'a> Tick<'a> {
         report.prepared.iter().rev().map(|p| p.txid()).find(|t| ids.contains(t))
     }
 
-    /// The built batch with its auction legs at the earliest ticks at which it still pays (`docs/spec/matcher.md` §3.3,
-    /// [`super::auction`]): `built` is the batch as planned at the lock time, `build` lowers a plan at the batch's rate and
-    /// funding (None: refused, over the fee cap or over a physical limit). Every candidate is built and kept only when its
-    /// exact profit (with the kept inventory's value) is at least `min_profit`, and at least one sompi; otherwise `built`
-    /// goes as it is.
+    /// The built batch with its auction legs at the earliest ticks at which it still pays.
     ///
-    /// 1. Pair auctions move token amounts: the books of the batch are planned again with their quotes at the same progress
-    ///    from their earliest ticks, the smallest progress at which the planner still fills each of them, and every
-    ///    immediate or triggered order of the batch, in full and the batch pays (bisection; the planner's fee estimate is
-    ///    corrected by what the built batch paid above it).
-    /// 2. KAS-book auctions keep the allocation: [`super::auction::earliest_ticks`] prices them against the batch's exact
-    ///    surplus; a build short of `min_profit` by a few sompi (a tick's push one byte longer) is retried with less.
+    /// See `docs/spec/matcher.md` §3.3 and [`super::auction`]. `built` is the batch as planned at
+    /// the lock time. `build` lowers a plan at the batch's rate and funding, and returns None when
+    /// the plan is refused, over the fee cap or over a physical limit. Every candidate is built. It
+    /// is kept only when its exact profit, with the kept inventory's value, is at least
+    /// `min_profit` and at least one sompi. Otherwise `built` goes as it is.
+    ///
+    /// 1. Pair auctions move token amounts. The books of the batch are planned again with the
+    ///    quotes of the pair auctions at the same progress from their earliest ticks. A bisection
+    ///    finds the smallest progress at which the planner still fills each of them, and every
+    ///    immediate or triggered order of the batch, in full, and the batch pays. The planner's fee
+    ///    estimate is corrected by what the built batch paid above it.
+    /// 2. KAS-book auctions keep the allocation. [`super::auction::earliest_ticks`] prices them
+    ///    against the batch's exact surplus. A build short of `min_profit` by a few sompi, for
+    ///    example because a tick's push is one byte longer, is retried with less.
     fn earliest_ticks(
         &self,
         built: (Plan, Lowered, Accounting),
@@ -459,12 +578,13 @@ impl<'a> Tick<'a> {
         planner: &PlannerConfig,
         build: &dyn Fn(&Plan) -> Option<(Lowered, Accounting)>,
     ) -> (Plan, Lowered, Accounting) {
-        // an earlier tick never takes the batch to nothing: at least one sompi above the fee
+        // An earlier tick never takes the batch to nothing. It keeps at least one sompi above the
+        // fee.
         let min = self.cfg.planner.min_profit.max(1);
         let pays = |p: &Plan, a: &Accounting| a.profit.saturating_add(p.kept_value()) >= min;
         let lock = self.lock as i64;
         let mut best = built;
-        // 1. pair auctions, planned again
+        // 1. Pair auctions, planned again.
         let pairs: Vec<(CovId, i64)> = best
             .0
             .fills
@@ -472,10 +592,12 @@ impl<'a> Tick<'a> {
             .filter_map(|f| Some((f.cand.id, super::auction::pair_auction_from(f, self.by_id.get(&f.cand.id)?, lock)?)))
             .collect();
         if !pairs.is_empty() {
-            // what the planner's fee estimate fell short of the built fee (the rate the batch goes at included)
+            // What the planner's fee estimate fell short of the built fee, at the rate the batch
+            // goes at.
             let short = (best.2.fee.min(i64::MAX as u64) as i64).saturating_sub(best.0.est_fee).max(0);
             let want = min.saturating_add(short);
-            // the orders that must keep their fills: the pair auctions and every immediate or triggered order of the batch
+            // The orders that must keep their fills: the pair auctions and every immediate or
+            // triggered order of the batch.
             let keep: Vec<(CovId, i64)> = best
                 .0
                 .fills
@@ -517,7 +639,7 @@ impl<'a> Tick<'a> {
                 }
             }
         }
-        // 2. KAS-book auctions, priced against the exact surplus
+        // 2. KAS-book auctions, priced against the exact surplus.
         let mut budget = best.2.profit.saturating_add(best.0.kept_value()).saturating_sub(min);
         for _ in 0..3 {
             let Some(p) = super::auction::earliest_ticks(&best.0, &self.by_id, self.lock, budget) else { break };
@@ -531,34 +653,39 @@ impl<'a> Tick<'a> {
         best
     }
 
-    /// Plans, builds, signs and validates the next batch of the tick. `extra` orders are left out (isolation); `last_plan`
-    /// receives the order ids of the latest plan attempted (isolation of a panic after planning).
+    /// Plans, builds, signs and validates the next batch of the tick.
+    ///
+    /// The `extra` orders are left out, for isolation. `last_plan` receives the order ids of the
+    /// latest plan attempted, to isolate a panic after planning.
     fn batch(&self, step: usize, extra: &BTreeSet<CovId>, report: &mut TickReport, last_plan: &mut Vec<CovId>) -> Batch {
         let cfg = self.cfg;
         let mut ex: BTreeSet<CovId> = self.excluded.union(extra).copied().collect();
-        // orders quarantined earlier in the tick (the builder refused them) are never planned again
+        // Orders quarantined earlier in the tick, which the builder refused, are never planned
+        // again.
         ex.extend(report.quarantined.iter().map(|q| q.0));
-        // the unit being planned (weighted selection): the other orders sit out its transactions
+        // The unit being planned by the weighted selection. The other orders sit out its
+        // transactions.
         let scope_out: BTreeSet<CovId> = match &self.scope {
             Some(scope) => self.by_id.keys().filter(|id| !scope.contains(*id)).copied().collect(),
             None => BTreeSet::new(),
         };
         ex.extend(scope_out.iter().copied());
-        // Funding (`select_funding`): the first attempt takes the largest UTXO, a builder's "insufficient funds" names the
-        // need; a fragmented pool is consolidated while the batch stays profitable with it.
+        // Funding (`select_funding`). The first attempt takes the largest UTXO, and a builder's
+        // "insufficient funds" names the need. A fragmented pool is consolidated while the batch
+        // stays profitable with it.
         let mut need = 0u64;
         let mut consolidate = true;
         let mut funding = select_funding(&self.pool, need, consolidate, &cfg.funding);
         let mut max_bytes = cfg.planner.tx_byte_budget();
-        // measured budgets for roles the table gives too little (the safety net below)
+        // Measured budgets for roles the table gives too little, the safety net below.
         let mut floor: BTreeMap<String, u16> = BTreeMap::new();
         let mut measured = false;
         let mut last: Option<(BookKey, String)> = None;
-        // the high rate of an urgent batch; off once the operator's whole pool cannot pay it (the batch then goes at the rate
-        // it was planned at)
+        // The high rate of an urgent batch. It is off once the operator's whole pool cannot pay it,
+        // and the batch then goes at the rate it was planned at.
         let mut high_ok = true;
-        // fills left out of this batch only to find the one a refusal that names no order comes from (`bisect`); they are
-        // never given up
+        // Fills left out of this batch only to find the one that a refusal naming no order comes
+        // from (`bisect`). They are never given up.
         let mut probe: BTreeSet<CovId> = BTreeSet::new();
         for _attempt in 0..MAX_ATTEMPTS {
             if self.out_of_time() {
@@ -592,9 +719,11 @@ impl<'a> Tick<'a> {
                 last = Some((key, format!("no {} builders in this build", key.family.as_str())));
                 break;
             };
-            // The batch's fee rate (`crate::fee`): the high rate when it fills an immediate order or a triggered stop (their
-            // deadlines are a minute away), else the rate it was planned at; held to the total cap, and lowered to the highest
-            // rate that keeps the batch profitable (never below the planned rate, at which the planner found it profitable).
+            // The batch's fee rate (`crate::fee`). It is the high rate when the batch fills an
+            // immediate order or a triggered stop, whose deadlines are a minute away. Otherwise it
+            // is the rate the batch was planned at. The rate is held to the total cap, and lowered
+            // to the highest rate that keeps the batch profitable. It never goes below the planned
+            // rate, at which the planner found the batch profitable.
             let plan_rate = cfg.planner.fee_rate;
             let mut rate = if high_ok && plan.fills.iter().any(|f| f.cand.class != Class::Resting) {
                 cfg.fees.rate(crate::fee::Urgency::High, plan_rate)
@@ -620,7 +749,8 @@ impl<'a> Tick<'a> {
                         }
                         if rate > plan_rate {
                             let a = accounting(&l, &funding);
-                            // the inventory a plan keeps is income the KAS accounting does not see (its policy value)
+                            // The inventory a plan keeps is income that the KAS accounting does not
+                            // see, valued by its policy.
                             let p = a.profit.saturating_add(plan.kept_value());
                             if p < cfg.planner.min_profit {
                                 rate = crate::fee::FeeRates::affordable(rate, a.fee, p, cfg.planner.min_profit, plan_rate)
@@ -636,8 +766,9 @@ impl<'a> Tick<'a> {
             let lowered = match lowered {
                 Ok(l) => l,
                 Err(e) => {
-                    // short of funds: more funding inputs (with a margin for their fee) while the pool has more to give
-                    // (the builder counts every input: the funding must grow by the shortfall)
+                    // Short of funds. Add funding inputs, with a margin for their fee, while the
+                    // pool has more to give. The builder counts every input, so the funding must
+                    // grow by the shortfall.
                     if let Some((n, h)) = super::lower::insufficient_funds(&e) {
                         let per_input = super::planner::est_fee(FUNDING_INPUT_BYTES, rate).max(0) as u64;
                         let total = |v: &[KeyUtxo]| v.iter().map(|k| k.utxo.amount).sum::<u64>();
@@ -651,7 +782,7 @@ impl<'a> Tick<'a> {
                             continue;
                         }
                         if rate > plan_rate {
-                            // the pool cannot pay the high rate: the planned rate
+                            // The pool cannot pay the high rate, so use the planned rate.
                             high_ok = false;
                             continue;
                         }
@@ -659,35 +790,41 @@ impl<'a> Tick<'a> {
                     let why = format!("lowering: {e}");
                     report.anomalies.push((key, step, why.clone()));
                     last = Some((key, why));
-                    // A refusal that names the order at fault (its token programs, its family: nothing the plan chose) fails
-                    // the same way every time that order is planned: it is quarantined, for this tick and (by the runner)
-                    // the next ones, like an order whose planning panics, and the batch is planned again without it. A
-                    // continuation of this tick's own transactions is only left out of this batch.
+                    // A refusal that names the order at fault, for its token programs or its family
+                    // and nothing the plan chose, fails the same way every time that order is
+                    // planned. So the order is quarantined like one whose planning panics, for this
+                    // tick and, by the runner, the next ones. The batch is planned again without
+                    // it. A continuation of this tick's own transactions is only left out of this
+                    // batch.
                     if let Some(id) = lowering_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
                         if !self.unaccepted.contains(&id) && !report.quarantined.iter().any(|q| q.0 == id) {
                             report.quarantined.push((id, format!("{REFUSED_BY_THE_BUILDER}: {e}")));
                         }
                         ex.insert(id);
-                        // the order at fault is out: what is left is planned as if it had never been listed
+                        // The order at fault is out. What is left is planned as if it had never
+                        // been listed.
                         last = None;
                         continue;
                     }
-                    // A refusal of the fill the plan chose for one order (its quantity, its continuation, its evidence): that
-                    // order sits out this batch, the other legs (of any book) are planned again without it.
+                    // A refusal of the fill the plan chose for one order, for its quantity, its
+                    // continuation or its evidence. That order sits out this batch, and the other
+                    // legs of any book are planned again without it.
                     if let Some(id) = lowering_fill_leg(&e).and_then(|i| plan.fills.get(i)).map(|f| f.cand.id) {
                         ex.insert(id);
                         probe.clear();
                         last = None;
                         continue;
                     }
-                    // A refusal of the continuation of an arming update: that order sits out this batch.
+                    // A refusal of the continuation of an arming update. That order sits out this
+                    // batch.
                     if let Some(id) = lowering_update(&e).and_then(|i| plan.updates.get(i)).map(|u| u.id) {
                         ex.insert(id);
                         probe.clear();
                         last = None;
                         continue;
                     }
-                    // A refusal of the entry a booked exit re-arms: the entry sits out this batch (the exit is not merged).
+                    // A refusal of the entry that a booked exit re-arms. The entry sits out this
+                    // batch, and the exit is not merged.
                     if let Some(id) = lowering_entry_leg(&e).and_then(|i| plan.fills.get(i)).and_then(|f| f.cand.merge) {
                         ex.insert(id);
                         probe.clear();
@@ -705,8 +842,8 @@ impl<'a> Tick<'a> {
                 }
             };
             let acct = accounting(&lowered, &funding);
-            // The physical limits of the built transaction (the plan's byte estimate is only an estimate): scale the budget
-            // down by the overrun and plan again.
+            // The physical limits of the built transaction, since the plan's byte count is only an
+            // estimate. Scale the budget down by the overrun and plan again.
             let m = lowered.built.fee.mass;
             let over = overrun(&lowered, &acct, cfg.planner.max_tx_bytes);
             if over > 1.0 {
@@ -724,9 +861,11 @@ impl<'a> Tick<'a> {
                     _ => break,
                 }
             }
-            // the batch's profit: its exact KAS (`change − funding`) and the policy value of the inventory it keeps
+            // The batch's profit is its exact KAS (`change − funding`) plus the policy value of the
+            // inventory it keeps.
             if acct.profit.saturating_add(plan.kept_value()) < cfg.planner.min_profit {
-                // the consolidated inputs' fee must not cost the batch: plan it again without them
+                // The fee of the consolidated inputs must not cost the batch. Plan it again without
+                // them.
                 let plain = select_funding(&self.pool, need, false, &cfg.funding);
                 if consolidate && plain.len() < funding.len() {
                     consolidate = false;
@@ -742,10 +881,11 @@ impl<'a> Tick<'a> {
                     _ => break,
                 }
             }
-            // §3.3: the auction legs at the earliest ticks at which the batch still pays its fee (at the rate it is built at)
-            // and `min_profit`, not at the lock time: a market order fills at about its start price whatever the matcher's
-            // latency. The batch is built again that way and kept only when it is exactly as profitable as required and
-            // within every limit; otherwise it goes as planned.
+            // §3.3. The auction legs go at the earliest ticks at which the batch still pays its
+            // fee, at the rate it is built at, and `min_profit`, not at the lock time. So a market
+            // order fills at about its start price, whatever the matcher's latency. The batch is
+            // built again that way. It is kept only when it is exactly as profitable as required
+            // and within every limit. Otherwise it goes as planned.
             let build = |p: &Plan| -> Option<(Lowered, Accounting)> {
                 let cx = LowerCtx {
                     budget_floor: floor.clone(),
@@ -778,10 +918,11 @@ impl<'a> Tick<'a> {
                     }));
                 }
                 Err(e) => {
-                    // Safety net only (the budget table is exact over every shape the planner builds): a budget the
-                    // table gives too little is measured in the engine and the batch retried once with the budgets its
-                    // inputs need, logged and counted (`lower::budget_slack_retries`, 0 in every test). The batch is
-                    // never skipped tick after tick for a short table entry.
+                    // A safety net only, because the budget table is exact over every shape the
+                    // planner builds. A budget the table gives too little is measured in the
+                    // engine, and the batch is retried once with the budgets its inputs need. The
+                    // retry is logged and counted (`lower::budget_slack_retries`, 0 in every test).
+                    // So a short table entry never skips the batch tick after tick.
                     if e.contains("ExceededCommittedScriptUnits") && !measured {
                         measured = true;
                         match super::lower::measured_floors(&lowered.built, self.signer) {
@@ -798,9 +939,10 @@ impl<'a> Tick<'a> {
                     // A chained step the engine refuses waits for its parent's acceptance.
                     report.anomalies.push((key, step, e.clone()));
                     last = Some((key, e.clone()));
-                    // The token program rejected the plan (not an order covenant, not a budget): a frozen or blacklisted
-                    // balance looks like this. Attribute it to the (accepted) order whose custody the failing input spends;
-                    // when it names none, the fill the search below isolates is the suspect.
+                    // The token program rejected the plan, not an order covenant or a budget. A
+                    // frozen or blacklisted balance looks like this. Attribute it to the accepted
+                    // order whose custody the failing input spends. When it names none, the fill
+                    // that the search below isolates is the suspect.
                     let mut token_why = None;
                     if let Some(i) = token_input_failure(&e, &lowered) {
                         let why = format!("the token program rejected the pre-simulated spend ({})", lowered.built.roles[i]);
@@ -841,10 +983,13 @@ impl<'a> Tick<'a> {
         }
     }
 
-    /// The book after a prepared transaction: continuations replace their orders (unaccepted, one transaction deeper),
-    /// everything else it spent leaves; the funding pool gives up every UTXO the transaction spends and takes the change.
+    /// Moves the tick's book past a prepared transaction.
+    ///
+    /// Continuations replace their orders, unaccepted and one transaction deeper. Everything else
+    /// the transaction spent leaves. The funding pool gives up every UTXO the transaction spends
+    /// and takes the change.
     fn apply(&mut self, p: &Prepared) {
-        // the inventory budgets the next batches of the tick are planned against
+        // The inventory budgets that the next batches of the tick are planned against.
         self.inventory_used.record(&p.plan.kept, p.lowered.built.fee.fee);
         let (continued, next_funding) = super::chain::apply(&mut self.by_id, &p.plan, &p.lowered.built, self.operator);
         for f in &p.plan.fills {
@@ -853,7 +998,7 @@ impl<'a> Tick<'a> {
         for id in continued {
             let deep = self.depth.get(&id).copied().unwrap_or(0) >= self.cfg.planner.max_chain.max(1);
             if !self.cfg.chain_unconfirmed || deep {
-                // continues next tick
+                // It continues next tick.
                 self.by_id.remove(&id);
             } else {
                 self.unaccepted.insert(id);
@@ -863,17 +1008,20 @@ impl<'a> Tick<'a> {
         let before = self.pool.len();
         self.pool.retain(|k| !spent.contains(&outpoint(&k.utxo)));
         if self.pool.len() < before {
-            // The change funds the next transactions (a P2PK spend never reads its parent's DAA score, so it chains safely).
+            // The change funds the next transactions. A P2PK spend never reads its parent's DAA
+            // score, so it chains safely.
             if let Some(f) = next_funding {
                 self.pool.push(f);
             }
         }
     }
 
-    /// Isolation after a panic (the last line of defence): the order whose removal makes the batch pass is
-    /// quarantined and that pass is the batch's result. The orders tried are those of the plan that panicked (a defect in
-    /// lowering or validation), else those of the books whose planning panics on its own. When no single order explains
-    /// it, those books sit out the rest of the tick.
+    /// Isolation after a panic, the last line of defence.
+    ///
+    /// The order whose removal makes the batch pass is quarantined, and that pass is the batch's
+    /// result. The orders tried are those of the plan that panicked, for a defect in lowering or
+    /// validation. Otherwise they are those of the books whose planning panics on its own. When no
+    /// single order explains the panic, those books sit out the rest of the tick.
     fn isolate(&mut self, step: usize, suspects: Vec<CovId>, report: &mut TickReport) -> Option<Batch> {
         tracing::error!("the matcher panicked on a batch; isolating the order");
         let mut tried = 0usize;
@@ -898,7 +1046,7 @@ impl<'a> Tick<'a> {
         let mut candidates: Vec<CovId> = suspects;
         let mut books_of: BTreeSet<BookKey> = BTreeSet::new();
         if candidates.is_empty() {
-            // planning itself panicked: the books whose planning panics alone
+            // Planning itself panicked. Find the books whose planning panics alone.
             let keys: Vec<BookKey> = books(&self.by_id.values().cloned().collect::<Vec<_>>()).into_keys().collect();
             for k in keys {
                 if self.out_of_time() {
@@ -922,7 +1070,7 @@ impl<'a> Tick<'a> {
                     candidates.extend(self.by_id.values().filter(|o| book_key(o) == Some(k)).map(|o| o.id()));
                 }
             }
-            // a pair order belongs to no book: its planning is tried with the books of its tokens
+            // A pair order belongs to no book. Its planning is tried with the books of its tokens.
             candidates.extend(self.by_id.values().filter(|o| o.order.state.is_pair()).map(|o| o.id()));
         } else {
             for id in &candidates {
@@ -945,7 +1093,7 @@ impl<'a> Tick<'a> {
                 return Some(b);
             }
         }
-        // no single order explains it: those books wait for the next tick, the process lives
+        // No single order explains it. Those books wait for the next tick, and the process lives.
         if books_of.is_empty() {
             books_of = books(&self.by_id.values().cloned().collect::<Vec<_>>()).into_keys().collect();
         }
@@ -963,12 +1111,12 @@ pub fn tick(inp: &TickInput, cfg: &EngineConfig, families: &Families, signer: &d
     tick_with(inp, cfg, families, signer, &engine_validator)
 }
 
-/// [`tick`] with a custom pre-submission validator (the default is the script engine).
+/// [`tick`] with a custom pre-submission validator. The default is the script engine.
 pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signer: &dyn Signer, validator: Validator) -> TickReport {
     let mut report = TickReport::default();
     let started = Instant::now();
     let tick_deadline = (cfg.tick_budget_ms > 0).then(|| started + Duration::from_millis(cfg.tick_budget_ms));
-    // no order with hostile numbers reaches the planner; it is quarantined with the reason
+    // No order with hostile numbers reaches the planner. It is quarantined with the reason.
     let mut by_id: BTreeMap<CovId, ListedOrder> = BTreeMap::new();
     for o in &inp.orders {
         match crate::sanity::check(&o.order.state) {
@@ -985,7 +1133,7 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
     });
     let fams: BTreeSet<Family> = [Family::Kcc20, Family::Kron].into_iter().filter(|f| families.supports(*f)).collect();
     let mut excluded = inp.excluded.clone();
-    // books this build cannot plan are reported once and left out
+    // Books this build cannot plan are reported once and left out.
     for (key, orders) in books(&by_id.values().cloned().collect::<Vec<_>>()) {
         let why = if token_limits(key.family, &key.template).is_none() {
             "unsupported token program".to_string()
@@ -1018,9 +1166,10 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
     let mut step = 0usize;
     let mut out_of_time = false;
     match cfg.select.filter(|s| s.samples()).and_then(|sel| select_units(&mut tk, &sel, &mut report)) {
-        // the reference: every unit of the view in one transaction sequence
+        // The reference: every unit of the view in one transaction sequence.
         None => out_of_time = run_batches(&mut tk, &mut report, &mut step),
-        // weighted selection: each unit planned (mandatory first, then the sample) in transactions of its own
+        // Weighted selection: each unit planned in transactions of its own, mandatory units first,
+        // then the sample.
         Some(groups) => {
             let several = groups.len() > 1;
             let all: BTreeSet<CovId> = groups.iter().flatten().copied().collect();
@@ -1031,8 +1180,9 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
                     break;
                 }
             }
-            // what the units' own transactions left (crossings that pay a transaction only together with another unit's,
-            // which the reference planner puts into one): the planned units together, as the reference plans them
+            // Then the planned units together, as the reference plans them. This takes what the
+            // units' own transactions left: crossings that pay a transaction only together with
+            // another unit's, which the reference planner puts into one.
             if several && !out_of_time {
                 tk.scope = Some(all);
                 out_of_time = run_batches(&mut tk, &mut report, &mut step);
@@ -1048,7 +1198,7 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
     report
 }
 
-/// The tokens an order belongs to (a pair order: both of its tokens).
+/// The tokens an order belongs to, both of them for a pair order.
 fn order_tokens(o: &ListedOrder) -> Vec<[u8; 32]> {
     match o.order.state.pair_tokens() {
         Some(t) => vec![t.a.cov_id, t.b.cov_id],
@@ -1056,11 +1206,16 @@ fn order_tokens(o: &ListedOrder) -> Vec<[u8; 32]> {
     }
 }
 
-/// The weighted selection of a tick (`docs/spec/matcher.md` §3.6): the work units of the view, the mandatory ones (class 1
-/// or class 2 work, or a crossing visible for `max_defer_daa`) and a weighted sample of the others, `share` of them in
-/// expectation, drawn without replacement with probability proportional to `(profit per byte)^alpha` ([`super::select`]).
-/// The orders of the units left out sit out the tick. Returns the order sets of the units to plan, in planning order; None
-/// (the reference) when the view has no unit or its planning panicked.
+/// The weighted selection of a tick (`docs/spec/matcher.md` §3.6).
+///
+/// It takes the work units of the view: the mandatory ones and a weighted sample of the others.
+/// A unit is mandatory when it holds class 1 or class 2 work, or a crossing visible for
+/// `max_defer_daa`. The sample takes `share` of the others in expectation, drawn without
+/// replacement with probability proportional to `(profit per byte)^alpha` ([`super::select`]).
+/// The orders of the units left out sit out the tick.
+///
+/// Returns the order sets of the units to plan, in planning order. Returns None, the reference,
+/// when the view has no unit or its planning panicked.
 fn select_units(tk: &mut Tick, sel: &TickSelect, report: &mut TickReport) -> Option<Vec<BTreeSet<CovId>>> {
     let deadline = tk.plan_deadline();
     let units: Vec<WorkUnit> = {
@@ -1084,7 +1239,8 @@ fn select_units(tk: &mut Tick, sel: &TickSelect, report: &mut TickReport) -> Opt
         return None;
     }
     let now = tk.inp.clock.daa;
-    // since when the unit's oldest crossable order has waited: the runner's history, else the listing of its crossings
+    // Since when the unit's oldest crossable order has waited. That is the runner's history, else
+    // the listing of its crossings.
     let since = |w: &WorkUnit| -> u64 {
         match &tk.cfg.select_since {
             Some(h) => w.orders.iter().map(|id| h.get(id).copied().unwrap_or(now).min(now)).min().unwrap_or(now),
@@ -1131,8 +1287,9 @@ fn select_units(tk: &mut Tick, sel: &TickSelect, report: &mut TickReport) -> Opt
     Some(groups)
 }
 
-/// Plans, builds and applies the tick's transactions until nothing (more) crosses in the scope; true when the tick's
-/// budget ran out.
+/// Plans, builds and applies the tick's transactions until nothing more crosses in the scope.
+///
+/// Returns true when the tick's budget ran out.
 fn run_batches(tk: &mut Tick, report: &mut TickReport, step: &mut usize) -> bool {
     loop {
         if tk.out_of_time() {
@@ -1145,7 +1302,7 @@ fn run_batches(tk: &mut Tick, report: &mut TickReport, step: &mut usize) -> bool
         let outcome = match r {
             Ok(b) => b,
             Err(_) => {
-                // roll back what the failed pass added to the report, then find the order to blame
+                // Roll back what the failed pass added to the report, then find the order to blame.
                 report.suspects.truncate(marks.0);
                 report.cleared.truncate(marks.1);
                 report.anomalies.truncate(marks.2);
@@ -1153,7 +1310,7 @@ fn run_batches(tk: &mut Tick, report: &mut TickReport, step: &mut usize) -> bool
                 report.slack_retries = marks.4;
                 match tk.isolate(*step, last_plan, report) {
                     Some(b) => b,
-                    // the guilty books are excluded for the tick: plan the rest
+                    // The guilty books are excluded for the tick. Plan the rest.
                     None => continue,
                 }
             }
@@ -1166,7 +1323,7 @@ fn run_batches(tk: &mut Tick, report: &mut TickReport, step: &mut usize) -> bool
             }
             Batch::Nothing => return false,
             Batch::Failed(key, why, gave_up) => {
-                // the rest of the view is still planned; what failed waits for the next tick
+                // The rest of the view is still planned. What failed waits for the next tick.
                 report.skipped.push((key, why));
                 if gave_up.iter().all(|id| tk.excluded.contains(id)) {
                     return false;
@@ -1215,16 +1372,17 @@ mod tests {
     fn a_fragmented_pool_is_consolidated_into_the_change() {
         let cfg = FundingConfig::default();
         let pool = vec![k(1, 100, true), k(2, 50, true), k(3, 20, true), k(4, 10, true), k(5, 5, true), k(6, 1, true)];
-        // more than target_utxos (4) accepted UTXOs: the two smallest ride along
+        // More than target_utxos (4) accepted UTXOs, so the two smallest ride along.
         assert_eq!(kas(&select_funding(&pool, 0, true, &cfg)), [100, 1, 5]);
         assert_eq!(kas(&select_funding(&pool, 0, false, &cfg)), [100], "off when the batch cannot afford it");
         assert_eq!(kas(&select_funding(&pool, 0, true, &FundingConfig { consolidate: 0, ..cfg.clone() })), [100]);
-        // a pool at the target is left alone, and the tick's unaccepted change is never consolidated
+        // A pool at the target is left alone, and the tick's unaccepted change is never
+        // consolidated.
         assert_eq!(kas(&select_funding(&pool[..4], 0, true, &cfg)), [100]);
         let mut chained = pool[..4].to_vec();
         chained.push(k(9, 3, false));
         assert_eq!(kas(&select_funding(&chained, 0, true, &cfg)), [100]);
-        // never more than max_inputs, never the same UTXO twice
+        // Never more than max_inputs, and never the same UTXO twice.
         let tight = FundingConfig { max_inputs: 2, ..cfg.clone() };
         assert_eq!(kas(&select_funding(&pool, 0, true, &tight)), [100, 1]);
         assert_eq!(kas(&select_funding(&pool, 175 * 100_000_000, true, &cfg)), [100, 50, 20, 10, 1, 5]);
