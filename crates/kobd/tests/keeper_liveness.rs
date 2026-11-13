@@ -23,6 +23,9 @@ use serde_json::Value;
 
 const KILL_DAA: u64 = 5_600;
 
+/// The local clock of the subsidy window in the test that rolls it (`Runner::subsidy_clock`).
+static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// An IOC ask listed at DAA 5,000 (killable from 5,600) whose refund tip is `tip`.
 fn ioc(n: u32, tip: i64) -> ListedOrder {
     let mut s = ask(1, P250, 5 * WHOLE, T3);
@@ -386,14 +389,15 @@ async fn a_restart_keeps_what_is_in_flight_and_can_still_replace_it() {
     let (t0, rate0, spends0) = tracked(&r);
     // a subsidy charged before the restart stays in the window after it (audit 2026-11-11 L-2)
     let kc = r.cfg.keeper.clone();
-    r.keeper_subsidy.charge(&kc, KILL_DAA, 12_345);
+    let now = kobd::matcher::book::utc_now();
+    r.keeper_subsidy.charge(&kc, KILL_DAA, now, 12_345);
     r.keeper_subsidy.save(&dir.path().join(kobd::matcher::run::SUBSIDY_FILE)).unwrap();
-    let left = r.keeper_subsidy.left(&kc, KILL_DAA);
+    let left = r.keeper_subsidy.left(&kc, KILL_DAA, now);
     drop(r);
     // the next start
     let mut r = runner_in(node.clone(), vec![order.clone()], K, 2, state.clone());
     assert_eq!(r.restarts, 1);
-    assert_eq!(r.keeper_subsidy.left(&kc, KILL_DAA), left, "the window continues");
+    assert_eq!(r.keeper_subsidy.left(&kc, KILL_DAA, now), left, "the window continues");
     let t = r.tracker.txs.get(&t0).expect("tracked again");
     assert!(t.unconfirmed && t.accepted.is_none());
     assert_eq!((t.fee_rate, t.spends.clone()), (rate0, spends0));
@@ -583,6 +587,13 @@ async fn the_subsidy_budget_bounds_the_operator_across_ticks_and_rolls_with_the_
     orders.extend((11..=13).map(|n| ioc_at(n, tip, 5_100))); // due at 5,700 (inside the window)
     orders.extend((21..=23).map(|n| ioc_at(n, tip, 6_000))); // due at 6,600 (the first charges left the window)
     let mut r = budgeted(node.clone(), orders, 0, 2 * s1, W);
+    // the window is W DAA of the chain and W / 10 seconds of the local clock: a clock in step with the test's DAA score
+    r.subsidy_clock = || CLOCK.load(std::sync::atomic::Ordering::SeqCst);
+    let at = |daa: u64| {
+        CLOCK.store(1_800_000_000 + daa / 10, std::sync::atomic::Ordering::SeqCst);
+        daa
+    };
+    at(KILL_DAA);
     r.source.0.daa_score = KILL_DAA;
     let rep = r.step().await.unwrap();
     assert_eq!(rep.submitted.len(), 5, "{:?}", rep.skipped);
@@ -590,26 +601,26 @@ async fn the_subsidy_budget_bounds_the_operator_across_ticks_and_rolls_with_the_
     assert_eq!(first.len(), 5);
     assert_eq!(count(&first, (1_000, s1)), 2, "two kills subsidised to the priority rate: {first:?}");
     assert_eq!(count(&first, (plain, 0)), 3, "the rest at the rate their tip pays: {first:?}");
-    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA), 2 * s1);
-    assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA), 0);
+    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA, (r.subsidy_clock)()), 2 * s1);
+    assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA, (r.subsidy_clock)()), 0);
     assert_eq!((r.keeper_subsidised, r.keeper_subsidy_sompi), (2, 2 * s1));
     let m = kobd::matcher::run::metrics_text(&r, &rep);
     assert!(m.contains("kob_keeper_subsidy_budget_left_sompi 0"), "{m}");
     // the next tick inside the window: the budget is still spent, the kills go at their own rate (subsidy_max = 0 behaviour)
-    node.set_daa(KILL_DAA + 100);
+    node.set_daa(at(KILL_DAA + 100));
     r.source.0.daa_score = KILL_DAA + 100;
     r.step().await.unwrap();
     let second = jobs_at(&r, KILL_DAA + 100, &[11, 12, 13]);
     assert_eq!(second, vec![(plain, 0); 3], "budget spent: no subsidy inside the window");
     assert_eq!(r.keeper_subsidy_sompi, 2 * s1);
     // a full window after the first charges: subsidy resumes, again within the budget
-    node.set_daa(KILL_DAA + W);
+    node.set_daa(at(KILL_DAA + W));
     r.source.0.daa_score = KILL_DAA + W;
     r.step().await.unwrap();
     let third = jobs_at(&r, KILL_DAA + W, &[21, 22, 23]);
     assert_eq!(count(&third, (1_000, s1)), 2, "subsidy resumes after the window: {third:?}");
     assert_eq!(count(&third, (plain, 0)), 1, "{third:?}");
-    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + W), 2 * s1, "the old charges left the window");
+    assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + W, (r.subsidy_clock)()), 2 * s1, "the old charges left the window");
     assert_eq!(r.keeper_subsidy_sompi, 4 * s1);
 }
 
@@ -655,18 +666,18 @@ async fn a_replacement_is_charged_its_added_subsidy_and_refused_past_the_budget(
         let mut r = budgeted(node.clone(), vec![ioc(1, tip)], 3, budget, 36_000);
         r.step().await.unwrap();
         assert_eq!(jobs_at(&r, KILL_DAA, &[1]), vec![(400, s400)]);
-        assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA), s400);
+        assert_eq!(r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA, (r.subsidy_clock)()), s400);
         // the estimate rises; the stuck kill wants the priority rate, which needs s1000 of subsidy in all
         node.0.lock().unwrap().fee = Some(serde_json::json!({"estimate": {"priorityBucket": {"feerate": 1000.0}}}));
         node.set_daa(KILL_DAA + 100);
         let rep = r.step().await.unwrap();
-        let spent = r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + 100);
+        let spent = r.keeper_subsidy.spent(&r.cfg.keeper, KILL_DAA + 100, (r.subsidy_clock)());
         if replaced {
             assert_eq!(rep.replaced.len(), 1, "within the budget: replaced");
             assert_eq!(tracked(&r).1, 1_000);
             assert_eq!(spent, s1000, "the original's subsidy plus the replacement's increase");
             assert_eq!(r.keeper_subsidy_sompi, s1000);
-            assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA + 100), 0);
+            assert_eq!(r.keeper_subsidy.left(&r.cfg.keeper, KILL_DAA + 100, (r.subsidy_clock)()), 0);
         } else {
             assert!(rep.replaced.is_empty(), "the increase does not fit the budget: not replaced");
             assert_eq!(node.replacements(), 0);

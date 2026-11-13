@@ -384,7 +384,11 @@ impl SubsidyAllowance {
 /// The operator subsidies of a rolling window ([`KeeperConfig::subsidy_budget`]), kept by the
 /// runner across ticks and replacements.
 ///
-/// It holds (virtual DAA score, sompi) of every subsidy charged. A subsidy is charged when its
+/// It holds the virtual DAA score, the sompi and the local time of every subsidy charged. A charge
+/// counts for a full window of the chain's DAA score, and for at least a full window and at most two
+/// of the local clock, at [`DAA_PER_SEC`]. So one DAA score far ahead, from a node that lies or
+/// glitches, neither erases the charges before it nor keeps its own one counting for longer than
+/// two windows of local time. A subsidy is charged when its
 /// transaction is submitted, also without a verdict since it may be accepted. A replacement charges
 /// only the increase. A transaction that never makes it into a block is not refunded, so the total
 /// charged is at least what the operator actually paid. The Executor keeps the window in a small
@@ -392,7 +396,61 @@ impl SubsidyAllowance {
 /// granting a new budget.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubsidyBudget {
-    spends: VecDeque<(u64, u64)>,
+    spends: VecDeque<Spend>,
+}
+
+/// DAA scores per second of the local clock (Kaspa's 10 blocks per second), for the window of a
+/// [`SubsidyBudget`] in local time.
+pub const DAA_PER_SEC: u64 = 10;
+
+/// One charge of a [`SubsidyBudget`]: `[daa, sompi, unix seconds]` in its file.
+///
+/// A file written before the local time was kept holds `[daa, sompi]`. Such a charge counts by its
+/// DAA score alone, as it did then.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "SpendWire", into = "(u64, u64, u64)")]
+struct Spend {
+    daa: u64,
+    sompi: u64,
+    /// Local unix seconds of the charge (0: unknown, an older file).
+    secs: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SpendWire {
+    Timed(u64, u64, u64),
+    Daa(u64, u64),
+}
+
+impl From<SpendWire> for Spend {
+    fn from(w: SpendWire) -> Self {
+        match w {
+            SpendWire::Timed(daa, sompi, secs) => Spend { daa, sompi, secs },
+            SpendWire::Daa(daa, sompi) => Spend { daa, sompi, secs: 0 },
+        }
+    }
+}
+
+impl From<Spend> for (u64, u64, u64) {
+    fn from(s: Spend) -> Self {
+        (s.daa, s.sompi, s.secs)
+    }
+}
+
+impl Spend {
+    /// Whether the charge counts in the window of `w` DAA that ends at `daa` and local time `now`.
+    ///
+    /// It counts while the chain says it is within the window, but only for two windows of local
+    /// time, and always for one.
+    fn counts(&self, w: u64, daa: u64, now: u64) -> bool {
+        let by_chain = self.daa.saturating_add(w) > daa;
+        if self.secs == 0 {
+            return by_chain;
+        }
+        let secs = w.div_ceil(DAA_PER_SEC);
+        now < self.secs.saturating_add(secs) || (by_chain && now < self.secs.saturating_add(secs.saturating_mul(2)))
+    }
 }
 
 impl SubsidyBudget {
@@ -414,32 +472,34 @@ impl SubsidyBudget {
         std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
     }
 
-    /// Sompi charged within the window that ends at `daa`.
+    /// Sompi charged within the window that ends at `daa` and at the local unix time `now`.
     ///
     /// Charges at a later DAA score count too: they come from before a node switch to one that is
     /// behind.
-    pub fn spent(&self, cfg: &KeeperConfig, daa: u64) -> u64 {
+    pub fn spent(&self, cfg: &KeeperConfig, daa: u64, now: u64) -> u64 {
         let w = cfg.subsidy_window_daa.max(1);
-        self.spends.iter().filter(|(d, _)| d.saturating_add(w) > daa).fold(0u64, |a, (_, s)| a.saturating_add(*s))
+        self.spends.iter().filter(|s| s.counts(w, daa, now)).fold(0u64, |a, s| a.saturating_add(s.sompi))
     }
 
-    /// What the window ending at `daa` still allows.
-    pub fn left(&self, cfg: &KeeperConfig, daa: u64) -> u64 {
-        cfg.subsidy_budget.saturating_sub(self.spent(cfg, daa))
+    /// What the window ending at `daa` and `now` still allows.
+    pub fn left(&self, cfg: &KeeperConfig, daa: u64, now: u64) -> u64 {
+        cfg.subsidy_budget.saturating_sub(self.spent(cfg, daa, now))
     }
 
-    /// Records `sompi` of subsidy at `daa` and forgets the charges that left the window.
-    pub fn charge(&mut self, cfg: &KeeperConfig, daa: u64, sompi: u64) {
+    /// Records `sompi` of subsidy at `daa` and the local unix time `now`, and forgets the charges
+    /// that left the window.
+    pub fn charge(&mut self, cfg: &KeeperConfig, daa: u64, now: u64, sompi: u64) {
         let w = cfg.subsidy_window_daa.max(1);
-        while self.spends.front().is_some_and(|(d, _)| d.saturating_add(w) <= daa) {
-            self.spends.pop_front();
-        }
+        self.spends.retain(|s| s.counts(w, daa, now));
         if sompi == 0 {
             return;
         }
         match self.spends.back_mut() {
-            Some((d, s)) if *d == daa => *s = s.saturating_add(sompi),
-            _ => self.spends.push_back((daa, sompi)),
+            Some(s) if s.daa == daa && s.secs != 0 => {
+                s.sompi = s.sompi.saturating_add(sompi);
+                s.secs = s.secs.max(now);
+            }
+            _ => self.spends.push_back(Spend { daa, sompi, secs: now }),
         }
     }
 }
@@ -995,24 +1055,64 @@ mod tests {
     #[test]
     fn the_budget_rolls_with_the_window() {
         let c = cfg(100, 1_000);
+        // the local clock in step with the chain: 10 DAA a second
+        let t = |daa: u64| daa / DAA_PER_SEC;
         let mut b = SubsidyBudget::default();
-        assert_eq!(b.left(&c, 0), 100);
-        b.charge(&c, 10, 40);
-        b.charge(&c, 500, 50);
-        assert_eq!(b.left(&c, 500), 10);
+        assert_eq!(b.left(&c, 0, t(0)), 100);
+        b.charge(&c, 10, t(10), 40);
+        b.charge(&c, 500, t(500), 50);
+        assert_eq!(b.left(&c, 500, t(500)), 10);
         // the first charge leaves the window 1,000 DAA after it was made, the second one later
-        assert_eq!(b.left(&c, 1_009), 10);
-        assert_eq!(b.left(&c, 1_010), 50);
-        assert_eq!(b.left(&c, 1_500), 100);
+        assert_eq!(b.left(&c, 1_009, t(1_009)), 10);
+        assert_eq!(b.left(&c, 1_010, t(1_010)), 50);
+        assert_eq!(b.left(&c, 1_500, t(1_500)), 100);
         // over-charging (a replacement without a verdict) saturates at 0
-        b.charge(&c, 1_500, 500);
-        assert_eq!(b.left(&c, 1_500), 0);
+        b.charge(&c, 1_500, t(1_500), 500);
+        assert_eq!(b.left(&c, 1_500, t(1_500)), 0);
         // charges of one DAA score are coalesced, old ones forgotten
-        b.charge(&c, 1_500, 1);
+        b.charge(&c, 1_500, t(1_500), 1);
         assert_eq!(b.spends.len(), 1);
         // A node behind the last charge still sees it, so a DAA score going backwards re-grants no
         // subsidy.
-        assert_eq!(b.left(&c, 100), 0);
+        assert_eq!(b.left(&c, 100, t(1_500)), 0);
+    }
+
+    /// One DAA score far ahead (a lying or glitching node) does not erase the window: the charges count for a full window
+    /// of local time whatever the DAA score says. Nor does a charge at that score count for longer than two windows of
+    /// local time once the chain is honest again. A file of an older version, without the local time, still loads.
+    #[test]
+    fn a_daa_score_far_ahead_does_not_erase_the_window() {
+        let c = cfg(100, 1_000); // 100 s of local time
+        let mut b = SubsidyBudget::default();
+        b.charge(&c, 10, 1, 40);
+        b.charge(&c, 500, 50, 50);
+        // the lie: every charge would be a window old, by the chain
+        let lie = 1_000_000_000_000;
+        assert_eq!(b.left(&c, lie, 51), 10, "the lie grants nothing");
+        b.charge(&c, lie, 51, 5);
+        assert_eq!(b.spends.len(), 3, "nothing forgotten");
+        // the honest score again: every charge counts
+        assert_eq!(b.left(&c, 510, 51), 5);
+        // a window later by the chain and the clock the honest charges left; the lie's counts until two windows of local
+        // time passed
+        assert_eq!(b.left(&c, 1_500, 150), 95);
+        assert_eq!(b.left(&c, 2_510, 251), 100);
+        b.charge(&c, 2_510, 251, 0);
+        assert!(b.spends.is_empty());
+        // within a window of local time a charge counts whatever the chain says, between one and two windows the chain
+        // decides, and past two the local clock alone ends it
+        b.charge(&c, 3_000, 300, 7);
+        assert_eq!(b.left(&c, 9_999_999, 310), 93);
+        assert_eq!(b.left(&c, 3_100, 450), 93, "the chain says it is within the window");
+        assert_eq!(b.left(&c, 4_000, 450), 100);
+        assert_eq!(b.left(&c, 3_100, 500), 100, "two windows of local time");
+        // a file of an older version: [daa, sompi], counted by the DAA score alone
+        let old: SubsidyBudget = serde_json::from_str(r#"{"spends":[[10,40],[500,50]]}"#).unwrap();
+        assert_eq!(old.left(&c, 1_009, 0), 10);
+        assert_eq!(old.left(&c, 1_010, 0), 50);
+        let text = serde_json::to_string(&b).unwrap();
+        assert_eq!(serde_json::from_str::<SubsidyBudget>(&text).unwrap(), b);
+        assert!(text.contains("[3000,7,300]"), "{text}");
     }
 
     #[test]

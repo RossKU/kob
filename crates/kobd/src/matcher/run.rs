@@ -661,6 +661,9 @@ pub struct Runner<N: NodeApi, S: BookSource> {
     /// each replacement. It is kept in `RunConfig::state_dir`, so a restart continues the window.
     /// Without a state directory it is in memory only.
     pub keeper_subsidy: SubsidyBudget,
+    /// The local clock of the subsidy window, unix seconds ([`SubsidyBudget`]). Tests set their
+    /// own.
+    pub subsidy_clock: fn() -> u64,
     /// Stuck kills and refunds replaced at a higher rate, for the metrics.
     pub keeper_replaced: u64,
     /// Replacements the node refused, for the metrics.
@@ -959,6 +962,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             keeper_subsidised: 0,
             keeper_subsidy_sompi: 0,
             keeper_subsidy,
+            subsidy_clock: utc_now,
             keeper_replaced: 0,
             keeper_replace_refused: 0,
         }
@@ -1021,7 +1025,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             let rate = want.max(t.fee_rate.saturating_add((t.fee_rate / 4).max(1))).min(ceiling);
             // The subsidy this replacement may have: what the job has, plus what the budget and the
             // step's cap still allow.
-            let more = if subsidised < kc.subsidy_max_jobs { self.keeper_subsidy.left(&kc, daa) } else { 0 };
+            let more = if subsidised < kc.subsidy_max_jobs { self.keeper_subsidy.left(&kc, daa, (self.subsidy_clock)()) } else { 0 };
             let jc = KeeperConfig { subsidy_max: kc.subsidy_max.min(j.subsidy.saturating_add(more)), ..kc.clone() };
             let job = if rate <= t.fee_rate {
                 Err(format!("already at the highest rate {ceiling}"))
@@ -1129,14 +1133,15 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
     /// The budget is kept in `RunConfig::state_dir`, so a restart continues the window.
     fn charge_subsidy(&mut self, daa: u64, sompi: u64) {
         let kc = &self.cfg.keeper;
-        let before = self.keeper_subsidy.left(kc, daa);
-        self.keeper_subsidy.charge(kc, daa, sompi);
+        let now = (self.subsidy_clock)();
+        let before = self.keeper_subsidy.left(kc, daa, now);
+        self.keeper_subsidy.charge(kc, daa, now, sompi);
         if let Some(d) = self.cfg.state_dir.as_deref().filter(|_| !self.cfg.dry_run) {
             if let Err(e) = self.keeper_subsidy.save(&d.join(SUBSIDY_FILE)) {
                 tracing::warn!(error = %e, "could not save the keepers' subsidy window (a restart would start it again)");
             }
         }
-        if before > 0 && self.keeper_subsidy.left(kc, daa) == 0 {
+        if before > 0 && self.keeper_subsidy.left(kc, daa, now) == 0 {
             tracing::warn!(
                 budget = kc.subsidy_budget,
                 window_daa = kc.subsidy_window_daa,
@@ -1765,7 +1770,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             // The subsidy this step may still hand out: the rolling budget left, and the step's cap
             // less the replacements'.
             let allowance = SubsidyAllowance {
-                sompi: self.keeper_subsidy.left(&self.cfg.keeper, daa),
+                sompi: self.keeper_subsidy.left(&self.cfg.keeper, daa, (self.subsidy_clock)()),
                 jobs: self.cfg.keeper.subsidy_max_jobs.saturating_sub(replaced_subsidised),
             };
             self.cfg.keeper.select = self.selector.tick(Role::Keep);
@@ -2443,7 +2448,7 @@ pub fn metrics_text<N: NodeApi, S: BookSource>(r: &Runner<N, S>, rep: &StepRepor
     g(
         "kob_keeper_subsidy_budget_left_sompi",
         "Sompi of keeper subsidy the rolling window still allows (--keeper-subsidy-budget-kas).",
-        r.keeper_subsidy.left(&r.cfg.keeper, rep.daa).to_string(),
+        r.keeper_subsidy.left(&r.cfg.keeper, rep.daa, (r.subsidy_clock)()).to_string(),
     );
     g("kob_keeper_replaced_total", "Stuck kills and refunds replaced at a higher fee rate.", r.keeper_replaced.to_string());
     g(

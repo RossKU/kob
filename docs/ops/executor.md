@@ -2944,7 +2944,9 @@ bucket of its urgency:
   transaction is submitted (also a submit or replacement without a verdict, which may still be accepted) and never given
   back for a transaction that is not accepted: the budget counts at least what the operator paid. The window is kept in
   `<data_dir>/keeper-subsidy.json` (written on every charge): a restart continues it, so restarts add no budget; a deleted
-  data directory starts it empty. A per-maker cap would not help
+  data directory starts it empty. Each charge also records the local time: it counts for at least one window of local
+  time (at 10 DAA a second) and at most two, and in between while the chain's DAA score says it is in the window, so a
+  node reporting a DAA score far ahead cannot erase the window. A per-maker cap would not help
   (maker keys are free). Using it up is logged once (`keeper subsidy budget of the window used up`); metric
   `kob_keeper_subsidy_budget_left_sompi`. At the defaults the subsidy costs the operator at most **1 KAS in any 24 hours** (raise it with
   `--keeper-subsidy-budget-kas`, or shorten the window with `--keeper-subsidy-window-daa`, e.g. 36,000 for 1 KAS an hour).
