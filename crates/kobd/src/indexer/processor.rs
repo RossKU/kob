@@ -1,29 +1,46 @@
-//! The order-book state machine: turns extracted transaction records into order, UTXO, token and event
-//! rows, for every protocol v3 order kind (both token families; quantities in token base units, prices per whole token).
-//! A placement under a template this build does not pin never becomes an order (its payload does not decode, or its output
-//! is not the P2SH of a pinned template: a reject). Arms, trailing ratchets and triggered fills read
-//! their trigger evidence from a plain resting `KobAsk` / `KobBid` filled in the same transaction (a pair conditional: two
-//! such fills, one of each token, or a resting `KobPair` of its pair); the event records which (`detail.evidence`).
+//! The order-book state machine of the indexer.
 //!
-//! Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): base token A in `token_cov_id`, quote token B in `quote_cov_id`, one
-//! custody row per custody of the state (each of its own token), strays of either token the order's own. A pair fill's event
-//! has no price (founder rule: prices come only from KAS-book fills); its pair fields are in `detail.pair` and its volume is a
-//! `pair_fills` row with the counterparty (`route` / `netting` / `inventory`, [`pair_counterparty`]).
+//! It turns extracted transaction records into order, UTXO, token and event rows, for every
+//! protocol v3 order kind in both token families. Quantities are in token base units, and prices
+//! are per whole token.
 //!
-//! Rules that keep it safe against hostile chain content:
-//! * malformed or lying transactions never abort a batch (a stalled follower would be a DoS); they
-//!   are recorded in `rejects` or ignored, and only database errors propagate;
-//! * an order exists only if `kob_protocol::payload::recover_orders` accepts its placement record: the
-//!   P2SH rebuilt from the pinned template and the state equals the output, the output is a fresh
-//!   covenant whose id is the consensus genesis id of a group that is this output alone,
-//!   and (ask side) the custody output is exactly
-//!   `amountLeft` base units owned by that id. The payload is never trusted;
-//! * later spends are classified from the input's own signature script: the revealed redeem script
-//!   hashed to the spent output (checked at extraction) and matched a pinned template, otherwise the
-//!   spend is recorded as `unknown` and the lineage is closed conservatively;
-//! * continuations are derived by splicing the mutable windows (`kob_protocol::state::mutable_windows`)
-//!   and checking the P2SH against the output: a state is stored only when it is proven;
-//! * everything mutable is stamped with the chain block that produced it (see `schema.sql`), so a
+//! A placement under a template this build does not pin never becomes an order. Either its payload
+//! does not decode, or its output is not the P2SH of a pinned template, and the placement is a
+//! reject.
+//!
+//! Arms, trailing ratchets and triggered fills read their trigger evidence from a plain resting
+//! `KobAsk` or `KobBid` filled in the same transaction. A pair conditional reads two such fills,
+//! one of each token, or a resting `KobPair` of its pair. The event records which one it used in
+//! `detail.evidence`.
+//!
+//! # Pair orders
+//!
+//! Pair orders are `KobPair`, `KobCondPair` and `KobIfdPair`. Base token A is in `token_cov_id`
+//! and quote token B in `quote_cov_id`. There is one custody row per custody of the state, each in
+//! its own token, and strays of either token are the order's own.
+//!
+//! A pair fill's event has no price, because prices come only from KAS-book fills. Its pair fields
+//! are in `detail.pair`. Its volume is a `pair_fills` row with the counterparty (`route`,
+//! `netting` or `inventory`, see [`pair_counterparty`]).
+//!
+//! # Hostile chain content
+//!
+//! These rules keep the processor safe against it:
+//! - Malformed or lying transactions never abort a batch, because a stalled follower would be a
+//!   DoS. They are recorded in `rejects` or ignored, and only database errors propagate.
+//! - An order exists only if `kob_protocol::payload::recover_orders` accepts its placement record.
+//!   The P2SH rebuilt from the pinned template and the state must equal the output. The output
+//!   must be a fresh covenant whose id is the consensus genesis id of a group that is this output
+//!   alone. On the ask side the custody output must be exactly `amountLeft` base units owned by
+//!   that id. The payload is never trusted.
+//! - Later spends are classified from the signature script of the input. Its revealed redeem
+//!   script hashes to the spent output, which is checked at extraction, and it must match a pinned
+//!   template. Otherwise the spend is recorded as `unknown` and the lineage is closed
+//!   conservatively.
+//! - Continuations are derived by splicing the mutable windows
+//!   (`kob_protocol::state::mutable_windows`) and checking the P2SH against the output. A state is
+//!   stored only when it is proven.
+//! - Everything mutable is stamped with the chain block that produced it, see `schema.sql`, so a
 //!   reorg is an exact revert.
 
 use super::db::{DbError, DbResult};
@@ -50,25 +67,39 @@ use std::sync::Arc;
 /// What a batch changed, for the change feed and metrics.
 #[derive(Debug, Default, Clone)]
 pub struct Delta {
+    /// Orders the batch changed.
     pub orders: BTreeSet<Hash32>,
+    /// Tokens whose books or holdings the batch changed.
     pub tokens: BTreeSet<Hash32>,
+    /// The fills of the batch.
     pub fills: Vec<FillNotice>,
+    /// Transactions of the batch that touched KOB state.
     pub relevant_txs: u64,
+    /// Orders created by the batch.
     pub new_orders: u64,
+    /// Transactions recorded as rejects.
     pub rejects: u64,
-    /// A placement announced a release newer than this build and the stored sightings changed (`super::release`).
+    /// A placement announced a release newer than this build and the stored sightings changed.
+    ///
+    /// See `super::release`.
     pub release_noticed: bool,
 }
 
+/// The rules and token allowlist that decide what the indexer stores and lists.
 pub struct Processor {
+    /// The token allowlist.
     pub tokens: Arc<TokenAllowlist>,
+    /// The listing rules.
     pub rules: ListingRules,
 }
 
 impl Processor {
-    /// A token the operator's own jobs (maintenance merges and sales) may touch: allowlisted, or, when the allowlist is not
-    /// required (open listing), traded by an order. Holdings are tracked for every token of a pinned program, so anyone can
-    /// send the operator a token; only these are worth the operator's fees.
+    /// Whether the operator's own jobs, such as maintenance merges and sales, may touch `token`.
+    ///
+    /// A token qualifies when it is allowlisted. When the allowlist is not required, as in open
+    /// listing, it also qualifies when an order trades it. Holdings are tracked for every token of
+    /// a pinned program, so anyone can send the operator a token, but only these tokens are worth
+    /// the operator's fees.
     pub fn operator_token(&self, conn: &Connection, token: &Hash32) -> DbResult<bool> {
         Ok(self.tokens.get(token).is_some()
             || ((!self.rules.require_allowlist || self.tokens.is_open()) && super::record::token_known(conn, token)?))
@@ -77,13 +108,16 @@ impl Processor {
 
 /// The chain block being applied.
 pub struct BlockCtx<'a> {
+    /// The header of the chain block.
     pub header: &'a ChainBlockHeader,
+    /// The sequence number of the block's row.
     pub seq: i64,
 }
 
 impl<'a> BlockCtx<'a> {
-    /// Stamp a row for the block (every applied block gets one; rows older than the reorg window are
-    /// pruned by the writer).
+    /// Stamps a row for the block.
+    ///
+    /// Every applied block gets one. The writer prunes the rows older than the reorg window.
     pub fn new(conn: &Connection, header: &'a ChainBlockHeader) -> DbResult<Self> {
         conn.prepare_cached("INSERT INTO blocks (hash, daa) VALUES (?1, ?2)")?
             .execute(params![&header.hash.0[..], header.daa_score as i64])?;
@@ -101,8 +135,10 @@ fn opt_hash_at(row: &Row<'_>, i: usize) -> rusqlite::Result<Option<Hash32>> {
     Ok(b.and_then(|b| Hash32::from_slice(&b)))
 }
 
-/// Runs protocol arithmetic that divides or multiplies chain-supplied values; a hostile order can
-/// make it overflow or divide by zero, which must never take the indexer down.
+/// Runs protocol arithmetic on chain-supplied values and returns `None` if it panics.
+///
+/// A hostile order can make the arithmetic overflow or divide by zero, which must never take the
+/// indexer down.
 pub fn guarded<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
@@ -115,7 +151,7 @@ struct OrderRow {
     token: Option<Hash32>,
     tif: Option<i64>,
     listed: bool,
-    /// Pair orders: the quote token B (`token` is the base token A).
+    /// For pair orders, the quote token B. `token` is the base token A.
     quote: Option<Hash32>,
 }
 
@@ -155,11 +191,12 @@ fn load_order_utxo(conn: &Connection, txid: &Hash32, idx: u32) -> DbResult<Optio
         .optional()?)
 }
 
+/// Whether the order with covenant id `cov` is stored.
 pub fn order_exists(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     super::record::order_known(conn, cov)
 }
 
-/// Whether the order already has a live custody row (a second one never becomes custody).
+/// Whether the order already has a live custody row. A second one never becomes custody.
 fn has_live_custody(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached(concat!(
@@ -170,7 +207,9 @@ fn has_live_custody(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
         .exists([&cov.0[..]])?)
 }
 
-/// Whether the order already has a live custody row of `token` (a pair order holds at most one custody per token).
+/// Whether the order already has a live custody row of `token`.
+///
+/// A pair order holds at most one custody per token.
 fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbResult<bool> {
     Ok(conn
         .prepare_cached(concat!(
@@ -183,10 +222,15 @@ fn has_live_custody_of(conn: &Connection, cov: &Hash32, token: &Hash32) -> DbRes
         .exists(params![&cov.0[..], &token.0[..]])?)
 }
 
-/// The extension commitments a pair order's custody of `token` may carry: the ones its custodies of that token carried so
-/// far (a rest keeps the extension commitment of the custody it continues), the one the state names for new outputs of that
-/// token (`KobIfdPair`'s `aExt` / `bExt`: a merge's new custody) and the one the order row stores (the placement record's
-/// first custody part, an exit's entry token).
+/// The extension commitments that a pair order's custody of `token` may carry.
+///
+/// They are:
+/// - The ones its custodies of that token carried so far. A rest keeps the extension commitment
+///   of the custody it continues.
+/// - The one the state names for new outputs of that token, as `aExt` or `bExt` of `KobIfdPair`
+///   for the new custody of a merge.
+/// - The one the order row stores, which is the first custody part of the placement record, or
+///   the entry token of an exit.
 fn pair_custody_exts(conn: &Connection, cov: &Hash32, token: &Hash32, state: &AnyState) -> DbResult<Vec<[u8; 32]>> {
     let mut v = vec![];
     let mut st = conn.prepare_cached(
@@ -221,9 +265,13 @@ fn pair_custody_exts(conn: &Connection, cov: &Hash32, token: &Hash32, state: &An
     Ok(v)
 }
 
-/// [`is_exact_custody`] of a pair order: the token output is exactly one of the custodies the order's CURRENT state
-/// requires ([`AnyState::custodies`]: that token, the exact amount), plain, covenant-owned by the order id, of that token's
-/// family and (KCC-20) with an extension commitment the order's custody of that token may carry ([`pair_custody_exts`]).
+/// [`is_exact_custody`] of a pair order.
+///
+/// The token output must be exactly one of the custodies that the CURRENT state of the order
+/// requires, with that token and the exact amount ([`AnyState::custodies`]). It must be plain,
+/// covenant-owned by the order id, and of the family of that token. A KCC-20 output must also carry
+/// an extension commitment that the order's custody of that token may carry
+/// ([`pair_custody_exts`]).
 fn is_exact_pair_custody(
     conn: &Connection,
     cov: &Hash32,
@@ -250,10 +298,13 @@ fn is_exact_pair_custody(
     Ok(true)
 }
 
-/// Whether a token output owned by order `cov` is exactly the custody the covenant rules require of the order's CURRENT
-/// state: the order's own token, exactly `amountLeft` base units, plain (borrowing disabled, covenant-owned
-/// by the order id) and carrying the extension commitment the order's custody carries. Orders that hold no tokens (bids,
-/// exits of a sell-first entry, an empty repeating entry) never have a custody.
+/// Whether a token output owned by order `cov` is exactly the custody the covenant requires.
+///
+/// The covenant rules apply to the CURRENT state of the order. The custody holds the order's own
+/// token, exactly `amountLeft` base units, and is plain: borrowing is disabled and it is
+/// covenant-owned by the order id. It carries the extension commitment that the order's custody
+/// carries. Orders that hold no tokens never have a custody. They are bids, exits of a sell-first
+/// entry and an empty repeating entry.
 fn is_exact_custody(
     conn: &Connection,
     cov: &Hash32,
@@ -288,7 +339,7 @@ fn is_exact_custody(
         return Ok(false);
     }
     let Some(state) = super::reads::tip_state(&contract, state) else { return Ok(false) };
-    // checked: a state that fails the numeric gate has no custody amount at all
+    // A state that fails the numeric gate has no custody amount at all.
     let Some(expect) = crate::sanity::custody_amount(&state).filter(|a| *a > 0) else { return Ok(false) };
     if amount != expect {
         return Ok(false);
@@ -297,11 +348,13 @@ fn is_exact_custody(
     if !(held.is_covenant_owned() && held.is_plain() && held.owner() == cov.0 && held.family() == state.family()) {
         return Ok(false);
     }
-    // the commitment the order's covenant requires of its custody (its state names it, `AnyState::custody_ext`)
+    // The commitment that the covenant of the order requires of its custody. The state names it,
+    // see `AnyState::custody_ext`.
     if state.family() == Family::Kcc20 && state.custody_ext(token.0).is_some_and(|e| e != held.extension()) {
         return Ok(false);
     }
-    // the extension commitment the order stores (an exit's is its entry's, see `apply_tx` step 3)
+    // The extension commitment the order stores. The one of an exit is its entry's, see step 3 of
+    // `apply_tx`.
     if let Some(w) = ext {
         if state.family() == Family::Kcc20 && held.extension()[..] != w[..] {
             return Ok(false);
@@ -310,7 +363,7 @@ fn is_exact_custody(
     Ok(true)
 }
 
-/// The extension commitment an order stores (`None`: unknown order, or none stored).
+/// The extension commitment an order stores, or `None` for an unknown order or none stored.
 fn order_ext_commit(conn: &Connection, cov: &Hash32) -> DbResult<Option<[u8; 32]>> {
     let e: Option<Vec<u8>> = conn
         .prepare_cached("SELECT e.h FROM orders o JOIN ids e ON e.id = o.ext_id WHERE o.covenant_id = ?1")?
@@ -321,44 +374,69 @@ fn order_ext_commit(conn: &Connection, cov: &Hash32) -> DbResult<Option<[u8; 32]
 
 /// Everything needed to insert a new order lineage.
 pub struct NewOrder {
+    /// The state of the order at its genesis output.
     pub state: AnyState,
+    /// The covenant id of the order.
     pub covenant_id: Hash32,
+    /// Id of the transaction that created the output.
     pub txid: Hash32,
+    /// Index of the output in that transaction.
     pub out_index: u32,
+    /// KAS value of the output.
     pub out_value: u64,
+    /// Script public key of the output.
     pub out_spk: Vec<u8>,
+    /// Sequence number of the chain block that holds the output.
     pub block_seq: i64,
+    /// DAA score of that chain block.
     pub daa: u64,
+    /// Timestamp of that chain block.
     pub ts: u64,
+    /// Position of the transaction in the chain block.
     pub tx_pos: i64,
+    /// The order this one continues, for an if-done exit.
     pub parent: Option<Hash32>,
-    /// Day orders: UTC unix seconds from the placement record.
+    /// For day orders, the deadline in UTC unix seconds from the placement record.
     pub deadline: Option<u64>,
-    /// Token custody UTXO of an ask-side order (placement record or verified import; a pair order: its first custody,
-    /// [`AnyState::custodies`]).
+    /// The token custody UTXO of an ask-side order, from the placement record or a verified import.
+    ///
+    /// For a pair order it is the first custody, see [`AnyState::custodies`].
     pub custody: Option<NewCustody>,
-    /// A sell-first `KobIfdPair`'s second custody (its B prefund).
+    /// The second custody of a sell-first `KobIfdPair`, its B prefund.
     pub prefund: Option<NewCustody>,
-    /// Extension commitment of the custody (ask-side kinds: the placement record's custody part, an if-done exit's entry).
+    /// The extension commitment of the custody.
+    ///
+    /// For ask-side kinds it is the custody part of the placement record, or the entry of an
+    /// if-done exit.
     pub ext_commit: Option<[u8; 32]>,
     /// `chain` or `import`.
     pub origin: &'static str,
-    /// Inherit the listing decision of the parent (if-done exits), else evaluate the rules.
+    /// The listing decision of the parent for an if-done exit. Otherwise the rules are evaluated.
     pub inherit_listed: Option<(bool, Option<String>)>,
 }
 
+/// A token custody UTXO of a new order.
 pub struct NewCustody {
+    /// Id of the transaction that created the output.
     pub txid: Hash32,
+    /// Index of the output in that transaction.
     pub index: u32,
+    /// KAS value of the output.
     pub value: u64,
+    /// Token amount in base units.
     pub amount: i64,
-    /// The custody's token (`None`: the order's token; a pair order names each custody's token, [`custody_part_tokens`]).
+    /// The token of the custody, or `None` for the token of the order.
+    ///
+    /// A pair order names the token of each custody, see [`custody_part_tokens`].
     pub token: Option<Hash32>,
 }
 
-/// The tokens of an order's custody parts in record order with their program template hashes: a KAS kind its one token, a
-/// pair order each custody of [`AnyState::custodies`] (S of a `KobPair` / `KobCondPair`; a buy-first entry's B escrow; a
-/// sell-first entry's A then its B prefund).
+/// The tokens of an order's custody parts in record order, with their program template hashes.
+///
+/// A KAS kind has its one token. A pair order has each custody of [`AnyState::custodies`]:
+/// - The S of a `KobPair` or `KobCondPair`.
+/// - The B escrow of a buy-first entry.
+/// - The A custody and then the B prefund of a sell-first entry.
 pub fn custody_part_tokens(s: &AnyState) -> Vec<(Hash32, Option<[u8; 32]>)> {
     match s.pair_tokens() {
         Some(t) => {
@@ -368,13 +446,16 @@ pub fn custody_part_tokens(s: &AnyState) -> Vec<(Hash32, Option<[u8; 32]>)> {
     }
 }
 
+/// Whether a placement became an order.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CreateOutcome {
+    /// The order was created.
     Created,
+    /// The placement was refused, with the reason.
     Rejected(String),
 }
 
-/// What an entry call did to the order (decoded from the revealed arguments).
+/// What an entry call did to the order, decoded from the revealed arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Act {
     Fill(i64),
@@ -400,8 +481,11 @@ fn classify(entry: &str, nb: Option<Nb>) -> Act {
     }
 }
 
-/// The `upd` flag of a pair conditional's `settle` (argument 11) or a pair entry's `fill` (argument 17): 1 = an update (arm or
-/// trail; nb = 0), 0 = a fill, merge or refund.
+/// The `upd` flag of a pair conditional's `settle` or a pair entry's `fill`.
+///
+/// It is argument 11 of `settle` and argument 17 of `fill`.
+///
+/// 1 is an update, an arm or a trail, with nb = 0. 0 is a fill, a merge or a refund.
 fn pair_upd(r: &Reveal) -> bool {
     match r.template {
         TemplateId::KobCondPair => r.int(11) == Some(1),
@@ -430,8 +514,9 @@ struct Spent {
 }
 
 impl Processor {
-    /// Live path: extract the relevant transactions of one chain block and apply them. Returns the
-    /// block's row and the records to append to the log.
+    /// Live path: extracts the relevant transactions of one chain block and applies them.
+    ///
+    /// It returns the records to append to the log.
     pub fn extract_and_apply_block(
         &self,
         conn: &Connection,
@@ -442,7 +527,9 @@ impl Processor {
         self.extract_and_apply_block_pre(conn, header, txs, None, delta)
     }
 
-    /// [`Processor::extract_and_apply_block`] with the batch's precomputed pure work ([`super::record::precompute`]).
+    /// [`Processor::extract_and_apply_block`] with the precomputed pure work of the batch.
+    ///
+    /// See [`super::record::precompute`].
     pub fn extract_and_apply_block_pre(
         &self,
         conn: &Connection,
@@ -458,10 +545,11 @@ impl Processor {
             let p = pre.and_then(|m| m.get(&tx.verbose_data.transaction_id));
             if let Some(mut rec) = ex.extract_with(tx, pos as u32, p)? {
                 self.apply_tx(conn, &ctx, &rec, p, delta)?;
-                // a candidate KCC-23 preparation that no genesis has bound is kept in the database only: the record log is permanent
-                // and any transaction can carry a 16 KiB `0x00{..}` payload. A transaction with nothing of KOB in it is not logged at
-                // all; one that is relevant to KOB for another reason (a token transfer, a stray send) is logged without the section
-                // (audit 2026-10-30 I2, I7)
+                // A candidate KCC-23 preparation that no genesis has bound is kept in the database
+                // only. The record log is permanent, and any transaction can carry a 16 KiB
+                // `0x00{..}` payload. A transaction with nothing of KOB in it is not logged at all.
+                // One that is relevant to KOB for another reason, such as a token transfer or a
+                // stray send, is logged without the section.
                 if rec.kcc23.as_ref().is_some_and(|d| !d.is_logged()) {
                     if rec.is_declaration_only() {
                         continue;
@@ -475,7 +563,7 @@ impl Processor {
         Ok(out)
     }
 
-    /// Replay path: apply the already extracted records of one logged chain block.
+    /// Replay path: applies the already extracted records of one logged chain block.
     pub fn apply_records(&self, conn: &Connection, header: &ChainBlockHeader, recs: &[TxRecord], delta: &mut Delta) -> DbResult<()> {
         let ctx = BlockCtx::new(conn, header)?;
         for rec in recs {
@@ -497,17 +585,21 @@ impl Processor {
         let seq = ctx.seq;
         let daa = ctx.header.daa_score;
 
-        // Trigger evidence the transaction carries: the quotes of the plain resting KobAsk / KobBid filled in it (a
-        // trailing `update` ratchets from one of them; `docs/spec/matcher.md` §4).
+        // Trigger evidence the transaction carries: the quotes of the plain resting `KobAsk` and
+        // `KobBid` orders filled in it. A trailing `update` ratchets from one of them, see
+        // `docs/spec/matcher.md` §4.
         let evidence_prices: Vec<i64> = rec.inputs.iter().filter_map(|i| evidence_touch(i.reveal.as_ref()?).map(|(_, p)| p)).collect();
 
-        // 1. spends of tracked outputs (and what the KOB inputs held: an executor's income, step 8)
+        // 1. Spends of tracked outputs, and what the KOB inputs held, for the income of an executor
+        // in step 8.
         let mut spent: Vec<Spent> = Vec::new();
         let mut kob_in: i128 = 0;
         let mut orphan = false;
-        // a covenant input that is neither an order nor an order's custody or stray: the sender's own tokens (step 8)
+        // A covenant input that is neither an order nor the custody or stray of an order. These are
+        // the sender's own tokens, see step 8.
         let mut foreign_cov_in = false;
-        // what every input held, from the outputs this store knows (the network fee of a record without the node's input values)
+        // What every input held, from the outputs this store knows. It gives the network fee of a
+        // record that lacks the input values of the node.
         let mut resolved_in: Option<i128> = Some(0);
         for (i, inp) in rec.inputs.iter().enumerate() {
             let known = match load_order_utxo(conn, &inp.txid, inp.index)? {
@@ -522,7 +614,7 @@ impl Processor {
                     None => orphan = true,
                 }
             } else {
-                // a custody or a stray of an order (its carrier)
+                // A custody or a stray of an order, and its carrier.
                 let carrier: Option<i64> = conn
                     .prepare_cached("SELECT value FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
                     .query_row(params![&inp.txid.0[..], inp.index], |r| r.get(0))
@@ -541,14 +633,16 @@ impl Processor {
         }
         super::outputs::record(conn, rec, seq, daa)?;
         let spent_covs: HashSet<Hash32> = spent.iter().map(|s| s.cov).collect();
-        // In-place amends the payload announces (AMEND records): each is verified against the continuation it names.
+        // The in-place amends and sweeps the payload announces, as AMEND and SWEEP records. Each is
+        // verified against the continuation it names.
         let amends: Vec<Record> = match payload::decode(&rec.payload) {
             Ok(Some(p)) => p.records.into_iter().filter(|r| matches!(r, Record::Amend { .. } | Record::Sweep { .. })).collect(),
             _ => vec![],
         };
 
-        // 2. outputs: continuations (a maker's cancel continues the id only as a verified in-place amend; any other
-        //    continuation of a cancel stays unproven: state unknown, listed nowhere)
+        // 2. Outputs: continuations. A maker's cancel continues the id only as a verified in-place
+        // amend or sweep. Any other continuation of a cancel stays unproven: its state is unknown
+        // and it is listed nowhere.
         let mut continued: HashSet<Hash32> = HashSet::new();
         for (j, out) in rec.outputs.iter().enumerate() {
             let Some((_, cov)) = out.cov else { continue };
@@ -576,7 +670,7 @@ impl Processor {
             }
         }
 
-        // 3. if-done exits: a fresh covenant output matching the exit the entry committed to
+        // 3. If-done exits: a fresh covenant output that matches the exit the entry committed to.
         let mut exits: HashMap<Hash32, Hash32> = HashMap::new();
         let mut created: HashSet<Hash32> = HashSet::new();
         for s in spent.iter().filter(|s| matches!(s.act, Act::Fill(_)) && model::exit_template(s.order.template).is_some()) {
@@ -585,10 +679,14 @@ impl Processor {
                 continue;
             };
             let out = &rec.outputs[j];
-            // The exit's token identity is its entry's: a buy-first entry pays the bought tokens to the exit's custody with its
-            // own `extensionCommitment` (the covenant writes it), a sell-first entry's `KobCondBid` exit carries it in its state.
-            // Stored like a placed order's, so every view of the exit (and the matcher's rebuilt custody) has it.
-            // A pair entry's exit holds n of A (buy-first) or B (sell-first) written with the entry's `aExt` / `bExt`.
+            // The token identity of the exit is the one of its entry. A buy-first entry pays the
+            // bought tokens to the custody of the exit with its own `extensionCommitment`, which
+            // the covenant writes. The `KobCondBid` exit of a sell-first entry carries it in its
+            // state. A pair entry's exit holds n of A when buy-first, or n of B when sell-first,
+            // written with the `aExt` or `bExt` of the entry.
+            //
+            // It is stored like the one of a placed order, so every view of the exit has it,
+            // including the custody the matcher rebuilds.
             let ext = match s.before.as_ref() {
                 Some(AnyState::KobIfdPair(e)) => Some(if e.is_buy_first() { e.a_ext } else { e.b_ext }),
                 b => match b.and_then(model::extension_of) {
@@ -633,16 +731,23 @@ impl Processor {
             self.genesis_orders(conn, ctx, rec, pre, delta, &mut created)?;
         }
 
-        // 5. token outputs owned by orders: the order's own exact custody, or a stray.
+        // 5. Token outputs owned by orders: the exact custody of the order, or a stray.
         //
-        // Nothing on chain says which output of a transaction is the continuation custody: the ask covenants pin ONE token
-        // output (`tokOut`) and only guard token INPUTS, so a taker can add further outputs owned by the order id. An output
-        // is therefore the custody only if it is exactly what the covenant rules require of the order's state after this
-        // transaction (`amountLeft` base units of the order's own token, plain, with the order's extension commitment);
-        // the first such output is the custody, every other same-owner output is a stray. A pair order holds one custody per
-        // token (`AnyState::custodies`: a sell-first `KobIfdPair` its A and its B prefund); any other output of either pair
-        // token owned by it is its own stray (not foreign). Kinds that hold KAS (bids, exits of
-        // a sell-first entry, an empty repeating entry) have no custody: every token owned by them is a stray.
+        // Nothing on chain says which output of a transaction is the continuation custody. The ask
+        // covenants pin ONE token output (`tokOut`) and only guard token INPUTS, so a taker can add
+        // further outputs owned by the order id.
+        //
+        // An output is therefore the custody only if it is exactly what the covenant rules require
+        // of the state of the order after this transaction. That is `amountLeft` base units of the
+        // token of the order, plain, with the extension commitment of the order. The first such
+        // output is the custody, and every other output with the same owner is a stray.
+        //
+        // A pair order holds one custody per token, see `AnyState::custodies`. A sell-first
+        // `KobIfdPair` holds its A and its B prefund. Any other output of either pair token that it
+        // owns is its own stray, not a foreign one.
+        //
+        // Kinds that hold KAS have no custody, so every token they own is a stray. They are bids,
+        // exits of a sell-first entry and an empty repeating entry.
         let mut roles: HashMap<u32, String> = HashMap::new();
         for t in &rec.tok_outs {
             let Some(out) = rec.outputs.get(t.out as usize) else { continue };
@@ -663,7 +768,8 @@ impl Processor {
                 ",?5,?6,?7,?8,?9)"
             ))?
             .execute(params![&txid.0[..], t.out, intern(conn, &token.0)?, &t.owner.0[..], t.amount, out.value as i64, role, seq, daa as i64])?;
-            // a placement record may already have stored this very output as the custody: keep the stored role
+            // A placement record may already have stored this very output as the custody. Keep the
+            // stored role.
             let stored: String = conn
                 .prepare_cached("SELECT role FROM token_utxos WHERE txid = ?1 AND idx = ?2")?
                 .query_row(params![&txid.0[..], t.out], |r| r.get(0))?;
@@ -671,7 +777,7 @@ impl Processor {
             delta.tokens.insert(token);
             delta.orders.insert(t.owner);
         }
-        // 5b. holdings: every proven token output of a pinned program, whoever owns it
+        // 5b. Holdings: every proven token output of a pinned program, whoever owns it.
         for h in &rec.holds {
             let Some(out) = rec.outputs.get(h.out as usize) else { continue };
             let Some((_, token)) = out.cov else { continue };
@@ -680,7 +786,7 @@ impl Processor {
             delta.tokens.insert(token);
         }
 
-        // 6. events (an in-place amend first takes the order's new terms)
+        // 6. Events. An in-place amend first takes the new terms of the order.
         for s in &spent {
             if let (Some(deadline), Some(after)) = (s.amend, &s.after) {
                 let carrier = rec.outputs.iter().find(|o| o.cov.is_some_and(|(_, c)| c == s.cov)).map(|o| o.value).unwrap_or(0);
@@ -690,21 +796,28 @@ impl Processor {
             self.record_spend_events(conn, ctx, rec, s, closes, &exits, &spent, delta)?;
         }
 
-        // 8. an executor's transaction: what it left to its sender and what it paid the miners (`executor_txs`, `super::income`)
+        // 8. An executor's transaction: what it left to its sender and what it paid the miners.
+        // See `executor_txs` and `super::income`.
         if !spent.is_empty() {
             self.executor_tx(conn, ctx, rec, &spent, kob_in, (orphan, foreign_cov_in), &continued, &created, resolved_in)?;
         }
 
-        // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis (`super::kcc23`)
+        // 7. KCC-23: a candidate preparation, or the verified launch proofs of a genesis. See
+        // `super::kcc23`.
         if let Some(d) = &rec.kcc23 {
             super::kcc23::apply(conn, seq, daa, &txid, d)?;
         }
         Ok(())
     }
 
-    /// The proven holding row of a custody the node verified at the script `TokenState::custody(amount, order id, ext)` produces
-    /// (imports, gap adoptions): the order views then carry the custody's token state, as for a custody seen on chain. Nothing
-    /// is stored without the extension commitment or for a token program this build does not pin.
+    /// Stores the proven holding row of a custody that the node verified.
+    ///
+    /// Imports and gap adoptions use it.
+    ///
+    /// The node verified the custody at the script that
+    /// `TokenState::custody(amount, order id, ext)` produces. The order views then carry the token
+    /// state of the custody, as for a custody seen on chain. Nothing is stored without the
+    /// extension commitment, or for a token program this build does not pin.
     #[allow(clippy::too_many_arguments)]
     fn custody_holding(
         &self,
@@ -716,7 +829,8 @@ impl Processor {
         seq: i64,
         daa: u64,
     ) -> DbResult<()> {
-        // the custody's token and program (a pair order names each custody's token; its family is that token's)
+        // The token and program of the custody. A pair order names the token of each custody, and
+        // its family is the family of that token.
         let (token, tpl_hash) = match c.token {
             Some(t) => (t, custody_part_tokens(st).into_iter().find(|x| x.0 == t).and_then(|x| x.1)),
             None => (Hash32(st.token_cov_id()), st.token_tpl_hash()),
@@ -728,7 +842,7 @@ impl Processor {
             return Ok(());
         };
         let ext = match (tt.family, ext) {
-            // a KRON token has no extension commitment
+            // A KRON token has no extension commitment.
             (Family::Kron, _) => [0; 32],
             (_, Some(e)) => e,
             _ => return Ok(()),
@@ -738,7 +852,7 @@ impl Processor {
         self.insert_holding(conn, &c.txid, c.index, &token, tt.id, &ts, c.value, "custody", seq, daa)
     }
 
-    /// Store a token output whose state was proven against its script public key.
+    /// Stores a token output whose state was proven against its script public key.
     #[allow(clippy::too_many_arguments)]
     fn insert_holding(
         &self,
@@ -757,8 +871,8 @@ impl Processor {
             kob_protocol::state::TokenState::Kcc20(k) => k.owner_scheme,
             kob_protocol::state::TokenState::Kron(k) => k.id_type,
         };
-        // the first holding under a program proves it: the orders already listed under another program for the covenant id were
-        // placed before the proof existed (audit 2026-10-30 V4)
+        // The first holding under a program proves it. The orders already listed under another
+        // program for the covenant id were placed before the proof existed.
         let token_id = intern(conn, &token.0)?;
         let proven_before = conn
             .prepare_cached("SELECT 1 FROM holding_programs WHERE token_id = ?1 AND program = ?2")?
@@ -790,15 +904,24 @@ impl Processor {
         Ok(())
     }
 
-    /// Most orders one proof re-lists (oldest first); the rest stay out of the books until they are amended.
+    /// Most orders one proof re-lists, oldest first. The rest stay out of the books until they are
+    /// amended.
     const RELIST_MAX: i64 = 2_000;
 
-    /// A program the chain proves for the token for the first time: the orders that pin it and were refused as `token_program_conflict`
-    /// while another program was the only one proved (the token has two programs, a KRON token upgraded from one to the other, say) get
-    /// the listing rules again, as of their placement. Without it an honest order of the second program stayed out of the books for good,
-    /// even though its own custody is the proof (audit 2026-10-30 V7: V2 / V4 regression). The rows they had are kept in `order_amends`
-    /// stamped with the block, so a reorg gives them back exactly ([`revert_block`]). The carrier the rules measure is the genesis output's
-    /// KAS (`orders.genesis_value`, schema 12: the archive pruning deletes the spent UTXO row; the row itself where an order lacks it).
+    /// Relists the orders refused for a program that the chain newly proves for the token.
+    ///
+    /// These orders pin the newly proven program. They were refused as `token_program_conflict`
+    /// while another program was the only one proved. That happens when a token has two programs,
+    /// for example a KRON token upgraded from one to the other. They get the listing rules again,
+    /// as of their placement. Without this, an honest order of the second program would stay out of
+    /// the books for good, even though its own custody is the proof.
+    ///
+    /// The rows they had are kept in `order_amends`, stamped with the block, so a reorg gives them
+    /// back exactly ([`revert_block`]).
+    ///
+    /// The carrier the rules measure is the KAS of the genesis output, `orders.genesis_value`. The
+    /// archive pruning deletes the spent UTXO row, so the value of that row is used only where an
+    /// order has no `genesis_value`.
     fn relist_proven(&self, conn: &Connection, token: &Hash32, program: TemplateId, seq: i64) -> DbResult<()> {
         let Some(tpl) = kob_protocol::artifacts::try_token_template(program).map(|t| t.hash.to_vec()) else { return Ok(()) };
         type Row = (Vec<u8>, String, Vec<u8>, i64, i64);
@@ -832,20 +955,24 @@ impl Processor {
         Ok(())
     }
 
-    /// Takes out of the books the listed orders of `token` that pin a program its holdings do not prove (they were listed while nothing
-    /// proved a program; a new one is refused as `token_program_conflict`, [`Processor::listing`]). The rows they had are kept in
-    /// `order_amends` stamped with the block, so a reorg gives them back exactly ([`revert_block`]).
+    /// Unlists the orders of `token` that pin a program its holdings do not prove.
+    ///
+    /// These orders were listed while nothing proved a program. A new order is refused as
+    /// `token_program_conflict`, see [`Processor::listing`]. The rows they had are kept in
+    /// `order_amends`, stamped with the block, so a reorg gives them back exactly
+    /// ([`revert_block`]).
     fn unlist_conflicting(&self, conn: &Connection, token: &Hash32, seq: i64) -> DbResult<()> {
         let proven = proven_hashes(conn, Some(*token))?;
         if proven.is_empty() {
             return Ok(());
         }
-        // the distinct programs the token's listed orders pin: one index seek each (`orders_listed_tokens`)
+        // The distinct programs that the listed orders of the token pin, with one index seek each.
+        // See `orders_listed_tokens`.
         let mut next = conn.prepare_cached(
             "SELECT MIN(token_tpl_id) FROM orders INDEXED BY orders_listed_tokens              WHERE listed = 1 AND token_id = (SELECT id FROM ids WHERE h = ?1) AND token_tpl_id IS NOT NULL AND token_tpl_id > ?2",
         )?;
-        // the programs are rows of ids in the order they were first seen: they are handled in the order of their hashes, as they always were
-        // (the amend rows of one block get their ids in that order)
+        // The programs are rows of `ids` in the order they were first seen. They are handled in the
+        // order of their hashes, so the amend rows of one block get their ids in that order.
         let mut tpls: Vec<(Vec<u8>, i64)> = Vec::new();
         let mut after = 0i64;
         while let Some(tpl_id) = next.query_row(params![&token.0[..], after], |r| r.get::<_, Option<i64>>(0))? {
@@ -880,7 +1007,7 @@ impl Processor {
     }
 
     // -----------------------------------------------------------------------------------------
-    // placement records
+    // Placement records.
 
     fn genesis_orders(
         &self,
@@ -900,7 +1027,8 @@ impl Processor {
             }
             Err(e) => return self.record_reject(conn, seq, &rec.txid, &format!("payload:{e}"), delta),
         };
-        // the release the placement announces, when it is newer than this build (the update notice, `super::release`)
+        // The release that the placement announces, when it is newer than this build. It drives the
+        // update notice, see `super::release`.
         let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
         for r in &p.records {
             match r {
@@ -933,7 +1061,8 @@ impl Processor {
                 }
                 let Some(out) = rec.outputs.get(ro.output as usize) else { continue };
                 let cov = Hash32(ro.covenant_id);
-                // the custody parts and their tokens (a pair order: `custodies()` order, each in its own token)
+                // The custody parts and their tokens. A pair order has them in the order of
+                // `custodies()`, each in its own token.
                 let part_tokens = custody_part_tokens(&ro.order);
                 let parts: Vec<(&payload::RecoveredCustody, Hash32, Option<[u8; 32]>)> =
                     ro.custody.iter().chain(ro.prefund.iter()).zip(part_tokens.iter()).map(|(c, (t, h))| (c, *t, *h)).collect();
@@ -977,7 +1106,8 @@ impl Processor {
                         if let Some(v) = newer_release {
                             delta.release_noticed |= super::release::note(conn, v, maker, rec.txid, ctx.header.daa_score)?;
                         }
-                        // the placement record reveals the custody states: prove each against its output before storing it
+                        // The placement record reveals the custody states. Prove each against its
+                        // output before storing it.
                         for (c, token, tpl_hash) in &parts {
                             let token = *token;
                             let tpl = tpl_hash.and_then(|h| kob_protocol::artifacts::token_template_by_hash(&h));
@@ -1007,7 +1137,9 @@ impl Processor {
         Ok(())
     }
 
-    /// Insert an order lineage. Shared by chain processing, if-done exits and recovery imports.
+    /// Inserts an order lineage.
+    ///
+    /// Chain processing, if-done exits and recovery imports share it.
     pub fn create_order(&self, conn: &Connection, delta: &mut Delta, n: NewOrder) -> DbResult<CreateOutcome> {
         let id = n.state.template_id();
         if !model::is_order(id) {
@@ -1030,8 +1162,9 @@ impl Processor {
         };
         let price = if in_book { terms.price } else { None };
         let initial_amount = n.state.amount_left();
-        // an order whose numbers the covenant would refuse or the matcher cannot survive is never listed (exits
-        // included: they used to inherit the parent's decision without a look at their own numbers)
+        // An order whose numbers the covenant would refuse or the matcher cannot survive is never
+        // listed. Exits are included: they take the decision of the parent only if their own
+        // numbers pass.
         let sane = crate::sanity::check(&n.state);
         let pair = n.state.pair_tokens();
         let quote = pair.map(|t| Hash32(t.b.cov_id));
@@ -1040,8 +1173,9 @@ impl Processor {
             Some((l, r)) => (l, r),
             None => self.listing(conn, &n.state, ext, n.daa, n.out_value)?,
         };
-        // the maker, token, program, extension, template and quote token are rows of `ids` (the few the orders name come first, migrate assigns
-        // them the first ids; a new one is added here)
+        // The maker, token, program, extension, template and quote token are rows of `ids`. The few
+        // that the orders name come first, because the migration assigns them the first ids. A new
+        // one is added here.
         for h in [&template(id).hash[..], &n.state.maker()[..], &token.0[..]] {
             intern(conn, h)?;
         }
@@ -1095,8 +1229,9 @@ impl Processor {
                 ",?5,?6,'custody',?7,?8)"
             ))?
             .execute(params![&c.txid.0[..], c.index, intern(conn, &ctok.0)?, &n.covenant_id.0[..], c.amount, c.value as i64, n.block_seq, n.daa as i64])?;
-            // a chain placement proves the custody's state from its transfer leader (step 5b); an import verified the custody
-            // script the state below produces, so it is proven the same way
+            // A chain placement proves the state of the custody from its transfer leader, in step
+            // 5b. An import verified the custody script that the state below produces, so it is
+            // proven the same way.
             if n.origin == "import" {
                 self.custody_holding(conn, &n.covenant_id, &n.state, c, ext, n.block_seq, n.daa)?;
             }
@@ -1126,7 +1261,7 @@ impl Processor {
             })
             .to_string()
         ])?;
-        // token registry event: first sighting of this (token, program, extension) identity
+        // Token registry event: the first sighting of this (token, program, extension) identity.
         for (tok, tpl, e) in placement_identities(&n.state, token, tpl_hash, ext) {
             let seen = conn
                 .prepare_cached("SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS ?2 AND ext_commit IS ?3")?
@@ -1141,14 +1276,17 @@ impl Processor {
         refresh_order_state(conn, &n.covenant_id)?;
         delta.orders.insert(n.covenant_id);
         delta.tokens.insert(token);
-        // a pair order is in the pair book of both its tokens: `book:<B>` subscribers refetch too
+        // A pair order is in the pair book of both its tokens, so `book:<B>` subscribers refetch
+        // too.
         delta.tokens.extend(quote);
         delta.new_orders += 1;
         Ok(CreateOutcome::Created)
     }
 
-    /// The listing rules (`tokens::ListingRules`) on an order's state as of `daa` (its genesis, or an in-place amend's
-    /// block) with `carrier` on its output.
+    /// Applies the listing rules (`tokens::ListingRules`) to the state of an order.
+    ///
+    /// `daa` is the DAA score of its genesis, or of the block of an in-place amend. `carrier` is
+    /// the KAS on its output.
     fn listing(
         &self,
         conn: &Connection,
@@ -1157,8 +1295,9 @@ impl Processor {
         daa: u64,
         carrier: u64,
     ) -> DbResult<(bool, Option<String>)> {
-        // a pair order needs both tokens acceptable: A as the order's token, B as any traded token (reasons `quote_...`);
-        // neither is measured in KAS (a pair order has no KAS quote)
+        // A pair order needs both tokens acceptable: A as the token of the order, and B as any
+        // traded token, with reasons `quote_...`. Neither is measured in KAS, because a pair order
+        // has no KAS quote.
         if let Some((mut ia, mut ib)) = pair_listing(state, daa, carrier) {
             ia.proven_tpls = proven_hashes(conn, ia.token_cov_id)?;
             ib.proven_tpls = proven_hashes(conn, ib.token_cov_id)?;
@@ -1172,14 +1311,16 @@ impl Processor {
             });
         }
         let terms = model::terms_of(state);
-        // a conditional order is measured at its take-profit leg, or at its stop when it has none (`tpPrice` 0: a stop-market,
-        // stop-limit or trailing stop); measured at the absent take-profit every such stop was worth 0 and never listed
+        // A conditional order is measured at its take-profit leg, or at its stop when it has none.
+        // It has none when `tpPrice` is 0, as for a stop-market, stop-limit or trailing stop. Such
+        // a stop would be worth 0 at the absent take-profit and would never list.
         let listing_price = match state {
             AnyState::KobCondAsk(c) | AnyState::KobCondAskKron(c) => Some(if c.tp_price > 0 { c.tp_price } else { c.stop_price }),
             AnyState::KobCondBid(c) | AnyState::KobCondBidKron(c) => Some(if c.tp_price > 0 { c.tp_price } else { c.stop_price }),
             _ => terms.price,
         };
-        // the scale an open-list token's decimals fix (its KCC-23 declaration, else its program's convention), see `ListingInput`
+        // The scale that the decimals of an open-list token fix. It comes from its KCC-23
+        // declaration, else from the convention of its program. See `ListingInput`.
         let standard_scale = if self.tokens.get(&Hash32(state.token_cov_id())).is_none() {
             super::reads::open_standard_scale(conn, &Hash32(state.token_cov_id()), state.token_tpl_hash().map(Hash32).as_ref())?
         } else {
@@ -1195,7 +1336,7 @@ impl Processor {
                 family: Some(state.family()),
                 scale: Some(terms.scale).filter(|s| *s > 0),
                 min_fill: Some(terms.min_fill),
-                // a bid has no amount: its quantity (and value) is its escrow, the carrier
+                // A bid has no amount. Its quantity and value are its escrow, the carrier.
                 amount: state.amount_left(),
                 price: listing_price,
                 tip: Some(terms.tip),
@@ -1212,12 +1353,19 @@ impl Processor {
         })
     }
 
-    /// The state an in-place amend (AMEND record) continues a maker-cancelled order with at output `j`, and the record's
-    /// deadline, if a record names exactly this continuation and it verifies: [`payload::verify_amend`] against the
-    /// revealed previous state (template, the maker's `cancel`, terms that keep the custody exact, the output the P2SH of
-    /// the new state and the only output carrying the id), a state the numeric gate accepts, and the order's custody still
-    /// live after the transaction (an amend never moves it). A record that fails is a reject and the continuation stays
-    /// unproven (state unknown: listed nowhere).
+    /// The state that an in-place amend continues a maker-cancelled order with at output `j`.
+    ///
+    /// The result also carries the deadline of the amend.
+    ///
+    /// An AMEND record must name exactly this continuation, and it must verify:
+    /// - [`payload::verify_amend`] accepts it against the revealed previous state. That covers the
+    ///   template, the maker's `cancel`, terms that keep the custody exact, the output being the
+    ///   P2SH of the new state, and its being the only output that carries the id.
+    /// - The numeric gate accepts the state.
+    /// - The custody of the order is still live after the transaction. An amend never moves it.
+    ///
+    /// A record that fails is a reject, and the continuation stays unproven: its state is unknown
+    /// and it is listed nowhere.
     #[allow(clippy::too_many_arguments)]
     fn amend_of(
         &self,
@@ -1236,7 +1384,8 @@ impl Processor {
             self.record_reject(conn, seq, &rec.txid, "amend:previous_state_unknown", delta)?;
             return Ok(None);
         };
-        // the spent script is proven (its redeem script hashed to the spent output at extraction): the input is its P2SH
+        // The spent script is proven, because its redeem script hashed to the spent output at
+        // extraction. The input is its P2SH.
         let mut tx = tx_json(rec, rec.payload.clone());
         if let Some(i) = tx.inputs.get_mut(s.input_idx) {
             i.utxo.script_public_key = kob_protocol::tx::spk_to_string(&before.spk());
@@ -1252,7 +1401,8 @@ impl Processor {
             self.record_reject(conn, seq, &rec.txid, &format!("amend:{why}"), delta)?;
             return Ok(None);
         }
-        // an ask's custody stays where it is (a bid owns none: its quantity is the continuation's escrow)
+        // The custody of an ask stays where it is. A bid owns none: its quantity is the escrow of
+        // the continuation.
         let holds_custody = matches!(a.order, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
         if holds_custody && !has_live_custody(conn, &s.cov)? {
             self.record_reject(conn, seq, &rec.txid, "amend:custody_not_live", delta)?;
@@ -1261,10 +1411,13 @@ impl Processor {
         Ok(Some((a.order, a.deadline)))
     }
 
-    /// The state a sweep in place (SWEEP record) continues a maker-cancelled order with at output `j`: the SAME state, if a
-    /// record names exactly this continuation and [`payload::verify_sweep`] accepts it against the revealed previous state,
-    /// and the order's custody (token-holding kinds with an amount left) is still live after the transaction (a sweep never
-    /// moves it). A record that fails is a reject and the continuation stays unproven.
+    /// The state that a sweep in place continues a maker-cancelled order with at output `j`.
+    ///
+    /// It is the SAME state. A SWEEP record must name exactly this continuation, and
+    /// [`payload::verify_sweep`] must accept it against the revealed previous state. The custody of
+    /// the order, for token-holding kinds with an amount left, must still be live after the
+    /// transaction. A sweep never moves it. A record that fails is a reject, and the continuation
+    /// stays unproven.
     #[allow(clippy::too_many_arguments)]
     fn sweep_of(
         &self,
@@ -1298,9 +1451,12 @@ impl Processor {
         Ok(Some(before.clone()))
     }
 
-    /// Takes an in-place amend's terms into the order row (price, tip, minimum fill, time in force, expiry, activation, deadline) and
-    /// re-runs the listing rules on them (as of the amend's block, with the continuation's carrier). The replaced values
-    /// are kept in `order_amends`, stamped with the block, so a reorg restores them exactly ([`revert_block`]).
+    /// Takes the terms of an in-place amend into the order row and re-lists it.
+    ///
+    /// The terms are the price, tip, minimum fill, time in force, expiry, activation and deadline.
+    /// The listing rules run as of the block of the amend, with the carrier of the continuation.
+    /// The replaced values are kept in `order_amends`, stamped with the block, so a reorg restores
+    /// them exactly ([`revert_block`]).
     fn apply_amend(
         &self,
         conn: &Connection,
@@ -1315,7 +1471,8 @@ impl Processor {
              SELECT id, ?2, price, tip, tif, expiry_daa, active_from, deadline, listed, unlisted_reason, budget_rate, reserve, min_fill FROM orders WHERE covenant_id = ?1",
         )?
         .execute(params![&cov.0[..], ctx.seq])?;
-        // a bid's budget rate and reserve follow its new terms (its remaining amount is the buying power of its escrow)
+        // The budget rate and reserve of a bid follow its new terms. Its remaining amount is the
+        // buying power of its escrow.
         if let AnyState::KobBid(b) | AnyState::KobBidKron(b) = state {
             conn.prepare_cached("UPDATE orders SET budget_rate = ?2, reserve = ?3 WHERE covenant_id = ?1")?.execute(params![
                 &cov.0[..],
@@ -1361,8 +1518,9 @@ impl Processor {
         daa: u64,
     ) -> DbResult<()> {
         conn.prepare_cached(
-            // the state is stored as its difference from the order's genesis state ([`super::packed`]); the order row is written
-            // before its first UTXO (an output of a covenant with no order row is not stored: no read could see it)
+            // The state is stored as its difference from the genesis state of the order, see
+            // [`super::packed`]. The order row is written before its first UTXO. An output of a
+            // covenant with no order row is not stored, because no read could see it.
             concat!(
                 "INSERT OR REPLACE INTO order_utxos (txid, idx, order_id, value, spk, state, created_block, created_daa) \
                  SELECT ?1, ?2, g.id, ?4, ?5, kob_pack(?6, ",
@@ -1377,7 +1535,7 @@ impl Processor {
     }
 
     // -----------------------------------------------------------------------------------------
-    // spends
+    // Spends.
 
     fn spend_order(&self, conn: &Connection, seq: i64, rec: &TxRecord, input_idx: usize, u: UtxoRow) -> DbResult<Option<Spent>> {
         let value = u.value;
@@ -1387,7 +1545,8 @@ impl Processor {
         let entry = reveal.as_ref().and_then(|r| r.entry());
         let act = match (&reveal, entry) {
             (Some(r), Some(e)) => match classify(e, r.nb()) {
-                // a pair conditional's / pair stop entry's update is `settle` / `fill` with nb = 0 and upd = 1
+                // The update of a pair conditional or a pair stop entry is `settle` or `fill`, with
+                // nb = 0 and upd = 1.
                 Act::Refund if pair_upd(r) => Act::Update,
                 a => a,
             },
@@ -1416,18 +1575,19 @@ impl Processor {
     }
 
     // -----------------------------------------------------------------------------------------
-    // derivations (each result is proven against the output's script public key)
+    // Derivations. Each result is proven against the script public key of the output.
 
-    /// The state of the continuation output, if it can be proven: the spent script with its mutable
-    /// windows (`amountLeft`, `armed`, `stopPrice`, `rptAmount`) replaced by values the entry call could
-    /// have written. Merges, fills, arms and trailing steps all fall in the candidate sets; the
-    /// P2SH of the spliced script decides.
+    /// The state of the continuation output, if it can be proven.
+    ///
+    /// It is the spent script with its mutable windows (`amountLeft`, `armed`, `stopPrice`,
+    /// `rptAmount`) replaced by values that the entry call could have written. Merges, fills, arms
+    /// and trailing steps all fall in the candidate sets. The P2SH of the spliced script decides.
     fn derive_after(&self, s: &Spent, out_spk: &[u8], evidence_prices: &[i64], rec: &TxRecord) -> Option<AnyState> {
         let before = s.before.as_ref()?;
         let id = before.template_id();
         let t = template(id);
         let redeem = before.redeem();
-        // unchanged script (Bid fills, IOC-less updates that changed nothing)
+        // Unchanged script, as for bid fills and updates that changed nothing.
         if p2sh_spk(&redeem) == out_spk {
             return Some(before.clone());
         }
@@ -1437,7 +1597,8 @@ impl Processor {
         }
         let cur = model::mutable_of(before);
         let is_update = s.act == Act::Update;
-        // checked: the fill / merge amount comes from the chain (a spend the covenant accepted keeps it in range)
+        // The fill or merge amount comes from the chain. A spend the covenant accepted keeps it in
+        // range, and the arithmetic is checked anyway.
         let mut amounts: Vec<Option<i64>> = vec![cur.amount];
         let mut rpt: Vec<Option<i64>> = vec![cur.rpt];
         match s.act {
@@ -1455,7 +1616,8 @@ impl Processor {
         let mut stops: Vec<Option<i64>> = vec![cur.stop];
         if let (true, Some(stop)) = (is_update, cur.stop) {
             let (step, ks) = match (before, s.reveal.as_ref()) {
-                // a pair conditional trails by the k its pair evidence justifies (`CondPairState::trail_k`)
+                // A pair conditional trails by the k that its pair evidence justifies, see
+                // `CondPairState::trail_k`.
                 (AnyState::KobCondPair(c), Some(r)) => {
                     let mut ks: Vec<i64> =
                         pair_evidence_of(rec, r, PAIR_EV_COND).and_then(|(ev, _)| c.trail_k(ev)).into_iter().collect();
@@ -1470,29 +1632,32 @@ impl Processor {
                 }
             }
         }
-        // a pair order's exact custody (`custody`): what each entry call can leave in it (the P2SH decides)
+        // The exact custody of a pair order, `custody`: what each entry call can leave in it. The
+        // P2SH decides.
         let mut custs: Vec<Option<i64>> = vec![cur.custody];
         if let Some(c) = cur.custody {
             let arg = |i: usize| s.reveal.as_ref().and_then(|r| r.int(i));
             match (before, s.act) {
                 (AnyState::KobPair(_) | AnyState::KobCondPair(_), Act::Fill(n)) => {
-                    // sOut (argument 4) released; an ask releases n
+                    // `sOut` (argument 4) is released. An ask releases n.
                     custs.extend([arg(4), Some(n)].into_iter().flatten().map(|d| c.checked_sub(d)));
                     if let AnyState::KobCondPair(x) = before {
-                        // a re-arming BID exit keeps custody - proceeds - back while it continues
+                        // A re-arming BID exit keeps custody - proceeds - back while it continues.
                         let keep = guarded(|| c.checked_sub(x.rpt_proceeds(n)?)?.checked_sub(x.rpt_back(n)?)).flatten();
                         custs.push(keep);
                     }
                     custs.push(Some(0));
                 }
                 (AnyState::KobIfdPair(e), Act::Fill(n)) => {
-                    // buy-first: the escrow minus the spend (argument amt 6); sell-first: the prefund minus pre(n)
+                    // Buy-first leaves the escrow minus the spend (argument `amt`, 6). Sell-first
+                    // leaves the prefund minus pre(n).
                     custs.extend(arg(6).map(|a| c.checked_sub(a)));
                     custs.push(guarded(|| c.checked_sub(e.pre_of(n)?)).flatten());
                     custs.push(Some(0));
                 }
                 (AnyState::KobIfdPair(e), Act::Merge { m, .. }) => {
-                    // buy-first: the escrow grows by budget(m); sell-first: the prefund by pre(m)
+                    // Buy-first grows the escrow by budget(m). Sell-first grows the prefund by
+                    // pre(m).
                     custs.push(guarded(|| c.checked_add(e.merge_budget(m)?)).flatten());
                     custs.push(guarded(|| c.checked_add(e.pre_of(m)?)).flatten());
                 }
@@ -1535,9 +1700,10 @@ impl Processor {
         None
     }
 
-    /// The exit an if-done entry fill created: the committed exit with `amountLeft = n` and the
-    /// repeat fields the entry wrote (booked while re-arms remain). Returns the exit state, its
-    /// covenant id and its output index.
+    /// The exit that an if-done entry fill created.
+    ///
+    /// It is the committed exit with `amountLeft = n` and the repeat fields the entry wrote, booked
+    /// while re-arms remain. It returns the exit state, its covenant id and its output index.
     fn derive_exit(
         &self,
         s: &Spent,
@@ -1577,7 +1743,7 @@ impl Processor {
     }
 
     // -----------------------------------------------------------------------------------------
-    // events
+    // Events.
 
     #[allow(clippy::too_many_arguments)]
     fn record_spend_events(
@@ -1599,15 +1765,17 @@ impl Processor {
         let amount_before = s.before.as_ref().and_then(|b| b.amount_left());
         let pair = s.before.as_ref().filter(|b| b.is_pair());
         let is_pair = model::is_pair(s.order.template);
-        // a pair order is paid in token B or A (its positional output is a token delivery; its KAS is the delivery carrier)
+        // A pair order is paid in token B or A. Its positional output is a token delivery, and its
+        // KAS is the delivery carrier.
         let payout = if matches!(s.act, Act::Fill(_)) && s.order.side == 1 && !is_pair {
             rec.outputs.get(s.input_idx).map(|o| o.value as i64)
         } else {
             None
         };
         let mut detail = json!({"input": s.input_idx, "entry": s.entry, "verified": s.before.is_some()});
-        // which plain resting fill of this transaction armed, ratcheted or triggered the order (a pair order: its pair evidence,
-        // two KAS-book fills of A and B or a resting KobPair of the pair)
+        // Which plain resting fill of this transaction armed, ratcheted or triggered the order. For
+        // a pair order this is its pair evidence: two KAS-book fills of A and B, or a resting
+        // `KobPair` of the pair.
         if let Some((b, r)) = s.before.as_ref().zip(s.reveal.as_ref()) {
             if b.is_pair() {
                 if let Some(v) = pair_evidence_detail(rec, b, r, s.act) {
@@ -1622,7 +1790,8 @@ impl Processor {
         match s.act {
             Act::Fill(n) => {
                 let quote = s.before.as_ref().and_then(|b| self.fill_quote(b, s, n));
-                // the call's time argument: the last one, except for the pair kinds (settle: argument 3; fill: argument 13)
+                // The time argument of the call is the last one. The pair kinds differ: `settle`
+                // has it at argument 3 and `fill` at argument 13.
                 let t_arg = s.reveal.as_ref().and_then(|r| match s.order.template {
                     TemplateId::KobPair | TemplateId::KobCondPair => r.int(3),
                     TemplateId::KobIfdPair => r.int(13),
@@ -1634,19 +1803,28 @@ impl Processor {
                 if let Some(x) = exits.get(&s.cov) {
                     detail["exit"] = json!(x.to_hex());
                 }
-                // A pair fill (docs/spec/matcher.md, price rule): no KAS price (the event's `price` is null, it is never a KAS
-                // trade, candle or last price), `detail.pair` carries the pair fields and `pair_fills` its volume.
+                // A pair fill has no KAS price, see the price rule in docs/spec/matcher.md. The
+                // `price` of the event is null, and it is never a KAS trade, candle or last price.
+                // `detail.pair` carries the pair fields and `pair_fills` its volume.
                 if let (Some(b), Some(r)) = (pair, s.reveal.as_ref()) {
                     let row = pair_fill_of(rec, s.input_idx, b, r, n, quote);
                     detail["pair"] = row.detail();
                     pair_fill = Some(row);
                 }
-                // bid side: what the fill drew from the escrow (the continuation keeps the rest) and the delivery output at the
-                // input's position (the maker's token output: its KAS is the delivery carrier plus used(n) - allIn(t), the difference
-                // between the budget the fill consumed at pMax + tip, rounded up, and what it paid at its quote, rounded down), so a
-                // reader can check that a buy never cost more than its all-in limit (escrow_after = 0 when the bid sold out):
-                // escrow_before - escrow_after - delivery_value - refund_value <= floor(n * (q + tip) / scale)
-                // (`refund_value`: the maker's plain refund output of a terminal fill, present from 1 KAS up)
+                // Bid side. Record what the fill drew from the escrow, since the continuation keeps
+                // the rest, and the delivery output at the position of the input.
+                //
+                // The delivery output is the token output of the maker. Its KAS is the delivery
+                // carrier plus used(n) - allIn(t). That is the difference between the budget the
+                // fill consumed at pMax + tip, rounded up, and what it paid at its quote, rounded
+                // down.
+                //
+                // A reader can then check that a buy never cost more than its all-in limit, with
+                // escrow_after = 0 when the bid sold out:
+                //   escrow_before - escrow_after - delivery_value - refund_value
+                //     <= floor(n * (q + tip) / scale)
+                // `refund_value` is the plain refund output of the maker for a terminal fill. It is
+                // present from 1 KAS up.
                 if s.order.side == 2 && !is_pair {
                     if let Some(o) = rec.outputs.get(s.input_idx) {
                         detail["delivery_value"] = json!(o.value.to_string());
@@ -1658,10 +1836,14 @@ impl Processor {
                             .optional()?;
                         if let Some(v) = before {
                             detail["escrow_before"] = json!(v.to_string());
-                            // A terminal fill (no continuation) of a plain bid sends the KAS beyond the delivery carrier back to the
-                            // maker as an output of its own once it is REFUND_MIN or more (the covenant's `refundTo`: output
-                            // M - 1 - i for the bid at input i); a smaller remainder stays on the delivery. The covenant fixes
-                            // which case applies from the state alone, so the refund output is identified without reading scripts.
+                            // A terminal fill of a plain bid, one with no continuation, sends the
+                            // KAS beyond the delivery carrier back to the maker as an output of its
+                            // own. It does so once that remainder is REFUND_MIN or more. This is
+                            // the `refundTo` of the covenant: output M - 1 - i for the bid at input
+                            // i. A smaller remainder stays on the delivery.
+                            //
+                            // The covenant fixes which case applies from the state alone, so the
+                            // refund output is identified without reading scripts.
                             let continues = rec.outputs.iter().any(|o| o.cov.is_some_and(|(_, c)| c == s.cov));
                             if let (false, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), Some(q)) =
                                 (continues, s.before.as_ref(), quote)
@@ -1689,7 +1871,8 @@ impl Processor {
                     }
                 }
                 let returned = if closes { amount_before.and_then(|l| l.checked_sub(n)).filter(|r| *r > 0) } else { None };
-                // the event's price: the KAS quote of a KAS kind; null for a pair fill (its quote in B is in `detail.pair`)
+                // The price of the event is the KAS quote of a KAS kind. It is null for a pair
+                // fill, whose quote in B is in `detail.pair`.
                 let event_price = if is_pair { None } else { quote.or(s.order.price) };
                 events.push(("fill", Some(n), event_price, closes && returned.is_none()));
                 if let Some(r) = returned {
@@ -1707,7 +1890,8 @@ impl Processor {
                 events.push((kind, amount_before, None, closes));
             }
             Act::Cancel if s.amend.is_some() => {
-                // in-place amend: the same order (covenant id, custody) with new terms; `detail.previous` the replaced ones
+                // In-place amend: the same order, with the same covenant id and custody, and new
+                // terms. `detail.previous` holds the replaced ones.
                 if let Some(b) = &s.before {
                     let t = model::terms_of(b);
                     detail["previous"] =
@@ -1717,7 +1901,8 @@ impl Processor {
                 events.push(("amend", after.and_then(|a| a.amount_left()), after.and_then(|a| model::terms_of(a).price), false));
             }
             Act::Cancel if s.sweep => {
-                // sweep in place: the same order at a new output, its strays returned to the maker
+                // Sweep in place: the same order at a new output, with its strays returned to the
+                // maker.
                 let after = s.after.as_ref();
                 events.push(("sweep", after.and_then(|a| a.amount_left()), None, false));
             }
@@ -1740,8 +1925,9 @@ impl Processor {
             }
             Act::Unknown => events.push(("unknown", None, None, closes)),
         }
-        // a fill: what it released to the filler at the order's tip in force (an amend of an earlier transaction has taken its new
-        // tip into the row), and the script that funded the transaction (`activity`, `GET /v1/stats`)
+        // For a fill: what it released to the filler at the tip in force of the order, and the
+        // script that funded the transaction. An amend of an earlier transaction has already taken
+        // its new tip into the row. See `activity` and `GET /v1/stats`.
         let (fee, executor) = match events.iter().find(|e| e.0 == "fill") {
             Some(&(_, amount, _, _)) => {
                 let terms: Option<(Option<i64>, Option<i64>)> = conn
@@ -1782,7 +1968,8 @@ impl Processor {
                 if *kind == "fill" { fee } else { None },
                 if *kind == "fill" { executor } else { None }
             ])?;
-            // a fill moves its token's candle bucket (recomputed before the transaction commits: `candles::refresh`)
+            // A fill moves the candle bucket of its token. It is recomputed before the transaction
+            // commits, in `candles::refresh`.
             if *kind == "fill" {
                 if let Some(t) = s.order.token {
                     super::candles::mark(conn, &t.0, ts)?;
@@ -1814,12 +2001,15 @@ impl Processor {
         Ok(())
     }
 
-    /// Quote bound of a fill at the call's time argument (auctions: the price the covenant bounds it by).
+    /// The quote bound of a fill at the time argument of the call.
+    ///
+    /// For auctions it is the price that the covenant bounds the fill by.
     fn fill_quote(&self, before: &AnyState, s: &Spent, _n: i64) -> Option<i64> {
         let r = s.reveal.as_ref()?;
         let daa = s.utxo_daa;
-        // the call's time argument: the last one, except for the pair kinds (KobPair / KobCondPair.settle: argument 3,
-        // KobIfdPair.fill: argument 13)
+        // The time argument of the call is the last one. The pair kinds differ: `settle` of
+        // `KobPair` and `KobCondPair` has it at argument 3, and `fill` of `KobIfdPair` at argument
+        // 13.
         let t = match before {
             AnyState::KobPair(_) | AnyState::KobCondPair(_) => r.int(3),
             AnyState::KobIfdPair(_) => r.int(13),
@@ -1838,7 +2028,7 @@ impl Processor {
             }
             AnyState::KobIfdBid(b) | AnyState::KobIfdBidKron(b) => b.price_at(b.entry_stop > 0 && b.armed == 0, t, daa),
             AnyState::KobIfdAsk(a) | AnyState::KobIfdAskKron(a) => a.price_at(a.entry_stop > 0 && a.armed == 0, t, daa),
-            // the pair kinds: the quote in token B per whole A (never a KAS price)
+            // The pair kinds: the quote in token B per whole A, never a KAS price.
             AnyState::KobPair(p) => p.price_at(t, daa),
             AnyState::KobCondPair(c) => {
                 let leg = r.int(6)?;
@@ -1849,12 +2039,20 @@ impl Processor {
         .flatten()
     }
 
-    /// Step 8 of a transaction that spent tracked orders: unless it is only the makers' own (cancels, in-place amends and sweeps), it
-    /// is an executor's, and gets its `executor_txs` row: its income ([`super::income`]: `kob_in`, what the KOB inputs held, minus
-    /// the outputs the orders own or pay) and its network fee (the record's input value minus its outputs), each `None` when the
-    /// chain data does not settle it, and whether it is an own trade (`own_trade`: the sender trades for itself, its income is not
-    /// counted, [`super::income`]). `orphan`: an order UTXO was spent whose order is not stored (its outputs cannot be told);
-    /// `foreign_cov_in`: a covenant input is no order's and no order's custody or stray.
+    /// Step 8 of a transaction that spent tracked orders: records the `executor_txs` row.
+    ///
+    /// A transaction that is not only the makers' own, as cancels, in-place amends and sweeps are,
+    /// is an executor's and gets a row with:
+    /// - Its income, see [`super::income`]. It is `kob_in`, what the KOB inputs held, minus the
+    ///   outputs the orders own or pay.
+    /// - Its network fee, the input value of the record minus its outputs.
+    /// - Whether it is an own trade, `own_trade`. The sender trades for itself, and its income is
+    ///   not counted, see [`super::income`].
+    ///
+    /// The income and the fee are each `None` when the chain data does not settle them.
+    ///
+    /// `orphan` means an order UTXO was spent whose order is not stored, so its outputs cannot be
+    /// told. `foreign_cov_in` means a covenant input is no order's and no custody or stray of one.
     #[allow(clippy::too_many_arguments)]
     fn executor_tx(
         &self,
@@ -1878,7 +2076,8 @@ impl Processor {
             if orphan {
                 return None;
             }
-            // every output carrying an order's covenant id (continuations, exits, placements) and every token output owned by one
+            // Every output that carries the covenant id of an order, as continuations, exits and
+            // placements do, and every token output owned by one.
             let mut kob_out: BTreeSet<usize> = rec
                 .outputs
                 .iter()
@@ -1887,14 +2086,15 @@ impl Processor {
                 .map(|(j, _)| j)
                 .collect();
             kob_out.extend(rec.tok_outs.iter().map(|t| t.out as usize));
-            // and what each spent order's covenant pins by position
+            // And what the covenant of each spent order pins by position.
             for s in spent {
                 let spend = match s.act {
                     Act::Fill(n) => Spend::Fill(n),
                     Act::Merge { .. } => Spend::Merge,
                     Act::Refund => Spend::Refund,
                     Act::Update => Spend::Update,
-                    // a maker's cancel next to an executor's legs routes outputs no covenant pins; an unclassified spend likewise
+                    // A maker's cancel next to the legs of an executor routes outputs that no
+                    // covenant pins. An unclassified spend does the same.
                     Act::Cancel | Act::Unknown => return None,
                 };
                 let (state, reveal) = (s.before.as_ref()?, s.reveal.as_ref()?);
@@ -1914,8 +2114,9 @@ impl Processor {
                 };
                 kob_out.extend(guarded(|| income::pinned(&leg, n_out)).flatten()?);
             }
-            // the sender trades for itself: its own tokens go in (a covenant input that is no order's and no order's custody or
-            // stray), or tokens come out that no order owns and no covenant pins (the sender's inventory, the rest of a route)
+            // The sender trades for itself in two cases. Its own tokens go in, as a covenant input
+            // that is no order's and no custody or stray of one. Or tokens come out that no order
+            // owns and no covenant pins, as the inventory of the sender or the rest of a route.
             let own = foreign_cov_in || rec.outputs.iter().enumerate().any(|(j, o)| o.cov.is_some() && !kob_out.contains(&j));
             Some((income::income(kob_in, &rec.outputs, &kob_out)?, own))
         })();
@@ -1923,8 +2124,9 @@ impl Processor {
             Some((v, own)) => (Some(v), own),
             None => (None, false),
         };
-        // the node's input values when the record has them, else what the inputs held by the outputs this store recorded
-        // (`super::outputs`): known only when every input resolves
+        // The input values of the node when the record has them, else what the inputs held
+        // according to the outputs this store recorded, see `super::outputs`. The latter is known
+        // only when every input resolves.
         let resolved = resolved_in.and_then(|v| u64::try_from(v).ok());
         if let (Some(node), Some(ours)) = (rec.in_value, resolved) {
             if node != ours {
@@ -1949,14 +2151,13 @@ impl Processor {
     }
 }
 
-/// The listing inputs of a pair order's two tokens (`None` for the KAS kinds): A with the order's scale, minimum fill, amount
-/// and expiry; B with its own scale. Neither carries a KAS price (a pair order is not measured in KAS). The extension
-/// commitment of each KCC-20 token: the state names it (`sExt` of the custody of S, `tExt` of the deliveries of T; an entry
-/// `aExt` and `bExt`).
-/// The token identities (token covenant id, program, extension commitment) an order placement names (`token_events`): a
-/// plain order its token with `ext`; a pair order both its tokens, each with the commitment its state carries for a KCC-20
-/// token and none (NULL) when the state's family code is not KCC-20. An unknown commitment is never recorded as the
-/// all-zero one, which is a real commitment (the standard fixed-supply class) the token list reports.
+/// The token identities that an order placement names, as recorded in `token_events`.
+///
+/// Each identity is a token covenant id, a program and an extension commitment. A plain order names
+/// its token with `ext`. A pair order names both its tokens. Each has the commitment that the state
+/// carries for a KCC-20 token, and none (NULL) when the family code of the state is not KCC-20. An
+/// unknown commitment is never recorded as the all-zero one, which is a real commitment, the
+/// standard fixed-supply class, that the token list reports.
 pub fn placement_identities(
     state: &AnyState,
     token: Hash32,
@@ -1972,6 +2173,12 @@ pub fn placement_identities(
     }
 }
 
+/// The listing inputs of the two tokens of a pair order, or `None` for the KAS kinds.
+///
+/// A comes with the scale, minimum fill, amount and expiry of the order, and B with its own scale.
+/// Neither carries a KAS price, because a pair order is not measured in KAS. The extension
+/// commitment of each KCC-20 token is the one the state names: `sExt` of the custody of S, `tExt`
+/// of the deliveries of T, and `aExt` and `bExt` of an entry.
 fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(ListingInput, ListingInput)> {
     let t = state.pair_tokens()?;
     let terms = model::terms_of(state);
@@ -2006,15 +2213,18 @@ fn pair_listing(state: &AnyState, genesis_daa: u64, carrier: u64) -> Option<(Lis
     Some((input(&t.a, ea, true), input(&t.b, eb, false)))
 }
 
-/// The programs the chain proves for a token ([`super::reads::proven_programs`]) as hashes.
+/// The programs the chain proves for a token, as hashes ([`super::reads::proven_programs`]).
 fn proven_hashes(conn: &Connection, token: Option<Hash32>) -> DbResult<Vec<Hash32>> {
     let Some(t) = token else { return Ok(vec![]) };
     Ok(super::reads::proven_programs(conn, &t.0)?.into_iter().filter_map(|h| <[u8; 32]>::try_from(h).ok().map(Hash32)).collect())
 }
 
-/// What a keeper's update may take from the order's output of `carrier` sompi, for an order a keeper can still arm (an unarmed stop, a
-/// stop entry: `matcher::candidate::updatable`); `None` for every other order, which is never updated. A buy stop pays its keeper only from
-/// what its buy does not need ([`CondBid::keeper_take`], measured at its current stop), every other order its `keeperTip`.
+/// What a keeper's update may take from the order's output of `carrier` sompi.
+///
+/// This applies to an order that a keeper can still arm: an unarmed stop or a stop entry, see
+/// `matcher::candidate::updatable`. It is `None` for every other order, which is never updated. A
+/// buy stop pays its keeper only from what its buy does not need, see [`CondBid::keeper_take`],
+/// measured at its current stop. Every other order pays its `keeperTip`.
 fn listing_keeper_tip(state: &AnyState, carrier: u64) -> Option<i64> {
     match state {
         AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) if s.armed == 0 && s.stop_price > 0 => Some(s.keeper_tip),
@@ -2029,8 +2239,10 @@ fn listing_keeper_tip(state: &AnyState, carrier: u64) -> Option<i64> {
     }
 }
 
-/// Step and candidate multiples of a trailing update: the multiples the trigger evidence in the transaction (the quotes of
-/// the plain resting orders it fills) justifies, plus a small range as a safety net.
+/// The step and the candidate multiples of a trailing update.
+///
+/// The multiples are the ones that the trigger evidence in the transaction justifies, which are
+/// the quotes of the plain resting orders it fills. A small range is added as a safety net.
 fn trail_candidates(before: &AnyState, evidence_prices: &[i64]) -> (i64, Vec<i64>) {
     let (step, steps): (i64, Box<dyn Fn(i64) -> i64>) = match before {
         AnyState::KobCondAsk(c) | AnyState::KobCondAskKron(c) => {
@@ -2081,9 +2293,12 @@ fn exit_candidates_ask(a: &IfdAskState, n: i64, entry: [u8; 32], utxo_daa: i64, 
     v
 }
 
-/// The exits a `KobIfdPair` fill of n can create (`IfdPairState::exit_for`): its custody is n of A (buy-first) or, sell-first,
-/// the proceeds `amt` (argument 6) plus the prefund of the fill (`pre(n)`, or the whole prefund left when the entry ends);
-/// booked with `rptUntil = rpt_until(expiryDaa, UTXO DAA)` when the entry repeats and `rptAmount > n`.
+/// The exits that a `KobIfdPair` fill of n can create, see `IfdPairState::exit_for`.
+///
+/// The custody of an exit is n of A when buy-first. When sell-first it is the proceeds `amt`
+/// (argument 6) plus the prefund of the fill, which is `pre(n)` or the whole prefund left when the
+/// entry ends. The exit is booked with `rptUntil = rpt_until(expiryDaa, UTXO DAA)` when the entry
+/// repeats and `rptAmount > n`.
 fn exit_candidates_pair(e: &IfdPairState, n: i64, entry: [u8; 32], utxo_daa: i64, amt: Option<i64>) -> Vec<AnyState> {
     let custodies: Vec<i64> = if e.is_buy_first() {
         vec![n]
@@ -2108,7 +2323,9 @@ fn exit_candidates_pair(e: &IfdPairState, n: i64, entry: [u8; 32], utxo_daa: i64
     v
 }
 
-/// A `TxJson` view of a record, enough for `recover_orders` (outpoints, covenant ids, outputs).
+/// A `TxJson` view of a record, enough for `recover_orders`.
+///
+/// It holds the outpoints, the covenant ids and the outputs.
 pub fn tx_json(rec: &TxRecord, payload: Vec<u8>) -> TxJson {
     TxJson {
         id: rec.txid.0,
@@ -2150,11 +2367,12 @@ pub fn tx_json(rec: &TxRecord, payload: Vec<u8>) -> TxJson {
     }
 }
 
-/// (txid, idx, value, state) of an order's current UTXO.
+/// The `(txid, idx, value, state)` of the current UTXO of an order.
 type TipRow = (Vec<u8>, i64, i64, Option<Vec<u8>>);
 
-/// The unspent UTXO of an order covenant (`?1`) that is its tip, with its state decoded against the order's genesis state
-/// ([`super::packed`]).
+/// The unspent UTXO of an order covenant (`?1`) that is its tip.
+///
+/// Its state is decoded against the genesis state of the order, see [`super::packed`].
 const TIP_UTXO_SQL: &str = concat!(
     "SELECT txid, idx, value, kob_ustate(state, (SELECT ",
     sql_genesis!("g"),
@@ -2166,8 +2384,10 @@ const TIP_UTXO_SQL: &str = concat!(
     " AND spent_block IS NULL ORDER BY created_block DESC, idx DESC LIMIT 1"
 );
 
-/// The fill amounts of one order (see [`refresh_order_state`] for the `+kind`). Summed in Rust, saturating: base-unit
-/// amounts of hostile orders can sum past an `i64`, where SQLite's `SUM` fails (a failed refresh would stall the follower).
+/// The fill amounts of one order, see [`refresh_order_state`] for the `+kind`.
+///
+/// They are summed in Rust, saturating. The base-unit amounts of hostile orders can sum past an
+/// `i64`, where the SQLite `SUM` fails, and a failed refresh would stall the follower.
 pub(crate) const FILLED_AMOUNT_SQL: &str =
     concat!("SELECT amount FROM order_events WHERE order_id = ", order_of!("?1"), " AND +kind = 'fill'");
 
@@ -2182,16 +2402,19 @@ fn filled_amount(conn: &Connection, cov: &Hash32) -> DbResult<i64> {
     Ok(sum.min(i64::MAX as i128) as i64)
 }
 
-/// Re-derive one order's `order_state` row from the base tables. Called after every change and
-/// after every revert, so it is the single definition of "status".
+/// Re-derives the `order_state` row of one order from the base tables.
+///
+/// It is called after every change and after every revert, so it is the single definition of
+/// "status".
 pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
     let Some(order) = load_order_full(conn, cov)? else {
         conn.execute(concat!("DELETE FROM order_state WHERE order_id = ", order_of!("?1")), [&cov.0[..]])?;
         return Ok(());
     };
-    // `+kind`: through the order's own events (`order_events_cov`). On `kind = 'fill'` alone the planner picks the
-    // market index (`order_events_fill_ts`, over the fills) and reads every fill of every token, on every fill and placement
-    // (refresh cost grew with the chain's fill count: 1.5 ms per KOB transaction after 60 s of a busy chain).
+    // `+kind` keeps the query on the events of the order itself, through `order_events_cov`. On
+    // `kind = 'fill'` alone the planner picks the market index, `order_events_fill_ts`, over the
+    // fills. It then reads every fill of every token, on every fill and placement, and the cost of
+    // the refresh grows with the fill count of the chain.
     let filled = filled_amount(conn, cov)?;
     let tip: Option<TipRow> =
         conn.prepare_cached(TIP_UTXO_SQL)?.query_row([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).optional()?;
@@ -2220,18 +2443,21 @@ pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
         (None, Some("kill")) => "killed",
         (None, _) => "closed",
     };
-    // remaining amount: exact from the tip state where the kind has `amountLeft`; a bid's is its buying power
+    // The remaining amount is exact from the tip state where the kind has `amountLeft`. For a bid
+    // it is its buying power.
     let (remaining, exact): (Option<i64>, bool) = match &tip {
         None => (Some(closing.as_ref().filter(|c| c.0 == "kill").and_then(|c| c.1).unwrap_or(0)), true),
         Some((_, _, value, state)) => {
             let known = state.as_ref().and_then(|s| AnyState::decode(order.template, s).ok());
             match (known.as_ref().and_then(|s| s.amount_left()), &known, order.template.base()) {
                 (Some(l), _, _) => (Some(l), true),
-                // a bid's quantity is its escrow: the most one fill can buy, the largest n whose budget
-                // ceil(n * (pMax + tip) / scale) leaves the delivery carrier and the reserve (an upper bound: every further fill
-                // moves one more carrier)
+                // The quantity of a bid is its escrow: the most one fill can buy. That is the
+                // largest n whose budget ceil(n * (pMax + tip) / scale) leaves the delivery carrier
+                // and the reserve. It is an upper bound, because every further fill moves one more
+                // carrier.
                 (None, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), _) => (Some(b.buying_power(*value)), false),
-                // an unproven bid state: the same bound from the order row (no delivery carrier known)
+                // An unproven bid state gets the same bound from the order row. No delivery carrier
+                // is known.
                 (None, _, TemplateId::KobBid) => match (order.budget_rate, order.reserve, order.scale) {
                     (Some(rate), Some(rs), Some(scale)) if rate > 0 && scale > 0 => {
                         let budget = (*value as i128 - rs as i128).max(0);
@@ -2262,10 +2488,11 @@ pub fn refresh_order_state(conn: &Connection, cov: &Hash32) -> DbResult<()> {
         last_block,
         last_daa
     ])?;
-    // An if-done entry with a stop is a stop order until it is armed: nothing fills it at its limit before trigger evidence
-    // in the same transaction (`docs/spec/matcher.md` §4), so it is in no KAS book, depth or count, where its limit would
-    // read as resting liquidity (a sell-stop entry's limit sits below the market and looked like a crossed ask). Armed, it
-    // auctions in its book. Follows the tip state both ways (reorgs included).
+    // An if-done entry with a stop is a stop order until it is armed. Nothing fills it at its limit
+    // before trigger evidence in the same transaction, see `docs/spec/matcher.md` §4. So it is in
+    // no KAS book, depth or count, where its limit would read as resting liquidity. The limit of a
+    // sell-stop entry sits below the market and would look like a crossed ask. Once armed, it
+    // auctions in its book. The flag follows the tip state both ways, reorgs included.
     if matches!(order.template.base(), TemplateId::KobIfdAsk | TemplateId::KobIfdBid) {
         if let Some(known) = tip.as_ref().and_then(|t| t.3.as_ref()).and_then(|s| AnyState::decode(order.template, s).ok()) {
             let unarmed_stop = match &known {
@@ -2298,9 +2525,10 @@ fn load_order_full(conn: &Connection, cov: &Hash32) -> DbResult<Option<OrderFull
     }))
 }
 
-/// Undo everything one chain block did. The block must be the newest stored one.
-/// Returns whether the block had changed any KOB row (a reorg that reverts only unrelated blocks is not
-/// worth a record-log frame).
+/// Undoes everything one chain block did. The block must be the newest stored one.
+///
+/// It returns whether the block had changed any KOB row. A reorg that reverts only unrelated
+/// blocks is not worth a record-log frame.
 pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<bool> {
     let mut changed = 0usize;
     let mut affected: BTreeSet<Hash32> = BTreeSet::new();
@@ -2320,7 +2548,8 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     collect(
         "SELECT o.covenant_id FROM token_utxos t JOIN orders o ON o.id = t.order_id WHERE t.created_block = ?1 OR t.spent_block = ?1",
     )?;
-    // a holding a reverted block created or spent belongs to a token whose holders' view changes (owners are not always orders)
+    // A holding that a reverted block created or spent belongs to a token whose holders' view
+    // changes. Owners are not always orders.
     let mut holding_tokens: BTreeSet<Hash32> = BTreeSet::new();
     {
         let mut st =
@@ -2329,7 +2558,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
             holding_tokens.insert(r?);
         }
     }
-    // tokens whose books change
+    // The tokens whose books change.
     let mut tokens: BTreeSet<Hash32> = BTreeSet::new();
     for cov in &affected {
         if let Some(o) = load_order(conn, cov)? {
@@ -2339,10 +2568,13 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
             tokens.extend(o.quote);
         }
     }
-    // in-place amends of the block: the orders take back the terms they replaced. One statement for all of them (a block can hold
-    // hundreds of thousands: the unlisting of a token's orders when a program is first proved, [`Processor::unlist_conflicting`]; a row at a
-    // time cost 19 s on a soak-sized store, audit 2026-10-30 I16). An order amended twice in the block takes the terms of its OLDEST
-    // row (what it applied newest first), its min_fill the oldest one that was recorded.
+    // In-place amends of the block: the orders take back the terms they replaced. One statement
+    // handles all of them, because a block can hold hundreds of thousands. They come from the
+    // unlisting of the orders of a token when a program is first proved, see
+    // `Processor::unlist_conflicting`. A row at a time is far too slow.
+    //
+    // An order amended twice in the block takes the terms of its OLDEST row, which is what it
+    // applied newest first. Its min_fill is the oldest one that was recorded.
     changed += conn.execute(
         "WITH first AS (SELECT MIN(id) AS id FROM order_amends WHERE block_seq = ?1 GROUP BY order_id)          UPDATE orders SET price = a.price, tip = a.tip, tif = a.tif, expiry_daa = a.expiry_daa, active_from = a.active_from,                 deadline = a.deadline, listed = a.listed, unlisted_reason = a.unlisted_reason, budget_rate = a.budget_rate,                 reserve = a.reserve          FROM order_amends a WHERE a.id IN (SELECT id FROM first) AND orders.id = a.order_id",
         [seq],
@@ -2352,7 +2584,8 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
         [seq],
     )?;
     changed += conn.execute("DELETE FROM order_amends WHERE block_seq = ?1", [seq])?;
-    // the candle buckets of the fills about to go (recomputed by `candles::refresh` before the transaction commits)
+    // The candle buckets of the fills about to go. `candles::refresh` recomputes them before the
+    // transaction commits.
     super::candles::mark_block(conn, seq)?;
     changed += conn.execute("DELETE FROM order_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM pair_fills WHERE block_seq = ?1", [seq])?;
@@ -2369,7 +2602,8 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("UPDATE token_holdings SET spent_block = NULL, spent_txid = NULL WHERE spent_block = ?1", [seq])?;
     changed += conn.execute("DELETE FROM token_events WHERE block_seq = ?1", [seq])?;
     changed += conn.execute("DELETE FROM rejects WHERE block_seq = ?1", [seq])?;
-    // the state rows of the orders this block created go with them (a row left would name an order that is gone)
+    // The state rows of the orders this block created go with them. A row left would name an order
+    // that is gone.
     changed += conn.execute("DELETE FROM order_state WHERE order_id IN (SELECT id FROM orders WHERE genesis_block = ?1)", [seq])?;
     changed += conn.execute("DELETE FROM orders WHERE genesis_block = ?1", [seq])?;
     changed += super::kcc23::revert(conn, seq)?;
@@ -2392,16 +2626,22 @@ impl From<crate::hex::HexError> for DbError {
 /// Outcome counters of operator operations.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OpReport {
+    /// Orders imported, or revived at a node-verified continuation.
     pub imported: u64,
+    /// Imports that named an order this store already has.
     pub already_known: u64,
+    /// Orders closed by a gap reconciliation.
     pub closed: u64,
+    /// Orders that continued under a new script and were adopted.
     pub adopted: u64,
+    /// One message per rejected operation.
     pub rejected: Vec<String>,
 }
 
 impl Processor {
-    /// Apply one operator operation (recovery import, gap close, gap adoption). All of them stamp
-    /// block 0, which is never reverted.
+    /// Applies one operator operation: a recovery import, a gap close or a gap adoption.
+    ///
+    /// All of them stamp block 0, which is never reverted.
     pub fn apply_op(&self, conn: &Connection, op: &LogOp, cursor_daa: u64, delta: &mut Delta, rep: &mut OpReport) -> DbResult<()> {
         match op {
             LogOp::Import { template: tid, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund } => {
@@ -2418,7 +2658,8 @@ impl Processor {
                     rep.rejected.push(format!("{label}: state does not match the script"));
                     return Ok(());
                 }
-                // each custody's token: the order's own (a KAS kind), or the token of that part of `AnyState::custodies`
+                // The token of each custody. It is the token of the order for a KAS kind, or the
+                // token of that part of `AnyState::custodies`.
                 let part_tokens = custody_part_tokens(&st);
                 let to_new = |c: &super::recordlog::ImportCustody, k: usize| NewCustody {
                     txid: c.txid,
@@ -2431,16 +2672,19 @@ impl Processor {
                 let pre = prefund.as_ref().map(|c| to_new(c, 1));
                 let ext = custody.as_ref().map(|c| c.ext.0);
                 if order_exists(conn, covenant_id)? {
-                    // A known order with no live output (closed by a gap reconciliation: it continued under a new script the
-                    // indexer never saw, e.g. a partial fill) is revived from the node-verified continuation: the node holds an
-                    // output of this covenant id at this script, which only the order's own lineage can produce.
+                    // A known order with no live output was closed by a gap reconciliation. It
+                    // continued under a new script that the indexer never saw, for example after a
+                    // partial fill. It is revived from the node-verified continuation: the node
+                    // holds an output of this covenant id at this script, which only the lineage of
+                    // the order itself can produce.
                     match self.revive(conn, delta, covenant_id, &st, *txid, *index, *value, spk, *daa, cust.as_ref(), ext)? {
                         true => rep.imported += 1,
                         false => rep.already_known += 1,
                     }
                     return Ok(());
                 }
-                // an exit names its entry: only an entry this indexer knows (else the exit is imported as an order of its own)
+                // An exit names its entry. Only an entry this indexer knows counts, and otherwise
+                // the exit is imported as an order of its own.
                 let parent = match parent {
                     Some(p) if order_exists(conn, p)? => Some(*p),
                     _ => None,
@@ -2516,8 +2760,9 @@ impl Processor {
                     .prepare_cached("UPDATE order_utxos SET spent_block = 0, spent_entry = 'gap' WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
                     .execute(params![&old_txid.0[..], old_index])?;
                 if n > 0 {
-                    // the token UTXOs owned by the order that the node no longer has are closed; the ones it still holds stay
-                    // (the reconciliation checked each at the script its proven state produces)
+                    // The token UTXOs owned by the order that the node no longer has are closed.
+                    // The ones it still holds stay, because the reconciliation checked each at the
+                    // script its proven state produces.
                     let kept: HashSet<(Hash32, u32)> = keep.iter().copied().collect();
                     let owned: Vec<(Hash32, u32)> = {
                         let mut st = conn.prepare_cached(concat!(
@@ -2538,8 +2783,8 @@ impl Processor {
                         )?
                         .execute(params![&t.0[..], i])?;
                     }
-                    // the output's own DAA (the refund and kill times count from it); operations written before 2026-10-02 have
-                    // only the cursor's
+                    // The DAA of the output itself, which the refund and kill times count from. An
+                    // operation without it falls back to the cursor's.
                     let udaa = daa.unwrap_or(cursor_daa);
                     self.insert_utxo(conn, covenant_id, txid, *index, *value, spk, state.as_deref(), 0, udaa)?;
                     let tid = load_order(conn, covenant_id)?.map(|o| o.template);
@@ -2548,7 +2793,8 @@ impl Processor {
                         _ => None,
                     };
                     if let (Some(c), Some(st)) = (custody, st) {
-                        // the first custody's token (a pair order: the first of `AnyState::custodies`, either token)
+                        // The token of the first custody. For a pair order it is the first of
+                        // `AnyState::custodies`, in either token.
                         let token = custody_part_tokens(&st).first().map(|t| t.0).unwrap_or(Hash32(st.token_cov_id()));
                         let live = conn
                             .prepare_cached("SELECT 1 FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
@@ -2578,9 +2824,11 @@ impl Processor {
         Ok(())
     }
 
-    /// Revives a known order without a live output (every output closed, e.g. by `CloseGap`) at a node-verified continuation
-    /// of the same template: the output and its custody become live again, an `update` event marks the import. `false` (and
-    /// nothing changed) when the order still has a live output or the template differs.
+    /// Revives a known order without a live output at a node-verified continuation.
+    ///
+    /// Every output of such an order is closed, for example by `CloseGap`. The output and its
+    /// custody become live again, and an `update` event marks the import. It returns `false`, with
+    /// nothing changed, when the order still has a live output or the template differs.
     #[allow(clippy::too_many_arguments)]
     fn revive(
         &self,
@@ -2662,13 +2910,16 @@ impl Processor {
 }
 
 // ---------------------------------------------------------------------------------------------
-// trigger evidence
+// Trigger evidence.
 
-/// The side and quote of a plain resting `KobAsk` / `KobBid` (either family) whose revealed spend is a fill (`n > 0`): what
-/// that input offers as trigger evidence to the conditional orders and stop entries of the same transaction (side
-/// [`kob_protocol::state::SIDE_ASK`]: a resting ask was filled, [`kob_protocol::state::SIDE_BID`]: a resting bid). The
-/// covenants' other rules (exposure, `minTouch` base units of an order of the same scale, no decay) are theirs to enforce;
-/// the indexer only reads which input the order named.
+/// The side and quote of a plain resting `KobAsk` or `KobBid` whose revealed spend is a fill.
+///
+/// Both families count, and the fill has `n > 0`. That input offers the side and quote as trigger
+/// evidence to the conditional orders and stop entries of the same transaction. The side is
+/// [`kob_protocol::state::SIDE_ASK`] when a resting ask was filled, and
+/// [`kob_protocol::state::SIDE_BID`] for a resting bid. The other rules of the covenants, which
+/// are exposure, `minTouch` base units of an order of the same scale, and no decay, are theirs to
+/// enforce. The indexer only reads which input the order named.
 fn evidence_touch(r: &Reveal) -> Option<(i64, i64)> {
     if !matches!(r.nb(), Some(Nb::Fill(n)) if n > 0) {
         return None;
@@ -2680,10 +2931,16 @@ fn evidence_touch(r: &Reveal) -> Option<(i64, i64)> {
     }
 }
 
-/// The input index of the trigger evidence an order's spend names: the `ev` argument of an `update` (arm or trailing
-/// ratchet), or of a fill that triggers an unarmed stop leg (`KobCondAsk.settle(n, tk, _, 1, ev, tk, t)`,
-/// `KobCondBid.settle(n, tok, 1, ev, t)`) or an unarmed stop entry (`KobIfdBid.fill(.., ev, t)`,
-/// `KobIfdAsk.settle(.., ev, tk, t)`). `None` for every other spend (an armed stop, a take-profit leg, a limit entry).
+/// The input index of the trigger evidence that the spend of an order names.
+///
+/// It is the `ev` argument of an `update`, which is an arm or a trailing ratchet. It is also the
+/// `ev` argument of a fill that triggers an unarmed stop leg or an unarmed stop entry:
+/// - `KobCondAsk.settle(n, tk, _, 1, ev, tk, t)`
+/// - `KobCondBid.settle(n, tok, 1, ev, t)`
+/// - `KobIfdBid.fill(.., ev, t)`
+/// - `KobIfdAsk.settle(.., ev, tk, t)`
+///
+/// It is `None` for every other spend: an armed stop, a take-profit leg or a limit entry.
 fn evidence_input(before: &AnyState, r: &Reveal, act: Act) -> Option<usize> {
     let ev = match act {
         Act::Update => r.int(0),
@@ -2699,8 +2956,10 @@ fn evidence_input(before: &AnyState, r: &Reveal, act: Act) -> Option<usize> {
     usize::try_from(ev).ok()
 }
 
-/// `detail.evidence` of an event: the evidence input, its order's covenant id and (when its spend is revealed) its side and
-/// quote.
+/// The `detail.evidence` of an event.
+///
+/// It holds the evidence input, the covenant id of its order and, when its spend is revealed, its
+/// side and quote.
 fn evidence_detail(rec: &TxRecord, k: usize) -> serde_json::Value {
     let Some(inp) = rec.inputs.get(k) else { return json!({ "input": k }) };
     let mut v = json!({ "input": k, "order": inp.cov.map(|c| c.to_hex()) });
@@ -2712,17 +2971,22 @@ fn evidence_detail(rec: &TxRecord, k: usize) -> serde_json::Value {
 }
 
 // ---------------------------------------------------------------------------------------------
-// pair orders: trigger evidence, fill rows, counterparty (founder price rule)
+// Pair orders: trigger evidence, fill rows and counterparty. Pair fills have no KAS price.
 
 /// Argument indices `(evA, evB, evMode)` of a pair conditional's `settle` (fill and update alike).
 const PAIR_EV_COND: (usize, usize, usize) = (7, 8, 10);
 /// Argument indices `(evA, evB, evMode)` of a pair entry's `fill` (fill and update alike).
 const PAIR_EV_IFD: (usize, usize, usize) = (9, 10, 12);
 
-/// The pair trigger evidence a pair spend names and its input indices: mode 0, a plain resting KAS-book order of A (`evA`)
-/// and one of B (`evB`) filled in the transaction (the quotes `a` and `b`); mode 1, a resting `KobPair` of the pair (`evA`)
-/// filled in it (its `price`). The covenant checks the rest (tokens, sides, scales, exposure, minTouch); the indexer reads
-/// what the spend named. `None` when the named inputs reveal no such fill.
+/// The pair trigger evidence that a pair spend names, and its input indices.
+///
+/// There are two modes:
+/// - Mode 0: a plain resting KAS-book order of A (`evA`) and one of B (`evB`) filled in the
+///   transaction, with the quotes `a` and `b`.
+/// - Mode 1: a resting `KobPair` of the pair (`evA`) filled in the transaction, with its `price`.
+///
+/// The covenant checks the rest: tokens, sides, scales, exposure and minTouch. The indexer reads
+/// what the spend named. It returns `None` when the named inputs reveal no such fill.
 fn pair_evidence_of(rec: &TxRecord, r: &Reveal, (ia, ib, im): (usize, usize, usize)) -> Option<(PairEvidence, Vec<usize>)> {
     let ka = usize::try_from(r.int(ia)?).ok()?;
     let ra = rec.inputs.get(ka)?.reveal.as_ref()?;
@@ -2747,9 +3011,11 @@ fn pair_evidence_of(rec: &TxRecord, r: &Reveal, (ia, ib, im): (usize, usize, usi
     }
 }
 
-/// `detail.evidence` of a pair order's spend that used trigger evidence (an update, a fill of an unarmed stop leg, a fill of
-/// an unarmed stop entry): `{"mode": 0 | 1, "inputs": [..], "orders": [..], "a" and "b" (mode 0: the two KAS quotes) or
-/// "price" (mode 1: the resting pair order's quote in B per whole A)}`.
+/// The `detail.evidence` of a pair order's spend that used trigger evidence.
+///
+/// That is an update, a fill of an unarmed stop leg or a fill of an unarmed stop entry. The value
+/// is `{"mode": 0 | 1, "inputs": [..], "orders": [..], ...}`. Mode 0 adds `"a"` and `"b"`, the two
+/// KAS quotes. Mode 1 adds `"price"`, the quote in B per whole A of the resting pair order.
 fn pair_evidence_detail(rec: &TxRecord, before: &AnyState, r: &Reveal, act: Act) -> Option<serde_json::Value> {
     let idx = match (before, act) {
         (AnyState::KobCondPair(_), Act::Update) => PAIR_EV_COND,
@@ -2773,9 +3039,12 @@ fn pair_evidence_detail(rec: &TxRecord, before: &AnyState, r: &Reveal, act: Act)
     Some(v)
 }
 
-/// The counterparty of a pair fill (founder price rule): `route` when the transaction also fills KAS-book orders of A or B
-/// (any KAS-quoted kind: those fills record their own KAS trades), else `netting` when an opposite pair order of the same pair
-/// (A, B) fills in it, else `inventory` (the filler's own tokens).
+/// The counterparty of a pair fill: `route`, `netting` or `inventory`.
+///
+/// It is `route` when the transaction also fills KAS-book orders of A or B. Any KAS-quoted kind
+/// counts, and those fills record their own KAS trades. Otherwise it is `netting` when an opposite
+/// pair order of the same pair (A, B) fills in the transaction. Otherwise it is `inventory`, the
+/// own tokens of the filler.
 pub fn pair_counterparty(rec: &TxRecord, self_input: usize, a: [u8; 32], b: [u8; 32], side: u8) -> &'static str {
     let mut netting = false;
     for (i, inp) in rec.inputs.iter().enumerate() {
@@ -2808,7 +3077,7 @@ pub fn pair_counterparty(rec: &TxRecord, self_input: usize, a: [u8; 32], b: [u8;
     }
 }
 
-/// One pair fill (`pair_fills` row and `detail.pair` of its event).
+/// One pair fill, as the `pair_fills` row and the `detail.pair` of its event.
 #[derive(Debug, Clone)]
 struct PairFillRow {
     a: [u8; 32],
@@ -2816,7 +3085,10 @@ struct PairFillRow {
     a_scale: i64,
     side: u8,
     amount_a: i64,
-    /// B the maker received (ASK) or paid (BID): the call's `tOut` / `sOut` (`KobPair`, `KobCondPair`) or `amt` (`KobIfdPair`).
+    /// B the maker received (ASK) or paid (BID).
+    ///
+    /// It is the `tOut` or `sOut` of the call for `KobPair` and `KobCondPair`, or `amt` for
+    /// `KobIfdPair`.
     amount_b: Option<i64>,
     /// The order's quote at the fill, B base units per whole A.
     price: Option<i64>,
@@ -2908,12 +3180,15 @@ fn pair_fill_of(rec: &TxRecord, input: usize, before: &AnyState, r: &Reveal, n: 
         counterparty: pair_counterparty(rec, input, t.a.cov_id, t.b.cov_id, side),
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The per-order lookups of the write path go through the order's own rows: a plan that starts from a column every
-    /// order shares (`kind`, `spent_block`) reads the whole table on every fill and placement.
+    /// The per-order lookups of the write path go through the rows of the order itself.
+    ///
+    /// A plan that starts from a column that every order shares, such as `kind` or `spent_block`,
+    /// reads the whole table on every fill and placement.
     #[test]
     fn per_order_queries_use_the_covenant_indexes() {
         let conn = crate::indexer::db::open_memory("testnet-10").unwrap();
