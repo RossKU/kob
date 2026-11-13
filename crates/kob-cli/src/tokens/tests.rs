@@ -37,14 +37,14 @@ fn the_table_shows_the_whole_covenant_id_and_a_warn_column_only_when_there_is_on
     assert_eq!(t.len(), 3);
     assert!(t[0].starts_with("TICKER  COVENANT ID") && t[0].ends_with("ASKS  BIDS"), "{t:?}");
     assert!(!t[0].contains("WARN"), "{t:?}");
-    // the id is never shortened
+    // The id is never shortened.
     assert!(t[1].contains(&cov(1)) && t[2].contains(&cov(2)), "{t:?}");
-    // columns line up: every line has the covenant id at the same column
+    // Columns line up: every line has the covenant id at the same column.
     let at = |l: &str, c: &str| l.find(c).unwrap();
     assert_eq!(at(&t[1], &cov(1)), at(&t[2], &cov(2)));
     assert!(t[1].starts_with("TUSD  ") && t[1].contains("  8  kcc20-ref-public-mint 3/3  "), "{t:?}");
     assert!(t[2].contains("   -  kron-2433 4/5"), "{t:?}");
-    // a warning adds the column
+    // A warning adds the column.
     let mut rows = rows;
     rows[0].warn = vec!["live_mint_authority".into(), "freeze".into()];
     let t = table(&rows);
@@ -65,7 +65,8 @@ fn the_indexer_rows_carry_its_facts_only() {
     let rows = indexer_rows(&v).unwrap();
     assert_eq!(rows.len(), 3, "a row without a covenant id is not a token");
     assert_eq!(rows[0].program, "kcc20-ref-public-mint 3/3");
-    // genesis_unverified only says the registry has no check: left out; the rest as the indexer says it
+    // `genesis_unverified` only says the registry has no check, so it is left out. The rest is as
+    // the indexer says it.
     assert_eq!(rows[0].warn, ["live_mint_authority", "freeze"]);
     assert_eq!((rows[0].asks, rows[0].bids, rows[0].decimals), (Some(4), Some(3), Some(8)));
     assert_eq!((rows[1].program.as_str(), rows[1].decimals), ("ambiguous", None));
@@ -75,18 +76,18 @@ fn the_indexer_rows_carry_its_facts_only() {
 
 fn kascov_fixture() -> Value {
     json!({"network": "mainnet", "tokens_total": 6, "tokens": [
-        // KCC-20 public mint, known by its view hash
+        // KCC-20 public mint, known by its view hash.
         {"covenant_id": cov(10), "claimed_ticker": "PMT", "claimed_decimals": 6, "listed_ticker": "NOTUSED",
          "standard": {"template_hash": cov(0xee), "view_template_hash": hash_of("kcc20-ref-public-mint")}},
-        // a program KOB lists but has not reviewed: said so
+        // A program KOB lists but has not reviewed: said so.
         {"covenant_id": cov(11), "claimed_ticker": "EIGHT", "standard": {"view_template_hash": hash_of("kcc20-ref-8x8")}},
-        // a program hash KOB has no program for
+        // A program hash KOB has no program for.
         {"covenant_id": cov(12), "claimed_ticker": "ODD", "claimed_decimals": 0, "standard": {"template_hash": cov(0xab), "view_template_hash": cov(0xcd)}},
-        // no program hash at all (the 46-byte layout)
+        // No program hash at all (the 46-byte layout).
         {"covenant_id": cov(13), "layout": "kcc20-46"},
-        // already shown by the indexer
+        // Already shown by the indexer.
         {"covenant_id": cov(1), "claimed_ticker": "TUSD"},
-        // not a token id
+        // Not a token id.
         {"covenant_id": "nonsense"},
     ]})
 }
@@ -103,7 +104,7 @@ fn kascov_is_a_discovery_list_whose_program_hash_is_mapped_to_kob_programs() {
     assert_eq!(by("11").program, "kcc20-ref-8x8 8/8 (pending-review)");
     assert_eq!(by("12").program, "unsupported");
     assert_eq!((by("13").program.as_str(), by("13").ticker.as_str()), ("unidentified", ""));
-    // the table marks them with "-"
+    // The table marks them with "-".
     let t = table(&rows);
     assert!(t[1].split_whitespace().rev().take(2).all(|w| w == "-"), "{t:?}");
     assert!(kascov_rows(&json!({}), &have).is_err());
@@ -136,7 +137,7 @@ fn max_age_is_the_servers_and_30_seconds_without_one() {
     assert_eq!(max_age_of(Some("public, s-maxage=60")), DEFAULT_MAX_AGE);
     assert_eq!(max_age_of(None), Duration::from_secs(30));
     assert_eq!(max_age_of(Some("max-age=soon")), DEFAULT_MAX_AGE);
-    // nothing to reuse when the server says so
+    // Nothing to reuse when the server says so.
     assert_eq!(max_age_of(Some("no-store")), Duration::ZERO);
     assert_eq!(max_age_of(Some("max-age=60, no-cache")), Duration::ZERO);
 }
@@ -158,43 +159,43 @@ fn the_local_copy_is_reused_within_max_age_only_and_revalidated_with_the_etag() 
     };
     let get = |now: u64, force: bool, r: Result<Fetched, String>| cached_list(Some(&dir), "mainnet", now, force, fetch(r));
     let now = 1_000_000;
-    // nothing cached: one request (not conditional), stored with the server's max-age (30 s)
+    // Nothing cached: one request (not conditional), stored with the server's max-age (30 s).
     let (v, o) = get(now, false, Ok(body(1, 30, Some("\"e1\"")))).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(1), Origin::Fetched));
     assert_eq!(seen.borrow()[0], Validators::default());
-    // 29 s later: the copy, no request
+    // 29 s later: the copy, no request.
     let (v, o) = get(now + 29, false, Ok(body(2, 30, None))).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(1), Origin::Cache));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    // 31 s later: one conditional request with the ETag; 304 keeps the copy and renews it for another max-age
+    // 31 s later: one conditional request with the ETag. The 304 keeps the copy and renews it.
     let (v, o) = get(now + 31, false, Ok(Fetched::NotModified { max_age: Duration::from_secs(30) })).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(1), Origin::Revalidated));
     assert_eq!(seen.borrow()[1].etag.as_deref(), Some("\"e1\""));
     let (_, o) = get(now + 60, false, Ok(body(9, 30, None))).unwrap();
     assert_eq!(o, Origin::Cache, "renewed at now + 31");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
-    // a changed list: 200 replaces the copy (and its validators)
+    // A changed list: 200 replaces the copy (and its validators).
     let (v, o) = get(now + 100, false, Ok(body(3, 60, Some("\"e3\"")))).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(3), Origin::Fetched));
     assert_eq!(seen.borrow()[2].etag.as_deref(), Some("\"e1\""));
-    // --refresh: a request now, unconditional, whatever the copy says
+    // --refresh: a request now, unconditional, whatever the copy says.
     let (v, o) = get(now + 101, true, Ok(body(4, 60, None))).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(4), Origin::Fetched));
     assert_eq!(seen.borrow()[3], Validators::default());
-    // the server is down: the older list, said so
+    // The server is down: the older list, said so.
     let (v, o) = get(now + 4000, false, Err("connection refused".into())).unwrap();
     assert_eq!((v["tokens"][0].as_i64(), o), (Some(4), Origin::StaleCache));
-    // another network has its own file; nothing cached and down: the error
+    // Another network has its own file. Nothing cached and down: the error.
     let e = cached_list(Some(&dir), "testnet-10", now, false, fetch(Err("connection refused".into()))).unwrap_err();
     assert_eq!(e, "connection refused");
-    // a 304 with nothing cached cannot be served
+    // A 304 with nothing cached cannot be served.
     let e =
         cached_list(Some(&dir), "testnet-10", now, false, fetch(Ok(Fetched::NotModified { max_age: DEFAULT_MAX_AGE }))).unwrap_err();
     assert!(e.contains("304"), "{e}");
-    // no cache directory: every call asks
+    // No cache directory: every call asks.
     let (_, o) = cached_list(None, "mainnet", now, false, fetch(Ok(body(5, 30, None)))).unwrap();
     assert_eq!(o, Origin::Fetched);
-    // no max-age (zero): never reused
+    // No max-age (zero): never reused.
     let (_, _) = get(now + 5000, false, Ok(body(6, 0, None))).unwrap();
     let (_, o) = get(now + 5000, false, Ok(body(7, 0, None))).unwrap();
     assert_eq!(o, Origin::Fetched);
@@ -234,29 +235,29 @@ fn the_command_end_to_end_with_a_mock_indexer_and_a_mock_kascov() {
     let _ = std::fs::remove_dir_all(&dir);
     let c = common(&url, "");
     let show = |search: &str, all: bool, refresh: bool| view(&c, search, all, refresh, &url, Some(&dir));
-    // the default: the indexer's tokens only, kascov is not asked
+    // The default: the indexer's tokens only, kascov is not asked.
     let (doc, lines) = show("", false, false).unwrap();
     assert!(lines[0].starts_with("2 token(s) on mainnet (indexer http://127.0.0.1:"), "{lines:?}");
     assert_eq!(doc["tokens"].as_array().unwrap().len(), 2);
     assert_eq!(doc["tokens"][1]["warnings"], json!(["live_mint_authority"]));
     assert_eq!(doc["kascov"], Value::Null);
     assert_eq!(kascov_requests(), 0);
-    // a search by covenant-id prefix
+    // A search by covenant-id prefix.
     let (doc, lines) = show(&cov(2)[..6], false, false).unwrap();
     assert_eq!(doc["tokens"].as_array().unwrap().len(), 1);
     assert!(lines[0].contains("matching `020202`"), "{lines:?}");
-    // --all: plus the four kascov-only tokens; one request
+    // --all: plus the four kascov-only tokens. One request.
     let (doc, lines) = show("", true, false).unwrap();
     assert_eq!(doc["tokens"].as_array().unwrap().len(), 6);
     assert_eq!(doc["kascov"]["origin"], "fetched");
     assert!(lines[0].contains("plus the kascov.io list"), "{lines:?}");
     let pmt = lines.iter().find(|l| l.starts_with("PMT")).unwrap();
     assert!(pmt.contains(&cov(10)) && pmt.contains("kcc20-ref-public-mint 3/3"), "{pmt}");
-    // within max-age: the copy, no request
+    // Within max-age: the copy, no request.
     let (doc, _) = show("pm", true, false).unwrap();
     assert_eq!((doc["kascov"]["origin"].as_str(), doc["tokens"].as_array().unwrap().len()), (Some("cache"), 1));
     assert_eq!(kascov_requests(), 1);
-    // --refresh: a request now (not conditional)
+    // --refresh: a request now (not conditional).
     let (doc, _) = show("pm", true, true).unwrap();
     assert_eq!(doc["kascov"]["origin"], "fetched");
     assert_eq!(kascov_requests(), 2);
@@ -267,7 +268,8 @@ fn the_command_end_to_end_with_a_mock_indexer_and_a_mock_kascov() {
         kascov_sent.iter().all(|h| !h.iter().any(|(k, _)| k == "if-none-match")),
         "the first and the forced request are unconditional"
     );
-    // past max-age (the copy's clock moved back by editing its metadata): one conditional request, answered 304
+    // Past max-age (the clock of the copy is moved back in its metadata): one conditional request,
+    // answered 304.
     let meta = dir.join("kascov-mainnet-tokens.meta.json");
     let mut m: Value = serde_json::from_str(&std::fs::read_to_string(&meta).unwrap()).unwrap();
     assert_eq!((m["max_age"].as_u64(), m["etag"].as_str()), (Some(30), Some("\"v1\"")));
@@ -278,7 +280,7 @@ fn the_command_end_to_end_with_a_mock_indexer_and_a_mock_kascov() {
     assert_eq!(kascov_requests(), 3);
     let last = state.lock().unwrap().request_headers.last().unwrap().clone();
     assert!(last.iter().any(|(k, v)| k == "if-none-match" && v == "\"v1\""), "{last:?}");
-    // a full covenant id in no list: said so, with the way on
+    // A full covenant id in no list: said so, with the way on.
     let unknown = cov(0x77);
     let (doc, lines) = show(&unknown, true, false).unwrap();
     assert_eq!(doc["tokens"].as_array().unwrap().len(), 0);
@@ -292,10 +294,10 @@ fn the_command_end_to_end_with_a_mock_indexer_and_a_mock_kascov() {
     assert!(doc["note"].as_str().unwrap().contains("neither the indexer's list nor kascov.io's"));
     let (_, lines) = show(&unknown, false, false).unwrap();
     assert!(lines.last().unwrap().contains("--all") && lines.last().unwrap().contains("not in the indexer's list"), "{lines:?}");
-    // a prefix is not a full id: no note
+    // A prefix is not a full id: no note.
     let (doc, _) = show("77", true, false).unwrap();
     assert_eq!(doc["note"], Value::Null);
-    // kascov unreachable, nothing cached: a clear error that names the way on
+    // kascov unreachable, nothing cached: a clear error that names the way on.
     let _ = std::fs::remove_dir_all(&dir);
     let e = view(&c, "", true, false, "http://127.0.0.1:1", Some(&dir)).unwrap_err();
     assert!(e.contains("kascov.io list is not reachable") && e.contains("without --all"), "{e}");
@@ -325,11 +327,12 @@ fn a_ticker_that_names_two_tokens_is_refused_with_every_candidate() {
     let e = market::unique_cov(&reg, &idx, "TUSD").unwrap_err();
     assert!(e.contains("`TUSD` names 2 tokens") && e.contains(&cov(1)) && e.contains(&cov(2)) && !e.contains(&cov(3)), "{e}");
     assert!(e.contains("(registry)") && e.contains("(indexer)"), "{e}");
-    // the same token in both lists is one token; a covenant id is never ambiguous; an unknown name is none
+    // The same token in both lists is one token. A covenant id is never ambiguous. An unknown name
+    // is none.
     assert_eq!(market::unique_cov(&reg, &[facts("TUSD", 1)], "tusd").unwrap(), Some([1; 32]));
     assert_eq!(market::unique_cov(&reg, &idx, &cov(2)).unwrap(), Some([2; 32]));
     assert_eq!(market::unique_cov(&reg, &idx, "NOPE").unwrap(), None);
-    // the resolver every trading command goes through refuses it too, instead of taking the registry's
+    // The resolver of every trading command refuses it too, instead of using the registry.
     let e = market::resolve_with("TUSD", &reg, &idx, None).unwrap_err();
     assert!(e.contains("names 2 tokens") && e.contains(&cov(2)), "{e}");
     let e = market::resolve_with("TUSD", &[], &[facts("TUSD", 4), facts("TUSD", 5)], None).unwrap_err();

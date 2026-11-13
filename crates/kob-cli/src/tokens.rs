@@ -1,7 +1,12 @@
-//! `kob tokens [SEARCH] [--all] [--json]`: the tokens with a KOB market (the indexer's `GET /v1/tokens`, `docs/api-reference.md` 3.4), and
-//! with `--all` every token kascov.io lists for the network, to find tokens that were never traded on KOB. Read-only: no key, no
-//! node. kascov is a discovery list only: its ticker and decimals are the token's own claims, and the one fact taken from it
-//! besides is the program hash, which says whether KOB knows the program (`kob registry programs`).
+//! `kob tokens [SEARCH] [--all] [--json]`: list the tokens with a KOB market.
+//!
+//! By default the list is the indexer's `GET /v1/tokens` (`docs/api-reference.md` 3.4). With
+//! `--all` it also holds every token that kascov.io lists for the network, which finds tokens that
+//! were never traded on KOB. The command is read-only and needs no key and no node.
+//!
+//! kascov is a discovery list only. Its ticker and decimals are claims of the token. The one fact
+//! taken from it is the program hash, which says whether KOB knows the program
+//! (`kob registry programs`).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,11 +46,13 @@ USAGE
 KOB makes no judgement of a token: nothing here says a token is good, verified or official.
 ";
 
-/// Where kascov publishes its token list (`$KOB_KASCOV_URL` replaces the base, for a mirror and for tests).
+/// Where kascov publishes its token list.
+///
+/// `$KOB_KASCOV_URL` replaces the base, for a mirror and for tests.
 pub const KASCOV_BASE: &str = "https://kascov.io";
 /// How long a cached list is reused when the server names no `max-age`.
 pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(30);
-/// Declarations asked for tokens without a registry ticker (one request each).
+/// Declarations asked for tokens without a registry ticker, one request each.
 const DECLARATION_BUDGET: usize = 40;
 /// Timeout of one request.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -71,7 +78,7 @@ pub struct Row {
     pub source: &'static str,
 }
 
-/// `kob-protocol`'s label of a program: its registry id and slots (`kcc20-ref-public-mint 3/3`).
+/// Label of a program: its registry id and slots, such as `kcc20-ref-public-mint 3/3`.
 pub fn program_label(registry_id: &str) -> String {
     match kob_protocol::profile::by_registry_id(registry_id) {
         Some(p) => format!("{} {}/{}", p.registry_id, p.slots.inputs, p.slots.outputs),
@@ -79,9 +86,11 @@ pub fn program_label(registry_id: &str) -> String {
     }
 }
 
-/// The program a kascov token runs, by the hashes kascov gives (`standard.view_template_hash`, else `standard.template_hash`):
-/// the KOB program's label (with its review status when not `reviewed`), `unsupported` for a hash KOB has no program for,
-/// `unidentified` when kascov gives none.
+/// The program a kascov token runs, named by the hashes kascov gives.
+///
+/// The hashes are `standard.view_template_hash`, else `standard.template_hash`. The result is the
+/// label of the KOB program, with its review status when that is not `reviewed`. It is
+/// `unsupported` for a hash that KOB has no program for, and `unidentified` when kascov gives none.
 pub fn kascov_program(token: &Value) -> String {
     let std = token.get("standard").filter(|s| s.is_object());
     let Some(std) = std else { return "unidentified".into() };
@@ -191,7 +200,7 @@ pub fn table(rows: &[Row]) -> Vec<String> {
         let mut out = String::new();
         for i in 0..cols {
             let c = &r[i];
-            // numbers right-aligned, the rest left-aligned
+            // Numbers are right-aligned, the rest left-aligned.
             if matches!(i, 2 | 4 | 5) {
                 out.push_str(&format!("{c:>w$}", w = widths[i]));
             } else {
@@ -206,8 +215,10 @@ pub fn table(rows: &[Row]) -> Vec<String> {
     std::iter::once(line(&head)).chain(body.iter().map(line)).collect()
 }
 
-/// The per-user cache directory of `kob` (`$KOB_CACHE_DIR`, else `%LOCALAPPDATA%\kob\cache`, `$XDG_CACHE_HOME/kob`,
-/// `~/.cache/kob`).
+/// The per-user cache directory of `kob`.
+///
+/// It is `$KOB_CACHE_DIR`, else `%LOCALAPPDATA%\kob\cache` on Windows, else `$XDG_CACHE_HOME/kob`,
+/// else `~/.cache/kob`.
 pub fn cache_dir() -> Option<PathBuf> {
     let env = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     if let Some(d) = env("KOB_CACHE_DIR") {
@@ -250,8 +261,10 @@ pub enum Fetched {
     NotModified { max_age: Duration },
 }
 
-/// The reuse time of a `Cache-Control` header: its `max-age` ([`DEFAULT_MAX_AGE`] when it has none; none at all for
-/// `no-store` / `no-cache`). `s-maxage` is for shared caches and is not read.
+/// The reuse time of a `Cache-Control` header.
+///
+/// It is the `max-age`, or [`DEFAULT_MAX_AGE`] when there is none, or zero for `no-store` and
+/// `no-cache`. `s-maxage` is for shared caches and is not read.
 pub fn max_age_of(cache_control: Option<&str>) -> Duration {
     let mut age = None;
     for d in cache_control.unwrap_or("").split(',').map(|d| d.trim().to_ascii_lowercase()) {
@@ -269,10 +282,13 @@ fn meta_json(now: u64, max_age: Duration, v: &Validators) -> Value {
     json!({"fetched_at": now, "max_age": max_age.as_secs(), "etag": v.etag, "last_modified": v.last_modified})
 }
 
-/// kascov's list of `network` through the cache in `dir` (`kascov-<network>-tokens.json` and its `.meta.json`). The copy is
-/// reused while it is younger than the server's `max-age` at the time it was fetched (`force`: never); past it, one
-/// request (`fetch`, given the validators of the copy), whose 304 renews the copy and whose 200 replaces it. When the request
-/// fails and a copy exists, that one is returned (the caller says so). `now` is unix seconds. Nothing runs in the background.
+/// kascov's list of `network`, through the cache in `dir`.
+///
+/// The cache files are `kascov-<network>-tokens.json` and its `.meta.json`. The copy is reused
+/// while it is younger than the `max-age` the server gave when it was fetched, and never with
+/// `force`. Past that, `fetch` makes one request with the validators of the copy. A 304 renews
+/// the copy and a 200 replaces it. When the request fails and a copy exists, that copy is
+/// returned and the caller says so. `now` is in unix seconds. Nothing runs in the background.
 pub fn cached_list(
     dir: Option<&Path>,
     network: &str,
@@ -299,7 +315,7 @@ pub fn cached_list(
             return Ok((v.clone(), Origin::Cache));
         }
     }
-    // a cache that cannot be written is not an error
+    // A cache that cannot be written is not an error.
     let store = |v: &Value, max_age: Duration, val: &Validators| {
         let (Some(f), Some(m)) = (&file, &meta_file) else { return };
         let _ = f.parent().map(std::fs::create_dir_all);
@@ -385,8 +401,9 @@ pub fn view(
     let indexer = c.need_indexer()?;
     let listed = http::get_ok(indexer, "/v1/tokens", data::INDEXER_TIMEOUT)?;
     let mut rows = indexer_rows(&listed)?;
-    // a token without a registry ticker: the symbol of its verified KCC-23 declaration, when the indexer holds one (one request
-    // each, at most DECLARATION_BUDGET; the rest stay blank)
+    // A token without a registry ticker gets the symbol of its verified KCC-23 declaration, if the
+    // indexer holds one. That costs one request each, at most DECLARATION_BUDGET, and the rest stay
+    // blank.
     let (reg, _) = data::token_lists(c.registry.as_deref(), &c.network, None)?;
     let held: std::collections::BTreeSet<String> = listed
         .get("tokens")
@@ -459,7 +476,8 @@ pub fn view(
         }});
     }
     let shown: Vec<Row> = rows.into_iter().filter(|r| matches(r, search)).collect();
-    // a full covenant id that is in no list: said so (it may still be a token; only the lists do not have it)
+    // A full covenant id that is in no list is said so. It may still be a token that only the lists
+    // lack.
     let missing = (kob_protocol::registry::parse_hex32(search.trim()).is_some() && shown.is_empty()).then(|| {
         if all {
             format!(
@@ -502,7 +520,7 @@ pub fn view(
     Ok((doc, lines))
 }
 
-/// Split a URL into the base (`scheme://host[:port]`) and the path the HTTP client takes separately.
+/// Split a URL into its base (`scheme://host[:port]`) and its path, which the client takes apart.
 fn url_base(url: &str) -> (String, String) {
     let rest_at = url.find("://").map_or(0, |i| i + 3);
     match url[rest_at..].find('/') {
