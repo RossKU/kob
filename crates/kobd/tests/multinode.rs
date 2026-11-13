@@ -15,7 +15,7 @@ use kobd::indexer::db::open_memory;
 use kobd::indexer::follower::{Follower, FollowerConfig, StepOutcome};
 use kobd::indexer::ingest::Ingest;
 use kobd::indexer::status::{FollowerState, HealthState};
-use kobd::rpc::multi::{MultiNode, NodeSpec};
+use kobd::rpc::multi::{MultiNode, NodeSpec, BENCH_FIRST, BENCH_STRIKES};
 use kobd::rpc::types::*;
 use kobd::rpc::{ChainSource, RpcError, WindowRequest};
 use kobd::testkit::*;
@@ -57,17 +57,33 @@ enum Mode {
 const FORGES_UNKNOWN: u8 = 1;
 const FORGES_RETENTION: u8 = 2;
 
+/// What a node's windows do once `down` is set: hang until they time out (180 s, the client's request timeout), or lose the
+/// connection at once.
+const HANGS: u8 = 1;
+const RESETS: u8 = 2;
+
 struct Peer {
     node: Arc<MockNode>,
     mode: Mode,
     windows: AtomicUsize,
     /// `FORGES_UNKNOWN` or `FORGES_RETENTION`: every chain request fails with that error, and no block is known.
     forge: AtomicU8,
+    /// `HANGS` or `RESETS`: every window it is asked for fails that way. Its other answers stay fine.
+    down: AtomicU8,
+    /// Requests for its acceptance data, as the cross-checking node asks for them.
+    ids: AtomicUsize,
 }
 
 impl Peer {
     fn new(node: &Arc<MockNode>, mode: Mode) -> Arc<Peer> {
-        Arc::new(Peer { node: node.clone(), mode, windows: AtomicUsize::new(0), forge: AtomicU8::new(0) })
+        Arc::new(Peer {
+            node: node.clone(),
+            mode,
+            windows: AtomicUsize::new(0),
+            forge: AtomicU8::new(0),
+            down: AtomicU8::new(0),
+            ids: AtomicUsize::new(0),
+        })
     }
 
     fn forged(&self, start: Hash32) -> Result<(), RpcError> {
@@ -86,6 +102,16 @@ impl ChainSource for Peer {
             self.windows.fetch_add(1, Ordering::Relaxed);
         }
         self.forged(req.start_hash)?;
+        if windowed {
+            match self.down.load(Ordering::Relaxed) {
+                HANGS => {
+                    tokio::time::sleep(Duration::from_secs(180)).await;
+                    return Err(RpcError::Timeout(Duration::from_secs(180)));
+                }
+                RESETS => return Err(RpcError::Transport("connection reset by peer".into())),
+                _ => {}
+            }
+        }
         if let Mode::Slow(d) = self.mode {
             tokio::time::sleep(d).await;
         }
@@ -166,6 +192,7 @@ impl ChainSource for Peer {
         ChainSource::chain_hashes(&*self.node, start).await
     }
     async fn chain_with_ids(&self, start: Hash32, m: Option<u64>) -> Result<ChainIds, RpcError> {
+        self.ids.fetch_add(1, Ordering::Relaxed);
         self.forged(start)?;
         if self.mode == Mode::IdsTimeOutUnbounded && m.is_none() {
             return Err(RpcError::Timeout(Duration::from_secs(180)));
@@ -512,5 +539,140 @@ async fn an_authority_that_disowns_the_cursor_is_not_believed_without_the_cross_
         let o = m.follower.step().await;
         let StepOutcome::Gap(why) = o else { panic!("forge {forge}: {o:?}") };
         assert!(kobd::indexer::follower::is_pruned_gap(&why), "forge {forge}: {why}");
+    }
+}
+
+/// Appends `blocks` chain blocks of noise to the mock chain, salted by `salt` so that no transaction repeats.
+fn grow(node: &MockNode, blocks: u64, salt: u64) {
+    for i in 0..blocks {
+        node.push_block((0..6).map(|j| noise_tx(salt + i * 100 + j, j % 3 == 0)).collect());
+    }
+}
+
+/// A secondary whose window answers take a minute each, next to a healthy primary (simulated time). Its late windows are
+/// asked of the primary too after a few seconds, and the first answer is used. After three such windows it is benched for
+/// bodies and gets none. Every catch-up takes about as long as the primary's alone, and the slow node delivered no window.
+/// Before, every window it held took the whole minute, in chain order, and held up every window behind it.
+#[tokio::test(start_paused = true)]
+async fn a_slow_secondary_is_hedged_and_benched_and_the_catch_up_keeps_the_primary_pace() {
+    let c = Ctx::new();
+    let _ = chain(&c, 160);
+    let node = c.hs.node.clone();
+    let alone = multi(node.anchor(), vec![(spec("pace-alone", true, 2), Peer::new(&node, Mode::Honest))]);
+    let t0 = tokio::time::Instant::now();
+    alone.sync(2_000).await;
+    let base = t0.elapsed();
+
+    let slow = Peer::new(&node, Mode::Slow(Duration::from_secs(60)));
+    let m = multi(
+        node.anchor(),
+        vec![(spec("pace-primary", true, 2), Peer::new(&node, Mode::Honest)), (spec("pace-slow", true, 2), slow.clone())],
+    );
+    // Catch-ups of 160 chain blocks, then of 60 more each, until the slow node is benched.
+    let mut rounds = 0;
+    loop {
+        let t0 = tokio::time::Instant::now();
+        m.sync(2_000).await;
+        let took = t0.elapsed();
+        let s = m.health.snapshot().nodes[1].clone();
+        println!(
+            "round {rounds}: {took:?} (the primary alone: {base:?}); slow node asked for {} windows, {s:?}",
+            slow.windows.load(Ordering::Relaxed)
+        );
+        assert!(took < Duration::from_secs(30) && took <= base + Duration::from_secs(30), "{took:?} against {base:?} alone");
+        assert_eq!(s.windows_ok, 0, "{s:?}");
+        if s.state == "benched" {
+            break;
+        }
+        rounds += 1;
+        assert!(rounds < 8, "never benched: {s:?}");
+        grow(&node, 60, 10_000_000 * rounds);
+    }
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+    let s = &h.nodes[1];
+    assert_eq!(s.benched, 1, "{s:?}");
+    assert!(s.hedged >= BENCH_STRIKES as u64, "{s:?}");
+    assert!(s.bench_reason.as_deref().is_some_and(|r| r.starts_with("late")), "{s:?}");
+    assert!(h.nodes[0].windows_ok > 0 && h.nodes[0].in_flight == 0 && s.in_flight == 0, "{:?}", h.nodes);
+
+    // Benched: the next catch-up does not ask it at all and waits for nothing.
+    let asked = slow.windows.load(Ordering::Relaxed);
+    grow(&node, 60, 90_000_000);
+    let t0 = tokio::time::Instant::now();
+    m.sync(2_000).await;
+    assert!(t0.elapsed() <= base + Duration::from_secs(1), "{:?}", t0.elapsed());
+    assert_eq!(slow.windows.load(Ordering::Relaxed), asked, "no window for a benched node");
+    assert_eq!(m.health.snapshot().cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+}
+
+/// A secondary whose windows keep failing, hanging until they time out or losing the connection, is benched for bodies.
+/// Benched, it still vouches for the authority's single steps. Healthy again after the bench, it serves windows again.
+#[tokio::test(start_paused = true)]
+async fn a_failing_secondary_is_benched_for_bodies_still_cross_checks_and_returns_once_healthy() {
+    for (k, down) in [HANGS, RESETS].into_iter().enumerate() {
+        let c = Ctx::new();
+        let _ = chain(&c, 80);
+        let node = c.hs.node.clone();
+        let flaky = Peer::new(&node, Mode::Honest);
+        flaky.down.store(down, Ordering::Relaxed);
+        let peer =
+            NodeSpec { url: format!("flaky-{k}"), fetch: true, submit: true, connections: 2, cross_check: true, may_lead: true };
+        let m = multi(
+            node.anchor(),
+            vec![(spec(&format!("flaky-primary-{k}"), true, 2), Peer::new(&node, Mode::Honest)), (peer, flaky.clone())],
+        );
+        let salt = 100_000_000 * (k as u64 + 1);
+        // Catch-ups until it is benched. A node that lost its connection backs off first, so time passes between them.
+        let mut rounds = 0;
+        loop {
+            let t0 = tokio::time::Instant::now();
+            m.sync(2_000).await;
+            assert!(t0.elapsed() < Duration::from_secs(30), "{:?}", t0.elapsed());
+            let f = m.health.snapshot().nodes[1].clone();
+            if f.state == "benched" {
+                break;
+            }
+            rounds += 1;
+            assert!(rounds < 8, "never benched: {f:?}");
+            tokio::time::sleep(Duration::from_secs(f.backoff_secs + 1)).await;
+            grow(&node, 60, salt + 1_000_000 * rounds);
+        }
+        let h = m.health.snapshot();
+        assert_eq!(h.cursor_hash, Some(node.tip()));
+        assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+        let f = &h.nodes[1];
+        assert_eq!((f.benched, f.windows_ok), (1, 0), "{f:?}");
+        assert!(f.bench_secs > 0 && f.bench_secs <= BENCH_FIRST.as_secs(), "{f:?}");
+        if down == RESETS {
+            assert!(f.windows_failed >= BENCH_STRIKES as u64 && f.hedged == 0, "{f:?}");
+            assert!(f.bench_reason.as_deref().is_some_and(|r| r.contains("reset")), "{f:?}");
+        } else {
+            assert!(f.hedged >= BENCH_STRIKES as u64, "{f:?}");
+        }
+
+        // Past its backoff and within the bench: single steps near the sink are still vouched for by it.
+        assert!(f.backoff_secs + 1 < f.bench_secs, "{f:?}");
+        tokio::time::sleep(Duration::from_secs(f.backoff_secs + 1)).await;
+        let ids = flaky.ids.load(Ordering::Relaxed);
+        grow(&node, 3, salt + 50_000_000);
+        m.sync(100).await;
+        assert_eq!(m.health.snapshot().cursor_hash, Some(node.tip()));
+        assert!(flaky.ids.load(Ordering::Relaxed) > ids, "a node benched for bodies still cross-checks");
+        assert_eq!(m.health.snapshot().nodes[1].state, "benched");
+
+        // Healthy again, and the bench is over: it serves windows again.
+        flaky.down.store(0, Ordering::Relaxed);
+        tokio::time::sleep(BENCH_FIRST).await;
+        grow(&node, 80, salt + 60_000_000);
+        m.sync(2_000).await;
+        let h = m.health.snapshot();
+        assert_eq!(h.cursor_hash, Some(node.tip()));
+        assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+        let f = &h.nodes[1];
+        assert!(f.windows_ok > 0, "it serves windows again: {f:?}");
+        assert_eq!((f.state.as_str(), f.benched, f.bench_secs), ("ok", 1, 0), "{f:?}");
     }
 }

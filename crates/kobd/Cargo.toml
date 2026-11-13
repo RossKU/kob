@@ -80,3 +80,5 @@ deploy-mainnet = ["kob-protocol/deploy-mainnet"]
 tempfile = "3"
 # C6 planner property tests: the value oracle names outputs through `kob_protocol::artifacts::spk_trace` (test-only feature)
 kob-protocol = { path = "../kob-protocol", features = ["adversarial"] }
+# Simulated time for the tests of slow nodes (`rpc::multi`, tests/multinode.rs)
+tokio = { version = "1", features = ["test-util"] }

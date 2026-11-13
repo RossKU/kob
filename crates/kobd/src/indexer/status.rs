@@ -764,6 +764,21 @@ impl HealthSnapshot {
                 n.dropped_reason.is_some() as u64
             });
             per(
+                "kob_indexer_node_benched",
+                "gauge",
+                "1 while the node is benched for transaction bodies (slow or failing); it still cross-checks and takes submissions.",
+                &|n| (n.state == "benched") as u64,
+            );
+            per("kob_indexer_node_benched_total", "counter", "Times the node was benched for transaction bodies.", &|n| {
+                n.benched as u64
+            });
+            per(
+                "kob_indexer_node_hedged_total",
+                "counter",
+                "Windows of the node that another node delivered first after it was late.",
+                &|n| n.hedged,
+            );
+            per(
                 "kob_indexer_node_replaced_total",
                 "counter",
                 "Public nodes the resolver entry gave up (failed, hanging, unsynced, behind, wrong network, no UTXO index, contradicting).",

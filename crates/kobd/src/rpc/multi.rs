@@ -28,6 +28,30 @@
 //! - A node that contradicts a hash or the authority's acceptance data is dropped until the process
 //!   restarts (`lies`).
 //!
+//! # A slow or flaky body node
+//!
+//! Windows are applied in chain order, so one window held by a slow node holds up every window
+//! behind it. A node that answers far later than the others, or keeps failing, must not slow the
+//! fetch below what the healthy nodes can do.
+//!
+//! - **Hedge.** A window on a node other than the authority is asked of another node too once it is
+//!   late: out for [`HEDGE_FACTOR`] times the median window time of the other healthy nodes, plus
+//!   [`HEDGE_MARGIN`] ([`HEDGE_UNMEASURED`] while no other node is measured). The other node is
+//!   picked as for any window, and the authority always qualifies. Whichever answer arrives first
+//!   is used, and the other request is dropped. A hedge's answer is checked like any other.
+//! - **Strikes.** A late window that the other node delivered first is a strike against the late
+//!   node (`hedged`). So is a window it failed on the wire: a transport error, a timeout, an
+//!   undecodable or oversized answer. A window it delivers in time clears its strikes. Not knowing
+//!   the window yet is no strike: such a node is behind and pauses for 10 s as before.
+//! - **Bench.** [`BENCH_STRIKES`] strikes in a row bench the node for bodies: it gets no windows
+//!   for [`BENCH_FIRST`], doubling at each bench up to [`BENCH_MAX`]. It is logged at warn. A
+//!   benched node keeps its other roles. It still cross-checks the authority and takes submissions.
+//! - **Return.** After the bench the node gets windows again. Its first window in time returns it,
+//!   logged at info. A strike before that benches it again at once, for twice as long. After
+//!   [`BENCH_FORGET_AFTER`] windows in time in a row, the next bench starts at [`BENCH_FIRST`] again.
+//!
+//! The authority is never hedged or benched. What a window from any node must pass is unchanged.
+//!
 //! # A cross-checking node
 //!
 //! A node with `NodeSpec::cross_check` also vouches for the authority's own data. It is the second
@@ -150,11 +174,12 @@ use super::types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse,
 use super::verify::{verify_window, Rejection};
 use super::{fetch_window_from, window_min_confirmations, ChainSource, Fetched, Origin, RpcError, WindowRequest};
 use crate::hex::Hash32;
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// One node of the list.
 #[derive(Debug, Clone)]
@@ -220,6 +245,8 @@ pub struct NodeStatus {
     /// - `dropped` means it contradicted the authority.
     /// - `cut` means a named node has an alarm and is left out of the pair until it ends (see
     ///   `cut_reason`).
+    /// - `benched` means it serves no windows for `bench_secs`, because it was slow or kept
+    ///   failing (`bench_reason`). It still cross-checks and takes submissions.
     /// - `idle` means it neither fetches nor takes submissions.
     pub state: String,
     /// Serves windows of the parallel fetch.
@@ -258,6 +285,14 @@ pub struct NodeStatus {
     pub backoff_secs: u64,
     /// The last error the node caused.
     pub last_error: Option<String>,
+    /// Windows of this node that another node delivered first, after it was late.
+    pub hedged: u64,
+    /// How many times the node was benched for bodies.
+    pub benched: u32,
+    /// Seconds until a benched node gets windows again.
+    pub bench_secs: u64,
+    /// Why the node was last benched for bodies, if it ever was.
+    pub bench_reason: Option<String>,
     /// Submissions the node took.
     ///
     /// A submission counts when the node accepted it, or already had the transaction from a peer or
@@ -272,12 +307,26 @@ struct PeerState {
     status: NodeStatus,
     ewma_bps: Option<f64>,
     failures: u32,
-    backoff_until: Option<Instant>,
+    /// Skipped until then. It is on the runtime's clock, which tests can pause.
+    backoff_until: Option<tokio::time::Instant>,
     /// When a window last went to it.
     last_used: Option<Instant>,
     /// When it last contradicted the authority as the cross-checking node. Tips that differ for a
     /// moment do not count.
     last_disagreement: Option<Instant>,
+    /// Seconds per window, smoothed, from the request to the checked answer.
+    ewma_secs: Option<f64>,
+    /// Strikes in a row against it as a body node (module documentation, *A slow or flaky body
+    /// node*).
+    strikes: u32,
+    /// Benched for bodies until then. It is on the runtime's clock, which tests can pause.
+    bench_until: Option<tokio::time::Instant>,
+    /// Benches since it last served [`BENCH_FORGET_AFTER`] windows in time in a row.
+    bench_level: u32,
+    /// Benched before and not returned yet. One strike benches it again.
+    returning: bool,
+    /// Windows in time in a row.
+    clean: u32,
 }
 
 /// A node whose rate is below the best rate divided by this gets windows only when no faster node
@@ -286,6 +335,25 @@ const SLOW_FACTOR: f64 = 4.0;
 /// A node's rate is measured again when it got no window for this long. Its next window then counts
 /// as unmeasured.
 const REMEASURE: Duration = Duration::from_secs(300);
+
+/// A window on another node than the authority is late after this many times the median window time
+/// of the other healthy nodes, plus [`HEDGE_MARGIN`]. It is then asked of another node too (module
+/// documentation, *A slow or flaky body node*).
+pub const HEDGE_FACTOR: f64 = 3.0;
+/// Added to the median window time before a window counts as late.
+pub const HEDGE_MARGIN: Duration = Duration::from_secs(2);
+/// When a window counts as late while no other node has a measured window time.
+pub const HEDGE_UNMEASURED: Duration = Duration::from_secs(10);
+/// How often a window in flight reads its deadline again, since the other nodes' times change.
+const HEDGE_RECHECK: Duration = Duration::from_secs(1);
+/// Strikes in a row that bench a node for bodies.
+pub const BENCH_STRIKES: u32 = 3;
+/// How long the first bench lasts. Each further bench doubles it.
+pub const BENCH_FIRST: Duration = Duration::from_secs(60);
+/// The longest bench.
+pub const BENCH_MAX: Duration = Duration::from_secs(900);
+/// Windows in time in a row after which the next bench starts at [`BENCH_FIRST`] again.
+pub const BENCH_FORGET_AFTER: u32 = 20;
 
 /// Per-node state shared by the chain source and the submitter.
 pub struct NodeBoard {
@@ -444,14 +512,30 @@ impl NodeBoard {
         self.with(i, |p| p.status.in_flight = p.status.in_flight.saturating_sub(1))
     }
 
-    fn fetched(&self, i: usize, f: &Fetched) {
+    /// Node `i` delivered the window `f`, `took` after it was asked. `on_time` is false for a window
+    /// that was late and hedged (module documentation, *A slow or flaky body node*).
+    fn fetched(&self, i: usize, f: &Fetched, took: Duration, on_time: bool) {
         let bytes = f.raw.wire_bytes as u64;
         let blocks = f.raw.added_chain_block_hashes.len() as u64;
         let txs: usize = f.raw.chain_block_accepted_transactions.iter().map(|b| b.accepted_transactions.len()).sum();
         let secs = f.elapsed.as_secs_f64().max(1e-3);
+        let url = self.url(i);
         self.with(i, |p| {
             p.failures = 0;
             p.backoff_until = None;
+            let t = took.as_secs_f64();
+            p.ewma_secs = Some(p.ewma_secs.map_or(t, |o| 0.7 * o + 0.3 * t));
+            if on_time {
+                p.strikes = 0;
+                p.clean = p.clean.saturating_add(1);
+                if p.clean >= BENCH_FORGET_AFTER {
+                    p.bench_level = 0;
+                }
+                if p.returning {
+                    p.returning = false;
+                    tracing::info!(node = %url, benched = p.status.benched, "a node serves windows of transaction bodies again");
+                }
+            }
             let s = &mut p.status;
             s.windows_ok += 1;
             s.blocks += blocks;
@@ -492,7 +576,7 @@ impl NodeBoard {
                 }
                 Fault::OutOfSync => {
                     s.out_of_sync += 1;
-                    p.backoff_until = Some(Instant::now() + Duration::from_secs(10));
+                    p.backoff_until = Some(tokio::time::Instant::now() + Duration::from_secs(10));
                 }
                 Fault::Failed => {
                     if e.starts_with("timeout") {
@@ -502,7 +586,7 @@ impl NodeBoard {
                     let d = Duration::from_secs(5)
                         .saturating_mul(1u32 << p.failures.min(5).saturating_sub(1))
                         .min(Duration::from_secs(120));
-                    p.backoff_until = Some(Instant::now() + d);
+                    p.backoff_until = Some(tokio::time::Instant::now() + d);
                     // A slow or failing link should not keep its old rate.
                     p.ewma_bps = p.ewma_bps.map(|b| b / 2.0);
                 }
@@ -511,6 +595,57 @@ impl NodeBoard {
                 tracing::warn!(node = %url, error = e, "window from a secondary node failed; trying another node");
             }
         })
+    }
+
+    /// A strike against node `i` as a body node: a window it failed on the wire, or one it was late
+    /// with that another node delivered first.
+    ///
+    /// [`BENCH_STRIKES`] in a row bench it for bodies, and one benches it again before it returned.
+    /// The authority is never benched.
+    fn strike(&self, i: usize, why: &str) {
+        if i == self.authority() {
+            return;
+        }
+        let url = self.url(i);
+        let now = tokio::time::Instant::now();
+        self.with(i, |p| {
+            p.clean = 0;
+            if p.bench_until.is_some_and(|t| t > now) {
+                // A window sent before the bench came back. The bench stands.
+                return;
+            }
+            p.strikes = p.strikes.saturating_add(1);
+            let needed = if p.returning { 1 } else { BENCH_STRIKES };
+            if p.strikes < needed {
+                return;
+            }
+            let d = BENCH_FIRST.saturating_mul(1u32 << p.bench_level.min(16)).min(BENCH_MAX);
+            p.bench_level = p.bench_level.saturating_add(1);
+            p.bench_until = Some(now + d);
+            p.strikes = 0;
+            p.returning = true;
+            p.status.benched = p.status.benched.saturating_add(1);
+            p.status.bench_reason = Some(why.to_string());
+            tracing::warn!(
+                node = %url,
+                secs = d.as_secs(),
+                times = p.status.benched,
+                reason = why,
+                "a slow or failing node is benched for transaction bodies: its windows go to other nodes; it still cross-checks and takes submissions"
+            );
+        })
+    }
+
+    /// Node `i` was late with a window, `after` it was asked, and another node delivered it first.
+    fn lost_race(&self, i: usize, after: Duration) {
+        self.with(i, |p| p.status.hedged += 1);
+        self.strike(i, &format!("late: another node delivered its window first ({} ms after it was asked)", after.as_millis()));
+    }
+
+    /// Whether node `i` is benched for bodies now.
+    fn benched(&self, i: usize) -> bool {
+        let now = tokio::time::Instant::now();
+        self.with(i, |p| p.bench_until.is_some_and(|t| t > now))
     }
 
     fn note_error(&self, i: usize, e: &RpcError) {
@@ -544,7 +679,7 @@ impl NodeBoard {
 
     /// The status of every node, as `/v1/health` shows it.
     pub fn snapshot(&self) -> Vec<NodeStatus> {
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         let authority = self.authority();
         (0..self.peers.len())
             .map(|i| {
@@ -563,10 +698,15 @@ impl NodeBoard {
                     let wait = p.backoff_until.map(|t| t.saturating_duration_since(now)).unwrap_or_default();
                     s.backoff_secs = wait.as_secs();
                     s.bytes_per_sec = p.ewma_bps.map(|b| b as u64);
+                    let bench = p.bench_until.map(|t| t.saturating_duration_since(now)).unwrap_or_default();
+                    // Rounded up, so a benched node never shows 0 s left.
+                    s.bench_secs = bench.as_secs() + u64::from(bench.subsec_nanos() > 0);
                     s.state = if s.dropped_reason.is_some() {
                         "dropped"
                     } else if cut && i != authority {
                         "cut"
+                    } else if !bench.is_zero() && i != authority {
+                        "benched"
                     } else if !wait.is_zero() {
                         "backoff"
                     } else if !s.fetch && !s.submit && i != authority {
@@ -1132,7 +1272,7 @@ impl<N: ChainSource> MultiNode<N> {
     ///
     /// It is the first cross-checking node that is not dropped, not cut off and not backing off.
     fn cross_checker(&self) -> Option<usize> {
-        let now = Instant::now();
+        let now = tokio::time::Instant::now();
         let a = self.board.authority();
         (0..self.nodes.len()).filter(|&i| i != a).find(|&i| {
             let entry = &self.specs[i].url;
@@ -1316,7 +1456,7 @@ impl<N: ChainSource> MultiNode<N> {
     /// The node for the next attempt at a window.
     ///
     /// It is chosen among the nodes not tried yet for this window that serve windows and are not
-    /// dropped, cut off or backing off. The authority always qualifies. The choice prefers, in this
+    /// dropped, cut off, backing off or benched. The authority always qualifies. The choice prefers, in this
     /// order, a node that is not slow, then one with a free connection, then the best rate.
     ///
     /// A node is slow when its rate is below a quarter of the best one's ([`SLOW_FACTOR`]). An
@@ -1337,9 +1477,9 @@ impl<N: ChainSource> MultiNode<N> {
             }
             let (backing_off, rate) = self.board.with(i, |p| {
                 let stale = p.last_used.is_some_and(|t| now.saturating_duration_since(t) > REMEASURE);
-                (p.backoff_until.is_some_and(|t| t > now), p.ewma_bps.filter(|_| !stale))
+                (p.backoff_until.is_some_and(|t| t > tokio::time::Instant::now()), p.ewma_bps.filter(|_| !stale))
             });
-            if i != a && backing_off {
+            if i != a && (backing_off || self.board.benched(i)) {
                 continue;
             }
             cands.push((i, self.permits[i].available_permits() > 0, rate));
@@ -2010,41 +2150,144 @@ async fn probe_demoted<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, boar
 }
 
 impl<N: ChainSource> MultiNode<N> {
+    /// When a window that node `i` was asked for is late (module documentation, *A slow or flaky
+    /// body node*).
+    ///
+    /// It is [`HEDGE_FACTOR`] times the (lower) median window time of the other healthy nodes, plus
+    /// [`HEDGE_MARGIN`]. These are the nodes with a measured window time that serve windows and
+    /// are not dropped, cut off or benched, and the authority always. With none it is
+    /// [`HEDGE_UNMEASURED`].
+    fn hedge_after(&self, i: usize) -> Duration {
+        let a = self.board.authority();
+        let mut times: Vec<f64> = (0..self.nodes.len())
+            .filter(|&j| j != i)
+            .filter(|&j| j == a || (self.specs[j].fetch && !self.board.dropped(j) && !self.board.cut(j) && !self.board.benched(j)))
+            .filter_map(|j| self.board.with(j, |p| p.ewma_secs))
+            .collect();
+        if times.is_empty() {
+            return HEDGE_UNMEASURED;
+        }
+        times.sort_by(f64::total_cmp);
+        // The lower median: with two other nodes, one fast and one slow, the fast one sets the pace.
+        let median = times[(times.len() - 1) / 2];
+        Duration::try_from_secs_f64(median * HEDGE_FACTOR).unwrap_or(Duration::MAX).saturating_add(HEDGE_MARGIN)
+    }
+
+    /// One attempt at the window on node `i`, on one of its connections.
+    ///
+    /// It returns the node, the outcome and how long the attempt took once it had the connection.
+    /// `permit` is the connection when the caller holds one already.
+    async fn attempt(
+        &self,
+        i: usize,
+        w: WindowRequest,
+        permit: Option<OwnedSemaphorePermit>,
+    ) -> (usize, Result<Fetched, Attempt>, Duration) {
+        let _permit = match permit {
+            Some(p) => p,
+            None => self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed"),
+        };
+        self.board.begin(i);
+        // Ends the count when the attempt ends, or when it is dropped: the prefetch aborted the
+        // window, or another node delivered it first.
+        let _flight = InFlight(&self.board, i);
+        let t0 = tokio::time::Instant::now();
+        let r = if i == self.board.authority() {
+            self.primary_window(&*self.nodes[i], &w).await.map_err(Attempt::Window)
+        } else {
+            self.fetch_checked(i, &w).await
+        };
+        (i, r, t0.elapsed())
+    }
+
     /// [`ChainSource::fetch_window`] without the health watch.
+    ///
+    /// A window that fails on a node goes to the next node. A window late on a node other than the
+    /// authority is asked of another node too, and the first answer is used (module documentation,
+    /// *A slow or flaky body node*).
     async fn fetch_any(&self, w: WindowRequest) -> Result<Fetched, RpcError> {
         let mut tried = vec![false; self.nodes.len()];
         let mut last: Option<RpcError> = None;
-        while let Some(i) = self.pick(&tried) {
-            tried[i] = true;
-            let a = self.board.authority();
-            let permit = self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed");
-            self.board.begin(i);
-            let r = if i == a {
-                self.primary_window(&*self.nodes[a], &w).await.map_err(Attempt::Window)
-            } else {
-                self.fetch_checked(i, &w).await
-            };
-            self.board.end(i);
-            drop(permit);
-            match r {
-                Ok(f) => {
-                    self.board.fetched(i, &f);
-                    return Ok(f);
-                }
-                Err(Attempt::Window(e)) => {
-                    if i == a && !matches!(e, RpcError::TooLarge { .. }) {
-                        // The authority is never skipped. The error is only counted.
-                        self.board.note_error(a, &e);
+        let mut running = FuturesUnordered::new();
+        // The attempt that may still turn late, with when it got its connection.
+        let mut watched: Option<(usize, tokio::time::Instant)> = None;
+        // The attempt that turned late, once another node was asked too.
+        let mut late: Option<(usize, tokio::time::Instant)> = None;
+        loop {
+            if running.is_empty() {
+                let Some(i) = self.pick(&tried) else { break };
+                tried[i] = true;
+                let permit = self.permits[i].clone().acquire_owned().await.expect("the semaphore is never closed");
+                watched = (i != self.board.authority()).then(|| (i, tokio::time::Instant::now()));
+                running.push(self.attempt(i, w, Some(permit)));
+            }
+            let now = tokio::time::Instant::now();
+            // The deadline is read again every `HEDGE_RECHECK`, since the other nodes' times move.
+            let wake = watched.map(|(i, t0)| (t0 + self.hedge_after(i)).min(now + HEDGE_RECHECK));
+            tokio::select! {
+                Some((i, r, took)) = running.next() => match r {
+                    Ok(f) => {
+                        let was_late = late.is_some_and(|(j, _)| j == i);
+                        self.board.fetched(i, &f, took, !was_late);
+                        if let Some((j, t0)) = late.filter(|(j, _)| *j != i) {
+                            self.board.lost_race(j, t0.elapsed());
+                        }
+                        return Ok(f);
                     }
-                    return Err(e);
+                    Err(Attempt::Window(e)) => {
+                        if i == self.board.authority() && !matches!(e, RpcError::TooLarge { .. }) {
+                            // The authority is never skipped. The error is only counted.
+                            self.board.note_error(i, &e);
+                        }
+                        return Err(e);
+                    }
+                    Err(Attempt::Node(e, fault)) => {
+                        let why = e.to_string();
+                        self.board.failed(i, fault, &why);
+                        if fault == Fault::Failed {
+                            self.board.strike(i, &why);
+                        }
+                        if watched.is_some_and(|(j, _)| j == i) {
+                            watched = None;
+                        }
+                        match late {
+                            // The late node failed. Its failure is its strike, and the other
+                            // request goes on.
+                            Some((j, _)) if j == i => late = None,
+                            // The other node failed. The late request may be asked of a further
+                            // node.
+                            Some(_) => watched = late.take(),
+                            None => {}
+                        }
+                        last = Some(e);
+                    }
+                },
+                _ = tokio::time::sleep_until(wake.unwrap_or(now + HEDGE_RECHECK)), if wake.is_some() => {
+                    let Some((i, t0)) = watched else { continue };
+                    if tokio::time::Instant::now() < t0 + self.hedge_after(i) {
+                        continue;
+                    }
+                    watched = None;
+                    if let Some(j) = self.pick(&tried) {
+                        tried[j] = true;
+                        late = Some((i, t0));
+                        tracing::debug!(late = %self.board.shown(i), other = %self.board.shown(j), "a window is late: asking another node too");
+                        running.push(self.attempt(j, w, None));
+                    }
                 }
-                Err(Attempt::Node(e, fault)) => {
-                    self.board.failed(i, fault, &e.to_string());
-                    last = Some(e);
-                }
+                else => break,
             }
         }
         Err(last.unwrap_or_else(|| RpcError::Transport("no node available for the window".into())))
+    }
+}
+
+/// A window in flight on a node, counted in `in_flight` until it is dropped.
+struct InFlight<'a>(&'a NodeBoard, usize);
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.end(self.1)
     }
 }
 
@@ -2370,5 +2613,52 @@ mod tests {
             }
         }
         assert_eq!(m.board.snapshot()[1].tip_differs, 6);
+    }
+
+    /// Strikes bench a secondary for bodies, never the authority. The bench ends on the runtime's clock. A strike before the
+    /// node returned benches it again, for twice as long. A window in time returns it, and then one strike is not enough.
+    #[tokio::test(start_paused = true)]
+    async fn strikes_bench_a_secondary_and_one_before_it_returned_benches_it_again_for_longer() {
+        let spec =
+            |url: &str| NodeSpec { url: url.into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true };
+        let b = NodeBoard::new(&[spec("bench-a"), spec("bench-b")]);
+        for _ in 0..2 * BENCH_STRIKES {
+            b.strike(0, "late");
+        }
+        assert!(!b.benched(0) && b.snapshot()[0].benched == 0, "the authority is never benched");
+        for _ in 0..BENCH_STRIKES {
+            assert!(!b.benched(1));
+            b.strike(1, "late");
+        }
+        let s = &b.snapshot()[1];
+        assert_eq!(
+            (s.state.as_str(), s.benched, s.bench_secs, s.bench_reason.as_deref()),
+            ("benched", 1, BENCH_FIRST.as_secs(), Some("late"))
+        );
+        // A window sent before the bench that fails is no further bench.
+        b.strike(1, "late");
+        assert_eq!(b.snapshot()[1].benched, 1);
+        tokio::time::advance(BENCH_FIRST).await;
+        assert!(!b.benched(1));
+        assert_eq!(b.snapshot()[1].state, "ok");
+        b.strike(1, "again");
+        assert!(b.benched(1), "one strike before it returned");
+        assert_eq!((b.snapshot()[1].benched, b.snapshot()[1].bench_secs), (2, 2 * BENCH_FIRST.as_secs()));
+        tokio::time::advance(2 * BENCH_FIRST).await;
+        let raw = RawVspcResponse {
+            removed_chain_block_hashes: vec![],
+            added_chain_block_hashes: vec![],
+            chain_block_accepted_transactions: vec![],
+            wire_bytes: 0,
+        };
+        let f = Fetched { raw, sink_blue: 0, end_blue: 0, elapsed: Duration::from_millis(10), origin: Origin::PRIMARY };
+        b.fetched(1, &f, Duration::from_millis(10), true);
+        b.strike(1, "once");
+        assert!(!b.benched(1), "returned: one strike is not enough");
+        // A late window that another node delivered first is a strike, and counted.
+        b.lost_race(1, Duration::from_secs(5));
+        b.lost_race(1, Duration::from_secs(5));
+        let s = &b.snapshot()[1];
+        assert_eq!((s.state.as_str(), s.hedged, s.benched, s.bench_secs), ("benched", 2, 3, 4 * BENCH_FIRST.as_secs()), "{s:?}");
     }
 }

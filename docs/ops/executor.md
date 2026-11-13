@@ -1278,7 +1278,9 @@ stays the authority for the selected chain (`rpc::multi`):
   what the other node says alone. On TN10 that is a few percent of the chain blocks;
 * a node that contradicts a hash or the primary is **dropped** until the process restarts (logged as an error, `lies` in
   its health); its window goes to the next node. A node that fails a window otherwise (transport, timeout, it does not know
-  the window yet) backs off (5 s, doubling to 2 minutes) and the window goes to the next node, the primary last;
+  the window yet) backs off (5 s, doubling to 80 s) and the window goes to the next node, the primary last. A window that
+  is late on a node is asked of another node too, and a node that keeps being late or failing is benched for bodies (Part
+  C, *Node*, *A slow or flaky body node*);
 * transactions of the executor (the matcher, the keepers) are submitted to every node that takes submissions at once; the
   first node that takes one answers, the others go on for propagation. When none takes it, the primary's rejection counts
   (it decides double spends and missing inputs), unless the primary failed on the wire and another node gave a verdict.
@@ -1313,8 +1315,9 @@ environment, not in `--extra-node` / `--rpc-url`: command-line arguments are vis
 resolvers of rusty-kaspa's `rpc/wrpc/client/Resolvers.toml`) hands out `wss://<node>/kaspa/testnet-10/wrpc/borsh`; the same
 node serves JSON at `.../wrpc/json`.
 
-Health: `nodes` lists every node (`role`, `state` `ok` / `backoff` / `dropped`, windows, chain blocks, transactions, bytes,
-`bytes_per_sec`, timeouts, `out_of_sync`, `lies`, `dropped_reason`, `submits_ok` / `submits_failed`), plus
+Health: `nodes` lists every node (`role`, `state` `ok` / `backoff` / `benched` / `dropped`, windows, chain blocks,
+transactions, bytes, `bytes_per_sec`, timeouts, `out_of_sync`, `lies`, `dropped_reason`, `hedged`, `benched`, `bench_secs`,
+`bench_reason`, `submits_ok` / `submits_failed`), plus
 `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total` (chain blocks compared with the primary's
 copy) and `lies_total`; metrics `kob_indexer_node_*{node=...}`. Health, metrics and logs show a node as
 `scheme://host:port` only: user name, password, path and query are left out (`/...` marks a removed path or query), so a
@@ -3152,6 +3155,24 @@ cross-check unless `[[nodes]]` add one (Part B 3, *Several nodes*), and a single
 is on. A `[[nodes]]` entry with a fixed public URL is a further body node, checked against the primary and taking
 submissions. It becomes the chain authority only when the primary's chain requests keep failing and its `may_lead` is on
 (below).
+
+**A slow or flaky body node** (`rpc::multi`, *A slow or flaky body node*). Windows are applied in chain order, so a
+window held by a slow node holds up every window behind it: on 2026-11-13 two public TN10 `[[nodes]]` that reset
+connections and timed out kept index-a's catch-up at 0.4 to 0.9x chain speed, while its own primary alone ran at 31 to
+36x. Now a window on a node other than the authority that is still out after 3 times the median window time of the other
+healthy nodes (the lower one of two), plus 2 s (10 s while no other node is measured), is asked of another node too, the
+authority always qualifying, and the first answer is used; it is checked against the primary like any other. A window
+the node lost this way, or failed on the wire (transport, timeout, an undecodable or oversized answer), is a strike; one
+it delivers in time clears them. Three strikes in a row **bench the node for bodies**: no windows for 60 s, doubling at
+each bench up to 15 minutes, logged at warn (`a slow or failing node is benched for transaction bodies`). A benched node
+keeps its other roles: it takes submissions, and the second node of a resolver pair keeps vouching for the authority's
+answers (a fixed-URL `[[nodes]]` entry has no such role). After the bench it gets windows again: its first window in time returns
+it (logged at info, `a node serves windows of transaction bodies again`), a strike before that benches it again at once;
+20 windows in time in a row start the next bench at 60 s again. The authority is never hedged or benched, and the
+handover rules below are unchanged. Not configurable. `/v1/health` `nodes[]` shows `state` `benched`, `bench_secs`
+(left), `benched` (times), `bench_reason` and `hedged` (windows another node delivered first); metrics
+`kob_indexer_node_benched`, `kob_indexer_node_benched_total` and `kob_indexer_node_hedged_total`; the status line shows
+the node as `benched`. So a slow public node can stay listed without slowing the catch-up below the healthy nodes' pace.
 
 **A failing chain authority** (`indexer::follower`, `rpc::multi`; every role, the Executor's indexer included). A node can
 answer its small calls (health, sink) while its chain requests (a VSPC batch, the chain hashes, its copy of a window from
