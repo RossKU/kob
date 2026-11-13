@@ -1,15 +1,19 @@
-//! Blocking TLS and a minimal HTTP/1.1 GET, for the two places that need them outside the async WebSocket client: the Kaspa
-//! resolver's HTTPS API (`rpc::resolver`) and the x402 facilitator's blocking node client (`x402::node`) on a `wss://` node.
+//! Blocking TLS and a minimal HTTP/1.1 GET.
 //!
-//! rustls with the ring provider and the webpki roots compiled in, as the async client (`tokio-tungstenite`) uses: no system
-//! OpenSSL, no system certificate store, the same trust on every platform and in a container with nothing installed.
+//! The callers need them outside the async WebSocket client. They are the HTTPS API of the Kaspa
+//! resolver (`rpc::resolver`), the KAS/USD price fetch (`api::price`), and the blocking node
+//! client of the x402 facilitator (`x402::node`) on a `wss://` node.
+//!
+//! TLS is rustls with the ring provider and the webpki roots compiled in, as the async client
+//! (`tokio-tungstenite`) uses. There is no system OpenSSL and no system certificate store. The
+//! trust is the same on every platform and in a container with nothing installed.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-/// The client configuration: ring, the safe default protocol versions, the webpki roots.
+/// The client configuration: ring, the safe default protocol versions and the webpki roots.
 fn config() -> Arc<rustls::ClientConfig> {
     static CFG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
     CFG.get_or_init(|| {
@@ -27,7 +31,9 @@ fn config() -> Arc<rustls::ClientConfig> {
 
 /// A plain or TLS stream over TCP.
 pub enum Stream {
+    /// A TCP stream.
     Plain(TcpStream),
+    /// A TCP stream under TLS.
     Tls(Box<rustls::StreamOwned<rustls::ClientConnection, TcpStream>>),
 }
 
@@ -65,17 +71,24 @@ impl Write for Stream {
     }
 }
 
-/// The parts of a URL a connection needs: TLS or not, host, port, path with query (`/` when empty).
+/// The parts of a URL that a connection needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
+    /// Whether the connection uses TLS.
     pub tls: bool,
+    /// The host, without brackets for IPv6.
     pub host: String,
+    /// The port.
     pub port: u16,
+    /// The path with the query. It is `/` when empty.
     pub path: String,
 }
 
-/// Splits `http(s)://` or `ws(s)://` URLs; the default ports are 80 / 443. User information is left out of the target (the
-/// WebSocket handshake takes it from the URL); no error text carries it or a query (`redact_url`).
+/// Splits an `http(s)://` or `ws(s)://` URL into a [`Target`].
+///
+/// The default ports are 80 and 443. User information is left out of the target, because the
+/// WebSocket handshake takes it from the URL. No error text carries it or a query, see
+/// `redact_url`.
 pub fn target(url: &str) -> Result<Target, String> {
     let shown = crate::rpc::redact_url(url);
     let (scheme, rest) = url.split_once("://").ok_or_else(|| format!("{shown}: not a URL"))?;
@@ -89,7 +102,7 @@ pub fn target(url: &str) -> Result<Target, String> {
         return Err(format!("{shown}: no host"));
     }
     let (host, port) = match authority.strip_prefix('[') {
-        // [v6]:port
+        // The form `[v6]:port`.
         Some(v6) => {
             let (h, p) = v6.split_once(']').ok_or_else(|| format!("{shown}: bad IPv6 host"))?;
             (h.to_string(), p.strip_prefix(':'))
@@ -114,8 +127,10 @@ pub fn target(url: &str) -> Result<Target, String> {
     Ok(Target { tls, host, port, path })
 }
 
-/// A TCP connection to `t` with read and write timeouts, wrapped in TLS when `t.tls` (server name: the host). Every address
-/// the host resolves to is tried in turn until one takes the connection, all of them within `timeout`.
+/// Connects to `t` with read and write timeouts, and wraps the connection in TLS when `t.tls`.
+///
+/// The TLS server name is the host. Every address that the host resolves to is tried in turn
+/// until one takes the connection, all of them within `timeout`.
 pub fn connect(t: &Target, timeout: Duration) -> Result<Stream, String> {
     connect_until(t, Instant::now() + timeout, timeout)
 }
@@ -136,8 +151,9 @@ fn connect_until(t: &Target, deadline: Instant, io_timeout: Duration) -> Result<
     Ok(Stream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
 }
 
-/// A failed connection attempt as an English phrase where its kind says enough (the operating system's own text comes in
-/// the system's language).
+/// A failed connection attempt as an English phrase where its kind says enough.
+///
+/// The text of the operating system comes in the language of the system.
 fn connect_error(e: &std::io::Error) -> String {
     use std::io::ErrorKind as K;
     match e.kind() {
@@ -149,9 +165,11 @@ fn connect_error(e: &std::io::Error) -> String {
     }
 }
 
-/// The first of `addrs` that takes a TCP connection before `deadline` (audit 2026-11-11 L-12: a host whose first address does
-/// not answer, an IPv6 one on an IPv4-only link, is reached on the next). Each try gets an equal share of the time left (at
-/// least a second, never past the deadline), so one address that never answers does not use it all up.
+/// Connects to the first of `addrs` that takes a TCP connection before `deadline`.
+///
+/// A host whose first address does not answer, such as an IPv6 one on an IPv4-only link, is
+/// reached on the next. Each try gets an equal share of the time left, at least a second and
+/// never past the deadline. One address that never answers does not use it all up.
 pub fn connect_any(addrs: &[SocketAddr], deadline: Instant) -> Result<TcpStream, String> {
     if addrs.is_empty() {
         return Err("no address".into());
@@ -172,12 +190,14 @@ pub fn connect_any(addrs: &[SocketAddr], deadline: Instant) -> Result<TcpStream,
     Err(errors.join("; "))
 }
 
-/// The most a GET answer may be (the resolver's is about a hundred bytes).
+/// The most a GET answer may be, in bytes. The answers of the resolver are small.
 const MAX_BODY: usize = 64 * 1024;
 
-/// `GET url` over HTTP/1.1 (`Connection: close`): the status code and the body, chunked transfer decoded. The whole GET, every
-/// address of the host tried and the answer read, takes at most `timeout` (a server that answers a byte at a time does not
-/// hold it longer).
+/// Makes a `GET url` over HTTP/1.1 with `Connection: close`.
+///
+/// It returns the status code and the body, with chunked transfer decoded. The whole GET takes at
+/// most `timeout`, with every address of the host tried and the answer read. A server that
+/// answers a byte at a time does not hold it longer.
 pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     let t = target(url)?;
     let deadline = Instant::now() + timeout;
@@ -205,7 +225,8 @@ pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
                     return Err(format!("GET {url}: answer larger than {MAX_BODY} bytes"));
                 }
             }
-            // a TLS peer that closes without close_notify: what was read is the answer (Connection: close)
+            // A TLS peer that closes without close_notify. What was read is the answer, because of
+            // `Connection: close`.
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof && !raw.is_empty() => break,
             Err(e) => return Err(format!("GET {url}: {e}")),
         }
@@ -213,7 +234,9 @@ pub fn http_get(url: &str, timeout: Duration) -> Result<(u16, String), String> {
     parse_response(&raw).map_err(|e| format!("GET {url}: {e}"))
 }
 
-/// An HTTP/1.1 response: status code and body (by `Content-Length`, chunked, or to the end).
+/// Parses an HTTP/1.1 response into the status code and the body.
+///
+/// The body is taken by `Content-Length`, chunked, or to the end.
 pub fn parse_response(raw: &[u8]) -> Result<(u16, String), String> {
     let end = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or("no end of headers")?;
     let head = std::str::from_utf8(&raw[..end]).map_err(|_| "headers are not text")?;
@@ -286,7 +309,7 @@ mod tests {
             Target { tls: false, host: "::1".into(), port: 17210, path: "/x?y".into() }
         );
         assert_eq!(target("ws://h?q=1").unwrap().path, "/?q=1");
-        // user information is not part of the target; errors never show it
+        // User information is not part of the target, and errors never show it.
         assert_eq!(
             target("wss://user:pw@h.example:8443/p").unwrap(),
             Target { tls: true, host: "h.example".into(), port: 8443, path: "/p".into() }
@@ -311,8 +334,8 @@ mod tests {
         assert!(parse_response(b"HTTP/1.1 200").is_err());
     }
 
-    /// Audit 2026-11-11 L-12: every address of a host is tried until one takes the connection (here the first refuses it), and
-    /// a deadline that passed tries none.
+    /// Every address of a host is tried until one takes the connection, here after the first
+    /// refuses it. A deadline that passed tries none.
     #[test]
     fn every_address_is_tried_within_the_deadline() {
         let open = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -328,7 +351,8 @@ mod tests {
         assert_eq!(connect_any(&[], Instant::now() + Duration::from_secs(1)).unwrap_err(), "no address");
     }
 
-    /// A GET against a local server: plain HTTP end to end (the TLS path is the same request over rustls).
+    /// A GET against a local server, plain HTTP end to end. The TLS path is the same request over
+    /// rustls.
     #[test]
     fn a_get_against_a_local_server() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
