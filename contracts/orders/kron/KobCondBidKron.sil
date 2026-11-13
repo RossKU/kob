@@ -1,21 +1,26 @@
 pragma silverscript ^0.1.0;
 
-// KRON twin of contracts/orders/KobCondBid.sil (legs, entries, state and invariants are described
-// there; family notes in contracts/orders/kron/README.md); differences:
-//  - No extensionCommitment (constructor and state: 33 bytes less), so the state windows in
-//    contSpk sit 33 bytes earlier: stopPrice [191..199), amountLeft [254..262), armed [263..271).
-//  - Token codec: the 46-byte KRON state (see KronState below). The delivery output is built in that
-//    encoding: owner = maker, id_type 3 (TYPE_DELIVERY), amount n base units, is_minter 0 (the type
-//    goes through a byte local, see there); the template prefix and suffix are read at
-//    sigscript_len - (tplPrefixLen + 46 + tplSuffixLen) of tokenTplIn.
-//  - noStrays: MAX_TOK_IN = 4 (KRON's token-input limit; 8 in the base), owner read at
-//    sigscript_len + 1 - 46 - tplSuffixLen.
-//  - Evidence: BID_STATE_LEN = 252; a bid's fields sit at the ask's offsets except interval [208..216)
-//    and slope [226..234). An ask's custody tk is a holder UTXO of this token's program (template hash +
-//    P2SH) whose state[1..36) is owner || 0x01 0x02 0x08 (id_type 2).
-// Same as the base: amounts and prices (base units at sompi per whole token, quoteOf rounding in the maker's
-// favour), minimum fill, legs, triggers, repeat-IFD rules (merge argument -(i * MERGE_K + n), MERGE_K = 2^53),
-// entries.
+// KobCondBidKron: a conditional order that buys a KRON token with KAS.
+//
+// This is the KRON version of contracts/orders/KobCondBid.sil, with the same
+// legs, entries and rules. This header lists the differences.
+// contracts/orders/kron/README.md describes the family.
+//
+// No extensionCommitment. KRON has none, so this order has neither the
+// constructor argument nor the state field, and its state is 33 B shorter.
+// The contSpk windows sit 33 B earlier.
+//
+// Token codec. The KRON state is 46 B, see KronState. The delivery is built
+// in that encoding, with owner = maker, id_type 3 (TYPE_DELIVERY), amount n
+// and is_minter 0.
+//
+// Stray guard. MAX_TOK_IN is 4, the KRON limit, where KobCondBid has 8. So
+// noStrays unrolls 4 slots, and it reads the owner at
+// sigscript_len + 1 - 46 - tplSuffixLen.
+//
+// Evidence. The evidence orders are KobAskKron and KobBidKron. A bid's
+// fields sit at the ask's offsets except interval and slope, see touchBid.
+// The custody of an ask is a KRON holder of id_type 2, see touch.
 contract KobCondBidKron(
     byte[32] ASK_TPL,
     int ASK_PRE,
@@ -90,27 +95,41 @@ contract KobCondBidKron(
         byte is_minter;
     }
 
-    // Maker deliveries (refunds, bought tokens): KRON id_type 3 (address presence), the type KRON's
-    // wallets and SDK use for user balances. Type 0 (token-level signature) is the alternative;
-    // change this one constant and rebuild to switch (see contracts/orders/kron/README.md).
+    // The delivery of the bought tokens is KRON id_type 3, address presence.
+    // KRON's wallets and SDK use that type for user balances. The alternative
+    // is type 0, a token-level signature. scripts/build-contracts.sh also
+    // builds this source as KobCondBidKronD0, with this one constant set to
+    // 0x00, see contracts/orders/kron/README.md.
     byte constant TYPE_DELIVERY = 0x03;
     byte constant SIGHASH_ALL = 0x01;
     int constant SIDE_ASK = 1;
     int constant SIDE_BID = 2;
-    // Smallest KAS beyond the delivery carrier a terminal fill sends back to the maker as its own output (1 KAS): a plain
-    // output of v sompi has KIP-9 storage mass 10^12 / v, so a smaller remainder stays on the delivery.
+    // The smallest KAS beyond the delivery carrier that a terminal fill sends
+    // back to the maker as its own output, 1 KAS. A plain output of v sompi
+    // has KIP-9 storage mass 10^12 / v, so a smaller remainder stays on the
+    // delivery.
     int constant REFUND_MIN = 100000000;
+    // An order untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
-    // Largest stopPrice whose band product stopPrice * slipBps (slipBps <= 10000) fits in an int.
+    // The largest stopPrice whose band product stopPrice * slipBps, with
+    // slipBps <= 10000, fits in an int.
     int constant MAX_STOP = 922337203685477;
     int constant ASK_STATE_LEN = 243;
     int constant BID_STATE_LEN = 252;
-    // The scans over these slots are unrolled by hand (one line per slot): raising a cap needs as many scan lines.
+    // The scans over these slots are unrolled by hand, one line per slot, so
+    // raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 4;
-    // Repeat merge argument -(i * MERGE_K + n): input index i < 1024, amount n < MERGE_K (2^53).
+    // The repeat merge argument is -(i * MERGE_K + n), with input index
+    // i < 1024 and amount n < MERGE_K (2^53).
     int constant MERGE_K = 9007199254740992;
     byte[32] constant ZERO32 = byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
 
+    // Check that input idx is an instance of template (pre, stLen, suf, tpl)
+    // and return its state. The input's scriptPubKey must be the P2SH of the
+    // redeem script at the end of its sigscript, and the template hash must
+    // be tpl. The evidence templates ASK_TPL and BID_TPL, with their prefix
+    // and suffix lengths, are constructor arguments that the .ctor.json of
+    // this contract fixes, the same on every network.
     function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
         int size = pre + stLen + suf;
         int base = OpTxInputScriptSigLen(idx) - size;
@@ -120,15 +139,11 @@ contract KobCondBidKron(
         return rs.slice(pre, pre + stLen);
     }
 
-    // P2SH of this script with stopPrice, amountLeft and armed replaced (the only mutable fields).
-    // State span starts at bytecode offset 1; payload windows: stopPrice [191..199),
-    // amountLeft [254..262), armed [263..271). Every other byte is copied.
-    // Terminal fill with a refund: the KAS the bid does not spend and the delivery does not need goes to the maker as a
-    // plain P2PK output (the destination of refund()), at output M - 1 - self (M = the number of outputs): one slot per
-    // bid input (distinct inputs, distinct outputs), counted from the end, so no two bids can share an output. The output
-    // must not be one another input claims by position: an input of the transaction at that index must be a token input
-    // (the token programs pin no plain output by index) or a plain key input; any other covenant input (an order pays,
-    // delivers or refunds at its own index, a router intent at j and j + 1) refuses the fill.
+    // Refund output of a terminal fill, as KobBid.refundTo. The KAS not spent
+    // goes to the maker as a plain P2PK output at output M - 1 - self, where
+    // M is the number of outputs. Each bid input has its own slot, counted
+    // from the end. An input at that index must be an input of this token or
+    // a plain key input, so the slot is no other input's positional output.
     function refundTo(int self, int rem) {
         int r = tx.outputs.length - 1 - self;
         if (r < tx.inputs.length) {
@@ -139,6 +154,14 @@ contract KobCondBidKron(
         require(tx.outputs[r].value >= rem);
     }
 
+    // P2SH of this script with stopPrice, amountLeft and armed replaced, the
+    // only mutable fields. The state span starts at bytecode offset 1. The
+    // payload windows are stopPrice [224..232), amountLeft [287..295) and
+    // armed [296..304). Every other byte is copied.
+    // P2SH of this script with stopPrice, amountLeft and armed replaced, the
+    // only mutable fields. The state span starts at bytecode offset 1. The
+    // payload windows are stopPrice [191..199), amountLeft [254..262) and
+    // armed [263..271). Every other byte is copied.
     function contSpk(int newStop, int newLeft, int newArmed) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
@@ -149,8 +172,11 @@ contract KobCondBidKron(
         ));
     }
 
-    // Stray guard (see KobBid): no token input may be owned by this covenant id; owner read at
-    // sigscript_len + 1 - 46 - tplSuffixLen (state offset 1 of the last push). Unrolled by hand.
+    // Stray guard, as KobBid.noStrays. The order owns no tokens, so no token
+    // input may be owned by this covenant id. The owner is read at
+    // sigscript_len + 1 - 46 - tplSuffixLen, state offset 1 of the last push.
+    // The scan is unrolled by hand over the MAX_TOK_IN slots, one line per
+    // token input k < cnt.
     function noStrays(byte[32] me) {
         int cnt = OpCovInputCount(tokenCovId);
         require(cnt <= MAX_TOK_IN);
@@ -161,17 +187,25 @@ contract KobCondBidKron(
         if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); }
     }
 
-    // Quote value of n base units at rate r, rounded down (c = 0) or up (c = scale - 1): see KobAsk.quoteOf.
+    // Quote value of n base units at rate r. c = 0 rounds down and
+    // c = scale - 1 rounds up. The split is exact, see KobAsk.quoteOf.
     function quoteOf(int n, int r, int c) : int {
         int m = n % scale;
         int q = n / scale;
         return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
     }
 
-    // TRIGGER EVIDENCE: as in KobCondBid (same scale, n >= minTouch base units), with the KRON offsets.
-    // KobBidKron state (252 B): tokenCovId[34..66) scale[118..126) price[136..144) activeFrom[163..171)
-    // interval[208..216) slope[226..234); KobAskKron's interval and slope are at [190..198) and [208..216).
-    // Bid evidence; returns its quote.
+    // Trigger evidence, as in KobCondBid.touchBid, with the KRON offsets.
+    // KRON has no extension commitment, so the token is its covenant id
+    // alone.
+    //
+    // State offsets:
+    //   KobBidKron (252 B) tokenCovId[34..66) scale[118..126)
+    //     price[136..144) activeFrom[163..171) interval[208..216)
+    //     slope[226..234)
+    //   KobAskKron interval[190..198) slope[208..216), the rest as above
+    //
+    // Bid evidence, for the stop leg in settle. Returns the bid's quote.
     function touchBid(int ev) : int {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
@@ -181,7 +215,8 @@ contract KobCondBidKron(
         require(int(byte[8](o.slice(118, 126))) == scale);
         require(n >= minTouch);
         require(int(byte[8](o.slice(226, 234))) == 0);
-        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        // The evidence's interval is its own state, so a raw-built order can
+        // carry a negative one. It must not shorten the rest.
         int iv = int(byte[8](o.slice(208, 216)));
         require(iv >= 0);
         int exposed = OpTxInputDaaScore(ev) + iv;
@@ -191,8 +226,12 @@ contract KobCondBidKron(
         return int(byte[8](o.slice(136, 144)));
     }
 
-    // Either side (update): tk >= 0 = ask evidence with its custody at tk, tk < 0 = bid evidence.
-    // Returns (side, quote), side 1 = ask, 2 = bid.
+    // Evidence of either side, for update. tk >= 0 is ask evidence with its
+    // custody at input tk, and tk < 0 is bid evidence. Returns the side,
+    // SIDE_ASK or SIDE_BID, and the quote. An ask's custody tk is a holder
+    // UTXO of this token's program, checked by template hash and P2SH, whose
+    // state[1..36) is the ask's covenant id followed by 0x01 0x02 0x08, so
+    // id_type 2.
     function touch(int ev, int tk) : (int, int) {
         require(OpTxInputScriptSigSubstr(ev, 0, 1) == byte[](0x08));
         int n = int(byte[8](OpTxInputScriptSigSubstr(ev, 1, 9)));
@@ -213,13 +252,15 @@ contract KobCondBidKron(
         }
         byte[] o = tplState(ev, pre, len, suf, tpl);
         require(byte[32](o.slice(34, 66)) == tokenCovId);
-        // q = scale .. activeFrom, r = interval .. slope (a bid's r sits w = 18 bytes later)
+        // q spans scale to activeFrom and r spans interval to slope. A bid's r
+        // sits w = 18 B later.
         byte[] q = o.slice(118, 171);
         byte[] r = o.slice(190 + w, 216 + w);
         require(int(byte[8](q.slice(0, 8))) == scale);
         require(n >= minTouch);
         require(int(byte[8](r.slice(18, 26))) == 0);
-        // an evidence order's own interval is its state, so a raw-built order can carry a negative one: it must not shorten the rest
+        // The evidence's interval is its own state, so a raw-built order can
+        // carry a negative one. It must not shorten the rest.
         int iv = int(byte[8](r.slice(0, 8)));
         require(iv >= 0);
         int exposed = OpTxInputDaaScore(ev) + iv;
@@ -236,9 +277,11 @@ contract KobCondBidKron(
         return (side, int(byte[8](q.slice(18, 26))));
     }
 
-    // nb: base units to buy (8-byte LE); tokenTplIn: any input of the token (template source);
-    // leg: 0 limit leg, 1 stop leg; ev: the evidence bid (touch), read only when the stop leg
-    // executes while unarmed; t: auction time (CLTV), read only by an armed stop leg with bandDaa > 0.
+    // Fill. nb is the base units to buy, 8-byte LE. tokenTplIn is any input
+    // of the token, the template source for the delivery. leg is 0 for the
+    // limit leg and 1 for the stop leg. ev is the evidence bid, read only when
+    // the stop leg fills unarmed. t is the auction time, proven by CLTV and
+    // read only by an armed stop leg with bandDaa > 0.
     entry settle(byte[8] nb, int tokenTplIn, int leg, int ev, int t) {
         int n = int(nb);
         int self = this.activeInputIndex;
@@ -248,10 +291,23 @@ contract KobCondBidKron(
         require(tx.daa >= activeFrom);
         require(n > 0);
         require(n <= amountLeft);
+        // Minimum fill. A fill takes at least minFill unless it takes all that
+        // is left. A fill that delivers moves deliveryCarrier onto its
+        // delivery, so the minimum bounds the deliveries a filler can force on
+        // the maker.
         require(n >= minFill || n == amountLeft);
         require(scale > 0);
         require(tip >= 0);
         require(deliveryCarrier >= 0);
+        // Legs. The limit leg 0 needs tpPrice > 0 and fills at tpPrice at any
+        // time. The stop leg 1 needs stopPrice > 0 and fills only once armed,
+        // at stopPrice + floor(stopPrice * bps / 10000). Both legs share one
+        // amountLeft, so nothing can be bought twice.
+        //
+        // armed is 0 when not armed, and 1 when armed with this UTXO's DAA as
+        // the auction origin. Any other value is the origin itself. A fill
+        // writes the origin into the continuation, so partial fills do not
+        // restart the auction.
         int legPrice = tpPrice;
         int newArmed = armed;
         if (armed == 1 && bandDaa > 0) {
@@ -265,6 +321,10 @@ contract KobCondBidKron(
             require(slipBps >= 0);
             require(slipBps <= 10000);
             int bps = slipBps;
+            // Touch trigger. An unarmed stop leg arms in its own fill, from a
+            // filled resting KobBidKron that quotes at least stopPrice. With
+            // bandDaa > 0 that fill pays the stop price itself, and the
+            // auction runs from this transaction.
             if (armed == 0) {
                 int rp = touchBid(ev);
                 require(rp >= stopPrice);
@@ -273,6 +333,10 @@ contract KobCondBidKron(
                     bps = 0;
                 }
             } else {
+                // Ascending auction over bandDaa DAA, with
+                // bps = slipBps * min(t - origin, bandDaa) / bandDaa. CLTV
+                // proves tx.daa >= t, and understating t only lowers the
+                // price. With bandDaa 0 the whole band applies at once.
                 if (bandDaa > 0) {
                     require(tx.daa >= t);
                     require(t >= newArmed);
@@ -280,15 +344,32 @@ contract KobCondBidKron(
                     if (e < bandDaa) { bps = slipBps * e / bandDaa; }
                 }
             }
+            // Multiply first, so the band is exact to one sompi at any stop
+            // price and rounds down, in the maker's favour. stopPrice * 10000
+            // must fit in 63 bits.
             require(stopPrice <= MAX_STOP);
             legPrice = stopPrice + stopPrice * bps / 10000;
         }
-        // the most the maker pays, rounded down (the maker's favour)
+        // All-in price. The maker pays at most
+        // spend = floor(n * (legPrice + tip) / scale). Whatever a seller
+        // accepts below that, the crossing spread and the tip, is the
+        // matcher's. The rest of the escrow stays in the order until the last
+        // fill. amountLeft bounds the quantity, so the extra value can never
+        // buy more.
         int spend = quoteOf(n, legPrice + tip, 0);
         int left = tx.inputs[self].value - spend;
 
         int keep = left - deliveryCarrier;
 
+        // Repeat IFD, sell-first. parent is the covenant id of the repeating
+        // KobIfdAskKron entry, or zero for an ordinary order. A limit-leg fill
+        // re-arms the entry, which must then be spent in this transaction in
+        // merge mode. Without the entry the fill needs tx.daa >= rptUntil, the
+        // DAA from which the entry counts as gone. A stop fill never re-arms,
+        // and the entry may not be spent next to it. rptPrice is the entry's
+        // all-in proceeds rate, its price - tip, and rptPre its prefund rate.
+        // docs/spec/order-types.md, "Repeat IFD in detail", has the whole
+        // cycle.
         bool rearm = false;
         if (parent != ZERO32) {
             int present = OpCovInputCount(parent);
@@ -304,25 +385,41 @@ contract KobCondBidKron(
         }
 
         if (rearm) {
-            // merge: the entry takes the n base units into its custody and prefund(n); the maker gets the profit at
-            // output i: the entry's proceeds for n minus the buy-back (see KobCondBid); the merge argument names this
-            // input and n only while n < 2^53
+            // The entry takes the n base units into its custody, which it
+            // pins, and prefund(n) = ceil(n * rptPre / scale). The maker gets
+            // the profit at output i, the entry's proceeds
+            // ceil(n * rptPrice / scale) minus the buy-back spend. The entry
+            // checks the same rounded amounts, so no remainder is left to the
+            // filler.
+            //
+            // The merge argument -(i * 2^53 + n) names this input and n only
+            // while n < 2^53. A look-alike exit of 2^53 units or more would
+            // read as the merge of another input.
             require(n < MERGE_K);
             int pin = OpCovInputIdx(parent, 0);
-            // the entry's sigscript starts with the 8-byte push of its merge argument (see KobCondBid)
+            // The entry's sigscript starts with the 8-byte push of its merge
+            // argument, which is negative, see KobCondBid.
             require(OpTxInputScriptSigSubstr(pin, 0, 1) == byte[](0x08));
             require(int(byte[8](OpTxInputScriptSigSubstr(pin, 1, 9))) == 0 - (self * MERGE_K + n));
             int proceeds = quoteOf(n, rptPrice, scale - 1);
             require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
             require(tx.outputs[self].value >= proceeds - spend);
-            // what stays in this order for its remaining amount (their proceeds and prefund)
+            // What stays in this order is the proceeds and prefund of its
+            // remaining amount.
             keep = tx.inputs[self].value - proceeds - quoteOf(n, rptPre, scale - 1);
         } else {
-            // Delivery: output i is a genuine KRON token UTXO with exactly n base units owned by the maker.
+            // Delivery and positional rule. The tokens bought by the order at
+            // input i are delivered at output i, a KRON token UTXO of exactly
+            // n base units owned by the maker, with id_type TYPE_DELIVERY and
+            // is_minter 0.
             require(OpInputCovenantId(tokenTplIn) == tokenCovId);
-            // hand-written validateOutputStateWithInputTemplate on (self, KronState { owner: byte[32](maker), id_type: TYPE_DELIVERY,
-            // amount: n, is_minter: NOT_MINTER }, tokenTplIn, ...): template prefix and suffix read from the
-            // end of tokenTplIn's sigscript and hash-checked against tokenTplHash, the state in its canonical push encoding
+            // This is validateOutputStateWithInputTemplate(self, KronState {
+            // owner: byte[32](maker), id_type: TYPE_DELIVERY, amount: n,
+            // is_minter: 0 }, tokenTplIn, ...) written by hand. The template
+            // prefix and suffix come from the end of tokenTplIn's sigscript,
+            // at sigscript_len - (tplPrefixLen + 46 + tplSuffixLen), and their
+            // hash must be tokenTplHash. The state is in its canonical push
+            // encoding.
             int tbase = OpTxInputScriptSigLen(tokenTplIn) - (tplPrefixLen + 46 + tplSuffixLen);
             byte[] tpre = OpTxInputScriptSigSubstr(tokenTplIn, tbase, tbase + tplPrefixLen);
             byte[] tsuf = OpTxInputScriptSigSubstr(tokenTplIn, tbase + tplPrefixLen + 46, tbase + tplPrefixLen + 46 + tplSuffixLen);
@@ -335,6 +432,9 @@ contract KobCondBidKron(
             require(OpOutputCovenantId(self) == tokenCovId);
         }
 
+        // A partial fill continues this script with amountLeft - n, as the
+        // only output bound to the covenant id. It holds at least keep, and a
+        // delivery carries at least deliveryCarrier.
         if (amountLeft - n > 0) {
             require(OpCovOutputCount(selfId) == 1);
             int selfOut = OpCovOutputIdx(selfId, 0);
@@ -344,9 +444,11 @@ contract KobCondBidKron(
                 require(tx.outputs[self].value >= deliveryCarrier);
             }
         } else {
-            // the rest: terminate. The KAS not spent returns to the maker as a plain output (refundTo) once it is REFUND_MIN
-            // or more beyond the delivery carrier, else it rides on the delivery; when re-arming it goes back to the entry,
-            // which checks it
+            // The order ends. No output may stay bound to the covenant id.
+            // Without a re-arm, the KAS not spent beyond the delivery carrier
+            // goes to the maker through refundTo once it is REFUND_MIN or
+            // more, and otherwise rides on the delivery. With a re-arm it goes
+            // back to the entry, which checks it.
             require(OpCovOutputCount(selfId) == 0);
             if (!rearm) {
                 int rem = left - deliveryCarrier;
@@ -360,14 +462,16 @@ contract KobCondBidKron(
         }
     }
 
-    // As KobCondBid.update.
+    // Update. Arm or trail the stop without a fill of this order, next to
+    // the evidence fill at input ev, as KobCondBid.update.
     entry update(int ev, int tk) {
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
-        // never next to the repeat entry (parent; zero when not booked): pushes need not be minimal under covenants, so
-        // this entry's sigscript could start with an 8-byte push of a small ev, which the entry's merge would read as
-        // the amount this exit sold
+        // Never next to the repeat entry, parent, which is zero when the order
+        // is not booked. Pushes need not be minimal under covenants, so this
+        // entry's sigscript could start with an 8-byte push of a small ev,
+        // which the entry's merge would read as the amount this exit sold.
         require(OpCovInputCount(parent) == 0);
         noStrays(selfId);
         require(armed == 0);
@@ -382,6 +486,11 @@ contract KobCondBidKron(
             newArmed = 1;
         } else {
             require(side == SIDE_ASK);
+            // Trailing, unarmed only. The fill of a resting KobAskKron quoting
+            // rp lowers stopPrice by k * trailStep, with
+            // k = floor((stopPrice - trailGap - rp) / trailStep) >= 1. k is
+            // capped so that the stop stays above tpPrice, when tpPrice > 0,
+            // and above 0. At most once per trailWait DAA (CSV).
             require(trailStep > 0);
             require(this.ageDaa >= trailWait);
             int k = (stopPrice - trailGap - rp) / trailStep;
@@ -395,10 +504,12 @@ contract KobCondBidKron(
         require(OpCovOutputCount(selfId) == 1);
         int selfOut = OpCovOutputIdx(selfId, 0);
         require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, amountLeft, newArmed));
-        // The keeper's tip never comes out of the buying budget: the continuation keeps at least what buying amountLeft in
-        // one fill at its dearest leg (the take-profit / limit, or the stop with its whole band) costs, with the delivery
-        // carrier. A tip beyond what the order holds above that (ratchets beyond the funded ones) is not paid: the keeper
-        // takes less, at the least nothing.
+        // The keeper's tip never comes out of the buying budget. The
+        // continuation keeps at least what buying amountLeft in one fill at
+        // its dearest leg costs, with the delivery carrier. The dearest leg is
+        // the limit, or the stop with its whole band. A tip beyond what the
+        // order holds above that is not paid, so for ratchets beyond the
+        // funded ones the keeper takes less, at the least nothing.
         int worst = tpPrice;
         if (slipBps >= 0 && slipBps <= 10000 && newStop <= MAX_STOP) {
             int stopTop = newStop + newStop * slipBps / 10000;
@@ -412,6 +523,8 @@ contract KobCondBidKron(
         require(tx.outputs[selfOut].value >= floorOut);
     }
 
+    // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
+    // maker routes the escrow and any strays.
     entry cancel(sig s) {
         byte[] sb = byte[](s);
         require(sb.length == 65);
@@ -419,6 +532,8 @@ contract KobCondBidKron(
         require(checkSig(s, maker));
     }
 
+    // Refund. Due at the earliest of expiryDaa and 90 days idle. This order
+    // has no tif, so it has no IOC kill.
     entry refund() {
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
@@ -426,6 +541,9 @@ contract KobCondBidKron(
         require(tx.daa >= idleEnd);
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
+        // The order ends. Spending it would authorise any stray owned by this
+        // id, so the refund carries no input of the token. The maker gets the
+        // escrow back at output i, less at most refundTip.
         require(OpCovInputCount(tokenCovId) == 0);
         require(OpCovOutputCount(selfId) == 0);
         require(refundTip >= 0);
