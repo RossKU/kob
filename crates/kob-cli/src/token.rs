@@ -487,8 +487,9 @@ pub(crate) fn read_key(src: &KeySource) -> Result<SecretKey, String> {
         KeySource::Env(v) => std::env::var(v).map_err(|_| format!("environment variable {v} is not set"))?,
         KeySource::File(p) => std::fs::read_to_string(p).map_err(|e| format!("cannot read key file {}: {e}", p.display()))?,
     };
-    let bytes: [u8; 32] = hex_array(raw.trim()).map_err(|e| format!("signing key: {e}"))?;
-    SecretKey::from_slice(&bytes).map_err(|e| format!("signing key: {e}"))
+    // A fixed message: the text may be a secret with one stray character, so it is never quoted.
+    let bytes: [u8; 32] = hex_array(raw.trim()).map_err(|_| "signing key is not 64 hex characters".to_string())?;
+    SecretKey::from_slice(&bytes).map_err(|_| "signing key is not a valid secret key".to_string())
 }
 
 /// Build the library spec from parsed arguments (resolving `self` holders against the funding key).
@@ -891,6 +892,29 @@ pub fn run_verify_declaration(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_malformed_key_is_never_echoed() {
+        let good = "11".repeat(32);
+        let bad = format!("KOB_KEY={good}");
+        let dir = std::env::temp_dir().join(format!("kob-readkey-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("k");
+        std::fs::write(
+            &p,
+            format!(
+                "{bad}
+"
+            ),
+        )
+        .unwrap();
+        for src in [KeySource::Hex(bad.clone()), KeySource::File(p.clone()), KeySource::Hex(format!("{}z", &good[1..]))] {
+            let e = read_key(&src).unwrap_err();
+            assert_eq!(e, "signing key is not 64 hex characters");
+            assert!(!e.contains(&good[..8]));
+        }
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn v(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_string).collect()

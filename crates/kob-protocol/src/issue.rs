@@ -278,9 +278,13 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 /// Parse a hex string of exactly `N` bytes.
+///
+/// Errors never quote the input: callers pass secrets (signing keys) through here, so a message
+/// states only the length and that the text is not hex.
 pub fn hex_array<const N: usize>(s: &str) -> Result<[u8; N]> {
-    let v =
-        silverscript_abi::decode_hex(s.trim_start_matches("0x")).map_err(|e| IssueError::Invalid(format!("bad hex `{s}`: {e}")))?;
+    let t = s.trim_start_matches("0x");
+    let v = silverscript_abi::decode_hex(t)
+        .map_err(|_| IssueError::Invalid(format!("not hex ({} characters; expected {} hex characters)", t.len(), 2 * N)))?;
     v.try_into().map_err(|v: Vec<u8>| IssueError::Invalid(format!("expected {N} bytes of hex, got {}", v.len())))
 }
 
@@ -1682,6 +1686,16 @@ pub fn verify_scheme4_enabled(program: &Program) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hex_array_errors_never_quote_the_input() {
+        let secret = "SECRETSECRETSECRETSECRETSECRETSECRETSECRETSECRETSECRETSECRETSECRETSEC";
+        for bad in [secret, &secret[..10], "abcd"] {
+            let e = hex_array::<32>(bad).unwrap_err().to_string();
+            assert!(!e.contains(bad) && !e.contains("SECRET"), "{e}");
+        }
+        assert!(hex_array::<32>(&"ab".repeat(32)).is_ok());
+    }
 
     fn funding(amount: u64, pk: [u8; 32]) -> FundingUtxo {
         FundingUtxo {
