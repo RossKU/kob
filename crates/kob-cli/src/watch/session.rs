@@ -1,7 +1,13 @@
-//! The watch loop: connect to the executor's WebSocket, subscribe, print what arrives, refetch the REST resources `book` and
-//! `order` notices point to (debounced), keep the connection alive with pings and, when it drops, reconnect with a growing
-//! pause and start from fresh state (`docs/api-reference.md` section 4.4: the server replays nothing). Blocking, one thread: the socket
-//! is polled with a short read timeout so a pending refetch, a ping and Ctrl-C are served between frames.
+//! The watch loop.
+//!
+//! It connects to the WebSocket of the executor, subscribes and prints what arrives. It also
+//! refetches the REST resources that `book` and `order` notices point to, debounced, and keeps
+//! the connection alive with pings. When the connection drops, it reconnects with a growing
+//! pause and starts from fresh state, because the server replays nothing, see
+//! `docs/api-reference.md`, section 4.4.
+//!
+//! The loop is blocking and runs in one thread. The socket is polled with a short read timeout,
+//! so a pending refetch, a ping and Ctrl-C are served between frames.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,15 +34,15 @@ use crate::trade::views;
 pub enum Kind {
     /// Every fill, or the fills of one token.
     Fills(Option<[u8; 32]>),
-    /// A token's book (a pair's: both tokens), reprinted on a notice.
+    /// The book of a token, or of a pair with both tokens, which is reprinted on a notice.
     Book([u8; 32], Option<[u8; 32]>),
-    /// Orders by covenant id, their state printed on a notice.
+    /// Orders by covenant id, whose state is printed on a notice.
     Orders(Vec<[u8; 32]>),
-    /// The indexer's progress and health.
+    /// The progress and health of the indexer.
     Health,
 }
 
-/// A REST resource a notice asks to be read again.
+/// A REST resource that a notice asks to be read again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Key {
     Book,
@@ -44,7 +50,7 @@ enum Key {
 }
 
 impl Kind {
-    /// The channels to subscribe to: always `reorg`, plus the kind's own.
+    /// The channels to subscribe to: always `reorg`, plus those of the kind.
     pub fn channels(&self) -> Vec<String> {
         let mut v = vec!["reorg".to_string()];
         match self {
@@ -83,22 +89,24 @@ impl Kind {
     }
 }
 
-/// The timings of a watch (tests shorten them).
+/// The timings of a watch. Tests shorten them.
 #[derive(Debug, Clone)]
 pub struct Timing {
-    /// A ping every this long (the server closes a session silent for 60 s).
+    /// A ping every this long. By default the server closes a session that is silent for 60 s.
     pub ping_every: Duration,
-    /// A notice waits this long for more before its resource is read again.
+    /// How long a notice waits for more before its resource is read again.
     pub debounce: Duration,
-    /// A resource is read again no sooner than this after its last read.
+    /// The least time between two reads of a resource.
     pub min_gap: Duration,
-    /// The socket's read timeout: how often the loop looks at the clock and at Ctrl-C.
+    /// The read timeout of the socket.
+    ///
+    /// It is how often the loop looks at the clock and at Ctrl-C.
     pub poll: Duration,
-    /// First pause before a reconnect, doubled up to `backoff_max`.
+    /// The first pause before a reconnect, doubled up to `backoff_max`.
     pub backoff_start: Duration,
-    /// Longest pause.
+    /// The longest pause before a reconnect.
     pub backoff_max: Duration,
-    /// Connect, handshake and subscribe timeout.
+    /// The timeout of connect, handshake and subscribe.
     pub connect: Duration,
 }
 
@@ -116,26 +124,28 @@ impl Default for Timing {
     }
 }
 
-/// Longest `Retry-After` honoured.
+/// The longest `Retry-After` that is honoured.
 const RETRY_AFTER_MAX: Duration = Duration::from_secs(60);
-/// Channels per subscribe message (a message is at most 4096 bytes; a channel name with an id is about 70).
+/// Channels per subscribe message.
+///
+/// A message is at most 4096 bytes, and a channel name with an id is about 70.
 const CHANNELS_PER_MESSAGE: usize = 40;
 
 /// A watch.
 pub struct Watch {
     /// The WebSocket address.
     pub target: WsTarget,
-    /// The indexer (REST).
+    /// The indexer, for REST.
     pub indexer: String,
     /// What to listen to.
     pub kind: Kind,
-    /// Shared options (network, registry).
+    /// The shared options, such as network and registry.
     pub common: Common,
-    /// The arguments `kob book` reads (for a book watch).
+    /// The arguments that `kob book` reads, for a book watch.
     pub parsed: Parsed,
-    /// Token lists.
+    /// The token lists.
     pub names: Names,
-    /// Timings.
+    /// The timings.
     pub timing: Timing,
 }
 
@@ -158,7 +168,8 @@ struct Pending {
 }
 
 impl Pending {
-    /// A notice: read the resource after the debounce (and no sooner than `min_gap` after its last read).
+    /// Handles a notice: the resource is read after the debounce, and no sooner than `min_gap`
+    /// after its last read.
     fn schedule(&mut self, key: Key, now: Instant, t: &Timing, debounce: bool) {
         if self.due.contains_key(&key) {
             return;
@@ -196,7 +207,8 @@ fn is_timeout(e: &std::io::Error) -> bool {
     matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)
 }
 
-/// Read one frame; `None` when nothing arrived within the read timeout (or a control frame was handled).
+/// Reads one frame, or returns `None` when nothing arrived within the read timeout or a control
+/// frame was handled.
 fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
     match ws.read() {
         Ok(Message::Text(t)) => {
@@ -207,7 +219,7 @@ fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
             Some(f) => format!("the server closed the connection (code {}: {})", u16::from(f.code), f.reason),
             None => "the server closed the connection".into(),
         }),
-        // tungstenite queued the pong; send it now
+        // Tungstenite queued the pong, so send it now.
         Ok(Message::Ping(_)) => ws.flush().map(|_| None).or_else(|e| {
             if matches!(&e, tungstenite::Error::Io(i) if is_timeout(i)) {
                 Ok(None)
@@ -224,11 +236,13 @@ fn poll(ws: &mut WebSocket<Stream>) -> Result<Option<Value>, String> {
 }
 
 impl Watch {
-    /// Run until Ctrl-C (`stop`), a fatal error or a closed output. The exit code: 0 after a stop, 1 after a fatal error.
+    /// Runs until Ctrl-C (`stop`), a fatal error or a closed output.
+    ///
+    /// The exit code is 0 after a stop or a closed output, and 1 after a fatal error.
     pub fn run(&mut self, stop: &AtomicBool, out: &mut Out) -> i32 {
         let mut backoff = self.timing.backoff_start;
         let mut was_subscribed = false;
-        // the first line names the network and the indexer it watches
+        // The first line names the network and the indexer that it watches.
         let channels = self.kind.channels();
         out.event(
             &format!("watching {} on network {} (indexer {})", self.kind.name(), self.common.network, self.target.shown()),
@@ -316,11 +330,11 @@ impl Watch {
         }
     }
 
-    /// One connection: subscribe, then serve frames, pings and refetches until it ends.
+    /// One connection: subscribes, then serves frames, pings and refetches until it ends.
     fn session(&mut self, mut ws: WebSocket<Stream>, stop: &AtomicBool, out: &mut Out, reconnect: bool) -> End {
         let timing = self.timing.clone();
         let mut pending = Pending::default();
-        // 1. subscribe (before any refetch, so a change in between is not lost)
+        // 1. Subscribe, before any refetch, so that a change in between is not lost.
         let wanted = self.kind.channels();
         let mut held: Vec<String> = vec![];
         let mut errors: Vec<String> = vec![];
@@ -363,12 +377,12 @@ impl Watch {
                 out.error(&format!("token lists: {e}"));
             }
         }
-        // 2. what is shown is read once now
+        // 2. What is shown is read once now.
         let now = Instant::now();
         for k in self.kind.tracked() {
             pending.schedule(k, now, &timing, false);
         }
-        // 3. serve
+        // 3. Serve.
         let mut next_ping = Instant::now() + timing.ping_every;
         loop {
             if stop.load(Ordering::Relaxed) || out.broken {
@@ -397,7 +411,7 @@ impl Watch {
         }
     }
 
-    /// One server frame.
+    /// Handles one server frame.
     fn on_frame(&mut self, f: &Value, out: &mut Out, pending: &mut Pending) {
         let data = f.get("data").cloned().unwrap_or(Value::Null);
         let now = Instant::now();
@@ -441,7 +455,7 @@ impl Watch {
         }
     }
 
-    /// Read a resource again and print it.
+    /// Reads a resource again and prints it.
     fn refetch(&mut self, key: Key, out: &mut Out) {
         match key {
             Key::Book => match views::book_view(&self.common, &self.parsed) {

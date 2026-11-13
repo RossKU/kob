@@ -1,6 +1,8 @@
-//! `kob watch`: follow the executor's WebSocket feed (`docs/api-reference.md` section 4) from a terminal or a pipe. Read-only: no key is
-//! read and nothing is signed. The WebSocket address is the indexer's (`--indexer` / `$KOB_INDEXER_URL`) with `http` turned
-//! into `ws` and `/v1/ws` appended.
+//! `kob watch`: follows the WebSocket feed of the executor from a terminal or a pipe.
+//!
+//! The feed is described in `docs/api-reference.md`, section 4. The command is read-only: no key
+//! is read and nothing is signed. The WebSocket address is the indexer address (`--indexer` or
+//! `$KOB_INDEXER_URL`) with `http` turned into `ws` and `/v1/ws` appended.
 
 mod frames;
 mod names;
@@ -21,7 +23,7 @@ use names::Names;
 use out::Out;
 use session::{Kind, Timing, Watch};
 
-/// Help of `kob watch`.
+/// The help text of `kob watch`.
 pub const USAGE: &str = "\
 kob watch: follow the executor's live feed (read-only; no key, nothing is signed)
 
@@ -45,7 +47,9 @@ USAGE
   becomes ws://host:port/v1/ws, https:// becomes wss://.
 ";
 
-/// Options `kob watch` takes from the shared set: it signs nothing and needs no node.
+/// The options of the shared set that `kob watch` refuses.
+///
+/// It signs nothing and needs no node.
 const REFUSED: &[&str] = &["--yes", "--dry-run", "--key-file", "--key-env", "--fee-rate", "--priority-fee", "--out-dir", "--node"];
 
 fn bail(e: &str, code: i32) -> i32 {
@@ -53,14 +57,14 @@ fn bail(e: &str, code: i32) -> i32 {
     code
 }
 
-/// Run `kob watch`.
+/// Runs `kob watch`.
 pub fn run(args: &[String]) -> i32 {
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE, COMMON_HELP], true) {
         return code;
     }
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
-    // a second handler is not an error worth stopping for (tests)
+    // A second handler is not an error worth stopping for. It happens in tests.
     let _ = ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed));
     let (mut watch, json) = match setup(args) {
         Ok(x) => x,
@@ -70,7 +74,9 @@ pub fn run(args: &[String]) -> i32 {
     watch.run(&stop, &mut out)
 }
 
-/// The watch the arguments describe (its lists are read now: an unknown token is refused before anything connects).
+/// The watch that the arguments describe.
+///
+/// Its lists are read now, so an unknown token is refused before anything connects.
 fn setup(args: &[String]) -> Result<(Watch, bool), (String, i32)> {
     let usage = |e: String| (e, 2);
     let (what, rest) = args.split_first().ok_or_else(|| usage("give what to watch: fills, book, order or health".into()))?;
@@ -131,10 +137,14 @@ fn setup(args: &[String]) -> Result<(Watch, bool), (String, i32)> {
             Kind::Health
         }
     };
-    // the arguments `kob book` reads on each refetch: the token as typed (the lists resolve it again), --quote and --depth
+    // The arguments that `kob book` reads on each refetch: the token as typed, because the lists
+    // resolve it again, and --quote and --depth.
     let parsed = Parsed { pos: p.pos.clone(), vals: p.vals.clone(), flags: Default::default() };
     Ok((Watch { target, indexer, kind, common: c, parsed, names, timing: Timing::default() }, json))
 }
 
-/// Orders one watch follows (a channel each, below the server's cap of 64 with `reorg` and the margin of a reconnect).
+/// The most orders that one watch follows, one channel each.
+///
+/// It stays below the cap of 64 channels of the server, with room for `reorg` and for the
+/// margin of a reconnect.
 const MAX_ORDERS: usize = 60;

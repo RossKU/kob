@@ -1,4 +1,7 @@
-//! How `kob watch` words the executor's frames (`docs/api-reference.md` section 4.2): one human line per event. Pure: no clock, no I/O.
+//! How `kob watch` words the frames of the executor, one human line per event.
+//!
+//! The frames are described in `docs/api-reference.md`, section 4.2. The functions are pure, with
+//! no clock and no I/O.
 
 use serde_json::Value;
 
@@ -7,21 +10,21 @@ use crate::trade::units::{self, TokenUnit};
 /// What a fill line needs of a token to show its amount and price in whole units.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenInfo {
-    /// Ticker (empty: none).
+    /// The ticker, empty when there is none.
     pub ticker: String,
-    /// Decimals.
+    /// The decimals.
     pub decimals: u32,
-    /// Base units the order prices are quoted per (`TokenMarket::scale`).
+    /// The base units that the order prices are quoted per, see `TokenMarket::scale`.
     pub scale: i64,
 }
 
-/// `HH:MM:SS` (UTC) of a unix time in seconds.
+/// `HH:MM:SS` in UTC of a unix time in seconds.
 pub fn clock(unix_secs: u64) -> String {
     let s = unix_secs % 86_400;
     format!("{:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60)
 }
 
-/// `abcd1234..9876abcd` for a long hex id; anything shorter is shown whole.
+/// `abcd1234..9876abcd` for a long hex id. Anything shorter is shown whole.
 pub fn short(id: &str) -> String {
     if id.len() > 20 && id.is_char_boundary(8) && id.is_char_boundary(id.len() - 8) {
         format!("{}..{}", &id[..8], &id[id.len() - 8..])
@@ -34,7 +37,7 @@ fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
     v.get(k).and_then(Value::as_str)
 }
 
-/// A number the executor writes as a decimal string (or a JSON number).
+/// A number that the executor writes as a decimal string or a JSON number.
 fn int(v: &Value, k: &str) -> Option<i128> {
     match v.get(k)? {
         Value::String(s) => s.parse().ok(),
@@ -47,7 +50,9 @@ fn opt(v: Option<i128>) -> String {
     v.map_or("-".into(), |x| x.to_string())
 }
 
-/// The line of a `fill` frame's `data`; `info` names the token's ticker, decimals and price scale when the lists know them.
+/// The line of the `data` of a `fill` frame.
+///
+/// `info` names the ticker, decimals and price scale of the token when the lists know them.
 pub fn fill_line(data: &Value, info: Option<&TokenInfo>) -> String {
     let side = match data.get("side").and_then(Value::as_i64) {
         Some(1) => "ask",
@@ -105,7 +110,8 @@ pub fn health_line(data: &Value) -> String {
         opt(int(data, "node_daa")),
         opt(int(data, "lag_daa"))
     );
-    // the executor's update notice (a newer KOB release in use on chain); shown only as a release version, never as raw text
+    // The update notice of the executor says that a newer KOB release is in use on chain. It is
+    // shown only as a release version, never as raw text.
     let newer = data.get("newer_release_seen").and_then(|n| text(n, "version"));
     if let Some(v) = newer.and_then(|v| v.parse::<kob_protocol::payload::Release>().ok()) {
         s.push_str(&format!("  | a newer KOB release is in use on chain ({v}): update"));
@@ -128,14 +134,18 @@ pub fn resync_line(data: &Value) -> String {
     format!("resync: this client missed {} events (it fell behind the server's buffer)", opt(int(data, "missed_events")))
 }
 
-/// A frame this build has no wording for (a newer executor): its type, channel and data on one line.
+/// A line for a frame that this build has no wording for, such as one of a newer executor.
+///
+/// It shows the type, channel and data on one line.
 pub fn generic_line(frame: &Value) -> String {
     let ty = text(frame, "type").unwrap_or("?");
     let ch = text(frame, "channel").map(|c| format!(" [{c}]")).unwrap_or_default();
     format!("{ty}{ch}  {}", frame.get("data").map_or(String::new(), Value::to_string))
 }
 
-/// What the `subscribed` reply says: the channels held now and the errors for names that failed.
+/// What the `subscribed` reply says.
+///
+/// That is the channels held now and the errors for names that failed.
 pub fn subscribed(frame: &Value) -> (Vec<String>, Vec<String>) {
     let list = |k: &str| {
         frame
@@ -176,7 +186,7 @@ mod tests {
                 "62".repeat(32)
             )
         );
-        // a bid, no payout (a conditional kind), no price (a pair order)
+        // A bid, with no payout for a conditional kind and no price for a pair order.
         let d = json!({"order": "6a".repeat(32), "token": null, "side": 2, "price": null, "amount": "1", "payout": null,
                        "txid": "62".repeat(32), "daa": 7});
         let l = fill_line(&d, Some(&tusd()));
@@ -193,7 +203,7 @@ mod tests {
             l.starts_with("fill  ask  99980049 base units of 55555555..55555555 @ raw price 3333445595 (decimals unknown)"),
             "{l}"
         );
-        // a token known by decimals only is named by its short id
+        // A token known by decimals only is named by its short id.
         let info = TokenInfo { ticker: String::new(), decimals: 2, scale: 100 };
         assert!(fill_line(&d, Some(&info)).contains("999800.49 55555555..55555555 @ 33.33445595 KAS per token"));
     }
@@ -208,7 +218,7 @@ mod tests {
             health_line(&json!({"state": "following", "cursor_daa": 995, "node_daa": null, "lag_daa": null})),
             "health  following  daa 995  node -  lag -"
         );
-        // the update notice of the executor; anything that is not a release version is not printed
+        // The update notice of the executor. Anything that is not a release version is not printed.
         let notice = json!({"state": "following", "cursor_daa": 995, "newer_release_seen": {"version": "0.1.1", "first_seen_daa": 7}});
         assert_eq!(
             health_line(&notice),

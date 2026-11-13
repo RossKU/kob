@@ -1,6 +1,9 @@
-//! What `kob watch` knows of tokens: the registry and the indexer's token list (ticker, decimals), resolved the way `kob book`
-//! resolves a token, cached per token. A token the lists do not name yet is asked again after a pause (a new token enters
-//! the indexer's list with its first order).
+//! What `kob watch` knows of tokens.
+//!
+//! These are the registry and the token list of the indexer, with ticker and decimals. A token is
+//! resolved the way `kob book` resolves it, and cached. A token that the lists do not name yet is
+//! asked again after a pause, because a new token enters the list of the indexer with its first
+//! order.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -15,24 +18,24 @@ use crate::trade::market::{self, DecimalsFrom, TokenFacts};
 
 /// How long a token that did not resolve is left alone.
 const RETRY_AFTER: Duration = Duration::from_secs(60);
-/// How often the indexer's token list is read again for a token that did not resolve.
+/// How often the token list of the indexer is read again for a token that did not resolve.
 const REFRESH: Duration = Duration::from_secs(30);
 
-/// The token lists and the per-token display facts.
+/// The token lists and the display facts per token.
 pub struct Names {
     indexer: String,
     network: String,
     registry: Option<PathBuf>,
-    /// The registry's tokens.
+    /// The tokens of the registry.
     pub reg: Vec<TokenFacts>,
-    /// The indexer's tokens.
+    /// The tokens of the indexer.
     pub idx: Vec<TokenFacts>,
     cache: BTreeMap<[u8; 32], (Option<TokenInfo>, Instant)>,
     refreshed: Instant,
 }
 
 impl Names {
-    /// Read the lists.
+    /// Reads the lists.
     pub fn load(indexer: &str, network: &str, registry: Option<PathBuf>) -> Result<Names, String> {
         let (reg, idx) = data::token_lists(registry.as_deref(), network, Some(indexer))?;
         Ok(Names {
@@ -46,7 +49,9 @@ impl Names {
         })
     }
 
-    /// Read the lists again (after a reconnect: tokens may have appeared) and forget what did not resolve.
+    /// Reads the lists again and forgets what did not resolve.
+    ///
+    /// It runs after a reconnect, because tokens may have appeared.
     pub fn reload(&mut self) -> Result<(), String> {
         let (reg, idx) = data::token_lists(self.registry.as_deref(), &self.network, Some(&self.indexer))?;
         self.reg = reg;
@@ -56,7 +61,7 @@ impl Names {
         Ok(())
     }
 
-    /// A token named by a ticker or a covenant id.
+    /// The token that a ticker or a covenant id names.
     pub fn find(&self, key: &str) -> Result<[u8; 32], String> {
         if let Some(c) = parse_hex32(key) {
             return Ok(c);
@@ -65,7 +70,9 @@ impl Names {
             .ok_or_else(|| format!("unknown token `{key}` (a ticker the registry or the indexer lists, or a covenant id)"))
     }
 
-    /// The display facts of a token, `None` when its decimals are not known (its fills are shown in base units).
+    /// The display facts of a token, or `None` when its decimals are not known.
+    ///
+    /// Its fills are then shown in base units.
     pub fn info(&mut self, cov: &[u8; 32]) -> Option<TokenInfo> {
         if let Some((info, at)) = self.cache.get(cov) {
             if info.is_some() || at.elapsed() < RETRY_AFTER {
@@ -81,7 +88,8 @@ impl Names {
         if let Some(info) = self.try_resolve(cov) {
             return Some(info);
         }
-        // a token that entered the indexer's list after the lists were read: read it again, at most every REFRESH
+        // A token that entered the list of the indexer after the lists were read is read again, at
+        // most every REFRESH.
         if self.refreshed.elapsed() >= REFRESH {
             self.refreshed = Instant::now();
             if let Ok(idx) = data::token_lists(None, &self.network, Some(&self.indexer)).map(|l| l.1) {

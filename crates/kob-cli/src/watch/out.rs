@@ -1,6 +1,9 @@
-//! Where `kob watch` writes: events on stdout (one line each; with `--json`, one JSON document per line), notes and errors on
-//! stderr (with `--json`, notes are `{"type":"note"}` lines on stdout so a pipe sees the gaps). A write that fails (a closed
-//! pipe) marks the output broken and the watch ends.
+//! Where `kob watch` writes.
+//!
+//! Events go to stdout, one line each, and with `--json` one JSON document per line. Notes and
+//! errors go to stderr. With `--json`, notes are `{"type":"note"}` lines on stdout, so that a
+//! pipe sees the gaps. A write that fails, such as on a closed pipe, marks the output broken and
+//! the watch ends.
 
 use std::io::Write;
 
@@ -14,7 +17,7 @@ pub struct Out {
     sink: Box<dyn Write + Send>,
     err: Box<dyn Write + Send>,
     now: fn() -> u64,
-    /// A write failed: the reader is gone.
+    /// Whether a write failed, which means the reader is gone.
     pub broken: bool,
 }
 
@@ -28,7 +31,7 @@ impl Out {
         Out::with(json, Box::new(std::io::stdout()), Box::new(std::io::stderr()), unix_now)
     }
 
-    /// Any sinks and clock (tests).
+    /// Any sinks and clock, for tests.
     pub fn with(json: bool, sink: Box<dyn Write + Send>, err: Box<dyn Write + Send>, now: fn() -> u64) -> Out {
         Out { json, sink, err, now, broken: false }
     }
@@ -40,7 +43,7 @@ impl Out {
     }
 
     fn put_err(&mut self, line: &str) {
-        // stderr failing (closed) is not a reason to stop
+        // A failing stderr, such as a closed one, is not a reason to stop.
         let _ = writeln!(self.err, "{line}").and_then(|_| self.err.flush());
     }
 
@@ -54,7 +57,7 @@ impl Out {
         }
     }
 
-    /// An event of several lines (a book): the time heads the first.
+    /// An event of several lines, such as a book: the time heads the first.
     pub fn block(&mut self, human: &[String], frame: &Value) {
         if self.json {
             self.put(&frame.to_string());
@@ -70,14 +73,18 @@ impl Out {
         }
     }
 
-    /// A frame that is shown in `--json` only (a `book` or `order` notice: the refetch is what a person reads).
+    /// A frame that is shown with `--json` only, such as a `book` or `order` notice.
+    ///
+    /// A person reads the refetch instead.
     pub fn json_only(&mut self, frame: &Value) {
         if self.json {
             self.put(&frame.to_string());
         }
     }
 
-    /// Something the reader should know about the watch itself (a reconnect, a resync, a reorg).
+    /// Something the reader should know about the watch itself.
+    ///
+    /// That is a reconnect, a resync or a reorg.
     pub fn note(&mut self, msg: &str) {
         if self.json {
             let line = json!({"type": "note", "data": {"message": msg}}).to_string();
@@ -88,7 +95,7 @@ impl Out {
         }
     }
 
-    /// A note that is also a server frame: `--json` prints the frame itself.
+    /// A note that is also a server frame. `--json` prints the frame itself.
     pub fn frame_note(&mut self, msg: &str, frame: &Value) {
         if self.json {
             self.put(&frame.to_string());
@@ -97,7 +104,7 @@ impl Out {
         }
     }
 
-    /// An error: always on stderr.
+    /// An error, always on stderr.
     pub fn error(&mut self, msg: &str) {
         self.put_err(&format!("error: {msg}"));
     }

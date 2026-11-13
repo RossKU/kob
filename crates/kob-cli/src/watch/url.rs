@@ -1,28 +1,32 @@
-//! The executor's WebSocket address, derived from the indexer URL (`docs/api-reference.md` section 4: `ws://<host>/v1/ws`).
+//! The WebSocket address of the executor, derived from the indexer URL.
+//!
+//! The route is `ws://<host>/v1/ws`, see `docs/api-reference.md`, section 4.
 
 use crate::trade::http::{b64, shown};
 
-/// The WebSocket route under the indexer's base path.
+/// The WebSocket route under the base path of the indexer.
 pub const WS_PATH: &str = "/v1/ws";
 
 /// Where `kob watch` connects.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WsTarget {
-    /// `wss://` (the indexer was `https://`).
+    /// Whether the scheme is `wss://`, which is the case when the indexer is `https://`.
     pub secure: bool,
-    /// Host without brackets.
+    /// The host, without brackets.
     pub host: String,
-    /// Port.
+    /// The port.
     pub port: u16,
     /// The base path of the indexer plus [`WS_PATH`].
     pub path: String,
-    /// `Authorization: Basic` value of credentials in the URL (`http://user:pw@host`).
+    /// The `Authorization: Basic` value of credentials in the URL, as in `http://user:pw@host`.
     pub auth: Option<String>,
     shown: String,
 }
 
 impl WsTarget {
-    /// `ws://host:port/v1/ws` without credentials (the port is omitted when it is the scheme's default).
+    /// `ws://host:port/v1/ws` without credentials.
+    ///
+    /// The port is omitted when it is the default of the scheme.
     pub fn url(&self) -> String {
         let default = if self.secure { 443 } else { 80 };
         let host = if self.host.contains(':') { format!("[{}]", self.host) } else { self.host.clone() };
@@ -30,13 +34,15 @@ impl WsTarget {
         format!("{}://{host}{port}{}", if self.secure { "wss" } else { "ws" }, self.path)
     }
 
-    /// The indexer as messages show it (no credentials).
+    /// The indexer as messages show it, without credentials.
     pub fn shown(&self) -> &str {
         &self.shown
     }
 }
 
-/// The WebSocket target of an indexer URL: `http` becomes `ws`, `https` becomes `wss`, the path is the indexer's base path
+/// The WebSocket target of an indexer URL.
+///
+/// `http` becomes `ws` and `https` becomes `wss`. The path is the base path of the indexer
 /// followed by `/v1/ws`.
 pub fn ws_target(indexer: &str) -> Result<WsTarget, String> {
     let who = shown(indexer);
@@ -58,7 +64,7 @@ pub fn ws_target(indexer: &str) -> Result<WsTarget, String> {
     let default = if secure { 443 } else { 80 };
     let bad_port = || format!("indexer {who}: bad port");
     let (host, port) = if let Some(inner) = hostport.strip_prefix('[') {
-        // an IPv6 literal: [::1] or [::1]:8091
+        // An IPv6 literal, such as [::1] or [::1]:8091.
         let (h, after) = inner.split_once(']').ok_or_else(|| format!("indexer {who}: bad host"))?;
         match after.strip_prefix(':') {
             Some(p) => (h, p.parse().map_err(|_| bad_port())?),
@@ -95,7 +101,7 @@ mod tests {
         assert_eq!(url("https://example.org"), "wss://example.org/v1/ws");
         assert_eq!(url("https://example.org:443/"), "wss://example.org/v1/ws");
         assert_eq!(url("https://example.org:8443"), "wss://example.org:8443/v1/ws");
-        // the indexer's base path is kept
+        // The base path of the indexer is kept.
         assert_eq!(url("http://h:1/kob/api/"), "ws://h:1/kob/api/v1/ws");
         assert_eq!(url("http://[::1]:8091"), "ws://[::1]:8091/v1/ws");
         assert_eq!(url("https://[::1]"), "wss://[::1]/v1/ws");

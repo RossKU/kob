@@ -1,5 +1,8 @@
-//! `kob watch` against a local server that speaks the executor's WebSocket protocol (`docs/api-reference.md` section 4) and a few REST
-//! routes on the same port: the frames, the refetch of notices (debounced), the reconnect, the errors.
+//! `kob watch` against a local server that speaks the WebSocket protocol of the executor.
+//!
+//! The server also answers a few REST routes on the same port. The tests cover the frames, the
+//! debounced refetch of notices, the reconnect and the errors. The protocol is described in
+//! `docs/api-reference.md`, section 4.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -40,12 +43,12 @@ impl Cap {
     }
 }
 
-/// What a connection's script does when it returns.
+/// What the script of a connection does when it returns.
 #[derive(PartialEq)]
 enum After {
-    /// Drop the TCP connection without a closing handshake.
+    /// Drops the TCP connection without a closing handshake.
     Drop,
-    /// Keep serving pings until the client goes.
+    /// Keeps serving pings until the client goes.
     Hold,
 }
 
@@ -88,8 +91,11 @@ fn send(ws: &mut WebSocket<TcpStream>, v: Value) {
     ws.send(Message::text(v.to_string())).unwrap();
 }
 
-/// A server on one port: `GET /v1/ws` upgrades and runs the script of that connection (numbered from 0); every other GET is
-/// answered from `routes` as JSON, 404 for the rest. `refuse_first`: the first upgrade gets `503` with `Retry-After: 1`.
+/// A server on one port.
+///
+/// `GET /v1/ws` upgrades and runs the script of that connection, numbered from 0. Every other
+/// GET is answered from `routes` as JSON, with 404 for the rest. With `refuse_first`, the first
+/// upgrade gets `503` with `Retry-After: 1`.
 fn start(routes: BTreeMap<String, Value>, refuse_first: bool, script: Script) -> Server {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -121,7 +127,7 @@ fn start(routes: BTreeMap<String, Value>, refuse_first: bool, script: Script) ->
                     }
                     let Ok(mut ws) = tungstenite::accept(stream) else { return };
                     let _ = ws.get_ref().set_read_timeout(Some(Duration::from_millis(100)));
-                    // the subscription every watch opens with
+                    // The subscription that every watch opens with.
                     let Some(first) = recv_wait(&mut ws, &done) else { return };
                     let msg: Value = serde_json::from_str(&first).unwrap();
                     assert_eq!(msg["op"], "subscribe");
@@ -224,7 +230,9 @@ fn fast() -> Timing {
     }
 }
 
-/// The channels a subscribe message asked for, as the server's reply lists them (sorted, `reorg` first).
+/// The channels that a subscribe message asked for, as the reply of the server lists them.
+///
+/// They are sorted, with `reorg` first.
 fn reply_channels(msg: &Value) -> Vec<String> {
     msg.as_array().unwrap().iter().filter_map(|c| c.as_str().map(str::to_owned)).collect()
 }
@@ -235,7 +243,9 @@ struct Run {
     err: String,
 }
 
-/// Run `kob watch <args>` against `server` until `until(stdout, stderr)` holds (20 s at most), then stop it.
+/// Runs `kob watch <args>` against `server` until `until(stdout, stderr)` holds.
+///
+/// It waits 20 s at most, and then stops the watch.
 fn watch(server: &Server, args: &[&str], json: bool, until: impl Fn(&str, &str) -> bool) -> Run {
     let mut a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     a.extend(["--network".into(), "testnet-10".into(), "--indexer".into(), server.url.clone()]);
@@ -254,7 +264,7 @@ fn watch(server: &Server, args: &[&str], json: bool, until: impl Fn(&str, &str) 
     while Instant::now() < end && !until(&out.text(), &err.text()) && !h.is_finished() {
         std::thread::sleep(Duration::from_millis(20));
     }
-    // let a late duplicate show up before the verdict
+    // Let a late duplicate show up before the verdict.
     std::thread::sleep(Duration::from_millis(400));
     stop.store(true, Ordering::Relaxed);
     let code = h.join().unwrap();
@@ -284,7 +294,8 @@ fn fills_frames_reconnect_and_server_notices() {
     let server = start(routes(), false, script);
     let r = watch(&server, &["fills"], false, |o, _| o.matches("fill  ask").count() >= 2);
     assert_eq!(r.code, 0, "{}", r.err);
-    // time (UTC), kind, amount and price in the token's decimals, short order id, full txid
+    // The line has the time (UTC), the kind, the amount and price in the decimals of the token,
+    // the short order id and the full txid.
     let want = format!(
         "03:08:44  fill  ask  2.5 WATCHT @ 2.5 KAS per WATCHT  paid 6.25 KAS  order a1a1a1a1..a1a1a1a1  tx {}  daa 995",
         "62".repeat(32)
@@ -293,14 +304,14 @@ fn fills_frames_reconnect_and_server_notices() {
     assert!(r.out.contains("fill  ask  0.001 WATCHT @"), "{}", r.out);
     assert!(r.out.contains("03:08:44  watching fills on network testnet-10 (indexer http://127.0.0.1:"), "{}", r.out);
     assert!(r.out.contains("future-frame [fills]  {\"a\":1}"), "{}", r.out);
-    // notes and errors go to stderr
+    // Notes and errors go to stderr.
     assert!(!r.out.contains("note:") && !r.out.contains("error:"), "{}", r.out);
     assert!(r.err.contains("note: reorg: 1 block(s) reverted, 2 added (daa 996)"), "{}", r.err);
     assert!(r.err.contains("note: resync: this client missed 12 events"), "{}", r.err);
     assert!(r.err.contains("error: server: unknown op"), "{}", r.err);
     assert!(r.err.contains("note: connection lost"), "{}", r.err);
     assert!(r.err.contains("note: reconnected"), "{}", r.err);
-    // both connections subscribed to reorg and fills; pings kept the second alive
+    // Both connections subscribed to reorg and fills, and pings kept the second alive.
     let subs = server.subs.lock().unwrap().clone();
     assert!(subs.len() >= 2, "{subs:?}");
     assert!(subs.iter().all(|s| reply_channels(s) == ["reorg", "fills"]), "{subs:?}");
@@ -318,7 +329,7 @@ fn fills_of_one_token_by_ticker_and_json_lines() {
     let r = watch(&server, &["fills", "--token", "watcht"], true, |o, _| o.contains("\"fill\""));
     assert_eq!(r.code, 0, "{}", r.err);
     assert_eq!(server.subs.lock().unwrap()[0], json!(["reorg", format!("fills:{}", to_hex(&TOKEN))]));
-    // NDJSON: the frame as the server sent it, one per line
+    // NDJSON: the frame as the server sent it, one per line.
     let lines: Vec<Value> = r.out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     assert_eq!(lines.len(), 2, "{}", r.out);
     assert_eq!(lines[0]["type"], "start");
@@ -349,7 +360,7 @@ fn a_book_notice_reads_the_book_again_once_per_burst() {
         o.matches("last fill").count() + o.matches("-- spread").count() >= 3 && e.contains("reconnected")
     });
     assert_eq!(r.code, 0, "{}", r.err);
-    // the first read, one read for the five notices, one after the reconnect
+    // The first read, one read for the five notices, and one after the reconnect.
     assert_eq!(server.hits(&path), 3, "{}", r.out);
     assert!(r.out.contains("03:08:44  book WATCHT"), "{}", r.out);
     assert!(r.out.contains("-- spread 0.05 KAS per WATCHT (best ask 2.5 KAS per WATCHT, best bid 2.45 KAS per WATCHT)"), "{}", r.out);
@@ -372,13 +383,14 @@ fn an_order_notice_prints_the_orders_state() {
     let r = watch(&server, &["order", &a, &b], true, |o, _| o.matches("\"snapshot\"").count() >= 3);
     assert_eq!(r.code, 0, "{}", r.err);
     let lines: Vec<Value> = r.out.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-    // the notice frame itself, then snapshots: the order twice (first read, after the notice), the unknown one once as null
+    // The notice frame itself, then snapshots: the order twice, at the first read and after the
+    // notice, and the unknown one once as null.
     assert!(lines.iter().any(|l| l["type"] == "order"), "{}", r.out);
     let snaps: Vec<&Value> = lines.iter().filter(|l| l["type"] == "snapshot").collect();
     assert_eq!(snaps.iter().filter(|s| s["channel"] == format!("order:{a}") && s["data"]["status"] == "partial").count(), 2);
     assert!(snaps.iter().any(|s| s["channel"] == format!("order:{b}") && s["data"].is_null()));
     assert_eq!(server.hits(&format!("/v1/orders/{a}")), 2);
-    // human form
+    // The human form.
     let server = start(routes(), false, {
         let a = a.clone();
         Arc::new(move |_, ws| {
@@ -412,7 +424,7 @@ fn health_lines_and_a_refused_upgrade_that_asks_to_wait() {
     let start_at = Instant::now();
     let r = watch(&server, &["health"], false, |o, _| o.contains("health  following"));
     assert_eq!(r.code, 0, "{}", r.err);
-    // 503 Retry-After: 1 is honoured over the short backoff
+    // A 503 with Retry-After: 1 is honoured over the short backoff.
     assert!(r.err.contains("HTTP 503") && r.err.contains("retrying in 1s"), "{}", r.err);
     assert!(start_at.elapsed() >= Duration::from_millis(900));
     assert!(r.out.contains("03:08:44  cursor  daa 995  +2 -0 blocks"), "{}", r.out);
@@ -437,7 +449,7 @@ fn a_subscription_the_server_refuses_ends_the_watch_with_the_reason() {
 
 #[test]
 fn an_endpoint_without_the_route_is_refused_clearly() {
-    // the HTTP side answers /v1/ws with 404: fatal, with the hint
+    // The HTTP side answers /v1/ws with 404, which is fatal, with the hint.
     let (url, _state) = crate::trade::http::mock::start(routes());
     let mut a: Vec<String> = ["health", "--network", "testnet-10", "--indexer"].iter().map(|s| s.to_string()).collect();
     a.push(url);
@@ -470,12 +482,12 @@ fn arguments() {
     assert!(err("book WATCHT --quote WATCHT").0.contains("names the token itself"));
     let many = (0..61).map(|i| format!("{:064x}", i + 1)).collect::<Vec<_>>().join(" ");
     assert!(err(&format!("order {many}")).0.contains("at most 60"));
-    // no indexer
+    // No indexer.
     let e = setup(&["health".into(), "--network".into(), "testnet-10".into()]);
     if std::env::var(crate::trade::http::INDEXER_ENV).is_err() {
         assert!(e.map(|_| ()).unwrap_err().0.contains("--indexer"));
     }
-    // channels
+    // Channels.
     let (w, _) = setup(&a("book WATCHT")).unwrap();
     assert_eq!(w.kind.channels(), vec!["reorg".to_string(), format!("book:{}", to_hex(&TOKEN))]);
     let (w, _) = setup(&a(&format!("order {} {}", to_hex(&ORDER), to_hex(&ORDER)))).unwrap();
