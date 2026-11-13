@@ -1,22 +1,30 @@
-// The KAS/USD price feed of the optional USD display: one store for the whole page and the loop that fills it.
+// The KAS/USD price feed of the optional USD display: one store for the whole page and the loop
+// that fills it.
 //
-// The loop runs only while USD is the display currency (app/currency-pref.ts) or a market view wants the rate for its thin-book marker (`want()`), asks the indexer (`kasUsd`, data/kas-price.ts) once at the start and then every
-// KAS_USD_POLL_MS (a minute) while the page is shown, and once more when the page is shown again after a poll was due. An indexer that has no such route (null:
-// 404) is "unavailable" and is asked again only after KAS_USD_RETRY_UNSUPPORTED_MS; a failed read (a 503 before the indexer's first price, a network error) keeps the
-// last quote (its age decides whether it is still used, app/fiat.ts) and doubles the wait up to KAS_USD_MAX_BACKOFF_MS, which the first success resets. Nothing here is
-// authority for anything signed.
+// The loop runs only while USD is the display currency (app/currency-pref.ts) or a market view
+// wants the rate for its thin-book marker (`want()`). It asks the indexer (`kasUsd`,
+// data/kas-price.ts) once at the start and then every KAS_USD_POLL_MS (a minute) while the page is
+// shown. It asks once more when the page is shown again after a poll was due.
+//
+// An indexer that has no such route (null, 404) is "unavailable" and is asked again only after
+// KAS_USD_RETRY_UNSUPPORTED_MS. A failed read, such as a 503 before the indexer's first price or
+// a network error, keeps the last quote and doubles the wait up to KAS_USD_MAX_BACKOFF_MS. Its
+// age decides whether the quote is still used (app/fiat.ts). The first success resets the wait.
+//
+// Nothing here is authority for anything signed.
 import { KAS_USD_MAX_BACKOFF_MS, KAS_USD_POLL_MS, KAS_USD_RETRY_UNSUPPORTED_MS, type KasUsdQuote } from '../data/kas-price';
 import type { IndexerApi } from '../data/indexer';
 import type { PriceFeed } from './fiat';
 
-/** What the store holds: the feed's state and the clock the views judge a quote's age by (it moves while the loop runs). */
+/** The feed state and the clock the views judge a quote's age by. The clock moves with the loop. */
 export interface PriceSnapshot extends PriceFeed {
   nowMs: number;
 }
 
-/** How often the views re-judge the age of the quote, ms (the loop's own tick). */
+/** How often the views re-judge the age of the quote, in ms. This is the loop's own tick. */
 export const PRICE_TICK_MS = 30_000;
 
+/** The store of the price feed. Views subscribe to it, and the loop writes to it. */
 export class KasPriceStore {
   private snap: PriceSnapshot = { quote: null, seenAtMs: null, status: 'idle', nowMs: Date.now() };
   private readonly listeners = new Set<() => void>();
@@ -37,7 +45,10 @@ export class KasPriceStore {
     for (const l of [...this.listeners]) l();
   }
 
-  /** A quote came in: kept with the local time its `at` was first seen (a quote with the same `at` keeps its first time). */
+  /**
+   * A quote came in. It is kept with the local time its `at` was first seen, and a quote with the
+   * same `at` keeps its first time.
+   */
   received(q: KasUsdQuote, nowMs: number): void {
     this.update((s) => ({ quote: q, seenAtMs: s.quote && s.quote.at === q.at && s.quote.usd === q.usd ? s.seenAtMs : nowMs, status: 'ok', nowMs }));
   }
@@ -45,12 +56,15 @@ export class KasPriceStore {
   private wanted = 0;
   private readonly wantListeners = new Set<() => void>();
 
-  /** Whether a view that needs the rate whatever the display currency (the thin-book marker of the market views) is mounted: the loop runs for it too. */
+  /**
+   * Whether a view that needs the rate whatever the display currency is mounted, such as the
+   * thin-book marker. The loop runs for it too.
+   */
   get isWanted(): boolean {
     return this.wanted > 0;
   }
 
-  /** A view wants the rate: returns its release (idempotent). */
+  /** A view wants the rate. Returns its release, which is idempotent. */
   want(): () => void {
     let held = true;
     this.wanted += 1;
@@ -68,7 +82,7 @@ export class KasPriceStore {
     return () => void this.wantListeners.delete(l);
   }
 
-  /** Back to the start (tests, and a new indexer). */
+  /** Back to the start, for tests and a new indexer. */
   reset(nowMs = Date.now()): void {
     this.update(() => ({ quote: null, seenAtMs: null, status: 'idle', nowMs }));
   }
@@ -77,8 +91,9 @@ export class KasPriceStore {
 /** The page's one store. */
 export const kasPrice = new KasPriceStore();
 
+/** What `startKasPriceFeed` needs. Every part but the indexer has a default. */
 export interface FeedDeps {
-  /** null: no indexer (the price is unavailable) */
+  /** Null when there is no indexer, and then the price is unavailable. */
   indexer: Pick<IndexerApi, 'kasUsd'> | null;
   store?: KasPriceStore;
   pollMs?: number;
@@ -87,15 +102,16 @@ export interface FeedDeps {
   tickMs?: number;
   now?: () => number;
   visible?: () => boolean;
-  /** calls `cb` on every change of the page's visibility; returns the unsubscribe */
+  /** Calls `cb` on every change of the page's visibility. Returns the unsubscribe. */
   onVisibility?: (cb: (visible: boolean) => void) => () => void;
   setTimeout?: (cb: () => void, ms: number) => unknown;
   clearTimeout?: (h: unknown) => void;
 }
 
 /**
- * Starts the loop; returns the stop. Reads once at once, then every `pollMs` while the page is visible (a hidden page sleeps; shown again, it reads at once when the
- * last read is a poll old). One read at a time.
+ * Starts the loop and returns the stop. It reads once at once, then every `pollMs` while the page
+ * is visible. A hidden page sleeps, and when shown again it reads at once if the last read is a
+ * poll old. One read at a time.
  */
 export function startKasPriceFeed(d: FeedDeps): () => void {
   const store = d.store ?? kasPrice;
@@ -109,11 +125,11 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
   const cancel = d.clearTimeout ?? ((h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>));
   let stopped = false;
   let busy = false;
-  // failed reads in a row: each doubles the wait, a success resets it
+  // Failed reads in a row. Each doubles the wait, and a success resets it.
   let fails = 0;
   let timer: unknown = null;
   let ticker: unknown = null;
-  // the earliest the next read may happen (ms on `now`); a hidden page leaves it due
+  // The earliest the next read may happen, in ms on `now`. A hidden page leaves it due.
   let nextAt = 0;
   const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
 
@@ -140,13 +156,14 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
         store.received(q, now());
       } else {
         fails = 0;
-        // no such route here (another indexer after a failover, or one with the price off): an older quote is dropped, it would only age
+        // No such route here, as on another indexer after a failover or one with the price off. An
+        // older quote is dropped, because it would only age.
         store.update((s) => ({ ...s, quote: null, seenAtMs: null, status: 'unavailable', nowMs: now() }));
         wait = retryMs;
       }
     } catch {
       if (stopped) return;
-      // the last quote is kept: its age decides whether it is still used
+      // The last quote is kept. Its age decides whether it is still used.
       store.update((s) => ({ ...s, status: 'error', nowMs: now() }));
       fails += 1;
       wait = Math.min(pollMs * 2 ** fails, Math.max(maxBackoffMs, pollMs));
@@ -160,7 +177,7 @@ export function startKasPriceFeed(d: FeedDeps): () => void {
   const off = (d.onVisibility ?? (() => () => {}))((v) => {
     if (stopped) return;
     if (v) {
-      // shown again: a read that fell due while hidden is made now
+      // Shown again: a read that fell due while hidden is made now.
       if (now() >= nextAt) void read();
       else schedule();
     } else if (timer !== null) {

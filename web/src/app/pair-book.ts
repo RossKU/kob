@@ -87,7 +87,7 @@ interface Row {
 
 const lower = (s: string | null | undefined): string => (s ?? '').toLowerCase();
 
-/** The listed orders of the pair A/B that count as liquidity, as rows. Malformed ones are skipped. */
+/** The listed orders of the pair A/B that count as liquidity, as rows. Bad ones are skipped. */
 function rowsOf(orders: readonly OrderView[], base: PairToken, quote: PairToken): Row[] {
   const out: Row[] = [];
   // One row per order. The indexer listing an order N times does not count it N times.
