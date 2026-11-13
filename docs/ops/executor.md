@@ -3179,7 +3179,9 @@ the entry's `fetch`. A node that serves windows is a full peer the operator list
 (`fetch = false`) is there to spread transactions, not to decide the chain, so it never leads unless `may_lead = true`.
 The primary (`rpc_url`, or the entry with `role = "primary"`) may always lead again. A candidate is checked on its own
 answers (network, sync, the cursor on its chain), so the setting is the operator's say in which nodes the store may
-follow: set `may_lead = false` on a node listed only for its bandwidth, such as a fixed public node.
+follow: set `may_lead = false` on a node listed only for its bandwidth, such as a fixed public node. Another node cannot
+make the authority's chain requests fail: they are bounded by the authority's own blue scores, never by a number another
+node reports.
 
 The handover is logged at warn (`another node is the chain authority now`, with both nodes), counted in
 `authority_replaced_total` (`kob_indexer_authority_replaced_total`) and the new authority's `nodes[].promoted`, and the

@@ -17,7 +17,7 @@ use kobd::indexer::ingest::Ingest;
 use kobd::indexer::status::{FollowerState, HealthState};
 use kobd::rpc::multi::{MultiNode, NodeSpec};
 use kobd::rpc::types::*;
-use kobd::rpc::{ChainSource, RpcError};
+use kobd::rpc::{ChainSource, RpcError, WindowRequest};
 use kobd::testkit::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,6 +43,11 @@ enum Mode {
     /// Hides the last accepted transaction of every chain block from this DAA score on, in every answer (a primary that
     /// lies; only a cross-checking node can contradict it).
     HidesTxFrom(u64),
+    /// Reports a blue score far above the real one for every block it knows. The end of a window from it would bound the
+    /// primary's acceptance data unless the primary used its own.
+    InflatesBlue,
+    /// Its acceptance data unbounded by `minConfirmationCount` times out, as a request for a whole backlog would.
+    IdsTimeOutUnbounded,
 }
 
 struct Peer {
@@ -128,6 +133,7 @@ impl ChainSource for Peer {
         let b = self.node.block_blue_score(hash).await?;
         Ok(match self.mode {
             Mode::Behind(max) => b.filter(|b| *b <= max),
+            Mode::InflatesBlue => b.map(|b| b + (1 << 40)),
             _ => b,
         })
     }
@@ -135,6 +141,9 @@ impl ChainSource for Peer {
         ChainSource::chain_hashes(&*self.node, start).await
     }
     async fn chain_with_ids(&self, start: Hash32, m: Option<u64>) -> Result<ChainIds, RpcError> {
+        if self.mode == Mode::IdsTimeOutUnbounded && m.is_none() {
+            return Err(RpcError::Timeout(Duration::from_secs(180)));
+        }
         self.node.chain_with_ids(start, m).await
     }
 }
@@ -396,4 +405,30 @@ async fn a_cross_checked_pair_indexes_only_what_both_nodes_report() {
     assert!(h.nodes[1].disagreements > 0, "{:?}", h.nodes[1]);
     assert!(h.nodes[1].last_error.as_deref().is_some_and(|e| e.contains("accepted")), "{:?}", h.nodes[1]);
     println!("contradicted {} times; cursor held at block {}", h.nodes[1].disagreements, k - 1);
+}
+
+/// The primary's acceptance data for a window from another node is bounded by the primary's own blue score of the window
+/// end, never by the other node's claim. A node that reports a huge one would otherwise make the primary's request unbounded
+/// (a whole backlog), and its timeout counts against the primary: two of them and a stall hand the chain authority over
+/// (`indexer::follower`, *A failing chain authority*), possibly to that very node.
+#[tokio::test]
+async fn a_node_inflating_the_window_end_cannot_make_the_primary_fail() {
+    let c = Ctx::new();
+    let _ = chain(&c, 80);
+    let node = c.hs.node.clone();
+    let primary = Peer::new(&node, Mode::IdsTimeOutUnbounded);
+    let liar = Peer::new(&node, Mode::InflatesBlue);
+    // the primary serves windows only when no other node can: every window is offered to the liar first
+    let source =
+        MultiNode::new(vec![(spec("primary", false, 2), primary.clone()), (spec("inflates", true, 2), liar.clone())], primary);
+    let blocks = node.chain();
+    for k in [10usize, 25, 40] {
+        let w = WindowRequest::new(blocks[k].hash, blocks[k + 10].hash);
+        let f = source.fetch_window(w).await.expect("the primary's request is bounded by its own blue score");
+        assert_eq!(f.origin.node, 1, "the window came from the other node, checked");
+        assert_eq!(f.raw.added_chain_block_hashes, blocks[k + 1..=k + 10].iter().map(|b| b.hash).collect::<Vec<_>>());
+    }
+    let st = source.board().snapshot();
+    assert_eq!((st[0].windows_failed, st[0].timeouts, st[0].last_error.clone()), (0, 0, None), "{:?}", st[0]);
+    assert_eq!(st[1].windows_ok, 3, "{:?}", st[1]);
 }

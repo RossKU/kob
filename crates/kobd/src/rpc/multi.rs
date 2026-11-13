@@ -1319,9 +1319,13 @@ impl<N: ChainSource> MultiNode<N> {
     /// The window from secondary `i`, checked against the authority.
     ///
     /// The node's own position is read first, and it must know the window end. Then its answer and
-    /// the authority's acceptance data for the same start are fetched at once. The blue score of
-    /// the window end from the node only bounds the authority's answer. A wrong one makes it
-    /// shorter, so fewer chain blocks are verified, or longer.
+    /// the authority's acceptance data for the same start are fetched at once.
+    ///
+    /// The node's blue scores bound only its own answer. The authority's acceptance data is
+    /// bounded by the authority's own blue score of the window end and its own sink. A node that
+    /// reported a huge blue score would otherwise make that request unbounded, a whole backlog, and
+    /// its timeout would count against the authority (`indexer::follower`, *A failing chain
+    /// authority*).
     async fn fetch_checked(&self, i: usize, w: &WindowRequest) -> Result<Fetched, Attempt> {
         let origin = Origin { node: i, trusted: false, tier: 0 };
         let node = &*self.nodes[i];
@@ -1330,13 +1334,18 @@ impl<N: ChainSource> MultiNode<N> {
             e @ RpcError::Node(_) => Attempt::Node(e, Fault::OutOfSync),
             e => Attempt::Node(e, Fault::Failed),
         };
-        let end_blue = node.block_blue_score(w.end).await.map_err(classify)?.ok_or_else(|| {
+        let (end_blue, own_end) = tokio::join!(node.block_blue_score(w.end), self.checker().block_blue_score(w.end));
+        let end_blue = end_blue.map_err(classify)?.ok_or_else(|| {
             Attempt::Node(RpcError::Node(format!("the node does not know the window end {} (behind)", w.end)), Fault::OutOfSync)
         })?;
+        // The authority planned the window, so it knows its end unless its chain moved since.
+        let own_end = own_end
+            .map_err(Attempt::Window)?
+            .ok_or_else(|| Attempt::Window(RpcError::Node(format!("the window end {} is no longer known to the primary", w.end))))?;
         let sink_blue = node.sink_blue_score().await.map_err(classify)?;
         let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
-        let primary_sink = self.primary_sink(end_blue).await.map_err(Attempt::Window)?;
-        let ids = self.checker().chain_with_ids(w.start, window_min_confirmations(primary_sink, end_blue, w.min_confirmations));
+        let primary_sink = self.primary_sink(own_end).await.map_err(Attempt::Window)?;
+        let ids = self.checker().chain_with_ids(w.start, window_min_confirmations(primary_sink, own_end, w.min_confirmations));
         let (body, ids) = tokio::join!(fetch_window_from(node, &mine, Verbosity::Full, origin), ids);
         let f = body.map_err(classify)?;
         let ids = ids.map_err(Attempt::Window)?;
