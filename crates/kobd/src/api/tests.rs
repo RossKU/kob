@@ -16,7 +16,8 @@ use tower::ServiceExt;
 
 const TOKEN: u8 = 0x11;
 const MAKER: u8 = 0xaa;
-/// One whole token of the fixtures in base units: the token has 3 decimals (scale 1 000). Prices are sompi per whole token.
+/// One whole token of the fixtures in base units: the token has 3 decimals (scale 1 000). Prices
+/// are sompi per whole token.
 const W: i64 = 1_000;
 
 fn cid(n: u8) -> Vec<u8> {
@@ -77,8 +78,8 @@ fn env(tweak: impl FnOnce(&mut ApiConfig)) -> Env {
     Env { _dir: dir, w, state }
 }
 
-/// An order of scale 1 000 (one whole token) and minimum fill 1 000 at `price` sompi per whole token; `initial` and
-/// `remaining` in base units.
+/// An order of scale 1 000 (one whole token) and minimum fill 1 000 at `price` sompi per whole
+/// token. `initial` and `remaining` in base units.
 #[allow(clippy::too_many_arguments)]
 fn seed_order(
     c: &Connection,
@@ -123,7 +124,7 @@ fn seed_order(
         params![cid(id), status, initial.unwrap_or(0) - remaining.unwrap_or(0), remaining, cid(id + 100), block, block * 100, initial.is_some() as i64],
     )
     .unwrap();
-    // ask-side orders are liquidity only with an exact live custody UTXO (`amountLeft` base units)
+    // Ask-side orders are liquidity only with an exact live custody UTXO (`amountLeft` base units).
     if side == 1 && remaining.unwrap_or(0) > 0 {
         intern(c, &cid(TOKEN)).unwrap();
         c.execute(
@@ -154,7 +155,7 @@ fn seed_all(c: &Connection) {
     seed_order(c, 5, 1, 90_000, 5, "filled", Some(5 * W), Some(0), true, 0xbb);
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
     seed_order(c, 7, 2, 260_000, 2, "open", None, Some(7 * W), true, 0xcc);
-    // a child (exit) of order 2
+    // A child (exit) of order 2.
     c.execute("UPDATE orders SET parent = ?1 WHERE covenant_id = ?2", params![cid(2), cid(5)]).unwrap();
     seed_event(c, 2, 2, 200, "create", 1, 0, 250_000);
     seed_event(c, 2, 6, 800, "fill", 1, 2 * W, 250_000);
@@ -206,16 +207,18 @@ async fn health_and_ready() {
     assert_eq!(v["counters"]["orders_total"], 7);
     assert_eq!(v["counters"]["orders_by_status"]["open"], 5);
     assert_eq!(v["counters"]["last_block_seq"], 9);
-    // the build that answers: the crate version, its commit when the build set one, the KOB1 payload version it handles
+    // The build that answers: the crate version, its commit when the build set one, the KOB1
+    // payload version it handles.
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(v["commit"].as_str(), option_env!("KOB_GIT_COMMIT").map(str::trim).filter(|c| !c.is_empty()));
     assert_eq!(v["payload_version"], kob_protocol::payload::PAYLOAD_VERSION);
-    // the smallest order the executor lists, in sompi as a decimal string (the web app warns below it)
+    // The smallest order the executor lists, in sompi as a decimal string (the web app warns below
+    // it).
     assert_eq!(v["min_order_value_sompi"], "100000000");
     let (s, v) = get(&app, "/v1/health/ready").await;
     assert_eq!((s, &v["ready"]), (StatusCode::OK, &Value::Bool(true)));
 
-    // 2 hours behind: alarm at 1h, not ready, health still 200
+    // 2 hours behind: alarm at 1h, not ready, health still 200.
     e.state.health.update(|h| {
         h.node_daa = Some(990 + 2 * 3600 * 10);
     });
@@ -250,8 +253,9 @@ async fn tokens_list_counts() {
     assert_eq!(t["open_bids"], 2);
 }
 
-/// The hot reads are kept for the store's data generation (`api::cache`): within one the answer is the kept one, and a
-/// change the write path commits (a new generation) is read at once. The reads that depend on the clock key on it as well.
+/// The hot reads are kept for the store's data generation (`api::cache`): within one the answer is
+/// the kept one, and a change the write path commits (a new generation) is read at once. The reads
+/// that depend on the clock key on it as well.
 #[tokio::test]
 async fn hot_reads_are_kept_for_one_data_generation() {
     let e = env(|_| {});
@@ -260,7 +264,7 @@ async fn hot_reads_are_kept_for_one_data_generation() {
     let asks = |v: &Value| v["tokens"][0]["open_asks"].as_i64();
     let (_, v) = get(&app, "/v1/tokens").await;
     assert_eq!(asks(&v), Some(3));
-    // what the follower would commit with a new generation: ask 1 filled
+    // What the follower would commit with a new generation: ask 1 filled.
     e.w.execute(
         "UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
         params![cid(1)],
@@ -271,7 +275,7 @@ async fn hot_reads_are_kept_for_one_data_generation() {
     e.state.generation.bump();
     let (_, v) = get(&app, "/v1/tokens").await;
     assert_eq!(asks(&v), Some(2), "a new generation reads the store again");
-    // a book at another node DAA score is another read
+    // A book at another node DAA score is another read.
     let book = format!("/v1/books/{}?aggregate=false", h(TOKEN));
     let (_, v) = get(&app, &book).await;
     assert_eq!(ids(&v["asks"]), vec![h(2), h(3)]);
@@ -318,7 +322,7 @@ async fn book_aggregated_and_per_order() {
 
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
     assert_eq!(v["aggregated"], false);
-    // asks ascending by price, ties by age (genesis block), then id; bids descending
+    // Asks ascend by price, with ties by age (genesis block), then id. Bids descend.
     assert_eq!(ids(&v["asks"]), vec![h(2), h(3), h(1)]);
     assert_eq!(ids(&v["bids"]), vec![h(7), h(6)]);
     assert_eq!(v["asks"][0]["status"], "partial");
@@ -326,14 +330,15 @@ async fn book_aggregated_and_per_order() {
     assert_eq!((v["asks"][0]["scale"].as_i64(), v["asks"][0]["min_fill"].as_str()), (Some(1000), Some("1000")));
     assert_eq!(v["asks"][0]["confirmations"], 800);
     assert_eq!(v["asks"][0]["settled"], true);
-    // every order of the book is fillable now (an expired one is not in the book: `the_kas_book_lists_only_...`)
+    // Every order of the book is fillable now (an expired one is not in the book:
+    // `the_kas_book_lists_only_...`).
     assert_eq!(v["asks"][0]["expired"], false);
 
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false&depth=1", h(TOKEN))).await;
     assert_eq!(ids(&v["asks"]), vec![h(2)]);
     assert_eq!(ids(&v["bids"]), vec![h(7)]);
 
-    // an unknown token has an empty book, a malformed one is a 400
+    // An unknown token has an empty book, a malformed one is a 400.
     let (s, v) = get(&app, &format!("/v1/books/{}", h(0x55))).await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["asks"].as_array().unwrap().is_empty());
@@ -346,10 +351,11 @@ async fn book_aggregated_and_per_order() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
 
-/// The KAS book (`/v1/books`, aggregated and per order, and the stats' best bid and ask) lists only the orders a conforming
-/// matcher may fill at the node's DAA score (`docs/spec/matcher.md` §2.2, §2.3), as the pair books do: not one past its soft
-/// expiry, nor one not yet active, nor an IOC past its kill time, nor a day order past its deadline. They stay in
-/// `/v1/orders`, flagged `expired`, for their makers and the refund keepers.
+/// The KAS book (`/v1/books`, aggregated and per order, and the stats' best bid and ask) lists only
+/// the orders a conforming matcher may fill at the node's DAA score (`docs/spec/matcher.md` §2.2,
+/// §2.3), as the pair books do: not one past its soft expiry, nor one not yet active, nor an IOC
+/// past its kill time, nor a day order past its deadline. They stay in `/v1/orders`, flagged
+/// `expired`, for their makers and the refund keepers.
 #[tokio::test]
 async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     let e = env(|_| {});
@@ -357,8 +363,8 @@ async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     let set = |sql: &str, id: u8| {
         e.w.execute(sql, params![cid(id)]).unwrap();
     };
-    // node DAA 1000: ask 2 expires at it, ask 3 activates after it, ask 1 is an IOC whose kill time passed (its UTXO at DAA
-    // 100, killed from 700), bid 7 a day order whose deadline passed
+    // Node DAA 1000: ask 2 expires at it, ask 3 activates after it, ask 1 is an IOC whose kill time
+    // passed (its UTXO at DAA 100, killed from 700), bid 7 a day order whose deadline passed.
     set("UPDATE orders SET expiry_daa = 1000 WHERE covenant_id = ?1", 2);
     set("UPDATE orders SET active_from = 1001 WHERE covenant_id = ?1", 3);
     set("UPDATE orders SET tif = 1 WHERE covenant_id = ?1", 1);
@@ -373,11 +379,11 @@ async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
     assert!(ids(&v["asks"]).is_empty(), "{v}");
     assert_eq!(ids(&v["bids"]), vec![h(6)]);
-    // the orders themselves stay visible, the expired one flagged
+    // The orders themselves stay visible, the expired one flagged.
     let (_, v) = get(&app, &format!("/v1/orders/{}", h(2))).await;
     assert_eq!((v["status"].as_str(), v["expired"].as_bool()), (Some("partial"), Some(true)));
-    // one block earlier every one of them was fillable, but the IOC is a taker in flight, never a resting order of the book
-    // (from its activation to its kill time too)
+    // One block earlier every one of them was fillable, but the IOC is a taker in flight, never a
+    // resting order of the book (from its activation to its kill time too).
     e.state.health.update(|h| h.node_daa = Some(650));
     set("UPDATE orders SET active_from = 600 WHERE covenant_id = ?1", 3);
     set("UPDATE orders SET deadline = NULL WHERE covenant_id = ?1", 7);
@@ -386,9 +392,10 @@ async fn the_kas_book_lists_only_orders_a_matcher_may_fill_now() {
     assert_eq!(ids(&v["bids"]), vec![h(7), h(6)]);
 }
 
-/// The KAS book, `/v1/depth` and the stats' touch, depth and order counts read the same RESTING book, as the pair books do:
-/// each order at its quote now (an auction's current price, not its limit), no IOC / FOK taker in flight, a TWAP order only
-/// once its next slice is due and for that one slice (`maxFill`).
+/// The KAS book, `/v1/depth` and the stats' touch, depth and order counts read the same RESTING
+/// book, as the pair books do: each order at its quote now (an auction's current price, not its
+/// limit), no IOC / FOK taker in flight, a TWAP order only once its next slice is due and for that
+/// one slice (`maxFill`).
 #[tokio::test]
 async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote() {
     use kob_protocol::state::{AnyState, AskState, BidState};
@@ -396,29 +403,32 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     let c = &e.w;
     let ask = |price: i64| AskState { token_cov_id: [TOKEN; 32], tip: 0, ..crate::testkit::ask(MAKER, price) };
     let bid = |price: i64| BidState { token_cov_id: [TOKEN; 32], tip: 0, ..crate::testkit::bid(0xcc, price) };
-    // node DAA 1000; a UTXO of block n was created at DAA 100 n
-    // a plain ask at 3.00 KAS (10 whole tokens)
+    // The node DAA is 1000. A UTXO of block n was created at DAA 100 n.
+    // A plain ask at 3.00 KAS (10 whole tokens).
     seed_live(c, 0x51, &AnyState::KobAsk(ask(300_000)), 1, 10 * W);
-    // a TWAP ask at 3.00, slices of 3 whole tokens every 500 DAA: its UTXO at DAA 200, the slice due from 700 (now: due)
+    // A TWAP ask at 3.00, slices of 3 whole tokens every 500 DAA: its UTXO at DAA 200, the slice
+    // due from 700 (now: due).
     seed_live(c, 0x52, &AnyState::KobAsk(AskState { interval: 500, max_fill: 3 * W, ..ask(300_000) }), 2, 10 * W);
-    // a TWAP ask at 2.95 between its slices (UTXO at 100, next slice from 2 100): not in the book
+    // A TWAP ask at 2.95 between its slices (UTXO at 100, next slice from 2 100): not in the book.
     seed_live(c, 0x53, &AnyState::KobAsk(AskState { interval: 2_000, max_fill: 3 * W, ..ask(295_000) }), 1, 10 * W);
-    // a decaying ask from 3.20 toward 2.80, 0.03 per 100 DAA from DAA 0: at 1 000, 3.20 - 10 x 0.03 = 2.90
+    // A decaying ask from 3.20 toward 2.80, 0.03 per 100 DAA from DAA 0: at 1 000, 3.20 - 10 x 0.03
+    // = 2.90.
     let decay = AskState { slope: 3_000, decay_step: 100, price_end: 280_000, ..ask(320_000) };
     seed_live(c, 0x54, &AnyState::KobAsk(decay), 1, 10 * W);
-    // an IOC ask at 2.50 and a FOK ask at 2.60, both before their kill time (UTXOs at 500 and 600: killed from 1 100, 1 200)
+    // An IOC ask at 2.50 and a FOK ask at 2.60, both before their kill time (UTXOs at 500 and 600:
+    // killed from 1 100, 1 200).
     seed_live(c, 0x55, &AnyState::KobAsk(AskState { tif: 1, ..ask(250_000) }), 5, 10 * W);
     seed_live(c, 0x56, &AnyState::KobAsk(AskState { tif: 2, ..ask(260_000) }), 6, 10 * W);
-    // a plain bid at 2.00 (buying power 5 whole tokens), a rising bid from 1.80 toward 2.60, +0.03 per 100 DAA: 2.10 at 1 000
-    // (2 whole tokens), and an IOC bid at 2.80 (UTXO at 700)
+    // A plain bid at 2.00 (buying power 5 whole tokens), a rising bid from 1.80 toward 2.60, +0.03
+    // per 100 DAA: 2.10 at 1 000 (2 whole tokens), and an IOC bid at 2.80 (UTXO at 700).
     seed_live(c, 0x61, &AnyState::KobBid(bid(200_000)), 1, 5 * W);
     let rise = BidState { slope: 3_000, decay_step: 100, price_end: 260_000, ..bid(180_000) };
     seed_live(c, 0x62, &AnyState::KobBid(rise), 1, 2 * W);
     seed_live(c, 0x63, &AnyState::KobBid(BidState { tif: 1, ..bid(280_000) }), 7, 5 * W);
     let app = router(e.state.clone());
 
-    // the levels: asks 2.90 (the auction, 10 000 base units), 3.00 (the plain ask's 10 000 and the TWAP slice's 3 000); bids
-    // 2.10 (the rising bid), 2.00
+    // The levels: asks 2.90 (the auction, 10 000 base units), 3.00 (the plain ask's 10 000 and the
+    // TWAP slice's 3 000). Bids 2.10 (the rising bid), 2.00.
     let (s, v) = get(&app, &format!("/v1/books/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let lv = |side: &str| -> Vec<(String, String, i64)> {
@@ -433,13 +443,13 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     };
     assert_eq!(lv("asks"), vec![("290000".into(), "10000".into(), 1), ("300000".into(), "13000".into(), 2)]);
     assert_eq!(lv("bids"), vec![("210000".into(), "2000".into(), 1), ("200000".into(), "5000".into(), 1)]);
-    // per order: the same orders, best quote first (the auction's limit 3.20 stays its `price`)
+    // Per order: the same orders, best quote first (the auction's limit 3.20 stays its `price`).
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
     assert_eq!(ids(&v["asks"]), vec![h(0x54), h(0x51), h(0x52)]);
     assert_eq!((v["asks"][0]["price"].as_str(), v["asks"][0]["quote"].as_str()), (Some("320000"), Some("290000")));
     assert_eq!(ids(&v["bids"]), vec![h(0x62), h(0x61)]);
 
-    // depth: cumulative over the same levels (2.90 x 10 = 29 KAS, then 3.00 x 13 = 39 KAS)
+    // Depth is cumulative over the same levels (2.90 x 10 = 29 KAS, then 3.00 x 13 = 39 KAS).
     let (_, v) = get(&app, &format!("/v1/depth/{}", h(TOKEN))).await;
     let asks = v["asks"].as_array().unwrap();
     assert_eq!(asks.len(), 2, "{v}");
@@ -451,8 +461,9 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     let bids = v["bids"].as_array().unwrap();
     assert_eq!((bids[0]["price"].as_str(), bids[1]["cum_amount"].as_str()), (Some("210000"), Some("7000")));
 
-    // stats: touch 2.10 / 2.90 (the IOC ask at 2.50 and bid at 2.80 would have crossed the book), mid 2.50, spread 0.80 / 2.50 = 3 200 bps;
-    // the 2 % band around 2.50 (2.45 ..= 2.55) is empty; 3 asks and 2 bids rest (of 6 and 3 live orders)
+    // Stats: touch 2.10 / 2.90 (the IOC ask at 2.50 and bid at 2.80 would have crossed the book),
+    // mid 2.50, spread 0.80 / 2.50 = 3 200 bps. The 2 % band around 2.50 (2.45 ..= 2.55) is empty.
+    // 3 asks and 2 bids rest, of 6 and 3 live orders.
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("210000"), Some("290000"), Some("250000")));
     assert_eq!(v["spread_bps"], 3200);
@@ -460,9 +471,10 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
         (v["depth_2pct_quote"].as_str(), v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()),
         (Some("0"), Some("0"), Some("0"))
     );
-    // the open counts are the orders of that book: the auction, the plain ask and the due TWAP; the two GTC bids (6 asks and 3 bids are live)
+    // The open counts are the orders of that book. The asks are the auction, the plain ask and the
+    // due TWAP, and the bids are the two GTC bids. In all 6 asks and 3 bids are live.
     assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(3), Some(2)));
-    // an expired ask (soft expiry at the node's DAA score) leaves the book and its count
+    // An expired ask (soft expiry at the node's DAA score) leaves the book and its count.
     e.w.execute("UPDATE orders SET expiry_daa = 1000 WHERE covenant_id = ?1", params![cid(0x51)]).unwrap();
     e.state.generation.bump();
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
@@ -470,8 +482,9 @@ async fn the_kas_book_depth_and_stats_read_resting_orders_at_their_current_quote
     e.w.execute("UPDATE orders SET expiry_daa = 400000000 WHERE covenant_id = ?1", params![cid(0x51)]).unwrap();
     e.state.generation.bump();
 
-    // 300 DAA later: the auction is at 3.20 - 13 x 0.03 = 2.81, the rising bid at 1.80 + 13 x 0.03 = 2.19, and the band around
-    // their mid 2.50 still empty; the IOC orders are past their kill time
+    // 300 DAA later: the auction is at 3.20 - 13 x 0.03 = 2.81, the rising bid at 1.80 + 13 x 0.03
+    // = 2.19, and the band around their mid 2.50 still empty. The IOC orders are past their kill
+    // time.
     e.state.health.update(|h| h.node_daa = Some(1300));
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str()), (Some("219000"), Some("281000")));
@@ -491,7 +504,7 @@ async fn order_by_id() {
     assert_eq!(v["filled_amount"], "6000");
     assert_eq!(v["amount_left"], "4000");
     assert_eq!((v["initial_amount"].as_str(), v["scale"].as_i64(), v["min_fill"].as_str()), (Some("10000"), Some(1000), Some("1000")));
-    // base units and whole-token prices only: no field of the older lot geometry is left in the view
+    // The view has base units and whole-token prices only, and no lot field.
     assert!(!v.to_string().contains("lot"), "{v}");
     assert_eq!(v["maker"], h(MAKER));
     assert_eq!(v["listed"], true);
@@ -503,7 +516,8 @@ async fn order_by_id() {
     assert_eq!(v["parent"], h(2));
     assert_eq!(v["expired"], false, "closed orders are never expired");
 
-    // docs/spec/matcher.md 1.2a: the token's genesis is not verified: every order view carries the warning
+    // docs/spec/matcher.md 1.2a: the token's genesis is not verified: every order view carries the
+    // warning.
     assert_eq!(v["warnings"], serde_json::json!(["genesis_unverified"]));
     let (_, page) = get(&app, &format!("/v1/orders?token={}", h(TOKEN))).await;
     let items = page["items"].as_array().unwrap();
@@ -537,7 +551,8 @@ async fn orders_by_maker_paging_and_filters() {
     assert_eq!(v["items"].as_array().unwrap().len(), 6);
     let (_, v) = get(&app, "/v1/orders?status=filled").await;
     assert_eq!(ids(&v["items"]), vec![h(5)]);
-    // every IOC / FOK / market order that returned its rest ends `killed`: the API filters it like any other status
+    // Every IOC / FOK / market order that returned its rest ends `killed`: the API filters it like
+    // any other status.
     let (s, v) = get(&app, "/v1/orders?status=killed").await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["items"].as_array().unwrap().is_empty());
@@ -547,7 +562,7 @@ async fn orders_by_maker_paging_and_filters() {
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, _) = get(&app, "/v1/orders?maker=zz").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    // page size is capped by config
+    // Page size is capped by config.
     let (_, v) = get(&app, "/v1/orders?limit=100000").await;
     assert_eq!(v["items"].as_array().unwrap().len(), 7);
 }
@@ -606,7 +621,8 @@ async fn events_and_fills() {
 async fn arm_events_carry_their_evidence_and_receipts_are_gone() {
     let e = env(|_| {});
     seed_all(&e.w);
-    // an `arm` of order 3 by the plain ask filled at input 1 of the same transaction (protocol v2.6: no receipt)
+    // An `arm` of order 3 by the plain ask filled at input 1 of the same transaction. The event
+    // carries its evidence and no receipt.
     let detail = format!(
         r#"{{"input":0,"entry":"update","verified":true,"evidence":{{"input":1,"order":"{}","side":1,"price":"95"}}}}"#,
         h(0x44)
@@ -625,7 +641,7 @@ async fn arm_events_carry_their_evidence_and_receipts_are_gone() {
     assert_eq!(arm["detail"]["evidence"]["order"], h(0x44));
     assert_eq!(arm["detail"]["evidence"]["input"], 1);
     assert_eq!(arm["detail"]["evidence"]["price"], "95");
-    // the v2.4 receipt endpoint is retired
+    // There is no receipt endpoint.
     let (s, v) = get(&app, "/v1/receipts").await;
     assert_eq!(s, StatusCode::NOT_FOUND);
     assert_eq!(v["error"]["code"], "not_found");
@@ -660,7 +676,7 @@ async fn rate_limit_returns_429_with_retry_after() {
     assert_eq!(v["error"]["code"], "rate_limited");
     let ra: u64 = hd.get("retry-after").unwrap().to_str().unwrap().parse().unwrap();
     assert!(ra >= 1);
-    // another client is unaffected
+    // Another client is unaffected.
     assert_eq!(get_from(&app, "/v1/tokens", "203.0.113.6", &[]).await.0, StatusCode::OK);
 }
 
@@ -677,12 +693,12 @@ async fn rate_limit_keys_follow_trusted_proxy_headers() {
         async move { get_from(&app, "/v1/tokens", "10.1.1.1", &[("x-forwarded-for", xff)]).await.0 }
     };
     assert_eq!(via_proxy("9.9.9.9").await, StatusCode::OK);
-    // same client again: limited, even with a spoofed extra left-most entry
+    // Same client again: limited, even with a spoofed extra left-most entry.
     assert_eq!(via_proxy("9.9.9.9").await, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(via_proxy("1.2.3.4, 9.9.9.9").await, StatusCode::TOO_MANY_REQUESTS);
-    // a different real client behind the same proxy has its own bucket
+    // A different real client behind the same proxy has its own bucket.
     assert_eq!(via_proxy("8.8.8.8").await, StatusCode::OK);
-    // an untrusted peer cannot pick its bucket with the header
+    // An untrusted peer cannot pick its bucket with the header.
     assert_eq!(get_from(&app, "/v1/tokens", "203.0.113.1", &[("x-forwarded-for", "5.5.5.5")]).await.0, StatusCode::OK);
     assert_eq!(get_from(&app, "/v1/tokens", "203.0.113.1", &[("x-forwarded-for", "6.6.6.6")]).await.0, StatusCode::TOO_MANY_REQUESTS);
 }
@@ -740,7 +756,7 @@ async fn websocket_end_to_end() {
     assert_eq!(ack["type"], "subscribed");
     assert_eq!(ack["data"]["channels"].as_array().unwrap().len(), 3);
 
-    // a second connection from the same address exceeds max_ws_per_ip
+    // A second connection from the same address exceeds max_ws_per_ip.
     let second = tokio_tungstenite::connect_async(format!("ws://{addr}/v1/ws")).await;
     assert!(second.is_err(), "per-IP WebSocket limit must reject the upgrade");
 
@@ -771,7 +787,7 @@ async fn websocket_end_to_end() {
         let f = next_json(&mut ws).await;
         seen.push(f["type"].as_str().unwrap().to_string());
         if f["type"] == "fill" {
-            // the quantities of a fill are decimal strings, as in REST
+            // The quantities of a fill are decimal strings, as in REST.
             assert_eq!(f["data"]["amount"], "2000");
             assert_eq!(f["data"]["price"], "250000");
             assert!(f["data"]["payout"].is_null());
@@ -784,7 +800,7 @@ async fn websocket_end_to_end() {
     ws.send(M::text(r#"{"op":"ping"}"#)).await.unwrap();
     assert_eq!(next_json(&mut ws).await["type"], "pong");
 
-    // graceful shutdown closes the socket
+    // Graceful shutdown closes the socket.
     let _ = stop_tx.send(());
     let closed = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -799,8 +815,7 @@ async fn websocket_end_to_end() {
     tokio::time::timeout(Duration::from_secs(5), server).await.expect("server stops").unwrap().unwrap();
 }
 
-// ---------------------------------------------------------------------------------------------
-// GET /v1/token-utxos
+// `GET /v1/token-utxos`.
 
 fn seed_holding(c: &Connection, n: u8, token: u8, owner: &[u8], family: i64, amount: i64, block: i64, spent: bool) {
     use kob_protocol::state::{Kcc20State, KronState, TokenState};
@@ -846,7 +861,7 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
     let app = router(e.state.clone());
     let owner = hex::encode(&key);
 
-    // by owner: unspent only by default, both families
+    // By owner: unspent only by default, both families.
     let (s, v) = get(&app, &format!("/v1/token-utxos?owner={owner}")).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let items = v["items"].as_array().unwrap();
@@ -866,7 +881,7 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
     assert_eq!(kcc["confirmations"], 900);
     assert_eq!(kcc["settled"], true);
     assert_eq!(kcc["index"], 1);
-    // the state is the kob-wasm token state JSON
+    // The state is the kob-wasm token state JSON.
     assert_eq!(kcc["state"]["owner_scheme"], 0);
     assert_eq!(kcc["state"]["amount"], "500");
     assert_eq!(kcc["state"]["owner"], owner);
@@ -878,14 +893,14 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
     assert_eq!(kron["state"]["is_minter"], 0);
     assert_eq!(kron["state_hex"].as_str().unwrap().len(), 92);
 
-    // include spent
+    // Include spent.
     let (_, v) = get(&app, &format!("/v1/token-utxos?owner={owner}&spent=true")).await;
     let items = v["items"].as_array().unwrap();
     assert_eq!(items.len(), 3);
     let spent = items.iter().find(|i| i["spent"] == true).unwrap();
     assert_eq!(spent["spent_txid"], h(102));
 
-    // by token, by owner + token
+    // By token, by owner + token.
     let (_, v) = get(&app, &format!("/v1/token-utxos?token={}", h(TOKEN))).await;
     assert_eq!(v["items"].as_array().unwrap().len(), 2);
     let (_, v) = get(&app, &format!("/v1/token-utxos?token={}&owner={owner}", h(0x12))).await;
@@ -893,13 +908,13 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
     let (_, v) = get(&app, &format!("/v1/token-utxos?token={}", h(0x77))).await;
     assert!(v["items"].as_array().unwrap().is_empty());
 
-    // a Kaspa P2PK address names the same owner
+    // A Kaspa P2PK address names the same owner.
     let addr = Address::new(Prefix::Testnet, Version::PubKey, &key).to_string();
     let (s, v) = get(&app, &format!("/v1/token-utxos?owner={addr}")).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["items"].as_array().unwrap().len(), 2);
 
-    // pagination: oldest first, keyset cursor
+    // Pagination: oldest first, with a keyset cursor.
     let (_, p1) = get(&app, &format!("/v1/token-utxos?owner={owner}&spent=true&limit=2")).await;
     assert_eq!(p1["items"].as_array().unwrap().len(), 2);
     let cur = p1["next_cursor"].as_str().expect("more pages").to_string();
@@ -911,7 +926,7 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
     all.sort_by_key(|a| a.as_str().unwrap().parse::<i64>().unwrap());
     assert_eq!(all, ["500", "700", "900"]);
 
-    // errors
+    // Errors.
     for uri in [
         "/v1/token-utxos".to_string(),
         "/v1/token-utxos?limit=5".to_string(),
@@ -921,7 +936,7 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
         format!("/v1/token-utxos?owner={owner}&spent=maybe"),
         format!("/v1/token-utxos?owner={owner}&limit=0"),
         format!("/v1/token-utxos?owner={owner}&cursor=garbage"),
-        // a script-hash address is not a key owner
+        // A script-hash address is not a key owner.
         format!("/v1/token-utxos?owner={}", Address::new(Prefix::Testnet, Version::ScriptHash, &key)),
     ] {
         let (s, v) = get(&app, &uri).await;
@@ -933,8 +948,8 @@ async fn token_utxos_by_owner_token_pagination_and_errors() {
 #[tokio::test]
 async fn aggregated_levels_are_per_price_and_scale_ordered_by_price_per_base_unit() {
     let e = env(|_| {});
-    // most orders quote the token's whole token (scale 1 000); some quote 10 whole tokens (scale 10 000): the same price per
-    // base unit is a 10 times larger `price` there
+    // Most orders quote one whole token (scale 1 000). Some quote 10 whole tokens (scale 10 000).
+    // The same price per base unit is a 10 times larger `price` there.
     let rescale = |id: u8, scale: i64| {
         e.w.execute("UPDATE orders SET scale = ?1 WHERE covenant_id = ?2", params![scale, cid(id)]).unwrap();
     };
@@ -962,8 +977,9 @@ async fn aggregated_levels_are_per_price_and_scale_ordered_by_price_per_base_uni
     let (s, v) = get(&app, &format!("/v1/books/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     let asks: Vec<_> = v["asks"].as_array().unwrap().iter().map(level).collect();
-    // ascending by price per base unit; equal prices per base unit are two rows (one per scale), the smaller raw price first;
-    // the raw price order (250000, 251000, 2400000, 2500000) would have put the cheapest level in the middle
+    // Ascending by price per base unit. Equal prices per base unit are two rows (one per scale),
+    // the smaller raw price first. The raw price order (250000, 251000, 2400000, 2500000) would
+    // have put the cheapest level in the middle.
     assert_eq!(
         asks,
         [
@@ -976,21 +992,21 @@ async fn aggregated_levels_are_per_price_and_scale_ordered_by_price_per_base_uni
     let bids: Vec<_> = v["bids"].as_array().unwrap().iter().map(level).collect();
     assert_eq!(bids, [lv("246000", 1000, "3000", 1), lv("2450000", 10_000, "3000", 1)]);
 
-    // depth cuts on the price per base unit
+    // Depth cuts on the price per base unit.
     let (_, v) = get(&app, &format!("/v1/books/{}?depth=2", h(TOKEN))).await;
     let asks: Vec<_> = v["asks"].as_array().unwrap().iter().map(level).collect();
     assert_eq!(asks.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["2400000", "250000"]);
     let (_, v) = get(&app, &format!("/v1/books/{}?depth=1", h(TOKEN))).await;
     assert_eq!(v["bids"].as_array().unwrap().len(), 1);
     assert_eq!(v["bids"][0]["price"], "246000");
-    // the per-order book follows the same order
+    // The per-order book follows the same order.
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(TOKEN))).await;
     assert_eq!(ids(&v["asks"]), vec![h(23), h(21), h(22), h(25), h(24)]);
     assert_eq!(ids(&v["bids"]), vec![h(27), h(26)]);
 }
 
-/// Amounts sum in 128 bits: two listed asks whose remaining amounts sum past an `i64` at one level are one level, never an
-/// error.
+/// Amounts sum in 128 bits: two listed asks whose remaining amounts sum past an `i64` at one level
+/// are one level, never an error.
 #[tokio::test]
 async fn aggregated_amounts_never_overflow() {
     let e = env(|_| {});
@@ -1002,9 +1018,9 @@ async fn aggregated_amounts_never_overflow() {
     assert_eq!(v["asks"][0]["orders"], 2);
 }
 
-/// `t` moved by whole days to the first time a minute or more after the wall clock: a fixture's newest trade then ends its 24 h
-/// window itself (the window ends at the newer of the newest event and the wall clock), and every residue of `t` under a day
-/// (its candle buckets) is kept.
+/// `t` moved by whole days to the first time a minute or more after the wall clock: a fixture's
+/// newest trade then ends its 24 h window itself (the window ends at the newer of the newest event
+/// and the wall clock), and every residue of `t` under a day (its candle buckets) is kept.
 fn ahead(t: i64) -> i64 {
     const DAY: i64 = 86_400_000;
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64 + 60_000;
@@ -1031,17 +1047,19 @@ async fn market_data_trades_candles_stats_depth() {
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
     seed_order(c, 7, 2, 260_000, 2, "open", None, Some(7 * W), true, 0xcc);
     let t0 = ahead(1_700_000_000_000);
-    // A: ask 2 (genesis DAA 200) and bid 7 (200) cross, 2 whole tokens: a tie goes to the asks (resting), a buy at the ask's 250 000
+    // A: ask 2 (genesis DAA 200) and bid 7 (200) cross, 2 whole tokens: a tie goes to the asks
+    // (resting), a buy at the ask's 250 000.
     seed_fill(c, 2, 0xa1, t0, 1, 2 * W, 250_000);
     seed_fill(c, 7, 0xa1, t0, 2, 2 * W, 260_000);
-    // B: a wallet sells directly into bid 6: one-sided, the seller aggressed at the bid's 240 000
+    // B: a wallet sells directly into bid 6: one-sided, the seller aggressed at the bid's 240 000.
     seed_fill(c, 6, 0xb1, t0 + 90_000, 2, W, 240_000);
-    // C: ask 1 (100) is older than bid 7 (200): a buy at 300 000
+    // C: ask 1 (100) is older than bid 7 (200): a buy at 300 000.
     seed_fill(c, 1, 0xc1, t0 + 400_000, 1, W, 300_000);
     seed_fill(c, 7, 0xc1, t0 + 400_000, 2, W, 260_000);
     let app = router(e.state.clone());
 
-    // trades: newest first, price per basis (the token's standard scale: 3 decimals, 1 000 base units = one whole token)
+    // Trades come newest first, with the price per basis. The standard scale of the token is 3
+    // decimals, so 1 000 base units are one whole token.
     let (s, v) = get(&app, &format!("/v1/trades/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v["price_basis"], "1000");
@@ -1063,7 +1081,8 @@ async fn market_data_trades_candles_stats_depth() {
     let (_, p2) = get(&app, &format!("/v1/trades/{}?limit=1&before={cur}", h(TOKEN))).await;
     assert_eq!(p2["items"][0]["price"], "240000");
 
-    // candles: 5m buckets hold A + B, then C; 1m buckets are three; empty buckets are omitted
+    // Candles: the 5m buckets hold A + B, then C. There are three 1m buckets. Empty buckets are
+    // omitted.
     let (s, v) = get(&app, &format!("/v1/candles/{}?interval=5m", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     let cs = v["items"].as_array().unwrap();
@@ -1089,7 +1108,7 @@ async fn market_data_trades_candles_stats_depth() {
     let (s, _) = get(&app, &format!("/v1/candles/{}?interval=1m&from=10&to=5", h(TOKEN))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
-    // stats: 24 h window ending at the newest event (later than the wall clock here)
+    // Stats: the 24 h window ends at the newest event, which is later than the wall clock here.
     let (s, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(
@@ -1102,17 +1121,18 @@ async fn market_data_trades_candles_stats_depth() {
     );
     assert_eq!(v["change_24h_bps"], 2000);
     assert_eq!((v["volume_24h"].as_str(), v["trades_24h"].as_i64()), (Some("4000"), Some(3)));
-    // this fixture's book is crossed (bid 260 above ask 250): the spread is negative
+    // This fixture's book is crossed (bid 260 above ask 250): the spread is negative.
     assert_eq!((v["best_bid"].as_str(), v["best_ask"].as_str(), v["mid"].as_str()), (Some("260000"), Some("250000"), Some("255000")));
     assert_eq!(v["spread_bps"], -392);
     assert_eq!((v["open_asks"].as_i64(), v["open_bids"].as_i64()), (Some(3), Some(2)));
-    // depth within 2 % of the mid (255 000: 249 900 .. 260 100): the 250 000 ask level (9 000 base units = 2 250 000 sompi) and the 260 000 bid level (7 000 = 1 820 000);
-    // the 300 000 ask and the 240 000 bid are outside
+    // Depth within 2 % of the mid (255 000: 249 900 .. 260 100): the 250 000 ask level (9 000 base
+    // units = 2 250 000 sompi) and the 260 000 bid level (7 000 = 1 820 000). The 300 000 ask and
+    // the 240 000 bid are outside.
     assert_eq!(v["depth_2pct_quote"], "4070000");
-    // its two sides (additive): the bid level 1 820 000, the ask level 2 250 000
+    // Its two sides (additive): the bid level 1 820 000, the ask level 2 250 000.
     assert_eq!((v["depth_2pct_bid_sompi"].as_str(), v["depth_2pct_ask_sompi"].as_str()), (Some("1820000"), Some("2250000")));
 
-    // depth: per-basis levels, best first, cumulative
+    // Depth: levels per basis, best first, cumulative.
     let (s, v) = get(&app, &format!("/v1/depth/{}", h(TOKEN))).await;
     assert_eq!(s, StatusCode::OK);
     let asks = v["asks"].as_array().unwrap();
@@ -1127,7 +1147,7 @@ async fn market_data_trades_candles_stats_depth() {
     let (_, v) = get(&app, &format!("/v1/depth/{}?levels=1", h(TOKEN))).await;
     assert_eq!(v["asks"].as_array().unwrap().len(), 1);
 
-    // an unknown token: empty, never an error
+    // An unknown token: empty, never an error.
     let (s, v) = get(&app, &format!("/v1/stats/{}", h(0x55))).await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["last"].is_null() && v["best_bid"].is_null() && v["depth_2pct_quote"].is_null());
@@ -1137,9 +1157,9 @@ async fn market_data_trades_candles_stats_depth() {
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
-/// `change_24h_bps` is measured against the price 24 h ago: the last trade at or before the window's start (`open_24h`), the
-/// window's first trade only when there was no earlier one (`market_data_trades_candles_stats_depth`). High, low, volume and
-/// count stay the window's.
+/// `change_24h_bps` is measured against the price 24 h ago: the last trade at or before the
+/// window's start (`open_24h`), the window's first trade only when there was no earlier one
+/// (`market_data_trades_candles_stats_depth`). High, low, volume and count stay the window's.
 #[tokio::test]
 async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
     let e = env(|_| {});
@@ -1147,23 +1167,24 @@ async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
     let t = ahead(1_700_000_000_000);
     const HOUR: i64 = 3_600_000;
-    // one-sided trades into bid 6 (each at its fill's price): 1.80 thirty hours before the newest, 2.00 twenty-five hours
-    // before (the price 24 h ago), then 2.60 and 2.50 inside the window
+    // One-sided trades into bid 6 (each at its fill's price): 1.80 thirty hours before the newest,
+    // 2.00 twenty-five hours before (the price 24 h ago), then 2.60 and 2.50 inside the window.
     seed_fill(c, 6, 0xd1, t - 30 * HOUR, 2, W, 180_000);
     seed_fill(c, 6, 0xd2, t - 25 * HOUR, 2, W, 200_000);
     seed_fill(c, 6, 0xd3, t - HOUR, 2, W, 260_000);
     seed_fill(c, 6, 0xd4, t, 2, 2 * W, 250_000);
     let app = router(e.state.clone());
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
-    // (2.50 - 2.00) / 2.00 = +25 %: the old rule (the window's first trade, 2.60) said -3.84 %
+    // The change is (2.50 - 2.00) / 2.00 = +25 %. It is not measured against the first trade of
+    // the window, 2.60, which would give -3.84 %.
     assert_eq!(
         (v["open_24h"].as_str(), v["high_24h"].as_str(), v["low_24h"].as_str(), v["last"].as_str()),
         (Some("200000"), Some("260000"), Some("250000"), Some("250000"))
     );
     assert_eq!(v["change_24h_bps"], 2500);
     assert_eq!((v["volume_24h"].as_str(), v["trades_24h"].as_i64()), (Some("3000"), Some(2)));
-    // a trade exactly 24 h before the window's end is both the reference and the window's first trade: (2.50 - 2.10) / 2.10
-    // = 1 904.76 bps, truncated
+    // A trade exactly 24 h before the window's end is both the reference and the window's first
+    // trade: (2.50 - 2.10) / 2.10 = 1 904.76 bps, truncated.
     seed_fill(c, 6, 0xd5, t - 24 * HOUR, 2, W, 210_000);
     e.state.generation.bump();
     let (_, v) = get(&app, &format!("/v1/stats/{}", h(TOKEN))).await;
@@ -1171,15 +1192,17 @@ async fn the_24h_change_is_measured_against_the_price_24_hours_ago() {
     assert_eq!(v["change_24h_bps"], 1904);
 }
 
-/// The 24 h window ends at the newer of the newest event and the wall clock: a market (and a pair) that stopped trading ages
-/// out of its 24 h figures instead of showing its last day forever; the last price stays.
+/// The 24 h window ends at the newer of the newest event and the wall clock: a market (and a pair)
+/// that stopped trading ages out of its 24 h figures instead of showing its last day forever. The
+/// last price stays.
 #[tokio::test]
 async fn a_quiet_market_ages_out_of_the_24h_figures() {
     let e = env(|_| {});
     let c = &e.w;
     seed_order(c, 6, 2, 240_000, 1, "open", None, Some(3 * W), true, 0xcc);
     seed_pair(c);
-    // the store's newest events, long before the wall clock: 2.00 two hours before the last trade at 2.50, and a pair fill
+    // The store's newest events, long before the wall clock: 2.00 two hours before the last trade
+    // at 2.50, and a pair fill.
     let p = 1_700_000_000_000i64;
     const HOUR: i64 = 3_600_000;
     seed_fill(c, 6, 0xd1, p - 2 * HOUR, 2, W, 200_000);
@@ -1195,7 +1218,7 @@ async fn a_quiet_market_ages_out_of_the_24h_figures() {
     assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "0", "amount_b": "0", "fills": 0, "window_truncated": false}));
     assert_eq!(v["items"].as_array().unwrap().len(), 1, "the fill itself stays listed");
 
-    // the same store read at chosen clocks (unix seconds)
+    // The same store read at chosen clocks (unix seconds).
     let at = |clock: Option<i64>| {
         let ctx = crate::indexer::reads::ReadCtx {
             node_daa: Some(1000),
@@ -1204,20 +1227,22 @@ async fn a_quiet_market_ages_out_of_the_24h_figures() {
         };
         crate::indexer::market::stats(c, &ctx, &Hash32([TOKEN; 32]), Some(3)).unwrap()
     };
-    // no clock: the window ends at the newest event and holds both trades, the first one its open (no earlier trade): +25 %
+    // No clock: the window ends at the newest event and holds both trades, the first one its open
+    // (no earlier trade): +25 %.
     let s = at(None);
     assert_eq!((s.ts, s.open_24h.as_deref(), s.trades_24h, s.change_24h_bps), (Some(p), Some("200000"), 2, Some(2500)));
-    // 23 h after the last trade: the window (p - 1 h .. p + 23 h) holds the 2.50 only; the price 24 h ago is the 2.00 before it
+    // 23 h after the last trade, the window (p - 1 h .. p + 23 h) holds the 2.50 only. The price
+    // 24 h ago is the 2.00 before it.
     let s = at(Some(p + 23 * HOUR));
     assert_eq!(
         (s.ts, s.open_24h.as_deref(), s.high_24h.as_deref(), s.low_24h.as_deref()),
         (Some(p + 23 * HOUR), Some("200000"), Some("250000"), Some("250000"))
     );
     assert_eq!((s.trades_24h, s.volume_24h.as_str(), s.change_24h_bps), (1, "1000", Some(2500)));
-    // 30 h after: nothing left in the window
+    // 30 h after: nothing left in the window.
     let s = at(Some(p + 30 * HOUR));
     assert_eq!((s.trades_24h, s.open_24h, s.change_24h_bps, s.last.as_deref()), (0, None, None, Some("250000")));
-    // a clock behind the newest event never cuts it short
+    // A clock behind the newest event never cuts it short.
     assert_eq!(at(Some(p - 5 * HOUR)).ts, Some(p));
 }
 
@@ -1233,7 +1258,8 @@ async fn raw(app: &Router, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, 
     (parts.status, parts.headers, body.collect().await.unwrap().to_bytes().to_vec())
 }
 
-/// A JSON read is gzip for a client that accepts it and plain for one that does not; small bodies, the Prometheus text and an `Accept-Encoding` without gzip are plain.
+/// A JSON read is gzip for a client that accepts it and plain for one that does not. Small bodies,
+/// the Prometheus text and an `Accept-Encoding` without gzip are plain.
 #[tokio::test]
 async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     use std::io::Read;
@@ -1259,8 +1285,8 @@ async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     flate2::read::GzDecoder::new(&packed[..]).read_to_end(&mut out).unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&out).unwrap(), want, "the same document");
 
-    // a cached read (the response cache keeps the plain body) and a browser's list of encodings
-    // (the activity totals: a market's stats outgrew the threshold with the two depth sides)
+    // A cached read (the response cache keeps the plain body) and a browser's list of encodings
+    // (the activity totals: a market's stats outgrew the threshold with the two depth sides).
     let (_, hc, small) = raw(&app, "/v1/stats", &[("accept-encoding", "br, gzip, deflate")]).await;
     assert!(hc.get("content-encoding").is_none(), "a body below the threshold is sent as it is: {} B", small.len());
     let (_, hb, _) = raw(&app, "/v1/orders", &[("accept-encoding", "br")]).await;
@@ -1268,7 +1294,7 @@ async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     let (_, hi, _) = raw(&app, "/v1/orders", &[("accept-encoding", "identity")]).await;
     assert!(hi.get("content-encoding").is_none());
 
-    // the Prometheus text is not compressed, nor is a tiny answer
+    // The Prometheus text is not compressed, nor is a tiny answer.
     let (s, hm, _) = raw(&app, "/v1/metrics", &[("accept-encoding", "gzip")]).await;
     assert_eq!(s, StatusCode::OK);
     assert!(hm.get("content-encoding").is_none());
@@ -1276,7 +1302,8 @@ async fn json_answers_are_gzip_only_for_a_client_that_accepts_it() {
     assert!(hr.get("content-encoding").is_none());
 }
 
-/// The `Cache-Control` each class of route sends through the whole router (the policy table itself is tested in `edge_cache`).
+/// The `Cache-Control` each class of route sends through the whole router (the policy table itself
+/// is tested in `edge_cache`).
 #[tokio::test]
 async fn cache_control_by_route_class() {
     let e = env(|_| {});
@@ -1300,7 +1327,7 @@ async fn cache_control_by_route_class() {
         ("/v1/health/ready".to_string(), "no-store"),
         ("/v1/metrics".to_string(), "no-store"),
         (format!("/v1/books/{}?_nc=123", h(TOKEN)), "no-store"),
-        // an error is never kept: a bad token, an unknown route, a bad range
+        // An error is never kept: a bad token, an unknown route, a bad range.
         ("/v1/books/zz".to_string(), "no-store"),
         ("/v1/nothing".to_string(), "no-store"),
         (format!("/v1/candles/{}?interval=2m", h(TOKEN)), "no-store"),
@@ -1308,13 +1335,13 @@ async fn cache_control_by_route_class() {
         let (_, hd, _) = get_from(&app, &uri, "127.0.0.1", &[]).await;
         assert_eq!(cc(&hd).as_deref(), Some(want), "{uri}");
     }
-    // a compressed answer carries it too, and the bypass parameter changes nothing else
+    // A compressed answer carries it too, and the bypass parameter changes nothing else.
     let (_, hz, _) = raw(&app, "/v1/orders", &[("accept-encoding", "gzip")]).await;
     assert_eq!(cc(&hz).as_deref(), Some("public, max-age=1, s-maxage=1"));
     let (s, _, v) = get_from(&app, &format!("/v1/books/{}?_nc=9", h(TOKEN)), "127.0.0.1", &[]).await;
     let (s0, _, v0) = get_from(&app, &format!("/v1/books/{}", h(TOKEN)), "127.0.0.1", &[]).await;
     assert_eq!((s, v), (s0, v0), "the server ignores the bypass parameter");
-    // a POST is never kept
+    // A POST is never kept.
     let mut req = Request::builder().method("POST").uri("/v1/orders").body(Body::empty()).unwrap();
     req.extensions_mut().insert(peer("127.0.0.1"));
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -1326,16 +1353,18 @@ async fn cache_control_by_route_class() {
 async fn activity_totals_over_a_range() {
     let e = env(|_| {});
     let c = &e.w;
-    // blocks 1 and 2 are old, 3 and 4 recent: makers MAKER (orders 1, 3), 0xbb (order 2), 0xcc (order 4)
+    // Blocks 1 and 2 are old, 3 and 4 recent: makers MAKER (orders 1, 3), 0xbb (order 2), 0xcc
+    // (order 4).
     seed_order(c, 1, 1, 300_000, 1, "open", Some(10 * W), Some(10 * W), true, MAKER);
     seed_order(c, 2, 1, 250_000, 2, "partial", Some(10 * W), Some(4 * W), true, 0xbb);
     seed_order(c, 3, 1, 250_000, 3, "open", Some(5 * W), Some(5 * W), true, MAKER);
     seed_order(c, 4, 2, 240_000, 4, "open", None, Some(3 * W), true, 0xcc);
-    // tips: order 1 and 3 pay 2 000 sompi per whole token, order 2 pays 500, order 4 none
+    // Tips: orders 1 and 3 pay 2 000 sompi per whole token, order 2 pays 500, order 4 none.
     c.execute("UPDATE orders SET tip = 2000 WHERE covenant_id IN (?1, ?2)", params![cid(1), cid(3)]).unwrap();
     c.execute("UPDATE orders SET tip = 500 WHERE covenant_id = ?1", params![cid(2)]).unwrap();
     let t0 = 1_700_000_000_000i64;
-    // the scripts that funded the fills: A the old one (block 2), B the one of block 3; block 4's is not recorded
+    // The scripts that funded the fills: A the old one (block 2), B the one of block 3. Block 4's
+    // is not recorded.
     let a = crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xa1, 0xac]).unwrap();
     let b = crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xb1, 0xac]).unwrap();
     assert_eq!(crate::indexer::activity::intern_script(c, &[0, 0, 0x20, 0xa1, 0xac]).unwrap(), a, "once per script");
@@ -1355,7 +1384,7 @@ async fn activity_totals_over_a_range() {
         )
         .unwrap();
     }
-    // the executors' transactions (schema 11): income and network fee, either unknown (NULL)
+    // The transactions of the executors: income and network fee, either unknown (NULL).
     for (block, ts, income, fee) in [
         (2i64, t0 - 9 * 86_400_000, Some(50_000i64), Some(2_000i64)),
         (3, t0 - 30_000, Some(900_000), Some(3_000)),
@@ -1368,14 +1397,15 @@ async fn activity_totals_over_a_range() {
         )
         .unwrap();
     }
-    // live order UTXOs: two unspent (1 000 000 each) and one spent
+    // Live order UTXOs: two unspent (1 000 000 each) and one spent.
     c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa, spent_block) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 7, x'00', 1, 100, 1)", params![cid(0x90), cid(1)]).unwrap();
     for (n, cov) in [(0x91u8, 1u8), (0x92, 4)] {
         c.execute("INSERT INTO order_utxos (txid, idx, order_id, value, spk, created_block, created_daa) VALUES (?1, 0, (SELECT id FROM orders WHERE covenant_id = ?2), 1000000, x'00', 1, 100)", params![cid(n), cid(cov)]).unwrap();
     }
     let app = router(e.state.clone());
 
-    // all time: 4 orders, 3 makers; fees 2 whole x 500 + 1 whole x 2000 + 1.5 whole x 2000 = 6 000; locked 2 000 000
+    // All time: 4 orders, 3 makers. Fees 2 whole x 500 + 1 whole x 2000 + 1.5 whole x 2000 = 6 000.
+    // Locked 2 000 000.
     let (s, v) = get(&app, "/v1/stats").await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert!(v["since"].is_null());
@@ -1383,8 +1413,8 @@ async fn activity_totals_over_a_range() {
     assert_eq!((v["fees_paid"].as_str(), v["kas_locked"].as_str()), (Some("6000"), Some("2000000")));
     assert_eq!(v["executors"].as_i64(), Some(2), "A and B; the fill without a recorded script is not counted");
     assert_eq!(v["ts"].as_i64(), Some(t0));
-    // income 50 000 + 900 000 - 10 000 over 3 transactions (1 unknown), fees 2 000 + 3 000 + 1 000 over 3 (1 unknown), net where both
-    // are known: 48 000 + 897 000
+    // Income 50 000 + 900 000 - 10 000 over 3 transactions (1 unknown), fees 2 000 + 3 000 + 1 000
+    // over 3 (1 unknown), net where both are known: 48 000 + 897 000.
     let earned = |v: &serde_json::Value| {
         (
             v["executor_income"].as_str().map(str::to_string),
@@ -1403,7 +1433,8 @@ async fn activity_totals_over_a_range() {
     assert_eq!(earned(&v), want("940000", 3, 1, "6000", 3, 1, "945000", 2));
     assert_eq!(v["tips_paid"], v["fees_paid"], "the tip sum, under its old name too");
 
-    // the last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole and 1.5 whole at 2 000)
+    // The last day: orders 3 and 4 (makers MAKER and 0xcc), the fills of blocks 3 and 4 (1 whole
+    // and 1.5 whole at 2 000).
     let (s, v) = get(&app, &format!("/v1/stats?since={}", t0 - 86_400_000 + 17)).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     assert_eq!(v["since"].as_i64(), Some((t0 - 86_400_000 + 17) / 60_000 * 60_000), "rounded down to the minute");
@@ -1411,19 +1442,21 @@ async fn activity_totals_over_a_range() {
     assert_eq!(v["fees_paid"], "5000");
     assert_eq!(v["executors"].as_i64(), Some(1), "B");
     assert_eq!(earned(&v), want("890000", 2, 1, "4000", 2, 1, "897000", 1));
-    // from a minute inside an hour: the minutes up to the hour and the hours after it, every bucket once
+    // From a minute inside an hour: the minutes up to the hour and the hours after it, every bucket
+    // once.
     let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 - 30_000)).await;
     assert_eq!((v["fills"].as_i64(), v["fees_paid"].as_str()), (Some(2), Some("5000")));
     let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 - 10_000)).await;
     assert_eq!((v["fills"].as_i64(), v["fees_paid"].as_str(), v["orders"].as_i64()), (Some(1), Some("3000"), Some(1)));
     assert_eq!(v["kas_locked"], "2000000", "locked is the state now, whatever the range");
 
-    // a range with nothing in it
+    // A range with nothing in it.
     let (_, v) = get(&app, &format!("/v1/stats?since={}", t0 + 3_600_000)).await;
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fees_paid"].as_str()), (Some(0), Some(0), Some("0")));
     assert_eq!((v["fills"].as_i64(), v["executors"].as_i64()), (Some(0), Some(0)));
 
-    // the aggregates follow a delete as a revert does it: the fills and orders of block 4 go, and the totals are those of blocks 1 to 3
+    // The aggregates follow a delete as a revert does it: the fills and orders of block 4 go, and
+    // the totals are those of blocks 1 to 3.
     c.execute_batch(
         "DELETE FROM order_events WHERE block_seq = 4; DELETE FROM orders WHERE genesis_block = 4; DELETE FROM executor_txs WHERE block_seq = 4;",
     )
@@ -1433,7 +1466,8 @@ async fn activity_totals_over_a_range() {
     assert_eq!((v["orders"].as_i64(), v["traders"].as_i64(), v["fills"].as_i64()), (Some(3), Some(2), Some(2)));
     assert_eq!((v["fees_paid"].as_str(), v["executors"].as_i64()), (Some("3000"), Some(2)));
     assert_eq!(earned(&v), want("950000", 2, 0, "5000", 2, 0, "945000", 2));
-    // the lean pruning deletes old rows under the `pruning` key: nothing is taken back (block 2 is gone from the store, not from the totals)
+    // The lean pruning deletes old rows under the `pruning` key: nothing is taken back (block 2 is
+    // gone from the store, not from the totals).
     let all = v.clone();
     c.execute_batch(
         "INSERT INTO meta (k, v) VALUES ('pruning', '1'); DELETE FROM order_events WHERE block_seq = 2; \
@@ -1455,7 +1489,8 @@ async fn activity_totals_over_a_range() {
     ] {
         assert_eq!(v[k], all[k], "{k}");
     }
-    // a revert of block 3 still takes back what it added; what was pruned stays (the fill, the maker and the executor of block 2)
+    // A revert of block 3 still takes back what it added. What was pruned stays (the fill, the
+    // maker and the executor of block 2).
     c.execute_batch(
         "DELETE FROM order_events WHERE block_seq = 3; DELETE FROM orders WHERE genesis_block = 3; DELETE FROM executor_txs WHERE block_seq = 3;",
     )
@@ -1488,10 +1523,11 @@ async fn activity_totals_of_an_empty_store() {
     assert!(v["ts"].is_null());
 }
 
-// ------------------------------------------------------------------------------------------------ pair books (pair orders)
+// Pair books (pair orders).
 
-/// A live, listed order with a real state (the pair book decodes it): its current UTXO, `order_state` (`remaining` base units)
-/// and exact custodies (a pair order: one per custody of its state, each of its own token).
+/// A live, listed order with a real state (the pair book decodes it): its current UTXO,
+/// `order_state` (`remaining` base units) and exact custodies (a pair order: one per custody of its
+/// state, each of its own token).
 fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, block: i64, remaining: i64) {
     let t = state.template_id();
     let terms = crate::model::terms_of(state);
@@ -1551,8 +1587,9 @@ fn seed_live(c: &Connection, id: u8, state: &kob_protocol::state::AnyState, bloc
     }
 }
 
-/// A `KobPair` of `amount` base units of A = `base` (scale 1 000) at `price` base units of B = `quote` per whole A: an ASK
-/// (custody: the amount of A) or a BID (custody: the B escrow of four fills).
+/// A `KobPair` of `amount` base units of A = `base` (scale 1 000) at `price` base units of B =
+/// `quote` per whole A: an ASK (custody: the amount of A) or a BID (custody: the B escrow of four
+/// fills).
 fn pair_of(base: u8, quote: u8, ask: bool, price: i64, amount: i64) -> kob_protocol::state::AnyState {
     use crate::testkit::{rtip, tok_fields, T3};
     use kob_protocol::state::{PairState, SIDE_ASK, SIDE_BID};
@@ -1602,13 +1639,15 @@ const QUOTE: u8 = 0x22;
 
 fn seed_pair(c: &Connection) {
     use kob_protocol::state::{AnyState, AskState, BidState};
-    // direct: an ask of base at 2 quote per base (5 whole tokens), a bid of base at 0.6 quote per base (5 whole tokens), and
-    // an ask of the OTHER orientation (quote/base): it is in the quote/base book only
+    // Direct: an ask of base at 2 quote per base (5 whole tokens), a bid of base at 0.6 quote per
+    // base (5 whole tokens), and an ask of the OTHER orientation (quote/base): it is in the
+    // quote/base book only.
     seed_live(c, 0x31, &pair_of(BASE, QUOTE, true, 2000, 5 * W), 1, 5 * W);
     seed_live(c, 0x32, &pair_of(BASE, QUOTE, false, 600, 5 * W), 2, 5 * W);
     seed_live(c, 0x33, &pair_of(QUOTE, BASE, true, 500, 4 * W), 2, 4 * W);
-    // the KAS route: a bid of base (260 100 000 sompi all-in per whole token of 1 000 base units, buying power 3 whole tokens)
-    // and an ask of quote (129 900 000 per whole token after its tip, 10 whole tokens)
+    // The KAS route: a bid of base (260 100 000 sompi all-in per whole token of 1 000 base units,
+    // buying power 3 whole tokens) and an ask of quote (129 900 000 per whole token after its tip,
+    // 10 whole tokens).
     let b = BidState { token_cov_id: [BASE; 32], ..crate::testkit::bid(1, 260_000_000) };
     seed_live(c, 0x41, &AnyState::KobBid(b), 3, 3 * W);
     let a = AskState { token_cov_id: [QUOTE; 32], ..crate::testkit::ask(2, 130_000_000) };
@@ -1630,8 +1669,9 @@ async fn pair_book_direct_and_route_levels() {
         v["asks"],
         serde_json::json!([{"source": "direct", "price_num": "2", "price_den": "1", "amount": "5000", "orders": 1}])
     );
-    // bids, best first: the route (sell base to the KAS bid, buy quote from the KAS ask: 260.1 / 129.9 = 867 / 433),
-    // bounded by the bid's 3 000 base units; then the pair BID (600 quote base units per whole base = 3 / 5)
+    // Bids, best first: the route (sell base to the KAS bid, buy quote from the KAS ask: 260.1 /
+    // 129.9 = 867 / 433), bounded by the bid's 3 000 base units. Then the pair BID (600 quote base
+    // units per whole base = 3 / 5).
     assert_eq!(
         v["bids"],
         serde_json::json!([
@@ -1641,18 +1681,19 @@ async fn pair_book_direct_and_route_levels() {
     );
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/book?depth=1", h(BASE), h(QUOTE))).await;
     assert_eq!(v["bids"].as_array().unwrap().len(), 1);
-    // the other orientation is its own book: the quote/base pair ask (0.5 base per quote), never the base/quote orders inverted
+    // The other orientation is its own book: the quote/base pair ask (0.5 base per quote), never
+    // the base/quote orders inverted.
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/book", h(QUOTE), h(BASE))).await;
     let direct: Vec<&Value> = v["asks"].as_array().unwrap().iter().filter(|l| l["source"] == "direct").collect();
     assert_eq!(direct.len(), 1);
     assert_eq!((direct[0]["price_num"].as_str(), direct[0]["price_den"].as_str()), (Some("1"), Some("2")));
     assert!(v["bids"].as_array().unwrap().iter().all(|l| l["source"] != "direct"));
-    // errors
+    // Errors.
     let (s, _) = get(&app, &format!("/v1/pairs/{}/{}/book", h(BASE), h(BASE))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
     let (s, _) = get(&app, &format!("/v1/pairs/zz/{}/book", h(QUOTE))).await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
-    // an unknown pair is empty, never an error
+    // An unknown pair is empty, never an error.
     let (s, v) = get(&app, &format!("/v1/pairs/{}/{}/book", h(0x55), h(0x56))).await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["asks"].as_array().unwrap().is_empty() && v["bids"].as_array().unwrap().is_empty());
@@ -1662,7 +1703,8 @@ async fn pair_book_direct_and_route_levels() {
 async fn pairs_list_and_pair_orders_in_the_order_views() {
     let e = env(|_| {});
     seed_pair(&e.w);
-    // a pair order whose custody is not exact (no live custody row) is no liquidity: neither listed nor in the book
+    // A pair order whose custody is not exact (no live custody row) is no liquidity: neither listed
+    // nor in the book.
     seed_live(&e.w, 0x34, &pair_of(BASE, QUOTE, true, 1900, 2 * W), 5, 2 * W);
     e.w.execute("DELETE FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [cid(0x34)]).unwrap();
     let app = router(e.state.clone());
@@ -1679,7 +1721,8 @@ async fn pairs_list_and_pair_orders_in_the_order_views() {
     assert_eq!(get(&app, "/v1/pairs?token=zz").await.0, StatusCode::BAD_REQUEST);
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/book", h(BASE), h(QUOTE))).await;
     assert!(v["asks"].as_array().unwrap().iter().all(|l| l["price_num"] != "19"), "the order without custody is not quoted");
-    // the KAS book of base does not hold the pair order; the order view shows its pair, side, price and custody
+    // The KAS book of base does not hold the pair order. The order view shows its pair, side, price
+    // and custody.
     let (_, v) = get(&app, &format!("/v1/books/{}?aggregate=false", h(BASE))).await;
     assert!(!v.to_string().contains(&h(0x31)));
     let (s, v) = get(&app, &format!("/v1/orders/{}", h(0x31))).await;
@@ -1703,7 +1746,7 @@ async fn pairs_list_and_pair_orders_in_the_order_views() {
     assert_eq!(cs[0]["ok"], true);
     assert_eq!(cs[0]["utxo"]["amount"], "5000");
     assert!(v["custody"]["ok"].as_bool().unwrap());
-    // a pair BID holds a B escrow: its custody is of the quote token
+    // A pair BID holds a B escrow: its custody is of the quote token.
     let (_, v) = get(&app, &format!("/v1/orders/{}", h(0x32))).await;
     assert_eq!((v["side"].as_i64(), v["pair"]["side"].as_str()), (Some(2), Some("bid")));
     let cs = v["pair"]["custodies"].as_array().unwrap();
@@ -1714,7 +1757,7 @@ async fn pairs_list_and_pair_orders_in_the_order_views() {
     assert!(v["custody"]["ok"].as_bool().unwrap());
     let (_, v) = get(&app, &format!("/v1/orders/{}", h(0x34))).await;
     assert_eq!(v["custody"]["ok"], false);
-    // listed under either of its tokens
+    // Listed under either of its tokens.
     let (_, v) = get(&app, &format!("/v1/orders?token={}", h(QUOTE))).await;
     let got = ids(&v["items"]);
     assert!(got.contains(&h(0x31)) && got.contains(&h(0x32)) && got.contains(&h(0x33)) && got.contains(&h(0x42)));
@@ -1748,19 +1791,21 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
     let e = env(|_| {});
     seed_pair(&e.w);
     let t0 = ahead(1_700_000_100_000);
-    // bucket 1 (5 m): base trades at 2.60 and 2.80 KAS, quote at 1.30; bucket 2: base at 2.70 only (quote carries 1.30 forward)
+    // Bucket 1 (5 m): base trades at 2.60 and 2.80 KAS, quote at 1.30. Bucket 2: base at 2.70 only
+    // (quote carries 1.30 forward).
     seed_kas_fill(&e.w, 0x41, BASE, 0x61, t0, 2, W, Some(260_000_000));
     seed_kas_fill(&e.w, 0x41, BASE, 0x62, t0 + 1_000, 2, W, Some(280_000_000));
     seed_kas_fill(&e.w, 0x42, QUOTE, 0x63, t0 + 2_000, 1, W, Some(130_000_000));
     seed_kas_fill(&e.w, 0x41, BASE, 0x64, t0 + 300_000, 2, W, Some(270_000_000));
-    // a pair fill (a netting fill of the pair orders): its event has no price and is never a KAS trade
+    // A pair fill (a netting fill of the pair orders): its event has no price and is never a KAS
+    // trade.
     seed_kas_fill(&e.w, 0x31, BASE, 0x65, t0 + 3_000, 1, 2 * W, None);
     seed_pair_fill(&e.w, 0x31, 0x65, t0 + 3_000, 1, 2 * W, 4 * W, 2000, "netting");
     seed_pair_fill(&e.w, 0x32, 0x65, t0 + 3_000, 2, 2 * W, 4 * W, 2000, "netting");
     seed_pair_fill(&e.w, 0x31, 0x66, t0 + 301_000, 1, W, 2 * W, 2000, "route");
     let app = router(e.state.clone());
 
-    // the KAS series of base: two trades in bucket 1, one in bucket 2 (the pair fill is not one)
+    // The KAS series of base: two trades in bucket 1, one in bucket 2 (the pair fill is not one).
     let (_, v) = get(&app, &format!("/v1/candles/{}?interval=5m", h(BASE))).await;
     let items = v["items"].as_array().unwrap();
     assert_eq!(items.len(), 2, "{v}");
@@ -1785,7 +1830,8 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
             c[k]["den"].as_str().unwrap().to_string(),
         )
     };
-    // open 2.60 / 1.30 = 2 000 quote base units per 1 000 base units; high 2.80 / 1.30 (the bound) = 28 000 / 13, floored
+    // Open 2.60 / 1.30 = 2 000 quote base units per 1 000 base units. High 2.80 / 1.30 (the bound)
+    // = 28 000 / 13, floored.
     assert_eq!(rate(&items[0], "o"), ("2000".into(), "2000".into(), "1".into()));
     assert_eq!(rate(&items[0], "h"), ("2153".into(), "28000".into(), "13".into()));
     assert_eq!(rate(&items[0], "l"), ("2000".into(), "2000".into(), "1".into()));
@@ -1795,17 +1841,18 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
         (items[0]["pair_volume_a"].as_str(), items[0]["pair_volume_b"].as_str(), items[0]["pair_fills"].as_u64()),
         (Some("2000"), Some("4000"), Some(1))
     );
-    // bucket 2: quote did not trade, its last close carries forward: 2.70 / 1.30 = 27 000 / 13
+    // Bucket 2: quote did not trade, its last close carries forward: 2.70 / 1.30 = 27 000 / 13.
     assert_eq!(rate(&items[1], "o"), ("2076".into(), "27000".into(), "13".into()));
     assert_eq!((items[1]["a_traded"].as_bool(), items[1]["b_traded"].as_bool()), (Some(true), Some(false)));
     assert_eq!(items[1]["pair_fills"], 1);
-    // errors and an unknown pair
+    // Errors and an unknown pair.
     assert_eq!(get(&app, &format!("/v1/pairs/{}/{}/candles?interval=7m", h(BASE), h(QUOTE))).await.0, StatusCode::BAD_REQUEST);
     let (s, v) = get(&app, &format!("/v1/pairs/{}/{}/candles", h(0x55), h(0x56))).await;
     assert_eq!(s, StatusCode::OK);
     assert!(v["items"].as_array().unwrap().is_empty());
 
-    // pair fills, newest first, with their counterparty and no price source; the 24 h pair volume
+    // Pair fills come newest first, with their counterparty and no price source. The 24 h pair
+    // volume follows.
     let (s, v) = get(&app, &format!("/v1/pairs/{}/{}/fills", h(BASE), h(QUOTE))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let items = v["items"].as_array().unwrap();
@@ -1817,20 +1864,22 @@ async fn pair_candles_come_from_the_two_kas_series_and_pair_fills_are_volume_onl
         (Some("2000"), Some("2"), Some("1"))
     );
     assert_eq!((items[2]["amount_a"].as_str(), items[2]["amount_b"].as_str()), (Some("2000"), Some("4000")));
-    // the netting fill (both its orders record it) counts once: 2 000 + the route fill's 1 000 of A in 2 transactions
+    // The netting fill (both its orders record it) counts once: 2 000 + the route fill's 1 000 of A
+    // in 2 transactions.
     assert_eq!(v["volume_24h"], serde_json::json!({"amount_a": "3000", "amount_b": "6000", "fills": 2, "window_truncated": false}));
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=1", h(BASE), h(QUOTE))).await;
     let cursor = v["next_cursor"].as_str().unwrap().to_string();
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills?limit=5&before={cursor}", h(BASE), h(QUOTE))).await;
     assert_eq!(v["items"].as_array().unwrap().len(), 2);
     assert!(v["next_cursor"].is_null());
-    // the other orientation has no fills
+    // The other orientation has no fills.
     let (_, v) = get(&app, &format!("/v1/pairs/{}/{}/fills", h(QUOTE), h(BASE))).await;
     assert!(v["items"].as_array().unwrap().is_empty());
 }
 
-/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof the indexer holds (as the write path stores it), 404 in
-/// the API's error shape when it holds none, 400 for a malformed id; `GET /v1/tokens` flags the tokens that have one.
+/// `GET /v1/tokens/{covenant_id}/declaration`: the KCC-23 launch proof the indexer holds (as the
+/// write path stores it), 404 in the API's error shape when it holds none, 400 for a malformed id.
+/// `GET /v1/tokens` flags the tokens that have one.
 #[tokio::test]
 async fn token_declarations_are_served_as_launch_proofs() {
     use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
@@ -1860,7 +1909,7 @@ async fn token_declarations_are_served_as_launch_proofs() {
     let proof = kob_protocol::kcc23::LaunchProof::of(&prep, &gen, kaspa_consensus_core::Hash::from_bytes(cov.0));
     assert_eq!(v, serde_json::to_value(&proof).unwrap());
     assert_eq!(v["format"], "kob-kcc23-proof/1");
-    // what a client does with it
+    // What a client does with it.
     let back: kob_protocol::kcc23::LaunchProof = serde_json::from_value(v).unwrap();
     assert_eq!(back.verify().unwrap().token.symbol.as_deref(), Some("EXT"));
 
@@ -1875,15 +1924,17 @@ async fn token_declarations_are_served_as_launch_proofs() {
     assert!(row(&h(TOKEN)).get("declaration").is_none(), "absent without a declaration (older clients see no new key)");
 }
 
-/// `history_from` (`/v1/health`, `/v1/stats`): where a lean store's trade history is complete from, the last event of the oldest
-/// closed order its pruning could have deleted (an entry with a live exit is kept whatever its age, and a live order keeps its
-/// own older events); `null` for a full store.
+/// `history_from` (`/v1/health`, `/v1/stats`): where a lean store's trade history is complete from,
+/// the last event of the oldest closed order its pruning could have deleted (an entry with a live
+/// exit is kept whatever its age, and a live order keeps its own older events). `null` for a full
+/// store.
 #[tokio::test]
 async fn a_lean_store_says_where_its_history_is_complete_from() {
     let e = env(|_| {});
     let c = &e.w;
-    // a live ask whose placement is the oldest event (1 000); a filled entry (last activity DAA 100, events at 2 000) whose exit
-    // is live; the oldest prunable closed order (DAA 200, its last event at 9 000); a newer closed one (DAA 300, at 20 000)
+    // A live ask whose placement is the oldest event (1 000). A filled entry (last activity DAA
+    // 100, events at 2 000) whose exit is live. The oldest prunable closed order (DAA 200, its last
+    // event at 9 000). A newer closed one (DAA 300, at 20 000).
     seed_order(c, 1, 1, 300_000, 50, "open", Some(W), Some(W), true, MAKER);
     seed_fill(c, 1, 0xe1, 1_000, 1, 0, 300_000);
     seed_order(c, 2, 2, 250_000, 1, "filled", None, Some(0), true, MAKER);
@@ -1896,33 +1947,35 @@ async fn a_lean_store_says_where_its_history_is_complete_from() {
     seed_order(c, 5, 2, 230_000, 3, "filled", None, Some(0), true, MAKER);
     seed_fill(c, 5, 0xe5, 20_000, 2, W, 230_000);
     let app = router(e.state.clone());
-    // a full store: null
+    // A full store: null.
     let (_, v) = get(&app, "/v1/health").await;
     assert!(v.get("history_from").is_some_and(Value::is_null), "{v}");
     let (_, v) = get(&app, "/v1/stats").await;
     assert!(v.get("history_from").is_some_and(Value::is_null), "{v}");
-    // the same store, lean
+    // The same store, lean.
     e.state.health.update(|h| h.lean = true);
     let app = router(e.state.clone());
     let (_, v) = get(&app, "/v1/health").await;
     assert_eq!(v["history_from"], 9_000);
     let (_, v) = get(&app, "/v1/stats").await;
     assert_eq!(v["history_from"], 9_000);
-    // the live exit closes: its entry is prunable and the oldest closed order (its last event at 2 000)
+    // The live exit closes. Its entry is prunable and is the oldest closed order, with its last
+    // event at 2 000.
     c.execute(
         "UPDATE order_state SET status = 'filled' WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
         params![cid(3)],
     )
     .unwrap();
     assert_eq!(crate::indexer::reads::history_from(c).unwrap(), Some(2_000));
-    // no closed order at all: the oldest event; an empty store: none
+    // With no closed order at all it is the oldest event. An empty store has none.
     c.execute("DELETE FROM order_state WHERE status = 'filled'", []).unwrap();
     assert_eq!(crate::indexer::reads::history_from(c).unwrap(), Some(1_000));
     c.execute("DELETE FROM order_events", []).unwrap();
     assert_eq!(crate::indexer::reads::history_from(c).unwrap(), None);
 }
 
-/// `/v1/health` reports the minimum order value the executor lists, whatever its configuration sets.
+/// `/v1/health` reports the minimum order value the executor lists, whatever its configuration
+/// sets.
 #[tokio::test]
 async fn health_reports_the_configured_minimum_order_value() {
     let mut e = env(|_| {});
@@ -1934,9 +1987,10 @@ async fn health_reports_the_configured_minimum_order_value() {
     assert_eq!(v["min_order_value_sompi"], "0");
 }
 
-/// The decimals of a token, which are the price basis of the market views (candles, stats, trades, depth, pair candles) and the `decimals`
-/// of `GET /v1/tokens`: its verified KCC-23 declaration, else its registry entry, else its program's default (KaspaRocket: 3), else
-/// none (the scale of its first order); `decimals_source` names which.
+/// The decimals of a token, which are the price basis of the market views (candles, stats, trades,
+/// depth, pair candles) and the `decimals` of `GET /v1/tokens`: its verified KCC-23 declaration,
+/// else its registry entry, else its program's default (KaspaRocket: 3), else none (the scale of
+/// its first order). `decimals_source` names which.
 #[tokio::test]
 async fn token_decimals_follow_the_declaration_then_the_registry_then_the_program_default() {
     use crate::indexer::kcc23::{apply, proof_tx, DeclSection};
@@ -1959,7 +2013,7 @@ async fn token_decimals_follow_the_declaration_then_the_registry_then_the_progra
     };
     seen(&Hash32([ROCKET; 32]));
     seen(&Hash32([REGISTERED; 32]));
-    // a token that declared 8 decimals at its creation, and is of the KaspaRocket program too
+    // A token that declared 8 decimals at its creation, and is of the KaspaRocket program too.
     let prep = kcc23_prep(1, kob_protocol::kcc23::encode(KCC23_EXAMPLE).unwrap());
     let (gen, declared) = kcc23_genesis(&prep, 0, 1);
     let ptx = |t| proof_tx(&kcc23_wire(t, false)).unwrap();
@@ -2009,8 +2063,9 @@ async fn token_decimals_follow_the_declaration_then_the_registry_then_the_progra
     assert_eq!(facts(&h(TOKEN)), (Some(3), Some("registry".into()), Some(1000)));
 }
 
-/// While the store catches up with a lag below the first alarm threshold the probe answers 200 (it is not "caught up": that is
-/// `state = following`); the health reports the pace and ETA of the catch-up, and a store that began after the oldest history says so.
+/// While the store catches up with a lag below the first alarm threshold the probe answers 200 (it
+/// is not "caught up": that is `state = following`). The health reports the pace and ETA of the
+/// catch-up, and a store that began after the oldest history says so.
 #[tokio::test]
 async fn ready_while_catching_up_and_the_health_names_the_catch_up_and_a_partial_history() {
     let e = env(|_| {});
@@ -2029,7 +2084,7 @@ async fn ready_while_catching_up_and_the_health_names_the_catch_up_and_a_partial
     assert_eq!((v["state"].as_str(), v["caught_up"].clone()), (Some("catching_up"), Value::Bool(false)));
     assert_eq!((v["catch_up"]["rate_daa_per_sec"].as_f64(), v["catch_up"]["eta_seconds"].as_u64()), (Some(150.0), Some(36)));
     assert_eq!((v["book_complete"].clone(), v["history_from_daa"].as_u64()), (Value::Bool(false), Some(990)));
-    // a complete store that follows has neither field
+    // A complete store that follows has neither field.
     e.state.health.update(|h| {
         h.state = FollowerState::Following;
         h.node_daa = Some(1000);
@@ -2042,8 +2097,9 @@ async fn ready_while_catching_up_and_the_health_names_the_catch_up_and_a_partial
     assert_eq!(v["book_complete"], true);
 }
 
-/// Audit 2026-11-11 M-13, M-16: `/v1/health` names the template generation and, under `kobd --executor`, the Executor's funds
-/// and submissions; `/v1/metrics` serves the Executor's own series after the indexer's, and the build.
+/// `/v1/health` names the template generation and, under `kobd --executor`, the funds and
+/// submissions of the Executor. `/v1/metrics` serves the series of the Executor after those of the
+/// indexer, and the build.
 #[tokio::test]
 async fn health_and_metrics_carry_the_executor_and_the_build() {
     let e = env(|_| {});
@@ -2072,8 +2128,8 @@ async fn health_and_metrics_carry_the_executor_and_the_build() {
     assert!(text.contains("kob_build_info{"), "{text}");
 }
 
-/// The update notice: `/v1/health` `newer_release_seen` is `null` until a newer release is seen on chain, then
-/// `{version, first_seen_daa}`; `/v1/metrics` has `kob_newer_release_seen`.
+/// The update notice: `/v1/health` `newer_release_seen` is `null` until a newer release is seen on
+/// chain, then `{version, first_seen_daa}`. `/v1/metrics` has `kob_newer_release_seen`.
 #[tokio::test]
 async fn health_names_a_newer_release_seen_on_chain() {
     let e = env(|_| {});
@@ -2103,11 +2159,11 @@ async fn the_metrics_route_follows_the_config() {
     let app = router(off.state.clone());
     let (s, v) = get(&app, "/v1/metrics").await;
     assert_eq!(s, StatusCode::NOT_FOUND, "{v}");
-    // everything else is still served
+    // Everything else is still served.
     assert_eq!(get(&app, "/v1/health").await.0, StatusCode::OK);
 }
 
-// ------------------------------------------------------------------------------------------------ logo reports
+// Logo reports.
 
 async fn post_with(app: &Router, body: &str, from: &str, headers: &[(&str, &str)]) -> (StatusCode, HeaderMap, Value) {
     let mut req = Request::builder().method("POST").uri("/v1/logo-reports").header("content-type", "application/json");
@@ -2179,7 +2235,7 @@ async fn a_report_hides_the_logo_at_once_and_the_blocklist_serves_it() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!(v, serde_json::json!({"hidden": [h(7)], "updated_ms": 1_000_000}));
     assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=5");
-    // a GitHub report of the same token (upper-case hex), from another client: still hidden
+    // A GitHub report of the same token (upper-case hex), from another client: still hidden.
     let gh = format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"source\":\"github\",\"ref\":12}}", h(7).to_uppercase());
     let (s, _, v) = post_from(&app, &gh, "10.1.1.2").await;
     assert_eq!((s, v["result"].as_str()), (StatusCode::OK, Some("hidden")));
@@ -2191,15 +2247,16 @@ async fn a_report_in_the_cooldown_after_a_restore_is_only_recorded() {
     let app = router(e.state.clone());
     let body = report_body(3, "illegal");
     assert_eq!(post_from(&app, &body, "10.1.1.1").await.2["result"], "hidden");
-    // the operator restores it (the subcommand writes through a connection of its own; here the service's)
+    // The operator restores it. The subcommand writes through a connection of its own, and here it
+    // is the connection of the service.
     crate::logo_reports::restore(&mut e.logo.test_connection(), &Hash32([3; 32]), 1_000_000, false).unwrap();
     e.now.fetch_add(60_000, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(post_from(&app, &body, "10.1.1.2").await.2["result"], "recorded");
-    // the list is cached for 5 s, then shows the restored token as shown
+    // The list is cached for 5 s, then shows the restored token as shown.
     e.now.fetch_add(5_000, std::sync::atomic::Ordering::SeqCst);
     let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
     assert_eq!(v["hidden"], serde_json::json!([]));
-    // after the cooldown (6 h) it hides again
+    // After the cooldown (6 h) it hides again.
     e.now.fetch_add(6 * 3_600_000, std::sync::atomic::Ordering::SeqCst);
     assert_eq!(post_from(&app, &body, "10.1.1.3").await.2["result"], "hidden");
     let (_, _, v) = get_from(&app, "/v1/logo-blocklist", "127.0.0.1", &[]).await;
@@ -2223,17 +2280,17 @@ async fn bad_reports_are_refused_and_cost_no_budget() {
         let (s, _, v) = post_from(&app, &bad, "10.1.1.1").await;
         assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {v}");
     }
-    // an oversize body is refused before it is read
+    // An oversize body is refused before it is read.
     let big = format!("{{\"covenant_id\":\"{}\",\"reason\":\"other\",\"x\":\"{}\"}}", h(1), "a".repeat(2000));
     assert_eq!(post_from(&app, &big, "10.1.1.1").await.0, StatusCode::PAYLOAD_TOO_LARGE);
-    // none of that used the client's two reports per hour
+    // None of that used the client's two reports per hour.
     for n in 1..=2u8 {
         assert_eq!(post_from(&app, &report_body(n, "other"), "10.1.1.1").await.0, StatusCode::OK);
     }
     let (s, hd, v) = post_from(&app, &report_body(9, "other"), "10.1.1.1").await;
     assert_eq!((s, v["error"]["code"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")));
     assert!(hd.get("retry-after").is_some());
-    // another client is not affected
+    // Another client is not affected.
     assert_eq!(post_from(&app, &report_body(9, "other"), "10.1.1.2").await.0, StatusCode::OK);
 }
 
@@ -2243,15 +2300,17 @@ async fn the_daily_total_and_the_trusted_proxy_rule_bound_reports() {
         c.trusted_proxies = vec!["10.9.9.9".into()];
     });
     let app = router(e.state.clone());
-    // behind the trusted proxy the forwarded address is the client: three clients, one report each
+    // Behind the trusted proxy the forwarded address is the client: three clients, one report each.
     for n in 1..=3u8 {
         let xff = format!("203.0.113.{n}");
         assert_eq!(post_with(&app, &report_body(n, "other"), "10.9.9.9", &[("x-forwarded-for", &xff)]).await.0, StatusCode::OK);
     }
-    // the same forwarded client again: its hourly budget is spent (the proxy itself is not the client)
+    // The same forwarded client again: its hourly budget is spent (the proxy itself is not the
+    // client).
     let (s, _, _) = post_with(&app, &report_body(5, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.1")]).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
-    // a fourth client is admitted (the refused request above was not counted); a fifth finds the day's total spent
+    // A fourth client is admitted (the refused request above was not counted). A fifth finds the
+    // day's total spent.
     assert_eq!(post_with(&app, &report_body(4, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.4")]).await.0, StatusCode::OK);
     let (s, _, _) = post_with(&app, &report_body(6, "other"), "10.9.9.9", &[("x-forwarded-for", "203.0.113.5")]).await;
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
@@ -2269,7 +2328,7 @@ async fn cors_allows_the_post_of_a_report() {
     assert_eq!(resp.headers().get("access-control-expose-headers").unwrap(), "retry-after");
 }
 
-// the KAS/USD price route (`api::price`): a mocked upstream, no network
+// The KAS/USD price route (`api::price`): a mocked upstream, no network.
 
 use crate::api::price::tests::{full, p_ok, set, t_ok, Mock, P, X, Y, Z};
 
@@ -2297,7 +2356,7 @@ async fn the_price_route_serves_the_cached_quote_with_a_short_cache_header() {
     assert_eq!((v["usd"].as_f64(), v["source"].as_str()), (Some(0.0576), Some("alpha")));
     assert!(v["at"].as_u64().is_some_and(|at| at >= now - 5 && at <= now + 5), "{v}");
     assert_eq!(hd.get("cache-control").unwrap(), "public, max-age=60, s-maxage=60");
-    // 25 more clients: no further call to any upstream, the same `at`
+    // 25 more clients: no further call to any upstream, the same `at`.
     for i in 0..25 {
         let (s, _, w) = get_from(&app, "/v1/price/kas-usd", &format!("10.0.0.{i}"), &[]).await;
         assert_eq!((s, w["at"].clone()), (StatusCode::OK, v["at"].clone()));
@@ -2327,7 +2386,7 @@ async fn the_price_route_answers_503_before_the_first_success_and_never_caches_i
     assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(v["error"]["code"], "price_unavailable");
     assert_eq!(hd.get("cache-control").unwrap(), "no-store");
-    // inside the period the failed upstreams are not asked again
+    // Inside the period the failed upstreams are not asked again.
     assert_eq!(get(&app, "/v1/price/kas-usd").await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(m.calls(), 4, "one round");
 }
