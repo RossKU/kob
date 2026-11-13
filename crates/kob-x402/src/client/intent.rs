@@ -1,15 +1,23 @@
-//! Payer / merchant SDK: intent-based swap-and-pay (`extra.route` binding `kob-intent-v1`).
+//! Payer and merchant SDK for intent-based swap-and-pay (`extra.route` binding `kob-intent-v1`).
 //!
-//! Merchant: [`intent_requirements`] builds an offer entry (`standard-native` or `kcc20`) whose
-//! `extra.route` accepts router intents: `{ binding: "kob-intent-v1", critical: true, router, payAssets }`.
+//! # Merchant side
 //!
-//! Payer: [`prepare_intent`] builds the **creation** transaction (the payer's one signature): it locks the
-//! payer's KAS (pay asset `KAS`, intent `KasToToken`) or token A (intent `TokenToKas` / `TokenSwap`) in the
-//! router actor of the fill shape the payer expects, with the payer's worst case as the intent's terms
-//! (`maxPay` + `maxExtra` sompi, or `maxSell` units), and commits the x402 digest in its payload. The
-//! facilitator verifies it, broadcasts it and executes the intent (retrying on conflicts without the payer).
-//! The payer keeps the [`IntentPayment`]: after the authorization expired without a settlement it cancels
-//! the intent with [`cancel_intent`] (one more signature) and gets everything back.
+//! [`intent_requirements`] builds an offer entry (`standard-native` or `kcc20`) whose `extra.route`
+//! accepts router intents: `{ binding: "kob-intent-v1", critical: true, router, payAssets }`.
+//!
+//! # Payer side
+//!
+//! [`prepare_intent`] builds the creation transaction, which carries the payer's one signature. It
+//! locks the payer's KAS (pay asset `KAS`, intent `KasToToken`) or token A (intent `TokenToKas` or
+//! `TokenSwap`) in the router actor of the fill shape the payer expects. The payer's worst case is
+//! the intent's terms: `maxPay` plus `maxExtra` sompi, or `maxSell` units. The transaction also
+//! commits the x402 digest in its payload.
+//!
+//! The facilitator verifies the creation, broadcasts it and executes the intent. It retries on
+//! conflicts without the payer.
+//!
+//! The payer keeps the [`IntentPayment`]. If the authorization expires without a settlement, the
+//! payer cancels the intent with [`cancel_intent`] (one more signature) and gets everything back.
 
 use std::collections::BTreeMap;
 
@@ -42,12 +50,13 @@ fn err(diag: Diag, msg: impl Into<String>) -> X402Error {
     X402Error::payload(diag, msg)
 }
 
-// ------------------------------------------------------------------------------------------ merchant
+// ---------------------------------------------------------------------------------------- merchant
 
 /// Builds an intent offer entry: the exact requirement of the merchant-gain profile plus
-/// `extra.route = { binding: "kob-intent-v1", critical: true, router, payAssets }`. Every pay token must be on a
-/// program the router trades ([`router_capable`]: KCC-20 or KRON, not KaspaCom's while it is pending review) and
-/// the merchant token a KCC-20 one ([`router_deliverable`]).
+/// `extra.route = { binding: "kob-intent-v1", critical: true, router, payAssets }`.
+///
+/// Every pay token must be on a program the router trades ([`router_capable`]). The merchant token
+/// must be a KCC-20 one ([`router_deliverable`]).
 pub fn intent_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
     use crate::client::swap::{MerchantGain, PayAssetSpec};
     let refuse = |t: &AllowedToken| {
@@ -80,35 +89,44 @@ pub fn intent_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
 /// The payer's terms and knobs of [`prepare_intent`].
 #[derive(Clone, Debug)]
 pub struct IntentOptions {
-    /// Router actor (the fill shape the keeper must use). Default: the one-order resting shape of the
-    /// intent kind (`KasToToken_buy`, `TokenToKas_sell`, `TokenSwap_swap`), the most likely to survive a
-    /// conflicting fill. See [`actor_for`].
+    /// Router actor, which is the fill shape the keeper must use. See [`actor_for`].
+    ///
+    /// Default: the one-order resting shape of the intent kind (`KasToToken_buy`,
+    /// `TokenToKas_sell` or `TokenSwap_swap`). It is the shape most likely to survive a conflicting
+    /// fill.
     pub actor: Option<String>,
     /// KasToToken: most sompi the asks may demand at their quotes (required).
     pub max_pay: Option<u64>,
-    /// KasToToken: most sompi for the merchant's carrier, fillers and the network fee. A single cap: whoever executes the
-    /// intent may keep up to `max_extra` of the payer's KAS, so set it tight. Default ([`default_max_extra`]): what the
-    /// actor's shape needs (the merchant carrier, the fillers of the shape, the execution's fee) at 5 times `fee_rate`
-    /// (the relay floor when unset) plus a small margin, e.g. the carrier + 0.14 KAS for the default one-ask shape on an 8/8 token.
+    /// KasToToken: most sompi for the merchant's carrier, fillers and the network fee.
+    ///
+    /// This is a single cap. Whoever executes the intent may keep up to `max_extra` of the payer's
+    /// KAS, so set it tight. The default comes from [`default_max_extra`]. It covers what the
+    /// actor's shape needs (the merchant carrier, the fillers and the execution fee) at 5 times
+    /// `fee_rate`, plus a small margin. The relay floor stands in when `fee_rate` is unset.
     pub max_extra: Option<u64>,
     /// TokenToKas / TokenSwap: most units of the pay token sold (required).
     pub max_sell: Option<i64>,
-    /// TokenToKas / TokenSwap: units locked (default `max_sell`, KRON `max_sell + 1`: a KRON intent locks more than
-    /// it may sell, its change output holds at least one unit); the rest comes back at execution.
+    /// TokenToKas / TokenSwap: units locked. The rest comes back at execution.
+    ///
+    /// Default: `max_sell`, or `max_sell + 1` for KRON. A KRON intent locks more than it may sell
+    /// because its change output holds at least one unit.
     pub lock_amount: Option<i64>,
     /// TokenToKas / TokenSwap: KAS of the intent UTXO, what the keeper may spend on fillers and the
     /// network fee besides the proceeds (default 1 KAS).
     pub keeper_value: u64,
     /// KAS carrier of the locked token UTXO (default: the policy's minimum carrier).
     pub lock_carrier: Option<u64>,
-    /// Authorization lifetime = how long the facilitator may execute. Default: 5 minutes, or the offer's
-    /// `maxTimeoutSeconds` when shorter; an explicit value above `maxTimeoutSeconds` is an error.
+    /// Authorization lifetime, which is how long the facilitator may execute.
+    ///
+    /// Default: 5 minutes, or the offer's `maxTimeoutSeconds` when that is shorter. An explicit
+    /// value above `maxTimeoutSeconds` is an error.
     pub expires_in_ms: Option<u64>,
-    /// Fee rate of the creation (sompi per gram), e.g. the node's estimate of the dynamic fee policy (default: the
-    /// relay floor).
+    /// Fee rate of the creation (sompi per gram), e.g. the node's estimate of the dynamic fee
+    /// policy (default: the relay floor).
     pub fee_rate: Option<u64>,
     pub fee_mode: FeeMode,
-    /// Explicit `payment-identifier` id (default: a fresh random one, [`crate::client::native::random_payment_id`]).
+    /// Explicit `payment-identifier` id. Default: a fresh random one
+    /// ([`crate::client::native::random_payment_id`]).
     pub payment_identifier: Option<String>,
 }
 
@@ -130,8 +148,8 @@ impl Default for IntentOptions {
     }
 }
 
-/// The actor of a fill shape: `asks` asks (the last resting or not) and `bids` bids, selling a token A of `a_family`
-/// (KCC-20 for a KasToToken intent).
+/// The actor of a fill shape: `asks` asks (the last resting or not) and `bids` bids, selling a
+/// token A of `a_family` (KCC-20 for a KasToToken intent).
 pub fn actor_for(
     kind: IntentKind,
     asks: usize,
@@ -156,8 +174,8 @@ pub struct PreparedIntent {
     pub digest: [u8; 32],
     pub expires_at: String,
     pub payer_address: Option<String>,
-    /// The payer's worst case: sompi (KasToToken: the intent value plus the creation fee) and token units
-    /// (TokenToKas / TokenSwap: `max_sell`, plus the KAS of the intent and the creation fee).
+    /// The payer's worst case: sompi (KasToToken: the intent value plus the creation fee) and token
+    /// units (TokenToKas / TokenSwap: `max_sell`, plus the KAS of the intent and the creation fee).
     pub worst_kas: u64,
     pub worst_tokens: i64,
     /// The `payment-identifier` id the commitment binds.
@@ -181,8 +199,9 @@ pub struct IntentPayment {
 }
 
 impl IntentPayment {
-    /// The creation as the one attempt of [`crate::client::retry::pay_intent_with_retry`]: its payload, payment id, the
-    /// creation's id and the outpoints it spends (all of them the payer's).
+    /// The creation as the one attempt of [`crate::client::retry::pay_intent_with_retry`]: its
+    /// payload, payment id, the creation's id and the outpoints it spends (all of them the
+    /// payer's).
     pub fn attempt(&self) -> crate::client::retry::Built<PaymentPayload> {
         let consumed: Vec<crate::chain::Outpoint> = self.tx.inputs.iter().map(crate::common::outpoint_of).collect();
         crate::client::retry::Built {
@@ -199,7 +218,8 @@ impl IntentPayment {
         }
     }
 
-    /// The intent's deadline (unix ms): the authorization's expiry, from which anyone may expire the intent.
+    /// The intent's deadline (unix ms): the authorization's expiry, from which anyone may expire
+    /// the intent.
     pub fn deadline_ms(&self) -> Option<u64> {
         crate::common::parse_iso_ms(&self.payload.payload.authorization.expires_at)
     }
@@ -219,8 +239,9 @@ fn positive(v: Option<u64>, what: &str) -> Result<u64> {
         .ok_or_else(|| err(Diag::InvalidKaspaX402Payload, format!("{what} is required (positive)")))
 }
 
-/// Builds an intent creation (unsigned). `pay_asset` is `"KAS"` or the pay token's covenant id (one of
-/// the offer's `payAssets`).
+/// Builds an unsigned intent creation.
+///
+/// `pay_asset` is `"KAS"` or the pay token's covenant id, one of the offer's `payAssets`.
 pub fn prepare_intent(
     policy: &Policy,
     offer: &PaymentRequirements,
@@ -300,8 +321,9 @@ pub fn prepare_intent(
     if lifetime == 0 || lifetime > ttl_cap {
         return Err(err(Diag::AuthorizationExceedsMaxTimeout, "the intent lifetime must be within maxTimeoutSeconds"));
     }
-    // The authorization expires at the intent's deadline: from it on anyone may expire the intent (the router returns
-    // the payer's KAS and tokens); the verifier recomputes the deadline from `expiresAt`.
+    // The authorization expires at the intent's deadline. From then on anyone may expire the
+    // intent, and the router returns the payer's KAS and tokens. The verifier recomputes the
+    // deadline from `expiresAt`.
     let deadline_ms = now_ms + lifetime;
     let deadline = i64::try_from(deadline_ms).map_err(|_| err(Diag::InvalidAuthorization, "the deadline is out of range"))?;
     let (state, terms, value, lock_amount) = match kind {
@@ -391,7 +413,7 @@ pub fn prepare_intent(
     state.check().map_err(|e| err(Diag::InvalidKaspaX402Payload, e.to_string()))?;
     state.check_actor(actor).map_err(|e| err(Diag::RouteUnsupported, e.to_string()))?;
     let expires_at = iso_from_ms(deadline_ms);
-    // the payment identifier is chosen here: the commitment binds it
+    // The payment identifier is chosen first because the commitment binds it.
     let payment_identifier = crate::common::resolve_payment_id(opts.payment_identifier.as_deref())?;
     let digest = intent_commit_digest(
         &PayloadCommit {
@@ -410,7 +432,7 @@ pub fn prepare_intent(
         },
         actor.name,
     )?;
-    // tokens: the pay token's key-owned, borrow-disabled UTXOs, largest first, enough for the lock
+    // Tokens: the pay token's key-owned, borrow-disabled UTXOs, largest first, enough for the lock.
     let mut tokens = vec![];
     if let Some(t) = pay_token {
         let mut sorted: Vec<&TokenUtxo> = funds
@@ -454,9 +476,10 @@ pub fn prepare_intent(
         records: vec![Record::X402 { reference: digest.to_vec() }],
         fee: FeeOptions { fee_rate: opts.fee_rate, fee_mode: opts.fee_mode },
     };
-    // KAS funding: the fewest of the payer's coins, largest first, that pay the value, the carriers and the fee, within the
-    // verifier's input bound (the builder spends every funding coin it is given; a payer with more coins than the bound could
-    // not create an intent at all: TN10 soak 2026-10-06, "input count must be 1..=32")
+    // KAS funding: the fewest of the payer's coins, largest first, that pay the value, the carriers
+    // and the fee, within the verifier's input bound. The builder spends every funding coin it is
+    // given. Passing all coins would make a payer with more coins than the bound unable to create
+    // an intent at all.
     let mut coins: Vec<KeyUtxo> = funds.funding.clone();
     coins.sort_by(|a, b| {
         b.utxo.amount.cmp(&a.utxo.amount).then((a.utxo.transaction_id, a.utxo.index).cmp(&(b.utxo.transaction_id, b.utxo.index)))
@@ -517,9 +540,10 @@ impl PreparedIntent {
         kob_protocol::tx::sign_locally(&self.built, keys).map_err(Into::into)
     }
 
-    /// Finalizes with the wallet signatures and builds the `PAYMENT-SIGNATURE` payload. The creation is
-    /// NOT broadcast by the payer: the facilitator does it (a creation the payer broadcasts itself is
-    /// refused, because anyone holding the offer could then present it first).
+    /// Finalizes with the wallet signatures and builds the `PAYMENT-SIGNATURE` payload.
+    ///
+    /// The payer must not broadcast the creation. The facilitator does. A creation the payer
+    /// broadcasts itself is refused, because anyone holding the offer could then present it first.
     pub fn complete(&self, signatures: &[InputSignature]) -> Result<IntentPayment> {
         let signed = kob_protocol::tx::finalize(&self.built, signatures, kob_protocol::tx::FinalizeOptions { tighten_budgets: true })?;
         let (tx, entries) = signed.tx.to_tx()?;
@@ -615,11 +639,15 @@ pub fn pay_intent(
     prepared.complete(&sigs)
 }
 
-/// The payer's cancel of an intent that was not executed (unsigned: the payer signs the intent input,
-/// SIGHASH_ALL). Everything returns to the payer: the intent's KAS and, for a token intent, the locked
-/// tokens (with their carrier). Broadcast it once the authorization expired without a settlement; before
-/// that it races the facilitator's execution (either may win, never both). `fee_rate`: sompi per gram (default
-/// the relay floor); the fee comes out of the intent's own KAS.
+/// Builds the unsigned cancel of an intent that was not executed.
+///
+/// The payer signs the intent input with SIGHASH_ALL. Everything returns to the payer: the
+/// intent's KAS and, for a token intent, the locked tokens with their carrier. Broadcast it once
+/// the authorization expired without a settlement. Before that it races the facilitator's
+/// execution, and either may win but never both.
+///
+/// `fee_rate` is in sompi per gram (default: the relay floor). The fee comes out of the intent's
+/// own KAS.
 pub fn cancel_intent(payment: &IntentPayment, fee_rate: Option<u64>) -> Result<BuiltTx> {
     let r = CancelIntent {
         actor: payment.actor.clone(),
