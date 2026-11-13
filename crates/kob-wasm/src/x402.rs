@@ -1228,8 +1228,10 @@ fn snapshot_of(payload: &PaymentPayload, daa: Option<u64>) -> R<Snapshot> {
             },
         );
     }
-    let lock = parsed.tx.lock_time;
-    Ok(Snapshot { utxos, daa: daa.unwrap_or(lock).max(lock) })
+    // A DAA lock time is final only strictly below the virtual score, so an offline check without
+    // a score assumes the first score at which the payment can be final.
+    let earliest = parsed.tx.lock_time.saturating_add(1);
+    Ok(Snapshot { utxos, daa: daa.unwrap_or(earliest).max(earliest) })
 }
 
 #[derive(Deserialize)]
