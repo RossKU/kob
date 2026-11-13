@@ -120,8 +120,9 @@
 //! - Within [`PROMOTE_CHECK_TIMEOUT`] it shows the right network and is synced. It knows the
 //!   cursor, and the cursor is on its selected chain.
 //!
-//! The first answers of the new authority from the cursor may remove at most [`SETTLE_MAX_REORG`]
-//! chain blocks and must know the cursor. Otherwise they are refused.
+//! The new authority settles with its first answer from the cursor that passes this check: it may
+//! remove at most [`SETTLE_MAX_REORG`] chain blocks and must know the cursor. An answer that fails
+//! it is refused. Only that one answer is checked.
 //!
 //! The old authority is a secondary node now. It is cut off from the pair until its alarm ends. The
 //! health watch probes it with chain requests. The alarm ends when they answered for
