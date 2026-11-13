@@ -155,3 +155,25 @@ Pinned to commit [`47792a0e`](https://github.com/RossKU/kob/tree/47792a0eba552e0
   or the only side present ([`guards.ts` L32-L37](https://github.com/RossKU/kob/blob/47792a0eba552e0469643c9d11b95d71b135c520/web/src/kob/guards.ts#L32-L37)). On a book with no orders at all the last trade
   price is the reference instead (the sentence then says "the last trade price"), with the same 10% and 50% thresholds. With no orders and
   no trade there is nothing to compare with, so no warning shows.
+
+## 8. Where do resting orders live on L1, and how did the contracts hold up against hostile transactions?
+
+Pinned to commit [`f686aa08`](https://github.com/RossKU/kob/tree/f686aa08c0720696fdeb72f18038c32885b382d5).
+
+- **An unfilled order is just a UTXO.** Placing an order moves the maker's tokens (an ask) or KAS (a bid) into a UTXO locked by the
+  order's covenant script. The script's state holds the price, the amount left, the expiry and the maker's key
+  ([`KobAsk.sil`](https://github.com/RossKU/kob/blob/f686aa08c0720696fdeb72f18038c32885b382d5/contracts/orders/KobAsk.sil)). There is no contract storage, no account state and no EVM: the book is
+  the set of order UTXOs on chain, and an indexer only reads them (`docs/spec/order-types.md`).
+- **It sits there until one of three things happens.** A fill spends it and pays the maker by the covenant's rules (a partial fill
+  leaves a new UTXO with the smaller amount). The maker cancels it with their own signature
+  ([`KobAsk.sil` L332-L337](https://github.com/RossKU/kob/blob/f686aa08c0720696fdeb72f18038c32885b382d5/contracts/orders/KobAsk.sil#L332-L337)). Or, after its expiry (at the latest 90 days without a
+  fill), anyone may send the refund, which returns the funds to the maker (a keeper keeps at most the small tip the order
+  offers for sending it)
+  ([`KobAsk.sil` L207-L213](https://github.com/RossKU/kob/blob/f686aa08c0720696fdeb72f18038c32885b382d5/contracts/orders/KobAsk.sil#L207-L213)).
+- **No admin keys.** No contract has an owner, an upgrade path or a pause. The only signature an order checks is the maker's, and
+  only to cancel. KOB cannot move, freeze or re-price an order.
+- **Hostile transactions.** An external red team (Kaspero Labs, with their kaspa-redteam tool) built 23,874 hostile transactions
+  against the order and router covenants and had rusty-kaspa's consensus judge each one. 75 were accepted, and none is a bug: 60 stay
+  within an amount the payer signed for (`max_extra`), and 15 were left open only because the tool could not yet read that token
+  program ([report](https://github.com/RossKU/kob/blob/f686aa08c0720696fdeb72f18038c32885b382d5/docs/security/REDTEAM-2026-11-kaspero.md)). A pass is not an audit or a guarantee, and KOB has had no external
+  security audit (`SECURITY.md`).
