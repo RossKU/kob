@@ -847,13 +847,16 @@ function kobBinary() {
   return ['release', 'debug'].map((d) => join(REPO_ROOT, 'target', d, exe)).find((f) => existsSync(f)) ?? null;
 }
 
-/** `kob take <id> --amount n` with the DEV key (env only, never printed) against the node and indexer of the run; returns the parsed outcome. */
-function kobTake(rc, covenantId, amount, label, bin) {
+/**
+ * `kob take <id> --amount n --yes` with the DEV key (env only, never printed) against the node and indexer of the run; returns the parsed outcome.
+ * `--yes` needs a price bound: `bound` is `['--max-price', '0.5KAS']` (taking a sell order) or `['--min-price', '0.5KAS']` (taking a buy order).
+ */
+function kobTake(rc, covenantId, amount, bound, label, bin) {
   const env = loadRealEnv();
   const stateDir = join(OUT_DIR, 'kob-state');
   mkdirSync(stateDir, { recursive: true });
   const args = ['take', covenantId, '--amount', `${BigInt(amount) * TOKEN}base`, '--network', 'testnet-10', '--node', env.NODE_WS || TN10_NODE, '--indexer', rc.indexerUrl,
-    '--registry', join(OUT_DIR, `registry-tn10.test.${rc.name}.json`), '--yes', '--json'];
+    '--registry', join(OUT_DIR, `registry-tn10.test.${rc.name}.json`), ...bound, '--yes', '--json'];
   const res = spawnSync(bin, args, { encoding: 'utf8', env: { ...process.env, KOB_KEY: env.DEV_PRIVATE_KEY, KOB_STATE_DIR: stateDir }, timeout: 180_000 });
   const scrub = (s) => String(s ?? '').split(env.DEV_PRIVATE_KEY).join('<key>');
   const out = scrub(res.stdout), err = scrub(res.stderr);
@@ -881,8 +884,11 @@ export async function runFill(rc) {
       await waitLive(rc, p.covenantIds, 90_000);
       // the taker reads the order from the indexer: wait until it lists it
       for (let i = 0; i < 60; i++) { const rr = await fetch(`${rc.indexerUrl}/v1/orders/${p.covenantIds[0]}`).catch(() => null); if (rr?.ok) break; await sleep(3000); }
-      let t = kobTake(rc, p.covenantIds[0], 2, label, bin);
-      for (let i = 0; i < 3 && !t.txid; i++) { await sleep(10_000); t = kobTake(rc, p.covenantIds[0], 2, label, bin); }
+      // the wallet's order is at 0.5 KAS with no tip: the taker buys from its sell at most at that price and sells into its buy at least at it
+      // (an order that crossed the book is an auction that reaches 0.5 within 20 s; until then the bound refuses and the retries wait)
+      const bound = side === 'sell' ? ['--max-price', '0.5KAS'] : ['--min-price', '0.5KAS'];
+      let t = kobTake(rc, p.covenantIds[0], 2, bound, label, bin);
+      for (let i = 0; i < 3 && !t.txid; i++) { await sleep(10_000); t = kobTake(rc, p.covenantIds[0], 2, bound, label, bin); }
       r.steps.push({ name: `taker fills the wallet ${side} (kob take, DEV key)`, txid: t.txid, status: t.status, stderr: t.stderr, stdoutHead: t.txid ? undefined : t.stdoutHead, plan: t.json?.plan ? JSON.stringify(t.json.plan).slice(0, 3000) : undefined });
       if (!t.txid) throw new Error(`kob take did not fill the wallet ${side}: status ${t.status} ${t.stderr}`);
       log(`[${rc.name}] ${label}: wallet order ${short(p.txid)}, taker tx ${short(t.txid)}`);
