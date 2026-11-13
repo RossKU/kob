@@ -694,7 +694,8 @@ export function PriceChart(props: PriceChartProps) {
         {/* the unit stays when there is nothing to read out (a market with no trades yet) */}
         <span class="chart-unit" data-testid="chart-unit">{unitParts(t('market.chart.unitOf', inverted ? { base: usd ? (props.quoteTicker ?? 'USD') : 'KAS', quote: props.ticker } : { base: props.ticker, quote: usd ? (props.quoteTicker ?? 'USD') : 'KAS' }))}</span>
       </div>
-      <ErrorBanner error={candles.error ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
+      {/* bars on screen stay as they are when a refresh fails (the indexer going away: the page switches to the node, which keeps them); the banner is for a chart with nothing to show */}
+      <ErrorBanner error={(current ? null : candles.error) ?? libError} title={t('market.chart.error')} onRetry={candles.reload} />
       <div class="chart-box">
         <div class="chart-canvas" ref={boxRef} aria-hidden="true" />
         {drawings.length ? (

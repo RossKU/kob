@@ -28,7 +28,6 @@ import { TipBadge } from '../market/TipBadge';
 import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
-import { useSystemStatus } from '../shell/StatusProvider';
 import { AmendDialog } from './AmendDialog';
 import { ReplaceDialog } from './ReplaceDialog';
 import { AutoRefundToggle } from './AutoRefund';
@@ -113,7 +112,6 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   };
   const services = useServices();
   const wallet = useWallet();
-  const { indexer: health } = useSystemStatus();
   const pubkey = wallet.info?.pubkey;
   const canSign = !!wallet.info && !wallet.networkMismatch;
 
@@ -518,7 +516,6 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       </div>
 
       {wallet.networkMismatch ? <Banner tone="error" data-testid="orders-network-blocked">{t('orders.networkBlocked')}</Banner> : null}
-      {d?.indexerError ? <Banner tone="warn" data-testid="orders-indexer-down">{t('orders.indexerDown')}</Banner> : null}
       {d?.straysError && !d.indexerError ? <Banner tone="warn" data-testid="orders-strays-down">{t('orders.straysDown')}</Banner> : null}
       {wallet.records.persistent?.() === false && (d?.records.length ?? 0) > 0 ? (
         // C5 W-14: the browser storage refused the placement records: they live in this tab only, the user must keep a backup
@@ -536,7 +533,6 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         </Banner>
       ) : null}
       {d?.nodeError ?<Banner tone="warn" data-testid="orders-node-down">{t('orders.nodeDown', { message: d.nodeError.message })}</Banner> : null}
-      {health.assessment.level === 'bad' && !d?.indexerError ? <Banner tone="warn">{t('orders.stale')}</Banner> : null}
       <ErrorBanner error={data.error} onRetry={data.reload} data-testid="orders-error" />
       {failure ? (
         <Banner tone="error" data-testid="orders-action-error">

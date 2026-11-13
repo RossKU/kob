@@ -10,7 +10,6 @@ import { Badge, Banner, Button, displayPriceDp, ErrorBanner, groupingPriceDp, Se
 import { OrderTicket } from '../ticket/OrderTicket';
 import { CrossCheckBanner } from './CrossCheckBanner';
 import { NodeDownNote } from '../shell/NodeDownNote';
-import { useSystemStatus } from '../shell/StatusProvider';
 import { clockText, useStandalone } from '../shell/standalone';
 import { buildBookModel, displayGroupSizes, groupSizesAt, inferTick, levelsFromView } from './book-model';
 import { useStaleSince } from './book-stale';
@@ -52,21 +51,6 @@ import { MarketActivity } from '../activity/ActivityPage';
 import { tradeRows } from './trades-model';
 import './market.css';
 
-/** Standalone mode (data/standalone.ts): a figure built from what was seen since the mode started says so. */
-function SinceBadge(props: { since: number; area: string; /** what the indexer gave before the mode is kept: when it was read */ until?: number | null }) {
-  if (props.until != null) {
-    return (
-      <Badge tone="info" data-testid={`${props.area}-standalone`} data-kept="1" title={t('market.standalone.keptHint')}>
-        {t('market.standalone.kept', { until: clockText(props.until), since: clockText(props.since) })}
-      </Badge>
-    );
-  }
-  return (
-    <Badge tone="info" data-testid={`${props.area}-standalone`} title={t('market.standalone.sinceHint')}>
-      {t('market.standalone.since', { time: clockText(props.since) })}
-    </Badge>
-  );
-}
 const TAPE_LIMIT = 50;
 
 /**
@@ -76,17 +60,13 @@ const TAPE_LIMIT = 50;
 export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string }) {
   const services = useServices();
   const wallet = useWallet();
-  const { indexer: health } = useSystemStatus();
   const { registry, indexer, kob, config } = services;
   const id = props.covenantId;
   const { favorites, change: changeFavorites } = useFavorites(config.network);
-  // standalone mode: the book, the trades and the figures come from what this page saw on the node since `sa.sinceMs`
+  // standalone mode: the book, the trades and the figures come from the node, on top of what the page last read from the indexer (data/stream-carry.ts)
   const sa = useStandalone(services.standalone);
   const standalone = sa?.active ? sa : null;
-  // what the indexer gave this page before the mode (data/stream-carry.ts): the token's facts (the token list) and its market figures, with when they were read
   const carry = standalone ? services.standalone?.carry ?? null : null;
-  const keptTokenAt = carry?.tokenAt(id) ?? null;
-  const keptMarketAt = carry?.marketAt(id) ?? null;
   // the close of a position (My orders): `?ticket=sell&amount=N` (buy first) opens the ticket on a market SELL of the N base units the position
   // bought and has not sold yet, `?ticket=cover&amount=N` (sell first) on a market BUY of the N it sold; `?ticket=close` on "close (sell all)"
   const [prefill, setPrefill] = useState<{ side?: 'buy' | 'sell'; price?: bigint; amount?: bigint; type?: 'close' | 'market'; seq?: number } | undefined>(
@@ -331,15 +311,14 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   }
 
   const info = row.info;
-  // the standalone book is the node's, not an indexer's that fell behind
-  const stale = !standalone && (health.assessment.level === 'warn' || health.assessment.level === 'bad');
   const liveKind = standalone ? 'standalone' : mode;
   const liveBadge = (
     <Badge tone={mode === 'live' ? 'ok' : mode === 'polling' ? 'info' : 'neutral'} data-testid="live-indicator" title={t(`market.live.${liveKind}Hint`)}>
       {t(`market.live.${liveKind}`)}
     </Badge>
   );
-  const since = standalone?.sinceMs ?? null;
+  // standalone mode with no resting orders of this market read from the indexer before (on from the start): the book holds only what the node showed since
+  const partialSince = standalone && carry?.ordersAt(id) == null ? standalone.sinceMs : null;
   // an open-list token is traded in standalone mode only with decimals known without the indexer (its declaration or its program's default): the
   // scale its orders seen since the mode started use is no evidence of the market's
   const standaloneScaleBlocked = !!standalone && scaleNeedsIndexer(row, open.reason, carry?.scaleOf(id) != null);
@@ -399,16 +378,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </Banner>
           ) : null}
           <CrossCheckBanner token={id} refreshKey={liveKey} />
-          {since !== null ? (
-            <div class="row">
-              <SinceBadge since={since} area="stats" until={keptMarketAt} />
-              {keptTokenAt !== null ? (
-                <Badge tone="info" data-testid="token-kept-standalone" title={t('market.standalone.tokenKeptHint')}>
-                  {t('market.standalone.tokenKept', { time: clockText(keptTokenAt) })}
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
         </>
       }
       book={
@@ -419,7 +388,6 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
           actions={
             <>
               <BookViewSwitch view={bookPanel.view} onChange={bookPanel.setView} />
-              {stale ? <Badge tone={health.assessment.level === 'bad' ? 'bad' : 'warn'} data-testid="book-stale">{t('market.book.stale')}</Badge> : null}
               {/* the book's own controls keep their place while the depth chart is shown (market.css hides them, so the header does not change) */}
               <div class="ob-tools book-only">
                 {/* the steps come from the book's tick: no book on screen yet (loading, indexer unreachable), no grouping to offer */}
@@ -432,10 +400,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
             </>
           }
         >
-          <BookPanelBody view={bookPanel.view} depth={<>{since !== null ? <div class="book-depth-note"><SinceBadge since={since} area="depth" /></div> : null}{depthChart}</>}>
+          <BookPanelBody view={bookPanel.view} depth={depthChart}>
             {!indexer ? <Banner tone="info">{t('market.book.noIndexer')}</Banner> : null}
-            {standalone && since !== null ? (
-              <p class="small muted" data-testid="book-standalone">{t(standalone.reason === 'manual' ? 'market.book.standaloneManual' : 'market.book.standaloneAuto', { time: clockText(since) })}</p>
+            {partialSince !== null ? (
+              <p class="small muted book-stale-since" title={t('market.book.partialHint')} data-testid="book-partial">{t('market.book.partial', { time: clockText(partialSince) })}</p>
             ) : null}
             {/* with a book on screen a failed pull is only the subtle marker below; the banner is for a page that has no book to show */}
             <ErrorBanner error={book.data ? null : book.error} title={t('market.book.error')} onRetry={book.reload} data-testid="book-error" />
@@ -447,7 +415,7 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
         </Section>
       }
       chart={
-        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card" actions={since !== null ? <SinceBadge since={since} area="chart" until={keptMarketAt} /> : undefined}>
+        <Section title={t('market.chart.title')} data-testid="chart-section" class="mkt-area-chart mkt-card">
           <PriceChart indexer={indexer} token={id} decimals={decimals} ticker={name} dp={dp} refreshKey={liveKey} resyncKey={resyncKey} inverted={inverted} {...kascovChartGate(kascovStatus, [{ token: id, decimals, priced: !!headerRow?.kascov?.spot }])} />
         </Section>
       }

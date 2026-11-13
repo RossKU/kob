@@ -48,7 +48,7 @@ export default {
   'issues.SLICE_AMOUNT_INVALID': 'The amount per slice must be greater than zero.',
   'issues.TWAP_EXCEEDS_LIFE': 'The schedule ({slices} slices every {intervalDaa} DAA) does not fit into the order life.',
   'issues.TWAP_SINGLE_SLICE': 'A slice is larger than the order: placed as one slice.',
-  'issues.NO_LIQUIDITY': 'No {counterparty} in the book to price a market order.',
+  'issues.NO_LIQUIDITY': 'No {counterparty} in the book to price a market order: place a limit order instead.',
   'issues.MARKET_DEPTH_INSUFFICIENT': 'Only {available} of your {amount} is in the book within your slippage; the rest is returned unfilled.',
   'issues.MARKET_ONE_TX_LIMIT': 'One transaction takes at most {perTx} {counterparty}: your amount needs about {needed} fills, so about {fillable} fills now and the rest returns. Raise Fills to trade more.',
   'issues.IOC_ONE_TX_LIMIT': 'One transaction takes at most {perTx} {counterparty}: your amount needs about {needed} fills, so about {fillable} fills now and the rest returns.',

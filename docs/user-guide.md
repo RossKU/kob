@@ -194,7 +194,7 @@ every market.
 * Not listed yet: cancels, amends, refunds, kills, expiries and stop arms. The indexer records them per order only; they join the log
   with an indexer update. Which executor sent a fill is not recorded on chain in a form the indexer keeps, so the log shows roles, not
   executors.
-* In standalone mode the log shows what the page saw on your node since the mode started ("since hh:mm"), and nothing older.
+* In standalone mode the log keeps the rows it had read from the indexer and adds what the page sees on your node.
 
 ## 5. Limit and market orders
 
@@ -317,8 +317,9 @@ your transactions.
 
 | You see | Meaning and what to do |
 |---|---|
-| "Order book data may be out of date" with "The indexer cannot be reached" | Books and order status may be old or missing. **Cancelling your orders still works** (from your records and the node). With the standalone fallback on (the default), the page switches to standalone mode after a few seconds (below); with it off, placing new orders waits until an indexer answers. |
-| "Standalone mode: the market from the node since hh:mm" | The indexer cannot be used (down, more than 10 minutes behind, without its node or on another network), or you switched standalone mode on in Settings. The page follows your Kaspa node itself; see "Standalone mode" below. |
+| "Switching to your node…" | The indexer just stopped answering. With the standalone fallback on (the default) the page switches to standalone mode at once (below); the ticket says the same for that moment. |
+| "Trading through your node since hh:mm" | The indexer cannot be used (down, more than 10 minutes behind, without its node or on another network), or you switched standalone mode on in Settings. The page follows your Kaspa node itself; see "Standalone mode" below. The bell also has one notification when the page switches to the node, and one when it is back on the indexer. |
+| "Order book data may be out of date" with "The indexer cannot be reached" | Only with the standalone fallback off: books and order status may be old or missing, and placing new orders waits until an indexer answers. **Cancelling your orders still works** (from your records and the node). |
 | "The indexer is behind the chain by ..." | Prices and status may be older than the chain. |
 | "The indexer is ... behind the chain. Do not trust the book shown" | Orders may already be filled or cancelled. Wait or use another indexer (Settings). |
 | "The indexer is catching up" / "starting" | Data is incomplete for a while. |
@@ -334,9 +335,15 @@ your transactions.
 
 A book marked "stale since hh:mm:ss" is the last good book; the latest indexer answer was late or failed.
 
+The dot in the network chip of the header says whether trading works: **green**, through the indexer; **yellow**, through your node
+(standalone mode), a backup indexer or an indexer behind the chain, or while the page switches to your node; **red**, your Kaspa node cannot
+be reached (nothing can be read or signed), or the indexer is down with the standalone fallback off. Its tooltip and the chip's panel say
+which.
+
 ### Standalone mode: the market from your node
 
-When the indexer cannot be used, the page does not show an empty market. It follows the new blocks of the Kaspa node it is connected to,
+When the indexer cannot be used, the page does not show an empty market, and it does not wait: the first read that finds the indexer down
+starts the switch (one more look a second later, so a single lost answer does not). It follows the new blocks of the Kaspa node it is connected to,
 reads the KOB orders placed in them (the same placement records the indexer reads, checked the same way) and follows them through the
 transactions that fill, amend or cancel them. **No other server is asked**, and no one else is trusted: every order is checked on your node
 before it is listed (its output must exist, unspent, at the script its terms produce under the contract templates this app pins), and an
@@ -344,12 +351,16 @@ order you take is checked again exactly as in section 5 before you sign.
 
 What it shows, and its limits:
 
-- **A partial book.** The book is labelled "Orders seen since hh:mm (indexer unavailable; older orders are not shown)". An order placed
-  before that time appears only if it is yours (found from this browser's records, as under My orders) or once a transaction fills, amends or
-  sweeps it. Older orders that nobody touches are not shown, even though they exist: the book may look thinner, and prices worse, than they are.
+- **The book the indexer listed stays.** The page keeps the resting orders of the markets it read from the indexer (read beside the book,
+  at most once a minute). Switching, it starts its book from them: each one is asked on your node at once, and one the node no longer holds
+  (filled or cancelled while the indexer was away) leaves the book; a block that fills, amends or cancels one moves it like any other order.
+  A market order is planned against these orders, and every order it takes is checked on the node again before you sign. An order placed
+  while the indexer was away and before the page followed the blocks is not seen. A page that read no book of a market from the indexer (standalone
+  mode on from the start) has only what your node showed: its book says "orders seen since hh:mm".
 - **Your own orders** from this browser's records are listed and checked on the node. Records from another device or browser are not here
   (import a backup, section 13).
-- **Only plain limit orders** rest in this book: asks and bids that are good till cancelled, without a price auction, worth at least 1 KAS.
+- **Only plain limit orders** rest in this book: asks and bids that are good till cancelled, without a price auction, worth at least 1 KAS
+  (an order the indexer listed keeps the indexer's verdict).
   Stop and take-profit orders, if-done entries, IOC / FOK orders and pair orders are not listed. A partially filled order is followed when
   the app can derive its new state from the fill; when it cannot, the order leaves the book until the indexer is back.
 - **What the page already read from the indexer stays.** Going standalone, by the switch in Settings or by the automatic fallback, does not
@@ -357,24 +368,23 @@ What it shows, and its limits:
   24 h figures and the trades of the markets it loaded, the activity log's rows (once the log had been on screen), and the token list with the
   facts of each token (so an open-list token such as TUSD, whose decimals come from the indexer's market scale, stays listed with its market
   page, its Trade tab and its ticket, trusted exactly as before the switch). What your node shows after the switch is added: a fill becomes
-  a new trade, a new candle (or joins the last one) and a new activity row. Each kept part says so: the chart, the figures and the log are marked
-  "Indexer data until hh:mm, then from your node (since hh:mm)" (the first time is when the page last read the indexer for it), and the token
-  says "Token facts from the indexer (read until hh:mm)". Fills between the two times, and anything older than what the page had loaded,
-  are not there: the node cannot supply them. The 24 h figures add the kept figures to what the node saw since, so they cover up to 24 h before
+  a new trade, a new candle (or joins the last one) and a new activity row. Nothing on the page marks it (the header's dot is yellow). Fills
+  between the last indexer read and the switch, and anything older than what the page had loaded, are not there: the node cannot supply them. The 24 h figures add the kept figures to what the node saw since, so they cover up to 24 h before
   the last indexer read and nothing older; 24 h after that read only the last price is kept. A market, a token or a log the page never loaded
   from the indexer in this session has nothing kept and behaves as below.
 - **The rest is from what was seen.** The depth chart, and the last price, 24 h figures, chart and activity log of a market with nothing kept,
-  are built from the fills seen since standalone mode started (a fill counts once your node shows its transaction) and from the partial book. Each is marked
-  "Since hh:mm only (standalone mode)": earlier trades are not included, so "24 h" means "since hh:mm" when that is shorter. The book is never
-  kept: a stale indexer book must not be offered, so it is always the partial book of your node, even for a market whose chart is kept.
-- **Needs the indexer, so unavailable here:** pair markets, holders and token holdings the indexer lists (the token UTXOs known to this
-  browser still work), the order history and fills under My orders, and notifications of your orders. A token the page never read from the
+  are built from the book and the fills seen since standalone mode started (a fill counts once your node shows its transaction): earlier
+  trades are not included, so "24 h" means "since the switch" when that is shorter.
+- **Your tokens stay sellable.** The token holdings the indexer listed for your wallet are kept too; each one is checked on your node before
+  it is offered, so one you spent meanwhile is not.
+- **Needs the indexer, so unavailable here:** pair markets, holders, the order history and fills under My orders, and notifications of your
+  orders. A token the page never read from the
   indexer this session is not listed, and its page says it is not known in standalone mode (the Trade tab keeps leading to it); it opens again once
   the indexer is back. A token without a known declaration or program default for its decimals, and whose market scale the indexer did
   not give this page before the switch, cannot be traded in this mode (its scale cannot be checked without the indexer): the ticket says so.
 - **Trading goes to the node as always**: you sign in your wallet and the page sends the transaction to the node.
-- **Back to the indexer**: when the indexer answers again, the page switches back by itself and its book is used again (the indexer's
-  book wins). What standalone mode collected is dropped; the kept indexer data is replaced by what the indexer says now.
+- **Back to the indexer**: when the indexer answers again (twice, five seconds apart, so one that flickers does not bring it back), the
+  page switches back by itself and its book is used again (the indexer's book wins). What standalone mode collected is dropped; the kept indexer data is replaced by what the indexer says now.
 
 Settings has three switches for it: **"Standalone mode (use the node only)"** keeps the page in standalone mode whatever the indexer does,
 and then the page sends the indexer no request for the market (the token-logo blocklist is still read from it); **"Fall back to standalone

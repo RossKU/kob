@@ -17,12 +17,11 @@ import type { PairFillsView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import { longId } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
-import { Badge, EmptyState, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
+import { EmptyState, ErrorBanner, Section, SortButton, ariaSortOf, scaledUnits, sortBy, useSlideIndicator, useSortState, type SortColumn, type SortValue } from '../kit';
 import { ListPager, RowsControl, showListStart } from '../market/ListPaging';
 import { pageWindow, type ListPageSize } from '../market/market-list';
 import { useHeldUntil, useListPage, useListPageSize, useRising } from '../market/use-market-list';
 import { Popover } from '../shell/Popover';
-import { clockText } from '../shell/standalone';
 import {
   ACTIVITY_DEPTH, ALL_KINDS, confirmationsAt, AVAILABLE_KINDS, PAGE_ROWS, logHasNext, logPage, rowHref, SETTLE_DAA, filterRows, heldView, logPriceDp, marketKeyOf, readPrefs, rowMakers, shownKinds, writePrefs,
   type ActivityKind, type ActivityPrefs, type ActivityRow, type ActorFilter, type MarketFilter, type MarketRef, type PrefsScope,
@@ -370,17 +369,6 @@ function ActivityLogView(props: ActivityLogProps) {
       <span class={`act-dot act-dot-${liveKind}`} title={t(`activity.live.${liveKind}Hint`)} data-testid="activity-live" data-mode={liveKind} role="img" aria-label={t(`activity.live.${liveKind}`)} />
       {t('activity.title')}
       <span class="act-scope muted">{props.market.kind === 'all' ? t('activity.allMarkets') : fmt.marketText(props.market)}</span>
-      {data.sinceMs !== null ? (
-        data.keptUntilMs !== null ? (
-          <Badge tone="info" title={t('activity.keptHint')} data-testid="activity-since" data-kept="1">
-            {t('activity.kept', { until: clockText(data.keptUntilMs), since: clockText(data.sinceMs) })}
-          </Badge>
-        ) : (
-          <Badge tone="info" title={t('activity.sinceHint')} data-testid="activity-since">
-            {t('activity.since', { time: clockText(data.sinceMs) })}
-          </Badge>
-        )
-      ) : null}
     </span>
   );
 
@@ -448,9 +436,6 @@ function ActivityLogView(props: ActivityLogProps) {
             <a href="#/activity" class="small" title={t('activity.allActivityTitle')} data-testid="activity-all-link">
               {t('activity.allActivity')}
             </a>
-          ) : null}
-          {data.sinceMs !== null ? (
-            <span class="small muted" data-testid="activity-nothing-before">{data.keptUntilMs !== null ? t('activity.nothingBeforeKept') : t('activity.nothingBefore', { time: clockText(data.sinceMs) })}</span>
           ) : null}
         </span>
       </div>

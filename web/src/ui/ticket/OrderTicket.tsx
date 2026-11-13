@@ -16,6 +16,7 @@ import { has, t } from '../../i18n';
 import { issueText, keyedText } from '../../i18n/issue-text';
 import { buildErrorText, rawOf } from '../../i18n/build-error';
 import { useSystemStatus } from '../shell/StatusProvider';
+import { useTradingStatus } from '../shell/StatusBar';
 import { planOrder, type Intent } from '../../kob/plan';
 import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
@@ -132,6 +133,8 @@ export function OrderTicket(props: OrderTicketProps) {
   const contended = useCongestion();
   const wallet = useWallet();
   const { indexer: indexerStatus } = useSystemStatus();
+  // the app is taking the market from the node (the indexer just went away): a guard that could not be read says that, the moment it lasts
+  const switching = useTradingStatus().code === 'switching';
   const tradable = token.tradable && token.program !== null && (!quote || (quote.tradable && quote.program !== null));
   // the order scale of this token (10^decimals, at most 10^9; kob-wasm defaultScale): every price is per that many base units
   const scale = 10n ** BigInt(Math.min(token.decimals, 9));
@@ -697,7 +700,10 @@ export function OrderTicket(props: OrderTicketProps) {
   for (const e of typedErrors) reasons.push({ code: `field-${e.field}`, text: `${t(labelKey(form.type, e.field))}: ${t(`ticket.err.${e.code}`, (e.params ?? {}) as Record<string, string | number>)}`, kind: 'field' });
   // a required field that is simply EMPTY (untouched, or just reset after an order) is not an error: no text in the slot (the instruction is on the disabled button,
   // `enterText` below); the slot's red text is for blocking errors only
-  for (const i of issues.filter((x) => x.severity === 'error')) reasons.push({ code: i.code, text: issueText(i, issueCtx), kind: 'issue', ...(rawOf(i) ? { raw: rawOf(i)! } : {}) });
+  for (const i of issues.filter((x) => x.severity === 'error')) {
+    const text = i.code === 'GUARDS_UNAVAILABLE' && switching ? t('ticket.switching') : issueText(i, issueCtx);
+    reasons.push({ code: i.code, text, kind: 'issue', ...(rawOf(i) ? { raw: rawOf(i)! } : {}) });
+  }
   if (ladder && !ladder.ok) reasons.push({ code: 'ladder', text: ladder.errors.map((e) => t(`ticket.ladder.err.${e.code}`, { level: e.level ?? 1, field: e.field ?? '', max: 20 })).join(' '), kind: 'ladder', testid: 'order-ladder-errors' });
   for (const f of ladderFunds) reasons.push({ code: f.code, text: f.text, kind: 'ladder', testid: 'order-ladder-funds' });
   if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });

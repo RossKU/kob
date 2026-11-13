@@ -67,6 +67,7 @@ export default {
   'ticket.need.checking': 'Checking the order...',
   'ticket.need.covenant': 'Run the wallet signing test above first: it is needed once before the first order.',
   'ticket.need.loading': 'Reading {what}: the order can be placed as soon as it is in.',
+  'ticket.switching': 'Switching to your node…',
   'ticket.wait.market': 'the order book',
   'ticket.wait.coins': 'your KAS from the node',
   'ticket.wait.holdings': 'your token holdings',
