@@ -146,13 +146,22 @@ export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged'
   return `${head} ${kas} ${rest}`;
 }
 
+/**
+ * The running merge's card in one line: its transactions and about how much KAS it frees ("5 transactions · about +9 KAS"). The whole summary is
+ * the confirmation's, before the run; the card shows the steps and what the current one waits for.
+ */
+export function mergeRunLine(plan: Pick<MergePlan, 'links' | 'freed'>): string {
+  const txs = countText('tx', plan.links.length);
+  return plan.freed > 0n ? t('orders.merge.runLine', { txs, kas: formatKas(plan.freed) }) : t('orders.merge.runLineCost', { txs, kas: formatKas(-plan.freed) });
+}
+
 /** A link as a flow plan (TxFlow takes the built transaction and the claims to check). */
 export function mergeFlowPlan(link: MergeLink): CancelPlan {
   return { ok: true, issues: link.issues, request: null, built: link.built, cancelIds: [], expected: { cancelIds: [] }, tokensReturned: 0n, kasReleased: 0n, fundingUsed: link.fundingUsed };
 }
 
 /**
- * Link `n` (0-based) of `total` as a flow step, `summary` shown while it runs. The user confirmed the whole run before it started, so the
+ * Link `n` (0-based) of `total` as a flow step, `summary` (one line: `mergeRunLine`) shown while it runs. The user confirmed the whole run before it started, so the
  * step is `preconfirmed`: the wallet's approval is its one prompt. A run of several reports in its card, not with a toast per step.
  */
 export function mergeStep(link: MergeLink, n: number, total: number, summary: string): FlowStep {

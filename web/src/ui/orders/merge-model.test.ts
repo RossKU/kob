@@ -7,7 +7,7 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeAllFrees, mergeFailure, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
+import { mergeAllFrees, mergeFailure, mergeRunLine, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
 import { summarize } from '../../signer/summary';
 import { formatKas } from '../../kob/units';
 
@@ -139,6 +139,12 @@ describe('Merge all: the confirmation and the flow steps', () => {
     const signer = summarize(kob, p.links[0]!.built, MAKER.pk, []);
     const line = signer.lines.find((l) => l.label === 'KAS freed from your token UTXOs (now spendable)');
     expect(line?.value).toBe(`${formatKas(5n * KAS)} KAS`);
+  });
+
+  it('the running card says it in one line: the transactions and about the KAS freed', () => {
+    const p = plan(30);
+    expect(mergeRunLine(p)).toBe(`15 transactions · about +${formatKas(p.freed)} KAS`);
+    expect(mergeRunLine({ ...plan(3), freed: -1_000_000n })).toBe('1 transaction · about −0.01 KAS net');
   });
 
   it('a fee above the freed carriers is stated as a net cost', () => {

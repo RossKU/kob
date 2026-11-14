@@ -15,7 +15,7 @@ import type { PlanEnv, PlanIssue } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { awaitMergeOutputs, mergeFlow, planMergeFor, type MergeFlow } from '../orders/actions';
-import { mergeSummary, mergeTokenOf } from '../orders/merge-model';
+import { mergeRunLine, mergeTokenOf } from '../orders/merge-model';
 import { TxFlow, type FlowOutcome } from '../orders/TxFlow';
 
 /** The issue code the offer answers. */
@@ -85,7 +85,7 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
           return stop(first ? tIssue('orders.issue', first) : t('orders.merge.unsupported'));
         }
         txids.current = [];
-        setFlow({ key: Date.now(), heading: t('ticket.merge.heading', { ticker: a.ticker }), run: mergeFlow(services, pubkey, mt, plan, mergeSummary(plan, a.ticker)) });
+        setFlow({ key: Date.now(), heading: t('ticket.merge.heading', { ticker: a.ticker }), run: mergeFlow(services, pubkey, mt, plan, mergeRunLine(plan)) });
       } catch (e) {
         const raw = e instanceof Error ? e.message : String(e);
         stop(buildErrorText(raw), raw);

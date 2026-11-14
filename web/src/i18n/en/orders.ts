@@ -369,6 +369,8 @@ export default {
   'orders.merge.freed': 'About {freed} KAS of their carriers returns to your wallet (after network fees of about {fee} KAS).',
   'orders.merge.costs': 'The network fees of about {fee} KAS exceed the carriers it frees: your wallet pays about {cost} KAS net.',
   'orders.merge.more': '{after} mergeable UTXOs remain: Merge all again to merge them.',
+  'orders.merge.runLine': '{txs} · about +{kas} KAS',
+  'orders.merge.runLineCost': '{txs} · about −{kas} KAS net',
   'orders.merge.last': 'One UTXO remains.',
   'orders.merge.submitted': 'Submitted: {count} token UTXOs merged into one.',
   'orders.merge.notAccepted': 'The previous merge is not on the node yet. The rest was not sent: Merge all again later.',

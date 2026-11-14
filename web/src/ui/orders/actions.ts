@@ -353,7 +353,7 @@ export interface MergeFlow {
   sent: MergeLink[];
 }
 
-/** Runs `plan` (planned by `planMergeFor`) as a flow whose every step shows `summary`. */
+/** Runs `plan` (planned by `planMergeFor`) as a flow whose every step shows `summary` (one line, merge-model.ts `mergeRunLine`). */
 export function mergeFlow(s: Services, pubkey: Hex, token: MergeToken, plan: MergePlan, summary: string): MergeFlow {
   const total = plan.links.length;
   const sent: MergeLink[] = plan.links.slice(0, 1);

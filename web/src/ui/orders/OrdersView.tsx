@@ -40,7 +40,7 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeFailure, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
 import type { MergePlan, MergeToken } from '../../kob/merge';
 import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
@@ -397,7 +397,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const startMerge = (ask: NonNullable<typeof mergeAsk>) => {
     setMergeAsk(null);
     if (!pubkey) return;
-    const run = mergeFlow(services, pubkey, ask.token, ask.plan, ask.summary);
+    // the card while it runs: the steps and one line, the whole summary was the confirmation's
+    const run = mergeFlow(services, pubkey, ask.token, ask.plan, mergeRunLine(ask.plan));
     startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next });
   };
 
