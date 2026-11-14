@@ -794,529 +794,571 @@ pub(crate) fn plan_leg(
     lock: i64,
 ) -> Result<LegPlan> {
     let suffix = pair_suffix(a, bt);
+    let cx = PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock };
     match (l, calc) {
         (Leg::Pair { order, custody, amount, .. }, PairCalc::Pair { t_arg, f, .. }) => {
-            let s = &order.state;
-            let n = *amount;
-            let ask = s.is_ask();
-            let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
-            let v = order.utxo.amount as i64;
-            let cv = custody.utxo.amount as i64;
-            let maker_ext = kcc20_ext(ttok, s.t_ext);
-            let mut extras = vec![];
-            let (delivery, branch) = if f.rest {
-                extras.push(Extra::Cont(
-                    kas_out(v - s.delivery_carrier - f.tip_kas, "pair continuation")?,
-                    PairState { amount_left: s.amount_left - n, custody: f.out_amount, ..s.clone() }.spk(),
-                ));
-                let st = custody.state.with_amount(f.out_amount);
-                extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
-                (s.delivery_carrier, "rest")
-            } else if f.out_amount > 0 {
-                let st = custody.state.with_amount(f.out_amount).with_user_owner(s.maker);
-                extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
-                (v - f.tip_kas, "return")
-            } else {
-                (v + cv - f.tip_kas, "close")
-            };
-            let mut role = format!("KobPair.settle.{}.{branch}", side_name(ask));
-            if s.interval > 0 {
-                role.push_str(".twap");
-            }
-            if s.slope != 0 {
-                role.push_str(".decay");
-            }
-            let t_tpl = first_in(lay, ttok, "pair order (T template source)")?;
-            Ok(LegPlan {
-                suffix,
-                pos: PosOut::Deliver(
-                    kas_out(delivery, "pair delivery carrier")?,
-                    TokenState::user(ttok.1.family(), f.t_out, s.maker, maker_ext),
-                    ttok,
-                ),
-                role,
-                sequence: s.interval.max(0) as u64,
-                plan: entry(
-                    TemplateId::KobPair,
-                    s.encode(),
-                    "settle",
-                    vec![
-                        nb(n),
-                        Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
-                        Arg::Int(t_tpl),
-                        Arg::Int(*t_arg),
-                        Arg::Int(f.s_out),
-                        Arg::Int(f.t_out),
-                    ],
-                ),
-                extras,
-                flows: vec![(stok, f.s_out, 0), (ttok, 0, f.t_out)],
-                merge: None,
-                adjust: if ask { Some((ttok, 5)) } else { None },
-            })
+            plan_pair(&cx, order, custody, *amount, *t_arg, f, suffix)
         }
         (Leg::CondPair { order, custody, amount, evidence, evidence_b, merge, .. }, PairCalc::Cond(c)) => {
-            let s = &order.state;
-            let n = *amount;
-            let ask = s.is_ask();
-            let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
-            let udaa = order.utxo.block_daa_score as i64;
-            let v = order.utxo.amount as i64;
-            let cv = custody.utxo.amount as i64;
-            let mut ev_args = [0i64; 4];
-            if c.trigger {
-                let (ev, args) = pair_evidence(
-                    b,
-                    lay,
-                    *evidence,
-                    *evidence_b,
-                    ask,
-                    a,
-                    bt,
-                    s.a_scale(),
-                    s.b_scale(),
-                    s.min_touch,
-                    s.min_touch_b(),
-                    s.min_rest_daa,
-                    lock,
-                )?;
-                if s.arms(ev) != Some(true) {
-                    return invalid(if ask {
-                        "a pair stop sell arms only when the rate fell to its stop or below"
-                    } else {
-                        "a pair buy stop arms only when the rate rose to its stop or above"
-                    });
-                }
-                ev_args = args;
-            }
-            let mut extras = vec![];
-            if c.left > 0 {
-                let next = CondPairState {
-                    amount_left: c.left,
-                    custody: c.out_amount,
-                    armed: s.next_armed(c.leg, c.trigger, udaa),
-                    ..s.clone()
-                };
-                extras.push(Extra::Cont(kas_out(v - s.delivery_carrier - c.tip_kas, "conditional pair continuation")?, next.spk()));
-                extras.push(Extra::AtInput {
-                    slot: Slot::Custody,
-                    value: custody.utxo.amount,
-                    state: custody.state.with_amount(c.out_amount),
-                    token: stok,
-                    patch: None,
-                });
-            } else if c.rearm.is_none() && c.out_amount > 0 {
-                let st = custody.state.with_amount(c.out_amount).with_user_owner(s.maker);
-                extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
-            }
-            let pos_value = if c.left > 0 || c.rearm.is_some() {
-                s.delivery_carrier
-            } else if c.out_amount > 0 {
-                v - c.tip_kas
-            } else {
-                v + cv - c.tip_kas
-            };
-            // The maker's token at output i: the T delivery, or a re-arming BID exit's B profit on
-            // the custody's template.
-            let pos_out = if c.d_s {
-                PosOut::Deliver(
-                    kas_out(pos_value, "profit carrier")?,
-                    custody.state.with_amount(c.d_out).with_user_owner(s.maker),
-                    stok,
-                )
-            } else {
-                let e = kcc20_ext(ttok, s.t_ext);
-                PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
-            };
-            let mut flows = vec![(stok, c.s_out, 0), (ttok, 0, c.t_out)];
-            let merge_plan = match (merge, c.rearm) {
-                (None, _) => None,
-                (Some(m), Some((proceeds, back))) => {
-                    let e = &m.entry;
-                    let es = &e.state;
-                    if e.utxo.covenant_id != Some(s.parent) {
-                        return invalid("the merged entry is not this exit's parent");
-                    }
-                    if !es.books_exit(s.parent, s) {
-                        return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
-                    }
-                    let edaa = e.utxo.block_daa_score as i64;
-                    let ev = e.utxo.amount as i64;
-                    let buy = es.is_buy_first();
-                    let (a_new, b_new) = if buy {
-                        let budget = need(es.merge_budget(n), "merge budget")?;
-                        if budget != proceeds || budget <= 0 {
-                            return invalid("the exit's re-arm budget is not the entry's");
-                        }
-                        (0, add(es.custody, budget, "merged escrow")?)
-                    } else {
-                        let pre = need(es.pre_of(n), "merge prefund")?;
-                        if pre != back {
-                            return invalid("the exit's prefund return is not the entry's");
-                        }
-                        (add(es.amount_left, n, "merged amount")?, add(es.custody, pre, "merged prefund")?)
-                    };
-                    let sellout = s.amount_left == n;
-                    let mut floor = ev;
-                    if sellout {
-                        let all = ev + v + cv - c.tip_kas - s.delivery_carrier;
-                        floor = floor.max(all);
-                    }
-                    let entry_in = lay.merge_in[&i];
-                    let mut new_custody = false;
-                    // The entry's custodies after the merge: an existing one at its index, a new
-                    // one with exitCarrier.
-                    let (ea_in, eb_in) = (lay.at.get(&(i, Slot::EntryA)).copied(), lay.at.get(&(i, Slot::EntryB)).copied());
-                    if a_new > 0 {
-                        kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
-                        match &m.a_custody {
-                            Some(x) => {
-                                check_custody(x, e.utxo.covenant_id, a, es.amount_left).map_err(|e| blame("entry", i, e))?;
-                                check_custody_ext(x, es.a_ext).map_err(|e| blame("entry", i, e))?;
-                                extras.push(Extra::AtInput {
-                                    slot: Slot::EntryA,
-                                    value: x.utxo.amount,
-                                    state: x.state.with_amount(a_new),
-                                    token: a,
-                                    patch: None,
-                                });
-                            }
-                            None => {
-                                if es.amount_left > 0 {
-                                    return invalid("the merged entry's A custody is required");
-                                }
-                                new_custody = true;
-                                floor -= es.exit_carrier;
-                                let st = TokenState::custody(a.1.family(), a_new, s.parent, kcc20_ext(a, es.a_ext));
-                                extras.push(Extra::Tok {
-                                    value: u(es.exit_carrier, "exitCarrier")?,
-                                    state: st,
-                                    token: a,
-                                    patch: Some((entry_in, 14)),
-                                });
-                            }
-                        }
-                    } else if m.a_custody.is_some() {
-                        return invalid("a buy-first entry holds no A custody");
-                    }
-                    if b_new > 0 {
-                        kron_output(bt.1.family(), b_new, "the merged entry's B custody")?;
-                        match &m.b_custody {
-                            Some(x) => {
-                                check_custody(x, e.utxo.covenant_id, bt, es.custody).map_err(|e| blame("entry", i, e))?;
-                                check_custody_ext(x, es.b_ext).map_err(|e| blame("entry", i, e))?;
-                                extras.push(Extra::AtInput {
-                                    slot: Slot::EntryB,
-                                    value: x.utxo.amount,
-                                    state: x.state.with_amount(b_new),
-                                    token: bt,
-                                    patch: None,
-                                });
-                            }
-                            None => {
-                                if es.custody > 0 {
-                                    return invalid("the merged entry's B custody is required");
-                                }
-                                new_custody = true;
-                                floor -= es.exit_carrier;
-                                let st = TokenState::custody(bt.1.family(), b_new, s.parent, kcc20_ext(bt, es.b_ext));
-                                extras.push(Extra::Tok {
-                                    value: u(es.exit_carrier, "exitCarrier")?,
-                                    state: st,
-                                    token: bt,
-                                    patch: Some((entry_in, 15)),
-                                });
-                            }
-                        }
-                    }
-                    // The exit's own flows come first. An ASK exit releases n of A and pays the
-                    // maker's B profit. A BID exit releases the B of its custody and pays the
-                    // maker's B profit. The entry's custodies follow, with the old amounts in and
-                    // the new amounts out.
-                    flows = if buy {
-                        vec![(a, n, 0), (bt, 0, c.d_out)]
-                    } else {
-                        vec![(bt, s.custody - c.out_amount, 0), (bt, 0, c.d_out)]
-                    };
-                    if let Some(x) = &m.a_custody {
-                        flows.push((a, x.state.amount(), 0));
-                    }
-                    if a_new > 0 {
-                        flows.push((a, 0, a_new));
-                    }
-                    if let Some(x) = &m.b_custody {
-                        flows.push((bt, x.state.amount(), 0));
-                    }
-                    if b_new > 0 {
-                        flows.push((bt, 0, b_new));
-                    }
-                    let cont = IfdPairState {
-                        amount_left: add(es.amount_left, n, "merged amount")?,
-                        custody: b_new,
-                        armed: es.merged_armed(edaa),
-                        ..es.clone()
-                    };
-                    extras.push(Extra::EntryCont(u(floor, "merged entry")?, cont.spk(), s.parent));
-                    let xc = lay.at[&(i, Slot::Custody)] as i64;
-                    let args = vec![
-                        Arg::Bytes(merge_arg(i, n)?),
-                        Arg::Int(ea_in.map(|x| x as i64).unwrap_or(0)),
-                        Arg::Int(eb_in.map(|x| x as i64).unwrap_or(0)),
-                        Arg::Int(if a_new > 0 { first_in(lay, a, "merge (A template)")? } else { 0 }),
-                        Arg::Int(if b_new > 0 { first_in(lay, bt, "merge (B template)")? } else { 0 }),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Bytes(vec![]),
-                        Arg::Bytes(vec![]),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(xc),
-                        Arg::Int(0),
-                    ];
-                    let plan = entry(TemplateId::KobIfdPair, es.encode(), "fill", args);
-                    let role = format!(
-                        "KobIfdPair.fill.merge.{}{}{}",
-                        side_name(!buy),
-                        if new_custody { ".new" } else { "" },
-                        if sellout { ".sellout" } else { "" }
-                    );
-                    Some((plan, role, e.utxo.clone()))
-                }
-                (Some(_), None) => unreachable!("a merge is a re-arm"),
-            };
-            let branch = if c.left > 0 {
-                "rest"
-            } else if c.rearm.is_none() && c.out_amount > 0 {
-                "return"
-            } else {
-                "close"
-            };
-            let role = format!(
-                "KobCondPair.settle.{}.leg{}{}{}{}.{branch}",
-                side_name(ask),
-                c.leg,
-                arm_tag(c.trigger, ev_args[3]),
-                if c.t_arg != 0 { ".auction" } else { "" },
-                if merge.is_some() { ".merge" } else { "" },
-            );
-            let t_tpl = if c.d_s {
-                lay.first_token_in.get(&ttok.0).map(|x| *x as i64).unwrap_or(0)
-            } else {
-                first_in(lay, ttok, "conditional pair (T template source)")?
-            };
-            Ok(LegPlan {
-                suffix,
-                pos: pos_out,
-                role,
-                sequence: 0,
-                plan: entry(
-                    TemplateId::KobCondPair,
-                    s.encode(),
-                    "settle",
-                    vec![
-                        nb(n),
-                        Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
-                        Arg::Int(t_tpl),
-                        Arg::Int(c.t_arg),
-                        Arg::Int(c.s_out),
-                        Arg::Int(c.t_out),
-                        Arg::Int(c.leg),
-                        Arg::Int(ev_args[0]),
-                        Arg::Int(ev_args[1]),
-                        Arg::Int(ev_args[2]),
-                        Arg::Int(ev_args[3]),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                    ],
-                ),
-                extras,
-                flows,
-                merge: merge_plan,
-                adjust: if ask { Some((ttok, 5)) } else { None },
-            })
+            plan_cond_pair(&cx, order, custody, *amount, *evidence, *evidence_b, merge.as_ref(), c, suffix)
         }
         (Leg::IfdPair { order, a_custody, b_custody, amount, evidence, evidence_b, .. }, PairCalc::Ifd(c)) => {
-            let s = &order.state;
-            let n = *amount;
-            let buy = s.is_buy_first();
-            let v = order.utxo.amount as i64;
-            // The custodies: exactly what the entry holds.
-            let a_held = if buy { 0 } else { s.amount_left };
-            match (a_custody, a_held > 0) {
-                (Some(x), true) => {
-                    check_custody(x, order.utxo.covenant_id, a, a_held)?;
-                    check_custody_ext(x, s.a_ext)?;
-                }
-                (None, false) => {}
-                (Some(_), false) => return invalid("this entry holds no A custody"),
-                (None, true) => return invalid("a sell-first entry's A custody is required"),
-            }
-            match (b_custody, s.custody > 0) {
-                (Some(x), true) => {
-                    check_custody(x, order.utxo.covenant_id, bt, s.custody)?;
-                    check_custody_ext(x, s.b_ext)?;
-                }
-                (None, false) => {}
-                (Some(_), false) => return invalid("this entry holds no B custody"),
-                (None, true) => return invalid("the entry's B custody is required"),
-            }
-            let a_car = a_custody.as_ref().map(|x| x.utxo.amount as i64).unwrap_or(0);
-            let b_car = b_custody.as_ref().map(|x| x.utxo.amount as i64).unwrap_or(0);
-            let mut ev_args = [0i64; 4];
-            if c.trigger {
-                let (ev, args) = pair_evidence(
-                    b,
-                    lay,
-                    *evidence,
-                    *evidence_b,
-                    !buy,
-                    a,
-                    bt,
-                    s.a_scale,
-                    s.b_scale,
-                    s.min_touch,
-                    s.min_touch_b(),
-                    s.min_rest_daa,
-                    lock,
-                )?;
-                if s.arms(ev) != Some(true) {
-                    return invalid(if buy {
-                        "a pair buy-stop entry arms only when the rate rose to its trigger or above"
-                    } else {
-                        "a pair sell-stop entry arms only when the rate fell to its trigger or below"
-                    });
-                }
-                ev_args = args;
-            }
-            let mut extras = vec![];
-            let base = v - s.delivery_carrier - s.exit_carrier - c.tip_kas;
-            if c.cont {
-                let mut keep = base;
-                if a_held > 0 {
-                    if c.a_new > 0 {
-                        let x = a_custody.as_ref().expect("checked");
-                        extras.push(Extra::AtInput {
-                            slot: Slot::A,
-                            value: x.utxo.amount,
-                            state: x.state.with_amount(c.a_new),
-                            token: a,
-                            patch: None,
-                        });
-                    } else {
-                        keep += a_car;
-                    }
-                }
-                if s.custody > 0 {
-                    if c.b_new > 0 {
-                        let x = b_custody.as_ref().expect("checked");
-                        extras.push(Extra::AtInput {
-                            slot: Slot::B,
-                            value: x.utxo.amount,
-                            state: x.state.with_amount(c.b_new),
-                            token: bt,
-                            patch: None,
-                        });
-                    } else {
-                        keep += b_car;
-                    }
-                }
-                let udaa = order.utxo.block_daa_score as i64;
-                let next = IfdPairState {
-                    amount_left: s.amount_left - n,
-                    custody: c.b_new,
-                    armed: s.next_armed(udaa),
-                    rpt_amount: if c.booked { s.rpt_amount - n } else { s.rpt_amount },
-                    ..s.clone()
-                };
-                extras.push(Extra::Cont(kas_out(keep, "entry continuation")?, next.spk()));
-                extras.push(Extra::Exit {
-                    value: u(s.exit_carrier, "exit carrier")?,
-                    spk: c.exit.spk(),
-                    tpl: TemplateId::KobCondPair,
-                    arg: 5,
-                });
-            } else {
-                let mut left = v + a_car - s.delivery_carrier - c.tip_kas;
-                if c.b_new > 0 {
-                    let x = b_custody.as_ref().expect("checked");
-                    let st = x.state.with_amount(c.b_new).with_user_owner(s.maker);
-                    extras.push(Extra::AtInput { slot: Slot::B, value: x.utxo.amount, state: st, token: bt, patch: None });
-                } else {
-                    left += b_car;
-                }
-                extras.push(Extra::Exit {
-                    value: kas_out(left, "exit value")? as u64,
-                    spk: c.exit.spk(),
-                    tpl: TemplateId::KobCondPair,
-                    arg: 5,
-                });
-            }
-            let (xtok, x_ext) = if buy { (a, s.a_ext) } else { (bt, s.b_ext) };
-            let x_ext = kcc20_ext(xtok, x_ext);
-            kron_output(xtok.1.family(), c.x_cust, "the exit's custody")?;
-            let c_tpl = template(TemplateId::KobCondPair);
-            let a_in = lay.at.get(&(i, Slot::A)).map(|x| *x as i64).unwrap_or(0);
-            let b_in = lay.at.get(&(i, Slot::B)).map(|x| *x as i64).unwrap_or(0);
-            let a_tpl = if buy || c.a_new > 0 { first_in(lay, a, "pair entry (A template)")? } else { 0 };
-            let b_tpl = if !buy || c.b_new > 0 { first_in(lay, bt, "pair entry (B template)")? } else { 0 };
-            let role = format!(
-                "KobIfdPair.fill.{}{}{}{}.{}",
-                side_name(!buy),
-                arm_tag(c.trigger, ev_args[3]),
-                if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
-                if c.booked { ".book" } else { "" },
-                entry_branch(s.amount_left - n > 0, c.cont)
-            );
-            let flows =
-                if buy { vec![(bt, c.amt, 0), (a, 0, n)] } else { vec![(a, n, 0), (bt, s.custody - c.b_new, 0), (bt, 0, c.x_cust)] };
-            Ok(LegPlan {
-                suffix,
-                pos: PosOut::DeliverToExit {
-                    value: u(s.delivery_carrier, "delivery carrier")?,
-                    amount: c.x_cust,
-                    ext: x_ext,
-                    token: xtok,
-                },
-                role,
-                sequence: 0,
-                plan: entry(
-                    TemplateId::KobIfdPair,
-                    s.encode(),
-                    "fill",
-                    vec![
-                        nb(n),
-                        Arg::Int(a_in),
-                        Arg::Int(b_in),
-                        Arg::Int(a_tpl),
-                        Arg::Int(b_tpl),
-                        Arg::Int(0),
-                        Arg::Int(c.amt),
-                        Arg::Bytes(c_tpl.prefix.clone()),
-                        Arg::Bytes(c_tpl.suffix.clone()),
-                        Arg::Int(ev_args[0]),
-                        Arg::Int(ev_args[1]),
-                        Arg::Int(ev_args[2]),
-                        Arg::Int(ev_args[3]),
-                        Arg::Int(c.t_arg),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                        Arg::Int(0),
-                    ],
-                ),
-                extras,
-                flows,
-                merge: None,
-                adjust: None,
-            })
+            plan_ifd_pair(&cx, order, a_custody.as_ref(), b_custody.as_ref(), *amount, *evidence, *evidence_b, c, suffix)
         }
         _ => invalid("pair leg and its amounts disagree"),
     }
+}
+
+/// The batch facts every pair leg planner reads.
+#[derive(Clone, Copy)]
+struct PairCtx<'a> {
+    batch: &'a Batch,
+    lay: &'a Layout,
+    /// The leg's position in the batch.
+    index: usize,
+    /// The pair's base token A.
+    token_a: Token,
+    /// The pair's quote token B.
+    token_b: Token,
+    lock: i64,
+}
+
+/// Plans a `KobPair` fill: the T delivery, and the rest or the return of its custody.
+fn plan_pair(
+    cx: &PairCtx,
+    order: &OrderUtxo<PairState>,
+    custody: &TokenUtxo,
+    n: i64,
+    t_arg: i64,
+    f: &PairFill,
+    suffix: String,
+) -> Result<LegPlan> {
+    let PairCtx { lay, index: i, token_a: a, token_b: bt, .. } = *cx;
+    let s = &order.state;
+    let ask = s.is_ask();
+    let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
+    let v = order.utxo.amount as i64;
+    let cv = custody.utxo.amount as i64;
+    let maker_ext = kcc20_ext(ttok, s.t_ext);
+    let mut extras = vec![];
+    let (delivery, branch) = if f.rest {
+        extras.push(Extra::Cont(
+            kas_out(v - s.delivery_carrier - f.tip_kas, "pair continuation")?,
+            PairState { amount_left: s.amount_left - n, custody: f.out_amount, ..s.clone() }.spk(),
+        ));
+        let st = custody.state.with_amount(f.out_amount);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
+        (s.delivery_carrier, "rest")
+    } else if f.out_amount > 0 {
+        let st = custody.state.with_amount(f.out_amount).with_user_owner(s.maker);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
+        (v - f.tip_kas, "return")
+    } else {
+        (v + cv - f.tip_kas, "close")
+    };
+    let mut role = format!("KobPair.settle.{}.{branch}", side_name(ask));
+    if s.interval > 0 {
+        role.push_str(".twap");
+    }
+    if s.slope != 0 {
+        role.push_str(".decay");
+    }
+    let t_tpl = first_in(lay, ttok, "pair order (T template source)")?;
+    Ok(LegPlan {
+        suffix,
+        pos: PosOut::Deliver(
+            kas_out(delivery, "pair delivery carrier")?,
+            TokenState::user(ttok.1.family(), f.t_out, s.maker, maker_ext),
+            ttok,
+        ),
+        role,
+        sequence: s.interval.max(0) as u64,
+        plan: entry(
+            TemplateId::KobPair,
+            s.encode(),
+            "settle",
+            vec![
+                nb(n),
+                Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
+                Arg::Int(t_tpl),
+                Arg::Int(t_arg),
+                Arg::Int(f.s_out),
+                Arg::Int(f.t_out),
+            ],
+        ),
+        extras,
+        flows: vec![(stok, f.s_out, 0), (ttok, 0, f.t_out)],
+        merge: None,
+        adjust: if ask { Some((ttok, 5)) } else { None },
+    })
+}
+
+/// Plans a `KobCondPair` fill on its take-profit or stop leg, and the merge of a booked exit's entry.
+#[allow(clippy::too_many_arguments)]
+fn plan_cond_pair(
+    cx: &PairCtx,
+    order: &OrderUtxo<CondPairState>,
+    custody: &TokenUtxo,
+    n: i64,
+    evidence: Option<usize>,
+    evidence_b: Option<usize>,
+    merge: Option<&PairEntryMerge>,
+    c: &CondCalc,
+    suffix: String,
+) -> Result<LegPlan> {
+    let PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
+    let s = &order.state;
+    let ask = s.is_ask();
+    let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
+    let udaa = order.utxo.block_daa_score as i64;
+    let v = order.utxo.amount as i64;
+    let cv = custody.utxo.amount as i64;
+    let mut ev_args = [0i64; 4];
+    if c.trigger {
+        let (ev, args) = pair_evidence(
+            b,
+            lay,
+            evidence,
+            evidence_b,
+            ask,
+            a,
+            bt,
+            s.a_scale(),
+            s.b_scale(),
+            s.min_touch,
+            s.min_touch_b(),
+            s.min_rest_daa,
+            lock,
+        )?;
+        if s.arms(ev) != Some(true) {
+            return invalid(if ask {
+                "a pair stop sell arms only when the rate fell to its stop or below"
+            } else {
+                "a pair buy stop arms only when the rate rose to its stop or above"
+            });
+        }
+        ev_args = args;
+    }
+    let mut extras = vec![];
+    if c.left > 0 {
+        let next =
+            CondPairState { amount_left: c.left, custody: c.out_amount, armed: s.next_armed(c.leg, c.trigger, udaa), ..s.clone() };
+        extras.push(Extra::Cont(kas_out(v - s.delivery_carrier - c.tip_kas, "conditional pair continuation")?, next.spk()));
+        extras.push(Extra::AtInput {
+            slot: Slot::Custody,
+            value: custody.utxo.amount,
+            state: custody.state.with_amount(c.out_amount),
+            token: stok,
+            patch: None,
+        });
+    } else if c.rearm.is_none() && c.out_amount > 0 {
+        let st = custody.state.with_amount(c.out_amount).with_user_owner(s.maker);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
+    }
+    let pos_value = if c.left > 0 || c.rearm.is_some() {
+        s.delivery_carrier
+    } else if c.out_amount > 0 {
+        v - c.tip_kas
+    } else {
+        v + cv - c.tip_kas
+    };
+    // The maker's token at output i: the T delivery, or a re-arming BID exit's B profit on
+    // the custody's template.
+    let pos_out = if c.d_s {
+        PosOut::Deliver(kas_out(pos_value, "profit carrier")?, custody.state.with_amount(c.d_out).with_user_owner(s.maker), stok)
+    } else {
+        let e = kcc20_ext(ttok, s.t_ext);
+        PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
+    };
+    let mut flows = vec![(stok, c.s_out, 0), (ttok, 0, c.t_out)];
+    let merge_plan = match (merge, c.rearm) {
+        (None, _) => None,
+        (Some(m), Some((proceeds, back))) => {
+            let e = &m.entry;
+            let es = &e.state;
+            if e.utxo.covenant_id != Some(s.parent) {
+                return invalid("the merged entry is not this exit's parent");
+            }
+            if !es.books_exit(s.parent, s) {
+                return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
+            }
+            let edaa = e.utxo.block_daa_score as i64;
+            let ev = e.utxo.amount as i64;
+            let buy = es.is_buy_first();
+            let (a_new, b_new) = if buy {
+                let budget = need(es.merge_budget(n), "merge budget")?;
+                if budget != proceeds || budget <= 0 {
+                    return invalid("the exit's re-arm budget is not the entry's");
+                }
+                (0, add(es.custody, budget, "merged escrow")?)
+            } else {
+                let pre = need(es.pre_of(n), "merge prefund")?;
+                if pre != back {
+                    return invalid("the exit's prefund return is not the entry's");
+                }
+                (add(es.amount_left, n, "merged amount")?, add(es.custody, pre, "merged prefund")?)
+            };
+            let sellout = s.amount_left == n;
+            let mut floor = ev;
+            if sellout {
+                let all = ev + v + cv - c.tip_kas - s.delivery_carrier;
+                floor = floor.max(all);
+            }
+            let entry_in = lay.merge_in[&i];
+            let mut new_custody = false;
+            // The entry's custodies after the merge: an existing one at its index, a new
+            // one with exitCarrier.
+            let (ea_in, eb_in) = (lay.at.get(&(i, Slot::EntryA)).copied(), lay.at.get(&(i, Slot::EntryB)).copied());
+            if a_new > 0 {
+                kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
+                match &m.a_custody {
+                    Some(x) => {
+                        check_custody(x, e.utxo.covenant_id, a, es.amount_left).map_err(|e| blame("entry", i, e))?;
+                        check_custody_ext(x, es.a_ext).map_err(|e| blame("entry", i, e))?;
+                        extras.push(Extra::AtInput {
+                            slot: Slot::EntryA,
+                            value: x.utxo.amount,
+                            state: x.state.with_amount(a_new),
+                            token: a,
+                            patch: None,
+                        });
+                    }
+                    None => {
+                        if es.amount_left > 0 {
+                            return invalid("the merged entry's A custody is required");
+                        }
+                        new_custody = true;
+                        floor -= es.exit_carrier;
+                        let st = TokenState::custody(a.1.family(), a_new, s.parent, kcc20_ext(a, es.a_ext));
+                        extras.push(Extra::Tok {
+                            value: u(es.exit_carrier, "exitCarrier")?,
+                            state: st,
+                            token: a,
+                            patch: Some((entry_in, 14)),
+                        });
+                    }
+                }
+            } else if m.a_custody.is_some() {
+                return invalid("a buy-first entry holds no A custody");
+            }
+            if b_new > 0 {
+                kron_output(bt.1.family(), b_new, "the merged entry's B custody")?;
+                match &m.b_custody {
+                    Some(x) => {
+                        check_custody(x, e.utxo.covenant_id, bt, es.custody).map_err(|e| blame("entry", i, e))?;
+                        check_custody_ext(x, es.b_ext).map_err(|e| blame("entry", i, e))?;
+                        extras.push(Extra::AtInput {
+                            slot: Slot::EntryB,
+                            value: x.utxo.amount,
+                            state: x.state.with_amount(b_new),
+                            token: bt,
+                            patch: None,
+                        });
+                    }
+                    None => {
+                        if es.custody > 0 {
+                            return invalid("the merged entry's B custody is required");
+                        }
+                        new_custody = true;
+                        floor -= es.exit_carrier;
+                        let st = TokenState::custody(bt.1.family(), b_new, s.parent, kcc20_ext(bt, es.b_ext));
+                        extras.push(Extra::Tok {
+                            value: u(es.exit_carrier, "exitCarrier")?,
+                            state: st,
+                            token: bt,
+                            patch: Some((entry_in, 15)),
+                        });
+                    }
+                }
+            }
+            // The exit's own flows come first. An ASK exit releases n of A and pays the
+            // maker's B profit. A BID exit releases the B of its custody and pays the
+            // maker's B profit. The entry's custodies follow, with the old amounts in and
+            // the new amounts out.
+            flows = if buy { vec![(a, n, 0), (bt, 0, c.d_out)] } else { vec![(bt, s.custody - c.out_amount, 0), (bt, 0, c.d_out)] };
+            if let Some(x) = &m.a_custody {
+                flows.push((a, x.state.amount(), 0));
+            }
+            if a_new > 0 {
+                flows.push((a, 0, a_new));
+            }
+            if let Some(x) = &m.b_custody {
+                flows.push((bt, x.state.amount(), 0));
+            }
+            if b_new > 0 {
+                flows.push((bt, 0, b_new));
+            }
+            let cont = IfdPairState {
+                amount_left: add(es.amount_left, n, "merged amount")?,
+                custody: b_new,
+                armed: es.merged_armed(edaa),
+                ..es.clone()
+            };
+            extras.push(Extra::EntryCont(u(floor, "merged entry")?, cont.spk(), s.parent));
+            let xc = lay.at[&(i, Slot::Custody)] as i64;
+            let args = vec![
+                Arg::Bytes(merge_arg(i, n)?),
+                Arg::Int(ea_in.map(|x| x as i64).unwrap_or(0)),
+                Arg::Int(eb_in.map(|x| x as i64).unwrap_or(0)),
+                Arg::Int(if a_new > 0 { first_in(lay, a, "merge (A template)")? } else { 0 }),
+                Arg::Int(if b_new > 0 { first_in(lay, bt, "merge (B template)")? } else { 0 }),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Bytes(vec![]),
+                Arg::Bytes(vec![]),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(xc),
+                Arg::Int(0),
+            ];
+            let plan = entry(TemplateId::KobIfdPair, es.encode(), "fill", args);
+            let role = format!(
+                "KobIfdPair.fill.merge.{}{}{}",
+                side_name(!buy),
+                if new_custody { ".new" } else { "" },
+                if sellout { ".sellout" } else { "" }
+            );
+            Some((plan, role, e.utxo.clone()))
+        }
+        (Some(_), None) => unreachable!("a merge is a re-arm"),
+    };
+    let branch = if c.left > 0 {
+        "rest"
+    } else if c.rearm.is_none() && c.out_amount > 0 {
+        "return"
+    } else {
+        "close"
+    };
+    let role = format!(
+        "KobCondPair.settle.{}.leg{}{}{}{}.{branch}",
+        side_name(ask),
+        c.leg,
+        arm_tag(c.trigger, ev_args[3]),
+        if c.t_arg != 0 { ".auction" } else { "" },
+        if merge.is_some() { ".merge" } else { "" },
+    );
+    let t_tpl = if c.d_s {
+        lay.first_token_in.get(&ttok.0).map(|x| *x as i64).unwrap_or(0)
+    } else {
+        first_in(lay, ttok, "conditional pair (T template source)")?
+    };
+    Ok(LegPlan {
+        suffix,
+        pos: pos_out,
+        role,
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobCondPair,
+            s.encode(),
+            "settle",
+            vec![
+                nb(n),
+                Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
+                Arg::Int(t_tpl),
+                Arg::Int(c.t_arg),
+                Arg::Int(c.s_out),
+                Arg::Int(c.t_out),
+                Arg::Int(c.leg),
+                Arg::Int(ev_args[0]),
+                Arg::Int(ev_args[1]),
+                Arg::Int(ev_args[2]),
+                Arg::Int(ev_args[3]),
+                Arg::Int(0),
+                Arg::Int(0),
+            ],
+        ),
+        extras,
+        flows,
+        merge: merge_plan,
+        adjust: if ask { Some((ttok, 5)) } else { None },
+    })
+}
+
+/// Plans a `KobIfdPair` entry fill, which delivers into the custody of the exit it creates.
+#[allow(clippy::too_many_arguments)]
+fn plan_ifd_pair(
+    cx: &PairCtx,
+    order: &OrderUtxo<IfdPairState>,
+    a_custody: Option<&TokenUtxo>,
+    b_custody: Option<&TokenUtxo>,
+    n: i64,
+    evidence: Option<usize>,
+    evidence_b: Option<usize>,
+    c: &IfdCalc,
+    suffix: String,
+) -> Result<LegPlan> {
+    let PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
+    let s = &order.state;
+    let buy = s.is_buy_first();
+    let v = order.utxo.amount as i64;
+    // The custodies: exactly what the entry holds.
+    let a_held = if buy { 0 } else { s.amount_left };
+    match (a_custody, a_held > 0) {
+        (Some(x), true) => {
+            check_custody(x, order.utxo.covenant_id, a, a_held)?;
+            check_custody_ext(x, s.a_ext)?;
+        }
+        (None, false) => {}
+        (Some(_), false) => return invalid("this entry holds no A custody"),
+        (None, true) => return invalid("a sell-first entry's A custody is required"),
+    }
+    match (b_custody, s.custody > 0) {
+        (Some(x), true) => {
+            check_custody(x, order.utxo.covenant_id, bt, s.custody)?;
+            check_custody_ext(x, s.b_ext)?;
+        }
+        (None, false) => {}
+        (Some(_), false) => return invalid("this entry holds no B custody"),
+        (None, true) => return invalid("the entry's B custody is required"),
+    }
+    let a_car = a_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
+    let b_car = b_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
+    let mut ev_args = [0i64; 4];
+    if c.trigger {
+        let (ev, args) = pair_evidence(
+            b,
+            lay,
+            evidence,
+            evidence_b,
+            !buy,
+            a,
+            bt,
+            s.a_scale,
+            s.b_scale,
+            s.min_touch,
+            s.min_touch_b(),
+            s.min_rest_daa,
+            lock,
+        )?;
+        if s.arms(ev) != Some(true) {
+            return invalid(if buy {
+                "a pair buy-stop entry arms only when the rate rose to its trigger or above"
+            } else {
+                "a pair sell-stop entry arms only when the rate fell to its trigger or below"
+            });
+        }
+        ev_args = args;
+    }
+    let mut extras = vec![];
+    let base = v - s.delivery_carrier - s.exit_carrier - c.tip_kas;
+    if c.cont {
+        let mut keep = base;
+        if a_held > 0 {
+            if c.a_new > 0 {
+                let x = a_custody.expect("checked");
+                extras.push(Extra::AtInput {
+                    slot: Slot::A,
+                    value: x.utxo.amount,
+                    state: x.state.with_amount(c.a_new),
+                    token: a,
+                    patch: None,
+                });
+            } else {
+                keep += a_car;
+            }
+        }
+        if s.custody > 0 {
+            if c.b_new > 0 {
+                let x = b_custody.expect("checked");
+                extras.push(Extra::AtInput {
+                    slot: Slot::B,
+                    value: x.utxo.amount,
+                    state: x.state.with_amount(c.b_new),
+                    token: bt,
+                    patch: None,
+                });
+            } else {
+                keep += b_car;
+            }
+        }
+        let udaa = order.utxo.block_daa_score as i64;
+        let next = IfdPairState {
+            amount_left: s.amount_left - n,
+            custody: c.b_new,
+            armed: s.next_armed(udaa),
+            rpt_amount: if c.booked { s.rpt_amount - n } else { s.rpt_amount },
+            ..s.clone()
+        };
+        extras.push(Extra::Cont(kas_out(keep, "entry continuation")?, next.spk()));
+        extras.push(Extra::Exit {
+            value: u(s.exit_carrier, "exit carrier")?,
+            spk: c.exit.spk(),
+            tpl: TemplateId::KobCondPair,
+            arg: 5,
+        });
+    } else {
+        let mut left = v + a_car - s.delivery_carrier - c.tip_kas;
+        if c.b_new > 0 {
+            let x = b_custody.expect("checked");
+            let st = x.state.with_amount(c.b_new).with_user_owner(s.maker);
+            extras.push(Extra::AtInput { slot: Slot::B, value: x.utxo.amount, state: st, token: bt, patch: None });
+        } else {
+            left += b_car;
+        }
+        extras.push(Extra::Exit {
+            value: kas_out(left, "exit value")? as u64,
+            spk: c.exit.spk(),
+            tpl: TemplateId::KobCondPair,
+            arg: 5,
+        });
+    }
+    let (xtok, x_ext) = if buy { (a, s.a_ext) } else { (bt, s.b_ext) };
+    let x_ext = kcc20_ext(xtok, x_ext);
+    kron_output(xtok.1.family(), c.x_cust, "the exit's custody")?;
+    let c_tpl = template(TemplateId::KobCondPair);
+    let a_in = lay.at.get(&(i, Slot::A)).map(|x| *x as i64).unwrap_or(0);
+    let b_in = lay.at.get(&(i, Slot::B)).map(|x| *x as i64).unwrap_or(0);
+    let a_tpl = if buy || c.a_new > 0 { first_in(lay, a, "pair entry (A template)")? } else { 0 };
+    let b_tpl = if !buy || c.b_new > 0 { first_in(lay, bt, "pair entry (B template)")? } else { 0 };
+    let role = format!(
+        "KobIfdPair.fill.{}{}{}{}.{}",
+        side_name(!buy),
+        arm_tag(c.trigger, ev_args[3]),
+        if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
+        if c.booked { ".book" } else { "" },
+        entry_branch(s.amount_left - n > 0, c.cont)
+    );
+    let flows = if buy { vec![(bt, c.amt, 0), (a, 0, n)] } else { vec![(a, n, 0), (bt, s.custody - c.b_new, 0), (bt, 0, c.x_cust)] };
+    Ok(LegPlan {
+        suffix,
+        pos: PosOut::DeliverToExit { value: u(s.delivery_carrier, "delivery carrier")?, amount: c.x_cust, ext: x_ext, token: xtok },
+        role,
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobIfdPair,
+            s.encode(),
+            "fill",
+            vec![
+                nb(n),
+                Arg::Int(a_in),
+                Arg::Int(b_in),
+                Arg::Int(a_tpl),
+                Arg::Int(b_tpl),
+                Arg::Int(0),
+                Arg::Int(c.amt),
+                Arg::Bytes(c_tpl.prefix.clone()),
+                Arg::Bytes(c_tpl.suffix.clone()),
+                Arg::Int(ev_args[0]),
+                Arg::Int(ev_args[1]),
+                Arg::Int(ev_args[2]),
+                Arg::Int(ev_args[3]),
+                Arg::Int(c.t_arg),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+            ],
+        ),
+        extras,
+        flows,
+        merge: None,
+        adjust: None,
+    })
 }
 
 /// Plans one [`BatchUpdate`] of a pair conditional or a pair stop entry.
