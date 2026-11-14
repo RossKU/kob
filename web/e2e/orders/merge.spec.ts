@@ -1,14 +1,16 @@
-// "Merge all" (My orders > Balances) through the UI and the mock stack, on a token of KOB's standard 3 / 3 program. One click plans the whole
-// tree of transfers to the wallet itself (level 1 merges the original UTXOs in threes, later levels merge the outputs), and its confirmation
-// states the transactions, the wallet approvals (one per transaction, one after the other) and the KAS freed. A rejected or failed step stops
-// the run; what was sent stays merged and Merge all plans again from it. The mock wallets refuse an input their own node does not know
-// (KasWare 0.11.5), and that node sees a new output only when it is pushed to it here (`walletNodeLagMs`), so a later level is signed only
-// through the visibility gate (src/wallet/visibility.ts). The mock node runs every transaction through the script engine.
+// "Merge all" (My orders > Balances) and the sell ticket's "Merge, then sell", through the UI and the mock stack, on a token of KOB's standard
+// 3 / 3 program. One click plans the whole tree of transfers to the wallet itself (level 1 merges the original UTXOs in threes, later levels
+// merge the outputs), and its confirmation states the transactions, the wallet approvals (one per transaction, one after the other) and the
+// KAS freed. A rejected or failed step stops the run; what was sent stays merged and Merge all plans again from it. The mock wallets refuse an
+// input their own node does not know (KasWare 0.11.5), and that node sees a new output only when it is pushed to it here
+// (`walletNodeLagMs`), so a later level is signed only through the visibility gate (src/wallet/visibility.ts). The mock node runs every
+// transaction through the script engine.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
+import { confirmReceipt, fillFields, pickType, settlePlan, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false, walletOptions: { walletNodeLagMs: 600_000 } });
 
@@ -194,4 +196,52 @@ test('a token the registry does not list is mergeable too, under its node-verifi
   expect(placed[0]!.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
   expect(placed[1]!.submission.token_outputs[0]!.amount).toBe((10n * TOKEN).toString());
   expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount))).toEqual([10n * TOKEN]);
+});
+
+test('the sell ticket merges just enough first, then places the sale with its own confirmation', async ({ appPage: page, mock, wallet }) => {
+  test.setTimeout(180_000);
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  // nine UTXOs of 1 EXSTD: a sale of 7 needs more than the 3 a transaction takes
+  await mock.giveTokens('alice', TOKEN, { token: STD, carrier: KAS, count: 9 });
+  await mock.giveKas('alice', 50n * KAS);
+  await registryWithStd(page);
+  await page.goto(`/#/market/${STD}`);
+  await connectWallet(page, 'kasware');
+  await expect(page.getByTestId('order-ticket')).toBeVisible();
+  await recordConfirmPopups(page);
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { amount: '7', price: '1' });
+  await settlePlan(page);
+
+  // the dead end is an offer that states the merges first: the 7 largest into 3 UTXOs, two transactions
+  const issue = page.getByTestId('order-issue-TOKEN_UTXOS_FRAGMENTED');
+  await expect(issue).toContainText(
+    'Too many EXSTD UTXOs for one sale. Merge first: 2 transactions, one wallet approval each.',
+    { timeout: 30_000 },
+  );
+  await expect(page.getByTestId('order-merge-sell')).toHaveAttribute('title', /^A sale takes at most 3 token UTXOs\. /);
+  await expect(page.getByTestId('order-place')).toBeDisabled();
+  await shot(page, 'sell-ticket-merge-offer');
+  await page.getByTestId('order-merge-sell').click();
+
+  // the merges, each approved in the wallet, then the sale's own final confirmation
+  await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 90_000 });
+  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'signed']);
+  expect(await confirmPopups(page)).toBe(1);
+  await confirmReceipt(page);
+  const txid = await waitSubmitted(page);
+  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'signed', 'signed']);
+
+  const subs = await mock.submitted();
+  expect(subs).toHaveLength(3);
+  const [m1, m2, sale] = subs;
+  expect(sale!.txid).toBe(txid);
+  // two level-1 merges of three, the sale takes their outputs and the one UTXO left over
+  for (const m of [m1!, m2!]) expect(m.token_outputs[0]!.amount).toBe((3n * TOKEN).toString());
+  const saleIns = (sale!.spent ?? []).filter((x) => x.kind === 'token').map((x) => x.outpoint.split(':')[0]);
+  expect(saleIns).toHaveLength(3);
+  expect(saleIns).toEqual(expect.arrayContaining([m1!.txid, m2!.txid]));
+  expect(sale!.created).toHaveLength(1);
+  expect((await ownedOf(mock, alice)).length).toBeLessThanOrEqual(2);
 });

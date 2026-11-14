@@ -46,6 +46,7 @@ import { expectedFromPlan } from './plan-expected';
 import { confirmNotes, confirmSignerNotes, minOrderValueOf, minValueNote } from './ticket-notes';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
+import { FRAGMENTED, useMergeBeforeSale } from './merge-before-sale';
 import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
 import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
@@ -87,7 +88,8 @@ interface Reason {
   text: string;
   /** `warn`: the order can be placed, but not as it is meant (below the minimum order value: it is never listed); shown in the slot even while the button is on */
   kind: 'need' | 'field' | 'issue' | 'ladder' | 'warn';
-  action?: 'retry';
+  /** `retry`: read the environment again; `merge`: merge the token's UTXOs, then place the order (merge-before-sale.tsx) */
+  action?: 'retry' | 'merge';
   raw?: string;
   testid?: string;
 }
@@ -96,6 +98,9 @@ interface Reason {
 const TOKEN_SHORT = new Set(['INSUFFICIENT_TOKENS', 'TOKEN_UTXOS_FRAGMENTED']);
 
 const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
+
+/** How long the sale after a merge waits for an environment that holds the merged UTXOs before the ticket gives the button back. */
+const SELL_AFTER_MERGE_MS = 30_000;
 
 /** A plan that takes longer than this shows its "Calculating..." indicator; a background re-plan on a tick is over before and shows nothing. */
 const PENDING_SHOW_MS = 500;
@@ -440,9 +445,19 @@ export function OrderTicket(props: OrderTicketProps) {
   }
   // C5-10: a wallet not known to sign covenant inputs (every cancel needs one) passes a one-time test signature before its first order
   const gate = useCovenantSignGate(enabled ? env : null);
+  // too many UTXOs of the token for one sale: the ticket offers to merge just enough first, then places the sale (merge-before-sale.tsx). A
+  // single order of a KAS market only: a ladder's levels and a pair's quote token are planned apart
+  const [sellAfterMerge, setSellAfterMerge] = useState<{ leaves: ReadonlySet<string>; at: number } | null>(null);
+  const merge = useMergeBeforeSale({
+    token, ticker: token.ticker, pubkey: wallet.info?.pubkey ?? null, env,
+    issue: enabled && !quote && !ladder ? planErrors.find((i) => i.code === FRAGMENTED) : undefined,
+    refresh,
+    onMerged: (leaves) => setSellAfterMerge({ leaves, at: Date.now() }),
+    onStop: (text, raw) => sender.stop(text, raw, 'merge'),
+  });
   const canPlace =
     enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !placing && !sendBusy(sender.status) && !crash
-    && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0;
+    && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0 && !merge.running;
   // an edit makes a reason the last click stopped for stale (a submitted order stays on the line until the next click)
   const edited = () => {
     setMaxNote(null);
@@ -644,6 +659,20 @@ export function OrderTicket(props: OrderTicketProps) {
     return sender.send(job);
   };
 
+  // after the merges: the sale is placed as by its button once the ticket has planned it on an environment that holds the merged UTXOs, and its
+  // usual final confirmation follows. A plan that cannot be placed then shows its reason instead, and so does one that never sees them
+  const sellReady = !!sellAfterMerge && !!env && current && env.tokenUtxos.some((u) => sellAfterMerge.leaves.has(`${u.transactionId}:${u.index}`));
+  useEffect(() => {
+    if (!sellAfterMerge) return;
+    if (sellReady) {
+      setSellAfterMerge(null);
+      if (canPlace) void place();
+      return;
+    }
+    const h = setTimeout(() => setSellAfterMerge(null), Math.max(0, SELL_AFTER_MERGE_MS - (Date.now() - sellAfterMerge.at)));
+    return () => clearTimeout(h);
+  }, [sellAfterMerge, sellReady]);
+
   /** The order button: every level of the order in turn, each planned at its turn, checked and approved in the wallet; a level that stops ends it. */
   const place = async () => {
     if (!canPlace || !built.intent) return;
@@ -701,6 +730,11 @@ export function OrderTicket(props: OrderTicketProps) {
   // a required field that is simply EMPTY (untouched, or just reset after an order) is not an error: no text in the slot (the instruction is on the disabled button,
   // `enterText` below); the slot's red text is for blocking errors only
   for (const i of issues.filter((x) => x.severity === 'error')) {
+    // too many UTXOs for one sale: the offer to merge first replaces the dead end, when a merge can help
+    if (i.code === FRAGMENTED && merge.offer) {
+      reasons.push({ code: i.code, text: merge.offer, kind: 'issue', action: 'merge' });
+      continue;
+    }
     const text = i.code === 'GUARDS_UNAVAILABLE' && switching ? t('ticket.switching') : issueText(i, issueCtx);
     reasons.push({ code: i.code, text, kind: 'issue', ...(rawOf(i) ? { raw: rawOf(i)! } : {}) });
   }
@@ -708,11 +742,13 @@ export function OrderTicket(props: OrderTicketProps) {
   for (const f of ladderFunds) reasons.push({ code: f.code, text: f.text, kind: 'ladder', testid: 'order-ladder-funds' });
   if (lastOrderErrors.length > 0) reasons.push({ code: 'ladder-last', text: lastOrderErrors.map((i) => t('ticket.ladder.lastLevel', { text: issueText(i, issueCtx) })).join(' '), kind: 'ladder', testid: 'order-ladder-last-errors' });
   // the button is off for a reason nothing above names (the plan is still being made, a click is running): said too, so a disabled button always has its sentence
-  const busy = placing || sendBusy(sender.status);
+  const busy = placing || sendBusy(sender.status) || merge.running || !!sellAfterMerge;
   // what the click is doing, as the label of the button itself (the eye is on it): checking, the app's confirmation, the wallet's approval, sending. A ladder
   // says its level first. The button keeps its size: only its text changes
   const phase = sender.status?.phase;
-  const busyText = busy
+  const busyText = busy && !placing && !sendBusy(sender.status)
+    ? t('ticket.merge.busy')
+    : busy
     ? (ladderLead ? `${ladderLead} · ` : '')
       + t(sender.status?.waiting ? 'send.waitWallet' : phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
     : null;
@@ -953,6 +989,7 @@ export function OrderTicket(props: OrderTicketProps) {
               >
                 <span key={r.text}>{r.text}</span>
                 {r.action === 'retry' ? <Button small onClick={() => void refresh().catch(() => null)} data-testid="order-retry">{t('common.retry')}</Button> : null}
+                {r.action === 'merge' ? <Button small class="tk-reason-merge" title={merge.hint} onClick={() => merge.start()} data-testid="order-merge-sell">{t('ticket.merge.action')}</Button> : null}
                 <RawDetails text={r.raw} />
               </li>
             ))}
@@ -972,7 +1009,8 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* the result of a click: a card of the notifications at the top right (not in the footer), so it never moves or covers the form; its progress is the
           label of the button */}
       <SendStatusToast sender={sender} lead={ladderLead} data-testid="order-status" />
-      <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace} loading={placing} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
+      {merge.card}
+      <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace || !!sellAfterMerge} loading={placing || merge.running || !!sellAfterMerge} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
         <span key={busyText ?? enterText ?? `${sideName}|${typeName}`} data-state={busyText ? 'busy' : enterText ? 'enter' : undefined}>{busyText ?? enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
       </Button>
       </div>

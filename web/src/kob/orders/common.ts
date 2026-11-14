@@ -300,9 +300,10 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
       tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
     } catch (e) {
       if (e instanceof InsufficientFunds) {
+        // `needed` lets the sell ticket merge just enough for this amount (ui/ticket/OrderTicket.tsx).
         return fail(
           e.kind === 'fragmented'
-            ? issue('TOKEN_UTXOS_FRAGMENTED', { max: e.maxInputs ?? 0 })
+            ? issue('TOKEN_UTXOS_FRAGMENTED', { max: e.maxInputs ?? 0, needed: e.needed })
             : issue('INSUFFICIENT_TOKENS', { needed: e.needed, have: e.have, shortfall: e.shortfall }),
         );
       }

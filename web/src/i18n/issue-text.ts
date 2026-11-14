@@ -123,6 +123,7 @@ declare('token', {
   'sweep.later-slots': ['amount'],
   'sweep.stray-unproven': ['amount'],
   INSUFFICIENT_TOKENS: ['needed', 'have', 'shortfall'],
+  TOKEN_UTXOS_FRAGMENTED: ['needed'],
   MARKET_DEPTH_INSUFFICIENT: ['available', 'amount'],
   MARKET_ONE_TX_LIMIT: ['fillable'],
   IOC_ONE_TX_LIMIT: ['fillable'],
