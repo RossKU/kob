@@ -291,15 +291,17 @@ armed or triggered, expiry soon, refunds. They are worked out in this browser wh
 ## 8. Merge token UTXOs
 
 Your tokens sit in token UTXOs (outputs). One transaction can spend only a few of them (3 on KOB's default token program). After many
-small buys you may hold more, and a sell then fails with "Your tokens are in too many UTXOs (at most 3 per transaction): merge them
-first (My orders, Balances)."
+small buys, or a resting order filled in many parts, you may hold more, and a sale then needs them merged first.
 
-* In **My orders**, under Balances, press **Merge (n)**. The button also shows roughly what the next click frees, for example
-  "Merge (5): about +4 KAS".
-* **One click is one transaction**: it merges your smallest UTXOs of that token up to the program's limit (3 into 1). It is manual and
-  costs a network fee; click again to merge more. "One UTXO remains: nothing more to merge" ends it.
-* The confirmation says how many UTXOs become how many ("The amount is unchanged") and how much KAS of their carriers returns to
-  your wallet after the fee. A merge never touches an open order's escrow.
+* In **My orders**, under Balances, press **Merge all (n)**. The button also shows roughly how much KAS the merge frees, for example
+  "Merge all (30): about +59 KAS".
+* A confirmation says what the merge takes before anything is sent: "Merge your 30 ... UTXOs into one: 15 transactions, one after the
+  other, each approved in your wallet (15 approvals)", and how much KAS of their carriers returns to your wallet after the network fees.
+  Each transaction is approved in your wallet on its own; no wallet signs several at once.
+* If you reject one, or one fails, the merge stops there. What was sent stays merged; press **Merge all** again to merge the rest.
+* On the order ticket, a sale that needs more UTXOs than one transaction takes offers **Merge, then sell**: it states how many merge
+  transactions it needs first, merges only as much as the amount needs, and then shows the sale's own confirmation as usual (the price
+  may have moved meanwhile). A merge never touches an open order's escrow.
 * The same applies to KAS: if "Your KAS is in too many small coins (UTXOs)", KOB cannot merge KAS. Send your KAS to your own address
   from your wallet to merge it, or place a smaller order.
 
