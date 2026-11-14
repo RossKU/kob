@@ -910,7 +910,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
         return invalid(format!("order value {} is below the {min} sompi this order needs to be fillable", r.value));
     }
     kas_out(r.value as i64, "the order value")?;
-    let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
+    let mut draft = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
     let holds = r.order.holds_tokens();
     let mut ext = None;
     if holds {
@@ -925,7 +925,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
-            d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
+            draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
         // The custody carries the commitment the order pins, since its covenant refuses any other.
         if fam == Family::Kcc20 && pinned_ext(&r.order, token.0).is_some_and(|e| Some(e) != ext) {
@@ -934,11 +934,11 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
     } else if !r.tokens.is_empty() {
         return invalid("KAS-holding orders take no token inputs");
     }
-    let auth = d.inputs.len();
+    let auth = draft.inputs.len();
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
-    let (_, order_id) = d.add_genesis(auth, vec![(r.value, r.order.spk())], Some(r.order.template_id()))?;
+    let (_, order_id) = draft.add_genesis(auth, vec![(r.value, r.order.spk())], Some(r.order.template_id()))?;
     let mut custody = None;
     if holds {
         let ext = ext.expect("ext");
@@ -952,43 +952,43 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
             return invalid(format!("token inputs hold {have} < the {amount} base units of amountLeft"));
         }
         let carrier = kas_out(r.token_carrier as i64, "tokenCarrier")?;
-        let idx = d.add_token_output(token, TokenState::custody(fam, amount, order_id, ext), carrier)?;
+        let idx = draft.add_token_output(token, TokenState::custody(fam, amount, order_id, ext), carrier)?;
         custody = Some(Custody { token_output: idx as u16, extension_commitment: ext });
         if have > amount {
             // Token change returns to the owner of the first token input.
             let owner = r.tokens[0].state.owner();
-            d.add_token_output(token, TokenState::user(token.1, have - amount, owner, ext), carrier)?;
+            draft.add_token_output(token, TokenState::user(token.1, have - amount, owner, ext), carrier)?;
         }
     }
     let mut records = vec![Record::order(0, &r.order, custody, r.deadline)];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode_with_release(&records)?;
-    d.seal(budgets)
+    draft.payload = payload::encode_with_release(&records)?;
+    draft.seal(budgets)
 }
 
 /// [`build_create_order`] of a pair order.
 ///
 /// It adds one custody output per custody the order holds, each of its own token with that token's
 /// change, and the placement record with its custody parts.
-fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
-    let (a, b) = pair_programs(&r.order)?;
-    if r.funding.is_empty() {
+fn build_create_pair(request: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
+    let (a, b) = pair_programs(&request.order)?;
+    if request.funding.is_empty() {
         return invalid("creating an order needs a P2PK funding input (it authorises the genesis)");
     }
-    let min = min_order_value(&r.order);
-    if (r.value as i64) < min {
-        return invalid(format!("order value {} is below the {min} sompi this order needs to be fillable", r.value));
+    let min = min_order_value(&request.order);
+    if (request.value as i64) < min {
+        return invalid(format!("order value {} is below the {min} sompi this order needs to be fillable", request.value));
     }
-    kas_out(r.value as i64, "the order value")?;
-    let custodies = r.order.custodies();
+    kas_out(request.value as i64, "the order value")?;
+    let custodies = request.order.custodies();
     if custodies.is_empty() {
         return invalid("a pair order holds tokens in custody");
     }
-    let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
+    let mut draft = Draft::new(request.lock_time, &request.fee, Some(request.change.unwrap_or(request.funding[0].pubkey)))?;
     let tok_of = |cov: [u8; 32]| if cov == a.0 { a } else { b };
     // The maker's tokens, per token: (token, total, extension, first owner).
     let mut groups: Vec<(Token, i64, [u8; 32], [u8; 32])> = vec![];
-    for t in &r.tokens {
+    for t in &request.tokens {
         let tok = match t.utxo.covenant_id {
             Some(c) if c == a.0 || c == b.0 => tok_of(c),
             _ => return invalid("a pair order takes tokens of its own two tokens only"),
@@ -1006,14 +1006,14 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             }
             None => groups.push((tok, t.state.amount(), t.state.extension(), t.state.owner())),
         }
-        d.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
+        draft.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
     }
-    let auth = d.inputs.len();
-    for f in &r.funding {
-        d.add_p2pk(f);
+    let auth = draft.inputs.len();
+    for f in &request.funding {
+        draft.add_p2pk(f);
     }
-    let (_, order_id) = d.add_genesis(auth, vec![(r.value, r.order.spk())], Some(r.order.template_id()))?;
-    let carrier = kas_out(r.token_carrier as i64, "tokenCarrier")?;
+    let (_, order_id) = draft.add_genesis(auth, vec![(request.value, request.order.spk())], Some(request.order.template_id()))?;
+    let carrier = kas_out(request.token_carrier as i64, "tokenCarrier")?;
     let mut parts = vec![];
     for (cov, amount) in &custodies {
         let tok = tok_of(*cov);
@@ -1025,23 +1025,23 @@ fn build_create_pair(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             return invalid(format!("token inputs hold {} < the {amount} base units of the custody", g.1));
         }
         // The custody carries the commitment the order pins, since its covenant refuses any other.
-        if tok.1.family() == Family::Kcc20 && pinned_ext(&r.order, *cov).is_some_and(|e| e != g.2) {
+        if tok.1.family() == Family::Kcc20 && pinned_ext(&request.order, *cov).is_some_and(|e| e != g.2) {
             return invalid("the token inputs carry another extension commitment than the order pins for its custody");
         }
         g.1 -= amount;
-        let idx = d.add_token_output(tok, TokenState::custody(tok.1.family(), *amount, order_id, g.2), carrier)?;
+        let idx = draft.add_token_output(tok, TokenState::custody(tok.1.family(), *amount, order_id, g.2), carrier)?;
         parts.push(Custody { token_output: idx as u16, extension_commitment: g.2 });
     }
     for (tok, rest, ext, owner) in groups {
         if rest > 0 {
-            d.add_token_output(tok, TokenState::user(tok.1, rest, owner, ext), carrier)?;
+            draft.add_token_output(tok, TokenState::user(tok.1, rest, owner, ext), carrier)?;
         }
     }
     let mut parts = parts.into_iter();
-    let mut records = vec![Record::order_with_prefund(0, &r.order, parts.next(), parts.next(), r.deadline)];
-    records.extend(r.records.iter().cloned());
-    d.payload = payload::encode_with_release(&records)?;
-    d.seal(budgets)
+    let mut records = vec![Record::order_with_prefund(0, &request.order, parts.next(), parts.next(), request.deadline)];
+    records.extend(request.records.iter().cloned());
+    draft.payload = payload::encode_with_release(&records)?;
+    draft.seal(budgets)
 }
 
 /// An order's own tokens, its custodies (token, exact amount) and the program suffix of its roles.
@@ -1062,17 +1062,17 @@ fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
 
 /// Builds a [`CancelOrder`], the maker's cancel with an optional replacement.
 pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx> {
-    let o = &r.order;
-    let id = o.state.template_id();
-    let (tokens, custodies, suffix) = own_tokens(&o.state)?;
+    let order = &r.order;
+    let id = order.state.template_id();
+    let (tokens, custodies, suffix) = own_tokens(&order.state)?;
     if r.retired.is_some() && (r.replace.is_some() || !r.tokens.is_empty() || !r.records.is_empty()) {
         return invalid("an order under a retired template is only cancelled: no replacement, top-up or records");
     }
     let subject = CancelSubject {
-        maker: o.state.maker(),
+        maker: order.state.maker(),
         tokens,
         custodies,
-        plan: cancel_plan(&o.state, r.retired)?,
+        plan: cancel_plan(&order.state, r.retired)?,
         role: format!("{}.cancel{suffix}", id.name()),
     };
     let parts = CancelParts {
@@ -1088,7 +1088,7 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
         records: &r.records,
         fee: &r.fee,
     };
-    cancel_with(subject, &o.utxo, parts, budgets)
+    cancel_with(subject, &order.utxo, parts, budgets)
 }
 
 /// The signing plan of the maker's cancel of an order.
@@ -1138,10 +1138,10 @@ struct CancelSubject {
 ///
 /// The custody, the strays of either of its tokens, the foreign strays and the carrier go back to
 /// the maker.
-fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets: BudgetFn) -> Result<BuiltTx> {
+fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, budgets: BudgetFn) -> Result<BuiltTx> {
     let CancelSubject { maker, tokens, custodies, plan, role } = subject;
-    let mut d = Draft::new(r.lock_time, r.fee, Some(r.change.unwrap_or(maker)))?;
-    let oi = d.add_input(utxo, plan, role, 0);
+    let mut draft = Draft::new(request.lock_time, request.fee, Some(request.change.unwrap_or(maker)))?;
+    let order_input = draft.add_input(utxo, plan, role, 0);
     let order_cov = utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
     // One group per own token: (token, units, extension, carriers).
     type Group = (Token, i64, Option<[u8; 32]>, Vec<u64>);
@@ -1157,8 +1157,8 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
         g.3.push(t.utxo.amount);
         Ok(g.0)
     }
-    let given: Vec<&TokenUtxo> = r.custody.iter().chain(r.prefund.iter()).copied().collect();
-    if r.prefund.is_some() && r.custody.is_none() {
+    let given: Vec<&TokenUtxo> = request.custody.iter().chain(request.prefund.iter()).copied().collect();
+    if request.prefund.is_some() && request.custody.is_none() {
         return invalid("the prefund custody comes with the first custody");
     }
     if given.len() > custodies.len() {
@@ -1170,33 +1170,33 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     for (c, (tok, amount)) in given.into_iter().zip(&custodies) {
         check_custody(c, Some(order_cov), *tok, *amount)?;
         put(&mut groups, c, "custody")?;
-        d.add_token_input(c, *tok, Witness::CovenantId)?;
+        draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
-    for st in r.strays {
+    for st in request.strays {
         let tok = tokens.iter().copied().find(|t| st.utxo.covenant_id == Some(t.0)).unwrap_or(tokens[0]);
         check_token_input(st, tok)?;
         if st.state.owner() != order_cov || !st.state.is_covenant_owned() {
             return invalid("a stray must be owned by the cancelled order's covenant id");
         }
         put(&mut groups, st, "stray")?;
-        d.add_token_input(st, tok, Witness::CovenantId)?;
+        draft.add_token_input(st, tok, Witness::CovenantId)?;
     }
-    for t in r.tokens {
+    for t in request.tokens {
         let tok = tokens.iter().copied().find(|x| t.utxo.covenant_id == Some(x.0)).unwrap_or(tokens[0]);
         check_token_input(t, tok)?;
         if !t.state.is_holder(tok.1) || t.state.owner() != maker {
             return invalid("top-up tokens must be the maker's own key-owned tokens");
         }
         put(&mut groups, t, "top-up")?;
-        d.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
+        draft.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
     }
     let own: Vec<[u8; 32]> = tokens.iter().map(|t| t.0).collect();
-    let foreign = add_foreign_inputs(&mut d, r.foreign, order_cov, &own)?;
-    for f in r.funding {
-        d.add_p2pk(f);
+    let foreign = add_foreign_inputs(&mut draft, request.foreign, order_cov, &own)?;
+    for f in request.funding {
+        draft.add_p2pk(f);
     }
     let mut records = vec![];
-    if let Some(rep) = r.replace {
+    if let Some(rep) = request.replace {
         check_new_order(&rep.order)?;
         if rep.order.maker() != maker {
             return invalid("the replacement must belong to the same maker");
@@ -1213,9 +1213,9 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
             return invalid("replacement value is below what the new order needs to be fillable");
         }
         kas_out(rep.value as i64, "the replacement value")?;
-        let (outs, new_id) = d.add_genesis(oi, vec![(rep.value, rep.order.spk())], Some(rep.order.template_id()))?;
+        let (outs, new_id) = draft.add_genesis(order_input, vec![(rep.value, rep.order.spk())], Some(rep.order.template_id()))?;
         // A tiny change rides on the replacement, as in the amend builders.
-        d.absorber = absorber_for(&rep.order, rep.value, outs[0]);
+        draft.absorber = absorber_for(&rep.order, rep.value, outs[0]);
         let default_carrier = groups.iter().find_map(|g| g.3.first().copied()).unwrap_or(0);
         let mut parts = vec![];
         for (tok, amount) in rep_custodies {
@@ -1228,7 +1228,7 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
                 rep.token_carrier.unwrap_or(g.3.first().copied().unwrap_or(default_carrier)) as i64,
                 "replacement tokenCarrier",
             )?;
-            let idx = d.add_token_output(tok, TokenState::custody(tok.1.family(), amount, new_id, e), carrier)?;
+            let idx = draft.add_token_output(tok, TokenState::custody(tok.1.family(), amount, new_id, e), carrier)?;
             parts.push(Custody { token_output: idx as u16, extension_commitment: e });
             g.1 -= amount;
         }
@@ -1238,15 +1238,15 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, r: CancelParts<'_>, budgets:
     for (tok, back, e, carriers) in groups {
         if back > 0 {
             let st = TokenState::user(tok.1, back, maker, e.expect("tokens"));
-            d.add_token_output(tok, st, pos(carriers[0] as i64, "token carrier")?)?;
+            draft.add_token_output(tok, st, pos(carriers[0] as i64, "token carrier")?)?;
         }
     }
-    add_foreign_outputs(&mut d, foreign, maker)?;
-    records.extend(r.records.iter().cloned());
+    add_foreign_outputs(&mut draft, foreign, maker)?;
+    records.extend(request.records.iter().cloned());
     if !records.is_empty() {
-        d.payload = payload::encode_with_release(&records)?;
+        draft.payload = payload::encode_with_release(&records)?;
     }
-    d.seal(budgets)
+    draft.seal(budgets)
 }
 
 /// The change rule of the amend builders, cancel-replace and in-place amend.
@@ -1277,16 +1277,16 @@ pub(crate) fn absorber_for(s: &AnyState, value: u64, output: usize) -> Option<cr
 
 /// Builds an [`AmendOrder`], the in-place amend of a plain ask or bid.
 pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
-    let o = &r.order;
-    let id = o.state.template_id();
+    let order = &r.order;
+    let id = order.state.template_id();
     if !payload::amendable(id) {
         return invalid(format!("{} orders are not amended in place (cancel-replace them)", id.name()));
     }
-    payload::check_amend_terms(&o.state, &r.amended).map_err(|e| Error::Invalid(e.to_string()))?;
+    payload::check_amend_terms(&order.state, &r.amended).map_err(|e| Error::Invalid(e.to_string()))?;
     check_new_order(&r.amended)?;
-    let token = order_token(&o.state)?;
-    let maker = o.state.maker();
-    let order_cov = o.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let token = order_token(&order.state)?;
+    let maker = order.state.maker();
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
     let funded = !r.funding.is_empty();
     // A bid's escrow is its quantity, so the continuation must still fund one minimum fill at the
     // new terms, as a cancel-replace's replacement must. Without funding, an explicit value above
@@ -1294,31 +1294,31 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let bid_floor =
         matches!(&r.amended, AnyState::KobBid(_) | AnyState::KobBidKron(_)).then(|| min_order_value(&r.amended).max(0) as u64);
     if let Some(floor) = bid_floor {
-        let want = r.value.unwrap_or(o.utxo.amount);
+        let want = r.value.unwrap_or(order.utxo.amount);
         if funded && want < floor {
             return invalid(format!(
                 "the amended bid's escrow of {want} sompi is below what the new order needs to be fillable: {floor} sompi (one minimum fill at the new terms)"
             ));
         }
-        if !funded && want > o.utxo.amount {
-            return Err(Error::InsufficientFunds { need: want, have: o.utxo.amount });
+        if !funded && want > order.utxo.amount {
+            return Err(Error::InsufficientFunds { need: want, have: order.utxo.amount });
         }
     }
-    let mut d = Draft::new(r.lock_time, &r.fee, funded.then(|| r.change.unwrap_or(maker)))?;
-    let oi = d.add_input(
-        &o.utxo,
-        entry(id, o.state.encode(), "cancel", vec![Arg::Sig(maker)]),
+    let mut draft = Draft::new(r.lock_time, &r.fee, funded.then(|| r.change.unwrap_or(maker)))?;
+    let order_input = draft.add_input(
+        &order.utxo,
+        entry(id, order.state.encode(), "cancel", vec![Arg::Sig(maker)]),
         format!("{}.cancel@{}", id.name(), token.1.name()),
         0,
     );
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
-    let value = r.value.unwrap_or(o.utxo.amount);
+    let value = r.value.unwrap_or(order.utxo.amount);
     // The continuation: the order's covenant id, authorised by the order input. Its custody stays
     // owned by that id.
-    let out = d.add_output(value, r.amended.spk(), Some((oi as u16, order_cov)));
-    d.absorber = if funded {
+    let out = draft.add_output(value, r.amended.spk(), Some((order_input as u16, order_cov)));
+    draft.absorber = if funded {
         absorber_for(&r.amended, value, out)
     } else {
         let tip = match &r.amended {
@@ -1331,10 +1331,10 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         let floor = MIN_AMEND_CARRIER.max(tip).max(bid_floor.unwrap_or(0));
         Some(crate::tx::Absorber { output: out, max_add: u64::MAX, pays: Some(floor) })
     };
-    let mut records = vec![Record::amend(out as u16, oi as u16, &r.amended, r.deadline)];
+    let mut records = vec![Record::amend(out as u16, order_input as u16, &r.amended, r.deadline)];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode_with_release(&records)?;
-    d.seal(budgets)
+    draft.payload = payload::encode_with_release(&records)?;
+    draft.seal(budgets)
 }
 
 /// One order of a position cancel, with its custody and any strays to sweep.
@@ -1385,7 +1385,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
     if r.orders.iter().any(|o| o.retired.is_some()) && !r.records.is_empty() {
         return invalid("a cancel of orders under a retired template carries no records");
     }
-    let mut d = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(maker)))?;
+    let mut draft = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(maker)))?;
     let mut items = vec![];
     for it in &r.orders {
         let s = &it.order.state;
@@ -1394,7 +1394,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             return invalid("a position cancel covers one maker's orders of one token (or one pair)");
         }
         let id = s.template_id();
-        d.add_input(&it.order.utxo, cancel_plan(s, it.retired)?, format!("{}.cancel{suffix}", id.name()), 0);
+        draft.add_input(&it.order.utxo, cancel_plan(s, it.retired)?, format!("{}.cancel{suffix}", id.name()), 0);
         items.push((it, custodies));
     }
     // Per token: (units, extension, first carrier).
@@ -1421,7 +1421,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
             if *g.2.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("all tokens of one transfer share one extension commitment");
             }
-            d.add_token_input(t, tok, Witness::CovenantId)?;
+            draft.add_token_input(t, tok, Witness::CovenantId)?;
             g.1 = add(g.1, t.state.amount(), "token amounts")?;
             if g.3 == 0 {
                 g.3 = t.utxo.amount;
@@ -1429,40 +1429,44 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
         }
     }
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
     for (tok, total, ext, carrier) in groups {
         if total > 0 {
             let v = pos(r.token_carrier.unwrap_or(carrier) as i64, "token carrier")?;
-            d.add_token_output(tok, TokenState::user(tok.1, total, maker, ext.expect("tokens")), v)?;
+            draft.add_token_output(tok, TokenState::user(tok.1, total, maker, ext.expect("tokens")), v)?;
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode_with_release(&r.records)?;
+        draft.payload = payload::encode_with_release(&r.records)?;
     }
-    d.seal(budgets)
+    draft.seal(budgets)
 }
 
 /// Builds the maker's sweep in place ([`SweepOrder`]).
 pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
-    let o = &r.order;
-    let id = o.state.template_id();
-    let maker = o.state.maker();
-    let order_cov = o.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let order = &r.order;
+    let id = order.state.template_id();
+    let maker = order.state.maker();
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
     if r.strays.is_empty() && r.foreign.is_empty() {
         return invalid("nothing to sweep: no strays");
     }
     let funded = !r.funding.is_empty();
     // Without funding only a plain ask's carrier pays. Every other kind's value is an escrow, a
     // prefund or keeper tips.
-    let carrier_pays = matches!(&o.state, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
+    let carrier_pays = matches!(&order.state, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
     if !funded && !carrier_pays {
         return invalid(format!("a {} sweep needs funding (its value is not a plain carrier)", id.name()));
     }
-    let mut d = Draft::new(r.lock_time, &r.fee, funded.then(|| r.change.unwrap_or(maker)))?;
-    let (tokens, _, suffix) = own_tokens(&o.state)?;
-    let oi =
-        d.add_input(&o.utxo, entry(id, o.state.encode(), "cancel", vec![Arg::Sig(maker)]), format!("{}.cancel{suffix}", id.name()), 0);
+    let mut draft = Draft::new(r.lock_time, &r.fee, funded.then(|| r.change.unwrap_or(maker)))?;
+    let (tokens, _, suffix) = own_tokens(&order.state)?;
+    let order_input = draft.add_input(
+        &order.utxo,
+        entry(id, order.state.encode(), "cancel", vec![Arg::Sig(maker)]),
+        format!("{}.cancel{suffix}", id.name()),
+        0,
+    );
     // The order's own tokens (A and B for a pair order), one group each, swept to the maker.
     let mut own_groups: Vec<ForeignOut> = vec![];
     for t in tokens.iter().copied() {
@@ -1486,7 +1490,7 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
             if s.state.extension() != e {
                 return invalid("all strays of one token in a sweep share one extension commitment (sweep the others separately)");
             }
-            d.add_token_input(s, t, Witness::CovenantId)?;
+            draft.add_token_input(s, t, Witness::CovenantId)?;
             units = units.checked_add(s.state.amount()).ok_or_else(|| Error::Invalid("stray amounts overflow".into()))?;
             kas = kas.checked_add(s.utxo.amount).ok_or_else(|| Error::Invalid("stray carriers overflow".into()))?;
         }
@@ -1496,29 +1500,29 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
         return invalid("a stray of another token is a foreign stray (pass it in `foreign` with its program)");
     }
     let own: Vec<[u8; 32]> = tokens.iter().map(|t| t.0).collect();
-    let foreign = add_foreign_inputs(&mut d, &r.foreign, order_cov, &own)?;
+    let foreign = add_foreign_inputs(&mut draft, &r.foreign, order_cov, &own)?;
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
     // The continuation: the same script under the order's covenant id, authorised by the order
     // input. A custody, owned by that id, stays where it is.
-    let out = d.add_output(o.utxo.amount, o.state.spk(), Some((oi as u16, order_cov)));
+    let out = draft.add_output(order.utxo.amount, order.state.spk(), Some((order_input as u16, order_cov)));
     if !funded {
-        let tip = match &o.state {
+        let tip = match &order.state {
             AnyState::KobAsk(a) | AnyState::KobAskKron(a) => a.refund_tip.max(0) as u64,
             _ => 0,
         };
-        d.absorber = Some(crate::tx::Absorber { output: out, max_add: u64::MAX, pays: Some(MIN_AMEND_CARRIER.max(tip)) });
+        draft.absorber = Some(crate::tx::Absorber { output: out, max_add: u64::MAX, pays: Some(MIN_AMEND_CARRIER.max(tip)) });
     }
     for (t, units, kas, e) in own_groups {
         let carrier = r.token_carrier.unwrap_or(kas);
-        d.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(carrier as i64, "stray carrier")?)?;
+        draft.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(carrier as i64, "stray carrier")?)?;
     }
-    add_foreign_outputs(&mut d, foreign, maker)?;
-    let mut records = vec![Record::Sweep { output: out as u16, input: oi as u16 }];
+    add_foreign_outputs(&mut draft, foreign, maker)?;
+    let mut records = vec![Record::Sweep { output: out as u16, input: order_input as u16 }];
     records.extend(r.records.iter().cloned());
-    d.payload = payload::encode_with_release(&records)?;
-    d.seal(budgets)
+    draft.payload = payload::encode_with_release(&records)?;
+    draft.seal(budgets)
 }
 
 /// One laid-out group of foreign strays.
@@ -1531,7 +1535,12 @@ type ForeignOut = (Token, i64, u64, [u8; 32]);
 /// The groups are of tokens other than `exclude`, the order's own. The outputs that return them
 /// ([`add_foreign_outputs`]) come after the transaction's positional outputs. Each group is one
 /// token, and its UTXOs share one extension commitment and fit the program's token inputs.
-fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 32], exclude: &[[u8; 32]]) -> Result<Vec<ForeignOut>> {
+fn add_foreign_inputs(
+    draft: &mut Draft,
+    foreign: &[ForeignStrays],
+    order_cov: [u8; 32],
+    exclude: &[[u8; 32]],
+) -> Result<Vec<ForeignOut>> {
     let mut out: Vec<ForeignOut> = vec![];
     for g in foreign {
         let t: Token = (g.token.covenant_id, g.token.program);
@@ -1557,7 +1566,7 @@ fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 
             if s.state.owner() != order_cov || !s.state.is_covenant_owned() || s.state.extension() != e {
                 return invalid("a foreign stray must be owned by the order's covenant id (one extension commitment per token)");
             }
-            d.add_token_input(s, t, Witness::CovenantId)?;
+            draft.add_token_input(s, t, Witness::CovenantId)?;
             units = units.checked_add(s.state.amount()).ok_or_else(|| Error::Invalid("foreign stray amounts overflow".into()))?;
             kas = kas.checked_add(s.utxo.amount).ok_or_else(|| Error::Invalid("foreign stray carriers overflow".into()))?;
         }
@@ -1568,9 +1577,9 @@ fn add_foreign_inputs(d: &mut Draft, foreign: &[ForeignStrays], order_cov: [u8; 
 
 /// The maker's outputs of [`add_foreign_inputs`]: each token's units with the KAS its strays
 /// carried.
-fn add_foreign_outputs(d: &mut Draft, groups: Vec<ForeignOut>, maker: [u8; 32]) -> Result<()> {
+fn add_foreign_outputs(draft: &mut Draft, groups: Vec<ForeignOut>, maker: [u8; 32]) -> Result<()> {
     for (t, units, kas, e) in groups {
-        d.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(kas as i64, "foreign stray carrier")?)?;
+        draft.add_token_output(t, TokenState::user(t.1, units, maker, e), pos(kas as i64, "foreign stray carrier")?)?;
     }
     Ok(())
 }
@@ -1580,22 +1589,22 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
     if r.order.state.is_pair() {
         return build_refund_pair(r, budgets);
     }
-    let o = &r.order;
-    let token = order_token(&o.state)?;
-    let (_, tip) = o.state.expiry().expect("order");
-    let due = o.state.refund_due(o.utxo.block_daa_score as i64).expect("order");
+    let order = &r.order;
+    let token = order_token(&order.state)?;
+    let (_, tip) = order.state.expiry().expect("order");
+    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
     if (r.lock_time as i64) < due {
         return invalid(format!("not refundable before DAA {due} (lockTime {})", r.lock_time));
     }
-    let id = o.state.template_id();
-    let maker = o.state.maker();
+    let id = order.state.template_id();
+    let maker = order.state.maker();
     // Funding without a change key would burn the whole funding as fee, so the change goes back to
     // the first funding key. Without funding the tip is the fee, and the keeper takes the
     // difference elsewhere.
-    let mut d = Draft::new(r.lock_time, &r.fee, r.change.or(r.funding.first().map(|f| f.pubkey)))?;
-    let state = o.state.encode();
-    let custody_amount = o.state.custody_amount();
-    let (plan, what) = match &o.state {
+    let mut draft = Draft::new(r.lock_time, &r.fee, r.change.or(r.funding.first().map(|f| f.pubkey)))?;
+    let state = order.state.encode();
+    let custody_amount = order.state.custody_amount();
+    let (plan, what) = match &order.state {
         AnyState::KobAsk(_) | AnyState::KobAskKron(_) => {
             (entry(id, state, "settle", vec![nb(0), Arg::Int(1), Arg::Int(0), Arg::Int(0)]), "refund")
         }
@@ -1620,27 +1629,27 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
         }
         _ => (entry(id, state, "refund", vec![]), "refund"),
     };
-    let kill = matches!(&o.state, AnyState::KobAsk(s) | AnyState::KobAskKron(s) if s.tif != TIF_GTC)
-        || matches!(&o.state, AnyState::KobBid(s) | AnyState::KobBidKron(s) if s.tif != TIF_GTC);
+    let kill = matches!(&order.state, AnyState::KobAsk(s) | AnyState::KobAskKron(s) if s.tif != TIF_GTC)
+        || matches!(&order.state, AnyState::KobBid(s) | AnyState::KobBidKron(s) if s.tif != TIF_GTC);
     let role = format!("{}.{what}{}@{}", id.name(), if kill { ".kill" } else { "" }, token.1.name());
-    d.add_input(&o.utxo, plan, role, SEQUENCE_NONFINAL);
-    let order_cov = o.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
-    let keep = u(o.utxo.amount as i64 - tip, "refund payout")?;
+    draft.add_input(&order.utxo, plan, role, SEQUENCE_NONFINAL);
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let keep = u(order.utxo.amount as i64 - tip, "refund payout")?;
     let own = vec![token.0];
     let foreign = match custody_amount {
         Some(amount) if amount > 0 => {
             let c = r.custody.as_ref().ok_or_else(|| Error::Invalid("token-holding order: custody token UTXO required".into()))?;
             check_custody(c, Some(order_cov), token, amount)?;
-            if let Some(e) = pinned_ext(&o.state, token.0) {
+            if let Some(e) = pinned_ext(&order.state, token.0) {
                 check_custody_ext(c, e)?;
             }
-            d.add_token_input(c, token, Witness::CovenantId)?;
+            draft.add_token_input(c, token, Witness::CovenantId)?;
             for f in &r.funding {
-                d.add_p2pk(f);
+                draft.add_p2pk(f);
             }
-            let foreign = add_foreign_inputs(&mut d, &r.foreign, order_cov, &own)?;
+            let foreign = add_foreign_inputs(&mut draft, &r.foreign, order_cov, &own)?;
             let st = c.state.with_holder_owner(token.1, maker);
-            d.add_token_output(token, st, keep + c.utxo.amount)?;
+            draft.add_token_output(token, st, keep + c.utxo.amount)?;
             foreign
         }
         _ => {
@@ -1648,15 +1657,15 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
                 return invalid("this order has no custody token (a refund never moves strays)");
             }
             for f in &r.funding {
-                d.add_p2pk(f);
+                draft.add_p2pk(f);
             }
-            let foreign = add_foreign_inputs(&mut d, &r.foreign, order_cov, &own)?;
-            d.add_output(pos(keep as i64, "refund payout")?, p2pk_spk(&maker), None);
+            let foreign = add_foreign_inputs(&mut draft, &r.foreign, order_cov, &own)?;
+            draft.add_output(pos(keep as i64, "refund payout")?, p2pk_spk(&maker), None);
             foreign
         }
     };
-    add_foreign_outputs(&mut d, foreign, maker)?;
-    d.seal(budgets)
+    add_foreign_outputs(&mut draft, foreign, maker)?;
+    draft.seal(budgets)
 }
 
 /// The refund of a pair order.
@@ -1664,57 +1673,57 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
 /// `KobPair` and `KobCondPair` return their custody to the maker at output 0 with every carrier,
 /// minus `refundTip`. `KobIfdPair` pays its KAS to the maker at output 0 and returns each custody
 /// at its own index.
-fn build_refund_pair(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
-    let o = &r.order;
-    let (_, tip) = o.state.expiry().expect("order");
-    let due = o.state.refund_due(o.utxo.block_daa_score as i64).expect("order");
-    if (r.lock_time as i64) < due {
-        return invalid(format!("not refundable before DAA {due} (lockTime {})", r.lock_time));
+fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
+    let order = &request.order;
+    let (_, tip) = order.state.expiry().expect("order");
+    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
+    if (request.lock_time as i64) < due {
+        return invalid(format!("not refundable before DAA {due} (lockTime {})", request.lock_time));
     }
-    let maker = o.state.maker();
-    let (tokens, custodies, _) = own_tokens(&o.state)?;
-    let kill = matches!(&o.state, AnyState::KobPair(s) if s.tif != TIF_GTC);
-    let (plan, role) = pair::refund_plan(&o.state, kill)?;
-    let mut d = Draft::new(r.lock_time, &r.fee, r.change.or(r.funding.first().map(|f| f.pubkey)))?;
-    d.add_input(&o.utxo, plan, role, SEQUENCE_NONFINAL);
-    let order_cov = o.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
-    let given: Vec<&TokenUtxo> = r.custody.iter().chain(r.prefund.iter()).collect();
+    let maker = order.state.maker();
+    let (tokens, custodies, _) = own_tokens(&order.state)?;
+    let kill = matches!(&order.state, AnyState::KobPair(s) if s.tif != TIF_GTC);
+    let (plan, role) = pair::refund_plan(&order.state, kill)?;
+    let mut draft = Draft::new(request.lock_time, &request.fee, request.change.or(request.funding.first().map(|f| f.pubkey)))?;
+    draft.add_input(&order.utxo, plan, role, SEQUENCE_NONFINAL);
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let given: Vec<&TokenUtxo> = request.custody.iter().chain(request.prefund.iter()).collect();
     if given.len() != custodies.len() {
         return invalid(format!(
             "this order's refund needs exactly its {} custody token UTXO(s) (a refund never moves strays)",
             custodies.len()
         ));
     }
-    if matches!(&o.state, AnyState::KobPair(_) | AnyState::KobCondPair(_)) && custodies.is_empty() {
+    if matches!(&order.state, AnyState::KobPair(_) | AnyState::KobCondPair(_)) && custodies.is_empty() {
         return invalid("a pair order without a custody is cancel-only");
     }
     for (c, (tok, amount)) in given.iter().zip(&custodies) {
         check_custody(c, Some(order_cov), *tok, *amount)?;
-        if let Some(e) = pinned_ext(&o.state, tok.0) {
+        if let Some(e) = pinned_ext(&order.state, tok.0) {
             check_custody_ext(c, e)?;
         }
-        d.add_token_input(c, *tok, Witness::CovenantId)?;
+        draft.add_token_input(c, *tok, Witness::CovenantId)?;
     }
-    for f in &r.funding {
-        d.add_p2pk(f);
+    for f in &request.funding {
+        draft.add_p2pk(f);
     }
     let own: Vec<[u8; 32]> = tokens.iter().map(|t| t.0).collect();
-    let foreign = add_foreign_inputs(&mut d, &r.foreign, order_cov, &own)?;
-    let keep = u(o.utxo.amount as i64 - tip, "refund payout")?;
-    match &o.state {
+    let foreign = add_foreign_inputs(&mut draft, &request.foreign, order_cov, &own)?;
+    let keep = u(order.utxo.amount as i64 - tip, "refund payout")?;
+    match &order.state {
         AnyState::KobIfdPair(_) => {
-            d.add_output(pos(keep as i64, "refund payout")?, p2pk_spk(&maker), None);
+            draft.add_output(pos(keep as i64, "refund payout")?, p2pk_spk(&maker), None);
             for (c, (tok, _)) in given.iter().zip(&custodies) {
-                d.add_token_output(*tok, c.state.with_user_owner(maker), c.utxo.amount)?;
+                draft.add_token_output(*tok, c.state.with_user_owner(maker), c.utxo.amount)?;
             }
         }
         _ => {
             let (c, (tok, _)) = (given[0], custodies[0]);
-            d.add_token_output(tok, c.state.with_user_owner(maker), keep + c.utxo.amount)?;
+            draft.add_token_output(tok, c.state.with_user_owner(maker), keep + c.utxo.amount)?;
         }
     }
-    add_foreign_outputs(&mut d, foreign, maker)?;
-    d.seal(budgets)
+    add_foreign_outputs(&mut draft, foreign, maker)?;
+    draft.seal(budgets)
 }
 
 /// Builds a [`SendTokens`] transfer.
@@ -1730,17 +1739,17 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
         check_key(k, "token change owner")?;
     }
     let change = r.change.or(r.funding.first().map(|f| f.pubkey)).or(Some(r.tokens[0].state.owner()));
-    let mut d = Draft::new(0, &r.fee, change)?;
+    let mut draft = Draft::new(0, &r.fee, change)?;
     let ext = r.tokens[0].state.extension();
     for t in &r.tokens {
         check_token_input(t, token)?;
         if t.state.extension() != ext {
             return invalid("token inputs mix extension commitments");
         }
-        d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
+        draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
     }
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
     let have = r
         .tokens
@@ -1751,23 +1760,27 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     for rc in &r.recipients {
         pos(rc.amount, "recipient amount")?;
         sent = sent.checked_add(rc.amount).ok_or_else(|| Error::Invalid("the recipients' amounts overflow an i64".into()))?;
-        d.add_token_output(token, TokenState::user(token.1, rc.amount, rc.pubkey, ext), pos(rc.carrier as i64, "recipient carrier")?)?;
+        draft.add_token_output(
+            token,
+            TokenState::user(token.1, rc.amount, rc.pubkey, ext),
+            pos(rc.carrier as i64, "recipient carrier")?,
+        )?;
     }
     if sent > have {
         return invalid(format!("sending {sent} with only {have}"));
     }
     if sent < have {
         let owner = r.token_change.unwrap_or(r.tokens[0].state.owner());
-        d.add_token_output(
+        draft.add_token_output(
             token,
             TokenState::user(token.1, have - sent, owner, ext),
             pos(r.token_change_carrier as i64, "token change carrier")?,
         )?;
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode_with_release(&r.records)?;
+        draft.payload = payload::encode_with_release(&r.records)?;
     }
-    d.seal(budgets)
+    draft.seal(budgets)
 }
 
 // ---------------------------------------------------------------- matcher shapes
