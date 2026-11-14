@@ -213,6 +213,25 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     expect(listCreations(NET, MAKER_PK, s.storage)).toEqual([]);
   });
 
+  it('a pushTx the wallet node does not keep: the genesis is asked for only once that node lists the preparation (getUtxoEntries)', async () => {
+    const s = setup();
+    // pushTx is accepted, yet the wallet's own lookup finds the preparation nowhere until the third
+    // poll (seen on TN10 with KasWare 0.11.5)
+    const view = laggingWalletNode(s.node, { pushLost: true });
+    const w = kasware(s, {}, view);
+    const refused: string[] = [];
+    const sign = w.provider.signPskt.bind(w.provider);
+    w.provider.signPskt = async (req) => sign(req).catch((e: Error) => Promise.reject((refused.push(e.message), e)));
+    let polls = 0;
+    const sleep = async () => void (++polls === 3 && view.reveal());
+    const res = await signAndSubmitCreation({ ...args(s, w.adapter), sleep });
+    expect(res.txid).toBe(s.plan.built.tx.id);
+    // the old gate trusted the accepted push and showed the wallet a genesis it had to refuse
+    expect(refused).toEqual([]);
+    expect(w.signs()).toBe(2);
+    expect(w.provider.calls.filter((c) => c.method === 'getUtxoEntries')).toHaveLength(4);
+  });
+
   it('without pushTx (Kaspire): the genesis is asked for once the node lists the preparation and the wallet node had its margin', async () => {
     const s = setup();
     const view = laggingWalletNode(s.node);

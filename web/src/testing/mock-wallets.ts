@@ -18,6 +18,10 @@
 // sign up on its node and refuses one that node does not hold unspent, with KasWare's message. The mock server plays that node
 // (`POST /mock/wallet-node/outpoints`, web/mock/server.mjs); `walletNodeLagMs` makes it see a new output only that long after KOB's node did,
 // unless the transaction was pushed to it (KasWare `pushTx` -> `POST /mock/wallet-node/push`). KOB assumes every extension wallet checks this.
+// KasWare's `getUtxoEntries(address)` lists what that node sees (`POST /mock/wallet-node/utxos`).
+// `pushTxOutcome` reproduces an announce that does not help: 'error' rejects with a message the
+// app cannot read as "already there"; 'lost' resolves although the wallet's node still cannot find
+// the output (a transaction moving from the mempool into a block).
 
 export type MockWalletId = 'kasware' | 'kaspire' | 'kastle';
 
@@ -55,6 +59,8 @@ export interface MockWalletConfig {
   checkInputs: boolean;
   /** the wallet's node sees a new output this long after KOB's node did (unless pushed to it) */
   walletNodeLagMs: number;
+  /** KasWare `pushTx`: 'ok' hands the tx to the wallet's node; 'error' and 'lost' do not */
+  pushTxOutcome: 'ok' | 'error' | 'lost';
   /** base URL of the mock server playing the wallet's node ('' = the app's `window.__KOB_CONFIG__.nodeUrl`) */
   nodeUrl: string;
 }
@@ -99,6 +105,7 @@ export const DEFAULT_WALLET_CONFIG: Omit<MockWalletConfig, 'wallet' | 'secretKey
   version: '',
   checkInputs: false,
   walletNodeLagMs: 0,
+  pushTxOutcome: 'ok',
   nodeUrl: '',
 };
 
@@ -276,11 +283,32 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
   const pushTx = async (rawtx: string) => {
     const base = walletNode();
     if (!base) throw new Error('pushTx: the active network node is unreachable');
+    const txid = String(JSON.parse(rawtx).id ?? '');
+    if (opts.pushTxOutcome === 'error') {
+      pushes.push({ at: Date.now(), txid, ok: false, error: 'RPC client is not connected' });
+      throw new Error('RPC client is not connected');
+    }
+    if (opts.pushTxOutcome === 'lost') {
+      pushes.push({ at: Date.now(), txid, ok: true, error: null });
+      return txid;
+    }
     const res = await fetch(base + '/mock/wallet-node/push', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ transaction: JSON.parse(rawtx) }) });
     const body = await res.json().catch(() => ({}));
     pushes.push({ at: Date.now(), txid: String(JSON.parse(rawtx).id ?? ''), ok: res.ok, error: res.ok ? null : String(body?.error ?? res.status) });
     if (!res.ok) throw new Error(String(body?.error ?? 'pushTx failed'));
     return body.transactionId;
+  };
+
+  /** `getUtxoEntries` requests, with how many entries came back */
+  const utxoReads: any[] = [];
+  const getUtxoEntries = async (addr?: string) => {
+    const base = walletNode();
+    if (!base) throw new Error('getUtxoEntries: the active network node is unreachable');
+    const res = await fetch(base + '/mock/wallet-node/utxos', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ address: addr ?? address(), lag_ms: opts.walletNodeLagMs }) });
+    if (!res.ok) throw new Error('getUtxoEntries failed');
+    const entries = (await res.json()).entries;
+    utxoReads.push({ at: Date.now(), address: addr ?? address(), outpoints: entries.map((e: any) => `${e.outpoint.transactionId}:${e.outpoint.index}`) });
+    return entries;
   };
 
   const scriptFor = (scripts: any[] | null, i: number) => (scripts && !opts.dropScripts ? scripts.find((s: any) => Number(s.inputIndex) === i) : undefined);
@@ -314,6 +342,7 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
       });
     },
     pushTx: async (rawtx: string) => pushTx(rawtx),
+    getUtxoEntries: async (addr?: string) => getUtxoEntries(addr),
   };
 
   // ------------------------------------------------------------------ Kaspire
@@ -427,11 +456,12 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
     options: opts,
     calls,
     pushes,
+    utxoReads,
     /** last recorded sign request */
     lastCall: () => calls[calls.length - 1] ?? null,
     /** changes behaviour at runtime, e.g. `configure({approve: false})` */
     configure: (patch: Record<string, any>) => Object.assign(opts, patch),
-    clearCalls: () => void ((calls.length = 0), (pushes.length = 0)),
+    clearCalls: () => void ((calls.length = 0), (pushes.length = 0), (utxoReads.length = 0)),
     /** fires a provider event (KasWare: accountsChanged / networkChanged) */
     emit,
     setNetwork: (n: string) => {

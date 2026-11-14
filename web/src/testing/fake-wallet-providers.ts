@@ -6,6 +6,8 @@
 //
 // The wallet's own node (`walletNode`): like KasWare 0.11.5, a fake given one refuses to sign an input that node does not hold, with KasWare's
 // message, and `pushTx` hands it a transaction. KOB assumes every extension wallet checks this, so the Kaspire fake takes one too.
+// The KasWare fake answers `getUtxoEntries` from that node when the node can list outputs by
+// address (`utxosOf`), and only then.
 import type { Hex, TxJson } from '../kob/types';
 import type { KaspaSdk } from '../data/kaspa-sdk';
 import type { KaswareProvider } from '../wallet/kasware';
@@ -34,24 +36,33 @@ export interface FakeWalletNode {
   hasUtxo(txid: string, index: number): boolean;
   /** `pushTx`: the wallet's node takes a transaction (resolves its id; rejects like a node) */
   push?(tx: TxJson): Promise<string>;
+  /** `getUtxoEntries(address)`: the outputs of `address` this node holds unspent */
+  utxosOf?(address: string): { transactionId: Hex; index: number }[];
 }
 
 /**
  * The wallet's view of `node` (a MockNode KOB's flow also talks to) lagging behind it: an output of a transaction `node` accepted after this
  * view was made is not seen until it is pushed to the wallet (`pushTx`) or `reveal`ed (it reached the wallet's node by relay).
  */
-export function laggingWalletNode(node: { hasUtxo(txid: string, index: number): boolean; submissions: readonly TxJson[] }): FakeWalletNode & { reveal(txid?: string): void; pushed: string[] } {
+export function laggingWalletNode(
+  node: { hasUtxo(txid: string, index: number): boolean; submissions: readonly TxJson[]; all?(): { address: string; transactionId: Hex; index: number }[] },
+  o: { pushLost?: boolean } = {},
+): FakeWalletNode & { reveal(txid?: string): void; pushed: string[] } {
   const before = node.submissions.length;
   const seen = new Set<string>();
   const pushed: string[] = [];
   const fresh = (txid: string) => node.submissions.slice(before).some((t) => t.id === txid);
+  const hasUtxo = (txid: string, index: number) => node.hasUtxo(txid, index) && (!fresh(txid) || seen.has(txid));
   return {
     pushed,
-    hasUtxo: (txid, index) => node.hasUtxo(txid, index) && (!fresh(txid) || seen.has(txid)),
+    hasUtxo,
+    ...(node.all ? { utxosOf: (address: string) => node.all!().filter((u) => u.address === address && hasUtxo(u.transactionId, u.index)) } : {}),
     async push(tx) {
       pushed.push(tx.id);
       if (!node.submissions.some((t) => t.id === tx.id)) throw new Error(`Rejected transaction ${tx.id}: transaction ${tx.id} is an orphan where orphan is disallowed`);
-      seen.add(tx.id);
+      // `pushLost`: the node took it, yet a moment later the wallet's lookup finds it neither in
+      // the mempool nor in the UTXO set.
+      if (!o.pushLost) seen.add(tx.id);
       return tx.id;
     },
     reveal(txid) {
@@ -228,6 +239,16 @@ export function fakeKasware(o: FakeWalletOptions): FakeKasware {
       if (!o.walletNode?.push) throw new Error('pushTx: no node');
       return o.walletNode.push(JSON.parse(rawtx) as TxJson);
     },
+    ...(o.walletNode?.utxosOf
+      ? {
+          async getUtxoEntries(addr?: string) {
+            w.calls.push({ method: 'getUtxoEntries', args: [addr] });
+            const list = o.walletNode!.utxosOf!(addr ?? address ?? '');
+            // KasWare's shape (a UtxoEntryReference as JSON): the outpoint nested
+            return list.map((u) => ({ address: addr, outpoint: { transactionId: u.transactionId, index: u.index } }));
+          },
+        }
+      : {}),
     async signPskt(req) {
       w.calls.push({ method: 'signPskt', args: [req] });
       const stop = checkBehavior(w.behavior);
