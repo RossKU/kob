@@ -13,6 +13,7 @@ import { firmReferencePrice } from '../kob/guards';
 import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
+import { freshTxids } from '../wallet/visibility';
 import { pendingSpends } from './pending-spends';
 import { spkStringToAddress } from '../data/kaspa-sdk';
 import { describeNodeError } from '../data/node-error';
@@ -278,6 +279,7 @@ export function assemblePlanEnv(
     kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
     ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
     funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
+    freshTxids: freshTxids(),
     ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
   };
 }
@@ -337,8 +339,11 @@ export function dropPendingSpends<E extends PlanEnv>(e: E): E {
   const funding = pendingSpends.funding(e.funding, e.maker);
   const tokenUtxos = pendingSpends.without(e.tokenUtxos);
   const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.without(e.pair.quoteTokenUtxos) } : null;
-  if (funding === e.funding && tokenUtxos === e.tokenUtxos && (!pair || pair.quoteTokenUtxos === (e as unknown as PairPlanEnv).pair.quoteTokenUtxos)) return e;
-  return { ...e, funding, tokenUtxos, ...(pair ? { pair } : {}) };
+  // the transactions sent since `e` was read make fresh coins too
+  const fresh = freshTxids();
+  const sameFresh = fresh.size === (e.freshTxids?.size ?? 0) && [...fresh].every((id) => e.freshTxids!.has(id));
+  if (funding === e.funding && tokenUtxos === e.tokenUtxos && sameFresh && (!pair || pair.quoteTokenUtxos === (e as unknown as PairPlanEnv).pair.quoteTokenUtxos)) return e;
+  return { ...e, funding, tokenUtxos, freshTxids: fresh, ...(pair ? { pair } : {}) };
 }
 
 /** The environment of the cancel, cancel-replace and refund planners. */
@@ -476,7 +481,7 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   }
   return {
     kob: s.kob, token: a, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice,
-    funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos),
+    funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos), freshTxids: freshTxids(),
     ...feeModeOf(s), fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
     pair: { quote: b, quoteTokenUtxos: pendingSpends.without(quoteTokenUtxos), view, kasPerWholeA, kasPerWholeB },
   };

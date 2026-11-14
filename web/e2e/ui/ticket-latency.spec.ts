@@ -4,11 +4,15 @@
 // (ui/ticket/review-check.ts), which reads again the parts that are older than the click, were read before the feed went live, or may have been
 // changed by a notice or by a submission of this page: with this indexer that is a few answers of 2-6 s; Continue in the popup asks the wallet at once.
 // With a ready ticket and a quick indexer the confirmation is there within 1 s of the click, also for an order right after the first one. A later order never picks the coins an earlier one has just spent
-// (app/pending-spends.ts).
+// (app/pending-spends.ts), and it spends the wallet's settled coins rather than the change of the order before: an extension wallet is asked for a
+// coin that change made only once its own node sees it (wallet/visibility.ts), so an order that can only spend that change waits for it, and says so.
 import type { Page } from '@playwright/test';
 import { expect, test, type MockWalletHandle } from '../fixtures';
 import { connectWallet, fund, listExkcc } from '../helpers/env';
 import { waitSubmitted } from '../helpers/ticket';
+
+/** The transactions the wallet's sign request `n` (0-based) spends from. */
+const spentTxids = async (wallet: MockWalletHandle, n: number): Promise<string[]> => (await wallet.calls())[n]!.tx.inputs.map((i: { transactionId: string }) => i.transactionId);
 
 /** milliseconds from a click to the final confirmation popup, and then from Continue to the wallet's sign request */
 interface ClickTimes {
@@ -25,6 +29,9 @@ const BUDGET_MS = 1_000;
  * connections to that origin, so the re-check's reads queue behind them: 60 s, not 30 s (measured 10-30 s on a quick machine, more on a CI runner).
  */
 const RECHECK_BUDGET_MS = 60_000;
+
+/** The visibility gate's margin after KOB's node lists a fresh output (wallet/visibility.ts `SETTLE_MS`). */
+const SETTLE_MS = 2_000;
 
 /** The node on an origin of its own, as in production (wRPC): its calls never queue behind the slow indexer's in the browser's connection pool. */
 async function nodeOnItsOwnOrigin(page: Page): Promise<void> {
@@ -106,7 +113,9 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       expect(keyToPlace).toBeLessThan(BUDGET_MS);
       const clickToWallet2 = await clickToWallet(page, wallet!, 2);
       expect(clickToWallet2.toPopup).toBeLessThan(RECHECK_BUDGET_MS);
+      // the wallet has settled coins: the second order spends one of them, not the first one's change, and the wallet is asked at once
       expect(clickToWallet2.toWallet).toBeLessThan(BUDGET_MS);
+      expect(await spentTxids(wallet!, 1)).not.toContain(txid);
       const txid2 = await waitSubmitted(page);
       expect(txid2).not.toBe(txid);
 
@@ -117,6 +126,8 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       const clickToWallet3 = await clickToWallet(page, wallet!, 3);
       expect(clickToWallet3.toPopup).toBeLessThan(RECHECK_BUDGET_MS);
       expect(clickToWallet3.toWallet).toBeLessThan(BUDGET_MS);
+      expect(await spentTxids(wallet!, 2)).not.toContain(txid);
+      expect(await spentTxids(wallet!, 2)).not.toContain(txid2);
       const txid3 = await waitSubmitted(page);
       expect(new Set([txid, txid2, txid3]).size).toBe(3);
       const submitted = await mock.submitted(false);
@@ -154,8 +165,52 @@ test.describe('order ticket with a slow indexer (2-6 s an answer)', () => {
       const second = await clickToWallet(page, wallet!, 2);
       expect(second.toPopup).toBeLessThan(BUDGET_MS);
       expect(second.toWallet).toBeLessThan(BUDGET_MS);
+      expect(await spentTxids(wallet!, 1)).not.toContain(txid);
       expect(await waitSubmitted(page)).not.toBe(txid);
       test.info().annotations.push({ type: 'ticket-latency', description: `click->popup ${first.toPopup} / ${second.toPopup} ms, continue->wallet request ${first.toWallet} / ${second.toWallet} ms` });
+    } finally {
+      await mock.latency(0);
+    }
+  });
+
+  test('an order right after the first that can only spend its change: the ticket says it waits for the wallet, which is asked once the node lists the change and the margin passed', async ({ appPage: page, mock, wallet }) => {
+    test.setTimeout(120_000);
+    // ONE coin: the second order has nothing but the first one's change to spend
+    await fund(mock, 'alice', { utxos: 1 });
+    await nodeOnItsOwnOrigin(page);
+    await listExkcc(page);
+    const tok = await mock.token();
+    await mock.latency(50, { jitterMs: 50 });
+    try {
+      await page.goto(`/#/market/${tok.covenant_id}`);
+      await connectWallet(page);
+      await page.getByTestId('order-side-buy').click();
+      await typeOrder(page, '3', '0.0201');
+      await expect(page.getByTestId('order-need-loading')).toHaveCount(0, { timeout: 30_000 });
+      await placeableFor(page, '3');
+      const first = await clickToWallet(page, wallet!, 1);
+      expect(first.toWallet).toBeLessThan(BUDGET_MS);
+      const txid = await waitSubmitted(page);
+
+      await typeOrder(page, '4', '0.0202');
+      await placeableFor(page, '4');
+      const t0 = Date.now();
+      await page.getByTestId('order-place').click();
+      await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 10_000 });
+      const toPopup = Date.now() - t0;
+      expect(toPopup).toBeLessThan(BUDGET_MS);
+      await page.getByTestId('confirm-order-ok').click();
+      const t1 = Date.now();
+      // the gate's wait is shown on the order button while the wallet's node catches up
+      await expect(page.getByTestId('order-place')).toContainText('sees your last transaction', { timeout: 5_000 });
+      await wallet!.waitForCalls(2, 30_000);
+      const toWallet = Date.now() - t1;
+      // the mock node lists the change at once: the wallet is asked after the margin, and not much later
+      expect(toWallet).toBeGreaterThanOrEqual(SETTLE_MS - 200);
+      expect(toWallet).toBeLessThan(SETTLE_MS + BUDGET_MS);
+      expect(await spentTxids(wallet!, 1)).toContain(txid);
+      expect(await waitSubmitted(page)).not.toBe(txid);
+      test.info().annotations.push({ type: 'ticket-latency', description: `fresh change only: click->popup ${toPopup} ms, continue->wallet request ${toWallet} ms` });
     } finally {
       await mock.latency(0);
     }

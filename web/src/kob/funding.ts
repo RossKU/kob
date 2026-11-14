@@ -83,7 +83,19 @@ const desc = <T extends { amount: string; transactionId: string; index: number }
  * default change owner. Any P2PK input of the wallet key does both, so the selection order only
  * changes which outpoint the covenant id derives from, and it is deterministic.
  */
-export function selectFunding(utxos: KeyUtxo[], needSompi: bigint, reserve: bigint = DEFAULT_FEE_RESERVE, maxInputs: number = MAX_FUNDING_INPUTS): KeyUtxo[] {
+export function selectFunding(
+  utxos: KeyUtxo[], needSompi: bigint, reserve: bigint = DEFAULT_FEE_RESERVE, maxInputs: number = MAX_FUNDING_INPUTS, fresh?: ReadonlySet<string>,
+): KeyUtxo[] {
+  // Settled coins first: a coin of a transaction sent moments ago makes the wallet wait until its
+  // node sees it. It is spent only when the others cannot cover the target.
+  const settled = fresh?.size ? utxos.filter((u) => !fresh.has(u.transactionId.toLowerCase())) : utxos;
+  if (settled.length < utxos.length && settled.length > 0) {
+    try {
+      return selectFunding(settled, needSompi, reserve, maxInputs);
+    } catch (e) {
+      if (!(e instanceof InsufficientFunds)) throw e;
+    }
+  }
   const target = (needSompi > 0n ? needSompi : 0n) + (reserve > 0n ? reserve : 0n);
   const usable = utxos.filter((u) => !u.covenantId && amountOf(u) > 0n);
   const have = usable.reduce((s, u) => s + amountOf(u), 0n);
@@ -171,13 +183,25 @@ export function selectTokens(
   amount: bigint,
   maxInputs: number,
   program: TokenProgram | null = null,
-  opts: { spare?: boolean; changeCap?: bigint } = {},
+  opts: { spare?: boolean; changeCap?: bigint; fresh?: ReadonlySet<string> } = {},
 ): TokenUtxo[] {
-  const cover = coverTokens(utxos, amount, maxInputs, program);
+  // Settled UTXOs first, as for the funding: one of a transaction sent moments ago covers the amount
+  // only when the others cannot, and never rides along as a spare extra.
+  const isFresh = (u: TokenUtxo) => !!opts.fresh?.has(u.transactionId.toLowerCase());
+  const settled = opts.fresh?.size ? utxos.filter((u) => !isFresh(u)) : utxos;
+  let cover: TokenUtxo[] | null = null;
+  if (settled.length < utxos.length && settled.length > 0) {
+    try {
+      cover = coverTokens(settled, amount, maxInputs, program);
+    } catch (e) {
+      if (!(e instanceof InsufficientFunds)) throw e;
+    }
+  }
+  cover ??= coverTokens(utxos, amount, maxInputs, program);
   if (opts.spare === false) return cover;
   const cap = opts.changeCap ?? (program && familyOfProgram(program) === 'kron' ? KRON_MAX_OUTPUT_AMOUNT : I64_MAX);
   const taken = new Set(cover);
-  const rest = usableTokens(utxos, program).filter((u) => !taken.has(u)).sort(tokenAsc);
+  const rest = usableTokens(settled, program).filter((u) => !taken.has(u)).sort(tokenAsc);
   let change = cover.reduce((s, u) => s + tokenAmt(u), 0n) - amount;
   const extras: TokenUtxo[] = [];
   for (const u of rest) {

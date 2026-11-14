@@ -397,7 +397,7 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
     try {
       // The covering set, then spare slots take the smallest other UTXOs of that token. That gives
       // one token change per token, and a KRON change stays under its per-output limit.
-      picked = selectTokens(usableUtxosOf(t.market, env.maker, t.utxos), c.amount, Math.min(t.market.slots.inputs, MAX_TOKEN_INPUTS), null, t.market.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
+      picked = selectTokens(usableUtxosOf(t.market, env.maker, t.utxos), c.amount, Math.min(t.market.slots.inputs, MAX_TOKEN_INPUTS), null, { ...(t.market.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {}), ...(env.freshTxids ? { fresh: env.freshTxids } : {}) });
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(
@@ -438,7 +438,7 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
     const r = reserve < room ? reserve : room;
     let funding: KeyUtxo[];
     try {
-      funding = selectFunding(env.funding, need, r);
+      funding = selectFunding(env.funding, need, r, undefined, env.freshTxids);
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(e.kind === 'fragmented' ? issue('FUNDING_FRAGMENTED', { max: e.maxInputs ?? 0 }) : issue('INSUFFICIENT_KAS', { needed: e.needed, have: e.have, shortfall: e.shortfall }));

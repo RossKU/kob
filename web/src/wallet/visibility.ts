@@ -78,6 +78,16 @@ export function sentAt(txid: string, now: number = now0()): number | null {
   return s && now - s.at <= FRESH_MS ? s.at : null;
 }
 
+/**
+ * The transactions this page sent less than `FRESH_MS` ago (lower case ids). A coin they made is
+ * one the gate may have to wait for, so planning spends it only when the settled coins cannot cover
+ * an order (kob/funding.ts `selectFunding`, `selectTokens`).
+ */
+export function freshTxids(now: number = now0()): Set<string> {
+  prune(now);
+  return new Set([...sent.keys()].filter((id) => sentAt(id, now) !== null));
+}
+
 /** Tests only: forgets every transaction noted. */
 export function resetVisibility(): void {
   sent.clear();

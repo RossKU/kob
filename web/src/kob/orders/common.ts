@@ -297,7 +297,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
       // The covering set, then spare slots take the wallet's smallest other UTXOs of the token.
       // They ride on the one token change, their carriers are recycled (tokenInputsKas) and the
       // surplus returns as KAS change.
-      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {});
+      tokens = selectTokens(usableTokenUtxos(env), spec.tokenAmount, Math.min(env.token.slots.inputs, MAX_TOKEN_INPUTS), env.token.program, { ...(env.token.family === 'kron' ? { changeCap: KRON_MAX_OUTPUT_AMOUNT } : {}), ...(env.freshTxids ? { fresh: env.freshTxids } : {}) });
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         // `needed` lets the sell ticket merge just enough for this amount (ui/ticket/OrderTicket.tsx).
@@ -340,7 +340,7 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
     const r = reserve < room ? reserve : room;
     let funding: KeyUtxo[];
     try {
-      funding = selectFunding(env.funding, need, r);
+      funding = selectFunding(env.funding, need, r, undefined, env.freshTxids);
     } catch (e) {
       if (e instanceof InsufficientFunds) {
         return fail(e.kind === 'fragmented' ? issue('FUNDING_FRAGMENTED', { max: e.maxInputs ?? 0 }) : issue('INSUFFICIENT_KAS', { needed: e.needed, have: e.have, shortfall: e.shortfall }));

@@ -214,6 +214,12 @@ export interface PlanEnv {
   /** Spendable P2PK-owned token UTXOs of the maker for `token`. */
   tokenUtxos: TokenUtxo[];
   /**
+   * Ids (lower case) of transactions this page sent moments ago. An extension wallet signs a coin
+   * they made only once its own node sees it, so the funding and token selection spend such a coin
+   * only when the settled ones cannot cover the order (wallet/visibility.ts).
+   */
+  freshTxids?: ReadonlySet<string>;
+  /**
    * Sompi per mass unit, 100 (the relay minimum) by default. An explicit rate means the fee policy
    * (`fees`) is not asked.
    */

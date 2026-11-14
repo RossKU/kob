@@ -22,6 +22,19 @@ describe('selectFunding', () => {
     expect(amounts(selectFunding(u, 10n * KAS, 0n, 4))).toEqual([1n * KAS, 1n * KAS, 1n * KAS, 20n * KAS]);
   });
 
+  it('spends a coin of a transaction sent moments ago only when the settled ones cannot cover the target (the wallet would wait for it)', () => {
+    const change = keyUtxo(1n * KAS);
+    const settled = [keyUtxo(5n * KAS), keyUtxo(20n * KAS)];
+    const fresh = new Set([change.transactionId.toLowerCase()]);
+    // smallest first would take the 1 KAS change; the settled 5 covers 2 KAS without it
+    expect(amounts(selectFunding([change, ...settled], 2n * KAS, 0n))).toEqual([1n * KAS, 5n * KAS]);
+    expect(amounts(selectFunding([change, ...settled], 2n * KAS, 0n, MAX_FUNDING_INPUTS, fresh))).toEqual([5n * KAS]);
+    // the settled coins cannot cover 26 KAS: the change is taken too
+    expect(amounts(selectFunding([change, ...settled], 26n * KAS, 0n, MAX_FUNDING_INPUTS, fresh))).toEqual([1n * KAS, 5n * KAS, 20n * KAS]);
+    // only fresh coins: they are spent
+    expect(amounts(selectFunding([change], 0n, 0n, MAX_FUNDING_INPUTS, fresh))).toEqual([1n * KAS]);
+  });
+
   it('adds the fee reserve to the need, exactly at the boundary', () => {
     const u = [keyUtxo(10n * KAS)];
     expect(selectFunding(u, 10n * KAS - 5_000_000n, 5_000_000n)).toHaveLength(1);
@@ -122,6 +135,18 @@ describe('selectTokens: the covering set, then the spare slots take the smallest
   const m = market3x3();
   const t = (wholeTokens: bigint) => tokenUtxo(m, wholeTokens * m.scale);
   const units = (u: { state: { amount: string } }[]) => u.map((x) => BigInt(x.state.amount) / m.scale);
+
+  it('a token UTXO of a transaction sent moments ago covers only when the settled ones cannot, and never rides along as an extra', () => {
+    const change = t(10n);
+    const fresh = new Set([change.transactionId.toLowerCase()]);
+    const u = [change, t(12n), t(1n)];
+    // the smallest covering one would be the fresh 10; the settled 12 covers 8, and the spare slot takes the settled 1, never the change
+    expect(units(selectTokens(u, 8n * m.scale, 3, null, { fresh }))).toEqual([12n, 1n]);
+    // 15 needs the change: covered largest first with it, the settled 1 rides along
+    expect(units(selectTokens(u, 15n * m.scale, 3, null, { fresh }))).toEqual([12n, 10n, 1n]);
+    // a sell ladder of one token UTXO: the next level spends the change
+    expect(units(selectTokens([change], 1n * m.scale, 3, null, { fresh }))).toEqual([10n]);
+  });
 
   it('need 100 of [1, 1, 1, 200]: still the 200 (what placed before places), the two spare slots take two of the 1s', () => {
     const u = [t(1n), t(200n), t(1n), t(1n)];
