@@ -31,7 +31,7 @@ import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
 import { useCongestion } from './use-congestion';
-import { SendStatusToast, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
+import { SendStatusInline, SendStatusToast, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
 import { oppositeSide } from '../market/orientation';
@@ -980,6 +980,10 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* the one place that says why the order cannot be placed (and what to know before it is: a warning), above the total and the button: no room when there is
           nothing to say, two lines at most (more scroll in it); the footer grows upwards from the pinned button, and the total is under the slot, so a sentence coming and
           going moves neither of them */}
+      {/* what a click is doing and why it stopped, in the footer itself (never over the form); a submitted order is a notification (below) */}
+      <div class="tk-status">
+        <SendStatusInline sender={sender} lead={ladderLead} data-testid="order-status" />
+      </div>
       <div class="tk-reason" data-testid="order-issues" data-count={shownReasons.length} aria-live="polite">
         {shownReasons.length > 0 ? (
           <ul>
@@ -1009,9 +1013,9 @@ export function OrderTicket(props: OrderTicketProps) {
           <span class="tk-line-unit">{costText.unit}</span>
         </div>
       </div>
-      {/* the result of a click: a card of the notifications at the top right (not in the footer), so it never moves or covers the form; its progress is the
-          label of the button */}
-      <SendStatusToast sender={sender} lead={ladderLead} data-testid="order-status" />
+      {/* the submitted order: a card of the notifications (its id, Copy, then whether a block took it), not a line of the footer; its progress is the
+          label of the button and the line above */}
+      <SendStatusToast sender={sender} lead={ladderLead} only="submitted" data-testid="order-status" />
       {merge.card}
       <Button
         variant="primary" block class="tk-place" data-side={form.side} onClick={() => (mergeFirst ? merge.start() : void place())} disabled={!(canPlace || mergeFirst) || !!sellAfterMerge}

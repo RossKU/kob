@@ -9,8 +9,10 @@
 /* a phone: a swipe on a form that does not scroll moves the page (contain would keep it in the panel, and the page would not move under the finger) */
 @media (max-width: 759px) { .tk-scroll { overscroll-behavior: auto; } }
 .tk-foot { flex: none; display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px var(--gutter) 8px; border-top: 1px solid var(--border); background: var(--surface); }
-/* the progress and the result of a click: one line above the button (a longer text scrolls in it), no room when there is none */
-.tk-status { max-height: 1.4rem; overflow-y: auto; overflow-x: hidden; }
+/* what a click is doing and why it stopped: a line of the footer above the reason slot (a longer text scrolls in it), in the flow of the footer, never
+   over the form; no room when there is none. A submitted order is a card of the notifications, not a line here */
+.tk-status { max-height: 3rem; overflow-y: auto; overflow-x: hidden; font-size: 0.85rem; line-height: 1.12rem; }
+.tk-status .send { padding: 2px 8px; font-size: inherit; }
 .tk-status:empty, .tk-reason:empty { display: none; }
 .tk-plain { padding: 14px var(--gutter); }
 /* the Buy | Sell row: the segmented control and, at its right end, the field help's "?" (the ticket has no title row) */

@@ -527,9 +527,9 @@ function ConfirmPopup(props: { status: SendStatus; onAnswer(ok: boolean): void }
 
 /**
  * One compact line: progress, the submitted transaction, or why nothing was sent. `lead` prefixes it (a ladder's "Level 2 of 3"). It also holds
- * the final confirmation popup of an external wallet while the send waits for it.
+ * the final confirmation popup of an external wallet while the send waits for it, unless `popup` is false (the caller opens it).
  */
-export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
+export function SendStatusLine(props: { sender: Sender; lead?: string | null; popup?: boolean; 'data-testid'?: string }) {
   const { config } = useServices();
   const wallet = useWallet();
   const s = props.sender.status;
@@ -567,21 +567,40 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'd
     <div class={`send send-${s.phase}`} data-testid={props['data-testid'] ?? 'send-status'} data-phase={s.phase} {...(s.confirmed ? { 'data-confirmed': s.confirmed } : {})} role={bad ? 'alert' : 'status'} aria-live="polite">
       {props.lead ? <span class="send-lead">{props.lead}</span> : null}
       {body}
-      {s.phase === 'confirming' && s.table ? <ConfirmPopup status={s} onAnswer={props.sender.decide} /> : null}
+      {props.popup !== false && s.phase === 'confirming' && s.table ? <ConfirmPopup status={s} onAnswer={props.sender.decide} /> : null}
     </div>
+  );
+}
+
+/**
+ * The send status inside a form (the order ticket): what a click is doing and why nothing was sent, in the flow of the form, never over it.
+ * A submitted transaction is not shown here: `SendStatusToast` with `only="submitted"` carries it to the notifications. The final confirmation
+ * popup of an external wallet opens over the page.
+ */
+export function SendStatusInline(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
+  const s = props.sender.status;
+  if (!s || s.phase === 'submitted') return null;
+  const popup = s.phase === 'confirming' && s.table && typeof document !== 'undefined' ? createPortal(<ConfirmPopup status={s} onAnswer={props.sender.decide} />, document.body) : null;
+  return (
+    <>
+      <SendStatusLine sender={props.sender} lead={props.lead ?? null} popup={false} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />
+      {popup}
+    </>
   );
 }
 
 /**
  * The send status as a card of the notifications at the top right (the toast host, kit/Toast.tsx), the same structure as theirs: what an order click is
  * doing, the submitted transaction, or why nothing was sent. The form under it never moves. Dismissed with its x once the send is over (an accepted
- * order's card goes by itself a minute after its block); without a host (a page with no app shell) it is shown in place.
+ * order's card goes by itself a minute after its block); without a host (a page with no app shell) it is shown in place. `only="submitted"`: the
+ * card carries the submitted transaction alone (its id, Copy, and then whether a block took it); the progress and the reasons are the form's
+ * (`SendStatusInline`).
  */
-export function SendStatusToast(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
+export function SendStatusToast(props: { sender: Sender; lead?: string | null; only?: 'submitted'; 'data-testid'?: string }) {
   const [host, setHost] = useState<HTMLElement | null>(null);
   useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
   const s = props.sender.status;
-  if (!s) return null;
+  if (!s || (props.only === 'submitted' && s.phase !== 'submitted')) return null;
   const tone = s.phase === 'blocked' || s.phase === 'failed' ? 'error' : s.phase === 'submitted' ? 'ok' : 'info';
   const card = (
     <div class={`toast toast-${tone} send-toast`} data-testid="send-toast">
