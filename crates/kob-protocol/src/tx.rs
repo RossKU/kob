@@ -93,8 +93,8 @@ pub fn output_storage_mass(o: &TransactionOutput) -> u64 {
     if o.value == 0 {
         return u64::MAX;
     }
-    let p = kaspa_consensus_core::mass::utxo_plurality(&o.script_public_key, o.covenant.is_some());
-    STORAGE_MASS_PARAMETER.saturating_mul(p).saturating_mul(p) / o.value
+    let plurality = kaspa_consensus_core::mass::utxo_plurality(&o.script_public_key, o.covenant.is_some());
+    STORAGE_MASS_PARAMETER.saturating_mul(plurality).saturating_mul(plurality) / o.value
 }
 /// Input sequence that keeps lock time enforced (non-final) with no relative lock.
 pub const SEQUENCE_NONFINAL: u64 = 0;
@@ -706,8 +706,8 @@ pub const BLOCK_MASS_LIMITS: BlockMassLimits =
 /// It uses rusty-kaspa's own mass calculator and the node's mempool mass cofactors.
 pub fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> MassReport {
     let params = mass_params();
-    let mc = MassCalculator::new_with_consensus_params(params);
-    let nc = mc.calc_non_contextual_masses(tx);
+    let mass_calc = MassCalculator::new_with_consensus_params(params);
+    let non_contextual = mass_calc.calc_non_contextual_masses(tx);
     // KIP-9 storage mass exists only for a transaction consensus can take. rusty-kaspa's calculator
     // divides by every output's value and by the input count, and `PopulatedTransaction` asserts
     // one entry per input. Consensus refuses a transaction without inputs or with a zero-value
@@ -718,17 +718,17 @@ pub fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> MassReport {
         u64::MAX
     } else {
         let populated = PopulatedTransaction::new(tx, entries.to_vec());
-        mc.calc_contextual_masses(&populated).map(|c| c.storage_mass).unwrap_or(u64::MAX)
+        mass_calc.calc_contextual_masses(&populated).map(|c| c.storage_mass).unwrap_or(u64::MAX)
     };
     let size = transaction_estimated_serialized_size(tx);
     // The mempool normalizes the transient mass with the cofactors of its block mass limits, which
     // are the consensus block mass limits (mining/src/mempool/check_transaction_standard.rs:71-75).
-    let transient_normalized = nc.normalized_transient(&params.block_mass_cofactors());
-    let fee_mass = nc.compute_mass.max(transient_normalized);
+    let transient_normalized = non_contextual.normalized_transient(&params.block_mass_cofactors());
+    let fee_mass = non_contextual.compute_mass.max(transient_normalized);
     MassReport {
         size,
-        compute: nc.compute_mass,
-        transient: nc.transient_mass,
+        compute: non_contextual.compute_mass,
+        transient: non_contextual.transient_mass,
         transient_normalized,
         storage,
         fee_mass,
@@ -865,11 +865,11 @@ pub fn sighash(tx: &Transaction, entries: &[UtxoEntry], idx: usize) -> [u8; 32] 
 /// ([`sighash`]). This function exists for the verifiers' negative tests and for tools that must
 /// forge a deliberately non-ALL signature.
 pub fn sighash_typed(tx: &Transaction, entries: &[UtxoEntry], idx: usize, hash_type: u8) -> Option<[u8; 32]> {
-    let mt = MutableTransaction::with_entries(tx.clone(), entries.to_vec());
+    let mutable_tx = MutableTransaction::with_entries(tx.clone(), entries.to_vec());
     let reused = SigHashReusedValuesUnsync::new();
-    let ht = SigHashType::from_u8(hash_type).ok()?;
-    let h = calc_schnorr_signature_hash(&mt.as_verifiable(), idx, ht, &reused);
-    Some(h.as_bytes())
+    let sighash_type = SigHashType::from_u8(hash_type).ok()?;
+    let hash = calc_schnorr_signature_hash(&mutable_tx.as_verifiable(), idx, sighash_type, &reused);
+    Some(hash.as_bytes())
 }
 
 /// Verifies a 65-byte signature against a digest and x-only key.
@@ -892,18 +892,18 @@ pub fn sign_digest(secret_key: &[u8; 32], digest: &[u8; 32]) -> Result<Vec<u8>> 
 /// The digest must be the matching [`sighash_typed`].
 pub fn sign_digest_typed(secret_key: &[u8; 32], digest: &[u8; 32], hash_type: u8) -> Result<Vec<u8>> {
     let secp = secp256k1::Secp256k1::new();
-    let kp = secp256k1::Keypair::from_seckey_slice(&secp, secret_key).map_err(|e| Error::Invalid(format!("secret key: {e}")))?;
+    let keypair = secp256k1::Keypair::from_seckey_slice(&secp, secret_key).map_err(|e| Error::Invalid(format!("secret key: {e}")))?;
     let msg = secp256k1::Message::from_digest_slice(digest).expect("32-byte digest");
-    let mut s = secp.sign_schnorr_no_aux_rand(&msg, &kp).as_ref().to_vec();
-    s.push(hash_type);
-    Ok(s)
+    let mut signature = secp.sign_schnorr_no_aux_rand(&msg, &keypair).as_ref().to_vec();
+    signature.push(hash_type);
+    Ok(signature)
 }
 
 /// x-only public key of a secret key.
 pub fn pubkey_of(secret_key: &[u8; 32]) -> Result<[u8; 32]> {
     let secp = secp256k1::Secp256k1::new();
-    let kp = secp256k1::Keypair::from_seckey_slice(&secp, secret_key).map_err(|e| Error::Invalid(format!("secret key: {e}")))?;
-    Ok(kp.x_only_public_key().0.serialize())
+    let keypair = secp256k1::Keypair::from_seckey_slice(&secp, secret_key).map_err(|e| Error::Invalid(format!("secret key: {e}")))?;
+    Ok(keypair.x_only_public_key().0.serialize())
 }
 
 /// Signs every request of a built transaction with local keys (x-only pubkey -> secret key).
@@ -959,8 +959,8 @@ pub fn assemble(built: &BuiltTx, signatures: &[InputSignature]) -> Result<(Trans
 pub fn tighten_budgets(tx: &mut Transaction, entries: &[UtxoEntry]) -> Result<()> {
     let units = crate::verify::measure_units(tx, entries)?;
     for (i, u) in units.iter().enumerate() {
-        let b = crate::budget::budget_for_units(*u);
-        tx.inputs[i].compute_commit = kaspa_consensus_core::mass::ComputeBudget::from(b).into();
+        let budget = crate::budget::budget_for_units(*u);
+        tx.inputs[i].compute_commit = kaspa_consensus_core::mass::ComputeBudget::from(budget).into();
     }
     Ok(())
 }
@@ -1228,9 +1228,10 @@ impl Draft {
         spk: ScriptPublicKey,
         template: Option<TemplateId>,
     ) -> Result<[u8; 32]> {
-        let op = self.inputs.get(auth).ok_or_else(|| Error::Invalid("genesis authorising input missing".into()))?.utxo.outpoint();
-        let o = TransactionOutput { value, script_public_key: spk.clone(), covenant: None };
-        let id = covenant_id(op, std::iter::once((idx as u32, &o))).as_bytes();
+        let outpoint =
+            self.inputs.get(auth).ok_or_else(|| Error::Invalid("genesis authorising input missing".into()))?.utxo.outpoint();
+        let output = TransactionOutput { value, script_public_key: spk.clone(), covenant: None };
+        let id = covenant_id(outpoint, std::iter::once((idx as u32, &output))).as_bytes();
         self.outputs[idx] = DOutput { value, spk, cov: Some((auth as u16, id)), token: None };
         self.covenants.push(NewCovenant { outputs: vec![idx as u32], authorizing_input: auth as u16, covenant_id: id, template });
         Ok(id)
@@ -1244,9 +1245,9 @@ impl Draft {
     /// new id.
     fn set_genesis_value(&mut self, idx: usize, value: u64) -> Result<()> {
         let Some((auth, old)) = self.outputs[idx].cov else { return invalid("not a genesis output") };
-        let op = self.inputs[auth as usize].utxo.outpoint();
-        let o = TransactionOutput { value, script_public_key: self.outputs[idx].spk.clone(), covenant: None };
-        let id = covenant_id(op, std::iter::once((idx as u32, &o))).as_bytes();
+        let outpoint = self.inputs[auth as usize].utxo.outpoint();
+        let output = TransactionOutput { value, script_public_key: self.outputs[idx].spk.clone(), covenant: None };
+        let id = covenant_id(outpoint, std::iter::once((idx as u32, &output))).as_bytes();
         self.outputs[idx].value = value;
         self.outputs[idx].cov = Some((auth, id));
         for c in self.covenants.iter_mut().filter(|c| c.covenant_id == old) {
@@ -1286,8 +1287,9 @@ impl Draft {
         let first = self.outputs.len();
         let tx_outs: Vec<TransactionOutput> =
             outs.iter().map(|(v, s)| TransactionOutput { value: *v, script_public_key: s.clone(), covenant: None }).collect();
-        let op = self.inputs.get(auth).ok_or_else(|| Error::Invalid("genesis authorising input missing".into()))?.utxo.outpoint();
-        let id = covenant_id(op, tx_outs.iter().enumerate().map(|(k, o)| ((first + k) as u32, o))).as_bytes();
+        let outpoint =
+            self.inputs.get(auth).ok_or_else(|| Error::Invalid("genesis authorising input missing".into()))?.utxo.outpoint();
+        let id = covenant_id(outpoint, tx_outs.iter().enumerate().map(|(k, o)| ((first + k) as u32, o))).as_bytes();
         let mut idx = vec![];
         for (v, s) in outs {
             idx.push(self.add_output(v, s, Some((auth as u16, id))));
@@ -1427,18 +1429,18 @@ impl Draft {
             }
         }
         for (cov, tpl) in &self.tokens {
-            let (tin, tout) = self.token_counts(*cov);
+            let (token_ins, token_outs) = self.token_counts(*cov);
             let (max_in, max_out) = tpl.token_slots().expect("token program");
-            if tin > max_in || tout > max_out {
+            if token_ins > max_in || token_outs > max_out {
                 return invalid(format!(
-                    "{} allows {max_in} token inputs / {max_out} token outputs per transaction; this needs {tin} / {tout}",
+                    "{} allows {max_in} token inputs / {max_out} token outputs per transaction; this needs {token_ins} / {token_outs}",
                     tpl.name()
                 ));
             }
-            if tin == 0 && tout > 0 {
+            if token_ins == 0 && token_outs > 0 {
                 return invalid("token outputs without a token input");
             }
-            if tin > 0 && tout == 0 {
+            if token_ins > 0 && token_outs == 0 {
                 return invalid("KCC-20 transfers need at least one token output");
             }
         }
@@ -1562,9 +1564,9 @@ impl Draft {
         };
         let dummy_sig = [[0u8; 64].as_slice(), &[SIGHASH_ALL]].concat();
         let mut inputs = Vec::with_capacity(self.inputs.len());
-        for ((inp, plan), b) in self.inputs.iter().zip(&plans).zip(&budget_values) {
-            let ss = plan.sigscript(plan.signer().map(|_| dummy_sig.as_slice()))?;
-            inputs.push(TransactionInput::new_with_compute_budget(inp.utxo.outpoint(), ss, inp.sequence, *b));
+        for ((inp, plan), budget_value) in self.inputs.iter().zip(&plans).zip(&budget_values) {
+            let sigscript = plan.sigscript(plan.signer().map(|_| dummy_sig.as_slice()))?;
+            inputs.push(TransactionInput::new_with_compute_budget(inp.utxo.outpoint(), sigscript, inp.sequence, *budget_value));
         }
         let total_in: u64 = entries.iter().map(|e| e.amount).sum();
         let fixed_out: u64 = outputs.iter().map(|o| o.value).sum();
@@ -1572,11 +1574,11 @@ impl Draft {
             return Err(Error::InsufficientFunds { need: fixed_out, have: total_in });
         }
         let slack = total_in - fixed_out;
-        let mk = |outs: Vec<TransactionOutput>| {
+        let build_tx = |outs: Vec<TransactionOutput>| {
             Transaction::new(1, inputs.clone(), outs, self.lock_time, SUBNETWORK_ID_NATIVE, 0, self.payload.clone())
         };
         let fee_of = |tx: &Transaction| target_fee(&masses(tx, &entries), self.fee_rate, self.fee_mode);
-        let fee_without = fee_of(&mk(outputs.clone()));
+        let fee_without = fee_of(&build_tx(outputs.clone()));
         let mut change_output = None;
         // The absorber's position among the final outputs, where empty reserved slots are not
         // outputs. A transaction with a reserved gap needs its change output there, and then has no
@@ -1589,11 +1591,11 @@ impl Draft {
         // mass moves with the value.
         let absorbed = |outs: &[TransactionOutput], at: usize, slack: u64, floor: u64| -> Option<Vec<TransactionOutput>> {
             let base = outs[at].value;
-            let mut v = (base + slack).checked_sub(fee_of(&mk(outs.to_vec())))?;
+            let mut v = (base + slack).checked_sub(fee_of(&build_tx(outs.to_vec())))?;
             for _ in 0..32 {
                 let mut o = outs.to_vec();
                 o[at].value = v;
-                let next = (base + slack).checked_sub(fee_of(&mk(o.clone())))?;
+                let next = (base + slack).checked_sub(fee_of(&build_tx(o.clone())))?;
                 if next >= v {
                     return (v >= floor).then_some(o);
                 }
@@ -1623,7 +1625,7 @@ impl Draft {
                 }
                 let mut outs = outputs.clone();
                 with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
-                let fee = fee_of(&mk(outs));
+                let fee = fee_of(&build_tx(outs));
                 let next = slack.saturating_sub(fee);
                 if next == c {
                     ok = true;
@@ -1642,10 +1644,10 @@ impl Draft {
                 // storage limit. Such a change is folded into the fee instead.
                 let mut outs = outputs.clone();
                 with_change(&mut outs, TransactionOutput { value: c, script_public_key: spk.clone(), covenant: None });
-                let m = masses(&mk(outs), &entries);
+                let mass_report = masses(&build_tx(outs), &entries);
                 // A tiny change, whose own storage mass (KIP-9 C / value) would exceed the fee
                 // mass, goes into the absorber instead if it fits.
-                let tiny = mass_params().storage_mass_parameter / c > m.fee_mass;
+                let tiny = mass_params().storage_mass_parameter / c > mass_report.fee_mass;
                 let folded = absorber
                     .filter(|_| tiny)
                     .and_then(|(a, at)| absorbed(&outputs, at, slack, 0).filter(|o| o[at].value - outputs[at].value <= a.max_add));
@@ -1657,14 +1659,14 @@ impl Draft {
                         // a change output. The fixed point left nothing over, and any rounding goes
                         // to the fee.
                         let value = o[at].value;
-                        let mut d = self;
-                        d.set_genesis_value(a.output, value)?;
-                        d.absorber = None;
-                        d.change = None;
-                        return d.seal(budgets);
+                        let mut draft = self;
+                        draft.set_genesis_value(a.output, value)?;
+                        draft.absorber = None;
+                        draft.change = None;
+                        return draft.seal(budgets);
                     }
                     outputs = o;
-                } else if m.within_block_limits() {
+                } else if mass_report.within_block_limits() {
                     let at = with_change(&mut outputs, TransactionOutput { value: c, script_public_key: spk, covenant: None });
                     change_output = Some(at as u32);
                 }
@@ -1680,7 +1682,7 @@ impl Draft {
         if tail_n > 0 && refund_slot_taken(outputs.len()) {
             return invalid("a refund output of a bid fill would sit at the positional output of another order input");
         }
-        let tx = mk(outputs);
+        let tx = build_tx(outputs);
         let report = masses(&tx, &entries);
         tx.set_storage_mass(report.storage);
         let report = masses(&tx, &entries);
