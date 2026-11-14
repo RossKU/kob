@@ -11,6 +11,13 @@
 //   switch.
 // Either way the app only extracts the signature and assembles the script itself through kob-wasm
 // `finalize`, which verifies it. A wallet that mis-assembles cannot produce a wrong transaction.
+//
+// Read from the 0.5.31 background script: `signPskt` looks no input up on any node, so the app's
+// visibility gate (wallet/visibility.ts) is only a precaution here. Its `pushTx` and
+// `getUtxoEntries` are not used. `pushTx` posts the string it is given as is to the REST API's
+// `/transactions`, which takes the REST shape of a transaction, not this app's. `getUtxoEntries`
+// lists only the selected account, whatever address it is asked about, from that REST API: it
+// cannot answer for covenant inputs, and it says nothing about a sign check that does not exist.
 import type { BuiltTx, Hex, InputSignature, SignRequest, TemplateName } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { normalizeNetwork } from '../data/kaspa-sdk';
