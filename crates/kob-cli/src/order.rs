@@ -218,9 +218,9 @@ fn describe(list: &[Value]) -> String {
     list.iter()
         .map(|t| {
             format!(
-                "{} units of {}.. ({} UTXO{}, {} KAS)",
+                "{} units of {} ({} UTXO{}, {} KAS)",
                 t["units"].as_str().unwrap_or("?"),
-                &t["token"].as_str().unwrap_or("")[..16.min(t["token"].as_str().unwrap_or("").len())],
+                t["token"].as_str().unwrap_or(""),
                 t["utxos"],
                 if t["utxos"] == 1 { "" } else { "s" },
                 kas(t["kas"].as_str().and_then(|k| k.parse().ok()).unwrap_or(0))
