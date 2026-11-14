@@ -13,7 +13,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { unzipSync } from 'fflate';
 import { chromium } from 'playwright-core';
-import { EXTENSIONS, checkPinnedPackage, crxToZip, packageVersion } from '../../tools/wallet-gate/lib/extension-pins.mjs';
+import { EXTENSIONS, checkPinnedPackage, crxToZip, packageVersion, sha256Hex } from '../../tools/wallet-gate/lib/extension-pins.mjs';
 
 export { chromium };
 
@@ -102,6 +102,40 @@ export async function ensureExtension(wallet, { download: allowDownload = true, 
   if (spec.zipUrl) unpackZip(pkg, dir);
   else unpackCrx(pkg, dir);
   return { dir, version, source: 'download', sha256: sha };
+}
+
+/**
+ * `--ext latest`: the newest release of a wallet, downloaded WITHOUT a pin into `.ext/latest/<wallet>/` (never the pinned cache `.ext/<wallet>/`,
+ * and always fresh). KasWare / Kastle: the CRX the Chrome Web Store endpoint serves; Kaspire: the newest GitHub release that carries an
+ * extension zip. The version and sha256 are returned so the run report records exactly which build ran; `pinnedVersion` says what the pins hold.
+ * @returns {Promise<{dir: string, version: string, source: 'latest', sha256: string, pinnedVersion: string}>}
+ */
+export async function ensureLatestExtension(wallet, { extRoot = EXT_ROOT } = {}) {
+  const spec = EXTENSIONS[wallet];
+  if (!spec) throw new Error(`unknown wallet ${wallet}`);
+  let url = spec.crxUrl;
+  if (spec.zipUrl) {
+    const headers = { accept: 'application/vnd.github+json', 'user-agent': 'kob-e2e-real', ...(process.env.GITHUB_TOKEN ? { authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) };
+    const res = await fetch('https://api.github.com/repos/KaspaHUB21/Kaspire-Kaspa-Wallet/releases?per_page=30', { headers });
+    if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+    let best = null;
+    const key = (v) => v.split('.').map(Number);
+    for (const r of await res.json()) {
+      for (const a of r.assets ?? []) {
+        const m = /^kaspire-extension-(\d+\.\d+\.\d+)\.zip$/.exec(a.name);
+        if (m && (!best || key(m[1]).reduce((d, n, i) => d || n - key(best.version)[i], 0) > 0)) best = { version: m[1], url: a.browser_download_url };
+      }
+    }
+    if (!best) throw new Error('no kaspire-extension-*.zip among the newest 30 releases');
+    url = best.url;
+  }
+  const pkg = await download(url);
+  const version = packageVersion(unzipSync(new Uint8Array(spec.zipUrl ? pkg : crxToZip(pkg))));
+  const dir = join(extRoot, 'latest', wallet);
+  rmSync(dir, { recursive: true, force: true });
+  if (spec.zipUrl) unpackZip(pkg, dir);
+  else unpackCrx(pkg, dir);
+  return { dir, version, source: 'latest', sha256: sha256Hex(pkg), pinnedVersion: spec.version };
 }
 
 // ------------------------------------------------------------------------------------------------ .env (secrets, gitignored)

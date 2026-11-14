@@ -5,11 +5,11 @@
 // open the gate page -> connect (approve popup) -> scripts/setup.mjs for the wallet address -> run T1/T2/T3 through
 // window.__gate.runTest while capturing + approving every Kaspire approval window. Results: out/wallet-kaspire.json.
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import kaspa from '../../lib/node-kaspa.mjs';
-import { ROOT, OUT, loadEnv, upsertEnv, launchWithExtension, extensionId, startServer, runSetup, saveResults, shot } from './common.mjs';
+import { ROOT, OUT, EXTENSIONS, loadEnv, upsertEnv, launchWithExtension, extensionId, startServer, runSetup, saveResults, shot } from './common.mjs';
 
 const argv = process.argv.slice(2);
 const flag = (n) => argv.includes('--' + n);
@@ -20,10 +20,11 @@ const ONLY = opt('only', 'T1,T2,T3').split(',');
 const VAULT_PASSWORD = 'kob-gate-kaspire-throwaway-2026'; // throwaway TN10 test wallet only
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const ZIP = join(ROOT, 'vendor', 'kaspire', 'kaspire-extension-0.5.1.zip');
-const EXT_DIR = join(ROOT, 'vendor', 'kaspire', 'ext');
-const SOURCE_URL = 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet/releases/download/v0.11.37/kaspire-extension-0.5.1.zip';
-const EXPECT_SHA = '8c44f8f9624e552bf7d75b07d981d4c8c7921e0679ea25b735195d4452cc5527'; // == the release's .sha256 asset
+// the pinned release (lib/extension-pins.mjs: version, zip URL and sha256, shared with web/e2e-real)
+const SOURCE_URL = EXTENSIONS.kaspire.zipUrl;
+const ZIP = join(ROOT, 'vendor', 'kaspire', SOURCE_URL.split('/').pop());
+const EXT_DIR = join(ROOT, 'vendor', EXTENSIONS.kaspire.vendorDir);
+const EXPECT_SHA = EXTENSIONS.kaspire.zipSha256;
 
 // ------------------------------------------------------------------ extension
 async function ensureExtension() {
@@ -35,7 +36,10 @@ async function ensureExtension() {
   }
   const sha = createHash('sha256').update(readFileSync(ZIP)).digest('hex');
   if (sha !== EXPECT_SHA) throw new Error(`extension zip sha256 mismatch: ${sha}`);
-  if (!existsSync(join(EXT_DIR, 'manifest.json'))) {
+  // an unpacked copy of another version (an older pin) is replaced
+  const unpacked = existsSync(join(EXT_DIR, 'manifest.json')) ? JSON.parse(readFileSync(join(EXT_DIR, 'manifest.json'), 'utf8')).version : null;
+  if (unpacked !== EXTENSIONS.kaspire.version) {
+    rmSync(EXT_DIR, { recursive: true, force: true });
     const { unzipSync } = await import('fflate');
     const files = unzipSync(new Uint8Array(readFileSync(ZIP)));
     for (const [name, data] of Object.entries(files)) {

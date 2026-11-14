@@ -1,0 +1,63 @@
+# Daily, keyless check that the wallet extensions the real-wallet runs are pinned to (tools/wallet-gate/lib/extension-pins.mjs) are still the
+# newest releases. KasWare 0.11.5 started refusing inputs its own node does not know and nobody noticed the new release: this makes a new
+# release visible the day it ships. It downloads the newest KasWare CRX and looks up the newest Kaspire release (no keys, no wallet is run), and
+# on a difference opens one issue with a diff of the provider methods and the refusal strings (a prompt to look, not proof). The job then fails
+# so the schedule shows red. A download or parse error fails the job without an issue. See tools/wallet-gate/README.md.
+name: wallet-drift
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: wallet-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Compare the newest releases with the pins
+        id: check
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          node tools/wallet-gate/scripts/check-latest.mjs --out drift.md
+          code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # exit 1 = drift (an issue follows), anything else non-zero = the check itself failed
+          if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then exit "$code"; fi
+      - name: Open an issue for the drift
+        if: steps.check.outputs.code == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title=$(head -n 1 drift.md | sed 's/^# //')
+          # the title is compared as data (never put into a jq program or a search query: it carries a version read from a download)
+          existing=$(gh issue list --state open --limit 200 --json number,title --jq '.[] | "\(.number)\t\(.title)"' | awk -F'\t' -v t="$title" '$2 == t { print $1; exit }')
+          if [ -n "$existing" ]; then
+            echo "issue #$existing is already open for: $title"
+          else
+            gh issue create --title "$title" --body-file drift.md
+          fi
+      - name: Fail on drift
+        if: steps.check.outputs.code == '1'
+        run: |
+          echo "A wallet extension drifted from the pins: see drift.md in the log of the previous step / the opened issue."
+          exit 1

@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
  * Every wallet is pinned: `version` is the manifest version the runs use, and a download must have the sha256 below
  * (`crxSha256` for the CRX file, `zipSha256` for the zip). The Chrome Web Store endpoint always serves the newest release,
  * so when a wallet publishes a new version the download is refused until the pin is moved here (new version and sha256,
- * after looking at the release). An unpacked copy is used only when its manifest version equals the pin.
+ * after looking at the release; scripts/check-latest.mjs reports a newer release daily, see its header). An unpacked copy is used only when its manifest version equals the pin.
  */
 export const EXTENSIONS = {
   kasware: {
@@ -18,15 +18,15 @@ export const EXTENSIONS = {
     vendorDir: 'ext-kasware/unpacked',
     id: 'hklhheigdmpoolooomdihmhlpjjdbklf',
     crxUrl: 'https://clients2.google.com/service/update2/crx?response=redirect&prodversion=153.0.0.0&acceptformat=crx3&x=id%3Dhklhheigdmpoolooomdihmhlpjjdbklf%26uc',
-    version: '0.10.0',
-    crxSha256: 'c2a9cf257f249653ff856eab02e5ab681a7590d8c58f58feecc4306b5354dcf0',
+    version: '0.11.5',
+    crxSha256: '0235123ff6a1ce781c7538bd0a0039df5fceb2fc16536dffe2d9fb4e5d59b46b',
   },
   kaspire: {
     label: 'Kaspire',
     vendorDir: 'kaspire/ext',
-    zipUrl: 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet/releases/download/v0.11.37/kaspire-extension-0.5.1.zip',
-    version: '0.5.1',
-    zipSha256: '8c44f8f9624e552bf7d75b07d981d4c8c7921e0679ea25b735195d4452cc5527',
+    zipUrl: 'https://github.com/KaspaHUB21/Kaspire-Kaspa-Wallet/releases/download/extension-v0.5.31/kaspire-extension-0.5.31.zip',
+    version: '0.5.31',
+    zipSha256: 'cb4c1ea8cd4a21cc650b2d07906f4ec9847c5c51bba5bd1f7b022cb20f52dedd',
   },
   kastle: {
     label: 'Kastle',

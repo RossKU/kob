@@ -1,7 +1,7 @@
 # Real-wallet run on Kaspa testnet-10
 
-Drives the built KOB web app with the REAL released wallet extensions (KasWare 0.10.0, Kaspire 0.5.1, Kastle 2.61.0, pinned in
-`tools/wallet-gate/lib/extension-pins.mjs`) against a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in
+Drives the built KOB web app with the REAL released wallet extensions (KasWare, Kaspire, Kastle: versions pinned in
+`tools/wallet-gate/lib/extension-pins.mjs`; the results tables below name the build each run used) against a testnet-10 node of your own (`KOB_TN10_WRPC`, default `ws://127.0.0.1:18210`; `NODE_WS` in
 `.env` overrides it) and proves, per wallet: issue a token of the default program (the published public-mint build, 3 / 3 slots), place and cancel the main order types, amend an order,
 merge the token's UTXOs and read My orders / Balances, with every accepted transaction checked on the node independently of the app.
 Test money only. On demand only: CI never runs it (it needs extensions, funded keys and a node; `.github/workflows/ci.yml` says so).
@@ -24,6 +24,7 @@ npm run fetch-sdk && npm run build:wasm -- --copy    # once (kob-wasm bindings a
 node e2e-real/run.mjs                                 # KasWare, Kaspire and Kastle, every scenario (market SKIPs without an indexer)
 node e2e-real/run.mjs --indexer http://127.0.0.1:8080 # also the market scenario (an indexer of the same TN10 node; or INDEXER_URL in .env)
 node e2e-real/run.mjs --wallet kaspire --only limit,amend --headless
+node e2e-real/run.mjs --ext latest --wallet kasware   # the NEWEST release, downloaded without a pin into .ext/latest/ (the pinned cache is untouched); version + sha256 land in the report
 
 # offline, mock stack + mock wallets (any machine, no secrets; about 20 min per wallet, most of it the app's acceptance wait)
 node e2e-real/run.mjs --mock                          # node-only, like the TN10 default

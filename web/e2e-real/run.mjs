@@ -4,7 +4,8 @@
 // transaction is verified on the node independently of the app.
 //
 //   node e2e-real/run.mjs [--wallet kasware,kaspire,kastle|all] [--only limit,amend,...] [--indexer [url]] [--headless] [--keep-open]
-//                         [--skip-issue] [--rebuild] [--port N]
+//                         [--skip-issue] [--rebuild] [--port N] [--ext pinned|latest]
+//   --ext latest   run the NEWEST released extension (downloaded without a pin into .ext/latest/, version and sha256 in the report) instead of the pinned build
 //   node e2e-real/run.mjs --mock [--indexer] ...      the same scenarios against the offline mock stack (web/e2e) with in-page mock wallets
 //
 // Exit codes: 0 every selected scenario passed (or was skipped with a reason), 1 a scenario failed, 77 skipped (no .env / extension cache / node
@@ -13,7 +14,7 @@
 import { existsSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { chromium, OUT_DIR, WEB_ROOT, ENV_PATH, ensureExtension, ensureMnemonic, launchWalletBrowser, loadEnv, log, shot, sleep } from './common.mjs';
+import { chromium, OUT_DIR, WEB_ROOT, ENV_PATH, EXTENSIONS, ensureExtension, ensureLatestExtension, ensureMnemonic, launchWalletBrowser, loadEnv, log, shot, sleep } from './common.mjs';
 import { fund, TN10_NODE } from './fund.mjs';
 import { startAppServer, DIST_REAL, REGISTRY_PATH } from './server.mjs';
 import { KAS, NodeChecker, WALLET_LABELS, connectWallet, kasBalance, openApp, retryOnce, walletDriver, writeJson } from './driver.mjs';
@@ -34,12 +35,16 @@ const ALL_IDS = SCENARIOS.map(([id]) => id);
 const ONLY = optv('only', ALL_IDS.join(',')).split(',');
 const HEADLESS = flag('headless') || MOCK; // the mock wallets need no extension: always headless
 const KEEP_OPEN = flag('keep-open');
+const EXT_MODE = optv('ext', 'pinned');
+const LATEST = EXT_MODE === 'latest';
 const SKIP_ISSUE = flag('skip-issue');
 const FUND_BELOW = 120n * KAS; // two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open
 const FUND_KAS = 100;
 
 for (const w of WALLETS) if (!ALL_WALLETS.includes(w)) throw new Error(`unknown wallet ${w} (kasware, kaspire, kastle)`);
 for (const id of ONLY) if (!ALL_IDS.includes(id)) throw new Error(`unknown scenario ${id} (${ALL_IDS.join(', ')})`);
+if (!['pinned', 'latest'].includes(EXT_MODE)) throw new Error(`--ext takes pinned or latest, not ${EXT_MODE}`);
+if (MOCK && LATEST) throw new Error('--ext latest runs a real extension: not with --mock');
 if (MOCK && SKIP_ISSUE) throw new Error('--skip-issue reuses tokens of an earlier TN10 run: not with --mock (the mock chain starts empty)');
 
 const skip = (why) => {
@@ -66,6 +71,7 @@ async function preflight(env) {
     // a throw-away mnemonic is generated into .env on first use (never printed); the run funds the wallet from the DEV key
     const key = `WALLET_MNEMONIC_${w.toUpperCase()}`;
     if (!env[key]) env[key] = ensureMnemonic(key);
+    if (LATEST) continue; // downloaded when the wallet's browser starts
     try {
       await ensureExtension(w, { download: false });
     } catch (e) {
@@ -98,7 +104,8 @@ async function walletContext(name, drv, mockBrowser) {
     await drv.setup(ctx);
     return { ctx, ext: { version: 'mock' } };
   }
-  const ext = await ensureExtension(name, { download: false });
+  const ext = LATEST ? await ensureLatestExtension(name) : await ensureExtension(name, { download: false });
+  if (LATEST) log(`[${name}] --ext latest: ${ext.version} (pinned ${ext.pinnedVersion}), sha256 ${ext.sha256}`);
   const ctx = await launchWalletBrowser({ extensionDir: ext.dir, profileName: name, headless: HEADLESS, fresh: true });
   log(`[${name}] onboarding ${drv.label} ${ext.version}`);
   await drv.setup(ctx);
@@ -139,6 +146,7 @@ async function runWallet(name, env, node, server, { mock, mockBrowser, indexerUr
   rmSync(join(OUT_DIR, 'screens', name), { recursive: true, force: true });
   const { ctx, ext } = await walletContext(name, drv, mockBrowser);
   result.walletVersion = ext.version;
+  result.extension = { mode: LATEST ? 'latest' : 'pinned', version: ext.version, sha256: ext.sha256 ?? null, pinnedVersion: EXTENSIONS[name]?.version ?? null };
   const appConfig = {
     network: 'testnet-10',
     indexerUrl,

@@ -176,12 +176,13 @@ describe('real-wallet helpers (e2e-real/common.mjs)', () => {
   it('ensureExtension reuses the unpacked cache, copies the wallet-gate cache, and only downloads when allowed', async () => {
     const vendor = join(tmp, 'vendor');
     const extRoot = join(tmp, 'ext-root');
-    real.unpackZip(zipSync({ 'manifest.json': strToU8('{"version":"0.10.0"}'), 'bg.js': strToU8('1') }), join(vendor, 'ext-kasware', 'unpacked'));
+    const pinned = real.EXTENSIONS.kasware.version; // the cache is used only when its manifest version equals the pin
+    real.unpackZip(zipSync({ 'manifest.json': strToU8(JSON.stringify({ version: pinned })), 'bg.js': strToU8('1') }), join(vendor, 'ext-kasware', 'unpacked'));
     const first = await real.ensureExtension('kasware', { extRoot, vendors: [join(tmp, 'nowhere'), vendor], download: false });
-    expect(first).toMatchObject({ source: 'vendor', version: '0.10.0', dir: join(extRoot, 'kasware') });
+    expect(first).toMatchObject({ source: 'vendor', version: pinned, dir: join(extRoot, 'kasware') });
     expect(readFileSync(join(first.dir, 'bg.js'), 'utf8')).toBe('1');
     // the second call reuses the copy even without any vendor cache
-    expect(await real.ensureExtension('kasware', { extRoot, vendors: [], download: false })).toMatchObject({ source: 'cache', version: '0.10.0' });
+    expect(await real.ensureExtension('kasware', { extRoot, vendors: [], download: false })).toMatchObject({ source: 'cache', version: pinned });
     await expect(real.ensureExtension('kaspire', { extRoot, vendors: [vendor], download: false })).rejects.toThrow(/not found/);
     await expect(real.ensureExtension('metamask' as never, { extRoot })).rejects.toThrow(/unknown wallet/);
   });

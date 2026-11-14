@@ -105,6 +105,34 @@ the node's rejection text if any, and acceptance (the output appears in the node
 ignores `--load-extension`; run `npx playwright-core install chromium` once), import a random test mnemonic, switch to TN10, run setup, and click through the
 wallet approval popups. Results: `out/wallet-<name>.json`, screenshots in `out/screens/<name>/`. Summary in `RESULTS.md` (section "Automated run").
 
+## Wallet release drift check (daily, no keys)
+
+The extensions are pinned in `lib/extension-pins.mjs` (version and sha256). A wallet release that changes how it signs (KasWare 0.11.5 started
+refusing inputs its own node does not know) must not go unnoticed, so `.github/workflows/wallet-drift.yml` runs every day:
+
+```
+node tools/wallet-gate/scripts/check-latest.mjs [--json] [--out drift.md] [--write-baseline]
+```
+
+It downloads the newest KasWare CRX (the store endpoint serves only the newest) and finds the newest Kaspire extension zip on GitHub (`GITHUB_TOKEN`
+is used when set), and compares version and sha256 with the pins. Exit 0: equal. Exit 1: a wallet drifted; the markdown report says "KasWare X released,
+KOB tested with Y" with a diff of the provider methods and of refusal-like strings (not an unspent, could not be verified, already spent, ...) in the
+background script / service worker, old pinned build against new. Exit 2: a download or parse error. In CI exit 1 opens one issue (the same title is not
+opened twice) and fails the job. The pinned KasWare build cannot be downloaded again, so its methods and strings are kept in
+`scripts/wallet-baseline.json`; regenerate it with `--write-baseline` (from the pinned builds) whenever a pin moves. Downloads are read as text and
+hashed only. A text diff is a prompt to look, not proof.
+
+When the issue fires: read the release, run the real-wallet gate on the founder's machine (`cd web && node e2e-real/run.mjs --ext latest --wallet kasware`
+runs the newest build without touching the pinned cache), and only then move the pin (version, sha256, and the zip URL for Kaspire) and the baseline.
+Moving a pin always needs that gate run: nothing in CI proves a wallet signs a KOB transaction.
+
+### Nightly real-extension run (documented, NOT implemented)
+
+A nightly job could run the `web/e2e-real` scenarios `issue`, `limit`, a 2-level ladder and `amend` against both the pinned build and
+`--ext latest` on a GitHub-hosted runner (headed Chromium under xvfb). It needs a funded THROWAWAY testnet-10 key (never the founder's dev key,
+testnet coins only) stored as a repository secret (for example `KOB_TN10_CI_KEY`) and a reachable TN10 node. It would report by issue and never block a
+push (public testnet infrastructure is flaky). Until that secret exists the real-extension run stays a manual run on the founder's machine.
+
 ## Layout
 
 ```
@@ -113,7 +141,7 @@ lib/contracts.mjs   KCC-20 state/redeem, BidOrder template patching (maker, toke
 lib/txbuild.mjs     tx v1 plan -> wasm Transaction, exact fee floor (100 sompi * max(compute mass, 2*size)), RPC helpers
 lib/flows.mjs       T1/T2/T3 builders, local signing, sigscript assembly, signature extraction, Kaspire ordered-args templates
 lib/setup-core.mjs  one genesis tx: token covenant group + bids (own covenant ids) + wallet P2PK funds
-scripts/            fetch-sdk, keygen, setup, serve, build-templates (dev-only; needs silverc)
+scripts/            fetch-sdk, keygen, setup, serve, build-templates (dev-only; needs silverc), check-latest (wallet drift check) + wallet-baseline.json
 web/                the static page (index.html, app.mjs, wallets.mjs adapters)
 artifacts/          KCC20Ref.json (silverc v1.0.0), BidOrder.template.json (sentinel-compiled; maker/tokenCovId patched at runtime)
 contracts/          the .sil sources (KCC20Ref.ctor.json: the constructor arguments of KCC20Ref.json). Older copies, not the programs
