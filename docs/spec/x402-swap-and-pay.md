@@ -4,7 +4,7 @@ Status: Draft proposal. Addressed to [elldeeone/kaspa-x402](https://github.com/e
 (v1.0.0-rc.1, binding `kaspa-exact-v2`, checked against commit `040b1ec`). Optional extension of
 the `exact` scheme; it does not change requirements or payloads that do not carry `extra.route`.
 Depends on the companion proposal `x402-kcc20-profile.md` (the `kcc20` profile, the payload
-commitment `kob-x402-payload-commitment-v1`, covenant fields in the safe-json projection, custody
+commitment `kob-x402-payload-commitment-v2`, covenant fields in the safe-json projection, custody
 classes). Reference implementation: KOB, crate `kob-x402` (`wire.rs`, `common.rs`, `swap.rs`,
 `client/swap.rs`), which is the source of the field names below.
 
@@ -152,7 +152,7 @@ The payload is the `exact-transaction` payload of the companion proposal with:
 }
 ```
 
-- `authorization`: the payload commitment (`kob-x402-payload-commitment-v1`), with the digest object
+- `authorization`: the payload commitment (`kob-x402-payload-commitment-v2`), with the digest object
   of the companion proposal and `route = { "binding": "kob-swap-v1", "payAsset": "<covenant id>" }`
   inside it. The commitment is embedded in the transaction payload as a KOB1 `X402` record, so every
   input authorizer's SIGHASH_ALL covers it. `standard-native` entries that carry `route` use this
@@ -1096,7 +1096,7 @@ route: {
 ```
 
 Conditional: when `route` is present, `profile` is `standard-native` or `kcc20`, and
-`authorization.version` is `kob-x402-payload-commitment-v1` (companion proposal, section 12).
+`authorization.version` is `kob-x402-payload-commitment-v2` (companion proposal, section 12).
 Transaction projection: output `covenant` objects and input `utxo.covenantId` as in the companion
 proposal, section 7.1.
 

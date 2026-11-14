@@ -20,7 +20,7 @@ KAS profiles could leave implicit:
 | # | Change | Where |
 |---|---|---|
 | 1 | Every token requirement carries an explicit custody class, `extra.token.custody` (`unconditional` or `issuer-controlled`). Acceptance of a token whose issuer can freeze or seize is never presented as final custody. | Sections 3, 4, 9 |
-| 2 | The authorization is a digest committed inside the transaction payload (`kob-x402-payload-commitment-v1`), not a Schnorr signature by one P2PK input. Every input authorizer's SIGHASH_ALL covers it, whatever the owner scheme. | Section 6 |
+| 2 | The authorization is a digest committed inside the transaction payload (`kob-x402-payload-commitment-v2`), not a Schnorr signature by one P2PK input. Every input authorizer's SIGHASH_ALL covers it, whatever the owner scheme. | Section 6 |
 | 3 | The safe-json projection and the transaction id rules cover version-1 transactions with output covenant bindings. | Section 7 |
 | 4 | A token payment is verified against a pinned token program (template hash) and pinned extension commitment; borrow-enabled token UTXOs are refused. | Sections 5, 8 |
 
@@ -299,7 +299,7 @@ holder.
     "paymentOutputIndex": 0,
     "requestHash": "<normalized request hash>",
     "authorization": {
-      "version": "kob-x402-payload-commitment-v1",
+      "version": "kob-x402-payload-commitment-v2",
       "expiresAt": "2026-10-01T12:00:00.000Z",
       "digest": "<32-byte digest>"
     }
@@ -315,7 +315,7 @@ Construct this object, using lowercase hex for every hex field:
 
 ```json
 {
-  "scope": "kob-x402-payload-commitment-v1",
+  "scope": "kob-x402-payload-commitment-v2",
   "network": "kaspa:testnet-10",
   "profile": "kcc20",
   "route": null,
@@ -626,9 +626,9 @@ example `invalid_kaspa_exact_utxo`, `invalid_kaspa_exact_fee`, `invalid_kaspa_ex
 
 - `profile` enum: add `"kcc20"`.
 - `authorization`: replace the single object by a `oneOf`:
-  - the existing object (`version` const `kaspa-x402-exact-request-authorization-v1`,
+  - the existing object (`version` const `kaspa-x402-exact-request-authorization-v2`,
     `inputIndex`, `expiresAt`, `digest`, `signature`);
-  - `{ version: const "kob-x402-payload-commitment-v1", expiresAt, digest }`, required, with
+  - `{ version: const "kob-x402-payload-commitment-v2", expiresAt, digest }`, required, with
     `additionalProperties: false` (so `inputIndex` and `signature` are forbidden).
 - Conditional: when `profile` is `kcc20`, `authorization.version` MUST be the payload commitment and
   `challengeId` MUST be absent; for `standard-native` and `additive` it MUST be the signed form.
