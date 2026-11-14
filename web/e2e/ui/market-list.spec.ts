@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { seedFavorites } from '../helpers/env';
+import { toggleListFilter } from '../helpers/list-filter';
 
 // every test opens the list itself (after its registry / route stubs are in place)
 test.use({ autoOpen: false });
@@ -159,7 +160,7 @@ test('sorting: 24 h volume first, every header sorts (click and keyboard), searc
   await expect(page.getByTestId('sort-volume').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'none');
 
   // the favourite pair EXKCC/EXUSD: its price implied through both KAS markets (EXKCC's ~0.025 EXUSD per KAS's 0.502 KAS), the depth near its mid (live pair orders in the tooltip), no spread
-  await page.getByTestId('token-list-favorites').click();
+  await toggleListFilter(page, 'token-list-favorites');
   const pairId = `${exkcc}-${QUOTE}`;
   const pair = page.getByTestId(`pair-row-${pairId}`);
   await expect(pair).toHaveAttribute('data-state', 'ready');
@@ -211,7 +212,7 @@ test('a token whose 24 h figures the indexer cannot give shows — without break
   await page.getByTestId('sort-volume').first().click();
   expect(await rowIds(page)).toEqual([exkcc, QUOTE]);
   // the pair needs both legs for its price: — there too
-  await page.getByTestId('token-list-favorites').click();
+  await toggleListFilter(page, 'token-list-favorites');
   await expect(page.getByTestId(`pair-last-${exkcc}-${QUOTE}`)).toHaveText('—');
 });
 
@@ -262,7 +263,7 @@ test.describe('phone', () => {
     const exkcc = await twoMarkets(page, mock);
     // a token without metadata (no ticker, no decimals) is out of the default list until asked for
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveCount(0);
-    await page.getByTestId('token-list-nameless').click();
+    await toggleListFilter(page, 'token-list-nameless');
     await expect(page.getByTestId(`token-link-${'0f'.repeat(32)}`)).toHaveText('Unnamed token');
     await expect(page.getByTestId(`token-hash-${'0f'.repeat(32)}`)).toHaveText('0f0f…0f0f');
     const row = page.getByTestId(`token-row-${exkcc}`);
@@ -284,7 +285,7 @@ test.describe('phone', () => {
     await page.getByTestId('sort-change').first().click();
     await expect(page.getByTestId('sort-change').first().locator('xpath=..')).toHaveAttribute('aria-sort', 'descending');
     // the favourite pair's table keeps its headers
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId('pair-table').getByTestId('sort-last')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
   });

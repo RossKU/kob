@@ -7,6 +7,7 @@ import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
 import { connectWallet, fund, listExkcc, pickAsset, seedFavorites, showActivity } from '../helpers/env';
 import { mockKascov, programHash, type MockKascovToken } from '../helpers/kascov';
+import { listFilterOn, openListFilter, toggleListFilter } from '../helpers/list-filter';
 
 test.use({ autoOpen: false });
 
@@ -303,8 +304,9 @@ test.describe('favourite tokens', () => {
     await expect(star).toHaveAttribute('aria-pressed', 'true');
     expect(await stored(page)).toEqual({ tokens: [base], pairs: [] });
 
-    await page.getByTestId('token-list-favorites').click();
-    await expect(page.getByTestId('token-list-favorites')).toHaveAttribute('aria-pressed', 'true');
+    await toggleListFilter(page, 'token-list-favorites');
+    expect(await listFilterOn(page, 'token-list-favorites')).toBe(true);
+    await expect(page.getByTestId('token-list-filter-count')).toHaveText('1');
     await expect(tokenRows(page)).toHaveCount(1);
     await expect(page.getByTestId(`token-row-${base}`)).toBeVisible();
     await page.getByTestId('token-search').fill('exusd');
@@ -324,11 +326,11 @@ test.describe('favourite tokens', () => {
 
     // taken off in the view, the row goes
     await page.goto('/#/market');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await page.getByTestId(`token-favorite-${base}`).click();
     await expect(tokenRows(page)).toHaveCount(0);
     await expect(page.getByTestId('token-list-empty')).toHaveText('No favorites yet.');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId(`token-row-${base}`)).toBeVisible();
   });
 
@@ -336,7 +338,7 @@ test.describe('favourite tokens', () => {
     const base = await seedPair(page, mock);
     await page.addInitScript(([k, v]) => localStorage.setItem(k!, v!), ['kob.favorites.v1:mainnet', JSON.stringify({ tokens: ['ab'.repeat(32)], pairs: [] })]);
     await page.goto('/#/market');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId('token-list-empty')).toHaveText('No favorites yet.');
     await page.evaluate((k) => localStorage.setItem(k, '{not json'), FAV_KEY);
     await page.reload();
@@ -362,7 +364,7 @@ test.describe('favourite tokens', () => {
     const star = page.getByTestId(`token-favorite-${base}`);
     await star.click();
     await expect(star).toHaveAttribute('aria-pressed', 'true');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(tokenRows(page)).toHaveCount(1);
     await page.getByTestId(`token-link-${base}`).click();
     await expect(page.getByTestId('token-page-favorite')).toHaveAttribute('aria-pressed', 'true');
@@ -390,7 +392,7 @@ test.describe('favourite tokens', () => {
     const gone = 'ab'.repeat(32);
     await seedFavorites(page, { tokens: [gone] });
     await page.goto('/#/market');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId(`token-row-${gone}`)).toBeVisible();
     await expect(page.getByTestId(`token-link-${gone}`)).toHaveAttribute('href', `#/market/${gone}`);
   });
@@ -402,7 +404,9 @@ test.describe('hidden tokens', () => {
     await page.goto('/#/market');
     const row = page.getByTestId(`token-row-${base}`);
     await expect(row).toBeVisible();
-    await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
+    // the menu offers the Hidden view only when a token is hidden
+    await expect((await openListFilter(page)).getByTestId('token-list-hidden')).toHaveCount(0);
+    await page.keyboard.press('Escape');
     // the table scrolls sideways only: a row rising in never gives it a vertical scrollbar
     expect(await page.locator('.ml-tokens').evaluate((e) => getComputedStyle(e).overflowY)).toBe('hidden');
     const before = await tokenRows(page).evaluateAll((rs) => rs.map((r) => r.getAttribute('data-testid')!));
@@ -418,7 +422,8 @@ test.describe('hidden tokens', () => {
       expect(await page.getByTestId(id).evaluate((e) => getComputedStyle(e).animationName)).toBe('ml-rise-a');
       if (k === 0) expect(await page.getByTestId(id).evaluate((e) => getComputedStyle(e).getPropertyValue('--i').trim())).toBe('0');
     }
-    await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    await expect((await openListFilter(page)).getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    await page.keyboard.press('Escape');
     // a search still finds a hidden token
     await page.getByTestId('token-search').fill('exkcc');
     await expect(row).toBeVisible();
@@ -426,17 +431,20 @@ test.describe('hidden tokens', () => {
     await expect(row).toHaveCount(0);
     // kept by this browser
     await page.reload();
-    await expect(page.getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    await expect((await openListFilter(page)).getByTestId('token-list-hidden')).toHaveText('Hidden (1)');
+    await page.keyboard.press('Escape');
     await expect(page.getByTestId(`token-row-${base}`)).toHaveCount(0);
     // the Hidden view lists it; its eye, pressed there, puts it back in the list
-    await page.getByTestId('token-list-hidden').click();
+    await toggleListFilter(page, 'token-list-hidden');
     await expect(tokenRows(page)).toHaveCount(1);
     await expect(page.getByTestId(`token-hide-${base}`)).toHaveAttribute('aria-pressed', 'true');
     await page.getByTestId(`token-hide-${base}`).click();
     await expect(page.getByTestId('token-list-empty')).toHaveText('No hidden tokens.');
-    await page.getByTestId('token-list-hidden').click();
+    await toggleListFilter(page, 'token-list-hidden');
     await expect(page.getByTestId(`token-row-${base}`)).toBeVisible();
-    await expect(page.getByTestId('token-list-hidden')).toHaveCount(0);
+    // the menu offers the Hidden view only when a token is hidden
+    await expect((await openListFilter(page)).getByTestId('token-list-hidden')).toHaveCount(0);
+    await page.keyboard.press('Escape');
   });
 });
 
@@ -551,7 +559,7 @@ test.describe('favourite pairs, and no table of pairs by default', () => {
     await expect(page.getByTestId(`token-row-${base}`)).toHaveAttribute('data-state', 'ready');
     await page.waitForTimeout(500);
     expect(pairReads).toEqual([]);
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId(`pair-row-${base}-${QUOTE}`)).toHaveAttribute('data-state', 'ready');
     // both orientations of the pair are read (they are one market: its book and its volume count the orders of QUOTE/BASE too)
     expect([...new Set(pairReads)].sort()).toEqual(
@@ -575,7 +583,7 @@ test.describe('favourite pairs, and no table of pairs by default', () => {
     await expect(page.getByTestId('pair-favorite')).toHaveAttribute('aria-pressed', 'true');
 
     await page.goto('/#/market');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     const id = `${base}-${QUOTE}`;
     const row = page.getByTestId(`pair-row-${id}`);
     await expect(row).toHaveAttribute('data-state', 'ready');
@@ -594,7 +602,7 @@ test.describe('favourite pairs, and no table of pairs by default', () => {
     const base = await seedPair(page, mock);
     await seedFavorites(page, { tokens: [base], pairs: [{ base, quote: TWIN }] });
     await page.goto('/#/market');
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId(`token-row-${base}`)).toBeVisible();
     const row = page.getByTestId(`pair-row-${base}-${TWIN}`);
     await expect(row).toBeVisible();
@@ -658,7 +666,7 @@ test.describe('a phone', () => {
     const next = (await page.getByTestId('token-list-next').boundingBox())!;
     expect(next.height).toBeGreaterThanOrEqual(44);
 
-    await page.getByTestId('token-list-favorites').click();
+    await toggleListFilter(page, 'token-list-favorites');
     await expect(page.getByTestId(`pair-row-${base}-${QUOTE}`)).toBeVisible();
     expect(await sideways(page)).toBeLessThanOrEqual(0);
     await shot(page, 'market-favorites-390');
@@ -696,7 +704,7 @@ test('at 1280 px', async ({ appPage: page, mock }) => {
   await page.getByTestId('pair-pick-base').click();
   await shot(page, 'picker-1280');
   await page.keyboard.press('Escape');
-  await page.getByTestId('token-list-favorites').click();
+  await toggleListFilter(page, 'token-list-favorites');
   await expect(page.getByTestId(`pair-row-${base}-${QUOTE}`)).toBeVisible();
   await shot(page, 'market-favorites-1280');
   await page.goto(`/#/market/${base}/${QUOTE}`);

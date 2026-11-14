@@ -420,7 +420,6 @@ body:has(.market-page) .container { max-width: none; }
 .hide-btn { opacity: 0.7; }
 .hide-btn:hover, .hide-btn:focus-visible { opacity: 1; }
 .fav-star.hide-btn[aria-pressed='true'] { color: var(--primary); opacity: 1; }
-.ml-list-more { flex-wrap: wrap; gap: 6px; }
 .fav-star:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
 @media (max-width: 759px), (pointer: coarse) { .fav-star { width: 44px; height: 44px; margin: -7px; } }
 
@@ -452,8 +451,6 @@ body:has(.market-page) .container { max-width: none; }
 /* the search, the favourites, the pair picker and the page size on one line; a phone wraps them. The start of the list comes back under the sticky header */
 .ml-tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 16px; margin-bottom: 12px; scroll-margin-top: 120px; }
 .ml-search { flex: 1 1 260px; max-width: 420px; min-width: 0; }
-.ml-fav-toggle { min-height: 36px; }
-.ml-fav-toggle[aria-pressed='true'] { border-color: var(--warn); color: var(--text); }
 .ml-pair { display: inline-flex; align-items: baseline; gap: 6px; min-height: 36px; line-height: 36px; }
 .ml-pair .asset-select-face { font-weight: 600; line-height: 1.6; }
 .ml-size { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -682,3 +679,15 @@ body:has(.market-page) .container { max-width: none; }
   .mkt-grid.mkt-chart-big.mkt-has-mine { grid-template-areas: 'chart chart ticket' 'mine mine mine'; }
   .mkt-chart-big .mkt-area-book { display: none; }
 }
+
+/* ---- the list's filter menu (ListFilterMenu.tsx): one button for every filter, with the number
+   that are on */
+.ml-filter { display: inline-flex; }
+.ml-filter-face { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; }
+.ml-filter-face.is-on { border-color: var(--warn); color: var(--text); }
+.ml-filter-count { display: inline-flex; align-items: center; justify-content: center; min-width: 1.25rem; height: 1.25rem; padding: 0 5px; box-sizing: border-box; border-radius: 999px; font-size: 0.72rem; font-weight: 700; line-height: 1; background: var(--warn-bg); color: var(--warn); }
+.ml-filter-item { width: 100%; appearance: none; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+.ml-filter-item:hover, .ml-filter-item:focus-visible { background: var(--surface-3); outline: none; }
+.ml-filter-item .picker-check { min-width: 1em; text-align: center; }
+.ml-filter-clear { border-top: 1px solid var(--border); border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+.ml-filter-clear .picker-label { font-weight: 400; color: var(--muted); }

@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test } from '../fixtures';
 import { connectWallet, fund, listExkcc } from '../helpers/env';
+import { toggleListFilter } from '../helpers/list-filter';
 
 const GENESIS = { txid: 'ab'.repeat(32), daa_score: 10, outputs: [1, 2], supply: 1000, minter_outputs: [], live_minters: [], checked_at_daa: 20, source: 'test' };
 
@@ -178,7 +179,7 @@ test.describe('token facts', () => {
       await route.fulfill({ response: res, json: body });
     });
     await page.goto('/#/market');
-    await page.getByTestId('token-list-nameless').click();
+    await toggleListFilter(page, 'token-list-nameless');
     await expect(page.getByTestId('token-table')).toBeVisible();
     const risk = page.getByTestId('token-table').getByTestId('badge-high-risk').first();
     await expect(risk).toBeVisible();

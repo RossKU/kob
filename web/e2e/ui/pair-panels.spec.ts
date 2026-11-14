@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
+import { toggleListFilter } from '../helpers/list-filter';
 
 test.use({ autoOpen: false });
 
@@ -165,7 +166,7 @@ test('pair page: KAS-derived prices, pair fills as volume only, depth, both toke
   // EXKCC (this row's quote) and the two fills are there
   await page.getByTestId('pair-favorite').click();
   await page.goto('/#/market');
-  await page.getByTestId('token-list-favorites').click();
+  await toggleListFilter(page, 'token-list-favorites');
   const row = page.getByTestId(`pair-row-${QUOTE}-${base}`);
   await expect(row).toHaveAttribute('data-state', 'ready');
   await expect(row.getByTestId(`pair-volume-${QUOTE}-${base}`)).toHaveAttribute('title', /EXKCC · 2 pair fills in 24 h$/);

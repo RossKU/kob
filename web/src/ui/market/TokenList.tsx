@@ -7,7 +7,7 @@ import { navigate, pairRoute, routeToHash, tokenRoute } from '../../app/router';
 import type { IndexerTokenView, PairBookView, PairFillsView, StatsView } from '../../data/indexer-types';
 import type { PairToken } from '../../kob/pair';
 import { t } from '../../i18n';
-import { Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
+import { Badge, Banner, Button, ErrorBanner, Field, Section, Table, TableMessage, toError, useAsync } from '../kit';
 import { FavoriteStar, HideToggle } from './FavoriteStar';
 import { isFavoritePair, isFavoriteToken, togglePair, toggleToken, useFavorites } from './favorites';
 import { useHiddenTokens } from './hidden-tokens';
@@ -23,13 +23,16 @@ import { TokenIcon } from './TokenIcon';
 import { TokenNote } from './TokenNote';
 import './market.css';
 import {
-  ariaSort, DEFAULT_SORT, filterPairs, kascovEntry, keepOrder, listedPairs, LOADING, nextSort, NONE, pageWindow, pairEntry, pairHasDecimals, pairLabelOf, sortEntries, tokenEntry,
+  ariaSort, DEFAULT_SORT, filterPairs, heldEntry, kascovEntry, keepOrder, listedPairs, LOADING, nextSort, NONE, pageWindow, pairEntry, pairHasDecimals, pairLabelOf, sortEntries, tokenEntry,
   type Cell, type ListedPair, type ListEntry, type Slot, type SortKey, type SortState,
 } from './market-list';
 import { mergeOrientations } from './pair-model';
 import { mergePairFills } from '../activity/activity-model';
 import { PAIR_DEPTH_LEVELS, pairDepthOf, pairVolumeOf, type PairDepth, type PairVolume } from './pair-market';
-import { buildTokenRows, filterTokens, idOnlyRow, isNameless, parseCovenantId, tokenLabel, tradableHere, tradableRows, type TokenRow } from './token-model';
+import { buildTokenRows, idOnlyRow, isNameless, parseCovenantId, tokenLabel, tradableHere, tradableRows, type TokenRow } from './token-model';
+import { filterRows, heldIds, heldRows, NO_FILTERS, toggleFilter, withHeldRows, type FilterKey, type ListFilters } from './held-list';
+import { ListFilterMenu, type FilterItem } from './ListFilterMenu';
+import { useHeldDeclarations, useWalletHoldings } from './use-wallet-holdings';
 import { useKascov } from './use-kascov';
 import { useHeldUntil, useListPage, useListPageSize, usePooledSlots } from './use-market-list';
 import { isAbort } from '../kit/hooks';
@@ -186,7 +189,7 @@ const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMe
 /** A phone: the list is cards (market.css), and a card's star and eye are one "⋯" menu. */
 const PHONE_LIST_QUERY = '(max-width: 759px)';
 
-function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, leaving, again }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; leaving: boolean; again: '' | 'a' | 'b' }) {
+function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide, held, leaving, again }: { row: TokenRow; entry: ListEntry; step: number; favorite: boolean; onFavorite: (id: string) => void; hidden: boolean; onHide: (id: string) => void; held: boolean; leaving: boolean; again: '' | 'a' | 'b' }) {
   // every row has the same three lines, so every row is as tall and the icons keep one pitch: line 1 the ticker (bold) and the name (one line, an ellipsis, the
   // whole name in its title); line 2 the covenant id fragment with its copy button; line 3 the badges (one line, never wrapped). A token without a ticker is led by its name
   const headline = row.ticker || row.name || t('market.list.unnamed');
@@ -205,7 +208,7 @@ function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide,
   }, [menu, row.covenantId]);
   useEffect(() => { if (!phone) { setMenu(false); setIdOpen(false); } }, [phone]);
   return (
-    <tr class={`ml-in${again ? ` ml-again-${again}` : ''}${leaving ? ' ml-out' : ''}`} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-state={rowState(entry)}>
+    <tr class={`ml-in${again ? ` ml-again-${again}` : ''}${leaving ? ' ml-out' : ''}`} style={`--i:${step}`} data-testid={`token-row-${row.covenantId}`} data-source={row.source} data-tradable={row.tradable ? '1' : '0'} data-held={held ? '1' : undefined} data-state={rowState(entry)}>
       <td>
         <div class="ml-name">
           <span class={`ml-actions${menu ? ' is-open' : ''}`} role={phone ? 'menu' : undefined}>
@@ -233,6 +236,9 @@ function TokenTableRow({ row, entry, step, favorite, onFavorite, hidden, onHide,
             </div>
             <div class={hasKascovMismatch(row) ? 'ml-line3 ml-line3-wrap' : 'ml-line3'} data-testid={`token-badges-${row.covenantId}`}>
               <span class="ml-badges">
+                {/* The wallet holds the token. It is said first, so a phone, which hides the family chip,
+                    still shows it. */}
+                {held ? <Badge tone="info" class="ml-held" title={t('market.held.title')} data-testid={`token-held-${row.covenantId}`}>{t('market.held.badge')}</Badge> : null}
                 <StatusBadges row={row} />
                 <KascovMismatch row={row} />
               </span>
@@ -277,6 +283,12 @@ function sliceOf<T>(slots: Map<string, Slot<PairFigures | null>>, pick: (f: Pair
   return out;
 }
 
+/**
+ * A row whose market the indexer has figures for. A row only kascov.io or the wallet's holdings
+ * name has no order the indexer knows, so nothing is asked for it.
+ */
+const hasStats = (r: TokenRow): boolean => r.source !== 'kascov' && r.source !== 'held';
+
 const pairToken = (r: TokenRow): PairToken => ({ covenantId: r.covenantId, ticker: r.ticker, decimals: r.decimals ?? 0, scale: r.scale ?? 1n });
 
 /**
@@ -300,11 +312,13 @@ export function TokenList(props: { invalidToken?: string }) {
   const saKey = sa?.active ? `standalone:${sa.version}` : 'indexer';
   const tokens = useAsync((signal) => (indexer ? indexer.tokens({ signal }) : Promise.resolve(null)), [indexer, saKey]);
   const { favorites, change: changeFavorites } = useFavorites(config.network);
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
-  // the tokens the viewer hid from the list (hidden-tokens.ts), and the view that shows only them
+  // the tokens the viewer hid from the list (hidden-tokens.ts)
   const { hidden, toggle: toggleHiddenToken } = useHiddenTokens(config.network);
-  const [hiddenOnly, setHiddenOnly] = useState(false);
   const hiddenSet = useMemo(() => new Set(hidden), [hidden]);
+  // The list's filters are one menu (held-list.ts): the Favorites and the Hidden views, the
+  // wallet's tokens and the tokens without a name.
+  const [filters, setFilters] = useState<ListFilters>(NO_FILTERS);
+  const { favorites: favoritesOnly, hidden: hiddenOnly, nameless: showNameless } = filters;
   // a row the eye was pressed on leaves as it came in, reversed (`.ml-out`), then the list drops it
   const [leaving, setLeaving] = useState<ReadonlySet<string>>(() => new Set());
   // once it is gone, the rows that stood below it rise in again from its place, one after the other, as the page's rows first did (`.ml-again-a` / `-b` in
@@ -314,7 +328,6 @@ export function TokenList(props: { invalidToken?: string }) {
   const readPairs = favoritesOnly && favorites.pairs.length > 0;
   const pairs = useAsync((signal) => (indexer && readPairs ? indexer.pairs(undefined, { signal }) : Promise.resolve(null)), [indexer, !!sa?.active, readPairs]);
   const [query, setQuery] = useState('');
-  const [showNameless, setShowNameless] = useState(false);
   const [pasted, setPasted] = useState<IndexerTokenView[]>([]);
   const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
   const [generation, setGeneration] = useState(0);
@@ -331,12 +344,27 @@ export function TokenList(props: { invalidToken?: string }) {
   // the names, icons and tokens kascov.io adds (kascov-merge.ts): only tokens of a program this build trades on this network; none of its facts
   const kascov = useKascov();
   const kascovTokens = kascov.status === 'ok' ? kascov.tokens : null;
+  // The connected wallet's tokens (use-wallet-holdings.ts). Each one the lists do not name gets a
+  // row, so its holder finds its market and places its first order there, and every one the
+  // wallet holds is marked. Nothing of this reaches anyone else's list.
+  const { holdings, connected } = useWalletHoldings(`${generation}|${saKey}`);
+  const heldSet = useMemo(() => heldIds(holdings), [holdings]);
+  const built = useMemo(() => buildTokenRows(registry, tokens.data ?? null, pasted, declared), [registry, tokens.data, pasted, declared]);
+  const mine = useMemo(
+    () => heldRows(kob, registry, holdings, new Set(built.map((r) => r.covenantId.toLowerCase())), config.network, declared),
+    [kob, registry, holdings, built, config.network, declared],
+  );
+  useHeldDeclarations(useMemo(() => mine.map((r) => r.covenantId), [mine]));
   const rows = useMemo(() => {
-    const built = buildTokenRows(registry, tokens.data ?? null, pasted, declared);
+    const all = withHeldRows(built, mine);
     const templates = kob.templates();
-    const known = new Set(built.map((r) => r.covenantId.toLowerCase()));
-    return mergeKascov(tradableRows(built, templates), kascovTokens, { network: config.network, templates, registry, declared, known });
-  }, [registry, tokens.data, pasted, kob, declared, kascovTokens, config.network]);
+    const known = new Set(all.map((r) => r.covenantId.toLowerCase()));
+    return mergeKascov(tradableRows(all, templates), kascovTokens, { network: config.network, templates, registry, declared, known });
+  }, [built, mine, kob, kascovTokens, config.network, registry, declared]);
+  // A wallet that is gone has no tokens to show: its filter goes with it.
+  useEffect(() => {
+    if (!connected && filters.held) setFilters((f) => ({ ...f, held: false }));
+  }, [connected, filters.held]);
   const listed = useMemo(() => (favoritesOnly ? listedPairs(favorites.pairs, rows, pairs.data) : []), [favoritesOnly, favorites.pairs, pairs.data, rows]);
   // the Favorites view's tokens: a favourite no list names now keeps a row by its id, so its star can be taken off
   const favoriteRows = useMemo(() => {
@@ -356,8 +384,8 @@ export function TokenList(props: { invalidToken?: string }) {
   const ready = !indexer || tokens.data !== undefined || tokens.error !== null;
   const statKeys = useMemo(() => {
     if (!ready) return null;
-    const own = rows.filter((r) => r.source !== 'kascov').map((r) => r.covenantId);
-    const more = [...favoriteRows.filter((r) => r.source !== 'kascov').map((r) => r.covenantId), ...listed.flatMap((p) => [p.base.covenantId, p.quote.covenantId])];
+    const own = rows.filter(hasStats).map((r) => r.covenantId);
+    const more = [...favoriteRows.filter(hasStats).map((r) => r.covenantId), ...listed.flatMap((p) => [p.base.covenantId, p.quote.covenantId])];
     return [...new Set([...own, ...more])];
   }, [ready, rows, favoriteRows, listed]);
   const loadStats = useMemo(() => (indexer ? (id: string, signal: AbortSignal) => indexer.stats(id, { signal }) : null), [indexer]);
@@ -398,12 +426,11 @@ export function TokenList(props: { invalidToken?: string }) {
   const shownRows = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
     // tokens without metadata only on a search or on request, or as a favourite; a hidden token only on a search, as a favourite or in the Hidden view
-    const inList = query.trim() ? rows : (showNameless ? rows : rows.filter((r) => !isNameless(r))).filter((r) => !hiddenSet.has(r.covenantId.toLowerCase()));
-    const visible = favoritesOnly ? favoriteRows : hiddenOnly ? hiddenRows : inList;
+    const visible = filterRows({ rows, favoriteRows, hiddenRows, hiddenIds: hiddenSet, heldIds: heldSet, filters, query });
     const byId = new Map(visible.map((r) => [r.covenantId, r]));
-    const entries = filterTokens(visible, query).map((r) => (r.source === 'kascov' ? kascovEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat, rate)));
+    const entries = visible.map((r) => (r.source === 'kascov' ? kascovEntry(r) : r.source === 'held' ? heldEntry(r) : tokenEntry(r, slotOf(r.covenantId), fiat, rate)));
     return sortEntries(entries, sort).map((e) => ({ entry: e, row: byId.get(e.key)! }));
-  }, [rows, favoriteRows, favoritesOnly, hiddenRows, hiddenOnly, hiddenSet, query, sort, stats, indexer, showNameless, fiat, rate]);
+  }, [rows, favoriteRows, hiddenRows, hiddenSet, heldSet, filters, query, sort, stats, indexer, fiat, rate]);
   const namelessCount = useMemo(() => rows.filter(isNameless).length, [rows]);
   const shownPairs = useMemo(() => {
     const slotOf = (id: string): Slot<StatsView> => stats.get(id) ?? (indexer ? LOADING : NONE);
@@ -416,7 +443,7 @@ export function TokenList(props: { invalidToken?: string }) {
 
   // the rows' places: taken from the sort when something the viewer sees as a new list happens, kept while figures arrive
   const [pageSize, setPageSize] = useListPageSize();
-  const viewKey = `${sort.key}:${sort.dir}|${query}|${showNameless ? 1 : 0}|${favoritesOnly ? 1 : 0}|${hiddenOnly ? 1 : 0}`;
+  const viewKey = `${sort.key}:${sort.dir}|${query}|${showNameless ? 1 : 0}|${favoritesOnly ? 1 : 0}|${hiddenOnly ? 1 : 0}|${filters.held ? 1 : 0}`;
   const placedBy = `${viewKey}|${generation}|${figuresIn ? 1 : 0}|${open ? 1 : 0}`;
   const placed = useRef<{ by: string; ids: string[] }>({ by: '', ids: [] });
   const sortedIds = shownRows.map((r) => r.row.covenantId);
@@ -457,6 +484,15 @@ export function TokenList(props: { invalidToken?: string }) {
     setGeneration((g) => g + 1);
   };
   const cols = TOKEN_FIGURES.length + 1;
+  // The menu offers a filter only where it can change something: the wallet's tokens with a
+  // wallet, the Hidden view with hidden tokens, the tokens without a name when there are some.
+  // One that is on stays, so it can be switched off.
+  const filterItems: FilterItem[] = [
+    { key: 'favorites', label: t('market.favorites'), testid: 'token-list-favorites' },
+    ...(connected || filters.held ? [{ key: 'held' as FilterKey, label: t('market.filter.held'), testid: 'token-list-held' }] : []),
+    ...(hidden.length > 0 || hiddenOnly ? [{ key: 'hidden' as FilterKey, label: t('market.hidden.show', { n: hidden.length }), testid: 'token-list-hidden' }] : []),
+    ...(namelessCount > 0 || showNameless ? [{ key: 'nameless' as FilterKey, label: t('market.filter.nameless', { n: namelessCount }), testid: 'token-list-nameless' }] : []),
+  ];
   // the Favorites view with favourite pairs only has no empty token table above them
   const noTokenTable = favoritesOnly && shownRows.length === 0 && shownPairs.length > 0;
 
@@ -472,14 +508,7 @@ export function TokenList(props: { invalidToken?: string }) {
           <div class="ml-search">
             <Field label={t('market.search.label')} type="search" value={query} onValue={setQuery} placeholder={t('market.search.placeholder')} data-testid="token-search" />
           </div>
-          <Button small variant="secondary" class="ml-fav-toggle" aria-pressed={favoritesOnly ? 'true' : 'false'} onClick={() => {
-              setFavoritesOnly((v) => !v);
-              setHiddenOnly(false);
-            }}
-            data-testid="token-list-favorites"
-          >
-            {t('market.favorites')}
-          </Button>
+          <ListFilterMenu filters={filters} items={filterItems} onToggle={(k) => setFilters((f) => toggleFilter(f, k))} onClear={() => setFilters(NO_FILTERS)} />
           <PairPicker rows={rows} />
           <RowsControl id="token-list" size={pageSize} onSize={setPageSize} />
         </div>
@@ -498,7 +527,7 @@ export function TokenList(props: { invalidToken?: string }) {
               {!open ? (
                 Array.from({ length: SKELETON_ROWS }, (_, i) => <SkeletonRow key={i} />)
               ) : shownRows.length === 0 ? (
-                <TableMessage colSpan={cols} data-testid="token-list-empty">{query ? t('market.list.noMatch') : favoritesOnly ? t('market.favorites.empty') : hiddenOnly ? t('market.hidden.empty') : t('market.list.empty')}</TableMessage>
+                <TableMessage colSpan={cols} data-testid="token-list-empty">{query ? t('market.list.noMatch') : filters.held ? t('market.held.empty') : favoritesOnly ? t('market.favorites.empty') : hiddenOnly ? t('market.hidden.empty') : t('market.list.empty')}</TableMessage>
               ) : (
                 windowRows.map(({ row, entry }, i) => (
                   <TokenTableRow
@@ -510,6 +539,7 @@ export function TokenList(props: { invalidToken?: string }) {
                     onFavorite={onFavoriteToken}
                     hidden={hiddenSet.has(row.covenantId.toLowerCase())}
                     onHide={onHideToken}
+                    held={heldSet.has(row.covenantId.toLowerCase())}
                     leaving={leaving.has(row.covenantId)}
                     again={i >= again.from ? (again.n % 2 ? 'a' : 'b') : ''}
                   />
@@ -519,28 +549,6 @@ export function TokenList(props: { invalidToken?: string }) {
           </Table>
         )}
         {open ? <ListPager id="token-list" window={pager} total={shownRows.length} hasNext={pager.page + 1 < pager.pages} onPage={turnTo} /> : null}
-        {(namelessCount > 0 && !query.trim() && !favoritesOnly && !hiddenOnly) || hidden.length > 0 || hiddenOnly ? (
-          <p class="small muted row ml-list-more">
-            {namelessCount > 0 && !query.trim() && !favoritesOnly && !hiddenOnly ? (
-              <Button small onClick={() => setShowNameless((v) => !v)} data-testid="token-list-nameless">
-                {t(showNameless ? 'market.list.hideNameless' : namelessCount === 1 ? 'market.list.showNameless.one' : 'market.list.showNameless.other', { n: namelessCount })}
-              </Button>
-            ) : null}
-            {hidden.length > 0 || hiddenOnly ? (
-              <Button
-                small
-                aria-pressed={hiddenOnly ? 'true' : 'false'}
-                onClick={() => {
-                  setHiddenOnly((v) => !v);
-                  setFavoritesOnly(false);
-                }}
-                data-testid="token-list-hidden"
-              >
-                {hiddenOnly ? t('market.hidden.back') : t('market.hidden.show', { n: hidden.length })}
-              </Button>
-            ) : null}
-          </p>
-        ) : null}
         {!indexer ? <p class="small muted">{t('market.list.noIndexer')}</p> : null}
         {kascov.status === 'unavailable' ? <p class="small muted" data-testid="kascov-unavailable">{t('market.list.kascovDown')}</p> : null}
         {open && shownPairs.length > 0 ? (

@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { closeBell, test, expect, statusEntry, TEST_KEYS, type MockClient } from '../fixtures';
 import { connectWallet, fund, listExkcc, pickAsset, seedFavorites, TOKEN } from '../helpers/env';
 import { runFlow, openOrderRow } from '../helpers/orders';
+import { toggleListFilter } from '../helpers/list-filter';
 import { clickPlace, clickPlaceOnly, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, waitReviewable, waitSubmitted } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -318,7 +319,7 @@ test('a favourite pair of open-list tokens is on the list and leads to its page'
   await openListed(page, [base, QUOTE], { [base]: { market_scale: 100_000_000 }, [QUOTE]: { market_scale: 1_000_000 } });
   await seedFavorites(page, { pairs: [{ base, quote: QUOTE }] });
   await page.goto('/#/market');
-  await page.getByTestId('token-list-favorites').click();
+  await toggleListFilter(page, 'token-list-favorites');
   const link = page.getByTestId('pair-table').locator(`a[href="#/market/${base}/${QUOTE}"]`);
   await expect(link).toHaveText(`${long(base)} / ${long(QUOTE)}`, { timeout: 20_000 });
   await link.click();
