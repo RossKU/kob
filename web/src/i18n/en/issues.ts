@@ -300,6 +300,7 @@ export default {
   'issues.wallet.inputs-unknown': 'Your wallet could not find a coin of this transaction on its own node yet. Nothing was sent; try again in a few seconds.',
   'issues.wallet.other': 'The wallet reported a problem. Nothing was sent. Details: {message}',
   'issues.signflow.rejected': 'You declined the request in your wallet. Nothing was sent.',
+  'issues.signflow.rejected-fresh': 'Your wallet did not sign this step, so nothing was sent for it. If your wallet said an input "is not an unspent output on this network" (KasWare then offers only Reject), its node had not caught up with your previous transaction yet: wait a few seconds and try again.',
   'issues.signflow.timeout': 'The wallet did not answer in time: check it for a pending request and try again.',
   'issues.signflow.no-signature': 'No valid signature from the wallet; nothing was sent. Try another wallet or update this one.',
   'issues.signflow.unsupported': 'This wallet is not available in this browser or does not support this action.',

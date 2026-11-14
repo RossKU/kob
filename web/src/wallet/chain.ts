@@ -13,7 +13,7 @@ import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import type { BuiltTx, InputSignature, SignedTx, TxJson } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
-import { SignFlowError, assertWalletMatches, type FailedStage, type SignStage } from './sign';
+import { REJECTED_FRESH, SignFlowError, assertWalletMatches, isDeclinedFresh, type FailedStage, type SignStage } from './sign';
 import { WalletError, type SignOptions, type WalletAdapter } from './types';
 import { awaitVisible, needsVisibility, noteSent } from './visibility';
 
@@ -242,6 +242,8 @@ export async function runSignChain(a: ChainArgs): Promise<ChainResult> {
           await sleep(a.unknownRetryMs ?? 2000);
           continue;
         }
+        // declined, perhaps because the wallet's node could not find the step's input yet: nothing was sent for this step
+        if (isDeclinedFresh(e, adapter, built.tx, a.alsoFresh)) throw fail('signing', e, REJECTED_FRESH, 'rejected-fresh', k);
         throw fail('signing', e, msg(e), e instanceof WalletError ? e.code : 'other', k);
       }
     }

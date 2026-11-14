@@ -128,3 +128,42 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     expect(await page.evaluate(() => localStorage.getItem('kob.creations.v2'))).toBeNull();
   });
 });
+
+// TN10, KasWare 0.11.5: once a genesis window showed only Reject ("is not an unspent output on
+// this network") although its preparation had been announced: the wallet's node was moving it from
+// its mempool into its UTXO index. The gate makes that rare (KOB's node lists the output, then 2 s);
+// when it happens anyway, nothing more is sent, and finishing a few seconds later succeeds.
+test.describe('chain signing: the wallet node lags the move from mempool to UTXO index', () => {
+  test.use({ walletOptions: { pushTxOutcome: 'lost', walletNodeLagMs: 6000, refusal: 'reject' } });
+
+  test('the first ask is refused (Reject only), the page says why and offers to finish; finishing a moment later succeeds', async ({ appPage: page, mock, wallet }) => {
+    await mock.giveKas('alice', 500n * KAS);
+    await openCreate(page, 'LAGS');
+    await page.getByTestId('issue-review').click();
+    await page.getByTestId('confirm-ack').check();
+    await page.getByTestId('confirm-sign').click();
+    // the genesis is asked for once KOB's node lists the preparation and the margin passed, announced or not
+    await wallet!.waitForCalls(2, 20_000);
+    await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 20_000 });
+    const calls = await wallet!.calls();
+    expect(calls.map((c) => c.status)).toEqual(['signed', 'rejected']);
+    expect(calls[1]!.at - calls[0]!.at).toBeGreaterThanOrEqual(2000);
+    const notice = page.getByTestId('issue-notice');
+    await expect(notice).toContainText('nothing more was sent');
+    await expect(notice).toContainText('is not an unspent output on this network');
+    await expect(notice).toContainText('wait a few seconds, then Finish the creation');
+    await expect(page.getByTestId('issue-pending-send')).toHaveText('Finish the creation');
+    await shot(page, '8-declined-fresh', 'issue-notice');
+    expect(await mock.submitted()).toHaveLength(1);
+
+    // a few seconds later the wallet's node has it: the same step, asked again, goes through
+    await page.waitForTimeout(Math.max(0, 6500 - (Date.now() - calls[0]!.at)));
+    await wallet!.clearCalls();
+    await page.getByTestId('issue-pending-send').click();
+    await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
+    expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed']);
+    const submitted = await mock.submitted();
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]!.tx.inputs[0].transactionId).toBe(submitted[0]!.txid);
+  });
+});

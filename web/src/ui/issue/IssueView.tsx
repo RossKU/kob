@@ -275,7 +275,7 @@ export function IssueView() {
     // `pending`: the first step is on chain, the token is not: its record is offered below ("Finish the creation")
     // the creation to finish is offered at the top: brought into view
     if (r.status === 'pending') setTimeout(() => document.querySelector('[data-testid="issue-pending"]')?.scrollIntoView({ block: 'center' }), 0);
-    setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : r.status === 'pending' ? { tone: 'info', text: t('issue.pending.continued') } : { tone: 'info', text: t('issue.cancelled') });
+    setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : r.status === 'pending' ? { tone: 'info', text: t(r.declined ? 'issue.pending.declined' : 'issue.pending.continued') } : { tone: 'info', text: t('issue.cancelled') });
   };
 
   const another = () => {

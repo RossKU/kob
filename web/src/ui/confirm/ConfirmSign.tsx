@@ -32,8 +32,8 @@ export type ConfirmResult =
   | { status: 'cancelled' }
   | { status: 'submitted'; txid: string; records: PlacementRecord[] }
   | { status: 'failed'; message: string }
-  /** the preparation is on chain, the genesis is not: the creation record finishes it */
-  | { status: 'pending'; message: string };
+  /** the preparation is on chain, the genesis is not: the creation record finishes it (`declined`: the wallet did not sign the genesis) */
+  | { status: 'pending'; message: string; declined?: boolean };
 
 export interface ConfirmSignProps {
   /** the unsigned genesis transaction to decode, show, sign and broadcast */
@@ -220,7 +220,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
       setChainNote(null);
       // the preparation is on chain but the token is not: never signed again here, the Create token page finishes it
       if (e instanceof SignFlowError && e.code === 'genesis-pending') {
-        finish({ status: 'pending', message: e.message });
+        const declined = e.cause instanceof SignFlowError && e.cause.rejectedByUser;
+        finish({ status: 'pending', message: e.message, ...(declined ? { declined: true } : {}) });
         return;
       }
       const f = classifyFailure(e);

@@ -296,7 +296,10 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     const e = (await signAndSubmitCreation(args(s, w.adapter)).catch((x) => x)) as SignFlowError;
     expect(e.code).toBe('genesis-pending');
     expect(e.rejectedByUser).toBe(false);
-    expect(e.message).toMatch(/second approval was declined/);
+    expect(e.message).toMatch(/second approval was declined, so nothing more was sent/);
+    expect(e.message).toMatch(/is not an unspent output on this network/);
+    // KasWare's Reject in its warning window answers like any rejection: the step spent a fresh output, so both are said
+    expect((e.cause as SignFlowError).code).toBe('rejected-fresh');
     expect(s.node.submissions.map((t) => t.id)).toEqual([s.plan.prep.tx.id]);
     expect(s.node.hasUtxo(s.plan.prep.tx.id, 0)).toBe(true);
     const rec = onlyRecord(s);

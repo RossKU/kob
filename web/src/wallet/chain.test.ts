@@ -101,7 +101,9 @@ describe('runSignChain', () => {
     const s2 = setup();
     const q = fakeKasware({ sdk, sk: MAKER_SK });
     const second = (await runSignChain({ ...base(s2, createKaswareAdapter({ getProvider: () => q })), onSent: () => void (q.behavior.rejectSign = true) }).catch((x) => x)) as ChainError;
-    expect([second.code, second.step, second.sent]).toEqual(['rejected', 1, 1]);
+    // the second step spends what the first sent a moment ago: declined, perhaps by a wallet that could not find it yet
+    expect([second.code, second.step, second.sent, second.rejectedByUser]).toEqual(['rejected-fresh', 1, 1, true]);
+    expect(second.message).toMatch(/nothing was sent for it.*wait a few seconds and try again/);
     expect(s2.node.submissions.map((t) => t.id)).toEqual([s2.steps[0]!.tx.id]);
   });
 

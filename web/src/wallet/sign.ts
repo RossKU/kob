@@ -33,11 +33,24 @@ export class SignFlowError extends Error {
     this.cause = cause;
     this.code = code;
   }
-  /** the user declined in the wallet: not an error to show as one */
+  /** the user declined in the wallet (`rejected-fresh`: perhaps because the wallet refused): not an error to show as one */
   get rejectedByUser(): boolean {
-    return this.stage === 'signing' && this.code === 'rejected';
+    return this.stage === 'signing' && (this.code === 'rejected' || this.code === 'rejected-fresh');
   }
 }
+
+/**
+ * The wallet declined a transaction that spends an output this page sent moments ago. A KasWare
+ * that cannot find such an input yet shows only Reject, and that answers like a user rejection
+ * (wallet/kasware.ts), so the app cannot tell which happened. `rejected-fresh` says both: nothing
+ * was sent, and a few seconds later the same step can be asked for again.
+ */
+export const REJECTED_FRESH =
+  'Your wallet did not sign this step, so nothing was sent for it. If your wallet said an input "is not an unspent output on this network" (KasWare then offers only Reject), its node had not caught up with your previous transaction yet: wait a few seconds and try again.';
+
+/** Whether a wallet's refusal of `tx` is to be reported as `rejected-fresh`. */
+export const isDeclinedFresh = (e: unknown, adapter: WalletAdapter, tx: Pick<TxJson, 'inputs'>, alsoFresh?: ReadonlyMap<string, number>): boolean =>
+  e instanceof WalletError && e.code === 'rejected' && needsVisibility(adapter) && freshInputs(tx, alsoFresh ? { alsoFresh } : {}).length > 0;
 
 export interface SignAndSubmitArgs {
   kob: KobWasm;
@@ -236,6 +249,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
         await sleep(UNKNOWN_RETRY_MS);
         continue;
       }
+      if (isDeclinedFresh(e, adapter, built.tx)) throw new SignFlowError('signing', e, REJECTED_FRESH, 'rejected-fresh');
       const code = e instanceof WalletError ? e.code : 'other';
       throw new SignFlowError('signing', e, msg(e), code);
     }

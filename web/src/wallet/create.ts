@@ -103,8 +103,8 @@ function genesisPending(prepTxid: string, e: unknown): SignFlowError {
   const first = `The token details were recorded on chain (transaction ${prepTxid.slice(0, 16)}...), but the token itself was not created`;
   const after = 'The KAS of that first step stays in your wallet. Open Create token to finish the creation, or keep the KAS.';
   if (e instanceof SignFlowError && e.stage === 'signing') {
-    if (e.code === 'rejected') {
-      return new SignFlowError('signing', e, `${first}: the second approval was declined. ${after} If your wallet showed a warning, wait a few seconds before you finish it.`, 'genesis-pending');
+    if (e.rejectedByUser) {
+      return new SignFlowError('signing', e, `${first}: the second approval was declined, so nothing more was sent. ${after} If your wallet said an input "is not an unspent output on this network" (KasWare then offers only Reject), wait a few seconds and finish it.`, 'genesis-pending');
     }
     return new SignFlowError('signing', e, `${first}: ${e.message} ${after}`, 'genesis-pending');
   }

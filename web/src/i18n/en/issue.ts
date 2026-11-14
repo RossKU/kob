@@ -139,6 +139,7 @@ export default {
   'issue.pending.needWallet': 'Connect the wallet that started this creation to finish it.',
   'issue.pending.finish': 'Finish the creation',
   'issue.pending.continued': "The token's details are recorded on chain, but the token itself was not created yet. Finish the creation at the top of this page.",
+  'issue.pending.declined': "The token's details are recorded on chain, but your wallet did not sign the token itself, so nothing more was sent. If your wallet said an input \"is not an unspent output on this network\" (KasWare then offers only Reject), its node had not caught up yet: wait a few seconds, then Finish the creation at the top of this page.",
   'issue.pending.send': 'Send the creation',
   'issue.pending.discard': 'Forget it',
   'issue.pending.failed': 'The creation could not be sent. {reason}',

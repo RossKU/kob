@@ -372,6 +372,25 @@ describe('signAndSubmit: the visibility gate (an input spending what this page j
     expect(slept).toEqual([2000]);
   });
 
+  it('a declined step that spends a fresh output says nothing was sent and to try again (rejected-fresh); an older one is a plain rejection', async () => {
+    const c = chain();
+    const p = fakeKasware({ sdk, sk: MAKER_SK });
+    const adapter = createKaswareAdapter({ getProvider: () => p });
+    p.behavior.rejectSign = true;
+    const first = (await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET, addressOf }).catch((x) => x)) as SignFlowError;
+    expect([first.code, first.rejectedByUser]).toEqual(['rejected', true]);
+    p.behavior.rejectSign = false;
+    await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET, addressOf });
+    p.behavior.rejectSign = true;
+    const quick = { visibility: { sleep: async () => undefined } };
+    const second = (await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, ...quick }).catch((x) => x)) as SignFlowError;
+    expect([second.stage, second.code, second.rejectedByUser]).toEqual(['signing', 'rejected-fresh', true]);
+    expect(second.message).toMatch(/nothing was sent for it.*"is not an unspent output on this network".*wait a few seconds and try again/);
+    // Try again: the same step, asked once more, goes through
+    p.behavior.rejectSign = false;
+    expect((await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, ...quick })).txid).toBe(c.second.tx.id);
+  });
+
   it('a wallet without pushTx is asked once the node lists the output and the margin passed; never before', async () => {
     const c = chain();
     const view = laggingWalletNode(c.n);

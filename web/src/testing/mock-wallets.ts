@@ -20,7 +20,9 @@
 // unless the transaction was pushed to it (KasWare `pushTx` -> `POST /mock/wallet-node/push`). KOB assumes every extension wallet checks this.
 // `pushTxOutcome` reproduces an announce that does not help: 'error' rejects with a message the
 // app cannot read as "already there"; 'lost' resolves although the wallet's node still cannot find
-// the output (a transaction moving from the mempool into a block).
+// the output (a transaction moving from the mempool into a block). `refusal: 'reject'` refuses
+// such an input the way KasWare 0.11.5 does in the end: its window offers only Reject, so the dApp
+// gets a plain user rejection (code 4001).
 
 export type MockWalletId = 'kasware' | 'kaspire' | 'kastle';
 
@@ -60,6 +62,8 @@ export interface MockWalletConfig {
   walletNodeLagMs: number;
   /** KasWare `pushTx`: 'ok' hands the tx to the wallet's node; 'error' and 'lost' do not */
   pushTxOutcome: 'ok' | 'error' | 'lost';
+  /** how an input the wallet's node does not hold is refused: KasWare's message ('error'), or a user rejection ('reject') */
+  refusal: 'error' | 'reject';
   /** base URL of the mock server playing the wallet's node ('' = the app's `window.__KOB_CONFIG__.nodeUrl`) */
   nodeUrl: string;
 }
@@ -105,6 +109,7 @@ export const DEFAULT_WALLET_CONFIG: Omit<MockWalletConfig, 'wallet' | 'secretKey
   checkInputs: false,
   walletNodeLagMs: 0,
   pushTxOutcome: 'ok',
+  refusal: 'error',
   nodeUrl: '',
 };
 
@@ -277,6 +282,7 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
       throw new Error('signPskt: Input verification failed: the active network node did not respond.');
     }
     const bad = entries.map((e, k) => ({ e, k })).filter(({ e }) => e?.state !== 'unspent');
+    if (bad.length && opts.refusal === 'reject') throw rejection();
     if (bad.length) throw new Error('signPskt: ' + bad.map(({ e, k }) => `Input #${indexes[k]} (${e.transactionId}:${e.index}) is not an unspent output on this network.`).join(' '));
   };
   const pushTx = async (rawtx: string) => {
