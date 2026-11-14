@@ -173,7 +173,7 @@ the first closed. ONE genesis window (preparation 92064f0b74915916cb5d0a8e0a977b
 `pushTx` outcome was not yet recorded) showed only Reject: "Critical Signing Warning: Input #0 (92064f0b...:0) is not an unspent output on
 this network", while KOB's node listed that output as unspent. 0.11.5 checks the input against its node's UTXO set, then its mempool
 (`verifyPsktInputs` in its service worker); a transaction that just left the mempool for a block the virtual chain has not accepted yet is
-in neither. Not reproduced in the 7 genesis windows after it; reported, not fixed here.
+in neither. Not reproduced in the 7 genesis windows after it; fixed the same day (*The wallet-node check*, below).
 
 Decline and resume (a separate script on the same driver, KasWare): the genesis window was rejected, the Create token page offered "Creation
 of RRKWZXGE not finished" with "Finish the creation"; after a page reload it was still offered, the button asked for one approval (the window
@@ -202,6 +202,35 @@ Harness changes (none of them an app defect):
 * `issue` records `sentTxids`, `pushTx` (KasWare's announce, read by wrapping `window.kasware.pushTx` in the page) and `gapsMs` (from the
   approval windows' `seenAt` / `doneAt`); a failed signing says what the windows showed.
 * `--fund-below` / `--fund`.
+
+## The wallet-node check (TN10, 2026-11-14, KasWare 0.11.5, Kaspire 0.5.31)
+
+The visibility gate no longer trusts an accepted `pushTx` or KOB's node: an adapter with `walletSees` is polled until the wallet's own
+node lists every fresh input (wallet/visibility.ts). KasWare answers it with `getUtxoEntries`, which reads the node its sign check
+reads. For the wallet's own account KasWare answers from its UTXO tracker, which lists a new output only once it is mature (about 10 s
+on TN10), so the second window now opens 11 to 15 s after the first instead of about 1 s. Each row is one creation with KasWare, headed,
+1 KAS per token output, driven by a loop over this driver (`signOnConfirmScreen`). The wait is from the first
+`getUtxoEntries` poll to the one that listed the preparation's output 0.
+
+| # | Preparation | Genesis | `pushTx` of the preparation | Wallet-node wait | Between the windows | Genesis window |
+|---|---|---|---|---|---|---|
+| 1 | 2ce10ef5924a9dd3e5fd553736b4b3cb6ced4ab5e59fb842b8f13d10c50a4be3 | e5306854a39402c74d9f041d6ed8c115240f8f818229bef5d1d579cb35e47fef | accepted, 264 ms | 13.8 s (28 polls) | 14.6 s | Sign |
+| 2 | b1f94b36beb14df41872cebb00d8e324d2f2f1770bf8ba314dc5e553b32d63d6 | 3be9b2f0149e9bc82632845f185253b5ba38a72098ab5543cc74543164eda30e | already in the mempool, 262 ms | 15.0 s (25 polls) | 12.5 s | Sign |
+| 3 | 8182c944f6034c8e5256e91a67949774da6f02dc382120904c15850938a6baa9 | d03940810081f4deebbf15f0116a910451e839fa5f74082b81b5ca40c3a8a6ea | already in the mempool, 261 ms | 15.6 s (26 polls) | 13.0 s | Sign |
+| 4 | a88312dac9d3101a9527aa9e78b9073a499a233c2dab2f0d872634f001f25f68 | c9600ce7eaaaab13733f3637ac1134923e35549d1ad2f70aa8753de7b5ded29e | already in the mempool, 262 ms | 14.0 s (21 polls) | 11.4 s | Sign |
+| 5 | f972451397f50da763bd020f0e402eb85d0af129f179405613b0f8ac2f79d7d3 | 0beba8aadddc770fb4c87e5db92b11d5814548cbceb6e9142f4bd520bc0d9546 | accepted, 260 ms | 14.0 s (23 polls) | 11.4 s | Sign |
+| 6 | 3203d6e2f0fc993b2f6d06a04de8f9429e2a4634e5bc13ba2898bf5d45bccf53 | 54ec199fe4ec4d4d90ff6c3e0023907ed98f1e79568e9aa50ff3c925193d6283 | accepted, 262 ms | 14.5 s (24 polls) | 11.9 s | Sign |
+| 7 | 70960ac352dc7451ad20b6e0a42c7ccf7165db02ffdb7156428b10617bbec2f5 | 3af06d7881b6015ffdab6d81b0baef93ba9de97463f085cf2973691170ba8e7b | already accepted by the consensus, 263 ms | 10.2 s (21 polls) | 10.9 s | Sign |
+| 8 | 0ba71ebc0163b177230b44b35404af0719ef4220e543780eadd40312e01e1b6e | 518d394eb4958e565da1dd38f221e1801879a5c160cf4111b00613753e7c78f4 | accepted, 262 ms | 15.0 s (25 polls) | 12.4 s | Sign |
+| 9 | ce1c1ea805b4e665ff9397811e617bb5e9eca820d0a6bb25ffe478fc2b2cc190 | 9ab52d2cbeac3138aafcaa67cdd3c1342b96e86ee661e3e89b82f8f2ebc41357 | accepted, 261 ms | 15.5 s (26 polls) | 13.0 s | Sign |
+| 10 | 323c347119bd34e35a28b0e84aa38ea8d9932b88af7995dd2615028539aaa1c4 | 31573c2a12d6577c9ee36f75f219b0b8531e441535a38408d72c87d44f239cef | already in the mempool, 259 ms | 14.1 s (23 polls) | 11.6 s | Sign |
+
+10 of 10 genesis windows had Sign; no "Critical Signing Warning". `node e2e-real/run.mjs --wallet kasware --skip-issue --only
+limit,cells,merge --fund-below 0` on the same build: limit, cells and merge PASS, no warning in any window.
+
+Kaspire 0.5.31 (headless, 3 creations, 1 KAS per token output): its `signPskt` looks no input up on any node (background script), its
+`pushTx` and `getUtxoEntries` do not fit the gate (wallet/kaspire.ts), so it keeps KOB's node plus 1.5 s: windows 2.6, 2.8 and 2.6 s apart,
+every creation accepted (preparations 2211878ec960..., 7067c454b158..., 8f1cd0347e3d...).
 
 ## What still needs a live run (TN10, the owner's machine)
 
