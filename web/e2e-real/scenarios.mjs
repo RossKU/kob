@@ -106,6 +106,7 @@ const popupView = (popups) =>
     signatureScriptModes: p.result?.rawJson ? kaspireModes(p.result.rawJson) : undefined,
     rawJson: p.result?.rawJson ? compactRaw(p.result.rawJson) : undefined,
     screenshot: p.result?.screenshot ?? null,
+    seenAt: p.seenAt, doneAt: p.doneAt,
     error: p.error,
   }));
 
@@ -113,6 +114,7 @@ const popupView = (popups) =>
 const stepOf = (name, s) => ({
   name, txid: s.txid, kind: s.kind, summary: s.summary, shownAs: s.shownAs || undefined, acks: s.acks.length ? s.acks : undefined, receipts: s.receipts?.length ? s.receipts : undefined,
   popups: popupView(s.popups), screenshots: s.screenshots, appStatus: s.appStatus, signMs: s.signMs ?? undefined, ms: s.totalMs,
+  gapsMs: s.gapsMs, sentTxids: s.sentTxids, pushTx: s.pushTx?.length ? s.pushTx : undefined,
 });
 
 /** Node check of one accepted tx: every P2SH output is unspent. */
@@ -363,9 +365,11 @@ async function place(rc, r, label, spec) {
   step.verify = await verifyCreated(rc, s.submitted, s.txid, label);
   await sleep(1500);
   const after = await readRecords(rc.h);
-  const created = Object.entries(after).filter(([id]) => !before.has(id));
+  // the records new since the placement started that belong to it: the app also adopts records of the wallet's OTHER orders as the
+  // indexer lists them (orders an earlier run left live), which are new to this browser but not of this transaction
+  const created = Object.entries(after).filter(([id, rec]) => !before.has(id) && rec.txid === s.txid);
   step.records = created.map(([id, rec]) => ({ covenantId: id, kind: rec.kind, txid: rec.txid, output: rec.output }));
-  if (!created.length) throw new Error('the app stored no placement record for the accepted transaction');
+  if (!created.length) throw new Error(`the app stored no placement record for the accepted transaction ${short(s.txid)}`);
   // the record the app keeps must point at a covenant outpoint that the node lists as unspent (verified above)
   const p2sh = new Set(outputsOf(rc.node, s.submitted).filter((o) => o.p2sh).map((o) => o.index));
   for (const [id, rec] of created) if (rec.txid !== s.txid || !p2sh.has(rec.output)) throw new Error(`placement record of ${short(id)} points at ${short(rec.txid)}:${rec.output}, not at a covenant output of the accepted transaction`);
@@ -375,15 +379,18 @@ async function place(rc, r, label, spec) {
 // ------------------------------------------------------------------------------------------------ My orders
 
 /** Opens My orders afresh (the view is re-mounted, no flow of an earlier action stays on it) and waits for the rows of `wantIds`. */
-async function openOrders(rc, wantIds = [], { timeoutMs = 90_000 } = {}) {
+async function openOrders(rc, wantIds = [], { timeoutMs = 90_000, tab = 'open' } = {}) {
   const { h } = rc;
+  // the Portfolio shows one tab at a time (`#/portfolio/<tab>`): Balances, Open orders (the live ones, with their actions), Order history
+  // (the ended ones, with their status). A row is found only on its tab; the Balances rows only on Balances.
   await goto(h, '#/settings');
-  await goto(h, '#/portfolio');
+  await goto(h, `#/portfolio/${tab}`);
   await tid(h, 'orders-view').waitFor({ timeout: 60_000 });
+  if (tab === 'balances') {
+    await tid(h, 'balances-panel').waitFor({ timeout: 60_000 });
+    return;
+  }
   await tid(h, 'orders-list').waitFor({ timeout: 60_000 });
-  // the "All" tab: an order that ended (cancelled, or killed / filled by someone else) stays listed with its status instead of leaving the
-  // "Active" tab without a trace; a live one is the same row with its actions
-  await tid(h, 'orders-tab-all').click({ timeout: 10_000 }).catch(() => {});
   const t0 = Date.now();
   for (;;) {
     const missing = [];
@@ -500,6 +507,14 @@ async function cancelStep(rc, r, label, { placed, covenantIds, position = false,
   }
   await openOrders(rc);
   step.ordersAfter = await waitNotLive(rc, covenantIds);
+  // gone from Open orders: its row on Order history says how it ended (the indexer may list it there a moment later)
+  await openOrders(rc, [], { tab: 'history' });
+  for (let i = 0; i < 5 && covenantIds.some((id) => !step.ordersAfter.find((v) => v.id === id)?.listed); i++) {
+    step.ordersAfter = await Promise.all(covenantIds.map((id) => rowView(h, id)));
+    if (step.ordersAfter.every((v) => v.listed)) break;
+    await sleep(2000);
+    await clickRefresh(h);
+  }
   step.screenshots.push(await shot(h.page, rc.name, `${label}-orders-after`));
   return step;
 }
@@ -524,6 +539,7 @@ async function placeAndCancel(rc, r, label, spec, { position = false, tokensBack
 async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
   const { h } = rc;
   const row = tid(h, `balance-row-${token}`);
+  if (!(await tid(h, 'portfolio-panel-balances').count())) await openOrders(rc, [], { tab: 'balances' });
   const t0 = Date.now();
   while (!(await row.count())) {
     if (Date.now() - t0 > timeoutMs) throw new Error(`the Balances panel has no row for ${short(token)}: ${collapse(await tid(h, 'balances-panel').innerText().catch(() => '')).slice(0, 500)}`);
@@ -534,9 +550,10 @@ async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
     const row = document.querySelector(`[data-testid="balance-row-${token}"]`);
     const txt = (n) => (n?.textContent ?? '').replace(/\s+/g, ' ').trim();
     const val = (cell) => cell?.querySelector('[data-value]')?.getAttribute('data-value') ?? txt(cell);
-    const tds = row ? row.querySelectorAll('td') : [];
+    // the table's cells are `role="cell"` divs named by column (`dt-c-<key>`, ui/kit/DataTable.tsx), not <td>s
+    const cell = (k) => row?.querySelector(`.dt-c-${k}`) ?? null;
     const merge = document.querySelector(`[data-testid="orders-merge-token-${token}"]`);
-    return { free: val(tds[1]), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(tds[4]), mergeButton: merge ? txt(merge) : null };
+    return { free: val(cell('available')), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(cell('kasLocked')), mergeButton: merge ? txt(merge) : null };
   }, token);
 }
 
@@ -550,7 +567,7 @@ async function waitBalance(rc, token, pred, what, timeoutMs = 90_000) {
     b = await balanceRow(rc, token);
     if (pred(b)) return b;
     if (Date.now() - t0 > timeoutMs) throw new Error(`Balances panel: ${what} not reached after ${timeoutMs} ms (${JSON.stringify(b)})`);
-    await openOrders(rc);
+    await openOrders(rc, [], { tab: 'balances' });
     await sleep(2000);
   }
 }
@@ -610,6 +627,8 @@ export async function runAmend(rc) {
     const before = await rowView(h, id);
     const btn = tid(h, `order-replace-${id}`);
     if (!(await btn.count())) throw new Error(`My orders offers no amend for the limit sell ${short(id)}: ${JSON.stringify(before)}`);
+    // the amend is in the row's folded details (the line itself carries only Cancel): unfolded first
+    if (!(await btn.isVisible())) await tid(h, `order-toggle-${id}`).click();
     await btn.click();
     await tid(h, 'amend-dialog').waitFor({ timeout: 30_000 });
     await tid(h, 'amend-price').fill('55');
@@ -816,6 +835,7 @@ export async function runBalances(rc) {
       rows[t.ticker] = await waitBalance(rc, t.tokenId, (b) => num(b.free) === Number(SUPPLY) && num(b.escrowed) === 0 && num(b.strays) === 0, `${t.ticker}: free ${SUPPLY}, nothing in orders`);
     }
     const kasLocked = collapse(await tid(rc.h, 'kas-locked').innerText().catch(() => ''));
+    await openOrders(rc);
     const live = await rc.h.page.locator('[data-testid^="order-row-"][data-live="1"]').count();
     r.steps.push({ name: 'balances', rows, kasLocked, liveOrders: live });
     if (live) throw new Error(`${live} order(s) still live in My orders`);

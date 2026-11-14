@@ -12,7 +12,7 @@ on any machine. It proves nothing about the real extensions, their popups or a r
 
 **Status.** The scenarios are ported to the current UI and protocol (base-unit amounts, the current ticket with its one order button and
 inline status line, the My orders flows without a confirmation screen, the compact header wallet chip) and run offline with `--mock` ("Verified offline" below) and on TN10 with the real KasWare and Kaspire ("TN10 run of
-2026-10-20" below: every scenario PASS); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
+2026-10-20" below: every scenario PASS; "TN10 run of 2026-11-14": KasWare 0.11.5 and Kaspire 0.5.31, issue, limit, amend, cells, merge PASS); Kastle 2.61.0 cannot connect to the app (its provider script throws under the app's Trusted Types).
 
 ## Run
 
@@ -35,7 +35,8 @@ Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (defa
 the issuance always runs first), `--indexer [url]` (TN10: that indexer, or `INDEXER_URL` of `.env`; `--mock`: the mock's), `--skip-issue` (TN10:
 reuse the tokens of the previous run of that wallet from `out/token-<wallet>.json`, with its tracker entries and placement records), `--headless`
 (Chromium `--headless=new`: works for Kaspire, KasWare needs a headed browser; `--mock` is always headless), `--keep-open`, `--rebuild` (rebuild
-`dist-real/`), `--port N`. `NODE_WS=ws://...` and `INDEXER_URL=...` in the environment override `.env`.
+`dist-real/`), `--port N`, `--fund-below KAS` / `--fund KAS` (a wallet below the first is topped up with the second from the DEV key; defaults
+120 / 100; one issuance with limit, amend, cells and merge needs about 15 KAS, so lower both when the DEV key runs short). `NODE_WS=ws://...` and `INDEXER_URL=...` in the environment override `.env`.
 The app is built into `dist-real/` (`npx vite build --outDir dist-real --emptyOutDir`, done automatically when missing; `--rebuild` after a source
 change); `dist/` is never touched.
 
@@ -47,7 +48,7 @@ Prerequisites of the TN10 run (all gitignored, never printed): `e2e-real/.env` w
 wallet the run funds), the extensions in `e2e-real/.ext/<wallet>` (copied from the wallet-gate cache, or downloaded; only the pinned version and
 sha256 is accepted), Playwright's bundled Chromium (branded Chrome >= 137 ignores `--load-extension`). Each wallet gets a fresh profile in
 `.browser-profiles/<wallet>` (kept after the run, so a stuck order can be recovered by re-opening it). A wallet below 120 KAS is topped up with
-100 KAS from the DEV key (two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open). The market scenario
+100 KAS from the DEV key (`--fund-below` / `--fund` change both; two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open). The market scenario
 also spends from the DEV key: about 3 KAS for the counterparty bid, returned by its cancel.
 
 ## Scenarios (per wallet, in this order)
@@ -57,9 +58,9 @@ check that stops the order shows one line, `order-status` / `flow-status`, and s
 its own covenant outputs exist (the submitted transaction is read from the page's wRPC frames, or from the HTTP submit body with `--mock`, not
 from app state). What a placement orders is checked on the app's final confirmation (`confirm-order`: title, net effect, the order's terms)
 BEFORE it goes to the wallet; a confirmation that says something else is cancelled there, so the check leaves no order behind. After a placement
-the app's placement record must point at one of those covenant outputs; My orders (its "All" tab, so an ended order keeps its row and status)
+the app's placement record must point at one of those covenant outputs; the Portfolio's Open orders tab (`#/portfolio/open`)
 must list the order as live (`order-row-<id>`, `data-live="1"`; polled: a fresh placement first shows `unknown` until the node's verdict on its
-record arrives); after the cancel it must no longer be live, and tokens a cancel releases must be tracked by the app's token tracker
+record arrives); after the cancel it must no longer be live there (its Order history row, `#/portfolio/history`, is recorded), and tokens a cancel releases must be tracked by the app's token tracker
 (`kob.tokens.v1.testnet-10.<pubkey>`) as an output of the cancel. Rows, balances and status lines are read in one pass from the page (a cell a
 row does not have is empty at once, never a 30 s locator wait). A failed scenario cancels the wallet's live orders before the next one starts.
 
@@ -145,6 +146,62 @@ a scenario that failed after placing left its order live and failed `balances` t
 Kastle: its `injected.js` (2.61.0) sets `innerHTML` (goober, the CSS-in-JS of its toast library) while it loads, before it assigns
 `window.kastle`; the app's CSP `require-trusted-types-for 'script'` (since 6ba73839, 2026-10-13) makes that assignment throw, so the provider
 never exists on the app's pages (it does on a page without the CSP). Kastle 2.60.1 was proven before Trusted Types were enforced.
+
+## TN10 run of 2026-11-14 (KasWare 0.11.5, Kaspire 0.5.31, indexer of a live soak on the same TN10)
+
+The proof of the two-step creation of master 9d83d9db2 (wallet/chain.ts: the preparation is signed and SENT, the genesis is asked for only
+once the wallet's own node can see the preparation's output 0, wallet/visibility.ts) with the real extensions. Fresh throw-away wallets funded
+from the DEV key (`--fund-below 40 --fund 30` for KasWare, `--fund-below 30 --fund 40` for Kaspire: the DEV key held 90 KAS),
+`--only limit,amend,cells,merge`, `--indexer http://127.0.0.1:8091` (INDEXER_URL). KasWare headed, Kaspire `--headless`.
+
+| Wallet | issue | limit | amend | cells | merge |
+|---|---|---|---|---|---|
+| KasWare 0.11.5 | PASS | PASS | PASS | PASS | PASS |
+| Kaspire 0.5.31 | PASS | PASS | PASS | PASS | PASS |
+
+The creations (preparation, then genesis; `issue` records both txids, the KasWare `pushTx` calls the app made, and the time between the two
+approval windows):
+
+| Wallet | Preparation | Genesis (token) | Announce | Between the approvals |
+|---|---|---|---|---|
+| KasWare 0.11.5 | dd1a511e62912c104084d6991e0c1ed2fadbfbb335f3ccc0efb79a296e4db9bd | 78bcab07d7b65f10fed82e7c60bdae285e0a499710904e260ca5147a21dd4b12 (22684f7b6e..., RAKWXEKK) | `pushTx` accepted in 249 ms | 1.03 s |
+| Kaspire 0.5.31 | 1305af5b6678e8688bc79e378a25312937521dbb3e63c6dca4ec63c4e290b4a1 | 7faa3b5c4417eb9fd0bd7a60242db5c595a24b8dd7db7f98e52ec56091dd5e75 (e595a4ffc7..., RAKPKXXQ) | none (no `announce`): KOB's node lists the output, plus 1.5 s | 2.61 s |
+
+KasWare 0.11.5 creations of the day: 9 genesis windows, 8 with Sign. `pushTx` answered within 255 ms every time it was recorded, either accepted or "already
+in the mempool" (the wallet's node had it from the network first; the app counts that as visible); the next window opened 1.02 to 1.03 s after
+the first closed. ONE genesis window (preparation 92064f0b74915916cb5d0a8e0a977b2c7a60eb84cb836846dfdd09317196eecc, an early run whose
+`pushTx` outcome was not yet recorded) showed only Reject: "Critical Signing Warning: Input #0 (92064f0b...:0) is not an unspent output on
+this network", while KOB's node listed that output as unspent. 0.11.5 checks the input against its node's UTXO set, then its mempool
+(`verifyPsktInputs` in its service worker); a transaction that just left the mempool for a block the virtual chain has not accepted yet is
+in neither. Not reproduced in the 7 genesis windows after it; reported, not fixed here.
+
+Decline and resume (a separate script on the same driver, KasWare): the genesis window was rejected, the Create token page offered "Creation
+of RRKWZXGE not finished" with "Finish the creation"; after a page reload it was still offered, the button asked for one approval (the window
+opened 2.3 s after the click: the preparation, sent by the earlier page, waited for KOB's node plus the margin), and the token was created:
+preparation c7291b6b58ed2afaad9919ad1857e6cf3a93001e2b4819d1a1e9f5fdfec61ff1, genesis
+59cba93540ed67638ec459ba3f2c72c56d9aa73a31753789036dc4b23ac7e44d (token a8c6e7988306c412246889c482b6ed93e06b0a9bb7a1ba4b4c12e8d6a17c652c),
+its output unspent on the node, the saved record gone.
+
+kascov.io (`/data/testnet-10/tokens.json`, newest activity first) listed none of the day's tokens while its newest entry stayed about
+240,000 DAA (6.7 h) behind its own tip for the whole session; the KCC-23 tokens of earlier runs are there by name and ticker
+(`metadata_source` `kcc23_declaration`).
+
+Harness changes (none of them an app defect):
+
+* KasWare 0.11.5: the wallet screen no longer shows the address (only "Account 1"), so the switch to Testnet 10 is checked on Settings
+  ("KASPA Network Testnet 10"); the address is still checked against the mnemonic after connecting. Its Sign window checks the inputs on its
+  own node and withholds Sign when one fails: the approver waits for Sign or the "Critical Signing Warning", and on the warning rejects at
+  once and records it (the run used to wait for the app's signing timeout, 4 minutes, with no reason).
+* The header has one Connect: `wallet-connect` opens the chooser whose rows are `wallet-connect-<id>` (an extension plus the private key on
+  testnet-10).
+* The Portfolio shows one tab at a time (`#/portfolio/balances|open|history`, no "All" tab): rows are looked for on Open orders, the ended
+  ones recorded from Order history, the Balances rows on Balances; the Balances cells are `role="cell"` divs (`dt-c-<key>`), not `<td>`s; an
+  order's Amend is in its folded details (`order-toggle-<id>` first).
+* The placement-record check takes the records of the placed transaction only: the app also adopts records of the wallet's other orders as
+  the indexer lists them (orders an earlier failed run left live).
+* `issue` records `sentTxids`, `pushTx` (KasWare's announce, read by wrapping `window.kasware.pushTx` in the page) and `gapsMs` (from the
+  approval windows' `seenAt` / `doneAt`); a failed signing says what the windows showed.
+* `--fund-below` / `--fund`.
 
 ## What still needs a live run (TN10, the owner's machine)
 

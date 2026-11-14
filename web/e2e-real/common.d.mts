@@ -40,7 +40,7 @@ export const POPUP_MATCHERS: Record<RealWallet, (url: string) => boolean>;
 export function isWalletPopup(wallet: RealWallet, page: { isClosed(): boolean; url(): string }): boolean;
 export function findPopup(ctx: any, wallet: RealWallet, o?: { handled?: WeakSet<object>; timeoutMs?: number; pollMs?: number }): Promise<any | null>;
 export interface PopupWatch {
-  seen: { index: number; url: string; result?: unknown; error?: string }[];
+  seen: { index: number; url: string; seenAt: number; doneAt?: number; result?: unknown; error?: string }[];
   stop(): Promise<PopupWatch['seen']>;
 }
 export function approvePopups(ctx: any, handler: (page: any, info: { wallet: RealWallet; index: number }) => Promise<unknown> | unknown, o: { wallet: RealWallet; pollMs?: number }): PopupWatch;
@@ -51,5 +51,6 @@ export function kastleApprover(o?: { approve?: boolean; password?: string; scree
 
 export function onboardKasware(ctx: any, words: string[], o?: { password?: string }): Promise<any>;
 export function switchKaswareToTn10(page: any): Promise<string>;
+export function kaswareOnTn10(text: string): boolean;
 export function onboardKaspire(ctx: any, extId: string, mnemonic: string, o: { password: string }): Promise<string>;
 export function onboardKastle(ctx: any, extId: string, o: { mnemonic: string; password: string }): Promise<boolean>;

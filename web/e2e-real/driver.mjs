@@ -4,7 +4,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  OUT_DIR, collapse, extensionId, kaspaNode, kaswareAddress, kaswareApprover, kaspireApprover, kastleApprover, log, onboardKasware, onboardKaspire,
+  OUT_DIR, collapse, extensionId, kaspaNode, kaswareAddress, kaswareApprover, kaswareOnTn10, kaspireApprover, kastleApprover, log, onboardKasware, onboardKaspire,
   onboardKastle, shot, sleep, switchKaswareToTn10, withPopupApproval,
 } from './common.mjs';
 import * as T from '../../tools/wallet-gate/lib/txbuild.mjs';
@@ -194,7 +194,10 @@ export function walletDriver(name, env, { mock = null } = {}) {
       async setup(ctx) {
         const wp = await onboardKasware(ctx, mnemonic.trim().split(/\s+/));
         const text = await switchKaswareToTn10(wp);
-        if (!/kaspatest:/.test(text)) throw new Error('KasWare did not switch to Testnet 10 (no kaspatest address on the wallet screen)');
+        if (!kaswareOnTn10(text)) {
+          const file = await shot(wp, 'kasware', 'tn10-switch-failed');
+          throw new Error(`KasWare did not switch to Testnet 10 (Settings does not name Testnet 10): "${text.split(' | ').at(-1).slice(0, 300)}", see ${file}`);
+        }
         return { walletPage: wp };
       },
     };
@@ -297,8 +300,53 @@ export async function openApp(ctx, baseUrl, config) {
   // the market list: the empty hash is the landing page, which has no app header (no wallet buttons)
   await page.goto(baseUrl + '/#/market');
   await page.getByTestId('main').waitFor({ timeout: 60_000 }).catch(() => {});
+  // again after every reload (the run reloads to switch registries, the resume check to come back to a saved creation)
+  page.on('load', () => void watchKaswarePushTx(h));
+  await watchKaswarePushTx(h);
   return h;
 }
+
+/**
+ * Records every KasWare `pushTx` call of the page (the app's `announce` of a transaction it sent, wallet/visibility.ts) with its outcome and
+ * time, so the run shows whether the wallet's node took it at once or the app fell back to waiting for the block. The provider is wrapped,
+ * not replaced: the call goes through unchanged. Read with `pushTxLog(h)`. No-op without `window.kasware` or `pushTx` (Kaspire, KasWare 0.10).
+ */
+export async function watchKaswarePushTx(h) {
+  await h.page.waitForFunction(() => typeof window.kasware?.pushTx === 'function', null, { timeout: 5000 }).catch(() => {});
+  h.pushTxWrapped = await h.page.evaluate(() => {
+    const p = window.kasware;
+    if (!p || typeof p.pushTx !== 'function' || p.__kobWrapped) return Boolean(p?.__kobWrapped);
+    const orig = p.pushTx.bind(p);
+    window.__kobPushTx = [];
+    try {
+      p.pushTx = async (raw) => {
+        let id = null;
+        try {
+          id = JSON.parse(raw).id ?? null;
+        } catch {
+          /* not JSON */
+        }
+        const e = { txid: id, at: Date.now(), ms: null, ok: null, answer: null, error: null };
+        window.__kobPushTx.push(e);
+        try {
+          const r = await orig(raw);
+          Object.assign(e, { ok: true, ms: Date.now() - e.at, answer: String(typeof r === 'string' ? r : JSON.stringify(r)).slice(0, 200) });
+          return r;
+        } catch (err) {
+          Object.assign(e, { ok: false, ms: Date.now() - e.at, error: String(err?.message ?? err).slice(0, 300) });
+          throw err;
+        }
+      };
+      p.__kobWrapped = true;
+    } catch {
+      return false; // a frozen provider: nothing recorded
+    }
+    return p.pushTx !== orig;
+  }).catch(() => false);
+}
+
+/** The `pushTx` calls recorded by `watchKaswarePushTx` (empty when nothing was wrapped). */
+export const pushTxLog = (h) => h.page.evaluate(() => window.__kobPushTx ?? []).catch(() => []);
 
 export const goto = async (h, hash) => {
   await h.page.evaluate((x) => {
@@ -312,8 +360,15 @@ const tid = (h, id) => h.page.getByTestId(id);
 /** Connects the wallet through the app's header (approves the wallet's connect / network windows) and reads what the header shows. */
 export async function connectWallet(h, ctx, wallet) {
   const btn = tid(h, `wallet-connect-${wallet.name}`);
+  // the header has one Connect: named for the wallet when it is the only way in (`wallet-connect-<id>`), else `wallet-connect`, which opens
+  // the chooser whose rows carry `wallet-connect-<id>` (an extension plus the private key entry the app offers on testnet-10)
+  const chooser = tid(h, 'wallet-connect');
   try {
-    await btn.waitFor({ timeout: 60_000 });
+    await btn.or(chooser).first().waitFor({ timeout: 60_000 });
+    if (!(await btn.count())) {
+      await chooser.first().click();
+      await btn.waitFor({ timeout: 15_000 });
+    }
   } catch {
     // say why: what the header shows, whether the page has the wallet's provider at all, and the page's errors (a provider script that threw)
     const seen = await h.page.evaluate((n) => ({ provider: typeof window[n], hint: document.querySelector('[data-testid="wallet-install-hint"]')?.textContent ?? null }), wallet.name).catch(() => ({}));
@@ -359,7 +414,7 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
   await tid(h, 'confirm-ack').check();
   const submitsBefore = h.submits.length;
   const tSign = Date.now();
-  const { popups } = await wallet.approve(ctx, async () => {
+  const watched = wallet.approve(ctx, async () => {
     await tid(h, 'confirm-sign').click();
     const t1 = Date.now();
     for (;;) {
@@ -371,6 +426,18 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
       await sleep(400);
     }
   });
+  let approval;
+  try {
+    approval = await watched;
+  } catch (e) {
+    // what the wallet windows said (a 0.11.5 "Critical Signing Warning"), what was sent and announced, how long the app waited between the
+    // approvals: the evidence of a failed creation, in the error the run records
+    const ws = (e.popups ?? []).map((p) => ({ index: p.index, clicked: p.result?.clicked ?? null, warning: p.result?.warning ?? null, seenAt: p.seenAt, doneAt: p.doneAt, screenshot: p.result?.screenshot ?? null }));
+    const pushTx = (await pushTxLog(h)).filter((x) => x.at >= tSign).map((x) => ({ txid: x.txid, ok: x.ok, ms: x.ms, at: x.at, error: x.error }));
+    const sent = h.submits.slice(submitsBefore).map((x) => x.txid ?? x.tx?.id ?? null);
+    throw new Error(`${e.message}; sent ${JSON.stringify(sent)}; pushTx ${JSON.stringify(pushTx)}; wallet windows ${JSON.stringify(ws)}`);
+  }
+  const { popups } = approval;
   const txid = await tid(h, 'tx-id').getAttribute('data-value');
   const signMs = Date.now() - tSign;
   // the app's own acceptance status (node UTXO polling), bounded
@@ -382,10 +449,17 @@ export async function signOnConfirmScreen(h, ctx, wallet, label, shotDir, { expe
     await sleep(1000);
   }
   screenshots.push(await shot(h.page, shotDir, `${label}-accepted`));
-  const submitted = h.submits.slice(submitsBefore).at(-1)?.tx ?? null;
+  const submits = h.submits.slice(submitsBefore);
+  const submitted = submits.at(-1)?.tx ?? null;
+  // a creation is two transactions (preparation, genesis) and two approvals: how long the app waited between them, and what announced the
+  // first one to the wallet's node (`pushTx`) or did not
+  const pushTx = (await pushTxLog(h)).filter((e) => e.at >= tSign);
+  const gapsMs = popups.slice(1).map((p, i) => (p.seenAt && popups[i].doneAt ? p.seenAt - popups[i].doneAt : null));
+  const sentTxids = submits.map((x) => x.txid ?? x.tx?.id ?? null);
+  if (popups.length > 1 || pushTx.length) log(`[${wallet.name}] ${label}: ${popups.length} approvals, waited ${JSON.stringify(gapsMs)} ms between them; sent ${JSON.stringify(sentTxids)}; pushTx ${JSON.stringify(pushTx.map((e) => ({ ok: e.ok, ms: e.ms, error: e.error })))}`);
   await tid(h, 'confirm-close').click();
   await sleep(500);
-  return { txid, kind, appStatus: status, summary, shownAs: '', acks: [], confirmText: fullText, popups, screenshots, signMs, totalMs: Date.now() - t0, submitted };
+  return { txid, kind, appStatus: status, summary, shownAs: '', acks: [], confirmText: fullText, popups, gapsMs, sentTxids, pushTx, screenshots, signMs, totalMs: Date.now() - t0, submitted };
 }
 
 /** The phases of an order action's status line (`order-status` / `flow-status`) that end it without a transaction. */

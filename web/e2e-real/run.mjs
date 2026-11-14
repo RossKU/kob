@@ -4,7 +4,9 @@
 // transaction is verified on the node independently of the app.
 //
 //   node e2e-real/run.mjs [--wallet kasware,kaspire,kastle|all] [--only limit,amend,...] [--indexer [url]] [--headless] [--keep-open]
-//                         [--skip-issue] [--rebuild] [--port N] [--ext pinned|latest]
+//                         [--skip-issue] [--rebuild] [--port N] [--ext pinned|latest] [--fund-below KAS] [--fund KAS]
+//   --fund-below / --fund   top a wallet up with --fund KAS from the DEV key when it holds less than --fund-below KAS (defaults 120 / 100); lower
+//                  them when the DEV key runs short and the scenarios need less (one issuance and limit / amend / cells / merge need about 15 KAS)
 //   --ext latest   run the NEWEST released extension (downloaded without a pin into .ext/latest/, version and sha256 in the report) instead of the pinned build
 //   node e2e-real/run.mjs --mock [--indexer] ...      the same scenarios against the offline mock stack (web/e2e) with in-page mock wallets
 //
@@ -38,8 +40,8 @@ const KEEP_OPEN = flag('keep-open');
 const EXT_MODE = optv('ext', 'pinned');
 const LATEST = EXT_MODE === 'latest';
 const SKIP_ISSUE = flag('skip-issue');
-const FUND_BELOW = 120n * KAS; // two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open
-const FUND_KAS = 100;
+const FUND_BELOW = BigInt(optv('fund-below', '120')) * KAS; // two issuances leave 10 KAS each in their token UTXOs; an IFD locks about 17 KAS while it is open
+const FUND_KAS = Number(optv('fund', '100'));
 
 for (const w of WALLETS) if (!ALL_WALLETS.includes(w)) throw new Error(`unknown wallet ${w} (kasware, kaspire, kastle)`);
 for (const id of ONLY) if (!ALL_IDS.includes(id)) throw new Error(`unknown scenario ${id} (${ALL_IDS.join(', ')})`);

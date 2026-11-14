@@ -272,13 +272,16 @@ export function approvePopups(ctx, handler, { wallet, pollMs = 250 } = {}) {
         continue;
       }
       handled.add(p);
-      const entry = { index: seen.length, url: p.url().replace(/(payload=)[^&#]*/, '$1<omitted>') };
+      // `seenAt` / `doneAt` (epoch ms): the gap between one popup's `doneAt` and the next one's `seenAt` is how long the app waited before
+      // asking again (a two-step creation: the visibility gate between the preparation and the genesis)
+      const entry = { index: seen.length, url: p.url().replace(/(payload=)[^&#]*/, '$1<omitted>'), seenAt: Date.now() };
       seen.push(entry);
       try {
         entry.result = await handler(p, { wallet, index: entry.index });
       } catch (e) {
         entry.error = String(e?.message ?? e);
       }
+      entry.doneAt = Date.now();
     }
   })();
   return {
@@ -296,6 +299,10 @@ export async function withPopupApproval(ctx, wallet, start, handler, opts = {}) 
   const watch = approvePopups(ctx, handler, { wallet, ...opts });
   try {
     return { result: await start(), popups: watch.seen };
+  } catch (e) {
+    // the windows seen so far go with the error: what the wallet said is the evidence of a refused step
+    if (e && typeof e === 'object') e.popups = watch.seen;
+    throw e;
   } finally {
     await watch.stop();
   }
@@ -316,8 +323,19 @@ export const kaswareApprover =
       text = await pop.innerText('body').catch(() => '');
       if (/\b(Cancel|Reject)\b/.test(text) && text.length > 30 && i > 1) break;
     }
+    // 0.11.5 checks every input against its own node while the Sign window is open (`verifyPsktInputs`) and shows Sign only when they all pass;
+    // an input it cannot find leaves a "Critical Signing Warning" and Reject alone. Wait for one of the two before reading the window.
+    // (a line of its own: "Sign Transaction" is also the window's title, so it does not count)
+    const hasApprove = (s) => KASWARE_APPROVE.filter((t) => t !== 'Sign Transaction').some((t) => new RegExp(`(^|\\n)\\s*${t.replace(/[&]/g, '\\$&')}\\s*($|\\n)`).test(s));
+    for (let i = 0; approve && i < 20 && /Sign Transaction/.test(text) && !hasApprove(text) && !/Critical Signing Warning/.test(text); i++) {
+      await sleep(400);
+      text = await pop.innerText('body').catch(() => '');
+    }
     const info = { text, summary: collapse(text).slice(0, 600), screenshot: await shot(pop, screenshotDir, 'popup'), clicked: null };
-    const labels = approve ? KASWARE_APPROVE : ['Cancel', 'Reject'];
+    const warning = /Critical Signing Warning\s*([^\n]*\n?[^\n]*)/.exec(text);
+    if (warning) info.warning = collapse(warning[0]).slice(0, 400);
+    // the wallet withheld Sign: rejected at once, so the app hears the refusal now (not after its signing timeout) and the run says why
+    const labels = approve && !(warning && !hasApprove(text)) ? KASWARE_APPROVE : ['Cancel', 'Reject'];
     for (const t of labels) {
       const loc = pop.getByText(t, { exact: true });
       if ((await loc.count().catch(() => 0)) > 0) {
@@ -434,7 +452,11 @@ export async function onboardKasware(ctx, words, { password = 'Kob-Test-12345' }
   return page;
 }
 
-/** KasWare: Settings -> network -> Testnet 10. Resolves with the wallet page text (contains the kaspatest: address when it worked). */
+/**
+ * KasWare: Settings -> network -> Testnet 10. Resolves with the text of the wallet screen and of Settings afterwards: 0.10 showed the
+ * kaspatest: address on the wallet screen; 0.11 shows only "Account 1" there (the address is behind Receive), but names the network in
+ * Settings ("KASPA Network Testnet 10") and badges the wallet screen "TN10".
+ */
 export async function switchKaswareToTn10(page) {
   await clickText(page, 'Settings');
   await sleep(1200);
@@ -444,8 +466,17 @@ export async function switchKaswareToTn10(page) {
   await sleep(3000);
   await clickText(page, 'Wallet');
   await sleep(1500);
-  return collapse(await page.innerText('body'));
+  const wallet = collapse(await page.innerText('body'));
+  await clickText(page, 'Settings');
+  await sleep(1200);
+  const settings = collapse(await page.innerText('body'));
+  await clickText(page, 'Wallet');
+  await sleep(800);
+  return `${wallet} | ${settings}`;
 }
+
+/** Did `switchKaswareToTn10` land on Testnet 10? (0.10: a kaspatest: address; 0.11: the network row of Settings) */
+export const kaswareOnTn10 = (text) => /kaspatest:/.test(text) || /Network Testnet 10(?!\d)/.test(text);
 
 /** Kaspire: imports the mnemonic on wallet.html and selects testnet-10. Resolves with a screenshot path. */
 export async function onboardKaspire(ctx, extId, mnemonic, { password }) {
