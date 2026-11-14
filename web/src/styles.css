@@ -591,19 +591,23 @@ small, .small { font-size: 0.85em; }
 .modal-foot { padding: 12px var(--gutter); border-top: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 body.modal-open { overflow: hidden; }
 
-/* bottom right on a desktop, the full width of the window (minus the gutters) at the bottom on a phone: never over the title area or the header's wallet chip
-   (review L-02). The newest card is the lowest. A phone's market page has its "Trade" button at the bottom right: the cards stand above it, 16 px clear */
-.toast-host { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); width: 360px; pointer-events: none; }
+/* ONE place for every notification on a desktop and a tablet: the top right, just under the sticky header (--toast-top, kit/Toast.tsx), near the bell
+   (founder 2026-11-14: all toasts and the flow card at the top right under the header, so none covers the order ticket's button; it was bottom right,
+   e43d81105 / review L-02). Never over the header or its wallet chip. The card of the task running (an order's send, a flow) is on top, the toasts
+   stack under it, the newest lowest. A phone: below */
+.toast-host { position: fixed; right: 16px; top: calc(var(--toast-top, 56px) + 8px); z-index: 200; display: flex; flex-direction: column; gap: 8px; max-width: calc(100vw - 32px); width: 360px; pointer-events: none; }
 .toast-host > * { pointer-events: auto; }
+.toast-host > .send-toast { order: -1; }
+/* a flow's card (Merge all, a cancel of several orders ...) never runs off the screen: it scrolls inside (its step list keeps the running step in view) */
+.toast-host:not([data-phone]) > .tx-flow-toast { max-height: calc(100vh - var(--toast-top, 56px) - 24px); overflow-y: auto; }
 .toast {
   background: var(--surface); border: 1px solid var(--border); border-left-width: 5px; border-radius: var(--radius-sm);
   box-shadow: var(--shadow); padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start;
 }
-/* a card comes in from the right edge (a phone: from the bottom) with a fade; leaving is instant */
+/* a card comes in from the right edge (a narrow window: down from under the header) with a fade; leaving is instant */
 @keyframes toast-in { from { opacity: 0; transform: translateX(16px); } }
-@keyframes toast-in-bottom { from { opacity: 0; transform: translateY(12px); } }
 .toast { animation: toast-in var(--dur-slow) var(--ease-out) backwards; }
-@media (max-width: 719px) { .toast { animation-name: toast-in-bottom; } }
+@media (max-width: 719px) { .toast { animation-name: toast-in-top; } }
 .toast-ok { border-left-color: var(--ok); }
 .toast-warn { border-left-color: var(--warn); }
 .toast-error { border-left-color: var(--bad); }
@@ -708,7 +712,6 @@ body.modal-open { overflow: hidden; }
   .wallet-kind, .wallet-chip .copy-btn { display: none; }
   .wallet-chip { padding-left: 8px; }
   .toast-host { left: 16px; right: 16px; width: auto; max-width: none; }
-  body:has(.mkt-trade-fab) .toast-host:not([data-phone]) { bottom: calc(16px + 44px + 16px + env(safe-area-inset-bottom, 0px)); }
 }
 /* a small phone: the chip keeps the dot and the network; "open review" is in its tooltip, the menu and the banner (so a connected row fits on any font) */
 @media (max-width: 430px) {

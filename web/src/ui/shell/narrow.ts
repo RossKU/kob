@@ -13,7 +13,7 @@ export const TIGHT_QUERY = '(max-width: 1199px)';
 export const PHONE_QUERY = '(max-width: 639px)';
 /**
  * A phone for the notifications (toasts): below 640 px, or a touch screen below 760 px (the same cut as the market page's Buy / Sell bar). The toasts sit at
- * the top under the header, one at a time (kit/Toast.tsx, styles.css `.toast-host[data-phone]`); a desktop keeps them at the bottom right.
+ * the top under the header, one at a time (kit/Toast.tsx, styles.css `.toast-host[data-phone]`); a desktop shows them stacked at the top right under the header.
  */
 export const PHONE_TOAST_QUERY = '(max-width: 639px), (pointer: coarse) and (max-width: 759px)';
 /** Spare room asked for before the wide row is tried again after it did not fit. */

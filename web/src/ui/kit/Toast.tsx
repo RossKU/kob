@@ -74,7 +74,7 @@ function useHostCards(host: { current: HTMLElement | null }, on: boolean): numbe
   return on ? n : 0;
 }
 
-/** Keeps `--toast-top` at the bottom edge of the sticky header, so a phone's toast hangs just under it. */
+/** Keeps `--toast-top` at the bottom edge of the sticky header, so the toasts hang just under it (a desktop's at the right, a phone's across). */
 function useHeaderOffset(host: { current: HTMLElement | null }, on: boolean): void {
   useEffect(() => {
     const el = host.current;
@@ -94,7 +94,9 @@ function useHeaderOffset(host: { current: HTMLElement | null }, on: boolean): vo
 }
 
 /**
- * Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. A desktop: bottom right, stacked. A phone (PHONE_TOAST_QUERY): at the
+ * Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. A desktop or a tablet: every toast and the card of a send or a
+ * flow at the top right just under the header, stacked, the running task's card on top (founder 2026-11-14: one place, never over the order ticket's
+ * button). A phone (PHONE_TOAST_QUERY): at the
  * top just under the header, ONE at a time (a card another component put in the host first, else the newest toast) with a "+N" chip for the rest, which opens
  * the bell; only the shown toast runs its timer. styles.css `.toast-host`.
  */
@@ -103,7 +105,7 @@ export function ToastHost() {
   const phone = useMedia(PHONE_TOAST_QUERY);
   const ref = useRef<HTMLDivElement>(null);
   const cards = useHostCards(ref, phone);
-  useHeaderOffset(ref, phone);
+  useHeaderOffset(ref, true);
   // on a phone a send / flow card (it may wait for the user's approval) is the one shown; the toasts wait behind it
   const shown = phone ? (cards > 0 ? [] : list.slice(-1)) : list;
   const waiting = phone ? Math.max(0, cards - 1) + list.length - shown.length : 0;

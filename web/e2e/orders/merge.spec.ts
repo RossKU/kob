@@ -94,6 +94,11 @@ test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 appr
   // mid-run: the first level is through, a later level is being built from its outputs
   await expect(page.getByTestId('flow-step-11')).toHaveAttribute('data-state', 'sending', { timeout: 120_000 });
   await shot(page, 'merge-all-progress');
+  // the flow's card: at the top right just under the header (founder 2026-11-14), on top of any toast, and never past the bottom of the window
+  const [fb, hb, vp] = [await flow.boundingBox(), await page.locator('header.header').boundingBox(), page.viewportSize()!];
+  expect(fb!.y - (hb!.y + hb!.height), 'just under the header').toBeLessThanOrEqual(12);
+  expect(vp.width - (fb!.x + fb!.width), 'at the right edge').toBeLessThanOrEqual(16);
+  expect(fb!.y + fb!.height, 'within the window').toBeLessThanOrEqual(vp.height);
   const placed = await runFlow(page, mock, wallet, { steps: 15, confirm: false });
   await expect(page.getByTestId('flow-done')).toContainText('15 transactions submitted');
 

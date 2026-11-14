@@ -100,6 +100,25 @@ test.describe('order ticket', () => {
     expect(BigInt(bal.tokens.EXKCC ?? '0')).toBe(97n * TOKEN);
   });
 
+  // founder 2026-11-14: the notifications sit at the top right under the header, so a submitted order's card covers at most the market bar's right
+  // end, never the ticket (its button above all); the ticket's own footer shows no line once the order is submitted
+  test('a submitted order: its notification at the top right over the market bar, clear of the ticket; nothing left in the ticket footer', async ({ appPage: page, mock }) => {
+    await fundAlice(mock);
+    await openTicket(page, mock);
+    await page.getByTestId('order-side-sell').click();
+    await page.getByTestId('order-amount').fill('3');
+    await page.getByTestId('order-price').fill('2.6');
+    await placeOrder(page, mock);
+    const card = page.getByTestId('send-toast');
+    await expect(card.getByTestId('tx-id')).toBeVisible();
+    await expect(page.locator('.tk-status')).toBeHidden();
+    const [cb, bar, ticket, header] = await Promise.all([card.boundingBox(), page.getByTestId('market-bar').boundingBox(), page.getByTestId('order-ticket').boundingBox(), page.locator('header.header').boundingBox()]);
+    expect(cb!.y, 'under the header').toBeGreaterThanOrEqual(header!.y + header!.height);
+    expect(cb!.y + cb!.height, 'within the market bar: never over the ticket').toBeLessThanOrEqual(ticket!.y);
+    expect(cb!.x, 'its right end').toBeGreaterThan(bar!.x + bar!.width / 2);
+    await page.screenshot({ path: test.info().outputPath('market-toast.png') });
+  });
+
   test('the final confirmation: Cancel sends nothing and the wallet is never asked; Continue asks it exactly once', async ({ appPage: page, mock, wallet }) => {
     await fundAlice(mock);
     await openTicket(page, mock);

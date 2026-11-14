@@ -410,14 +410,18 @@ test.describe('a touch screen (pointer: coarse)', () => {
     expect(css.top, 'just under the header').toBeLessThanOrEqual(header.y + header.height + 12);
   });
 
-  test('a desktop: the toasts stay at the bottom right', async ({ appPage: page }) => {
+  // founder 2026-11-14: top right just under the header (near the bell), so a toast never covers the order ticket's button (was bottom right, review L-02)
+  test('a desktop: the toasts sit at the top right, just under the header', async ({ appPage: page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto('/#/settings');
     const host = page.getByTestId('toast-host');
     await expect(host).not.toHaveAttribute('data-phone', 'true');
-    const css = await host.evaluate((e) => { const c = getComputedStyle(e); return { top: c.top, bottom: parseFloat(c.bottom), right: parseFloat(c.right), width: parseFloat(c.width) }; });
+    const header = (await page.locator('header.header').boundingBox())!;
+    // the header's height is read by an effect after the first paint
+    await expect.poll(() => host.evaluate((e) => parseFloat(getComputedStyle(e).top))).toBeGreaterThanOrEqual(header.y + header.height);
+    const css = await host.evaluate((e) => { const c = getComputedStyle(e); return { top: parseFloat(c.top), right: parseFloat(c.right), width: parseFloat(c.width) }; });
     expect(css.right).toBe(16);
-    expect(css.bottom).toBeGreaterThanOrEqual(16);
+    expect(css.top, 'just under the header').toBeLessThanOrEqual(header.y + header.height + 12);
     expect(css.width).toBe(360);
   });
 });
