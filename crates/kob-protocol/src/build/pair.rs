@@ -761,6 +761,26 @@ fn first_in(lay: &Layout, t: Token, what: &str) -> Result<i64> {
         .ok_or_else(|| Error::Invalid(format!("{what}: no input of {} in the batch", t.1.name())))
 }
 
+/// The extension commitment a token output of `t` carries: `e` for KCC-20, none for KRON.
+fn kcc20_ext(t: Token, e: [u8; 32]) -> [u8; 32] {
+    if t.1.family() == Family::Kcc20 {
+        e
+    } else {
+        [0; 32]
+    }
+}
+
+/// The role tag of a pair fill that arms from evidence of mode `ev_mode` (0 or 1).
+fn arm_tag(trigger: bool, ev_mode: i64) -> &'static str {
+    if !trigger {
+        ""
+    } else if ev_mode == 0 {
+        ".arm0"
+    } else {
+        ".arm1"
+    }
+}
+
 /// The plan of a pair leg: its input, positional output, extras and token flows.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_leg(
@@ -782,7 +802,7 @@ pub(crate) fn plan_leg(
             let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
             let v = order.utxo.amount as i64;
             let cv = custody.utxo.amount as i64;
-            let maker_ext = if ttok.1.family() == Family::Kcc20 { s.t_ext } else { [0; 32] };
+            let maker_ext = kcc20_ext(ttok, s.t_ext);
             let mut extras = vec![];
             let (delivery, branch) = if f.rest {
                 extras.push(Extra::Cont(
@@ -905,7 +925,7 @@ pub(crate) fn plan_leg(
                     stok,
                 )
             } else {
-                let e = if ttok.1.family() == Family::Kcc20 { s.t_ext } else { [0; 32] };
+                let e = kcc20_ext(ttok, s.t_ext);
                 PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
             };
             let mut flows = vec![(stok, c.s_out, 0), (ttok, 0, c.t_out)];
@@ -967,12 +987,7 @@ pub(crate) fn plan_leg(
                                 }
                                 new_custody = true;
                                 floor -= es.exit_carrier;
-                                let st = TokenState::custody(
-                                    a.1.family(),
-                                    a_new,
-                                    s.parent,
-                                    if a.1.family() == Family::Kcc20 { es.a_ext } else { [0; 32] },
-                                );
+                                let st = TokenState::custody(a.1.family(), a_new, s.parent, kcc20_ext(a, es.a_ext));
                                 extras.push(Extra::Tok {
                                     value: u(es.exit_carrier, "exitCarrier")?,
                                     state: st,
@@ -1004,12 +1019,7 @@ pub(crate) fn plan_leg(
                                 }
                                 new_custody = true;
                                 floor -= es.exit_carrier;
-                                let st = TokenState::custody(
-                                    bt.1.family(),
-                                    b_new,
-                                    s.parent,
-                                    if bt.1.family() == Family::Kcc20 { es.b_ext } else { [0; 32] },
-                                );
+                                let st = TokenState::custody(bt.1.family(), b_new, s.parent, kcc20_ext(bt, es.b_ext));
                                 extras.push(Extra::Tok {
                                     value: u(es.exit_carrier, "exitCarrier")?,
                                     state: st,
@@ -1090,15 +1100,7 @@ pub(crate) fn plan_leg(
                 "KobCondPair.settle.{}.leg{}{}{}{}.{branch}",
                 side_name(ask),
                 c.leg,
-                if c.trigger {
-                    if ev_args[3] == 0 {
-                        ".arm0"
-                    } else {
-                        ".arm1"
-                    }
-                } else {
-                    ""
-                },
+                arm_tag(c.trigger, ev_args[3]),
                 if c.t_arg != 0 { ".auction" } else { "" },
                 if merge.is_some() { ".merge" } else { "" },
             );
@@ -1255,7 +1257,7 @@ pub(crate) fn plan_leg(
                 });
             }
             let (xtok, x_ext) = if buy { (a, s.a_ext) } else { (bt, s.b_ext) };
-            let x_ext = if xtok.1.family() == Family::Kcc20 { x_ext } else { [0; 32] };
+            let x_ext = kcc20_ext(xtok, x_ext);
             kron_output(xtok.1.family(), c.x_cust, "the exit's custody")?;
             let c_tpl = template(TemplateId::KobCondPair);
             let a_in = lay.at.get(&(i, Slot::A)).map(|x| *x as i64).unwrap_or(0);
@@ -1265,24 +1267,10 @@ pub(crate) fn plan_leg(
             let role = format!(
                 "KobIfdPair.fill.{}{}{}{}.{}",
                 side_name(!buy),
-                if c.trigger {
-                    if ev_args[3] == 0 {
-                        ".arm0"
-                    } else {
-                        ".arm1"
-                    }
-                } else {
-                    ""
-                },
+                arm_tag(c.trigger, ev_args[3]),
                 if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
                 if c.booked { ".book" } else { "" },
-                if s.amount_left - n > 0 {
-                    "cont"
-                } else if c.cont {
-                    "wait"
-                } else {
-                    "close"
-                }
+                entry_branch(s.amount_left - n > 0, c.cont)
             );
             let flows =
                 if buy { vec![(bt, c.amt, 0), (a, 0, n)] } else { vec![(a, n, 0), (bt, s.custody - c.b_new, 0), (bt, 0, c.x_cust)] };
