@@ -22,7 +22,8 @@ import { describeEvent } from './describe';
 import { INVOICE_POLL_MS, ORDERS_POLL_MS, pollInvoices, pollWallet } from './poll';
 import { declaredToken, loadDeclaration, restoreDeclarations } from '../../data/token-declarations';
 import { useLiveRefresh } from '../market/live';
-import { addNotice, noticeOfSwitch, type SystemNotice } from './system-notices';
+import { addNotice, noticeOfHeldError, noticeOfSwitch, type SystemNotice } from './system-notices';
+import { toasts } from '../kit/toast-store';
 
 export type BrowserPermission = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -100,6 +101,8 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (n) setSystem((l) => addNotice(l, n));
     });
   }, [services.standalone]);
+  // an error toast held back while a flow's card is on screen goes to the bell instead
+  useEffect(() => toasts.onHeldError((text) => setSystem((l) => addNotice(l, noticeOfHeldError(text, Date.now())))), []);
 
   const store = useMemo(() => (pubkey ? new NotificationStore(safeStorage(), network, pubkey) : null), [pubkey, network]);
   useEffect(() => (store ? store.subscribe(() => setTick((n) => n + 1)) : undefined), [store]);

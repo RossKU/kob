@@ -9,6 +9,7 @@ export default {
   'notify.system.node.auto': 'The indexer cannot be used, so the market now comes from your Kaspa node, starting from what the indexer showed last. Every order is still checked on the node before it is signed.',
   'notify.system.node.behind': 'The indexer is behind the chain, so the market now comes from your Kaspa node, starting from what the indexer showed last. Every order is still checked on the node before it is signed.',
   'notify.system.node.manual': 'Standalone mode is on in Settings: the market comes from your Kaspa node. Every order is checked on the node before it is signed.',
+  'notify.system.error.title': 'Error',
   'notify.system.indexer.title': 'Back on the indexer',
   'notify.system.indexer.body': 'The indexer has caught up with the chain: the market comes from it, as usual.',
   'notify.connect': 'Connect a wallet to receive notifications for its orders and payments.',

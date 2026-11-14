@@ -1,9 +1,10 @@
 // System notifications: what the app itself did that the user should know of, with or without a wallet (the wallet's notifications are per wallet,
 // kob/notifications.ts). Today: the market switched to the user's node (standalone mode, data/standalone.ts), and back to the indexer. One notification
-// per switch, in the bell with the others; nothing else on the page announces it (the header's dot is yellow while it lasts). Kept for the session only.
+// per switch, in the bell with the others; nothing else on the page announces it (the header's dot is yellow while it lasts). An error toast held back
+// while a flow's card is on screen (kit/toast-store.ts `hold`) is one too, and colours the bell until it is read. Kept for the session only.
 import type { StandaloneState } from '../../data/standalone';
 
-export type SystemNoticeKind = 'node' | 'indexer';
+export type SystemNoticeKind = 'node' | 'indexer' | 'error';
 
 export interface SystemNotice {
   id: string;
@@ -12,6 +13,8 @@ export interface SystemNotice {
   reason: 'manual' | 'auto' | null;
   /** `node`, automatic: the indexer was behind the chain (not unreachable) */
   behind?: boolean;
+  /** `error`: the text of an error toast held back while a flow's card was on screen (kit/toast-store.ts `hold`) */
+  text?: string;
   at: number;
   read: boolean;
 }
@@ -25,6 +28,11 @@ let seq = 0;
 export function noticeOfSwitch(prev: Pick<StandaloneState, 'active' | 'reason'> & { behind?: boolean }, next: Pick<StandaloneState, 'active' | 'reason'> & { behind?: boolean }, at: number): SystemNotice | null {
   if (prev.active === next.active) return null;
   return { id: `system-${at}-${++seq}`, kind: next.active ? 'node' : 'indexer', reason: next.active ? next.reason : null, ...(next.active && next.behind ? { behind: true } : {}), at, read: false };
+}
+
+/** The notification of an error toast a flow's card held back: in the bell, unread, colouring it until read. */
+export function noticeOfHeldError(text: string, at: number): SystemNotice {
+  return { id: `system-${at}-${++seq}`, kind: 'error', reason: null, text, at, read: false };
 }
 
 /** `list` with `n` first, at most MAX_SYSTEM_NOTICES. */

@@ -62,7 +62,7 @@ function Item(props: { e: NotificationEvent; onNavigate: () => void }) {
 function SystemItem(props: { e: SystemNotice }) {
   const n = useNotify();
   const e = props.e;
-  const body = e.kind === 'node' ? t(e.reason === 'manual' ? 'notify.system.node.manual' : e.behind ? 'notify.system.node.behind' : 'notify.system.node.auto') : t('notify.system.indexer.body');
+  const body = e.kind === 'error' ? (e.text ?? '') : e.kind === 'node' ? t(e.reason === 'manual' ? 'notify.system.node.manual' : e.behind ? 'notify.system.node.behind' : 'notify.system.node.auto') : t('notify.system.indexer.body');
   return (
     <li class={`notify-item${e.read ? '' : ' notify-unread'}`} data-testid="notify-item-system" data-kind={e.kind} data-read={e.read ? 'true' : 'false'} onClick={() => n.markRead(e.id)}>
       <div class="notify-item-main">
@@ -171,7 +171,7 @@ export function NotificationPanel(props: { status: readonly StatusEntry[]; close
   );
 }
 
-/** Header bell with the unread badge, coloured by the worst of the current status; opens the panel under it. */
+/** Header bell with the unread badge, coloured by the worst of the current status and of an unread error a flow held back; opens the panel under it. */
 export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: StoredOverride[] }) {
   const n = useNotify();
   const status = useStatusEntries(props.warnings, props.storedOverrides);
@@ -187,7 +187,7 @@ export function NotifyBell(props: { warnings: ConfigWarning[]; storedOverrides: 
         label={label}
         anchor={narrow ? 'header' : 'self'}
         triggerClass="notify-bell"
-        triggerAttrs={{ 'data-testid': 'notify-bell', 'data-status-tone': worstTone(status) ?? 'none', 'data-status-count': status.length, title: label, 'aria-haspopup': 'true' }}
+        triggerAttrs={{ 'data-testid': 'notify-bell', 'data-status-tone': worstTone([...status, ...n.system.filter((x) => x.kind === 'error' && !x.read).map(() => ({ tone: 'error' as const }))]) ?? 'none', 'data-status-count': status.length, title: label, 'aria-haspopup': 'true' }}
         panelTestId="notify-panel"
         panelClass="hp-panel-wide"
         trigger={

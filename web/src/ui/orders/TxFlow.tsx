@@ -4,6 +4,7 @@ import { t } from '../../i18n';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
 import { Banner, Button, IssueLine, Spinner } from '../kit';
+import { toasts } from '../kit/toast-store';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
 import { PHONE_TOAST_QUERY } from '../shell/narrow';
 import { tCount } from './plural';
@@ -133,6 +134,8 @@ export function TxFlow(props: TxFlowProps) {
     // leaving the page mid-flow: no further step starts
     return () => void (gone.current = true);
   }, []);
+  // while the card is on screen no new toast shows (founder 2026-11-14): notifications go to the bell only, an error colours it
+  useEffect(() => toasts.hold(), []);
 
   // a long list scrolls in the card: the running step stays in view
   const list = useRef<HTMLOListElement>(null);

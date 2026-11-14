@@ -2,6 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { MAX_TOASTS, ToastStore } from './toast-store';
 
 describe('toast store', () => {
+  it('while a flow card holds it, no new toast shows: an error goes to the bell listeners, nothing is replayed after the release', () => {
+    const s = new ToastStore();
+    s.push({ message: 'before', tone: 'ok' });
+    const errors: string[] = [];
+    s.onHeldError((m) => errors.push(m));
+    const release = s.hold();
+    expect(s.held).toBe(true);
+    expect(s.push({ message: 'Payment received', tone: 'ok' })).toBe(0);
+    expect(s.push({ message: 'the node failed', tone: 'error' })).toBe(0);
+    expect(s.snapshot().map((t) => t.message)).toEqual(['before']);
+    expect(errors).toEqual(['the node failed']);
+    // two cards: the hold lasts until both are gone; a release twice counts once
+    const second = s.hold();
+    release();
+    release();
+    expect(s.held).toBe(true);
+    second();
+    expect(s.held).toBe(false);
+    expect(s.snapshot().map((t) => t.message)).toEqual(['before']);
+    s.push({ message: 'after', tone: 'info' });
+    expect(s.snapshot().map((t) => t.message)).toEqual(['before', 'after']);
+  });
+
   it('adds, merges identical messages and dismisses', () => {
     const s = new ToastStore();
     let calls = 0;

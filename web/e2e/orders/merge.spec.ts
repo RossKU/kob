@@ -137,6 +137,13 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   for (let k = 1; k <= 7; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
   await openBalances(page, 7);
 
+  // the notifications on: a payment while the flow runs goes to the bell only (founder 2026-11-14), never on screen under the card
+  await page.getByTestId('notify-bell').click();
+  await page.getByTestId('notify-enable').click();
+  await page.getByTestId('notify-panel').getByRole('button', { name: 'Close' }).click();
+  // the first poll stores the baseline: a payment after it is a new one
+  const pk = alice;
+  await expect.poll(() => page.evaluate((k) => { try { return JSON.parse(localStorage.getItem(`kob.notify.testnet-10.${k}`) ?? 'null')?.snaps != null; } catch { return false; } }, pk), { timeout: 30_000 }).toBe(true);
   // every request answers 2 s late: the second one is rejected while it waits
   await wallet!.configure({ delayMs: 2000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
@@ -151,13 +158,21 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   await expect(page.getByTestId('flow-step-2')).toHaveAttribute('data-state', 'pending');
   await expect(page.getByTestId('tx-flow')).toContainText('1 transaction not started');
   expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'rejected']);
+  // the stopped card stays on screen: a payment now goes to the bell only, never on screen under the card
+  await mock.giveKas('alice', 3n * KAS);
+  await expect(page.getByTestId('notify-unread')).toHaveText('1', { timeout: 30_000 });
+  await expect(page.locator('[data-testid="toast-host"] > .toast:not(.send-toast)')).toHaveCount(0);
   // the first merge went through (1 + 2 + 3 = 6), the rest is untouched: a valid state
   await expect.poll(async () => (await ownedOf(mock, alice)).map((u) => BigInt(u.amount)).sort((a, b) => (a < b ? -1 : 1)), { timeout: 15_000 }).toEqual(
     [4n, 5n, 6n, 6n, 7n].map((k) => k * TOKEN),
   );
 
-  // run again: planned from the five left, two transactions into one
+  // nothing was queued behind the card: closing it replays no toast (the bell has the payment)
   await page.getByTestId('tx-flow-dismiss').click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('[data-testid="toast-host"] > .toast:not(.send-toast)')).toHaveCount(0);
+  await expect(page.getByTestId('notify-unread')).toHaveText('1');
+  // run again: planned from the five left, two transactions into one
   await wallet!.configure({ approve: true, delayMs: 0 });
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(5\): /, { timeout: 15_000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
