@@ -181,6 +181,10 @@ export default {
   'confirm.stage.finalizing': 'Checking the signatures',
   'confirm.stage.validating': 'Running the contract scripts',
   'confirm.stage.submitting': 'Sending to the network',
+  // a creation with a wallet that asks once per transaction (wallet/create.ts): which of the two approvals the wallet shows now
+  'confirm.chain.prep': 'Step 1 of 2: approve the transaction that records the token details in your wallet.',
+  'confirm.chain.wait': 'Step 1 of 2 sent. Waiting until your wallet can see it...',
+  'confirm.chain.genesis': 'Step 2 of 2: approve the token creation in your wallet.',
 
   'confirm.issue.section': 'The token you create',
   'confirm.issue.sectionNote': 'Checked against the transaction: every output below carries exactly this token.',
@@ -231,7 +235,7 @@ export default {
   'confirm.issue.finding.prepSpend': 'The token creation does not spend the first transaction that records its details.',
   'confirm.issue.finding.prepOutput': 'Output {output} of the first transaction pays somewhere other than back to your wallet.',
   'confirm.issue.finding.declaration': 'The details recorded on chain are not the name, ticker and decimals shown here.',
-  'confirm.issue.finding.walletTwice': 'Your wallet asks twice: first for the transaction that records the details, then for the token creation. Approve both; nothing is sent until both are signed.',
+  'confirm.issue.finding.walletTwice': "Your wallet asks twice. The first approval records the token's details and is sent at once. A few seconds later the second approval creates the token. If you decline the second one, the details stay recorded, the KAS stays in your wallet (only the first step's network fee, about {fee}, is spent), and you can finish the creation later from this page.",
   'confirm.issue.finding.walletBlind': 'Your wallet cannot show tokens: it will only show KAS amounts. Check the token details on this screen.',
   'confirm.f.pairPair': 'Pair',
   'confirm.f.pairSells': 'sells {base} for {quote} (prices in {quote} per {base})',

@@ -98,7 +98,7 @@ test.describe('token issuance', () => {
     expect(proof).toMatchObject({ format: 'kob-kcc23-proof/1', covenantId: tokenId, preparation: { payload: prep.tx.payload } });
     await expect(page.getByTestId('issue-proof-download')).toBeVisible();
     // nothing is left to resume
-    expect(await page.evaluate(() => localStorage.getItem('kob.creations.v1'))).toBeNull();
+    expect(await page.evaluate(() => [localStorage.getItem('kob.creations.v1'), localStorage.getItem('kob.creations.v2')])).toEqual([null, null]);
 
     // the wallet's token output is remembered by the token tracker (test hook window.__kob, present with features.test)
     const tracked = await page.evaluate((pk) => (window as any).__kob.services.tracker.list(pk), TEST_KEYS.alice.pubkey);
@@ -302,7 +302,7 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-review')).toBeDisabled();
   });
 
-  test('a creation whose genesis did not go out is offered again and sent without a new signature', async ({ appPage: page, mock }) => {
+  test('a creation whose genesis did not go out is offered again and sent without a new signature', async ({ appPage: page, mock, wallet }) => {
     await mock.giveKas('alice', 500n * KAS);
     await page.goto('/#/create');
     await clickConnectOption(page, 'wallet-connect-kasware'); // the pick: the extension or the private key
@@ -323,8 +323,9 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-review').click();
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('confirm-error')).toContainText('stays in your wallet', { timeout: 30_000 });
-    await page.getByTestId('confirm-replan').click();
+    // the preparation is on chain, the genesis is not: the confirmation closes, the page offers the creation (never signed again on that screen)
+    await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 30_000 });
+    await expect(page.getByTestId('issue-notice')).toContainText('Finish the creation at the top of this page');
     await page.unroute('**/*');
     // only the preparation went out; the creation is offered again
     const before = await mock.submitted();
@@ -332,8 +333,12 @@ test.describe('token issuance', () => {
     const pending = page.getByTestId('issue-pending');
     await expect(pending).toBeVisible();
     await expect(pending).toContainText('RESUME');
+    // the genesis was signed before it was refused: it is sent again as it is, with no new signature
+    const asked = (await wallet!.calls()).length;
+    await expect(page.getByTestId('issue-pending-send')).toHaveText('Send the creation');
     await page.getByTestId('issue-pending-send').click();
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
+    expect((await wallet!.calls()).length).toBe(asked);
     const after = await mock.submitted();
     expect(after.length).toBe(before.length + 1);
     expect(after[after.length - 1]!.tx.inputs[0].transactionId).toBe(before[before.length - 1]!.txid);

@@ -38,6 +38,8 @@ export interface MockWalletHandle {
   /** every sign request the wallet received (deep copies, safe to assert on) */
   calls(): Promise<MockWalletCall[]>;
   lastCall(): Promise<MockWalletCall | null>;
+  /** the KasWare `pushTx` requests the page made (a transaction handed to the wallet's own node), oldest first */
+  pushes(): Promise<{ at: number; txid: string; ok: boolean; error: string | null }[]>;
   /** resolves once the wallet has received at least `n` sign requests (returns them) */
   waitForCalls(n?: number, timeoutMs?: number): Promise<MockWalletCall[]>;
   /** changes behaviour of the LIVE page (approve / reject / delay / wrongSignature / ...). A reload restores the installed options. */
@@ -61,6 +63,7 @@ export async function installMockWallet(page: Page, opts: InstallMockWalletOptio
   const handle: MockWalletHandle = {
     config,
     calls: () => page.evaluate(() => JSON.parse(JSON.stringify((window as any).__mockWallet.calls))),
+    pushes: () => page.evaluate(() => JSON.parse(JSON.stringify((window as any).__mockWallet.pushes))),
     lastCall: () =>
       page.evaluate(() => {
         const c = (window as any).__mockWallet.lastCall();

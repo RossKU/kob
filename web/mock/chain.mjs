@@ -142,7 +142,8 @@ export class MockChain {
   // ------------------------------------------------------------------------------------------------ UTXO primitives
 
   addUtxo({ txid, index, amount, spk, covenantId = null, daa, kind = 'other' }) {
-    const u = { txid, index, amount: BigInt(amount), spk, covenantId, daa, kind, spentBy: null, orderCov: null, tokenRec: null };
+    // createdMs: wall time the node learned the output (the mock wallets' own node sees it `lag_ms` later: server.mjs /mock/wallet-node)
+    const u = { txid, index, amount: BigInt(amount), spk, covenantId, daa, kind, spentBy: null, orderCov: null, tokenRec: null, createdMs: Date.now() };
     const key = outKey(txid, index);
     this.utxos.set(key, u);
     let set = this.bySpk.get(spk);

@@ -6,6 +6,10 @@
 // (a read made before the transaction reached a block does not): the balance does not drop to the coins left unspent in between, and the next
 // order may spend the change (the node accepts a transaction spending an output of one in its mempool; `factOf` stands for the node's facts
 // of such an input, which the page knows exactly: it built the transaction).
+//
+// The preparation output 0 of a token creation left unfinished (data/creations.ts) is reserved for its genesis: never funding of anything else
+// while its record exists, on any page (the Create token page offers to finish it).
+import { reservedCreationOutpoints } from '../data/creations';
 import { p2pkScriptPublicKey } from '../data/utxos';
 import type { NodeInputFact } from '../kob/node-verify';
 import type { Hex, KeyUtxo, TxJson, Utxo } from '../kob/types';
@@ -27,7 +31,8 @@ export class PendingSpends {
   private readonly change = new Map<string, OwnOutput>();
   /** when the newest submission was made (0: none on this page) */
   lastAddedAt = 0;
-  constructor(private readonly now: () => number = Date.now) {}
+  /** `reserved`: outpoints (`txid:index`, lower case) that are never funding (default: none; the page's registry: the unfinished creations) */
+  constructor(private readonly now: () => number = Date.now, private readonly reserved: () => ReadonlySet<string> = () => new Set()) {}
 
   /** The inputs of a transaction the node just accepted into its mempool. */
   add(inputs: readonly { transactionId: string; index: number }[]): void {
@@ -67,12 +72,19 @@ export class PendingSpends {
    * does not list (largest first, as the node's reader orders them; an older read lacking it gets it too, until the TTL).
    */
   funding<U extends KeyUtxo>(utxos: U[], pubkey: Hex): (U | KeyUtxo)[] {
-    const kept = this.without(utxos);
+    let reserved: ReadonlySet<string>;
+    try {
+      reserved = this.reserved();
+    } catch {
+      reserved = new Set();
+    }
+    const free = <T extends Pick<Utxo, 'transactionId' | 'index'>>(xs: T[]): T[] => (reserved.size === 0 ? xs : xs.filter((u) => !reserved.has(key(u.transactionId, u.index))));
+    const kept = free(this.without(utxos));
     if (this.change.size === 0) return kept;
     const listed = new Set(utxos.map((u) => key(u.transactionId, u.index)));
     const pk = pubkey.toLowerCase();
     const extra: KeyUtxo[] = [];
-    for (const [k, c] of [...this.change]) if (!listed.has(k) && this.live(k) && c.utxo.pubkey === pk && !this.has(c.utxo.transactionId, c.utxo.index)) extra.push(c.utxo);
+    for (const [k, c] of [...this.change]) if (!listed.has(k) && !reserved.has(k) && this.live(k) && c.utxo.pubkey === pk && !this.has(c.utxo.transactionId, c.utxo.index)) extra.push(c.utxo);
     if (!extra.length) return kept;
     return [...kept, ...extra].sort((a, b) => {
       const d = BigInt(b.amount) - BigInt(a.amount);
@@ -98,4 +110,4 @@ export class PendingSpends {
 }
 
 /** The page's one registry: a send that the node accepted adds to it (ui/confirm/send.ts), the environment builders read it. */
-export const pendingSpends = new PendingSpends();
+export const pendingSpends = new PendingSpends(Date.now, () => reservedCreationOutpoints());

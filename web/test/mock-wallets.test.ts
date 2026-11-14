@@ -24,11 +24,28 @@ const askBuilt = (): BuiltTx => {
   return kob.build(JSON.parse(JSON.stringify(v.request).replaceAll(GOLDEN_MAKER, TEST_PUBKEYS.alice)) as ActionRequest);
 };
 
-function loadWallet(o: Partial<InstallMockWalletOptions> & { wallet: InstallMockWalletOptions['wallet'] }, withSdk = true) {
+/** `fetch`: the wallet's own node (POST /mock/wallet-node/*); without one the input check is off unless the test turns it on */
+function loadWallet(o: Partial<InstallMockWalletOptions> & { wallet: InstallMockWalletOptions['wallet'] }, withSdk = true, fetch?: (url: string, init: any) => Promise<any>) {
   const window: any = withSdk ? { __kobKaspa: sdk } : {};
-  const ctx = vm.createContext({ window, setTimeout, clearTimeout });
-  vm.runInContext(mockWalletInitScript(buildWalletConfig({ secretKey: ALICE, ...o })), ctx);
+  const ctx = vm.createContext({ window, setTimeout, clearTimeout, ...(fetch ? { fetch } : {}) });
+  vm.runInContext(mockWalletInitScript(buildWalletConfig({ secretKey: ALICE, checkInputs: false, ...o })), ctx);
   return window;
+}
+
+/** A wallet node holding `held` (`txid:index`), answering like the mock server; records the requests. */
+function walletNodeFetch(held: Set<string>) {
+  const requests: { url: string; body: any }[] = [];
+  const fetch = async (url: string, init: any) => {
+    const body = JSON.parse(init.body);
+    requests.push({ url, body });
+    if (url.endsWith('/mock/wallet-node/push')) {
+      held.add(`${body.transaction.id}:0`);
+      return { ok: true, status: 200, json: async () => ({ transactionId: body.transaction.id }) };
+    }
+    const entries = body.outpoints.map((p: any) => ({ ...p, state: held.has(`${p.transactionId}:${p.index}`) ? 'unspent' : 'unknown' }));
+    return { ok: true, status: 200, json: async () => ({ entries }) };
+  };
+  return { fetch, requests };
 }
 
 const pushes = (hex: string): Buffer[] => {
@@ -65,7 +82,7 @@ describe('KasWare mock', () => {
   it('reports the shapes proven on TN10 (network label, 33-byte key, accounts, version)', async () => {
     const w = loadWallet({ wallet: 'kasware' });
     expect(await w.kasware.getNetwork()).toBe('kaspa_testnet_10');
-    expect(await w.kasware.getVersion()).toBe('0.10.0');
+    expect(await w.kasware.getVersion()).toBe('0.11.5');
     const [addr] = await w.kasware.requestAccounts();
     expect(addr).toMatch(/^kaspatest:q/);
     expect(await w.kasware.getPublicKey()).toBe('02' + TEST_PUBKEYS.alice);
@@ -94,6 +111,30 @@ describe('KasWare mock', () => {
     expect(call).toMatchObject({ wallet: 'kasware', method: 'signPskt', inputs: [0, 1], status: 'signed', signedInputs: [0, 1], unsignedInputs: [], sighashType: 1 });
     expect(call.txJson).toBe(txJson);
     expect(call.tx.id).toBe(built.tx.id);
+  });
+
+  it('like KasWare 0.11.5, refuses an input its own node does not hold (by default), signs once it does, and takes pushTx', async () => {
+    const built = askBuilt();
+    const [i0, i1] = built.tx.inputs.map((i) => `${i.transactionId}:${i.index}`);
+    const held = new Set([i0!]);
+    const node = walletNodeFetch(held);
+    const w = loadWallet({ wallet: 'kasware', checkInputs: true, nodeUrl: 'http://mock.test' }, true, node.fetch);
+    const req = { txJsonString: JSON.stringify(built.tx), options: { signInputs: signRequests(built) } };
+    await expect(w.kasware.signPskt(req)).rejects.toThrow(`signPskt: Input #1 (${i1}) is not an unspent output on this network.`);
+    expect(node.requests[0]).toMatchObject({ url: 'http://mock.test/mock/wallet-node/outpoints', body: { lag_ms: 0 } });
+    expect(w.__mockWallet.lastCall()).toMatchObject({ status: 'error', signedInputs: [] });
+    held.add(i1!);
+    finalizeAndValidate(built, signaturesFrom(await w.kasware.signPskt(req), built));
+    // pushTx hands a signed transaction to the wallet's node; it is logged apart from the sign requests
+    expect(await w.kasware.pushTx(JSON.stringify(built.tx))).toBe(built.tx.id);
+    expect(w.__mockWallet.pushes).toMatchObject([{ txid: built.tx.id, ok: true }]);
+    expect(w.__mockWallet.calls).toHaveLength(2);
+    // no node to ask: it fails closed, like the real wallet
+    const lone = loadWallet({ wallet: 'kasware', checkInputs: true });
+    await expect(lone.kasware.signPskt(req)).rejects.toThrow(/node is unreachable/);
+    // the defaults: on for KasWare and Kaspire
+    expect(buildWalletConfig({ wallet: 'kasware', secretKey: ALICE }).checkInputs).toBe(true);
+    expect(buildWalletConfig({ wallet: 'kaspire', secretKey: ALICE }).checkInputs).toBe(true);
   });
 
   it('signs only the requested inputs', async () => {

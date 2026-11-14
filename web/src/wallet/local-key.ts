@@ -228,6 +228,8 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
     label: LOCAL_KEY_LABEL,
     // the frame signs any input of its key by digest (covenant inputs included): the same `push(sig65)` KasWare returns
     covenantSigning: 'proven',
+    // the frame signs what it is shown: no node of its own to look the inputs up on
+    inputPolicy: 'offline',
     detect: () => true,
     async connect(wantNetwork: string): Promise<WalletInfo> {
       network = normalizeNetwork(wantNetwork);

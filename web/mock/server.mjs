@@ -138,6 +138,8 @@ export async function startMockServer(opts = {}) {
   // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
   // `indexerDown`: every indexer route (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
   const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false };
+  /** transactions pushed to the mock wallets' own node (`/mock/wallet-node/push`): seen there at once, whatever `lag_ms` */
+  const walletPushed = new Set();
   // the node's blocks: one per accepted transaction (mock/blocks.mjs)
   const blockLog = new BlockLog();
   chain.txListeners.add((tx, daa, ts) => blockLog.record(tx, daa, ts));
@@ -323,6 +325,7 @@ export async function startMockServer(opts = {}) {
       ctl.jitterMs = 0;
       ctl.scope = 'all';
       ctl.indexerDown = false;
+      walletPushed.clear();
       blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
       kasPrice = { ...DEFAULT_KAS_PRICE, mode: 'ok', ageS: 0, reads: 0 };
@@ -440,6 +443,30 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/advance-daa') {
       const n = body.daa !== undefined ? Number(body.daa) : body.seconds !== undefined ? Number(body.seconds) * 10 : NaN;
       return ok({ daa: chain.advanceDaa(n) });
+    }
+    // the mock wallets' OWN node (src/testing/mock-wallets.ts): what a wallet that looks its inputs up before signing (KasWare 0.11.5) sees.
+    // `{ outpoints: [{ transactionId, index }], lag_ms }` -> `{ entries: [{ transactionId, index, state }] }`, state `unspent` | `spent` | `unknown` |
+    // `unseen` (an output of a submitted transaction younger than `lag_ms`: not relayed to the wallet's node yet, unless its transaction was pushed to it)
+    if (post && path === '/mock/wallet-node/outpoints') {
+      const lag = Math.max(0, Number(body.lag_ms ?? 0) || 0);
+      const list = Array.isArray(body.outpoints) ? body.outpoints : [];
+      const entries = list.map((o) => {
+        const u = chain.utxos.get(`${o?.transactionId}:${o?.index}`);
+        // the lag is a relay delay: it applies to outputs of transactions submitted to the node, not to seeded coins (older than any lag)
+        const relayed = chain.txs.has(u?.txid);
+        const state = !u ? 'unknown' : u.spentBy ? 'spent' : lag > 0 && relayed && !walletPushed.has(u.txid) && Date.now() - (u.createdMs ?? 0) < lag ? 'unseen' : 'unspent';
+        return { transactionId: o?.transactionId, index: o?.index, state };
+      });
+      return ok({ entries });
+    }
+    // KasWare `pushTx`: the wallet's node takes a signed transaction (`{ transaction }`); one the node does not have yet is submitted (a refusal is
+    // the node's 400), one it has is only marked as seen by the wallet's node
+    if (post && path === '/mock/wallet-node/push') {
+      const tx = body.transaction;
+      if (!tx || typeof tx !== 'object' || !HEX64.test(tx.id ?? '')) throw badRequest('transaction must be a transaction object with an id');
+      if (!chain.txs.has(tx.id)) chain.submit(tx);
+      walletPushed.add(tx.id);
+      return ok({ transactionId: tx.id });
     }
     if (post && path === '/mock/fail-next-submit') {
       chain.failNext = { remaining: Number(body.count ?? 1), message: String(body.message ?? 'mock: injected submit failure') };

@@ -3,7 +3,10 @@
 // documented in tools/wallet-gate/RESULTS.md: KasWare's 66-byte `push(sig65)` for P2SH inputs and `kaspa_testnet_10` network name,
 // Kaspire's `psktTransactionJson` with `ordered-args` / `wrap-signature` / bare-signature modes, Kastle's 33-byte key and its silently
 // unsigned covenant inputs without `scripts` (issue #353). NOT used by the production app.
-import type { Hex } from '../kob/types';
+//
+// The wallet's own node (`walletNode`): like KasWare 0.11.5, a fake given one refuses to sign an input that node does not hold, with KasWare's
+// message, and `pushTx` hands it a transaction. KOB assumes every extension wallet checks this, so the Kaspire fake takes one too.
+import type { Hex, TxJson } from '../kob/types';
 import type { KaspaSdk } from '../data/kaspa-sdk';
 import type { KaswareProvider } from '../wallet/kasware';
 import type { KaspireProvider, KaspireScriptEntry } from '../wallet/kaspire';
@@ -26,6 +29,49 @@ export interface FakeBehavior {
   onlyInputs?: number[];
 }
 
+/** What a fake wallet sees of the network: its OWN node (not necessarily KOB's). */
+export interface FakeWalletNode {
+  hasUtxo(txid: string, index: number): boolean;
+  /** `pushTx`: the wallet's node takes a transaction (resolves its id; rejects like a node) */
+  push?(tx: TxJson): Promise<string>;
+}
+
+/**
+ * The wallet's view of `node` (a MockNode KOB's flow also talks to) lagging behind it: an output of a transaction `node` accepted after this
+ * view was made is not seen until it is pushed to the wallet (`pushTx`) or `reveal`ed (it reached the wallet's node by relay).
+ */
+export function laggingWalletNode(node: { hasUtxo(txid: string, index: number): boolean; submissions: readonly TxJson[] }): FakeWalletNode & { reveal(txid?: string): void; pushed: string[] } {
+  const before = node.submissions.length;
+  const seen = new Set<string>();
+  const pushed: string[] = [];
+  const fresh = (txid: string) => node.submissions.slice(before).some((t) => t.id === txid);
+  return {
+    pushed,
+    hasUtxo: (txid, index) => node.hasUtxo(txid, index) && (!fresh(txid) || seen.has(txid)),
+    async push(tx) {
+      pushed.push(tx.id);
+      if (!node.submissions.some((t) => t.id === tx.id)) throw new Error(`Rejected transaction ${tx.id}: transaction ${tx.id} is an orphan where orphan is disallowed`);
+      seen.add(tx.id);
+      return tx.id;
+    },
+    reveal(txid) {
+      for (const t of node.submissions.slice(before)) if (txid === undefined || t.id === txid) seen.add(t.id);
+    },
+  };
+}
+
+/** KasWare 0.11.5's refusal (`verifyPsktInputsOnActiveNetwork`) of the first requested input its node does not hold; null when all are held. */
+function unknownInputError(node: FakeWalletNode | undefined, tx: SafeTx, indexes: number[]): Error | null {
+  if (!node) return null;
+  for (const i of indexes) {
+    const input = tx.inputs[i] as SafeInput & { transactionId?: string; index?: number };
+    const txid = String(input?.transactionId ?? '');
+    const index = Number(input?.index ?? 0);
+    if (!node.hasUtxo(txid, index)) return new Error(`signPskt: Input #${i} (${txid}:${index}) is not an unspent output on this network.`);
+  }
+  return null;
+}
+
 export interface FakeWalletOptions {
   sdk: KaspaSdk;
   /** account secret key (hex) */
@@ -37,6 +83,8 @@ export interface FakeWalletOptions {
   behavior?: FakeBehavior;
   /** network names `switchNetwork` accepts (default: the wallet-native and the plain SDK spelling) */
   switchAccepts?: string[];
+  /** the wallet's own node: given, every input asked to be signed must be held there (KasWare 0.11.5), and `pushTx` feeds it */
+  walletNode?: FakeWalletNode;
 }
 
 export interface CallLog { method: string; args: unknown[] }
@@ -156,7 +204,7 @@ export function fakeKasware(o: FakeWalletOptions): FakeKasware {
       return pubkeyOf(sk);
     },
     async getVersion() {
-      return o.version ?? '0.10.0';
+      return o.version ?? '0.11.5';
     },
     switchAccount(next, addr) {
       sk = next;
@@ -175,11 +223,18 @@ export function fakeKasware(o: FakeWalletOptions): FakeKasware {
       delete (w as Partial<FakeKasware>).on;
       delete (w as Partial<FakeKasware>).removeListener;
     },
+    async pushTx(rawtx: string) {
+      w.calls.push({ method: 'pushTx', args: [rawtx] });
+      if (!o.walletNode?.push) throw new Error('pushTx: no node');
+      return o.walletNode.push(JSON.parse(rawtx) as TxJson);
+    },
     async signPskt(req) {
       w.calls.push({ method: 'signPskt', args: [req] });
       const stop = checkBehavior(w.behavior);
       if (stop) return stop;
       const tx = JSON.parse(req.txJsonString) as SafeTx;
+      const unknown = unknownInputError(o.walletNode, tx, req.options.signInputs.map((s) => s.index));
+      if (unknown) throw unknown;
       const key = w.behavior.signKey ?? sk;
       for (const si of req.options.signInputs) {
         if (w.behavior.onlyInputs && !w.behavior.onlyInputs.includes(si.index)) continue;
@@ -247,6 +302,8 @@ export function fakeKaspire(o: FakeWalletOptions): FakeKaspire {
           const stop = checkBehavior(w.behavior);
           if (stop) return stop;
           const tx = JSON.parse(p.psktTransactionJson) as SafeTx;
+          const unknown = unknownInputError(o.walletNode, tx, p.signInputs.map((s) => s.index));
+          if (unknown) throw unknown;
           const key = w.behavior.signKey ?? sk;
           for (const si of p.signInputs) {
             if (w.behavior.onlyInputs && !w.behavior.onlyInputs.includes(si.index)) continue;

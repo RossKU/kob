@@ -1,7 +1,9 @@
 // Token issuance (`kob token create` in the browser): a fixed-supply KCC-20 token on the KCC-20 reference program, by default the published
 // public-mint build `KCC20PublicMint` (3 / 3, no minter) or, chosen under Advanced, the standalone 3 / 3 build `KCC20Ref`. Form -> live validation ->
 // debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
-// tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top.
+// tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top:
+// sent as it is when its genesis is signed, finished with one more wallet approval when it is not (the second approval was declined, or the
+// page closed between the two: wallet/create.ts `finishCreation`).
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 
@@ -27,8 +29,11 @@ import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
 import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice } from '../../kob/issue';
-import { listCreations, removeCreation, type CreationRecord } from '../../data/creations';
-import { resumeCreation } from '../../wallet/create';
+import { creationIsOld, genesisSigned, listCreations, removeCreation, type CreationRecord } from '../../data/creations';
+import { CREATION_SPENT, finishCreation } from '../../wallet/create';
+import { SignFlowError } from '../../wallet/sign';
+import { pendingSpends } from '../../app/pending-spends';
+import { inputAddressOf } from '../confirm/send';
 import { expectedOutputs } from '../../wallet/sign';
 import type { BuiltTx } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
@@ -139,8 +144,9 @@ export function IssueView() {
   const funding = useAsync(async () => (usable && pubkey ? services.utxos.fundingFor(pubkey) : null), [pubkey, usable, retry]);
   // the preparation output of a creation left unfinished stays reserved for its genesis (sent again from the banner below), never new funding
   const reserved = useMemo(() => new Set(pubkey ? listCreations(config.network, pubkey).map((r) => `${r.prepTxid}:0`) : []), [pubkey, config.network, retry, phase.kind]);
+  // and a coin a transaction of this page just spent is not funding either (the node lists it until a block holds that transaction)
   const fundingList = useMemo(
-    () => (usable && pubkey ? (funding.data?.filter((u) => !reserved.has(`${u.transactionId}:${u.index}`)) ?? null) : null),
+    () => (usable && pubkey ? (funding.data ? pendingSpends.without(funding.data).filter((u) => !reserved.has(`${u.transactionId}:${u.index}`)) : null) : null),
     [usable, pubkey, funding.data, reserved],
   );
   const spendable = fundingList ? fundingList.reduce((s, u) => s + BigInt(u.amount), 0n) : null;
@@ -189,8 +195,13 @@ export function IssueView() {
   const [pending, setPending] = useState<CreationRecord[]>([]);
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
-  const finishCreation = (rec: CreationRecord, txid: string, show: boolean) => {
-    const plan = { built: { tx: rec.genesis } as BuiltTx, token: rec.token };
+  /** what the wallet is asked for while a creation is finished (confirm.chain.*) */
+  const [resumeNote, setResumeNote] = useState<'wait' | 'genesis' | null>(null);
+  /** creations whose first step's coin was spent elsewhere: only forgetting them is left */
+  const [spent, setSpent] = useState<ReadonlySet<string>>(new Set());
+  const genesisTx = (rec: CreationRecord) => rec.genesis ?? rec.genesisBuilt!.tx;
+  const completed = (rec: CreationRecord, txid: string, show: boolean) => {
+    const plan = { built: { tx: genesisTx(rec) } as BuiltTx, token: rec.token };
     const trackFailed = !trackIssued(services, plan);
     rememberIssuedToken(config.network, rec.token.covenantId, { decimals: rec.token.decimals, ticker: rec.token.ticker, name: rec.token.name });
     adoptDeclaration(kob, config.network, rec.token.covenantId, rec.docs.launchProof);
@@ -210,9 +221,9 @@ export function IssueView() {
     void (async () => {
       for (const rec of recs) {
         try {
-          const outs = expectedOutputs(services.sdk, config.network, rec.genesis, [0]);
+          const outs = expectedOutputs(services.sdk, config.network, genesisTx(rec), [0]);
           const found = await services.node.getUtxosByAddresses([outs[0]!.address]);
-          if (alive && found.some((u) => u.transactionId === rec.genesisTxid && u.index === 0)) finishCreation(rec, rec.genesisTxid, false);
+          if (alive && found.some((u) => u.transactionId === rec.genesisTxid && u.index === 0)) completed(rec, rec.genesisTxid, false);
         } catch {
           /* offered as it is */
         }
@@ -226,12 +237,18 @@ export function IssueView() {
     setResuming(rec.covenantId);
     setResumeError(null);
     try {
-      const txid = await resumeCreation(services.node, rec);
-      finishCreation(rec, txid, true);
+      if (!genesisSigned(rec) && !wallet.adapter) throw new Error(t('issue.pending.needWallet'));
+      const txid = await finishCreation({
+        kob, node: services.node, adapter: wallet.adapter!, network: config.network, rec, addressOf: inputAddressOf(services),
+        onStage: (s, info) => setResumeNote(s === 'signing' ? (info?.waiting ? 'wait' : 'genesis') : null),
+      });
+      completed(rec, txid, true);
     } catch (e) {
+      if (e instanceof SignFlowError && e.code === CREATION_SPENT) setSpent((xs) => new Set(xs).add(rec.covenantId));
       setResumeError({ id: rec.covenantId, text: e instanceof Error ? e.message : String(e) });
     } finally {
       setResuming(null);
+      setResumeNote(null);
     }
   };
   const discard = (rec: CreationRecord) => {
@@ -255,7 +272,10 @@ export function IssueView() {
     }
     setPhase({ kind: 'form' });
     setRetry((n) => n + 1); // the spent UTXOs may have changed: read the funding again (and the creations left unfinished)
-    setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : { tone: 'info', text: t('issue.cancelled') });
+    // `pending`: the first step is on chain, the token is not: its record is offered below ("Finish the creation")
+    // the creation to finish is offered at the top: brought into view
+    if (r.status === 'pending') setTimeout(() => document.querySelector('[data-testid="issue-pending"]')?.scrollIntoView({ block: 'center' }), 0);
+    setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : r.status === 'pending' ? { tone: 'info', text: t('issue.pending.continued') } : { tone: 'info', text: t('issue.cancelled') });
   };
 
   const another = () => {
@@ -281,7 +301,7 @@ export function IssueView() {
     <div class="issue-page stack" data-testid="issue-view">
       <div>
         <h1>{t('issue.title')}</h1>
-        <p class="muted">{t('issue.intro')}</p>
+        <p class="muted" data-testid="issue-intro">{t('issue.intro', { approvals: wallet.adapter ? t(wallet.adapter.signChain ? 'issue.intro.one' : 'issue.intro.two') : '' })}</p>
       </div>
 
       {fixedLine ? <p class="issue-fixed-line" data-testid="issue-fixed-line">{fixedLine}</p> : null}
@@ -298,14 +318,30 @@ export function IssueView() {
           data-testid="issue-pending"
           actions={
             <div class="row">
-              <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-pending-send">
-                {t('issue.pending.send')}
-              </Button>
+              {spent.has(rec.covenantId) ? null : (
+                <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-pending-send">
+                  {t(genesisSigned(rec) ? 'issue.pending.send' : 'issue.pending.finish')}
+                </Button>
+              )}
               <Button small disabled={resuming !== null} onClick={() => discard(rec)} data-testid="issue-pending-discard">{t('issue.pending.discard')}</Button>
             </div>
           }
         >
-          <p>{t('issue.pending.body', { ticker: rec.token.ticker, sent: rec.prepSent ? t('issue.pending.sent') : '' })}</p>
+          {spent.has(rec.covenantId) ? (
+            <p data-testid="issue-pending-spent">{t('issue.pending.spent')}</p>
+          ) : (
+            <>
+              <p data-testid="issue-pending-body">
+                {genesisSigned(rec)
+                  ? t('issue.pending.body', { ticker: rec.token.ticker, sent: rec.prepSent ? t('issue.pending.sent') : '' })
+                  : t(rec.prepSent ? 'issue.pending.bodyUnsigned' : 'issue.pending.bodyUnsent', { ticker: rec.token.ticker })}
+              </p>
+              <p class={creationIsOld(rec) ? 'field-error' : 'muted'} data-testid="issue-pending-window" data-old={creationIsOld(rec) ? 'true' : 'false'}>
+                {t(creationIsOld(rec) ? 'issue.pending.old' : 'issue.pending.window')}
+              </p>
+              {resuming === rec.covenantId && resumeNote ? <p class="muted" data-testid="issue-pending-step" data-step={resumeNote}>{t(`confirm.chain.${resumeNote}`)}</p> : null}
+            </>
+          )}
           {resumeError?.id === rec.covenantId ? (
             <div class="field-error wrap-anywhere" data-testid="issue-pending-error">
               {t('issue.pending.failed', { reason: friendlyErrorText(resumeError.text) })}

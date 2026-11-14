@@ -1,7 +1,9 @@
 // Token issuance view (ui/issue). Flat dotted keys, {param} placeholders.
 export default {
   'issue.title': "Create a token",
-  'issue.intro': "Create a new fixed-supply token. Its name, ticker, decimals and links are recorded on chain with it (one approval), and the whole supply goes to your wallet (or to the holders you choose under Advanced).",
+  'issue.intro': "Create a new fixed-supply token. Its name, ticker, decimals and links are recorded on chain with it{approvals}, and the whole supply goes to your wallet (or to the holders you choose under Advanced).",
+  'issue.intro.one': ' (one approval)',
+  'issue.intro.two': ' (your wallet asks twice)',
 
   'issue.fixedLine': 'Fixed supply: no one can mint more, freeze or seize these tokens.',
   'issue.powersLine': 'This program gives an authority these powers over the tokens: {powers}.',
@@ -128,6 +130,15 @@ export default {
   'issue.pending.title': 'Creation of {ticker} not finished',
   'issue.pending.body': "The details of {ticker} were signed{sent} but the token itself was not created. The KAS of that first step is still in your wallet. Send the creation again (no new signature), or keep the KAS and forget it.",
   'issue.pending.sent': ' and recorded on chain',
+  // the genesis is not signed yet (the second approval was declined, or the page closed): the wallet asks once more
+  'issue.pending.bodyUnsigned': "The details of {ticker} are recorded on chain but the token itself was not created. Finish the creation (your wallet asks once more), or keep the KAS and forget it.",
+  'issue.pending.bodyUnsent': "The details of {ticker} were signed but may not have reached the network, and the token itself was not created. Finish the creation (it is sent again, then your wallet asks once more), or keep the KAS and forget it.",
+  'issue.pending.window': "Finish it within 72 hours of the first step: after that, other apps may no longer show the token's name, ticker and decimals.",
+  'issue.pending.old': "This creation was started more than 60 hours ago. Other apps stop picking up the token's details 72 hours after the first step: a new creation is the safer choice.",
+  'issue.pending.spent': 'The coin of the first step was spent, so this creation cannot be finished. Start a new one.',
+  'issue.pending.needWallet': 'Connect the wallet that started this creation to finish it.',
+  'issue.pending.finish': 'Finish the creation',
+  'issue.pending.continued': "The token's details are recorded on chain, but the token itself was not created yet. Finish the creation at the top of this page.",
   'issue.pending.send': 'Send the creation',
   'issue.pending.discard': 'Forget it',
   'issue.pending.failed': 'The creation could not be sent. {reason}',

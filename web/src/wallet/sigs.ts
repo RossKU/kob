@@ -152,10 +152,21 @@ export function isUserRejection(e: unknown): boolean {
   return /\b(reject(ed|ion)?|den(y|ied)|declin(e|ed)|cancel(l?ed)?|refus(e|ed)|dismiss(ed)?|closed by (the )?user|user closed|closed the (window|popup)|user abort)\b/i.test(errText(e));
 }
 
+/**
+ * The wallet refused to sign because its own node does not know an input, or sees it spent (KasWare 0.11.5 `verifyPsktInputsOnActiveNetwork`:
+ * "Input #0 (...) is not an unspent output on this network.", "... could not be verified ...", "... already spent by a pending transaction ...",
+ * "Cannot verify inputs: the active network node is unreachable.", "Input verification failed: the active network node did not respond.").
+ */
+export function isInputsUnknown(e: unknown): boolean {
+  if (e instanceof WalletError) return e.code === 'inputs-unknown';
+  return /not an unspent output|does not match an unspent output|could not be verified|already spent by a pending|cannot verify inputs|input verification failed/i.test(errText(e));
+}
+
 /** Maps anything a provider call threw to a `WalletError`. */
 export function toWalletError(e: unknown, label: string): WalletError {
   if (e instanceof WalletError) return e;
   if (isUserRejection(e)) return new WalletError('rejected', `You rejected the request in ${label}.`);
+  if (isInputsUnknown(e)) return new WalletError('inputs-unknown', `${label} cannot see a coin of this transaction on its own node yet: ${errText(e)}`);
   return new WalletError('other', `${label}: ${errText(e)}`);
 }
 

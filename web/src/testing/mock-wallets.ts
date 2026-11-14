@@ -13,6 +13,11 @@
 // `createInputSignature(tx, index, privateKey, SighashType.All)` a real wallet runs. Everything is driven by `mockWalletPageScript`,
 // a SELF-CONTAINED function (no imports, no closures): Playwright serialises it with `.toString()` (`mockWalletInitScript`).
 // Tests steer the wallet at runtime through `window.__mockWallet` (options, call log, events).
+//
+// The wallet's OWN node (`checkInputs`, default on for KasWare and Kaspire): like KasWare 0.11.5, the wallet looks every input it is asked to
+// sign up on its node and refuses one that node does not hold unspent, with KasWare's message. The mock server plays that node
+// (`POST /mock/wallet-node/outpoints`, web/mock/server.mjs); `walletNodeLagMs` makes it see a new output only that long after KOB's node did,
+// unless the transaction was pushed to it (KasWare `pushTx` -> `POST /mock/wallet-node/push`). KOB assumes every extension wallet checks this.
 
 export type MockWalletId = 'kasware' | 'kaspire' | 'kastle';
 
@@ -46,6 +51,12 @@ export interface MockWalletConfig {
   /** 'compressed' = 33-byte key (02 prefix), 'xonly' = 32 bytes; default per wallet as observed */
   pubkeyFormat: 'compressed' | 'xonly';
   version: string;
+  /** refuse to sign an input the wallet's own node does not hold unspent (KasWare 0.11.5) */
+  checkInputs: boolean;
+  /** the wallet's node sees a new output this long after KOB's node did (unless pushed to it) */
+  walletNodeLagMs: number;
+  /** base URL of the mock server playing the wallet's node ('' = the app's `window.__KOB_CONFIG__.nodeUrl`) */
+  nodeUrl: string;
 }
 
 export interface MockWalletCall {
@@ -86,12 +97,15 @@ export const DEFAULT_WALLET_CONFIG: Omit<MockWalletConfig, 'wallet' | 'secretKey
   injectDelayMs: 0,
   pubkeyFormat: 'compressed',
   version: '',
+  checkInputs: false,
+  walletNodeLagMs: 0,
+  nodeUrl: '',
 };
 
 /** Per-wallet defaults observed on the real extensions. */
 export const WALLET_DEFAULTS: Record<MockWalletId, Partial<MockWalletConfig>> = {
-  kasware: { pubkeyFormat: 'compressed', version: '0.10.0' },
-  kaspire: { pubkeyFormat: 'xonly', version: '1.2.0' },
+  kasware: { pubkeyFormat: 'compressed', version: '0.11.5', checkInputs: true },
+  kaspire: { pubkeyFormat: 'xonly', version: '1.2.0', checkInputs: true },
   kastle: { pubkeyFormat: 'compressed', version: '2.60.1' },
 };
 
@@ -103,6 +117,8 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
   const w = window as any;
   const opts: any = { ...config };
   const calls: any[] = [];
+  /** `pushTx` requests (not sign requests: `calls` holds those only) */
+  const pushes: any[] = [];
   const listeners: Record<string, any[]> = {};
   const account = { network: opts.network as string, lost: false };
 
@@ -235,6 +251,38 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
     }
   };
 
+  // --- the wallet's own node (KasWare 0.11.5 `verifyPsktInputsOnActiveNetwork`): every input asked to be signed must be held there, unspent
+  const walletNode = (): string => {
+    const base = String(opts.nodeUrl || w.__KOB_CONFIG__?.nodeUrl || '');
+    return /^https?:\/\//.test(base) ? base.replace(/\/+$/, '') : '';
+  };
+  const checkInputsOnNode = async (txJson: string, indexes: number[]) => {
+    if (!opts.checkInputs || indexes.length === 0) return;
+    const tx = JSON.parse(txJson);
+    const outpoints = indexes.map((i) => ({ transactionId: String(tx.inputs?.[i]?.transactionId ?? ''), index: Number(tx.inputs?.[i]?.index ?? 0) }));
+    const base = walletNode();
+    if (!base) throw new Error('signPskt: Cannot verify inputs: the active network node is unreachable.');
+    let entries: any[];
+    try {
+      const res = await fetch(base + '/mock/wallet-node/outpoints', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ outpoints, lag_ms: opts.walletNodeLagMs }) });
+      entries = (await res.json()).entries;
+      if (!Array.isArray(entries)) throw new Error('bad answer');
+    } catch {
+      throw new Error('signPskt: Input verification failed: the active network node did not respond.');
+    }
+    const bad = entries.map((e, k) => ({ e, k })).filter(({ e }) => e?.state !== 'unspent');
+    if (bad.length) throw new Error('signPskt: ' + bad.map(({ e, k }) => `Input #${indexes[k]} (${e.transactionId}:${e.index}) is not an unspent output on this network.`).join(' '));
+  };
+  const pushTx = async (rawtx: string) => {
+    const base = walletNode();
+    if (!base) throw new Error('pushTx: the active network node is unreachable');
+    const res = await fetch(base + '/mock/wallet-node/push', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ transaction: JSON.parse(rawtx) }) });
+    const body = await res.json().catch(() => ({}));
+    pushes.push({ at: Date.now(), txid: String(JSON.parse(rawtx).id ?? ''), ok: res.ok, error: res.ok ? null : String(body?.error ?? res.status) });
+    if (!res.ok) throw new Error(String(body?.error ?? 'pushTx failed'));
+    return body.transactionId;
+  };
+
   const scriptFor = (scripts: any[] | null, i: number) => (scripts && !opts.dropScripts ? scripts.find((s: any) => Number(s.inputIndex) === i) : undefined);
 
   // ------------------------------------------------------------------ KasWare
@@ -260,8 +308,12 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
       const indexes = sign.map((s) => Number(s.index));
       const call = newCall('signPskt', txJson, indexes, sign[0]?.sighashType ?? null, null, null);
       // KasWare returns only push(sig65) for every signed input, P2SH or not: the dApp assembles the full script
-      return run(call, () => signInputs(call, txJson, indexes, (sig) => sig));
+      return run(call, async () => {
+        await checkInputsOnNode(txJson, indexes);
+        return signInputs(call, txJson, indexes, (sig) => sig);
+      });
     },
+    pushTx: async (rawtx: string) => pushTx(rawtx),
   };
 
   // ------------------------------------------------------------------ Kaspire
@@ -306,10 +358,10 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
           const indexes = sign.map((s) => Number(s.index));
           const call = newCall('signPskt', txJson, indexes, sign[0]?.sighashType ?? null, params.scripts ?? null, null);
           return run(call, async () => ({
-            psktTransactionJson: await signInputs(call, txJson, indexes, (sig, i) => {
+            psktTransactionJson: await checkInputsOnNode(txJson, indexes).then(() => signInputs(call, txJson, indexes, (sig, i) => {
               const sc = scriptFor(params.scripts ?? null, i);
               return sc ? kaspireArgs(sc, sig, sc.scriptHex) : sig;
-            }),
+            })),
           }));
         }
         default:
@@ -374,11 +426,12 @@ export function mockWalletPageScript(config: MockWalletConfig): void {
     },
     options: opts,
     calls,
+    pushes,
     /** last recorded sign request */
     lastCall: () => calls[calls.length - 1] ?? null,
     /** changes behaviour at runtime, e.g. `configure({approve: false})` */
     configure: (patch: Record<string, any>) => Object.assign(opts, patch),
-    clearCalls: () => void (calls.length = 0),
+    clearCalls: () => void ((calls.length = 0), (pushes.length = 0)),
     /** fires a provider event (KasWare: accountsChanged / networkChanged) */
     emit,
     setNetwork: (n: string) => {

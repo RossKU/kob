@@ -19,7 +19,7 @@ describe('KasWare adapter: connect', () => {
     expect(adapter.id).toBe('kasware');
     expect(adapter.detect()).toBe(true);
     const info = await adapter.connect('testnet-10');
-    expect(info).toEqual({ id: 'kasware', label: 'KasWare', address: 'kaspatest:qfake-kasware', pubkey: MAKER_PK, network: 'testnet-10', version: '0.10.0' });
+    expect(info).toEqual({ id: 'kasware', label: 'KasWare', address: 'kaspatest:qfake-kasware', pubkey: MAKER_PK, network: 'testnet-10', version: '0.11.5' });
     expect(provider.calls.some((c) => c.method === 'switchNetwork')).toBe(false);
   });
 

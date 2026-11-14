@@ -1,6 +1,7 @@
-// Wallet adapter contract. Adapters only sign: they never build, never broadcast, and never see anything but the tx the app already
-// showed on the pre-sign confirmation screen. Proven on TN10 in tools/wallet-gate (RESULTS.md).
-import type { BuiltTx, Hex, InputSignature } from '../kob/types';
+// Wallet adapter contract. Adapters sign: they never build, and never see anything but the tx the app already showed on the pre-sign
+// confirmation screen. They broadcast nothing of their own; the one exception is `announce`: an adapter may hand the wallet's own node a
+// transaction KOB already finalized, validated and sent to its node (wallet/visibility.ts). Proven on TN10 in tools/wallet-gate (RESULTS.md).
+import type { BuiltTx, Hex, InputSignature, TxJson } from '../kob/types';
 import type { GenesisClaim, SignerNote } from '../signer/protocol';
 
 /** Browser extension wallets (discovered on `window`). */
@@ -42,6 +43,13 @@ export interface WalletAdapter {
    * verified for this wallet; 'unknown' (or absent): the app asks for a one-time test signature (never broadcast) before the first order.
    */
   readonly covenantSigning?: 'proven' | 'unknown';
+  /**
+   * What the wallet needs of the inputs it signs. 'node-visible' (the default, every extension wallet): the wallet looks each input up on its
+   * OWN node and refuses one it does not find unspent there (KasWare 0.11.5 does so off mainnet; KOB assumes every extension wallet does, on
+   * every network), so the app asks it to sign only once every input is visible there (wallet/visibility.ts). 'offline': the wallet signs what
+   * it is shown (the private-key signer).
+   */
+  readonly inputPolicy?: 'offline' | 'node-visible';
   /** provider injected in this page? (extensions inject late: callers poll / re-check) */
   detect(): boolean;
   /** connects and reads account, key and network; tries to switch to `wantNetwork`; the result's `network` tells whether that worked */
@@ -68,6 +76,12 @@ export interface WalletAdapter {
    * provider has no emitter). Call after `connect`. Returns an idempotent unsubscribe that removes every listener / timer.
    */
   subscribe?(onEvent: (e: WalletEvent) => void, opts?: WalletSubscribeOptions): () => void;
+  /**
+   * Hands `tx` to the wallet's own node (KasWare `pushTx`, no popup), so that the wallet finds its outputs at once when it is asked to sign a
+   * transaction spending them. Called only with a transaction KOB finalized, validated and sent to its own node, which is the broadcast that
+   * counts. Resolves once that node took it (or already had it); rejects with `WalletError` otherwise.
+   */
+  announce?(tx: TxJson, opts?: { timeoutMs?: number }): Promise<void>;
 }
 
 /**
@@ -110,7 +124,8 @@ export interface SignOptions {
 }
 
 export class WalletError extends Error {
-  readonly code: 'rejected' | 'timeout' | 'no-signature' | 'unsupported' | 'network' | 'other';
+  /** `inputs-unknown`: the wallet refused because its own node does not know an input (yet), or sees it spent */
+  readonly code: 'rejected' | 'timeout' | 'no-signature' | 'unsupported' | 'network' | 'inputs-unknown' | 'other';
   constructor(code: WalletError['code'], message: string) {
     super(message);
     this.name = 'WalletError';

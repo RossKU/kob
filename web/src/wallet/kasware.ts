@@ -3,11 +3,14 @@
 //   * `signPskt({ txJsonString, options: { signInputs: [{ index, sighashType: 1 }] } })` returns the signed tx JSON (string or object);
 //     for a P2SH (covenant) input it puts only `push(sig65)` (66 bytes) in the signature script: the dApp assembles the rest. We do not
 //     assemble anything here: only the signature is taken, kob-wasm `finalize` builds the script and checks the signature;
-//   * the popup is a generic "Sign Transaction: Spend": it cannot show token semantics, the app's own confirmation screen does.
-import type { BuiltTx, InputSignature } from '../kob/types';
+//   * the popup is a generic "Sign Transaction: Spend": it cannot show token semantics, the app's own confirmation screen does;
+//   * 0.11.5 (read from its service worker): off mainnet `signPskt` refuses an input its own node does not list as unspent (UTXO set or
+//     mempool), and `pushTx(txJson)` submits a signed transaction to that node without a popup. `announce` uses it for a transaction KOB
+//     already sent (wallet/visibility.ts).
+import type { BuiltTx, InputSignature, TxJson } from '../kob/types';
 import { normalizeNetwork } from '../data/kaspa-sdk';
 import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
-import { CONNECT_TIMEOUT_MS, REFRESH_TIMEOUT_MS, SIGN_TIMEOUT_MS, collectSignatures, normalizePubkey, toWalletError, withTimeout } from './sigs';
+import { CONNECT_TIMEOUT_MS, REFRESH_TIMEOUT_MS, SIGN_TIMEOUT_MS, collectSignatures, errText, normalizePubkey, toWalletError, withTimeout } from './sigs';
 import { DEFAULT_POLL_MS, hasEmitter, listenProvider, pollProvider, type EmitterLike } from './events';
 
 export interface KaswareProvider extends EmitterLike {
@@ -19,6 +22,8 @@ export interface KaswareProvider extends EmitterLike {
   getPublicKey(): Promise<string>;
   getVersion?(): Promise<string>;
   signPskt(request: { txJsonString: string; options: { signInputs: { index: number; sighashType: number }[] } }): Promise<unknown>;
+  /** 0.11.5: submits a signed transaction (safe JSON string) to the wallet's own node, without a popup; resolves with its id */
+  pushTx?(rawtx: string): Promise<unknown>;
 }
 
 export interface KaswareDeps {
@@ -27,6 +32,10 @@ export interface KaswareDeps {
 }
 
 const LABEL = 'KasWare';
+/** `pushTx` answers at once (no popup): it either reaches the wallet's node quickly or not at all */
+const ANNOUNCE_TIMEOUT_MS = 3000;
+/** a node that already has the transaction */
+const ALREADY = /already (?:in|exists in) (?:the )?mempool|already accepted|already (?:have|known)|duplicate transaction/i;
 
 /** KasWare's own names first (`kaspa_testnet_10`), then the plain SDK names: the wallet accepted `testnet-10` on TN10 too. */
 const switchNames = (net: string): string[] => (net === 'mainnet' ? ['kaspa_mainnet', 'mainnet'] : net === 'testnet-10' ? ['kaspa_testnet_10', 'testnet-10'] : [net]);
@@ -116,6 +125,18 @@ export function createKaswareAdapter(deps: KaswareDeps = {}): WalletAdapter {
         onEvent,
         o.pollMs ?? DEFAULT_POLL_MS,
       );
+    },
+
+    async announce(tx: TxJson, opts: { timeoutMs?: number } = {}): Promise<void> {
+      const p = need();
+      if (typeof p.pushTx !== 'function') throw new WalletError('unsupported', `${LABEL} has no pushTx.`);
+      try {
+        await withTimeout(p.pushTx(JSON.stringify(tx)), opts.timeoutMs ?? ANNOUNCE_TIMEOUT_MS, `${LABEL}.pushTx`);
+      } catch (e) {
+        // the wallet's node already holds it (from the network, or an earlier push): that is what was wanted
+        if (ALREADY.test(errText(e))) return;
+        throw toWalletError(e, LABEL);
+      }
     },
 
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {

@@ -56,4 +56,20 @@ describe('PendingSpends', () => {
     expect(p.factOf('tx1', 1)).toBeNull();
     expect(p.funding(listed, pk)).toBe(listed);
   });
+
+  it('never offers a reserved outpoint as funding (the preparation output 0 of an unfinished creation), listed or as pending change', () => {
+    const pk = 'ab'.repeat(32);
+    const reserved = new Set(['p1:0']);
+    const p = new PendingSpends(() => 0, () => reserved);
+    const coin = (transactionId: string, index: number) => ({ transactionId, index, amount: '100', covenantId: null, pubkey: pk });
+    expect(p.funding([coin('P1', 0), coin('c1', 0)], pk).map((x) => x.transactionId)).toEqual(['c1']);
+    // the preparation's change (its output 0 back to the key) is reserved too while it is pending
+    p.addChange({ outputs: [{ value: '500', scriptPublicKey: p2pkScriptPublicKey(pk), covenant: null }] }, 'p1', pk);
+    expect(p.funding([coin('c1', 0)], pk).map((x) => x.transactionId)).toEqual(['c1']);
+    reserved.clear();
+    expect(p.funding([coin('c1', 0)], pk).map((x) => x.transactionId)).toEqual(['p1', 'c1']);
+    // a reservation that cannot be read reserves nothing
+    const broken = new PendingSpends(() => 0, () => { throw new Error('storage'); });
+    expect(broken.funding([coin('p1', 0)], pk)).toHaveLength(1);
+  });
 });

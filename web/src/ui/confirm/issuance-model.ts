@@ -166,7 +166,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0));
   if (others.length > 0) info(others.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: others.length }, 'holdersOther');
   info('walletBlind');
-  if (prep && i.oneApproval === false) info('walletTwice');
+  if (prep && i.oneApproval === false) info('walletTwice', { fee: kas(prepFee) });
 
   const sections: Section[] = [];
   const decimals = token.decimals;

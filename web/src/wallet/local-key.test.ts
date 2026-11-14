@@ -232,7 +232,7 @@ describe('private-key adapter: a token creation (KCC-23) on one confirmation', (
     const plan = creation();
     const n = seeded(plan.prep);
     const res = await signAndSubmitCreation({
-      kob, node: n, adapter, prep: plan.prep, built: plan.built, network: NET, maker: MAKER_PK, storage: null,
+      kob, node: n, adapter, prep: plan.prep, built: plan.built, network: NET, maker: MAKER_PK, storage: null, addressOf: (spk) => spkStringToAddress(sdk, spk, NET),
       record: { token: plan.token, declaration: plan.declaration, docs: plan.docs },
     });
     expect(seen).toHaveLength(1);

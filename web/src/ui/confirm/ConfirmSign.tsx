@@ -1,8 +1,10 @@
 // The PRE-SIGN CONFIRMATION SCREEN of a token creation (the Create token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
 // token whose facts can never change, so this dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and
 // the genesis spending it), shows the WHOLE effect in plain words, blocks signing on any blocking finding, asks for an explicit
-// acknowledgement, then runs `signAndSubmitCreation` (both signed, the preparation sent first; wallet/create.ts) with a stage stepper and
-// reports the accepted genesis.
+// acknowledgement, then runs `signAndSubmitCreation` (wallet/create.ts: one approval for the private-key signer; an extension wallet signs and
+// sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with a stage stepper, and reports the
+// accepted genesis. A creation whose preparation went out but whose genesis did not (declined, not visible in time, refused) closes this
+// screen as `pending`: the Create token page finishes it (its record, data/creations.ts); it is never signed again here.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
@@ -14,7 +16,7 @@ import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import type { BuiltTx } from '../../kob/types';
 import { formatUtc } from '../../kob/daa';
-import { expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
+import { SignFlowError, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
 import { signAndSubmitCreation } from '../../wallet/create';
 import { pendingSpends } from '../../app/pending-spends';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard, unitParts } from '../kit';
@@ -23,10 +25,15 @@ import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
 import { classifyFailure, explorerTxUrl, stepStates, type Failure } from './confirm-flow';
-import { recordAccepted } from './send';
+import { inputAddressOf, recordAccepted } from './send';
 import './confirm.css';
 
-export type ConfirmResult = { status: 'cancelled' } | { status: 'submitted'; txid: string; records: PlacementRecord[] } | { status: 'failed'; message: string };
+export type ConfirmResult =
+  | { status: 'cancelled' }
+  | { status: 'submitted'; txid: string; records: PlacementRecord[] }
+  | { status: 'failed'; message: string }
+  /** the preparation is on chain, the genesis is not: the creation record finishes it */
+  | { status: 'pending'; message: string };
 
 export interface ConfirmSignProps {
   /** the unsigned genesis transaction to decode, show, sign and broadcast */
@@ -104,6 +111,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   const [ack, setAck] = useState(false);
   const [phase, setPhase] = useState<Phase>('review');
   const [stage, setStage] = useState<SignStage | null>(null);
+  /** a creation with a wallet that asks once per transaction: which approval it shows now (confirm.chain.*) */
+  const [chainNote, setChainNote] = useState<'prep' | 'wait' | 'genesis' | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmed>('waiting');
@@ -181,10 +190,18 @@ export function ConfirmSign(props: ConfirmSignProps) {
     setStage('signing');
     try {
       const onStage = (s: SignStage) => alive.current && setStage(s);
+      const addressOf = inputAddressOf(services);
       if (props.creation) {
         const c = props.creation;
+        const twice = !wallet.adapter.signChain;
         const res = await signAndSubmitCreation({
-          kob, node, adapter: wallet.adapter, prep: c.prep, built, network: config.network, maker, onStage,
+          kob, node, adapter: wallet.adapter, prep: c.prep, built, network: config.network, maker, addressOf,
+          onStage: (s, info) => {
+            if (!alive.current) return;
+            setStage(s);
+            if (!twice || s !== 'signing') return;
+            setChainNote(info?.step === 'genesis' ? (info.waiting ? 'wait' : 'genesis') : 'prep');
+          },
           record: { token: props.issue.token, declaration: c.declaration, docs: c.docs },
           // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
           onPrepSent: (prep) => {
@@ -192,6 +209,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
             if (wallet.info) pendingSpends.addChange(prep.tx, prep.tx.id, wallet.info.pubkey);
           },
         });
+        setChainNote(null);
         await afterAccepted(res.txid);
       } else {
         const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage });
@@ -199,6 +217,12 @@ export function ConfirmSign(props: ConfirmSignProps) {
       }
     } catch (e) {
       if (!alive.current) return;
+      setChainNote(null);
+      // the preparation is on chain but the token is not: never signed again here, the Create token page finishes it
+      if (e instanceof SignFlowError && e.code === 'genesis-pending') {
+        finish({ status: 'pending', message: e.message });
+        return;
+      }
       const f = classifyFailure(e);
       if (f.kind === 'known') {
         // the node already holds exactly this transaction (a double click, a retry after a lost answer): it IS submitted
@@ -339,6 +363,12 @@ export function ConfirmSign(props: ConfirmSignProps) {
             {copied ? t('common.copied') : t('confirm.advanced.copyTx')}
           </Button>
         </details>
+
+        {busy && chainNote ? (
+          <p class="cf-chain" data-testid="confirm-chain-step" data-step={chainNote} aria-live="polite">
+            {t(`confirm.chain.${chainNote}`)}
+          </p>
+        ) : null}
 
         {busy || phase === 'submitted' ? (
           <ol class="cf-stages" data-testid="confirm-stages" data-stage={stage ?? ''} aria-live="polite">
