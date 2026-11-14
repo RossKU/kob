@@ -60,7 +60,8 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
 * Control (`POST /mock/...`, JSON): `reset` (default seed; `{seed:false}` empty; `{history:{...}}` adds a history), `seed` (`{tokens, orders, book, fills,
   trades, history, utxos}`), `utxo` (give KAS / tokens),
   `fill` (a REAL transition: new order UTXO + script, shrunk custody, payouts; IFD entries book their exit child), `arm`, `stray` (`{covenant_id, amount, token?, program?, ticker?}`: `token` = a FOREIGN stray of another token, a new covenant id is registered as an unlisted token; stray views carry `program` and `foreign`), `advance-daa`,
-  `fail-next-submit`, `latency` (`{ms, jitter_ms, scope: all | indexer}`: every API answer, or only `/v1/*`, waits ms + up to jitter_ms), `health`, `reorg`, `resync`, `ws-close`; `GET /mock/submitted` (decoded summaries + the tx), `/mock/state`, `/mock/balance?key=`.
+  `wallet-node/outpoints` (`{outpoints, lag_ms}` -> each outpoint as the mock wallets' own node sees it: `unspent` | `spent` | `unknown` | `unseen`),
+  `wallet-node/push` (`{transaction}`: KasWare `pushTx`), `fail-next-submit`, `latency` (`{ms, jitter_ms, scope: all | indexer}`: every API answer, or only `/v1/*`, waits ms + up to jitter_ms), `health`, `reorg`, `resync`, `ws-close`; `GET /mock/submitted` (decoded summaries + the tx), `/mock/state`, `/mock/balance?key=`.
 * Default seed: fictional token EXKCC (KCC20Ref_8x8, the 8/8 prototype kept as a fixture for the multi-slot paths; the
   issuance spec issues the default `KCC20PublicMint` (the standalone `KCC20Ref` when chosen); 8 decimals: order scale 1e8 base units per token; amounts in base units, prices in sompi per whole token), 10 price levels per side (best level holds 2 orders,
   maker = key `maker`), 8 finished orders with fills. Seeded orders are real (cancellable by their maker key). Nothing is funded
@@ -78,7 +79,11 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
 response shapes proven on TN10 (KasWare: safe-JSON string with `push(sig65)`, `kaspa_testnet_10`; Kaspire: `{psktTransactionJson}`, `scripts` modes;
 Kastle: 33-byte key, P2SH inputs left unsigned without `scripts`, issue #353). Signing runs in the page with `window.__kobKaspa` (the app exposes
 the official SDK there when its injected config has `features.test`). Options: `approve` / `rejectMessage`, `delayMs`, `wrongSignature`,
-`dropScripts`, `omitInputs`, `failConnect`, `injectDelayMs` (late injection), `network`, `allowNetworkSwitch`. The handle steers a live page
+`dropScripts`, `omitInputs`, `failConnect`, `injectDelayMs` (late injection), `network`, `allowNetworkSwitch`, and the wallet's OWN node:
+`checkInputs` (default on for KasWare and Kaspire) refuses, with KasWare 0.11.5's message, to sign an input the mock server (playing the wallet's
+node) does not hold unspent; `walletNodeLagMs` makes that node see an output of a submitted transaction only that long after the mock node did,
+unless the transaction was pushed to it (KasWare `pushTx`, logged in `pushes()`, not among the sign calls); `nodeUrl` (default: the app's
+`__KOB_CONFIG__.nodeUrl`). KOB assumes every extension wallet checks its inputs this way (`src/wallet/visibility.ts`, `e2e/ui/chain-sign.spec.ts`). The handle steers a live page
 (`configure`, `emit`, `setNetwork`) and exposes the call log (`calls()`, `waitForCalls()`): every sign request with the tx JSON, input indexes,
 `scripts` and what was signed. Install before `page.goto`.
 

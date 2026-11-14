@@ -119,9 +119,10 @@ key. The genesis therefore carries, in its payload, the states of its token outp
   KCC-23 reader ignores the payload (it reads the preparation's).
 * A genesis built before this payload existed, or by another tool, carries none; see *What the issuer must keep*.
 
-* Both are planned and signed before anything is sent: a version 1 transaction id does not depend on signature scripts or compute
-  budgets, so the genesis can spend an output of a preparation that is not on chain yet. The preparation is sent first, then the
-  genesis (offered again for a few seconds while the node has not yet seen its input).
+* Both are planned before anything is signed: a version 1 transaction id does not depend on signature scripts or compute budgets, so
+  the genesis can be built (and its covenant id shown) while the preparation is not on chain yet. The preparation is sent first, then
+  the genesis (offered again for a few seconds while the node has not yet seen its input). Nothing in the protocol requires the genesis
+  to be SIGNED before the preparation is sent; when it is signed depends on the wallet (*Signing* below).
 * Lock time 0, the native subnetwork and gas 0 on both (what the executor's indexer can hash from a `High` VSPC answer).
 * Fees at the relay floor (100 sompi per gram), from `issue::tests::creation_fees_before_and_after`:
 
@@ -141,9 +142,17 @@ key. The genesis therefore carries, in its payload, the states of its token outp
   KCC-23 declaration, and that each genesis token output carries exactly the script of its claimed state; it then shows the
   declared name, ticker and decimals, the supply and what the key receives, and one fee for both. Approve signs both
   (`prepSignatures` with the genesis's `signatures`).
-* **Extension wallets** (KasWare, Kaspire, Kastle): their APIs sign one transaction per request, so the wallet asks twice (the
-  preparation, then the genesis), after the app's one confirmation screen, which says so. Both are signed before anything is sent:
-  declining the second request sends nothing.
+* **Extension wallets** (KasWare, Kaspire, Kastle): their APIs sign one transaction per request, so the wallet asks twice, after the
+  app's one confirmation screen, which says so. An extension wallet looks every input it signs up on its OWN node and refuses one it
+  does not find there unspent (KasWare 0.11.5 does so off mainnet; KOB assumes every extension wallet does, on every network). The
+  genesis spends the preparation's output 0, which is on no node until the preparation is sent, so (`web/src/wallet/chain.ts`):
+  1. the wallet signs the preparation; the app finalizes and validates it, writes the creation record, and sends it;
+  2. the app hands it to the wallet's own node where the wallet can take it (KasWare `pushTx`, no popup), or else waits until its
+     node lists output 0 (in a block) plus a short margin (`web/src/wallet/visibility.ts`, at most 60 s);
+  3. only then the wallet is asked for the genesis, which is finalized, validated, recorded and sent.
+
+  Declining the second request leaves the preparation on chain: only its network fee (about 0.002 KAS) is spent, output 0 stays a coin
+  of the wallet, and the creation can be finished later (*Failure between the two*).
 * The app's confirmation screen verifies the preparation too (inputs and outputs the wallet's own, the declaration states the shown
   name, ticker and decimals, the fee is inputs minus outputs) and shows what is recorded on chain.
 
@@ -151,10 +160,19 @@ key. The genesis therefore carries, in its payload, the states of its token outp
 
 * The preparation's output 0 is an ordinary P2PK UTXO of the creator: if the genesis never goes out, the KAS stays in the wallet,
   spendable like any other coin. Nothing can be lost.
-* The web app writes a creation record (`data/creations.ts`: both signed transactions, the token, the documents) before it sends the
-  preparation, and removes it once the genesis is accepted. A record that outlives the page is offered on Create token: "Send the
-  creation" sends the saved preparation again (a node that has it refuses it, harmlessly) and the saved, signed genesis, with no
-  new signature; "Forget it" keeps the KAS. A genesis already on chain finishes its record silently.
+* The web app writes a creation record (`data/creations.ts`, storage key `kob.creations.v2`: the signed preparation, the genesis as
+  planned and, once signed, signed, the token, the documents) before it sends the preparation, and removes it once the genesis is
+  accepted. A record that outlives the page (a declined second approval, a reload between the two, a refused genesis) is offered on
+  Create token. With a signed genesis, "Send the creation" sends the saved preparation again (a node that has it refuses it,
+  harmlessly) and the saved genesis, with no new signature. Without one, "Finish the creation" asks the wallet once more: when the
+  node lists output 0 at once, otherwise after sending the saved preparation again and waiting for it; a preparation the node refuses
+  for good while output 0 is not listed means the coin was spent elsewhere, and only "Forget it" is left. "Forget it" keeps the KAS. A
+  genesis already on chain finishes its record silently. Records of the older `kob.creations.v1` key (always with a signed genesis)
+  are moved to v2 on the first read.
+* While a record exists its output 0 is reserved for the genesis: no order or other transaction of the app funds itself from it.
+* The executor's indexer drops a preparation no genesis spent after 72 hours (`crates/kobd/src/config.rs`): a genesis sent later is
+  valid but has no declaration there. The Create token page says to finish within 72 hours, and past 60 hours recommends a new
+  creation instead.
 * The CLI keeps the same in the output directory (`./kob-create-<id16>` when no `--out-dir` is given on a submitting run);
   `kob token resume <DIR>` sends the saved pair.
 

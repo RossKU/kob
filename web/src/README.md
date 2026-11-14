@@ -10,7 +10,7 @@
 | `kob/` | Protocol and transaction logic over kob-wasm: order planners, pre-sign decoding, registry, balances, issuance |
 | `ui/` | Preact components by screen; `kit/` holds the shared widgets |
 | `data/` | Clients: node RPC (official SDK), indexer REST and WebSocket, UTXOs, token tracker, genesis check |
-| `wallet/` | Browser-wallet adapters and the signing path |
+| `wallet/` | Browser-wallet adapters and the signing path; `chain.ts` signs a chain of transactions (a token creation), `visibility.ts` asks an extension wallet to sign only inputs its own node can see |
 | `signer/` | The sandboxed private-key signer page (`signer.html`): its own decoding, approval and signing |
 | `i18n/` | English texts by UI area and the typed lookup |
 | `testing/` | Test-only fixtures, mock node and mock wallets |
