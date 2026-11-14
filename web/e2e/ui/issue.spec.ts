@@ -325,7 +325,8 @@ test.describe('token issuance', () => {
     await page.getByTestId('confirm-sign').click();
     // the preparation is on chain, the genesis is not: the confirmation closes, the page offers the creation (never signed again on that screen)
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 30_000 });
-    await expect(page.getByTestId('issue-notice')).toContainText('Finish the creation at the top of this page');
+    await expect(page.getByTestId('issue-notice')).toContainText('the token itself was not created yet');
+    await expect(page.getByTestId('issue-notice-finish')).toHaveText('Send the creation');
     await page.unroute('**/*');
     // only the preparation went out; the creation is offered again
     const before = await mock.submitted();

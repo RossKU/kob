@@ -35,7 +35,7 @@ import { SignFlowError } from '../../wallet/sign';
 import { pendingSpends } from '../../app/pending-spends';
 import { inputAddressOf } from '../confirm/send';
 import { expectedOutputs } from '../../wallet/sign';
-import type { BuiltTx } from '../../kob/types';
+import type { BuiltTx, Hex } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
 import { isKeyOwned } from '../../kob/token-state';
 import type { Services } from '../../app/services';
@@ -54,7 +54,8 @@ import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
 
 type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs'>; txid: string; trackFailed: boolean };
-type Notice = { tone: 'info' | 'error'; text: string } | null;
+/** `finish`: the covenant id of the creation the notice offers to finish (the same action as its banner) */
+type Notice = { tone: 'info' | 'error'; text: string; finish?: Hex } | null;
 
 /** Remembers the token outputs of the genesis in the tracker (a genesis has no token leader, so `trackFromBuilt` does not cover it). */
 function trackIssued(services: Services, plan: Pick<IssuePlan, 'built' | 'token'>): boolean {
@@ -140,6 +141,9 @@ export function IssueView() {
   const usable = pubkey !== null && !wallet.networkMismatch;
   const registryTickers = useMemo(() => services.registry.tokens.map((x) => x.ticker), [services.registry]);
 
+  // ---- creations of this wallet whose genesis did not go out (read below)
+  const [pending, setPending] = useState<CreationRecord[]>([]);
+
   // ---- funding
   const funding = useAsync(async () => (usable && pubkey ? services.utxos.fundingFor(pubkey) : null), [pubkey, usable, retry]);
   // the preparation output of a creation left unfinished stays reserved for its genesis (sent again from the banner below), never new funding
@@ -170,7 +174,8 @@ export function IssueView() {
     funding: fundingList,
     fees: fees.data ?? null,
     registryTickers,
-    enabled: limits !== null && !blocked && usable && phase.kind === 'form',
+    // a creation left unfinished comes first: no new one is planned beside it (its coin is reserved, and two "Review and sign" would confuse)
+    enabled: limits !== null && !blocked && usable && phase.kind === 'form' && pending.length === 0,
     retry,
   });
 
@@ -189,10 +194,9 @@ export function IssueView() {
   const shortfall = planIssues.map(shortfallOf).find((x) => x !== null) ?? null;
 
   const summary = plan.status === 'ready' ? reviewSummary(plan.plan, pubkey) : null;
-  const canReview = plan.status === 'ready' && phase.kind === 'form';
+  const canReview = plan.status === 'ready' && phase.kind === 'form' && pending.length === 0;
 
   // ---- creations of this wallet whose genesis did not go out: offered again (a genesis already on chain finishes them silently)
-  const [pending, setPending] = useState<CreationRecord[]>([]);
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
   /** what the wallet is asked for while a creation is finished (confirm.chain.*) */
@@ -275,7 +279,13 @@ export function IssueView() {
     // `pending`: the first step is on chain, the token is not: its record is offered below ("Finish the creation")
     // the creation to finish is offered at the top: brought into view
     if (r.status === 'pending') setTimeout(() => document.querySelector('[data-testid="issue-pending"]')?.scrollIntoView({ block: 'center' }), 0);
-    setNotice(r.status === 'failed' ? { tone: 'error', text: r.message } : r.status === 'pending' ? { tone: 'info', text: t(r.declined ? 'issue.pending.declined' : 'issue.pending.continued') } : { tone: 'info', text: t('issue.cancelled') });
+    setNotice(
+      r.status === 'failed'
+        ? { tone: 'error', text: r.message }
+        : r.status === 'pending'
+          ? { tone: 'info', text: t(r.declined ? 'issue.pending.declined' : 'issue.pending.continued'), finish: current.token.covenantId }
+          : { tone: 'info', text: t('issue.cancelled') },
+    );
   };
 
   const another = () => {
@@ -566,7 +576,7 @@ export function IssueView() {
       <Section title={t('issue.summary.title')} data-testid="issue-plan-section">
         {renderPlanArea()}
         {notice ? (
-          <Banner tone={notice.tone === 'error' ? 'error' : 'info'} title={notice.tone === 'error' ? t('issue.failed.title') : undefined} data-testid="issue-notice">
+          <Banner tone={notice.tone === 'error' ? 'error' : 'info'} title={notice.tone === 'error' ? t('issue.failed.title') : undefined} actions={renderNoticeFinish()} data-testid="issue-notice">
             <span class="wrap-anywhere">{notice.text}</span>
           </Banner>
         ) : null}
@@ -593,8 +603,20 @@ export function IssueView() {
 
   // ---------------------------------------------------------------------------------------------- parts: plain render functions, not components (a component type created per render would remount its inputs and lose focus)
 
+  /** The notice's own "Finish the creation": the same action as the banner of the creation left unfinished. */
+  function renderNoticeFinish() {
+    const rec = notice?.finish ? pending.find((x) => x.covenantId === notice.finish) : undefined;
+    if (!rec || spent.has(rec.covenantId)) return undefined;
+    return (
+      <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-notice-finish">
+        {t(genesisSigned(rec) ? 'issue.pending.send' : 'issue.pending.finish')}
+      </Button>
+    );
+  }
+
   function reviewHint(): string {
     if (!wallet.info || wallet.networkMismatch) return t('issue.review.connect');
+    if (pending.length > 0) return t('issue.review.unfinished');
     if (blocked) return t('issue.review.fix');
     if (plan.status === 'invalid') return shortfall ? t('issue.review.connect') : t('issue.review.fix');
     return t('issue.review.wait');
@@ -768,6 +790,8 @@ export function IssueView() {
   }
 
   function renderPlanArea() {
+    // nothing is planned while a creation is left unfinished (the hint under the button says why)
+    if (phase.kind === 'form' && pending.length > 0) return null;
     if (plan.status === 'pending') {
       return (
         <div class="loading-row" data-testid="issue-plan-pending">

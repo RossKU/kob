@@ -97,7 +97,12 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await wallet!.waitForCalls(2, 20_000);
     await wallet!.configure({ approve: false });
     await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 20_000 });
-    await expect(page.getByTestId('issue-notice')).toContainText('Finish the creation at the top of this page');
+    await expect(page.getByTestId('issue-notice')).toContainText('your wallet did not sign the token itself');
+    await expect(page.getByTestId('issue-notice-finish')).toHaveText('Finish the creation');
+    // no new creation is prepared beside the unfinished one
+    await expect(page.getByTestId('issue-plan-pending')).toHaveCount(0);
+    await expect(page.getByTestId('issue-review')).toBeDisabled();
+    await expect(page.getByTestId('issue-review-hint')).toHaveText('Finish or forget the unfinished creation first.');
     const pending = page.getByTestId('issue-pending');
     await expect(pending).toContainText('DECL');
     await expect(page.getByTestId('issue-pending-body')).toContainText('Finish the creation (your wallet asks once more)');
@@ -151,15 +156,20 @@ test.describe('chain signing: the wallet node lags the move from mempool to UTXO
     const notice = page.getByTestId('issue-notice');
     await expect(notice).toContainText('nothing more was sent');
     await expect(notice).toContainText('is not an unspent output on this network');
-    await expect(notice).toContainText('wait a few seconds, then Finish the creation');
+    await expect(notice).toContainText('wait a few seconds, then finish the creation.');
+    await expect(notice).not.toContainText('at the top of this page');
+    await expect(page.getByTestId('issue-notice-finish')).toHaveText('Finish the creation');
     await expect(page.getByTestId('issue-pending-send')).toHaveText('Finish the creation');
+    await expect(page.getByTestId('issue-plan-pending')).toHaveCount(0);
+    await expect(page.getByTestId('issue-review')).toBeDisabled();
     await shot(page, '8-declined-fresh', 'issue-notice');
     expect(await mock.submitted()).toHaveLength(1);
 
     // a few seconds later the wallet's node has it: the same step, asked again, goes through
     await page.waitForTimeout(Math.max(0, 6500 - (Date.now() - calls[0]!.at)));
     await wallet!.clearCalls();
-    await page.getByTestId('issue-pending-send').click();
+    // the notice's own button finishes it, as the banner's does
+    await page.getByTestId('issue-notice-finish').click();
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
     expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed']);
     const submitted = await mock.submitted();
