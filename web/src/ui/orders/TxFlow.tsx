@@ -20,6 +20,13 @@ export interface FlowStep {
   shownAs?: string;
   /** the toast once the step is submitted (default: the cancel / sweep wording) */
   toast?: string;
+  /** no toast of its own: the flow's card reports it (a step of a merge run) */
+  silent?: boolean;
+  /**
+   * the user confirmed this step in the app before the flow started (a merge run's confirmation states every transaction): the send skips the
+   * app's own final confirmation, and the wallet still asks for its approval
+   */
+  preconfirmed?: boolean;
 }
 
 export type StepState = 'pending' | 'preparing' | 'sending' | 'submitted' | 'cancelled' | 'failed';
@@ -39,10 +46,10 @@ export interface TxFlowProps {
   /** called once when the flow is over (all steps done, or one stopped) */
   onDone(outcome: FlowOutcome): void;
   /**
-   * A CHAINED flow (a token merge): step `index` spends an output of step `index - 1`, so it is built again from the node once that step was
-   * submitted (`prev`) and replaces the planned step. A rejection ends the flow with its message.
+   * A CHAINED flow (a token merge): step `index` may spend outputs of earlier steps, so it is built again at its turn and replaces the planned
+   * step. `txids` holds the transaction id of every step before it. A rejection ends the flow with its message.
    */
-  next?(index: number, prev: { txid: string }): Promise<FlowStep>;
+  next?(index: number, txids: readonly string[]): Promise<FlowStep>;
   /** the card was dismissed (its x once the flow is over, or by itself a moment after every step went through) */
   onClose?(): void;
 }
@@ -55,8 +62,9 @@ const DONE_CLOSE_PHONE_MS = 4000;
 /**
  * Runs one or several transactions one after the other, each checked silently and approved in the wallet (ui/confirm/send.ts) as soon as the flow
  * starts: the action's button was the user's request, the wallet's popup is the approval. A progress list shows every step and one line the
- * current one; a step that stops (rejected in the wallet, a failed check) ends the sequence, and steps not yet run are simply not run: they spend
- * disjoint UTXOs, so a partial sequence leaves everything consistent.
+ * current one; a step that stops (rejected in the wallet, a failed check) ends the sequence, and steps not yet run are simply not run: each step
+ * is valid alone (a merge's later step is built only at its turn, from the outputs of the steps it follows), so a partial sequence leaves
+ * everything consistent.
  */
 export function TxFlow(props: TxFlowProps) {
   const sender = useSend();
@@ -83,14 +91,14 @@ export function TxFlow(props: TxFlowProps) {
       setIndex(list.length);
       finish(st);
     };
-    let prev: string | null = null;
+    const sent: string[] = [];
     for (let i = 0; i < list.length; i++) {
       if (gone.current) return;
-      if (i > 0 && props.next && prev) {
+      if (i > 0 && props.next) {
         st[i] = 'preparing';
         show();
         try {
-          list[i] = await props.next(i, { txid: prev });
+          list[i] = await props.next(i, [...sent]);
           setSteps([...list]);
         } catch (e) {
           st[i] = 'failed';
@@ -106,7 +114,7 @@ export function TxFlow(props: TxFlowProps) {
         st[i] = 'failed';
         return end();
       }
-      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label });
+      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}) });
       if (out.status !== 'submitted') {
         st[i] = out.send.phase === 'rejected' ? 'cancelled' : 'failed';
         return end();
@@ -115,7 +123,7 @@ export function TxFlow(props: TxFlowProps) {
       show();
       setTxids((m) => ({ ...m, [i]: out.txid }));
       await props.onStepSubmitted(step, out);
-      prev = out.txid;
+      sent.push(out.txid);
     }
     end();
   };
@@ -125,6 +133,12 @@ export function TxFlow(props: TxFlowProps) {
     // leaving the page mid-flow: no further step starts
     return () => void (gone.current = true);
   }, []);
+
+  // a long list scrolls in the card: the running step stays in view
+  const list = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    list.current?.querySelector<HTMLElement>(`[data-testid="flow-step-${index}"]`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [index, states]);
 
   const running = index < steps.length;
   const step = steps[index];
@@ -147,7 +161,7 @@ export function TxFlow(props: TxFlowProps) {
       <div class="grow wrap-anywhere stack-sm">
       <strong class="tx-flow-title">{props.heading}</strong>
       {steps.length > 1 ? (
-        <ol class="progress" data-testid="flow-progress">
+        <ol class="progress" data-testid="flow-progress" ref={list}>
           {steps.map((s, i) => (
             <li key={i} data-testid={`flow-step-${i}`} data-state={states[i]}>
               <span class="pill-step" aria-hidden="true">

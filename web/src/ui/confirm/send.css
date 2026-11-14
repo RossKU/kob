@@ -45,7 +45,8 @@
 .send-toast .send { padding: 0; border: 0; background: none; }
 /* a My orders flow (orders/TxFlow.tsx) in the notifications: its title, the steps and the result stack in the card */
 .tx-flow-toast .tx-flow-title { font-weight: 600; }
-.tx-flow-toast .progress { margin: 0; }
+/* a merge run lists every transaction: a long list scrolls inside the card, which keeps the running step in view */
+.tx-flow-toast .progress { margin: 0; max-height: 40vh; overflow-y: auto; }
 .tx-flow-toast .flow-line { margin: 0; }
 .tx-flow-toast .flow-line.bad { color: var(--bad); font-weight: 600; }
 .tx-flow-toast .flow-line.warn { color: var(--warn); }

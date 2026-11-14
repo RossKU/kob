@@ -272,8 +272,9 @@ export function useSend(): Sender {
     if ('blocked' in checked) return stopped({ phase: 'blocked', ...checked.blocked });
     // the job checked (the ticket's re-check may have put the plan of the state at the click in its place) is the one signed
     let final = checked.job;
-    // the final confirmation: the private-key signer shows it in its frame, for any other wallet the app shows it first
-    if (w.adapter!.id !== 'local-key') {
+    // the final confirmation: the private-key signer shows it in its frame, for any other wallet the app shows it first (unless the user confirmed
+    // it in the app before: a merge run)
+    if (w.adapter!.id !== 'local-key' && !final.preconfirmed) {
       const confirmed = await confirmInApp(id, final, checked.decoded);
       if ('phase' in confirmed) return stopped(confirmed);
       final = confirmed;

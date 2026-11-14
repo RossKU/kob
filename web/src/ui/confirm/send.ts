@@ -61,6 +61,11 @@ export interface SendJob {
   signerNotes?: readonly SignerNote[] | undefined;
   /** this job re-times the one the user confirmed just before (the private-key signer then signs it without asking again when nothing got worse) */
   retimed?: boolean | undefined;
+  /**
+   * the user confirmed this transaction in the app already (a merge run's confirmation, which states every transaction of the run): an external
+   * wallet is asked at once, without the app's final confirmation; every check above still runs and the wallet still asks for its own approval
+   */
+  preconfirmed?: boolean | undefined;
 }
 
 /** The registry plus the job's open-list tokens: what its transaction is decoded against and its tokens' identities are checked with. */
