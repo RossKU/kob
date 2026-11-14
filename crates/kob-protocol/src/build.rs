@@ -2212,11 +2212,11 @@ pub fn touch_of(leg: &Leg) -> Result<Touch> {
 ///
 /// `ev` is the input index of the evidence order, which equals its leg index. `tk` is the input
 /// index of its custody for an ask, and `-1` for a bid.
-fn evidence(b: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> {
-    let l = b.legs.get(k).ok_or_else(|| Error::Invalid(format!("trigger evidence {k} is not a leg of the batch")))?;
-    let t = touch_of(l).map_err(|e| blame("evidence", k, e))?;
-    let tk = if t.side == SIDE_ASK { lay.at[&(k, Slot::Custody)] as i64 } else { -1 };
-    Ok((t, k as i64, tk))
+fn evidence(batch: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> {
+    let leg = batch.legs.get(k).ok_or_else(|| Error::Invalid(format!("trigger evidence {k} is not a leg of the batch")))?;
+    let touch = touch_of(leg).map_err(|e| blame("evidence", k, e))?;
+    let tk_index = if touch.side == SIDE_ASK { lay.at[&(k, Slot::Custody)] as i64 } else { -1 };
+    Ok((touch, k as i64, tk_index))
 }
 
 /// The order state of a leg as the kind of its token's family.
@@ -2305,32 +2305,32 @@ pub(crate) struct Layout {
 ///   the legs and the extras, so no output slot below them is ever left empty, whichever token they
 ///   are of.
 /// - Then, token by token, the other custodies and the taker's tokens.
-fn layout(b: &Batch, tokens: Vec<Token>, custs: &[CustIn]) -> Result<Layout> {
-    let n_legs = b.legs.len();
+fn layout(batch: &Batch, tokens: Vec<Token>, custodies: &[CustIn]) -> Result<Layout> {
+    let n_legs = batch.legs.len();
     let mut next = n_legs;
     let mut merge_in = BTreeMap::new();
-    for (i, l) in b.legs.iter().enumerate() {
-        if l_merges(l) {
+    for (i, leg) in batch.legs.iter().enumerate() {
+        if l_merges(leg) {
             merge_in.insert(i, next);
             next += 1;
         }
     }
     let mut at = BTreeMap::new();
     let mut token_inputs = vec![];
-    for c in custs.iter().filter(|c| c.4) {
+    for c in custodies.iter().filter(|c| c.4) {
         at.insert((c.0, c.1), next);
         token_inputs.push((TokIn::Leg(c.0, c.1), c.3));
         next += 1;
     }
-    let mut taker_in = vec![false; b.taker_tokens.len()];
+    let mut taker_in = vec![false; batch.taker_tokens.len()];
     for t in &tokens {
-        for c in custs.iter().filter(|c| !c.4 && c.3 == *t) {
+        for c in custodies.iter().filter(|c| !c.4 && c.3 == *t) {
             at.insert((c.0, c.1), next);
             token_inputs.push((TokIn::Leg(c.0, c.1), c.3));
             next += 1;
         }
-        for (k, tk) in b.taker_tokens.iter().enumerate() {
-            if tk.utxo.covenant_id == Some(t.0) {
+        for (k, taker_token) in batch.taker_tokens.iter().enumerate() {
+            if taker_token.utxo.covenant_id == Some(t.0) {
                 taker_in[k] = true;
                 token_inputs.push((TokIn::Taker(k), *t));
                 next += 1;
@@ -2453,7 +2453,7 @@ fn refund_order(refunds: &[Option<(u64, [u8; 32])>]) -> Option<Vec<usize>> {
 ///
 /// New position `j` holds the original leg `perm[j]`, and the evidence indices of the legs and
 /// updates follow their legs.
-fn permute_batch(b: &Batch, perm: &[usize]) -> Batch {
+fn permute_batch(batch: &Batch, perm: &[usize]) -> Batch {
     let mut inv = vec![0usize; perm.len()];
     for (j, o) in perm.iter().enumerate() {
         inv[*o] = j;
@@ -2463,10 +2463,10 @@ fn permute_batch(b: &Batch, perm: &[usize]) -> Batch {
             *k = inv.get(*k).copied().unwrap_or(*k);
         }
     };
-    let mut out = b.clone();
-    out.legs = perm.iter().map(|o| b.legs[*o].clone()).collect();
-    for l in out.legs.iter_mut() {
-        match l {
+    let mut out = batch.clone();
+    out.legs = perm.iter().map(|o| batch.legs[*o].clone()).collect();
+    for leg in out.legs.iter_mut() {
+        match leg {
             Leg::CondAsk { evidence, .. }
             | Leg::CondBid { evidence, .. }
             | Leg::IfdBid { evidence, .. }
@@ -2508,11 +2508,11 @@ fn unpermute_error(e: Error, perm: &[usize]) -> Error {
     Error::Invalid(out)
 }
 
-fn build_batch_mode(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltTx> {
-    match build_batch_pass(b, budgets, strict)? {
+fn build_batch_mode(batch: &Batch, budgets: BudgetFn, strict: bool) -> Result<BuiltTx> {
+    match build_batch_pass(batch, budgets, strict)? {
         Pass::Built(t) => Ok(*t),
         Pass::Reorder(perm) => {
-            match build_batch_pass(&permute_batch(b, &perm), budgets, strict).map_err(|e| unpermute_error(e, &perm))? {
+            match build_batch_pass(&permute_batch(batch, &perm), budgets, strict).map_err(|e| unpermute_error(e, &perm))? {
                 Pass::Built(t) => Ok(*t),
                 Pass::Reorder(_) => invalid("the legs with a refund output could not be put first"),
             }
@@ -2531,19 +2531,19 @@ struct LegTokens {
 }
 
 /// The tokens of every leg, and the amounts of the pair legs.
-fn collect_leg_tokens(b: &Batch, lock: i64, strict: bool) -> Result<LegTokens> {
+fn collect_leg_tokens(batch: &Batch, lock: i64, strict: bool) -> Result<LegTokens> {
     let mut leg_tokens: Vec<Token> = vec![];
     let mut pair_toks: Vec<Option<(Token, Token)>> = vec![];
     let mut calcs: Vec<Option<pair::PairCalc>> = vec![];
-    for (i, l) in b.legs.iter().enumerate() {
-        match pair::leg_pair_tokens(l).map_err(|e| leg_order_error(i, e))? {
+    for (i, leg) in batch.legs.iter().enumerate() {
+        match pair::leg_pair_tokens(leg).map_err(|e| leg_order_error(i, e))? {
             Some((a, bt)) => {
-                leg_tokens.push(pair::leg_main_token(l, a, bt));
+                leg_tokens.push(pair::leg_main_token(leg, a, bt));
                 pair_toks.push(Some((a, bt)));
-                calcs.push(pair::calc_leg(l, lock, strict).map_err(|e| leg_fill_error(i, e))?);
+                calcs.push(pair::calc_leg(leg, lock, strict).map_err(|e| leg_fill_error(i, e))?);
             }
             None => {
-                leg_tokens.push(leg_state(l).and_then(|s| order_token(&s)).map_err(|e| leg_order_error(i, e))?);
+                leg_tokens.push(leg_state(leg).and_then(|s| order_token(&s)).map_err(|e| leg_order_error(i, e))?);
                 pair_toks.push(None);
                 calcs.push(None);
             }
@@ -2574,50 +2574,50 @@ fn batch_tokens(leg_tokens: &[Token], pair_toks: &[Option<(Token, Token)>]) -> R
 
 /// The custody inputs of every leg.
 fn custody_inputs<'a>(
-    b: &'a Batch,
+    batch: &'a Batch,
     leg_tokens: &[Token],
     pair_toks: &[Option<(Token, Token)>],
     calcs: &[Option<pair::PairCalc>],
 ) -> Result<Vec<CustIn<'a>>> {
-    let mut custs: Vec<CustIn> = vec![];
-    for (i, l) in b.legs.iter().enumerate() {
+    let mut custodies: Vec<CustIn> = vec![];
+    for (i, leg) in batch.legs.iter().enumerate() {
         let tok = leg_tokens[i];
-        match l {
+        match leg {
             Leg::Ask { order, custody, amount, .. } => {
                 let ioc = order.state.tif != TIF_GTC && *amount < order.state.amount_left;
-                custs.push((i, Slot::Custody, custody, tok, ioc));
+                custodies.push((i, Slot::Custody, custody, tok, ioc));
             }
-            Leg::CondAsk { custody, .. } | Leg::IfdAsk { custody, .. } => custs.push((i, Slot::Custody, custody, tok, false)),
+            Leg::CondAsk { custody, .. } | Leg::IfdAsk { custody, .. } => custodies.push((i, Slot::Custody, custody, tok, false)),
             Leg::CondBid { merge: Some(m), .. } => {
                 if let Some(c) = &m.custody {
-                    custs.push((i, Slot::Entry, c, tok, false));
+                    custodies.push((i, Slot::Entry, c, tok, false));
                 }
             }
             Leg::Pair { .. } | Leg::CondPair { .. } | Leg::IfdPair { .. } => {
                 let (a, bt) = pair_toks[i].expect("pair leg");
-                for (slot, c, t, positional) in pair::leg_custodies(l, calcs[i].as_ref().expect("pair calc"), a, bt)? {
-                    custs.push((i, slot, c, t, positional));
+                for (slot, c, t, positional) in pair::leg_custodies(leg, calcs[i].as_ref().expect("pair calc"), a, bt)? {
+                    custodies.push((i, slot, c, t, positional));
                 }
             }
             _ => {}
         }
     }
-    Ok(custs)
+    Ok(custodies)
 }
 
 /// Covenant ids spent by the batch.
 ///
 /// Each order is spent at most once, and a booked exit's entry only in its own merge.
-fn spent_covenant_ids(b: &Batch) -> Result<BTreeSet<[u8; 32]>> {
+fn spent_covenant_ids(batch: &Batch) -> Result<BTreeSet<[u8; 32]>> {
     let mut spent_ids: BTreeSet<[u8; 32]> = BTreeSet::new();
-    for l in &b.legs {
-        let id = l_utxo(l).covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    for leg in &batch.legs {
+        let id = l_utxo(leg).covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
         if !spent_ids.insert(id) {
             return invalid("an order appears twice in one transaction");
         }
     }
-    for l in &b.legs {
-        let merged = match l {
+    for leg in &batch.legs {
+        let merged = match leg {
             Leg::CondAsk { merge: Some(e), .. } => e.utxo.covenant_id,
             Leg::CondBid { merge: Some(e), .. } => e.entry.utxo.covenant_id,
             _ => continue,
@@ -2627,7 +2627,7 @@ fn spent_covenant_ids(b: &Batch) -> Result<BTreeSet<[u8; 32]>> {
             return invalid("an entry merges one exit per transaction and is not otherwise spent in it");
         }
     }
-    for u in &b.updates {
+    for u in &batch.updates {
         let id = u.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("updated order has no covenant id".into()))?;
         if !spent_ids.insert(id) {
             return invalid("an updated order is spent once and not filled in the same transaction");
@@ -3346,29 +3346,29 @@ fn plan_ifd_ask(
     })
 }
 
-fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
-    if b.legs.is_empty() {
+fn build_batch_pass(batch: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> {
+    if batch.legs.is_empty() {
         return invalid("empty batch");
     }
-    let lock = b.lock_time as i64;
-    let change = b.change.or(b.funding.first().map(|f| f.pubkey));
+    let lock = batch.lock_time as i64;
+    let change = batch.change.or(batch.funding.first().map(|f| f.pubkey));
     if change.is_none() {
         // Without a change key the spread and tips would all become fee.
         return invalid("a batch needs a change key (or a funding input) to receive the spread");
     }
-    if let Some(t) = &b.taker {
+    if let Some(t) = &batch.taker {
         check_key(t, "taker key")?;
     }
-    for p in &b.receivers {
+    for p in &batch.receivers {
         check_key(&p.pubkey, "token receiver")?;
     }
-    let mut d = Draft::new(b.lock_time, &b.fee, change)?;
-    let LegTokens { main: leg_tokens, pair: pair_toks, calcs } = collect_leg_tokens(b, lock, strict)?;
+    let mut draft = Draft::new(batch.lock_time, &batch.fee, change)?;
+    let LegTokens { main: leg_tokens, pair: pair_toks, calcs } = collect_leg_tokens(batch, lock, strict)?;
     let tokens = batch_tokens(&leg_tokens, &pair_toks)?;
-    let custs = custody_inputs(b, &leg_tokens, &pair_toks, &calcs)?;
-    let lay = layout(b, tokens, &custs)?;
-    let n_legs = b.legs.len();
-    let spent_ids = spent_covenant_ids(b)?;
+    let custodies = custody_inputs(batch, &leg_tokens, &pair_toks, &calcs)?;
+    let lay = layout(batch, tokens, &custodies)?;
+    let n_legs = batch.legs.len();
+    let spent_ids = spent_covenant_ids(batch)?;
 
     let mut exts = Exts::default();
 
@@ -3376,14 +3376,14 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     // Terminal bid fills whose unspent KAS returns to the maker in an output of its own: (value,
     // maker) per leg.
     let mut refunds: Vec<Option<(u64, [u8; 32])>> = vec![None; n_legs];
-    for (i, l) in b.legs.iter().enumerate() {
+    for (i, leg) in batch.legs.iter().enumerate() {
         let tok = leg_tokens[i];
         let fam = tok.1.family();
-        let n = leg_amount(l);
+        let n = leg_amount(leg);
         pos(n, "amount")?;
-        let utxo = l_utxo(l);
+        let utxo = l_utxo(leg);
         let cx = LegCtx {
-            batch: b,
+            batch,
             lay: &lay,
             index: i,
             token: tok,
@@ -3396,26 +3396,27 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             cov_id: utxo.covenant_id.expect("checked"),
             strict,
         };
-        let p = match l {
+        let p = match leg {
             Leg::Ask { order, custody, t, .. } => plan_ask(&cx, order, custody, *t, &mut exts)?,
             Leg::Bid { order, t, .. } => plan_bid(&cx, order, *t, &mut exts, &mut refunds[i])?,
-            Leg::CondAsk { order, custody, leg, evidence: ev, t, merge, .. } => {
-                plan_cond_ask(&cx, order, custody, *leg, *ev, *t, merge.as_ref(), &mut exts)?
+            Leg::CondAsk { order, custody, leg: cond_leg, evidence: ev, t, merge, .. } => {
+                plan_cond_ask(&cx, order, custody, *cond_leg, *ev, *t, merge.as_ref(), &mut exts)?
             }
-            Leg::CondBid { order, leg, evidence: ev, t, merge, .. } => {
-                plan_cond_bid(&cx, order, *leg, *ev, *t, merge.as_ref(), &mut exts, &mut refunds[i])?
+            Leg::CondBid { order, leg: cond_leg, evidence: ev, t, merge, .. } => {
+                plan_cond_bid(&cx, order, *cond_leg, *ev, *t, merge.as_ref(), &mut exts, &mut refunds[i])?
             }
             Leg::IfdBid { order, evidence: ev, t, .. } => plan_ifd_bid(&cx, order, *ev, *t, &mut exts)?,
             Leg::IfdAsk { order, custody, evidence: ev, t, .. } => plan_ifd_ask(&cx, order, custody, *ev, *t, &mut exts)?,
             Leg::Pair { .. } | Leg::CondPair { .. } | Leg::IfdPair { .. } => {
                 let (a, bt) = pair_toks[i].expect("pair leg");
-                pair_exts(l, a, bt, &mut |t, e| exts.merge(t, e))?;
-                pair::plan_leg(b, &lay, i, l, calcs[i].as_ref().expect("pair calc"), a, bt, lock).map_err(|e| leg_fill_error(i, e))?
+                pair_exts(leg, a, bt, &mut |t, e| exts.merge(t, e))?;
+                pair::plan_leg(batch, &lay, i, leg, calcs[i].as_ref().expect("pair calc"), a, bt, lock)
+                    .map_err(|e| leg_fill_error(i, e))?
             }
         };
         plans.push(p);
     }
-    deliver_pair_surplus(b, &mut plans)?;
+    deliver_pair_surplus(batch, &mut plans)?;
     // The covenants pin a refund at output M - 1 - i for the bid at input i, so the fills with a
     // refund are the first legs.
     if let Some(perm) = refund_order(&refunds) {
@@ -3424,24 +3425,24 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
 
     // Inputs: legs, merged entries, token inputs (positional custodies first, see `layout`),
     // updates and funding.
-    add_leg_inputs(&mut d, b, &lay, &plans, &custs, &mut exts, strict)?;
-    let update_outs = add_update_inputs(&mut d, b, &lay, &spent_ids)?;
-    for f in &b.funding {
-        d.add_p2pk(f);
+    add_leg_inputs(&mut draft, batch, &lay, &plans, &custodies, &mut exts, strict)?;
+    let update_outs = add_update_inputs(&mut draft, batch, &lay, &spent_ids)?;
+    for f in &batch.funding {
+        draft.add_p2pk(f);
     }
 
     // Outputs: positional slots, extras per leg, update continuations, payments and the taker's
     // tokens.
-    let LegOutputs { returns, mut patches, owner } = add_leg_outputs(&mut d, b, &lay, &mut plans)?;
-    add_update_outputs(&mut d, b, update_outs)?;
-    for p in &b.payments {
-        d.add_output(pos(p.amount as i64, "payment")?, spk_from_string(&p.script_public_key)?, None);
+    let LegOutputs { returns, mut patches, owner } = add_leg_outputs(&mut draft, batch, &lay, &mut plans)?;
+    add_update_outputs(&mut draft, batch, update_outs)?;
+    for p in &batch.payments {
+        draft.add_output(pos(p.amount as i64, "payment")?, spk_from_string(&p.script_public_key)?, None);
     }
-    add_taker_tokens(&mut d, b, &lay, &plans, &exts, change)?;
+    add_taker_tokens(&mut draft, batch, &lay, &plans, &exts, change)?;
     // Pinned outputs at their custody input's index.
     for (at, v, st, token, patch) in returns {
-        d.ensure_output(at);
-        d.fill_token_output(at, token, st, v)?;
+        draft.ensure_output(at);
+        draft.fill_token_output(at, token, st, v)?;
         if let Some((input, arg)) = patch {
             patches.push((input, arg, at));
         }
@@ -3449,67 +3450,67 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
     // Positional outputs.
     for (i, p) in plans.iter().enumerate() {
         match &p.pos {
-            PosOut::Pay(v, maker) => d.fill_output(i, *v, p2pk_spk(maker), None),
-            PosOut::Deliver(v, st, token) => d.fill_token_output(i, *token, st.clone(), *v)?,
+            PosOut::Pay(v, maker) => draft.fill_output(i, *v, p2pk_spk(maker), None),
+            PosOut::Deliver(v, st, token) => draft.fill_token_output(i, *token, st.clone(), *v)?,
             PosOut::DeliverToExit { .. } => unreachable!("resolved with the exit"),
             PosOut::Exit(v, spk, tpl) => {
-                d.fill_genesis(i, i, *v, spk.clone(), Some(*tpl))?;
+                draft.fill_genesis(i, i, *v, spk.clone(), Some(*tpl))?;
             }
         }
     }
     for (i, r) in refunds.iter().enumerate() {
         if let Some((value, maker)) = r {
-            d.add_refund(i, *value, *maker, leg_tokens[i].0);
+            draft.add_refund(i, *value, *maker, leg_tokens[i].0);
         }
     }
     // Patch index arguments (tokOut / exitOut / a merged pair entry's new custodies).
     for (input, arg, out) in patches {
-        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
+        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut draft.inputs[input].plan {
             args[arg] = Arg::Int(out as i64);
         }
     }
-    if !b.records.is_empty() {
-        d.payload = payload::encode_with_release(&b.records)?;
+    if !batch.records.is_empty() {
+        draft.payload = payload::encode_with_release(&batch.records)?;
     }
-    d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
+    draft.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
 }
 
 /// Adds the inputs of the legs and of their merged entries, then the token inputs in layout order.
 fn add_leg_inputs(
-    d: &mut Draft,
-    b: &Batch,
+    draft: &mut Draft,
+    batch: &Batch,
     lay: &Layout,
     plans: &[LegPlan],
-    custs: &[CustIn],
+    custodies: &[CustIn],
     exts: &mut Exts,
     strict: bool,
 ) -> Result<()> {
-    for (i, l) in b.legs.iter().enumerate() {
-        let p = &plans[i];
-        d.add_input(l_utxo(l), p.plan.clone(), format!("{}{}", p.role, p.suffix), p.sequence);
+    for (i, leg) in batch.legs.iter().enumerate() {
+        let leg_plan = &plans[i];
+        draft.add_input(l_utxo(leg), leg_plan.plan.clone(), format!("{}{}", leg_plan.role, leg_plan.suffix), leg_plan.sequence);
     }
-    for (i, p) in plans.iter().enumerate() {
-        if let Some((plan, role, utxo)) = &p.merge {
-            let at = d.add_input(utxo, plan.clone(), format!("{role}{}", p.suffix), SEQUENCE_NONFINAL);
+    for (i, leg_plan) in plans.iter().enumerate() {
+        if let Some((plan, role, utxo)) = &leg_plan.merge {
+            let at = draft.add_input(utxo, plan.clone(), format!("{role}{}", leg_plan.suffix), SEQUENCE_NONFINAL);
             debug_assert_eq!(at, lay.merge_in[&i]);
         }
     }
-    for (tin, t) in &lay.token_inputs {
-        match *tin {
+    for (token_input, t) in &lay.token_inputs {
+        match *token_input {
             TokIn::Leg(i, slot) => {
-                let c = custs.iter().find(|c| c.0 == i && c.1 == slot).expect("laid out").2;
-                let got = d.add_token_input(c, *t, Witness::CovenantId)?;
+                let custody = custodies.iter().find(|c| c.0 == i && c.1 == slot).expect("laid out").2;
+                let got = draft.add_token_input(custody, *t, Witness::CovenantId)?;
                 debug_assert_eq!(got, lay.at[&(i, slot)]);
             }
             TokIn::Taker(k) => {
-                let tk = &b.taker_tokens[k];
-                check_token_input(tk, *t)?;
-                if strict && !tk.state.is_holder(t.1) {
+                let taker_token = &batch.taker_tokens[k];
+                check_token_input(taker_token, *t)?;
+                if strict && !taker_token.state.is_holder(t.1) {
                     return invalid("taker tokens must be key-owned (a token owned by an order id is a stray)");
                 }
-                exts.merge(t.0, tk.state.extension())?;
-                let w = if tk.state.is_user() { token_witness(&tk.state, t.1)? } else { Witness::CovenantId };
-                d.add_token_input(tk, *t, w)?;
+                exts.merge(t.0, taker_token.state.extension())?;
+                let witness = if taker_token.state.is_user() { token_witness(&taker_token.state, t.1)? } else { Witness::CovenantId };
+                draft.add_token_input(taker_token, *t, witness)?;
             }
         }
     }
@@ -3520,11 +3521,16 @@ fn add_leg_inputs(
 ///
 /// Their evidence is a leg of this batch. It returns each update's input index, the order's next
 /// state and the keeper's take.
-fn add_update_inputs(d: &mut Draft, b: &Batch, lay: &Layout, spent_ids: &BTreeSet<[u8; 32]>) -> Result<Vec<(usize, AnyState, i64)>> {
+fn add_update_inputs(
+    draft: &mut Draft,
+    batch: &Batch,
+    lay: &Layout,
+    spent_ids: &BTreeSet<[u8; 32]>,
+) -> Result<Vec<(usize, AnyState, i64)>> {
     let mut update_outs = vec![];
-    for (k, u) in b.updates.iter().enumerate() {
-        let (plan, role, sequence, next, take) = update_plan(b, lay, u, spent_ids)?;
-        let at = d.add_input(&u.order.utxo, plan, role, sequence);
+    for (k, u) in batch.updates.iter().enumerate() {
+        let (plan, role, sequence, next, take) = update_plan(batch, lay, u, spent_ids)?;
+        let at = draft.add_input(&u.order.utxo, plan, role, sequence);
         debug_assert_eq!(at, lay.update_base + k);
         update_outs.push((at, next, take));
     }
@@ -3545,17 +3551,17 @@ struct LegOutputs {
 }
 
 /// Reserves the positional outputs and the pinned ones, and adds the extras of every leg.
-fn add_leg_outputs(d: &mut Draft, b: &Batch, lay: &Layout, plans: &mut [LegPlan]) -> Result<LegOutputs> {
-    let n_legs = b.legs.len();
+fn add_leg_outputs(draft: &mut Draft, batch: &Batch, lay: &Layout, plans: &mut [LegPlan]) -> Result<LegOutputs> {
+    let n_legs = batch.legs.len();
     for _ in 0..n_legs {
-        d.reserve_output();
+        draft.reserve_output();
     }
     // Outputs pinned at a custody input's index (IOC returns, pair rests and returns, merged pair
     // entries' custodies) are reserved now, so the extras skip them.
     for (i, p) in plans.iter().enumerate() {
         for x in &p.extras {
             if let Extra::AtInput { slot, .. } = x {
-                d.pin_output(lay.at[&(i, *slot)]);
+                draft.pin_output(lay.at[&(i, *slot)]);
             }
         }
     }
@@ -3564,16 +3570,16 @@ fn add_leg_outputs(d: &mut Draft, b: &Batch, lay: &Layout, plans: &mut [LegPlan]
     // The leg each output belongs to (its positional output, its extras), so that a refusal of
     // `seal` that names an output can name the leg.
     let mut owner: BTreeMap<usize, usize> = (0..n_legs).map(|i| (i, i)).collect();
-    for (i, l) in b.legs.iter().enumerate() {
-        let cov = l_utxo(l).covenant_id.expect("checked");
+    for (i, leg) in batch.legs.iter().enumerate() {
+        let cov = l_utxo(leg).covenant_id.expect("checked");
         let extras = std::mem::take(&mut plans[i].extras);
         for x in extras {
             match x {
                 Extra::Cont(v, spk) => {
-                    owner.insert(d.add_output(v, spk, Some((i as u16, cov))), i);
+                    owner.insert(draft.add_output(v, spk, Some((i as u16, cov))), i);
                 }
                 Extra::Tok { value, state, token, patch } => {
-                    let o = d.add_token_output(token, state, value)?;
+                    let o = draft.add_token_output(token, state, value)?;
                     owner.insert(o, i);
                     if let Some((input, arg)) = patch {
                         patches.push((input, arg, o));
@@ -3584,16 +3590,16 @@ fn add_leg_outputs(d: &mut Draft, b: &Batch, lay: &Layout, plans: &mut [LegPlan]
                     returns.push((lay.at[&(i, slot)], value, state, token, patch))
                 }
                 Extra::Exit { value, spk, tpl, arg } => {
-                    let x = d.reserve_output();
+                    let x = draft.reserve_output();
                     owner.insert(x, i);
-                    let id = d.fill_genesis(x, i, value, spk, Some(tpl))?;
+                    let id = draft.fill_genesis(x, i, value, spk, Some(tpl))?;
                     patches.push((i, arg, x));
                     if let PosOut::DeliverToExit { value: dv, amount, ext, token } = plans[i].pos {
                         plans[i].pos = PosOut::Deliver(dv, TokenState::custody(token.1.family(), amount, id, ext), token);
                     }
                 }
                 Extra::EntryCont(v, spk, entry_cov) => {
-                    owner.insert(d.add_output(v, spk, Some((lay.merge_in[&i] as u16, entry_cov))), i);
+                    owner.insert(draft.add_output(v, spk, Some((lay.merge_in[&i] as u16, entry_cov))), i);
                 }
             }
         }
@@ -3602,9 +3608,9 @@ fn add_leg_outputs(d: &mut Draft, b: &Batch, lay: &Layout, plans: &mut [LegPlan]
 }
 
 /// Adds the continuation of every update.
-fn add_update_outputs(d: &mut Draft, b: &Batch, update_outs: Vec<(usize, AnyState, i64)>) -> Result<()> {
+fn add_update_outputs(draft: &mut Draft, batch: &Batch, update_outs: Vec<(usize, AnyState, i64)>) -> Result<()> {
     for (k, (at, next, take)) in update_outs.into_iter().enumerate() {
-        let u = &b.updates[k];
+        let u = &batch.updates[k];
         let cov = u.order.utxo.covenant_id.expect("checked");
         // A continuation below the covenant-output bound could never be mined. It is refused here,
         // naming the update, because `seal` would refuse the whole transaction without knowing
@@ -3616,30 +3622,37 @@ fn add_update_outputs(d: &mut Draft, b: &Batch, update_outs: Vec<(usize, AnyStat
                 crate::tx::COVENANT_OUTPUT_MIN
             ));
         }
-        d.add_output(pos(cont, "update continuation")?, next.spk(), Some((at as u16, cov)));
+        draft.add_output(pos(cont, "update continuation")?, next.spk(), Some((at as u16, cov)));
     }
     Ok(())
 }
 
 /// Adds the taker's net tokens, per token.
-fn add_taker_tokens(d: &mut Draft, b: &Batch, lay: &Layout, plans: &[LegPlan], exts: &Exts, change: Option<[u8; 32]>) -> Result<()> {
+fn add_taker_tokens(
+    draft: &mut Draft,
+    batch: &Batch,
+    lay: &Layout,
+    plans: &[LegPlan],
+    exts: &Exts,
+    change: Option<[u8; 32]>,
+) -> Result<()> {
     for t in &lay.tokens {
         let (sold, bought) = token_flow(plans, *t)?;
-        let supplied: i64 = b.taker_tokens.iter().filter(|x| x.utxo.covenant_id == Some(t.0)).map(|x| x.state.amount()).sum();
+        let supplied: i64 = batch.taker_tokens.iter().filter(|x| x.utxo.covenant_id == Some(t.0)).map(|x| x.state.amount()).sum();
         let net = sold + supplied - bought;
         if net < 0 {
             return invalid(format!("the batch delivers {bought} token base units but only {} are available", sold + supplied));
         }
         if net > 0 {
-            let to = b.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(b.taker).or(change);
+            let to = batch.receivers.iter().find(|r| r.covenant_id == t.0).map(|r| r.pubkey).or(batch.taker).or(change);
             let to = to.ok_or_else(|| Error::Invalid("no receiver for the taker's tokens".into()))?;
             let e = exts.0.get(&t.0).copied().ok_or_else(|| Error::Invalid("no token state in the batch".into()))?;
             // A kept surplus (inventory) carries `keep_carrier` when the request names one.
-            let carrier = match b.keep_carrier {
-                Some(c) if b.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
-                _ => pos(b.taker_token_carrier as i64, "takerTokenCarrier")?,
+            let carrier = match batch.keep_carrier {
+                Some(c) if batch.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
+                _ => pos(batch.taker_token_carrier as i64, "takerTokenCarrier")?,
             };
-            d.add_token_output(*t, TokenState::user(t.1, net, to, e), carrier)?;
+            draft.add_token_output(*t, TokenState::user(t.1, net, to, e), carrier)?;
         }
     }
     Ok(())
@@ -3676,10 +3689,10 @@ fn dust_leg(e: Error, owner: &BTreeMap<usize, usize>) -> Error {
 fn token_flow(plans: &[LegPlan], t: Token) -> Result<(i64, i64)> {
     let mut sold = 0i64;
     let mut bought = 0i64;
-    for (tok, s, b) in plans.iter().flat_map(|p| p.flows.iter()) {
-        if tok.0 == t.0 {
-            sold = add(sold, *s, "token amounts of the batch")?;
-            bought = add(bought, *b, "token amounts of the batch")?;
+    for (flow_token, sold_units, bought_units) in plans.iter().flat_map(|p| p.flows.iter()) {
+        if flow_token.0 == t.0 {
+            sold = add(sold, *sold_units, "token amounts of the batch")?;
+            bought = add(bought, *bought_units, "token amounts of the batch")?;
         }
     }
     Ok((sold, bought))
@@ -3689,9 +3702,9 @@ fn token_flow(plans: &[LegPlan], t: Token) -> Result<(i64, i64)> {
 ///
 /// They are its custodies' commitments, copied to their rests and returns, and the state's, for T
 /// deliveries and an entry's new outputs.
-fn pair_exts(l: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], [u8; 32]) -> Result<()>) -> Result<()> {
+fn pair_exts(leg: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], [u8; 32]) -> Result<()>) -> Result<()> {
     let ext = |t: Token, e: [u8; 32]| if t.1.family() == Family::Kcc20 { e } else { [0; 32] };
-    match l {
+    match leg {
         Leg::Pair { order, custody, .. } => {
             let s = &order.state;
             let (st, tt) = if s.is_ask() { (a, bt) } else { (bt, a) };
@@ -3731,7 +3744,7 @@ fn pair_exts(l: &Leg, a: Token, bt: Token, merge_ext: &mut impl FnMut([u8; 32], 
 /// [`Batch::keep_surplus`] names the tokens the taker takes into inventory. Their surplus then
 /// stays with the taker. A KRON delivery above the program's output limit keeps the excess with the
 /// taker.
-fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
+fn deliver_pair_surplus(batch: &Batch, plans: &mut [LegPlan]) -> Result<()> {
     let mut bought: Vec<Token> = vec![];
     for t in plans.iter().filter_map(|p| p.adjust.map(|(t, _)| t)) {
         if !bought.contains(&t) {
@@ -3739,7 +3752,7 @@ fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
         }
     }
     for t in bought {
-        if b.taker_tokens.iter().any(|x| x.utxo.covenant_id == Some(t.0)) || b.keep_surplus.contains(&t.0) {
+        if batch.taker_tokens.iter().any(|x| x.utxo.covenant_id == Some(t.0)) || batch.keep_surplus.contains(&t.0) {
             continue;
         }
         let (sold, taken) = token_flow(plans, t)?;
@@ -3771,7 +3784,7 @@ fn deliver_pair_surplus(b: &Batch, plans: &mut [LegPlan]) -> Result<()> {
 /// fills at its trigger. An armed one runs its auction at `t`.
 #[allow(clippy::too_many_arguments)]
 fn ifd_trigger(
-    b: &Batch,
+    batch: &Batch,
     lay: &Layout,
     entry_stop: i64,
     armed: i64,
@@ -3790,9 +3803,9 @@ fn ifd_trigger(
     }
     if armed == 0 {
         let k = ev.ok_or_else(|| Error::Invalid("an unarmed stop entry needs trigger evidence".into()))?;
-        let (e, a, tk) = evidence(b, lay, k)?;
-        check(&e)?;
-        return Ok((true, 0, a, tk));
+        let (touch, ev_index, tk_index) = evidence(batch, lay, k)?;
+        check(&touch)?;
+        return Ok((true, 0, ev_index, tk_index));
     }
     if band_daa > 0 {
         return Ok((false, auction_t(t, lock, armed_origin(armed, utxo_daa).expect("armed"), "stop-entry auction")?, 0, 0));
@@ -3822,23 +3835,28 @@ fn arm_entry_rules(amount_left: i64, stop_beyond_limit: bool) -> Result<()> {
 /// trigger side, and a trailing ratchet the opposite side and at least one justified step. A booked
 /// exit is never updated next to its repeat entry. `spent` holds the covenant ids the batch spends,
 /// and the covenants refuse `update` when the parent is among the inputs.
-fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 32]>) -> Result<(SigPlan, String, u64, AnyState, i64)> {
+fn update_plan(
+    batch: &Batch,
+    lay: &Layout,
+    u: &BatchUpdate,
+    spent: &BTreeSet<[u8; 32]>,
+) -> Result<(SigPlan, String, u64, AnyState, i64)> {
     if u.order.state.is_pair() {
-        return pair::update_plan_pair(b, lay, u, spent);
+        return pair::update_plan_pair(batch, lay, u, spent);
     }
     if u.evidence_b.is_some() {
         return invalid("evidenceB names the B leg of a pair order's evidence (mode 0)");
     }
-    let o = &u.order;
-    let lock = b.lock_time as i64;
-    let fam = o.state.family();
-    let tok = order_token(&o.state)?;
-    let (e, ev_arg, tk_arg) = evidence(b, lay, u.evidence)?;
+    let order = &u.order;
+    let lock = batch.lock_time as i64;
+    let family = order.state.family();
+    let tok = order_token(&order.state)?;
+    let (touch, ev_arg, tk_arg) = evidence(batch, lay, u.evidence)?;
     let check = |min_touch, min_rest, active_from, token, scale| -> Result<()> {
         if lock < active_from {
             return invalid("the order is not active yet");
         }
-        e.check(token, scale, min_touch, min_rest, lock)
+        touch.check(token, scale, min_touch, min_rest, lock)
     };
     let not_next_to_parent = |parent: [u8; 32]| -> Result<()> {
         if parent != [0; 32] && spent.contains(&parent) {
@@ -3846,95 +3864,98 @@ fn update_plan(b: &Batch, lay: &Layout, u: &BatchUpdate, spent: &BTreeSet<[u8; 3
         }
         Ok(())
     };
-    let (next, what, sequence): (AnyState, &str, u64) = match &o.state {
-        AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => {
-            if s.armed != 0 || s.stop_price <= 0 {
+    let (next, what, sequence): (AnyState, &str, u64) = match &order.state {
+        AnyState::KobCondAsk(state) | AnyState::KobCondAskKron(state) => {
+            if state.armed != 0 || state.stop_price <= 0 {
                 return invalid("only an unarmed stop order can be armed or trailed");
             }
-            not_next_to_parent(s.parent)?;
-            check(s.min_touch, s.min_rest_daa, s.active_from, s.token_cov_id, s.scale)?;
-            if e.side == SIDE_ASK {
-                if e.price > s.stop_price {
+            not_next_to_parent(state.parent)?;
+            check(state.min_touch, state.min_rest_daa, state.active_from, state.token_cov_id, state.scale)?;
+            if touch.side == SIDE_ASK {
+                if touch.price > state.stop_price {
                     return invalid("arming a stop sell needs a resting ask filled at or below the stop");
                 }
-                (AnyState::KobCondAsk(CondAskState { armed: 1, ..s.clone() }).into_family(fam), "arm", 0)
+                (AnyState::KobCondAsk(CondAskState { armed: 1, ..state.clone() }).into_family(family), "arm", 0)
             } else {
-                let k = s.trail_steps(e.price);
+                let k = state.trail_steps(touch.price);
                 if k < 1 {
                     return invalid("the evidence justifies no trailing step");
                 }
-                let stop = s.stop_price + k * s.trail_step;
+                let stop = state.stop_price + k * state.trail_step;
                 (
-                    AnyState::KobCondAsk(CondAskState { stop_price: stop, ..s.clone() }).into_family(fam),
+                    AnyState::KobCondAsk(CondAskState { stop_price: stop, ..state.clone() }).into_family(family),
                     "trail",
-                    s.trail_wait.max(0) as u64,
+                    state.trail_wait.max(0) as u64,
                 )
             }
         }
-        AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => {
-            if s.armed != 0 || s.stop_price <= 0 {
+        AnyState::KobCondBid(state) | AnyState::KobCondBidKron(state) => {
+            if state.armed != 0 || state.stop_price <= 0 {
                 return invalid("only an unarmed stop order can be armed or trailed");
             }
-            not_next_to_parent(s.parent)?;
-            check(s.min_touch, s.min_rest_daa, s.active_from, s.token_cov_id, s.scale)?;
-            if e.side == SIDE_BID {
-                if e.price < s.stop_price {
+            not_next_to_parent(state.parent)?;
+            check(state.min_touch, state.min_rest_daa, state.active_from, state.token_cov_id, state.scale)?;
+            if touch.side == SIDE_BID {
+                if touch.price < state.stop_price {
                     return invalid("arming a buy stop needs a resting bid filled at or above the stop");
                 }
-                (AnyState::KobCondBid(CondBidState { armed: 1, ..s.clone() }).into_family(fam), "arm", 0)
+                (AnyState::KobCondBid(CondBidState { armed: 1, ..state.clone() }).into_family(family), "arm", 0)
             } else {
-                let k = s.trail_steps(e.price);
+                let k = state.trail_steps(touch.price);
                 if k < 1 {
                     return invalid("the evidence justifies no trailing step");
                 }
-                let stop = s.stop_price - k * s.trail_step;
+                let stop = state.stop_price - k * state.trail_step;
                 (
-                    AnyState::KobCondBid(CondBidState { stop_price: stop, ..s.clone() }).into_family(fam),
+                    AnyState::KobCondBid(CondBidState { stop_price: stop, ..state.clone() }).into_family(family),
                     "trail",
-                    s.trail_wait.max(0) as u64,
+                    state.trail_wait.max(0) as u64,
                 )
             }
         }
-        AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => {
-            if s.entry_stop <= 0 || s.armed != 0 {
+        AnyState::KobIfdBid(state) | AnyState::KobIfdBidKron(state) => {
+            if state.entry_stop <= 0 || state.armed != 0 {
                 return invalid("only an unarmed stop entry can be armed");
             }
-            arm_entry_rules(s.amount_left, s.entry_stop > s.price)?;
-            check(s.min_touch, s.min_rest_daa, s.active_from, s.token_cov_id, s.scale)?;
-            if e.side != SIDE_BID || e.price < s.entry_stop {
+            arm_entry_rules(state.amount_left, state.entry_stop > state.price)?;
+            check(state.min_touch, state.min_rest_daa, state.active_from, state.token_cov_id, state.scale)?;
+            if touch.side != SIDE_BID || touch.price < state.entry_stop {
                 return invalid("a buy-stop entry is armed by a resting bid filled at or above its trigger");
             }
-            (AnyState::KobIfdBid(IfdBidState { armed: 1, ..s.clone() }).into_family(fam), "arm", 0)
+            (AnyState::KobIfdBid(IfdBidState { armed: 1, ..state.clone() }).into_family(family), "arm", 0)
         }
-        AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => {
-            if s.entry_stop <= 0 || s.armed != 0 {
+        AnyState::KobIfdAsk(state) | AnyState::KobIfdAskKron(state) => {
+            if state.entry_stop <= 0 || state.armed != 0 {
                 return invalid("only an unarmed stop entry can be armed");
             }
-            arm_entry_rules(s.amount_left, s.entry_stop < s.price)?;
-            check(s.min_touch, s.min_rest_daa, s.active_from, s.token_cov_id, s.scale)?;
-            if e.side != SIDE_ASK || e.price > s.entry_stop {
+            arm_entry_rules(state.amount_left, state.entry_stop < state.price)?;
+            check(state.min_touch, state.min_rest_daa, state.active_from, state.token_cov_id, state.scale)?;
+            if touch.side != SIDE_ASK || touch.price > state.entry_stop {
                 return invalid("a sell-stop entry is armed by a resting ask filled at or below its trigger");
             }
-            (AnyState::KobIfdAsk(IfdAskState { armed: 1, ..s.clone() }).into_family(fam), "arm", 0)
+            (AnyState::KobIfdAsk(IfdAskState { armed: 1, ..state.clone() }).into_family(family), "arm", 0)
         }
         _ => return invalid("only conditional orders and stop entries are updated"),
     };
-    let max_take = match (&o.state, &next) {
+    let max_take = match (&order.state, &next) {
         // A buy stop's tip never comes out of what buying its amount needs (KobCondBid.update).
-        (AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s), AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x)) => {
-            need(s.keeper_take(o.utxo.amount.min(i64::MAX as u64) as i64, x.stop_price), "the keeper's take of a conditional bid")?
+        (AnyState::KobCondBid(state) | AnyState::KobCondBidKron(state), AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x)) => {
+            need(
+                state.keeper_take(order.utxo.amount.min(i64::MAX as u64) as i64, x.stop_price),
+                "the keeper's take of a conditional bid",
+            )?
         }
-        _ => o.state.keeper_tip().expect("updatable kind"),
+        _ => order.state.keeper_tip().expect("updatable kind"),
     };
     let take = u.take.unwrap_or(max_take);
     if !(0..=max_take).contains(&take) {
         return invalid(format!("a keeper takes at most {max_take} (keeperTip, and of a conditional bid what its buy does not need)"));
     }
-    let id = o.state.template_id();
+    let id = order.state.template_id();
     // KobIfdBid.update(ev) reads a bid only; the others take (ev, tk).
     let args = if id.base() == TemplateId::KobIfdBid { vec![Arg::Int(ev_arg)] } else { vec![Arg::Int(ev_arg), Arg::Int(tk_arg)] };
     let role = format!("{}.update.{what}@{}", id.name(), tok.1.name());
-    Ok((entry(id, o.state.encode(), "update", args), role, sequence, next, take))
+    Ok((entry(id, order.state.encode(), "update", args), role, sequence, next, take))
 }
 
 // ---------------------------------------------------------------- two-token routes
