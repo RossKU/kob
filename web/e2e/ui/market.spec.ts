@@ -282,8 +282,9 @@ test.describe('wallet', () => {
     const addr = appPage.getByTestId(TESTID.walletAddress);
     await expect(addr).toBeVisible();
     await expect(addr).toHaveAttribute('data-value', TEST_KEYS.alice.testnetAddress);
-    // the chip's text is the address as a wallet address reads, network prefix included, its middle shortened; the full address is its value
-    await expect(addr).toContainText(/^kaspatest:q\w{5}…\w{6}/);
+    // the chip's text is the address with its network prefix and the start of its body, then an ellipsis (never cut in the middle); the full
+    // address is its value
+    await expect(addr).toContainText(/^kaspatest:q\w{11}…$/);
     await expect(addr).not.toHaveText(TEST_KEYS.alice.testnetAddress); // shortened
     // the wallet's name is no label of the address: it is the wallet icon's tooltip
     await expect(appPage.getByTestId('wallet-connected')).not.toContainText('KasWare');

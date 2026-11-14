@@ -91,9 +91,9 @@ describe('payment notifications name the amount and the unit like the portfolio 
 
   it('an unnamed token: its short id, in whole tokens where its decimals are known, else the raw amount', () => {
     const none = { byCovenantId: new Map() };
-    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 2,663,250,640 55aac2…07bf at your address.');
+    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 2,663,250,640 55aa…07bf at your address.');
     noteMarketDecimals('testnet-10', id, 8);
-    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 26.6325 55aac2…07bf at your address.');
+    expect(describeEvent(ev({ token: id, params: { amount: '2663250640' } }), none, fiat, 'testnet-10').body).toBe('Received 26.6325 55aa…07bf at your address.');
   });
 
   it('KAS without USD, and with USD after the KAS amount', () => {

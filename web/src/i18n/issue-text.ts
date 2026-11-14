@@ -159,7 +159,8 @@ const toBig = (v: string | number | bigint): bigint | null => {
 
 const HEX64 = /^[0-9a-f]{64}$/i;
 const OUTPOINT = /^([0-9a-f]{64}):(\d+)$/i;
-const shortHex = (s: string): string => `${s.slice(0, 4)}…${s.slice(-4)}`;
+// an id in a sentence: its start, then an ellipsis (never cut in the middle)
+const shortHex = (s: string): string => `${s.slice(0, 8)}…`;
 
 function formatToken(b: bigint, ctx: IssueTextContext, token: string | null = null): string {
   if (ctx.tokenDecimals === undefined) return tokenAmountText(token, b);

@@ -424,7 +424,7 @@ function TrackerSettings() {
           ) : (
             list.map((x) => (
               <tr key={`${x.transactionId}:${x.index}`} data-testid="tracker-row">
-                <td><CopyText value={`${x.transactionId}:${x.index}`} head={8} tail={8} /></td>
+                <td><CopyText value={`${x.transactionId}:${x.index}`} chars={16} /></td>
                 <td class="right"><TrackedAmount utxo={x} /></td>
                 <td class="right">
                   <Button small variant="danger" onClick={() => (tracker.remove(pubkey, x.transactionId, x.index), setRev((n) => n + 1))}>{t('settings.tracker.remove')}</Button>

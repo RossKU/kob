@@ -98,7 +98,7 @@ function InvoiceWatch() {
         <ul class="notify-invoices">
           {n.invoices.map((w) => (
             <li key={w.id} class="row" data-testid="notify-invoice-item">
-              <span>{t('notify.invoice.item', { id: w.reference || shortId(w.id, 6, 4), status: w.status ? t(`notify.status.${w.status}`) : t('notify.invoice.unknownStatus') })}</span>
+              <span>{t('notify.invoice.item', { id: w.reference || shortId(w.id, 10), status: w.status ? t(`notify.status.${w.status}`) : t('notify.invoice.unknownStatus') })}</span>
               <Button small variant="ghost" onClick={() => n.removeInvoice(w.id)} data-testid="notify-invoice-remove">{t('notify.invoice.remove')}</Button>
             </li>
           ))}

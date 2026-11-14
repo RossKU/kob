@@ -157,7 +157,7 @@ export function RecoverPanel(props: RecoverPanelProps) {
                 const s = summary(resolved);
                 return (
                   <tr key={record.covenantId} data-testid="rescan-row" data-status={s.key}>
-                    <td><CopyText value={record.covenantId} head={8} tail={6} /></td>
+                    <td><CopyText value={record.covenantId} chars={14} /></td>
                     <td>{record.kind}</td>
                     <td>
                       <Badge tone={s.tone}>{t(`orders.recover.status.${s.key}`)}</Badge>

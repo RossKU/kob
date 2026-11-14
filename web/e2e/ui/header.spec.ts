@@ -299,7 +299,7 @@ test.describe('phone', () => {
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
     await expect(page.getByTestId('wallet-choose').getByRole('button')).toHaveText(['Connect KasWare', 'Private key']);
     await page.getByTestId('wallet-connect-kasware').click();
-    await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
+    await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{7}…$/);
     await expect(page.getByTestId('wallet-sheet')).toHaveCount(0);
     // the runner's fonts are wider still than Verdana: a little more letter spacing stands for them
     await page.addStyleTag({ content: '.header * { letter-spacing: 0.5px; }' });

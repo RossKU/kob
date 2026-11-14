@@ -841,7 +841,7 @@ export function IssueView() {
                   <ul class="issue-holder-list">
                     {summary.holders.map((h) => (
                       <li key={h.index} class="wrap-anywhere">
-                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : shortId(h.owner, 8, 6), amount: `${h.human} ${summary.ticker}` })}
+                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : shortId(h.owner, 14), amount: `${h.human} ${summary.ticker}` })}
                       </li>
                     ))}
                   </ul>

@@ -2,20 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeShort, formatRowTimeShortUnix, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
 
 describe('kit format', () => {
-  it('shortens ids without touching short strings', () => {
+  it('shortens ids from their start, never in the middle, without touching short strings', () => {
     const id = 'abcd' + '0'.repeat(56) + '1234';
-    expect(shortId(id)).toBe('abcd…1234');
-    expect(shortId(id, 6, 6)).toBe('abcd00…001234');
+    expect(shortId(id)).toBe('abcd0000…');
+    expect(shortId(id, 12)).toBe('abcd00000000…');
     expect(shortId('abc')).toBe('abc');
-    expect(shortId('123456789')).toBe('123456789'); // 9 chars: nothing to hide with 4 + 4
+    expect(shortId('123456789')).toBe('123456789'); // 9 chars: nothing to hide with 8 + the ellipsis
   });
 
-  it('keeps the network prefix of an address', () => {
+  it('keeps the network prefix of an address and ends it with an ellipsis', () => {
     const a = 'kaspatest:qqabcdefghijklmnopqrstuvwxyz0123456789abcdefghijklmnop';
-    const s = shortAddress(a);
-    expect(s.startsWith('kaspatest:qqabcd')).toBe(true);
-    expect(s.endsWith(a.slice(-6))).toBe(true);
-    expect(s).toContain('…');
+    expect(shortAddress(a)).toBe('kaspatest:qqabcdefghij…');
     expect(shortAddress('kaspa:qq')).toBe('kaspa:qq');
   });
 

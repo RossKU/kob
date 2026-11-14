@@ -58,7 +58,7 @@ export function StraysPanel(props: {
                   {tokenLabel(shown(s.token))}
                 </td>
                 <td class="right"><Amount kind="token" value={amount} decimals={shown(s.token).decimals} unit={false} fraction={qtyFraction} group /></td>
-                <td><CopyText value={s.owner} head={8} tail={6} /></td>
+                <td><CopyText value={s.owner} chars={14} /></td>
                 <td>
                   {s.lost ? (
                     <Badge tone="bad" title={t('orders.strays.lostHint')}>{t('orders.strays.lost')}</Badge>

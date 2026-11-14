@@ -485,7 +485,8 @@ export interface DecodeInput {
 const P2PK_RE = /^0000 ?20([0-9a-f]{64})ac$/;
 const P2SH_RE = /^0000aa20([0-9a-f]{64})87$/;
 const p2pkSpk = (pk: Hex): string => `000020${pk}ac`;
-const shortId = (h: string): string => `${h.slice(0, 4)}…${h.slice(-4)}`;
+// a key or transaction id in a finding: its start, then an ellipsis (never cut in the middle)
+const shortId = (h: string): string => (h.length > 9 ? `${h.slice(0, 8)}…` : h);
 
 /** Payment key of a plain P2PK script public key (kaspa string form), null for anything else. */
 export const p2pkOwner = (spk: string): Hex | null => P2PK_RE.exec(spk)?.[1] ?? null;

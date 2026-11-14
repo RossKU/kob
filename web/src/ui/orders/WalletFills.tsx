@@ -214,7 +214,7 @@ function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) 
           compact
           flow
           items={[
-            { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} /> },
+            { label: t('orders.orderId'), value: <CopyText value={row.id} chars={14} /> },
             { label: t('orders.fills.tx'), value: <CopyText value={fill.txid} ellipsis href={href} /> },
             { label: t('orders.fills.time'), value: f.time },
             { label: t(props.fiat ? 'orders.col.valueUsd' : 'orders.col.valueKas'), value: <MoneyCell kas={f.valueKas} /> },

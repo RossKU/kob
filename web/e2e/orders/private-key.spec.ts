@@ -8,10 +8,10 @@ import { chooseOption } from '../helpers/dropdown';
 import { runFlow } from '../helpers/orders';
 import { clickPlace, confirmReceipt, expectStopped, fillFields, pickType, placedBy, readReceipt, readSignerFrame, waitReviewable, waitSubmitted, type ReceiptRead } from '../helpers/ticket';
 import { formatKas } from '../../src/kob/units';
-/** the header chip shows the address with its network prefix, the head and tail of its body (WalletButton.tsx chipAddress) */
+/** the header chip shows the address with its network prefix and the start of its body, then an ellipsis (WalletButton.tsx chipAddress) */
 const chipAddress = (a: string): string => {
   const body = a.slice(a.indexOf(':') + 1);
-  return `${a.slice(0, a.indexOf(':') + 1)}${body.slice(0, 6)}…${body.slice(-6)}`;
+  return `${a.slice(0, a.indexOf(':') + 1)}${body.slice(0, 12)}…`;
 };
 
 test.use({ walletId: null, autoOpen: false });

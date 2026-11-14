@@ -273,7 +273,7 @@ export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, wal
   return token.outputs.map((o) => ({
     index: o.index,
     owner: o.owner,
-    ownerShort: shortId(o.owner, 8, 6),
+    ownerShort: shortId(o.owner, 14),
     ownerScheme: o.ownerScheme,
     amount: BigInt(o.amount),
     human: humanAmount(o.amount, token.decimals),

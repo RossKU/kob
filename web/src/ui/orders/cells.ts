@@ -3,7 +3,7 @@
 //  - a price column: ONE number of decimals for the whole column (from the finest price in it, `priceDpOf`), so the decimal points line up; the exact price in the title
 //  - a token without a name of its own: its short id (`8347…cd64`) in the muted unit slot, never the long hex as a unit
 import { formatUnits, statePriceToTokenPrice } from '../../kob/units';
-import { longId } from '../../kob/registry';
+import { longId, shortId as covenantFragment } from '../../kob/registry';
 import { columnPriceDp, formatRowTime, shortId } from '../kit/format';
 
 /** Most fraction digits an amount shows in a table or a strip; the title carries the rest. */
@@ -27,7 +27,7 @@ export function amountCell(value: bigint, decimals: number): AmountText {
 /** True where a token's `ticker` is only its covenant id's fragment (a token nobody named: app/token-display.ts shows it as 8 + 8 hex). */
 export function isUnnamed(ticker: string | undefined | null, covenantId: string | null | undefined): boolean {
   if (!covenantId) return !ticker;
-  return !ticker || ticker === longId(covenantId) || ticker === shortId(covenantId) || ticker === covenantId;
+  return !ticker || ticker === longId(covenantId) || ticker === covenantFragment(covenantId) || ticker === shortId(covenantId) || ticker === covenantId;
 }
 
 export interface UnitText {
@@ -38,7 +38,7 @@ export interface UnitText {
 
 /** The unit of a token's amount in a table: its ticker; without one, the short id of its covenant id (`8347…cd64`, the full id as the title). */
 export function tokenUnit(ticker: string | undefined | null, covenantId: string | null | undefined): UnitText {
-  if (isUnnamed(ticker, covenantId)) return covenantId ? { text: shortId(covenantId), title: covenantId } : { text: '', title: undefined };
+  if (isUnnamed(ticker, covenantId)) return covenantId ? { text: covenantFragment(covenantId), title: covenantId } : { text: '', title: undefined };
   return { text: ticker as string, title: undefined };
 }
 

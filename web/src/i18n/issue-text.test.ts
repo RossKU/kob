@@ -65,9 +65,9 @@ describe('issueText: parameter formatting', () => {
 
   it('shortens 64-hex ids and outpoints, and stringifies everything else', () => {
     const t = issueText(issue('SELF_TRADE', { ownCovenantId: COV, ownPrice: 250_000_000n }), {});
-    expect(t).toContain('7070…7070');
+    expect(t).toContain('70707070…');
     expect(t).not.toContain(COV);
-    expect(issueText(issue('cancel.stray-other-extension', { outpoint: `${COV}:2`, amount: 5n }), { tokenDecimals: 0 })).toContain('7070…7070:2');
+    expect(issueText(issue('cancel.stray-other-extension', { outpoint: `${COV}:2`, amount: 5n }), { tokenDecimals: 0 })).toContain('70707070…:2');
     expect(issueText(issue('DAY_ORDER_ENDS_SOON', { minutes: 4 }), {})).toBe('This day order ends by 00:00 UTC, within 4 minutes.');
   });
 });
@@ -92,7 +92,7 @@ describe('issueText: context merged into the params', () => {
   });
 
   it('builds {where} from the index of the finding (order-not-maker can be about an input or an output)', () => {
-    expect(issueText(issue('order-not-maker', { maker: OTHER.pk }, { input: 0 }), {})).toMatch(/^Input 0: The order belongs to another key \([0-9a-f]{4}…[0-9a-f]{4}\)/);
+    expect(issueText(issue('order-not-maker', { maker: OTHER.pk }, { input: 0 }), {})).toMatch(/^Input 0: The order belongs to another key \([0-9a-f]{8}…\)/);
     expect(issueText(issue('order-not-maker', { maker: OTHER.pk }), {})).toMatch(/^The order belongs/);
   });
 
@@ -252,7 +252,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
     const s = decode(tampered('create.ask', (x) => { x.tx.outputs[3].scriptPublicKey = `000020${OTHER.pk}ac`; }));
     const pay = s.blocking.find((b) => b.code === 'payment-out')!;
     const en = issueText(pay, {});
-    expect(en).toMatch(/^Output 3: [\d.]+ KAS would be PAID to another key \([0-9a-f]{4}…[0-9a-f]{4}\)\.$/);
+    expect(en).toMatch(/^Output 3: [\d.]+ KAS would be PAID to another key \([0-9a-f]{8}…\)\.$/);
   });
 
   it('renders a hand-made finding for every SIGNING_ISSUE_CODE with realistic params', () => {

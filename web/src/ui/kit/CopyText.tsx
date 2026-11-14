@@ -9,8 +9,8 @@ export interface CopyTextProps {
   short?: boolean;
   /** shown text override (e.g. a shortened address that keeps its network prefix) */
   text?: string;
-  head?: number;
-  tail?: number;
+  /** how many leading characters the shortened text shows before its ellipsis (default 12) */
+  chars?: number;
   /** when set, the shown text is a link to this URL, opened in a new tab (the transaction on the block explorer) */
   href?: string | null;
   /** the whole text, ending with an ellipsis (CSS) where there is no room for it, never shortened in the middle (a transaction id in a list or its details); the title has it whole */
@@ -51,12 +51,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/** Shortened id / address with a copy button. The full value is in `title` and in `data-value` (for tests). */
+/** Id / address shortened from its start (never in the middle) with a copy button. The full value is in `title` and in `data-value` (for tests). */
 export function CopyText(props: CopyTextProps) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => void (timer.current && clearTimeout(timer.current)), []);
-  const shown = props.text ?? (props.short === false || props.ellipsis ? props.value : shortId(props.value, props.head ?? 6, props.tail ?? 6));
+  const shown = props.text ?? (props.short === false || props.ellipsis ? props.value : shortId(props.value, props.chars ?? 12));
   const onCopy = async () => {
     const ok = await copyToClipboard(props.value);
     setState(ok ? 'copied' : 'failed');

@@ -7,19 +7,20 @@ import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { Badge, Button, Modal } from '../kit';
 import { copyToClipboard } from '../kit/CopyText';
+import { shortAddress, shortId } from '../kit/format';
 import { Popover } from './Popover';
 import { installable } from './wallet-model';
 import { isPhoneBrowser } from './platform';
 import { useNarrow } from './narrow';
 
-/** The address in the chip as a wallet address reads: its network prefix, then the head and tail of the body ("kaspatest:qq776p…wutfav"). */
+/**
+ * The address in the chip: its network prefix, then the start of the body and an ellipsis ("kaspatest:qq776pwutf…"), never cut in the
+ * middle. A phone shows the start of the body alone ("qq776pwu…"); the network is the chip's word.
+ */
 export const chipAddress = (address: string, narrow = false): string => {
   const colon = address.indexOf(':');
-  const prefix = colon >= 0 ? address.slice(0, colon + 1) : '';
   const body = address.slice(colon + 1);
-  // a phone: the head and the tail of the body alone ("qq77…tfav"), the network is the chip's word
-  if (narrow) return body.length <= 10 ? body : `${body.slice(0, 4)}…${body.slice(-4)}`;
-  return body.length <= 14 ? address : `${prefix}${body.slice(0, 6)}…${body.slice(-6)}`;
+  return narrow ? shortId(body, 8) : shortAddress(address, 12);
 };
 
 /** How the wallet is connected, for the chip's wallet icon (never a label of the address: "Private key" next to it reads as a key). */

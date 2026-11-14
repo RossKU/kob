@@ -2,20 +2,22 @@
 // delegates to kob/units.ts, which does exact integer arithmetic.
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10, SOMPI_PER_KAS } from '../../kob/units';
 
-/** `abcdef...123456` -> `abcd...3456` (head/tail characters). Strings that are already short come back unchanged. */
-export function shortId(id: string, head = 4, tail = 4): string {
+/**
+ * An id shortened from its start: its first `chars` characters, then an ellipsis
+ * (`753894e5…`). Transaction ids and wallet addresses are never cut in the middle (founder rule).
+ */
+export function shortId(id: string, chars = 8): string {
   const s = String(id);
-  if (s.length <= head + tail + 1) return s;
-  return `${s.slice(0, head)}…${s.slice(-tail)}`;
+  if (s.length <= chars + 1) return s;
+  return `${s.slice(0, chars)}…`;
 }
 
-/** Address form: keeps the network prefix visible (`kaspa:qq...xyz`). */
-export function shortAddress(address: string, tail = 6): string {
+/** Address form: the network prefix and the start of the body, then an ellipsis (`kaspa:qq776pwutf…`). */
+export function shortAddress(address: string, chars = 12): string {
   const i = address.indexOf(':');
-  if (i < 0) return shortId(address, 6, tail);
+  if (i < 0) return shortId(address, chars);
   const prefix = address.slice(0, i + 1);
-  const body = address.slice(i + 1);
-  return body.length <= 8 + tail ? address : `${prefix}${body.slice(0, 6)}…${body.slice(-tail)}`;
+  return `${prefix}${shortId(address.slice(i + 1), chars)}`;
 }
 
 /** KAS text of a sompi amount: up to 8 decimals, trailing zeros trimmed. */

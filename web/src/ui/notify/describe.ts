@@ -9,6 +9,7 @@ import { pow10 } from '../../kob/units';
 import type { NotificationEvent } from '../../kob/notifications';
 import type { TokenRegistry } from '../../kob/registry';
 import { kasText, pricePerTokenText, scaleOfDecimals, shortId, tokenText } from '../kit/format';
+import { shortId as covenantFragment } from '../../kob/registry';
 
 /** `what` of a `reorg` event: the kinds of change a chain re-organisation can make to an own order (each has a `notify.ev.reorg.<what>.body`). */
 export const REORG_WHATS = ['fill', 'cancelled', 'refunded', 'killed', 'gone'] as const;
@@ -26,7 +27,7 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
   const info = e.token ? displayToken(registry ?? NO_REGISTRY, network, e.token) : undefined;
   // displayToken names an unnamed token by its long id: a notification says it short
   const named = !!info && !isUnnamed(info.ticker, e.token);
-  const token = named ? info.ticker : e.token ? shortId(e.token, 6, 4) : '?';
+  const token = named ? info.ticker : e.token ? covenantFragment(e.token) : '?';
   const side = e.side ? t(`notify.side.${e.side}`) : '';
   const p = e.params;
   // amounts are base units (decimal strings): shown in token units when the token is known
@@ -76,7 +77,7 @@ export function describeEvent(e: NotificationEvent, registry: Pick<TokenRegistry
   }
   if (e.kind === 'invoice') {
     const status = t(`notify.status.${String(p.status)}`);
-    params = { status, reference: p.reference ? String(p.reference) : shortId(String(p.invoice ?? ''), 6, 4) };
+    params = { status, reference: p.reference ? String(p.reference) : shortId(String(p.invoice ?? ''), 10) };
   }
   const href = e.kind === 'payment' && e.token ? routeToHash({ name: 'token', covenantId: e.token }) : e.kind === 'invoice' ? '#/settings' : '#/portfolio/open';
   return { title: t(`notify.ev.${e.kind}.title`, params), body: t(bodyKey, params), href };

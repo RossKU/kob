@@ -4,7 +4,8 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect } from 'preact/hooks';
 import { t } from '../i18n';
-import { shortId } from '../ui/kit/format';
+// a covenant id keeps the token fragment form (its head and tail bits identify the token)
+import { shortId } from '../kob/registry';
 
 // The network in force names itself in the tab: a testnet page is never mistaken for the real one. It is read at runtime (one bundle serves both networks),
 // so it applies on top of whatever the build wrote (head-meta.mjs may have prefixed a testnet build's static title: that prefix is replaced, not doubled).

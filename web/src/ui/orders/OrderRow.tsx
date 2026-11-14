@@ -510,7 +510,7 @@ export function OrderRow(props: OrderRowProps) {
             label: t('orders.placementTx'),
             value: row.placementTx ? <CopyText value={row.placementTx} ellipsis href={placementUrl} data-testid={`order-tx-${row.id}`} /> : '—',
           },
-          { label: t('orders.orderId'), value: <CopyText value={row.id} head={8} tail={6} data-testid={`order-id-${row.id}`} /> },
+          { label: t('orders.orderId'), value: <CopyText value={row.id} chars={14} data-testid={`order-id-${row.id}`} /> },
         ]}
       />
 
