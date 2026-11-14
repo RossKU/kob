@@ -275,7 +275,7 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   // how it is connected)
   await expect(header.getByText('testnet-10', { exact: true })).toHaveCount(1);
   await expect(page.getByTestId('wallet-network')).toHaveCount(0);
-  await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q\w{5}…\w{6}/);
+  await expect(page.getByTestId('wallet-address')).toContainText(/^kaspatest:q\w{11}…$/);
   await expect(page.getByTestId('wallet-kind')).toHaveAttribute('title', 'Connected with: KasWare');
   // the chip is one button; Copy, the explorer and Disconnect are in its menu
   await page.getByTestId('wallet-menu').click();
@@ -289,7 +289,7 @@ test('the header after connecting: one network badge, a compact wallet chip, sho
   // 375 px: still ONE row (the logo, the menu, the shortened network chip, the short address, the bell)
   await page.setViewportSize({ width: 375, height: 812 });
   await expect(page.getByTestId('wallet-address')).toBeVisible();
-  await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{3}…\w{4}$/);
+  await expect(page.getByTestId('wallet-address')).toContainText(/^q\w{7}…$/);
   await expect(page.getByTestId('network-badge')).toHaveText('tn10');
   const phone = await header.boundingBox();
   expect(phone!.height).toBeLessThan(60);
