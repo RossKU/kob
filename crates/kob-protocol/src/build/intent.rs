@@ -1059,8 +1059,10 @@ pub fn intent_budgets(role: &str) -> Result<u16> {
 /// cover, so that the fee of that build is close to the real fee. With the fallback budget the
 /// measuring build would cost about twenty times the real router input. It could then exceed a
 /// tight `max_extra`, which the router itself checks, although the exact build fits.
+#[cfg(feature = "engine")]
 const ROUTER_FILL_BUDGET_MEASURING: u16 = 64;
 
+#[cfg(feature = "engine")]
 fn measuring_budgets(role: &str) -> Result<u16> {
     match intent_budgets(role) {
         Ok(ROUTER_FILL_BUDGET_FALLBACK) if role.starts_with("router.") => Ok(ROUTER_FILL_BUDGET_MEASURING),
