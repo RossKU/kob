@@ -241,6 +241,19 @@ export function kascovEntry(row: TokenRow): ListEntry {
 }
 
 /**
+ * A token only the wallet's holdings name (`source: 'held'`, held-list.ts). The indexer lists no
+ * order of it, so nothing is fetched and every figure reads "—". It sorts after the rows with
+ * figures, as a row without orders does.
+ */
+export function heldEntry(row: TokenRow): ListEntry {
+  return {
+    key: row.covenantId, kind: 'token', name: tokenLabel(row).toLowerCase(), loading: false, unavailable: false, noOrders: true,
+    sort: { last: null, change: null, volume: null, mcap: null, spread: null, depth: null },
+    cells: { last: EMPTY, change: EMPTY, volume: EMPTY, mcap: EMPTY, spread: EMPTY, depth: EMPTY },
+  };
+}
+
+/**
  * A token's KAS market (TOKEN/KAS) from its `/v1/stats` slot; the open order counts of `/v1/tokens` (the depth tooltip) are there before the stats. With `fiat` (USD
  * display in force) the price, the 24 h volume, the market cap and the depth are shown in dollars (`usdCell`); the change and the spread are ratios and stay, and
  * the sort values stay KAS (the same order).
