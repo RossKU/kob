@@ -168,7 +168,7 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         ));
     }
     let change = r.change.unwrap_or(r.funding[0].pubkey);
-    let mut d = Draft::new(0, &r.fee, Some(change))?;
+    let mut draft = Draft::new(0, &r.fee, Some(change))?;
     let locked = locked_token(&r.state);
     let mut ext = None;
     if let Some(token) = locked {
@@ -183,18 +183,18 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
-            d.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
+            draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
     } else if !r.tokens.is_empty() {
         return invalid("a KasToToken intent locks KAS only");
     }
-    let auth = d.inputs.len();
+    let auth = draft.inputs.len();
     for f in &r.funding {
-        d.add_p2pk(f);
+        draft.add_p2pk(f);
     }
-    let at = d.reserve_output();
+    let at = draft.reserve_output();
     debug_assert_eq!(at, INTENT_OUTPUT as usize);
-    let id = d.fill_genesis(at, auth, r.value, spk, None)?;
+    let id = draft.fill_genesis(at, auth, r.value, spk, None)?;
     if let Some(token) = locked {
         let fam = token.1.family();
         let ext = ext.expect("token inputs");
@@ -221,12 +221,15 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         if have < r.lock_amount {
             return invalid(format!("token inputs hold {have} < the {} units to lock", r.lock_amount));
         }
-        let o =
-            d.add_token_output(token, TokenState::custody(fam, r.lock_amount, id, ext), pos(r.lock_carrier as i64, "lockCarrier")?)?;
+        let o = draft.add_token_output(
+            token,
+            TokenState::custody(fam, r.lock_amount, id, ext),
+            pos(r.lock_carrier as i64, "lockCarrier")?,
+        )?;
         debug_assert_eq!(o, LOCK_OUTPUT as usize);
         if have > r.lock_amount {
             let owner = r.tokens[0].state.owner();
-            d.add_token_output(
+            draft.add_token_output(
                 token,
                 TokenState::user(fam, have - r.lock_amount, owner, ext),
                 pos(r.token_change_carrier as i64, "tokenChangeCarrier")?,
@@ -234,9 +237,9 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode_with_release(&r.records)?;
+        draft.payload = payload::encode_with_release(&r.records)?;
     }
-    d.seal(budgets)
+    draft.seal(budgets)
 }
 
 // ------------------------------------------------------------------------------------------ cancel
@@ -271,11 +274,11 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
     let payer = r.state.payer();
     let to = r.to.unwrap_or(payer);
     check_key(&to, "cancel receiver")?;
-    let mut d = Draft::new(0, &r.fee, Some(to))?;
+    let mut draft = Draft::new(0, &r.fee, Some(to))?;
     let mut args = vec![Arg::Sig(payer)];
     args.extend(int_args(cancel_args(actor, &r.state)?)?);
     let plan = SigPlan::Router { actor: actor.name.into(), state: r.state.encode(actor)?, entry: "cancel".into(), args };
-    d.add_input(&r.intent, plan, router_role(actor, "cancel"), SEQUENCE_NONFINAL);
+    draft.add_input(&r.intent, plan, router_role(actor, "cancel"), SEQUENCE_NONFINAL);
     match (locked_token(&r.state), &r.lock) {
         (Some(token), Some(l)) => {
             check_token_input(l, token)?;
@@ -283,9 +286,9 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
                 return invalid("the locked token UTXO is not owned by this intent");
             }
             check_lock_pin(&r.state, l)?;
-            d.add_token_input(l, token, Witness::CovenantId)?;
+            draft.add_token_input(l, token, Witness::CovenantId)?;
             let back = TokenState::user(token.1.family(), l.state.amount(), to, l.state.extension());
-            d.add_token_output(token, back, l.utxo.amount)?;
+            draft.add_token_output(token, back, l.utxo.amount)?;
         }
         // The cancel ends the intent covenant, after which the locked tokens (owned by the intent
         // id) can never move.
@@ -293,7 +296,7 @@ pub fn build_cancel_intent(r: &CancelIntent, budgets: BudgetFn) -> Result<BuiltT
         (None, Some(_)) => return invalid("a KasToToken intent locks no tokens"),
         (None, None) => {}
     }
-    d.seal(budgets)
+    draft.seal(budgets)
 }
 
 // ------------------------------------------------------------------------------------------ expire
@@ -331,12 +334,12 @@ pub fn build_expire_intent(r: &ExpireIntent, budgets: BudgetFn) -> Result<BuiltT
     r.state.check()?;
     let id = r.intent.covenant_id.ok_or_else(|| Error::Invalid("the intent UTXO has no covenant id".into()))?;
     let payer = r.state.payer();
-    let mut d = Draft::new(r.state.deadline() as u64, &r.fee, Some(payer))?;
-    let j = d.reserve_output();
+    let mut draft = Draft::new(r.state.deadline() as u64, &r.fee, Some(payer))?;
+    let j = draft.reserve_output();
     let args = int_args(expire_args(actor, &r.state)?)?;
     let plan = SigPlan::Router { actor: actor.name.into(), state: r.state.encode(actor)?, entry: "expire".into(), args };
-    let me = d.add_input(&r.intent, plan, router_role(actor, "expire"), SEQUENCE_NONFINAL);
-    debug_assert_eq!((me, j), (0, 0));
+    let intent_input = draft.add_input(&r.intent, plan, router_role(actor, "expire"), SEQUENCE_NONFINAL);
+    debug_assert_eq!((intent_input, j), (0, 0));
     match (locked_token(&r.state), &r.lock) {
         (Some(token), Some(l)) => {
             check_token_input(l, token)?;
@@ -344,15 +347,15 @@ pub fn build_expire_intent(r: &ExpireIntent, budgets: BudgetFn) -> Result<BuiltT
                 return invalid("the locked token UTXO is not owned by this intent");
             }
             check_lock_pin(&r.state, l)?;
-            d.add_token_input(l, token, Witness::CovenantId)?;
+            draft.add_token_input(l, token, Witness::CovenantId)?;
             let back = TokenState::user(token.1.family(), l.state.amount(), payer, l.state.extension());
-            d.add_token_output(token, back, l.utxo.amount)?;
+            draft.add_token_output(token, back, l.utxo.amount)?;
         }
         (Some(_), None) => return invalid("a token intent's expiry returns its locked tokens"),
         (None, Some(_)) => return invalid("a KasToToken intent locks no tokens"),
         (None, None) => {}
     }
-    let built = d.seal(budgets)?;
+    let built = draft.seal(budgets)?;
     if built.fee.change_output != Some(0) {
         return invalid("the intent's KAS does not cover the expiry's fee (the payer's output 0 is missing)");
     }
@@ -460,44 +463,44 @@ struct AskPlan {
     rests: bool,
 }
 
-fn plan_ask(a: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
-    let s = &a.order.state;
-    let cov = a.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("ask UTXO has no covenant id".into()))?;
-    if s.token_cov_id != token.0 {
+fn plan_ask(ask: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
+    let state = &ask.order.state;
+    let cov = ask.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("ask UTXO has no covenant id".into()))?;
+    if state.token_cov_id != token.0 {
         return invalid("an ask of another token");
     }
-    let p = super::token_program(&s.token_tpl_hash, s.tpl_prefix_len, s.tpl_suffix_len)?;
-    if p != token.1 {
-        return invalid(format!("an ask of the {} program; the intent buys {} tokens", p.name(), token.1.name()));
+    let program = super::token_program(&state.token_tpl_hash, state.tpl_prefix_len, state.tpl_suffix_len)?;
+    if program != token.1 {
+        return invalid(format!("an ask of the {} program; the intent buys {} tokens", program.name(), token.1.name()));
     }
-    check_custody(&a.custody, Some(cov), token, s.custody_amount())?;
-    check_custody_ext(&a.custody, s.extension_commitment)?;
-    if s.slope != 0 || s.interval != 0 {
+    check_custody(&ask.custody, Some(cov), token, state.custody_amount())?;
+    check_custody_ext(&ask.custody, state.extension_commitment)?;
+    if state.slope != 0 || state.interval != 0 {
         return invalid("intent executions take plain asks only (no auction, no TWAP)");
     }
-    if lock < s.active_from {
+    if lock < state.active_from {
         return invalid("ask not active yet");
     }
-    let n = a.amount;
+    let n = ask.amount;
     pos(n, "ask amount")?;
-    if !s.fill_ok(n) {
+    if !state.fill_ok(n) {
         return invalid(format!("an ask fill of {n} base units: n <= amountLeft, the minimum fill, maxFill"));
     }
-    let all_in = super::need(s.proceeds(n, 0, a.order.utxo.block_daa_score as i64), "ask proceeds")?;
-    let quote = super::need(quote_of(n, s.price, s.scale, Round::Up), "ask quote")?;
-    let rest = s.amount_left - n;
+    let all_in = super::need(state.proceeds(n, 0, ask.order.utxo.block_daa_score as i64), "ask proceeds")?;
+    let quote = super::need(quote_of(n, state.price, state.scale, Round::Up), "ask quote")?;
+    let rest = state.amount_left - n;
     let rests = rest > 0;
-    if rests && s.tif != TIF_GTC {
+    if rests && state.tif != TIF_GTC {
         return invalid("only a GTC ask can rest; an IOC / FOK ask in an intent is sold out");
     }
     let (payout, rest_out) = if rests {
-        let next = AskState { amount_left: rest, ..s.clone() };
+        let next = AskState { amount_left: rest, ..state.clone() };
         (
             pos(all_in, "ask payout")?,
-            Some((a.custody.utxo.amount, a.custody.state.with_amount(rest), a.order.utxo.amount, next.spk_for(Family::Kcc20))),
+            Some((ask.custody.utxo.amount, ask.custody.state.with_amount(rest), ask.order.utxo.amount, next.spk_for(Family::Kcc20))),
         )
     } else {
-        (pos(all_in + a.order.utxo.amount as i64 + a.custody.utxo.amount as i64, "ask payout")?, None)
+        (pos(all_in + ask.order.utxo.amount as i64 + ask.custody.utxo.amount as i64, "ask payout")?, None)
     };
     Ok(AskPlan { payout, rest: rest_out, take: n, quote, all_in, rests })
 }
@@ -516,49 +519,49 @@ struct BidPlan {
     state: TokenState,
 }
 
-fn plan_bid(b: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
-    let s = &b.order.state;
-    if s.token_cov_id != token.0 {
+fn plan_bid(bid: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
+    let state = &bid.order.state;
+    if state.token_cov_id != token.0 {
         return invalid("a bid of another token");
     }
-    let p = super::token_program(&s.token_tpl_hash, s.tpl_prefix_len, s.tpl_suffix_len)?;
-    if p != token.1 {
-        return invalid(format!("a bid of the {} program; the intent sells {} tokens", p.name(), token.1.name()));
+    let program = super::token_program(&state.token_tpl_hash, state.tpl_prefix_len, state.tpl_suffix_len)?;
+    if program != token.1 {
+        return invalid(format!("a bid of the {} program; the intent sells {} tokens", program.name(), token.1.name()));
     }
-    let fam = p.family();
-    if fam == Family::Kron && s.extension_commitment != [0; 32] {
+    let fam = program.family();
+    if fam == Family::Kron && state.extension_commitment != [0; 32] {
         return invalid("a KRON bid has no extension commitment");
     }
-    if s.slope != 0 || s.interval != 0 {
+    if state.slope != 0 || state.interval != 0 {
         return invalid("intent executions take plain bids only (no rising price, no DCA)");
     }
-    if lock < s.active_from {
+    if lock < state.active_from {
         return invalid("bid not active yet");
     }
-    let n = b.amount;
+    let n = bid.amount;
     pos(n, "bid amount")?;
-    let v = b.order.utxo.amount as i64;
-    if !s.fill_ok(n, v) {
+    let order_value = bid.order.utxo.amount as i64;
+    if !state.fill_ok(n, order_value) {
         return invalid(format!("a bid fill of {n} base units: maxFill, the budget, the minimum fill"));
     }
-    let used = super::need(s.used(n), "bid budget")?;
-    let all_in = super::need(s.spend(n, 0, b.order.utxo.block_daa_score as i64), "bid spend")?;
-    let left = v - used;
-    let can_continue = s.can_continue(left);
-    let rests = s.tif == TIF_GTC && can_continue;
-    if s.tif == TIF_FOK && can_continue {
+    let used = super::need(state.used(n), "bid budget")?;
+    let all_in = super::need(state.spend(n, 0, bid.order.utxo.block_daa_score as i64), "bid spend")?;
+    let left = order_value - used;
+    let can_continue = state.can_continue(left);
+    let rests = state.tif == TIF_GTC && can_continue;
+    if state.tif == TIF_FOK && can_continue {
         return invalid("a FOK bid must be filled completely");
     }
     let mut refund = None;
     let (delivery, cont) = if rests {
-        (s.delivery_carrier + used - all_in, Some((pos(left - s.delivery_carrier, "bid continuation")?, s.spk_for(fam))))
+        (state.delivery_carrier + used - all_in, Some((pos(left - state.delivery_carrier, "bid continuation")?, state.spk_for(fam))))
     } else {
-        let rem = v - all_in - s.delivery_carrier;
+        let rem = order_value - all_in - state.delivery_carrier;
         if rem >= crate::tx::REFUND_MIN as i64 {
             refund = Some(rem as u64);
-            (s.delivery_carrier, None)
+            (state.delivery_carrier, None)
         } else {
-            (v - all_in, None)
+            (order_value - all_in, None)
         }
     };
     Ok(BidPlan {
@@ -568,17 +571,17 @@ fn plan_bid(b: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
         sold: n,
         all_in,
         rests,
-        state: TokenState::user(fam, n, s.maker, s.extension_commitment),
+        state: TokenState::user(fam, n, state.maker, state.extension_commitment),
     })
 }
 
 fn check_shape(actor: &Actor, asks: &[AskPlan], bids: &[BidPlan]) -> Result<()> {
-    let s = actor.shape;
-    if asks.len() != s.asks || bids.len() != s.bids {
-        return invalid(format!("{} fills {} asks and {} bids", actor.name, s.asks, s.bids));
+    let shape = actor.shape;
+    if asks.len() != shape.asks || bids.len() != shape.bids {
+        return invalid(format!("{} fills {} asks and {} bids", actor.name, shape.asks, shape.bids));
     }
     for (i, a) in asks.iter().enumerate() {
-        let want = i + 1 == asks.len() && s.last_ask_rests;
+        let want = i + 1 == asks.len() && shape.last_ask_rests;
         if a.rests != want {
             return invalid(format!(
                 "{}: ask {} must {}",
@@ -589,7 +592,7 @@ fn check_shape(actor: &Actor, asks: &[AskPlan], bids: &[BidPlan]) -> Result<()> 
         }
     }
     for (i, b) in bids.iter().enumerate() {
-        let want = i + 1 == bids.len() && s.last_bid_rests;
+        let want = i + 1 == bids.len() && shape.last_bid_rests;
         if b.rests != want {
             return invalid(format!(
                 "{}: bid {} must {}",
@@ -698,20 +701,20 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         }
     }
     let lock_tok = match (tok_a, &r.lock) {
-        (Some(t), Some(l)) => {
-            check_token_input(l, t)?;
-            if l.state.owner() != id || !l.state.is_covenant_owned() {
+        (Some(t), Some(lock_token)) => {
+            check_token_input(lock_token, t)?;
+            if lock_token.state.owner() != id || !lock_token.state.is_covenant_owned() {
                 return invalid("the locked token UTXO is not owned by this intent");
             }
-            check_lock_pin(&r.state, l)?;
-            if l.state.amount() < facts.sold {
-                return invalid(format!("the intent locks {} units, the execution sells {}", l.state.amount(), facts.sold));
+            check_lock_pin(&r.state, lock_token)?;
+            if lock_token.state.amount() < facts.sold {
+                return invalid(format!("the intent locks {} units, the execution sells {}", lock_token.state.amount(), facts.sold));
             }
             // A KRON output holds at least one unit, so the payer's change must not be empty.
-            if fam_a == Family::Kron && l.state.amount() == facts.sold {
+            if fam_a == Family::Kron && lock_token.state.amount() == facts.sold {
                 return invalid("a KRON execution leaves the payer at least one unit (the token program refuses an empty output)");
             }
-            Some(l)
+            Some(lock_token)
         }
         (Some(_), None) => return invalid("a token intent's execution spends its locked tokens"),
         (None, Some(_)) => return invalid("a KasToToken intent locks no tokens"),
@@ -721,7 +724,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     // For KasToToken the change is the payer's and goes to the reserved slot j. For token intents
     // it is the keeper's and comes last.
     let change = if kind == IntentKind::KasToToken { payer } else { r.keeper };
-    let mut d = Draft::new(r.lock_time, &r.fee, Some(change))?;
+    let mut draft = Draft::new(r.lock_time, &r.fee, Some(change))?;
     let ka = r.asks.len();
     let kb = r.bids.len();
     let a0 = kb + ka; // first token input
@@ -735,7 +738,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         let s = &b.order.state;
         let first_tok = kb + ka; // token A (the locked UTXO) follows the order inputs
         let role = format!("{}.fill.{}@{prog_a}", bid_kind.name(), if bids[i].rests { "cont" } else { "close" });
-        d.add_input(
+        draft.add_input(
             &b.order.utxo,
             order_entry(bid_kind, s.encode_for(fam_a), "fill", vec![nb(b.amount), Arg::Int(first_tok as i64), Arg::Int(0)]),
             role,
@@ -747,7 +750,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         let role = format!("KobAsk.settle.{}@{prog_b}", if asks[m].rests { "rest" } else { "close" });
         // tokOut is the custody rest, the first output after the positional and payout slots. It is
         // patched below.
-        d.add_input(
+        draft.add_input(
             &a.order.utxo,
             order_entry(
                 TemplateId::KobAsk,
@@ -760,11 +763,11 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         );
     }
     // Token inputs: the locked token A (token intents), then the custodies of B.
-    if let Some(l) = lock_tok {
-        d.add_token_input(l, tok_a.expect("token intent"), Witness::CovenantId)?;
+    if let Some(lock_token) = lock_tok {
+        draft.add_token_input(lock_token, tok_a.expect("token intent"), Witness::CovenantId)?;
     }
     for a in &r.asks {
-        d.add_token_input(&a.custody, tok_b.expect("ask legs buy the merchant token"), Witness::CovenantId)?;
+        draft.add_token_input(&a.custody, tok_b.expect("ask legs buy the merchant token"), Witness::CovenantId)?;
     }
     let fill = FillArgs {
         asks: r.asks.iter().map(|a| a.order.utxo.covenant_id.unwrap_or_default()).collect(),
@@ -779,7 +782,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             other => Err(Error::Invalid(format!("unexpected router argument {other:?}"))),
         })
         .collect::<Result<_>>()?;
-    let me = d.add_input(
+    let intent_input = draft.add_input(
         &r.intent,
         SigPlan::Router { actor: actor.name.into(), state: istate, entry: actor.entry.into(), args },
         router_role(actor, actor.entry),
@@ -794,65 +797,65 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         IntentKind::KasToToken => {
             let tok = tok_b.expect("KasToToken buys a token");
             for (m, a) in asks.iter().enumerate() {
-                d.add_output(a.payout, p2pk_spk(&r.asks[m].order.state.maker), None);
+                draft.add_output(a.payout, p2pk_spk(&r.asks[m].order.state.maker), None);
             }
             if let Some((carrier, st, _, _)) = last_ask.and_then(|i| asks[i].rest.clone()) {
-                let o = d.add_token_output(tok, st, carrier)?;
+                let o = draft.add_token_output(tok, st, carrier)?;
                 tok_out_patch = Some((kb + last_ask.unwrap(), o));
             }
-            while d.outputs.len() < me {
-                d.add_output(filler, p2pk_spk(&payer), None);
+            while draft.outputs.len() < intent_input {
+                draft.add_output(filler, p2pk_spk(&payer), None);
             }
-            let j = d.reserve_output();
-            debug_assert_eq!(j, me);
+            let j = draft.reserve_output();
+            debug_assert_eq!(j, intent_input);
             let ext = r.asks[0].custody.state.extension();
-            let mo = d.add_token_output(
+            let merchant_out = draft.add_token_output(
                 tok,
                 TokenState::user(Family::Kcc20, facts.bought, merchant, ext),
                 pos(r.merchant_carrier as i64, "merchant carrier")?,
             )?;
-            debug_assert_eq!(mo, me + 1);
-            facts.merchant_output = mo as u32;
+            debug_assert_eq!(merchant_out, intent_input + 1);
+            facts.merchant_output = merchant_out as u32;
             if let Some((_, _, ask_carrier, spk)) = last_ask.and_then(|i| asks[i].rest.clone()) {
                 let i = last_ask.unwrap();
-                d.add_output(ask_carrier, spk, Some(((kb + i) as u16, r.asks[i].order.utxo.covenant_id.expect("checked"))));
+                draft.add_output(ask_carrier, spk, Some(((kb + i) as u16, r.asks[i].order.utxo.covenant_id.expect("checked"))));
             }
         }
         IntentKind::TokenToKas => {
             let tok = tok_a.expect("TokenToKas sells a token");
-            let l = lock_tok.expect("checked");
+            let lock_token = lock_tok.expect("checked");
             for b in &bids {
-                d.add_token_output(tok, b.state.clone(), b.delivery)?;
+                draft.add_token_output(tok, b.state.clone(), b.delivery)?;
             }
             match last_bid.and_then(|i| bids[i].cont.clone()) {
                 Some((v, spk)) => {
                     let i = last_bid.unwrap();
-                    d.add_output(v, spk, Some((i as u16, r.bids[i].order.utxo.covenant_id.expect("bid UTXO has a covenant id"))));
+                    draft.add_output(v, spk, Some((i as u16, r.bids[i].order.utxo.covenant_id.expect("bid UTXO has a covenant id"))));
                 }
                 None => {
-                    d.add_output(filler, p2pk_keeper.clone(), None);
+                    draft.add_output(filler, p2pk_keeper.clone(), None);
                 }
             }
-            let mo = d.add_output(pos(r.merchant_kas as i64, "merchant KAS")?, p2pk_spk(&merchant), None);
-            if mo != me {
-                return Err(Error::Invalid(format!("layout: merchant output at {mo}, intent at input {me}")));
+            let merchant_out = draft.add_output(pos(r.merchant_kas as i64, "merchant KAS")?, p2pk_spk(&merchant), None);
+            if merchant_out != intent_input {
+                return Err(Error::Invalid(format!("layout: merchant output at {merchant_out}, intent at input {intent_input}")));
             }
-            facts.merchant_output = mo as u32;
-            d.add_token_output(
+            facts.merchant_output = merchant_out as u32;
+            draft.add_token_output(
                 tok,
-                TokenState::user(fam_a, l.state.amount() - facts.sold, payer, l.state.extension()),
-                pos(r.payer_token_carrier.unwrap_or(l.utxo.amount) as i64, "payer token carrier")?,
+                TokenState::user(fam_a, lock_token.state.amount() - facts.sold, payer, lock_token.state.extension()),
+                pos(r.payer_token_carrier.unwrap_or(lock_token.utxo.amount) as i64, "payer token carrier")?,
             )?;
         }
         IntentKind::TokenSwap => {
-            let ta = tok_a.expect("swap sells token A");
-            let tb = tok_b.expect("swap buys token B");
-            let l = lock_tok.expect("checked");
+            let sold_token = tok_a.expect("swap sells token A");
+            let bought_token = tok_b.expect("swap buys token B");
+            let lock_token = lock_tok.expect("checked");
             for b in &bids {
-                d.add_token_output(ta, b.state.clone(), b.delivery)?;
+                draft.add_token_output(sold_token, b.state.clone(), b.delivery)?;
             }
             for (m, a) in asks.iter().enumerate() {
-                d.add_output(a.payout, p2pk_spk(&r.asks[m].order.state.maker), None);
+                draft.add_output(a.payout, p2pk_spk(&r.asks[m].order.state.maker), None);
             }
             // The queue: custody rest of B, bid continuation, ask continuation.
             enum Q {
@@ -877,66 +880,66 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
                 ));
             }
             let mut queue = queue.into_iter();
-            let put = |d: &mut Draft, q: Q, patch: &mut Option<(usize, usize)>| -> Result<()> {
+            let put = |draft: &mut Draft, q: Q, patch: &mut Option<(usize, usize)>| -> Result<()> {
                 match q {
                     Q::Tok(v, st) => {
-                        let o = d.add_token_output(tb, st, v)?;
+                        let o = draft.add_token_output(bought_token, st, v)?;
                         *patch = Some((kb + last_ask.expect("an ask rests"), o));
                     }
                     Q::Plain(v, spk, cov) => {
-                        d.add_output(v, spk, cov);
+                        draft.add_output(v, spk, cov);
                     }
                 }
                 Ok(())
             };
             for _ in 0..ka + 1 {
                 match queue.next() {
-                    Some(q) => put(&mut d, q, &mut tok_out_patch)?,
+                    Some(q) => put(&mut draft, q, &mut tok_out_patch)?,
                     None => {
-                        d.add_output(filler, p2pk_keeper.clone(), None);
+                        draft.add_output(filler, p2pk_keeper.clone(), None);
                     }
                 }
             }
             let ext_b = r.asks[0].custody.state.extension();
-            let mo = d.add_token_output(
-                tb,
+            let merchant_out = draft.add_token_output(
+                bought_token,
                 TokenState::user(Family::Kcc20, facts.bought, merchant, ext_b),
                 pos(r.merchant_carrier as i64, "merchant carrier")?,
             )?;
-            if mo != me {
-                return Err(Error::Invalid(format!("layout: merchant output at {mo}, intent at input {me}")));
+            if merchant_out != intent_input {
+                return Err(Error::Invalid(format!("layout: merchant output at {merchant_out}, intent at input {intent_input}")));
             }
-            facts.merchant_output = mo as u32;
-            d.add_token_output(
-                ta,
-                TokenState::user(fam_a, l.state.amount() - facts.sold, payer, l.state.extension()),
-                pos(r.payer_token_carrier.unwrap_or(l.utxo.amount) as i64, "payer token carrier")?,
+            facts.merchant_output = merchant_out as u32;
+            draft.add_token_output(
+                sold_token,
+                TokenState::user(fam_a, lock_token.state.amount() - facts.sold, payer, lock_token.state.extension()),
+                pos(r.payer_token_carrier.unwrap_or(lock_token.utxo.amount) as i64, "payer token carrier")?,
             )?;
             for q in queue {
-                put(&mut d, q, &mut tok_out_patch)?;
+                put(&mut draft, q, &mut tok_out_patch)?;
             }
         }
     }
     if let Some((input, out)) = tok_out_patch {
-        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
+        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut draft.inputs[input].plan {
             args[2] = Arg::Int(out as i64);
         }
     }
     for (i, b) in bids.iter().enumerate() {
         if let Some(v) = b.refund {
-            d.add_refund(i, v, r.bids[i].order.state.maker, tok_a.expect("bids sell token A").0);
+            draft.add_refund(i, v, r.bids[i].order.state.maker, tok_a.expect("bids sell token A").0);
         }
     }
     if !r.records.is_empty() {
-        d.payload = payload::encode_with_release(&r.records)?;
+        draft.payload = payload::encode_with_release(&r.records)?;
     }
-    let built = d.seal(budgets)?;
+    let built = draft.seal(budgets)?;
     // KasToToken: the router's bound on the payer's change (out j + pay + max_extra >= the intent
     // value).
     if let IntentState::KasToToken { max_extra, .. } = &r.state {
         let (tx, _) = built.tx.to_tx()?;
-        let change = tx.outputs.get(me).map(|o| o.value as i64).unwrap_or(0);
-        if built.fee.change_output != Some(me as u32) {
+        let change = tx.outputs.get(intent_input).map(|o| o.value as i64).unwrap_or(0);
+        if built.fee.change_output != Some(intent_input as u32) {
             return invalid("the payer's KAS change must be the intent's output j (the budget does not cover the execution)");
         }
         if change + facts.quote_pay + max_extra < r.intent.amount as i64 {
