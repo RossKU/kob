@@ -77,7 +77,7 @@ row does not have is empty at once, never a 30 s locator wait). A failed scenari
 | market | Needs an indexer (SKIP otherwise): the DEV key (`maker` with `--mock`), driven through the same app in its own browser with an in-page signer (`features.test`, injected config only), rests a limit buy of 1 A @ 0.6; the wallet market-sells 1 A into it once the book shows it (the confirmation's auction must start from 0.6; a `clock-moved` stop, nothing sent, is tried again up to 3 times). If a matcher fills it, that is recorded; else it is cancelled. The counterparty bid is cancelled when still live, and whatever of the DEV key's orders is still live after a failed run is swept (cancelled). |
 | fill | TN10 with an indexer only (SKIP otherwise, and with `--mock`): a taker fills the wallet's orders with `kob take --yes` and the DEV key, bounded by `--max-price 0.5KAS` / `--min-price 0.5KAS` (`KOB_BIN`, else `target/{release,debug}/kob` of this repo; the key goes in the environment, never on the command line or into `out/`). The wallet's limit sell 2 @ 0.5 is filled (the taker pays, the wallet's order ends), then its limit buy 2 @ 0.5 is filled by the taker delivering tokens; each wallet order must end not live in My orders. |
 | cells | Three limit sells of 1 token (@ 50, 51, 52 KAS) are placed and cancelled one by one: every cancel releases a separate token UTXO, so the wallet holds three cells for the merge scenario that follows. |
-| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge (n)") -> one transfer to itself of the smallest up-to-3 token UTXOs per click, one wallet approval each (`flow-shown-as` states the UTXOs merged, the count before / after and the KAS freed), clicked until the button disappears; the last merge's single token output is unspent on the node and holds the whole supply. |
+| merge | My orders > Balances: `orders-merge-token-<A>` ("Merge all (n): about +x KAS") -> `merge-all-dialog`, whose `merge-all-summary` must say "Merge your n TICKER UTXOs into one: T transactions" with T = ceil((n - 1) / 2) -> `merge-all-confirm` -> one flow of T transactions, one wallet approval each; the last merge's single token output is unspent on the node and holds the whole supply, and the button is gone. |
 | balances | Balances panel: for A and B free = 1,000,000, nothing in orders, no strays; no order left live. |
 
 Covenant-signing gate: a wallet the app does not know to sign covenant inputs (Kastle) is asked once for a test signature before its first order
@@ -226,7 +226,10 @@ on TN10), so the second window now opens 11 to 15 s after the first instead of a
 | 10 | 323c347119bd34e35a28b0e84aa38ea8d9932b88af7995dd2615028539aaa1c4 | 31573c2a12d6577c9ee36f75f219b0b8531e441535a38408d72c87d44f239cef | already in the mempool, 259 ms | 14.1 s (23 polls) | 11.6 s | Sign |
 
 10 of 10 genesis windows had Sign; no "Critical Signing Warning". `node e2e-real/run.mjs --wallet kasware --skip-issue --only
-limit,cells,merge --fund-below 0` on the same build: limit, cells and merge PASS, no warning in any window.
+limit,cells,merge --fund-below 0` on the same build: limit, cells and merge PASS, no warning in any window. Again on Merge all (master
+40b3da2ad, `--skip-issue --only cells,merge --fund-below 0`): cells PASS; merge PASS, 4 UTXOs in 2 transactions (9fdb2e43cb...,
+8f23eeff9c...) in 20.6 s, the dialog's summary "Merge your 4 RAKWXEKK UTXOs into one: 2 transactions, one after the other, each approved
+in your wallet (2 approvals)".
 
 Kaspire 0.5.31 (headless, 3 creations, 1 KAS per token output): its `signPskt` looks no input up on any node (background script), its
 `pushTx` and `getUtxoEntries` do not fit the gate (wallet/kaspire.ts), so it keeps KOB's node plus 1.5 s: windows 2.6, 2.8 and 2.6 s apart,

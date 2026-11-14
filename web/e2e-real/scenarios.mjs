@@ -789,28 +789,20 @@ export async function runMerge(rc) {
     const trackedBefore = (await trackedTokens(h)).filter((x) => x.token === token);
     const step = { name: `merge ${n0} UTXOs`, balancesBefore: before, trackedBefore, links: [], done: null };
     r.steps.push(step);
-    let n = n0;
-    let last = null;
-    // one transaction per click: 3 -> 1 leaves n - 2, so n UTXOs take ceil((n - 1) / 2) clicks
-    for (let click = 0; n >= 2; click++) {
-      if (click > n0) throw new Error(`the merge did not end after ${click} clicks`);
-      await tid(h, `orders-merge-token-${token}`).click();
-      const { steps, done } = await runFlow(h, rc.ctx, rc.drv, 'merge', rc.name);
-      step.links.push(...steps.map((s) => stepOf('merge link', s)));
-      step.done = done;
-      if (steps.length !== 1) throw new Error(`a merge click should be one transaction, the flow had ${steps.length}`);
-      const k = Math.min(3, n);
-      const after = n - k + 1;
-      if (!new RegExp(`Merge your ${k} smallest ${rc.token.ticker} UTXOs into one in one transaction: ${n} UTXOs become ${after}\\.`).test(steps[0].shownAs)) {
-        throw new Error(`the merge flow does not state the merge: "${steps[0].shownAs}"`);
-      }
-      last = steps[0];
-      n = after;
-      if (n >= 2) {
-        await openOrders(rc);
-        await waitBalance(rc, token, (b) => (b.mergeButton ?? '').startsWith(`Merge (${n})`), `"Merge (${n})" after ${click + 1} click(s)`, 60_000);
-      }
-    }
+    // Merge all: one dialog, then one transaction per wallet approval (3 -> 1 each, so n UTXOs take ceil((n - 1) / 2) of them)
+    const txs = Math.ceil((n0 - 1) / 2);
+    await tid(h, `orders-merge-token-${token}`).click();
+    await tid(h, 'merge-all-dialog').waitFor({ timeout: 30_000 });
+    const summary = collapse(await tid(h, 'merge-all-summary').innerText());
+    step.summary = summary;
+    const want = new RegExp(`^Merge your ${n0} ${rc.token.ticker} UTXOs into one: ${txs} transaction${txs === 1 ? '' : 's'}\\b`);
+    if (!want.test(summary)) throw new Error(`the merge dialog does not state the merge of ${n0} UTXOs in ${txs} transaction(s): "${summary}"`);
+    await tid(h, 'merge-all-confirm').click();
+    const { steps, done } = await runFlow(h, rc.ctx, rc.drv, 'merge', rc.name, txs > 12 ? { maxSteps: txs } : {});
+    step.links.push(...steps.map((x) => stepOf('merge link', { ...x, shownAs: summary })));
+    step.done = done;
+    if (steps.length !== txs) throw new Error(`Merge all of ${n0} UTXOs should be ${txs} transaction(s), the flow had ${steps.length}`);
+    const last = steps[steps.length - 1];
     // node: the last merge's single token output is unspent
     const outs = outputsOf(rc.node, last.submitted).filter((o) => o.p2sh && o.address);
     if (outs.length !== 1) throw new Error(`the last merge has ${outs.length} covenant outputs, expected 1`);
@@ -822,7 +814,7 @@ export async function runMerge(rc) {
     if (got.total !== SUPPLY * TOKEN) throw new Error(`the merged UTXO should hold the whole supply (${SUPPLY * TOKEN}), the app tracks ${got.total}`);
     await openOrders(rc);
     step.balancesAfter = await waitBalance(rc, token, (b) => !b.mergeButton && num(b.free) === Number(SUPPLY), 'one UTXO with the whole supply');
-    log(`[${rc.name}] merge: ${n0} UTXOs in ${step.links.length} click(s), last ${short(last.txid)}`);
+    log(`[${rc.name}] merge: ${n0} UTXOs in ${step.links.length} transaction(s), last ${short(last.txid)}`);
   });
 }
 
