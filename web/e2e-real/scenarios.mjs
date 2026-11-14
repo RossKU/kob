@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { OUT_DIR, REPO_ROOT, collapse, log, shot, sleep } from './common.mjs';
 import { TN10_NODE, loadRealEnv } from './fund.mjs';
-import { goto, outputsOf, runFlow, signFromTicket, signOnConfirmScreen } from './driver.mjs';
+import { goto, outputsOf, pushTxLog, runFlow, signFromTicket, signLadderFromTicket, signOnConfirmScreen } from './driver.mjs';
 
 const tid = (h, id) => h.page.getByTestId(id);
 const short = (s) => (s ? `${s.slice(0, 10)}...` : '-');
@@ -617,6 +617,51 @@ export async function runLimit(rc) {
   });
 }
 
+/**
+ * A limit buy ladder of 3 levels (1 token from 0.5 KAS, 2 % apart), one click: each level its own transaction. A level the planner
+ * funds from the change of the level before spends an output KOB's node accepted a moment ago, so the wallet is asked for it only once
+ * KOB's node lists that change and the margin passed (wallet/visibility.ts); `spendsPrevious` records which did. Every level is checked
+ * on the node and recorded, then each is cancelled. (A sell ladder from one token UTXO chains every level on the token change, but on
+ * TN10 the ticket did not yet see the second level's token change when it planned the third: "Not enough tokens".)
+ */
+export async function runLadder(rc) {
+  return scenario(rc, 'ladder', async (r) => {
+    const { h } = rc;
+    const levels = 3;
+    const before = new Set(Object.keys(await readRecords(h)));
+    const t = await fillTicket(rc, { type: 'limit', side: 'buy', fields: { amount: 1, price: 0.5, 'ladder.on': true, 'ladder.levels': levels, 'ladder.pct': 2 } });
+    const tSign = Date.now();
+    const s = await signLadderFromTicket(h, rc.ctx, rc.drv, 'ladder', rc.name, t.click, levels);
+    if (s.submitted.length !== levels) throw new Error(`a ladder of ${levels} levels sent ${s.submitted.length} transaction(s)`);
+    const legs = s.submitted.map((x, k) => ({
+      txid: x.txid,
+      spendsPrevious: k > 0 && x.tx.inputs.some((i) => (i.previousOutpoint?.transactionId ?? i.transactionId) === s.submitted[k - 1].txid),
+    }));
+    const pushTx = (await pushTxLog(h)).filter((e) => e.at >= tSign).map((e) => ({ txid: e.txid, ok: e.ok, ms: e.ms, error: e.error }));
+    const step = { name: `ladder of ${levels} limit buys`, legs, gapsMs: s.gapsMs, pushTx, popups: popupView(s.popups), screenshots: s.screenshots, totalMs: s.totalMs, button: t.button };
+    r.steps.push(step);
+    // node: every covenant output of every level is unspent, but one a later level spent
+    const spentLater = new Set(s.submitted.flatMap((x) => x.tx.inputs.map((i) => { const op = i.previousOutpoint ?? i; return `${op.transactionId}:${op.index}`; })));
+    step.verify = [];
+    for (const x of s.submitted) {
+      for (const o of outputsOf(rc.node, x.tx).filter((o) => o.p2sh && o.address && !spentLater.has(`${x.txid}:${o.index}`))) {
+        const w = await rc.node.waitOutpoint(o.address, x.txid, o.index, true);
+        step.verify.push({ what: `ladder level: covenant output ${short(x.txid)}:${o.index}`, unspent: w.ok, ms: w.ms });
+        if (!w.ok) throw new Error(`node check failed: covenant output ${x.txid}:${o.index} is not unspent after ${w.ms} ms`);
+      }
+    }
+    await sleep(1500);
+    const after = await readRecords(h);
+    const ids = s.submitted.map((x) => Object.entries(after).find(([id, rec]) => !before.has(id) && rec.txid === x.txid)?.[0] ?? null);
+    if (ids.some((id) => !id)) throw new Error(`the app stored no placement record for every level: ${JSON.stringify(ids)}`);
+    step.covenantIds = ids;
+    log(`[${rc.name}] ladder: ${levels} levels ${legs.map((l) => short(l.txid)).join(' ')}, spends the level before ${JSON.stringify(legs.map((l) => l.spendsPrevious))}, gaps ${JSON.stringify(s.gapsMs)}`);
+    for (const [k, id] of ids.entries()) {
+      await cancelStep(rc, r, `ladder-${k + 1}`, { placed: new Map([[s.submitted[k].txid, s.submitted[k].tx]]), covenantIds: [id] });
+    }
+  });
+}
+
 /** Amend in place (AMEND record): a limit sell gets a new price; the same order (covenant id) lives on at a new outpoint; then cancelled. */
 export async function runAmend(rc) {
   return scenario(rc, 'amend', async (r) => {
@@ -837,6 +882,7 @@ export async function runBalances(rc) {
 /** Scenario ids in run order, with the function and whether it needs token B. */
 export const SCENARIOS = [
   ['limit', runLimit],
+  ['ladder', runLadder],
   ['amend', runAmend],
   ['ioc', runIoc],
   ['stop', runStop],

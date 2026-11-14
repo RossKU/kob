@@ -541,6 +541,34 @@ export async function signFromTicket(h, ctx, wallet, label, shotDir, click, { ex
 }
 
 /**
+ * A ladder of the ticket: one click, one transaction per level, each with its final confirmation (confirmed here) and its wallet popup.
+ * Approves them until the ticket says every level was placed (`order-result-ladder`); throws with the app's sentence when a level stops.
+ * Returns the submitted transactions in order, the popups, and the time between one popup closing and the next opening.
+ */
+export async function signLadderFromTicket(h, ctx, wallet, label, shotDir, click, levels) {
+  const t0 = Date.now();
+  const submitsBefore = h.submits.length;
+  const { popups } = await wallet.approve(ctx, async () => {
+    await click();
+    for (;;) {
+      if (await tid(h, 'order-result-ladder').count()) return;
+      const phase = await phaseOf(h, 'order-status');
+      if (phase === 'confirming') await confirmInApp(h);
+      if (STOPPED.includes(phase)) {
+        const stopped = collapse(await tid(h, 'order-ladder-stopped').innerText().catch(() => ''));
+        throw new Error(`${await statusError(h, 'order-status')}${stopped ? `; ${stopped}` : ''}`);
+      }
+      if (Date.now() - t0 > levels * (POPUP_TIMEOUT_MS + 60_000)) throw new Error(`${label}: the ladder did not end`);
+      await sleep(400);
+    }
+  });
+  const screenshots = [await shot(h.page, shotDir, `${label}-placed`)];
+  const submitted = h.submits.slice(submitsBefore).filter((x) => x.tx).map((x) => ({ txid: x.txid ?? x.tx.id, tx: x.tx }));
+  const gapsMs = popups.slice(1).map((p, i) => (p.seenAt && popups[i].doneAt ? p.seenAt - popups[i].doneAt : null));
+  return { submitted, popups, gapsMs, screenshots, totalMs: Date.now() - t0 };
+}
+
+/**
  * Runs a My orders transaction flow (cancel, cancel of a position, merge ...) that the action's button has just started: every step shows its
  * final confirmation (confirmed here) and asks the wallet, the next one after each submission. Approves the popups until the flow shows its result and returns one step
  * per submitted transaction. Throws when the flow stops or ends with an error. Open My orders fresh before the action (scenarios.mjs

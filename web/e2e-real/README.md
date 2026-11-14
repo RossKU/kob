@@ -31,7 +31,7 @@ node e2e-real/run.mjs --mock                          # node-only, like the TN10
 node e2e-real/run.mjs --mock --indexer                # with the mock indexer: market scenario and position cards
 ```
 
-Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all: `limit,amend,ioc,stop,oco,ifd,pair,market,fill,cells,merge,balances`;
+Flags: `--wallet kasware,kaspire,kastle|all` (default all), `--only <ids>` (default all: `limit,ladder,amend,ioc,stop,oco,ifd,pair,market,fill,cells,merge,balances`;
 the issuance always runs first), `--indexer [url]` (TN10: that indexer, or `INDEXER_URL` of `.env`; `--mock`: the mock's), `--skip-issue` (TN10:
 reuse the tokens of the previous run of that wallet from `out/token-<wallet>.json`, with its tracker entries and placement records), `--headless`
 (Chromium `--headless=new`: works for Kaspire, KasWare needs a headed browser; `--mock` is always headless), `--keep-open`, `--rebuild` (rebuild
@@ -68,6 +68,7 @@ row does not have is empty at once, never a 30 s locator wait). A failed scenari
 |---|---|
 | issue | Create token screen (`#/create`; the old `#/issue` leads there): the published public-mint build (`issue-program-public-mint` under Advanced, KCC20PublicMint, no minter; the default since 2026-11-04) is issued, 1,000,000 tokens with 8 decimals to the wallet. Result panel token id / txid, the registry entry (`template_id` `kcc20-ref-public-mint`, `max_token_inputs` 3), the genesis UTXO tracked with program KCC20PublicMint. Token B (the pair's quote) is issued the same way when `pair` is selected. The run then serves a test registry with both tokens listed. |
 | limit | Limit GTC sell 3 @ 50 KAS (while it rests, Balances shows 3 in orders), cancelled, 3 tokens back; limit GTC buy 2 @ 0.5 KAS, cancelled. |
+| ladder | One click on a limit buy ladder of 3 levels (1 token from 0.5 KAS, 2 % apart): one transaction and one wallet approval per level; a level funded from the change of the one before is asked for only once KOB's node lists that change and 2 s passed (`spendsPrevious` records which). Every level's covenant outputs unspent, a placement record each; then each level is cancelled. |
 | amend | Limit sell 2 @ 50, My orders `order-replace-<id>` -> amend dialog (`amend-price` 55, `amend-preview`) -> one cancel-replace transaction; the SAME order id lives on at 55 (in-place AMEND record), then cancelled, 2 tokens back. |
 | ioc | IOC buy 2 @ 0.4 with a 50 s life (advanced field `life`; an IOC may have 1 to 600 DAA = 60 s at most, counted from the ticket's clock, so the wallet's approval eats into it: 60 s would run over the limit), cancelled while alive. An IOC that a keeper on the network killed at its expiry before the cancel could be signed is a SKIP with its status. |
 | stop | Stop-market sell 2, stop 0.2: rests unarmed, cancelled, 2 tokens back. |
@@ -173,7 +174,7 @@ the first closed. ONE genesis window (preparation 92064f0b74915916cb5d0a8e0a977b
 `pushTx` outcome was not yet recorded) showed only Reject: "Critical Signing Warning: Input #0 (92064f0b...:0) is not an unspent output on
 this network", while KOB's node listed that output as unspent. 0.11.5 checks the input against its node's UTXO set, then its mempool
 (`verifyPsktInputs` in its service worker); a transaction that just left the mempool for a block the virtual chain has not accepted yet is
-in neither. Not reproduced in the 7 genesis windows after it; fixed the same day (*The wallet-node check*, below).
+in neither. Not reproduced in the 7 genesis windows after it; fixed the same day (*The visibility gate after the Reject-only window*, below).
 
 Decline and resume (a separate script on the same driver, KasWare): the genesis window was rejected, the Create token page offered "Creation
 of RRKWZXGE not finished" with "Finish the creation"; after a page reload it was still offered, the button asked for one approval (the window
@@ -203,37 +204,52 @@ Harness changes (none of them an app defect):
   approval windows' `seenAt` / `doneAt`); a failed signing says what the windows showed.
 * `--fund-below` / `--fund`.
 
-## The wallet-node check (TN10, 2026-11-14, KasWare 0.11.5, Kaspire 0.5.31)
+## The visibility gate after the Reject-only window (TN10, 2026-11-14, KasWare 0.11.5, Kaspire 0.5.31)
 
-The visibility gate no longer trusts an accepted `pushTx` or KOB's node: an adapter with `walletSees` is polled until the wallet's own
-node lists every fresh input (wallet/visibility.ts). KasWare answers it with `getUtxoEntries`, which reads the node its sign check
-reads. For the wallet's own account KasWare answers from its UTXO tracker, which lists a new output only once it is mature (about 10 s
-on TN10), so the second window now opens 11 to 15 s after the first instead of about 1 s. Each row is one creation with KasWare, headed,
-1 KAS per token output, driven by a loop over this driver (`signOnConfirmScreen`). The wait is from the first
-`getUtxoEntries` poll to the one that listed the preparation's output 0.
+KasWare's Reject in that window answers like any user rejection (`userRejectedRequest`, code 4001), so the app cannot tell the two
+apart. Two gates were tried on the same day:
 
-| # | Preparation | Genesis | `pushTx` of the preparation | Wallet-node wait | Between the windows | Genesis window |
-|---|---|---|---|---|---|---|
-| 1 | 2ce10ef5924a9dd3e5fd553736b4b3cb6ced4ab5e59fb842b8f13d10c50a4be3 | e5306854a39402c74d9f041d6ed8c115240f8f818229bef5d1d579cb35e47fef | accepted, 264 ms | 13.8 s (28 polls) | 14.6 s | Sign |
-| 2 | b1f94b36beb14df41872cebb00d8e324d2f2f1770bf8ba314dc5e553b32d63d6 | 3be9b2f0149e9bc82632845f185253b5ba38a72098ab5543cc74543164eda30e | already in the mempool, 262 ms | 15.0 s (25 polls) | 12.5 s | Sign |
-| 3 | 8182c944f6034c8e5256e91a67949774da6f02dc382120904c15850938a6baa9 | d03940810081f4deebbf15f0116a910451e839fa5f74082b81b5ca40c3a8a6ea | already in the mempool, 261 ms | 15.6 s (26 polls) | 13.0 s | Sign |
-| 4 | a88312dac9d3101a9527aa9e78b9073a499a233c2dab2f0d872634f001f25f68 | c9600ce7eaaaab13733f3637ac1134923e35549d1ad2f70aa8753de7b5ded29e | already in the mempool, 262 ms | 14.0 s (21 polls) | 11.4 s | Sign |
-| 5 | f972451397f50da763bd020f0e402eb85d0af129f179405613b0f8ac2f79d7d3 | 0beba8aadddc770fb4c87e5db92b11d5814548cbceb6e9142f4bd520bc0d9546 | accepted, 260 ms | 14.0 s (23 polls) | 11.4 s | Sign |
-| 6 | 3203d6e2f0fc993b2f6d06a04de8f9429e2a4634e5bc13ba2898bf5d45bccf53 | 54ec199fe4ec4d4d90ff6c3e0023907ed98f1e79568e9aa50ff3c925193d6283 | accepted, 262 ms | 14.5 s (24 polls) | 11.9 s | Sign |
-| 7 | 70960ac352dc7451ad20b6e0a42c7ccf7165db02ffdb7156428b10617bbec2f5 | 3af06d7881b6015ffdab6d81b0baef93ba9de97463f085cf2973691170ba8e7b | already accepted by the consensus, 263 ms | 10.2 s (21 polls) | 10.9 s | Sign |
-| 8 | 0ba71ebc0163b177230b44b35404af0719ef4220e543780eadd40312e01e1b6e | 518d394eb4958e565da1dd38f221e1801879a5c160cf4111b00613753e7c78f4 | accepted, 262 ms | 15.0 s (25 polls) | 12.4 s | Sign |
-| 9 | ce1c1ea805b4e665ff9397811e617bb5e9eca820d0a6bb25ffe478fc2b2cc190 | 9ab52d2cbeac3138aafcaa67cdd3c1342b96e86ee661e3e89b82f8f2ebc41357 | accepted, 261 ms | 15.5 s (26 polls) | 13.0 s | Sign |
-| 10 | 323c347119bd34e35a28b0e84aa38ea8d9932b88af7995dd2615028539aaa1c4 | 31573c2a12d6577c9ee36f75f219b0b8531e441535a38408d72c87d44f239cef | already in the mempool, 259 ms | 14.1 s (23 polls) | 11.6 s | Sign |
+* Asking the wallet's own node (`getUtxoEntries`, polled until it listed the preparation's output 0): 10 of 10 genesis windows had
+  Sign, but the second window opened 11 to 15 s after the first, because KasWare answers for its own account from its UTXO tracker,
+  which lists an output only once it is mature. Dropped for the next one.
+* The gate now: every fresh input waits until KOB's node lists it in its UTXO set, then 2 s, whether `pushTx` was accepted or not
+  (wallet/visibility.ts). It is probabilistic: the race is the moment the wallet's node moves the transaction from its mempool into
+  its UTXO index. A miss is safe: nothing is sent for that step, the app says so and why (`rejected-fresh`), and the step is asked
+  for again (a creation's "Finish the creation", right on the page; a ladder or Merge all is run again).
 
-10 of 10 genesis windows had Sign; no "Critical Signing Warning". `node e2e-real/run.mjs --wallet kasware --skip-issue --only
-limit,cells,merge --fund-below 0` on the same build: limit, cells and merge PASS, no warning in any window. Again on Merge all (master
-40b3da2ad, `--skip-issue --only cells,merge --fund-below 0`): cells PASS; merge PASS, 4 UTXOs in 2 transactions (9fdb2e43cb...,
-8f23eeff9c...) in 20.6 s, the dialog's summary "Merge your 4 RAKWXEKK UTXOs into one: 2 transactions, one after the other, each approved
-in your wallet (2 approvals)".
+Each row is one creation with KasWare, headed, 1 KAS per token output, driven by a loop over this driver; "between the windows" is
+from the first window closing to the second one opening.
 
-Kaspire 0.5.31 (headless, 3 creations, 1 KAS per token output): its `signPskt` looks no input up on any node (background script), its
-`pushTx` and `getUtxoEntries` do not fit the gate (wallet/kaspire.ts), so it keeps KOB's node plus 1.5 s: windows 2.6, 2.8 and 2.6 s apart,
-every creation accepted (preparations 2211878ec960..., 7067c454b158..., 8f1cd0347e3d...).
+| # | Preparation | Genesis | `pushTx` of the preparation | Between the windows | Genesis window |
+|---|---|---|---|---|---|
+| 1 | 2a294f5cdf70ca98dc11c6a860e710d84e168b806ae572ee595e0cdfe77bd962 | 4ede46b1ccaa12740dd391f5d65c729a98420daddf70f7c145a3eb98de4a8c0b | accepted, 238 ms | 3.9 s | Sign |
+| 2 | a3a06879f5610606dc5f0e058df07e60870ea980ac2e98710f64228b64931189 | 9291ff0b66970d3976c866613f4891974f55779e82d569731d58c93b1b5acf56 | accepted, 234 ms | 4.1 s | Sign |
+| 3 | 330720583daf6fafe8afe30661b6fb55ef2162ed72cf2c5fbac0fd93a76fae88 | 6428b8a4652fadbb5ee06298b4a8413ecfa17d7025a934bbaf957ba6fcc580c7 | accepted, 257 ms | 3.8 s | Sign |
+| 4 | a14ccccd6ba9d311ed7329acae2e782c3f79b3733f9a8abdf6ca2b031ea1b878 | 7227466a2d9e06d5ed58cacbd1e1a7efce4cd8c55cc6d286975a8279f6d2f1ed | already accepted by the consensus, 234 ms | 3.1 s | Sign |
+| 5 | b63b110c6e80afb83345db4295415a915c4d5075db8def07cc1a627c89f1204e | ae3dd4cedf647e871a62de40d67955d09eacdb491a8233f076e6d0d596b36e44 | already in the mempool, 237 ms | 3.9 s | Sign |
+| 6 | 5df0e079af11865b3559b08094941a61925765c731c570a25a37e07194d046f5 | 7ed5df8fbc5e89c6aea3fb6014b9d018e9045686da9aca5be7a373b6c3c2c884 | accepted, 241 ms | 3.7 s | Sign |
+| 7 | 3a5e95d7265be5f0d5e58066d71cb71f2cf3132c8140cf875f5ad4169d4bdd85 | 89ade03576818de0ae87fb730483e4b136381f32ca20c6791fb930d110bed835 | accepted, 235 ms | 3.9 s | Sign |
+| 8 | 89c24f276b58d88f5fb709f1f7399b0da97bee533bb448010c7b8cf636f806db | e700cfabef9bff8578a73f795ffa3658ddda00d220360cb5d994117f564d429d | accepted, 234 ms | 3.9 s | Sign |
+| 9 | e584b9949c19a2a4850a277e27aa75bbefa686b25accbd859ee1e5bbbda088cd | 75b23d32641fe3caee36578552d1dde488da5e5deaba33906c703dc0aaedd32d | accepted, 235 ms | 4.7 s | Sign |
+| 10 | b25366b9ae4ecbe0053303ac466b4d8498aa9dbeea001c99bf7c0d2b5cb2a4d2 | 565bf3e3c4fa4e4a0f509b48005e3e24901696bf4218ced8c5291465de5bf69e | accepted, 233 ms | 4.2 s | Sign |
+| 11 | 78fecc0415aacf7b610e12d7dc7a4cc6acd9eb7c0092b8350736eb6852452689 | ad43489e06876057227ea0b39cdd4998156338c104f4bac2c620c97527c285ef | accepted, 234 ms | 3.9 s | Sign |
+| 12 | 60250675e4dc764c75727578bcb558e4a539c912bc93968d15b38b87c95b63db | 08f6068f513fb639b9c6a9c5567754ccbedf561cca8d99817204582f9da9926b | already in the mempool, 234 ms | 3.9 s | Sign |
+
+12 of 12 genesis windows had Sign, none Reject only, so "Finish the creation" was not needed live (the mock e2e `chain-sign` covers it:
+a wallet node that lags the move, the first ask refused, finishing a moment later goes through). On the same build,
+`node e2e-real/run.mjs --wallet kasware --skip-issue --only ladder,cells,merge --fund-below 0` (the ladder then was a buy ladder):
+ladder, cells and merge PASS, no warning in any window; Merge all merged 4 UTXOs in 2 transactions (5fb599cbe1..., b5a5380e5f...),
+the second spending the first's merged output. The buy ladder (672ac736d9..., 06dd260098..., 978772ebfa...): every window had Sign, 2.3 and 5.7 s
+between them; the third level spent the change of the second, the second another coin of the wallet. A sell ladder from the one
+merged token UTXO (`--only ladder`, a sell variant) chains on the token change: its second level (30b0cfa441...) spent the token
+and KAS change of the first (5657f8de12...) 7.2 s after it and had Sign, but the ticket then planned the third without the second's
+token change ("Not enough tokens: ... you hold 0"), so nothing was asked for it; the run swept the placed levels. That is a gap of the
+ticket's token view between ladder levels, not of the visibility gate.
+
+The private-key signer is not gated (it signs offline). Kaspire 0.5.31 (headless, 3 creations, 1 KAS per token output, on the earlier
+gate with 1.5 s): its `signPskt` looks no input up on any node (background script), its `pushTx` and `getUtxoEntries` do not fit
+the gate (wallet/kaspire.ts); windows 2.6, 2.8 and 2.6 s apart, every creation accepted (preparations 2211878ec960...,
+7067c454b158..., 8f1cd0347e3d...).
 
 ## What still needs a live run (TN10, the owner's machine)
 
