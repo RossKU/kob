@@ -3406,6 +3406,66 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
 
     // Inputs: legs, merged entries, token inputs (positional custodies first, see `layout`),
     // updates and funding.
+    add_leg_inputs(&mut d, b, &lay, &plans, &custs, &mut exts, strict)?;
+    let update_outs = add_update_inputs(&mut d, b, &lay, &spent_ids)?;
+    for f in &b.funding {
+        d.add_p2pk(f);
+    }
+
+    // Outputs: positional slots, extras per leg, update continuations, payments and the taker's
+    // tokens.
+    let LegOutputs { returns, mut patches, owner } = add_leg_outputs(&mut d, b, &lay, &mut plans)?;
+    add_update_outputs(&mut d, b, update_outs)?;
+    for p in &b.payments {
+        d.add_output(pos(p.amount as i64, "payment")?, spk_from_string(&p.script_public_key)?, None);
+    }
+    add_taker_tokens(&mut d, b, &lay, &plans, &exts, change)?;
+    // Pinned outputs at their custody input's index.
+    for (at, v, st, token, patch) in returns {
+        d.ensure_output(at);
+        d.fill_token_output(at, token, st, v)?;
+        if let Some((input, arg)) = patch {
+            patches.push((input, arg, at));
+        }
+    }
+    // Positional outputs.
+    for (i, p) in plans.iter().enumerate() {
+        match &p.pos {
+            PosOut::Pay(v, maker) => d.fill_output(i, *v, p2pk_spk(maker), None),
+            PosOut::Deliver(v, st, token) => d.fill_token_output(i, *token, st.clone(), *v)?,
+            PosOut::DeliverToExit { .. } => unreachable!("resolved with the exit"),
+            PosOut::Exit(v, spk, tpl) => {
+                d.fill_genesis(i, i, *v, spk.clone(), Some(*tpl))?;
+            }
+        }
+    }
+    for (i, r) in refunds.iter().enumerate() {
+        if let Some((value, maker)) = r {
+            d.add_refund(i, *value, *maker, leg_tokens[i].0);
+        }
+    }
+    // Patch index arguments (tokOut / exitOut / a merged pair entry's new custodies).
+    for (input, arg, out) in patches {
+        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
+            args[arg] = Arg::Int(out as i64);
+        }
+    }
+    if !b.records.is_empty() {
+        d.payload = payload::encode_with_release(&b.records)?;
+    }
+    d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
+}
+
+/// Adds the inputs of the legs and of their merged entries, then the token inputs in layout order.
+fn add_leg_inputs(
+    d: &mut Draft,
+    b: &Batch,
+    lay: &Layout,
+    plans: &[LegPlan],
+    custs: &[CustIn],
+    exts: &mut Exts,
+    strict: bool,
+) -> Result<()> {
     for (i, l) in b.legs.iter().enumerate() {
         let p = &plans[i];
         d.add_input(l_utxo(l), p.plan.clone(), format!("{}{}", p.role, p.suffix), p.sequence);
@@ -3435,21 +3495,40 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
-    // Updates (arm or trail without a fill) come after the token inputs. Their evidence is a leg of
-    // this batch.
+    Ok(())
+}
+
+/// Adds the update inputs, which arm or trail an order without a fill, after the token inputs.
+///
+/// Their evidence is a leg of this batch. It returns each update's input index, the order's next
+/// state and the keeper's take.
+fn add_update_inputs(d: &mut Draft, b: &Batch, lay: &Layout, spent_ids: &BTreeSet<[u8; 32]>) -> Result<Vec<(usize, AnyState, i64)>> {
     let mut update_outs = vec![];
     for (k, u) in b.updates.iter().enumerate() {
-        let (plan, role, sequence, next, take) = update_plan(b, &lay, u, &spent_ids)?;
+        let (plan, role, sequence, next, take) = update_plan(b, lay, u, spent_ids)?;
         let at = d.add_input(&u.order.utxo, plan, role, sequence);
         debug_assert_eq!(at, lay.update_base + k);
         update_outs.push((at, next, take));
     }
-    for f in &b.funding {
-        d.add_p2pk(f);
-    }
+    Ok(update_outs)
+}
 
-    // Outputs: positional slots, extras per leg, update continuations, payments and the taker's
-    // tokens.
+/// A token output pinned at a custody input's index: (index, value, state, token, patch).
+type Pinned = (usize, u64, TokenState, Token, Option<(usize, usize)>);
+
+/// What adding the outputs of the legs leaves for the end of the transaction.
+struct LegOutputs {
+    /// The outputs pinned at a custody input's index, filled once every other output is placed.
+    returns: Vec<Pinned>,
+    /// (input, argument, output): the argument of an input that receives an output's index.
+    patches: Vec<(usize, usize, usize)>,
+    /// The leg each output belongs to.
+    owner: BTreeMap<usize, usize>,
+}
+
+/// Reserves the positional outputs and the pinned ones, and adds the extras of every leg.
+fn add_leg_outputs(d: &mut Draft, b: &Batch, lay: &Layout, plans: &mut [LegPlan]) -> Result<LegOutputs> {
+    let n_legs = b.legs.len();
     for _ in 0..n_legs {
         d.reserve_output();
     }
@@ -3462,7 +3541,6 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
-    type Pinned = (usize, u64, TokenState, Token, Option<(usize, usize)>);
     let mut returns: Vec<Pinned> = vec![];
     let mut patches: Vec<(usize, usize, usize)> = vec![];
     // The leg each output belongs to (its positional output, its extras), so that a refusal of
@@ -3502,6 +3580,11 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             }
         }
     }
+    Ok(LegOutputs { returns, patches, owner })
+}
+
+/// Adds the continuation of every update.
+fn add_update_outputs(d: &mut Draft, b: &Batch, update_outs: Vec<(usize, AnyState, i64)>) -> Result<()> {
     for (k, (at, next, take)) in update_outs.into_iter().enumerate() {
         let u = &b.updates[k];
         let cov = u.order.utxo.covenant_id.expect("checked");
@@ -3517,12 +3600,13 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
         }
         d.add_output(pos(cont, "update continuation")?, next.spk(), Some((at as u16, cov)));
     }
-    for p in &b.payments {
-        d.add_output(pos(p.amount as i64, "payment")?, spk_from_string(&p.script_public_key)?, None);
-    }
-    // The taker's net tokens, per token.
+    Ok(())
+}
+
+/// Adds the taker's net tokens, per token.
+fn add_taker_tokens(d: &mut Draft, b: &Batch, lay: &Layout, plans: &[LegPlan], exts: &Exts, change: Option<[u8; 32]>) -> Result<()> {
     for t in &lay.tokens {
-        let (sold, bought) = token_flow(&plans, *t)?;
+        let (sold, bought) = token_flow(plans, *t)?;
         let supplied: i64 = b.taker_tokens.iter().filter(|x| x.utxo.covenant_id == Some(t.0)).map(|x| x.state.amount()).sum();
         let net = sold + supplied - bought;
         if net < 0 {
@@ -3540,40 +3624,7 @@ fn build_batch_pass(b: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pass> 
             d.add_token_output(*t, TokenState::user(t.1, net, to, e), carrier)?;
         }
     }
-    // Pinned outputs at their custody input's index.
-    for (at, v, st, token, patch) in returns {
-        d.ensure_output(at);
-        d.fill_token_output(at, token, st, v)?;
-        if let Some((input, arg)) = patch {
-            patches.push((input, arg, at));
-        }
-    }
-    // Positional outputs.
-    for (i, p) in plans.iter().enumerate() {
-        match &p.pos {
-            PosOut::Pay(v, maker) => d.fill_output(i, *v, p2pk_spk(maker), None),
-            PosOut::Deliver(v, st, token) => d.fill_token_output(i, *token, st.clone(), *v)?,
-            PosOut::DeliverToExit { .. } => unreachable!("resolved with the exit"),
-            PosOut::Exit(v, spk, tpl) => {
-                d.fill_genesis(i, i, *v, spk.clone(), Some(*tpl))?;
-            }
-        }
-    }
-    for (i, r) in refunds.iter().enumerate() {
-        if let Some((value, maker)) = r {
-            d.add_refund(i, *value, *maker, leg_tokens[i].0);
-        }
-    }
-    // Patch index arguments (tokOut / exitOut / a merged pair entry's new custodies).
-    for (input, arg, out) in patches {
-        if let crate::tx::DPlan::Plain(SigPlan::Entry { args, .. }) = &mut d.inputs[input].plan {
-            args[arg] = Arg::Int(out as i64);
-        }
-    }
-    if !b.records.is_empty() {
-        d.payload = payload::encode_with_release(&b.records)?;
-    }
-    d.seal(budgets).map(|t| Pass::Built(Box::new(t))).map_err(|e| dust_leg(e, &owner))
+    Ok(())
 }
 
 /// Names the leg of a `seal` refusal for KIP-9 dust.
