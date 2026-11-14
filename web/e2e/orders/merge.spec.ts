@@ -1,16 +1,16 @@
-// "Merge tokens" (My orders > Balances) through the UI and the mock stack, on a token of KOB's standard 3 / 3 program. One click = ONE transfer
-// to the wallet itself of its smallest up-to-3 plain UTXOs (a merge is manual and costs a fee: the user clicks again to merge more), its
-// confirmation stating the KAS the merge frees and how many mergeable UTXOs remain: seven UTXOs become one in three clicks (3 -> 1, then the
-// smallest three of the five left, then the last three). The wallet's open sell order of the same token keeps its custody. The mock node runs
-// every transaction through the script engine.
+// "Merge all" (My orders > Balances) through the UI and the mock stack, on a token of KOB's standard 3 / 3 program. One click plans the whole
+// tree of transfers to the wallet itself (level 1 merges the original UTXOs in threes, later levels merge the outputs), and its confirmation
+// states the transactions, the wallet approvals (one per transaction, one after the other) and the KAS freed. A rejected or failed step stops
+// the run; what was sent stays merged and Merge all plans again from it. The mock wallets refuse an input their own node does not know
+// (KasWare 0.11.5), and that node sees a new output only when it is pushed to it here (`walletNodeLagMs`), so a later level is signed only
+// through the visibility gate (src/wallet/visibility.ts). The mock node runs every transaction through the script engine.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { test, expect, type MockClient } from '../fixtures';
 import { KAS, TOKEN, connectWallet } from '../helpers/env';
 import { runFlow } from '../helpers/orders';
-import { confirmUntil, expectStopped } from '../helpers/ticket';
 
-test.use({ autoOpen: false });
+test.use({ autoOpen: false, walletOptions: { walletNodeLagMs: 600_000 } });
 
 const STD = '5a'.repeat(32);
 const EXT = 'ee'.repeat(32);
@@ -27,148 +27,171 @@ async function registryWithStd(page: Page): Promise<void> {
   );
 }
 
-/** Records every text `flow-shown-as` (the chain summary of the running merge step) takes from now on: each step shows it only while it runs. */
-async function recordShownAs(page: Page): Promise<void> {
+const seedStd = (mock: MockClient) => mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
+
+/** Counts every appearance of the app's own final confirmation (a merge run's steps are confirmed up front, so it never shows for them). */
+async function recordConfirmPopups(page: Page): Promise<void> {
   await page.evaluate(() => {
-    const seen: string[] = [];
-    (window as unknown as { __shownAs: string[] }).__shownAs = seen;
-    const read = () => {
-      const text = document.querySelector('[data-testid="flow-shown-as"]')?.textContent?.trim();
-      if (text && !seen.includes(text)) seen.push(text);
-    };
-    new MutationObserver(read).observe(document.body, { subtree: true, childList: true, characterData: true });
-    read();
+    const w = window as unknown as { __confirms: number };
+    w.__confirms = 0;
+    let shown = false;
+    new MutationObserver(() => {
+      const now = !!document.querySelector('[data-testid="confirm-order"]');
+      if (now && !shown) w.__confirms++;
+      shown = now;
+    }).observe(document.body, { subtree: true, childList: true });
   });
 }
-const shownAs = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __shownAs: string[] }).__shownAs);
+const confirmPopups = (page: Page): Promise<number> => page.evaluate(() => (window as unknown as { __confirms: number }).__confirms);
 
 const ownedOf = async (mock: MockClient, pubkey: string) =>
   ((await mock.get(`/v1/token-utxos?owner=${pubkey}&token=${STD}&spent=false&limit=200`)).items as { txid: string; index: number; amount: string; role: string }[]).filter((u) => u.role === 'owned');
 
-/** Clicks Merge, runs its one transaction through the wallet and returns it with the summary its confirmation showed. */
-async function mergeOnce(page: Page, mock: MockClient, wallet: Parameters<typeof runFlow>[2]) {
-  const before = (await shownAs(page)).length;
-  await page.getByTestId(`orders-merge-token-${STD}`).click();
-  // the click plans before the new flow replaces the last one: until then the last merge's `flow-done` is still shown, and runFlow would take it
-  // for this merge's end and never confirm its popup (it cannot end again before its popup is confirmed)
-  await expect(page.getByTestId('flow-done')).toHaveCount(0, { timeout: 15_000 });
-  await expect(page.getByTestId('tx-flow')).toContainText('Merge EXSTD UTXOs');
-  // one transaction per click: no multi-step progress list
-  await expect(page.getByTestId('flow-progress')).toHaveCount(0);
-  const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-  await expect(page.getByTestId('flow-done')).toContainText('1 transaction submitted');
-  const shown = (await shownAs(page)).slice(before);
-  expect(shown).toHaveLength(1);
-  return { placed: placed!, shown: shown[0]! };
+/** The screenshots of this run (saved with the test's results). */
+const shot = (page: Page, name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
+
+async function openBalances(page: Page, count: number): Promise<void> {
+  await registryWithStd(page);
+  await page.goto('/#/portfolio');
+  await connectWallet(page, 'kasware');
+  await expect(page.getByTestId('balances-panel')).toBeVisible();
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(new RegExp(`^Merge all \\(${count}\\): about \\+[0-9.,]+ KAS$`), { timeout: 15_000 });
 }
 
-test('merge seven UTXOs of a 3 / 3 token: one 3 -> 1 transaction per click, the KAS freed stated, the open order untouched', async ({ appPage: page, mock, wallet }) => {
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
+test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 approvals, then a tree of 3 -> 1 merges into one UTXO', async ({ appPage: page, mock, wallet }) => {
+  test.setTimeout(240_000);
+  await seedStd(mock);
   const alice = (await mock.balance('alice')).pubkey;
-  for (let k = 1; k <= 7; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  await mock.giveTokens('alice', TOKEN, { token: STD, carrier: 2n * KAS, count: 30 });
   await mock.giveKas('alice', 20n * KAS);
   // an open sell order of the same token: its custody is the order's, never merged
   await mock.seed({ orders: [{ token: STD, side: 'ask', maker: 'alice', price: 2_700_000, amount: (3n * TOKEN).toString() }] });
   const [order] = await mock.ordersOf('alice');
   const custodyBefore = (await mock.order(order.covenant_id)).custody.utxo;
-  expect(await ownedOf(mock, alice)).toHaveLength(7);
+  expect(await ownedOf(mock, alice)).toHaveLength(30);
 
-  await registryWithStd(page);
-  await page.goto('/#/portfolio');
-  await connectWallet(page, 'kasware');
-  await expect(page.getByTestId('balances-panel')).toBeVisible();
-
-  const merge = page.getByTestId(`orders-merge-token-${STD}`);
-  await expect(merge).toHaveText(/^Merge \(7\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
-  // the KAS on the wallet's token UTXOs (the carriers a merge frees) is shown apart from the free KAS
-  await expect(page.getByTestId('kas-on-tokens')).toHaveText(/^[0-9.,]+\s*KAS$/);
-  await recordShownAs(page);
-
-  // click 1: the three smallest (1 + 2 + 3) into one; of their three 2 KAS carriers the merged output keeps one at the 1 KAS default, so 5 KAS come back, less the fee
-  const first = await mergeOnce(page, mock, wallet);
-  expect(first.shown).toMatch(
-    /^Merge your 3 smallest EXSTD UTXOs into one in one transaction: 7 UTXOs become 5\. About 4\.9\d* KAS of their carriers returns to your wallet \(after the fee of about 0\.\d+ KAS\)\. 5 mergeable UTXOs remain: click Merge again to merge more\.$/,
+  await openBalances(page, 30);
+  await recordConfirmPopups(page);
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  const dialog = page.getByTestId('merge-all-dialog');
+  await expect(dialog).toBeVisible({ timeout: 30_000 });
+  // thirty 2 KAS carriers, the final UTXO keeps 1 KAS: about 59 KAS less the fees come back
+  await expect(page.getByTestId('merge-all-summary')).toHaveText(
+    /^Merge your 30 EXSTD UTXOs into one: 15 transactions, one after the other, each approved in your wallet \(15 approvals\)\. About 58\.\d+ KAS of their carriers returns to your wallet \(after network fees of about 0\.\d+ KAS\)\. One UTXO remains\.$/,
   );
-  const tokenIns = (p: typeof first.placed) => (p.submission.spent ?? []).filter((x) => x.kind === 'token');
-  expect(tokenIns(first.placed)).toHaveLength(3);
-  // ONE token output: the wallet's, holding the three merged amounts (nothing goes to other keys)
-  expect(first.placed.submission.token_outputs).toHaveLength(1);
-  expect(first.placed.submission.token_outputs[0]!.owner).toBe(alice);
-  expect(first.placed.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
-  expect(first.placed.submission.closed).toEqual([]);
-  expect(await ownedOf(mock, alice)).toHaveLength(5);
-  // nothing merged by itself: the button now offers the five left
-  await expect(merge).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  expect(await wallet!.calls()).toEqual([]);
+  await shot(page, 'merge-all-confirmation');
+  // each approval takes the wallet a second, as a person does: the run can be seen mid-way
+  await wallet!.configure({ delayMs: 1000 });
+  await page.getByTestId('merge-all-confirm').click();
+  await expect(dialog).toHaveCount(0);
 
-  // click 2: the smallest three of 4, 5, 6, 6 (the first merge's output), 7: 4 + 5 + 6
-  const second = await mergeOnce(page, mock, wallet);
-  expect(second.shown).toContain('Merge your 3 smallest EXSTD UTXOs into one in one transaction: 5 UTXOs become 3.');
-  expect(second.shown).toContain('3 mergeable UTXOs remain');
-  expect(tokenIns(second.placed)).toHaveLength(3);
-  expect(second.placed.submission.token_outputs[0]!.amount).toBe((15n * TOKEN).toString());
-  await expect(merge).toHaveText(/^Merge \(3\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  const flow = page.getByTestId('tx-flow');
+  await expect(flow).toContainText('Merge EXSTD UTXOs');
+  await expect(page.locator('[data-testid^="flow-step-"]')).toHaveCount(15);
+  // mid-run: the first level is through, a later level is being built from its outputs
+  await expect(page.getByTestId('flow-step-11')).toHaveAttribute('data-state', 'sending', { timeout: 120_000 });
+  await shot(page, 'merge-all-progress');
+  const placed = await runFlow(page, mock, wallet, { steps: 15, confirm: false });
+  await expect(page.getByTestId('flow-done')).toContainText('15 transactions submitted');
 
-  // click 3: the last three (6, 7 and the second merge's output, 15)
-  const third = await mergeOnce(page, mock, wallet);
-  expect(third.shown).toMatch(/^Merge your 3 smallest EXSTD UTXOs into one in one transaction: 3 UTXOs become 1\. .* One UTXO remains: nothing more to merge\.$/);
-  expect(tokenIns(third.placed)).toHaveLength(3);
-  const out2 = second.placed.submission.token_outputs[0]!.output;
-  expect((third.placed.submission.spent ?? []).map((x) => x.outpoint)).toContain(`${second.placed.txid}:${out2}`);
-  expect(third.placed.submission.token_outputs[0]!.amount).toBe((28n * TOKEN).toString());
+  // one wallet approval per transaction and never the app's own confirmation in between
+  expect((await wallet!.calls()).map((c) => c.status)).toEqual(Array(15).fill('signed'));
+  expect(await confirmPopups(page)).toBe(0);
+  // each transaction was handed to the wallet's own node (KasWare pushTx): only that made a later level's inputs visible to it
+  expect((await wallet!.pushes()).map((p) => p.txid)).toEqual(placed.map((p) => p.txid));
+  const tokenIns = (p: (typeof placed)[number]) => (p.submission.spent ?? []).filter((x) => x.kind === 'token').map((x) => x.outpoint);
+  // level 1 (the first ten) spends only the original UTXOs; a later one spends outputs of earlier merges
+  const made = new Set(placed.map((p) => p.txid));
+  placed.slice(0, 10).forEach((p) => expect(tokenIns(p).some((o) => made.has(o.split(':')[0]!))).toBe(false));
+  expect(tokenIns(placed[10]!).filter((o) => made.has(o.split(':')[0]!))).toHaveLength(3);
+  for (const p of placed) {
+    expect(tokenIns(p).length).toBeLessThanOrEqual(3);
+    expect(p.submission.token_outputs).toHaveLength(1);
+    expect(p.submission.token_outputs[0]!.owner).toBe(alice);
+    expect(p.submission.closed).toEqual([]);
+  }
 
   const owned = await ownedOf(mock, alice);
   expect(owned).toHaveLength(1);
-  expect(owned[0]!.amount).toBe((28n * TOKEN).toString());
+  expect(owned[0]!.amount).toBe((30n * TOKEN).toString());
   const after = await mock.order(order.covenant_id);
   expect(after.status).toBe('open');
   expect(after.custody.utxo.txid).toBe(custodyBefore.txid);
   expect(after.custody.utxo.spent).toBe(false);
   // one UTXO left: nothing to merge
-  await expect(merge).toHaveCount(0, { timeout: 15_000 });
-  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'signed', 'signed']);
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveCount(0, { timeout: 15_000 });
 });
 
-test('a merge the wallet rejects sends nothing: the UTXOs stay as they were', async ({ appPage: page, mock, wallet }) => {
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
+test('a step rejected mid-run stops the merge cleanly: what was sent stays merged, and Merge all plans the rest from there', async ({ appPage: page, mock, wallet }) => {
+  test.setTimeout(180_000);
+  await seedStd(mock);
   const alice = (await mock.balance('alice')).pubkey;
-  for (let k = 1; k <= 5; k++) await mock.giveTokens('alice', TOKEN, { token: STD, carrier: 2n * KAS });
-  await registryWithStd(page);
-  await page.goto('/#/portfolio');
-  await connectWallet(page, 'kasware');
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
-  await recordShownAs(page);
-  await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
+  for (let k = 1; k <= 7; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  await openBalances(page, 7);
+
+  // every request answers 2 s late: the second one is rejected while it waits
+  await wallet!.configure({ delayMs: 2000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
-  await confirmUntil(page, page.getByTestId('flow-stopped'));
-  await expectStopped(page, 'rejected', { testid: 'flow-status' });
-  const shown = await shownAs(page);
-  expect(shown[0]).toContain('Merge your 3 smallest EXSTD UTXOs into one in one transaction: 5 UTXOs become 3.');
-  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['rejected']);
-  expect(await mock.submitted(false)).toHaveLength(0);
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge your 7 EXSTD UTXOs into one: 3 transactions, one after the other, each approved in your wallet (3 approvals).', { timeout: 30_000 });
+  await page.getByTestId('merge-all-confirm').click();
+  await wallet!.waitForCalls(2, 60_000);
+  await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
+  await expect(page.getByTestId('flow-done')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId('flow-done')).toHaveText('Done: 1 transaction submitted.');
+  await expect(page.getByTestId('flow-step-0')).toHaveAttribute('data-state', 'submitted');
+  await expect(page.getByTestId('flow-step-1')).toHaveAttribute('data-state', 'cancelled');
+  await expect(page.getByTestId('flow-step-2')).toHaveAttribute('data-state', 'pending');
+  await expect(page.getByTestId('tx-flow')).toContainText('1 transaction not started');
+  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'rejected']);
+  // the first merge went through (1 + 2 + 3 = 6), the rest is untouched: a valid state
+  await expect.poll(async () => (await ownedOf(mock, alice)).map((u) => BigInt(u.amount)).sort((a, b) => (a < b ? -1 : 1)), { timeout: 15_000 }).toEqual(
+    [4n, 5n, 6n, 6n, 7n].map((k) => k * TOKEN),
+  );
+
+  // run again: planned from the five left, two transactions into one
+  await page.getByTestId('tx-flow-dismiss').click();
+  await wallet!.configure({ approve: true, delayMs: 0 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(5\): /, { timeout: 15_000 });
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge your 5 EXSTD UTXOs into one: 2 transactions', { timeout: 30_000 });
+  await page.getByTestId('merge-all-confirm').click();
+  await runFlow(page, mock, wallet, { steps: 2, confirm: false });
   const owned = await ownedOf(mock, alice);
-  expect(owned.map((u) => BigInt(u.amount))).toEqual([TOKEN, TOKEN, TOKEN, TOKEN, TOKEN]);
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge \(5\): about \+[0-9.,]+ KAS$/);
+  expect(owned.map((u) => u.amount)).toEqual([(28n * TOKEN).toString()]);
 });
 
-test('a token the registry does not list is mergeable too: Merge shows under its node-verified program and one click merges its three smallest UTXOs', async ({ appPage: page, mock, wallet }) => {
+test('closing the confirmation sends nothing', async ({ appPage: page, mock, wallet }) => {
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  await mock.giveTokens('alice', TOKEN, { token: STD, carrier: 2n * KAS, count: 5 });
+  await openBalances(page, 5);
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  await expect(page.getByTestId('merge-all-dialog')).toBeVisible({ timeout: 30_000 });
+  await page.getByTestId('merge-all-cancel').click();
+  await expect(page.getByTestId('merge-all-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('tx-flow')).toHaveCount(0);
+  expect(await wallet!.calls()).toEqual([]);
+  expect(await mock.submitted(false)).toHaveLength(0);
+  expect(await ownedOf(mock, alice)).toHaveLength(5);
+});
+
+test('a token the registry does not list is mergeable too, under its node-verified program', async ({ appPage: page, mock, wallet }) => {
   // EXSTD is in the mock chain only (no registry route here): the wallet holds it as an open-list token
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
+  await seedStd(mock);
   const alice = (await mock.balance('alice')).pubkey;
   for (let k = 1; k <= 4; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
   await mock.giveKas('alice', 20n * KAS);
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
-  await expect(merge).toHaveText(/^Merge \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
-  await recordShownAs(page);
+  await expect(merge).toHaveText(/^Merge all \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
   await merge.click();
-  await expect(page.getByTestId('flow-done')).toHaveCount(0, { timeout: 15_000 });
-  await expect(page.getByTestId('tx-flow')).toContainText('UTXOs');
-  const [placed] = await runFlow(page, mock, wallet, { steps: 1 });
-  await expect(page.getByTestId('flow-done')).toContainText('1 transaction submitted');
-  expect((await shownAs(page))[0]).toMatch(/into one in one transaction: 4 UTXOs become 2\./);
-  // ONE token output holding the three smallest amounts (1 + 2 + 3), the fourth UTXO untouched
-  expect(placed!.submission.token_outputs).toHaveLength(1);
-  expect(placed!.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
-  expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount)).sort()).toEqual([4n * TOKEN, 6n * TOKEN]);
+  await expect(page.getByTestId('merge-all-summary')).toContainText('UTXOs into one: 2 transactions', { timeout: 30_000 });
+  await page.getByTestId('merge-all-confirm').click();
+  const placed = await runFlow(page, mock, wallet, { steps: 2, confirm: false });
+  // level 1 merges the three smallest (1 + 2 + 3), level 2 that output with the fourth
+  expect(placed[0]!.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
+  expect(placed[1]!.submission.token_outputs[0]!.amount).toBe((10n * TOKEN).toString());
+  expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount))).toEqual([10n * TOKEN]);
 });

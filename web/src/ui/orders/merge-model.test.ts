@@ -1,5 +1,5 @@
-// The merge action's model: the outpoints held for open orders, the per-token count behind the "Merge (n)" button and the flow steps with the
-// summary every confirmation screen of the chain shows.
+// The merge action's model: the outpoints held for open orders, the per-token count behind the "Merge all (n)" button, the KAS it frees, and
+// the flow steps with the summary the run's confirmation states (transactions, approvals, KAS freed).
 import { describe, expect, it } from 'vitest';
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
@@ -7,7 +7,7 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeFailure, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, nextMergeFrees, reservedOutpoints, unlistedMergeToken } from './merge-model';
+import { mergeAllFrees, mergeFailure, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
 import { summarize } from '../../signer/summary';
 import { formatKas } from '../../kob/units';
 
@@ -53,7 +53,7 @@ describe('a token the registry does not list (open list, foreign KCC-20)', () =>
     const mt = unlistedMergeToken(TOKEN.covenantId, mine, MAKER.pk, new Set(), unlisted)!;
     expect(mt).toEqual({ covenantId: TOKEN.covenantId, program: TOKEN.program, templateHash: info.templateHash, extensionCommitment: TOKEN.ext, slots: { inputs: info.slots.inputs } });
     expect(mergeableCounts(mine, none, MAKER.pk, new Set(), unlisted)).toEqual(new Map([[TOKEN.covenantId, 3]]));
-    expect(nextMergeFrees(mine, none, MAKER.pk, new Set(), unlisted).has(TOKEN.covenantId)).toBe(true);
+    expect(mergeAllFrees(mine, none, MAKER.pk, new Set(), unlisted).has(TOKEN.covenantId)).toBe(true);
     // no node-verified program: nothing to merge with (and without the option the registry-only behaviour stays)
     expect(mergeableCounts(mine, none, MAKER.pk, new Set(), { kob, programs: new Map() }).size).toBe(0);
     expect(mergeableCounts(mine, none, MAKER.pk, new Set()).size).toBe(0);
@@ -73,55 +73,76 @@ describe('a token the registry does not list (open list, foreign KCC-20)', () =>
     expect(mergeTokenFor(TOKEN.covenantId, mine, registry.byCovenantId, MAKER.pk, new Set(), unlisted)).toEqual(mergeTokenOf(info));
   });
 
-  it('the plan merges them: one transaction, the smallest UTXOs into one', () => {
+  it('the plan merges them: one transaction, the three UTXOs into one', () => {
     const mt = unlistedMergeToken(TOKEN.covenantId, mine, MAKER.pk, new Set(), unlisted)!;
-    const plan = planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mt, mine, new Set(), 1);
+    const plan = planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mt, mine);
     expect(plan.ok).toBe(true);
     expect(plan.links).toHaveLength(1);
     expect(plan.links[0]!.inputs).toHaveLength(3);
   });
 });
 
-describe('merge flow step (one transaction per click)', () => {
-  const set = Array.from({ length: 5 }, (_, i) => tokenUtxo(BigInt(10 * (i + 1)), MAKER.pk, 0x90 + i, 2n * KAS));
-  const one = () => planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mergeTokenOf(info)!, set, new Set(), 1);
+describe('Merge all: the confirmation and the flow steps', () => {
+  const set = (n: number) => Array.from({ length: n }, (_, i) => tokenUtxo(BigInt(10 * (i + 1)), MAKER.pk, 0x90 + i, 2n * KAS));
+  const plan = (n: number, o = {}) => planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 10n * KAS)] }, mergeTokenOf(info)!, set(n), new Set(), o);
 
-  it('the app plans one link: its confirmation says what it merges, the KAS it frees and how many mergeable UTXOs remain', () => {
-    const plan = one();
-    expect(plan.ok).toBe(true);
-    expect(plan.links).toHaveLength(1);
-    // three 2 KAS carriers in, one kept by the merged output at the 1 KAS default: 5 KAS less the fee come back
-    expect(plan.freed).toBe(5n * KAS - plan.fee);
-    const summary = mergeSummary(plan, info.ticker);
-    const freed = (Number(plan.freed) / 1e8).toString().replace('.', '\\.');
-    expect(summary).toMatch(
+  it('30 UTXOs: the confirmation states 15 transactions, 15 wallet approvals and the KAS freed', () => {
+    const p = plan(30);
+    expect(p.ok).toBe(true);
+    expect(p.links).toHaveLength(15);
+    // thirty 2 KAS carriers in, the final UTXO keeps one at the 1 KAS default: 59 KAS less the fees come back
+    expect(p.freed).toBe(59n * KAS - p.fee);
+    const freed = formatKas(p.freed).replace('.', '\\.');
+    expect(mergeSummary(p, info.ticker)).toMatch(
       new RegExp(
-        `^Merge your 3 smallest TST UTXOs into one in one transaction: 5 UTXOs become 3\\. About ${freed} KAS of their carriers returns to your wallet \\(after the fee of about 0\\.\\d+ KAS\\)\\. 3 mergeable UTXOs remain: click Merge again to merge more\\.$`,
+        `^Merge your 30 TST UTXOs into one: 15 transactions, one after the other, each approved in your wallet \\(15 approvals\\)\\. About ${freed} KAS of their carriers returns to your wallet \\(after network fees of about 0\\.\\d+ KAS\\)\\. One UTXO remains\\.$`,
       ),
     );
-    const step = mergeStep(plan.links[0]!, summary);
-    expect(step.title).toBe('Merge tokens');
-    expect(step.shownAs).toBe(summary);
-    expect(step.plan.built).toBe(plan.links[0]!.built);
-    expect(step.spends).toEqual([]);
-    expect(step.toast).toBe('Submitted: 3 token UTXOs merged into one.');
+    // the button's figure before the click: the carriers less the one the final UTXO keeps, before the fees
+    expect(mergeAllFrees(set(30), registry.byCovenantId, MAKER.pk, new Set()).get(TOKEN.covenantId)).toBe(59n * KAS);
+    expect(mergeAllFrees(set(1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
+  });
+
+  it('one transaction says so in the singular; a merge that cannot take every UTXO says how many it takes and what remains', () => {
+    expect(mergeSummary(plan(3), info.ticker)).toMatch(/^Merge your 3 TST UTXOs into one: 1 transaction, approved in your wallet \(1 approval\)\. About /);
+    const some = mergeSummary({ ...plan(3), before: 120, merged: 101, after: 20 }, info.ticker);
+    expect(some).toMatch(/^Merge your 101 smallest TST UTXOs \(of 120\) into one: /);
+    expect(some).toMatch(/ 20 mergeable UTXOs remain: Merge all again to merge them\.$/);
+  });
+
+  it('the sell ticket\'s merge says the sale comes after it, with its own confirmation', () => {
+    const p = plan(30, { target: 2000n });
+    expect(p.links).toHaveLength(3);
+    expect(mergeSummary(p, info.ticker)).toMatch(
+      /^Your TST needs merging before the sale: 3 transactions, one after the other, each approved in your wallet \(3 approvals\)\. Then the sale is planned again and you confirm it as usual\. About [0-9.]+ KAS /,
+    );
+  });
+
+  it('every step is confirmed up front (the wallet approval is its one prompt); a run of several reports in its card, not by toasts', () => {
+    const p = plan(7);
+    const summary = mergeSummary(p, info.ticker);
+    const steps = p.links.map((l, i) => mergeStep(l, i, p.links.length, summary));
+    expect(steps.map((x) => x.title)).toEqual(['Merge 1 of 3', 'Merge 2 of 3', 'Merge 3 of 3']);
+    expect(steps.every((x) => x.preconfirmed && x.silent && x.shownAs === summary && x.spends.length === 0)).toBe(true);
+    expect(steps[2]!.plan.built).toBe(p.links[2]!.built);
+    const one = plan(3);
+    const single = mergeStep(one.links[0]!, 0, 1, mergeSummary(one, info.ticker));
+    expect(single.title).toBe('Merge tokens');
+    expect(single.silent).toBeUndefined();
+    expect(single.preconfirmed).toBe(true);
+    expect(single.toast).toBe('Submitted: 3 token UTXOs merged into one.');
     expect(mergeFailure({ issues: [{ code: 'merge.nothing', severity: 'error', message: 'x' }] }).ok).toBe(false);
   });
 
-  it('the signer frame says what the merge makes spendable (the KAS line alone reads as the fee) and the button says it before the click', () => {
-    const plan = one();
-    const signer = summarize(kob, plan.links[0]!.built, MAKER.pk, []);
+  it('the signer frame says what a merge makes spendable (the KAS line alone reads as the fee)', () => {
+    const p = plan(5);
+    const signer = summarize(kob, p.links[0]!.built, MAKER.pk, []);
     const line = signer.lines.find((l) => l.label === 'KAS freed from your token UTXOs (now spendable)');
     expect(line?.value).toBe(`${formatKas(5n * KAS)} KAS`);
-    // three 2 KAS carriers, one kept at the 1 KAS default: about 5 KAS before the fee
-    expect([...nextMergeFrees(set, registry.byCovenantId, MAKER.pk, new Set())]).toEqual([[TOKEN.covenantId, 5n * KAS]]);
-    expect(nextMergeFrees(set.slice(0, 1), registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
   });
 
-  it('the last merge says nothing is left; a fee above the freed carriers is stated as a net cost', () => {
-    const last = mergeSummary({ ...one(), before: 3, after: 1 }, info.ticker);
-    expect(last).toMatch(/ One UTXO remains: nothing more to merge\.$/);
-    const cost = mergeSummary({ ...one(), freed: -1_000_000n, fee: 3_000_000n }, info.ticker);
-    expect(cost).toContain('The fee of about 0.03 KAS exceeds the carriers it frees: your wallet pays about 0.01 KAS net.');
+  it('a fee above the freed carriers is stated as a net cost', () => {
+    const cost = mergeSummary({ ...plan(3), freed: -1_000_000n, fee: 3_000_000n }, info.ticker);
+    expect(cost).toContain('The network fees of about 0.03 KAS exceed the carriers it frees: your wallet pays about 0.01 KAS net.');
   });
 });

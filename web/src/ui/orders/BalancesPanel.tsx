@@ -7,6 +7,7 @@ import { TipBadge } from '../market/TipBadge';
 import { TokenNote } from '../market/TokenNote';
 import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
+import { mergeSlots, mergeTxCount } from '../../kob/merge';
 import type { Hex } from '../../kob/types';
 import { KasIcon } from '../kit/KasIcon';
 import {
@@ -21,9 +22,9 @@ import { IdentityBlock } from '../market/Fingerprint';
 import type { KascovMeta } from '../market/token-model';
 import type { WalletBalances } from './use-balances';
 import { AMOUNT_FRACTION_MAX, amountCell } from './cells';
-import { tCount } from './plural';
+import { countText, tCount } from './plural';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
-import { mergeTokenFor, mergeableCounts, nextMergeFrees } from './merge-model';
+import { mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 import './balances.css';
 
@@ -121,9 +122,9 @@ export function BalancesPanel(props: {
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
-  // about how much KAS the next Merge click frees, per token (shown on the button: the reason to press it)
+  // about how much KAS Merge all frees, per token (shown on the button: the reason to press it)
   const frees = useMemo(
-    () => (free.data ? nextMergeFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, bigint>()),
+    () => (free.data ? mergeAllFrees(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, bigint>()),
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
@@ -274,7 +275,7 @@ export function BalancesPanel(props: {
                                 small
                                 disabled={!props.canSign || !!props.busy}
                                 loading={props.busy === `merge-${b.token}`}
-                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: mergeAs!.slots.inputs })}
+                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: mergeSlots(mergeAs!), txs: countText('tx', mergeTxCount(mergeable.get(b.token)!, mergeSlots(mergeAs!))) })}
                                 onClick={() => props.onMergeToken!(b.token)}
                                 data-testid={`orders-merge-token-${b.token}`}
                               >

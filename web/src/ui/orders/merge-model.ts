@@ -1,16 +1,17 @@
-// "Merge tokens" in My orders > Balances: which token UTXOs a merge may take, how many per token, the flow step of a planned merge and the summary
-// its confirmation shows. One click = ONE transaction (planMergeFor plans one link: the smallest up-to-3 UTXOs into one): a merge is manual and
-// every transaction costs a fee, so the user decides each one and clicks again to merge more. Pure; the builder is kob/merge.ts.
+// "Merge all" in My orders > Balances and the sell ticket's merge: which token UTXOs a merge may take, how many per token, the flow steps of a
+// planned merge and the summary its confirmation shows. One click plans the whole tree (kob/merge.ts): its confirmation states the transactions,
+// the wallet approvals (one per transaction, one after the other) and the KAS freed, and nothing is sent before the user confirms. Pure.
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
-import { mergeCandidates, mergeSlots, outpointOf, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
+import { mergeCandidates, outpointOf, planMergeShape, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
 import type { KobWasm } from '../../kob/wasm';
 import { extensionOfState, familyOfProgram } from '../../kob/token-state';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
+import { countText } from './plural';
 import type { FlowStep } from './TxFlow';
 
 const LIVE = new Set(['open', 'partial']);
@@ -97,18 +98,19 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
 }
 
 /**
- * Per token: about how much KAS the next Merge click frees (before its fee, a few hundredths of a KAS): the KAS on the UTXOs one transaction takes
- * (the smallest ones, `mergeCandidates` order, up to the program's inputs) less the carrier the merged UTXO keeps (the largest input's, at most the
- * default carrier: kob/merge.ts `mergedCarrier`). Tokens with fewer than two mergeable UTXOs are left out. The confirmation states the exact amount.
+ * Per token: about how much KAS "Merge all" frees (before its fees, a few hundredths of a KAS per transaction): the KAS on the UTXOs the
+ * tree merges (planMergeShape: every mergeable one, up to MAX_MERGE_TXS transactions) less the carrier the final UTXO keeps (the largest
+ * input's, at most the default carrier: kob/merge.ts `mergedCarrier`; a carrier an intermediate output keeps is freed by the next level).
+ * Tokens with fewer than two mergeable UTXOs are left out. The confirmation states the exact amount.
  */
-export function nextMergeFrees(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge): Map<Hex, bigint> {
+export function mergeAllFrees(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge): Map<Hex, bigint> {
   const out = new Map<Hex, bigint>();
   for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
     const mt = mergeTokenFor(id, freeTokens, tokens, maker, reserved, unlisted);
     if (!mt) continue;
-    const take = mergeCandidates(freeTokens, mt, maker, reserved).slice(0, mergeSlots(mt));
-    if (take.length < 2) continue;
-    const kas = take.map((u) => BigInt(u.amount));
+    const shape = planMergeShape(mt, freeTokens, maker, reserved);
+    if (!shape.ok) continue;
+    const kas = shape.nodes.flatMap((n) => n.fresh.map((u) => BigInt(u.amount)));
     const largest = kas.reduce((m, v) => (v > m ? v : m), 0n);
     const kept = largest < DEFAULT_CARRIER ? largest : DEFAULT_CARRIER;
     out.set(id, kas.reduce((s, v) => s + v, 0n) - kept);
@@ -116,20 +118,30 @@ export function nextMergeFrees(freeTokens: readonly TokenUtxo[], tokens: Readonl
   return out;
 }
 
+/** "3 transactions, one after the other, each approved in your wallet (3 approvals)": what a merge of `txs` transactions asks of the user. */
+const mergeRunText = (txs: number): string =>
+  t(txs === 1 ? 'orders.merge.run.one' : 'orders.merge.run.other', { txs: countText('tx', txs), approvals: countText('approval', txs) });
+
 /**
- * The merge in a few sentences (shown on its confirmation): how many UTXOs it merges and the count before / after, the KAS it frees (the merged
- * UTXOs' carriers, less the one the merged output keeps, less the fee: the reason to merge at all; when the fee exceeds the freed carriers, the
- * net cost instead) and how many mergeable UTXOs are left for the next click. Written for the app's one-link plan; a chain says its count.
+ * The merge in a few sentences (shown on its confirmation, and while it runs): what it merges, the transactions and the wallet approvals it
+ * takes (one each, one after the other), the KAS it frees (the merged UTXOs' carriers, less the ones the outputs keep, less the fees: the
+ * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and how many mergeable UTXOs a full merge leaves. The
+ * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation.
  */
-export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee'>, ticker: string): string {
+export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'>, ticker: string): string {
+  const n = plan.links.length;
+  const counts = { ticker, run: mergeRunText(n), merged: plan.merged, before: plan.before };
   const head =
-    plan.links.length > 1
-      ? t('orders.merge.summaryChain', { ticker, merged: plan.merged, before: plan.before, after: plan.after, txs: plan.links.length })
-      : t('orders.merge.summary', { ticker, merged: plan.merged, before: plan.before, after: plan.after });
+    plan.target !== null
+      ? t('orders.merge.summaryTarget', counts)
+      : plan.merged === plan.before
+        ? t('orders.merge.summaryAll', counts)
+        : t('orders.merge.summarySome', counts);
   const kas =
     plan.freed > 0n
       ? t('orders.merge.freed', { freed: formatKas(plan.freed), fee: formatKas(plan.fee) })
       : t('orders.merge.costs', { cost: formatKas(-plan.freed), fee: formatKas(plan.fee) });
+  if (plan.target !== null) return `${head} ${kas}`;
   const rest = plan.after >= 2 ? t('orders.merge.more', { after: plan.after }) : t('orders.merge.last');
   return `${head} ${kas} ${rest}`;
 }
@@ -139,14 +151,19 @@ export function mergeFlowPlan(link: MergeLink): CancelPlan {
   return { ok: true, issues: link.issues, request: null, built: link.built, cancelIds: [], expected: { cancelIds: [] }, tokensReturned: 0n, kasReleased: 0n, fundingUsed: link.fundingUsed };
 }
 
-/** The merge's one transaction as a flow step, its confirmation showing `summary`. */
-export function mergeStep(link: MergeLink, summary: string): FlowStep {
+/**
+ * Link `n` (0-based) of `total` as a flow step, `summary` shown while it runs. The user confirmed the whole run before it started, so the
+ * step is `preconfirmed`: the wallet's approval is its one prompt. A run of several reports in its card, not with a toast per step.
+ */
+export function mergeStep(link: MergeLink, n: number, total: number, summary: string): FlowStep {
   return {
-    title: t('orders.merge.title'),
+    title: total > 1 ? t('orders.merge.step', { n: n + 1, total }) : t('orders.merge.title'),
     plan: mergeFlowPlan(link),
     spends: [],
     shownAs: summary,
     toast: t('orders.merge.submitted', { count: link.inputs.length }),
+    ...(total > 1 ? { silent: true } : {}),
+    preconfirmed: true,
   };
 }
 

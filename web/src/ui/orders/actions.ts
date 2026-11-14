@@ -15,12 +15,14 @@ import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { Family, Hex, TokenUtxo } from '../../kob/types';
 import { t, tIssue } from '../../i18n';
 import { buildErrorText } from '../../i18n/build-error';
-import { planMerge, type MergePlan, type MergeToken } from '../../kob/merge';
+import { buildMergeLink, mergeCarry, mergeLeaves, planMerge, type MergeLink, type MergeOptions, type MergePlan, type MergeToken } from '../../kob/merge';
 import type { TokenInfo } from '../../kob/registry';
 import { waitForAcceptance } from '../../wallet/sign';
 import { buildReplacement, type AmendInput, type AmendKind, type AmendResult } from './amend';
+import { mergeStep } from './merge-model';
 import { spkToAddressFor } from './orders-data';
 import type { OrderEntry } from './orders-model';
+import type { FlowStep } from './TxFlow';
 
 
 /** Indexer stray -> token UTXO of the order (the state is taken from the view, or rebuilt from owner + amount + extension commitment). */
@@ -293,15 +295,86 @@ export async function dropRecords(store: RecordStore, ids: readonly Hex[]): Prom
 // ------------------------------------------------------------------------------------------------ token merge
 
 /**
- * Plans ONE merge transaction of the wallet's plain UTXOs of `token` (kob/merge.ts with `maxLinks` 1): the smallest up to the program's token
- * inputs (3 for KOB's standard program) into one output. A merge is manual and costs a fee, so one click is one transaction and the user clicks
- * again to merge more (the same for a wallet and the private-key signer; nothing merges automatically). The token UTXOs come from the tracker
- * (indexer + local candidates, verified on the node), never one of `reserved` (the open orders' custodies and strays).
+ * Plans the merge of the wallet's plain UTXOs of `token` as a tree (kob/merge.ts). With no
+ * `target` it is "Merge all": every mergeable UTXO into one, at most MAX_MERGE_TXS transactions.
+ * With a `target` it is the sell ticket's merge: only until one placement can take the amount. The
+ * token UTXOs come from the tracker (indexer and local candidates, verified on the node) without
+ * what this page has just spent, and never one of `reserved` (the open orders' custodies and
+ * strays). A merge is manual and costs a fee: nothing merges until the user confirms the plan.
  */
-export async function planMergeFor(s: Services, pubkey: Hex, token: MergeToken | null, reserved: ReadonlySet<string>): Promise<MergePlan> {
+export async function planMergeFor(s: Services, pubkey: Hex, token: MergeToken | null, reserved: ReadonlySet<string>, o: MergeOptions = {}): Promise<MergePlan> {
   if (!token) throw new Error(t('orders.merge.unsupported'));
   const env = await buildCancelEnv(s, { pubkey }, token);
-  return planMerge(env, token, env.tokenUtxos ?? [], reserved, 1);
+  return planMerge(env, token, env.tokenUtxos ?? [], reserved, o);
+}
+
+/** How long a merge waits for the outputs it spends to be in the node's UTXO set. */
+export const MERGE_PARENT_TIMEOUT_MS = 60_000;
+
+/** The outputs of the sent links `ids` on the node, in that order, or null when one is not there in time. */
+async function sentOutputs(s: Services, ids: readonly number[], sent: readonly MergeLink[], txids: readonly string[], timeoutMs: number) {
+  const toAddress = spkToAddressFor(s);
+  const want = ids.map((k) => {
+    const l = sent[k]!;
+    return { address: toAddress(l.built.tx.outputs[l.output.index]!.scriptPublicKey), transactionId: txids[k]!, index: l.output.index };
+  });
+  const res = await waitForAcceptance(s.node, want, { timeoutMs });
+  if (!res.accepted) return null;
+  return want.map((w) => res.found.find((f) => f.transactionId === w.transactionId && f.index === w.index)!);
+}
+
+/**
+ * Link `k` of a running merge, built again at its turn. `sent` holds the links sent so far and
+ * `txids` their transaction ids. Its parents' outputs are read from the NODE, once the node lists
+ * them: KOB's node lists an output once its transaction is in a block, and the send re-reads every
+ * input there before the wallet is asked. The KAS UTXOs are read afresh, without the ones the run
+ * has spent. A link of level 1 waits for nothing. The wallet's own node is the send's visibility
+ * gate (wallet/visibility.ts).
+ */
+export async function nextMergeLink(
+  s: Services, pubkey: Hex, token: MergeToken, plan: MergePlan, k: number, sent: readonly MergeLink[], txids: readonly string[], timeoutMs = MERGE_PARENT_TIMEOUT_MS,
+): Promise<MergeLink> {
+  const planned = plan.links[k];
+  if (!planned) throw new Error(t('orders.merge.unsupported'));
+  const found = planned.parents.length ? await sentOutputs(s, planned.parents, sent, txids, timeoutMs) : [];
+  if (!found) throw new Error(t('orders.merge.notAccepted'));
+  const carried = planned.parents.map((p, i) => mergeCarry(sent[p]!, txids[p]!, token, found[i]));
+  const env = await buildCancelEnv(s, { pubkey });
+  const link = buildMergeLink(env, token, [...carried, ...planned.fresh], planned.fresh, new Set(), planned);
+  if ('error' in link) throw new Error(tIssue('orders.issue', link.error));
+  return link;
+}
+
+/** A planned merge as the steps of a <TxFlow>, each later one built at its turn (`nextMergeLink`). */
+export interface MergeFlow {
+  steps: FlowStep[];
+  next(index: number, txids: readonly string[]): Promise<FlowStep>;
+  /** The links as built for the send so far, by step. */
+  sent: MergeLink[];
+}
+
+/** Runs `plan` (planned by `planMergeFor`) as a flow whose every step shows `summary`. */
+export function mergeFlow(s: Services, pubkey: Hex, token: MergeToken, plan: MergePlan, summary: string): MergeFlow {
+  const total = plan.links.length;
+  const sent: MergeLink[] = plan.links.slice(0, 1);
+  return {
+    steps: plan.links.map((l, i) => mergeStep(l, i, total, summary)),
+    sent,
+    next: async (k, txids) => {
+      const link = await nextMergeLink(s, pubkey, token, plan, k, sent, txids);
+      sent[k] = link;
+      return mergeStep(link, k, total, summary);
+    },
+  };
+}
+
+/**
+ * Waits until the node lists the outputs a merge run left: the leaves of the links it sent. The
+ * sale after the sell ticket's merge plans from them.
+ */
+export async function awaitMergeOutputs(s: Services, sent: readonly MergeLink[], txids: readonly string[], timeoutMs = MERGE_PARENT_TIMEOUT_MS): Promise<boolean> {
+  const leaves = mergeLeaves(sent).filter((k) => txids[k]);
+  return leaves.length === 0 || (await sentOutputs(s, leaves, sent, txids, timeoutMs)) !== null;
 }
 
 /** The user-facing text of a planning failure (a raw builder / node text becomes a plain sentence; `rawActionError` keeps it for "Details"). */

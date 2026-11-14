@@ -8,7 +8,7 @@ export function tCount(key: string, count: number | bigint, params: Params = {})
 }
 
 /** The nouns `countText` knows (`orders.n.<noun>.one|other`). */
-export const COUNT_NOUNS = ['order', 'utxo', 'fill', 'record', 'newRecord', 'input'] as const;
+export const COUNT_NOUNS = ['order', 'utxo', 'fill', 'record', 'newRecord', 'input', 'tx', 'approval'] as const;
 export type CountNoun = (typeof COUNT_NOUNS)[number];
 
 /** A count with its noun, "1 order" / "3 orders", for a sentence that names more than one count. */

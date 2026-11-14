@@ -40,7 +40,8 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeFailure, mergeStep, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { mergeFailure, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import type { MergePlan, MergeToken } from '../../kob/merge';
 import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
 import { fillHistory, fillsCsv, fillsFileName } from './fills-model';
@@ -50,7 +51,7 @@ import { countText, tCount } from './plural';
 import { downloadText, exportFileName } from '../kit/download';
 import { backupFileText } from './recover';
 import {
-  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, rawActionError, planCancelFor, planCancelMany, planMergeFor,
+  abandoningOrders, abandonsStrays, describeActionError, liveExitsOfRepeatEntry, markCancelling, mergeFlow, rawActionError, planCancelFor, planCancelMany, planMergeFor,
   planRefundFor, planSweepFor, planSweepMany, warnEntryOnly,
 } from './actions';
 import { amendKind, describeEntries, entryState, countByStatus, type OrderRowModel } from './orders-model';
@@ -63,7 +64,7 @@ interface Flow {
   key: number;
   heading: string;
   steps: FlowStep[];
-  /** a chained flow (token merge): builds step `index` once the previous one was submitted */
+  /** a chained flow (token merge): builds step `index` at its turn, once the steps it follows were submitted */
   next?: TxFlowProps['next'];
 }
 
@@ -181,6 +182,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const [confirmAll, setConfirmAll] = useState<{ token: Hex | null; ids: Hex[] } | null>(null);
 
   const [sweepFirst, setSweepFirst] = useState<{ ids: Hex[]; count: number; proceed: () => void; retry: () => void } | null>(null);
+  // a planned "Merge all" waiting for its confirmation (the transactions, approvals and KAS it frees)
+  const [mergeAsk, setMergeAsk] = useState<{ token: MergeToken; ticker: string; plan: MergePlan; summary: string } | null>(null);
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
@@ -375,8 +378,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const reserved = useMemo(() => reservedOutpoints(d), [d]);
 
   /**
-   * Merges the wallet's smallest plain UTXOs of `token` (up to the program's token inputs, 3) into one: ONE transfer to itself per click, its
-   * confirmation stating the KAS it frees and how many mergeable UTXOs remain; the user clicks again to merge more.
+   * "Merge all": plans the merge of every mergeable plain UTXO of `token` into one, as a tree of transfers to the wallet itself (kob/merge.ts),
+   * and asks for the confirmation that states its transactions, the wallet approvals (one each) and the KAS it frees. Nothing is sent before.
    */
   const mergeToken = (token: Hex) =>
     void guarded(`merge-${token}`, async () => {
@@ -387,8 +390,16 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
       const plan = await planMergeFor(services, pubkey, mt, reserved);
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      startFlow(t('orders.merge.heading', { ticker }), [mergeStep(plan.links[0]!, mergeSummary(plan, ticker))]);
+      setMergeAsk({ token: mt, ticker, plan, summary: mergeSummary(plan, ticker) });
     });
+
+  /** The confirmed merge: its transactions one after the other, each approved in the wallet; a later one is built at its turn. */
+  const startMerge = (ask: NonNullable<typeof mergeAsk>) => {
+    setMergeAsk(null);
+    if (!pubkey) return;
+    const run = mergeFlow(services, pubkey, ask.token, ask.plan, ask.summary);
+    startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next });
+  };
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);
   // close: cancel the position's live orders, then unwind at market. Buy first: the exits hold the bought tokens, the cancel returns them and
@@ -405,7 +416,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     // the records stay (marked) until the cancel is final: a fill may win the race, a reorg may undo it (C5-06)
     // (a sweep continues the order: markCancelling leaves its record unmarked, the send moved its last state to the continuation)
     if (pubkey) await markCancelling(wallet.records, { cancelIds: step.spends, built: step.plan.built }, result.txid);
-    showToast(step.toast ?? (step.plan.sweep ? tCount('orders.flow.sweepSubmitted', step.plan.sweep.utxos) : tCount('orders.flow.submitted', step.spends.length)), 'ok');
+    if (!step.silent) showToast(step.toast ?? (step.plan.sweep ? tCount('orders.flow.sweepSubmitted', step.plan.sweep.utxos) : tCount('orders.flow.submitted', step.spends.length)), 'ok');
   };
   const onFlowDone = (o: FlowOutcome) => {
     setSweepFollowUp((c) => (c && c.pending ? (o.submitted > 0 ? { ...c, pending: false } : null) : c));
@@ -852,6 +863,27 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       {amend && amendState && amendK === 'replace' && !replaceReady ? (
         <Modal title={t('orders.amend.title')} onClose={() => setAmend(null)} data-testid="replace-no-token">
           <p>{t('orders.replace.noToken')}</p>
+        </Modal>
+      ) : null}
+
+      {mergeAsk ? (
+        <Modal
+          title={t('orders.merge.confirmTitle', { ticker: mergeAsk.ticker })}
+          onClose={() => setMergeAsk(null)}
+          data-testid="merge-all-dialog"
+          footer={
+            <>
+              <Button onClick={() => setMergeAsk(null)} data-testid="merge-all-cancel">
+                {t('common.cancel')}
+              </Button>
+              <Button variant="primary" data-autofocus onClick={() => startMerge(mergeAsk)} data-testid="merge-all-confirm">
+                {t('orders.merge.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p data-testid="merge-all-summary">{mergeAsk.summary}</p>
+          <p class="small muted">{t('orders.merge.confirmNote')}</p>
         </Modal>
       ) : null}
 
