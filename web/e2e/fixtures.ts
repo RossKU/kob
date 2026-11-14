@@ -176,6 +176,10 @@ export class MockClient {
   setHealth(state: string, lagDaa = 0, extra: { book_complete?: boolean; history_from_daa?: number; payload_version?: number } = {}) {
     return this.post('/mock/health', { state, lag_daa: lagDaa, ...extra });
   }
+  /** The node lists an output of a submitted transaction only `holdMs` after it took it, as a real node once a block holds it (0: at once). */
+  nodeMempool(holdMs: number) {
+    return this.post('/mock/node-mempool', { hold_ms: holdMs });
+  }
   /** A chain re-org of `blocks` blocks (1 = routine; more than 30 is "deep"); changes nothing in the order data. */
   reorg(blocks = 1) {
     return this.post('/mock/reorg', { blocks });

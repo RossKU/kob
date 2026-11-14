@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { p2pkScriptPublicKey } from '../data/utxos';
+import type { TokenUtxo } from '../kob/types';
 import { PENDING_SPEND_TTL_MS, PendingSpends } from './pending-spends';
 
 const u = (transactionId: string, index: number) => ({ transactionId, index, amount: '1' });
@@ -71,5 +72,30 @@ describe('PendingSpends', () => {
     // a reservation that cannot be read reserves nothing
     const broken = new PendingSpends(() => 0, () => { throw new Error('storage'); });
     expect(broken.funding([coin('p1', 0)], pk)).toHaveLength(1);
+  });
+  it("counts the token change of a submitted transaction as the key's token UTXO until the node lists it (TN10 2026-11-14: a sell ladder's level 3 held 0)", () => {
+    let now = 0;
+    const p = new PendingSpends(() => now);
+    const pk = 'ab'.repeat(32);
+    const tok = 'ee'.repeat(32);
+    const tu = (transactionId: string, index: number, amount: string, covenantId = tok, owner = pk) =>
+      ({ transactionId, index, amount: '100000000', covenantId, state: { owner, amount, extension_commitment: 'cc'.repeat(32) } }) as unknown as TokenUtxo;
+    // level 1 spent the wallet's one token UTXO (100) and returned 99 as change; level 2 spends that change and returns 98
+    p.add([{ transactionId: 'a0', index: 0 }]);
+    p.addTokens([{ utxo: tu('L1', 2, '99'), scriptPublicKey: '0000aa' }], pk);
+    // the reader lists only what the node verifies: neither the spent UTXO (still listed by an old read) nor the change counts wrong
+    expect(p.tokens([tu('a0', 0, '100')], pk, tok).map((u) => [u.transactionId, u.state.amount])).toEqual([['l1', '99']]);
+    expect(p.factOf('L1', 2)).toEqual({ amount: 100000000n, scriptPublicKey: '0000aa', covenantId: tok });
+    p.add([{ transactionId: 'l1', index: 2 }]);
+    p.addTokens([{ utxo: tu('L2', 2, '98'), scriptPublicKey: '0000bb' }], pk);
+    expect(p.tokens([], pk, tok).map((u) => [u.transactionId, u.state.amount])).toEqual([['l2', '98']]);
+    // only this key's outputs of this token; once the node lists one, it is counted once
+    expect(p.tokens([], 'cd'.repeat(32), tok)).toEqual([]);
+    expect(p.tokens([], pk, '71'.repeat(32))).toEqual([]);
+    expect(p.tokens([], pk, undefined)).toEqual([]);
+    expect(p.tokens([tu('l2', 2, '98'), tu('b0', 0, '5')], pk, tok).map((u) => u.state.amount)).toEqual(['98', '5']);
+    now += PENDING_SPEND_TTL_MS;
+    expect(p.tokens([], pk, tok)).toEqual([]);
+    expect(p.factOf('l2', 2)).toBeNull();
   });
 });

@@ -11,13 +11,18 @@
 // one in its mempool. `factOf` stands for the node's facts of such an input, which the page knows
 // exactly because it built the transaction.
 //
+// Their token outputs back to the key, a placement's token change or a merge's output, count the
+// same way: the token reader lists only what the node verifies, so without them the next order of a
+// sell ladder, or the sale after a merge, would be planned without the tokens the last transaction
+// returned (TN10 2026-11-14: "you hold 0" at level 3).
+//
 // The preparation output 0 of an unfinished token creation (data/creations.ts) is reserved for its
 // genesis. While its record exists it never funds anything else, on any page; the Create token page
 // offers to finish it.
 import { reservedCreationOutpoints } from '../data/creations';
 import { p2pkScriptPublicKey } from '../data/utxos';
 import type { NodeInputFact } from '../kob/node-verify';
-import type { Hex, KeyUtxo, TxJson, Utxo } from '../kob/types';
+import type { Hex, KeyUtxo, TokenUtxo, TxJson, Utxo } from '../kob/types';
 
 /**
  * How long a submitted input stays excluded. It is far beyond acceptance, which takes seconds. A
@@ -33,11 +38,21 @@ interface OwnOutput {
   until: number;
 }
 
+interface OwnToken {
+  utxo: TokenUtxo;
+  /** the key that owns it */
+  pubkey: string;
+  scriptPublicKey: string;
+  until: number;
+}
+
 /** The submitted spends of this page, and the change they return to the wallet's key. */
 export class PendingSpends {
   private readonly spent = new Map<string, number>();
   /** The plain KAS outputs back to their key of the transactions submitted, by outpoint. */
   private readonly change = new Map<string, OwnOutput>();
+  /** The token outputs back to their key of the transactions submitted, by outpoint. */
+  private readonly tokenChange = new Map<string, OwnToken>();
   /** When the newest submission was made. 0 means none on this page. */
   lastAddedAt = 0;
   /** `reserved`: outpoints (`txid:index`, lower case) that are never funding (default: none; the page's registry: the unfinished creations) */
@@ -80,7 +95,47 @@ export class PendingSpends {
    */
   factOf(transactionId: string, index: number): NodeInputFact | null {
     const c = this.live(key(transactionId, index));
-    return c ? { amount: BigInt(c.utxo.amount), scriptPublicKey: c.scriptPublicKey, covenantId: null } : null;
+    if (c) return { amount: BigInt(c.utxo.amount), scriptPublicKey: c.scriptPublicKey, covenantId: null };
+    const tk = this.liveToken(key(transactionId, index));
+    return tk ? { amount: BigInt(tk.utxo.amount), scriptPublicKey: tk.scriptPublicKey, covenantId: tk.utxo.covenantId ?? null } : null;
+  }
+
+  /**
+   * The token outputs of a transaction the node accepted that belong to `pubkey` by itself: the
+   * caller derived each state from the built transaction and checked that the output's script
+   * commits to it (data/token-tracker.ts `trackFromBuilt`). They are token UTXOs of that key until
+   * the node lists them.
+   */
+  addTokens(outputs: readonly { utxo: TokenUtxo; scriptPublicKey: string }[], pubkey: Hex): void {
+    const until = this.now() + PENDING_SPEND_TTL_MS;
+    for (const o of outputs) {
+      const utxo = { ...o.utxo, transactionId: o.utxo.transactionId.toLowerCase() };
+      this.tokenChange.set(key(utxo.transactionId, utxo.index), { utxo, pubkey: pubkey.toLowerCase(), scriptPublicKey: o.scriptPublicKey, until });
+    }
+  }
+
+  /**
+   * The token UTXOs of `pubkey` for token `covenantId` that the reader listed (`utxos`), without
+   * what a submitted transaction spends, plus the token outputs of the submitted ones that are not
+   * listed yet. Largest amount first, as the token reader orders them.
+   */
+  tokens<U extends TokenUtxo>(utxos: U[], pubkey: Hex, covenantId: Hex | null | undefined): (U | TokenUtxo)[] {
+    const kept = this.without(utxos);
+    if (this.tokenChange.size === 0 || !covenantId) return kept;
+    const listed = new Set(utxos.map((u) => key(u.transactionId, u.index)));
+    const pk = pubkey.toLowerCase();
+    const cov = covenantId.toLowerCase();
+    const extra: TokenUtxo[] = [];
+    for (const [k, c] of [...this.tokenChange]) {
+      if (listed.has(k) || !this.liveToken(k) || c.pubkey !== pk || (c.utxo.covenantId ?? '').toLowerCase() !== cov || this.has(c.utxo.transactionId, c.utxo.index)) continue;
+      extra.push(c.utxo);
+    }
+    if (!extra.length) return kept;
+    return [...kept, ...extra].sort((a, b) => {
+      const d = BigInt(b.state.amount) - BigInt(a.state.amount);
+      if (d !== 0n) return d > 0n ? 1 : -1;
+      return a.transactionId === b.transactionId ? a.index - b.index : a.transactionId < b.transactionId ? -1 : 1;
+    });
   }
 
   /**
@@ -109,6 +164,14 @@ export class PendingSpends {
       if (d !== 0n) return d > 0n ? 1 : -1;
       return a.transactionId === b.transactionId ? a.index - b.index : a.transactionId < b.transactionId ? -1 : 1;
     });
+  }
+
+  private liveToken(k: string): OwnToken | null {
+    const c = this.tokenChange.get(k);
+    if (!c) return null;
+    if (c.until > this.now()) return c;
+    this.tokenChange.delete(k);
+    return null;
   }
 
   private live(k: string): OwnOutput | null {

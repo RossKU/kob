@@ -5,6 +5,7 @@ import type { RecordStore, PlacementRecord } from '../kob/records';
 import { amendedRecords, recordsFromBuilt, sweptRecords } from '../kob/records';
 import type { BuiltTx, Hex } from '../kob/types';
 import type { Clock } from '../kob/plan-types';
+import { pendingSpends } from './pending-spends';
 import type { Services } from './services';
 
 /** What `commitAccepted` needs to know about an accepted transaction. */
@@ -55,7 +56,16 @@ export async function commitAccepted(a: CommitArgs): Promise<PlacementRecord[]> 
     /* Best effort, like the placement records. */
   }
   try {
-    a.services.tracker.trackFromBuilt(a.services.kob, a.built, a.maker, a.txid);
+    const tracked = a.services.tracker.trackFromBuilt(a.services.kob, a.built, a.maker, a.txid);
+    // The token reader lists only what the node verifies: until a block holds them, these outputs
+    // are the wallet's through the page's pending spends, so the next order can spend them.
+    pendingSpends.addTokens(
+      tracked.map((x) => ({
+        utxo: { transactionId: x.transactionId, index: x.index, amount: x.carrier, covenantId: x.tokenCovId, state: x.state },
+        scriptPublicKey: a.built.tx.outputs[x.index]!.scriptPublicKey,
+      })),
+      a.maker,
+    );
   } catch {
     /* Tracking is a cache. The indexer or a re-import can rebuild it. */
   }

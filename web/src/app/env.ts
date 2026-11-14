@@ -278,7 +278,7 @@ export function assemblePlanEnv(
   return {
     kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
     ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
-    funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.without(parts.holdings?.tokenUtxos ?? []),
+    funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.tokens(parts.holdings?.tokenUtxos ?? [], wallet.pubkey, market.covenantId),
     freshTxids: freshTxids(),
     ...feeModeOf(s), fees: parts.coins.fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
   };
@@ -332,13 +332,13 @@ export async function buildPlanEnv(services: Services, wallet: Pick<WalletInfo, 
 
 /**
  * `e` without the inputs this page has already spent in a submitted transaction, plus the KAS
- * change of those the node does not list yet (app/pending-spends.ts). For an environment read
- * before the spend.
+ * and token change of those the node does not list yet (app/pending-spends.ts). For an environment
+ * read before the spend.
  */
 export function dropPendingSpends<E extends PlanEnv>(e: E): E {
   const funding = pendingSpends.funding(e.funding, e.maker);
-  const tokenUtxos = pendingSpends.without(e.tokenUtxos);
-  const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.without(e.pair.quoteTokenUtxos) } : null;
+  const tokenUtxos = pendingSpends.tokens(e.tokenUtxos, e.maker, e.token.covenantId);
+  const pair = isPairEnv(e) ? { ...e.pair, quoteTokenUtxos: pendingSpends.tokens(e.pair.quoteTokenUtxos, e.maker, e.pair.quote.covenantId) } : null;
   // the transactions sent since `e` was read make fresh coins too
   const fresh = freshTxids();
   const sameFresh = fresh.size === (e.freshTxids?.size ?? 0) && [...fresh].every((id) => e.freshTxids!.has(id));
@@ -355,7 +355,7 @@ export async function buildCancelEnv(s: Services, wallet: Pick<WalletInfo, 'pubk
     readFees(s),
   ]);
   return {
-    kob: s.kob, maker: wallet.pubkey, funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos), clock: { daa: clock.daa, unixSeconds: clock.unixSeconds },
+    kob: s.kob, maker: wallet.pubkey, funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.tokens(tokenUtxos, wallet.pubkey, token?.covenantId), clock: { daa: clock.daa, unixSeconds: clock.unixSeconds },
     ...feeModeOf(s), fees,
   };
 }
@@ -481,8 +481,8 @@ export async function buildPairPlanEnv(services: Services, wallet: Pick<WalletIn
   }
   return {
     kob: s.kob, token: a, maker: wallet.pubkey, clock, book, ownOrders, ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice,
-    funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.without(tokenUtxos), freshTxids: freshTxids(),
+    funding: pendingSpends.funding(funding, wallet.pubkey), tokenUtxos: pendingSpends.tokens(tokenUtxos, wallet.pubkey, a.covenantId), freshTxids: freshTxids(),
     ...feeModeOf(s), fees, ...(o.feeRate ? { feeRate: o.feeRate } : {}), ...(o.carrier ? { carrier: o.carrier } : {}),
-    pair: { quote: b, quoteTokenUtxos: pendingSpends.without(quoteTokenUtxos), view, kasPerWholeA, kasPerWholeB },
+    pair: { quote: b, quoteTokenUtxos: pendingSpends.tokens(quoteTokenUtxos, wallet.pubkey, b.covenantId), view, kasPerWholeA, kasPerWholeB },
   };
 }

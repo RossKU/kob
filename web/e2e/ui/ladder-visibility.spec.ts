@@ -45,4 +45,29 @@ test.describe('chain signing: a ladder spending the change of its previous level
       expect(signed[1]!.at - signed[0]!.at).toBeGreaterThanOrEqual(1500);
     });
   });
+  test.describe('a sell ladder whose node lists a new output only once a block holds it (3 s here)', () => {
+    test('each level spends the token change of the level before, which the page counts as held while the node does not list it yet', async ({ appPage: page, mock, wallet }) => {
+      test.setTimeout(120_000);
+      // ONE token UTXO and ONE coin: every next level spends the token change and the KAS change of the level before (TN10 2026-11-14: level 3
+      // was planned without the token change of level 2, still in the mempool, and stopped with "you hold 0")
+      await fund(mock, 'alice', { utxos: 1 });
+      await mock.nodeMempool(3000);
+      await openMarket(page, mock);
+      await pickType(page, 'limit', 'sell');
+      await fillFields(page, { amount: '1', price: '0.03', 'ladder.on': true, 'ladder.levels': '3', 'ladder.pct': '2' });
+      await waitReviewable(page);
+      const placed = await placeLadder(page, mock, 3);
+      // the three sells listed under the ticket
+      await expect(page.getByText('Open orders (3)')).toBeVisible({ timeout: 30_000 });
+      await page.screenshot({ path: test.info().outputPath('sell-ladder-3-legs.png'), fullPage: true });
+      const calls = await wallet!.calls();
+      expect(calls.map((c) => c.status)).toEqual(['signed', 'signed', 'signed']);
+      // the visibility gate still holds: the wallet is asked for the next level only once the node lists the change it spends
+      for (const k of [1, 2]) expect(calls[k]!.at - calls[k - 1]!.at).toBeGreaterThanOrEqual(2500);
+      const tokenIns = (k: number) => (placed[k]!.submission.spent ?? []).filter((x) => x.kind === 'token').map((x) => x.outpoint.split(':')[0]);
+      // levels 2 and 3 spend the token change of the level before
+      for (const k of [1, 2]) expect(tokenIns(k)).toContain(placed[k - 1]!.submission.txid);
+      expect(placed.map((p) => p.submission.created.length)).toEqual([1, 1, 1]);
+    });
+  });
 });

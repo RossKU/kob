@@ -137,7 +137,8 @@ export async function startMockServer(opts = {}) {
   const chain = new MockChain(kob, { network: opts.network, settleDepthDaa: opts.settleDepthDaa, daaPerSecond: opts.daaPerSecond, startDaa: opts.startDaa });
   // artificial latency of every API answer (`/mock/*` never waits): `latencyMs` plus a uniform `jitterMs`, on every route or only the indexer's (`/v1/*`)
   // `indexerDown`: every indexer route (`/v1/*`, the WebSocket included) answers 503 while the node stays up (standalone mode)
-  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false };
+  // mempoolMs: the node lists an output of a submitted transaction only this long after it took it (a real node lists it once a block holds it)
+  const ctl = { latencyMs: 0, jitterMs: 0, scope: 'all', indexerDown: false, mempoolMs: 0 };
   /** transactions pushed to the mock wallets' own node (`/mock/wallet-node/push`): seen there at once, whatever `lag_ms` */
   const walletPushed = new Set();
   // the node's blocks: one per accepted transaction (mock/blocks.mjs)
@@ -302,7 +303,10 @@ export async function startMockServer(opts = {}) {
     }
     if (post && path === '/node/utxos') {
       const body = await readJson(req);
-      return ok({ entries: chain.utxosByAddresses(body.addresses) });
+      const entries = chain.utxosByAddresses(body.addresses);
+      if (ctl.mempoolMs <= 0) return ok({ entries });
+      const now = Date.now();
+      return ok({ entries: entries.filter((e) => !(chain.txs.has(e.transactionId) && now - (chain.utxos.get(`${e.transactionId}:${e.index}`)?.createdMs ?? 0) < ctl.mempoolMs)) });
     }
     if (post && path === '/node/submit') {
       const body = await readJson(req);
@@ -325,6 +329,7 @@ export async function startMockServer(opts = {}) {
       ctl.jitterMs = 0;
       ctl.scope = 'all';
       ctl.indexerDown = false;
+      ctl.mempoolMs = 0;
       walletPushed.clear();
       blockLog.reset();
       feeEstimate = { ...DEFAULT_FEE_ESTIMATE };
@@ -439,6 +444,12 @@ export async function startMockServer(opts = {}) {
     if (post && path === '/mock/frozen') {
       if (!HEX64.test(body.covenant_id ?? '')) throw badRequest('covenant_id must be 64 hex characters');
       return ok(chain.setPossiblyFrozen(body.covenant_id, body.frozen !== false));
+    }
+    // `{ hold_ms }`: the node's UTXO lists leave out an output of a submitted transaction for its first `hold_ms` (still in the mempool); the node
+    // still takes a transaction that spends it, as a real node does
+    if (post && path === '/mock/node-mempool') {
+      ctl.mempoolMs = Math.max(0, Number(body.hold_ms ?? 0) || 0);
+      return ok({ hold_ms: ctl.mempoolMs });
     }
     if (post && path === '/mock/advance-daa') {
       const n = body.daa !== undefined ? Number(body.daa) : body.seconds !== undefined ? Number(body.seconds) * 10 : NaN;
