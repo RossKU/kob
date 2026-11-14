@@ -406,56 +406,59 @@ pub(crate) fn leg_main_token(l: &Leg, a: Token, b: Token) -> Token {
 pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCalc>> {
     let r = match l {
         Leg::Pair { order, custody, amount, t } => {
-            let s = &order.state;
+            let state = &order.state;
             let n = *amount;
-            let udaa = order.utxo.block_daa_score as i64;
-            if strict && lock < s.active_from {
-                return invalid(format!("pair order not active before DAA {}", s.active_from));
+            let utxo_daa = order.utxo.block_daa_score as i64;
+            if strict && lock < state.active_from {
+                return invalid(format!("pair order not active before DAA {}", state.active_from));
             }
-            if custody.state.amount() != s.custody {
+            if custody.state.amount() != state.custody {
                 return invalid(format!(
                     "the pair order's custody holds {}, its state needs exactly {}",
                     custody.state.amount(),
-                    s.custody
+                    state.custody
                 ));
             }
-            check_custody_ext(custody, s.s_ext)?;
-            let t_arg =
-                if s.slope != 0 { auction_t(*t, lock, need(s.origin(udaa), "decay origin")?, "decaying pair order")? } else { 0 };
-            let p = need(s.price_at(t_arg, udaa), "pair order quote")?;
-            let f = s.fill(n, p, order.utxo.amount as i64).map_err(|e| Error::Invalid(format!("pair fill: {e}")))?;
-            PairCalc::Pair { t_arg, f }
+            check_custody_ext(custody, state.s_ext)?;
+            let t_arg = if state.slope != 0 {
+                auction_t(*t, lock, need(state.origin(utxo_daa), "decay origin")?, "decaying pair order")?
+            } else {
+                0
+            };
+            let price = need(state.price_at(t_arg, utxo_daa), "pair order quote")?;
+            let fill = state.fill(n, price, order.utxo.amount as i64).map_err(|e| Error::Invalid(format!("pair fill: {e}")))?;
+            PairCalc::Pair { t_arg, f: fill }
         }
         Leg::CondPair { order, custody, amount, leg, evidence, t, merge, .. } => {
-            let s = &order.state;
+            let state = &order.state;
             let n = *amount;
-            let udaa = order.utxo.block_daa_score as i64;
-            if strict && lock < s.active_from {
+            let utxo_daa = order.utxo.block_daa_score as i64;
+            if strict && lock < state.active_from {
                 return invalid("conditional pair order not active yet");
             }
-            if !s.fill_ok(n) {
+            if !state.fill_ok(n) {
                 return invalid(format!(
                     "a conditional pair fill of {n} needs n <= amountLeft {} and n >= minFill {} unless it takes everything left",
-                    s.amount_left, s.min_fill
+                    state.amount_left, state.min_fill
                 ));
             }
-            if custody.state.amount() != s.custody {
+            if custody.state.amount() != state.custody {
                 return invalid("the conditional pair order's custody does not hold exactly its custody field");
             }
-            check_custody_ext(custody, s.s_ext)?;
+            check_custody_ext(custody, state.s_ext)?;
             let leg = *leg as i64;
             let mut trigger = false;
             let mut t_arg = 0;
             match leg {
-                0 if s.tp_price > 0 => {}
-                1 if s.stop_ok() => {
-                    if s.armed == 0 {
+                0 if state.tp_price > 0 => {}
+                1 if state.stop_ok() => {
+                    if state.armed == 0 {
                         if evidence.is_none() {
                             return invalid("an unarmed stop leg needs trigger evidence");
                         }
                         trigger = true;
-                    } else if s.band_daa > 0 {
-                        let origin = armed_origin(s.armed, udaa).expect("armed");
+                    } else if state.band_daa > 0 {
+                        let origin = armed_origin(state.armed, utxo_daa).expect("armed");
                         t_arg = auction_t(*t, lock, origin, "stop auction")?;
                     }
                 }
@@ -464,24 +467,24 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if leg == 0 && evidence.is_some() {
                 return invalid("a take-profit / limit fill takes no trigger evidence");
             }
-            let lp = need(s.leg_price(leg, trigger, t_arg, udaa), "conditional pair leg price")?;
-            if lp <= 0 {
+            let leg_price = need(state.leg_price(leg, trigger, t_arg, utxo_daa), "conditional pair leg price")?;
+            if leg_price <= 0 {
                 return invalid("the leg price must be positive");
             }
-            let mut s_out = need(s.s_out(n, lp), "conditional pair S out")?;
-            let mut t_out = need(s.t_out_min(n, lp), "conditional pair T out")?;
-            let tip_kas = need(s.tip_kas(n), "conditional pair tip")?;
-            if s.tip < 0 || s.delivery_carrier < 0 {
+            let mut s_out = need(state.s_out(n, leg_price), "conditional pair S out")?;
+            let mut t_out = need(state.t_out_min(n, leg_price), "conditional pair T out")?;
+            let tip_kas = need(state.tip_kas(n), "conditional pair tip")?;
+            if state.tip < 0 || state.delivery_carrier < 0 {
                 return invalid("tip and deliveryCarrier must be >= 0");
             }
-            let left = s.amount_left - n;
-            let mut out_amount = s.custody - s_out;
+            let left = state.amount_left - n;
+            let mut out_amount = state.custody - s_out;
             let mut rearm = None;
             let mut d_out = t_out;
             let mut d_s = false;
-            if s.is_booked() {
+            if state.is_booked() {
                 if leg == 0 {
-                    if merge.is_none() && lock < s.rpt_until {
+                    if merge.is_none() && lock < state.rpt_until {
                         return invalid("a booked exit takes profit only with its entry's merge until rptUntil");
                     }
                 } else if merge.is_some() {
@@ -494,8 +497,8 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                 if n >= MERGE_SHIFT {
                     return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
                 }
-                let proceeds = need(s.rpt_proceeds(n), "repeat proceeds")?;
-                if s.is_ask() {
+                let proceeds = need(state.rpt_proceeds(n), "repeat proceeds")?;
+                if state.is_ask() {
                     // The entry's B custody takes the budget. The maker's profit must be positive,
                     // so deliver one more unit of B when the rounded minimum leaves nothing.
                     if t_out <= proceeds {
@@ -505,17 +508,17 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                     rearm = Some((proceeds, 0));
                 } else {
                     d_s = true;
-                    let back = need(s.rpt_back(n), "repeat prefund")?;
+                    let back = need(state.rpt_back(n), "repeat prefund")?;
                     if left > 0 {
                         // The maker's profit proceeds - sOut must be positive, so pay at most
                         // proceeds - 1.
                         s_out = s_out.min(proceeds - 1);
-                        out_amount = s.custody - proceeds - back;
+                        out_amount = state.custody - proceeds - back;
                         d_out = proceeds - s_out;
                     } else {
-                        s_out = s_out.min(s.custody - back - 1);
+                        s_out = s_out.min(state.custody - back - 1);
                         out_amount = 0;
-                        d_out = s.custody - back - s_out;
+                        d_out = state.custody - back - s_out;
                     }
                     if s_out < 0 {
                         return invalid("the re-arming exit's profit would not be positive");
@@ -527,54 +530,57 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                 }
             }
             if out_amount < 0 {
-                return invalid(format!("the conditional pair order's custody of {} cannot release what this fill needs", s.custody));
+                return invalid(format!(
+                    "the conditional pair order's custody of {} cannot release what this fill needs",
+                    state.custody
+                ));
             }
             if left > 0 && out_amount == 0 {
                 return invalid("a partial conditional pair fill must leave something in the custody");
             }
-            if left > 0 && order.utxo.amount < (s.delivery_carrier + tip_kas) as u64 {
+            if left > 0 && order.utxo.amount < (state.delivery_carrier + tip_kas) as u64 {
                 return invalid("the order's KAS do not fund the delivery carrier and the tip of a partial fill");
             }
             PairCalc::Cond(CondCalc { leg, trigger, t_arg, s_out, t_out, tip_kas, left, out_amount, rearm, d_out, d_s })
         }
         Leg::IfdPair { order, amount, evidence, t, .. } => {
-            let s = &order.state;
+            let state = &order.state;
             let n = *amount;
-            let udaa = order.utxo.block_daa_score as i64;
+            let utxo_daa = order.utxo.block_daa_score as i64;
             let cov_id = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("entry UTXO has no covenant id".into()))?;
-            if strict && lock < s.active_from {
+            if strict && lock < state.active_from {
                 return invalid("pair entry not active yet");
             }
-            if !s.fill_ok(n) {
+            if !state.fill_ok(n) {
                 return invalid("pair entry fill: n <= amountLeft and n >= minFill unless it takes everything left");
             }
-            if s.tip < 0 || s.delivery_carrier < 0 || s.exit_carrier < 0 {
+            if state.tip < 0 || state.delivery_carrier < 0 || state.exit_carrier < 0 {
                 return invalid("tip and carriers must be >= 0");
             }
-            let buy = s.is_buy_first();
+            let buy = state.is_buy_first();
             let mut trigger = false;
             let mut t_arg = 0;
-            if s.entry_stop > 0 {
-                if (buy && s.entry_stop > s.price) || (!buy && s.entry_stop < s.price) {
+            if state.entry_stop > 0 {
+                if (buy && state.entry_stop > state.price) || (!buy && state.entry_stop < state.price) {
                     return invalid("a stop entry whose trigger is beyond its limit never fills");
                 }
-                if s.armed == 0 {
+                if state.armed == 0 {
                     if evidence.is_none() {
                         return invalid("an unarmed stop entry needs trigger evidence");
                     }
                     trigger = true;
-                } else if s.band_daa > 0 {
-                    t_arg = auction_t(*t, lock, armed_origin(s.armed, udaa).expect("armed"), "stop-entry auction")?;
+                } else if state.band_daa > 0 {
+                    t_arg = auction_t(*t, lock, armed_origin(state.armed, utxo_daa).expect("armed"), "stop-entry auction")?;
                 }
             } else if evidence.is_some() {
                 return invalid("a limit entry takes no trigger evidence");
             }
-            let booked = s.rpt_amount > n;
+            let booked = state.rpt_amount > n;
             if booked && n >= MERGE_SHIFT {
                 return invalid("a booked exit's amount must be below 2^53 (the merge argument)");
             }
             if strict {
-                rpt_fill_rule(s.rpt_amount, s.min_fill, n)?;
+                rpt_fill_rule(state.rpt_amount, state.min_fill, n)?;
             }
             if booked && t_arg == 0 {
                 t_arg = t.unwrap_or(lock);
@@ -582,36 +588,37 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if t_arg > lock {
                 return invalid("time t must be <= lockTime");
             }
-            let p = need(s.price_at(trigger, t_arg, udaa), "pair entry price")?;
-            if p <= 0 {
+            let price = need(state.price_at(trigger, t_arg, utxo_daa), "pair entry price")?;
+            if price <= 0 {
                 return invalid("the entry quote must be positive");
             }
-            let tip_kas = need(s.tip_kas(n), "pair entry tip")?;
-            let new_left = s.amount_left - n;
-            let cont = new_left > 0 || s.rpt_amount > 0;
+            let tip_kas = need(state.tip_kas(n), "pair entry tip")?;
+            let new_left = state.amount_left - n;
+            let cont = new_left > 0 || state.rpt_amount > 0;
             let (amt, a_new, b_new, x_cust) = if buy {
-                let amt = need(s.spend(n, p), "pair entry spend")?;
-                let b_new = sub(s.custody, amt, "pair entry escrow")?;
+                let amt = need(state.spend(n, price), "pair entry spend")?;
+                let b_new = sub(state.custody, amt, "pair entry escrow")?;
                 if b_new < 0 {
-                    return invalid(format!("the entry's escrow of {} cannot pay {amt}", s.custody));
+                    return invalid(format!("the entry's escrow of {} cannot pay {amt}", state.custody));
                 }
                 (amt, 0, b_new, n)
             } else {
-                if s.prefund < 0 {
+                if state.prefund < 0 {
                     return invalid("prefund must be >= 0");
                 }
-                let amt = need(s.proceeds(n, p), "pair entry proceeds")?;
-                let used = if cont { need(s.pre_of(n), "pair entry prefund")? } else { s.custody };
-                if used > s.custody {
+                let amt = need(state.proceeds(n, price), "pair entry proceeds")?;
+                let used = if cont { need(state.pre_of(n), "pair entry prefund")? } else { state.custody };
+                if used > state.custody {
                     return invalid(format!(
                         "the entry's prefund custody of {} cannot pay the prefund {used} of this fill",
-                        s.custody
+                        state.custody
                     ));
                 }
-                (amt, new_left, s.custody - used, add(amt, used, "the exit's custody")?)
+                (amt, new_left, state.custody - used, add(amt, used, "the exit's custody")?)
             };
-            let booking = booked.then_some(Booking { parent: cov_id, until: need(rpt_until(s.expiry_daa, udaa), "rptUntil")? });
-            let exit = s.exit_for(n, x_cust, booking)?;
+            let booking =
+                booked.then_some(Booking { parent: cov_id, until: need(rpt_until(state.expiry_daa, utxo_daa), "rptUntil")? });
+            let exit = state.exit_for(n, x_cust, booking)?;
             PairCalc::Ifd(IfdCalc { trigger, t_arg, amt, a_new, b_new, x_cust, booked, cont, tip_kas, exit })
         }
         _ => return Ok(None),
@@ -784,18 +791,18 @@ fn arm_tag(trigger: bool, ev_mode: i64) -> &'static str {
 /// The plan of a pair leg: its input, positional output, extras and token flows.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn plan_leg(
-    b: &Batch,
+    batch: &Batch,
     lay: &Layout,
     i: usize,
-    l: &Leg,
+    leg: &Leg,
     calc: &PairCalc,
     a: Token,
     bt: Token,
     lock: i64,
 ) -> Result<LegPlan> {
     let suffix = pair_suffix(a, bt);
-    let cx = PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock };
-    match (l, calc) {
+    let cx = PairCtx { batch, lay, index: i, token_a: a, token_b: bt, lock };
+    match (leg, calc) {
         (Leg::Pair { order, custody, amount, .. }, PairCalc::Pair { t_arg, f, .. }) => {
             plan_pair(&cx, order, custody, *amount, *t_arg, f, suffix)
         }
@@ -830,66 +837,66 @@ fn plan_pair(
     custody: &TokenUtxo,
     n: i64,
     t_arg: i64,
-    f: &PairFill,
+    fill: &PairFill,
     suffix: String,
 ) -> Result<LegPlan> {
     let PairCtx { lay, index: i, token_a: a, token_b: bt, .. } = *cx;
-    let s = &order.state;
-    let ask = s.is_ask();
-    let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
-    let v = order.utxo.amount as i64;
-    let cv = custody.utxo.amount as i64;
-    let maker_ext = kcc20_ext(ttok, s.t_ext);
+    let state = &order.state;
+    let ask = state.is_ask();
+    let (s_token, t_token) = if ask { (a, bt) } else { (bt, a) };
+    let order_value = order.utxo.amount as i64;
+    let custody_value = custody.utxo.amount as i64;
+    let maker_ext = kcc20_ext(t_token, state.t_ext);
     let mut extras = vec![];
-    let (delivery, branch) = if f.rest {
+    let (delivery, branch) = if fill.rest {
         extras.push(Extra::Cont(
-            kas_out(v - s.delivery_carrier - f.tip_kas, "pair continuation")?,
-            PairState { amount_left: s.amount_left - n, custody: f.out_amount, ..s.clone() }.spk(),
+            kas_out(order_value - state.delivery_carrier - fill.tip_kas, "pair continuation")?,
+            PairState { amount_left: state.amount_left - n, custody: fill.out_amount, ..state.clone() }.spk(),
         ));
-        let st = custody.state.with_amount(f.out_amount);
-        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
-        (s.delivery_carrier, "rest")
-    } else if f.out_amount > 0 {
-        let st = custody.state.with_amount(f.out_amount).with_user_owner(s.maker);
-        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
-        (v - f.tip_kas, "return")
+        let st = custody.state.with_amount(fill.out_amount);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
+        (state.delivery_carrier, "rest")
+    } else if fill.out_amount > 0 {
+        let st = custody.state.with_amount(fill.out_amount).with_user_owner(state.maker);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
+        (order_value - fill.tip_kas, "return")
     } else {
-        (v + cv - f.tip_kas, "close")
+        (order_value + custody_value - fill.tip_kas, "close")
     };
     let mut role = format!("KobPair.settle.{}.{branch}", side_name(ask));
-    if s.interval > 0 {
+    if state.interval > 0 {
         role.push_str(".twap");
     }
-    if s.slope != 0 {
+    if state.slope != 0 {
         role.push_str(".decay");
     }
-    let t_tpl = first_in(lay, ttok, "pair order (T template source)")?;
+    let t_tpl = first_in(lay, t_token, "pair order (T template source)")?;
     Ok(LegPlan {
         suffix,
         pos: PosOut::Deliver(
             kas_out(delivery, "pair delivery carrier")?,
-            TokenState::user(ttok.1.family(), f.t_out, s.maker, maker_ext),
-            ttok,
+            TokenState::user(t_token.1.family(), fill.t_out, state.maker, maker_ext),
+            t_token,
         ),
         role,
-        sequence: s.interval.max(0) as u64,
+        sequence: state.interval.max(0) as u64,
         plan: entry(
             TemplateId::KobPair,
-            s.encode(),
+            state.encode(),
             "settle",
             vec![
                 nb(n),
                 Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
                 Arg::Int(t_tpl),
                 Arg::Int(t_arg),
-                Arg::Int(f.s_out),
-                Arg::Int(f.t_out),
+                Arg::Int(fill.s_out),
+                Arg::Int(fill.t_out),
             ],
         ),
         extras,
-        flows: vec![(stok, f.s_out, 0), (ttok, 0, f.t_out)],
+        flows: vec![(s_token, fill.s_out, 0), (t_token, 0, fill.t_out)],
         merge: None,
-        adjust: if ask { Some((ttok, 5)) } else { None },
+        adjust: if ask { Some((t_token, 5)) } else { None },
     })
 }
 
@@ -903,34 +910,34 @@ fn plan_cond_pair(
     evidence: Option<usize>,
     evidence_b: Option<usize>,
     merge: Option<&PairEntryMerge>,
-    c: &CondCalc,
+    calc: &CondCalc,
     suffix: String,
 ) -> Result<LegPlan> {
-    let PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
-    let s = &order.state;
-    let ask = s.is_ask();
-    let (stok, ttok) = if ask { (a, bt) } else { (bt, a) };
-    let udaa = order.utxo.block_daa_score as i64;
-    let v = order.utxo.amount as i64;
-    let cv = custody.utxo.amount as i64;
+    let PairCtx { batch, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
+    let state = &order.state;
+    let ask = state.is_ask();
+    let (s_token, t_token) = if ask { (a, bt) } else { (bt, a) };
+    let utxo_daa = order.utxo.block_daa_score as i64;
+    let order_value = order.utxo.amount as i64;
+    let custody_value = custody.utxo.amount as i64;
     let mut ev_args = [0i64; 4];
-    if c.trigger {
+    if calc.trigger {
         let (ev, args) = pair_evidence(
-            b,
+            batch,
             lay,
             evidence,
             evidence_b,
             ask,
             a,
             bt,
-            s.a_scale(),
-            s.b_scale(),
-            s.min_touch,
-            s.min_touch_b(),
-            s.min_rest_daa,
+            state.a_scale(),
+            state.b_scale(),
+            state.min_touch,
+            state.min_touch_b(),
+            state.min_rest_daa,
             lock,
         )?;
-        if s.arms(ev) != Some(true) {
+        if state.arms(ev) != Some(true) {
             return invalid(if ask {
                 "a pair stop sell arms only when the rate fell to its stop or below"
             } else {
@@ -940,45 +947,60 @@ fn plan_cond_pair(
         ev_args = args;
     }
     let mut extras = vec![];
-    if c.left > 0 {
-        let next =
-            CondPairState { amount_left: c.left, custody: c.out_amount, armed: s.next_armed(c.leg, c.trigger, udaa), ..s.clone() };
-        extras.push(Extra::Cont(kas_out(v - s.delivery_carrier - c.tip_kas, "conditional pair continuation")?, next.spk()));
+    if calc.left > 0 {
+        let next = CondPairState {
+            amount_left: calc.left,
+            custody: calc.out_amount,
+            armed: state.next_armed(calc.leg, calc.trigger, utxo_daa),
+            ..state.clone()
+        };
+        extras.push(Extra::Cont(
+            kas_out(order_value - state.delivery_carrier - calc.tip_kas, "conditional pair continuation")?,
+            next.spk(),
+        ));
         extras.push(Extra::AtInput {
             slot: Slot::Custody,
             value: custody.utxo.amount,
-            state: custody.state.with_amount(c.out_amount),
-            token: stok,
+            state: custody.state.with_amount(calc.out_amount),
+            token: s_token,
             patch: None,
         });
-    } else if c.rearm.is_none() && c.out_amount > 0 {
-        let st = custody.state.with_amount(c.out_amount).with_user_owner(s.maker);
-        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: stok, patch: None });
+    } else if calc.rearm.is_none() && calc.out_amount > 0 {
+        let st = custody.state.with_amount(calc.out_amount).with_user_owner(state.maker);
+        extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
     }
-    let pos_value = if c.left > 0 || c.rearm.is_some() {
-        s.delivery_carrier
-    } else if c.out_amount > 0 {
-        v - c.tip_kas
+    let pos_value = if calc.left > 0 || calc.rearm.is_some() {
+        state.delivery_carrier
+    } else if calc.out_amount > 0 {
+        order_value - calc.tip_kas
     } else {
-        v + cv - c.tip_kas
+        order_value + custody_value - calc.tip_kas
     };
     // The maker's token at output i: the T delivery, or a re-arming BID exit's B profit on
     // the custody's template.
-    let pos_out = if c.d_s {
-        PosOut::Deliver(kas_out(pos_value, "profit carrier")?, custody.state.with_amount(c.d_out).with_user_owner(s.maker), stok)
+    let pos_out = if calc.d_s {
+        PosOut::Deliver(
+            kas_out(pos_value, "profit carrier")?,
+            custody.state.with_amount(calc.d_out).with_user_owner(state.maker),
+            s_token,
+        )
     } else {
-        let e = kcc20_ext(ttok, s.t_ext);
-        PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, TokenState::user(ttok.1.family(), c.d_out, s.maker, e), ttok)
+        let e = kcc20_ext(t_token, state.t_ext);
+        PosOut::Deliver(
+            kas_out(pos_value, "delivery carrier")?,
+            TokenState::user(t_token.1.family(), calc.d_out, state.maker, e),
+            t_token,
+        )
     };
-    let mut flows = vec![(stok, c.s_out, 0), (ttok, 0, c.t_out)];
-    let merge_plan = match (merge, c.rearm) {
+    let mut flows = vec![(s_token, calc.s_out, 0), (t_token, 0, calc.t_out)];
+    let merge_plan = match (merge, calc.rearm) {
         (None, _) => None,
-        (Some(m), Some(rearm)) => Some(plan_cond_pair_merge(cx, order, custody, n, m, c, rearm, &mut extras, &mut flows)?),
+        (Some(m), Some(rearm)) => Some(plan_cond_pair_merge(cx, order, custody, n, m, calc, rearm, &mut extras, &mut flows)?),
         (Some(_), None) => unreachable!("a merge is a re-arm"),
     };
-    let branch = if c.left > 0 {
+    let branch = if calc.left > 0 {
         "rest"
-    } else if c.rearm.is_none() && c.out_amount > 0 {
+    } else if calc.rearm.is_none() && calc.out_amount > 0 {
         "return"
     } else {
         "close"
@@ -986,15 +1008,15 @@ fn plan_cond_pair(
     let role = format!(
         "KobCondPair.settle.{}.leg{}{}{}{}.{branch}",
         side_name(ask),
-        c.leg,
-        arm_tag(c.trigger, ev_args[3]),
-        if c.t_arg != 0 { ".auction" } else { "" },
+        calc.leg,
+        arm_tag(calc.trigger, ev_args[3]),
+        if calc.t_arg != 0 { ".auction" } else { "" },
         if merge.is_some() { ".merge" } else { "" },
     );
-    let t_tpl = if c.d_s {
-        lay.first_token_in.get(&ttok.0).map(|x| *x as i64).unwrap_or(0)
+    let t_tpl = if calc.d_s {
+        lay.first_token_in.get(&t_token.0).map(|x| *x as i64).unwrap_or(0)
     } else {
-        first_in(lay, ttok, "conditional pair (T template source)")?
+        first_in(lay, t_token, "conditional pair (T template source)")?
     };
     Ok(LegPlan {
         suffix,
@@ -1003,16 +1025,16 @@ fn plan_cond_pair(
         sequence: 0,
         plan: entry(
             TemplateId::KobCondPair,
-            s.encode(),
+            state.encode(),
             "settle",
             vec![
                 nb(n),
                 Arg::Int(lay.at[&(i, Slot::Custody)] as i64),
                 Arg::Int(t_tpl),
-                Arg::Int(c.t_arg),
-                Arg::Int(c.s_out),
-                Arg::Int(c.t_out),
-                Arg::Int(c.leg),
+                Arg::Int(calc.t_arg),
+                Arg::Int(calc.s_out),
+                Arg::Int(calc.t_out),
+                Arg::Int(calc.leg),
                 Arg::Int(ev_args[0]),
                 Arg::Int(ev_args[1]),
                 Arg::Int(ev_args[2]),
@@ -1024,7 +1046,7 @@ fn plan_cond_pair(
         extras,
         flows,
         merge: merge_plan,
-        adjust: if ask { Some((ttok, 5)) } else { None },
+        adjust: if ask { Some((t_token, 5)) } else { None },
     })
 }
 
@@ -1039,25 +1061,25 @@ fn plan_cond_pair_merge(
     custody: &TokenUtxo,
     n: i64,
     m: &PairEntryMerge,
-    c: &CondCalc,
+    calc: &CondCalc,
     (proceeds, back): (i64, i64),
     extras: &mut Vec<Extra>,
     flows: &mut Vec<(Token, i64, i64)>,
 ) -> Result<(SigPlan, String, Utxo)> {
     let PairCtx { lay, index: i, token_a: a, token_b: bt, .. } = *cx;
-    let s = &order.state;
-    let v = order.utxo.amount as i64;
-    let cv = custody.utxo.amount as i64;
+    let state = &order.state;
+    let order_value = order.utxo.amount as i64;
+    let custody_value = custody.utxo.amount as i64;
     let e = &m.entry;
-    let es = &e.state;
-    let (a_new, b_new) = merged_entry_amounts(s, e, n, proceeds, back)?;
-    let edaa = e.utxo.block_daa_score as i64;
-    let ev = e.utxo.amount as i64;
-    let buy = es.is_buy_first();
-    let sellout = s.amount_left == n;
-    let mut floor = ev;
+    let entry_state = &e.state;
+    let (a_new, b_new) = merged_entry_amounts(state, e, n, proceeds, back)?;
+    let entry_daa = e.utxo.block_daa_score as i64;
+    let entry_value = e.utxo.amount as i64;
+    let buy = entry_state.is_buy_first();
+    let sellout = state.amount_left == n;
+    let mut floor = entry_value;
     if sellout {
-        let all = ev + v + cv - c.tip_kas - s.delivery_carrier;
+        let all = entry_value + order_value + custody_value - calc.tip_kas - state.delivery_carrier;
         floor = floor.max(all);
     }
     let entry_in = lay.merge_in[&i];
@@ -1069,8 +1091,8 @@ fn plan_cond_pair_merge(
         kron_output(a.1.family(), a_new, "the merged entry's A custody")?;
         match &m.a_custody {
             Some(x) => {
-                check_custody(x, e.utxo.covenant_id, a, es.amount_left).map_err(|e| blame("entry", i, e))?;
-                check_custody_ext(x, es.a_ext).map_err(|e| blame("entry", i, e))?;
+                check_custody(x, e.utxo.covenant_id, a, entry_state.amount_left).map_err(|e| blame("entry", i, e))?;
+                check_custody_ext(x, entry_state.a_ext).map_err(|e| blame("entry", i, e))?;
                 extras.push(Extra::AtInput {
                     slot: Slot::EntryA,
                     value: x.utxo.amount,
@@ -1080,14 +1102,14 @@ fn plan_cond_pair_merge(
                 });
             }
             None => {
-                if es.amount_left > 0 {
+                if entry_state.amount_left > 0 {
                     return invalid("the merged entry's A custody is required");
                 }
                 new_custody = true;
-                floor -= es.exit_carrier;
-                let st = TokenState::custody(a.1.family(), a_new, s.parent, kcc20_ext(a, es.a_ext));
+                floor -= entry_state.exit_carrier;
+                let st = TokenState::custody(a.1.family(), a_new, state.parent, kcc20_ext(a, entry_state.a_ext));
                 extras.push(Extra::Tok {
-                    value: u(es.exit_carrier, "exitCarrier")?,
+                    value: u(entry_state.exit_carrier, "exitCarrier")?,
                     state: st,
                     token: a,
                     patch: Some((entry_in, 14)),
@@ -1101,8 +1123,8 @@ fn plan_cond_pair_merge(
         kron_output(bt.1.family(), b_new, "the merged entry's B custody")?;
         match &m.b_custody {
             Some(x) => {
-                check_custody(x, e.utxo.covenant_id, bt, es.custody).map_err(|e| blame("entry", i, e))?;
-                check_custody_ext(x, es.b_ext).map_err(|e| blame("entry", i, e))?;
+                check_custody(x, e.utxo.covenant_id, bt, entry_state.custody).map_err(|e| blame("entry", i, e))?;
+                check_custody_ext(x, entry_state.b_ext).map_err(|e| blame("entry", i, e))?;
                 extras.push(Extra::AtInput {
                     slot: Slot::EntryB,
                     value: x.utxo.amount,
@@ -1112,14 +1134,14 @@ fn plan_cond_pair_merge(
                 });
             }
             None => {
-                if es.custody > 0 {
+                if entry_state.custody > 0 {
                     return invalid("the merged entry's B custody is required");
                 }
                 new_custody = true;
-                floor -= es.exit_carrier;
-                let st = TokenState::custody(bt.1.family(), b_new, s.parent, kcc20_ext(bt, es.b_ext));
+                floor -= entry_state.exit_carrier;
+                let st = TokenState::custody(bt.1.family(), b_new, state.parent, kcc20_ext(bt, entry_state.b_ext));
                 extras.push(Extra::Tok {
-                    value: u(es.exit_carrier, "exitCarrier")?,
+                    value: u(entry_state.exit_carrier, "exitCarrier")?,
                     state: st,
                     token: bt,
                     patch: Some((entry_in, 15)),
@@ -1131,16 +1153,17 @@ fn plan_cond_pair_merge(
     // maker's B profit. A BID exit releases the B of its custody and pays the
     // maker's B profit. The entry's custodies follow, with the old amounts in and
     // the new amounts out.
-    *flows = if buy { vec![(a, n, 0), (bt, 0, c.d_out)] } else { vec![(bt, s.custody - c.out_amount, 0), (bt, 0, c.d_out)] };
+    *flows =
+        if buy { vec![(a, n, 0), (bt, 0, calc.d_out)] } else { vec![(bt, state.custody - calc.out_amount, 0), (bt, 0, calc.d_out)] };
     push_entry_flows(flows, m, a, bt, a_new, b_new);
     let cont = IfdPairState {
-        amount_left: add(es.amount_left, n, "merged amount")?,
+        amount_left: add(entry_state.amount_left, n, "merged amount")?,
         custody: b_new,
-        armed: es.merged_armed(edaa),
-        ..es.clone()
+        armed: entry_state.merged_armed(entry_daa),
+        ..entry_state.clone()
     };
-    extras.push(Extra::EntryCont(u(floor, "merged entry")?, cont.spk(), s.parent));
-    let xc = lay.at[&(i, Slot::Custody)] as i64;
+    extras.push(Extra::EntryCont(u(floor, "merged entry")?, cont.spk(), state.parent));
+    let exit_custody_in = lay.at[&(i, Slot::Custody)] as i64;
     let args = vec![
         Arg::Bytes(merge_arg(i, n)?),
         Arg::Int(ea_in.map(|x| x as i64).unwrap_or(0)),
@@ -1158,10 +1181,10 @@ fn plan_cond_pair_merge(
         Arg::Int(0),
         Arg::Int(0),
         Arg::Int(0),
-        Arg::Int(xc),
+        Arg::Int(exit_custody_in),
         Arg::Int(0),
     ];
-    let plan = entry(TemplateId::KobIfdPair, es.encode(), "fill", args);
+    let plan = entry(TemplateId::KobIfdPair, entry_state.encode(), "fill", args);
     let role = format!(
         "KobIfdPair.fill.merge.{}{}{}",
         side_name(!buy),
@@ -1175,27 +1198,33 @@ fn plan_cond_pair_merge(
 ///
 /// The entry must be the exit's parent and book it, and the exit's re-arm (`proceeds`, `back`) must
 /// be the entry's.
-fn merged_entry_amounts(s: &CondPairState, e: &OrderUtxo<IfdPairState>, n: i64, proceeds: i64, back: i64) -> Result<(i64, i64)> {
-    let es = &e.state;
-    if e.utxo.covenant_id != Some(s.parent) {
+fn merged_entry_amounts(
+    state: &CondPairState,
+    merged_entry: &OrderUtxo<IfdPairState>,
+    n: i64,
+    proceeds: i64,
+    back: i64,
+) -> Result<(i64, i64)> {
+    let entry_state = &merged_entry.state;
+    if merged_entry.utxo.covenant_id != Some(state.parent) {
         return invalid("the merged entry is not this exit's parent");
     }
-    if !es.books_exit(s.parent, s) {
+    if !entry_state.books_exit(state.parent, state) {
         return invalid("the exit is not one the merged entry books (its terms or repeat fields differ)");
     }
-    let buy = es.is_buy_first();
+    let buy = entry_state.is_buy_first();
     let (a_new, b_new) = if buy {
-        let budget = need(es.merge_budget(n), "merge budget")?;
+        let budget = need(entry_state.merge_budget(n), "merge budget")?;
         if budget != proceeds || budget <= 0 {
             return invalid("the exit's re-arm budget is not the entry's");
         }
-        (0, add(es.custody, budget, "merged escrow")?)
+        (0, add(entry_state.custody, budget, "merged escrow")?)
     } else {
-        let pre = need(es.pre_of(n), "merge prefund")?;
+        let pre = need(entry_state.pre_of(n), "merge prefund")?;
         if pre != back {
             return invalid("the exit's prefund return is not the entry's");
         }
-        (add(es.amount_left, n, "merged amount")?, add(es.custody, pre, "merged prefund")?)
+        (add(entry_state.amount_left, n, "merged amount")?, add(entry_state.custody, pre, "merged prefund")?)
     };
     Ok((a_new, b_new))
 }
@@ -1226,31 +1255,31 @@ fn plan_ifd_pair(
     n: i64,
     evidence: Option<usize>,
     evidence_b: Option<usize>,
-    c: &IfdCalc,
+    calc: &IfdCalc,
     suffix: String,
 ) -> Result<LegPlan> {
-    let PairCtx { batch: b, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
-    let s = &order.state;
-    let buy = s.is_buy_first();
+    let PairCtx { batch, lay, index: i, token_a: a, token_b: bt, lock, .. } = *cx;
+    let state = &order.state;
+    let buy = state.is_buy_first();
     let a_held = check_entry_custodies(order, a_custody, b_custody, a, bt)?;
     let mut ev_args = [0i64; 4];
-    if c.trigger {
+    if calc.trigger {
         let (ev, args) = pair_evidence(
-            b,
+            batch,
             lay,
             evidence,
             evidence_b,
             !buy,
             a,
             bt,
-            s.a_scale,
-            s.b_scale,
-            s.min_touch,
-            s.min_touch_b(),
-            s.min_rest_daa,
+            state.a_scale,
+            state.b_scale,
+            state.min_touch,
+            state.min_touch_b(),
+            state.min_rest_daa,
             lock,
         )?;
-        if s.arms(ev) != Some(true) {
+        if state.arms(ev) != Some(true) {
             return invalid(if buy {
                 "a pair buy-stop entry arms only when the rate rose to its trigger or above"
             } else {
@@ -1259,32 +1288,41 @@ fn plan_ifd_pair(
         }
         ev_args = args;
     }
-    let extras = ifd_pair_extras(cx, order, a_custody, b_custody, a_held, n, c)?;
-    let (xtok, x_ext) = if buy { (a, s.a_ext) } else { (bt, s.b_ext) };
+    let extras = ifd_pair_extras(cx, order, a_custody, b_custody, a_held, n, calc)?;
+    let (xtok, x_ext) = if buy { (a, state.a_ext) } else { (bt, state.b_ext) };
     let x_ext = kcc20_ext(xtok, x_ext);
-    kron_output(xtok.1.family(), c.x_cust, "the exit's custody")?;
+    kron_output(xtok.1.family(), calc.x_cust, "the exit's custody")?;
     let c_tpl = template(TemplateId::KobCondPair);
     let a_in = lay.at.get(&(i, Slot::A)).map(|x| *x as i64).unwrap_or(0);
     let b_in = lay.at.get(&(i, Slot::B)).map(|x| *x as i64).unwrap_or(0);
-    let a_tpl = if buy || c.a_new > 0 { first_in(lay, a, "pair entry (A template)")? } else { 0 };
-    let b_tpl = if !buy || c.b_new > 0 { first_in(lay, bt, "pair entry (B template)")? } else { 0 };
+    let a_tpl = if buy || calc.a_new > 0 { first_in(lay, a, "pair entry (A template)")? } else { 0 };
+    let b_tpl = if !buy || calc.b_new > 0 { first_in(lay, bt, "pair entry (B template)")? } else { 0 };
     let role = format!(
         "KobIfdPair.fill.{}{}{}{}.{}",
         side_name(!buy),
-        arm_tag(c.trigger, ev_args[3]),
-        if s.entry_stop > 0 && s.armed != 0 && s.band_daa > 0 { ".auction" } else { "" },
-        if c.booked { ".book" } else { "" },
-        entry_branch(s.amount_left - n > 0, c.cont)
+        arm_tag(calc.trigger, ev_args[3]),
+        if state.entry_stop > 0 && state.armed != 0 && state.band_daa > 0 { ".auction" } else { "" },
+        if calc.booked { ".book" } else { "" },
+        entry_branch(state.amount_left - n > 0, calc.cont)
     );
-    let flows = if buy { vec![(bt, c.amt, 0), (a, 0, n)] } else { vec![(a, n, 0), (bt, s.custody - c.b_new, 0), (bt, 0, c.x_cust)] };
+    let flows = if buy {
+        vec![(bt, calc.amt, 0), (a, 0, n)]
+    } else {
+        vec![(a, n, 0), (bt, state.custody - calc.b_new, 0), (bt, 0, calc.x_cust)]
+    };
     Ok(LegPlan {
         suffix,
-        pos: PosOut::DeliverToExit { value: u(s.delivery_carrier, "delivery carrier")?, amount: c.x_cust, ext: x_ext, token: xtok },
+        pos: PosOut::DeliverToExit {
+            value: u(state.delivery_carrier, "delivery carrier")?,
+            amount: calc.x_cust,
+            ext: x_ext,
+            token: xtok,
+        },
         role,
         sequence: 0,
         plan: entry(
             TemplateId::KobIfdPair,
-            s.encode(),
+            state.encode(),
             "fill",
             vec![
                 nb(n),
@@ -1293,14 +1331,14 @@ fn plan_ifd_pair(
                 Arg::Int(a_tpl),
                 Arg::Int(b_tpl),
                 Arg::Int(0),
-                Arg::Int(c.amt),
+                Arg::Int(calc.amt),
                 Arg::Bytes(c_tpl.prefix.clone()),
                 Arg::Bytes(c_tpl.suffix.clone()),
                 Arg::Int(ev_args[0]),
                 Arg::Int(ev_args[1]),
                 Arg::Int(ev_args[2]),
                 Arg::Int(ev_args[3]),
-                Arg::Int(c.t_arg),
+                Arg::Int(calc.t_arg),
                 Arg::Int(0),
                 Arg::Int(0),
                 Arg::Int(0),
@@ -1322,22 +1360,22 @@ fn check_entry_custodies(
     a: Token,
     bt: Token,
 ) -> Result<i64> {
-    let s = &order.state;
-    let buy = s.is_buy_first();
-    let a_held = if buy { 0 } else { s.amount_left };
+    let state = &order.state;
+    let buy = state.is_buy_first();
+    let a_held = if buy { 0 } else { state.amount_left };
     match (a_custody, a_held > 0) {
         (Some(x), true) => {
             check_custody(x, order.utxo.covenant_id, a, a_held)?;
-            check_custody_ext(x, s.a_ext)?;
+            check_custody_ext(x, state.a_ext)?;
         }
         (None, false) => {}
         (Some(_), false) => return invalid("this entry holds no A custody"),
         (None, true) => return invalid("a sell-first entry's A custody is required"),
     }
-    match (b_custody, s.custody > 0) {
+    match (b_custody, state.custody > 0) {
         (Some(x), true) => {
-            check_custody(x, order.utxo.covenant_id, bt, s.custody)?;
-            check_custody_ext(x, s.b_ext)?;
+            check_custody(x, order.utxo.covenant_id, bt, state.custody)?;
+            check_custody_ext(x, state.b_ext)?;
         }
         (None, false) => {}
         (Some(_), false) => return invalid("this entry holds no B custody"),
@@ -1357,72 +1395,72 @@ fn ifd_pair_extras(
     b_custody: Option<&TokenUtxo>,
     a_held: i64,
     n: i64,
-    c: &IfdCalc,
+    calc: &IfdCalc,
 ) -> Result<Vec<Extra>> {
     let PairCtx { token_a: a, token_b: bt, .. } = *cx;
-    let s = &order.state;
-    let v = order.utxo.amount as i64;
-    let a_car = a_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
-    let b_car = b_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
+    let state = &order.state;
+    let order_value = order.utxo.amount as i64;
+    let a_carrier = a_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
+    let b_carrier = b_custody.map(|x| x.utxo.amount as i64).unwrap_or(0);
     let mut extras = vec![];
-    let base = v - s.delivery_carrier - s.exit_carrier - c.tip_kas;
-    if c.cont {
+    let base = order_value - state.delivery_carrier - state.exit_carrier - calc.tip_kas;
+    if calc.cont {
         let mut keep = base;
         if a_held > 0 {
-            if c.a_new > 0 {
+            if calc.a_new > 0 {
                 let x = a_custody.expect("checked");
                 extras.push(Extra::AtInput {
                     slot: Slot::A,
                     value: x.utxo.amount,
-                    state: x.state.with_amount(c.a_new),
+                    state: x.state.with_amount(calc.a_new),
                     token: a,
                     patch: None,
                 });
             } else {
-                keep += a_car;
+                keep += a_carrier;
             }
         }
-        if s.custody > 0 {
-            if c.b_new > 0 {
+        if state.custody > 0 {
+            if calc.b_new > 0 {
                 let x = b_custody.expect("checked");
                 extras.push(Extra::AtInput {
                     slot: Slot::B,
                     value: x.utxo.amount,
-                    state: x.state.with_amount(c.b_new),
+                    state: x.state.with_amount(calc.b_new),
                     token: bt,
                     patch: None,
                 });
             } else {
-                keep += b_car;
+                keep += b_carrier;
             }
         }
-        let udaa = order.utxo.block_daa_score as i64;
+        let utxo_daa = order.utxo.block_daa_score as i64;
         let next = IfdPairState {
-            amount_left: s.amount_left - n,
-            custody: c.b_new,
-            armed: s.next_armed(udaa),
-            rpt_amount: if c.booked { s.rpt_amount - n } else { s.rpt_amount },
-            ..s.clone()
+            amount_left: state.amount_left - n,
+            custody: calc.b_new,
+            armed: state.next_armed(utxo_daa),
+            rpt_amount: if calc.booked { state.rpt_amount - n } else { state.rpt_amount },
+            ..state.clone()
         };
         extras.push(Extra::Cont(kas_out(keep, "entry continuation")?, next.spk()));
         extras.push(Extra::Exit {
-            value: u(s.exit_carrier, "exit carrier")?,
-            spk: c.exit.spk(),
+            value: u(state.exit_carrier, "exit carrier")?,
+            spk: calc.exit.spk(),
             tpl: TemplateId::KobCondPair,
             arg: 5,
         });
     } else {
-        let mut left = v + a_car - s.delivery_carrier - c.tip_kas;
-        if c.b_new > 0 {
+        let mut left = order_value + a_carrier - state.delivery_carrier - calc.tip_kas;
+        if calc.b_new > 0 {
             let x = b_custody.expect("checked");
-            let st = x.state.with_amount(c.b_new).with_user_owner(s.maker);
+            let st = x.state.with_amount(calc.b_new).with_user_owner(state.maker);
             extras.push(Extra::AtInput { slot: Slot::B, value: x.utxo.amount, state: st, token: bt, patch: None });
         } else {
-            left += b_car;
+            left += b_carrier;
         }
         extras.push(Extra::Exit {
             value: kas_out(left, "exit value")? as u64,
-            spk: c.exit.spk(),
+            spk: calc.exit.spk(),
             tpl: TemplateId::KobCondPair,
             arg: 5,
         });
