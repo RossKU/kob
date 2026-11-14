@@ -1,10 +1,10 @@
 // The sell ticket's answer to TOKEN_UTXOS_FRAGMENTED: a sale takes at most the program's token inputs (3 for KOB's standard program), and
 // when the largest UTXOs of the token do not cover the amount, the ticket offers to merge just enough first (kob/merge.ts, the target mode:
-// until the 3 largest resulting UTXOs cover it). The offer states the merge transactions and approvals up front. A click runs them one after
-// the other, each approved in the wallet (ui/orders/TxFlow.tsx, the same run as "Merge all"), then reads the wallet again and hands the sale
-// back to the ticket, which plans it from that fresh state and opens its usual final confirmation: the price may have moved meanwhile, so
-// the user approves the sale itself as always. A merge rejected or failed part way stops there; what was sent stays merged and the offer
-// is planned again from it.
+// until the 3 largest resulting UTXOs cover it). The order button then reads "Merge, then sell", and a note above it, in place of the error,
+// states the merge transactions and approvals up front. A click runs them one after the other, each approved in the wallet
+// (ui/orders/TxFlow.tsx, the same run as "Merge all"), then reads the wallet again and hands the sale back to the ticket, which plans it from
+// that fresh state and opens its usual final confirmation: the price may have moved meanwhile, so the user approves the sale itself as
+// always. A merge rejected or failed part way stops there; what was sent stays merged and the offer is planned again from it.
 import type { JSX } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
@@ -16,7 +16,6 @@ import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { awaitMergeOutputs, mergeFlow, planMergeFor, type MergeFlow } from '../orders/actions';
 import { mergeSummary, mergeTokenOf } from '../orders/merge-model';
-import { countText } from '../orders/plural';
 import { TxFlow, type FlowOutcome } from '../orders/TxFlow';
 
 /** The issue code the offer answers. */
@@ -38,9 +37,9 @@ export interface MergeBeforeSaleArgs {
 }
 
 export interface MergeBeforeSale {
-  /** the sentence that replaces the fragmented message, with the merge count; null when no merge can help */
+  /** the note that replaces the fragmented message, with the merge count; null when no merge can help */
   offer: string | null;
-  /** the offer's button tooltip: why, and what follows the merges */
+  /** the order button's tooltip while it merges first: why, and what follows the merges */
   hint: string;
   /** from the click until the merges are over (the ticket is busy) */
   running: boolean;
@@ -60,7 +59,7 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
   // the count before the click, from the tree alone (nothing is built until the click)
   const shape = mt && a.env && a.pubkey && target !== null ? planMergeShape(mt, a.env.tokenUtxos, a.pubkey, new Set(), { target }) : null;
   const txs = shape?.ok ? shape.nodes.length : 0;
-  const offer = txs > 0 ? t('ticket.merge.offer', { ticker: a.ticker, txs: countText('tx', txs) }) : null;
+  const offer = txs > 0 ? t(txs === 1 ? 'ticket.merge.offer.one' : 'ticket.merge.offer.other', { ticker: a.ticker, count: txs }) : null;
 
   const stop = (text: string, raw?: string) => {
     setRunning(false);

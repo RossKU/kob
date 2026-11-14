@@ -299,9 +299,10 @@ small buys, or a resting order filled in many parts, you may hold more, and a sa
   other, each approved in your wallet (15 approvals)", and how much KAS of their carriers returns to your wallet after the network fees.
   Each transaction is approved in your wallet on its own; no wallet signs several at once.
 * If you reject one, or one fails, the merge stops there. What was sent stays merged; press **Merge all** again to merge the rest.
-* On the order ticket, a sale that needs more UTXOs than one transaction takes offers **Merge, then sell**: it states how many merge
-  transactions it needs first, merges only as much as the amount needs, and then shows the sale's own confirmation as usual (the price
-  may have moved meanwhile). A merge never touches an open order's escrow.
+* On the order ticket, when a sale needs more UTXOs than one transaction takes, the order button reads **Merge, then sell** and a
+  note above it says how many merge transactions come first, one wallet approval each. It merges only as much as the amount needs,
+  then shows the sale's own confirmation as usual (the price may have moved meanwhile). A ladder or a pair order still asks you to
+  merge in My orders first. A merge never touches an open order's escrow.
 * The same applies to KAS: if "Your KAS is in too many small coins (UTXOs)", KOB cannot merge KAS. Send your KAS to your own address
   from your wallet to merge it, or place a smaller order.
 

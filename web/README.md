@@ -215,9 +215,10 @@ that cannot be read now is named. In standalone mode either open-list token need
   Balances shows the KAS on the wallet's token UTXOs as its own line (counted in the total: a buy's delivery also carries its price
   improvement over the escrowed worst price, so it can be far more than the carriers), and the private-key signer frame adds "KAS freed from
   your token UTXOs" (its KAS line counts that KAS as the wallet's already, so a merge alone reads as the fee).
-  The sell ticket answers `TOKEN_UTXOS_FRAGMENTED` with "Merge, then sell" (`src/ui/ticket/merge-before-sale.tsx`): the target mode merges only
-  until the 3 largest UTXOs cover the amount, stating the transaction count first; then the ticket reads the wallet again, plans the sale from
-  that state and opens its usual final confirmation.
+  When `TOKEN_UTXOS_FRAGMENTED` is all that stops a single sale on a KAS market, the order button itself reads "Merge, then sell" and a
+  neutral note above it states the merge transactions (`src/ui/ticket/merge-before-sale.tsx`; a ladder or a pair keeps the error): the target
+  mode merges only until the 3 largest UTXOs cover the amount; then the ticket reads the wallet again, plans the sale from that state and
+  opens its usual final confirmation.
 
 ## Wallet events
 

@@ -206,24 +206,32 @@ test('the sell ticket merges just enough first, then places the sale with its ow
   await mock.giveTokens('alice', TOKEN, { token: STD, carrier: KAS, count: 9 });
   await mock.giveKas('alice', 50n * KAS);
   await registryWithStd(page);
+  // tall enough for the whole ticket, its order button included, on the screenshot
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(`/#/market/${STD}`);
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await recordConfirmPopups(page);
   await pickType(page, 'limit', 'sell');
-  await fillFields(page, { amount: '7', price: '1' });
+  // a ladder's levels are planned apart: no merge path, the dead end and the disabled button stay as they are
+  await fillFields(page, { amount: '4', price: '1', 'ladder.on': true, 'ladder.levels': '2', 'ladder.pct': '2' });
+  await settlePlan(page);
+  await expect(page.getByTestId('order-issue-TOKEN_UTXOS_FRAGMENTED')).toHaveAttribute('data-severity', 'error', { timeout: 30_000 });
+  await expect(page.getByTestId('order-note-merge')).toHaveCount(0);
+  await expect(page.getByTestId('order-place')).toBeDisabled();
+  await fillFields(page, { 'ladder.on': false, amount: '7' });
   await settlePlan(page);
 
-  // the dead end is an offer that states the merges first: the 7 largest into 3 UTXOs, two transactions
-  const issue = page.getByTestId('order-issue-TOKEN_UTXOS_FRAGMENTED');
-  await expect(issue).toContainText(
-    'Too many EXSTD UTXOs for one sale. Merge first: 2 transactions, one wallet approval each.',
-    { timeout: 30_000 },
-  );
-  await expect(page.getByTestId('order-merge-sell')).toHaveAttribute('title', /^A sale takes at most 3 token UTXOs\. /);
-  await expect(page.getByTestId('order-place')).toBeDisabled();
+  // a single sale: the order button itself merges first, and a neutral note above it states the merges (the 7 largest into 3 UTXOs)
+  await expect(page.getByTestId('order-note-merge')).toHaveText('Your EXSTD is split into many UTXOs: 2 merge transactions first, one wallet approval each.', { timeout: 30_000 });
+  await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
+  const button = page.getByTestId('order-place');
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveText('Merge, then sell');
+  await expect(button).toHaveAttribute('title', /^A sale takes at most 3 token UTXOs\. /);
+  expect(await wallet!.calls()).toEqual([]);
   await shot(page, 'sell-ticket-merge-offer');
-  await page.getByTestId('order-merge-sell').click();
+  await button.click();
 
   // the merges, each approved in the wallet, then the sale's own final confirmation
   await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 90_000 });

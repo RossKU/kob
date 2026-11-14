@@ -88,8 +88,7 @@ interface Reason {
   text: string;
   /** `warn`: the order can be placed, but not as it is meant (below the minimum order value: it is never listed); shown in the slot even while the button is on */
   kind: 'need' | 'field' | 'issue' | 'ladder' | 'warn';
-  /** `retry`: read the environment again; `merge`: merge the token's UTXOs, then place the order (merge-before-sale.tsx) */
-  action?: 'retry' | 'merge';
+  action?: 'retry';
   raw?: string;
   testid?: string;
 }
@@ -458,6 +457,11 @@ export function OrderTicket(props: OrderTicketProps) {
   const canPlace =
     enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !placing && !sendBusy(sender.status) && !crash
     && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0 && !merge.running;
+  // the only thing in the way is that the sale needs more token UTXOs than one transaction takes, and a merge can help: the order button
+  // itself merges first, then places the sale (its label and the note above it say so)
+  const mergeFirst =
+    !!merge.offer && enabled && gate.ready && !!shownPlan && !pending && !placing && !sendBusy(sender.status) && !crash && !merge.running
+    && planErrors.length > 0 && planErrors.every((i) => i.code === FRAGMENTED);
   // an edit makes a reason the last click stopped for stale (a submitted order stays on the line until the next click)
   const edited = () => {
     setMaxNote(null);
@@ -730,9 +734,9 @@ export function OrderTicket(props: OrderTicketProps) {
   // a required field that is simply EMPTY (untouched, or just reset after an order) is not an error: no text in the slot (the instruction is on the disabled button,
   // `enterText` below); the slot's red text is for blocking errors only
   for (const i of issues.filter((x) => x.severity === 'error')) {
-    // too many UTXOs for one sale: the offer to merge first replaces the dead end, when a merge can help
-    if (i.code === FRAGMENTED && merge.offer) {
-      reasons.push({ code: i.code, text: merge.offer, kind: 'issue', action: 'merge' });
+    // too many UTXOs for one sale: when the order button merges first, a note says what that takes instead of the dead end
+    if (i.code === FRAGMENTED && mergeFirst) {
+      reasons.push({ code: i.code, text: merge.offer!, kind: 'need', testid: 'order-note-merge' });
       continue;
     }
     const text = i.code === 'GUARDS_UNAVAILABLE' && switching ? t('ticket.switching') : issueText(i, issueCtx);
@@ -989,7 +993,6 @@ export function OrderTicket(props: OrderTicketProps) {
               >
                 <span key={r.text}>{r.text}</span>
                 {r.action === 'retry' ? <Button small onClick={() => void refresh().catch(() => null)} data-testid="order-retry">{t('common.retry')}</Button> : null}
-                {r.action === 'merge' ? <Button small class="tk-reason-merge" title={merge.hint} onClick={() => merge.start()} data-testid="order-merge-sell">{t('ticket.merge.action')}</Button> : null}
                 <RawDetails text={r.raw} />
               </li>
             ))}
@@ -1010,8 +1013,13 @@ export function OrderTicket(props: OrderTicketProps) {
           label of the button */}
       <SendStatusToast sender={sender} lead={ladderLead} data-testid="order-status" />
       {merge.card}
-      <Button variant="primary" block class="tk-place" data-side={form.side} onClick={() => void place()} disabled={!canPlace || !!sellAfterMerge} loading={placing || merge.running || !!sellAfterMerge} data-testid="order-place" data-state={placing ? 'placing' : undefined}>
-        <span key={busyText ?? enterText ?? `${sideName}|${typeName}`} data-state={busyText ? 'busy' : enterText ? 'enter' : undefined}>{busyText ?? enterText ?? t('ticket.place', { side: sideName, type: typeName })}</span>
+      <Button
+        variant="primary" block class="tk-place" data-side={form.side} onClick={() => (mergeFirst ? merge.start() : void place())} disabled={!(canPlace || mergeFirst) || !!sellAfterMerge}
+        loading={placing || merge.running || !!sellAfterMerge} data-testid="order-place" data-state={placing ? 'placing' : mergeFirst ? 'merge' : undefined} {...(mergeFirst ? { title: merge.hint } : {})}
+      >
+        <span key={busyText ?? enterText ?? (mergeFirst ? 'merge' : `${sideName}|${typeName}`)} data-state={busyText ? 'busy' : enterText ? 'enter' : undefined}>
+          {busyText ?? enterText ?? (mergeFirst ? t('ticket.merge.action') : t('ticket.place', { side: sideName, type: typeName }))}
+        </span>
       </Button>
       </div>
     </section>
