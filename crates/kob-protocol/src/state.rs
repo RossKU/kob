@@ -158,12 +158,12 @@ pub(crate) fn decode_fields(
     if bytes.len() != t.state_len {
         return Err(StateError::Codec(name, format!("state span is {} bytes, expected {}", bytes.len(), t.state_len)));
     }
-    let mut m = decode_runtime_state_script(&t.artifact, &t.contract().runtime_state, bytes)
+    let mut fields = decode_runtime_state_script(&t.artifact, &t.contract().runtime_state, bytes)
         .map_err(|e| StateError::Codec(name, e.to_string()))?;
     if kron {
-        m.entry(EXT_KEY.to_string()).or_insert_with(|| ArtifactValue::Bytes(vec![0; 32]));
+        fields.entry(EXT_KEY.to_string()).or_insert_with(|| ArtifactValue::Bytes(vec![0; 32]));
     }
-    Ok(m)
+    Ok(fields)
 }
 
 /// Common interface of every typed state.
@@ -204,13 +204,13 @@ pub trait StateCodec: FieldMap {
     /// Decodes a state span of the template `id` (this kind in some family).
     fn decode_as(id: TemplateId, bytes: &[u8]) -> Result<Self, StateError> {
         debug_assert_eq!(id.base(), Self::TEMPLATE, "{}: template {} is not this kind", Self::NAME, id.name());
-        let m = decode_fields(Self::NAME, template(id), id.family() == Family::Kron, bytes)?;
-        let s = Self::from_values(&m)?;
+        let fields = decode_fields(Self::NAME, template(id), id.family() == Family::Kron, bytes)?;
+        let state = Self::from_values(&fields)?;
         // Canonical encoding only (fixed-width pushes): re-encoding must reproduce the bytes.
-        if s.try_encode_as(id)? != bytes {
+        if state.try_encode_as(id)? != bytes {
             return Err(StateError::Codec(Self::NAME, "non-canonical state encoding".into()));
         }
-        Ok(s)
+        Ok(state)
     }
 }
 
@@ -271,11 +271,11 @@ pub trait OrderState: StateCodec {
     fn from_redeem_for(fam: Family, redeem: &[u8]) -> Result<Self, StateError> {
         for id in [Self::template_for(fam), Self::template_for(fam).delivery0()] {
             if let Some(st) = template(id).state_of(redeem) {
-                let s = Self::decode_as(id, st)?;
-                if s.template_of(fam) != id {
+                let state = Self::decode_as(id, st)?;
+                if state.template_of(fam) != id {
                     return Err(StateError::NotInstance(Self::NAME));
                 }
-                return Ok(s);
+                return Ok(state);
             }
         }
         Err(StateError::NotInstance(Self::NAME))
@@ -992,15 +992,15 @@ pub fn quote_of(n: i64, rate: i64, scale: i64, round: Round) -> Option<i64> {
     if n < 0 || rate < 0 || scale <= 0 {
         return None;
     }
-    let c = match round {
+    let rounding = match round {
         Round::Down => 0,
         Round::Up => scale - 1,
     };
-    let (q, m) = (n / scale, n % scale);
-    let a = q.checked_mul(rate)?;
-    let b = m.checked_mul(rate / scale)?;
-    let d = m.checked_mul(rate % scale)?.checked_add(c)? / scale;
-    a.checked_add(b)?.checked_add(d)
+    let (whole, rest) = (n / scale, n % scale);
+    let whole_value = whole.checked_mul(rate)?;
+    let rest_rate_value = rest.checked_mul(rate / scale)?;
+    let rest_frac_value = rest.checked_mul(rate % scale)?.checked_add(rounding)? / scale;
+    whole_value.checked_add(rest_rate_value)?.checked_add(rest_frac_value)
 }
 
 /// The exact value of [`quote_of`] in 128-bit arithmetic, not limited to `i64`.
@@ -1010,10 +1010,10 @@ pub fn quote_exact(n: i64, rate: i64, scale: i64, round: Round) -> Option<i128> 
     if n < 0 || rate < 0 || scale <= 0 {
         return None;
     }
-    let (num, s) = (n as i128 * rate as i128, scale as i128);
+    let (num, scale_wide) = (n as i128 * rate as i128, scale as i128);
     Some(match round {
-        Round::Down => num / s,
-        Round::Up => (num + s - 1) / s,
+        Round::Down => num / scale_wide,
+        Round::Up => (num + scale_wide - 1) / scale_wide,
     })
 }
 
@@ -1033,11 +1033,11 @@ pub fn check_scale(scale: i64) -> Result<(), String> {
     if !(1..=MAX_SCALE).contains(&scale) {
         return Err(format!("scale must be within 1..=10^9 (got {scale})"));
     }
-    let mut s = scale;
-    while s % 10 == 0 {
-        s /= 10;
+    let mut reduced = scale;
+    while reduced % 10 == 0 {
+        reduced /= 10;
     }
-    if s != 1 {
+    if reduced != 1 {
         return Err(format!("scale must be a power of ten (got {scale})"));
     }
     Ok(())
@@ -1050,8 +1050,8 @@ pub fn check_quote(amount: i64, rate: i64, scale: i64, what: &str) -> Result<(),
     if amount < 0 || rate < 0 {
         return Err(format!("{what}: amount and rate must be >= 0"));
     }
-    let v = quote_exact(amount, rate, scale, Round::Up).ok_or_else(|| format!("{what}: invalid scale {scale}"))?;
-    if v >= QUOTE_LIMIT {
+    let value = quote_exact(amount, rate, scale, Round::Up).ok_or_else(|| format!("{what}: invalid scale {scale}"))?;
+    if value >= QUOTE_LIMIT {
         return Err(format!("{what}: the full amount {amount} at {rate} per {scale} base units is worth 2^62 or more"));
     }
     Ok(())
@@ -1483,11 +1483,11 @@ impl CondAskState {
         if self.trail_step <= 0 {
             return 0;
         }
-        let mut k = (rp - self.trail_gap - self.stop_price).div_euclid(self.trail_step);
+        let mut steps = (rp - self.trail_gap - self.stop_price).div_euclid(self.trail_step);
         if self.tp_price > 0 {
-            k = k.min((self.tp_price - 1 - self.stop_price).div_euclid(self.trail_step));
+            steps = steps.min((self.tp_price - 1 - self.stop_price).div_euclid(self.trail_step));
         }
-        k.max(0)
+        steps.max(0)
     }
 }
 
@@ -1588,10 +1588,10 @@ impl CondBidState {
         if self.trail_step <= 0 {
             return 0;
         }
-        let k = (self.stop_price - self.trail_gap - rp).div_euclid(self.trail_step);
+        let steps = (self.stop_price - self.trail_gap - rp).div_euclid(self.trail_step);
         let floor = self.tp_price.max(0);
-        let kf = (self.stop_price - floor - 1).div_euclid(self.trail_step);
-        k.min(kf).max(0)
+        let floor_steps = (self.stop_price - floor - 1).div_euclid(self.trail_step);
+        steps.min(floor_steps).max(0)
     }
 }
 
@@ -1612,10 +1612,10 @@ fn entry_price(price: i64, entry_stop: i64, band_daa: i64, armed: i64, trigger: 
                 price
             }
         }
-        (false, Some(o)) => {
-            let e = t.checked_sub(o)?;
-            if band_daa > 0 && e < band_daa {
-                entry_stop.checked_add(price.checked_sub(entry_stop)?.checked_mul(e)? / band_daa)?
+        (false, Some(origin)) => {
+            let elapsed = t.checked_sub(origin)?;
+            if band_daa > 0 && elapsed < band_daa {
+                entry_stop.checked_add(price.checked_sub(entry_stop)?.checked_mul(elapsed)? / band_daa)?
             } else {
                 price
             }
@@ -1653,17 +1653,17 @@ fn entry_next_armed(entry_stop: i64, band_daa: i64, armed: i64, utxo_daa: i64) -
 ///
 /// The fields are `0x20 parent`, `0x08 rptPrice`, an optional `0x08 rptPre` and `0x08 rptUntil`.
 fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i64) -> Vec<u8> {
-    let mut v = vec![0x20];
-    v.extend_from_slice(&parent);
-    v.push(0x08);
-    v.extend_from_slice(&rpt_price.to_le_bytes());
+    let mut script = vec![0x20];
+    script.extend_from_slice(&parent);
+    script.push(0x08);
+    script.extend_from_slice(&rpt_price.to_le_bytes());
     if let Some(p) = rpt_pre {
-        v.push(0x08);
-        v.extend_from_slice(&p.to_le_bytes());
+        script.push(0x08);
+        script.extend_from_slice(&p.to_le_bytes());
     }
-    v.push(0x08);
-    v.extend_from_slice(&until.to_le_bytes());
-    v
+    script.push(0x08);
+    script.extend_from_slice(&until.to_le_bytes());
+    script
 }
 
 /// The extension commitment a buy-first entry writes behind the repeat fields of its exit.
@@ -1671,9 +1671,9 @@ fn repeat_tail(parent: [u8; 32], rpt_price: i64, rpt_pre: Option<i64>, until: i6
 /// The span is `0x20 ext`, where `ext` is the entry's own `extensionCommitment`, the commitment of
 /// the custody it delivers. It is zero for KRON, whose exit has no such field.
 fn ext_tail(ext: [u8; 32]) -> Vec<u8> {
-    let mut v = vec![0x20];
-    v.extend_from_slice(&ext);
-    v
+    let mut script = vec![0x20];
+    script.extend_from_slice(&ext);
+    script
 }
 
 impl IfdBidState {
@@ -1692,13 +1692,13 @@ impl IfdBidState {
     }
     /// The exit a fill of n creates (booked when the entry repeats and `rptAmount > n`).
     pub fn exit_for(&self, n: i64, booking: Option<Booking>) -> Result<CondAskState, StateError> {
-        let mut x = CondAskState { amount_left: n, ..self.exit()? };
-        if let Some(b) = booking {
-            x.parent = b.parent;
-            x.rpt_price = self.budget_rate().ok_or(StateError::Codec("KobIfdBid", "price + tip overflows".into()))?;
-            x.rpt_until = b.until;
+        let mut exit = CondAskState { amount_left: n, ..self.exit()? };
+        if let Some(terms) = booking {
+            exit.parent = terms.parent;
+            exit.rpt_price = self.budget_rate().ok_or(StateError::Codec("KobIfdBid", "price + tip overflows".into()))?;
+            exit.rpt_until = terms.until;
         }
-        Ok(x)
+        Ok(exit)
     }
     /// Whether `x` is exactly an exit this entry books with parent `me`.
     ///
@@ -1795,14 +1795,14 @@ impl IfdAskState {
     }
     /// The exit a fill of n creates (booked when the entry repeats and `rptAmount > n`).
     pub fn exit_for(&self, n: i64, booking: Option<Booking>) -> Result<CondBidState, StateError> {
-        let mut x = CondBidState { amount_left: n, ..self.exit()? };
-        if let Some(b) = booking {
-            x.parent = b.parent;
-            x.rpt_price = self.proceeds_rate();
-            x.rpt_pre = self.prefund;
-            x.rpt_until = b.until;
+        let mut exit = CondBidState { amount_left: n, ..self.exit()? };
+        if let Some(terms) = booking {
+            exit.parent = terms.parent;
+            exit.rpt_price = self.proceeds_rate();
+            exit.rpt_pre = self.prefund;
+            exit.rpt_until = terms.until;
         }
-        Ok(x)
+        Ok(exit)
     }
     /// Whether `x` is exactly an exit this entry books with parent `me`.
     ///
@@ -1914,10 +1914,10 @@ impl AnyState {
     /// are id_type 0 takes the `*KronD0` build, whose maker deliveries are id_type 0. Any other
     /// program takes the default build, see [`TemplateId::for_token_hash`].
     pub fn template_id(&self) -> TemplateId {
-        let k = self.kind();
+        let kind = self.kind();
         match self.token_tpl_hash() {
-            Some(h) if k.family() == Family::Kron && !k.is_pair() => k.for_token_hash(Family::Kron, &h),
-            _ => k,
+            Some(h) if kind.family() == Family::Kron && !kind.is_pair() => kind.for_token_hash(Family::Kron, &h),
+            _ => kind,
         }
     }
     /// The order kind of the variant (a KRON kind: its default build).
@@ -2145,7 +2145,7 @@ impl AnyState {
     /// The state must pass [`AnyState::validate`], and `id` must be the build of the token program
     /// the state pins.
     pub fn decode(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
-        let s = match id {
+        let state = match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
             TemplateId::KobBid => AnyState::KobBid(BidState::decode_as(id, bytes)?),
             TemplateId::KobCondAsk => AnyState::KobCondAsk(CondAskState::decode_as(id, bytes)?),
@@ -2169,21 +2169,21 @@ impl AnyState {
             TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, bytes)?),
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
         };
-        s.validate()?;
+        state.validate()?;
         // The build of a KRON kind is the token program's, and both builds have the same state
         // span. An instance of one build whose state pins a program of the other is not an order
         // KOB recognises, because it would be a delivery the maker could not spend.
-        if s.template_id() != id {
+        if state.template_id() != id {
             return Err(StateError::Codec(
                 "AnyState",
                 format!(
                     "{}: the state's token program takes the {} build (maker deliveries of the program's holder owner)",
                     id.name(),
-                    s.template_id().name()
+                    state.template_id().name()
                 ),
             ));
         }
-        Ok(s)
+        Ok(state)
     }
     /// [`AnyState::decode`] of a state named by its kind, whatever the build.
     ///
@@ -2411,35 +2411,35 @@ impl AnyState {
         let name = self.template_id().name();
         check_scale(self.scale()).map_err(|e| format!("{name}: {e}"))?;
         let sum = |a: i64, b: i64, what: &str| a.checked_add(b).ok_or_else(|| format!("{name}: {what} overflows"));
-        let q = |amount: i64, rate: i64, what: &str| check_quote(amount, rate.max(0), self.scale(), &format!("{name} {what}"));
+        let check = |amount: i64, rate: i64, what: &str| check_quote(amount, rate.max(0), self.scale(), &format!("{name} {what}"));
         match self {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => {
-                q(s.amount_left, s.price.max(s.price_end), "price")?;
+                check(s.amount_left, s.price.max(s.price_end), "price")?;
             }
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
                 // A bid's amount is its escrow. The rates must leave room for the KAS of one fill.
                 sum(s.price_max(), s.tip, "pMax + tip")?;
             }
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => {
-                q(s.amount_left, s.tp_price.max(s.stop_price), "leg price")?;
-                q(s.amount_left, s.rpt_price, "rptPrice")?;
+                check(s.amount_left, s.tp_price.max(s.stop_price), "leg price")?;
+                check(s.amount_left, s.rpt_price, "rptPrice")?;
             }
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => {
-                q(s.amount_left, sum(s.worst(), s.tip, "worst + tip")?, "worst leg + tip")?;
-                q(s.amount_left, s.rpt_price, "rptPrice")?;
-                q(s.amount_left, s.rpt_pre, "rptPre")?;
+                check(s.amount_left, sum(s.worst(), s.tip, "worst + tip")?, "worst leg + tip")?;
+                check(s.amount_left, s.rpt_price, "rptPrice")?;
+                check(s.amount_left, s.rpt_pre, "rptPre")?;
             }
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => {
-                q(s.amount_left, sum(s.price, s.tip, "price + tip")?, "price + tip")?;
+                check(s.amount_left, sum(s.price, s.tip, "price + tip")?, "price + tip")?;
                 if let Ok(x) = s.exit() {
-                    q(s.amount_left, x.tp_price.max(x.stop_price), "exit leg price")?;
+                    check(s.amount_left, x.tp_price.max(x.stop_price), "exit leg price")?;
                 }
             }
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => {
-                q(s.amount_left, s.price.max(s.entry_stop), "price")?;
-                q(s.amount_left, s.prefund, "prefund")?;
+                check(s.amount_left, s.price.max(s.entry_stop), "price")?;
+                check(s.amount_left, s.prefund, "prefund")?;
                 if let Ok(x) = s.exit() {
-                    q(s.amount_left, sum(x.worst(), x.tip, "exit worst + tip")?, "exit worst leg + tip")?;
+                    check(s.amount_left, sum(x.worst(), x.tip, "exit worst + tip")?, "exit worst leg + tip")?;
                 }
             }
             AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) => unreachable!("checked above"),
