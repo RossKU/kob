@@ -128,29 +128,3 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     expect(await page.evaluate(() => localStorage.getItem('kob.creations.v2'))).toBeNull();
   });
 });
-
-// TN10, KasWare 0.11.5: once a genesis window showed only Reject ("is not an unspent output")
-// although KOB's node listed the preparation. Neither an accepted pushTx nor KOB's node proves what
-// the wallet will find, so the gate asks the wallet's node itself (getUtxoEntries).
-test.describe('chain signing: a pushTx that does not make the output findable on the wallet node', () => {
-  test.use({ walletOptions: { pushTxOutcome: 'lost', walletNodeLagMs: 4000 } });
-
-  test('the genesis is asked for only once the wallet node lists the preparation, and is never refused', async ({ appPage: page, mock, wallet }) => {
-    await mock.giveKas('alice', 500n * KAS);
-    await openCreate(page, 'LOST');
-    await page.getByTestId('issue-review').click();
-    await page.getByTestId('confirm-ack').check();
-    await page.getByTestId('confirm-sign').click();
-    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
-    const calls = await wallet!.calls();
-    // the old gate counted the accepted push as visible: the wallet refused the genesis first
-    expect(calls.map((c) => c.status)).toEqual(['signed', 'signed']);
-    const prep = (await mock.submitted())[0]!.txid;
-    expect((await wallet!.pushes()).find((p) => p.txid === prep)).toMatchObject({ ok: true });
-    const reads = (await wallet!.utxoReads()).filter((r) => r.at <= calls[1]!.at);
-    expect(reads.length).toBeGreaterThan(1);
-    expect(reads.at(-1)!.outpoints).toContain(`${prep}:0`);
-    expect(reads.slice(0, -1).some((r) => r.outpoints.includes(`${prep}:0`))).toBe(false);
-    expect(calls[1]!.at - calls[0]!.at).toBeGreaterThanOrEqual(3500);
-  });
-});

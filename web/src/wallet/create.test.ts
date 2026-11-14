@@ -213,23 +213,22 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     expect(listCreations(NET, MAKER_PK, s.storage)).toEqual([]);
   });
 
-  it('a pushTx the wallet node does not keep: the genesis is asked for only once that node lists the preparation (getUtxoEntries)', async () => {
+  it('an accepted pushTx is not enough: the genesis waits for the node and the margin; a refusal is asked again and passes', async () => {
     const s = setup();
-    // pushTx is accepted, yet the wallet's own lookup finds the preparation nowhere until the third
-    // poll (seen on TN10 with KasWare 0.11.5)
+    // pushTx is accepted, yet the wallet's lookup does not find the preparation until it moved into its node's UTXO index (seen on TN10)
     const view = laggingWalletNode(s.node, { pushLost: true });
     const w = kasware(s, {}, view);
-    const refused: string[] = [];
+    const slept: number[] = [];
+    let refused = 0;
     const sign = w.provider.signPskt.bind(w.provider);
-    w.provider.signPskt = async (req) => sign(req).catch((e: Error) => Promise.reject((refused.push(e.message), e)));
-    let polls = 0;
-    const sleep = async () => void (++polls === 3 && view.reveal());
+    w.provider.signPskt = async (req) => sign(req).catch((e: Error) => Promise.reject((refused++, e)));
+    // the wallet's node takes the block only after the margin: the first ask is refused, the one 2 s later passes
+    const sleep = async (ms: number) => void (slept.push(ms), ms === 2000 && slept.filter((x) => x === 2000).length === 2 && view.reveal());
     const res = await signAndSubmitCreation({ ...args(s, w.adapter), sleep });
     expect(res.txid).toBe(s.plan.built.tx.id);
-    // the old gate trusted the accepted push and showed the wallet a genesis it had to refuse
-    expect(refused).toEqual([]);
-    expect(w.signs()).toBe(2);
-    expect(w.provider.calls.filter((c) => c.method === 'getUtxoEntries')).toHaveLength(4);
+    expect(slept.slice(0, 1)).toEqual([2000]);
+    expect(refused).toBe(1);
+    expect(w.signs()).toBe(3);
   });
 
   it('without pushTx (Kaspire): the genesis is asked for once the node lists the preparation and the wallet node had its margin', async () => {
@@ -260,7 +259,8 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
       slept.push(ms);
       if (ms === 2000 && ++retries === 2) view.reveal(); // relayed during the second wait
     };
-    const res = await signAndSubmitCreation({ ...args(s, adapter), sleep });
+    // the margin is not one of the 2 s retries
+    const res = await signAndSubmitCreation({ ...args(s, adapter), sleep, settleMs: 1500 });
     expect(res.txid).toBe(s.plan.built.tx.id);
     expect(p.calls.filter((c) => c.method === 'signPskt')).toHaveLength(4); // preparation, then the genesis three times
     expect(slept.filter((ms) => ms === 2000)).toHaveLength(2);

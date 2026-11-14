@@ -7,13 +7,14 @@
 //   * 0.11.5 (read from its service worker): off mainnet `signPskt` refuses an input its own node does not list as unspent (UTXO set or
 //     mempool), and `pushTx(txJson)` submits a signed transaction to that node without a popup. `announce` uses it for a transaction KOB
 //     already sent (wallet/visibility.ts);
-//   * 0.11.5 `getUtxoEntries(address)` lists the unspent outputs of one address without a popup,
-//     from the same node: its UTXO tracker for the wallet's own account, `getUtxosByAddresses`
-//     for any other address. An output listed there passes the sign check's first lookup, so
-//     `walletSees` asks it. The mempool is not listed, so it can only err on the side of waiting.
+//   * 0.11.5 refusing an input shows a "Critical Signing Warning" and only Reject. Reject answers
+//     like any user rejection (`userRejectedRequest`, code 4001), so the app cannot tell the two
+//     apart: a declined step that spends a fresh output says both (wallet/sign.ts).
+//   * 0.11.5 `getUtxoEntries` answers for the wallet's own account from its UTXO tracker, which
+//     lists a new output only once it is mature (11 to 15 s on TN10): too slow to gate on.
 import type { BuiltTx, InputSignature, TxJson } from '../kob/types';
 import { normalizeNetwork } from '../data/kaspa-sdk';
-import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo, type WalletOutpoint } from './types';
+import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
 import { CONNECT_TIMEOUT_MS, REFRESH_TIMEOUT_MS, SIGN_TIMEOUT_MS, collectSignatures, errText, normalizePubkey, toWalletError, withTimeout } from './sigs';
 import { DEFAULT_POLL_MS, hasEmitter, listenProvider, pollProvider, type EmitterLike } from './events';
 
@@ -28,8 +29,6 @@ export interface KaswareProvider extends EmitterLike {
   signPskt(request: { txJsonString: string; options: { signInputs: { index: number; sighashType: number }[] } }): Promise<unknown>;
   /** 0.11.5: submits a signed transaction (safe JSON string) to the wallet's own node, without a popup; resolves with its id */
   pushTx?(rawtx: string): Promise<unknown>;
-  /** 0.11.5: the unspent outputs of `address` (default: the account's) on the wallet's node */
-  getUtxoEntries?(address?: string): Promise<unknown>;
 }
 
 export interface KaswareDeps {
@@ -40,8 +39,6 @@ export interface KaswareDeps {
 const LABEL = 'KasWare';
 /** `pushTx` answers at once (no popup): it either reaches the wallet's node quickly or not at all */
 const ANNOUNCE_TIMEOUT_MS = 3000;
-/** one `getUtxoEntries` call: it has no popup, so it answers at once or not at all */
-const SEES_TIMEOUT_MS = 5000;
 /** a node that already has the transaction */
 const ALREADY = /already (?:in|exists in) (?:the )?mempool|already accepted|already (?:have|known)|duplicate transaction/i;
 
@@ -145,27 +142,6 @@ export function createKaswareAdapter(deps: KaswareDeps = {}): WalletAdapter {
         if (ALREADY.test(errText(e))) return;
         throw toWalletError(e, LABEL);
       }
-    },
-
-    async walletSees(outpoints: readonly WalletOutpoint[], opts: { timeoutMs?: number } = {}): Promise<boolean[]> {
-      const p = need();
-      if (typeof p.getUtxoEntries !== 'function') throw new WalletError('unsupported', `${LABEL} has no getUtxoEntries.`);
-      const listed = new Set<string>();
-      try {
-        for (const address of new Set(outpoints.map((o) => o.address))) {
-          const entries = await withTimeout(p.getUtxoEntries(address), opts.timeoutMs ?? SEES_TIMEOUT_MS, `${LABEL}.getUtxoEntries`);
-          // An answer of another shape says nothing about the outputs: the gate falls back rather
-          // than wait on it.
-          if (!Array.isArray(entries)) throw new WalletError('other', `${LABEL}.getUtxoEntries returned no list.`);
-          for (const e of entries) {
-            const op = e?.outpoint ?? e?.entry?.outpoint;
-            if (op && typeof op.transactionId === 'string') listed.add(`${op.transactionId.toLowerCase()}:${Number(op.index ?? 0)}`);
-          }
-        }
-      } catch (e) {
-        throw toWalletError(e, LABEL);
-      }
-      return outpoints.map((o) => listed.has(`${o.transactionId.toLowerCase()}:${o.index}`));
     },
 
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {

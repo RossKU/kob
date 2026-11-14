@@ -1,5 +1,5 @@
-// The visibility gate: an extension wallet is asked to sign an input spending a fresh output only once that output is visible to its own node
-// (announced to it, or listed by KOB's node plus a margin); the private-key signer and old inputs pass at once.
+// The visibility gate: an extension wallet is asked to sign an input spending a fresh output only once KOB's node lists that output and a
+// margin for the wallet's node passed, announced or not; the private-key signer and old inputs pass at once.
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MockNode } from '../testing/mock-node';
 import type { TxJson } from '../kob/types';
@@ -73,21 +73,29 @@ describe('awaitVisible', () => {
     expect(n.utxoQueries).toEqual([]);
   });
 
-  it('an output announced to this wallet is visible at once: no node poll, no margin', async () => {
+  it('an accepted announce does not count on its own: KOB node must list the output, then the margin of 2 s', async () => {
     const n = node();
     const c = clock();
     const w = wallet({ announce: async () => undefined });
-    await noteSent(w, tx(A), { now: c.now });
-    const r = await awaitVisible({ adapter: w, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:addr', ...c });
-    expect(r.ok).toBe(true);
-    expect(n.utxoQueries).toEqual([]);
-    expect(c.slept).toEqual([]);
+    expect(await noteSent(w, tx(A), { now: c.now })).toBe(true);
+    const waits: boolean[] = [];
+    const real = n.getUtxosByAddresses.bind(n);
+    let polls = 0;
+    n.getUtxosByAddresses = async (a) => {
+      if (++polls === 2) list(n, A);
+      return real(a);
+    };
+    const r = await awaitVisible({ adapter: w, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:addr', onWait: (x) => waits.push(x), ...c });
+    expect(r).toEqual({ ok: true, waitedMs: 500 + SETTLE_MS });
+    expect(SETTLE_MS).toBe(2000);
+    expect(c.slept).toEqual([500, SETTLE_MS]);
+    expect(waits).toEqual([true, false]);
   });
 
-  it("another wallet's announce does not count; without one it polls KOB's node, then waits the margin", async () => {
+  it("without an announce it polls KOB's node, then waits the margin", async () => {
     const n = node();
     const c = clock();
-    await noteSent(wallet({ id: 'kaspire', announce: async () => undefined }), tx(A), { now: c.now });
+    void noteSent(null, tx(A), { now: c.now });
     const waits: boolean[] = [];
     let polls = 0;
     const real = n.getUtxosByAddresses.bind(n);
@@ -131,75 +139,6 @@ describe('awaitVisible', () => {
     const c = clock();
     list(n, A);
     const r = await awaitVisible({ adapter: wallet(), node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:addr', alsoFresh: new Map([[A, c.now() - 1000]]), ...c });
-    expect(r.ok).toBe(true);
-    expect(c.slept).toEqual([SETTLE_MS]);
-  });
-});
-
-describe('awaitVisible: asking the wallet node itself (walletSees, KasWare getUtxoEntries)', () => {
-  /** a wallet whose own node lists `A:0` from the `from`-th question on (Infinity: never) */
-  const seeing = (from: number, o: Partial<WalletAdapter> = {}) => {
-    const asked: { transactionId: string; index: number; address: string }[][] = [];
-    const w = wallet({
-      announce: async () => undefined,
-      walletSees: async (outs) => (asked.push([...outs]), outs.map(() => asked.length >= from)),
-      ...o,
-    });
-    return Object.assign(w, { asked });
-  };
-
-  it('listed at once: no wait, no poll of KOB node, the address of each input is asked', async () => {
-    const n = node();
-    const c = clock();
-    const w = seeing(1);
-    await noteSent(w, tx(A), { now: c.now });
-    const waits: boolean[] = [];
-    const r = await awaitVisible({ adapter: w, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:own', onWait: (x) => waits.push(x), ...c });
-    expect(r).toEqual({ ok: true, waitedMs: 0 });
-    expect(w.asked).toEqual([[{ transactionId: A, index: 0, address: 'kaspatest:own' }]]);
-    expect(n.utxoQueries).toEqual([]);
-    expect(waits).toEqual([]);
-  });
-
-  it('an accepted announce is not enough: the gate waits until the wallet node lists the output', async () => {
-    const n = node();
-    const c = clock();
-    // the announce went through, yet the wallet's node lists the output only at the third question
-    // (it moved from the mempool into a block)
-    const w = seeing(3);
-    expect(await noteSent(w, tx(A), { now: c.now })).toBe(true);
-    list(n, A); // KOB's node has it all along: it says nothing about the wallet's node
-    const waits: boolean[] = [];
-    const r = await awaitVisible({ adapter: w, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:own', onWait: (x) => waits.push(x), ...c });
-    expect(r).toEqual({ ok: true, waitedMs: 1000 });
-    expect(w.asked).toHaveLength(3);
-    expect(c.slept).toEqual([500, 500]);
-    expect(waits).toEqual([true, false]);
-    expect(n.utxoQueries).toEqual([]);
-  });
-
-  it('never listed: not in time, and the wallet is not asked to sign', async () => {
-    const n = node();
-    const c = clock();
-    const w = seeing(Infinity);
-    await noteSent(w, tx(A), { now: c.now });
-    const r = await awaitVisible({ adapter: w, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:own', timeoutMs: 3000, ...c });
-    expect(r).toMatchObject({ ok: false, missing: [{ transactionId: A, index: 0 }] });
-    expect(r.waitedMs).toBeLessThanOrEqual(3000);
-  });
-
-  it('a wallet that cannot tell falls back to the announce, and without one to KOB node plus the margin', async () => {
-    const n = node();
-    const c = clock();
-    const failing = seeing(1, { walletSees: async () => { throw new Error('getUtxoEntries: not connected'); } });
-    await noteSent(failing, tx(A), { now: c.now });
-    expect(await awaitVisible({ adapter: failing, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:addr', ...c })).toEqual({ ok: true, waitedMs: 0 });
-    // an answer for other outpoints counts as no answer; no announce: KOB's node, then the margin
-    resetVisibility();
-    const odd = wallet({ walletSees: async () => [] });
-    void noteSent(odd, tx(A), { now: c.now });
-    list(n, A);
-    const r = await awaitVisible({ adapter: odd, node: n, tx: tx(B, [[A, 0]]), addressOf: () => 'kaspatest:addr', ...c });
     expect(r.ok).toBe(true);
     expect(c.slept).toEqual([SETTLE_MS]);
   });

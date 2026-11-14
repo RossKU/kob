@@ -136,37 +136,3 @@ describe('KasWare adapter: signTx', () => {
     expect(() => assertConsensusValid(built, sigs)).toThrow(/signature/i);
   });
 });
-
-describe('KasWare adapter: walletSees (getUtxoEntries, 0.11.5)', () => {
-  const T1 = '1a'.repeat(32);
-  const T2 = '2b'.repeat(32);
-  it("asks each address once and answers per outpoint from the wallet node's list (both of KasWare's entry shapes)", async () => {
-    const asked: (string | undefined)[] = [];
-    const lists: Record<string, unknown[]> = {
-      'kaspatest:own': [{ outpoint: { transactionId: T1.toUpperCase(), index: 0 } }, { entry: { outpoint: { transactionId: T2, index: 1 } } }],
-      'kaspatest:p2sh': [],
-    };
-    const p = fakeKasware({ sdk, sk: MAKER_SK });
-    p.getUtxoEntries = async (address?: string) => (asked.push(address), lists[address ?? ''] ?? []);
-    const a = createKaswareAdapter({ getProvider: () => p });
-    const seen = await a.walletSees!([
-      { transactionId: T1, index: 0, address: 'kaspatest:own' },
-      { transactionId: T1, index: 1, address: 'kaspatest:own' },
-      { transactionId: T2, index: 1, address: 'kaspatest:own' },
-      { transactionId: T2, index: 0, address: 'kaspatest:p2sh' },
-    ]);
-    expect(seen).toEqual([true, false, true, false]);
-    expect(asked).toEqual(['kaspatest:own', 'kaspatest:p2sh']);
-  });
-
-  it('rejects when it cannot tell: no getUtxoEntries (before 0.11.5), an answer that is not a list, a wallet that does not answer', async () => {
-    const out = [{ transactionId: T1, index: 0, address: 'kaspatest:own' }];
-    const { adapter } = mk();
-    await expect(adapter.walletSees!(out)).rejects.toMatchObject({ code: 'unsupported' });
-    const p = fakeKasware({ sdk, sk: MAKER_SK });
-    p.getUtxoEntries = async () => ({ entries: [] });
-    await expect(createKaswareAdapter({ getProvider: () => p }).walletSees!(out)).rejects.toBeInstanceOf(WalletError);
-    p.getUtxoEntries = () => new Promise(() => undefined);
-    await expect(createKaswareAdapter({ getProvider: () => p }).walletSees!(out, { timeoutMs: 20 })).rejects.toMatchObject({ code: 'timeout' });
-  });
-});

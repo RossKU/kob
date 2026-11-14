@@ -447,27 +447,17 @@ export async function startMockServer(opts = {}) {
     // the mock wallets' OWN node (src/testing/mock-wallets.ts): what a wallet that looks its inputs up before signing (KasWare 0.11.5) sees.
     // `{ outpoints: [{ transactionId, index }], lag_ms }` -> `{ entries: [{ transactionId, index, state }] }`, state `unspent` | `spent` | `unknown` |
     // `unseen` (an output of a submitted transaction younger than `lag_ms`: not relayed to the wallet's node yet, unless its transaction was pushed to it)
-    // The lag is a relay delay: it applies to outputs of transactions submitted to the node, not
-    // to seeded coins, which are older than any lag.
-    const unseen = (u, lag) => lag > 0 && chain.txs.has(u.txid) && !walletPushed.has(u.txid) && Date.now() - (u.createdMs ?? 0) < lag;
-    const lagOf = () => Math.max(0, Number(body.lag_ms ?? 0) || 0);
     if (post && path === '/mock/wallet-node/outpoints') {
-      const lag = lagOf();
+      const lag = Math.max(0, Number(body.lag_ms ?? 0) || 0);
       const list = Array.isArray(body.outpoints) ? body.outpoints : [];
       const entries = list.map((o) => {
         const u = chain.utxos.get(`${o?.transactionId}:${o?.index}`);
-        const state = !u ? 'unknown' : u.spentBy ? 'spent' : unseen(u, lag) ? 'unseen' : 'unspent';
+        // the lag is a relay delay: it applies to outputs of transactions submitted to the node, not to seeded coins (older than any lag)
+        const relayed = chain.txs.has(u?.txid);
+        const state = !u ? 'unknown' : u.spentBy ? 'spent' : lag > 0 && relayed && !walletPushed.has(u.txid) && Date.now() - (u.createdMs ?? 0) < lag ? 'unseen' : 'unspent';
         return { transactionId: o?.transactionId, index: o?.index, state };
       });
       return ok({ entries });
-    }
-    // KasWare `getUtxoEntries(address)`: `{ address, lag_ms }` -> the unspent outputs of that
-    // address the wallet's node sees, in KasWare's shape (`outpoint: { transactionId, index }`).
-    // An output still `unseen` above is not listed.
-    if (post && path === '/mock/wallet-node/utxos') {
-      const lag = lagOf();
-      const entries = chain.utxosByAddresses([String(body.address ?? '')]).filter((e) => !unseen(chain.utxos.get(`${e.transactionId}:${e.index}`), lag));
-      return ok({ entries: entries.map((e) => ({ address: e.address, outpoint: { transactionId: e.transactionId, index: e.index }, amount: e.amount, scriptPublicKey: e.scriptPublicKey, blockDaaScore: e.blockDaaScore, isCoinbase: false })) });
     }
     // KasWare `pushTx`: the wallet's node takes a signed transaction (`{ transaction }`); one the node does not have yet is submitted (a refusal is
     // the node's 400), one it has is only marked as seen by the wallet's node

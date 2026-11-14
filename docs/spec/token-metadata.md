@@ -147,10 +147,12 @@ key. The genesis therefore carries, in its payload, the states of its token outp
   does not find there unspent (KasWare 0.11.5 does so off mainnet; KOB assumes every extension wallet does, on every network). The
   genesis spends the preparation's output 0, which is on no node until the preparation is sent, so (`web/src/wallet/chain.ts`):
   1. the wallet signs the preparation; the app finalizes and validates it, writes the creation record, and sends it;
-  2. the app hands it to the wallet's own node where the wallet can take it (KasWare `pushTx`, no popup), then waits until
-     that node lists output 0, asked through the wallet (KasWare `getUtxoEntries`, no popup): an accepted `pushTx` alone does
-     not prove the wallet will find it. A wallet that cannot be asked waits until KOB's node lists output 0 (in a block) plus a
-     short margin, or not at all once `pushTx` was accepted (`web/src/wallet/visibility.ts`, at most 60 s);
+  2. the app hands it to the wallet's own node where the wallet can take it (KasWare `pushTx`, no popup), which keeps it in that
+     node's mempool, then waits until KOB's node lists output 0 (in a block) plus 2 s (`web/src/wallet/visibility.ts`, at most
+     60 s), announced or not. This is probabilistic: the wallet finds the output in its node's mempool or UTXO index, and while
+     its node moves the transaction from one to the other it is briefly in neither (on TN10 KasWare 0.11.5 then showed only
+     Reject). The 2 s after KOB's node lists it make that rare. A miss is safe: nothing more is sent, the app says so, and
+     finishing the creation a few seconds later asks for the genesis again;
   3. only then the wallet is asked for the genesis, which is finalized, validated, recorded and sent.
 
   Declining the second request leaves the preparation on chain: only its network fee (about 0.002 KAS) is spent, output 0 stays a coin

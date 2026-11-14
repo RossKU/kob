@@ -1,7 +1,7 @@
 // The race of quick successive sends with a wallet that looks every input up on its OWN node (KasWare 0.11.5; the mock wallets do so by
 // default): a ladder's next level spends the change of the level before, which KOB's node accepted a moment ago. The wallet is asked to sign
-// only once that change is visible to the wallet's node (src/wallet/visibility.ts, on every network): at once when it was handed to that
-// node (KasWare pushTx), else once KOB's node lists it plus a margin, asking again if the wallet still cannot see it.
+// only once KOB's node lists that change and a margin for the wallet's node passed (src/wallet/visibility.ts, on every network), also
+// when it was handed to that node (KasWare pushTx); a wallet that still cannot see it is asked again.
 import { test, expect } from '../fixtures';
 import { fund, openMarket } from '../helpers/env';
 import { fillFields, pickType, placeLadder, waitReviewable } from '../helpers/ticket';
@@ -11,7 +11,7 @@ test.use({ autoOpen: false });
 test.describe('chain signing: a ladder spending the change of its previous level', () => {
   test.describe('KasWare: its node sees a new output only when it is pushed', () => {
     test.use({ walletOptions: { walletNodeLagMs: 600_000 } });
-    test('each level is handed to the wallet node, so the next one signs at once', async ({ appPage: page, mock, wallet }) => {
+    test('each level is handed to the wallet node, and the next one is asked after the node lists the change and the margin', async ({ appPage: page, mock, wallet }) => {
       // ONE coin: every next level funds itself from the change of the level before
       await fund(mock, 'alice', { utxos: 1 });
       await openMarket(page, mock);

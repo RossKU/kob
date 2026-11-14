@@ -357,17 +357,19 @@ describe('signAndSubmit: the visibility gate (an input spending what this page j
   const addressOf = (spk: string) => spkStringToAddress(sdk, spk, NET);
   beforeEach(() => resetVisibility());
 
-  it('KasWare: the first transaction is handed to the wallet node (pushTx), so the second is signed at once', async () => {
+  it('KasWare: the first transaction is handed to the wallet node (pushTx), and the second still waits for the node and the margin', async () => {
     const c = chain();
     const view = laggingWalletNode(c.n);
     const p = fakeKasware({ sdk, sk: MAKER_SK, walletNode: view });
     const adapter = createKaswareAdapter({ getProvider: () => p });
     await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET, addressOf });
     const waits: boolean[] = [];
-    const res = await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, onWait: (w) => waits.push(w) });
+    const slept: number[] = [];
+    const res = await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, onWait: (w) => waits.push(w), visibility: { sleep: async (ms) => void slept.push(ms) } });
     expect(res.txid).toBe(c.second.tx.id);
     expect(view.pushed).toEqual([c.first.tx.id, c.second.tx.id]);
-    expect(waits).toEqual([]);
+    expect(waits).toEqual([true, false]);
+    expect(slept).toEqual([2000]);
   });
 
   it('a wallet without pushTx is asked once the node lists the output and the margin passed; never before', async () => {

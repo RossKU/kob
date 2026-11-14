@@ -1,7 +1,6 @@
 // Wallet adapter contract. Adapters sign: they never build, and never see anything but the tx the app already showed on the pre-sign
 // confirmation screen. They broadcast nothing of their own; the one exception is `announce`: an adapter may hand the wallet's own node a
-// transaction KOB already finalized, validated and sent to its node (wallet/visibility.ts).
-// `walletSees` only reads what that node lists. Proven on TN10 in tools/wallet-gate (RESULTS.md).
+// transaction KOB already finalized, validated and sent to its node (wallet/visibility.ts). Proven on TN10 in tools/wallet-gate (RESULTS.md).
 import type { BuiltTx, Hex, InputSignature, TxJson } from '../kob/types';
 import type { GenesisClaim, SignerNote } from '../signer/protocol';
 
@@ -83,24 +82,6 @@ export interface WalletAdapter {
    * counts. Resolves once that node took it (or already had it); rejects with `WalletError` otherwise.
    */
   announce?(tx: TxJson, opts?: { timeoutMs?: number }): Promise<void>;
-  /**
-   * Whether the wallet's OWN node lists each outpoint as unspent now: one boolean per outpoint, in
-   * order (KasWare `getUtxoEntries`, no popup). The visibility gate asks this before the wallet is
-   * asked to sign, because neither a successful `announce` nor KOB's node proves that the wallet
-   * will find the output. Rejects when the wallet cannot tell; the gate then falls back to
-   * `announce` and KOB's node.
-   */
-  walletSees?(outpoints: readonly WalletOutpoint[], opts?: { timeoutMs?: number }): Promise<boolean[]>;
-}
-
-/**
- * An output the wallet is about to be asked to spend, with the address its node files it under:
- * the wallet looks outputs up by address.
- */
-export interface WalletOutpoint {
-  transactionId: Hex;
-  index: number;
-  address: string;
 }
 
 /**

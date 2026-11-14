@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ChainError, runSignChain, spendsOutputOf } from './chain';
 import { createKaswareAdapter } from './kasware';
-import { resetVisibility } from './visibility';
+import { SETTLE_MS, resetVisibility } from './visibility';
 import type { WalletAdapter } from './types';
 import { fakeKasware, laggingWalletNode } from '../testing/fake-wallet-providers';
 import { MockNode } from '../testing/mock-node';
@@ -139,6 +139,6 @@ describe('runSignChain', () => {
     const res = await runSignChain({ ...base(s, adapter), steps: [s.steps[1]! as BuiltTx], alsoFresh: new Map([[s.steps[0]!.tx.id, Date.now()]]), sleep: async (ms) => void slept.push(ms) });
     expect(res.signed[0]!.tx.id).toBe(s.steps[1]!.tx.id);
     // the gate looked the first step up on the node and waited the margin before asking
-    expect(slept).toEqual([1500]);
+    expect(slept).toEqual([SETTLE_MS]);
   });
 });
