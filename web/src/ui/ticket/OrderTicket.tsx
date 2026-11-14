@@ -714,7 +714,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const phase = sender.status?.phase;
   const busyText = busy
     ? (ladderLead ? `${ladderLead} · ` : '')
-      + t(phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
+      + t(sender.status?.waiting ? 'send.waitWallet' : phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
     : null;
   // nothing but empty required fields is in the way: the disabled button itself says what to enter first ("Enter an amount": the first missing field)
   const firstEmpty = isIncomplete(built.errors) ? built.errors.find((e) => e.code === 'required') : undefined;

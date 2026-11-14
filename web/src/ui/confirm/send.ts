@@ -95,11 +95,21 @@ function walletBlock(services: Services, wallet: WalletFacts, built: BuiltTx): B
 }
 
 /**
+ * An input a transaction of this page already spends (accepted by the node, not yet in a block: the node still lists the coin): a second cancel
+ * of the same order, an amend right after a cancel. The wallet's node sees it spent by a pending transaction and the node would refuse it as a
+ * double spend: it is never signed.
+ */
+function pendingSpent(built: BuiltTx): Blocked | null {
+  const i = built.tx.inputs.find((x) => pendingSpends.has(x.transactionId, x.index));
+  return i ? { code: 'input-pending-spent', text: t('send.alreadySpending') } : null;
+}
+
+/**
  * The checks of a transaction before the wallet is asked to sign it: the job to sign (the caller's gate may have replaced its plan), or the first
  * finding that stops it. Never throws for a finding; a failing node read is a finding (`inputs-unavailable`).
  */
 export async function checkBeforeSigning(services: Services, wallet: WalletFacts, job: SendJob): Promise<{ blocked: Blocked } | { job: SendJob; decoded: SigningSummary }> {
-  const early = walletBlock(services, wallet, job.built);
+  const early = walletBlock(services, wallet, job.built) ?? pendingSpent(job.built);
   if (early) return { blocked: early };
   // the change of a transaction this page submitted is not on the node's list until a block holds it: the page knows its facts (it built it)
   const nodeFacts = (b: BuiltTx) =>
@@ -120,7 +130,7 @@ export async function checkBeforeSigning(services: Services, wallet: WalletFacts
   if (gate && 'replace' in gate) {
     // the state at the click planned the order into another transaction: that one is checked as strictly, and signed
     final = { ...job, ...gate.replace, gate: undefined };
-    const again = walletBlock(services, wallet, final.built);
+    const again = walletBlock(services, wallet, final.built) ?? pendingSpent(final.built);
     if (again) return { blocked: again };
     if (!sameInputs(job.built, final.built)) facts = await nodeFacts(final.built);
   }

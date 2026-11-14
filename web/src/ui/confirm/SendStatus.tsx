@@ -32,7 +32,7 @@ import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/
 import type { LiveSigning } from '../../wallet/types';
 import { Button, CopyText, Modal, RawDetails, Spinner, unitParts } from '../kit';
 import { classifyFailure } from './confirm-flow';
-import { checkBeforeSigning, recordAccepted, registryOfJob, type SendJob } from './send';
+import { checkBeforeSigning, inputAddressOf, recordAccepted, registryOfJob, type SendJob } from './send';
 import { SigningTimer, rememberSigningMs } from './signing-time';
 import './send.css';
 
@@ -66,6 +66,8 @@ export interface SendStatus {
   holdUntil?: number;
   /** confirming: the node's DAA score now (projected), for the times of the table */
   daa?: bigint | null;
+  /** signing: the wallet is not asked yet: a coin of this transaction is an output of the one just sent, not yet visible to the wallet's node */
+  waiting?: boolean;
 }
 
 export type SendOutcome = { status: 'submitted'; txid: string; records: PlacementRecord[] } | { status: 'stopped'; send: SendStatus };
@@ -309,7 +311,8 @@ export function useSend(): Sender {
       };
       try {
         // no `inputAddress`: `checkBeforeSigning` has just re-read every input on the node (the decoder stops any it does not confirm); a second
-        // read would only add a round trip before the wallet's popup
+        // read would only add a round trip before the wallet's popup. `addressOf`: an input spending the change of a transaction this page sent
+        // moments ago (a ladder's next level, an order right after another) waits until the wallet's own node sees it (wallet/visibility.ts)
         const first = clock0 ? await Promise.race([clock0, sleep(LIVE_MS).then(() => null)]) : null;
         const res = await signAndSubmit({
           kob: services.kob, node: services.node, adapter: w.adapter!, built: final.built, network: services.config.network,
@@ -318,6 +321,8 @@ export function useSend(): Sender {
           ...(final.retimed ? { retime: true } : {}),
           ...(final.signerNotes?.length ? { signerNotes: [...final.signerNotes] } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
+          addressOf: inputAddressOf(services),
+          onWait: (waiting) => set(id, { phase: 'signing', ...(waiting ? { waiting: true } : {}) }),
           onStage: (s) => {
             if (s === 'signing') timer.handed(attempt0.built.tx.id);
             // the clock check after the signature has just passed
@@ -534,7 +539,7 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; 'd
   if (busy) {
     body = (
       <>
-        <Spinner /> <span class="send-text" key={s.phase}>{t(PHASE_TEXT[s.phase as keyof typeof PHASE_TEXT], { wallet: wallet.info?.label || t('send.yourWallet') })}</span>
+        <Spinner /> <span class="send-text" key={s.phase + (s.waiting ? '-wait' : '')}>{t(s.waiting ? 'send.waitWallet' : PHASE_TEXT[s.phase as keyof typeof PHASE_TEXT], { wallet: wallet.info?.label || t('send.yourWallet') })}</span>
       </>
     );
   } else if (s.phase === 'submitted' && s.txid) {

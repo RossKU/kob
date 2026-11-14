@@ -16,6 +16,7 @@ import { confirmInputsOnNode } from '../kob/node-verify';
 import { normalizeNetwork, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import type { SignerNote } from '../signer/protocol';
 import { WalletError, type WalletAdapter, type LiveSigning } from './types';
+import { awaitVisible, freshInputs, needsVisibility, noteSent } from './visibility';
 
 export type SignStage = 'signing' | 'finalizing' | 'validating' | 'submitting' | 'submitted';
 export type FailedStage = Exclude<SignStage, 'submitted'>;
@@ -81,6 +82,16 @@ export interface SignAndSubmitArgs {
    * wallet signed, which is then the one finalized, checked and sent
    */
   live?: { signing: LiveSigning; submitByOf(built: BuiltTx): bigint | undefined };
+  /**
+   * script public key -> address of the app's network, for the visibility gate (visibility.ts): an input that spends an output of a transaction
+   * this page sent moments ago (a ladder, an order right after another) must be visible to an extension wallet's own node before the wallet is
+   * asked. Without it (and without `inputAddress`) such a transaction is not signed (`inputs-pending`).
+   */
+  addressOf?: (spk: string) => string;
+  /** the visibility gate waits (true) / stops waiting (false) */
+  onWait?: (waiting: boolean) => void;
+  /** the gate's limits (tests shorten them) */
+  visibility?: { timeoutMs?: number; pollMs?: number; settleMs?: number; sleep?: (ms: number) => Promise<void> };
 }
 
 /**
@@ -89,6 +100,10 @@ export interface SignAndSubmitArgs {
  * request open longer than that lead plus this margin returns a signature for an auction already this far down its price path.
  */
 export const AUCTION_START_MARGIN_DAA = 20n;
+
+/** A wallet that answers "I cannot see an input" (`inputs-unknown`) is asked again this often, this far apart (chain.ts does the same). */
+const UNKNOWN_ATTEMPTS = 3;
+const UNKNOWN_RETRY_MS = 2000;
 
 /**
  * The `submitByDaa` of a transaction that creates `states` (the planner's `{ kind, state }` order states): the earliest start (plus
@@ -171,6 +186,28 @@ async function assertInputsOnNode(node: NodeApi, built: BuiltTx, toAddress: (spk
   }
 }
 
+/**
+ * The visibility gate of one transaction (visibility.ts): an extension wallet is asked only once every input that spends an output of a
+ * transaction this page sent recently is visible to its own node. A no-op for the private-key signer and for inputs older than that.
+ */
+async function assertVisibleToWallet(a: SignAndSubmitArgs, built: BuiltTx): Promise<void> {
+  if (!needsVisibility(a.adapter) || freshInputs(built.tx).length === 0) return;
+  const addressOf = a.addressOf ?? a.inputAddress;
+  if (!addressOf) throw new SignFlowError('signing', null, 'This transaction spends a coin your wallet may not see yet. Nothing was sent; try again in a few seconds.', 'inputs-pending');
+  const v = a.visibility ?? {};
+  const seen = await awaitVisible({
+    adapter: a.adapter, node: a.node, tx: built.tx, addressOf,
+    ...(a.onWait ? { onWait: a.onWait } : {}),
+    ...(v.timeoutMs !== undefined ? { timeoutMs: v.timeoutMs } : {}),
+    ...(v.pollMs !== undefined ? { pollMs: v.pollMs } : {}),
+    ...(v.settleMs !== undefined ? { settleMs: v.settleMs } : {}),
+    ...(v.sleep ? { sleep: v.sleep } : {}),
+  });
+  if (!seen.ok) {
+    throw new SignFlowError('signing', null, `Your wallet cannot see a coin of this transaction yet (your last transaction is not on the network after ${Math.round(seen.waitedMs / 1000)} s). Nothing was sent; try again in a moment.`, 'inputs-pending');
+  }
+}
+
 export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmitResult> {
   const { kob, node, adapter, network } = a;
   let built = a.built;
@@ -186,12 +223,22 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   stage('signing');
   if ((a.checkWallet ?? true) && adapter.refresh) await assertWalletMatches(adapter, built, network);
   if (a.inputAddress) await assertInputsOnNode(node, built, a.inputAddress);
+  await assertVisibleToWallet(a, built);
   let sigs;
-  try {
-    sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}) });
-  } catch (e) {
-    const code = e instanceof WalletError ? e.code : 'other';
-    throw new SignFlowError('signing', e, msg(e), code);
+  const sleep = a.visibility?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  for (let n = 1; ; n++) {
+    try {
+      sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}) });
+      break;
+    } catch (e) {
+      // the wallet's own node has not seen a coin of it yet after all (a slow relay): asked again a moment later, at most UNKNOWN_ATTEMPTS times
+      if (e instanceof WalletError && e.code === 'inputs-unknown' && n < UNKNOWN_ATTEMPTS) {
+        await sleep(UNKNOWN_RETRY_MS);
+        continue;
+      }
+      const code = e instanceof WalletError ? e.code : 'other';
+      throw new SignFlowError('signing', e, msg(e), code);
+    }
   }
   // the wallet signed a replacement it was given while the user read: that one is finalized, checked and sent
   const replaced = a.live?.signing.signed;
@@ -233,6 +280,8 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   }
   // what this transaction changes is read past the indexer's cache from now on (data/fresh.ts)
   markOwnAction();
+  // its outputs are fresh: the next transaction spending one waits until the wallet's node sees it (handed to that node where the wallet can)
+  void noteSent(adapter, signed.tx);
   stage('submitted', { txid });
   return { txid, built, signed, fee: BigInt(signed.fee.fee) };
 }

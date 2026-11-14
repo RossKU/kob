@@ -212,7 +212,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
         setChainNote(null);
         await afterAccepted(res.txid);
       } else {
-        const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage });
+        const res = await signAndSubmit({ kob, node, adapter: wallet.adapter, built, network: config.network, onStage, addressOf });
         await afterAccepted(res.txid);
       }
     } catch (e) {

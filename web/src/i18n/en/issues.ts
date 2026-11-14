@@ -312,6 +312,7 @@ export default {
   'issues.signflow.other': 'Signing failed and nothing was sent. Details: {message}',
   'issues.signflow.signature': 'The wallet\'s signature does not match; nothing was sent. Try again or use another wallet.',
   'issues.signflow.validation': 'The script check failed before sending; nothing was sent. Plan the order again.',
+  'issues.signflow.inputs-pending': 'Your wallet cannot see a coin of this transaction yet (your last transaction is still on its way). Nothing was sent; try again in a few seconds.',
   'issues.signflow.inputs-unknown': 'Your wallet could not find a coin of this transaction on its own node yet. Nothing was sent; try again in a few seconds.',
   'issues.signflow.clock-moved': 'The price moved while waiting for your approval in the wallet. Nothing was sent; try again.',
   'issues.node.unavailable': 'Cannot reach the node. If unsure whether the transaction went out, check your orders before sending again.',

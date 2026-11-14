@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { AUCTION_START_MARGIN_DAA, SignFlowError, auctionSubmitBy, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from './sign';
 import { createKaswareAdapter } from './kasware';
 import { createKaspireAdapter, dispatchTagFrom } from './kaspire';
 import { createKastleAdapter } from './kastle';
-import { fakeKasware, fakeKaspire, fakeKastle } from '../testing/fake-wallet-providers';
+import { fakeKasware, fakeKaspire, fakeKastle, laggingWalletNode } from '../testing/fake-wallet-providers';
+import { resetVisibility } from './visibility';
+import { signBuilt } from '../testing/local-signer';
+import { emptyIssueForm, planIssue } from '../kob/issue';
 import { MockNode } from '../testing/mock-node';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
 import { spkStringToAddress } from '../data/kaspa-sdk';
@@ -338,5 +341,72 @@ describe('expectedOutputs + waitForAcceptance', () => {
     const r3 = await waitForAcceptance(n3, out('a', 'x', 0), { signal: ctl.signal, pollMs: 1, timeoutMs: 60_000 });
     expect(r3.accepted).toBe(false);
     expect(n3.utxoQueries).toHaveLength(1); // one look, then it stops
+  });
+});
+
+describe('signAndSubmit: the visibility gate (an input spending what this page just sent)', () => {
+  const chain = () => {
+    const plan = planIssue(kob, { ...emptyIssueForm(), name: 'Gate Coin', ticker: 'GATE', decimals: 0, supply: '10' }, {
+      funding: [{ transactionId: '0d'.repeat(32), index: 0, amount: (50n * 100_000_000n).toString(), blockDaaScore: '100', pubkey: MAKER_PK }],
+      maker: MAKER_PK,
+      network: NET,
+    });
+    const n = seeded(plan.prep);
+    return { first: plan.prep, second: plan.built, n };
+  };
+  const addressOf = (spk: string) => spkStringToAddress(sdk, spk, NET);
+  beforeEach(() => resetVisibility());
+
+  it('KasWare: the first transaction is handed to the wallet node (pushTx), so the second is signed at once', async () => {
+    const c = chain();
+    const view = laggingWalletNode(c.n);
+    const p = fakeKasware({ sdk, sk: MAKER_SK, walletNode: view });
+    const adapter = createKaswareAdapter({ getProvider: () => p });
+    await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET, addressOf });
+    const waits: boolean[] = [];
+    const res = await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, onWait: (w) => waits.push(w) });
+    expect(res.txid).toBe(c.second.tx.id);
+    expect(view.pushed).toEqual([c.first.tx.id, c.second.tx.id]);
+    expect(waits).toEqual([]);
+  });
+
+  it('a wallet without pushTx is asked once the node lists the output and the margin passed; never before', async () => {
+    const c = chain();
+    const view = laggingWalletNode(c.n);
+    const p = fakeKaspire({ sdk, sk: MAKER_SK, network: NET, walletNode: { hasUtxo: view.hasUtxo } });
+    const adapter = createKaspireAdapter({ getProvider: () => p });
+    await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET, addressOf });
+    const waits: boolean[] = [];
+    const res = await signAndSubmit({
+      kob, node: c.n, adapter, built: c.second, network: NET, addressOf, onWait: (w) => waits.push(w),
+      visibility: { sleep: async () => view.reveal() },
+    });
+    expect(res.txid).toBe(c.second.tx.id);
+    expect(waits).toEqual([true, false]);
+  });
+
+  it('without an address function the fresh input is not signed (inputs-pending); the private-key signer is never gated', async () => {
+    const c = chain();
+    const p = fakeKasware({ sdk, sk: MAKER_SK });
+    const adapter = createKaswareAdapter({ getProvider: () => p });
+    await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET });
+    const e = (await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET }).catch((x) => x)) as SignFlowError;
+    expect([e.stage, e.code]).toEqual(['signing', 'inputs-pending']);
+    expect(p.calls.filter((x) => x.method === 'signPskt')).toHaveLength(1);
+    const offline: WalletAdapter = { ...kasware(), id: 'local-key', inputPolicy: 'offline', refresh: undefined, signTx: async (b) => signBuilt(b, [MAKER_SK]) };
+    expect((await signAndSubmit({ kob, node: c.n, adapter: offline, built: c.second, network: NET })).txid).toBe(c.second.tx.id);
+  });
+
+  it('the node never lists it: the wallet is not asked (inputs-pending)', async () => {
+    const c = chain();
+    const p = fakeKasware({ sdk, sk: MAKER_SK });
+    const adapter = createKaswareAdapter({ getProvider: () => p });
+    await signAndSubmit({ kob, node: c.n, adapter, built: c.first, network: NET });
+    c.n.removeUtxo(c.first.tx.id, 0);
+    let t = 0;
+    const e = (await signAndSubmit({ kob, node: c.n, adapter, built: c.second, network: NET, addressOf, visibility: { timeoutMs: 3000, sleep: async (ms) => void (t += ms) } }).catch((x) => x)) as SignFlowError;
+    expect(e.code).toBe('inputs-pending');
+    expect(p.calls.filter((x) => x.method === 'signPskt')).toHaveLength(1);
+    expect(t).toBeGreaterThan(0);
   });
 });

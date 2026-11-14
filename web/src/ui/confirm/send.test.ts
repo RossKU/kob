@@ -118,4 +118,14 @@ describe('checkBeforeSigning', () => {
     }
     expect(blockedBy(await checkBeforeSigning(servicesFor(null), wallet(), job))).toBeNull();
   });
+
+  it('stops a transaction spending a coin a transaction of this page already spends (a second cancel of the same order before a block)', async () => {
+    const plan = planned();
+    const built = plan.built!;
+    const job = { built, expected: expectedFromPlan(plan) };
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), job))).toBeNull();
+    // the first one was accepted: the node still lists its inputs, the wallet's node sees them spent by a pending transaction
+    pendingSpends.add([built.tx.inputs[0]!]);
+    expect(blockedBy(await checkBeforeSigning(servicesFor(built), wallet(), job))?.code).toBe('input-pending-spent');
+  });
 });
