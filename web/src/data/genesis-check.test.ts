@@ -140,8 +140,11 @@ describe('verifying recorded tokens', () => {
   });
 });
 
-describe('a federated-bridge token (kUSDT, testnet-10: its BridgeMint pinned by hash)', () => {
-  const k = kusdtRecording();
+describe.each([
+  ['the first build', undefined],
+  ['the build with the signer-recovery path', 'recovery_build' as const],
+])('a federated-bridge token (kUSDT, testnet-10, %s: its BridgeMint pinned by hash)', (_, deployment) => {
+  const k = kusdtRecording(deployment);
   const net = (): Net => {
     const urls: string[] = [];
     const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { 'content-type': 'application/json' } });

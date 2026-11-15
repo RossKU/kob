@@ -3,9 +3,41 @@
 | | |
 |---|---|
 | What | kUSDT (kaspador.github.io/kusdt-docs): a KCC-20 token whose holders are the `KCC20` actor of upstream's published `KCC20PublicMint` app, byte for byte (KOB's `kcc20-ref-public-mint`, template `734850b0...`), and whose issuance is a federated bridge. Its genesis group holds a `BridgeMint` (the only issuer: it mints kUSDT against USDT locked in an EVM vault when 3 of its 5 signers sign; a guardian key can pause it) and a `TokenSeed` of the app's `27f8403` build. A redemption is a KCC-20 transfer to a burn owner that names the payout chain and address |
-| Pin | The `BridgeMint` as the `bridge-minter` companion of `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`): template hash `15e5532d4115550df60b7f9b1af2a0c996463cc4ba243bcdf9c478174fb6da40` over the KCC-1 actor-type cut (prefix 34 B = the 1-byte Sil prefix and the push of the compiler-owned `gen__kcc20_template`, which is `9703112e...`, the app's `KCC20`, so the pinned bytes mint only that program; state 173 B; suffix 4,151 B). Its Sil template hash (prefix 1 B) is `11ae39c524e45cfe477e53dd15715e35dd61a241c864a6537d1d4c509649cc25` |
-| Fixture | `observed.json`: the testnet-10 genesis transaction (BridgeMint, TokenSeed, the creator's change), the `BridgeMint` redeem script its first spend revealed, and a redemption with its payload and burn output. Public chain data; KOB vendors no source of kUSDT |
+| Pin | Two `BridgeMint` builds, each a `bridge-minter` companion of `KCC20PublicMint` (`crates/kob-protocol/data/programs.json`), each by its template hash over the KCC-1 actor-type cut (prefix 34 B = the 1-byte Sil prefix and the push of the compiler-owned `gen__kcc20_template`, which is `9703112e...`, the app's `KCC20`, so the pinned bytes mint only that program). The first build: `15e5532d4115550df60b7f9b1af2a0c996463cc4ba243bcdf9c478174fb6da40`, state 173 B, suffix 4,151 B, Sil template hash (prefix 1 B) `11ae39c524e45cfe477e53dd15715e35dd61a241c864a6537d1d4c509649cc25`. The build with the signer-recovery path (section "The recovery build"): `d8b48be4cf93156a40f0ac443da5eddf293e79b862a89c2e1c96b21d8c4a3446`, state 250 B, suffix 8,215 B, Sil template hash `1bcabab63c4906ab3cb08a7233bf18cb813b248450fc400538c89d233f014964` |
+| Fixture | `observed.json`: the testnet-10 genesis transaction (BridgeMint, TokenSeed, the creator's change), the `BridgeMint` redeem script its first spend revealed, and a redemption with its payload and burn output; under `recovery_build` the same (no redemption) for the deployment that superseded it. Public chain data; KOB vendors no source of kUSDT |
 | Review | None. KOB does not review the bridge: the pin only recognises the covenant (section "In KOB"). Everything below about what the bridge does is the issuer's description |
+
+## Deployments (testnet-10)
+
+| Covenant id | Genesis | `BridgeMint` | State |
+|---|---|---|---|
+| `6711958e2bc51c590426037020d9683ebd5daf42593de1797b65d25b92566314` | `73e7a514...` | first build (`15e5532d...`) | superseded: a test deployment of an earlier release, vaults `0x7a9CA592...7C57` |
+| `a1d9fd1347128011ad0036b077949d63274d5d3b8ac8351776c30c945ef2c2fb` | `7ecb75d0701a3c2d3735322a93ceb349d60ba69a6a617fe229ba2a66d50ed207` | recovery build (`d8b48be4...`) | the issuer's current record (`deployments/testnet.json`, testnet window 2026-11-04 to 14); KasPool pool id `99445008e36139d0a57040f562414e298a3022fb739c0e9374b1dbb9f4c42171` |
+
+The issuer says every code change gives a new covenant id: the two are different tokens, linked only by redeeming out of the old one
+on the EVM side. Neither is a mainnet kUSDT.
+
+## The recovery build (2026-11-15)
+
+Source: github.com/kaspador/kusdt-open, commit `671bebe98cd7916108a33d7f4a46dd1ea1c55e5a` (release `mainnet-v0.9.8-rc.25`),
+`bridge/kaspa/contracts/bridge_mint.ag` and `SPEC.md` section 6, read only; nothing of it was built or run.
+
+* **What changed.** Five state fields follow the extension commitment, which is no longer the last field: `recovery_delay`,
+  `recovery_nonce`, `recovery_pending`, `recovery_signer_set`, `recovery_guardian`. The commitment is bytes 131..164 of the 250-byte
+  span (`kob_protocol::kusdt::bridge_mint_extension` reads each build by the span's length and refuses any other). The mint and govern
+  digests sign the minter UTXO's age, and every input of a spend must be settled (`require_settled_inputs`).
+* **Recovery.** Three of the five signers (the mint quorum) can propose a new signer set and guardian (`govern` action 6). Anyone can
+  carry it out (`execute_recovery`, no signature) once the minter UTXO has stood untouched for `recovery_delay` DAA: 36,000 DAA
+  (about 1 hour) on this deployment, 2,592,000 DAA (72 hours) planned for mainnet, fixed at genesis. Until then any one signer can
+  veto it (action 7), and every spend of the minter restarts the wait; four signers replacing the set (`set_signers`) end it. So
+  three keys can take over the signer set and guardian if no honest signer vetoes in time. The issuer's README does not mention it;
+  SPEC section 6 does.
+* **What KOB checked.** The redeem script of genesis output 0 as its first spend (`efc13cf3...`) revealed it equals the issuer's
+  published artifact (`bridge/kaspa/artifacts/kusdt.json`, `BridgeMint`) outside the state span, and its state is the issuer's
+  `launch.initialMinter.state`; the pin `d8b48be4...` is the template hash of that cut, computed by KOB
+  (`silverscript_abi::template_hash`). The genesis group (`7ecb75d0...`) recomputes to `a1d9fd13...` and verifies under
+  `KCC20PublicMint` with it (`kusdt_bridge_tests.rs`); without it, or with only the first build's pin, it fails as contaminated.
+  The holder program is unchanged (`KCC20` `9703112e...`, the same `TokenSeed`).
 
 ## What the issuer publishes (2026-11-05)
 
@@ -53,11 +85,12 @@ A listing (a registry entry, a curated list KOB pins) of a mainnet kUSDT waits f
 * the vault on each EVM chain names as `owner()` a contract that is the Safe the issuer promises, behind a timelock whose minimum
   delay is at least 48 hours, with no `pendingOwner()`; a single key as owner (as on testnet) is not listable, because the owner alone
   can replace all signers and raise the release limits, that is, drain the vault, and the timelock is the holders' only exit window;
-* the mainnet `BridgeMint` is the pinned bytes (its cut hashes to `15e5532d...`) and the token's genesis verifies with it.
+* the mainnet `BridgeMint` is a pinned build (its cut hashes to a pinned handle; a new release is a new pin), the token's genesis
+  verifies with it, and its `recovery_delay` and limits are recorded from the genesis state.
 
 ## In KOB
 
-* `crates/kob-protocol/data/programs.json`: the `bridge-minter` companion of `KCC20PublicMint` (opaque: recognised by its template hash,
+* `crates/kob-protocol/data/programs.json`: the `bridge-minter` companions of `KCC20PublicMint`, one per build (opaque: recognised by its template hash,
   its state not read except for its extension commitment, `kob_protocol::kusdt::bridge_mint_extension`, held to the token's one
   class). A genesis holding it verifies; the report lists it among `minter_outputs` (a mint authority: the supply is not fixed) and in
   `companion_outputs` with its role, and it adds nothing to `mint_allowance` (not a public mint).
@@ -65,3 +98,32 @@ A listing (a registry entry, a curated list KOB pins) of a mainnet kUSDT waits f
   docs, and a collapsed note on bridge custody; it counts no public mint for it.
 * The indexer: an output a redemption payload names and whose proven state is that burn owner (`kob_protocol::kusdt::is_burned`)
   is not a holding (`GET /v1/token-utxos` does not list it).
+
+## Licence
+
+kusdt-open is under the MIT licence; KOB keeps chain bytes of it (the revealed `BridgeMint` redeem scripts in `observed.json`) and
+hashes, no source. Its notice:
+
+```
+MIT License
+
+Copyright (c) 2026 Trestly
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

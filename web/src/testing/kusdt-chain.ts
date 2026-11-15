@@ -2,7 +2,8 @@
 // Kaspa REST explorer's transaction would serve it, built from the chain bytes of contracts/third-party/kusdt/observed.json (the genesis outputs, the
 // BridgeMint redeem script its first spend revealed). Output 0 is the BridgeMint (spent, revealed), output 1 the unspent TokenSeed nobody revealed (the
 // check rebuilds it from the creator's key, which only the explorer's transaction names), output 2 the creator's change. The covenant id commits to all
-// of it, so a check that passes on these documents passes on the chain's.
+// of it, so a check that passes on these documents passes on the chain's. `kusdtRecording('recovery_build')` is the deployment that superseded it (covenant
+// a1d9fd13..., the BridgeMint build with the signer-recovery path), recorded the same way.
 import { readFileSync } from 'node:fs';
 
 interface Observed {
@@ -25,8 +26,9 @@ export interface KusdtRecording {
   explorerTx: Record<string, unknown>;
 }
 
-export function kusdtRecording(): KusdtRecording {
-  const o = JSON.parse(readFileSync(new URL('../../../contracts/third-party/kusdt/observed.json', import.meta.url), 'utf8')) as Observed;
+export function kusdtRecording(deployment?: 'recovery_build'): KusdtRecording {
+  const all = JSON.parse(readFileSync(new URL('../../../contracts/third-party/kusdt/observed.json', import.meta.url), 'utf8')) as Observed & { recovery_build: Observed };
+  const o: Observed = deployment ? all[deployment] : all;
   const g = o.genesis;
   const cov = o.token.covenant_id;
   const group = g.outputs.filter((x) => x.covenant?.covenant_id === cov);
