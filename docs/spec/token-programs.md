@@ -180,7 +180,7 @@ notes:
 | KRON launchpad | `kron-2433`, `kron-2732` | The KRON codec family (orders and builders, reviewed B2); both programs are data on it |
 | KForge (testnet-10, legacy) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
 | KaspaRocket | `KaspaRocketToken11458` | Data plus a profile field: the published public-mint `KCC20` actor at 10 / 10 slots (a derived source, since 2026-10-14 also the publisher's, and its build), profile with slots 10 / 10, `minters: genesis-only`, `default_decimals` 3 (the KaspaRocket convention, `networks: [mainnet, testnet-10]`), reviewed 2026-10-27; see below |
-| kUSDT (federated bridge) | `kcc20-ref-public-mint` (no new program) | Data plus a companion role: its holders are the published public-mint `KCC20`; its `BridgeMint` is pinned by hash as the `bridge-minter` companion of `KCC20PublicMint` (not reviewed); the indexer keeps its burned outputs out of the holdings; see below |
+| kUSDT (federated bridge) | `kcc20-ref-public-mint` (no new program) | Data plus a companion role: its holders are the published public-mint `KCC20`; each build of its `BridgeMint` is pinned by hash as a `bridge-minter` companion of `KCC20PublicMint` (not reviewed); the indexer keeps its burned outputs out of the holdings; see below |
 | KForge (KCC-20) | `KForgeToken7214` | Data: the published public-mint `KCC20` actor at 6 / 6 slots (a derived source, the one KForge's registry names by hash, and its build), profile with slots 6 / 6, `minters: genesis-only`, `default_decimals` 0 (the KForge convention), `networks: [mainnet, testnet-10]`, reviewed 2026-11-05; see below |
 
 ### KForge (legacy, `KForgeToken1785`)
@@ -316,16 +316,22 @@ review only, 2026-11-05): tradable on mainnet.
 
 `contracts/third-party/kusdt/UPSTREAM.md` (what the issuer publishes, what KOB checked, the trust it rests on),
 `crates/kob-tests/tests/programs/kusdt_bridge_tests.rs` and `crates/kob-protocol/src/kusdt.rs`; fixture `contracts/third-party/kusdt/observed.json`
-(testnet-10).
+(testnet-10, two deployments). kusdt-open is MIT-licensed (its notice is in `UPSTREAM.md`); KOB keeps chain bytes and hashes of it, no source.
 
 * **Program.** kUSDT holders are the `KCC20` of the published public-mint app byte for byte, so its orders and transfers are
   `KCC20PublicMint`'s: nothing new to trade it. What is new is its issuance: a `BridgeMint` in the genesis group, the only issuer,
   which mints against USDT locked in a vault on Ethereum or BNB Chain when 3 of its 5 signers sign.
-* **The pin.** The `BridgeMint` is the `bridge-minter` companion of `KCC20PublicMint` (template hash `15e5532d...` over the KCC-1
-  actor-type cut: the 34-byte prefix holds the push of `gen__kcc20_template`, the app's `KCC20`, so the pinned bytes mint that program
-  only). It is recognised from the chain: the genesis group recomputes to the covenant id and the redeem script hashes to its output,
-  never from a name or a list. KOB does not review the bridge. A genesis with it verifies, lists it among the mint authorities with
-  no allowance, and fails as contaminated without the pin.
+* **The pins.** Each `BridgeMint` build is a `bridge-minter` companion of `KCC20PublicMint`, by its template hash over the KCC-1
+  actor-type cut (the 34-byte prefix holds the push of `gen__kcc20_template`, the app's `KCC20`, so the pinned bytes mint that program
+  only): the first build `15e5532d...` (173-byte state; testnet-10 covenant `6711958e...`, superseded) and the build with the
+  signer-recovery path `d8b48be4...` (250-byte state; covenant `a1d9fd13...`). Every release of the issuer is a new covenant id
+  and needs its own pin. A build is recognised from the chain: the genesis group recomputes to the covenant id and the redeem
+  script hashes to its output, never from a name or a list. KOB does not review the bridge. A genesis with it verifies, lists it
+  among the mint authorities with no allowance, and fails as contaminated without its pin. Its extension commitment is read by the
+  span's length (the last field of 173 bytes, bytes 131..164 of 250, nothing for any other length).
+* **Recovery (second build).** Three of the five signers can propose a new signer set and guardian; anyone carries it out once the
+  minter has stood untouched for `recovery_delay` DAA (36,000 on testnet-10, 72 hours planned for mainnet, fixed at genesis), and
+  any one signer can veto it until then. Three keys can therefore replace the signers and the guardian if nobody vetoes in time.
 * **What the apps say.** The web app names the issuance ("Federated bridge (BridgeMint)", per the issuer's docs) and shows a
   collapsed note on bridge custody: the backing is held by the bridge's signers and the vault owner, and can be lost if they misbehave
   or lose their keys. It counts no public mint and no fixed supply for the token.
@@ -335,7 +341,7 @@ review only, 2026-11-05): tradable on mainnet.
   that the owner of each EVM vault is the Safe the issuer promises, behind a timelock of at least 48 hours, and not a single key as
   on testnet (`0x4f6d...b1be`, which matches the issuer's plan for a test deployment). The owner alone can replace all signers and
   raise the release limits, that is, drain the vault: the timelock is the holders' exit window. The mainnet `BridgeMint` must also
-  be the pinned bytes, with a genesis that verifies.
+  be a pinned build, with a genesis that verifies.
 
 ## 7. Invariants
 
