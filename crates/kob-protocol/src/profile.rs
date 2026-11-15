@@ -704,10 +704,10 @@ impl ProgramProfile {
                     if comp.role == CompanionRole::Minter {
                         return e("a minter companion needs a decoder (its allowance bounds the supply)".into());
                     }
-                    if comp.role == CompanionRole::BridgeMinter && l.state_len != crate::kusdt::BRIDGE_MINT_STATE_LEN {
+                    if comp.role == CompanionRole::BridgeMinter && !crate::kusdt::BRIDGE_MINT_STATE_LENS.contains(&l.state_len) {
                         return e(format!(
-                            "a bridge-minter companion is kUSDT's BridgeMint, whose state span is {} bytes",
-                            crate::kusdt::BRIDGE_MINT_STATE_LEN
+                            "a bridge-minter companion is kUSDT's BridgeMint, whose state span is one of {:?} bytes",
+                            crate::kusdt::BRIDGE_MINT_STATE_LENS
                         ));
                     }
                 }

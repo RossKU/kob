@@ -16,7 +16,9 @@ use kaspa_consensus_core::tx::{ScriptPublicKey, TransactionId, TransactionOutpoi
 use kob_protocol::artifacts::{token_template, TemplateId};
 use kob_protocol::genesis_open::{check_open_genesis, OpenGenesis, OpenOutcome, OpenOutput};
 use kob_protocol::json::{from_hex, to_hex};
-use kob_protocol::kusdt::{bridge_mint_extension, burn_owner, is_burned, redemption_entries, RedemptionEntry, BRIDGE_MINT_STATE_LEN};
+use kob_protocol::kusdt::{
+    bridge_mint_extension, burn_owner, is_burned, redemption_entries, RedemptionEntry, BRIDGE_MINT_STATE_LEN_V1,
+};
 use kob_protocol::profile::{match_companion, CompanionMatch, CompanionRole};
 use kob_protocol::public_mint::KCC20_SIL_HASH;
 use kob_protocol::registry::{verify_genesis_with, GenesisError, GenesisOutput};
@@ -88,7 +90,7 @@ fn the_bridge_mint_pin_is_the_observed_covenant() {
     let rule = profile().genesis.companions.iter().find(|c| c.role == CompanionRole::BridgeMinter).expect("the pin");
     assert_eq!(rule.template_hash.as_deref(), Some(BRIDGE_MINT_HASH));
     let l = rule.layout.unwrap();
-    assert_eq!((l.prefix_len, l.state_len, l.suffix_len), (34, BRIDGE_MINT_STATE_LEN, 4_151));
+    assert_eq!((l.prefix_len, l.state_len, l.suffix_len), (34, BRIDGE_MINT_STATE_LEN_V1, 4_151));
     let r = bridge_mint();
     assert_eq!(r.len(), 4_358);
     // the redeem script of genesis output 0, as its first spend revealed it
@@ -150,7 +152,7 @@ fn without_the_pin_the_genesis_is_contaminated() {
 /// A `BridgeMint` of the pinned bytes with its state's extension commitment set to `ext`.
 fn bridge_mint_with(ext: [u8; 32]) -> Vec<u8> {
     let mut r = bridge_mint();
-    let end = 34 + BRIDGE_MINT_STATE_LEN;
+    let end = 34 + BRIDGE_MINT_STATE_LEN_V1;
     r[end - 32..end].copy_from_slice(&ext);
     r
 }

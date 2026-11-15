@@ -10,8 +10,9 @@
 //!
 //! - **The `BridgeMint` companion.** It is pinned by its template hash over the KCC-1 actor-type
 //!   cut: the 34-byte prefix with the compiler-owned `gen__kcc20_template` context, which names
-//!   the program it mints (the app's `KCC20`). The pin is the `bridge-minter` companion of
-//!   `KCC20PublicMint` in `data/programs.json`. KOB does not review the bridge. The pin only
+//!   the program it mints (the app's `KCC20`). The pins are the `bridge-minter` companions of
+//!   `KCC20PublicMint` in `data/programs.json`, one per build of the issuer
+//!   ([`BRIDGE_MINT_STATE_LENS`]). KOB does not review the bridge. The pin only
 //!   recognises the covenant, so a genesis holding it verifies and is reported as having a mint
 //!   authority. The apps name the issuance ("federated bridge") instead of counting a public
 //!   mint. Its state is not read, except for the extension commitment its mints carry
@@ -31,11 +32,22 @@ pub const REDEEM_TAG: &[u8; 15] = b"kUSDT/redeem/v1";
 pub const PAYLOAD_MAGIC: &[u8; 5] = b"KUSDT";
 /// Payload kind of a redemption.
 pub const PAYLOAD_REDEMPTION: u8 = 0x01;
-/// Length of the `BridgeMint` state span after the 34-byte prefix.
-///
-/// The span is eight 8-byte integers, a bool and three 32-byte fields, each with its push opcode.
-/// Its extension commitment is the last field.
-pub const BRIDGE_MINT_STATE_LEN: usize = 173;
+/// Length of the state span after the 34-byte prefix of the first `BridgeMint` build KOB pins
+/// (testnet-10 covenant `6711958e...`, superseded): eight 8-byte integers, a bool and three
+/// 32-byte fields, each with its push opcode. Its extension commitment is the last field.
+pub const BRIDGE_MINT_STATE_LEN_V1: usize = 173;
+/// Length of the state span of the `BridgeMint` build with the signer-recovery path (testnet-10
+/// covenant `a1d9fd13...`): seven 8-byte integers, a bool, three 32-byte fields (the extension
+/// commitment is the third), then the recovery fields: two integers, a bool and two 32-byte fields.
+pub const BRIDGE_MINT_STATE_LEN_RECOVERY: usize = 250;
+/// The state span lengths of the `BridgeMint` builds KOB pins. A `bridge-minter` companion has one
+/// of them.
+pub const BRIDGE_MINT_STATE_LENS: [usize; 2] = [BRIDGE_MINT_STATE_LEN_V1, BRIDGE_MINT_STATE_LEN_RECOVERY];
+
+/// The push sizes of the fields of a `BridgeMint` state span, per build (in the order of
+/// [`BRIDGE_MINT_STATE_LENS`]), and the index of the extension commitment among them.
+const BRIDGE_MINT_FIELDS: [(&[usize], usize); 2] =
+    [(&[8, 8, 8, 8, 8, 8, 8, 8, 1, 32, 32, 32], 11), (&[8, 8, 8, 8, 8, 8, 8, 1, 32, 32, 32, 8, 8, 1, 32, 32], 10)];
 
 /// The burn script `R(chain, address)`, 40 bytes.
 ///
@@ -105,11 +117,24 @@ pub fn is_burned(entries: &[RedemptionEntry], output: u32, state: &TokenState) -
 
 /// The extension commitment that a `BridgeMint` state span gives every state it mints.
 ///
-/// The span is the state after the 34-byte prefix. The commitment is its last field (`0x20` and 32
-/// bytes). `None` when the span is not that length or the field is not pushed that way.
+/// The span is the state after the 34-byte prefix. Its length names the build
+/// ([`BRIDGE_MINT_STATE_LENS`]): the commitment is the last field of a 173-byte span and the
+/// eleventh (bytes 131..164: `0x20` and 32 bytes) of a 250-byte one. `None` (fail closed) for any
+/// other length, or when the span is not exactly that build's fields, each a direct push of its
+/// size.
 pub fn bridge_mint_extension(state: &[u8]) -> Option<[u8; 32]> {
-    let tail = state.len().checked_sub(33).filter(|_| state.len() == BRIDGE_MINT_STATE_LEN).map(|i| &state[i..])?;
-    (tail[0] == 0x20).then(|| tail[1..].try_into().expect("32"))
+    let (sizes, ext) =
+        BRIDGE_MINT_FIELDS.iter().zip(BRIDGE_MINT_STATE_LENS).find_map(|(f, len)| (state.len() == len).then_some(*f))?;
+    let mut at = 0;
+    let mut found = None;
+    for (i, &n) in sizes.iter().enumerate() {
+        let field = state.get(at + 1..at + 1 + n).filter(|_| usize::from(state[at]) == n)?;
+        if i == ext {
+            found = Some(field.try_into().ok()?);
+        }
+        at += 1 + n;
+    }
+    found.filter(|_| at == state.len())
 }
 
 #[cfg(test)]
@@ -144,14 +169,56 @@ mod tests {
         assert!(!is_burned(&e, 0, &other));
     }
 
+    /// A state span of the given push sizes, each field filled with its index + 1.
+    fn span(sizes: &[usize]) -> Vec<u8> {
+        sizes.iter().enumerate().flat_map(|(i, &n)| std::iter::once(n as u8).chain(std::iter::repeat_n(i as u8 + 1, n))).collect()
+    }
+
     #[test]
-    fn the_extension_commitment_of_a_bridge_mint_state() {
-        let mut s = vec![0u8; BRIDGE_MINT_STATE_LEN];
-        s[140] = 0x20;
+    fn the_field_tables_are_the_pinned_lengths() {
+        for ((sizes, ext), len) in BRIDGE_MINT_FIELDS.iter().zip(BRIDGE_MINT_STATE_LENS) {
+            assert_eq!(sizes.iter().map(|n| n + 1).sum::<usize>(), len);
+            assert_eq!(sizes[*ext], 32);
+        }
+    }
+
+    #[test]
+    fn the_extension_commitment_of_a_first_build_state() {
+        let mut s = span(BRIDGE_MINT_FIELDS[0].0);
+        assert_eq!(s.len(), BRIDGE_MINT_STATE_LEN_V1);
+        // the last field
+        assert_eq!(s[140], 0x20);
         s[141..].copy_from_slice(&[7; 32]);
         assert_eq!(bridge_mint_extension(&s), Some([7; 32]));
         s[140] = 0x21;
         assert_eq!(bridge_mint_extension(&s), None);
         assert_eq!(bridge_mint_extension(&s[1..]), None);
+    }
+
+    #[test]
+    fn the_extension_commitment_of_a_recovery_build_state() {
+        let mut s = span(BRIDGE_MINT_FIELDS[1].0);
+        assert_eq!(s.len(), BRIDGE_MINT_STATE_LEN_RECOVERY);
+        // bytes 131..164, not the last field (the proposed recovery guardian)
+        assert_eq!(s[131], 0x20);
+        s[132..164].copy_from_slice(&[7; 32]);
+        assert_eq!(bridge_mint_extension(&s), Some([7; 32]));
+        // a push of another size anywhere moves the fields after it: refused
+        for at in [0, 63, 65, 131, 164, 182, 217] {
+            let mut t = s.clone();
+            t[at] ^= 1;
+            assert_eq!(bridge_mint_extension(&t), None, "{at}");
+        }
+    }
+
+    #[test]
+    fn any_other_state_length_fails_closed() {
+        for len in [0, 33, 112, 172, 174, 206, 249, 251, 283] {
+            assert_eq!(bridge_mint_extension(&vec![0x20; len]), None, "{len}");
+        }
+        // a 250-byte span laid out as the first build's fields plus padding is no recovery-build state
+        let mut s = span(BRIDGE_MINT_FIELDS[0].0);
+        s.resize(BRIDGE_MINT_STATE_LEN_RECOVERY, 0);
+        assert_eq!(bridge_mint_extension(&s), None);
     }
 }
