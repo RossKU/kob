@@ -1,7 +1,7 @@
 // Wording of the ticket and the settings that used to mislead: the amount help promised a cost line the ticket does not have, the day-order text named
 // one country's time zone for everybody, a failed read blamed the node whatever failed, and the dynamic-fee hint promised a review screen.
 import { expect, test } from '../fixtures';
-import { connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
+import { TOKEN, connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
 import { pickType } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
@@ -38,4 +38,15 @@ test('the dynamic fee hint says where the fee is shown and that the rate is not'
   await expect(hint).not.toContainText('review screen');
   await expect(hint).toContainText('The fee is shown where you approve');
   await expect(hint).toContainText('the rate itself is not shown');
+});
+
+test('Available counts only the token the planner can spend, and one muted line names what it cannot', async ({ appPage: page, mock }) => {
+  await fund(mock, 'alice', { tokens: 5n });
+  await mock.giveTokens('alice', 7n * TOKEN, { borrow_scheme: 1 });
+  await openMarket(page, mock);
+  await pickType(page, 'limit', 'sell');
+  await expect(page.getByTestId('order-available')).toContainText('5');
+  const note = page.getByTestId('order-unusable');
+  await expect(note).toHaveText(/^7 EXKCC not usable here$/);
+  await expect(note).toHaveAttribute('title', 'has a borrow setting');
 });

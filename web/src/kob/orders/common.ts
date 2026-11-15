@@ -232,6 +232,35 @@ export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUt
   );
 }
 
+/** Why a held UTXO of this token cannot fund an order (the first check it fails), or null when it can. */
+export type UnusableReason = 'owner' | 'extension' | 'borrow';
+
+/**
+ * The token units the wallet holds that `usableTokenUtxos` skips, with the reason of the largest
+ * such UTXO; null when every held unit is usable.
+ */
+export function unusableTokenHeld(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUtxos'>): { amount: bigint; reason: UnusableReason } | null {
+  const m = env.token;
+  const usable = new Set(usableTokenUtxos(env));
+  let amount = 0n;
+  let top = -1n;
+  let reason: UnusableReason = 'owner';
+  for (const u of env.tokenUtxos) {
+    if (u.covenantId !== m.covenantId || usable.has(u)) continue;
+    const a = BigInt(u.state.amount);
+    amount += a;
+    if (a <= top) continue;
+    top = a;
+    reason =
+      !isKeyOwned(u.state, m.program) || u.state.owner !== env.maker
+        ? 'owner'
+        : (m.family === 'kron' ? !isKronState(u.state) : extensionOfState(u.state) !== m.extensionCommitment)
+          ? 'extension'
+          : 'borrow';
+  }
+  return amount > 0n ? { amount, reason } : null;
+}
+
 /** Base units held in usable token UTXOs (for "close all"). */
 export const heldAmount = (env: PlanEnv): bigint => usableTokenUtxos(env).reduce((s, u) => s + BigInt(u.state.amount), 0n);
 

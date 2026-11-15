@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COVENANT_OUTPUT_MIN, DEFAULT_CARRIER, DUST_OUTPUT_MIN, bidBudgetRate, bidEscrowOf, buildCreate, carrierOf, defaultMinFillFor, failedPlan, finishPlan, heldAmount, makeAsk, makeBid,
-  makeDisclosure, orderCarrierFloor, refundTipFor, tokenCarrierFloor, usableTokenUtxos, verifyBuilt,
+  makeDisclosure, orderCarrierFloor, refundTipFor, tokenCarrierFloor, unusableTokenHeld, usableTokenUtxos, verifyBuilt,
 } from './common';
 import { ISSUE_CATALOG, customIssue, hasError, issue } from './common-issues';
 import { FIXTURE_CARRIER, KAS, MAKER_PK, TOK, makeEnv, tokenUtxo } from '../../testing/fixtures';
@@ -82,6 +82,19 @@ describe('token selection helpers', () => {
     env.tokenUtxos.push(good, borrow, tokenUtxo(m, 1_000n, 10n * KAS, 'cd'.repeat(32)));
     expect(usableTokenUtxos(env)).toEqual([good]);
     expect(heldAmount(env)).toBe(2_500n);
+  });
+
+  it('unusableTokenHeld counts the held units the planner skips and names the reason of the largest', () => {
+    const env = makeEnv({ tokenAmounts: [] });
+    const m = env.token;
+    expect(unusableTokenHeld(env)).toBeNull();
+    env.tokenUtxos.push(tokenUtxo(m, 2_500n));
+    expect(unusableTokenHeld(env)).toBeNull();
+    const borrow = { ...tokenUtxo(m, 1_000n), state: { ...tokenUtxo(m, 1_000n).state, borrow_scheme: 1 } };
+    env.tokenUtxos.push(borrow);
+    expect(unusableTokenHeld(env)).toEqual({ amount: 1_000n, reason: 'borrow' });
+    env.tokenUtxos.push({ ...tokenUtxo(m, 3_000n), state: { ...tokenUtxo(m, 3_000n).state, extension_commitment: 'cd'.repeat(32) } });
+    expect(unusableTokenHeld(env)).toEqual({ amount: 4_000n, reason: 'extension' });
   });
 });
 

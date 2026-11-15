@@ -270,11 +270,11 @@ export class MockChain {
   }
 
   /** Gives a key one P2PK-owned token UTXO (`amount` base units, on a `carrier` KAS output). */
-  giveTokens(pubkey, tokenRef, amount, carrier = DEFAULT_CARRIER) {
+  giveTokens(pubkey, tokenRef, amount, carrier = DEFAULT_CARRIER, borrowScheme = 0) {
     const tok = this.tokenRef(tokenRef);
     const txid = syntheticId('tok', ++this.synth);
     const seq = ++this.blockSeq;
-    const rec = this.addTokenUtxo({ txid, index: 0, token: tok, state: this.tokenState(tok, pubkey, 0, amount), value: carrier, role: 'owned', daa: this.daa(), seq });
+    const rec = this.addTokenUtxo({ txid, index: 0, token: tok, state: { ...this.tokenState(tok, pubkey, 0, amount), ...(borrowScheme ? { borrow_scheme: borrowScheme } : {}) }, value: carrier, role: 'owned', daa: this.daa(), seq });
     return { transactionId: txid, index: 0, token: tok.covenant_id, amount: rec.amount.toString(), value: rec.value.toString() };
   }
 

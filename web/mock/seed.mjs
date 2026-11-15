@@ -347,7 +347,7 @@ export function giveSpec(chain, u) {
   const made = { kas: [], tokens: [] };
   if (u.kas !== undefined) for (let i = 0; i < (u.count ?? 1); i++) made.kas.push(chain.giveKas(pk, BigInt(u.kas)));
   for (const t of u.tokens ?? []) {
-    for (let i = 0; i < (t.count ?? 1); i++) made.tokens.push(chain.giveTokens(pk, t.token ?? [...chain.tokens.keys()][0], BigInt(t.amount), t.carrier === undefined ? DEFAULT_CARRIER : BigInt(t.carrier)));
+    for (let i = 0; i < (t.count ?? 1); i++) made.tokens.push(chain.giveTokens(pk, t.token ?? [...chain.tokens.keys()][0], BigInt(t.amount), t.carrier === undefined ? DEFAULT_CARRIER : BigInt(t.carrier), t.borrow_scheme ?? 0));
   }
   return made;
 }

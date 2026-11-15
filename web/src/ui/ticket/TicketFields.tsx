@@ -25,6 +25,8 @@ export interface TicketFieldsProps {
   onMax?: () => void;
   /** "Available 988.41 KAS": the balance this order spends, one right-aligned line under the amount box; a tap does `onMax` */
   available?: { amount: string; unit: string };
+  /** a sell: held units the wallet cannot spend here, one muted line under Available (the reason is its tooltip) */
+  unusable?: { text: string; reason: string };
   /** the 0..100 % of Max slider under the amount field */
   slider?: AmountSliderProps;
   disabled?: boolean;
@@ -324,6 +326,7 @@ export function TicketFields(props: TicketFieldsProps) {
             {/* one line of fixed height under the box: what this order can spend (the Max button), at the right end. What the amount costs stands in the
                 ticket's footer, over the button (OrderTicket.tsx "Total") */}
             <div class="tk-avail-line" data-testid="order-available-line">{availableBtn}</div>
+            {availableBtn && props.unusable ? <div class="tk-unusable" title={props.unusable.reason} data-testid="order-unusable">{props.unusable.text}</div> : null}
             {props.slider ? <AmountSlider {...props.slider} disabled={props.disabled || props.slider.disabled} /> : null}
           </Fragment>
         ) : (

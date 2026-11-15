@@ -91,6 +91,7 @@
 
 /* the Available line under the amount box: one line of a fixed height, right-aligned ("Available 100 EXKCC", the Max button), never wrapped */
 .tk-avail-line { display: flex; justify-content: flex-end; height: 1.4rem; margin-top: -6px; overflow: hidden; white-space: nowrap; line-height: 1.5rem; }
+.tk-unusable { text-align: right; font-size: 0.8rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tk-available { display: inline-flex; gap: 0.3em; max-width: 100%; min-width: 0; }
 .tk-available .tk-line-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tk-available .tk-avail-label, .tk-available .tk-line-unit { flex: none; }

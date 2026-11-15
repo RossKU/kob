@@ -22,7 +22,7 @@ import { errors, isPairEnv, type Clock, type OrderPlan } from '../../kob/plan-ty
 import type { TokenInfo } from '../../kob/registry';
 import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
-import { DEFAULT_CARRIER } from '../../kob/orders/common';
+import { DEFAULT_CARRIER, heldAmount, unusableTokenHeld } from '../../kob/orders/common';
 import { lowPairTipFields } from '../../kob/orders/pair-common';
 import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
@@ -270,7 +270,9 @@ export function OrderTicket(props: OrderTicketProps) {
   const ticker = token.ticker;
 
   // balances the wallet can spend (the planner does the exact funding check)
-  const tokenBalance = env ? sum(env.tokenUtxos.map((u) => BigInt(u.state.amount))) : 0n;
+  const tokenBalance = env ? heldAmount(env) : 0n;
+  // held units of this token the planner cannot spend (a borrow setting, another extension, not key-owned)
+  const unusable = env ? unusableTokenHeld(env) : null;
   // another market starts shallow again (declared before the effect that sets it, so a change of both in one pass ends with the set one)
   useEffect(() => setWalkDepth(0n), [token.covenantId, quote?.covenantId]);
   const intentType = built.intent?.type;
@@ -926,7 +928,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} slider={slider}
+          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
