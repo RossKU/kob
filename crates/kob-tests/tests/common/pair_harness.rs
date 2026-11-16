@@ -17,14 +17,12 @@
 //! against it, `KobIfdAsk` against KobCondBid and KobAsk, `KobIfdBid` against KobCondAsk). An ablation
 //! run (`KOB_ABLATION_SRC` = a directory with mutated sources, `KOB_ABLATION=1`) therefore executes the weakened covenant
 //! everywhere it appears: as the order filled, as trigger evidence of a conditional, as the exit an entry creates.
-//! Without an ablation the compiled templates must equal the pinned ones, except the templates whose re-pin is pending
-//! ([`REPIN_PENDING`]). A mutation must not move the state span.
+//! Without an ablation the compiled templates must equal the pinned ones. A mutation must not move the state span.
 //!
 //! Bid delivery modes (docs/design/bid-delivery-spec.md): the pair templates carry a delivery block appended to their
 //! state (`KobPair` / `KobCondPair`: mode, recvThreshold, topupTip, bought; `KobIfdPair`: the three exit fields).
-//! Until the re-pin the library builds states of the pinned (shorter) length; [`full_state`] appends the default block
-//! (mode 0, all zero) to such a state, so every honest build runs in mode 0. A scenario sets another block per input
-//! ([`Ed::dlv_in`]) or per order output ([`Ed::dlv_out`], continuations and exits). An entry call with fewer arguments
+//! The library builds states with the block; a scenario replaces the block per input ([`Ed::dlv_in`]) or per order output
+//! ([`Ed::dlv_out`], continuations and exits) with [`set_block`]. An entry call with fewer arguments
 //! than the compiled entry takes (the new trailing `form`) is padded with zeros, and its signature script is encoded with
 //! the compiled artifact's ABI. [`Ed::borrow_leaders`] turns a KCC-20 leader to the borrow path (witness `0x01`).
 //!
@@ -73,23 +71,6 @@ pub fn is_pair(id: TemplateId) -> bool {
 
 // ---------------------------------------------------------------- the pair templates under test
 
-/// (template, its pinned state length before the bid delivery modes, the number of int fields of its delivery block):
-/// the templates whose sources changed with the delivery modes while their pinned artifacts wait for the re-pin
-/// (package P1). Their compiled build is not compared with the pinned artifact while the pinned state still has the
-/// old length, and a state span of that length is extended by the default delivery block ([`full_state`]). `KobBid`
-/// (the trigger evidence of the conditionals), `KobCondBid` and `KobIfdAsk` gained a block too; `KobCondAsk` and
-/// `KobIfdBid` keep their state (no block) but embed the longer `KobBid` evidence state, so their code changed.
-pub const REPIN_PENDING: [(TemplateId, usize, usize); 8] = [
-    (TemplateId::KobPair, 447, 4),
-    (TemplateId::KobCondPair, 543, 4),
-    (TemplateId::KobIfdPair, 909, 3),
-    (TemplateId::KobBid, 285, 4),
-    (TemplateId::KobCondBid, 381, 4),
-    (TemplateId::KobIfdAsk, 594, 3),
-    (TemplateId::KobCondAsk, 363, 0),
-    (TemplateId::KobIfdBid, 585, 0),
-];
-
 /// The delivery block of int fields `v` (`0x08` + 8 bytes little-endian each).
 pub fn dlv_block(v: &[i64]) -> Vec<u8> {
     v.iter().flat_map(|x| [vec![0x08u8], x.to_le_bytes().to_vec()].concat()).collect()
@@ -105,30 +86,13 @@ pub fn xdlv(mode: i64, thr: i64, tip: i64) -> Vec<u8> {
     dlv_block(&[mode, thr, tip])
 }
 
-/// The pre-delivery state length and the delivery block size (bytes) of `id`, if its re-pin is pending.
-pub fn pending(id: TemplateId) -> Option<(usize, usize)> {
-    REPIN_PENDING.iter().find(|(t, ..)| *t == id).map(|(_, old, nf)| (*old, nf * 9))
-}
-
-/// `state` of template `id` with `block` (or the default delivery block, all zero) appended when it has the pre-delivery
-/// length.
-pub fn full_state_with(id: TemplateId, state: &[u8], block: Option<&[u8]>) -> Vec<u8> {
-    match pending(id) {
-        Some((old, size)) if state.len() == old => {
-            let d = block.map(|b| b.to_vec()).unwrap_or_else(|| dlv_block(&vec![0; size / 9]));
-            assert_eq!(d.len(), size, "{}: delivery block of {size} bytes", id.name());
-            [state, d.as_slice()].concat()
-        }
-        _ => {
-            assert!(block.is_none(), "{}: a delivery block for a state of {} bytes", id.name(), state.len());
-            state.to_vec()
-        }
-    }
-}
-
-/// [`full_state_with`] with the default block.
-pub fn full_state(id: TemplateId, state: &[u8]) -> Vec<u8> {
-    full_state_with(id, state, None)
+/// `state` of template `id` (with its delivery block) with the block replaced by `block` (`None`: as it is).
+pub fn set_block(id: TemplateId, state: &[u8], block: Option<&[u8]>) -> Vec<u8> {
+    let Some(d) = block else { return state.to_vec() };
+    let b = delivery_block(id).unwrap_or_else(|| panic!("{}: no delivery block", id.name()));
+    assert_eq!(state.len(), b.len(), "{}: a state of {} bytes has no delivery block", id.name(), state.len());
+    assert_eq!(d.len(), b.len() - b.legacy_len, "{}: delivery block of {} bytes", id.name(), b.len() - b.legacy_len);
+    [&state[..b.legacy_len], d].concat()
 }
 
 type Abis = Mutex<BTreeMap<[u8; 32], (SilAbiArtifact, String)>>;
@@ -169,13 +133,13 @@ pub struct Sub {
 }
 
 impl Sub {
-    /// The redeem script of `state` (a pre-delivery state gets the default delivery block, [`full_state`]).
+    /// The redeem script of `state`.
     pub fn redeem(&self, state: &[u8]) -> Vec<u8> {
-        [self.prefix.as_slice(), &full_state(self.id, state), self.suffix.as_slice()].concat()
+        [self.prefix.as_slice(), state, self.suffix.as_slice()].concat()
     }
-    /// The redeem script of `state` with the delivery block `block` (or the default one).
+    /// The redeem script of `state` with its delivery block replaced by `block` (`None`: as it is, [`set_block`]).
     pub fn redeem_with(&self, state: &[u8], block: Option<&[u8]>) -> Vec<u8> {
-        [self.prefix.as_slice(), &full_state_with(self.id, state, block), self.suffix.as_slice()].concat()
+        [self.prefix.as_slice(), &set_block(self.id, state, block), self.suffix.as_slice()].concat()
     }
     pub fn spk(&self, state: &[u8]) -> ScriptPublicKey {
         p2sh_spk(&self.redeem(state))
@@ -255,8 +219,7 @@ impl Subs {
                 .unwrap_or_else(|e| panic!("compile {}: {e:?}", id.name()));
             let (prefix, suffix, hash) = common::compiled_template_parts_and_hash(&art);
             let pinned = template(id);
-            let repin = pending(id).is_some_and(|(old, _)| pinned.state_len == old);
-            if !ablating() && !repin {
+            if !ablating() {
                 assert_eq!(
                     (prefix.as_slice(), suffix.as_slice()),
                     (pinned.prefix.as_slice(), pinned.suffix.as_slice()),
@@ -349,9 +312,9 @@ pub struct Ed {
     pub signers: BTreeMap<usize, u8>,
     /// Raw signature-script override per input (applied after assembly; the attack writes the bytes itself).
     pub raw_sigscripts: BTreeMap<usize, Vec<u8>>,
-    /// Delivery block of the order spent at input i (a template under test with a pending re-pin; default: all zero).
+    /// Delivery block of the order spent at input i (a template under test; default: the built one).
     pub dlv_in: BTreeMap<usize, Vec<u8>>,
-    /// Delivery block of the order output k (a continuation or an exit the library derived; default: all zero).
+    /// Delivery block of the order output k (a continuation or an exit the library derived; default: the built one).
     pub dlv_out: BTreeMap<usize, Vec<u8>>,
     /// KCC-20 leaders that spend on the borrow path (witness `0x01` alone).
     pub borrow_leaders: BTreeSet<usize>,
