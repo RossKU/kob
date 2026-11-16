@@ -267,24 +267,37 @@ fn p2pk_like(spk: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
     kaspa_consensus_core::tx::ScriptPublicKey::from_vec(u16::from_be_bytes([spk[0], spk[1]]), spk[2..].to_vec())
 }
 
-/// A mode-1 bid holding bought tokens needs its bought-custody as a leg input, which swap legs and the intent book do not
-/// carry, so it is never offered; a mode-1 bid that bought nothing is.
+/// A mode-1 bid holding bought tokens fills with its bought-custody as a leg input: the quotes name it
+/// (`OrderRef::bid_with_custody`) and the intent book carries it with the bid. A bid holding bought tokens whose custody
+/// the book has not seen is left out; a mode-1 bid that bought nothing needs none.
 #[test]
-fn quotes_and_the_intent_book_leave_out_a_bid_holding_bought_tokens() {
+fn quotes_and_the_intent_book_carry_a_bids_bought_custody() {
     use mc::*;
     let t = kob_protocol::artifacts::TemplateId::Kcc20Ref;
-    let m1 = |id: u32, bought: i64| {
+    let m1 = |id: u32, bought: i64, with_custody: bool| {
         let mut o = l_bid(id, bid(10 + id as u8, P250, t), 5 * WHOLE);
         let AnyState::KobBid(b) = &mut o.order.state else { panic!() };
         (b.mode, b.bought) = (kob_protocol::state::MODE_ACCUMULATE, bought);
+        if with_custody {
+            o.bought_custody = Some(custody(bought, cid(id), 1_000));
+        }
         o
     };
-    let b = book(vec![m1(1, 0), m1(2, 3 * WHOLE)]);
-    let sell = QuoteRequest { token: TOKEN, take: Take::SellToBids, amount: WHOLE, limit_price: None, exclude: vec![] };
-    let legs = quote_legs(&b, &sell, UTC).unwrap();
-    assert_eq!(legs.len(), 1);
-    assert_eq!(legs[0].outpoint(), Outpoint::new(b.orders[0].order.utxo.transaction_id, b.orders[0].order.utxo.index));
+    let b = book(vec![m1(1, 0, false), m1(2, 3 * WHOLE, true), m1(3, 3 * WHOLE, false)]);
+    let req = |amount: i64| QuoteRequest { token: TOKEN, take: Take::SellToBids, amount, limit_price: None, exclude: vec![] };
+    let out = |i: usize| Outpoint::new(b.orders[i].order.utxo.transaction_id, b.orders[i].order.utxo.index);
+    // bids 1 and 2 together: bid 2 is a leg with its bought-custody, bid 3 never is
+    let legs = quote_legs(&b, &req(7 * WHOLE), UTC).unwrap();
+    assert_eq!(legs.len(), 2);
+    assert!(legs.iter().all(|l| l.outpoint() != out(2)), "the bid without its custody is left out");
+    let with = legs.iter().find(|l| l.outpoint() == out(1)).expect("the custody bid is a leg");
+    assert_eq!(with.bought_custody(), b.orders[1].bought_custody.as_ref());
+    let plain = legs.iter().find(|l| l.outpoint() == out(0)).expect("the bid that bought nothing is a leg");
+    assert_eq!(plain.bought_custody(), None);
+    // bid 3 adds nothing: the book cannot take far more than two bids
+    assert!(quote_legs(&b, &req(30 * WHOLE), UTC).is_none());
     let view = kobd::x402::quote::book_view(&b);
-    assert_eq!(view.bids.len(), 1);
-    assert_eq!(view.bids[0].utxo.covenant_id, Some(cid(1)));
+    assert_eq!(view.bids.len(), 2);
+    assert_eq!((view.bids[0].0.utxo.covenant_id, view.bids[0].1.as_ref()), (Some(cid(1)), None));
+    assert_eq!((view.bids[1].0.utxo.covenant_id, view.bids[1].1.as_ref()), (Some(cid(2)), b.orders[1].bought_custody.as_ref()));
 }

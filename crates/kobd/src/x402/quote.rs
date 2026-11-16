@@ -85,10 +85,10 @@ impl Level<'_> {
     }
 }
 
-/// A mode-1 bid holding bought tokens needs its bought-custody as a leg input. The swap legs and
-/// the intent book (`kob_x402`) carry none, so such a bid is not offered until they do.
-fn holds_bought(o: &ListedOrder) -> bool {
-    o.order.state.bought_custody().is_some()
+/// A mode-1 bid holding bought tokens fills only with its bought-custody as a leg input: one the
+/// book has not seen (`ListedOrder::bought_custody`) is not offered.
+fn custody_missing(o: &ListedOrder) -> bool {
+    o.order.state.bought_custody().is_some() && o.bought_custody.is_none()
 }
 
 fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'a>> {
@@ -100,7 +100,7 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
         if req.exclude.contains(&outpoint_of(o)) || excluded_by_expiry(o, t, utc) || token_program(&o.order.state).is_none() {
             continue;
         }
-        if crate::sanity::check(&o.order.state).is_err() || holds_bought(o) {
+        if crate::sanity::check(&o.order.state).is_err() || custody_missing(o) {
             continue;
         }
         match (&o.order.state, req.take) {
@@ -184,7 +184,11 @@ pub fn quote_legs(book: &MemoryBook, req: &QuoteRequest, utc: u64) -> Option<Vec
         }
         let leg = match &l.order.order.state {
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
-                OrderRef::bid(OrderUtxo { utxo: l.order.order.utxo.clone(), state: s.clone() }, n)
+                let order = OrderUtxo { utxo: l.order.order.utxo.clone(), state: s.clone() };
+                match l.order.bought_custody.clone().filter(|_| s.bought > 0) {
+                    Some(c) => OrderRef::bid_with_custody(order, c, n),
+                    None => OrderRef::bid(order, n),
+                }
             }
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => {
                 OrderRef::ask(OrderUtxo { utxo: l.order.order.utxo.clone(), state: s.clone() }, l.order.custody.clone()?, n)
@@ -212,18 +216,22 @@ pub fn quote(book: &MemoryBook, reqs: &[QuoteRequest], lock_time: u64, utc: u64)
 /// The plain limit orders of a book as an intent execution's [`kob_x402::intent::BookView`].
 ///
 /// It holds KCC-20 asks with their exact custody, which an intent buys for the merchant. It also
-/// holds KCC-20 and KRON bids, which an intent sells the payer's token into. The planner filters
+/// holds KCC-20 and KRON bids, with a mode-1 bid's bought-custody, which an intent sells the payer's
+/// token into (a bid that holds bought tokens but whose custody the book has not seen is left out). The planner filters
 /// further by the intent's token programs, plain resting orders and activity.
 pub fn book_view(book: &MemoryBook) -> kob_x402::intent::BookView {
     let mut v = kob_x402::intent::BookView::default();
-    for o in book.orders.iter().filter(|o| !holds_bought(o)) {
+    for o in book.orders.iter().filter(|o| !custody_missing(o)) {
         match &o.order.state {
             AnyState::KobAsk(s) => {
                 if let Some(c) = o.custody.clone().filter(|_| o.custody_ok()) {
                     v.asks.push((OrderUtxo { utxo: o.order.utxo.clone(), state: s.clone() }, c));
                 }
             }
-            AnyState::KobBid(s) | AnyState::KobBidKron(s) => v.bids.push(OrderUtxo { utxo: o.order.utxo.clone(), state: s.clone() }),
+            AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
+                let custody = o.bought_custody.clone().filter(|_| s.bought > 0);
+                v.bids.push((OrderUtxo { utxo: o.order.utxo.clone(), state: s.clone() }, custody))
+            }
             _ => {}
         }
     }
