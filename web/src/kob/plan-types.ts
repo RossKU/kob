@@ -20,6 +20,7 @@ import type { FeeContext, RatePick } from './fee-policy';
 import type { PairBookView } from '../data/indexer-types';
 import type { BuiltTx, CreateOrderRequest, Family, FeeMode, Hex, KeyUtxo, OrderState, PairKind, PairTriggerRule, TokenProgram, TokenUtxo } from './types';
 import type { KobWasm } from './wasm';
+import type { PlanDelivery } from './orders/delivery';
 
 /**
  * Market parameters of one token, from its registry entry (kob/registry.ts) and the embedded token
@@ -357,6 +358,29 @@ export interface OrderPlan {
    * fills against the visible book, also on a failed build.
    */
   fills?: PlanFills;
+  /** A buy's delivery (mode 0 / 1 / 2, a top-up's tip and threshold): orders/delivery.ts `withDelivery`. */
+  delivery?: PlanDelivery;
+}
+
+/** The claims of a mode-1 order's bought-custody (bid-delivery-spec §7, CL1 to CL3); `decodeSigning` names them the same. */
+export type ClaimKind = 'claim' | 'claim-merge' | 'claim-place';
+
+/** What a claim moves, for its confirmation. Token amounts in base units of the bought token, KAS in sompi. */
+export interface ClaimDisclosure {
+  kind: ClaimKind;
+  /** the order claimed from; it continues with `bought` 0 unless `ends` */
+  covenantId: Hex;
+  bought: bigint;
+  /** the wallet's plain UTXOs merged into the claim (CL2, CL3) */
+  merged: bigint;
+  /** to the maker's one plain UTXO, and into the placed order's custody */
+  toYou: bigint;
+  toOrder: bigint;
+  /** KAS added to the continuation: the carrier of its next custody */
+  carrierAdded: bigint;
+  /** a claim and place that ends the order */
+  ends: boolean;
+  fee: bigint | null;
 }
 
 /**

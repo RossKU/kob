@@ -24,7 +24,9 @@
 //   outputs and bounded.
 // - An in-place amend (AMEND record, `recoverAmends`) or a sweep (SWEEP record, re-checked by
 //   sweep.ts `verify_sweep`, where the same script continues the order input's covenant id) is the
-//   only way an order's covenant id may continue. Any other continuation, or a record that does not
+//   only way an order's covenant id may continue, besides a claim (bid-delivery-spec §7: the maker's
+//   cancel of a mode-1 order continues it with only `bought` 0; its tokens go to the maker or into
+//   the order placed with it). Any other continuation, or a record that does not
 //   verify, is blocking. A sweep's token outputs are its strays returned to the maker, and anything
 //   to another key is blocking, as everywhere.
 // - A conditional order or stop entry that the tx arms or trails shows its trigger evidence
@@ -60,7 +62,7 @@ import type {
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
-import { borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf } from './token-state';
+import { KCC20_SCHEME_COVID, PLAIN_BORROW, borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf, programOfHash } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
@@ -101,11 +103,11 @@ export const SIGNING_ISSUE_CODES = [
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
-  'retired-not-cancel',
+  'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
-  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place',
+  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed',
 ] as const;
 /** The code of a signing finding. */
 export type SigningIssueCode = (typeof SIGNING_ISSUE_CODES)[number];
@@ -117,7 +119,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
     c,
     (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
-      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place'] as string[]).includes(c)
+      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed'] as string[]).includes(c)
         ? 'info'
         : 'blocking',
   ]),
@@ -229,7 +231,17 @@ export interface DecodedOrder {
    * script (same state, custody untouched)
    */
   sweptFrom?: number;
+  /** a claim (bid-delivery-spec §7): the order input this output continues with only `bought` set to 0 */
+  claimedFrom?: number;
+  /** the order's delivery block, or the one an if-done entry commits for its exits; null for a kind without one */
+  delivery: DeliveryTerms | null;
 }
+
+/** A delivery block (bid-delivery-spec §2). `exit`: an if-done entry's `exit*` fields (`bought` 0). */
+export interface DeliveryTerms { mode: bigint; recvThreshold: bigint; topupTip: bigint; bought: bigint; exit: boolean }
+
+/** A mode-1 order's bought-custody as its state pins it: token, template, commitment, amount, and the order's carrier. */
+export interface BoughtFacts { token: Hex; tplHash: Hex; ext: Hex; amount: bigint; carrier: bigint }
 
 /** An order UTXO spent by this tx. */
 export interface DecodedSpend {
@@ -240,7 +252,7 @@ export interface DecodedSpend {
    * `sweep`: the maker's cancel continued the order in place under the same script (a verified
    * SWEEP record): only its strays move
    */
-  action: NonNullable<DecodedInput['order']>['action'] | 'sweep';
+  action: NonNullable<DecodedInput['order']>['action'] | 'sweep' | 'claim';
   makerIsWallet: boolean;
   /** custody + stray tokens of the order's own token swept by the tx (base units) */
   tokensReleased: bigint;
@@ -269,6 +281,11 @@ export interface DecodedSpend {
    * this frame signs is its maker's cancel)
    */
   retired?: Hex;
+  /**
+   * a mode-1 order's bought-custody this spend moves: its amount, its input (null when the tx does not spend it) and, for a
+   * claim, the output the order continues at
+   */
+  bought?: { amount: bigint; input: number | null; continuesAt: number | null; toYou?: bigint; toOrder?: bigint };
 }
 
 /**
@@ -379,7 +396,7 @@ export interface NetEffects {
  * `sweep` is the maker's sweep of an order's strays in place. The order continues unchanged and
  * only strays move.
  */
-export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'other';
+export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'other';
 
 /** The decoded transaction: what it spends, what it creates and every finding. */
 export interface SigningSummary {
@@ -427,6 +444,8 @@ export interface ExpectedSigning {
   cancelIds?: Hex[];
   /** covenant ids of orders swept in place (verified SWEEP records): they are not cancelled */
   sweepIds?: Hex[];
+  /** covenant ids of orders claimed (bid-delivery-spec §7): they continue with `bought` 0 */
+  claimIds?: Hex[];
   /**
    * outpoints (`txid:index`) the tx must NOT spend: the custody of a swept order (a sweep moves
    * strays only)
@@ -524,6 +543,32 @@ function splitOrderValue(d: OrderDescription, value: bigint): LockedKas {
     ? { total: value, carriers: rest, escrow: 0n, refundTips, keeperTips, reserves }
     : { total: value, carriers: 0n, escrow: rest, refundTips, keeperTips, reserves };
 }
+
+const DELIVERY_KEYS = ['mode', 'recvThreshold', 'topupTip', 'bought', 'exitMode', 'exitRecvThreshold', 'exitTopupTip'] as const;
+
+/** The delivery block of an order state; null for asks, `KobIfdBid` and every KRON twin. */
+export function deliveryOf(os: OrderState): DeliveryTerms | null {
+  if (familyOfKind(os.kind) === 'kron') return null;
+  const s = os.state as unknown as Record<string, string | undefined>;
+  const v = (k: string) => big(s[k] ?? '0');
+  if (os.kind === 'KobBid' || os.kind === 'KobCondBid' || os.kind === 'KobPair' || os.kind === 'KobCondPair') {
+    return { mode: v('mode'), recvThreshold: v('recvThreshold'), topupTip: v('topupTip'), bought: v('bought'), exit: false };
+  }
+  if (os.kind === 'KobIfdAsk' || os.kind === 'KobIfdPair') return { mode: v('exitMode'), recvThreshold: v('exitRecvThreshold'), topupTip: v('exitTopupTip'), bought: 0n, exit: true };
+  return null;
+}
+
+/** The bought-custody a mode-1 order holds (`bought > 0`), or null. A pair order buys its T token. */
+export function boughtOf(os: OrderState): BoughtFacts | null {
+  const d = deliveryOf(os);
+  if (!d || d.exit || d.mode !== 1n || d.bought <= 0n) return null;
+  const s = os.state as unknown as Record<string, string>;
+  const pair = os.kind === 'KobPair' || os.kind === 'KobCondPair';
+  return { token: pair ? s.tCovId : s.tokenCovId, tplHash: pair ? s.tTplHash : s.tokenTplHash, ext: pair ? s.tExt : s.extensionCommitment, amount: d.bought, carrier: big(s.deliveryCarrier) };
+}
+
+/** A claim or an ending cancel of a mode-1 order (bid-delivery-spec §7); `output` the verified continuation, `why` its faults. */
+interface Claim { input: number; cov: Hex; b: BoughtFacts; output: number | null; custodyInput: number | null; wallet: number[]; why: string[] }
 
 function planSigner(p: SigPlan): Hex | null {
   switch (p.kind) {
@@ -757,6 +802,64 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   const sweepByOutput = new Map(sweeps.map((s) => [s.output, s]));
   const sweepByInput = new Map(sweeps.map((s) => [s.input, s]));
+  // claims (bid-delivery-spec §7): the maker's cancel of a mode-1 order holding a bought-custody. A claim continues the order's
+  // covenant id with `bought` 0 only; an ending cancel must spend the custody (nothing else ever can)
+  const claims = new Map<number, Claim>();
+  const claimByOutput = new Map<number, Claim>();
+  /** input `k` is exactly the bought-custody `b` of the order `cov` */
+  const isBoughtCustody = (k: number, b: BoughtFacts, cov: Hex): boolean => {
+    const p = built.plans[k]!;
+    if ((p.kind !== 'tokenLeader' && p.kind !== 'tokenDelegator') || tx.inputs[k]!.utxo.covenantId !== b.token || p.template !== programOfHash(b.tplHash)) return false;
+    const st = p.state;
+    return isKcc20State(st) && st.owner === cov && st.owner_scheme === KCC20_SCHEME_COVID && borrowKeyOf(st) === PLAIN_BORROW && st.extension_commitment === b.ext && big(st.amount) === b.amount;
+  };
+  inputs.forEach((d, i) => {
+    const os = orderStates.get(i);
+    const cov = tx.inputs[i]!.utxo.covenantId ?? null;
+    const b = os ? boughtOf(os) : null;
+    if (!os || !b || !cov || d.order?.action !== 'cancel') return;
+    const owned = inputs.filter((x) => x.token?.escrowOf === cov).map((x) => x.index);
+    const custody = owned.find((k) => isBoughtCustody(k, b, cov)) ?? null;
+    if (sweepByInput.has(i) || amends.some((a) => a.input === i)) {
+      // a sweep or an amend keeps `bought`: its custody stays
+      if (custody !== null) add('sweep-custody-spent', `input ${custody}: the transaction moves the order's bought-custody, which a sweep or an amend keeps in place`, { input: custody });
+      return;
+    }
+    const bound = tx.outputs.map((o, j) => [o, j] as const).filter(([o]) => o.covenant?.covenantId === cov).map(([, j]) => j);
+    if (!bound.length) {
+      if (custody === null) add('bought-custody-lost', `input ${i}: the cancel ends an order whose bought-custody (on-chain amount ${b.amount}) it does not spend: those tokens could never be moved again`, { input: i, params: { amount: b.amount } });
+      claims.set(i, { input: i, cov, b, output: null, custodyInput: custody, wallet: [], why: [] });
+      return;
+    }
+    const why: string[] = [];
+    const j = bound[0]!;
+    const out = tx.outputs[j]!;
+    const next = { ...os, state: { ...os.state, bought: '0' } } as OrderState;
+    let same = false;
+    try {
+      same = kob.scriptPublicKey(next) === out.scriptPublicKey;
+    } catch {
+      same = false;
+    }
+    if (bound.length > 1) why.push(`${bound.length} outputs are bound to the order's covenant id, a claim continues it at one`);
+    if (out.covenant!.authorizingInput !== i) why.push(`output ${j} is not authorised by the order's input ${i}`);
+    if (!same) why.push(`output ${j} is not the same order with only bought set to 0`);
+    const least = d.amount + b.carrier;
+    if (big(out.value) < least) why.push(`output ${j} holds ${formatKas(big(out.value))} KAS, less than the order's ${formatKas(d.amount)} KAS plus one delivery carrier`);
+    if (custody === null) why.push(`its bought-custody (exactly ${b.amount} of the order's token, its commitment, no borrowing) is not an input`);
+    for (const k of owned) if (k !== custody) why.push(`input ${k} is another UTXO owned by the order (a sell custody or a stray): a claim moves only the bought-custody`);
+    const wallet: number[] = [];
+    for (const x of inputs) {
+      if (!x.token || x.token.ref.covenantId !== b.token || x.token.escrowOf !== null) continue;
+      const p = built.plans[x.index]!;
+      const plain = (p.kind === 'tokenLeader' || p.kind === 'tokenDelegator') && borrowKeyOf(p.state) === PLAIN_BORROW && p.state.extension_commitment === b.ext;
+      if (x.ownedBy !== 'maker' || x.token.ownerScheme !== 0 || !plain) why.push(`input ${x.index} is not your plain UTXO of the claimed token and its commitment`);
+      else wallet.push(x.index);
+    }
+    const c: Claim = { input: i, cov, b, output: same && out.covenant!.authorizingInput === i && bound.length === 1 ? j : null, custodyInput: custody, wallet, why };
+    claims.set(i, c);
+    if (c.output !== null) claimByOutput.set(j, c);
+  });
   // only covenants proven by a verified placement record can be custody owners: `built.covenants`
   // is builder-declared and never trusted here
   const newCovenantIds = new Set<Hex>(recovered.map((r) => r.covenantId));
@@ -933,7 +1036,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const first = custodies[0];
       orders.push({
         output: j, covenantId: rec.covenantId, description, state: os, value, locked, deadline: rec.deadline != null ? big(rec.deadline) : null, verified,
-        custody: first ? { output: first.output, amount: first.amount, carrier: first.carrier, ref: first.ref } : null, custodies,
+        custody: first ? { output: first.output, amount: first.amount, carrier: first.carrier, ref: first.ref } : null, custodies, delivery: deliveryOf(os),
       });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: rec.covenantId, description, verified, locked, deadline: rec.deadline != null ? big(rec.deadline) : null } };
     }
@@ -953,7 +1056,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
       const deadline = am.deadline != null ? big(am.deadline) : null;
-      orders.push({ output: j, covenantId: am.covenantId, description, state: os, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input });
+      // an amend keeps the delivery block (bid-delivery-spec §2)
+      const was = orderStates.get(am.input);
+      if (was && JSON.stringify(deliveryOf(was), bigReplacer) !== JSON.stringify(deliveryOf(os), bigReplacer)) add('order-terms-invalid', `output ${j}: the amend changes the order's delivery (mode, tip, threshold or bought), which an amend keeps`, { output: j });
+      orders.push({ output: j, covenantId: am.covenantId, description, state: os, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input, delivery: deliveryOf(os) });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: am.covenantId, description, verified, locked, deadline } };
     }
     const sw = sweepByOutput.get(j);
@@ -964,8 +1070,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (os.state.maker !== maker) add('order-not-maker', `output ${j}: the swept order names ${shortId(os.state.maker)} as maker, not the connected wallet key`, { output: j, params: { maker: os.state.maker } });
       const description = describeOrder(os, kob);
       const locked = splitOrderValue(description, value);
-      orders.push({ output: j, covenantId: sw.covenantId, description, state: os, value, locked, deadline: null, verified: true, custody: null, custodies: [], sweptFrom: sw.input });
+      orders.push({ output: j, covenantId: sw.covenantId, description, state: os, value, locked, deadline: null, verified: true, custody: null, custodies: [], sweptFrom: sw.input, delivery: deliveryOf(os) });
       return { ...blank, kind: 'order', order: { covenantId: sw.covenantId, description, verified: true, locked, deadline: null } };
+    }
+    const cl = claimByOutput.get(j);
+    if (cl) {
+      // checked above: the order's script with only bought 0, bound to its covenant id from its input
+      const os = { ...orderStates.get(cl.input)!, state: { ...orderStates.get(cl.input)!.state, bought: '0' } } as OrderState;
+      const description = describeOrder(os, kob);
+      const locked = splitOrderValue(description, value);
+      orders.push({ output: j, covenantId: cl.cov, description, state: os, value, locked, deadline: null, verified: true, custody: null, custodies: [], claimedFrom: cl.input, delivery: deliveryOf(os) });
+      return { ...blank, kind: 'order', order: { covenantId: cl.cov, description, verified: true, locked, deadline: null } };
     }
     const tok = tokenOutputs.get(j);
     if (tok) {
@@ -1399,6 +1514,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const sum = (xs: DecodedInput[]): bigint => xs.reduce((a, t) => a + t.token!.amount, 0n);
       const sw = sweepByInput.get(d.index);
       const swept = !!sw && o.action === 'cancel';
+      const st = orderStates.get(d.index);
+      const bf = st ? boughtOf(st) : null;
+      const cl = claims.get(d.index);
+      const custodyIn = cl ? cl.custodyInput : bf && cov ? (owned.map((x) => x.index).find((k) => isBoughtCustody(k, bf, cov)) ?? null) : null;
+      const boughtPart = bf ? { bought: { amount: bf.amount, input: custodyIn, continuesAt: cl?.output ?? null } } : {};
       // the order's own token(s): its token (a pair order: A and B, each with its custody per the
       // state) and, apart, FOREIGN strays of any other token owned by the same id (matcher.md 1.2)
       const pair = o.description?.pair ?? null;
@@ -1406,7 +1526,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const quoteToken = pair && pair.quote.covId !== pair.base.covId ? pair.quote.covId : null;
       const mine = owned.filter((t) => ownToken === null || t.token!.ref.covenantId === ownToken);
       const total = sum(mine);
-      const heldOf = (token: Hex): bigint => (pair ? pair.custodies.filter((c) => c.token === token).reduce((x, c) => x + c.amount, 0n) : (o.description?.tokenAmount ?? 0n));
+      const boughtHeld = (token: Hex): bigint => (bf && bf.token === token ? bf.amount : 0n);
+      const heldOf = (token: Hex): bigint => boughtHeld(token) + (pair ? pair.custodies.filter((c) => c.token === token).reduce((x, c) => x + c.amount, 0n) : (o.description?.tokenAmount ?? 0n));
       const expectedCustody = ownToken !== null ? heldOf(ownToken) : 0n;
       const strayOf = (released: bigint, held: bigint): bigint => (swept ? released : released > held ? released - held : 0n);
       let pairTokens: DecodedSpend['pairTokens'] = null;
@@ -1441,15 +1562,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         return {
           ...(o.retired ? { retired: o.retired } : {}),
           input: d.index, covenantId: cov, description: o.description, action: 'sweep' as const, makerIsWallet: o.makerIsWallet,
-          tokensReleased: total, strays: total, otherStrays: [...others.values()], pairTokens, trigger: null,
+          tokensReleased: total, strays: total, otherStrays: [...others.values()], pairTokens, trigger: null, ...boughtPart,
           sweptTo: { output: sw!.output, utxos: owned.length, kas: owned.reduce((x, t) => x + t.amount, 0n) },
         };
       }
       return {
         ...(o.retired ? { retired: o.retired } : {}),
-        input: d.index, covenantId: cov, description: o.description, action: o.action, makerIsWallet: o.makerIsWallet,
+        input: d.index, covenantId: cov, description: o.description, action: cl?.output != null ? ('claim' as const) : o.action, makerIsWallet: o.makerIsWallet,
         tokensReleased: total, strays: strayOf(total, expectedCustody), otherStrays: [...others.values()], pairTokens,
-        trigger: triggers.get(d.index) ?? null,
+        trigger: triggers.get(d.index) ?? null, ...boughtPart,
       };
     });
   for (const s of spends) {
@@ -1462,6 +1583,40 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         input: s.input, output: s.sweptTo.output, params: { utxos: s.sweptTo.utxos },
       });
     }
+  }
+  // where a claim's tokens go: your plain UTXO, or the custody of the one order placed here, which holds only the claimed token
+  const placed = orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined && o.amendedFrom === undefined);
+  for (const c of claims.values()) {
+    // an ending cancel: only where its tokens go is said (the generic checks hold them to you or to your new order)
+    const ending = c.output === null && !tx.outputs.some((o) => o.covenant?.covenantId === c.cov);
+    const why = ending ? [] : [...c.why];
+    if (!ending) for (const o of placed) {
+      const cs = custodiesOf(o.state, kob);
+      if (!cs.length || cs.some((x) => x.token !== c.b.token)) why.push(`output ${o.output} places an order that does not hold only the claimed token`);
+    }
+    const placedIds = new Set(placed.map((o) => o.covenantId));
+    const to = { maker: 0n, placed: 0n };
+    for (const o of outputs) {
+      if (!o.token || o.token.ref.covenantId !== c.b.token) continue;
+      const ext = tokenOutputs.get(o.index) ? extensionOfState(tokenOutputs.get(o.index)!.state) : null;
+      if (o.kind === 'token-change' && ext === c.b.ext) to.maker += o.token.amount;
+      else if (o.kind === 'custody' && o.token.escrowOf && placedIds.has(o.token.escrowOf) && ext === c.b.ext) to.placed += o.token.amount;
+      else if (!ending) why.push(`output ${o.index}: ${human(o.token.ref, o.token.amount)} of the claimed token go neither to your plain UTXO nor into your placed order`);
+    }
+    const fromWallet = c.wallet.reduce((x, k) => x + inputs[k]!.token!.amount, 0n);
+    if (!ending && to.maker + to.placed !== c.b.amount + fromWallet) why.push(`the claimed token's outputs hold ${to.maker + to.placed}, not the ${c.b.amount} bought plus ${fromWallet} of your UTXOs`);
+    if (why.length) {
+      add('claim-invalid', `input ${c.input}: this is no valid claim of the order's bought tokens: ${why.join('; ')}`, { input: c.input, params: { reason: why[0]! } });
+      continue;
+    }
+    const sp = spends.find((x) => x.input === c.input);
+    if (sp?.bought) Object.assign(sp.bought, { toYou: to.maker, toOrder: to.placed });
+    if (ending) continue;
+    const ref = tokenRef(registry, c.b.token);
+    const where = to.placed > 0n ? (to.maker > 0n ? `${human(ref, to.placed)} into your new order and ${human(ref, to.maker)} to you` : 'into your new order') : 'to you as one UTXO';
+    add('bought-claimed', `input ${c.input}: ${human(ref, c.b.amount)} bought by the order go ${where}; the order continues at output ${c.output} with bought 0`, {
+      input: c.input, output: c.output!, params: { amount: c.b.amount, toYou: to.maker, toOrder: to.placed },
+    });
   }
   // a sweep moves strays only: an outpoint the plan names as the swept order's custody must not be
   // spent
@@ -1580,6 +1735,14 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         add('expected-sweep-ids', `the plan sweeps ${want.length} order(s) in place but the transaction sweeps ${swept.length}: ${swept.map(shortId).join(', ') || 'none'}`, { params: { expected: want.length, actual: swept.length } });
       }
     }
+    // a claim plan names the orders it claims: exactly those (and any other plan none)
+    const claimed = spends.filter((s) => s.action === 'claim').map((s) => s.covenantId ?? '');
+    if (expected.claimIds || claimed.length) {
+      const want = expected.claimIds ?? [];
+      if ([...claimed].sort().join(',') !== [...want].sort().join(',')) {
+        add('expected-claim-ids', `the plan claims from ${want.length} order(s) but the transaction claims from ${claimed.length}: ${claimed.map(shortId).join(', ') || 'none'}`, { params: { expected: want.length, actual: claimed.length } });
+      }
+    }
   }
   function compareOrders(exp: OrderState[]) {
     const enc = (s: OrderState): string => {
@@ -1589,13 +1752,31 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         return '';
       }
     };
-    const have = orders.map((o) => enc((recoveredByOutput.get(o.output)?.order ?? amendByOutput.get(o.output)?.order ?? sweepByOutput.get(o.output)!.order) as OrderState));
+    const haveStates = orders.filter((o) => o.claimedFrom === undefined).map((o) => (recoveredByOutput.get(o.output)?.order ?? amendByOutput.get(o.output)?.order ?? sweepByOutput.get(o.output)!.order) as OrderState);
+    const have = haveStates.map(enc);
     const pool = [...have];
+    const poolStates = [...haveStates];
     const leftovers: OrderState[] = [];
     for (const e of exp) {
       const i = pool.indexOf(enc(e));
-      if (i >= 0) pool.splice(i, 1);
-      else leftovers.push(e);
+      if (i >= 0) {
+        pool.splice(i, 1);
+        poolStates.splice(i, 1);
+      } else leftovers.push(e);
+    }
+    // an order that differs from the plan in its delivery only: say which field (a top-up tip or threshold the user did not choose)
+    const withoutDelivery = (o: OrderState) => {
+      const st = { ...(o.state as unknown as Record<string, unknown>) };
+      for (const k of DELIVERY_KEYS) delete st[k];
+      return JSON.stringify({ kind: o.kind, st });
+    };
+    for (const e of leftovers) {
+      const a = poolStates.find((x) => withoutDelivery(x) === withoutDelivery(e));
+      if (!a) continue;
+      const de = deliveryOf(e);
+      const da = deliveryOf(a);
+      const fields = (['mode', 'recvThreshold', 'topupTip', 'bought'] as const).filter((k) => (de?.[k] ?? 0n) !== (da?.[k] ?? 0n));
+      if (fields.length) add('expected-delivery', `an order's delivery differs from the plan (${fields.join(', ')}): ${fields.map((k) => `${da?.[k] ?? 0n} instead of ${de?.[k] ?? 0n}`).join(', ')}`, { params: { fields: fields.join(', ') } });
     }
     // an if-done entry's committed exit is part of the plan's states but is created later by fills:
     // it must match the entry's commitment
@@ -1622,12 +1803,17 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
 
   // ---------------------------------------------------------------- classification
   // a swept order continues unchanged: this tx does not create it
-  const createdOrders = orders.some((o) => o.sweptFrom === undefined);
+  const createdOrders = orders.some((o) => o.sweptFrom === undefined && o.claimedFrom === undefined);
+  const claimSpends = spends.filter((s) => s.action === 'claim');
+  // an ending cancel whose bought tokens go into the order placed here is a claim and place too
+  const boughtTokens = new Set(spends.filter((s) => s.action === 'cancel' && s.bought?.input != null).map((s) => boughtOf(orderStates.get(s.input)!)!.token));
+  const placesBought = orders.some((o) => o.sweptFrom === undefined && o.claimedFrom === undefined && o.custodies.some((c) => boughtTokens.has(c.ref.covenantId)));
+  const mergesWallet = [...claims.values()].some((c) => c.output !== null && c.wallet.length > 0);
   const cancels = spends.filter((s) => s.action === 'cancel');
   const refunds = spends.filter((s) => s.action === 'refund');
   const sweptSpends = spends.filter((s) => s.action === 'sweep');
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
-  const kind: SigningKind = createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
+  const kind: SigningKind = claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');
   // an order under a retired template is only cancelled: no replacement, sweep or anything else in
   // the same transaction

@@ -34,7 +34,7 @@ function fixedTerms(d: OrderDescription): string {
 function orderKept(a: DecodedOrder, b: DecodedOrder): boolean {
   const x = a.description;
   const y = b.description;
-  if (fixedTerms(x) !== fixedTerms(y)) return false;
+  if (fixedTerms(x) !== fixedTerms(y) || json(a.delivery) !== json(b.delivery)) return false;
   if (y.activeFrom < x.activeFrom || (x.expiryDaa > 0n && y.expiryDaa < x.expiryDaa) || (x.expiryDaa === 0n) !== (y.expiryDaa === 0n)) return false;
   // and not by more than a slow approval can explain (S3). Without an auction an expiry moves with the start (a lifetime counted from it) or not at
   // all (an explicit date), never alone by its own amount; an auction's expiry follows the length of the auction, which the price it starts from
@@ -67,10 +67,10 @@ export function sameOrBetter(approved: SigningSummary, next: SigningSummary): bo
   // no finding the approved one did not have (the frame decodes without the app's claims: a send to another key is always one, and was shown)
   const known = new Set(approved.blocking.map((b) => b.code));
   if (next.blocking.some((b) => !known.has(b.code)) || approved.kind !== next.kind) return false;
-  const ao = approved.orders.filter((o) => o.sweptFrom === undefined);
-  const bo = next.orders.filter((o) => o.sweptFrom === undefined);
+  const ao = approved.orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined);
+  const bo = next.orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined);
   if (ao.length !== bo.length || !ao.every((o, i) => orderKept(o, bo[i]!))) return false;
-  // the orders it closes, the tokens it moves for the wallet and to others: the same
+  // the orders it closes or claims, the tokens it moves for the wallet and to others: the same
   if (json(approved.spends.map((s) => [s.covenantId, s.action])) !== json(next.spends.map((s) => [s.covenantId, s.action]))) return false;
   const tokens = (s: SigningSummary) => json(s.net.tokens.map((t) => [t.ref.covenantId, t.walletDelta, t.toOthers, t.escrowed]).sort());
   if (tokens(approved) !== tokens(next)) return false;

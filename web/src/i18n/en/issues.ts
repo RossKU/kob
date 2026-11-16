@@ -168,8 +168,13 @@ export default {
   'issues.retired-not-cancel': 'An order under an older contract version can only be cancelled by its maker, and this transaction does something else with it. Not signing.',
   'issues.sweep-invalid': 'A sweep record does not verify: the order would not continue under the same contract. Not signing. Details: {message}',
   'issues.expected-sweep-ids': 'The plan sweeps {expected} order(s), the transaction {actual}. Not signing.',
-  'issues.sweep-custody-spent': 'Input {input}: the sweep spends the order\'s custody, which it must leave in place. Not signing.',
+  'issues.sweep-custody-spent': 'Input {input}: the transaction spends the order\'s custody, which a sweep or an amend leaves in place. Not signing.',
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
+  'issues.claim-invalid': 'Input {input}: not a valid claim of the order\'s bought tokens ({reason}). Not signing.',
+  'issues.bought-custody-lost': 'Input {input}: the cancel ends the order but leaves its bought tokens behind, where nothing can move them again. Not signing.',
+  'issues.expected-claim-ids': 'The plan claims from {expected} order(s), the transaction from {actual}. Not signing.',
+  'issues.expected-delivery': 'An order\'s delivery differs from what you chose ({fields}). Not signing.',
+  'issues.bought-claimed': 'Input {input}: the order\'s bought tokens are claimed; the order continues at output {output}.',
 
   // ================================================================ wallet-popup notices (describeInputsForWallet)
   'issues.walletnotice.blind-tokens': 'Your wallet cannot show token amounts, order prices or where tokens go. Check this screen, not the wallet popup.',
