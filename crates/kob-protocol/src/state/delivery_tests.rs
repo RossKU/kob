@@ -631,3 +631,43 @@ fn delivery_golden_vectors() {
     }
     assert_eq!(v, vector_json(), "the vectors are stale: KOB_REGEN=1 rewrites them");
 }
+
+/// A mode-1 bid that holds its bought-custody (`bought > 0`) reserves no carrier: its fills grow the custody and move no
+/// carrier (`KobBid.sil` `resv`), so its buying power and whether it can continue count the escrow without one. A mode-1
+/// bid before its first fill (bought 0) and modes 0 / 2 keep one carrier per further fill.
+#[test]
+fn a_bid_holding_its_bought_custody_reserves_no_carrier() {
+    let AnyState::KobBid(s) = compiled(TemplateId::KobBid) else { unreachable!() };
+    // used(n) = 10 n sompi
+    let base = BidState {
+        scale: 1,
+        price: 10,
+        tip: 0,
+        slope: 0,
+        price_end: 0,
+        decay_step: 1,
+        min_fill: 1,
+        max_fill: 0,
+        reserve: 0,
+        delivery_carrier: 1_000,
+        recv_threshold: 0,
+        topup_tip: 0,
+        ..s
+    };
+    for (mode, bought, power, cont) in [(0, 0, 100, false), (1, 0, 100, false), (1, 5, 200, true), (2, 0, 100, false)] {
+        let (recv_threshold, topup_tip) = if mode == 2 { (1, 0) } else { (0, 0) };
+        let b = BidState { mode, bought, recv_threshold, topup_tip, ..base.clone() };
+        assert_eq!(b.carrier_reserve(), if cont { 0 } else { 1_000 }, "mode {mode} bought {bought}");
+        assert_eq!(b.buying_power(2_000), power, "mode {mode} bought {bought}: buying power of 2,000 sompi");
+        // 1,005 sompi left after a fill: one more minimum fill (10 sompi) only without a carrier
+        assert_eq!(b.can_continue(1_005), cont, "mode {mode} bought {bought}: can continue");
+        // minFill 2 (20 sompi): a fill of 1 from 1,020 leaves 1,010, which funds another minimum fill only without a
+        // carrier, so the short fill is allowed exactly when the bid cannot continue
+        assert_eq!(BidState { min_fill: 2, ..b.clone() }.fill_ok(1, 1_020), !cont, "mode {mode} bought {bought}: minimum fill");
+    }
+    // with a reserve the carrier-free budget still keeps it
+    let b = BidState { mode: 1, bought: 5, reserve: 300, ..base };
+    assert_eq!(b.buying_power(2_000), 170);
+    assert!(!b.can_continue(305));
+    assert!(b.can_continue(310));
+}

@@ -1676,20 +1676,31 @@ impl BidState {
     pub fn spend(&self, n: i64, t: i64, utxo_daa: i64) -> Option<i64> {
         self.spend_at(n, self.price_at(t, utxo_daa)?)
     }
+    /// The carrier the budget keeps per further fill: `deliveryCarrier`, or none for a mode-1 bid
+    /// that holds its bought-custody (`bought > 0`), whose fills grow the custody and move no
+    /// carrier (`KobBid.sil` `resv`; bid-delivery-spec §4).
+    pub fn carrier_reserve(&self) -> i64 {
+        if self.mode == MODE_ACCUMULATE && self.bought > 0 {
+            0
+        } else {
+            self.delivery_carrier
+        }
+    }
     /// Whether a bid whose escrow keeps `left` after a fill can continue.
     ///
     /// It can when one more minimum fill of buying power is left:
-    /// `left − deliveryCarrier − reserve >= used(minFill)`.
+    /// `left − carrier − reserve >= used(minFill)`, the carrier as [`BidState::carrier_reserve`].
     pub fn can_continue(&self, left: i64) -> bool {
-        match (self.used(self.min_fill), left.checked_sub(self.delivery_carrier).and_then(|x| x.checked_sub(self.reserve))) {
+        match (self.used(self.min_fill), left.checked_sub(self.carrier_reserve()).and_then(|x| x.checked_sub(self.reserve))) {
             (Some(u), Some(free)) => free >= u,
             _ => false,
         }
     }
     /// Remaining buying power of an escrow of `value` sompi.
     ///
-    /// It is the largest n with `used(n) <= value − deliveryCarrier − reserve`, and 0 when not even
-    /// one base unit is funded.
+    /// It is the largest n with `used(n) <= value − carrier − reserve` (the carrier as
+    /// [`BidState::carrier_reserve`]: none for a mode-1 bid holding its bought-custody), and 0 when
+    /// not even one base unit is funded.
     ///
     /// It is O(1) and total over any state, including a hostile one decoded from the chain. It is 0
     /// when `tip < 0`, when the budget rate `pMax + tip` overflows or is not positive, when `scale`
@@ -1708,7 +1719,7 @@ impl BidState {
             return 0;
         }
         let Some(rate) = self.budget_rate().filter(|r| *r > 0) else { return 0 };
-        let budget = value as i128 - self.delivery_carrier as i128 - self.reserve as i128;
+        let budget = value as i128 - self.carrier_reserve() as i128 - self.reserve as i128;
         if budget <= 0 {
             return 0;
         }
