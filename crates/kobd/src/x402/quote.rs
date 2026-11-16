@@ -124,7 +124,9 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
                         part_cap: i64::MAX,
                         order: o,
                     };
-                    out.extend(l.kip9(v, 0));
+                    // A mode-1 bid holding its bought-custody puts the custody's KAS on the delivery.
+                    let cust = o.bought_custody.as_ref().filter(|_| s.bought > 0).map(|c| c.utxo.amount.min(i64::MAX as u64) as i64);
+                    out.extend(l.kip9(v, cust.unwrap_or(0)));
                 }
             }
             (AnyState::KobAsk(s) | AnyState::KobAskKron(s), Take::BuyFromAsks) => {
