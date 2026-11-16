@@ -57,7 +57,7 @@ describe('i18n key usage', () => {
     for (const net of LANDING_NETWORKS) family('landing.disc.tail', [net]);
     family('orders.status', ORDER_STATUSES);
     family('orders.source', ['node', 'nodeHint', 'record', 'recordHint', 'none', 'noneHint']);
-    family('orders.flow.state', ['pending', 'preparing', 'sending', 'submitted', 'cancelled', 'failed']);
+    family('stepper.state', ['done', 'current', 'waiting', 'failed']);
     family('send.submitted', ['waiting', 'confirmed', 'unconfirmed']);
     family('orders.position', ['single', 'ifd', 'repeat']);
     family('orders.position.first', ['buy', 'sell']);

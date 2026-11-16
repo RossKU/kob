@@ -1,0 +1,39 @@
+/* The signing stepper (kit/Stepper.tsx): circles joined by a line, theme tokens only (light and dark). */
+.stepper { --step-dot: 22px; --step-gap: 6px; list-style: none; margin: 0; padding: 0; font-size: 0.85rem; line-height: 1.3; }
+.stepper-step { position: relative; min-width: 0; color: var(--muted); }
+.stepper-dot {
+  flex: none; box-sizing: border-box; width: var(--step-dot); height: var(--step-dot); border-radius: 50%; display: inline-flex; align-items: center;
+  justify-content: center; border: 2px solid var(--border); background: var(--surface); color: var(--muted); font-size: 0.75rem; font-weight: 700;
+  position: relative; z-index: 1;
+}
+.stepper-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.stepper-label { color: inherit; }
+.stepper-note { color: var(--muted); font-size: 0.8rem; }
+.stepper-step.is-current { color: var(--text); }
+.stepper-step.is-current .stepper-label { font-weight: 700; }
+.stepper-step.is-current .stepper-dot { border-color: var(--primary); color: var(--primary); }
+.stepper-step.is-done .stepper-dot { border-color: var(--ok); background: var(--ok); color: var(--surface); }
+.stepper-step.is-done { color: var(--text); }
+.stepper-step.is-failed .stepper-dot { border-color: var(--bad); background: var(--bad); color: var(--surface); }
+.stepper-step.is-failed .stepper-note { color: var(--bad); }
+/* working now: the circle itself turns */
+.stepper-step.is-busy .stepper-dot { border-color: var(--border); border-top-color: var(--primary); animation: spin 0.8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .stepper-step.is-busy .stepper-dot { animation-duration: 2.4s; } }
+
+/* a row: ○—○—○, each label centred under its circle */
+.stepper-row { display: flex; align-items: flex-start; max-width: 440px; }
+.stepper-row > .stepper-step { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: 0 2px; }
+.stepper-row > .stepper-step + .stepper-step::before {
+  content: ''; position: absolute; top: calc(var(--step-dot) / 2 - 1px); height: 2px; background: var(--border);
+  left: calc(-50% + var(--step-dot) / 2 + 2px); right: calc(50% + var(--step-dot) / 2 + 2px);
+}
+.stepper-row > .stepper-step.is-done + .stepper-step::before { background: var(--ok); }
+
+/* a column: the circles on one vertical line, the labels to their right */
+.stepper-column { display: flex; flex-direction: column; gap: var(--step-gap); }
+.stepper-column > .stepper-step { display: flex; align-items: flex-start; gap: 8px; }
+.stepper-column > .stepper-step > .stepper-text { padding-top: 2px; }
+.stepper-column > .stepper-step:not(:last-child)::after {
+  content: ''; position: absolute; left: calc(var(--step-dot) / 2 - 1px); top: var(--step-dot); bottom: calc(-1 * var(--step-gap)); width: 2px; background: var(--border);
+}
+.stepper-column > .stepper-step.is-done:not(:last-child)::after { background: var(--ok); }

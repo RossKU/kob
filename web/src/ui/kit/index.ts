@@ -15,6 +15,7 @@
 //   Banner        { tone: 'info'|'ok'|'warn'|'error', title, actions, onDismiss };  ErrorBanner { error, onRetry }
 //   Modal/Dialog  { title, onClose, footer, large, dismissable, hideClose } (render conditionally: mounted = open)
 //   Spinner       { large };  Loading { text }
+//   Stepper       the signing steps of a chained flow { steps: StepperItem[] (label, state done|current|waiting|failed, note, busy), label, layout }
 //   Amount        { kind: 'kas'|'token'|'price', value: bigint|null, decimals, scale, maxFraction, unit, group, signed }
 //   CopyText      { value, short, head, tail } shortened id/address with a copy button;  copyToClipboard(text)
 //   ToastHost     mount once (App does); show messages with showToast(message, tone, timeoutMs?)
@@ -45,6 +46,8 @@ export { Section, type SectionProps } from './Section';
 export { useSlideIndicator } from './slide-indicator';
 export { Segmented, type SegmentedOption, type SegmentedProps } from './Segmented';
 export { Loading, Spinner, type SpinnerProps } from './Spinner';
+export { Stepper, type StepperProps } from './Stepper';
+export type { StepperItem, StepperState } from './stepper-model';
 export { SortButton, SortControl, sortKeyOf, useSortState } from './SortHeader';
 export { ariaSortOf, chooseSort, nextSort, scaledUnits, sortBy, type SortColumn, type SortDir, type SortState, type SortValue } from './sort';
 export { UnitText, unitParts } from './UnitText';
