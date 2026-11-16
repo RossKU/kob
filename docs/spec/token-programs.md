@@ -86,15 +86,17 @@ transactions. Two cases:
   id_type 2): `crates/kob-tests/tests/kcc20/kcc20_public_mint_genesis_tests.rs`
   `a_kasseal_launch_genesis_verifies_as_a_fixed_supply_public_mint_token`.
 * **Companions bound to the token's own covenant id** are accepted only when the program's profile declares them
-  (`genesis.companions`), by role: `minter`, `seed`, `curve`, `pool`, `vault`, `bridge-minter`. A companion is either *decoded* (`decoder`:
+  (`genesis.companions`), by role: `minter`, `seed`, `curve`, `pool`, `vault`, `bridge-minter`, `zk-bridge-minter`. A companion is either *decoded* (`decoder`:
   `kcc20-public-mint/PublicMint` and `kcc20-public-mint/TokenSeed`, the issuance actors of the published public-mint app, in
   both upstream builds KOB pins: argent-lang/kcc20-reference `c8a0871` and `27f8403`, which adds the owner-signed
   `rebalance_value` to both issuers and leaves the `KCC20` holder program unchanged; the check reports the build, and a genesis
   never mixes them: `docs/spec/kcc-conformance.md` 4.3; a minter's `remaining` is summed into `mint_allowance`) or *opaque* (`template_hash` plus `layout`: recognised by the template
-  hash of its cut, reported in `GenesisReport::companion_outputs`, carrying no amount and no mint authority). The one opaque role
-  with a mint authority is `bridge-minter`, a federated bridge's minter (kUSDT's `BridgeMint`, below): it is also listed in
-  `minter_outputs`, adds nothing to `mint_allowance` (no allowance KOB reads), and the extension commitment of its mints, the
-  last field of its state, is held to the token's one class. Anything else in the group is refused (`NotTemplate`). `registry::verify_genesis_with` checks a group under a candidate profile, so a
+  hash of its cut, reported in `GenesisReport::companion_outputs`, carrying no amount and no mint authority). The opaque roles
+  with a mint authority are a bridge's minters: `bridge-minter`, a federated bridge's (kUSDT's `BridgeMint`), and
+  `zk-bridge-minter`, a ZK bridge's (Kozmic's `BridgeMint`), both below. Each is also listed in `minter_outputs`, adds nothing
+  to `mint_allowance` (no allowance KOB reads), and the extension commitment of its mints, read by the build's state layout, is
+  held to the token's one class. What its state names (kUSDT: the signer set and the guardian; Kozmic: the bridge covenant id) is
+  reported with it (`CompanionOutput::bridge`) for the apps to show, unchecked. Anything else in the group is refused (`NotTemplate`). `registry::verify_genesis_with` checks a group under a candidate profile, so a
   launchpad's genesis shape can be tried before its profile is committed (`registry` test
   `a_genesis_group_holds_the_companions_its_profile_declares_and_nothing_else`).
 
@@ -181,6 +183,7 @@ notes:
 | KForge (testnet-10, legacy) | `KForgeToken1785` | Code: the delivery id_type 0 builds of the KRON order kinds and id_type 0 holder spends (a token-level signature in the signature column). Data: profile with holder 0, slots 1 / 3, `networks: [testnet-10]`, `pending-review`; see below |
 | KaspaRocket | `KaspaRocketToken11458` | Data plus a profile field: the published public-mint `KCC20` actor at 10 / 10 slots (a derived source, since 2026-10-14 also the publisher's, and its build), profile with slots 10 / 10, `minters: genesis-only`, `default_decimals` 3 (the KaspaRocket convention, `networks: [mainnet, testnet-10]`), reviewed 2026-10-27; see below |
 | kUSDT (federated bridge) | `kcc20-ref-public-mint` (no new program) | Data plus a companion role: its holders are the published public-mint `KCC20`; each build of its `BridgeMint` is pinned by hash as a `bridge-minter` companion of `KCC20PublicMint` (not reviewed); the indexer keeps its burned outputs out of the holdings; see below |
+| Kozmic (ZK bridge, kzUSDC) | `kcc20-ref-public-mint` (no new program) | Data plus a companion role: its holders are the published public-mint `KCC20`; its `BridgeMint` build is pinned by hash as a `zk-bridge-minter` companion of `KCC20PublicMint` (not reviewed; the bridge and its Ethereum vault not verified); the indexer keeps cells at its burn owner out of the holdings; see below |
 | KForge (KCC-20) | `KForgeToken7214` | Data: the published public-mint `KCC20` actor at 6 / 6 slots (a derived source, the one KForge's registry names by hash, and its build), profile with slots 6 / 6, `minters: genesis-only`, `default_decimals` 0 (the KForge convention), `networks: [mainnet, testnet-10]`, reviewed 2026-11-05; see below |
 
 ### KForge (legacy, `KForgeToken1785`)
@@ -332,9 +335,11 @@ review only, 2026-11-05): tradable on mainnet.
 * **Recovery (second build).** Three of the five signers can propose a new signer set and guardian; anyone carries it out once the
   minter has stood untouched for `recovery_delay` DAA (36,000 on testnet-10, 72 hours planned for mainnet, fixed at genesis), and
   any one signer can veto it until then. Three keys can therefore replace the signers and the guardian if nobody vetoes in time.
-* **What the apps say.** The web app names the issuance ("Federated bridge (BridgeMint)", per the issuer's docs) and shows a
-  collapsed note on bridge custody: the backing is held by the bridge's signers and the vault owner, and can be lost if they misbehave
-  or lose their keys. It counts no public mint and no fixed supply for the token.
+* **What the apps say.** The web app names the issuance ("Federated bridge (BridgeMint)", per the issuer's docs, signers not
+  verified by KOB) and shows a collapsed note on bridge custody: the backing is held by the bridge's signers and the vault owner,
+  and can be lost if they misbehave or lose their keys. The note shows the signer set (the hash of the five signer keys) and the
+  guardian key the minter's state names, unchecked: anyone can deploy the same build with signers of their own, and it verifies
+  the same. It counts no public mint and no fixed supply for the token.
 * **Burns.** A redemption sends kUSDT to owner scheme 3 at `Blake2b(R)`, `R` a 40-byte script that starts with `OP_RETURN`, and names
   `R`'s fields in its payload; the indexer keeps such an output out of the holdings (`GET /v1/token-utxos`): it can never move.
 * **Before a mainnet listing.** A listing of a mainnet kUSDT (a registry entry, a curated list KOB pins) waits for an on-chain check
@@ -342,6 +347,30 @@ review only, 2026-11-05): tradable on mainnet.
   on testnet (`0x4f6d...b1be`, which matches the issuer's plan for a test deployment). The owner alone can replace all signers and
   raise the release limits, that is, drain the vault: the timelock is the holders' exit window. The mainnet `BridgeMint` must also
   be a pinned build, with a genesis that verifies.
+
+### Kozmic (ZK bridge, `KCC20PublicMint`)
+
+`contracts/third-party/kozmic/UPSTREAM.md` (what the issuer publishes, what KOB checked, the trust it rests on),
+`crates/kob-tests/tests/programs/kozmic_bridge_tests.rs` and `crates/kob-protocol/src/kozmic.rs`; fixture
+`contracts/third-party/kozmic/observed.json` (mainnet: kzUSDC `cc9957fe...`, the older kzUSDC instance `9753d77b...`, the
+Sepolia rehearsal Sepia.k `13af6019...`). kozmic-bridge is BSL 1.1: KOB keeps chain bytes and hashes of it, no source.
+
+* **Program.** The holders are `KCC20PublicMint`'s `KCC20`, so its orders and transfers need nothing new. The issuance is one
+  `BridgeMint` in the genesis group, which mints only in a transaction that spends the bridge covenant its state names (a RISC
+  Zero light client of Ethereum that decides the amounts and owners).
+* **The pin.** The `BridgeMint` build is a `zk-bridge-minter` companion of `KCC20PublicMint`, by its template hash over the
+  KCC-1 actor-type cut `92c69c7f...` (prefix 34 B with the push of `gen__kcc20_template`, state 99 B: its own Sil template
+  `dc96afcd...`, the bridge covenant id and the extension commitment, which is the last field; suffix 1,340 B). The redeem
+  script of each genesis output hashes to it; the instances differ only in the bridge covenant id.
+* **What the pin does not prove.** It recognises the minter's code, not the bridge: anyone can deploy the same build with a bridge
+  covenant of their own, and that genesis verifies the same (Sepia.k, backed by Sepolia test USDC, does). Checking the bridge too
+  would need a pin per bridge instance (its vault address is compiled into its script) and still could not show from Kaspa data
+  that the vault is the real one or that the bridge's initial Ethereum checkpoint is genuine. So the apps name the issuance "ZK
+  bridge (Kozmic BridgeMint)", say that the bridge and its vault are not verified by KOB, and show the bridge covenant id the
+  minter names, for a holder to compare with the issuer's.
+* **Burns.** A burn is a transfer to owner scheme 3 at `Blake2b(6a)` (`d379e50f...`), the script hash of `OP_RETURN` alone:
+  spending it means revealing a script with that hash, and the only one known fails at once. The indexer keeps such an output out
+  of the holdings, with or without a payload.
 
 ## 7. Invariants
 

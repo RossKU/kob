@@ -19,12 +19,12 @@ use kob_protocol::artifacts::{token_template, TemplateId};
 use kob_protocol::genesis_open::{check_open_genesis, OpenGenesis, OpenOutcome, OpenOutput};
 use kob_protocol::json::{from_hex, to_hex};
 use kob_protocol::kusdt::{
-    bridge_mint_extension, burn_owner, is_burned, redemption_entries, RedemptionEntry, BRIDGE_MINT_STATE_LEN_RECOVERY,
-    BRIDGE_MINT_STATE_LEN_V1,
+    bridge_mint_extension, bridge_mint_signers, burn_owner, is_burned, redemption_entries, RedemptionEntry,
+    BRIDGE_MINT_STATE_LEN_RECOVERY, BRIDGE_MINT_STATE_LEN_V1,
 };
 use kob_protocol::profile::{match_companion, CompanionMatch, CompanionRole};
 use kob_protocol::public_mint::KCC20_SIL_HASH;
-use kob_protocol::registry::{verify_genesis_with, GenesisError, GenesisOutput};
+use kob_protocol::registry::{verify_genesis_with, BridgeFacts, GenesisError, GenesisOutput};
 use kob_protocol::script::p2sh_spk;
 use kob_protocol::state::{Kcc20State, TokenState};
 
@@ -56,6 +56,9 @@ const RECOVERY: Build = Build {
     suffix_len: 8_215,
 };
 const BUILDS: [&Build; 2] = [&V1, &RECOVERY];
+/// The signer set (the hash of the five signer keys) and the guardian key both deployments' minters name in their state.
+const SIGNER_SET: &str = "b563c26ffc9f94f977e9d580f02a0b8501c023a8455f2f35b74e79f8df3c0301";
+const GUARDIAN: &str = "3c4c0ef3d985fb93ebdb30c5dd8ff8d6ffffa1e411565a21cc33aa2365a89566";
 
 fn observed() -> serde_json::Value {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/third-party/kusdt/observed.json");
@@ -170,6 +173,8 @@ fn the_recovery_build_state_is_the_issuers_initial_minter() {
     assert_eq!((int(164), int(173)), (36_000, 0), "recovery delay, recovery nonce");
     assert_eq!(&s[182..184], [0x01, 0x00], "no recovery pending");
     assert_eq!(bridge_mint_extension(s), Some([0; 32]));
+    let h = |x: &str| <[u8; 32]>::try_from(from_hex(x).unwrap()).unwrap();
+    assert_eq!(bridge_mint_signers(s), Some((h(SIGNER_SET), h(GUARDIAN))));
 }
 
 #[test]
@@ -190,6 +195,9 @@ fn genesis_verifies(b: &Build) {
     assert_eq!((rep.minter_outputs.clone(), rep.seed_outputs.clone()), (vec![0], vec![1]));
     assert_eq!(rep.companion_outputs.iter().map(|c| (c.index, c.role.as_str())).collect::<Vec<_>>(), [(0, "bridge-minter")]);
     assert!(rep.is_bridge_minter(0) && !rep.is_bridge_minter(1));
+    // what the apps show of it, unchecked: the signer set and the guardian its state names
+    let facts = BridgeFacts { signer_set: Some(SIGNER_SET.into()), guardian: Some(GUARDIAN.into()), ..Default::default() };
+    assert_eq!(rep.companion_outputs[0].bridge, Some(facts));
     assert_eq!(rep.issuer.as_deref(), Some("kcc20-reference@27f8403"));
     assert_eq!(v.rebuilt, vec![1], "the unspent TokenSeed, rebuilt from the creator's key");
 }

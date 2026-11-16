@@ -22,6 +22,7 @@
 //! ```text
 //! {status: "verified", program, programHash, txid, outputs, supply, minterOutputs,
 //!  mintAllowance, seedOutputs, companionOutputs, issuer, rebuilt}
+//! companionOutputs: [{index, role, bridge?: {bridgeCovenantId?, signerSet?, guardian?}}]
 //! {status: "failed", code: "mismatch" | "contaminated", message}
 //! {status: "unavailable", code: "unrevealed" | "unsupported_program" | "malformed", message}
 //! ```
@@ -65,6 +66,22 @@ struct Request {
     program_hint: Option<String>,
     #[serde(default)]
     owner_hints: Vec<String>,
+}
+
+/// A companion output: `{index, role, bridge?: {bridgeCovenantId?, signerSet?, guardian?}}`; `bridge` is what a
+/// bridge's minter names in its state, unchecked.
+fn companion_json(c: &kob_protocol::registry::CompanionOutput) -> Value {
+    let mut v = json!({ "index": c.index, "role": c.role });
+    if let Some(b) = &c.bridge {
+        let mut f = serde_json::Map::new();
+        for (k, x) in [("bridgeCovenantId", &b.bridge_covenant_id), ("signerSet", &b.signer_set), ("guardian", &b.guardian)] {
+            if let Some(x) = x {
+                f.insert(k.into(), json!(x));
+            }
+        }
+        v["bridge"] = Value::Object(f);
+    }
+    v
 }
 
 fn unavailable(message: String) -> String {
@@ -129,7 +146,7 @@ pub fn verify_genesis(request: &str) -> Result<String, String> {
                 "minterOutputs": rep.minter_outputs,
                 "mintAllowance": rep.mint_allowance.to_string(),
                 "seedOutputs": rep.seed_outputs,
-                "companionOutputs": rep.companion_outputs.iter().map(|c| json!({ "index": c.index, "role": c.role })).collect::<Vec<_>>(),
+                "companionOutputs": rep.companion_outputs.iter().map(companion_json).collect::<Vec<_>>(),
                 "issuer": rep.issuer,
                 "rebuilt": v.rebuilt,
             })

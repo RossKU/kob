@@ -73,6 +73,7 @@ pub mod kcc1;
 pub mod kcc2;
 pub mod kcc20;
 pub mod kcc23;
+pub mod kozmic;
 pub mod kusdt;
 pub mod payload;
 pub mod payment;

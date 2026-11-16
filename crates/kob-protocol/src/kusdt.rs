@@ -16,7 +16,9 @@
 //!   recognises the covenant, so a genesis holding it verifies and is reported as having a mint
 //!   authority. The apps name the issuance ("federated bridge") instead of counting a public
 //!   mint. Its state is not read, except for the extension commitment its mints carry
-//!   ([`bridge_mint_extension`]), which the genesis check holds to the token's one class.
+//!   ([`bridge_mint_extension`]), which the genesis check holds to the token's one class, and
+//!   its signer set and guardian ([`bridge_mint_signers`]), which the apps show unchecked. Anyone
+//!   can deploy the same build with signers of their own, and it verifies the same.
 //! - **Burned cells.** A burn owner is the `p2sh/v1` authority (owner scheme 3) of a 40-byte script
 //!   `R` that starts with `OP_RETURN` ([`burn_script`]). No input can ever satisfy it, so the
 //!   tokens can never move again. A redemption carries the preimages in its payload
@@ -115,26 +117,39 @@ pub fn is_burned(entries: &[RedemptionEntry], output: u32, state: &TokenState) -
     k.owner_scheme == crate::kcc2::P2SH && entries.iter().any(|e| u32::from(e.output) == output && e.owner() == k.owner)
 }
 
-/// The extension commitment that a `BridgeMint` state span gives every state it mints.
+/// The fields of a `BridgeMint` state span and the index of its extension commitment among them.
 ///
 /// The span is the state after the 34-byte prefix. Its length names the build
-/// ([`BRIDGE_MINT_STATE_LENS`]): the commitment is the last field of a 173-byte span and the
-/// eleventh (bytes 131..164: `0x20` and 32 bytes) of a 250-byte one. `None` (fail closed) for any
-/// other length, or when the span is not exactly that build's fields, each a direct push of its
-/// size.
-pub fn bridge_mint_extension(state: &[u8]) -> Option<[u8; 32]> {
+/// ([`BRIDGE_MINT_STATE_LENS`]). `None` (fail closed) for any other length, or when the span is not
+/// exactly that build's fields, each a direct push of its size.
+fn bridge_mint_fields(state: &[u8]) -> Option<(Vec<&[u8]>, usize)> {
     let (sizes, ext) =
         BRIDGE_MINT_FIELDS.iter().zip(BRIDGE_MINT_STATE_LENS).find_map(|(f, len)| (state.len() == len).then_some(*f))?;
     let mut at = 0;
-    let mut found = None;
-    for (i, &n) in sizes.iter().enumerate() {
-        let field = state.get(at + 1..at + 1 + n).filter(|_| usize::from(state[at]) == n)?;
-        if i == ext {
-            found = Some(field.try_into().ok()?);
-        }
+    let mut fields = Vec::with_capacity(sizes.len());
+    for &n in sizes {
+        fields.push(state.get(at + 1..at + 1 + n).filter(|_| usize::from(state[at]) == n)?);
         at += 1 + n;
     }
-    found.filter(|_| at == state.len())
+    (at == state.len()).then_some((fields, ext))
+}
+
+/// The extension commitment that a `BridgeMint` state span gives every state it mints.
+///
+/// The commitment is the last field of a 173-byte span and the eleventh (bytes 131..164: `0x20`
+/// and 32 bytes) of a 250-byte one. `None` for any other span ([`bridge_mint_fields`]).
+pub fn bridge_mint_extension(state: &[u8]) -> Option<[u8; 32]> {
+    let (f, ext) = bridge_mint_fields(state)?;
+    f[ext].try_into().ok()
+}
+
+/// The signers of a `BridgeMint` state span: the hash of its five signer keys (`signer_set`) and
+/// the guardian's key, the two fields before the extension commitment in both builds. KOB does
+/// not check them; the apps show them so that a holder can compare them with what the issuer
+/// publishes. `None` for any other span.
+pub fn bridge_mint_signers(state: &[u8]) -> Option<([u8; 32], [u8; 32])> {
+    let (f, ext) = bridge_mint_fields(state)?;
+    Some((f[ext - 2].try_into().ok()?, f[ext - 1].try_into().ok()?))
 }
 
 #[cfg(test)]
@@ -209,6 +224,14 @@ mod tests {
             t[at] ^= 1;
             assert_eq!(bridge_mint_extension(&t), None, "{at}");
         }
+    }
+
+    #[test]
+    fn the_signers_are_the_two_fields_before_the_extension_commitment() {
+        // each field is filled with its index + 1
+        assert_eq!(bridge_mint_signers(&span(BRIDGE_MINT_FIELDS[0].0)), Some(([10; 32], [11; 32])));
+        assert_eq!(bridge_mint_signers(&span(BRIDGE_MINT_FIELDS[1].0)), Some(([9; 32], [10; 32])));
+        assert_eq!(bridge_mint_signers(&[0x20; 99]), None);
     }
 
     #[test]

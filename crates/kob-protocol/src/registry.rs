@@ -389,7 +389,7 @@ pub struct GenesisReport {
     /// - KRON outputs with `is_minter != 0`;
     /// - the `PublicMint` outputs of a token of the published `KCC20PublicMint` app
     ///   ([`crate::public_mint`]);
-    /// - the minter of a federated bridge (a `bridge-minter` companion, also in
+    /// - the minter of a bridge (a `bridge-minter` or `zk-bridge-minter` companion, also in
     ///   `companion_outputs`), which adds nothing to `mint_allowance`.
     ///
     /// A KRON transaction can create a minter output only when it spends a minter, because every
@@ -412,7 +412,7 @@ pub struct GenesisReport {
     ///
     /// Examples are the curve, pool or vault of a launchpad that is bound to the covenant id of the
     /// token (`genesis.companions` of `data/programs.json`). They have no amount, and no mint
-    /// authority except a `bridge-minter`.
+    /// authority except a bridge's minter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub companion_outputs: Vec<CompanionOutput>,
     /// The upstream build of the published public-mint app whose actors the genesis holds.
@@ -425,9 +425,13 @@ pub struct GenesisReport {
 }
 
 impl GenesisReport {
-    /// True when output `index` is a federated bridge's minter (a `bridge-minter` companion).
+    /// True when output `index` is a bridge's minter (a `bridge-minter` or `zk-bridge-minter`
+    /// companion).
     pub fn is_bridge_minter(&self, index: u32) -> bool {
-        self.companion_outputs.iter().any(|c| c.index == index && c.role == crate::profile::CompanionRole::BridgeMinter.as_str())
+        use crate::profile::CompanionRole::{BridgeMinter, ZkBridgeMinter};
+        self.companion_outputs
+            .iter()
+            .any(|c| c.index == index && [BridgeMinter.as_str(), ZkBridgeMinter.as_str()].contains(&c.role.as_str()))
     }
 }
 
@@ -436,8 +440,41 @@ impl GenesisReport {
 pub struct CompanionOutput {
     /// Output index in the genesis transaction.
     pub index: u32,
-    /// The role the profile declares (`curve`, `pool`, `vault`, `seed`, `bridge-minter`).
+    /// The role the profile declares (`curve`, `pool`, `vault`, `seed`, `bridge-minter`,
+    /// `zk-bridge-minter`).
     pub role: String,
+    /// What a bridge's minter names in its state, for the apps to show. KOB checks none of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<BridgeFacts>,
+}
+
+/// What a bridge's minter names in its state (see [`CompanionOutput::bridge`]), lowercase hex.
+/// KOB does not check these: anyone can deploy the same minter with values of their own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BridgeFacts {
+    /// The bridge covenant whose input every mint needs (a `zk-bridge-minter`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge_covenant_id: Option<String>,
+    /// The hash of the signer keys (a `bridge-minter`, kUSDT's `signer_set`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_set: Option<String>,
+    /// The guardian's key (a `bridge-minter`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardian: Option<String>,
+}
+
+impl BridgeFacts {
+    /// The facts of a bridge minter's state span by its role, `None` for another role or span.
+    pub fn of(role: crate::profile::CompanionRole, state: &[u8]) -> Option<Self> {
+        let h = |b: [u8; 32]| Some(crate::json::to_hex(&b));
+        match role {
+            crate::profile::CompanionRole::BridgeMinter => crate::kusdt::bridge_mint_signers(state)
+                .map(|(set, guardian)| BridgeFacts { signer_set: h(set), guardian: h(guardian), ..Default::default() }),
+            crate::profile::CompanionRole::ZkBridgeMinter => crate::kozmic::bridge_mint_state(state)
+                .map(|s| BridgeFacts { bridge_covenant_id: h(s.bridge_covenant_id), ..Default::default() }),
+            _ => None,
+        }
+    }
 }
 
 impl GenesisReport {
@@ -1364,20 +1401,23 @@ pub fn verify_genesis_with(
                     c
                 }
                 crate::profile::CompanionMatch::Opaque(role) => {
-                    if role == crate::profile::CompanionRole::BridgeMinter {
-                        // a federated bridge's minter (kUSDT's BridgeMint): a mint authority
+                    let mut bridge = None;
+                    if role.is_bridge_minter() {
+                        // a bridge's minter (kUSDT's or Kozmic's BridgeMint): a mint authority
                         // without an allowance KOB reads; what it mints carries its extension
                         // commitment, which must be the token's one class
-                        let e = profile
+                        let state = profile
                             .genesis
                             .companions
                             .iter()
                             .filter(|r| r.role == role)
                             .find_map(|r| r.opaque_state(redeem))
-                            .and_then(crate::kusdt::bridge_mint_extension)
+                            .filter(|s| role.bridge_mint_extension(s).is_some())
                             .ok_or_else(|| {
                                 GenesisError::BadState(o.index, "a BridgeMint state without its extension commitment".into())
                             })?;
+                        let e = role.bridge_mint_extension(state).expect("checked");
+                        bridge = BridgeFacts::of(role, state);
                         let want = *ext.get_or_insert(e);
                         if e != want {
                             return Err(GenesisError::ExtensionCommitment(
@@ -1388,7 +1428,7 @@ pub fn verify_genesis_with(
                         }
                         minter_outputs.push(o.index);
                     }
-                    companion_outputs.push(CompanionOutput { index: o.index, role: role.as_str().to_string() });
+                    companion_outputs.push(CompanionOutput { index: o.index, role: role.as_str().to_string(), bridge });
                     continue;
                 }
             };
@@ -2125,7 +2165,7 @@ mod tests {
         let good = [holder.clone(), curve([0x08, 1, 2, 3, 4, 5, 6, 7, 8], &c_suffix)];
         let r = check(&launchpad, &good).expect("the declared curve is accepted");
         assert_eq!((r.supply, r.outputs), (1_000, 2));
-        assert_eq!(r.companion_outputs, vec![CompanionOutput { index: 1, role: "curve".into() }]);
+        assert_eq!(r.companion_outputs, vec![CompanionOutput { index: 1, role: "curve".into(), bridge: None }]);
         assert!(r.minter_outputs.is_empty(), "an opaque companion is no mint authority");
         assert_eq!(check(embedded, &good).unwrap_err(), GenesisError::NotTemplate(1, "kcc20-ref-3x3".into()));
         let impostor = [holder, curve([0x08, 1, 2, 3, 4, 5, 6, 7, 8], &[0x75, 0x51])];
