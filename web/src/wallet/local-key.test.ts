@@ -335,10 +335,25 @@ describe('private-key adapter: a one-approval merge session (signer/session.ts)'
     expect(sigs).toHaveLength(plan.links[0]!.built.sign.length);
     expect(prompts).toBe(1);
     expect(log.filter((l) => l === 'request true')).toHaveLength(shown);
+    expect(adapter.sessionEnded!(s!.sid)).toBe(false);
     // the same link again: not the next one of the plan, so the frame ends the session and asks
     await adapter.signTx(plan.links[0]!.built, { session: s!.sid });
     expect(prompts).toBe(2);
+    // the run sees that the session is over (its card says the later steps are confirmed one by one)
+    expect(adapter.sessionEnded!(s!.sid)).toBe(true);
     expect(log.filter((l) => l === 'request true')).toHaveLength(shown + 1);
+  });
+
+  it('a session the frame closes because its plan is through has not ended early', async () => {
+    const { adapter, connect, host } = pair(() => 'approve');
+    await connect(CHAIN_MAKER.sk);
+    await adapter.connect(NET);
+    hello(host);
+    const plan = merge();
+    const s = await adapter.openSession!(plan.links.map((l) => l.built));
+    for (const l of plan.links) await adapter.signTx(l.built, { session: s!.sid });
+    expect(host.endedEarly(s!.sid)).toBe(false);
+    expect(adapter.sessionEnded!(s!.sid)).toBe(false);
   });
 
   it('a session the host no longer waits for (timed out, cancelled) is closed in the frame at once', () => {

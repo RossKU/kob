@@ -111,6 +111,8 @@ export function TxFlow(props: TxFlowProps) {
     const st: StepState[] = list.map((_, i) => (i === 0 ? 'sending' : 'pending'));
     const show = () => setStates([...st]);
     const end = () => {
+      checkSession();
+      if (sessionEnded) setSessionLine(t('orders.flow.sessionEndedDone'));
       // the run is over: the wallet's session ends before anything that follows it (a sale) is asked for
       closeSession();
       show();
@@ -119,6 +121,15 @@ export function TxFlow(props: TxFlowProps) {
     };
     const sent: string[] = [];
     const adapter = wallet.adapter;
+    // the wallet ended the session part way (a step off the plan, expiry): that step and the later ones were asked one by one
+    let sessionEnded = false;
+    const checkSession = () => {
+      const s = live.current;
+      if (!s || !adapter?.sessionEnded?.(s.sid)) return;
+      live.current = null;
+      sessionEnded = true;
+      setSessionLine(t('orders.flow.sessionEnded'));
+    };
     if (props.session?.length && adapter?.openSession && adapter.canOpenSession?.()) {
       // one run under a session at a time: a second one would end the first one's session
       release.current = claimSessionRun();
@@ -168,6 +179,7 @@ export function TxFlow(props: TxFlowProps) {
       }
       const sid = live.current?.sid;
       const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}) });
+      checkSession();
       if (out.status !== 'submitted') {
         st[i] = out.send.phase === 'rejected' ? 'cancelled' : 'failed';
         return end();

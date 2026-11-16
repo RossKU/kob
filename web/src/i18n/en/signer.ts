@@ -107,6 +107,7 @@ export default {
   'signer.session.token': 'Token',
   'signer.session.what': 'What',
   'signer.session.whatValue': '{utxos} of your UTXOs into {outputs}, to yourself. {amount} in total, unchanged.',
+  'signer.session.rawAmount': '{amount} (raw amount)',
   'signer.session.txs': 'Transactions',
   'signer.session.txsValue': 'at most {count}',
   'signer.session.valid': 'Valid for',

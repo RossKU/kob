@@ -79,6 +79,8 @@ export interface WalletAdapter {
   openSession?(plan: BuiltTx[], opts?: { timeoutMs?: number }): Promise<SigningSession | null>;
   /** Ends the session `sid` (the run is over): any later request is shown for approval. */
   closeSession?(sid: string): void;
+  /** Whether the wallet ended the session `sid` before its plan was through (a step off the plan, expiry): later steps then ask one by one. */
+  sessionEnded?(sid: string): boolean;
   /**
    * Re-reads account, key and network of the ALREADY connected wallet without asking the user (no connect popup, no network switch).
    * Rejects with `WalletError` when the wallet no longer exposes an account (locked, disconnected the site).

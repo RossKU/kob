@@ -89,6 +89,8 @@ export class SignerHost {
   private caps = new Set<SignerCap>();
   /** the session the frame opened and has not closed, as far as this side knows */
   private live: string | null = null;
+  /** sessions the frame ended before their plan was through */
+  private closedEarly = new Set<string>();
   private seq = 0;
   /** The id of the request the frame signed last, which is what a re-timed request names. */
   private lastSigned: string | null = null;
@@ -129,7 +131,10 @@ export class SignerHost {
         return;
       }
       case 'session-closed':
-        if (this.live === m.sid) this.live = null;
+        if (this.live === m.sid) {
+          this.live = null;
+          if (m.reason !== 'done') this.closedEarly.add(m.sid);
+        }
         // a step of the ended session now asks the user: the frame is shown at once
         if (this.waiting?.session === m.sid && this.waiting.show !== undefined) {
           clearTimeout(this.waiting.show);
@@ -221,6 +226,11 @@ export class SignerHost {
       this.events.onRequest?.(true);
       this.post(toSigner({ type: 'session-open', id, plan, tokens, ...this.table() }));
     });
+  }
+
+  /** Whether the frame ended the session `sid` before its plan was through (a step off the plan, expiry, a rejection), not when done. */
+  endedEarly(sid: string): boolean {
+    return this.closedEarly.has(sid);
   }
 
   /** Ends the session `sid` in the frame (the run is over). */
@@ -417,6 +427,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       return host.openSession(plan, deps.tokenHints?.(plan[0]!) ?? [], opts.timeoutMs);
     },
     closeSession: (sid: string) => deps.host()?.closeSession(sid),
+    sessionEnded: (sid: string) => deps.host()?.endedEarly(sid) === true,
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {
       const host = deps.host();
       const pubkey = pub();

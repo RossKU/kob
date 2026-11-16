@@ -154,6 +154,8 @@ test('a step off the allowed plan (a fee above its cap after the estimate jumps)
   await cancelReceipt(page);
   await expect(page.getByTestId('flow-result')).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('[data-testid^="flow-step-"][data-state="cancelled"]')).toHaveCount(1);
+  // the card no longer says the run is approved once: the session ended at the step off the plan
+  await expect(page.getByTestId('flow-session')).toHaveText('The private key signer session ended: later steps were confirmed one by one.');
   expect((await mock.submitted()).length).toBe(before);
   // what was sent stays merged
   expect((await ownedOf(mock, alice)).length).toBeLessThan(30);

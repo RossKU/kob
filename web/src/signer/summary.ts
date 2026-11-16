@@ -495,7 +495,10 @@ function durationWords(ms: number): string {
 export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
   const hint = hints.find((h) => h.covenantId === terms.covenantId);
   const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '';
-  const amount = `${formatTokenAmount(terms.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unit}`;
+  // nothing this frame can check states the decimals (no pinned table lists the token, no declaration or convention was hinted): the
+  // amount is in base units, and says so, never a bare integer
+  const raw = !hint || hint.source === 'assumed';
+  const amount = raw ? t('signer.session.rawAmount', { amount: formatTokenAmount(terms.amount, RAW_TOKEN_DECIMALS) }) : `${formatTokenAmount(terms.amount, hint.decimals)}${unit}`;
   const lines: SummaryLine[] = [
     { label: t('signer.session.token'), value: tokenName(terms.covenantId, hint, true), dir: null },
     { label: t('signer.session.what'), value: t('signer.session.whatValue', { utxos: terms.utxos, outputs: terms.outputs, amount }), dir: null },
