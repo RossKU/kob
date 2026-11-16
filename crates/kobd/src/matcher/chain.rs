@@ -111,6 +111,7 @@ fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, bu
         order: OrderUtxo { utxo: out_utxo(built, idx, Some(id)), state: next },
         custody,
         custody_b: None,
+        bought_custody: None,
         deadline: o.deadline,
         seen_daa: o.seen_daa,
         foreign: o.foreign.clone(),

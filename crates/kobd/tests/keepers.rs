@@ -619,3 +619,42 @@ fn no_keeper_job_spends_another_jobs_change() {
     // nothing is remembered as unprofitable or unbuildable because the coins ran out
     assert!(r.unprofitable.is_empty() && r.failed.is_empty());
 }
+
+/// A mode-1 bid that bought `bought` base units, with its bought-custody (or none).
+fn mode1_bid(id: u32, bought: i64, held: Option<i64>) -> ListedOrder {
+    let s = BidState { mode: MODE_ACCUMULATE, bought, ..bid(id as u8, P250, T3) };
+    let mut o = listed(cid(id), AnyState::KobBid(s), CARRIER, 1_000);
+    o.bought_custody = held.map(|a| custody(a, cid(id), 1_000));
+    o
+}
+
+/// A refund of an ended mode-1 bid releases its bought-custody whole to the maker (bid-delivery-spec §5).
+#[test]
+fn a_mode1_bid_refund_releases_its_bought_custody_to_the_maker() {
+    let cfg = KeeperConfig::default();
+    let o = mode1_bid(1, 4 * WHOLE, Some(4 * WHOLE));
+    let r = keep_with(vec![o], EXPIRY as u64, &cfg, false, 1);
+    assert_eq!(kinds(&r), vec![(JobKind::Refund, cid(1))]);
+    // the custody is the order's second input and its tokens go to the maker as one plain UTXO
+    assert!(r.jobs[0].built.tx.inputs.len() >= 2);
+    assert!(pays_token(&r.jobs[0], T3, 4 * WHOLE, 1), "the whole bought-custody goes to the maker");
+}
+
+/// A bid that bought nothing refunds as before, with no token input.
+#[test]
+fn a_mode1_bid_without_bought_tokens_refunds_as_before() {
+    let r = keep_with(vec![mode1_bid(2, 0, None)], EXPIRY as u64, &KeeperConfig::default(), false, 1);
+    assert_eq!(kinds(&r), vec![(JobKind::Refund, cid(2))]);
+    assert!(!pays_token(&r.jobs[0], T3, WHOLE, 2));
+}
+
+/// Without the exact bought-custody the covenant refuses the refund, so no job is built.
+#[test]
+fn a_mode1_bid_refund_needs_the_exact_bought_custody() {
+    let cfg = KeeperConfig::default();
+    for held in [None, Some(3 * WHOLE)] {
+        let r = keep_with(vec![mode1_bid(3, 4 * WHOLE, held)], EXPIRY as u64, &cfg, false, 1);
+        assert!(r.jobs.is_empty(), "{held:?}");
+        assert!(r.skipped.iter().any(|(_, w)| w.contains("bought-custody")), "{:?}", r.skipped);
+    }
+}

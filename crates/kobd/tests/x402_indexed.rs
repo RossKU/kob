@@ -266,3 +266,25 @@ async fn the_follower_reports_the_spending_input_and_every_output_in_order() {
 fn p2pk_like(spk: &[u8]) -> kaspa_consensus_core::tx::ScriptPublicKey {
     kaspa_consensus_core::tx::ScriptPublicKey::from_vec(u16::from_be_bytes([spk[0], spk[1]]), spk[2..].to_vec())
 }
+
+/// A mode-1 bid holding bought tokens needs its bought-custody as a leg input, which swap legs and the intent book do not
+/// carry, so it is never offered; a mode-1 bid that bought nothing is.
+#[test]
+fn quotes_and_the_intent_book_leave_out_a_bid_holding_bought_tokens() {
+    use mc::*;
+    let t = kob_protocol::artifacts::TemplateId::Kcc20Ref;
+    let m1 = |id: u32, bought: i64| {
+        let mut o = l_bid(id, bid(10 + id as u8, P250, t), 5 * WHOLE);
+        let AnyState::KobBid(b) = &mut o.order.state else { panic!() };
+        (b.mode, b.bought) = (kob_protocol::state::MODE_ACCUMULATE, bought);
+        o
+    };
+    let b = book(vec![m1(1, 0), m1(2, 3 * WHOLE)]);
+    let sell = QuoteRequest { token: TOKEN, take: Take::SellToBids, amount: WHOLE, limit_price: None, exclude: vec![] };
+    let legs = quote_legs(&b, &sell, UTC).unwrap();
+    assert_eq!(legs.len(), 1);
+    assert_eq!(legs[0].outpoint(), Outpoint::new(b.orders[0].order.utxo.transaction_id, b.orders[0].order.utxo.index));
+    let view = kobd::x402::quote::book_view(&b);
+    assert_eq!(view.bids.len(), 1);
+    assert_eq!(view.bids[0].utxo.covenant_id, Some(cid(1)));
+}

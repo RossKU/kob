@@ -902,6 +902,7 @@ fn exit_from_tx(
         order: kob_protocol::tx::OrderUtxo { utxo: u(idx, Some(g.covenant_id)), state: AnyState::KobCondAsk(state) },
         custody: Some(kob_protocol::tx::TokenUtxo { utxo: u(cidx, Some(TOKEN)), state: cst.into() }),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: accepted,
         foreign: vec![],

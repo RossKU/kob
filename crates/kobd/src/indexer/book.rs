@@ -318,7 +318,12 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let ext = ext.and_then(h32).unwrap_or([0; 32]);
         // A mode-1 order's bought-custody is the order's, never a stray: it is served apart
         // ([`bought_custodies`]).
-        let own: Vec<OwnedToken> = tokens.remove(&cov).unwrap_or_default().into_iter().filter(|t| !t.bought).collect();
+        let (bought, own): (Vec<OwnedToken>, Vec<OwnedToken>) = tokens.remove(&cov).unwrap_or_default().into_iter().partition(|t| t.bought);
+        // exactly one proven row, as [`bought_custodies`] (the view fails closed on more)
+        let bought_custody = match <[OwnedToken; 1]>::try_from(bought) {
+            Ok([t]) => t.proven.map(|state| TokenUtxo { utxo: t.utxo, state }),
+            Err(_) => None,
+        };
         // Tokens of the order itself (a pair order has A and B) versus foreign strays (any other
         // token, `docs/spec/matcher.md` 1.2).
         let pair = state.pair_tokens();
@@ -390,6 +395,7 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             },
             custody: first,
             custody_b: second,
+            bought_custody,
             deadline: deadline.and_then(|d| u64::try_from(d).ok()),
             // The chain block that made this UTXO visible. An earlier one is served first among
             // immediate orders (`docs/spec/matcher.md` 3.1). It is deterministic across restarts,

@@ -146,6 +146,7 @@ fn a_sale_that_does_not_pay_its_fee_is_a_merge() {
         },
         custody: None,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
@@ -254,6 +255,7 @@ fn untipped_bid(id: u32, maker: u8, price: i64, amount: i64) -> ListedOrder {
         order: OrderUtxo { utxo: utxo(v, 1_000, Some(cid(id))), state: AnyState::KobBid(b) },
         custody: None,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
@@ -310,4 +312,23 @@ fn overflowing_holdings_are_left_alone() {
     assert_eq!(r.jobs.len(), 1, "{:?}", r.skipped);
     assert_eq!((r.jobs[0].kind, r.jobs[0].token), (MaintKind::Merge, [0x01; 32]));
     assert!(r.skipped.iter().any(|(t, why)| *t == token_a(T8) && why.contains("overflow")), "{:?}", r.skipped);
+}
+
+/// A mode-1 bid holding bought tokens is sold into through its bought-custody; without the exact one it is left out.
+#[test]
+fn a_sale_into_a_mode1_bid_goes_through_its_bought_custody() {
+    let tokens = vec![own(T8, 1_200), own(T8, 800)];
+    let mut bid = l_bid_a(100, T8, 2, P260, 4 * WHOLE);
+    let AnyState::KobBid(b) = &mut bid.order.state else { panic!() };
+    (b.mode, b.bought) = (MODE_ACCUMULATE, 500);
+    let held = TokenUtxo { utxo: utxo(CARRIER, 900, Some(token_a(T8))), state: tstate(T8, 500, cid(100), true) };
+    let mut with = bid.clone();
+    with.bought_custody = Some(held);
+    let r = run(&input(tokens.clone(), vec![with, market_ask()], vec![]), &MaintenanceConfig::default());
+    let j = &r.jobs[0];
+    assert_eq!((j.kind, j.order), (MaintKind::Sell, Some(cid(100))), "{:?}", r.skipped);
+    assert!(j.spends.len() >= 3, "the operator's tokens and the bought-custody are spent");
+    // custody missing: the covenant would refuse, so the bid is not a buyer (the dust is merged)
+    let r = run(&input(tokens, vec![bid, market_ask()], vec![]), &MaintenanceConfig::default());
+    assert_eq!(r.jobs[0].kind, MaintKind::Merge, "{:?}", r.skipped);
 }
