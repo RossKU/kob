@@ -378,7 +378,7 @@ fn kas_payment(amount: u64) -> Payment {
 /// SW1-shaped hand-built batch (bid of A sold into, payer token, merchant KAS payment).
 fn sw1_batch(f: &Fx, amount: u64) -> Batch {
     Batch {
-        legs: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None }],
+        legs: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None, delivery: None }],
         taker_tokens: vec![f.payer_tok.clone()],
         taker: Some(pk(PAYER)),
         payments: vec![kas_payment(amount)],
@@ -390,7 +390,7 @@ fn sw1_batch(f: &Fx, amount: u64) -> Batch {
 fn sw3_route(f: &Fx, ask_whole: i64, carrier: u64) -> Batch {
     route_batch(&SwapRoute {
         lock_time: NOW,
-        sell: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None }],
+        sell: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None, delivery: None }],
         buy: vec![Leg::Ask { order: f.ask1.0.clone(), custody: f.ask1.1.clone(), amount: ask_whole * WHOLE, t: None }],
         tokens: vec![f.payer_tok.clone()],
         receiver: Some(pk(MERCHANT)),
@@ -854,7 +854,7 @@ fn aliasing_merchant_is_the_maker_of_the_filled_ask_is_rejected() {
     let offer = f.kas_offer(payout);
     let batch = route_batch(&SwapRoute {
         lock_time: NOW,
-        sell: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None }],
+        sell: vec![Leg::Bid { order: f.bid1.clone(), amount: 3 * WHOLE, t: None, delivery: None }],
         buy: vec![Leg::Ask { order: merchant_ask.0.clone(), custody: merchant_ask.1.clone(), amount: 2 * WHOLE, t: None }],
         tokens: vec![f.payer_tok.clone()],
         receiver: None,
@@ -886,7 +886,7 @@ fn merchant_bid(f: &Fx, tag: u8, covb: u8, state: BidState, value: u64) -> Order
 /// SW1-shaped batch that fills 3 whole tokens of `bid` (which ends it) and pays the merchant `amount` KAS.
 fn ending_fill_batch(f: &Fx, bid: &OrderUtxo<BidState>, amount: u64) -> Batch {
     Batch {
-        legs: vec![Leg::Bid { order: bid.clone(), amount: 3 * WHOLE, t: None }],
+        legs: vec![Leg::Bid { order: bid.clone(), amount: 3 * WHOLE, t: None, delivery: None }],
         taker_tokens: vec![f.payer_tok.clone()],
         taker: Some(pk(PAYER)),
         payments: vec![kas_payment(amount)],
@@ -1337,7 +1337,7 @@ fn conditional_and_if_done_legs_are_unsupported() {
     let cond = common::order(40, v, common::cov(0xe1), 2_000, cb);
     put(&f.chain, &cond.utxo, cond.state.spk());
     let batch = Batch {
-        legs: vec![Leg::CondBid { order: cond, amount: 3 * WHOLE, leg: 0, evidence: None, t: None, merge: None }],
+        legs: vec![Leg::CondBid { order: cond, amount: 3 * WHOLE, leg: 0, evidence: None, t: None, merge: None, delivery: None }],
         taker_tokens: vec![f.payer_tok.clone()],
         taker: Some(pk(PAYER)),
         payments: vec![kas_payment(KAS)],

@@ -78,8 +78,12 @@ pub fn refund_actions() -> Vec<(String, Action)> {
             // KobBid / KobBidKron: an IOC bid fills and ends
             let b0 = BidState { tif: TIF_IOC, ..bid(MAKER_B, P250, p) };
             let spend = b0.spend(n, NOW as i64, 1_000).unwrap();
-            let mut b =
-                batch(vec![Leg::Bid { order: order(20, (spend + dc() + rem) as u64, cov(0xb1), 1_000, b0), amount: n, t: None }]);
+            let mut b = batch(vec![Leg::Bid {
+                order: order(20, (spend + dc() + rem) as u64, cov(0xb1), 1_000, b0),
+                amount: n,
+                t: None,
+                delivery: None,
+            }]);
             b.taker_tokens = vec![tok(21, n, pk(TAKER), kob_protocol::state::SCHEME_P2PK, 1_000)];
             b.change = Some(pk(TAKER));
             v.push((format!("refund.bid.{tag}@{}", p.name()), conv(Action::Batch(b))));
@@ -96,6 +100,7 @@ pub fn refund_actions() -> Vec<(String, Action)> {
                 evidence: None,
                 t: Some(NOW as i64),
                 merge: None,
+                delivery: None,
             }]);
             b.taker_tokens = vec![tok(41, amount, pk(TAKER), kob_protocol::state::SCHEME_P2PK, 1_000)];
             b.change = Some(pk(TAKER));
@@ -112,6 +117,7 @@ pub fn refund_actions() -> Vec<(String, Action)> {
                     order: order(20 + k as u8, (spend + dc() + rem) as u64, cov(0xb1 + k as u8), 1_000, b0),
                     amount: n,
                     t: None,
+                    delivery: None,
                 });
             }
             let mut b = batch(legs);

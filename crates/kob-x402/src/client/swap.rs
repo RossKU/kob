@@ -212,7 +212,7 @@ pub struct OrderRef {
 impl OrderRef {
     /// A bid the payer sells `amount` base units into.
     pub fn bid(order: OrderUtxo<BidState>, amount: i64) -> Self {
-        OrderRef { leg: Leg::Bid { order, amount, t: None } }
+        OrderRef { leg: Leg::Bid { order, amount, t: None, delivery: None } }
     }
     /// An ask the payer buys `amount` base units from (`custody` holds exactly the ask's
     /// `amountLeft`).

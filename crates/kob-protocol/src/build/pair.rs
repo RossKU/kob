@@ -405,7 +405,7 @@ pub(crate) fn leg_main_token(l: &Leg, a: Token, b: Token) -> Token {
 /// It refuses what the covenant refuses.
 pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCalc>> {
     let r = match l {
-        Leg::Pair { order, custody, amount, t } => {
+        Leg::Pair { order, custody, amount, t, .. } => {
             let state = &order.state;
             let n = *amount;
             let utxo_daa = order.utxo.block_daa_score as i64;

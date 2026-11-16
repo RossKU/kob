@@ -354,7 +354,7 @@ fn sell_action(
     let AnyState::KobBid(s) = base else { return Err("not a plain bid".into()) };
     Ok(Action::Batch(Batch {
         lock_time: lock,
-        legs: vec![Leg::Bid { order: OrderUtxo { utxo: bid.order.utxo.clone(), state: s }, amount, t: None }],
+        legs: vec![Leg::Bid { order: OrderUtxo { utxo: bid.order.utxo.clone(), state: s }, amount, t: None, delivery: None }],
         updates: vec![],
         taker_tokens: tokens.to_vec(),
         taker: Some(operator),

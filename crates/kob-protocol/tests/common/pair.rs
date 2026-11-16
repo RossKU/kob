@@ -128,14 +128,14 @@ pub fn pair_leg(s: PairState, pa: TemplateId, pb: TemplateId, c: [u8; 32], tag: 
 pub fn pair_leg_amount(s: PairState, pa: TemplateId, pb: TemplateId, c: [u8; 32], tag: u8, amount: i64) -> Leg {
     let (tok, p) = s_of(s.is_ask(), pa, pb);
     let custody = tutxo(p, tok, tag + 1, s.custody, c, true);
-    Leg::Pair { order: order(tag, pv(), c, 1_000, s), custody, amount, t: None }
+    Leg::Pair { order: order(tag, pv(), c, 1_000, s), custody, amount, t: None, bought_custody: None, receive: None, form: None }
 }
 
 /// A plain bid of `token` (program `p`) at `price`, funded for `funded` whole tokens, filled for `n`.
 pub fn kbid_leg(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8; 32], tag: u8, funded: i64, n: i64) -> Leg {
     let s = BidState { token_cov_id: token, min_fill: WHOLE.min(n * WHOLE), ..bid(maker, price, p) };
     let v = s.escrow(funded * WHOLE, 1).unwrap() as u64;
-    Leg::Bid { order: order(tag, v, c, 1_000, s), amount: n * WHOLE, t: None }
+    Leg::Bid { order: order(tag, v, c, 1_000, s), amount: n * WHOLE, t: None, delivery: None }
 }
 
 /// A plain ask of `token` (program `p`) at `price` holding `held` whole tokens, filled for `n`.
@@ -300,6 +300,9 @@ pub fn cond_pair_leg(s: CondPairState, pa: TemplateId, pb: TemplateId, c: [u8; 3
         evidence_b: None,
         t: None,
         merge: None,
+        bought_custody: None,
+        receive: None,
+        form: None,
     }
 }
 
@@ -499,6 +502,9 @@ pub fn rearm_with(buy: bool, pa: TemplateId, pb: TemplateId, r: Rearm) -> Batch 
         evidence_b: None,
         t: None,
         merge: Some(merge),
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     // every token settled exactly through the KAS books (no taker output: the shapes fit the 3 / 3 programs where they can)
     let m = n * WHOLE;
@@ -567,6 +573,7 @@ fn refund(s: AnyState, value: u64, custody: Option<TokenUtxo>, prefund: Option<T
         foreign: vec![],
         custody,
         prefund,
+        bought_custody: None,
         lock_time: lock,
         // a funded keeper (the default tips are derived from these fees: keeper_tips.rs)
         funding: vec![key_utxo(250, KEEPER, 5 * KAS)],
@@ -994,7 +1001,7 @@ pub fn pair_name(pa: TemplateId, pb: TemplateId) -> String {
 pub fn kbid_units(token: [u8; 32], p: TemplateId, maker: u8, price: i64, c: [u8; 32], tag: u8, amount: i64) -> Leg {
     let s = BidState { token_cov_id: token, min_fill: amount, ..bid(maker, price, p) };
     let v = s.escrow(amount, 1).unwrap() as u64;
-    Leg::Bid { order: order(tag, v, c, 1_000, s), amount, t: None }
+    Leg::Bid { order: order(tag, v, c, 1_000, s), amount, t: None, delivery: None }
 }
 
 /// A plain ask of `token` (program `p`) holding and selling exactly `amount` base units.
@@ -1416,5 +1423,8 @@ pub fn cond_pair_leg_amount(s: CondPairState, pa: TemplateId, pb: TemplateId, c:
         evidence_b: None,
         t: None,
         merge: None,
+        bought_custody: None,
+        receive: None,
+        form: None,
     }
 }

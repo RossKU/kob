@@ -376,6 +376,7 @@ async fn a_pair_order_is_refunded_by_anyone_after_expiry_and_cancelled_with_stra
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&refund]).await;
     assert_eq!(c.hs.status(&px.cov), "refunded");
@@ -522,6 +523,9 @@ async fn a_sell_first_pair_entry_holds_two_custodies_and_each_fill_creates_a_bid
             evidence_b: None,
             t: None,
             merge: None,
+            bought_custody: None,
+            receive: None,
+            form: None,
         };
         let mut b = batch(&c.w, c.daa(), vec![leg]);
         b.taker_tokens = vec![taker_coin(&c, p.fa, 4 * WHOLE)];
@@ -594,6 +598,9 @@ async fn a_repeating_buy_first_pair_entry_books_its_exit_and_the_take_profit_mer
         evidence_b: None,
         t: None,
         merge: Some(merge),
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     let t_out = x.t_out_min(4 * WHOLE, x.tp_price).unwrap();
     assert_eq!(t_out, 4_800);
@@ -795,6 +802,9 @@ async fn a_repeating_sell_first_entry_is_re_armed_by_its_exits_take_profit_into_
         evidence_b: None,
         t: None,
         merge: Some(merge),
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     let mut b = batch(&c.w, c.daa(), vec![leg]);
     b.taker_tokens = vec![taker_coin(&c, p.fa, 4 * WHOLE)];
@@ -862,6 +872,9 @@ async fn a_waiting_buy_first_entry_without_escrow_gets_a_new_b_custody_from_its_
         evidence_b: None,
         t: None,
         merge: Some(merge),
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     let t_out = x.t_out_min(10 * WHOLE, x.tp_price).unwrap();
     let mut b = batch(&c.w, c.daa(), vec![leg]);

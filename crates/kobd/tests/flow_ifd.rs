@@ -309,6 +309,7 @@ async fn repeat_sell_first_cycle_merges_the_bought_back_amount_into_the_entry_cu
         evidence: None,
         t: None,
         merge: Some(entry_utxo),
+        delivery: None,
     };
     let mut b = batch(&c.w, c.daa(), vec![leg]);
     b.taker_tokens = vec![c.w.token(TAKER, 3 * WHOLE)];
@@ -366,8 +367,15 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
     let exit10 =
         ia.exit_for(10 * WHOLE, Some(Booking { parent: cov.0, until: rpt_until(ia.expiry_daa, entry_daa).unwrap() })).unwrap();
     let merge = SellFirstEntry { entry: c.w.order(&fill, find_cov(&fill, &cov).unwrap(), waiting.clone()), custody: None };
-    let leg =
-        Leg::CondBid { order: c.w.order(&fill, xi, exit10), amount: 10 * WHOLE, leg: 0, evidence: None, t: None, merge: Some(merge) };
+    let leg = Leg::CondBid {
+        order: c.w.order(&fill, xi, exit10),
+        amount: 10 * WHOLE,
+        leg: 0,
+        evidence: None,
+        t: None,
+        merge: Some(merge),
+        delivery: None,
+    };
     let mut b = batch(&c.w, c.daa(), vec![leg]);
     b.taker_tokens = vec![c.w.token(TAKER, 10 * WHOLE)];
     let tp = c.w.sign(&Action::Batch(b));
@@ -411,6 +419,7 @@ async fn empty_repeating_entry_waits_without_custody_gets_a_new_one_on_merge_and
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&close]).await;
     assert_eq!(c.hs.status(&cov), "refunded");

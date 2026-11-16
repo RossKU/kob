@@ -146,6 +146,7 @@ pub fn refund_of(c: CondPairState, pa: TemplateId, pb: TemplateId, lock: u64) ->
         funding: vec![key_utxo(250, KEEPER, 5 * KAS)],
         change: Some(pk(KEEPER)),
         fee: fee(),
+        bought_custody: None,
     })
 }
 pub fn cancel_of(c: CondPairState, pa: TemplateId, pb: TemplateId, strays: Vec<TokenUtxo>) -> Action {

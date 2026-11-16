@@ -1106,6 +1106,16 @@ fn allowance(s: &AnyState, plan: &SigPlan) -> i128 {
     if upd != 0 && n == Some(0) {
         return s.keeper_tip().unwrap_or(0) as i128;
     }
+    // a top-up (delivery mode 2, form 2: KobBid fill argument 3, KobCondBid settle argument 5) leaves the order's
+    // topupTip to the filler (docs/design/bid-delivery-spec.md §4)
+    let form = match (s, entry.as_str()) {
+        (AnyState::KobBid(_), "fill") => args.get(3),
+        (AnyState::KobCondBid(_), "settle") => args.get(5),
+        _ => None,
+    };
+    if matches!(form, Some(Arg::Int(2))) && n.is_some_and(|x| x > 0) {
+        return s.delivery().map(|d| d.topup_tip).unwrap_or(0) as i128;
+    }
     match entry.as_str() {
         "refund" | "close" | "expire" => refund_tip,
         "settle" | "fill" if n == Some(0) => refund_tip,

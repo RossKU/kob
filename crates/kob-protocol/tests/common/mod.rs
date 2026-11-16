@@ -226,7 +226,10 @@ pub fn bid(maker: u8, price: i64, tpl: TemplateId) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 /// Market sell: an IOC auction from the touch 2.60 down to the 3% bound over 200 DAA,
@@ -323,7 +326,10 @@ pub fn cond_bid(maker: u8, tpl: TemplateId) -> CondBidState {
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 /// The exit every buy-first fixture commits to: OCO take-profit 3.00 / stop 2.20, GTC.
@@ -391,7 +397,9 @@ pub fn ifd_ask(maker: u8, tpl: TemplateId) -> IfdAskState {
         amount_left: 10 * WHOLE,
         rpt_amount: 0,
         exit_state: IfdAskState::commit_exit_for(tpl.family(), &ifda_exit(maker, tpl)),
-        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+        exit_mode: 0,
+        exit_recv_threshold: 0,
+        exit_topup_tip: 0,
     }
 }
 
@@ -446,7 +454,12 @@ pub fn ev_ask(price: i64, n: i64, tpl: TemplateId) -> Leg {
 /// batch sells `n` whole tokens.
 pub fn ev_bid(price: i64, n: i64, tpl: TemplateId) -> Leg {
     let b = bid(MAKER_C, price, tpl);
-    Leg::Bid { order: order(92, b.escrow(5 * WHOLE, 5).unwrap() as u64, cov(0x9b), 1_000, b), amount: n * WHOLE, t: None }
+    Leg::Bid {
+        order: order(92, b.escrow(5 * WHOLE, 5).unwrap() as u64, cov(0x9b), 1_000, b),
+        amount: n * WHOLE,
+        t: None,
+        delivery: None,
+    }
 }
 /// Amount and side of an evidence leg.
 fn ev_amount(e: &Leg) -> (i64, bool) {
@@ -521,7 +534,7 @@ fn take_ask(a: AskState, n: i64) -> Batch {
 /// Taker sells `n` whole tokens into one bid funded for `funded` whole tokens (one delivery).
 fn take_bid(bs: BidState, n: i64, funded: i64) -> Batch {
     let v = bs.escrow(funded * WHOLE, 1).unwrap() as u64;
-    let mut b = batch(vec![Leg::Bid { order: order(20, v, cov(0xb1), 1_000, bs), amount: n * WHOLE, t: None }]);
+    let mut b = batch(vec![Leg::Bid { order: order(20, v, cov(0xb1), 1_000, bs), amount: n * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![tok(21, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
     b.change = Some(pk(TAKER));
     b
@@ -561,6 +574,7 @@ fn condb_fill_at(c: CondBidState, n: i64, leg: u8, ev: Option<Leg>, daa: u64) ->
         evidence: None,
         t: None,
         merge: None,
+        delivery: None,
     }]);
     b.taker_tokens = vec![tok(41, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
     b.change = Some(pk(TAKER));
@@ -666,6 +680,7 @@ fn rpt_ask_tp(tpl: TemplateId, exit: CondBidState, n: i64, entry_n: i64, merge: 
         evidence: None,
         t: None,
         merge: merge.then(|| SellFirstEntry { entry: order(60, ev, cov(0xf1), 1_000, e), custody: custody_utxo }),
+        delivery: None,
     }]);
     b.taker_tokens = vec![tok(41, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_500)];
     b.change = Some(pk(TAKER));
@@ -1002,6 +1017,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     // ------------------------------------------------ refunds, kills, close (keepers paid by the tip)
     let refund = |o: OrderUtxo<AnyState>, custody: Option<TokenUtxo>, lock: u64| RefundOrder {
         prefund: None,
+        bought_custody: None,
         order: o,
         foreign: vec![],
         custody,
@@ -1166,8 +1182,18 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     let b1 = bid(MAKER_B, P245, t3);
     let b2 = bid(MAKER_C, P250, t3);
     let mut s3 = batch(vec![
-        Leg::Bid { order: order(20, b1.escrow(10 * WHOLE, 3).unwrap() as u64, cov(0xb1), 1_000, b1), amount: 4 * WHOLE, t: None },
-        Leg::Bid { order: order(21, b2.escrow(2 * WHOLE, 1).unwrap() as u64, cov(0xb2), 1_000, b2), amount: 2 * WHOLE, t: None },
+        Leg::Bid {
+            order: order(20, b1.escrow(10 * WHOLE, 3).unwrap() as u64, cov(0xb1), 1_000, b1),
+            amount: 4 * WHOLE,
+            t: None,
+            delivery: None,
+        },
+        Leg::Bid {
+            order: order(21, b2.escrow(2 * WHOLE, 1).unwrap() as u64, cov(0xb2), 1_000, b2),
+            amount: 2 * WHOLE,
+            t: None,
+            delivery: None,
+        },
     ]);
     s3.taker_tokens = vec![tok(22, 6 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
     s3.change = Some(pk(TAKER));
@@ -1183,7 +1209,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         cp.tip = tip;
         let bv = bp.escrow(8 * WHOLE, 1).unwrap() as u64;
         let mut b = batch(vec![
-            Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bp), amount: 8 * WHOLE, t: None },
+            Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bp), amount: 8 * WHOLE, t: None, delivery: None },
             Leg::Ask {
                 order: order(10, carrier(), cov(0xa1), 1_000, ap),
                 custody: custody(11, 5, cov(0xa1), 1_000),
@@ -1218,7 +1244,12 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         for (i, (p, n)) in bid_ps.iter().enumerate() {
             let bp = bid([MAKER_A, MAKER_B, MAKER_C][i], *p, t8);
             let v = bp.escrow(n * WHOLE, 1).unwrap() as u64;
-            legs.push(Leg::Bid { order: order(20 + i as u8, v, cov(0xb1 + i as u8), 1_000, bp), amount: n * WHOLE, t: None });
+            legs.push(Leg::Bid {
+                order: order(20 + i as u8, v, cov(0xb1 + i as u8), 1_000, bp),
+                amount: n * WHOLE,
+                t: None,
+                delivery: None,
+            });
         }
         for (i, (p, held, sold)) in ask_ps.iter().enumerate() {
             let c = cov(0xa1 + i as u8);
@@ -1354,7 +1385,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         let a_b = AskState { token_cov_id: TOKEN_B, ..ask_n(MAKER_C, P250, t3, 5) };
         SwapRoute {
             lock_time: NOW,
-            sell: vec![Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bs), amount: 3 * WHOLE, t: None }],
+            sell: vec![Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bs), amount: 3 * WHOLE, t: None, delivery: None }],
             buy: vec![Leg::Ask {
                 order: order(10, carrier(), cov(0x5a), 1_000, a_b),
                 custody: tok_of(11, 5 * WHOLE, cov(0x5a), SCHEME_COVID, 1_000, TOKEN_B),
@@ -1378,8 +1409,212 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
     add("route.swap", Action::SwapRoute(route(false)));
     add("route.swapAndPay.x402", Action::SwapRoute(route(true)));
 
+    // Delivery modes (KCC-20 only, docs/design/bid-delivery-spec.md): accumulate into the order's bought-custody (its first
+    // fill, a later fill, the fill that ends it and releases it), new receive UTXOs and top-ups of the maker's receive UTXO,
+    // and the refund that releases a bought-custody.
+    if !kron {
+        for (name, a) in delivery_scenarios(t3) {
+            add(&name, a);
+        }
+    }
+
     if kron {
         return v.into_iter().map(|(n, a)| (n, kron_action_on(t3, a))).collect();
+    }
+    v
+}
+
+// ---------------------------------------------------------------- delivery modes (bid-delivery-spec)
+
+/// The threshold of the fixtures' receive UTXOs and the `recvThreshold` of their mode-2 orders: half a whole token.
+pub const RECV_T: i64 = WHOLE / 2;
+
+/// The fixtures' `topupTip` (never above the delivery carrier in force).
+pub fn ttip() -> i64 {
+    dc().min(2_000_000)
+}
+
+/// `b` in delivery mode `mode` holding `bought` base units (mode 2: threshold [`RECV_T`], tip [`ttip`]).
+pub fn mode_bid(b: BidState, mode: i64, bought: i64) -> BidState {
+    let (recv_threshold, topup_tip) = if mode == MODE_TOPUP { (RECV_T, ttip()) } else { (0, 0) };
+    BidState { mode, recv_threshold, topup_tip, bought, ..b }
+}
+
+/// `c` in delivery mode `mode` holding `bought` base units (as [`mode_bid`]).
+pub fn mode_cond_bid(c: CondBidState, mode: i64, bought: i64) -> CondBidState {
+    let (recv_threshold, topup_tip) = if mode == MODE_TOPUP { (RECV_T, ttip()) } else { (0, 0) };
+    CondBidState { mode, recv_threshold, topup_tip, bought, ..c }
+}
+
+/// The bought-custody of `bought` base units of the order `order` (owner its covenant id, scheme 0x04).
+pub fn bought_custody(tag: u8, bought: i64, order: [u8; 32], daa: u64) -> TokenUtxo {
+    tok(tag, bought, order, SCHEME_COVID, daa)
+}
+
+/// A receive UTXO of `owner`: `amount` base units, borrow scheme amount-threshold with threshold `thr`.
+pub fn recv_tok(tag: u8, amount: i64, owner: [u8; 32], thr: i64, daa: u64) -> TokenUtxo {
+    let mut t = tok(tag, amount, owner, SCHEME_P2PK, daa);
+    t.state = t.state.with_borrow(kob_protocol::build::receive_borrow(thr));
+    t
+}
+
+/// The delivery inputs of a bid leg.
+pub fn bid_dlv(custody: Option<TokenUtxo>, receive: Option<TokenUtxo>, form: Option<u8>) -> Option<BidDelivery> {
+    Some(BidDelivery { custody, receive, form })
+}
+
+/// Taker sells `n` whole tokens into one bid (cov 0xb1) of `value` sompi naming the delivery inputs `delivery`.
+pub fn take_bid_valued(bs: BidState, n: i64, value: u64, delivery: Option<BidDelivery>) -> Batch {
+    let mut b = batch(vec![Leg::Bid { order: order(20, value, cov(0xb1), 1_000, bs), amount: n * WHOLE, t: None, delivery }]);
+    b.taker_tokens = vec![tok(21, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
+    b.change = Some(pk(TAKER));
+    b
+}
+
+/// A taker sells `n` whole tokens into a conditional bid (cov 0xe1) on `leg` naming the delivery inputs `delivery`.
+pub fn condb_fill_dlv(c: CondBidState, n: i64, leg: u8, value: u64, delivery: Option<BidDelivery>) -> Batch {
+    let mut b = batch(vec![Leg::CondBid {
+        order: order(40, value, cov(0xe1), 2_000, c),
+        amount: n * WHOLE,
+        leg,
+        evidence: None,
+        t: None,
+        merge: None,
+        delivery,
+    }]);
+    b.taker_tokens = vec![tok(41, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
+    b.change = Some(pk(TAKER));
+    b
+}
+
+/// The delivery-mode scenarios on the KCC-20 program `t3` (the top-ups only where it has a measured top-up).
+pub fn delivery_scenarios(t3: TemplateId) -> Vec<(String, Action)> {
+    let mut v: Vec<(String, Action)> = vec![];
+    let mut add = |name: &str, a: Action| v.push((name.to_string(), a));
+    let bc = cov(0xb1);
+    let topup = kob_protocol::budget::topup_extra(t3).is_some();
+    let acc = |bought: i64| mode_bid(bid(MAKER_B, P245, t3), MODE_ACCUMULATE, bought);
+    let held = || bid_dlv(Some(bought_custody(23, 4 * WHOLE, bc, 1_500)), None, None);
+    // mode 1: the first fill creates the bought-custody, a later one continues it, the last one releases it whole to the
+    // maker (its unspent KAS refunded, or riding on the delivery)
+    let a0 = acc(0);
+    add("take.bid.acc.first", Action::Batch(take_bid_valued(a0.clone(), 4, a0.escrow(10 * WHOLE, 1).unwrap() as u64, None)));
+    let a4 = acc(4 * WHOLE);
+    add("take.bid.acc.more", Action::Batch(take_bid_valued(a4.clone(), 3, a4.escrow(10 * WHOLE, 1).unwrap() as u64, held())));
+    let last = |extra: i64| (a4.used(3 * WHOLE).unwrap() + extra) as u64;
+    add("take.bid.acc.close", Action::Batch(take_bid_valued(a4.clone(), 3, last(2 * KAS as i64), held())));
+    add("take.bid.acc.closeDust", Action::Batch(take_bid_valued(a4.clone(), 3, last(KAS as i64 / 2), held())));
+    // two mode-1 bids with custodies and the taker's token: three token inputs of a 3 / 3 program
+    let b2 = mode_bid(bid(MAKER_C, P250, t3), MODE_ACCUMULATE, 2 * WHOLE);
+    let mut two = batch(vec![
+        Leg::Bid {
+            order: order(20, a4.escrow(10 * WHOLE, 1).unwrap() as u64, bc, 1_000, a4.clone()),
+            amount: 3 * WHOLE,
+            t: None,
+            delivery: held(),
+        },
+        Leg::Bid {
+            order: order(21, b2.escrow(10 * WHOLE, 1).unwrap() as u64, cov(0xb2), 1_000, b2),
+            amount: 2 * WHOLE,
+            t: None,
+            delivery: bid_dlv(Some(bought_custody(24, 2 * WHOLE, cov(0xb2), 1_500)), None, None),
+        },
+    ]);
+    two.taker_tokens = vec![tok(22, 5 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
+    two.change = Some(pk(TAKER));
+    add("take.sell.twoBids.acc", Action::Batch(two));
+    // mode 2: without a receive UTXO a fill creates one (form 1), with one it tops it up (form 2), or a plain UTXO (form 0)
+    let m2 = mode_bid(bid(MAKER_B, P245, t3), MODE_TOPUP, 0);
+    let v10 = m2.escrow(10 * WHOLE, 3).unwrap() as u64;
+    let recv = || recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T, 1_500);
+    add("take.bid.recv", Action::Batch(take_bid_valued(m2.clone(), 4, v10, None)));
+    add("take.bid.topup.plain", Action::Batch(take_bid_valued(m2.clone(), 4, v10, bid_dlv(None, None, Some(0)))));
+    if topup {
+        add("take.bid.topup", Action::Batch(take_bid_valued(m2.clone(), 4, v10, bid_dlv(None, Some(recv()), None))));
+        let v4 = m2.escrow(4 * WHOLE, 1).unwrap() as u64;
+        add("take.bid.topup.close", Action::Batch(take_bid_valued(m2.clone(), 4, v4, bid_dlv(None, Some(recv()), None))));
+        // a matcher crosses the top-up bid with two asks: the receive UTXO leads, the ask custodies are its delegates
+        let xb = mode_bid(bid(MAKER_B, P260, t3), MODE_TOPUP, 0);
+        let xv = xb.escrow(8 * WHOLE, 1).unwrap() as u64;
+        let mut x = batch(vec![
+            Leg::Bid { order: order(20, xv, bc, 1_000, xb), amount: 8 * WHOLE, t: None, delivery: bid_dlv(None, Some(recv()), None) },
+            Leg::Ask {
+                order: order(10, carrier(), cov(0xa1), 1_000, ask_n(MAKER_A, P250, t3, 5)),
+                custody: custody(11, 5, cov(0xa1), 1_000),
+                amount: 5 * WHOLE,
+                t: None,
+            },
+            Leg::Ask {
+                order: order(13, carrier(), cov(0xa3), 1_000, ask(MAKER_C, P255, t3)),
+                custody: custody(14, 10, cov(0xa3), 1_000),
+                amount: 3 * WHOLE,
+                t: None,
+            },
+        ]);
+        x.change = Some(pk(MATCHER));
+        add("match.cross.1x2.topup", Action::Batch(x));
+    }
+    // conditional buys: a later fill of a mode-1 order, its last fill, a top-up
+    let cb = cond_bid(MAKER_B, t3);
+    let ce = cov(0xe1);
+    let cheld = || bid_dlv(Some(bought_custody(43, 4 * WHOLE, ce, 2_500)), None, None);
+    let c4 = CondBidState { amount_left: 6 * WHOLE, ..mode_cond_bid(cb.clone(), MODE_ACCUMULATE, 4 * WHOLE) };
+    add("cond.bid.acc.more", Action::Batch(condb_fill_dlv(c4.clone(), 3, 0, c4.escrow(1).unwrap() as u64, cheld())));
+    add("cond.bid.acc.close", Action::Batch(condb_fill_dlv(c4.clone(), 6, 0, c4.escrow(1).unwrap() as u64, cheld())));
+    let c2 = mode_cond_bid(cb.clone(), MODE_TOPUP, 0);
+    add("cond.bid.recv", Action::Batch(condb_fill_dlv(c2.clone(), 4, 0, c2.escrow(2).unwrap() as u64, None)));
+    if topup {
+        let r = recv_tok(44, 2 * WHOLE, pk(MAKER_B), RECV_T, 2_500);
+        add(
+            "cond.bid.topup",
+            Action::Batch(condb_fill_dlv(c2.clone(), 4, 0, c2.escrow(2).unwrap() as u64, bid_dlv(None, Some(r), None))),
+        );
+    }
+    // the refunds that release a bought-custody at its own index
+    let fresh = (EXPIRY - 1_000) as u64;
+    let refund = |o: OrderUtxo<AnyState>, bought: Option<TokenUtxo>| RefundOrder {
+        prefund: None,
+        bought_custody: bought,
+        order: o,
+        foreign: vec![],
+        custody: None,
+        lock_time: EXPIRY as u64,
+        funding: vec![],
+        change: None,
+        fee: fee(),
+    };
+    add(
+        "refund.bid.acc",
+        Action::RefundOrder(refund(
+            order(20, 25 * KAS, bc, fresh, AnyState::KobBid(a4.clone())),
+            Some(bought_custody(23, 4 * WHOLE, bc, fresh)),
+        )),
+    );
+    add(
+        "refund.condBid.acc",
+        Action::RefundOrder(refund(
+            order(40, c4.escrow(1).unwrap() as u64, ce, fresh, AnyState::KobCondBid(c4.clone())),
+            Some(bought_custody(43, 4 * WHOLE, ce, fresh)),
+        )),
+    );
+    // placements: a mode-1 bid funded with one carrier, a mode-2 bid
+    let create = |o: AnyState, value: u64| CreateOrder {
+        order: o,
+        value,
+        tokens: vec![],
+        token_carrier: carrier(),
+        funding: vec![key_utxo(2, MAKER_A, 1_000 * KAS)],
+        change: None,
+        lock_time: 0,
+        deadline: None,
+        records: vec![],
+        fee: fee(),
+    };
+    let pa = mode_bid(bid(MAKER_A, P245, t3), MODE_ACCUMULATE, 0);
+    add("create.bid.acc", Action::CreateOrder(create(AnyState::KobBid(pa.clone()), pa.escrow(10 * WHOLE, 1).unwrap() as u64)));
+    if topup {
+        let pt = mode_bid(bid(MAKER_A, P245, t3), MODE_TOPUP, 0);
+        add("create.bid.topup", Action::CreateOrder(create(AnyState::KobBid(pt.clone()), pt.escrow(10 * WHOLE, 3).unwrap() as u64)));
     }
     v
 }
@@ -1511,6 +1746,7 @@ pub fn grid() -> Vec<(String, Action)> {
                         order: order(150 + k as u8, bp.escrow(WHOLE, 1).unwrap() as u64, cov(0x30 + k as u8), 1_000, bp),
                         amount: WHOLE,
                         t: None,
+                        delivery: None,
                     });
                 }
                 for k in 0..i {
@@ -1595,7 +1831,12 @@ pub fn pad_batch_shaped(t: TemplateId, a: &Action, asks: usize, bids: usize, amo
     for j in 0..bids {
         let s = BidState { min_fill: amount, ..bid(20 + (j % 10) as u8, price + 10_000_000, t) };
         let value = s.escrow(amount, 1).expect("pad bid escrow") as u64;
-        legs.push(Leg::Bid { order: OrderUtxo { utxo: pad_utxo(0xb7, j, value, Some(pad_cov(0xb7, j))), state: s }, amount, t: None });
+        legs.push(Leg::Bid {
+            order: OrderUtxo { utxo: pad_utxo(0xb7, j, value, Some(pad_cov(0xb7, j))), state: s },
+            amount,
+            t: None,
+            delivery: None,
+        });
     }
     let mut pad = batch(legs);
     if bids > 0 {

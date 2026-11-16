@@ -34,7 +34,12 @@ fn ioc_bid(j: usize, maker: u8, extra: i64) -> (Leg, BidState, i64) {
     let mut c = [0xc7; 32];
     c[0] = 0xb7;
     c[1] = j as u8;
-    let leg = Leg::Bid { order: OrderUtxo { utxo: pu(0xb7, j, value as u64, Some(c)), state: s.clone() }, amount: FILL, t: None };
+    let leg = Leg::Bid {
+        order: OrderUtxo { utxo: pu(0xb7, j, value as u64, Some(c)), state: s.clone() },
+        amount: FILL,
+        t: None,
+        delivery: None,
+    };
     (leg, s, spend)
 }
 
@@ -126,4 +131,33 @@ fn legs_with_a_refund_are_put_first_and_blame_keeps_the_callers_indices() {
     }
     let e = run(batch_of(vec![a, bad, good], 3)).unwrap_err();
     assert!(e.contains("leg 1"), "{e}");
+}
+
+/// Delivery modes (bid-delivery-spec §4 rule 4): the remainder `rem = value - allIn - released` counts what leaves the
+/// escrow beyond the price, so the terminal fill of a bid holding its bought-custody (released 0) refunds the carrier too,
+/// and a terminal top-up (released `topupTip`) refunds all but the tip. Below REFUND_MIN it rides on the delivery.
+#[test]
+fn a_terminal_fill_refunds_what_its_delivery_mode_does_not_release() {
+    let c = [0xc7; 32];
+    let s = mode_bid(
+        BidState { tif: 0, min_fill: WHOLE, delivery_carrier: CARRIER as i64, ..bid(20, 240_000_000, T) },
+        MODE_ACCUMULATE,
+        3 * WHOLE,
+    );
+    let spend = s.spend(FILL, 0, 1_000).unwrap();
+    // one minimum fill short of continuing: the order ends
+    let value = s.used(FILL).unwrap() + 2 * KAS as i64;
+    let custody =
+        TokenUtxo { utxo: pu(0xba, 0, CARRIER, Some(TOKEN_COV)), state: TokenState::custody(Family::Kcc20, 3 * WHOLE, c, ext_for(T)) };
+    let leg = Leg::Bid {
+        order: OrderUtxo { utxo: pu(0xb7, 0, value as u64, Some(c)), state: s.clone() },
+        amount: FILL,
+        t: None,
+        delivery: bid_dlv(Some(custody), None, None),
+    };
+    let (tx, _) = run(batch_of(vec![leg], 1)).expect("the release with its refund");
+    let outs = &tx.outputs;
+    assert_eq!(outs[0].value, CARRIER, "the release keeps the custody's KAS");
+    assert_eq!(outs.last().unwrap().script_public_key, p2pk_spk(&s.maker));
+    assert_eq!(outs.last().unwrap().value as i64, value - spend, "no carrier leaves the escrow: all of it is refunded");
 }

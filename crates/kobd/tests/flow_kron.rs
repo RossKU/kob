@@ -184,6 +184,7 @@ async fn kron_ask_cancel_and_keeper_refund() {
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&refund]).await;
     assert_eq!(c.hs.status(&cov), "refunded");
@@ -199,7 +200,8 @@ async fn kron_bid_escrow_fills_and_the_maker_is_delivered_tokens() {
     let cov = c.w.cov(&create, 0);
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobBidKron(b0.clone())));
     assert_eq!(view(&c, &cov).extension_commitment.as_deref(), Some(kobd::hex::encode(&[0u8; 32]).as_str()));
-    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
+    let mut b =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![taker(&c, 4 * WHOLE)];
     let fill = c.w.sign(&Action::Batch(b));
     c.push(&[&fill]).await;
@@ -232,6 +234,7 @@ async fn kron_ioc_orders_are_killed_and_day_orders_record_their_deadline() {
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&kill]).await;
     assert_eq!(c.hs.status(&cov), "killed");
@@ -408,6 +411,7 @@ async fn kron_sell_first_entry_holds_custody_and_its_bid_exit_merges_back() {
         evidence: None,
         t: None,
         merge: Some(merge),
+        delivery: None,
     };
     let mut b = batch(&c.w, c.daa(), vec![leg]);
     b.taker_tokens = vec![taker(&c, 3 * WHOLE)];

@@ -136,7 +136,10 @@ fn bid(maker: u8, price: i64, refund_tip: i64) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 fn batch(legs: Vec<Leg>) -> Batch {
@@ -167,6 +170,7 @@ fn refund_action(order: OrderUtxo<AnyState>, custody: Option<TokenUtxo>) -> Refu
         funding: vec![],
         change: None,
         fee: FeeOptions::default(),
+        bought_custody: None,
     }
 }
 
@@ -274,8 +278,8 @@ fn sell_two_bids(rtip: i64) -> Action {
     let (b1, b2) = (bid(MAKER_B, P245, rtip), bid(MAKER_C, P250, rtip));
     let (v1, v2) = (b1.used(10 * WHOLE).unwrap() + 3 * DC, b2.used(2 * WHOLE).unwrap() + DC);
     let mut b = batch(vec![
-        Leg::Bid { order: order(20, v1 as u64, cov(0xb1), 1_000, b1), amount: 4_500, t: None },
-        Leg::Bid { order: order(21, v2 as u64, cov(0xb2), 1_000, b2), amount: 2 * WHOLE, t: None },
+        Leg::Bid { order: order(20, v1 as u64, cov(0xb1), 1_000, b1), amount: 4_500, t: None, delivery: None },
+        Leg::Bid { order: order(21, v2 as u64, cov(0xb2), 1_000, b2), amount: 2 * WHOLE, t: None, delivery: None },
     ]);
     b.taker_tokens = vec![user_tok(22, 6_500, pk(TAKER))];
     Action::Batch(b)
@@ -421,6 +425,7 @@ fn sell_into_bids() {
         order: order(20, (10 * (P245 + TIP) + 3 * DC) as u64, cov(0xb1), 1_000, b1),
         amount: 4 * WHOLE,
         t: None,
+        delivery: None,
     }]);
     b.taker_tokens = vec![user_tok(21, 4 * WHOLE, pk(TAKER))];
     run("v2 taker sells 4 tokens into 1 bid (partial)", &Action::Batch(b));

@@ -345,13 +345,22 @@ fn a_bid_is_amended_in_place() {
         let next =
             Utxo { transaction_id: s.tx.id, index: 0, amount: s.tx.outputs[0].value, block_daa_score: 2_000, covenant_id: Some(B_ID) };
         let mut f = fill.clone();
-        f.legs[0] =
-            Leg::Bid { order: OrderUtxo { utxo: next.clone(), state: bid_of(&r.amended).clone() }, amount: 4 * WHOLE, t: None };
+        f.legs[0] = Leg::Bid {
+            order: OrderUtxo { utxo: next.clone(), state: bid_of(&r.amended).clone() },
+            amount: 4 * WHOLE,
+            t: None,
+            delivery: None,
+        };
         let (_, f1) = signed("fill after bid amend", &Action::Batch(f));
         assert_eq!(f1.tx.inputs[0].utxo.script_public_key, s.tx.outputs[0].script_public_key);
         // the old state no longer opens the order
         let mut g = fill.clone();
-        g.legs[0] = Leg::Bid { order: OrderUtxo { utxo: next, state: bid_of(&r.order.state).clone() }, amount: 4 * WHOLE, t: None };
+        g.legs[0] = Leg::Bid {
+            order: OrderUtxo { utxo: next, state: bid_of(&r.order.state).clone() },
+            amount: 4 * WHOLE,
+            t: None,
+            delivery: None,
+        };
         let built = build(&Action::Batch(g)).unwrap();
         let sigs = sign_locally(&built, &keys()).unwrap();
         let mut stale = finalize(&built, &sigs, FinalizeOptions::default()).unwrap();

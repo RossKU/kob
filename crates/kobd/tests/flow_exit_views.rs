@@ -224,6 +224,7 @@ async fn the_matchers_listed_exit_carries_the_entrys_commitment_and_a_keeper_ref
                 funding: vec![c.w.coin(KEEPER, 10)],
                 change: Some(pk(KEEPER)),
                 fee: FeeOptions::default(),
+                bought_custody: None,
             }));
             c.push(&[&refund]).await;
             assert_eq!(c.hs.status(&exit), "refunded", "{fam:?} repeat {repeat}");
