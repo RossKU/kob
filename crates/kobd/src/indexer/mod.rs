@@ -16,6 +16,7 @@ pub mod archive;
 pub mod book;
 pub mod candles;
 pub mod db;
+pub mod delivery;
 pub mod flags;
 pub mod follower;
 pub mod ids;

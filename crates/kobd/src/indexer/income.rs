@@ -93,6 +93,9 @@ pub struct Leg<'a> {
     pub quote: Option<i64>,
     /// The KAS of the spent order UTXO.
     pub value: i64,
+    /// The input that spends the order's bought-custody (a mode-1 order with `bought` > 0), when
+    /// the transaction does.
+    pub bought_in: Option<usize>,
 }
 
 /// The outputs the covenant of a leg pins by position.
@@ -134,19 +137,25 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         // and `close()` with the carrier, is the maker's at i.
         (KobIfdAsk(_) | KobIfdAskKron(_), Spend::Refund) => v.push(i),
         (KobIfdAsk(_) | KobIfdAskKron(_), Spend::Fill(_) | Spend::Merge | Spend::Update) => {}
-        // `fill(nb, tokenTplIn, t)`: the delivery at i. A terminal fill's unspent KAS beyond the
-        // delivery carrier goes at M - 1 - i (`refundTo`), from REFUND_MIN up. `refund()`: the
-        // maker's at i.
+        // `fill(nb, tokIn, t, form)`: the delivery at i. A terminal fill's unspent KAS beyond what
+        // the fill releases (`released`: the delivery carrier, none into an existing
+        // bought-custody, `topupTip` for a top-up) goes at M - 1 - i (`refundTo`), from REFUND_MIN
+        // up. `refund(custIn)`: the maker's at i, and a bought-custody's release at custIn.
         (KobBid(b) | KobBidKron(b), Spend::Fill(n)) => {
             v.push(i);
             if !l.continues {
-                let rem = l.value.checked_sub(b.spend_at(n, l.quote?)?)?.checked_sub(b.delivery_carrier)?;
+                let rem = l.value.checked_sub(b.spend_at(n, l.quote?)?)?.checked_sub(released(l, b.delivery_carrier))?;
                 if rem >= REFUND_MIN as i64 {
                     v.push(outputs.checked_sub(1 + i)?);
                 }
             }
         }
-        (KobBid(_) | KobBidKron(_), Spend::Refund) => v.push(i),
+        (KobBid(_) | KobBidKron(_), Spend::Refund) => {
+            v.push(i);
+            if l.bought_in.is_some() {
+                v.push(arg(0)?);
+            }
+        }
         // `settle(nb, tokenTplIn, leg, ...)`: the delivery at i, or the maker's profit at i for a
         // re-arming take-profit. A terminal fill that does not re-arm sends what it did not spend
         // beyond its delivery carrier, from REFUND_MIN up, to M - 1 - i.
@@ -155,13 +164,18 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
             let rearm = l.parent_spent && l.reveal.int(2)? == 0;
             if !rearm && !l.continues {
                 let spend = quote_of(n, l.quote?.checked_add(c.tip)?, c.scale, Round::Down)?;
-                let rem = l.value.checked_sub(spend)?.checked_sub(c.delivery_carrier)?;
+                let rem = l.value.checked_sub(spend)?.checked_sub(released(l, c.delivery_carrier))?;
                 if rem >= REFUND_MIN as i64 {
                     v.push(outputs.checked_sub(1 + i)?);
                 }
             }
         }
-        (KobCondBid(_) | KobCondBidKron(_), Spend::Refund) => v.push(i),
+        (KobCondBid(_) | KobCondBidKron(_), Spend::Refund) => {
+            v.push(i);
+            if l.bought_in.is_some() {
+                v.push(arg(0)?);
+            }
+        }
         (KobCondBid(_) | KobCondBidKron(_), Spend::Update) => {}
         // `fill`: the bought tokens at i, owned by the exit. `refund()`: the maker's at i.
         (KobIfdBid(_) | KobIfdBidKron(_), Spend::Fill(_) | Spend::Refund) => v.push(i),
@@ -175,7 +189,11 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
                 v.push(arg(1)?);
             }
         }
-        (KobPair(_), Spend::Refund) => v.push(i),
+        // A mode-1 order's bought-custody is released at its own input index.
+        (KobPair(_), Spend::Refund) => {
+            v.push(i);
+            v.extend(l.bought_in);
+        }
         // `settle(nb, custIn, tTplIn, t, sOut, tOut, leg, ..)`: the delivery at i, or a re-arming
         // take-profit's profit. The custody's rest or return goes at custIn while some is left.
         // That is custody - sOut, or for a re-arming BID exit that continues custody - proceeds -
@@ -198,7 +216,10 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
                 v.push(arg(1)?);
             }
         }
-        (KobCondPair(_), Spend::Refund) => v.push(i),
+        (KobCondPair(_), Spend::Refund) => {
+            v.push(i);
+            v.extend(l.bought_in);
+        }
         (KobCondPair(_), Spend::Update) => {}
         // `fill(nb, aIn, bIn, aTplIn, bTplIn, exitOut, amt, ..)`: the exit's custody at i, owned by
         // the exit. A buy-first entry that ends returns the B it did not spend (custody - amt) at
@@ -224,6 +245,13 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         _ => return None,
     }
     v.iter().all(|&j| j < outputs).then_some(v)
+}
+
+/// The KAS a delivering fill releases from the escrow beyond its price (bid-delivery-spec §4).
+///
+/// It is `carrier` for a kind without a delivery block or a state the delivery rules do not read.
+fn released(l: &Leg<'_>, carrier: i64) -> i64 {
+    super::delivery::fill_delivery(l.state, l.reveal).map_or(carrier, |d| d.released())
 }
 
 /// `kob_in - Σ outputs[j]` over the distinct `kob_out` indexes, in sompi.
@@ -269,7 +297,7 @@ mod tests {
     }
 
     fn leg<'a>(state: &'a AnyState, spend: Spend, input: usize, r: &'a Reveal) -> Leg<'a> {
-        Leg { state, spend, input, reveal: r, continues: false, parent_spent: false, quote: None, value: 0 }
+        Leg { state, spend, input, reveal: r, continues: false, parent_spent: false, quote: None, value: 0, bought_in: None }
     }
 
     /// An ask's fill pins its payout at its input index, and its custody index only while tokens

@@ -1318,6 +1318,40 @@ pub struct OrderView {
     /// It is set on single-order lookups and on the live orders of a `maker=` list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custody: Option<CustodyView>,
+    /// How a fill hands the bought tokens to the maker (`docs/design/bid-delivery-spec.md`):
+    /// `wallet` (mode 0: a new token UTXO per fill), `order` (mode 1: the order keeps them in its
+    /// bought-custody until it ends, is refunded, cancelled or claimed) or `topup` (mode 2: a fill
+    /// may top up the maker's receive UTXO and keep `topup_tip`).
+    ///
+    /// It is set for the delivering kinds (`KobBid`, `KobCondBid`, `KobPair`, `KobCondPair` and
+    /// the KRON twins, always `wallet`) and, for an if-done entry (`KobIfdAsk`, `KobIfdPair`), is
+    /// the mode its exits deliver in. An order placed before the delivery modes reads `wallet`.
+    /// From the current state, else the placement state. Absent for the other kinds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<&'static str>,
+    /// `delivery` as the state's `mode` (0, 1, 2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_mode: Option<i64>,
+    /// Mode 1: base units the bought-custody holds now (the current state's `bought`). 0 for the
+    /// other modes, and once a claim took them (`bought` < `filled_amount`). Absent without a
+    /// current state, or for a kind that does not deliver.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bought: Option<String>,
+    /// Mode 2: the sompi a top-up fill keeps (`topupTip`), "0" otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topup_tip: Option<String>,
+    /// Mode 2: the smallest guard threshold of a receive UTXO a fill may top up
+    /// (`recvThreshold`, base units), "0" otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recv_threshold: Option<String>,
+    /// Mode 1: the exact bought-custody check, as `custody` is for an ask. `expected_amount` is
+    /// `bought`; `utxo` the live token UTXO of role `bought` (owned by the order id); `ok` when
+    /// exactly one holds `bought` (none for `bought` = 0). A bid's `custody` is this view too
+    /// while `bought` > 0.
+    ///
+    /// It is set on single-order lookups and on the live orders of a `maker=` list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bought_custody: Option<CustodyView>,
     /// Stray token UTXOs owned by the order id. They are never liquidity.
     ///
     /// It is set on single-order lookups and on the live orders of a `maker=` list.
@@ -1615,6 +1649,9 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
     }
     // A pair order has no KAS quote. Its quote now (B per whole A) is `pair.quote_now`.
     let pair = pair_state.and_then(|(s, cur)| pair_view(&s, cur, quote.take()));
+    // The delivery terms: the current state's, else the placement's. `bought` is the current one.
+    let block = state.as_ref().or(placed.as_ref()).and_then(crate::indexer::delivery::block_of);
+    let bought = state.as_ref().and_then(|s| s.delivery()).map(|d| d.bought.to_string());
     if quote.is_none() && pair.is_none() {
         quote = sompi(r.get(10)?);
     }
@@ -1673,6 +1710,12 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         quote,
         repeat,
         custody: None,
+        delivery: block.and_then(|d| crate::indexer::delivery::mode_name(d.mode)),
+        delivery_mode: block.map(|d| d.mode),
+        bought,
+        topup_tip: block.map(|d| d.topup_tip.to_string()),
+        recv_threshold: block.map(|d| d.recv_threshold.to_string()),
+        bought_custody: None,
         strays: None,
         strays_total: None,
         last_block: r.get::<_, Option<i64>>(34)?.unwrap_or(0),
@@ -1749,7 +1792,7 @@ pub struct TokenUtxoView {
     pub amount: String,
     /// KAS carrier.
     pub value: String,
-    /// `custody` or `stray`.
+    /// `custody`, `bought` (a mode-1 order's bought-custody) or `stray`.
     pub role: String,
     pub created_daa: i64,
     pub spent: bool,
@@ -1946,6 +1989,17 @@ fn attach_holdings(conn: &Connection, ctx: &ReadCtx, covenant_id: &Hash32, v: &m
             utxo: if live.len() == 1 { live.pop() } else { None },
             ok,
         });
+    }
+    // A mode-1 order's bought-custody (`role = bought`), checked against its current `bought`.
+    if let (Some(1), Some(bought)) = (v.delivery_mode, v.bought.clone()) {
+        let mut live = live_token_utxos(conn, ctx, covenant_id, crate::indexer::delivery::ROLE_BOUGHT, 2)?;
+        let ok = if bought == "0" { live.is_empty() } else { live.len() == 1 && live[0].amount == bought };
+        let utxo = if live.len() == 1 { live.pop() } else { None };
+        let view = CustodyView { expected_amount: Some(bought.clone()), utxo, ok };
+        if v.pair.is_none() && v.side == 2 && bought != "0" {
+            v.custody = Some(view.clone());
+        }
+        v.bought_custody = Some(view);
     }
     let strays = live_token_utxos(conn, ctx, covenant_id, "stray", MAX_VIEW_STRAYS + 1)?;
     if strays.len() > MAX_VIEW_STRAYS {
@@ -2453,7 +2507,7 @@ pub struct HoldingView {
     pub amount: String,
     /// KAS carrier.
     pub value: String,
-    /// `owned`, `custody` or `stray`.
+    /// `owned`, `custody`, `bought` (a mode-1 order's bought-custody) or `stray`.
     pub role: String,
     /// The token state as JSON, in the shape the token state functions of kob-wasm take.
     ///

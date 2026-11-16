@@ -72,7 +72,7 @@ macro_rules! live_order_holding {
         concat!(
             "(",
             $h,
-            ".role IN ('custody','stray') AND EXISTS (SELECT 1 FROM ids li JOIN orders lo ON lo.covenant_id = li.h \
+            ".role IN ('custody','bought','stray') AND EXISTS (SELECT 1 FROM ids li JOIN orders lo ON lo.covenant_id = li.h \
              JOIN order_state ls ON ls.order_id = lo.id WHERE li.id = ",
             $h,
             ".owner_id AND ls.status IN ('open','partial')))"
@@ -292,7 +292,7 @@ pub fn prune(
                     "DELETE FROM order_amends WHERE order_id IN (SELECT id FROM lean_batch)",
                     "DELETE FROM pair_fills WHERE covenant_id IN (SELECT cov FROM lean_batch)",
                     "DELETE FROM order_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
-                    "DELETE FROM token_holdings WHERE owner_id IN (SELECT i.id FROM lean_batch b JOIN ids i ON i.h = b.cov) AND role IN ('custody','stray')",
+                    "DELETE FROM token_holdings WHERE owner_id IN (SELECT i.id FROM lean_batch b JOIN ids i ON i.h = b.cov) AND role IN ('custody','bought','stray')",
                     "DELETE FROM token_utxos WHERE order_id IN (SELECT id FROM lean_batch)",
                     "DELETE FROM order_flags WHERE covenant_id IN (SELECT cov FROM lean_batch)",
                     "DELETE FROM order_state WHERE order_id IN (SELECT id FROM lean_batch)",

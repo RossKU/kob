@@ -147,6 +147,8 @@ struct OwnedToken {
     utxo: Utxo,
     amount: i64,
     custody: bool,
+    /// The bought-custody of a mode-1 order (`role = bought`, `super::delivery`).
+    bought: bool,
     /// The state the indexer proved for the output (`token_holdings`), when it has one.
     proven: Option<TokenState>,
     /// The program it was proven under.
@@ -192,9 +194,40 @@ fn owned_tokens(conn: &Connection) -> DbResult<HashMap<[u8; 32], Vec<OwnedToken>
             block_daa_score: daa.max(0) as u64,
             covenant_id: Some(token),
         };
-        m.entry(owner).or_default().push(OwnedToken { utxo, amount, custody: role == "custody", proven, program });
+        m.entry(owner).or_default().push(OwnedToken {
+            utxo,
+            amount,
+            custody: role == "custody",
+            bought: role == super::delivery::ROLE_BOUGHT,
+            proven,
+            program,
+        });
     }
     Ok(m)
+}
+
+/// The live bought-custody of every mode-1 order that holds one, by order covenant id
+/// (bid-delivery-spec §1, `super::delivery`).
+///
+/// It is exactly `bought` base units of the order's bought token, owned by the order id, as the
+/// indexer proved it. The order views carry it as `bought_custody`; a fill into it, a refund and a
+/// claim spend it. It is never one of the order's strays. An order with more than one such row has
+/// none here (the view fails closed).
+pub fn bought_custodies(conn: &Connection) -> DbResult<HashMap<[u8; 32], TokenUtxo>> {
+    let mut out: HashMap<[u8; 32], TokenUtxo> = HashMap::new();
+    let mut twice: Vec<[u8; 32]> = vec![];
+    for (cov, owned) in owned_tokens(conn)? {
+        for t in owned.into_iter().filter(|t| t.bought) {
+            let Some(state) = t.proven else { continue };
+            if out.insert(cov, TokenUtxo { utxo: t.utxo, state }).is_some() {
+                twice.push(cov);
+            }
+        }
+    }
+    for c in twice {
+        out.remove(&c);
+    }
+    Ok(out)
 }
 
 /// Every listed live order with its custody and strays.
@@ -283,7 +316,9 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         // A KRON token has no extension commitment: the placement record's is zero, and
         // `TokenState` ignores it.
         let ext = ext.and_then(h32).unwrap_or([0; 32]);
-        let own = tokens.remove(&cov).unwrap_or_default();
+        // A mode-1 order's bought-custody is the order's, never a stray: it is served apart
+        // ([`bought_custodies`]).
+        let own: Vec<OwnedToken> = tokens.remove(&cov).unwrap_or_default().into_iter().filter(|t| !t.bought).collect();
         // Tokens of the order itself (a pair order has A and B) versus foreign strays (any other
         // token, `docs/spec/matcher.md` 1.2).
         let pair = state.pair_tokens();
