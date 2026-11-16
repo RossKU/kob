@@ -20,6 +20,7 @@ export const DEFAULTS = {
     perDayKas: 500, // the same over a UTC day, from the ledger
     maxFeeKas: 1, // the most network fee of one transaction (a token creation: of both)
     priceBandPct: 25, // a limit price or take bound this far from the last fill (else the mid) is refused; null: off
+    launchesPerDay: 3, // token creations per UTC day
   },
   withdrawTo: [], // the only addresses kob_send may pay (the primary wallet)
   killSwitchFile: null, // while this file exists every write is refused; null: <dataDir>/STOP
@@ -47,6 +48,7 @@ const ENV = {
   KOB_MCP_PER_TX_KAS: (c, v) => { c.limits = { ...c.limits, perTxKas: v }; },
   KOB_MCP_PER_DAY_KAS: (c, v) => { c.limits = { ...c.limits, perDayKas: v }; },
   KOB_MCP_MAX_FEE_KAS: (c, v) => { c.limits = { ...c.limits, maxFeeKas: v }; },
+  KOB_MCP_LAUNCHES_PER_DAY: (c, v) => { c.limits = { ...c.limits, launchesPerDay: Number(v) }; },
   KOB_MCP_WITHDRAW_TO: (c, v) => { c.withdrawTo = v.split(/[\s,]+/).filter(Boolean); },
 };
 
@@ -77,6 +79,7 @@ export function checkConfig(c, baseDir, env = process.env) {
   if (c.network === 'mainnet' && c.allowMainnet !== true) errs.push('network is mainnet but allowMainnet is not true');
   if (!['confirm', 'auto'].includes(c.mode)) errs.push(`mode: ${c.mode} (confirm or auto)`);
   if (!c.keyFile && !env.KOB_KEY) errs.push('keyFile is not set and KOB_KEY is empty');
+  c = { ...c, limits: { ...DEFAULTS.limits, ...c.limits } };
   const lim = {};
   for (const k of ['perTxKas', 'perDayKas', 'maxFeeKas']) {
     try {
@@ -86,7 +89,8 @@ export function checkConfig(c, baseDir, env = process.env) {
       errs.push(`limits.${k}: ${JSON.stringify(c.limits[k])}`);
     }
   }
-  if (c.limits.priceBandPct != null && !(Number(c.limits.priceBandPct) > 0)) errs.push('limits.priceBandPct must be above 0 or null');
+  if (c.limits.priceBandPct != null && (!/^\d+(\.\d+)?$/.test(String(c.limits.priceBandPct)) || !(Number(c.limits.priceBandPct) > 0))) errs.push('limits.priceBandPct must be a number above 0, or null');
+  if (!Number.isInteger(c.limits.launchesPerDay) || c.limits.launchesPerDay < 0) errs.push('limits.launchesPerDay must be a whole number, 0 or more');
   const prefix = c.network === 'mainnet' ? 'kaspa:' : 'kaspatest:';
   const withdrawTo = (c.withdrawTo ?? []).map((a) => String(a).trim().toLowerCase());
   for (const a of withdrawTo) if (!a.startsWith(prefix) || !/^[a-z]+:[02-9ac-hj-np-z]{61,63}$/.test(a)) errs.push(`withdrawTo: ${a} is not a ${c.network} address`);

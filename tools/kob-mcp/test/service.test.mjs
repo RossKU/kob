@@ -174,3 +174,47 @@ test('the key path never appears in what the tools return or log', async () => {
   assert.equal(auditText.includes(t.cfg.keyFile), false);
   assert.equal(auditText.includes(t.cfg.keyFile.replace(/\\/g, '\\\\')), false);
 });
+
+test('take: the bound refusal is read in both CLI forms (JSON issue, or stderr text when the fill cannot be built)', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  const id = 'ab'.repeat(32);
+  assert.match((await svc.write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' })).reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX /);
+  process.env.FAKE_KOB_TAKE_UNBUILT = '1';
+  try {
+    const r = await new KobService(t.cfg).write('kob_take', { id, amount: '1TUSD', max_price: '0.2KAS' });
+    assert.match(r.reason, /^CLI_REFUSED \(exit 1\): TAKE_PRICE_ABOVE_MAX: error: this fill pays/);
+  } finally {
+    delete process.env.FAKE_KOB_TAKE_UNBUILT;
+  }
+  assert.equal(t.yesCalls().length, 0);
+});
+
+test('token creations are capped per UTC day (launchesPerDay)', async () => {
+  const t = setup({ mode: 'auto', limits: { launchesPerDay: 1 } });
+  const svc = new KobService(t.cfg);
+  const args = { name: 'Test MCP', ticker: 'TMCP', decimals: 2, supply: '100000', fund_utxo: `${'aa'.repeat(32)}:1:5000000000` };
+  assert.equal((await svc.write('kob_token_create', args)).status, 'submitted');
+  assert.match((await svc.write('kob_token_create', { ...args, ticker: 'TMCQ' })).reason, /^LAUNCH_CAP/);
+  assert.equal(t.yesCalls().length, 1);
+  assert.equal((await svc.status()).today.launches, 1);
+});
+
+test('claim and delivery: refused unless the CLI help names them; offered when it does', async () => {
+  const t = setup({ mode: 'auto' });
+  const svc = new KobService(t.cfg);
+  assert.deepEqual(await svc.detectFeatures(), { claim: false, delivery: false });
+  assert.match((await svc.write('kob_claim', { id: 'ab'.repeat(32) })).reason, /^NOT_OFFERED/);
+  assert.match((await svc.write('kob_place_limit', { ...place, delivery: 'collected' })).reason, /^NOT_OFFERED/);
+  assert.match((await svc.status()).cli.claim, /not in this CLI build/);
+  process.env.FAKE_KOB_FEATURES = 'claim,delivery';
+  try {
+    const svc2 = new KobService(t.cfg);
+    assert.deepEqual(await svc2.detectFeatures(), { claim: true, delivery: true });
+    assert.equal((await svc2.write('kob_claim', { id: 'ab'.repeat(32) })).status, 'submitted');
+    assert.equal((await svc2.write('kob_place_limit', { ...place, delivery: 'collected' })).status, 'submitted');
+    assert.ok(t.yesCalls().some((a) => a.includes('--delivery') && a.includes('collected')));
+  } finally {
+    delete process.env.FAKE_KOB_FEATURES;
+  }
+});

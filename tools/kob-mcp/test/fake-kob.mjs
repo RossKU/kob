@@ -31,7 +31,19 @@ function sign(action, net, plan = {}, ids = [], apply = () => {}, issues = []) {
   print({ ...doc, result: { status: 'submitted', txid: doc.transaction.txid, fee: String(FEE), covenant_ids: ids, file: null, engine_validated: true } });
 }
 
+// FAKE_KOB_FEATURES=claim,delivery: the help of a CLI with bid delivery
+const features = (process.env.FAKE_KOB_FEATURES ?? '').split(',');
+if (args.includes('--help')) {
+  if (args[0] === 'claim' && !features.includes('claim')) { process.stderr.write('error: unknown command `claim`\n'); process.exit(2); }
+  process.stdout.write(args[0] === 'claim' ? 'kob claim: take what a collected buy order bought\n'
+    : `kob place: place an order\n  --amount A\n${features.includes('delivery') ? '  --delivery D   how a buy hands over what it buys\n' : ''}`);
+  process.exit(0);
+}
+
 switch (args[0]) {
+  case 'claim':
+    sign(`claim ${args[1]}`, -FEE, { order: args[1] });
+    break;
   case 'balances':
     print({ maker: MAKER, kas: { free: String(c.kasFree), locked: '0', total: String(c.kasFree) }, tokens: [], skipped: [] });
     break;
@@ -70,7 +82,12 @@ switch (args[0]) {
     const price = Number(c.book.best_ask);
     const amount = units(val('--amount'));
     const max = val('--max-price') ? kasOf(val('--max-price')) : null;
-    const issues = max != null && price > max ? [{ code: 'TAKE_PRICE_ABOVE_MAX', severity: 'error', message: 'this fill pays more than your --max-price: nothing signed' }] : [];
+    if (max != null && price > max && process.env.FAKE_KOB_TAKE_UNBUILT) {
+      // the CLI's other form: the fill could not be built either, so the refusal is only the stderr text
+      process.stderr.write('error: this fill pays 0.26 KAS per TUSD (the order\'s price 0.26 KAS per TUSD at the lock time (DAA 5), less its tip 0 KAS per TUSD that you keep), above your --max-price 0.2 KAS per TUSD: nothing signed\n');
+      process.exit(1);
+    }
+    const issues = max != null && price > max ?[{ code: 'TAKE_PRICE_ABOVE_MAX', severity: 'error', message: 'this fill pays more than your --max-price: nothing signed' }] : [];
     sign(`take ${args[1]} (buy from a sell order)`, -(Math.round(amount * price) + FEE), { order: args[1], price: String(price), bound: max != null ? { kind: 'max', per_token: String(max) } : null }, [], () => {}, issues);
     break;
   }

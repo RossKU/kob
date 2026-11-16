@@ -3,9 +3,13 @@
 
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from '../src/config.mjs';
-import { ensureDataDir } from '../src/service.mjs';
+import { KobService, ensureDataDir } from '../src/service.mjs';
 import { createServer } from '../src/tools.mjs';
 
+if (Number(process.versions.node.split('.')[0]) < 22) {
+  process.stderr.write(`kob-mcp: needs Node 22 or later (global WebSocket and fetch), this is ${process.version}\n`);
+  process.exit(2);
+}
 const i = process.argv.indexOf('--config');
 const given = (i > 0 ? process.argv[i + 1] : process.env.KOB_MCP_CONFIG)?.trim();
 const file = given && !given.startsWith('${') ? given : null; // an unset form field may arrive as its placeholder
@@ -17,6 +21,8 @@ try {
   process.stderr.write(`kob-mcp: ${e.message}\n`);
   process.exit(2);
 }
-const { server } = createServer(cfg);
+const service = new KobService(cfg);
+const features = await service.detectFeatures();
+const { server } = createServer(cfg, { service });
 await server.connect(new StdioServerTransport());
-process.stderr.write(`kob-mcp: ready on ${cfg.network}, mode ${cfg.mode}\n`);
+process.stderr.write(`kob-mcp: ready on ${cfg.network}, mode ${cfg.mode}; kob claim ${features.claim ? 'yes' : 'no'}, --delivery ${features.delivery ? 'yes' : 'no'}\n`);

@@ -45,13 +45,43 @@ test('caps: per transaction, per day and fee', () => {
 });
 
 test('price band: a buy far above or a sell far below the reference is refused', () => {
-  const book = { last_fill: String(25_000_000n), best_bid: '24000000', best_ask: '26000000' };
-  assert.equal(bandCheck({ side: 'buy', price: 31_000_000n, book, bandPct: 25 }).ok, true);
-  assert.match(bandCheck({ side: 'buy', price: 32_000_000n, book, bandPct: 25 }).reason, /^PRICE_BAND/);
-  assert.match(bandCheck({ side: 'sell', price: 18_000_000n, book, bandPct: 25 }).reason, /^PRICE_BAND/);
-  assert.equal(bandCheck({ side: 'sell', price: 19_000_000n, book, bandPct: 25 }).ok, true);
-  assert.equal(bandCheck({ side: 'buy', price: 1n, book: { best_bid: null, best_ask: null, last_fill: null }, bandPct: 25 }).ok, true);
-  assert.equal(bandCheck({ side: 'buy', price: 10n ** 12n, book, bandPct: null }).ok, true);
+  const book = { last_fill: String(25_000_000n), best_bid: '24000000', best_ask: '26000000', scale: 100_000_000 };
+  const at = (side, price, extra = {}) => bandCheck({ side, price, book, bandPct: 25, decimals: 8, ...extra });
+  assert.equal(at('buy', 31_250_000n).ok, true, 'exactly at +25 % passes');
+  assert.match(at('buy', 31_250_001n).reason, /^PRICE_BAND/);
+  assert.match(at('sell', 18_749_999n).reason, /^PRICE_BAND/);
+  assert.equal(at('sell', 18_750_000n).ok, true, 'exactly at -25 % passes');
+  assert.equal(at('buy', 1n, { book: { best_bid: null, best_ask: null, last_fill: null, scale: 1e8 } }).ok, true);
+  assert.equal(at('buy', 10n ** 12n, { bandPct: null }).ok, true);
+  assert.match(at('buy', 1n, { decimals: null }).note, /decimals are unknown/);
+});
+
+test('price band: exact at any number of decimals, a half-sompi mid and a fractional band', () => {
+  // 12 decimals: the book's scale stops at 10^9, so 25,000,000 sompi per 10^9 base units is 250 KAS per whole token
+  const b12 = { last_fill: '25000000', scale: 1_000_000_000 };
+  assert.equal(bandCheck({ side: 'buy', price: 312_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
+  assert.match(bandCheck({ side: 'buy', price: 312_50000001n, book: b12, bandPct: 25, decimals: 12 }).reason, /250 KAS per whole token/);
+  assert.equal(bandCheck({ side: 'sell', price: 187_50000000n, book: b12, bandPct: 25, decimals: 12 }).ok, true);
+  assert.equal(bandCheck({ side: 'sell', price: 187_49999999n, book: b12, bandPct: 25, decimals: 12 }).ok, false);
+  // 18 decimals: 1 sompi per 10^9 base units is 10^9 sompi (10 KAS) per whole token
+  const b18 = { last_fill: '1', scale: 1_000_000_000 };
+  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_000n, book: b18, bandPct: 25, decimals: 18 }).ok, true);
+  assert.equal(bandCheck({ side: 'buy', price: 1_250_000_001n, book: b18, bandPct: 25, decimals: 18 }).ok, false);
+  // 0 decimals, a mid of 3 and 4 sompi (3.5), a 2.5 % band: the buy limit is 3.5875 sompi
+  const b0 = { last_fill: null, best_bid: '3', best_ask: '4', scale: 1 };
+  assert.equal(bandCheck({ side: 'buy', price: 3n, book: b0, bandPct: '2.5', decimals: 0 }).ok, true);
+  assert.equal(bandCheck({ side: 'buy', price: 4n, book: b0, bandPct: '2.5', decimals: 0 }).ok, false);
+  assert.equal(bandCheck({ side: 'sell', price: 4n, book: b0, bandPct: 150, decimals: 0 }).ok, true, 'a band over 100 % never refuses a sell');
+});
+
+test('ledger: launches of the day, released ones not counted', () => {
+  const l = new Ledger(join(mkdtempSync(join(tmpdir(), 'kob-led-')), 'ledger.jsonl'));
+  l.reserve('a', '2026-11-17', KAS, { tool: 'kob_token_create' });
+  l.reserve('b', '2026-11-17', KAS, { tool: 'kob_token_create' });
+  l.reserve('c', '2026-11-17', KAS, { tool: 'kob_place_limit' });
+  l.reserve('d', '2026-11-16', KAS, { tool: 'kob_token_create' });
+  l.release('b', 'not sent');
+  assert.equal(l.launchesOn('2026-11-17'), 1);
 });
 
 test('config: testnet by default, mainnet only with allowMainnet, the allow-list checked', () => {

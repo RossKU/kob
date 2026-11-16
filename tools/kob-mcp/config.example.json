@@ -5,6 +5,6 @@
   "keyFile": "C:/kob/agent.key",
   "dataDir": "./kob-mcp-data",
   "mode": "confirm",
-  "limits": { "perTxKas": 50, "perDayKas": 200, "maxFeeKas": 1, "priceBandPct": 25 },
+  "limits": { "perTxKas": 50, "perDayKas": 200, "maxFeeKas": 1, "priceBandPct": 25, "launchesPerDay": 3 },
   "withdrawTo": ["kaspatest:<your primary wallet>"]
 }

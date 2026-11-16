@@ -29,6 +29,8 @@ test('stdio: tools are listed and called; a write plans, then sends on confirm',
     assert.equal(takeTool.annotations.destructiveHint, true);
     assert.ok(takeTool.inputSchema.properties.max_price);
     assert.equal(tools.find((x) => x.name === 'kob_book').annotations.readOnlyHint, true);
+    assert.equal(names.includes('kob_claim'), false, 'this CLI has no kob claim');
+    assert.equal(tools.find((x) => x.name === 'kob_place_limit').inputSchema.properties.delivery, undefined);
 
     const book = body(await client.callTool({ name: 'kob_book', arguments: { token: 'TUSD' } }));
     assert.equal(book.best_bid, '24000000');
@@ -36,6 +38,7 @@ test('stdio: tools are listed and called; a write plans, then sends on confirm',
     const status = await client.callTool({ name: 'kob_status', arguments: {} });
     assert.equal(status.content[0].text.includes(t.cfg.keyFile), false, 'no key path');
     assert.equal(body(status).wallet.address.startsWith('kaspatest:'), true);
+    assert.match(body(status).cli.claim, /not in this CLI build/);
 
     const args = { token: 'TUSD', side: 'buy', amount: '2TUSD', price: '0.25KAS' };
     const plan = body(await client.callTool({ name: 'kob_place_limit', arguments: args }));
@@ -67,4 +70,22 @@ test('stdio: a config that asks for mainnet without allowMainnet does not start'
   const client = new Client({ name: 'kob-mcp-test', version: '0.0.0' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [join(HERE, '..', 'server', 'index.mjs'), '--config', file], stderr: 'pipe' });
   await assert.rejects(client.connect(transport));
+});
+
+test('stdio: a CLI with kob claim and --delivery gets kob_claim and the delivery argument', async () => {
+  const t = setup();
+  const file = join(t.dir, 'config.json');
+  writeFileSync(file, JSON.stringify(t.raw));
+  const transport = new StdioClientTransport({ command: process.execPath, args: [join(HERE, '..', 'server', 'index.mjs'), '--config', file],
+    env: { ...process.env, FAKE_KOB_FEATURES: 'claim,delivery' }, stderr: 'pipe' });
+  const client = new Client({ name: 'kob-mcp-test', version: '0.0.0' });
+  await client.connect(transport);
+  try {
+    const { tools } = await client.listTools();
+    assert.ok(tools.some((x) => x.name === 'kob_claim'));
+    assert.deepEqual(tools.find((x) => x.name === 'kob_place_limit').inputSchema.properties.delivery.enum, ['each', 'collected', 'one-utxo']);
+    assert.match(body(await client.callTool({ name: 'kob_status', arguments: {} })).cli.claim, /offered/);
+  } finally {
+    await client.close();
+  }
 });

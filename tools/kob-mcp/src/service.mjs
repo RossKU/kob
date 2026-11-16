@@ -60,6 +60,18 @@ export class KobService {
     this.plans = new Map();
     this.queue = Promise.resolve();
     this.maker = null;
+    this.features = { claim: false, delivery: false };
+  }
+
+  /** What this CLI build offers, read once from its help: `kob claim` and `--delivery` (bid delivery). */
+  async detectFeatures() {
+    const claim = await this.kob.exec(['claim', '--help'], { bare: true });
+    const place = await this.kob.exec(['place', '--help'], { bare: true });
+    this.features = {
+      claim: claim.code === 0 && /\bclaim\b/.test(claim.stdout),
+      delivery: place.code === 0 && /--delivery\b/.test(place.stdout),
+    };
+    return this.features;
   }
 
   /** Hides the key path from anything returned. */
@@ -155,7 +167,10 @@ export class KobService {
     return {
       wallet,
       killSwitch: killSwitchOn(this.cfg) ? 'ON: every write is refused (remove the STOP file to resume)' : 'off',
-      today: { day, spentKas: kas(spent), leftKas: kas(caps.perDay > spent ? caps.perDay - spent : 0n) },
+      today: { day, spentKas: kas(spent), leftKas: kas(caps.perDay > spent ? caps.perDay - spent : 0n),
+        launches: this.ledger.launchesOn(day), launchesPerDay: this.cfg.limits.launchesPerDay },
+      cli: { claim: this.features.claim ? 'kob claim: offered' : 'kob claim: not in this CLI build (kob_claim is not registered)',
+        delivery: this.features.delivery ? '--delivery: offered' : '--delivery: not in this CLI build (kob_place_limit has no delivery argument)' },
     };
   }
 
@@ -168,7 +183,10 @@ export class KobService {
     switch (tool) {
       case 'kob_place_limit': {
         const argv = ['place', 'limit', '--token', need(RE.token, a.token, 'token'), '--side', a.side, '--amount', amt(a.amount, 'amount'), '--price', px(a.price, 'price')];
-        if (a.delivery) argv.push('--delivery', a.delivery);
+        if (a.delivery) {
+          if (!this.features.delivery) throw new Refusal('NOT_OFFERED: this kob CLI build has no --delivery');
+          argv.push('--delivery', a.delivery);
+        }
         if (a.tip) argv.push('--tip', px(a.tip, 'tip'));
         if (a.gtd) argv.push('--gtd', need(RE.when, a.gtd, 'gtd'));
         if (a.day) argv.push('--day');
@@ -206,6 +224,7 @@ export class KobService {
       case 'kob_merge':
         return { argv: ['merge', need(RE.token, a.token, 'token')] };
       case 'kob_claim': {
+        if (!this.features.claim) throw new Refusal('NOT_OFFERED: this kob CLI build has no kob claim');
         const argv = ['claim', need(RE.id, a.id, 'id').toLowerCase()];
         if (a.merge && a.sell_price) throw new Refusal('BAD_ARGUMENT: merge and sell_price exclude each other');
         if (a.merge) argv.push('--merge');
@@ -303,7 +322,9 @@ export class KobService {
     const r = await this.kob.exec([...built.argv, ...extra, '--dry-run']);
     const errs = (r.json?.issues ?? []).filter((i) => i.severity === 'error');
     if (r.code !== 0 || errs.length || !r.json) {
-      return { ok: false, doc: r.json, error: `CLI_REFUSED (exit ${r.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || r.stderr || 'no output'}` };
+      // A take's bound refusal is an issue in the JSON, or only the stderr text when the fill could not be built either.
+      const bound = errs.length ? '' : takeRefusalCode(r.stderr);
+      return { ok: false, doc: r.json, error: `CLI_REFUSED (exit ${r.code}): ${errs.map((i) => `${i.code} ${i.message}`).join('; ') || `${bound}${r.stderr || 'no output'}`}` };
     }
     return { ok: true, doc: r.json, ...spendOf(r.json) };
   }
@@ -352,7 +373,10 @@ export class KobService {
       }
       const built = await this.build(tool, args);
       if (plan?.fund) built.fund = plan.fund;
-      const band = built.band ? bandCheck({ ...built.band, book: await this.bookFor(built.band.token), bandPct: this.cfg.limits.priceBandPct }) : null;
+      if (built.create && this.ledger.launchesOn(today()) >= this.cfg.limits.launchesPerDay) {
+        throw new Refusal(`LAUNCH_CAP: ${this.cfg.limits.launchesPerDay} token creations per UTC day, ${this.ledger.launchesOn(today())} today`);
+      }
+      const band = built.band ? await this.band(built.band) : null;
       if (band && !band.ok) throw new Refusal(band.reason);
       const planId = plan?.id ?? randomBytes(6).toString('hex');
       const planDir = join(this.cfg.dataDir, 'creations', `${planId}-plan-${this.now()}`);
@@ -435,6 +459,19 @@ export class KobService {
     };
   }
 
+  /** The price band of a limit price or take bound, with the token's decimals for books whose scale is capped at 10^9. */
+  async band({ side, price, token }) {
+    const book = await this.bookFor(token);
+    let decimals = null;
+    const scale = book?.scale != null ? BigInt(book.scale) : null;
+    if (scale != null && scale < 1_000_000_000n) decimals = scale.toString().length - 1;
+    else if (scale != null && book?.token) {
+      const list = await this.tokens({ search: book.token }).catch(() => null);
+      decimals = (list?.tokens ?? []).find((t) => t.covenant_id === book.token)?.decimals ?? null;
+    }
+    return bandCheck({ side, price, book, decimals, bandPct: this.cfg.limits.priceBandPct });
+  }
+
   async bookFor(token) {
     try {
       return await this.cli(['book', token, '--depth', '1']);
@@ -446,6 +483,13 @@ export class KobService {
   redactArgs(a) {
     return JSON.parse(this.redact(JSON.stringify(a ?? {})));
   }
+}
+
+/** "TAKE_PRICE_ABOVE_MAX: " or "TAKE_PRICE_BELOW_MIN: " from the CLI's stderr text, else "". */
+export function takeRefusalCode(stderr) {
+  if (/TAKE_PRICE_ABOVE_MAX|above your --max-price/.test(stderr ?? '')) return 'TAKE_PRICE_ABOVE_MAX: ';
+  if (/TAKE_PRICE_BELOW_MIN|below your --min-price/.test(stderr ?? '')) return 'TAKE_PRICE_BELOW_MIN: ';
+  return '';
 }
 
 export function ensureDataDir(cfg) {

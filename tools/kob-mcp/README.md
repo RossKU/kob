@@ -28,7 +28,8 @@ the key, and no tool shows its path. It runs on testnet-10 by default.
 | `kob_token_create` | a fixed-supply KCC-20 token, the whole supply to this wallet |
 | `kob_send` | KAS or a token, only to an allow-listed address |
 
-`delivery` and `kob_claim` need a CLI with bid delivery (`kob claim`); an older CLI refuses them (exit 2).
+At start-up the server reads `kob claim --help` and `kob place --help`: `kob_claim` and the `delivery` argument are
+registered only when the CLI offers them, and `kob_status` says which (`cli`).
 
 ## How a write goes
 
@@ -36,7 +37,8 @@ the key, and no tool shows its path. It runs on testnet-10 by default.
    the fee, the KAS that leaves the wallet (`spendKas`: escrow, carriers, sends and fee) and a `planId`. Nothing is signed.
 2. The same call with `confirm: "<planId>"` within `planTtlSec` (default 300 s) plans again, checks again and runs `--yes`.
    Other arguments, a used or an expired plan id, or a new plan that takes more than the confirmed one plus `maxFeeKas`
-   are refused. The sent transaction is planned again, so its ids can differ from the dry run's.
+   are refused.
+   The sent transaction is planned again, so its ids can differ from the dry run's; what must match is the KAS it takes.
 3. With `"mode": "auto"` the first call checks and sends at once. The limits still apply.
 
 ## Safeguards
@@ -46,8 +48,13 @@ the key, and no tool shows its path. It runs on testnet-10 by default.
 - **Caps** (KAS that leaves the wallet, `max(fee, -net)` of the plan): `perTxKas` per transaction, `perDayKas` per UTC day,
   `maxFeeKas` per transaction. The day is summed from `ledger.jsonl` in the data folder: a send is reserved before `--yes`
   and settled from the CLI's result, released only when nothing was sent, and counted when the outcome is unknown.
+  The caps count gross outflow: KAS a cancel or a fill brings back does not free any of the day's cap.
+- **Launches.** At most `launchesPerDay` (default 3) token creations per UTC day.
 - **Price band.** A limit price or take bound more than `priceBandPct` (default 25 %) worse than the last fill (else the
-  mid) is refused. It catches mistakes, not a market someone moves. The caps are the hard limit.
+  mid) is refused, in exact integers at any number of decimals. It catches mistakes, not a market someone moves. The
+  caps are the hard limit.
+- **Take.** The CLI's bound refusal is read in both forms: `TAKE_PRICE_ABOVE_MAX` / `TAKE_PRICE_BELOW_MIN` in the JSON
+  `issues`, or only the stderr text when the fill could not be built either.
 - **Withdrawals.** `kob_send` pays only the addresses in `withdrawTo` (your primary wallet). No tool takes another
   recipient: token creation sends the supply and the change to this wallet.
 - **Kill switch.** While `<dataDir>/STOP` (or `killSwitchFile`) exists, every write is refused before the CLI runs. Reads
@@ -60,14 +67,15 @@ Keep one data folder per wallet: the caps count what this folder's ledger saw.
 
 ## Claude Desktop
 
-Build the extension (`.mcpb`) and open it with Claude Desktop:
+It needs Node 22 or later (global `WebSocket` and `fetch`), as Claude Desktop's bundled Node or your own; the
+manifest says `node >=22.0.0` and the server refuses an older one. Build the extension (`.mcpb`) and open it with Claude Desktop:
 
 ```sh
 cd tools/kob-mcp && npm ci --omit=dev
 npx @anthropic-ai/mcpb@2.1.2 pack . kob-mcp.mcpb
 ```
 
-The install form asks for the `kob` binary, the key file, the primary wallet, the three caps and the data folder; a node
+The install form asks for the `kob` binary, the key file, the primary wallet, the three caps, the launches per day and the data folder; a node
 URL (needed to create tokens) and a config file for the other settings are optional. The form's values win over the file.
 
 ## Claude Code

@@ -50,7 +50,7 @@ export class Kob {
 
   /** One run: { code, docs, json (the first document), stdout, stderr, timedOut }. */
   exec(args, opts = {}) {
-    const argv = [...this.cfg.kobCliArgs, ...args, ...this.common(opts)];
+    const argv = [...this.cfg.kobCliArgs, ...args, ...(opts.bare ? [] : this.common(opts))];
     return new Promise((resolve) => {
       const child = spawn(this.cfg.kobCli, argv, { env: this.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';

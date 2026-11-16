@@ -79,11 +79,29 @@ async function readTool(svc, name, args) {
   }
 }
 
-/** The MCP server with every tool registered. */
+/** The tools this CLI build supports: kob_claim and the delivery argument only when its help names them. */
+export function toolsFor(features) {
+  const out = [];
+  for (const [name, title, description, shape, kind] of TOOLS) {
+    if (name === 'kob_claim' && !features.claim) continue;
+    let s = shape;
+    if (name === 'kob_place_limit' && !features.delivery) {
+      const { delivery, ...rest } = shape;
+      s = rest;
+    }
+    if (name === 'kob_fee_estimate' && !features.claim) {
+      s = { ...shape, tool: z.enum(shape.tool.options.filter((t) => t !== 'kob_claim')) };
+    }
+    out.push([name, title, description, s, kind]);
+  }
+  return out;
+}
+
+/** The MCP server with the tools registered; call `service.detectFeatures()` first (main does). */
 export function createServer(cfg, opts = {}) {
   const svc = opts.service ?? new KobService(cfg);
   const server = new McpServer({ name: 'kob-mcp', version: VERSION });
-  for (const [name, title, description, shape, kind] of TOOLS) {
+  for (const [name, title, description, shape, kind] of toolsFor(svc.features)) {
     const annotations = kind === 'read'
       ? { title, readOnlyHint: true, openWorldHint: true }
       : { title, readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };

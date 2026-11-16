@@ -30,8 +30,12 @@ wallet holds the 5 KAS. No key or key path appears in the transcript, the audit 
 Seen during the run:
 - The first take of the best ask got "stale view: the node holds no unspent output of the order at its current
   outpoint": a soak bot had filled or amended it after the book was read. The next read gave a live order.
-- This CLI build reports a take's bound refusal on stderr (exit 1, stdout empty), not as `TAKE_PRICE_ABOVE_MAX` in
-  `issues`; the tool returns the CLI's message either way.
+- At 23:26 the take's bound refusal came only as stderr text (exit 1, stdout empty). The fill could not be built
+  either (the wallet's change was still unconfirmed), and `crates/kob-cli/src/trade/actions.rs` (lines 1084 and 1131)
+  then reports the refusal in place of the build error, as REFERENCE.md documents ("When the fill cannot be built
+  either"). With confirmed funds (23:5x UTC, the same CLI) the refusal is `TAKE_PRICE_ABOVE_MAX` in the JSON `issues`
+  (line 1164). The server reads both forms.
+- With this CLI (no `kob claim`, no `--delivery`) the server registers 16 tools and `kob_status` says so under `cli`.
 - The dry run's covenant id and transaction id differ from the sent ones: the CLI plans the sent transaction again. The
   check on confirm is the KAS it takes, not the ids.
 - The packed extension (`mcpb pack`) was unpacked and started with only the form's `KOB_MCP_*` variables; it listed
