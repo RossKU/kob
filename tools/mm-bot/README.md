@@ -1,11 +1,9 @@
 # kob-mm-bot
 
-A market maker for one dollar-stablecoin token on a KOB KAS book. It quotes a bid and an ask ladder around a fair value
-taken from the KAS/USD exchange markets, amends its orders in place when the market moves, and never takes an order.
-It drives the `kob` CLI as a child process and needs Node 22; there are no npm dependencies.
-
-Production target: **kzUSDC** on Kaspa mainnet, covenant id `cc9957fe0d485f79994ed583aa7e16bacf194d9b9d6d77aeedc129349ddad12c`,
-6 decimals. The token is pinned by covenant id, never by ticker: look-alike "kzUSDC" tokens exist.
+A market maker for a dollar-stablecoin token on its KOB KAS book: set `token` to its covenant id. It quotes a bid
+and an ask ladder around a fair value taken from the KAS/USD exchange markets, amends its orders in place when the
+market moves, and never takes an order. It drives the `kob` CLI as a child process and needs Node 22; there are no npm
+dependencies. The token is pinned by covenant id, never by ticker (tickers collide).
 
 ## Setup
 
@@ -63,7 +61,7 @@ picks the mode, and quotes or pulls its quotes.
 **Deposits.** When a side is short the bot says what to send, once per change and every 60 min while it lasts:
 
 ```
-IDLE: Insufficient kzUSDC (cc9957fe...): asks need 45% = 450 USD = 450 kzUSDC, 0 kzUSDC (0%) held; deposit 450 kzUSDC to kaspa:qq... to resume asks.
+IDLE: Insufficient USDX (<covenant id>): asks need 45% = 450 USD = 450 USDX, 0 USDX (0%) held; deposit 450 USDX to kaspa:qq... to resume asks.
 INFO: Funds received, ask quoting resumed.
 ```
 
@@ -147,7 +145,7 @@ errors), `logs/fills.jsonl`, `logs/alerts.jsonl`, and `state.json` (the bot's or
 
 ## Fees
 
-Network fees measured on testnet-10 with this bot (2026-11-16, a 6-decimal public-mint token, the kzUSDC program):
+Network fees measured on testnet-10 with this bot (2026-11-16, a 6-decimal token on the KCC-20 public-mint program):
 
 | Transaction | Fee (KAS) |
 |---|---|
