@@ -1175,12 +1175,12 @@ or pair evidence) and, for a repeat merge, the exit's state; it scans every inpu
 most 8 each, unrolled). It reads no counterparty: its cost does not depend on the route or the netting it is in. The
 budgets are measured per shape and program pair by `crates/kob-protocol/tests/budget_table.rs` (pair roles
 `<Kind>.<entry>…@<program of A>+<program of B>`, `data/compute_budgets.json`, units of 10,000 script units): on KCC20Ref
-for both tokens `KobPair` 6 to 11, `KobCondPair` 7 to 21 (a stop armed in its fill 21, an update 11), `KobIfdPair` 7 to 34
-(a sell-first fill that arms its stop entry and books its exit 34); over every program pair at most 72, 91 and 136 (the
+for both tokens `KobPair` 6 to 15, `KobCondPair` 7 to 29 (a fill 29, an update 18), `KobIfdPair` 7 to 40
+(a sell-first fill that arms its stop entry and books its exit 40); over every program pair at most 96, 133 and 163 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 2,960 B (state 447 B), `KobCondPair` 6,848 B (state 543 B), `KobIfdPair` 9,252 B (state
-909 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
+**Template sizes.** `KobPair` 3,717 B (state 483 B), `KobCondPair` 7,842 B (state 579 B), `KobIfdPair` 9,351 B (state
+936 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 
 **Batches without caps.** The planner has no size cap and no candidate cap; a batch is filled up to the physical

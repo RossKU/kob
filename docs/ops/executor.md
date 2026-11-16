@@ -735,8 +735,9 @@ node (wRPC JSON)  ->  follower  ->  extract  ->  ingest (one atomic SQLite commi
   token UTXO of ANY other token owned by an order id is a FOREIGN stray: flagged `foreign: true` with its proven `state` and
   `program` (the extractor reads the transfer leader of every token transfer that is not an order's own continuation to find
   them). A maker's SWEEP in place (`kob1-payload.md`) keeps the order live: event `sweep`, the same state at the new
-  outpoint. Bid-side kinds own no tokens:
-  every token owned by their id is a stray.
+  outpoint. Bid-side kinds own no tokens, except a mode-1 delivery bid's **bought-custody** (role `bought`: the one token
+  UTXO owned by the order id holding exactly `bought` base units, served as `bought_custody { expected_amount, utxo, ok }`);
+  every other token owned by their id is a stray.
 * **Auctions.** `GET /v1/orders/{id}` (and each order of an unaggregated book) carries `auction`
   with `kind` (`decay`, `rise`, `stop`, `entry`), `origin_daa`, `start_price`, `end_price`,
   `current_price` at the node's DAA score and whether it is `complete`; `quote` is the price now
@@ -2726,6 +2727,15 @@ a stop is only armed by a batch that carries a qualifying fill.
 | Next tick | an armed stop runs its band auction with class-2 priority, no evidence needed |
 
 `--no-arm` turns updates off (triggered fills stay). The indexer's events name the evidence (`detail.evidence`, Part B).
+
+### Bid delivery
+
+A delivering bid or pair order carries a mode (`docs/design/bid-delivery-spec.md`). Mode 0: each fill makes a new token UTXO
+for the maker. Mode 1: the fill adds the bought tokens to the order's bought-custody (one extra token input once it exists, one
+output), and the maker gets them when the order ends, is refunded or cancelled, or claims them. Mode 2: the fill may top up the
+maker's receive UTXO (the token's first input; at most one top-up per token per transaction) and keeps `topupTip`; a fill of
+`n` at most the UTXO's threshold, or a second top-up, delivers plainly. The matcher counts the bought-custody and the receive UTXO
+as token slots, and `pair_keeper_tips.json` / `compute_budgets.json` carry the delivery shapes.
 
 ### Pair orders
 

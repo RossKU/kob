@@ -4,6 +4,8 @@ One runner, `ablate.mjs`, for the contract-source ablations of the harness suite
 KRON: sell side, buy side) and the pair orders (`KobPair`, `KobCondPair` with its repeat-IFD checks, `KobIfdPair`). Node 22, no dependencies, no `cargo` unless you do not pass `--exe-dir`. Works on Windows, Linux and macOS (the
 repo root is derived from the script location, `tools/ablation/../..`).
 
+Bid delivery (modes 0 / 1 / 2): the `KobBid`, `KobCondBid`, `KobIfdAsk` and pair catalogs carry entries for the delivery rules (bought-custody, top-up, stray guard, release at the end); the Suites table counts are the current catalog sizes.
+
 Latest results: [RESULTS.md](RESULTS.md). Audit completion (2026-10-13): every `require` of the KAS-kind templates has an
 entry or is documented as unwitnessable in its catalog header (`coverage.mjs`: 598 -> 35 require lines without a mutation over
 all eight catalogs, the 35 all documented), **562/562 new entries confirmed, 14/14 held**. Pre-mainnet covenant fixes
@@ -47,14 +49,14 @@ directory (line endings normalised to LF) and mutates only the copies.
 
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
-| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 297 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 218 |
-| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/orders/kron` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 312 |
-| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/orders/kron` | KobCondBidKron, KobIfdAskKron | 209 |
-| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 85 |
-| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 127 |
+| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 340 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 255 |
+| `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/orders/kron` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 321 |
+| `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/orders/kron` | KobCondBidKron, KobIfdAskKron | 218 |
+| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 88 |
+| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 133 |
 | `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund, the merge bound) | `kob_ifd_pair_tests` | `contracts/orders` | KobCondPair | 12 |
-| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/orders` | KobIfdPair | 128 |
+| `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/orders` | KobIfdPair | 135 |
 
 The pair suites run every scenario on token pairs of both families (`common/pair_harness.rs`: the three pair templates are
 compiled from source in dependency order, KobCondPair against the compiled KobPair and KobIfdPair against both, so a

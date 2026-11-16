@@ -606,7 +606,11 @@ curl -s $API/v1/orders/$ORDER
 | `auction`, `quote` | object or null, string or null | An auction in progress (decay, rise, armed stop leg or entry) and the quote now (the auction price, else the limit; `null` for pair orders). |
 | `repeat` | object or null | Repeating if-done entry (`role: "entry"`, `rpt_amount`, `rearm_amount`) or booked exit (`role: "exit"`, `parent`, `rpt_until`, `rpt_price`). |
 | `custody` | object, **omitted** | Ask kinds on single lookups and in live orders of a `maker=` list: `expected_amount` (string or null), `utxo` (the one live custody UTXO or null), `ok` (exactly one live custody holds the expected amount). |
-| `strays` | array, **omitted** | Live token UTXOs owned by the order id that are not its custody (never liquidity). Single lookups and live orders of a `maker=` list. At most 100 are listed. |
+| `delivery`, `delivery_mode` | string, number, **omitted** | Bid delivery of the kinds that deliver (`KobBid`, `KobCondBid`, `KobPair`, `KobCondPair`; an if-done entry: the mode its exits use): `wallet` (0, a new token UTXO per fill), `order` (1, the order keeps what it buys in its bought-custody) or `topup` (2, a fill may top up the maker's receive UTXO). Orders placed before the modes read `wallet`; KRON twins are always `wallet`. |
+| `bought` | string, **omitted** | Mode 1: base units the bought-custody holds now (`"0"` in the other modes or after a claim). |
+| `topup_tip`, `recv_threshold` | string, **omitted** | Mode 2: the sompi a top-up fill keeps and the smallest guard threshold (base units) of a receive UTXO it may top up; `"0"` otherwise. |
+| `bought_custody` | object, **omitted** | Mode 1, single lookups and live orders of a `maker=` list: like `custody` for the bought-custody: `expected_amount` (= `bought`), `utxo` (the live token UTXO of role `bought`), `ok` (exactly one holds `bought`; none when `bought` is 0). |
+| `strays` | array, **omitted** | Live token UTXOs owned by the order id that are not its custody or bought-custody (never liquidity). Single lookups and live orders of a `maker=` list. At most 100 are listed. |
 | `strays_total` | number, **omitted** | Present only when the order has more live strays than `strays` lists: how many it has. |
 | `last_block`, `last_daa`, `confirmations`, `settled` | number, number, number or null, bool | Latest event position of the order. |
 | `expired` | bool | Live and past `expiry_daa`: a refund is pending. |
@@ -617,7 +621,7 @@ curl -s $API/v1/orders/$ORDER
 | `warnings` | array of string | Show these with the order: `genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority`. |
 
 A token UTXO object (`custody.utxo`, `strays[]`) has `txid`, `index`, `token`, `owner`, `amount`, `value` (the KAS carrier),
-`role` (`custody` or `stray`), `created_daa`, `spent`, `spent_txid`, `confirmations`, `settled`, and, when the indexer proved it,
+`role` (`custody`, `bought` or `stray`), `created_daa`, `spent`, `spent_txid`, `confirmations`, `settled`, and, when the indexer proved it,
 `state` (the token state JSON that kob-wasm's builders take) and `program`; `foreign: true` appears only on a stray of a token
 other than the order's own.
 
@@ -752,7 +756,7 @@ curl -s "$API/v1/token-utxos?owner=$KEY&token=$TOKEN&limit=100"
 | `program`, `template_hash` | string, hex | The pinned token program template (`KCC20Ref`, `KCC20Ref_8x8`, `KronToken2433`, ...): the argument of kob-wasm's `tokenScriptPublicKey` and the builders' token requests. `template_hash` is empty if the program cannot be mapped. |
 | `owner`, `owner_kind` | hex, number | The state's 32-byte owner and its kind: KCC-20 `owner_scheme` (0 key, 4 covenant id); KRON `id_type` (0 key, 1 script hash, 2 covenant id, 3 address presence). |
 | `amount`, `value` | string | Token base units; the KAS carrier in sompi. |
-| `role` | string | `owned` (a holder that is not a KOB order), `custody` or `stray` (owned by an order id). |
+| `role` | string | `owned` (a holder that is not a KOB order), `custody`, `bought` (a mode-1 order's bought-custody) or `stray` (owned by an order id). |
 | `state` | object or `null` | The token state JSON as kob-wasm's builders take it (`null` if it cannot be decoded); KRON: `{"owner","id_type","amount","is_minter"}`. |
 | `state_hex` | string | The state span in hex (112 bytes for KCC-20, 46 bytes for KRON). |
 | `created_daa`, `spent`, `spent_txid`, `confirmations`, `settled` | number, bool, hex or null, number or null, bool | Position and spend status; `spent_txid` is set only for spends the indexer saw. |
@@ -1335,7 +1339,7 @@ What the code and the docs support, and no more:
   pin your client to a tested build.
 * **Defensive client habits** (advice, not a promise): ignore fields you do not know; treat an absent optional field as `null`
   (these are omitted when they do not apply: health `history_from_daa`, `catch_up`, `backfill`, `gaps`, `nodes`; token
-  `decimals_source`, `program_ambiguous`, `candidate_templates`, `declaration`; order `placed_state`, `custody`, `strays`,
+  `decimals_source`, `program_ambiguous`, `candidate_templates`, `declaration`; order `placed_state`, `custody`, `delivery`, `delivery_mode`, `bought`, `topup_tip`, `recv_threshold`, `bought_custody`, `strays`,
   `strays_total`, `frozen_reason`, `children`, `children_total`, `pair`; pair `stop_price`, `prefund`, custody `utxo` and
   `ok`; token UTXO `state`, `program`, `foreign`); parse amounts as arbitrary-precision integers; never assume a list is complete
   without following `next_cursor`.
