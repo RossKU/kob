@@ -210,13 +210,21 @@ export function pairCollectedExtra(program: string): bigint {
   return v ?? Object.values(PAIR_COLLECTED_EXTRA_REFERENCE).reduce((a, b) => (a > b ? a : b), 0n);
 }
 
+/** The later fills a Collected pair tip pays for at most: those of the 64 deliveries a pair order funds by default, less the first. */
+export const MAX_COLLECTED_LATER_FILLS = 63n;
+
 /**
- * What a Collected pair order adds to its default tip (sompi per whole A): ceil(ceil(1.25 x extra) x scale / minFill), so every fill of
- * at least minFill pays its filler at least 1.25 times the custody input's extra fee on top of the default pair tip.
+ * What a Collected pair order adds to its default tip (sompi per whole A, the unit of every pair tip):
+ *   ceil(ceil(1.25 x extra) x L x scale / amount),  L = min(ceil(amount / minFill) - 1, MAX_COLLECTED_LATER_FILLS)
+ * that is 1.25 times the custody input's extra fee for each later fill (the first fill has no custody yet), spread over the whole amount
+ * like the default pair tip, so a later fill of the average size pays its filler that much on top. An order of one possible fill adds 0.
  */
-export function collectedPairTipExtra(extra: bigint, scale: bigint, minFill: bigint): bigint {
-  if (extra <= 0n || minFill <= 0n) return 0n;
-  return ceilDiv(ceilDiv(extra * 5n, 4n) * scale, minFill);
+export function collectedPairTipExtra(extra: bigint, scale: bigint, amount: bigint, minFill: bigint): bigint {
+  if (extra <= 0n || minFill <= 0n || amount <= 0n) return 0n;
+  const later = ceilDiv(amount, minFill) - 1n;
+  const l = later < MAX_COLLECTED_LATER_FILLS ? later : MAX_COLLECTED_LATER_FILLS;
+  if (l <= 0n) return 0n;
+  return ceilDiv(ceilDiv(extra * 5n, 4n) * l * scale, amount);
 }
 
 /**

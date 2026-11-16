@@ -219,6 +219,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // the delivery of a buy (kob/orders/delivery.ts): the wallet default of Settings and the receive threshold this wallet stored for the token
   const [walletDelivery] = useDeliveryPref();
   const family = token.program && isTokenProgram(token.program) ? CODEC_OF_PROGRAM[token.program] : undefined;
+  const quoteFamily = quote?.program && isTokenProgram(quote.program) ? CODEC_OF_PROGRAM[quote.program] : undefined;
   const pubkey = wallet.info?.pubkey ?? null;
   const ext = env?.token.extensionCommitment ?? null;
   const [thresholdTick, setThresholdTick] = useState(0);
@@ -231,9 +232,10 @@ export function OrderTicket(props: OrderTicketProps) {
       decimals: token.decimals, scale, tick: token.tick ?? 1n, tzOffsetMin: new Date().getTimezoneOffset(), ...(rateMilli ? { rateMilli } : {}),
       ...(quote ? { quoteDecimals: quote.decimals } : { ref: { buy: bestAsk, sell: bestBid } }),
       ...(family ? { family } : {}),
+      ...(quoteFamily ? { quoteFamily } : {}),
       delivery: { walletDefault: walletDelivery, ...(storedThreshold !== undefined ? { threshold: storedThreshold } : {}) },
     }),
-    [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid, family, walletDelivery, storedThreshold],
+    [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid, family, quoteFamily, walletDelivery, storedThreshold],
   );
   // a streaming order's "price you saw" is the quote its side meets (buy: the best ask, sell: the best bid): filled in and kept on the quote until
   // the user types a price of their own
@@ -427,7 +429,8 @@ export function OrderTicket(props: OrderTicketProps) {
   const [deliveryHelp, setDeliveryHelp] = useState(false);
   const deliverySubs: Record<string, { text: string; testid: string }> = {};
   // one line under the select that follows the choice (Added to one UTXO: its tip and the tip total follow under the tip box)
-  if (delivery) deliverySubs.delivery = { text: t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
+  // a pair sell receives token B: the line names it
+  if (delivery) deliverySubs.delivery = { text: quote && form.side === 'sell' ? t(`ticket.delivery.hint.${delivery}.pairSell`, { quote: quote.ticker }) : t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
   if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
     const tip = BigInt(planned.delivery.fields.topupTip);
     const kas = formatKas(topupTipTotal(tip, planned.fills), { group: ',' });

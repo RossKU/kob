@@ -3,8 +3,9 @@
 // KRON A and an immediate order deliver at each fill. The plans are signed and validated by the script engine (pair-testkit pairValid).
 import { describe, expect, it } from 'vitest';
 import { defaultPairTip } from './pair-common';
-import { kronA, makePairEnv } from './pair-fixtures';
+import { kronA, kronB, makePairEnv } from './pair-fixtures';
 import { pairValid, plan } from './pair-testkit';
+import { ceilDiv } from '../units';
 import { PAIR_COLLECTED_EXTRA_REFERENCE, collectedPairTipExtra, pairCollectedExtra, planDelivery } from './delivery';
 
 /** the pair state of a plan's (first) order: KobPair or KobCondPair */
@@ -13,13 +14,20 @@ const codes = (p: { issues: { code: string }[] }): string[] => p.issues.map((i) 
 const buy = { type: 'limit', side: 'buy', amount: 10_000n, price: 1_400n, minFill: 2_500n } as const;
 
 describe('the Collected tip of a pair bid', () => {
-  it('adds ceil(ceil(1.25 x extra) x scale / minFill) to the default tip (negative: no margin, no rounding up)', () => {
+  it('adds ceil(ceil(1.25 x extra) x L x scale / amount), L = later fills (at most 63), to the default tip (negative: no margin, no rounding up, no cap)', () => {
     expect(PAIR_COLLECTED_EXTRA_REFERENCE.KCC20Ref_8x8).toBe(1_282_600n);
-    // 1.25 x 1 282 600 = 1 603 250 sompi per fill of minFill
-    expect(collectedPairTipExtra(1_282_600n, 1_000n, 2_500n)).toBe(641_300n);
-    expect(collectedPairTipExtra(1_282_601n, 1_000n, 3n)).toBe(534_417_334n);
-    expect(collectedPairTipExtra(1_282_601n, 1_000n, 3n)).not.toBe((1_282_601n * 5n * 1_000n) / 4n / 3n);
-    expect(collectedPairTipExtra(0n, 1_000n, 3n)).toBe(0n);
+    // 10 000 base units, minFill 2 500: 3 later fills of 1.25 x 1 282 600 = 1 603 250 sompi, over 10 whole A
+    expect(collectedPairTipExtra(1_282_600n, 1_000n, 10_000n, 2_500n)).toBe(480_975n);
+    // a later fill of minFill pays its filler at least 1.25 x the extra less the first fill's share
+    expect((480_975n * 2_500n) / 1_000n).toBeGreaterThanOrEqual((1_603_250n * 3n) / 4n);
+    // rounded up
+    expect(collectedPairTipExtra(1_282_601n, 1_000n, 7n, 3n)).toBe(458_072_000n);
+    expect(collectedPairTipExtra(1_282_601n, 1_000n, 7n, 3n)).not.toBe((((1_282_601n * 5n) / 4n) * 2n * 1_000n) / 7n);
+    // at most 63 later fills: a minFill of 1 over 10 000 does not pay 9 999 of them
+    expect(collectedPairTipExtra(1_282_600n, 1_000n, 10_000n, 1n)).toBe(ceilDiv(1_603_250n * 63n * 1_000n, 10_000n));
+    // one possible fill: no custody input ever
+    expect(collectedPairTipExtra(1_282_600n, 1_000n, 10_000n, 10_000n)).toBe(0n);
+    expect(collectedPairTipExtra(0n, 1_000n, 7n, 3n)).toBe(0n);
     // a program without a measurement uses the largest reference value
     expect(pairCollectedExtra('KCC20Ref')).toBe(1_282_600n);
   });
@@ -32,7 +40,7 @@ describe('pair bids with a delivery (signed and validated by the script engine)'
     expect(pairState(p)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
     expect(p.pair!.deliveries).toBe(1n);
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'collected' }, fills: 1n });
-    expect(BigInt(pairState(p).tip)).toBe(defaultPairTip(env, 10_000n) + collectedPairTipExtra(pairCollectedExtra(env.token.program), env.token.scale, 2_500n));
+    expect(BigInt(pairState(p).tip)).toBe(defaultPairTip(env, 10_000n) + collectedPairTipExtra(pairCollectedExtra(env.token.program), env.token.scale, 10_000n, 2_500n));
     expect(p.disclosure!.notes).toContain('deliveryCollected');
     // a tip the user typed stays as typed
     expect(pairState(pairValid(env, { ...buy, tip: 7n })).tip).toBe('7');
@@ -53,19 +61,37 @@ describe('pair bids with a delivery (signed and validated by the script engine)'
     expect(codes(byDefault)).toContain('DELIVERY_TOPUP_FALLBACK');
   });
 
-  it('a KRON A, an IOC and a pair sell deliver at each fill (negative: the rules removed give them Collected)', () => {
+  it('a KRON A, an IOC and a sell of a KRON B deliver at each fill (negative: the rules removed give them Collected)', () => {
     const kron = pairValid(makePairEnv({ a: kronA(), aAmounts: [100_000n] }), { ...buy, delivery: { choice: 'collected' } });
     expect(pairState(kron).mode).toBe('0');
     const ioc = plan(makePairEnv(), { type: 'ioc', side: 'buy', amount: 1_000n, price: 1_600n });
     expect(planDelivery(ioc)?.delivery.choice ?? 'each').toBe('each');
-    const sell = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 10_000n, price: 1_600n });
-    expect(pairState(sell).mode).toBe('0');
-    expect(planDelivery(sell)).toBeNull();
+    // a sell whose B is KRON
+    const kronSell = pairValid(makePairEnv({ b: kronB(), bAmounts: [100_000n] }), { type: 'limit', side: 'sell', amount: 10_000n, price: 1_600n, delivery: { choice: 'collected' } });
+    expect(pairState(kronSell).mode).toBe('0');
   });
 
   it('a conditional pair bid (KobCondPair) is Collected with one carrier', () => {
     const p = pairValid(makePairEnv(), { type: 'stopLimit', side: 'buy', amount: 10_000n, stop: 1_700n, limit: 1_750n, minFill: 2_500n });
     expect(pairState(p)).toMatchObject({ mode: '1', bought: '0' });
     expect(p.pair!.deliveries).toBe(1n);
+  });
+
+  it('a resting pair sell (it receives B) is Collected by default: one carrier, the tip raised with the extra of B', () => {
+    const env = makePairEnv();
+    const sell = { type: 'limit', side: 'sell', amount: 10_000n, price: 1_600n, minFill: 2_500n } as const;
+    const p = pairValid(env, sell);
+    expect(pairState(p)).toMatchObject({ side: '1', mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
+    expect(p.pair!.deliveries).toBe(1n);
+    expect(BigInt(pairState(p).tip)).toBe(defaultPairTip(env, 10_000n) + collectedPairTipExtra(pairCollectedExtra(env.pair.quote.program), env.token.scale, 10_000n, 2_500n));
+    // negative: Each fill funds a carrier per possible fill
+    const each = pairValid(env, { ...sell, delivery: { choice: 'each' } });
+    expect(pairState(each).mode).toBe('0');
+    expect(each.pair!.deliveries).toBe(4n);
+    // a TWAP sell and a stop sell too; an IOC sell delivers at each fill
+    expect(pairState(pairValid(env, { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n })).mode).toBe('1');
+    expect(pairState(pairValid(env, { type: 'stopMarket', side: 'sell', amount: 8_000n, stop: 1_400n })).mode).toBe('1');
+    const ioc = plan(env, { type: 'ioc', side: 'sell', amount: 1_000n, price: 1_400n });
+    expect(planDelivery(ioc)?.delivery.choice ?? 'each').toBe('each');
   });
 });

@@ -81,16 +81,15 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     if (c.crossing && c.touch !== null) log.add(pairIssue('PAIR_TP_CROSSES', { touch: c.touch, ticker: b.ticker }, 'takeProfit'));
   }
   // A buy's delivery: Collected by default (one carrier for every fill); its default tip also pays the custody input of every later fill
-  let dlv: ResolvedDelivery | null = null;
+  // (a sell receives B, a buy A; the tip is KAS per whole A on either side)
+  const bought = sell ? b : env.token;
   let tipNow = tip;
-  if (!sell) {
-    const dIssues: PlanIssue[] = [];
-    dlv = resolvePairDelivery({ codec: env.token.family, cls: 'resting', carrier, scale: env.token.scale, minFill }, intent.delivery, dIssues);
-    log.add(...dIssues);
-    if (log.failed) return failed(log);
-    if (dlv.choice === 'collected' && intent.tip === undefined) tipNow = tip + collectedPairTipExtra(pairCollectedExtra(env.token.program), env.token.scale, minFill);
-  }
-  const collected = dlv?.choice === 'collected';
+  const dIssues: PlanIssue[] = [];
+  const dlv: ResolvedDelivery = resolvePairDelivery({ codec: bought.family, cls: 'resting', carrier, scale: env.token.scale, minFill }, intent.delivery, dIssues);
+  log.add(...dIssues);
+  if (log.failed) return failed(log);
+  if (dlv.choice === 'collected' && intent.tip === undefined) tipNow = tip + collectedPairTipExtra(pairCollectedExtra(bought.program), env.token.scale, amount, minFill);
+  const collected = dlv.choice === 'collected';
   // KAS delivery carriers: one per budgeted fill, at most one per possible fill (a Collected order: one).
   const possible = ceilDiv(amount, minFill);
   const fills = intent.maxFills ?? defaultPairFills(possible);
@@ -105,7 +104,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   const tips = pairTipsOf(env);
   const draft = makeCondPairState(env, {
     side: intent.side, amount, minFill, tip: tipNow, activeFrom: act.activeFrom, expiryDaa: expiry.expiryDaa, refundTip: tips.refundTip, deliveryCarrier: carrier, custody: amount,
-    ...(dlv ? { delivery: dlv.fields } : {}),
+    delivery: dlv.fields,
   }, legs);
   let order = draft;
   if (!sell) {
@@ -176,7 +175,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     cond,
     carrier,
   });
-  return dlv ? withDelivery(plan, { delivery: dlv, fills: funded }) : plan;
+  return withDelivery(plan, { delivery: dlv, fills: funded });
 }
 
 /**

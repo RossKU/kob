@@ -634,7 +634,9 @@ describe('pair sells budget their fills (maxFills)', () => {
 
   it('a pair sell shows the fills field where a buy does; a KAS sell still does not', () => {
     for (const type of ['limit', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) {
-      expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).toContain('maxFills');
+      // a resting pair sell is Collected by default too (it receives B; one carrier): its Fills box shows with Each fill
+      expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).not.toContain('maxFills');
+      expect(layoutOf(form(type, 'sell', { delivery: 'each' }), PAIR).advanced, `${type} pair sell, each fill`).toContain('maxFills');
       // a pair buy is Collected by default (one carrier): its Fills box shows with Each fill
       expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).not.toContain('maxFills');
       expect(layoutOf(form(type, 'buy', { delivery: 'each' }), PAIR).advanced, `${type} pair buy, each fill`).toContain('maxFills');
@@ -645,9 +647,9 @@ describe('pair sells budget their fills (maxFills)', () => {
 
   it('a pair limit / dutch / stop sell carries maxFills to the planner, which funds exactly that many deliveries', () => {
     const cases: [OrderTypeId, Record<string, string>][] = [
-      ['limit', { amount: '10', price: '15.5', minFill: '1', maxFills: '2' }],
-      ['dutch', { amount: '10', price: '17', priceEnd: '15.5', duration: '10', minFill: '1', maxFills: '2' }],
-      ['stopMarket', { amount: '10', stop: '14', minFill: '1', maxFills: '2' }],
+      ['limit', { amount: '10', price: '15.5', minFill: '1', maxFills: '2', delivery: 'each' }],
+      ['dutch', { amount: '10', price: '17', priceEnd: '15.5', duration: '10', minFill: '1', maxFills: '2', delivery: 'each' }],
+      ['stopMarket', { amount: '10', stop: '14', minFill: '1', maxFills: '2', delivery: 'each' }],
     ];
     for (const [type, values] of cases) {
       const r = buildIntent(form(type, 'sell', values), PAIR);
@@ -661,7 +663,7 @@ describe('pair sells budget their fills (maxFills)', () => {
       expect(json(buildIntent(formFromIntent(r.intent!, PAIR), PAIR).intent), type).toBe(json(r.intent));
     }
     // as many fills as the order can have: no longer limited
-    const all = buildIntent(form('limit', 'sell', { amount: '10', price: '15.5', minFill: '5', maxFills: '2' }), PAIR).intent!;
+    const all = buildIntent(form('limit', 'sell', { amount: '10', price: '15.5', minFill: '5', maxFills: '2', delivery: 'each' }), PAIR).intent!;
     expect(planOrder(env, all).issues.map((i) => i.code)).not.toContain('PAIR_FILLS_LIMITED');
     // on a KAS market a sell never sends maxFills (the planner would refuse it)
     expect(buildIntent(form('limit', 'sell', { amount: '1', price: '2.5', maxFills: '2' }), CTX).intent).not.toHaveProperty('maxFills');
@@ -708,7 +710,7 @@ describe('streaming: the price you saw follows the quote', () => {
 
 describe('delivery of buy orders (bid-delivery-spec §10)', () => {
   const PAIR: TicketCtx = { ...CTX, quoteDecimals: 6 };
-  it('resting buys (on a pair too) and sell-first if-done orders choose it; IOC / FOK / market, sells, repeats, KRON and pair if-done orders do not', () => {
+  it('resting buys, resting pair sells and sell-first if-done orders choose it; IOC / FOK / market, KAS sells, repeats, KRON and pair if-done orders do not', () => {
     for (const t of ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) expect(hasDeliveryChoice({ type: t, side: 'buy' }, CTX), t).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, CTX)).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifo', side: 'sell' }, CTX)).toBe(true);
@@ -718,7 +720,12 @@ describe('delivery of buy orders (bid-delivery-spec §10)', () => {
     expect(hasDeliveryChoice({ type: 'repeatIfd', side: 'sell' }, CTX)).toBe(false);
     expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...CTX, family: 'kron' })).toBe(false);
     expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, PAIR)).toBe(true);
-    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, PAIR)).toBe(false);
+    // a pair sell receives B: it chooses too, unless B is KRON or the order is immediate
+    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, PAIR)).toBe(true);
+    expect(hasDeliveryChoice({ type: 'twap', side: 'sell' }, PAIR)).toBe(true);
+    expect(hasDeliveryChoice({ type: 'ioc', side: 'sell' }, PAIR)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, { ...PAIR, quoteFamily: 'kron' })).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, { ...PAIR, family: 'kron' })).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, PAIR)).toBe(false);
     expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...PAIR, family: 'kron' })).toBe(false);
     // a pair offers no Added to one UTXO: the wallet default falls back to Collected

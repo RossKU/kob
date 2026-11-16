@@ -196,6 +196,8 @@ export interface TicketCtx {
   ref?: { buy?: bigint | null; sell?: bigint | null };
   /** the family of the token's program: a KRON token's buys deliver at each fill, so its ticket has no Delivery choice. Absent: KCC-20. */
   family?: 'kcc20' | 'kron';
+  /** a token pair: the family of the quote token B, which a pair sell receives (a KRON B: each fill). Absent: KCC-20. */
+  quoteFamily?: 'kcc20' | 'kron';
   /**
    * The wallet's delivery settings (orders/delivery.ts): the default of Settings (absent: Collected) and, for Top-up, the receive threshold this
    * wallet stored for the token (absent: the planner sets it from the price at the first top-up order).
@@ -206,12 +208,16 @@ export interface TicketCtx {
 /** The order types whose buys rest and deliver (KobBid, KobCondBid) and so choose their delivery; the sell side of an if-done buys back. */
 const DELIVERY_BUY_TYPES: readonly OrderTypeId[] = ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
 
+/** The order types of a token pair whose SELLS rest and deliver token B (KobPair, KobCondPair asks). */
+const DELIVERY_PAIR_SELL_TYPES: readonly OrderTypeId[] = ['limit', 'twap', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
+
 /**
  * Whether the form's order chooses its delivery (bid-delivery-spec §10): a resting buy of a KCC-20 token (on a token pair too: a pair bid buys
- * A), and the buy-back exits of a sell-first IFD / IFO of a KAS market. IOC, FOK, market orders, KRON tokens and repeating entries deliver at
- * each fill, so they have no choice.
+ * A), a resting sell of a token pair whose B is KCC-20 (it receives B), and the buy-back exits of a sell-first IFD / IFO of a KAS market.
+ * IOC, FOK, market orders, KRON tokens, repeating entries and the exits of pair if-done orders deliver at each fill, so they have no choice.
  */
-export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family'>): boolean {
+export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily'>): boolean {
+  if (isPairCtx(ctx) && form.side === 'sell') return ctx?.quoteFamily !== 'kron' && DELIVERY_PAIR_SELL_TYPES.includes(form.type);
   if (ctx?.family === 'kron') return false;
   if (form.type === 'ifd' || form.type === 'ifo') return !isPairCtx(ctx) && form.side === 'sell';
   return form.side === 'buy' && DELIVERY_BUY_TYPES.includes(form.type);
@@ -224,7 +230,7 @@ export const deliveryChoicesOf = (ctx?: Pick<TicketCtx, 'quoteDecimals'>): reado
  * The delivery the form's order gets: the choice under Advanced, else the wallet default, else Collected (a choice the ticket does not offer,
  * Added to one UTXO on a pair: Collected); null when it has no choice.
  */
-export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'delivery'>): DeliveryChoice | null {
+export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): DeliveryChoice | null {
   if (!hasDeliveryChoice(form, ctx)) return null;
   const v = form.values.delivery;
   const c = isDeliveryChoice(v) ? v : ctx?.delivery?.walletDefault ?? 'collected';
@@ -316,7 +322,7 @@ const EXIT_TRIGGER = ['exit.minTouch', 'exit.minRestDaa'];
  * Which fields the form shows for its type, side and current selections (conditional fields appear when their switch is on). `ctx` tells a pair
  * ticket (`isPairCtx`): its sells budget their fills too.
  */
-export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'delivery'>): Layout {
+export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): Layout {
   const out = layoutOfType(form, ctx);
   const delivery = deliveryOf(form, ctx);
   if (delivery === null) return out;

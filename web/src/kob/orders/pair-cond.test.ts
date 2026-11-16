@@ -6,6 +6,8 @@ import type { CondPairState } from '../types';
 import type { TokenMarket } from '../plan-types';
 import { KAS, ceilDivM, ceilQ, floorQ, kronA, kronB, makePairEnv, tokenA, tokenB } from './pair-fixtures';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
+/** Each fill: the pair sells below are written for a delivery per fill (a resting pair order defaults to Collected: pair-delivery.test.ts) */
+const EACH = { choice: 'each' } as const;
 
 const DC = 10n * KAS;
 const cs = (p: { states: { kind: string; state: unknown }[] }): CondPairState => {
@@ -35,7 +37,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
   const tip = 77_777n;
 
   it('stop-market sell: side ASK holds the A amount, 3% band over 300 DAA, minTouch = minFill, keeper reserve on the order UTXO, falls-to trigger', () => {
-    const p = pairValid(env(), { type: 'stopMarket', side: 'sell', amount, stop: 1_401n, tip });
+    const p = pairValid(env(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount, stop: 1_401n, tip });
     const s = cs(p);
     const mf = defMin(amount, a.scale);
     expect(s).toMatchObject({
@@ -76,7 +78,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
   });
 
   it('stop-limit: the largest band within the limit; take-profit; OCO with both legs', () => {
-    const sl = pairValid(env(), { type: 'stopLimit', side: 'sell', amount, stop: 1_400n, limit: 1_380n });
+    const sl = pairValid(env(), { type: 'stopLimit', side: 'sell', delivery: EACH, amount, stop: 1_400n, limit: 1_380n });
     expect(cs(sl).slipBps).toBe(String(((20n + 1n) * 10_000n - 1n) / 1_400n));
     expect(sl.pair!.receiveMinB).toBe(ceilQ(amount, 1_380n, a.scale));
     expect(sl.disclosure!.notes).toContain('stopLimitMayNotFill');
@@ -85,7 +87,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
     expect(tp.pair!.trigger).toBeNull();
     expect(tp.pair!.payMaxB).toBe(floorQ(amount, 1_300n, a.scale));
     expect(BigInt(cs(tp).custody)).toBe(floorQ(amount, 1_300n, a.scale) + 1n);
-    const oco = pairValid(env(), { type: 'oco', side: 'sell', amount, stop: 1_400n, takeProfit: 1_700n });
+    const oco = pairValid(env(), { type: 'oco', side: 'sell', delivery: EACH, amount, stop: 1_400n, takeProfit: 1_700n });
     const w = worstOf('sell', 1_400n, 300n);
     expect(cs(oco)).toMatchObject({ tpPrice: '1700', stopPrice: '1400' });
     expect(oco.pair!.receiveMinB).toBe(ceilQ(amount, w, a.scale));
@@ -95,7 +97,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
   });
 
   it('trailing stop with a take-profit: step / gap / wait, the pre-funded updates, the trailing rule', () => {
-    const p = pairValid(env(), { type: 'trailingStop', side: 'sell', amount, stop: 1_400n, trail: { step: 10n, gap: 30n }, takeProfit: 1_800n });
+    const p = pairValid(env(), { type: 'trailingStop', side: 'sell', delivery: EACH, amount, stop: 1_400n, trail: { step: 10n, gap: 30n }, takeProfit: 1_800n });
     expect(cs(p)).toMatchObject({ trailStep: '10', trailGap: '30', trailWait: '6000', tpPrice: '1800' });
     expect(p.cond?.keeper).toMatchObject({ expectedUpdates: 21, reserve: keeperTip * 21n });
     expect(p.disclosure!.carriers.find((c) => c.kind === 'keeperReserve')).toMatchObject({ amount: keeperTip, count: 21 });
@@ -108,7 +110,7 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
   });
 
   it('the planned stop arms exactly on the evidence the rule names (kob-wasm pairArms, both modes)', () => {
-    const p = pairValid(env(), { type: 'stopMarket', side: 'sell', amount, stop: 1_400n });
+    const p = pairValid(env(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount, stop: 1_400n });
     const s = p.states[0];
     expect(K.pairArms(s, { mode: 'pair', price: '1400' })).toBe(true);
     expect(K.pairArms(s, { mode: 'pair', price: '1401' })).toBe(false);
@@ -122,13 +124,13 @@ describe.each(combos)('KobCondPair on %s', (_name, mkA, mkB) => {
 
 describe('KobCondPair presets, warnings and refusals', () => {
   it('minTouch presets (50% / 100% of the amount) and the rest time are the state\'s', () => {
-    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', amount: 8_000n, stop: 1_400n, minTouch: 4_000n, minRestDaa: 100n, bandDaa: 0n, slipBps: 150 });
+    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 8_000n, stop: 1_400n, minTouch: 4_000n, minRestDaa: 100n, bandDaa: 0n, slipBps: 150 });
     expect(cs(p)).toMatchObject({ minTouch: '4000', minRestDaa: '100', bandDaa: '0', slipBps: '150' });
     expect(p.pair!.trigger).toMatchObject({ minTouch: '4000', minRestDaa: '100' });
   });
 
   it('a custom keeper tip and maxFills of either side', () => {
-    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', amount: 20_000n, stop: 1_400n, keeperTip: 5_000_000n, maxFills: 5n, tip: 0n });
+    const p = pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 20_000n, stop: 1_400n, keeperTip: 5_000_000n, maxFills: 5n, tip: 0n });
     expect(cs(p).keeperTip).toBe('5000000');
     expect(p.pair!.deliveries).toBe(5n);
     expect(p.pair!.orderValue).toBe(5n * DC + 5_000_000n);
@@ -143,7 +145,7 @@ describe('KobCondPair presets, warnings and refusals', () => {
   });
 
   it('warnings: the stop already reached, a take-profit through the pair book', () => {
-    expect(codes(pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 1_500n }))).toContain('COND_STOP_ALREADY_REACHED');
+    expect(codes(pairValid(makePairEnv(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_500n }))).toContain('COND_STOP_ALREADY_REACHED');
     const tp = pairValid(makePairEnv(), { type: 'takeProfit', side: 'buy', amount: 5_000n, price: 1_510n });
     expect(codes(tp)).toContain('PAIR_TP_CROSSES');
     expect(tp.issues.find((i) => i.code === 'PAIR_TP_CROSSES')!.params).toMatchObject({ touch: 1_500n, ticker: 'BBB' });
@@ -151,24 +153,24 @@ describe('KobCondPair presets, warnings and refusals', () => {
 
   it('refusals: leg order, stop-limit beyond the stop, trailing step, carrier, not enough B, the KRON escrow cap, the B notional', () => {
     const env = makePairEnv();
-    expect(errorCodes(plan(env, { type: 'oco', side: 'sell', amount: 5_000n, stop: 1_400n, takeProfit: 1_300n }))).toEqual(['COND_TP_STOP_ORDER']);
-    expect(errorCodes(plan(env, { type: 'stopLimit', side: 'sell', amount: 5_000n, stop: 1_400n, limit: 1_450n }))).toEqual(['COND_STOP_LIMIT_BEYOND_STOP']);
-    expect(errorCodes(plan(env, { type: 'trailingStop', side: 'sell', amount: 5_000n, stop: 1_400n, trail: { step: 0n, gap: 0n } }))).toEqual(['COND_TRAIL_STEP_INVALID']);
-    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 1_400n, carrier: 0n }))).toEqual(['COND_CARRIER_INVALID']);
+    expect(errorCodes(plan(env, { type: 'oco', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n, takeProfit: 1_300n }))).toEqual(['COND_TP_STOP_ORDER']);
+    expect(errorCodes(plan(env, { type: 'stopLimit', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n, limit: 1_450n }))).toEqual(['COND_STOP_LIMIT_BEYOND_STOP']);
+    expect(errorCodes(plan(env, { type: 'trailingStop', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n, trail: { step: 0n, gap: 0n } }))).toEqual(['COND_TRAIL_STEP_INVALID']);
+    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n, carrier: 0n }))).toEqual(['COND_CARRIER_INVALID']);
     const noB = plan(makePairEnv({ bAmounts: [1_000n] }), { type: 'stopMarket', side: 'buy', amount: 5_000n, stop: 1_600n });
     expect(errorCodes(noB)).toEqual(['PAIR_INSUFFICIENT_TOKENS']);
     expect(noB.issues.find((i) => i.code === 'PAIR_INSUFFICIENT_TOKENS')!.params).toMatchObject({ ticker: 'BBB' });
     const kron = plan(makePairEnv({ a: kronA(), b: kronB() }), { type: 'stopMarket', side: 'buy', amount: 1_000_000n, stop: 2_000_000n });
     expect(errorCodes(kron)).toEqual(['PAIR_KRON_CUSTODY_TOO_LARGE']);
     // a stop above the covenant's MAX_STOP (stop x slipBps must fit 63 bits) is too large as a price; a large amount at a high stop breaks the 2^62 bound
-    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 1n << 61n }))).toEqual(['PRICE_TOO_LARGE']);
-    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', amount: 10_000_000_000_000n, stop: 900_000_000_000_000n }))).toEqual(['PAIR_NOTIONAL_TOO_LARGE']);
-    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 0n }))).toEqual(['PRICE_NOT_POSITIVE']);
+    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1n << 61n }))).toEqual(['PRICE_TOO_LARGE']);
+    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 10_000_000_000_000n, stop: 900_000_000_000_000n }))).toEqual(['PAIR_NOTIONAL_TOO_LARGE']);
+    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 0n }))).toEqual(['PRICE_NOT_POSITIVE']);
   });
 
   it('self-trade: a sell stop whose band reaches an own resting pair bid', () => {
     const env = makePairEnv({ ownOrders: [{ covenantId: 'cd'.repeat(32), side: 'buy', price: 1_390n, tip: 0n, amountLeft: 100n, active: true }] });
-    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 1_400n }))).toEqual(['SELF_TRADE']);
-    expect(codes(plan(env, { type: 'stopMarket', side: 'sell', amount: 5_000n, stop: 1_400n, slipBps: 0 }))).not.toContain('SELF_TRADE');
+    expect(errorCodes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n }))).toEqual(['SELF_TRADE']);
+    expect(codes(plan(env, { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 5_000n, stop: 1_400n, slipBps: 0 }))).not.toContain('SELF_TRADE');
   });
 });
