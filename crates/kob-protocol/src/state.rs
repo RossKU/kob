@@ -126,44 +126,290 @@ pub trait FieldMap: Sized + Clone {
     fn from_values(m: &BTreeMap<String, ArtifactValue>) -> Result<Self, StateError>;
 }
 
-/// Encodes a field map as the state span of the template `t`.
+// ---------------------------------------------------------------- delivery block
+
+/// Delivery mode 0 (*new*): every fill creates a new plain token UTXO for the maker.
 ///
-/// With `kron` the extension commitment is dropped, and it must be zero, because no KRON template
-/// has that field.
+/// See `docs/design/bid-delivery-spec.md` §1. It is the only mode of a KRON delivery, of a
+/// repeating if-done entry's exits and of an order whose template has no delivery block.
+pub const MODE_NEW: i64 = 0;
+/// Delivery mode 1 (*accumulate*): the order keeps what it buys in its own bought-custody.
+pub const MODE_ACCUMULATE: i64 = 1;
+/// Delivery mode 2 (*top-up*): a filler may add the tokens to the maker's receive UTXO.
+pub const MODE_TOPUP: i64 = 2;
+
+/// The delivery block of a delivering order, in state order: `mode`, `recvThreshold`,
+/// `topupTip`, `bought` (all `int`; `bought` is mutable and last).
+pub const DELIVERY_FIELDS: [&str; 4] = ["mode", "recvThreshold", "topupTip", "bought"];
+/// The delivery block an if-done entry stores for its exits (immutable; the exit starts with
+/// `bought = 0`).
+pub const EXIT_DELIVERY_FIELDS: [&str; 3] = ["exitMode", "exitRecvThreshold", "exitTopupTip"];
+
+/// Encoded size of one block field: `0x08` + 8 bytes little-endian.
+const INT_PUSH: usize = 9;
+
+/// The two state layouts of a delivering kind (bid-delivery-spec §2).
+///
+/// The delivery block is appended at the end of the state, so every other field keeps its offset,
+/// and the state length alone tells the two layouts apart. An order placed before the block existed
+/// (a retired template) has the [`StateLayout::Legacy`] layout and decodes with every block field
+/// zero, i.e. mode 0, which is what its script does. The kinds without a block (asks, `KobIfdBid`,
+/// every KRON twin) have only the legacy layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StateLayout {
+    /// The state without the delivery block (today's templates, and every kind without one).
+    Legacy,
+    /// The state with the delivery block appended.
+    Delivery,
+}
+
+/// Where the delivery block of a delivering template sits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveryBlock {
+    /// The block's fields in state order ([`DELIVERY_FIELDS`] or [`EXIT_DELIVERY_FIELDS`]).
+    pub fields: &'static [&'static str],
+    /// State length without the block: the state offset of its first field.
+    pub legacy_len: usize,
+}
+
+impl DeliveryBlock {
+    /// State length with the block.
+    pub fn len(&self) -> usize {
+        self.legacy_len + INT_PUSH * self.fields.len()
+    }
+    /// Always false: a block has at least one field.
+    pub fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+    /// State length in `layout`.
+    pub fn state_len(&self, layout: StateLayout) -> usize {
+        match layout {
+            StateLayout::Legacy => self.legacy_len,
+            StateLayout::Delivery => self.len(),
+        }
+    }
+    /// The layout of a state span of `len` bytes, if it is one of the two.
+    pub fn layout_of_len(&self, len: usize) -> Option<StateLayout> {
+        if len == self.len() {
+            Some(StateLayout::Delivery)
+        } else if len == self.legacy_len {
+            Some(StateLayout::Legacy)
+        } else {
+            None
+        }
+    }
+    /// State offset of a block field's push opcode (`0x08`).
+    pub fn offset(&self, field: &str) -> Option<usize> {
+        self.fields.iter().position(|f| *f == field).map(|k| self.legacy_len + INT_PUSH * k)
+    }
+    /// Redeem-script window `[start, end)` of a block field's 8 payload bytes.
+    ///
+    /// The redeem script is `1 byte prefix ‖ state ‖ code` (bid-delivery-spec §2).
+    pub fn window(&self, field: &str) -> Option<(usize, usize)> {
+        self.offset(field).map(|o| (o + 2, o + 2 + 8))
+    }
+}
+
+/// The delivery block of an order template, or `None` for a template without one.
+///
+/// The delivering templates are `KobBid`, `KobCondBid`, `KobPair` and `KobCondPair`
+/// ([`DELIVERY_FIELDS`]), and the entries `KobIfdAsk` and `KobIfdPair` whose exits deliver
+/// ([`EXIT_DELIVERY_FIELDS`]). The KRON twins are unchanged: a KRON delivery is mode 0. The pair
+/// templates serve both families (a pair order buying a KRON token keeps mode 0).
+pub fn delivery_block(id: TemplateId) -> Option<DeliveryBlock> {
+    let (fields, legacy_len): (&'static [&'static str], usize) = match id {
+        TemplateId::KobBid => (&DELIVERY_FIELDS, 285),
+        TemplateId::KobCondBid => (&DELIVERY_FIELDS, 381),
+        TemplateId::KobPair => (&DELIVERY_FIELDS, 447),
+        TemplateId::KobCondPair => (&DELIVERY_FIELDS, 543),
+        TemplateId::KobIfdAsk => (&EXIT_DELIVERY_FIELDS, 594),
+        TemplateId::KobIfdPair => (&EXIT_DELIVERY_FIELDS, 909),
+        _ => return None,
+    };
+    Some(DeliveryBlock { fields, legacy_len })
+}
+
+/// The layout of the template this build pins for `id`, read from its artifact's state length.
+///
+/// Panics when the artifact's state length is neither layout of the kind: the artifact is not the
+/// one the spec describes (a broken build, like a broken artifact).
+pub fn pinned_layout(id: TemplateId) -> StateLayout {
+    match delivery_block(id) {
+        None => StateLayout::Legacy,
+        Some(b) => b.layout_of_len(template(id).state_len).unwrap_or_else(|| {
+            let n = template(id).state_len;
+            panic!("{}: the pinned state is {n} bytes, neither {} (legacy) nor {} (delivery)", id.name(), b.legacy_len, b.len())
+        }),
+    }
+}
+
+/// The layout of a state span of `len` bytes of the kind `id` (`None`: no layout of the kind).
+pub fn layout_of_len(id: TemplateId, len: usize) -> Option<StateLayout> {
+    match delivery_block(id) {
+        Some(b) => b.layout_of_len(len),
+        None => (len == template(id).state_len).then_some(StateLayout::Legacy),
+    }
+}
+
+/// State length of the kind `id` in `layout` (`None`: the kind has no delivery block).
+pub fn state_len_in(id: TemplateId, layout: StateLayout) -> Option<usize> {
+    match (delivery_block(id), layout) {
+        (Some(b), l) => Some(b.state_len(l)),
+        (None, StateLayout::Legacy) => Some(template(id).state_len),
+        (None, StateLayout::Delivery) => None,
+    }
+}
+
+fn is_block_key(k: &str) -> bool {
+    DELIVERY_FIELDS.contains(&k) || EXIT_DELIVERY_FIELDS.contains(&k)
+}
+
+/// Whether the artifact of `t` declares the block's fields.
+///
+/// It either declares none of them (a template built before the block, encoded here with the
+/// block appended by hand), or all of them as its last runtime fields, in the block's order, as
+/// `int`. Anything else is refused: the hand encoding would not be the compiler's.
+fn artifact_has_block(name: &'static str, t: &Template, b: &DeliveryBlock) -> Result<bool, StateError> {
+    let fields = &t.contract().runtime_state.fields;
+    let declared = fields.iter().filter(|f| is_block_key(&f.name)).count();
+    if declared == 0 {
+        return Ok(false);
+    }
+    let n = b.fields.len();
+    let tail_ok = fields.len() >= n
+        && fields[fields.len() - n..]
+            .iter()
+            .zip(b.fields)
+            .all(|(f, want)| f.name == *want && matches!(f.ty, silverscript_abi::TypeArtifact::Int));
+    if declared != n || !tail_ok {
+        return Err(StateError::Codec(
+            name,
+            format!("{}: the artifact's delivery fields are not exactly {:?} as its last int fields", t.id.name(), b.fields),
+        ));
+    }
+    Ok(true)
+}
+
+/// The artifact's runtime state without the delivery block fields.
+fn base_runtime_state(t: &Template, has_block: bool) -> std::borrow::Cow<'_, silverscript_abi::RuntimeStateArtifact> {
+    let rs = &t.contract().runtime_state;
+    if !has_block {
+        return std::borrow::Cow::Borrowed(rs);
+    }
+    let mut base = rs.clone();
+    base.fields.retain(|f| !is_block_key(&f.name));
+    std::borrow::Cow::Owned(base)
+}
+
+/// Encodes a field map as the state span of the template `id` in `layout`.
+///
+/// - A KRON template has no extension commitment: the field is dropped, and it must be zero.
+/// - The delivery block fields are taken out of the map. Under a template without a block, or in
+///   the legacy layout, they must be zero (absent counts as zero). In the delivery layout they are
+///   appended as `0x08` + 8 bytes each, in the block's order (absent: zero).
 pub(crate) fn encode_fields(
     name: &'static str,
-    t: &Template,
-    kron: bool,
+    id: TemplateId,
+    layout: StateLayout,
     mut v: BTreeMap<String, ArtifactValue>,
 ) -> Result<Vec<u8>, StateError> {
-    if kron {
+    let t = template(id);
+    if id.family() == Family::Kron {
         if let Some(ArtifactValue::Bytes(b)) = v.remove(EXT_KEY) {
             if b.iter().any(|x| *x != 0) {
                 return Err(StateError::Codec(name, "KRON tokens have no extension commitment (must be zero)".into()));
             }
         }
     }
-    encode_runtime_state_script(&t.artifact, &t.contract().runtime_state, &v).map_err(|e| StateError::Codec(name, e.to_string()))
+    let mut block_values: BTreeMap<String, i64> = BTreeMap::new();
+    let keys: Vec<String> = v.keys().filter(|k| is_block_key(k)).cloned().collect();
+    for k in keys {
+        match v.remove(&k) {
+            Some(ArtifactValue::Int(i)) => {
+                block_values.insert(k, i);
+            }
+            Some(other) => return Err(StateError::Type(name, k, format!("expected int, got {other:?}"))),
+            None => {}
+        }
+    }
+    let block = delivery_block(id);
+    let appended: &[&str] = match (block, layout) {
+        (Some(b), StateLayout::Delivery) => b.fields,
+        (None, StateLayout::Delivery) => {
+            return Err(StateError::Codec(name, format!("{} has no delivery block (legacy layout only)", id.name())))
+        }
+        (_, StateLayout::Legacy) => &[],
+    };
+    if let Some((k, _)) = block_values.iter().find(|(k, x)| **x != 0 && !appended.contains(&k.as_str())) {
+        let why = if block.is_some() { "the legacy layout has no delivery block" } else { "the template has no delivery block" };
+        return Err(StateError::Codec(name, format!("{}: `{k}` must be 0 ({why}: mode 0)", id.name())));
+    }
+    let has_block = match block {
+        Some(b) => artifact_has_block(name, t, &b)?,
+        None => false,
+    };
+    let rs = base_runtime_state(t, has_block);
+    let mut out = encode_runtime_state_script(&t.artifact, &rs, &v).map_err(|e| StateError::Codec(name, e.to_string()))?;
+    if let Some(b) = block {
+        if out.len() != b.legacy_len {
+            return Err(StateError::Codec(
+                name,
+                format!("{}: the state without its block is {} bytes, not {}", id.name(), out.len(), b.legacy_len),
+            ));
+        }
+    }
+    for k in appended {
+        out.push(0x08);
+        out.extend_from_slice(&block_values.get(*k).copied().unwrap_or(0).to_le_bytes());
+    }
+    Ok(out)
 }
 
-/// Decodes the state span of the template `t` into its field map.
+/// Decodes the state span of the template `id` into its field map, and tells its layout.
 ///
-/// With `kron` an absent extension commitment reads as zero.
+/// The span's length selects the layout ([`layout_of_len`]). Every block field the span does not
+/// carry reads as zero, as does the extension commitment of a KRON template. A block field must be
+/// spelled `0x08` + 8 bytes.
 pub(crate) fn decode_fields(
     name: &'static str,
-    t: &Template,
-    kron: bool,
+    id: TemplateId,
     bytes: &[u8],
-) -> Result<BTreeMap<String, ArtifactValue>, StateError> {
-    if bytes.len() != t.state_len {
-        return Err(StateError::Codec(name, format!("state span is {} bytes, expected {}", bytes.len(), t.state_len)));
+) -> Result<(BTreeMap<String, ArtifactValue>, StateLayout), StateError> {
+    let t = template(id);
+    let block = delivery_block(id);
+    let layout = layout_of_len(id, bytes.len()).ok_or_else(|| {
+        let want = match block {
+            Some(b) => format!("{} (with the delivery block) or {} (legacy)", b.len(), b.legacy_len),
+            None => t.state_len.to_string(),
+        };
+        StateError::Codec(name, format!("state span is {} bytes, expected {want}", bytes.len()))
+    })?;
+    let has_block = match block {
+        Some(b) => artifact_has_block(name, t, &b)?,
+        None => false,
+    };
+    let base_len = block.map_or(bytes.len(), |b| b.legacy_len);
+    let rs = base_runtime_state(t, has_block);
+    let mut fields =
+        decode_runtime_state_script(&t.artifact, &rs, &bytes[..base_len]).map_err(|e| StateError::Codec(name, e.to_string()))?;
+    if let (Some(b), StateLayout::Delivery) = (block, layout) {
+        for (k, f) in b.fields.iter().enumerate() {
+            let at = base_len + INT_PUSH * k;
+            if bytes[at] != 0x08 {
+                return Err(StateError::Codec(name, format!("`{f}` is not an 8-byte push (opcode {:#04x})", bytes[at])));
+            }
+            let x = i64::from_le_bytes(bytes[at + 1..at + INT_PUSH].try_into().expect("8"));
+            fields.insert(f.to_string(), ArtifactValue::Int(x));
+        }
     }
-    let mut fields = decode_runtime_state_script(&t.artifact, &t.contract().runtime_state, bytes)
-        .map_err(|e| StateError::Codec(name, e.to_string()))?;
-    if kron {
+    for k in DELIVERY_FIELDS.iter().chain(EXIT_DELIVERY_FIELDS.iter()) {
+        fields.entry(k.to_string()).or_insert(ArtifactValue::Int(0));
+    }
+    if id.family() == Family::Kron {
         fields.entry(EXT_KEY.to_string()).or_insert_with(|| ArtifactValue::Bytes(vec![0; 32]));
     }
-    Ok(fields)
+    Ok((fields, layout))
 }
 
 /// Common interface of every typed state.
@@ -190,10 +436,21 @@ pub trait StateCodec: FieldMap {
         self.try_encode_as(id).unwrap_or_else(|e| panic!("{}: state encoding failed: {e}", Self::NAME))
     }
 
-    /// Fallible [`StateCodec::encode_as`]: a KRON state must carry no extension commitment.
+    /// Fallible [`StateCodec::encode_as`], in the layout of the template this build pins for `id`.
+    ///
+    /// A KRON state must carry no extension commitment, and a state under a template without a
+    /// delivery block (or with the legacy layout) must have every delivery field zero.
     fn try_encode_as(&self, id: TemplateId) -> Result<Vec<u8>, StateError> {
+        self.try_encode_layout(id, pinned_layout(id))
+    }
+
+    /// The encoded state span under `id` in an explicit `layout` (bid-delivery-spec §2).
+    ///
+    /// [`StateLayout::Legacy`] is the span of an order placed before the delivery block (a retired
+    /// template), [`StateLayout::Delivery`] the span with the block appended.
+    fn try_encode_layout(&self, id: TemplateId, layout: StateLayout) -> Result<Vec<u8>, StateError> {
         debug_assert_eq!(id.base(), Self::TEMPLATE, "{}: template {} is not this kind", Self::NAME, id.name());
-        encode_fields(Self::NAME, template(id), id.family() == Family::Kron, self.to_values())
+        encode_fields(Self::NAME, id, layout, self.to_values())
     }
 
     /// Decodes a state span (KCC-20 template).
@@ -201,16 +458,23 @@ pub trait StateCodec: FieldMap {
         Self::decode_as(Self::TEMPLATE, bytes)
     }
 
-    /// Decodes a state span of the template `id` (this kind in some family).
+    /// Decodes a state span of the template `id` (this kind in some family), in either layout.
     fn decode_as(id: TemplateId, bytes: &[u8]) -> Result<Self, StateError> {
+        Self::decode_layout(id, bytes).map(|(s, _)| s)
+    }
+
+    /// [`StateCodec::decode_as`], and the layout the span's length selected.
+    ///
+    /// A legacy span reads with every delivery field zero (mode 0).
+    fn decode_layout(id: TemplateId, bytes: &[u8]) -> Result<(Self, StateLayout), StateError> {
         debug_assert_eq!(id.base(), Self::TEMPLATE, "{}: template {} is not this kind", Self::NAME, id.name());
-        let fields = decode_fields(Self::NAME, template(id), id.family() == Family::Kron, bytes)?;
+        let (fields, layout) = decode_fields(Self::NAME, id, bytes)?;
         let state = Self::from_values(&fields)?;
         // Canonical encoding only (fixed-width pushes): re-encoding must reproduce the bytes.
-        if state.try_encode_as(id)? != bytes {
+        if state.try_encode_layout(id, layout)? != bytes {
             return Err(StateError::Codec(Self::NAME, "non-canonical state encoding".into()));
         }
-        Ok(state)
+        Ok((state, layout))
     }
 }
 
@@ -413,6 +677,21 @@ kob_state!(
         price_end: i64 => "priceEnd",
         /// DAA per rise step (> 0 when rising).
         decay_step: i64 => "decayStep",
+        /// Delivery mode, bid-delivery-spec §1: 0 new UTXO per fill, 1 accumulate in the order's
+        /// bought-custody, 2 top-up of the maker's receive UTXO. Set at placement, immutable.
+        ///
+        /// Absent in the legacy layout (a template before the delivery block), where it reads as 0.
+        #[serde(default)]
+        mode: i64 => "mode",
+        /// Mode 2: the least `borrow_guard` threshold of the maker's receive UTXO (0 in modes 0, 1).
+        #[serde(default)]
+        recv_threshold: i64 => "recvThreshold",
+        /// Mode 2: the KAS a top-up fill releases in place of `deliveryCarrier` (0 in modes 0, 1).
+        #[serde(default)]
+        topup_tip: i64 => "topupTip",
+        /// Mutable (mode 1): base units the bought-custody holds, exactly (0 in modes 0, 2).
+        #[serde(default)]
+        bought: i64 => "bought",
     }
 );
 
@@ -503,6 +782,21 @@ kob_state!(
         /// Repeat IFD: the entry's prefund rate (sompi per whole token).
         rpt_pre: i64 => "rptPre",
         rpt_until: i64 => "rptUntil",
+        /// Delivery mode, bid-delivery-spec §1: 0 new UTXO per fill, 1 accumulate in the order's
+        /// bought-custody, 2 top-up of the maker's receive UTXO. Set at placement, immutable.
+        ///
+        /// Absent in the legacy layout (a template before the delivery block), where it reads as 0.
+        #[serde(default)]
+        mode: i64 => "mode",
+        /// Mode 2: the least `borrow_guard` threshold of the maker's receive UTXO (0 in modes 0, 1).
+        #[serde(default)]
+        recv_threshold: i64 => "recvThreshold",
+        /// Mode 2: the KAS a top-up fill releases in place of `deliveryCarrier` (0 in modes 0, 1).
+        #[serde(default)]
+        topup_tip: i64 => "topupTip",
+        /// Mutable (mode 1): base units the bought-custody holds, exactly (0 in modes 0, 2).
+        #[serde(default)]
+        bought: i64 => "bought",
     }
 );
 
@@ -584,6 +878,17 @@ kob_state!(
         /// Each fill replaces its `amountLeft` with the fill's n, and the entry writes the repeat
         /// fields.
         exit_state: Vec<u8> => "exitState",
+        /// Delivery mode of the exits, bid-delivery-spec §2 (0 for a repeating entry). Immutable.
+        ///
+        /// Absent in the legacy layout, where it reads as 0. Each exit starts with `bought = 0`.
+        #[serde(default)]
+        exit_mode: i64 => "exitMode",
+        /// The exits' `recvThreshold` (mode 2; else 0).
+        #[serde(default)]
+        exit_recv_threshold: i64 => "exitRecvThreshold",
+        /// The exits' `topupTip` (mode 2; else 0).
+        #[serde(default)]
+        exit_topup_tip: i64 => "exitTopupTip",
     }
 );
 
@@ -1811,12 +2116,22 @@ impl IfdAskState {
         }
     }
     /// The committed exit order (plain, with the committed `amountLeft`).
+    ///
+    /// Its delivery block is the entry's `exitMode`, `exitRecvThreshold`, `exitTopupTip` and
+    /// `bought = 0` (bid-delivery-spec §2), all zero for an entry in the legacy layout.
     pub fn exit(&self) -> Result<CondBidState, StateError> {
         let fam = self.exit_family()?;
-        CondBidState::decode_as(
+        let x = CondBidState::decode_as(
             TemplateId::KobCondBid.in_family(fam),
             &[self.exit_state.clone(), repeat_tail([0; 32], 0, Some(0), 0)].concat(),
-        )
+        )?;
+        Ok(CondBidState {
+            mode: self.exit_mode,
+            recv_threshold: self.exit_recv_threshold,
+            topup_tip: self.exit_topup_tip,
+            bought: 0,
+            ..x
+        })
     }
     /// The exit a fill of n creates (booked when the entry repeats and `rptAmount > n`).
     pub fn exit_for(&self, n: i64, booking: Option<Booking>) -> Result<CondBidState, StateError> {
@@ -2088,7 +2403,33 @@ impl AnyState {
     /// - A sell-first KRON entry commits a KRON exit.
     /// - A pair order has a valid side, valid family codes, no extension commitment for a KRON
     ///   token, two different tokens and, for an entry, a committed exit of the right width.
+    ///
+    /// It also checks that the state fits the layout of the template this build pins, see
+    /// [`AnyState::validate_layout`].
     pub fn validate(&self) -> Result<(), StateError> {
+        self.validate_layout(pinned_layout(self.template_id()))
+    }
+    /// [`AnyState::validate`] for an explicit layout of its template.
+    ///
+    /// A template without a delivery block, and the legacy layout of one with it, carry no delivery
+    /// fields: they must be zero (mode 0), as the KRON extension commitment must be. Only these
+    /// encoding rules are checked here; the delivery rules are [`AnyState::check_delivery`].
+    pub fn validate_layout(&self, layout: StateLayout) -> Result<(), StateError> {
+        let name = self.template_id().name();
+        let block = delivery_block(self.template_id());
+        if layout == StateLayout::Delivery && block.is_none() {
+            return Err(StateError::Codec("AnyState", format!("{name} has no delivery block (legacy layout only)")));
+        }
+        if block.is_none() || layout == StateLayout::Legacy {
+            if let Some(d) = self.block_fields().filter(|d| *d != Delivery::NEW) {
+                let why =
+                    if block.is_some() { "the legacy layout has no delivery block" } else { "the template has no delivery block" };
+                return Err(StateError::Codec(
+                    "AnyState",
+                    format!("{name}: {why}, so its delivery fields must be zero (mode 0), got {d:?}"),
+                ));
+            }
+        }
         if self.family() == Family::Kron && self.extension_commitment().is_some_and(|e| e != [0; 32]) {
             return Err(StateError::Codec(
                 "AnyState",
@@ -2145,17 +2486,24 @@ impl AnyState {
     /// A hostile or malformed state fails, e.g. a committed exit of the wrong width or a KRON
     /// extension commitment. Use this on any state that did not come from a builder of this crate.
     pub fn try_encode(&self) -> Result<Vec<u8>, StateError> {
+        self.try_encode_layout(pinned_layout(self.template_id()))
+    }
+    /// [`AnyState::try_encode`] in an explicit layout of its template (bid-delivery-spec §2).
+    ///
+    /// [`StateLayout::Legacy`] is the span of an order placed before the delivery block, e.g. under
+    /// a retired template of the cancel-only table.
+    pub fn try_encode_layout(&self, layout: StateLayout) -> Result<Vec<u8>, StateError> {
         let id = self.template_id();
         match self {
-            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => s.try_encode_as(id),
-            AnyState::KobBid(s) | AnyState::KobBidKron(s) => s.try_encode_as(id),
-            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => s.try_encode_as(id),
-            AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.try_encode_as(id),
-            AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.try_encode_as(id),
-            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.try_encode_as(id),
-            AnyState::KobPair(s) => s.try_encode_as(id),
-            AnyState::KobCondPair(s) => s.try_encode_as(id),
-            AnyState::KobIfdPair(s) => s.try_encode_as(id),
+            AnyState::KobAsk(s) | AnyState::KobAskKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobBid(s) | AnyState::KobBidKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.try_encode_layout(id, layout),
+            AnyState::KobPair(s) => s.try_encode_layout(id, layout),
+            AnyState::KobCondPair(s) => s.try_encode_layout(id, layout),
+            AnyState::KobIfdPair(s) => s.try_encode_layout(id, layout),
         }
     }
     /// The encoded state. Panics on a state [`AnyState::try_encode`] refuses.
@@ -2165,11 +2513,17 @@ impl AnyState {
     pub fn encode(&self) -> Vec<u8> {
         self.try_encode().unwrap_or_else(|e| panic!("{e}"))
     }
-    /// Decodes the state span of an instance of the order template `id`.
+    /// Decodes the state span of an instance of the order template `id`, in either layout.
     ///
-    /// The state must pass [`AnyState::validate`], and `id` must be the build of the token program
-    /// the state pins.
+    /// The span's length selects the layout (bid-delivery-spec §2, [`layout_of_len`]): a legacy
+    /// span (an order placed before the delivery block) reads with every delivery field zero. The
+    /// state must pass [`AnyState::validate_layout`] for that layout, and `id` must be the build of
+    /// the token program the state pins.
     pub fn decode(id: TemplateId, bytes: &[u8]) -> Result<AnyState, StateError> {
+        Self::decode_layout(id, bytes).map(|(s, _)| s)
+    }
+    /// [`AnyState::decode`], and the layout the span's length selected.
+    pub fn decode_layout(id: TemplateId, bytes: &[u8]) -> Result<(AnyState, StateLayout), StateError> {
         let state = match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
             TemplateId::KobBid => AnyState::KobBid(BidState::decode_as(id, bytes)?),
@@ -2194,7 +2548,9 @@ impl AnyState {
             TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, bytes)?),
             other => return Err(StateError::Codec("AnyState", format!("{} is not an order template", other.name()))),
         };
-        state.validate()?;
+        // the typed decoders accepted the span, so its length is one of the kind's layouts
+        let layout = layout_of_len(id, bytes.len()).expect("a decoded span has a layout");
+        state.validate_layout(layout)?;
         // The build of a KRON kind is the token program's, and both builds have the same state
         // span. An instance of one build whose state pins a program of the other is not an order
         // KOB recognises, because it would be a delivery the maker could not spend.
@@ -2208,7 +2564,7 @@ impl AnyState {
                 ),
             ));
         }
-        Ok(state)
+        Ok((state, layout))
     }
     /// [`AnyState::decode`] of a state named by its kind, whatever the build.
     ///
@@ -2473,20 +2829,201 @@ impl AnyState {
     }
 }
 
+/// The delivery block fields of a state (bid-delivery-spec §2).
+///
+/// For a delivering order they are its own block. For an if-done entry they are the block it
+/// writes into each exit, with `bought = 0`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Delivery {
+    /// 0 new, 1 accumulate, 2 top-up ([`MODE_NEW`], [`MODE_ACCUMULATE`], [`MODE_TOPUP`]).
+    #[serde(with = "crate::json::field")]
+    pub mode: i64,
+    #[serde(with = "crate::json::field")]
+    pub recv_threshold: i64,
+    #[serde(with = "crate::json::field")]
+    pub topup_tip: i64,
+    /// Base units in the bought-custody (mode 1). Always 0 for an entry's exit block.
+    #[serde(with = "crate::json::field")]
+    pub bought: i64,
+}
+
+impl Delivery {
+    /// Mode 0 with every field zero: today's delivery, and what a legacy state reads as.
+    pub const NEW: Delivery = Delivery { mode: MODE_NEW, recv_threshold: 0, topup_tip: 0, bought: 0 };
+}
+
+/// The placement and fill rules of a delivery block's mode fields (bid-delivery-spec §2, §4.1-2).
+///
+/// `carrier` is the `deliveryCarrier` of the delivering order, `kron` whether it delivers a KRON
+/// token.
+fn check_mode(what: &str, d: &Delivery, carrier: i64, kron: bool) -> Result<(), String> {
+    if !(MODE_NEW..=MODE_TOPUP).contains(&d.mode) {
+        return Err(format!("{what}: mode must be 0, 1 or 2, got {}", d.mode));
+    }
+    if kron && d.mode != MODE_NEW {
+        return Err(format!("{what}: a KRON delivery is mode 0, got mode {}", d.mode));
+    }
+    if d.mode == MODE_TOPUP {
+        if d.recv_threshold <= 0 {
+            return Err(format!("{what}: mode 2 needs recvThreshold > 0, got {}", d.recv_threshold));
+        }
+        if d.topup_tip < 0 || d.topup_tip > carrier {
+            return Err(format!("{what}: mode 2 needs 0 <= topupTip <= deliveryCarrier ({carrier}), got {}", d.topup_tip));
+        }
+    } else if d.recv_threshold != 0 || d.topup_tip != 0 {
+        return Err(format!("{what}: modes 0 and 1 have recvThreshold = topupTip = 0, got {} and {}", d.recv_threshold, d.topup_tip));
+    }
+    Ok(())
+}
+
+impl AnyState {
+    /// The delivery block fields the typed state carries, whatever its template's layout.
+    ///
+    /// They are the own block of a bid-side kind and of a pair order, and the exit block (with
+    /// `bought = 0`) of a sell-first entry and of a pair entry. `None` for the kinds that carry none.
+    fn block_fields(&self) -> Option<Delivery> {
+        self.delivery().or_else(|| self.exit_delivery())
+    }
+    /// The delivery block of a delivering order: `KobBid`, `KobCondBid`, `KobPair`, `KobCondPair`.
+    ///
+    /// The KRON twins (`KobBidKron`, `KobCondBidKron`) deliver too, always in mode 0: their template
+    /// has no block and the fields are zero. `None` for the kinds that do not deliver to the maker.
+    pub fn delivery(&self) -> Option<Delivery> {
+        let d = |mode, recv_threshold, topup_tip, bought| Some(Delivery { mode, recv_threshold, topup_tip, bought });
+        match self {
+            AnyState::KobBid(s) | AnyState::KobBidKron(s) => d(s.mode, s.recv_threshold, s.topup_tip, s.bought),
+            AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => d(s.mode, s.recv_threshold, s.topup_tip, s.bought),
+            AnyState::KobPair(s) => d(s.mode, s.recv_threshold, s.topup_tip, s.bought),
+            AnyState::KobCondPair(s) => d(s.mode, s.recv_threshold, s.topup_tip, s.bought),
+            _ => None,
+        }
+    }
+    /// The delivery block an if-done entry writes into each exit (`bought = 0`): `KobIfdAsk`
+    /// (and its KRON twin, always mode 0) and `KobIfdPair`.
+    pub fn exit_delivery(&self) -> Option<Delivery> {
+        let d = |mode, recv_threshold, topup_tip| Some(Delivery { mode, recv_threshold, topup_tip, bought: 0 });
+        match self {
+            AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => d(s.exit_mode, s.exit_recv_threshold, s.exit_topup_tip),
+            AnyState::KobIfdPair(s) => d(s.exit_mode, s.exit_recv_threshold, s.exit_topup_tip),
+            _ => None,
+        }
+    }
+    /// The amount of a mode-1 order's bought-custody, when it holds one (`bought > 0`).
+    ///
+    /// The bought-custody is the order's own token UTXO of the bought token: owner the order's
+    /// covenant id, scheme `0x04`, no borrowing, amount exactly `bought` (bid-delivery-spec §1).
+    pub fn bought_custody(&self) -> Option<i64> {
+        self.delivery().filter(|d| d.mode == MODE_ACCUMULATE && d.bought > 0).map(|d| d.bought)
+    }
+    /// The same state with `bought` set (a mode-1 continuation, or `bought = 0` after a claim).
+    ///
+    /// Returns `None` for a kind without its own delivery block fields.
+    pub fn with_bought(&self, bought: i64) -> Option<AnyState> {
+        let mut s = self.clone();
+        match &mut s {
+            AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.bought = bought,
+            AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => x.bought = bought,
+            AnyState::KobPair(x) => x.bought = bought,
+            AnyState::KobCondPair(x) => x.bought = bought,
+            _ => return None,
+        }
+        Some(s)
+    }
+    /// The delivery rules of a state (bid-delivery-spec §2 *Placement*, §4 rules 1 and 2).
+    ///
+    /// - `mode` is 0, 1 or 2. Modes 0 and 1 have `recvThreshold = topupTip = 0`; mode 2 has
+    ///   `recvThreshold > 0` and `0 <= topupTip <= deliveryCarrier` (an exit block: the exit's
+    ///   carrier).
+    /// - A KRON delivery is mode 0: the KRON twins, a pair order buying a KRON token, and the exits
+    ///   of a pair entry that deliver a KRON token.
+    /// - Modes 0 and 2 have `bought = 0`, mode 1 `bought >= 0`; with `placement` (a new order, a
+    ///   KOB1 `ORDER` record) `bought = 0`.
+    /// - A repeating entry (`rptAmount != 0`) writes `exitMode = 0`.
+    ///
+    /// Mode 0 for an IOC / FOK order is a wallet rule, not checked here.
+    pub fn check_delivery(&self, placement: bool) -> Result<(), String> {
+        let name = self.template_id().name();
+        if let Some(d) = self.delivery() {
+            let (carrier, kron) = match self {
+                AnyState::KobBid(s) | AnyState::KobBidKron(s) => (s.delivery_carrier, self.family() == Family::Kron),
+                AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => (s.delivery_carrier, self.family() == Family::Kron),
+                AnyState::KobPair(s) => (s.delivery_carrier, s.t_token().family_of() != Some(Family::Kcc20)),
+                AnyState::KobCondPair(s) => (s.delivery_carrier, s.t_token().family_of() != Some(Family::Kcc20)),
+                _ => unreachable!("delivering kinds"),
+            };
+            check_mode(name, &d, carrier, kron)?;
+            if d.bought < 0 {
+                return Err(format!("{name}: bought must be >= 0, got {}", d.bought));
+            }
+            if d.mode != MODE_ACCUMULATE && d.bought != 0 {
+                return Err(format!("{name}: only mode 1 holds bought tokens (mode {}, bought {})", d.mode, d.bought));
+            }
+            if placement && d.bought != 0 {
+                return Err(format!("{name}: a new order has bought = 0, got {}", d.bought));
+            }
+        }
+        if let Some(d) = self.exit_delivery() {
+            let what = format!("{name} exit");
+            let (exit_carrier, kron, repeating) = match self {
+                AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => {
+                    (s.exit().map_err(|e| e.to_string())?.delivery_carrier, self.family() == Family::Kron, s.rpt_amount != 0)
+                }
+                AnyState::KobIfdPair(s) => (
+                    s.exit().map_err(|e| e.to_string())?.delivery_carrier,
+                    s.exit_delivered().family_of() != Some(Family::Kcc20),
+                    s.rpt_amount != 0,
+                ),
+                _ => unreachable!("entries with exit blocks"),
+            };
+            check_mode(&what, &d, exit_carrier, kron)?;
+            if repeating && d.mode != MODE_NEW {
+                return Err(format!("{what}: a repeating entry's exits are mode 0, got exitMode {}", d.mode));
+            }
+        }
+        Ok(())
+    }
+    /// Whether two states have the same delivery terms: `mode`, `recvThreshold`, `topupTip`,
+    /// `bought`, and an entry's exit block. An in-place amend keeps them (bid-delivery-spec §2).
+    pub fn same_delivery(&self, other: &AnyState) -> bool {
+        self.delivery() == other.delivery() && self.exit_delivery() == other.exit_delivery()
+    }
+}
+
 /// Mutable fields of each order template and their bytecode payload windows `[start, end)`.
 ///
 /// The windows hold the 8-byte values the covenants splice into their continuations, see
 /// `docs/spec/matcher.md` §1.1. Every other byte of an order's redeem script is fixed for the life
 /// of its covenant id. The KRON bid-side kinds have no extension commitment, so their windows sit
 /// 33 bytes earlier. Both builds of a KRON kind have the same windows.
+///
+/// The windows are those of the template this build pins: in the delivery layout a delivering
+/// order also splices `bought`, last ([`mutable_windows_in`]).
 pub fn mutable_windows(id: TemplateId) -> &'static [(&'static str, usize, usize)] {
+    mutable_windows_in(id, pinned_layout(id))
+}
+
+/// [`mutable_windows`] of the kind `id` in an explicit state layout.
+///
+/// The legacy layout is that of an order placed before the delivery block (bid-delivery-spec §2:
+/// the existing windows do not move). A kind without a delivery block has one layout.
+pub fn mutable_windows_in(id: TemplateId, layout: StateLayout) -> &'static [(&'static str, usize, usize)] {
+    let delivery = layout == StateLayout::Delivery;
     match id.canonical() {
         TemplateId::KobAsk | TemplateId::KobAskKron => &[("amountLeft", 236, 244)],
+        TemplateId::KobBid if delivery => &[("bought", 314, 322)],
+        TemplateId::KobPair if delivery => &[("amountLeft", 398, 406), ("custody", 407, 415), ("bought", 476, 484)],
         TemplateId::KobPair => &[("amountLeft", 398, 406), ("custody", 407, 415)],
+        TemplateId::KobCondPair if delivery => {
+            &[("stopPrice", 416, 424), ("armed", 425, 433), ("amountLeft", 434, 442), ("custody", 443, 451), ("bought", 572, 580)]
+        }
         TemplateId::KobCondPair => &[("stopPrice", 416, 424), ("armed", 425, 433), ("amountLeft", 434, 442), ("custody", 443, 451)],
         TemplateId::KobIfdPair => &[("armed", 440, 448), ("amountLeft", 449, 457), ("custody", 458, 466), ("rptAmount", 467, 475)],
         TemplateId::KobCondAsk | TemplateId::KobCondAskKron => {
             &[("stopPrice", 182, 190), ("armed", 245, 253), ("amountLeft", 272, 280)]
+        }
+        TemplateId::KobCondBid if delivery => {
+            &[("stopPrice", 224, 232), ("amountLeft", 287, 295), ("armed", 296, 304), ("bought", 410, 418)]
         }
         TemplateId::KobCondBid => &[("stopPrice", 224, 232), ("amountLeft", 287, 295), ("armed", 296, 304)],
         TemplateId::KobCondBidKron => &[("stopPrice", 191, 199), ("amountLeft", 254, 262), ("armed", 263, 271)],
@@ -2497,7 +3034,7 @@ pub fn mutable_windows(id: TemplateId) -> &'static [(&'static str, usize, usize)
     }
 }
 
-/// Bytecode windows of the repeat fields an if-done entry writes into its exits (immutable).
+// Bytecode windows of the repeat fields an if-done entry writes into its exits (immutable).
 pub fn repeat_window(id: TemplateId) -> Option<(usize, usize)> {
     match id.canonical() {
         TemplateId::KobCondAsk | TemplateId::KobCondAskKron => Some((280, 331)),
@@ -2520,3 +3057,6 @@ pub use pair::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod delivery_tests;

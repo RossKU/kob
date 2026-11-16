@@ -598,7 +598,11 @@ fn mutable_windows_match_the_encoding() {
             assert_eq!(&rs[a + 1..a + 33], &[0xab; 32], "{}", id.name());
             // the repeat fields end the state; a KobCondPair's sExt and a KobCondAsk's
             // extensionCommitment (0x20 + 32 B) follow them
-            let tail = if matches!(id, TemplateId::KobCondPair | TemplateId::KobCondAsk) { 33 } else { 0 };
+            let mut tail = if matches!(id, TemplateId::KobCondPair | TemplateId::KobCondAsk) { 33 } else { 0 };
+            // and the delivery block, appended last when the pinned template has it
+            if let (Some(b), StateLayout::Delivery) = (delivery_block(id), pinned_layout(id)) {
+                tail += b.len() - b.legacy_len;
+            }
             assert_eq!(b + tail, 1 + t.state_len, "{}: the repeat fields end the state", id.name());
         }
     }

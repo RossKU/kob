@@ -52,6 +52,53 @@ export type TemplateName = OrderKind | KronD0Template | TokenProgram;
 import type { Kcc20Program, KronProgram, TokenProgram } from './programs.generated';
 export type { Kcc20Program, KronProgram, TokenProgram };
 
+/**
+ * Delivery mode of a buy-side order (docs/design/bid-delivery-spec.md §1), as a decimal string:
+ * `'0'` a new token UTXO per fill, `'1'` accumulate in the order's bought-custody (one UTXO to the
+ * maker when the order ends or is claimed), `'2'` top-up of the maker's receive UTXO.
+ */
+export type DeliveryMode = '0' | '1' | '2';
+/**
+ * The delivery block appended to a delivering order's state (bid-delivery-spec §2): `KobBid`,
+ * `KobCondBid`, `KobPair`, `KobCondPair`. kob-wasm always returns the fields; on input an absent
+ * field is 0. A state of the legacy layout (an order placed before the block, a retired template)
+ * decodes with every field '0', i.e. mode 0. The KRON twins have no block: always mode 0.
+ */
+export interface DeliveryFields {
+  /** 0 new, 1 accumulate, 2 top-up ({@link DeliveryMode}). Set at placement, never amended. */
+  mode?: I64;
+  /** Mode 2: the least threshold of the maker's receive UTXO (`borrow_guard`); else '0'. */
+  recvThreshold?: I64;
+  /** Mode 2: the KAS a top-up fill keeps in place of `deliveryCarrier` (0..deliveryCarrier); else '0'. */
+  topupTip?: I64;
+  /** Mutable, mode 1: base units in the bought-custody (exactly); '0' in modes 0 and 2 and at placement. */
+  bought?: I64;
+}
+/**
+ * The delivery block an if-done entry writes into each exit, which starts with `bought = 0`:
+ * `KobIfdAsk` (its `KobCondBid` exits) and `KobIfdPair` (its `KobCondPair` exits). Absent = 0; a
+ * repeating entry's exits are mode 0.
+ */
+export interface ExitDeliveryFields {
+  exitMode?: I64;
+  exitRecvThreshold?: I64;
+  exitTopupTip?: I64;
+}
+/** The two state layouts of a delivering kind (bid-delivery-spec §2). */
+export type StateLayout = 'legacy' | 'delivery';
+/** kob-wasm `stateLayouts`: the layouts of a template and where its delivery block sits. */
+export interface StateLayoutsInfo {
+  /** The layout of the template this build pins. */
+  pinned: StateLayout;
+  legacyLen: number;
+  /** null for a kind without a delivery block (asks, `KobIfdBid`, every KRON twin). */
+  deliveryLen: number | null;
+  /** The block's fields: state offset of the push and the redeem-script window of the 8 bytes. */
+  fields: { name: string; stateOffset: number; window: [number, number] }[];
+}
+/** kob-wasm `decodeStateLayout`: a decoded state and the layout its length selected. */
+export interface DecodedStateLayout { layout: StateLayout; order: AnyState }
+
 /** State of a plain ask (`KobAsk`): an amount of a token offered for KAS. */
 export interface AskState {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64;
@@ -74,7 +121,7 @@ export interface AskState {
   extensionCommitment: Hex;
 }
 /** State of a plain bid (`KobBid`): a KAS escrow that buys a token. */
-export interface BidState {
+export interface BidState extends DeliveryFields {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64; extensionCommitment: Hex;
   scale: I64;
   /** Smallest fill in base units (> 0), unless under one minimum fill of buying power remains. */
@@ -102,7 +149,7 @@ export interface CondAskState {
   extensionCommitment: Hex;
 }
 /** State of a conditional bid (`KobCondBid`): a KAS escrow with a stop, take-profit or trail. */
-export interface CondBidState {
+export interface CondBidState extends DeliveryFields {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64; extensionCommitment: Hex;
   scale: I64; minFill: I64; tip: I64; activeFrom: I64; expiryDaa: I64; refundTip: I64; deliveryCarrier: I64;
   tpPrice: I64; stopPrice: I64; slipBps: I64; trailStep: I64; trailGap: I64; trailWait: I64;
@@ -122,7 +169,7 @@ export interface IfdBidState {
   exitState: Hex;
 }
 /** State of an if-done ask entry (`KobIfdAsk`): sells a token, then places a conditional bid. */
-export interface IfdAskState {
+export interface IfdAskState extends ExitDeliveryFields {
   maker: Hex; tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64;
   scale: I64; price: I64; tip: I64; activeFrom: I64; expiryDaa: I64; refundTip: I64;
   /** Buy-back budget beyond the proceeds, sompi per whole token. */
@@ -143,7 +190,7 @@ export interface IfdAskState {
  * Tips, keeper tips and carriers are KAS. `tip` is sompi per whole A, prefunded on the order UTXO
  * and released rounded down per fill. Source: contracts/orders/KobPair.sil.
  */
-export interface PairState {
+export interface PairState extends DeliveryFields {
   maker: Hex;
   /** 1 ASK (sells base A), 2 BID (buys base A). */
   side: I64;
@@ -189,7 +236,7 @@ export interface PairState {
  * It arms from evidence in one of two modes. Mode 0 is two KAS-book fills of A and B, which imply
  * a rate. Mode 1 is a fill of a resting `KobPair` of the pair.
  */
-export interface CondPairState {
+export interface CondPairState extends DeliveryFields {
   maker: Hex; side: I64;
   sCovId: Hex; sTplHash: Hex; sPre: I64; sSuf: I64; sFamily: I64; sScale: I64;
   tCovId: Hex; tTplHash: Hex; tPre: I64; tSuf: I64; tFamily: I64; tExt: Hex; tScale: I64;
@@ -223,7 +270,7 @@ export interface CondPairState {
  * An ASK (side 1, sell-first) holds A (exactly `amountLeft`) and a B prefund (`custody`). It sells
  * A into a fresh `KobCondPair` BID exit that holds the proceeds plus the fill's prefund.
  */
-export interface IfdPairState {
+export interface IfdPairState extends ExitDeliveryFields {
   maker: Hex;
   /** 2 BID (buy-first), 1 ASK (sell-first). */
   side: I64;
