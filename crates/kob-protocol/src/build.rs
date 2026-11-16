@@ -4883,6 +4883,7 @@ pub enum Action {
     Batch(Batch),
     SwapRoute(SwapRoute),
     SweepOrder(SweepOrder),
+    ClaimOrder(ClaimOrder),
 }
 
 /// Builds any action with the committed compute-budget table.
@@ -4902,6 +4903,7 @@ pub fn build_with(a: &Action, budgets: BudgetFn) -> Result<BuiltTx> {
         Action::Batch(r) => build_batch(r, budgets),
         Action::SwapRoute(r) => build_swap_route(r, budgets),
         Action::SweepOrder(r) => build_sweep_order(r, budgets),
+        Action::ClaimOrder(r) => build_claim_order(r, budgets),
     }
 }
 

@@ -364,7 +364,9 @@ pub fn fill_topup(c: &Ctx, order: &OrderUtxo<BidState>, cov: &Hash32, recv: &Tok
 }
 
 /// The maker's cancel of `order`, sweeping `custody` (built as a stray) to the maker. With `claim`, the escrow output becomes the
-/// order's continuation with `bought = 0` (shape CL1); without it the escrow goes back (CL4).
+/// order's continuation with `bought = 0` (shape CL1); without it the escrow goes back (CL4). Without `custody` for an order
+/// holding one, the builder refuses (it would leave the custody behind): the request then names the order with `bought = 0`, and
+/// the order's own state is restored in the built transaction.
 pub fn cancel_sweeping(
     c: &Ctx,
     order: &OrderUtxo<AnyState>,
@@ -372,10 +374,15 @@ pub fn cancel_sweeping(
     custody: Option<&TokenUtxo>,
     cont: Option<AnyState>,
 ) -> SignedTx {
+    let leaves = custody.is_none() && order.state.bought_custody().is_some();
+    let mut named = order.clone();
+    if leaves {
+        named.state = order.state.with_bought(0).unwrap();
+    }
     let req = CancelOrder {
         retired: None,
         prefund: None,
-        order: order.clone(),
+        order: named,
         custody: None,
         foreign: vec![],
         strays: custody.cloned().into_iter().collect(),
@@ -388,6 +395,17 @@ pub fn cancel_sweeping(
         fee: FeeOptions::default(),
     };
     let mut built = build(&Action::CancelOrder(req)).unwrap_or_else(|e| panic!("build: {e}"));
+    if leaves {
+        let i =
+            built.tx.inputs.iter().position(|x| x.transaction_id == order.utxo.transaction_id && x.index == order.utxo.index).unwrap();
+        let SigPlan::Entry { state, .. } = &mut built.plans[i] else { panic!("the order's cancel") };
+        *state = order.state.encode();
+        built.tx.inputs[i].utxo.script_public_key = spk_to_string(&order.state.spk());
+        let redeem = built.plans[i].redeem();
+        for r in built.sign.iter_mut().filter(|r| r.input_index == i) {
+            r.redeem_script = redeem.clone();
+        }
+    }
     if let Some(next) = cont {
         let v = order.utxo.amount;
         // the builder returns the escrow with the funding's change in one output of the maker: the escrow stays in the order

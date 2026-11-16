@@ -294,6 +294,7 @@ pub fn set_rate(a: &mut kob_protocol::build::Action, rate: u64) {
         Action::Batch(r) => &mut r.fee,
         Action::SwapRoute(r) => &mut r.fee,
         Action::SweepOrder(r) => &mut r.fee,
+        Action::ClaimOrder(r) => &mut r.fee,
     };
     fee.fee_rate = Some(rate);
 }
