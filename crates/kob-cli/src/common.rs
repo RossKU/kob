@@ -194,7 +194,7 @@ impl OrderScript {
     pub fn spk(self, s: &AnyState) -> Result<ScriptPublicKey, String> {
         match self {
             OrderScript::Pinned(t) => order_spk(t, s),
-            OrderScript::Retired(r) => r.spk(&encode_state(r.kind, s)?).map_err(|e| e.to_string()),
+            OrderScript::Retired(r) => r.spk(&r.encode_state(s).map_err(|e| e.to_string())?).map_err(|e| e.to_string()),
         }
     }
 

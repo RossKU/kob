@@ -2,8 +2,9 @@
 //! RETIRED template, executed in the rusty-kaspa script engine against that template's own bytecode.
 //!
 //! For every retired template of the table (the bid re-version `acf39cf`: `KobBid` b995661f and its KRON twins, the conditional,
-//! if-done and pair kinds that embed it and their delivery-0 builds; the F1 generation `da35841`): an order of its kind, on a
-//! program of its family, is cancelled with `CancelOrder::retired`. The order input is the retired template's P2SH (the bytes
+//! if-done and pair kinds that embed it and their delivery-0 builds; the F1 generation `da35841`; the bid delivery re-pin
+//! `0714451`, whose templates have the legacy state layout of their kind): an order of its kind, on a program of its family,
+//! is cancelled with `CancelOrder::retired`. The order input is the retired template's P2SH (the bytes
 //! of `crates/kob-protocol/data/retired`, read here from disk), its `cancel(sig)` validates, and the custody, the strays and
 //! the order's KAS go back to the maker. A signature of anyone else, or the redeem script of another retired template of the
 //! same kind, is refused by the engine; the builders refuse a replacement, records and a hash outside the table.
@@ -69,6 +70,7 @@ fn order_of(kind: TemplateId, p: TemplateId) -> (AnyState, u64) {
             let v = i.escrow(CARRIER as i64).unwrap() as u64;
             (AnyState::KobIfdAsk(i), v)
         }
+        TemplateId::KobPair => return (AnyState::KobPair(pair(MAKER_A, false, p, p, WHOLE)), PV),
         TemplateId::KobCondPair => return (AnyState::KobCondPair(cond_pair_bid(MAKER_A, p, p)), PV),
         TemplateId::KobIfdPair => {
             let i = ifd_pair(MAKER_A, false, p, p);
@@ -86,12 +88,13 @@ fn custodies_of(s: &AnyState, p: TemplateId) -> Vec<TokenUtxo> {
 }
 
 /// The P2SH script public key of an order of this retired template, from the committed bytes alone: the file's bytecode with the
-/// state spliced into the span today's kind has (the same layout).
+/// state spliced into the span of the kind's layout the template has (the legacy layout: no delivery block).
 fn spk_from_file(r: &RetiredTemplate, state: &[u8]) -> String {
     let file = common_root().join(format!("crates/kob-protocol/data/retired/{}.{}.bin", r.kind.name(), &r.hash_hex()[..8]));
     let bytes = std::fs::read(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
-    let cur = template(r.kind);
-    let (off, len) = (cur.prefix.len(), cur.state_len);
+    let off = template(r.kind).prefix.len();
+    let len = state_len_in(r.kind, StateLayout::Legacy).unwrap();
+    assert_eq!(state.len(), len, "{}: the state is in the legacy layout", r.label());
     let redeem = [&bytes[..off], state, &bytes[off + len..]].concat();
     assert_eq!(silverscript_abi::template_hash(&bytes[..off], &bytes[off + len..]), r.hash, "{}", r.label());
     spk_to_string(&kaspa_txscript::pay_to_script_hash_script(&redeem))
@@ -147,7 +150,7 @@ fn maker_units(built: &BuiltTx) -> i64 {
 #[test]
 fn every_retired_template_is_cancelled_by_its_maker_in_the_engine() {
     let maker_spk = format!("0000{}", to_hex(kob_protocol::script::p2pk_spk(&pk(MAKER_A)).script()));
-    assert_eq!(retired().len(), 31);
+    assert_eq!(retired().len(), 39);
     for r in retired() {
         let p = program_of(r.kind);
         let (state, value) = order_of(r.kind, p);
@@ -163,7 +166,11 @@ fn every_retired_template_is_cancelled_by_its_maker_in_the_engine() {
             "{label}: {:?}",
             built.plans[0]
         );
-        let spk = spk_from_file(r, &state.encode());
+        let span = r.encode_state(&state).unwrap();
+        assert_eq!(span, state.try_encode_layout(StateLayout::Legacy).unwrap(), "{label}: the retired order's span is legacy");
+        // and its terms decode with today's codec (every delivery field zero)
+        assert_eq!(AnyState::decode(r.kind, &span).unwrap(), state, "{label}: the span decodes");
+        let spk = spk_from_file(r, &span);
         assert_eq!(built.tx.inputs[0].utxo.script_public_key, spk, "{label}: the input is the retired template's P2SH");
         assert_ne!(spk, spk_to_string(&template(r.kind).spk(&state.encode())), "{label}");
         let signed = sign(&built);
@@ -191,7 +198,7 @@ fn the_redeem_script_of_another_retired_template_does_not_spend_the_order() {
     // the order rests under template a; the cancel is built through template b, then pointed at the order's real output
     let req = cancel(order(70, value, O, 1_000, state.clone()), Some(b.hash), custodies_of(&state, p), vec![]);
     let mut built = build_cancel_order(&req, &kob_protocol::budget::lookup).unwrap();
-    built.tx.inputs[0].utxo.script_public_key = spk_from_file(a, &state.encode());
+    built.tx.inputs[0].utxo.script_public_key = spk_from_file(a, &a.encode_state(&state).unwrap());
     // the maker signs that transaction (the digests follow the spent output's script)
     let (tx, entries) = built.tx.to_tx().unwrap();
     for r in built.sign.iter_mut() {
@@ -281,4 +288,43 @@ fn nothing_but_a_plain_cancel_is_built_for_a_retired_template() {
     // a plan naming a hash outside the table derives no script
     let plan = SigPlan::RetiredCancel { template: r.kind, retired: [0x5a; 32], state: state.encode(), maker: pk(MAKER_A) };
     assert!(plan.check().is_err() && plan.redeem().is_none());
+}
+
+#[test]
+fn a_retired_order_of_a_delivering_kind_is_cancelled_through_its_legacy_span() {
+    // the bid delivery re-pin: today's KobBid has the delivery block, the retired one does not
+    let r = retired().iter().find(|r| r.label() == "KobBid dfcd78f1").unwrap();
+    let b = delivery_block(r.kind).unwrap();
+    assert_eq!((r.state_len, template(r.kind).state_len), (b.legacy_len, b.len()));
+    let p = program_of(r.kind);
+    let (state, value) = order_of(r.kind, p);
+    let built = build_cancel_order(&cancel(order(70, value, O, 1_000, state.clone()), Some(r.hash), vec![], vec![]), &kob_protocol::budget::lookup)
+        .unwrap();
+    match &built.plans[0] {
+        SigPlan::RetiredCancel { state: span, .. } => assert_eq!(span.len(), b.legacy_len),
+        other => panic!("{other:?}"),
+    }
+    validate_signed(&sign(&built)).unwrap();
+    // ablation: the same order spliced in today's (delivery) span is not the retired order's script, and the engine refuses it
+    let mut wrong = built.clone();
+    let delivery_span = state.encode();
+    assert_eq!(delivery_span.len(), b.len());
+    let file = common_root().join(format!("crates/kob-protocol/data/retired/{}.{}.bin", r.kind.name(), &r.hash_hex()[..8]));
+    let bytes = std::fs::read(&file).unwrap();
+    let off = template(r.kind).prefix.len();
+    let redeem = [&bytes[..off], &delivery_span[..], &bytes[off + b.legacy_len..]].concat();
+    wrong.tx.inputs[0].utxo.script_public_key = spk_to_string(&kaspa_txscript::pay_to_script_hash_script(&redeem));
+    let (tx, entries) = wrong.tx.to_tx().unwrap();
+    for s in wrong.sign.iter_mut() {
+        s.sighash = kob_protocol::tx::sighash(&tx, &entries, s.input_index);
+    }
+    assert!(validate_signed(&sign(&wrong)).is_err(), "a delivery-layout span spends the retired order");
+    // a state with a delivery mode set has no legacy span: no retired cancel is built for it
+    let mut accumulate = state.clone();
+    if let AnyState::KobBid(x) = &mut accumulate {
+        x.mode = kob_protocol::state::MODE_ACCUMULATE;
+    }
+    assert!(r.encode_state(&accumulate).is_err());
+    assert!(build_cancel_order(&cancel(order(70, value, O, 1_000, accumulate), Some(r.hash), vec![], vec![]), &kob_protocol::budget::lookup)
+        .is_err());
 }

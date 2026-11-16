@@ -14,9 +14,12 @@
 //! [`crate::tx::SigPlan::RetiredCancel`]. No other entry of a retired template is ever built or
 //! signed.
 //!
-//! Every retired template here shares the state layout and the `cancel(sig)` entry of today's kind
-//! of the same name. That is checked on first use: the state span length, and the ABI and dispatch
-//! tag of the cancel entry of today's artifact. So its terms decode with today's codec
+//! Every retired template here shares a state layout and the `cancel(sig)` entry of today's kind of
+//! the same name. A template retired before the delivery block (bid-delivery-spec §2) has the
+//! kind's [`StateLayout::Legacy`] layout: the state without the block, which decodes with every
+//! block field zero. That is checked on first use: the state span is a layout of the kind
+//! ([`crate::state::layout_of_len`]), the legacy one for a kind with a delivery block, and the
+//! ABI and dispatch tag of the cancel entry are today's. So its terms decode with today's codec
 //! ([`crate::state::AnyState::decode`]), and only its bytecode differs.
 //!
 //! The bytes are the compiled bytecode of the retired artifact, taken from the last commit that
@@ -36,6 +39,7 @@ use silverscript_abi::{ArtifactValue, TypeArtifact};
 use crate::artifacts::{template, try_template, TemplateId, PINNED};
 use crate::json::{hex32, to_hex};
 use crate::script::entry_sigscript;
+use crate::state::{layout_of_len, state_len_in, AnyState, StateLayout};
 use crate::{Error, Result};
 
 /// The only entry a retired template is ever spent through.
@@ -53,7 +57,12 @@ pub enum Retirement {
     /// Trigger evidence refuses a negative interval (`docs/security/AUDIT-2026-10.md`, section 12).
     /// Retired by `da35841`; the last commit carrying these is `60a4d11`.
     F1,
+    /// The buy-side kinds carry the delivery block (`docs/design/bid-delivery-spec.md`), and the
+    /// kinds that embed them changed with them. Retired by `0714451`; the last commit
+    /// carrying these is `d12b28e1`.
+    BidDelivery,
 }
+
 
 impl Retirement {
     /// The commit that retired the templates.
@@ -61,6 +70,7 @@ impl Retirement {
         match self {
             Retirement::BidRefund => "acf39cf",
             Retirement::F1 => "da35841",
+            Retirement::BidDelivery => "0714451",
         }
     }
 
@@ -69,6 +79,7 @@ impl Retirement {
         match self {
             Retirement::BidRefund => "59d9ea30",
             Retirement::F1 => "60a4d11",
+            Retirement::BidDelivery => "d12b28e1",
         }
     }
 }
@@ -88,8 +99,11 @@ pub struct RetiredTemplate {
     pub prefix: Vec<u8>,
     /// Bytecode after the state span.
     pub suffix: Vec<u8>,
-    /// Length of the state span (that of `kind`).
+    /// Length of the state span: that of `kind` in [`RetiredTemplate::layout`].
     pub state_len: usize,
+    /// The state layout of `kind` its orders were placed with ([`StateLayout::Legacy`] for every
+    /// template retired so far).
+    pub layout: StateLayout,
 }
 
 impl RetiredTemplate {
@@ -115,6 +129,16 @@ impl RetiredTemplate {
             return None;
         }
         Some(&redeem[self.prefix.len()..self.prefix.len() + self.state_len])
+    }
+
+    /// The state span of an order of this template: `s` (of `kind`) encoded in its layout.
+    ///
+    /// A state with a delivery block field set has no legacy span, and fails.
+    pub fn encode_state(&self, s: &AnyState) -> Result<Vec<u8>> {
+        if s.template_id() != self.kind {
+            return Err(Error::Invalid(format!("{}: a {} state is not a {} state", self.label(), s.template_id().name(), self.kind.name())));
+        }
+        s.try_encode_layout(self.layout).map_err(|e| Error::Invalid(format!("{}: {e}", self.label())))
     }
 
     /// Hex of the template hash.
@@ -204,11 +228,19 @@ retired_table![
     (KobCondBidKronD0, F1, "f47fe24d"),
     (KobIfdBidKronD0, F1, "c9cbbbdb"),
     (KobIfdAskKronD0, F1, "4ee20455"),
+    (KobBid, BidDelivery, "dfcd78f1"),
+    (KobCondAsk, BidDelivery, "23431719"),
+    (KobCondBid, BidDelivery, "07952223"),
+    (KobIfdBid, BidDelivery, "956f81e8"),
+    (KobIfdAsk, BidDelivery, "2328ea8f"),
+    (KobPair, BidDelivery, "c95c9234"),
+    (KobCondPair, BidDelivery, "0d9918cc"),
+    (KobIfdPair, BidDelivery, "43c721c5"),
 ];
 
 /// The full template hashes of [`TABLE`], in its order: the hashes the retired orders were placed
 /// under. Each is recomputed from its bytes on load.
-const HASHES: [&str; 31] = [
+const HASHES: [&str; 39] = [
     "b995661f8b17c7c558b85975e361c26b00a2d57214cf631083a464b835e54fa3",
     "770314aa3391b20333c98037343f538f1903002362f31bd599abfca16aa67247",
     "26042aff0dc58c2cbaa0efd166c38944942d75524cc55033dde80502c4558166",
@@ -240,6 +272,14 @@ const HASHES: [&str; 31] = [
     "f47fe24d8d4566d0074ecf5627031d69348fa4ec3ece48ba8739685775ea3fa3",
     "c9cbbbdbd0ecdde70c0f3130ca1a7d2802f8682bbde5532907ef3c2589252f52",
     "4ee20455e942d978f3be267c0b99deffa4c43ee55b9bfc49c53610500ca238f2",
+    "dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef",
+    "23431719bdf1d5ffee8e4cd5aa50afa2c3513f60acca13cc3226c83f1eb9113a",
+    "079522237b973923ed05be828d6f62036ac642c3ee9fe493d921a7062b75e135",
+    "956f81e8c0f1dc9192da65307a1f29c58c4c2f56a6ebf2703346538736459c06",
+    "2328ea8fd57ee9b4a09602df23dcb12e8bda7664da670ab9d41a2aa8f058f30e",
+    "c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6",
+    "0d9918cc8f99bf46baf9f4544a413129aae5881b1e97326f69208057e441b98a",
+    "43c721c5190432b1788ca4f79ab56c180f6ee2f9d958bb1cdd8ebeb64831a087",
 ];
 
 fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
@@ -257,9 +297,16 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
         if kind.kind_code().is_none() {
             return Err(format!("{name}: {} is not an order kind", kind.name()));
         }
-        // today's kind: the same state span at the same place (the order kinds have no
-        // compiler-owned context fields)
-        let (offset, len) = (cur.prefix.len(), cur.state_len);
+        // today's kind: the state span at the same place (the order kinds have no compiler-owned
+        // context fields), of the kind's legacy layout: every template retired so far was placed
+        // before the delivery block (bid-delivery-spec §2), so a kind with the block has a longer
+        // span today
+        let layout = StateLayout::Legacy;
+        let len = state_len_in(*kind, layout).ok_or_else(|| format!("{name}: {} has no legacy layout", kind.name()))?;
+        if layout_of_len(*kind, len) != Some(layout) {
+            return Err(format!("{name}: a {len}-byte span is not the legacy layout of {}", kind.name()));
+        }
+        let offset = cur.prefix.len();
         if bytes.len() < offset + len {
             return Err(format!("{name}: {} bytes cannot hold a state span {offset}+{len}", bytes.len()));
         }
@@ -286,7 +333,7 @@ fn load() -> std::result::Result<Vec<RetiredTemplate>, String> {
         if !bytes.windows(4).any(|w| w == CANCEL_TAG) {
             return Err(format!("{name}: the bytecode does not carry the cancel dispatch tag"));
         }
-        out.push(RetiredTemplate { kind: *kind, hash, retirement: *retirement, prefix, suffix, state_len: len });
+        out.push(RetiredTemplate { kind: *kind, hash, retirement: *retirement, prefix, suffix, state_len: len, layout });
     }
     Ok(out)
 }
@@ -342,9 +389,15 @@ mod tests {
     #[test]
     fn the_table_loads_and_is_not_pinned() {
         self_check().unwrap();
-        assert_eq!(retired().len(), 31);
+        assert_eq!(retired().len(), 39);
         for r in retired() {
-            assert_eq!(r.state_len, template(r.kind).state_len, "{}", r.label());
+            // the span of the kind's legacy layout: a kind with the delivery block is longer today
+            assert_eq!(r.layout, StateLayout::Legacy, "{}", r.label());
+            assert_eq!(layout_of_len(r.kind, r.state_len), Some(StateLayout::Legacy), "{}", r.label());
+            match crate::state::delivery_block(r.kind) {
+                Some(b) => assert!(r.state_len == b.legacy_len && r.state_len < template(r.kind).state_len, "{}", r.label()),
+                None => assert_eq!(r.state_len, template(r.kind).state_len, "{}", r.label()),
+            }
             // a retired template is never one this build pins, of any kind
             assert!(crate::artifacts::template_by_hash(&r.hash).is_none(), "{}", r.label());
             assert_eq!(retired_by_hash(&r.hash).unwrap().hash, r.hash);
@@ -357,6 +410,19 @@ mod tests {
         {
             assert!(retired().iter().any(|r| r.label() == label), "{label}");
         }
+        // the bid delivery re-pin: every kind that changed, the pair order included
+        for label in [
+            "KobBid dfcd78f1",
+            "KobCondAsk 23431719",
+            "KobCondBid 07952223",
+            "KobIfdBid 956f81e8",
+            "KobIfdAsk 2328ea8f",
+            "KobPair c95c9234",
+            "KobCondPair 0d9918cc",
+            "KobIfdPair 43c721c5",
+        ] {
+            assert!(retired().iter().any(|r| r.label() == label), "{label}");
+        }
     }
 
     #[test]
@@ -366,8 +432,13 @@ mod tests {
             let redeem = r.redeem(&state).unwrap();
             assert_eq!(r.state_of(&redeem), Some(state.as_slice()));
             assert!(r.redeem(&state[1..]).is_err());
-            // a retired script is never today's script of the same state
-            assert_ne!(r.spk(&state).unwrap(), template(r.kind).spk(&state), "{}", r.label());
+            // a retired script is never today's script of the same state (a delivering kind: today's span is longer)
+            let today = template(r.kind);
+            if today.state_len == r.state_len {
+                assert_ne!(r.spk(&state).unwrap(), today.spk(&state), "{}", r.label());
+            } else {
+                assert!(today.state_len > r.state_len && (r.prefix != today.prefix || r.suffix != today.suffix), "{}", r.label());
+            }
         }
     }
 

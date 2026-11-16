@@ -1153,7 +1153,8 @@ fn cancel_plan(s: &AnyState, retired: Option<[u8; 32]>) -> Result<SigPlan> {
         None => entry(id, s.encode(), "cancel", vec![Arg::Sig(s.maker())]),
         Some(h) => {
             let r = crate::retired::retired_for(&h, id)?;
-            SigPlan::RetiredCancel { template: r.kind, retired: r.hash, state: s.encode(), maker: s.maker() }
+            // the span of the retired template's own layout (legacy: no delivery block)
+            SigPlan::RetiredCancel { template: r.kind, retired: r.hash, state: r.encode_state(s)?, maker: s.maker() }
         }
     })
 }

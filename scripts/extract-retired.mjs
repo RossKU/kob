@@ -25,6 +25,9 @@ const GENERATIONS = [
   // templates above)
   ['60a4d11', ['KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobCondPair', 'KobIfdPair', 'KobCondAskKron', 'KobCondBidKron',
     'KobIfdBidKron', 'KobIfdAskKron', 'KobCondAskKronD0', 'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
+  // retired by the bid delivery re-pin (docs/design/bid-delivery-spec.md: the delivery block of the buy-side kinds); d12b28e1 is the
+  // last commit carrying them. Their state is the legacy layout (no delivery block); the KRON kinds did not change.
+  ['d12b28e1', ['KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobPair', 'KobCondPair', 'KobIfdPair']],
 ];
 
 let bad = 0;
