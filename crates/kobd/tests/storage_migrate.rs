@@ -6,6 +6,8 @@
 //! store this build refuses is left as it is, and the migrated store goes on being indexed.
 
 mod common;
+#[path = "common/delivery.rs"]
+mod delivery;
 
 use common::*;
 use kob_protocol::build::*;
@@ -993,4 +995,93 @@ async fn vacuum_gives_the_free_pages_back_and_keeps_every_row() {
     // a store of another schema is refused untouched
     Connection::open(&path).unwrap().execute("UPDATE meta SET v = '11' WHERE k = 'schema_version'", []).unwrap();
     assert!(storage::vacuum(&config(dir.path()), |_| {}).is_err());
+}
+
+/// The bid delivery modes (`docs/design/bid-delivery-spec.md`) add no column: an order placed before them (its state in the legacy
+/// layout, under a retired template of the cancel-only table) reads as mode 0, and a mode-1 bid's bought-custody (`token_utxos.role
+/// = 'bought'`) and claim event are ordinary rows. A store with both migrates from schema 9 and every read stays the same.
+#[tokio::test]
+async fn a_store_with_bids_placed_before_the_delivery_modes_and_a_bought_custody_migrates_and_reads_the_same() {
+    use kob_protocol::artifacts::TemplateId;
+    let mut c = Ctx::new();
+    scenario(&mut c, |_| {}).await;
+    // a mode-1 bid that bought 4 whole tokens into its bought-custody, then had them claimed and bought 2 more
+    let b0 = BidState { mode: MODE_ACCUMULATE, ..bid(MAKER_A, P250) };
+    let escrow = b0.escrow(10 * WHOLE, 4).unwrap() as u64;
+    let create = c.w.create_tx(AnyState::KobBid(b0.clone()), escrow, MAKER_A, 0);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let fa = delivery::fill_first(&c, &c.w.order(&create, 0, b0.clone()), &cov, 4 * WHOLE);
+    c.push(&[&fa]).await;
+    let custody = c.w.token_at(&fa, find_custody(&fa, &cov, 4 * WHOLE).unwrap(), delivery::bought(4 * WHOLE, &cov));
+    let b4 = AnyState::KobBid(BidState { bought: 4 * WHOLE, ..b0.clone() });
+    let oa = find_cov(&fa, &cov).unwrap();
+    let claim = delivery::cancel_sweeping(&c, &c.w.order(&fa, oa, b4), &cov, Some(&custody), Some(AnyState::KobBid(b0.clone())));
+    c.push(&[&claim]).await;
+    let fc = delivery::fill_first(&c, &c.w.order(&claim, find_cov(&claim, &cov).unwrap(), b0.clone()), &cov, 2 * WHOLE);
+    c.push(&[&fc]).await;
+    assert_eq!(c.hs.event_kinds(&cov), ["create", "fill", "claim", "fill"]);
+
+    // a bid placed before the delivery modes: its rows as an earlier build left them, its state the legacy 285-byte span stored whole
+    let legacy = bid(MAKER_B, P245);
+    let create_l = c.w.create_tx(AnyState::KobBid(legacy.clone()), legacy.escrow(10 * WHOLE, 3).unwrap() as u64, MAKER_B, 0);
+    c.push(&[&create_l]).await;
+    let cov_l = c.w.cov(&create_l, 0);
+    let retired = kob_protocol::retired::retired()
+        .iter()
+        .find(|r| r.kind == TemplateId::KobBid && r.layout == StateLayout::Legacy)
+        .expect("a retired KobBid of the legacy layout");
+    let span = AnyState::KobBid(legacy.clone()).try_encode_layout(StateLayout::Legacy).unwrap();
+    assert_eq!(span.len(), 285);
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        let conn = g.conn();
+        kobd::indexer::ids::intern(conn, &retired.hash).unwrap();
+        conn.execute(
+            "UPDATE orders SET template_id = (SELECT id FROM ids WHERE h = ?2), genesis_state = ?3 WHERE covenant_id = ?1",
+            rusqlite::params![&cov_l.0[..], &retired.hash[..], &span],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE order_utxos SET state = ?2 WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)",
+            rusqlite::params![&cov_l.0[..], &span],
+        )
+        .unwrap();
+    }
+    let v = view(&c, &cov_l);
+    assert_eq!(v.cancel_only, Some(true));
+    assert_eq!(
+        (v.delivery, v.delivery_mode, v.bought.as_deref()),
+        (Some("wallet"), Some(0), Some("0")),
+        "the legacy layout is mode 0"
+    );
+    assert_eq!(v.state.as_ref().and_then(|s| s["state"]["mode"].as_str()), Some("0"));
+    let v1 = view(&c, &cov);
+    assert_eq!((v1.delivery, v1.bought.as_deref()), (Some("order"), Some("2000")));
+    assert!(v1.bought_custody.as_ref().is_some_and(|b| b.ok));
+
+    let dir = tempfile::tempdir().unwrap();
+    let cur = dir.path().join("current.sqlite3");
+    snapshot_file(&c, &cur);
+    let path = dir.path().join("index.sqlite3");
+    legacy_store(&cur, &path, Legacy::V9);
+    std::fs::remove_file(&cur).unwrap();
+    let rep = storage::migrate(&config(dir.path()), storage::Options::default(), |_| {}).unwrap();
+    assert_eq!(rep.from_schema, 9);
+    let after = open_ro(&path);
+    let (before_digests, before_reads) = {
+        let g = c.hs.ingest.lock().unwrap();
+        (table_digests(g.conn()), reads_json(g.conn()))
+    };
+    let no_fees = |v: Vec<(String, u64, String)>| -> Vec<(String, u64)> { v.into_iter().map(|d| (d.0, d.1)).collect() };
+    assert_eq!(no_fees(table_digests(&after)), no_fees(before_digests));
+    let roles: i64 = after.query_row("SELECT COUNT(*) FROM token_utxos WHERE role = 'bought'", [], |r| r.get(0)).unwrap();
+    assert_eq!(roles, 2, "both bought-custodies, the claimed one spent");
+    let after_reads = reads_json(&after);
+    let at = |reads: &[String], needle: &str| reads.iter().find(|r| r.contains(needle)).cloned();
+    // the views of the two bids read the same (the fills' fees and the totals a schema 9 store lacks are elsewhere)
+    for id in [cov, cov_l] {
+        let needle = format!("\"covenant_id\":\"{}\"", id.to_hex());
+        assert_eq!(at(&after_reads, &needle), at(&before_reads, &needle), "{needle}");
+    }
 }

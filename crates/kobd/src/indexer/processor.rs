@@ -44,6 +44,7 @@
 //!   reorg is an exact revert.
 
 use super::db::{DbError, DbResult};
+use super::delivery::{self, ROLE_BOUGHT};
 use super::ids::{id_of, intern, order_of};
 use super::packed::{sql_genesis, sql_order_ids, sql_order_ids_more, sql_ustate};
 use super::record::{Extractor, Reveal, TxRecord};
@@ -213,6 +214,17 @@ fn has_live_custody(conn: &Connection, cov: &Hash32) -> DbResult<bool> {
             " AND role = 'custody' AND spent_block IS NULL LIMIT 1"
         ))?
         .exists([&cov.0[..]])?)
+}
+
+/// Whether the order has a live token row of `role` (any token).
+fn has_live_role(conn: &Connection, cov: &Hash32, role: &str) -> DbResult<bool> {
+    Ok(conn
+        .prepare_cached(concat!(
+            "SELECT 1 FROM token_utxos WHERE order_id = ",
+            order_of!("?1"),
+            " AND role = ?2 AND spent_block IS NULL LIMIT 1"
+        ))?
+        .exists(params![&cov.0[..], role])?)
 }
 
 /// Whether the order already has a live custody row of `token`.
@@ -519,6 +531,21 @@ struct Spent {
     amend: Option<Option<u64>>,
     /// A verified sweep in place continued the order unchanged (SWEEP record).
     sweep: bool,
+    /// The input that spends the order's live bought-custody (mode 1), when the transaction does.
+    bought_in: Option<usize>,
+    /// A verified claim (the maker's `cancel` that releases the bought-custody and continues the
+    /// order with `bought = 0`): the base units it released.
+    claim: Option<i64>,
+}
+
+impl Spent {
+    /// How the fill of this spend delivered, for a delivering order whose state is proven.
+    fn delivery(&self) -> Option<delivery::FillDelivery> {
+        match self.act {
+            Act::Fill(_) => delivery::fill_delivery(self.before.as_ref()?, self.reveal.as_ref()?),
+            _ => None,
+        }
+    }
 }
 
 impl Processor {
@@ -609,6 +636,11 @@ impl Processor {
         // What every input held, from the outputs this store knows. It gives the network fee of a
         // record that lacks the input values of the node.
         let mut resolved_in: Option<i128> = Some(0);
+        // The inputs that spend an order's bought-custody, by order.
+        let mut bought_in: HashMap<Hash32, usize> = HashMap::new();
+        // Covenant inputs of no order: `(input, value when known)`. A top-up's receive UTXO is one,
+        // and is the maker's, not the sender's (below).
+        let mut foreign_ins: Vec<(usize, Option<i64>)> = Vec::new();
         for (i, inp) in rec.inputs.iter().enumerate() {
             let known = match load_order_utxo(conn, &inp.txid, inp.index)? {
                 Some(u) => Some(u.value),
@@ -622,13 +654,26 @@ impl Processor {
                     None => orphan = true,
                 }
             } else {
-                // A custody or a stray of an order, and its carrier.
-                let carrier: Option<i64> = conn
-                    .prepare_cached("SELECT value FROM token_utxos WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL")?
-                    .query_row(params![&inp.txid.0[..], inp.index], |r| r.get(0))
+                // A custody, bought-custody or stray of an order, and its carrier.
+                let owned: Option<(i64, String, Vec<u8>)> = conn
+                    .prepare_cached(
+                        "SELECT t.value, t.role, o.covenant_id FROM token_utxos t JOIN orders o ON o.id = t.order_id \
+                         WHERE t.txid = ?1 AND t.idx = ?2 AND t.spent_block IS NULL",
+                    )?
+                    .query_row(params![&inp.txid.0[..], inp.index], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
                     .optional()?;
+                let carrier = owned.as_ref().map(|o| o.0);
+                if let Some((_, role, owner)) = &owned {
+                    if role == ROLE_BOUGHT {
+                        if let Some(h) = Hash32::from_slice(owner) {
+                            bought_in.insert(h, i);
+                        }
+                    }
+                }
                 kob_in += i128::from(carrier.unwrap_or(0));
-                foreign_cov_in |= inp.cov.is_some() && carrier.is_none();
+                if inp.cov.is_some() && carrier.is_none() {
+                    foreign_ins.push((i, known));
+                }
                 conn.prepare_cached(
                     "UPDATE token_utxos SET spent_block = ?1, spent_txid = ?2 WHERE txid = ?3 AND idx = ?4 AND spent_block IS NULL",
                 )?
@@ -640,6 +685,24 @@ impl Processor {
             }
         }
         super::outputs::record(conn, rec, seq, daa)?;
+        for s in spent.iter_mut() {
+            s.bought_in = bought_in.get(&s.cov).copied();
+        }
+        // A top-up (mode 2, form 2) builds the delivery from the maker's receive UTXO, its token
+        // input `tokIn`. That input is the maker's: its KAS rides on the delivery, which the order
+        // pays, and it is no token of the sender's. Any other covenant input of no order is.
+        let topups: HashSet<usize> =
+            spent.iter().filter_map(|s| s.delivery().filter(|d| d.form == delivery::Form::Topup).and_then(|d| d.tok_in)).collect();
+        for (i, known) in foreign_ins {
+            if topups.contains(&i) {
+                match known {
+                    Some(v) => kob_in += i128::from(v),
+                    None => orphan = true,
+                }
+            } else {
+                foreign_cov_in = true;
+            }
+        }
         let spent_covs: HashSet<Hash32> = spent.iter().map(|s| s.cov).collect();
         // The in-place amends and sweeps the payload announces, as AMEND and SWEEP records. Each is
         // verified against the continuation it names.
@@ -666,7 +729,13 @@ impl Processor {
                                 spent[si].sweep = true;
                                 Some(st)
                             }
-                            None => None,
+                            None => match self.claim_of(conn, rec, &spent[si], j)? {
+                                Some((st, released)) => {
+                                    spent[si].claim = Some(released);
+                                    Some(st)
+                                }
+                                None => None,
+                            },
                         },
                     },
                     _ => self.derive_after(&spent[si], out.spk.as_slice(), &evidence_prices, rec),
@@ -765,9 +834,18 @@ impl Processor {
             }
             let mut role = "stray";
             if created.contains(&t.owner) || spent_covs.contains(&t.owner) {
-                let held = rec.holds.iter().find(|h| h.out == t.out).map(|h| &h.state);
+                let hold = rec.holds.iter().find(|h| h.out == t.out);
+                let held = hold.map(|h| &h.state);
                 if is_exact_custody(conn, &t.owner, &token, t.amount, held)? && !has_live_custody_of(conn, &t.owner, &token)? {
                     role = "custody";
+                } else if spent.iter().any(|s| {
+                    s.cov == t.owner
+                        && s.after.as_ref().is_some_and(|a| delivery::is_bought_custody(a, &t.owner, &token, t.amount, hold))
+                }) && !has_live_role(conn, &t.owner, ROLE_BOUGHT)?
+                {
+                    // The bought-custody of a mode-1 order that this transaction continued with
+                    // `bought` > 0: the order's, never a stray.
+                    role = ROLE_BOUGHT;
                 }
             }
             conn.prepare_cached(concat!(
@@ -1456,7 +1534,35 @@ impl Processor {
             self.record_reject(conn, seq, &rec.txid, "sweep:custody_not_live", delta)?;
             return Ok(None);
         }
+        // The bought-custody stays where it is too: the same state names the same `bought`.
+        if before.bought_custody().is_some() && !has_live_role(conn, &s.cov, ROLE_BOUGHT)? {
+            self.record_reject(conn, seq, &rec.txid, "sweep:bought_custody_not_live", delta)?;
+            return Ok(None);
+        }
         Ok(Some(before.clone()))
+    }
+
+    /// The state that a claim continues a maker-cancelled mode-1 order with at output `j`, and
+    /// the base units it released (bid-delivery-spec §7, shapes CL1 to CL3).
+    ///
+    /// A claim is the maker's `cancel` that spends the order's live bought-custody (`bought` > 0)
+    /// and continues the order at `j`, its only output of the covenant id, as the P2SH of the same
+    /// state with `bought = 0`. The P2SH proves the state, so no record names it. A pair order's
+    /// sell custody stays live. Anything else is no claim, and the continuation stays unproven as
+    /// for any other cancel that continues the id.
+    fn claim_of(&self, conn: &Connection, rec: &TxRecord, s: &Spent, j: usize) -> DbResult<Option<(AnyState, i64)>> {
+        let Some(before) = &s.before else { return Ok(None) };
+        let (Some(bought), Some(_)) = (before.bought_custody(), s.bought_in) else { return Ok(None) };
+        let Some(after) = before.with_bought(0) else { return Ok(None) };
+        let Some(out) = rec.outputs.get(j) else { return Ok(None) };
+        let bound = rec.outputs.iter().filter(|o| o.cov.is_some_and(|(_, c)| c == s.cov)).count();
+        if bound != 1 || spk_bytes(&after.spk()) != out.spk {
+            return Ok(None);
+        }
+        if before.custodies().iter().any(|(_, a)| *a > 0) && !has_live_custody(conn, &s.cov)? {
+            return Ok(None);
+        }
+        Ok(Some((after, bought)))
     }
 
     /// Takes the terms of an in-place amend into the order row and re-lists it.
@@ -1589,6 +1695,8 @@ impl Processor {
             after: None,
             amend: None,
             sweep: false,
+            bought_in: None,
+            claim: None,
         }))
     }
 
@@ -1682,14 +1790,22 @@ impl Processor {
                 _ => {}
             }
         }
-        let mut tried: HashSet<Mutable> = HashSet::new();
+        // `bought` of a delivering order: a mode-1 fill that continues adds n to its bought-custody
+        // (bid-delivery-spec §4). Every other spend leaves it.
+        let mut boughts: Vec<Option<i64>> = vec![before.delivery().map(|d| d.bought)];
+        if let (Act::Fill(n), Some(d)) = (s.act, before.delivery()) {
+            if d.mode == kob_protocol::state::MODE_ACCUMULATE {
+                boughts.push(d.bought.checked_add(n));
+            }
+        }
+        let mut tried: HashSet<(Mutable, Option<i64>)> = HashSet::new();
         for l in &amounts {
             for a in &armed {
                 for st in &stops {
                     for r in &rpt {
-                        for cu in &custs {
+                        for (cu, bo) in custs.iter().flat_map(|c| boughts.iter().map(move |b| (c, b))) {
                             let m = Mutable { amount: *l, armed: *a, stop: *st, rpt: *r, custody: *cu };
-                            if !tried.insert(m) {
+                            if !tried.insert((m, *bo)) {
                                 continue;
                             }
                             let mut rs = redeem.clone();
@@ -1700,6 +1816,7 @@ impl Processor {
                                     "stopPrice" => m.stop,
                                     "rptAmount" => m.rpt,
                                     "custody" => m.custody,
+                                    "bought" => *bo,
                                     _ => None,
                                 };
                                 if let Some(v) = v {
@@ -1813,7 +1930,10 @@ impl Processor {
                 let t_arg = s.reveal.as_ref().and_then(|r| match s.order.template {
                     TemplateId::KobPair | TemplateId::KobCondPair => r.int(3),
                     TemplateId::KobIfdPair => r.int(13),
-                    _ => r.args.last().and_then(|a| crate::script::script_int(a)),
+                    t => match delivery::time_arg(t) {
+                        Some(k) => r.int(k),
+                        None => r.args.last().and_then(|a| crate::script::script_int(a)),
+                    },
                 });
                 if let Some(t) = t_arg {
                     detail["t"] = json!(t);
@@ -1843,6 +1963,17 @@ impl Processor {
                 //     <= floor(n * (q + tip) / scale)
                 // `refund_value` is the plain refund output of the maker for a terminal fill. It is
                 // present from 1 KAS up.
+                //
+                // A delivery built from a token input carries that input's KAS too
+                // (bid-delivery-spec §4): a mode-1 fill into an existing bought-custody, and a
+                // top-up of the maker's receive UTXO. `delivery_kas_in` is that KAS, so the escrow
+                // put `delivery_value - delivery_kas_in` on the delivery, and the check reads
+                //   escrow_before - escrow_after - (delivery_value - delivery_kas_in) - refund_value
+                //     <= floor(n * (q + tip) / scale)
+                let fd = s.delivery();
+                if let Some(fd) = fd {
+                    self.delivery_detail(conn, rec, s, n, &fd, &mut detail)?;
+                }
                 if s.order.side == 2 && !is_pair {
                     if let Some(o) = rec.outputs.get(s.input_idx) {
                         detail["delivery_value"] = json!(o.value.to_string());
@@ -1866,7 +1997,10 @@ impl Processor {
                             if let (false, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), Some(q)) =
                                 (continues, s.before.as_ref(), quote)
                             {
-                                let rem = b.spend_at(n, q).and_then(|all_in| v.checked_sub(all_in)?.checked_sub(b.delivery_carrier));
+                                // What leaves the escrow beyond the price: a carrier, none for a
+                                // fill into an existing bought-custody, `topupTip` for a top-up.
+                                let released = fd.map_or(b.delivery_carrier, |d| d.released());
+                                let rem = b.spend_at(n, q).and_then(|all_in| v.checked_sub(all_in)?.checked_sub(released));
                                 let slot = rec.outputs.len().checked_sub(1 + s.input_idx);
                                 if let (Some(rem), Some(slot)) = (rem, slot) {
                                     if rem >= kob_protocol::tx::REFUND_MIN as i64 {
@@ -1904,6 +2038,17 @@ impl Processor {
                 events.push(("rearm", Some(m), None, false));
             }
             Act::Refund => {
+                // A mode-1 order's refund releases its whole bought-custody to the maker as one
+                // plain UTXO (bid-delivery-spec §5): at output `custIn` of a bid kind's
+                // `refund(custIn)`, at the custody's own input index of a pair order.
+                if let (Some(b), Some(k)) = (s.before.as_ref().and_then(|b| b.bought_custody()), s.bought_in) {
+                    detail["released"] = json!(b.to_string());
+                    let at =
+                        if is_pair { Some(k) } else { s.reveal.as_ref().and_then(|r| r.int(0)).and_then(|v| usize::try_from(v).ok()) };
+                    if let Some(at) = at {
+                        detail["release_output"] = json!(at);
+                    }
+                }
                 let kind = if ioc { "kill" } else { "refund" };
                 events.push((kind, amount_before, None, closes));
             }
@@ -1924,7 +2069,20 @@ impl Processor {
                 let after = s.after.as_ref();
                 events.push(("sweep", after.and_then(|a| a.amount_left()), None, false));
             }
-            Act::Cancel => events.push(("cancel", None, None, closes)),
+            Act::Cancel if s.claim.is_some() => {
+                // A claim: the maker took the bought-custody and the order goes on with
+                // `bought = 0` (bid-delivery-spec §7). `amount` is what it released.
+                detail["released"] = json!(s.claim.unwrap_or(0).to_string());
+                events.push(("claim", s.claim, None, false));
+            }
+            Act::Cancel => {
+                // The maker's cancel spent the bought-custody with the order (CL4, or a claim
+                // whose continuation this indexer cannot prove).
+                if let (Some(b), Some(_)) = (s.before.as_ref().and_then(|b| b.bought_custody()), s.bought_in) {
+                    detail["released"] = json!(b.to_string());
+                }
+                events.push(("cancel", None, None, closes))
+            }
             Act::Update => {
                 let kind = match (&s.before, &s.after) {
                     (Some(b), Some(a)) => {
@@ -2025,6 +2183,58 @@ impl Processor {
         Ok(())
     }
 
+    /// The delivery fields of a delivering order's fill event (bid-delivery-spec §4).
+    ///
+    /// - `delivery`: `new` (a new plain UTXO for the maker), `custody` (into the order's
+    ///   bought-custody; mode 1), `receive` (a new receive UTXO; mode 2 form 1) or `topup` (the
+    ///   maker's receive UTXO topped up; mode 2 form 2). `delivery_mode` is the order's mode.
+    /// - Mode 1: `bought`, what the bought-custody holds after a fill the order survives, or
+    ///   `released`, the `bought + n` its ending fill delivers to the maker as one plain UTXO.
+    /// - A top-up: `topup_tip`, the KAS the fill keeps, and `receive_before`, what the receive UTXO
+    ///   held before.
+    /// - `delivery_kas_in`: the KAS of the token input the delivery is built from (the
+    ///   bought-custody, or the receive UTXO), which rides on the delivery.
+    fn delivery_detail(
+        &self,
+        conn: &Connection,
+        rec: &TxRecord,
+        s: &Spent,
+        n: i64,
+        fd: &delivery::FillDelivery,
+        detail: &mut serde_json::Value,
+    ) -> DbResult<()> {
+        detail["delivery"] = json!(fd.form.name());
+        detail["delivery_mode"] = json!(fd.block.mode);
+        let continues = rec.outputs.iter().any(|o| o.cov.is_some_and(|(_, c)| c == s.cov));
+        if fd.block.mode == kob_protocol::state::MODE_ACCUMULATE {
+            let total = fd.block.bought.saturating_add(n).to_string();
+            detail[if continues { "bought" } else { "released" }] = json!(total);
+        }
+        if fd.form == delivery::Form::Topup {
+            detail["topup_tip"] = json!(fd.block.topup_tip.to_string());
+        }
+        let Some(inp) = fd.tok_in.and_then(|k| rec.inputs.get(k)) else { return Ok(()) };
+        // The input was spent in step 1: its row is read whatever its spent mark.
+        let mut found: Option<(i64, i64)> = None;
+        for sql in [
+            "SELECT value, amount FROM token_utxos WHERE txid = ?1 AND idx = ?2",
+            "SELECT value, amount FROM token_holdings WHERE txid = ?1 AND idx = ?2",
+        ] {
+            found =
+                conn.prepare_cached(sql)?.query_row(params![&inp.txid.0[..], inp.index], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+            if found.is_some() {
+                break;
+            }
+        }
+        if let Some((value, amount)) = found {
+            detail["delivery_kas_in"] = json!(value.to_string());
+            if fd.form == delivery::Form::Topup {
+                detail["receive_before"] = json!(amount.to_string());
+            }
+        }
+        Ok(())
+    }
+
     /// The quote bound of a fill at the time argument of the call.
     ///
     /// For auctions it is the price that the covenant bounds the fill by.
@@ -2034,10 +2244,14 @@ impl Processor {
         // The time argument of the call is the last one. The pair kinds differ: `settle` of
         // `KobPair` and `KobCondPair` has it at argument 3, and `fill` of `KobIfdPair` at argument
         // 13.
+        // `KobBid` and `KobCondBid` end with `form` (bid-delivery-spec §3).
         let t = match before {
             AnyState::KobPair(_) | AnyState::KobCondPair(_) => r.int(3),
             AnyState::KobIfdPair(_) => r.int(13),
-            _ => r.args.last().and_then(|a| crate::script::script_int(a)),
+            _ => match delivery::time_arg(r.template) {
+                Some(k) => r.int(k),
+                None => r.args.last().and_then(|a| crate::script::script_int(a)),
+            },
         }?;
         guarded(|| match before {
             AnyState::KobAsk(a) | AnyState::KobAskKron(a) => a.price_at(t, daa),
@@ -2135,6 +2349,7 @@ impl Processor {
                     parent_spent: model::parent_of(state).is_some_and(|p| spent_covs.contains(&Hash32(p))),
                     quote,
                     value: s.value,
+                    bought_in: s.bought_in,
                 };
                 kob_out.extend(guarded(|| income::pinned(&leg, n_out)).flatten()?);
             }
@@ -2532,7 +2747,14 @@ fn refresh_with(conn: &Connection, cov: &Hash32, how: Filled) -> DbResult<()> {
                 // largest n whose budget ceil(n * (pMax + tip) / scale) leaves the delivery carrier
                 // and the reserve. It is an upper bound, because every further fill moves one more
                 // carrier.
-                (None, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), _) => (Some(b.buying_power(*value)), false),
+                //
+                // A mode-1 bid whose bought-custody exists releases no carrier on its next fill:
+                // that delivery rides on the custody's KAS (bid-delivery-spec §4), so the whole
+                // escrow above the reserve buys.
+                (None, Some(AnyState::KobBid(b) | AnyState::KobBidKron(b)), _) => {
+                    let extra = if b.mode == kob_protocol::state::MODE_ACCUMULATE && b.bought > 0 { b.delivery_carrier } else { 0 };
+                    (Some(b.buying_power(value.saturating_add(extra))), false)
+                }
                 // An unproven bid state gets the same bound from the order row. No delivery carrier
                 // is known.
                 (None, _, TemplateId::KobBid) => match (order.budget_rate, order.reserve, order.scale) {
@@ -2808,7 +3030,7 @@ impl Processor {
                     conn.prepare_cached(concat!(
                         "UPDATE token_holdings SET spent_block = 0 WHERE owner_id = ",
                         id_of!("?1"),
-                        " AND role IN ('custody','stray') AND spent_block IS NULL"
+                        " AND role IN ('custody','bought','stray') AND spent_block IS NULL"
                     ))?
                     .execute([&covenant_id.0[..]])?;
                     self.gap_event(conn, covenant_id, txid, cursor_daa, "unknown", true, json!({"reason": "gap_close"}))?;
@@ -2856,7 +3078,7 @@ impl Processor {
                         )?
                         .execute(params![&t.0[..], i])?;
                         conn.prepare_cached(
-                            "UPDATE token_holdings SET spent_block = 0 WHERE txid = ?1 AND idx = ?2 AND role IN ('custody','stray') AND spent_block IS NULL",
+                            "UPDATE token_holdings SET spent_block = 0 WHERE txid = ?1 AND idx = ?2 AND role IN ('custody','bought','stray') AND spent_block IS NULL",
                         )?
                         .execute(params![&t.0[..], i])?;
                     }
