@@ -188,9 +188,14 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
     return { tpl: t.tplHash, cov: t.covenantId };
   };
   const straySpks = snap.strays.map((s) => tokenSpk(kob, strayToken(s).tpl, s.state));
+  // A mode-1 order's bought-custody, on its bought token's program.
+  const bc = snap.boughtCustody ?? null;
+  const bcTok = bc ? strayToken(bc) : null;
+  const bcSpk = bc && bcTok ? tokenSpk(kob, bcTok.tpl, bc.state) : null;
   const refs: OutpointRef[] = [{ transactionId: snap.order.transactionId, index: snap.order.index, scriptPublicKey: orderSpk }];
   if (snap.custody && custodySpk) refs.push({ transactionId: snap.custody.transactionId, index: snap.custody.index, scriptPublicKey: custodySpk });
   if (snap.prefund && prefundSpk) refs.push({ transactionId: snap.prefund.transactionId, index: snap.prefund.index, scriptPublicKey: prefundSpk });
+  if (bc && bcSpk) refs.push({ transactionId: bc.transactionId, index: bc.index, scriptPublicKey: bcSpk });
   snap.strays.forEach((s, i) => {
     const spk = straySpks[i];
     if (spk) refs.push({ transactionId: s.transactionId, index: s.index, scriptPublicKey: spk });
@@ -228,6 +233,12 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
       if (!pf || !prefundToken) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its prefund custody UTXO is not on the node with the claimed script and token covenant id`);
       prefund = { ...snap.prefund, amount: pf.amount.toString(), covenantId: prefundToken };
     }
+    let boughtCustody: TokenUtxo | null = null;
+    if (bc && bcTok) {
+      const bf = confirmed(bc, bcSpk, bcTok.cov);
+      if (!bf) throw new SnapshotError('node-mismatch', `order ${snap.covenantId}: its bought-custody token UTXO is not on the node with the claimed script and token covenant id`);
+      boughtCustody = { ...bc, amount: bf.amount.toString(), covenantId: bcTok.cov };
+    }
     const strays: TokenUtxo[] = [];
     snap.strays.forEach((s, i) => {
       const cov = strayToken(s).cov;
@@ -243,7 +254,7 @@ export function snapshotCheck(kob: KobWasm, snap: OrderSnapshot): SnapshotCheck 
         }),
       }))
       .filter((g) => g.utxos.length > 0);
-    return { ...snap, order: { ...snap.order, amount: orderFact.amount.toString() }, custody, ...(snap.prefund ? { prefund } : {}), strays, ...(snap.foreign ? { foreign } : {}) };
+    return { ...snap, order: { ...snap.order, amount: orderFact.amount.toString() }, custody, ...(snap.prefund ? { prefund } : {}), ...(bc ? { boughtCustody } : {}), strays, ...(snap.foreign ? { foreign } : {}) };
   };
   return { refs, finish };
 }

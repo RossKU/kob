@@ -4,12 +4,15 @@
 // - `escrowedBalances(orders)` gives custody, strays, KAS escrow and KAS carriers per token, from
 //   live OrderViews and OrderSnapshots. A pair order counts its custody of A under A and of B
 //   under B, and its KAS under its base token A.
+// - A mode-1 order's bought-custody is the maker's own tokens ("bought, held by the order"): `bought`,
+//   never `custody`.
 // - `withFreeBalances(escrowed, utxos)` adds the free token balance owned by the maker's key. It
 //   also adds KRON tokens the key holds in a way KOB cannot spend (id_type 0 or 1).
 //
 // The module is pure and DOM-free. All amounts are bigint, in token base units or sompi.
 import type { OrderView } from '../data/indexer-types';
 import type { OrderSnapshot } from './cancel';
+import { boughtOf } from './bought';
 import { asOrderState, big, custodiesOf, describeOrder, tokenCovIdOf } from './order-facts';
 import { pairOfView } from './pair-view';
 import { isKeyOwned, isKronUnspendable } from './token-state';
@@ -20,6 +23,10 @@ export interface EscrowedBalance {
   token: Hex;
   /** Tokens in 0x04 custody of live orders, in base units. Wallets do not show them. */
   custody: bigint;
+  /** Tokens mode-1 orders bought and hold for the maker (their bought-custodies), in base units. */
+  bought: bigint;
+  /** The live orders holding `bought`. */
+  boughtOrders: number;
   /**
    * Stray tokens owned by live orders' covenant ids, in base units. Only the maker's cancel
    * recovers them.
@@ -49,6 +56,9 @@ export interface TokenBalance {
    */
   notSpendable: bigint;
   escrowed: bigint;
+  /** Bought, held by the maker's mode-1 orders: the maker's own tokens, claimable. */
+  bought: bigint;
+  boughtOrders: number;
   strays: bigint;
   kasLocked: bigint;
   kasEscrow: bigint;
@@ -74,6 +84,8 @@ interface Normalised {
   /** The known custody UTXOs with token, amount and KAS carrier. A pair order may have A and B. */
   custodies: { token: Hex; amount: bigint; kas: bigint }[];
   strays: { token: Hex; amount: bigint; kas: bigint }[];
+  /** The bought-custody (amount from the state; KAS from its UTXO when known). */
+  bought: { token: Hex; amount: bigint; kas: bigint } | null;
 }
 
 function normalise(o: Input): Normalised | SkippedOrder {
@@ -83,21 +95,27 @@ function normalise(o: Input): Normalised | SkippedOrder {
     if (!o.state_known || !state) return { covenantId: o.covenant_id, reason: 'state-unknown' };
     if (!o.current || o.current.value == null) return { covenantId: o.covenant_id, reason: 'no-current-utxo' };
     const pv = pairOfView(o);
+    // a bid's `custody` is its bought-custody (kobd reads.rs): only an order with a sell custody counts it
     const cus = pv
       ? pv.custodies.map((c) => c.utxo ?? null)
-      : [o.custody?.utxo ?? null];
+      : custodiesOf(state).length ? [o.custody?.utxo ?? null] : [];
+    const bf = boughtOf(state);
+    const bu = o.bought_custody?.utxo;
     return {
       covenantId: o.covenant_id, state, value: big(o.current.value),
       custodies: cus.filter((cu): cu is NonNullable<typeof cu> => !!cu && !cu.spent).map((cu) => ({ token: cu.token, amount: big(cu.state?.amount ?? cu.amount), kas: big(cu.value) })),
       strays: (o.strays ?? []).filter((s) => !s.spent).map((s) => ({ token: s.token, amount: big(s.state?.amount ?? s.amount), kas: big(s.value) })),
+      bought: bf ? { token: bf.token, amount: bf.amount, kas: bu && !bu.spent ? big(bu.value) : 0n } : null,
     };
   }
+  const bf = boughtOf(o.order.state);
   const token = tokenCovIdOf(o.order.state);
   const cs = custodiesOf(o.order.state);
   return {
     covenantId: o.covenantId, state: o.order.state, value: big(o.order.amount),
     custodies: [o.custody ?? null, o.prefund ?? null].flatMap((u, k) => (u ? [{ token: u.covenantId ?? cs[k]?.token ?? token, amount: big(u.state.amount), kas: big(u.amount) }] : [])),
     strays: o.strays.map((s) => ({ token: s.covenantId ?? token, amount: big(s.state.amount), kas: big(s.amount) })),
+    bought: bf ? { token: bf.token, amount: bf.amount, kas: o.boughtCustody ? big(o.boughtCustody.amount) : 0n } : null,
   };
 }
 
@@ -116,7 +134,7 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
     const d = describeOrder(n.state);
     const token = tokenCovIdOf(n.state);
     const row = (t: Hex): EscrowedBalance =>
-      by.get(t) ?? (by.set(t, { token: t, custody: 0n, strays: 0n, kasEscrow: 0n, kasCarriers: 0n, kasLocked: 0n, orders: 0 }).get(t) as EscrowedBalance);
+      by.get(t) ?? (by.set(t, { token: t, custody: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasEscrow: 0n, kasCarriers: 0n, kasLocked: 0n, orders: 0 }).get(t) as EscrowedBalance);
     const b = row(token);
     b.orders++;
     // Count each custody UTXO's own amount. A custody the input does not show counts what the
@@ -132,6 +150,12 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
     for (const s of n.strays) {
       row(s.token).strays += s.amount;
       carriers += s.kas;
+    }
+    if (n.bought) {
+      const r = row(n.bought.token);
+      r.bought += n.bought.amount;
+      r.boughtOrders++;
+      carriers += n.bought.kas;
     }
     // A pair order trades tokens only. Its whole value is carriers and its tip prefund.
     if (d.side === 'sell' || d.pair) {
@@ -197,7 +221,7 @@ export function withFreeBalances(
   return [...tokens].sort().map((token) => {
     const e = eBy.get(token);
     return {
-      token, free: free.get(token) ?? 0n, notSpendable: other.get(token) ?? 0n, escrowed: e?.custody ?? 0n, strays: e?.strays ?? 0n, kasLocked: e?.kasLocked ?? 0n,
+      token, free: free.get(token) ?? 0n, notSpendable: other.get(token) ?? 0n, escrowed: e?.custody ?? 0n, bought: e?.bought ?? 0n, boughtOrders: e?.boughtOrders ?? 0, strays: e?.strays ?? 0n, kasLocked: e?.kasLocked ?? 0n,
       kasEscrow: e?.kasEscrow ?? 0n, kasCarriers: e?.kasCarriers ?? 0n, orderCount: e?.orders ?? 0,
     };
   });

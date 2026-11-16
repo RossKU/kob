@@ -1,5 +1,5 @@
 // Balances the wallet does not show: free tokens (P2PK-owned, tracked locally / by the indexer; KRON tokens KOB cannot spend apart), tokens in 0x04 custody of live orders,
-// stray tokens, and KAS locked in orders. Combines the pure helpers of kob/balances.ts with the indexer's stray list. Pure.
+// tokens bought and held by mode-1 orders, stray tokens, and KAS locked in orders. Combines the pure helpers of kob/balances.ts with the indexer's stray list. Pure.
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { escrowedBalances, kasBalanceSummary, withFreeBalances, type TokenBalance } from '../../kob/balances';
 import type { OrderSnapshot } from '../../kob/cancel';
@@ -64,10 +64,10 @@ export function combineBalances(o: {
   let lost = 0n;
   for (const [token, t] of totals) {
     lost += t.lost;
-    const cur = by.get(token) ?? { token, free: 0n, notSpendable: 0n, escrowed: 0n, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
+    const cur = by.get(token) ?? { token, free: 0n, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
     by.set(token, { ...cur, strays: t.recoverable });
   }
-  const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
+  const tokens = [...by.values()].filter((b) => b.free > 0n || b.notSpendable > 0n || b.escrowed > 0n || b.bought > 0n || b.strays > 0n || b.kasLocked > 0n || b.orderCount > 0).sort((a, b) => (a.token < b.token ? -1 : a.token > b.token ? 1 : 0));
   const kas = kasBalanceSummary(o.freeKas, tokens);
   const onTokens = o.freeTokens.filter((u) => u.state.owner === o.maker).reduce((s, u) => s + big(u.amount), 0n);
   return { tokens, kas: { ...kas, onTokens, total: kas.total + onTokens }, lostStrayTokens: lost };
@@ -89,7 +89,7 @@ export function balanceColumnFractions(
     const d = decimalsOf(b.token);
     if (d === undefined) continue;
     out.free = Math.max(out.free, unitsFraction(b.free, d));
-    out.escrowed = Math.max(out.escrowed, unitsFraction(b.escrowed, d));
+    out.escrowed = Math.max(out.escrowed, unitsFraction(b.escrowed + b.bought, d), unitsFraction(b.bought, d));
     out.strays = Math.max(out.strays, unitsFraction(b.strays, d));
   }
   return out;

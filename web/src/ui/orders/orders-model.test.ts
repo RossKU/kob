@@ -400,3 +400,36 @@ describe('merging with placement records', () => {
     expect((view.state as AnyState).kind).toBe('KobAsk');
   });
 });
+
+describe('a Collected bid holding what it bought (bid-delivery-spec §10)', () => {
+  const collectedView = (bought: string, utxo = true) => {
+    const p = placeGolden(kob, 'create.bid');
+    const s = p.snapshots[0];
+    const state = { ...s.order.state, state: { ...s.order.state.state, mode: '1', bought } } as OrderState;
+    const snap = { ...s, order: { ...s.order, state } };
+    const u = { txid: 'ab'.repeat(32), index: 1, token: (state.state as { tokenCovId: string }).tokenCovId, owner: s.covenantId, amount: bought, value: '1000000000', role: 'bought', created_daa: 1, spent: false, spent_txid: null, confirmations: 10, settled: true };
+    const cv = { expected_amount: bought, utxo: utxo ? u : null, ok: utxo };
+    return orderViewOf(kob, snap, { delivery: 'order', delivery_mode: 1, bought, custody: cv, bought_custody: cv });
+  };
+
+  it('the row names the delivery and the bought amount, and offers Claim (negative: nothing bought, no Claim)', () => {
+    const [e] = buildEntries([collectedView('4000')], []);
+    const row = describeEntry(e, ctx);
+    expect(row.delivery).toBe('1');
+    expect(row.bought).toMatchObject({ amount: 4000n, ok: true });
+    expect(row.canClaim).toBe(true);
+    const [z] = buildEntries([collectedView('0')], []);
+    expect(describeEntry(z, ctx)).toMatchObject({ delivery: '1', bought: null, canClaim: false });
+  });
+
+  it('no Claim while the indexer has not proven the custody UTXO', () => {
+    const [e] = buildEntries([collectedView('4000', false)], []);
+    expect(describeEntry(e, ctx)).toMatchObject({ bought: { ok: false }, canClaim: false });
+  });
+
+  it('an order of the legacy layout has no delivery row', () => {
+    const { row } = rowOf('create.ask');
+    expect(row.delivery).toBeNull();
+    expect(row.bought).toBeNull();
+  });
+});

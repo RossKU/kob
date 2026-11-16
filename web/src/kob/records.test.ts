@@ -314,10 +314,16 @@ describe('resolveRecord', () => {
     expect((await resolveRecord(kob, chain, rec, addr)).status).toBe('unknown');
   });
 
-  it('a bid resolves spent when gone (no mutable fields) and live while present', async () => {
+  it('a bid resolves spent when gone (bought stays 0 outside mode 1) and live while present', async () => {
     const { p, rec } = recordOf('create.bid');
+    expect(kob.decodeState('KobBid', rec.state).state).toMatchObject({ bought: '0' });
+    expect(String((kob.decodeState('KobBid', rec.state).state as { mode?: string }).mode)).not.toBe('1');
     const chain = new FakeChain();
     expect((await resolveRecord(kob, chain, rec, addr)).status).toBe('spent');
+    // negative: a Collected bid's bought grows with its fills and is not walked, so a node that finds nothing cannot say spent
+    const st = kob.decodeState('KobBid', rec.state);
+    const collected = { ...rec, state: kob.encodeState({ ...st, state: { ...st.state, mode: '1' } } as never) };
+    expect((await resolveRecord(kob, new FakeChain(), collected, addr)).status).toBe('unknown');
     chain.applyTx(p.signed.tx);
     const r = await resolveRecord(kob, chain, rec, addr);
     expect(r.status).toBe('live');

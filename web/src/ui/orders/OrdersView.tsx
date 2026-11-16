@@ -29,6 +29,8 @@ import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
 import { AmendDialog } from './AmendDialog';
+import { ClaimDialog } from './ClaimDialog';
+import { planClaimMany, prepareClaim, type ClaimContext } from './claim';
 import { ReplaceDialog } from './ReplaceDialog';
 import { AutoRefundToggle } from './AutoRefund';
 import { BalancesFrame, BalancesPanel } from './BalancesPanel';
@@ -178,6 +180,8 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const [failureRaw, setFailureRaw] = useState<string | null>(null);
   const [planFail, setPlanFail] = useState<{ plans: CancelPlan[]; failed: { id: string; message: string }[] } | null>(null);
   const [amend, setAmend] = useState<OrderRowModel | null>(null);
+  // a claim of what a Collected buy order bought, open in its dialog
+  const [claim, setClaim] = useState<{ row: OrderRowModel; ctx: ClaimContext } | null>(null);
   const [replaceMode, setReplaceMode] = useState(false);
   const [confirmAll, setConfirmAll] = useState<{ token: Hex | null; ids: Hex[] } | null>(null);
 
@@ -310,13 +314,21 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       );
     });
 
+  const amountOf = (token: Hex, amount: bigint): string => formatUnits(amount, shownToken(token)?.decimals ?? 0, { group: ',' });
+  // a cancel or refund of a buy order holding what it bought: its toast names the tokens coming back with the KAS
+  const withReturns = (step: FlowStep, row: OrderRowModel): FlowStep => {
+    if (!row.bought || !step.plan.ok) return step;
+    const amount = step.plan.quoteReturned !== undefined && row.pair && row.bought.token === row.pair.quote ? step.plan.quoteReturned : step.plan.tokensReturned;
+    return { ...step, toast: t('orders.flow.returnsSubmitted', { kas: formatUnits(step.plan.kasReleased, 8), amount: amountOf(row.bought.token, amount), ticker: shownToken(row.bought.token)?.ticker ?? '' }) };
+  };
+
   const cancelOne = (row: OrderRowModel) =>
     void guarded(row.id, async () => {
       if (!pubkey) return;
       const planned = await planCancelFor(services, pubkey, row.entry, strayList);
       const plan = warnEntryOnly(planned.plan, liveExitsOfRepeatEntry(row.entry, d?.positions ?? []));
       if (!plan.ok) return setPlanFail({ plans: [plan], failed: [] });
-      const go = () => startFlow(t('orders.flow.cancelHeading'), [stepOf(t('orders.flow.cancelTitle'), plan)]);
+      const go = () => startFlow(t('orders.flow.cancelHeading'), [withReturns(stepOf(t('orders.flow.cancelTitle'), plan), row)]);
       // C5-01: more strays than one transaction can move. A sweep first moves them while the order lives; abandoning stays a choice
       if (abandonsStrays(plan) && row.live) {
         const count = plan.issues.filter((i) => i.code === 'cancel.strays-abandoned').reduce((a, i) => a + Number(i.params?.count ?? 0), 0);
@@ -340,7 +352,12 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
         if (!pubkey) return;
         const { plan } = await planRefundFor(services, pubkey, row.entry, strayList);
         if (!plan.ok) return setPlanFail({ plans: [plan], failed: [] });
-        startFlow(t('orders.flow.refundHeading'), [stepOf(t('orders.flow.refundTitle'), plan)]);
+        startFlow(t('orders.flow.refundHeading'), [withReturns(stepOf(t('orders.flow.refundTitle'), plan), row)]);
+      }),
+    onClaim: (row) =>
+      void guarded(row.id, async () => {
+        if (!pubkey) return;
+        setClaim({ row, ctx: await prepareClaim(services, pubkey, row.entry, strayList, reserved) });
       }),
     onAmend: (row) => {
       setFailure(null);
@@ -400,6 +417,30 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     // the card while it runs: the steps and one line, the whole summary was the confirmation's
     const run = mergeFlow(services, pubkey, ask.token, ask.plan, mergeRunLine(ask.plan));
     startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next });
+  };
+
+  /** Balances' Claim: the dialog for one order, else one claim per order in one flow. */
+  const claimToken = (token: Hex) => {
+    const holders = rows.filter((r) => r.canClaim && r.bought?.token === token);
+    if (holders.length === 1) return actions.onClaim?.(holders[0]!);
+    if (!holders.length) return;
+    void guarded(`claim-${token}`, async () => {
+      if (!pubkey) return;
+      const out = await planClaimMany(services, pubkey, holders.map((r) => r.entry), strayList);
+      const good = out.plans.filter((p) => p.ok);
+      const bad = out.plans.filter((p) => !p.ok);
+      const failed = out.failed.map((f) => ({ id: f.id, message: describeActionError(f.error) }));
+      if (bad.length || failed.length) setPlanFail({ plans: bad, failed });
+      if (!good.length) return;
+      const ticker = shownToken(token)?.ticker ?? '';
+      startFlow(
+        t('orders.flow.claimHeading', { ticker }),
+        good.map((p, i) => ({
+          ...stepOf(good.length > 1 ? t('orders.flow.claimStep', { n: i + 1, total: good.length }) : t('orders.flow.claimTitle'), p),
+          toast: t('orders.flow.claimSubmitted', { amount: amountOf(token, p.claim?.claimed ?? 0n), ticker }),
+        })),
+      );
+    });
   };
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);
@@ -731,6 +772,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 reserved={reserved}
                 busy={busy}
                 onMergeToken={mergeToken}
+                onClaimToken={claimToken}
                 balances={balances}
                 iconOf={iconOf}
                 {...(embed ? { compact: true } : {})}
@@ -836,6 +878,18 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       </details>
       )}
 
+      {claim ? (
+        <ClaimDialog
+          row={claim.row}
+          ctx={claim.ctx}
+          onClose={() => setClaim(null)}
+          onPlanned={(plan, toast) => {
+            const ticker = shownToken(claim.ctx.token?.covenantId ?? claim.row.bought?.token ?? null)?.ticker ?? '';
+            setClaim(null);
+            startFlow(t('orders.flow.claimHeading', { ticker }), [{ ...stepOf(t('orders.flow.claimTitle'), plan), toast }]);
+          }}
+        />
+      ) : null}
       {amend && amendState && amendK && amendK !== 'replace' ? (
         <AmendDialog
           row={amend}

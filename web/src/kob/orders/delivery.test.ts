@@ -13,6 +13,7 @@ import {
   topupTipTotal, walletThreshold, type DeliveryOrder,
 } from './delivery';
 import type { PlanIssue } from '../plan-types';
+import { TOKEN_PROGRAMS } from '../programs.generated';
 
 const K = kob();
 const P = 250_000_000n; // 2.5 KAS per whole token
@@ -70,9 +71,10 @@ describe('the top-up tip (bid-delivery-spec §10)', () => {
     // capped at the carrier
     expect(defaultTopupTip(1_000_000n, 2_304_000n)).toBe(1_000_000n);
     expect(defaultTopupTip(DC, null)).toBeNull();
-    // from the program table: KCC20Ref has a measured (or the spec's reference) extra, the 8x8 program and KRON have none
+    // from the measured table (topup_extra.json): every KCC-20 program has an extra, KRON none
     expect(programTopupTip('KCC20Ref', DC)).toBe(744_250n);
-    expect(programTopupTip('KCC20Ref_8x8', DC)).toBeNull();
+    expect(programTopupTip('KCC20Ref_8x8', DC)).toBe(defaultTopupTip(DC, 1_282_400n));
+    for (const p of TOKEN_PROGRAMS) expect(programTopupTip(p.name, DC) === null, p.name).toBe(p.codec === 'kron');
     expect(programTopupTip('KronToken2433', DC)).toBeNull();
     expect(topupTipTotal(744_250n, 3n)).toBe(2_232_750n);
   });
@@ -111,7 +113,9 @@ describe('the receive threshold (bid-delivery-spec §10)', () => {
     expect(topupOffer(order({ minFill: 1_500n }))).toMatchObject({ ok: true, threshold: 2_000n, recvThreshold: 1_499n, defaultTip: 744_250n });
     expect(topupOffer(order({ minFill: 1n }))).toEqual({ ok: false, reason: 'minFill' });
     expect(topupOffer(order({ price: null }))).toEqual({ ok: false, reason: 'price' });
-    expect(topupOffer(order({ program: 'KCC20Ref_8x8' }))).toEqual({ ok: false, reason: 'program' });
+    // a program row without an extra (only KRON rows; deliveryFixed catches KRON first, so a KCC-20 codec on it reaches the program rule)
+    expect(topupOffer(order({ program: 'KronToken2433' }))).toEqual({ ok: false, reason: 'program' });
+    expect(topupOffer(order({ program: 'KCC20Ref_8x8' }))).toMatchObject({ ok: true, defaultTip: defaultTopupTip(DC, 1_282_400n) });
     expect(topupOffer(order({ cls: 'immediate' }))).toEqual({ ok: false, reason: 'fixed' });
   });
 
@@ -125,9 +129,13 @@ describe('the receive threshold (bid-delivery-spec §10)', () => {
     resolveDelivery(order({ minFill: 1n }), { choice: 'topup' }, pre);
     expect(pre.map((i) => [i.code, i.severity, i.field])).toEqual([['DELIVERY_TOPUP_UNAVAILABLE', 'error', 'delivery']]);
     const pre2: PlanIssue[] = [];
-    const r = resolveDelivery(order({ program: 'KCC20Ref_8x8' }), { walletDefault: 'topup' }, pre2);
+    const r = resolveDelivery(order({ minFill: 1n }), { walletDefault: 'topup' }, pre2);
     expect(r.fields.mode).toBe('1');
     expect(pre2.map((i) => [i.code, i.severity])).toEqual([['DELIVERY_TOPUP_FALLBACK', 'info']]);
+    // negative: a wallet default the order can have is no fallback
+    const pre3: PlanIssue[] = [];
+    expect(resolveDelivery(order({ program: 'KCC20Ref_8x8' }), { walletDefault: 'topup' }, pre3).fields.mode).toBe('2');
+    expect(pre3).toEqual([]);
   });
 });
 
@@ -163,10 +171,10 @@ describe('plans with a delivery (signed and validated by the script engine)', ()
     expect(bidOf(planValid(limitBuy({ minFill: 1_200n, delivery: { choice: 'topup' } })))).toMatchObject({ recvThreshold: '1199' });
   });
 
-  it('Top-up refused for a program without a top-up extra, and for a minimum fill of 1', () => {
-    const on8x8 = planSimple(makeEnv({ market: market8x8() }), limitBuy({ delivery: { choice: 'topup' } }));
-    expect(on8x8.ok).toBe(false);
-    expect(codes(on8x8.issues)).toContain('DELIVERY_TOPUP_UNAVAILABLE');
+  it('Top-up on the 8x8 program with its measured tip, refused for a minimum fill of 1', () => {
+    const on8x8 = planValid(limitBuy({ delivery: { choice: 'topup' } }), makeEnv({ market: market8x8() }));
+    expect(bidOf(on8x8)).toMatchObject({ mode: '2', topupTip: defaultTopupTip(DC, 1_282_400n)!.toString() });
+    expect(codes(on8x8.issues)).not.toContain('DELIVERY_TOPUP_UNAVAILABLE');
     const one = planSimple(makeEnv(), limitBuy({ minFill: 1n, delivery: { choice: 'topup' } }));
     expect(codes(one.issues)).toContain('DELIVERY_TOPUP_UNAVAILABLE');
   });

@@ -593,6 +593,23 @@ export class MockChain {
         touched.add(so.cov);
         continue;
       }
+      const claimed = entry === 'cancel' && cont && !known && String(o.state.state.mode ?? '0') === '1' && BigInt(o.state.state.bought ?? 0) > 0n
+        ? { kind: o.state.kind, state: { ...o.state.state, bought: '0' } } : null;
+      if (claimed && this.kob.scriptPublicKey(claimed) === cont.spk) {
+        cont.orderCov = so.cov;
+        cont.kind = 'order';
+        const n = BigInt(o.state.state.bought);
+        o.state = claimed;
+        o.stateKnown = true;
+        o.current = { txid, index: cont.index, value: cont.amount };
+        o.currentDaa = daa;
+        if (baseKind(claimed.kind) === 'KobBid') o.amountLeft = bidBuyingPower(this.kob, claimed, BigInt(cont.amount));
+        o.lastSeq = seq;
+        o.lastDaa = daa;
+        this.pushEvent({ cov: so.cov, kind: 'claim', seq, daa, txid, token: o.token, side: o.side, amount: n, closes: false, detail: { input: so.input, entry } });
+        touched.add(so.cov);
+        continue;
+      }
       const am = entry === 'cancel' && cont ? amends.find((a) => a.covenantId === so.cov && a.output === cont.index) : undefined;
       if (am) {
         const before = termsOf(o.state);
@@ -1027,16 +1044,21 @@ export class MockChain {
       const delivery = BigInt(s.deliveryCarrier);
       const exitCarrier = kind === 'KobIfdBid' ? BigInt(s.exitCarrier) : 0n;
       let deliveryValue = delivery;
+      // a Collected (mode 1) KCC-20 bid keeps what it bought in its bought-custody (bid-delivery-spec §1, §4): the first fill funds its carrier
+      const collects = any.kind === 'KobBid' && String(s.mode ?? '0') === '1';
+      const priorBought = collects ? BigInt(s.bought ?? 0) : 0n;
+      const priorCustody = collects && priorBought > 0n ? this.liveTokenUtxos(cov, 'bought')[0] ?? null : null;
       if (kind === 'KobBid') {
         // a plain bid consumes its budget ceil(n * (pMax + tip) / scale); the difference to what it paid rides on the delivery
         const used = BigInt(this.kob.raw.bidUsed(JSON.stringify(any), String(n)));
         const rest = cur.amount - used;
         const cont = BigInt(s.tif) === 0n && this.kob.raw.bidCanContinue(JSON.stringify(any), String(rest));
         if (cont) {
-          newValue = rest - delivery;
-          deliveryValue = delivery + used - spend;
-          newAny = any;
-        } else newValue = cur.amount - spend - delivery;
+          newValue = priorCustody ? rest : rest - delivery;
+          deliveryValue = (priorCustody ? priorCustody.value : delivery) + used - spend;
+          newAny = collects ? { kind: any.kind, state: { ...s, bought: String(priorBought + n) } } : any;
+        } else newValue = cur.amount - spend - (priorCustody ? 0n : delivery);
+        if (!cont && priorCustody) deliveryValue = priorCustody.value;
       } else {
         newValue = cur.amount - spend - delivery - exitCarrier;
         if (left - n > 0n) newAny = { kind: any.kind, state: { ...s, amountLeft: String(left - n) } };
@@ -1049,13 +1071,17 @@ export class MockChain {
       } else if (newValue > 0n) {
         this.addUtxo({ txid, index: idx++, amount: newValue, spk: this.pkSpk(s.maker), daa, kind: 'p2pk' });
       }
+      if (priorCustody) this.spendUtxo(this.utxos.get(outKey(priorCustody.txid, priorCustody.index)), txid);
       if (kind === 'KobIfdBid') {
         children.push(this.spawnExit(o, n, exitCarrier, txid, idx++, daa, seq, { carrier: delivery, amount: n }));
+      } else if (collects && newAny) {
+        this.addTokenUtxo({ txid, index: idx++, token: tok, state: this.tokenState(tok, cov, 4, priorBought + n), value: deliveryValue, role: 'bought', daa, seq });
       } else {
-        this.addTokenUtxo({ txid, index: idx++, token: tok, state: this.tokenState(tok, s.maker, 0, n), value: deliveryValue, role: 'owned', daa, seq });
+        // an ending Collected fill releases the whole bought-custody as one UTXO
+        this.addTokenUtxo({ txid, index: idx++, token: tok, state: this.tokenState(tok, s.maker, 0, priorBought + n), value: deliveryValue, role: 'owned', daa, seq });
       }
       if (taker) this.addUtxo({ txid, index: idx++, amount: quoteOf(n, p, t.scale, 'down'), spk: this.pkSpk(taker), daa, kind: 'p2pk' });
-      newLeft = kind === 'KobBid' ? (newAny ? bidBuyingPower(this.kob, any, newValue) : 0n) : left - n;
+      newLeft = kind === 'KobBid' ? (newAny ? bidBuyingPower(this.kob, newAny, newValue) : 0n) : left - n;
     }
 
     o.filledAmount += n;

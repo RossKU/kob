@@ -350,6 +350,25 @@ export function orderView(chain, o, ctx, detailed = false) {
     expired: active(o) && ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
     possibly_frozen: !!o.possiblyFrozen,
   };
+  // a delivering order's mode and, in mode 1, what its bought-custody holds (kobd reads.rs; a non-pair bid's custody is that view too)
+  if (s.mode !== undefined) {
+    const mode = Number(s.mode);
+    view.delivery = mode === 1 ? 'order' : mode === 2 ? 'topup' : 'wallet';
+    view.delivery_mode = mode;
+    if (stateKnown) {
+      view.bought = String(s.bought ?? 0);
+      view.topup_tip = String(s.topupTip ?? 0);
+      view.recv_threshold = String(s.recvThreshold ?? 0);
+    }
+    if (mode === 1 && stateKnown && (detailed || ctx.makerList === true)) {
+      const live = chain.liveTokenUtxos(o.covenantId, 'bought');
+      const want = BigInt(s.bought ?? 0);
+      const ok = want === 0n ? live.length === 0 : live.length === 1 && live[0].amount === want;
+      const cv = { expected_amount: want.toString(), utxo: live.length === 1 ? tokenUtxoView(live[0], ctx, {}, chain) : null, ok };
+      view.bought_custody = cv;
+      if (!pair && o.side === 2 && want > 0n) view.custody = cv;
+    }
+  }
   // a pair order: its pair, prices in B per whole A and custodies (utxo / ok on single lookups and a maker's list)
   if (pair) view.pair = pairView(chain, o, ctx, stateKnown ? auction : null, detailed || ctx.makerList === true);
   if (detailed) {

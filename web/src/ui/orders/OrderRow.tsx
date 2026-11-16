@@ -44,6 +44,8 @@ export interface OrderRowActions {
   onRefund(row: OrderRowModel): void;
   /** the maker's sweep of the order's strays in place (the order continues unchanged) */
   onSweep(row: OrderRowModel): void;
+  /** Claim, Claim and merge, Claim and sell of what a mode-1 order bought (the order stays open) */
+  onClaim?(row: OrderRowModel): void;
 }
 
 export interface OrderRowProps {
@@ -243,6 +245,11 @@ export function OrderRow(props: OrderRowProps) {
     );
   const marketText = tk && row.pair ? `${tk.ticker}/${bToken?.ticker ?? shortId(row.pair.quote)}` : tk ? `${tk.ticker}/KAS` : row.token ? longId(row.token) : '—';
   const cancellable = !row.oldTemplate && (row.live || row.status === 'unknown');
+  // what a mode-1 order bought and holds, in the bought token (a pair order's T may be B)
+  const boughtTk = row.bought && row.pair && row.bought.token === row.pair.quote ? bToken : tk;
+  const boughtText = row.bought ? amountCell(row.bought.amount, boughtTk?.decimals ?? RAW_TOKEN_DECIMALS).text : null;
+  const boughtUnit = row.bought ? tokenUnit(boughtTk?.ticker, row.bought.token).text : '';
+  const claimHint = row.bought ? t('orders.claim.hint', { amount: boughtText!, ticker: boughtUnit }) : undefined;
 
   const cells: Record<string, JSX.Element> = {};
   cells.time = (
@@ -299,6 +306,9 @@ export function OrderRow(props: OrderRowProps) {
         <span class="or-bar" aria-hidden="true">
           <span style={{ width: `${Math.min(100, line.pct ?? line.budgetPct ?? 0)}%` }} />
         </span>
+      ) : null}
+      {boughtText !== null && row.live ? (
+        <div class="dt-sub" title={t('orders.bought.inOrderHint')} data-testid={`order-bought-${row.id}`}>{t('orders.bought.inOrder', { amount: boughtText })}</div>
       ) : null}
     </DtCell>
   );
@@ -484,6 +494,16 @@ export function OrderRow(props: OrderRowProps) {
             ),
             show: line.filledAmountText !== null || line.budgetSpentText !== null,
           },
+          {
+            label: t('orders.detail.delivery'),
+            value: <span data-testid="order-delivery">{t(`ticket.short.delivery.${row.delivery === '1' ? 'collected' : row.delivery === '2' ? 'topup' : 'each'}`)}</span>,
+            show: row.delivery !== null,
+          },
+          {
+            label: t('orders.detail.bought'),
+            value: <span data-testid="order-bought-detail">{t('orders.detail.boughtValue', { amount: boughtText ?? '', ticker: boughtUnit })}</span>,
+            show: boughtText !== null && row.live,
+          },
           { label: t('orders.expires'), value: <ExpiryText row={row} />, show: row.live },
           {
             label: t('orders.renew'),
@@ -521,6 +541,12 @@ export function OrderRow(props: OrderRowProps) {
         <p class="small muted" style="margin-top:8px" data-testid={`order-old-template-why-${row.id}`}>{t('orders.oldTemplate.noCancel')}</p>
       ) : row.live || row.status === 'unknown' ? (
         <div class="order-actions" style="margin-top:8px">
+          {/* in the details, not the line: the line's action cell keeps its width (founder rule, the Portfolio layout) */}
+          {row.canClaim && actions.onClaim ? (
+            <Button small variant="primary" disabled={!canSign || props.busy} title={disabledReason ?? claimHint} onClick={() => actions.onClaim!(row)} data-testid={`order-claim-${row.id}`}>
+              {t('orders.claim')}
+            </Button>
+          ) : null}
           {canSweep ? (
             <Button small disabled={!canSign || props.busy} title={disabledReason ?? t('orders.sweep.hint')} onClick={() => actions.onSweep(row)} data-testid={`order-sweep-${row.id}`}>
               {t('orders.sweep.action')}

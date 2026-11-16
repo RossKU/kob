@@ -39,7 +39,7 @@ export function useWalletBalances(data: OrdersData | null, pubkey: Hex | undefin
   /** A token balance's value in KAS (sompi) at its market's last price: free, in orders and strays; null without a last price. */
   const valueOf = (b: TokenBalance): bigint | null => {
     const p = prices.data?.get(b.token);
-    return p ? quoteOf(b.free + b.escrowed + b.strays, p.last, p.basis, 'down') : null;
+    return p ? quoteOf(b.free + b.escrowed + b.bought + b.strays, p.last, p.basis, 'down') : null;
   };
   const summary = useMemo(() => {
     if (!combined) return null;

@@ -83,7 +83,7 @@ describe('combineBalances: tokens KOB cannot spend', () => {
 });
 
 describe('balanceColumnFractions', () => {
-  const row = (token: string, free: bigint) => ({ token, free, notSpendable: 0n, escrowed: 0n, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 });
+  const row = (token: string, free: bigint) => ({ token, free, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 });
   it('aligns the known tokens and leaves a token of unknown decimals out (TN10 2026-10-15: 500,000 base units shown as 500,000.00000000)', () => {
     const tusd = 'aa'.repeat(32);
     const unknown = 'bb'.repeat(32);
@@ -94,5 +94,21 @@ describe('balanceColumnFractions', () => {
     expect(balanceColumnFractions([row(unknown, 500_001n)], decimals, unitsFraction).free).toBe(0);
     // a registry token with 0 decimals still counts (0)
     expect(balanceColumnFractions([row(unknown, 5n)], () => 0, unitsFraction).free).toBe(0);
+  });
+});
+
+describe('combineBalances: tokens a Collected bid bought', () => {
+  it('a bid holding bought tokens counts them as bought, never as custody, and its row shows with no free tokens', () => {
+    const b = placeGolden(kob, 'create.bid').snapshots[0];
+    const state = { ...b.order.state, state: { ...b.order.state.state, mode: '1', bought: '900' } } as typeof b.order.state;
+    const bs = { ...b, order: { ...b.order, state } };
+    const u = strayFor(bs, 900n, 95, 1_000_000_000n);
+    const cv = { expected_amount: '900', utxo: tokenUtxoView(u, 'custody', { role: 'bought' }), ok: true };
+    const view = orderViewOf(kob, bs, { delivery_mode: 1, bought: '900', custody: cv, bought_custody: cv });
+    const c = combineBalances({ maker: MAKER.pk, freeKas: 0n, freeTokens: [], liveOrders: [view], strays: [] });
+    expect(c.tokens).toHaveLength(1);
+    expect(c.tokens[0]).toMatchObject({ token: TOKEN.covenantId, free: 0n, escrowed: 0n, bought: 900n, boughtOrders: 1 });
+    // the column fraction covers what the In your orders cell shows (for sale + bought)
+    expect(balanceColumnFractions(c.tokens, () => 3, unitsFraction).escrowed).toBe(unitsFraction(900n, 3));
   });
 });

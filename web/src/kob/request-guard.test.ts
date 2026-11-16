@@ -45,3 +45,12 @@ describe('requestKeyProblem / guardRequest', () => {
     expect(requestKeyProblem(foreign, { maker: MAKER.pk })).toMatch(/belongs to/);
   });
 });
+
+describe('requestKeyProblem: claimOrder', () => {
+  const order = (maker: string) => ({ state: { kind: 'KobBid', state: { maker } } });
+  it("refuses a claim of another key's order and a placed order of another maker (negative: the wallet's pass)", () => {
+    expect(requestKeyProblem({ action: 'claimOrder', order: order(MAKER.pk), place: { order: { kind: 'KobAsk', state: { maker: MAKER.pk } } } }, { maker: MAKER.pk })).toBeNull();
+    expect(requestKeyProblem({ action: 'claimOrder', order: order(OTHER.pk) }, { maker: MAKER.pk })).toMatch(/order to claim/);
+    expect(requestKeyProblem({ action: 'claimOrder', order: order(MAKER.pk), place: { order: { kind: 'KobAsk', state: { maker: OTHER.pk } } } }, { maker: MAKER.pk })).toMatch(/placed order maker/);
+  });
+});
