@@ -154,12 +154,13 @@ fn slot_limited(e: &kob_protocol::Error) -> bool {
     m.contains("token inputs /") && m.contains("token outputs per transaction")
 }
 
-/// The pair shapes of one program pair: every scenario (each must build) and every branch-grid shape that builds (the
-/// others fail on the token slots only: `every_pair_role_is_present_and_sufficient_on_every_program_pair`).
+/// The pair shapes of one program pair: every scenario (each must build), every branch-grid shape that builds (the
+/// others fail on the token slots only: `every_pair_role_is_present_and_sufficient_on_every_program_pair`) and every
+/// delivery-grid shape that builds (`common::pair::pair_delivery_grid`: the `.m1` / `.m1c` / `.m2` / `.m2t` roles).
 fn pair_shapes_of(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
-    use common::pair::{pair_branch_shapes, pair_scenarios};
+    use common::pair::{pair_branch_shapes, pair_delivery_grid, pair_scenarios};
     let mut v = pair_scenarios(pa, pb);
-    v.extend(pair_branch_shapes(pa, pb).into_iter().filter(|(_, a)| builds(a)));
+    v.extend(pair_branch_shapes(pa, pb).into_iter().chain(pair_delivery_grid(pa, pb)).filter(|(_, a)| builds(a)));
     v
 }
 

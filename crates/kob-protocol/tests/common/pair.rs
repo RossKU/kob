@@ -1125,7 +1125,6 @@ pub fn pair_branch_shapes(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action
     v.extend(pair_update_grid(pa, pb));
     v.extend(pair_merge_grid(pa, pb));
     v.extend(pair_refund_grid(pa, pb));
-    v.extend(pair_delivery_grid(pa, pb));
     v
 }
 
@@ -1219,8 +1218,9 @@ fn set_grid_inputs(
 
 /// Every `KobPair` / `KobCondPair` fill of the branch grid ([`pair_fill_grid`]) with a KCC-20 T in each delivery form
 /// ([`grid_forms`]), and the refund of each with a bought-custody, so the budget table measures every delivery role
-/// (`.m1`, `.m1c`, `.m2`, `.m2t`) at its worst branch. A shape the covenant rules refuse in a form (a booked exit's
-/// re-arming fill is mode 0) does not build and is left out by the table.
+/// (`.m1`, `.m1c`, `.m2`, `.m2t`) at its worst branch. Not part of [`pair_branch_shapes`] (the mode-0 role space and the C6
+/// corpus): a shape the delivery rules refuse in a form (a booked exit's re-arming fill is mode 0, a top-up that is not
+/// its token's lowest-index delivery) does not build, and the table leaves it out.
 pub fn pair_delivery_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
     let mut v: Vec<(String, Action)> = vec![];
     for (name, a) in pair_fill_grid(pa, pb) {
