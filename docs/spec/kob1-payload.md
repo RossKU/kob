@@ -102,6 +102,46 @@ field     = LEB128                          an 8-byte field (an integer): its 8 
 The decoder rebuilds the exact state span (push headers from the template, zero fields from the mask). It rejects a
 mask bit beyond the template's 32-byte fields and an all-zero 32-byte field spelled out instead of masked.
 
+### The delivery block
+
+A buy-side order chooses how its bought tokens reach its maker (`docs/design/bid-delivery-spec.md` §1): mode 0 a new
+token UTXO per fill, 1 accumulate in the order's own bought-custody, 2 top-up of the maker's receive UTXO. The mode lives
+in a **delivery block** appended at the end of the state of every delivering template, so every other field keeps its
+offset (§2 of that spec). The block is four `int` fields (`0x08` + 8 bytes little-endian), in this order:
+
+| Field | Meaning |
+|---|---|
+| `mode` | 0, 1 or 2; set at placement, immutable |
+| `recvThreshold` | mode 2: the least threshold of the maker's receive UTXO; 0 otherwise |
+| `topupTip` | mode 2: the KAS a top-up fill keeps in place of `deliveryCarrier`, `0 ≤ topupTip ≤ deliveryCarrier`; 0 otherwise |
+| `bought` | mutable: the base units the order's bought-custody holds (mode 1); 0 in modes 0 and 2 |
+
+The entries whose exits deliver carry the exits' block instead: `exitMode`, `exitRecvThreshold`, `exitTopupTip` (three
+`int`s, immutable); each exit they create is the exit state as built before the block, followed by these three and
+`bought = 0`. A repeating entry's exits are mode 0.
+
+| Template | State without the block | Block (state offsets) | State with the block | `bought`, redeem window |
+|---|---|---|---|---|
+| `KobBid` | 285 | `mode` 285, `recvThreshold` 294, `topupTip` 303, `bought` 312 | 321 | `[314, 322)` |
+| `KobCondBid` | 381 | 381, 390, 399, 408 | 417 | `[410, 418)` |
+| `KobPair` | 447 | 447, 456, 465, 474 | 483 | `[476, 484)` |
+| `KobCondPair` | 543 | 543, 552, 561, 570 | 579 | `[572, 580)` |
+| `KobIfdAsk` | 594 | `exitMode` 594, `exitRecvThreshold` 603, `exitTopupTip` 612 | 621 | none |
+| `KobIfdPair` | 909 | `exitMode` 909, `exitRecvThreshold` 918, `exitTopupTip` 927 | 936 | none |
+
+The asks, `KobCondAsk`, `KobIfdBid` and every KRON twin have no block: a KRON delivery is mode 0. The pair templates serve
+both families; a pair order that buys a KRON token is mode 0.
+
+**Two layouts, told apart by length.** An order placed before the block (a template of the cancel-only table,
+`template-retirement.md`) keeps its state span without it: the *legacy layout*. Decoders accept both lengths of a
+delivering kind (`kob_protocol::state::AnyState::decode`, wasm `decodeState` / `decodeStateLayout`); a legacy span reads
+with every block field zero, i.e. mode 0, which is what its script does, and re-encodes only in its own layout
+(`try_encode_layout`, wasm `encodeStateLayout`). Any other length, and a block field that is not an `0x08` push, is
+refused. A record (ORDER, AMEND) names the pinned template, so its state has the pinned template's length; the compact
+spelling of the block is that of any 8-byte field (one LEB128 each, so a mode-0 or mode-1 block of a new order is 4
+bytes). The fields, offsets and windows: `kob_protocol::state::delivery_block`, `mutable_windows_in`, wasm `stateLayouts`.
+Golden vectors of both layouts of every delivering kind: `crates/kob-protocol/src/state/delivery_vectors.json`.
+
 ### ORDER record (placement record), version 4
 
 ```
@@ -149,15 +189,15 @@ and the record's family is the family of the pair's base token A.
 | Code | Template | State bytes | Custody part | Pinned template hash |
 |---|---|---|---|---|
 | `0x01` | `KobAsk` | 276 | yes (`extensionCommitment`) | `070bb3b2…63b887c` |
-| `0x02` | `KobBid` | 285 | no | `dfcd78f1…54bd5ef` |
+| `0x02` | `KobBid` | 321 (legacy 285) | no | `dfcd78f1…54bd5ef` |
 | `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `23431719…eb9113a` |
-| `0x04` | `KobCondBid` | 381 | no | `07952223…b75e135` |
+| `0x04` | `KobCondBid` | 417 (legacy 381) | no | `07952223…b75e135` |
 | `0x05` | `KobIfdBid` | 585 | no | `956f81e8…6459c06` |
-| `0x06` | `KobIfdAsk` | 594 | yes (its exit's `extensionCommitment`) | `2328ea8f…058f30e` |
+| `0x06` | `KobIfdAsk` | 621 (legacy 594) | yes (its exit's `extensionCommitment`) | `2328ea8f…058f30e` |
 | `0x07` | reserved | — | — | never reused: a record of this kind is refused |
-| `0x08` | `KobPair` (pair order, token A KCC-20) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 543 | the custody of S (`sExt`) | `0d9918cc…441b98a` |
-| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `43c721c5…831a087` |
+| `0x08` | `KobPair` (pair order, token A KCC-20) | 483 (legacy 447) | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
+| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `0d9918cc…441b98a` |
+| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `43c721c5…831a087` |
 
 KRON (family `0x02`), same kind codes:
 
@@ -170,9 +210,9 @@ KRON (family `0x02`), same kind codes:
 | `0x05` | `KobIfdBidKron` | 552 | no | `644eeb9c…46b41ed` |
 | `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `2557e020…34a7a21` |
 | `0x07` | reserved | — | — | refused |
-| `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 447 | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
-| `0x09` | `KobCondPair` (token A KRON; the same template) | 543 | the custody of S (`sExt`) | `0d9918cc…441b98a` |
-| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 909 | buy-first: the B escrow; sell-first: A, then the B prefund | `43c721c5…831a087` |
+| `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 483 (legacy 447) | the custody of S (`sExt`) | `c95c9234…ab4a9c6` |
+| `0x09` | `KobCondPair` (token A KRON; the same template) | 579 (legacy 543) | the custody of S (`sExt`) | `0d9918cc…441b98a` |
+| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `43c721c5…831a087` |
 
 Codes `0x01` to `0x06` of family `0x02` also name the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` ..
 `KobIfdAskKronD0`, testnet only: the same state layouts, maker deliveries of KRON id_type 0, for a token program whose holders are
@@ -181,7 +221,9 @@ id_type 0, KForge). A record names the kind, not the build: the build is the one
 of a spent order in its template byte (`0x40` set for a `*KronD0` build).
 
 Full hashes: see `kob_protocol::artifacts::PINNED` (the artifacts in `contracts/artifacts`, also the `templates` list of
-the golden vectors).
+the golden vectors). "Legacy" is the state length of the same kind before the delivery block (*The delivery block* above):
+the length of its orders under the templates of the cancel-only table, which decoders still read; a record always has the
+pinned length. The KRON twins have no block, and their lengths did not change.
 An ORDER record is critical, so a decoder that does not know its kind rejects the payload (and lists nothing of that
 transaction) instead of misreading it.
 
@@ -213,7 +255,9 @@ custody of the commitment it pins), `scale` and `amountLeft`, so the custody the
 `amountLeft` and of its commitment; it may change `minFill`, `price`, `tip`, `tif`, `activeFrom`, `expiryDaa`, `refundTip`, `interval`,
 `maxFill`, `slope`, `priceEnd` and `decayStep` (`kob_protocol::payload::check_amend_terms`). A quantity change
 re-custodies: that is a cancel-replace. An amended bid keeps the maker, the token (the four fields above and the
-`extensionCommitment` its deliveries carry) and `scale`; every other term may change, and its quantity follows its
+`extensionCommitment` its deliveries carry), `scale` and its delivery block (`mode`, `recvThreshold`, `topupTip` and
+`bought`: the mode is chosen at placement, and a mode-1 bid's bought-custody stays exactly `bought`); every other term
+may change, and its quantity follows its
 escrow: the builder refuses a continuation below what funds one minimum fill at the new terms (with its
 `deliveryCarrier` and `reserve`); a larger escrow (a top-up) comes from maker funding in the same transaction.
 Strays owned by the id stay strays (only a cancel or a sweep, below, moves them): wallets amend in place only an order without
@@ -223,7 +267,8 @@ strays.
 
 For every ORDER record, reject the record unless all hold. In the reference code what the decoder checks rejects the
 whole payload, not the record (`kob_protocol::payload::decode`, as the builders do): rule 1 (unknown family or kind, a
-wrong state length), rule 2 (a state that does not decode canonically) and the numeric gate of rule 8. A payload is one
+wrong state length), rule 2 (a state that does not decode canonically), the numeric gate of rule 8 and the delivery rules
+of rule 9. A payload is one
 author's (the transaction's), so a bad record hides only that author's other records. `recoverOrders` is all-or-nothing
 per payload; the executor's indexer applies rules 3 to 7 record by record (it re-encodes and recovers each record on its
 own). An order output that is not the P2SH of a pinned template (rule 3)
@@ -260,6 +305,11 @@ is an order of a template this build does not pin: it is never recovered, listed
 8. Indexers list an order only if its state passes the numeric gate (`scale` a power of ten, `scale ≤ 10^9`, and the
    full-fill value of every rate it carries below 2^62: `order-types.md`, *Overflow*); builders refuse to create one
    that does not.
+9. The delivery block (*The delivery block* above; `AnyState::check_delivery`): `mode` is 0, 1 or 2; modes 0 and 1 have
+   `recvThreshold = topupTip = 0`; mode 2 has `recvThreshold > 0` and `0 ≤ topupTip ≤ deliveryCarrier` (an entry's exit
+   block: the exit's `deliveryCarrier`); a new order has `bought = 0`; a delivery of a KRON token (a pair order buying
+   one, a pair entry whose exits deliver one) is mode 0; a repeating entry (`rptAmount ≠ 0`) has `exitMode = 0`. Like the
+   numeric gate, the reference decoder rejects the payload. Mode 0 for an IOC / FOK order is a wallet rule, not checked here.
 
 Consensus has already accepted the transaction, so the covenant scripts themselves guarantee that
 later spends follow the order's rules; the checks above only establish *which* outputs are KOB
@@ -283,7 +333,8 @@ all hold (`kob_protocol::payload::verify_amend`):
 2. `inputs[input]` spends that previous state: its UTXO's script is `P2SH(previous)`, it carries a covenant id, its
    entry is `cancel` (the maker's signature, SIGHASH_ALL: only the maker can amend), and no other input carries the id.
 3. The amended state keeps the terms above (an ask: maker, token, `extensionCommitment`, `scale`, `amountLeft`; a bid:
-   maker, token, `extensionCommitment`, `scale`), of the same template; an ask keeps `amountLeft > 0`.
+   maker, token, `extensionCommitment`, `scale`, `mode`, `recvThreshold`, `topupTip`, `bought`), of the same template; an
+   ask keeps `amountLeft > 0`. The amended state passes the delivery rules (rule 9 above, without `bought = 0`).
 4. `outputs[output].scriptPublicKey == P2SH(prefix ‖ state ‖ suffix)`, bound to the order's covenant id with
    `authorizingInput = input`, and it is the ONLY output of the transaction bound to that id (as rule 4: a sibling
    would carry the id and could unlock the custody outside the order's rules).
@@ -379,6 +430,7 @@ vectors `pair.create.*`).
 | In-place amend of an ask: KCC-20 / KRON | 175 / 143 |
 | In-place amend of a bid: KCC-20 / KRON | 179 / 147 |
 | Day order: + deadline | + 5 (version 2: + 8) |
+| A delivering order (bid, conditional bid, sell-first IFD, every pair order) with the delivery block | + one LEB128 per block field: + 4 for mode 0 or 1 (+ 3 for an entry), more for a mode-2 threshold and tip; the rows above are re-measured with the re-pinned templates |
 | Every payload with an `ORDER` record: + the RELEASE record | + 6 (each part of the release below 128) |
 | x402 reference only (32 B) + note | 56 (version 2, unchanged) |
 

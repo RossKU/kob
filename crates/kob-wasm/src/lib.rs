@@ -180,9 +180,59 @@ pub mod api {
         Ok(to_hex(&s.try_encode().map_err(|e| e.to_string())?))
     }
     /// Decodes the hex of a state span of the template `kind` into its typed JSON.
+    ///
+    /// Either layout of a delivering kind decodes (bid-delivery-spec §2): a legacy span reads
+    /// with every delivery field zero.
     pub fn decode_state(kind: &str, hex: &str) -> R<String> {
         let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
         out(&AnyState::decode(id, &from_hex(hex)?).map_err(|e| e.to_string())?)
+    }
+    fn layout_of(name: &str) -> R<state::StateLayout> {
+        match name.trim() {
+            "legacy" => Ok(state::StateLayout::Legacy),
+            "delivery" => Ok(state::StateLayout::Delivery),
+            o => Err(format!("layout: \"legacy\" or \"delivery\", got {o:?}")),
+        }
+    }
+    /// [`decode_state`] and the layout the span's length selected: `{layout, order}`.
+    pub fn decode_state_layout(kind: &str, hex: &str) -> R<String> {
+        let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
+        let (order, layout) = AnyState::decode_layout(id, &from_hex(hex)?).map_err(|e| e.to_string())?;
+        out(&serde_json::json!({ "layout": layout, "order": order }))
+    }
+    /// Encodes an order state in an explicit layout (`"legacy"` or `"delivery"`), after
+    /// validating it for that layout.
+    pub fn encode_state_layout(state: &str, layout: &str) -> R<String> {
+        let s: AnyState = parse("state", state)?;
+        let l = layout_of(layout)?;
+        s.validate_layout(l).map_err(|e| e.to_string())?;
+        Ok(to_hex(&s.try_encode_layout(l).map_err(|e| e.to_string())?))
+    }
+    /// The state layouts of the template `kind` (bid-delivery-spec §2).
+    ///
+    /// `{pinned, legacyLen, deliveryLen, fields: [{name, stateOffset, window}]}`: the layout this
+    /// build pins, the two state lengths (`deliveryLen` null for a kind without a delivery block)
+    /// and the block's fields with their state offsets and redeem-script windows `[start, end)`.
+    pub fn state_layouts(kind: &str) -> R<String> {
+        let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
+        artifacts::try_template(id).ok_or_else(|| format!("{kind} is not a template of this build"))?;
+        let block = state::delivery_block(id);
+        let fields: Vec<serde_json::Value> = block
+            .map(|b| {
+                b.fields.iter().map(|f| serde_json::json!({ "name": f, "stateOffset": b.offset(f), "window": b.window(f) })).collect()
+            })
+            .unwrap_or_default();
+        out(&serde_json::json!({
+            "pinned": state::pinned_layout(id),
+            "legacyLen": state::state_len_in(id, state::StateLayout::Legacy),
+            "deliveryLen": state::state_len_in(id, state::StateLayout::Delivery),
+            "fields": fields,
+        }))
+    }
+    /// The delivery rules of an order state, from `AnyState::check_delivery` (`placement`: a new
+    /// order, `bought = 0`).
+    pub fn check_delivery(state: &str, placement: &str) -> R<()> {
+        any(state)?.check_delivery(flag("placement", placement)?)
     }
     /// The redeem script of an order state, as hex.
     pub fn redeem_script(state: &str) -> R<String> {
@@ -211,7 +261,12 @@ pub mod api {
         s.validate().map_err(|e| e.to_string())?;
         let h = kob_protocol::json::hex32(retired)?;
         let r = kob_protocol::retired::retired_for(&h, s.template_id()).map_err(|e| e.to_string())?;
-        Ok(tx::spk_to_string(&r.spk(&s.encode()).map_err(|e| e.to_string())?))
+        // the retired template's own layout: one placed before the delivery block is legacy
+        let layout = state::layout_of_len(s.template_id(), r.state_len)
+            .ok_or_else(|| format!("{}: no state layout of {} bytes", r.label(), r.state_len))?;
+        s.validate_layout(layout).map_err(|e| e.to_string())?;
+        let span = s.try_encode_layout(layout).map_err(|e| e.to_string())?;
+        Ok(tx::spk_to_string(&r.spk(&span).map_err(|e| e.to_string())?))
     }
     /// Encodes a token state of either family (the KRON layout has `id_type` / `is_minter`).
     pub fn encode_token_state(state: &str) -> R<String> {
@@ -1038,6 +1093,11 @@ pub mod api {
         let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
         out(&state::mutable_windows(id).to_vec())
     }
+    /// The mutable windows of `kind` in an explicit layout, from `state::mutable_windows_in`.
+    pub fn mutable_windows_in(kind: &str, layout: &str) -> R<String> {
+        let id = TemplateId::from_name(kind).ok_or_else(|| format!("unknown template {kind}"))?;
+        out(&state::mutable_windows_in(id, layout_of(layout)?).to_vec())
+    }
     /// Fixed-supply KCC-20 creation under KCC-23, see `crate::issue`.
     ///
     /// The result is `{prep, built, declaration, token, docs, warnings}`.
@@ -1138,6 +1198,30 @@ pub fn encode_state(state: &str) -> Result<String, JsError> {
 #[wasm_bindgen(js_name = decodeState)]
 pub fn decode_state(kind: &str, hex: &str) -> Result<String, JsError> {
     js(api::decode_state(kind, hex))
+}
+
+/// Decodes a state span of either layout: `{layout: "legacy" | "delivery", order}`.
+#[wasm_bindgen(js_name = decodeStateLayout)]
+pub fn decode_state_layout(kind: &str, hex: &str) -> Result<String, JsError> {
+    js(api::decode_state_layout(kind, hex))
+}
+
+/// Encodes an order state in an explicit layout, `"legacy"` or `"delivery"`.
+#[wasm_bindgen(js_name = encodeStateLayout)]
+pub fn encode_state_layout(state: &str, layout: &str) -> Result<String, JsError> {
+    js(api::encode_state_layout(state, layout))
+}
+
+/// The state layouts of a template and its delivery block fields (bid-delivery-spec §2).
+#[wasm_bindgen(js_name = stateLayouts)]
+pub fn state_layouts(kind: &str) -> Result<String, JsError> {
+    js(api::state_layouts(kind))
+}
+
+/// The delivery rules of an order state; `placement` (`"true"`/`"false"`) for a new order.
+#[wasm_bindgen(js_name = checkDelivery)]
+pub fn check_delivery(state: &str, placement: &str) -> Result<(), JsError> {
+    js(api::check_delivery(state, placement))
 }
 
 /// Redeem script of an order state.
@@ -1275,6 +1359,12 @@ pub fn day_order(d0: &str, t0: &str, rate_milli: &str) -> Result<String, JsError
 #[wasm_bindgen(js_name = mutableWindows)]
 pub fn mutable_windows(kind: &str) -> Result<String, JsError> {
     js(api::mutable_windows(kind))
+}
+
+/// Mutable fields of an order template in an explicit layout (`"legacy"` or `"delivery"`).
+#[wasm_bindgen(js_name = mutableWindowsIn)]
+pub fn mutable_windows_in(kind: &str, layout: &str) -> Result<String, JsError> {
+    js(api::mutable_windows_in(kind, layout))
 }
 
 /// Plans a fixed-supply KCC-20 issuance, which is the `kob token create` flow.
@@ -2117,6 +2207,58 @@ mod tests {
             let rate = d.rate_milli.map(|r| r.to_string()).unwrap_or_default();
             assert_eq!(api::day_order(&d.d0.to_string(), &d.t0.to_string(), &rate).unwrap(), s(&d.result));
         }
+    }
+
+    /// bid-delivery-spec §2 through the api: both layouts of every delivering kind (the golden
+    /// vectors of `kob-protocol/src/state/delivery_vectors.json`), the layout table and the rules.
+    #[test]
+    fn delivery_layouts_through_the_api() {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../../kob-protocol/src/state/delivery_vectors.json")).unwrap();
+        let rows = v["vectors"].as_array().unwrap();
+        assert_eq!(rows.len(), 6);
+        for row in rows {
+            let kind = row["kind"].as_str().unwrap();
+            let order = serde_json::to_string(&row["order"]).unwrap();
+            let (delivery, legacy) = (row["delivery"].as_str().unwrap(), row["legacy"].as_str().unwrap());
+            assert_eq!(api::encode_state_layout(&order, "delivery").unwrap(), delivery, "{kind}");
+            let d: serde_json::Value = serde_json::from_str(&api::decode_state_layout(kind, delivery).unwrap()).unwrap();
+            assert_eq!((d["layout"].as_str(), &d["order"]), (Some("delivery"), &row["order"]), "{kind}");
+            let l: serde_json::Value = serde_json::from_str(&api::decode_state_layout(kind, legacy).unwrap()).unwrap();
+            assert_eq!(l["layout"].as_str(), Some("legacy"), "{kind}");
+            for k in ["mode", "recvThreshold", "topupTip", "bought", "exitMode", "exitRecvThreshold", "exitTopupTip"] {
+                if let Some(x) = l["order"]["state"].get(k) {
+                    assert_eq!(x.as_str(), Some("0"), "{kind} {k}: a legacy span reads as mode 0");
+                }
+            }
+            // decodeState takes either layout
+            assert!(api::decode_state(kind, legacy).is_ok() && api::decode_state(kind, delivery).is_ok(), "{kind}");
+            assert!(api::decode_state(kind, &delivery[..delivery.len() - 2]).is_err(), "{kind}");
+            // the legacy layout cannot carry the block
+            assert!(api::encode_state_layout(&order, "legacy").is_err(), "{kind}");
+            let info: serde_json::Value = serde_json::from_str(&api::state_layouts(kind).unwrap()).unwrap();
+            assert_eq!(info["legacyLen"], row["legacyLen"]);
+            assert_eq!(info["deliveryLen"], row["deliveryLen"]);
+            assert!(matches!(info["pinned"].as_str(), Some("legacy" | "delivery")));
+            api::check_delivery(&order, "false").unwrap();
+        }
+        let info: serde_json::Value = serde_json::from_str(&api::state_layouts("KobBid").unwrap()).unwrap();
+        assert_eq!(info["fields"][3], serde_json::json!({ "name": "bought", "stateOffset": 312, "window": [314, 322] }));
+        let none: serde_json::Value = serde_json::from_str(&api::state_layouts("KobBidKron").unwrap()).unwrap();
+        assert_eq!((none["deliveryLen"].clone(), none["fields"].as_array().unwrap().len()), (serde_json::Value::Null, 0));
+        assert_eq!(api::mutable_windows_in("KobBid", "delivery").unwrap(), r#"[["bought",314,322]]"#);
+        assert_eq!(api::mutable_windows_in("KobBid", "legacy").unwrap(), "[]");
+        assert!(api::mutable_windows_in("KobBid", "other").is_err());
+        // the rules: a placement with bought > 0, a mode out of range
+        let bid: serde_json::Value = rows[0]["order"].clone();
+        assert_eq!(bid["kind"], "KobBid");
+        let held = serde_json::to_string(&bid).unwrap();
+        assert!(api::check_delivery(&held, "false").is_ok());
+        let mut placed = bid.clone();
+        placed["state"]["bought"] = "0".into();
+        assert!(api::check_delivery(&serde_json::to_string(&placed).unwrap(), "true").is_ok());
+        let mut bad = placed.clone();
+        bad["state"]["mode"] = "3".into();
+        assert!(api::check_delivery(&serde_json::to_string(&bad).unwrap(), "true").unwrap_err().contains("mode must be 0, 1 or 2"));
     }
 
     fn golden_state(name: &str) -> String {

@@ -46,7 +46,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::{pinned_hash, template, token_template_by_hash, Template, TemplateId};
 use crate::error::{Error, Result};
 use crate::family::Family;
-use crate::state::{AnyState, TokenState};
+use crate::state::{delivery_block, pinned_layout, AnyState, StateLayout, TokenState};
 use crate::tx::{spk_from_string, spk_to_string, SigPlan, TxJson};
 
 /// Payload magic.
@@ -406,6 +406,26 @@ pub fn state_layout(t: TemplateId) -> Vec<(Vec<u8>, usize)> {
     state_layout_of(template(t))
 }
 
+/// The pushes of the state span of the kind `t` in an explicit layout (bid-delivery-spec §2).
+///
+/// The delivery block is appended at the end of the state, one `0x08` + 8 bytes push per field.
+/// The legacy layout is the pinned template's without the block, the delivery layout the pinned
+/// template's with it, whichever of the two the artifact has. Returns `None` for the delivery
+/// layout of a kind without a block.
+pub fn state_layout_in(t: TemplateId, layout: StateLayout) -> Option<Vec<(Vec<u8>, usize)>> {
+    let mut pushes = state_layout(t);
+    let Some(b) = delivery_block(t) else {
+        return (layout == StateLayout::Legacy).then_some(pushes);
+    };
+    if pinned_layout(t) == StateLayout::Delivery {
+        pushes.truncate(pushes.len() - b.fields.len());
+    }
+    if layout == StateLayout::Delivery {
+        pushes.extend(b.fields.iter().map(|_| (vec![0x08u8], 8)));
+    }
+    Some(pushes)
+}
+
 /// The pushes that make up a template's state span, in order.
 ///
 /// Each is a field's push header and data length. The header is the opcode and, for a push of more
@@ -440,17 +460,22 @@ pub fn state_layout_of(tpl: &Template) -> Vec<(Vec<u8>, usize)> {
 ///
 /// The push headers are the template's and are not spelled.
 fn put_compact_state(out: &mut Vec<u8>, tpl: &Template, span: &[u8]) -> Result<()> {
+    put_compact_layout(out, &tpl.contract_name, &state_layout_of(tpl), span)
+}
+
+/// [`put_compact_state`] over an explicit push layout (`name` for errors).
+fn put_compact_layout(out: &mut Vec<u8>, name: &str, layout: &[(Vec<u8>, usize)], span: &[u8]) -> Result<()> {
     let mut fields: Vec<&[u8]> = vec![];
     let mut p = 0;
-    for (h, n) in state_layout_of(tpl) {
+    for (h, n) in layout {
         if span.get(p..p + h.len()) != Some(h.as_slice()) || span.len() < p + h.len() + n {
-            return Err(Error::Payload(format!("{} state is not in the template's layout", tpl.contract_name)));
+            return Err(Error::Payload(format!("{name} state is not in the template's layout")));
         }
         fields.push(&span[p + h.len()..p + h.len() + n]);
         p += h.len() + n;
     }
     if p != span.len() {
-        return Err(Error::Payload(format!("{} state is not in the template's layout", tpl.contract_name)));
+        return Err(Error::Payload(format!("{name} state is not in the template's layout")));
     }
     let mut mask = 0u64;
     for (k, f) in fields.iter().filter(|f| f.len() == 32).enumerate() {
@@ -480,13 +505,17 @@ fn put_compact_state(out: &mut Vec<u8>, tpl: &Template, span: &[u8]) -> Result<(
 /// It refuses a non-canonical spelling: an all-zero 32-byte field not in the mask, or a mask bit
 /// beyond the fields.
 fn get_compact_state(v: &[u8], p: &mut usize, tpl: &Template) -> Result<Vec<u8>> {
-    let layout = state_layout_of(tpl);
+    get_compact_layout(v, p, &tpl.contract_name, state_layout_of(tpl))
+}
+
+/// [`get_compact_state`] over an explicit push layout (`name` for errors).
+fn get_compact_layout(v: &[u8], p: &mut usize, name: &str, layout: Vec<(Vec<u8>, usize)>) -> Result<Vec<u8>> {
     let n32 = layout.iter().filter(|(_, n)| *n == 32).count();
     let mask = get_varint(v, p, "state mask")?;
     if n32 < 64 && mask >> n32 != 0 {
-        return Err(Error::Payload(format!("{} state mask names a field the template does not have", tpl.contract_name)));
+        return Err(Error::Payload(format!("{name} state mask names a field the template does not have")));
     }
-    let mut span = Vec::with_capacity(tpl.state_len);
+    let mut span = Vec::with_capacity(layout.iter().map(|(h, n)| h.len() + n).sum());
     let mut k = 0;
     for (h, n) in layout {
         span.extend_from_slice(&h);
@@ -513,10 +542,11 @@ fn get_compact_state(v: &[u8], p: &mut usize, tpl: &Template) -> Result<Vec<u8>>
 /// The checks an encoder shares with the decoder.
 ///
 /// The template must be an order template serving the record's family. The state must have the
-/// template's length, decode canonically, be of that family and pass the numeric gate
-/// ([`AnyState::check_numbers`]). For a pair order, the family of its base token A is the record's
-/// family.
-fn check_order_state(family: u8, t: TemplateId, state: &[u8]) -> Result<AnyState> {
+/// template's length, decode canonically, be of that family, pass the numeric gate
+/// ([`AnyState::check_numbers`]) and the delivery rules ([`AnyState::check_delivery`]; with
+/// `placement`, an ORDER record, `bought = 0`). For a pair order, the family of its base token A
+/// is the record's family.
+fn check_order_state(family: u8, t: TemplateId, state: &[u8], placement: bool) -> Result<AnyState> {
     if t.kind_code().is_none() {
         return Err(Error::Payload(format!("{} is not an order template", t.name())));
     }
@@ -532,6 +562,7 @@ fn check_order_state(family: u8, t: TemplateId, state: &[u8]) -> Result<AnyState
         return Err(Error::Payload(format!("{}: the record's family {family:#04x} is not the state's (its base token's)", t.name())));
     }
     s.check_numbers().map_err(Error::Payload)?;
+    s.check_delivery(placement).map_err(Error::Payload)?;
     Ok(s)
 }
 
@@ -548,7 +579,7 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
             Record::Order { output, family, template: t, template_hash, state, custody, prefund, deadline } => {
                 // The rules a decoder applies. A malformed placement is refused here, not only by
                 // the indexer after it is on chain.
-                let s = check_order_state(*family, *t, state)?;
+                let s = check_order_state(*family, *t, state, true)?;
                 if *template_hash != pinned_hash(*t) {
                     return Err(Error::Payload(format!("template hash of {} is not the pinned one", t.name())));
                 }
@@ -593,7 +624,7 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
                 put_record(&mut out, REC_ORDER, &v)?;
             }
             Record::Amend { output, input, family, template: t, state, deadline } => {
-                check_order_state(*family, *t, state)?;
+                check_order_state(*family, *t, state, false)?;
                 if !amendable(*t) {
                     return Err(Error::Payload(format!("{} orders are not amended in place", t.name())));
                 }
@@ -795,7 +826,7 @@ fn decode_order_compact(v: &[u8]) -> Result<Record> {
     }
     let state = get_compact_state(v, &mut p, template(t))?;
     let t = build_of(t, &state);
-    let fams = custody_families(&check_order_state(family, t, &state)?);
+    let fams = custody_families(&check_order_state(family, t, &state, true)?);
     let mut parts = vec![];
     for (k, cfam) in fams.iter().enumerate() {
         let token_output = get_u16_varint(v, &mut p, "custody output")?;
@@ -869,7 +900,7 @@ fn decode_amend(v: &[u8]) -> Result<Record> {
     }
     let state = get_compact_state(v, &mut p, template(t))?;
     let t = build_of(t, &state);
-    check_order_state(family, t, &state)?;
+    check_order_state(family, t, &state, false)?;
     let deadline = if flags & FLAG_DEADLINE != 0 { Some(get_varint(v, &mut p, "deadline")?) } else { None };
     if p != v.len() {
         return Err(Error::Payload(format!("amend record has {} trailing bytes", v.len() - p)));
@@ -1036,7 +1067,7 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
         let Record::Order { output, family, template: t, state, custody, prefund, deadline, .. } = r else { continue };
         let o = *output as usize;
         let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
-        let order = check_order_state(*family, *t, state)?;
+        let order = check_order_state(*family, *t, state, true)?;
         let (id, value) = verify_genesis(tx, o, &spk_to_string(&order.spk()))?;
         // The custodies the order holds: (token, its program hash, family, amount, the extension
         // commitment the order pins).
@@ -1124,7 +1155,8 @@ pub fn amendable(t: TemplateId) -> bool {
 /// it is a cancel-replace.
 ///
 /// A plain bid keeps the template, the maker, the token (covenant id, program, template lengths and
-/// the pinned `extensionCommitment` its deliveries carry) and the `scale`. Its quantity is its
+/// the pinned `extensionCommitment` its deliveries carry), the `scale` and its delivery block
+/// (`mode`, `recvThreshold`, `topupTip`, `bought`: bid-delivery-spec §2). Its quantity is its
 /// escrow, so every other term may change: price, tip, minimum fill, time in force, timing,
 /// rising-bid terms, `reserve` and `deliveryCarrier`. The builder checks that the continuation
 /// still funds one minimum fill at the new terms ([`crate::build::min_order_value`]).
@@ -1166,6 +1198,11 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
             }
             if a.scale != b.scale {
                 return bad("the scale cannot change (prices of one order stay comparable)");
+            }
+            if !previous.same_delivery(next) {
+                // bid-delivery-spec §2: the delivery mode is set at placement, and a mode-1 bid's
+                // bought-custody stays exactly `bought`.
+                return bad("mode, recvThreshold, topupTip and bought cannot change");
             }
         }
         _ => return bad("only a plain ask or a plain bid is amended in place"),
@@ -1218,7 +1255,7 @@ pub fn verify_amend(tx: &TxJson, record: &Record, previous: &AnyState, entry: &s
     };
     let (o, i) = (*output as usize, *input as usize);
     let bad = |m: &str| Err(Error::Payload(format!("amend record for output {o}: {m}")));
-    check_order_state(*family, *t, state)?;
+    check_order_state(*family, *t, state, false)?;
     if !amendable(*t) {
         return bad("this kind is not amended in place");
     }
@@ -1815,5 +1852,127 @@ mod tests {
         let b = encode(&x402).unwrap();
         assert_eq!(b[4], PAYLOAD_VERSION_2);
         assert_eq!(decode(&b).unwrap().unwrap().records, x402);
+    }
+
+    // ------------------------------------------------------------ the delivery block (bid-delivery-spec §2)
+
+    const DELIVERING: [TemplateId; 6] = [
+        TemplateId::KobBid,
+        TemplateId::KobCondBid,
+        TemplateId::KobPair,
+        TemplateId::KobCondPair,
+        TemplateId::KobIfdAsk,
+        TemplateId::KobIfdPair,
+    ];
+
+    fn leb_len(x: u64) -> usize {
+        let mut v = vec![];
+        put_varint(&mut v, x);
+        v.len()
+    }
+
+    /// Fuzz: the compact spelling covers the delivery layout too (the block fields are 8-byte
+    /// fields, one LEB128 each), both layouts round-trip, and the layout of the pinned template is
+    /// one of the two.
+    #[test]
+    fn the_delivery_block_compacts_in_both_layouts() {
+        let mut x = 0x1234_5678_9abc_def1u64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for t in DELIVERING {
+            let b = delivery_block(t).unwrap();
+            let legacy = state_layout_in(t, StateLayout::Legacy).unwrap();
+            let delivery = state_layout_in(t, StateLayout::Delivery).unwrap();
+            let len = |l: &[(Vec<u8>, usize)]| l.iter().map(|(h, n)| h.len() + n).sum::<usize>();
+            assert_eq!((len(&legacy), len(&delivery)), (b.legacy_len, b.len()), "{}", t.name());
+            assert_eq!(&delivery[..legacy.len()], &legacy[..], "{}", t.name());
+            assert!(delivery[legacy.len()..].iter().all(|(h, n)| h == &[0x08] && *n == 8));
+            assert_eq!(state_layout(t), if pinned_layout(t) == StateLayout::Delivery { delivery.clone() } else { legacy.clone() });
+            // the compiled instance's legacy part (the block, if pinned, is last)
+            let tpl = template(t);
+            let base = tpl.contract().compiled.bytecode[1..1 + b.legacy_len].to_vec();
+            let mut c = vec![];
+            put_compact_layout(&mut c, t.name(), &legacy, &base).unwrap();
+            let mut p = 0;
+            assert_eq!(get_compact_layout(&c, &mut p, t.name(), legacy.clone()).unwrap(), base);
+            assert_eq!(p, c.len());
+            for _ in 0..200 {
+                let values: Vec<u64> = b.fields.iter().map(|_| next() >> (next() % 64)).collect();
+                let span: Vec<u8> =
+                    base.iter().copied().chain(values.iter().flat_map(|v| std::iter::once(0x08).chain(v.to_le_bytes()))).collect();
+                let mut cd = vec![];
+                put_compact_layout(&mut cd, t.name(), &delivery, &span).unwrap();
+                assert_eq!(cd.len(), c.len() + values.iter().map(|v| leb_len(*v)).sum::<usize>(), "{}", t.name());
+                let mut p = 0;
+                assert_eq!(get_compact_layout(&cd, &mut p, t.name(), delivery.clone()).unwrap(), span, "{}", t.name());
+                assert_eq!(p, cd.len());
+                // a span of the other layout is not in this one
+                assert!(put_compact_layout(&mut vec![], t.name(), &legacy, &span).is_err());
+                assert!(put_compact_layout(&mut vec![], t.name(), &delivery, &base).is_err());
+            }
+        }
+        assert!(state_layout_in(TemplateId::KobAsk, StateLayout::Delivery).is_none());
+        assert_eq!(state_layout_in(TemplateId::KobBidKron, StateLayout::Legacy).unwrap(), state_layout(TemplateId::KobBidKron));
+    }
+
+    fn with(s: &AnyState, f: impl Fn(&mut crate::state::BidState)) -> AnyState {
+        let mut s = s.clone();
+        if let AnyState::KobBid(b) = &mut s {
+            f(b);
+        }
+        s
+    }
+
+    /// bid-delivery-spec §2: an in-place amend may not change `mode`, `recvThreshold`, `topupTip`
+    /// or `bought`; every other bid term still may.
+    #[test]
+    fn an_amend_keeps_the_delivery_block() {
+        let bid = compiled(TemplateId::KobBid);
+        let held = with(&bid, |b| (b.mode, b.bought) = (1, 500));
+        // positive: same block, other terms changed
+        assert!(check_amend_terms(&held, &with(&held, |b| b.price += 1)).is_ok());
+        assert!(check_amend_terms(&bid, &with(&bid, |b| b.delivery_carrier += 1)).is_ok());
+        // negative: each block field (ablation: without the rule every one of these passes)
+        for (previous, next) in [
+            (&held, with(&held, |b| b.mode = 0)),
+            (&held, with(&held, |b| b.bought = 0)),
+            (&held, with(&held, |b| b.bought = 501)),
+            (&bid, with(&bid, |b| (b.mode, b.recv_threshold) = (2, 7))),
+            (&bid, with(&bid, |b| b.topup_tip = 1)),
+            (&bid, with(&bid, |b| b.recv_threshold = 1)),
+        ] {
+            let e = check_amend_terms(previous, &next).unwrap_err().to_string();
+            assert!(e.contains("mode, recvThreshold, topupTip and bought cannot change"), "{e}");
+        }
+    }
+
+    /// The ORDER and AMEND records apply the delivery rules (`AnyState::check_delivery`): an ORDER
+    /// needs `bought = 0`, an AMEND does not. Under a pinned template without the block every record
+    /// is mode 0 (its state cannot spell another); with the block, the rules are exercised.
+    #[test]
+    fn records_apply_the_delivery_rules() {
+        let bid = compiled(TemplateId::KobBid);
+        assert!(check_order_state(bid.family().code(), TemplateId::KobBid, &bid.encode(), true).is_ok());
+        if pinned_layout(TemplateId::KobBid) != StateLayout::Delivery {
+            // the legacy layout spells no block: a record is mode 0
+            assert_eq!(bid.delivery(), Some(crate::state::Delivery::NEW));
+            return;
+        }
+        let span = |f: &dyn Fn(&mut crate::state::BidState)| with(&bid, f).encode();
+        let fam = bid.family().code();
+        let held = span(&|b| (b.mode, b.bought) = (1, 9));
+        let e = check_order_state(fam, TemplateId::KobBid, &held, true).unwrap_err().to_string();
+        assert!(e.contains("a new order has bought = 0"), "{e}");
+        assert!(check_order_state(fam, TemplateId::KobBid, &held, false).is_ok());
+        for bad in [span(&|b| b.mode = 3), span(&|b| b.mode = 2), span(&|b| (b.mode, b.topup_tip) = (1, 1))] {
+            assert!(check_order_state(fam, TemplateId::KobBid, &bad, true).is_err());
+            assert!(check_order_state(fam, TemplateId::KobBid, &bad, false).is_err());
+        }
+        let topup = span(&|b| (b.mode, b.recv_threshold, b.topup_tip) = (2, 1, b.delivery_carrier));
+        assert!(check_order_state(fam, TemplateId::KobBid, &topup, true).is_ok());
     }
 }

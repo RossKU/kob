@@ -106,6 +106,21 @@ kob_state!(
         ///
         /// The order takes no custody of another commitment.
         s_ext: [u8; 32] => "sExt",
+        /// Delivery mode, bid-delivery-spec §1: 0 new UTXO per fill, 1 accumulate in the order's
+        /// bought-custody, 2 top-up of the maker's receive UTXO. Set at placement, immutable.
+        ///
+        /// Absent in the legacy layout (a template before the delivery block), where it reads as 0.
+        #[serde(default)]
+        mode: i64 => "mode",
+        /// Mode 2: the least `borrow_guard` threshold of the maker's receive UTXO (0 in modes 0, 1).
+        #[serde(default)]
+        recv_threshold: i64 => "recvThreshold",
+        /// Mode 2: the KAS a top-up fill releases in place of `deliveryCarrier` (0 in modes 0, 1).
+        #[serde(default)]
+        topup_tip: i64 => "topupTip",
+        /// Mutable (mode 1): base units the bought-custody holds, exactly (0 in modes 0, 2).
+        #[serde(default)]
+        bought: i64 => "bought",
     }
 );
 
@@ -170,6 +185,21 @@ kob_state!(
         ///
         /// In an exit it is the entry's `aExt` or `bExt`.
         s_ext: [u8; 32] => "sExt",
+        /// Delivery mode, bid-delivery-spec §1: 0 new UTXO per fill, 1 accumulate in the order's
+        /// bought-custody, 2 top-up of the maker's receive UTXO. Set at placement, immutable.
+        ///
+        /// Absent in the legacy layout (a template before the delivery block), where it reads as 0.
+        #[serde(default)]
+        mode: i64 => "mode",
+        /// Mode 2: the least `borrow_guard` threshold of the maker's receive UTXO (0 in modes 0, 1).
+        #[serde(default)]
+        recv_threshold: i64 => "recvThreshold",
+        /// Mode 2: the KAS a top-up fill releases in place of `deliveryCarrier` (0 in modes 0, 1).
+        #[serde(default)]
+        topup_tip: i64 => "topupTip",
+        /// Mutable (mode 1): base units the bought-custody holds, exactly (0 in modes 0, 2).
+        #[serde(default)]
+        bought: i64 => "bought",
     }
 );
 
@@ -228,6 +258,17 @@ kob_state!(
         rpt_amount: i64 => "rptAmount",
         /// The committed exit: the `KobCondPair` state up to `armed` (432 bytes).
         exit_state: Vec<u8> => "exitState",
+        /// Delivery mode of the exits, bid-delivery-spec §2 (0 for a repeating entry). Immutable.
+        ///
+        /// Absent in the legacy layout, where it reads as 0. Each exit starts with `bought = 0`.
+        #[serde(default)]
+        exit_mode: i64 => "exitMode",
+        /// The exits' `recvThreshold` (mode 2; else 0).
+        #[serde(default)]
+        exit_recv_threshold: i64 => "exitRecvThreshold",
+        /// The exits' `topupTip` (mode 2; else 0).
+        #[serde(default)]
+        exit_topup_tip: i64 => "exitTopupTip",
     }
 );
 
@@ -983,11 +1024,31 @@ impl IfdPairState {
         }
     }
     /// The committed exit order, with `amountLeft`, `custody` and the repeat fields zero.
+    ///
+    /// Its delivery block is the entry's `exitMode`, `exitRecvThreshold`, `exitTopupTip` and
+    /// `bought = 0` (bid-delivery-spec §2), all zero for an entry in the legacy layout.
     pub fn exit(&self) -> Result<CondPairState, StateError> {
         if self.exit_state.len() != IFD_PAIR_EXIT_COMMIT {
             return Err(StateError::Codec("KobIfdPair", format!("exitState must be {IFD_PAIR_EXIT_COMMIT} bytes")));
         }
-        CondPairState::decode(&[self.exit_state.clone(), exit_tail(0, 0, [0; 32], 0, 0, 0, self.exit_s_ext())].concat())
+        let x = CondPairState::decode(&[self.exit_state.clone(), exit_tail(0, 0, [0; 32], 0, 0, 0, self.exit_s_ext())].concat())?;
+        Ok(CondPairState {
+            mode: self.exit_mode,
+            recv_threshold: self.exit_recv_threshold,
+            topup_tip: self.exit_topup_tip,
+            bought: 0,
+            ..x
+        })
+    }
+    /// The token the exits deliver to the maker: B for a buy-first entry (its exit sells A), A for
+    /// a sell-first one (its exit buys A back).
+    pub fn exit_delivered(&self) -> PairToken {
+        let t = self.tokens();
+        if self.is_buy_first() {
+            t.b
+        } else {
+            t.a
+        }
     }
     /// The KAS an exit needs, from the exit's own rules. Its UTXO value is `exitCarrier`.
     ///
