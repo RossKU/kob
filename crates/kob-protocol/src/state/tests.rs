@@ -621,7 +621,8 @@ fn kron_states_have_no_extension_commitment() {
     ] {
         let tk = template(kron);
         let span = &tk.contract().compiled.bytecode[1..1 + tk.state_len];
-        assert_eq!(tk.state_len + 33, template(kcc).state_len, "{}", kron.name());
+        // the KCC-20 kind without its delivery block (the KRON twins have none)
+        assert_eq!(Some(tk.state_len + 33), state_len_in(kcc, StateLayout::Legacy), "{}", kron.name());
         let st = typed(kron, span);
         assert_eq!(st.extension_commitment(), Some([0; 32]));
         assert_eq!(st.encode(), span);

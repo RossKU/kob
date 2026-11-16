@@ -32,14 +32,14 @@ around the state span, the same value silverc reports as `template_hash`):
 | Actor | Handle | State span | Program |
 |---|---|---|---|
 | `KOBOrders::KobAsk` | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1+276 | 1,684 B |
-| `KOBOrders::KobBid` | `dfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef` | 1+285 | 1,629 B |
-| `KOBOrders::KobCondAsk` | `23431719bdf1d5ffee8e4cd5aa50afa2c3513f60acca13cc3226c83f1eb9113a` | 1+363 | 3,855 B |
-| `KOBOrders::KobCondBid` | `079522237b973923ed05be828d6f62036ac642c3ee9fe493d921a7062b75e135` | 1+381 | 3,725 B |
-| `KOBOrders::KobIfdAsk` | `2328ea8fd57ee9b4a09602df23dcb12e8bda7664da670ab9d41a2aa8f058f30e` | 1+594 | 5,197 B |
-| `KOBOrders::KobIfdBid` | `956f81e8c0f1dc9192da65307a1f29c58c4c2f56a6ebf2703346538736459c06` | 1+585 | 3,841 B |
-| `KOBOrders::KobPair` | `c95c92344f08c42992699b0e467cf32fe573dda9b879250438d60a13cab4a9c6` | 1+447 | 2,960 B |
-| `KOBOrders::KobCondPair` | `0d9918cc8f99bf46baf9f4544a413129aae5881b1e97326f69208057e441b98a` | 1+543 | 6,862 B |
-| `KOBOrders::KobIfdPair` | `43c721c5190432b1788ca4f79ab56c180f6ee2f9d958bb1cdd8ebeb64831a087` | 1+909 | 9,263 B |
+| `KOBOrders::KobBid` | `0d72813a1c067feaaac2dd36427e9ce1a0d5cc6b65db298faa9fd0c24561a4c5` | 1+321 | 2,679 B |
+| `KOBOrders::KobCondAsk` | `7811a37e7769ec54d3fd5cc87fde9afdcdb183fe97aa79f06c8982805a8b284b` | 1+363 | 3,855 B |
+| `KOBOrders::KobCondBid` | `3c6211a706ba9692a3949bfacebf8d45ab3fe5fb135e6236744283184036c486` | 1+417 | 4,791 B |
+| `KOBOrders::KobIfdAsk` | `895eae0b44d7c85ab87339a2856a856aaf7fb5126b70beb3445c894145882e97` | 1+621 | 5,348 B |
+| `KOBOrders::KobIfdBid` | `9847b2d4828a855f69156cb88e9e380c70502bba0d86c2097c3c8d61830cd80d` | 1+585 | 3,841 B |
+| `KOBOrders::KobPair` | `cba29506b515146727665c89720e9cb9190779d2ce0dad58081f0906adf85980` | 1+483 | 3,717 B |
+| `KOBOrders::KobCondPair` | `97359a5b5268e3a4bceeaf93905e679e7e3e0f5884b3f4be85840af7ad5e9c08` | 1+579 | 7,842 B |
+| `KOBOrders::KobIfdPair` | `62ac27d7f7ed5922720fa82d9742537a7d6d658f46967abddc49fdea1971a2f3` | 1+936 | 9,351 B |
 | `KOBOrdersKron::KobAskKron` | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1+243 | 1,487 B |
 | `KOBOrdersKron::KobBidKron` | `7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582` | 1+252 | 1,456 B |
 | `KOBToken::KCC20` (8 in / 8 out) | `666da060d02663939efdc534ea10cce219e5564af86f4cc8eeea2ca129f7c032` | 1+112 | 6,350 B |

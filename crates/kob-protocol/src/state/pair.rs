@@ -1231,7 +1231,8 @@ mod tests {
     fn covenant_offsets_match_the_encoding() {
         let p: PairState = compiled(TemplateId::KobPair);
         let st = p.encode();
-        assert_eq!(st.len(), 447);
+        // the legacy fields, then the delivery block (bid-delivery-spec §2): no offset below moves
+        assert_eq!(st.len(), 447 + 36);
         assert_eq!(i64::from_le_bytes(st[34..42].try_into().unwrap()), p.side);
         assert_eq!(&st[43..75], &p.s_cov_id);
         assert_eq!(i64::from_le_bytes(st[136..144].try_into().unwrap()), p.s_scale);
@@ -1245,7 +1246,7 @@ mod tests {
         assert_eq!(&st[415..447], &p.s_ext);
         let c: CondPairState = compiled(TemplateId::KobCondPair);
         let cs = c.encode();
-        assert_eq!(cs.len(), 543);
+        assert_eq!(cs.len(), 543 + 36);
         assert_eq!(i64::from_le_bytes(cs[289..297].try_into().unwrap()), c.tip);
         assert_eq!(i64::from_le_bytes(cs[325..333].try_into().unwrap()), c.delivery_carrier);
         assert_eq!(i64::from_le_bytes(cs[415..423].try_into().unwrap()), c.stop_price);
