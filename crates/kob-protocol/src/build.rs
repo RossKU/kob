@@ -1775,10 +1775,6 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
 /// at its own index.
 fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let order = &request.order;
-    if request.bought_custody.is_some() || order.state.bought_custody().is_some() {
-        // The release of a pair order's bought-custody is the pair builder's (B3, at integration).
-        return invalid("the refund of a pair order holding a bought-custody is not built here yet");
-    }
     let (_, tip) = order.state.expiry().expect("order");
     let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
     if (request.lock_time as i64) < due {
@@ -1791,6 +1787,18 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
     let mut draft = Draft::new(request.lock_time, &request.fee, request.change.or(request.funding.first().map(|f| f.pubkey)))?;
     draft.add_input(&order.utxo, plan, role, SEQUENCE_NONFINAL);
     let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    // A mode-1 pair order's bought-custody: input 1, before the sell custody, released at output 1.
+    let bought = pair::refund_inputs(&order.state).bought;
+    let release = match (bought, &request.bought_custody) {
+        (Some((t, _)), Some(c)) => {
+            pair::check_refund_bought(&order.state, order_cov, c)?;
+            draft.add_token_input(c, t, Witness::CovenantId)?;
+            Some((t, c))
+        }
+        (None, None) => None,
+        (Some(_), None) => return invalid("this order's refund releases its bought-custody (boughtCustody)"),
+        (None, Some(_)) => return invalid("this order holds no bought-custody (a refund never moves strays)"),
+    };
     let given: Vec<&TokenUtxo> = request.custody.iter().chain(request.prefund.iter()).collect();
     if given.len() != custodies.len() {
         return invalid(format!(
@@ -1824,6 +1832,10 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
         _ => {
             let (c, (tok, _)) = (given[0], custodies[0]);
             draft.add_token_output(tok, c.state.with_user_owner(maker), keep + c.utxo.amount)?;
+            if let Some((t, b)) = release {
+                let (value, state) = pair::refund_release(&order.state, b);
+                draft.add_token_output(t, state, value)?;
+            }
         }
     }
     add_foreign_outputs(&mut draft, foreign, maker)?;

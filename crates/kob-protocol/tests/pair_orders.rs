@@ -554,13 +554,12 @@ fn a_held_bought_custody_is_never_left_behind() {
 
 // -------- the delivery inputs of a leg: a bought-custody, a receive UTXO, a form
 //
-// `Leg::Pair` / `Leg::CondPair` take them as `boughtCustody`, `receive` and `form` (the B3 patch of build.rs, applied by
-// the integrator); `RefundOrder` takes `boughtCustody`. The legs below are written through serde so this file compiles
-// before the patch; the tests that need the fields are ignored until it lands (`cargo test -- --ignored`).
+// `Leg::Pair` / `Leg::CondPair` take them as `boughtCustody`, `receive` and `form`; `RefundOrder` takes `boughtCustody`.
+// The legs below are written through serde, and `with_delivery` checks the library keeps the fields.
 
-const NEEDS_PATCH: &str = "the Leg / RefundOrder delivery fields (B3 build.rs patch)";
+const NEEDS_PATCH: &str = "the Leg / RefundOrder delivery fields";
 
-/// `leg` with its delivery inputs, through the request JSON. Panics if the library drops them (no patch yet).
+/// `leg` with its delivery inputs, through the request JSON. Panics if the library drops them.
 fn with_delivery(leg: Leg, bought: Option<&TokenUtxo>, receive: Option<&TokenUtxo>, form: Option<u8>) -> Leg {
     let mut v = serde_json::to_value(&leg).unwrap();
     if let Some(b) = bought {
@@ -591,7 +590,6 @@ fn bought_custody(tp: TemplateId, tok: [u8; 32], c: [u8; 32], b: i64) -> TokenUt
 /// carrier leaves the order) and the continuation records bought + n; the fill that ends the order pays bought + n to the
 /// maker's key with every KAS of the order and of the custody. Both sides, `KobPair` and `KobCondPair`.
 #[test]
-#[ignore = "needs the Leg / RefundOrder delivery fields (B3 build.rs patch)"]
 fn mode_one_spends_and_continues_the_bought_custody() {
     let (pa, pb) = (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8);
     let b = 3 * WHOLE;
@@ -644,7 +642,6 @@ fn mode_one_spends_and_continues_the_bought_custody() {
 /// The refund of a mode-1 order holding a bought-custody releases it whole, with its KAS, to the maker at its own input
 /// index (input 1, before the sell custody): `KobPair` and `KobCondPair`. Without it the builder refuses.
 #[test]
-#[ignore = "needs the Leg / RefundOrder delivery fields (B3 build.rs patch)"]
 fn a_refund_releases_the_bought_custody() {
     let (pa, pb) = (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8);
     let b = 3 * WHOLE;
@@ -654,6 +651,7 @@ fn a_refund_releases_the_bought_custody() {
             foreign: vec![],
             custody: Some(custody),
             prefund: None,
+            bought_custody: None,
             lock_time: EXPIRY as u64,
             funding: vec![key_utxo(250, KEEPER, 5 * KAS)],
             change: Some(pk(KEEPER)),
@@ -684,7 +682,6 @@ fn a_refund_releases_the_bought_custody() {
 
 /// Mode 2 form 0 on request: a new plain UTXO; a form above 2 is refused.
 #[test]
-#[ignore = "needs the Leg / RefundOrder delivery fields (B3 build.rs patch)"]
 fn mode_two_takes_the_requested_form() {
     let (pa, pb) = (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8);
     let x = pair_mode(pair(MAKER_A, false, pa, pb, RATE), MODE_TOPUP);
@@ -695,4 +692,29 @@ fn mode_two_takes_the_requested_form() {
     let mut batch = route_bid(x, pa, pb, 4);
     batch.legs[0] = with_delivery(batch.legs[0].clone(), None, None, Some(3));
     assert!(common::exact::build_measured(&Action::Batch(batch)).is_err());
+}
+
+/// Mode 2 form 2: the fill tops up the maker's receive UTXO (T's first input, the leader on the borrow path) to have + n
+/// at output i, both sides, in the engine. A receive UTXO below the order's `recvThreshold` is refused by the builder.
+#[test]
+fn mode_two_tops_up_the_receive_utxo() {
+    let (pa, pb) = (TemplateId::Kcc20Ref8x8, TemplateId::Kcc20Ref8x8);
+    let have = 7 * WHOLE;
+    for ask in [true, false] {
+        let (tok, tp) = t_of(ask, pa, pb);
+        let ext = ext_for(tp);
+        let x = pair_mode(pair(MAKER_A, ask, pa, pb, RATE), MODE_TOPUP);
+        let t = x.t_out_min(4 * WHOLE, x.price).unwrap();
+        let recv = |thr: i64| TokenUtxo {
+            utxo: utxo(0xb8, BOUGHT_KAS, 1_000, Some(tok)),
+            state: receive_state(have, pk(MAKER_A), thr, ext),
+        };
+        let mut batch = if ask { route_ask(x.clone(), pa, pb, 4) } else { route_bid(x.clone(), pa, pb, 4) };
+        batch.legs[0] = with_delivery(batch.legs[0].clone(), None, Some(&recv(RECV_THR)), Some(2));
+        let s = run(&format!("top-up ask={ask}"), &Action::Batch(batch));
+        assert!(holds(&s, 0, tp, tok, &receive_state(have + t, pk(MAKER_A), RECV_THR, ext)), "ask={ask}: have + n at output i");
+        let mut batch = if ask { route_ask(x.clone(), pa, pb, 4) } else { route_bid(x, pa, pb, 4) };
+        batch.legs[0] = with_delivery(batch.legs[0].clone(), None, Some(&recv(RECV_THR - 1)), Some(2));
+        assert!(common::exact::build_measured(&Action::Batch(batch)).is_err(), "ask={ask}: a threshold below recvThreshold");
+    }
 }

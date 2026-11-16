@@ -348,12 +348,10 @@ pub(crate) enum PairCalc {
 // ---------------------------------------------------------------- T delivery modes
 
 /// The slot of a `KobPair` / `KobCondPair` leg's bought-custody input.
-///
-/// Those legs never use the entry slots `A` and `B`, which only a `KobIfdPair` leg fills.
-/// INTEGRATOR: a dedicated `Slot::Bought` in `build.rs` can replace it.
-const BOUGHT_SLOT: Slot = Slot::A;
-/// The slot of a top-up's receive UTXO input (mode 2 form 2). INTEGRATOR: `Slot::Receive`.
-const RECEIVE_SLOT: Slot = Slot::B;
+const BOUGHT_SLOT: Slot = Slot::Bought;
+/// The slot of a top-up's receive UTXO input (mode 2 form 2): its token's first input, the
+/// leader on the borrow path (`layout` puts it first, the batch signs it with the borrow witness).
+const RECEIVE_SLOT: Slot = Slot::Recv;
 
 /// The T inputs a delivering pair leg spends besides its order and its sell custody
 /// (bid-delivery-spec §3), and the form it asks for.
@@ -370,16 +368,15 @@ pub(crate) struct DeliveryInputs<'a> {
     pub form: Option<u8>,
 }
 
-/// The delivery inputs of a pair leg.
-///
-/// INTEGRATOR: `Leg::Pair` and `Leg::CondPair` carry them as `bought_custody: Option<TokenUtxo>`,
-/// `receive: Option<TokenUtxo>` and `form: Option<u8>` (serde `boughtCustody`, `receive`, `form`;
-/// the B3 patch of `build.rs`). Until then every leg has none: modes 0 and 2 forms 0 / 1 and the
-/// first fill of a mode-1 order build; a mode-1 order holding a bought-custody and a top-up need
-/// the fields.
+/// The delivery inputs of a pair leg: `Leg::Pair` and `Leg::CondPair` carry them as
+/// `bought_custody`, `receive` and `form` (serde `boughtCustody`, `receive`, `form`).
 pub(crate) fn delivery_inputs(l: &Leg) -> DeliveryInputs<'_> {
-    let _ = l;
-    DeliveryInputs::default()
+    match l {
+        Leg::Pair { bought_custody, receive, form, .. } | Leg::CondPair { bought_custody, receive, form, .. } => {
+            DeliveryInputs { bought_custody: bought_custody.as_ref(), receive: receive.as_ref(), form: *form }
+        }
+        _ => DeliveryInputs::default(),
+    }
 }
 
 /// A pair order's T delivery at output i, by its delivery mode and form (bid-delivery-spec §4).
@@ -2004,7 +2001,7 @@ pub(crate) struct RefundInputs {
 
 /// The token inputs of the refund of pair order `s`.
 ///
-/// INTEGRATOR (`build_refund_pair`): with `bought` the refund takes the bought-custody
+/// `build_refund_pair`: with `bought` the refund takes the bought-custody
 /// (`RefundOrder::bought_custody`, checked with [`check_refund_bought`]) as input 1 before the sell
 /// custody, and adds its release ([`refund_release`]) as output 1 after the sell custody's refund.
 pub(crate) fn refund_inputs(s: &AnyState) -> RefundInputs {
@@ -2024,7 +2021,6 @@ pub(crate) fn refund_inputs(s: &AnyState) -> RefundInputs {
 }
 
 /// Checks the bought-custody a pair refund releases.
-#[allow(dead_code)] // build_refund_pair calls it once RefundOrder carries the bought-custody (B3 patch)
 pub(crate) fn check_refund_bought(s: &AnyState, order_cov: [u8; 32], c: &TokenUtxo) -> Result<()> {
     let Some((t, bought)) = refund_inputs(s).bought else {
         return invalid("this order holds no bought-custody (a refund never moves strays)");
@@ -2039,7 +2035,6 @@ pub(crate) fn check_refund_bought(s: &AnyState, order_cov: [u8; 32], c: &TokenUt
 
 /// The release of a pair refund's bought-custody: the maker's plain UTXO of the whole custody,
 /// with its KAS (value, state).
-#[allow(dead_code)] // build_refund_pair calls it once RefundOrder carries the bought-custody (B3 patch)
 pub(crate) fn refund_release(s: &AnyState, c: &TokenUtxo) -> (u64, TokenState) {
     (c.utxo.amount, c.state.with_user_owner(s.maker()))
 }
