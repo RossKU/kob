@@ -142,6 +142,10 @@ pub enum LogOp {
         ///
         /// `None` for every other order.
         prefund: Option<ImportCustody>,
+        /// A mode-1 order's bought-custody, node-verified (op code 7).
+        ///
+        /// `None` for every other order, and for an operation of op code 1, 5 or 6.
+        bought: Option<ImportCustody>,
     },
     /// A tracked order output that the node no longer has, spent during a gap: close its lineage.
     CloseGap { txid: Hash32, index: u32, covenant_id: Hash32 },
@@ -228,10 +232,17 @@ pub const FORMAT_IN_VALUE: u8 = 5;
 impl LogOp {
     fn encode(&self, w: &mut Writer) {
         match self {
-            LogOp::Import { template, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund } => {
+            LogOp::Import { template, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund, bought } => {
                 // Op 5 is op 1 followed by the parent (op 1 is still read). Op 6 is op 5 followed
                 // by the second custody (a pair entry's B prefund), written only when there is one.
-                w.u8(if prefund.is_some() { 6 } else { 5 });
+                // Op 7 is op 6 followed by the bought-custody, written only when there is one.
+                w.u8(if bought.is_some() {
+                    7
+                } else if prefund.is_some() {
+                    6
+                } else {
+                    5
+                });
                 w.u8(code_of(*template));
                 w.bytes(state);
                 w.hash(covenant_id);
@@ -242,8 +253,11 @@ impl LogOp {
                 w.var(*daa);
                 put_custody(w, custody.as_ref());
                 put_opt_hash(w, parent.as_ref());
-                if prefund.is_some() {
+                if prefund.is_some() || bought.is_some() {
                     put_custody(w, prefund.as_ref());
+                }
+                if bought.is_some() {
+                    put_custody(w, bought.as_ref());
                 }
             }
             LogOp::CloseGap { txid, index, covenant_id } => {
@@ -286,7 +300,7 @@ impl LogOp {
     /// past and counted in `ctx`.
     fn decode(r: &mut Reader<'_>, ctx: &mut DecodeCtx<'_>) -> Result<Option<LogOp>, WireError> {
         Ok(Some(match r.u8()? {
-            op @ (1 | 5 | 6) => {
+            op @ (1 | 5 | 6 | 7) => {
                 let code = r.u8()?;
                 let state = r.bytes()?.to_vec();
                 let covenant_id = r.hash()?;
@@ -297,9 +311,10 @@ impl LogOp {
                 let daa = r.var()?;
                 let custody = get_custody(r)?;
                 let parent = if op >= 5 { get_opt_hash(r)? } else { None };
-                let prefund = if op == 6 { get_custody(r)? } else { None };
+                let prefund = if op >= 6 { get_custody(r)? } else { None };
+                let bought = if op == 7 { get_custody(r)? } else { None };
                 let Some(template) = ctx.import_template(code, state.len())? else { return Ok(None) };
-                LogOp::Import { template, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund }
+                LogOp::Import { template, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund, bought }
             }
             2 => LogOp::CloseGap { txid: r.hash()?, index: r.var()? as u32, covenant_id: r.hash()? },
             op @ (3 | 4) => {
@@ -1314,6 +1329,7 @@ mod tests {
                 custody: Some(custody_of(7)),
                 parent: None,
                 prefund: Some(custody_of(9)),
+                bought: None,
             },
             LogOp::Import {
                 template: TemplateId::KobPair,
@@ -1327,10 +1343,50 @@ mod tests {
                 custody: Some(custody_of(7)),
                 parent: Some(Hash32([8; 32])),
                 prefund: None,
+                bought: None,
+            },
+            // A mode-1 bid's import carries its bought-custody (op 7).
+            LogOp::Import {
+                template: TemplateId::KobBid,
+                state: vec![0x13; template(TemplateId::KobBid).state_len],
+                covenant_id: Hash32([1; 32]),
+                txid: Hash32([2; 32]),
+                index: 3,
+                value: 4,
+                spk: vec![5; 3],
+                daa: 6,
+                custody: None,
+                parent: None,
+                prefund: None,
+                bought: Some(custody_of(10)),
             },
         ];
         let d = LogBatch::decode(&b.encode(5)).unwrap();
         assert_eq!(d.batch, b);
+        // An import without a bought-custody is still written as op 5 or 6, byte for byte.
+        for (op, code) in b.ops[2..].iter().zip([6u8, 5, 7]) {
+            let mut w = Writer::new();
+            op.encode(&mut w);
+            assert_eq!(w.buf[0], code);
+        }
+
+        // ... in the op 5 layout an older build wrote, which reads back with no bought-custody.
+        let mut old = Writer::new();
+        old.u8(5);
+        old.u8(code_of(TemplateId::KobPair));
+        old.bytes(&vec![0x12; template(TemplateId::KobPair).state_len]);
+        old.hash(&Hash32([1; 32]));
+        old.hash(&Hash32([2; 32]));
+        old.var(3);
+        old.var(4);
+        old.bytes(&[5; 3]);
+        old.var(6);
+        put_custody(&mut old, Some(&custody_of(7)));
+        put_opt_hash(&mut old, Some(&Hash32([8; 32])));
+        let mut w = Writer::new();
+        b.ops[3].encode(&mut w);
+        assert_eq!(w.buf, old.buf);
+        assert!(matches!(&d.batch.ops[3], LogOp::Import { bought: None, prefund: None, .. }));
 
         // Older operations: op 3 (adopt without DAA, custody and kept token UTXOs).
         let mut empty = batch(3);

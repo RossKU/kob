@@ -17,6 +17,10 @@
 //! base units owned by the order id) and verifies the custody UTXO the same way. Without it the
 //! order is imported with unverified custody.
 //!
+//! A mode-1 bid holding `bought` > 0 owns a bought-custody. Its script follows from the state
+//! alone (`bought` units owned by the order id, the state's extension commitment), so it is
+//! always rebuilt and verified.
+//!
 //! # Order receipts
 //!
 //! The order parameters exist only in the genesis transaction's placement record. So makers, and
@@ -222,6 +226,18 @@ fn custody_scripts(state: &AnyState, e: &ExportedOrder, cov: Hash32, network: &s
     out
 }
 
+/// The bought-custody script of a mode-1 order holding `bought` > 0: (script, address, amount,
+/// extension commitment, token covenant id). `None` for every other order, or a token program
+/// this build does not pin.
+fn bought_script(state: &AnyState, cov: Hash32, network: &str) -> Option<(Vec<u8>, String, i64, Hash32, Hash32)> {
+    let amount = state.bought_custody()?;
+    let want = crate::indexer::delivery::bought_token(state)?;
+    let tt = token_template_by_hash(&want.tpl_hash).filter(|t| Some(t.family) == want.family)?;
+    let cspk = spk_bytes(&TokenState::custody(tt.family, amount, cov.0, want.ext).spk_with(tt));
+    let addr = spk_address(&cspk, network)?;
+    Some((cspk, addr, amount, Hash32(want.ext), Hash32(want.token)))
+}
+
 fn lock(i: &Arc<Mutex<Ingest>>) -> std::sync::MutexGuard<'_, Ingest> {
     i.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -257,6 +273,8 @@ pub async fn import_orders<S: ChainSource>(
         /// token-holding kinds, one per custody for a pair order. Each is (script, address, amount,
         /// extension commitment, token).
         custody: Vec<(Vec<u8>, String, i64, Hash32, Hash32)>,
+        /// The bought-custody script of a mode-1 order holding `bought` > 0, same shape.
+        bought: Option<(Vec<u8>, String, i64, Hash32, Hash32)>,
     }
     let mut cands = Vec::new();
     for e in &export.orders {
@@ -278,10 +296,11 @@ pub async fn import_orders<S: ChainSource>(
             Some(cov) => custody_scripts(&state, e, cov, network),
             None => vec![],
         };
-        cands.push(Cand { spk, addr, state, entry: e.clone(), custody });
+        let bought = e.covenant_id.and_then(|cov| bought_script(&state, cov, network));
+        cands.push(Cand { spk, addr, state, entry: e.clone(), custody, bought });
     }
     let mut addrs: HashSet<String> = cands.iter().map(|c| c.addr.clone()).collect();
-    addrs.extend(cands.iter().flat_map(|c| c.custody.iter().map(|x| x.1.clone())));
+    addrs.extend(cands.iter().flat_map(|c| c.custody.iter().chain(c.bought.iter()).map(|x| x.1.clone())));
     let addrs: Vec<String> = addrs.into_iter().collect();
     let utxos = fetch_utxos(source, &addrs).await?;
     let mut ops = Vec::new();
@@ -298,22 +317,16 @@ pub async fn import_orders<S: ChainSource>(
         }
         for u in matches {
             let cov = u.utxo_entry.covenant_id.expect("filtered");
-            let found: Vec<Option<ImportCustody>> = c
-                .custody
-                .iter()
-                .map(|(cspk, _, amount, ext, want_tok)| {
-                    utxos
-                        .iter()
-                        .find(|x| x.utxo_entry.script_public_key.0 == *cspk && x.utxo_entry.covenant_id == Some(*want_tok))
-                        .map(|x| ImportCustody {
-                            txid: x.outpoint.transaction_id,
-                            index: x.outpoint.index,
-                            value: x.utxo_entry.amount,
-                            amount: *amount,
-                            ext: *ext,
-                        })
-                })
-                .collect();
+            let at = |(cspk, _, amount, ext, want_tok): &(Vec<u8>, String, i64, Hash32, Hash32)| {
+                let x =
+                    utxos.iter().find(|x| x.utxo_entry.script_public_key.0 == *cspk && x.utxo_entry.covenant_id == Some(*want_tok))?;
+                let (txid, index, value) = (x.outpoint.transaction_id, x.outpoint.index, x.utxo_entry.amount);
+                Some(ImportCustody { txid, index, value, amount: *amount, ext: *ext })
+            };
+            let found: Vec<Option<ImportCustody>> = c.custody.iter().map(at).collect();
+            // The bought-custody is rebuilt for the covenant id the node reports, which the order
+            // script does not commit to.
+            let bought = bought_script(&c.state, cov, network).as_ref().and_then(at);
             let custody = found.first().cloned().flatten();
             let prefund = found.get(1).cloned().flatten();
             let wanted = if c.state.is_pair() {
@@ -321,7 +334,7 @@ pub async fn import_orders<S: ChainSource>(
             } else {
                 usize::from(c.state.holds_tokens() && c.state.amount_left().unwrap_or(0) > 0)
             };
-            if found.iter().flatten().count() < wanted {
+            if found.iter().flatten().count() < wanted || (c.state.bought_custody().is_some() && bought.is_none()) {
                 report.custody_unverified.push(cov.to_hex());
             }
             ops.push(LogOp::Import {
@@ -336,6 +349,7 @@ pub async fn import_orders<S: ChainSource>(
                 custody,
                 parent: c.entry.parent,
                 prefund,
+                bought,
             });
         }
     }

@@ -2943,7 +2943,7 @@ impl Processor {
     /// All of them stamp block 0, which is never reverted.
     pub fn apply_op(&self, conn: &Connection, op: &LogOp, cursor_daa: u64, delta: &mut Delta, rep: &mut OpReport) -> DbResult<()> {
         match op {
-            LogOp::Import { template: tid, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund } => {
+            LogOp::Import { template: tid, state, covenant_id, txid, index, value, spk, daa, custody, parent, prefund, bought } => {
                 let label = covenant_id.to_hex();
                 let Ok(st) = AnyState::decode(*tid, state) else {
                     rep.rejected.push(format!("{label}: state does not decode"));
@@ -2977,7 +2977,12 @@ impl Processor {
                     // holds an output of this covenant id at this script, which only the lineage of
                     // the order itself can produce.
                     match self.revive(conn, delta, covenant_id, &st, *txid, *index, *value, spk, *daa, cust.as_ref(), ext)? {
-                        true => rep.imported += 1,
+                        true => {
+                            rep.imported += 1;
+                            if let Some(b) = bought {
+                                self.import_bought(conn, delta, covenant_id, &st, b, *daa)?;
+                            }
+                        }
                         false => rep.already_known += 1,
                     }
                     return Ok(());
@@ -2988,6 +2993,7 @@ impl Processor {
                     Some(p) if order_exists(conn, p)? => Some(*p),
                     _ => None,
                 };
+                let bought_of = bought.as_ref().map(|b| (st.clone(), b));
                 match self.create_order(
                     conn,
                     delta,
@@ -3011,7 +3017,12 @@ impl Processor {
                         inherit_listed: None,
                     },
                 )? {
-                    CreateOutcome::Created => rep.imported += 1,
+                    CreateOutcome::Created => {
+                        rep.imported += 1;
+                        if let Some((st, b)) = bought_of {
+                            self.import_bought(conn, delta, covenant_id, &st, b, *daa)?;
+                        }
+                    }
                     CreateOutcome::Rejected(r) if r == "duplicate_covenant" => rep.already_known += 1,
                     CreateOutcome::Rejected(r) => rep.rejected.push(format!("{label}: {r}")),
                 }
@@ -3120,6 +3131,50 @@ impl Processor {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Stores the node-verified bought-custody of an imported mode-1 order as a chain fill stores it:
+    /// a `token_utxos` row of role [`ROLE_BOUGHT`] and its proven holding. Only the exact one the
+    /// state requires is kept ([`delivery::is_bought_custody`]), at block 0 like every import.
+    fn import_bought(
+        &self,
+        conn: &Connection,
+        delta: &mut Delta,
+        cov: &Hash32,
+        st: &AnyState,
+        c: &super::recordlog::ImportCustody,
+        daa: u64,
+    ) -> DbResult<()> {
+        let Some(want) = delivery::bought_token(st) else { return Ok(()) };
+        let Some(tt) = kob_protocol::artifacts::token_template_by_hash(&want.tpl_hash).filter(|t| Some(t.family) == want.family)
+        else {
+            return Ok(());
+        };
+        let token = Hash32(want.token);
+        let held = super::record::HeldOut {
+            out: c.index,
+            program: tt.id,
+            state: kob_protocol::state::TokenState::custody(tt.family, c.amount, cov.0, c.ext.0),
+        };
+        if !delivery::is_bought_custody(st, cov, &token, c.amount, Some(&held)) || has_live_role(conn, cov, ROLE_BOUGHT)? {
+            return Ok(());
+        }
+        let n = conn
+            .prepare_cached(concat!(
+                "INSERT INTO token_utxos (txid, idx, token_id, order_id, amount, value, role, created_block, created_daa) VALUES (?1,?2,?3,",
+                order_of!("?4"),
+                ",?5,?6,?7,0,?8) ON CONFLICT(txid, idx) DO UPDATE SET spent_block = NULL, spent_txid = NULL, role = excluded.role \
+                 WHERE token_utxos.order_id = excluded.order_id"
+            ))?
+            .execute(params![&c.txid.0[..], c.index, intern(conn, &token.0)?, &cov.0[..], c.amount, c.value as i64, ROLE_BOUGHT, sql_int(daa)])?;
+        if n == 0 {
+            return Ok(());
+        }
+        conn.prepare_cached("DELETE FROM token_holdings WHERE txid = ?1 AND idx = ?2")?.execute(params![&c.txid.0[..], c.index])?;
+        self.insert_holding(conn, &c.txid, c.index, &token, tt.id, &held.state, c.value, ROLE_BOUGHT, 0, daa)?;
+        delta.tokens.insert(token);
+        delta.orders.insert(*cov);
         Ok(())
     }
 

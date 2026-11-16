@@ -37,6 +37,7 @@ async fn a_decay_step_zero_ask_is_indexed_but_not_listed() {
         custody: Some(ImportCustody { txid: Hash32([0x44; 32]), index: 1, value: CARRIER, amount: 10 * WHOLE, ext: Hash32(EXT) }),
         parent: None,
         prefund: None,
+        bought: None,
     };
     let applied = c.hs.ingest.lock().unwrap().apply_ops(vec![op], None).unwrap();
     assert_eq!(applied.ops.imported, 1, "{:?}", applied.ops.rejected);
@@ -88,6 +89,7 @@ async fn a_bid_whose_budget_never_evaluates_is_indexed_at_once_and_not_listed() 
             custody: None,
             parent: None,
             prefund: None,
+            bought: None,
         };
         let applied = c.hs.ingest.lock().unwrap().apply_ops(vec![op], None).unwrap();
         assert_eq!(applied.ops.imported, 1, "{:?}", applied.ops.rejected);

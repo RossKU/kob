@@ -1,9 +1,11 @@
 //! Restart, record-log replay and the recovery hooks (maker export/import, gap reconciliation).
 
 mod common;
+#[path = "common/delivery.rs"]
+mod delivery;
 
 use common::*;
-use kob_protocol::artifacts::template;
+use kob_protocol::artifacts::{template, TemplateId};
 use kob_protocol::build::*;
 use kob_protocol::state::*;
 use kob_protocol::tx::*;
@@ -11,7 +13,7 @@ use kobd::config::{IndexerConfig, StartMode};
 use kobd::hex::{Hash32, HexBytes};
 use kobd::indexer::db::{open_memory, open_writer};
 use kobd::indexer::ingest::Cursor;
-use kobd::indexer::recordlog::{self, LogBatch, LogCursor, RecordLog};
+use kobd::indexer::recordlog::{self, ImportCustody, LogBatch, LogCursor, LogOp, RecordLog};
 use kobd::indexer::{replay_from_log, Indexer};
 use kobd::recover::{export_orders, import_orders, rebase, reconcile_open_orders};
 use kobd::rpc::types::{AddressUtxo, AddressUtxoEntry, Outpoint};
@@ -925,4 +927,170 @@ async fn a_store_that_began_late_or_skipped_chain_is_not_a_complete_book_for_goo
     drop(idx);
     let h = Indexer::open(full).unwrap().health.snapshot();
     assert_eq!((h.book_complete, h.history_from_daa), (true, None));
+}
+
+/// `(role, amount, spent)` of every token row owned by order `cov`, oldest first.
+fn token_rows(c: &Ctx, cov: &Hash32) -> Vec<(String, i64, bool)> {
+    let g = c.hs.ingest.lock().unwrap();
+    let mut st = g
+        .conn()
+        .prepare(
+            "SELECT role, amount, spent_block IS NOT NULL FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) \
+             ORDER BY created_block, idx",
+        )
+        .unwrap();
+    st.query_map([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+}
+
+/// What [`mode_1_bid_holding_4`] returns.
+struct HeldBid {
+    fill: SignedTx,
+    cov: Hash32,
+    state: BidState,
+    /// Output indices of the order and of its bought-custody in `fill`.
+    oa: usize,
+    ca: usize,
+    export: kobd::recover::MakerExport,
+}
+
+/// A mode-1 bid of MAKER_A that bought 4 whole tokens into its bought-custody, indexed by `c`, and a healthy indexer's export.
+async fn mode_1_bid_holding_4(c: &Ctx) -> HeldBid {
+    let b0 = BidState { mode: MODE_ACCUMULATE, expiry_daa: c.daa() as i64 + 5_000, ..bid(MAKER_A, P250) };
+    let create = c.w.create_tx(AnyState::KobBid(b0.clone()), b0.escrow(10 * WHOLE, 4).unwrap() as u64, MAKER_A, 0);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let fill = delivery::fill_first(c, &c.w.order(&create, 0, b0.clone()), &cov, 4 * WHOLE);
+    c.push(&[&fill]).await;
+    let state = BidState { bought: 4 * WHOLE, ..b0 };
+    assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobBid(state.clone())));
+    let export = export_orders(c.hs.ingest.lock().unwrap().conn(), Some(&state.maker), true).unwrap();
+    assert_eq!(export.orders.len(), 1);
+    assert_eq!(export.orders[0].state.0, AnyState::KobBid(state.clone()).encode());
+    let export = serde_json::from_str(&serde_json::to_string(&export).unwrap()).unwrap();
+    let (oa, ca) = (find_cov(&fill, &cov).unwrap(), find_custody(&fill, &cov, 4 * WHOLE).unwrap());
+    HeldBid { fill, cov, state, oa, ca, export }
+}
+
+/// The node's UTXO set after the fill: the order's continuation and, at the custody's outpoint, a token UTXO of state `cust` and
+/// token `tok`.
+fn bid_utxos(c: &Ctx, h: &HeldBid, cust: &TokenState, tok: Hash32) -> Vec<(String, AddressUtxo)> {
+    let daa = c.w.order(&h.fill, h.oa, h.state.clone()).utxo.block_daa_score;
+    let at = |spk: Vec<u8>, id: Hash32, j: usize| {
+        let (a, mut u) = node_utxo(&spk, id, Hash32(h.fill.tx.id), j as u32, h.fill.tx.outputs[j].value);
+        u.utxo_entry.block_daa_score = daa;
+        (a, u)
+    };
+    vec![
+        at(spk_bytes(&AnyState::KobBid(h.state.clone()).spk()), h.cov, h.oa),
+        at(spk_bytes(&cust.spk_with(kob_protocol::artifacts::token_template(T3))), tok, h.ca),
+    ]
+}
+
+/// A fresh indexer that lost the history, with a node holding `utxos`, after importing `export`.
+async fn import_into(utxos: Vec<(String, AddressUtxo)>, export: &kobd::recover::MakerExport) -> (Ctx, kobd::recover::ImportReport) {
+    let c = Ctx::with(Harness::new(open_memory("testnet-10").unwrap(), None));
+    c.hs.sync().await;
+    c.hs.node.set_utxos(utxos);
+    let rep = import_orders(&c.hs.ingest, c.hs.node.as_ref(), "testnet-10", export).await.unwrap();
+    (c, rep)
+}
+
+#[tokio::test]
+async fn a_recovered_mode_1_bid_has_its_bought_custody_and_a_refund_or_cancel_releases_it() {
+    let c = Ctx::new();
+    let h = mode_1_bid_holding_4(&c).await;
+    let cov = h.cov;
+    let utxos = bid_utxos(&c, &h, &delivery::bought(4 * WHOLE, &cov), Hash32(TOKEN_COV));
+
+    let (c2, rep) = import_into(utxos.clone(), &h.export).await;
+    assert_eq!((rep.imported, rep.already_known), (1, 0), "{rep:?}");
+    assert!(rep.custody_unverified.is_empty(), "{rep:?}");
+    assert_eq!(c2.hs.tip_state(&cov), Some(AnyState::KobBid(h.state.clone())));
+    assert_eq!(token_rows(&c2, &cov), [("bought".to_string(), 4 * WHOLE, false)], "stored as a live fill stores it");
+    let v = view(&c2, &cov);
+    let bc = v.bought_custody.clone().expect("bought-custody view");
+    assert!(bc.ok && bc.utxo.as_ref().is_some_and(|u| u.role == "bought" && u.amount == "4000"), "{bc:?}");
+    assert_eq!(v.custody.as_ref().map(|c| c.ok), Some(true));
+    let role: String = c2.hs.query(
+        "SELECT role FROM token_holdings WHERE txid = ?1 AND idx = ?2 AND spent_block IS NULL",
+        rusqlite::params![&h.fill.tx.id[..], h.ca as i64],
+    );
+    assert_eq!(role, "bought", "with its proven holding");
+    {
+        let g = c2.hs.ingest.lock().unwrap();
+        let bcs = kobd::indexer::book::bought_custodies(g.conn()).unwrap();
+        assert_eq!(bcs.get(&cov.0).map(|t| t.state.amount()), Some(4 * WHOLE), "the matcher's book serves it");
+    }
+    // importing again is idempotent
+    let rep = import_orders(&c2.hs.ingest, c2.hs.node.as_ref(), "testnet-10", &h.export).await.unwrap();
+    assert_eq!((rep.imported, rep.already_known), (0, 1));
+    assert_eq!(token_rows(&c2, &cov).len(), 1);
+
+    // a keeper's refund releases it as for a live-indexed order
+    let order = c.w.order(&h.fill, h.oa, AnyState::KobBid(h.state.clone()));
+    let custody = c.w.token_at(&h.fill, h.ca, delivery::bought(4 * WHOLE, &cov));
+    let due = AnyState::KobBid(h.state.clone()).refund_due(order.utxo.block_daa_score as i64).unwrap() as u64;
+    let refund = delivery::refund_releasing(&c, &order, &custody, due);
+    c2.w.include(&c2.hs.node, &[&refund]);
+    c2.hs.sync().await;
+    assert_eq!(c2.hs.status(&cov), "refunded");
+    assert!(token_rows(&c2, &cov).iter().all(|r| r.2), "nothing of the order is left live");
+    let detail: String = c2.hs.query(
+        "SELECT kob_dtext(detail) FROM order_events WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) AND kind = 'refund'",
+        [&cov.0[..]],
+    );
+    let d: serde_json::Value = serde_json::from_str(&detail).unwrap();
+    assert_eq!(d["released"].as_str(), Some("4000"), "{d}");
+
+    // the maker's cancel that takes the custody with the escrow (CL4) releases it too
+    let (c3, _) = import_into(utxos, &h.export).await;
+    let cl4 = delivery::cancel_sweeping(&c, &order, &cov, Some(&custody), None);
+    c3.w.include(&c3.hs.node, &[&cl4]);
+    c3.hs.sync().await;
+    assert_eq!(c3.hs.status(&cov), "cancelled");
+    assert!(token_rows(&c3, &cov).iter().all(|r| r.2));
+}
+
+#[tokio::test]
+async fn a_look_alike_of_a_recovered_bids_bought_custody_is_not_adopted() {
+    let c = Ctx::new();
+    let h = mode_1_bid_holding_4(&c).await;
+    let cov = h.cov;
+    let fake_owner = Hash32([0x77; 32]);
+    for (what, cust, tok) in [
+        ("wrong amount", delivery::bought(3 * WHOLE, &cov), Hash32(TOKEN_COV)),
+        ("wrong owner", delivery::bought(4 * WHOLE, &fake_owner), Hash32(TOKEN_COV)),
+        ("wrong token", delivery::bought(4 * WHOLE, &cov), Hash32([0x55; 32])),
+    ] {
+        let (c2, rep) = import_into(bid_utxos(&c, &h, &cust, tok), &h.export).await;
+        assert_eq!(rep.imported, 1, "{what}: the order itself is verified: {rep:?}");
+        assert_eq!(rep.custody_unverified, vec![cov.to_hex()], "{what}");
+        assert!(token_rows(&c2, &cov).is_empty(), "{what}");
+        let v = view(&c2, &cov);
+        assert!(v.bought_custody.as_ref().is_some_and(|b| !b.ok && b.utxo.is_none()), "{what}: fails closed");
+    }
+
+    // a record-log import whose bought-custody is not the one the state requires is not stored either; the exact one is
+    let state = AnyState::KobBid(h.state.clone());
+    let op = |amount: i64| LogOp::Import {
+        template: TemplateId::KobBid,
+        state: state.encode(),
+        covenant_id: cov,
+        txid: Hash32(h.fill.tx.id),
+        index: h.oa as u32,
+        value: h.fill.tx.outputs[h.oa].value,
+        spk: spk_bytes(&state.spk()),
+        daa: 900,
+        custody: None,
+        parent: None,
+        prefund: None,
+        bought: Some(ImportCustody { txid: Hash32(h.fill.tx.id), index: h.ca as u32, value: CARRIER, amount, ext: Hash32(EXT) }),
+    };
+    for (amount, want) in [(3 * WHOLE, vec![]), (4 * WHOLE, vec![("bought".to_string(), 4 * WHOLE, false)])] {
+        let c3 = Ctx::with(Harness::new(open_memory("testnet-10").unwrap(), None));
+        c3.hs.sync().await;
+        let applied = c3.hs.ingest.lock().unwrap().apply_ops(vec![op(amount)], None).unwrap();
+        assert_eq!(applied.ops.imported, 1, "{:?}", applied.ops.rejected);
+        assert_eq!(token_rows(&c3, &cov), want);
+    }
 }
