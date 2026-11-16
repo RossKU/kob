@@ -584,6 +584,8 @@ fn iv(i: i64) -> Arg {
 enum Wit {
     CovId,
     P2pk(Keypair),
+    /// borrow path of an amount-threshold (receive) UTXO: the path byte 0x01 alone (leader only; a delegate gives nothing)
+    Borrow,
 }
 #[derive(Clone)]
 enum Role {
@@ -681,11 +683,21 @@ fn push(data: &[u8]) -> Vec<u8> {
     push_redeem_script(data)
 }
 fn entry_ss(art: &SilAbiArtifact, entry: &str, args: &[ArtifactValue]) -> Vec<u8> {
-    let mut s = encode_entry_sig_script(art, entry, args).expect("encode entry");
+    let mut s = encode_entry_sig_script(art, entry, &pad_args(art, entry, args)).expect("encode entry");
     s.extend_from_slice(&push(&bytecode(art)));
     s
 }
 
+/// Calls written before the delivery modes (KobCondBid settle without `form`, refund without `custIn`) take 0 for the
+/// arguments the entry gained: form 0, and a custIn that a refund with bought == 0 never reads.
+fn pad_args(art: &SilAbiArtifact, entry: &str, args: &[ArtifactValue]) -> Vec<ArtifactValue> {
+    let mut v = args.to_vec();
+    let want = common::entry_by_name(art, entry).map(|e| e.params.len()).unwrap_or(0);
+    while v.len() < want {
+        v.push(int(0));
+    }
+    v
+}
 fn build(net: &Net, s: &Scn, budgets: &[u16]) -> (Transaction, Vec<UtxoEntry>) {
     let entries: Vec<UtxoEntry> = s.inputs.iter().map(|i| i.entry.clone()).collect();
     let inputs: Vec<TransactionInput> = s
@@ -725,6 +737,7 @@ fn build(net: &Net, s: &Scn, budgets: &[u16]) -> (Transaction, Vec<UtxoEntry>) {
                 let w = match wit {
                     Wit::CovId => vec![0x00],
                     Wit::P2pk(kp) => [vec![0x00], sig_of(kp, 0x01)].concat(),
+                    Wit::Borrow => vec![0x01],
                 };
                 let mut s = net.t.entry_ss("transfer", &[ArtifactValue::Array(next.clone()), w.into()]);
                 s.extend_from_slice(&push(redeem));
@@ -732,7 +745,7 @@ fn build(net: &Net, s: &Scn, budgets: &[u16]) -> (Transaction, Vec<UtxoEntry>) {
             }
             Role::TokDelegate { redeem, wit } => {
                 let w = match wit {
-                    Wit::CovId => vec![],
+                    Wit::CovId | Wit::Borrow => vec![],
                     Wit::P2pk(kp) => sig_of(kp, 0x01),
                 };
                 let mut s = net.t.entry_ss("transfer_delegator", &[w.into()]);
@@ -1151,6 +1164,12 @@ struct CondBP {
     scale: i64,
     /// deliveryCarrier (sompi on every delivery); default DC
     dc: i64,
+    /// delivery block (docs/design/bid-delivery-spec.md): mode 0 new / 1 accumulate / 2 top-up, recvThreshold, topupTip,
+    /// bought (base units in the bought-custody); default all 0
+    mode: i64,
+    recv_threshold: i64,
+    topup_tip: i64,
+    bought: i64,
 }
 impl CondBP {
     /// Buy OCO: limit leg at 2.00 (below the market), buy-stop 3.00 with the default 3% band
@@ -1181,6 +1200,10 @@ impl CondBP {
             rpt_until: 0,
             scale: SCALE,
             dc: DC,
+            mode: 0,
+            recv_threshold: 0,
+            topup_tip: 0,
+            bought: 0,
         }
     }
     fn with_qty(&self, qty: i64) -> Self {
@@ -1235,6 +1258,10 @@ struct IfdAP {
     scale: i64,
     /// activeFrom (DAA); default 0
     active_from: i64,
+    /// the exits' delivery fields (exitMode, exitRecvThreshold, exitTopupTip); default 0
+    exit_mode: i64,
+    exit_thr: i64,
+    exit_tip: i64,
 }
 impl IfdAP {
     /// rptAmount in base units: the raw override, or the whole-token budget scaled.
@@ -1272,6 +1299,10 @@ fn condb(n: &Net, p: &CondBP) -> SilAbiArtifact {
         int(p.rpt_price),
         int(p.rpt_pre),
         int(p.rpt_until),
+        int(p.mode),
+        int(p.recv_threshold),
+        int(p.topup_tip),
+        int(p.bought),
     ]);
     compile_contract(&src("KobCondBid"), &a, CompileOptions::default()).expect("compile KobCondBid")
 }
@@ -1308,6 +1339,9 @@ fn ifda(n: &Net, p: &IfdAP) -> SilAbiArtifact {
         int(p.qty_base.unwrap_or(p.qty * UNIT)), // amountLeft in base units (= custody)
         int(p.rpt_amount()),                     // rptAmount in base units
         bytes(&condb_state(n, &p.exit)),
+        int(p.exit_mode),
+        int(p.exit_thr),
+        int(p.exit_tip),
     ]);
     compile_contract(&src("KobIfdAsk"), &a, CompileOptions::default()).expect("compile KobIfdAsk")
 }
@@ -1459,6 +1493,9 @@ fn ifda_p(f: &Fx) -> IfdAP {
         min_touch: 1,
         scale: UNIT,
         active_from: 0,
+        exit_mode: 0,
+        exit_thr: 0,
+        exit_tip: 0,
     }
 }
 /// Recomputes the genesis covenant id of output `out` (authorised by input `auth`) exactly as
@@ -1546,7 +1583,7 @@ fn v2_buy_sizes_layouts_sigops() {
     let f = fx();
     let n = &f.net;
     let m = pk(&f.maker_a);
-    let arts = [("KobCondBid", condb(n, &CondBP::oco(m)), 381), ("KobIfdAsk", ifda(n, &ifda_p(&f)), 594)];
+    let arts = [("KobCondBid", condb(n, &CondBP::oco(m)), 417), ("KobIfdAsk", ifda(n, &ifda_p(&f)), 621)];
     for (name, a, st) in arts.iter() {
         let bc = bytecode(a);
         let l = state_layout(a);
@@ -3293,10 +3330,10 @@ fn rpta_merge(f: &Fx, k: &MergeBKnobs) -> Scn {
 /// A crafted P2SH input imitating a booked KobCondBid exit of `parent` (see the sell-side twin).
 fn fake_exit_b(f: &Fx, parent: Hash, m: i64, value: i64) -> Inp {
     let tpl = condb_tpl(&f.net);
-    let size = tpl.pre.len() + 381 + tpl.suf.len();
+    let size = tpl.pre.len() + 417 + tpl.suf.len();
     let data_len = size - 6;
     let mut data = vec![0u8; data_len];
-    // state span = redeem[1..382); parent at state [322..354) = redeem [323..355) = data [320..352)
+    // state span = redeem[1..418); parent at state [322..354) = redeem [323..355) = data [320..352)
     // the would-be extensionCommitment at state [118..150) = data [116..148) (a new custody takes it)
     data[116..148].copy_from_slice(&EXT);
     data[320..352].copy_from_slice(&parent.as_bytes());
@@ -5418,7 +5455,7 @@ fn v3_buy_audit_ifd_ask() {
     rs[295] = 0x07;
     rs[296..303].copy_from_slice(&[0u8; 7]);
     rs[303] = 0x61; // OP_NOP
-    let mut ss = encode_entry_sig_script(&art, "settle", &[bytes(&(4 * WHOLE).to_le_bytes()), int(1), int(0), int(0), int(0)])
+    let mut ss = encode_entry_sig_script(&art, "settle", &[bytes(&(4 * WHOLE).to_le_bytes()), int(1), int(0), int(0), int(0), int(0)])
         .expect("encode settle");
     ss.extend_from_slice(&push(&rs));
     let x_in = s.inputs[0].entry.clone();
@@ -5946,4 +5983,985 @@ fn v3_buy_cond_refund() {
         &with_name(brc_slot_input(&f, true), "BRC38 refund slot at a covenant input of another covenant id (a router intent / order)"),
         0,
     );
+}
+
+// ================================================================ delivery modes (docs/design/bid-delivery-spec.md)
+//
+// KobCondBid with the delivery block (mode, recvThreshold, topupTip, bought) and KobIfdAsk handing its three immutable exit
+// fields to every exit it creates. Mode 0 is today's delivery, so every older test above runs in mode 0. Each new rule has a
+// positive scenario and a negative one that a contract without the rule accepts (KOB_ABLATION runs print ABLATION-PASS).
+
+/// The conditional buy's covenant id byte in the delivery-mode scenarios.
+const DMC: u8 = 0xe1;
+/// recvThreshold of a mode-2 order: minFill - 1, the wallet's cap.
+const DM_THR: i64 = DEFAULT_MIN_FILL - 1;
+/// topupTip of a mode-2 order: 0.02 KAS.
+const DM_TT: i64 = 2_000_000;
+/// Units and KAS of the maker's receive UTXO, the KAS on a bought-custody (the carrier of its first fill).
+const DM_RECV_HAVE: i64 = 7_000;
+const DM_RECV_KAS: i64 = KAS;
+const DM_CUST_KAS: i64 = DC;
+/// Size of the templates before the delivery modes (state 381 B / 594 B), and the spec's ceiling on the growth (section 9).
+const CONDB_SIZE_BEFORE: usize = 3_725;
+const IFDA_SIZE_BEFORE: usize = 5_197;
+const DM_GROWTH_CEILING: usize = 1_150;
+
+fn thr_guard(t: i64) -> [u8; 32] {
+    let mut g = [0u8; 32];
+    g[..8].copy_from_slice(&t.to_le_bytes());
+    g
+}
+/// A KCC-20 holder state with every field free.
+#[derive(Clone, Copy)]
+struct TSt {
+    amount: i64,
+    owner: [u8; 32],
+    scheme: u8,
+    borrow: u8,
+    guard: [u8; 32],
+    ext: [u8; 32],
+}
+impl TSt {
+    /// Plain: the key's, borrow disabled, zero guard.
+    fn plain(amount: i64, owner: &[u8; 32]) -> Self {
+        TSt { amount, owner: *owner, scheme: SCHEME_P2PK, borrow: 0, guard: [0; 32], ext: EXT }
+    }
+    /// Receive UTXO: the key's, borrow scheme amount-threshold with threshold `thr`.
+    fn recv(amount: i64, owner: &[u8; 32], thr: i64) -> Self {
+        TSt { borrow: 1, guard: thr_guard(thr), ..TSt::plain(amount, owner) }
+    }
+    /// Custody owned by covenant id `owner` (scheme 0x04).
+    fn custody(amount: i64, owner: Hash) -> Self {
+        TSt { scheme: SCHEME_COVID, ..TSt::plain(amount, &owner.as_bytes()) }
+    }
+    fn with(mut self, f: impl FnOnce(&mut TSt)) -> Self {
+        f(&mut self);
+        self
+    }
+    fn bytes(&self) -> Vec<u8> {
+        let mut v = vec![0x08];
+        v.extend_from_slice(&self.amount.to_le_bytes());
+        v.push(0x20);
+        v.extend_from_slice(&self.owner);
+        v.extend_from_slice(&[0x01, self.scheme, 0x01, self.borrow, 0x20]);
+        v.extend_from_slice(&self.guard);
+        v.push(0x20);
+        v.extend_from_slice(&self.ext);
+        v
+    }
+    fn val(&self) -> ArtifactValue {
+        BTreeMap::from([
+            ("amount".to_string(), int(self.amount)),
+            ("owner".to_string(), bytes(&self.owner)),
+            ("owner_scheme".to_string(), ArtifactValue::Byte(self.scheme)),
+            ("borrow_scheme".to_string(), ArtifactValue::Byte(self.borrow)),
+            ("borrow_guard".to_string(), bytes(&self.guard)),
+            ("extension_commitment".to_string(), bytes(&self.ext)),
+        ])
+        .into()
+    }
+}
+fn t_redeem(t: &Token, s: &TSt) -> Vec<u8> {
+    [t.prefix.clone(), s.bytes(), t.suffix.clone()].concat()
+}
+/// A token input holding `s`: the leader (with the states of its outputs) or a delegate.
+fn t_in(t: &Token, value: i64, s: &TSt, next: Option<&[TSt]>, wit: Wit, daa: u64) -> Inp {
+    let redeem = t_redeem(t, s);
+    let entry = utxo(value, pay_to_script_hash_script(&redeem), TOKEN_COV, daa);
+    let role = match next {
+        Some(n) => Role::TokLeader { redeem, next: n.iter().map(TSt::val).collect(), wit },
+        None => Role::TokDelegate { redeem, wit },
+    };
+    Inp { entry, role, seq: 0 }
+}
+fn t_out(t: &Token, value: i64, s: &TSt, leader: usize) -> TransactionOutput {
+    out(value, pay_to_script_hash_script(&t_redeem(t, s)), Some((leader as u16, TOKEN_COV)))
+}
+/// Output 0 (the delivery) becomes `d`, in the output and in the leader's states.
+fn dm_set_d(f: &Fx, s: &mut Scn, lead: usize, d: &TSt) {
+    dm_set_tok_out(f, s, lead, 0, 0, d);
+}
+/// Token output `o`, the leader's state `k`, becomes `st`.
+fn dm_set_tok_out(f: &Fx, s: &mut Scn, lead: usize, o: usize, k: usize, st: &TSt) {
+    s.outputs[o].script_public_key = pay_to_script_hash_script(&t_redeem(&f.net.t, st));
+    if let Role::TokLeader { next, .. } = &mut s.inputs[lead].role {
+        next[k] = st.val();
+    }
+}
+/// A new token output `st` (KAS `v`) of the leader's group, after every output.
+fn dm_add_tok_out(f: &Fx, s: &mut Scn, lead: usize, v: i64, st: &TSt) {
+    s.outputs.push(t_out(&f.net.t, v, st, lead));
+    if let Role::TokLeader { next, .. } = &mut s.inputs[lead].role {
+        next.push(st.val());
+    }
+}
+
+/// The buy OCO of CondBP::oco in delivery mode `mode` (mode 2: recvThreshold DM_THR, topupTip DM_TT), holding `bought`.
+fn dm_cp(maker: [u8; 32], mode: i64, bought: i64) -> CondBP {
+    let (thr, tt) = if mode == 2 { (DM_THR, DM_TT) } else { (0, 0) };
+    CondBP { mode, recv_threshold: thr, topup_tip: tt, bought, ..CondBP::oco(maker) }
+}
+/// The escrow of an order: its quantity at the dearest leg, plus one carrier unless it already has its bought-custody (the
+/// wallet funds a mode-1 order with one carrier).
+fn dm_value(cp: &CondBP) -> i64 {
+    cp.qty * (cp.worst() + cp.tip) + if cp.mode == 1 && cp.bought > 0 { 0 } else { cp.dc }
+}
+/// KAS the escrow releases beyond the price on a fill of `form` (spec section 4).
+fn dm_released(cp: &CondBP, form: i64) -> i64 {
+    if cp.mode == 1 && cp.bought > 0 {
+        0
+    } else if cp.mode == 2 && form == 2 {
+        cp.topup_tip
+    } else {
+        cp.dc
+    }
+}
+
+/// Knobs of a delivery-mode fill.
+#[derive(Clone)]
+struct DmK {
+    /// the order before the fill (qty = whole tokens left)
+    cp: CondBP,
+    /// whole tokens bought
+    n: i64,
+    leg: i64,
+    form: i64,
+    /// trigger evidence read by the fill (an unarmed stop leg)
+    ev: Option<Ev>,
+    /// the escrow (default dm_value)
+    v: Option<i64>,
+    /// the maker's receive UTXO a top-up continues (default DM_RECV_HAVE units, threshold DM_THR)
+    recv: Option<TSt>,
+}
+impl DmK {
+    fn new(cp: CondBP, n: i64) -> Self {
+        DmK { cp, n, leg: 0, form: 0, ev: None, v: None, recv: None }
+    }
+}
+/// Where a delivery-mode fill put things.
+struct DmIx {
+    /// the token leader (input)
+    lead: usize,
+    /// the token input the fill names (tokIn)
+    tok: usize,
+    /// the continuation (output), if any
+    cont: Option<usize>,
+    /// the taker's KAS change (output)
+    change: usize,
+}
+/// A taker sells k.n whole tokens into the conditional buy (input 0, cov 0xe1) as the spec's fill table builds it. Output 0 is
+/// the delivery D, then the continuation, the taker's change and, for an ending fill, the maker's refund (last). Token inputs:
+/// a top-up's receive UTXO leads (borrow path) and the taker's tokens delegate; otherwise the taker's tokens lead and a
+/// bought-custody (mode 1, bought > 0) delegates.
+fn dm_fill(f: &Fx, k: &DmK) -> (Scn, DmIx) {
+    let t = &f.net.t;
+    let c = cov(DMC);
+    let cp = &k.cp;
+    let taker = pk(&f.taker);
+    let n = k.n * WHOLE;
+    let v = k.v.unwrap_or_else(|| dm_value(cp));
+    let spend = bid_all_in(k.n, cp.leg_price(k.leg), cp.tip);
+    let left = v - spend;
+    let cont = k.n < cp.qty;
+    let custody = cp.mode == 1 && cp.bought > 0;
+    let topup = cp.mode == 2 && k.form == 2;
+    let released = dm_released(cp, k.form);
+    let (have, on_d) = if custody {
+        (DM_CUST_KAS, 0)
+    } else if topup {
+        (DM_RECV_KAS, 0)
+    } else {
+        (0, cp.dc)
+    };
+    let recv = k.recv.unwrap_or_else(|| TSt::recv(DM_RECV_HAVE, &cp.maker, DM_THR));
+    let d = if cp.mode == 1 {
+        if cont {
+            TSt::custody(cp.bought + n, c)
+        } else {
+            TSt::plain(cp.bought + n, &cp.maker)
+        }
+    } else if topup {
+        recv.with(|r| r.amount += n)
+    } else if cp.mode == 2 && k.form == 1 {
+        TSt::recv(n, &cp.maker, cp.recv_threshold)
+    } else {
+        TSt::plain(n, &cp.maker)
+    };
+    let rem = left - released;
+    let refund = !cont && rem >= REFUND_MIN;
+    let d_kas = if cont || refund { have + on_d } else { have + rem + on_d };
+    let sold = TSt::plain(n, &taker);
+    let mut toks = vec![];
+    let tok = if topup {
+        toks.push(t_in(t, DM_RECV_KAS, &recv, Some(&[d]), Wit::Borrow, 1_000));
+        toks.push(t_in(t, CARRIER, &sold, None, Wit::P2pk(f.taker), 1_000));
+        1
+    } else {
+        toks.push(t_in(t, CARRIER, &sold, Some(&[d]), Wit::P2pk(f.taker), 1_000));
+        if custody {
+            toks.push(t_in(t, DM_CUST_KAS, &TSt::custody(cp.bought, c), None, Wit::CovId, 1_500));
+            2
+        } else {
+            1
+        }
+    };
+    let mut inputs = vec![call(
+        &condb(&f.net, cp),
+        "settle",
+        vec![nb(n), iv(tok as i64), iv(k.leg), iv(0), iv(0), iv(k.form)],
+        "condb.settle",
+        v,
+        c,
+        2_000,
+    )];
+    inputs.extend(toks);
+    let mut outputs = vec![t_out(t, d_kas.max(0), &d, 1)];
+    let mut cont_idx = None;
+    if cont {
+        let armed = if k.leg == 1 && cp.armed == 0 { 1 } else { cp.armed };
+        let bought = if cp.mode == 1 { cp.bought + n } else { cp.bought };
+        let next = CondBP { qty: cp.qty - k.n, armed, bought, ..cp.clone() };
+        cont_idx = Some(outputs.len());
+        outputs.push(out(left - released, spk_of(&condb(&f.net, &next)), Some((0, c))));
+    }
+    let change = outputs.len();
+    outputs.push(out(0, p2pk_spk(&taker), None));
+    let mut s = Scn {
+        name: format!(
+            "DM fill mode {} form {} bought {} leg {} {}/{} whole{}",
+            cp.mode,
+            k.form,
+            cp.bought,
+            k.leg,
+            k.n,
+            cp.qty,
+            if cont {
+                ""
+            } else if refund {
+                ", ends with a refund"
+            } else {
+                ", ends, the rest rides on D"
+            }
+        ),
+        inputs,
+        outputs,
+        lock_time: NOW,
+        payload: vec![],
+    };
+    if let Some(e) = &k.ev {
+        // add_ev pads the outputs to the inputs with zero-value outputs, which the storage-mass formula cannot price: pad
+        // with KAS of the taker instead
+        while s.outputs.len() < s.inputs.len() {
+            s.outputs.push(out(KAS, p2pk_spk(&taker), None));
+        }
+        let (ei, _) = add_ev(f, &mut s, e);
+        set_arg(&mut s, 0, 3, iv(ei));
+    }
+    if refund {
+        push_refunds(&mut s, &[(rem, cp.maker)]);
+    }
+    balance(&mut s, change);
+    (s, DmIx { lead: 1, tok, cont: cont_idx, change })
+}
+/// The three shapes of a fill of 4 whole from `cp` (10 whole): partial on the limit leg; ending on the limit leg (the rest,
+/// REFUND_MIN or more, is refunded); ending on the armed stop leg with 1,000 sompi beyond the price and the release (rides
+/// on D).
+fn dm_shapes(cp: &CondBP, form: i64) -> Vec<DmK> {
+    let end_stop = cp.with_qty(4).armed();
+    let v = 4 * (end_stop.worst() + end_stop.tip) + dm_released(&end_stop, form) + 1_000;
+    vec![
+        DmK { form, ..DmK::new(cp.clone(), 4) },
+        DmK { form, ..DmK::new(cp.with_qty(4), 4) },
+        DmK { form, leg: 1, v: Some(v), ..DmK::new(end_stop, 4) },
+    ]
+}
+fn rebalance(s: &mut Scn, ix: &DmIx) {
+    balance(s, ix.change);
+}
+
+/// DM1: every mode x form x shape fills, with the delivery the spec's table pins. Prints the relay fee of each.
+#[test]
+fn dm_modes_and_forms_positive() {
+    for f in [fx(), fx_pm()] {
+        let m = pk(&f.maker_b);
+        for (mode, forms) in [(0, vec![0, 7]), (1, vec![0, 7]), (2, vec![0, 1, 2])] {
+            let boughts = if mode == 1 { vec![0, 3 * WHOLE] } else { vec![0] };
+            for form in forms {
+                for &bought in &boughts {
+                    for k in dm_shapes(&dm_cp(m, mode, bought), form) {
+                        let (s, _) = dm_fill(&f, &k);
+                        let name = s.name.clone();
+                        let fee = run_ok(&f.net, &s);
+                        println!("DM-FEE {} {name}: {fee} sompi", f.net.t.name);
+                    }
+                }
+            }
+        }
+        // a mode-1 order bought in three fills: its custody, then the custody grown, then one plain UTXO of all it bought
+        let cp = dm_cp(m, 1, 0);
+        let v0 = dm_value(&cp);
+        let s1 = bid_all_in(3, cp.tp, cp.tip);
+        run_ok(&f.net, &with_name(dm_fill(&f, &DmK::new(cp.clone(), 3)).0, "DM1 lifecycle: 3 of 10 into a new custody"));
+        let cp2 = CondBP { qty: 7, bought: 3 * WHOLE, ..cp.clone() };
+        let v1 = v0 - s1 - DC;
+        let s2 = bid_all_in(3, cp.tp, cp.tip);
+        let k2 = DmK { v: Some(v1), ..DmK::new(cp2, 3) };
+        run_ok(&f.net, &with_name(dm_fill(&f, &k2).0, "DM1 lifecycle: 3 of 7 into the custody (now 6)"));
+        let cp3 = CondBP { qty: 4, bought: 6 * WHOLE, ..cp.clone() };
+        let k3 = DmK { v: Some(v1 - s2), ..DmK::new(cp3, 4) };
+        run_ok(&f.net, &with_name(dm_fill(&f, &k3).0, "DM1 lifecycle: the last 4 end the order, 10 whole to the maker"));
+    }
+}
+
+/// DM2: the delivery rules of each mode. Every scenario is a positive of DM1 with one thing changed.
+#[test]
+fn dm_delivery_rules_negative() {
+    let f = fx();
+    let n = &f.net;
+    let m = pk(&f.maker_b);
+    let taker = pk(&f.taker);
+    let c = cov(DMC);
+    let held = dm_cp(m, 1, 3 * WHOLE);
+    let fresh1 = dm_cp(m, 1, 0);
+    let mode2 = dm_cp(m, 2, 0);
+    let bad = |s: Scn, name: &str| run_bad(n, &with_name(s, name), 0);
+
+    // field checks (nothing checks the state at placement)
+    for (mode, name) in [(3, "DM2-01 mode 3"), (-1, "DM2-02 mode -1")] {
+        bad(dm_fill(&f, &DmK::new(CondBP { mode, ..dm_cp(m, 0, 0) }, 4)).0, name);
+    }
+    bad(dm_fill(&f, &DmK::new(CondBP { bought: 3 * WHOLE, ..dm_cp(m, 0, 0) }, 4)).0, "DM2-03 mode 0 with bought > 0");
+    bad(dm_fill(&f, &DmK::new(CondBP { bought: 3 * WHOLE, ..mode2.clone() }, 4)).0, "DM2-04 mode 2 with bought > 0");
+    bad(dm_fill(&f, &DmK::new(CondBP { bought: -1, ..fresh1.clone() }, 4)).0, "DM2-05 mode 1 with bought < 0");
+    // a top-up named with another form: without the range check, any form but 0 and 1 would read as a top-up
+    for (form, name) in [(3, "DM2-06 mode 2 form 3 (a top-up shape)"), (-1, "DM2-07 mode 2 form -1 (a top-up shape)")] {
+        let (mut s, _) = dm_fill(&f, &DmK { form: 2, ..DmK::new(mode2.clone(), 4) });
+        set_arg(&mut s, 0, 5, iv(form));
+        bad(s, name);
+    }
+    for form in [1, 2] {
+        let k = |cp: CondBP| DmK { form, ..DmK::new(cp, 4) };
+        bad(dm_fill(&f, &k(CondBP { recv_threshold: 0, ..mode2.clone() })).0, &format!("DM2-08 form {form}: recvThreshold 0"));
+        bad(dm_fill(&f, &k(CondBP { topup_tip: DC + 1, ..mode2.clone() })).0, &format!("DM2-09 form {form}: topupTip > carrier"));
+        bad(dm_fill(&f, &k(CondBP { topup_tip: -1, ..mode2.clone() })).0, &format!("DM2-10 form {form}: topupTip < 0"));
+    }
+    // form 0 reads neither field: a mode-2 order with recvThreshold 0 still fills by a new plain UTXO
+    run_ok(n, &with_name(dm_fill(&f, &DmK::new(CondBP { recv_threshold: 0, ..mode2.clone() }, 4)).0, "DM2 form 0 ignores recvThreshold"));
+
+    // mode 1, the first fill: the delivery is the custody of n with the carrier
+    let (mut s, ix) = dm_fill(&f, &DmK::new(fresh1.clone(), 4));
+    dm_set_d(&f, &mut s, ix.lead, &TSt::plain(4 * WHOLE, &m));
+    bad(s, "DM2-11 mode 1 continues: n delivered plain to the maker instead of into the custody");
+    let (mut s, ix) = dm_fill(&f, &DmK::new(fresh1.clone(), 4));
+    s.outputs[0].value -= 1;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-12 mode 1 first fill: the custody gets less than the carrier");
+    let (mut s, _) = dm_fill(&f, &DmK::new(fresh1.clone(), 4));
+    s.outputs[1].script_public_key = spk_of(&condb(n, &CondBP { qty: 6, ..fresh1.clone() }));
+    bad(s, "DM2-13 mode 1 continues: bought not raised in the continuation");
+    // mode 1 with a custody
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    dm_set_d(&f, &mut s, ix.lead, &TSt::plain(7 * WHOLE, &m));
+    bad(s, "DM2-14 mode 1 continues: the custody released plain to the maker");
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    dm_set_d(&f, &mut s, ix.lead, &TSt::custody(7 * WHOLE, c).with(|x| x.borrow = 1));
+    bad(s, "DM2-15 mode 1 continues: the new custody borrow-enabled");
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    let cont = ix.cont.unwrap();
+    s.outputs[cont].value -= DC as u64;
+    s.outputs[0].value += DC as u64;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-16 mode 1 with a custody: a second carrier leaves the escrow");
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    s.outputs[0].value -= 1;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-17 mode 1 with a custody: the custody's KAS taken");
+    let ending = dm_shapes(&held, 0);
+    let (mut s, ix) = dm_fill(&f, &ending[1]);
+    dm_set_d(&f, &mut s, ix.lead, &TSt::custody(7 * WHOLE, c));
+    bad(s, "DM2-18 mode 1 ends: the bought units left behind in a custody of the order's id");
+    let (mut s, ix) = dm_fill(&f, &ending[1]);
+    dm_set_d(&f, &mut s, ix.lead, &TSt::plain(7 * WHOLE, &taker));
+    bad(s, "DM2-19 mode 1 ends: the bought units delivered to another key");
+    let (mut s, ix) = dm_fill(&f, &ending[2]);
+    s.outputs[0].value -= 1;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-20 mode 1 ends without a refund: D short of the custody's KAS plus the rest");
+
+    // mode 2 form 1: a receive UTXO of exactly recvThreshold
+    let k1 = DmK { form: 1, ..DmK::new(mode2.clone(), 4) };
+    let (mut s, ix) = dm_fill(&f, &k1);
+    dm_set_d(&f, &mut s, ix.lead, &TSt::recv(4 * WHOLE, &m, DM_THR + 1));
+    bad(s, "DM2-21 form 1: the receive UTXO with another threshold");
+    let (mut s, ix) = dm_fill(&f, &k1);
+    dm_set_d(&f, &mut s, ix.lead, &TSt::plain(4 * WHOLE, &m));
+    bad(s, "DM2-22 form 1: a plain UTXO delivered");
+    let (mut s, ix) = dm_fill(&f, &DmK::new(mode2.clone(), 4));
+    dm_set_d(&f, &mut s, ix.lead, &TSt::recv(4 * WHOLE, &m, DM_THR));
+    bad(s, "DM2-23 form 0: a receive UTXO delivered");
+
+    // mode 2 form 2: the top-up
+    let k2 = DmK { form: 2, ..DmK::new(mode2.clone(), 4) };
+    let recv = TSt::recv(DM_RECV_HAVE, &m, DM_THR);
+    let topup = |r: TSt| dm_fill(&f, &DmK { recv: Some(r), ..k2.clone() }).0;
+    run_ok(n, &with_name(topup(recv.with(|r| r.guard = thr_guard(2_000))), "DM2 top-up of a receive UTXO above recvThreshold"));
+    // the successor is pinned to the maker's key and the order's commitment anyway, so these two deliver what the order
+    // pins and only the order's check of the receive UTXO refuses them
+    let (mut s, ix) = dm_fill(&f, &DmK { recv: Some(TSt::recv(DM_RECV_HAVE, &taker, DM_THR)), ..k2.clone() });
+    dm_set_d(&f, &mut s, ix.lead, &recv.with(|r| r.amount += 4 * WHOLE));
+    bad(s, "DM2-24 top-up of another key's receive UTXO");
+    bad(topup(recv.with(|r| r.guard = thr_guard(DM_THR - 1))), "DM2-25 top-up of a receive UTXO below recvThreshold");
+    bad(topup(recv.with(|r| r.guard[20] = 1)), "DM2-26 top-up of a receive UTXO with a non-canonical guard");
+    let (mut s, ix) = dm_fill(&f, &DmK { recv: Some(recv.with(|r| r.ext = [0xef; 32])), ..k2.clone() });
+    dm_set_d(&f, &mut s, ix.lead, &recv.with(|r| r.amount += 4 * WHOLE));
+    bad(s, "DM2-27 top-up of a receive UTXO of another commitment");
+    bad(topup(recv.with(|r| r.scheme = SCHEME_COVID)), "DM2-28 top-up of a receive UTXO with owner scheme 0x04");
+    let (mut s, ix) = dm_fill(&f, &k2);
+    if let Role::TokLeader { wit, .. } = &mut s.inputs[ix.lead].role {
+        *wit = Wit::P2pk(f.maker_b);
+    }
+    set_tok_redeem(&mut s, ix.lead, t_redeem(&f.net.t, &TSt::plain(DM_RECV_HAVE, &m)));
+    dm_set_d(&f, &mut s, ix.lead, &TSt::plain(DM_RECV_HAVE + 4 * WHOLE, &m));
+    bad(s, "DM2-29 top-up of a plain UTXO of the maker (borrow disabled)");
+    let (mut s, ix) = dm_fill(&f, &k2);
+    let e = &s.inputs[ix.tok].entry;
+    s.inputs[ix.tok].entry = UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
+    bad(s, "DM2-30 top-up: the receive UTXO is not the P2SH of the script it pushes");
+    let (mut s, ix) = dm_fill(&f, &k2);
+    dm_set_d(&f, &mut s, ix.lead, &recv.with(|r| {
+        r.amount += 4 * WHOLE;
+        r.guard = thr_guard(DM_THR + 1);
+    }));
+    bad(s, "DM2-31 top-up: the successor's threshold changed");
+    let (mut s, ix) = dm_fill(&f, &k2);
+    let cont = ix.cont.unwrap();
+    s.outputs[cont].value -= 1;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-32 top-up: the escrow leaves topupTip + 1");
+    let (mut s, ix) = dm_fill(&f, &k2);
+    s.outputs[0].value -= 1;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-33 top-up: the receive UTXO's KAS taken");
+    // an order whose escrow does not cover the price and the tip cannot end by a top-up (rem + KAS put on D >= 0)
+    let end = mode2.with_qty(4).armed();
+    let short = DmK { form: 2, leg: 1, v: Some(4 * (end.worst() + end.tip) + DM_TT - 1), ..DmK::new(end.clone(), 4) };
+    let (mut s, ix) = dm_fill(&f, &short);
+    s.outputs[0].value = DM_RECV_KAS as u64;
+    rebalance(&mut s, &ix);
+    bad(s, "DM2-34 top-up ends with an escrow short of the tip (rem + KAS on D < 0)");
+    run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(4 * (end.worst() + end.tip) + DM_TT), ..short.clone() }).0, "DM2 top-up ends, escrow exactly price + tip"));
+    // the token program: a top-up must raise the receive UTXO above its threshold (spec section 6.6), the builder uses form 1
+    let (s, ix) = dm_fill(&f, &DmK { recv: Some(recv.with(|r| r.guard = thr_guard(4 * WHOLE))), ..k2.clone() });
+    run_bad(n, &with_name(s, "DM2-35 top-up of n <= the receive UTXO's threshold (token program)"), ix.lead);
+}
+
+/// DM3: the stray guard. A fill lets through only the bought-custody it names and authenticates.
+#[test]
+fn dm_stray_guard() {
+    let f = fx();
+    let n = &f.net;
+    let m = pk(&f.maker_b);
+    let taker = pk(&f.taker);
+    let c = cov(DMC);
+    let t = &f.net.t;
+    let held = dm_cp(m, 1, 3 * WHOLE);
+    // a further token input, its units to the taker: owned by the order's id it is a stray, owned by the taker it is fine
+    let extra = |stray: bool| {
+        let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+        let (st, wit) =
+            if stray { (TSt::custody(2 * WHOLE, c), Wit::CovId) } else { (TSt::plain(2 * WHOLE, &taker), Wit::P2pk(f.taker)) };
+        s.inputs.push(t_in(t, CARRIER, &st, None, wit, 1_500));
+        dm_add_tok_out(&f, &mut s, ix.lead, CARRIER, &TSt::plain(2 * WHOLE, &taker));
+        rebalance(&mut s, &ix);
+        s
+    };
+    run_ok(n, &with_name(extra(false), "DM3 control: a further token input of the taker next to the custody"));
+    run_bad(n, &with_name(extra(true), "DM3-01 a second UTXO of the order's id next to its custody (a stray)"), 0);
+    // a look-alike custody: one more unit than bought (the extra unit to the taker)
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    set_tok_redeem(&mut s, ix.tok, t_redeem(t, &TSt::custody(4 * WHOLE, c)));
+    dm_add_tok_out(&f, &mut s, ix.lead, 0, &TSt::plain(WHOLE, &taker));
+    run_bad(n, &with_name(s, "DM3-02 the named custody holds more than bought"), 0);
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    set_tok_redeem(&mut s, ix.tok, t_redeem(t, &TSt::custody(3 * WHOLE, c).with(|x| x.ext = [0xef; 32])));
+    run_bad(n, &with_name(s, "DM3-03 the named custody carries another commitment"), 0);
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    set_tok_redeem(&mut s, ix.tok, t_redeem(t, &TSt::custody(3 * WHOLE, c).with(|x| x.borrow = 1)));
+    run_bad(n, &with_name(s, "DM3-04 the named custody is borrow-enabled"), 0);
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    let e = &s.inputs[ix.tok].entry;
+    s.inputs[ix.tok].entry = UtxoEntry::new(e.amount, ScriptPublicKey::new(0, vec![OpTrue].into()), e.block_daa_score, false, e.covenant_id);
+    run_bad(n, &with_name(s, "DM3-05 the named custody is not the P2SH of the script it pushes"), 0);
+    // the fill names the taker's tokens: the custody is then an unnamed input of the order's id
+    let (mut s, ix) = dm_fill(&f, &DmK::new(held.clone(), 4));
+    set_arg(&mut s, 0, 1, iv(ix.lead as i64));
+    run_bad(n, &with_name(s, "DM3-06 the custody present but not named by the fill"), 0);
+    // bought == 0: no input of the order's id at all, even one named by the fill
+    let (mut s, ix) = dm_fill(&f, &DmK::new(dm_cp(m, 1, 0), 4));
+    s.inputs.push(t_in(t, CARRIER, &TSt::custody(2 * WHOLE, c), None, Wit::CovId, 1_500));
+    dm_add_tok_out(&f, &mut s, ix.lead, CARRIER, &TSt::plain(2 * WHOLE, &taker));
+    set_arg(&mut s, 0, 1, iv(2));
+    rebalance(&mut s, &ix);
+    run_bad(n, &with_name(s, "DM3-07 bought 0: a UTXO of the order's id named by the fill"), 0);
+    // on the 8 / 8 program, the custody at every token slot, and a stray at every slot next to it
+    let f8 = fx8();
+    let taker = pk(&f8.taker);
+    for slot in 0..4usize {
+        for stray in [false, true] {
+            let (mut s, ix) = dm_fill(&f8, &DmK::new(held.clone(), 4));
+            // move the custody (input 2) to token slot `slot` by putting `slot` taker units before it
+            let cust = s.inputs.remove(ix.tok);
+            for _ in 0..slot.saturating_sub(1) {
+                s.inputs.push(t_in(&f8.net.t, CARRIER, &TSt::plain(WHOLE, &taker), None, Wit::P2pk(f8.taker), 1_000));
+                dm_add_tok_out(&f8, &mut s, ix.lead, CARRIER, &TSt::plain(WHOLE, &taker));
+            }
+            let at = if slot == 0 { 1 } else { s.inputs.len() };
+            if slot == 0 {
+                // the custody leads: it takes the leader's states, the taker's tokens delegate
+                let mut lead = s.inputs.remove(1);
+                let mut cust = cust;
+                if let (Role::TokLeader { next, .. }, Role::TokDelegate { redeem, wit }) = (&lead.role, &cust.role) {
+                    cust.role = Role::TokLeader { redeem: redeem.clone(), next: next.clone(), wit: wit.clone() };
+                }
+                if let Role::TokLeader { redeem, wit, .. } = &lead.role {
+                    lead.role = Role::TokDelegate { redeem: redeem.clone(), wit: wit.clone() };
+                }
+                s.inputs.insert(1, cust);
+                s.inputs.insert(2, lead);
+            } else {
+                s.inputs.push(cust);
+            }
+            set_arg(&mut s, 0, 1, iv(at as i64));
+            if stray {
+                s.inputs.push(t_in(&f8.net.t, CARRIER, &TSt::custody(2 * WHOLE, c), None, Wit::CovId, 1_500));
+                dm_add_tok_out(&f8, &mut s, 1, CARRIER, &TSt::plain(2 * WHOLE, &taker));
+            }
+            rebalance(&mut s, &ix);
+            let name = format!("DM3-08 8/8: custody at token slot {slot}{}", if stray { ", a stray after it" } else { "" });
+            if stray {
+                run_bad(&f8.net, &with_name(s, &name), 0);
+            } else {
+                run_ok(&f8.net, &with_name(s, &name));
+            }
+        }
+    }
+}
+
+/// DM4: trigger and condition interplay. The stop leg arms in its own fill from a resting bid's fill in every mode, the
+/// update arms an order that holds bought units without touching them, and neither reads the custody as evidence.
+#[test]
+fn dm_trigger_interplay() {
+    let f = fx();
+    let n = &f.net;
+    let m = pk(&f.maker_b);
+    let t = &f.net.t;
+    let c = cov(DMC);
+    for (mode, form, bought) in [(0, 0, 0), (1, 0, 0), (1, 0, 3 * WHOLE), (2, 0, 0), (2, 1, 0), (2, 2, 0)] {
+        let cp = dm_cp(m, mode, bought);
+        for qty in [10, 4] {
+            let mut k = DmK { form, leg: 1, ev: Some(arm_ev()), ..DmK::new(cp.with_qty(qty), 4) };
+            if qty == 4 {
+                // the ending stop fill spends the whole escrow: 1,000 sompi ride on D
+                k.v = Some(4 * (cp.worst() + cp.tip) + dm_released(&cp, form) + 1_000);
+            }
+            let (s, _) = dm_fill(&f, &k);
+            let name = format!("DM4 {} (stop leg armed in its fill by a resting bid's fill)", s.name);
+            run_ok(n, &with_name(s, &name));
+        }
+        let (s, _) = dm_fill(&f, &DmK { form, leg: 1, ..DmK::new(cp.clone(), 4) });
+        run_bad(n, &with_name(s, &format!("DM4-01 mode {mode} form {form} bought {bought}: unarmed stop fill without evidence")), 0);
+        let (s, _) = dm_fill(&f, &DmK { form, leg: 1, ev: Some(Ev::bid(cp.stop - 1)), ..DmK::new(cp.clone(), 4) });
+        run_bad(n, &with_name(s, &format!("DM4-02 mode {mode} form {form} bought {bought}: evidence below the stop")), 0);
+    }
+    // update arms a mode-1 order holding 3 whole and keeps bought
+    let held = dm_cp(m, 1, 3 * WHOLE);
+    run_ok(n, &with_name(condb_update(&f, &held, &held.armed(), &arm_ev(), 0), "DM4 update arms an order with a custody"));
+    run_bad(
+        n,
+        &with_name(condb_update(&f, &held, &CondBP { bought: 0, ..held.armed() }, &arm_ev(), 0), "DM4-03 update zeroes bought"),
+        0,
+    );
+    let mut s = condb_update(&f, &held, &held.armed(), &arm_ev(), 0);
+    let l = push_tok(
+        &f,
+        &mut s,
+        DM_CUST_KAS,
+        3 * WHOLE,
+        &c.as_bytes(),
+        SCHEME_COVID,
+        TOKEN_COV,
+        Wit::CovId,
+        1_500,
+        vec![tok_state(3 * WHOLE, &c.as_bytes(), SCHEME_COVID)],
+    );
+    s.outputs.push(out(DM_CUST_KAS, t.spk(3 * WHOLE, &c.as_bytes(), SCHEME_COVID), Some((l as u16, TOKEN_COV))));
+    run_bad(n, &with_name(s, "DM4-04 update spends the order's custody (pinned nowhere)"), 0);
+}
+
+/// One order of a batch.
+struct DmLeg {
+    cp: CondBP,
+    n: i64,
+    form: i64,
+    c: u8,
+}
+/// A taker sells into several partially filled orders at once (order i at input i delivers at output i, continues at
+/// output legs + i). Token inputs: the top-ups' receive UTXOs, then the custodies, then the taker's tokens; the first leads
+/// and authorises every delivery.
+fn dm_batch(f: &Fx, legs: &[DmLeg], name: &str) -> Scn {
+    let t = &f.net.t;
+    let taker = pk(&f.taker);
+    let k = legs.len();
+    let mut toks: Vec<(i64, TSt, Wit)> = vec![];
+    let mut tok_of = vec![usize::MAX; k];
+    for (i, l) in legs.iter().enumerate() {
+        if l.cp.mode == 2 && l.form == 2 {
+            tok_of[i] = k + toks.len();
+            toks.push((DM_RECV_KAS, TSt::recv(DM_RECV_HAVE, &l.cp.maker, DM_THR), Wit::Borrow));
+        }
+    }
+    for (i, l) in legs.iter().enumerate() {
+        if l.cp.mode == 1 && l.cp.bought > 0 {
+            tok_of[i] = k + toks.len();
+            toks.push((DM_CUST_KAS, TSt::custody(l.cp.bought, cov(l.c)), Wit::CovId));
+        }
+    }
+    let total: i64 = legs.iter().map(|l| l.n * WHOLE).sum();
+    let taker_at = k + toks.len();
+    toks.push((CARRIER, TSt::plain(total, &taker), Wit::P2pk(f.taker)));
+    let mut inputs = vec![];
+    let mut ds = vec![];
+    let mut outputs = vec![];
+    let mut conts = vec![];
+    for (i, l) in legs.iter().enumerate() {
+        assert!(l.n < l.cp.qty, "dm_batch: partial fills only");
+        let cp = &l.cp;
+        let c = cov(l.c);
+        let nn = l.n * WHOLE;
+        let tok = if tok_of[i] == usize::MAX { taker_at } else { tok_of[i] };
+        let v = dm_value(cp);
+        let spend = bid_all_in(l.n, cp.tp, cp.tip);
+        let custody = cp.mode == 1 && cp.bought > 0;
+        let topup = cp.mode == 2 && l.form == 2;
+        let (d, d_kas) = if cp.mode == 1 {
+            (TSt::custody(cp.bought + nn, c), if custody { DM_CUST_KAS } else { cp.dc })
+        } else if topup {
+            (TSt::recv(DM_RECV_HAVE + nn, &cp.maker, DM_THR), DM_RECV_KAS)
+        } else if cp.mode == 2 && l.form == 1 {
+            (TSt::recv(nn, &cp.maker, cp.recv_threshold), cp.dc)
+        } else {
+            (TSt::plain(nn, &cp.maker), cp.dc)
+        };
+        inputs.push(call(&condb(&f.net, cp), "settle", vec![nb(nn), iv(tok as i64), iv(0), iv(0), iv(0), iv(l.form)], "condb.settle", v, c, 2_000));
+        outputs.push(t_out(t, d_kas, &d, k));
+        ds.push(d);
+        let next = CondBP { qty: cp.qty - l.n, bought: if cp.mode == 1 { cp.bought + nn } else { 0 }, ..cp.clone() };
+        conts.push(out(v - spend - dm_released(cp, l.form), spk_of(&condb(&f.net, &next)), Some((i as u16, c))));
+    }
+    for (j, (kas, st, wit)) in toks.into_iter().enumerate() {
+        inputs.push(t_in(t, kas, &st, (j == 0).then_some(&ds[..]), wit, 1_500));
+    }
+    outputs.extend(conts);
+    outputs.push(out(0, p2pk_spk(&taker), None));
+    let change = outputs.len() - 1;
+    let mut s = Scn { name: name.into(), inputs, outputs, lock_time: NOW, payload: vec![] };
+    balance(&mut s, change);
+    s
+}
+
+/// DM5: positional and ordering rules (spec section 6) on the 3 / 3 program.
+#[test]
+fn dm_ordering_rules() {
+    let f = fx();
+    let n = &f.net;
+    let (ma, mb) = (pk(&f.maker_a), pk(&f.maker_b));
+    let leg = |cp: CondBP, form: i64, c: u8| DmLeg { cp, n: 2, form, c };
+    run_ok(
+        n,
+        &dm_batch(&f, &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 1, 3 * WHOLE), 0, 0xe2)], "DM5 top-up first + a mode-1 order with a custody"),
+    );
+    run_ok(
+        n,
+        &dm_batch(
+            &f,
+            &[leg(dm_cp(ma, 1, 3 * WHOLE), 0, 0xe1), leg(dm_cp(mb, 1, 4 * WHOLE), 0, 0xe2)],
+            "DM5 two mode-1 orders with their custodies",
+        ),
+    );
+    run_ok(n, &dm_batch(&f, &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 2, 0), 1, 0xe2)], "DM5 top-up first + a new receive UTXO"));
+    run_ok(n, &dm_batch(&f, &[leg(dm_cp(ma, 1, 3 * WHOLE), 0, 0xe1), leg(dm_cp(mb, 0, 0), 0, 0xe2)], "DM5 custody first, mode 0 second"));
+    // the topped-up order is the token's lowest-index delivering order: its delivery is the leader's first output
+    let s = dm_batch(&f, &[leg(dm_cp(ma, 0, 0), 0, 0xe1), leg(dm_cp(mb, 2, 0), 2, 0xe2)], "DM5-01 top-up behind another delivery");
+    run_bad(n, &s, 2);
+    // at most one top-up per token per transaction (only the leader borrows)
+    let s = dm_batch(&f, &[leg(dm_cp(ma, 2, 0), 2, 0xe1), leg(dm_cp(mb, 2, 0), 2, 0xe2)], "DM5-02 two top-ups in one transaction");
+    run_bad(n, &s, 3);
+    // the receive UTXO must lead: as a delegate it has no borrow path
+    let (mut s, ix) = dm_fill(&f, &DmK { form: 2, ..DmK::new(dm_cp(mb, 2, 0), 4) });
+    let recv = s.inputs.remove(1);
+    let mut sold = s.inputs.remove(1);
+    if let (Role::TokLeader { next, .. }, Role::TokDelegate { redeem, wit }) = (&recv.role, &sold.role) {
+        sold.role = Role::TokLeader { redeem: redeem.clone(), next: next.clone(), wit: wit.clone() };
+    }
+    let mut recv = recv;
+    if let Role::TokLeader { redeem, wit, .. } = &recv.role {
+        recv.role = Role::TokDelegate { redeem: redeem.clone(), wit: wit.clone() };
+    }
+    s.inputs.insert(1, sold);
+    s.inputs.insert(2, recv);
+    set_arg(&mut s, 0, 1, iv(2));
+    rebalance(&mut s, &ix);
+    run_bad(n, &with_name(s, "DM5-03 the receive UTXO as a delegate (not the leader)"), 2);
+    // the delivery of order i is output i: a top-up's successor at output 1 is not order 0's delivery
+    let (mut s, ix) = dm_fill(&f, &DmK { form: 2, ..DmK::new(dm_cp(mb, 2, 0), 4) });
+    s.outputs.swap(0, 1);
+    rebalance(&mut s, &ix);
+    run_bad(n, &with_name(s, "DM5-04 top-up successor not at the order's own index"), 0);
+    // a terminal top-up with a refund: the refund at M - 1 - i, the successor at i
+    let ending = dm_shapes(&dm_cp(mb, 2, 0), 2);
+    run_ok(n, &with_name(dm_fill(&f, &ending[1]).0, "DM5 terminal top-up with its refund last"));
+}
+
+/// The bought-custody of `cp` (cov 0xe1, 3 whole) refunded with the escrow by anyone at expiry: [0] the escrow to the maker,
+/// [1] the custody released plain to the maker at its own input index.
+fn dm_refund(f: &Fx, cp: &CondBP) -> Scn {
+    let t = &f.net.t;
+    let c = cov(DMC);
+    let v = dm_value(cp);
+    let rel = TSt::plain(cp.bought, &cp.maker);
+    Scn {
+        name: "DM refund".into(),
+        inputs: vec![
+            call(&condb(&f.net, cp), "refund", vec![iv(1)], "condb.refund", v, c, (EXPIRY - 1_000) as u64),
+            t_in(t, DM_CUST_KAS, &TSt::custody(cp.bought, c), Some(&[rel]), Wit::CovId, 1_500),
+        ],
+        outputs: vec![out(v - REFUND_TIP, p2pk_spk(&cp.maker), None), t_out(t, DM_CUST_KAS, &rel, 1)],
+        lock_time: EXPIRY as u64,
+        payload: vec![],
+    }
+}
+
+/// DM6: the order's end without the maker's signature never leaves a bought-custody behind (refund(custIn)).
+#[test]
+fn dm_refund_releases_the_custody() {
+    let f = fx();
+    let n = &f.net;
+    let t = &f.net.t;
+    let m = pk(&f.maker_b);
+    let taker = pk(&f.taker);
+    let c = cov(DMC);
+    let held = dm_cp(m, 1, 3 * WHOLE);
+    run_ok(n, &with_name(dm_refund(&f, &held), "DM6 refund: escrow at i, the custody released whole at its own index"));
+    run_ok(n, &with_name(condb_refund(&f, &dm_cp(m, 1, 0)), "DM6 refund of a mode-1 order that bought nothing"));
+    let bad = |s: Scn, name: &str| run_bad(n, &with_name(s, name), 0);
+    let mut s = dm_refund(&f, &held);
+    dm_set_tok_out(&f, &mut s, 1, 1, 0, &TSt::plain(3 * WHOLE, &taker));
+    bad(s, "DM6-01 refund: the custody released to another key");
+    let mut s = dm_refund(&f, &held);
+    dm_set_tok_out(&f, &mut s, 1, 1, 0, &TSt::custody(3 * WHOLE, c));
+    bad(s, "DM6-02 refund: the custody kept under the order's id");
+    let mut s = dm_refund(&f, &held);
+    dm_set_tok_out(&f, &mut s, 1, 1, 0, &TSt::recv(3 * WHOLE, &m, DM_THR));
+    bad(s, "DM6-03 refund: the custody released borrow-enabled");
+    let mut s = dm_refund(&f, &held);
+    s.outputs[1].value -= 1;
+    bad(s, "DM6-04 refund: the custody's KAS taken");
+    let mut s = dm_refund(&f, &held);
+    s.outputs.insert(1, out(0, p2pk_spk(&taker), None));
+    bad(s, "DM6-05 refund: the release not at the custody's own index");
+    let mut s = dm_refund(&f, &held);
+    s.inputs.push(t_in(t, CARRIER, &TSt::custody(2 * WHOLE, c), None, Wit::CovId, 1_500));
+    dm_add_tok_out(&f, &mut s, 1, CARRIER, &TSt::plain(2 * WHOLE, &taker));
+    bad(s, "DM6-06 refund: a stray of the order's id next to the custody");
+    let mut s = dm_refund(&f, &held);
+    set_tok_redeem(&mut s, 1, t_redeem(t, &TSt::custody(4 * WHOLE, c)));
+    dm_add_tok_out(&f, &mut s, 1, 0, &TSt::plain(WHOLE, &taker));
+    bad(s, "DM6-07 refund: a look-alike custody (more than bought)");
+    let mut s = dm_refund(&f, &held);
+    s.inputs.truncate(1);
+    s.outputs.truncate(1);
+    set_arg(&mut s, 0, 0, iv(0));
+    bad(s, "DM6-08 refund of an order holding bought units without its custody");
+    let mut s = condb_refund(&f, &dm_cp(m, 1, 0));
+    let st = TSt::plain(2 * WHOLE, &taker);
+    s.inputs.push(t_in(t, CARRIER, &TSt::custody(2 * WHOLE, c), Some(&[st]), Wit::CovId, 1_500));
+    s.outputs.push(t_out(t, CARRIER, &st, 1));
+    bad(s, "DM6-09 refund with bought 0 and a token UTXO of the order's id");
+}
+
+/// DM7: claims through cancel (spec section 7): the maker's SIGHASH_ALL signature moves the custody in every shape.
+#[test]
+fn dm_claims_through_cancel() {
+    let f = fx();
+    let n = &f.net;
+    let t = &f.net.t;
+    let m = pk(&f.maker_b);
+    let c = cov(DMC);
+    let held = CondBP { qty: 6, ..dm_cp(m, 1, 3 * WHOLE) };
+    let v = dm_value(&held);
+    let fresh = CondBP { bought: 0, ..held.clone() };
+    let order = |kp: Keypair| call(&condb(n, &held), "cancel", vec![Arg::Sig(kp, 0x01)], "condb.cancel", v, c, 2_000);
+    let custody = |next: &[TSt]| t_in(t, DM_CUST_KAS, &TSt::custody(3 * WHOLE, c), Some(next), Wit::CovId, 1_500);
+    let wallet = |units: i64| t_in(t, CARRIER, &TSt::plain(units, &m), None, Wit::P2pk(f.maker_b), 1_000);
+    let fund = || p2pk_in(&f.maker_b, 20 * KAS);
+    let close = |mut s: Scn| {
+        s.outputs.push(out(0, p2pk_spk(&m), None));
+        let l = s.outputs.len() - 1;
+        balance(&mut s, l);
+        s
+    };
+    // CL1 claim: the order continues with bought 0 and one more carrier, the maker gets the custody plain
+    let cl1 = |kp: Keypair| {
+        let st = TSt::plain(3 * WHOLE, &m);
+        close(Scn {
+            name: "DM7 CL1 claim".into(),
+            inputs: vec![order(kp), custody(&[st]), fund()],
+            outputs: vec![out(v + DC, spk_of(&condb(n, &fresh)), Some((0, c))), t_out(t, DM_CUST_KAS, &st, 1)],
+            lock_time: NOW,
+            payload: vec![],
+        })
+    };
+    run_ok(n, &cl1(f.maker_b));
+    run_bad(n, &with_name(cl1(f.taker), "DM7-01 CL1 signed by another key"), 0);
+    // CL2 claim and merge: custody + two wallet UTXOs -> one plain UTXO
+    let st = TSt::plain(6 * WHOLE, &m);
+    run_ok(
+        n,
+        &close(Scn {
+            name: "DM7 CL2 claim and merge with 2 wallet UTXOs".into(),
+            inputs: vec![order(f.maker_b), custody(&[st]), wallet(WHOLE), wallet(2 * WHOLE), fund()],
+            outputs: vec![out(v + DC, spk_of(&condb(n, &fresh)), Some((0, c))), t_out(t, DM_CUST_KAS + 2 * CARRIER, &st, 1)],
+            lock_time: NOW,
+            payload: vec![],
+        }),
+    );
+    // CL3 claim and place: the escrow back to the maker, custody + one wallet UTXO -> the custody of a new KobAsk of 4 whole
+    let ask = n.ask(&AskP { qty: 4, ..AskP::new(m, P250) });
+    let mut s = Scn {
+        name: "DM7 CL3 claim and place a KobAsk".into(),
+        inputs: vec![order(f.maker_b), custody(&[TSt::plain(0, &m)]), fund(), wallet(WHOLE)],
+        outputs: vec![out(v, p2pk_spk(&m), None), out(CARRIER, spk_of(&ask), None)],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    let ask_id = regen(&mut s, 1, 2);
+    s.outputs.push(t_out(t, CARRIER, &TSt::custody(4 * WHOLE, ask_id), 1));
+    dm_set_tok_out(&f, &mut s, 1, 2, 0, &TSt::custody(4 * WHOLE, ask_id));
+    run_ok(n, &close(s));
+    // CL4 cancel: escrow and custody to the maker
+    let st = TSt::plain(3 * WHOLE, &m);
+    run_ok(
+        n,
+        &close(Scn {
+            name: "DM7 CL4 cancel with the custody".into(),
+            inputs: vec![order(f.maker_b), custody(&[st]), fund()],
+            outputs: vec![out(v, p2pk_spk(&m), None), t_out(t, DM_CUST_KAS, &st, 1)],
+            lock_time: NOW,
+            payload: vec![],
+        }),
+    );
+}
+
+/// DM8: KobIfdAsk hands exitMode, exitRecvThreshold and exitTopupTip to every exit, with bought = 0; a repeating entry's
+/// exits are mode 0; the merge reads the delivery block as the entry books it.
+#[test]
+fn dm_ifd_exit_fields() {
+    let f = fx();
+    let n = &f.net;
+    let m = pk(&f.maker_a);
+    let with_exit = |mode: i64, thr: i64, tip: i64| {
+        let exit = CondBP { mode, recv_threshold: thr, topup_tip: tip, ..ifda_exit(m) };
+        IfdAP { exit_mode: mode, exit_thr: thr, exit_tip: tip, exit, ..ifda_p(&f) }
+    };
+    for (mode, thr, tip) in [(0, 0, 0), (1, 0, 0), (2, DM_THR, DM_TT)] {
+        let ip = with_exit(mode, thr, tip);
+        run_ok(n, &with_name(ifda_fill(&f, &ip, 10, 4, IFDA_VALUE), &format!("DM8 entry fill, exit mode {mode}")));
+        run_ok(n, &with_name(ifda_fill(&f, &ip, 4, 4, IFDA_VALUE), &format!("DM8 entry sells out, exit mode {mode}")));
+    }
+    // the exit's state the entry writes: any other delivery block is refused
+    let ip = with_exit(1, 0, 0);
+    for (x, name) in [
+        (CondBP { mode: 0, ..ip.exit.clone() }, "DM8-01 exit written with mode 0 (entry: 1)"),
+        (CondBP { bought: WHOLE, ..ip.exit.clone() }, "DM8-02 exit written with bought > 0"),
+        (CondBP { recv_threshold: 5, ..ip.exit.clone() }, "DM8-03 exit written with another recvThreshold"),
+        (CondBP { topup_tip: 5, ..ip.exit.clone() }, "DM8-04 exit written with another topupTip"),
+    ] {
+        let mut s = ifda_fill(&f, &ip, 10, 4, IFDA_VALUE);
+        s.outputs[0].script_public_key = spk_of(&condb(n, &x.with_qty(4)));
+        regen(&mut s, 0, 0);
+        run_bad(n, &with_name(s, name), 0);
+    }
+    // an exit of mode 1 then buys back into its own custody and ends with one plain UTXO
+    let x = ip.exit.with_qty(4);
+    let xv = ask_all_in(4, ip.price, ip.tip) + 4 * ip.prefund + ip.exit_carrier;
+    run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(xv), ..DmK::new(x.clone(), 2) }).0, "DM8 the mode-1 exit buys 2 of 4 into its custody"));
+    let x2 = CondBP { qty: 2, bought: 2 * WHOLE, ..x.clone() };
+    let xv2 = xv - bid_all_in(2, x.tp, x.tip) - DC;
+    run_ok(n, &with_name(dm_fill(&f, &DmK { v: Some(xv2), ..DmK::new(x2, 2) }).0, "DM8 the mode-1 exit ends: 4 whole to the maker"));
+
+    // a repeating entry: its exits are mode 0
+    let s = rpta_fill(&f, &RaKnobs::new(10, 4, 21));
+    run_ok(n, &with_name(s.clone(), "DM8 repeating entry books a mode-0 exit"));
+    let ip1 = IfdAP { exit_mode: 1, exit: CondBP { mode: 1, ..ifda_exit(m) }, ..rpta_p(&f, 10, 21) };
+    let mut s1 = s.clone();
+    set_art(&mut s1, 0, ifda(n, &ip1));
+    s1.outputs[0].script_public_key = spk_of(&condb(n, &booked_exit_b(&ip1, 4, 0)));
+    s1.outputs[1].script_public_key = spk_of(&ifda(n, &IfdAP { qty: 6, rpt: 17, ..ip1.clone() }));
+    regen(&mut s1, 0, 0);
+    run_bad(n, &with_name(s1, "DM8-05 repeating entry with exitMode 1"), 0);
+    // the same entry once its re-arms are used up (rptAmount 1) still writes mode-0 exits only
+    let ip2 = IfdAP { rpt_base: Some(1), ..ip1.clone() };
+    let mut s2 = ifda_fill(&f, &IfdAP { rpt_base: Some(1), ..rpta_p(&f, 10, 0) }, 10, 4, IFDA_VALUE);
+    run_ok(n, &with_name(s2.clone(), "DM8 repeating entry with no re-arms left, exit mode 0"));
+    set_art(&mut s2, 0, ifda(n, &ip2));
+    s2.outputs[0].script_public_key = spk_of(&condb(n, &ip2.exit.with_qty(4)));
+    s2.outputs[1].script_public_key = spk_of(&ifda(n, &IfdAP { qty: 6, ..ip2.clone() }));
+    regen(&mut s2, 0, 0);
+    run_bad(n, &with_name(s2, "DM8-06 repeating entry (no re-arms left) with exitMode 1"), 0);
+
+    // merge: the booked exit's delivery block is compared; the exit refuses a re-arm while it holds bought units
+    run_ok(n, &with_name(rpta_merge(&f, &MergeBKnobs::new(&f, 6, 4, 3)), "DM8 merge of a mode-0 booked exit"));
+    let k = MergeBKnobs::new(&f, 6, 4, 3);
+    let xb = booked_exit_b(&k.entry, 4, 0);
+    let s = rpta_merge(&f, &MergeBKnobs { exit: Some(CondBP { recv_threshold: 5, ..xb.clone() }), ..k.clone() });
+    run_bad(n, &with_name(s, "DM8-07 merge of a look-alike exit with another delivery block"), 2);
+    let s = rpta_merge(&f, &MergeBKnobs { exit: Some(CondBP { mode: 1, bought: WHOLE, ..xb.clone() }), ..k.clone() });
+    run_bad(n, &with_name(s, "DM8-08 a booked exit holding bought units re-arms"), 0);
+}
+
+/// DM9: layouts, sizes and the sig-op bound of the changed templates (spec sections 2 and 9).
+#[test]
+fn dm_layout_and_budget() {
+    let f = fx();
+    let n = &f.net;
+    let m = pk(&f.maker_b);
+    let le = |s: &[u8], a: usize| i64::from_le_bytes(s[a..a + 8].try_into().unwrap());
+    let cp = CondBP { mode: 2, recv_threshold: 777, topup_tip: 555, bought: 4_321, qty: 7, armed: 1, ..CondBP::oco(m) };
+    let a = condb(n, &cp);
+    let b = bytecode(&a);
+    assert_eq!(state_layout(&a).len, 417, "KobCondBid state");
+    for (at, v, name) in [(382, 2, "mode"), (391, 777, "recvThreshold"), (400, 555, "topupTip"), (409, 4_321, "bought")] {
+        assert_eq!((b[at], le(&b, at + 1)), (0x08, v), "KobCondBid {name} at redeem {at}");
+    }
+    // the existing windows do not move
+    assert_eq!((b[223], le(&b, 224)), (0x08, cp.stop), "stopPrice");
+    assert_eq!((b[286], le(&b, 287)), (0x08, 7 * UNIT), "amountLeft");
+    assert_eq!((b[295], le(&b, 296)), (0x08, 1), "armed");
+    let ip = IfdAP { exit_mode: 1, exit_thr: 888, exit_tip: 999, ..ifda_p(&f) };
+    let ia = ifda(n, &ip);
+    let ib = bytecode(&ia);
+    assert_eq!(state_layout(&ia).len, 621, "KobIfdAsk state");
+    for (at, v, name) in [(595, 1, "exitMode"), (604, 888, "exitRecvThreshold"), (613, 999, "exitTopupTip")] {
+        assert_eq!((ib[at], le(&ib, at + 1)), (0x08, v), "KobIfdAsk {name} at redeem {at}");
+    }
+    assert_eq!((ib[244], ib[253], ib[262]), (0x08, 0x08, 0x08), "KobIfdAsk mutable windows unchanged");
+    for (name, bc, before) in [("KobCondBid", b, CONDB_SIZE_BEFORE), ("KobIfdAsk", ib, IFDA_SIZE_BEFORE)] {
+        let so = kaspa_txscript::get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(
+            &push(&bc),
+            &pay_to_script_hash_script(&bc),
+        );
+        println!("DM-SIZE {name}: {} B (before {before} B, +{} B), static sig-op bound {so}", bc.len(), bc.len() - before);
+        assert!(bc.len() <= before + DM_GROWTH_CEILING, "{name}: growth above the spec's ceiling");
+        assert!(so <= 15, "{name}: sig-op cap");
+    }
 }
