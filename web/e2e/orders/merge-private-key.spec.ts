@@ -104,7 +104,11 @@ test('Merge all of 30 with the private key: one Allow in the signer, then 15 tra
   await countFrameShows(page);
   await page.getByTestId('merge-all-confirm').click();
   await expect(page.getByTestId('flow-session-ask')).toBeVisible();
+  // the one approval is the stepper's first step
+  await expect(page.getByTestId('flow-session-step')).toHaveAttribute('aria-current', 'step');
+  await expect(page.getByTestId('flow-step-0')).toHaveAttribute('data-state', 'sending');
   await allowSession(page, 15, 'pk-session-approval');
+  await expect(page.getByTestId('flow-session-step')).toHaveAttribute('data-state', 'open');
   await expect(page.getByTestId('flow-session')).toContainText('Approved once in the private key signer: at most 15 transactions');
 
   // mid-run: the frame stays hidden while the steps go through
@@ -177,6 +181,9 @@ test('Merge, then sell with the private key: one Allow for the merges, then the 
   await expect(page.getByTestId('order-note-merge')).toHaveText('Your EXSTD is split into many UTXOs: 2 merge transactions first, one approval in the private key signer.', { timeout: 30_000 });
   await countFrameShows(page);
   await page.getByTestId('order-place').click();
+  // the stepper: Approve, the two merges, then Sell
+  await expect(page.getByTestId('flow-progress').getByRole('listitem')).toHaveCount(4);
+  await expect(page.getByTestId('flow-then-step')).toHaveAttribute('data-state', 'waiting');
   await allowSession(page, 2);
   // the sale: the frame's ordinary confirmation, Approve
   await expect(page.getByTestId('signer-overlay')).toBeVisible({ timeout: 90_000 });
