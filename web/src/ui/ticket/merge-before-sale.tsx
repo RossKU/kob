@@ -7,7 +7,7 @@
 // always. A merge rejected or failed part way stops there; what was sent stays merged and the offer is planned again from it.
 import type { JSX } from 'preact';
 import { useRef, useState } from 'preact/hooks';
-import { useServices } from '../../app/context';
+import { useServices, useWallet } from '../../app/context';
 import { t, tIssue } from '../../i18n';
 import { buildErrorText } from '../../i18n/build-error';
 import { mergeLeaves, outpointOf, planMergeShape } from '../../kob/merge';
@@ -15,7 +15,7 @@ import type { PlanEnv, PlanIssue } from '../../kob/plan-types';
 import type { TokenInfo } from '../../kob/registry';
 import type { Hex } from '../../kob/types';
 import { awaitMergeOutputs, mergeFlow, planMergeFor, type MergeFlow } from '../orders/actions';
-import { mergeRunLine, mergeTokenOf } from '../orders/merge-model';
+import { mergeApprovedOnce, mergeRunLine, mergeTokenOf } from '../orders/merge-model';
 import { TxFlow, type FlowOutcome } from '../orders/TxFlow';
 
 /** The issue code the offer answers. */
@@ -50,6 +50,7 @@ export interface MergeBeforeSale {
 
 export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
   const services = useServices();
+  const wallet = useWallet();
   const [running, setRunning] = useState(false);
   const [flow, setFlow] = useState<{ key: number; heading: string; run: MergeFlow } | null>(null);
   const txids = useRef<string[]>([]);
@@ -59,7 +60,9 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
   // the count before the click, from the tree alone (nothing is built until the click)
   const shape = mt && a.env && a.pubkey && target !== null ? planMergeShape(mt, a.env.tokenUtxos, a.pubkey, new Set(), { target }) : null;
   const txs = shape?.ok ? shape.nodes.length : 0;
-  const offer = txs > 0 ? t(txs === 1 ? 'ticket.merge.offer.one' : 'ticket.merge.offer.other', { ticker: a.ticker, count: txs }) : null;
+  // the private-key signer approves the whole merge once (its session); every other wallet once per transaction
+  const once = !!mt && mergeApprovedOnce(wallet.adapter, mt);
+  const offer = txs > 0 ? t(txs === 1 ? 'ticket.merge.offer.one' : once ? 'ticket.merge.offer.once' : 'ticket.merge.offer.other', { ticker: a.ticker, count: txs }) : null;
 
   const stop = (text: string, raw?: string) => {
     setRunning(false);
@@ -118,6 +121,7 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
       heading={flow.heading}
       steps={flow.run.steps}
       next={flow.run.next}
+      {...(flow.run.session ? { session: flow.run.session } : {})}
       onStepSubmitted={(_s, r) => void txids.current.push(r.txid)}
       onDone={(o) => void done(o)}
       onClose={() => setFlow(null)}

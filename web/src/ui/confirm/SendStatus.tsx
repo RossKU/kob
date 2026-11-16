@@ -288,7 +288,8 @@ export function useSend(): Sender {
       const timer = new SigningTimer();
       const walletId = w.adapter!.id;
       const live: LiveSigning | null =
-        walletId === 'local-key' && !final.retimed
+        // a session step is not followed while it waits: the frame signs it at once or shows it as a new request
+        walletId === 'local-key' && !final.retimed && !final.session
           ? {
               attach: (to) => {
                 follow(final, () => reading, (j) => {
@@ -321,6 +322,7 @@ export function useSend(): Sender {
           ...(final.submitByDaa != null ? { submitByDaa: final.submitByDaa } : {}),
           ...(final.retimed ? { retime: true } : {}),
           ...(final.signerNotes?.length ? { signerNotes: [...final.signerNotes] } : {}),
+          ...(final.session ? { session: final.session } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
           addressOf: inputAddressOf(services),
           onWait: (waiting) => set(id, { phase: 'signing', ...(waiting ? { waiting: true } : {}) }),

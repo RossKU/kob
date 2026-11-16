@@ -40,7 +40,7 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { mergeApprovedOnce, mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
 import type { MergePlan, MergeToken } from '../../kob/merge';
 import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
@@ -66,6 +66,8 @@ interface Flow {
   steps: FlowStep[];
   /** a chained flow (token merge): builds step `index` at its turn, once the steps it follows were submitted */
   next?: TxFlowProps['next'];
+  /** the run as planned, for a wallet that approves it once (a merge with the private-key signer) */
+  session?: TxFlowProps['session'];
 }
 
 const REFRESH_MS = 15_000;
@@ -270,7 +272,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // a failed stray fetch is passed on as "unknown" (null): a record-path cancel then warns instead of silently abandoning strays
   const strayList = d?.straysError ? null : strays;
 
-  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next'> = {}) => {
+  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next' | 'session'> = {}) => {
     setPlanFail(null);
     setFailure(null);
     setFlow({ key: Date.now(), heading, steps, ...chain });
@@ -390,7 +392,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
       const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
       const plan = await planMergeFor(services, pubkey, mt, reserved);
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      setMergeAsk({ token: mt, ticker, plan, summary: mergeSummary(plan, ticker) });
+      setMergeAsk({ token: mt, ticker, plan, summary: mergeSummary(plan, ticker, mergeApprovedOnce(wallet.adapter, mt)) });
     });
 
   /** The confirmed merge: its transactions one after the other, each approved in the wallet; a later one is built at its turn. */
@@ -399,7 +401,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     if (!pubkey) return;
     // the card while it runs: the steps and one line, the whole summary was the confirmation's
     const run = mergeFlow(services, pubkey, ask.token, ask.plan, mergeRunLine(ask.plan));
-    startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next });
+    startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next, ...(run.session ? { session: run.session } : {}) });
   };
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);
@@ -629,6 +631,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           onDone={onFlowDone}
           onClose={() => setFlow(null)}
           {...(flow.next ? { next: flow.next } : {})}
+          {...(flow.session ? { session: flow.session } : {})}
         />
       ) : null}
 

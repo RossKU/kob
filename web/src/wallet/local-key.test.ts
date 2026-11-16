@@ -15,6 +15,8 @@ import { emptyIssueForm, planIssue } from '../kob/issue';
 import { formatKas } from '../kob/units';
 import { pubkeyOf } from '../testing/local-signer';
 import { signAndSubmitCreation } from './create';
+import { planMerge, type MergeToken } from '../kob/merge';
+import { MAKER as CHAIN_MAKER, TOKEN as CHAIN_TOKEN, goldenRequest as chainGoldenRequest, keyUtxo, tokenUtxo as chainTokenUtxo } from '../testing/chain-fixtures';
 
 const sdk = loadKaspaSdkNode();
 const NET = 'testnet-10';
@@ -294,5 +296,62 @@ describe('private-key adapter: the registry table (audit 2026-10-30 G7)', () => 
     host.registryTable = undefined;
     await createLocalKeyAdapter({ host: () => host, sdk }).signTx(buildSend(), {});
     expect('registry' in posted.find((m) => m.type === 'sign')!).toBe(false);
+  });
+});
+
+describe('private-key adapter: a one-approval merge session (signer/session.ts)', () => {
+  const KAS = 100_000_000n;
+  const STD: MergeToken = { covenantId: CHAIN_TOKEN.covenantId, program: CHAIN_TOKEN.program, templateHash: CHAIN_TOKEN.templateHash, extensionCommitment: CHAIN_TOKEN.ext, slots: { inputs: 3 } };
+  const merge = () => {
+    const set = Array.from({ length: 5 }, (_, i) => chainTokenUtxo(BigInt(i + 1) * KAS, CHAIN_MAKER.pk, 0x40 + i, 2n * KAS));
+    const plan = planMerge({ kob, maker: CHAIN_MAKER.pk, funding: [keyUtxo(CHAIN_MAKER.pk, 50n * KAS, 201)] }, STD, set);
+    expect(plan.ok).toBe(true);
+    return plan;
+  };
+  const hello = (host: SignerHost) => host.receive({ p: 'kob-signer/1', type: 'hello', caps: ['merge-session', 'something-new'] });
+
+  it('is offered only once the frame says it holds sessions; before that the run asks per transaction', async () => {
+    const { adapter, connect, host } = pair();
+    await connect(CHAIN_MAKER.sk);
+    await adapter.connect(NET);
+    expect(adapter.canOpenSession!()).toBe(false);
+    expect(await adapter.openSession!(merge().links.map((l) => l.built))).toBeNull();
+    hello(host);
+    expect(adapter.canOpenSession!()).toBe(true);
+  });
+
+  it('one approval in the frame, then the steps are signed without showing the frame; an off-plan step shows it at once', async () => {
+    let prompts = 0;
+    const { adapter, connect, host, log } = pair(() => (prompts++, 'approve'));
+    await connect(CHAIN_MAKER.sk);
+    await adapter.connect(NET);
+    hello(host);
+    const plan = merge();
+    const s = await adapter.openSession!(plan.links.map((l) => l.built));
+    expect(s).toMatchObject({ txs: plan.links.length, sid: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect(prompts).toBe(1);
+    const shown = log.filter((l) => l === 'request true').length;
+    const sigs = await adapter.signTx(plan.links[0]!.built, { session: s!.sid });
+    expect(sigs).toHaveLength(plan.links[0]!.built.sign.length);
+    expect(prompts).toBe(1);
+    expect(log.filter((l) => l === 'request true')).toHaveLength(shown);
+    // the same link again: not the next one of the plan, so the frame ends the session and asks
+    await adapter.signTx(plan.links[0]!.built, { session: s!.sid });
+    expect(prompts).toBe(2);
+    expect(log.filter((l) => l === 'request true')).toHaveLength(shown + 1);
+  });
+
+  it('a rejected plan ends the run (rejected); a plan the frame refuses is null, so the run asks per transaction', async () => {
+    const a = pair(() => 'reject');
+    await a.connect(CHAIN_MAKER.sk);
+    await a.adapter.connect(NET);
+    hello(a.host);
+    await expect(a.adapter.openSession!(merge().links.map((l) => l.built))).rejects.toMatchObject({ code: 'rejected' });
+    const b = pair();
+    await b.connect(CHAIN_MAKER.sk);
+    await b.adapter.connect(NET);
+    hello(b.host);
+    const notMerge = kob.build(chainGoldenRequest('cancel.ask', CHAIN_MAKER.pk));
+    expect(await b.adapter.openSession!([notMerge])).toBeNull();
   });
 });

@@ -74,6 +74,7 @@ export default {
   'ticket.switching': 'Switching to your node…',
   'ticket.merge.offer.one': 'Your {ticker} is split into many UTXOs: 1 merge transaction first, one wallet approval.',
   'ticket.merge.offer.other': 'Your {ticker} is split into many UTXOs: {count} merge transactions first, one wallet approval each.',
+  'ticket.merge.offer.once': 'Your {ticker} is split into many UTXOs: {count} merge transactions first, one approval in the private key signer.',
   'ticket.merge.actionHint': 'A sale takes at most {max} token UTXOs. The merges run first, each approved in your wallet; then the sale is planned again and you confirm it as usual.',
   'ticket.merge.action': 'Merge, then sell',
   'ticket.merge.heading': 'Merge {ticker} UTXOs before the sale',

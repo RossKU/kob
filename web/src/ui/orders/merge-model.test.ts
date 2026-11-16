@@ -7,7 +7,7 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeAllFrees, mergeFailure, mergeRunLine, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
+import { mergeAllFrees, mergeApprovedOnce, mergeSessionPlan, mergeFailure, mergeRunLine, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
 import { summarize } from '../../signer/summary';
 import { formatKas } from '../../kob/units';
 
@@ -108,6 +108,19 @@ describe('Merge all: the confirmation and the flow steps', () => {
     const some = mergeSummary({ ...plan(3), before: 120, merged: 101, after: 20 }, info.ticker);
     expect(some).toMatch(/^Merge the 101 smallest of 120 TST UTXOs into 1\. /);
     expect(some).toMatch(/ 20 more remain: Merge all again\.$/);
+  });
+
+  it('a run the private-key signer approves once says 1 approval; KRON and extension wallets keep one approval per transaction', () => {
+    const p = plan(30);
+    expect(mergeSummary(p, info.ticker, true)).toMatch(/^Merge 30 TST UTXOs into 1\. 15 transactions · 1 approval · about /);
+    const session = { canOpenSession: () => true };
+    expect(mergeApprovedOnce(session, { program: 'KCC20Ref' })).toBe(true);
+    expect(mergeApprovedOnce(session, { program: 'KronToken2433' })).toBe(false);
+    expect(mergeApprovedOnce({ canOpenSession: () => false }, { program: 'KCC20Ref' })).toBe(false);
+    // an extension wallet has no sessions at all
+    expect(mergeApprovedOnce({}, { program: 'KCC20Ref' })).toBe(false);
+    expect(mergeSessionPlan(p, { program: 'KCC20Ref' })).toHaveLength(15);
+    expect(mergeSessionPlan(p, { program: 'KronToken2433' })).toBeUndefined();
   });
 
   it('the sell ticket\'s merge says the sale comes after it, with its own confirmation', () => {

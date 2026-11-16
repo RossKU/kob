@@ -10,7 +10,8 @@ import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
 import type { KobWasm } from '../../kob/wasm';
 import { borrowKeyOf, extensionOfState, familyOfProgram } from '../../kob/token-state';
-import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
+import type { WalletAdapter } from '../../wallet/types';
+import type { BuiltTx, Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { countText } from './plural';
 import type { FlowStep } from './TxFlow';
 
@@ -127,19 +128,33 @@ export function mergeAllFrees(freeTokens: readonly TokenUtxo[], tokens: Readonly
   return out;
 }
 
-/** "3 transactions · 3 approvals": what a merge of `txs` transactions asks of the user. */
-const mergeRunText = (txs: number): string => t('orders.merge.run', { txs: countText('tx', txs), approvals: countText('approval', txs) });
+/**
+ * "3 transactions · 3 approvals": what a merge of `txs` transactions asks of the user; `once`: the wallet approves the whole run once (the
+ * private-key signer's session), "3 transactions · 1 approval".
+ */
+const mergeRunText = (txs: number, once = false): string => t('orders.merge.run', { txs: countText('tx', txs), approvals: countText('approval', once ? 1 : txs) });
+
+/**
+ * Whether this wallet approves a merge of `token` once for the whole run: the private-key signer once its frame offers sessions. A KRON
+ * token input carries no signature, so a KRON merge is approved once per transaction (founder 2026-11-14), as with every extension wallet.
+ */
+export const mergeApprovedOnce = (adapter: Pick<WalletAdapter, 'canOpenSession'> | null | undefined, token: Pick<MergeToken, 'program'>): boolean =>
+  adapter?.canOpenSession?.() === true && familyOfProgram(token.program) !== 'kron';
+
+/** The plan a wallet may approve once (TxFlow `session`): every link as planned; none for KRON (`mergeApprovedOnce`). */
+export const mergeSessionPlan = (plan: Pick<MergePlan, 'links'>, token: Pick<MergeToken, 'program'>): BuiltTx[] | undefined =>
+  familyOfProgram(token.program) === 'kron' ? undefined : plan.links.map((l) => l.built);
 
 /**
  * The merge in a few sentences (shown on its confirmation, and while it runs): what it merges, the transactions and the wallet approvals it
  * takes (one each, one after the other), the KAS it frees (the merged UTXOs' carriers, less the ones the outputs keep, less the fees: the
  * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and, when one run cannot take them all, how many remain. The
- * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation.
+ * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation. `once`: the wallet approves the run once (`mergeApprovedOnce`).
  */
-export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings'>>, ticker: string): string {
+export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings'>>, ticker: string, once = false): string {
   const n = plan.links.length;
   const settings = plan.settings ?? 1;
-  const counts = { ticker, run: mergeRunText(n), merged: plan.merged, before: plan.before, settings };
+  const counts = { ticker, run: mergeRunText(n, once), merged: plan.merged, before: plan.before, settings };
   // UTXOs with different borrow settings merge apart: one UTXO per setting
   const head =
     plan.target !== null

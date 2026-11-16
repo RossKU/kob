@@ -1,6 +1,10 @@
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
+import { useWallet } from '../../app/context';
 import { t } from '../../i18n';
+import type { BuiltTx } from '../../kob/types';
+import { formatKas } from '../../kob/units';
+import { WalletError } from '../../wallet/types';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
 import { Banner, Button, IssueLine, Spinner } from '../kit';
@@ -53,6 +57,11 @@ export interface TxFlowProps {
   next?(index: number, txids: readonly string[]): Promise<FlowStep>;
   /** the card was dismissed (its x once the flow is over, or by itself a moment after every step went through) */
   onClose?(): void;
+  /**
+   * The whole run as planned (a merge: every link), for a wallet that approves it once (the private-key signer: wallet/types.ts
+   * `openSession`). The wallet checks every step against it itself; a wallet without sessions asks once per step as before.
+   */
+  session?: BuiltTx[];
 }
 
 /** How long the card of a flow whose every step went through stays (its toast says the same and stays longer). */
@@ -76,6 +85,16 @@ export function TxFlow(props: TxFlowProps) {
   const [txids, setTxids] = useState<Record<number, string>>({});
   const done = useRef(false);
   const gone = useRef(false);
+  const wallet = useWallet();
+  // the wallet's one-approval session of this run (closed when the run ends or the card goes)
+  const live = useRef<{ sid: string; close(): void } | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [sessionLine, setSessionLine] = useState<string | null>(null);
+  const closeSession = () => {
+    const s = live.current;
+    live.current = null;
+    s?.close();
+  };
 
   const finish = (s: StepState[]) => {
     if (done.current) return;
@@ -88,11 +107,32 @@ export function TxFlow(props: TxFlowProps) {
     const st: StepState[] = list.map((_, i) => (i === 0 ? 'sending' : 'pending'));
     const show = () => setStates([...st]);
     const end = () => {
+      // the run is over: the wallet's session ends before anything that follows it (a sale) is asked for
+      closeSession();
       show();
       setIndex(list.length);
       finish(st);
     };
     const sent: string[] = [];
+    const adapter = wallet.adapter;
+    if (props.session?.length && adapter?.openSession && adapter.canOpenSession?.()) {
+      // one approval for the whole plan in the wallet; a wallet that will not hold a session for it asks per step
+      setAsking(true);
+      try {
+        const s = await adapter.openSession(props.session);
+        if (s) {
+          live.current = { sid: s.sid, close: () => adapter.closeSession?.(s.sid) };
+          setSessionLine(t('orders.flow.sessionOpen', { txs: s.txs, fee: formatKas(s.feeMax) }));
+        }
+      } catch (e) {
+        setAsking(false);
+        st[0] = e instanceof WalletError && e.code === 'rejected' ? 'cancelled' : 'failed';
+        if (st[0] === 'failed') setMessage(e instanceof Error ? e.message : String(e));
+        return end();
+      }
+      setAsking(false);
+      if (gone.current) return closeSession();
+    }
     for (let i = 0; i < list.length; i++) {
       if (gone.current) return;
       if (i > 0 && props.next) {
@@ -115,7 +155,8 @@ export function TxFlow(props: TxFlowProps) {
         st[i] = 'failed';
         return end();
       }
-      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}) });
+      const sid = live.current?.sid;
+      const out = await sender.send({ built: step.plan.built, expected: step.plan.expected, label: step.label, ...(step.preconfirmed ? { preconfirmed: true } : {}), ...(sid ? { session: sid } : {}) });
       if (out.status !== 'submitted') {
         st[i] = out.send.phase === 'rejected' ? 'cancelled' : 'failed';
         return end();
@@ -131,8 +172,11 @@ export function TxFlow(props: TxFlowProps) {
 
   useEffect(() => {
     void run();
-    // leaving the page mid-flow: no further step starts
-    return () => void (gone.current = true);
+    // leaving the page mid-flow: no further step starts, and the wallet's session ends
+    return () => {
+      gone.current = true;
+      closeSession();
+    };
   }, []);
   // while the card is on screen no new toast shows (founder 2026-11-14): notifications go to the bell only, an error colours it
   useEffect(() => toasts.hold(), []);
@@ -179,6 +223,8 @@ export function TxFlow(props: TxFlowProps) {
         </ol>
       ) : null}
       {running && step?.shownAs ? <p class="small" data-testid="flow-shown-as">{step.shownAs}</p> : null}
+      {asking ? <p class="small" data-testid="flow-session-ask"><Spinner /> {t('orders.flow.sessionAsk')}</p> : null}
+      {sessionLine ? <p class="small muted" data-testid="flow-session">{sessionLine}</p> : null}
       {preparing ? (
         <p class="small muted" data-testid="flow-preparing">
           <Spinner /> {t('orders.flow.preparing')}

@@ -90,6 +90,8 @@ export interface SignAndSubmitArgs {
   clockDaa?: bigint;
   /** the app's hints for the private-key signer's confirmation (`SignOptions.signerNotes`) */
   signerNotes?: SignerNote[];
+  /** a step of the wallet's one-approval session (`SignOptions.session`): every check here still runs */
+  session?: string;
   /**
    * the transaction may be replaced while the user reads it (`SignOptions.live`): `submitByOf` gives the `submitByDaa` of a replacement the
    * wallet signed, which is then the one finalized, checked and sent
@@ -241,7 +243,7 @@ export async function signAndSubmit(a: SignAndSubmitArgs): Promise<SignAndSubmit
   const sleep = a.visibility?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   for (let n = 1; ; n++) {
     try {
-      sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}) });
+      sigs = await adapter.signTx(built, { network, timeoutMs: a.timeoutMs, ...(a.retime ? { retime: true } : {}), ...(a.clockDaa !== undefined ? { clockDaa: a.clockDaa } : {}), ...(a.signerNotes?.length ? { signerNotes: a.signerNotes } : {}), ...(a.live ? { live: a.live.signing } : {}), ...(a.session ? { session: a.session } : {}) });
       break;
     } catch (e) {
       // the wallet's own node has not seen a coin of it yet after all (a slow relay): asked again a moment later, at most UNKNOWN_ATTEMPTS times

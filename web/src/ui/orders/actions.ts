@@ -12,14 +12,14 @@ import { resolveRecord, retiredOf, type RecordKind, type RecordStore } from '../
 import { familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
-import type { Family, Hex, TokenUtxo } from '../../kob/types';
+import type { BuiltTx, Family, Hex, TokenUtxo } from '../../kob/types';
 import { t, tIssue } from '../../i18n';
 import { buildErrorText } from '../../i18n/build-error';
 import { buildMergeLink, mergeCarry, mergeLeaves, planMerge, type MergeLink, type MergeOptions, type MergePlan, type MergeToken } from '../../kob/merge';
 import type { TokenInfo } from '../../kob/registry';
 import { waitForAcceptance } from '../../wallet/sign';
 import { buildReplacement, type AmendInput, type AmendKind, type AmendResult } from './amend';
-import { mergeStep } from './merge-model';
+import { mergeSessionPlan, mergeStep } from './merge-model';
 import { spkToAddressFor } from './orders-data';
 import type { OrderEntry } from './orders-model';
 import type { FlowStep } from './TxFlow';
@@ -351,6 +351,8 @@ export interface MergeFlow {
   next(index: number, txids: readonly string[]): Promise<FlowStep>;
   /** The links as built for the send so far, by step. */
   sent: MergeLink[];
+  /** the plan a wallet may approve once (merge-model.ts `mergeSessionPlan`; none for KRON) */
+  session?: BuiltTx[];
 }
 
 /** Runs `plan` (planned by `planMergeFor`) as a flow whose every step shows `summary` (one line, merge-model.ts `mergeRunLine`). */
@@ -360,6 +362,7 @@ export function mergeFlow(s: Services, pubkey: Hex, token: MergeToken, plan: Mer
   return {
     steps: plan.links.map((l, i) => mergeStep(l, i, total, summary)),
     sent,
+    ...(mergeSessionPlan(plan, token) ? { session: mergeSessionPlan(plan, token)! } : {}),
     next: async (k, txids) => {
       const link = await nextMergeLink(s, pubkey, token, plan, k, sent, txids);
       sent[k] = link;
