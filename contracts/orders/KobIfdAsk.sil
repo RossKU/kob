@@ -29,8 +29,10 @@ pragma silverscript ^0.1.0;
 //
 // Only armed, amountLeft and rptAmount are mutable. exitState is the state
 // of every exit up to its repeat fields, and a fill writes n into its
-// amountLeft. The exit and evidence templates, KobCondBid and KobAsk of this
-// family, are build constants.
+// amountLeft. exitMode, exitRecvThreshold and exitTopupTip are the exits'
+// delivery fields, written after their repeat fields with bought = 0. The
+// exit and evidence templates, KobCondBid and KobAsk of this family, are
+// build constants.
 contract KobIfdAsk(
     byte[32] COND_BID_TPL,
     int COND_BID_PRE,
@@ -60,7 +62,10 @@ contract KobIfdAsk(
     int init_armed,
     int init_amountLeft,
     int init_rptAmount,
-    byte[321] init_exitState
+    byte[321] init_exitState,
+    int init_exitMode,
+    int init_exitRecvThreshold,
+    int init_exitTopupTip
 ) {
     pubkey maker = init_maker;
     byte[32] tokenCovId = init_tokenCovId;
@@ -85,6 +90,9 @@ contract KobIfdAsk(
     int amountLeft = init_amountLeft;      // custody holds exactly this many base units (mutable)
     int rptAmount = init_rptAmount;        // repeat: 0 = off, else 1 + base units of re-arms left (mutable)
     byte[321] exitState = init_exitState;  // KobCondBid state of every exit up to its repeat fields
+    int exitMode = init_exitMode;          // the exits' delivery mode (0 for a repeating entry)
+    int exitRecvThreshold = init_exitRecvThreshold; // the exits' recvThreshold
+    int exitTopupTip = init_exitTopupTip;  // the exits' topupTip
 
     // KCC-20 token state, 112 B on the wire:
     //   0x08 amount[8] | 0x20 owner[32] | 0x01 owner_scheme
@@ -106,10 +114,11 @@ contract KobIfdAsk(
     byte constant SCHEME_COVID = 0x04;
     byte constant SIGHASH_ALL = 0x01;
     // MAX_IDLE is 90 days of DAA, at 10 DAA/s. ASK_STATE_LEN is the KobAsk
-    // state. EXIT_STATE_LEN is the KobCondBid state with its repeat fields.
+    // state. EXIT_STATE_LEN is the KobCondBid state with its repeat fields
+    // and its delivery block.
     int constant MAX_IDLE = 77760000;
     int constant ASK_STATE_LEN = 276;
-    int constant EXIT_STATE_LEN = 381;
+    int constant EXIT_STATE_LEN = 417;
     // The most token inputs a transaction may carry, 8 for the 8/8 prototype.
     // More are refused. The scan is unrolled by hand, one line per slot, so
     // raising the cap needs as many lines.
@@ -142,6 +151,15 @@ contract KobIfdAsk(
         require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
         require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
         return rs;
+    }
+
+    // The delivery block of every exit, its state [381..417): the pushes
+    // (0x08 + 8 B each) of mode, recvThreshold and topupTip, which are this
+    // entry's exit fields, and of bought = 0. docs/design/bid-delivery-spec.md
+    // section 2.
+    function exitTail() : byte[] {
+        return byte[](0x08) + byte[](exitMode as byte[8]) + byte[](0x08) + byte[](exitRecvThreshold as byte[8])
+            + byte[](0x08) + byte[](exitTopupTip as byte[8]) + byte[](0x08) + byte[](0 as byte[8]);
     }
 
     // As tplRs, but return only the state span.
@@ -329,6 +347,8 @@ contract KobIfdAsk(
                 // (0x20 + 32 B), which is this entry, the rptPrice and rptPre
                 // pushes (0x08 + 8 B each), which are this entry's, and the
                 // push opcode of rptUntil. rptUntil [373..381) is not compared.
+                // [381..417) is the delivery block as settle books it, see
+                // exitTail.
                 // A look-alike exit that someone else funds pays this maker on
                 // this maker's terms, and returns at least the prefund of the
                 // amount it re-arms. See docs/spec/order-types.md, "Repeat IFD
@@ -345,6 +365,7 @@ contract KobIfdAsk(
                 int rate = price - tip;
                 require(x.slice(321, 373) == byte[](0x20) + byte[](selfId) + byte[](0x08) + byte[](rate as byte[8]) + byte[](0x08)
                     + byte[](prefund as byte[8]) + byte[](0x08));
+                require(x.slice(381, 417) == exitTail());
                 // m is this exit's n. The exit's sigscript starts with the
                 // 8-byte push of the n of its settle. Its other entries cannot
                 // pass for it. Cancel starts with this maker's own 65-byte
@@ -451,6 +472,11 @@ contract KobIfdAsk(
                 int xPrice = 0;
                 int xPre = 0;
                 int xUntil = 0;
+                // The exits of a repeating entry merge back into it, so they
+                // deliver nothing themselves and keep no bought-custody: mode 0.
+                if (rptAmount != 0) {
+                    require(exitMode == 0);
+                }
                 if (rptAmount > n) {
                     // A booked exit's amount fits the merge argument.
                     require(n < MERGE_K);
@@ -472,16 +498,17 @@ contract KobIfdAsk(
 
                 // The exit. Its script is exactly the P2SH of the KobCondBid
                 // prefix, the committed state with amountLeft (state
-                // [286..294)) set to n, the repeat fields and the suffix. The
-                // repeat fields are parent (0x20 + 32 B), then rptPrice, rptPre
-                // and rptUntil (0x08 + 8 B each). The filler supplies the
-                // template bytes, which are checked against COND_BID_TPL.
+                // [286..294)) set to n, the repeat fields, the delivery block
+                // and the suffix. The repeat fields are parent (0x20 + 32 B),
+                // then rptPrice, rptPre and rptUntil (0x08 + 8 B each). The
+                // delivery block is exitTail. The filler supplies the template
+                // bytes, which are checked against COND_BID_TPL.
                 require(blake3(byte[](cPre.length as byte[8]) + cPre + byte[](cSuf.length as byte[8]) + cSuf) == COND_BID_TPL);
                 byte[] st = byte[](exitState);
                 byte[] exitSpk = byte[](new ScriptPubKeyP2SHFromRedeemScript(
                     cPre + st.slice(0, 286) + byte[](nb) + st.slice(294, 321) + byte[](0x20) + byte[](xParent)
                         + byte[](0x08) + byte[](xPrice as byte[8]) + byte[](0x08) + byte[](xPre as byte[8]) + byte[](0x08)
-                        + byte[](xUntil as byte[8]) + cSuf
+                        + byte[](xUntil as byte[8]) + exitTail() + cSuf
                 ));
                 require(tx.outputs[exitOut].scriptPubKey == exitSpk);
                 // The exit is a fresh covenant. Genesis outputs are invisible
