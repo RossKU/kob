@@ -10,6 +10,7 @@ import { expect, test } from '../fixtures';
 import { listExkcc } from '../helpers/env';
 import { horizontalOverflow } from '../helpers/i18n';
 import { mockExplorer, mockKascov, programHash } from '../helpers/kascov';
+import { kozmicRecording } from '../../src/testing/kozmic-chain';
 import { kusdtRecording } from '../../src/testing/kusdt-chain';
 
 test.use({ autoOpen: false });
@@ -143,7 +144,7 @@ for (const vp of VIEWPORTS) {
       // the issuance, from the genesis check (the pinned BridgeMint), with where its description comes from
       const issuance = page.getByTestId('token-issuance');
       await expect(issuance).toContainText('Federated bridge (BridgeMint)');
-      await expect(page.getByTestId('token-issuance-source')).toHaveText('per issuer docs');
+      await expect(page.getByTestId('token-issuance-source')).toHaveText('per issuer docs; signers not verified by KOB');
       // the custody note: folded until tapped
       const note = page.getByTestId('token-bridge-note');
       await expect(note).toBeVisible();
@@ -151,7 +152,32 @@ for (const vp of VIEWPORTS) {
       await note.getByRole('button', { name: 'Bridge custody' }).click();
       await expect(note.getByTestId('token-bridge-note-text')).toContainText("held by the bridge's signers");
       await expect(note.getByTestId('token-bridge-note-text')).toContainText('can be lost');
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('does not verify its signer set');
+      // what the minter's state names, unchecked, for a holder to compare with the issuer's values
+      await expect(note.getByTestId('token-bridge-signer-set')).toHaveAttribute('data-value', 'b563c26ffc9f94f977e9d580f02a0b8501c023a8455f2f35b74e79f8df3c0301');
+      await expect(note.getByTestId('token-bridge-guardian')).toHaveAttribute('data-value', '3c4c0ef3d985fb93ebdb30c5dd8ff8d6ffffa1e411565a21cc33aa2365a89566');
+      await expect(note.getByTestId('token-bridge-covenant')).toHaveCount(0);
       // a bridge's minter is no public mint: no allowance line, no High risk
+      await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
+      await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
+      expect(await horizontalOverflow(page)).toBe(0);
+    });
+
+    test('a ZK-bridge token (kzUSDC, mainnet bytes): the Issuance row names the ZK bridge and says KOB does not verify it, the note names the bridge covenant', async ({ appPage: page }) => {
+      const k = kozmicRecording('kzusdc');
+      const entry = { covenant_id: k.covenantId, claimed_ticker: k.ticker, claimed_name: k.ticker, program: PM, status: 'unvalidated' };
+      await open(page, `/market/${k.covenantId}`, { tokens: [entry], files: { [k.covenantId]: k.kascov } });
+      const header = page.getByTestId('token-header');
+      await expect(await status(page, 'genesis_verified')).toContainText('Genesis verified');
+      await expect(header.getByTestId('genesis-failed-warning')).toHaveCount(0);
+      await expect(page.getByTestId('token-issuance')).toContainText('ZK bridge (Kozmic BridgeMint)');
+      await expect(page.getByTestId('token-issuance-source')).toHaveText('per issuer docs; bridge not verified by KOB');
+      const note = page.getByTestId('token-bridge-note');
+      await note.getByRole('button', { name: 'Bridge custody' }).click();
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('Minted by Kozmic BridgeMint (ZK bridge)');
+      await expect(note.getByTestId('token-bridge-note-text')).toContainText('not verified by KOB');
+      await expect(note.getByTestId('token-bridge-covenant')).toHaveAttribute('data-value', k.bridgeCovenantId);
+      await expect(note.getByTestId('token-bridge-signer-set')).toHaveCount(0);
       await expect(page.getByTestId('status-fact-mint_allowance')).toHaveCount(0);
       await expect(header.getByTestId('badge-high-risk')).toHaveCount(0);
       expect(await horizontalOverflow(page)).toBe(0);

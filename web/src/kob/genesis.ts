@@ -58,10 +58,11 @@ export interface GenesisVerified {
   seedOutputs: number[];
   /**
    * Genesis outputs that are companions the program's profile pins by template hash, with their
-   * role. `bridge-minter` is a federated bridge's minter, such as kUSDT's BridgeMint. It mints
-   * against deposits on another chain and is also among `minterOutputs`.
+   * role. `bridge-minter` is a federated bridge's minter (kUSDT's BridgeMint) and `zk-bridge-minter`
+   * a ZK bridge's (Kozmic's BridgeMint). Both mint against deposits on another chain and are also
+   * among `minterOutputs`; `bridge` is what such a minter names in its state, which KOB does not check.
    */
-  companionOutputs: { index: number; role: string }[];
+  companionOutputs: GenesisCompanion[];
   /** The build of the public-mint app whose actors the genesis holds. */
   issuer: string | null;
   /** Outputs whose redeem script was rebuilt (an unspent TokenSeed). */
@@ -85,6 +86,21 @@ export interface GenesisUnavailable {
   code: 'unrevealed' | 'unsupported_program' | 'malformed';
   message: string;
 }
+/** What a bridge's minter names in its state (lowercase hex), unchecked: anyone can deploy the same minter with values of their own. */
+export interface BridgeFacts {
+  /** the bridge covenant whose input every mint needs (`zk-bridge-minter`) */
+  bridgeCovenantId?: string;
+  /** the hash of the signer keys (`bridge-minter`) */
+  signerSet?: string;
+  /** the guardian's key (`bridge-minter`) */
+  guardian?: string;
+}
+/** A companion output of a genesis group. */
+export interface GenesisCompanion {
+  index: number;
+  role: string;
+  bridge?: BridgeFacts;
+}
 /** The answer of the genesis check. */
 export type GenesisVerdict = GenesisVerified | GenesisFailed | GenesisUnavailable;
 
@@ -93,11 +109,24 @@ interface RawGenesis {
 }
 
 const ints = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []);
-const companions = (v: unknown): { index: number; role: string }[] =>
+const HEX32 = /^[0-9a-f]{64}$/;
+const bridgeFacts = (v: unknown): BridgeFacts | null => {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const f: BridgeFacts = {};
+  for (const k of ['bridgeCovenantId', 'signerSet', 'guardian'] as const) {
+    const x = o[k];
+    if (typeof x === 'string' && HEX32.test(x)) f[k] = x;
+  }
+  return f;
+};
+const companions = (v: unknown): GenesisCompanion[] =>
   Array.isArray(v)
     ? v.flatMap((c: unknown) => {
         const o = c && typeof c === 'object' ? (c as Record<string, unknown>) : {};
-        return Number.isInteger(o.index) && typeof o.role === 'string' ? [{ index: o.index as number, role: o.role }] : [];
+        if (!Number.isInteger(o.index) || typeof o.role !== 'string') return [];
+        const bridge = bridgeFacts(o.bridge);
+        return [{ index: o.index as number, role: o.role, ...(bridge ? { bridge } : {}) }];
       })
     : [];
 const big = (v: unknown): bigint => {
