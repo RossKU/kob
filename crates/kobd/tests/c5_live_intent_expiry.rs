@@ -167,7 +167,7 @@ fn world(max_attempts: usize) -> World {
     {
         let b = bid_a(20, common::MAKER_B, P250, 10);
         put(&chain, &b.utxo, b.state.spk());
-        book.bids.push(b);
+        book.bids.push((b, None));
     }
     {
         let a = ask_b(10, common::MAKER_A, 10);
@@ -255,7 +255,7 @@ impl World {
     }
     /// A rival takes the only bid when the keeper's first execution names it: the intent cannot be executed.
     fn arm_rival(&self) {
-        let o = self.book.lock().unwrap().bids[0].utxo.clone();
+        let o = self.book.lock().unwrap().bids[0].0.utxo.clone();
         *self.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
     fn intent_is_spent(&self, p: &IntentPayment) -> bool {
