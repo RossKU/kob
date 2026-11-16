@@ -28,7 +28,8 @@
 //    amount would only shrink the maker's receive UTXO before the gain; the token program keeps amounts non-negative);
 //    isCustody's P2SH line (a planted non-P2SH look-alike custody, which consensus cannot produce, could only add tokens to
 //    the order: the real custody is then a stray and every other UTXO of the id is refused); `require(rem + onDelivery >=
-//    0)` (rem >= -released always, and with onDelivery 0 the token program keeps the continued UTXO's KAS); in the top-up
+//    0)` (given reserve >= 0, rem >= -released, and with onDelivery 0 the token program keeps the continued UTXO's KAS;
+//    with a negative reserve it is the second check of AU-B-7 / AU-B-7x); in the top-up
 //    branch `total = have + n`, `haveKas = ...`, `onDelivery = 0` and `mid = rst.slice(42, 79)` (the token program's borrow
 //    path pins the successor's state, gain and KAS; removing them only makes honest top-ups fail); `onDelivery = 0` of the
 //    custody branch and the noStrays exclusion `x_k != custody` (removing them only refuses honest fills); BOUGHT_AT (a
@@ -777,7 +778,8 @@ export const mutations = withPublicMint([
   { id: "AU-B-4", file: "KobBid", run: { [T_AU_B]: ["NAU-B03"] }, note: "fill n > 0 (a zero fill would close an exhausted bid before its expiry)", edits: [del("        require(n > 0);\n")] },
   { id: "AU-B-5", file: "KobBid", run: { [T_AU_B]: ["NAU-B04"] }, note: "scale > 0 (hostile field: a negative scale turns the quote negative)", edits: [del("        require(scale > 0);\n")] },
   { id: "AU-B-6", file: "KobBid", run: { [T_AU_B]: ["NAU-B05"] }, note: "tip >= 0 (hostile field: the bid would pay below its quoted price)", edits: [del("        require(tip >= 0);\n")] },
-  { id: "AU-B-7", file: "KobBid", run: { [T_AU_B]: ["NAU-B06"] }, note: "reserve >= 0 (hostile field: a negative reserve lets an underfunded bid fill)", edits: [del("        require(reserve >= 0);\n")] },
+  { id: "AU-B-7", file: "KobBid", hold: { [T_AU_B]: ["NAU-B06"] }, note: "reserve >= 0 (hostile field; defence in depth since the delivery modes: the terminal fill's rem + onDelivery >= 0 also refuses the underfunded IOC fill of NAU-B06; AU-B-7x removes both)", edits: [del("        require(reserve >= 0);\n")] },
+  { id: "AU-B-7x", file: "KobBid", run: { [T_AU_B]: ["NAU-B06"] }, note: "reserve >= 0 and rem + onDelivery >= 0 removed together: a negative reserve lets an IOC bid funded short of the fill's budget fill", edits: [del("        require(reserve >= 0);\n"), del("                require(rem + onDelivery >= 0);\n")] },
   { id: "AU-B-8", file: "KobBid", run: { [T_AU_B]: ["NAU-B07"] }, note: "deliveryCarrier >= 0 (hostile field)", edits: [del("        require(deliveryCarrier >= 0);\n")] },
   { id: "AU-B-9", file: "KobBid", run: { [T_TV]: ["NV3"] }, note: "DCA: the UTXO is >= interval DAA old (CSV)", edits: [del("            require(this.ageDaa >= interval);\n")] },
   { id: "AU-B-10", file: "KobBid", run: { [T_TV]: ["NV4"] }, note: "DCA: n <= maxFill", edits: [del("        require(maxFill == 0 || n <= maxFill);\n")] },
