@@ -6,16 +6,20 @@
 //! another state than the output, terms that would move the custody (scale, quantity, token, maker), a second output
 //! carrying the id, a record next to a fill instead of the maker's cancel, a kind that is not a plain ask or bid.
 //! A plain bid (no custody: its quantity is its escrow) is amended the same way, keeping its token and scale.
+//! A mode-1 order's claim (bid-delivery-spec §7) is the same cancel continuing the order with bought = 0: CL1 to CL3.
 
 mod common;
 
+use common::pair::{cond_pair_ask, pair, pv, tutxo, RATE};
 use common::*;
 use kob_protocol::artifacts::TemplateId;
-use kob_protocol::build::{build, Action, AmendOrder, Leg};
+use kob_protocol::build::{build, build_claim_order, Action, AmendOrder, ClaimOrder, Leg, Replacement};
 use kob_protocol::payload::{self, decode, encode, recover_amends, recover_amends_planned, recover_orders, verify_amend, Record};
-use kob_protocol::state::{AnyState, AskState, BidState};
+use kob_protocol::state::{
+    AnyState, AskState, BidState, CondBidState, CondPairState, IfdAskState, PairState, TokenState, MODE_ACCUMULATE, SCHEME_P2PK,
+};
 use kob_protocol::tx::{
-    finalize, sign_locally, spk_to_string, BuiltTx, CovenantJson, FinalizeOptions, OrderUtxo, SignedTx, TxOutputJson, Utxo,
+    finalize, sign_locally, spk_to_string, BuiltTx, CovenantJson, FinalizeOptions, OrderUtxo, SignedTx, TokenUtxo, TxOutputJson, Utxo,
 };
 use kob_protocol::verify::validate_signed;
 use kob_protocol::Error;
@@ -443,4 +447,281 @@ fn an_ask_amend_keeps_its_extension_commitment() {
     assert!(e.to_string().contains("extensionCommitment"), "{e}");
     // the amend that keeps it is accepted
     payload::check_amend_terms(&r.order.state, &r.amended).unwrap();
+}
+
+// ---------------------------------------------------------------- claims (bid-delivery-spec §7, CL1 to CL3)
+
+/// The KCC-20 programs (modes 1 and 2 exist for KCC-20 only), from the 3 / 3 reference to the largest.
+fn kcc20() -> Vec<TemplateId> {
+    common::PROGRAMS.into_iter().filter(|p| p.family() == kob_protocol::Family::Kcc20).collect()
+}
+
+fn engine(name: &str, built: &BuiltTx) -> SignedTx {
+    let sigs = sign_locally(built, &keys()).unwrap();
+    let s = finalize(built, &sigs, FinalizeOptions { tighten_budgets: true }).unwrap_or_else(|e| panic!("{name}: finalize: {e}"));
+    let v = validate_signed(&s).unwrap_or_else(|e| panic!("{name}: engine rejected: {e}\nroles {:?}", built.roles));
+    assert!(v.mass.within_block_limits(), "{name}: {:?}", v.mass);
+    s
+}
+
+/// A mode-1 bid (covenant B_ID) holding 4 whole tokens in its bought-custody, and that custody.
+fn held_bid(p: TemplateId) -> (OrderUtxo<AnyState>, TokenUtxo) {
+    let a4 = mode_bid(bid(MAKER_B, P245, p), MODE_ACCUMULATE, 4 * WHOLE);
+    let v = a4.escrow(10 * WHOLE, 1).unwrap() as u64;
+    (order(20, v, B_ID, 1_000, AnyState::KobBid(a4)), bought_custody(23, 4 * WHOLE, B_ID, 1_500))
+}
+
+fn wallet(tag: u8, n: i64, maker: u8) -> TokenUtxo {
+    tok(tag, n * WHOLE, pk(maker), SCHEME_P2PK, 1_000)
+}
+
+fn claim(order: OrderUtxo<AnyState>, custody: TokenUtxo, tokens: Vec<TokenUtxo>, place: Option<AnyState>, end: bool) -> ClaimOrder {
+    let maker = order.state.maker();
+    let key = (1..=40u8).find(|k| pk(*k) == maker).unwrap();
+    ClaimOrder {
+        order,
+        bought_custody: custody,
+        tokens,
+        place: place.map(|o| Replacement { order: o, value: CARRIER, token_carrier: None, deadline: None }),
+        end,
+        value: None,
+        token_carrier: None,
+        funding: vec![key_utxo(30, key, 100 * KAS)],
+        change: None,
+        lock_time: 0,
+        records: vec![],
+        fee: fee(),
+    }
+}
+
+fn try_claim(r: &ClaimOrder) -> Result<BuiltTx, Error> {
+    build_claim_order(r, &kob_protocol::budget::lookup)
+}
+
+/// The outputs bound to covenant `c`.
+fn bound(s: &SignedTx, c: [u8; 32]) -> Vec<usize> {
+    s.tx.outputs.iter().enumerate().filter(|(_, o)| o.covenant.as_ref().is_some_and(|x| x.covenant_id == c)).map(|(j, _)| j).collect()
+}
+
+/// Whether an output holds token state `st` of program `p` with `value` sompi (any value when `None`).
+fn holds(s: &SignedTx, p: TemplateId, st: &TokenState, value: Option<u64>) -> bool {
+    let spk = spk_to_string(&st.spk_with(kob_protocol::artifacts::token_template(p)));
+    s.tx.outputs.iter().any(|o| o.script_public_key == spk && value.is_none_or(|v| o.value == v))
+}
+
+/// `n` base units of program `p` as a plain UTXO of `maker`.
+fn plain(p: TemplateId, n: i64, maker: u8) -> TokenState {
+    TokenState::user(p, n, pk(maker), EXT)
+}
+
+/// CL1 claim, CL2 claim and merge (up to the program's token inputs), CL3 claim and place (the order continues or ends) of a
+/// `KobBid` on every KCC-20 program, in the engine; the claimed order then fills as a fresh mode-1 order.
+#[test]
+fn claim_shapes_of_a_bid_run_in_the_engine_on_every_kcc20_program() {
+    for p in kcc20() {
+        let max_in = p.token_slots().unwrap().0.min(kob_protocol::Family::Kcc20.max_tok_in());
+        let (o, c) = held_bid(p);
+        let b = bid_of(&o.state).clone();
+        let after = AnyState::KobBid(BidState { bought: 0, ..b.clone() });
+        let floor = o.utxo.amount + b.delivery_carrier as u64;
+        let label = |what: &str| format!("{what}@{}", p.name());
+
+        // CL1: the continuation at output 0 (bought = 0, one more carrier), the custody to the maker with its KAS
+        let s = engine(&label("CL1"), &try_claim(&claim(o.clone(), c.clone(), vec![], None, false)).unwrap());
+        println!("{}: {} B, fee {} sompi", label("CL1"), s.fee.mass.size, s.fee.fee);
+        assert_eq!(bound(&s, B_ID), vec![0], "{}", p.name());
+        assert_eq!(s.tx.outputs[0].covenant, Some(CovenantJson { authorizing_input: 0, covenant_id: B_ID }));
+        assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&after.spk()));
+        assert!(s.tx.outputs[0].value >= floor, "{}", p.name());
+        assert!(holds(&s, p, &plain(p, 4 * WHOLE, MAKER_B), Some(c.utxo.amount)), "{}", p.name());
+        assert_eq!(s.tx.inputs[1].transaction_id, c.utxo.transaction_id, "the custody leads its token");
+        assert!(recover_orders(&s.tx).unwrap().is_empty() && s.tx.payload.is_empty(), "a claim needs no record");
+        // the claimed order fills as a fresh mode-1 order: its first fill pays a new custody's carrier
+        let next = s.tx.outputs[0].value;
+        let mut fill = take_bid_valued(BidState { bought: 0, ..b.clone() }, 3, next, None);
+        let Leg::Bid { order: fo, .. } = &mut fill.legs[0] else { panic!() };
+        fo.utxo = Utxo { transaction_id: s.tx.id, index: 0, amount: next, block_daa_score: 2_000, covenant_id: Some(B_ID) };
+        let f = engine(&label("fill after CL1"), &build(&Action::Batch(fill)).unwrap());
+        assert!(holds(&f, p, &TokenState::custody(p.family(), 3 * WHOLE, B_ID, EXT), None), "{}: a new custody", p.name());
+
+        // CL2: the custody and max_in - 1 wallet UTXOs into one plain UTXO with all their KAS
+        let w: Vec<TokenUtxo> = (0..max_in - 1).map(|k| wallet(40 + k as u8, 1, MAKER_B)).collect();
+        let s = engine(&label("CL2"), &try_claim(&claim(o.clone(), c.clone(), w.clone(), None, false)).unwrap());
+        println!(
+            "{} ({} wallet UTXOs): {} B, compute {}, fee {} sompi",
+            label("CL2"),
+            w.len(),
+            s.fee.mass.size,
+            s.fee.mass.compute,
+            s.fee.fee
+        );
+        let kas = c.utxo.amount + w.iter().map(|t| t.utxo.amount).sum::<u64>();
+        assert!(holds(&s, p, &plain(p, (4 + w.len() as i64) * WHOLE, MAKER_B), Some(kas)), "{}", p.name());
+        assert_eq!(bound(&s, B_ID), vec![0]);
+        assert_eq!(s.tx.inputs.len(), 1 + max_in + 1, "{}: order, custody, wallet UTXOs, funding", p.name());
+        // slot refusal: one wallet UTXO more is a token input the program does not take
+        let mut more = w.clone();
+        more.push(wallet(60, 1, MAKER_B));
+        let e = try_claim(&claim(o.clone(), c.clone(), more, None, false)).unwrap_err().to_string();
+        assert!(e.contains("wallet UTXOs"), "{}: {e}", p.name());
+
+        // CL3: custody + 1 wallet whole: a 3-whole ask of the maker, 2 whole back, the order continuing or ending
+        for end in [false, true] {
+            let ask3 = AnyState::KobAsk(ask_n(MAKER_B, P250, p, 3));
+            let r = claim(o.clone(), c.clone(), vec![wallet(41, 1, MAKER_B)], Some(ask3.clone()), end);
+            let s = engine(&label(if end { "CL3 end" } else { "CL3" }), &try_claim(&r).unwrap());
+            println!("{}: {} B, fee {} sompi", label(if end { "CL3 end" } else { "CL3" }), s.fee.mass.size, s.fee.fee);
+            let got = recover_orders(&s.tx).unwrap();
+            assert_eq!(got.len(), 1, "{}", p.name());
+            assert_eq!(got[0].order, ask3);
+            let cu = got[0].custody.as_ref().expect("the placed custody");
+            assert_eq!(cu.state, TokenState::custody(p.family(), 3 * WHOLE, got[0].covenant_id, EXT));
+            assert!(holds(&s, p, &plain(p, 2 * WHOLE, MAKER_B), None), "{}: the rest to the maker", p.name());
+            if end {
+                assert!(bound(&s, B_ID).is_empty(), "{}: the order ends", p.name());
+                let change = s.tx.outputs[s.fee.change_output.unwrap() as usize].value;
+                assert!(change > o.utxo.amount, "{}: the escrow goes back with the change", p.name());
+            } else {
+                assert_eq!(bound(&s, B_ID), vec![0]);
+                assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&after.spk()));
+                assert_eq!(got[0].output, 1);
+            }
+        }
+    }
+}
+
+/// CL1 and CL3 of a `KobCondBid` on every KCC-20 program.
+#[test]
+fn claim_shapes_of_a_cond_bid_run_in_the_engine() {
+    const E_ID: [u8; 32] = [0xe1; 32];
+    for p in kcc20() {
+        let c4 = CondBidState { amount_left: 6 * WHOLE, ..mode_cond_bid(cond_bid(MAKER_B, p), MODE_ACCUMULATE, 4 * WHOLE) };
+        let o = order(40, c4.escrow(1).unwrap() as u64, E_ID, 2_000, AnyState::KobCondBid(c4.clone()));
+        let c = bought_custody(43, 4 * WHOLE, E_ID, 2_500);
+        let after = AnyState::KobCondBid(CondBidState { bought: 0, ..c4.clone() });
+        let s = engine(&format!("cond CL1@{}", p.name()), &try_claim(&claim(o.clone(), c.clone(), vec![], None, false)).unwrap());
+        assert_eq!(bound(&s, E_ID), vec![0]);
+        assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&after.spk()));
+        assert!(s.tx.outputs[0].value >= o.utxo.amount + c4.delivery_carrier as u64);
+        assert!(holds(&s, p, &plain(p, 4 * WHOLE, MAKER_B), Some(c.utxo.amount)));
+        let place = Some(AnyState::KobAsk(ask_n(MAKER_B, P250, p, 4)));
+        let s = engine(&format!("cond CL3 end@{}", p.name()), &try_claim(&claim(o, c, vec![], place, true)).unwrap());
+        assert!(bound(&s, E_ID).is_empty());
+        assert_eq!(recover_orders(&s.tx).unwrap()[0].custody.as_ref().unwrap().state.amount(), 4 * WHOLE);
+    }
+}
+
+/// CL1 and CL2 of `KobPair` and `KobCondPair` (an ask: sells A, buys B into its bought-custody): the sell custody of A is not
+/// an input, and the order continues with bought = 0.
+#[test]
+fn claim_shapes_of_a_pair_order_keep_its_sell_custody() {
+    const X: [u8; 32] = [0x83; 32];
+    for p in [TemplateId::Kcc20Ref, TemplateId::Kcc20Ref8x8] {
+        let kp = PairState { mode: MODE_ACCUMULATE, bought: 3 * WHOLE, ..pair(MAKER_A, true, p, p, RATE) };
+        let kc = CondPairState { mode: MODE_ACCUMULATE, bought: 3 * WHOLE, ..cond_pair_ask(MAKER_A, p, p) };
+        let cases = [
+            ("pair", AnyState::KobPair(kp.clone()), AnyState::KobPair(PairState { bought: 0, ..kp.clone() }), kp.delivery_carrier),
+            (
+                "condPair",
+                AnyState::KobCondPair(kc.clone()),
+                AnyState::KobCondPair(CondPairState { bought: 0, ..kc.clone() }),
+                kc.delivery_carrier,
+            ),
+        ];
+        for (name, st, after, carrier) in cases {
+            let o = order(70, pv(), X, 1_000, st.clone());
+            let c = tutxo(p, TOKEN_B, 60, 3 * WHOLE, X, true);
+            for n in [0, 1] {
+                let w: Vec<TokenUtxo> = (0..n).map(|k| tutxo(p, TOKEN_B, 61 + k as u8, WHOLE, pk(MAKER_A), false)).collect();
+                let label = format!("{name} CL{}@{}", n + 1, p.name());
+                let s = engine(&label, &try_claim(&claim(o.clone(), c.clone(), w, None, false)).unwrap());
+                assert_eq!(bound(&s, X), vec![0], "{label}");
+                assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&after.spk()), "{label}");
+                assert!(s.tx.outputs[0].value >= pv() + carrier as u64, "{label}");
+                assert!(s.tx.inputs.iter().all(|i| i.utxo.covenant_id != Some(TOKEN_COV)), "{label}: the sell custody stays");
+                assert!(holds(&s, p, &TokenState::user(p, (3 + n) * WHOLE, pk(MAKER_A), EXT), None), "{label}");
+            }
+            // a pair order ends only by its cancel, which returns its sell custody too
+            let r = claim(o, c, vec![], Some(AnyState::KobAsk(ask_n(MAKER_A, P250, p, 1))), true);
+            assert!(try_claim(&r).unwrap_err().to_string().contains("CancelOrder"), "{name}");
+        }
+    }
+}
+
+/// Every claim rule with its pair: the valid request builds, the one that breaks the rule is refused.
+#[test]
+fn claim_refusals() {
+    let p = TemplateId::Kcc20Ref;
+    let (o, c) = held_bid(p);
+    let base = || claim(o.clone(), c.clone(), vec![], None, false);
+    let refused = |r: &ClaimOrder, what: &str, needle: &str| {
+        let e = try_claim(r).expect_err(what).to_string();
+        assert!(e.contains(needle), "{what}: {e}");
+    };
+    try_claim(&base()).unwrap();
+    // the order holds a bought-custody: mode 1 with bought > 0
+    for (what, st) in [("mode 1, bought 0", mode_bid(bid(MAKER_B, P245, p), MODE_ACCUMULATE, 0)), ("mode 0", bid(MAKER_B, P245, p))] {
+        let mut r = base();
+        r.order.state = AnyState::KobBid(st);
+        refused(&r, what, "no bought-custody");
+    }
+    // the custody is exactly the order's: amount, owner, commitment
+    let mut r = base();
+    r.bought_custody = bought_custody(23, 4 * WHOLE - 1, B_ID, 1_500);
+    refused(&r, "a look-alike of another amount", "custody holds");
+    let mut r = base();
+    r.bought_custody = bought_custody(23, 4 * WHOLE, [0x5a; 32], 1_500);
+    refused(&r, "a custody of another order", "not owned by its order");
+    let mut r = base();
+    if let TokenState::Kcc20(k) = &mut r.bought_custody.state {
+        k.extension_commitment = [0x55; 32];
+    }
+    refused(&r, "a custody of another commitment", "not exactly the order's");
+    // wallet tokens: the maker's plain UTXOs of the bought token's commitment
+    let mut r = base();
+    r.tokens = vec![wallet(41, 1, MAKER_A)];
+    refused(&r, "another key's tokens", "wallet tokens");
+    let mut r = base();
+    r.tokens = vec![recv_tok(41, WHOLE, pk(MAKER_B), RECV_T, 1_000)];
+    refused(&r, "a receive UTXO", "wallet tokens");
+    let mut r = base();
+    let mut w = wallet(41, 1, MAKER_B);
+    if let TokenState::Kcc20(k) = &mut w.state {
+        k.extension_commitment = [0x55; 32];
+    }
+    r.tokens = vec![w];
+    refused(&r, "another commitment", "wallet tokens");
+    let mut r = base();
+    r.tokens = vec![wallet(41, 1, MAKER_B)];
+    try_claim(&r).unwrap();
+    // the continuation holds at least the order's value plus one deliveryCarrier
+    let floor = o.utxo.amount + bid_of(&o.state).delivery_carrier as u64;
+    let mut r = base();
+    r.value = Some(floor - 1);
+    refused(&r, "a continuation one sompi short", "at least");
+    r.value = Some(floor + KAS);
+    let s = engine("a larger continuation", &try_claim(&r).unwrap());
+    assert!(s.tx.outputs[0].value >= floor + KAS);
+    // funding
+    let mut r = base();
+    r.funding = vec![];
+    refused(&r, "no funding", "funding");
+    // only a claim and place of a bid ends the order
+    refused(&claim(o.clone(), c.clone(), vec![], None, true), "an ending claim without a placement", "CancelOrder");
+    // the placed order: the maker's, holding the claimed token, of its commitment, fillable, within the claimed units
+    let placed = |st: AnyState| claim(o.clone(), c.clone(), vec![], Some(st), false);
+    try_claim(&placed(AnyState::KobAsk(ask_n(MAKER_B, P250, p, 4)))).unwrap();
+    refused(&placed(AnyState::KobAsk(ask_n(MAKER_A, P250, p, 4))), "another maker's order", "maker's");
+    refused(&placed(AnyState::KobBid(bid(MAKER_B, P245, p))), "a bid (no custody)", "custody");
+    refused(&placed(AnyState::KobAsk(ask_n(MAKER_B, P250, p, 5))), "more than the claim holds", "claim holds");
+    let mut a = ask_n(MAKER_B, P250, p, 4);
+    a.extension_commitment = [0x55; 32];
+    refused(&placed(AnyState::KobAsk(a)), "an ask pinning another commitment", "pins another");
+    let ia = IfdAskState { amount_left: 4 * WHOLE, ..ifd_ask(MAKER_B, p) };
+    let min = kob_protocol::build::min_order_value(&AnyState::KobIfdAsk(ia.clone())) as u64;
+    let mut r = placed(AnyState::KobIfdAsk(ia));
+    r.place.as_mut().unwrap().value = min - 1;
+    refused(&r, "a placed order below its fillable value", "fillable");
+    r.place.as_mut().unwrap().value = min;
+    engine("a placed sell-first entry", &try_claim(&r).unwrap());
 }
