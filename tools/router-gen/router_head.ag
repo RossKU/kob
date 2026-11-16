@@ -43,7 +43,8 @@
 // there are two shapes.
 //   rest  The order is filled partially and continues, GTC orders only. A
 //         KobAsk continues with amountLeft - n and its custody holds the
-//         rest. A KobBid continues byte-identically.
+//         rest. A KobBid continues with its state unchanged, except that a
+//         bid of delivery mode 1 adds n to `bought`.
 //   out   The order ends. A KobAsk is sold out, whatever its time in force. A
 //         KobBid ends when exhausted, IOC or FOK.
 // Only the last order of a sweep may rest, as a best-price-first matcher
@@ -51,7 +52,9 @@
 // the asks' escrows are matched to them by owner. A leg has at most 3
 // orders, so a token group has at most 3 escrow inputs and 4 token outputs.
 // That fits the 8/8 prototype and KRON's 4/5. A 3/3 program runs every shape
-// but the three-bid sells. docs/argent/argent.md, "Fill shapes", lists them.
+// but the three-bid sells. A bid's bought-custody is one more token input
+// (BID CUSTODY), so on a 3/3 program a sell has the lock and at most two
+// custodies. docs/argent/argent.md, "Fill shapes", lists them.
 //
 // Source style. Order states are read by field projection
 // (`book.inputs.ask.price`), never copied into locals. A copy adds about one
@@ -60,9 +63,9 @@
 // order's continuation with `become` either. That would not fit `swap2`, and
 // the order validates its continuation itself. The router's pin on the
 // escrow change output, which the ask pins too, ties n to the token flow.
-// Argent has no macros, so tools/router-gen/gen-router.sh writes the 30
+// Argent has no macros, so tools/router-gen/gen-router.sh writes the 42
 // actors out. KasToToken_buy, _buy_out, _buy3, TokenToKas_sell2,
-// TokenSwap_swap and _swap2_out show every ingredient.
+// _sell2_cc, TokenSwap_swap and _swap2_out show every ingredient.
 //
 // POSITIONAL ANTI-ALIASING RULE. Argent generates none, so this one is
 // hand-written and reviewed. The intent spent at input j owns exactly two
@@ -91,7 +94,7 @@
 // in `swap2`.
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907";
+import "./KOBOrders/artifact.json" id "010c4f1444105aa55e5e4481aab448fa09560b15a091bf9642d5fa1073d5d907";
 import "./KOBOrdersKron/artifact.json" id "7681275caba68f02eb4bb3521838755d1f6ecade5837e8a5fdfd78a1dfd7a10b";
 
 const int MAX_SOMPI = 2900000000000000000;
@@ -304,3 +307,33 @@ fn bid_fits(byte[32] b_token, byte[32] token, int n) {
     require(b_token == token);
     require(n > 0);
 }
+
+// BID DELIVERY. A KCC-20 KobBid carries a delivery mode (0 new, 1
+// accumulate, 2 top-up) and `bought`, what its bought-custody holds, in its
+// state (docs/design/bid-delivery-spec.md, sections 4 and 8). The router pins
+// each bid leg's delivery as the bid's mode requires it.
+//   A resting bid of mode 1 delivers into its bought-custody: bought + n,
+//   owned by the bid's covenant id (owner scheme 0x04, borrow disabled, zero
+//   guard, the bid's commitment).
+//   An ending bid of mode 1 releases its custody: one plain UTXO of
+//   bought + n to the maker's key.
+//   Modes 0 and 2 deliver one plain UTXO of n to the maker's key (mode 2
+//   form 0). The keeper fills a mode-2 bid with form 0; the bid requires
+//   bought == 0 in both modes.
+// A bid with bought > 0 runs its fill only with its custody as a token
+// input. Every observed group has an exact shape, so such a bid is filled
+// only by an entry with a custody leg for it (BID CUSTODY). The other entries
+// serve modes 0 and 2 and the first fill of a mode-1 bid.
+//
+// BID CUSTODY. The custody legs observe a bid's bought-custody as one more
+// token input, after the lock, in bid order. The keeper puts the bids with a
+// custody first, so the custody legs are the leading bids of a shape
+// (TokenToKas_sell_c, _sell2_c, _sell2_cc and their _out twins, one _c twin
+// of each TokenSwap shape). The custody is checked as ask_fits checks an
+// ask's escrow. It is owned by the bid's id with owner scheme 0x04, its
+// borrow path is disabled, it holds exactly the bid's `bought` and it
+// carries the bid's commitment. The bid checks its custody's exact state as
+// well. The payer's bounds are unchanged: the custody's units are the bid
+// maker's, they go back into that bid's delivery, and the payer's change is
+// the lock less what was sold. The checks are written inline per custody
+// leg, because a helper costs one stack item too many in TokenSwap_swap2_c.

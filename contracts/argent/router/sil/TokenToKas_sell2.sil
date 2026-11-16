@@ -35,7 +35,7 @@ contract TokenToKas_sell2(
     int constant MAX_TOKEN_OUTPUTS = 8;
 
     // :: linked templates
-    byte[32] constant gen__kob_orders__kob_bid_template_const = byte[32](0xdfcd78f15cdadccb7db6f8094cb42421a409642a8b28041518a6bd2ec54bd5ef);
+    byte[32] constant gen__kob_orders__kob_bid_template_const = byte[32](0x0d72813a1c067feaaac2dd36427e9ce1a0d5cc6b65db298faa9fd0c24561a4c5);
 
     // :: state layouts
     struct KasToTokenState {
@@ -190,6 +190,10 @@ contract TokenToKas_sell2(
         int slope;
         int priceEnd;
         int decayStep;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobCondAskState {
         // :: user declared fields
@@ -617,11 +621,17 @@ contract TokenToKas_sell2(
             borrow_guard: ZERO32,
             extension_commitment: gen__book1_bid_state.extensionCommitment,
         };
+        byte[32] delivery2_state_owner = byte[32](gen__book2_bid_state.maker);
+        byte delivery2_state_scheme = OWNER_P2PK_SCHNORR;
+        if (gen__book2_bid_state.mode == 1) {
+            delivery2_state_owner = byte[32](bid2_covid);
+            delivery2_state_scheme = OWNER_COVENANT_ID;
+        }
         KCC20State delivery2_state = KCC20State {
             // :: user declared fields
-            amount: n2,
-            owner: byte[32](gen__book2_bid_state.maker),
-            owner_scheme: OWNER_P2PK_SCHNORR,
+            amount: gen__book2_bid_state.bought + n2,
+            owner: delivery2_state_owner,
+            owner_scheme: delivery2_state_scheme,
             borrow_scheme: BORROW_DISABLED,
             borrow_guard: ZERO32,
             extension_commitment: gen__book2_bid_state.extensionCommitment,

@@ -833,3 +833,105 @@ fn aud_rt_router_token_cancel_refuses_a_minter_or_borrow_enabled_lock() {
         println!("{actor} on {}: the router refuses the cancel of {what}; without `{line}` it accepts it", prog.name());
     }
 }
+
+// ================================================================================================ P13: router custody legs
+
+/// Custody legs of a router actor, as its name declares them (docs/design/bid-delivery-spec.md, section 8): the leading
+/// bids of `TokenToKas_sell_c`, `_sell2_c` (1) and `_sell2_cc` (2) and their `_out` twins, and the first bid of every
+/// `TokenSwap_<shape>_c`; none for every other actor (the KRON routers included).
+fn custody_legs_of(actor: &str) -> usize {
+    match actor.split_once('_') {
+        Some(("TokenToKas", shape)) => shape.split('_').filter(|p| p.chars().all(|c| c == 'c') && !p.is_empty()).map(str::len).sum(),
+        Some(("TokenSwap", shape)) => usize::from(shape.ends_with("_c")),
+        _ => 0,
+    }
+}
+
+/// Problems of the custody legs of one generated router actor (empty = sound): it observes exactly as many custody
+/// inputs as its name declares, custody m is the token group's input m (the lock is input 0) of a group of exactly
+/// 1 + c inputs, it is read under the intent's token handle, and it carries the five checks against bid m: owner = bid
+/// m's id, owner scheme 0x04, borrow disabled, amount = bid m's `bought`, bid m's extension commitment.
+fn custody_problems(actor: &str, src: &str) -> Vec<String> {
+    let mut p = vec![];
+    let c = custody_legs_of(actor);
+    let (grp, book, handle) =
+        if actor.starts_with("TokenSwap") { ("token_a_group", "bids", "token_a_type") } else { ("token", "book", "token_type") };
+    let decls: Vec<usize> = (1..=9).filter(|m| src.contains(&format!("KCC20State gen__{grp}_cust{m}_state = readInputStateWithTemplate("))).collect();
+    if decls != (1..=c).collect::<Vec<_>>() {
+        p.push(format!("{actor}: observes custody inputs {decls:?}, its name declares {c}"));
+    }
+    if c == 0 {
+        return p;
+    }
+    if !src.contains(&format!("require(OpCovInputCount(gen__{grp}_cov_id) == {});", 1 + c)) {
+        p.push(format!("{actor}: the token group does not have exactly {} inputs", 1 + c));
+    }
+    for m in 1..=c {
+        let st = format!("gen__{grp}_cust{m}_state");
+        if !src.contains(&format!("int gen__{grp}_cust{m}_input_idx = OpCovInputIdx(gen__{grp}_cov_id, {m});")) {
+            p.push(format!("{actor}: custody {m} is not the token group's input {m}"));
+        }
+        let at = src.find(&format!("KCC20State {st} = readInputStateWithTemplate(")).unwrap_or(0);
+        let read = &src[at..at + src[at..].find(");").unwrap_or(0)];
+        if !read.contains(&format!("gen__{grp}_cust{m}_input_idx")) || !read.trim_end().ends_with(handle) {
+            p.push(format!("{actor}: custody {m} is not read under the intent's handle {handle}"));
+        }
+        for want in [
+            format!("require({st}.owner == byte[32](bid{m}_covid));"),
+            format!("require({st}.owner_scheme == OWNER_COVENANT_ID);"),
+            format!("require({st}.borrow_scheme == BORROW_DISABLED);"),
+            format!("require({st}.amount == gen__{book}{m}_bid_state.bought);"),
+            format!("require({st}.extension_commitment == gen__{book}{m}_bid_state.extensionCommitment);"),
+        ] {
+            if src.matches(&want).count() != 1 {
+                p.push(format!("{actor}: custody {m} lacks `{want}`"));
+            }
+        }
+    }
+    p
+}
+
+/// P13 (router, static): every custody leg of every generated router actor checks its bid's bought-custody as the spec
+/// requires (`custody_problems`), and only the actors whose name declares custody legs observe a custody: 12 actors,
+/// 14 custody legs. Negative: the checker flags a dropped check, a check against another bid's state or id, and an actor
+/// that observes fewer custodies than its name declares (it is not vacuous).
+#[test]
+fn c4_router_custody_legs_check_every_custody() {
+    let dir = common::repo_root().join("contracts/argent/router/sil");
+    let mut actors = 0;
+    let mut legs = 0;
+    let mut names = vec![];
+    for e in std::fs::read_dir(&dir).expect("router sil dir") {
+        let path = e.expect("entry").path();
+        let actor = path.file_stem().unwrap().to_string_lossy().to_string();
+        let src = std::fs::read_to_string(&path).expect("read").replace("\r\n", "\n");
+        let p = custody_problems(&actor, &src);
+        assert!(p.is_empty(), "{p:#?}");
+        let c = custody_legs_of(&actor);
+        if c > 0 {
+            actors += 1;
+            legs += c;
+            names.push(format!("{actor} ({c})"));
+        }
+    }
+    println!("CUSTODY LEGS {}", names.join(", "));
+    assert_eq!((actors, legs), (12, 14), "custody actors and legs of the router");
+
+    // the checker is not vacuous
+    let read = |a: &str| std::fs::read_to_string(dir.join(format!("{a}.sil"))).unwrap().replace("\r\n", "\n");
+    let cc = read("TokenToKas_sell2_cc");
+    let line = "        require(gen__token_cust2_state.amount == gen__book2_bid_state.bought);\n";
+    assert!(cc.contains(line), "generated router changed: {line}");
+    assert!(!custody_problems("TokenToKas_sell2_cc", &cc.replace(line, "")).is_empty(), "a dropped check must be flagged");
+    let other = cc.replace(line, &line.replace("book2", "book1"));
+    assert!(!custody_problems("TokenToKas_sell2_cc", &other).is_empty(), "a check against another bid's state must be flagged");
+    let owner = "require(gen__token_cust1_state.owner == byte[32](bid1_covid));";
+    let swapped = cc.replace(owner, &owner.replace("bid1_covid", "bid2_covid"));
+    assert!(!custody_problems("TokenToKas_sell2_cc", &swapped).is_empty(), "a custody owned by another bid must be flagged");
+    assert!(!custody_problems("TokenToKas_sell2_cc", &read("TokenToKas_sell2_c")).is_empty(), "a missing custody leg must be flagged");
+    let sw = read("TokenSwap_swap2_c");
+    let ext = "        require(gen__token_a_group_cust1_state.extension_commitment == gen__bids1_bid_state.extensionCommitment);\n";
+    assert!(sw.contains(ext), "generated router changed: {ext}");
+    assert!(!custody_problems("TokenSwap_swap2_c", &sw.replace(ext, "")).is_empty(), "a dropped swap check must be flagged");
+    assert!(!custody_problems("TokenSwap_swap2_c", &read("TokenSwap_swap2")).is_empty(), "a swap twin without its custody must be flagged");
+}
