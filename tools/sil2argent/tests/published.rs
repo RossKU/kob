@@ -240,8 +240,8 @@ fn docs_list_every_router_entry() {
     }
     assert_eq!(
         n,
-        30 * 3,
-        "router: 30 fill shapes (six per intent, two KRON intents), each an actor with its entry, expire and cancel"
+        42 * 3,
+        "router: 42 fill shapes (six per intent and per KRON intent, plus six bought-custody shapes of TokenToKas and of          TokenSwap), each an actor with its entry, expire and cancel"
     );
 }
 

@@ -96,7 +96,7 @@
 // in `swap2`.
 
 import "./kcc20_8x8.ag";
-import "./KOBOrders/artifact.json" id "010c4f1444105aa55e5e4481aab448fa09560b15a091bf9642d5fa1073d5d907";
+import "./KOBOrders/artifact.json" id "3c04d2e5b84d3815ab5e5232b979ab8582e2709e6775cf11df047284e5d5a445";
 import "./KOBOrdersKron/artifact.json" id "7681275caba68f02eb4bb3521838755d1f6ecade5837e8a5fdfd78a1dfd7a10b";
 
 const int MAX_SOMPI = 2900000000000000000;

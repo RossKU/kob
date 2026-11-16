@@ -256,6 +256,10 @@ contract KasToToken_buy3(
         int rptPrice;
         int rptPre;
         int rptUntil;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobCondPairState {
         // :: user declared fields
@@ -298,6 +302,10 @@ contract KasToToken_buy3(
         int rptPre;
         int rptUntil;
         byte[32] sExt;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobIfdAskState {
         // :: user declared fields
@@ -324,6 +332,9 @@ contract KasToToken_buy3(
         int amountLeft;
         int rptAmount;
         byte[321] exitState;
+        int exitMode;
+        int exitRecvThreshold;
+        int exitTopupTip;
     }
     struct KobIfdBidState {
         // :: user declared fields
@@ -389,6 +400,9 @@ contract KasToToken_buy3(
         int custody;
         int rptAmount;
         byte[432] exitState;
+        int exitMode;
+        int exitRecvThreshold;
+        int exitTopupTip;
     }
     struct KobPairState {
         // :: user declared fields
@@ -423,6 +437,10 @@ contract KasToToken_buy3(
         int amountLeft;
         int custody;
         byte[32] sExt;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KronTokenState {
         // :: user declared fields

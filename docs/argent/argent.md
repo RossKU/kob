@@ -1,4 +1,4 @@
-# KOB as an Argent app
+| `KOBOrders::KobIfdPair` | `62ac27d7f7ed5922720fa82d9742537a7d6d658f46967abddc49fdea1971a2f3` | 1+936 | 9,351 B || `KOBOrders::KobCondPair` | `97359a5b5268e3a4bceeaf93905e679e7e3e0f5884b3f4be85840af7ad5e9c08` | 1+579 | 7,842 B || `KOBOrders::KobPair` | `cba29506b515146727665c89720e9cb9190779d2ce0dad58081f0906adf85980` | 1+483 | 3,717 B || `KOBOrders::KobIfdBid` | `9847b2d4828a855f69156cb88e9e380c70502bba0d86c2097c3c8d61830cd80d` | 1+585 | 3,841 B || `KOBOrders::KobIfdAsk` | `895eae0b44d7c85ab87339a2856a856aaf7fb5126b70beb3445c894145882e97` | 1+621 | 5,348 B || `KOBOrders::KobCondBid` | `3c6211a706ba9692a3949bfacebf8d45ab3fe5fb135e6236744283184036c486` | 1+417 | 4,791 B || `KOBOrders::KobCondAsk` | `7811a37e7769ec54d3fd5cc87fde9afdcdb183fe97aa79f06c8982805a8b284b` | 1+363 | 3,855 B || `KOBOrders::KobBid` | `0d72813a1c067feaaac2dd36427e9ce1a0d5cc6b65db298faa9fd0c24561a4c5` | 1+321 | 2,679 B |# KOB as an Argent app
 
 KOB is an Argent app on the outside and hand-written SilverScript on the inside. This document
 says what is published, how another Argent app imports it, and what the KOB router on top of it
@@ -21,10 +21,10 @@ artifact id you reviewed; do not pin a file name or a branch.
 
 | App | Artifact id (`id` field of `artifact.json`) |
 |---|---|
-| `KOBOrders` | `aaaf060e2c4d998289c292778625e2e11f25a44b2ec27a2b33a2b93d305cd907` |
+| `KOBOrders` | `3c04d2e5b84d3815ab5e5232b979ab8582e2709e6775cf11df047284e5d5a445` |
 | `KOBOrdersKron` | `7681275caba68f02eb4bb3521838755d1f6ecade5837e8a5fdfd78a1dfd7a10b` |
 | `KOBToken` | `364f6518d3ae5a31d0fcf768c9a1cc5d6e187cb2d03787dee8d8e9088ffec39f` |
-| `KobRouter` | `08e7edd76c4f057f65060cfa1589d239a8aebf922eea90cc2a5606de764f2d24` |
+| `KobRouter` | `b9732200e2c829865df4efd97c5db944ff6d8afb75a4143924316a3506229037` |
 
 Actor-type handles (the template hash of the hand-written program: blake3 over prefix and suffix
 around the state span, the same value silverc reports as `template_hash`):
@@ -300,18 +300,33 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 
 | Actor (`TokenToKas_<shape>`) | Entry | Redeem |
 |---|---|---|
-| `_sell` / `_sell_out` | `sell(bid, n)` / `sell_out(bid, n)` | 4,077 B / 4,065 B |
-| `_sell2` / `_sell2_out` | `sell2(bid1, bid2, n1, n2)` / `sell2_out(..)` | 5,654 B / 5,642 B |
-| `_sell3` / `_sell3_out` | `sell3(bid1, bid2, bid3, n1, n2, n3)` / `sell3_out(..)` (not on the 3/3 program) | 7,291 B / 7,279 B |
+| `_sell` / `_sell_out` | `sell(bid, n)` / `sell_out(bid, n)` | 4,323 B / 4,285 B |
+| `_sell2` / `_sell2_out` | `sell2(bid1, bid2, n1, n2)` / `sell2_out(..)` | 6,120 B / 6,082 B |
+| `_sell3` / `_sell3_out` | `sell3(bid1, bid2, bid3, n1, n2, n3)` / `sell3_out(..)` (not on the 3/3 program) | 7,981 B / 7,942 B |
+| `_sell_c` / `_sell_c_out` | `sell_c(bid, n)` / `sell_c_out(bid, n)`: the bid holds a bought-custody | 4,785 B / 4,773 B |
+| `_sell2_c` / `_sell2_c_out` | `sell2_c(bid1, bid2, n1, n2)` / `sell2_c_out(..)`: bid 1 holds a bought-custody | 6,611 B / 6,573 B |
+| `_sell2_cc` / `_sell2_cc_out` | `sell2_cc(bid1, bid2, n1, n2)` / `sell2_cc_out(..)`: both bids hold one | 7,099 B / 7,082 B |
 
 | Actor (`TokenSwap_<shape>`) | Entry | Redeem |
 |---|---|---|
-| `_swap` | `swap(bid, ask, n_a)`: bid and ask rest | 6,627 B |
-| `_swap_bid_out` | `swap_bid_out(bid, ask, n_a)`: the bid ends, the ask rests | 6,608 B |
-| `_swap_ask_out` | `swap_ask_out(bid, ask, n_a)`: the bid rests, the ask is sold out | 6,349 B |
-| `_swap_out` | `swap_out(bid, ask, n_a)` | 6,337 B |
-| `_swap2` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,143 B |
-| `_swap2_out` | `swap2_out(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 9,856 B |
+| `_swap` | `swap(bid, ask, n_a)`: bid and ask rest | 6,883 B |
+| `_swap_bid_out` | `swap_bid_out(bid, ask, n_a)`: the bid ends, the ask rests | 6,844 B |
+| `_swap_ask_out` | `swap_ask_out(bid, ask, n_a)`: the bid rests, the ask is sold out | 6,601 B |
+| `_swap_out` | `swap_out(bid, ask, n_a)` | 6,557 B |
+| `_swap2` | `swap2(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,665 B |
+| `_swap2_out` | `swap2_out(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,359 B |
+| `_swap_c` | `swap_c(bid, ask, n_a)`: as `_swap`, the bid holds a bought-custody | 7,357 B |
+| `_swap_bid_out_c` | `swap_bid_out_c(bid, ask, n_a)` | 7,344 B |
+| `_swap_ask_out_c` | `swap_ask_out_c(bid, ask, n_a)` | 7,101 B |
+| `_swap_out_c` | `swap_out_c(bid, ask, n_a)` | 7,089 B |
+| `_swap2_c` | `swap2_c(bid1, bid2, ask1, ask2, n_a1, n_a2)`: bid 1 holds a bought-custody | 11,215 B |
+| `_swap2_out_c` | `swap2_out_c(bid1, bid2, ask1, ask2, n_a1, n_a2)` | 10,902 B |
+
+Bid delivery modes (`docs/design/bid-delivery-spec.md`, section 8): every bid leg pins the delivery its bid's mode
+requires (mode 1: the bought-custody of `bought + n` owned by the bid's id, or `bought + n` to the maker when the bid
+ends; modes 0 and 2: `n` to the maker). A bid that already holds a custody needs the `_c` / `_cc` shape (custody legs
+first, each custody the token input right after the lock), which checks the custody's owner, scheme, borrow flag, amount
+(`== bought`) and commitment. There are no `sell3` custody shapes; the KRON routers are unchanged.
 
 | Actor (`TokenToKasKron_<shape>`) | Entry | Redeem |
 |---|---|---|
@@ -328,20 +343,21 @@ arguments in transaction order; the asks' escrows are matched to them by owner.
 Every actor also has `expire()` (anyone, from the deadline on) and `cancel(sig)` (payer,
 SIGHASH_ALL). The redeem sizes include both. For scale: the standard 3/3 token program is 2.9 kB, a KobAsk
 1.7 kB. **The largest scripts are
-`TokenSwap_swap2` and `_swap2_out` (9,856-10,143 B):** they observe four orders and two token groups,
+`TokenSwap_swap2` and `_swap2_out` (10,359-10,665 B) and their `_c` twins (10,902-11,215 B):** they observe four orders and two token groups,
 and every observed order state is 20 or 21 fields read by the script. A payer who wants a sweep of
 one order per leg pays the 6.3-6.6 kB of the single-order swap. `swap2` is the tightest script (214
 live bindings and 221 combined stack items of the 244 allowed, measured on 2026-10-10 with the lock pin, the B pin and
 the ask's `extensionCommitment`; `docs/argent/argent-feedback.md` item 6): its body keeps no local an expression can stand for
 (the input index, the sum of the base units sold into the bids and the take of a resting last ask are written out where
-they are used), which makes room for the two token handles. argentc refuses an entry over the limit, so every shape
+they are used), which makes room for the two token handles. `swap2_c` sits exactly at the 244-item limit (its custody leg is written
+inline: as a helper it overflows by one item). argentc refuses an entry over the limit, so every shape
 compiling is the check.
 
 `n` is the number of token base units sold into a bid (any amount; the bid enforces its own minimum
 fill). How much an ask gives follows from `amount` (the last ask
 of a sweep gives `amount` minus what the sold-out asks gave). Hidden witnesses are the handle
 prefix/suffix lengths of the imported templates, ask first, then bid, then the token: 4 for the
-`KasToToken` and `TokenToKas` actors, 8 for `TokenSwap` (KobAsk 1 and 1,407, KobBid 1 and 1,230,
+`KasToToken` and `TokenToKas` actors, 8 for `TokenSwap` (KobAsk 1 and 1,407, KobBid 1 and 2,357,
 KobBidKron 1 and 1,090, then the token handles' own: KCC20 3/3 1 and 2,802, the public-mint build 34 and 3,885, the 8/8
 prototype 1 and 6,237, KRON 0 and 2,387 or 2,686); the `expire` and the `cancel` of a token intent take the locked token's
 two. Slot limit: at most 3 escrow inputs and 4 token outputs in one token group, bounded further by the token's program (the

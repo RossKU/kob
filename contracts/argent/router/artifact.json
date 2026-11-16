@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "id": "c18f157f7e0100a13e80221cdf585d01cd67ab6fb53dac9d8217c8fe0b3321e3",
+  "id": "b9732200e2c829865df4efd97c5db944ff6d8afb75a4143924316a3506229037",
   "generator": {
     "name": "argentc",
     "version": "0.1.0"
@@ -9,7 +9,7 @@
   "dependencies": [
     {
       "app": "KOBOrders",
-      "artifact_id": "010c4f1444105aa55e5e4481aab448fa09560b15a091bf9642d5fa1073d5d907"
+      "artifact_id": "3c04d2e5b84d3815ab5e5232b979ab8582e2709e6775cf11df047284e5d5a445"
     },
     {
       "app": "KOBOrdersKron",
@@ -10161,6 +10161,30 @@
             "type": {
               "kind": "int"
             }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -10407,6 +10431,30 @@
               "kind": "fixed_bytes",
               "len": 32
             }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -10552,6 +10600,24 @@
             "type": {
               "kind": "fixed_bytes",
               "len": 321
+            }
+          },
+          {
+            "name": "exitMode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitRecvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitTopupTip",
+            "type": {
+              "kind": "int"
             }
           }
         ]
@@ -10928,6 +10994,24 @@
               "kind": "fixed_bytes",
               "len": 432
             }
+          },
+          {
+            "name": "exitMode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitRecvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitTopupTip",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -11124,6 +11208,30 @@
             "type": {
               "kind": "fixed_bytes",
               "len": 32
+            }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
             }
           }
         ]
@@ -35053,6 +35161,30 @@
             "type": {
               "kind": "int"
             }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -35298,6 +35430,30 @@
               "kind": "fixed_bytes",
               "len": 32
             }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -35442,6 +35598,24 @@
             "type": {
               "kind": "fixed_bytes",
               "len": 321
+            }
+          },
+          {
+            "name": "exitMode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitRecvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitTopupTip",
+            "type": {
+              "kind": "int"
             }
           }
         ]
@@ -35816,6 +35990,24 @@
               "kind": "fixed_bytes",
               "len": 432
             }
+          },
+          {
+            "name": "exitMode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitRecvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "exitTopupTip",
+            "type": {
+              "kind": "int"
+            }
           }
         ]
       },
@@ -36011,6 +36203,30 @@
             "type": {
               "kind": "fixed_bytes",
               "len": 32
+            }
+          },
+          {
+            "name": "mode",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "recvThreshold",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "topupTip",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "bought",
+            "type": {
+              "kind": "int"
             }
           }
         ]

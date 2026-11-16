@@ -56,6 +56,10 @@ contract PriceGate(
         int slope;
         int priceEnd;
         int decayStep;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobCondAskState {
         // :: user declared fields
@@ -118,6 +122,10 @@ contract PriceGate(
         int rptPrice;
         int rptPre;
         int rptUntil;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobCondPairState {
         // :: user declared fields
@@ -160,6 +168,10 @@ contract PriceGate(
         int rptPre;
         int rptUntil;
         byte[32] sExt;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobIfdAskState {
         // :: user declared fields
@@ -186,6 +198,9 @@ contract PriceGate(
         int amountLeft;
         int rptAmount;
         byte[321] exitState;
+        int exitMode;
+        int exitRecvThreshold;
+        int exitTopupTip;
     }
     struct KobIfdBidState {
         // :: user declared fields
@@ -251,6 +266,9 @@ contract PriceGate(
         int custody;
         int rptAmount;
         byte[432] exitState;
+        int exitMode;
+        int exitRecvThreshold;
+        int exitTopupTip;
     }
     struct KobPairState {
         // :: user declared fields
@@ -285,6 +303,10 @@ contract PriceGate(
         int amountLeft;
         int custody;
         byte[32] sExt;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
 
     // :: route templates
