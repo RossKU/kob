@@ -8,9 +8,14 @@ import type { OrderState, TokenUtxo } from './types';
 import { loadKobNode } from './wasm.node';
 import { FakeChain, MAKER, OTHER, TOKEN, keyUtxo, orderViewOf, placeGolden, signAndValidate, strayFor, testAddress, tokenUtxo, tokenUtxoView } from '../testing/chain-fixtures';
 import { confirmSnapshotOnNode } from './node-verify';
+import { decodeSigning } from './decode';
+import { parseRegistry } from './registry';
+import type { CancelPlan } from './cancel';
+import { nodeFactsOf, tradableRegistryJson } from '../testing/chain-fixtures';
 
 const kob = loadKobNode();
 const KAS = 100_000_000n;
+const registry = parseRegistry(tradableRegistryJson(), { kob });
 const BOUGHT = 4_000n;
 
 const env = (over: Partial<CancelEnv> = {}): CancelEnv => ({
@@ -24,6 +29,11 @@ function collected(bought = BOUGHT): { snap: OrderSnapshot; custody: TokenUtxo }
   const snap0: OrderSnapshot = { ...base, order: { ...base.order, state } };
   const custody = strayFor(snap0, bought, 91, 10n * KAS);
   return { snap: { ...snap0, boughtCustody: custody }, custody };
+}
+/** The pre-sign decoder (W3) accepts the plan as its own expectations say: nothing blocking. */
+function expectSigns(plan: CancelPlan) {
+  const s = decodeSigning({ kob, built: plan.built!, maker: MAKER.pk, registry, expected: plan.expected, nodeInputs: nodeFactsOf(plan.built!) });
+  expect(s.blocking.map((b) => `${b.code}: ${b.message}`)).toEqual([]);
 }
 const spends = (built: { tx: { inputs: { transactionId: string; index: number }[] } }, u: TokenUtxo) => built.tx.inputs.some((i) => i.transactionId === u.transactionId && i.index === u.index);
 
@@ -74,7 +84,8 @@ describe('planClaim (CL1 to CL3)', () => {
     expect(BigInt(cont.value)).toBe(BigInt(snap.order.amount) + 10n * KAS);
     expect(plan.claim).toMatchObject({ claimed: BOUGHT, toWallet: BOUGHT, merged: 0n, placed: 0n, carrier: 10n * KAS, ends: false });
     expect(plan.claim!.fee).toBe(BigInt(plan.built!.fee.fee));
-    expect(plan.expected.orders?.[0]?.state).toMatchObject({ bought: '0', mode: '1' });
+    expect(plan.expected).toMatchObject({ claimIds: [snap.covenantId], cancelIds: [], orders: [] });
+    expectSigns(plan);
   });
 
   it('claim and merge takes the wallet UTXOs up to the program\'s inputs (negative: one more is refused)', () => {
@@ -85,6 +96,7 @@ describe('planClaim (CL1 to CL3)', () => {
     const plan = planClaim(env(), snap, { merge: wallet.slice(0, room) });
     expect(plan.ok).toBe(true);
     signAndValidate(kob, plan.built!);
+    expectSigns(plan);
     expect(plan.claim).toMatchObject({ mergedUtxos: room, toWallet: BOUGHT + wallet.slice(0, room).reduce((a, u) => a + BigInt(u.state.amount), 0n) });
     const over = planClaim(env(), snap, { merge: wallet });
     expect(over.ok).toBe(false);
@@ -110,6 +122,7 @@ describe('planClaim (CL1 to CL3)', () => {
       expect(plan.claim).toMatchObject({ placed: BOUGHT, toWallet: 0n, ends: end });
       expect(plan.built!.tx.outputs.some((o) => o.covenant?.covenantId === snap.covenantId)).toBe(!end);
       expect(plan.expected.tokensEscrowed).toBe(BOUGHT);
+      expectSigns(plan);
     }
     // negative: end without a placement is a cancel
     expect(planClaim(env(), snap, { end: true }).issues.map((i) => i.code)).toContain('claim.end-without-place');
@@ -134,6 +147,7 @@ describe('cancel, refund and replace carry the bought-custody back', () => {
     expect(spends(plan.built!, custody)).toBe(true);
     expect(plan.tokensReturned).toBe(BOUGHT);
     expect(plan.kasReleased).toBe(BigInt(snap.order.amount) + 10n * KAS);
+    expectSigns(plan);
     const lost = planCancel(env(), { ...snap, boughtCustody: null });
     expect(lost.ok).toBe(false);
     expect(lost.issues.map((i) => i.code)).toContain('cancel.bought-missing');
@@ -153,6 +167,8 @@ describe('cancel, refund and replace carry the bought-custody back', () => {
     signAndValidate(kob, rep.built!);
     expect(rep.tokensReturned).toBe(BOUGHT);
     expect(rep.expected.orders?.[0]?.state).toMatchObject({ bought: '0' });
+    expectSigns(rep);
+    for (const p of plans) expectSigns(p);
   });
 
   it('refund releases it to the maker (negative: without it the planner refuses)', () => {
@@ -163,6 +179,7 @@ describe('cancel, refund and replace carry the bought-custody back', () => {
     signAndValidate(kob, plan.built!, []);
     expect(spends(plan.built!, custody)).toBe(true);
     expect(plan.tokensReturned).toBe(BOUGHT);
+    expectSigns(plan);
     expect(planRefund(env(), { ...due, boughtCustody: null }).issues.map((i) => i.code)).toContain('cancel.bought-missing');
   });
 });

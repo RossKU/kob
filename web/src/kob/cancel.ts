@@ -1257,7 +1257,6 @@ export function planClaim(env0: CancelEnv, snap: OrderSnapshot, spec: ClaimSpec 
   const merged = totalAmount(merge);
   const ends = !!spec.end;
   const cont = ends ? null : (r.built.tx.outputs.find((o) => o.covenant?.covenantId === cov) ?? null);
-  const contState = ends ? null : ({ ...st, state: { ...st.state, bought: '0' } } as OrderState);
   const custodyCarrier = place ? (place.tokenCarrier ?? big(bc.amount)) * BigInt(custodiesOf(place.order).length) : 0n;
   const kasLocked = (cont ? big(cont.value) : 0n) + (place ? place.value + custodyCarrier : 0n);
   const toWallet = bf.amount + merged - placed;
@@ -1265,8 +1264,9 @@ export function planClaim(env0: CancelEnv, snap: OrderSnapshot, spec: ClaimSpec 
   const claim: ClaimSummary = { token: bf.token, claimed: bf.amount, merged, mergedUtxos: merge.length, placed, toWallet, carrier: ends ? 0n : bf.carrier, fee: big(r.built.fee.fee), ends };
   return {
     ok: true, issues: r.issues, request: r.request, built: r.built, cancelIds: [cov],
+    // a continuing claim is no cancel; its continuation counts in the KAS locked and is not one of `orders` (the decoder checks it is the order with bought 0)
     expected: withChange(env, r.built, {
-      cancelIds: [cov], orders: [...(contState ? [contState] : []), ...(place ? [place.order] : [])], kasLocked, ...(place ? { tokensEscrowed: placed } : {}),
+      ...(ends ? { cancelIds: [cov] } : { cancelIds: [], claimIds: [cov] }), orders: place ? [place.order] : [], kasLocked, ...(place ? { tokensEscrowed: placed } : {}),
     }),
     tokensReturned: quote ? 0n : toWallet, ...(quote ? { quoteReturned: toWallet } : quoteField(snap, 0n)),
     kasReleased: big(bc.amount) + merge.reduce((a, u) => a + big(u.amount), 0n) + (ends ? big(snap.order.amount) : 0n), fundingUsed: r.fundingUsed,
