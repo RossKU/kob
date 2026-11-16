@@ -7,8 +7,10 @@
 //! the published public-mint build of the reference (3/3; token A and token B), and the KRON programs (2,433 B and 2,732 B) for a KRON token A (`TokenToKasKron_*`, `TokenSwapKron_*`, sold into
 //! `KobBidKron`s; token B stays KCC-20).
 //!
-//! Positive: every one of the 30 router actors (fill shapes) is created, executed and validated on every program pair
-//! that can run it (the 3/3 program has no room for a three-bid sell: the builders refuse it); each intent kind is
+//! Positive: every one of the 42 router actors (fill shapes, 12 of them with bought-custody legs) is created, executed
+//! and validated on every program pair that can run it (the 3/3 program has no room for a three-bid sell: the builders
+//! refuse it). Their KCC-20 bids cover the delivery modes: mode 1 (its first fill, and the custody legs of the `_c`
+//! actors), mode 2 (form 0) and mode 0 (`docs/design/bid-delivery-spec.md`, section 8). Each intent kind is
 //! cancelled by its payer (token intents take their locked tokens back in the same transaction), and expired by anyone
 //! from its deadline on. Negative: an execution whose merchant output or payer change is redirected after building, a
 //! cancel signed by another key, a cancel that leaves the lock behind (one that spends other tokens of the same token
@@ -19,14 +21,14 @@
 mod common;
 
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
+use kob_protocol::Family;
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::build::*;
-use kob_protocol::router::{Actor, IntentKind, IntentState, ACTORS, EXPIRE_MAX_FEE};
+use kob_protocol::router::{ACTORS, Actor, EXPIRE_MAX_FEE, IntentKind, IntentState};
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use kob_protocol::verify::{execute, validate};
-use kob_protocol::Family;
 
 use common::*;
 
@@ -77,7 +79,7 @@ fn runs_for(actor: &Actor) -> Vec<(Progs, bool)> {
         }) {
             continue;
         }
-        out.push((p, actor.shape.fits(a, b)));
+        out.push((p, actor.fits(a, b)));
     }
     out
 }
@@ -98,12 +100,33 @@ fn ask_leg(tag: u8, maker: u8, n: i64, take: i64, tif: i64, pb: TemplateId) -> I
     }
 }
 /// A bid that buys `n` whole tokens and then rests (`ends = false`, funded for more) or ends (funded for `n` whole
-/// tokens and half a minimum fill: it cannot afford another one).
-fn bid_leg(tag: u8, maker: u8, n: i64, ends: bool, pa: TemplateId) -> IntentBid {
-    let s = bid_a(maker, 0, pa);
-    let value =
-        if ends { s.escrow(n * WHOLE, 1).unwrap() + s.used(WHOLE).unwrap() / 2 } else { s.escrow((n + 5) * WHOLE, 1).unwrap() };
-    IntentBid { order: order(tag, value as u64, cov(0x60 + tag), 1_000, s), amount: n * WHOLE }
+/// tokens and half a minimum fill: it cannot afford another one), of delivery `mode`, that bought `bought` whole tokens
+/// before. Mode 1 with `bought > 0` holds them in its bought-custody (a token UTXO of its id carrying [`CARRIER`]), and
+/// its budget reserves no carrier; mode 2 is opted in (threshold 1, tip 0).
+fn bid_leg_mode(tag: u8, maker: u8, n: i64, ends: bool, pa: TemplateId, mode: i64, bought: i64) -> IntentBid {
+    let s = BidState { mode, bought: bought * WHOLE, recv_threshold: i64::from(mode == 2), ..bid_a(maker, 0, pa) };
+    let has_custody = mode == 1 && bought > 0;
+    // a bid that holds its custody reserves no carrier for its next fill
+    let unreserved = if has_custody { s.delivery_carrier } else { 0 };
+    let value = if ends {
+        s.escrow(n * WHOLE, 1).unwrap() - unreserved + s.used(WHOLE).unwrap() / 2
+    } else {
+        s.escrow((n + 5) * WHOLE, 1).unwrap()
+    };
+    let id = cov(0x60 + tag);
+    let custody = has_custody.then(|| tok_of(tag + 120, bought * WHOLE, id, SCHEME_COVID, 1_000, TOK_A));
+    IntentBid { order: order(tag, value as u64, id, 1_000, s), amount: n * WHOLE, custody }
+}
+/// The delivery mode of bid `i` of `actor` in [`legs_for`]: a custody leg is mode 1 with 1 whole token bought; the other
+/// KCC-20 bids cycle through mode 1 (first fill), mode 2 (form 0) and mode 0. A KRON bid is mode 0.
+fn leg_mode(actor: &Actor, i: usize, pa: TemplateId) -> (i64, i64) {
+    if pa.family() == Family::Kron {
+        (0, 0)
+    } else if i < actor.custody {
+        (1, 1)
+    } else {
+        (((i + 1) % 3) as i64, 0)
+    }
 }
 /// A key-held token state of the payer's token A (KCC-20 owner scheme 0, KRON address presence).
 fn user_a(pa: TemplateId, amount: i64, owner: [u8; 32]) -> TokenState {
@@ -203,7 +226,8 @@ fn legs_for(actor: &Actor, p: Progs) -> (Vec<IntentAsk>, Vec<IntentBid>) {
     let bids = (0..s.bids)
         .map(|i| {
             let last = i + 1 == s.bids;
-            bid_leg(30 + i as u8, 25 + i as u8, 2, !(last && s.last_bid_rests), p.a)
+            let (mode, bought) = leg_mode(actor, i, p.a);
+            bid_leg_mode(30 + i as u8, 25 + i as u8, 2, !(last && s.last_bid_rests), p.a, mode, bought)
         })
         .collect();
     (asks, bids)
@@ -272,7 +296,8 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
                 b_extension: EXT,
                 deadline: DEADLINE,
             },
-            2 * KAS,
+            // a custody leg adds a filler slot before the intent's outputs
+            (2 + actor.custody as u64) * KAS,
             lock,
             0,
         ),
@@ -280,10 +305,14 @@ fn state_for(actor: &Actor, p: Progs, asks: &[IntentAsk], bids: &[IntentBid]) ->
 }
 
 fn validate_exec(r: &ExecuteIntent) -> Result<(Transaction, Vec<UtxoEntry>, ExecutionFacts), String> {
+    validate_exec_fee(r).map(|(tx, entries, facts, _)| (tx, entries, facts))
+}
+/// [`validate_exec`] with the fee the execution pays (sompi).
+fn validate_exec_fee(r: &ExecuteIntent) -> Result<(Transaction, Vec<UtxoEntry>, ExecutionFacts, u64), String> {
     let (s, facts) = execute_intent(r).map_err(|e| e.to_string())?;
     let (tx, entries) = s.tx.to_tx().map_err(|e| e.to_string())?;
-    validate(&tx, &entries).map_err(|e| e.to_string())?;
-    Ok((tx, entries, facts))
+    let v = validate(&tx, &entries).map_err(|e| e.to_string())?;
+    Ok((tx, entries, facts, v.fee))
 }
 
 /// Every actor on every program pair of its family that can run it; the 3/3 program refuses the three-bid sells
@@ -303,8 +332,9 @@ fn every_router_shape_is_created_executed_and_validated() {
             }
             let c = create(actor, state, p, value, lock);
             let r = exec_req(&c, actor, asks, bids, merchant_kas);
-            let (tx, _, facts) = validate_exec(&r).unwrap_or_else(|e| panic!("{} {p:?}: {e}", actor.name));
+            let (tx, _, facts, fee) = validate_exec_fee(&r).unwrap_or_else(|e| panic!("{} {p:?}: {e}", actor.name));
             let me = tx.inputs.len() - 1;
+            check_bid_deliveries(&r, &tx, p.a);
             assert_eq!(tx.inputs[me].previous_outpoint.index, INTENT_OUTPUT, "{}: the intent is the last input", actor.name);
             let mo = &tx.outputs[facts.merchant_output as usize];
             match actor.shape.kind {
@@ -328,13 +358,15 @@ fn every_router_shape_is_created_executed_and_validated() {
                 assert_eq!(tx.outputs[me + 1].script_public_key, spk_on(p.a, &change), "{}: payer change at j + 1", actor.name);
             }
             println!(
-                "{:<26} {:>15} -> {:<14} ok: {} in / {} out, {} B, intent value {} sompi",
+                "{:<26} {:>15} -> {:<14} ok: {} in / {} out, {} B, fee {fee} sompi, router script {} B, bid budgets {:?}, intent value {} sompi",
                 actor.name,
                 if actor.shape.kind.locks_tokens() { p.a.name() } else { "KAS" },
                 if actor.shape.kind.merchant_gets_token() { p.b.name() } else { "KAS" },
                 tx.inputs.len(),
                 tx.outputs.len(),
                 kaspa_consensus_core::mass::transaction_estimated_serialized_size(&tx),
+                c.state.redeem(actor).unwrap().len(),
+                tx.inputs[..actor.shape.bids].iter().map(|i| i.compute_commit.compute_budget().unwrap_or(0)).collect::<Vec<_>>(),
                 r.intent.amount
             );
             ran += 1;
@@ -992,4 +1024,165 @@ fn an_execution_that_keeps_more_than_max_extra_is_refused_by_the_router() {
         execute(&below, &entries, true).unwrap()[me].is_err(),
         "one sompi below value - pay - max_extra fails at the intent input"
     );
+}
+
+// ================================================================ bid delivery modes (docs/design/bid-delivery-spec.md, section 8)
+
+/// The bid leg's delivery the router pins, checked on a built execution: mode 1 delivers `bought + n` into the bid's
+/// bought-custody (owner = its id, scheme 0x04) while it rests and to the maker's key when it ends; modes 0 and 2
+/// deliver `n` to the maker's key. A resting mode-1 bid continues with `bought + n`, and a bid with a custody spends it.
+fn check_bid_deliveries(r: &ExecuteIntent, tx: &Transaction, pa: TemplateId) {
+    for b in &r.bids {
+        let s = &b.order.state;
+        let id = b.order.utxo.covenant_id.unwrap();
+        let at = input_of(tx, &b.order.utxo);
+        let cont = tx.outputs.iter().find(|o| o.covenant.is_some_and(|c| c.covenant_id.as_bytes() == id));
+        let rests = cont.is_some();
+        let want = match (s.mode, rests) {
+            (1, true) => TokenState::custody(pa.family(), s.bought + b.amount, id, s.extension_commitment),
+            (1, false) => TokenState::user(pa, s.bought + b.amount, s.maker, s.extension_commitment),
+            _ => TokenState::user(pa, b.amount, s.maker, s.extension_commitment),
+        };
+        assert_eq!(tx.outputs[at].script_public_key, spk_on(pa, &want), "{}: the delivery of the bid at input {at}", r.actor);
+        if let Some(o) = cont {
+            let next = if s.mode == 1 { BidState { bought: s.bought + b.amount, ..s.clone() } } else { s.clone() };
+            let want = if pa.family() == Family::Kron { AnyState::KobBidKron(next) } else { AnyState::KobBid(next) }.spk();
+            assert_eq!(o.script_public_key, want, "{}: the continuation of the bid at input {at}", r.actor);
+        }
+        if let Some(c) = &b.custody {
+            input_of(tx, &c.utxo);
+        }
+    }
+}
+
+/// The input that spends `u`.
+fn input_of(tx: &Transaction, u: &Utxo) -> usize {
+    tx.inputs
+        .iter()
+        .position(|i| i.previous_outpoint.transaction_id.as_bytes() == u.transaction_id && i.previous_outpoint.index == u.index)
+        .expect("the UTXO is spent")
+}
+
+/// A built, engine-valid execution of `name` with the legs of [`legs_for`], its request and the intent's input index.
+fn honest_exec(name: &str, p: Progs) -> (ExecuteIntent, Transaction, Vec<UtxoEntry>, usize) {
+    let actor = Actor::by_name(name).unwrap();
+    let (asks, bids) = legs_for(actor, p);
+    let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
+    let c = create(actor, state, p, value, lock);
+    let r = exec_req(&c, actor, asks, bids, merchant_kas);
+    let (tx, entries, _) = validate_exec(&r).unwrap_or_else(|e| panic!("{name}: {e}"));
+    let me = tx.inputs.len() - 1;
+    (r, tx, entries, me)
+}
+
+type Delivery = fn(&BidState, i64, [u8; 32]) -> TokenState;
+
+/// The deliveries the builder writes are the only ones the router accepts. Each honest execution validates, and the
+/// same transaction with the other delivery form at the bid's output (what the builder would write without the mode
+/// rule) fails at the intent input: a resting mode-1 bid delivered plainly (its first fill under `sell`, its custody
+/// under `sell_c` and `swap_c`), an ending custody bid delivered `n` instead of `bought + n` (`sell_c_out`, `swap2_c`),
+/// and a resting mode-2 / mode-0 bid delivered into a custody of its id.
+#[test]
+fn the_router_accepts_only_the_delivery_of_the_bid_mode() {
+    let p = RUNS[0];
+    let plain_n: Delivery = |s, n, _| TokenState::user(P8, n, s.maker, s.extension_commitment);
+    let plain_total: Delivery = |s, n, _| TokenState::user(P8, s.bought + n, s.maker, s.extension_commitment);
+    let into_custody: Delivery = |s, n, id| TokenState::custody(Family::Kcc20, s.bought + n, id, s.extension_commitment);
+    let cases: [(&str, usize, Delivery); 7] = [
+        // one resting mode-1 bid, its first fill (the custody is created)
+        ("TokenToKas_sell", 0, plain_n),
+        // the resting custody bid delivered plainly (bought + n to the maker's key)
+        ("TokenToKas_sell_c", 0, plain_total),
+        // the ending custody bid gets n only (its custody's units left out)
+        ("TokenToKas_sell_c_out", 0, plain_n),
+        // bid 2 is a resting mode-2 bid (form 0: plain n), delivered into a custody of its id
+        ("TokenToKas_sell2", 1, into_custody),
+        // bid 3 is a resting mode-0 bid, delivered into a custody of its id
+        ("TokenToKas_sell3", 2, into_custody),
+        // the tightest shape (at the stack limit): the ending custody leg delivered n only
+        ("TokenSwap_swap2_c", 0, plain_n),
+        // the resting custody leg delivered plainly
+        ("TokenSwap_swap_c", 0, plain_total),
+    ];
+    for (name, bid, f) in cases {
+        let (r, tx, entries, me) = honest_exec(name, p);
+        check_bid_deliveries(&r, &tx, p.a);
+        let b = &r.bids[bid];
+        let at = input_of(&tx, &b.order.utxo);
+        let mut bad = tx.clone();
+        bad.outputs[at].script_public_key = spk_on(p.a, &f(&b.order.state, b.amount, b.order.utxo.covenant_id.unwrap()));
+        assert_ne!(bad.outputs[at].script_public_key, tx.outputs[at].script_public_key, "{name}: another delivery");
+        let res = execute(&bad, &entries, true).unwrap();
+        assert!(res[me].is_err(), "{name}: bid {bid} with the other delivery must fail at the intent input");
+        println!("REFUSED {name}: bid {bid} (mode {}, bought {}) with the other delivery", b.order.state.mode, b.order.state.bought);
+    }
+}
+
+/// The builder's custody rules. A bid that holds a bought-custody needs a custody actor and its custody input, exactly
+/// its own (`bought` units, owned by its id, scheme 0x04, its commitment), and only a mode-1 bid with `bought > 0` has
+/// one. The custody bids are put first whatever order the keeper names them in.
+#[test]
+fn the_builder_checks_the_bid_custody_legs() {
+    let p = RUNS[0];
+    let actor = Actor::by_name("TokenToKas_sell_c").unwrap();
+    let (asks, bids) = legs_for(actor, p);
+    let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
+    let c = create(actor, state.clone(), p, value, lock);
+    let base = exec_req(&c, actor, asks.clone(), bids.clone(), merchant_kas);
+    validate_exec(&base).unwrap();
+    let refused = |r: &ExecuteIntent, what: &str, needle: &str| {
+        let e = build_execute_intent(r, &intent_budgets).err().unwrap_or_else(|| panic!("{what}: must be refused"));
+        assert!(e.to_string().contains(needle), "{what}: {e}");
+        println!("REFUSED {what}: {e}");
+    };
+    // the custody bid through the entry without a custody leg (the same terms under sell)
+    let sell = Actor::by_name("TokenToKas_sell").unwrap();
+    let cs = create(sell, state.clone(), p, value, lock);
+    refused(&exec_req(&cs, sell, asks.clone(), bids.clone(), merchant_kas), "a custody bid under sell", "bought-custody");
+    // its custody left out
+    let mut r = base.clone();
+    r.bids[0].custody = None;
+    refused(&r, "the custody left out", "is required");
+    // a custody one unit short of bought, owned by another id, of scheme 0x00, with borrowing, of another commitment
+    let mut r = base.clone();
+    let cu = r.bids[0].custody.as_mut().unwrap();
+    cu.state = cu.state.with_amount(cu.state.amount() - 1);
+    refused(&r, "a custody one unit short", "bought-custody");
+    let edit = |f: &dyn Fn(&mut Kcc20State)| {
+        let mut r = base.clone();
+        if let TokenState::Kcc20(k) = &mut r.bids[0].custody.as_mut().unwrap().state {
+            f(k);
+        }
+        r
+    };
+    refused(&edit(&|k| k.owner = cov(0xbe)), "a custody of another id", "bought-custody");
+    refused(&edit(&|k| k.owner_scheme = 0), "a custody of owner scheme 0x00", "bought-custody");
+    refused(&edit(&|k| k.borrow_scheme = 1), "a custody with borrowing", "borrow");
+    refused(&edit(&|k| k.extension_commitment = [0xdd; 32]), "a custody of another commitment", "extension commitment");
+    // a custody named for a bid of mode 0, and a mode-0 bid that claims bought > 0
+    let (pasks, mut pbids) = legs_for(sell, p);
+    pbids[0].order.state.mode = 0;
+    pbids[0].custody = Some(tok_of(150, WHOLE, pbids[0].order.utxo.covenant_id.unwrap(), SCHEME_COVID, 1_000, TOK_A));
+    refused(&exec_req(&cs, sell, pasks.clone(), pbids.clone(), merchant_kas), "a custody for a mode-0 bid", "only a mode-1 bid");
+    pbids[0].custody = None;
+    pbids[0].order.state.bought = WHOLE;
+    refused(&exec_req(&cs, sell, pasks, pbids, merchant_kas), "a mode-0 bid with bought > 0", "only mode 1 holds");
+
+    // sell2_c: the custody bid named second is put first
+    let actor = Actor::by_name("TokenToKas_sell2_c").unwrap();
+    let (asks, mut bids) = legs_for(actor, p);
+    assert!(bids[0].custody.is_some() && bids[1].custody.is_none());
+    let (state, value, lock, merchant_kas) = state_for(actor, p, &asks, &bids);
+    bids.swap(0, 1);
+    let c = create(actor, state.clone(), p, value, lock);
+    let r = exec_req(&c, actor, asks, bids, merchant_kas);
+    let (tx, _, _) = validate_exec(&r).unwrap();
+    check_bid_deliveries(&r, &tx, p.a);
+    assert_eq!(input_of(&tx, &r.bids[1].order.utxo), 0, "the custody bid is the first input");
+    // two custody bids under sell2_c (sell2_cc's legs)
+    let cc = Actor::by_name("TokenToKas_sell2_cc").unwrap();
+    let (asks, bids) = legs_for(cc, p);
+    let (state, value, lock, merchant_kas) = state_for(cc, p, &asks, &bids);
+    let c = create(actor, state, p, value, lock);
+    refused(&exec_req(&c, actor, asks, bids, merchant_kas), "two custody bids under sell2_c", "bought-custody");
 }
