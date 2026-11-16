@@ -30,8 +30,11 @@ pragma silverscript ^0.1.0;
 //
 // Only armed, amountLeft, custody and rptAmount are mutable. custody is the
 // exact B held, the escrow of a BID or the prefund of an ASK. exitState is
-// the KobCondPair state of every exit up to armed. The exit and evidence
-// templates are build constants.
+// the KobCondPair state of every exit up to armed. exitMode,
+// exitRecvThreshold and exitTopupTip are the delivery mode of every exit
+// (docs/design/bid-delivery-spec.md), written into it with bought 0; a
+// repeating entry's exits deliver in mode 0. The exit and evidence templates
+// are build constants.
 contract KobIfdPair(
     byte[32] COND_TPL,
     int COND_PRE,
@@ -85,7 +88,10 @@ contract KobIfdPair(
     int init_amountLeft,
     int init_custody,
     int init_rptAmount,
-    byte[432] init_exitState
+    byte[432] init_exitState,
+    int init_exitMode,
+    int init_exitRecvThreshold,
+    int init_exitTopupTip
 ) {
     // State layout, as payload ranges of the redeem script, whose state
     // starts at byte 1:
@@ -104,14 +110,17 @@ contract KobIfdPair(
     //   mutable  armed [440..448)  amountLeft [449..457)
     //            custody [458..466)  rptAmount [467..475)
     //   exitState [478..910), after its push 0x4d b0 01 at [475..478)
-    // The state is 909 B and ends at byte 910.
+    //   exitMode [911..919)  exitRecvThreshold [920..928)
+    //   exitTopupTip [929..937)
+    // The state is 936 B and ends at byte 937.
     //
     // KobCondPair state offsets used here, relative to its state: side
     // [34..42) sScale [136..144) tScale [271..279) tip [289..297)
     // deliveryCarrier [325..333) stopPrice [415..423) armed [424..432)
     // amountLeft [433..441) custody [442..450) parent [451..483)
     // rptPrice [484..492) rptPre [493..501) rptUntil [502..510)
-    // sExt [511..543).
+    // sExt [511..543) mode [544..552) recvThreshold [553..561)
+    // topupTip [562..570) bought [571..579).
     pubkey maker = init_maker;               // returns, refunds, cancel key
     int side = init_side;                    // 2 BID (buy-first), 1 ASK (sell-first)
     byte[32] aCovId = init_aCovId;           // base token A
@@ -147,6 +156,9 @@ contract KobIfdPair(
     int custody = init_custody;              // exact B held: BID the escrow, ASK the prefund (mutable)
     int rptAmount = init_rptAmount;          // repeat: 0 = off, else 1 + base units of re-arms left (mutable)
     byte[432] exitState = init_exitState;    // KobCondPair state of every exit up to armed
+    int exitMode = init_exitMode;            // the exits' delivery mode: 0 new, 1 accumulate, 2 top-up (0 when repeating)
+    int exitRecvThreshold = init_exitRecvThreshold; // the exits' recvThreshold (mode 2)
+    int exitTopupTip = init_exitTopupTip;    // the exits' topupTip (mode 2)
 
     byte constant SCHEME_P2PK = 0x00;
     byte constant SCHEME_COVID = 0x04;
@@ -160,14 +172,14 @@ contract KobIfdPair(
     // An entry untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
     // State lengths of the evidence templates: KobAsk 276, KobAskKron 243,
-    // KobBid 285, KobBidKron 252 and KobPair 447.
+    // KobBid 285, KobBidKron 252 and KobPair 483.
     int constant ASK_STATE_LEN = 276;
     int constant ASK_STATE_LEN_KRON = 243;
     int constant BID_STATE_LEN = 285;
     int constant BID_STATE_LEN_KRON = 252;
-    int constant PAIR_STATE_LEN = 447;
+    int constant PAIR_STATE_LEN = 483;
     // State length of the exit, KobCondPair.
-    int constant EXIT_STATE_LEN = 543;
+    int constant EXIT_STATE_LEN = 579;
     // The most token inputs of one token a transaction may carry, 8 for the
     // 8/8 prototype. The scans over these slots are unrolled by hand, one
     // line per slot, so raising the cap needs as many lines.
@@ -626,6 +638,10 @@ contract KobIfdPair(
         // extension commitment it is the guard and extension tail of a new
         // KCC-20 output.
         byte[] zg = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x20);
+        // The delivery block of every exit, state [543..579): exitMode,
+        // exitRecvThreshold, exitTopupTip and bought 0.
+        byte[] xDlv = byte[](0x08) + byte[](exitMode as byte[8]) + byte[](0x08) + byte[](exitRecvThreshold as byte[8]) + byte[](0x08)
+            + byte[](exitTopupTip as byte[8]) + byte[](0x08) + zg.slice(0, 8);
 
         // Custodies. The A custody of a sell-first entry holds exactly
         // amountLeft, and the B custody exactly `custody`. Either is absent
@@ -751,8 +767,10 @@ contract KobIfdPair(
                     xsExt = bExt;
                 }
                 // The exit's sExt, with its push at [510..543), is the
-                // commitment of its custody token, as fill writes it.
-                require(x.slice(510, 543) == byte[](0x20) + byte[](xsExt));
+                // commitment of its custody token, and its delivery block
+                // [543..579) is this entry's, with bought 0, as fill writes
+                // them.
+                require(x.slice(510, 579) == byte[](0x20) + byte[](xsExt) + xDlv);
                 require(x.slice(423, 424) + x.slice(432, 433) + x.slice(441, 442) + x.slice(450, 502)
                     == byte[](0x080808) + byte[](0x20) + byte[](selfId) + byte[](0x08) + byte[](price as byte[8]) + byte[](0x08)
                         + byte[](xPre as byte[8]) + byte[](0x08));
@@ -917,6 +935,9 @@ contract KobIfdPair(
                 // KAS and part of neither. Any other exit gets zero repeat
                 // fields. See docs/spec/order-types.md, "Pair if-done
                 // entries".
+                // The exits of a repeating entry deliver in mode 0, because a
+                // booked exit's take-profit fill re-arms this entry.
+                if (rptAmount != 0) { require(exitMode == 0); }
                 byte[32] xParent = ZERO32;
                 int xPrice = 0;
                 int xPre = 0;
@@ -977,9 +998,9 @@ contract KobIfdPair(
                 // amountLeft set to n and custody to xCust, state
                 // [432..450) = 0x08 n 0x08 xCust. Then come the repeat fields
                 // parent (0x20 + 32 B), rptPrice, rptPre and rptUntil
-                // (0x08 + 8 B each), and sExt (0x20 + 32 B). The filler
-                // supplies the template bytes, which are checked against
-                // COND_TPL.
+                // (0x08 + 8 B each), sExt (0x20 + 32 B) and the delivery block
+                // xDlv. The filler supplies the template bytes, which are
+                // checked against COND_TPL.
                 //
                 // The exit is a fresh covenant with one output, created by
                 // this input. Genesis outputs are invisible to OpAuthOutput*,
@@ -997,7 +1018,7 @@ contract KobIfdPair(
                 byte[] exitSpk = byte[](new ScriptPubKeyP2SHFromRedeemScript(
                     cPre + byte[](exitState) + byte[](0x08) + byte[](nb) + byte[](0x08) + byte[](xCust as byte[8]) + byte[](0x20)
                         + byte[](xParent) + byte[](0x08) + byte[](xPrice as byte[8]) + byte[](0x08) + byte[](xPre as byte[8])
-                        + byte[](0x08) + byte[](xUntil as byte[8]) + byte[](0x20) + byte[](xs) + cSuf
+                        + byte[](0x08) + byte[](xUntil as byte[8]) + byte[](0x20) + byte[](xs) + xDlv + cSuf
                 ));
                 require(tx.outputs[exitOut].scriptPubKey == exitSpk);
                 byte[32] exitId = OpOutputCovenantId(exitOut);

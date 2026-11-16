@@ -1503,3 +1503,35 @@ pub fn closing(ask: bool, pa: TemplateId, pb: TemplateId) -> PairState {
         PairState { custody: s.s_out(NR, PR).unwrap(), ..s }
     }
 }
+
+// ---------------------------------------------------------------- delivery modes (docs/design/bid-delivery-spec.md)
+
+/// The delivery of the pair order under test (side `ask`): its T and the `form` argument at settle position 6.
+fn mode_case(ask: bool, pa: TemplateId, pb: TemplateId) -> ModeCase {
+    ModeCase { kind: TemplateId::KobPair, oid: OID, tok: t_tok(ask), prog: t_prog(ask, pa, pb), dc: pdc(), form_at: 6 }
+}
+
+/// Every delivery mode of both sides (`ph::mode_battery`: PM.. positives and NM.. attacks, ids prefixed with the side,
+/// `a` / `b`, and the T family, `tk` / `tr`): a KCC-20 T in modes 0, 1 and 2 (forms 0, 1, 2), a KRON T in mode 0 only.
+fn delivery_modes(r: &Run, pa: TemplateId, pb: TemplateId) {
+    for ask in [true, false] {
+        let c = mode_case(ask, pa, pb);
+        let pfx = format!("{}t{} ", if ask { "a" } else { "b" }, ftag(c.prog));
+        let s = side_pr(ask, pa, pb);
+        let part = |n: &str| inv_ed(n, s.clone(), pa, pb, NR).0;
+        let end = |n: &str| inv_ed(n, s.clone(), pa, pb, s.amount_left).0;
+        let refund = |n: &str| ed(n, refund_of(s.clone(), pa, pb, EXPIRY as u64, PV));
+        if c.prog.family() == Family::Kcc20 {
+            mode_battery(r, &c, &ModeShapes { part: &part, end: &end, refund: &refund }, &pfx);
+        } else {
+            kron_t_battery(r, &c, &part, &pfx);
+        }
+    }
+}
+
+#[test]
+fn pair_delivery_modes() {
+    let mut m = vec![family_mixes()[0]];
+    m.extend(mixed());
+    suite(&m, delivery_modes);
+}
