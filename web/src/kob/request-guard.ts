@@ -36,6 +36,13 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
   const replace = r.replace as { order?: unknown } | null | undefined;
   if (replace) problems.push(bad('replacement order maker', makerOf(replace.order), own));
   // A cancel signs with the wallet key only, so the order must belong to the wallet.
+  // A claim signs the order's cancel and may place an order: both the wallet's.
+  if (r.action === 'claimOrder') {
+    const m = makerOf((r.order as { state?: unknown } | undefined)?.state);
+    problems.push(m !== null && m !== keys.maker ? `the order to claim belongs to ${m.slice(0, 8)}..., not to the wallet` : null);
+    const place = r.place as { order?: unknown } | null | undefined;
+    if (place) problems.push(bad('placed order maker', makerOf(place.order), own));
+  }
   if (r.action === 'cancelOrder' || r.action === 'sweepOrder') {
     const m = makerOf((r.order as { state?: unknown } | undefined)?.state);
     problems.push(m !== null && m !== keys.maker ? `the order to ${r.action === 'sweepOrder' ? 'sweep' : 'cancel'} belongs to ${m.slice(0, 8)}..., not to the wallet` : null);

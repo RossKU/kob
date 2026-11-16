@@ -26,6 +26,7 @@
 // - TypeScript never re-implements a protocol rule. The builder (crates/kob-protocol/src/build.rs)
 //   is the reference, and its rejections are reported as `PlanIssue`s.
 import type { OrderView, TokenUtxoView } from '../data/indexer-types';
+import { boughtOf } from './bought';
 import type { ExpectedSigning } from './decode';
 import {
   asOrderState, baseKind, big, custodiesOf, extensionOf, familyOfKind, isKind, pairExtFor, pairFactsOf, quoteCovIdOf, tokenCovIdOf,
@@ -73,6 +74,8 @@ export interface OrderSnapshot {
   custody: TokenUtxo | null;
   /** A sell-first `KobIfdPair`'s B prefund custody, the second of `custodies`. */
   prefund?: TokenUtxo | null;
+  /** A mode-1 order's bought-custody (`bought > 0`): the maker's tokens, never sell custody. Cancel, refund and claim move it. */
+  boughtCustody?: TokenUtxo | null;
   /** Strays of the order's own token or tokens. A pair order has them of A and of B. */
   strays: TokenUtxo[];
   /**
@@ -175,7 +178,7 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
         const x = pv.custodies[k];
         return (x && x.token === c.token ? (x.utxo ?? null) : null) ?? (k === 0 ? (view.custody?.utxo ?? null) : null);
       })
-    : [view.custody?.utxo ?? null];
+    : cs.length ? [view.custody?.utxo ?? null] : [null];
   const extOf = (token: Hex, k: number | null): Hex | null => {
     const u = k !== null ? cuViews[k] : null;
     const fromUtxo = u?.state ? extensionOfState(u.state) : null;
@@ -200,7 +203,12 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
     return u ? extensionOfState(u.state) : extOf(token, k >= 0 ? k : null);
   };
   const strays = split.own.map((s) => tokenUtxoFromView(s, view.covenant_id, custodyExt(s.token), famOf(s.token)));
+  // a bid's `custody` is its bought-custody too (kobd reads.rs)
+  const bf = boughtOf(st);
+  const bv = view.bought_custody?.utxo ?? (!pv && !cs.length ? (view.custody?.utxo ?? null) : null);
+  const boughtCustody = bf && bv && !bv.spent && bv.token === bf.token ? tokenUtxoFromView(bv, view.covenant_id, bf.ext, 'kcc20') : null;
   return {
+    ...(boughtCustody ? { boughtCustody } : {}),
     ...(split.foreign.length ? { foreign: split.foreign } : {}),
     ...(split.unproven.length ? { foreignUnproven: split.unproven } : {}),
     covenantId: view.covenant_id,
@@ -343,6 +351,8 @@ export interface RefundOrderRequest {
   custody?: TokenUtxo | null;
   /** A sell-first `KobIfdPair`'s B prefund custody. */
   prefund?: TokenUtxo | null;
+  /** A mode-1 order's bought-custody, released whole to the maker. */
+  boughtCustody?: TokenUtxo | null;
   lockTime: U64;
   funding?: KeyUtxo[];
   change?: Hex | null;
@@ -350,8 +360,23 @@ export interface RefundOrderRequest {
   ownKeys?: Hex[];
 }
 
-/** A kob-wasm request that spends orders: cancel, amend, position cancel, refund or sweep. */
-export type CancelRequest = CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | RefundOrderRequest | SweepOrderRequest;
+/** The `claimOrder` request of kob-wasm (bid-delivery-spec §7, CL1 to CL3). */
+export interface ClaimOrderRequest {
+  action: 'claimOrder';
+  order: OrderUtxo<OrderState>;
+  boughtCustody: TokenUtxo;
+  tokens: TokenUtxo[];
+  place: Replacement | null;
+  end: boolean;
+  funding: KeyUtxo[];
+  change?: Hex | null;
+  lockTime: U64;
+  records: [];
+  fee?: { feeRate?: U64 | null };
+}
+
+/** A kob-wasm request that spends orders: cancel, amend, position cancel, refund, sweep or claim. */
+export type CancelRequest = CancelOrderRequest | AmendOrderRequest | CancelPositionRequest | RefundOrderRequest | SweepOrderRequest | ClaimOrderRequest;
 
 /** The result of planning a cancel, amend, sweep or refund. */
 export interface CancelPlan {
@@ -381,6 +406,8 @@ export interface CancelPlan {
   foreignReturned?: { covenantId: Hex; amount: bigint; utxos: number }[];
   /** A sweep in place (`planSweep`): what returns and what stays for a later sweep. */
   sweep?: SweepSummary;
+  /** A claim (`planClaim`): what it moves. */
+  claim?: ClaimSummary;
 }
 
 /**
@@ -633,12 +660,19 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if ((cs[1]?.amount ?? 0n) > 0n && !snap.prefund) {
     return { error: [issue('cancel.prefund-missing', 'error', 'the order\'s prefund custody (its second token UTXO) is unknown: refresh the order from the indexer or node', { covenantId: snap.covenantId })] };
   }
+  // A mode-1 order's bought-custody goes back with the cancel (CL4); the builder takes it among the strays.
+  const bf = boughtOf(st);
+  const bc = bf ? (snap.boughtCustody ?? null) : null;
+  if (bf && !bc) {
+    return { error: [issue('cancel.bought-missing', 'error', 'the token UTXO holding what this order bought is unknown: refresh the order from the indexer', { covenantId: snap.covenantId })] };
+  }
   const toks = ownTokenFacts(st);
   const ownIds = toks.map((t) => t.covenantId);
   // A stray of another token, none of the order's own, cannot join the order's own transfers. The
   // builder would refuse the whole cancel, so the stray is left behind and reported instead of
   // making the order uncancellable.
   const own = snap.strays.filter((s) => {
+    if (bc && outpointOf(s) === outpointOf(bc)) return false;
     if (ownIds.includes(s.covenantId ?? '')) return true;
     issues.push(issue('cancel.stray-other-token', 'warning', 'a stray of another token cannot be swept by this cancel and is left behind', { outpoint: outpointOf(s), amount: big(s.state.amount), ...(s.covenantId ? { token: s.covenantId } : {}) }));
     return false;
@@ -650,11 +684,12 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   const groups: TokenGroup[] = [];
   for (const t of toks) {
     const held = custodiesOfToken(snap, cs, t.covenantId);
+    const forced = bc && bf!.token === t.covenantId ? [{ ...bc, covenantId: t.covenantId }] : [];
     const mine = own.filter((s) => s.covenantId === t.covenantId);
     // The transfer's extension commitment is the custody's, else the one the state names when a
     // stray carries it, else the first stray's.
     const named = t.ext !== null && mine.some((s) => extensionMatches(s.state, t.ext)) ? t.ext : null;
-    const ext = (held[0] ? extensionOfState(held[0].state) : null) ?? named ?? (mine[0] ? extensionOfState(mine[0].state) : null) ?? (t.role === 'base' ? extensionOf(st) : null);
+    const ext = (held[0] ? extensionOfState(held[0].state) : null) ?? (forced[0] ? extensionOfState(forced[0].state) : null) ?? named ?? (mine[0] ? extensionOfState(mine[0].state) : null) ?? (t.role === 'base' ? extensionOf(st) : null);
     // Strays with another extension commitment cannot share one transfer with the rest (a kob-wasm
     // rule). They are reported and not silently moved.
     let strays = mine.filter((s) => {
@@ -665,7 +700,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
       return true;
     });
     const slots = tokenSlotsFor(env.kob, t.tplHash)?.inputs ?? 3;
-    const room = slots - held.length - (extra.get(t.covenantId) ?? 0);
+    const room = slots - held.length - forced.length - (extra.get(t.covenantId) ?? 0);
     if (strays.length > room) {
       if (!opts.allowAbandonStrays) {
         return {
@@ -677,15 +712,16 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
       strays = strays.slice(0, Math.max(room, 0));
       issues.push(issue('cancel.strays-abandoned', 'warning', `${dropped.length} stray token UTXO(s) do not fit the transaction and are abandoned (lost when the order closes)`, { count: dropped.length, amount: totalAmount(dropped), order: snap.covenantId, ...tokenOfAll(dropped) }));
     }
-    kept.push(...strays);
-    groups.push({ token: t.covenantId, role: t.role, slots, ext: held.length || strays.length ? ext : null, inputs: held.length + strays.length, program: programOfHash(t.tplHash) });
+    kept.push(...forced, ...strays);
+    const inputs = held.length + forced.length + strays.length;
+    groups.push({ token: t.covenantId, role: t.role, slots, ext: inputs ? ext : null, inputs, program: programOfHash(t.tplHash) });
   }
   const foreign = prepareForeign(env, snap, opts, issues);
   if (!Array.isArray(foreign)) return foreign;
   const item: CancelItem = { order: snap.order, custody: snap.custody, ...(snap.prefund ? { prefund: snap.prefund } : {}), strays: kept, ...(snap.retired ? { retired: snap.retired } : {}) };
   const first = groups[0]!;
   const baseExt = (snap.custody && cs[0]?.token === first.token ? extensionOfState(snap.custody.state) : null) ?? first.ext ?? extensionOf(st) ?? null;
-  return { item, snap: { ...snap, strays: kept, foreign }, issues, slots: first.slots, ext: baseExt, groups, foreign };
+  return { item, snap: { ...snap, strays: kept, boughtCustody: bc, foreign }, issues, slots: first.slots, ext: baseExt, groups, foreign };
 }
 
 const isErr = (p: Prepared | { error: PlanIssue[] }): p is { error: PlanIssue[] } => 'error' in p;
@@ -780,7 +816,7 @@ const AMEND_KEEPS = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tpl
  * A plain bid owns no custody, because its quantity is its escrow. It keeps its maker, its token
  * (with the pinned delivery extension) and its scale.
  */
-const AMEND_KEEPS_BID = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale'] as const;
+const AMEND_KEEPS_BID = ['maker', 'tokenCovId', 'tokenTplHash', 'tplPrefixLen', 'tplSuffixLen', 'extensionCommitment', 'scale', 'mode', 'recvThreshold', 'topupTip', 'bought'] as const;
 
 /**
  * Whether an amendment can be in place (kob-protocol `AmendOrder`).
@@ -863,10 +899,11 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
     return failed([issue('cancel.replacement-wrong-token', 'error', 'the replacement must trade the same token (a pair order: the same pair) as the cancelled order')], [order.covenantId]);
   }
   if (!opts.noInPlace && amendsInPlace(order, rep, extraTokens)) return planAmendInPlace(env, order, replacement);
-  let newState = rep;
+  // the new order starts with nothing bought; the cancel returns the old bought-custody
+  let newState = 'bought' in rep.state && big(String((rep.state as { bought?: string }).bought ?? '0')) !== 0n ? ({ ...rep, state: { ...rep.state, bought: '0' } } as OrderState) : rep;
   const armedNow = 'armed' in rep.state ? big((rep.state as { armed: string }).armed) : 0n;
   if (armedNow !== 0n) {
-    newState = { ...rep, state: { ...rep.state, armed: '0' } } as OrderState;
+    newState = { ...newState, state: { ...newState.state, armed: '0' } } as OrderState;
     issues.push(issue('cancel.replacement-restarts-unarmed', 'info', 'an amended stop starts unarmed and must trigger again'));
   } else if ('armed' in old.state && big((old.state as { armed: string }).armed) !== 0n && ('armed' in rep.state)) {
     issues.push(issue('cancel.replacement-restarts-unarmed', 'info', 'an amended stop starts unarmed and must trigger again'));
@@ -1143,6 +1180,100 @@ export function planSweep(env0: CancelEnv, snap: OrderSnapshot): CancelPlan {
   };
 }
 
+// --------------------------------------------------------------------------------------- planClaim
+
+/** What a claim does besides sending the bought tokens to the wallet. */
+export interface ClaimSpec {
+  /** Claim and merge (CL2): the wallet's plain UTXOs of the bought token that join the claimed one. */
+  merge?: TokenUtxo[];
+  /** Claim and place (CL3): an order that takes its custody from the claimed tokens (and `merge`). */
+  place?: ReplacementSpec;
+  /** With `place`: the order ends and its KAS returns, instead of continuing with nothing bought. */
+  end?: boolean;
+}
+
+/** What a claim moves, for its confirmation. */
+export interface ClaimSummary {
+  token: Hex;
+  /** Base units the bought-custody held. */
+  claimed: bigint;
+  merged: bigint;
+  mergedUtxos: number;
+  /** Base units the placed order takes into its custody. */
+  placed: bigint;
+  /** Base units in the one plain UTXO the wallet gets (0 when the placed order takes everything). */
+  toWallet: bigint;
+  /** KAS the continuing order gains: the carrier of its next bought-custody (0 when it ends). */
+  carrier: bigint;
+  fee: bigint;
+  ends: boolean;
+}
+
+/** Most wallet UTXOs a claim and merge can add: the token program's inputs less the bought-custody. */
+export function claimMergeRoom(kob: KobWasm, st: OrderState): number {
+  const bf = boughtOf(st);
+  const t = bf ? ownTokenFacts(st).find((x) => x.covenantId === bf.token) : undefined;
+  const slots = t ? (tokenSlotsFor(kob, t.tplHash)?.inputs ?? 3) : 3;
+  return Math.max(slots - 1, 0);
+}
+
+/**
+ * The maker's claim of a mode-1 order's bought-custody through its `cancel` (kob-protocol `ClaimOrder`, bid-delivery-spec §7).
+ * The order continues with nothing bought (or ends, with a placement); the tokens reach the wallet as one plain UTXO, join
+ * `merge` (CL2) or go into `place` (CL3), in one approval. A wallet KAS UTXO pays the next custody's carrier and the fee.
+ */
+export function planClaim(env0: CancelEnv, snap: OrderSnapshot, spec: ClaimSpec = {}): CancelPlan {
+  const env = withUrgency(env0, 'normal');
+  const only = retiredOnly(snap);
+  if (only) return only;
+  const st = snap.order.state;
+  const cov = snap.covenantId;
+  if (st.state.maker !== env.maker) return failed([issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can claim', { covenantId: cov })]);
+  const bf = boughtOf(st);
+  if (!bf) return failed([issue('claim.nothing', 'error', 'this order holds no bought tokens')], [cov]);
+  const bc = snap.boughtCustody ?? null;
+  if (!bc) return failed([issue('cancel.bought-missing', 'error', 'the token UTXO holding what this order bought is unknown: refresh the order from the indexer', { covenantId: cov })], [cov]);
+  if (spec.end && !spec.place) return failed([issue('claim.end-without-place', 'error', 'a claim ends the order only with a placement: cancel it instead')], [cov]);
+  const merge = spec.merge ?? [];
+  if (merge.some((u) => (u.covenantId ?? bf.token) !== bf.token || u.state.owner !== env.maker || !isPlainState(u.state) || !extensionMatches(u.state, bf.ext))) {
+    return failed([issue('claim.merge-not-plain', 'error', 'only plain wallet UTXOs of the bought token can join a claim')], [cov]);
+  }
+  const room = claimMergeRoom(env.kob, st);
+  if (merge.length > room) return failed([issue('claim.merge-too-many', 'error', `this token takes ${room} wallet UTXOs with a claim`, { max: room })], [cov]);
+  const pool = (env.funding ?? []).filter((f) => f.pubkey === env.maker).sort((x, y) => (big(x.amount) < big(y.amount) ? -1 : big(x.amount) > big(y.amount) ? 1 : 0));
+  const seed = pool.find((f) => big(f.amount) >= ONE_KAS) ?? pool[pool.length - 1] ?? null;
+  if (!seed) return failed([issue('claim.needs-funding', 'error', "a claim needs a KAS UTXO of the wallet: the next custody's carrier and the fee")], [cov]);
+  const place = spec.place ?? null;
+  const placed = place ? custodiesOf(place.order).reduce((a, c) => a + (c.token === bf.token ? c.amount : 0n), 0n) : 0n;
+  const rp: Replacement | null = place
+    ? { order: place.order, value: place.value.toString(), tokenCarrier: place.tokenCarrier != null ? place.tokenCarrier.toString() : null, deadline: place.deadline != null ? place.deadline.toString() : null }
+    : null;
+  const make = (funding: KeyUtxo[]): CancelRequest => ({
+    action: 'claimOrder', order: snap.order, boughtCustody: { ...bc, covenantId: bf.token }, tokens: merge, place: rp, end: !!spec.end, funding, change: env.changeTo ?? null, lockTime: '0',
+    records: [], fee: feeOpts(env),
+  });
+  const r = buildWithFunding(env, make, [seed]);
+  if ('error' in r) return failed([r.error], [cov]);
+  const merged = totalAmount(merge);
+  const ends = !!spec.end;
+  const cont = ends ? null : (r.built.tx.outputs.find((o) => o.covenant?.covenantId === cov) ?? null);
+  const contState = ends ? null : ({ ...st, state: { ...st.state, bought: '0' } } as OrderState);
+  const custodyCarrier = place ? (place.tokenCarrier ?? big(bc.amount)) * BigInt(custodiesOf(place.order).length) : 0n;
+  const kasLocked = (cont ? big(cont.value) : 0n) + (place ? place.value + custodyCarrier : 0n);
+  const toWallet = bf.amount + merged - placed;
+  const quote = ownTokenFacts(st).find((x) => x.covenantId === bf.token)?.role === 'quote';
+  const claim: ClaimSummary = { token: bf.token, claimed: bf.amount, merged, mergedUtxos: merge.length, placed, toWallet, carrier: ends ? 0n : bf.carrier, fee: big(r.built.fee.fee), ends };
+  return {
+    ok: true, issues: r.issues, request: r.request, built: r.built, cancelIds: [cov],
+    expected: withChange(env, r.built, {
+      cancelIds: [cov], orders: [...(contState ? [contState] : []), ...(place ? [place.order] : [])], kasLocked, ...(place ? { tokensEscrowed: placed } : {}),
+    }),
+    tokensReturned: quote ? 0n : toWallet, ...(quote ? { quoteReturned: toWallet } : quoteField(snap, 0n)),
+    kasReleased: big(bc.amount) + merge.reduce((a, u) => a + big(u.amount), 0n) + (ends ? big(snap.order.amount) : 0n), fundingUsed: r.fundingUsed,
+    claim,
+  };
+}
+
 // -------------------------------------------------------------------------------------- planRefund
 
 /**
@@ -1178,8 +1309,11 @@ export function planRefund(env0: CancelEnv, order: OrderSnapshot, opts: { reclai
   if ((cs[0]?.amount ?? 0n) > 0n && !order.custody) return failed([issue('cancel.custody-missing', 'error', "the order's custody token UTXO is unknown")], [order.covenantId]);
   if ((cs[1]?.amount ?? 0n) > 0n && !order.prefund) return failed([issue('cancel.prefund-missing', 'error', "the order's prefund custody (its second token UTXO) is unknown")], [order.covenantId]);
   const holding = cs.length > 0;
+  const bf = boughtOf(order.order.state);
+  const bc = bf ? (order.boughtCustody ?? null) : null;
+  if (bf && !bc) return failed([issue('cancel.bought-missing', 'error', 'the token UTXO holding what this order bought is unknown: refresh the order from the indexer', { covenantId: order.covenantId })], [order.covenantId]);
   const make = (funding: KeyUtxo[]): CancelRequest => ({
-    action: 'refundOrder', order: order.order, custody: holding ? order.custody : null, ...(cs.length > 1 && order.prefund ? { prefund: order.prefund } : {}),
+    action: 'refundOrder', order: order.order, custody: holding ? order.custody : null, ...(cs.length > 1 && order.prefund ? { prefund: order.prefund } : {}), ...(bc ? { boughtCustody: bc } : {}),
     lockTime: env.clock!.daa.toString(), funding, change: env.changeTo ?? env.maker, fee: feeOpts(env),
   });
   const seed = opts.reclaimTip
@@ -1191,10 +1325,10 @@ export function planRefund(env0: CancelEnv, order: OrderSnapshot, opts: { reclai
     const e = m ? issue('refund.not-yet', 'error', `not refundable before DAA ${m[1]} (now ${env.clock.daa})`, { dueDaa: BigInt(m[1]), nowDaa: env.clock.daa }) : r.error;
     return failed([...issues, e], [order.covenantId]);
   }
-  const back = returnedOf({ order: order.order, custody: holding ? order.custody : null, prefund: order.prefund ?? null, strays: [] }, order);
+  const back = returnedOf({ order: order.order, custody: holding ? order.custody : null, prefund: order.prefund ?? null, strays: bc ? [{ ...bc, covenantId: bf!.token }] : [] }, order);
   return {
     ok: true, issues: [...issues, ...r.issues], request: r.request, built: r.built, cancelIds: [order.covenantId], expected: withChange(env, r.built, { cancelIds: [order.covenantId] }),
     tokensReturned: back.base, ...quoteField(order, back.quote),
-    kasReleased: big(order.order.amount) + custodyUtxos({ custody: holding ? order.custody : null, prefund: order.prefund }).reduce((a, x) => a + big(x.amount), 0n), fundingUsed: r.fundingUsed,
+    kasReleased: big(order.order.amount) + custodyUtxos({ custody: holding ? order.custody : null, prefund: order.prefund }).reduce((a, x) => a + big(x.amount), 0n) + (bc ? big(bc.amount) : 0n), fundingUsed: r.fundingUsed,
   };
 }

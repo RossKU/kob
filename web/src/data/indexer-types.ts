@@ -310,7 +310,17 @@ export interface OrderView {
   auction?: AuctionView | null;
   quote?: string | null;
   repeat?: RepeatView | null;
+  /** asks: the sell custody; a non-pair bid holding bought tokens: its bought-custody (the same view as `bought_custody`) */
   custody?: CustodyView;
+  /** delivering kinds: `wallet` (mode 0), `order` (mode 1), `topup` (mode 2); absent on older executors */
+  delivery?: 'wallet' | 'order' | 'topup';
+  delivery_mode?: number;
+  /** mode 1: base units in the bought-custody now ("0" after a claim) */
+  bought?: string;
+  topup_tip?: string;
+  recv_threshold?: string;
+  /** mode 1: the bought-custody, checked against `bought` */
+  bought_custody?: CustodyView;
   strays?: TokenUtxoView[];
   last_block: number; last_daa: number; confirmations: number | null; settled: boolean;
   expired: boolean;

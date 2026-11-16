@@ -4,6 +4,7 @@
 import type { OrderView } from '../../data/indexer-types';
 import { GTC_DAYS, MARKET_AUCTION_DAA, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix, renewalUnixForExpiry } from '../../kob/daa';
 import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isMultiFillMarket, isPairKind, type OrderDescription } from '../../kob/order-facts';
+import { boughtOf, deliveryModeOf } from '../../kob/bought';
 import { pairOfView } from '../../kob/pair-view';
 import type { Clock } from '../../kob/plan-types';
 import { recordCodec, retiredOf, type PlacementRecord, type RecordKind, type ResolvedRecord } from '../../kob/records';
@@ -242,6 +243,12 @@ export interface OrderRowModel {
   refundable: boolean;
   /** ask kinds: the indexer proved exactly one custody UTXO with the expected amount (null: not known) */
   custodyOk: boolean | null;
+  /** a delivering buy (bid kinds, pair orders): its mode, '1' Collected; null for the other kinds */
+  delivery: '0' | '1' | '2' | null;
+  /** a mode-1 order holding what it bought: the token, the base units and whether the indexer proved its UTXO (null: not known) */
+  bought: { token: Hex; amount: bigint; ok: boolean | null } | null;
+  /** Claim, Claim and merge, Claim and sell (the order stays open) */
+  canClaim: boolean;
   placementTx: Hex | null;
   parent: Hex | null;
   label: string | null;
@@ -430,12 +437,14 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const r = e.resolved;
   const oldTemplate = r?.status === 'old-template';
   const cancelOnly = isCancelOnly(e, ctx.kob);
-  const needsCustody = !!es && holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n;
+  const bf = es ? boughtOf(es.state) : null;
+  const bought = bf ? { token: bf.token, amount: bf.amount, ok: v?.bought_custody ? v.bought_custody.ok : null } : null;
+  const needsCustody = !!es && ((holdsTokens(es.state.kind) && (custodyAmountOf(es.state) ?? 0n) > 0n) || !!bf);
   const cancelBlocked: OrderRowModel['cancelBlocked'] = viaView
     ? null
     : oldTemplate
       ? 'old-template'
-      : r?.status === 'live' && needsCustody && !r.custody
+      : r?.status === 'live' && needsCustody && (bf ? true : !r.custody)
         ? r.custodyIssue === 'no-extension' ? 'no-extension' : 'custody-missing'
         : null;
   const viaRecord = r?.status === 'live' && cancelBlocked === null;
@@ -446,7 +455,12 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     amountTotal, amountLeft, amountEstimated: v ? v.amount_estimated : e.resolved !== null && es?.source === 'node' && baseKind(es.state.kind) === 'KobBid',
     scale, minFill: desc ? desc.minFill : bi(v?.min_fill ?? null),
     auction, armed: armedRaw === null ? null : armedRaw !== 0n, startsAtDaa: activeFrom !== null && nowDaa !== null && activeFrom > nowDaa ? activeFrom : null,
-    expiry, renewalUnix, renewalDue, refundDueDaa: refundDue, refundable, custodyOk, placementTx: v?.genesis.txid ?? e.record?.txid ?? null, parent: v?.parent ?? null,
+    expiry, renewalUnix, renewalDue, refundDueDaa: refundDue, refundable, custodyOk,
+    delivery: es && ('mode' in es.state.state || v?.delivery_mode != null) ? deliveryModeOf(es.state) : null,
+    bought,
+    // a claim spends the bought-custody the indexer proved
+    canClaim: live && viaView && !cancelOnly && !!bought && bought.ok !== false && !!v?.bought_custody?.utxo,
+    placementTx: v?.genesis.txid ?? e.record?.txid ?? null, parent: v?.parent ?? null,
     // older versions stored the form's ids ("ifd buy"): shown in the ticket's words
     label: labelText(e.record?.label),
     // a cancel needs a live order whose current UTXO can be found: proven indexer state, or a node-resolved record

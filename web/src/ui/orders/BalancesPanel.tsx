@@ -75,6 +75,8 @@ export function BalancesPanel(props: {
   busy?: string | null;
   /** merge the wallet's plain UTXOs of a token into one */
   onMergeToken?(token: Hex): void;
+  /** claim what the wallet's Collected buy orders of a token bought (one order: its dialog; several: one claim each) */
+  onClaimToken?(token: Hex): void;
   /** the page's balances (use-balances.ts): the free balances, combined with the orders and strays, and each token's value in KAS */
   balances: WalletBalances;
   /** only these tokens (a market page: its token, a pair's two); KAS always */
@@ -104,7 +106,7 @@ export function BalancesPanel(props: {
       case 'available':
         return scaledUnits(b.free, decimals);
       case 'inOrders':
-        return scaledUnits(b.escrowed, decimals);
+        return scaledUnits(b.escrowed + b.bought, decimals);
       case 'strays':
         return scaledUnits(b.strays, decimals);
       case 'kasLocked':
@@ -233,6 +235,7 @@ export function BalancesPanel(props: {
                 const scaleNote = shown.decimalsSource === 'scale' && !shown.declarationConflicts?.length ? decimalsNote(shown) : null;
                 const mergeAs = props.onMergeToken && mergeable.has(b.token) ? mergeTokenFor(b.token, free.data!.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : null;
                 const showMerge = !!mergeAs;
+                const claimable = !!props.onClaimToken && b.bought > 0n;
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
@@ -261,15 +264,36 @@ export function BalancesPanel(props: {
                           </div>
                         ) : null}
                       </DtCell>
-                      <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="balance-escrowed"><Amount kind="token" value={b.escrowed} decimals={d} unit={false} fraction={dp.escrowed} group /></DtCell>
+                      <DtCell k="inOrders" label={t('orders.balances.inOrders')} num data-testid="balance-escrowed">
+                        <Amount kind="token" value={b.escrowed + b.bought} decimals={d} unit={false} fraction={dp.escrowed} group />
+                        {b.bought > 0n ? (
+                          // tokens bought and held by Collected buy orders: the wallet's own, next to what is for sale
+                          <>
+                            {b.escrowed > 0n ? <div class="dt-sub" data-testid="balance-for-sale">{t('orders.balances.forSale', { amount: amountCell(b.escrowed, d).text })}</div> : null}
+                            <div class="dt-sub" title={t('orders.balances.boughtHint')} data-testid="balance-bought">{t('orders.balances.bought', { amount: amountCell(b.bought, d).text })}</div>
+                          </>
+                        ) : null}
+                      </DtCell>
                       <DtCell k="strays" label={t('orders.balances.strays')} num card={b.strays > 0n ? 'pair' : 'hidden'} data-testid="balance-strays"><Amount kind="token" value={b.strays} decimals={d} unit={false} fraction={dp.strays} group /></DtCell>
                       <DtCell k="kasLocked" label={lockedLabel} num card="hidden"><Amount kind="kas" value={b.kasLocked} unit={false} fraction={dp.kas} group fiat={fiat} /></DtCell>
                       <DtCell k="value" label={valueLabel} num card="end" data-testid="balance-value">
                         {valueOf(b) !== null ? <MoneyCell kas={valueOf(b)!} unit={false} fraction={dp.value} /> : <span class="dt-muted" title={t('orders.balances.noPrice')}>—</span>}
                       </DtCell>
                       <DtCell k="act" card="action">
-                        {showMerge || b.orderCount > 0 ? (
+                        {showMerge || b.orderCount > 0 || claimable ? (
                           <span class="dt-act">
+                            {claimable ? (
+                              <Button
+                                small
+                                disabled={!props.canSign || !!props.busy}
+                                loading={props.busy === `claim-${b.token}`}
+                                title={b.boughtOrders > 1 ? t('orders.claim.allHint', { count: b.boughtOrders }) : t('orders.claim.hint', { amount: amountCell(b.bought, d).text, ticker: shown.ticker })}
+                                onClick={() => props.onClaimToken!(b.token)}
+                                data-testid={`balance-claim-${b.token}`}
+                              >
+                                {b.boughtOrders > 1 ? t('orders.claim.all', { count: b.boughtOrders }) : t('orders.claim')}
+                              </Button>
+                            ) : null}
                             {mergeAs ? (
                               <Button
                                 small
