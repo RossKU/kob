@@ -308,7 +308,9 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   // the KAS of the order UTXOs, custodies and strays this transaction spends is not covered by the wallet's signature: it is the node's word (S1, accepted: the user chooses the node)
   if (s.unsignedKas) list.append(el('div', { class: 'line fee muted', 'data-testid': 'signer-unsigned-kas' }, el('dt', {}, t('signer.unsignedKas'))));
   const reject = el('button', { type: 'button', 'data-testid': 'signer-reject' }, t('signer.reject'));
-  const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t('signer.approve'));
+  // a merge session's screen: Allow opens it (nothing is signed by that click), the fixed line says what still asks
+  const approve = el('button', { type: 'button', class: 'primary', disabled: '', 'data-testid': 'signer-approve' }, t(req.session ? 'signer.allow' : 'signer.approve'));
+  const sessionNote = req.session ? [el('p', { class: 'muted', 'data-testid': 'signer-session-note' }, t('signer.session.note'))] : [];
   const actions = el('div', { class: 'row end' }, reject, approve);
   // why Approve still waits, once it has waited a while (the visibility check: an overlay, a zoom or a cut-off frame keeps it disabled)
   const waitText = el('p', { class: 'muted' }, '');
@@ -348,7 +350,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
   // device pixel ratio the browser reported rows as covered by the next one (Android Chrome 2026-10-23: "lines seen 2/5, covered parts 3"), which
   // kept Approve disabled; the label and value sit inside the row's padding, so only a real overlay covers them, and every word must still show
   const cellsOf = (root: Element): Element[] => [...root.querySelectorAll(':scope > .line > dt, :scope > .line > dd')];
-  const parts: Element[] = [title, ...cellsOf(list), ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token'), ...o.querySelectorAll('.line > dt, .line > dd')]), ...problems];
+  const parts: Element[] = [title, ...cellsOf(list), ...orders.flatMap((o) => [...o.querySelectorAll('h2, p.token'), ...o.querySelectorAll('.line > dt, .line > dd')]), ...sessionNote, ...problems];
   stopVisibility = watchRequest(
     parts,
     actions,
@@ -383,7 +385,7 @@ function requestView(core: SignerCore, req: PendingRequest): void {
     idleView(core);
   });
   onScreen = { id: req.id, shape: shapeOf(s), cells, hold };
-  show(title, list, ...orders, ...hintsView, ...problems, actions, waitWhy);
+  show(title, list, ...orders, ...hintsView, ...sessionNote, ...problems, actions, waitWhy);
 }
 
 // ------------------------------------------------------------------------------------------------ boot
@@ -401,7 +403,8 @@ async function boot(): Promise<void> {
   }
   show(el('p', { class: 'muted' }, t('signer.loading')));
   const [sdk, kob] = await Promise.all([loadKaspaSdk(), loadKob()]);
-  const core = createSignerCore({ sdk, kob, post, registryHash: __KOB_REGISTRY_TABLE_HASH__ });
+  // the frame's own monotonic clock: re-time windows and a session's expiry never follow the app's clock or a change of the system time
+  const core = createSignerCore({ sdk, kob, post, registryHash: __KOB_REGISTRY_TABLE_HASH__, now: () => performance.now() });
   window.addEventListener('message', (e) => {
     if (!fromParent(e, window.parent, APP_ORIGIN)) return;
     const m = parseAppMessage(e.data);
@@ -424,6 +427,7 @@ async function boot(): Promise<void> {
   });
   connectView(core);
   post(toApp({ type: 'ready' }));
+  post(toApp({ type: 'hello', caps: ['merge-session'] }));
 }
 
 boot().catch(() => show(el('p', { class: 'error' }, t('signer.loadFailed'))));

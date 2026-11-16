@@ -478,3 +478,46 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output)));
   return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), ...problemsOf(problems) };
 }
+
+/** "4 min 30 s": a session's validity as the frame says it (never rounded up). */
+function durationWords(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const min = Math.floor(s / 60);
+  const sec = s % 60;
+  return sec === 0 ? t('signer.session.minutes', { min }) : min === 0 ? t('signer.session.seconds', { sec }) : t('signer.session.minSec', { min, sec });
+}
+
+/**
+ * The screen of a one-approval merge session (session.ts): what the frame derived from the plan it decoded, never what the app says. The
+ * token by its covenant id (8 + 8 hex), the UTXOs merged and left, the token amount (unchanged), the most transactions, the most network fee
+ * in all (and the planned fee), and how long the approval lasts. `decoded` is the first link's decoding (the summary type carries one).
+ */
+export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
+  const hint = hints.find((h) => h.covenantId === terms.covenantId);
+  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '';
+  const amount = `${formatTokenAmount(terms.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unit}`;
+  const lines: SummaryLine[] = [
+    { label: t('signer.session.token'), value: tokenName(terms.covenantId, hint, true), dir: null },
+    { label: t('signer.session.what'), value: t('signer.session.whatValue', { utxos: terms.utxos, outputs: terms.outputs, amount }), dir: null },
+    { label: t('signer.session.txs'), value: t('signer.session.txsValue', { count: terms.links.length }), dir: null },
+    { label: t('signer.session.valid'), value: t('signer.session.validValue', { time: durationWords(terms.ttlMs) }), dir: null },
+  ];
+  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: hint.ticker }) : t('signer.session.titleToken');
+  return {
+    title, lines, orders: [],
+    fee: t('signer.session.feeValue', { max: formatKas(terms.feeMax), planned: formatKas(terms.plannedFee) }),
+    problems: 0, problemCodes: [], decoded,
+  };
+}
+
+/** The terms the session screen shows (session.ts `SessionTerms`). */
+interface SessionTermsView {
+  covenantId: Hex;
+  links: readonly unknown[];
+  utxos: number;
+  outputs: number;
+  amount: bigint;
+  feeMax: bigint;
+  plannedFee: bigint;
+  ttlMs: number;
+}

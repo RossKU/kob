@@ -205,3 +205,41 @@ describe("signer protocol: the app's notes (codes and numbers, never text)", () 
     expect(parseAppMessage({ p: P, type: 'cancel', id: 'n1', notes: [] })).toBeNull();
   });
 });
+
+describe('signer protocol: the one-approval merge session', () => {
+  const sid = 'ab'.repeat(16);
+  it('the app opens a session with a plan, steps carry its id, and closes it', () => {
+    const plan = [buildSend(), buildSend()];
+    expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan, tokens: [] }))?.type).toBe('session-open');
+    expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r1', built: buildSend(), tokens: [], session: sid })))
+      .toMatchObject({ type: 'sign', session: sid });
+    expect(parseAppMessage({ p: P, type: 'session-close', sid })).toEqual({ p: P, type: 'session-close', sid });
+  });
+  it('drops a session id with a re-timing, a creation or notes; a bad id; an empty or oversized plan; terms from the app', () => {
+    const built = buildSend();
+    for (const extra of [{ retimeOf: 'r0' }, { prep: built }, { notes: [{ kind: 'congestion' }] }]) {
+      expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r1', built, tokens: [], session: sid, ...extra })), JSON.stringify(Object.keys(extra))).toBeNull();
+    }
+    for (const bad of ['AB'.repeat(16), 'ab'.repeat(15), 42]) expect(parseAppMessage(clone({ p: P, type: 'sign', id: 'r1', built, tokens: [], session: bad }))).toBeNull();
+    expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [], tokens: [] }))).toBeNull();
+    expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: Array.from({ length: 51 }, () => built), tokens: [] }))).toBeNull();
+    // the count, fee budget and expiry are the frame's: an app that sends them is not speaking this protocol
+    expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [built], tokens: [], txs: 50 }))).toBeNull();
+    expect(parseAppMessage(clone({ p: P, type: 'session-open', id: 'o1', plan: [{ ...built, sign: [] }], tokens: [] }))).toBeNull();
+    expect(parseAppMessage({ p: P, type: 'session-close', sid: 'x' })).toBeNull();
+  });
+  it('the app takes hello (known capabilities only), session-opened and session-closed', () => {
+    expect(parseSignerMessage({ p: P, type: 'hello', caps: ['merge-session', 'future'] })).toEqual({ p: P, type: 'hello', caps: ['merge-session'] });
+    expect(parseSignerMessage({ p: P, type: 'session-opened', id: 'o1', sid, txs: 15, feeMax: '62000000', expiresInMs: 270_000 })?.type).toBe('session-opened');
+    expect(parseSignerMessage({ p: P, type: 'session-closed', sid, reason: 'done' })?.type).toBe('session-closed');
+    for (const bad of [
+      { p: P, type: 'hello', caps: 'merge-session' },
+      { p: P, type: 'session-opened', id: 'o1', sid, txs: 0, feeMax: '1', expiresInMs: 1 },
+      { p: P, type: 'session-opened', id: 'o1', sid, txs: 51, feeMax: '1', expiresInMs: 1 },
+      { p: P, type: 'session-opened', id: 'o1', sid, txs: 1, feeMax: '-1', expiresInMs: 1 },
+      { p: P, type: 'session-closed', sid, reason: 'whatever' },
+    ]) {
+      expect(parseSignerMessage(bad), JSON.stringify(bad)).toBeNull();
+    }
+  });
+});
