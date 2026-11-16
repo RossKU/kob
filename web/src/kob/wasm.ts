@@ -52,6 +52,7 @@ export interface RawKobWasm {
   checkScale(scale: string): void;
   checkQuote(amount: string, rate: string, scale: string, what: string): void;
   checkNumbers(state: string): void;
+  checkDelivery(state: string, placement: string): void;
   minFillOk(n: string, left: string, minFill: string): boolean;
   defaultScale(decimals: number): string;
   defaultMinFill(amount: string, price: string, scale: string): string;
@@ -244,6 +245,11 @@ export interface KobWasm {
    * with the reason.
    */
   checkNumbers(state: AnyState): void;
+  /**
+   * The delivery rules of an order state (bid-delivery-spec §2: mode, recvThreshold, topupTip, bought; the exit block of an
+   * if-done entry); `placement` for a new order (bought = 0). Throws with the reason.
+   */
+  checkDelivery(state: AnyState, placement: boolean): void;
   /** `0 < n <= left` and `n >= minFill` unless n takes everything left. */
   minFillOk(n: Num, left: Num, minFill: Num): boolean;
   /** `10^min(decimals, 9)`. */
@@ -483,6 +489,7 @@ export function createKob(raw: RawKobWasm): KobWasm {
     checkScale: (sc) => wrap('checkScale', () => raw.checkScale(s(sc))),
     checkQuote: (a, r, sc, w) => wrap('checkQuote', () => raw.checkQuote(s(a), s(r), s(sc), w)),
     checkNumbers: (st) => wrap('checkNumbers', () => raw.checkNumbers(J(st))),
+    checkDelivery: (st, placement) => wrap('checkDelivery', () => raw.checkDelivery(J(st), placement ? 'true' : 'false')),
     minFillOk: (n, l, m) => wrap('minFillOk', () => raw.minFillOk(s(n), s(l), s(m))),
     defaultScale: (d) => wrap('defaultScale', () => BigInt(raw.defaultScale(d))),
     defaultMinFill: (a, p, sc) => wrap('defaultMinFill', () => BigInt(raw.defaultMinFill(s(a), s(p), s(sc)))),

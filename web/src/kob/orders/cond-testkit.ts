@@ -84,6 +84,17 @@ export const errorCodes = (p: CondPlan): string[] => p.issues.filter((i) => i.se
  * It decodes the committed prefix followed by the zero repeat fields, like
  * `IfdBidState::exit()` and `IfdAskState::exit()` do.
  */
+/** An i64 as 8 bytes little-endian, hex. */
+const i64le = (v: bigint): string => {
+  let x = BigInt.asUintN(64, v);
+  let out = '';
+  for (let i = 0; i < 8; i++) {
+    out += (x & 0xffn).toString(16).padStart(2, '0');
+    x >>= 8n;
+  }
+  return out;
+};
+
 export function committedExit(env: PlanEnv, entry: OrderState): AnyState {
   const family = familyOfKind(entry.kind);
   if (baseKind(entry.kind) === 'KobIfdBid') {
@@ -94,7 +105,10 @@ export function committedExit(env: PlanEnv, entry: OrderState): AnyState {
   }
   if (baseKind(entry.kind) === 'KobIfdAsk') {
     const tail = '20' + '00'.repeat(32) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8) + '08' + '00'.repeat(8);
-    return env.kob.decodeState(kindFor('KobCondBid', family), (entry.state as IfdAskState).exitState + tail);
+    // the delivery block the entry appends (bid-delivery-spec §2): exitMode, exitRecvThreshold, exitTopupTip, bought = 0; a KRON exit has none
+    const e = entry.state as IfdAskState;
+    const block = family === 'kron' ? '' : [e.exitMode, e.exitRecvThreshold, e.exitTopupTip, '0'].map((v) => '08' + i64le(BigInt(v ?? '0'))).join('');
+    return env.kob.decodeState(kindFor('KobCondBid', family), e.exitState + tail + block);
   }
   throw new Error('not an if-done entry');
 }

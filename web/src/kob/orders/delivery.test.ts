@@ -1,0 +1,213 @@
+// Delivery of buy orders (bid-delivery-spec §10): the default per order class and token family, the top-up tip formula, the receive
+// threshold, and the plans the simple planner builds with them (signed and validated by the script engine like every other plan).
+// Each rule has a negative case that fails when the rule is removed.
+import { describe, expect, it } from 'vitest';
+import type { BidState } from '../types';
+import type { OrderPlan } from '../plan-types';
+import { errors } from '../plan-types';
+import { KAS, TOK, consensusCheck, kob, makeEnv, market3x3, market8x8, marketKron } from '../../testing/fixtures';
+import type { SimpleIntent } from '../intent-simple';
+import { planDelivery, planSimple } from './simple';
+import {
+  RECV_THRESHOLD_SOMPI, choiceOfMode, defaultTopupTip, deliveryFixed, effectiveChoice, fundedFills, orderRecvThreshold, programTopupTip, resolveDelivery, topupOffer,
+  topupTipTotal, walletThreshold, type DeliveryOrder,
+} from './delivery';
+import type { PlanIssue } from '../plan-types';
+
+const K = kob();
+const P = 250_000_000n; // 2.5 KAS per whole token
+const DC = 10n * KAS; // the fixtures' delivery carrier
+const order = (o: Partial<DeliveryOrder> = {}): DeliveryOrder => ({ codec: 'kcc20', program: 'KCC20Ref', cls: 'resting', carrier: DC, scale: 1_000n, minFill: 4_000n, price: P, ...o });
+const codes = (xs: readonly PlanIssue[]): string[] => xs.map((i) => i.code);
+const bidOf = (p: OrderPlan): BidState => p.states[0]!.state as BidState;
+
+/** Plans, asserts success, validates the built transaction in the script engine and recovers the placement record. */
+function planValid(intent: SimpleIntent, env = makeEnv()): OrderPlan {
+  const p = planSimple(env, intent);
+  expect(errors(p), JSON.stringify(errors(p))).toEqual([]);
+  consensusCheck(K, p.built!);
+  const rec = K.recoverOrders(p.built!.tx);
+  expect(rec[0]!.order).toEqual(p.states[0]);
+  K.checkDelivery(p.states[0]!, true);
+  return p;
+}
+
+describe('the default delivery (bid-delivery-spec §10)', () => {
+  it('Collected for a resting KCC-20 buy; the wallet default and the user choice override it in that order', () => {
+    expect(effectiveChoice(order(), undefined)).toBe('collected');
+    expect(effectiveChoice(order(), { walletDefault: 'each' })).toBe('each');
+    expect(effectiveChoice(order(), { walletDefault: 'each', choice: 'topup' })).toBe('topup');
+    expect(effectiveChoice(order(), { walletDefault: 'topup', choice: 'collected' })).toBe('collected');
+  });
+
+  it('each fill, whatever is asked, for IOC / FOK / market orders, a repeating entry and a KRON token (negative: the rule removed gives them Collected)', () => {
+    for (const o of [order({ cls: 'immediate' }), order({ cls: 'repeating' }), order({ codec: 'kron', program: 'KronToken2433' })]) {
+      expect(deliveryFixed(o)).toBe(true);
+      for (const choice of ['collected', 'topup'] as const) {
+        expect(effectiveChoice(o, { choice, walletDefault: choice })).toBe('each');
+        const pre: PlanIssue[] = [];
+        expect(resolveDelivery(o, { choice }, pre).fields).toEqual({ mode: '0', recvThreshold: '0', topupTip: '0', bought: '0' });
+        expect(pre).toEqual([]);
+      }
+    }
+    expect(deliveryFixed(order())).toBe(false);
+  });
+
+  it('the modes of the choices; a mode-1 order is funded with one carrier, the others with one per fill (negative: Collected with per-fill carriers)', () => {
+    expect([choiceOfMode('0'), choiceOfMode('1'), choiceOfMode('2'), choiceOfMode(undefined)]).toEqual(['each', 'collected', 'topup', 'each']);
+    expect(fundedFills('collected', 3n)).toBe(1n);
+    expect(fundedFills('each', 3n)).toBe(3n);
+    expect(fundedFills('topup', 3n)).toBe(3n);
+  });
+});
+
+describe('the top-up tip (bid-delivery-spec §10)', () => {
+  it('is min(deliveryCarrier, ceil(1.25 x topup_extra)) (negative: no margin, no rounding up, no cap)', () => {
+    expect(defaultTopupTip(DC, 595_400n)).toBe(744_250n);
+    // 1.25 x 595_401 = 744_251.25: rounded up
+    expect(defaultTopupTip(DC, 595_401n)).toBe(744_252n);
+    expect(defaultTopupTip(DC, 595_401n)).not.toBe((595_401n * 5n) / 4n);
+    // capped at the carrier
+    expect(defaultTopupTip(1_000_000n, 2_304_000n)).toBe(1_000_000n);
+    expect(defaultTopupTip(DC, null)).toBeNull();
+    // from the program table: KCC20Ref has a measured (or the spec's reference) extra, the 8x8 program and KRON have none
+    expect(programTopupTip('KCC20Ref', DC)).toBe(744_250n);
+    expect(programTopupTip('KCC20Ref_8x8', DC)).toBeNull();
+    expect(programTopupTip('KronToken2433', DC)).toBeNull();
+    expect(topupTipTotal(744_250n, 3n)).toBe(2_232_750n);
+  });
+
+  it('a tip above the carrier or below 0 is refused, one below the default warns, up to the carrier is accepted', () => {
+    const run = (topupTip: bigint) => {
+      const pre: PlanIssue[] = [];
+      const r = resolveDelivery(order(), { choice: 'topup', topupTip }, pre);
+      return { r, codes: codes(pre) };
+    };
+    expect(run(DC + 1n).codes).toEqual(['TOPUP_TIP_INVALID']);
+    expect(run(-1n).codes).toEqual(['TOPUP_TIP_INVALID']);
+    expect(run(744_249n).codes).toEqual(['TOPUP_TIP_LOW']);
+    expect(run(DC)).toMatchObject({ codes: [], r: { fields: { topupTip: DC.toString() } } });
+    expect(run(744_250n)).toMatchObject({ codes: [], r: { fields: { topupTip: '744250' } } });
+  });
+});
+
+describe('the receive threshold (bid-delivery-spec §10)', () => {
+  it('T = max(1, ceil(RECV_THRESHOLD_SOMPI x scale / price)): 5 KAS of the token at the order price', () => {
+    expect(RECV_THRESHOLD_SOMPI).toBe(500_000_000n);
+    // 5 KAS at 2.5 KAS per token: 2 tokens
+    expect(walletThreshold(P, 1_000n)).toBe(2_000n);
+    // rounded up
+    expect(walletThreshold(300_000_000n, 1_000n)).toBe(1_667n);
+    // a token worth more than 5 KAS per base unit: at least 1
+    expect(walletThreshold(10n ** 15n, 1n)).toBe(1n);
+    expect(walletThreshold(null, 1_000n)).toBeNull();
+    expect(walletThreshold(0n, 1_000n)).toBeNull();
+  });
+
+  it("an order's recvThreshold is min(T, minFill - 1); at 0 top-up is not offered (negative: without the cap a fill of minFill could not top up)", () => {
+    expect(orderRecvThreshold(2_000n, 4_000n)).toBe(2_000n);
+    expect(orderRecvThreshold(2_000n, 1_500n)).toBe(1_499n);
+    expect(orderRecvThreshold(2_000n, 1n)).toBe(0n);
+    expect(topupOffer(order({ minFill: 1_500n }))).toMatchObject({ ok: true, threshold: 2_000n, recvThreshold: 1_499n, defaultTip: 744_250n });
+    expect(topupOffer(order({ minFill: 1n }))).toEqual({ ok: false, reason: 'minFill' });
+    expect(topupOffer(order({ price: null }))).toEqual({ ok: false, reason: 'price' });
+    expect(topupOffer(order({ program: 'KCC20Ref_8x8' }))).toEqual({ ok: false, reason: 'program' });
+    expect(topupOffer(order({ cls: 'immediate' }))).toEqual({ ok: false, reason: 'fixed' });
+  });
+
+  it('a stored T is reused whatever the price (negative: recomputing it from the price)', () => {
+    expect(topupOffer(order({ price: 300_000_000n }), 2_000n)).toMatchObject({ ok: true, threshold: 2_000n, recvThreshold: 2_000n });
+    expect(topupOffer(order({ price: 300_000_000n }))).toMatchObject({ ok: true, threshold: 1_667n });
+  });
+
+  it('a top-up the user chose that the order cannot have is an error; one that is only the wallet default falls back to Collected', () => {
+    const pre: PlanIssue[] = [];
+    resolveDelivery(order({ minFill: 1n }), { choice: 'topup' }, pre);
+    expect(pre.map((i) => [i.code, i.severity, i.field])).toEqual([['DELIVERY_TOPUP_UNAVAILABLE', 'error', 'delivery']]);
+    const pre2: PlanIssue[] = [];
+    const r = resolveDelivery(order({ program: 'KCC20Ref_8x8' }), { walletDefault: 'topup' }, pre2);
+    expect(r.fields.mode).toBe('1');
+    expect(pre2.map((i) => [i.code, i.severity])).toEqual([['DELIVERY_TOPUP_FALLBACK', 'info']]);
+  });
+});
+
+describe('plans with a delivery (signed and validated by the script engine)', () => {
+  const limitBuy = (o: Partial<Extract<SimpleIntent, { type: 'limit' }>> = {}): SimpleIntent => ({ type: 'limit', side: 'buy', price: P, amount: 10n * TOK, minFill: 2_500n, ...o });
+
+  it('a GTC limit buy is Collected by default: mode 1, one delivery carrier, maxFills does not add carriers', () => {
+    const p = planValid(limitBuy());
+    expect(bidOf(p)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
+    expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 10n * TOK, 1n));
+    expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')).toEqual({ kind: 'deliveryCarrier', amount: DC, count: 1 });
+    expect(p.disclosure!.notes).toContain('deliveryCollected');
+    expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'collected' }, fills: 1n });
+    const more = planValid(limitBuy({ maxFills: 5n }));
+    expect(more.request!.value).toBe(p.request!.value);
+    // negative: each fill funds one carrier per fill (4 fills of 2.5 tokens, at most the default 3)
+    const each = planValid(limitBuy({ delivery: { choice: 'each' } }));
+    expect(bidOf(each).mode).toBe('0');
+    expect(BigInt(each.request!.value) - BigInt(p.request!.value)).toBe(2n * DC + 2n);
+  });
+
+  it('Top-up: mode 2 with the threshold and the tip, funded with one carrier per fill', () => {
+    const p = planValid(limitBuy({ delivery: { choice: 'topup' } }));
+    // T = 2 tokens at 2.5 KAS (5 KAS), below minFill - 1
+    expect(bidOf(p)).toMatchObject({ mode: '2', recvThreshold: '2000', topupTip: '744250', bought: '0' });
+    expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 10n * TOK, 3n));
+    expect(p.disclosure!.notes).toContain('deliveryTopup');
+    expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'topup', threshold: 2_000n }, fills: 3n });
+    // a stored threshold and a raised tip
+    const q = planValid(limitBuy({ delivery: { choice: 'topup', threshold: 1_000n, topupTip: DC } }));
+    expect(bidOf(q)).toMatchObject({ recvThreshold: '1000', topupTip: DC.toString() });
+    // the threshold is capped at minFill - 1
+    expect(bidOf(planValid(limitBuy({ minFill: 1_200n, delivery: { choice: 'topup' } })))).toMatchObject({ recvThreshold: '1199' });
+  });
+
+  it('Top-up refused for a program without a top-up extra, and for a minimum fill of 1', () => {
+    const on8x8 = planSimple(makeEnv({ market: market8x8() }), limitBuy({ delivery: { choice: 'topup' } }));
+    expect(on8x8.ok).toBe(false);
+    expect(codes(on8x8.issues)).toContain('DELIVERY_TOPUP_UNAVAILABLE');
+    const one = planSimple(makeEnv(), limitBuy({ minFill: 1n, delivery: { choice: 'topup' } }));
+    expect(codes(one.issues)).toContain('DELIVERY_TOPUP_UNAVAILABLE');
+  });
+
+  it('IOC and market buys (a multi-fill one too) deliver at each fill, with a carrier per fill (negative: the class rule removed)', () => {
+    const ioc = planValid({ type: 'ioc', side: 'buy', price: P + 1_100_000n, amount: 2n * TOK });
+    expect(bidOf(ioc).mode).toBe('0');
+    const market = planValid({ type: 'market', side: 'buy', amount: 3n * TOK, maxFills: 3n });
+    expect(bidOf(market).mode).toBe('0');
+    expect(planDelivery(market)).toMatchObject({ delivery: { choice: 'each' } });
+    expect(planDelivery(market)!.fills).toBeGreaterThan(1n);
+    expect(market.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')!.count).toBe(Number(planDelivery(market)!.fills));
+  });
+
+  it('a KRON buy delivers at each fill (negative: Collected on a KRON token)', () => {
+    const p = planValid(limitBuy({ delivery: { choice: 'collected' } }), makeEnv({ market: marketKron() }));
+    expect(bidOf(p).mode).toBe('0');
+    expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')!.count).toBe(3);
+  });
+
+  it('DCA and a rising bid are Collected by default with one carrier; the wallet default Each fill restores a carrier per slice', () => {
+    const dca: SimpleIntent = { type: 'dca', amount: 5n * TOK, sliceAmount: TOK, interval: { daa: 600n }, price: 245_000_000n };
+    const p = planValid(dca);
+    expect(bidOf(p).mode).toBe('1');
+    expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 5n * TOK, 1n));
+    const each = planValid({ ...dca, delivery: { walletDefault: 'each' } } as SimpleIntent);
+    expect(bidOf(each).mode).toBe('0');
+    expect(BigInt(each.request!.value)).toBe(K.bidEscrow(each.states[0]!, 5n * TOK, 5n));
+    const rising = planValid({ type: 'dutch', side: 'buy', amount: 5n * TOK, price: 200_000_000n, priceEnd: 240_000_000n, duration: { daa: 4_000n } });
+    expect(bidOf(rising).mode).toBe('1');
+  });
+
+  it('a crossing Collected buy is not warned for its fills (one carrier serves every fill)', () => {
+    const p = planValid(limitBuy({ price: P + 1_100_000n, amount: 20n * TOK, minFill: undefined }));
+    expect(bidOf(p).mode).toBe('1');
+    expect(codes(p.issues)).not.toContain('FILLS_BUDGET_SHORT');
+    expect(p.fills).toMatchObject({ carrierDeposit: DC, scope: 'crossing' });
+  });
+
+  it('a sell has no delivery', () => {
+    const p = planValid({ type: 'limit', side: 'sell', price: P, amount: 10n * TOK }, makeEnv({ market: market3x3() }));
+    expect(planDelivery(p)).toBeNull();
+  });
+});

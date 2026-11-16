@@ -16,6 +16,7 @@
 // ignored.
 
 import type { Activation } from './intent-simple';
+import type { DeliveryRequest } from './orders/delivery';
 
 /** How long a placed order lives. The default is `gtc`, with no fixed date. */
 export type CondExpiry =
@@ -65,9 +66,14 @@ export interface CondCommon {
   /**
    * Separate fills to pre-fund a delivery carrier for, on buy-side conditionals.
    * Those are stop, take-profit, OCO and trailing buy. The default is 2, at most the number of
-   * fills the minimum fill allows.
+   * fills the minimum fill allows. A Collected order is funded with one carrier whatever this says.
    */
   maxFills?: bigint;
+  /**
+   * Where the bought tokens go (orders/delivery.ts): a buy-side conditional, and the buy-back exits of a sell-first IFD / IFO.
+   * Default: the wallet default, else Collected. The exits of a repeating entry always deliver at each fill.
+   */
+  delivery?: DeliveryRequest;
 }
 
 /** Trailing parameters of a stop leg (matcher.md 4.4, 10.7). */
