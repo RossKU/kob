@@ -185,7 +185,9 @@ fn gtc_buy_is_the_golden_create_bid_escrow() {
     let m = market(TemplateId::Kcc20Ref);
     let p = valid(&env(&m), Intent::Limit(LimitIntent { tip: 100_000, ..limit(Side::Buy, 10 * TOK, 245_000_000) }));
     let s = bid(&p);
-    assert_eq!((s.min_fill, s.delivery_carrier, s.reserve, s.refund_tip), (4082, C, 0, 3_500_000));
+    // the default refundTip of the program (data/keeper_tips.json, measured)
+    let refund_tip = kob_protocol::defaults::tips(TemplateId::Kcc20Ref).unwrap().refund_tip as i64;
+    assert_eq!((s.min_fill, s.delivery_carrier, s.reserve, s.refund_tip), (4082, C, 0, refund_tip));
     // The value is used(10000) + 2 sompi of rounding + 3 delivery carriers, as in the Rust golden
     // vector `create.bid`.
     let (g, gv) = golden("create.bid");
@@ -442,7 +444,7 @@ fn stops_take_profit_and_oco_like_the_web_planner() {
     let AnyState::KobCondAsk(s) = &p.states[0] else { panic!() };
     assert_eq!(
         (s.min_fill, s.min_touch, s.refund_tip, s.keeper_tip, s.slip_bps, s.band_daa, s.min_rest_daa, s.expiry_daa),
-        (4348, 4348, 3_500_000, 2_200_000, 300, 300, 50, GTC)
+        (4348, 4348, kob_protocol::defaults::tips(TemplateId::Kcc20Ref).unwrap().refund_tip as i64, 2_200_000, 300, 300, 50, GTC)
     );
     let d = p.disclosure.unwrap();
     assert_eq!(

@@ -919,22 +919,25 @@ fn replace_intents_round_trip() {
 /// `kob place` of a pair order with no `--tip` carries the keeper tip of the pair.
 ///
 /// The tip is over the amount of the order, as in the web ticket (`defaultPairTip` and
-/// `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`). The numbers are pinned for one
-/// KCC-20 pair: a keeper tip of 3_800_000 sompi in `pair_keeper_tips.json` and 3 decimals on A.
-/// They must equal what pair-common.ts computes for the same pair and amounts:
+/// `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`), for one KCC-20 pair: the keeper
+/// tip of `pair_keeper_tips.json` (measured) and 3 decimals on A. The numbers must equal what
+/// pair-common.ts computes for the same pair and amounts:
 /// `ceil(keeperTip * scale / amount)` and `floor(amount * tip / scale) < keeperTip`.
 #[test]
 fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
-    assert_eq!((pair_tips(a.program, b.program).unwrap().keeper_tip, a.scale), (3_800_000, 1000));
-    // Pinned: the whole token (1000 base units) pays the whole keeper tip, and 10_007 base units
-    // round up.
-    assert_eq!(default_pair_tip(&e, 1000), 3_800_000);
-    assert_eq!(default_pair_tip(&e, 10_007), 379_735);
+    let kt = pair_tips(a.program, b.program).unwrap().keeper_tip as i64;
+    assert_eq!(a.scale, 1000);
+    // ceil(keeperTip * scale / amount): the whole token (1000 base units) pays the whole keeper
+    // tip, and 10_007 base units round up.
+    let d = (kt * 1000 + 10_007 - 1) / 10_007;
+    assert!(d * 10_007 > kt * 1000 && (d - 1) * 10_007 < kt * 1000, "10_007 base units round up");
+    assert_eq!(default_pair_tip(&e, 1000), kt);
+    assert_eq!(default_pair_tip(&e, 10_007), d);
     assert_eq!(default_pair_tip(&e, 0), 0);
-    assert!(!pair_tip_below_default(&e, 10_007, 379_735));
-    assert!(pair_tip_below_default(&e, 10_007, 379_734));
+    assert!(!pair_tip_below_default(&e, 10_007, d));
+    assert!(pair_tip_below_default(&e, 10_007, d - 1));
     assert!(pair_tip_below_default(&e, 10_007, 0));
     assert!(!pair_tip_below_default(&e, 0, 0));
     // An order on a KAS book (no pair) has no default and says nothing.
@@ -949,10 +952,10 @@ fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     assert!(!apply_pair_tip_defaults(&e, &mut intent, false, false));
     let p = valid(&e, intent);
     let AnyState::KobPair(s) = &p.states[0] else { panic!("{:?}", p.states[0]) };
-    assert_eq!(s.tip, 379_735);
+    assert_eq!(s.tip, d);
     // A typed tip, zero included, is kept. Below the default it asks for the note, at or above it
     // does not.
-    for (typed, below) in [(0, true), (379_734, true), (379_735, false), (1_000_000, false)] {
+    for (typed, below) in [(0, true), (d - 1, true), (d, false), (d + 1_000_000, false)] {
         let mut intent = Intent::Limit(LimitIntent { tip: typed, ..limit(Side::Sell, 10_007, 1_550) });
         assert_eq!(apply_pair_tip_defaults(&e, &mut intent, true, false), below, "typed {typed}");
         let p = valid(&e, intent);
@@ -966,7 +969,8 @@ fn every_pair_kind_gets_the_default_tip_and_an_explicit_zero_stays() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
     let amount = 10_007;
-    let d = 379_735;
+    // ceil(keeperTip * scale / amount) of the pair (data/pair_keeper_tips.json, measured)
+    let d = (pair_tips(a.program, b.program).unwrap().keeper_tip as i64 * a.scale + amount - 1) / amount;
     let tips = |i: &Intent| -> (i64, Option<i64>) {
         match i {
             Intent::Limit(x) => (x.tip, None),
