@@ -40,6 +40,7 @@ import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, ret
 import { oppositeSide } from '../market/orientation';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields, labelKey } from './TicketFields';
+import { DeliveryHelp } from './DeliveryHelp';
 import {
   BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, deliveryOf, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   isIncomplete, setSide, setValue, sidesOf, switchType, visibleErrors,
@@ -423,6 +424,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const carrier = env?.carrier ?? DEFAULT_CARRIER;
   const defaultTip = token.program ? programTopupTip(token.program, carrier) : null;
   const topupThreshold = planned?.delivery.choice === 'topup' ? planned.delivery.threshold : null;
+  const [deliveryHelp, setDeliveryHelp] = useState(false);
   const deliverySubs: Record<string, { text: string; testid: string }> = {};
   if (delivery === 'collected') deliverySubs.delivery = { text: t('ticket.delivery.collectedNote'), testid: 'order-delivery-note' };
   if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
@@ -973,6 +975,7 @@ export function OrderTicket(props: OrderTicketProps) {
             <TicketFields
               form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
               defaults={{ delivery: walletDelivery }} placeholders={defaultTip !== null ? { topupTip: formatKas(defaultTip) } : {}} subs={deliverySubs}
+              asides={{ delivery: <button type="button" class="tk-whats" onClick={() => setDeliveryHelp(true)} data-testid="order-delivery-help">{t('ticket.dhelp.link')}</button> }}
             />
           </div>
         </details>
@@ -1057,6 +1060,7 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* the submitted order: a card of the notifications (its id, Copy, then whether a block took it), not a line of the footer; its progress is the
           label of the button and the line above */}
       <SendStatusToast sender={sender} lead={ladderLead} only="submitted" data-testid="order-status" />
+      {deliveryHelp && delivery ? <DeliveryHelp selected={delivery} onClose={() => setDeliveryHelp(false)} /> : null}
       {merge.card}
       <Button
         variant="primary" block class="tk-place" data-side={form.side} onClick={() => (mergeFirst ? merge.start() : void place())} disabled={!(canPlace || mergeFirst) || !!sellAfterMerge}

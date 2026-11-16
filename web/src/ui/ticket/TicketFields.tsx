@@ -47,6 +47,8 @@ export interface TicketFieldsProps {
   placeholders?: Readonly<Record<string, string>>;
   /** one muted line under a field (Delivery: what Collected means; Top-up tip: the tip total) */
   subs?: Readonly<Record<string, { text: string; testid: string }>>;
+  /** something at the right end of a select's label row (Delivery: its "What's this?" link) */
+  asides?: Readonly<Record<string, ComponentChildren>>;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -158,7 +160,7 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         if (spec.kind === 'select') {
           return (
-            <FieldShell key={id} label={label} hint={subLine ? <>{subLine}{helpOf(help)}</> : helpOf(help)} error={common.error}>
+            <FieldShell key={id} label={label} labelAside={props.asides?.[id]} hint={subLine ? <>{subLine}{helpOf(help)}</> : helpOf(help)} error={common.error}>
               {({ id: cid, labelId, describedBy, invalid }) => (
                 <Dropdown
                   id={cid}

@@ -7,37 +7,15 @@
 // Not covered here (the fill builders of the delivery modes are later work packages): a fill of a Collected or a Top-up order.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
+import { STD, openStd } from '../helpers/delivery';
 import { expect, test } from '../fixtures';
-import { connectWallet, fund, listExkcc } from '../helpers/env';
+import { listExkcc } from '../helpers/env';
 import { fillFields, pickType, placeOrder, settlePlan, waitReviewable } from '../helpers/ticket';
 import { chooseOption } from '../helpers/dropdown';
 
 test.use({ autoOpen: false });
 
-/** EXSTD: a listed token of the standard 3 / 3 program (KCC20Ref, the program with a top-up extra), as in market-fills.spec.ts */
-const STD = '5a'.repeat(32);
-const EXT = 'ee'.repeat(32);
 const shots = process.env.KOB_DELIVERY_SHOTS;
-
-async function registryWithStd(page: Page): Promise<void> {
-  const reg = JSON.parse(readFileSync(new URL('../../../registry/tokens.example.json', import.meta.url), 'utf8'));
-  for (const t of reg.templates) t.review_status = 'reviewed';
-  const exkcc = reg.tokens.find((t: { ticker: string }) => t.ticker === 'EXKCC');
-  Object.assign(exkcc, { verified: true });
-  reg.tokens.push({ ...exkcc, ticker: 'EXSTD', name: 'Example standard token', covenant_id: STD, template_id: 'kcc20-ref-3x3', extension_commitment: EXT });
-  await page.route('**/registry/tokens.json', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, body: JSON.stringify(reg) }),
-  );
-}
-
-async function openStd(page: Page, mock: Parameters<typeof fund>[0]): Promise<void> {
-  await fund(mock);
-  await mock.seed({ tokens: [{ ticker: 'EXSTD', covenant_id: STD, program: 'KCC20Ref', extension_commitment: EXT, decimals: 8, template_id: 'kcc20-ref-3x3' }] });
-  await registryWithStd(page);
-  await page.goto(`/#/market/${STD}`);
-  await connectWallet(page, 'kasware');
-  await expect(page.getByTestId('order-ticket')).toBeVisible();
-}
 
 const openAdvanced = async (page: Page): Promise<void> => {
   const box = page.getByTestId('order-advanced');
@@ -138,3 +116,61 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await expect(page.getByTestId('field-delivery')).toHaveCount(0);
   await expect(page.getByTestId('field-maxFills')).toBeVisible();
 });
+
+test("What's this?: the step-by-step help opens from the Delivery label, plays, pauses, steps, and closes back to the link", async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await openStd(page, mock);
+  await pickType(page, 'limit', 'buy');
+  await openAdvanced(page);
+  const link = page.getByTestId('order-delivery-help');
+  // on the label row of Delivery, at its right end
+  const [lb, label] = await Promise.all([link.boundingBox(), page.locator('label', { hasText: /^Delivery$/ }).boundingBox()]);
+  expect(Math.abs(lb!.y + lb!.height - (label!.y + label!.height))).toBeLessThan(6);
+  expect(lb!.x).toBeGreaterThan(label!.x + label!.width);
+  await link.click();
+  const help = page.getByTestId('delivery-help');
+  await expect(help).toBeVisible();
+  // the choice in force (Collected) is highlighted
+  await expect(help.getByTestId('delivery-help-lane-collected')).toHaveAttribute('data-on', 'true');
+  await expect(help.getByTestId('delivery-help-lane-each')).toHaveAttribute('data-on', 'false');
+  const caption = help.getByTestId('delivery-help-caption');
+  const play = help.getByTestId('delivery-help-play');
+  // it plays: the caption moves on by itself
+  await expect(play).toHaveAttribute('aria-label', 'Pause');
+  await expect(caption).toHaveText('Fill 2 of 3', { timeout: 5_000 });
+  await play.click();
+  await expect(play).toHaveAttribute('aria-label', 'Play');
+  const held = await caption.textContent();
+  await page.waitForTimeout(1_600);
+  await expect(caption).toHaveText(held!);
+  // steps by hand
+  // steps by hand, to the end (the forward button stops there)
+  const forward = help.getByTestId('delivery-help-forward');
+  while (await forward.isEnabled()) await forward.click();
+  await expect(caption).toHaveText('Order ends');
+  await expect(help.getByTestId('delivery-help-result-collected')).toHaveText('1 UTXO · when the order ends');
+  await help.getByTestId('delivery-help-back').click();
+  await expect(caption).toHaveText('Fill 3 of 3');
+  // Escape closes; focus is back on the link
+  await page.keyboard.press('Escape');
+  await expect(help).toHaveCount(0);
+  await expect(link).toBeFocused();
+  // the close button too
+  await link.click();
+  await help.getByRole('button', { name: 'Close' }).click();
+  await expect(help).toHaveCount(0);
+});
+
+test('reduced motion: the help opens paused on the final state', async ({ appPage: page, mock }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openStd(page, mock);
+  await pickType(page, 'limit', 'buy');
+  await openAdvanced(page);
+  await page.getByTestId('order-delivery-help').click();
+  const help = page.getByTestId('delivery-help');
+  await expect(help.getByTestId('delivery-help-caption')).toHaveText('Order ends');
+  await expect(help.getByTestId('delivery-help-play')).toHaveAttribute('aria-label', 'Play');
+  await page.waitForTimeout(1_500);
+  await expect(help.getByTestId('delivery-help-caption')).toHaveText('Order ends');
+});
+
