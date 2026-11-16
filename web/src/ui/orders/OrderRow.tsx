@@ -333,11 +333,6 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="act" card="action" class="or-act">
       {cancellable ? (
         <span class="dt-act">
-          {row.canClaim && actions.onClaim ? (
-            <Button small disabled={!canSign || props.busy} title={disabledReason ?? claimHint} onClick={() => actions.onClaim!(row)} data-testid={`order-claim-${row.id}`}>
-              {t('orders.claim')}
-            </Button>
-          ) : null}
           <Button
             small
             variant="danger"
@@ -546,6 +541,12 @@ export function OrderRow(props: OrderRowProps) {
         <p class="small muted" style="margin-top:8px" data-testid={`order-old-template-why-${row.id}`}>{t('orders.oldTemplate.noCancel')}</p>
       ) : row.live || row.status === 'unknown' ? (
         <div class="order-actions" style="margin-top:8px">
+          {/* in the details, not the line: the line's action cell keeps its width (founder rule, the Portfolio layout) */}
+          {row.canClaim && actions.onClaim ? (
+            <Button small variant="primary" disabled={!canSign || props.busy} title={disabledReason ?? claimHint} onClick={() => actions.onClaim!(row)} data-testid={`order-claim-${row.id}`}>
+              {t('orders.claim')}
+            </Button>
+          ) : null}
           {canSweep ? (
             <Button small disabled={!canSign || props.busy} title={disabledReason ?? t('orders.sweep.hint')} onClick={() => actions.onSweep(row)} data-testid={`order-sweep-${row.id}`}>
               {t('orders.sweep.action')}

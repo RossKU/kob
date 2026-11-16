@@ -1081,7 +1081,7 @@ export class MockChain {
         this.addTokenUtxo({ txid, index: idx++, token: tok, state: this.tokenState(tok, s.maker, 0, priorBought + n), value: deliveryValue, role: 'owned', daa, seq });
       }
       if (taker) this.addUtxo({ txid, index: idx++, amount: quoteOf(n, p, t.scale, 'down'), spk: this.pkSpk(taker), daa, kind: 'p2pk' });
-      newLeft = kind === 'KobBid' ? (newAny ? bidBuyingPower(this.kob, any, newValue) : 0n) : left - n;
+      newLeft = kind === 'KobBid' ? (newAny ? bidBuyingPower(this.kob, newAny, newValue) : 0n) : left - n;
     }
 
     o.filledAmount += n;
