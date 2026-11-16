@@ -79,6 +79,9 @@ fn side_name(ask: bool) -> &'static str {
 pub(crate) fn check_new_pair(s: &AnyState) -> Result<()> {
     let (a, b) = pair_programs(s)?;
     s.check_numbers().map_err(Error::Invalid)?;
+    // The delivery block (bid-delivery-spec §2 Placement): mode 0, 1 or 2, its threshold and tip,
+    // bought = 0, mode 0 for a KRON T and for a repeating entry's exits.
+    s.check_delivery(true).map_err(Error::Invalid)?;
     check_key(&s.maker(), "order maker")?;
     let floor_of = |program: TemplateId| program.min_token_output().unwrap_or(0).max(crate::tx::COVENANT_OUTPUT_MIN) as i64;
     let token_carrier = |what: &str, v: i64, program: TemplateId| -> Result<()> {
@@ -318,11 +321,13 @@ fn check_new_cond_pair(c: &CondPairState, a: &Token, b: &Token, exit: bool) -> R
 /// - An IOC / FOK order, or one whose `minFill` takes everything, funds one.
 /// - An entry funds a delivery and an exit carrier per possible fill and the tip, and a repeating
 ///   entry one extra exit carrier.
+/// - A mode-1 order (accumulate) funds one: its first fill puts the carrier on the bought-custody,
+///   and every later fill moves the custody's KAS along (bid-delivery-spec §10 Funding).
 pub(crate) fn min_pair_value(s: &AnyState) -> i64 {
     let sat = |v: Option<i64>| v.unwrap_or(i64::MAX);
     match s {
-        AnyState::KobPair(p) => sat(p.kas_value(p.funded_fills())),
-        AnyState::KobCondPair(c) => sat(c.kas_value(c.funded_fills())),
+        AnyState::KobPair(p) => sat(p.kas_value(if p.mode == MODE_ACCUMULATE { 1 } else { p.funded_fills() })),
+        AnyState::KobCondPair(c) => sat(c.kas_value(if c.mode == MODE_ACCUMULATE { 1 } else { c.funded_fills() })),
         AnyState::KobIfdPair(i) => sat(i.kas_value()),
         _ => 1,
     }
@@ -335,9 +340,349 @@ pub(crate) fn min_pair_value(s: &AnyState) -> i64 {
 /// That is its amounts, and which of its custodies keep an output at their own index.
 #[allow(clippy::large_enum_variant)] // one per leg of a batch
 pub(crate) enum PairCalc {
-    Pair { t_arg: i64, f: PairFill },
+    Pair { t_arg: i64, f: PairFill, dlv: PairDelivery },
     Cond(CondCalc),
     Ifd(IfdCalc),
+}
+
+// ---------------------------------------------------------------- T delivery modes
+
+/// The slot of a `KobPair` / `KobCondPair` leg's bought-custody input.
+///
+/// Those legs never use the entry slots `A` and `B`, which only a `KobIfdPair` leg fills.
+/// INTEGRATOR: a dedicated `Slot::Bought` in `build.rs` can replace it.
+const BOUGHT_SLOT: Slot = Slot::A;
+/// The slot of a top-up's receive UTXO input (mode 2 form 2). INTEGRATOR: `Slot::Receive`.
+const RECEIVE_SLOT: Slot = Slot::B;
+
+/// The T inputs a delivering pair leg spends besides its order and its sell custody
+/// (bid-delivery-spec §3), and the form it asks for.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct DeliveryInputs<'a> {
+    /// Mode 1 with `bought > 0`: the order's bought-custody (T owned by the order's covenant id,
+    /// owner scheme `0x04`, no borrowing, a zero guard, exactly `bought`).
+    pub bought_custody: Option<&'a TokenUtxo>,
+    /// Mode 2 form 2: the maker's receive UTXO the fill tops up.
+    pub receive: Option<&'a TokenUtxo>,
+    /// Mode 2: the form, 0 a plain UTXO, 1 a new receive UTXO, 2 a top-up of `receive`.
+    ///
+    /// Default: 2 with a receive UTXO, else 1.
+    pub form: Option<u8>,
+}
+
+/// The delivery inputs of a pair leg.
+///
+/// INTEGRATOR: `Leg::Pair` and `Leg::CondPair` carry them as `bought_custody: Option<TokenUtxo>`,
+/// `receive: Option<TokenUtxo>` and `form: Option<u8>` (serde `boughtCustody`, `receive`, `form`;
+/// the B3 patch of `build.rs`). Until then every leg has none: modes 0 and 2 forms 0 / 1 and the
+/// first fill of a mode-1 order build; a mode-1 order holding a bought-custody and a top-up need
+/// the fields.
+pub(crate) fn delivery_inputs(l: &Leg) -> DeliveryInputs<'_> {
+    let _ = l;
+    DeliveryInputs::default()
+}
+
+/// A pair order's T delivery at output i, by its delivery mode and form (bid-delivery-spec §4).
+#[derive(Clone, Debug)]
+pub(crate) struct PairDelivery {
+    pub mode: i64,
+    /// The `form` argument (the covenant reads it in mode 2 only).
+    pub form: i64,
+    /// The state of output i, its amount included (`have + tOut`).
+    pub state: TokenState,
+    /// KAS leaving the order beyond the price and the tip: a carrier, a top-up's `topupTip`, or 0
+    /// once the bought-custody exists.
+    pub released: i64,
+    /// KAS the order itself puts on output i: a carrier, or 0 when the delivery continues a T
+    /// input that carries its own KAS.
+    pub on_d: i64,
+    /// KAS of the T input the delivery continues (a bought-custody or a receive UTXO), else 0.
+    pub have_kas: i64,
+    /// Base units of that input, which flow in and out again on output i.
+    pub have: i64,
+    /// `bought` of the continuation (mode 1: `bought + tOut`; else the unchanged 0).
+    pub next_bought: i64,
+    /// The slot of the continued T input, if any.
+    pub input: Option<Slot>,
+    /// The role tag: "" (mode 0), ".m1", ".m1c" (a bought-custody is spent), ".m2" (forms 0 and
+    /// 1), ".m2t" (a top-up).
+    pub tag: &'static str,
+}
+
+impl PairDelivery {
+    /// The KAS of output i when the order continues: the continued input's KAS and the order's
+    /// carrier, if it puts one.
+    fn rest_value(&self) -> i64 {
+        self.have_kas + self.on_d
+    }
+    /// The KAS of output i when the order ends: every KAS of the order and of the continued input,
+    /// less the tip and what leaves the order beyond the carrier (a top-up's tip).
+    fn end_value(&self, order_value: i64, tip_kas: i64) -> i64 {
+        order_value + self.have_kas - tip_kas - (self.released - self.on_d)
+    }
+    /// The token flow of T: the continued input's units in, output i's out.
+    fn t_flow(&self, t: Token) -> (Token, i64, i64) {
+        (t, self.have, self.state.amount())
+    }
+}
+
+/// The guard of a receive UTXO with threshold `thr`: `thr` little-endian, then 24 zero bytes.
+pub(crate) fn receive_guard(thr: i64) -> [u8; 32] {
+    let mut g = [0u8; 32];
+    g[..8].copy_from_slice(&thr.to_le_bytes());
+    g
+}
+
+/// The receive state of `amount` for key `owner` with threshold `thr` (bid-delivery-spec §1).
+pub(crate) fn receive_state(amount: i64, owner: [u8; 32], thr: i64, ext: [u8; 32]) -> TokenState {
+    TokenState::Kcc20(Kcc20State::p2pk(amount, owner, ext)).with_borrow((1, receive_guard(thr)))
+}
+
+/// The terms of a delivering pair order the delivery reads.
+pub(crate) struct DeliveryTerms {
+    pub d: crate::state::Delivery,
+    pub carrier: i64,
+    pub maker: [u8; 32],
+    /// The commitment of T's deliveries (zero for KRON).
+    pub t_ext: [u8; 32],
+}
+
+/// The delivery of `t_out` units of T at output i (bid-delivery-spec §4).
+///
+/// `more`: the order continues. `order_cov`: the order's covenant id. It refuses what the covenant
+/// refuses. A top-up of `n <= threshold` of the receive UTXO, which the token program cannot take,
+/// falls back to form 1 (§6 rule 6).
+pub(crate) fn pair_delivery(
+    terms: &DeliveryTerms,
+    t: Token,
+    order_cov: [u8; 32],
+    t_out: i64,
+    more: bool,
+    inp: DeliveryInputs,
+) -> Result<PairDelivery> {
+    let DeliveryTerms { d, carrier, maker, t_ext } = *terms;
+    let fam = t.1.family();
+    if !(MODE_NEW..=MODE_TOPUP).contains(&d.mode) {
+        return invalid(format!("delivery mode must be 0, 1 or 2, got {}", d.mode));
+    }
+    if fam != Family::Kcc20 && d.mode != MODE_NEW {
+        return invalid(format!("a KRON delivery is mode 0, got mode {}", d.mode));
+    }
+    if d.mode != MODE_TOPUP && (inp.receive.is_some() || inp.form.is_some_and(|f| f != 0)) {
+        return invalid("only a mode-2 order takes a form or a receive UTXO");
+    }
+    if d.mode != MODE_ACCUMULATE && inp.bought_custody.is_some() {
+        return invalid("only a mode-1 order holds a bought-custody");
+    }
+    let plain = |amount: i64| TokenState::user(t.1, amount, maker, t_ext);
+    let new = |state: TokenState, form: i64, tag: &'static str| PairDelivery {
+        mode: d.mode,
+        form,
+        state,
+        released: carrier,
+        on_d: carrier,
+        have_kas: 0,
+        have: 0,
+        next_bought: 0,
+        input: None,
+        tag,
+    };
+    match d.mode {
+        MODE_ACCUMULATE => {
+            if d.bought < 0 {
+                return invalid(format!("bought must be >= 0, got {}", d.bought));
+            }
+            let total = add(d.bought, t_out, "bought + tOut")?;
+            let state = if more { TokenState::custody(fam, total, order_cov, t_ext) } else { plain(total) };
+            if d.bought == 0 {
+                if inp.bought_custody.is_some() {
+                    return invalid("a mode-1 order with bought = 0 holds no bought-custody");
+                }
+                return Ok(PairDelivery { next_bought: total, ..new(state, 0, ".m1") });
+            }
+            let c = inp.bought_custody.ok_or_else(|| {
+                Error::Invalid(format!(
+                    "a mode-1 order holding bought = {} spends its bought-custody (boughtCustody) in every fill",
+                    d.bought
+                ))
+            })?;
+            check_bought_custody(c, t, order_cov, d.bought, t_ext)?;
+            Ok(PairDelivery {
+                released: 0,
+                on_d: 0,
+                have_kas: c.utxo.amount as i64,
+                have: d.bought,
+                next_bought: total,
+                input: Some(BOUGHT_SLOT),
+                ..new(state, 0, ".m1c")
+            })
+        }
+        MODE_TOPUP => {
+            if d.bought != 0 {
+                return invalid(format!("modes 0 and 2 hold no bought tokens (bought {})", d.bought));
+            }
+            let mut form = inp.form.map(i64::from).unwrap_or(if inp.receive.is_some() { 2 } else { 1 });
+            if form != 0 && (d.recv_threshold <= 0 || d.topup_tip < 0 || d.topup_tip > carrier) {
+                return invalid("mode 2 forms 1 and 2 need recvThreshold > 0 and 0 <= topupTip <= deliveryCarrier");
+            }
+            let mut receive = inp.receive;
+            if form == 2 {
+                let r = receive.ok_or_else(|| Error::Invalid("a top-up (form 2) names the maker's receive UTXO (receive)".into()))?;
+                let thr = check_receive(r, t, maker, d.recv_threshold, t_ext)?;
+                if t_out <= thr {
+                    // The token program takes a top-up only with a gain above the threshold.
+                    form = 1;
+                    receive = None;
+                }
+            } else if receive.is_some() {
+                return invalid(format!("form {form} spends no receive UTXO"));
+            }
+            match (form, receive) {
+                (0, _) => Ok(new(plain(t_out), 0, ".m2")),
+                (1, _) => Ok(new(receive_state(t_out, maker, d.recv_threshold, t_ext), 1, ".m2")),
+                (2, Some(r)) => {
+                    let have = r.state.amount();
+                    Ok(PairDelivery {
+                        released: d.topup_tip,
+                        on_d: 0,
+                        have_kas: r.utxo.amount as i64,
+                        have,
+                        input: Some(RECEIVE_SLOT),
+                        ..new(r.state.with_amount(add(have, t_out, "receive + tOut")?), 2, ".m2t")
+                    })
+                }
+                _ => invalid(format!("mode 2 delivers in form 0, 1 or 2, got {form}")),
+            }
+        }
+        _ => {
+            if d.bought != 0 {
+                return invalid(format!("modes 0 and 2 hold no bought tokens (bought {})", d.bought));
+            }
+            Ok(new(plain(t_out), 0, ""))
+        }
+    }
+}
+
+/// A bought-custody: T of the order's covenant id, owner scheme `0x04`, no borrowing, a zero guard,
+/// the order's commitment and exactly `bought` (bid-delivery-spec §5: known by its exact state).
+fn check_bought_custody(c: &TokenUtxo, t: Token, order_cov: [u8; 32], bought: i64, ext: [u8; 32]) -> Result<()> {
+    check_custody(c, Some(order_cov), t, bought).map_err(|e| Error::Invalid(format!("bought-custody: {e}")))?;
+    if c.state != TokenState::custody(t.1.family(), bought, order_cov, ext) {
+        return invalid(
+            "bought-custody: its state is not exactly the order's (borrowing disabled, a zero guard, the order's commitment)",
+        );
+    }
+    Ok(())
+}
+
+/// A receive UTXO of the maker the order may top up, and its threshold (bid-delivery-spec §4).
+///
+/// It is T, owned by the maker's key (scheme `0x00`), borrow scheme `0x01`, a canonical guard with a
+/// threshold of at least `recvThreshold`, and the order's commitment.
+fn check_receive(r: &TokenUtxo, t: Token, maker: [u8; 32], recv_threshold: i64, ext: [u8; 32]) -> Result<i64> {
+    check_token_input(r, t)?;
+    let TokenState::Kcc20(k) = &r.state else { return invalid("a receive UTXO is a KCC-20 holding") };
+    if k.owner != maker || k.owner_scheme != SCHEME_P2PK || k.borrow_scheme != 1 {
+        return invalid("the receive UTXO is the maker's key-owned holding with borrow scheme 0x01");
+    }
+    if k.borrow_guard[8..] != [0u8; 24] {
+        return invalid("the receive UTXO's guard is not canonical (threshold, then 24 zero bytes)");
+    }
+    let thr = i64::from_le_bytes(k.borrow_guard[..8].try_into().expect("8 bytes"));
+    if thr < recv_threshold {
+        return invalid(format!("the receive UTXO's threshold {thr} is below the order's recvThreshold {recv_threshold}"));
+    }
+    if k.extension_commitment != ext {
+        return invalid("the receive UTXO carries another extension commitment than the order's deliveries");
+    }
+    if k.amount < 0 {
+        return invalid("the receive UTXO holds a negative amount");
+    }
+    Ok(thr)
+}
+
+/// A top-up's batch rules (bid-delivery-spec §6 rules 3 and 4).
+///
+/// The receive UTXO is T's first input (the leader, spent on the borrow path), the topped-up
+/// order's output i is T's first output (no leg before it delivers T at its positional slot, a
+/// refund-carrying bid included, which the builder puts first), and a transaction tops up one
+/// receive UTXO per token.
+fn check_topup(cx: &PairCtx, t: Token) -> Result<()> {
+    let PairCtx { batch, lay, index: i, .. } = *cx;
+    if lay.first_token_in.get(&t.0) != lay.at.get(&(i, RECEIVE_SLOT)) {
+        return invalid("a top-up's receive UTXO must be the first input of its token (put the top-up leg first)");
+    }
+    for (j, l) in batch.legs.iter().enumerate() {
+        if j < i && positional_token(l) == Some(t.0) {
+            return invalid(format!(
+                "a top-up is the lowest-index delivery of its token, but leg {j} delivers it before (use form 1)"
+            ));
+        }
+        if j != i && delivery_inputs(l).receive.is_some() && leg_t_token(l) == Some(t.0) {
+            return invalid("one top-up per token and transaction (use form 1 for the others)");
+        }
+    }
+    Ok(())
+}
+
+/// The token a leg's positional output (output j) holds, if it is a token output.
+fn positional_token(l: &Leg) -> Option<[u8; 32]> {
+    match l {
+        Leg::Bid { order, .. } => Some(order.state.token_cov_id),
+        Leg::CondBid { order, .. } => Some(order.state.token_cov_id),
+        Leg::IfdBid { order, .. } => Some(order.state.token_cov_id),
+        Leg::Pair { .. } | Leg::CondPair { .. } => leg_t_token(l),
+        Leg::IfdPair { order, .. } => {
+            let s = &order.state;
+            Some(if s.is_buy_first() { s.a_cov_id } else { s.b_cov_id })
+        }
+        _ => None,
+    }
+}
+
+/// The tokens (S, T) of a `KobPair` / `KobCondPair` leg.
+fn pair_s_t(l: &Leg) -> Result<(Token, Token)> {
+    let (a, b) = leg_pair_tokens(l)?.ok_or_else(|| Error::Invalid("not a pair leg".into()))?;
+    let ask = match l {
+        Leg::Pair { order, .. } => order.state.is_ask(),
+        Leg::CondPair { order, .. } => order.state.is_ask(),
+        _ => return invalid("not a delivering pair leg"),
+    };
+    Ok(if ask { (a, b) } else { (b, a) })
+}
+
+/// The covenant id of an order UTXO.
+fn order_cov(u: &Utxo) -> Result<[u8; 32]> {
+    u.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))
+}
+
+/// The delivery terms of a `KobPair`.
+fn pair_terms(s: &PairState) -> DeliveryTerms {
+    DeliveryTerms {
+        d: crate::state::Delivery { mode: s.mode, recv_threshold: s.recv_threshold, topup_tip: s.topup_tip, bought: s.bought },
+        carrier: s.delivery_carrier,
+        maker: s.maker,
+        t_ext: if s.t_token().family_of() == Some(Family::Kcc20) { s.t_ext } else { [0; 32] },
+    }
+}
+
+/// The delivery terms of a `KobCondPair`.
+fn cond_terms(s: &CondPairState) -> DeliveryTerms {
+    DeliveryTerms {
+        d: crate::state::Delivery { mode: s.mode, recv_threshold: s.recv_threshold, topup_tip: s.topup_tip, bought: s.bought },
+        carrier: s.delivery_carrier,
+        maker: s.maker,
+        t_ext: if s.t_token().family_of() == Some(Family::Kcc20) { s.t_ext } else { [0; 32] },
+    }
+}
+
+/// The T a `KobPair` / `KobCondPair` leg delivers.
+fn leg_t_token(l: &Leg) -> Option<[u8; 32]> {
+    match l {
+        Leg::Pair { order, .. } => Some(order.state.t_cov_id),
+        Leg::CondPair { order, .. } => Some(order.state.t_cov_id),
+        _ => None,
+    }
 }
 
 pub(crate) struct CondCalc {
@@ -357,6 +702,8 @@ pub(crate) struct CondCalc {
     /// or the T delivery (`false`).
     d_out: i64,
     d_s: bool,
+    /// The T delivery at output i (mode 0 when the exit re-arms its entry).
+    dlv: PairDelivery,
 }
 
 pub(crate) struct IfdCalc {
@@ -426,8 +773,21 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
                 0
             };
             let price = need(state.price_at(t_arg, utxo_daa), "pair order quote")?;
-            let fill = state.fill(n, price, order.utxo.amount as i64).map_err(|e| Error::Invalid(format!("pair fill: {e}")))?;
-            PairCalc::Pair { t_arg, f: fill }
+            // The order funds what its mode releases (`dlv.released`), checked below, so the
+            // state's rule runs with the carrier added back.
+            let value = order.utxo.amount as i64;
+            let fill = state
+                .fill(n, price, value.saturating_add(state.delivery_carrier))
+                .map_err(|e| Error::Invalid(format!("pair fill: {e}")))?;
+            let (_, t_token) = pair_s_t(l)?;
+            let dlv = pair_delivery(&pair_terms(state), t_token, order_cov(&order.utxo)?, fill.t_out, fill.rest, delivery_inputs(l))?;
+            if fill.rest && value < dlv.released.saturating_add(fill.tip_kas) {
+                return invalid(format!(
+                    "the order's {value} sompi do not fund what a partial fill releases ({} + the tip {})",
+                    dlv.released, fill.tip_kas
+                ));
+            }
+            PairCalc::Pair { t_arg, f: fill, dlv }
         }
         Leg::CondPair { order, custody, amount, leg, evidence, t, merge, .. } => {
             let state = &order.state;
@@ -538,10 +898,16 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
             if left > 0 && out_amount == 0 {
                 return invalid("a partial conditional pair fill must leave something in the custody");
             }
-            if left > 0 && order.utxo.amount < (state.delivery_carrier + tip_kas) as u64 {
-                return invalid("the order's KAS do not fund the delivery carrier and the tip of a partial fill");
+            if rearm.is_some() && state.mode != MODE_NEW {
+                return invalid("a booked exit that re-arms its entry delivers in mode 0");
             }
-            PairCalc::Cond(CondCalc { leg, trigger, t_arg, s_out, t_out, tip_kas, left, out_amount, rearm, d_out, d_s })
+            let (_, t_token) = pair_s_t(l)?;
+            let inputs = if d_s { DeliveryInputs::default() } else { delivery_inputs(l) };
+            let dlv = pair_delivery(&cond_terms(state), t_token, order_cov(&order.utxo)?, d_out, left > 0, inputs)?;
+            if left > 0 && (order.utxo.amount as i64) < dlv.released.saturating_add(tip_kas) {
+                return invalid("the order's KAS do not fund what a partial fill releases (a carrier or a top-up tip) and the tip");
+            }
+            PairCalc::Cond(CondCalc { leg, trigger, t_arg, s_out, t_out, tip_kas, left, out_amount, rearm, d_out, d_s, dlv })
         }
         Leg::IfdPair { order, amount, evidence, t, .. } => {
             let state = &order.state;
@@ -633,11 +999,13 @@ pub(crate) fn calc_leg(l: &Leg, lock: i64, strict: bool) -> Result<Option<PairCa
 pub(crate) fn leg_custodies<'a>(l: &'a Leg, calc: &PairCalc, a: Token, b: Token) -> Result<Vec<(Slot, &'a TokenUtxo, Token, bool)>> {
     let mut v = vec![];
     match (l, calc) {
-        (Leg::Pair { order, custody, .. }, PairCalc::Pair { f, .. }) => {
+        (Leg::Pair { order, custody, .. }, PairCalc::Pair { f, dlv, .. }) => {
             v.push((Slot::Custody, custody, if order.state.is_ask() { a } else { b }, f.out_amount > 0));
+            push_delivery_input(&mut v, l, dlv, if order.state.is_ask() { b } else { a });
         }
         (Leg::CondPair { order, custody, merge, .. }, PairCalc::Cond(c)) => {
             v.push((Slot::Custody, custody, if order.state.is_ask() { a } else { b }, c.out_amount > 0));
+            push_delivery_input(&mut v, l, &c.dlv, if order.state.is_ask() { b } else { a });
             if let Some(m) = merge {
                 if let Some(x) = &m.a_custody {
                     v.push((Slot::EntryA, x, a, true));
@@ -658,6 +1026,19 @@ pub(crate) fn leg_custodies<'a>(l: &'a Leg, calc: &PairCalc, a: Token, b: Token)
         _ => return invalid("pair leg and its amounts disagree"),
     }
     Ok(v)
+}
+
+/// Appends the T input a delivery continues (a bought-custody or a receive UTXO), if any.
+///
+/// It is never positional: a bought-custody's successor and a topped-up receive UTXO sit at the
+/// order's output i, not at their own index.
+fn push_delivery_input<'a>(v: &mut Vec<(Slot, &'a TokenUtxo, Token, bool)>, l: &'a Leg, dlv: &PairDelivery, t: Token) {
+    let inp = delivery_inputs(l);
+    match dlv.input {
+        Some(BOUGHT_SLOT) => v.push((BOUGHT_SLOT, inp.bought_custody.expect("checked by pair_delivery"), t, false)),
+        Some(RECEIVE_SLOT) => v.push((RECEIVE_SLOT, inp.receive.expect("checked by pair_delivery"), t, false)),
+        _ => {}
+    }
 }
 
 /// The evidence arguments `(evA, evB, tk, evMode)` of a pair conditional.
@@ -803,8 +1184,8 @@ pub(crate) fn plan_leg(
     let suffix = pair_suffix(a, bt);
     let cx = PairCtx { batch, lay, index: i, token_a: a, token_b: bt, lock };
     match (leg, calc) {
-        (Leg::Pair { order, custody, amount, .. }, PairCalc::Pair { t_arg, f, .. }) => {
-            plan_pair(&cx, order, custody, *amount, *t_arg, f, suffix)
+        (Leg::Pair { order, custody, amount, .. }, PairCalc::Pair { t_arg, f, dlv }) => {
+            plan_pair(&cx, order, custody, *amount, *t_arg, f, dlv, suffix)
         }
         (Leg::CondPair { order, custody, amount, evidence, evidence_b, merge, .. }, PairCalc::Cond(c)) => {
             plan_cond_pair(&cx, order, custody, *amount, *evidence, *evidence_b, merge.as_ref(), c, suffix)
@@ -831,6 +1212,7 @@ struct PairCtx<'a> {
 }
 
 /// Plans a `KobPair` fill: the T delivery, and the rest or the return of its custody.
+#[allow(clippy::too_many_arguments)]
 fn plan_pair(
     cx: &PairCtx,
     order: &OrderUtxo<PairState>,
@@ -838,6 +1220,7 @@ fn plan_pair(
     n: i64,
     t_arg: i64,
     fill: &PairFill,
+    dlv: &PairDelivery,
     suffix: String,
 ) -> Result<LegPlan> {
     let PairCtx { lay, index: i, token_a: a, token_b: bt, .. } = *cx;
@@ -846,22 +1229,24 @@ fn plan_pair(
     let (s_token, t_token) = if ask { (a, bt) } else { (bt, a) };
     let order_value = order.utxo.amount as i64;
     let custody_value = custody.utxo.amount as i64;
-    let maker_ext = kcc20_ext(t_token, state.t_ext);
+    if dlv.input == Some(RECEIVE_SLOT) {
+        check_topup(cx, t_token)?;
+    }
     let mut extras = vec![];
     let (delivery, branch) = if fill.rest {
         extras.push(Extra::Cont(
-            kas_out(order_value - state.delivery_carrier - fill.tip_kas, "pair continuation")?,
-            PairState { amount_left: state.amount_left - n, custody: fill.out_amount, ..state.clone() }.spk(),
+            kas_out(order_value - dlv.released - fill.tip_kas, "pair continuation")?,
+            PairState { amount_left: state.amount_left - n, custody: fill.out_amount, bought: dlv.next_bought, ..state.clone() }.spk(),
         ));
         let st = custody.state.with_amount(fill.out_amount);
         extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
-        (state.delivery_carrier, "rest")
+        (dlv.rest_value(), "rest")
     } else if fill.out_amount > 0 {
         let st = custody.state.with_amount(fill.out_amount).with_user_owner(state.maker);
         extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
-        (order_value - fill.tip_kas, "return")
+        (dlv.end_value(order_value, fill.tip_kas), "return")
     } else {
-        (order_value + custody_value - fill.tip_kas, "close")
+        (dlv.end_value(order_value, fill.tip_kas) + custody_value, "close")
     };
     let mut role = format!("KobPair.settle.{}.{branch}", side_name(ask));
     if state.interval > 0 {
@@ -870,14 +1255,14 @@ fn plan_pair(
     if state.slope != 0 {
         role.push_str(".decay");
     }
-    let t_tpl = first_in(lay, t_token, "pair order (T template source)")?;
+    role.push_str(dlv.tag);
+    let t_tpl = match dlv.input {
+        Some(slot) => lay.at[&(i, slot)] as i64,
+        None => first_in(lay, t_token, "pair order (T template source)")?,
+    };
     Ok(LegPlan {
         suffix,
-        pos: PosOut::Deliver(
-            kas_out(delivery, "pair delivery carrier")?,
-            TokenState::user(t_token.1.family(), fill.t_out, state.maker, maker_ext),
-            t_token,
-        ),
+        pos: PosOut::Deliver(kas_out(delivery, "pair delivery carrier")?, dlv.state.clone(), t_token),
         role,
         sequence: state.interval.max(0) as u64,
         plan: entry(
@@ -891,12 +1276,15 @@ fn plan_pair(
                 Arg::Int(t_arg),
                 Arg::Int(fill.s_out),
                 Arg::Int(fill.t_out),
+                Arg::Int(dlv.form),
             ],
         ),
         extras,
-        flows: vec![(s_token, fill.s_out, 0), (t_token, 0, fill.t_out)],
+        flows: vec![(s_token, fill.s_out, 0), dlv.t_flow(t_token)],
         merge: None,
-        adjust: if ask { Some((t_token, 5)) } else { None },
+        // A pair ask's delivery takes the batch's surplus of T, unless it is a bought-custody
+        // that stays with the order: the continuation's `bought` is fixed before the surplus.
+        adjust: if ask && !(fill.rest && dlv.mode == MODE_ACCUMULATE) { Some((t_token, 5)) } else { None },
     })
 }
 
@@ -952,12 +1340,11 @@ fn plan_cond_pair(
             amount_left: calc.left,
             custody: calc.out_amount,
             armed: state.next_armed(calc.leg, calc.trigger, utxo_daa),
+            bought: calc.dlv.next_bought,
             ..state.clone()
         };
-        extras.push(Extra::Cont(
-            kas_out(order_value - state.delivery_carrier - calc.tip_kas, "conditional pair continuation")?,
-            next.spk(),
-        ));
+        extras
+            .push(Extra::Cont(kas_out(order_value - calc.dlv.released - calc.tip_kas, "conditional pair continuation")?, next.spk()));
         extras.push(Extra::AtInput {
             slot: Slot::Custody,
             value: custody.utxo.amount,
@@ -969,12 +1356,18 @@ fn plan_cond_pair(
         let st = custody.state.with_amount(calc.out_amount).with_user_owner(state.maker);
         extras.push(Extra::AtInput { slot: Slot::Custody, value: custody.utxo.amount, state: st, token: s_token, patch: None });
     }
-    let pos_value = if calc.left > 0 || calc.rearm.is_some() {
+    let dlv = &calc.dlv;
+    if dlv.input == Some(RECEIVE_SLOT) {
+        check_topup(cx, t_token)?;
+    }
+    let pos_value = if calc.rearm.is_some() {
         state.delivery_carrier
+    } else if calc.left > 0 {
+        dlv.rest_value()
     } else if calc.out_amount > 0 {
-        order_value - calc.tip_kas
+        dlv.end_value(order_value, calc.tip_kas)
     } else {
-        order_value + custody_value - calc.tip_kas
+        dlv.end_value(order_value, calc.tip_kas) + custody_value
     };
     // The maker's token at output i: the T delivery, or a re-arming BID exit's B profit on
     // the custody's template.
@@ -985,14 +1378,9 @@ fn plan_cond_pair(
             s_token,
         )
     } else {
-        let e = kcc20_ext(t_token, state.t_ext);
-        PosOut::Deliver(
-            kas_out(pos_value, "delivery carrier")?,
-            TokenState::user(t_token.1.family(), calc.d_out, state.maker, e),
-            t_token,
-        )
+        PosOut::Deliver(kas_out(pos_value, "delivery carrier")?, dlv.state.clone(), t_token)
     };
-    let mut flows = vec![(s_token, calc.s_out, 0), (t_token, 0, calc.t_out)];
+    let mut flows = vec![(s_token, calc.s_out, 0), (t_token, dlv.have, dlv.have + calc.t_out)];
     let merge_plan = match (merge, calc.rearm) {
         (None, _) => None,
         (Some(m), Some(rearm)) => Some(plan_cond_pair_merge(cx, order, custody, n, m, calc, rearm, &mut extras, &mut flows)?),
@@ -1006,14 +1394,17 @@ fn plan_cond_pair(
         "close"
     };
     let role = format!(
-        "KobCondPair.settle.{}.leg{}{}{}{}.{branch}",
+        "KobCondPair.settle.{}.leg{}{}{}{}.{branch}{}",
         side_name(ask),
         calc.leg,
         arm_tag(calc.trigger, ev_args[3]),
         if calc.t_arg != 0 { ".auction" } else { "" },
         if merge.is_some() { ".merge" } else { "" },
+        dlv.tag,
     );
-    let t_tpl = if calc.d_s {
+    let t_tpl = if let Some(slot) = dlv.input {
+        lay.at[&(i, slot)] as i64
+    } else if calc.d_s {
         lay.first_token_in.get(&t_token.0).map(|x| *x as i64).unwrap_or(0)
     } else {
         first_in(lay, t_token, "conditional pair (T template source)")?
@@ -1041,12 +1432,14 @@ fn plan_cond_pair(
                 Arg::Int(ev_args[3]),
                 Arg::Int(0),
                 Arg::Int(0),
+                Arg::Int(dlv.form),
             ],
         ),
         extras,
         flows,
         merge: merge_plan,
-        adjust: if ask { Some((t_token, 5)) } else { None },
+        // As a KobPair ask: a bought-custody that stays with the order takes no surplus.
+        adjust: if ask && !(calc.left > 0 && dlv.mode == MODE_ACCUMULATE) { Some((t_token, 5)) } else { None },
     })
 }
 
@@ -1524,7 +1917,7 @@ pub(crate) fn update_plan_pair(
             let mut argv = vec![nb(0)];
             argv.extend([0i64, 0, 0, 0, 0, 0].map(Arg::Int));
             argv.extend(args.map(Arg::Int));
-            argv.extend([Arg::Int(1), Arg::Int(k)]);
+            argv.extend([Arg::Int(1), Arg::Int(k), Arg::Int(0)]);
             let role =
                 format!("KobCondPair.update.{}.{what}{}{suffix}", side_name(s.is_ask()), if args[3] == 0 { ".ev0" } else { ".ev1" });
             (entry(TemplateId::KobCondPair, s.encode(), "settle", argv), role, seq, AnyState::KobCondPair(next))
@@ -1601,22 +1994,85 @@ pub(crate) fn update_plan_pair(
     Ok((plan, role, sequence, next, take))
 }
 
+/// The token inputs of a pair refund, after the order at input 0.
+pub(crate) struct RefundInputs {
+    /// The bought-custody's token and amount (mode 1, `bought > 0`): input 1, released at output 1.
+    pub bought: Option<(Token, i64)>,
+    /// The input index of the sell custody (`KobPair`, `KobCondPair`): 1, or 2 after a bought-custody.
+    pub custody_in: usize,
+}
+
+/// The token inputs of the refund of pair order `s`.
+///
+/// INTEGRATOR (`build_refund_pair`): with `bought` the refund takes the bought-custody
+/// (`RefundOrder::bought_custody`, checked with [`check_refund_bought`]) as input 1 before the sell
+/// custody, and adds its release ([`refund_release`]) as output 1 after the sell custody's refund.
+pub(crate) fn refund_inputs(s: &AnyState) -> RefundInputs {
+    let bought = match s {
+        AnyState::KobPair(_) | AnyState::KobCondPair(_) => s.bought_custody().and_then(|b| {
+            let (a, bt) = pair_programs(s).ok()?;
+            let t_cov = match s {
+                AnyState::KobPair(p) => p.t_cov_id,
+                AnyState::KobCondPair(c) => c.t_cov_id,
+                _ => unreachable!("pair kinds"),
+            };
+            Some((if t_cov == a.0 { a } else { bt }, b))
+        }),
+        _ => None,
+    };
+    RefundInputs { custody_in: if bought.is_some() { 2 } else { 1 }, bought }
+}
+
+/// Checks the bought-custody a pair refund releases.
+#[allow(dead_code)] // build_refund_pair calls it once RefundOrder carries the bought-custody (B3 patch)
+pub(crate) fn check_refund_bought(s: &AnyState, order_cov: [u8; 32], c: &TokenUtxo) -> Result<()> {
+    let Some((t, bought)) = refund_inputs(s).bought else {
+        return invalid("this order holds no bought-custody (a refund never moves strays)");
+    };
+    let ext = match s {
+        AnyState::KobPair(p) => pair_terms(p).t_ext,
+        AnyState::KobCondPair(c) => cond_terms(c).t_ext,
+        _ => unreachable!("refund_inputs"),
+    };
+    check_bought_custody(c, t, order_cov, bought, ext)
+}
+
+/// The release of a pair refund's bought-custody: the maker's plain UTXO of the whole custody,
+/// with its KAS (value, state).
+#[allow(dead_code)] // build_refund_pair calls it once RefundOrder carries the bought-custody (B3 patch)
+pub(crate) fn refund_release(s: &AnyState, c: &TokenUtxo) -> (u64, TokenState) {
+    (c.utxo.amount, c.state.with_user_owner(s.maker()))
+}
+
 /// The signing plan and the role of the refund of a pair order.
 ///
 /// Anyone may refund after the order's expiry, 90 days idle or an IOC / FOK kill.
+///
+/// A `KobPair` / `KobCondPair` holding a bought-custody (mode 1, `bought > 0`) releases it whole to
+/// the maker at its own input index (bid-delivery-spec §5): the bought-custody is input 1 and the
+/// sell custody input 2 ([`refund_inputs`]), so the outputs are the sell custody's refund at 0 and
+/// the release at 1.
 pub(crate) fn refund_plan(s: &AnyState, kill: bool) -> Result<(SigPlan, String)> {
     let (a, b) = pair_programs(s)?;
     let suffix = pair_suffix(a, b);
     let st = s.encode();
+    let inputs = refund_inputs(s);
+    let cust_in = inputs.custody_in as i64;
+    let (t_in, tag) = if inputs.bought.is_some() { (1, ".m1c") } else { (0, "") };
     Ok(match s {
         AnyState::KobPair(p) => (
-            entry(TemplateId::KobPair, st, "settle", vec![nb(0), Arg::Int(1), Arg::Int(0), Arg::Int(0), Arg::Int(0), Arg::Int(0)]),
-            format!("KobPair.refund{}.{}{suffix}", if kill { ".kill" } else { "" }, side_name(p.is_ask())),
+            entry(
+                TemplateId::KobPair,
+                st,
+                "settle",
+                vec![nb(0), Arg::Int(cust_in), Arg::Int(t_in), Arg::Int(0), Arg::Int(0), Arg::Int(0), Arg::Int(0)],
+            ),
+            format!("KobPair.refund{}.{}{tag}{suffix}", if kill { ".kill" } else { "" }, side_name(p.is_ask())),
         ),
         AnyState::KobCondPair(c) => {
-            let mut args = vec![nb(0), Arg::Int(1)];
+            let mut args = vec![nb(0), Arg::Int(cust_in), Arg::Int(t_in)];
             args.extend([0i64; 11].map(Arg::Int));
-            (entry(TemplateId::KobCondPair, st, "settle", args), format!("KobCondPair.refund.{}{suffix}", side_name(c.is_ask())))
+            (entry(TemplateId::KobCondPair, st, "settle", args), format!("KobCondPair.refund.{}{tag}{suffix}", side_name(c.is_ask())))
         }
         AnyState::KobIfdPair(i) => {
             // The custodies are at input 1, and at input 2 when there are two. The A custody
