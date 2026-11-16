@@ -1,5 +1,6 @@
 //! C6 planner property tests: random global books (two tokens of different programs, plain orders of both,
-//! pair orders A / B (the three kinds, both sides, including pair market auctions), market orders, stops, if-done entries, TWAP / DCA, makers with several
+//! pair orders A / B (the three kinds, both sides, including pair market auctions), market orders, stops, if-done entries, TWAP / DCA, bids in every
+//! delivery mode (mode-1 bought-custodies, mode-2 receive UTXOs and tips), makers with several
 //! orders), and hostile variants of them. For every tick:
 //!
 //! * no panic (the tick runs under `catch_unwind`);
@@ -56,6 +57,41 @@ fn min_fill(r: &mut StdRng) -> i64 {
     [WHOLE, WHOLE, 1, 250, 1_500][r.gen_range(0..5)]
 }
 
+/// A bid's delivery block and its tokens: mode 0, mode 1 holding a bought-custody or not, mode 2 with 0 to 2 of the
+/// maker's receive UTXOs and a tip that pays the top-up or not.
+#[derive(Default)]
+struct Dl {
+    mode: i64,
+    thr: i64,
+    tip: i64,
+    bought: i64,
+    recv: Vec<TokenUtxo>,
+}
+
+impl Dl {
+    fn on(self, id: u32, mut o: ListedOrder) -> ListedOrder {
+        if self.bought > 0 {
+            o.bought_custody = Some(custody(self.bought, cid(id), 1_000));
+        }
+        o.receive = self.recv;
+        o
+    }
+}
+
+fn delivery(r: &mut StdRng, m: u8, pa: TemplateId, carrier: i64) -> Dl {
+    match r.gen_range(0..4) {
+        0 | 1 => Dl::default(),
+        2 => Dl { mode: MODE_ACCUMULATE, bought: [0, 1, WHOLE, 4 * WHOLE][r.gen_range(0..4)], ..Dl::default() },
+        _ => {
+            let extra = kob_protocol::budget::topup_extra(pa).map_or(0, |x| x as i64);
+            let thr = [1, 500, WHOLE][r.gen_range(0..3)];
+            let tip = [0, extra - 1, extra, (extra * 5 + 3) / 4][r.gen_range(0..4)].clamp(0, carrier);
+            let recv = (0..r.gen_range(0..=2)).map(|_| receive(m, r.gen_range(0..=8) * WHOLE, thr * r.gen_range(1..=2))).collect();
+            Dl { mode: MODE_TOPUP, thr, tip, bought: 0, recv }
+        }
+    }
+}
+
 /// A random global book: orders of token A (every kind), plain orders of token B, pair orders A / B.
 fn random_book(r: &mut StdRng, base: u32) -> (MemoryBook, String) {
     let pa = PA[r.gen_range(0..PA.len())];
@@ -96,7 +132,10 @@ fn random_book(r: &mut StdRng, base: u32) -> (MemoryBook, String) {
                 b.interval = 600;
                 b.max_fill = amount(r, 1, 3);
             }
-            let o = l_bid(next(), b.clone(), amount(r, 1, 8));
+            let dl = if b.tif == 0 { delivery(r, m, pa, b.delivery_carrier) } else { Dl::default() };
+            (b.mode, b.recv_threshold, b.topup_tip, b.bought) = (dl.mode, dl.thr, dl.tip, dl.bought);
+            let id = next();
+            let o = dl.on(id, l_bid(id, b.clone(), amount(r, 1, 8)));
             if b.tif != 0 {
                 fresh(o)
             } else {
@@ -123,7 +162,10 @@ fn random_book(r: &mut StdRng, base: u32) -> (MemoryBook, String) {
             if r.gen_bool(0.3) {
                 s.armed = 1;
             }
-            l_cond_bid(next(), s, NOW - 700)
+            let dl = delivery(r, m, pa, s.delivery_carrier);
+            (s.mode, s.recv_threshold, s.topup_tip, s.bought) = (dl.mode, dl.thr, dl.tip, dl.bought);
+            let id = next();
+            dl.on(id, l_cond_bid(id, s, NOW - 700))
         } else if k < 92 {
             let mut s = ifd_bid(m, px(r, 250_000_000), amount(r, 1, 6), pa);
             s.min_fill = min_fill(r);

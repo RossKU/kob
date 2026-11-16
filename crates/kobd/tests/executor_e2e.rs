@@ -178,11 +178,13 @@ async fn the_store_lists_every_kind_exactly_as_the_chain_built_it() {
                 family: fam,
                 custody: custody.map(|n| c.w.token_at(create, 1, TokenState::custody(fam, n, cov.0, EXT))),
                 custody_b: None,
+                bought_custody: None,
                 deadline,
                 seen_daa: utxo.utxo.block_daa_score,
                 foreign: vec![],
                 strays: vec![],
                 order: utxo,
+                receive: vec![],
             }
         };
         let expected = [

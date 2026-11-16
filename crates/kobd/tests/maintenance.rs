@@ -146,10 +146,12 @@ fn a_sale_that_does_not_pay_its_fee_is_a_merge() {
         },
         custody: None,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     };
     // (no price floor here: this is the fee rule alone)
     let cfg = MaintenanceConfig { sell_floor_bps: 0, ..Default::default() };
@@ -254,10 +256,12 @@ fn untipped_bid(id: u32, maker: u8, price: i64, amount: i64) -> ListedOrder {
         order: OrderUtxo { utxo: utxo(v, 1_000, Some(cid(id))), state: AnyState::KobBid(b) },
         custody: None,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 

@@ -16,6 +16,11 @@
 //!   ([`Tracked::addresses`]). The orders whose inputs are gone back off, and the other orders of
 //!   the transaction are planned again at once. Every order backs off only when the node cannot
 //!   tell.
+//! - A lost race over a top-up's receive UTXO (named in a double spend, or the input the node no
+//!   longer holds) backs off no order: the UTXO takes no top-up for [`RECEIVE_BUSY_DAA`], and the
+//!   orders are planned again at once with new receive UTXOs (form 1). When the node cannot tell
+//!   which input is missing, the receive UTXOs go busy and the orders are planned again; a second
+//!   refusal, without top-ups, backs off as usual.
 //! - A mempool double spend of one of the operator's own funding coins backs off no order. The
 //!   spender is a transaction this process does not know: one from before a restart that the
 //!   journal missed, a withdraw, or a second process on the same key. The coin is held out of the
@@ -232,6 +237,47 @@ async fn lost_orders<N: NodeApi>(node: &N, t: &Tracked, outcome: SubmitOutcome, 
     conflict_orders(t, outcome, msg)
 }
 
+/// A lost race of a transaction that tops up `receives`: the receive UTXOs that go busy and the
+/// orders that back off.
+///
+/// A double spend naming a receive UTXO, or a missing input the node places on receive UTXOs only,
+/// backs off no order. A missing input the node cannot place makes every receive UTXO busy and
+/// backs off no order either: the orders are rebuilt without top-ups at once.
+async fn receive_race<N: NodeApi>(
+    node: &N,
+    t: &Tracked,
+    receives: &BTreeSet<Outpoint>,
+    outcome: SubmitOutcome,
+    msg: Option<&str>,
+) -> (BTreeSet<Outpoint>, BTreeSet<CovId>) {
+    if outcome == SubmitOutcome::DoubleSpend {
+        return match msg.and_then(double_spent_outpoint) {
+            Some(op) if receives.contains(&op) => ([op].into_iter().collect(), BTreeSet::new()),
+            _ => (BTreeSet::new(), conflict_orders(t, outcome, msg)),
+        };
+    }
+    let gone_receives = missing_outpoints(node, t, receives).await;
+    match (missing_owners(node, t).await, gone_receives) {
+        (Some(ids), gone) => (gone.unwrap_or_default(), ids),
+        (None, Some(gone)) if !gone.is_empty() => (gone, BTreeSet::new()),
+        // The node cannot tell: no order is blamed before a rebuild without top-ups.
+        (None, None) => (receives.clone(), BTreeSet::new()),
+        // Every receive UTXO and order input is there: the missing input is another one.
+        (None, Some(_)) => (BTreeSet::new(), t.orders.clone()),
+    }
+}
+
+/// Which of `ops` the node no longer holds, asked by address; `None` when it cannot tell.
+async fn missing_outpoints<N: NodeApi>(node: &N, t: &Tracked, ops: &BTreeSet<Outpoint>) -> Option<BTreeSet<Outpoint>> {
+    let addrs: BTreeSet<&String> = ops.iter().filter_map(|op| t.addresses.get(op)).collect();
+    if addrs.is_empty() || !node.server_info().await.is_ok_and(|i| i.has_utxo_index) {
+        return None;
+    }
+    let addrs: Vec<String> = addrs.into_iter().cloned().collect();
+    let live: BTreeSet<Outpoint> = node.utxos_by_addresses(&addrs).await.ok()?.iter().map(|u| (u.transaction_id, u.index)).collect();
+    Some(ops.iter().filter(|op| t.addresses.contains_key(*op) && !live.contains(*op)).copied().collect())
+}
+
 /// The orders a refused submission backs off.
 ///
 /// On a mempool double spend of an input whose order is known ([`Tracked::owners`]), that order
@@ -356,7 +402,15 @@ pub struct Tracker {
     /// Retired transactions the node's mempool did not hold at the last check: the DAA score of
     /// that check and the number of misses in a row ([`Tracker::retired_to_check`]).
     pub retired_misses: BTreeMap<[u8; 32], (u64, u32)>,
+    /// The receive UTXOs a transaction about to be submitted tops up ([`Tracker::note_topups`]).
+    pub topups: BTreeMap<[u8; 32], BTreeSet<Outpoint>>,
+    /// Receive UTXOs a lost race named, with the DAA score until which they take no top-up.
+    pub busy_receives: BTreeMap<Outpoint, u64>,
 }
+
+/// DAA a receive UTXO named by a lost race takes no top-up (one minute): the book drops it once
+/// the indexer sees its spend.
+pub const RECEIVE_BUSY_DAA: u64 = 600;
 
 /// A retired transaction's mempool is checked at most this often (DAA, about ten seconds).
 pub const RETIRED_CHECK_DAA: u64 = 100;
@@ -370,6 +424,18 @@ impl Tracker {
     /// A tracker with no transactions.
     pub fn new(cfg: TrackerConfig) -> Self {
         Tracker { cfg, ..Default::default() }
+    }
+
+    /// Notes the receive UTXOs that transaction `txid` tops up, before its submission.
+    pub fn note_topups(&mut self, txid: [u8; 32], receives: BTreeSet<Outpoint>) {
+        if !receives.is_empty() {
+            self.topups.insert(txid, receives);
+        }
+    }
+
+    /// Receive UTXOs that take no top-up at `daa`.
+    pub fn busy_receives(&self, daa: u64) -> BTreeSet<Outpoint> {
+        self.busy_receives.iter().filter(|(_, until)| **until > daa).map(|(op, _)| *op).collect()
     }
 
     /// Outpoints no plan may spend: those of pending and accepted but not final transactions, and
@@ -570,6 +636,8 @@ impl Tracker {
 
     /// Submits a transaction and records it. Returns the node's verdict.
     pub async fn submit<N: NodeApi>(&mut self, node: &N, t: Tracked, daa: u64) -> SubmitOutcome {
+        let receives = self.topups.remove(&t.txid).unwrap_or_default();
+        self.busy_receives.retain(|_, until| *until > daa);
         if let Some(p) = t.parent {
             if !self.txs.contains_key(&p) {
                 // A chained step whose parent failed is never submitted.
@@ -596,6 +664,14 @@ impl Tracker {
                 self.txs.insert(t.txid, t);
             }
             SubmitOutcome::DoubleSpend if self.hold_funding(&t, msg.as_deref(), daa) => self.conflicts += 1,
+            SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput if !receives.is_empty() => {
+                self.conflicts += 1;
+                let (busy, ids) = receive_race(node, &t, &receives, outcome, msg.as_deref()).await;
+                for op in busy {
+                    self.busy_receives.insert(op, daa.saturating_add(RECEIVE_BUSY_DAA));
+                }
+                self.back_off(&ids, daa);
+            }
             SubmitOutcome::DoubleSpend | SubmitOutcome::MissingInput => {
                 self.conflicts += 1;
                 let ids = lost_orders(node, &t, outcome, msg.as_deref()).await;

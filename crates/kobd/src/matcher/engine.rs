@@ -375,9 +375,20 @@ pub(super) fn token_input_failure(err: &str, lowered: &Lowered) -> Option<usize>
 pub(super) fn custody_owner(plan: &Plan, lowered: &Lowered, by_id: &BTreeMap<CovId, ListedOrder>, i: usize) -> Option<CovId> {
     let inp = lowered.built.tx.inputs.get(i)?;
     let spent = (inp.transaction_id, inp.index);
-    plan.fills.iter().map(|f| f.cand.id).find(|id| {
-        by_id.get(id).is_some_and(|o| o.custody.iter().chain(o.custody_b.iter()).any(|c| super::book::outpoint(&c.utxo) == spent))
-    })
+    plan.fills
+        .iter()
+        .map(|f| f.cand.id)
+        .find(|id| by_id.get(id).is_some_and(|o| o.own_tokens().any(|c| super::book::outpoint(&c.utxo) == spent)))
+}
+
+/// The first input of a top-up's receive UTXO (a borrow-path leader), if the batch tops one up.
+pub fn topup_input(lowered: &Lowered) -> Option<usize> {
+    (0..lowered.built.roles.len()).find(|i| is_topup_input(lowered, *i))
+}
+
+/// Whether input `i` is a top-up's receive UTXO.
+pub fn is_topup_input(lowered: &Lowered, i: usize) -> bool {
+    lowered.built.roles.get(i).is_some_and(|r| r.contains(".leader.borrow."))
 }
 
 /// The order a validation error names.
@@ -688,6 +699,9 @@ impl<'a> Tick<'a> {
         // Fills left out of this batch only to find the one that a refusal naming no order comes
         // from (`bisect`). They are never given up.
         let mut probe: BTreeSet<CovId> = BTreeSet::new();
+        // Mode-2 top-ups are offered until one is refused or makes the batch too large; the batch
+        // is then built again with new receive UTXOs (form 1).
+        let mut topups = true;
         for _attempt in 0..MAX_ATTEMPTS {
             if self.out_of_time() {
                 break;
@@ -735,6 +749,7 @@ impl<'a> Tick<'a> {
             let lowered = loop {
                 let cx = LowerCtx {
                     budget_floor: floor.clone(),
+                    topups,
                     by_id: &self.by_id,
                     funding: funding.clone(),
                     operator: self.operator,
@@ -847,6 +862,10 @@ impl<'a> Tick<'a> {
             // estimate. Scale the budget down by the overrun and plan again.
             let m = lowered.built.fee.mass;
             let over = overrun(&lowered, &acct, cfg.planner.max_tx_bytes);
+            if over > 1.0 && topups && topup_input(&lowered).is_some() {
+                topups = false;
+                continue;
+            }
             if over > 1.0 {
                 let shrunk = ((plan.est_bytes as f64 / over) * 0.97) as u64;
                 if plan.fills.len() > 1 && shrunk < plan.est_bytes && shrunk > 0 {
@@ -890,6 +909,7 @@ impl<'a> Tick<'a> {
             let build = |p: &Plan| -> Option<(Lowered, Accounting)> {
                 let cx = LowerCtx {
                     budget_floor: floor.clone(),
+                    topups,
                     by_id: &self.by_id,
                     funding: funding.clone(),
                     operator: self.operator,
@@ -945,6 +965,10 @@ impl<'a> Tick<'a> {
                     // order whose custody the failing input spends. When it names none, the fill
                     // that the search below isolates is the suspect.
                     let mut token_why = None;
+                    if topups && token_input_failure(&e, &lowered).is_some_and(|i| is_topup_input(&lowered, i)) {
+                        topups = false;
+                        continue;
+                    }
                     if let Some(i) = token_input_failure(&e, &lowered) {
                         let why = format!("the token program rejected the pre-simulated spend ({})", lowered.built.roles[i]);
                         if let Some(id) = custody_owner(&plan, &lowered, &self.by_id, i).filter(|id| !self.unaccepted.contains(id)) {

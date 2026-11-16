@@ -318,10 +318,12 @@ pub fn listed(id: [u8; 32], state: AnyState, value: u64, daa: u64) -> ListedOrde
         order: OrderUtxo { utxo: utxo(value, daa, Some(id)), state },
         custody,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -334,6 +336,38 @@ pub fn l_bid(id: u32, s: BidState, amount: i64) -> ListedOrder {
     let v = (s.used(amount).expect("budget") + s.delivery_carrier + s.reserve) as u64;
     listed(cid(id), AnyState::KobBid(s), v, 1_000)
 }
+/// A mode-1 bid funded for `amount` more base units, holding `bought` in its bought-custody.
+pub fn m1_bid(id: u32, maker: u8, price: i64, amount: i64, bought: i64) -> ListedOrder {
+    let s = BidState { mode: MODE_ACCUMULATE, bought, ..bid(maker, price, T3) };
+    let v = (s.used(amount).expect("budget") + s.carrier_reserve() + s.reserve) as u64;
+    let mut o = listed(cid(id), AnyState::KobBid(s), v, 1_000);
+    if bought > 0 {
+        o.bought_custody = Some(custody(bought, cid(id), 1_000));
+    }
+    o
+}
+
+/// The default `topupTip` of a `KCC20Ref` order (bid-delivery-spec §10).
+pub fn default_tip() -> i64 {
+    kob_protocol::budget::default_topup_tip(T3, DC).expect("KCC20Ref has a measured top-up")
+}
+
+/// A receive UTXO of `maker` holding `amount` with guard threshold `thr`.
+pub fn receive(maker: u8, amount: i64, thr: i64) -> TokenUtxo {
+    let mut g = [0u8; 32];
+    g[..8].copy_from_slice(&thr.to_le_bytes());
+    let state = TokenState::from(Kcc20State::p2pk(amount, pk(maker), EXT)).with_borrow((1, g));
+    TokenUtxo { utxo: utxo(CARRIER, 900, Some(TOKEN)), state }
+}
+
+/// A mode-2 bid (threshold `thr`, tip `tip`) funded for `amount`, with the maker's receive UTXOs.
+pub fn m2_bid(id: u32, maker: u8, price: i64, amount: i64, thr: i64, tip: i64, recv: Vec<TokenUtxo>) -> ListedOrder {
+    let s = BidState { mode: MODE_TOPUP, recv_threshold: thr, topup_tip: tip, ..bid(maker, price, T3) };
+    let mut o = l_bid(id, s, amount);
+    o.receive = recv;
+    o
+}
+
 pub fn l_cond_ask(id: u32, s: CondAskState, daa: u64) -> ListedOrder {
     listed(cid(id), AnyState::KobCondAsk(s), CARRIER, daa)
 }
@@ -413,14 +447,25 @@ pub fn kron_token(t: &TokenUtxo) -> TokenUtxo {
     TokenUtxo { utxo, state }
 }
 
+/// A KRON delivery is mode 0 (bid-delivery-spec §1): the twin of a mode-1 / mode-2 bid is a mode-0 bid.
+pub fn mode0(s: AnyState) -> AnyState {
+    match s {
+        AnyState::KobBid(b) => AnyState::KobBid(BidState { mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0, ..b }),
+        AnyState::KobCondBid(c) => AnyState::KobCondBid(CondBidState { mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0, ..c }),
+        s => s,
+    }
+}
+
 /// An order as the same order of the KRON family.
 pub fn kron_order(o: &ListedOrder) -> ListedOrder {
     ListedOrder {
         family: Family::Kron,
-        order: OrderUtxo { utxo: o.order.utxo.clone(), state: kron_state(o.order.state.clone()) },
+        order: OrderUtxo { utxo: o.order.utxo.clone(), state: kron_state(mode0(o.order.state.clone())) },
         custody: o.custody.as_ref().map(kron_token),
         foreign: vec![],
         strays: o.strays.iter().map(kron_token).collect(),
+        bought_custody: None,
+        receive: vec![],
         ..o.clone()
     }
 }
@@ -442,10 +487,12 @@ pub fn to_kron(inp: &TickInput) -> TickInput {
             .iter()
             .map(|o| ListedOrder {
                 family: Family::Kron,
-                order: OrderUtxo { utxo: o.order.utxo.clone(), state: kron_state(o.order.state.clone()) },
+                order: OrderUtxo { utxo: o.order.utxo.clone(), state: kron_state(mode0(o.order.state.clone())) },
                 custody: o.custody.as_ref().map(&tok),
                 foreign: vec![],
                 strays: o.strays.iter().map(&tok).collect(),
+                bought_custody: None,
+                receive: vec![],
                 ..o.clone()
             })
             .collect(),

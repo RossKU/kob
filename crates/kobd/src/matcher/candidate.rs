@@ -120,6 +120,8 @@ pub struct Cand {
     pub merge: Option<CovId>,
     /// The merged sell-first entry has a custody, an extra token input and output.
     pub merge_custody: bool,
+    /// The fill spends the order's bought-custody (mode 1, `bought > 0`): one more token input.
+    pub bought_in: bool,
     /// A booked exit's entry.
     ///
     /// The entry never shares the transaction, except as this fill's merge (§6.1).
@@ -553,6 +555,7 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
         trigger: None,
         merge: None,
         merge_custody: false,
+        bought_in: false,
         parent: None,
         touch: None,
         chain_safe: true,
@@ -708,7 +711,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.ioc = s.tif == TIF_IOC;
                 // The outputs a fill leaves must clear their KIP-9 dust bounds. These are the
                 // continuation and the delivery.
-                if !c.set_rules(plain_kip9(&state, v, 0, q, c.rules())) {
+                let bought_kas = o.bought_custody.as_ref().map_or(0, |b| b.utxo.amount.min(i64::MAX as u64) as i64);
+                if !c.set_rules(plain_kip9(&state, v, bought_kas, q, c.rules())) {
                     continue;
                 }
                 if s.tif == TIF_FOK {
@@ -728,7 +732,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     });
                 }
                 c.chain_safe = s.interval == 0;
-                c.bytes = INPUT_BYTES + rl(TemplateId::KobBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES;
+                c.bought_in = s.mode == MODE_ACCUMULATE && s.bought > 0;
+                c.bytes = INPUT_BYTES + rl(TemplateId::KobBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES + if c.bought_in { tok_in } else { 0 };
                 out.push(c);
             }
             AnyState::KobCondAsk(s) => {
@@ -839,7 +844,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 }
                 // KIP-9. A partial fill delivers on `deliveryCarrier` and keeps the continuation
                 // `v - spend - deliveryCarrier`. The fill of everything left delivers `v - spend`.
-                // A merge pays the entry instead, and the builder's rules apply to it.
+                // A merge pays the entry instead, and the builder's rules apply to it. A mode-1 bid
+                // holding its bought-custody moves no carrier: the custody's KAS rides on D.
+                let bought_in = s.mode == MODE_ACCUMULATE && s.bought > 0;
+                let carrier = if bought_in { 0 } else { s.delivery_carrier };
+                let on_d = if bought_in { o.bought_custody.as_ref().map_or(0, |b| b.utxo.amount.min(i64::MAX as u64) as i64) } else { carrier };
                 let kip9 = |c: &mut Cand| -> bool {
                     if c.merge.is_some() {
                         return true;
@@ -848,10 +857,10 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     let left = |n: i64| s.spend(n, cv.quote).and_then(|sp| v.checked_sub(sp));
                     c.set_rules(kip9_limits(
                         cv.rules(),
-                        s.delivery_carrier >= COV_OUTPUT_MIN,
+                        on_d >= COV_OUTPUT_MIN,
                         |_| true,
-                        |n| left(n).is_some_and(|l| l.saturating_sub(s.delivery_carrier) >= COV_OUTPUT_MIN),
-                        |n| left(n).is_some_and(|l| l >= COV_OUTPUT_MIN),
+                        |n| left(n).is_some_and(|l| l.saturating_sub(carrier) >= COV_OUTPUT_MIN),
+                        |n| left(n).is_some_and(|l| l.saturating_add(if bought_in { on_d } else { 0 }) >= COV_OUTPUT_MIN),
                     ))
                 };
                 let mk = |leg: u8, quote: i64| {
@@ -869,10 +878,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     c.cap = largest_fit(s.amount_left, |n| {
                         s.spend(n, quote)
                             .and_then(|sp| v.checked_sub(sp))
-                            .is_some_and(|left| left - if n < s.amount_left { s.delivery_carrier } else { 0 } > 0)
+                            .is_some_and(|left| left - if n < s.amount_left { carrier } else { 0 } > 0)
                     });
                     c.chain_safe = s.armed != 1;
-                    c.bytes = INPUT_BYTES + rl(TemplateId::KobCondBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES;
+                    c.bought_in = bought_in;
+                    c.bytes = INPUT_BYTES + rl(TemplateId::KobCondBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES + if bought_in { tok_in } else { 0 };
                     c
                 };
                 if s.tp_price > 0 {
@@ -1327,7 +1337,8 @@ fn first_true(lo: i64, hi: i64, f: &impl Fn(i64) -> bool) -> i64 {
 ///   The fill of everything left pays all three.
 /// - A bid's fill delivers the tokens on `deliveryCarrier + used(n) − spend(n)`. A GTC bid keeps
 ///   the continuation `v − used(n) − deliveryCarrier` while it can continue. A fill that ends it,
-///   and any IOC or FOK fill, delivers `v − spend(n)`.
+///   and any IOC or FOK fill, delivers `v − spend(n)`. A mode-1 bid holding its bought-custody
+///   moves no carrier, and its D carries the custody's KAS `cust` instead.
 pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> Option<QtyRules> {
     match s {
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => {
@@ -1342,9 +1353,15 @@ pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> O
             )
         }
         AnyState::KobBid(b) | AnyState::KobBidKron(b) => {
+            // A mode-1 bid holding its bought-custody moves no carrier: the custody's KAS (`cust`)
+            // is on D.
+            let carrier = b.carrier_reserve();
+            let on_d = if carrier == 0 { cust } else { carrier };
             let spend = |n: i64| b.spend_at(n, quote);
             let used = |n: i64| b.used(n);
-            let closing = |n: i64| spend(n).is_some_and(|sp| v.saturating_sub(sp) >= COV_OUTPUT_MIN);
+            // An ending fill puts what the escrow keeps on D, next to the bought-custody's KAS.
+            let held = if carrier == 0 { cust } else { 0 };
+            let closing = |n: i64| spend(n).is_some_and(|sp| v.saturating_sub(sp).saturating_add(held) >= COV_OUTPUT_MIN);
             if b.tif != TIF_GTC {
                 // An IOC or FOK bid never continues. Every fill delivers what its escrow keeps.
                 return kip9_limits(r, true, |_| true, closing, closing);
@@ -1353,10 +1370,10 @@ pub fn plain_kip9(s: &AnyState, v: i64, cust: i64, quote: i64, r: QtyRules) -> O
                 r,
                 true,
                 |n| match (used(n), spend(n)) {
-                    (Some(u), Some(sp)) => b.delivery_carrier.saturating_add(u - sp) >= COV_OUTPUT_MIN,
+                    (Some(u), Some(sp)) => on_d.saturating_add(u - sp) >= COV_OUTPUT_MIN,
                     _ => false,
                 },
-                |n| used(n).is_some_and(|u| v.saturating_sub(u).saturating_sub(b.delivery_carrier) >= COV_OUTPUT_MIN),
+                |n| used(n).is_some_and(|u| v.saturating_sub(u).saturating_sub(carrier) >= COV_OUTPUT_MIN),
                 closing,
             )
         }

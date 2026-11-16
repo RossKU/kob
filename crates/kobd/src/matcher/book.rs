@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kob_protocol::state::AnyState;
+use kob_protocol::state::{AnyState, TokenState};
 use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
 use serde::{Deserialize, Serialize};
 
@@ -45,6 +45,10 @@ pub struct ListedOrder {
     /// to its A custody).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custody_b: Option<TokenUtxo>,
+    /// A mode-1 order's bought-custody (`bought > 0`): one live token UTXO owned by the order id, as the
+    /// indexer proved it. Refunds and fills of the order spend it. It is never a stray.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bought_custody: Option<TokenUtxo>,
     /// Day orders: wall-clock deadline (UTC unix seconds) from the placement record (§10.10).
     #[serde(default, with = "kob_protocol::json::field")]
     pub deadline: Option<u64>,
@@ -59,6 +63,10 @@ pub struct ListedOrder {
     /// (`KeeperConfig::return_foreign_strays`).
     #[serde(default)]
     pub foreign: Vec<kob_protocol::build::ForeignStrays>,
+    /// A mode-2 order's top-up targets: the maker's live receive UTXOs of the token it buys, with
+    /// the order's commitment ([`topup_receive`] picks one per fill).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub receive: Vec<TokenUtxo>,
 }
 
 impl ListedOrder {
@@ -103,7 +111,32 @@ impl ListedOrder {
                 && (c.state.family() != Family::Kcc20 || self.order.state.custody_ext(token) == Some(c.state.extension()))
                 && c.utxo.covenant_id == Some(token)
                 && !self.strays.iter().any(|s| outpoint(&s.utxo) == outpoint(&c.utxo))
-        })
+        }) && self.bought_ok()
+    }
+
+    /// Whether the bought-custody is exactly the one the state needs: none unless mode 1 with
+    /// `bought > 0`, then `bought` of the bought token, owned by the order, plain, its commitment.
+    pub fn bought_ok(&self) -> bool {
+        let s = &self.order.state;
+        match (s.bought_custody(), &self.bought_custody) {
+            (None, None) => true,
+            (Some(b), Some(c)) => crate::indexer::delivery::bought_token(s).is_some_and(|want| {
+                c.state.amount() == b
+                    && c.state.owner() == self.id()
+                    && c.state.is_covenant_owned()
+                    && c.state.is_plain()
+                    && Some(c.state.family()) == want.family
+                    && c.state.extension() == want.ext
+                    && c.utxo.covenant_id == Some(want.token)
+                    && !self.strays.iter().any(|x| outpoint(&x.utxo) == outpoint(&c.utxo))
+            }),
+            _ => false,
+        }
+    }
+
+    /// Every token UTXO the order owns and a fill may spend: its custodies and its bought-custody.
+    pub fn own_tokens(&self) -> impl Iterator<Item = &TokenUtxo> {
+        self.custody.iter().chain(self.custody_b.iter()).chain(self.bought_custody.iter())
     }
 
     /// The custody of `token`. Pair orders hold custodies of either token, and a KAS kind has one.
@@ -273,7 +306,7 @@ impl MemoryBook {
         let mut s = BTreeSet::new();
         for o in &self.orders {
             s.insert(outpoint(&o.order.utxo));
-            for c in o.custody.iter().chain(o.custody_b.iter()) {
+            for c in o.own_tokens() {
                 s.insert(outpoint(&c.utxo));
             }
         }
@@ -291,6 +324,35 @@ impl OrderBookView for MemoryBook {
     fn wallet_tokens(&self, owner: &[u8; 32]) -> Vec<TokenUtxo> {
         self.wallet_tokens.iter().filter(|t| &t.state.owner() == owner && t.state.is_user()).cloned().collect()
     }
+}
+
+/// The threshold of a receive UTXO of `maker` with commitment `ext`: owner scheme `0x00`, borrow
+/// scheme `0x01`, guard = threshold (8 bytes LE) and 24 zero bytes (bid-delivery-spec §1).
+pub fn receive_threshold(t: &TokenState, maker: &[u8; 32], ext: &[u8; 32]) -> Option<i64> {
+    let s = t.as_kcc20()?;
+    let thr = i64::from_le_bytes(s.borrow_guard[..8].try_into().ok()?);
+    (s.owner == *maker
+        && s.owner_scheme == kob_protocol::state::SCHEME_P2PK
+        && s.borrow_scheme == 0x01
+        && s.borrow_guard[8..].iter().all(|b| *b == 0)
+        && s.extension_commitment == *ext
+        && s.amount >= 0)
+        .then_some(thr)
+}
+
+/// The receive UTXO a fill of `n` of a mode-2 bid tops up: the largest of the maker's whose threshold
+/// is at least `recvThreshold` and below `n`, the lowest outpoint on a tie, so every executor aims
+/// at the same one and the maker's holdings converge (`borrow-topup.md` §5).
+pub fn topup_receive(o: &ListedOrder, n: i64) -> Option<&TokenUtxo> {
+    let (AnyState::KobBid(_) | AnyState::KobCondBid(_)) = o.base_state() else { return None };
+    let d = o.order.state.delivery().filter(|d| d.mode == kob_protocol::state::MODE_TOPUP)?;
+    let want = crate::indexer::delivery::bought_token(&o.order.state)?;
+    let maker = o.order.state.maker();
+    o.receive
+        .iter()
+        .filter(|r| r.utxo.covenant_id == Some(want.token))
+        .filter(|r| receive_threshold(&r.state, &maker, &want.ext).is_some_and(|thr| thr >= d.recv_threshold && thr < n))
+        .min_by(|a, b| b.state.amount().cmp(&a.state.amount()).then(outpoint(&a.utxo).cmp(&outpoint(&b.utxo))))
 }
 
 /// Groups the listed orders of a view by book.

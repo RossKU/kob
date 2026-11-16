@@ -1084,7 +1084,8 @@ impl<'u> Alloc<'u> {
                 d.sold = n as i128;
             }
             (None, Side::Bid) => {
-                d.tin = u32::from(c.merge_custody);
+                // A merged entry's custody, or the bid's own bought-custody (mode 1).
+                d.tin = u32::from(c.merge_custody) + u32::from(c.bought_in);
                 d.tout = 1;
                 d.bought = n as i128;
             }

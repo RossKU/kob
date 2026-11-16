@@ -574,20 +574,24 @@ fn an_if_done_pair_cycle_buys_books_its_exit_and_re_arms() {
         order: OrderUtxo { utxo: out_utxo(p, xo, daa), state: AnyState::KobCondPair(x) },
         custody: Some(TokenUtxo { utxo: out_utxo(p, xc, daa), state: xc_state }),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     };
     let entry_l = ListedOrder {
         family: kobd::matcher::family::Family::Kcc20,
         order: OrderUtxo { utxo: out_utxo(p, eo, daa), state: AnyState::KobIfdPair(e2) },
         custody: Some(TokenUtxo { utxo: out_utxo(p, ec, daa), state: ec_state }),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     };
     // tick 2: the exit's take-profit (1.60) nets against a pair BID at 1.70 and re-arms the entry
     let r2 = run_pair(vec![entry_l, exit_l, l_pair(3, T8, T8, pbid(3, T8, T8, 2 * WHOLE, 1_700, PTIP), 1_000)], &cfg());

@@ -737,7 +737,7 @@ fn busy_orders(orders: &[ListedOrder], spent: &BTreeSet<super::book::Outpoint>) 
         .iter()
         .filter(|o| {
             spent.contains(&outpoint(&o.order.utxo))
-                || o.custody.iter().chain(o.custody_b.iter()).any(|c| spent.contains(&outpoint(&c.utxo)))
+                || o.own_tokens().any(|c| spent.contains(&outpoint(&c.utxo)))
         })
         .map(|o| o.id())
         .collect()
@@ -756,14 +756,30 @@ fn input_owners(p: &super::engine::Prepared, orders: &[ListedOrder]) -> BTreeMap
         }
     }
     for o in orders.iter().filter(|o| ids.contains(&o.id())) {
-        for c in o.custody.iter().chain(o.custody_b.iter()) {
+        for c in o.own_tokens() {
             owners.insert(outpoint(&c.utxo), o.id());
         }
     }
     owners
 }
 
-/// The address of every input that `owners` names, from the script the input spends.
+/// The receive UTXOs a matcher transaction tops up.
+fn topup_inputs(p: &super::engine::Prepared) -> BTreeSet<super::book::Outpoint> {
+    let ins = &p.signed.tx.inputs;
+    (0..ins.len()).filter(|i| super::engine::is_topup_input(&p.lowered, *i)).map(|i| (ins[i].transaction_id, ins[i].index)).collect()
+}
+
+/// The orders of the book without the receive UTXOs in `blocked` (spent by a pending
+/// transaction, or named by a lost race): their fills deliver new receive UTXOs.
+pub fn without_receives(mut orders: Vec<ListedOrder>, blocked: &BTreeSet<super::book::Outpoint>) -> Vec<ListedOrder> {
+    for o in orders.iter_mut() {
+        o.receive.retain(|r| !blocked.contains(&outpoint(&r.utxo)));
+    }
+    orders
+}
+
+/// The address of every input that `owners` names, and of every top-up's receive UTXO, from the
+/// script the input spends.
 ///
 /// After a missing-input refusal the node is asked which of them are still unspent.
 fn input_addresses(
@@ -772,9 +788,10 @@ fn input_addresses(
     network: &str,
 ) -> BTreeMap<super::book::Outpoint, String> {
     let mut out = BTreeMap::new();
+    let topups = topup_inputs(p);
     for i in &p.signed.tx.inputs {
         let op = (i.transaction_id, i.index);
-        if !owners.contains_key(&op) {
+        if !owners.contains_key(&op) && !topups.contains(&op) {
             continue;
         }
         let addr = crate::hex::decode(&i.utxo.script_public_key).ok().and_then(|spk| crate::script::spk_address(&spk, network));
@@ -827,7 +844,7 @@ fn listed_outpoints(orders: &[ListedOrder]) -> BTreeSet<super::book::Outpoint> {
     let mut s = BTreeSet::new();
     for o in orders {
         s.insert(outpoint(&o.order.utxo));
-        for c in o.custody.iter().chain(o.custody_b.iter()) {
+        for c in o.own_tokens() {
             s.insert(outpoint(&c.utxo));
         }
     }
@@ -1619,7 +1636,11 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
             self.cfg.engine.planner.inventory.used = self.inventory_use.clone();
             self.cfg.engine.select = self.selector.tick(Role::Match);
             self.cfg.engine.select_since = self.cfg.engine.select.map(|_| self.selector.history.clone());
-            let inp = TickInput { orders: book.orders.clone(), clock, funding: funding.clone(), excluded: excluded.clone() };
+            // A receive UTXO a pending transaction spends, or a lost race named, takes no top-up.
+            let mut blocked = spent.clone();
+            blocked.extend(self.tracker.busy_receives(daa));
+            let orders = without_receives(book.orders.clone(), &blocked);
+            let inp = TickInput { orders, clock, funding: funding.clone(), excluded: excluded.clone() };
             let report = matcher_tick(&inp, &self.cfg.engine, &self.families, self.signer.as_ref());
             self.selector.record(report.selection.as_ref().map(|s| s.crossable.as_slice()).unwrap_or(&[]), daa);
             if let Some(s) = &report.selection {
@@ -1710,6 +1731,7 @@ impl<N: NodeApi, S: BookSource> Runner<N, S> {
                     retired: None,
                 };
                 let spent_ids = t.orders.clone();
+                self.tracker.note_topups(t.txid, topup_inputs(&p));
                 self.send(t, daa, &mut rep).await;
                 if rep.conflicts.last() == Some(&p.txid()) {
                     match_lost += 1;

@@ -161,10 +161,12 @@ pub fn l_pair(id: u32, pa: TemplateId, pb: TemplateId, s: PairState, daa: u64) -
         order: OrderUtxo { utxo: utxo(v, daa, Some(cid(id))), state: AnyState::KobPair(s) },
         custody: Some(custody),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -231,10 +233,12 @@ pub fn l_cond_pair(id: u32, pa: TemplateId, pb: TemplateId, s: CondPairState, da
         order: OrderUtxo { utxo: utxo(v, daa, Some(cid(id))), state: AnyState::KobCondPair(s) },
         custody: Some(custody),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -310,10 +314,12 @@ pub fn l_ifd_pair(id: u32, pa: TemplateId, pb: TemplateId, s: IfdPairState, daa:
         order: OrderUtxo { utxo: utxo(v, daa, Some(cid(id))), state: AnyState::KobIfdPair(s) },
         custody,
         custody_b,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -329,10 +335,12 @@ pub fn l_bid_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
         order: OrderUtxo { utxo: utxo(v, 1_000, Some(cid(id))), state: AnyState::KobBid(b).into_family(fam(p)) },
         custody: None,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -348,10 +356,12 @@ pub fn l_ask_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
         order: OrderUtxo { utxo: utxo(CARRIER, 1_000, Some(cid(id))), state: AnyState::KobAsk(a).into_family(fam(p)) },
         custody: Some(custody),
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 

@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use kob_protocol::build::{Batch, BatchUpdate, Leg, PairEntryMerge, SellFirstEntry};
+use kob_protocol::build::{Batch, BatchUpdate, BidDelivery, Leg, PairEntryMerge, SellFirstEntry};
 use kob_protocol::state::*;
 use kob_protocol::tx::{FeeOptions, KeyUtxo, OrderUtxo};
 
@@ -39,6 +39,30 @@ pub struct LowerCtx<'a> {
     /// `ExceededCommittedScriptUnits` (a shape the generator misses), the engine measures the
     /// inputs of the transaction ([`measured_floors`]) and retries once with the budgets they need.
     pub budget_floor: BTreeMap<String, u16>,
+    /// Offer mode-2 bids their top-up ([`bid_delivery`]). Off: every mode-2 fill is a new receive
+    /// UTXO (form 1), the rebuild after a refused top-up.
+    pub topups: bool,
+}
+
+/// Whether a mode-2 order's `topupTip` covers the measured extra fee of a top-up at `fee_rate`
+/// (`data/topup_extra.json`, measured at the floor rate). The tip is the only reason to top up.
+pub fn topup_pays(s: &AnyState, fee_rate: u64) -> bool {
+    let (Some(d), Some(p)) = (s.delivery(), super::candidate::token_program(s)) else { return false };
+    let Some(extra) = kob_protocol::budget::topup_extra(p) else { return false };
+    let extra = (extra as u128 * fee_rate as u128).div_ceil(kob_protocol::tx::MIN_FEE_RATE as u128);
+    d.mode == MODE_TOPUP && d.topup_tip.max(0) as u128 >= extra
+}
+
+/// The delivery inputs of a KAS-book bid's fill of `n`: a mode-1 order's bought-custody, and a
+/// mode-2 order's receive UTXO when its tip pays the top-up. The builder still uses form 1 where
+/// layout rules 3 to 6 forbid the top-up.
+pub fn bid_delivery(o: &ListedOrder, n: i64, cx: &LowerCtx) -> Option<BidDelivery> {
+    let d = o.order.state.delivery()?;
+    let custody = o.bought_custody.clone().filter(|_| d.mode == MODE_ACCUMULATE && d.bought > 0);
+    let receive = (cx.topups && topup_pays(&o.order.state, cx.fee_rate))
+        .then(|| super::book::topup_receive(o, n).cloned())
+        .flatten();
+    (custody.is_some() || receive.is_some()).then_some(BidDelivery { custody, receive, form: None })
 }
 
 /// The typed state of an order UTXO.
@@ -76,7 +100,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                 order: typed(&o.order, |s| if let AnyState::KobBid(x) = s { Some(x.clone()) } else { None })?,
                 amount,
                 t,
-                delivery: None,
+                delivery: bid_delivery(o, amount, cx),
             },
             AnyState::KobCondAsk(_) => {
                 let merge = match f.cand.merge {
@@ -113,8 +137,8 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     leg: f.cand.leg,
                     evidence,
                     t,
+                    delivery: if merge.is_some() { None } else { bid_delivery(o, amount, cx) },
                     merge,
-                    delivery: None,
                 }
             }
             AnyState::KobIfdBid(_) => Leg::IfdBid {
@@ -135,7 +159,9 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                 custody: custody()?,
                 amount,
                 t,
-                bought_custody: None,
+                // A pair order is never topped up here (layout rule 3 is the bid builder's only):
+                // mode 2 delivers a new receive UTXO.
+                bought_custody: o.bought_custody.clone(),
                 receive: None,
                 form: None,
             },
@@ -161,7 +187,7 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                     evidence_b: f.evidence_b,
                     t,
                     merge,
-                    bought_custody: None,
+                    bought_custody: o.bought_custody.clone(),
                     receive: None,
                     form: None,
                 }
