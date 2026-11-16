@@ -112,7 +112,7 @@ contract KobCondAsk(
     // int, with slipBps <= 10000.
     int constant MAX_STOP = 922337203685477;
     int constant ASK_STATE_LEN = 276;
-    int constant BID_STATE_LEN = 285;
+    int constant BID_STATE_LEN = 321;
     // The most token inputs a transaction may carry, 8 for the 8/8 prototype.
     // The scan over these slots is unrolled by hand, one line per slot, so
     // raising the cap needs as many lines.

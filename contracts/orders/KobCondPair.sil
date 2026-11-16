@@ -182,10 +182,10 @@ contract KobCondPair(
     // an int, with slipBps <= 10000.
     int constant MAX_STOP = 922337203685477;
     // State lengths of the evidence templates: KobAsk 276, KobAskKron 243,
-    // KobBid 285 and KobBidKron 252.
+    // KobBid 321 and KobBidKron 252.
     int constant ASK_STATE_LEN = 276;
     int constant ASK_STATE_LEN_KRON = 243;
-    int constant BID_STATE_LEN = 285;
+    int constant BID_STATE_LEN = 321;
     int constant BID_STATE_LEN_KRON = 252;
     // State length of the KobPair template, for pair-order evidence.
     int constant PAIR_STATE_LEN = 483;

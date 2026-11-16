@@ -106,7 +106,7 @@ contract KobIfdBid(
     // state, and EXIT_STATE_LEN that of the KobCondAsk state with its repeat
     // fields and extensionCommitment.
     int constant MAX_IDLE = 77760000;
-    int constant BID_STATE_LEN = 285;
+    int constant BID_STATE_LEN = 321;
     int constant EXIT_STATE_LEN = 363;
     // The scans over these slots are unrolled by hand, one line per slot, so
     // raising a cap needs as many scan lines.

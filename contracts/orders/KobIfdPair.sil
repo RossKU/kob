@@ -172,10 +172,10 @@ contract KobIfdPair(
     // An entry untouched for 90 days (10 DAA/s) becomes refundable by anyone.
     int constant MAX_IDLE = 77760000;
     // State lengths of the evidence templates: KobAsk 276, KobAskKron 243,
-    // KobBid 285, KobBidKron 252 and KobPair 483.
+    // KobBid 321, KobBidKron 252 and KobPair 483.
     int constant ASK_STATE_LEN = 276;
     int constant ASK_STATE_LEN_KRON = 243;
-    int constant BID_STATE_LEN = 285;
+    int constant BID_STATE_LEN = 321;
     int constant BID_STATE_LEN_KRON = 252;
     int constant PAIR_STATE_LEN = 483;
     // State length of the exit, KobCondPair.

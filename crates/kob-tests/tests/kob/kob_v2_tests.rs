@@ -513,6 +513,10 @@ impl Net {
             int(p.slope),
             int(p.price_end),
             int(p.decay_step),
+            int(0),
+            int(0),
+            int(0),
+            int(0),
         ]);
         compile_contract(&src("KobBid"), &a, CompileOptions::default()).expect("compile KobBid")
     }
@@ -1149,7 +1153,7 @@ fn s2_tips(f: &Fx, tip: i64) -> Scn {
     Scn {
         name: format!("S2 matcher crosses 1 bid x 2 asks, each at its own all-in price (tips {tip})"),
         inputs: vec![
-            call(&bid, "fill", vec![nb(8 * TOK), iv(3), iv(0)], "bid.fill", bid_value, b, 1_000),
+            call(&bid, "fill", vec![nb(8 * TOK), iv(3), iv(0), iv(0)], "bid.fill", bid_value, b, 1_000),
             call(&ask_a, "settle", vec![nb(5 * TOK), iv(3), iv(0), iv(0)], "ask.settle", CARRIER, ca, 1_000),
             call(&ask_c, "settle", vec![nb(3 * TOK), iv(4), iv(4), iv(0)], "ask.settle", CARRIER, cc, 1_000),
             tok_in(
@@ -1193,8 +1197,8 @@ fn s3(f: &Fx) -> Scn {
     Scn {
         name: "S3 taker sells into 2 bids (1 partial + 1 exhausted)".into(),
         inputs: vec![
-            call(&bid1, "fill", vec![nb(4 * TOK), iv(2), iv(0)], "bid.fill", v1, b1, 1_000),
-            call(&bid2, "fill", vec![nb(2 * TOK), iv(2), iv(0)], "bid.fill", v2, b2, 1_000),
+            call(&bid1, "fill", vec![nb(4 * TOK), iv(2), iv(0), iv(0)], "bid.fill", v1, b1, 1_000),
+            call(&bid2, "fill", vec![nb(2 * TOK), iv(2), iv(0), iv(0)], "bid.fill", v2, b2, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -1296,7 +1300,7 @@ fn s6_value(f: &Fx, bp: &BidP, n: i64, v: i64, eff: i64, t: i64) -> Scn {
     let mut s = Scn {
         name: format!("S6 taker sells {n} base units into a bid (tif {}, escrow {v})", bp.tif),
         inputs: vec![
-            call(&bid, "fill", vec![nb(n), iv(1), iv(t)], "bid.fill", v, b, 1_000),
+            call(&bid, "fill", vec![nb(n), iv(1), iv(t), iv(0)], "bid.fill", v, b, 1_000),
             tok_in(
                 tk,
                 CARRIER,
@@ -1389,7 +1393,7 @@ fn s9(f: &Fx, entry: &'static str, expiry: i64, lock_time: u64) -> Scn {
     let mut bp = BidP::new(m, P245);
     bp.expiry = expiry;
     let bid = f.net.bid(&bp);
-    let args = if entry == "cancel" { vec![Arg::Sig(f.maker_b, 0x01)] } else { vec![] };
+    let args = if entry == "cancel" { vec![Arg::Sig(f.maker_b, 0x01)] } else { vec![iv(0)] };
     Scn {
         name: format!("S9 bid {entry} (expiry {expiry}, lockTime {lock_time})"),
         inputs: vec![call(&bid, entry, args, if entry == "cancel" { "bid.cancel" } else { "bid.refund" }, 25 * KAS, b, 1_000)],
@@ -1615,10 +1619,10 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         let art = f.net.bid(&bp);
         let v = bp.funded(n);
         let mut inp = match e.mode {
-            EvMode::Fill => call(&art, "fill", vec![nb(n), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill", v, e.cov, e.daa),
-            EvMode::Refund => call(&art, "refund", vec![], "ev.bid.refund", v, e.cov, e.daa),
+            EvMode::Fill => call(&art, "fill", vec![nb(n), iv(ei as i64 + 1), iv(t_arg), iv(0)], "ev.bid.fill", v, e.cov, e.daa),
+            EvMode::Refund => call(&art, "refund", vec![iv(0)], "ev.bid.refund", v, e.cov, e.daa),
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.bid.cancel", v, e.cov, e.daa),
-            EvMode::ZeroFill => call(&art, "fill", vec![nb(0), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill0", v, e.cov, e.daa),
+            EvMode::ZeroFill => call(&art, "fill", vec![nb(0), iv(ei as i64 + 1), iv(t_arg), iv(0)], "ev.bid.fill0", v, e.cov, e.daa),
             EvMode::Forged => forged_ev(&bytecode(&art), n, v, e.cov, e.daa),
             EvMode::NotP2sh => not_p2sh_ev(&bytecode(&art), n, v, e.cov, e.daa),
         };
@@ -1982,7 +1986,7 @@ fn b1(f: &Fx, tip: i64) -> (Scn, i64) {
         let v = bp.funded(*amount);
         let c = bid_all_in(*amount, *price, tip);
         spend_total += c;
-        inputs.push(call(&bid, "fill", vec![nb(*amount), iv(8), iv(0)], "bid.fill", v, cov(0xb1 + i as u8), 1_000));
+        inputs.push(call(&bid, "fill", vec![nb(*amount), iv(8), iv(0), iv(0)], "bid.fill", v, cov(0xb1 + i as u8), 1_000));
         outputs.push(out(v - c, t.spk(*amount, &bid_makers[i], SCHEME_P2PK), Some((8, TOKEN_COV))));
     }
     let mut toks = vec![];
@@ -2179,7 +2183,7 @@ fn bid_refund(f: &Fx, tif: i64, lock_time: u64) -> Scn {
     let mut bp = BidP::new(pk(&f.maker_b), P245);
     bp.expiry = NO_EXPIRY;
     bp.tif = tif;
-    s.inputs[0] = call(&f.net.bid(&bp), "refund", vec![], "bid.refund", 25 * KAS, cov(0xb1), 1_000);
+    s.inputs[0] = call(&f.net.bid(&bp), "refund", vec![iv(0)], "bid.refund", 25 * KAS, cov(0xb1), 1_000);
     s
 }
 /// OCO with a 300-DAA stop auction (stop 2.00, band 3%).
@@ -2227,7 +2231,7 @@ fn v2_sizes_layouts_sigops() {
     let m = pk(&f.maker_a);
     let arts = [
         ("KobAsk", n.ask(&AskP::new(m, P250)), 276),
-        ("KobBid", n.bid(&BidP::new(m, P250)), 285),
+        ("KobBid", n.bid(&BidP::new(m, P250)), 321),
         ("KobCondAsk", n.cond(&CondP::oco(m)), 363),
         ("KobIfdBid", n.ifd(&IfdP::limit(m, 10 * TOK, P260, ifd_exit(m))), 585),
     ];
@@ -3270,7 +3274,7 @@ fn cond_into_bid(f: &Fx) -> Scn {
                 2_000,
             ),
             tok_in(t, CARRIER, 10 * TOK, &c.as_bytes(), SCHEME_COVID, TOKEN_COV, Some(next), Wit::CovId, 2_000),
-            call(&f.net.bid(&bp), "fill", vec![nb(4 * TOK), iv(1), iv(0)], "bid.fill", v, b, 1_000),
+            call(&f.net.bid(&bp), "fill", vec![nb(4 * TOK), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000),
         ],
         outputs: vec![
             out(pay, p2pk_spk(&cp.maker), None),
@@ -4698,7 +4702,7 @@ fn fx_ioc_ask_plus_bid(f: &Fx) -> Scn {
         name: "FXE2 IOC ask + bid of one maker: the ask's return (tokOut 1) is also the bid's delivery".into(),
         inputs: vec![
             call(&ask, "settle", vec![nb(n_ask), iv(2), iv(1), iv(0)], "ask.settle", CARRIER, a1, 1_000),
-            call(&bid, "fill", vec![nb(r), iv(2), iv(0)], "bid.fill", v, b1, 1_000),
+            call(&bid, "fill", vec![nb(r), iv(2), iv(0), iv(0)], "bid.fill", v, b1, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -5113,7 +5117,7 @@ fn bid_full(f: &Fx, r: i64, amount: i64, v: i64, delivery: i64) -> Scn {
     Scn {
         name: "bid full fill".into(),
         inputs: vec![
-            call(&f.net.bid(&bp), "fill", vec![nb(amount), iv(1), iv(0)], "bid.fill", v, b, 1_000),
+            call(&f.net.bid(&bp), "fill", vec![nb(amount), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -5642,7 +5646,7 @@ fn bid_stray_at_slot(f: &Fx, k: usize, stray: bool) -> Scn {
         toks.push(odd);
     }
     let extra = toks.iter().map(|x| x.0).sum::<i64>() - n;
-    let mut inputs = vec![call(&bid, "fill", vec![nb(n), iv(1), iv(0)], "bid.fill", v, b, 1_000)];
+    let mut inputs = vec![call(&bid, "fill", vec![nb(n), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000)];
     for (j, (amt, owner, scheme, wit)) in toks.into_iter().enumerate() {
         let next = (j == 0).then(|| vec![tok_state(n, &bp.maker, SCHEME_P2PK), tok_state(extra, &taker, SCHEME_P2PK)]);
         inputs.push(tok_in(t, CARRIER, amt, &owner, scheme, TOKEN_COV, next, wit, 1_000));
@@ -5887,7 +5891,7 @@ fn v3_audit_bid() {
     let s = Scn {
         name: "NAU-B03 zero fill (n = 0) closing an exhausted bid before its expiry".into(),
         inputs: vec![
-            call(&n.bid(&bp), "fill", vec![nb(0), iv(1), iv(0)], "bid.fill", v, b, 1_000),
+            call(&n.bid(&bp), "fill", vec![nb(0), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -5917,7 +5921,7 @@ fn v3_audit_bid() {
         name: "NAU-B04 hostile field: an IOC bid at scale -1000 (its delivery takes the escrow and 4 x the quote from the seller)"
             .into(),
         inputs: vec![
-            call(&n.bid(&hb), "fill", vec![nb(4 * TOK), iv(1), iv(0)], "bid.fill", v, b, 1_000),
+            call(&n.bid(&hb), "fill", vec![nb(4 * TOK), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -5954,7 +5958,7 @@ fn v3_audit_bid() {
     let s = Scn {
         name: "NAU-B06 hostile field: a negative reserve (an IOC bid funded short of the fill's budget fills anyway)".into(),
         inputs: vec![
-            call(&n.bid(&rb), "fill", vec![nb(4 * TOK), iv(1), iv(0)], "bid.fill", v, b, 1_000),
+            call(&n.bid(&rb), "fill", vec![nb(4 * TOK), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000),
             tok_in(
                 t,
                 CARRIER,
@@ -5984,7 +5988,7 @@ fn v3_audit_bid() {
     let used = db.used(4 * TOK);
     let spend = quote_at(4 * TOK, P245 + TIP, SCALE, false).unwrap();
     let v = s.inputs[0].entry.amount as i64;
-    s.inputs[0] = call(&n.bid(&db), "fill", vec![nb(4 * TOK), iv(1), iv(0)], "bid.fill", v, b, 1_000);
+    s.inputs[0] = call(&n.bid(&db), "fill", vec![nb(4 * TOK), iv(1), iv(0), iv(0)], "bid.fill", v, b, 1_000);
     s.outputs[0].value = 0;
     s.outputs[1] = out(v - used + KAS, spk_of(&n.bid(&db)), Some((0, b)));
     s.outputs[2].value = (spend + CARRIER - NET_FEE - KAS - (used - spend)) as u64;
@@ -6959,7 +6963,7 @@ fn br_multi(f: &Fx, legs: &[BrLeg]) -> Scn {
         } else {
             (spend + DC + l.extra, DC + l.extra)
         };
-        inputs.push(call(&bid, "fill", vec![nb(l.n), iv(k as i64), iv(0)], "bid.fill", v, c, 1_000));
+        inputs.push(call(&bid, "fill", vec![nb(l.n), iv(k as i64), iv(0), iv(0)], "bid.fill", v, c, 1_000));
         outs.push(out(delivery, t.spk(l.n, &l.bp.maker, SCHEME_P2PK), Some((k as u16, TOKEN_COV))));
         states.push(tok_state(l.n, &l.bp.maker, SCHEME_P2PK));
         kas += spend;
@@ -7003,7 +7007,7 @@ fn br_alias(f: &Fx, alias: bool) -> Scn {
     Scn {
         name: format!("BR alias: bid refund slot {} the ask payout", if alias { "is" } else { "is not" }),
         inputs: vec![
-            call(&f.net.bid(&bp), "fill", vec![nb(n_bid), iv(1), iv(0)], "bid.fill", v, b1, 1_000),
+            call(&f.net.bid(&bp), "fill", vec![nb(n_bid), iv(1), iv(0), iv(0)], "bid.fill", v, b1, 1_000),
             tok_in(
                 t,
                 CARRIER,
