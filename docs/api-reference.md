@@ -45,8 +45,8 @@ Contents: [1 Overview](#1-overview) | [2 Conventions](#2-conventions) | [3 Endpo
 
 ### Routes
 
-The list below is the router (`api/mod.rs`, `build()`), in registration order: 22 routes, plus `GET /v1/metrics` as the 23rd
-only when `[api] metrics = true` (the default), the KAS price route (24) only when `[api] usd_price = true` (default false), and the two logo routes (25, 26) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
+The list below is the router (`api/mod.rs`, `build()`), in registration order: 23 routes, plus `GET /v1/metrics` as the 24th
+only when `[api] metrics = true` (the default), the KAS price route (25) only when `[api] usd_price = true` (default false), and the two logo routes (26, 27) only when `[logo_reports] enabled = true` (default false). "Cost" is the rate-limit weight (section 5.2): `1` light, `H` heavy
 (`heavy_route_cost`, default 5). "Cached" marks the reads kept in the response cache (section 5.6).
 
 | # | Route | Section | Cost | Cached |
@@ -69,14 +69,15 @@ only when `[api] metrics = true` (the default), the KAS price route (24) only wh
 | 16 | `GET /v1/token-utxos` | [3.14](#314-get-v1token-utxos) | H | no |
 | 17 | `GET /v1/trades/{token}` | [3.15](#315-get-v1tradestoken) | H | no |
 | 18 | `GET /v1/candles/{token}` | [3.16](#316-get-v1candlestoken) | H | yes |
-| 19 | `GET /v1/stats` | [3.21](#321-get-v1stats) | H | yes |
-| 20 | `GET /v1/stats/{token}` | [3.17](#317-get-v1statstoken) | H | yes |
-| 21 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
-| 22 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
-| 23 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
-| 24 | `GET /v1/price/kas-usd` (only with `[api] usd_price`) | [3.22](#322-get-v1pricekas-usd) | 1 | no (own cache) |
-| 25 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
-| 26 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
+| 19 | `GET /v1/quotes/{token}` | [3.23](#323-get-v1quotestoken) | H | yes |
+| 20 | `GET /v1/stats` | [3.21](#321-get-v1stats) | H | yes |
+| 21 | `GET /v1/stats/{token}` | [3.17](#317-get-v1statstoken) | H | yes |
+| 22 | `GET /v1/depth/{token}` | [3.18](#318-get-v1depthtoken) | H | yes |
+| 23 | `GET /v1/ws` | [4](#4-websocket) | 1 (upgrade) | no |
+| 24 | `GET /v1/metrics` (only with `metrics = true`) | [3.3](#33-get-v1metrics) | 1 | no |
+| 25 | `GET /v1/price/kas-usd` (only with `[api] usd_price`) | [3.22](#322-get-v1pricekas-usd) | 1 | no (own cache) |
+| 26 | `POST /v1/logo-reports` (only with `[logo_reports] enabled`) | [3.19](#319-post-v1logo-reports) | 1 | no |
+| 27 | `GET /v1/logo-blocklist` (only with `[logo_reports] enabled`) | [3.20](#320-get-v1logo-blocklist) | 1 | no |
 
 ## 2. Conventions
 
@@ -1030,6 +1031,26 @@ normal pace again after its first success. The last good value keeps being serve
 (`price_unavailable`, no `Retry-After`). `Cache-Control: public, max-age=60, s-maxage=60` on the `200` (a `503` is `no-store`), the same for every viewer, so a CDN
 keeps it (`ops/chart-server.md`). An indexer without the route (an older build, or `usd_price` off) is a `404`, and the web app then shows KAS and says so.
 
+### 3.23 `GET /v1/quotes/{token}`
+
+The history of the top of the token's KAS book, for the chart's mid line. Heavy; cached. Once a minute the indexer samples the best bid and
+ask (as `best_bid` and `best_ask` of `/v1/stats/{token}`) and keeps a row only when either changed; rows are kept 30 days. A store further
+behind the node than its lag tolerance samples nothing. The parameters, defaults and errors are those of `/v1/candles/{token}` (section 3.16);
+without `to` the window ends with the bucket of the newest row.
+
+```
+curl -s "$API/v1/quotes/$TOKEN?interval=1h&limit=24"
+```
+
+```json
+{ "token": "<hex32>", "interval": "1h", "price_basis": "1000", "decimals": 3,
+  "items": [ [1790000000000, "240000", "260000"], [1790003600000, null, "255000"] ] }
+```
+
+An item is `[t, bid, ask]`, ascending: the bucket start (unix ms) and the last values in it, sompi per `price_basis` base units, `null` for an
+empty side. Only buckets with a change are listed, so carry a value forward to the next item. The first item is the value in force at the start
+of the window, at its bucket.
+
 ## 4. WebSocket
 
 **URL** `ws://<host>/v1/ws` (`wss://` behind a TLS-terminating proxy). The route is an ordinary `GET` with the upgrade headers;
@@ -1167,7 +1188,7 @@ too; WebSocket messages after the upgrade do not, they have their own cap).
 | global | `global_rps` | `global_burst` | 500 per second, burst 1000 |
 
 * A request takes **1 token** from each bucket, or `heavy_route_cost` (default **5**; capped at the bucket's burst) when its path
-  starts with `/v1/candles/`, `/v1/stats/`, `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/token-utxos`, `/v1/strays` or
+  starts with `/v1/candles/`, `/v1/quotes/`, `/v1/stats/`, `/v1/depth/`, `/v1/trades/`, `/v1/books/`, `/v1/token-utxos`, `/v1/strays` or
   `/v1/pairs` (which includes all four pair routes). Everything else, including `/v1/orders*`, `/v1/fills`, `/v1/tokens*`,
   `/v1/token-events`, `/v1/health*`, `/v1/metrics`, `/v1/logo-*` and `/v1/ws`, costs 1. With the defaults a client can burst 12 heavy requests
   and sustain 4 per second.
@@ -1220,7 +1241,7 @@ connection over a cap gets the bare `503` of section 5.1 and is closed. These ca
 
 ### 5.6 Response cache
 
-`/v1/tokens`, `/v1/books/{token}`, `/v1/pairs`, `/v1/pairs/{base}/{quote}/book`, `/v1/candles/{token}`, `/v1/stats`, `/v1/stats/{token}`
+`/v1/tokens`, `/v1/books/{token}`, `/v1/pairs`, `/v1/pairs/{base}/{quote}/book`, `/v1/candles/{token}`, `/v1/quotes/{token}`, `/v1/stats`, `/v1/stats/{token}`
 and `/v1/depth/{token}` are kept in a response cache per **data generation** of the store (the generation moves after every
 committed batch, revert, operator import and possibly-frozen flag). The key is the request's parameters plus, for the reads that
 depend on the clock (books, pairs, pair books, stats, depth), the node's DAA score and the wall-clock second, so a cached body is
@@ -1236,11 +1257,11 @@ Every **successful** (200) answer to a GET carries a `Cache-Control` by the rout
 | Class | Routes | `Cache-Control` |
 |---|---|---|
 | live | `/v1/books/{token}`, `/v1/depth/{token}`, `/v1/orders` (every filter, `maker=` lists included: public chain data keyed by the URL), `/v1/orders/{id}`, `/v1/orders/{id}/events`, `/v1/fills`, `/v1/trades/{token}`, `/v1/strays`, `/v1/token-utxos`, `/v1/token-events`, `/v1/pairs/{base}/{quote}/book` and `/fills` | `public, max-age=1, s-maxage=1` |
-| open candles, token stats | `/v1/candles/{token}` and `/v1/pairs/{base}/{quote}/candles` unless closed (below); `/v1/stats/{token}` | candles `public, max-age=3, s-maxage=3`; stats `max-age=2, s-maxage=2` |
+| open candles, token stats | `/v1/candles/{token}`, `/v1/quotes/{token}` and `/v1/pairs/{base}/{quote}/candles` unless closed (below); `/v1/stats/{token}` | candles `public, max-age=3, s-maxage=3`; stats `max-age=2, s-maxage=2` |
 | lists | `/v1/tokens`, `/v1/pairs`; `/v1/stats` | `public, max-age=5, s-maxage=5, stale-while-revalidate=5`; the totals 10 and 10 |
 | declarations | `/v1/tokens/{id}/declaration` | `public, max-age=60, s-maxage=60` |
 | price | `/v1/price/kas-usd` (only with `usd_price`; the upstreams are asked at most once a minute) | `public, max-age=60, s-maxage=60` |
-| closed candles | a candles query with a `to` at least one hour in the past: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
+| closed candles | a candles or quotes query with a `to` at least one hour in the past: no bucket in it can change | `public, max-age=3600, s-maxage=3600` |
 | never | `/v1/health`, `/v1/health/ready`, `/v1/metrics`, `/v1/ws`, `POST`, every non-200 answer (errors, 429, 503), and any request that has the query parameter `_nc` | `no-store` |
 
 `GET /v1/logo-blocklist` keeps its own `public, max-age=5`. **Bypass:** a client that has just changed something itself (placed, cancelled, amended or refunded an order)

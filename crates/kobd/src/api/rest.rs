@@ -445,6 +445,30 @@ pub async fn candles(State(app): State<Arc<App>>, Path(token): Path<String>, Que
     .await
 }
 
+/// `GET /v1/quotes/{token}?interval=&from=&to=&limit=`: the top-of-book history, `[t, bid, ask]`.
+///
+/// The parameters are those of the candles. See `indexer::quotes`.
+pub async fn quotes(State(app): State<Arc<App>>, Path(token): Path<String>, Query(q): Params) -> ApiResult {
+    let token = parse_hash("token", &token)?;
+    let interval = q.get("interval").cloned().unwrap_or_else(|| "5m".into());
+    let iv = market::interval_ms(&interval).ok_or_else(|| ApiError::bad_request("interval must be one of 1m, 5m, 1h, 1d"))?;
+    let from = opt_i64(&q, "from")?;
+    let to = opt_i64(&q, "to")?;
+    if let (Some(f), Some(t)) = (from, to) {
+        if t <= f {
+            return Err(ApiError::bad_request("to must be after from"));
+        }
+    }
+    let n = limit(&q, "limit", 500, 1500)?;
+    let tokens = app.state.tokens.clone();
+    let key = format!("quotes {token} {interval} {from:?} {to:?} {n}");
+    cached(&app, key, move |c| {
+        let decimals = reads::token_decimals(c, &tokens, &token)?;
+        crate::indexer::quotes::quotes(c, &token, decimals, &interval, iv, from, to, n)
+    })
+    .await
+}
+
 /// `GET /v1/stats/{token}`: 24 h statistics and the top of the book.
 pub async fn stats(State(app): State<Arc<App>>, Path(token): Path<String>) -> ApiResult {
     let token = parse_hash("token", &token)?;

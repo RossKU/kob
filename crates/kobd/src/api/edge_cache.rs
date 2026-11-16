@@ -98,7 +98,7 @@ pub fn policy(method: &Method, path: &str, query: &str, now_ms: i64) -> Policy {
         ["v1", "price", "kas-usd"] => public(60),
         ["v1", "stats"] => Policy::Public { secs: 10, stale: 10 },
         ["v1", "stats", _] => public(2),
-        ["v1", "candles", _] | ["v1", "pairs", _, _, "candles"] => {
+        ["v1", "candles" | "quotes", _] | ["v1", "pairs", _, _, "candles"] => {
             // The handler reads the LAST `to` of a repeated key, so the policy never trusts a
             // repeated one: `?to=1&to=<now>` must not cache live candles as closed.
             let closed = !has_repeated(query, "to")

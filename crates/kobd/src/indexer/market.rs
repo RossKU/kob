@@ -84,7 +84,7 @@ pub struct Trade {
 }
 
 /// `price` sompi per `scale` base units as sompi per `basis` base units (rounded down).
-fn per_basis(price: i64, scale: i64, basis: i128) -> i128 {
+pub(crate) fn per_basis(price: i64, scale: i64, basis: i128) -> i128 {
     (price as i128).saturating_mul(basis) / scale.max(1) as i128
 }
 

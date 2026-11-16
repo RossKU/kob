@@ -228,6 +228,8 @@ pub struct Follower<S: ChainSource> {
     /// When the free space of the data directory and the size of the database are measured next,
     /// see [`Follower::disk_tick`].
     disk_next: Mutex<std::time::Instant>,
+    /// The wall-clock minute (ms) the books were last sampled, see [`Follower::quotes_tick`].
+    quotes_minute: Mutex<i64>,
     /// The authority's chain requests that failed on the wire in a row, and the last of them.
     chain_failures: Mutex<(u32, String)>,
     /// When the cursor last moved, or the authority last answered from it (the local monotonic
@@ -284,6 +286,7 @@ impl<S: ChainSource> Follower<S> {
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
             pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
             disk_next: Mutex::new(std::time::Instant::now()),
+            quotes_minute: Mutex::new(0),
             chain_failures: Mutex::new((0, String::new())),
             progress_at: Mutex::new(std::time::Instant::now()),
         }
@@ -360,6 +363,30 @@ impl<S: ChainSource> Follower<S> {
             h.data_dir_free_bytes = free;
             h.db_bytes = size;
         });
+    }
+
+    /// Samples the top of the KAS books once a wall-clock minute ([`super::quotes`]).
+    ///
+    /// A store behind the node has an old book, so it samples nothing.
+    async fn quotes_tick(&self) {
+        let now = now_ms() as i64;
+        let minute = now - now.rem_euclid(60_000);
+        {
+            let mut m = self.quotes_minute.lock().unwrap_or_else(|e| e.into_inner());
+            if *m >= minute {
+                return;
+            }
+            *m = minute;
+        }
+        let snap = self.health.snapshot();
+        if !snap.within_lag_tolerance() {
+            return;
+        }
+        // The settle depth plays no part in a book.
+        let ctx = super::reads::ReadCtx { node_daa: snap.node_daa, settle_depth_daa: 0, now_unix: Some((now / 1_000) as u64) };
+        if let Err(e) = self.blocking(move |i| i.sample_quotes(&ctx, now)).await {
+            tracing::warn!(error = %e, "quotes: sampling the books failed; trying again next minute");
+        }
     }
 
     /// Updates how fast the store closes in on the node and when it will have, while it is
@@ -1176,6 +1203,7 @@ impl<S: ChainSource> Follower<S> {
             };
             self.lean_tick().await;
             self.disk_tick().await;
+            self.quotes_tick().await;
             let delay = match &outcome {
                 StepOutcome::Applied { more: true, .. } | StepOutcome::Rewound { .. } => {
                     failures = 0;
