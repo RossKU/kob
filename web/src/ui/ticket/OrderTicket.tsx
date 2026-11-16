@@ -271,7 +271,8 @@ export function OrderTicket(props: OrderTicketProps) {
 
   // balances the wallet can spend (the planner does the exact funding check)
   const tokenBalance = env ? heldAmount(env) : 0n;
-  // held units of this token the planner cannot spend (a borrow setting, another extension, not key-owned)
+  // held units of this token the planner cannot spend (another owner type, another extension, a KRON minter UTXO); a key-owned holding with a
+  // borrow setting counts (option A)
   const unusable = env ? unusableTokenHeld(env) : null;
   // another market starts shallow again (declared before the effect that sets it, so a change of both in one pass ends with the set one)
   useEffect(() => setWalkDepth(0n), [token.covenantId, quote?.covenantId]);

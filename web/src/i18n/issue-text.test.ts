@@ -265,7 +265,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'token-to-unknown-owner': { output: 1 }, 'output-unknown': { output: 4 }, 'sign-foreign-key': { input: 0 }, 'sign-mismatch': { input: 0 },
       'sign-unexpected': { input: 5 }, 'sighash-type': { input: 0 }, 'expected-orders': { params: { planned: 1, actual: 2 } },
       'expected-kas-locked': { params: { expected: 10n * KAS, actual: 12n * KAS } }, 'expected-tokens-escrowed': { params: { expected: 1000n, actual: 900n } },
-      'expected-cancel-ids': { params: { expected: 1, actual: 2 } }, 'expected-max-fee': { params: { fee: 3_000_000n, max: 2_000_000n } }, 'tx-version': {}, 'input-unconfirmed': { input: 2 }, 'token-state-unplain': { output: 1 }, 'inputs-unverified': {},
+      'expected-cancel-ids': { params: { expected: 1, actual: 2 } }, 'expected-max-fee': { params: { fee: 3_000_000n, max: 2_000_000n } }, 'tx-version': {}, 'input-unconfirmed': { input: 2 }, 'token-state-unplain': { output: 1 }, 'token-state-mixed': { params: { token: COV } }, 'inputs-unverified': {},
       'fee-high': { params: { fee: 5_000_000n, minimum: 1_000_000n } }, 'unsigned-maker-input': { input: 1 }, 'foreign-input': { input: 1 }, 'payload-unknown': {},
       'payload-invalid': {}, 'token-unlisted': { params: { covenantId: COV } }, 'no-order-records': {}, 'payment-expected': { output: 1 }, 'transfer-expected': { output: 1 },
       'strays-swept': { input: 1, params: { amount: 250n } }, 'kas-released': { params: { released: 20n * KAS } },

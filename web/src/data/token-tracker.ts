@@ -357,7 +357,10 @@ export class TokenTracker {
     if (v.state) return v.state;
     const family = familyOfProgram(token.program);
     if (family === 'kcc20' && !token.extensionCommitment) return null;
-    // a key-owned token UTXO (KCC-20: P2PK owner without borrow guard; KRON: the program's holder owner)
+    // A key-owned token UTXO (KCC-20: P2PK owner without borrow guard; KRON: the program's holder owner). This stand-in
+    // is plain: a holding with a borrow setting (spendable on the owner path, option A) needs the state the indexer proved
+    // (`v.state`, used above), since its script commits to the scheme and guard. Without it the node check below finds no
+    // output at the stand-in's script and the candidate is dropped, never spent under a wrong state.
     return keyState(family, v.amount, v.owner, token.extensionCommitment ?? null, token.program);
   }
 

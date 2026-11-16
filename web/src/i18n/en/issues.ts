@@ -76,6 +76,7 @@ export default {
   'issues.INSUFFICIENT_KAS': 'Not enough KAS: needs {needed}, you have {have} (short {shortfall}).',
   'issues.INSUFFICIENT_TOKENS': 'Not enough tokens: needs {needed}, you hold {have} (short {shortfall}).',
   'issues.TOKEN_UTXOS_FRAGMENTED': 'Your tokens are in too many UTXOs (at most {max} per transaction): merge them first (Portfolio, Balances).',
+  'issues.TOKEN_UTXOS_MIXED_BORROW': 'No one kind of your token UTXOs holds {needed}: UTXOs with different borrow settings never share a transaction. Sell less, or move the tokens to one kind first.',
   'issues.FUNDING_FRAGMENTED': 'Your KAS is in too many small coins (UTXOs): one transaction can use at most {max}. KOB cannot merge KAS. Send your KAS to your own address from your wallet to merge it, or place a smaller order.',
   'issues.CLOSE_NOTHING_TO_SELL': 'You hold none of this token.',
   'issues.BUILD_REJECTED': 'The protocol refused this order: {reason}',
@@ -143,6 +144,7 @@ export default {
   'issues.expected-cancel-ids': 'The plan cancels {expected} order(s), the transaction spends {actual}.',
   'issues.expected-max-fee': 'The fee of {fee} exceeds the {max} the plan allowed.',
   'issues.input-unconfirmed': 'Input {input}: the node does not confirm this UTXO; its KAS value and the fee cannot be trusted.',
+  'issues.token-state-mixed': 'The token inputs carry different borrow settings: one transaction spends one setting only.',
   'issues.token-state-unplain': 'Output {output}: the token state has extra features (borrow scheme or guard, minter flag) that could let someone else move these tokens.',
   // warnings
   'issues.inputs-unverified': 'Input values were not checked with the node: the fee shown may be wrong.',
@@ -342,6 +344,7 @@ export default {
   'issues.PAIR_MARKET_REFERENCE_DIVERGES': 'The pair book shows {reference} {ticker} per token, the last KAS trades imply {lastFill} ({percent}% apart), both from the indexer: check the price before signing.',
   'issues.PAIR_INSUFFICIENT_TOKENS': 'Not enough {ticker}: needs {needed}, you hold {have} (short {shortfall}).',
   'issues.PAIR_TOKEN_UTXOS_FRAGMENTED': 'Your {ticker} is in too many UTXOs (at most {max} per transaction): merge them first (Portfolio, Balances).',
+  'issues.PAIR_TOKEN_UTXOS_MIXED_BORROW': 'No one kind of your {ticker} UTXOs holds {needed}: UTXOs with different borrow settings never share a transaction.',
   'issues.PAIR_KRON_CUSTODY_TOO_LARGE': 'A custody of {amount} {ticker} exceeds what a KRON output holds ({max}): lower the amount or the price.',
   'issues.PAIR_KRON_DELIVERY_TOO_LARGE': 'One minimum fill delivers more {ticker} than a KRON output holds ({max}): lower the minimum fill or the price.',
   'issues.PAIR_TP_CROSSES': 'The take-profit crosses the pair book ({touch} {ticker} per token): it fills at once at your limit.',

@@ -38,7 +38,7 @@ import type {
   ActionRequest, AmendOrderRequest, BuiltTx, FeeMode, CancelItem, CancelOrderRequest, CancelPositionRequest, Family, ForeignStrays, Hex, KeyUtxo, OrderState, OrderUtxo,
   Replacement, SweepOrderRequest, TokenProgram, TokenState, TokenUtxo, U64, Utxo,
 } from './types';
-import { custodyState, extensionMatches, extensionOfState, familyOfProgram, familyOfState, isCovenantOwned, isKeyOwned, programOfHash } from './token-state';
+import { custodyState, extensionMatches, extensionOfState, familyOfProgram, familyOfState, isCovenantOwned, isKeyOwned, isPlainState, programOfHash } from './token-state';
 import { atFloor, buildWithCap, recordFee, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import { guardRequest } from './request-guard';
 import { KobError, type KobWasm } from './wasm';
@@ -751,9 +751,12 @@ export interface ReplacementSpec {
  * leave of the program's input slots, and the stray trimming re-runs with the top-up counted
  * (`prepare(..., topUps)`). An extra wallet UTXO would push a stray out of the sweep, and the stray
  * would stay behind on the cancelled order's id.
+ *
+ * A top-up joins the plain custody in one output, so only plain UTXOs qualify: one with a borrow
+ * setting would mix settings (the builder refuses it).
  */
 function pickTokens(pool: TokenUtxo[], token: Hex, amount: bigint, ext: Hex | null, maker: Hex, maxInputs: number, program: TokenProgram | null = null): TokenUtxo[] | null {
-  const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && t.state.owner === maker && extensionMatches(t.state, ext));
+  const usable = pool.filter((t) => (!t.covenantId || t.covenantId === token) && isKeyOwned(t.state, program) && isPlainState(t.state) && t.state.owner === maker && extensionMatches(t.state, ext));
   const sorted = [...usable].sort((a, b) => (big(b.state.amount) > big(a.state.amount) ? 1 : big(b.state.amount) < big(a.state.amount) ? -1 : 0));
   const single = [...sorted].reverse().find((t) => big(t.state.amount) >= amount);
   if (single) return [single];

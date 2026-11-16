@@ -218,6 +218,28 @@ test('a token the registry does not list is mergeable too, under its node-verifi
   expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount))).toEqual([10n * TOKEN]);
 });
 
+test('Merge all merges each borrow setting apart: one UTXO per setting, each keeping its scheme and guard', async ({ appPage: page, mock, wallet }) => {
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  // three plain UTXOs and two of borrow scheme 2 (option A: spent by the owner key on the owner path)
+  for (let k = 1; k <= 3; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  for (let k = 4; k <= 5; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS, borrow_scheme: 2 });
+  await mock.giveKas('alice', 20n * KAS);
+  await openBalances(page, 5);
+  await expect(page.getByTestId('balances-panel')).toContainText('15');
+  await page.screenshot({ path: test.info().outputPath('balances-borrow-merge.png'), animations: 'disabled' });
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  const summary = page.getByTestId('merge-all-summary');
+  await expect(summary).toContainText('Merge your 5 EXSTD UTXOs into 2, one per borrow setting', { timeout: 30_000 });
+  await expect(summary).toContainText('2 UTXOs remain, one per borrow setting.');
+  await shot(page, 'merge-borrow-confirm');
+  await page.getByTestId('merge-all-confirm').click();
+  const placed = await runFlow(page, mock, wallet, { steps: 2, confirm: false });
+  expect(placed.map((p) => p.submission.token_outputs[0]!.amount)).toEqual([(6n * TOKEN).toString(), (9n * TOKEN).toString()]);
+  const owned = ((await mock.get(`/v1/token-utxos?owner=${alice}&token=${STD}&spent=false&limit=50`)).items as { amount: string; role: string; state: { borrow_scheme: number } }[]).filter((u) => u.role === 'owned');
+  expect(owned.map((u) => [BigInt(u.amount), u.state.borrow_scheme]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[6n * TOKEN, 0], [9n * TOKEN, 2]]);
+});
+
 test('the sell ticket merges just enough first, then places the sale with its own confirmation', async ({ appPage: page, mock, wallet }) => {
   test.setTimeout(180_000);
   await seedStd(mock);

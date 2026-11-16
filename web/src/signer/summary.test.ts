@@ -89,9 +89,11 @@ describe('signer summary: order terms', () => {
 
 describe('signer summary: a token merge', () => {
   const hints = [{ covenantId: CHAIN_TOKEN.covenantId, ticker: 'TUSD', decimals: 8 }];
-  const mergeBuilt = (n: number) => {
+  const mergeBuilt = (n: number, borrowScheme = 0) => {
     const chainKob = loadKobNode();
-    const set = Array.from({ length: n }, (_, i) => chainTokenUtxo(BigInt((i + 1) * 100_000_000), CHAIN_MAKER.pk, 0x40 + i, 2n * KAS_SOMPI));
+    const set = Array.from({ length: n }, (_, i) => chainTokenUtxo(BigInt((i + 1) * 100_000_000), CHAIN_MAKER.pk, 0x40 + i, 2n * KAS_SOMPI)).map((u) =>
+      borrowScheme ? { ...u, state: { ...u.state, borrow_scheme: borrowScheme, borrow_guard: CHAIN_OTHER.pk } as typeof u.state } : u,
+    );
     const std = { covenantId: CHAIN_TOKEN.covenantId, program: CHAIN_TOKEN.program, templateHash: CHAIN_TOKEN.templateHash, extensionCommitment: CHAIN_TOKEN.ext, slots: { inputs: 3, outputs: 3 } };
     const plan = planMerge({ kob: chainKob, maker: CHAIN_MAKER.pk, funding: [keyUtxo(CHAIN_MAKER.pk, 50n * KAS_SOMPI, 201)] }, std, set);
     expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
@@ -110,6 +112,15 @@ describe('signer summary: a token merge', () => {
     // the KAS the freed carriers make spendable is still said
     expect(s.lines.find((l) => /freed/.test(l.label))!.value).toMatch(/ KAS$/);
     expect(s.orders).toEqual([]);
+  });
+
+  it('option A: the merge of holdings with a borrow setting (scheme 2) shows as a merge with no problem; its output keeps the setting', () => {
+    const { chainKob, built, plan } = mergeBuilt(3, 2);
+    expect(plan.links[0]!.output.state).toMatchObject({ borrow_scheme: 2, borrow_guard: CHAIN_OTHER.pk });
+    const s = summarize(chainKob, built, CHAIN_MAKER.pk, hints);
+    expect(s.title).toBe('Merge token UTXOs');
+    expect(s.decoded.blocking).toEqual([]);
+    expect(s.lines.find((l) => /merged$/.test(l.label))!.value).toBe('3 UTXOs into 1: 6 TUSD in total, unchanged');
   });
 
   it('read for another key, the same request is no merge of its own tokens (no merge title or line)', () => {

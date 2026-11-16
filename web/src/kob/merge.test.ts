@@ -1,11 +1,11 @@
-// "Merge all" and the sell ticket's merge: the candidates (only the wallet's own plain UTXOs of the token, never an order's custody / stray or a
+// "Merge all" and the sell ticket's merge: the candidates (only the wallet's own UTXOs of the token, one tree per borrow setting, never an order's custody / stray or a
 // reserved outpoint), the tree's shape on the standard 3 / 3 program (level 1 groups the originals in threes, later levels merge the outputs)
 // and on the 8 / 8 prototype, the target mode (just enough for one placement), the KRON output cap, and every link built by kob-wasm, signed
 // locally, run through the script engine and decoded on the confirmation model (a send to the wallet itself, nothing blocking).
 import { describe, expect, it } from 'vitest';
 import { decodeSigning } from './decode';
 import {
-  MAX_MERGE_TXS, buildMergeLink, mergeCandidates, mergeCarry, mergeLeaves, mergeSlots, mergeTree, mergeTxCount, planMerge, planMergeShape, targetSet,
+  MAX_MERGE_TXS, buildMergeLink, mergeCandidates, mergeCarry, mergeLeaves, mergeSlots, mergeTree, mergeTxCount, mergeableCount, mergeableGroups, planMerge, planMergeShape, targetSet,
   type MergeNode, type MergeToken,
 } from './merge';
 import { KRON_MAX_OUTPUT_AMOUNT, keyState } from './token-state';
@@ -39,7 +39,7 @@ const left = (n: number, nodes: MergeNode<number>[]) => n - nodes.reduce((s, x) 
 const levels = (nodes: MergeNode<unknown>[]) => nodes.reduce<Record<number, number>>((m, x) => ({ ...m, [x.level]: (m[x.level] ?? 0) + 1 }), {});
 
 describe('merge candidates', () => {
-  it('only plain UTXOs the wallet key owns, of the token and its extension commitment, not reserved; smallest first', () => {
+  it('only UTXOs the wallet key owns (any borrow setting), of the token and its extension commitment, not reserved; smallest first', () => {
     const mine = [tokenUtxo(30n, MAKER.pk, 0x51), tokenUtxo(10n, MAKER.pk, 0x52), tokenUtxo(20n, MAKER.pk, 0x53)];
     const other = tokenUtxo(5n, OTHER.pk, 0x54);
     const custody = tokenUtxo(5n, 'ab'.repeat(32), 0x55, 1_000_000_000n, 4);
@@ -50,7 +50,9 @@ describe('merge candidates', () => {
     const reserved = tokenUtxo(7n, MAKER.pk, 0x5a);
     const all = [...mine, other, custody, otherExt, otherToken, empty, borrowed, reserved];
     const got = mergeCandidates(all, STD, MAKER.pk, new Set([`${reserved.transactionId}:${reserved.index}`]));
-    expect(got.map((u) => u.state.amount)).toEqual(['10', '20', '30']);
+    // a borrow setting is no longer refused (option A): it merges in its own tree
+    expect(got.map((u) => u.state.amount)).toEqual(['5', '10', '20', '30']);
+    expect(got[0]).toBe(borrowed);
   });
 });
 
@@ -292,5 +294,76 @@ describe('planMerge on the standard program (real kob-wasm builds)', () => {
     const l = plan.links[0]!;
     expect(l.built.tx.outputs[l.output.index]!.scriptPublicKey).toBe(kob.tokenScriptPublicKey(STD.program, l.output.state));
     expect((l.output.state as { extension_commitment: Hex }).extension_commitment).toBe(TOKEN.ext);
+  });
+});
+
+describe('borrow settings (option A): one tree per setting, each output keeps it', () => {
+  const guard2 = OTHER.pk;
+  const withBorrow = (u: TokenUtxo, scheme: number, guard: Hex): TokenUtxo => ({ ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: guard } as TokenUtxo['state'] });
+  const plain = (n: number) => utxos(n);
+  const bs = (u: TokenUtxo) => (u.state as { borrow_scheme: number }).borrow_scheme;
+  const scheme2 = (amounts: bigint[], at = 0x70) => amounts.map((a, i) => withBorrow(tokenUtxo(a, MAKER.pk, at + i, 2n * KAS), 2, guard2));
+
+  it('candidates include key-owned holdings of any setting; groups put plain first, then by total', () => {
+    const b1 = withBorrow(tokenUtxo(500n, MAKER.pk, 0x7a), 1, 'aa'.repeat(32));
+    const set = [...plain(2), ...scheme2([5n, 7n]), b1];
+    const cands = mergeCandidates(set, STD, MAKER.pk);
+    expect(cands.map((u) => u.state.amount)).toEqual(['5', '7', '10', '20', '500']);
+    const groups = mergeableGroups(cands);
+    expect(groups.map((g) => g.map((u) => u.state.amount))).toEqual([['10', '20'], ['5', '7']]);
+    // the scheme-1 UTXO is alone in its setting: not mergeable
+    expect(mergeableCount(cands)).toBe(4);
+  });
+
+  it('two settings: two trees joined by level, every parent before its child', () => {
+    const shape = planMergeShape(STD, [...plain(4), ...scheme2([5n, 6n, 7n])], MAKER.pk);
+    expect(shape.ok).toBe(true);
+    if (!shape.ok) return;
+    expect([shape.before, shape.settings]).toEqual([7, 2]);
+    expect(shape.nodes.map((n) => [n.level, n.parents, n.fresh.map((u) => u.state.amount)])).toEqual([
+      [1, [], ['10', '20', '30']],
+      [1, [], ['5', '6', '7']],
+      [2, [0], ['40']],
+    ]);
+    // a node never mixes settings: its fresh inputs and its parents' inputs share one setting
+    for (const n of shape.nodes) expect(new Set(n.fresh.map(bs)).size).toBe(1);
+  });
+
+  it('a scheme-2 merge is built, valid in the engine and decoded with nothing blocking; its output keeps scheme and guard', () => {
+    const set = scheme2([5n, 6n, 7n, 8n]);
+    const plan = planMerge(env(), STD, set);
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect([plan.before, plan.after, plan.settings]).toEqual([4, 1, 1]);
+    for (const l of plan.links) {
+      expect(l.request.recipients).toEqual([]);
+      expect(l.output.state).toMatchObject({ borrow_scheme: 2, borrow_guard: guard2 });
+      expect(l.built.tx.outputs[l.output.index]!.scriptPublicKey).toBe(kob.tokenScriptPublicKey(STD.program, l.output.state));
+      signAndValidate(kob, l.built, [MAKER.sk]);
+      const s = decodeSigning({ kob, built: l.built, maker: MAKER.pk, registry, expected: { cancelIds: [] }, nodeInputs: nodeFactsOf(l.built) });
+      expect(s.blocking).toEqual([]);
+    }
+    // the level-2 link carries the level-1 output with its setting
+    expect(plan.links[1]!.inputs[0]!.state).toMatchObject({ borrow_scheme: 2, borrow_guard: guard2 });
+  });
+
+  it('plain and scheme 2 together: each merges apart, the summary counts one UTXO per setting', () => {
+    const plan = planMerge(env(), STD, [...plain(3), ...scheme2([5n, 6n])]);
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect([plan.before, plan.after, plan.settings, plan.links.length]).toEqual([5, 2, 2, 2]);
+    expect(plan.links.map((l) => (l.output.state as { borrow_scheme: number }).borrow_scheme)).toEqual([0, 2]);
+    for (const l of plan.links) signAndValidate(kob, l.built, [MAKER.sk]);
+  });
+
+  it('target mode merges in the one setting that holds the amount', () => {
+    // plain holds 60 in 3, scheme 2 holds 26 in 4: 25 needs no merge (plain covers it); 70 fits no setting
+    const set = [...plain(3), ...scheme2([5n, 6n, 7n, 8n])];
+    const notNeeded = planMergeShape(STD, set, MAKER.pk, new Set(), { target: 25n });
+    expect(notNeeded.ok ? null : notNeeded.issue.code).toBe('merge.not-needed');
+    const short = planMergeShape(STD, set, MAKER.pk, new Set(), { target: 70n });
+    expect(short.ok ? null : short.issue.code).toBe('merge.short');
+    // only scheme 2 is fragmented: 4 UTXOs, 3 slots
+    const only2 = planMergeShape(STD, [tokenUtxo(1n, MAKER.pk, 0x60), ...scheme2([5n, 6n, 7n, 8n])], MAKER.pk, new Set(), { target: 26n });
+    expect(only2.ok).toBe(true);
+    if (only2.ok) expect(only2.nodes.flatMap((n) => n.fresh).every((u) => bs(u) === 2)).toBe(true);
   });
 });

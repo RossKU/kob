@@ -4,7 +4,9 @@ import {
   makeDisclosure, orderCarrierFloor, refundTipFor, tokenCarrierFloor, unusableTokenHeld, usableTokenUtxos, verifyBuilt,
 } from './common';
 import { ISSUE_CATALOG, customIssue, hasError, issue } from './common-issues';
-import { FIXTURE_CARRIER, KAS, MAKER_PK, TOK, makeEnv, tokenUtxo } from '../../testing/fixtures';
+import { FIXTURE_CARRIER, KAS, MAKER_PK, TOK, consensusCheck, makeEnv, tokenUtxo } from '../../testing/fixtures';
+import { decodeSigning } from '../decode';
+import { custodyState, keyState } from '../token-state';
 import type { OrderState } from '../types';
 import { ceilDiv } from '../units';
 
@@ -74,14 +76,17 @@ describe('state builders', () => {
 });
 
 describe('token selection helpers', () => {
-  it('usableTokenUtxos filters by token, owner, scheme, borrow flag and extension; heldAmount sums every base unit', () => {
+  it('usableTokenUtxos filters by token, owner, owner scheme and extension, any borrow setting kept; heldAmount sums every base unit', () => {
     const env = makeEnv({ tokenAmounts: [] });
     const m = env.token;
     const good = tokenUtxo(m, 2_500n);
-    const borrow = { ...tokenUtxo(m, 1_000n), state: { ...tokenUtxo(m, 1_000n).state, borrow_scheme: 1 } };
-    env.tokenUtxos.push(good, borrow, tokenUtxo(m, 1_000n, 10n * KAS, 'cd'.repeat(32)));
-    expect(usableTokenUtxos(env)).toEqual([good]);
-    expect(heldAmount(env)).toBe(2_500n);
+    // option A: a key-owned holding with a borrow setting is spent on the owner path
+    const borrow = { ...tokenUtxo(m, 1_000n), state: { ...tokenUtxo(m, 1_000n).state, borrow_scheme: 2, borrow_guard: 'ab'.repeat(32) } };
+    // another owner scheme (a key hash) with a borrow setting stays unusable
+    const keyHash = { ...tokenUtxo(m, 700n), state: { ...tokenUtxo(m, 700n).state, owner_scheme: 1, borrow_scheme: 1 } };
+    env.tokenUtxos.push(good, borrow, keyHash, tokenUtxo(m, 1_000n, 10n * KAS, 'cd'.repeat(32)));
+    expect(usableTokenUtxos(env)).toEqual([good, borrow]);
+    expect(heldAmount(env)).toBe(3_500n);
   });
 
   it('unusableTokenHeld counts the held units the planner skips and names the reason of the largest', () => {
@@ -90,11 +95,15 @@ describe('token selection helpers', () => {
     expect(unusableTokenHeld(env)).toBeNull();
     env.tokenUtxos.push(tokenUtxo(m, 2_500n));
     expect(unusableTokenHeld(env)).toBeNull();
+    // a key-owned holding with a borrow setting is usable (option A)
     const borrow = { ...tokenUtxo(m, 1_000n), state: { ...tokenUtxo(m, 1_000n).state, borrow_scheme: 1 } };
     env.tokenUtxos.push(borrow);
-    expect(unusableTokenHeld(env)).toEqual({ amount: 1_000n, reason: 'borrow' });
+    expect(unusableTokenHeld(env)).toBeNull();
+    // another owner scheme stays unusable, borrow setting or not
+    env.tokenUtxos.push({ ...tokenUtxo(m, 1_200n), state: { ...tokenUtxo(m, 1_200n).state, owner_scheme: 1, borrow_scheme: 2 } });
+    expect(unusableTokenHeld(env)).toEqual({ amount: 1_200n, reason: 'owner' });
     env.tokenUtxos.push({ ...tokenUtxo(m, 3_000n), state: { ...tokenUtxo(m, 3_000n).state, extension_commitment: 'cd'.repeat(32) } });
-    expect(unusableTokenHeld(env)).toEqual({ amount: 4_000n, reason: 'extension' });
+    expect(unusableTokenHeld(env)).toEqual({ amount: 4_200n, reason: 'extension' });
   });
 });
 
@@ -124,6 +133,40 @@ describe('buildCreate / verifyBuilt', () => {
     expect(r.issues).toEqual([]);
     expect(r.request!.tokenCarrier).toBe(String(DEFAULT_CARRIER));
     expect(verifyBuilt(env, r.built!, spec)).toBeNull();
+  });
+
+  it('option A: an ask from a holding with a borrow setting (schemes 1, 2, 3): plain custody, the change keeps scheme and guard, valid and not blocked', () => {
+    for (const [scheme, guard] of [[1, '00'.repeat(8) + 'ff'.repeat(24)], [2, 'ab'.repeat(32)], [3, '5a'.repeat(32)]] as const) {
+      const env = makeEnv({ tokenAmounts: [] });
+      const held = tokenUtxo(env.token, 100n * TOK);
+      env.tokenUtxos.push({ ...held, state: { ...held.state, borrow_scheme: scheme, borrow_guard: guard } as typeof held.state });
+      const { spec } = askSpec(env);
+      const r = buildCreate(env, spec);
+      expect(r.issues, `scheme ${scheme}`).toEqual([]);
+      expect(verifyBuilt(env, r.built!, spec)).toBeNull();
+      const tokenOuts = r.built!.tx.outputs.filter((o) => o.covenant?.covenantId === env.token.covenantId).map((o) => o.scriptPublicKey);
+      const orderId = r.built!.covenants[0]!.covenantId;
+      const program = env.token.program!;
+      const custody = custodyState('kcc20', 4n * TOK, orderId, env.token.extensionCommitment);
+      const change = { ...keyState('kcc20', 96n * TOK, MAKER_PK, env.token.extensionCommitment), borrow_scheme: scheme, borrow_guard: guard };
+      expect(tokenOuts).toEqual([env.kob.tokenScriptPublicKey(program, custody), env.kob.tokenScriptPublicKey(program, change)]);
+      consensusCheck(env.kob, r.built!);
+      const d = decodeSigning({ kob: env.kob, built: r.built!, maker: MAKER_PK, registry: null });
+      expect(d.blocking, `scheme ${scheme}`).toEqual([]);
+    }
+  });
+
+  it('option A: holdings of two settings never share the placement; one that covers is used, else TOKEN_UTXOS_MIXED_BORROW', () => {
+    const env = makeEnv({ tokenAmounts: [3n * TOK] });
+    const held = tokenUtxo(env.token, 3n * TOK);
+    env.tokenUtxos.push({ ...held, state: { ...held.state, borrow_scheme: 2, borrow_guard: 'ab'.repeat(32) } as typeof held.state });
+    expect(heldAmount(env)).toBe(6n * TOK);
+    const ok = buildCreate(env, askSpec(env, 2n * TOK).spec);
+    expect(ok.issues).toEqual([]);
+    expect((ok.request?.tokens ?? []).map((t) => (t.state as { borrow_scheme: number }).borrow_scheme)).toEqual([0]);
+    const mixed = buildCreate(env, askSpec(env, 5n * TOK).spec);
+    expect(mixed.built).toBeNull();
+    expect(mixed.issues.map((i) => i.code)).toEqual(['TOKEN_UTXOS_MIXED_BORROW']);
   });
 
   it('verifyBuilt catches any divergence between plan and transaction', () => {

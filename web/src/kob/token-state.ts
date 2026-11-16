@@ -67,6 +67,43 @@ export const isKronUnspendable = (s: TokenState, program?: TokenProgram | null):
   isKronState(s) && s.id_type !== holderOwnerOf(program, 'kron') && s.id_type !== KRON_ID_COVID;
 /** True for a KCC-20 state without borrowing or a KRON state without the minter flag. */
 export const isPlainState = (s: TokenState): boolean => (isKronState(s) ? s.is_minter === 0 : s.borrow_scheme === 0);
+/**
+ * True for a state the builders spend from a wallet: plain, or a key-owned KCC-20 holding with a
+ * borrow setting (option A: the owner path checks the owner only, whatever the borrow scheme).
+ * Its change keeps the setting; custodies, deliveries and recipients stay plain.
+ */
+export const isSpendableHolding = (s: TokenState, program?: TokenProgram | null): boolean =>
+  isKeyOwned(s, program) && (isPlainState(s) || isKcc20State(s));
+/** The borrow setting of a state as one key, `scheme:guard`. Every plain state has {@link PLAIN_BORROW}. */
+export const borrowKeyOf = (s: TokenState): string => (isKronState(s) || s.borrow_scheme === 0 ? PLAIN_BORROW : `${s.borrow_scheme}:${s.borrow_guard.toLowerCase()}`);
+/** The borrow key of a plain state. */
+export const PLAIN_BORROW = `0:${ZERO32}`;
+/** The same state with the borrow setting of `from` (KCC-20; a KRON state is returned as is). */
+export const withBorrowOf = <S extends TokenState>(s: S, from: TokenState): S =>
+  isKronState(s) || isKronState(from) ? s : ({ ...s, borrow_scheme: from.borrow_scheme, borrow_guard: from.borrow_guard } as S);
+/**
+ * Groups `utxos` by borrow setting: the plain group first, then by total, largest first, then by
+ * key. Inputs of different settings never share a transaction.
+ */
+export function groupByBorrow<U extends { state: TokenState }>(utxos: readonly U[]): U[][] {
+  const groups = new Map<string, U[]>();
+  for (const u of utxos) {
+    const k = borrowKeyOf(u.state);
+    const g = groups.get(k);
+    if (g) g.push(u);
+    else groups.set(k, [u]);
+  }
+  const total = (g: U[]): bigint => g.reduce((s, u) => s + BigInt(u.state.amount), 0n);
+  return [...groups.entries()]
+    .sort(([ka, a], [kb, b]) => {
+      if ((ka === PLAIN_BORROW) !== (kb === PLAIN_BORROW)) return ka === PLAIN_BORROW ? -1 : 1;
+      const x = total(a);
+      const y = total(b);
+      if (x !== y) return x > y ? -1 : 1;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    })
+    .map(([, g]) => g);
+}
 /** The extension commitment of a KCC-20 state, or null for KRON, which has none. */
 export const extensionOfState = (s: TokenState): Hex | null => (isKronState(s) ? null : s.extension_commitment);
 /** A short label of the owner type for issue text and tracker listings. */
