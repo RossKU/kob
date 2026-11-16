@@ -76,7 +76,7 @@ async function allowSession(page: Page, txs: number, screenshot?: string): Promi
   expect(read.lines['What']).toMatch(/^\d+ of your UTXOs into \d+, to yourself\. .+ in total, unchanged\.$/);
   expect(read.lines['Valid for']).toMatch(/^\d+ min( \d+ s)?, in this tab only$/);
   expect(read.fee).toMatch(/^at most [0-9.]+ KAS in total \(planned [0-9.]+ KAS\)$/);
-  await expect(signer(page).getByTestId('signer-session-note')).toHaveText('Anything else is shown for confirmation as usual. Rejecting any request ends this.');
+  await expect(signer(page).getByTestId('signer-session-note')).toHaveText('May use your KAS to pay the fees, within the cap. Anything else is shown for confirmation as usual. Rejecting any request ends this.');
   await expect(signer(page).getByTestId('signer-approve')).toHaveText('Allow');
   if (screenshot) {
     await expect(signer(page).getByTestId('signer-approve')).toBeEnabled();

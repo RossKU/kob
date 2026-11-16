@@ -5,6 +5,7 @@ import { t } from '../../i18n';
 import type { BuiltTx } from '../../kob/types';
 import { formatKas } from '../../kob/units';
 import { WalletError } from '../../wallet/types';
+import { claimSessionRun } from './session-run';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
 import { Banner, Button, IssueLine, Spinner } from '../kit';
@@ -90,10 +91,13 @@ export function TxFlow(props: TxFlowProps) {
   const live = useRef<{ sid: string; close(): void } | null>(null);
   const [asking, setAsking] = useState(false);
   const [sessionLine, setSessionLine] = useState<string | null>(null);
+  const release = useRef<(() => void) | null>(null);
   const closeSession = () => {
     const s = live.current;
     live.current = null;
     s?.close();
+    release.current?.();
+    release.current = null;
   };
 
   const finish = (s: StepState[]) => {
@@ -116,6 +120,13 @@ export function TxFlow(props: TxFlowProps) {
     const sent: string[] = [];
     const adapter = wallet.adapter;
     if (props.session?.length && adapter?.openSession && adapter.canOpenSession?.()) {
+      // one run under a session at a time: a second one would end the first one's session
+      release.current = claimSessionRun();
+      if (!release.current) {
+        st[0] = 'failed';
+        setMessage(t('orders.flow.sessionBusy'));
+        return end();
+      }
       // one approval for the whole plan in the wallet; a wallet that will not hold a session for it asks per step
       setAsking(true);
       try {

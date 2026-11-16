@@ -115,7 +115,7 @@ export default {
   'signer.session.seconds': '{sec} s',
   'signer.session.minSec': '{min} min {sec} s',
   'signer.session.feeValue': 'at most {max} KAS in total (planned {planned} KAS)',
-  'signer.session.note': 'Anything else is shown for confirmation as usual. Rejecting any request ends this.',
+  'signer.session.note': 'May use your KAS to pay the fees, within the cap. Anything else is shown for confirmation as usual. Rejecting any request ends this.',
   'signer.waitWhy': 'Approve is locked until you have seen the whole request. Keep this window fully on screen and scroll through every line. Anything over it, a zoomed page or a cut-off window keeps it locked.',
   'signer.waitCounts': 'Check: buttons {buttons}, lines seen {lines}, covered parts {covered}.',
   'signer.reject': 'Reject',

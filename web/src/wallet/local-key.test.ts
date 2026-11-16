@@ -341,6 +341,13 @@ describe('private-key adapter: a one-approval merge session (signer/session.ts)'
     expect(log.filter((l) => l === 'request true')).toHaveLength(shown + 1);
   });
 
+  it('a session the host no longer waits for (timed out, cancelled) is closed in the frame at once', () => {
+    const posted: unknown[] = [];
+    const host = new SignerHost((m) => posted.push(m));
+    host.receive({ p: 'kob-signer/1', type: 'session-opened', id: 'late', sid: 'cd'.repeat(16), txs: 3, feeMax: '1000', expiresInMs: 150_000 });
+    expect(posted).toEqual([{ p: 'kob-signer/1', type: 'session-close', sid: 'cd'.repeat(16) }]);
+  });
+
   it('a rejected plan ends the run (rejected); a plan the frame refuses is null, so the run asks per transaction', async () => {
     const a = pair(() => 'reject');
     await a.connect(CHAIN_MAKER.sk);

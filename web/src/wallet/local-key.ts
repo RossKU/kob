@@ -119,7 +119,11 @@ export class SignerHost {
         return;
       case 'session-opened': {
         const o = this.opening;
-        if (o?.id !== m.id) return;
+        // a session this side no longer waits for (timed out, cancelled, another request): closed at once, so it is never usable
+        if (o?.id !== m.id) {
+          this.post(toSigner({ type: 'session-close', sid: m.sid }));
+          return;
+        }
         this.live = m.sid;
         this.settleOpen(() => o.resolve({ sid: m.sid, txs: m.txs, feeMax: BigInt(m.feeMax), expiresInMs: m.expiresInMs }));
         return;

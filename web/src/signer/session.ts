@@ -14,7 +14,8 @@
 import type { DecodedInput, SigningSummary } from '../kob/decode';
 import { MAX_TOKEN_INPUTS } from '../kob/guards';
 import { tokenCarrierFloor } from '../kob/orders/common';
-import type { BuiltTx, Hex } from '../kob/types';
+import { borrowKeyOf, extensionOfState, keyState, withBorrowOf } from '../kob/token-state';
+import type { BuiltTx, Hex, TokenState } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { mergedTokens } from './summary';
 
@@ -59,6 +60,8 @@ export interface MergeFacts {
   kasInputs: string[];
   /** the one token output: its index, KAS and token amount */
   output: { index: number; kas: bigint; amount: bigint };
+  /** the borrow setting (kob/token-state.ts `borrowKeyOf`) every token input carries and the merged output keeps */
+  setting: string;
   fee: bigint;
 }
 
@@ -70,7 +73,7 @@ const refuse = (why: Refusal): { refused: Refusal } => ({ refused: why });
  * file), else why not. `decoded` is this frame's decoding of `built` for `pubkey` (summary.ts `summarize`). Fails closed: anything not
  * known to be a merge refuses.
  */
-export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSummary, built: BuiltTx, pubkey: Hex): MergeFacts | { refused: Refusal } {
+export function mergeFacts(kob: Pick<KobWasm, 'templates' | 'tokenScriptPublicKey'>, decoded: SigningSummary, built: BuiltTx, pubkey: Hex): MergeFacts | { refused: Refusal } {
   if (decoded.blocking.length > 0) return refuse('blocking');
   if (decoded.warnings.some((w) => !EXPECTED_WARNINGS.has(w.code))) return refuse('warning');
   if (decoded.info.length > 0) return refuse('info');
@@ -90,6 +93,8 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSumm
   const kasInputs: string[] = [];
   let program: string | null = null;
   let largest = 0n;
+  // the token state of the first token input (its plan's), which every other token input must share in borrow setting and extension
+  let first: TokenState | null = null;
   for (const d of decoded.inputs as DecodedInput[]) {
     const raw = tx.inputs[d.index];
     if (!raw || !d.willSign || d.signer !== pubkey || d.ownedBy !== 'maker') return refuse('unsigned');
@@ -98,6 +103,10 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSumm
       if (!k || k.ref.covenantId !== covenantId || k.owner !== pubkey || k.ownerScheme !== 0 || k.escrowOf !== null || k.witness !== 'p2pk' || raw.utxo.covenantId !== covenantId) return refuse('input');
       if (program !== null && k.program !== program) return refuse('input');
       program = k.program;
+      const plan = built.plans[d.index];
+      if (!plan || (plan.kind !== 'tokenLeader' && plan.kind !== 'tokenDelegator')) return refuse('input');
+      if (first && (borrowKeyOf(plan.state) !== borrowKeyOf(first) || extensionOfState(plan.state) !== extensionOfState(first))) return refuse('input');
+      first ??= plan.state;
       tokenInputs.push({ outpoint: outpoint(raw), kas: d.amount, amount: k.amount });
       if (d.amount > largest) largest = d.amount;
     } else if (d.type === 'kas') {
@@ -105,7 +114,7 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSumm
       kasInputs.push(outpoint(raw));
     } else return refuse('input');
   }
-  if (program === null || tokenInputs.length !== m.inCount || kasInputs.length > MAX_KAS_INPUTS) return refuse('input');
+  if (program === null || first === null || tokenInputs.length !== m.inCount || kasInputs.length > MAX_KAS_INPUTS) return refuse('input');
 
   // outputs: the one merged token UTXO and at most one KAS change, both this key's, nothing flagged
   let output: MergeFacts['output'] | null = null;
@@ -118,6 +127,10 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSumm
     else return refuse('output');
   }
   if (!output || output.amount !== m.amount || decoded.outputs.length !== tx.outputs.length) return refuse('output');
+  // the merged output is exactly the state kob/merge.ts plans: the whole amount, this key, the inputs' extension and borrow setting (a
+  // setting dropped or changed on the way is not a merge)
+  const want = withBorrowOf(keyState('kcc20', m.amount, pubkey, extensionOfState(first), program as never), first);
+  if (kob.tokenScriptPublicKey(program as never, want) !== tx.outputs[output.index]?.scriptPublicKey) return refuse('output');
 
   const k = decoded.net.kas;
   if (k.toOthers !== 0n || k.locked.total !== 0n || k.released !== 0n || k.fromOthers !== 0n) return refuse('net');
@@ -137,7 +150,7 @@ export function mergeFacts(kob: Pick<KobWasm, 'templates'>, decoded: SigningSumm
   const capped = largest < ONE_KAS ? largest : ONE_KAS;
   if (output.kas > (capped > floor ? capped : floor)) return refuse('carrier');
 
-  return { covenantId, program, tokenInputs, kasInputs, output, fee };
+  return { covenantId, program, tokenInputs, kasInputs, output, fee, setting: borrowKeyOf(first) };
 }
 
 /** One link of the allowed plan, as each step is checked against it. */
@@ -150,6 +163,8 @@ export interface PlannedLink {
   amount: bigint;
   carrier: bigint;
   fee: bigint;
+  /** the borrow setting it merges in and keeps */
+  setting: string;
 }
 
 /** What the user allows: derived by this frame from the plan it decoded, never taken from the app. */
@@ -209,7 +224,7 @@ export function sessionTerms(plan: readonly { built: BuiltTx; facts: MergeFacts 
     if (f.kasInputs.some((o) => planIds.has(o.split(':')[0]!))) return refuse('plan-parent');
     utxos += fresh.size;
     for (const u of fresh.values()) amount += u.amount;
-    links.push({ fresh, parents, amount: f.output.amount, carrier: f.output.kas, fee: f.fee });
+    links.push({ fresh, parents, amount: f.output.amount, carrier: f.output.kas, fee: f.fee, setting: f.setting });
   }
   const leaves = links.filter((_, j) => !links.some((l) => l.parents.includes(j))).length;
   const plannedFee = links.reduce((s, l) => s + l.fee, 0n);
@@ -227,7 +242,9 @@ export interface SessionState {
   sid: string;
   pubkey: Hex;
   terms: SessionTerms;
+  /** when it expires on the frame's monotonic clock, and on the wall clock (a monotonic clock can stand still while the device sleeps) */
   expiresAt: number;
+  expiresAtWall: number;
   /** every outpoint a step of this session spent */
   consumed: Set<string>;
   /** the merged output of each signed link, with the transaction id this frame's own finalize gave it */
@@ -235,18 +252,19 @@ export interface SessionState {
   feeLeft: bigint;
 }
 
-/** Opens the state of a session the user allowed at `now` (the frame's own clock). */
-export function openState(sid: string, pubkey: Hex, terms: SessionTerms, now: number): SessionState {
-  return { sid, pubkey, terms, expiresAt: now + terms.ttlMs, consumed: new Set(), signed: [], feeLeft: terms.feeMax };
+/** Opens the state of a session the user allowed at `now` (the frame's monotonic clock) and `wall` (its wall clock). */
+export function openState(sid: string, pubkey: Hex, terms: SessionTerms, now: number, wall: number): SessionState {
+  return { sid, pubkey, terms, expiresAt: now + terms.ttlMs, expiresAtWall: wall + terms.ttlMs, consumed: new Set(), signed: [], feeLeft: terms.feeMax };
 }
 
 /**
- * Whether `facts` (the decoded step) is exactly the next link of the allowed plan at `now`: null when it is, else why not. The step's token
+ * Whether `facts` (the decoded step) is exactly the next link of the allowed plan at `now` / `wall` (it expires on whichever clock passes
+ * first): null when it is, else why not. The step's token
  * inputs must be the link's original UTXOs as allowed and the merged outputs of the links this session signed, nothing else, its merged amount
  * and carrier the planned ones, its fee within both caps, none of its inputs spent by an earlier step.
  */
-export function admitStep(s: SessionState, facts: MergeFacts, now: number): Refusal | null {
-  if (now >= s.expiresAt) return 'expired';
+export function admitStep(s: SessionState, facts: MergeFacts, now: number, wall: number): Refusal | null {
+  if (now >= s.expiresAt || wall >= s.expiresAtWall) return 'expired';
   const k = s.signed.length;
   const link = s.terms.links[k];
   if (!link) return 'count';
@@ -261,13 +279,13 @@ export function admitStep(s: SessionState, facts: MergeFacts, now: number): Refu
     if (!want || used.has(u.outpoint) || want.kas !== u.kas || want.amount !== u.amount) return 'deviates';
     used.add(u.outpoint);
   }
-  if (facts.output.amount !== link.amount || facts.output.kas !== link.carrier) return 'deviates';
+  if (facts.output.amount !== link.amount || facts.output.kas !== link.carrier || facts.setting !== link.setting) return 'deviates';
   if (facts.fee > s.terms.perTxFeeMax) return 'fee-cap';
   if (facts.fee > s.feeLeft) return 'fee-budget';
   return null;
 }
 
-/** Records an admitted step BEFORE it is signed (a failure to sign ends the session): its inputs spent, its fee debited, its output kept. */
+/** Records a step once it is signed (core.ts; a failure to sign ends the session instead): its inputs spent, its fee debited, its output kept. */
 export function recordStep(s: SessionState, facts: MergeFacts, txid: Hex): void {
   for (const o of [...facts.tokenInputs.map((u) => u.outpoint), ...facts.kasInputs]) s.consumed.add(o);
   s.feeLeft -= facts.fee;

@@ -148,12 +148,39 @@ describe('session rules: what a merge link is', () => {
     expect(summarize(kob, mixed, MAKER.pk, HINTS).decoded.blocking.map((b) => b.code)).toContain('token-state-mixed');
     expect(facts(mixed)).toEqual({ refused: 'blocking' });
   });
+
+  it('option A: a merged output that drops or changes the inputs\' borrow setting is not a merge; a step in another setting than planned deviates', () => {
+    const held = (n: number): TokenUtxo => {
+      const u = tokenUtxo(BigInt(n) * KAS, MAKER.pk, 0x60 + n, 2n * KAS);
+      return { ...u, state: { ...u.state, borrow_scheme: 2, borrow_guard: OTHER.pk } as Kcc20State };
+    };
+    const p = planMerge(env(), STD, [held(1), held(2), held(3)]);
+    expect(p.ok).toBe(true);
+    const f = ok(p.links[0]!.built);
+    const withOutput = (edit: (s: Kcc20State) => Kcc20State): BuiltTx => {
+      const b = clone(p.links[0]!.built);
+      const leader = b.plans.find((x) => x.kind === 'tokenLeader') as Extract<BuiltTx['plans'][number], { kind: 'tokenLeader' }>;
+      const next = edit({ ...leader.nextStates[0]! });
+      leader.nextStates[0] = next;
+      b.tx.outputs[f.output.index]!.scriptPublicKey = kob.tokenScriptPublicKey(leader.template, next);
+      return b;
+    };
+    // dropped: the merged UTXO would come out plain
+    expect(facts(withOutput((s) => ({ ...s, borrow_scheme: 0, borrow_guard: '00'.repeat(32) })))).toHaveProperty('refused');
+    // changed: another guard, or another scheme
+    expect(facts(withOutput((s) => ({ ...s, borrow_guard: MAKER.pk })))).toHaveProperty('refused');
+    expect(facts(withOutput((s) => ({ ...s, borrow_scheme: 1 })))).toHaveProperty('refused');
+    // the plan's step in another setting than the one allowed
+    const s = openState('aa'.repeat(16), MAKER.pk, termsOf(p), 1000, 1000);
+    expect(admitStep(s, f, 1000, 1000)).toBeNull();
+    expect(admitStep(s, { ...f, setting: '0:' + '00'.repeat(32) }, 1000, 1000)).toBe('deviates');
+  });
 });
 
 describe('session rules: each step against the allowed plan', () => {
   const run = () => {
     const p = plan7();
-    const s = openState('aa'.repeat(16), MAKER.pk, termsOf(p), 1000);
+    const s = openState('aa'.repeat(16), MAKER.pk, termsOf(p), 1000, 1000);
     return { p, s };
   };
 
@@ -161,17 +188,17 @@ describe('session rules: each step against the allowed plan', () => {
     const { p, s } = run();
     for (let k = 0; k < 2; k++) {
       const f = ok(p.links[k]!.built);
-      expect(admitStep(s, f, 1000)).toBeNull();
+      expect(admitStep(s, f, 1000, 1000)).toBeNull();
       recordStep(s, f, `${k}`.repeat(64));
     }
     const third = p.links[2]!;
     const inputs = [mergeCarry(p.links[0]!, '0'.repeat(64), STD), mergeCarry(p.links[1]!, '1'.repeat(64), STD), ...third.fresh];
     const f = ok(rebuilt(third, inputs));
-    expect(admitStep(s, f, 1000)).toBeNull();
+    expect(admitStep(s, f, 1000, 1000)).toBeNull();
     recordStep(s, f, 'ff'.repeat(32));
     expect(stepsLeft(s)).toBe(0);
     // the count is exhausted: nothing more
-    expect(admitStep(s, ok(p.links[0]!.built), 1000)).toBe('count');
+    expect(admitStep(s, ok(p.links[0]!.built), 1000, 1000)).toBe('count');
   });
 
   it('a step that deviates from the plan is refused: another UTXO after a re-read, another parent, another carrier', () => {
@@ -179,31 +206,33 @@ describe('session rules: each step against the allowed plan', () => {
     const first = p.links[0]!;
     // the re-read found another UTXO of the same token in place of an allowed one
     const swapped = [...first.inputs.slice(0, 2), tokenUtxo(9n * KAS, MAKER.pk, 0x99, 2n * KAS)];
-    expect(admitStep(s, ok(rebuilt(first, swapped)), 1000)).toBe('deviates');
+    expect(admitStep(s, ok(rebuilt(first, swapped)), 1000, 1000)).toBe('deviates');
     // the allowed UTXO with another KAS amount than at approval
     const moved = [...first.inputs.slice(0, 2), { ...first.inputs[2]!, amount: (3n * KAS).toString() }];
-    expect(admitStep(s, ok(rebuilt(first, moved)), 1000)).toBe('deviates');
+    expect(admitStep(s, ok(rebuilt(first, moved)), 1000, 1000)).toBe('deviates');
     // the second link first (the run keeps the plan's order)
-    expect(admitStep(s, ok(p.links[1]!.built), 1000)).toBe('deviates');
+    expect(admitStep(s, ok(p.links[1]!.built), 1000, 1000)).toBe('deviates');
     // a lower carrier on the merged output than planned
-    expect(admitStep(s, ok(rebuilt(first, first.inputs, (r) => void (r.tokenChangeCarrier = (50_000_000n).toString()))), 1000)).toBe('deviates');
+    expect(admitStep(s, ok(rebuilt(first, first.inputs, (r) => void (r.tokenChangeCarrier = (50_000_000n).toString()))), 1000, 1000)).toBe('deviates');
     for (let k = 0; k < 2; k++) recordStep(s, ok(p.links[k]!.built), `${k}`.repeat(64));
     // the level-2 link spending another output than the ones this session signed
     const third = p.links[2]!;
     const forged = [mergeCarry(p.links[0]!, '0'.repeat(64), STD), mergeCarry(p.links[1]!, '7'.repeat(64), STD), ...third.fresh];
-    expect(admitStep(s, ok(rebuilt(third, forged)), 1000)).toBe('deviates');
+    expect(admitStep(s, ok(rebuilt(third, forged)), 1000, 1000)).toBe('deviates');
   });
 
   it('a replayed step is refused (its inputs are spent), as is a step after expiry or past the fee caps', () => {
     const { p, s } = run();
     const f = ok(p.links[0]!.built);
     recordStep(s, f, '0'.repeat(64));
-    expect(admitStep(s, f, 1000)).toBe('consumed');
+    expect(admitStep(s, f, 1000, 1000)).toBe('consumed');
     const g = ok(p.links[1]!.built);
-    expect(admitStep(s, g, s.expiresAt)).toBe('expired');
-    expect(admitStep(s, { ...g, fee: s.terms.perTxFeeMax + 1n }, 1000)).toBe('fee-cap');
+    expect(admitStep(s, g, s.expiresAt, 1000)).toBe('expired');
+    // the monotonic clock stood still (the device slept): the wall clock still ends it
+    expect(admitStep(s, g, 1000, s.expiresAtWall)).toBe('expired');
+    expect(admitStep(s, { ...g, fee: s.terms.perTxFeeMax + 1n }, 1000, 1000)).toBe('fee-cap');
     s.feeLeft = g.fee - 1n;
-    expect(admitStep(s, g, 1000)).toBe('fee-budget');
+    expect(admitStep(s, g, 1000, 1000)).toBe('fee-budget');
   });
 });
 
@@ -240,6 +269,38 @@ function allowed(c: ReturnType<typeof setup>, p: MergePlan): string {
 }
 
 describe('signer core: one-approval session', () => {
+  it('a check that throws on a step refuses it: the session ends and the request is shown as usual', () => {
+    const broken = { on: false };
+    const flaky = new Proxy(kob, { get: (t, k) => (k === 'templates' && broken.on ? () => { throw new Error('wasm gone'); } : Reflect.get(t, k)) });
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob: flaky, post: (m) => sent.push(structuredClone(m)), now: () => 0, registryHash: tableHash(TABLE) });
+    core.importKey(MAKER.sk);
+    const p = plan7();
+    core.receive(parseAppMessage(structuredClone({ p: P, ...open(p) }))!);
+    core.approve('o1');
+    const sid = (sent.at(-1) as Extract<SignerToApp, { type: 'session-opened' }>).sid;
+    broken.on = true;
+    const req = core.receive(parseAppMessage(structuredClone({ p: P, ...step(p.links[0]!.built, 's0', sid) }))!);
+    expect(req?.id).toBe('s0');
+    expect(sent.at(-1)).toEqual({ p: P, type: 'session-closed', sid, reason: 'refused' });
+    expect(core.session()).toBeNull();
+    expect(sent.some((m) => m.type === 'signed')).toBe(false);
+  });
+
+  it('the session also expires on the wall clock when the monotonic one stands still', () => {
+    const wall = { now: 0 };
+    const sent: SignerToApp[] = [];
+    const core = createSignerCore({ sdk, kob, post: (m) => sent.push(structuredClone(m)), now: () => 0, wallNow: () => wall.now });
+    core.importKey(MAKER.sk);
+    const p = plan7();
+    core.receive(parseAppMessage(structuredClone({ p: P, ...open(p) }))!);
+    core.approve('o1');
+    const sid = (sent.at(-1) as Extract<SignerToApp, { type: 'session-opened' }>).sid;
+    wall.now = 150_000;
+    expect(core.receive(parseAppMessage(structuredClone({ p: P, ...step(p.links[0]!.built, 's0', sid) }))!)?.id).toBe('s0');
+    expect(sent.at(-1)).toEqual({ p: P, type: 'session-closed', sid, reason: 'expired' });
+  });
+
   it('Allow signs nothing; then the whole plan is signed step by step without a prompt, and the session closes when done', () => {
     const c = setup();
     const p = plan7();

@@ -52,6 +52,8 @@ export interface SignerCoreDeps {
   post(m: SignerToApp): void;
   /** ms clock (tests; the page passes its monotonic clock): re-time windows and session expiry */
   now?: () => number;
+  /** wall clock in ms (tests): a session also expires on it */
+  wallNow?: () => number;
   /** random bytes for a session id (tests) */
   random?: (n: number) => Uint8Array;
   /** the hash of the registry table pinned into this bundle (table.ts); without it every registry hint is shown as unverified */
@@ -96,6 +98,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   // the one-approval merge session the user allowed (session.ts), in this closure only: never stored, never sent
   let session: SessionState | null = null;
   const now = deps.now ?? Date.now;
+  const wallNow = deps.wallNow ?? Date.now;
   const random = deps.random ?? ((n: number) => crypto.getRandomValues(new Uint8Array(n)));
 
   const endSession = (reason: SessionCloseReason) => {
@@ -274,11 +277,18 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         // (another session id, no session id, any deviation) ends the session and is shown for confirmation as usual
         const live = session;
         let facts: MergeFacts | null = null;
-        if (m.session === live.sid) {
-          const f = mergeFacts(kob, summary.decoded, m.built, pub);
-          facts = 'refused' in f ? null : f;
+        let why: ReturnType<typeof admitStep> = 'deviates';
+        try {
+          if (m.session === live.sid) {
+            const f = mergeFacts(kob, summary.decoded, m.built, pub);
+            facts = 'refused' in f ? null : f;
+          }
+          why = facts ? admitStep(live, facts, now(), wallNow()) : 'deviates';
+        } catch {
+          // a check that throws refuses: the session ends and the request is shown as usual
+          facts = null;
+          why = 'deviates';
         }
-        const why = facts ? admitStep(live, facts, now()) : 'deviates';
         if (facts && why === null) {
           let signed: { sigs: InputSignature[]; txid: Hex };
           try {
@@ -322,7 +332,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       if (req.session) {
         // the user allowed the plan: nothing is signed now; the session id is minted here and binds the steps to this plan, this key, this frame
         const sid = [...random(16)].map((b) => b.toString(16).padStart(2, '0')).join('');
-        session = openState(sid, pub, req.session, now());
+        session = openState(sid, pub, req.session, now(), wallNow());
         post(toApp({ type: 'session-opened', id, sid, txs: req.session.links.length, feeMax: req.session.feeMax.toString(), expiresInMs: req.session.ttlMs }));
         return true;
       }

@@ -386,6 +386,7 @@ export default {
   'orders.flow.done.one': 'Done: {count} transaction submitted.',
   'orders.flow.done.other': 'Done: {count} transactions submitted.',
   'orders.flow.stopped': 'Nothing was sent.',
+  'orders.flow.sessionBusy': 'Another merge is still running. Try again when it is done.',
   'orders.flow.sessionAsk': 'Approve the whole merge once in the private key signer.',
   'orders.flow.sessionOpen': 'Approved once in the private key signer: at most {txs} transactions, fees at most {fee} KAS. A step off the plan asks again.',
   'orders.flow.remaining.one': '{count} transaction not started; start it again from the list.',
