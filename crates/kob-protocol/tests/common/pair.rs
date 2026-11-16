@@ -1125,6 +1125,136 @@ pub fn pair_branch_shapes(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action
     v.extend(pair_update_grid(pa, pb));
     v.extend(pair_merge_grid(pa, pb));
     v.extend(pair_refund_grid(pa, pb));
+    v.extend(pair_delivery_grid(pa, pb));
+    v
+}
+
+// ---------------------------------------------------------------- delivery modes (docs/design/bid-delivery-spec.md §4)
+
+/// The receive UTXO threshold and top-up tip of the delivery grid's mode-2 orders.
+const GRID_RECV_THR: i64 = 5;
+const GRID_TOPUP_TIP: i64 = 1_000_000;
+/// The bought-custody (mode 1) and the receive UTXO (mode 2 top-up) of the delivery grid hold this much T.
+const GRID_HELD: i64 = 3 * WHOLE;
+
+/// The delivery forms of the grid: mode 1 first fill (`.m1`), mode 1 with a bought-custody (`.m1c`), mode 2 a new receive
+/// UTXO (`.m2`, form 1) and a plain one (form 0), a top-up (`.m2t`) where T's program has one.
+fn grid_forms(t: TemplateId) -> Vec<&'static str> {
+    let mut v = vec!["m1", "m1c", "m2", "m2plain"];
+    if kob_protocol::budget::topup_extra(t).is_some() {
+        v.push("m2t");
+    }
+    v
+}
+
+/// A bought-custody of `b` of T (program `t`, token `tok`) owned by the order of covenant `c`.
+fn grid_bought(t: TemplateId, tok: [u8; 32], c: [u8; 32], b: i64, ext: [u8; 32]) -> TokenUtxo {
+    TokenUtxo { utxo: utxo(0xb7, 3 * KAS, 1_000, Some(tok)), state: TokenState::custody(t.family(), b, c, ext) }
+}
+
+/// The maker's receive UTXO of `have` of T with threshold `thr` (bid-delivery-spec §1).
+fn grid_receive(tok: [u8; 32], maker: [u8; 32], have: i64, thr: i64, ext: [u8; 32]) -> TokenUtxo {
+    let mut g = [0u8; 32];
+    g[..8].copy_from_slice(&thr.to_le_bytes());
+    TokenUtxo { utxo: utxo(0xb8, 3 * KAS, 1_000, Some(tok)), state: TokenState::user(Family::Kcc20, have, maker, ext).with_borrow((1, g)) }
+}
+
+/// The delivery block of form `f`: (mode, recvThreshold, topupTip, bought).
+fn grid_block(f: &str) -> (i64, i64, i64, i64) {
+    match f {
+        "m1" => (MODE_ACCUMULATE, 0, 0, 0),
+        "m1c" => (MODE_ACCUMULATE, 0, 0, GRID_HELD),
+        _ => (MODE_TOPUP, GRID_RECV_THR, GRID_TOPUP_TIP.min(pdc()), 0),
+    }
+}
+
+/// T of a pair order: (token, program), when it is a KCC-20 token (a KRON T is delivered in mode 0 only).
+fn grid_t(t_cov: [u8; 32], pa: TemplateId, pb: TemplateId) -> Option<([u8; 32], TemplateId)> {
+    let p = if t_cov == TOKEN_COV { pa } else { pb };
+    (p.family() == Family::Kcc20).then_some((t_cov, p))
+}
+
+/// The first `KobPair` / `KobCondPair` leg of `b` (KCC-20 T, not a booked exit's re-arming fill) in form `f`.
+fn grid_leg_in(mut b: Batch, f: &str, pa: TemplateId, pb: TemplateId) -> Option<Batch> {
+    let (mode, thr, tip, bought) = grid_block(f);
+    let leg = b.legs.iter_mut().find(|l| matches!(l, Leg::Pair { .. } | Leg::CondPair { merge: None, .. }))?;
+    match leg {
+        Leg::Pair { order, bought_custody, receive, form, .. } => {
+            let (tok, t) = grid_t(order.state.t_cov_id, pa, pb)?;
+            let (maker, ext, cov) = (order.state.maker, order.state.t_ext, order.utxo.covenant_id?);
+            order.state = PairState { mode, recv_threshold: thr, topup_tip: tip, bought, ..order.state.clone() };
+            set_grid_inputs(f, t, tok, cov, maker, ext, bought_custody, receive, form)?;
+        }
+        Leg::CondPair { order, bought_custody, receive, form, .. } => {
+            let (tok, t) = grid_t(order.state.t_cov_id, pa, pb)?;
+            let (maker, ext, cov) = (order.state.maker, order.state.t_ext, order.utxo.covenant_id?);
+            order.state = CondPairState { mode, recv_threshold: thr, topup_tip: tip, bought, ..order.state.clone() };
+            set_grid_inputs(f, t, tok, cov, maker, ext, bought_custody, receive, form)?;
+        }
+        _ => unreachable!("found a pair leg"),
+    }
+    Some(b)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_grid_inputs(
+    f: &str,
+    t: TemplateId,
+    tok: [u8; 32],
+    cov: [u8; 32],
+    maker: [u8; 32],
+    ext: [u8; 32],
+    bought_custody: &mut Option<TokenUtxo>,
+    receive: &mut Option<TokenUtxo>,
+    form: &mut Option<u8>,
+) -> Option<()> {
+    match f {
+        "m1c" => *bought_custody = Some(grid_bought(t, tok, cov, GRID_HELD, ext)),
+        "m2plain" => *form = Some(0),
+        "m2t" => *receive = Some(grid_receive(tok, maker, GRID_HELD, GRID_RECV_THR, ext)),
+        _ => {}
+    }
+    Some(())
+}
+
+/// Every `KobPair` / `KobCondPair` fill of the branch grid ([`pair_fill_grid`]) with a KCC-20 T in each delivery form
+/// ([`grid_forms`]), and the refund of each with a bought-custody, so the budget table measures every delivery role
+/// (`.m1`, `.m1c`, `.m2`, `.m2t`) at its worst branch. A shape the covenant rules refuse in a form (a booked exit's
+/// re-arming fill is mode 0) does not build and is left out by the table.
+pub fn pair_delivery_grid(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
+    let mut v: Vec<(String, Action)> = vec![];
+    for (name, a) in pair_fill_grid(pa, pb) {
+        let Action::Batch(b) = a else { continue };
+        let Some(t) = b.legs.iter().find_map(|l| match l {
+            Leg::Pair { order, .. } => grid_t(order.state.t_cov_id, pa, pb),
+            Leg::CondPair { order, merge: None, .. } => grid_t(order.state.t_cov_id, pa, pb),
+            _ => None,
+        }) else {
+            continue;
+        };
+        for f in grid_forms(t.1) {
+            if let Some(b2) = grid_leg_in(b.clone(), f, pa, pb) {
+                v.push((format!("{name}.{f}"), Action::Batch(b2)));
+            }
+        }
+    }
+    for (name, a) in pair_refund_grid(pa, pb) {
+        let Action::RefundOrder(mut r) = a else { continue };
+        let (t_cov, maker_ext) = match &r.order.state {
+            AnyState::KobPair(p) => (p.t_cov_id, p.t_ext),
+            AnyState::KobCondPair(c) => (c.t_cov_id, c.t_ext),
+            _ => continue,
+        };
+        let Some((tok, t)) = grid_t(t_cov, pa, pb) else { continue };
+        let Some(cov) = r.order.utxo.covenant_id else { continue };
+        r.order.state = match r.order.state.clone() {
+            AnyState::KobPair(p) => AnyState::KobPair(PairState { mode: MODE_ACCUMULATE, bought: GRID_HELD, ..p }),
+            AnyState::KobCondPair(c) => AnyState::KobCondPair(CondPairState { mode: MODE_ACCUMULATE, bought: GRID_HELD, ..c }),
+            _ => unreachable!(),
+        };
+        r.bought_custody = Some(grid_bought(t, tok, cov, GRID_HELD, maker_ext));
+        v.push((format!("{name}.m1c"), Action::RefundOrder(r)));
+    }
     v
 }
 
