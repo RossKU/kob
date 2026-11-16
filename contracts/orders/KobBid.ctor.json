@@ -19,5 +19,9 @@
   {"kind": "int", "value": 0},
   {"kind": "int", "value": 0},
   {"kind": "int", "value": 0},
-  {"kind": "int", "value": 1}
+  {"kind": "int", "value": 1},
+  {"kind": "int", "value": 0},
+  {"kind": "int", "value": 0},
+  {"kind": "int", "value": 0},
+  {"kind": "int", "value": 0}
 ]

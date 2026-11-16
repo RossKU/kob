@@ -5,27 +5,48 @@ pragma silverscript ^0.1.0;
 // This is the base buy order of the family. It follows KobAsk for the stray
 // guard, the positional rule, IOC/FOK, the price formulas and rounding. The
 // KRON version is kron/KobBidKron.sil. The specification is
-// docs/spec/order-types.md.
+// docs/spec/order-types.md; the delivery modes are
+// docs/design/bid-delivery-spec.md.
 //
 // Entries:
-//   fill(nb, tokenTplIn, t), with n = int(nb)
+//   fill(nb, tokIn, t, form), with n = int(nb)
 //     Buy n base units. Anyone, once tx.daa >= activeFrom.
 //   cancel(sig)
-//     Maker only, signed with SIGHASH_ALL.
-//   refund()
-//     Return the escrow to the maker at output i. Anyone, once
+//     Maker only, signed with SIGHASH_ALL. A claim of the bought tokens
+//     (mode 1) is a cancel whose outputs continue the order with bought = 0.
+//   refund(custIn)
+//     Return the escrow to the maker at output i, and the bought-custody
+//     (mode 1, bought > 0) at output custIn. Anyone, once
 //     tx.daa >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill).
 //
-// tokenTplIn is any input of this token. The fill reads only the token
-// template bytes from it. t is the time of a rising bid, proven by CLTV.
+// Delivery mode, set by the maker and immutable (state field `mode`):
+//   0 new         every fill delivers a new plain UTXO of n to the maker.
+//   1 accumulate  the order keeps what it buys in its own bought-custody, a
+//                 token UTXO owned by the order's covenant id holding exactly
+//                 `bought` (the one mutable field). The maker gets one plain
+//                 UTXO when the order ends, is refunded or is claimed.
+//   2 top-up      the filler picks the form of each fill:
+//                   form 0  a new plain UTXO of n,
+//                   form 1  a new receive UTXO of n (borrow scheme
+//                           amount-threshold, threshold recvThreshold),
+//                   form 2  the maker's receive UTXO tokIn topped up to
+//                           amount + n; the escrow moves no carrier and leaves
+//                           topupTip (<= deliveryCarrier) to the filler.
+// Modes 0 and 1 ignore `form`.
+//
+// tokIn is the token input the delivery is built from: in mode 1 with
+// bought > 0 the bought-custody, in mode 2 form 2 the receive UTXO, otherwise
+// any input of this token (only its template bytes are read). t is the time
+// of a rising bid, proven by CLTV.
 //
 // nb is a fixed 8-byte push and the first argument. A conditional order that
 // uses this fill as trigger evidence reads it at sigscript[1..9), after the
 // push opcode, see KobCondBid.touchBid.
 //
-// Every per-order value is in the state span, and none of them changes. A
-// partial fill continues the byte-identical script, and only the escrowed KAS
-// shrinks. The escrow is the quantity, at the budget rate pMax + tip.
+// Every per-order value but `bought` is in the state span and never changes.
+// A partial fill continues the script with only `bought` spliced (byte-
+// identical in modes 0 and 2), and the escrowed KAS shrinks. The escrow is
+// the quantity, at the budget rate pMax + tip.
 //
 // Prices are in sompi per whole token, which is `scale` base units. Every
 // amount is rounded in the maker's favour, see KobAsk.quoteOf.
@@ -50,7 +71,11 @@ contract KobBid(
     int init_maxFill,
     int init_slope,
     int init_priceEnd,
-    int init_decayStep
+    int init_decayStep,
+    int init_mode,
+    int init_recvThreshold,
+    int init_topupTip,
+    int init_bought
 ) {
     pubkey maker = init_maker;
     byte[32] tokenCovId = init_tokenCovId;
@@ -73,6 +98,10 @@ contract KobBid(
     int slope = init_slope;                  // rising bid: sompi per whole token per decayStep DAA (0 = off)
     int priceEnd = init_priceEnd;            // rising cap
     int decayStep = init_decayStep;          // DAA per price step (> 0 when rising)
+    int mode = init_mode;                    // delivery mode: 0 new, 1 accumulate, 2 top-up
+    int recvThreshold = init_recvThreshold;  // mode 2: smallest threshold of a receive UTXO the maker accepts (> 0)
+    int topupTip = init_topupTip;            // mode 2: sompi of the escrow a top-up fill leaves to the filler
+    int bought = init_bought;                // mode 1: base units in the bought-custody (mutable, the last field)
 
     struct KCC20State {
         int amount;
@@ -101,6 +130,9 @@ contract KobBid(
     // the 8/8 prototype (the issued reference is 3/3). The scan is unrolled by
     // hand, one line per slot, so raising the cap needs as many lines.
     int constant MAX_TOK_IN = 8;
+    // Offset of the 8 payload bytes of `bought` in the redeem script: the
+    // 1-byte prefix, the state up to `bought` (312 B) and its push opcode.
+    int constant BOUGHT_AT = 314;
 
     // Quote value of n base units at rate r. c = 0 rounds down and
     // c = scale - 1 rounds up. The split is exact, see KobAsk.quoteOf.
@@ -110,26 +142,27 @@ contract KobBid(
         return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
     }
 
-    // Stray guard. A bid owns no tokens. KCC-20 authorises every token UTXO
-    // owned by this covenant id whenever this input is spent, so a fill
-    // refuses any token input owned by `me`. Only the maker's cancel can move
-    // a stray.
+    // Stray guard. KCC-20 authorises every token UTXO owned by this covenant
+    // id whenever this input is spent, so a fill refuses any token input
+    // owned by `me` except `custody`, the bought-custody the fill names and
+    // authenticates by its exact state (-1 when the order holds none). Only
+    // the maker's cancel can move a stray.
     //
     // The owner sits at a fixed distance from the end of the sigscript, as in
     // KobAsk.noStrays. The scan is unrolled by hand over MAX_TOK_IN slots, one
     // line per token input k < cnt.
-    function noStrays(byte[32] me) {
+    function noStrays(byte[32] me, int custody) {
         int cnt = OpCovInputCount(tokenCovId);
         require(cnt <= MAX_TOK_IN);
         int off = 10 - 112 - tplSuffixLen;
-        if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); }
-        if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); }
-        if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); }
-        if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); }
-        if (cnt > 4) { int x4 = OpCovInputIdx(tokenCovId, 4); int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); }
-        if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); }
-        if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); }
-        if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); }
+        if (cnt > 0) { int x0 = OpCovInputIdx(tokenCovId, 0); if (x0 != custody) { int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); } }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tokenCovId, 1); if (x1 != custody) { int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); } }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tokenCovId, 2); if (x2 != custody) { int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); } }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tokenCovId, 3); if (x3 != custody) { int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); } }
+        if (cnt > 4) { int x4 = OpCovInputIdx(tokenCovId, 4); if (x4 != custody) { int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); } }
+        if (cnt > 5) { int x5 = OpCovInputIdx(tokenCovId, 5); if (x5 != custody) { int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); } }
+        if (cnt > 6) { int x6 = OpCovInputIdx(tokenCovId, 6); if (x6 != custody) { int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); } }
+        if (cnt > 7) { int x7 = OpCovInputIdx(tokenCovId, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
     }
 
     // Refund output of a terminal fill. The KAS that the bid does not spend
@@ -154,12 +187,51 @@ contract KobBid(
         require(tx.outputs[r].value >= rem);
     }
 
-    entry fill(byte[8] nb, int tokenTplIn, int t) {
+    // P2SH of this script with `bought` replaced: the 8 payload bytes
+    // [BOUGHT_AT, BOUGHT_AT + 8) of the redeem script. With newBought ==
+    // bought it is this script's own P2SH.
+    function contSpk(int newBought) : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        byte[] rs = OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, BOUGHT_AT) + byte[](newBought as byte[8]) + rs.slice(BOUGHT_AT + 8, this.bytecodeSize)
+        ));
+    }
+
+    // The redeem script of token input idx, an input of this token whose
+    // template (the prefix and suffix around the 112-byte state, read from
+    // the end of its sigscript) hashes to tokenTplHash.
+    function tokRs(int idx) : byte[] {
+        require(OpInputCovenantId(idx) == tokenCovId);
+        int size = tplPrefixLen + 112 + tplSuffixLen;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(blake3(byte[](tplPrefixLen as byte[8]) + rs.slice(0, tplPrefixLen) + byte[](tplSuffixLen as byte[8]) + rs.slice(tplPrefixLen + 112, size)) == tokenTplHash);
+        return rs;
+    }
+
+    // The bought-custody: input idx is the P2SH of the token redeem script rs
+    // holding exactly `bought` units, owned by this order's covenant id
+    // (owner scheme 0x04), borrowing disabled, zero guard, the order's
+    // commitment. Known by its exact state, so a stray sent to this id never
+    // stands in for it (KobAsk.settle).
+    function isCustody(int idx, byte[] rs, byte[32] me) {
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(rs.slice(tplPrefixLen, tplPrefixLen + 112) == byte[](0x08) + byte[](bought as byte[8]) + byte[](0x20) + byte[](me)
+            + byte[](0x0104010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])
+            + byte[](0x20) + extensionCommitment);
+    }
+
+    entry fill(byte[8] nb, int tokIn, int t, int form) {
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
-        noStrays(selfId);
+        require(bought >= 0);
+        int cust = -1;
+        if (bought > 0) { cust = tokIn; }
+        noStrays(selfId, cust);
         require(tx.daa >= activeFrom);
 
         require(n > 0);
@@ -213,71 +285,133 @@ contract KobBid(
         require(left >= reserve);
 
         // Delivery and positional rule. The tokens bought by the order at
-        // input i are delivered at output i. That is a KCC-20 UTXO of exactly
-        // n base units owned by the maker, with owner scheme 0x00
-        // (p2pk-schnorr), borrowing disabled and the commitment
-        // extensionCommitment.
-        //
-        // This is validateOutputStateWithInputTemplate(self, KCC20State {
-        // amount: n, owner: maker, owner_scheme: SCHEME_P2PK, borrow_scheme:
-        // BORROW_DISABLED, borrow_guard: ZERO32, extension_commitment:
-        // extensionCommitment }, tokenTplIn, ...) written by hand. The
-        // template prefix and suffix come from the end of tokenTplIn's
-        // sigscript, and their hash must be tokenTplHash. The state is the
-        // struct's canonical push encoding, 0x08 amount 0x20 owner 0x01 scheme
-        // 0x01 borrow 0x20 guard 0x20 ext. The zero guard is written as four
-        // 8-byte zero conversions, not as ZERO32.
-        require(OpInputCovenantId(tokenTplIn) == tokenCovId);
-        int tbase = OpTxInputScriptSigLen(tokenTplIn) - (tplPrefixLen + 112 + tplSuffixLen);
-        byte[] tpre = OpTxInputScriptSigSubstr(tokenTplIn, tbase, tbase + tplPrefixLen);
-        byte[] tsuf = OpTxInputScriptSigSubstr(tokenTplIn, tbase + tplPrefixLen + 112, tbase + tplPrefixLen + 112 + tplSuffixLen);
-        require(blake3(byte[](tplPrefixLen as byte[8]) + tpre + byte[](tplSuffixLen as byte[8]) + tsuf) == tokenTplHash);
-        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
-            tpre + byte[](0x08) + byte[](nb) + byte[](0x20) + byte[](maker)
-                + byte[](0x0100010020) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])
-                + byte[](0x20) + extensionCommitment + tsuf
-        )));
-        require(OpOutputCovenantId(self) == tokenCovId);
+        // input i go to output i, a KCC-20 UTXO on the template read from
+        // tokIn with the commitment extensionCommitment. Its state is the
+        // struct's canonical push encoding, 0x08 amount 0x20 owner 0x01
+        // scheme 0x01 borrow 0x20 guard 0x20 ext, written by hand; the zero
+        // guard is four 8-byte zero conversions, not ZERO32. What the amount,
+        // owner, schemes and guard are depends on the mode:
+        //   mode 0, mode 2 form 0  plain: n, the maker, 0x00, 0x00, zero
+        //   mode 2 form 1          receive: n, the maker, 0x00, 0x01,
+        //                          recvThreshold as 8 bytes + 24 zero bytes
+        //   mode 2 form 2          the receive UTXO tokIn with amount have + n
+        //   mode 1, continuing     bought-custody: bought + n, this order's
+        //                          id, 0x04, 0x00, zero
+        //   mode 1, ending         plain: bought + n, the maker
+        byte[] trs = tokRs(tokIn);
+        byte[] tpre = trs.slice(0, tplPrefixLen);
+        byte[] tsuf = trs.slice(tplPrefixLen + 112, tplPrefixLen + 112 + tplSuffixLen);
+        byte[] zg = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        require(mode >= 0);
+        require(mode <= 2);
+        int haveKas = 0;                  // KAS already on the token UTXO this fill continues
+        int onDelivery = deliveryCarrier; // KAS the escrow puts on output i
+        int released = deliveryCarrier;   // KAS that leaves the escrow beyond the price
+        int resv = deliveryCarrier;       // carrier the budget still reserves per fill
+        int total = n;
+        int nextBought = bought;
+        // state bytes [42, 79): owner scheme, borrow scheme, guard
+        byte[] mid = byte[](0x0100010020) + zg;
+        if (mode == 1) {
+            // Accumulate. With bought > 0, tokIn is the bought-custody and its
+            // KAS stays on it; the escrow moves no carrier.
+            if (bought > 0) {
+                isCustody(tokIn, trs, selfId);
+                haveKas = tx.inputs[tokIn].value;
+                onDelivery = 0;
+                released = 0;
+                resv = 0;
+            }
+            total = bought + n;
+            nextBought = total;
+        } else {
+            require(bought == 0);
+            if (mode == 2 && form != 0) {
+                require(recvThreshold > 0);
+                require(topupTip >= 0);
+                require(topupTip <= deliveryCarrier);
+                if (form == 1) {
+                    mid = byte[](0x0100010120) + byte[](recvThreshold as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+                } else {
+                    // Top-up: tokIn is the maker's receive UTXO, the P2SH of the
+                    // script its state is read from. Owner the maker's key,
+                    // amount-threshold with a threshold >= recvThreshold and a
+                    // canonical guard, the order's commitment. The token
+                    // program (borrow path) requires the leader's first output
+                    // to keep its state bytes [9, 112) with a gain above the
+                    // threshold, so output i must be that output.
+                    require(form == 2);
+                    require(tx.inputs[tokIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
+                    byte[] rst = trs.slice(tplPrefixLen, tplPrefixLen + 112);
+                    require(rst.slice(9, 47) == byte[](0x20) + byte[](maker) + byte[](0x0100010120));
+                    require(int(byte[8](rst.slice(47, 55))) >= recvThreshold);
+                    require(rst.slice(55, 79) == byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]));
+                    require(rst.slice(79, 112) == byte[](0x20) + extensionCommitment);
+                    int have = int(byte[8](rst.slice(1, 9)));
+                    require(have >= 0);
+                    total = have + n;
+                    haveKas = tx.inputs[tokIn].value;
+                    onDelivery = 0;
+                    released = topupTip;
+                    mid = rst.slice(42, 79);
+                }
+            }
+        }
 
         // Minimum fill. A fill takes at least minFill unless it ends the bid,
         // because less than one minimum fill of buying power is left. Every
-        // fill moves deliveryCarrier of the escrow onto its delivery, so the
-        // minimum bounds the deliveries and carriers a filler can force on
-        // the maker.
+        // fill that creates a delivery moves deliveryCarrier of the escrow
+        // onto it, so the minimum bounds the deliveries and carriers a filler
+        // can force on the maker. The budget keeps resv per further fill: one
+        // carrier, none once the bought-custody exists.
         require(minFill > 0);
-        bool canContinue = left - deliveryCarrier - reserve >= quoteOf(minFill, pMax + tip, scale - 1);
+        bool canContinue = left - resv - reserve >= quoteOf(minFill, pMax + tip, scale - 1);
         require(n >= minFill || !canContinue);
+        byte[32] outOwner = byte[32](maker);
         if (tif == TIF_GTC && canContinue) {
-            // The bid continues with the byte-identical script, the only
-            // output bound to its covenant id. It holds exactly the unused
-            // budget, so the bid never buys more than it was funded for. The
-            // delivery carries deliveryCarrier plus used - allIn.
+            // The bid continues with its own script, `bought` spliced, the
+            // only output bound to its covenant id. It holds exactly the
+            // unused budget less what left the escrow, so the bid never buys
+            // more than it was funded for. The delivery carries its KAS (the
+            // carrier, or the KAS of the UTXO it continues) plus used - allIn.
             require(OpCovOutputCount(selfId) == 1);
             int selfOut = OpCovOutputIdx(selfId, 0);
-            require(tx.outputs[selfOut].scriptPubKey == this.activeScriptPubKey);
-            require(tx.outputs[selfOut].value == left - deliveryCarrier);
-            require(tx.outputs[self].value >= deliveryCarrier + used - allIn);
+            require(tx.outputs[selfOut].scriptPubKey == contSpk(nextBought));
+            require(tx.outputs[selfOut].value == left - released);
+            require(tx.outputs[self].value >= haveKas + onDelivery + used - allIn);
+            if (mode == 1) {
+                outOwner = selfId;
+                mid = byte[](0x0104010020) + zg;
+            }
         } else {
             // The bid ends when it cannot buy one more minimum fill or is not
             // GTC. FOK needs a full fill, which for a bid means that less than
             // one minimum fill of buying power is left. No output may stay
-            // bound to the covenant id. The KAS not spent beyond the delivery
-            // carrier goes to the maker through refundTo once it is REFUND_MIN
-            // or more. A smaller remainder rides on the delivery.
+            // bound to the covenant id, and a bought-custody goes whole to the
+            // maker's key. The KAS not spent beyond what left the escrow goes
+            // to the maker through refundTo once it is REFUND_MIN or more. A
+            // smaller remainder rides on the delivery.
             require(tif != TIF_FOK || !canContinue);
             require(OpCovOutputCount(selfId) == 0);
-            int rem = inValue - allIn - deliveryCarrier;
+            int rem = inValue - allIn - released;
             if (rem >= REFUND_MIN) {
                 refundTo(self, rem);
-                require(tx.outputs[self].value >= deliveryCarrier);
+                require(tx.outputs[self].value >= haveKas + onDelivery);
             } else {
-                require(tx.outputs[self].value >= inValue - allIn);
+                require(rem + onDelivery >= 0);
+                require(tx.outputs[self].value >= haveKas + rem + onDelivery);
             }
         }
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            tpre + byte[](0x08) + byte[](total as byte[8]) + byte[](0x20) + byte[](outOwner) + mid
+                + byte[](0x20) + extensionCommitment + tsuf
+        )));
+        require(OpOutputCovenantId(self) == tokenCovId);
     }
 
     // Cancel. The maker's SIGHASH_ALL signature covers every output, so the
-    // maker routes the escrow and any strays.
+    // maker routes the escrow, the bought-custody and any strays. A claim is
+    // a cancel that continues the order (bought = 0) under its covenant id.
     entry cancel(sig s) {
         byte[] sb = byte[](s);
         require(sb.length == 65);
@@ -289,7 +423,7 @@ contract KobBid(
     // FOK, IOC_LIFE after the order became fillable. On chain every tif but
     // GTC has the kill. A covenant cannot prove an upper time bound on a
     // fill, so the kill is a refund that anyone may send.
-    entry refund() {
+    entry refund(int custIn) {
         int self = this.activeInputIndex;
         int utxoDaa = OpTxInputDaaScore(self);
         int idleEnd = utxoDaa + MAX_IDLE;
@@ -304,9 +438,26 @@ contract KobBid(
         byte[32] selfId = OpInputCovenantId(self);
         require(OpCovInputCount(selfId) == 1);
         // The order ends. Spending it would authorise any stray owned by this
-        // id, so the refund carries no input of the token. The maker gets the
-        // escrow back at output i, less at most refundTip.
-        require(OpCovInputCount(tokenCovId) == 0);  // strays owned by this id stay put
+        // id, so the refund carries no input of the token but the
+        // bought-custody. The maker gets the escrow back at output i, less at
+        // most refundTip.
+        if (bought > 0) {
+            // The bought-custody is the only token input and goes whole, with
+            // its KAS, to the maker's key as one plain UTXO at the custody's
+            // own index.
+            require(OpCovInputCount(tokenCovId) == 1);
+            byte[] trs = tokRs(custIn);
+            isCustody(custIn, trs, selfId);
+            require(tx.outputs[custIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](bought as byte[8]) + byte[](0x20) + byte[](maker) + byte[](0x0100010020)
+                    + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])
+                    + byte[](0x20) + extensionCommitment + trs.slice(tplPrefixLen + 112, tplPrefixLen + 112 + tplSuffixLen)
+            )));
+            require(OpOutputCovenantId(custIn) == tokenCovId);
+            require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
+        } else {
+            require(OpCovInputCount(tokenCovId) == 0);  // strays owned by this id stay put
+        }
         require(OpCovOutputCount(selfId) == 0);
         require(refundTip >= 0);
         require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
