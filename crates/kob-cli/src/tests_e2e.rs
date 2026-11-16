@@ -115,7 +115,10 @@ fn bid(maker: u8) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -157,7 +160,10 @@ fn pair_order(maker: u8, ask: bool) -> PairState {
         amount_left: 10 * SCALE,
         custody: 10 * SCALE,
         s_ext: EXT,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     };
     if !ask {
         x.custody = x.bid_escrow(x.amount_left, 4).unwrap();
@@ -212,7 +218,10 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: EXT,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     };
     let mut e = IfdPairState {
         maker: pk(maker),
@@ -250,7 +259,9 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
         custody: 0,
         rpt_amount: 0,
         exit_state: IfdPairState::commit_exit(&exit),
-        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+        exit_mode: 0,
+        exit_recv_threshold: 0,
+        exit_topup_tip: 0,
     };
     e.custody = e.b_custody_needed().unwrap();
     e
@@ -1023,6 +1034,24 @@ fn candidate_search() {
     assert_eq!(recover::candidates(TemplateId::KobBid, std::slice::from_ref(&bid_state), &[5_000]).len(), 1);
     assert!(crate::common::script_is_fixed(&bid_state));
     assert!(!crate::common::script_is_fixed(&placed));
+    // A mode-1 bid keeps what it buys, and every fill splices `bought` into its script: its candidates
+    // are the known state, the hints taken as `bought`, then `bought = k x minFill`. Modes 0 and 2 stay fixed.
+    let collected = AnyState::KobBid(BidState { mode: 1, ..bid(1) });
+    assert!(!crate::common::script_is_fixed(&collected));
+    for mode in [0, 2] {
+        let other = AnyState::KobBid(BidState { mode, recv_threshold: i64::from(mode == 2), ..bid(1) });
+        assert!(crate::common::script_is_fixed(&other), "mode {mode}");
+        assert_eq!(recover::candidates(TemplateId::KobBid, &[other], &[3_000]).len(), 1, "mode {mode}");
+    }
+    let c = recover::candidates(TemplateId::KobBid, std::slice::from_ref(&collected), &[3_000]);
+    let bought = |c: &[recover::Candidate]| c.iter().map(|c| c.state.delivery().unwrap().bought).collect::<Vec<_>>();
+    assert_eq!(c.len(), recover::MAX_CANDIDATES);
+    assert_eq!(bought(&c)[..5], [0, 3_000, 1_000, 2_000, 4_000]);
+    assert_eq!((c[0].via, c[1].via, c[2].via), (VIA_KNOWN, VIA_HINT, VIA_FALLBACK));
+    // A later known state (it already holds 3000) is tried first and keeps its own grid.
+    let later = collected.with_bought(3_000).unwrap();
+    let c = recover::candidates(TemplateId::KobBid, &[later.clone(), collected.clone()], &[]);
+    assert_eq!((c[0].state.clone(), bought(&c)[1]), (later, 0));
     assert!(crate::common::amount_is_the_only_mutable_field(TemplateId::KobAsk));
     assert!(!crate::common::amount_is_the_only_mutable_field(TemplateId::KobCondAsk));
     // Template resolution: only the order templates this build pins.

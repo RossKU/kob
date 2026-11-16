@@ -273,9 +273,11 @@ pub fn amount_is_the_only_mutable_field(id: TemplateId) -> bool {
 
 /// Whether the script of a state never changes after placement.
 ///
-/// Then one candidate is the whole search. A bid is such a state: its quantity is its escrow.
+/// Then one candidate is the whole search. A bid is such a state: its quantity is its escrow. Only a
+/// mode-1 bid changes: every fill splices `bought` into its script.
 pub fn script_is_fixed(s: &AnyState) -> bool {
-    kob_protocol::state::mutable_windows(s.template_id()).is_empty()
+    let collects = s.delivery().is_some_and(|d| d.mode == kob_protocol::state::MODE_ACCUMULATE);
+    kob_protocol::state::mutable_windows(s.template_id()).iter().all(|(name, ..)| *name == "bought" && !collects)
 }
 
 /// A token amount in base units.

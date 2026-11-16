@@ -5,7 +5,7 @@
 //! `kobd` refund.
 
 use kob_protocol::build::{
-    build, Action, AmendOrder, Batch, CancelOrder, Leg, RefundOrder, Replacement, SendTokens, TokenRecipient, TokenRef,
+    build, Action, AmendOrder, Batch, CancelOrder, ClaimOrder, Leg, RefundOrder, Replacement, SendTokens, TokenRecipient, TokenRef,
 };
 use kob_protocol::defaults::DEFAULT_ORDER_CARRIER;
 use kob_protocol::json::to_hex;
@@ -186,6 +186,10 @@ fn order_lines(live: &Live, ms: &[TokenMarket]) -> Vec<String> {
     let s = &live.order.state;
     let mut v = vec![format!("order {} ({}), maker {}", to_hex(&live.cov), s.template_id().name(), show_id(&s.maker(), ""))];
     v.push(format!("on the order: {}", units::kas(live.order.utxo.amount as i128)));
+    let bought_unit = live.bought.as_ref().and_then(|b| ms.iter().find(|m| Some(m.cov) == b.utxo.covenant_id)).or(ms.first());
+    if let Some(t) = bought_unit.and_then(|m| super::delivery::text(s, &m.unit())) {
+        v.push(format!("delivery: {t}"));
+    }
     for c in live.custody.iter().chain(live.prefund.iter()) {
         let m = ms.iter().find(|m| Some(m.cov) == c.utxo.covenant_id);
         let u = m.map(|m| m.unit()).unwrap_or(TokenUnit { ticker: String::new(), decimals: 0 });
@@ -462,7 +466,8 @@ pub fn build_replace(
     // The tokens that the replacement must hold come from the old custody, the strays and, when
     // short, free tokens.
     let mut tokens: Vec<TokenUtxo> = vec![];
-    let mut strays = live.strays.clone();
+    // A mode-1 order's bought-custody goes to the maker with the cancel.
+    let mut strays: Vec<TokenUtxo> = live.bought.iter().chain(live.strays.iter()).cloned().collect();
     for (token, need) in rep.custodies().into_iter().filter(|c| c.1 > 0) {
         let m = markets.iter().find(|m| m.cov == token).ok_or("unknown token of the replacement")?;
         let held: Vec<&TokenUtxo> =
@@ -722,6 +727,7 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
     env.carrier = super::place::carrier_arg(p).map_err(usage)?.or(order_carrier(live));
     env.guards_acknowledged = p.has("--ack-no-guards");
     env.market_start_ack = true;
+    env.delivery = super::delivery::request_of(s);
     let penv = replace_env(&env, &live.cov, s, live.order.utxo.amount);
     let plan = super::plan::plan_order(&penv, &intent);
     let Some(req) = plan.request.clone().filter(|_| plan.ok) else {
@@ -770,7 +776,7 @@ kob cancel: the maker's cancel of live orders by covenant id (the indexer's view
 USAGE
   kob cancel <COVENANT_ID>... [options]
 
-  The order's KAS, its custody, the strays of its own token(s) and foreign strays (other tokens sent to it) return to
+  The order's KAS, its custody, a collected buy's bought tokens, the strays of its own token(s) and foreign strays (other tokens sent to it) return to
   the maker in one transaction per order; strays one transaction cannot take are reported. Fee from the released KAS,
   else the smallest sufficient KAS UTXO of the key. (`kob order cancel --view FILE` does the same from saved views.)
   An order under an older contract version (a retired template of this build's cancel-only table, which the indexer's
@@ -904,7 +910,7 @@ pub fn run_refund(args: &[String]) -> i32 {
             funding: f,
             change: Some(signer.pubkey),
             fee: fee.clone(),
-            bought_custody: None,
+            bought_custody: live.bought.clone(),
         };
         let earned = |b: &BuiltTx| -> i128 {
             let me = kob_protocol::tx::spk_to_string(&p2pk_spk(&signer.pubkey));
@@ -978,6 +984,207 @@ pub fn run_refund(args: &[String]) -> i32 {
         ))
     })();
     finish_or(&c, &signer, r, "this refund")
+}
+
+// ---------------------------------------------------------------------------- claim
+
+/// The help text of `kob claim`.
+pub const CLAIM_USAGE: &str = "\
+kob claim: take what a collected buy order bought (it holds the tokens until you claim them, or it ends)
+
+USAGE
+  kob claim <COVENANT_ID> [--merge] [options]
+  kob claim <COVENANT_ID> --sell --price P [--amount AMOUNT] [--tip T] [--min-fill AMOUNT] [--carrier KAS] [--end]
+                          [--ack-no-guards] [options]
+
+  Claim: the bought tokens come to you as one UTXO; the order goes on with the same id and KAS, plus one delivery
+  carrier for its next custody. --merge adds your plain UTXOs of the token to it. --sell places an ask of the claimed
+  tokens at P in the same transaction (--amount defaults to all of them, more takes your own UTXOs, the rest comes
+  to you); --end then ends a buy order and returns its KAS. A pair order is claimed or merged, not sold. Your key pays
+  the carrier and the fee from its KAS; only the maker claims.
+";
+
+/// The delivery carrier of a delivering order.
+fn delivery_carrier_of(s: &AnyState) -> i64 {
+    match s {
+        AnyState::KobBid(x) | AnyState::KobBidKron(x) => x.delivery_carrier,
+        AnyState::KobCondBid(x) | AnyState::KobCondBidKron(x) => x.delivery_carrier,
+        AnyState::KobPair(x) => x.delivery_carrier,
+        AnyState::KobCondPair(x) => x.delivery_carrier,
+        _ => 0,
+    }
+}
+
+/// Runs `kob claim`.
+pub fn run_claim(args: &[String]) -> i32 {
+    let sell_only = ["--price", "--amount", "--tip", "--min-fill", "--carrier", "--end", "--ack-no-guards"];
+    let (p, c, signer) = match ctx_checked(
+        args,
+        &["--price", "--amount", "--tip", "--min-fill", "--carrier"],
+        &["--merge", "--sell", "--end", "--ack-no-guards"],
+        CLAIM_USAGE,
+        |p| {
+            if p.has("--merge") && p.has("--sell") {
+                return Err("--merge and --sell exclude each other (a sell gathers the tokens it needs)".into());
+            }
+            if !p.has("--sell") {
+                if let Some(k) = sell_only.iter().find(|k| p.get(k).is_some() || p.has(k)) {
+                    return Err(format!("{k} belongs to --sell"));
+                }
+            } else if p.get("--price").is_none() {
+                return Err("--sell needs --price P".into());
+            }
+            Ok(())
+        },
+    ) {
+        Ok(x) => x,
+        Err(code) => return code,
+    };
+    let r = (|| -> Result<(Ready, Units), Fail> {
+        let [id] = p.pos.as_slice() else { return Err(usage("give exactly one covenant id")) };
+        let cov = cov_arg(id).map_err(usage)?;
+        let node = c.need_node()?;
+        let indexer = c.need_indexer()?;
+        let live = data::live_order(indexer, node, &c.network, &cov)?;
+        let s = &live.order.state;
+        if s.maker() != signer.pubkey {
+            return Err("this order is not yours: only its maker claims".into());
+        }
+        let Some(custody) = live.bought.clone() else {
+            return Err("this order holds nothing bought (it delivers each fill, or was claimed already)".into());
+        };
+        let ms = markets_of(&c, &live)?;
+        let m = ms.iter().find(|m| Some(m.cov) == custody.utxo.covenant_id).ok_or("the bought token is not known")?.clone();
+        let bought = custody.state.amount();
+        let cap = m.slots.0.min(MAX_TOKEN_INPUTS).min(m.family.max_tok_in()).saturating_sub(1);
+        let wallet = || -> Result<Vec<TokenUtxo>, Fail> {
+            let all = data::token_utxos(indexer, node, &c.network, &m, &signer.pubkey)?;
+            let mut v: Vec<TokenUtxo> =
+                usable_token_utxos(&m, &signer.pubkey, &all).into_iter().filter(|u| u.state.is_plain()).collect();
+            v.sort_by_key(|u| std::cmp::Reverse(u.state.amount()));
+            Ok(v)
+        };
+        let mut lines = order_lines(&live, &ms);
+        let mut issues: Vec<Issue> = vec![];
+        let (mut tokens, mut place, mut plan_note) = (vec![], None, None);
+        if p.has("--merge") {
+            tokens = wallet()?.into_iter().take(cap).collect();
+            if tokens.is_empty() {
+                return Err("no plain UTXO of this token to merge: a plain claim takes the bought tokens alone".into());
+            }
+        } else if p.has("--sell") {
+            if s.is_pair() {
+                return Err("a pair order's bought tokens are claimed (or merged); place their ask with kob place".into());
+            }
+            let ua = m.unit();
+            let price = parse_kas_price(p.get("--price").unwrap_or_default(), &ua, m.scale, "--price", false).map_err(usage)?;
+            let tip = p.get("--tip").map(|v| parse_kas_price(v, &ua, m.scale, "--tip", true)).transpose().map_err(usage)?;
+            let amount = match p.get("--amount") {
+                Some(v) => parse_token_amount(v, &ua, "--amount").map_err(usage)?,
+                None => bought,
+            };
+            let min_fill = p.get("--min-fill").map(|v| parse_token_amount(v, &ua, "--min-fill")).transpose().map_err(usage)?;
+            if amount > bought {
+                let usable = wallet()?;
+                tokens = select_tokens(&usable, amount - bought, cap, &m.name()).map_err(|e| e.message)?;
+            }
+            // The planner draws the ask's custody from the claimed tokens: they stand in as a UTXO of the maker.
+            let (mut env, notes) = super::place::env_of(&c, &m, None, super::place::Needs::default(), signer.pubkey)?;
+            env.carrier = super::place::carrier_arg(&p).map_err(usage)?.or(Some(custody.utxo.amount));
+            env.guards_acknowledged = p.has("--ack-no-guards");
+            env.market_start_ack = true;
+            let stand_in = TokenUtxo {
+                utxo: kob_protocol::tx::Utxo {
+                    transaction_id: [0xff; 32],
+                    index: 1,
+                    amount: custody.utxo.amount,
+                    block_daa_score: 0,
+                    covenant_id: Some(m.cov),
+                },
+                state: kob_protocol::state::TokenState::user(m.program, bought, signer.pubkey, m.ext),
+            };
+            env.token_utxos = std::iter::once(stand_in).chain(tokens.iter().cloned()).collect();
+            let intent = super::plan::Intent::Limit(super::plan::LimitIntent {
+                side: Side::Sell,
+                amount,
+                price,
+                tip: tip.unwrap_or(0),
+                min_fill,
+                lifetime: super::plan::Lifetime::Gtc,
+                active_from: None,
+                crossing: super::plan::Crossing::Auction,
+                max_fills: None,
+            });
+            let plan = super::plan::plan_order(&env, &intent);
+            let Some(req) = plan.request.clone().filter(|_| plan.ok) else {
+                super::flow::print_issues(&plan.issues, c.json);
+                return Err("the ask could not be planned: nothing signed".into());
+            };
+            issues.extend(plan.issues.iter().filter(|i| i.severity != Severity::Error).cloned());
+            issues.extend(notes);
+            plan_note = Some(super::place::plan_lines(&plan, &m, None));
+            place = Some(Replacement {
+                order: req.order.clone(),
+                value: req.value,
+                token_carrier: (req.token_carrier > 0).then_some(req.token_carrier),
+                deadline: req.deadline,
+            });
+        }
+        let funding = data::funding(node, &c.network, &signer.pubkey)?;
+        let fee = c.fee_options();
+        let carrier = delivery_carrier_of(s);
+        let end = p.has("--end");
+        let make = |f: Vec<KeyUtxo>| ClaimOrder {
+            order: live.order.clone(),
+            bought_custody: custody.clone(),
+            tokens: tokens.clone(),
+            place: place.clone(),
+            end,
+            value: None,
+            token_carrier: None,
+            funding: f,
+            change: Some(signer.pubkey),
+            lock_time: 0,
+            records: vec![],
+            fee: fee.clone(),
+        };
+        let mut pool = funding.clone();
+        pool.sort_by_key(|u| u.utxo.amount);
+        let seed = pool.iter().find(|u| u.utxo.amount >= carrier as u64 + ONE_KAS).or(pool.last()).cloned();
+        let (built, _) = build_with_funding(&funding, seed.into_iter().collect(), |f| Action::ClaimOrder(make(f)))?;
+        let u = m.unit();
+        lines.push(format!("claim: {} bought, held by the order, go to you as one plain UTXO", units::tokens(bought as i128, &u)));
+        if !tokens.is_empty() {
+            let have: i128 = tokens.iter().map(|t| t.state.amount() as i128).sum();
+            lines.push(format!(
+                "{} of your own {} UTXO(s) {}",
+                units::tokens(have, &u),
+                tokens.len(),
+                if place.is_some() { "join the ask" } else { "join it" }
+            ));
+        }
+        lines.push(if end {
+            "the order ends: its KAS comes back to you".to_string()
+        } else {
+            format!("the order goes on with the same id (+ {} for its next custody)", units::kas(carrier as i128))
+        });
+        if let Some(l) = plan_note {
+            lines.push("sold in the same transaction:".into());
+            lines.extend(l.into_iter().map(|x| format!("  {x}")));
+        }
+        Ok((
+            Ready {
+                title: format!("claim {}", to_hex(&cov)),
+                lines,
+                issues,
+                file: format!("{}.claim.json", to_hex(&cov)),
+                json: json!({"order": to_hex(&cov), "bought": bought.to_string(), "merged": tokens.len(), "sell": place.is_some(), "ends": end}),
+                built,
+            },
+            units_of(&ms),
+        ))
+    })();
+    finish_or(&c, &signer, r, "this claim")
 }
 
 // ---------------------------------------------------------------------------- take

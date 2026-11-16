@@ -58,7 +58,7 @@ SWEEP (every live order of the key's maker that has strays)
   UTXO of the maker from the node.
 
 CANCEL (every order given)
-  The maker's cancel: the custody (the view's custody UTXO), the strays of the order's tokens (within the program's
+  The maker's cancel: the custody (the view's custody UTXO), a collected buy's bought tokens, the strays of the order's tokens (within the program's
   token inputs) and foreign strays back to the maker with the order's KAS; strays left behind are reported. Fee from
   the order's released KAS, else the smallest sufficient plain KAS UTXO of the maker.
 
@@ -379,9 +379,18 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
         }
         custody_views.push((c.clone(), st, spk));
     }
+    // A mode-1 order's bought-custody goes back to the maker with a cancel (the builder needs it).
+    let bought_target = if a.op == Op::Cancel { crate::trade::data::bought_target(state, cov)? } else { None };
+    if let Some((st, _, token)) = &bought_target {
+        match &v.bought {
+            Some(b) if b.token == *token && b.amount == st.amount() => {}
+            _ => return Ok(Err(refuse("the view names no bought-custody UTXO of the order's `bought` base units"))),
+        }
+    }
     let mut spks = vec![order_spk.clone()];
     spks.extend(cands.iter().map(|c| c.3.clone()));
     spks.extend(custody_views.iter().map(|c| c.2.clone()));
+    spks.extend(bought_target.iter().map(|t| t.1.clone()));
     let at = lookup(&a.node, &a.network, &spks)?;
     let node_order = at
         .get(&spk_bytes(&order_spk))
@@ -402,6 +411,13 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
     }
     let mut held = held.into_iter();
     let (custody, prefund) = (held.next(), held.next());
+    let bought: Option<TokenUtxo> = match (&bought_target, &v.bought) {
+        (Some((st, spk, _)), Some(bv)) => match on_node(&at, spk, bv) {
+            Some(u) => Some(TokenUtxo { utxo: u, state: st.clone() }),
+            None => return Ok(Err(refuse("the view's bought-custody UTXO is not on the node (stale view)"))),
+        },
+        _ => None,
+    };
     let mut confirmed: Vec<Stray> = vec![];
     for (s, program, st, spk) in cands {
         match on_node(&at, &spk, &s) {
@@ -431,7 +447,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
             cap = cap.min(program.family().max_tok_in());
         }
         // A custody of this token takes one of its inputs and sets its extension commitment.
-        for c in custody.iter().chain(prefund.iter()).filter(|c| c.utxo.covenant_id == Some(t)) {
+        for c in custody.iter().chain(prefund.iter()).chain(bought.iter()).filter(|c| c.utxo.covenant_id == Some(t)) {
             cap = cap.saturating_sub(1);
             ext = c.state.extension();
         }
@@ -489,7 +505,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
                 order: OrderUtxo { utxo: order_utxo.clone(), state: state.clone() },
                 custody: custody.clone(),
                 prefund: prefund.clone(),
-                strays: strays.clone(),
+                strays: bought.iter().cloned().chain(strays.iter().cloned()).collect(),
                 foreign: foreign.clone(),
                 tokens: vec![],
                 funding,
@@ -508,7 +524,7 @@ pub(crate) fn prepare(v: &View, a: &Args, maker_key: [u8; 32]) -> Result<Result<
             return Err("internal: the sweep's output 0 is not the order's continuation".into());
         }
     }
-    let swept: Vec<&TokenUtxo> = strays.iter().chain(foreign.iter().flat_map(|g| g.utxos.iter())).collect();
+    let swept: Vec<&TokenUtxo> = bought.iter().chain(strays.iter()).chain(foreign.iter().flat_map(|g| g.utxos.iter())).collect();
     let returned = tally(&swept);
     let paid_by = match &funding {
         Funding::Own => "the order's own KAS".to_string(),

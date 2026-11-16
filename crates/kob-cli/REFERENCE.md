@@ -19,6 +19,7 @@ still change until a release says otherwise.
 - [Fees](#fees)
 - [Network, node and safety checks](#network-node-and-safety-checks)
 - [Order kinds: every option](#order-kinds-every-option)
+- [Delivery and kob claim](#delivery-and-kob-claim)
 - [kob take: the price bound](#kob-take-the-price-bound)
 - [JSON output](#json-output)
 - [Exit codes](#exit-codes)
@@ -189,6 +190,35 @@ its amount, or for a buy; otherwise a cancel-replace). Conditionals take `--pric
 if-done entries and every pair order are re-planned from their terms with `--price`, `--take-profit`, `--stop`,
 `--stop-limit`, `--exit-tip`, `--trail-step`, `--trail-gap`, `--entry-stop`. Repeat entries are not replaced (cancel instead).
 
+## Delivery and kob claim
+
+`--delivery each|collected|one-utxo` on every kind that buys (also pair orders, and a sell-first if-done entry's buy-back exit):
+
+| Delivery | Mode | What fills do |
+|---|---|---|
+| `collected` | 1 | the order keeps what it buys; you get one UTXO when it ends or you claim; one delivery carrier funds all fills |
+| `each` | 0 | a new token UTXO for you per fill, one carrier per fill |
+| `one-utxo` | 2 | a filler may add to your receive UTXO and keeps `--topup-tip KAS` (default `min(carrier, ceil(1.25 x the program's extra fee))`) |
+
+Default: `collected` for a resting (GTC) buy of a KCC-20 token, a resting pair order and a non-repeating exit. IOC, FOK, market,
+KRON and a repeating entry's exits deliver `each` (another choice is ignored with a warning). `one-utxo` is never offered on
+pair orders. Its receive threshold is `T = max(1, ceil(5 KAS x scale / price))`, kept in `receive-thresholds.json` of the state
+directory per key, token and extension commitment after the first submitted order; the order uses `min(T, minFill - 1)` (none:
+`one-utxo` is refused). `--reset-threshold` recomputes T at this order's price. A collected pair order's default tip adds
+`ceil(ceil(1.25 x 1,282,600) x L x scale / amount)` sompi per whole A, `L` = later fills (at most 63), for the custody input.
+`kob replace` keeps an order's delivery.
+
+`kob claim <ID>` is the maker's claim of a collected order's bought tokens, through the order's `cancel` entry:
+
+- `kob claim ID`: the tokens come to you as one plain UTXO; the order continues (same id, `bought` 0) with one more carrier.
+- `--merge`: your plain UTXOs of the token (up to the program's token inputs) join that UTXO.
+- `--sell --price P [--amount A] [--tip T] [--min-fill A] [--carrier KAS] [--end]`: an ask of the claimed tokens in the same
+  transaction (more than claimed takes your UTXOs, the rest comes to you). `--end` ends a buy order and returns its KAS.
+  A pair order is claimed or merged only.
+
+It needs your key (`--key-file`), shows the plan, `--dry-run` stops, `--yes` signs. `kob cancel` and `kob refund` of a
+collected order return its bought tokens to the maker. `kob orders` and `kob replace` show the delivery and `bought`.
+
 ## kob take: the price bound
 
 `kob take <ID> --amount A` fills one resting order as the taker, in one transaction you build and sign yourself (an
@@ -274,7 +304,7 @@ always print a JSON report. In `kob registry`, `programs`, `add-program` and `ve
 
 In the examples `<64 hex>` stands for a 64-character hex string.
 
-### Signing commands (`place`, `replace`, `cancel`, `refund`, `take`, `send`)
+### Signing commands (`place`, `replace`, `cancel`, `refund`, `claim`, `take`, `send`)
 
 One JSON document on stdout once a transaction has been built: the plan, with the submission's outcome in `result`.
 
@@ -406,9 +436,9 @@ One document on stdout; nothing is signed. `--yes` and `--dry-run` are accepted 
 - `orders`: `{"maker", "network", "orders": [...]}`. Each order has `covenant_id`, `contract` (template name), `market`
   (ticker or `A/B`), `status` (the indexer's), `what` (text), `expiry_daa` (number or `null`), `flags` (strings such as
   `expired`, `refundable from DAA N`, `possibly frozen`) and `value` (the indexer's `current.value` as sent, `null` when
-  absent).
+  absent), `delivery` (text, `null` for a kind that delivers no tokens) and `bought` (base units a collected order holds, or `null`).
 - `balances`: `{"maker", "kas": {"free", "locked", "total"}, "tokens": [...], "skipped": [...]}`, the KAS values sompi
-  strings. Each token row has `token`, `ticker`, `decimals` (number or `null`), `free`, `in_orders`, `strays`,
+  strings. Each token row has `token`, `ticker`, `decimals` (number or `null`), `free`, `in_orders`, `bought` (held by collected orders, the maker's until claimed), `strays`,
   `kas_escrow`, `kas_carriers`, `kas_locked` (strings, base units or sompi), `free_utxos` (number), `free_verified`
   (boolean: the free tokens were confirmed on the node, else they are the indexer's figure), `orders` (number) and `text`
   (the same for people). `skipped` lists orders not counted: `{"covenant_id", "reason"}`.

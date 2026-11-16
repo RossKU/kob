@@ -466,6 +466,8 @@ pub struct Live {
     pub custody: Option<TokenUtxo>,
     /// The B prefund of a sell-first pair entry.
     pub prefund: Option<TokenUtxo>,
+    /// A mode-1 order's bought-custody (`bought > 0`), confirmed on the node.
+    pub bought: Option<TokenUtxo>,
     /// The strays of its own tokens, confirmed on the node, with their extension commitment.
     pub strays: Vec<TokenUtxo>,
     /// The number of strays of other tokens.
@@ -478,6 +480,25 @@ pub struct Live {
     ///
     /// It tells a GTC order from a dated one.
     pub genesis_daa: Option<i64>,
+}
+
+/// The bought-custody a mode-1 order holds: its state, script and token (`None` without one).
+pub(crate) fn bought_target(
+    state: &AnyState,
+    cov: [u8; 32],
+) -> Result<Option<(TokenState, kaspa_consensus_core::tx::ScriptPublicKey, [u8; 32])>, String> {
+    let Some(amount) = state.bought_custody() else { return Ok(None) };
+    let (token, hash, ext) = match state {
+        AnyState::KobPair(p) => (p.t_cov_id, p.t_tpl_hash, p.t_ext),
+        AnyState::KobCondPair(p) => (p.t_cov_id, p.t_tpl_hash, p.t_ext),
+        AnyState::KobBid(b) | AnyState::KobBidKron(b) => (b.token_cov_id, b.token_tpl_hash, b.extension_commitment),
+        AnyState::KobCondBid(b) | AnyState::KobCondBidKron(b) => (b.token_cov_id, b.token_tpl_hash, b.extension_commitment),
+        _ => return Ok(None),
+    };
+    let tt = kob_protocol::artifacts::token_template_by_hash(&hash).ok_or("the bought token's program is not supported")?;
+    let st = TokenState::custody(tt.family, amount, cov, ext);
+    let spk = st.spk_with(tt);
+    Ok(Some((st, spk, token)))
 }
 
 /// Reads `GET /v1/orders/{id}`, then the order UTXO, its custodies and its strays on the node.
@@ -505,8 +526,10 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
     let ospk = order_spk(tpl, &state)?;
     // The custodies and the own strays.
     let targets = crate::recover::custody_targets(&state, *cov, view.ext)?;
+    let bought_target = bought_target(&state, *cov)?;
     let mut spks = vec![ospk.clone()];
     spks.extend(targets.iter().map(|t| t.1.clone()));
+    spks.extend(bought_target.iter().map(|t| t.1.clone()));
     let own_tokens: Vec<[u8; 32]> = match state.pair_tokens() {
         Some(p) => vec![p.a.cov_id, p.b.cov_id],
         None => vec![state.token_cov_id()],
@@ -550,6 +573,18 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
             .ok_or("the order's custody is not on the node (stale view)")?;
         held.push(TokenUtxo { utxo: utxo_of(u), state: st.clone() });
     }
+    // The bought-custody: the view's UTXO of the role `bought`, exactly `bought` base units, on the node.
+    let bought = match (&bought_target, &view.bought) {
+        (None, _) => None,
+        (Some(_), None) => return Err("the view names no bought-custody UTXO for this order (it holds bought tokens)".into()),
+        (Some((st, spk, token)), Some(bv)) => {
+            let u = at
+                .get(&spk_bytes(spk))
+                .and_then(|us| us.iter().find(|u| u.txid == bv.txid && u.index == bv.index && u.covenant_id == Some(*token)))
+                .ok_or("the order's bought-custody is not on the node (stale view)")?;
+            Some(TokenUtxo { utxo: utxo_of(u), state: st.clone() })
+        }
+    };
     let mut strays = vec![];
     for (s, st, spk) in stray_cands {
         if let Some(u) = crate::order::on_node(&at, &spk, &s) {
@@ -562,6 +597,7 @@ pub fn live_order(indexer: &str, node: &str, network: &str, cov: &[u8; 32]) -> R
         order: OrderUtxo { utxo: utxo_of(node_order), state },
         custody: held.next(),
         prefund: held.next(),
+        bought,
         strays,
         foreign,
         deadline: v.get("deadline").and_then(Value::as_u64),

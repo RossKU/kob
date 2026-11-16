@@ -919,20 +919,19 @@ fn replace_intents_round_trip() {
 /// `kob place` of a pair order with no `--tip` carries the keeper tip of the pair.
 ///
 /// The tip is over the amount of the order, as in the web ticket (`defaultPairTip` and
-/// `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`), for one KCC-20 pair: the keeper
-/// tip of `pair_keeper_tips.json` (measured) and 3 decimals on A. The numbers must equal what
-/// pair-common.ts computes for the same pair and amounts:
+/// `pairTipBelowDefault` of `web/src/kob/orders/pair-common.ts`). The numbers are pinned for one
+/// KCC-20 pair: the keeper tip of `pair_keeper_tips.json` and 3 decimals on A.
+/// They must equal what pair-common.ts computes for the same pair and amounts:
 /// `ceil(keeperTip * scale / amount)` and `floor(amount * tip / scale) < keeperTip`.
 #[test]
 fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
+    // The keeper tip is read from the table; the sums are the web ticket's `ceil(keeperTip * scale / amount)`.
     let kt = pair_tips(a.program, b.program).unwrap().keeper_tip as i64;
     assert_eq!(a.scale, 1000);
-    // ceil(keeperTip * scale / amount): the whole token (1000 base units) pays the whole keeper
-    // tip, and 10_007 base units round up.
-    let d = (kt * 1000 + 10_007 - 1) / 10_007;
-    assert!(d * 10_007 > kt * 1000 && (d - 1) * 10_007 < kt * 1000, "10_007 base units round up");
+    let d = (kt * 1000 + 10_006) / 10_007;
+    // The whole token (1000 base units) pays the whole keeper tip, and 10_007 base units round up.
     assert_eq!(default_pair_tip(&e, 1000), kt);
     assert_eq!(default_pair_tip(&e, 10_007), d);
     assert_eq!(default_pair_tip(&e, 0), 0);
@@ -955,7 +954,7 @@ fn a_pair_order_with_no_tip_carries_the_pairs_keeper_tip() {
     assert_eq!(s.tip, d);
     // A typed tip, zero included, is kept. Below the default it asks for the note, at or above it
     // does not.
-    for (typed, below) in [(0, true), (d - 1, true), (d, false), (d + 1_000_000, false)] {
+    for (typed, below) in [(0, true), (d - 1, true), (d, false), (1_000_000, false)] {
         let mut intent = Intent::Limit(LimitIntent { tip: typed, ..limit(Side::Sell, 10_007, 1_550) });
         assert_eq!(apply_pair_tip_defaults(&e, &mut intent, true, false), below, "typed {typed}");
         let p = valid(&e, intent);
@@ -969,8 +968,7 @@ fn every_pair_kind_gets_the_default_tip_and_an_explicit_zero_stays() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
     let e = pair_env(&a, &b);
     let amount = 10_007;
-    // ceil(keeperTip * scale / amount) of the pair (data/pair_keeper_tips.json, measured)
-    let d = (pair_tips(a.program, b.program).unwrap().keeper_tip as i64 * a.scale + amount - 1) / amount;
+    let d = (pair_tips(a.program, b.program).unwrap().keeper_tip as i64 * 1000 + 10_006) / 10_007;
     let tips = |i: &Intent| -> (i64, Option<i64>) {
         match i {
             Intent::Limit(x) => (x.tip, None),
@@ -1068,4 +1066,186 @@ fn every_pair_kind_gets_the_default_tip_and_an_explicit_zero_stays() {
     let mut intent = Intent::Ifd(IfdIntent { amount, ..ifd(Side::Buy, 1_401, Some(1_601), None) });
     apply_pair_tip_defaults(&e, &mut intent, false, false);
     assert_eq!(ipair(&valid(&e, intent)).tip, d);
+}
+
+// ------------------------------------------------------------------------------------- delivery
+
+use super::delivery::{self, Choice, Request as DRequest};
+
+fn pick(e: &Env, c: Option<Choice>) -> Env {
+    Env { delivery: DRequest { choice: c, ..Default::default() }, ..e.clone() }
+}
+fn delivery_carriers(p: &Plan) -> usize {
+    p.disclosure.as_ref().unwrap().carriers.iter().find(|c| c.kind == "delivery carrier").map_or(0, |c| c.count as usize)
+}
+fn modes(p: &Plan, k: usize) -> (i64, i64, i64, i64) {
+    let d = p.states[k].delivery().or_else(|| p.states[k].exit_delivery()).expect("a delivering kind");
+    (d.mode, d.recv_threshold, d.topup_tip, d.bought)
+}
+fn pair_mode(p: &Plan) -> (i64, i64) {
+    match &p.states[0] {
+        AnyState::KobPair(s) => (s.mode, s.tip),
+        o => panic!("{o:?}"),
+    }
+}
+fn ioc_buy(amount: i64, price: i64) -> Intent {
+    Intent::Immediate(ImmediateIntent {
+        fok: false,
+        side: Side::Buy,
+        amount,
+        price,
+        tip: 0,
+        min_fill: None,
+        life_daa: None,
+        active_from: None,
+    })
+}
+
+/// bid-delivery-spec §10: a resting KCC-20 buy is collected by default and funded with one carrier;
+/// each fill keeps today's mode 0 and one carrier per budgeted fill.
+#[test]
+fn a_resting_buy_is_collected_by_default_with_one_carrier() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    let buy = || Intent::Limit(limit(Side::Buy, 100 * TOK, P));
+    let each = valid(&pick(&e, Some(Choice::Each)), buy());
+    let col = valid(&pick(&e, None), buy());
+    assert_eq!(modes(&each, 0), (0, 0, 0, 0));
+    assert_eq!(modes(&col, 0), (1, 0, 0, 0), "the default is collected");
+    assert_eq!((delivery_carriers(&each), delivery_carriers(&col)), (3, 1));
+    assert_eq!(value(&each) - value(&col), 2 * C + 2, "the escrow holds one carrier, not three (and 2 sompi of rounding)");
+    assert!(col.issues.is_empty(), "{:?}", col.issues);
+    let line = super::delivery::text(&col.states[0], &m.unit()).unwrap();
+    assert!(line.starts_with("collected"), "{line}");
+    // A stop buy is funded with one carrier too.
+    let stop =
+        |e: &Env| valid(e, Intent::Cond(CondIntent { stop: Some(260_000_000), ..cond(CondKind::StopMarket, Side::Buy, 10 * TOK) }));
+    let (s_each, s_col) = (stop(&pick(&e, Some(Choice::Each))), stop(&pick(&e, None)));
+    assert_eq!((modes(&s_each, 0).0, modes(&s_col, 0).0), (0, 1));
+    assert_eq!(value(&s_each) - value(&s_col), 2 * C);
+    assert_eq!(delivery_carriers(&s_col), 1);
+    // A DCA is a resting buy.
+    let dca = valid(&pick(&e, None), Intent::Schedule(sched(true, 10 * TOK, 2 * TOK, 600, P)));
+    assert_eq!(modes(&dca, 0).0, 1);
+}
+
+/// IOC / FOK / market buys, KRON and a repeating entry's exit deliver each fill whatever is asked.
+#[test]
+fn immediate_kron_and_repeating_buys_deliver_each_fill() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = pick(&env(&m), None);
+    let p = valid(&e, ioc_buy(4 * TOK, P));
+    assert_eq!(modes(&p, 0), (0, 0, 0, 0));
+    assert!(!codes(&p).contains(&"DELIVERY_EACH_FILL"), "a default says nothing");
+    // A choice that cannot apply is said.
+    let p = valid(&pick(&e, Some(Choice::Collected)), ioc_buy(4 * TOK, P));
+    assert_eq!(modes(&p, 0).0, 0);
+    assert!(codes(&p).contains(&"DELIVERY_EACH_FILL"));
+    // KRON: always mode 0.
+    let k = kron_a();
+    let p = valid(&pick(&env(&k), Some(Choice::Collected)), Intent::Limit(limit(Side::Buy, 100 * k.scale, P)));
+    assert_eq!(modes(&p, 0), (0, 0, 0, 0));
+    assert!(codes(&p).contains(&"DELIVERY_EACH_FILL"));
+    // A sell-first entry: a plain one collects at its exit; a repeating one merges back and delivers each fill.
+    let plain = valid(&e, Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
+    assert_eq!(modes(&plain, 0), (1, 0, 0, 0), "the entry carries the exit block");
+    assert_eq!(modes(&plain, 1), (1, 0, 0, 0), "and the committed exit agrees");
+    let repeating = valid(&e, Intent::Ifd(rep(Side::Sell, 260_000_000, 240_000_000, Some(2))));
+    assert_eq!((modes(&repeating, 0), modes(&repeating, 1)), ((0, 0, 0, 0), (0, 0, 0, 0)));
+    // A buy-first entry delivers each fill (its entry bid is unchanged) and its exit sells.
+    let buy_first = valid(&e, Intent::Ifd(ifd(Side::Buy, 240_000_000, Some(260_000_000), None)));
+    assert!(buy_first.states[0].delivery().is_none() && buy_first.states[0].exit_delivery().is_none());
+}
+
+/// One-utxo: the threshold is `min(T, minFill - 1)`, the tip the program's default, the order funded
+/// like each fill; a stored T is reused, a tip above the carrier and a minimum fill of 1 are refused.
+#[test]
+fn one_utxo_carries_the_threshold_and_the_tip() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    let one = |c: DRequest| Env { delivery: DRequest { choice: Some(Choice::OneUtxo), ..c }, ..e.clone() };
+    let buy = || Intent::Limit(limit(Side::Buy, 100 * TOK, P));
+    let p = valid(&one(Default::default()), buy());
+    let b = bid_of(&p.states[0]);
+    let t = delivery::wallet_threshold(P, m.scale).unwrap();
+    assert_eq!(t, (5 * KAS * m.scale + P - 1) / P);
+    assert_eq!(
+        (b.mode, b.recv_threshold, b.topup_tip, b.bought),
+        (2, t.min(b.min_fill - 1), delivery::default_tip(TemplateId::Kcc20Ref, C).unwrap(), 0)
+    );
+    assert_eq!(p.new_threshold, Some(t), "the first order of the token keeps T");
+    assert_eq!(delivery_carriers(&p), 3, "a top-up order is funded like each fill");
+    // The stored T is used and not renewed; --reset-threshold renews it.
+    let p = valid(&one(DRequest { threshold: Some(7), ..Default::default() }), buy());
+    assert_eq!((bid_of(&p.states[0]).recv_threshold, p.new_threshold), (7, None));
+    let p = valid(&one(DRequest { threshold: Some(7), reset: true, ..Default::default() }), buy());
+    assert_eq!(p.new_threshold, Some(t));
+    // The tip is the user's, within the carrier; below the default it warns.
+    let p = valid(&one(DRequest { tip: Some(1), ..Default::default() }), buy());
+    assert_eq!(bid_of(&p.states[0]).topup_tip, 1);
+    assert!(codes(&p).contains(&"TOPUP_TIP_LOW"));
+    assert_eq!(errors(&plan_order(&one(DRequest { tip: Some(C + 1), ..Default::default() }), &buy())), vec!["TOPUP_TIP_INVALID"]);
+    let one_unit = Intent::Limit(LimitIntent { min_fill: Some(1), ..limit(Side::Buy, 100 * TOK, P) });
+    assert_eq!(errors(&plan_order(&one(Default::default()), &one_unit)), vec!["DELIVERY_ONE_UTXO_UNAVAILABLE"]);
+    // The if-done exit of a sell-first entry takes it too.
+    let p = valid(&one(Default::default()), Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
+    let (mode, recv, tip, _) = modes(&p, 0);
+    assert_eq!((mode, recv > 0, tip), (2, true, delivery::default_tip(TemplateId::Kcc20Ref, C).unwrap()));
+    assert!(p.new_threshold.is_some());
+}
+
+/// Pair orders: collected by default for the token they receive, never one-utxo, KRON each fill;
+/// the default tip pays the custody input of the later fills.
+#[test]
+fn pair_orders_are_collected_and_their_tip_pays_the_later_fills() {
+    let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
+    let each = pick(&pair_env(&a, &b), Some(Choice::Each));
+    let col = pick(&pair_env(&a, &b), None);
+    let amount = 9_001;
+    let plan = |e: &Env, side: Side, price: i64| {
+        let mut i = Intent::Limit(limit(side, amount, price));
+        apply_pair_tip_defaults(e, &mut i, false, false);
+        valid(e, i)
+    };
+    for (side, price) in [(Side::Buy, 1_450), (Side::Sell, 1_550)] {
+        let (p0, p1) = (plan(&each, side, price), plan(&col, side, price));
+        let ((m0, tip0), (m1, tip1)) = (pair_mode(&p0), pair_mode(&p1));
+        assert_eq!((m0, m1), (0, 1), "{side:?}");
+        let mf = def_min(amount, a.scale);
+        assert_eq!(tip1 - tip0, delivery::collected_pair_tip_extra(a.scale, amount, mf), "{side:?}");
+        assert!(tip1 > tip0);
+        assert!(value(&p1) < value(&p0), "one carrier, not one per fill");
+    }
+    // A typed tip is kept as typed.
+    let mut i = Intent::Limit(LimitIntent { tip: 5, ..limit(Side::Buy, amount, 1_450) });
+    apply_pair_tip_defaults(&col, &mut i, true, false);
+    assert_eq!(pair_mode(&valid(&col, i)).1, 5);
+    // One-utxo is not offered on a pair.
+    let one = pick(&pair_env(&a, &b), Some(Choice::OneUtxo));
+    let p = plan_order(&one, &Intent::Limit(limit(Side::Buy, amount, 1_450)));
+    assert_eq!(errors(&p), vec!["DELIVERY_ONE_UTXO_UNAVAILABLE"]);
+    // A conditional pair order collects too. IOC does not.
+    let p = valid(&col, Intent::Cond(CondIntent { stop: Some(1_401), ..cond(CondKind::StopMarket, Side::Sell, amount) }));
+    assert_eq!(cpair(&p).mode, 1);
+    assert_eq!(pair_mode(&valid(&col, ioc_buy(amount, 1_450))).0, 0);
+    // KRON A: a buy receives KRON (each fill); the sell receives B (KCC-20: collected).
+    let k = pick(&pair_env(&kron_a(), &tok_b()), None);
+    let mode = |side, price| pair_mode(&valid(&k, Intent::Limit(limit(side, amount, price)))).0;
+    assert_eq!((mode(Side::Buy, 1_450), mode(Side::Sell, 1_550)), (0, 1));
+    // A pair if-done order delivers each fill.
+    let p = valid(&col, Intent::Ifd(ifd(Side::Buy, 1_440, Some(1_600), None)));
+    assert_eq!(ipair(&p).exit_mode, 0);
+}
+
+/// A replacement keeps the delivery of its order.
+#[test]
+fn a_replacement_keeps_its_orders_delivery() {
+    let m = market(TemplateId::Kcc20Ref);
+    let e = env(&m);
+    for c in [Choice::Each, Choice::Collected, Choice::OneUtxo] {
+        let p = valid(&pick(&e, Some(c)), Intent::Limit(limit(Side::Buy, 100 * TOK, P)));
+        let kept = Env { delivery: delivery::request_of(&p.states[0]), ..e.clone() };
+        let again = valid(&kept, Intent::Limit(limit(Side::Buy, 100 * TOK, P + 1_000_000)));
+        assert_eq!(modes(&again, 0), modes(&p, 0), "{c:?}");
+    }
 }

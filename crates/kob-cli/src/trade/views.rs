@@ -406,6 +406,16 @@ pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
         None => ua.0.ticker.clone(),
     };
     let expiry = state.as_ref().and_then(AnyState::expiry).map(|e| e.0);
+    // How it delivers; a pair order delivers the token it receives.
+    let delivery = state.as_ref().and_then(|s| {
+        let t = match s {
+            AnyState::KobPair(p) => p.t_cov_id,
+            AnyState::KobCondPair(p) => p.t_cov_id,
+            _ => s.token_cov_id(),
+        };
+        super::delivery::text(s, &unit_of(&t, reg, idx).0)
+    });
+    let bought = state.as_ref().and_then(AnyState::bought_custody);
     let mut flags = vec![];
     if o.get("expired").and_then(Value::as_bool) == Some(true) {
         flags.push("expired".to_string());
@@ -418,7 +428,8 @@ pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
     }
     json!({
                 "covenant_id": cov, "contract": contract, "market": market, "status": status, "what": what,
-                "expiry_daa": expiry.filter(|e| *e < 1 << 60), "flags": flags,
+                "expiry_daa": expiry.filter(|e| *e < 1 << 60), "flags": flags, "delivery": delivery,
+                "bought": bought.map(|b| b.to_string()),
                 "value": o.get("current").and_then(|c| c.get("value")).cloned().unwrap_or(Value::Null),
     })
 }
@@ -428,8 +439,9 @@ pub fn order_row_line(r: &Value) -> String {
     let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
     let exp = r["expiry_daa"].as_i64().map(|e| format!(", expiry DAA {e}")).unwrap_or_default();
     let flags = r["flags"].as_array().map(|f| f.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let delivery = r["delivery"].as_str().map(|d| format!("; {d}")).unwrap_or_default();
     format!(
-        "{} {} {}: {} [{}{}{}]",
+        "{} {} {}: {}{delivery} [{}{}{}]",
         s("covenant_id"),
         s("contract"),
         s("market"),
@@ -496,6 +508,8 @@ pub fn orders_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, Ve
 pub struct Escrowed {
     /// Tokens in custody, in base units.
     pub custody: i128,
+    /// Tokens bought by collected orders and held by them: the maker's, until claimed.
+    pub bought: i128,
     /// Stray tokens that live orders own.
     pub strays: i128,
     /// The KAS budget of buy-side orders.
@@ -549,6 +563,8 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(|c| c.get("utxo")).collect())
                 .unwrap_or_default(),
+            // A buy owns no sell custody: what the view calls its custody is the bought-custody, counted below.
+            None if !reserved_kas(&s).0 => vec![],
             None => o.get("custody").and_then(|c| c.get("utxo")).into_iter().collect(),
         };
         let mut carriers = 0i128;
@@ -565,6 +581,12 @@ pub fn escrowed(views: &[Value]) -> (BTreeMap<[u8; 32], Escrowed>, Vec<Skipped>)
             if !seen.contains(&t) {
                 by.entry(t).or_default().custody += amount as i128;
             }
+        }
+        // The bought-custody of a collected order: the view's UTXO, else what the state says it holds.
+        if let (Some(b), Ok(Some((_, _, t)))) = (s.bought_custody(), super::data::bought_target(&s, [0; 32])) {
+            let u = o.get("bought_custody").and_then(|c| c.get("utxo")).filter(|u| !u.is_null());
+            by.entry(t).or_default().bought += u.and_then(|u| i64_of(u.get("amount"))).unwrap_or(b) as i128;
+            carriers += u.and_then(|u| i64_of(u.get("value"))).unwrap_or(0) as i128;
         }
         for u in o.get("strays").and_then(Value::as_array).into_iter().flatten() {
             if u.get("spent").and_then(Value::as_bool) == Some(true) {
@@ -697,11 +719,12 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             rows.push(json!({
                 "token": to_hex(&t), "ticker": u.0.ticker, "decimals": u.1.then_some(u.0.decimals),
                 "free": free.to_string(), "free_utxos": utxos, "free_verified": verified,
-                "in_orders": e.custody.to_string(), "strays": e.strays.to_string(),
+                "in_orders": e.custody.to_string(), "bought": e.bought.to_string(), "strays": e.strays.to_string(),
                 "kas_escrow": e.kas_escrow.to_string(), "kas_carriers": e.kas_carriers.to_string(),
                 "kas_locked": (e.kas_escrow + e.kas_carriers).to_string(), "orders": e.orders,
                 "text": {
-                    "free": amount_text(free, &u), "in_orders": amount_text(e.custody, &u), "strays": amount_text(e.strays, &u),
+                    "free": amount_text(free, &u), "in_orders": amount_text(e.custody, &u), "bought": amount_text(e.bought, &u),
+                    "strays": amount_text(e.strays, &u),
                     "kas_locked": units::kas(e.kas_escrow + e.kas_carriers),
                 },
             }));
@@ -725,8 +748,13 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             let t = &r["text"];
             let s = |v: &Value| v.as_str().unwrap_or("").to_string();
             let n = |v: &Value| v.as_u64().unwrap_or(0);
+            let bought = if s(&r["bought"]) == "0" {
+                String::new()
+            } else {
+                format!(", bought {} held by orders (kob claim)", s(&t["bought"]))
+            };
             lines.push(format!(
-                "  {}: free {}{} in {} UTXO{}, in orders {}, strays {}, KAS locked {} ({} order{})",
+                "  {}: free {}{} in {} UTXO{}, in orders {}{bought}, strays {}, KAS locked {} ({} order{})",
                 s(&r["ticker"]),
                 s(&t["free"]),
                 if r["free_verified"].as_bool() == Some(true) { "" } else { " (indexer, not confirmed)" },

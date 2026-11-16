@@ -22,6 +22,7 @@ use kob_protocol::state::{AnyState, CondPairState, IfdPairState, SIDE_ASK, SIDE_
 use kob_protocol::tx::KeyUtxo;
 use kob_protocol::Family;
 
+use super::delivery::{collected_pair_tip_extra, Choice, Class};
 use super::market::TokenMarket;
 use super::plan::*;
 
@@ -104,6 +105,7 @@ pub fn apply_pair_tip_defaults(env: &Env, intent: &mut Intent, tip_typed: bool, 
     if env.pair.is_none() {
         return false;
     }
+    let extra = collected_tip_extra(env, intent);
     let (amount, tip, exit_tip): (i64, &mut i64, Option<&mut i64>) = match intent {
         Intent::Limit(i) => (i.amount, &mut i.tip, None),
         Intent::Immediate(i) => (i.amount, &mut i.tip, None),
@@ -116,15 +118,40 @@ pub fn apply_pair_tip_defaults(env: &Env, intent: &mut Intent, tip_typed: bool, 
         Intent::Ifd(i) => (i.amount, &mut i.tip, Some(&mut i.exit_tip)),
     };
     let mut below = false;
+    let mut extra = extra;
     for (typed, t) in [(tip_typed, Some(tip)), (exit_tip_typed, exit_tip)] {
         let Some(t) = t else { continue };
         if typed {
             below |= pair_tip_below_default(env, amount, *t);
         } else {
-            *t = default_pair_tip(env, amount);
+            *t = default_pair_tip(env, amount) + extra;
+            extra = 0;
         }
     }
     below
+}
+
+/// What a collected pair order adds to its default tip: the custody input of its later fills.
+///
+/// Only the resting kinds are collected, and only when the token they receive is KCC-20.
+fn collected_tip_extra(env: &Env, intent: &Intent) -> i64 {
+    let Some(pair) = &env.pair else { return 0 };
+    let (side, amount, min_fill) = match intent {
+        Intent::Limit(i) => (i.side, i.amount, i.min_fill),
+        Intent::Dutch(i) => (i.side, i.amount, i.min_fill),
+        Intent::Schedule(i) => (if i.dca { Side::Buy } else { Side::Sell }, i.amount, i.min_fill),
+        Intent::Cond(i) => (i.side, i.amount, i.min_fill),
+        _ => return 0,
+    };
+    let a = &env.market;
+    let mf = min_fill.unwrap_or_else(|| default_min_fill_pair(amount, pair.kas_per_whole_a, a.scale));
+    let mut ignored = vec![];
+    let dl = pair_delivery(env, pair, side, Class::Resting, env.carrier(), mf, &mut ignored);
+    if dl.choice == Choice::Collected {
+        collected_pair_tip_extra(a.scale, amount, mf)
+    } else {
+        0
+    }
 }
 
 /// The environment the shared leg and expiry helpers run in for a pair (`legEnvOf`).
@@ -201,7 +228,15 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
     let b = &pair.quote;
     let order = spec.order.clone();
     let states: Vec<AnyState> = std::iter::once(order.clone()).chain(spec.exit.clone()).collect();
-    let fail = |issues: Vec<Issue>| Plan { ok: false, issues, states: states.clone(), request: None, built: None, disclosure: None };
+    let fail = |issues: Vec<Issue>| Plan {
+        ok: false,
+        issues,
+        states: states.clone(),
+        request: None,
+        built: None,
+        disclosure: None,
+        new_threshold: None,
+    };
     // KRON caps on what the order holds and delivers.
     for (tok, amount) in order.custodies() {
         let m = if tok == a.cov { a } else { b };
@@ -337,7 +372,15 @@ pub(crate) fn place_pair_order(env: &Env, pair: &PairPart, mut issues: Vec<Issue
         activates_at: spec.activates_at.filter(|x| *x > env.clock.daa).map(|x| (x, daa_to_unix(&env.clock, x))),
         notes,
     };
-    Plan { ok: !has_error(&issues), issues, states, request: Some(req), built: Some(built), disclosure: Some(disclosure) }
+    Plan {
+        ok: !has_error(&issues),
+        issues,
+        states,
+        request: Some(req),
+        built: Some(built),
+        disclosure: Some(disclosure),
+        new_threshold: None,
+    }
 }
 
 /// The KAS lines of a `KobPair` or `KobCondPair` order UTXO.
@@ -412,7 +455,10 @@ fn cond_pair_state(
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: ext(s),
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -487,7 +533,12 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
         log.push(error("MAX_FILLS_INVALID", format!("the number of fills must be 1..{possible}")));
         return failed(log);
     }
-    if fills < possible {
+    // Collected: one carrier serves every fill.
+    let dl = super::plan::pair_delivery(env, pair, i.side, Class::Resting, carrier, min_fill, &mut log);
+    if has_error(&log) {
+        return failed(log);
+    }
+    if fills < possible && dl.choice != Choice::Collected {
         log.push(info(
             "PAIR_FILLS_LIMITED",
             format!("{fills} delivery carriers: after {} partial fills what is left fills only in full", fills - 1),
@@ -515,8 +566,9 @@ pub(crate) fn plan_pair_cond(env: &Env, i: &CondIntent) -> Plan {
         };
         st.custody = escrow;
     }
+    st.mode = dl.mode();
     // At least the deliveries that the protocol requires a new order to fund itself.
-    let funded = fills.max(st.funded_fills());
+    let funded = dl.funded(fills.max(st.funded_fills()));
     let Some(total) = st.kas_value(funded) else {
         log.push(error("TIP_TOO_LARGE", "the priority tip is too large for this quantity"));
         return failed(log);
@@ -758,7 +810,9 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
         custody: 0,
         rpt_amount,
         exit_state: exit_state.clone(),
-        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+        exit_mode: 0,
+        exit_recv_threshold: 0,
+        exit_topup_tip: 0,
     };
     // Never below what the protocol requires of every exit.
     let needed = draft_with(exit_planned).exit_carrier_needed();
