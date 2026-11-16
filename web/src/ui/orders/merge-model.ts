@@ -127,14 +127,13 @@ export function mergeAllFrees(freeTokens: readonly TokenUtxo[], tokens: Readonly
   return out;
 }
 
-/** "3 transactions, one after the other, each approved in your wallet (3 approvals)": what a merge of `txs` transactions asks of the user. */
-const mergeRunText = (txs: number): string =>
-  t(txs === 1 ? 'orders.merge.run.one' : 'orders.merge.run.other', { txs: countText('tx', txs), approvals: countText('approval', txs) });
+/** "3 transactions · 3 approvals": what a merge of `txs` transactions asks of the user. */
+const mergeRunText = (txs: number): string => t('orders.merge.run', { txs: countText('tx', txs), approvals: countText('approval', txs) });
 
 /**
  * The merge in a few sentences (shown on its confirmation, and while it runs): what it merges, the transactions and the wallet approvals it
  * takes (one each, one after the other), the KAS it frees (the merged UTXOs' carriers, less the ones the outputs keep, less the fees: the
- * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and how many mergeable UTXOs a full merge leaves. The
+ * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and, when one run cannot take them all, how many remain. The
  * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation.
  */
 export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings'>>, ticker: string): string {
@@ -152,11 +151,10 @@ export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged'
           : t('orders.merge.summarySome', counts);
   const kas =
     plan.freed > 0n
-      ? t('orders.merge.freed', { freed: formatKas(plan.freed), fee: formatKas(plan.fee) })
-      : t('orders.merge.costs', { cost: formatKas(-plan.freed), fee: formatKas(plan.fee) });
+      ? t('orders.merge.freed', { run: counts.run, freed: formatKas(plan.freed) })
+      : t('orders.merge.costs', { run: counts.run, cost: formatKas(-plan.freed) });
   if (plan.target !== null) return `${head} ${kas}`;
-  const rest = plan.after > settings ? t('orders.merge.more', { after: plan.after }) : settings > 1 ? t('orders.merge.lastSettings', { settings }) : t('orders.merge.last');
-  return `${head} ${kas} ${rest}`;
+  return plan.after > settings ? `${head} ${kas} ${t('orders.merge.more', { after: plan.after })}` : `${head} ${kas}`;
 }
 
 /**
