@@ -4,12 +4,12 @@
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { t } from '../../i18n';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
-import { mergeCandidates, outpointOf, planMergeShape, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
+import { mergeCandidates, mergeableCount, outpointOf, planMergeShape, type MergeLink, type MergePlan, type MergeToken } from '../../kob/merge';
 import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
 import type { KobWasm } from '../../kob/wasm';
-import { extensionOfState, familyOfProgram } from '../../kob/token-state';
+import { borrowKeyOf, extensionOfState, familyOfProgram } from '../../kob/token-state';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { countText } from './plural';
 import type { FlowStep } from './TxFlow';
@@ -91,7 +91,8 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
   for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
     const mt = mergeTokenFor(id, freeTokens, tokens, maker, reserved, unlisted);
     if (!mt) continue;
-    const n = mergeCandidates(freeTokens, mt, maker, reserved).length;
+    // UTXOs of one borrow setting merge together only: count those in a setting with two or more
+    const n = mergeableCount(mergeCandidates(freeTokens, mt, maker, reserved));
     if (n >= 2) out.set(id, n);
   }
   return out;
@@ -110,40 +111,50 @@ export function mergeAllFrees(freeTokens: readonly TokenUtxo[], tokens: Readonly
     if (!mt) continue;
     const shape = planMergeShape(mt, freeTokens, maker, reserved);
     if (!shape.ok) continue;
-    const kas = shape.nodes.flatMap((n) => n.fresh.map((u) => BigInt(u.amount)));
-    const largest = kas.reduce((m, v) => (v > m ? v : m), 0n);
-    const kept = largest < DEFAULT_CARRIER ? largest : DEFAULT_CARRIER;
-    out.set(id, kas.reduce((s, v) => s + v, 0n) - kept);
+    // one final UTXO, and so one kept carrier, per borrow setting
+    const bySetting = new Map<string, bigint[]>();
+    for (const u of shape.nodes.flatMap((n) => n.fresh)) {
+      const k = borrowKeyOf(u.state);
+      bySetting.set(k, [...(bySetting.get(k) ?? []), BigInt(u.amount)]);
+    }
+    let frees = 0n;
+    for (const kas of bySetting.values()) {
+      const largest = kas.reduce((m, v) => (v > m ? v : m), 0n);
+      frees += kas.reduce((s, v) => s + v, 0n) - (largest < DEFAULT_CARRIER ? largest : DEFAULT_CARRIER);
+    }
+    out.set(id, frees);
   }
   return out;
 }
 
-/** "3 transactions, one after the other, each approved in your wallet (3 approvals)": what a merge of `txs` transactions asks of the user. */
-const mergeRunText = (txs: number): string =>
-  t(txs === 1 ? 'orders.merge.run.one' : 'orders.merge.run.other', { txs: countText('tx', txs), approvals: countText('approval', txs) });
+/** "3 transactions · 3 approvals": what a merge of `txs` transactions asks of the user. */
+const mergeRunText = (txs: number): string => t('orders.merge.run', { txs: countText('tx', txs), approvals: countText('approval', txs) });
 
 /**
  * The merge in a few sentences (shown on its confirmation, and while it runs): what it merges, the transactions and the wallet approvals it
  * takes (one each, one after the other), the KAS it frees (the merged UTXOs' carriers, less the ones the outputs keep, less the fees: the
- * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and how many mergeable UTXOs a full merge leaves. The
+ * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and, when one run cannot take them all, how many remain. The
  * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation.
  */
-export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'>, ticker: string): string {
+export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings'>>, ticker: string): string {
   const n = plan.links.length;
-  const counts = { ticker, run: mergeRunText(n), merged: plan.merged, before: plan.before };
+  const settings = plan.settings ?? 1;
+  const counts = { ticker, run: mergeRunText(n), merged: plan.merged, before: plan.before, settings };
+  // UTXOs with different borrow settings merge apart: one UTXO per setting
   const head =
     plan.target !== null
       ? t('orders.merge.summaryTarget', counts)
-      : plan.merged === plan.before
-        ? t('orders.merge.summaryAll', counts)
-        : t('orders.merge.summarySome', counts);
+      : settings > 1
+        ? t('orders.merge.summarySettings', counts)
+        : plan.merged === plan.before
+          ? t('orders.merge.summaryAll', counts)
+          : t('orders.merge.summarySome', counts);
   const kas =
     plan.freed > 0n
-      ? t('orders.merge.freed', { freed: formatKas(plan.freed), fee: formatKas(plan.fee) })
-      : t('orders.merge.costs', { cost: formatKas(-plan.freed), fee: formatKas(plan.fee) });
+      ? t('orders.merge.freed', { run: counts.run, freed: formatKas(plan.freed) })
+      : t('orders.merge.costs', { run: counts.run, cost: formatKas(-plan.freed) });
   if (plan.target !== null) return `${head} ${kas}`;
-  const rest = plan.after >= 2 ? t('orders.merge.more', { after: plan.after }) : t('orders.merge.last');
-  return `${head} ${kas} ${rest}`;
+  return plan.after > settings ? `${head} ${kas} ${t('orders.merge.more', { after: plan.after })}` : `${head} ${kas}`;
 }
 
 /**

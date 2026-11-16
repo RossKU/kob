@@ -46,7 +46,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{check_custody, check_custody_ext, check_token_input, nb, pos, token_witness, BudgetFn, Token};
+use super::{check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness, BudgetFn, Token};
 use crate::artifacts::TemplateId;
 use crate::error::{invalid, Error, Result};
 use crate::family::Family;
@@ -171,6 +171,7 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
     let mut draft = Draft::new(0, &r.fee, Some(change))?;
     let locked = locked_token(&r.state);
     let mut ext = None;
+    let mut borrow = None;
     if let Some(token) = locked {
         if r.tokens.is_empty() {
             return invalid("a token intent needs the payer's token inputs");
@@ -183,6 +184,7 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
+            one_borrow(&mut borrow, &t.state)?;
             draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
     } else if !r.tokens.is_empty() {
@@ -231,7 +233,7 @@ pub fn build_create_intent(r: &CreateIntent, budgets: BudgetFn) -> Result<BuiltT
             let owner = r.tokens[0].state.owner();
             draft.add_token_output(
                 token,
-                TokenState::user(fam, have - r.lock_amount, owner, ext),
+                holder_change(fam, have - r.lock_amount, owner, ext, borrow.unwrap_or(crate::state::NO_BORROW), owner)?,
                 pos(r.token_change_carrier as i64, "tokenChangeCarrier")?,
             )?;
         }

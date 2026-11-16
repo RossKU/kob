@@ -1,6 +1,6 @@
 // Coin selection for placement transactions, for KAS funding inputs and token inputs.
 // It is pure and deterministic, and ties break by outpoint.
-import { KRON_MAX_OUTPUT_AMOUNT, familyOfProgram, isKeyOwned } from './token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, familyOfProgram, groupByBorrow, isKeyOwned } from './token-state';
 import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
 
 /**
@@ -25,13 +25,14 @@ export const MAX_FUNDING_INPUTS = 50;
 export const MAX_SPARE_TOKEN_INPUTS = 3;
 
 /** Why a selection failed. */
-export type InsufficientKind = 'kas' | 'tokens' | 'fragmented';
+export type InsufficientKind = 'kas' | 'tokens' | 'fragmented' | 'mixed';
 
 /**
  * Thrown by `selectFunding` and `selectTokens`.
  * For `kind` 'kas' and 'tokens' the balance is short by `shortfall`. For 'fragmented' the balance
  * suffices but needs more inputs than one transaction may carry (`maxInputs`), so the UTXOs must be
- * merged first.
+ * merged first. For 'mixed' the token balance suffices, but no one borrow setting holds enough:
+ * tokens of different settings never share a transaction.
  */
 export class InsufficientFunds extends Error {
   readonly kind: InsufficientKind;
@@ -44,7 +45,9 @@ export class InsufficientFunds extends Error {
     super(
       kind === 'fragmented'
         ? `covering ${needed} needs more than ${maxInputs} inputs: merge your UTXOs first`
-        : `insufficient ${kind === 'kas' ? 'KAS' : 'tokens'}: need ${needed}, have ${have} (short by ${short})`,
+        : kind === 'mixed'
+          ? `no one borrow setting of your token UTXOs holds ${needed}: UTXOs of different settings never share a transaction`
+          : `insufficient ${kind === 'kas' ? 'KAS' : 'tokens'}: need ${needed}, have ${have} (short by ${short})`,
     );
     this.name = 'InsufficientFunds';
     this.kind = kind;
@@ -177,6 +180,10 @@ export function coverTokens(utxos: TokenUtxo[], amount: bigint, maxInputs: numbe
  *   same amount and re-create the UTXO at a fee. Two or more extras do reduce the UTXO count.
  *
  * `spare: false` returns the covering set alone.
+ *
+ * All picked UTXOs share one borrow setting (scheme and guard), since the change keeps it. It tries
+ * the plain group first, then the others by total, largest first (`groupByBorrow`). When the
+ * balance covers `amount` but no group does, it throws InsufficientFunds('mixed').
  */
 export function selectTokens(
   utxos: TokenUtxo[],
@@ -184,6 +191,30 @@ export function selectTokens(
   maxInputs: number,
   program: TokenProgram | null = null,
   opts: { spare?: boolean; changeCap?: bigint; fresh?: ReadonlySet<string> } = {},
+): TokenUtxo[] {
+  const groups = groupByBorrow(usableTokens(utxos, program));
+  if (groups.length <= 1) return selectInGroup(utxos, amount, maxInputs, program, opts);
+  const have = groups.flat().reduce((s, u) => s + tokenAmt(u), 0n);
+  if (amount > 0n && have < amount) throw new InsufficientFunds('tokens', amount, have);
+  let first: InsufficientFunds | null = null;
+  for (const g of groups) {
+    if (g.reduce((s, u) => s + tokenAmt(u), 0n) < amount) continue;
+    try {
+      return selectInGroup(g, amount, maxInputs, program, opts);
+    } catch (e) {
+      if (!(e instanceof InsufficientFunds)) throw e;
+      first ??= e;
+    }
+  }
+  throw first ?? new InsufficientFunds('mixed', amount, have);
+}
+
+function selectInGroup(
+  utxos: TokenUtxo[],
+  amount: bigint,
+  maxInputs: number,
+  program: TokenProgram | null,
+  opts: { spare?: boolean; changeCap?: bigint; fresh?: ReadonlySet<string> },
 ): TokenUtxo[] {
   // Settled UTXOs first, as for the funding: one of a transaction sent moments ago covers the amount
   // only when the others cannot, and never rides along as a spare extra.

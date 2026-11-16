@@ -604,6 +604,10 @@ kob_state!(
 pub const SCHEME_P2PK: u8 = 0x00;
 /// KCC-20 owner scheme: covenant id (KOB order custody).
 pub const SCHEME_COVID: u8 = 0x04;
+/// A KCC-20 borrow setting: (borrow scheme, borrow guard).
+pub type Borrow = (u8, [u8; 32]);
+/// Borrowing disabled: the setting of every custody, delivery and recipient output.
+pub const NO_BORROW: Borrow = (0, [0; 32]);
 /// Time in force: the order rests until it is filled, cancelled or refunded.
 pub const TIF_GTC: i64 = 0;
 /// Time in force: fill what crosses now and return the rest.
@@ -874,11 +878,32 @@ impl TokenState {
             TokenState::Kron(_) => None,
         }
     }
-    /// KCC-20: borrowing disabled. KRON: not a minter. Anything else is refused by the builders.
+    /// KCC-20: borrowing disabled. KRON: not a minter.
+    ///
+    /// The builders refuse other states, except a key-owned KCC-20 holding (owner scheme 0x00) with
+    /// a borrow setting, which they spend on the owner path.
     pub fn is_plain(&self) -> bool {
         match self {
             TokenState::Kcc20(s) => s.borrow_scheme == 0,
             TokenState::Kron(s) => s.is_minter == 0,
+        }
+    }
+    /// The borrow setting (borrow scheme, borrow guard). KRON has none: [`NO_BORROW`].
+    pub fn borrow(&self) -> Borrow {
+        match self {
+            TokenState::Kcc20(s) => (s.borrow_scheme, s.borrow_guard),
+            TokenState::Kron(_) => NO_BORROW,
+        }
+    }
+    /// The same state with the borrow setting `b`. A KRON state takes [`NO_BORROW`] only and
+    /// stays unchanged.
+    pub fn with_borrow(self, b: Borrow) -> Self {
+        match self {
+            TokenState::Kcc20(s) => TokenState::Kcc20(Kcc20State { borrow_scheme: b.0, borrow_guard: b.1, ..s }),
+            k @ TokenState::Kron(_) => {
+                debug_assert_eq!(b, NO_BORROW, "KRON states have no borrow setting");
+                k
+            }
         }
     }
     /// Token state owned by `owner` as a key, with the holder owner of `of`.

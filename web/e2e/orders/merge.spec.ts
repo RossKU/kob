@@ -79,7 +79,7 @@ test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 appr
   await expect(dialog).toBeVisible({ timeout: 30_000 });
   // thirty 2 KAS carriers, the final UTXO keeps 1 KAS: about 59 KAS less the fees come back
   await expect(page.getByTestId('merge-all-summary')).toHaveText(
-    /^Merge your 30 EXSTD UTXOs into one: 15 transactions, one after the other, each approved in your wallet \(15 approvals\)\. About 58\.\d+ KAS of their carriers returns to your wallet \(after network fees of about 0\.\d+ KAS\)\. One UTXO remains\.$/,
+    /^Merge 30 EXSTD UTXOs into 1\. 15 transactions · 15 approvals · about \+58\.\d+ KAS after fees\.$/,
   );
   expect(await wallet!.calls()).toEqual([]);
   await shot(page, 'merge-all-confirmation');
@@ -147,7 +147,7 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   // every request answers 2 s late: the second one is rejected while it waits
   await wallet!.configure({ delayMs: 2000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
-  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge your 7 EXSTD UTXOs into one: 3 transactions, one after the other, each approved in your wallet (3 approvals).', { timeout: 30_000 });
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 7 EXSTD UTXOs into 1. 3 transactions · 3 approvals', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
   await wallet!.waitForCalls(2, 60_000);
   await wallet!.configure({ approve: false, rejectMessage: 'User rejected the request' });
@@ -176,7 +176,7 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   await wallet!.configure({ approve: true, delayMs: 0 });
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(5\): /, { timeout: 15_000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
-  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge your 5 EXSTD UTXOs into one: 2 transactions', { timeout: 30_000 });
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 5 EXSTD UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
   await runFlow(page, mock, wallet, { steps: 2, confirm: false });
   const owned = await ownedOf(mock, alice);
@@ -209,13 +209,34 @@ test('a token the registry does not list is mergeable too, under its node-verifi
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
   await expect(merge).toHaveText(/^Merge all \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
   await merge.click();
-  await expect(page.getByTestId('merge-all-summary')).toContainText('UTXOs into one: 2 transactions', { timeout: 30_000 });
+  await expect(page.getByTestId('merge-all-summary')).toContainText('UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
   const placed = await runFlow(page, mock, wallet, { steps: 2, confirm: false });
   // level 1 merges the three smallest (1 + 2 + 3), level 2 that output with the fourth
   expect(placed[0]!.submission.token_outputs[0]!.amount).toBe((6n * TOKEN).toString());
   expect(placed[1]!.submission.token_outputs[0]!.amount).toBe((10n * TOKEN).toString());
   expect((await ownedOf(mock, alice)).map((u) => BigInt(u.amount))).toEqual([10n * TOKEN]);
+});
+
+test('Merge all merges each borrow setting apart: one UTXO per setting, each keeping its scheme and guard', async ({ appPage: page, mock, wallet }) => {
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  // three plain UTXOs and two of borrow scheme 2 (option A: spent by the owner key on the owner path)
+  for (let k = 1; k <= 3; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  for (let k = 4; k <= 5; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS, borrow_scheme: 2 });
+  await mock.giveKas('alice', 20n * KAS);
+  await openBalances(page, 5);
+  await expect(page.getByTestId('balances-panel')).toContainText('15');
+  await page.screenshot({ path: test.info().outputPath('balances-borrow-merge.png'), animations: 'disabled' });
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  const summary = page.getByTestId('merge-all-summary');
+  await expect(summary).toContainText('Merge 5 EXSTD UTXOs into 2, one per borrow setting.', { timeout: 30_000 });
+  await shot(page, 'merge-borrow-confirm');
+  await page.getByTestId('merge-all-confirm').click();
+  const placed = await runFlow(page, mock, wallet, { steps: 2, confirm: false });
+  expect(placed.map((p) => p.submission.token_outputs[0]!.amount)).toEqual([(6n * TOKEN).toString(), (9n * TOKEN).toString()]);
+  const owned = ((await mock.get(`/v1/token-utxos?owner=${alice}&token=${STD}&spent=false&limit=50`)).items as { amount: string; role: string; state: { borrow_scheme: number } }[]).filter((u) => u.role === 'owned');
+  expect(owned.map((u) => [BigInt(u.amount), u.state.borrow_scheme]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[6n * TOKEN, 0], [9n * TOKEN, 2]]);
 });
 
 test('the sell ticket merges just enough first, then places the sale with its own confirmation', async ({ appPage: page, mock, wallet }) => {

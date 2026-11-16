@@ -197,3 +197,52 @@ describe('selectTokens: the covering set, then the spare slots take the smallest
     expect(selectTokens(u, 100_000_000n, 3, null, { changeCap: 400_000_000n }).map((x) => x.state.amount)).toEqual(['300000000']);
   });
 });
+
+describe('selectTokens: one borrow setting per selection (option A)', () => {
+  const m = market3x3();
+  const t = (wholeTokens: bigint) => tokenUtxo(m, wholeTokens * m.scale);
+  const b = (wholeTokens: bigint, scheme = 2, guard = 'ab'.repeat(32)) => {
+    const u = t(wholeTokens);
+    return { ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: guard } as typeof u.state };
+  };
+  const units = (u: { state: { amount: string } }[]) => u.map((x) => BigInt(x.state.amount) / m.scale);
+  const schemes = (u: { state: object }[]) => new Set(u.map((x) => (x.state as { borrow_scheme: number }).borrow_scheme));
+
+  it('a holding with a borrow setting is selected like a plain one when it is the only setting', () => {
+    expect(units(selectTokens([b(40n), b(2n)], 10n * m.scale, 3))).toEqual([40n, 2n]);
+  });
+
+  it('plain first; spares come from the same setting only', () => {
+    const u = [t(20n), t(1n), b(30n), b(1n)];
+    const got = selectTokens(u, 10n * m.scale, 3);
+    expect(units(got)).toEqual([20n, 1n]);
+    expect(schemes(got)).toEqual(new Set([0]));
+  });
+
+  it('the plain group short: the setting that holds the amount, never a mix', () => {
+    const u = [t(5n), b(30n), b(4n)];
+    const got = selectTokens(u, 10n * m.scale, 3);
+    expect(units(got)).toEqual([30n, 4n]);
+    expect(schemes(got)).toEqual(new Set([2]));
+    // two non-plain settings: the larger total first
+    const v = [b(8n, 1, 'cd'.repeat(32)), b(12n), b(15n, 3, 'ef'.repeat(32))];
+    expect(units(selectTokens(v, 10n * m.scale, 3, null, { spare: false }))).toEqual([15n]);
+  });
+
+  it('enough in all, but in no one setting: mixed; short in all: tokens', () => {
+    const u = [t(6n), b(6n)];
+    const mixed = (() => {
+      try {
+        selectTokens(u, 10n * m.scale, 3);
+        return null;
+      } catch (e) {
+        return e as InsufficientFunds;
+      }
+    })();
+    expect(mixed?.kind).toBe('mixed');
+    expect(() => selectTokens(u, 13n * m.scale, 3)).toThrow(/insufficient tokens/);
+    // a setting that holds the amount but too fragmented: fragmented, not mixed
+    const f = [t(1n), b(3n), b(3n), b(3n), b(3n)];
+    expect(() => selectTokens(f, 12n * m.scale, 3)).toThrow(/merge your UTXOs first/);
+  });
+});

@@ -750,13 +750,17 @@ pub struct SweepOrder {
 }
 
 /// Plain token transfer from key owners (the CLI `send`; either family).
+///
+/// The inputs share one borrow setting. Recipients get plain outputs; the token change keeps the
+/// inputs' setting. With no recipients the whole amount is the change: a merge that keeps it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendTokens {
     pub token: TokenRef,
     pub tokens: Vec<TokenUtxo>,
     pub recipients: Vec<TokenRecipient>,
-    /// Owner of the token change (default: owner of the first token input).
+    /// Owner of the token change (default: owner of the first token input). A change with a
+    /// borrow setting goes to that owner only.
     #[serde(with = "crate::json::field", default)]
     pub token_change: Option<[u8; 32]>,
     #[serde(with = "crate::json::field", default)]
@@ -846,9 +850,11 @@ fn check_token_input(t: &TokenUtxo, token: Token) -> Result<()> {
     if t.state.family() != token.1.family() {
         return invalid(format!("a {:?} token state on the {} token", t.state.family(), token.1.name()));
     }
-    if !t.state.is_plain() {
+    if !t.state.is_plain() && !owner_path_borrow(&t.state) {
         return invalid(match t.state.family() {
-            Family::Kcc20 => "token UTXOs with borrowing enabled are refused (a borrow can invalidate a signed transaction)",
+            Family::Kcc20 => {
+                "token UTXOs with borrowing enabled are refused unless key-owned (owner scheme 0x00), which the owner path spends"
+            }
             Family::Kron => "KRON minter token UTXOs are refused",
         });
     }
@@ -856,6 +862,44 @@ fn check_token_input(t: &TokenUtxo, token: Token) -> Result<()> {
         return invalid("token UTXO amount must be positive");
     }
     Ok(())
+}
+
+/// A key-owned KCC-20 holding with a borrow setting.
+///
+/// The owner path checks the owner only, whatever the borrow scheme and guard, so the builders
+/// spend it like a plain holding. Its change keeps the setting ([`holder_change`]), and every
+/// custody, delivery and recipient output stays plain.
+fn owner_path_borrow(s: &TokenState) -> bool {
+    matches!(s, TokenState::Kcc20(k) if k.owner_scheme == SCHEME_P2PK && k.borrow_scheme != 0)
+}
+
+/// Records the borrow setting of holder input `s` in `acc`, which all inputs of one token share.
+///
+/// Inputs of one token with different settings (scheme or guard) never share a transaction, so
+/// their change cannot silently drop or gain a setting.
+fn one_borrow(acc: &mut Option<Borrow>, s: &TokenState) -> Result<()> {
+    if *acc.get_or_insert(s.borrow()) != s.borrow() {
+        return invalid("token inputs mix borrow settings (scheme and guard): spend each setting in its own transaction");
+    }
+    Ok(())
+}
+
+/// The holder's token change: the state of `user` with the inputs' borrow setting `b`.
+///
+/// A change with a borrow setting returns to the owner of the inputs (`input_owner`), since the
+/// setting is that owner's choice.
+fn holder_change(
+    of: impl Into<HolderOf>,
+    amount: i64,
+    owner: [u8; 32],
+    ext: [u8; 32],
+    b: Borrow,
+    input_owner: [u8; 32],
+) -> Result<TokenState> {
+    if b != NO_BORROW && owner != input_owner {
+        return invalid("the change of a holding with a borrow setting returns to its owner");
+    }
+    Ok(TokenState::user(of, amount, owner, ext).with_borrow(b))
 }
 
 /// The custody of an order: owned by the order's covenant id and holding exactly `amount`.
@@ -913,6 +957,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
     let mut draft = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(r.funding[0].pubkey)))?;
     let holds = r.order.holds_tokens();
     let mut ext = None;
+    let mut borrow = None;
     if holds {
         if r.tokens.is_empty() {
             return invalid("token-holding orders need token inputs");
@@ -925,6 +970,7 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
             if *ext.get_or_insert(t.state.extension()) != t.state.extension() {
                 return invalid("token inputs mix extension commitments");
             }
+            one_borrow(&mut borrow, &t.state)?;
             draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
         }
         // The custody carries the commitment the order pins, since its covenant refuses any other.
@@ -955,9 +1001,11 @@ pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx>
         let idx = draft.add_token_output(token, TokenState::custody(fam, amount, order_id, ext), carrier)?;
         custody = Some(Custody { token_output: idx as u16, extension_commitment: ext });
         if have > amount {
-            // Token change returns to the owner of the first token input.
+            // Token change returns to the owner of the first token input, with the inputs' borrow
+            // setting. The custody above is always plain.
             let owner = r.tokens[0].state.owner();
-            draft.add_token_output(token, TokenState::user(token.1, have - amount, owner, ext), carrier)?;
+            let change = holder_change(token.1, have - amount, owner, ext, borrow.unwrap_or(NO_BORROW), owner)?;
+            draft.add_token_output(token, change, carrier)?;
         }
     }
     let mut records = vec![Record::order(0, &r.order, custody, r.deadline)];
@@ -986,8 +1034,9 @@ fn build_create_pair(request: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx
     }
     let mut draft = Draft::new(request.lock_time, &request.fee, Some(request.change.unwrap_or(request.funding[0].pubkey)))?;
     let tok_of = |cov: [u8; 32]| if cov == a.0 { a } else { b };
-    // The maker's tokens, per token: (token, total, extension, first owner).
-    let mut groups: Vec<(Token, i64, [u8; 32], [u8; 32])> = vec![];
+    // The maker's tokens, per token: (token, total, extension, first owner, borrow setting).
+    type Group = (Token, i64, [u8; 32], [u8; 32], Option<Borrow>);
+    let mut groups: Vec<Group> = vec![];
     for t in &request.tokens {
         let tok = match t.utxo.covenant_id {
             Some(c) if c == a.0 || c == b.0 => tok_of(c),
@@ -1002,9 +1051,10 @@ fn build_create_pair(request: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx
                 if g.2 != t.state.extension() {
                     return invalid("token inputs mix extension commitments");
                 }
+                one_borrow(&mut g.4, &t.state)?;
                 g.1 = add(g.1, t.state.amount(), "token input amounts")?;
             }
-            None => groups.push((tok, t.state.amount(), t.state.extension(), t.state.owner())),
+            None => groups.push((tok, t.state.amount(), t.state.extension(), t.state.owner(), Some(t.state.borrow()))),
         }
         draft.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
     }
@@ -1032,9 +1082,10 @@ fn build_create_pair(request: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx
         let idx = draft.add_token_output(tok, TokenState::custody(tok.1.family(), *amount, order_id, g.2), carrier)?;
         parts.push(Custody { token_output: idx as u16, extension_commitment: g.2 });
     }
-    for (tok, rest, ext, owner) in groups {
+    for (tok, rest, ext, owner, borrow) in groups {
         if rest > 0 {
-            draft.add_token_output(tok, TokenState::user(tok.1, rest, owner, ext), carrier)?;
+            let change = holder_change(tok.1, rest, owner, ext, borrow.unwrap_or(NO_BORROW), owner)?;
+            draft.add_token_output(tok, change, carrier)?;
         }
     }
     let mut parts = parts.into_iter();
@@ -1186,6 +1237,10 @@ fn cancel_with(subject: CancelSubject, utxo: &Utxo, request: CancelParts<'_>, bu
         check_token_input(t, tok)?;
         if !t.state.is_holder(tok.1) || t.state.owner() != maker {
             return invalid("top-up tokens must be the maker's own key-owned tokens");
+        }
+        // They join the plain custody in one output, and inputs of one token share one borrow setting.
+        if !t.state.is_plain() {
+            return invalid("top-up tokens with a borrow setting cannot join the plain custody (move them to a plain UTXO first)");
         }
         put(&mut groups, t, "top-up")?;
         draft.add_token_input(t, tok, token_witness(&t.state, tok.1)?)?;
@@ -1729,8 +1784,8 @@ fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx
 /// Builds a [`SendTokens`] transfer.
 pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     let token = (r.token.covenant_id, r.token.program);
-    if r.tokens.is_empty() || r.recipients.is_empty() {
-        return invalid("send needs token inputs and recipients");
+    if r.tokens.is_empty() {
+        return invalid("send needs token inputs");
     }
     for rc in &r.recipients {
         check_key(&rc.pubkey, "recipient")?;
@@ -1741,11 +1796,13 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
     let change = r.change.or(r.funding.first().map(|f| f.pubkey)).or(Some(r.tokens[0].state.owner()));
     let mut draft = Draft::new(0, &r.fee, change)?;
     let ext = r.tokens[0].state.extension();
+    let mut borrow = None;
     for t in &r.tokens {
         check_token_input(t, token)?;
         if t.state.extension() != ext {
             return invalid("token inputs mix extension commitments");
         }
+        one_borrow(&mut borrow, &t.state)?;
         draft.add_token_input(t, token, token_witness(&t.state, token.1)?)?;
     }
     for f in &r.funding {
@@ -1770,10 +1827,11 @@ pub fn build_send_tokens(r: &SendTokens, budgets: BudgetFn) -> Result<BuiltTx> {
         return invalid(format!("sending {sent} with only {have}"));
     }
     if sent < have {
-        let owner = r.token_change.unwrap_or(r.tokens[0].state.owner());
+        let first = r.tokens[0].state.owner();
+        let owner = r.token_change.unwrap_or(first);
         draft.add_token_output(
             token,
-            TokenState::user(token.1, have - sent, owner, ext),
+            holder_change(token.1, have - sent, owner, ext, borrow.unwrap_or(NO_BORROW), first)?,
             pos(r.token_change_carrier as i64, "token change carrier")?,
         )?;
     }
@@ -3640,6 +3698,24 @@ fn add_update_outputs(draft: &mut Draft, batch: &Batch, update_outs: Vec<(usize,
     Ok(())
 }
 
+/// The borrow setting of the taker's tokens of `t` and their owner, for the taker's net output.
+///
+/// The taker's tokens of one token share one setting. A setting other than [`NO_BORROW`] never
+/// joins a custody of the same token in one output, since custodies are plain.
+fn taker_borrow(batch: &Batch, lay: &Layout, t: Token) -> Result<(Borrow, Option<[u8; 32]>)> {
+    let mut b = None;
+    let mut owner = None;
+    for x in batch.taker_tokens.iter().filter(|x| x.utxo.covenant_id == Some(t.0)) {
+        one_borrow(&mut b, &x.state)?;
+        owner.get_or_insert(x.state.owner());
+    }
+    let b = b.unwrap_or(NO_BORROW);
+    if b != NO_BORROW && lay.token_inputs.iter().any(|(i, tok)| matches!(i, TokIn::Leg(..)) && *tok == t) {
+        return invalid("taker tokens with a borrow setting cannot share a token output with plain custodies (one borrow setting per token and transaction)");
+    }
+    Ok((b, owner))
+}
+
 /// Adds the taker's net tokens, per token.
 fn add_taker_tokens(
     draft: &mut Draft,
@@ -3665,7 +3741,8 @@ fn add_taker_tokens(
                 Some(c) if batch.keep_surplus.contains(&t.0) => pos(c as i64, "keepCarrier")?,
                 _ => pos(batch.taker_token_carrier as i64, "takerTokenCarrier")?,
             };
-            draft.add_token_output(*t, TokenState::user(t.1, net, to, e), carrier)?;
+            let (b, owner) = taker_borrow(batch, lay, *t)?;
+            draft.add_token_output(*t, holder_change(t.1, net, to, e, b, owner.unwrap_or(to))?, carrier)?;
         }
     }
     Ok(())

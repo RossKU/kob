@@ -95,7 +95,7 @@ describe('Merge all: the confirmation and the flow steps', () => {
     const freed = formatKas(p.freed).replace('.', '\\.');
     expect(mergeSummary(p, info.ticker)).toMatch(
       new RegExp(
-        `^Merge your 30 TST UTXOs into one: 15 transactions, one after the other, each approved in your wallet \\(15 approvals\\)\\. About ${freed} KAS of their carriers returns to your wallet \\(after network fees of about 0\\.\\d+ KAS\\)\\. One UTXO remains\\.$`,
+        `^Merge 30 TST UTXOs into 1\\. 15 transactions · 15 approvals · about \\+${freed} KAS after fees\\.$`,
       ),
     );
     // the button's figure before the click: the carriers less the one the final UTXO keeps, before the fees
@@ -104,17 +104,17 @@ describe('Merge all: the confirmation and the flow steps', () => {
   });
 
   it('one transaction says so in the singular; a merge that cannot take every UTXO says how many it takes and what remains', () => {
-    expect(mergeSummary(plan(3), info.ticker)).toMatch(/^Merge your 3 TST UTXOs into one: 1 transaction, approved in your wallet \(1 approval\)\. About /);
+    expect(mergeSummary(plan(3), info.ticker)).toMatch(/^Merge 3 TST UTXOs into 1\. 1 transaction · 1 approval · about /);
     const some = mergeSummary({ ...plan(3), before: 120, merged: 101, after: 20 }, info.ticker);
-    expect(some).toMatch(/^Merge your 101 smallest TST UTXOs \(of 120\) into one: /);
-    expect(some).toMatch(/ 20 mergeable UTXOs remain: Merge all again to merge them\.$/);
+    expect(some).toMatch(/^Merge the 101 smallest of 120 TST UTXOs into 1\. /);
+    expect(some).toMatch(/ 20 more remain: Merge all again\.$/);
   });
 
   it('the sell ticket\'s merge says the sale comes after it, with its own confirmation', () => {
     const p = plan(30, { target: 2000n });
     expect(p.links).toHaveLength(3);
     expect(mergeSummary(p, info.ticker)).toMatch(
-      /^Your TST needs merging before the sale: 3 transactions, one after the other, each approved in your wallet \(3 approvals\)\. Then the sale is planned again and you confirm it as usual\. About [0-9.]+ KAS /,
+      /^Merge your TST first, then confirm the sale\. 3 transactions · 3 approvals · about \+[0-9.]+ KAS after fees\.$/,
     );
   });
 
@@ -149,6 +149,6 @@ describe('Merge all: the confirmation and the flow steps', () => {
 
   it('a fee above the freed carriers is stated as a net cost', () => {
     const cost = mergeSummary({ ...plan(3), freed: -1_000_000n, fee: 3_000_000n }, info.ticker);
-    expect(cost).toContain('The network fees of about 0.03 KAS exceed the carriers it frees: your wallet pays about 0.01 KAS net.');
+    expect(cost).toBe('Merge 3 TST UTXOs into 1. 1 transaction · 1 approval · about −0.01 KAS net.');
   });
 });

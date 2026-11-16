@@ -124,6 +124,8 @@ declare('token', {
   'sweep.stray-unproven': ['amount'],
   INSUFFICIENT_TOKENS: ['needed', 'have', 'shortfall'],
   TOKEN_UTXOS_FRAGMENTED: ['needed'],
+  TOKEN_UTXOS_MIXED_BORROW: ['needed'],
+  PAIR_TOKEN_UTXOS_MIXED_BORROW: ['needed'],
   MARKET_DEPTH_INSUFFICIENT: ['available', 'amount'],
   MARKET_ONE_TX_LIMIT: ['fillable'],
   IOC_ONE_TX_LIMIT: ['fillable'],

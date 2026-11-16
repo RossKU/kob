@@ -16,7 +16,7 @@ import { InsufficientFunds, DEFAULT_FEE_RESERVE, selectFunding, selectTokens } f
 import { MAX_TOKEN_INPUTS } from '../guards';
 import { daaToUnix } from '../daa';
 import { isKind, kindFor } from '../order-facts';
-import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isPlainState } from '../token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isSpendableHolding } from '../token-state';
 import { issue, hasError } from './common-issues';
 
 export { issue, customIssue, hasError, ISSUE_CATALOG } from './common-issues';
@@ -219,21 +219,28 @@ export const defaultMinFillFor = (env: Pick<PlanEnv, 'kob' | 'token'>, amount: b
 
 // ---- selecting and building
 
-/** The maker's P2PK-owned token UTXOs that can fund an order (same token and extension). */
+/**
+ * The maker's P2PK-owned token UTXOs that can fund an order (same token and extension).
+ * A KCC-20 holding with a borrow setting counts (option A). `selectTokens` picks from one setting
+ * only and the change keeps it; the custody is always plain.
+ */
 export function usableTokenUtxos(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenUtxos'>): TokenUtxo[] {
   const m = env.token;
   return env.tokenUtxos.filter(
     (u) =>
       u.covenantId === m.covenantId &&
-      isKeyOwned(u.state, m.program) &&
       u.state.owner === env.maker &&
-      isPlainState(u.state) &&
+      isSpendableHolding(u.state, m.program) &&
       (m.family === 'kron' ? isKronState(u.state) : extensionOfState(u.state) === m.extensionCommitment),
   );
 }
 
-/** Why a held UTXO of this token cannot fund an order (the first check it fails), or null when it can. */
-export type UnusableReason = 'owner' | 'extension' | 'borrow';
+/**
+ * Why a held UTXO of this token cannot fund an order (the first check it fails), or null when it can:
+ * an owner type the builders do not spend (a key hash, a script, ...), another extension commitment,
+ * or a KRON minter UTXO.
+ */
+export type UnusableReason = 'owner' | 'extension' | 'minter';
 
 /**
  * The token units the wallet holds that `usableTokenUtxos` skips, with the reason of the largest
@@ -256,7 +263,7 @@ export function unusableTokenHeld(env: Pick<PlanEnv, 'token' | 'maker' | 'tokenU
         ? 'owner'
         : (m.family === 'kron' ? !isKronState(u.state) : extensionOfState(u.state) !== m.extensionCommitment)
           ? 'extension'
-          : 'borrow';
+          : 'minter';
   }
   return amount > 0n ? { amount, reason } : null;
 }
@@ -333,7 +340,9 @@ function buildCreateAt(env: PlanEnv, spec: CreateSpec): CreateResult {
         return fail(
           e.kind === 'fragmented'
             ? issue('TOKEN_UTXOS_FRAGMENTED', { max: e.maxInputs ?? 0, needed: e.needed })
-            : issue('INSUFFICIENT_TOKENS', { needed: e.needed, have: e.have, shortfall: e.shortfall }),
+            : e.kind === 'mixed'
+              ? issue('TOKEN_UTXOS_MIXED_BORROW', { needed: e.needed })
+              : issue('INSUFFICIENT_TOKENS', { needed: e.needed, have: e.have, shortfall: e.shortfall }),
         );
       }
       throw e;

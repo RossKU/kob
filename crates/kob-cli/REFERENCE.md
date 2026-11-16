@@ -1,3 +1,7 @@
+- **`kob merge <TOKEN> [--wait-secs N]`** takes the key's UTXOs of the token of one borrow setting (plain first; smallest first)
+  and chains transfers to the key itself, at most 10 transactions per run (run again for more, or for another setting). The
+  merged output keeps that setting and the largest input carrier (at most 1 KAS); the freed carriers pay the fee. One
+  confirmation signs the chain; each later link waits up to `--wait-secs` (default 30) for the node to show the previous output.
 # kob reference
 
 The details behind [README.md](README.md): planner defaults, units, token resolution, fees, every order option, the `--json`
@@ -581,8 +585,8 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 
 ## kob merge, kob order and kob recover
 
-- **`kob merge <TOKEN> [--wait-secs N]`** takes the key's plain UTXOs of the token (smallest first) and chains transfers to the
-  key itself, at most 10 transactions per run (run again for more). The merged output keeps the largest input carrier (at most
+- **`kob merge <TOKEN> [--wait-secs N]`** takes the key's UTXOs of the token of one borrow setting (plain first; smallest first)
+  and chains transfers to the key itself; the merged output keeps that setting, at most 10 transactions per run (run again for more). The merged output keeps the largest input carrier (at most
   1 KAS); the freed carriers pay the fee. One confirmation signs the chain; each later link waits up to `--wait-secs`
   (default 30) for the node to show the previous output.
 - **`kob order sweep --view FILE...`** returns an order's strays to the maker while the order continues in place (same

@@ -2,7 +2,7 @@
 // one country's time zone for everybody, a failed read blamed the node whatever failed, and the dynamic-fee hint promised a review screen.
 import { expect, test } from '../fixtures';
 import { TOKEN, connectWallet, fund, listExkcc, openMarket } from '../helpers/env';
-import { pickType } from '../helpers/ticket';
+import { fillFields, pickType, placeOrder, waitReviewable } from '../helpers/ticket';
 
 test.use({ autoOpen: false });
 
@@ -40,13 +40,26 @@ test('the dynamic fee hint says where the fee is shown and that the rate is not'
   await expect(hint).toContainText('the rate itself is not shown');
 });
 
-test('Available counts only the token the planner can spend, and one muted line names what it cannot', async ({ appPage: page, mock }) => {
+test('a key-owned holding with a borrow setting counts in Available and sells on the owner path; its change keeps the setting', async ({ appPage: page, mock }) => {
   await fund(mock, 'alice', { tokens: 5n });
-  await mock.giveTokens('alice', 7n * TOKEN, { borrow_scheme: 1 });
-  await openMarket(page, mock);
+  // borrow scheme 2 (a guard key), as a TN10 holding had: spendable by its owner like a plain one (option A)
+  await mock.giveTokens('alice', 7n * TOKEN, { borrow_scheme: 2 });
+  const token = await openMarket(page, mock);
   await pickType(page, 'limit', 'sell');
-  await expect(page.getByTestId('order-available')).toContainText('5');
-  const note = page.getByTestId('order-unusable');
-  await expect(note).toHaveText(/^7 EXKCC not usable here$/);
-  await expect(note).toHaveAttribute('title', 'has a borrow setting');
+  await expect(page.getByTestId('order-available')).toContainText('12');
+  await expect(page.getByTestId('order-unusable')).toHaveCount(0);
+  // 6 is more than the plain 5: the sale takes the borrow-enabled 7 alone, never both kinds in one transaction
+  await fillFields(page, { amount: '6', price: '0.2' });
+  await waitReviewable(page);
+  await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath('sell-ticket-borrow-holding.png'), animations: 'disabled' });
+  const placed = await placeOrder(page, mock);
+  expect(placed.submission.created).toHaveLength(1);
+  const alice = (await mock.balance('alice')).pubkey;
+  const owned = ((await mock.get(`/v1/token-utxos?owner=${alice}&token=${token}&spent=false&limit=50`)).items as { amount: string; role: string; state: { borrow_scheme: number } }[]).filter((u) => u.role === 'owned');
+  // the plain 5 untouched; the change of 1 keeps borrow scheme 2
+  expect(owned.map((u) => [BigInt(u.amount), u.state.borrow_scheme]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[1n * TOKEN, 2], [5n * TOKEN, 0]]);
+  // the custody of the new ask is plain
+  const custody = ((await mock.get(`/v1/token-utxos?owner=${placed.submission.created[0]!.covenantId}&token=${token}&spent=false`)).items as { role: string; state: { borrow_scheme: number } }[]);
+  expect(custody.map((u) => [u.role, u.state.borrow_scheme])).toEqual([['custody', 0]]);
 });

@@ -60,7 +60,7 @@ import type {
 import type { NodeInputFacts } from './node-verify';
 import { outpointKey } from './node-verify';
 import { CODEC_OF_PROGRAM, isTokenProgram } from './programs.generated';
-import { extensionOfState, isCovenantOwned, isKeyOwned, ownerTypeOf } from './token-state';
+import { borrowKeyOf, extensionOfState, isCovenantOwned, isKcc20State, isKeyOwned, ownerTypeOf } from './token-state';
 import { recoverSweeps, type RecoveredSweep } from './sweep';
 import type { KobWasm } from './wasm';
 
@@ -99,7 +99,7 @@ export const SIGNING_ISSUE_CODES = [
   'malformed-built', 'recover-failed', 'order-spk-mismatch', 'order-not-maker', 'order-unrecorded', 'order-token-mismatch', 'input-script-mismatch', 'output-script-mismatch',
   'token-output-count', 'token-unbalanced', 'kas-unbalanced', 'fee-mismatch', 'fee-excessive', 'fee-rate-excessive', 'payment-out', 'transfer-out', 'token-to-unknown-owner',
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
-  'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'pair-token-mismatch', 'pair-family-mismatch',
+  'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   'retired-not-cancel',
   // warnings
@@ -578,6 +578,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    * the spent UTXOs)
    */
   const orderStates = new Map<number, OrderState>();
+  /** Per token covenant id: the borrow setting (`borrowKeyOf`) of every token input, and of the wallet's own ones. */
+  const inputBorrow = new Map<Hex, { all: Set<string>; maker: Set<string> }>();
 
   // ---------------------------------------------------------------- inputs
   const inputs: DecodedInput[] = tx.inputs.map((inp, i) => decodeInput(i, inp, built.plans[i], built.roles[i]));
@@ -664,6 +666,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     mustMatch(derivedSpk, `${plan.template} token script of the given state`);
     const covId = inp.utxo.covenantId ?? '';
     const ownedBy: DecodedInput['ownedBy'] = isCovenantOwned(st) ? 'covenant' : st.owner === maker ? 'maker' : 'other';
+    const seen = inputBorrow.get(covId) ?? { all: new Set<string>(), maker: new Set<string>() };
+    seen.all.add(borrowKeyOf(st));
+    if (ownedBy === 'maker' && isKeyOwned(st)) seen.maker.add(borrowKeyOf(st));
+    inputBorrow.set(covId, seen);
     const witness: 'covenantId' | 'p2pk' = plan.kind === 'kronToken' ? (isCovenantOwned(st) ? 'covenantId' : 'p2pk') : plan.witness.kind;
     return {
       ...base, type: 'token', ownedBy,
@@ -672,6 +678,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
         escrowOf: isCovenantOwned(st) ? st.owner : null, program: plan.template, witness,
       },
     };
+  }
+
+  // inputs of one token with different borrow settings never share a transaction (option A): the
+  // change could not keep the setting of every input
+  for (const [covId, seen] of inputBorrow) {
+    if (seen.all.size > 1) add('token-state-mixed', `the token inputs of token ${shortId(covId)} carry different borrow settings: one transaction spends one setting only`, { params: { token: covId } });
   }
 
   // signature requests must be for the wallet key, SIGHASH_ALL, on inputs whose plan wants exactly
@@ -967,7 +979,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const st = tok.state;
       const ref = tokenRef(registry, tok.covenantId);
       const token = { ref, amount: big(st.amount), owner: st.owner, ownerScheme: ownerTypeOf(st), escrowOf: isCovenantOwned(st) ? st.owner : null };
-      const unplain = unplainTokenState(st);
+      // A borrow setting is kept only on the wallet's own change, and only with the setting of every
+      // wallet input of that token (option A: the owner path spends such a holding, its change keeps
+      // the setting). On a recipient, a custody or any other output it stays blocking.
+      const keepsSetting =
+        isKcc20State(st) && isKeyOwned(st) && st.owner === maker && inputBorrow.get(tok.covenantId)?.maker.size === 1 && inputBorrow.get(tok.covenantId)!.maker.has(borrowKeyOf(st));
+      const unplain = keepsSetting ? null : unplainTokenState(st);
       if (unplain) add('token-state-unplain', `output ${j}: the token state carries ${unplain}: tokens with these features could be moved by someone else`, { output: j });
       if (isCovenantOwned(st)) {
         if (newCovenantIds.has(st.owner)) return { ...blank, kind: 'custody', flagged: !ok, token };

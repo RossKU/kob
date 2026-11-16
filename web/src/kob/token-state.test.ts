@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { withFreeBalances } from './balances';
-import { holderOwnerOf, isKeyOwned, isKronUnspendable, keyState, programOfHash } from './token-state';
+import { PLAIN_BORROW, borrowKeyOf, groupByBorrow, holderOwnerOf, isKeyOwned, isKronUnspendable, isSpendableHolding, keyState, programOfHash, withBorrowOf } from './token-state';
 import { TOKEN_PROGRAMS } from './programs.generated';
 import type { Hex, KronState, TokenUtxo } from './types';
 
@@ -45,5 +45,42 @@ describe('key-held KRON states follow the program holder owner', () => {
     expect([known.free, known.notSpendable]).toEqual([5n, 0n]);
     const [unknown] = withFreeBalances([], [u], OWNER);
     expect([unknown.free, unknown.notSpendable]).toEqual([0n, 5n]);
+  });
+});
+
+describe('borrow settings (option A)', () => {
+  const k = (amount: string, borrow_scheme = 0, borrow_guard = '00'.repeat(32), owner_scheme = 0) => ({
+    state: { amount, owner: OWNER, owner_scheme, borrow_scheme, borrow_guard, extension_commitment: '00'.repeat(32) },
+  });
+
+  it('a key-owned KCC-20 holding of any borrow setting is spendable; another owner scheme or a KRON minter is not', () => {
+    expect(isSpendableHolding(k('5').state)).toBe(true);
+    expect(isSpendableHolding(k('5', 2, 'ab'.repeat(32)).state)).toBe(true);
+    expect(isSpendableHolding(k('5', 1, 'ab'.repeat(32), 1).state)).toBe(false);
+    expect(isSpendableHolding(kron(3), 'KronToken2433')).toBe(true);
+    expect(isSpendableHolding({ ...kron(3), is_minter: 1 }, 'KronToken2433')).toBe(false);
+  });
+
+  it('borrowKeyOf: one key per (scheme, guard); every plain state and KRON share PLAIN_BORROW', () => {
+    expect(borrowKeyOf(k('5').state)).toBe(PLAIN_BORROW);
+    expect(borrowKeyOf(kron(3))).toBe(PLAIN_BORROW);
+    expect(borrowKeyOf(k('5', 2, 'AB'.repeat(32)).state)).toBe(`2:${'ab'.repeat(32)}`);
+    expect(borrowKeyOf(k('5', 2, 'ab'.repeat(32)).state)).not.toBe(borrowKeyOf(k('5', 2, 'cd'.repeat(32)).state));
+  });
+
+  it('groupByBorrow: plain first, then by total, largest first; order kept inside a group', () => {
+    const a = k('1', 2, 'ab'.repeat(32));
+    const b = k('9', 3, 'cd'.repeat(32));
+    const c = k('2');
+    const d = k('4', 2, 'ab'.repeat(32));
+    const e = k('3');
+    expect(groupByBorrow([a, b, c, d, e])).toEqual([[c, e], [b], [a, d]]);
+    expect(groupByBorrow([])).toEqual([]);
+  });
+
+  it('withBorrowOf copies scheme and guard (KCC-20) and leaves KRON alone', () => {
+    const from = k('1', 3, '5a'.repeat(32)).state;
+    expect(withBorrowOf(k('7').state, from)).toMatchObject({ amount: '7', borrow_scheme: 3, borrow_guard: '5a'.repeat(32) });
+    expect(withBorrowOf(kron(3), from)).toEqual(kron(3));
   });
 });

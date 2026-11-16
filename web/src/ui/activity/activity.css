@@ -47,7 +47,7 @@
 /* The widths the columns grow to (founder 2026-11-12: the whole transaction id and the whole wallet when there is room). Tx and Wallet grow to their full text: 64 hex characters at 0.8rem
    mono (about 30.7rem) and a 61-character address body at 0.78rem mono (about 28.5rem), with a little slack for a wider mono font; Amount and Price stop at what their figures need (a long
    amount such as 123,456,789.12 TUSD with its dollar or KAS line under it: 9rem; the price and its "Price (KAS)" title: 6rem). A track grows toward its cap together with the others, so the figure columns
-   reach theirs first and Tx and Wallet take the rest. Where Tx and Wallet are full, the slack goes to the Amount track (1fr, its figures are right-aligned), so the numbers stay by their titles. A text
+   reach theirs first and Tx and Wallet take the rest. Where Tx and Wallet are full, the slack is spread evenly between the columns (founder 2026-11-16: one wide gap before Amount read as a broken Wallet column). A text
    that still has no room ends with an ellipsis, never shortened in the middle. */
 .act-log { --act-tx-w: 31rem; --act-who-w: 29rem; --act-amt-w: 9rem; --act-px-w: 6rem; container: actlog / inline-size; font-size: 0.83rem; font-variant-numeric: tabular-nums; min-width: 0; scroll-margin-top: 120px; }
 .act-head, .act-row {
@@ -119,10 +119,10 @@ a.act-row:focus-visible { outline: 2px solid var(--focus, var(--primary)); outli
 .act-skel .act-c-conf .skeleton-line { width: 28px; }
 .act-skel .act-c-amt, .act-skel .act-c-time { min-width: 48px; }
 
-/* A wide log: Tx and Wallet grow to their whole text first (the caps above), Amount and Price stay at their figures' width, the slack after that goes to Amount. Three classes: the same rule under a
+/* A wide log: Tx and Wallet grow to their whole text first (the caps above), Amount and Price stay at their figures' width, the slack after that goes evenly between the columns. Three classes: the same rule under a
    token or pair page wins over any older rule on the figures. */
 @container actlog (min-width: 1200px) {
-  .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, var(--act-tx-w)) minmax(90px, var(--act-who-w)) minmax(var(--act-amt-w), 1fr) minmax(84px, var(--act-px-w)) 64px 84px; }
+  .act .act-log .act-head, .act .act-log .act-row { grid-template-columns: 28px 56px minmax(80px, var(--act-tx-w)) minmax(90px, var(--act-who-w)) var(--act-amt-w) minmax(84px, var(--act-px-w)) 64px 84px; justify-content: space-between; }
 }
 /* a medium card: no pie (the count, or ✓), tighter columns */
 @container actlog (max-width: 899px) {

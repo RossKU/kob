@@ -22,7 +22,7 @@ import { KobError } from '../wasm';
 import { InsufficientFunds, DEFAULT_FEE_RESERVE, selectFunding, selectTokens } from '../funding';
 import { MAX_TOKEN_INPUTS, QUOTE_LIMIT } from '../guards';
 import { daaToUnix } from '../daa';
-import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isPlainState } from '../token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isSpendableHolding } from '../token-state';
 import { fitsI64 } from '../units';
 import { issue, hasError } from './common-issues';
 import { DEFAULT_CARRIER, orderCarrierFloor, str } from './common';
@@ -111,14 +111,16 @@ function tokenOf(env: PairPlanEnv, covId: Hex): { market: TokenMarket; utxos: To
   return null;
 }
 
-/** The maker's P2PK-owned plain UTXOs of `market` (same token, same extension for KCC-20). */
+/**
+ * The maker's P2PK-owned UTXOs of `market` (same token, same extension for KCC-20), a KCC-20
+ * borrow setting included (option A: one setting per selection, see `selectTokens`).
+ */
 export function usableUtxosOf(market: TokenMarket, maker: Hex, utxos: readonly TokenUtxo[]): TokenUtxo[] {
   return utxos.filter(
     (u) =>
       u.covenantId === market.covenantId &&
-      isKeyOwned(u.state) &&
       u.state.owner === maker &&
-      isPlainState(u.state) &&
+      isSpendableHolding(u.state) &&
       (market.family === 'kron' ? isKronState(u.state) : extensionOfState(u.state) === market.extensionCommitment),
   );
 }
@@ -403,7 +405,9 @@ function buildPairCreateAt(env: PairPlanEnv, spec: { order: OrderState; value: b
         return fail(
           e.kind === 'fragmented'
             ? pairIssue('PAIR_TOKEN_UTXOS_FRAGMENTED', { ticker: t.market.ticker, max: e.maxInputs ?? 0 })
-            : pairIssue('PAIR_INSUFFICIENT_TOKENS', { ticker: t.market.ticker, needed: e.needed, have: e.have, shortfall: e.shortfall }, t.market === env.token ? 'amount' : 'price'),
+            : e.kind === 'mixed'
+              ? pairIssue('PAIR_TOKEN_UTXOS_MIXED_BORROW', { ticker: t.market.ticker, needed: e.needed }, t.market === env.token ? 'amount' : 'price')
+              : pairIssue('PAIR_INSUFFICIENT_TOKENS', { ticker: t.market.ticker, needed: e.needed, have: e.have, shortfall: e.shortfall }, t.market === env.token ? 'amount' : 'price'),
         );
       }
       throw e;

@@ -5,9 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { planCancel, type CancelEnv, type OrderSnapshot } from './cancel';
 import { FEE_ABSOLUTE_MAX, decodeSigning } from './decode';
 import { parseRegistry } from './registry';
-import type { ActionRequest, BuiltTx, Hex, Kcc20State } from './types';
+import type { ActionRequest, BuiltTx, Hex, Kcc20State, TokenUtxo } from './types';
+import { planMerge, type MergeToken } from './merge';
 import { loadKobNode } from './wasm.node';
-import { MAKER, OTHER, goldenRequest, keyUtxo, nodeFactsOf, placeGolden, tradableRegistryJson } from '../testing/chain-fixtures';
+import { MAKER, OTHER, TOKEN, goldenRequest, keyUtxo, nodeFactsOf, placeGolden, tokenUtxo, tradableRegistryJson } from '../testing/chain-fixtures';
 
 const kob = loadKobNode();
 const registry = parseRegistry(tradableRegistryJson(), { kob });
@@ -132,5 +133,47 @@ describe('an if-done entry committed exit with another maker (negative result ke
     const evilReq = clone(req);
     evilReq.order.state.exitState = exit.split(MAKER.pk).join(OTHER.pk);
     expect(() => kob.build(evilReq)).toThrow(/exit must be the maker's order of the same token/);
+  });
+});
+
+describe('borrow settings on the owner path (option A): kept only on the wallet change of inputs of that one setting', () => {
+  const guard = OTHER.pk;
+  const held = (amount: bigint, n: number, scheme = 2): TokenUtxo => {
+    const u = tokenUtxo(amount, MAKER.pk, n, 2n * KAS);
+    return { ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: guard } as Kcc20State };
+  };
+  const STD: MergeToken = { covenantId: TOKEN.covenantId, program: TOKEN.program, templateHash: TOKEN.templateHash, extensionCommitment: TOKEN.ext, slots: { inputs: 3 } };
+  const link = () => {
+    const plan = planMerge({ kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 50n * KAS, 201)] }, STD, [held(5n, 0x71), held(6n, 0x72)]);
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    return clone(plan.links[0]!.built);
+  };
+  const dec = (built: BuiltTx) => decodeSigning({ kob, built, maker: MAKER.pk, registry, expected: { cancelIds: [] }, nodeInputs: nodeFactsOf(built) });
+
+  it('a merge of one setting into the wallet change with that setting is not blocked', () => {
+    expect(dec(link()).blocking).toEqual([]);
+  });
+
+  it('inputs of two settings are blocking (token-state-mixed), and the change then cannot keep either', () => {
+    const built = link();
+    const i = built.tx.inputs.findIndex((x) => x.utxo.covenantId === TOKEN.covenantId);
+    const plan = built.plans[i] as Extract<BuiltTx['plans'][number], { kind: 'tokenLeader' }>;
+    const plain = { ...(plan.state as Kcc20State), borrow_scheme: 0, borrow_guard: '00'.repeat(32) };
+    plan.state = plain;
+    built.tx.inputs[i]!.utxo.scriptPublicKey = kob.tokenScriptPublicKey(plan.template, plain);
+    const codes = dec(built).blocking.map((b) => b.code);
+    expect(codes).toContain('token-state-mixed');
+    expect(codes).toContain('token-state-unplain');
+  });
+
+  it('the setting on another output than the wallet change (another guard) is blocking', () => {
+    const built = link();
+    const li = built.plans.findIndex((p) => p.kind === 'tokenLeader');
+    const plan = built.plans[li] as Extract<BuiltTx['plans'][number], { kind: 'tokenLeader' }>;
+    const out = built.tx.outputs.findIndex((o) => o.covenant?.covenantId === TOKEN.covenantId);
+    const st = { ...(plan.nextStates[0] as Kcc20State), borrow_guard: MAKER.pk };
+    plan.nextStates[0] = st;
+    built.tx.outputs[out]!.scriptPublicKey = kob.tokenScriptPublicKey(plan.template, st);
+    expect(dec(built).blocking.map((b) => b.code)).toContain('token-state-unplain');
   });
 });
