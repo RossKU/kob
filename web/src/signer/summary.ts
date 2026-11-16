@@ -65,6 +65,9 @@ const TITLE: Record<SigningKind, string> = {
   refund: 'signer.kind.refund',
   send: 'signer.kind.send',
   sweep: 'signer.kind.sweep',
+  claim: 'signer.kind.claim',
+  'claim-merge': 'signer.kind.claimMerge',
+  'claim-place': 'signer.kind.claimPlace',
   other: 'signer.kind.other',
 };
 
@@ -361,6 +364,23 @@ function scaleMismatches(s: SigningSummary, hints: TokenHint[]): { code: string 
   return out;
 }
 
+/** The delivery the order is signed with (a signed term: mode, and a top-up's tip and threshold); an if-done entry's on its exit. */
+function withDelivery(sum: SummaryOrder, o: DecodedOrder, hints: TokenHint[]): SummaryOrder {
+  const dl = o.delivery;
+  if (!dl) return sum;
+  const d = o.description;
+  const token = d.pair ? (d.pair.side === 'buy' ? d.pair.base.covId : d.pair.quote.covId) : d.tokenCovId;
+  const hint = hints.find((h) => h.covenantId === token);
+  const mode = dl.mode === 1n ? 'collected' : dl.mode === 2n ? 'topup' : 'each';
+  const rows: SummaryOrder['rows'] = [{ id: 'delivery', label: t('signer.delivery.label'), value: t(`signer.delivery.${mode}`) }];
+  if (dl.mode === 2n) {
+    rows.push({ id: 'topupTip', label: t('signer.delivery.tip'), value: `${formatKas(dl.topupTip)} KAS` });
+    rows.push({ id: 'recvThreshold', label: t('signer.delivery.threshold'), value: formatTokenAmount(dl.recvThreshold, hint ? hint.decimals : RAW_TOKEN_DECIMALS) });
+  }
+  if (dl.exit && sum.exit) return { ...sum, exit: { ...sum.exit, rows: [...sum.exit.rows, ...rows] } };
+  return { ...sum, rows: [...sum.rows, ...rows] };
+}
+
 /** Compact lines of a decoded request: KAS and every token, net for this key; KAS locked into orders and paid to other keys; the fee. */
 export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: KobWasm, terms = false): SignerSummary {
   const hints = withOrderScales(s, appHints);
@@ -389,13 +409,30 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
   for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && (x.action === 'cancel' || x.action === 'refund' || x.action === 'sweep')).slice(0, MAX_CLOSED_LINES)) {
     lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
   }
+  // a claim (bid-delivery-spec §7): what the order bought, where it goes, the carrier added to the order
+  for (const sp of s.spends.filter((x) => x.makerIsWallet && x.covenantId && x.bought && (x.action === 'claim' || x.bought.input !== null))) {
+    const b = sp.bought!;
+    const token = sp.description?.pair ? (sp.description.pair.side === 'buy' ? sp.description.pair.base.covId : sp.description.pair.quote.covId) : sp.description?.tokenCovId;
+    if (!token) continue;
+    const hint = hints.find((h) => h.covenantId === token);
+    const amount = (v: bigint) => `${formatTokenAmount(v, hint ? hint.decimals : RAW_TOKEN_DECIMALS)}${unitOf(hint)}`;
+    if (sp.action === 'claim') lines.push({ label: t('signer.net.claims'), value: longId(sp.covenantId!), dir: null });
+    lines.push({ label: t('signer.net.claimed', { token: tokenName(token, hint, terms) }), value: amount(b.amount), dir: null });
+    if (b.toYou !== undefined && b.toOrder !== undefined) {
+      const to = b.toOrder === 0n ? t('signer.net.claimToYou') : b.toYou === 0n ? t('signer.net.claimToOrder') : t('signer.net.claimSplit', { order: amount(b.toOrder), you: amount(b.toYou) });
+      lines.push({ label: t('signer.net.claimTo'), value: to, dir: null });
+    }
+    const cont = s.orders.find((o) => o.claimedFrom === sp.input);
+    const was = s.inputs[sp.input]?.amount;
+    if (cont && was !== undefined && cont.value > was) lines.push({ label: t('signer.net.claimCarrier'), value: kas(cont.value - was), dir: null });
+  }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
   const fromTokens = freedFromTokens(s);
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
   const registry = hintRegistry(hints);
-  const orders = s.orders.filter((o) => o.sweptFrom === undefined).map((o) => {
+  const orders = s.orders.filter((o) => o.sweptFrom === undefined && o.claimedFrom === undefined).map((o) => {
     const chain = orderSummary(o.description, { value: o.value, locked: o.locked, deadline: o.deadline, fills: marketFillsOf(o, kob) }, hints, registry, terms);
-    return flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain;
+    return withDelivery(flippedSummary(o, hints.find((h) => h.covenantId === o.description.tokenCovId), kob, chain, terms) ?? chain, o, hints);
   });
   const found = [...s.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code)), ...(terms ? scaleMismatches(s, hints) : [])];
   // the maker's cancel of an order under an older contract version (the cancel-only table): said as such, with what returns to the wallet

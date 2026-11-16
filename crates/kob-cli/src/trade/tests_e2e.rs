@@ -163,6 +163,8 @@ struct World {
     indexer: String,
     indexer_state: Arc<Mutex<MockIndexer>>,
     dir: PathBuf,
+    /// The output files (and their bytes) that `fresh` already handed out.
+    seen: Mutex<BTreeMap<PathBuf, Vec<u8>>>,
 }
 
 fn world(name: &str, orders: &[(AnyState, [u8; 32], u8, u64)]) -> World {
@@ -216,7 +218,7 @@ fn world_x(
     for n in [0x11u8, 0x22] {
         std::fs::write(dir.join(format!("key{n:02x}")), to_hex(&[n; 32])).unwrap();
     }
-    World { node, node_state, indexer, indexer_state, dir }
+    World { node, node_state, indexer, indexer_state, dir, seen: Mutex::new(BTreeMap::new()) }
 }
 
 impl World {
@@ -239,32 +241,42 @@ impl World {
         );
         v
     }
+    /// The output file for `suffix` that no earlier call returned, or whose bytes changed since.
+    ///
+    /// Two files written within one clock tick have equal modification times, so the newest by time
+    /// is not well defined; what the last command wrote is what is new. With none new, the newest.
+    fn fresh(&self, suffix: &str) -> PathBuf {
+        let dir = self.dir.join("out");
+        let mut files: Vec<(PathBuf, Vec<u8>)> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.display().to_string().ends_with(suffix))
+            .map(|p| {
+                let b = std::fs::read(&p).unwrap();
+                (p, b)
+            })
+            .collect();
+        files.sort_by_key(|(p, _)| std::fs::metadata(p).unwrap().modified().unwrap());
+        let mut seen = self.seen.lock().unwrap();
+        let new: Vec<&(PathBuf, Vec<u8>)> = files.iter().filter(|(p, b)| seen.get(p) != Some(b)).collect();
+        let (path, _) = new.last().copied().or(files.last()).unwrap_or_else(|| panic!("no {suffix} in {}", dir.display())).clone();
+        for (p, b) in &files {
+            seen.insert(p.clone(), b.clone());
+        }
+        path
+    }
     fn submitted(&self) -> usize {
         self.node_state.lock().unwrap().submitted.len()
     }
     /// The codes of the findings in the newest file written for `suffix`.
     fn issue_codes(&self, suffix: &str) -> Vec<String> {
-        let dir = self.dir.join("out");
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.display().to_string().ends_with(suffix))
-            .collect();
-        files.sort_by_key(|p| std::fs::metadata(p).unwrap().modified().unwrap());
-        let path = files.last().unwrap_or_else(|| panic!("no {suffix} in {}", dir.display()));
+        let path = &self.fresh(suffix);
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         doc["info"]["issues"].as_array().unwrap().iter().map(|i| i["code"].as_str().unwrap().to_string()).collect()
     }
     /// The newest signed transaction written for `suffix`, validated again in the engine.
     fn signed(&self, suffix: &str) -> SignedTx {
-        let dir = self.dir.join("out");
-        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| p.display().to_string().ends_with(suffix))
-            .collect();
-        files.sort_by_key(|p| std::fs::metadata(p).unwrap().modified().unwrap());
-        let path = files.last().unwrap_or_else(|| panic!("no {suffix} in {}", dir.display()));
+        let path = &self.fresh(suffix);
         let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         assert_eq!(doc["submit_request"]["method"], "submitTransaction");
         let s: SignedTx = serde_json::from_value(doc["signed"].clone()).unwrap();
