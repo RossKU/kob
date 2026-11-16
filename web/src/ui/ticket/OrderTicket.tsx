@@ -24,6 +24,9 @@ import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER, heldAmount, unusableTokenHeld } from '../../kob/orders/common';
 import { lowPairTipFields } from '../../kob/orders/pair-common';
+import { planDelivery, programTopupTip, topupTipTotal, withThreshold } from '../../kob/orders/delivery';
+import { CODEC_OF_PROGRAM, isTokenProgram } from '../../kob/programs.generated';
+import { readThreshold, rememberThreshold, useDeliveryPref } from '../settings/delivery-pref';
 import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, useAsync } from '../kit';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
@@ -38,7 +41,7 @@ import { oppositeSide } from '../market/orientation';
 import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields, labelKey } from './TicketFields';
 import {
-  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, deliveryOf, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   isIncomplete, setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -212,12 +215,24 @@ export function OrderTicket(props: OrderTicketProps) {
   // the book's best prices: what a KAS amount of a market / close order converts at (an inverted market)
   const bestAsk = env?.book.asks[0]?.price ?? null;
   const bestBid = env?.book.bids[0]?.price ?? null;
+  // the delivery of a buy (kob/orders/delivery.ts): the wallet default of Settings and the receive threshold this wallet stored for the token
+  const [walletDelivery] = useDeliveryPref();
+  const family = token.program && isTokenProgram(token.program) ? CODEC_OF_PROGRAM[token.program] : undefined;
+  const pubkey = wallet.info?.pubkey ?? null;
+  const ext = env?.token.extensionCommitment ?? null;
+  const [thresholdTick, setThresholdTick] = useState(0);
+  const storedThreshold = useMemo(
+    () => (pubkey && ext ? readThreshold({ maker: pubkey, tokenCovId: token.covenantId, extensionCommitment: ext }) : undefined),
+    [pubkey, ext, token.covenantId, thresholdTick],
+  );
   const ctx: TicketCtx = useMemo(
     () => ({
       decimals: token.decimals, scale, tick: token.tick ?? 1n, tzOffsetMin: new Date().getTimezoneOffset(), ...(rateMilli ? { rateMilli } : {}),
       ...(quote ? { quoteDecimals: quote.decimals } : { ref: { buy: bestAsk, sell: bestBid } }),
+      ...(family ? { family } : {}),
+      delivery: { walletDefault: walletDelivery, ...(storedThreshold !== undefined ? { threshold: storedThreshold } : {}) },
     }),
-    [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid],
+    [token.decimals, scale, token.tick, rateMilli, quote?.decimals, bestAsk, bestBid, family, walletDelivery, storedThreshold],
   );
   // a streaming order's "price you saw" is the quote its side meets (buy: the best ask, sell: the best bid): filled in and kept on the quote until
   // the user types a price of their own
@@ -402,6 +417,19 @@ export function OrderTicket(props: OrderTicketProps) {
 
   const shownPlan: OrderPlan | null = enabled && current ? plan : null;
   const planErrors = shownPlan ? errors(shownPlan) : [];
+  // the delivery rows of Advanced: the choice in force, the program's default Top-up tip, and what Top-up costs at most (the shown plan's fills)
+  const delivery = deliveryOf(form, ctx);
+  const planned = shownPlan ? planDelivery(shownPlan) : null;
+  const carrier = env?.carrier ?? DEFAULT_CARRIER;
+  const defaultTip = token.program ? programTopupTip(token.program, carrier) : null;
+  const topupThreshold = planned?.delivery.choice === 'topup' ? planned.delivery.threshold : null;
+  const deliverySubs: Record<string, { text: string; testid: string }> = {};
+  if (delivery === 'collected') deliverySubs.delivery = { text: t('ticket.delivery.collectedNote'), testid: 'order-delivery-note' };
+  if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
+    const tip = BigInt(planned.delivery.fields.topupTip);
+    const kas = formatKas(topupTipTotal(tip, planned.fills), { group: ',' });
+    deliverySubs.topupTip = { text: planned.fills === 1n ? t('ticket.topup.total.one', { kas }) : t('ticket.topup.total.other', { kas, count: planned.fills.toString() }), testid: 'order-topup-total' };
+  }
   // under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the book the planner sees; a fixed line, "—" when empty
   // the USD display (Settings): a muted read-only "≈ $x" beside the estimate of a KAS-quoted order; the ticket's own figures and everything signed stay KAS
   const fiat = useFiat();
@@ -683,7 +711,10 @@ export function OrderTicket(props: OrderTicketProps) {
   /** The order button: every level of the order in turn, each planned at its turn, checked and approved in the wallet; a level that stops ends it. */
   const place = async () => {
     if (!canPlace || !built.intent) return;
-    const intents = ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent];
+    // Top-up: every order of the click uses one receive threshold, the stored one or the one the shown plan set (the wallet's first top-up order
+    // of the token); it is stored once an order with it is submitted
+    const firstTopup = topupThreshold === null ? null : storedThreshold === undefined ? topupThreshold : null;
+    const intents = (ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent]).map((i) => (firstTopup !== null ? withThreshold(i, firstTopup) : i));
     const levels = intents.length;
     // the terms the user saw: the plan the button was enabled for (a ladder's levels are planned each at its turn, each within the planner's rules)
     const shown = levels === 1 ? shownPlan : null;
@@ -699,6 +730,9 @@ export function OrderTicket(props: OrderTicketProps) {
         const out = await placeLevel(intents[i]!, i, levels, shown);
         if (out?.status !== 'submitted') break;
         placed += 1;
+        if (firstTopup !== null && pubkey && ext && rememberThreshold({ maker: pubkey, tokenCovId: token.covenantId, extensionCommitment: ext, threshold: firstTopup, ticker, decimals: token.decimals })) {
+          setThresholdTick((n) => n + 1);
+        }
       }
     } finally {
       setPlacing(false);
@@ -936,7 +970,10 @@ export function OrderTicket(props: OrderTicketProps) {
         <details class="tk-advanced" data-testid="order-advanced">
           <summary>{t('ticket.advanced')}</summary>
           <div class="tk-advanced-body">
-            <TicketFields form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})} />
+            <TicketFields
+              form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
+              defaults={{ delivery: walletDelivery }} placeholders={defaultTip !== null ? { topupTip: formatKas(defaultTip) } : {}} subs={deliverySubs}
+            />
           </div>
         </details>
       </div>
@@ -965,6 +1002,7 @@ export function OrderTicket(props: OrderTicketProps) {
                     : ' '}
               </p>
               <p class="muted">{t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
+              {delivery === 'collected' ? <p class="muted" data-testid="order-ladder-custodies">{t('ticket.ladder.custodies', { levels: ladder.levels.length })}</p> : null}
             </>
           ) : null}
         </div>

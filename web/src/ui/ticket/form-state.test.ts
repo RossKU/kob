@@ -6,7 +6,7 @@ import { consensusCheck, kob, makeEnv, market8x8 } from '../../testing/fixtures'
 import { CASES, CTX, TOKEN, WIDE, form, json, ticketEnv } from './ticket-fixtures';
 import {
   FIELDS, FIELD_DEFAULTS, ORDER_TYPES, TYPE_GROUPS, buildIntent, formFromIntent, formatLocalDateTime, initialForm, isIncomplete, layoutOf, maxAmount, parseAmount, parseLocalDateTime,
-  followQuote, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
+  deliveryOf, followQuote, hasDeliveryChoice, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
 const K = kob();
@@ -61,7 +61,11 @@ describe('vocabulary and layout', () => {
     expect(layoutOf(form('limit', 'sell', {})).main).not.toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', { lifetime: 'gtd' })).main).toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', {})).advanced).not.toContain('maxFills');
-    expect(layoutOf(form('limit', 'buy', {})).advanced).toContain('maxFills');
+    // a resting buy chooses its delivery right after the tip; Collected (the default) is funded with one carrier, so it has no Fills box
+    expect(layoutOf(form('limit', 'buy', {})).advanced.slice(0, 2)).toEqual(['tip', 'delivery']);
+    expect(layoutOf(form('limit', 'buy', {})).advanced).not.toContain('maxFills');
+    expect(layoutOf(form('limit', 'buy', { delivery: 'each' })).advanced).toContain('maxFills');
+    expect(layoutOf(form('limit', 'buy', { delivery: 'topup' })).advanced).toEqual(expect.arrayContaining(['delivery', 'topupTip', 'maxFills']));
     expect(layoutOf(form('ifd', 'buy', {})).main).toContain('exit.takeProfit');
     expect(layoutOf(form('ifd', 'buy', { 'exit.kind': 'stop' })).main).toContain('exit.stop');
     expect(layoutOf(form('ifd', 'buy', { 'exit.kind': 'stop' })).main).not.toContain('exit.takeProfit');
@@ -313,10 +317,11 @@ describe('buildIntent', () => {
   });
 
   it('maps a limit to sompi per whole token, base units, tip and lifetime', () => {
-    const r = buildIntent(form('limit', 'buy', { amount: '5.5', price: '1.5', tip: '0.0001', lifetime: 'day', crossing: 'reject', maxFills: '2', minFill: '0.25' }), CTX);
+    const r = buildIntent(form('limit', 'buy', { amount: '5.5', price: '1.5', tip: '0.0001', lifetime: 'day', crossing: 'reject', maxFills: '2', minFill: '0.25', delivery: 'each' }), CTX);
     expect(r.errors).toEqual([]);
     expect(r.intent).toEqual({
       type: 'limit', side: 'buy', amount: 550_000_000n, minFill: 25_000_000n, price: 150_000_000n, tip: 10_000n, lifetime: { kind: 'day' }, crossing: 'reject', maxFills: 2n,
+      delivery: { choice: 'each' },
     });
   });
 
@@ -696,5 +701,65 @@ describe('streaming: the price you saw follows the quote', () => {
     expect(followQuote(r.form, null, r.auto).form.values.displayedPrice).toBe('2.7');
     const lim = form('limit', 'buy', { price: '' });
     expect(followQuote(lim, '2.5', null).form).toBe(lim);
+  });
+});
+
+describe('delivery of buy orders (bid-delivery-spec §10)', () => {
+  const PAIR: TicketCtx = { ...CTX, quoteDecimals: 6 };
+  it('resting buys and sell-first if-done orders choose it; IOC / FOK / market, sells, repeats, KRON and pairs do not', () => {
+    for (const t of ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) expect(hasDeliveryChoice({ type: t, side: 'buy' }, CTX), t).toBe(true);
+    expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, CTX)).toBe(true);
+    expect(hasDeliveryChoice({ type: 'ifo', side: 'sell' }, CTX)).toBe(true);
+    for (const t of ['ioc', 'fok', 'market', 'streaming'] as const) expect(hasDeliveryChoice({ type: t, side: 'buy' }, CTX), t).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, CTX)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'ifd', side: 'buy' }, CTX)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'repeatIfd', side: 'sell' }, CTX)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...CTX, family: 'kron' })).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, PAIR)).toBe(false);
+    // no choice: no Delivery row, and the Fills box stays
+    expect(layoutOf(form('ioc', 'buy', {})).advanced).not.toContain('delivery');
+    expect(layoutOf(form('limit', 'buy', {}), { ...CTX, family: 'kron' }).advanced).toEqual(expect.arrayContaining(['maxFills']));
+    expect(layoutOf(form('limit', 'buy', {}), { ...CTX, family: 'kron' }).advanced).not.toContain('delivery');
+  });
+
+  it('the choice under Advanced, else the wallet default, else Collected', () => {
+    expect(deliveryOf(form('limit', 'buy', {}), CTX)).toBe('collected');
+    expect(deliveryOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'each' } })).toBe('each');
+    expect(deliveryOf(form('limit', 'buy', { delivery: 'topup' }), { ...CTX, delivery: { walletDefault: 'each' } })).toBe('topup');
+    expect(deliveryOf(form('ioc', 'buy', { delivery: 'topup' }), CTX)).toBeNull();
+    // the wallet default Each fill shows the Fills box
+    expect(layoutOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'each' } }).advanced).toContain('maxFills');
+  });
+
+  it('builds the delivery request: the choice, the wallet default, a Top-up tip in KAS and the stored threshold', () => {
+    const ctx: TicketCtx = { ...CTX, delivery: { walletDefault: 'each', threshold: 777n } };
+    const base = { amount: '5', price: '1.5' };
+    expect(buildIntent(form('limit', 'buy', base), ctx).intent).toMatchObject({ delivery: { walletDefault: 'each' } });
+    expect(buildIntent(form('limit', 'buy', base), CTX).intent).not.toHaveProperty('delivery');
+    const topup = buildIntent(form('limit', 'buy', { ...base, delivery: 'topup', topupTip: '0.009', maxFills: '4' }), ctx).intent;
+    expect(topup).toMatchObject({ delivery: { choice: 'topup', walletDefault: 'each', topupTip: 900_000n, threshold: 777n }, maxFills: 4n });
+    // Collected drops the Fills value (one carrier), and a Top-up tip typed before is not sent
+    const collected = buildIntent(form('limit', 'buy', { ...base, delivery: 'collected', topupTip: '0.009', maxFills: '4' }), ctx).intent;
+    expect(collected).toMatchObject({ delivery: { choice: 'collected', walletDefault: 'each' } });
+    expect(collected).not.toHaveProperty('maxFills');
+    expect((collected as { delivery: object }).delivery).not.toHaveProperty('topupTip');
+    expect(buildIntent(form('limit', 'buy', { ...base, delivery: 'topup', topupTip: 'x' }), ctx).errors.map((e) => [e.field, e.code])).toEqual([['topupTip', 'format']]);
+    // a sell-first IFD carries it for its exits; a conditional buy too
+    expect(buildIntent(form('stopLimit', 'buy', { amount: '5', stop: '1.5', limit: '1.6', delivery: 'each' }), CTX).intent).toMatchObject({ delivery: { choice: 'each' } });
+    // the form of an intent shows its delivery again
+    const back = formFromIntent(topup!, CTX);
+    expect(back.values).toMatchObject({ delivery: 'topup', topupTip: '0.009' });
+  });
+
+  it('plans a Collected and a Top-up limit buy from the form', () => {
+    const env = makeEnv();
+    const c: TicketCtx = { decimals: 3, scale: 1_000n, tick: 1n };
+    const collected = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5' }), c).intent!);
+    expect(errors(collected)).toEqual([]);
+    expect(collected.states[0]!.state).toMatchObject({ mode: '1' });
+    const topup = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5', delivery: 'topup' }), c).intent!);
+    expect(errors(topup)).toEqual([]);
+    expect(topup.states[0]!.state).toMatchObject({ mode: '2', recvThreshold: '2000' });
+    consensusCheck(K, topup.built!);
   });
 });

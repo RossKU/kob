@@ -8,6 +8,7 @@
 // pair trigger rule (two KAS books or a resting pair order). Prices are never derived from pair fills.
 import { gtcRenewalUnix, formatLocal, formatUtc } from '../../kob/daa';
 import type { CondSummary } from '../../kob/orders/cond-common';
+import { planDelivery, topupTipTotal } from '../../kob/orders/delivery';
 import type { CarrierLine, Clock, Disclosure, OrderPlan, PairDisclosure } from '../../kob/plan-types';
 import { formatKas, formatPricePerToken, formatTokenAmount, formatUnits, pow10 } from '../../kob/units';
 
@@ -266,6 +267,18 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
   // R-13: paid only to whoever refunds the order after its expiry; it returns to you with a cancel or the last fill
   if (d.refundTip > 0n) reserves.push({ id: 'refundTip', labelKey: 'ticket.disc.refundTip', tone: 'muted', value: kasText(d.refundTip), detail: tx('ticket.disc.refundTipHint') });
   if (d.keeperTip > 0n) reserves.push({ id: 'keeperTip', labelKey: 'ticket.disc.keeperTip', tone: 'muted', value: kasText(d.keeperTip) });
+  // the delivery of a buy (orders/delivery.ts): its name, and a Top-up's tip per fill with the most it can pay
+  const delivery = planDelivery(plan);
+  if (delivery) {
+    reserves.push({ id: 'delivery', labelKey: 'ticket.disc.delivery', tone: 'muted', value: tx(`ticket.opt.delivery.${delivery.delivery.choice}`) });
+    if (delivery.delivery.choice === 'topup') {
+      const tip = BigInt(delivery.delivery.fields.topupTip);
+      reserves.push({
+        id: 'topupTip', labelKey: 'ticket.disc.topupTip', tone: 'muted', value: tx('ticket.val.topupTip', { tip: kasText(tip) }),
+        detail: tx('ticket.val.topupTipTotal', { total: kasText(topupTipTotal(tip, delivery.fills)) }),
+      });
+    }
+  }
 
   const pairFacts = ctx.quote ? ((plan as OrderPlan & { pair?: PairFacts | null }).pair ?? null) : null;
   const seen = new Set<string>();
@@ -461,5 +474,5 @@ export const NOTE_TAGS = [
   'gtc', 'dayOrder', 'gtd', 'auction', 'marketable', 'fokAllOrNothing', 'iocRemainderReturned', 'marketFills', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch', 'rising',
   'carrierReturned', 'stopTrigger', 'stopAuction', 'triggerExposure', 'stopLimitMayNotFill', 'trailing', 'takeProfitLeg', 'oco', 'partialFillsKeepLegs', 'keeperReserve',
   'ifd', 'ifo', 'position', 'buyFirst', 'sellFirst', 'minFill', 'exitGtc', 'exitGtd', 'stopEntry', 'stopEntryTrigger', 'stopEntryAuction', 'exitStop', 'repeat', 'repeatUnlimited',
-  'repeatCounted', 'repeatReBuys', 'repeatReSells', 'repeatStopLossEnds', 'mergeTip', 'cancelPosition', 'prefund', ...PAIR_NOTE_TAGS,
+  'repeatCounted', 'repeatReBuys', 'repeatReSells', 'repeatStopLossEnds', 'mergeTip', 'cancelPosition', 'prefund', 'deliveryCollected', 'deliveryTopup', ...PAIR_NOTE_TAGS,
 ] as const;

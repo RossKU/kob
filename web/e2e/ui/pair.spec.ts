@@ -279,6 +279,9 @@ test('a pair sell budgets its fills like a buy: "Fills to fund" reaches the plan
   await pickType(page, 'limit', 'sell');
   await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
   await page.getByTestId('order-side-buy').click();
+  // a KAS buy is Collected by default (one carrier, no Fills box); Each fill funds a carrier per fill
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
+  await fillFields(page, { delivery: 'each' });
   await expect(page.getByTestId('field-maxFills')).toHaveCount(1);
 });
 

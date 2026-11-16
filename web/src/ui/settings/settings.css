@@ -51,3 +51,4 @@
   .settings-view .btn, .settings-view .btn-sm { min-height: 44px; }
   .settings-view .btn-sm { min-height: 36px; }
 }
+.settings-threshold { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
