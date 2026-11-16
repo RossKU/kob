@@ -41,7 +41,8 @@ use kob_protocol::defaults::{
 };
 use kob_protocol::payload::recover_orders;
 use kob_protocol::state::{
-    AnyState, AskState, BidState, CondAskState, CondBidState, IfdAskState, IfdBidState, PairState, SIDE_ASK, SIDE_BID,
+    AnyState, AskState, BidState, Borrow, CondAskState, CondBidState, IfdAskState, IfdBidState, PairState, NO_BORROW, SIDE_ASK,
+    SIDE_BID,
 };
 use kob_protocol::tx::{BuiltTx, FeeMode, FeeOptions, KeyUtxo, TokenUtxo, COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
 use kob_protocol::Family;
@@ -1138,9 +1139,11 @@ pub(crate) fn insufficient_kas(needed: i128, have: i128) -> Issue {
     )
 }
 
-/// The token UTXOs covering `amount` within `max_inputs`.
+/// The token UTXOs covering `amount` within `max_inputs`, all of one borrow setting.
 ///
-/// It is the smallest single UTXO that suffices, else the largest first.
+/// Inputs of different borrow settings never share a transaction (option A), so it tries one
+/// setting at a time: plain first, then the others by total, largest first. Within one it is the
+/// smallest single UTXO that suffices, else the largest first.
 pub fn select_tokens(utxos: &[TokenUtxo], amount: i64, max_inputs: usize, label: &str) -> Result<Vec<TokenUtxo>, Issue> {
     let usable: Vec<&TokenUtxo> = utxos.iter().filter(|u| u.state.is_user() && u.state.amount() > 0).collect();
     let have: i128 = usable.iter().map(|u| u.state.amount() as i128).sum();
@@ -1150,7 +1153,49 @@ pub fn select_tokens(utxos: &[TokenUtxo], amount: i64, max_inputs: usize, label:
             format!("not enough {label}: this needs {amount} base units, you hold {have} (short by {})", amount as i128 - have),
         ));
     }
-    let mut asc = usable.clone();
+    let groups = borrow_groups(&usable);
+    if groups.len() == 1 {
+        return select_in_group(&usable, amount, max_inputs, label);
+    }
+    let mut fragmented = None;
+    for g in &groups {
+        let total: i128 = g.iter().map(|u| u.state.amount() as i128).sum();
+        if total < amount as i128 {
+            continue;
+        }
+        match select_in_group(g, amount, max_inputs, label) {
+            Ok(p) => return Ok(p),
+            Err(e) => {
+                fragmented.get_or_insert(e);
+            }
+        }
+    }
+    Err(fragmented.unwrap_or_else(|| {
+        error(
+            "TOKEN_UTXOS_MIXED_BORROW",
+            format!(
+                "your {label} are in UTXOs with different borrow settings and none of them holds {amount} base units: one transaction spends one setting only"
+            ),
+        )
+    }))
+}
+
+/// `utxos` grouped by borrow setting (scheme and guard): plain first, then by total, largest first.
+pub fn borrow_groups<'a>(utxos: &[&'a TokenUtxo]) -> Vec<Vec<&'a TokenUtxo>> {
+    let mut groups: Vec<(Borrow, Vec<&TokenUtxo>)> = vec![];
+    for u in utxos {
+        match groups.iter_mut().find(|g| g.0 == u.state.borrow()) {
+            Some(g) => g.1.push(u),
+            None => groups.push((u.state.borrow(), vec![u])),
+        }
+    }
+    let total = |g: &[&TokenUtxo]| g.iter().map(|u| u.state.amount() as i128).sum::<i128>();
+    groups.sort_by(|a, b| (b.0 == NO_BORROW).cmp(&(a.0 == NO_BORROW)).then(total(&b.1).cmp(&total(&a.1))).then(a.0.cmp(&b.0)));
+    groups.into_iter().map(|g| g.1).collect()
+}
+
+fn select_in_group(usable: &[&TokenUtxo], amount: i64, max_inputs: usize, label: &str) -> Result<Vec<TokenUtxo>, Issue> {
+    let mut asc = usable.to_vec();
     asc.sort_by(|a, b| a.state.amount().cmp(&b.state.amount()).then(outpoint_key(&a.utxo).cmp(&outpoint_key(&b.utxo))));
     if let Some(u) = asc.iter().find(|u| u.state.amount() >= amount) {
         return Ok(vec![(*u).clone()]);
@@ -1173,7 +1218,10 @@ pub fn select_tokens(utxos: &[TokenUtxo], amount: i64, max_inputs: usize, label:
     Ok(picked)
 }
 
-/// The maker's key-owned plain UTXOs of `m` (same extension commitment for KCC-20).
+/// The maker's key-owned UTXOs of `m` (same extension commitment for KCC-20).
+///
+/// A KCC-20 holding with a borrow setting counts: the owner path spends it, and its change keeps
+/// the setting. A KRON minter UTXO does not.
 pub fn usable_token_utxos(m: &TokenMarket, maker: &[u8; 32], utxos: &[TokenUtxo]) -> Vec<TokenUtxo> {
     utxos
         .iter()
@@ -1181,7 +1229,7 @@ pub fn usable_token_utxos(m: &TokenMarket, maker: &[u8; 32], utxos: &[TokenUtxo]
             u.utxo.covenant_id == Some(m.cov)
                 && u.state.is_holder(m.program)
                 && u.state.owner() == *maker
-                && u.state.is_plain()
+                && (u.state.is_plain() || u.state.family() == Family::Kcc20)
                 && u.state.family() == m.family
                 && (m.family == Family::Kron || u.state.extension() == m.ext)
         })

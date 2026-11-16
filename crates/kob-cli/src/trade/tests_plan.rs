@@ -779,3 +779,33 @@ fn the_priority_fee_is_the_storage_inclusive_fee_and_the_default_is_untouched() 
     assert_eq!((at.fee_rate, at.fee_mode), (200, FeeMode::Priority));
     assert_eq!(at.min_fee, priority_fee(&at.mass, 200));
 }
+
+/// Option A: a key-owned holding with a borrow setting sells like a plain one, from one setting
+/// at a time; the change keeps the setting and the custody is plain.
+#[test]
+fn a_sell_from_a_borrow_enabled_holding_spends_one_setting() {
+    let m = market(TemplateId::Kcc20Ref);
+    let s2 = (2u8, [0x22; 32]);
+    let with = |u: TokenUtxo, b| TokenUtxo { state: u.state.with_borrow(b), ..u };
+    for b in [(1u8, [0x01; 32]), s2, (3u8, [0x5a; 32])] {
+        let e = Env { token_utxos: vec![with(token_utxo(&m, 2, 100 * TOK), b)], ..env(&m) };
+        assert_eq!(held_amount(&e), 100 * TOK);
+        let p = valid(&e, Intent::Limit(limit(Side::Sell, 10 * TOK, 300_000_000)));
+        let built = p.built.unwrap();
+        let tpl = kob_protocol::artifacts::token_template(m.program);
+        let change = TokenState::user(m.program, 90 * TOK, maker(), m.ext).with_borrow(b);
+        let spk = kob_protocol::tx::spk_to_string(&change.spk_with(tpl));
+        assert!(built.tx.outputs.iter().any(|o| o.script_public_key == spk), "the change keeps the setting {b:?}");
+    }
+    // 60 plain + 50 of scheme 2: 55 fits the plain group only; 70 fits neither
+    let us = vec![token_utxo(&m, 2, 60 * TOK), with(token_utxo(&m, 3, 50 * TOK), s2)];
+    let picked = select_tokens(&usable_token_utxos(&m, &maker(), &us), 55 * TOK, 3, "TST").unwrap();
+    assert_eq!(picked, vec![us[0].clone()]);
+    let picked = select_tokens(&usable_token_utxos(&m, &maker(), &us), 30 * TOK, 3, "TST").unwrap();
+    assert_eq!(picked, vec![us[0].clone()], "plain first");
+    let e = select_tokens(&usable_token_utxos(&m, &maker(), &us), 70 * TOK, 3, "TST").unwrap_err();
+    assert_eq!(e.code, "TOKEN_UTXOS_MIXED_BORROW");
+    let e = Env { token_utxos: us, ..env(&m) };
+    let p = plan_order(&e, &Intent::Limit(limit(Side::Sell, 70 * TOK, 300_000_000)));
+    assert!(!p.ok && codes(&p).contains(&"TOKEN_UTXOS_MIXED_BORROW"));
+}

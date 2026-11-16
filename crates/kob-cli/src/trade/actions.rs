@@ -486,7 +486,9 @@ pub fn build_replace(
             ));
         }
         if need > have {
-            let usable = usable_token_utxos(m, maker, token_utxos);
+            // A top-up joins the plain custody in one output: plain holdings only.
+            let usable: Vec<TokenUtxo> =
+                usable_token_utxos(m, maker, token_utxos).into_iter().filter(|u| u.state.is_plain()).collect();
             let picked = select_tokens(&usable, need - have, slots - inputs, &m.name()).map_err(|e| e.message)?;
             notes.push(format!(
                 "the replacement needs more tokens than the order holds: {} added",

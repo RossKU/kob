@@ -1,12 +1,14 @@
-//! `kob merge <TOKEN>`: merges the plain token UTXOs of the wallet for one token into one.
+//! `kob merge <TOKEN>`: merges the token UTXOs of the wallet for one token into one.
 //!
 //! It is the answer to `TOKEN_UTXOS_FRAGMENTED` and a port of `web/src/kob/merge.ts`.
 //!
 //! # Inputs
 //!
-//! The inputs are token UTXOs that the key owns by itself. They must be plain, with the
-//! extension commitment of the token, and so never the custody or stray of an order. Each is
-//! confirmed on the node. They are taken smallest first, ties by outpoint.
+//! The inputs are token UTXOs that the key owns by itself, with the extension commitment of the
+//! token, and so never the custody or stray of an order. Each is confirmed on the node. They
+//! share one borrow setting (scheme and guard), which the merged output keeps: plain ones when
+//! two or more exist, else the setting with the most UTXOs; run again for another setting. They
+//! are taken smallest first, ties by outpoint.
 //!
 //! # The chain
 //!
@@ -30,10 +32,10 @@ use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use kob_protocol::artifacts::token_template;
-use kob_protocol::build::{build, Action, SendTokens, TokenRecipient, TokenRef};
+use kob_protocol::build::{build, Action, SendTokens, TokenRef};
 use kob_protocol::defaults::DEFAULT_ORDER_CARRIER;
 use kob_protocol::json::to_hex;
-use kob_protocol::state::TokenState;
+use kob_protocol::state::{TokenState, NO_BORROW};
 use kob_protocol::tx::{spk_to_string, BuiltTx, FeeOptions, KeyUtxo, TokenUtxo, Utxo};
 use kob_protocol::Family;
 use serde_json::json;
@@ -53,7 +55,7 @@ kob merge: merge the key's own token UTXOs of one token into one (a chain of tra
 USAGE
   kob merge <TOKEN> [--wait-secs N] [options]
 
-  Takes the key's plain UTXOs of TOKEN (smallest first): the first transfer up to the program's token inputs, every next
+  Takes the key's UTXOs of TOKEN of one borrow setting (plain first; smallest first): the first transfer up to the program's token inputs, every next
   one the previous output plus up to inputs - 1 more, at most 10 transactions per run (run again for more). The merged
   output keeps the largest input carrier (at most 1 KAS); the freed carriers pay the fee. One confirmation signs the
   whole chain; each later link waits up to --wait-secs (default 30) for the node to show the previous output, then is
@@ -86,10 +88,23 @@ fn outpoint(u: &Utxo) -> ([u8; 32], u32) {
 
 /// The UTXOs that a merge may spend (`mergeCandidates`).
 ///
-/// They are the plain UTXOs of `m` that the key owns by itself, with its extension commitment
-/// and a positive amount. They are sorted smallest first, ties by outpoint.
+/// They are the UTXOs of `m` that the key owns by itself, with its extension commitment and a
+/// positive amount, all of one borrow setting: the plain ones when there are two or more, else
+/// the setting with the most UTXOs (ties: the plain one, then the lower setting). They are sorted
+/// smallest first, ties by outpoint.
 pub fn candidates(m: &TokenMarket, maker: &[u8; 32], utxos: &[TokenUtxo]) -> Vec<TokenUtxo> {
-    let mut v: Vec<TokenUtxo> = usable_token_utxos(m, maker, utxos).into_iter().filter(|u| u.state.amount() > 0).collect();
+    let all: Vec<TokenUtxo> = usable_token_utxos(m, maker, utxos).into_iter().filter(|u| u.state.amount() > 0).collect();
+    let plain = all.iter().filter(|u| u.state.borrow() == NO_BORROW).count();
+    let mut settings: Vec<_> = all.iter().map(|u| u.state.borrow()).collect();
+    settings.sort();
+    settings.dedup();
+    let count = |b: &kob_protocol::state::Borrow| all.iter().filter(|u| u.state.borrow() == *b).count();
+    let pick = if plain >= 2 {
+        NO_BORROW
+    } else {
+        settings.iter().max_by(|a, b| count(a).cmp(&count(b)).then(b.cmp(a))).copied().unwrap_or(NO_BORROW)
+    };
+    let mut v: Vec<TokenUtxo> = all.into_iter().filter(|u| u.state.borrow() == pick).collect();
     v.sort_by(|a, b| a.state.amount().cmp(&b.state.amount()).then(outpoint(&a.utxo).cmp(&outpoint(&b.utxo))));
     v
 }
@@ -163,15 +178,18 @@ pub fn build_link(
         return Err("merging KRON tokens needs a KAS UTXO of the key in the transaction".into());
     }
     let ext = if kron { [0; 32] } else { inputs.first().map(|u| u.state.extension()).unwrap_or(m.ext) };
-    let state = TokenState::user(m.program, total, *maker, ext);
+    // The merged output keeps the inputs' one borrow setting (the builder refuses a mix).
+    let borrow = inputs.first().map(|u| u.state.borrow()).unwrap_or(NO_BORROW);
+    let state = TokenState::user(m.program, total, *maker, ext).with_borrow(borrow);
     let spk = spk_to_string(&state.spk_with(token_template(m.program)));
     let mut used: Vec<KeyUtxo> = seed.into_iter().collect();
     for _ in 0..8 {
         let req = SendTokens {
             token: TokenRef { covenant_id: m.cov, program: m.program },
             tokens: inputs.clone(),
-            recipients: vec![TokenRecipient { pubkey: *maker, amount: total, carrier }],
-            token_change: None,
+            // No recipient: the whole amount is the key's change, which keeps the borrow setting.
+            recipients: vec![],
+            token_change: Some(*maker),
             token_change_carrier: carrier,
             funding: used.clone(),
             change: Some(*maker),
@@ -461,5 +479,42 @@ mod tests {
         assert_eq!(merged_carrier(&m, &us[..2]), 60_000_000);
         assert_eq!(merged_carrier(&m, &us), DEFAULT_ORDER_CARRIER);
         assert_eq!(merged_carrier(&m, &[tu(&m, 9, 1, 1)]), token_carrier_floor(&m) as u64);
+    }
+
+    #[test]
+    fn candidates_take_one_borrow_setting_and_the_link_keeps_it() {
+        let m = TokenMarket::new([0x70; 32], "TST", 3, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
+        // the x coordinate of the secp256k1 generator: a valid key
+        let key: [u8; 32] = kob_protocol::json::from_hex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let s2 = (2u8, [0x22; 32]);
+        let b = |mut u: TokenUtxo, s: kob_protocol::state::Borrow| {
+            u.state = u.state.with_borrow(s).with_user_owner(key);
+            u
+        };
+        // two plain, three of scheme 2: the plain ones first
+        let k = ONE_KAS;
+        let us = vec![
+            b(tu(&m, 1, 10, k), NO_BORROW),
+            b(tu(&m, 2, 20, k), NO_BORROW),
+            b(tu(&m, 3, 30, k), s2),
+            b(tu(&m, 4, 40, k), s2),
+            b(tu(&m, 5, 5, k), s2),
+        ];
+        let c = candidates(&m, &key, &us);
+        assert_eq!(c.iter().map(|u| u.state.amount()).collect::<Vec<_>>(), vec![10, 20]);
+        // one plain: the scheme-2 group, smallest first
+        let c = candidates(&m, &key, &us[1..]);
+        assert_eq!(c.iter().map(|u| u.state.amount()).collect::<Vec<_>>(), vec![5, 30, 40]);
+        assert!(c.iter().all(|u| u.state.borrow() == s2));
+        // the link merges them into one output with the same setting
+        let pool = vec![KeyUtxo {
+            utxo: Utxo { transaction_id: [9; 32], index: 0, amount: 10 * ONE_KAS, block_daa_score: 1, covenant_id: None },
+            pubkey: key,
+        }];
+        let link = build_link(&m, &key, c, 3, &pool, &BTreeSet::new(), &FeeOptions::default()).unwrap();
+        assert_eq!(link.output.2, TokenState::user(m.program, 75, key, m.ext).with_borrow(s2));
     }
 }
