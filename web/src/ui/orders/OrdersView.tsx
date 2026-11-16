@@ -40,7 +40,7 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeApprovedOnce, mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { convertibleCounts, mergeApprovedOnce, mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
 import type { MergePlan, MergeToken } from '../../kob/merge';
 import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
@@ -185,7 +185,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
   const [sweepFirst, setSweepFirst] = useState<{ ids: Hex[]; count: number; proceed: () => void; retry: () => void } | null>(null);
   // a planned "Merge all" waiting for its confirmation (the transactions, approvals and KAS it frees)
-  const [mergeAsk, setMergeAsk] = useState<{ token: MergeToken; ticker: string; plan: MergePlan; summary: string } | null>(null);
+  const [mergeAsk, setMergeAsk] = useState<{ id: Hex; token: MergeToken; ticker: string; plan: MergePlan; summary: string; convert?: boolean; canConvert?: boolean } | null>(null);
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
@@ -383,16 +383,19 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
    * "Merge all": plans the merge of every mergeable plain UTXO of `token` into one, as a tree of transfers to the wallet itself (kob/merge.ts),
    * and asks for the confirmation that states its transactions, the wallet approvals (one each) and the KAS it frees. Nothing is sent before.
    */
-  const mergeToken = (token: Hex) =>
-    void guarded(`merge-${token}`, async () => {
+  const mergeToken = (token: Hex, convert = false) =>
+    void guarded(`${convert ? 'convert' : 'merge'}-${token}`, async () => {
       // the registry's token, else (any held token the node verified a program for) the one built from that program and the wallet's UTXOs (merge-model.ts)
       const free = balances.free.data;
-      const mt = pubkey && free ? mergeTokenFor(token, free.freeTokens, services.registry.byCovenantId, pubkey, reserved, { kob: services.kob, programs: free.programOf ?? free.programs }) : null;
+      const unlisted = free ? { kob: services.kob, programs: free.programOf ?? free.programs } : undefined;
+      const mt = pubkey && free ? mergeTokenFor(token, free.freeTokens, services.registry.byCovenantId, pubkey, reserved, unlisted) : null;
       if (!pubkey || !mt) return;
+      // holdings with a borrow setting: the Merge all dialog also offers to convert them to plain
+      const canConvert = !convert && convertibleCounts(free!.freeTokens, services.registry.byCovenantId, pubkey, reserved, unlisted).has(token);
       const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
-      const plan = await planMergeFor(services, pubkey, mt, reserved);
+      const plan = await planMergeFor(services, pubkey, mt, reserved, convert ? { convert } : {});
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      setMergeAsk({ token: mt, ticker, plan, summary: mergeSummary(plan, ticker, mergeApprovedOnce(wallet.adapter, mt)) });
+      setMergeAsk({ id: token, token: mt, ticker, plan, summary: mergeSummary(plan, ticker, mergeApprovedOnce(wallet.adapter, mt, convert)), ...(convert ? { convert } : {}), ...(canConvert ? { canConvert } : {}) });
     });
 
   /** The confirmed merge: its transactions one after the other, each approved in the wallet; a later one is built at its turn. */
@@ -401,7 +404,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     if (!pubkey) return;
     // the card while it runs: the steps and one line, the whole summary was the confirmation's
     const run = mergeFlow(services, pubkey, ask.token, ask.plan, mergeRunLine(ask.plan));
-    startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next, ...(run.session ? { session: run.session } : {}) });
+    startFlow(t(ask.convert ? 'orders.convert.heading' : 'orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next, ...(run.session ? { session: run.session } : {}) });
   };
 
   const onCancelPosition = (p: Position) => cancelMany(t('orders.flow.positionHeading'), p.cancelIds, p.id);
@@ -734,6 +737,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 reserved={reserved}
                 busy={busy}
                 onMergeToken={mergeToken}
+                onConvertToken={(token) => mergeToken(token, true)}
                 balances={balances}
                 iconOf={iconOf}
                 {...(embed ? { compact: true } : {})}
@@ -872,7 +876,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
       {mergeAsk ? (
         <Modal
-          title={t('orders.merge.confirmTitle', { ticker: mergeAsk.ticker })}
+          title={t(mergeAsk.convert ? 'orders.convert.confirmTitle' : 'orders.merge.confirmTitle', { ticker: mergeAsk.ticker })}
           onClose={() => setMergeAsk(null)}
           data-testid="merge-all-dialog"
           footer={
@@ -880,14 +884,19 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               <Button onClick={() => setMergeAsk(null)} data-testid="merge-all-cancel">
                 {t('common.cancel')}
               </Button>
+              {mergeAsk.canConvert ? (
+                <Button variant="ghost" onClick={() => { const id = mergeAsk.id; setMergeAsk(null); mergeToken(id, true); }} title={t('orders.convert.dialogHint')} data-testid="merge-all-convert">
+                  {t('orders.convert.button')}
+                </Button>
+              ) : null}
               <Button variant="primary" data-autofocus onClick={() => startMerge(mergeAsk)} data-testid="merge-all-confirm">
-                {t('orders.merge.confirm')}
+                {t(mergeAsk.convert ? 'orders.convert.confirm' : 'orders.merge.confirm')}
               </Button>
             </>
           }
         >
           <p data-testid="merge-all-summary">{mergeAsk.summary}</p>
-          <p class="small muted">{t('orders.merge.confirmNote')}</p>
+          <p class="small muted">{t(mergeAsk.convert ? 'orders.convert.confirmNote' : 'orders.merge.confirmNote')}</p>
         </Modal>
       ) : null}
 

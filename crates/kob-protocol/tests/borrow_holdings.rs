@@ -214,3 +214,29 @@ fn custodies_stay_plain_and_other_owners_stay_refused() {
     }
     refused(&Action::CreateOrder(o), "owner scheme 0x01", "borrowing enabled");
 }
+
+#[test]
+fn a_conversion_to_plain_sends_the_whole_holding_to_its_owner_as_a_plain_recipient() {
+    // "Convert to plain" (web kob/merge.ts `convert`): the inputs of one setting, the owner's own key as the one recipient of the whole
+    // amount, no change. The recipient output is plain, so the holding loses its setting; no builder change is needed.
+    for p in kcc20_programs() {
+        for b in settings() {
+            let label = format!("convert, borrow scheme {}, {}", b.0, p.name());
+            let Action::SendTokens(mut s) = scenario(p, "send.tokens") else { panic!() };
+            for t in &mut s.tokens {
+                with_borrow(t, b);
+            }
+            let total: i64 = s.tokens.iter().map(|t| t.state.amount()).sum();
+            let owner = s.tokens[0].state.owner();
+            s.recipients = vec![TokenRecipient { pubkey: owner, amount: total, carrier: 2 * carrier() }];
+            let built = build(&Action::SendTokens(s.clone())).unwrap_or_else(|e| panic!("{label}: {e}"));
+            engine(&built, &label);
+            let plain = TokenState::user(p, total, owner, EXT);
+            assert_eq!(token_spks(&built), vec![spk(p, &plain)], "{label}: one plain output of the owner");
+            // ablation: a merge of the same inputs (no recipient) keeps the setting, so the two differ
+            s.recipients = vec![];
+            let merged = build(&Action::SendTokens(s)).unwrap_or_else(|e| panic!("{label}: merge: {e}"));
+            assert_ne!(token_spks(&merged), token_spks(&built), "{label}");
+        }
+    }
+}

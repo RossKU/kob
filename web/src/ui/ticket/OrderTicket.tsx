@@ -46,7 +46,7 @@ import { expectedFromPlan } from './plan-expected';
 import { confirmNotes, confirmSignerNotes, minOrderValueOf, minValueNote } from './ticket-notes';
 import { expandLadder, expandLimitLadder, ladderOfForm, ladderTotals, limitLadderOfForm, limitLadderValues, type LadderLevel } from './ladder';
 import { maxBuyAmount } from './max-amount';
-import { FRAGMENTED, useMergeBeforeSale } from './merge-before-sale';
+import { MERGE_ANSWERS, useMergeBeforeSale } from './merge-before-sale';
 import { orderLabel } from './order-label';
 import { usePairTicketEnv, useTicketEnv, useTicketPlan, type EnvWait } from './use-ticket';
 import { CLOCK_TICK_MS, CLOCK_WAIT_MS, REVIEW_CACHE_MS, REVIEW_REUSE_MS, liveClockAt, reviewClock, sameTransaction, slippageWithin, withinTerms } from './review-check';
@@ -452,7 +452,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const [sellAfterMerge, setSellAfterMerge] = useState<{ leaves: ReadonlySet<string>; at: number } | null>(null);
   const merge = useMergeBeforeSale({
     token, ticker: token.ticker, pubkey: wallet.info?.pubkey ?? null, env,
-    issue: enabled && !quote && !ladder ? planErrors.find((i) => i.code === FRAGMENTED) : undefined,
+    issue: enabled && !quote && !ladder ? planErrors.find((i) => MERGE_ANSWERS.has(i.code)) : undefined,
     refresh,
     onMerged: (leaves) => setSellAfterMerge({ leaves, at: Date.now() }),
     onStop: (text, raw) => sender.stop(text, raw, 'merge'),
@@ -464,7 +464,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // itself merges first, then places the sale (its label and the note above it say so)
   const mergeFirst =
     !!merge.offer && enabled && gate.ready && !!shownPlan && !pending && !placing && !sendBusy(sender.status) && !crash && !merge.running
-    && planErrors.length > 0 && planErrors.every((i) => i.code === FRAGMENTED);
+    && planErrors.length > 0 && planErrors.every((i) => i.code === planErrors[0]!.code && MERGE_ANSWERS.has(i.code));
   // an edit makes a reason the last click stopped for stale (a submitted order stays on the line until the next click)
   const edited = () => {
     setMaxNote(null);
@@ -738,7 +738,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // `enterText` below); the slot's red text is for blocking errors only
   for (const i of issues.filter((x) => x.severity === 'error')) {
     // too many UTXOs for one sale: when the order button merges first, a note says what that takes instead of the dead end
-    if (i.code === FRAGMENTED && mergeFirst) {
+    if (MERGE_ANSWERS.has(i.code) && mergeFirst) {
       reasons.push({ code: i.code, text: merge.offer!, kind: 'need', testid: 'order-note-merge' });
       continue;
     }
@@ -754,7 +754,7 @@ export function OrderTicket(props: OrderTicketProps) {
   // says its level first. The button keeps its size: only its text changes
   const phase = sender.status?.phase;
   const busyText = busy && !placing && !sendBusy(sender.status)
-    ? t('ticket.merge.busy')
+    ? merge.busy
     : busy
     ? (ladderLead ? `${ladderLead} · ` : '')
       + t(sender.status?.waiting ? 'send.waitWallet' : phase === 'signing' ? 'send.signing' : phase === 'sending' ? 'send.sending' : phase === 'confirming' ? 'send.confirming' : 'send.checking', { wallet: wallet.info?.label || t('send.yourWallet') })
@@ -1025,7 +1025,7 @@ export function OrderTicket(props: OrderTicketProps) {
         loading={placing || merge.running || !!sellAfterMerge} data-testid="order-place" data-state={placing ? 'placing' : mergeFirst ? 'merge' : undefined} {...(mergeFirst ? { title: merge.hint } : {})}
       >
         <span key={busyText ?? enterText ?? (mergeFirst ? 'merge' : `${sideName}|${typeName}`)} data-state={busyText ? 'busy' : enterText ? 'enter' : undefined}>
-          {busyText ?? enterText ?? (mergeFirst ? t('ticket.merge.action') : t('ticket.place', { side: sideName, type: typeName }))}
+          {busyText ?? enterText ?? (mergeFirst ? merge.action : t('ticket.place', { side: sideName, type: typeName }))}
         </span>
       </Button>
       </div>

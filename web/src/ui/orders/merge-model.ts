@@ -9,7 +9,7 @@ import { DEFAULT_CARRIER } from '../../kob/orders/common';
 import { formatKas } from '../../kob/order-facts';
 import type { TokenInfo } from '../../kob/registry';
 import type { KobWasm } from '../../kob/wasm';
-import { borrowKeyOf, extensionOfState, familyOfProgram } from '../../kob/token-state';
+import { PLAIN_BORROW, borrowKeyOf, extensionOfState, familyOfProgram } from '../../kob/token-state';
 import type { WalletAdapter } from '../../wallet/types';
 import type { BuiltTx, Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 import { countText } from './plural';
@@ -100,6 +100,21 @@ export function mergeableCounts(freeTokens: readonly TokenUtxo[], tokens: Readon
 }
 
 /**
+ * Per token: how many of the wallet's free UTXOs carry a KCC-20 borrow setting ("Convert to plain" turns them into plain ones; tokens without
+ * one are left out). `unlisted` as for `mergeableCounts`.
+ */
+export function convertibleCounts(freeTokens: readonly TokenUtxo[], tokens: ReadonlyMap<Hex, TokenInfo>, maker: Hex, reserved: ReadonlySet<string>, unlisted?: UnlistedMerge): Map<Hex, number> {
+  const out = new Map<Hex, number>();
+  for (const id of new Set(freeTokens.map((u) => u.covenantId).filter((x): x is Hex => !!x))) {
+    const mt = mergeTokenFor(id, freeTokens, tokens, maker, reserved, unlisted);
+    if (!mt) continue;
+    const n = mergeCandidates(freeTokens, mt, maker, reserved).filter((u) => borrowKeyOf(u.state) !== PLAIN_BORROW).length;
+    if (n > 0) out.set(id, n);
+  }
+  return out;
+}
+
+/**
  * Per token: about how much KAS "Merge all" frees (before its fees, a few hundredths of a KAS per transaction): the KAS on the UTXOs the
  * tree merges (planMergeShape: every mergeable one, up to MAX_MERGE_TXS transactions) less the carrier the final UTXO keeps (the largest
  * input's, at most the default carrier: kob/merge.ts `mergedCarrier`; a carrier an intermediate output keeps is freed by the next level).
@@ -138,12 +153,15 @@ const mergeRunText = (txs: number, once = false): string => t('orders.merge.run'
  * Whether this wallet approves a merge of `token` once for the whole run: the private-key signer once its frame offers sessions. A KRON
  * token input carries no signature, so a KRON merge is approved once per transaction (founder 2026-11-14), as with every extension wallet.
  */
-export const mergeApprovedOnce = (adapter: Pick<WalletAdapter, 'canOpenSession'> | null | undefined, token: Pick<MergeToken, 'program'>): boolean =>
-  adapter?.canOpenSession?.() === true && familyOfProgram(token.program) !== 'kron';
+export const mergeApprovedOnce = (adapter: Pick<WalletAdapter, 'canOpenSession'> | null | undefined, token: Pick<MergeToken, 'program'>, convert = false): boolean =>
+  !convert && adapter?.canOpenSession?.() === true && familyOfProgram(token.program) !== 'kron';
 
-/** The plan a wallet may approve once (TxFlow `session`): every link as planned; none for KRON (`mergeApprovedOnce`). */
-export const mergeSessionPlan = (plan: Pick<MergePlan, 'links'>, token: Pick<MergeToken, 'program'>): BuiltTx[] | undefined =>
-  familyOfProgram(token.program) === 'kron' ? undefined : plan.links.map((l) => l.built);
+/**
+ * The plan a wallet may approve once (TxFlow `session`): every link as planned; none for KRON (`mergeApprovedOnce`), and none for a
+ * conversion to plain: the signer's session admits only merges that keep the setting, so each conversion step is confirmed on its own.
+ */
+export const mergeSessionPlan = (plan: Pick<MergePlan, 'links'> & Partial<Pick<MergePlan, 'convert'>>, token: Pick<MergeToken, 'program'>): BuiltTx[] | undefined =>
+  familyOfProgram(token.program) === 'kron' || plan.convert ? undefined : plan.links.map((l) => l.built);
 
 /**
  * The merge in a few sentences (shown on its confirmation, and while it runs): what it merges, the transactions and the wallet approvals it
@@ -151,13 +169,16 @@ export const mergeSessionPlan = (plan: Pick<MergePlan, 'links'>, token: Pick<Mer
  * reason to merge at all; when the fees exceed the freed carriers, the net cost instead) and, when one run cannot take them all, how many remain. The
  * sell ticket's merge (`target`) says the sale comes after it, with its own confirmation. `once`: the wallet approves the run once (`mergeApprovedOnce`).
  */
-export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings'>>, ticker: string, once = false): string {
+export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged' | 'freed' | 'links' | 'fee' | 'target'> & Partial<Pick<MergePlan, 'settings' | 'convert'>>, ticker: string, once = false): string {
   const n = plan.links.length;
   const settings = plan.settings ?? 1;
   const counts = { ticker, run: mergeRunText(n, once), merged: plan.merged, before: plan.before, settings };
-  // UTXOs with different borrow settings merge apart: one UTXO per setting
-  const head =
-    plan.target !== null
+  // UTXOs with different borrow settings merge apart: one UTXO per setting; a conversion ends each setting in a plain UTXO
+  const head = plan.convert
+    ? plan.target !== null
+      ? t('orders.convert.summaryTarget', counts)
+      : t(plan.merged === 1 ? 'orders.convert.summaryOne' : settings > 1 ? 'orders.convert.summarySettings' : 'orders.convert.summary', counts)
+    : plan.target !== null
       ? t('orders.merge.summaryTarget', counts)
       : settings > 1
         ? t('orders.merge.summarySettings', counts)
@@ -169,6 +190,7 @@ export function mergeSummary(plan: Pick<MergePlan, 'before' | 'after' | 'merged'
       ? t('orders.merge.freed', { run: counts.run, freed: formatKas(plan.freed) })
       : t('orders.merge.costs', { run: counts.run, cost: formatKas(-plan.freed) });
   if (plan.target !== null) return `${head} ${kas}`;
+  if (plan.convert) return plan.after > 0 ? `${head} ${kas} ${t('orders.convert.more', { after: plan.after })}` : `${head} ${kas}`;
   return plan.after > settings ? `${head} ${kas} ${t('orders.merge.more', { after: plan.after })}` : `${head} ${kas}`;
 }
 
@@ -190,13 +212,14 @@ export function mergeFlowPlan(link: MergeLink): CancelPlan {
  * Link `n` (0-based) of `total` as a flow step, `summary` (one line: `mergeRunLine`) shown while it runs. The user confirmed the whole run before it started, so the
  * step is `preconfirmed`: the wallet's approval is its one prompt. A run of several reports in its card, not with a toast per step.
  */
-export function mergeStep(link: MergeLink, n: number, total: number, summary: string): FlowStep {
+export function mergeStep(link: MergeLink, n: number, total: number, summary: string, convert = false): FlowStep {
+  const k = convert ? 'orders.convert' : 'orders.merge';
   return {
-    title: total > 1 ? t('orders.merge.step', { n: n + 1, total }) : t('orders.merge.title'),
+    title: total > 1 ? t(`${k}.step`, { n: n + 1, total }) : t(`${k}.title`),
     plan: mergeFlowPlan(link),
     spends: [],
     shownAs: summary,
-    toast: t('orders.merge.submitted', { count: link.inputs.length }),
+    toast: link.plain ? t('orders.convert.submitted', { count: link.inputs.length }) : t('orders.merge.submitted', { count: link.inputs.length }),
     ...(total > 1 ? { silent: true } : {}),
     preconfirmed: true,
   };

@@ -177,3 +177,47 @@ describe('borrow settings on the owner path (option A): kept only on the wallet 
     expect(dec(built).blocking.map((b) => b.code)).toContain('token-state-unplain');
   });
 });
+
+describe('convert to plain (option A follow-up): inputs of one borrow setting into a plain UTXO of the same key is accepted; mixing stays blocking', () => {
+  const guard = OTHER.pk;
+  const held = (amount: bigint, n: number, scheme = 2): TokenUtxo => {
+    const u = tokenUtxo(amount, MAKER.pk, n, 2n * KAS);
+    return { ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: guard } as Kcc20State };
+  };
+  const STD: MergeToken = { covenantId: TOKEN.covenantId, program: TOKEN.program, templateHash: TOKEN.templateHash, extensionCommitment: TOKEN.ext, slots: { inputs: 3 } };
+  const fund = [keyUtxo(MAKER.pk, 50n * KAS, 201)];
+  const dec = (built: BuiltTx) => decodeSigning({ kob, built, maker: MAKER.pk, registry, expected: { cancelIds: [] }, nodeInputs: nodeFactsOf(built) });
+  const tokenInput = (built: BuiltTx, k = 0) => built.tx.inputs.map((x, i) => [x, i] as const).filter(([x]) => x.utxo.covenantId === TOKEN.covenantId)[k]![1];
+  const toPlain = (built: BuiltTx, i: number) => {
+    const plan = built.plans[i] as Extract<BuiltTx['plans'][number], { kind: 'tokenLeader' | 'tokenDelegator' }>;
+    const plain = { ...(plan.state as Kcc20State), borrow_scheme: 0, borrow_guard: '00'.repeat(32) };
+    plan.state = plain;
+    built.tx.inputs[i]!.utxo.scriptPublicKey = kob.tokenScriptPublicKey(plan.template, plain);
+  };
+
+  it('the conversion: borrow-setting inputs, one plain token output to the wallet key, nothing blocking', () => {
+    const plan = planMerge({ kob, maker: MAKER.pk, funding: fund }, STD, [held(5n, 0x71), held(6n, 0x72)], new Set(), { convert: true });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    const s = dec(clone(plan.links[0]!.built));
+    expect(s.blocking).toEqual([]);
+    expect(s.outputs.filter((o) => o.token).map((o) => [o.kind, o.token!.owner, o.token!.amount])).toEqual([['token-change', MAKER.pk, 11n]]);
+  });
+
+  it('a conversion with a plain input next to the borrow-setting one is blocking (token-state-mixed)', () => {
+    const plan = planMerge({ kob, maker: MAKER.pk, funding: fund }, STD, [held(5n, 0x71), held(6n, 0x72)], new Set(), { convert: true });
+    const built = clone(plan.links[0]!.built);
+    toPlain(built, tokenInput(built, 1));
+    expect(dec(built).blocking.map((b) => b.code)).toContain('token-state-mixed');
+  });
+
+  it('a sale spending a plain and a borrow-setting UTXO together is blocking (token-state-mixed)', () => {
+    const req = goldenRequest<Extract<ActionRequest, { action: 'createOrder' }>>('create.ask');
+    const first = req.tokens![0]!;
+    const b = { ...first.state, borrow_scheme: 2, borrow_guard: guard } as Kcc20State;
+    req.tokens = [{ ...first, state: b }, { ...first, transactionId: '7e'.repeat(32), index: 3, state: { ...b, amount: '1000' } }];
+    const built = kob.build(req);
+    expect(dec(built).blocking).toEqual([]);
+    toPlain(built, tokenInput(built, 1));
+    expect(dec(built).blocking.map((b) => b.code)).toContain('token-state-mixed');
+  });
+});

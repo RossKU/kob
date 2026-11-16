@@ -360,13 +360,13 @@ export function mergeFlow(s: Services, pubkey: Hex, token: MergeToken, plan: Mer
   const total = plan.links.length;
   const sent: MergeLink[] = plan.links.slice(0, 1);
   return {
-    steps: plan.links.map((l, i) => mergeStep(l, i, total, summary)),
+    steps: plan.links.map((l, i) => mergeStep(l, i, total, summary, plan.convert)),
     sent,
     ...(mergeSessionPlan(plan, token) ? { session: mergeSessionPlan(plan, token)! } : {}),
     next: async (k, txids) => {
       const link = await nextMergeLink(s, pubkey, token, plan, k, sent, txids);
       sent[k] = link;
-      return mergeStep(link, k, total, summary);
+      return mergeStep(link, k, total, summary, plan.convert);
     },
   };
 }

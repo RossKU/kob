@@ -367,3 +367,66 @@ describe('borrow settings (option A): one tree per setting, each output keeps it
     if (only2.ok) expect(only2.nodes.flatMap((n) => n.fresh).every((u) => bs(u) === 2)).toBe(true);
   });
 });
+
+describe('convert to plain: the UTXOs with a borrow setting become plain ones, one per setting; plain UTXOs are never inputs', () => {
+  const guard2 = OTHER.pk;
+  const withBorrow = (u: TokenUtxo, scheme: number, guard: Hex): TokenUtxo => ({ ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: guard } as TokenUtxo['state'] });
+  const scheme2 = (amounts: bigint[], at = 0x70) => amounts.map((a, i) => withBorrow(tokenUtxo(a, MAKER.pk, at + i, 2n * KAS), 2, guard2));
+  const scheme1 = (amounts: bigint[], at = 0x90) => amounts.map((a, i) => withBorrow(tokenUtxo(a, MAKER.pk, at + i, 2n * KAS), 1, 'ab'.repeat(32)));
+  const bs = (s: TokenUtxo['state']) => (s as { borrow_scheme: number }).borrow_scheme;
+  const check = (l: ReturnType<typeof planMerge>['links'][number]) => {
+    signAndValidate(kob, l.built, [MAKER.sk]);
+    const s = decodeSigning({ kob, built: l.built, maker: MAKER.pk, registry, expected: { cancelIds: [] }, nodeInputs: nodeFactsOf(l.built) });
+    expect(s.blocking).toEqual([]);
+    const outs = l.built.tx.outputs.filter((o) => o.covenant?.covenantId === STD.covenantId);
+    expect(outs).toHaveLength(1);
+    expect(outs[0]!.scriptPublicKey).toBe(kob.tokenScriptPublicKey(STD.program, l.output.state));
+  };
+
+  it('one UTXO of a setting: one transaction, the whole amount to the wallet key as a plain recipient output; the plain UTXOs stay', () => {
+    const plan = planMerge(env(), STD, [...utxos(2), ...scheme2([7n])], new Set(), { convert: true });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect([plan.convert, plan.before, plan.after, plan.settings, plan.links.length]).toEqual([true, 1, 0, 1, 1]);
+    const l = plan.links[0]!;
+    expect(l.plain).toBe(true);
+    expect(l.inputs.map((u) => u.state.amount)).toEqual(['7']);
+    expect(l.request.recipients).toEqual([{ pubkey: MAKER.pk, amount: '7', carrier: l.output.carrier.toString() }]);
+    expect(l.output.state).toEqual(keyState('kcc20', 7n, MAKER.pk, TOKEN.ext));
+    check(l);
+  });
+
+  it('a setting in more UTXOs than one transaction takes merges in its setting first; only its last transaction goes plain', () => {
+    const plan = planMerge(env(), STD, scheme2([5n, 6n, 7n, 8n]), new Set(), { convert: true });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect(plan.links.map((l) => [l.level, l.plain, bs(l.output.state)])).toEqual([[1, false, 2], [2, true, 0]]);
+    expect(plan.links[1]!.output.state.amount).toBe('26');
+    for (const l of plan.links) check(l);
+  });
+
+  it('two settings: one plain UTXO each, never both settings in one transaction', () => {
+    const plan = planMerge(env(), STD, [...scheme2([5n, 6n]), ...scheme1([9n])], new Set(), { convert: true });
+    expect(plan.ok, JSON.stringify(plan.issues)).toBe(true);
+    expect([plan.before, plan.settings, plan.links.length]).toEqual([3, 2, 2]);
+    for (const l of plan.links) {
+      expect(new Set(l.inputs.map((u) => `${bs(u.state)}`)).size).toBe(1);
+      expect(l.plain).toBe(true);
+      check(l);
+    }
+  });
+
+  it('target: only the settings the plain UTXOs need, largest first; none when plain holds it; nothing to convert without a setting', () => {
+    // plain 30, scheme 2 holds 11, scheme 1 holds 9
+    const set = [...utxos(2), ...scheme2([5n, 6n]), ...scheme1([9n])];
+    const need = planMergeShape(STD, set, MAKER.pk, new Set(), { convert: true, target: 40n });
+    expect(need.ok).toBe(true);
+    if (need.ok) expect(need.nodes.flatMap((n) => n.fresh).map((u) => bs(u.state))).toEqual([2, 2]);
+    const both = planMergeShape(STD, set, MAKER.pk, new Set(), { convert: true, target: 45n });
+    expect(both.ok && both.settings).toBe(2);
+    const notNeeded = planMergeShape(STD, set, MAKER.pk, new Set(), { convert: true, target: 30n });
+    expect(notNeeded.ok ? null : notNeeded.issue.code).toBe('merge.not-needed');
+    const short = planMergeShape(STD, set, MAKER.pk, new Set(), { convert: true, target: 51n });
+    expect(short.ok ? null : short.issue.code).toBe('merge.short');
+    const none = planMergeShape(STD, utxos(3), MAKER.pk, new Set(), { convert: true });
+    expect(none.ok ? null : none.issue.code).toBe('merge.no-borrow');
+  });
+});

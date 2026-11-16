@@ -7,7 +7,7 @@ import { planMerge } from '../../kob/merge';
 import { parseRegistry } from '../../kob/registry';
 import { loadKobNode } from '../../kob/wasm.node';
 import { MAKER, OTHER, TOKEN, keyUtxo, tokenUtxo, tokenUtxoView, tradableRegistryJson } from '../../testing/chain-fixtures';
-import { mergeAllFrees, mergeApprovedOnce, mergeSessionPlan, mergeFailure, mergeRunLine, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
+import { convertibleCounts, mergeAllFrees, mergeApprovedOnce, mergeSessionPlan, mergeFailure, mergeRunLine, mergeStep, mergeSummary, mergeTokenFor, mergeTokenOf, mergeableCounts, reservedOutpoints, unlistedMergeToken } from './merge-model';
 import { summarize } from '../../signer/summary';
 import { formatKas } from '../../kob/units';
 
@@ -163,5 +163,35 @@ describe('Merge all: the confirmation and the flow steps', () => {
   it('a fee above the freed carriers is stated as a net cost', () => {
     const cost = mergeSummary({ ...plan(3), freed: -1_000_000n, fee: 3_000_000n }, info.ticker);
     expect(cost).toBe('Merge 3 TST UTXOs into 1. 1 transaction · 1 approval · about −0.01 KAS net.');
+  });
+});
+
+describe('convert to plain', () => {
+  const borrowed = (amount: bigint, n: number, scheme = 2) => {
+    const u = tokenUtxo(amount, MAKER.pk, n, 2n * KAS);
+    return { ...u, state: { ...u.state, borrow_scheme: scheme, borrow_guard: OTHER.pk } } as typeof u;
+  };
+  const mt = mergeTokenOf(info)!;
+  const env = { kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 50n * KAS, 201)] };
+
+  it('counts per token the UTXOs that carry a borrow setting; a token with none is left out', () => {
+    const counts = convertibleCounts([tokenUtxo(4n, MAKER.pk, 0x60), borrowed(5n, 0x61), borrowed(6n, 0x62, 1)], registry.byCovenantId, MAKER.pk, new Set());
+    expect([...counts]).toEqual([[TOKEN.covenantId, 2]]);
+    expect(convertibleCounts([tokenUtxo(4n, MAKER.pk, 0x60)], registry.byCovenantId, MAKER.pk, new Set()).size).toBe(0);
+    // an outpoint held for an order is never converted
+    expect(convertibleCounts([borrowed(5n, 0x61)], registry.byCovenantId, MAKER.pk, new Set([`${borrowed(5n, 0x61).transactionId}:${0x61}`])).size).toBe(0);
+  });
+
+  it('the confirmation says what turns plain; no one-approval session (each step is confirmed on its own)', () => {
+    const one = planMerge(env, mt, [tokenUtxo(4n, MAKER.pk, 0x60), borrowed(5n, 0x61)], new Set(), { convert: true });
+    expect(mergeSummary(one, info.ticker, true)).toMatch(/^Convert 1 TST UTXO with a borrow setting into a plain one\. 1 transaction · 1 approval · about /);
+    const two = planMerge(env, mt, [borrowed(5n, 0x61), borrowed(6n, 0x62, 1)], new Set(), { convert: true });
+    expect(mergeSummary(two, info.ticker)).toMatch(/^Convert 2 TST UTXOs with borrow settings into 2 plain UTXOs, one per setting\. 2 transactions · 2 approvals/);
+    const target = planMerge(env, mt, [tokenUtxo(4n, MAKER.pk, 0x60), borrowed(5n, 0x61)], new Set(), { convert: true, target: 8n });
+    expect(mergeSummary(target, info.ticker)).toMatch(/^Convert your TST with a borrow setting to plain first, then confirm the sale\./);
+    const session = { canOpenSession: () => true };
+    expect(mergeApprovedOnce(session, mt, true)).toBe(false);
+    expect(mergeSessionPlan(one, mt)).toBeUndefined();
+    expect(mergeStep(one.links[0]!, 0, 1, 'x', true)).toMatchObject({ title: 'Convert to plain', toast: 'Submitted: converted into a plain UTXO.' });
   });
 });

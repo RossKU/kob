@@ -5,6 +5,9 @@
 // (ui/orders/TxFlow.tsx, the same run as "Merge all"), then reads the wallet again and hands the sale back to the ticket, which plans it from
 // that fresh state and opens its usual final confirmation: the price may have moved meanwhile, so the user approves the sale itself as
 // always. A merge rejected or failed part way stops there; what was sent stays merged and the offer is planned again from it.
+// The same run answers TOKEN_UTXOS_MIXED_BORROW: the wallet holds the amount, but in UTXOs of several KCC-20 borrow settings, and one
+// sale spends one setting only. "Convert, then sell" converts just the settings the plain UTXOs need into plain ones (kob/merge.ts,
+// `convert`), each conversion approved in the wallet, and then the sale is planned again the same way.
 import type { JSX } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
@@ -18,8 +21,14 @@ import { awaitMergeOutputs, mergeFlow, planMergeFor, type MergeFlow } from '../o
 import { mergeApprovedOnce, mergeRunLine, mergeTokenOf } from '../orders/merge-model';
 import { TxFlow, type FlowOutcome } from '../orders/TxFlow';
 
-/** The issue code the offer answers. */
+/** The issue codes the offer answers: too many UTXOs for one sale (a merge), or no one borrow setting holding the amount (a conversion). */
 export const FRAGMENTED = 'TOKEN_UTXOS_FRAGMENTED';
+export const MIXED_BORROW = 'TOKEN_UTXOS_MIXED_BORROW';
+export const MERGE_ANSWERS: ReadonlySet<string> = new Set([FRAGMENTED, MIXED_BORROW]);
+
+/** The texts of the run: a merge, or a conversion to plain. */
+const MERGE_KEYS = { one: 'ticket.merge.offer.one', other: 'ticket.merge.offer.other', heading: 'ticket.merge.heading', hint: 'ticket.merge.actionHint', action: 'ticket.merge.action' };
+const CONVERT_KEYS = { one: 'ticket.convert.offer.one', other: 'ticket.convert.offer.other', heading: 'ticket.convert.heading', hint: 'ticket.convert.actionHint', action: 'ticket.convert.action' };
 
 export interface MergeBeforeSaleArgs {
   token: TokenInfo;
@@ -27,7 +36,7 @@ export interface MergeBeforeSaleArgs {
   pubkey: Hex | null;
   /** the ticket's environment (its token UTXOs are the wallet's, without what this page has just spent) */
   env: PlanEnv | null;
-  /** the shown plan's TOKEN_UTXOS_FRAGMENTED issue (a single order of a KAS market), else undefined */
+  /** the shown plan's TOKEN_UTXOS_FRAGMENTED or TOKEN_UTXOS_MIXED_BORROW issue (a single order of a KAS market), else undefined */
   issue: PlanIssue | undefined;
   refresh(): Promise<PlanEnv | null>;
   /** the merges are on the node and the ticket reads the wallet again: `leaves` are the outpoints of the merged UTXOs the sale may take */
@@ -41,6 +50,10 @@ export interface MergeBeforeSale {
   offer: string | null;
   /** the order button's tooltip while it merges first: why, and what follows the merges */
   hint: string;
+  /** the order button's label while it merges (or converts) first */
+  action: string;
+  /** the button's text while the merges (or conversions) run */
+  busy: string;
   /** from the click until the merges are over (the ticket is busy) */
   running: boolean;
   start(): void;
@@ -55,14 +68,20 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
   const [flow, setFlow] = useState<{ key: number; heading: string; run: MergeFlow } | null>(null);
   const txids = useRef<string[]>([]);
   const mt = a.issue ? mergeTokenOf(a.token) : null;
+  // no one borrow setting holds the amount: the run converts to plain instead of merging
+  const convert = a.issue?.code === MIXED_BORROW;
+  // what a running run is (its texts stay while the ticket plans again around it)
+  const ran = useRef(convert);
+  if (!running && !flow) ran.current = convert;
   const needed = a.issue?.params?.needed;
   const target = typeof needed === 'bigint' ? needed : typeof needed === 'string' && /^\d+$/.test(needed) ? BigInt(needed) : null;
   // the count before the click, from the tree alone (nothing is built until the click)
-  const shape = mt && a.env && a.pubkey && target !== null ? planMergeShape(mt, a.env.tokenUtxos, a.pubkey, new Set(), { target }) : null;
+  const shape = mt && a.env && a.pubkey && target !== null ? planMergeShape(mt, a.env.tokenUtxos, a.pubkey, new Set(), { target, convert }) : null;
   const txs = shape?.ok ? shape.nodes.length : 0;
   // the private-key signer approves the whole merge once (its session); every other wallet once per transaction
-  const once = !!mt && mergeApprovedOnce(wallet.adapter, mt);
-  const offer = txs > 0 ? t(txs === 1 ? 'ticket.merge.offer.one' : once ? 'ticket.merge.offer.once' : 'ticket.merge.offer.other', { ticker: a.ticker, count: txs }) : null;
+  const once = !!mt && mergeApprovedOnce(wallet.adapter, mt, convert);
+  const k = convert ? CONVERT_KEYS : MERGE_KEYS;
+  const offer = txs > 0 ? t(txs === 1 ? k.one : once ? 'ticket.merge.offer.once' : k.other, { ticker: a.ticker, count: txs }) : null;
 
   const stop = (text: string, raw?: string) => {
     setRunning(false);
@@ -76,7 +95,7 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
     void (async () => {
       try {
         // planned again from the wallet as it is now (the ticket's environment may be seconds old)
-        const plan = await planMergeFor(services, pubkey, mt, new Set(), { target });
+        const plan = await planMergeFor(services, pubkey, mt, new Set(), { target, convert });
         if (!plan.ok) {
           const first = plan.issues[0];
           // the wallet changed since the offer (a fill, another tab): no merge is needed any more, the ticket plans the sale again
@@ -88,7 +107,7 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
           return stop(first ? tIssue('orders.issue', first) : t('orders.merge.unsupported'));
         }
         txids.current = [];
-        setFlow({ key: Date.now(), heading: t('ticket.merge.heading', { ticker: a.ticker }), run: mergeFlow(services, pubkey, mt, plan, mergeRunLine(plan)) });
+        setFlow({ key: Date.now(), heading: t(k.heading, { ticker: a.ticker }), run: mergeFlow(services, pubkey, mt, plan, mergeRunLine(plan)) });
       } catch (e) {
         const raw = e instanceof Error ? e.message : String(e);
         stop(buildErrorText(raw), raw);
@@ -127,5 +146,5 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
       onClose={() => setFlow(null)}
     />
   ) : null;
-  return { offer, hint: t('ticket.merge.actionHint', { max: a.issue?.params?.max ?? '' }), running, start, card };
+  return { offer, hint: t(k.hint, { max: a.issue?.params?.max ?? '' }), action: t(k.action), busy: t(ran.current ? 'ticket.convert.busy' : 'ticket.merge.busy'), running, start, card };
 }

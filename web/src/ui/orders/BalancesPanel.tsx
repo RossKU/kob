@@ -24,7 +24,7 @@ import type { WalletBalances } from './use-balances';
 import { AMOUNT_FRACTION_MAX, amountCell } from './cells';
 import { countText, tCount } from './plural';
 import { balanceColumnFractions, unreviewedProgram } from './balances-model';
-import { mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
+import { convertibleCounts, mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 import './balances.css';
 
@@ -75,6 +75,8 @@ export function BalancesPanel(props: {
   busy?: string | null;
   /** merge the wallet's plain UTXOs of a token into one */
   onMergeToken?(token: Hex): void;
+  /** turn the wallet's UTXOs of a token that carry a KCC-20 borrow setting into plain ones (the cell's button when the token has no Merge all; the Merge all dialog offers it otherwise) */
+  onConvertToken?(token: Hex): void;
   /** the page's balances (use-balances.ts): the free balances, combined with the orders and strays, and each token's value in KAS */
   balances: WalletBalances;
   /** only these tokens (a market page: its token, a pair's two); KAS always */
@@ -119,6 +121,12 @@ export function BalancesPanel(props: {
   // free token UTXOs a merge may take, per token (two or more)
   const mergeable = useMemo(
     () => (free.data ? mergeableCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, number>()),
+    [free.data, registry, props.pubkey, props.reserved, unlisted],
+  );
+
+  // free token UTXOs with a borrow setting, per token ("Convert to plain")
+  const convertible = useMemo(
+    () => (free.data ? convertibleCounts(free.data.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : new Map<Hex, number>()),
     [free.data, registry, props.pubkey, props.reserved, unlisted],
   );
 
@@ -233,6 +241,8 @@ export function BalancesPanel(props: {
                 const scaleNote = shown.decimalsSource === 'scale' && !shown.declarationConflicts?.length ? decimalsNote(shown) : null;
                 const mergeAs = props.onMergeToken && mergeable.has(b.token) ? mergeTokenFor(b.token, free.data!.freeTokens, registry.byCovenantId, props.pubkey, props.reserved ?? new Set(), unlisted) : null;
                 const showMerge = !!mergeAs;
+                // "Convert to plain" is in the Merge all dialog where that button shows; only a token with nothing to merge has it here (the cell keeps its width)
+                const showConvert = !!props.onConvertToken && convertible.has(b.token) && !showMerge;
                 const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
@@ -268,7 +278,7 @@ export function BalancesPanel(props: {
                         {valueOf(b) !== null ? <MoneyCell kas={valueOf(b)!} unit={false} fraction={dp.value} /> : <span class="dt-muted" title={t('orders.balances.noPrice')}>—</span>}
                       </DtCell>
                       <DtCell k="act" card="action">
-                        {showMerge || b.orderCount > 0 ? (
+                        {showMerge || showConvert || b.orderCount > 0 ? (
                           <span class="dt-act">
                             {mergeAs ? (
                               <Button
@@ -282,6 +292,19 @@ export function BalancesPanel(props: {
                                 {(frees.get(b.token) ?? 0n) > 0n
                                   ? t('orders.merge.buttonFrees', { count: mergeable.get(b.token)!, kas: formatKas(frees.get(b.token)!) })
                                   : t('orders.merge.button', { count: mergeable.get(b.token)! })}
+                              </Button>
+                            ) : null}
+                            {showConvert ? (
+                              <Button
+                                small
+                                variant="ghost"
+                                disabled={!props.canSign || !!props.busy}
+                                loading={props.busy === `convert-${b.token}`}
+                                title={t('orders.convert.hint', { count: convertible.get(b.token)! })}
+                                onClick={() => props.onConvertToken!(b.token)}
+                                data-testid={`orders-convert-token-${b.token}`}
+                              >
+                                {t('orders.convert.button')}
                               </Button>
                             ) : null}
                             {b.orderCount > 0 ? (

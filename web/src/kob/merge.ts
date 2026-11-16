@@ -22,6 +22,9 @@
 //   as KAS change. A wallet KAS UTXO is added only when they do not cover the fee, or for a KRON
 //   transfer, which needs a P2PK input of the owner.
 // - The fee uses the low urgency of the fee policy, as housekeeping (matcher.md 9).
+// - "Convert to plain" (`convert`) turns the wallet's holdings with a borrow setting into plain ones: one tree per setting, merged in
+//   that setting, whose last transaction sends the whole amount to the wallet key as a plain recipient output (a `sendTokens` with the
+//   key as its one recipient and no change). A setting held in one UTXO takes one transaction. Plain UTXOs are never inputs.
 //
 // A transaction above level 1 spends outputs that exist only once their transactions are
 // accepted. `planMerge` builds the whole tree against provisional outpoints, so the count, fee and
@@ -33,7 +36,7 @@ import { MAX_TOKEN_INPUTS } from './guards';
 import { DEFAULT_CARRIER, tokenCarrierFloor } from './orders/common';
 import type { PlanIssue } from './plan-types';
 import { guardRequest } from './request-guard';
-import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, familyOfProgram, groupByBorrow, isSpendableHolding, keyState, withBorrowOf } from './token-state';
+import { KRON_MAX_OUTPUT_AMOUNT, PLAIN_BORROW, borrowKeyOf, extensionOfState, familyOfProgram, groupByBorrow, isSpendableHolding, keyState, withBorrowOf } from './token-state';
 import type { BuiltTx, FeeMode, Hex, KeyUtxo, SendTokensRequest, TokenProgram, TokenState, TokenUtxo } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -92,6 +95,8 @@ export interface MergeLink {
   level: number;
   /** The earlier links whose outputs this link spends, in input order. */
   parents: number[];
+  /** The output is plain: the last link of a conversion. Otherwise it keeps the inputs' borrow setting. */
+  plain: boolean;
 }
 
 /** One transaction of a planned tree, before it is built. */
@@ -101,6 +106,8 @@ export interface MergeNode<T> {
   parents: number[];
   /** The original UTXOs it spends. */
   fresh: T[];
+  /** Its output is plain: the last transaction of a conversion (`MergeOptions.convert`). */
+  plain?: boolean;
 }
 
 /** The result of `planMerge`: the groups, the built tree and what the merge yields. */
@@ -122,6 +129,8 @@ export interface MergePlan {
   before: number;
   /** The number of borrow settings (one tree each) the planned links merge; 1 for plain UTXOs only. */
   settings: number;
+  /** A conversion to plain (`MergeOptions.convert`): `before` counts the UTXOs with a borrow setting, and each tree ends in a plain UTXO. */
+  convert: boolean;
   /**
    * The number of mergeable UTXOs after them. The merged outputs count, because they merge again.
    */
@@ -271,6 +280,11 @@ export interface MergeOptions {
    * amount, in base units. Omitted, the merge is full.
    */
   target?: bigint;
+  /**
+   * Convert to plain: the UTXOs with a borrow setting become plain ones (one per setting), plain UTXOs are left as they are. With
+   * `target`, only the settings needed for the plain UTXOs to hold that amount, largest first.
+   */
+  convert?: boolean;
 }
 
 /** The planned tree before it is built, or the issue that stops it. `settings`: the borrow settings it merges, one tree each. */
@@ -297,6 +311,7 @@ export function planMergeShape(token: MergeToken, utxos: readonly TokenUtxo[], m
   const slots = mergeSlots(token);
   const cap = familyOfProgram(token.program) === 'kron' ? KRON_MAX_OUTPUT_AMOUNT : I64_MAX;
   const fail = (code: string, message: string, params?: PlanIssue['params']): MergeShape => ({ ok: false, before, issue: issue(code, 'error', message, params) });
+  if (o.convert) return convertShape(cands, slots, o.target ?? null, fail);
   if (o.target === undefined) {
     // One tree per borrow setting, plain first, within MAX_MERGE_TXS in all.
     const trees: MergeNode<TokenUtxo>[][] = [];
@@ -335,6 +350,45 @@ export function planMergeShape(token: MergeToken, utxos: readonly TokenUtxo[], m
 }
 
 /**
+ * The conversion tree: per borrow setting (largest first), the tree that merges it in its setting, whose last node's output is plain. A
+ * setting in one UTXO is one node. With `target`, only the settings the plain UTXOs need to hold it; without, every setting within
+ * MAX_MERGE_TXS transactions (a setting that does not fit waits for the next run).
+ */
+function convertShape(cands: readonly TokenUtxo[], slots: number, target: bigint | null, fail: (code: string, message: string, params?: PlanIssue['params']) => MergeShape): MergeShape {
+  const groups = groupByBorrow(cands);
+  const plainGroup = groups.find((g) => borrowKeyOf(g[0]!.state) === PLAIN_BORROW) ?? [];
+  const borrowed = groups.filter((g) => g !== plainGroup);
+  const total = (g: readonly TokenUtxo[]) => g.reduce((n, u) => n + big(u.state.amount), 0n);
+  if (!borrowed.length) return fail('merge.no-borrow', 'no token UTXO of this token has a borrow setting');
+  let take = borrowed;
+  if (target !== null) {
+    let have = total(plainGroup);
+    if (have >= target) return fail('merge.not-needed', 'the plain token UTXOs already hold the amount: no conversion is needed');
+    take = [];
+    for (const g of borrowed) {
+      if (have >= target) break;
+      take.push(g);
+      have += total(g);
+    }
+    if (have < target) return fail('merge.short', 'the token UTXOs do not hold the amount', { count: cands.length });
+  }
+  const trees: MergeNode<TokenUtxo>[][] = [];
+  let budget = MAX_MERGE_TXS;
+  for (const g of take) {
+    const nodes = g.length === 1 ? [{ level: 1, parents: [], fresh: [...g] }] : mergeTree(g, slots);
+    if (nodes.length > budget) {
+      if (target !== null) return fail('merge.too-many', `the amount needs more than ${MAX_MERGE_TXS} conversion transactions`, { txs: MAX_MERGE_TXS + 1, max: MAX_MERGE_TXS });
+      break;
+    }
+    nodes[nodes.length - 1] = { ...nodes[nodes.length - 1]!, plain: true };
+    trees.push(nodes);
+    budget -= nodes.length;
+  }
+  if (!trees.length) return fail('merge.too-many', `a conversion needs more than ${MAX_MERGE_TXS} transactions`, { txs: MAX_MERGE_TXS + 1, max: MAX_MERGE_TXS });
+  return { ok: true, before: borrowed.reduce((n, g) => n + g.length, 0), settings: trees.length, nodes: joinTrees(trees) };
+}
+
+/**
  * Returns the KAS the merged output carries, the largest input carrier within the default and the
  * floor.
  */
@@ -356,8 +410,9 @@ const FUNDING_HEADROOM = 500_000n;
  */
 export function buildMergeLink(
   env0: MergeEnv, token: MergeToken, inputs: TokenUtxo[], fresh: TokenUtxo[], spentFunding: ReadonlySet<string> = new Set(),
-  at: Pick<MergeNode<TokenUtxo>, 'level' | 'parents'> = { level: 1, parents: [] },
+  at: Pick<MergeNode<TokenUtxo>, 'level' | 'parents' | 'plain'> = { level: 1, parents: [] },
 ): MergeLink | { error: PlanIssue } {
+  const plain = at.plain === true;
   const env = withUrgency(env0, 'low');
   const total = inputs.reduce((s, u) => s + big(u.state.amount), 0n);
   const carrier = mergedCarrier(env.kob, token, inputs);
@@ -371,12 +426,13 @@ export function buildMergeLink(
   if (kron && !seed) return { error: issue('merge.needs-funding', 'error', 'merging KRON tokens needs a KAS UTXO of the wallet in the transaction') };
   let used: KeyUtxo[] = seed ? [seed] : [];
   // No recipient: the whole amount is the wallet's token change, which keeps the inputs' one borrow
-  // setting (the builder refuses inputs of different settings).
+  // setting (the builder refuses inputs of different settings). A conversion's last link instead names the
+  // wallet key as its one recipient of the whole amount: a recipient output is plain, and there is no change.
   const make = (funding: KeyUtxo[]): SendTokensRequest => ({
     action: 'sendTokens',
     token: { covenantId: token.covenantId, program: token.program },
     tokens: inputs,
-    recipients: [],
+    recipients: plain ? [{ pubkey: env.maker, amount: total.toString(), carrier: carrier.toString() }] : [],
     tokenChange: env.maker,
     tokenChangeCarrier: carrier.toString(),
     funding,
@@ -389,13 +445,14 @@ export function buildMergeLink(
       const r = buildWithCap(env.fees?.policy, request, (q) => env.kob.build(q));
       recordFee(env, r.built, r.rate);
       const index = r.built.tx.outputs.findIndex((o) => o.covenant?.covenantId === token.covenantId);
-      const state = withBorrowOf(keyState(familyOfProgram(token.program), total, env.maker, kron ? null : extensionOfState(inputs[0]!.state), token.program), inputs[0]!.state);
+      const held = keyState(familyOfProgram(token.program), total, env.maker, kron ? null : extensionOfState(inputs[0]!.state), token.program);
+      const state = plain ? held : withBorrowOf(held, inputs[0]!.state);
       const out = r.built.tx.outputs[index];
       if (!out || r.built.tx.outputs.filter((o) => o.covenant?.covenantId === token.covenantId).length !== 1 || out.scriptPublicKey !== env.kob.tokenScriptPublicKey(token.program, state)) {
         return { error: issue('merge.build-failed', 'error', 'the built transfer does not end in one token output of the wallet holding the whole amount') };
       }
       const issues = used.length > (seed ? 1 : 0) ? [issue('merge.funding-added', 'info', 'the freed carriers do not cover the network fee: a wallet KAS UTXO pays it', { inputs: used.length })] : [];
-      return { inputs, fresh, built: r.built, request: r.request, fundingUsed: used, output: { index, carrier: big(out.value), state }, fee: big(r.built.fee.fee), issues, level: at.level, parents: [...at.parents] };
+      return { inputs, fresh, built: r.built, request: r.request, fundingUsed: used, output: { index, carrier: big(out.value), state }, fee: big(r.built.fee.fee), issues, level: at.level, parents: [...at.parents], plain };
     } catch (e) {
       const msg = e instanceof KobError || e instanceof Error ? e.message : String(e);
       const m = INSUFFICIENT.exec(msg);
@@ -424,7 +481,7 @@ export function mergeCarry(link: MergeLink, txid: Hex, token: Pick<MergeToken, '
   };
 }
 
-const failedPlan = (issues: PlanIssue[], before: number): MergePlan => ({ ok: false, issues, groups: [], links: [], levels: 0, target: null, before, settings: 0, after: before, merged: 0, freed: 0n, amount: 0n, fee: 0n });
+const failedPlan = (issues: PlanIssue[], before: number): MergePlan => ({ ok: false, issues, groups: [], links: [], levels: 0, target: null, before, settings: 0, convert: false, after: before, merged: 0, freed: 0n, amount: 0n, fee: 0n });
 
 /**
  * Plans the merge of `token` for the wallet key.
@@ -444,11 +501,11 @@ export function planMerge(env: MergeEnv, token: MergeToken, utxos: readonly Toke
     for (const f of l.fundingUsed) spent.add(outpointOf(f));
     links.push(l);
   }
-  return summarizeMerge(links, shape.before, o.target ?? null, shape.settings);
+  return summarizeMerge(links, shape.before, o.target ?? null, shape.settings, o.convert === true);
 }
 
 /** Returns the plan of the built `links`, with `before` mergeable UTXOs before them. */
-function summarizeMerge(links: MergeLink[], before: number, target: bigint | null = null, settings = 1): MergePlan {
+function summarizeMerge(links: MergeLink[], before: number, target: bigint | null = null, settings = 1, convert = false): MergePlan {
   const groups = links.map((l) => l.fresh);
   const fee = links.reduce((s, l) => s + l.fee, 0n);
   // Each link frees its inputs' carriers less the one its output keeps. A carrier kept by a link
@@ -464,7 +521,9 @@ function summarizeMerge(links: MergeLink[], before: number, target: bigint | nul
     target,
     before,
     settings,
-    after: before - links.reduce((n, l) => n + l.inputs.length - 1, 0),
+    convert,
+    // a conversion: the UTXOs with a borrow setting it leaves (each tree ends in a plain one)
+    after: before - links.reduce((n, l) => n + l.inputs.length - 1, 0) - (convert ? links.filter((l) => l.plain).length : 0),
     merged: groups.reduce((n, g) => n + g.length, 0),
     freed: carriersIn - carriersKept - fee,
     amount: groups.flat().reduce((s, u) => s + big(u.state.amount), 0n),
