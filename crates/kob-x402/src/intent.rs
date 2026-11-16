@@ -1061,7 +1061,7 @@ fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sel
                 let s2 = sold + n;
                 if s2 <= max_sell {
                     let mut legs = chosen.clone();
-                    legs.push(IntentBid { order: (*b).clone(), amount: n });
+                    legs.push(IntentBid { order: (*b).clone(), amount: n, custody: None });
                     out.push((s2, legs));
                 }
             }
@@ -1072,7 +1072,7 @@ fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sel
             if sold + n > max_sell {
                 continue;
             }
-            chosen.push(IntentBid { order: bids[i].clone(), amount: n });
+            chosen.push(IntentBid { order: bids[i].clone(), amount: n, custody: None });
             rec(bids, k, i + 1, chosen, last_rests, max_sell, need, out);
             chosen.pop();
         }

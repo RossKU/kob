@@ -42,7 +42,7 @@ fn bid_leg(tag: u8, maker: u8, n: i64, ends: bool) -> IntentBid {
     let s = BidState { tif: 0, ..bid(maker, P245, P8) };
     let value =
         if ends { s.escrow(n * WHOLE, 1).unwrap() + s.used(WHOLE).unwrap() / 2 } else { s.escrow((n + 5) * WHOLE, 1).unwrap() };
-    IntentBid { order: order(tag, value as u64, cov(0x60 + tag), 1_000, s), amount: n * WHOLE }
+    IntentBid { order: order(tag, value as u64, cov(0x60 + tag), 1_000, s), amount: n * WHOLE, custody: None }
 }
 
 fn legs_for(actor: &Actor) -> (Vec<IntentAsk>, Vec<IntentBid>) {
