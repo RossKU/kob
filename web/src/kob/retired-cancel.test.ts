@@ -50,7 +50,7 @@ async function snapshotOf(golden: string, label: string, n?: number): Promise<{ 
 describe('the cancel-only table in kob-wasm', () => {
   it('lists the retired templates of template-retirement.md, each with the cancel entry only', () => {
     const t = kob.retiredTemplates();
-    expect(t).toHaveLength(31);
+    expect(t).toHaveLength(39);
     for (const label of [BID, 'KobBidKron 6ec1a3dd', 'KobBidKronD0 436fbbbb', 'KobCondBid 26042aff', COND_ASK_F1]) expect(t.map((x) => x.label)).toContain(label);
     expect(t.every((x) => x.entries.length === 1 && x.entries[0] === 'cancel')).toBe(true);
     // none is a template this build pins

@@ -1053,7 +1053,7 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
     let b = bid(1);
     let value = b.escrow(10 * SCALE, 3).unwrap() as u64;
     let s = AnyState::KobBid(b);
-    let spk = r.spk(&s.encode()).unwrap();
+    let spk = r.spk(&r.encode_state(&s).unwrap()).unwrap();
     assert_ne!(spk, s.spk(), "the retired script is not today's");
     let (url, node) =
         mock::start(vec![node_utxo(&spk, 0xd2, 0, value, Some(AR)), node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None)]);
