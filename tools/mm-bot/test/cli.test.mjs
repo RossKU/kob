@@ -86,7 +86,7 @@ test('balances: integer units and the maker key', async () => {
 test('config: the defaults plus a token pass; bad values are listed together', () => {
   const ok = { ...DEFAULTS, token: { ...DEFAULTS.token, covenantId: TOKEN, decimals: 6 } };
   assert.deepEqual(validate(ok), []);
-  const bad = validate({ ...ok, network: 'testnet', token: { ...ok.token, covenantId: 'KZUSDC' }, quotes: { ...ok.quotes, repriceThreshold: 0.02, maxBidPct: 70 } });
+  const bad = validate({ ...ok, network: 'testnet', token: { ...ok.token, covenantId: 'USDX' }, quotes: { ...ok.quotes, repriceThreshold: 0.02, maxBidPct: 70 } });
   assert.ok(bad.some((p) => /network/.test(p)));
   assert.ok(bad.some((p) => /pin the token by its covenant id/.test(p)));
   assert.ok(bad.some((p) => /repriceThreshold must be below/.test(p)));

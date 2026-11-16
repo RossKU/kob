@@ -6,8 +6,8 @@ import { pegCheck } from '../src/reference.mjs';
 import { retiredMessage, retiredPlan } from '../src/retired.mjs';
 import { DEFAULTS, validate } from '../src/config.mjs';
 
-const OLD = '9753d77b8cf60b6349786ca57a9ab89c9adf8bc980c4b4e804f3ac05c775cfe2';
-const NEW = 'cc9957fe0d485f79994ed583aa7e16bacf194d9b9d6d77aeedc129349ddad12c';
+const OLD = '03'.repeat(32);
+const NEW = '04'.repeat(32);
 const order = (id, extra = {}) => ({ id: id.repeat(64).slice(0, 64), side: 'sell', ...extra });
 
 test('a retired token: cancel every order, then merge, then done; never a place or an amend', () => {
@@ -39,7 +39,7 @@ test('config: retiredTokens are covenant ids and never the quoted token', () => 
   const ok = { ...DEFAULTS, token: { ...DEFAULTS.token, covenantId: NEW, decimals: 6 }, retiredTokens: [OLD] };
   assert.deepEqual(validate(ok), []);
   assert.ok(validate({ ...ok, retiredTokens: [NEW] }).some((p) => /must not contain token.covenantId/.test(p)));
-  assert.ok(validate({ ...ok, retiredTokens: ['kzUSDC'] }).some((p) => /not 64 lower-case hex/.test(p)));
+  assert.ok(validate({ ...ok, retiredTokens: ['USDX'] }).some((p) => /not 64 lower-case hex/.test(p)));
 });
 
 test('peg check: a live rate outside the band fails; a fallback or fixed rate never does', () => {

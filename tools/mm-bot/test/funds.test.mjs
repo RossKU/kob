@@ -5,7 +5,7 @@ import { alertsToSend, fundChecks, fundLevel, ladderNeeds, shortfall } from '../
 import { sizedQuotes } from '../src/sizing.mjs';
 
 const ADDR = 'kaspatest:qzsanlgngufgqyddqqmtqau5n43jwn2a8w9vsdghwmpse9z77tp0kmzydclw7';
-const TOKEN = { id: 'cc9957fe0d485f79994ed583aa7e16bacf194d9b9d6d77aeedc129349ddad12c', label: 'kzUSDC' };
+const TOKEN = { id: '02'.repeat(32), label: 'USDX' };
 const RATES = { tokenUsd: 1, kasUsd: 0.025 };
 const FAIR = 40; // 1 / 0.025
 // 1000 USD capital, 3 levels of 15 % (150 USD = 150 tokens), sides capped at 50 %
@@ -48,7 +48,7 @@ test('a low token side warns before it runs out, naming the token by ticker and 
   const asks = c.find((x) => x.key === 'asks');
   assert.equal(asks.level, 'warn', '100 USD is under 12.5 % of 1000 USD');
   assert.equal(asks.shortfall, 350);
-  assert.equal(asks.message, `Low kzUSDC (${TOKEN.id}): asks need 45% = 450 USD = 450 kzUSDC, 100 kzUSDC (10%) held; deposit 350 kzUSDC to ${ADDR} to quote the full ask ladder.`);
+  assert.equal(asks.message, `Low USDX (${TOKEN.id}): asks need 45% = 450 USD = 450 USDX, 100 USDX (10%) held; deposit 350 USDX to ${ADDR} to quote the full ask ladder.`);
   assert.equal(fundChecks({ ...base, kasHeld: 20_000, kasFree: 200, tokenHeld: 130 }).find((x) => x.key === 'asks').level, 'ok');
 });
 
