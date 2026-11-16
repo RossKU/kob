@@ -8,7 +8,7 @@ guide walks through the web app as it is today. The labels in quotation marks ar
 
 Contents: [1 What you need](#1-what-you-need) | [2 Connect a wallet](#2-connect-a-wallet) |
 [3 Find a token](#3-find-a-token-and-read-its-facts) | [4 Buy and sell](#4-buy-and-sell) | [4a Activity](#4a-activity) |
-[5 Limit and market orders](#5-limit-and-market-orders) | [6 Partial fills](#6-partial-fills-and-you-may-receive-up-to) |
+[5 Limit and market orders](#5-limit-and-market-orders) | [6 Partial fills](#6-partial-fills-and-you-may-receive-up-to) | [6a Where bought tokens go](#6a-where-bought-tokens-go) |
 [7 Your orders: cancel, refund, renew](#7-your-orders-cancel-refund-renew) | [8 Merge token UTXOs](#8-merge-token-utxos) |
 [9 Current status: node and indexer](#9-current-status-node-and-indexer) | [10 Fees: what goes where](#10-fees-what-goes-where) |
 [11 Private-key guidance](#11-private-key-guidance) | [12 Create a token, and find one you created earlier](#12-create-a-token-and-find-one-you-created-earlier) |
@@ -249,6 +249,19 @@ price or better. The confirmation therefore says:
 
 So with a multi-fill market buy you can end up with a little more than you typed (on testnet-10 a buy of 0.6 delivered 0.6676).
 You never pay more than the budget shown, and the price still never goes beyond your worst price.
+
+## 6a. Where bought tokens go
+
+A buy order that delivers KCC-20 tokens has three delivery choices (ticket, "Delivery"):
+
+| Choice | What happens |
+|---|---|
+| Each fill separately | Every fill sends its tokens to you as a new token UTXO. Used for market, IOC and FOK orders, KRON tokens and repeating orders. |
+| Collected, sent at the end | The default for a "Good till cancelled" buy. The order keeps what it buys; you get one token UTXO when the order ends or is cancelled. |
+| Added to one UTXO | Optional, in the advanced settings. A matcher may add the tokens to your receive UTXO and keeps a small tip you set; it needs a minimum fill larger than your threshold. |
+
+While an order collects, the tokens show as **Bought tokens** ("held by the order"), counted as yours. Press **Claim** to take
+them now (also "Claim and sell", "Claim and merge"); the order stays open. A cancel or a refund also sends them to you.
 
 ## 7. Your orders: cancel, refund, renew
 
