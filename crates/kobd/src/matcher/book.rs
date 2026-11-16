@@ -45,6 +45,10 @@ pub struct ListedOrder {
     /// to its A custody).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custody_b: Option<TokenUtxo>,
+    /// A mode-1 order's bought-custody (`bought > 0`): one live token UTXO owned by the order id, as the
+    /// indexer proved it. Refunds and fills of the order spend it. It is never a stray.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bought_custody: Option<TokenUtxo>,
     /// Day orders: wall-clock deadline (UTC unix seconds) from the placement record (§10.10).
     #[serde(default, with = "kob_protocol::json::field")]
     pub deadline: Option<u64>,

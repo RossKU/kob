@@ -85,6 +85,12 @@ impl Level<'_> {
     }
 }
 
+/// A mode-1 bid holding bought tokens needs its bought-custody as a leg input. The swap legs and
+/// the intent book (`kob_x402`) carry none, so such a bid is not offered until they do.
+fn holds_bought(o: &ListedOrder) -> bool {
+    o.order.state.bought_custody().is_some()
+}
+
 fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'a>> {
     let t = book.daa_score as i64;
     let mut out = Vec::new();
@@ -94,7 +100,7 @@ fn levels<'a>(book: &'a MemoryBook, req: &QuoteRequest, utc: u64) -> Vec<Level<'
         if req.exclude.contains(&outpoint_of(o)) || excluded_by_expiry(o, t, utc) || token_program(&o.order.state).is_none() {
             continue;
         }
-        if crate::sanity::check(&o.order.state).is_err() {
+        if crate::sanity::check(&o.order.state).is_err() || holds_bought(o) {
             continue;
         }
         match (&o.order.state, req.take) {
@@ -210,7 +216,7 @@ pub fn quote(book: &MemoryBook, reqs: &[QuoteRequest], lock_time: u64, utc: u64)
 /// further by the intent's token programs, plain resting orders and activity.
 pub fn book_view(book: &MemoryBook) -> kob_x402::intent::BookView {
     let mut v = kob_x402::intent::BookView::default();
-    for o in &book.orders {
+    for o in book.orders.iter().filter(|o| !holds_bought(o)) {
         match &o.order.state {
             AnyState::KobAsk(s) => {
                 if let Some(c) = o.custody.clone().filter(|_| o.custody_ok()) {

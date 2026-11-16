@@ -782,6 +782,16 @@ fn returnable_foreign(o: &ListedOrder) -> Vec<ForeignStrays> {
         .collect()
 }
 
+/// Whether the order's bought-custody is what its refund needs: none when it holds none, else the
+/// one live UTXO holding exactly `bought`.
+fn bought_ok(o: &ListedOrder) -> bool {
+    match (o.order.state.bought_custody(), &o.bought_custody) {
+        (None, None) => true,
+        (Some(b), Some(c)) => c.state.amount() == b && c.state.owner() == o.id(),
+        _ => false,
+    }
+}
+
 /// Drops the foreign strays a keeper refund would return. `false` when it returns none.
 fn strip_foreign(a: &mut Action) -> bool {
     match a {
@@ -940,6 +950,10 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
                     report
                         .skipped
                         .push((id, format!("{}: the custody is missing or does not hold the order's amountLeft", kind.name())));
+                } else if !bought_ok(o) {
+                    // A mode-1 order's refund releases its bought-custody whole; without the exact one the
+                    // covenant refuses it.
+                    report.skipped.push((id, format!("{}: the bought-custody is missing or does not hold the order's bought", kind.name())));
                 } else {
                     attempt = Some((
                         kind,
@@ -952,7 +966,7 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
                             funding: funding_vec.clone(),
                             change: Some(operator),
                             fee: fee.clone(),
-                            bought_custody: None,
+                            bought_custody: o.bought_custody.clone().filter(|_| o.order.state.bought_custody().is_some()),
                         }),
                     ));
                 }

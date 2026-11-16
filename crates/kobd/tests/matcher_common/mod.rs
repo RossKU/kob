@@ -318,6 +318,7 @@ pub fn listed(id: [u8; 32], state: AnyState, value: u64, daa: u64) -> ListedOrde
         order: OrderUtxo { utxo: utxo(value, daa, Some(id)), state },
         custody,
         custody_b: None,
+        bought_custody: None,
         deadline: None,
         seen_daa: daa,
         foreign: vec![],

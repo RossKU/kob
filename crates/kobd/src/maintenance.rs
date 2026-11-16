@@ -34,7 +34,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use kob_protocol::artifacts::TemplateId;
-use kob_protocol::build::{build_with, Action, Batch, Leg, SendTokens, TokenRecipient, TokenRef};
+use kob_protocol::build::{build_with, Action, Batch, BidDelivery, Leg, SendTokens, TokenRecipient, TokenRef};
 use kob_protocol::state::AnyState;
 use kob_protocol::tx::{finalize, BuiltTx, FeeOptions, FinalizeOptions, KeyUtxo, OrderUtxo, SignedTx, TokenUtxo};
 use kob_protocol::verify::{validate_signed, Validation};
@@ -273,6 +273,10 @@ fn best_bid(inp: &MaintenanceInput, g: &Group, held: i64, t: i64) -> Option<(Lis
         if inp.excluded_outpoints.contains(&outpoint(&o.order.utxo)) {
             continue;
         }
+        // a bid holding bought tokens is filled only with its exact bought-custody
+        if o.order.state.bought_custody().is_some() != o.bought_custody.is_some() {
+            continue;
+        }
         let mut n = held.min(c.cap);
         if let Some((_, hi)) = c.fok {
             n = n.min(hi);
@@ -354,7 +358,13 @@ fn sell_action(
     let AnyState::KobBid(s) = base else { return Err("not a plain bid".into()) };
     Ok(Action::Batch(Batch {
         lock_time: lock,
-        legs: vec![Leg::Bid { order: OrderUtxo { utxo: bid.order.utxo.clone(), state: s }, amount, t: None, delivery: None }],
+        // a mode-1 bid that already bought is filled through its bought-custody
+        legs: vec![Leg::Bid {
+            order: OrderUtxo { utxo: bid.order.utxo.clone(), state: s },
+            amount,
+            t: None,
+            delivery: bid.bought_custody.clone().map(|c| BidDelivery { custody: Some(c), ..Default::default() }),
+        }],
         updates: vec![],
         taker_tokens: tokens.to_vec(),
         taker: Some(operator),
