@@ -527,3 +527,449 @@ fn refuse_v24_violations(kron: bool, scenarios: Vec<(String, Action)>) {
     c.value -= 1;
     expect_invalid(Action::CreateOrder(c), "under-funded entry");
 }
+
+// ---------------------------------------------------------------- delivery modes (docs/design/bid-delivery-spec.md)
+
+mod delivery {
+    use super::common::*;
+    use kob_protocol::artifacts::{token_template, TemplateId};
+    use kob_protocol::build::{build, check_new_order, Action, Batch, BidDelivery, Leg};
+    use kob_protocol::state::*;
+    use kob_protocol::tx::{Arg, BuiltTx, SigPlan, Witness};
+    use kob_protocol::Family;
+
+    const T: TemplateId = TemplateId::Kcc20Ref;
+
+    fn scenario(name: &str) -> Action {
+        scenarios().into_iter().find(|(n, _)| n == name).unwrap_or_else(|| panic!("scenario {name}")).1
+    }
+    fn batch_of(a: Action) -> Batch {
+        let Action::Batch(b) = a else { panic!("a batch") };
+        b
+    }
+    fn built(a: &Action) -> BuiltTx {
+        build(a).unwrap_or_else(|e| panic!("build: {e}"))
+    }
+    fn err(a: &Action) -> String {
+        build(a).err().unwrap_or_else(|| panic!("the builder must refuse this")).to_string()
+    }
+    /// The (tokIn, form) arguments of the bid entry at input `i`.
+    fn bid_args(b: &BuiltTx, i: usize) -> (i64, i64) {
+        let SigPlan::Entry { args, entry, .. } = &b.plans[i] else { panic!("an order entry") };
+        let int = |a: &Arg| if let Arg::Int(x) = a { *x } else { panic!("an int argument") };
+        match entry.as_str() {
+            "fill" => (int(&args[1]), int(&args[3])),
+            "settle" => (int(&args[1]), int(&args[5])),
+            e => panic!("entry {e}"),
+        }
+    }
+    fn out_spk(b: &BuiltTx, k: usize) -> kaspa_consensus_core::tx::ScriptPublicKey {
+        b.tx.to_tx().unwrap().0.outputs[k].script_public_key.clone()
+    }
+    fn out_value(b: &BuiltTx, k: usize) -> u64 {
+        b.tx.to_tx().unwrap().0.outputs[k].value
+    }
+    fn tok_spk(s: &TokenState) -> kaspa_consensus_core::tx::ScriptPublicKey {
+        s.spk_with(token_template(T))
+    }
+    fn plain(n: i64, maker: u8) -> TokenState {
+        TokenState::user(T, n, pk(maker), ext_for(T))
+    }
+    fn leg_bid(b: &Batch, i: usize) -> BidState {
+        let Leg::Bid { order, .. } = &b.legs[i] else { panic!("a bid leg") };
+        order.state.clone()
+    }
+    fn set_delivery(b: &mut Batch, i: usize, d: Option<BidDelivery>) {
+        match &mut b.legs[i] {
+            Leg::Bid { delivery, .. } | Leg::CondBid { delivery, .. } => *delivery = d,
+            _ => panic!("a bid leg"),
+        }
+    }
+    fn leader_witness(b: &BuiltTx, i: usize) -> Witness {
+        let SigPlan::TokenLeader { witness, .. } = &b.plans[i] else { panic!("input {i} is not a token leader: {:?}", b.roles[i]) };
+        witness.clone()
+    }
+
+    /// Mode 1: the first fill delivers into a new bought-custody and the continuation records `bought`; a later fill
+    /// continues the custody (its KAS stays on it, the escrow moves no carrier); the fill that ends the order releases it
+    /// whole to the maker as one plain UTXO.
+    #[test]
+    fn mode_1_accumulates_into_the_bought_custody_and_releases_it_at_the_end() {
+        let first = scenario("take.bid.acc.first");
+        let b = built(&first);
+        let s = leg_bid(&batch_of(first.clone()), 0);
+        assert_eq!(out_spk(&b, 0), tok_spk(&TokenState::custody(Family::Kcc20, 4 * WHOLE, cov(0xb1), ext_for(T))), "custody of n");
+        assert_eq!(out_spk(&b, 1), AnyState::KobBid(BidState { bought: 4 * WHOLE, ..s.clone() }).spk(), "bought = n");
+        assert_eq!(bid_args(&b, 0), (1, 0));
+        assert_eq!(b.roles[0], "KobBid.fill.cont@KCC20Ref");
+
+        let more = scenario("take.bid.acc.more");
+        let bm = built(&more);
+        let s = leg_bid(&batch_of(more.clone()), 0);
+        let v = batch_of(more.clone()).legs[0].clone();
+        let Leg::Bid { order, delivery: Some(d), .. } = v else { panic!() };
+        let c = d.custody.unwrap();
+        assert_eq!(bid_args(&bm, 0), (1, 0), "tokIn is the bought-custody");
+        assert_eq!(leader_witness(&bm, 1), Witness::CovenantId, "the custody leads, authorised by the order");
+        assert_eq!(out_spk(&bm, 0), tok_spk(&TokenState::custody(Family::Kcc20, 7 * WHOLE, cov(0xb1), ext_for(T))));
+        let used = s.used(3 * WHOLE).unwrap();
+        let spend = s.spend(3 * WHOLE, 0, 1_000).unwrap();
+        assert_eq!(out_value(&bm, 0) as i64, c.utxo.amount as i64 + used - spend, "the custody keeps its KAS, no carrier");
+        assert_eq!(out_value(&bm, 1) as i64, order.utxo.amount as i64 - used, "the continuation keeps the carrier");
+        assert_eq!(out_spk(&bm, 1), AnyState::KobBid(BidState { bought: 7 * WHOLE, ..s.clone() }).spk());
+        assert_eq!(bm.roles[0], "KobBid.fill.cont.custody@KCC20Ref");
+
+        let close = scenario("take.bid.acc.close");
+        let bc = built(&close);
+        let tx = bc.tx.to_tx().unwrap().0;
+        assert_eq!(out_spk(&bc, 0), tok_spk(&plain(7 * WHOLE, MAKER_B)), "released whole to the maker");
+        assert_eq!(out_value(&bc, 0), c.utxo.amount, "with the custody's KAS");
+        assert!(!tx.outputs.iter().any(|o| matches!(o.covenant, Some(x) if x.covenant_id.as_bytes() == cov(0xb1))), "no continuation");
+        assert_eq!(tx.outputs.last().unwrap().script_public_key, kob_protocol::script::p2pk_spk(&pk(MAKER_B)), "the refund");
+        assert_eq!(bc.roles[0], "KobBid.fill.close.custody@KCC20Ref");
+        // a remainder below REFUND_MIN rides on the release
+        let dust = built(&scenario("take.bid.acc.closeDust"));
+        assert!(out_value(&dust, 0) > c.utxo.amount);
+    }
+
+    /// Mode 2: without a receive UTXO the fill creates one (form 1); with the maker's receive UTXO it tops it up (form 2),
+    /// the receive UTXO leading on the borrow path, its KAS kept, the escrow releasing only `topupTip`; form 0 is plain.
+    #[test]
+    fn mode_2_creates_or_tops_up_the_receive_utxo() {
+        let recv = built(&scenario("take.bid.recv"));
+        assert_eq!(out_spk(&recv, 0), tok_spk(&plain(4 * WHOLE, MAKER_B).with_borrow(kob_protocol::build::receive_borrow(RECV_T))));
+        assert_eq!(bid_args(&recv, 0).1, 1);
+
+        let plain0 = built(&scenario("take.bid.topup.plain"));
+        assert_eq!(out_spk(&plain0, 0), tok_spk(&plain(4 * WHOLE, MAKER_B)));
+        assert_eq!(bid_args(&plain0, 0).1, 0);
+
+        let a = scenario("take.bid.topup");
+        let b = built(&a);
+        let leg = batch_of(a.clone()).legs[0].clone();
+        let Leg::Bid { order, delivery: Some(d), .. } = leg else { panic!() };
+        let r = d.receive.unwrap();
+        let s = order.state.clone();
+        assert_eq!(bid_args(&b, 0), (1, 2), "tokIn is the receive UTXO, form 2");
+        assert_eq!(leader_witness(&b, 1), Witness::Borrow, "the receive UTXO leads on the borrow path");
+        assert!(b.roles[1].starts_with("KCC20Ref.leader.borrow."), "{}", b.roles[1]);
+        assert_eq!(out_spk(&b, 0), tok_spk(&r.state.with_amount(6 * WHOLE)), "have + n, every other state byte kept");
+        let used = s.used(4 * WHOLE).unwrap();
+        let spend = s.spend(4 * WHOLE, 0, 1_000).unwrap();
+        assert_eq!(out_value(&b, 0) as i64, r.utxo.amount as i64 + used - spend, "the receive UTXO keeps its KAS");
+        assert_eq!(out_value(&b, 1) as i64, order.utxo.amount as i64 - used - s.topup_tip, "only topupTip leaves the escrow");
+        assert_eq!(b.roles[0], "KobBid.fill.cont.topup@KCC20Ref");
+        // the matcher's cross: the receive UTXO leads, the ask custodies delegate
+        let x = built(&scenario("match.cross.1x2.topup"));
+        assert_eq!(leader_witness(&x, 3), Witness::Borrow);
+        // a conditional bid tops up the same way
+        let cb = built(&scenario("cond.bid.topup"));
+        assert_eq!(bid_args(&cb, 0), (1, 2));
+        assert_eq!(leader_witness(&cb, 1), Witness::Borrow);
+        assert_eq!(cb.roles[0], "KobCondBid.settle.leg0.cont.topup@KCC20Ref");
+    }
+
+    /// The builder takes a top-up only where the batch allows it, and otherwise creates a new receive UTXO (form 1); a
+    /// forced top-up the batch does not allow is refused (bid-delivery-spec §6.3 to §6.6).
+    #[test]
+    fn a_top_up_is_taken_only_where_the_batch_allows_it() {
+        let base = batch_of(scenario("take.bid.topup"));
+        let r = |b: &Batch| match &b.legs[0] {
+            Leg::Bid { delivery: Some(d), .. } => d.receive.clone().unwrap(),
+            _ => panic!(),
+        };
+        let recv0 = r(&base);
+        let form_of = |b: &Batch, i: usize| bid_args(&built(&Action::Batch(b.clone())), i).1;
+        let forced = |mut b: Batch, i: usize| {
+            match &mut b.legs[i] {
+                Leg::Bid { delivery: Some(d), .. } => d.form = Some(2),
+                _ => panic!(),
+            }
+            err(&Action::Batch(b))
+        };
+        assert_eq!(form_of(&base, 0), 2, "positive: the honest top-up");
+        // 1. a fill that does not gain more than the threshold (here: threshold = n)
+        let mut b = base.clone();
+        let mut thr = recv_tok(24, 2 * WHOLE, pk(MAKER_B), 4 * WHOLE, 1_500);
+        set_delivery(&mut b, 0, bid_dlv(None, Some(thr.clone()), None));
+        assert_eq!(form_of(&b, 0), 1);
+        assert!(forced(b, 0).contains("does not gain more than"));
+        // 2. a threshold below the order's recvThreshold
+        let mut b = base.clone();
+        thr = recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T - 1, 1_500);
+        set_delivery(&mut b, 0, bid_dlv(None, Some(thr), None));
+        assert_eq!(form_of(&b, 0), 1);
+        // 3. another owner, a plain UTXO, another commitment, a non-canonical guard
+        for bad in [
+            recv_tok(24, 2 * WHOLE, pk(MAKER_C), RECV_T, 1_500),
+            tok(24, 2 * WHOLE, pk(MAKER_B), SCHEME_P2PK, 1_500),
+            {
+                let mut x = recv0.clone();
+                if let TokenState::Kcc20(k) = &mut x.state {
+                    k.extension_commitment = [0x11; 32];
+                }
+                x
+            },
+            {
+                let mut x = recv0.clone();
+                if let TokenState::Kcc20(k) = &mut x.state {
+                    k.borrow_guard[9] = 1;
+                }
+                x
+            },
+        ] {
+            let mut b = base.clone();
+            set_delivery(&mut b, 0, bid_dlv(None, Some(bad), None));
+            assert_eq!(form_of(&b, 0), 1);
+            assert!(forced(b, 0).contains("top-up (form 2) is not possible"));
+        }
+        // 4. not the token's lowest-index delivering leg: a plain bid of the token before it
+        let mut b = base.clone();
+        let other = bid(MAKER_C, P245, T);
+        b.legs.insert(
+            0,
+            Leg::Bid {
+                order: order(25, other.escrow(10 * WHOLE, 1).unwrap() as u64, cov(0xb5), 1_000, other),
+                amount: 2 * WHOLE,
+                t: None,
+                delivery: None,
+            },
+        );
+        b.taker_tokens[0] = tok(21, 6 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000);
+        assert_eq!(form_of(&b, 1), 1);
+        assert!(forced(b, 1).contains("lowest-index delivering leg"));
+        // 5. a custody whose output sits at its own index (an IOC ask's return) precedes the receive UTXO
+        let mut b = base.clone();
+        let ioc = AskState { tif: TIF_IOC, ..ask_n(MAKER_A, P245, T, 10) };
+        b.legs.push(Leg::Ask {
+            order: order(26, carrier(), cov(0xa6), 1_000, ioc),
+            custody: custody(27, 10, cov(0xa6), 1_000),
+            amount: 2 * WHOLE,
+            t: None,
+        });
+        b.funding = vec![key_utxo(28, TAKER, 100 * KAS)];
+        assert_eq!(form_of(&b, 0), 1);
+        assert!(forced(b, 0).contains("own input index"));
+        // 6. the token's slots: three taker token inputs on the 3 / 3 program leave no room
+        let mut b = base.clone();
+        b.taker_tokens = (0..3).map(|k| tok(30 + k, if k == 0 { 2 * WHOLE } else { WHOLE }, pk(TAKER), SCHEME_P2PK, 1_000)).collect();
+        assert_eq!(form_of(&b, 0), 1);
+        assert!(forced(b, 0).contains("token input 4"));
+        // 7. a program without a measured top-up never tops up
+        for p in PROGRAMS.into_iter().filter(|p| p.family() == Family::Kcc20 && kob_protocol::budget::topup_extra(*p).is_none()) {
+            let s = mode_bid(bid(MAKER_B, P245, p), MODE_TOPUP, 0);
+            let mut b = take_bid_valued(s.clone(), 4, s.escrow(10 * WHOLE, 3).unwrap() as u64, None);
+            b.taker_tokens[0] = tok_on(p, 21, 4 * WHOLE, pk(TAKER), 1_000);
+            let mut rr = recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T, 1_500);
+            if let TokenState::Kcc20(k) = &mut rr.state {
+                k.extension_commitment = ext_for(p);
+            }
+            set_delivery(&mut b, 0, bid_dlv(None, Some(rr), None));
+            assert_eq!(form_of(&b, 0), 1, "{}", p.name());
+        }
+    }
+
+    /// A refund-carrying terminal bid is put first, so a token with one tops up only that one (bid-delivery-spec §6.4): the
+    /// top-up the first pass gave the other bid moves to it.
+    #[test]
+    fn a_token_with_a_refund_carrying_bid_tops_up_only_that_bid() {
+        let m2 = mode_bid(bid(MAKER_B, P245, T), MODE_TOPUP, 0);
+        let cont = bid(MAKER_C, P245, T);
+        let recv_b = recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T, 1_500);
+        let recv_c = recv_tok(25, 2 * WHOLE, pk(MAKER_C), RECV_T, 1_500);
+        let c2 = mode_bid(cont.clone(), MODE_TOPUP, 0);
+        // leg 0 continues (no refund) and could top up; leg 1 ends with a refund
+        let mut b = take_bid_valued(c2.clone(), 2, c2.escrow(10 * WHOLE, 3).unwrap() as u64, bid_dlv(None, Some(recv_c), None));
+        b.legs.push(Leg::Bid {
+            order: order(
+                26,
+                (m2.used(4 * WHOLE).unwrap() + m2.delivery_carrier + 2 * KAS as i64) as u64,
+                cov(0xb6),
+                1_000,
+                m2.clone(),
+            ),
+            amount: 4 * WHOLE,
+            t: None,
+            delivery: bid_dlv(None, Some(recv_b.clone()), None),
+        });
+        b.taker_tokens[0] = tok(21, 6 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000);
+        let tx = built(&Action::Batch(b.clone()));
+        // the refund leg is input 0 and tops up; the other one creates a receive UTXO
+        assert_eq!(bid_args(&tx, 0), (2, 2));
+        assert_eq!(bid_args(&tx, 1).1, 1);
+        assert_eq!(out_spk(&tx, 0), tok_spk(&recv_b.state.with_amount(6 * WHOLE)));
+        assert_eq!(leader_witness(&tx, 2), Witness::Borrow);
+        super::run("refund-first top-up", &Action::Batch(b.clone()));
+        // forcing the top-up onto the continuing bid is refused
+        match &mut b.legs[0] {
+            Leg::Bid { delivery: Some(d), .. } => d.form = Some(2),
+            _ => panic!(),
+        }
+        assert!(err(&Action::Batch(b)).contains("lowest-index delivering leg"));
+    }
+
+    /// The delivery inputs a leg names must match its order's mode.
+    #[test]
+    fn the_delivery_inputs_must_match_the_mode() {
+        let more = batch_of(scenario("take.bid.acc.more"));
+        // positive: the honest one builds (and validates, `every_builder_shape_validates_on_every_token_program`)
+        built(&Action::Batch(more.clone()));
+        // a mode-1 order holding bought tokens without its custody
+        let mut b = more.clone();
+        set_delivery(&mut b, 0, None);
+        assert!(err(&Action::Batch(b)).contains("needs its bought-custody"));
+        // a custody of another amount, of another owner
+        for c in [bought_custody(23, 3 * WHOLE, cov(0xb1), 1_500), bought_custody(23, 4 * WHOLE, cov(0xbb), 1_500)] {
+            let mut b = more.clone();
+            set_delivery(&mut b, 0, bid_dlv(Some(c), None, None));
+            build(&Action::Batch(b)).expect_err("not the bought-custody");
+        }
+        // a custody named by a mode-0 or a mode-2 order, a receive UTXO or a form named by a mode-0 / mode-1 order
+        let plain_bid = batch_of(scenario("take.bid.partial"));
+        let r = recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T, 1_500);
+        for d in [
+            bid_dlv(Some(bought_custody(23, 4 * WHOLE, cov(0xb1), 1_500)), None, None),
+            bid_dlv(None, Some(r.clone()), None),
+            bid_dlv(None, None, Some(1)),
+        ] {
+            let mut b = plain_bid.clone();
+            set_delivery(&mut b, 0, d);
+            assert!(err(&Action::Batch(b)).contains("delivery."));
+        }
+        let mut b = more.clone();
+        set_delivery(&mut b, 0, bid_dlv(Some(bought_custody(23, 4 * WHOLE, cov(0xb1), 1_500)), Some(r.clone()), None));
+        assert!(err(&Action::Batch(b)).contains("mode-2 (top-up) order only"));
+        let mut b = batch_of(scenario("take.bid.recv"));
+        set_delivery(&mut b, 0, bid_dlv(Some(bought_custody(23, 4 * WHOLE, cov(0xb1), 1_500)), None, None));
+        assert!(err(&Action::Batch(b)).contains("only a mode-1 order"));
+        // a form outside 0..=2, a forced top-up without a receive UTXO
+        for f in [3u8, 2] {
+            let mut b = batch_of(scenario("take.bid.recv"));
+            set_delivery(&mut b, 0, bid_dlv(None, None, Some(f)));
+            assert!(err(&Action::Batch(b)).contains("delivery"));
+        }
+    }
+
+    /// A refund of a mode-1 bid holding bought tokens releases the custody whole at its own index (`refund(custIn)`).
+    #[test]
+    fn a_refund_releases_the_bought_custody_at_its_own_index() {
+        let a = scenario("refund.bid.acc");
+        let b = built(&a);
+        let Action::RefundOrder(r) = &a else { panic!() };
+        let SigPlan::Entry { args, entry, .. } = &b.plans[0] else { panic!() };
+        assert_eq!((entry.as_str(), args.as_slice()), ("refund", &[Arg::Int(1)][..]));
+        assert_eq!(b.roles[0], "KobBid.refund.custody@KCC20Ref");
+        assert_eq!(out_spk(&b, 0), kob_protocol::script::p2pk_spk(&pk(MAKER_B)));
+        assert_eq!(out_spk(&b, 1), tok_spk(&plain(4 * WHOLE, MAKER_B)));
+        assert_eq!(out_value(&b, 1), r.bought_custody.as_ref().unwrap().utxo.amount);
+        built(&scenario("refund.condBid.acc"));
+        // without the custody: refused; a refund of a bid holding none names custIn 0 and no token input
+        let mut x = r.clone();
+        x.bought_custody = None;
+        assert!(err(&Action::RefundOrder(x.clone())).contains("bought-custody"));
+        // named as the sell custody instead: refused
+        x.custody = r.bought_custody.clone();
+        assert!(err(&Action::RefundOrder(x)).contains("boughtCustody"));
+        let plain_refund = built(&scenario("refund.bid"));
+        let SigPlan::Entry { args, .. } = &plain_refund.plans[0] else { panic!() };
+        assert_eq!(args.as_slice(), &[Arg::Int(0)][..]);
+    }
+
+    /// Placement (bid-delivery-spec §2): the mode and its fields, bought = 0, mode 0 for an IOC / FOK bid and for a KRON
+    /// delivery, a top-up only on a program with a measured top-up; a repeating entry's exits in mode 0.
+    #[test]
+    fn placement_checks_the_delivery_block() {
+        let ok = |s: AnyState| check_new_order(&s).unwrap_or_else(|e| panic!("{e}"));
+        let bad = |s: AnyState, what: &str| {
+            let e = check_new_order(&s).unwrap_err().to_string();
+            assert!(e.contains(what), "{e}");
+        };
+        let b = bid(MAKER_A, P245, T);
+        ok(AnyState::KobBid(mode_bid(b.clone(), MODE_ACCUMULATE, 0)));
+        ok(AnyState::KobBid(mode_bid(b.clone(), MODE_TOPUP, 0)));
+        bad(AnyState::KobBid(mode_bid(b.clone(), MODE_ACCUMULATE, WHOLE)), "bought = 0");
+        bad(AnyState::KobBid(BidState { mode: 3, ..b.clone() }), "mode must be 0, 1 or 2");
+        bad(AnyState::KobBid(BidState { recv_threshold: 0, ..mode_bid(b.clone(), MODE_TOPUP, 0) }), "recvThreshold > 0");
+        bad(AnyState::KobBid(BidState { topup_tip: b.delivery_carrier + 1, ..mode_bid(b.clone(), MODE_TOPUP, 0) }), "topupTip");
+        bad(
+            AnyState::KobBid(BidState { recv_threshold: 1, ..mode_bid(b.clone(), MODE_ACCUMULATE, 0) }),
+            "recvThreshold = topupTip = 0",
+        );
+        bad(AnyState::KobBid(BidState { tif: TIF_IOC, ..mode_bid(b.clone(), MODE_ACCUMULATE, 0) }), "IOC / FOK");
+        bad(AnyState::KobBid(BidState { tif: TIF_FOK, ..mode_bid(b.clone(), MODE_TOPUP, 0) }), "IOC / FOK");
+        ok(AnyState::KobBid(BidState { tif: TIF_IOC, ..b.clone() }));
+        let kron = bid(MAKER_A, P245, TemplateId::KronToken2433);
+        bad(AnyState::KobBidKron(mode_bid(kron, MODE_ACCUMULATE, 0)), "KRON delivery is mode 0");
+        for p in PROGRAMS.into_iter().filter(|p| p.family() == Family::Kcc20 && kob_protocol::budget::topup_extra(*p).is_none()) {
+            bad(AnyState::KobBid(mode_bid(bid(MAKER_A, P245, p), MODE_TOPUP, 0)), "no measured top-up");
+            ok(AnyState::KobBid(mode_bid(bid(MAKER_A, P245, p), MODE_ACCUMULATE, 0)));
+        }
+        let c = cond_bid(MAKER_A, T);
+        ok(AnyState::KobCondBid(mode_cond_bid(c.clone(), MODE_ACCUMULATE, 0)));
+        bad(AnyState::KobCondBid(mode_cond_bid(c.clone(), MODE_ACCUMULATE, 3)), "bought = 0");
+        let ia = IfdAskState { exit_mode: MODE_ACCUMULATE, ..ifd_ask(MAKER_A, T) };
+        ok(AnyState::KobIfdAsk(ia.clone()));
+        bad(AnyState::KobIfdAsk(IfdAskState { rpt_amount: 1 + 20 * WHOLE, ..ia }), "repeating entry's exits are mode 0");
+    }
+
+    /// The fill of a repeating sell-first entry whose exits are not mode 0 is refused (the covenant refuses it).
+    #[test]
+    fn a_repeating_entry_with_a_delivering_exit_mode_is_not_filled() {
+        let Action::Batch(mut b) = scenario("ifd.ask.repeat.book") else { panic!() };
+        built(&Action::Batch(b.clone()));
+        if let Leg::IfdAsk { order, .. } = &mut b.legs[0] {
+            order.state.exit_mode = MODE_ACCUMULATE;
+        }
+        assert!(err(&Action::Batch(b)).contains("exitMode = 0"));
+    }
+
+    /// The default top-up tip: `min(deliveryCarrier, ceil(1.25 × extra))`, none on a program without a top-up.
+    #[test]
+    fn the_default_top_up_tip_is_five_quarters_of_the_extra_fee_capped_at_the_carrier() {
+        use kob_protocol::budget::{default_topup_tip, topup_extra};
+        let extra = topup_extra(T).expect("KCC20Ref tops up") as i64;
+        assert_eq!(default_topup_tip(T, i64::MAX), Some((extra * 5 + 3) / 4));
+        assert_eq!(default_topup_tip(T, extra), Some(extra));
+        assert_eq!(default_topup_tip(TemplateId::KronToken2433, 10 * KAS as i64), None);
+    }
+
+    /// Ablation of the builder's top-up rules: with them skipped (`build_batch_unchecked`), a forced top-up that is not the
+    /// token's lowest-index delivering leg, or that does not gain more than the threshold, is rejected by the engine.
+    #[cfg(feature = "adversarial")]
+    #[test]
+    fn without_the_top_up_rules_the_engine_rejects_the_top_up() {
+        use kob_protocol::build::build_batch_unchecked;
+        use kob_protocol::tx::{assemble, sign_locally};
+        let rejected = |b: &Batch| {
+            let built =
+                build_batch_unchecked(b, &|r: &str| Ok(kob_protocol::budget::lookup(r).unwrap_or(200))).expect("builds unchecked");
+            let sigs = sign_locally(&built, &keys()).unwrap();
+            let (tx, entries) = assemble(&built, &sigs).unwrap();
+            kob_protocol::verify::execute(&tx, &entries, true).unwrap().iter().any(|r| r.is_err())
+        };
+        let base = batch_of(scenario("take.bid.topup"));
+        let mut honest = base.clone();
+        if let Leg::Bid { delivery: Some(d), .. } = &mut honest.legs[0] {
+            d.form = Some(2);
+        }
+        assert!(!rejected(&honest), "the honest forced top-up passes");
+        // n <= threshold
+        let mut b = honest.clone();
+        set_delivery(&mut b, 0, bid_dlv(None, Some(recv_tok(24, 2 * WHOLE, pk(MAKER_B), 4 * WHOLE, 1_500)), Some(2)));
+        assert!(rejected(&b), "a top-up gaining only the threshold");
+        // not the lowest-index delivering leg: a plain bid's delivery is the token's first output
+        let mut b = honest.clone();
+        let other = bid(MAKER_C, P245, T);
+        b.legs.insert(
+            0,
+            Leg::Bid {
+                order: order(25, other.escrow(10 * WHOLE, 1).unwrap() as u64, cov(0xb5), 1_000, other),
+                amount: 2 * WHOLE,
+                t: None,
+                delivery: None,
+            },
+        );
+        b.taker_tokens[0] = tok(21, 6 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000);
+        assert!(rejected(&b), "a top-up whose delivery is not the token's first output");
+    }
+}

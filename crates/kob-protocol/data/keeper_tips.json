@@ -1,44 +1,44 @@
 {
   "KCC20KaspaCom_0_2_5": {
-    "refundFee": "6271400",
-    "refundTip": "12600000",
-    "updateFee": "1069600",
+    "refundFee": "6301600",
+    "refundTip": "12700000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20P2": {
-    "refundFee": "1745000",
-    "refundTip": "3500000",
-    "updateFee": "1069600",
+    "refundFee": "1775200",
+    "refundTip": "3600000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20PublicMint": {
-    "refundFee": "1967200",
+    "refundFee": "1997400",
     "refundTip": "4000000",
-    "updateFee": "1069600",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20Ref": {
-    "refundFee": "1744000",
-    "refundTip": "3500000",
-    "updateFee": "1069600",
+    "refundFee": "1774200",
+    "refundTip": "3600000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20Ref_16x16": {
-    "refundFee": "3530200",
-    "refundTip": "7100000",
-    "updateFee": "1069600",
+    "refundFee": "3560400",
+    "refundTip": "7200000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20Ref_4x5": {
-    "refundFee": "1938800",
-    "refundTip": "3900000",
-    "updateFee": "1069600",
+    "refundFee": "1969000",
+    "refundTip": "4000000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KCC20Ref_8x8": {
-    "refundFee": "2431000",
-    "refundTip": "4900000",
-    "updateFee": "1069600",
+    "refundFee": "2461200",
+    "refundTip": "5000000",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KForgeToken1785": {
@@ -48,15 +48,15 @@
     "keeperTip": "2000000"
   },
   "KForgeToken7214": {
-    "refundFee": "2603800",
+    "refundFee": "2634000",
     "refundTip": "5300000",
-    "updateFee": "1069600",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KaspaRocketToken11458": {
-    "refundFee": "3452600",
+    "refundFee": "3482800",
     "refundTip": "7000000",
-    "updateFee": "1069600",
+    "updateFee": "1099800",
     "keeperTip": "2200000"
   },
   "KronToken2433": {

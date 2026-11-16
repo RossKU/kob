@@ -180,6 +180,7 @@ fn foreign_strays_go_back_to_the_maker_with_a_cancel_and_with_a_permissionless_r
             let label = format!("refund {name}@{}", t.name());
             let r = RefundOrder {
                 prefund: None,
+                bought_custody: None,
                 order: order(70, value, O, 1_000, state),
                 custody,
                 foreign: vec![foreign(pf, &[80])],

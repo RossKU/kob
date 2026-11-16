@@ -59,6 +59,15 @@ pub fn leader_witness(sig: Option<&[u8]>) -> Vec<u8> {
     w
 }
 
+/// KCC-20 leader witness for the borrow path: `PATH_BORROW (0x01)` alone.
+///
+/// An amount-threshold receive UTXO (borrow scheme 0x01) needs no witness bytes beyond the path,
+/// and nobody signs: the token program keeps its owner, settings and KAS and requires a gain of
+/// its amount above the threshold.
+pub fn borrow_witness() -> Vec<u8> {
+    vec![0x01]
+}
+
 /// Signature script of a KRON token input (KRON SDK `transferSigScript` layout).
 ///
 /// The columns are, in order:

@@ -52,6 +52,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
                         order: order(20, value, cov(0xb1), 1_000, s),
                         amount: 4 * WHOLE,
                         t: decay.then_some(lock as i64),
+                        delivery: None,
                     }]);
                     b.taker_tokens = vec![tok(21, 4 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
                     b.change = Some(pk(TAKER));
@@ -125,6 +126,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
                 evidence: None,
                 t: None,
                 merge: None,
+                delivery: None,
             }]);
             b.taker_tokens = vec![tok(41, (n + i64::from(ev.is_some())) * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
             b.change = Some(pk(TAKER));
@@ -261,6 +263,7 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
                 entry: order(60, ev, cov(0xf1), 1_000, e),
                 custody: Some(custody(61, entry_n, cov(0xf1), 1_000)),
             }),
+            delivery: None,
         }]);
         b.taker_tokens = vec![tok(41, n * WHOLE, pk(TAKER), SCHEME_P2PK, 1_500)];
         b.change = Some(pk(TAKER));
@@ -274,12 +277,123 @@ pub fn branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
     let wa = IfdAskState { amount_left: 4 * WHOLE, rpt_amount: 1, ..ifd_ask(MAKER_A, p) };
     let wav = wa.escrow(carrier() as i64).unwrap() as u64;
     v.push(("branch.ifd.ask.repeat.waitUnbooked".into(), Action::Batch(ifda_fill(wa, 4, wav, None, 1_000))));
+    // delivery modes (KCC-20, docs/design/bid-delivery-spec.md): every branch of a GTC bid and of a conditional bid in mode 1
+    // (its first fill, a later one continuing its bought-custody: `.custody`) and in mode 2 (a plain UTXO, a new receive UTXO, a
+    // top-up: `.topup`), so the table measures each role at its worst delivery
+    if p.family() == Family::Kcc20 {
+        v.extend(delivery_branch_shapes(p));
+    }
     if p.family() == Family::Kron {
         v = v.into_iter().map(|(n, a)| (n, kron_action_on(p, a))).collect();
     }
     // a program with fewer token slots than the fixtures assume keeps the shapes that fit them (`scenarios_on`)
     if p.token_slots().is_some_and(|(i, o)| i < 3 || o < 3) {
         v.retain(|(_, a)| fits_slots(a));
+    }
+    v
+}
+
+/// The delivery forms a branch shape fills with: mode 1 first / later (with its bought-custody), mode 2 plain / new receive
+/// UTXO / top-up. The top-ups only on a program with a measured top-up.
+fn delivery_forms_of(p: TemplateId) -> Vec<&'static str> {
+    let mut v = vec!["acc0", "acc", "plain", "recv"];
+    if kob_protocol::budget::topup_extra(p).is_some() {
+        v.push("topup");
+    }
+    v
+}
+
+/// The delivery block and inputs of a branch fill in form `f` by `maker` (custody owned by `order_cov`, `held` bought).
+fn branch_delivery(f: &str, maker: u8, order_cov: [u8; 32], held: i64) -> ((i64, i64), Option<BidDelivery>) {
+    match f {
+        "acc0" => ((MODE_ACCUMULATE, 0), None),
+        "acc" => ((MODE_ACCUMULATE, held), bid_dlv(Some(bought_custody(29, held, order_cov, 1_500)), None, None)),
+        "plain" => ((MODE_TOPUP, 0), bid_dlv(None, None, Some(0))),
+        "recv" => ((MODE_TOPUP, 0), None),
+        _ => ((MODE_TOPUP, 0), bid_dlv(None, Some(recv_tok(28, 2 * WHOLE, pk(maker), RECV_T, 1_500)), None)),
+    }
+}
+
+/// Every branch of a GTC `KobBid` (DCA, rising, continue / close, the close with and without its refund) and of a
+/// `KobCondBid` (every leg mode, rest / sell-out) in every delivery form ([`delivery_forms_of`]).
+pub fn delivery_branch_shapes(p: TemplateId) -> Vec<(String, Action)> {
+    let mut v = vec![];
+    let lock = NOW;
+    for f in delivery_forms_of(p) {
+        for interval in [0, 600] {
+            for decay in [false, true] {
+                for end in ["cont", "close", "closeDust"] {
+                    let ((mode, bought), delivery) = branch_delivery(f, MAKER_B, cov(0xb1), 3 * WHOLE);
+                    let mut s = mode_bid(BidState { interval, ..bid(MAKER_B, P245, p) }, mode, bought);
+                    if decay {
+                        s.slope = 1_000_000;
+                        s.price_end = 260_000_000;
+                        s.active_from = 1_000;
+                    }
+                    // the fill takes 4 whole tokens; it ends the bid when less than one more minimum fill is left (a
+                    // bid holding its bought-custody reserves no carrier for its next fill)
+                    let value = match end {
+                        "cont" => s.escrow(10 * WHOLE, 1).unwrap(),
+                        "close" if bought > 0 => s.used(4 * WHOLE).unwrap() + 2 * KAS as i64,
+                        "close" => s.escrow(4 * WHOLE, 1).unwrap() + 2 * KAS as i64,
+                        _ if bought > 0 => s.used(4 * WHOLE).unwrap() + KAS as i64 / 2,
+                        _ => s.escrow(4 * WHOLE, 1).unwrap(),
+                    } as u64;
+                    let mut b = batch(vec![Leg::Bid {
+                        order: order(20, value, cov(0xb1), 1_000, s),
+                        amount: 4 * WHOLE,
+                        t: decay.then_some(lock as i64),
+                        delivery,
+                    }]);
+                    b.taker_tokens = vec![tok(21, 4 * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
+                    b.change = Some(pk(TAKER));
+                    v.push((format!("branch.bid.{f}.interval{interval}.rise{decay}.{end}"), Action::Batch(b)));
+                }
+            }
+        }
+        for full in [false, true] {
+            let n = if full { 10 } else { 4 };
+            for leg_mode in ["tp", "trigger", "auction1", "auctionOrigin", "wholeBand"] {
+                let ((mode, bought), delivery) = branch_delivery(f, MAKER_B, cov(0xe1), 3 * WHOLE);
+                let mut s = mode_cond_bid(cond_bid(MAKER_B, p), mode, bought);
+                let (leg, ev) = match leg_mode {
+                    "tp" => (0u8, None),
+                    "trigger" => (1, Some(ev_bid(302_000_000, 1, p))),
+                    "auction1" => {
+                        s.armed = 1;
+                        (1, None)
+                    }
+                    "auctionOrigin" => {
+                        s.armed = lock as i64 - 50;
+                        (1, None)
+                    }
+                    _ => {
+                        s.armed = 1;
+                        s.band_daa = 0;
+                        (1, None)
+                    }
+                };
+                let value = s.escrow(2).unwrap() as u64;
+                let mut b = batch(vec![Leg::CondBid {
+                    order: order(40, value, cov(0xe1), lock - 100, s),
+                    amount: n * WHOLE,
+                    leg,
+                    evidence: None,
+                    t: None,
+                    merge: None,
+                    delivery,
+                }]);
+                b.taker_tokens = vec![tok(41, (n + i64::from(ev.is_some())) * WHOLE, pk(TAKER), SCHEME_P2PK, 1_000)];
+                b.change = Some(pk(TAKER));
+                if let Some(e) = ev {
+                    b.legs.push(e);
+                    if let Leg::CondBid { evidence, .. } = &mut b.legs[0] {
+                        *evidence = Some(1);
+                    }
+                }
+                v.push((format!("branch.condBid.{f}.{leg_mode}.full{full}"), Action::Batch(b)));
+            }
+        }
     }
     v
 }

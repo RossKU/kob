@@ -38,3 +38,34 @@ pub fn lookup(role: &str) -> Result<u16> {
 pub fn budget_for_units(units: u64) -> u16 {
     ComputeBudget::checked_covering_script_units(ScriptUnits(units)).map(|b| b.value()).unwrap_or(u16::MAX)
 }
+
+const TOPUP_EXTRA_JSON: &str = include_str!("../data/topup_extra.json");
+
+/// The measured top-up extra fee per token program (program name -> sompi).
+///
+/// It is the relay fee at the floor rate of a top-up fill (mode 2 form 2) less that of a new-delivery
+/// fill (form 1) of the same order, bid-delivery-spec §9: the receive UTXO's input pushes the whole
+/// token program. `tests/topup_extra.rs` measures it through the builders on every KCC-20 program
+/// whose borrow path the engine accepts, and `KOB_REGEN=1` rewrites `data/topup_extra.json`. A
+/// program without an entry has no top-up: the builders never top up on it and a new mode-2 order
+/// of its token is refused.
+pub fn topup_extra_table() -> &'static BTreeMap<String, u64> {
+    static T: OnceLock<BTreeMap<String, u64>> = OnceLock::new();
+    T.get_or_init(|| {
+        let raw: BTreeMap<String, String> = serde_json::from_str(TOPUP_EXTRA_JSON).expect("topup extra json");
+        raw.into_iter().map(|(k, v)| (k, v.parse().expect("topup extra: a sompi amount"))).collect()
+    })
+}
+
+/// The measured top-up extra fee of a token program, `None` when it has no top-up.
+pub fn topup_extra(program: crate::artifacts::TemplateId) -> Option<u64> {
+    topup_extra_table().get(program.name()).copied()
+}
+
+/// The default `topupTip` of a mode-2 order (bid-delivery-spec §10):
+/// `min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`, `None` when the program has no top-up.
+pub fn default_topup_tip(program: crate::artifacts::TemplateId, delivery_carrier: i64) -> Option<i64> {
+    let extra = topup_extra(program)?;
+    let tip = i64::try_from((extra.saturating_mul(5)).div_ceil(4)).unwrap_or(i64::MAX);
+    Some(tip.min(delivery_carrier.max(0)))
+}

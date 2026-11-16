@@ -104,3 +104,66 @@ fn cost_table() {
     std::fs::write(&path, &out).unwrap();
     println!("wrote {path} ({} rows)", out.lines().count() - 1);
 }
+
+/// The fill whose relay fee the top-up extra prices: a matcher crosses a GTC mode-2 bid of `p` (continuing) with one ask
+/// selling out, the delivery a top-up of the maker's receive UTXO (`topup`) or a new receive UTXO.
+fn topup_cross(p: TemplateId, topup: bool) -> Action {
+    use common::*;
+    use kob_protocol::build::{Batch, Leg};
+    use kob_protocol::state::*;
+    let bs = mode_bid(bid(MAKER_B, P260, p), MODE_TOPUP, 0);
+    let bv = bs.escrow(10 * WHOLE, 3).unwrap() as u64;
+    let mut r = recv_tok(24, 2 * WHOLE, pk(MAKER_B), RECV_T, 1_500);
+    r.state = TokenState::user(p, 2 * WHOLE, pk(MAKER_B), ext_for(p)).with_borrow(kob_protocol::build::receive_borrow(RECV_T));
+    let mut c = custody(11, 4, cov(0xa1), 1_000);
+    c.state = TokenState::custody(p.family(), 4 * WHOLE, cov(0xa1), ext_for(p));
+    let delivery = if topup { bid_dlv(None, Some(r), Some(2)) } else { bid_dlv(None, None, Some(1)) };
+    let legs = vec![
+        Leg::Bid { order: order(20, bv, cov(0xb1), 1_000, bs), amount: 4 * WHOLE, t: None, delivery },
+        Leg::Ask { order: order(10, carrier(), cov(0xa1), 1_000, ask_n(MAKER_A, P250, p, 4)), custody: c, amount: 4 * WHOLE, t: None },
+    ];
+    let Action::Batch(mut b) = scenarios_on(p).into_iter().find(|(n, _)| n == "match.cross.1x2").expect("the cross").1 else {
+        panic!("a batch")
+    };
+    b = Batch { legs, ..b };
+    Action::Batch(b)
+}
+
+/// The relay fee at the floor rate of `a` (exact budgets), or why it does not validate.
+fn floor_fee(a: &Action) -> Result<u64, String> {
+    let provisional = |r: &str| Ok(kob_protocol::budget::lookup(r).unwrap_or(400));
+    let built = kob_protocol::build::build_with(a, &provisional).map_err(|e| e.to_string())?;
+    let sigs = sign_locally(&built, &common::keys()).map_err(|e| e.to_string())?;
+    let signed = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: true }).map_err(|e| e.to_string())?;
+    kob_protocol::verify::validate_signed(&signed).map_err(|e| e.to_string())?;
+    Ok(kob_protocol::tx::min_fee(&signed.fee.mass, signed.fee.fee_rate))
+}
+
+/// `data/topup_extra.json` (bid-delivery-spec §9): per KCC-20 token program, the relay fee at the floor rate of a top-up fill
+/// less that of a new-delivery fill (form 1) of the same order, measured through the builders and validated in the engine.
+/// A program whose top-up the engine (or the program's slots) refuses gets no entry, and has no top-up. `KOB_REGEN=1`
+/// rewrites the file.
+#[test]
+fn topup_extra_table_is_measured_and_current() {
+    let mut generated = std::collections::BTreeMap::new();
+    for p in common::PROGRAMS.into_iter().filter(|p| p.family() == kob_protocol::Family::Kcc20) {
+        let new = floor_fee(&topup_cross(p, false)).unwrap_or_else(|e| panic!("{}: the new-delivery fill: {e}", p.name()));
+        match floor_fee(&topup_cross(p, true)) {
+            Ok(top) => {
+                assert!(top > new, "{}: a top-up costs more than a new delivery ({top} vs {new})", p.name());
+                generated.insert(p.name().to_string(), (top - new).to_string());
+            }
+            Err(e) => println!("{}: no top-up: {e}", p.name()),
+        }
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/topup_extra.json");
+    let mut json = serde_json::to_string_pretty(&generated).unwrap();
+    json.push('\n');
+    if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
+        std::fs::write(&path, &json).unwrap();
+        println!("wrote {} programs to {}: {json}", generated.len(), path.display());
+        return;
+    }
+    let committed = std::fs::read_to_string(&path).unwrap().replace("\r\n", "\n");
+    assert_eq!(committed, json, "topup_extra.json is stale: run `KOB_REGEN=1 cargo test -p kob-protocol --test cost_table topup`");
+}

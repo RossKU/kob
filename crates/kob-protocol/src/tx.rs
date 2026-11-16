@@ -199,6 +199,11 @@ pub enum Arg {
 /// carrying the owner covenant id, or a P2PK input of the owner key. `P2pk` of an `id_type` 0 state
 /// carries a SIGHASH_ALL Schnorr signature by the key in the input's signature column. Such states
 /// belong to a program whose holders are id_type 0, e.g. KForge.
+///
+/// `Borrow` is the KCC-20 borrow path of an amount-threshold receive UTXO (borrow scheme 0x01): the
+/// leader's witness is the path byte 0x01 alone and nobody signs. The token program then requires
+/// the leader's first output to keep its state with a gain above the threshold. Only a KCC-20
+/// leader takes it (a top-up, `docs/design/bid-delivery-spec.md` §6.3).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
 pub enum Witness {
@@ -206,6 +211,8 @@ pub enum Witness {
     CovenantId,
     /// The owner key: a SIGHASH_ALL Schnorr signature (KCC-20) or a P2PK input of the key (KRON).
     P2pk(#[serde(with = "crate::json::field")] [u8; 32]),
+    /// The KCC-20 borrow path (leader only, no signature).
+    Borrow,
 }
 
 /// How one input's signature script is assembled.
@@ -295,7 +302,7 @@ impl SigPlan {
             }
             SigPlan::TokenLeader { witness, .. } | SigPlan::TokenDelegator { witness, .. } => match witness {
                 Witness::P2pk(k) => Some(*k),
-                Witness::CovenantId => None,
+                Witness::CovenantId | Witness::Borrow => None,
             },
             SigPlan::KronToken { signer, .. } => *signer,
             SigPlan::RetiredCancel { maker, .. } => Some(*maker),
@@ -389,6 +396,7 @@ impl SigPlan {
                 let w = match witness {
                     Witness::CovenantId => leader_witness(None),
                     Witness::P2pk(_) => leader_witness(Some(need("kcc20 leader")?)),
+                    Witness::Borrow => crate::script::borrow_witness(),
                 };
                 let next = ArtifactValue::Array(next_states.iter().map(kcc20_state_value).collect());
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer", &[next, ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
@@ -398,6 +406,7 @@ impl SigPlan {
                 let w = match witness {
                     Witness::CovenantId => vec![],
                     Witness::P2pk(_) => need("kcc20 delegator")?.to_vec(),
+                    Witness::Borrow => return invalid("the KCC-20 borrow path is the leader's only (a delegate needs its owner)"),
                 };
                 entry_sigscript(tpl, &state.redeem_with(tpl), "transfer_delegator", &[ArtifactValue::Bytes(w)]).map_err(Error::Invalid)
             }
@@ -1322,6 +1331,7 @@ impl Draft {
             Witness::P2pk(k) => {
                 self.inputs.iter().position(|i| matches!(&i.plan, DPlan::Plain(SigPlan::P2pk { pubkey }) if pubkey == k))
             }
+            Witness::Borrow => return invalid("KRON tokens have no borrow path"),
         };
         let idx = found.ok_or_else(|| match w {
             Witness::CovenantId => Error::Invalid(format!(
@@ -1332,6 +1342,7 @@ impl Draft {
                 "KRON tokens of {} are held by address presence: the transaction needs a P2PK input of that key (add a funding input)",
                 to_hex(k)
             )),
+            Witness::Borrow => Error::Invalid("KRON tokens have no borrow path".into()),
         })?;
         // The witness is one script-number byte. Indices above 127 read as negative and can never
         // authorise.
@@ -1355,6 +1366,11 @@ impl Draft {
                             .collect();
                         SigPlan::TokenLeader { template: *template, state: state.clone(), next_states: next, witness: witness.clone() }
                     } else {
+                        if *witness == Witness::Borrow {
+                            return invalid(
+                                "a token input on the KCC-20 borrow path must be its token's first input (the leader): a receive UTXO that is not the leader needs its owner",
+                            );
+                        }
                         SigPlan::TokenDelegator { template: *template, state: state.clone(), witness: witness.clone() }
                     }
                 }
@@ -1483,6 +1499,7 @@ impl Draft {
                             (Witness::CovenantId, _) => "covid",
                             (Witness::P2pk(_), Some(_)) => "sig",
                             (Witness::P2pk(_), None) => "addr",
+                            (Witness::Borrow, _) => "borrow",
                         },
                         counts.0,
                         counts.1
@@ -1749,6 +1766,7 @@ fn witness_tag(w: &Witness) -> &'static str {
     match w {
         Witness::CovenantId => "covid",
         Witness::P2pk(_) => "p2pk",
+        Witness::Borrow => "borrow",
     }
 }
 
@@ -1776,6 +1794,38 @@ mod tests {
             assert!(d.add_token_output((tok, tpl), TokenState::custody(fam, 5, [0x71; 32], [0; 32]), 1_000).is_ok());
             assert!(d.add_token_output((tok, tpl), TokenState::user(fam, 5, [0x72; 32], [0; 32]), 1_000).is_ok());
         }
+    }
+
+    /// Only a KCC-20 leader takes the borrow path (a top-up's receive UTXO, `Witness::Borrow`): the
+    /// leader's witness is the path byte alone, no signature is requested, its role names the path,
+    /// and a delegate on the borrow path is refused.
+    #[test]
+    fn the_borrow_path_is_the_kcc20_leaders_only() {
+        let fee = FeeOptions::default();
+        let tok = ([0x70; 32], TemplateId::Kcc20Ref);
+        let utxo =
+            |tag: u8| Utxo { transaction_id: [tag; 32], index: 0, amount: 100_000_000, block_daa_score: 1, covenant_id: Some(tok.0) };
+        let (maker, seller) = ([0x11; 32], [0x12; 32]);
+        let mut guard = [0u8; 32];
+        guard[0] = 5;
+        let recv = TokenUtxo { utxo: utxo(1), state: TokenState::user(Family::Kcc20, 10, maker, [0; 32]).with_borrow((1, guard)) };
+        let sold = TokenUtxo { utxo: utxo(2), state: TokenState::user(Family::Kcc20, 6, seller, [0; 32]) };
+        let funding = KeyUtxo { utxo: Utxo { covenant_id: None, ..utxo(3) }, pubkey: seller };
+        let draft = |first: (&TokenUtxo, Witness), second: (&TokenUtxo, Witness)| {
+            let mut d = Draft::new(0, &fee, Some(seller)).unwrap();
+            d.add_token_input(first.0, tok, first.1).unwrap();
+            d.add_token_input(second.0, tok, second.1).unwrap();
+            d.add_p2pk(&funding);
+            d.add_token_output(tok, recv.state.with_amount(16), 100_000_000).unwrap();
+            d.seal(&|_: &str| Ok(1))
+        };
+        let b = draft((&recv, Witness::Borrow), (&sold, Witness::P2pk(seller))).expect("the receive UTXO leads on the borrow path");
+        assert!(matches!(&b.plans[0], SigPlan::TokenLeader { witness: Witness::Borrow, .. }));
+        assert_eq!(b.plans[0].signer(), None);
+        assert_eq!(b.roles[0], "KCC20Ref.leader.borrow.i2.o1");
+        assert_eq!(b.plans[0].sigscript(None).unwrap(), b.plans[0].sigscript(Some(&[0; 65])).unwrap(), "nobody signs");
+        let e = draft((&sold, Witness::P2pk(seller)), (&recv, Witness::Borrow)).unwrap_err().to_string();
+        assert!(e.contains("first input (the leader)"), "{e}");
     }
 
     /// An output with a covenant id (an order continuation, a token output) takes two KIP-9 storage

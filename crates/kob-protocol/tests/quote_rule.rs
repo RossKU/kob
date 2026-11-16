@@ -95,7 +95,7 @@ fn split_fills_never_pay_a_seller_less_or_charge_a_buyer_more_than_one_fill() {
         let mut v = b0.escrow(total, parts.len() as i64).unwrap();
         let mut spent = 0i64;
         for (i, n) in parts.iter().copied().enumerate() {
-            let leg = Leg::Bid { order: order(20, v as u64, cov(0xb1), 1_000, s.clone()), amount: n, t: None };
+            let leg = Leg::Bid { order: order(20, v as u64, cov(0xb1), 1_000, s.clone()), amount: n, t: None, delivery: None };
             let label = format!("bid split {trial} fill {i} ({n})");
             let (_, signed) = run_any(&label, &Action::Batch(batch(vec![leg], taker_tokens(n))));
             let cont =
@@ -179,7 +179,7 @@ fn the_minimum_fill_of_every_kind_is_the_covenants() {
         bid_of(n + 1),
         |s| {
             let AnyState::KobBid(b) = s else { unreachable!() };
-            let leg = Leg::Bid { order: order(20, bv(b), cov(0xb1), 1_000, b.clone()), amount: n, t: None };
+            let leg = Leg::Bid { order: order(20, bv(b), cov(0xb1), 1_000, b.clone()), amount: n, t: None, delivery: None };
             Action::Batch(batch(vec![leg], taker_tokens(n)))
         },
         |s| Some(s.clone()),
@@ -187,7 +187,7 @@ fn the_minimum_fill_of_every_kind_is_the_covenants() {
     // ... and the exception: a fill that leaves less than one minimum fill of buying power terminates the bid, at any size
     let AnyState::KobBid(hi) = bid_of(n + 1) else { unreachable!() };
     let small = (hi.used(n).unwrap() + hi.delivery_carrier) as u64;
-    let leg = Leg::Bid { order: order(20, small, cov(0xb1), 1_000, hi.clone()), amount: n, t: None };
+    let leg = Leg::Bid { order: order(20, small, cov(0xb1), 1_000, hi.clone()), amount: n, t: None, delivery: None };
     let (built, _) = run_any("bid: the terminating fill below minFill", &Action::Batch(batch(vec![leg], taker_tokens(n))));
     assert!(built.roles[0].contains(".fill.close"), "{:?}", built.roles);
 
@@ -233,6 +233,7 @@ fn the_minimum_fill_of_every_kind_is_the_covenants() {
                 evidence: None,
                 t: None,
                 merge: None,
+                delivery: None,
             };
             Action::Batch(batch(vec![leg], taker_tokens(n)))
         },
@@ -299,7 +300,7 @@ fn the_minimum_fill_of_every_kind_is_the_covenants() {
             let bv = bs.escrow(n, 1).unwrap() as u64;
             Action::Batch(route(vec![
                 pair_leg_amount(x.clone(), P, P, X_ID, 70, n),
-                Leg::Bid { order: order(72, bv, cov(0x91), 1_000, bs), amount: n, t: None },
+                Leg::Bid { order: order(72, bv, cov(0x91), 1_000, bs), amount: n, t: None, delivery: None },
                 kask_leg(TOKEN_B, P, MAKER_C, P250, cov(0x92), 74, 10, 2),
             ]))
         },
