@@ -249,6 +249,7 @@ async fn buy_side_conditional_take_profit_and_stop_entries() {
             evidence: None,
             t: None,
             merge: None,
+            delivery: None,
         }],
     );
     b.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE)];

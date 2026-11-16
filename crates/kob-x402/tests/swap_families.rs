@@ -363,7 +363,7 @@ fn a_kron_token_outside_the_allowlist_is_refused() {
     let held = w.put_holding(K, 21, 5 * WHOLE, pk(PAYER));
     let offer = w.kas_offer(KAS, &[A8]);
     let batch = Batch {
-        legs: vec![Leg::Bid { order: bid, amount: 3 * WHOLE, t: None }],
+        legs: vec![Leg::Bid { order: bid, amount: 3 * WHOLE, t: None, delivery: None }],
         taker_tokens: vec![held],
         taker: Some(pk(PAYER)),
         payments: vec![Payment { script_public_key: spk_to_string(&p2pk_spk(&pk(MERCHANT))), amount: KAS }],
@@ -507,7 +507,7 @@ fn aliasing_a_kcc20_ask_payout_as_the_merchant_kas_is_rejected_on_a_kron_route()
     let offer = w.kas_offer(payout, &[K]);
     let batch = kob_protocol::build::route_batch(&kob_protocol::build::SwapRoute {
         lock_time: NOW,
-        sell: vec![Leg::Bid { order: bid, amount: 3 * WHOLE, t: None }],
+        sell: vec![Leg::Bid { order: bid, amount: 3 * WHOLE, t: None, delivery: None }],
         buy: vec![Leg::Ask { order: ask.0, custody: ask.1, amount: 2 * WHOLE, t: None }],
         tokens: vec![held],
         receiver: None,

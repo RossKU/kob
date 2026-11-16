@@ -113,7 +113,8 @@ async fn a_hostile_taker_cannot_break_a_bid_with_a_token_output_to_its_id() {
     let create = c.w.create_tx(AnyState::KobBid(b0.clone()), b0.escrow(5 * WHOLE, 2).unwrap() as u64, MAKER_B, 0);
     c.push(&[&create]).await;
     let cov = c.w.cov(&create, 0);
-    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
+    let mut b =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE + 5)];
     let built = build(&Action::Batch(b)).expect("honest fill");
     let hostile = poison(&c, built, 5, cov);

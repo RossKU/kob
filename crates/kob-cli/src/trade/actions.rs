@@ -904,6 +904,7 @@ pub fn run_refund(args: &[String]) -> i32 {
             funding: f,
             change: Some(signer.pubkey),
             fee: fee.clone(),
+            bought_custody: None,
         };
         let earned = |b: &BuiltTx| -> i128 {
             let me = kob_protocol::tx::spk_to_string(&p2pk_spk(&signer.pubkey));
@@ -1042,7 +1043,7 @@ pub fn run_take(args: &[String]) -> i32 {
                 (Leg::Ask { order: OrderUtxo { utxo: u, state: s.clone() }, custody: custody()?, amount, t: None }, true)
             }
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => {
-                (Leg::Bid { order: OrderUtxo { utxo: u, state: s.clone() }, amount, t: None }, false)
+                (Leg::Bid { order: OrderUtxo { utxo: u, state: s.clone() }, amount, t: None, delivery: None }, false)
             }
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) if s.tp_price > 0 => (
                 Leg::CondAsk {
@@ -1057,7 +1058,15 @@ pub fn run_take(args: &[String]) -> i32 {
                 true,
             ),
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) if s.tp_price > 0 => (
-                Leg::CondBid { order: OrderUtxo { utxo: u, state: s.clone() }, amount, leg: 0, evidence: None, t: None, merge: None },
+                Leg::CondBid {
+                    order: OrderUtxo { utxo: u, state: s.clone() },
+                    amount,
+                    leg: 0,
+                    evidence: None,
+                    t: None,
+                    merge: None,
+                    delivery: None,
+                },
                 false,
             ),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) if s.entry_stop == 0 => {

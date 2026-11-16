@@ -327,8 +327,11 @@ impl Gen {
                     }
                     AnyState::KobBid(b) => {
                         let n = (1 + rng.below(2) as i64) * WHOLE;
-                        let mut bt =
-                            batch(&c.w, lock, vec![Leg::Bid { order: c.w.order(&lv.tx, lv.idx, b.clone()), amount: n, t: None }]);
+                        let mut bt = batch(
+                            &c.w,
+                            lock,
+                            vec![Leg::Bid { order: c.w.order(&lv.tx, lv.idx, b.clone()), amount: n, t: None, delivery: None }],
+                        );
                         bt.taker_tokens = vec![c.w.token_for(self.fam, TAKER, n)];
                         let tx = c.w.try_sign(&Action::Batch(bt))?;
                         self.advance(i, &tx, AnyState::KobBid(b), round, false);

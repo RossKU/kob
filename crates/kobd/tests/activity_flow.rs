@@ -148,7 +148,7 @@ async fn a_crossing_pays_its_executor_the_spread_and_the_tips_and_its_fee_to_the
     let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
     let legs = vec![
         Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
-        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None, delivery: None },
     ];
     let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
     c.push(&[&fill]).await;
@@ -218,6 +218,7 @@ async fn a_keepers_refund_earns_its_refund_tip() {
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&refund]).await;
     assert_eq!(c.hs.status(&cov), "refunded");
@@ -276,7 +277,7 @@ async fn a_fee_is_resolved_from_the_recorded_outputs_when_the_record_has_no_inpu
     let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
     let legs = vec![
         Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
-        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None, delivery: None },
     ];
     let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
     c.push(&[&fill]).await;
@@ -286,7 +287,7 @@ async fn a_fee_is_resolved_from_the_recorded_outputs_when_the_record_has_no_inpu
     let custody = c.w.token_at(&fill, find_custody(&fill, &cov_a, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov_a.0, EXT));
     let legs = vec![
         Leg::Ask { order: c.w.order(&fill, find_cov(&fill, &cov_a).unwrap(), a6), custody, amount: 2 * WHOLE, t: None },
-        Leg::Bid { order: c.w.order(&fill, find_cov(&fill, &cov_b).unwrap(), b.clone()), amount: 2 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&fill, find_cov(&fill, &cov_b).unwrap(), b.clone()), amount: 2 * WHOLE, t: None, delivery: None },
     ];
     let mut second = batch(&c.w, c.daa(), legs);
     second.funding = vec![KeyUtxo { utxo: c.w.utxo(&fill, change), pubkey: pk(TAKER) }];
@@ -359,7 +360,7 @@ async fn an_executor_trading_for_itself_is_not_counted_as_paid_to_it() {
     let custody = c.w.token_at(&create_a, 1, Kcc20State::custody(10 * WHOLE, cov_a.0, EXT));
     let legs = vec![
         Leg::Ask { order: c.w.order(&create_a, 0, a.clone()), custody, amount: 4 * WHOLE, t: None },
-        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&create_b, 0, b.clone()), amount: 4 * WHOLE, t: None, delivery: None },
     ];
     let matched = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
     c.push(&[&matched]).await;
@@ -384,7 +385,12 @@ async fn an_executor_trading_for_itself_is_not_counted_as_paid_to_it() {
     let mut sale = batch(
         &c.w,
         c.daa(),
-        vec![Leg::Bid { order: c.w.order(&matched, find_cov(&matched, &cov_b).unwrap(), b.clone()), amount: 2 * WHOLE, t: None }],
+        vec![Leg::Bid {
+            order: c.w.order(&matched, find_cov(&matched, &cov_b).unwrap(), b.clone()),
+            amount: 2 * WHOLE,
+            t: None,
+            delivery: None,
+        }],
     );
     sale.taker_tokens = vec![c.w.token(TAKER, 2 * WHOLE)];
     let sold = c.w.sign(&Action::Batch(sale));
@@ -416,6 +422,7 @@ async fn an_executor_trading_for_itself_is_not_counted_as_paid_to_it() {
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     }));
     c.push(&[&refund]).await;
     assert_eq!(own_trade(&c, &refund), 0);

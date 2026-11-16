@@ -87,7 +87,8 @@ async fn compact_records_are_a_small_fraction_of_the_raw_transactions() {
     let b0 = bid(MAKER_B, P245);
     let create_b = c.w.create_tx(AnyState::KobBid(b0.clone()), b0.escrow(10 * WHOLE, 3).unwrap() as u64, MAKER_B, 0);
     c.push(&[&create_b]).await;
-    let mut bt = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create_b, 0, b0), amount: 4 * WHOLE, t: None }]);
+    let mut bt =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create_b, 0, b0), amount: 4 * WHOLE, t: None, delivery: None }]);
     bt.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE)];
     let fill_b = c.w.sign(&Action::Batch(bt));
     c.push(&[&fill_b]).await;

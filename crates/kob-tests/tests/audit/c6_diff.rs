@@ -620,7 +620,8 @@ fn bid_case(d: &mut D, rule: &'static str, force: Option<(bool, Rem)>) {
         None => value,
     };
     let c = cov(0xb1);
-    let mut b = batch(lock as u64, vec![Leg::Bid { order: order(20, value as u64, c, daa, b0.clone()), amount: n, t }]);
+    let mut b =
+        batch(lock as u64, vec![Leg::Bid { order: order(20, value as u64, c, daa, b0.clone()), amount: n, t, delivery: None }]);
     b.taker_tokens = vec![tok(21, n, pk(TAKER), SCHEME_P2PK, 1_000)];
     b.change = Some(pk(TAKER));
     let ctx = format!("{b0:?} value {value} n {n} t {t:?}");
@@ -682,6 +683,7 @@ fn rule_bid_terminal_pair(d: &mut D) {
             order: order(20 + k as u8, value as u64, cov(0xb1 + k as u8), 1_000 + k as u64, b0),
             amount: n,
             t: None,
+            delivery: None,
         });
     }
     let mut b = batch(lock as u64, legs);
@@ -854,6 +856,7 @@ fn cond_bid_case(d: &mut D, rule: &'static str, force: Option<(bool, Rem)>) {
             evidence: None,
             t: Some(t),
             merge: None,
+            delivery: None,
         }],
     );
     b.taker_tokens = vec![tok(41, n, pk(TAKER), SCHEME_P2PK, 1_000)];
@@ -1133,6 +1136,7 @@ fn rule_refund(d: &mut D) {
         funding: vec![],
         change: Some(pk(KEEPER)),
         fee: fee(),
+        bought_custody: None,
     };
     let Some(m) = d.build(R, Action::RefundOrder(req), false, &ctx) else { return };
     let i = input_of(&m, c).unwrap();
@@ -1372,6 +1376,9 @@ fn rule_pair(d: &mut D) {
         custody: pair::tutxo(sprog, stok, 71, x.custody, pair::X_ID, true),
         amount: n,
         t,
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     let bt = pair::route(vec![leg, a_leg, b_leg]);
     let ctx = format!(

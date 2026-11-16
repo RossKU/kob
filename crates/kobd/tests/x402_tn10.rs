@@ -565,7 +565,10 @@ fn bid_state(maker: &Key, t: &Issued, vdaa: u64) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -1446,7 +1449,7 @@ fn x402_on_testnet_10() {
     let filler_tok = token_a.utxos[1].clone();
     let taker_batch = Batch {
         lock_time: lock_time(&net),
-        legs: vec![Leg::Bid { order: bid_e1.order.clone(), amount: 2 * WHOLE, t: None }],
+        legs: vec![Leg::Bid { order: bid_e1.order.clone(), amount: 2 * WHOLE, t: None, delivery: None }],
         updates: vec![],
         taker_tokens: vec![filler_tok],
         taker: Some(filler.pk),

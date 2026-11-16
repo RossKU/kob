@@ -251,7 +251,7 @@ impl Resting {
                 let custody = c.w.token_at(&self.create, 1, TokenState::custody(self.fam, 10 * WHOLE, self.cov(c).0, EXT));
                 Leg::Ask { order: c.w.order(&self.create, 0, a.clone()), custody, amount, t: None }
             }
-            AnyState::KobBid(b) => Leg::Bid { order: c.w.order(&self.create, 0, b.clone()), amount, t: None },
+            AnyState::KobBid(b) => Leg::Bid { order: c.w.order(&self.create, 0, b.clone()), amount, t: None, delivery: None },
             _ => unreachable!("a resting order is plain"),
         }
     }

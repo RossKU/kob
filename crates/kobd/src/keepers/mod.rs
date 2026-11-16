@@ -952,6 +952,7 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
                             funding: funding_vec.clone(),
                             change: Some(operator),
                             fee: fee.clone(),
+                            bought_custody: None,
                         }),
                     ));
                 }

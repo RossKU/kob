@@ -288,7 +288,8 @@ async fn an_amended_bid_keeps_its_id_and_its_buying_power_follows_the_new_terms(
     assert_eq!(bid_prices(&c), ["120000000"]);
 
     // a fill of the amended bid from its continuation
-    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&am, 0, amended.clone()), amount: 2 * WHOLE, t: None }]);
+    let mut b =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&am, 0, amended.clone()), amount: 2 * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![c.w.token(TAKER, 2 * WHOLE)];
     let fill = c.w.sign(&Action::Batch(b));
     c.push(&[&fill]).await;
@@ -373,7 +374,7 @@ async fn an_amend_restarts_the_age_that_decides_which_side_sets_the_trade_price(
     // they cross in one transaction
     let legs = vec![
         Leg::Ask { order: c.w.order(&am_a, 0, a1.clone()), custody, amount: 2 * WHOLE, t: None },
-        Leg::Bid { order: c.w.order(&am_b, 0, b1.clone()), amount: 2 * WHOLE, t: None },
+        Leg::Bid { order: c.w.order(&am_b, 0, b1.clone()), amount: 2 * WHOLE, t: None, delivery: None },
     ];
     let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), legs)));
     c.push(&[&fill]).await;

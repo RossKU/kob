@@ -319,7 +319,7 @@ pub fn custody_index(p: Pair, t: &SignedTx, owner: &Hash32, token: [u8; 32], amo
 pub fn pair_leg(c: &Ctx, p: Pair, t: &SignedTx, idx: usize, s: &PairState, custody_tx: &SignedTx, amount: i64) -> Leg {
     let cov = c.w.cov(t, idx);
     let custody = custody_at(c, p, custody_tx, &cov, s.s_cov_id, s.custody).expect("the pair order's custody");
-    Leg::Pair { order: c.w.order(t, idx, s.clone()), custody, amount, t: None }
+    Leg::Pair { order: c.w.order(t, idx, s.clone()), custody, amount, t: None, bought_custody: None, receive: None, form: None }
 }
 
 /// Taker tokens of a family for a batch (the taker's own inventory).

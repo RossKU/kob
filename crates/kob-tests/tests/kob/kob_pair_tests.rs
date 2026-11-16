@@ -160,6 +160,7 @@ pub fn refund_of(s: PairState, pa: TemplateId, pb: TemplateId, lock: u64, value:
         funding: vec![key_utxo(250, KEEPER, 5 * KAS)],
         change: Some(pk(KEEPER)),
         fee: fee(),
+        bought_custody: None,
     })
 }
 

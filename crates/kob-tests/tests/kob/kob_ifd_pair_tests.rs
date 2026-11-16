@@ -338,6 +338,7 @@ fn refund_entry(s: IfdPairState, pa: TemplateId, pb: TemplateId) -> Action {
         funding: vec![key_utxo(250, KEEPER, 5 * KAS)],
         change: Some(pk(KEEPER)),
         fee: fee(),
+        bought_custody: None,
     })
 }
 
@@ -2070,6 +2071,9 @@ fn rearm_with(base: IfdPairState, pa: TemplateId, pb: TemplateId, held: i64, n: 
         evidence_b: None,
         t: None,
         merge: Some(merge),
+        bought_custody: None,
+        receive: None,
+        form: None,
     };
     let m = n * WHOLE;
     if buy {

@@ -120,6 +120,7 @@ async fn ask_refund_after_expiry_by_a_keeper() {
         funding: vec![c.w.coin(KEEPER, 10)],
         change: Some(pk(KEEPER)),
         fee: FeeOptions::default(),
+        bought_custody: None,
     };
     let refund = c.w.sign(&Action::RefundOrder(req));
     c.push(&[&refund]).await;
@@ -138,7 +139,8 @@ async fn a_terminal_bid_fill_reports_the_makers_refund_output() {
     let create = c.w.create_tx(AnyState::KobBid(b0.clone()), escrow, MAKER_B, 0);
     c.push(&[&create]).await;
     let cov = c.w.cov(&create, 0);
-    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
+    let mut b =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE)];
     let fill = c.w.sign(&Action::Batch(b));
     assert!(find_cov(&fill, &cov).is_none(), "an IOC bid never continues");
@@ -183,7 +185,8 @@ async fn bid_escrow_fills_and_reports_estimated_amount() {
         .query("SELECT amount_exact FROM order_state WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1)", [&cov.0[..]]);
     assert_eq!(exact, 0, "a bid's quantity is its escrow, not an exact count");
     // a taker sells 4 whole tokens into it
-    let mut b = batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None }]);
+    let mut b =
+        batch(&c.w, c.daa(), vec![Leg::Bid { order: c.w.order(&create, 0, b0.clone()), amount: 4 * WHOLE, t: None, delivery: None }]);
     b.taker_tokens = vec![c.w.token(TAKER, 4 * WHOLE)];
     let fill = c.w.sign(&Action::Batch(b));
     c.push(&[&fill]).await;
@@ -321,6 +324,7 @@ async fn ioc_and_fok_are_killed_by_a_keeper_after_the_window() {
             funding: vec![c.w.coin(KEEPER, 10)],
             change: Some(pk(KEEPER)),
             fee: FeeOptions::default(),
+            bought_custody: None,
         }));
         c.push(&[&refund]).await;
         assert_eq!(c.hs.status(&cov), "killed", "tif {tif}");
