@@ -68,6 +68,11 @@ AMOUNTS (always with a unit; never rounded)
   --exit-tip T   the if-done exit's tip (a pair if-done: the same default as --tip when not typed)
   --min-fill A   smallest fill (default: worth 10 KAS at the limit; IOC / FOK / market 1 base unit; if-done ceil(amount/4))
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
+  --delivery D   how a buy hands over what it buys: collected (the default for a resting buy of a KCC-20 token: the order
+                 keeps the tokens until it ends or you run kob claim; one delivery carrier in all), each (a new UTXO per
+                 fill; always for IOC / FOK / market, KRON and repeating exits) or one-utxo (a filler may top up your receive
+                 UTXO and keeps --topup-tip KAS, default 1.25 x its extra fee; the threshold is kept per token and
+                 --reset-threshold renews it; not on pair orders). For buys, pair orders and a sell-first if-done's exit
   --carrier KAS  KAS on every covenant UTXO of the order (default 1KAS; at least 0.08KAS and the token program's floor)
   --decimals N   the first order of a token without a registry entry and without orders: its decimals (0..=9; the scale
                  is 10^N). The chain records no decimals: give the ones the issuer chose. Once the token had an order,
@@ -128,8 +133,10 @@ const VALUE_FLAGS: &[&str] = &[
     "--repeat-count",
     "--decimals",
     "--floor-price",
+    "--delivery",
+    "--topup-tip",
 ];
-const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start"];
+const BOOL_FLAGS: &[&str] = &["--day", "--all-or-nothing", "--ack-no-guards", "--ack-market-start", "--reset-threshold"];
 
 /// The options that every kind takes.
 ///
@@ -139,24 +146,30 @@ const ANY_KIND: &[&str] =
 const LIFE: &[&str] = &["--gtd", "--day", "--active-from"];
 const STOP_KNOBS: &[&str] = &["--min-touch", "--band", "--keeper-tip", "--min-rest"];
 const TRAIL: &[&str] = &["--trail-step", "--trail-gap", "--trail-wait", "--trail-updates"];
+/// What a buy that rests chooses: how it delivers what it buys.
+const DELIVERY: &[&str] = &["--delivery", "--topup-tip", "--reset-threshold"];
 
 /// The kind-specific options that a kind takes, besides [`ANY_KIND`].
 fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
     let v = |xs: &[&[&'static str]]| Some(xs.concat());
     match kind {
-        "limit" | "pair-limit" => v(&[&["--price", "--min-fill", "--crossing", "--max-fills"], LIFE]),
+        "limit" | "pair-limit" => v(&[&["--price", "--min-fill", "--crossing", "--max-fills"], LIFE, DELIVERY]),
         "ioc" | "fok" => v(&[&["--price", "--min-fill", "--life", "--active-from"]]),
         "market" => v(&[&["--min-fill", "--slippage", "--all-or-nothing", "--floor-price"]]),
         "streaming" => v(&[&["--min-fill", "--displayed-price", "--tolerance", "--all-or-nothing"]]),
         "close" => v(&[&["--slippage", "--all-or-nothing", "--floor-price"]]),
         "twap" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction"], LIFE]),
-        "dca" => v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction", "--max-fills"], LIFE]),
-        "dutch" => v(&[&["--price", "--min-fill", "--price-end", "--duration", "--step", "--max-fills"], LIFE]),
-        "stop-market" => v(&[&["--stop", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE]),
-        "stop-limit" => v(&[&["--stop", "--limit", "--min-fill", "--max-fills"], STOP_KNOBS, LIFE]),
-        "trailing-stop" => v(&[&["--stop", "--take-profit", "--min-fill", "--slippage", "--max-fills"], TRAIL, STOP_KNOBS, LIFE]),
-        "take-profit" => v(&[&["--take-profit", "--min-fill", "--max-fills"], LIFE]),
-        "oco" => v(&[&["--take-profit", "--stop", "--limit", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE]),
+        "dca" => {
+            v(&[&["--price", "--min-fill", "--slice", "--interval", "--price-end", "--slice-auction", "--max-fills"], LIFE, DELIVERY])
+        }
+        "dutch" => v(&[&["--price", "--min-fill", "--price-end", "--duration", "--step", "--max-fills"], LIFE, DELIVERY]),
+        "stop-market" => v(&[&["--stop", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE, DELIVERY]),
+        "stop-limit" => v(&[&["--stop", "--limit", "--min-fill", "--max-fills"], STOP_KNOBS, LIFE, DELIVERY]),
+        "trailing-stop" => {
+            v(&[&["--stop", "--take-profit", "--min-fill", "--slippage", "--max-fills"], TRAIL, STOP_KNOBS, LIFE, DELIVERY])
+        }
+        "take-profit" => v(&[&["--take-profit", "--min-fill", "--max-fills"], LIFE, DELIVERY]),
+        "oco" => v(&[&["--take-profit", "--stop", "--limit", "--min-fill", "--slippage", "--max-fills"], STOP_KNOBS, LIFE, DELIVERY]),
         "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo" => v(&[
             &[
                 "--price",
@@ -173,6 +186,7 @@ fn kind_flags(kind: &str) -> Option<Vec<&'static str>> {
             ],
             TRAIL,
             LIFE,
+            DELIVERY,
             if kind.starts_with("repeat-") { &["--repeat-count"] } else { &[] },
         ]),
         _ => None,
@@ -240,7 +254,38 @@ pub fn check_flags(kind: &str, p: &Parsed) -> Result<Side, String> {
     if kind == "pair-limit" && p.get("--quote").is_none() {
         return Err("pair-limit needs --quote TOKEN_B".into());
     }
-    side_for(kind, p)
+    let side = side_for(kind, p)?;
+    delivery_request(kind, side, p).map(|_| side)
+}
+
+/// The `--delivery` options of a command line.
+///
+/// A buy of the KAS book, a pair order and the buy-back exit of a sell-first if-done entry deliver
+/// tokens. A sell, a buy-first entry (its entry bid delivers each fill) and a pair if-done entry do not
+/// offer the choice. The receive threshold is added from this machine's record by [`run`].
+pub fn delivery_request(kind: &str, side: Side, p: &Parsed) -> Result<super::delivery::Request, String> {
+    use super::delivery::{Choice, Request};
+    let choice = p.get("--delivery").map(Choice::parse).transpose()?;
+    let tip = p.get("--topup-tip").map(|v| parse_kas(v, "--topup-tip", true).map(|x| x as i64)).transpose()?;
+    let reset = p.has("--reset-threshold");
+    if choice.is_none() && tip.is_none() && !reset {
+        return Ok(Request::default());
+    }
+    let pair = p.get("--quote").is_some();
+    let if_done = matches!(kind, "ifd" | "ifo" | "repeat-ifd" | "repeat-ifo");
+    let why = match (pair, if_done, side) {
+        (true, true, _) => Some("a pair if-done order delivers each fill"),
+        (false, true, Side::Buy) => Some("a buy-first entry delivers each fill (its exit sells)"),
+        (false, false, Side::Sell) => Some("a sell on the KAS book delivers KAS"),
+        _ => None,
+    };
+    if let Some(w) = why {
+        return Err(format!("--delivery, --topup-tip and --reset-threshold do not apply: {w}"));
+    }
+    if (tip.is_some() || reset) && choice != Some(Choice::OneUtxo) {
+        return Err("--topup-tip and --reset-threshold go with --delivery one-utxo".into());
+    }
+    Ok(Request { choice, tip, threshold: None, reset })
 }
 
 /// The intent of `kind` from the arguments. `quote` is the B token of a pair.
@@ -478,6 +523,9 @@ pub fn plan_lines(plan: &Plan, m: &TokenMarket, quote: Option<&TokenMarket>) -> 
     let mut v = vec![];
     for (k, s) in plan.states.iter().enumerate() {
         v.push(format!("{} {}", if k == 0 { "order:" } else { "committed exit:" }, s.template_id().name()));
+    }
+    if let Some(l) = plan.states.first().and_then(|s| super::delivery::text(s, &m.unit())) {
+        v.push(format!("delivery: {l}"));
     }
     v.push(format!("side: {} {}", d.side.name(), m.name()));
     match m.decimals_from {
@@ -770,6 +818,7 @@ pub fn env_of(
         fee_mode: c.fee_mode(),
         carrier: None,
         pair,
+        delivery: Default::default(),
     };
     Ok((env, notes))
 }
@@ -829,7 +878,9 @@ pub fn run(args: &[String]) -> i32 {
         let signer = c.signer(args).map_err(|e| (2, e))?;
         check_flags(&kind, &p).map_err(|e| (2, e))?;
         super::flow::check_network_first(&c).map_err(|e| (1, e))?;
-        let (env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
+        let (mut env, a, b, notes) = env_for(&c, &p, &kind, signer.pubkey).map_err(|e| (1, e))?;
+        env.delivery = delivery_request(&kind, side_for(&kind, &p).map_err(|e| (2, e))?, &p).map_err(|e| (2, e))?;
+        env.delivery.threshold = super::delivery::stored_threshold(&c.network, &signer.pubkey, &a.cov, &a.ext);
         let mut intent = intent_of(&kind, &p, &a, b.as_ref()).map_err(|e| (2, e))?;
         // A pair order with no tip carries the default of the pair, as the web ticket does. A
         // typed tip stays, zero included.
@@ -863,6 +914,10 @@ pub fn run(args: &[String]) -> i32 {
             if code == 0 && !c.dry_run && matches!(a.decimals_from, market::DecimalsFrom::Entered | market::DecimalsFrom::Remembered) {
                 crate::recent::record_first_order_decimals(&c.network, &a.cov, a.decimals);
             }
+            // The receive threshold of a first one-utxo order of the token stays for the next ones.
+            if let (0, false, Some(t)) = (code, c.dry_run, plan.new_threshold) {
+                super::delivery::store_threshold(&c.network, &signer.pubkey, &a.cov, &a.ext, t);
+            }
             code
         }
         _ => {
@@ -890,6 +945,44 @@ mod tests {
         let small = TokenMarket::new([0x71; 32], "S", 3, TemplateId::Kcc20Ref, Some([0xee; 32]), None).unwrap();
         let tip = units::parse_kas_price("0.01KAS", &small.unit(), small.scale, "--tip", true).unwrap();
         assert_eq!(tip_per_whole(tip, &small), units::kas(1_000_000));
+    }
+
+    /// `--delivery` and its options: where they apply, and what they ask for.
+    #[test]
+    fn the_delivery_options_apply_to_buys_and_say_why_not_to_others() {
+        use crate::trade::delivery::Choice;
+        let req = |line: &str| -> Result<crate::trade::delivery::Request, String> {
+            let args: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            let p = crate::trade::opts::parse(&args, VALUE_FLAGS, BOOL_FLAGS)?;
+            let kind = p.pos.first().cloned().unwrap_or_default();
+            let side = if p.get("--side") == Some("sell") { Side::Sell } else { Side::Buy };
+            check_flags(&kind, &p)?;
+            delivery_request(&kind, side, &p)
+        };
+        let base = "limit --token T --amount 1tok --price 1KAS";
+        assert_eq!(req(&format!("{base} --side buy")).unwrap(), Default::default());
+        assert_eq!(req(&format!("{base} --side buy --delivery collected")).unwrap().choice, Some(Choice::Collected));
+        let r = req(&format!("{base} --side buy --delivery one-utxo --topup-tip 0.001KAS --reset-threshold")).unwrap();
+        assert_eq!((r.choice, r.tip, r.reset), (Some(Choice::OneUtxo), Some(100_000), true));
+        // The reasons are said.
+        for (line, why) in [
+            (format!("{base} --side buy --delivery sometimes"), "must be each, collected or one-utxo"),
+            (format!("{base} --side sell --delivery each"), "a sell on the KAS book"),
+            (format!("{base} --side buy --topup-tip 0.001KAS"), "go with --delivery one-utxo"),
+            (format!("{base} --side buy --delivery each --reset-threshold"), "go with --delivery one-utxo"),
+            ("ifd --token T --amount 1tok --price 1KAS --take-profit 2KAS --side buy --delivery each".to_string(), "buy-first"),
+            (
+                "ifd --token T --quote U --amount 1tok --price 1KAS --take-profit 2KAS --side sell --delivery each".to_string(),
+                "pair if-done",
+            ),
+            ("ioc --token T --amount 1tok --price 1KAS --side buy --delivery each".to_string(), "does not apply to ioc"),
+        ] {
+            let e = req(&line).unwrap_err();
+            assert!(e.contains(why), "{line}: {e}");
+        }
+        // A pair order and a sell-first entry take it.
+        assert!(req("limit --token T --quote U --amount 1tok --price 1KAS --side sell --delivery collected").is_ok());
+        assert!(req("ifd --token T --amount 1tok --price 1KAS --take-profit 2KAS --side sell --delivery each").is_ok());
     }
 
     /// Every kind takes `--decimals`, for the first order of a token without orders.

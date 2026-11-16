@@ -230,9 +230,9 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
 
 /// A candidate that is a state the files name.
 pub const VIA_KNOWN: &str = "known state";
-/// A candidate with the amount left the maker gave with `--amount-left`.
+/// A candidate with the amount left (a mode-1 order: the bought amount) the maker gave with `--amount-left`.
 pub const VIA_HINT: &str = "--amount-left";
-/// A candidate from the bounded fallback `amountLeft - k x minFill` (not exhaustive).
+/// A candidate from the bounded fallback `amountLeft - k x minFill`, or `bought = k x minFill` (not exhaustive).
 pub const VIA_FALLBACK: &str = "fallback search";
 
 /// One candidate state and its script.
@@ -256,7 +256,8 @@ pub struct Candidate {
 ///
 /// A partial fill splices the new `amountLeft` into the script, and any amount of at least
 /// `minFill` may have been filled. The third group is therefore a bounded guess and not
-/// exhaustive.
+/// exhaustive. A mode-1 order (it keeps what it buys) also splices `bought` with every fill:
+/// its hints are tried as `bought` too, and the fallback is `bought = k x minFill`, k = 0, 1, ...
 #[cfg(test)]
 pub fn candidates(tpl: TemplateId, known: &[AnyState], hints: &[i64]) -> Vec<Candidate> {
     candidates_under(OrderScript::Pinned(tpl), known, hints)
@@ -284,6 +285,20 @@ pub fn candidates_under(script: OrderScript, known: &[AnyState], hints: &[i64]) 
         for h in hints {
             if let Some(c) = with_amount_left(s, *h) {
                 push(c, VIA_HINT, &mut out);
+            }
+        }
+    }
+    // A mode-1 order: the bought amount, as a bid has no amount left and a conditional one both.
+    for s in known.iter().filter(|s| s.delivery().is_some_and(|d| d.mode == kob_protocol::state::MODE_ACCUMULATE)) {
+        for h in hints {
+            if let Some(c) = s.with_bought(*h) {
+                push(c, VIA_HINT, &mut out);
+            }
+        }
+        let m = s.min_fill();
+        for k in 0..if m > 0 { MAX_CANDIDATES as i64 } else { 0 } {
+            if let Some(c) = k.checked_mul(m).and_then(|b| s.with_bought(b)) {
+                push(c, VIA_FALLBACK, &mut out);
             }
         }
     }
@@ -520,7 +535,7 @@ fn not_found_note(known: Option<&AnyState>, searched: usize) -> String {
             "spent, or partly filled to an amount the search did not reach ({searched} candidates: the known states, the --amount-left hints, then amountLeft - k x minFill; that search is not exhaustive: pass the order's amount left from an indexer view with --amount-left)"
         ),
         _ => format!(
-            "spent, or a state the search did not reach ({searched} candidates over the amount left; a moved stop, an armed band or repeat fields change the script too)"
+            "spent, or a state the search did not reach ({searched} candidates over the amount left and the bought amount; a moved stop, an armed band or repeat fields change the script too)"
         ),
     }
 }

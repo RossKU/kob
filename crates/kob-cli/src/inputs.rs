@@ -91,6 +91,8 @@ pub struct View {
     ///
     /// For a sell-first `KobIfdPair` it is the B prefund.
     pub custody_b: Option<TokenView>,
+    /// A mode-1 order's live bought-custody (`bought_custody.utxo`).
+    pub bought: Option<TokenView>,
     /// Live strays.
     pub strays: Vec<TokenView>,
 }
@@ -371,6 +373,10 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
         None | Some(Value::Null) => None,
         Some(u) => Some(token_view(u, "pair.custodies[1].utxo")?),
     };
+    let bought = match o.get("bought_custody").and_then(|c| c.get("utxo")) {
+        None | Some(Value::Null) => None,
+        Some(u) => Some(token_view(u, "bought_custody.utxo")?),
+    };
     let strays = match o.get("strays") {
         None | Some(Value::Null) => vec![],
         Some(Value::Array(a)) => {
@@ -389,6 +395,7 @@ fn view(v: &Value, source: &str) -> Result<View, String> {
         ext: opt_h32(o.get("extension_commitment"), "extension_commitment")?,
         custody,
         custody_b,
+        bought,
         strays,
     })
 }

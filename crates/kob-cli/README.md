@@ -104,6 +104,7 @@ One rule for every command that takes a key:
 | `kob place <KIND>` | place an order (kinds below) |
 | `kob replace <ID>` | amend a live order in place, or cancel-replace it in one transaction |
 | `kob cancel <ID>...` | the maker's cancel: custody, strays and KAS back to the maker |
+| `kob claim <ID> [--merge | --sell --price P]` | take what a collected buy order bought: alone, with your UTXOs, or sold in the same transaction |
 | `kob refund <ID>` | refund an ended order; any key may send it and keeps the refund tip, less the fee |
 | `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price`; one is required with `--yes`) |
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token or KAS |

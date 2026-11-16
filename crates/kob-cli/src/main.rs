@@ -56,6 +56,8 @@ TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; a key on the com
                                if-done entries and pair orders are re-planned from their terms)
   kob cancel <COVENANT_ID>...  the maker's cancel by covenant id (indexer view, checked on the node)
   kob refund <COVENANT_ID>     the permissionless refund of an ended order (the sender keeps the refund tip)
+  kob claim <COVENANT_ID> [--merge | --sell --price P]
+                               take the tokens a collected buy order bought (alone, merged with yours, or sold)
   kob take <COVENANT_ID> --amount A
                                fill a resting order as the taker
   kob send <TOKEN|KAS> <TO> <AMOUNT>
@@ -130,8 +132,8 @@ USAGE
 
 /// The commands `kob help <command>` knows.
 const COMMANDS: &[&str] = &[
-    "token", "registry", "recover", "order", "place", "replace", "cancel", "refund", "take", "send", "merge", "book", "orders",
-    "balances", "watch", "tokens",
+    "token", "registry", "recover", "order", "place", "replace", "cancel", "refund", "claim", "take", "send", "merge", "book",
+    "orders", "balances", "watch", "tokens",
 ];
 
 /// The `kob --version` line, such as `kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`.
@@ -213,6 +215,7 @@ fn dispatch(args: &[String]) -> i32 {
         ["replace", ..] => trade::actions::run_replace(&args[1..]),
         ["cancel", ..] => trade::actions::run_cancel(&args[1..]),
         ["refund", ..] => trade::actions::run_refund(&args[1..]),
+        ["claim", ..] => trade::actions::run_claim(&args[1..]),
         ["take", ..] => trade::actions::run_take(&args[1..]),
         ["send", ..] => trade::actions::run_send(&args[1..]),
         ["merge", ..] => trade::merge::run(&args[1..]),

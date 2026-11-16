@@ -47,6 +47,7 @@ use kob_protocol::state::{
 use kob_protocol::tx::{BuiltTx, FeeMode, FeeOptions, KeyUtxo, TokenUtxo, COVENANT_OUTPUT_MIN, DUST_OUTPUT_MIN};
 use kob_protocol::Family;
 
+use super::delivery::{self, Choice, Class, Resolved};
 use super::market::TokenMarket;
 
 // ------------------------------------------------------------------------------ constants (daa.ts)
@@ -286,6 +287,8 @@ pub struct Env {
     pub carrier: Option<u64>,
     /// A pair order's quote token B.
     pub pair: Option<PairPart>,
+    /// How a buy delivers (`--delivery`, the stored receive threshold).
+    pub delivery: delivery::Request,
 }
 
 impl Env {
@@ -729,10 +732,12 @@ pub struct Plan {
     pub built: Option<BuiltTx>,
     /// What to show.
     pub disclosure: Option<Disclosure>,
+    /// Mode 2: the receive threshold T that is new on this machine, kept once the order is submitted.
+    pub new_threshold: Option<i64>,
 }
 
 pub(crate) fn failed(issues: Vec<Issue>) -> Plan {
-    Plan { ok: false, issues, states: vec![], request: None, built: None, disclosure: None }
+    Plan { ok: false, issues, states: vec![], request: None, built: None, disclosure: None, new_threshold: None }
 }
 
 // --------------------------------------------------------------------------------- integer helpers
@@ -1471,7 +1476,7 @@ pub(crate) fn make_ask(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
     }
 }
 
-pub(crate) fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
+pub(crate) fn make_bid(env: &Env, p: &Draft, min_fill: i64, dl: &Resolved) -> AnyState {
     let m = &env.market;
     let s = BidState {
         maker: env.maker,
@@ -1495,7 +1500,10 @@ pub(crate) fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
         slope: p.slope,
         price_end: p.price_end,
         decay_step: p.decay_step,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: dl.mode(),
+        recv_threshold: dl.recv_threshold,
+        topup_tip: dl.topup_tip,
+        bought: 0,
     };
     match m.family {
         Family::Kcc20 => AnyState::KobBid(s),
@@ -1607,11 +1615,28 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
     if has_error(&issues) {
         return failed(issues);
     }
-    let fills = d.fills.unwrap_or(1);
+    let mut fills = d.fills.unwrap_or(1);
+    let mut dl = Resolved::EACH;
     let (order, value, token_amount) = match d.side {
         Side::Sell => (make_ask(env, &d, min_fill), env.carrier(), d.amount),
         Side::Buy => {
-            let o = make_bid(env, &d, min_fill);
+            let class = if d.tif == 0 && !d.immediate { Class::Resting } else { Class::Immediate };
+            let want = delivery::Order {
+                kron: m.family == Family::Kron,
+                program: m.program,
+                class,
+                carrier: env.carrier(),
+                scale: m.scale,
+                min_fill,
+                price: Some(d.limit_price),
+                pair: false,
+            };
+            dl = delivery::resolve(&want, &env.delivery, &mut issues);
+            if has_error(&issues) {
+                return failed(issues);
+            }
+            fills = dl.funded(fills);
+            let o = make_bid(env, &d, min_fill, &dl);
             let escrow = match &o {
                 AnyState::KobBid(b) | AnyState::KobBidKron(b) => b.escrow(d.amount, fills),
                 _ => None,
@@ -1698,6 +1723,7 @@ pub(crate) fn place_simple(env: &Env, d: Draft, mut issues: Vec<Issue>) -> Plan 
         request: res.request,
         built: Some(built),
         disclosure: Some(disclosure),
+        new_threshold: dl.threshold.filter(|_| dl.threshold_new),
     }
 }
 
@@ -2369,6 +2395,59 @@ pub(crate) fn cond_ask_state(
     }
 }
 
+/// The delivery of a buy of the KAS book of the token of `env`.
+pub(crate) fn bid_delivery(
+    env: &Env,
+    class: Class,
+    carrier: i64,
+    min_fill: i64,
+    price: Option<i64>,
+    log: &mut Vec<Issue>,
+) -> Resolved {
+    let m = &env.market;
+    let want = delivery::Order {
+        kron: m.family == Family::Kron,
+        program: m.program,
+        class,
+        carrier,
+        scale: m.scale,
+        min_fill,
+        price,
+        pair: false,
+    };
+    delivery::resolve(&want, &env.delivery, log)
+}
+
+/// The delivery of a pair order: it delivers the token it receives, B for a sell and A for a buy.
+/// A pair order is collected or each fill, never one-utxo.
+pub(crate) fn pair_delivery(
+    env: &Env,
+    pair: &PairPart,
+    side: Side,
+    class: Class,
+    carrier: i64,
+    min_fill: i64,
+    log: &mut Vec<Issue>,
+) -> Resolved {
+    let t = if side == Side::Sell { &pair.quote } else { &env.market };
+    let want = delivery::Order {
+        kron: t.family == Family::Kron,
+        program: t.program,
+        class,
+        carrier,
+        scale: t.scale,
+        min_fill,
+        price: None,
+        pair: true,
+    };
+    delivery::resolve(&want, &env.delivery, log)
+}
+
+/// Writes the delivery block of `dl` into a conditional bid.
+pub(crate) fn set_delivery(s: &mut CondBidState, dl: &Resolved) {
+    (s.mode, s.recv_threshold, s.topup_tip) = (dl.mode(), dl.recv_threshold, dl.topup_tip);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn cond_bid_state(
     env: &Env,
@@ -2411,7 +2490,10 @@ pub(crate) fn cond_bid_state(
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -2559,7 +2641,7 @@ pub(crate) fn finish_cond(env: &Env, mut log: Vec<Issue>, spec: CondSpec) -> Pla
         activates_at: spec.activates_at.map(|a| (a, daa_to_unix(&env.clock, a))),
         notes,
     };
-    Plan { ok: true, issues: log, states, request: res.request, built: Some(built), disclosure: Some(disclosure) }
+    Plan { ok: true, issues: log, states, request: res.request, built: Some(built), disclosure: Some(disclosure), new_threshold: None }
 }
 
 /// The legs of a conditional intent (`legInputOf`).
@@ -2632,6 +2714,7 @@ pub(crate) fn cond_shape(i: &CondIntent, log: &mut Vec<Issue>) {
 
 pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     let m = &env.market;
+    let mut new_threshold = None;
     let mut log = check_amount(i.amount, m, i.side == Side::Sell);
     if i.tip < 0 {
         log.push(error("TIP_NEGATIVE", "the priority tip cannot be negative"));
@@ -2704,7 +2787,14 @@ pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
             log.push(error("MAX_FILLS_INVALID", format!("the number of fills must be 1..{max_fills}")));
             return failed(log);
         }
-        let s = cond_bid_state(env, i.amount, min_fill, i.tip, expiry.daa, act.active_from, carrier, &legs);
+        let dl = bid_delivery(env, Class::Resting, carrier, min_fill, Some(bid_worst(&legs)), &mut log);
+        if has_error(&log) {
+            return failed(log);
+        }
+        new_threshold = dl.threshold.filter(|_| dl.threshold_new);
+        let fills = dl.funded(fills);
+        let mut s = cond_bid_state(env, i.amount, min_fill, i.tip, expiry.daa, act.active_from, carrier, &legs);
+        set_delivery(&mut s, &dl);
         let Some(escrow) = s.escrow(fills) else {
             log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for one order"));
             return failed(log);
@@ -2744,7 +2834,7 @@ pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
     if has_stop {
         notes.push("keeperReserve");
     }
-    finish_cond(
+    let plan = finish_cond(
         env,
         log,
         CondSpec {
@@ -2765,7 +2855,8 @@ pub(crate) fn plan_cond(env: &Env, i: &CondIntent) -> Plan {
             min_touch: has_stop.then_some(legs.min_touch),
             notes,
         },
-    )
+    );
+    Plan { new_threshold, ..plan }
 }
 
 /// Checks which exit legs each if-done kind demands (`checkExitShape`).
@@ -3072,6 +3163,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
     let keeper_reserve = es.keeper_tip * es.arm_updates;
     let mut lines = vec![];
     let fam = m.family;
+    let mut new_threshold = None;
     let (order, exit, _prefund) = if buy_first {
         let ask = cond_ask_state(env, i.amount, exit_min_fill, exit_tip, exit_exp, 0, &legs);
         let bid = IfdBidState {
@@ -3123,7 +3215,15 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         };
         (o, x, None)
     } else {
-        let bid_exit = cond_bid_state(env, i.amount, exit_min_fill, exit_tip, exit_exp, 0, carrier, &legs);
+        // The exits of a non-repeating entry deliver as a resting buy does; a repeating one merges back.
+        let class = if repeat { Class::Repeating } else { Class::Resting };
+        let dl = bid_delivery(env, class, carrier, exit_min_fill, Some(bid_worst(&legs)), &mut log);
+        if has_error(&log) {
+            return failed(log);
+        }
+        new_threshold = dl.threshold.filter(|_| dl.threshold_new);
+        let mut bid_exit = cond_bid_state(env, i.amount, exit_min_fill, exit_tip, exit_exp, 0, carrier, &legs);
+        set_delivery(&mut bid_exit, &dl);
         let proceeds = i.price - i.tip;
         let worst_buy_back = bid_worst(&legs) + exit_tip;
         let min_prefund = (worst_buy_back - proceeds).max(0);
@@ -3160,7 +3260,9 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             amount_left: i.amount,
             rpt_amount,
             exit_state: IfdAskState::commit_exit_for(fam, &bid_exit),
-            exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
+            exit_mode: dl.mode(),
+            exit_recv_threshold: dl.recv_threshold,
+            exit_topup_tip: dl.topup_tip,
         };
         let Some(value) = ask.escrow(carrier) else {
             log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for one order"));
@@ -3195,7 +3297,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
         _ => None,
     };
     let notes = ifd_notes(i, &legs, stop_entry, count);
-    finish_cond(
+    let plan = finish_cond(
         env,
         log,
         CondSpec {
@@ -3216,7 +3318,8 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             min_touch: stop_entry.then_some(es.min_touch),
             notes,
         },
-    )
+    );
+    Plan { new_threshold, ..plan }
 }
 
 // -------------------------------------------------------------------------- pair limit (pair-*.ts)
@@ -3262,7 +3365,13 @@ pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<I
     }
     let possible = ceil_div(d.amount as i128, min_fill as i128) as i64;
     let fills = d.fills.or(d.fills_requested).unwrap_or(possible.min(MAX_DEFAULT_PAIR_FILLS));
-    if d.tif == 0 && d.interval == 0 && fills < possible {
+    // Collected: one carrier serves every fill.
+    let class = if d.tif == 0 && !d.immediate { Class::Resting } else { Class::Immediate };
+    let dl = pair_delivery(env, pair, d.side, class, env.carrier(), min_fill, &mut issues);
+    if has_error(&issues) {
+        return failed(issues);
+    }
+    if d.tif == 0 && d.interval == 0 && fills < possible && dl.choice != Choice::Collected {
         issues.push(info(
             "PAIR_FILLS_LIMITED",
             format!("{fills} delivery carriers: after {} partial fills what is left fills only in full", fills - 1),
@@ -3308,7 +3417,10 @@ pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<I
         amount_left: d.amount,
         custody: d.amount,
         s_ext: ext(s),
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: dl.mode(),
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     };
     if d.side == Side::Buy {
         let f = if d.tif == 0 { st.max_fills() } else { 1 };
@@ -3318,7 +3430,7 @@ pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<I
         };
         st.custody = escrow;
     }
-    let funded = fills.max(st.funded_fills());
+    let funded = dl.funded(fills.max(st.funded_fills()));
     let Some(total) = st.kas_value(funded) else {
         issues.push(error("TIP_TOO_LARGE", "the priority tip is too large for this quantity"));
         return failed(issues);

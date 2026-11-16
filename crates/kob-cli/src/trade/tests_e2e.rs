@@ -123,7 +123,10 @@ fn bid(maker: [u8; 32]) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1,
-        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
+        mode: 0,
+        recv_threshold: 0,
+        topup_tip: 0,
+        bought: 0,
     }
 }
 
@@ -137,6 +140,13 @@ fn live(state: &AnyState, cov: [u8; 32], tag: u8, value: u64, utxos: &mut Vec<No
         "state": state, "current": {"txid": to_hex(&[tag; 32]), "index": 0, "value": value.to_string()}, "current_daa": 990_000,
         "extension_commitment": to_hex(&EXT), "strays": [],
     });
+    if let Some(b) = state.bought_custody() {
+        let c = TokenState::custody(P.family(), b, cov, EXT);
+        utxos.push(node_utxo(&token_spk(&c), tag + 2, 0, 2 * KAS, Some(TOKEN)));
+        let mut t = token_item(tag + 2, &c);
+        t["role"] = json!("bought");
+        v["bought_custody"] = json!({"expected_amount": b.to_string(), "utxo": t, "ok": true});
+    }
     if let Some(a) = state.custody_amount().filter(|a| *a > 0) {
         let c = TokenState::custody(P.family(), a, cov, EXT);
         utxos.push(node_utxo(&token_spk(&c), tag + 1, 0, 2 * KAS, Some(TOKEN)));
@@ -828,6 +838,7 @@ fn planned(intent: crate::trade::plan::Intent, pair: bool) -> (AnyState, u64) {
             kas_per_whole_a: Some(3 * KAS as i64),
             kas_per_whole_b: Some(KAS as i64 / 5),
         }),
+        delivery: Default::default(),
     };
     let p = plan_order(&env, &intent);
     assert!(p.ok, "{:?}", p.issues);
@@ -1326,4 +1337,102 @@ fn a_declared_token_without_orders_takes_its_decimals_from_its_declaration() {
     route("/v1/tokens", json!({"tokens": [tst, row(Value::Null, json!(1_000_000))]}));
     assert_eq!(run(place, w.args(0x11, &sell)), 0);
     assert_eq!(w.submitted(), 3);
+}
+
+// ---------------------------------------------------------------------------- delivery and claim
+
+/// A mode-1 buy holding `bought` base units, its escrow funded with one carrier.
+fn collected(maker: [u8; 32], bought: i64, expiry: i64) -> (AnyState, u64) {
+    let s = BidState { mode: 1, bought, expiry_daa: expiry, ..bid(maker) };
+    let value = s.escrow(10 * SCALE, 1).unwrap() as u64;
+    (AnyState::KobBid(s), value)
+}
+
+fn plain_out(s: &SignedTx, owner: [u8; 32], amount: i64) -> bool {
+    let want = spk_to_string(&token_spk(&user_token(owner, amount)));
+    s.tx.outputs.iter().any(|o| o.script_public_key == want && o.covenant.is_some())
+}
+
+fn covenant_outputs(s: &SignedTx) -> usize {
+    s.tx.outputs.iter().filter(|o| o.covenant.is_some()).count()
+}
+
+/// `kob claim`: the maker's claim, with a wallet merge and with an ask, and what `cancel`,
+/// `refund`, `orders` and `balances` do with a bought-custody.
+#[test]
+fn claim_merge_sell_and_the_bought_custody_in_cancel_refund_and_views() {
+    use crate::trade::views;
+    let maker = pk(0x11);
+    let (c, plain, e) = ([0xc1; 32], [0xc2; 32], [0xc3; 32]);
+    let (st, value) = collected(maker, 4 * SCALE, 1_000_000 + 77_000_000);
+    let (ended, ended_value) = collected(maker, 4 * SCALE, 999_000);
+    let (none_bought, none_value) = collected(maker, 0, 1_000_000 + 77_000_000);
+    let w = world("claim", &[(st.clone(), c, 0x10, value), (none_bought, plain, 0x20, none_value), (ended, e, 0x30, ended_value)]);
+    let claim = crate::trade::actions::run_claim;
+    let id = to_hex(&c);
+    // A dry run signs nothing, and a claim needs --yes or a terminal.
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --dry-run"))), 0);
+    assert_eq!(run(claim, w.args(0x11, &id)), 1);
+    assert_eq!(w.submitted(), 0);
+    // Only the maker claims; an order holding nothing bought has nothing to claim; usage mistakes are 2.
+    assert_eq!(run(claim, w.args(0x22, &format!("{id} --yes"))), 1);
+    assert_eq!(run(claim, w.args(0x11, &format!("{} --yes", to_hex(&plain)))), 1);
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --merge --sell --price 3KAS --yes"))), 2);
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --price 3KAS --yes"))), 2, "--price belongs to --sell");
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --sell --yes"))), 2, "--sell needs --price");
+    assert_eq!(w.submitted(), 0);
+    // Claim: one plain UTXO of the bought tokens to the maker; the order continues with bought = 0.
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --yes"))), 0);
+    let s = w.signed(".claim.json");
+    assert!(plain_out(&s, maker, 4 * SCALE), "the bought tokens come to the maker as one plain UTXO");
+    let after = spk_to_string(&st.with_bought(0).unwrap().spk());
+    assert!(s.tx.outputs.iter().any(|o| o.script_public_key == after && o.covenant.is_some()), "the order continues empty");
+    assert!(s.tx.inputs.len() >= 3 && covenant_outputs(&s) == 2, "order + custody + funding in; continuation + tokens out");
+    // Merge: the maker's 100 TST UTXO joins.
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --merge --yes"))), 0);
+    let s = w.signed(".claim.json");
+    assert!(plain_out(&s, maker, 104 * SCALE), "4 claimed + 100 held, one UTXO");
+    // Sell: all the claimed tokens go into a new ask in the same transaction (order, ask, custody out).
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --sell --price 3KAS --yes"))), 0);
+    let s = w.signed(".claim.json");
+    assert_eq!(covenant_outputs(&s), 3, "continuation + the ask + its custody");
+    // A smaller amount leaves the rest to the maker; --end ends the buy and returns its KAS.
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --sell --price 3KAS --amount 3TST --end --yes"))), 0);
+    let s = w.signed(".claim.json");
+    assert_eq!(covenant_outputs(&s), 3, "the ask, its custody and the 1 TST left");
+    assert!(plain_out(&s, maker, SCALE), "the 1 TST left goes to the maker");
+    assert!(!s.tx.outputs.iter().any(|o| o.script_public_key == after), "the buy ended: no continuation");
+    // More than claimed takes the maker's own tokens.
+    assert_eq!(run(claim, w.args(0x11, &format!("{id} --sell --price 3KAS --amount 10TST --yes"))), 0);
+    assert_eq!(w.submitted(), 5);
+
+    // The maker's cancel and the refund of an ended order hand the bought tokens back.
+    assert_eq!(run(crate::trade::actions::run_cancel, w.args(0x11, &format!("{id} --yes"))), 0);
+    let s = w.signed(".cancel.json");
+    assert!(plain_out(&s, maker, 4 * SCALE), "the bought tokens go back to the maker");
+    assert!(s.tx.inputs.iter().any(|i| i.utxo.covenant_id == Some(TOKEN)), "the bought-custody is an input of the cancel");
+    assert_eq!(run(crate::trade::actions::run_refund, w.args(0x22, &format!("{} --yes", to_hex(&e)))), 0);
+    let s = w.signed(".refund.json");
+    assert!(s.tx.inputs.iter().any(|i| i.utxo.covenant_id == Some(TOKEN)), "the bought-custody is an input of the refund");
+
+    // The views: the delivery, what the order holds and what the balances count as the maker's.
+    let order_json = json!({
+        "covenant_id": id, "contract": "KobBid", "status": "open", "state_known": true, "state": st,
+        "current": {"value": value.to_string()}, "token": to_hex(&TOKEN),
+        "bought_custody": {"expected_amount": "4000", "ok": true,
+                           "utxo": {"token": to_hex(&TOKEN), "amount": "4000", "value": "200000000", "spent": false}},
+        "custody": {"expected_amount": "4000", "ok": true,
+                    "utxo": {"token": to_hex(&TOKEN), "amount": "4000", "value": "200000000", "spent": false}},
+    });
+    let row = views::order_row(&order_json, &[], &[]);
+    assert_eq!(row["bought"], "4000");
+    let text = row["delivery"].as_str().unwrap();
+    assert!(text.starts_with("collected") && text.contains("bought and held by the order"), "{text}");
+    assert!(views::order_row_line(&row).contains("; collected"), "{}", views::order_row_line(&row));
+    // Balances count the bought tokens apart from the sell custody, once, with their carrier.
+    let (held, skipped) = views::escrowed(&[order_json]);
+    assert!(skipped.is_empty());
+    let e = &held[&TOKEN];
+    assert_eq!((e.bought, e.custody), (4_000, 0));
+    assert!(e.kas_carriers >= 2 * KAS as i128, "the bought-custody's carrier is locked KAS: {}", e.kas_carriers);
 }
