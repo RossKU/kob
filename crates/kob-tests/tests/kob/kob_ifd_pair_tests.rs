@@ -2813,3 +2813,95 @@ fn ifd_limits() {
         r.bad(&e, i);
     });
 }
+
+// ---------------------------------------------------------------- the exits' delivery mode (docs/design/bid-delivery-spec.md)
+
+/// A fill of a pair entry (buy-first: an ASK exit; sell-first: a BID exit) whose entry commits the exit delivery fields
+/// `x` (exitMode, exitRecvThreshold, exitTopupTip) and whose exit is written with the delivery block `xb`; the entry's
+/// continuation keeps `x`.
+fn exit_fill(name: &str, s: IfdPairState, pa: TemplateId, pb: TemplateId, x: [i64; 3], xb: [i64; 4]) -> (Ed, usize) {
+    let buy = s.is_buy_first();
+    let b = if buy { ifd_bid_route(s, pa, pb, 4) } else { ifd_ask_route(s, pa, pb, 4) };
+    let mut e = ed_of(name, Action::Batch(b));
+    let i = ein(&e);
+    e.dlv_in.insert(i, ph::xdlv(x[0], x[1], x[2]));
+    let k = cont(&e);
+    e.dlv_out.insert(k, ph::xdlv(x[0], x[1], x[2]));
+    let xo = exit_out(&e);
+    e.dlv_out.insert(xo, ph::dlv(xb[0], xb[1], xb[2], xb[3]));
+    (e, i)
+}
+
+/// KobIfdPair writes its exitMode, exitRecvThreshold and exitTopupTip into every exit with bought 0 (PX.. positives, NX..
+/// attacks, refused by the entry's input); a repeating entry's exits deliver in mode 0; a merge takes only an exit whose
+/// delivery block is the entry's.
+#[test]
+fn ifd_pair_exit_delivery_modes() {
+    let subs = Subs::compile();
+    each(&subs, &all_mixes(), |r, pa, pb| {
+        for buy in [true, false] {
+            let sd = if buy { "b" } else { "a" };
+            let s = ifd_pair(MAKER_A, buy, pa, pb);
+            let id = |t: &str| format!("{sd}{t}");
+            // the exit's bought token: B for an ASK exit, A for a BID exit
+            let kcc = (if buy { pb } else { pa }).family() == kob_protocol::Family::Kcc20;
+            let (e, _) = exit_fill(&id("PX01 exit in mode 0"), s.clone(), pa, pb, [0, 0, 0], [0, 0, 0, 0]);
+            r.ok(&e);
+            if kcc {
+                let (e, _) = exit_fill(&id("PX02 exit in mode 1"), s.clone(), pa, pb, [1, 0, 0], [1, 0, 0, 0]);
+                r.ok(&e);
+                let (e, _) = exit_fill(&id("PX03 exit in mode 2"), s.clone(), pa, pb, [2, 7, 3], [2, 7, 3, 0]);
+                r.ok(&e);
+            }
+            for (n, xb) in [
+                ("NX01 exit written in mode 0 (the entry commits mode 1)", [0, 0, 0, 0]),
+                ("NX02 exit written with bought > 0", [1, 0, 0, 5]),
+                ("NX03 exit written with another recvThreshold", [1, 7, 0, 0]),
+                ("NX04 exit written with another topupTip", [1, 0, 3, 0]),
+                ("NX05 exit written in mode 2", [2, 0, 0, 0]),
+            ] {
+                let (e, i) = exit_fill(&id(n), s.clone(), pa, pb, [1, 0, 0], xb);
+                r.bad(&e, i);
+            }
+            let (mut e, i) = exit_fill(&id("NX06 the continuation changes exitMode"), s.clone(), pa, pb, [1, 0, 0], [1, 0, 0, 0]);
+            let k = cont(&e);
+            e.dlv_out.insert(k, ph::xdlv(0, 0, 0));
+            r.bad(&e, i);
+            // a repeating entry books exits that re-arm it: they deliver in mode 0
+            let rs = IfdPairState { rpt_amount: 1 + 20 * WHOLE, ..s.clone() };
+            let (e, _) = exit_fill(&id("PX07 repeating entry, exit in mode 0"), rs.clone(), pa, pb, [0, 0, 0], [0, 0, 0, 0]);
+            r.ok(&e);
+            let (e, i) = exit_fill(&id("NX08 repeating entry with exitMode 1"), rs.clone(), pa, pb, [1, 0, 0], [1, 0, 0, 0]);
+            r.bad(&e, i);
+            let (e, i) = exit_fill(&id("NX09 repeating entry with exitMode 2"), rs, pa, pb, [2, 7, 3], [2, 7, 3, 0]);
+            r.bad(&e, i);
+            // a merge reads the exit's delivery block as fill writes it
+            for (held, n) in [(4, 2), (4, 4)] {
+                let tag = if held == n { "sold out" } else { "partial" };
+                let Some(built) = ph::try_built(Action::Batch(rearm(buy, pa, pb, held, n, 0))) else {
+                    println!("SKIP-SLOTS {sd} merge ({tag}) {} (build)", r.pair);
+                    continue;
+                };
+                let merge = |t: &str, xin: [i64; 4]| {
+                    let mut e = Ed::new(&id(&format!("{t} ({tag})")), &built);
+                    let xi = e.input_of_cov(XE_ID);
+                    e.dlv_in.insert(xi, ph::dlv(xin[0], xin[1], xin[2], xin[3]));
+                    if let Some(k) = e.cont_out(XE_ID) {
+                        e.dlv_out.insert(k, ph::dlv(xin[0], xin[1], xin[2], xin[3]));
+                    }
+                    (e.clone(), ein(&e))
+                };
+                let (e, _) = merge("PX10 merge of an exit in mode 0", [0, 0, 0, 0]);
+                r.ok(&e);
+                let (e, i) = merge("NX11 merge of an exit whose recvThreshold is not the entry's", [0, 5, 0, 0]);
+                r.bad(&e, i);
+                let (e, i) = merge("NX12 merge of an exit whose topupTip is not the entry's", [0, 0, 4, 0]);
+                r.bad(&e, i);
+                let (e, i) = merge("NX13 merge of an exit in mode 1", [1, 0, 0, 0]);
+                r.bad(&e, i);
+                let (e, i) = merge("NX14 merge of an exit holding bought > 0", [0, 0, 0, 6]);
+                r.bad(&e, i);
+            }
+        }
+    });
+}

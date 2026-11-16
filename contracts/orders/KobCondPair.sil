@@ -15,21 +15,29 @@ pragma silverscript ^0.1.0;
 //
 // Entries:
 //   settle(nb, custIn, tTplIn, t, sOut, tOut, leg, evA, evB, tk, evMode,
-//          upd, k), with n = int(nb)
+//          upd, k, form), with n = int(nb)
 //     n > 0, upd 0   Fill n base units of A on leg 0 (take-profit or limit)
 //                    or leg 1 (stop). Anyone, once tx.daa >= activeFrom.
-//     n == 0, upd 0  Refund the whole custody to the maker at output i.
-//                    Anyone, after expiryDaa or 90 days idle.
+//     n == 0, upd 0  Refund the whole custody to the maker at output i, and
+//                    the bought-custody if any at its own index. Anyone,
+//                    after expiryDaa or 90 days idle.
 //     n == 0, upd 1  Update. Arm (k == 0) or trail (k >= 1) the stop next to
 //                    the evidence fills. Anyone, and the keeper may take up
 //                    to keeperTip.
 //   cancel(sig)
-//     Maker only, signed with SIGHASH_ALL.
+//     Maker only, signed with SIGHASH_ALL. It is also the claim of the
+//     bought-custody (docs/design/bid-delivery-spec.md, section 7).
 //
-// Only stopPrice, armed, amountLeft and custody are mutable. The repeat
-// fields are zero unless a repeating KobIfdPair entry booked this order as
-// its exit. The evidence templates, KobAsk, KobBid and KobPair of both
-// families, are build constants.
+// The T delivery has a mode, the maker's and immutable, as in KobPair: 0 a
+// new plain UTXO per fill, 1 accumulate in the order's bought-custody of
+// exactly `bought`, 2 top-up of the maker's receive UTXO with form (0 new
+// plain, 1 new receive UTXO, 2 top-up) chosen by the filler. Modes 1 and 2
+// are for a KCC-20 T only, and a booked exit (repeat) delivers in mode 0.
+//
+// Only stopPrice, armed, amountLeft, custody and bought are mutable. The
+// repeat fields are zero unless a repeating KobIfdPair entry booked this
+// order as its exit. The evidence templates, KobAsk, KobBid and KobPair of
+// both families, are build constants.
 contract KobCondPair(
     byte[32] ASK_TPL,
     int ASK_PRE,
@@ -84,7 +92,11 @@ contract KobCondPair(
     int init_rptPrice,
     int init_rptPre,
     int init_rptUntil,
-    byte[32] init_sExt
+    byte[32] init_sExt,
+    int init_mode,
+    int init_recvThreshold,
+    int init_topupTip,
+    int init_bought
 ) {
     // State layout, as payload ranges of the redeem script, whose state
     // starts at byte 1:
@@ -105,9 +117,12 @@ contract KobCondPair(
     //   repeat   parent [452..484)  rptPrice [485..493)  rptPre [494..502)
     //            rptUntil [503..511)
     //   sExt [512..544), the KCC-20 extension commitment of the custody
-    // The state is 543 B and ends at byte 544. A KobIfdPair entry commits the
+    //   delivery  mode [545..553)  recvThreshold [554..562)
+    //             topupTip [563..571)  bought [572..580), mutable
+    // The state is 579 B and ends at byte 580. A KobIfdPair entry commits the
     // state offsets [0..432), maker to armed, as its exitState. It writes
-    // amountLeft, custody, the repeat fields and sExt, its own aExt or bExt.
+    // amountLeft, custody, the repeat fields, sExt, its own aExt or bExt, and
+    // its exitMode, exitRecvThreshold and exitTopupTip with bought 0.
     pubkey maker = init_maker;               // T deliveries, S returns / refunds, profits, cancel key
     int side = init_side;                    // 1 ASK (sells base A = S), 2 BID (buys base A = T)
     byte[32] sCovId = init_sCovId;           // the token sold and held (A for an ask, B for a bid)
@@ -147,6 +162,10 @@ contract KobCondPair(
     int rptPre = init_rptPre;                // repeat IFD: BID exit the entry's prefund rate (0 for an ASK exit)
     int rptUntil = init_rptUntil;            // repeat IFD: from this DAA a TP fill may skip the entry
     byte[32] sExt = init_sExt;               // KCC-20 extension commitment of the custody of S (0 for KRON)
+    int mode = init_mode;                    // delivery of T: 0 new, 1 accumulate, 2 top-up (KCC-20 T only for 1 and 2)
+    int recvThreshold = init_recvThreshold;  // mode 2: smallest threshold of a receive UTXO the maker accepts (> 0)
+    int topupTip = init_topupTip;            // mode 2: sompi a top-up fill leaves to the filler (<= deliveryCarrier)
+    int bought = init_bought;                // mode 1: exact T held in the bought-custody (mutable, last)
 
     byte constant SCHEME_P2PK = 0x00;
     byte constant SCHEME_COVID = 0x04;
@@ -169,7 +188,7 @@ contract KobCondPair(
     int constant BID_STATE_LEN = 285;
     int constant BID_STATE_LEN_KRON = 252;
     // State length of the KobPair template, for pair-order evidence.
-    int constant PAIR_STATE_LEN = 447;
+    int constant PAIR_STATE_LEN = 483;
     // The most token inputs of one token a transaction may carry, 8 for the
     // 8/8 prototype. A KRON program accepts fewer. The scans over these are
     // unrolled by hand, one line per slot, so raising the cap needs as many
@@ -211,18 +230,18 @@ contract KobCondPair(
         return rs.slice(pre, pre + stLen);
     }
 
-    // P2SH of this script with the mutable window [416..451) replaced. The
-    // payloads are stopPrice [416..424), armed [425..433), amountLeft
-    // [434..442) and custody [443..451). Bytes 424, 433 and 442 are the 0x08
-    // push opcodes, copied.
-    function contSpk(int newStop, int newArmed, int newLeft, int newCust) : byte[] {
+    // P2SH of this script with the mutable window [416..451) and bought
+    // [572..580) replaced. The payloads are stopPrice [416..424), armed
+    // [425..433), amountLeft [434..442) and custody [443..451). Bytes 424, 433
+    // and 442 are the 0x08 push opcodes, copied.
+    function contSpk(int newStop, int newArmed, int newLeft, int newCust, int newBought) : byte[] {
         int self = this.activeInputIndex;
         int len = OpTxInputScriptSigLen(self);
         byte[] rs = OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);
         return byte[](new ScriptPubKeyP2SHFromRedeemScript(
             rs.slice(0, 416) + byte[](newStop as byte[8]) + rs.slice(424, 425) + byte[](newArmed as byte[8])
                 + rs.slice(433, 434) + byte[](newLeft as byte[8]) + rs.slice(442, 443) + byte[](newCust as byte[8])
-                + rs.slice(451, this.bytecodeSize)
+                + rs.slice(451, 572) + byte[](newBought as byte[8]) + rs.slice(580, this.bytecodeSize)
         ));
     }
 
@@ -587,14 +606,17 @@ contract KobCondPair(
     // update pushes 0x08 + 0, so it never reads as a traded amount, and update
     // also refuses to run next to the parent entry.
     //
-    // custIn is the custody input, and tTplIn any input of T, the source of
-    // its template bytes. sOut is the S a fill releases and tOut the T the
-    // maker receives at output i. evA, evB, tk and evMode are the evidence,
-    // see pairEv. t is the auction time, proven by CLTV, which only an armed
-    // stop leg with bandDaa > 0 reads. An update uses none of custIn, tTplIn,
-    // t, sOut, tOut and leg.
+    // custIn is the custody input. tTplIn is the T input the delivery is
+    // built from: the bought-custody in mode 1 once bought > 0, the maker's
+    // receive UTXO for a top-up (mode 2, form 2), otherwise any input of T,
+    // the source of its template bytes. sOut is the S a fill releases and
+    // tOut the T the maker receives at output i. evA, evB, tk and evMode are
+    // the evidence, see pairEv. t is the auction time, proven by CLTV, which
+    // only an armed stop leg with bandDaa > 0 reads. form is read in mode 2
+    // only. An update uses none of custIn, tTplIn, t, sOut, tOut, leg and
+    // form.
     entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
-                 int upd, int k) {
+                 int upd, int k, int form) {
         int n = int(nb);
         int self = this.activeInputIndex;
         byte[32] selfId = OpInputCovenantId(self);
@@ -624,22 +646,25 @@ contract KobCondPair(
             require(tFamily == FAM_KCC20);
         }
         // Stray guards on both tokens, in every mode. No S input may be owned
-        // by this id but the custody, none at all in an update, and no T
-        // input may be. Strays are inert, and only the maker's cancel can move
-        // them.
+        // by this id but the custody, none at all in an update. No T input
+        // may be owned by it but the authenticated bought-custody tc of a
+        // fill or a refund, none at all in an update (the T guard runs at the
+        // end, once tc is known). Strays are inert, and only the maker's
+        // cancel can move them.
         int cust = custIn;
         if (update) { cust = 0 - 1; }
         noStrays(sCovId, selfId, cust, sOff);
-        noStrays(tCovId, selfId, 0 - 1, tOff);
+        int tc = 0 - 1;
 
         // The continuation, if any, is this script with stopPrice, armed,
         // amountLeft and custody set to newStop, newArmed, cLeft and cCust,
-        // holding at least `floor`.
+        // and bought to cBought, holding at least `floor`.
         bool cont = false;
         int newStop = stopPrice;
         int newArmed = armed;
         int cLeft = amountLeft;
         int cCust = custody;
+        int cBought = bought;
         int floor = 0;
         if (armed == 1 && bandDaa > 0) {
             // A fill of an armed stop records the auction origin, the DAA of
@@ -768,6 +793,68 @@ contract KobCondPair(
             // UTXO sent to this id can never stand in for it.
             require(held == custody);
 
+            // Repeat. A booked exit's take-profit fill re-arms the parent
+            // entry, which must then be spent in the same transaction in
+            // merge mode. Without the entry in the transaction, a take-profit
+            // fill needs tx.daa >= rptUntil. A stop fill never re-arms, and
+            // the entry may not be spent next to it. See
+            // docs/spec/order-types.md, "Pair if-done entries". A booked exit
+            // delivers in mode 0.
+            bool rearm = false;
+            if (n > 0 && parent != ZERO32) {
+                int present = OpCovInputCount(parent);
+                if (leg == 0) {
+                    if (present == 0) {
+                        require(tx.daa >= rptUntil);
+                    } else {
+                        rearm = true;
+                        require(mode == 0);
+                    }
+                } else {
+                    require(present == 0);
+                }
+            }
+            // The maker's token at output i is a T delivery, or, when a BID
+            // exit re-arms, its profit in S (dS).
+            bool dS = rearm && !sell;
+
+            // T, the token bought. tr is the redeem script of tTplIn, checked
+            // by template hash, read by every fill that delivers T and by a
+            // refund that releases a bought-custody: the bought-custody
+            // itself, the receive UTXO of a top-up, or any input of T.
+            byte[] tr = byte[](0x00);
+            if (bought > 0 || (n > 0 && !dS)) {
+                require(OpInputCovenantId(tTplIn) == tCovId);
+                int tSize = tPre + tLen + tSuf;
+                int tBase = OpTxInputScriptSigLen(tTplIn) - tSize;
+                tr = OpTxInputScriptSigSubstr(tTplIn, tBase, tBase + tSize);
+                require(blake3(byte[](tPre as byte[8]) + tr.slice(0, tPre) + byte[](tSuf as byte[8]) + tr.slice(tPre + tLen, tSize)) == tTplHash);
+            }
+            // KCC-20 T state [9..79) of a token owned by the maker's key (dMid)
+            // or by this order's id (cMid): owner, owner scheme, borrowing
+            // disabled and a zero guard. tail is [79..112), the commitment tExt.
+            byte[] zg = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]);
+            byte[] dMid = byte[](0x20) + byte[](maker) + byte[](0x0100010020) + zg;
+            byte[] cMid = byte[](0x20) + byte[](selfId) + byte[](0x0104010020) + zg;
+            byte[] tail = byte[](0x20) + byte[](tExt);
+            // The bought-custody. With bought > 0 it is input tTplIn: the P2SH
+            // of the KCC-20 T template holding exactly `bought`, owned by this
+            // id with scheme 0x04, borrowing disabled, a zero guard and tExt.
+            // Known by its exact state, so a stray or a look-alike sent to
+            // this id never stands in for it.
+            int haveKas = 0;
+            if (bought > 0) {
+                require(tFamily == FAM_KCC20);
+                require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));
+                require(tr.slice(tPre, tPre + 112) == byte[](0x08) + byte[](bought as byte[8]) + cMid + tail);
+                tc = tTplIn;
+                haveKas = tx.inputs[tTplIn].value;
+            }
+            // The maker's T output this settle pins, if any: index dIdx,
+            // amount dAmt, state [9..79) dMid.
+            int dIdx = self;
+            int dAmt = bought;
+
             // The carriers are the KAS on the order and custody UTXOs.
             int carriers = tx.inputs[self].value + tx.inputs[custIn].value;
             int outAmount = custody;
@@ -789,6 +876,12 @@ contract KobCondPair(
                 // output i unpinned, so such an order is cancel-only.
                 require(custody > 0);
                 require(tx.outputs[self].value + refundTip >= carriers);
+                // No bought-custody is left behind: it goes whole, with its
+                // KAS, to the maker's key at its own input index.
+                dIdx = tTplIn;
+                if (bought > 0) {
+                    require(tx.outputs[tTplIn].value >= haveKas);
+                }
             } else {
                 // FILL
                 require(tx.daa >= activeFrom);
@@ -873,29 +966,9 @@ contract KobCondPair(
                 int left = amountLeft - n;
                 outAmount = custody - sOut;
 
-                // Repeat. A booked exit's take-profit fill re-arms the parent
-                // entry, which must then be spent in the same transaction in
-                // merge mode. Without the entry in the transaction, a
-                // take-profit fill needs tx.daa >= rptUntil. A stop fill never
-                // re-arms, and the entry may not be spent next to it. See
-                // docs/spec/order-types.md, "Pair if-done entries".
-                bool rearm = false;
-                if (parent != ZERO32) {
-                    int present = OpCovInputCount(parent);
-                    if (leg == 0) {
-                        if (present == 0) {
-                            require(tx.daa >= rptUntil);
-                        } else {
-                            rearm = true;
-                        }
-                    } else {
-                        require(present == 0);
-                    }
-                }
                 // The maker's token at output i is dOut of T, the delivery.
                 // When a BID exit re-arms it is the profit, in S.
                 int dOut = tOut;
-                bool dS = false;
                 if (rearm) {
                     // The merge argument encodes n below 2^53. A booked exit's
                     // amount always is, so this only hardens.
@@ -919,7 +992,6 @@ contract KobCondPair(
                         // custody, and back(n) of B into its prefund, both
                         // pinned by the entry. back(n) is n at rptPre,
                         // rounded up. The maker gets the profit in B.
-                        dS = true;
                         int back = quoteOf(n, rptPre, sA, sA - 1);
                         if (left > 0) {
                             outAmount = custody - proceeds - back;
@@ -936,30 +1008,81 @@ contract KobCondPair(
                 }
                 require(outAmount >= 0);
 
-                // Positional rule. The maker's token at output i is owned by
-                // the maker. A BID exit's B profit is on the custody's own
-                // template, with the custody's guard and extension. The T
-                // delivery is on T's template, read from tTplIn and checked by
-                // hash, with a zero guard and tExt.
-                byte[] oPre = trs.slice(0, sPre);
-                byte[] oSuf = trs.slice(sPre + sLen, trs.length);
-                int oFam = sFamily;
-                byte[] oGx = gx;
-                byte[32] oTok = sCovId;
-                if (!dS) {
-                    require(OpInputCovenantId(tTplIn) == tCovId);
-                    int tbase = OpTxInputScriptSigLen(tTplIn) - (tPre + tLen + tSuf);
-                    oPre = OpTxInputScriptSigSubstr(tTplIn, tbase, tbase + tPre);
-                    oSuf = OpTxInputScriptSigSubstr(tTplIn, tbase + tPre + tLen, tbase + tPre + tLen + tSuf);
-                    require(blake3(byte[](tPre as byte[8]) + oPre + byte[](tSuf as byte[8]) + oSuf) == tTplHash);
-                    oFam = tFamily;
-                    oGx = byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0x20) + byte[](tExt);
-                    oTok = tCovId;
+                // Delivery of T at output i, by the order's mode. onD is the
+                // KAS the order puts on output i and released the KAS that
+                // leaves the order beyond the tip. haveKas is the KAS of the T
+                // input the delivery continues (a bought-custody or a receive
+                // UTXO). A re-arming fill is mode 0, checked above.
+                require(mode >= 0);
+                require(mode <= 2);
+                if (tFamily == FAM_KRON) {
+                    // A KRON T is delivered new.
+                    require(mode == 0);
                 }
-                require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
-                    oPre + tokenState(oFam, dOut, byte[32](maker), false, oGx) + oSuf
-                )));
-                require(OpOutputCovenantId(self) == oTok);
+                int onD = deliveryCarrier;
+                int released = deliveryCarrier;
+                dAmt = dOut;
+                if (mode == 1) {
+                    // Accumulate. The custody of bought + tOut stays owned by
+                    // this id while the order continues and goes to the
+                    // maker's key when it ends. A later fill moves the
+                    // custody's KAS along and no carrier.
+                    require(bought >= 0);
+                    if (bought > 0) {
+                        onD = 0;
+                        released = 0;
+                    }
+                    dAmt = bought + tOut;
+                    if (left > 0) {
+                        dMid = cMid;
+                        cBought = dAmt;
+                    }
+                } else {
+                    require(bought == 0);
+                    if (mode == 2 && form != 0) {
+                        require(recvThreshold > 0);
+                        require(topupTip >= 0);
+                        require(topupTip <= deliveryCarrier);
+                        // State [9..47) of a receive UTXO of the maker: 0x20
+                        // owner 0x01 0x00 0x01 0x01 (amount-threshold) 0x20.
+                        byte[] rcv = byte[](0x20) + byte[](maker) + byte[](0x0100010120);
+                        // Form 1, a new receive UTXO: guard = recvThreshold
+                        // LE || 24 zero bytes.
+                        dMid = rcv + byte[](recvThreshold as byte[8]) + zg.slice(8, 32);
+                        if (form != 1) {
+                            // Form 2, top-up. tTplIn is the maker's receive
+                            // UTXO, the P2SH of the script its state is read
+                            // from: threshold >= recvThreshold, canonical
+                            // guard, the commitment tExt. It grows by tOut
+                            // and keeps the rest of its state. The order
+                            // leaves topupTip to the filler and puts no
+                            // carrier on it.
+                            require(form == 2);
+                            require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));
+                            byte[] rst = tr.slice(tPre, tPre + 112);
+                            require(rst.slice(9, 47) == rcv);
+                            require(int(byte[8](rst.slice(47, 55))) >= recvThreshold);
+                            require(rst.slice(55, 112) == zg.slice(8, 32) + tail);
+                            int have = int(byte[8](rst.slice(1, 9)));
+                            require(have >= 0);
+                            dAmt = have + tOut;
+                            dMid = rst.slice(9, 79);
+                            haveKas = tx.inputs[tTplIn].value;
+                            onD = 0;
+                            released = topupTip;
+                        }
+                    }
+                }
+
+                if (dS) {
+                    // Positional rule. A BID exit's B profit is owned by the
+                    // maker, on the custody's own template, with the
+                    // custody's guard and extension.
+                    require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                        trs.slice(0, sPre) + tokenState(sFamily, dOut, byte[32](maker), false, gx) + trs.slice(sPre + sLen, trs.length)
+                    )));
+                    require(OpOutputCovenantId(self) == sCovId);
+                }
 
                 if (left > 0) {
                     // The rest continues this script with amountLeft - n and
@@ -970,9 +1093,9 @@ contract KobCondPair(
                     cont = true;
                     cLeft = left;
                     cCust = outAmount;
-                    floor = tx.inputs[self].value - deliveryCarrier - tipKas;
+                    floor = tx.inputs[self].value - released - tipKas;
                     require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
-                    require(tx.outputs[self].value >= deliveryCarrier);
+                    require(tx.outputs[self].value >= haveKas + onD);
                     outOwner = selfId;
                     rest = true;
                     outIdx = custIn;
@@ -985,20 +1108,40 @@ contract KobCondPair(
                         require(outAmount == 0);
                         require(tx.outputs[self].value >= deliveryCarrier);
                     } else {
+                        // Output i keeps the order's KAS and that of the T
+                        // input it continues, less the tip and a top-up's
+                        // topupTip.
+                        int keep = tx.inputs[self].value + haveKas - tipKas - (released - onD);
                         if (outAmount > 0) {
                             // what is left of the custody returns to the maker
-                            // at its index, with its carrier. Output i keeps
-                            // the order's KAS, less the tip.
+                            // at its index, with its carrier.
                             require(tx.outputs[custIn].value >= tx.inputs[custIn].value);
-                            require(tx.outputs[self].value >= tx.inputs[self].value - tipKas);
                             outIdx = custIn;
                         } else {
-                            // No S is left. Output i gets both carriers,
-                            // less the tip.
-                            require(tx.outputs[self].value >= carriers - tipKas);
+                            // No S is left. Output i also gets the custody's
+                            // carrier.
+                            keep = keep + tx.inputs[custIn].value;
                         }
+                        require(tx.outputs[self].value >= keep);
                     }
                 }
+            }
+
+            if (bought > 0 || (n > 0 && !dS)) {
+                // Pin the maker's T output: a fill's delivery at output i
+                // (positional rule: one output can never serve two orders), or
+                // a refund's release of the bought-custody at its own index.
+                // It is on T's template, read from tTplIn, and bound to T's
+                // covenant id.
+                byte[] dSt = byte[](0x08) + byte[](dAmt as byte[8]) + dMid + tail;
+                if (tFamily == FAM_KRON) {
+                    // id_type 3 (address presence), not a minter
+                    dSt = byte[](0x20) + byte[](maker) + byte[](0x010308) + byte[](dAmt as byte[8]) + byte[](0x0100);
+                }
+                require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                    tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)
+                )));
+                require(OpOutputCovenantId(dIdx) == tCovId);
             }
 
             if (outAmount > 0) {
@@ -1011,13 +1154,14 @@ contract KobCondPair(
                 require(OpOutputCovenantId(outIdx) == sCovId);
             }
         }
+        noStrays(tCovId, selfId, tc, tOff);
 
         if (cont) {
             // An update or a partial fill. The continuation is the only
             // output bound to this id.
             require(OpCovOutputCount(selfId) == 1);
             int selfOut = OpCovOutputIdx(selfId, 0);
-            require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, newArmed, cLeft, cCust));
+            require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, newArmed, cLeft, cCust, cBought));
             require(tx.outputs[selfOut].value >= floor);
         } else {
             // The order ends. No output may stay bound to its covenant id.

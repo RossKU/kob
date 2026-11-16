@@ -1796,3 +1796,75 @@ fn evidence_misc(r: &Run, pa: TemplateId, pb: TemplateId) {
 fn cond_pair_evidence_misc() {
     suite(&mixes(), evidence_misc);
 }
+
+// ---------------------------------------------------------------- delivery modes (docs/design/bid-delivery-spec.md)
+
+/// The delivery of the conditional pair order under test (side `ask`): its T and the `form` argument at position 13.
+fn mode_case(ask: bool, pa: TemplateId, pb: TemplateId) -> ModeCase {
+    ModeCase { kind: TemplateId::KobCondPair, oid: OID, tok: t_tok(ask), prog: t_prog(ask, pa, pb), dc: pdc(), form_at: 13 }
+}
+
+/// Every delivery mode of both sides on the take-profit / limit leg (`ph::mode_battery`, ids prefixed with the side and
+/// the T family), then the paths only a conditional has: an update keeps `bought` and spends no custody, and a booked
+/// exit's re-arming fill delivers in mode 0.
+fn delivery_modes(r: &Run, pa: TemplateId, pb: TemplateId) {
+    for ask in [true, false] {
+        let c = mode_case(ask, pa, pb);
+        let side = if ask { "a" } else { "b" };
+        let pfx = format!("{side}t{} ", if c.prog.family() == Family::Kcc20 { "k" } else { "r" });
+        let s = cside(ask, pa, pb);
+        let part = |n: &str| tp_ed(n, s.clone(), pa, pb, NR).0;
+        let end = |n: &str| tp_ed(n, s.clone(), pa, pb, s.amount_left).0;
+        let refund = |n: &str| ed(n, refund_of(s.clone(), pa, pb, EXPIRY as u64));
+        if c.prog.family() == Family::Kcc20 {
+            mode_battery(r, &c, &ModeShapes { part: &part, end: &end, refund: &refund }, &pfx);
+        } else {
+            kron_t_battery(r, &c, &part, &pfx);
+        }
+
+        // an update of an order holding a bought-custody: bought is carried, the custody is not spent
+        let b = M_BOUGHT;
+        let upd = |n: &str| {
+            let mut e = edb(&format!("{pfx}{n}"), cond_update(pa, pb, ask, false, false, false));
+            let i = e.order_in(OID);
+            c.set_mode(&mut e, i, 1, 0, 0, b, b);
+            (e, i)
+        };
+        if c.prog.family() == Family::Kcc20 {
+            let (e, _) = upd("PM10 mode 1 update keeps bought");
+            r.ok(&e);
+            let (mut e, i) = upd("NM80 update drops bought from the continuation");
+            let k = e.cont_out(OID).unwrap();
+            e.dlv_out.insert(k, dlv(1, 0, 0, 0));
+            r.bad(&e, i);
+            let (mut e, i) = upd("NM81 update spends the bought-custody (named as the T input)");
+            c.add_bought(&mut e, i, b);
+            e.add_token_output(c.tok, c.plain(b, MATCHER), M_KAS);
+            r.bad(&e, i);
+        }
+    }
+    // a booked exit's re-arming take-profit delivers in mode 0 (KobIfdPair commits exitMode 0 for a repeating entry)
+    for buy in [true, false] {
+        for (held, n) in [(4, 2), (4, 4)] {
+            let name = format!("{}NM82 a re-arming exit in mode 1 ({held} held, {n} filled)", if buy { "x" } else { "y" });
+            let Some(built) = try_built(Action::Batch(rearm(buy, pa, pb, held, n, 0))) else {
+                println!("SKIP-SLOTS {name} {} (build)", r.pair);
+                continue;
+            };
+            let mut e = Ed::new(&name, &built);
+            let xi = e.order_in(XE_ID);
+            e.dlv_in.insert(xi, dlv(1, 0, 0, 0));
+            if let Some(k) = e.cont_out(XE_ID) {
+                e.dlv_out.insert(k, dlv(1, 0, 0, 0));
+            }
+            r.bad(&e, xi);
+        }
+    }
+}
+
+#[test]
+fn cond_pair_delivery_modes() {
+    let mut m = vec![KKPM];
+    m.extend(mixes());
+    suite(&m, delivery_modes);
+}
