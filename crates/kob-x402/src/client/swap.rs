@@ -40,7 +40,7 @@ use kaspa_addresses::Address;
 use kaspa_consensus_core::tx::{Transaction, UtxoEntry};
 use kaspa_txscript::pay_to_address_script;
 use kob_protocol::build::{
-    build_batch, build_send_tokens, route_batch, Batch, Leg, Payment, SendTokens, SwapRoute, TokenPayee, TokenRecipient, TokenRef,
+    build_batch, build_send_tokens, route_batch, Batch, BidDelivery, Leg, Payment, SendTokens, SwapRoute, TokenPayee, TokenRecipient, TokenRef,
 };
 use kob_protocol::payload::Record;
 use kob_protocol::state::{AskState, BidState, TokenState};
@@ -203,7 +203,8 @@ pub fn swap_requirements(p: &SwapOfferParams) -> Result<PaymentRequirements> {
 // ------------------------------------------------------------------------------------- payer types
 
 /// One order of a quote: a plain bid of the pay token or a plain ask of the merchant token, with
-/// the UTXOs it needs (asks: their exact custody) and the base units to fill.
+/// the UTXOs it needs (asks: their exact custody; mode-1 bids holding bought tokens: their
+/// bought-custody) and the base units to fill.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderRef {
     pub leg: Leg,
@@ -213,6 +214,18 @@ impl OrderRef {
     /// A bid the payer sells `amount` base units into.
     pub fn bid(order: OrderUtxo<BidState>, amount: i64) -> Self {
         OrderRef { leg: Leg::Bid { order, amount, t: None, delivery: None } }
+    }
+    /// A mode-1 bid that holds bought tokens: `custody` is its bought-custody, exactly `bought` base units.
+    pub fn bid_with_custody(order: OrderUtxo<BidState>, custody: TokenUtxo, amount: i64) -> Self {
+        let delivery = Some(BidDelivery { custody: Some(custody), ..BidDelivery::default() });
+        OrderRef { leg: Leg::Bid { order, amount, t: None, delivery } }
+    }
+    /// The bought-custody of a bid leg, if it names one.
+    pub fn bought_custody(&self) -> Option<&TokenUtxo> {
+        match &self.leg {
+            Leg::Bid { delivery, .. } => delivery.as_ref()?.custody.as_ref(),
+            _ => None,
+        }
     }
     /// An ask the payer buys `amount` base units from (`custody` holds exactly the ask's
     /// `amountLeft`).

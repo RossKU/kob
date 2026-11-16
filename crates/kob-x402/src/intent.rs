@@ -63,7 +63,7 @@ use kob_protocol::build::{execute_intent, ExecuteIntent, ExecutionFacts, IntentA
 use kob_protocol::family::Family;
 use kob_protocol::router::{intent_program, Actor, IntentKind, IntentState, MIN_INTENT_VALUE, ROUTER_ARTIFACT_ID};
 use kob_protocol::script::{p2pk_spk, p2sh_spk};
-use kob_protocol::state::{quote_of, AskState, BidState, Round, TokenState, TIF_FOK, TIF_GTC, TIF_IOC};
+use kob_protocol::state::{quote_of, AskState, BidState, Round, TokenState, MODE_ACCUMULATE, TIF_FOK, TIF_GTC, TIF_IOC};
 use kob_protocol::tx::{FeeOptions, OrderUtxo, TokenUtxo, Utxo};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -815,8 +815,11 @@ fn check_lock(
 pub struct BookView {
     /// Asks with their exact custody.
     pub asks: Vec<(OrderUtxo<AskState>, TokenUtxo)>,
-    pub bids: Vec<OrderUtxo<BidState>>,
+    /// Bids, each with its bought-custody when it is a mode-1 bid holding bought tokens (`bought > 0`).
+    pub bids: Vec<(OrderUtxo<BidState>, Option<TokenUtxo>)>,
 }
+
+type BookBid = (OrderUtxo<BidState>, Option<TokenUtxo>);
 
 /// The keeper's parameters.
 #[derive(Clone, Debug)]
@@ -875,10 +878,28 @@ fn ask_ok(o: &OrderUtxo<AskState>, c: &TokenUtxo, token: &[u8; 32], program: Tem
         && c.state.is_plain()
 }
 
-fn bid_ok(o: &OrderUtxo<BidState>, token: &[u8; 32], program: TemplateId, lock: u64) -> bool {
-    let s = &o.state;
+/// The bought-custody is exactly what the bid's state says it holds: present, owned by the bid and of
+/// `bought` units, or absent when the bid holds none.
+fn custody_ok(o: &OrderUtxo<BidState>, c: Option<&TokenUtxo>) -> bool {
+    let held = (o.state.mode == MODE_ACCUMULATE && o.state.bought > 0).then_some(o.state.bought);
+    match (held, c) {
+        (None, None) => true,
+        (Some(b), Some(c)) => {
+            c.state.amount() == b
+                && c.state.owner() == o.utxo.covenant_id.unwrap_or_default()
+                && c.state.is_covenant_owned()
+                && c.state.is_plain()
+                && c.state.extension() == o.state.extension_commitment
+        }
+        _ => false,
+    }
+}
+
+fn bid_ok(o: &BookBid, token: &[u8; 32], program: TemplateId, lock: u64) -> bool {
+    let s = &o.0.state;
     let p = kob_protocol::artifacts::token_template(program);
-    s.token_cov_id == *token
+    custody_ok(&o.0, o.1.as_ref())
+        && s.token_cov_id == *token
         && s.token_tpl_hash == p.hash
         && s.tpl_prefix_len == p.prefix.len() as i64
         && s.tpl_suffix_len == p.suffix.len() as i64
@@ -1037,12 +1058,19 @@ fn bid_last_amount(o: &OrderUtxo<BidState>, rests: bool, missing: i64) -> Option
 
 /// Bid sweeps of `k` bids that release at least `need` sompi, fewest units sold first.
 ///
-/// The first `k - 1` bids end. A sweep sells at most `max_sell` units, and `need` is all-in.
-fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sell: i64, need: i64) -> Vec<Vec<IntentBid>> {
+/// The first `k - 1` bids end. A sweep sells at most `max_sell` units, and `need` is all-in. The
+/// first `custody` bids hold a bought-custody and the others none (the actor's shape), so `bids` lists
+/// the custody bids first.
+fn bid_sweeps(bids: &[&BookBid], k: usize, custody: usize, last_rests: bool, max_sell: i64, need: i64) -> Vec<Vec<IntentBid>> {
     let mut out: Vec<(i64, Vec<IntentBid>)> = vec![];
+    fn leg(b: &BookBid, n: i64) -> IntentBid {
+        IntentBid { order: b.0.clone(), amount: n, custody: b.1.clone() }
+    }
+    #[allow(clippy::too_many_arguments)]
     fn rec(
-        bids: &[&OrderUtxo<BidState>],
+        bids: &[&BookBid],
         k: usize,
+        custody: usize,
         start: usize,
         chosen: &mut Vec<IntentBid>,
         last_rests: bool,
@@ -1052,33 +1080,37 @@ fn bid_sweeps(bids: &[&OrderUtxo<BidState>], k: usize, last_rests: bool, max_sel
     ) {
         let sold: i64 = chosen.iter().map(|b| b.amount).sum();
         let got: i64 = chosen.iter().map(|b| bid_spend(&b.order, b.amount).unwrap_or(0)).sum();
+        let want_custody = chosen.len() < custody;
         if chosen.len() + 1 == k {
-            for b in bids {
-                if chosen.iter().any(|c| c.order.utxo == b.utxo) {
+            for b in bids.iter().filter(|b| b.1.is_some() == want_custody) {
+                if chosen.iter().any(|c| c.order.utxo == b.0.utxo) {
                     continue;
                 }
-                let Some(n) = bid_last_amount(b, last_rests, need - got) else { continue };
+                let Some(n) = bid_last_amount(&b.0, last_rests, need - got) else { continue };
                 let s2 = sold + n;
                 if s2 <= max_sell {
                     let mut legs = chosen.clone();
-                    legs.push(IntentBid { order: (*b).clone(), amount: n, custody: None });
+                    legs.push(leg(b, n));
                     out.push((s2, legs));
                 }
             }
             return;
         }
         for i in start..bids.len() {
-            let Some(n) = bid_prefix_amount(bids[i]) else { continue };
+            if bids[i].1.is_some() != want_custody {
+                continue;
+            }
+            let Some(n) = bid_prefix_amount(&bids[i].0) else { continue };
             if sold + n > max_sell {
                 continue;
             }
-            chosen.push(IntentBid { order: bids[i].clone(), amount: n, custody: None });
-            rec(bids, k, i + 1, chosen, last_rests, max_sell, need, out);
+            chosen.push(leg(bids[i], n));
+            rec(bids, k, custody, i + 1, chosen, last_rests, max_sell, need, out);
             chosen.pop();
         }
     }
     let mut chosen = vec![];
-    rec(bids, k, 0, &mut chosen, last_rests, max_sell, need, &mut out);
+    rec(bids, k, custody, 0, &mut chosen, last_rests, max_sell, need, &mut out);
     out.sort_by_key(|(s, _)| *s);
     out.into_iter().map(|(_, l)| l).collect()
 }
@@ -1120,12 +1152,16 @@ pub fn plan_executions(
     };
     asks.sort_by(|a, b| a.0.state.price.cmp(&b.0.state.price).then(a.0.utxo.block_daa_score.cmp(&b.0.utxo.block_daa_score)));
     asks.truncate(kp.max_candidates);
-    let mut bids: Vec<&OrderUtxo<BidState>> = match f.state.locked_token().zip(f.state.locked_program()) {
-        Some((t, p)) => book.bids.iter().filter(|o| !exclude.contains(&op(&o.utxo)) && bid_ok(o, &t, p, lock_time)).collect(),
+    let mut bids: Vec<&BookBid> = match f.state.locked_token().zip(f.state.locked_program()) {
+        Some((t, p)) => book.bids.iter().filter(|o| !exclude.contains(&op(&o.0.utxo)) && bid_ok(o, &t, p, lock_time)).collect(),
         None => vec![],
     };
-    bids.sort_by(|a, b| b.state.price.cmp(&a.state.price).then(a.utxo.block_daa_score.cmp(&b.utxo.block_daa_score)));
-    bids.truncate(kp.max_candidates);
+    bids.sort_by(|a, b| b.0.state.price.cmp(&a.0.state.price).then(a.0.utxo.block_daa_score.cmp(&b.0.utxo.block_daa_score)));
+    // The custody bids first, as the custody actors take them, each pool cut to the candidate limit.
+    let (mut with, mut without): (Vec<&BookBid>, Vec<&BookBid>) = bids.into_iter().partition(|b| b.1.is_some());
+    with.truncate(kp.max_candidates);
+    without.truncate(kp.max_candidates);
+    let bids: Vec<&BookBid> = with.into_iter().chain(without).collect();
     let base = |asks: Vec<IntentAsk>, bids: Vec<IntentBid>, merchant_kas: u64| ExecuteIntent {
         actor: f.actor.clone(),
         state: f.state.clone(),
@@ -1154,7 +1190,7 @@ pub fn plan_executions(
             let lock_amt = sellable(f);
             // One filler when the last bid ends.
             let need = *merchant_kas + fee_reserve + if shape.last_bid_rests { 0 } else { fillers(1) } - f.intent.amount as i64;
-            for legs in bid_sweeps(&bids, shape.bids, shape.last_bid_rests, (*max_sell).min(lock_amt), need.max(1)) {
+            for legs in bid_sweeps(&bids, shape.bids, actor.custody, shape.last_bid_rests, (*max_sell).min(lock_amt), need.max(1)) {
                 out.push(base(vec![], legs, *merchant_kas as u64));
             }
         }
@@ -1172,7 +1208,7 @@ pub fn plan_executions(
                 let need = pay + f.merchant_value as i64 + fee_reserve + fillers((shape.asks + 1).saturating_sub(queued))
                     - f.intent.amount as i64;
                 for bid_legs in
-                    bid_sweeps(&bids, shape.bids, shape.last_bid_rests, (*max_sell_a).min(lock_amt), need.max(1)).into_iter().take(4)
+                    bid_sweeps(&bids, shape.bids, actor.custody, shape.last_bid_rests, (*max_sell_a).min(lock_amt), need.max(1)).into_iter().take(4)
                 {
                     out.push(base(ask_legs.clone(), bid_legs, 0));
                 }

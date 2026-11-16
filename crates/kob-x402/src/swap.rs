@@ -17,7 +17,7 @@
 //!
 //! `kob_protocol::build::{Batch, SwapRoute}` builds the transaction. Its inputs are, in order:
 //! - the order inputs, where input `i` is paid at output `i` (the anti-aliasing layout);
-//! - the token inputs, which are ask custodies and payer tokens;
+//! - the token inputs, which are ask custodies, mode-1 bids' bought-custodies and payer tokens;
 //! - the payer's KAS funding.
 //!
 //! The outputs are the positional slots `0..k`, order continuations and custody remainders, KAS
@@ -31,7 +31,8 @@
 //!   A payer KAS input is a P2PK UTXO without a covenant. An order input is a `KobAsk` or
 //!   `KobBid` of either family whose redeem script matches the template and hashes to the UTXO
 //!   script. A token input is an allowlisted token, either a payer's key-owned token or the exact
-//!   custody of an ask.
+//!   custody of an ask or the bought-custody of a mode-1 bid that holds bought tokens. Such a bid
+//!   has exactly one, holding exactly `bought`.
 //! - The order inputs are the first `k` inputs, and outputs `0..k` are their positional slots.
 //!   Order continuations, custody remainders and bid refunds are claimed by their orders too. A
 //!   claimed output never counts as merchant gain, so a fill of the merchant's own order cannot
@@ -347,6 +348,8 @@ pub struct LegFact {
     pub units: u128,
     /// Token covenant id of the order.
     pub token: [u8; 32],
+    /// The custody input the leg spends: an ask's exact custody, or a mode-1 bid's bought-custody.
+    pub custody: Option<Outpoint>,
 }
 
 /// What the payer gives up and which orders carry the payment.
@@ -383,13 +386,17 @@ struct Leg {
     /// Base units filled.
     amount: i64,
     token: [u8; 32],
-    /// An ask's custody in base units, and 0 for a bid.
-    amount_left: i64,
+    /// The exact custody the leg spends, in base units: an ask's `amountLeft`, a mode-1 bid's `bought`
+    /// (its bought-custody), else 0.
+    custody_need: i64,
     tif: i64,
     maker: [u8; 32],
+    /// An ask's `amountLeft`, else 0.
+    amount_left: i64,
     /// For a bid, the most KAS its terminal fill can owe the maker as a refund. 0 for an ask.
     ///
-    /// It is the escrow less the delivery carrier and less the least the fill can spend, which is
+    /// It is the escrow less the delivery carrier (none once the bid holds its bought-custody) and
+    /// less the least the fill can spend, which is
     /// `BidState::spend_at` at the lowest quote. The bid covenant puts the refund at output
     /// `M - 1 - input`, where `M` is the number of outputs. That is a plain P2PK output of the
     /// maker holding at least what the fill leaves. The verifier only uses this cap to know whether
@@ -403,7 +410,7 @@ enum InKind {
     PayerKas([u8; 32]),
     /// A payer's key-owned token input, a KCC-20 P2PK owner or a key-held KRON token.
     PayerToken([u8; 32], TokenState),
-    /// The custody token of an ask order.
+    /// The custody token of an ask order, or the bought-custody of a mode-1 bid.
     Custody(TokenState),
 }
 
@@ -716,6 +723,7 @@ pub fn verify_swap_facts(
                         kind: LegKind::Ask,
                         amount,
                         token: t.covenant_id,
+                        custody_need: s.amount_left,
                         amount_left: s.amount_left,
                         tif: s.tif,
                         maker: s.maker,
@@ -737,6 +745,9 @@ pub fn verify_swap_facts(
                         Some(s.extension_commitment),
                     )?;
                     check_scale(s.scale)?;
+                    let bought = state.bought_custody().unwrap_or(0);
+                    // A bid that holds its bought-custody moves no carrier on a fill.
+                    let carrier = if bought > 0 { 0 } else { s.delivery_carrier };
                     Leg {
                         input: i,
                         outpoint,
@@ -744,6 +755,7 @@ pub fn verify_swap_facts(
                         kind: LegKind::Bid,
                         amount,
                         token: t.covenant_id,
+                        custody_need: bought,
                         amount_left: 0,
                         tif: s.tif,
                         maker: s.maker,
@@ -752,7 +764,7 @@ pub fn verify_swap_facts(
                             let spend = s.spend_at(amount, p_min).unwrap_or(0).max(0);
                             i64::try_from(entry.amount)
                                 .ok()
-                                .and_then(|v| v.checked_sub(spend)?.checked_sub(s.delivery_carrier))
+                                .and_then(|v| v.checked_sub(spend)?.checked_sub(carrier))
                                 .unwrap_or(0)
                                 .max(0)
                         },
@@ -793,30 +805,37 @@ pub fn verify_swap_facts(
     if legs.iter().map(|l| l.cov).collect::<BTreeSet<_>>().len() != k {
         return Err(unsupported("an order covenant id appears twice"));
     }
-    // Custody. Each ask has exactly one input holding its exact custody, and there are no strays.
+    // Custody. Each ask, and each mode-1 bid holding bought tokens, has exactly one input holding its
+    // exact custody, and there are no strays.
     let mut custody_of: BTreeMap<usize, usize> = BTreeMap::new();
     for (i, kind) in kinds.iter().enumerate() {
         if let InKind::Custody(st) = kind {
-            let li = legs.iter().position(|l| l.kind == LegKind::Ask && l.cov == st.owner()).ok_or_else(|| {
+            let li = legs.iter().position(|l| l.cov == st.owner()).ok_or_else(|| {
                 X402Error::payload(
                     Diag::TokenOwnerScheme,
                     format!("input {i}: token owned by an order this transaction does not fill"),
                 )
             })?;
             let l = &legs[li];
+            if l.custody_need == 0 {
+                return Err(unsupported(format!("input {i}: a token owned by a bid that holds no bought-custody (a stray)")));
+            }
             if entries[i].covenant_id.map(|h| h.as_bytes()) != Some(l.token) {
                 return Err(X402Error::payload(Diag::TokenOwnerScheme, format!("input {i}: custody of another token than its order")));
             }
-            if st.amount() != l.amount_left {
+            if st.amount() != l.custody_need {
                 return Err(unsupported(format!("input {i}: a token owned by an order that is not its exact custody (a stray)")));
             }
             if custody_of.insert(li, i).is_some() {
-                return Err(unsupported("an ask has two custody inputs"));
+                return Err(unsupported("an order has two custody inputs"));
             }
         }
     }
-    if legs.iter().enumerate().any(|(li, l)| l.kind == LegKind::Ask && !custody_of.contains_key(&li)) {
-        return Err(unsupported("an ask order without its custody input"));
+    if let Some(l) = legs.iter().enumerate().find(|(li, l)| l.custody_need > 0 && !custody_of.contains_key(li)).map(|(_, l)| l) {
+        return Err(unsupported(match l.kind {
+            LegKind::Ask => "an ask order without its custody input",
+            LegKind::Bid => "a mode-1 bid that holds bought tokens without its bought-custody input",
+        }));
     }
     // Leg roles against the pay asset.
     for l in &legs {
@@ -1186,7 +1205,17 @@ pub fn verify_swap_facts(
     let facts = SwapFacts {
         pay_asset: route.pay_asset.clone(),
         orders,
-        legs: legs.iter().map(|l| LegFact { outpoint: l.outpoint, kind: l.kind, units: l.amount as u128, token: l.token }).collect(),
+        legs: legs
+            .iter()
+            .enumerate()
+            .map(|(li, l)| LegFact {
+                outpoint: l.outpoint,
+                kind: l.kind,
+                units: l.amount as u128,
+                token: l.token,
+                custody: custody_of.get(&li).map(|&i| outpoint_of(&tx.inputs[i])),
+            })
+            .collect(),
         payer_spent,
         payer_keys: payer_keys.into_iter().collect(),
         merchant_output: mj as u32,

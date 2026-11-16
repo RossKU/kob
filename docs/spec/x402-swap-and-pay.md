@@ -230,7 +230,8 @@ commitment):
 
 ```text
 input[0..k)   order inputs, k >= 1 (bids, asks); the order at input i owns output slot i
-input[k..)    order custody token inputs (ask legs: token UTXOs owned by an order's covenant id),
+input[k..)    order custody token inputs (ask legs and mode-1 bid legs that hold bought tokens: token
+              UTXOs owned by an order's covenant id),
               payer token inputs of the pay asset A (key-owned; none when the payer pays KAS),
               payer P2PK KAS inputs (required when A is a KRON token: they authorise it)
 
@@ -287,7 +288,10 @@ Every input MUST be exactly one of:
    the redeem script. An unknown covenant or template MUST be rejected (`unknown_order_template`),
    never skipped (a pinned template of an unsupported order kind is `route_unsupported`);
 2. an **order custody token input**: a token UTXO of an allowlisted token whose owner (KCC-20 scheme
-   `0x04`, KRON `id_type 2`) is the covenant id of an order input of the same transaction;
+   `0x04`, KRON `id_type 2`) is the covenant id of an order input of the same transaction. An ask has
+   exactly one, holding exactly its `amountLeft`. A mode-1 bid (`bid-delivery-spec.md`) with
+   `bought > 0` has exactly one, its bought-custody, holding exactly `bought`. A bid with `bought = 0`
+   has none. Any other custody input is a stray (`route_unsupported`);
 3. a **payer token input** of `route.payAsset` (absent when it is `KAS`): a key-owned UTXO (KCC-20
    owner scheme `0x00`, KRON `id_type 3`) of an allowlisted token with the pinned program and
    extension commitment. A KRON token input requires a payer P2PK input of the same key in the transaction (the covenant checks
@@ -325,7 +329,7 @@ Compute the claim function of section 4 from trusted data:
 - an ask that ends with tokens unsold (IOC) returns them to its maker. The return is a token output
   held by the maker's key, at the index of the ask's custody input. It is claimed (IOC return);
 - a bid at input `i` that ends in the transaction (no continuation) may owe its maker the KAS it
-  did not spend, beyond its delivery carrier. From 1 KAS (`REFUND_MIN`) up, the covenant sends
+  did not spend, beyond its delivery carrier (none once it holds its bought-custody). From 1 KAS (`REFUND_MIN`) up, the covenant sends
   that KAS to P2PK(maker) at output `M-1-i`, where `M` is the number of outputs. The covenant
   only requires that output to hold at least the remainder. So when the remainder can reach 1 KAS
   and output `M-1-i` pays P2PK(maker), it is claimed whatever its value (bid refund). A surplus
@@ -909,7 +913,7 @@ redirected outputs rejected by the router; the payer's cancel; the cancel budget
 its deadline, rejected 1 ms before it and with its KAS or tokens redirected),
 `crates/kob-tests/tests/audit/c4_security_tests.rs` (the cancel's lock owner check on KCC-20 and KRON, and its refusal of a
 borrow-enabled or minter lock, each with its ablation),
-`crates/kob-x402/tests/intent.rs` (payer SDK, verifier and keeper over the in-memory chain; `intent-neg-hashtype`
+`crates/kob-x402/tests/intent.rs` (payer SDK, custody actors, verifier and keeper over the in-memory chain; `intent-neg-hashtype`
 in `intent_creation_payer_signatures_must_use_sighash_all`) and
 `crates/kobd/tests/x402_intents.rs` (the facilitator end to end). The router's own covenant rules
 are covered by `crates/kob-tests/tests/argent/argent_router_tests.rs` (positive, negative and ablation cases).
@@ -927,6 +931,8 @@ are covered by `crates/kob-tests/tests/argent/argent_router_tests.rs` (positive,
 | `intent-neg-hashtype` | a correctly signed creation whose P2PK input or token owner witness uses SIGHASH_NONE, SIGHASH_SINGLE or an ANYONECANPAY form, or a trailing byte that is no hash type | `token_owner_scheme` |
 | `intent-neg-broadcast` | the payer broadcast the creation before submitting it | `invalid_kaspa_exact_utxo` |
 | `intent-neg-program` | a pay token off the intent program's token program | `route_unsupported` |
+| `intent-pos-custody` | a custody actor (`TokenToKas_sell_c`, ...) executed into a mode-1 bid through its bought-custody | valid |
+| `intent-neg-custody` | the book's custody bids and the actor's custody count disagree; a custody that is not the exact `bought`, or owned by another | `intent_not_executable` |
 | `intent-neg-book` | no order fits the intent's shape and limits | `intent_not_executable`, nothing broadcast |
 | `intent-end-deadline` | nothing executable until the deadline; the payer cancels | `intent_expired`; the cancel returns everything |
 | `intent-end-expiry` | nothing executable until the deadline; the payer does nothing | `intent_expired`; the facilitator's expiry returns the KAS (less at most `EXPIRE_MAX_FEE`) and the tokens to the payer |
@@ -1162,6 +1168,8 @@ engine-validated chain; the KRON and KaspaCom-template cases; `swap-neg-hashtype
 | `swap-neg-order-later` | an order input at index `k` or later | `route_aliasing` |
 | `swap-neg-unknown` | a covenant that is not a pinned KOB template, as an input; a conditional or if-done order | `unknown_order_template`; `route_unsupported` |
 | `swap-neg-extra-output` | an unclaimed output that is neither merchant, payer token change nor payer KAS change | `invalid_payload` (`invalid_kaspa_exact_payment_output`) |
+| `swap-pos-custody` | A to KAS through a mode-1 bid that holds bought tokens, continuing or ending (with a refund below the delivery carrier) | valid |
+| `swap-neg-custody` | such a bid without its custody input; a second or inexact token owned by the bid; a token owned by a bid that holds none | `route_unsupported` |
 | `swap-neg-borrow` | a borrow-enabled payer, custody or merchant token UTXO | `token_borrow_enabled` |
 | `swap-neg-payasset` | `route.payAsset` outside `payAssets`; a payer token of another token | `pay_asset_not_accepted` |
 | `swap-neg-underpay` / `swap-neg-overpay` | merchant output below or above `amount` | `underpayment` / `overpayment` |
