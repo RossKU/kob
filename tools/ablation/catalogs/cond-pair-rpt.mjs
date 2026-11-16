@@ -25,8 +25,9 @@ const S_PIN = `                require(tx.outputs[outIdx].scriptPubKey == byte[]
                 )));
 `;
 
-const MAKER_DELIVERY = `                require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
-                    oPre + tokenState(oFam, dOut, byte[32](maker), false, oGx) + oSuf
+// the maker's T output pin (an ASK exit's profit is in T; the BID exit's S profit under dS is a separate pin)
+const MAKER_DELIVERY = `                require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                    tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)
                 )));
 `;
 
@@ -34,10 +35,10 @@ export const mutations = [
   // ---- the re-arm pays the maker its profit
   { id: 'CR1', file: F, test: T, expect: ['NCR1'], note: 'a re-arming take-profit pays the maker exactly its profit dOut at output i (ASK exit: tOut - budget). Removing the maker-delivery pin lets the re-arm skim the profit.', edits: [del(MAKER_DELIVERY)] },
   // ---- a booked exit takes profit without its entry only from rptUntil
-  { id: 'CR2', file: F, test: 'cond_rpt_until', expect: ['NCRU'], note: 'a booked exit (parent set) takes profit on leg 0 without its entry present only once tx.daa >= rptUntil; before that it must run together with its entry merge', edits: [del('                            require(tx.daa >= rptUntil);\n')] },
+  { id: 'CR2', file: F, test: 'cond_rpt_until', expect: ['NCRU'], note: 'a booked exit (parent set) takes profit on leg 0 without its entry present only once tx.daa >= rptUntil; before that it must run together with its entry merge', edits: [del('                        require(tx.daa >= rptUntil);\n')] },
   // ---- completion (p2t_ifd2): the repeat rules of the exit (test fns cond_rpt_rules, ifd_merge_rules)
   { id: 'CR3', file: F, test: TR, expect: ['NCR4'], note: 'update: a booked exit is never armed next to its repeat entry (here: next to a fill of the entry)', edits: [rx(A_UPDATE, /require\(OpCovInputCount\(parent\) == 0\);/, '')] },
-  { id: 'CR4', file: F, test: TR, expect: ['NCR5'], note: "the stop leg never re-arms: a booked exit's stop fill is refused next to its entry (here its merge: the matcher would fund a re-arm after a stop-loss)", edits: [del('                        require(present == 0);\n')] },
+  { id: 'CR4', file: F, test: TR, expect: ['NCR5'], note: "the stop leg never re-arms: a booked exit's stop fill is refused next to its entry (here its merge: the matcher would fund a re-arm after a stop-loss)", edits: [del('                    require(present == 0);\n')] },
   { id: 'CR6', file: F, test: TR, expect: ['NCR9'], inputOnly: ['NCR9'], note: "the entry's sigscript starts with an 8-byte push (a 9-byte push carrying the merge argument refused; the entry's own byte[8] argument refuses it too)", edits: [del('                    require(OpTxInputScriptSigSubstr(pin, 0, 1) == byte[](0x08));\n')] },
   { id: 'CR7', file: F, hold: { ifd_merge_rules: ['NIX7e'] }, note: "the entry's pushed merge argument names this exit and its n. DEFENCE IN DEPTH with the entry's check of this exit's push (KobIfdPair IF110): an entry merging m != n stays rejected by the entry (NIX7e); ifd-pair IF110c removes both", edits: [del(PUSH_X)] },
   { id: 'CR8', file: F, test: TR, expect: ['NCR6'], inputOnly: ['NCR6'], note: 're-arm: the maker profit is positive (a committed take-profit at the entry price gives 0: refused; a 0-amount token output is also refused by the KRON program, so on KCC/KRON only the exit input flips)', edits: [del('                    require(dOut > 0);\n')] },

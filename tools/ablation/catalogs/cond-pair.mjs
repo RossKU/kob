@@ -51,6 +51,7 @@ const CUS = 'cond_pair_custody';
 const FIL = 'cond_pair_fills';
 const CAR = 'cond_pair_carriers';
 const MISC = 'cond_pair_evidence_misc';
+const DM = 'cond_pair_delivery_modes';
 // AUD-EXT: the evidence of another extension commitment (another kob-tests binary)
 const AUDC = 'audit_pair_sec_tests::aud_ext_cond_pair_refuses_evidence_of_another_extension_commitment';
 
@@ -96,7 +97,7 @@ export const mutations = [
   { id: 'C2', file: F, test: LIF, expect: both('NC82'), inputOnly: both('NC82'), note: 'a refund needs a positive custody (a zero custody leaves output i unpinned)', edits: [del('                require(custody > 0);\n')] },
   // ---- strays of both tokens (fill and refund share the top-of-entry guards)
   { id: 'G1', file: F, run: { [SET]: ['NC06a', 'NC06b', 'NC08a', 'NC08b'], [UP]: ['NC76'] }, note: 'no S input owned by this id but the custody (fill, refund; the update spends none)', edits: [del('        noStrays(sCovId, selfId, cust, sOff);\n')] },
-  { id: 'G2', file: F, run: { [SET]: ['NC07a', 'NC07b', 'NC09a', 'NC09b'], [UP]: ['NC77'] }, note: 'no T input owned by this id', edits: [del('        noStrays(tCovId, selfId, 0 - 1, tOff);\n')] },
+  { id: 'G2', file: F, run: { [SET]: ['NC07a', 'NC07b', 'NC09a', 'NC09b'], [UP]: ['NC77'] }, note: 'no T input owned by this id', edits: [del('        noStrays(tCovId, selfId, tc, tOff);\n')] },
   { id: 'G3', file: F, test: UP, expect: ['NC76'], note: 'an update spends no S input of the order (cust = -1 so the custody is not exempted)', edits: [rep('        if (update) { cust = 0 - 1; }', '        if (update) { cust = custIn; }')] },
   // the unrolled scan slot by slot (one shared function: the T scan of a TP fill witnesses each line), and its bound (a 9th
   // input of a KCC-20 token is beyond the scan; the token program refuses it on its own input, so only the order flips)
@@ -111,8 +112,8 @@ export const mutations = [
   // ---- the maker's token at output i and the S outputs
   { id: 'O1', file: F, run: { [SET]: both('NC11'), [LIF]: both('NC84') }, note: "the maker's token / the S output pinned (owner, amount, index)", edits: [del('                require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                    trs.slice(0, sPre) + tokenState(sFamily, outAmount, outOwner, rest, gx) + trs.slice(sPre + sLen, trs.length)\n                )));\n')] },
   { id: 'O2', file: F, test: SET, expect: both('NC16'), note: 'the S output carries the S covenant', edits: [del('                require(OpOutputCovenantId(outIdx) == sCovId);\n')] },
-  { id: 'O3', file: F, test: SET, expect: both('NC13'), note: "the maker's token output at i is pinned (delivery / profit)", edits: [del('                require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                    oPre + tokenState(oFam, dOut, byte[32](maker), false, oGx) + oSuf\n                )));\n')] },
-  { id: 'O4', file: F, test: SET, expect: both('NC14'), note: "the maker's token output carries its token covenant", edits: [del('                require(OpOutputCovenantId(self) == oTok);\n')] },
+  { id: 'O3', file: F, test: SET, expect: both('NC13'), note: "the maker's token output at i is pinned (delivery / profit; the pin is now split: this is the T pin, the BID exit's S profit pin under dS is a separate check)", edits: [del('                require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                    tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)\n                )));\n')] },
+  { id: 'O4', file: F, test: SET, expect: both('NC14'), note: "the maker's token output carries its token covenant (split like O3: this is the T delivery's)", edits: [del('                require(OpOutputCovenantId(dIdx) == tCovId);\n')] },
   { id: 'K1', file: F, test: SET, expect: both('NC10'), note: 'one continuation on a partial fill', edits: [rx('        if (cont) {', /require\(OpCovOutputCount\(selfId\) == 1\);/, 'require(true);')] },
   // ---- evidence. rd reads the A leg (mode 0) and the pair order (mode 1); evLeg reads the B leg (mode 0); tplState
   // authenticates both. Scenarios that doctor the evidence order's own state also fail that order's input (inputOnly):
@@ -198,7 +199,7 @@ export const mutations = [
   { id: 'C4k', file: F, test: CUS, expect: ['NC101sk'], note: 'KCC-20 custody of owner scheme 0x04, borrowing disabled', edits: [del('                require(tin.slice(43, 46) == byte[](0x040100));\n')] },
   { id: 'C10k', file: F, test: CUS, expect: ['NC107sk'], note: "KCC-20 custody of the extension commitment sExt (another commitment is another token; audit 2026-10-13: before, only kob_pair_custody_ext_tests asserted it)", edits: [del('                require(byte[32](tin.slice(80, 112)) == sExt);\n')] },
   { id: 'C6k', file: F, test: CUS, expect: ['NC102sk'], note: 'sFamily is 1 or 2 (hostile field read as KCC-20)', edits: [del('                require(sFamily == FAM_KCC20);\n')] },
-  { id: 'C6tk', file: F, test: CUS, expect: ['NC103tk'], note: 'tFamily is 1 or 2 (hostile field read as KCC-20)', edits: [del('            require(tFamily == FAM_KCC20);\n')] },
+  { id: 'C6tk', file: F, test: CUS, expect: ['NC103tk'], note: 'tFamily is 1 or 2 (hostile field read as KCC-20)', edits: [rep('            tOff = 1 - 46 - tSuf;\n        } else {\n            require(tFamily == FAM_KCC20);\n', '            tOff = 1 - 46 - tSuf;\n        } else {\n')] },
   { id: 'C0', file: F, test: CUS, expect: both('NC104'), note: 'the custody carries the S covenant (not a UTXO of another token owned by the order)', edits: [del('            require(OpInputCovenantId(custIn) == sCovId);\n')] },
   { id: 'CP2SH', file: F, test: CUS, expect: both('NC105'), note: 'the custody is a P2SH spend of its redeem (a planted UTXO of the S covenant id)', edits: [rx('    function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);/, 'require(true);')] },
   { id: 'CHASH', file: F, test: CUS, expect: both('NC106'), note: "the custody's template is S's (a planted look-alike P2SH)", edits: [rx('    function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
@@ -227,15 +228,15 @@ export const mutations = [
   { id: 'F20', file: F, test: FIL, expect: ['NC117'], note: 'side is 1 or 2 (a fill of hostile side 3)', edits: [rx('                int sA = tScale;', /require\(side == SIDE_BID\);/, 'require(true);')] },
   { id: 'F21', file: F, hold: { [MISC]: ['NC142'] }, note: 'side is 1 or 2 in the arming block: defence in depth (pairEv reads a side-3 order as an ASK, so its evidence token check refuses the BID evidence)', edits: [rx('            int sB = tScale;', /require\(side == SIDE_BID\);/, 'require(true);')] },
   // ---- the T template source, rests, returns, carriers
-  { id: 'T1', file: F, test: CAR, expect: both('NC130'), inputOnly: both('NC130'), hold: { [CAR]: both('NC131') }, note: "the T template source's hash (a planted look-alike; the T program also refuses the bound look-alike output)", edits: [del('                    require(blake3(byte[](tPre as byte[8]) + oPre + byte[](tSuf as byte[8]) + oSuf) == tTplHash);\n')] },
-  { id: 'T2', file: F, hold: { [CAR]: both('NC131') }, note: 'the T template source carries the T covenant: defence in depth (any T-covenant input is a genuine T program input whose bytes the hash pins; another program fails the hash)', edits: [del('                    require(OpInputCovenantId(tTplIn) == tCovId);\n')] },
-  { id: 'K2', file: F, test: CAR, expect: both('NC132'), note: 'the continuation is this script with the new mutable window', edits: [del('            require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, newArmed, cLeft, cCust));\n')] },
+  { id: 'T1', file: F, test: CAR, expect: both('NC130'), inputOnly: both('NC130'), hold: { [CAR]: both('NC131') }, note: "the T template source's hash (a planted look-alike; the T program also refuses the bound look-alike output)", edits: [del('                require(blake3(byte[](tPre as byte[8]) + tr.slice(0, tPre) + byte[](tSuf as byte[8]) + tr.slice(tPre + tLen, tSize)) == tTplHash);\n')] },
+  { id: 'T2', file: F, hold: { [CAR]: both('NC131') }, note: 'the T template source carries the T covenant: defence in depth (any T-covenant input is a genuine T program input whose bytes the hash pins; another program fails the hash)', edits: [del('                require(OpInputCovenantId(tTplIn) == tCovId);\n')] },
+  { id: 'K2', file: F, test: CAR, expect: both('NC132'), note: 'the continuation is this script with the new mutable window', edits: [del('            require(tx.outputs[selfOut].scriptPubKey == contSpk(newStop, newArmed, cLeft, cCust, cBought));\n')] },
   { id: 'K3', file: F, test: CAR, expect: both('NC133'), note: 'the continuation keeps its floor (order value - deliveryCarrier - tip)', edits: [del('            require(tx.outputs[selfOut].value >= floor);\n')] },
-  { id: 'K4', file: F, test: CAR, expect: both('NC134'), note: 'the custody rest keeps its carrier', edits: [rx('                    floor = tx.inputs[self].value - deliveryCarrier - tipKas;', /require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, 'require(true);')] },
-  { id: 'K5', file: F, test: CAR, expect: both('NC135'), note: 'the delivery carries deliveryCarrier', edits: [rx('                    floor = tx.inputs[self].value - deliveryCarrier - tipKas;', /require\(tx\.outputs\[self\]\.value >= deliveryCarrier\);/, 'require(true);')] },
+  { id: 'K4', file: F, test: CAR, expect: both('NC134'), note: 'the custody rest keeps its carrier', edits: [rx('                    floor = tx.inputs[self].value - released - tipKas;', /require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, 'require(true);')] },
+  { id: 'K5', file: F, test: CAR, expect: both('NC135'), note: 'the delivery carries deliveryCarrier', edits: [rx('                    floor = tx.inputs[self].value - released - tipKas;', /require\(tx\.outputs\[self\]\.value >= haveKas \+ onD\);/, 'require(true);')] },
   { id: 'K6', file: F, test: CAR, expect: ['NC136a'], note: 'a return keeps its carrier', edits: [rx('                            // what is left of the custody returns', /require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, 'require(true);')] },
-  { id: 'K7', file: F, test: CAR, expect: ['NC136b'], note: 'done with a return: the maker gets the order value but the tip', edits: [del('                            require(tx.outputs[self].value >= tx.inputs[self].value - tipKas);\n')] },
-  { id: 'K8', file: F, test: CAR, expect: both('NC137'), note: 'sold out: every carrier back to the maker but the tip', edits: [del('                            require(tx.outputs[self].value >= carriers - tipKas);\n')] },
+  { id: 'K7', file: F, test: CAR, expect: ['NC136b'], note: 'done with a return: the maker gets the order value but the tip (now one `>= keep` check after the outAmount branch, shared with K8; removed here only for outAmount > 0)', edits: [rep('                        require(tx.outputs[self].value >= keep);\n', '                        if (outAmount == 0) { require(tx.outputs[self].value >= keep); }\n')] },
+  { id: 'K8', file: F, test: CAR, expect: both('NC137'), note: 'sold out: every carrier back to the maker but the tip (now one `>= keep` check after the outAmount branch, shared with K7; removed here only for outAmount == 0)', edits: [rep('                        require(tx.outputs[self].value >= keep);\n', '                        if (outAmount > 0) { require(tx.outputs[self].value >= keep); }\n')] },
   { id: 'Q7', file: F, test: CAR, expect: ['NC138'], note: 'a rest keeps something in the custody (no continuation with an empty escrow)', edits: [del('                    require(outAmount > 0);\n')] },
   // ---- evidence mode argument, the B quote, trailing gap / step
   { id: 'EVMODE', file: F, test: MISC, expect: ['NC140'], note: 'evMode is 0 or 1', edits: [del('            require(evMode == 1);\n')] },
@@ -248,4 +249,9 @@ mutations.push(
   // both template checks of the evidence removed: the order's own counterparties (wrong side) and the order / a token
   // input / a P2PK input named as evidence
   { id: 'EVTPL', file: F, hold: { [EV0]: both('NC26'), [EXP]: ['NC54', 'NC55', 'NC56'] }, note: 'evidence template hash and P2SH both removed: the wrong side (the order own counterparties) and the order / a token / a P2PK input are still refused (state read at the other template offsets fails the token / scale identity; the fill push refuses token / P2PK inputs)', edits: [rx('    function tplState(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {', /require\(tx\.inputs\[idx\]\.scriptPubKey == byte\[\]\(new ScriptPubKeyP2SHFromRedeemScript\(rs\)\)\);\n\s*require\(blake3\([\s\S]*?\) == tpl\);/, 'require(true);')] },
+);
+
+// delivery modes (docs/design/bid-delivery-spec.md; WP-C3): a booked exit re-arming fill delivers in mode 0
+mutations.push(
+  { id: "DM-CP1", file: F, test: DM, expect: ["yNM82"], inputOnly: ["yNM82"], note: "a re-arming fill (the entry present) is mode 0", edits: [rep("                        rearm = true;\n                        require(mode == 0);\n", "                        rearm = true;\n")] },
 );

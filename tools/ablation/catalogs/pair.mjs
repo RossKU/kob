@@ -39,19 +39,20 @@ const PAR = 'pair_params';
 const LIF = 'pair_lifecycle';
 const OUT = 'pair_outputs';
 const CAR = 'pair_carriers';
+const DM = 'pair_delivery_modes';
 // the KobCondPair stops armed by a fake pair quote (mode-1 evidence; KobCondPair is recompiled against the mutated KobPair)
 const CFQ = 'kob_cond_pair_tests::cond_pair_evidence_fake_quotes';
 
 const both = id => [`${id}a`, `${id}b`];
-const T_PIN = `            require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
-                tpre + tokenState(tFamily, tOut, byte[32](maker), false, byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]), byte[](tExt)) + tsuf
+const T_PIN = `            require(tx.outputs[dIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                tr.slice(0, tPre) + dSt + tr.slice(tPre + tLen, tr.length)
             )));
 `;
 const S_PIN = `            require(tx.outputs[outIdx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
                 trs.slice(0, sPre) + tokenState(sFamily, outAmount, outOwner, rest, guard, ext) + trs.slice(sPre + sLen, trs.length)
             )));
 `;
-const T_STRAYS = '            noStrays(tCovId, selfId, -1, tOff);\n';
+const T_STRAYS = '            noStrays(tCovId, selfId, tc, tOff);\n';
 
 export const mutations = [
   // ---- identity of the order and of its custody
@@ -72,10 +73,10 @@ export const mutations = [
   { id: 'C8', file: F, test: SET, expect: ['NP06', 'NP07'], note: 'exact custody: held == custody (an extra unit to the matcher)', edits: [del('        require(held == custody);\n')] },
   // ---- strays of both tokens
   { id: 'G1', file: F, run: { [STR]: ['NP30a0', 'NP30a1', 'NP30a2', 'NP30b0', 'NP30b1', 'NP30b2', ...both('NP32')] }, note: 'no S input owned by this id but the custody (rest, IOC, close, refund)', edits: [del('        noStrays(sCovId, selfId, custIn, sOff);\n')] },
-  { id: 'G2', file: F, run: { [STR]: ['NP31a0', 'NP31a1', 'NP31a2', 'NP31b0', 'NP31b1', 'NP31b2'] }, note: 'no T input owned by this id in a fill (rest, IOC, close)', edits: [del(T_STRAYS)] },
+  { id: 'G2', file: F, run: { [STR]: ['NP31a0', 'NP31a1', 'NP31a2', 'NP31b0', 'NP31b1', 'NP31b2'], [DM]: ['atkNM10', 'btkNM10'] }, note: 'no T input owned by this id in a fill (rest, IOC, close) but the named bought-custody (mode 1: NM10)', edits: [del(T_STRAYS)] },
   ...[0, 1, 2, 3, 4, 5, 6, 7].map(k => ({ id: `GS${k}`, file: F, test: STR, expect: [`NP34t${k}`], note: `noStrays scan slot ${k}: a stray of the order at the input of slot ${k} of its token`, edits: [rep(`require(byte[32](OpTxInputScriptSigSubstr(x${k}, e${k}, e${k} + 32)) != me);`, 'require(true);')] })),
   { id: 'GB', file: F, test: STR, expect: ['NP35t'], inputOnly: ['NP35t'], note: 'noStrays bound: at most MAX_TOK_IN = 8 inputs of the token (a 9th is not scanned; the KCC-20 program refuses it on its own input)', edits: [del('        require(cnt <= MAX_TOK_IN);\n')] },
-  { id: 'G3', file: F, test: STR, expect: both('NP33'), note: 'a refund carries no T input (T strays stay put)', edits: [del('            require(OpCovInputCount(tCovId) == 0);\n')] },
+  { id: 'G3', file: F, run: { [STR]: both('NP33'), [DM]: ['atkNM44', 'btkNM44'] }, note: 'a refund carries no T input (T strays stay put); a mode-1 fill counts exactly its T inputs (NM44)', edits: [del('            require(OpCovInputCount(tCovId) == tIns);\n')] },
   // ---- refund
   { id: 'E1', file: F, test: LIF, expect: [...both('NP70'), ...both('NP71'), ...both('NP72'), ...both('NP73')], note: 'refund only once due (expiry, 90 days idle, IOC / FOK kill)', edits: [del('            require(tx.daa >= idleEnd);\n')] },
   { id: 'E1a', file: F, test: LIF, expect: both('NP70'), note: 'refund from expiryDaa, not one DAA earlier', edits: [rep('            if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }', '            if (expiryDaa - 1 < idleEnd) { idleEnd = expiryDaa - 1; }')] },
@@ -112,15 +113,15 @@ export const mutations = [
   { id: 'Q3b', file: F, test: SET, expect: ['NP03'], note: 'a bid pays no more than its floor', edits: [rep('                require(sOut == quoteOf(n, p, tScale, 0));', '                require(sOut >= quoteOf(n, p, tScale, 0));')] },
   { id: 'Q4', file: F, run: { [FQ]: ['NP12a', 'NP12b'], [CFQ]: ['NC40', 'NC43', 'NC40u', 'NC43u'] }, note: "C1: an ask's custody is its whole amountLeft (every displayed amount takeable; never evidence otherwise)", edits: [del('                require(custody == amountLeft);\n')] },
   { id: 'Q5', file: F, run: { [FQ]: ['NP10'], [CFQ]: ['NC41', 'NC41u'] }, note: 'C1: the escrow pays the quote (an unfunded bid can be neither filled nor evidence)', edits: [del('            require(outAmount >= 0);\n')] },
-  { id: 'Q6', file: F, run: { [FQ]: ['NP11a', 'NP11b'], [CFQ]: ['NC42a', 'NC42b', 'NC42au', 'NC42bu'] }, note: 'C1: the order UTXO funds its delivery carrier and tip (no filler-funded carrier wall)', edits: [del('                require(tx.inputs[self].value >= deliveryCarrier + tipKas);\n')] },
+  { id: 'Q6', file: F, run: { [FQ]: ['NP11a', 'NP11b'], [CFQ]: ['NC42a', 'NC42b', 'NC42au', 'NC42bu'] }, note: 'C1: the order UTXO funds its delivery carrier and tip (no filler-funded carrier wall)', edits: [del('                require(tx.inputs[self].value >= released + tipKas);\n')] },
   { id: 'Q7', file: F, test: FQ, expect: ['NP13'], note: 'a rest keeps something in the custody (no continuation with an empty escrow)', edits: [del('                require(outAmount > 0);\n')] },
   { id: 'Q8', file: F, test: CAR, expect: both('NP118'), note: 'the KAS tip is the floor', edits: [rep('            int tipKas = quoteOf(n, tip, baseScale, 0);', '            int tipKas = quoteOf(n, tip, baseScale, baseScale - 1);')] },
   // ---- the maker's T at output i
   { id: 'T1', file: F, run: { [OUT]: ['NP90tk', 'NP90tr', 'NP91tk', 'NP91tr', 'NP92tk', 'NP92tr', 'NP93tk'], [ALI]: both('NP40') }, inputOnly: ['NP92tk', 'NP92tr'], note: "the maker's T output pinned (owner, owner type, extension, borrowing, minter; one delivery for two orders; the token programs also refuse NP92)", edits: [del(T_PIN)] },
-  { id: 'T2k', file: F, test: OUT, expect: ['NP91tk'], note: 'KCC-20 delivery owned by a key (scheme 0x00)', edits: [rep('            byte sc = SCHEME_P2PK;', '            byte sc = SCHEME_COVID;')] },
-  { id: 'T2r', file: F, test: OUT, expect: ['NP91tr'], note: 'KRON delivery of id_type 3 (address)', edits: [rep('            byte ty = KRON_DELIVERY;', '            byte ty = KRON_COVID;')] },
-  { id: 'T3', file: F, test: OUT, expect: both('NP94'), note: 'the delivery carries the T covenant', edits: [del('            require(OpOutputCovenantId(self) == tCovId);\n')] },
-  { id: 'T4', file: F, test: OUT, expect: both('NP95'), inputOnly: both('NP95'), hold: { [OUT]: both('NP96') }, note: "the T template source's prefix / suffix hash (a planted look-alike; the T program also refuses the bound look-alike output)", edits: [del('            require(blake3(byte[](tPre as byte[8]) + tpre + byte[](tSuf as byte[8]) + tsuf) == tTplHash);\n')] },
+  { id: 'T2k', file: F, test: OUT, expect: ['NP91tk'], note: 'KCC-20 delivery owned by a key (scheme 0x00; the T delivery state is now dMid, no longer tokenState, so both are mutated)', edits: [rep('            byte sc = SCHEME_P2PK;', '            byte sc = SCHEME_COVID;'), rep('        byte[] dMid = byte[](0x20) + byte[](maker) + byte[](0x0100010020) + zg;', '        byte[] dMid = byte[](0x20) + byte[](maker) + byte[](0x0104010020) + zg;')] },
+  { id: 'T2r', file: F, test: OUT, expect: ['NP91tr'], note: 'KRON delivery of id_type 3 (address; the KRON T delivery state is now dSt, no longer tokenState, so both are mutated)', edits: [rep('            byte ty = KRON_DELIVERY;', '            byte ty = KRON_COVID;'), rep('byte[](maker) + byte[](0x010308) + byte[](dAmt as byte[8])', 'byte[](maker) + byte[](0x010208) + byte[](dAmt as byte[8])')] },
+  { id: 'T3', file: F, test: OUT, expect: both('NP94'), note: 'the delivery carries the T covenant', edits: [del('            require(OpOutputCovenantId(dIdx) == tCovId);\n')] },
+  { id: 'T4', file: F, test: OUT, expect: both('NP95'), inputOnly: both('NP95'), hold: { [OUT]: both('NP96') }, note: "the T template source's prefix / suffix hash (a planted look-alike; the T program also refuses the bound look-alike output)", edits: [del('            require(blake3(byte[](tPre as byte[8]) + tr.slice(0, tPre) + byte[](tSuf as byte[8]) + tr.slice(tPre + tLen, tSize)) == tTplHash);\n')] },
   { id: 'T5', file: F, hold: { [OUT]: both('NP96') }, note: 'the T template source carries the T covenant: defence in depth (any T-covenant input is a genuine T program input whose bytes the hash pins; another program fails the hash)', edits: [del('            require(OpInputCovenantId(tTplIn) == tCovId);\n')] },
   { id: 'T6k', file: F, test: CUS, expect: ['NP23tk'], note: 'tFamily is 1 or 2 (hostile field read as KCC-20)', edits: [del('                require(tFamily == FAM_KCC20);\n')] },
   // ---- the S outputs (rest, IOC return, refund)
@@ -130,15 +131,20 @@ export const mutations = [
   // ---- continuation and carriers
   { id: 'K1', file: F, test: ALI, expect: both('NP42'), hold: { [ALI]: both('NP43') }, note: 'one continuation (a second output bound to the id is a forged UTXO of it; none fails OpCovOutputIdx anyway)', edits: [del('                require(OpCovOutputCount(selfId) == 1);\n')] },
   { id: 'K2', file: F, test: CAR, expect: [...both('NP110'), ...both('NP111')], note: 'the continuation is this script with amountLeft - n and custody - sOut', edits: [rx('                byte[] me = OpTxInputScriptSigSubstr(self, len - this.bytecodeSize, len);', /\n\s*require\(tx\.outputs\[selfOut\]\.scriptPubKey == [\s\S]*?\)\)\);/, '')] },
-  { id: 'K3', file: F, test: CAR, expect: both('NP112'), note: 'the continuation keeps the order value minus the delivery carrier and the tip', edits: [del('                require(tx.outputs[selfOut].value >= tx.inputs[self].value - deliveryCarrier - tipKas);\n')] },
-  { id: 'K4', file: F, test: CAR, expect: both('NP113'), note: "the custody rest keeps its carrier", edits: [rx('                require(tx.outputs[selfOut].value >= tx.inputs[self].value - deliveryCarrier - tipKas);', /\n\s*require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, '')] },
-  { id: 'K5', file: F, test: CAR, expect: both('NP114'), note: 'the delivery carries deliveryCarrier', edits: [del('                require(tx.outputs[self].value >= deliveryCarrier);\n')] },
+  { id: 'K3', file: F, test: CAR, expect: both('NP112'), note: 'the continuation keeps the order value minus the delivery carrier and the tip', edits: [del('                require(tx.outputs[selfOut].value >= tx.inputs[self].value - released - tipKas);\n')] },
+  { id: 'K4', file: F, test: CAR, expect: both('NP113'), note: "the custody rest keeps its carrier", edits: [rx('                require(tx.outputs[selfOut].value >= tx.inputs[self].value - released - tipKas);', /\n\s*require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, '')] },
+  { id: 'K5', file: F, run: { [CAR]: both('NP114'), [DM]: ['atkNM17', 'btkNM17', 'atkNM24', 'btkNM24', 'atkNM75', 'btkNM75'] }, inputOnly: ['atkNM75', 'btkNM75'], note: 'the delivery carries deliveryCarrier (a new delivery: haveKas + the carrier, NM17 / NM24 / NM75)', edits: [del('                require(tx.outputs[self].value >= haveKas + onD);\n')] },
   { id: 'K6', file: F, test: PAR, expect: ['NP53'], note: 'FOK: all or nothing', edits: [del('                require(tif != TIF_FOK || amountLeft == n);\n')] },
   { id: 'K7', file: F, test: ALI, expect: both('NP44'), note: 'a terminating fill leaves no output bound to the order id', edits: [rx('                require(tif != TIF_FOK || amountLeft == n);', /\n\s*require\(OpCovOutputCount\(selfId\) == 0\);/, '')] },
   { id: 'K8', file: F, test: CAR, expect: both('NP115'), note: 'the IOC return keeps its carrier', edits: [rx('                if (outAmount > 0) {', /\n\s*require\(tx\.outputs\[custIn\]\.value >= tx\.inputs\[custIn\]\.value\);/, '')] },
-  { id: 'K9', file: F, test: CAR, expect: both('NP116'), note: "IOC / done: the maker gets the order value back but the tip", edits: [del('                    require(tx.outputs[self].value >= tx.inputs[self].value - tipKas);\n')] },
-  { id: 'K10', file: F, test: CAR, expect: both('NP117'), note: 'sold out: every carrier back to the maker but the tip', edits: [del('                    require(tx.outputs[self].value >= carriers - tipKas);\n')] },
+  { id: 'K9', file: F, test: CAR, expect: both('NP116'), note: "IOC / done: the maker gets the order value back but the tip (now one `>= keep` check after the outAmount branch, shared with K10; removed here only for outAmount > 0)", edits: [rep('                require(tx.outputs[self].value >= keep);\n', '                if (outAmount == 0) { require(tx.outputs[self].value >= keep); }\n')] },
+  { id: 'K10', file: F, test: CAR, expect: both('NP117'), note: 'sold out: every carrier back to the maker but the tip (now one `>= keep` check after the outAmount branch, shared with K9; removed here only for outAmount == 0)', edits: [rep('                require(tx.outputs[self].value >= keep);\n', '                if (outAmount > 0) { require(tx.outputs[self].value >= keep); }\n')] },
   // ---- cancel
   { id: 'X1', file: F, test: LIF, expect: both('NP79'), note: 'cancel: SIGHASH_ALL only', edits: [del('        require(sb[64] == SIGHASH_ALL);\n')] },
   { id: 'X2', file: F, test: LIF, expect: both('NP80'), note: 'cancel: the maker signs', edits: [rep('        require(checkSig(s, maker));', '        require(sb.length == 65);')] },
+  // ---- delivery modes (docs/design/bid-delivery-spec.md; WP-C3: kob_pair_tests::pair_delivery_modes, ids <side>t<family> +
+  // NM.., the side a / b and the KCC-20 T family k; the KRON-T battery has no attack of its own, mode 0 only)
+  { id: "DM-P1", file: F, test: DM, expect: ["atkNM01","btkNM01","atkNM02","btkNM02","atkNM03","btkNM03","atkNM04","btkNM04","atkNM07","btkNM07","atkNM19","btkNM19","atkNM05","btkNM05","atkNM06","btkNM06"], inputOnly: ["atkNM05","btkNM05","atkNM06","btkNM06"], note: "mode 1 later fill: the bought-custody is known by its exact state (amount bought, plain owner = the order id, zero guard, the commitment)", edits: [del("            require(tr.slice(tPre, tPre + 112) == byte[](0x08) + byte[](bought as byte[8]) + cMid + tail);\n")] },
+  { id: "DM-P5", file: F, test: DM, expect: ["atkNM79","btkNM79"], inputOnly: ["atkNM79","btkNM79"], note: "mode 2 top-up: the receive UTXO is the P2SH of the script its state is read from", edits: [rep("                        require(form == 2);\n                        require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));\n", "                        require(form == 2);\n")] },
+  { id: "DM-P9", file: F, test: DM, expect: ["atkNM42","btkNM42"], note: "mode 1 later fill: the grown custody keeps its KAS", edits: [del("                require(tx.outputs[tTplIn].value >= haveKas);\n")] },
 ];
