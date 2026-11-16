@@ -286,7 +286,7 @@ export default {
   'ticket.dhelp.for.collected': "Most buy orders, ladders, DCA",
   'ticket.dhelp.for.topup': "Bots and market makers who resell at once",
   'ticket.dhelp.for.each': "IOC, FOK and market orders; KRON tokens",
-  'ticket.dhelp.tradeoff.collected': "Tokens reach the wallet when the order ends; selling them first takes a claim",
+  'ticket.dhelp.tradeoff.collected': "Tokens reach the wallet when the order ends; selling them takes a claim (done in the same approval)",
   'ticket.dhelp.tradeoff.topup': "A small tip per fill; a fill that clashes with your own spend arrives as a new UTXO",
   'ticket.dhelp.tradeoff.each': "Many small UTXOs to merge later",
   'ticket.topup.total.one': 'Tip total: up to {kas} KAS for 1 fill. A fill that cannot be added arrives as a new UTXO.',

@@ -874,7 +874,9 @@ export async function resolveRecord(
     const found = (await ask(part.map((c) => c.spk))).find((u) => u.covenantId === record.covenantId && bySpk.has(u.scriptPublicKey));
     if (found) return live(found, bySpk.get(found.scriptPublicKey)!, true);
   }
-  const exhaustive = !truncated && fields.every((f) => f === 'amountLeft' || (f === 'custody' && jointCustody));
+  // `bought` moves only in mode 1 (bid-delivery-spec §2); in modes 0 and 2 it stays 0
+  const fixedBought = String(((last ?? base).state as { mode?: unknown }).mode ?? '0') !== '1';
+  const exhaustive = !truncated && fields.every((f) => f === 'amountLeft' || (f === 'custody' && jointCustody) || (f === 'bought' && fixedBought));
   return result(exhaustive ? 'spent' : 'unknown', null, null, false);
 }
 
