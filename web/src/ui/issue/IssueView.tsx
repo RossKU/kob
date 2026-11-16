@@ -43,7 +43,8 @@ import { ConnectBar } from '../shell/WalletButton';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
-import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
+import { pendingCreationItems } from '../confirm/creation-steps';
+import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
@@ -253,6 +254,8 @@ export function IssueView() {
     } finally {
       setResuming(null);
       setResumeNote(null);
+      // the attempt may have sent the first step: the record says so, and its stepper follows
+      if (pubkey) setPending(listCreations(config.network, pubkey));
     }
   };
   const discard = (rec: CreationRecord) => {
@@ -346,6 +349,17 @@ export function IssueView() {
                   ? t('issue.pending.body', { ticker: rec.token.ticker, sent: rec.prepSent ? t('issue.pending.sent') : '' })
                   : t(rec.prepSent ? 'issue.pending.bodyUnsigned' : 'issue.pending.bodyUnsent', { ticker: rec.token.ticker })}
               </p>
+              <Stepper
+                data-testid="issue-pending-stepper"
+                label={t('stepper.label')}
+                steps={pendingCreationItems({
+                  prepSent: rec.prepSent,
+                  signed: genesisSigned(rec),
+                  resuming: resuming === rec.covenantId,
+                  note: resuming === rec.covenantId ? resumeNote : null,
+                  failed: resumeError?.id === rec.covenantId,
+                })}
+              />
               <p class={creationIsOld(rec) ? 'field-error' : 'muted'} data-testid="issue-pending-window" data-old={creationIsOld(rec) ? 'true' : 'false'}>
                 {t(creationIsOld(rec) ? 'issue.pending.old' : 'issue.pending.window')}
               </p>

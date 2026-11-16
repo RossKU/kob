@@ -8,14 +8,15 @@ import { WalletError } from '../../wallet/types';
 import { claimSessionRun } from './session-run';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
-import { Banner, Button, IssueLine, Spinner } from '../kit';
+import { Banner, Button, IssueLine, Spinner, Stepper } from '../kit';
 import { toasts } from '../kit/toast-store';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
 import { PHONE_TOAST_QUERY } from '../shell/narrow';
 import { tCount } from './plural';
+import { flowStepperItems, type SessionStep } from './flow-steps';
 
 export interface FlowStep {
-  /** the step in the progress list */
+  /** the step's label in the stepper */
   title: string;
   plan: CancelPlan;
   /** placement-record label for orders the step creates (amendments) */
@@ -63,6 +64,8 @@ export interface TxFlowProps {
    * `openSession`). The wallet checks every step against it itself; a wallet without sessions asks once per step as before.
    */
   session?: BuiltTx[];
+  /** a step after the run, outside it ("Merge, then sell": the sale), shown last in the stepper */
+  then?: { label: string; note: string };
 }
 
 /** How long the card of a flow whose every step went through stays (its toast says the same and stays longer). */
@@ -72,7 +75,7 @@ const DONE_CLOSE_PHONE_MS = 4000;
 
 /**
  * Runs one or several transactions one after the other, each checked silently and approved in the wallet (ui/confirm/send.ts) as soon as the flow
- * starts: the action's button was the user's request, the wallet's popup is the approval. A progress list shows every step and one line the
+ * starts: the action's button was the user's request, the wallet's popup is the approval. The stepper (kit/Stepper.tsx) shows every step and one line the
  * current one; a step that stops (rejected in the wallet, a failed check) ends the sequence, and steps not yet run are simply not run: each step
  * is valid alone (a merge's later step is built only at its turn, from the outputs of the steps it follows), so a partial sequence leaves
  * everything consistent.
@@ -90,6 +93,8 @@ export function TxFlow(props: TxFlowProps) {
   // the wallet's one-approval session of this run (closed when the run ends or the card goes)
   const live = useRef<{ sid: string; close(): void } | null>(null);
   const [asking, setAsking] = useState(false);
+  // the stepper's first step while the run has a session: known before the run starts, so the card does not change shape
+  const [session, setSession] = useState<SessionStep>(() => (props.session?.length && wallet.adapter?.openSession && wallet.adapter.canOpenSession?.() ? 'asking' : 'none'));
   const [sessionLine, setSessionLine] = useState<string | null>(null);
   const release = useRef<(() => void) | null>(null);
   const closeSession = () => {
@@ -135,6 +140,7 @@ export function TxFlow(props: TxFlowProps) {
       release.current = claimSessionRun();
       if (!release.current) {
         st[0] = 'failed';
+        setSession('failed');
         setMessage(t('orders.flow.sessionBusy'));
         return end();
       }
@@ -142,6 +148,8 @@ export function TxFlow(props: TxFlowProps) {
       setAsking(true);
       try {
         const s = await adapter.openSession(props.session);
+        // a wallet that will not hold one asks per step: no approval step then
+        setSession(s ? 'open' : 'none');
         if (s) {
           live.current = { sid: s.sid, close: () => adapter.closeSession?.(s.sid) };
           setSessionLine(t('orders.flow.sessionOpen', { txs: s.txs, fee: formatKas(s.feeMax) }));
@@ -149,6 +157,7 @@ export function TxFlow(props: TxFlowProps) {
       } catch (e) {
         setAsking(false);
         st[0] = e instanceof WalletError && e.code === 'rejected' ? 'cancelled' : 'failed';
+        setSession(st[0] === 'cancelled' ? 'declined' : 'failed');
         if (st[0] === 'failed') setMessage(e instanceof Error ? e.message : String(e));
         return end();
       }
@@ -224,26 +233,33 @@ export function TxFlow(props: TxFlowProps) {
     const timer = setTimeout(() => props.onClose?.(), phone ? DONE_CLOSE_PHONE_MS : DONE_CLOSE_MS);
     return () => clearTimeout(timer);
   }, [allThrough]);
+  const items = flowStepperItems({
+    titles: steps.map((s) => s.title),
+    states,
+    phase: sender.status?.phase ?? null,
+    waiting: !!sender.status?.waiting,
+    session,
+    ...(props.then ? { then: props.then } : {}),
+  });
+  // the session's step comes before the run's steps
+  const lead = session === 'none' ? 0 : 1;
   const tone = running ? 'info' : message || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';
 
   const card = (
     <div class={`toast toast-${tone} send-toast tx-flow-toast`} data-testid="tx-flow">
       <div class="grow wrap-anywhere stack-sm">
       <strong class="tx-flow-title">{props.heading}</strong>
-      {steps.length > 1 ? (
-        <ol class="progress" data-testid="flow-progress" ref={list}>
-          {steps.map((s, i) => (
-            <li key={i} data-testid={`flow-step-${i}`} data-state={states[i]}>
-              <span class="pill-step" aria-hidden="true">
-                {states[i] === 'submitted' ? '✓' : states[i] === 'failed' ? '✗' : states[i] === 'cancelled' ? '–' : i + 1}
-              </span>
-              <span>
-                {s.title} - {t(`orders.flow.state.${states[i]}`)}
-                {txids[i] ? <code class="mono small"> {txids[i].slice(0, 10)}{'…'}</code> : null}
-              </span>
-            </li>
-          ))}
-        </ol>
+      {items.length > 1 ? (
+        <Stepper
+          steps={items}
+          label={t('stepper.label')}
+          listRef={list}
+          data-testid="flow-progress"
+          extra={(k) => {
+            const i = k - lead;
+            return txids[i] ? <code class="mono small">{txids[i].slice(0, 10)}{'…'}</code> : null;
+          }}
+        />
       ) : null}
       {running && step?.shownAs ? <p class="small" data-testid="flow-shown-as">{step.shownAs}</p> : null}
       {asking ? <p class="small" data-testid="flow-session-ask"><Spinner /> {t('orders.flow.sessionAsk')}</p> : null}
