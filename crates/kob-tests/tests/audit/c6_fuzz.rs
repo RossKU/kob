@@ -403,23 +403,28 @@ fn c6_oracle_flags_pair_token_one_unit_short() {
 ///   such terms (builders and indexer refuse them), so the maker is left unvalued and counted (`INVALID_TERMS`).
 ///
 /// Each replay must leave the oracle clean.
+///
+/// The op seeds are re-derived for the delivery block of the pair states (bid-delivery-spec section 2): the orderState
+/// op picks one of the integer fields of the decoded state, which now include mode, recvThreshold, topupTip, bought (or
+/// the exit fields), so eight of the original seeds picked another field. Each seed below makes the same mutation as the
+/// original one (same input, field, old and new value).
 #[test]
 fn c6_pair_long_run_regressions() {
     let keys = keys();
     let (seeds, _) = build_seeds(&keys, true);
     let cx = c6::mutate::Cx { donors: seeds.iter().map(|s| s.m.clone()).collect() };
     let cases: [(&str, u64, bool); 12] = [
-        ("pair.ask.ioc@KronToken2433>KCC20Ref+oneMaker", 7585978075027431233, true),
+        ("pair.ask.ioc@KronToken2433>KCC20Ref+oneMaker", 1384, true),
         ("pairgrid.ask.return.decayfalse.twap@KronToken2433>KCC20Ref_8x8+oneMaker", 16287918994125123015, true),
         ("pairgrid.ifd.ask.auction.close.tip@KronToken2433>KCC20Ref_8x8+oneMaker", 12382582100974033423, false),
-        ("pairgrid.ifd.ask.arm1.close@KronToken2433>KCC20Ref_8x8", 13679103126665020201, false),
-        ("pair.ask.close@KCC20KaspaCom_0_2_5>KCC20P2", 17997030425699801929, true),
-        ("pair.net.2x2.close@KCC20Ref_8x8>KronToken2433", 6091004526121319853, true),
-        ("pair.ask.fok@KronToken2433>KCC20Ref+oneMaker", 7709506244033634556, true),
-        ("pairgrid.ask.return.decaytrue.twap@KCC20Ref_8x8>KCC20Ref_8x8", 10531623874732506812, true),
-        ("pairgrid.ifd.ask.arm0.close@KronToken2433>KCC20Ref_8x8", 3736764389874600003, false),
+        ("pairgrid.ifd.ask.arm1.close@KronToken2433>KCC20Ref_8x8", 593, false),
+        ("pair.ask.close@KCC20KaspaCom_0_2_5>KCC20P2", 26932, true),
+        ("pair.net.2x2.close@KCC20Ref_8x8>KronToken2433", 122, true),
+        ("pair.ask.fok@KronToken2433>KCC20Ref+oneMaker", 1384, true),
+        ("pairgrid.ask.return.decaytrue.twap@KCC20Ref_8x8>KCC20Ref_8x8", 1384, true),
+        ("pairgrid.ifd.ask.arm0.close@KronToken2433>KCC20Ref_8x8", 24590, false),
         ("pairgrid.ifd.ask.auction.close@KCC20Ref_8x8>KCC20Ref_8x8", 405491482584364473, false),
-        ("pairgrid.ifd.ask.arm1.close.tip@KronToken2433>KCC20Ref_8x8+oneMaker", 1288796983043464974, false),
+        ("pairgrid.ifd.ask.arm1.close.tip@KronToken2433>KCC20Ref_8x8+oneMaker", 374, false),
         ("pair.ask.ioc@KCC20KaspaCom_0_2_5>KCC20P2", 4104355800711999445, true),
     ];
     for (name, op_seed, np64) in cases {
@@ -435,3 +440,4 @@ fn c6_pair_long_run_regressions() {
         }
     }
 }
+
