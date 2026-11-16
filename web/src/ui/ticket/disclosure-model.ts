@@ -270,7 +270,7 @@ export function buildDisclosureModel(plan: OrderPlan, ctx: DisclosureCtx): Discl
   // the delivery of a buy (orders/delivery.ts): its name, and a Top-up's tip per fill with the most it can pay
   const delivery = planDelivery(plan);
   if (delivery) {
-    reserves.push({ id: 'delivery', labelKey: 'ticket.disc.delivery', tone: 'muted', value: tx(`ticket.opt.delivery.${delivery.delivery.choice}`) });
+    reserves.push({ id: 'delivery', labelKey: 'ticket.disc.delivery', tone: 'muted', value: tx(`ticket.short.delivery.${delivery.delivery.choice}`) });
     if (delivery.delivery.choice === 'topup') {
       const tip = BigInt(delivery.delivery.fields.topupTip);
       reserves.push({

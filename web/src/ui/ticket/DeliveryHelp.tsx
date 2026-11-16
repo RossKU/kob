@@ -78,7 +78,9 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
           <Box x={MID} y={CUST_Y} label={String(bought || 10)} cls={ended ? 'dh-box' : 'dh-cust'} pop={!ended} />
         </g>
         <text class={at(step, 1, 'dh-small dh-step') + (ended ? ' dh-gone' : '')} x={MID + W / 2} y={CUST_Y + H + 14} text-anchor="middle">{t('ticket.dhelp.custody')}</text>
-        <text class={at(step, LAST_STEP, 'dh-small dh-step')} x={MID - 8} y={WALLET_Y - 30} text-anchor="end">{t('ticket.dhelp.endsOrClaim')}</text>
+        {/* right of the custody's way down, in two short lines: never past the drawing's edges */}
+        <text class={at(step, LAST_STEP, 'dh-small dh-step')} x={MID + W + 8} y={CUST_Y + 22}>{t('ticket.dhelp.endsOrClaim')}</text>
+        <text class={at(step, LAST_STEP, 'dh-small dh-step')} x={MID + W + 8} y={CUST_Y + 36}>{t('ticket.dhelp.orClaim')}</text>
       </>
     );
   } else {
@@ -97,7 +99,7 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
   return (
     <figure class={`dh-lane${props.on ? ' dh-on' : ''}${m === 'collected' ? ' dh-default' : ''}`} data-testid={`delivery-help-lane-${m}`} data-on={props.on ? 'true' : 'false'}>
       <figcaption class="dh-lane-title">
-        {t(`ticket.opt.delivery.${m}`)}
+        {t(`ticket.short.delivery.${m}`)}
         {m === 'collected' ? <span class="dh-pill">{t('ticket.dhelp.default')}</span> : null}
         {props.on ? <span class="dh-pill dh-pill-on">{t('ticket.dhelp.yours')}</span> : null}
       </figcaption>
@@ -152,7 +154,7 @@ export function DeliveryHelp(props: { selected: DeliveryChoice; onClose: () => v
         <tbody>
           {ROWS.map((m) => (
             <tr key={m} class={m === props.selected ? 'dh-on' : undefined} data-testid={`delivery-help-row-${m}`}>
-              <th scope="row">{t(`ticket.opt.delivery.${m}`)}</th>
+              <th scope="row">{t(`ticket.short.delivery.${m}`)}</th>
               {cols.map((c) => <td key={c} data-label={t(`ticket.dhelp.col.${c}`)}>{t(`ticket.dhelp.${c}.${m}`)}</td>)}
             </tr>
           ))}

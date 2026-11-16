@@ -35,8 +35,8 @@ test('a limit buy is Collected by default: Delivery under Advanced, no Fills box
   );
   expect(main).toEqual(['order-amount', 'order-price', 'field-ladder.on', 'field-lifetime']);
   await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'collected');
-  await expect(page.getByTestId('field-delivery')).toHaveText(/Collected/);
-  await expect(page.getByTestId('order-delivery-note')).toHaveText('Bought tokens arrive as one UTXO when the order ends. You can claim them earlier.');
+  await expect(page.getByTestId('field-delivery')).toContainText('Collected, sent at the end');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Fills collect in the order and arrive as one UTXO when it ends.');
   await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
   await expect(page.getByTestId('field-topupTip')).toHaveCount(0);
   // the row right after the priority tip
@@ -57,16 +57,22 @@ test('Top-up: the tip per fill (default from the program), the tip total and Fil
   await openAdvanced(page);
   await chooseOption(page.getByTestId('field-delivery'), 'topup');
   await expect(page.getByTestId('field-topupTip')).toBeVisible();
+  await expect(page.getByTestId('field-delivery')).toContainText('Added to one UTXO');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill is added to one UTXO in your wallet, for a small tip per fill.');
+  await expect(page.locator('label', { hasText: /^Tip per added fill$/ })).toBeVisible();
   // ceil(1.25 x 595 400 sompi), the reference top-up extra of KCC20Ref
   await expect(page.getByTestId('field-topupTip')).toHaveAttribute('placeholder', '0.0074425');
   await expect(page.getByTestId('field-maxFills')).toBeVisible();
   await settlePlan(page);
-  await expect(page.getByTestId('order-topup-total')).toHaveText('Tip total: up to 0.0223275 KAS for 3 fills. A fill that cannot top up arrives as a new UTXO.');
+  await expect(page.getByTestId('order-topup-total')).toHaveText('Tip total: up to 0.0223275 KAS for 3 fills. A fill that cannot be added arrives as a new UTXO.');
   await fillFields(page, { topupTip: '0.009' });
   await settlePlan(page);
-  await expect(page.getByTestId('order-topup-total')).toHaveText('Tip total: up to 0.027 KAS for 3 fills. A fill that cannot top up arrives as a new UTXO.');
+  await expect(page.getByTestId('order-topup-total')).toHaveText('Tip total: up to 0.027 KAS for 3 fills. A fill that cannot be added arrives as a new UTXO.');
   await waitReviewable(page);
-  if (shots) await page.getByTestId('order-ticket').screenshot({ path: `${shots}/delivery-advanced-topup.png` });
+  if (shots) {
+    await page.getByTestId('order-topup-total').scrollIntoViewIfNeeded();
+    await page.getByTestId('order-ticket').screenshot({ path: `${shots}/delivery-advanced-topup.png` });
+  }
   const placed = await placeOrder(page, mock);
   // the wallet's T = ceil(5 KAS x 10^8 / 0.025 KAS) = 200 EXSTD; the order's recvThreshold is min(T, minFill - 1) = 10 EXSTD less one base unit
   expect(stateOf(placed)).toMatchObject({ mode: '2', recvThreshold: '999999999', topupTip: '900000', bought: '0' });
@@ -82,9 +88,11 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await openStd(page, mock);
   await page.goto('/#/settings');
   const card = page.getByTestId('settings-delivery');
-  await expect(card.getByTestId('settings-delivery-collected')).toHaveAttribute('aria-checked', 'true');
-  await card.getByTestId('settings-delivery-each').click();
-  await expect(card.getByTestId('settings-delivery-each')).toHaveAttribute('aria-checked', 'true');
+  const choice = card.getByTestId('settings-delivery-choice');
+  await expect(choice).toHaveAttribute('data-value', 'collected');
+  await expect(choice).toContainText('Collected, sent at the end');
+  await chooseOption(choice, 'each');
+  await expect(choice).toHaveAttribute('data-value', 'each');
   await expect(card.getByTestId('settings-delivery-thresholds-none')).toHaveText('None yet.');
   if (shots) {
     await card.scrollIntoViewIfNeeded();
@@ -95,8 +103,8 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await pickType(page, 'limit', 'buy');
   await openAdvanced(page);
   await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'each');
-  await expect(page.getByTestId('field-delivery')).toHaveText(/Each fill/);
-  await expect(page.getByTestId('order-delivery-note')).toHaveCount(0);
+  await expect(page.getByTestId('field-delivery')).toContainText('Each fill separately');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill arrives in your wallet as its own UTXO.');
   await expect(page.getByTestId('field-maxFills')).toBeVisible();
   await fillFields(page, { price: '0.025', amount: '40', minFill: '10' });
   const placed = await placeOrder(page, mock);
@@ -124,7 +132,7 @@ test("What's this?: the step-by-step help opens from the Delivery label, plays, 
   await openAdvanced(page);
   const link = page.getByTestId('order-delivery-help');
   // on the label row of Delivery, at its right end
-  const [lb, label] = await Promise.all([link.boundingBox(), page.locator('label', { hasText: /^Delivery$/ }).boundingBox()]);
+  const [lb, label] = await Promise.all([link.boundingBox(), page.locator('label', { hasText: /^Bought tokens$/ }).boundingBox()]);
   expect(Math.abs(lb!.y + lb!.height - (label!.y + label!.height))).toBeLessThan(6);
   expect(lb!.x).toBeGreaterThan(label!.x + label!.width);
   await link.click();

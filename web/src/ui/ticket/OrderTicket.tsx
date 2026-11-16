@@ -426,7 +426,8 @@ export function OrderTicket(props: OrderTicketProps) {
   const topupThreshold = planned?.delivery.choice === 'topup' ? planned.delivery.threshold : null;
   const [deliveryHelp, setDeliveryHelp] = useState(false);
   const deliverySubs: Record<string, { text: string; testid: string }> = {};
-  if (delivery === 'collected') deliverySubs.delivery = { text: t('ticket.delivery.collectedNote'), testid: 'order-delivery-note' };
+  // one line under the select that follows the choice (Added to one UTXO: its tip and the tip total follow under the tip box)
+  if (delivery) deliverySubs.delivery = { text: t(`ticket.delivery.hint.${delivery}`), testid: 'order-delivery-note' };
   if (delivery === 'topup' && planned?.delivery.choice === 'topup') {
     const tip = BigInt(planned.delivery.fields.topupTip);
     const kas = formatKas(topupTipTotal(tip, planned.fills), { group: ',' });

@@ -45,6 +45,9 @@ describe('the Delivery help steps', () => {
   it('every sentence of the help exists', () => {
     for (const m of ['each', 'collected', 'topup']) {
       for (const k of ['result', 'cost', 'aria', 'wait', 'for', 'tradeoff']) expect(has(`ticket.dhelp.${k}.${m}`), `${k}.${m}`).toBe(true);
+      // the long form of the select and Settings, the short one of the help and the order details, and the hint under the select
+      for (const k of ['opt', 'short']) expect(has(`ticket.${k}.delivery.${m}`), `${k}.${m}`).toBe(true);
+      expect(has(`ticket.delivery.hint.${m}`), `hint.${m}`).toBe(true);
     }
   });
 });

@@ -12,7 +12,7 @@ import { t } from '../../i18n';
 import type { ComponentChildren } from 'preact';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
@@ -222,11 +222,12 @@ function DeliverySettings() {
       <Learn short={t('settings.delivery.short')}>{t('settings.delivery.explain')}</Learn>
       <div class="stack-sm">
         <span class="small" id="settings-delivery-label">{t('settings.delivery.label')}</span>
-        <Segmented<DeliveryChoice>
-          options={DELIVERY_CHOICES.map((c) => ({ value: c, label: t(`ticket.opt.delivery.${c}`), 'data-testid': `settings-delivery-${c}` }))}
+        {/* a drop-down: the long names of the three choices do not fit side by side */}
+        <Dropdown
+          labelledBy="settings-delivery-label"
           value={choice}
-          onChange={setChoice}
-          aria-label={t('settings.delivery.label')}
+          options={DELIVERY_CHOICES.map((c) => ({ value: c, label: t(`ticket.opt.delivery.${c}`) }))}
+          onChange={(v) => setChoice(v as DeliveryChoice)}
           data-testid="settings-delivery-choice"
         />
       </div>
