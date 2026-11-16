@@ -8,7 +8,7 @@ import { Indexer, indexerUrl } from './indexer.mjs';
 import { sideBudgets, skewShift } from './inventory.mjs';
 import { Kob } from './kob.mjs';
 import { buildLadder } from './ladder.mjs';
-import { backoffMs, feeGate, IDLE, nextMode, QUOTING, sideStatus, STOPPING } from './modes.mjs';
+import { backoffMs, feeGate, IDLE, initialMode, nextMode, QUOTING, sideStatus, STOPPING } from './modes.mjs';
 import { planActions, pullAll } from './reprice.mjs';
 import { retiredMessage, retiredPlan } from './retired.mjs';
 import { inventoryUsd, sizedQuotes } from './sizing.mjs';
@@ -58,6 +58,8 @@ export class Bot {
     this.kob = new Kob(cfg, { dryRun });
     this.idx = new Indexer(indexerUrl(cfg));
     this.state = loadState(cfg.dataDir);
+    // a stop is final for the run that was stopped, not for the next start
+    if (this.state.mode.mode === STOPPING) this.state.mode = initialMode(Date.now());
     // `once` skips the start-up cool-down
     if (once && this.state.mode.reason === 'cooldown') this.state.mode = { ...this.state.mode, steadySince: Date.now() - cfg.safety.resumeAfterSec * 1000 };
     this.refMemory = {};
@@ -137,9 +139,10 @@ export class Bot {
     let sides = { bids: { quoting: false, reason: 'idle' }, asks: { quoting: false, reason: 'idle' } };
     let plan = null;
     if (mode.pull) {
-      if (orders.length) {
-        this.log.info(`pull ${orders.length} quote(s): ${mode.mode}${mode.reason ? `/${mode.reason}` : ''}`);
-        await this.execute(pullAll(orders.filter((o) => o.pendingKind !== 'cancel'), `pull: ${mode.reason ?? mode.mode}`));
+      const toCancel = orders.filter((o) => o.pendingKind !== 'cancel');
+      if (toCancel.length) {
+        this.log.info(`pull ${toCancel.length} quote(s): ${mode.mode}${mode.reason ? `/${mode.reason}` : ''}`);
+        await this.execute(pullAll(toCancel, `pull: ${mode.reason ?? mode.mode}`));
       }
     } else {
       plan = this.plan(snap, bal, orders);

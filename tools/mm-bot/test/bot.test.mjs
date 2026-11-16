@@ -1,6 +1,6 @@
 // Whole cycles against a stand-in CLI with a small ledger (fake-kob.mjs "chain") and a stubbed fetch; no network.
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +148,10 @@ test('a full life: idle, merge, quote both sides, hold, amend on a move, pull on
   assert.equal(Object.keys(chain().orders).length, 0);
   r = await bot.cycle();
   assert.equal(r, 'stopped');
+  // the next start, once the STOP file is gone, begins in IDLE/cooldown, not STOPPING
+  rmSync(paths(dir).stop);
+  const again = new Bot(bot.cfg);
+  assert.equal(`${again.state.mode.mode}/${again.state.mode.reason}`, 'IDLE/cooldown');
 
   // the logs: a fee ledger, an actions log and a status snapshot
   assert.ok(bot.state.fees.txs > 0);

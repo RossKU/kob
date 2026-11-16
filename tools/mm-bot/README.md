@@ -149,8 +149,12 @@ Network fees measured on testnet-10 with this bot (2026-11-16, a 6-decimal token
 
 | Transaction | Fee (KAS) |
 |---|---|
-| place a bid / an ask | 0.002234 / 0.010112 |
+| place a bid / an ask | 0.002234 to 0.003354 / 0.010112 |
 | amend in place, bid / ask | 0.004168 / 0.004276 |
+| cancel a bid / an ask | 0.003806 / 0.012504 |
+| merge 5 token UTXOs (2 transactions) | 0.051292 |
+
+The 31-minute run (12 placements, 9 amends, 12 cancels, 1 merge) paid 0.264424 KAS in 34 transactions.
 
 An amend's fee comes from the order itself (an ask's 1 KAS carrier, a bid's escrow). The default cap of 50 KAS a day is a
 guard against a runaway, not an expected cost.
