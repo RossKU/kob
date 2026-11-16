@@ -353,7 +353,7 @@ test('a wide log shows the whole transaction id and wallet; Tx and Wallet are wi
     await expect(rows(page).first()).toBeVisible();
     await expect(page.getByTestId('activity-wallet').first()).toHaveText(/^q[0-9a-z]{20,}/, { timeout: 15_000 });
     const c = await read();
-    // Amount stops at its figures' width until Tx and Wallet are whole (the slack after that goes to it)
+    // Amount stops at its figures' width until Tx and Wallet are whole (the slack after that is spread between the columns)
     expect(c.tx, `tx at ${width}`).toBeGreaterThan(c.px * 2.5);
     expect(c.who, `wallet at ${width}`).toBeGreaterThan(c.px * 2.5);
     expect(c.px).toBeLessThanOrEqual(100);
