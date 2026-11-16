@@ -304,6 +304,7 @@ export default {
   'market.chart.l': 'L',
   'market.chart.c': 'C',
   'market.chart.v': 'Vol',
+  'market.chart.mid': 'Mid',
   'market.chart.empty': 'No trades yet: the chart starts with the first trade.',
   'market.chart.unsupported': 'This indexer does not serve price history yet.',
   'market.chart.off': 'No indexer is configured, so there is no price history.',

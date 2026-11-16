@@ -272,6 +272,7 @@ export async function startMockServer(opts = {}) {
     // ---- market data: trades, candles, 24 h stats, depth
     if (get && (m = /^\/v1\/trades\/([^/]+)$/.exec(path))) return ok(M.tradesPage(chain, m[1], q));
     if (get && (m = /^\/v1\/candles\/([^/]+)$/.exec(path))) return ok(M.candlesView(chain, m[1], q));
+    if (get && (m = /^\/v1\/quotes\/([^/]+)$/.exec(path))) return ok(M.quotesView(chain, m[1], q));
     if (get && path === '/v1/stats') return ok(M.activityView(chain, q, activityKnobs));
     if (get && (m = /^\/v1\/stats\/([^/]+)$/.exec(path))) return ok(M.statsView(chain, m[1]));
     if (get && (m = /^\/v1\/depth\/([^/]+)$/.exec(path))) return ok(M.depthView(chain, m[1], q));

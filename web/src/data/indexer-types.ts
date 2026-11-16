@@ -429,6 +429,15 @@ export interface CandleView {
   trades: number;
 }
 
+/** `GET /v1/quotes/{token}`: the top of the book per bucket with a change, `[t, bid, ask]` (sompi per `price_basis`; null: empty side), ascending. */
+export interface QuotesView {
+  token: Hex;
+  interval: CandleInterval;
+  price_basis: string;
+  decimals?: number | null;
+  items: [number, string | null, string | null][];
+}
+
 /** `GET /v1/candles/{token}?interval=&from=&to=&limit=` (ascending; buckets without trades are omitted). */
 export interface CandlesView {
   token: Hex;

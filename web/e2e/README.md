@@ -29,7 +29,7 @@ worker its own in-process server (and enables parallel runs). Ports: `KOB_MOCK_P
   (paged `{items, next_cursor}` with the decoded KCC-20 `state`; the real endpoint is documented in `docs/ops/executor.md` 5.1). Errors: `{error:{code,message}}`. CORS is open.
 * Market data (`mock/market.mjs`): `/v1/trades/{token}?limit=&before=` (a trade = the fill events of one tx; aggressor `side`,
   resting-side VWAP `price`, ask-side `amount` / `quote`, newest first), `/v1/candles/{token}?interval=1m|5m|1h|1d&from=&to=&limit=` (empty buckets
-  omitted; `from` / `to` bound the bucket start), `/v1/stats/{token}` (24 h window ending at the mock chain time, book top, `null` when absent),
+  omitted; `from` / `to` bound the bucket start), `/v1/quotes/{token}` (`[t, bid, ask]`: a traded bucket's low and high, then the current touch), `/v1/stats/{token}` (24 h window ending at the mock chain time, book top, `null` when absent),
   `/v1/depth/{token}?levels=` (listed book merged by price per `price_basis`, cumulative sums). Unknown token -> 404 `not_found`, bad interval -> 400.
 * Token/token pairs (`mock/pairs.mjs`, pair orders `KobPair` / `KobCondPair` / `KobIfdPair`): the endpoints of docs/ops/executor.md 5.4:
   `/v1/pairs/{base}/{quote}/book?depth=` (`direct` levels from resting KobPair orders, `entry` levels from if-done entries at their limit, `route`
