@@ -69,8 +69,13 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
     await expect(page.getByTestId('confirm-chain-step')).toHaveAttribute('data-step', 'prep');
+    // the stepper: Prepare is current, Create token waits
+    await expect(page.getByTestId('create-step-prep')).toHaveAttribute('aria-current', 'step');
+    await expect(page.getByTestId('create-step-genesis')).toHaveAttribute('data-state', 'waiting');
     await shot(page, '2-popup-step1', 'confirm-chain-step');
     await expect(page.getByTestId('confirm-chain-step')).toHaveAttribute('data-step', 'genesis', { timeout: 15_000 });
+    await expect(page.getByTestId('create-step-prep')).toHaveAttribute('data-state', 'done');
+    await expect(page.getByTestId('create-step-genesis')).toHaveAttribute('aria-current', 'step');
     // the second popup is open only once step 1 is on the node and was handed to the wallet's node
     const atSecond = await mock.submitted();
     expect(atSecond).toHaveLength(1);
@@ -78,6 +83,7 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await shot(page, '3-popup-step2', 'confirm-chain-step');
     await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
     await shot(page, '4-sent', 'tx-result');
+    await expect(page.getByTestId('create-stepper').locator('[data-state="done"]')).toHaveCount(2);
     const calls = await wallet!.calls();
     expect(calls.map((c) => c.status)).toEqual(['signed', 'signed']);
     const submitted = await mock.submitted();
@@ -119,6 +125,11 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await page.reload();
     await clickConnectOption(page, 'wallet-connect-kasware');
     await expect(page.getByTestId('issue-pending')).toBeVisible();
+    // the record says where it stopped: Prepare done, Create token left
+    const steps = page.getByTestId('issue-pending-stepper');
+    await expect(steps.getByTestId('create-step-prep')).toHaveAttribute('data-state', 'done');
+    await expect(steps.getByTestId('create-step-genesis')).toHaveAttribute('aria-current', 'step');
+    await expect(steps.getByTestId('create-step-genesis')).toContainText('Not signed yet');
     await shot(page, '6-resume-after-reload', 'issue-pending');
     await wallet!.clearCalls();
     await page.getByTestId('issue-pending-send').click();
