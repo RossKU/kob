@@ -542,17 +542,21 @@ mod tests {
 
     #[test]
     fn mutable_fields_are_the_spliced_windows() {
-        // A template's compiled state. An if-done entry's committed exit placeholder (its last
-        // field, a PUSHDATA2) is replaced by its exit kind's compiled state prefix at the entry's
-        // scales, because the entries decode their committed exit.
+        // A template's compiled state. An if-done entry's committed exit placeholder (a PUSHDATA2,
+        // followed only by the exit's delivery fields, int pushes) is replaced by its exit kind's
+        // compiled state prefix at the entry's scales, because the entries decode their committed
+        // exit.
         fn compiled(id: TemplateId) -> AnyState {
             let t = template(id);
             let mut b = t.contract().compiled.bytecode[1..1 + t.state_len].to_vec();
             let Some(xid) = exit_template(id) else { return AnyState::decode(id, &b).expect("compiled state") };
             let n = b.len();
-            let j = (0..n.saturating_sub(3))
-                .find(|&j| b[j] == 0x4d && u16::from_le_bytes([b[j + 1], b[j + 2]]) as usize == n - j - 3)
-                .expect("the committed exit is the last field");
+            let ints_only = |t: &[u8]| t.len() % 9 == 0 && t.chunks(9).all(|c| c[0] == 0x08);
+            let (j, end) = (0..n.saturating_sub(3))
+                .filter(|&j| b[j] == 0x4d)
+                .map(|j| (j, j + 3 + u16::from_le_bytes([b[j + 1], b[j + 2]]) as usize))
+                .find(|&(_, end)| end <= n && ints_only(&b[end..]))
+                .expect("the committed exit is followed only by int fields");
             let x = compiled(xid);
             let scales: Vec<i64> = (0..10).map(|k| 10i64.pow(k)).collect();
             for &sa in &scales {
@@ -565,7 +569,7 @@ mod tests {
                         _ => unreachable!("an exit kind"),
                     }
                     let e = y.encode();
-                    b[j + 3..].copy_from_slice(&e[..n - j - 3]);
+                    b[j + 3..end].copy_from_slice(&e[..end - j - 3]);
                     if let Ok(s) = AnyState::decode(id, &b) {
                         return s;
                     }
