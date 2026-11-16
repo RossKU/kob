@@ -6,7 +6,7 @@ import { consensusCheck, kob, makeEnv, market8x8 } from '../../testing/fixtures'
 import { CASES, CTX, TOKEN, WIDE, form, json, ticketEnv } from './ticket-fixtures';
 import {
   FIELDS, FIELD_DEFAULTS, ORDER_TYPES, TYPE_GROUPS, buildIntent, formFromIntent, formatLocalDateTime, initialForm, isIncomplete, layoutOf, maxAmount, parseAmount, parseLocalDateTime,
-  deliveryOf, followQuote, hasDeliveryChoice, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
+  deliveryChoicesOf, deliveryOf, followQuote, hasDeliveryChoice, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
 const K = kob();
@@ -635,7 +635,9 @@ describe('pair sells budget their fills (maxFills)', () => {
   it('a pair sell shows the fills field where a buy does; a KAS sell still does not', () => {
     for (const type of ['limit', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) {
       expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).toContain('maxFills');
-      expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).toContain('maxFills');
+      // a pair buy is Collected by default (one carrier): its Fills box shows with Each fill
+      expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).not.toContain('maxFills');
+      expect(layoutOf(form(type, 'buy', { delivery: 'each' }), PAIR).advanced, `${type} pair buy, each fill`).toContain('maxFills');
       expect(layoutOf(form(type, 'sell', {})).advanced, `${type} KAS sell`).not.toContain('maxFills');
       expect(layoutOf(form(type, 'sell', {}), CTX).advanced, `${type} KAS sell (ctx)`).not.toContain('maxFills');
     }
@@ -706,7 +708,7 @@ describe('streaming: the price you saw follows the quote', () => {
 
 describe('delivery of buy orders (bid-delivery-spec §10)', () => {
   const PAIR: TicketCtx = { ...CTX, quoteDecimals: 6 };
-  it('resting buys and sell-first if-done orders choose it; IOC / FOK / market, sells, repeats, KRON and pairs do not', () => {
+  it('resting buys (on a pair too) and sell-first if-done orders choose it; IOC / FOK / market, sells, repeats, KRON and pair if-done orders do not', () => {
     for (const t of ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) expect(hasDeliveryChoice({ type: t, side: 'buy' }, CTX), t).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, CTX)).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifo', side: 'sell' }, CTX)).toBe(true);
@@ -715,7 +717,14 @@ describe('delivery of buy orders (bid-delivery-spec §10)', () => {
     expect(hasDeliveryChoice({ type: 'ifd', side: 'buy' }, CTX)).toBe(false);
     expect(hasDeliveryChoice({ type: 'repeatIfd', side: 'sell' }, CTX)).toBe(false);
     expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...CTX, family: 'kron' })).toBe(false);
-    expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, PAIR)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, PAIR)).toBe(true);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, PAIR)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, PAIR)).toBe(false);
+    expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...PAIR, family: 'kron' })).toBe(false);
+    // a pair offers no Added to one UTXO: the wallet default falls back to Collected
+    expect(deliveryChoicesOf(PAIR)).toEqual(['collected', 'each']);
+    expect(deliveryOf(form('limit', 'buy', {}), { ...PAIR, delivery: { walletDefault: 'topup' } })).toBe('collected');
+    expect(buildIntent(form('limit', 'buy', { amount: '1', price: '1' }), { ...PAIR, delivery: { walletDefault: 'topup' } }).intent).toMatchObject({ delivery: { walletDefault: 'collected' } });
     // no choice: no Delivery row, and the Fills box stays
     expect(layoutOf(form('ioc', 'buy', {})).advanced).not.toContain('delivery');
     expect(layoutOf(form('limit', 'buy', {}), { ...CTX, family: 'kron' }).advanced).toEqual(expect.arrayContaining(['maxFills']));

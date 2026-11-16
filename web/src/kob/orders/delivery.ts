@@ -189,3 +189,41 @@ export function withThreshold<I extends object>(intent: I, threshold: bigint): I
   const d = (intent as { delivery?: DeliveryRequest }).delivery;
   return d ? { ...intent, delivery: { ...d, threshold } } : intent;
 }
+
+// ---- pair orders (founder decision 11/16)
+//
+// A resting pair BID (KobPair, KobCondPair) whose bought token A is KCC-20 is Collected by default, like a KAS-book bid, and is funded
+// with one delivery carrier. "Added to one UTXO" is not offered on pairs (the spec defines no threshold price for them), and a KRON A
+// delivers at each fill. A Collected fill after the first also spends the bought-custody, which costs its filler more relay fee: the
+// default tip pays it.
+
+/**
+ * The extra relay fee of a Collected pair fill after the first (it carries the bought-custody input), sompi, by the program of the bought
+ * token. Reference values measured by work package B3 on KCC20Ref_8x8 (a later fill 5,782,600 against a first fill 4,500,000 sompi), until
+ * pair_keeper_tips.json carries a measured value per program pair. A program without a value uses the largest one of the table.
+ */
+export const PAIR_COLLECTED_EXTRA_REFERENCE: Readonly<Record<string, bigint>> = { KCC20Ref_8x8: 5_782_600n - 4_500_000n };
+
+/** The collected extra of a bought program (else the largest value of the reference table). */
+export function pairCollectedExtra(program: string): bigint {
+  const v = PAIR_COLLECTED_EXTRA_REFERENCE[program];
+  return v ?? Object.values(PAIR_COLLECTED_EXTRA_REFERENCE).reduce((a, b) => (a > b ? a : b), 0n);
+}
+
+/**
+ * What a Collected pair order adds to its default tip (sompi per whole A): ceil(ceil(1.25 x extra) x scale / minFill), so every fill of
+ * at least minFill pays its filler at least 1.25 times the custody input's extra fee on top of the default pair tip.
+ */
+export function collectedPairTipExtra(extra: bigint, scale: bigint, minFill: bigint): bigint {
+  if (extra <= 0n || minFill <= 0n) return 0n;
+  return ceilDiv(ceilDiv(extra * 5n, 4n) * scale, minFill);
+}
+
+/**
+ * The delivery of a pair BID: resolveDelivery without "Added to one UTXO". A GTC order is resting, any other each fill. A Top-up the user
+ * chose is an error; one that is only the wallet default falls back to Collected.
+ */
+export function resolvePairDelivery(o: Omit<DeliveryOrder, 'program' | 'price'>, r: DeliveryRequest | undefined, pre: PlanIssue[]): ResolvedDelivery {
+  // no program: no top-up extra, so topupOffer refuses it
+  return resolveDelivery({ ...o, program: '', price: null }, r, pre);
+}

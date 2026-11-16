@@ -227,12 +227,12 @@ describe.each(combos)('KobPair TWAP / DCA / Dutch on %s', (_name, mkA, mkB) => {
   });
 
   it('DCA buy: one delivery per slice (or more when asked), the escrow at the price rounded down plus one unit', () => {
-    const p = pairValid(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { seconds: 3_600n }, price: 1_400n, maxFills: 5n });
+    const p = pairValid(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { seconds: 3_600n }, price: 1_400n, maxFills: 5n, delivery: { choice: 'each' } });
     const s = pairState(p);
     expect(s).toMatchObject({ side: '2', maxFill: '3000', interval: '36000' });
     expect(p.pair!.deliveries).toBe(5n);
     expect(BigInt(s.custody)).toBe(floorQ(9_000n, 1_400n, a.scale) + 1n);
-    expect(errorCodes(plan(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { daa: 600n }, price: 1_400n, maxFills: 2n }))).toContain('MAX_FILLS_INVALID');
+    expect(errorCodes(plan(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { daa: 600n }, price: 1_400n, maxFills: 2n, delivery: { choice: 'each' } }))).toContain('MAX_FILLS_INVALID');
   });
 
   it('Dutch sell decays and a rising bid rises over the duration from activeFrom', () => {
@@ -340,7 +340,7 @@ describe('golden vectors: the planned KobPair is the protocol\'s', () => {
     for (const [name, side] of [['pair.create.ask', 'sell'], ['pair.create.bid', 'buy']] as const) {
       const g = goldenRequest(name, MAKER_PK);
       const gs = (g as unknown as { order: { state: Record<string, string> } }).order.state;
-      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n, tip: 0n });
+      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n, tip: 0n, ...(side === 'buy' ? { delivery: { choice: 'each' as const } } : {}) });
       const s = pairState(p) as unknown as Record<string, string>;
       // the escrow is floor(amount p / scale(A)) + 1, like the golden bid
       const skip = new Set(['expiryDaa', 'decayStep', 'custody']);

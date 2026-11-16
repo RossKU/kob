@@ -25,7 +25,7 @@
 //   takes it from the order UTXO.
 import type { CondIntent } from '../intent-cond';
 import { COND_TYPES, isIfdLike } from '../intent-cond';
-import type { CarrierLine, PairOrderPlan, PairPlanEnv } from '../plan-types';
+import type { CarrierLine, PairOrderPlan, PairPlanEnv, PlanIssue } from '../plan-types';
 import { checkAmount, checkMinFill, crossingTouch } from '../guards';
 import { ceilDiv, maxBig } from '../units';
 import { issue } from './common-issues';
@@ -37,6 +37,7 @@ import {
   withCustody,
 } from './pair-common';
 import { planPairIfd } from './pair-ifd';
+import { collectedPairTipExtra, pairCollectedExtra, resolvePairDelivery, withDelivery, type ResolvedDelivery } from './delivery';
 import { pairIssue } from './pair-issues';
 
 const failed = (log: IssueLog, cond: CondSummary | null = null): PairOrderPlan => failedPairPlan(log.issues, [], cond);
@@ -79,7 +80,18 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     const c = crossingTouch(env.book, intent.side, legs.tpPrice, 0n);
     if (c.crossing && c.touch !== null) log.add(pairIssue('PAIR_TP_CROSSES', { touch: c.touch, ticker: b.ticker }, 'takeProfit'));
   }
-  // KAS delivery carriers: one per budgeted fill, at most one per possible fill.
+  // A buy's delivery: Collected by default (one carrier for every fill); its default tip also pays the custody input of every later fill
+  let dlv: ResolvedDelivery | null = null;
+  let tipNow = tip;
+  if (!sell) {
+    const dIssues: PlanIssue[] = [];
+    dlv = resolvePairDelivery({ codec: env.token.family, cls: 'resting', carrier, scale: env.token.scale, minFill }, intent.delivery, dIssues);
+    log.add(...dIssues);
+    if (log.failed) return failed(log);
+    if (dlv.choice === 'collected' && intent.tip === undefined) tipNow = tip + collectedPairTipExtra(pairCollectedExtra(env.token.program), env.token.scale, minFill);
+  }
+  const collected = dlv?.choice === 'collected';
+  // KAS delivery carriers: one per budgeted fill, at most one per possible fill (a Collected order: one).
   const possible = ceilDiv(amount, minFill);
   const fills = intent.maxFills ?? defaultPairFills(possible);
   if (fills < 1n || fills > possible) {
@@ -87,12 +99,13 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     return failed(log);
   }
   // With fewer carriers than possible fills, the rest fills only in full after fills - 1 partials.
-  if (fills < possible) log.add(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
+  if (!collected && fills < possible) log.add(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   if (log.failed) return failed(log);
 
   const tips = pairTipsOf(env);
   const draft = makeCondPairState(env, {
-    side: intent.side, amount, minFill, tip, activeFrom: act.activeFrom, expiryDaa: expiry.expiryDaa, refundTip: tips.refundTip, deliveryCarrier: carrier, custody: amount,
+    side: intent.side, amount, minFill, tip: tipNow, activeFrom: act.activeFrom, expiryDaa: expiry.expiryDaa, refundTip: tips.refundTip, deliveryCarrier: carrier, custody: amount,
+    ...(dlv ? { delivery: dlv.fields } : {}),
   }, legs);
   let order = draft;
   if (!sell) {
@@ -107,7 +120,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   }
   // At least the deliveries the protocol requires a new order to fund itself (kob-wasm
   // pairFundedFills): for a resting order a partial fill and the fill of its rest.
-  const funded = maxBig(fills, env.kob.pairFundedFills(order));
+  const funded = collected ? 1n : maxBig(fills, env.kob.pairFundedFills(order));
   const kas = pairKasLines(env, order, funded, carrier);
   if (kas === null) {
     log.shared('TIP_TOO_LARGE', undefined, 'tip');
@@ -130,8 +143,9 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
   const n1 = minFill < amount ? minFill : amount;
   const notes = [...NOTES_BY_TYPE[intent.type]];
   if (keeper !== null) notes.push('keeperReserve');
+  if (collected) notes.push('deliveryCollected');
   const cond: CondSummary = { type: intent.type, legs: legs.summary, trail: legs.trail, keeper, entry: null, exit: null, repeat: null };
-  return placePair(env, log.issues, {
+  const plan = placePair(env, log.issues, {
     order,
     lines,
     deadline: expiry.deadline,
@@ -142,7 +156,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     limitPrice,
     expectedPrice: expected,
     worstPrice: worst,
-    tip,
+    tip: tipNow,
     minTouch: hasStop ? legs.minTouch : null,
     keeperTip: legs.keeperTip,
     allInTotal: bOf(amount, limitPrice),
@@ -162,6 +176,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     cond,
     carrier,
   });
+  return dlv ? withDelivery(plan, { delivery: dlv, fills: funded }) : plan;
 }
 
 /**

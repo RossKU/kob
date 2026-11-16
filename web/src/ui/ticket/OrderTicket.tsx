@@ -42,7 +42,7 @@ import { useCovenantSignGate } from './CovenantSignGate';
 import { TicketFields, labelKey } from './TicketFields';
 import { DeliveryHelp } from './DeliveryHelp';
 import {
-  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, deliveryOf, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
+  BASE_SUFFIX, TYPE_GROUPS, amountBaseOf, buildIntent, deliveryChoicesOf, deliveryOf, kasTextOf, followQuote, formatPrice, streamingQuoteText, initialForm, layoutOf, parsePrice, reorientAmounts, setAmountBase,
   isIncomplete, setSide, setValue, sidesOf, switchType, visibleErrors,
   type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
@@ -975,7 +975,7 @@ export function OrderTicket(props: OrderTicketProps) {
           <div class="tk-advanced-body">
             <TicketFields
               form={form} ctx={ctx} ticker={ticker} ids={layout.advanced} errors={errs} onChange={onChange} {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
-              defaults={{ delivery: walletDelivery }} placeholders={defaultTip !== null ? { topupTip: formatKas(defaultTip) } : {}} subs={deliverySubs}
+              defaults={{ delivery: delivery ?? walletDelivery }} options={{ delivery: deliveryChoicesOf(ctx) }} placeholders={defaultTip !== null ? { topupTip: formatKas(defaultTip) } : {}} subs={deliverySubs}
               asides={{ delivery: <button type="button" class="tk-whats" onClick={() => setDeliveryHelp(true)} data-testid="order-delivery-help">{t('ticket.dhelp.link')}</button> }}
             />
           </div>

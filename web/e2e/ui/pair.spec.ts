@@ -354,3 +354,30 @@ test('picking a quote token keeps the layout: the chart stays in the same place 
   await expect(page.getByTestId('pair-chart-note')).toContainText('pair fills count only as volume');
   await expect(page.getByTestId('price-chart')).toHaveAttribute('data-state', /^(ready|empty)$/);
 });
+
+test('a pair buy chooses what happens to the bought tokens: Collected by default (one carrier), Each fill, no "Added to one UTXO"', async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await openPair(page, mock, { usd: 10n });
+  await pickType(page, 'limit', 'buy');
+  await fillFields(page, { price: '0.048', amount: '2', minFill: '0.5' });
+  const box = page.getByTestId('order-advanced');
+  if ((await box.getAttribute('open')) === null) await box.locator('summary').click();
+  const select = page.getByTestId('field-delivery');
+  await expect(select).toHaveAttribute('data-value', 'collected');
+  expect(await optionValues(select)).toEqual(['collected', 'each']);
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Fills collect in the order and arrive as one UTXO when it ends.');
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
+  await waitReviewable(page);
+  const shots = process.env.KOB_DELIVERY_SHOTS;
+  if (shots) {
+    await page.getByTestId('order-delivery-note').scrollIntoViewIfNeeded();
+    await page.getByTestId('order-ticket').screenshot({ path: `${shots}/delivery-pair-advanced.png` });
+  }
+  const placed = await placeOrderAndRead(page, mock);
+  expect(placed.views[0].contract).toBe('KobPair');
+  expect(placed.views[0].state.state).toMatchObject({ side: '2', mode: '1', bought: '0' });
+  // Each fill: the Fills box is back
+  await fillFields(page, { delivery: 'each' });
+  await expect(page.getByTestId('field-maxFills')).toBeVisible();
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill arrives in your wallet as its own UTXO.');
+});

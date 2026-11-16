@@ -47,6 +47,8 @@ export interface TicketFieldsProps {
   placeholders?: Readonly<Record<string, string>>;
   /** one muted line under a field (Delivery: what Collected means; Top-up tip: the tip total) */
   subs?: Readonly<Record<string, { text: string; testid: string }>>;
+  /** the options a select offers when they depend on the ticket (Bought tokens on a token pair: no "Added to one UTXO") */
+  options?: Readonly<Record<string, readonly string[]>>;
   /** something at the right end of a select's label row (Delivery: its "What's this?" link) */
   asides?: Readonly<Record<string, ComponentChildren>>;
 }
@@ -168,7 +170,7 @@ export function TicketFields(props: TicketFieldsProps) {
                   describedBy={describedBy}
                   invalid={invalid}
                   value={value || props.defaults?.[id] || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
-                  options={(spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
+                  options={(props.options?.[id] ?? spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
                   onChange={(v) => props.onChange(id, v)}
                   data-testid={spec.testid}
