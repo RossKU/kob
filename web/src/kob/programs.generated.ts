@@ -2,7 +2,7 @@
 
 /**
  * Every token program kob-protocol embeds, in declaration order. `carrierFloor` is a U64 decimal string (sompi). `topupExtra` (sompi, a U64
- * decimal string, or null: no top-up for the program) is the extra relay fee of a top-up fill (bid-delivery-spec §9), from the reference values of bid-delivery-spec §9 (topup_extra.json is not generated yet).
+ * decimal string, or null: no top-up for the program) is the extra relay fee of a top-up fill (bid-delivery-spec §9), from crates/kob-protocol/data/topup_extra.json.
  */
 export const TOKEN_PROGRAMS = [
   {
@@ -45,7 +45,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
-    topupExtra: null,
+    topupExtra: '790200',
   },
   {
     name: 'KCC20Ref_8x8',
@@ -66,7 +66,7 @@ export const TOKEN_PROGRAMS = [
     review: 'pending-review',
     networks: [],
     defaultDecimals: null,
-    topupExtra: null,
+    topupExtra: '1282400',
   },
   {
     name: 'KCC20Ref_16x16',
@@ -87,7 +87,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
-    topupExtra: null,
+    topupExtra: '2381600',
   },
   {
     name: 'KCC20P2',
@@ -108,7 +108,7 @@ export const TOKEN_PROGRAMS = [
     review: 'test-only',
     networks: [],
     defaultDecimals: null,
-    topupExtra: null,
+    topupExtra: '596400',
   },
   {
     name: 'KCC20KaspaCom_0_2_5',
@@ -129,7 +129,7 @@ export const TOKEN_PROGRAMS = [
     review: 'pending-review',
     networks: [],
     defaultDecimals: null,
-    topupExtra: null,
+    topupExtra: '5122800',
   },
   {
     name: 'KCC20PublicMint',
