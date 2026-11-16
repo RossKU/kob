@@ -418,7 +418,12 @@ impl Net {
             int(p.price_end),
             int(p.decay_step),
         ]);
-        compile_contract(&src("KobBid"), &a, CompileOptions::default()).expect("compile KobBid")
+        // KobBid with the delivery block (WP-C1): the evidence bid delivers in mode 0 (mode, recvThreshold, topupTip, bought)
+        let code = src("KobBid");
+        if code.contains("init_bought") {
+            a.extend([int(0), int(0), int(0), int(0)]);
+        }
+        compile_contract(&code, &a, CompileOptions::default()).expect("compile KobBid")
     }
     fn cond(&self, p: &CondP) -> SilAbiArtifact {
         let mut a = self.ev_consts();

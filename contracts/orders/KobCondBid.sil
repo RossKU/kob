@@ -140,8 +140,10 @@ contract KobCondBid(
     // The largest stopPrice whose band product stopPrice * slipBps, with
     // slipBps <= 10000, fits in an int.
     int constant MAX_STOP = 922337203685477;
+    // The evidence states: KobAsk 276 B, KobBid 321 B with its delivery block
+    // appended (its other fields keep their offsets, see touchBid).
     int constant ASK_STATE_LEN = 276;
-    int constant BID_STATE_LEN = 285;
+    int constant BID_STATE_LEN = 321;
     // The scans over these slots are unrolled by hand, one line per slot, so
     // raising a cap needs as many scan lines.
     int constant MAX_TOK_IN = 8;
