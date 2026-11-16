@@ -158,7 +158,7 @@ fn world(merchant: Merchant) -> World {
     let mut book = BookView::default();
     for b in [bid_a(20, common::MAKER_B, P250, 10), bid_a(21, common::MAKER_C, P245, 10)] {
         put(&chain, &b.utxo, b.state.spk());
-        book.bids.push(b);
+        book.bids.push((b, None));
     }
     for a in [ask_b(10, common::MAKER_A, 10), ask_b(11, common::MAKER_C, 10)] {
         put(&chain, &a.0.utxo, a.0.state.spk());

@@ -204,7 +204,7 @@ fn world() -> World {
     // the best bid (2.50) is the keeper's first choice; the second (2.45) is the fallback
     for b in [bid_a(20, common::MAKER_B, P250, 10), bid_a(21, common::MAKER_C, P245, 10)] {
         put(&chain, &b.utxo, b.state.spk());
-        book.bids.push(b);
+        book.bids.push((b, None));
     }
     {
         let a = ask_b(10, common::MAKER_A, 10);
@@ -353,7 +353,7 @@ fn an_intent_settles_after_a_conflicting_fill_without_a_new_signature() {
     assert!(v.is_valid, "{v:?}");
     assert_eq!(w.chain.submit_count(), 0);
     // a rival takes the best bid just before the keeper's first execution reaches the node
-    let best = w.book.lock().unwrap().bids[0].utxo.clone();
+    let best = w.book.lock().unwrap().bids[0].0.utxo.clone();
     *w.view.rival.lock().unwrap() = Some(Outpoint::new(best.transaction_id, best.index));
     let r = with_miner(&w, || w.fac.settle(SHOP, &request(&offer, &p.payload)));
     assert!(r.success, "{r:?}");
@@ -488,7 +488,7 @@ fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
     {
         let mut b = w.book.lock().unwrap();
         b.bids.truncate(1);
-        let o = b.bids[0].utxo.clone();
+        let o = b.bids[0].0.utxo.clone();
         *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
     let p = w.pay_t2k(&offer, &id, 3 * WHOLE);
@@ -499,8 +499,8 @@ fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
     assert_eq!(w.status(&id).status, InvoiceState::Pending);
     // liquidity comes back only after the deadline: the facilitator does not execute any more
     w.clock.set(NOW_MS + 121_000);
-    w.book.lock().unwrap().bids.push(bid_a(22, common::MAKER_A, P245, 10));
-    let o = w.book.lock().unwrap().bids.last().unwrap().clone();
+    w.book.lock().unwrap().bids.push((bid_a(22, common::MAKER_A, P245, 10), None));
+    let o = w.book.lock().unwrap().bids.last().unwrap().0.clone();
     put(&w.chain, &o.utxo, o.state.spk());
     let rep = w.fac.reconcile();
     assert_eq!(rep.intents_driven, 1);
@@ -543,7 +543,7 @@ fn an_unexecuted_intent_is_expired_on_chain_by_the_facilitator_after_its_deadlin
     {
         let mut b = w.book.lock().unwrap();
         b.bids.truncate(1);
-        let o = b.bids[0].utxo.clone();
+        let o = b.bids[0].0.utxo.clone();
         *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
     let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
@@ -586,7 +586,7 @@ fn a_paused_facilitator_broadcasts_no_intent_execution_or_expiry() {
     {
         let mut b = w.book.lock().unwrap();
         b.bids.truncate(1);
-        let o = b.bids[0].utxo.clone();
+        let o = b.bids[0].0.utxo.clone();
         *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
     let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
@@ -622,7 +622,7 @@ fn a_waiting_expiry_is_replaced_at_the_high_rate() {
     {
         let mut b = w.book.lock().unwrap();
         b.bids.truncate(1);
-        let o = b.bids[0].utxo.clone();
+        let o = b.bids[0].0.utxo.clone();
         *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
     let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
@@ -705,8 +705,8 @@ fn the_keeper_replans_against_the_book_of_the_moment_after_losing_an_order() {
     let w = world();
     let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
     let p = w.pay_t2k(&offer, RH, 3 * WHOLE);
-    let best = w.book.lock().unwrap().bids[0].utxo.clone();
-    let stale = w.book.lock().unwrap().bids[1].utxo.clone();
+    let best = w.book.lock().unwrap().bids[0].0.utxo.clone();
+    let stale = w.book.lock().unwrap().bids[1].0.utxo.clone();
     let fresh = bid_a(22, common::MAKER_A, P250, 10);
     let fresh_op = Outpoint::new(fresh.utxo.transaction_id, fresh.utxo.index);
     *w.view.rival.lock().unwrap() = Some(Outpoint::new(best.transaction_id, best.index));
@@ -715,8 +715,8 @@ fn the_keeper_replans_against_the_book_of_the_moment_after_losing_an_order() {
         // the book moves with the rival's fill: the taken bid leaves it, a new bid at the best price arrives
         put(&chain, &fresh.utxo, fresh.state.spk());
         let mut b = book.lock().unwrap();
-        b.bids.retain(|x| x.utxo.transaction_id != best.transaction_id);
-        b.bids.insert(0, fresh);
+        b.bids.retain(|x| x.0.utxo.transaction_id != best.transaction_id);
+        b.bids.insert(0, (fresh, None));
     }));
     let r = with_miner(&w, || w.fac.settle(SHOP, &request(&offer, &p.payload)));
     assert!(r.success, "{r:?}");

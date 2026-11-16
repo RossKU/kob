@@ -251,7 +251,7 @@ fn an_intent_executed_by_another_keeper_settles_for_the_payer() {
     let mut book = BookView::default();
     for b in [bid_a(20, common::MAKER_B, P250, 10), bid_a(21, common::MAKER_C, P245, 10)] {
         put(&chain, &b.utxo, b.state.spk());
-        book.bids.push(b);
+        book.bids.push((b, None));
     }
     let tok = common::tok_of(30, 9 * WHOLE, pk(PAYER_K), SCHEME_P2PK, 900, TOKEN_COV);
     put(&chain, &tok.utxo, tok.state.spk_with(kob_protocol::artifacts::token_template(P8)));

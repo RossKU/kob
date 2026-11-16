@@ -185,7 +185,7 @@ fn world_with_min_carrier(min_carrier: u64) -> World {
         bid_tok(23, common::MAKER_C, P245, 10, TOKEN_B),
     ] {
         put(&chain, &b.utxo, b.state.spk());
-        book.bids.push(b);
+        book.bids.push((b, None));
     }
     for a in [ask_b(10, common::MAKER_A, 10), ask_b(11, common::MAKER_C, 10)] {
         put(&chain, &a.0.utxo, a.0.state.spk());
