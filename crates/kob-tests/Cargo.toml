@@ -200,3 +200,8 @@ path = "tests/programs/program_kforgetoken1785.rs"
 [[test]]
 name = "program_kforgetoken7214"
 path = "tests/programs/program_kforgetoken7214.rs"
+
+# Reference experiments of docs/design/bid-delivery-spec.md (prototypes under contracts/prototypes/borrow): not a shipped suite.
+[[test]]
+name = "borrow_topup_experiments"
+path = "tests/design/borrow_topup_experiments.rs"

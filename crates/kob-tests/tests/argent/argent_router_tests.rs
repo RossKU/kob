@@ -3132,3 +3132,23 @@ fn router_lock_pin() {
     stand_in(&f, &mut s, 1, cov(0xc2), 1, &EXT, &[(1, payer, SCHEME_P2PK, 1)]);
     run_bad(t, &s, 0);
 }
+
+/// Design check for docs/design/bid-delivery-spec.md (router shape): an entry's observed token inputs are a fixed set. The
+/// shipped `sell` entry observes exactly one input of token A (the lock); with a second one in the transaction (here a
+/// custody owned by the bid's id, its units added to the payer's change so the token conserves) the intent refuses. A bid
+/// custody therefore cannot be an optional input of an existing entry: a shape with a custody input is its own entry.
+#[test]
+fn router_entry_refuses_a_token_input_it_does_not_observe() {
+    let f = fx();
+    let p = t2k_default(&f);
+    run_ok(&f.t, &r2(&f, &p, "R2 baseline (one token A input)"));
+    let mut s = r2(&f, &p, "R2 with a second token A input: the sell entry observes exactly one");
+    let change = HELD - p.n + WHOLE;
+    s.inputs.insert(2, tok_delegate(&f.t, TOKEN_A, CARRIER, WHOLE, &p.b.as_bytes()));
+    if let Role::TokLeader { next, .. } = &mut s.inputs[1].role {
+        next[1] = tok_state(change, &p.payer, SCHEME_P2PK);
+    }
+    s.outputs[3].script_public_key = f.t.spk(change, &p.payer, SCHEME_P2PK);
+    s.outputs[4].value += CARRIER as u64;
+    run_bad(&f.t, &s, 3);
+}
