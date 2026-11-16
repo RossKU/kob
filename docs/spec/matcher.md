@@ -1031,10 +1031,10 @@ custodies (genuine holder of the token's program, owned by the exit id, exactly 
    fills is not bounded by ⌈N/`minFill`⌉: after every merge the "takes everything left" exception applies again, so a
    re-armed amount below `minFill` fills, and makes an exit, on its own.)
 7. Merges are paid by the take-profit's crossing spread and the exit's `tip` (a merge adds
-   the entry input, and sell-first its custody: buy-first 3,960 bytes and 0.0079 KAS, sell-first 8,270 bytes and
-   0.0165 KAS over a plain take-profit; golden vectors `rpt.bid.merge.partial` vs `cond.ask.takeProfit.partial` and
+   the entry input, and sell-first its custody: buy-first 4,005 bytes and 0.0080 KAS, sell-first 8,543 bytes and
+   0.0171 KAS over a plain take-profit; golden vectors `rpt.bid.merge.partial` vs `cond.ask.takeProfit.partial` and
    `rpt.ask.merge.partial` vs `cond.bid.limit.partial`, §9; a pair merge adds the entry and its custodies: buy-first
-   11,862 bytes and 0.0237 KAS, sell-first into new custodies 8,428 bytes and 0.0169 KAS, `pair.rearm.bid` vs
+   12,330 bytes and 0.0247 KAS, sell-first into new custodies 9,071 bytes and 0.0181 KAS, `pair.rearm.bid` vs
    `pair.cond.ask.tp` and `pair.rearm.ask.new` vs `pair.cond.bid.limit`). Wallets SHOULD raise a repeat exit's tip
    accordingly.
 8. The indexer derives every step: exits from the fill (§1.1), the entry's continuation after a
@@ -1139,33 +1139,33 @@ amount a fill takes. The pair rows use the reference token programs of the vecto
 
 | Shape | Bytes | Fee floor |
 |---|---|---|
-| taker buys 4/10 from one ask (S1; `take.ask.partial`) | 5,663 | 0.0113 KAS |
-| market sell auction fill, IOC 4/10 (`take.ask.market`) | 5,579 | 0.0112 KAS |
-| matcher crosses 1 bid × 2 asks (S2; `match.cross.1x2`) | 12,049 | 0.0241 KAS |
-| B1 batch, 3 bids × 5 asks (8/8) + one stop armed by `update` next to an ask fill (`match.batch.3x5.8x8.arm`) | 52,772 | 0.1055 KAS |
-| stop sell 4/10 armed inside its fill, with the evidence ask fill 1/5 (`cond.ask.stop.trigger`) | 12,712 | 0.0254 KAS |
-| stop auction fill, armed (S17; `cond.ask.stop.auction`) | 7,515 | 0.0150 KAS |
-| arm a stop sell by `update` next to a 1/5 ask fill, whole transaction (`cond.ask.update.arm`) | 9,298 | 0.0186 KAS |
+| taker buys 4/10 from one ask (S1; `take.ask.partial`) | 5,534 | 0.0111 KAS |
+| market sell auction fill, IOC 4/10 (`take.ask.market`) | 5,450 | 0.0109 KAS |
+| matcher crosses 1 bid × 2 asks (S2; `match.cross.1x2`) | 12,955 | 0.0259 KAS |
+| B1 batch, 3 bids × 5 asks (8/8) + one stop armed by `update` next to an ask fill (`match.batch.3x5.8x8.arm`) | 54,515 | 0.1090 KAS |
+| stop sell 4/10 armed inside its fill, with the evidence ask fill 1/5 (`cond.ask.stop.trigger`) | 12,779 | 0.0256 KAS |
+| stop auction fill, armed (S17; `cond.ask.stop.auction`) | 7,711 | 0.0154 KAS |
+| arm a stop sell by `update` next to a 1/5 ask fill, whole transaction (`cond.ask.update.arm`) | 9,540 | 0.0191 KAS |
 | arm or trail (`update`), marginal inside a batch, largest over the updatable kinds (`data/keeper_tips.json` `updateFee`) | — | KAS-quoted kinds 0.0101 KAS (KRON 0.0091 KAS); the pair conditionals and entries 0.0178 KAS (either family) |
-| IOC kill / refund of an ask (`refund.ask.iocKill`) | 5,159 | 0.0103 KAS |
-| in-place amend of an ask, the carrier pays (any KCC-20 program / KRON; `amend.ask`), payload version 4 | 2,090 / 1,939 | 0.0042 / 0.0039 KAS |
-| cancel-replace of an ask, 3/3 / 8/8 (`cancelReplace.ask`; no tiny change output, payload version 4) | 5,474 / 9,204 | 0.0109 / 0.0184 KAS |
-| IFO entry partial 4/10 (S14; `ifd.bid.partial`) / a repeating entry (RP1; `ifd.bid.repeat.book`) | 10,766 / 10,769 | 0.0215 / 0.0215 KAS |
-| stop-entry IFO 4/10 armed inside the fill, with the evidence bid fill (S18; `ifd.bid.stopEntry.trigger`) | 12,636 | 0.0253 KAS |
-| sell-first IFO entry partial 4/10 (B7; `ifd.ask.partial`) / a repeating entry (RPB1; `ifd.ask.repeat.book`) | 11,822 / 11,825 | 0.0236 / 0.0237 KAS |
-| repeat, buy-first: take-profit 3/4 + merge (RP4; `rpt.bid.merge.partial`) / sell-out 4/4 + merge (RP5; `rpt.bid.merge.sellOut`) | 11,472 / 11,192 | 0.0229 / 0.0224 KAS |
-| repeat, sell-first: buy-back 3/4 + merge into custody (RPB4; `rpt.ask.merge.partial`) / 4/4 into a new custody (RPB5; `rpt.ask.merge.newCustody`) | 15,232 / 11,992 | 0.0305 / 0.0240 KAS |
-| booked exit take-profit after `rptUntil`, no merge (RP6 / RPB6; `rpt.bid.takeProfit.afterUntil` / `rpt.ask.takeProfit.afterUntil`) | 7,232 / 6,875 | 0.0145 / 0.0138 KAS |
-| close of an empty repeating ask (RPB8; `close.ifdAsk.emptyRepeat`) / refund of an if-done bid entry (RP9; `refund.ifdBid`: a non-repeating entry, the same template and entry as an empty repeating one) | 5,108 / 4,004 | 0.0102 / 0.0080 KAS |
-| pair ask fill routed through 1 bid of A + 1 ask of B, rest (`pair.ask.rest`; `pair.kcc20-kron.ask.rest` / `pair.kron-kcc20.ask.rest` / `pair.kron-kron.ask.rest`) | 13,959 / 13,016 / 12,995 / 12,351 | 0.0279 / 0.0260 / 0.0260 / 0.0247 KAS |
-| pair bid fill routed through 1 bid of B + 1 ask of A, rest (`pair.bid.rest`, same family mixes) | 13,959 / 12,995 / 13,016 / 12,351 | 0.0279 / 0.0260 / 0.0260 / 0.0247 KAS |
-| pair market order mid-auction (`pair.ask.decay` / `pair.bid.rising`) | 13,962 / 13,962 | 0.0279 / 0.0279 KAS |
-| two opposite pair orders netted, no KAS-book leg (`pair.net.1x1`) / 2 × 2 netted, KRON / KRON (`pair.kron-kron.net.2x2`) | 13,506 / 24,524 | 0.0270 / 0.0490 KAS |
-| pair stop armed inside its fill, evidence mode 0 (two KAS-book fills) / mode 1 (a resting `KobPair` fill) (`pair.cond.ask.stop.ev0` / `pair.cond.ask.stop.ev1`) | 24,356 / 23,450 | 0.0487 / 0.0469 KAS |
-| arm a pair stop by `update`, mode 0 / mode 1, whole transaction (`pair.update.ask.arm.ev0` / `pair.update.ask.arm.ev1`) | 20,807 / 19,901 | 0.0416 / 0.0398 KAS |
-| pair if-done entry fill, buy-first / sell-first (`pair.ifd.bid.cont` / `pair.ifd.ask.cont`) | 25,574 / 28,923 | 0.0511 / 0.0578 KAS |
-| pair repeat: take-profit + merge, buy-first / sell-first into new custodies (`pair.rearm.bid` / `pair.rearm.ask.new`) | 29,146 / 25,908 | 0.0583 / 0.0518 KAS |
-| create / cancel / refund a pair ask (`pair.create.ask` / `pair.cancel.ask` / `pair.refund.ask`); create a sell-first pair entry (`pair.create.ifdAsk`, two custodies) | 4,244 / 6,654 / 6,602; 8,171 | 0.0085 / 0.0133 / 0.0132; 0.0163 KAS |
+| IOC kill / refund of an ask (`refund.ask.iocKill`) | 5,030 | 0.0101 KAS |
+| in-place amend of an ask, the carrier pays (any KCC-20 program / KRON; `amend.ask`), payload version 4 | 2,168 / 1,939 | 0.0043 / 0.0039 KAS |
+| cancel-replace of an ask, 3/3 / 8/8 (`cancelReplace.ask`; no tiny change output, payload version 4) | 5,383 / 9,204 | 0.0108 / 0.0184 KAS |
+| IFO entry partial 4/10 (S14; `ifd.bid.partial`) / a repeating entry (RP1; `ifd.bid.repeat.book`) | 10,974 / 10,977 | 0.0219 / 0.0220 KAS |
+| stop-entry IFO 4/10 armed inside the fill, with the evidence bid fill (S18; `ifd.bid.stopEntry.trigger`) | 14,008 | 0.0280 KAS |
+| sell-first IFO entry partial 4/10 (B7; `ifd.ask.partial`) / a repeating entry (RPB1; `ifd.ask.repeat.book`) | 13,614 / 13,617 | 0.0272 / 0.0272 KAS |
+| repeat, buy-first: take-profit 3/4 + merge (RP4; `rpt.bid.merge.partial`) / sell-out 4/4 + merge (RP5; `rpt.bid.merge.sellOut`) | 11,713 / 11,433 | 0.0234 / 0.0229 KAS |
+| repeat, sell-first: buy-back 3/4 + merge into custody (RPB4; `rpt.ask.merge.partial`) / 4/4 into a new custody (RPB5; `rpt.ask.merge.newCustody`) | 16,886 / 13,821 | 0.0338 / 0.0276 KAS |
+| booked exit take-profit after `rptUntil`, no merge (RP6 / RPB6; `rpt.bid.takeProfit.afterUntil` / `rpt.ask.takeProfit.afterUntil`) | 7,428 / 8,308 | 0.0149 / 0.0166 KAS |
+| close of an empty repeating ask (RPB8; `close.ifdAsk.emptyRepeat`) / refund of an if-done bid entry (RP9; `refund.ifdBid`: a non-repeating entry, the same template and entry as an empty repeating one) | 5,556 / 4,049 | 0.0111 / 0.0081 KAS |
+| pair ask fill routed through 1 bid of A + 1 ask of B, rest (`pair.ask.rest`; `pair.kcc20-kron.ask.rest` / `pair.kron-kcc20.ask.rest` / `pair.kron-kron.ask.rest`) | 15,630 / 14,816 / 13,790 / 13,275 | 0.0313 / 0.0296 / 0.0276 / 0.0266 KAS |
+| pair bid fill routed through 1 bid of B + 1 ask of A, rest (`pair.bid.rest`, same family mixes) | 15,630 / 13,790 / 14,816 / 13,275 | 0.0313 / 0.0276 / 0.0296 / 0.0266 KAS |
+| pair market order mid-auction (`pair.ask.decay` / `pair.bid.rising`) | 15,633 / 15,633 | 0.0313 / 0.0313 KAS |
+| two opposite pair orders netted, no KAS-book leg (`pair.net.1x1`) / 2 × 2 netted, KRON / KRON (`pair.kron-kron.net.2x2`) | 14,778 / 27,768 | 0.0296 / 0.0555 KAS |
+| pair stop armed inside its fill, evidence mode 0 (two KAS-book fills) / mode 1 (a resting `KobPair` fill) (`pair.cond.ask.stop.ev0` / `pair.cond.ask.stop.ev1`) | 27,869 / 26,165 | 0.0557 / 0.0523 KAS |
+| arm a pair stop by `update`, mode 0 / mode 1, whole transaction (`pair.update.ask.arm.ev0` / `pair.update.ask.arm.ev1`) | 24,495 / 22,791 | 0.0490 / 0.0456 KAS |
+| pair if-done entry fill, buy-first / sell-first (`pair.ifd.bid.cont` / `pair.ifd.ask.cont`) | 28,625 / 31,799 | 0.0573 / 0.0636 KAS |
+| pair repeat: take-profit + merge, buy-first / sell-first into new custodies (`pair.rearm.bid` / `pair.rearm.ask.new`) | 32,092 / 29,029 | 0.0642 / 0.0581 KAS |
+| create / cancel / refund a pair ask (`pair.create.ask` / `pair.cancel.ask` / `pair.refund.ask`); create a sell-first pair entry (`pair.create.ifdAsk`, two custodies) | 4,111 / 7,289 / 7,238; 7,830 | 0.0082 / 0.0146 / 0.0145; 0.0157 KAS |
 | global batch: two 8/8 books (2 bids × 2 asks; an IOC ask into two bids) and a routed pair order 8/8 / 8/8, one transaction, 10 fills | 51,829 | 0.1037 KAS |
 | global batch at the physical limit: the first of 4 transactions over 48 books of 8/8 tokens, 38 fills | 230,267 | 0.4605 KAS |
 
