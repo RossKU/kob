@@ -1,5 +1,5 @@
 //! Regression: planner fuzz with SANE-looking but differently distributed books than `matcher_fuzz`:
-//! mixed minimum fills (1 base unit up to 7 whole tokens) and amounts that are not multiples of a whole token (the
+//! bids in every delivery mode (mode-1 custodies, mode-2 receive UTXOs and tips), mixed minimum fills (1 base unit up to 7 whole tokens) and amounts that are not multiples of a whole token (the
 //! minimum-fill rule and the maker-favour rounding), one token at two scales (two books of one market), wide tip range
 //! (tips larger than the spread), many equal prices, larger books (up to 40 orders), more IOC / FOK, `maxFill` caps and TWAP
 //! intervals. Every plan must be engine-valid and satisfy `check_invariants` (no partial FOK, no stray, one
@@ -79,8 +79,28 @@ fn order(r: &mut Rng, id: u32, tpl: TemplateId, mid: i64) -> ListedOrder {
         if r.chance(15) {
             b.max_fill = r.range(1, 4 * WHOLE) * k;
         }
+        // GTC bids deliver in every mode: mode 1 with or without a bought-custody, mode 2 with or without the
+        // maker's receive UTXOs and with a tip that pays the top-up or not.
+        let mode = if tif == 0 { r.pick(&[MODE_NEW, MODE_NEW, MODE_ACCUMULATE, MODE_TOPUP]) } else { MODE_NEW };
+        let mut recv = vec![];
+        if mode == MODE_ACCUMULATE {
+            b.mode = mode;
+            b.bought = r.pick(&[0, 1, WHOLE * k, 5 * WHOLE * k]);
+        } else if mode == MODE_TOPUP {
+            let extra = kob_protocol::budget::topup_extra(tpl).expect("a measured top-up") as i64;
+            b.mode = mode;
+            b.recv_threshold = r.pick(&[1, 500, WHOLE]) * k;
+            b.topup_tip = r.pick(&[0, extra - 1, extra, (extra * 5 + 3) / 4]).min(b.delivery_carrier);
+            for _ in 0..r.range(0, 2) {
+                recv.push(receive(maker, r.range(0, 9) * WHOLE * k, b.recv_threshold * r.range(1, 2)));
+            }
+        }
         let v = (b.used(amount).expect("budget") + r.range(1, 4) * DC) as u64;
-        let o = listed(cid(id), AnyState::KobBid(b), v, 1_000);
+        let mut o = listed(cid(id), AnyState::KobBid(b.clone()), v, 1_000);
+        if b.bought > 0 {
+            o.bought_custody = Some(custody(b.bought, cid(id), 1_000));
+        }
+        o.receive = recv;
         if tif != 0 {
             fresh(o)
         } else {

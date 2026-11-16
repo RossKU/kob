@@ -29,7 +29,7 @@ use super::reads::tip_state;
 use crate::hex::Hash32;
 use crate::matcher::book::{ListedOrder, MemoryBook, OrderBookView};
 use kob_protocol::family::Family;
-use kob_protocol::state::TokenState;
+use kob_protocol::state::{AnyState, TokenState};
 use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
 use rusqlite::Connection;
 use std::collections::HashMap;
@@ -403,7 +403,63 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
             seen_daa: daa.max(0) as u64,
             foreign,
             strays: strays.into_iter().map(as_token).collect(),
+            receive: vec![],
         });
+    }
+    // A mode-2 bid's top-up targets: the maker's live receive UTXOs of its token and commitment.
+    let mut seen: HashMap<([u8; 32], [u8; 32]), Vec<TokenUtxo>> = HashMap::new();
+    for o in out.iter_mut() {
+        let s = &o.order.state;
+        let (AnyState::KobBid(_) | AnyState::KobCondBid(_)) = s else { continue };
+        if s.delivery().is_none_or(|d| d.mode != kob_protocol::state::MODE_TOPUP) {
+            continue;
+        }
+        let (maker, token, ext) = (s.maker(), s.token_cov_id(), o.extension().unwrap_or([0; 32]));
+        let all = match seen.get(&(maker, token)) {
+            Some(v) => v.clone(),
+            None => {
+                let v = key_tokens(conn, &maker, &token)?;
+                seen.insert((maker, token), v.clone());
+                v
+            }
+        };
+        o.receive = all.into_iter().filter(|t| crate::matcher::book::receive_threshold(&t.state, &maker, &ext).is_some()).collect();
+    }
+    Ok(out)
+}
+
+/// The live, proven token UTXOs of `token` that key `owner` holds, oldest first.
+fn key_tokens(conn: &Connection, owner: &[u8; 32], token: &[u8; 32]) -> DbResult<Vec<TokenUtxo>> {
+    let mut st = conn.prepare_cached(
+        "SELECT x.txid, x.idx, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x \
+         JOIN ids ow ON ow.id = x.owner_id \
+         WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.spent_block IS NULL \
+         ORDER BY x.created_block, x.txid, x.idx",
+    )?;
+    let rows = st.query_map([&owner[..], &token[..]], |r| {
+        Ok((
+            r.get::<_, Vec<u8>>(0)?,
+            r.get::<_, u32>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, Vec<u8>>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    let mut out = vec![];
+    for r in rows {
+        let (txid, idx, program, value, state, daa) = r?;
+        let Some(program) = kob_protocol::artifacts::TemplateId::from_name(&program).filter(|p| p.is_token()) else { continue };
+        let Ok(state) = TokenState::decode_with(kob_protocol::artifacts::token_template(program), &state) else { continue };
+        let Some(txid) = h32(txid) else { continue };
+        let utxo = Utxo {
+            transaction_id: txid,
+            index: idx,
+            amount: value.max(0) as u64,
+            block_daa_score: daa.max(0) as u64,
+            covenant_id: Some(*token),
+        };
+        out.push(TokenUtxo { utxo, state });
     }
     Ok(out)
 }

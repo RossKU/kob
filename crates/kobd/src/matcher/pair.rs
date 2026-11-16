@@ -469,7 +469,8 @@ impl PairInfo {
                 let pre_in = u32::from(s.custody > 0);
                 (pre_in, 1 + u32::from(pre_in == 1 && s.custody - used > 0))
             }
-            _ => (0, 1),
+            // The delivery, and a mode-1 order's bought-custody in (bid-delivery-spec §6.5).
+            _ => (u32::from(self.state.bought_custody().is_some()), 1),
         }
     }
     /// Whether the evidence arms this order's stop, by its own covenant rule.
@@ -1182,7 +1183,8 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                     + (m.slots.1 + m.slots.3) as u64 * (OUTPUT_BYTES + NEXT_STATE_BYTES)
                     + OUTPUT_BYTES
             });
-            let bytes = order_bytes(info.kind, s_prog, t_prog, u64::from(info.custody > 0), merge_bytes);
+            let bought = if info.state.bought_custody().is_some() { token_input_bytes(t_prog) } else { 0 };
+            let bytes = order_bytes(info.kind, s_prog, t_prog, u64::from(info.custody > 0), merge_bytes) + bought;
             let (Some(sell_cap), Some(buy_cap)) = (info.sell_qty(info.cap), info.buy_qty(info.cap)) else { continue };
             let class = match (&info.need, info.kind, info.leg, &info.state) {
                 (Some(_), _, _, _) => Class::Triggered,
@@ -1221,6 +1223,7 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                 trigger: None,
                 merge,
                 merge_custody: false,
+                bought_in: false,
                 parent,
                 touch: None,
                 chain_safe: false,
@@ -1312,6 +1315,7 @@ pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
         trigger: None,
         merge: None,
         merge_custody: false,
+        bought_in: false,
         parent: None,
         touch: None,
         chain_safe: false,

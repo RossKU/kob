@@ -166,6 +166,7 @@ pub fn l_pair(id: u32, pa: TemplateId, pb: TemplateId, s: PairState, daa: u64) -
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -237,6 +238,7 @@ pub fn l_cond_pair(id: u32, pa: TemplateId, pb: TemplateId, s: CondPairState, da
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -317,6 +319,7 @@ pub fn l_ifd_pair(id: u32, pa: TemplateId, pb: TemplateId, s: IfdPairState, daa:
         seen_daa: daa,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -337,6 +340,7 @@ pub fn l_bid_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
@@ -357,6 +361,7 @@ pub fn l_ask_of(id: u32, token: [u8; 32], p: TemplateId, maker: u8, price: i64, 
         seen_daa: 1_000,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 

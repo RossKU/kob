@@ -184,6 +184,7 @@ async fn the_store_lists_every_kind_exactly_as_the_chain_built_it() {
                 foreign: vec![],
                 strays: vec![],
                 order: utxo,
+                receive: vec![],
             }
         };
         let expected = [

@@ -907,6 +907,7 @@ fn exit_from_tx(
         seen_daa: accepted,
         foreign: vec![],
         strays: vec![],
+        receive: vec![],
     }
 }
 
