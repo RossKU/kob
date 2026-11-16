@@ -141,6 +141,14 @@ pub mod api {
                 chk("order maker", Some(r.order.state.maker()))?;
                 chk("change key", r.change)
             }
+            Action::ClaimOrder(r) => {
+                chk("order maker", Some(r.order.state.maker()))?;
+                chk("change key", r.change)?;
+                if let Some(p) = &r.place {
+                    chk("placed order maker", Some(p.order.maker()))?;
+                }
+                Ok(())
+            }
         }
     }
     /// Attaches signatures to a built transaction and returns the signed transaction.

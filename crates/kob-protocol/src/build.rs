@@ -583,7 +583,8 @@ pub struct CancelOrder {
     /// Stray token UTXOs owned by the order's covenant id, swept to the maker.
     ///
     /// The cancel is the only path that moves them. A pair order's strays may be of either of its
-    /// tokens, A or B, and each token is swept in its own output.
+    /// tokens, A or B, and each token is swept in its own output. A mode-1 order's bought-custody
+    /// is one of them and required (CL4).
     #[serde(default)]
     pub strays: Vec<TokenUtxo>,
     /// Foreign strays, returned to the maker in one output per token.
@@ -624,6 +625,46 @@ pub struct Replacement {
     pub token_carrier: Option<u64>,
     #[serde(with = "crate::json::field", default)]
     pub deadline: Option<u64>,
+}
+
+/// The maker's claim of a mode-1 order's bought-custody through its SIGHASH_ALL `cancel`
+/// (bid-delivery-spec §7, shapes CL1 to CL3).
+///
+/// - Claim (CL1): the order continues at output 0 with `bought = 0`, and the bought-custody goes to
+///   the maker as one plain UTXO.
+/// - Claim and merge (CL2): `tokens`, the maker's plain UTXOs of the bought token, join that UTXO.
+/// - Claim and place (CL3): `place` takes its custody from the claimed tokens (and `tokens`); the
+///   rest is a plain UTXO of the maker. With `end` the order ends and its KAS goes to the change.
+///
+/// The continuation holds the order's KAS plus one `deliveryCarrier`, since its next fill funds a
+/// new custody. Funding pays that and the fee, and its first input authorises the placed genesis.
+/// A pair order's sell custody is not touched. Ending without a placement is a [`CancelOrder`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimOrder {
+    pub order: OrderUtxo<AnyState>,
+    pub bought_custody: TokenUtxo,
+    #[serde(default)]
+    pub tokens: Vec<TokenUtxo>,
+    #[serde(default)]
+    pub place: Option<Replacement>,
+    #[serde(default)]
+    pub end: bool,
+    /// KAS on the continuation (default and least: the order's value plus `deliveryCarrier`).
+    #[serde(with = "crate::json::field", default)]
+    pub value: Option<u64>,
+    /// KAS on the maker's plain token output (default: the KAS of the token inputs it gathers).
+    #[serde(with = "crate::json::field", default)]
+    pub token_carrier: Option<u64>,
+    pub funding: Vec<KeyUtxo>,
+    #[serde(with = "crate::json::field", default)]
+    pub change: Option<[u8; 32]>,
+    #[serde(with = "crate::json::field", default)]
+    pub lock_time: u64,
+    #[serde(default)]
+    pub records: Vec<Record>,
+    #[serde(default)]
+    pub fee: FeeOptions,
 }
 
 /// Amend a plain ask in place, by the maker's SIGHASH_ALL `cancel`.
@@ -956,6 +997,53 @@ pub(crate) fn pinned_ext(s: &AnyState, token: [u8; 32]) -> Option<[u8; 32]> {
     s.custody_ext(token)
 }
 
+/// A mode-1 order's bought-custody (bid-delivery-spec §1): its token, `bought`, the commitment it
+/// carries and the order's `deliveryCarrier`.
+struct Bought {
+    token: Token,
+    amount: i64,
+    ext: [u8; 32],
+    carrier: i64,
+}
+
+impl Bought {
+    /// The exact state of the custody under the order `cov`.
+    fn state(&self, cov: [u8; 32]) -> TokenState {
+        TokenState::custody(self.token.1.family(), self.amount, cov, self.ext)
+    }
+    fn is(&self, t: &TokenUtxo, cov: [u8; 32]) -> bool {
+        t.utxo.covenant_id == Some(self.token.0) && t.state == self.state(cov)
+    }
+}
+
+/// The bought-custody `s` holds, `None` without one (`bought == 0`, another mode or kind).
+fn bought_of(s: &AnyState) -> Result<Option<Bought>> {
+    let Some(amount) = s.bought_custody() else { return Ok(None) };
+    let (token, ext, carrier) = match s {
+        AnyState::KobBid(b) => (order_token(s)?, b.extension_commitment, b.delivery_carrier),
+        AnyState::KobCondBid(c) => (order_token(s)?, c.extension_commitment, c.delivery_carrier),
+        AnyState::KobPair(p) => (pair_bought(s)?, p.t_ext, p.delivery_carrier),
+        AnyState::KobCondPair(p) => (pair_bought(s)?, p.t_ext, p.delivery_carrier),
+        _ => return Ok(None),
+    };
+    Ok(Some(Bought { token, amount, ext, carrier }))
+}
+
+fn pair_bought(s: &AnyState) -> Result<Token> {
+    Ok(pair::refund_inputs(s).bought.ok_or_else(|| Error::Invalid("a pair order of unsupported programs".into()))?.0)
+}
+
+/// A cancel that ends an order holding a bought-custody must move it: nothing can spend a token
+/// owned by a covenant id that no longer exists.
+fn check_releases_bought(s: &AnyState, cov: [u8; 32], strays: &[TokenUtxo]) -> Result<()> {
+    match bought_of(s)? {
+        Some(b) if !strays.iter().any(|t| b.is(t, cov)) => {
+            invalid(format!("this order holds a bought-custody of {} base units: pass it in strays, or the cancel loses it", b.amount))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Builds a [`CreateOrder`].
 pub fn build_create_order(r: &CreateOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     check_new_order(&r.order)?;
@@ -1136,6 +1224,9 @@ pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx>
     let (tokens, custodies, suffix) = own_tokens(&order.state)?;
     if r.retired.is_some() && (r.replace.is_some() || !r.tokens.is_empty() || !r.records.is_empty()) {
         return invalid("an order under a retired template is only cancelled: no replacement, top-up or records");
+    }
+    if let Some(cov) = order.utxo.covenant_id {
+        check_releases_bought(&order.state, cov, &r.strays)?;
     }
     let subject = CancelSubject {
         maker: order.state.maker(),
@@ -1411,6 +1502,117 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     draft.seal(budgets)
 }
 
+/// Builds a [`ClaimOrder`].
+pub fn build_claim_order(r: &ClaimOrder, budgets: BudgetFn) -> Result<BuiltTx> {
+    let order = &r.order;
+    let s = &order.state;
+    let maker = s.maker();
+    let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+    let b = bought_of(s)?.ok_or_else(|| Error::Invalid("this order holds no bought-custody (mode 1, bought > 0)".into()))?;
+    let t = b.token;
+    if r.funding.is_empty() {
+        return invalid("a claim needs funding: the next custody's carrier, the fee and a placed order's genesis");
+    }
+    if r.end && (r.place.is_none() || s.is_pair()) {
+        return invalid("only a claim and place of a bid ends the order; otherwise cancel it (CancelOrder)");
+    }
+    // The program's token inputs, capped where the budget table measures a covenant-owned leader.
+    let max_in = t.1.token_slots().map(|x| x.0).unwrap_or(0).min(t.1.family().max_tok_in());
+    if 1 + r.tokens.len() > max_in {
+        return invalid(format!("{} takes {max_in} token inputs: the bought-custody and {} wallet UTXOs", t.1.name(), max_in - 1));
+    }
+    let c = &r.bought_custody;
+    check_custody(c, Some(order_cov), t, b.amount)?;
+    if !b.is(c, order_cov) {
+        return invalid("bought-custody: its state is not exactly the order's (no borrowing, a zero guard, the order's commitment)");
+    }
+    let (_, _, suffix) = own_tokens(s)?;
+    let mut draft = Draft::new(r.lock_time, &r.fee, Some(r.change.unwrap_or(maker)))?;
+    let id = s.template_id();
+    let order_input = draft.add_input(
+        &order.utxo,
+        entry(id, s.encode(), "cancel", vec![Arg::Sig(maker)]),
+        format!("{}.cancel{suffix}", id.name()),
+        0,
+    );
+    draft.add_token_input(c, t, Witness::CovenantId)?;
+    let (mut left, mut wallet_kas) = (b.amount, 0u64);
+    for w in &r.tokens {
+        check_token_input(w, t)?;
+        if !w.state.is_plain() || !w.state.is_holder(t.1) || w.state.owner() != maker || w.state.extension() != b.ext {
+            return invalid("a claim's wallet tokens are the maker's plain UTXOs of the bought token and its commitment");
+        }
+        left = add(left, w.state.amount(), "token amounts")?;
+        wallet_kas = wallet_kas.checked_add(w.utxo.amount).ok_or_else(|| Error::Invalid("token carriers overflow".into()))?;
+        draft.add_token_input(w, t, token_witness(&w.state, t.1)?)?;
+    }
+    let auth = draft.inputs.len();
+    for f in &r.funding {
+        draft.add_p2pk(f);
+    }
+    let cont = if r.end {
+        None
+    } else {
+        let after = s.with_bought(0).expect("a delivering kind");
+        let floor =
+            order.utxo.amount.checked_add(u(b.carrier, "deliveryCarrier")?).ok_or_else(|| Error::Invalid("value overflow".into()))?;
+        let value = r.value.unwrap_or(floor);
+        if value < floor {
+            return invalid(format!("the continuation needs at least {floor} sompi: the order's value and one deliveryCarrier"));
+        }
+        kas_out(value as i64, "the continuation value")?;
+        let out = draft.add_output(value, after.spk(), Some((order_input as u16, order_cov)));
+        Some((after, value, out))
+    };
+    let mut records = vec![];
+    if let Some(p) = &r.place {
+        check_new_order(&p.order)?;
+        let (_, custodies, _) = own_tokens(&p.order)?;
+        if p.order.maker() != maker || custodies.is_empty() || custodies.iter().any(|(x, _)| *x != t) {
+            return invalid("the placed order is the maker's and holds only the claimed token in custody");
+        }
+        if pinned_ext(&p.order, t.0).is_some_and(|e| e != b.ext) {
+            return invalid("the placed order pins another extension commitment than the claimed tokens carry");
+        }
+        if (p.value as i64) < min_order_value(&p.order) {
+            return invalid("the placed order's value is below what it needs to be fillable");
+        }
+        kas_out(p.value as i64, "the placed order's value")?;
+        let (outs, new_id) = draft.add_genesis(auth, vec![(p.value, p.order.spk())], Some(p.order.template_id()))?;
+        let carrier = kas_out(p.token_carrier.unwrap_or(c.utxo.amount) as i64, "the placed custody's carrier")?;
+        let mut parts = vec![];
+        for (_, amount) in custodies {
+            if amount > left {
+                return invalid(format!("the placed order needs {amount} base units; the claim holds {left}"));
+            }
+            left -= amount;
+            let idx = draft.add_token_output(t, TokenState::custody(t.1.family(), amount, new_id, b.ext), carrier)?;
+            parts.push(Custody { token_output: idx as u16, extension_commitment: b.ext });
+        }
+        let mut parts = parts.into_iter();
+        records.push(Record::order_with_prefund(outs[0] as u16, &p.order, parts.next(), parts.next(), p.deadline));
+        draft.absorber = absorber_for(&p.order, p.value, outs[0]);
+    }
+    if left > 0 {
+        // The maker's plain UTXO carries the KAS of the token inputs it gathers.
+        let kas = match (&r.place, wallet_kas) {
+            (Some(_), 0) => c.utxo.amount,
+            (Some(_), w) => w,
+            (None, w) => c.utxo.amount.saturating_add(w),
+        };
+        let carrier = pos(r.token_carrier.unwrap_or(kas) as i64, "token carrier")?;
+        draft.add_token_output(t, TokenState::user(t.1, left, maker, b.ext), carrier)?;
+    }
+    if let (None, Some((after, value, out))) = (draft.absorber, &cont) {
+        draft.absorber = absorber_for(after, *value, *out);
+    }
+    records.extend(r.records.iter().cloned());
+    if !records.is_empty() {
+        draft.payload = payload::encode_with_release(&records)?;
+    }
+    draft.seal(budgets)
+}
+
 /// One order of a position cancel, with its custody and any strays to sweep.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1475,6 +1677,7 @@ pub fn build_cancel_position(r: &CancelPosition, budgets: BudgetFn) -> Result<Bu
     let mut groups: Vec<(Token, i64, Option<[u8; 32]>, u64)> = tokens.iter().map(|t| (*t, 0, None, 0)).collect();
     for (it, custodies) in items {
         let cov = it.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+        check_releases_bought(&it.order.state, cov, &it.strays)?;
         let given: Vec<&TokenUtxo> = it.custody.iter().chain(it.prefund.iter()).collect();
         if given.len() > custodies.len() {
             return invalid("this order has no custody token");
@@ -1535,6 +1738,12 @@ pub fn build_sweep_order(r: &SweepOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     let mut draft = Draft::new(r.lock_time, &r.fee, funded.then(|| r.change.unwrap_or(maker)))?;
     let (tokens, _, suffix) = own_tokens(&order.state)?;
+    // The continuation keeps `bought`, so its custody stays (a claim moves it).
+    if let Some(b) = bought_of(&order.state)? {
+        if r.strays.iter().any(|t| b.is(t, order_cov)) {
+            return invalid("a sweep never moves the order's bought-custody: claim it (ClaimOrder)");
+        }
+    }
     let order_input = draft.add_input(
         &order.utxo,
         entry(id, order.state.encode(), "cancel", vec![Arg::Sig(maker)]),
@@ -4674,6 +4883,7 @@ pub enum Action {
     Batch(Batch),
     SwapRoute(SwapRoute),
     SweepOrder(SweepOrder),
+    ClaimOrder(ClaimOrder),
 }
 
 /// Builds any action with the committed compute-budget table.
@@ -4693,6 +4903,7 @@ pub fn build_with(a: &Action, budgets: BudgetFn) -> Result<BuiltTx> {
         Action::Batch(r) => build_batch(r, budgets),
         Action::SwapRoute(r) => build_swap_route(r, budgets),
         Action::SweepOrder(r) => build_sweep_order(r, budgets),
+        Action::ClaimOrder(r) => build_claim_order(r, budgets),
     }
 }
 

@@ -1,6 +1,7 @@
 //! Strays (`matcher.md` §1.2): the maker's sweep IN PLACE (`SweepOrder`: the maker's `cancel` continues the order with the
 //! same script, a `SWEEP` record names the continuation) for every order kind, and foreign strays (tokens of another covenant
 //! id owned by the order id) returned to the maker by the maker's cancel and sweep and by a permissionless refund / kill.
+//! A mode-1 order's bought-custody is never swept (a claim moves it), and a cancel that ends the order must release it.
 //! Every transaction is validated in the rusty-kaspa v2.1.0 engine.
 
 mod common;
@@ -225,4 +226,99 @@ fn maker_units(built: &BuiltTx) -> i64 {
         }
     }
     units
+}
+
+// ---------------------------------------------------------------- a mode-1 order's bought-custody (bid-delivery-spec §5, §7)
+
+/// A mode-1 bid holding 4 whole in its bought-custody, a `KobPair` ask holding 3 whole of B in its own, each with that custody.
+fn held(t: TemplateId) -> Vec<(&'static str, OrderUtxo<AnyState>, Option<TokenUtxo>, TokenUtxo)> {
+    let b = BidState { mode: MODE_ACCUMULATE, bought: 4 * WHOLE, ..bid(MAKER_A, P245, t) };
+    let x = PairState { mode: MODE_ACCUMULATE, bought: 3 * WHOLE, ..pair(MAKER_A, true, t, t, RATE) };
+    vec![
+        (
+            "bid",
+            order(70, b.escrow(10 * WHOLE, 1).unwrap() as u64, O, 1_000, AnyState::KobBid(b)),
+            None,
+            tutxo(t, TOKEN_COV, 72, 4 * WHOLE, O, true),
+        ),
+        (
+            "pair",
+            order(70, PV, O, 1_000, AnyState::KobPair(x)),
+            Some(tutxo(t, TOKEN_COV, 71, 10 * WHOLE, O, true)),
+            tutxo(t, TOKEN_B, 72, 3 * WHOLE, O, true),
+        ),
+    ]
+}
+
+/// A sweep continues the order with the same `bought`, so it never moves the bought-custody (a claim does); a stray of
+/// another amount is swept as before.
+#[test]
+fn a_sweep_never_moves_the_bought_custody() {
+    for t in [TemplateId::Kcc20Ref, TemplateId::Kcc20Ref8x8] {
+        for (name, o, _, bc) in held(t) {
+            let label = format!("{name}@{}", t.name());
+            let e = build_sweep_order(&sweep(o.clone(), vec![bc.clone()], vec![], true), &kob_protocol::budget::lookup)
+                .expect_err(&label)
+                .to_string();
+            assert!(e.contains("bought-custody"), "{label}: {e}");
+            let stray = tutxo(t, bc.utxo.covenant_id.unwrap(), 76, 3, O, true);
+            let built = build_sweep_order(&sweep(o.clone(), vec![stray], vec![], true), &kob_protocol::budget::lookup)
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            engine(&built, &label);
+            assert_eq!(built.tx.outputs[0].script_public_key, built.tx.inputs[0].utxo.script_public_key, "{label}: bought unchanged");
+        }
+    }
+}
+
+/// The maker's cancel of an order holding a bought-custody (CL4) takes it with the order: without it the cancel would leave it
+/// owned by a covenant id that no longer exists, so the builder refuses. The same for a position cancel.
+#[test]
+fn a_cancel_releases_the_bought_custody() {
+    for t in [TemplateId::Kcc20Ref, TemplateId::Kcc20Ref8x8] {
+        for (name, o, custody, bc) in held(t) {
+            let label = format!("{name}@{}", t.name());
+            let cancel = |strays: Vec<TokenUtxo>| CancelOrder {
+                retired: None,
+                prefund: None,
+                order: o.clone(),
+                custody: custody.clone(),
+                strays,
+                foreign: vec![],
+                tokens: vec![],
+                funding: vec![key_utxo(3, MAKER_A, 10 * KAS)],
+                change: None,
+                replace: None,
+                lock_time: 0,
+                records: vec![],
+                fee: fee(),
+            };
+            let e = build_cancel_order(&cancel(vec![]), &kob_protocol::budget::lookup).expect_err(&label).to_string();
+            assert!(e.contains("bought-custody"), "{label}: {e}");
+            // a look-alike of another amount does not stand in for it
+            let other = tutxo(t, bc.utxo.covenant_id.unwrap(), 76, 3, O, true);
+            assert!(build_cancel_order(&cancel(vec![other]), &kob_protocol::budget::lookup).is_err(), "{label}");
+            let built = build_cancel_order(&cancel(vec![bc.clone()]), &kob_protocol::budget::lookup)
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            engine(&built, &label);
+            let sell = custody.as_ref().map_or(0, |c| c.state.amount());
+            assert_eq!(maker_units(&built), sell + bc.state.amount(), "{label}: every custody to the maker");
+            assert!(
+                built.tx.outputs.iter().all(|x| x.covenant.as_ref().is_none_or(|c| c.covenant_id != O)),
+                "{label}: the order ends"
+            );
+            let position = |strays: Vec<TokenUtxo>| CancelPosition {
+                orders: vec![CancelItem { order: o.clone(), retired: None, custody: custody.clone(), prefund: None, strays }],
+                funding: vec![key_utxo(3, MAKER_A, 10 * KAS)],
+                change: None,
+                lock_time: 0,
+                token_carrier: None,
+                records: vec![],
+                fee: fee(),
+            };
+            assert!(build_cancel_position(&position(vec![]), &kob_protocol::budget::lookup).is_err(), "{label}");
+            let built = build_cancel_position(&position(vec![bc.clone()]), &kob_protocol::budget::lookup)
+                .unwrap_or_else(|e| panic!("{label}: {e}"));
+            engine(&built, &format!("position {label}"));
+        }
+    }
 }
