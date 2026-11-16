@@ -735,10 +735,7 @@ fn rpc_json(signed: &kob_protocol::tx::SignedTx) -> anyhow::Result<serde_json::V
 fn busy_orders(orders: &[ListedOrder], spent: &BTreeSet<super::book::Outpoint>) -> BTreeSet<CovId> {
     orders
         .iter()
-        .filter(|o| {
-            spent.contains(&outpoint(&o.order.utxo))
-                || o.own_tokens().any(|c| spent.contains(&outpoint(&c.utxo)))
-        })
+        .filter(|o| spent.contains(&outpoint(&o.order.utxo)) || o.own_tokens().any(|c| spent.contains(&outpoint(&c.utxo))))
         .map(|o| o.id())
         .collect()
 }

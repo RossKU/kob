@@ -733,7 +733,8 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 }
                 c.chain_safe = s.interval == 0;
                 c.bought_in = s.mode == MODE_ACCUMULATE && s.bought > 0;
-                c.bytes = INPUT_BYTES + rl(TemplateId::KobBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES + if c.bought_in { tok_in } else { 0 };
+                c.bytes =
+                    INPUT_BYTES + rl(TemplateId::KobBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES + if c.bought_in { tok_in } else { 0 };
                 out.push(c);
             }
             AnyState::KobCondAsk(s) => {
@@ -848,7 +849,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 // holding its bought-custody moves no carrier: the custody's KAS rides on D.
                 let bought_in = s.mode == MODE_ACCUMULATE && s.bought > 0;
                 let carrier = if bought_in { 0 } else { s.delivery_carrier };
-                let on_d = if bought_in { o.bought_custody.as_ref().map_or(0, |b| b.utxo.amount.min(i64::MAX as u64) as i64) } else { carrier };
+                let on_d = if bought_in {
+                    o.bought_custody.as_ref().map_or(0, |b| b.utxo.amount.min(i64::MAX as u64) as i64)
+                } else {
+                    carrier
+                };
                 let kip9 = |c: &mut Cand| -> bool {
                     if c.merge.is_some() {
                         return true;
@@ -882,7 +887,11 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                     });
                     c.chain_safe = s.armed != 1;
                     c.bought_in = bought_in;
-                    c.bytes = INPUT_BYTES + rl(TemplateId::KobCondBid) + 2 * OUTPUT_BYTES + NEXT_STATE_BYTES + if bought_in { tok_in } else { 0 };
+                    c.bytes = INPUT_BYTES
+                        + rl(TemplateId::KobCondBid)
+                        + 2 * OUTPUT_BYTES
+                        + NEXT_STATE_BYTES
+                        + if bought_in { tok_in } else { 0 };
                     c
                 };
                 if s.tp_price > 0 {

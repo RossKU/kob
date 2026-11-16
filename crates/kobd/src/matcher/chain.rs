@@ -159,7 +159,8 @@ fn topped_up(by_id: &BTreeMap<CovId, ListedOrder>, plan: &Plan, built: &BuiltTx)
             let Some(program) = token_program(&o.order.state) else { continue };
             let st = r.state.with_amount(r.state.amount().saturating_add(f.amount));
             let spk = kob_protocol::tx::spk_to_string(&st.spk_with(kob_protocol::artifacts::token_template(program)));
-            let next = find_output(built, &spk, r.utxo.covenant_id).map(|i| TokenUtxo { utxo: out_utxo(built, i, r.utxo.covenant_id), state: st });
+            let next = find_output(built, &spk, r.utxo.covenant_id)
+                .map(|i| TokenUtxo { utxo: out_utxo(built, i, r.utxo.covenant_id), state: st });
             let e = out.entry(outpoint(&r.utxo)).or_insert(None);
             if e.is_none() {
                 *e = next;

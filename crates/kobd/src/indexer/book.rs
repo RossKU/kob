@@ -318,7 +318,8 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         let ext = ext.and_then(h32).unwrap_or([0; 32]);
         // A mode-1 order's bought-custody is the order's, never a stray: it is served apart
         // ([`bought_custodies`]).
-        let (bought, own): (Vec<OwnedToken>, Vec<OwnedToken>) = tokens.remove(&cov).unwrap_or_default().into_iter().partition(|t| t.bought);
+        let (bought, own): (Vec<OwnedToken>, Vec<OwnedToken>) =
+            tokens.remove(&cov).unwrap_or_default().into_iter().partition(|t| t.bought);
         // exactly one proven row, as [`bought_custodies`] (the view fails closed on more)
         let bought_custody = match <[OwnedToken; 1]>::try_from(bought) {
             Ok([t]) => t.proven.map(|state| TokenUtxo { utxo: t.utxo, state }),
@@ -434,7 +435,14 @@ fn key_tokens(conn: &Connection, owner: &[u8; 32], token: &[u8; 32]) -> DbResult
         "SELECT x.txid, x.idx, x.program, x.value, kob_hstate(x.state, x.family, ow.h, x.owner_kind, x.amount), x.created_daa FROM token_holdings x          JOIN ids ow ON ow.id = x.owner_id          WHERE x.owner_id = (SELECT id FROM ids WHERE h = ?1) AND x.token_id = (SELECT id FROM ids WHERE h = ?2) AND x.spent_block IS NULL          ORDER BY x.created_block, x.txid, x.idx",
     )?;
     let rows = st.query_map([&owner[..], &token[..]], |r| {
-        Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?, r.get::<_, Vec<u8>>(4)?, r.get::<_, i64>(5)?))
+        Ok((
+            r.get::<_, Vec<u8>>(0)?,
+            r.get::<_, u32>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, Vec<u8>>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
     })?;
     let mut out = vec![];
     for r in rows {
@@ -442,7 +450,13 @@ fn key_tokens(conn: &Connection, owner: &[u8; 32], token: &[u8; 32]) -> DbResult
         let Some(program) = kob_protocol::artifacts::TemplateId::from_name(&program).filter(|p| p.is_token()) else { continue };
         let Ok(state) = TokenState::decode_with(kob_protocol::artifacts::token_template(program), &state) else { continue };
         let Some(txid) = h32(txid) else { continue };
-        let utxo = Utxo { transaction_id: txid, index: idx, amount: value.max(0) as u64, block_daa_score: daa.max(0) as u64, covenant_id: Some(*token) };
+        let utxo = Utxo {
+            transaction_id: txid,
+            index: idx,
+            amount: value.max(0) as u64,
+            block_daa_score: daa.max(0) as u64,
+            covenant_id: Some(*token),
+        };
         out.push(TokenUtxo { utxo, state });
     }
     Ok(out)

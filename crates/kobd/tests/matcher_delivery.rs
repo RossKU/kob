@@ -211,11 +211,9 @@ fn a_refused_top_up_is_rebuilt_with_form_1() {
     let orders = vec![m2_bid(1, 1, P260, 2 * WHOLE, 500, default_tip(), vec![r0.clone()]), l_ask(10, ask(2, P250, 2 * WHOLE, T3))];
     let inp = input(&book(orders));
     let op = outpoint(&r0.utxo);
-    let refuse = |s: &SignedTx| {
-        match s.tx.inputs.iter().position(|i| (i.transaction_id, i.index) == op) {
-            Some(i) => Err(format!("input {i}: the token program refused the borrow path")),
-            None => kob_protocol::verify::validate_signed(s).map_err(|e| e.to_string()),
-        }
+    let refuse = |s: &SignedTx| match s.tx.inputs.iter().position(|i| (i.transaction_id, i.index) == op) {
+        Some(i) => Err(format!("input {i}: the token program refused the borrow path")),
+        None => kob_protocol::verify::validate_signed(s).map_err(|e| e.to_string()),
     };
     let r = tick_with(&inp, &cfg(), &Families::default(), &signer(), &refuse);
     assert!(r.suspects.is_empty(), "{:?}", r.suspects);

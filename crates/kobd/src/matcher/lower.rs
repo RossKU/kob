@@ -59,9 +59,7 @@ pub fn topup_pays(s: &AnyState, fee_rate: u64) -> bool {
 pub fn bid_delivery(o: &ListedOrder, n: i64, cx: &LowerCtx) -> Option<BidDelivery> {
     let d = o.order.state.delivery()?;
     let custody = o.bought_custody.clone().filter(|_| d.mode == MODE_ACCUMULATE && d.bought > 0);
-    let receive = (cx.topups && topup_pays(&o.order.state, cx.fee_rate))
-        .then(|| super::book::topup_receive(o, n).cloned())
-        .flatten();
+    let receive = (cx.topups && topup_pays(&o.order.state, cx.fee_rate)).then(|| super::book::topup_receive(o, n).cloned()).flatten();
     (custody.is_some() || receive.is_some()).then_some(BidDelivery { custody, receive, form: None })
 }
 
