@@ -267,10 +267,28 @@ struct BidP {
     price_end: i64,
     decay_step: i64,
     active_from: i64,
+    /// delivery block (docs/design/bid-delivery-spec.md, section 2): mode 0 new, 1 accumulate, 2 top-up; recvThreshold and
+    /// topupTip (mode 2); bought, what the bought-custody holds (mode 1)
+    mode: i64,
+    recv_threshold: i64,
+    topup_tip: i64,
+    bought: i64,
 }
 impl BidP {
     fn new(maker: [u8; 32]) -> Self {
-        BidP { maker, price: BID_PRICE, tif: 0, slope: 0, price_end: 0, decay_step: 1, active_from: 0 }
+        BidP {
+            maker,
+            price: BID_PRICE,
+            tif: 0,
+            slope: 0,
+            price_end: 0,
+            decay_step: 1,
+            active_from: 0,
+            mode: 0,
+            recv_threshold: 0,
+            topup_tip: 0,
+            bought: 0,
+        }
     }
 }
 /// The order program: the shipped one, or a same-layout impostor (a one-constant edit of the
@@ -339,6 +357,10 @@ fn bid_art(t: &Token, tok: Hash, p: &BidP, prog: Prog) -> SilAbiArtifact {
         int(p.slope),
         int(p.price_end),
         int(p.decay_step),
+        int(p.mode),
+        int(p.recv_threshold),
+        int(p.topup_tip),
+        int(p.bought),
     ];
     compile_contract(&order_src("KobBid", prog), &args, CompileOptions::default()).expect("compile KobBid")
 }
@@ -379,6 +401,9 @@ enum Router {
     ExpireNoLockAmount,
     /// TokenToKas.expire (actor `TokenToKas_sell`) without the lock pin's extension commitment check.
     ExpireNoLockExtension,
+    /// One edit of the generated source of any actor: (entry, needle, replacement); the needle must occur exactly once
+    /// in that entry (the bid-delivery ablations: a custody check or a mode-1 delivery rule removed).
+    Edit(&'static str, &'static str, &'static str),
 }
 /// Text of `entry <name>(` up to (not including) the next `entry ` line.
 fn entry_range(s: &str, name: &str) -> (usize, usize) {
@@ -453,6 +478,7 @@ fn router_src(name: &str, r: Router) -> String {
             assert_eq!(name, "TokenToKas_sell");
             ablate(&s, "expire", &[("        require(gen__token_mine_state.amount == lock_amount);\n", String::new())])
         }
+        Router::Edit(entry, needle, with) => ablate(&s, entry, &[(needle, with.to_string())]),
         Router::ExpireNoLockExtension => {
             assert_eq!(name, "TokenToKas_sell");
             ablate(
@@ -1007,7 +1033,7 @@ fn r2(f: &Fx, p: &T2K, name: &str) -> Scn {
         lock: 0,
         name: name.into(),
         inputs: vec![
-            call(&bid, BID_VALUE, b, "fill", vec![nb(n), iv(1), iv(0)], "bid"),
+            call(&bid, BID_VALUE, b, "fill", vec![nb(n), iv(1), iv(0), iv(0)], "bid"),
             tok_leader(
                 t,
                 TOKEN_A,
@@ -1090,7 +1116,7 @@ fn r3(f: &Fx, p: &Swap, name: &str) -> Scn {
         lock: 0,
         name: name.into(),
         inputs: vec![
-            call(&bid, BID_VALUE, b, "fill", vec![nb(SWAP_SELL), iv(2), iv(0)], "bid"),
+            call(&bid, BID_VALUE, b, "fill", vec![nb(SWAP_SELL), iv(2), iv(0), iv(0)], "bid"),
             call(&ask, CARRIER, a, "settle", vec![nb(SWAP_BUY), iv(3), iv(2), iv(0)], "ask"),
             tok_leader(
                 t,
@@ -1140,8 +1166,36 @@ fn cancel_scn(intent: &SilAbiArtifact, r: Hash, payer: &Keypair, signer: &Keypai
 
 /// The fill shapes of the router: one actor (`<Intent>_<shape>`) each, with that entry, expire and cancel.
 const K2T_SHAPES: [&str; 6] = ["buy", "buy_out", "buy2", "buy2_out", "buy3", "buy3_out"];
-const T2K_SHAPES: [&str; 6] = ["sell", "sell_out", "sell2", "sell2_out", "sell3", "sell3_out"];
-const SWAP_SHAPES: [&str; 6] = ["swap", "swap_bid_out", "swap_ask_out", "swap_out", "swap2", "swap2_out"];
+/// TokenToKas: the shapes of 1-3 bids, then those whose leading bids hold a bought-custody (`_c`, `_cc`).
+const T2K_SHAPES: [&str; 12] = [
+    "sell",
+    "sell_out",
+    "sell2",
+    "sell2_out",
+    "sell3",
+    "sell3_out",
+    "sell_c",
+    "sell_c_out",
+    "sell2_c",
+    "sell2_c_out",
+    "sell2_cc",
+    "sell2_cc_out",
+];
+/// TokenSwap: the shapes, then their `_c` twins (bid 1 holds a bought-custody).
+const SWAP_SHAPES: [&str; 12] = [
+    "swap",
+    "swap_bid_out",
+    "swap_ask_out",
+    "swap_out",
+    "swap2",
+    "swap2_out",
+    "swap_c",
+    "swap_bid_out_c",
+    "swap_ask_out_c",
+    "swap_out_c",
+    "swap2_c",
+    "swap2_out_c",
+];
 /// (actor name, observes KobAsk, observes KobBid) of every router actor.
 fn router_shapes() -> Vec<(String, bool, bool)> {
     let mut v = vec![];
@@ -1490,7 +1544,7 @@ fn router_negative_kas_to_token() {
     // N-K6: a different KOB order kind in the ask slot (KobBid: other template and layout).
     let mut s = r1(&f, &base, "N-K6 KAS->B: order input is a KobBid");
     let bid = bid_art(t, TOKEN_B, &BidP::new(pk(&f.maker_a)), Prog::Shipped);
-    s.inputs[0] = call(&bid, BID_VALUE, base.a, "fill", vec![nb(BUY), iv(1), iv(0)], "bid");
+    s.inputs[0] = call(&bid, BID_VALUE, base.a, "fill", vec![nb(BUY), iv(1), iv(0), iv(0)], "bid");
     run_bad(t, &s, 2);
 
     // N-K7: aliasing, self-trade. The payer is the ask maker; one output tries to be both the ask
@@ -1577,7 +1631,7 @@ fn router_negative_token_to_kas() {
     let mut s = r2(&f, &base, "N-T7 A->KAS: keeper sells 7000 base units, max_sell is 4000");
     let bid = bid_art(t, TOKEN_A, &base.bid, base.prog);
     let sold = HELD;
-    s.inputs[0] = call(&bid, BID_VALUE, base.b, "fill", vec![nb(sold), iv(1), iv(0)], "bid");
+    s.inputs[0] = call(&bid, BID_VALUE, base.b, "fill", vec![nb(sold), iv(1), iv(0), iv(0)], "bid");
     set_arg(&mut s, 2, 1, iv(sold));
     set_leader_next(&mut s, 1, vec![tok_state(sold, &base.bid.maker, SCHEME_P2PK), tok_state(0, &pk(&f.payer), SCHEME_P2PK)]);
     let cont = BID_VALUE - quote_up(sold, BID_PRICE) - DC;
@@ -1663,7 +1717,7 @@ fn router_negative_token_swap() {
     let mut s = r3(&f, &base, "N-S6 A->KAS->B: keeper sells 6000 base units of A, max_sell_a is 4000");
     let sold = 6 * WHOLE;
     let bid = bid_art(t, TOKEN_A, &base.bid, Prog::Shipped);
-    s.inputs[0] = call(&bid, BID_VALUE, base.b, "fill", vec![nb(sold), iv(2), iv(0)], "bid");
+    s.inputs[0] = call(&bid, BID_VALUE, base.b, "fill", vec![nb(sold), iv(2), iv(0), iv(0)], "bid");
     set_arg(&mut s, 4, 2, iv(sold));
     set_leader_next(
         &mut s,
@@ -1825,7 +1879,9 @@ impl AskLeg {
         quote_up(self.take, self.p.price)
     }
 }
-/// One bid of a sweep: `n` base units are sold into it; its input holds `value` KAS.
+/// One bid of a sweep: `n` base units are sold into it; its input holds `value` KAS. A bid of delivery mode 1 with
+/// `p.bought > 0` holds a bought-custody of `p.bought` base units and `CUST_KAS` (docs/design/bid-delivery-spec.md,
+/// section 4): the custody is a token input, and the fill moves no carrier out of the escrow.
 #[derive(Clone)]
 struct BidLeg {
     p: BidP,
@@ -1834,9 +1890,32 @@ struct BidLeg {
     n: i64,
     t: i64,
 }
+/// KAS on a harness bid's bought-custody (the carrier its first fill put there).
+const CUST_KAS: i64 = DC;
 impl BidLeg {
     fn new(p: BidP, i: usize, value: i64, n: i64) -> Self {
         BidLeg { p, covid: cov(0xb1 + i as u8), value, n, t: 0 }
+    }
+    /// The bid holds a bought-custody: a mode-1 bid that has bought before.
+    fn has_custody(&self) -> bool {
+        self.p.mode == 1 && self.p.bought > 0
+    }
+    /// KAS leaving the escrow beyond the price (`released`), and the carrier reserved per remaining fill: the delivery
+    /// carrier, or 0 for a bid that already has its custody (its KAS stays there).
+    fn released(&self) -> i64 {
+        if self.has_custody() {
+            0
+        } else {
+            DC
+        }
+    }
+    /// KAS of the token UTXO the fill continues (the custody's).
+    fn have_kas(&self) -> i64 {
+        if self.has_custody() {
+            CUST_KAS
+        } else {
+            0
+        }
     }
     /// The budget rate pMax (+ tip, 0 here): price, or a rising bid's cap when higher.
     fn rate_max(&self) -> i64 {
@@ -1857,28 +1936,61 @@ impl BidLeg {
     /// The bid continues (GTC, and buying power for one more minimum fill remains) rather than ending (exhausted,
     /// IOC, FOK).
     fn rests(&self) -> bool {
-        self.p.tif == 0 && self.value - self.used() - DC - RESERVE >= quote_up(MIN_FILL, self.rate_max())
+        self.p.tif == 0 && self.value - self.used() - self.released() - RESERVE >= quote_up(MIN_FILL, self.rate_max())
     }
     /// The KAS a terminating bid returns to its maker as its own output: everything not spent beyond the delivery
     /// carrier, when that is REFUND_MIN or more (`refundTo`); None when the bid rests or the remainder is smaller.
     fn refund(&self) -> Option<i64> {
-        let rem = self.value - self.all_in() - DC;
+        let rem = self.value - self.all_in() - self.released();
         (!self.rests() && rem >= REFUND_MIN).then_some(rem)
     }
-    /// Value of the delivery output: the carrier plus what the maker did not spend of the consumed budget (a rising
-    /// bid's headroom and the rounding); when the bid ends, the carrier alone if the rest is refunded, else
-    /// everything it did not spend.
+    /// Value of the delivery output: the custody's KAS and the carrier plus what the maker did not spend of the consumed
+    /// budget (a rising bid's headroom and the rounding); when the bid ends, the carrier alone if the rest is refunded,
+    /// else everything it did not spend.
     fn delivery_value(&self) -> i64 {
         if self.rests() {
-            DC + self.used() - self.all_in()
+            self.have_kas() + self.released() + self.used() - self.all_in()
         } else if self.refund().is_some() {
-            DC
+            self.have_kas() + self.released()
         } else {
-            self.value - self.all_in()
+            self.have_kas() + self.value - self.all_in()
         }
     }
     fn cont_value(&self) -> i64 {
-        self.value - self.used() - DC
+        self.value - self.used() - self.released()
+    }
+    /// Base units of the delivery: bought + n (bought is 0 but in mode 1).
+    fn delivered(&self) -> i64 {
+        self.p.bought + self.n
+    }
+    /// Owner and owner scheme of the delivery: the bid's own id (its bought-custody) for a resting mode-1 bid, else the
+    /// maker's key.
+    fn delivery_owner(&self) -> ([u8; 32], u8) {
+        if self.p.mode == 1 && self.rests() {
+            (self.covid.as_bytes(), SCHEME_COVID)
+        } else {
+            (self.p.maker, SCHEME_P2PK)
+        }
+    }
+    fn delivery_state(&self) -> ArtifactValue {
+        let (o, sc) = self.delivery_owner();
+        tok_state(self.delivered(), &o, sc)
+    }
+    fn delivery_spk(&self, t: &Token) -> ScriptPublicKey {
+        let (o, sc) = self.delivery_owner();
+        t.spk(self.delivered(), &o, sc)
+    }
+    /// The bid's continuation: its own script, a mode-1 bid's with bought + n.
+    fn cont_spk(&self, f: &Fx) -> ScriptPublicKey {
+        let mut p = self.p.clone();
+        if p.mode == 1 {
+            p.bought += self.n;
+        }
+        spk_of(&bid_art(&f.t, TOKEN_A, &p, Prog::Shipped))
+    }
+    /// The bought-custody as a token input (a delegate owned by the bid's id).
+    fn custody_input(&self, t: &Token) -> Inp {
+        tok_delegate(t, TOKEN_A, CUST_KAS, self.p.bought, &self.covid.as_bytes())
     }
 }
 /// The refund outputs of a sweep's terminating bids (input i -> output M - 1 - i, M the number of outputs), as the
@@ -1950,6 +2062,38 @@ fn swap_entry(kb: usize, bid_rest: bool, ka: usize, ask_rest: bool) -> &'static 
         (2, false, 2, false) => "swap2_out",
         _ => panic!("no swap entry for {kb} bids ({bid_rest}) and {ka} asks ({ask_rest})"),
     }
+}
+/// The sell shape for k bids whose first `c` hold a bought-custody (docs/design/bid-delivery-spec.md, section 8).
+fn sell_entry_c(k: usize, rest: bool, c: usize) -> &'static str {
+    match (k, rest, c) {
+        (_, _, 0) => sell_entry(k, rest),
+        (1, true, 1) => "sell_c",
+        (1, false, 1) => "sell_c_out",
+        (2, true, 1) => "sell2_c",
+        (2, false, 1) => "sell2_c_out",
+        (2, true, 2) => "sell2_cc",
+        (2, false, 2) => "sell2_cc_out",
+        _ => panic!("no sell entry for {k} bids with {c} custody legs"),
+    }
+}
+/// The swap shape whose first bid holds a bought-custody (`c` = 1): the `_c` twin.
+fn swap_entry_c(kb: usize, bid_rest: bool, ka: usize, ask_rest: bool, c: usize) -> &'static str {
+    match (swap_entry(kb, bid_rest, ka, ask_rest), c) {
+        (s, 0) => s,
+        ("swap", 1) => "swap_c",
+        ("swap_bid_out", 1) => "swap_bid_out_c",
+        ("swap_ask_out", 1) => "swap_ask_out_c",
+        ("swap_out", 1) => "swap_out_c",
+        ("swap2", 1) => "swap2_c",
+        ("swap2_out", 1) => "swap2_out_c",
+        (s, _) => panic!("no custody twin of {s} with {c} custody legs"),
+    }
+}
+/// The custody-bearing legs of a sweep: they must be its leading legs (the keeper orders them first).
+fn custody_legs(legs: &[BidLeg]) -> usize {
+    let c = legs.iter().take_while(|l| l.has_custody()).count();
+    assert!(legs[c..].iter().all(|l| !l.has_custody()), "custody-bearing bids come first");
+    c
 }
 
 // ---- KasToToken over k asks: [ask_1 .. ask_k] sold out but the last, which may rest
@@ -2064,20 +2208,22 @@ fn t2km(f: &Fx, legs: Vec<BidLeg>) -> T2Km {
         r: cov(0xc2),
     }
 }
-/// Layout (k bids, me = k + 1):
-///   in  [0..k) bids  [k] payer's token A (leader, owned by the intent)  [k+1] intent
-///   out [0..k) bid deliveries  [k] bid continuation (if the last bid rests) or a filler
-///       [k+1] merchant KAS  [k+2] payer token change  [k+3] keeper KAS
+/// Layout (k bids of which the first c hold a bought-custody, me = k + 1 + c):
+///   in  [0..k) bids  [k] payer's token A (leader, owned by the intent)  [k+1..k+1+c) the custodies of bids 1..c
+///       [me] intent
+///   out [0..k) bid deliveries  [k] bid continuation (if the last bid rests) or a filler  then c fillers
+///       [me] merchant KAS  [me+1] payer token change  [me+2] keeper KAS
 ///       then the refunds of the terminating bids that return KAS (see `refund_tail`: bid i -> output M - 1 - i)
 fn t2k_multi(f: &Fx, p: &T2Km, name: &str) -> Scn {
     let t = &f.t;
     let k = p.legs.len();
+    let c = custody_legs(&p.legs);
     let merchant = pk(&f.merchant);
     let last = p.legs.last().unwrap();
     let rest = last.rests();
     let sold: i64 = p.legs.iter().map(|l| l.n).sum::<i64>();
     let max_sell = p.max_sell.unwrap_or(sold);
-    let shape = p.shape.unwrap_or(sell_entry(k, rest));
+    let shape = p.shape.unwrap_or(sell_entry_c(k, rest, c));
     let intent = t2k_art_s(p.router, shape, &p.payer, &merchant, TOKEN_A, p.merchant_kas, max_sell, sold + p.keep);
     let mut args: Vec<ArtifactValue> = p.legs.iter().map(|l| bytes(&l.covid.as_bytes())).collect();
     args.extend(p.legs.iter().map(|l| int(l.n)));
@@ -2085,29 +2231,49 @@ fn t2k_multi(f: &Fx, p: &T2Km, name: &str) -> Scn {
     args.extend(t.hidden());
 
     let mut inputs = vec![];
-    for l in &p.legs {
-        inputs.push(call(&bid_leg_art(f, l), l.value, l.covid, "fill", vec![nb(l.n), iv(k as i64), iv(l.t)], "bid"));
+    for (m, l) in p.legs.iter().enumerate() {
+        let tok_in = if m < c { k + 1 + m } else { k };
+        inputs.push(call(&bid_leg_art(f, l), l.value, l.covid, "fill", vec![nb(l.n), iv(tok_in as i64), iv(l.t), iv(0)], "bid"));
     }
-    let mut next: Vec<ArtifactValue> = p.legs.iter().map(|l| tok_state(l.n, &l.p.maker, SCHEME_P2PK)).collect();
+    let mut next: Vec<ArtifactValue> = p.legs.iter().map(|l| l.delivery_state()).collect();
     next.push(tok_state(p.keep, &p.payer, SCHEME_P2PK));
     inputs.push(tok_leader(t, TOKEN_A, CARRIER, sold + p.keep, &p.r.as_bytes(), 0, next));
+    for l in &p.legs[..c] {
+        inputs.push(l.custody_input(t));
+    }
     inputs.push(call(&intent, CARRIER, p.r, shape, args.into_iter().map(av).collect(), "t2k"));
 
     let mut outs: Vec<TransactionOutput> =
-        p.legs.iter().map(|l| out(l.delivery_value(), t.spk(l.n, &l.p.maker, SCHEME_P2PK), Some((k as u16, TOKEN_A)))).collect();
+        p.legs.iter().map(|l| out(l.delivery_value(), l.delivery_spk(t), Some((k as u16, TOKEN_A)))).collect();
     if rest {
-        outs.push(out(last.cont_value(), spk_of(&bid_leg_art(f, last)), Some(((k - 1) as u16, last.covid))));
+        outs.push(out(last.cont_value(), last.cont_spk(f), Some(((k - 1) as u16, last.covid))));
     } else {
+        outs.push(out(FILLER, p2pk_spk(&pk(&f.keeper)), None));
+    }
+    // the slots of the custody inputs: the keeper's KAS, then fillers
+    let keeper_at = (c > 0).then_some(k + 1);
+    for _ in 0..c {
         outs.push(out(FILLER, p2pk_spk(&pk(&f.keeper)), None));
     }
     outs.push(out(p.merchant_kas, p2pk_spk(&merchant), None));
     outs.push(out(CARRIER, t.spk(p.keep, &p.payer, SCHEME_P2PK), Some((k as u16, TOKEN_A))));
     let tail = refund_tail(f, &p.legs);
-    let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
-    let others: i64 = outs.iter().chain(tail.iter()).map(|o| o.value as i64).sum();
-    outs.push(out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None));
-    outs.extend(tail);
+    keeper_out(f, &inputs, &mut outs, keeper_at, tail);
     Scn { lock: p.legs.iter().map(|l| l.t as u64).max().unwrap_or(0), name: name.into(), inputs, outputs: outs }
+}
+
+/// The keeper's KAS (everything the other outputs and the fee leave) at `at` (a filler slot, replaced) or after the other
+/// outputs, then the refund `tail`.
+fn keeper_out(f: &Fx, inputs: &[Inp], outs: &mut Vec<TransactionOutput>, at: Option<usize>, tail: Vec<TransactionOutput>) {
+    let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
+    let others: i64 =
+        outs.iter().enumerate().filter(|(i, _)| Some(*i) != at).map(|(_, o)| o.value as i64).sum::<i64>() + tail.iter().map(|o| o.value as i64).sum::<i64>();
+    let keeper = out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None);
+    match at {
+        Some(i) => outs[i] = keeper,
+        None => outs.push(keeper),
+    }
+    outs.extend(tail);
 }
 
 // ---- TokenSwap over kb bids and ka asks
@@ -2138,19 +2304,22 @@ fn swm(f: &Fx, bids: Vec<BidLeg>, asks: Vec<AskLeg>) -> Swm {
         r: cov(0xc3),
     }
 }
-/// Layout (kb bids, ka asks, a0 = kb + ka, me = a0 + 1 + ka):
-///   in  [0..kb) bids  [kb..a0) asks  [a0] payer's token A (leader)  [a0+1..me) escrows of B
-///       (leader first)  [me] intent
+/// Layout (kb bids of which the first c (0 or 1) holds a bought-custody, ka asks, a0 = kb + ka, e0 = a0 + 1 + c,
+/// me = e0 + ka):
+///   in  [0..kb) bids  [kb..a0) asks  [a0] payer's token A (leader)  [a0+1..e0) the custody of bid 1
+///       [e0..me) escrows of B (leader first)  [me] intent
 ///   out [0..kb) A deliveries to the bid makers  [kb..a0) ask maker payouts
-///       [a0..me) the first `ka + 1` of: escrow B change, bid continuation, ask continuation
+///       [a0..me) the first `ka + 1 + c` of: escrow B change, bid continuation, ask continuation
 ///       (fillers when fewer)  [me] merchant delivery (B)  [me+1] payer token A change
 ///       then the remaining continuations, then the keeper's KAS, then the refunds of the terminating bids that return
 ///       KAS (see `refund_tail`: bid i -> output M - 1 - i)
 fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     let t = &f.t;
     let (kb, ka) = (p.bids.len(), p.asks.len());
+    let c = custody_legs(&p.bids);
     let a0 = kb + ka;
-    let me = a0 + 1 + ka;
+    let e0 = a0 + 1 + c;
+    let me = e0 + ka;
     let merchant = pk(&f.merchant);
     let last_bid = p.bids.last().unwrap();
     let last_ask = p.asks.last().unwrap();
@@ -2158,7 +2327,7 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     let sold: i64 = p.bids.iter().map(|l| l.n).sum::<i64>();
     let amount_b = p.amount_b.unwrap_or(p.asks.iter().map(|l| l.take).sum::<i64>());
     let max_sell_a = p.max_sell_a.unwrap_or(sold);
-    let shape = p.shape.unwrap_or(swap_entry(kb, bid_rest, ka, ask_rest_));
+    let shape = p.shape.unwrap_or(swap_entry_c(kb, bid_rest, ka, ask_rest_, c));
     let intent = swap_art_s(p.router, shape, &p.payer, &merchant, TOKEN_A, TOKEN_B, max_sell_a, amount_b, sold + p.keep);
     let mut args: Vec<ArtifactValue> = p.bids.iter().map(|l| bytes(&l.covid.as_bytes())).collect();
     args.extend(p.asks.iter().map(|l| bytes(&l.covid.as_bytes())));
@@ -2169,8 +2338,9 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     args.extend(t.hidden()); // token B's handle
 
     let mut inputs = vec![];
-    for l in &p.bids {
-        inputs.push(call(&bid_leg_art(f, l), l.value, l.covid, "fill", vec![nb(l.n), iv(a0 as i64), iv(l.t)], "bid"));
+    for (m, l) in p.bids.iter().enumerate() {
+        let tok_in = if m < c { a0 + 1 + m } else { a0 };
+        inputs.push(call(&bid_leg_art(f, l), l.value, l.covid, "fill", vec![nb(l.n), iv(tok_in as i64), iv(l.t), iv(0)], "bid"));
     }
     for (m, l) in p.asks.iter().enumerate() {
         inputs.push(call(
@@ -2178,13 +2348,16 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
             CARRIER,
             l.covid,
             "settle",
-            vec![nb(l.take), iv((a0 + 1 + m) as i64), iv(a0 as i64), iv(l.t)],
+            vec![nb(l.take), iv((e0 + m) as i64), iv(a0 as i64), iv(l.t)],
             "ask",
         ));
     }
-    let mut next_a: Vec<ArtifactValue> = p.bids.iter().map(|l| tok_state(l.n, &l.p.maker, SCHEME_P2PK)).collect();
+    let mut next_a: Vec<ArtifactValue> = p.bids.iter().map(|l| l.delivery_state()).collect();
     next_a.push(tok_state(p.keep, &p.payer, SCHEME_P2PK));
     inputs.push(tok_leader(t, TOKEN_A, CARRIER, sold + p.keep, &p.r.as_bytes(), 0, next_a));
+    for l in &p.bids[..c] {
+        inputs.push(l.custody_input(t));
+    }
     let mut next_b = vec![];
     if ask_rest_ {
         next_b.push(tok_state(last_ask.custody - last_ask.take, &last_ask.covid.as_bytes(), SCHEME_COVID));
@@ -2200,18 +2373,18 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
     inputs.push(call(&intent, SWAPM_INTENT_VALUE, p.r, shape, args.into_iter().map(av).collect(), "swap"));
 
     let mut outs: Vec<TransactionOutput> =
-        p.bids.iter().map(|l| out(l.delivery_value(), t.spk(l.n, &l.p.maker, SCHEME_P2PK), Some((a0 as u16, TOKEN_A)))).collect();
+        p.bids.iter().map(|l| out(l.delivery_value(), l.delivery_spk(t), Some((a0 as u16, TOKEN_A)))).collect();
     outs.extend(p.asks.iter().map(|l| out(l.payout(), p2pk_spk(&l.p.maker), None)));
     let mut queue = vec![];
     if ask_rest_ {
         queue.push(out(
             CARRIER,
             t.spk(last_ask.custody - last_ask.take, &last_ask.covid.as_bytes(), SCHEME_COVID),
-            Some(((a0 + 1) as u16, TOKEN_B)),
+            Some((e0 as u16, TOKEN_B)),
         ));
     }
     if bid_rest {
-        queue.push(out(last_bid.cont_value(), spk_of(&bid_leg_art(f, last_bid)), Some(((kb - 1) as u16, last_bid.covid))));
+        queue.push(out(last_bid.cont_value(), last_bid.cont_spk(f), Some(((kb - 1) as u16, last_bid.covid))));
     }
     if ask_rest_ {
         queue.push(out(
@@ -2221,18 +2394,17 @@ fn swap_multi(f: &Fx, p: &Swm, name: &str) -> Scn {
         ));
     }
     let mut queue = queue.into_iter();
-    for _ in 0..ka + 1 {
+    for _ in 0..ka + 1 + c {
         outs.push(queue.next().unwrap_or_else(|| out(FILLER, p2pk_spk(&pk(&f.keeper)), None)));
     }
     assert_eq!(outs.len(), me);
-    outs.push(out(CARRIER, t.spk(amount_b, &merchant, SCHEME_P2PK), Some(((a0 + 1) as u16, TOKEN_B))));
+    // with a custody input, the last filler slot before the intent's outputs holds the keeper's KAS
+    let keeper_at = (c > 0).then_some(me - 1).filter(|&i| outs[i].value as i64 == FILLER && outs[i].covenant.is_none());
+    outs.push(out(CARRIER, t.spk(amount_b, &merchant, SCHEME_P2PK), Some((e0 as u16, TOKEN_B))));
     outs.push(out(CARRIER, t.spk(p.keep, &p.payer, SCHEME_P2PK), Some((a0 as u16, TOKEN_A))));
     outs.extend(queue);
     let tail = refund_tail(f, &p.bids);
-    let total_in: i64 = inputs.iter().map(|i| i.entry.amount as i64).sum();
-    let others: i64 = outs.iter().chain(tail.iter()).map(|o| o.value as i64).sum();
-    outs.push(out(total_in - others - FEE, p2pk_spk(&pk(&f.keeper)), None));
-    outs.extend(tail);
+    keeper_out(f, &inputs, &mut outs, keeper_at, tail);
     let lock = p.bids.iter().map(|l| l.t).chain(p.asks.iter().map(|l| l.t)).max().unwrap_or(0) as u64;
     Scn { lock, name: name.into(), inputs, outputs: outs }
 }
@@ -2852,7 +3024,7 @@ fn fx_r1_merchant_bid(f: &Fx) -> Scn {
     let mut s = r1(f, &k2t_default(f), "FXR1 KAS->B: a merchant bid after the intent double-claims the merchant output");
     let bid = bid_art(t, TOKEN_B, &BidP::new(merchant), Prog::Shipped);
     let b = cov(0xb9);
-    s.inputs.push(call(&bid, BID_VALUE, b, "fill", vec![nb(BUY), iv(1), iv(0)], "bid"));
+    s.inputs.push(call(&bid, BID_VALUE, b, "fill", vec![nb(BUY), iv(1), iv(0), iv(0)], "bid"));
     s.outputs.push(out(BID_VALUE - quote_up(BUY, BID_PRICE) - DC, spk_of(&bid), Some((3, b))));
     fx_balance_to_keeper(f, &mut s);
     s
@@ -2915,7 +3087,7 @@ fn router_fx_intent_last_and_fills_only() {
     let mut s = r2(&f, &t2k_default(&f), "FXR2 A->KAS: a payer bid after the intent double-claims the payer token change");
     let bid = bid_art(t, TOKEN_A, &BidP::new(pk(&f.payer)), Prog::Shipped);
     let b = cov(0xb9);
-    s.inputs.push(call(&bid, BID_VALUE, b, "fill", vec![nb(3 * WHOLE), iv(1), iv(0)], "bid"));
+    s.inputs.push(call(&bid, BID_VALUE, b, "fill", vec![nb(3 * WHOLE), iv(1), iv(0), iv(0)], "bid"));
     s.outputs.push(out(BID_VALUE - quote_up(3 * WHOLE, BID_PRICE) - DC, spk_of(&bid), Some((3, b))));
     fx_balance_to_keeper(&f, &mut s);
     run_bad(t, &s, 2);
@@ -3151,4 +3323,291 @@ fn router_entry_refuses_a_token_input_it_does_not_observe() {
     s.outputs[3].script_public_key = f.t.spk(change, &p.payer, SCHEME_P2PK);
     s.outputs[4].value += CARRIER as u64;
     run_bad(&f.t, &s, 3);
+}
+
+// ================================================================ bid delivery modes (docs/design/bid-delivery-spec.md, section 8)
+
+/// A bid leg for the delivery-mode tests: `n` whole tokens sold into a bid of delivery `mode` that bought `bought` whole
+/// tokens before (mode 1: its bought-custody holds them), funded so that it rests or ends as asked. Mode 2 bids are
+/// opted in (threshold 1, tip 0) and filled with form 0, as the router pins them.
+fn mode_leg(i: usize, n: i64, ends: bool, mode: i64, bought: i64) -> BidLeg {
+    let mut p = BidP::new(fresh_maker());
+    p.mode = mode;
+    p.bought = bought * WHOLE;
+    if mode == 2 {
+        p.recv_threshold = 1;
+    }
+    let mut l = BidLeg::new(p, i, BID_VALUE, n * WHOLE);
+    if ends {
+        // less than one more minimum fill of buying power after this one (the reserved carrier counts unless the
+        // custody exists), and 1 KAS left over for the maker's refund output
+        l.value = l.used() + l.released() + RESERVE + KAS;
+    }
+    assert_eq!(l.rests(), !ends, "mode leg {i}: rests / ends as specified");
+    l
+}
+/// The input index of the intent (the last input of every honest layout).
+fn intent_idx(s: &Scn) -> usize {
+    s.inputs.len() - 1
+}
+/// On an ablated router: input `idx` passes (whatever else refuses the transaction), so the removed rule was what
+/// refused it there.
+fn run_input_passes(t: &Token, s: &Scn, idx: usize) {
+    let (tx, entries) = build(t, s, &[]);
+    let res = execute(&tx, &entries).expect("covenant context");
+    assert!(
+        res[idx].is_ok(),
+        "{}: input {idx} ({}) should pass on the ablated router: {:?}",
+        s.name,
+        role_name(&s.inputs[idx].role),
+        res[idx]
+    );
+    let failing: Vec<String> =
+        res.iter().enumerate().filter(|(_, r)| r.is_err()).map(|(i, _)| format!("{i} {}", role_name(&s.inputs[i].role))).collect();
+    println!(
+        "ABLATED {}  [in[{idx}] {} passes; failing: {}]",
+        s.name,
+        role_name(&s.inputs[idx].role),
+        if failing.is_empty() { "none".into() } else { failing.join(", ") }
+    );
+}
+/// The first output of the token A leader at input `leader` (the first bid's delivery) and output 0 become `amount` held
+/// by `owner` under `scheme`.
+fn redeliver(t: &Token, s: &mut Scn, leader: usize, amount: i64, owner: &[u8; 32], scheme: u8) {
+    let mut next = leader_next(s, leader);
+    next[0] = tok_state(amount, owner, scheme);
+    set_leader_next(s, leader, next);
+    s.outputs[0].script_public_key = t.spk(amount, owner, scheme);
+}
+
+/// Positive: every TokenToKas and TokenSwap shape into bids of every delivery mode. The entries without a custody leg
+/// serve mode 0, mode 2 (form 0, a plain delivery of n) and the first fill of a mode-1 bid (a resting one delivers into
+/// its new bought-custody, an ending one plainly); the custody entries serve bids that hold a custody (a resting one
+/// delivers bought + n into the custody, an ending one releases bought + n to the maker's key).
+#[test]
+fn router_bid_delivery_modes() {
+    let f = fx();
+    let t = &f.t;
+    let run = |legs: Vec<BidLeg>, name: &str| run_ok(t, &t2k_multi(&f, &t2km(&f, legs), name));
+    // ---- the entries without a custody leg
+    run(vec![mode_leg(0, 4, false, 1, 0)], "D1a A->KAS via sell: mode-1 bid, first fill, rests (its custody is created)");
+    run(vec![mode_leg(0, 3, true, 1, 0)], "D1b A->KAS via sell_out: mode-1 bid, first fill, ends (plain n)");
+    run(vec![mode_leg(0, 4, false, 2, 0)], "D1c A->KAS via sell: mode-2 bid rests (form 0, plain n)");
+    run(vec![mode_leg(0, 3, true, 2, 0)], "D1d A->KAS via sell_out: mode-2 bid ends (form 0, plain n)");
+    run(
+        vec![mode_leg(0, 3, true, 2, 0), mode_leg(1, 4, false, 1, 0)],
+        "D1e A->KAS via sell2: mode-2 bid ends, mode-1 first fill rests",
+    );
+    run(
+        vec![mode_leg(0, 2, true, 1, 0), mode_leg(1, 2, true, 0, 0), mode_leg(2, 3, false, 1, 0)],
+        "D1f A->KAS via sell3: mode-1 and mode-0 bids end, mode-1 first fill rests",
+    );
+    // ---- the custody entries
+    run(vec![mode_leg(0, 4, false, 1, 2)], "D2a A->KAS via sell_c: custody of 2000, rests (custody of 6000)");
+    run(vec![mode_leg(0, 3, true, 1, 2)], "D2b A->KAS via sell_c_out: custody of 2000, ends (5000 plain to the maker)");
+    run(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 0, 0)],
+        "D2c A->KAS via sell2_c: custody bid ends, mode-0 bid rests",
+    );
+    run(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 0)],
+        "D2d A->KAS via sell2_c: custody bid ends, mode-1 first fill rests",
+    );
+    run(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 2, 0)],
+        "D2e A->KAS via sell2_c_out: custody bid and mode-2 bid end",
+    );
+    run(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 1)],
+        "D2f A->KAS via sell2_cc: custody bid ends, custody bid rests",
+    );
+    run(vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 1, 5)], "D2g A->KAS via sell2_cc_out: both custody bids end");
+    // the payer's bound counts what the payer sells, never the custody's units
+    let mut p = t2km(&f, vec![mode_leg(0, 4, false, 1, 2)]);
+    p.max_sell = Some(4 * WHOLE);
+    run_ok(t, &t2k_multi(&f, &p, "D2h A->KAS via sell_c: max_sell = n exactly (the 2000 in custody are the bid maker's)"));
+
+    // ---- TokenSwap: the shapes without a custody leg and their _c twins
+    let sw = |bids: Vec<BidLeg>, asks: &[(i64, i64)], name: &str| run_ok(t, &swap_multi(&f, &swm(&f, bids, ask_legs(asks)), name));
+    sw(vec![mode_leg(0, 4, false, 1, 0)], &[(10, 3)], "D3a A->KAS->B via swap: mode-1 bid, first fill, rests");
+    sw(vec![mode_leg(0, 4, false, 2, 0)], &[(10, 3)], "D3b A->KAS->B via swap: mode-2 bid rests (form 0)");
+    sw(vec![mode_leg(0, 4, false, 1, 2)], &[(10, 3)], "D3c A->KAS->B via swap_c: custody bid rests, ask rests");
+    sw(vec![mode_leg(0, 3, true, 1, 2)], &[(10, 3)], "D3d A->KAS->B via swap_bid_out_c: custody bid ends, ask rests");
+    sw(vec![mode_leg(0, 4, false, 1, 2)], &[(3, 3)], "D3e A->KAS->B via swap_ask_out_c: custody bid rests, ask sold out");
+    sw(vec![mode_leg(0, 3, true, 1, 2)], &[(3, 3)], "D3f A->KAS->B via swap_out_c: custody bid ends, ask sold out");
+    sw(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 0)],
+        &[(2, 2), (10, 3)],
+        "D3g A->KAS->B via swap2_c: custody bid ends, mode-1 first fill rests, 2 asks",
+    );
+    sw(
+        vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 3, true, 0, 0)],
+        &[(2, 2), (3, 3)],
+        "D3h A->KAS->B via swap2_out_c: custody bid and mode-0 bid end, 2 asks sold out",
+    );
+}
+
+/// The delivery rules of a bid leg. A resting mode-1 bid delivered plainly to its maker is refused by the router (and
+/// by the bid), in `sell` (its first fill) and in `sell_c` (it holds a custody); with the rule removed from the router
+/// (ablation) the router input accepts it. A resting mode-0 bid delivered into a custody of its id is refused. An ending
+/// custody bid must receive bought + n: n alone is refused, and accepted by the router input without the amount rule. A
+/// custody bid cannot be filled through an entry without a custody leg, its custody cannot sit after the intent, and the
+/// payer's bound is summed over custody legs as over any legs (ablation: per leg).
+#[test]
+fn router_bid_delivery_mode_rules() {
+    let f = fx();
+    let t = &f.t;
+    // a resting mode-1 bid delivered plainly: its next fills would find no custody of what it bought
+    let plain = |router: Router, shape: Option<&'static str>, bought: i64, name: &str| {
+        let mut p = t2km(&f, vec![mode_leg(0, 4, false, 1, bought)]);
+        p.router = router;
+        p.shape = shape;
+        let mut s = t2k_multi(&f, &p, name);
+        let l = &p.legs[0];
+        redeliver(t, &mut s, 1, l.delivered(), &l.p.maker, SCHEME_P2PK);
+        s
+    };
+    let s = plain(Router::Shipped, None, 0, "N-D1 sell: resting mode-1 bid (first fill) delivered plainly to the maker");
+    run_bad(t, &s, intent_idx(&s));
+    let rule = "        if (gen__book1_bid_state.mode == 1) {\n            delivery1_state_owner = byte[32](bid1_covid);\n            delivery1_state_scheme = OWNER_COVENANT_ID;\n        }\n";
+    let s = plain(Router::Edit("sell", rule, ""), Some("sell"), 0, "A-D1 sell without the mode-1 rule: plain delivery");
+    run_input_passes(t, &s, intent_idx(&s));
+    let s = plain(Router::Shipped, None, 2, "N-D2 sell_c: resting custody bid delivered plainly to the maker");
+    run_bad(t, &s, intent_idx(&s));
+    let s = plain(
+        Router::Edit(
+            "sell_c",
+            "            owner: byte[32](bid1_covid),\n            owner_scheme: OWNER_COVENANT_ID,\n",
+            "            owner: byte[32](gen__book1_bid_state.maker),\n            owner_scheme: OWNER_P2PK_SCHNORR,\n",
+        ),
+        Some("sell_c"),
+        2,
+        "A-D2 sell_c with a plain delivery rule: plain delivery",
+    );
+    run_input_passes(t, &s, intent_idx(&s));
+    // modes 0 and 2 deliver plainly: a resting mode-0 bid's tokens sent to a custody of its id are refused
+    let p = t2km(&f, vec![mode_leg(0, 4, false, 0, 0)]);
+    let mut s = t2k_multi(&f, &p, "N-D3 sell: resting mode-0 bid delivered into a custody owned by its id");
+    let l = &p.legs[0];
+    redeliver(t, &mut s, 1, l.n, &l.covid.as_bytes(), SCHEME_COVID);
+    run_bad(t, &s, intent_idx(&s));
+
+    // an ending custody bid gets n only (the custody's units left out)
+    let short = |router: Router, name: &str| {
+        let mut p = t2km(&f, vec![mode_leg(0, 3, true, 1, 2)]);
+        p.router = router;
+        p.shape = Some("sell_c_out");
+        let mut s = t2k_multi(&f, &p, name);
+        let l = &p.legs[0];
+        redeliver(t, &mut s, 1, l.n, &l.p.maker, SCHEME_P2PK);
+        s
+    };
+    let s = short(Router::Shipped, "N-D4 sell_c_out: the ending custody bid gets n, not bought + n");
+    run_bad(t, &s, intent_idx(&s));
+    let s = short(
+        Router::Edit("sell_c_out", "            amount: gen__book1_bid_state.bought + n1,\n", "            amount: n1,\n"),
+        "A-D4 sell_c_out delivering n: the custody's units left out",
+    );
+    run_input_passes(t, &s, intent_idx(&s));
+
+    // a bid that holds a custody cannot be filled by an entry without a custody leg (every observed group is exact)
+    let p = t2km(&f, vec![mode_leg(0, 4, false, 1, 2)]);
+    let mut q = p.clone();
+    q.shape = Some("sell");
+    let s = t2k_multi(&f, &q, "N-D5 sell: a custody bid (with its custody input) through the entry without a custody leg");
+    run_bad(t, &s, intent_idx(&s));
+    // the intent stays the last input: a custody after it is refused (positional rule)
+    let mut s = t2k_multi(&f, &p, "N-D6 sell_c: the custody input after the intent");
+    let cust = s.inputs.remove(2);
+    s.inputs.push(cust);
+    set_arg(&mut s, 0, 1, iv(3));
+    run_bad(t, &s, 2);
+    // P13: max_sell over the sum of the legs, custody legs included
+    let mk = |router: Router| {
+        let mut p = t2km(&f, vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 1)]);
+        p.router = router;
+        p.max_sell = Some(5 * WHOLE);
+        t2k_multi(&f, &p, "A-D7 sell2_cc: 7000 base units sold over two custody bids, max_sell is 5000")
+    };
+    run_attack_passes(
+        t,
+        &mk(Router::Edit("sell2_cc", "require(sold <= max_sell);", "require(n1 <= max_sell);\n        require(n2 <= max_sell);")),
+    );
+    let s = mk(Router::Shipped);
+    run_bad(t, &s, intent_idx(&s));
+}
+
+/// A redeem script of the harness token with any state (the custody stand-ins).
+fn redeem_any(t: &Token, amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8, ext: &[u8; 32]) -> Vec<u8> {
+    [t.prefix.clone(), tok_state_bytes_ext(amount, owner, scheme, borrow, ext), t.suffix.clone()].concat()
+}
+
+/// The custody leg's checks (BID CUSTODY): a stand-in for the bid's bought-custody that differs in one term (owner,
+/// owner scheme, borrow path, amount, extension commitment) is refused at the intent input, in `sell_c` and in the
+/// tightest shape `swap2_c`, and by the bid (it checks the custody's exact state); with that one check removed from the
+/// router (ablation) the intent input accepts it.
+#[test]
+fn router_bid_custody_checks() {
+    let f = fx();
+    let t = &f.t;
+    type StandIn = fn(&Token, &BidLeg) -> Vec<u8>;
+    // (what differs, the stand-in, the start of the router line that refuses it)
+    let cases: [(&str, StandIn, &str); 5] = [
+        (
+            "owned by another covenant id",
+            |t, l| redeem_any(t, l.p.bought, &cov(0xbe).as_bytes(), SCHEME_COVID, 0, &EXT),
+            "owner == byte[32](bid1_covid)",
+        ),
+        (
+            "of owner scheme 0x00 (a key named by the bid's id)",
+            |t, l| redeem_any(t, l.p.bought, &l.covid.as_bytes(), SCHEME_P2PK, 0, &EXT),
+            "owner_scheme == OWNER_COVENANT_ID",
+        ),
+        (
+            "with its borrow path enabled",
+            |t, l| redeem_any(t, l.p.bought, &l.covid.as_bytes(), SCHEME_COVID, 1, &EXT),
+            "borrow_scheme == BORROW_DISABLED",
+        ),
+        (
+            "one unit short of bought",
+            |t, l| redeem_any(t, l.p.bought - 1, &l.covid.as_bytes(), SCHEME_COVID, 0, &EXT),
+            "amount == gen__",
+        ),
+        (
+            "of another extension commitment",
+            |t, l| redeem_any(t, l.p.bought, &l.covid.as_bytes(), SCHEME_COVID, 0, &OTHER_EXT),
+            "extension_commitment == gen__",
+        ),
+    ];
+    for (actor, shape, grp, at) in [("TokenToKas_sell_c", "sell_c", "token", 2usize), ("TokenSwap_swap2_c", "swap2_c", "token_a_group", 5)] {
+        let src = router_src(actor, Router::Shipped);
+        for (label, stand_in, line) in cases.iter() {
+            let mk = |router: Router| {
+                let name = format!("N-C {shape}: the custody is {label}");
+                let (mut s, l) = if shape == "sell_c" {
+                    let mut p = t2km(&f, vec![mode_leg(0, 4, false, 1, 2)]);
+                    p.router = router;
+                    (t2k_multi(&f, &p, &name), p.legs[0].clone())
+                } else {
+                    let mut p = swm(&f, vec![mode_leg(0, 3, true, 1, 2), mode_leg(1, 4, false, 1, 0)], ask_legs(&[(2, 2), (10, 3)]));
+                    p.router = router;
+                    (swap_multi(&f, &p, &name), p.bids[0].clone())
+                };
+                assert!(matches!(s.inputs[at].role, Role::TokDelegate { .. }), "{name}: input {at} is the custody");
+                let redeem = stand_in(t, &l);
+                s.inputs[at] =
+                    Inp { entry: cov_utxo(CUST_KAS, pay_to_script_hash_script(&redeem), TOKEN_A), role: Role::TokDelegate { redeem } };
+                s
+            };
+            let s = mk(Router::Shipped);
+            run_bad(t, &s, intent_idx(&s));
+            let (tx, entries) = build(t, &s, &[]);
+            assert!(execute(&tx, &entries).unwrap()[0].is_err(), "{}: the bid refuses the stand-in too", s.name);
+            let head = format!("        require(gen__{grp}_cust1_state.{line}");
+            let full = src.lines().find(|x| x.starts_with(&head)).unwrap_or_else(|| panic!("{actor}: no custody line {head}"));
+            let needle: &'static str = Box::leak(format!("{full}\n").into_boxed_str());
+            let s = mk(Router::Edit(shape, needle, ""));
+            run_input_passes(t, &s, intent_idx(&s));
+        }
+    }
 }

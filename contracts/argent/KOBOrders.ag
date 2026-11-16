@@ -25,7 +25,11 @@
 // Orders keep their remaining size and lifecycle flags (amountLeft, armed) in
 // mutable fields, so a partial fill or an update continues with a different
 // state. A reader of an observed order must not assume a byte-identical
-// continuation.
+// continuation. The buy-side kinds (KobBid, KobCondBid, KobPair,
+// KobCondPair) end their state with the delivery block mode, recvThreshold,
+// topupTip, bought (docs/design/bid-delivery-spec.md, section 2). bought is
+// mutable: a mode-1 fill that continues adds n to it, and the order's
+// bought-custody holds exactly bought.
 //
 // The templates an order embeds, for trigger evidence and exits, are fixed by
 // contracts/orders/*.ctor.json and depend on no network or genesis. The
@@ -80,6 +84,13 @@ state KobBidState {
     int slope;
     int priceEnd;
     int decayStep;
+    // Delivery block (docs/design/bid-delivery-spec.md, section 2): mode 0
+    // new, 1 accumulate, 2 top-up; bought is mutable, what the bought-custody
+    // holds.
+    int mode;
+    int recvThreshold;
+    int topupTip;
+    int bought;
 }
 
 state KobCondAskState {
@@ -142,6 +153,13 @@ state KobCondBidState {
     int rptPrice;
     int rptPre;
     int rptUntil;
+    // Delivery block (docs/design/bid-delivery-spec.md, section 2): mode 0
+    // new, 1 accumulate, 2 top-up; bought is mutable, what the bought-custody
+    // holds.
+    int mode;
+    int recvThreshold;
+    int topupTip;
+    int bought;
 }
 
 state KobIfdAskState {
@@ -168,6 +186,11 @@ state KobIfdAskState {
     int amountLeft;
     int rptAmount;
     byte[321] exitState;
+    // The delivery terms of the exit (docs/design/bid-delivery-spec.md,
+    // section 2), written into the exit state with bought = 0.
+    int exitMode;
+    int exitRecvThreshold;
+    int exitTopupTip;
 }
 
 state KobIfdBidState {
@@ -234,6 +257,13 @@ state KobPairState {
     int amountLeft;
     int custody;
     byte[32] sExt;
+    // Delivery block (docs/design/bid-delivery-spec.md, section 2): mode 0
+    // new, 1 accumulate, 2 top-up; bought is mutable, what the bought-custody
+    // holds.
+    int mode;
+    int recvThreshold;
+    int topupTip;
+    int bought;
 }
 
 state KobCondPairState {
@@ -276,6 +306,13 @@ state KobCondPairState {
     int rptPre;
     int rptUntil;
     byte[32] sExt;
+    // Delivery block (docs/design/bid-delivery-spec.md, section 2): mode 0
+    // new, 1 accumulate, 2 top-up; bought is mutable, what the bought-custody
+    // holds.
+    int mode;
+    int recvThreshold;
+    int topupTip;
+    int bought;
 }
 
 state KobIfdPairState {
@@ -314,6 +351,11 @@ state KobIfdPairState {
     int custody;
     int rptAmount;
     byte[432] exitState;
+    // The delivery terms of the exit (docs/design/bid-delivery-spec.md,
+    // section 2), written into the exit state with bought = 0.
+    int exitMode;
+    int exitRecvThreshold;
+    int exitTopupTip;
 }
 
 // ---------------------------------------- limit orders
@@ -336,7 +378,12 @@ actor KobAsk owns KobAskState {
 }
 
 actor KobBid owns KobBidState {
-    entry fill(byte[8] nb, int tokenTplIn, int t) emits {
+    // Fill n base units, delivered as the order's mode requires. tokIn is the
+    // bought-custody (mode 1, bought > 0), the maker's receive UTXO (mode 2,
+    // form 2) or any input of the token. form is read in mode 2 only: 0 plain
+    // new, 1 new receive UTXO, 2 top-up. A mode-1 continuation adds n to
+    // bought.
+    entry fill(byte[8] nb, int tokIn, int t, int form) emits {
         next: KobBid[0..=1],
     } {
         KobBidState[] cont;
@@ -348,7 +395,9 @@ actor KobBid owns KobBidState {
         require(checkSig(s, maker));
     }
 
-    entry refund() emits none {
+    // With bought > 0 the bought-custody is input custIn and goes whole to the
+    // maker's key at output custIn.
+    entry refund(int custIn) emits none {
         require(true);
     }
 }
@@ -366,7 +415,7 @@ actor KobPair owns KobPairState {
     // it, such as the KAS books of both tokens, opposite pair orders or
     // inventory. A GTC rest continues with amountLeft - n and the rest of the
     // custody. A sold-out, IOC or FOK fill ends the order.
-    entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut) emits {
+    entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int form) emits {
         next: KobPair[0..=1],
     } {
         KobPairState[] cont;
@@ -392,7 +441,7 @@ actor KobCondPair owns KobCondPairState {
     // The take-profit fill of a booked exit re-arms its KobIfdPair entry,
     // which is spent in the same transaction.
     entry settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int leg, int evA, int evB, int tk, int evMode,
-                 int upd, int k) emits {
+                 int upd, int k, int form) emits {
         next: KobCondPair[0..=1],
     } {
         KobCondPairState[] cont;
@@ -454,7 +503,7 @@ actor KobCondAsk owns KobCondAskState {
 }
 
 actor KobCondBid owns KobCondBidState {
-    entry settle(byte[8] nb, int tokenTplIn, int leg, int ev, int t) emits {
+    entry settle(byte[8] nb, int tokIn, int leg, int ev, int t, int form) emits {
         next: KobCondBid[0..=1],
     } {
         KobCondBidState[] cont;
@@ -474,7 +523,7 @@ actor KobCondBid owns KobCondBidState {
         require(checkSig(s, maker));
     }
 
-    entry refund() emits none {
+    entry refund(int custIn) emits none {
         require(true);
     }
 }

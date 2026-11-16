@@ -12,7 +12,8 @@
 # committed, and the build fails if it is not what this script writes. Pure bash, LF output.
 #
 # PIN=1 (or PIN=ask / PIN=bid) adds the continuation pin of every resting order (both sides, or only
-# resting asks / only resting KCC-20 bids) for measurements; the shipped router has none
+# resting asks / only resting KCC-20 bids) for measurements; the shipped router has none. The bid pin is the
+# unchanged state, so it holds for delivery modes 0 and 2 only (mode 1 adds n to `bought`)
 # (docs/argent/argent-feedback.md, item 6).
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -232,10 +233,69 @@ k2t_entry() { # $1 = k, $2 = rest|out
   echo "    }"
 }
 
+# ---------------------------------------------------------------- bid deliveries (router_head.ag, "BID DELIVERY")
+# The delivery of a KCC-20 bid leg, as the bid's delivery mode requires it (docs/design/bid-delivery-spec.md, sections 4
+# and 8). $1 = local name, $2 = projection of the observed bid, $3 = the bid's covid expression, $4 = n expression,
+# $5 = custody|nocust (the leg observes the bid's bought-custody as a token input, or not), $6 = rest|out (the bid
+# continues or ends).
+#   custody, rest  the bought-custody of bought + n, owned by the bid's id (only mode 1 has a custody)
+#   custody, out   one plain UTXO of bought + n to the maker (the ending fill releases the custody)
+#   nocust,  rest  mode 1: the first bought-custody, of bought + n (bought is 0: a bid with a custody needs a custody
+#                  leg); modes 0 and 2: plain n to the maker (mode 2 form 0)
+#   nocust,  out   plain n to the maker in every mode (mode 1 ending on its first fill delivers bought + n = n)
+bid_delivery() {
+  local v=$1 b=$2 id=$3 n=$4 cust=$5 last=$6 owner scheme amount=$4
+  if [ "$cust" = custody ]; then
+    amount="$b.bought + $n"
+    if [ "$last" = rest ]; then owner="byte[32]($id)"; scheme=OWNER_COVENANT_ID; else owner="byte[32]($b.maker)"; scheme=OWNER_P2PK_SCHNORR; fi
+  elif [ "$last" = rest ]; then
+    amount="$b.bought + $n"
+    echo "        byte[32] ${v}_owner = byte[32]($b.maker);"
+    echo "        byte ${v}_scheme = OWNER_P2PK_SCHNORR;"
+    echo "        if ($b.mode == 1) {"
+    echo "            ${v}_owner = byte[32]($id);"
+    echo "            ${v}_scheme = OWNER_COVENANT_ID;"
+    echo "        }"
+    owner="${v}_owner"; scheme="${v}_scheme"
+  else
+    owner="byte[32]($b.maker)"; scheme=OWNER_P2PK_SCHNORR
+  fi
+  cat <<EOT
+        KCC20State $v = {
+            amount: $amount,
+            owner: $owner,
+            owner_scheme: $scheme,
+            borrow_scheme: BORROW_DISABLED,
+            borrow_guard: ZERO32,
+            extension_commitment: $b.extensionCommitment,
+        };
+EOT
+}
+# The custody check of custody leg $1 (router_head.ag, "BID CUSTODY"). $2 = projection of the custody input, $3 = the
+# observed bid, $4 = the bid's covid expression. Written inline: as a helper it costs one stack item too many in
+# TokenSwap_swap2_c (245 combined stack items, limit 244).
+bid_cust() {
+  echo "        require($2.owner == byte[32]($4));"
+  echo "        require($2.owner_scheme == OWNER_COVENANT_ID);"
+  echo "        require($2.borrow_scheme == BORROW_DISABLED);"
+  echo "        require($2.amount == $3.bought);"
+  echo "        require($2.extension_commitment == $3.extensionCommitment);"
+}
+# Entry name of a bid-leg shape: $1 = base (sell, sell2, swap, swap_bid_out, ...), $2 = custody legs, $3 = rest|out,
+# $4 = where the custody marks go (before_out: sell_c_out, TokenToKas; suffix: swap_bid_out_c, TokenSwap).
+cust_name() {
+  local n=$1 c="" i
+  for i in $(seq 1 "$2"); do c="${c}c"; done
+  [ -n "$c" ] && c="_$c"
+  if [ "$4" = before_out ]; then n="$n$c"; [ "$3" = out ] && n="${n}_out"; else n="$n$c"; fi
+  echo "$n"
+}
+
 # ---------------------------------------------------------------- TokenToKas
-t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
-  local k=$1 last=$2 fam=$3 name m E=token.inputs.escrow M=token.inputs.mine
-  name=sell; [ "$k" -gt 1 ] && name=sell$k; [ "$last" = out ] && name=${name}_out
+t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron), $4 = custody legs (leading bids, KCC-20 only)
+  local k=$1 last=$2 fam=$3 c=${4:-0} name m E=token.inputs.escrow M=token.inputs.mine
+  name=sell; [ "$k" -gt 1 ] && name=sell$k
+  name=$(cust_name "$name" "$c" "$last" before_out)
   local args=()
   for m in $(seq 1 "$k"); do args+=("cov_id bid${m}_covid"); done
   for m in $(seq 1 "$k"); do args+=("int n$m"); done
@@ -246,6 +306,9 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
     echo "    // units go into them, at most max_sell in all.";
   else echo "    // $k bids, all ending. n1 .. n$k base units go into them, at most"
     echo "    // max_sell in all."; fi
+  if [ "$c" = 1 ]; then echo "    // Bid 1 holds a bought-custody, a token input after the lock (BID CUSTODY).";
+  elif [ "$c" -gt 1 ]; then echo "    // Bids 1 .. $c hold a bought-custody each, token inputs after the lock in"
+    echo "    // bid order (BID CUSTODY)."; fi
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$k"); do
     if [ "$m" = "$k" ]; then bid_obs "book$m" "bid${m}_covid" "$last" "$fam"; else bid_obs "book$m" "bid${m}_covid" out "$fam"; fi
@@ -253,6 +316,7 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
   echo "    observes token by self.token_covid {"
   echo "        inputs {"
   echo "            mine: self.token_type,"
+  for m in $(seq 1 "$c"); do echo "            cust$m: self.token_type,"; done
   echo "        }"
   echo "        outputs {"
   for m in $(seq 1 "$k"); do echo "            delivery$m: self.token_type,"; done
@@ -266,6 +330,7 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
   for m in $(seq 1 "$k"); do
     echo "        bid_fits(book$m.inputs.bid.tokenCovId, $TOK, n$m);"
   done
+  for m in $(seq 1 "$c"); do bid_cust "$m" "token.inputs.cust$m" "book$m.inputs.bid" "bid${m}_covid"; done
   [ "$last" = rest ] && echo "        require(book$k.inputs.bid.tif == 0);"
   local sum="n1"; for j in $(seq 2 "$k"); do sum="$sum + n$j"; done
   echo "        int sold = $sum;"
@@ -277,7 +342,14 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
   echo "        require(OpCovOutputIdx(token_covid, $k) == me + 1);"
   echo
   for m in $(seq 1 "$k"); do
-    a_lit "$fam" "delivery${m}_state" "byte[32](book$m.inputs.bid.maker)" "n$m" "book$m.inputs.bid.extensionCommitment"
+    if [ "$fam" = kron ]; then
+      a_lit "$fam" "delivery${m}_state" "byte[32](book$m.inputs.bid.maker)" "n$m" "book$m.inputs.bid.extensionCommitment"
+    else
+      local cu=nocust lm=out
+      [ "$m" -le "$c" ] && cu=custody
+      [ "$m" = "$k" ] && lm=$last
+      bid_delivery "delivery${m}_state" "book$m.inputs.bid" "bid${m}_covid" "n$m" "$cu" "$lm"
+    fi
   done
   a_lit "$fam" change_state "byte[32](payer)" "$M.amount - sold" "$M.extension_commitment"
   if [ "$last" = rest ] && pin_bid && [ "$fam" = kcc20 ]; then
@@ -294,8 +366,10 @@ t2k_entry() { # $1 = k, $2 = rest|out, $3 = family of token A (kcc20|kron)
 }
 
 # ---------------------------------------------------------------- TokenSwap
-swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (asks), $5 = ask last rest|out, $6 = family of token A
-  local name=$1 kb=$2 bl=$3 ka=$4 al=$5 fam=$6 m E=token_b_group.inputs.escrow M=token_a_group.inputs.mine
+swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (asks), $5 = ask last rest|out, $6 = family of token A,
+  # $7 = custody legs (leading bids, KCC-20 only)
+  local name=$1 kb=$2 bl=$3 ka=$4 al=$5 fam=$6 c=${7:-0} m E=token_b_group.inputs.escrow M=token_a_group.inputs.mine
+  name=$(cust_name "$name" "$c" "$bl" suffix)
   local args=()
   for m in $(seq 1 "$kb"); do args+=("cov_id bid${m}_covid"); done
   for m in $(seq 1 "$ka"); do args+=("cov_id ask${m}_covid"); done
@@ -310,6 +384,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     echo "    // $kb bids and $ka asks. Every bid but the last ends, and every ask but"
     echo "    // the last is sold out. The last bid $bv, and the last ask $av."
   fi
+  [ "$c" -gt 0 ] && echo "    // Bid 1 holds a bought-custody, a token A input after the lock (BID CUSTODY)."
   echo "    entry $name($(join , "${args[@]}" | sed 's/,/, /g'))"
   for m in $(seq 1 "$kb"); do
     if [ "$m" = "$kb" ]; then bid_obs "bids$m" "bid${m}_covid" "$bl" "$fam"; else bid_obs "bids$m" "bid${m}_covid" out "$fam"; fi
@@ -320,6 +395,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
   echo "    observes token_a_group by self.token_a {"
   echo "        inputs {"
   echo "            mine: self.token_a_type,"
+  for m in $(seq 1 "$c"); do echo "            cust$m: self.token_a_type,"; done
   echo "        }"
   echo "        outputs {"
   for m in $(seq 1 "$kb"); do echo "            delivery$m: self.token_a_type,"; done
@@ -351,6 +427,7 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     echo "        bid_fits(bids$m.inputs.bid.tokenCovId, byte[32](token_a), n_a$m);"
     SD[$m]="n_a$m"
   done
+  for m in $(seq 1 "$c"); do bid_cust "$m" "token_a_group.inputs.cust$m" "bids$m.inputs.bid" "bid${m}_covid"; done
   [ "$bl" = rest ] && echo "        require(bids$kb.inputs.bid.tif == 0);"
   local sum="${SD[1]}"; for j in $(seq 2 "$kb"); do sum="$sum + ${SD[$j]}"; done
   echo "        require($sum <= max_sell_a);"
@@ -386,7 +463,14 @@ swap_entry() { # $1 = name, $2 = kb (bids), $3 = bid last rest|out, $4 = ka (ask
     esc_change b_change "$E$ka" "${TK[$ka]}"
   fi
   for m in $(seq 1 "$kb"); do
-    a_lit "$fam" "a_delivery$m" "byte[32](bids$m.inputs.bid.maker)" "${SD[$m]}" "bids$m.inputs.bid.extensionCommitment"
+    if [ "$fam" = kron ]; then
+      a_lit "$fam" "a_delivery$m" "byte[32](bids$m.inputs.bid.maker)" "${SD[$m]}" "bids$m.inputs.bid.extensionCommitment"
+    else
+      local cu=nocust lm=out
+      [ "$m" -le "$c" ] && cu=custody
+      [ "$m" = "$kb" ] && lm=$bl
+      bid_delivery "a_delivery$m" "bids$m.inputs.bid" "bid${m}_covid" "${SD[$m]}" "$cu" "$lm"
+    fi
   done
   a_lit "$fam" a_change "byte[32](payer)" "$M.amount - ($sum)" "$M.extension_commitment"
   tok_lit b_merchant merchant amount_b b_extension
@@ -505,6 +589,7 @@ cancel_entry() {
 
 k2t_name() { local n=buy; [ "$1" -gt 1 ] && n=buy$1; [ "$2" = out ] && n=${n}_out; echo "$n"; }
 t2k_name() { local n=sell; [ "$1" -gt 1 ] && n=sell$1; [ "$2" = out ] && n=${n}_out; echo "$n"; }
+t2k_cust_name() { local n=sell; [ "$1" -gt 1 ] && n=sell$1; cust_name "$n" "$2" "$3" before_out; }
 
 ACTORS=()
 TK=()
@@ -557,6 +642,14 @@ emit_actor() {
   for k in 1 2 3; do for last in rest out; do
     emit_actor TokenToKas TokenToKas kcc20 TokenToKasState "$(t2k_name $k $last)" < <(t2k_entry $k $last kcc20)
   done; done
+  echo "// TokenToKas into bids that hold a bought-custody (delivery mode 1 after its"
+  echo "// first fill). The keeper puts the custody-bearing bids first: in"
+  echo "// sell<k>_c.. the leading bids carry a custody, one per \`c\`. Their custodies"
+  echo "// are the token inputs after the lock, in bid order."
+  echo
+  for kc in "1 1" "2 1" "2 2"; do read -r k c <<< "$kc"; for last in rest out; do
+    emit_actor TokenToKas TokenToKas kcc20 TokenToKasState "$(t2k_cust_name "$k" "$c" "$last")" < <(t2k_entry "$k" "$last" kcc20 "$c")
+  done; done
   echo "// ---------------------------------------- TokenSwap"
   echo
   echo "// Token A to KAS to token B. Transaction shape of every swap:"
@@ -573,6 +666,12 @@ emit_actor() {
   echo
   while read -r nm kb bl ka al; do
     emit_actor TokenSwap TokenSwap kcc20 TokenSwapState "$nm" < <(swap_entry "$nm" "$kb" "$bl" "$ka" "$al" kcc20)
+  done <<< "$SWAP_SHAPES"
+  echo "// TokenSwap into a first bid that holds a bought-custody: one _c twin of"
+  echo "// each shape. The custody is the token A input after the lock."
+  echo
+  while read -r nm kb bl ka al; do
+    emit_actor TokenSwap TokenSwap kcc20 TokenSwapState "${nm}_c" < <(swap_entry "$nm" "$kb" "$bl" "$ka" "$al" kcc20 1)
   done <<< "$SWAP_SHAPES"
   echo "// ---------------------------------------- TokenToKasKron"
   echo

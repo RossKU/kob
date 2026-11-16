@@ -190,6 +190,10 @@ contract TokenToKasKron_sell2(
         int slope;
         int priceEnd;
         int decayStep;
+        int mode;
+        int recvThreshold;
+        int topupTip;
+        int bought;
     }
     struct KobCondAskState {
         // :: user declared fields
