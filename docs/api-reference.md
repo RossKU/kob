@@ -707,7 +707,9 @@ hash commits to the whole state, so the indexer reads the state from the creatin
 the pinned token program equals the output's script public key. Every token of a pinned program is tracked, listed or not.
 A burned output is not a holding and is not listed: a KCC-20 state of owner scheme 3 whose owner is the burn owner the
 transaction's kUSDT redemption payload names for that output (`Blake2b` of a script that starts with `OP_RETURN`, so the
-tokens can never move; `contracts/third-party/kusdt/UPSTREAM.md`).
+tokens can never move; `contracts/third-party/kusdt/UPSTREAM.md`), or `Blake2b(6a)`, the script hash of `OP_RETURN` alone
+(`d379e50f...`, Kozmic's burn owner, with or without a payload; `contracts/third-party/kozmic/UPSTREAM.md`). Outputs the
+indexer recorded before a build knew a burn owner stay listed until it re-indexes them.
 Heavy. The limits of what is indexed (genesis outputs of other issuers, tokens sent before the indexer started, spends inside a
 gap) and why a consumer must still check a UTXO against the node before spending it are in
 [ops/executor.md](ops/executor.md), section 5.1.

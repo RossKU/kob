@@ -30,8 +30,9 @@
 //!   of a public-mint app's `mint` / `create`), and the output's script public key must prove it.
 //!   An input that spends a tracked holding is relevant too, because it marks the holding spent.
 //!   Outputs of a program this build does not pin, or of a look-alike, prove nothing and are not
-//!   kept. Neither are burned outputs: a state at a burn owner that the transaction's kUSDT
-//!   redemption payload names (`kob_protocol::kusdt::is_burned`) can never move,
+//!   kept. Neither are burned outputs, which can never move: a state at a burn owner that the
+//!   transaction's kUSDT redemption payload names (`kob_protocol::kusdt::is_burned`), or one at
+//!   the script hash of `OP_RETURN` alone, Kozmic's burn owner (`kob_protocol::kozmic::is_burned`),
 //! - the transaction is a KCC-23 candidate preparation or a verified genesis of one
 //!   (`super::kcc23`). Its record carries a declaration section (the transaction's id-relevant
 //!   fields), and nothing else unless it is relevant to KOB too.
@@ -1003,7 +1004,8 @@ impl Extractor<'_> {
         let mut genesis: Option<Vec<Leader>> = None;
         let mut used: HashSet<(u32, usize)> = HashSet::new();
         // The burns a kUSDT redemption payload names. An output proven to hold such a state is
-        // burned (its owner is the hash of a script that starts with OP_RETURN), not a holding.
+        // burned (its owner is the hash of a script that starts with OP_RETURN), not a holding;
+        // so is one at the hash of OP_RETURN alone (Kozmic's burn owner), with or without a payload.
         let burns = kob_protocol::kusdt::redemption_entries(&tx.payload.0).unwrap_or_default();
         for (j, o) in tx.outputs.iter().enumerate() {
             let Some(c) = &o.covenant else { continue };
@@ -1040,7 +1042,7 @@ impl Extractor<'_> {
                     }
                     // The state is proven: the P2SH it produces is this output's script public key.
                     used.insert((c.authorizing_input, k));
-                    if kob_protocol::kusdt::is_burned(&burns, j as u32, s) {
+                    if kob_protocol::kusdt::is_burned(&burns, j as u32, s) || kob_protocol::kozmic::is_burned(s) {
                         break 'found;
                     }
                     let owner = Hash32(s.owner());

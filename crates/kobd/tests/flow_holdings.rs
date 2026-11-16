@@ -391,7 +391,11 @@ async fn the_outputs_of_a_token_genesis_are_the_owners_holdings_from_the_first_b
 /// `OP_RETURN` script): the real `SendTokens` builder, the recipient re-targeted before signing (as `World::stray`), the
 /// transaction carrying `payload` (a redemption payload names its burn outputs). Returns the transaction and the burn's output.
 async fn send_to_burn(c: &Ctx, payload: impl Fn(u8) -> Vec<u8>) -> (SignedTx, usize) {
-    let address = [0x6d; 20];
+    send_to_owner(c, kob_protocol::kcc2::P2SH, kob_protocol::kusdt::burn_owner(2, &[0x6d; 20]), payload).await
+}
+
+/// TAKER sends 300 of the KCC-20 test token to `owner` of owner scheme `scheme`, as [`send_to_burn`].
+async fn send_to_owner(c: &Ctx, scheme: u8, owner: [u8; 32], payload: impl Fn(u8) -> Vec<u8>) -> (SignedTx, usize) {
     let tok = c.w.token(TAKER, 1_000);
     let req = SendTokens {
         token: TokenRef { covenant_id: TOKEN_COV, program: T3 },
@@ -407,10 +411,7 @@ async fn send_to_burn(c: &Ctx, payload: impl Fn(u8) -> Vec<u8>) -> (SignedTx, us
     let mut built = build(&Action::SendTokens(req)).unwrap();
     let tpl = token_template(T3);
     let from = Kcc20State::p2pk(300, pk(30), EXT);
-    let to = Kcc20State {
-        owner_scheme: kob_protocol::kcc2::P2SH,
-        ..Kcc20State::p2pk(300, kob_protocol::kusdt::burn_owner(2, &address), EXT)
-    };
+    let to = Kcc20State { owner_scheme: scheme, ..Kcc20State::p2pk(300, owner, EXT) };
     let from_spk = spk_to_string(&TokenState::Kcc20(from.clone()).spk_with(tpl));
     let at = built.tx.outputs.iter().position(|o| o.script_public_key == from_spk).expect("recipient output");
     built.tx.outputs[at].script_public_key = spk_to_string(&TokenState::Kcc20(to.clone()).spk_with(tpl));
@@ -451,5 +452,30 @@ async fn a_kusdt_burn_named_by_its_redemption_payload_is_not_a_holding() {
         let mut held: Vec<(String, i64)> = list(&c, &by_token).into_iter().map(|v| (v.amount, v.owner_kind)).collect();
         held.sort();
         assert_eq!(held, [("300".to_string(), 3), ("700".to_string(), 0)], "{payload:?} (burn at output {at})");
+    }
+}
+
+/// Kozmic burns (`contracts/third-party/kozmic/UPSTREAM.md`): an output whose proven state is at owner scheme 3 and the hash of
+/// `OP_RETURN` alone can never move, so it is no holding, with or without a payload. The same 32 bytes as a key (scheme 0), or the
+/// hash of another script, are holdings.
+#[tokio::test]
+async fn a_transfer_to_the_hash_of_op_return_alone_is_not_a_holding() {
+    let by_token = HoldingFilter { owner: None, token: Some(Hash32(TOKEN_COV)), include_spent: false };
+    let burn = kob_protocol::kozmic::burn_owner();
+    let held = |c: &Ctx| {
+        let mut h: Vec<(String, i64)> = list(c, &by_token).into_iter().map(|v| (v.amount, v.owner_kind)).collect();
+        h.sort();
+        h
+    };
+    for payload in [vec![], b"KZB1".to_vec()] {
+        let c = Ctx::new();
+        send_to_owner(&c, kob_protocol::kcc2::P2SH, burn, |_| payload.clone()).await;
+        assert_eq!(held(&c), [("700".to_string(), 0)], "only the change is a holding ({payload:?})");
+    }
+    for (scheme, owner, kind) in [(0u8, burn, 0i64), (kob_protocol::kcc2::P2SH, kob_protocol::kcc2::p2sh_authority(&[0x6a, 0x00]), 3)]
+    {
+        let c = Ctx::new();
+        send_to_owner(&c, scheme, owner, |_| vec![]).await;
+        assert_eq!(held(&c), [("300".to_string(), kind), ("700".to_string(), 0)], "scheme {scheme}");
     }
 }
