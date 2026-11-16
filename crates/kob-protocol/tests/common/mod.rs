@@ -226,6 +226,7 @@ pub fn bid(maker: u8, price: i64, tpl: TemplateId) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     }
 }
 /// Market sell: an IOC auction from the touch 2.60 down to the 3% bound over 200 DAA,
@@ -322,6 +323,7 @@ pub fn cond_bid(maker: u8, tpl: TemplateId) -> CondBidState {
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     }
 }
 /// The exit every buy-first fixture commits to: OCO take-profit 3.00 / stop 2.20, GTC.
@@ -389,6 +391,7 @@ pub fn ifd_ask(maker: u8, tpl: TemplateId) -> IfdAskState {
         amount_left: 10 * WHOLE,
         rpt_amount: 0,
         exit_state: IfdAskState::commit_exit_for(tpl.family(), &ifda_exit(maker, tpl)),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     }
 }
 

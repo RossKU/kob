@@ -412,6 +412,7 @@ fn cond_pair_state(
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: ext(s),
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     }
 }
 
@@ -757,6 +758,7 @@ pub(crate) fn plan_pair_ifd(env: &Env, i: &IfdIntent) -> Plan {
         custody: 0,
         rpt_amount,
         exit_state: exit_state.clone(),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     };
     // Never below what the protocol requires of every exit.
     let needed = draft_with(exit_planned).exit_carrier_needed();

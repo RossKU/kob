@@ -115,6 +115,7 @@ fn bid(maker: u8) -> BidState {
         slope: 0,
         price_end: 0,
         decay_step: 1_000,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     }
 }
 
@@ -156,6 +157,7 @@ fn pair_order(maker: u8, ask: bool) -> PairState {
         amount_left: 10 * SCALE,
         custody: 10 * SCALE,
         s_ext: EXT,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     if !ask {
         x.custody = x.bid_escrow(x.amount_left, 4).unwrap();
@@ -210,6 +212,7 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: EXT,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     let mut e = IfdPairState {
         maker: pk(maker),
@@ -247,6 +250,7 @@ fn ifd_sell_first(maker: u8) -> IfdPairState {
         custody: 0,
         rpt_amount: 0,
         exit_state: IfdPairState::commit_exit(&exit),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     };
     e.custody = e.b_custody_needed().unwrap();
     e

@@ -83,6 +83,7 @@ fn library_instances_equal_compiler_output() {
         slope: 1_000_000,
         price_end: 260_000_000,
         decay_step: 1,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     assert_eq!(bid.redeem(), compiled(TemplateId::KobBid, 0, bid.to_values()), "KobBid");
 
@@ -147,6 +148,7 @@ fn library_instances_equal_compiler_output() {
         rpt_price: 249_900_000,
         rpt_pre: 50_000_000,
         rpt_until: 78_760_000,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     assert_eq!(cb.redeem(), compiled(TemplateId::KobCondBid, 6, cb.to_values()), "KobCondBid");
 
@@ -202,6 +204,7 @@ fn library_instances_equal_compiler_output() {
         amount_left: 6_123,
         rpt_amount: 17_001,
         exit_state: IfdAskState::commit_exit(&CondBidState { parent: [0; 32], rpt_price: 0, rpt_pre: 0, rpt_until: 0, ..cb.clone() }),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     };
     assert_eq!(ia.redeem(), compiled(TemplateId::KobIfdAsk, 6, ia.to_values()), "KobIfdAsk");
 
@@ -242,6 +245,7 @@ fn library_instances_equal_compiler_output() {
         amount_left: 987_654_321,
         custody: 12_195_000,
         s_ext: [0xe7; 32],
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     assert_eq!(x.redeem(), compiled(TemplateId::KobPair, 0, x.to_values()), "KobPair");
     let c = CondPairState {
@@ -284,6 +288,7 @@ fn library_instances_equal_compiler_output() {
         rpt_pre: 0,
         rpt_until: 77_760_123,
         s_ext: [0; 32],
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     assert_eq!(c.redeem(), compiled(TemplateId::KobCondPair, 15, c.to_values()), "KobCondPair");
     let e = IfdPairState {
@@ -322,6 +327,7 @@ fn library_instances_equal_compiler_output() {
         custody: 1_975_309,
         rpt_amount: 17_001,
         exit_state: IfdPairState::commit_exit(&CondPairState { side: 2, parent: [0; 32], rpt_price: 0, rpt_until: 0, ..c.clone() }),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     };
     assert_eq!(e.redeem(), compiled(TemplateId::KobIfdPair, 18, e.to_values()), "KobIfdPair");
 

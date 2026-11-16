@@ -127,6 +127,7 @@ pub fn pair_state(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, amount: 
         amount_left: amount,
         custody: amount,
         s_ext: if ask { ext_of(pa) } else { ext_of(pb) },
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     if !ask {
         s.custody = s.bid_escrow(s.amount_left, 4).expect("escrow");
@@ -213,6 +214,7 @@ pub fn cond_pair(maker: u8, ask: bool, pa: TemplateId, pb: TemplateId, amount: i
         rpt_pre: 0,
         rpt_until: 0,
         s_ext: p.s_ext,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     if !ask {
         c.custody = c.bid_escrow(c.max_fills()).expect("escrow");
@@ -288,6 +290,7 @@ pub fn ifd_pair(maker: u8, buy: bool, pa: TemplateId, pb: TemplateId, amount: i6
         custody: 0,
         rpt_amount: 0,
         exit_state: IfdPairState::commit_exit(&exit),
+        exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
     };
     s.custody = s.b_custody_needed().expect("custody");
     s

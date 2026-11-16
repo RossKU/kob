@@ -234,6 +234,7 @@ mod tests {
             slope: 0,
             price_end: 0,
             decay_step: 1,
+            mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
         }
     }
 

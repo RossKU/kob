@@ -1495,6 +1495,7 @@ pub(crate) fn make_bid(env: &Env, p: &Draft, min_fill: i64) -> AnyState {
         slope: p.slope,
         price_end: p.price_end,
         decay_step: p.decay_step,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     match m.family {
         Family::Kcc20 => AnyState::KobBid(s),
@@ -2410,6 +2411,7 @@ pub(crate) fn cond_bid_state(
         rpt_price: 0,
         rpt_pre: 0,
         rpt_until: 0,
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     }
 }
 
@@ -3158,6 +3160,7 @@ pub(crate) fn plan_ifd(env: &Env, i: &IfdIntent) -> Plan {
             amount_left: i.amount,
             rpt_amount,
             exit_state: IfdAskState::commit_exit_for(fam, &bid_exit),
+            exit_mode: 0, exit_recv_threshold: 0, exit_topup_tip: 0,
         };
         let Some(value) = ask.escrow(carrier) else {
             log.push(error("AMOUNT_TOO_LARGE", "the amount is too large for one order"));
@@ -3305,6 +3308,7 @@ pub(crate) fn place_pair(env: &Env, pair: &PairPart, d: Draft, mut issues: Vec<I
         amount_left: d.amount,
         custody: d.amount,
         s_ext: ext(s),
+        mode: 0, recv_threshold: 0, topup_tip: 0, bought: 0,
     };
     if d.side == Side::Buy {
         let f = if d.tif == 0 { st.max_fills() } else { 1 };
