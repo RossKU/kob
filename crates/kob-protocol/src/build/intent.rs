@@ -18,20 +18,32 @@
 //!   out  [0..k) maker payouts  [k] custody rest of the last ask (if it rests)
 //!        fillers up to 2k  [2k] payer KAS change  [2k+1] merchant token delivery
 //!        [2k+2] last ask continuation (if it rests)
-//! TokenToKas  (k bids, j = k + 1)
-//!   in   [0..k) bids  [k] locked token A (owned by the intent)  [k+1] intent
+//! TokenToKas  (k bids, the first c with a bought-custody, j = k + 1 + c)
+//!   in   [0..k) bids  [k] locked token A (owned by the intent)
+//!        [k+1..j) the bought-custodies of bids 1..c  [j] intent
 //!   out  [0..k) deliveries to the bid makers
-//!        [k] last bid continuation (if it rests) or a filler
-//!        [k+1] merchant KAS  [k+2] payer token A change  then the keeper's KAS
-//! TokenSwap   (kb bids, ka asks, a0 = kb + ka, j = a0 + 1 + ka)
+//!        [k] last bid continuation (if it rests) or a filler  then c fillers
+//!        [j] merchant KAS  [j+1] payer token A change  then the keeper's KAS
+//! TokenSwap   (kb bids, the first c with a bought-custody, ka asks, a0 = kb + ka,
+//!              j = a0 + 1 + c + ka)
 //!   in   [0..kb) bids  [kb..a0) asks  [a0] locked token A
-//!        [a0+1..j) custodies of B (leader first)  [j] intent
+//!        [a0+1..a0+1+c) the bought-custody of bid 1  [a0+1+c..j) custodies of B (leader first)
+//!        [j] intent
 //!   out  [0..kb) A deliveries  [kb..a0) ask payouts
-//!        [a0..j) the first ka + 1 of: custody rest of B, bid continuation,
+//!        [a0..j) the first ka + 1 + c of: custody rest of B, bid continuation,
 //!                ask continuation (fillers when fewer)
 //!        [j] merchant B delivery  [j+1] payer token A change
 //!        then the remaining continuations, then the keeper's KAS
 //! ```
+//!
+//! # Bid delivery modes
+//!
+//! A bid leg delivers what the bid's state asks for (`docs/design/bid-delivery-spec.md`, section 8),
+//! and the router pins it. Mode 1 (accumulate) delivers `bought + n` into the bid's bought-custody
+//! while the bid rests, and plainly to its maker when it ends. Modes 0 and 2 deliver `n` plainly
+//! (mode 2 form 0). A mode-1 bid that already bought (`bought > 0`) spends its bought-custody
+//! ([`IntentBid::custody`]), so it needs a custody actor (`_c`, `_cc`). Those take the custody bids
+//! first. The other actors serve modes 0 and 2 and the first fill of a mode-1 bid.
 //!
 //! # Tokens
 //!
@@ -46,16 +58,16 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness, BudgetFn, Token};
+use super::{BudgetFn, Token, check_custody, check_custody_ext, check_token_input, holder_change, nb, one_borrow, pos, token_witness};
 use crate::artifacts::TemplateId;
-use crate::error::{invalid, Error, Result};
+use crate::error::{Error, Result, invalid};
 use crate::family::Family;
 use crate::payload::{self, Record};
-use crate::router::{cancel_args, expire_args, fill_args, Actor, FillArgs, IntentKind, IntentState, EXPIRE_MAX_FEE, MIN_INTENT_VALUE};
+use crate::router::{Actor, EXPIRE_MAX_FEE, FillArgs, IntentKind, IntentState, MIN_INTENT_VALUE, cancel_args, expire_args, fill_args};
 use crate::script::p2pk_spk;
-use crate::state::{quote_of, AskState, BidState, OrderState, Round, TokenState, TIF_FOK, TIF_GTC};
+use crate::state::{AskState, BidState, OrderState, Round, TIF_FOK, TIF_GTC, TokenState, quote_of};
 use crate::tx::{
-    check_key, Arg, BuiltTx, Draft, FeeOptions, KeyUtxo, OrderUtxo, SigPlan, TokenUtxo, Utxo, Witness, SEQUENCE_NONFINAL,
+    Arg, BuiltTx, Draft, FeeOptions, KeyUtxo, OrderUtxo, SEQUENCE_NONFINAL, SigPlan, TokenUtxo, Utxo, Witness, check_key,
 };
 
 /// Index of the intent output in a creation transaction.
@@ -387,6 +399,13 @@ pub struct IntentBid {
     pub order: OrderUtxo<BidState>,
     #[serde(with = "crate::json::field")]
     pub amount: i64,
+    /// The bid's bought-custody: required for a mode-1 bid with `bought > 0`, refused otherwise.
+    ///
+    /// It is the token UTXO owned by the bid's covenant id that holds exactly `bought`
+    /// (`docs/design/bid-delivery-spec.md`, section 1). The fill spends it, so the execution
+    /// needs a custody actor (`_c`, `_cc`), with the custody bids first.
+    #[serde(default)]
+    pub custody: Option<TokenUtxo>,
 }
 
 /// A keeper's execution of an intent against named orders.
@@ -508,6 +527,7 @@ fn plan_ask(ask: &IntentAsk, token: Token, lock: i64) -> Result<AskPlan> {
 }
 
 struct BidPlan {
+    /// KAS of the delivery output at the bid's own index.
     delivery: u64,
     /// The KAS an ending bid returns to its maker in an output of its own, instead of on the
     /// delivery.
@@ -518,7 +538,46 @@ struct BidPlan {
     sold: i64,
     all_in: i64,
     rests: bool,
+    /// The delivery's token state: plain `n` (modes 0 and 2, form 0), the bought-custody of
+    /// `bought + n` (mode 1, resting) or plain `bought + n` (mode 1, ending).
     state: TokenState,
+    /// The fill spends the bid's bought-custody (mode 1, `bought > 0`).
+    custody: bool,
+}
+
+/// The rules of a bid fill of `n` from an escrow of `value` that depend on the delivery mode
+/// (`KobBid.fill`, `docs/design/bid-delivery-spec.md` section 4).
+///
+/// It returns `(released, can_continue)`. `released` is the KAS that leaves the escrow beyond the
+/// price: the delivery carrier, or nothing once a mode-1 bid holds its bought-custody, whose KAS
+/// stays on the delivery. The budget then reserves no carrier per further fill either.
+fn bid_mode_rules(state: &BidState, n: i64, value: i64) -> Result<(i64, bool)> {
+    use crate::state::{MODE_ACCUMULATE, MODE_NEW, MODE_TOPUP};
+    if !(MODE_NEW..=MODE_TOPUP).contains(&state.mode) {
+        return invalid(format!("a bid of delivery mode {} (0, 1 or 2)", state.mode));
+    }
+    if state.bought < 0 || (state.mode != MODE_ACCUMULATE && state.bought != 0) {
+        return invalid(format!("a bid of mode {} with bought {}: only mode 1 holds bought tokens", state.mode, state.bought));
+    }
+    if state.delivery_carrier < 0 || state.reserve < 0 || state.tip < 0 || state.min_fill <= 0 {
+        return invalid("a bid with a negative carrier, reserve or tip, or no minimum fill");
+    }
+    if n <= 0 || (state.max_fill != 0 && n > state.max_fill) {
+        return invalid(format!("a bid fill of {n} base units: n > 0, n <= maxFill"));
+    }
+    let used = super::need(state.used(n), "bid budget")?;
+    let left = value - used;
+    if left < state.reserve {
+        return invalid(format!("a bid fill of {n} base units exceeds the bid's budget"));
+    }
+    let custody = state.mode == MODE_ACCUMULATE && state.bought > 0;
+    let resv = if custody { 0 } else { state.delivery_carrier };
+    let one = super::need(state.used(state.min_fill), "bid minimum fill")?;
+    let can_continue = left - resv - state.reserve >= one;
+    if n < state.min_fill && can_continue {
+        return invalid(format!("a bid fill of {n} base units is below the minimum fill {} and does not end the bid", state.min_fill));
+    }
+    Ok((resv, can_continue))
 }
 
 fn plan_bid(bid: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
@@ -543,44 +602,72 @@ fn plan_bid(bid: &IntentBid, token: Token, lock: i64) -> Result<BidPlan> {
     let n = bid.amount;
     pos(n, "bid amount")?;
     let order_value = bid.order.utxo.amount as i64;
-    if !state.fill_ok(n, order_value) {
-        return invalid(format!("a bid fill of {n} base units: maxFill, the budget, the minimum fill"));
+    let (released, can_continue) = bid_mode_rules(state, n, order_value)?;
+    let accumulate = state.mode == crate::state::MODE_ACCUMULATE;
+    // The bought-custody: a mode-1 bid that bought before (`bought > 0`) holds its tokens in a token
+    // UTXO of its own id, which this fill spends and continues. Its KAS stays on the delivery.
+    let custody = accumulate && state.bought > 0;
+    if accumulate && fam != Family::Kcc20 {
+        return invalid("a KRON bid delivers in mode 0");
     }
+    let have_kas = match (&bid.custody, custody) {
+        (Some(c), true) => {
+            let cov = bid.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("bid UTXO has no covenant id".into()))?;
+            check_custody(c, Some(cov), token, state.bought).map_err(|e| Error::Invalid(format!("the bid's bought-custody: {e}")))?;
+            check_custody_ext(c, state.extension_commitment)?;
+            c.utxo.amount as i64
+        }
+        (None, true) => {
+            return invalid(format!("a mode-1 bid that bought {} base units: its bought-custody is required", state.bought));
+        }
+        (Some(_), false) => return invalid("only a mode-1 bid with bought > 0 has a bought-custody"),
+        (None, false) => 0,
+    };
     let used = super::need(state.used(n), "bid budget")?;
     let all_in = super::need(state.spend(n, 0, bid.order.utxo.block_daa_score as i64), "bid spend")?;
     let left = order_value - used;
-    let can_continue = state.can_continue(left);
     let rests = state.tif == TIF_GTC && can_continue;
     if state.tif == TIF_FOK && can_continue {
         return invalid("a FOK bid must be filled completely");
     }
+    // Mode 1 delivers bought + n: into the bought-custody while the bid rests, to the maker's key
+    // when it ends. Modes 0 and 2 deliver n to the maker's key (mode 2 form 0, as the router pins).
+    let delivered = if accumulate { state.bought + n } else { n };
+    let token_state = if accumulate && rests {
+        let cov = bid.order.utxo.covenant_id.ok_or_else(|| Error::Invalid("bid UTXO has no covenant id".into()))?;
+        TokenState::custody(fam, delivered, cov, state.extension_commitment)
+    } else {
+        TokenState::user(fam, delivered, state.maker, state.extension_commitment)
+    };
     let mut refund = None;
     let (delivery, cont) = if rests {
-        (state.delivery_carrier + used - all_in, Some((pos(left - state.delivery_carrier, "bid continuation")?, state.spk_for(fam))))
+        let next = if accumulate { BidState { bought: delivered, ..state.clone() } } else { state.clone() };
+        (have_kas + released + used - all_in, Some((pos(left - released, "bid continuation")?, next.spk_for(fam))))
     } else {
-        let rem = order_value - all_in - state.delivery_carrier;
+        let rem = order_value - all_in - released;
         if rem >= crate::tx::REFUND_MIN as i64 {
             refund = Some(rem as u64);
-            (state.delivery_carrier, None)
+            (have_kas + released, None)
         } else {
-            (order_value - all_in, None)
+            (have_kas + rem + released, None)
         }
     };
-    Ok(BidPlan {
-        delivery: pos(delivery, "bid delivery")?,
-        refund,
-        cont,
-        sold: n,
-        all_in,
-        rests,
-        state: TokenState::user(fam, n, state.maker, state.extension_commitment),
-    })
+    Ok(BidPlan { delivery: pos(delivery, "bid delivery")?, refund, cont, sold: n, all_in, rests, state: token_state, custody })
 }
 
 fn check_shape(actor: &Actor, asks: &[AskPlan], bids: &[BidPlan]) -> Result<()> {
     let shape = actor.shape;
     if asks.len() != shape.asks || bids.len() != shape.bids {
         return invalid(format!("{} fills {} asks and {} bids", actor.name, shape.asks, shape.bids));
+    }
+    // The router observes every token input: the first `actor.custody` bids spend their
+    // bought-custody, the others none.
+    let custodies = bids.iter().filter(|b| b.custody).count();
+    if custodies != actor.custody || bids.iter().take(actor.custody).any(|b| !b.custody) {
+        return invalid(format!(
+            "{} fills {} bids that hold a bought-custody, as its first bids; this execution has {custodies}",
+            actor.name, actor.custody
+        ));
     }
     for (i, a) in asks.iter().enumerate() {
         let want = i + 1 == asks.len() && shape.last_ask_rests;
@@ -629,17 +716,18 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let no_token = || Error::Invalid(format!("{} trades no such token", actor.name));
     let asks: Vec<AskPlan> = r.asks.iter().map(|a| plan_ask(a, tok_b.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
     let bids: Vec<BidPlan> = r.bids.iter().map(|b| plan_bid(b, tok_a.ok_or_else(no_token)?, lock)).collect::<Result<_>>()?;
-    check_shape(actor, &asks, &bids)?;
-    // The covenants pin a bid's refund at output M - 1 - i. The bids that return KAS come first,
-    // then the other bids that end, and the bid that rests comes last (the router's shape).
+    // The custody actors take the bids that hold a bought-custody first. Then the covenants pin a
+    // bid's refund at output M - 1 - i, so the bids that return KAS come first, then the other bids
+    // that end, and the bid that rests comes last (the router's shape).
     let rank = |b: &BidPlan| {
-        if b.refund.is_some() {
+        let r = if b.refund.is_some() {
             0
         } else if b.rests {
             2
         } else {
             1
-        }
+        };
+        (!b.custody, r)
     };
     if bids.windows(2).any(|w| rank(&w[0]) > rank(&w[1])) {
         let mut order: Vec<usize> = (0..bids.len()).collect();
@@ -648,6 +736,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
         sorted.bids = order.iter().map(|i| r.bids[*i].clone()).collect();
         return build_execute_intent(&sorted, budgets);
     }
+    check_shape(actor, &asks, &bids)?;
     if r.asks.iter().any(|a| a.custody.state.extension() != r.asks[0].custody.state.extension()) {
         return invalid("the asks' custodies mix extension commitments");
     }
@@ -730,7 +819,9 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     let ka = r.asks.len();
     let kb = r.bids.len();
     let a0 = kb + ka; // first token input
-    let custody_base = if kind == IntentKind::TokenSwap { a0 + 1 } else { a0 };
+    // The bids' bought-custodies follow the lock (token A inputs a0 + 1 ..), then the ask escrows.
+    let c = actor.custody;
+    let custody_base = if kind == IntentKind::TokenSwap { a0 + 1 + c } else { a0 };
     let bid_kind = TemplateId::KobBid.in_family(fam_a);
     let prog_a = tok_a.map(|t| t.1.name()).unwrap_or_default();
     let prog_b = tok_b.map(|t| t.1.name()).unwrap_or_default();
@@ -738,14 +829,22 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
     // Inputs: bids, then asks.
     for (i, b) in r.bids.iter().enumerate() {
         let s = &b.order.state;
-        let first_tok = kb + ka; // token A (the locked UTXO) follows the order inputs
-        let role = format!("{}.fill.{}@{prog_a}", bid_kind.name(), if bids[i].rests { "cont" } else { "close" });
-        draft.add_input(
-            &b.order.utxo,
-            order_entry(bid_kind, s.encode_for(fam_a), "fill", vec![nb(b.amount), Arg::Int(first_tok as i64), Arg::Int(0)]),
-            role,
-            SEQUENCE_NONFINAL,
+        // tokIn: the bid's bought-custody, or else any input of token A (the lock, after the order
+        // inputs), whose template the delivery is built on.
+        let tok_in = if bids[i].custody { a0 + 1 + i } else { a0 };
+        let role = format!(
+            "{}.fill.{}{}@{prog_a}",
+            bid_kind.name(),
+            if bids[i].rests { "cont" } else { "close" },
+            if bids[i].custody { ".custody" } else { "" }
         );
+        // A KCC-20 bid's last argument is the mode-2 form, 0 (a plain delivery of n): the router
+        // pins that delivery. The KRON bid has none.
+        let mut args = vec![nb(b.amount), Arg::Int(tok_in as i64), Arg::Int(0)];
+        if fam_a == Family::Kcc20 {
+            args.push(Arg::Int(0));
+        }
+        draft.add_input(&b.order.utxo, order_entry(bid_kind, s.encode_for(fam_a), "fill", args), role, SEQUENCE_NONFINAL);
     }
     for (m, a) in r.asks.iter().enumerate() {
         let s = &a.order.state;
@@ -764,9 +863,14 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
             SEQUENCE_NONFINAL,
         );
     }
-    // Token inputs: the locked token A (token intents), then the custodies of B.
+    // Token inputs: the locked token A (token intents), the bids' bought-custodies (authorised by
+    // their bids), then the custodies of B.
     if let Some(lock_token) = lock_tok {
         draft.add_token_input(lock_token, tok_a.expect("token intent"), Witness::CovenantId)?;
+    }
+    for b in r.bids.iter().take(c) {
+        let cust = b.custody.as_ref().expect("checked: a custody leg");
+        draft.add_token_input(cust, tok_a.expect("bids buy token A"), Witness::CovenantId)?;
     }
     for a in &r.asks {
         draft.add_token_input(&a.custody, tok_b.expect("ask legs buy the merchant token"), Witness::CovenantId)?;
@@ -838,6 +942,10 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
                     draft.add_output(filler, p2pk_keeper.clone(), None);
                 }
             }
+            // The output slots of the custody inputs, which the intent's outputs follow.
+            for _ in 0..c {
+                draft.add_output(filler, p2pk_keeper.clone(), None);
+            }
             let merchant_out = draft.add_output(pos(r.merchant_kas as i64, "merchant KAS")?, p2pk_spk(&merchant), None);
             if merchant_out != intent_input {
                 return Err(Error::Invalid(format!("layout: merchant output at {merchant_out}, intent at input {intent_input}")));
@@ -894,7 +1002,7 @@ pub fn build_execute_intent(r: &ExecuteIntent, budgets: BudgetFn) -> Result<(Bui
                 }
                 Ok(())
             };
-            for _ in 0..ka + 1 {
+            for _ in 0..ka + 1 + c {
                 match queue.next() {
                     Some(q) => put(&mut draft, q, &mut tok_out_patch)?,
                     None => {
@@ -1044,10 +1152,23 @@ pub const ROUTER_EXPIRE_BUDGET: u16 = 13;
 /// Budget a router fill input is first built with before `execute_intent` measures the exact one.
 pub const ROUTER_FILL_BUDGET_FALLBACK: u16 = 900;
 
-/// The committed budget table, plus the router roles it does not list (`router.<actor>.<entry>`).
+/// What a bid fill that spends its bought-custody needs beyond the same fill without it, in budget
+/// units, while the committed table has no row of its own for it
+/// (`KobBid.fill.<branch>.custody@<program>`).
+///
+/// The custody path reads and checks the custody's state (`isCustody`). Measured over the custody
+/// actors of `tests/intent_builders.rs`: 1 on the 3/3 reference program, 2 on its public-mint build,
+/// 3 on the 8/8 program. It goes once the budget table has rows of its own for these roles.
+pub const CUSTODY_FILL_BUDGET_EXTRA: u16 = 3;
+
+/// The committed budget table, plus the router roles it does not list (`router.<actor>.<entry>`) and
+/// the bid fills that spend a bought-custody (see [`CUSTODY_FILL_BUDGET_EXTRA`]).
 pub fn intent_budgets(role: &str) -> Result<u16> {
     match crate::budget::lookup(role) {
         Ok(b) => Ok(b),
+        Err(Error::MissingBudget(_)) if role.contains(".custody@") => {
+            Ok(crate::budget::lookup(&role.replacen(".custody@", "@", 1))?.saturating_add(CUSTODY_FILL_BUDGET_EXTRA))
+        }
         Err(_) if role.starts_with("router.") && role.ends_with(".cancel") => Ok(ROUTER_CANCEL_BUDGET),
         Err(_) if role.starts_with("router.") && role.ends_with(".expire") => Ok(ROUTER_EXPIRE_BUDGET),
         Err(_) if role.starts_with("router.") => Ok(ROUTER_FILL_BUDGET_FALLBACK),

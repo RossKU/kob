@@ -38,16 +38,16 @@ use std::sync::OnceLock;
 use kaspa_consensus_core::tx::ScriptPublicKey;
 use kaspa_txscript::pay_to_script_hash_script;
 use serde::{Deserialize, Serialize};
-use silverscript_abi::{encode_contract_entry_sig_script, encode_runtime_state_script, ArtifactValue, SilAbiArtifact};
+use silverscript_abi::{ArtifactValue, SilAbiArtifact, encode_contract_entry_sig_script, encode_runtime_state_script};
 
-use crate::artifacts::{template, TemplateId};
+use crate::artifacts::{TemplateId, template};
 use crate::error::{Error, Result};
 use crate::family::Family;
 use crate::json::to_hex;
 use crate::script::push_data;
 
 /// Id of the committed router artifact (`contracts/argent/router/artifact.json`, field `id`).
-pub const ROUTER_ARTIFACT_ID: &str = "08e7edd76c4f057f65060cfa1589d239a8aebf922eea90cc2a5606de764f2d24";
+pub const ROUTER_ARTIFACT_ID: &str = "b9732200e2c829865df4efd97c5db944ff6d8afb75a4143924316a3506229037";
 
 /// Most sompi an `expire` may keep of the intent's KAS.
 ///
@@ -89,25 +89,37 @@ fn slots_fit(p: TemplateId, ins: usize, outs: usize) -> bool {
 /// Template hash of every router actor (hex).
 ///
 /// A changed router is a changed protocol.
-pub const ROUTER_PINNED: [(&str, &str); 30] = [
+pub const ROUTER_PINNED: [(&str, &str); 42] = [
     ("KasToToken_buy", "f79266cbcafdfbc832631048bdd47dc5bd0b5c8bdfc63f5fe816fff0a7eee352"),
     ("KasToToken_buy_out", "1fc0dc4c8956b786f292711e0c3d9760de79c21299f16cc017c0420e43715909"),
     ("KasToToken_buy2", "c671ffe0bf5b84524d1af9651321ab77288b1d6fe8561fdcfca95144fb86cb41"),
     ("KasToToken_buy2_out", "47833c3d191c9f73adf9672a8db31b7e995f50a49808af26e9f715a25352dd7d"),
     ("KasToToken_buy3", "79f299b0f1b4c4cc0669f157630ef8c027761b7b2a55f4f1213a0a16378ac658"),
     ("KasToToken_buy3_out", "9ba226ad8b16f16466bccb25fc37ee3b0fa7c71179fddf1db032ed5f51a4df96"),
-    ("TokenToKas_sell", "97c3125b39a406194dc1211d450a0a2161f429d76106a6f167af4817bc195733"),
-    ("TokenToKas_sell_out", "1dd7095bad446e35a45de53d6811aabad09cb8ae80226bdfca0d7c8d2612ccf3"),
-    ("TokenToKas_sell2", "7284593abe1d584ff79723432e850f85638078c3581bb1b7f34e8adb3abee5f6"),
-    ("TokenToKas_sell2_out", "f015006eedd98c5f01e29d558684f704f947e7472135ce69028db7d6c0b61b96"),
-    ("TokenToKas_sell3", "5f9fcf31ed0631582e6bdcbcb4263af04ad8c9f1f89a064fe738089f59fa2df9"),
-    ("TokenToKas_sell3_out", "6cc79eadd8bf351cbf3ef4f44114507448e5aaced479a9064b0c464e360f218b"),
-    ("TokenSwap_swap", "6ed96c4f53fe0e31105927c96762d6d99c7541c889d1fd54221a4fab1152fc3c"),
-    ("TokenSwap_swap_bid_out", "50f9fdd81689cf1c0469d29f5a531e61971d48b0146d2b163e6e0e95a1483d97"),
-    ("TokenSwap_swap_ask_out", "eaac247ab256e6fbf25abd509d57b4f5fa53b40697e0c0ee4d51de3c809c3646"),
-    ("TokenSwap_swap_out", "21109c1b1818466773da8ba782d359fd1302a4b1984e949396be019c96536572"),
-    ("TokenSwap_swap2", "334caa87161211016226d66a3b3caab8cd1d7923040f6ccda7ab4b7058f2d929"),
-    ("TokenSwap_swap2_out", "88de6a0067023ca02c6c2d0e9d6f6aac8f81283f5484ddace2215c029818050e"),
+    ("TokenToKas_sell", "86b0372f1bae71948f7c0981d93c4d7e67bec9e45bf549784b34e88803aac3c0"),
+    ("TokenToKas_sell_out", "93f8da54e6cfc3c432e5d43ec09216e9b9db5c336e521282515d8d632daeb5b7"),
+    ("TokenToKas_sell2", "7e735daad587d94f80e4d19b8dc8a8eb256fac81cf720c070dfaaba832e028db"),
+    ("TokenToKas_sell2_out", "d9f14cd9d497d9da1cc51a2b16bdfb5a31d30873e152586c5cb6db047313852c"),
+    ("TokenToKas_sell3", "f19bdb2b387aa860608e9e39d62fef92a5579fb7ba285656001ed6a92db744da"),
+    ("TokenToKas_sell3_out", "594e63e93a449eef68ca868ca384dc908984db923d35892bc18386a4d5a5dfee"),
+    ("TokenToKas_sell_c", "1a9f33eeea6ace68271024ffb9c23fdf5fdd2d4152aa3e923024a9cc287d8cb5"),
+    ("TokenToKas_sell_c_out", "ca67f899b4e7b221e83d6f7a65fc71c6a4078749bd1c6a802169c48ca5320888"),
+    ("TokenToKas_sell2_c", "cc9dc8303d1d88898ad0608aa8dda8eb945bbcf0a0c69ad283375e884c7eb351"),
+    ("TokenToKas_sell2_c_out", "a88b19279642835e2431f94d42bd6918a8a69a706f29b9389f9b37f649525ba6"),
+    ("TokenToKas_sell2_cc", "ee7846e8cf760d1f93c01950a030e9b995b035e7603a0c341c5b7810f0f4becd"),
+    ("TokenToKas_sell2_cc_out", "dbfdb9da558f26f023ae3ffe0bf6b21829f960cdd7db6ebc83013f7b5ff3fd67"),
+    ("TokenSwap_swap", "9d56b5b2b20754c0af14df96bd636910d7a51c849f5d114737d9e5d9d604ef90"),
+    ("TokenSwap_swap_bid_out", "7f632c67bd32b4b0a7267a6e4e076263fe1c36ee4edac458830a445618d42c13"),
+    ("TokenSwap_swap_ask_out", "5ea9b9335b48837169e6da677f3fc429d5218f1df136bb0f711f1b649deb6a92"),
+    ("TokenSwap_swap_out", "7b6121464f74a4e575e3d6b82c9caa53ffbee421115936b70576e4bc884b4d54"),
+    ("TokenSwap_swap2", "e9fb33a11f6c6915f82f48d3c90d0a56838cd7ed1c56c7a029635d890d4244c2"),
+    ("TokenSwap_swap2_out", "64bc129130e54e13ba1a8239f6625f1bb701cfc691c9b56f2646566cbbfa54a5"),
+    ("TokenSwap_swap_c", "bd6baa7159bde2a7c0e914ae18ecd83fe99f426de38f7cb2e761dc3a6bb8f379"),
+    ("TokenSwap_swap_bid_out_c", "062b7d8564521f63d79311403aa01bed8f808197ec52a2f7526db02d64cf7b1b"),
+    ("TokenSwap_swap_ask_out_c", "f32a1c0035e2b0aba446a9649e64f3ea6082f4db7509feaf3509c964449a35f5"),
+    ("TokenSwap_swap_out_c", "6823a60c77f4da0790155cef0be79001b464b5f395bef00672aa1a0ce051fd52"),
+    ("TokenSwap_swap2_c", "1c0ff2c44ca2c393db16b8975e485c2d8a718692546706a308c782af5f36ac31"),
+    ("TokenSwap_swap2_out_c", "48606701d4c0b0fb593ab678e24a8f5f8610e7f83f7cf06174c13604abbd7282"),
     ("TokenToKasKron_sell", "66c1faf4d1c7bda40ce0be4e519d18c9032d2b8b587d2dbe4387d38e5ea1582e"),
     ("TokenToKasKron_sell_out", "ec990fd18b7026525c3ad23b80fa3c7e22f5bce5315ad387c9aecb9b8e2a7bf9"),
     ("TokenToKasKron_sell2", "c00e99bb4f53c36f63a5af588f234475800a9ce1e0345bb57113fa2dcf605136"),
@@ -214,13 +226,21 @@ impl Shape {
     }
 }
 
-/// One router actor (= one template): its name, its fill entry and its shape.
+/// One router actor (= one template): its name, its fill entry, its shape and its custody legs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Actor {
     pub name: &'static str,
     /// The fill entry (the actor's other entries are `expire` and `cancel`).
     pub entry: &'static str,
     pub shape: Shape,
+    /// How many leading bid legs sell into a bid that already holds a bought-custody (0 to 2).
+    ///
+    /// A mode-1 bid with `bought > 0` keeps what it bought in a token UTXO owned by its own
+    /// covenant id (`docs/design/bid-delivery-spec.md`, section 1). The fill spends it and
+    /// delivers `bought + n`, so the custody is a token input of token A. The router observes
+    /// every token input, so each count of custody legs is its own actor (`_c`, `_cc`). The
+    /// custody legs are the first bids, and their custodies the token A inputs after the lock.
+    pub custody: usize,
 }
 
 const fn sh(kind: IntentKind, asks: usize, bids: usize, last_ask_rests: bool, last_bid_rests: bool) -> Shape {
@@ -233,37 +253,53 @@ const fn shk(kind: IntentKind, asks: usize, bids: usize, last_ask_rests: bool, l
 use IntentKind::{KasToToken as K2T, TokenSwap as SW, TokenToKas as T2K};
 
 /// Every actor of the router.
-pub const ACTORS: [Actor; 30] = [
-    Actor { name: "KasToToken_buy", entry: "buy", shape: sh(K2T, 1, 0, true, false) },
-    Actor { name: "KasToToken_buy_out", entry: "buy_out", shape: sh(K2T, 1, 0, false, false) },
-    Actor { name: "KasToToken_buy2", entry: "buy2", shape: sh(K2T, 2, 0, true, false) },
-    Actor { name: "KasToToken_buy2_out", entry: "buy2_out", shape: sh(K2T, 2, 0, false, false) },
-    Actor { name: "KasToToken_buy3", entry: "buy3", shape: sh(K2T, 3, 0, true, false) },
-    Actor { name: "KasToToken_buy3_out", entry: "buy3_out", shape: sh(K2T, 3, 0, false, false) },
-    Actor { name: "TokenToKas_sell", entry: "sell", shape: sh(T2K, 0, 1, false, true) },
-    Actor { name: "TokenToKas_sell_out", entry: "sell_out", shape: sh(T2K, 0, 1, false, false) },
-    Actor { name: "TokenToKas_sell2", entry: "sell2", shape: sh(T2K, 0, 2, false, true) },
-    Actor { name: "TokenToKas_sell2_out", entry: "sell2_out", shape: sh(T2K, 0, 2, false, false) },
-    Actor { name: "TokenToKas_sell3", entry: "sell3", shape: sh(T2K, 0, 3, false, true) },
-    Actor { name: "TokenToKas_sell3_out", entry: "sell3_out", shape: sh(T2K, 0, 3, false, false) },
-    Actor { name: "TokenSwap_swap", entry: "swap", shape: sh(SW, 1, 1, true, true) },
-    Actor { name: "TokenSwap_swap_bid_out", entry: "swap_bid_out", shape: sh(SW, 1, 1, true, false) },
-    Actor { name: "TokenSwap_swap_ask_out", entry: "swap_ask_out", shape: sh(SW, 1, 1, false, true) },
-    Actor { name: "TokenSwap_swap_out", entry: "swap_out", shape: sh(SW, 1, 1, false, false) },
-    Actor { name: "TokenSwap_swap2", entry: "swap2", shape: sh(SW, 2, 2, true, true) },
-    Actor { name: "TokenSwap_swap2_out", entry: "swap2_out", shape: sh(SW, 2, 2, false, false) },
-    Actor { name: "TokenToKasKron_sell", entry: "sell", shape: shk(T2K, 0, 1, false, true) },
-    Actor { name: "TokenToKasKron_sell_out", entry: "sell_out", shape: shk(T2K, 0, 1, false, false) },
-    Actor { name: "TokenToKasKron_sell2", entry: "sell2", shape: shk(T2K, 0, 2, false, true) },
-    Actor { name: "TokenToKasKron_sell2_out", entry: "sell2_out", shape: shk(T2K, 0, 2, false, false) },
-    Actor { name: "TokenToKasKron_sell3", entry: "sell3", shape: shk(T2K, 0, 3, false, true) },
-    Actor { name: "TokenToKasKron_sell3_out", entry: "sell3_out", shape: shk(T2K, 0, 3, false, false) },
-    Actor { name: "TokenSwapKron_swap", entry: "swap", shape: shk(SW, 1, 1, true, true) },
-    Actor { name: "TokenSwapKron_swap_bid_out", entry: "swap_bid_out", shape: shk(SW, 1, 1, true, false) },
-    Actor { name: "TokenSwapKron_swap_ask_out", entry: "swap_ask_out", shape: shk(SW, 1, 1, false, true) },
-    Actor { name: "TokenSwapKron_swap_out", entry: "swap_out", shape: shk(SW, 1, 1, false, false) },
-    Actor { name: "TokenSwapKron_swap2", entry: "swap2", shape: shk(SW, 2, 2, true, true) },
-    Actor { name: "TokenSwapKron_swap2_out", entry: "swap2_out", shape: shk(SW, 2, 2, false, false) },
+///
+/// The KCC-20 `TokenToKas` and `TokenSwap` shapes have custody twins: `sell_c`, `sell2_c`,
+/// `sell2_cc` and their `_out` twins, and one `_c` twin of each swap shape. There are no
+/// `sell3` custody twins, and the KRON routers have none (a KRON delivery is mode 0).
+pub const ACTORS: [Actor; 42] = [
+    Actor { name: "KasToToken_buy", entry: "buy", shape: sh(K2T, 1, 0, true, false), custody: 0 },
+    Actor { name: "KasToToken_buy_out", entry: "buy_out", shape: sh(K2T, 1, 0, false, false), custody: 0 },
+    Actor { name: "KasToToken_buy2", entry: "buy2", shape: sh(K2T, 2, 0, true, false), custody: 0 },
+    Actor { name: "KasToToken_buy2_out", entry: "buy2_out", shape: sh(K2T, 2, 0, false, false), custody: 0 },
+    Actor { name: "KasToToken_buy3", entry: "buy3", shape: sh(K2T, 3, 0, true, false), custody: 0 },
+    Actor { name: "KasToToken_buy3_out", entry: "buy3_out", shape: sh(K2T, 3, 0, false, false), custody: 0 },
+    Actor { name: "TokenToKas_sell", entry: "sell", shape: sh(T2K, 0, 1, false, true), custody: 0 },
+    Actor { name: "TokenToKas_sell_out", entry: "sell_out", shape: sh(T2K, 0, 1, false, false), custody: 0 },
+    Actor { name: "TokenToKas_sell2", entry: "sell2", shape: sh(T2K, 0, 2, false, true), custody: 0 },
+    Actor { name: "TokenToKas_sell2_out", entry: "sell2_out", shape: sh(T2K, 0, 2, false, false), custody: 0 },
+    Actor { name: "TokenToKas_sell3", entry: "sell3", shape: sh(T2K, 0, 3, false, true), custody: 0 },
+    Actor { name: "TokenToKas_sell3_out", entry: "sell3_out", shape: sh(T2K, 0, 3, false, false), custody: 0 },
+    Actor { name: "TokenToKas_sell_c", entry: "sell_c", shape: sh(T2K, 0, 1, false, true), custody: 1 },
+    Actor { name: "TokenToKas_sell_c_out", entry: "sell_c_out", shape: sh(T2K, 0, 1, false, false), custody: 1 },
+    Actor { name: "TokenToKas_sell2_c", entry: "sell2_c", shape: sh(T2K, 0, 2, false, true), custody: 1 },
+    Actor { name: "TokenToKas_sell2_c_out", entry: "sell2_c_out", shape: sh(T2K, 0, 2, false, false), custody: 1 },
+    Actor { name: "TokenToKas_sell2_cc", entry: "sell2_cc", shape: sh(T2K, 0, 2, false, true), custody: 2 },
+    Actor { name: "TokenToKas_sell2_cc_out", entry: "sell2_cc_out", shape: sh(T2K, 0, 2, false, false), custody: 2 },
+    Actor { name: "TokenSwap_swap", entry: "swap", shape: sh(SW, 1, 1, true, true), custody: 0 },
+    Actor { name: "TokenSwap_swap_bid_out", entry: "swap_bid_out", shape: sh(SW, 1, 1, true, false), custody: 0 },
+    Actor { name: "TokenSwap_swap_ask_out", entry: "swap_ask_out", shape: sh(SW, 1, 1, false, true), custody: 0 },
+    Actor { name: "TokenSwap_swap_out", entry: "swap_out", shape: sh(SW, 1, 1, false, false), custody: 0 },
+    Actor { name: "TokenSwap_swap2", entry: "swap2", shape: sh(SW, 2, 2, true, true), custody: 0 },
+    Actor { name: "TokenSwap_swap2_out", entry: "swap2_out", shape: sh(SW, 2, 2, false, false), custody: 0 },
+    Actor { name: "TokenSwap_swap_c", entry: "swap_c", shape: sh(SW, 1, 1, true, true), custody: 1 },
+    Actor { name: "TokenSwap_swap_bid_out_c", entry: "swap_bid_out_c", shape: sh(SW, 1, 1, true, false), custody: 1 },
+    Actor { name: "TokenSwap_swap_ask_out_c", entry: "swap_ask_out_c", shape: sh(SW, 1, 1, false, true), custody: 1 },
+    Actor { name: "TokenSwap_swap_out_c", entry: "swap_out_c", shape: sh(SW, 1, 1, false, false), custody: 1 },
+    Actor { name: "TokenSwap_swap2_c", entry: "swap2_c", shape: sh(SW, 2, 2, true, true), custody: 1 },
+    Actor { name: "TokenSwap_swap2_out_c", entry: "swap2_out_c", shape: sh(SW, 2, 2, false, false), custody: 1 },
+    Actor { name: "TokenToKasKron_sell", entry: "sell", shape: shk(T2K, 0, 1, false, true), custody: 0 },
+    Actor { name: "TokenToKasKron_sell_out", entry: "sell_out", shape: shk(T2K, 0, 1, false, false), custody: 0 },
+    Actor { name: "TokenToKasKron_sell2", entry: "sell2", shape: shk(T2K, 0, 2, false, true), custody: 0 },
+    Actor { name: "TokenToKasKron_sell2_out", entry: "sell2_out", shape: shk(T2K, 0, 2, false, false), custody: 0 },
+    Actor { name: "TokenToKasKron_sell3", entry: "sell3", shape: shk(T2K, 0, 3, false, true), custody: 0 },
+    Actor { name: "TokenToKasKron_sell3_out", entry: "sell3_out", shape: shk(T2K, 0, 3, false, false), custody: 0 },
+    Actor { name: "TokenSwapKron_swap", entry: "swap", shape: shk(SW, 1, 1, true, true), custody: 0 },
+    Actor { name: "TokenSwapKron_swap_bid_out", entry: "swap_bid_out", shape: shk(SW, 1, 1, true, false), custody: 0 },
+    Actor { name: "TokenSwapKron_swap_ask_out", entry: "swap_ask_out", shape: shk(SW, 1, 1, false, true), custody: 0 },
+    Actor { name: "TokenSwapKron_swap_out", entry: "swap_out", shape: shk(SW, 1, 1, false, false), custody: 0 },
+    Actor { name: "TokenSwapKron_swap2", entry: "swap2", shape: shk(SW, 2, 2, true, true), custody: 0 },
+    Actor { name: "TokenSwapKron_swap2_out", entry: "swap2_out", shape: shk(SW, 2, 2, false, false), custody: 0 },
 ];
 
 impl Actor {
@@ -271,9 +307,29 @@ impl Actor {
     pub fn by_name(name: &str) -> Option<&'static Actor> {
         ACTORS.iter().find(|a| a.name == name)
     }
-    /// The actor of a shape.
+    /// The actor of a shape whose bids hold no bought-custody.
+    ///
+    /// It serves bids of delivery modes 0 and 2 and the first fill of a mode-1 bid.
     pub fn by_shape(shape: &Shape) -> Option<&'static Actor> {
-        ACTORS.iter().find(|a| a.shape == *shape)
+        Self::by_shape_custody(shape, 0)
+    }
+    /// The actor of a shape whose first `custody` bids hold a bought-custody.
+    pub fn by_shape_custody(shape: &Shape, custody: usize) -> Option<&'static Actor> {
+        ACTORS.iter().find(|a| a.shape == *shape && a.custody == custody)
+    }
+    /// Token slots the execution of this actor needs: (inputs, outputs) of token A, then token B.
+    ///
+    /// They are the shape's, plus one token A input per custody leg.
+    pub fn token_slots(&self) -> ((usize, usize), (usize, usize)) {
+        let ((ai, ao), b) = self.shape.token_slots();
+        ((ai + self.custody, ao), b)
+    }
+    /// True when the programs of token A (`a`) and token B (`b`) can run this actor.
+    ///
+    /// See [`Shape::fits`]; the custody legs add token A inputs.
+    pub fn fits(&self, a: Option<TemplateId>, b: Option<TemplateId>) -> bool {
+        let ((ai, ao), _) = self.token_slots();
+        self.shape.fits(a, b) && a.is_none_or(|p| slots_fit(p, ai, ao))
     }
     /// The loaded, pinned template.
     pub fn template(&self) -> &'static RouterTemplate {
@@ -767,7 +823,7 @@ impl IntentState {
         if actor.shape.a_family != self.a_family() {
             return Err(Error::Invalid(format!("{} does not trade a {:?} token A", actor.name, self.a_family())));
         }
-        if !actor.shape.fits(self.locked_program(), self.merchant_program()) {
+        if !actor.fits(self.locked_program(), self.merchant_program()) {
             return Err(Error::Invalid(format!("{}: the token programs have no room for its token inputs and outputs", actor.name)));
         }
         Ok(())
@@ -832,13 +888,7 @@ impl IntentState {
                 .ok_or_else(|| Error::Invalid(format!("{}: state field {k} names no known token program", actor.name)))
         };
         // The lock's extension commitment: a KCC-20 token A pins it, a KRON one has none.
-        let ext = || -> Result<[u8; 32]> {
-            if actor.shape.a_family == Family::Kcc20 {
-                key("lock_extension")
-            } else {
-                Ok([0u8; 32])
-            }
-        };
+        let ext = || -> Result<[u8; 32]> { if actor.shape.a_family == Family::Kcc20 { key("lock_extension") } else { Ok([0u8; 32]) } };
         let st = match actor.shape.kind {
             IntentKind::KasToToken => IntentState::KasToToken {
                 payer: key("payer")?,
@@ -1016,7 +1066,18 @@ mod tests {
     fn router_loads_and_is_pinned() {
         check_router().unwrap();
         for a in &ACTORS {
-            assert_eq!(Actor::by_shape(&a.shape).unwrap().name, a.name, "one actor per shape");
+            assert_eq!(Actor::by_shape_custody(&a.shape, a.custody).unwrap().name, a.name, "one actor per shape and custody legs");
+            // Custody legs: KCC-20 bid legs only, at most two, never a three-bid sell; the name says
+            // how many (`_c`, `_cc`).
+            let tail = a.name.rsplit('_').find(|p| p.chars().all(|c| c == 'c')).map_or(0, str::len);
+            assert_eq!(a.custody, tail, "{}: custody legs in the name", a.name);
+            if a.custody > 0 {
+                assert!(a.shape.a_family == Family::Kcc20 && a.shape.kind.locks_tokens(), "{}", a.name);
+                assert!(a.custody <= a.shape.bids.min(2) && a.shape.bids < 3, "{}", a.name);
+                assert!(a.entry.contains("_c"), "{}", a.name);
+                // The twin without custody legs exists.
+                assert_eq!(Actor::by_shape(&a.shape).unwrap().custody, 0, "{}", a.name);
+            }
             let prefix = a.name.split('_').next().unwrap();
             let kron = a.shape.a_family == Family::Kron;
             assert_eq!(prefix, if kron { format!("{}Kron", a.shape.kind.as_str()) } else { a.shape.kind.as_str().to_string() });
@@ -1046,25 +1107,27 @@ mod tests {
                 (IntentKind::TokenSwap, Family::Kcc20) => (Some(Kcc20Ref8x8), Some(Kcc20Ref8x8)),
                 (IntentKind::TokenSwap, Family::Kron) => (Some(KronToken2732), Some(Kcc20Ref8x8)),
             };
-            assert!(s.fits(pa, pb), "{}", a.name);
+            assert!(a.fits(pa, pb), "{}", a.name);
             // The 3/3 programs: the reference and its published public-mint build.
             for p3 in [Kcc20Ref, Kcc20PublicMint] {
                 let three = |p: Option<TemplateId>| p.map(|_| p3);
-                let fits3 = s.fits(if s.a_family == Family::Kcc20 { three(pa) } else { pa }, three(pb));
+                let fits3 = a.fits(if s.a_family == Family::Kcc20 { three(pa) } else { pa }, three(pb));
                 // A KRON token A keeps its program. Only token B moves to the 3/3 program, and a
                 // KRON sell has no token B.
+                // The custody legs fit: the lock and two custodies are three token A inputs.
                 assert_eq!(fits3, !(s.a_family == Family::Kcc20 && s.bids == 3), "{} on {}", a.name, p3.name());
+                assert_eq!(a.token_slots().0.0, usize::from(s.kind.locks_tokens()) + a.custody, "{}", a.name);
             }
             if pa.is_some() {
-                assert!(!s.fits(Some(Kcc20KaspaCom025), pb), "{}", a.name);
+                assert!(!a.fits(Some(Kcc20KaspaCom025), pb), "{}", a.name);
             }
             if s.kind.merchant_gets_token() {
-                assert!(!s.fits(pa, Some(KronToken2433)), "{}: a KRON merchant token", a.name);
-                assert!(!s.fits(pa, Some(Kcc20KaspaCom025)), "{}", a.name);
+                assert!(!a.fits(pa, Some(KronToken2433)), "{}: a KRON merchant token", a.name);
+                assert!(!a.fits(pa, Some(Kcc20KaspaCom025)), "{}", a.name);
             }
             if let Some(p) = pa {
                 let other = if p.family() == Family::Kron { Kcc20Ref8x8 } else { KronToken2433 };
-                assert!(!s.fits(Some(other), pb), "{}: token A of the other family", a.name);
+                assert!(!a.fits(Some(other), pb), "{}: token A of the other family", a.name);
             }
         }
         assert!(intent_program(Kcc20KaspaCom025).is_err());
