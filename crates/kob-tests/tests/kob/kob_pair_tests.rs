@@ -1516,7 +1516,7 @@ fn mode_case(ask: bool, pa: TemplateId, pb: TemplateId) -> ModeCase {
 fn delivery_modes(r: &Run, pa: TemplateId, pb: TemplateId) {
     for ask in [true, false] {
         let c = mode_case(ask, pa, pb);
-        let pfx = format!("{}t{} ", if ask { "a" } else { "b" }, ftag(c.prog));
+        let pfx = format!("{}t{}", if ask { "a" } else { "b" }, ftag(c.prog));
         let s = side_pr(ask, pa, pb);
         let part = |n: &str| inv_ed(n, s.clone(), pa, pb, NR).0;
         let end = |n: &str| inv_ed(n, s.clone(), pa, pb, s.amount_left).0;

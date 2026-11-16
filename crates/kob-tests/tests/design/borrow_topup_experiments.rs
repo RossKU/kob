@@ -1076,6 +1076,7 @@ fn c_costs_on_larger_programs_and_sizes() {
     a.extend(f.t.tok_args());
     a.extend([bytes(&EXT), int(SCALE), int(SCALE), int(P250), int(TIP)]);
     a.extend([int(0), int(0), int(EXPIRY), int(REFUND_TIP), int(0), int(DC), int(0), int(0), int(0), int(0), int(0)]);
+    a.extend(MODE0);
     let today = bytecode(&compile_contract(&common::contract_source("KobBid"), &a, CompileOptions::default()).expect("compile KobBid"));
     println!("SIZE KobBid {} B, KobBidTopup {} B ({:+} B)", today.len(), proto.len(), proto.len() as i64 - today.len() as i64);
 }
@@ -1130,9 +1131,20 @@ fn acc(f: &Fx, maker: &Keypair, bought: i64, expiry: i64) -> SilAbiArtifact {
     a.push(int(bought));
     compile_contract(&common::contract_source("KobBidAcc"), &a, CompileOptions::default()).expect("compile KobBidAcc")
 }
-/// The shipped KobBid with the same terms (the cost baseline).
+/// The shipped KobBid with the same terms, in delivery mode 0 (the cost baseline; since the bid delivery modes the shipped
+/// KobBid carries the delivery block, docs/design/bid-delivery-spec.md section 2).
 fn today(f: &Fx, maker: &Keypair) -> SilAbiArtifact {
-    compile_contract(&common::contract_source("KobBid"), &today_args(f, maker, EXPIRY), CompileOptions::default()).expect("compile KobBid")
+    let mut a = today_args(f, maker, EXPIRY);
+    a.extend(MODE0);
+    compile_contract(&common::contract_source("KobBid"), &a, CompileOptions::default()).expect("compile KobBid")
+}
+/// The delivery block of the shipped KobBid in mode 0: mode, recvThreshold, topupTip, bought.
+const MODE0: [ArtifactValue; 4] = [ArtifactValue::Int(0), ArtifactValue::Int(0), ArtifactValue::Int(0), ArtifactValue::Int(0)];
+/// fill(nb, tokIn, t, form) of the shipped KobBid (form 0: read in mode 2 only).
+fn today_fill(n: i64, idx: usize) -> Vec<ArtifactValue> {
+    let mut a = args3(n, idx);
+    a.push(int(0));
+    a
 }
 fn today_args(f: &Fx, maker: &Keypair, expiry: i64) -> Vec<ArtifactValue> {
     let mut a = vec![bytes(&pk(maker))];
@@ -1210,7 +1222,7 @@ fn today_taker(f: &Fx, w: i64) -> Scn {
         Scn {
             name: format!("F today: taker sells {w} into the shipped KobBid"),
             inputs: vec![
-                call(&b, "fill", args3(n, 1), "bid.fill", v, BID_COV),
+                call(&b, "fill", today_fill(n, 1), "bid.fill", v, BID_COV),
                 tok_leader(&f.t, CARRIER, &plain(10_000, &tk), &[plain(n, &m), plain(10_000 - n, &tk)], Wit::P2pk(f.taker)),
                 p2pk_in(&f.taker, KAS),
             ],
@@ -1252,13 +1264,14 @@ fn cross_acc(f: &Fx, w: i64, acc_bought: Option<i64>) -> Scn {
             )
         }
         other => {
+            let fill = if other.is_none() { today_fill(n, 2) } else { args3(n, 2) };
             let (b, bn, d) = match other {
                 Some(_) => (acc(f, &f.maker, 0, EXPIRY), acc(f, &f.maker, n, EXPIRY), custody(n, BID_COV)),
                 None => (today(f, &f.maker), today(f, &f.maker), plain(n, &m)),
             };
             (
                 vec![
-                    call(&b, "fill", args3(n, 2), "bid.fill", v, BID_COV),
+                    call(&b, "fill", fill, "bid.fill", v, BID_COV),
                     call(&a, "settle", settle(2), "ask.settle", CARRIER, ASK_COV),
                     tok_leader(&f.t, CARRIER, &cust, &[d, rest], Wit::CovId),
                     p2pk_in(&f.matcher, KAS),

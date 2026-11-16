@@ -1811,7 +1811,7 @@ fn delivery_modes(r: &Run, pa: TemplateId, pb: TemplateId) {
     for ask in [true, false] {
         let c = mode_case(ask, pa, pb);
         let side = if ask { "a" } else { "b" };
-        let pfx = format!("{side}t{} ", if c.prog.family() == Family::Kcc20 { "k" } else { "r" });
+        let pfx = format!("{side}t{}", if c.prog.family() == Family::Kcc20 { "k" } else { "r" });
         let s = cside(ask, pa, pb);
         let part = |n: &str| tp_ed(n, s.clone(), pa, pb, NR).0;
         let end = |n: &str| tp_ed(n, s.clone(), pa, pb, s.amount_left).0;

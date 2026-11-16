@@ -76,9 +76,19 @@ pub fn is_pair(id: TemplateId) -> bool {
 /// (template, its pinned state length before the bid delivery modes, the number of int fields of its delivery block):
 /// the templates whose sources changed with the delivery modes while their pinned artifacts wait for the re-pin
 /// (package P1). Their compiled build is not compared with the pinned artifact while the pinned state still has the
-/// old length, and a state span of that length is extended by the default delivery block ([`full_state`]).
-pub const REPIN_PENDING: [(TemplateId, usize, usize); 3] =
-    [(TemplateId::KobPair, 447, 4), (TemplateId::KobCondPair, 543, 4), (TemplateId::KobIfdPair, 909, 3)];
+/// old length, and a state span of that length is extended by the default delivery block ([`full_state`]). `KobBid`
+/// (the trigger evidence of the conditionals), `KobCondBid` and `KobIfdAsk` gained a block too; `KobCondAsk` and
+/// `KobIfdBid` keep their state (no block) but embed the longer `KobBid` evidence state, so their code changed.
+pub const REPIN_PENDING: [(TemplateId, usize, usize); 8] = [
+    (TemplateId::KobPair, 447, 4),
+    (TemplateId::KobCondPair, 543, 4),
+    (TemplateId::KobIfdPair, 909, 3),
+    (TemplateId::KobBid, 285, 4),
+    (TemplateId::KobCondBid, 381, 4),
+    (TemplateId::KobIfdAsk, 594, 3),
+    (TemplateId::KobCondAsk, 363, 0),
+    (TemplateId::KobIfdBid, 585, 0),
+];
 
 /// The delivery block of int fields `v` (`0x08` + 8 bytes little-endian each).
 pub fn dlv_block(v: &[i64]) -> Vec<u8> {
@@ -210,22 +220,25 @@ fn repoint(args: &mut [ArtifactValue], dep: TemplateId, sub: &Sub) {
 }
 
 impl Subs {
-    /// The three pair templates.
+    /// The three pair templates, and the `KobBid` their conditionals read as trigger evidence.
     pub fn compile() -> Subs {
         Subs::compile_deps(&[
+            (TemplateId::KobBid, &[]),
             (TemplateId::KobPair, &[]),
-            (TemplateId::KobCondPair, &[TemplateId::KobPair]),
-            (TemplateId::KobIfdPair, &[TemplateId::KobCondPair, TemplateId::KobPair]),
+            (TemplateId::KobCondPair, &[TemplateId::KobPair, TemplateId::KobBid]),
+            (TemplateId::KobIfdPair, &[TemplateId::KobCondPair, TemplateId::KobPair, TemplateId::KobBid]),
         ])
     }
-    /// The KCC-20 ask family ([`ASK_KINDS`]), each against the compiled templates it embeds.
+    /// The KCC-20 ask family ([`ASK_KINDS`]) and the `KobBid` the conditionals read as trigger evidence, each against
+    /// the compiled templates it embeds.
     pub fn compile_asks() -> Subs {
         Subs::compile_deps(&[
             (TemplateId::KobAsk, &[]),
-            (TemplateId::KobCondAsk, &[TemplateId::KobAsk]),
-            (TemplateId::KobCondBid, &[TemplateId::KobAsk]),
+            (TemplateId::KobBid, &[]),
+            (TemplateId::KobCondAsk, &[TemplateId::KobAsk, TemplateId::KobBid]),
+            (TemplateId::KobCondBid, &[TemplateId::KobAsk, TemplateId::KobBid]),
             (TemplateId::KobIfdAsk, &[TemplateId::KobCondBid, TemplateId::KobAsk]),
-            (TemplateId::KobIfdBid, &[TemplateId::KobCondAsk]),
+            (TemplateId::KobIfdBid, &[TemplateId::KobCondAsk, TemplateId::KobBid]),
         ])
     }
     /// `deps`: (template, the templates under test whose build constants it embeds), in dependency order.

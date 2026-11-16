@@ -267,6 +267,11 @@ impl Net {
             int(0),
             int(0),
             int(0),
+            // delivery block (bid-delivery-spec section 2): mode 0, recvThreshold, topupTip, bought
+            int(0),
+            int(0),
+            int(0),
+            int(0),
         ]);
         compile_contract(&order_src("KobBid"), &a, CompileOptions::default()).expect("compile KobBid")
     }
@@ -700,7 +705,7 @@ fn cross8x8(net: &Net, matcher: &Keypair) -> Scn {
     for i in 0..8 {
         let bid = net.bid(&pk(&bmakers[i]), P260);
         let v = used + DC;
-        inputs.push(call(&bid, "fill", vec![nb(2 * WHOLE), iv(17), iv(0)], "bid.fill", v, cov(0xb0 + i as u8), 1_000));
+        inputs.push(call(&bid, "fill", vec![nb(2 * WHOLE), iv(17), iv(0), iv(0)], "bid.fill", v, cov(0xb0 + i as u8), 1_000));
         outputs.push(out(v - bid_all_in(2 * WHOLE, P260), t.spk(2 * WHOLE, &pk(&bmakers[i]), SCHEME_P2PK), Some((16, TOKEN_COV))));
         states.push(tok_state_bytes(2 * WHOLE, &pk(&bmakers[i]), SCHEME_P2PK, 0));
         income += bid_all_in(2 * WHOLE, P260);
