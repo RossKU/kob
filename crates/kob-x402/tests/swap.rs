@@ -1756,3 +1756,120 @@ fn a_pay_asset_listed_twice_is_refused() {
     let e = kob_x402::swap::parse_route_offer(&offer).unwrap_err();
     assert!(e.to_string().contains("twice"), "{e}");
 }
+
+// ------------------------------------------------------------------------------------------ mode-1 bids holding bought tokens
+
+/// A mode-1 bid of A that bought 2 whole tokens before (`bought = 2`), with its bought-custody on the chain.
+/// `slack` KAS ride on top of a 3-token fill's budget (the bid continues when `tif` is GTC and `slack` is large).
+fn custody_bid(f: &Fx, tag: u8, covb: u8, tif: i64, whole: i64, slack: u64) -> (OrderUtxo<BidState>, TokenUtxo) {
+    let bs = BidState { mode: 1, bought: 2 * WHOLE, tif, ..common::bid(common::MAKER_B, P245, T) };
+    // a bid that holds its custody reserves no delivery carrier
+    let value = bs.used(whole * WHOLE).expect("budget") as u64 + slack;
+    let bid = common::order(tag, value, common::cov(covb), 1_000, bs);
+    let cust = common::custody(tag + 1, 2, common::cov(covb), 1_000);
+    put_bid(&f.chain, &bid);
+    put_tok(&f.chain, &cust);
+    (bid, cust)
+}
+
+fn custody_quote(bid: &OrderUtxo<BidState>, cust: &TokenUtxo) -> Quote {
+    Quote { lock_time: NOW, orders: vec![OrderRef::bid_with_custody(bid.clone(), cust.clone(), 3 * WHOLE)] }
+}
+
+fn add_token_input(tx: &mut Transaction, entries: &mut Vec<UtxoEntry>, plans: &mut Vec<SigPlan>, t: &TokenUtxo) {
+    let tid = kaspa_consensus_core::tx::TransactionId::from_bytes(t.utxo.transaction_id);
+    tx.inputs.push(TransactionInput::new_with_compute_budget(kaspa_consensus_core::tx::TransactionOutpoint::new(tid, t.utxo.index), vec![], 0, 10));
+    entries.push(UtxoEntry::new(
+        t.utxo.amount,
+        t.state.spk_with(token_template(T)),
+        1_000,
+        false,
+        Some(kaspa_consensus_core::Hash::from_bytes(TOKEN_COV)),
+    ));
+    plans.push(SigPlan::TokenDelegator {
+        template: T,
+        state: t.state.as_kcc20().unwrap().clone(),
+        witness: kob_protocol::tx::Witness::CovenantId,
+    });
+}
+
+#[test]
+fn x1_a_swap_through_a_mode_1_bids_bought_custody_verifies_and_the_engine_accepts_it() {
+    let f = fx();
+    let (bid, cust) = custody_bid(&f, 40, 0xc1, 0, 5, 0);
+    let offer = f.kas_offer(KAS);
+    let quote = custody_quote(&bid, &cust);
+    let prep = f.prepare(&offer, &quote, &f.funds(false));
+    assert!(prep.built.tx.inputs.iter().any(|i| (i.transaction_id, i.index) == (cust.utxo.transaction_id, cust.utxo.index)));
+    let p = prep.complete(&prep.sign_with(&keys()).unwrap()).unwrap();
+    let (v, facts) = kob_x402::swap::verify_swap_facts(&f.ctx(), &offer, &p.payload, RH).unwrap_or_else(|e| panic!("verification failed: {e}"));
+    assert_eq!(facts.legs[0].custody, Some(op(&cust.utxo)));
+    assert_eq!(facts.payer_spent, 3 * WHOLE as u64);
+    assert_eq!(v.order_inputs, vec![op(&bid.utxo)]);
+    f.accept(&offer, &p.payload);
+}
+
+#[test]
+fn x1_an_ending_custody_bid_claims_its_refund_without_the_delivery_carrier_deduction() {
+    let f = fx();
+    // IOC: the fill ends it and 3 KAS of slack return to the maker. Once the custody exists no carrier is held back, so the
+    // slack (below the 10 KAS delivery carrier) is still a refund the verifier must claim.
+    let (bid, cust) = custody_bid(&f, 42, 0xc2, 1, 3, 3 * KAS);
+    let offer = f.kas_offer(KAS);
+    let prep = f.prepare(&offer, &custody_quote(&bid, &cust), &f.funds(false));
+    let last = prep.built.tx.outputs.last().unwrap();
+    assert_eq!(last.script_public_key, spk_to_string(&p2pk_spk(&pk(common::MAKER_B))), "the refund closes the transaction");
+    let p = prep.complete(&prep.sign_with(&keys()).unwrap()).unwrap();
+    f.accept(&offer, &p.payload);
+}
+
+#[test]
+fn x1_a_custody_bid_without_its_custody_input_is_rejected() {
+    let f = fx();
+    let (bid, cust) = custody_bid(&f, 44, 0xc3, 0, 5, 0);
+    let offer = f.kas_offer(KAS);
+    let prep = f.prepare(&offer, &custody_quote(&bid, &cust), &f.funds(false));
+    let at = prep.built.tx.inputs.iter().position(|i| i.index == cust.utxo.index && i.transaction_id == cust.utxo.transaction_id).unwrap();
+    let p = attack(&prep, |tx, entries, plans| {
+        tx.inputs.remove(at);
+        entries.remove(at);
+        plans.remove(at);
+    });
+    let e = err_of(f.verify(&offer, &p));
+    assert_eq!(e.diag, Diag::RouteUnsupported);
+    assert!(e.to_string().contains("bought-custody"), "{e}");
+}
+
+#[test]
+fn x1_a_stray_token_of_a_custody_bid_or_of_a_bid_without_custody_is_rejected() {
+    let f = fx();
+    // a second token owned by the bid, next to its real custody: not the exact custody
+    let (bid, cust) = custody_bid(&f, 46, 0xc4, 0, 5, 0);
+    let offer = f.kas_offer(KAS);
+    let prep = f.prepare(&offer, &custody_quote(&bid, &cust), &f.funds(false));
+    let stray = common::tok(60, WHOLE, common::cov(0xc4), SCHEME_COVID, 1_000);
+    put_tok(&f.chain, &stray);
+    let p = attack(&prep, |tx, entries, plans| add_token_input(tx, entries, plans, &stray));
+    let e = err_of(f.verify(&offer, &p));
+    assert_eq!(e.diag, Diag::RouteUnsupported);
+    assert!(e.to_string().contains("stray") || e.to_string().contains("two custody"), "{e}");
+    // a bid that holds nothing (bought = 0) with a token of its own in the transaction
+    let prep = f.prepare(&offer, &f.sw1_quote(&f.bid1), &f.funds(false));
+    let stray = common::tok(62, WHOLE, f.bid1.utxo.covenant_id.unwrap(), SCHEME_COVID, 1_000);
+    put_tok(&f.chain, &stray);
+    let p = attack(&prep, |tx, entries, plans| add_token_input(tx, entries, plans, &stray));
+    let e = err_of(f.verify(&offer, &p));
+    assert_eq!(e.diag, Diag::RouteUnsupported);
+    assert!(e.to_string().contains("holds no bought-custody"), "{e}");
+}
+
+#[test]
+fn x1_the_client_names_the_custody_it_needs() {
+    let f = fx();
+    let (bid, cust) = custody_bid(&f, 48, 0xc5, 0, 5, 0);
+    // the leg without the custody is refused by the builder, and the custody is readable from the leg
+    let none = Quote { lock_time: NOW, orders: vec![OrderRef::bid(bid.clone(), 3 * WHOLE)] };
+    let offer = f.kas_offer(KAS);
+    assert!(prepare_swap(&f.policy, &offer, &none, RH, &f.funds(false), NOW_MS, &bounded(&none)).is_err());
+    assert_eq!(OrderRef::bid_with_custody(bid, cust.clone(), WHOLE).bought_custody(), Some(&cust));
+}

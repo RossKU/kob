@@ -166,7 +166,7 @@ impl Fx {
         verify_intent(&self.ctx(), offer, p, RH)
     }
     fn book(&self) -> BookView {
-        BookView { asks: self.asks.clone(), bids: self.bids.clone() }
+        BookView { asks: self.asks.clone(), bids: self.bids.iter().cloned().map(|b| (b, None)).collect() }
     }
     fn keeper(&self) -> KeeperParams {
         KeeperParams { keeper: pk(KEEPER), ..KeeperParams::default() }
@@ -665,4 +665,66 @@ fn a_payer_with_a_hundred_small_coins_creates_an_intent_from_the_largest_it_need
     let p = f.pay(&offer, &hex(&TOKEN_COV), &t2k_opts()).unwrap();
     let (v, _) = f.verify(&offer, &p.payload).unwrap();
     assert!(v.tx.inputs.len() <= f.policy.limits.max_inputs, "{} inputs", v.tx.inputs.len());
+}
+
+// ------------------------------------------------------------------------------------------ mode-1 bids holding bought tokens
+
+/// A mode-1 GTC bid of A that bought 2 whole tokens before, with its bought-custody (`custody_whole` whole tokens), both on the chain.
+fn custody_bid(f: &Fx, tag: u8, custody_whole: i64) -> (OrderUtxo<BidState>, TokenUtxo) {
+    let s = BidState { mode: 1, bought: 2 * WHOLE, ..common::bid(common::MAKER_B, P245, P8) };
+    let id = common::cov(0x60 + tag);
+    let bid = common::order(tag, s.used(10 * WHOLE).unwrap() as u64, id, 1_000, s);
+    let cust = common::tok_of(tag + 100, custody_whole * WHOLE, id, SCHEME_COVID, 1_000, TOKEN_COV);
+    put(&f.chain, &bid.utxo, bid.state.spk());
+    put_tok(&f.chain, &cust);
+    (bid, cust)
+}
+
+fn custody_actor(name: &str) -> IntentOptions {
+    IntentOptions { actor: Some(name.into()), ..t2k_opts() }
+}
+
+#[test]
+fn x1_a_custody_actor_sells_into_a_bid_through_its_bought_custody() {
+    let f = fx();
+    let (bid, cust) = custody_bid(&f, 40, 2);
+    let offer = f.kas_offer(5 * KAS, MERCHANT);
+    let p = f.pay(&offer, &hex(&TOKEN_COV), &custody_actor("TokenToKas_sell_c")).unwrap();
+    let (v, facts) = f.verify(&offer, &p.payload).unwrap();
+    f.chain.submit(&v.tx).unwrap();
+    f.chain.mine(1);
+    let book = BookView { asks: vec![], bids: vec![(bid.clone(), Some(cust.clone()))] };
+    let ex = build_execution(&facts, &book, &BTreeSet::new(), NOW, &f.keeper()).unwrap().expect("the custody bid executes the intent");
+    let spends = |t: &TokenUtxo| ex.tx.inputs.iter().any(|i| (i.previous_outpoint.transaction_id.as_bytes(), i.previous_outpoint.index) == (t.utxo.transaction_id, t.utxo.index));
+    assert!(spends(&cust), "the execution spends the bought-custody");
+    kob_protocol::verify::validate(&ex.tx, &ex.entries).expect("engine validation");
+    f.chain.submit(&ex.tx).unwrap_or_else(|e| panic!("execution submit: {e:?}"));
+    f.chain.mine(1);
+    assert!(matches!(f.chain.output_status(&ex.merchant_output, &ex.merchant_spk).unwrap(), OutputStatus::Accepted { .. }));
+}
+
+#[test]
+fn x1_the_book_matches_the_actors_custody_count() {
+    let f = fx();
+    let (bid, cust) = custody_bid(&f, 41, 2);
+    let plain = (bid_a(20, common::MAKER_B, 10), None);
+    let offer = f.kas_offer(5 * KAS, MERCHANT);
+    let run = |actor: &str, bids: Vec<(OrderUtxo<BidState>, Option<TokenUtxo>)>| {
+        let p = f.pay(&offer, &hex(&TOKEN_COV), &custody_actor(actor)).unwrap();
+        let (_, facts) = f.verify(&offer, &p.payload).unwrap();
+        build_execution(&facts, &BookView { asks: vec![], bids }, &BTreeSet::new(), NOW, &f.keeper()).unwrap().is_some()
+    };
+    // a custody bid only serves a custody actor, a plain bid only a plain one
+    assert!(!run("TokenToKas_sell", vec![(bid.clone(), Some(cust.clone()))]));
+    assert!(!run("TokenToKas_sell_c", vec![plain.clone()]));
+    assert!(run("TokenToKas_sell", vec![plain.clone()]));
+    assert!(run("TokenToKas_sell_c", vec![plain, (bid.clone(), Some(cust.clone()))]));
+    // a custody bid that lacks its custody, or whose custody is not the exact `bought`, is not offered to anyone
+    assert!(!run("TokenToKas_sell_c", vec![(bid.clone(), None)]));
+    let (bid2, short) = custody_bid(&f, 43, 1);
+    assert!(!run("TokenToKas_sell_c", vec![(bid2, Some(short))]));
+    // a custody of another owner is no custody of this bid
+    let mut foreign = cust.clone();
+    foreign.state = foreign.state.with_holder_owner(P8, pk(PAYER));
+    assert!(!run("TokenToKas_sell_c", vec![(bid, Some(foreign))]));
 }
