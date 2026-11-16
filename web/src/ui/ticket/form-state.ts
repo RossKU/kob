@@ -24,6 +24,7 @@ import type { Lifetime } from '../../kob/intent-simple';
 import { SLIPPAGE_BPS, secondsToDaa } from '../../kob/daa';
 import { stopWorstPrice } from '../../kob/orders/cond-legs';
 import { auctionBound } from '../../kob/orders/simple';
+import { DELIVERY_CHOICES, isDeliveryChoice, type DeliveryChoice, type DeliveryRequest } from '../../kob/orders/delivery';
 import {
   UnitsError, fitsI64, formatPricePerToken, formatUnits, parseKas, parseUnits, pow10, roundToTick, safeRounding, tokenPriceToStatePrice, type Rounding,
 } from '../../kob/units';
@@ -125,6 +126,8 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
     F('exit.minFill', 'amount'), F('exit.lifetime', 'select', ['gtc', 'gtd']), F('exit.lifetimeAt', 'datetime'),
     F('ladder.levels', 'int'), F('ladder.step', 'delta'), F('ladder.on', 'bool'), F('ladder.pct', 'percent'), F('ladder.end', 'price'),
     F('prefund', 'delta'), F('repeat.count', 'int'),
+    // where a buy's tokens go (orders/delivery.ts): Collected (the default), Each fill, Top-up with its tip per fill in KAS
+    F('delivery', 'select', DELIVERY_CHOICES), F('topupTip', 'kas'),
   ].map((f) => [f.id, f]),
 );
 
@@ -191,6 +194,47 @@ export interface TicketCtx {
    * close) is converted at (`kas` forms only). `buy` = the best ask (what a buy meets), `sell` = the best bid.
    */
   ref?: { buy?: bigint | null; sell?: bigint | null };
+  /** the family of the token's program: a KRON token's buys deliver at each fill, so its ticket has no Delivery choice. Absent: KCC-20. */
+  family?: 'kcc20' | 'kron';
+  /** a token pair: the family of the quote token B, which a pair sell receives (a KRON B: each fill). Absent: KCC-20. */
+  quoteFamily?: 'kcc20' | 'kron';
+  /**
+   * The wallet's delivery settings (orders/delivery.ts): the default of Settings (absent: Collected) and, for Top-up, the receive threshold this
+   * wallet stored for the token (absent: the planner sets it from the price at the first top-up order).
+   */
+  delivery?: { walletDefault?: DeliveryChoice; threshold?: bigint };
+}
+
+/** The order types whose buys rest and deliver (KobBid, KobCondBid) and so choose their delivery; the sell side of an if-done buys back. */
+const DELIVERY_BUY_TYPES: readonly OrderTypeId[] = ['limit', 'dca', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
+
+/** The order types of a token pair whose SELLS rest and deliver token B (KobPair, KobCondPair asks). */
+const DELIVERY_PAIR_SELL_TYPES: readonly OrderTypeId[] = ['limit', 'twap', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'];
+
+/**
+ * Whether the form's order chooses its delivery (bid-delivery-spec §10): a resting buy of a KCC-20 token (on a token pair too: a pair bid buys
+ * A), a resting sell of a token pair whose B is KCC-20 (it receives B), and the buy-back exits of a sell-first IFD / IFO of a KAS market.
+ * IOC, FOK, market orders, KRON tokens, repeating entries and the exits of pair if-done orders deliver at each fill, so they have no choice.
+ */
+export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily'>): boolean {
+  if (isPairCtx(ctx) && form.side === 'sell') return ctx?.quoteFamily !== 'kron' && DELIVERY_PAIR_SELL_TYPES.includes(form.type);
+  if (ctx?.family === 'kron') return false;
+  if (form.type === 'ifd' || form.type === 'ifo') return !isPairCtx(ctx) && form.side === 'sell';
+  return form.side === 'buy' && DELIVERY_BUY_TYPES.includes(form.type);
+}
+
+/** The choices the ticket offers: a token pair has no "Added to one UTXO" (the spec defines no threshold price for a pair order). */
+export const deliveryChoicesOf = (ctx?: Pick<TicketCtx, 'quoteDecimals'>): readonly DeliveryChoice[] => (isPairCtx(ctx) ? DELIVERY_CHOICES.filter((c) => c !== 'topup') : DELIVERY_CHOICES);
+
+/**
+ * The delivery the form's order gets: the choice under Advanced, else the wallet default, else Collected (a choice the ticket does not offer,
+ * Added to one UTXO on a pair: Collected); null when it has no choice.
+ */
+export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): DeliveryChoice | null {
+  if (!hasDeliveryChoice(form, ctx)) return null;
+  const v = form.values.delivery;
+  const c = isDeliveryChoice(v) ? v : ctx?.delivery?.walletDefault ?? 'collected';
+  return deliveryChoicesOf(ctx).includes(c) ? c : 'collected';
 }
 
 /** A token/token pair ticket (the quote is a token B): a pair sell delivers B per fill, so it budgets its fills (`maxFills`) like a buy. */
@@ -278,7 +322,18 @@ const EXIT_TRIGGER = ['exit.minTouch', 'exit.minRestDaa'];
  * Which fields the form shows for its type, side and current selections (conditional fields appear when their switch is on). `ctx` tells a pair
  * ticket (`isPairCtx`): its sells budget their fills too.
  */
-export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'>): Layout {
+export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): Layout {
+  const out = layoutOfType(form, ctx);
+  const delivery = deliveryOf(form, ctx);
+  if (delivery === null) return out;
+  // Delivery is the row after the priority tip; Top-up adds its tip. A Collected order is funded with one carrier, so it has no Fills box.
+  const adv = out.advanced.filter((id) => !(delivery === 'collected' && id === 'maxFills'));
+  const at = adv.indexOf('tip') + 1;
+  adv.splice(at, 0, 'delivery', ...(delivery === 'topup' ? ['topupTip'] : []));
+  return { main: out.main, advanced: adv };
+}
+
+function layoutOfType(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'>): Layout {
   const v = form.values;
   const buy = form.side === 'buy';
   const life = (): string[] => (v.lifetime === 'gtd' ? LIFE : ['lifetime']);
@@ -641,6 +696,20 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     }
     return Number(b);
   };
+  // the delivery of a resting buy (and of a sell-first if-done's exits): the choice, the wallet's default and stored threshold, a Top-up tip
+  const delivery = deliveryOf(form, ctx);
+  const deliveryReq = (): { delivery?: DeliveryRequest } => {
+    if (delivery === null) return {};
+    const offered = deliveryChoicesOf(ctx);
+    const choice = r.pick('delivery', offered);
+    const wallet = ctx.delivery?.walletDefault;
+    const req: DeliveryRequest = dropUndefined({
+      choice, walletDefault: wallet !== undefined && offered.includes(wallet) ? wallet : wallet !== undefined ? 'collected' : undefined, topupTip: delivery === 'topup' ? r.kas('topupTip') : undefined, threshold: delivery === 'topup' ? ctx.delivery?.threshold : undefined,
+    });
+    return Object.keys(req).length ? { delivery: req } : {};
+  };
+  /** a Collected order is funded with one delivery carrier: it has no Fills box */
+  const fillsOf = (budgets: boolean): { maxFills?: bigint | undefined } => (budgets && delivery !== 'collected' ? { maxFills: r.positive('maxFills', false) } : {});
   const condCommon = () => ({
     amount: amount as bigint,
     tip,
@@ -648,7 +717,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     expiry: lifetimeCond(),
     activeFrom: activeFrom(),
     carrier: r.kas('carrier'),
-    ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}),
+    ...fillsOf(budgetsFills(side, ctx)),
+    ...deliveryReq(),
   });
   // lifetime of the exits (no day order: the exit is created later); empty = good till cancelled
   const exitExpiry = (): Exclude<CondExpiry, { kind: 'day' }> | undefined => {
@@ -668,7 +738,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
   let intent: Record<string, unknown> | null = null;
   switch (type) {
     case 'limit':
-      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: r.pick('crossing', ['auction', 'limit', 'reject'] as const), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
+      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: r.pick('crossing', ['auction', 'limit', 'reject'] as const), ...fillsOf(budgetsFills(side, ctx)), ...deliveryReq() };
       break;
     case 'ioc':
     case 'fok':
@@ -689,7 +759,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
       intent = {
         type, side, amount, minFill, tip, sliceAmount: r.amount('sliceAmount'), interval: interval === undefined ? undefined : { seconds: interval }, price: r.price('price'),
         priceEnd: r.price('priceEnd', side, false), sliceAuction: r.has('priceEnd') ? sec('sliceAuction') : undefined,
-        lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...(type === 'dca' ? { maxFills: r.positive('maxFills', false) } : {}),
+        lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...fillsOf(type === 'dca'), ...(type === 'dca' ? deliveryReq() : {}),
       };
       break;
     }
@@ -697,7 +767,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
       const duration = r.minutes('duration', true);
       intent = {
         type, side, amount, minFill, tip, price: r.price('price'), priceEnd: r.price('priceEnd'), duration: duration === undefined ? undefined : { seconds: duration },
-        stepDaa: r.positive('stepDaa', false), lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}),
+        stepDaa: r.positive('stepDaa', false), lifetime: lifetimeSimple(), activeFrom: activeFrom(), ...fillsOf(budgetsFills(side, ctx)), ...deliveryReq(),
       };
       break;
     }
@@ -827,6 +897,8 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   amount('amount', i.amount);
   amount('minFill', i.minFill);
   if (i.tip !== undefined) kasTip('tip', i.tip);
+  put('delivery', i.delivery?.choice);
+  if (i.delivery?.topupTip !== undefined) v.topupTip = formatUnits(i.delivery.topupTip, 8);
   switch (intent.type) {
     case 'limit': price('price', i.price); life(i.lifetime); from(i.activeFrom); put('crossing', i.crossing); put('maxFills', i.maxFills); break;
     case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); break;

@@ -39,6 +39,7 @@ import {
   withCustody,
 } from './pair-common';
 import { pairIssue, type PairIssueCode } from './pair-issues';
+import { collectedPairTipExtra, pairCollectedExtra, resolvePairDelivery, withDelivery, type DeliveryRequest, type ResolvedDelivery } from './delivery';
 
 /** A fully resolved plain pair order: base units of A, B per whole A and a KAS tip. */
 interface Draft {
@@ -72,6 +73,10 @@ interface Draft {
   activatesAt: bigint | null;
   notes: string[];
   pairNotes: string[];
+  /** a buy: what the user and the wallet asked for its delivery (orders/delivery.ts) */
+  delivery: DeliveryRequest | undefined;
+  /** the tip is the default one (a Collected buy raises it for its later fills) */
+  tipDefault: boolean;
 }
 
 const LEAD = MARKET_ACTIVATION_DAA;
@@ -79,7 +84,7 @@ const LEAD = MARKET_ACTIVATION_DAA;
 const blank = (side: 'sell' | 'buy', amount: bigint, price: bigint, tip: bigint, minFill: bigint | undefined): Draft => ({
   side, amount, minFill: minFill ?? null, immediate: false, price, tip, tif: 0, activeFrom: 0n, requestedActiveFrom: null, expiryDaa: 0n, interval: 0n,
   maxFill: 0n, slope: 0n, priceEnd: 0n, decayStep: 1n, deadline: null, fills: null, fillsRequested: undefined, reach: price, expiryKind: 'gtc',
-  expectedPrice: null, worstPrice: null, limitPrice: price, activatesAt: null, notes: [], pairNotes: [],
+  expectedPrice: null, worstPrice: null, limitPrice: price, activatesAt: null, notes: [], pairNotes: [], delivery: undefined, tipDefault: false,
 });
 
 const BAND_CODES: Record<string, PairIssueCode> = { PRICE_AGGRESSIVE_VS_MARKET: 'PAIR_PRICE_AGGRESSIVE_VS_MARKET', PRICE_FAR_FROM_MARKET: 'PAIR_PRICE_FAR_FROM_MARKET' };
@@ -122,14 +127,26 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
 
   const possible = ceilDiv(d.amount, minFill);
   const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
-  // With fewer carriers than possible fills, the rest fills only in full after the partial fills.
-  if (d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const dc = pairCarrierOf(env);
+  // The delivery of the token the order receives (a buy: A, a sell: B): a resting order is Collected by default (one carrier for every
+  // fill), and its default tip also pays the custody input of every later fill (orders/delivery.ts collectedPairTipExtra; the tip is KAS
+  // per whole A and the fills count A, on either side)
+  const bought = d.side === 'buy' ? a : b;
+  const dlv: ResolvedDelivery = resolvePairDelivery({ codec: bought.family, cls: d.tif === 0 && !d.immediate ? 'resting' : 'immediate', carrier: dc, scale: a.scale, minFill }, d.delivery, issues);
+  if (hasError(issues)) return failedPairPlan(issues);
+  if (dlv.choice === 'collected') {
+    d.notes.push('deliveryCollected');
+    if (d.tipDefault) d.tip += collectedPairTipExtra(pairCollectedExtra(bought.program), a.scale, d.amount, minFill);
+  }
+  const collected = dlv.choice === 'collected';
+  // With fewer carriers than possible fills, the rest fills only in full after the partial fills (a Collected order is not limited).
+  if (!collected && d.tif === 0 && d.interval === 0n && fills < possible) issues.push(pairIssue('PAIR_FILLS_LIMITED', { fills, partials: fills - 1n }));
   const tips = pairTipsOf(env);
   const draft = makePairState(env, {
     side: d.side, amount: d.amount, minFill, price: d.price, tip: d.tip, tif: d.tif, activeFrom: d.activeFrom, expiryDaa: d.expiryDaa,
     refundTip: tips.refundTip, deliveryCarrier: dc, interval: d.interval, maxFill: d.maxFill, slope: d.slope, priceEnd: d.priceEnd, decayStep: d.decayStep,
     custody: d.amount,
+    delivery: dlv.fields,
   });
   let order = draft;
   if (d.side === 'buy') {
@@ -140,8 +157,8 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
     order = withCustody(draft, escrow);
   }
   // At least the deliveries the protocol requires a new order to fund itself (kob-wasm
-  // pairFundedFills): for a resting order a partial fill and the fill of its rest.
-  const funded = maxBig(fills, env.kob.pairFundedFills(order));
+  // pairFundedFills): for a resting order a partial fill and the fill of its rest. A Collected order: one (bid-delivery-spec §10).
+  const funded = collected ? 1n : maxBig(fills, env.kob.pairFundedFills(order));
   const kas = pairKasLines(env, order, funded, dc);
   if (kas === null) return failedPairPlan([...issues, issue('TIP_TOO_LARGE', undefined, 'tip')]);
 
@@ -153,7 +170,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   const atWorst = bOf(d.amount, worst);
   const n1 = minFill < d.amount ? minFill : d.amount;
   const priceMax = env.kob.pairPriceMax(order);
-  return placePair(env, issues, {
+  const plan = placePair(env, issues, {
     order,
     lines: kas.lines,
     deadline: d.deadline,
@@ -183,6 +200,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
     pairNotes: d.pairNotes,
     cond: null,
   });
+  return withDelivery(plan, { delivery: dlv, fills: funded });
 }
 
 // ---- limit
@@ -193,6 +211,8 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   if (hasError(pre)) return failedPairPlan(pre);
   const ticker = env.pair.quote.ticker;
   const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
+  d.tipDefault = i.tip === undefined;
+  d.delivery = (i as { delivery?: DeliveryRequest }).delivery;
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;
@@ -240,6 +260,8 @@ function planImmediate(env: PairPlanEnv, i: IocIntent | FokIntent): PairOrderPla
   const life = lifeDaa(env, i.life, pre);
   if (hasError(pre)) return failedPairPlan(pre);
   const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
+  d.tipDefault = i.tip === undefined;
+  d.delivery = (i as { delivery?: DeliveryRequest }).delivery;
   d.immediate = true;
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
@@ -350,6 +372,8 @@ function planSchedule(env: PairPlanEnv, i: TwapIntent | DcaIntent): PairOrderPla
   if (hasError(pre)) return failedPairPlan(pre);
 
   const d = blank(side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
+  d.tipDefault = i.tip === undefined;
+  d.delivery = (i as { delivery?: DeliveryRequest }).delivery;
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;
@@ -398,6 +422,8 @@ function planDutch(env: PairPlanEnv, i: DutchIntent): PairOrderPlan {
   if (hasError(pre)) return failedPairPlan(pre);
 
   const d = blank(i.side, i.amount, i.price, i.tip ?? defaultPairTip(env, i.amount), i.minFill);
+  d.tipDefault = i.tip === undefined;
+  d.delivery = (i as { delivery?: DeliveryRequest }).delivery;
   const requested = activationDaa(env, i.activeFrom);
   const future = requested !== null && requested > env.clock.daa;
   d.requestedActiveFrom = requested;

@@ -12,6 +12,8 @@ import { market3x3 } from '../../testing/fixtures';
 import { CLOCK, KAS, MAKER_PK, ceilDivM, ceilQ, floorQ, kronA, kronB, level, makePairEnv, tokenA, tokenB } from './pair-fixtures';
 import { defaultPairTip, lowPairTipFields, pairTipBelowDefault } from './pair-common';
 import { K, codes, errorCodes, pairValid, plan } from './pair-testkit';
+/** Each fill: the pair sells below are written for a delivery per fill (a resting pair order defaults to Collected: pair-delivery.test.ts) */
+const EACH = { choice: 'each' } as const;
 
 const pairState = (p: { states: { kind: string; state: unknown }[] }): PairState => {
   expect(p.states[0].kind).toBe('KobPair');
@@ -43,7 +45,7 @@ describe.each(combos)('KobPair limit orders on %s', (_name, mkA, mkB) => {
   const tip = 123_457n; // sompi per whole A
 
   it('GTC sell: side ASK, S = A held exactly, T = B, default minFill, deliveries, the B received rounded UP, the KAS tip rounded DOWN', () => {
-    const p = pairValid(env(), { type: 'limit', side: 'sell', amount, price, tip });
+    const p = pairValid(env(), { type: 'limit', side: 'sell', delivery: EACH, amount, price, tip });
     const s = pairState(p);
     expect(s).toMatchObject({
       side: '1', sCovId: a.covenantId, tCovId: b.covenantId, sFamily: famCode(a), tFamily: famCode(b), sScale: String(a.scale), tScale: String(b.scale),
@@ -88,13 +90,13 @@ describe.each(combos)('KobPair limit orders on %s', (_name, mkA, mkB) => {
   });
 
   it('GTD and day orders, timed activation', () => {
-    const gtd = pairValid(env(), { type: 'limit', side: 'sell', amount, price, lifetime: { kind: 'gtd', at: CLOCK.unixSeconds + 86_400n } });
+    const gtd = pairValid(env(), { type: 'limit', side: 'sell', delivery: EACH, amount, price, lifetime: { kind: 'gtd', at: CLOCK.unixSeconds + 86_400n } });
     expect(BigInt(pairState(gtd).expiryDaa)).toBe(CLOCK.daa + 864_000n);
     expect(gtd.disclosure!.expiry.kind).toBe('gtd');
     const day = pairValid(env(), { type: 'limit', side: 'buy', amount, price: 1_400n, lifetime: { kind: 'day' } });
     expect(day.disclosure!.expiry.kind).toBe('day');
     expect(day.request!.deadline).toBe('1790726400');
-    const timed = pairValid(env(), { type: 'limit', side: 'sell', amount, price, activeFrom: { daa: CLOCK.daa + 5_000n } });
+    const timed = pairValid(env(), { type: 'limit', side: 'sell', delivery: EACH, amount, price, activeFrom: { daa: CLOCK.daa + 5_000n } });
     expect(pairState(timed).activeFrom).toBe(String(CLOCK.daa + 5_000n));
     expect(timed.disclosure!.activatesAt?.daa).toBe(CLOCK.daa + 5_000n);
   });
@@ -102,7 +104,7 @@ describe.each(combos)('KobPair limit orders on %s', (_name, mkA, mkB) => {
 
 describe('KobPair: the crossing policy against the pair book (B prices, the KAS tip never crosses)', () => {
   it('a sell through the best bid is an auction from the touch down to the limit (default)', () => {
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 4_000n, price: 1_400n, tip: 50_000_000n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_400n, tip: 50_000_000n });
     const s = pairState(p);
     expect(s).toMatchObject({ price: '1450', priceEnd: '1400', decayStep: '1', activeFrom: String(CLOCK.daa + 30n) });
     expect(BigInt(s.slope)).toBe(ceilDivM(50n, 200n));
@@ -123,16 +125,16 @@ describe('KobPair: the crossing policy against the pair book (B prices, the KAS 
   });
 
   it('crossing: limit fills at the limit (warning), reject refuses, a timed limit is never an auction; a KAS tip does not cross', () => {
-    const lim = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 4_000n, price: 1_400n, crossing: 'limit' });
+    const lim = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_400n, crossing: 'limit' });
     expect(pairState(lim).slope).toBe('0');
     expect(codes(lim)).toContain('PAIR_MARKETABLE_LIMIT_FILLS_AT_LIMIT');
-    const rej = plan(makePairEnv(), { type: 'limit', side: 'sell', amount: 4_000n, price: 1_400n, crossing: 'reject' });
+    const rej = plan(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_400n, crossing: 'reject' });
     expect(rej.ok).toBe(false);
     expect(errorCodes(rej)).toEqual(['PAIR_MARKETABLE_REJECTED']);
-    const timed = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 4_000n, price: 1_400n, activeFrom: { daa: CLOCK.daa + 100n } });
+    const timed = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_400n, activeFrom: { daa: CLOCK.daa + 100n } });
     expect(pairState(timed).slope).toBe('0');
     // a sell at 1451 with a huge KAS tip: the bid is 1450, nothing crosses (a KAS-quoted ask's tip would)
-    const tipped = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 4_000n, price: 1_451n, tip: 10n * KAS });
+    const tipped = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 4_000n, price: 1_451n, tip: 10n * KAS });
     expect(codes(tipped)).not.toContain('PAIR_MARKETABLE_AUCTION');
   });
 
@@ -175,7 +177,7 @@ describe.each(combos)('KobPair IOC / FOK / market / streaming / close on %s', (_
   });
 
   it('market sell: an IOC auction from the best bid down to the 3% bound, minFill 1, the B received at the bound rounded up', () => {
-    const p = pairValid(env(), { type: 'market', side: 'sell', amount: 3_001n });
+    const p = pairValid(env(), { type: 'market', side: 'sell', delivery: EACH, amount: 3_001n });
     const s = pairState(p);
     const end = 1_450n - (1_450n * 300n) / 10_000n;
     expect(s).toMatchObject({ tif: '1', minFill: '1', price: '1450', priceEnd: String(end), decayStep: '1', activeFrom: String(CLOCK.daa + 30n), expiryDaa: String(CLOCK.daa + 330n) });
@@ -195,7 +197,7 @@ describe.each(combos)('KobPair IOC / FOK / market / streaming / close on %s', (_
   });
 
   it('market FOK (allOrNothing), streaming from the displayed price, close sells the whole A balance', () => {
-    const fok = pairValid(env(), { type: 'market', side: 'sell', amount: 3_000n, allOrNothing: true });
+    const fok = pairValid(env(), { type: 'market', side: 'sell', delivery: EACH, amount: 3_000n, allOrNothing: true });
     expect(pairState(fok).tif).toBe('2');
     const st = pairValid(env(), { type: 'streaming', side: 'buy', amount: 3_000n, displayedPrice: 1_480n, toleranceBps: 100n });
     expect(pairState(st)).toMatchObject({ price: '1480', priceEnd: String(1_480n + 14n) });
@@ -216,71 +218,71 @@ describe.each(combos)('KobPair TWAP / DCA / Dutch on %s', (_name, mkA, mkB) => {
   const env = () => makePairEnv({ a, b });
 
   it('TWAP sell: maxFill = slice, interval, one delivery carrier per slice; a per-slice auction decays to priceEnd', () => {
-    const p = pairValid(env(), { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n, tip: 0n });
+    const p = pairValid(env(), { type: 'twap', delivery: EACH, amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n, tip: 0n });
     expect(pairState(p)).toMatchObject({ maxFill: '2500', interval: '600', side: '1', slope: '0' });
     expect(BigInt(pairState(p).minFill) <= 2_500n).toBe(true);
     expect(p.pair!.deliveries).toBe(4n);
     expect(p.pair!.orderValue).toBe(4n * DC);
-    const au = pairValid(env(), { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n, priceEnd: 1_480n });
+    const au = pairValid(env(), { type: 'twap', delivery: EACH, amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n, priceEnd: 1_480n });
     expect(pairState(au)).toMatchObject({ priceEnd: '1480', slope: '1' });
     expect(au.pair!.receiveMinB).toBe(ceilQ(10_000n, 1_480n, a.scale));
   });
 
   it('DCA buy: one delivery per slice (or more when asked), the escrow at the price rounded down plus one unit', () => {
-    const p = pairValid(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { seconds: 3_600n }, price: 1_400n, maxFills: 5n });
+    const p = pairValid(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { seconds: 3_600n }, price: 1_400n, maxFills: 5n, delivery: { choice: 'each' } });
     const s = pairState(p);
     expect(s).toMatchObject({ side: '2', maxFill: '3000', interval: '36000' });
     expect(p.pair!.deliveries).toBe(5n);
     expect(BigInt(s.custody)).toBe(floorQ(9_000n, 1_400n, a.scale) + 1n);
-    expect(errorCodes(plan(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { daa: 600n }, price: 1_400n, maxFills: 2n }))).toContain('MAX_FILLS_INVALID');
+    expect(errorCodes(plan(env(), { type: 'dca', amount: 9_000n, sliceAmount: 3_000n, interval: { daa: 600n }, price: 1_400n, maxFills: 2n, delivery: { choice: 'each' } }))).toContain('MAX_FILLS_INVALID');
   });
 
   it('Dutch sell decays and a rising bid rises over the duration from activeFrom', () => {
-    const d = pairValid(env(), { type: 'dutch', side: 'sell', amount: 5_000n, price: 1_700n, priceEnd: 1_500n, duration: { daa: 1_000n }, stepDaa: 10n });
+    const d = pairValid(env(), { type: 'dutch', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_700n, priceEnd: 1_500n, duration: { daa: 1_000n }, stepDaa: 10n });
     expect(pairState(d)).toMatchObject({ price: '1700', priceEnd: '1500', decayStep: '10', slope: String(ceilDivM(200n, 100n)), activeFrom: String(CLOCK.daa + 30n) });
     expect(d.pair!.receiveMinB).toBe(ceilQ(5_000n, 1_500n, a.scale));
     expect(d.pair!.expectedB).toBe(ceilQ(5_000n, 1_700n, a.scale));
     const r = pairValid(env(), { type: 'dutch', side: 'buy', amount: 5_000n, price: 1_300n, priceEnd: 1_420n, duration: { daa: 600n } });
     expect(pairState(r)).toMatchObject({ price: '1300', priceEnd: '1420', side: '2' });
     expect(r.pair!.payMaxB).toBe(floorQ(5_000n, 1_420n, a.scale));
-    expect(errorCodes(plan(env(), { type: 'dutch', side: 'sell', amount: 5_000n, price: 1_500n, priceEnd: 1_600n, duration: { daa: 600n } }))).toEqual(['PRICE_END_INVALID']);
+    expect(errorCodes(plan(env(), { type: 'dutch', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n, priceEnd: 1_600n, duration: { daa: 600n } }))).toEqual(['PRICE_END_INVALID']);
   });
 });
 
 describe('KobPair refusals and guards', () => {
   it('not enough A / not enough B / not enough KAS name the token', () => {
-    const noA = plan(makePairEnv({ aAmounts: [1_000n] }), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_500n });
+    const noA = plan(makePairEnv({ aAmounts: [1_000n] }), { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n });
     expect(errorCodes(noA)).toEqual(['PAIR_INSUFFICIENT_TOKENS']);
     expect(noA.issues[0].params).toMatchObject({ ticker: 'AAA', needed: 5_000n, have: 1_000n, shortfall: 4_000n });
     const noB = plan(makePairEnv({ bAmounts: [100n] }), { type: 'limit', side: 'buy', amount: 5_000n, price: 1_400n });
     expect(errorCodes(noB)).toEqual(['PAIR_INSUFFICIENT_TOKENS']);
     expect(noB.issues[0].params).toMatchObject({ ticker: 'BBB', have: 100n });
-    const noKas = plan(makePairEnv({ funding: [KAS] }), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_500n });
+    const noKas = plan(makePairEnv({ funding: [KAS] }), { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n });
     expect(errorCodes(noKas)).toContain('INSUFFICIENT_KAS');
   });
 
   it('KRON caps: the A amount, a B escrow and the B delivery of one minimum fill', () => {
     const kk = { a: kronA(), b: kronB(), aAmounts: [2_000_000_000n], bAmounts: [4_000_000_000n] };
-    expect(errorCodes(plan(makePairEnv(kk), { type: 'limit', side: 'sell', amount: 1_000_000_001n, price: 1n }))).toEqual(['AMOUNT_TOO_LARGE']);
+    expect(errorCodes(plan(makePairEnv(kk), { type: 'limit', side: 'sell', delivery: EACH, amount: 1_000_000_001n, price: 1n }))).toEqual(['AMOUNT_TOO_LARGE']);
     // a bid of 1e6 A (scale 1000: 1e9 base units... here 1_000_000 base units = 1000 KRA) at 2_000_000 KRB per KRA: escrow 2e9 KRB > 1e9
     const esc = plan(makePairEnv(kk), { type: 'limit', side: 'buy', amount: 1_000_000n, price: 2_000_000n });
     expect(errorCodes(esc)).toEqual(['PAIR_KRON_CUSTODY_TOO_LARGE']);
     expect(esc.issues.find((i) => i.code === 'PAIR_KRON_CUSTODY_TOO_LARGE')!.params).toMatchObject({ ticker: 'KRB' });
     // a sell whose minimum fill (the whole amount) would deliver 2e9 KRB in one output
-    const del = plan(makePairEnv(kk), { type: 'limit', side: 'sell', amount: 1_000_000n, minFill: 1_000_000n, price: 2_000_000n });
+    const del = plan(makePairEnv(kk), { type: 'limit', side: 'sell', delivery: EACH, amount: 1_000_000n, minFill: 1_000_000n, price: 2_000_000n });
     expect(errorCodes(del)).toEqual(['PAIR_KRON_DELIVERY_TOO_LARGE']);
   });
 
   it('bad prices and tips; the 2^62 bound of the B value; two equal tokens', () => {
     const env = makePairEnv();
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 0n }))).toEqual(['PRICE_NOT_POSITIVE']);
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1n << 63n }))).toEqual(['PRICE_TOO_LARGE']);
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1n << 61n }))).toEqual(['PAIR_NOTIONAL_TOO_LARGE']);
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_500n, tip: -1n }))).toEqual(['TIP_NEGATIVE']);
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_500n, tip: 1n << 62n }))).toEqual(['TIP_TOO_LARGE']);
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 0n, price: 1_500n }))).toEqual(['AMOUNT_NOT_POSITIVE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 0n }))).toEqual(['PRICE_NOT_POSITIVE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1n << 63n }))).toEqual(['PRICE_TOO_LARGE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1n << 61n }))).toEqual(['PAIR_NOTIONAL_TOO_LARGE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n, tip: -1n }))).toEqual(['TIP_NEGATIVE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n, tip: 1n << 62n }))).toEqual(['TIP_TOO_LARGE']);
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 0n, price: 1_500n }))).toEqual(['AMOUNT_NOT_POSITIVE']);
     const same = makePairEnv({ b: market3x3({ ticker: 'AAA' }) });
-    expect(errorCodes(plan(same, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_500n }))).toEqual(['PAIR_SAME_TOKEN']);
+    expect(errorCodes(plan(same, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_500n }))).toEqual(['PAIR_SAME_TOKEN']);
   });
 
   it('self-trade against an own live pair order of this pair (B prices, no tips)', () => {
@@ -291,43 +293,43 @@ describe('KobPair refusals and guards', () => {
   });
 
   it('without A\'s KAS reference the default minimum fill is a quarter of the amount (info)', () => {
-    const p = pairValid(makePairEnv({ kasPerWholeA: null }), { type: 'limit', side: 'sell', amount: 10_001n, price: 1_550n });
+    const p = pairValid(makePairEnv({ kasPerWholeA: null }), { type: 'limit', side: 'sell', delivery: EACH, amount: 10_001n, price: 1_550n });
     expect(BigInt(pairState(p).minFill)).toBe(2_501n);
     expect(codes(p)).toContain('PAIR_KAS_REFERENCE_MISSING');
   });
 
   it('environment findings: guards unavailable (an error, nothing to acknowledge), the pair book against the rate the KAS trades imply', () => {
     const env = { ...makePairEnv(), guardsUnavailable: ['book'] as const };
-    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n }))).toEqual(['GUARDS_UNAVAILABLE']);
-    const div = plan(makePairEnv({ lastFillPrice: 3_000n }), { type: 'limit', side: 'sell', amount: 5_000n, price: 1_550n });
+    expect(errorCodes(plan(env, { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_550n }))).toEqual(['GUARDS_UNAVAILABLE']);
+    const div = plan(makePairEnv({ lastFillPrice: 3_000n }), { type: 'limit', side: 'sell', delivery: EACH, amount: 5_000n, price: 1_550n });
     expect(codes(div)).toContain('PAIR_MARKET_REFERENCE_DIVERGES');
     expect(div.issues.find((i) => i.code === 'PAIR_MARKET_REFERENCE_DIVERGES')!.params).toMatchObject({ reference: 1_475n, lastFill: 3_000n, ticker: 'BBB' });
   });
 
   it('a resting order funds one delivery carrier per possible fill by default; fewer carriers are disclosed', () => {
     // minFill 1 000 of 20 000: 20 possible fills, each funded
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n, tip: 0n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, minFill: 1_000n, tip: 0n });
     expect(p.pair!.deliveries).toBe(20n);
     expect(p.pair!.orderValue).toBe(20n * DC);
     expect(codes(p)).not.toContain('PAIR_FILLS_LIMITED');
     // more possible fills than the default bound: the bound, and the note that the rest then fills only in full
-    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 100n });
+    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, minFill: 100n });
     expect(q.pair!.deliveries).toBe(64n);
     expect(q.issues.find((i) => i.code === 'PAIR_FILLS_LIMITED')!.params).toMatchObject({ fills: 64n, partials: 63n });
-    const r = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, minFill: 1_000n, maxFills: 5n });
+    const r = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, minFill: 1_000n, maxFills: 5n });
     expect(codes(r)).toContain('PAIR_FILLS_LIMITED');
   });
 
   it('maxFills of a resting order budgets the delivery carriers (both sides)', () => {
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, maxFills: 5n, tip: 0n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, maxFills: 5n, tip: 0n });
     expect(p.pair!.deliveries).toBe(5n);
     expect(p.pair!.orderValue).toBe(5n * DC);
-    expect(errorCodes(plan(makePairEnv(), { type: 'limit', side: 'sell', amount: 20_000n, price: 1_550n, maxFills: 0n }))).toEqual(['MAX_FILLS_INVALID']);
+    expect(errorCodes(plan(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 20_000n, price: 1_550n, maxFills: 0n }))).toEqual(['MAX_FILLS_INVALID']);
   });
 
   it('book levels of every source make the touch; an own plan never trades below its limit at the bound', () => {
     const book = { asks: [level(1_490n, 100n)], bids: [level(1_460n, 100n)] };
-    const p = pairValid(makePairEnv({ book }), { type: 'market', side: 'sell', amount: 1_000n });
+    const p = pairValid(makePairEnv({ book }), { type: 'market', side: 'sell', delivery: EACH, amount: 1_000n });
     expect(pairState(p).price).toBe('1460');
     expect(codes(p)).toContain('MARKET_DEPTH_INSUFFICIENT');
   });
@@ -340,7 +342,7 @@ describe('golden vectors: the planned KobPair is the protocol\'s', () => {
     for (const [name, side] of [['pair.create.ask', 'sell'], ['pair.create.bid', 'buy']] as const) {
       const g = goldenRequest(name, MAKER_PK);
       const gs = (g as unknown as { order: { state: Record<string, string> } }).order.state;
-      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n, tip: 0n });
+      const p = pairValid(env, { type: 'limit', side, amount: 10_000n, price: 1_000n, minFill: 1_000n, maxFills: 9n, tip: 0n, delivery: EACH });
       const s = pairState(p) as unknown as Record<string, string>;
       // the escrow is floor(amount p / scale(A)) + 1, like the golden bid
       const skip = new Set(['expiryDaa', 'decayStep', 'custody']);
@@ -354,7 +356,7 @@ describe('golden vectors: the planned KobPair is the protocol\'s', () => {
 
 describe('fill rule consistency: what the plan discloses is what kob-wasm lets a filler take', () => {
   it('a full fill of a planned ask at its price pays the maker at least the disclosed B; a bid pays exactly the disclosed B', () => {
-    const ask = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 7_777n, price: 1_533n });
+    const ask = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 7_777n, price: 1_533n });
     const fa = K.pairFill(ask.states[0], 7_777n, 1_533n, ask.pair!.orderValue);
     expect(fa.tOut).toBe(ask.pair!.receiveMinB);
     expect(fa.sOut).toBe(7_777n);
@@ -384,22 +386,22 @@ describe('the default tip of a pair order pays a netting fill\'s fee share (the 
     const b = tokenB();
     const env = () => makePairEnv({ a, b });
     for (const intent of [
-      { type: 'market', side: 'sell', amount: 3_000n },
-      { type: 'ioc', side: 'sell', amount: 3_000n, price: 1_450n },
-      { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n },
+      { type: 'market', side: 'sell', delivery: EACH, amount: 3_000n },
+      { type: 'ioc', side: 'sell', delivery: EACH, amount: 3_000n, price: 1_450n },
+      { type: 'twap', delivery: EACH, amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n },
     ]) {
       const p = pairValid(env(), intent);
       expect(tipTotal(p, intent.amount, a), intent.type).toBeGreaterThanOrEqual(keeperTip(a, b));
     }
-    const stop = pairValid(env(), { type: 'stopMarket', side: 'sell', amount: 20_000n, stop: 1_400n });
+    const stop = pairValid(env(), { type: 'stopMarket', side: 'sell', delivery: EACH, amount: 20_000n, stop: 1_400n });
     expect(BigInt((stop.states[0].state as { tip: string }).tip) * 20_000n / a.scale).toBeGreaterThanOrEqual(keeperTip(a, b));
   });
 
   it('an explicit tip is kept as typed, zero included', () => {
-    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 10_007n, price: 1_550n, tip: 0n });
+    const p = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 10_007n, price: 1_550n, tip: 0n });
     expect((p.states[0].state as PairState).tip).toBe('0');
     expect(p.pair!.tipKasTotal).toBe(0n);
-    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', amount: 10_007n, price: 1_550n, tip: 77n });
+    const q = pairValid(makePairEnv(), { type: 'limit', side: 'sell', delivery: EACH, amount: 10_007n, price: 1_550n, tip: 77n });
     expect((q.states[0].state as PairState).tip).toBe('77');
   });
 

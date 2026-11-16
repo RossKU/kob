@@ -7,8 +7,8 @@
 import { MIN_REST_DAA, SLIPPAGE_BPS, STOP_BAND_DAA, clampRate } from '../daa';
 import type { StopSpec, TrailSpec } from '../intent-cond';
 import type { PlanEnv } from '../plan-types';
-import type { CondAskState, CondBidState } from '../types';
-import { str } from './common';
+import type { CondAskState, CondBidState, DeliveryFields } from '../types';
+import { NO_DELIVERY, str } from './common';
 import {
   DEFAULT_EXPECTED_UPDATES, DEFAULT_TRAIL_WAIT_DAA, MAX_EXPECTED_UPDATES, MIN_TRAIL_WAIT_DAA, ZERO32, toStatePrice,
   type IssueLog, type KeeperSummary, type LegSummary, type TrailSummary,
@@ -287,7 +287,7 @@ export function condAskState(env: PlanEnv, b: CondBase, l: Legs): CondAskState {
 }
 
 /** `KobCondBid` state of a buy-side conditional: a new order with no repeat fields, not armed. */
-export function condBidState(env: PlanEnv, b: CondBase & { deliveryCarrier: bigint }, l: Legs): CondBidState {
+export function condBidState(env: PlanEnv, b: CondBase & { deliveryCarrier: bigint; delivery?: Required<DeliveryFields> }, l: Legs): CondBidState {
   const tk = env.token;
   return {
     maker: env.maker,
@@ -319,6 +319,8 @@ export function condBidState(env: PlanEnv, b: CondBase & { deliveryCarrier: bigi
     rptPrice: '0',
     rptPre: '0',
     rptUntil: '0',
+    // the delivery block (bid-delivery-spec §2); a KRON bid is always mode 0
+    ...(tk.family === 'kcc20' && b.delivery ? b.delivery : NO_DELIVERY),
   };
 }
 

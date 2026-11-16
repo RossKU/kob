@@ -8,6 +8,7 @@
 // TokenMarket.scale). units.ts converts from the KAS-per-token text. Wall-clock times are UTC unix
 // seconds, and protocol times are DAA scores.
 import type { Duration } from './daa';
+import type { DeliveryRequest } from './orders/delivery';
 
 /** When a resting order ends. An omitted lifetime means GTC. */
 export type Lifetime =
@@ -65,9 +66,12 @@ export interface LimitIntent extends SimpleBase {
   activeFrom?: Activation;
   crossing?: CrossingPolicy;
   /**
-   * For a buy only, the number of fills the escrow budgets a delivery carrier for. Defaults to 3.
+   * For a buy only, the number of fills the escrow budgets a delivery carrier for. Defaults to 3. A Collected buy is funded with
+   * one carrier whatever this says.
    */
   maxFills?: bigint;
+  /** For a buy only: where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  delivery?: DeliveryRequest;
 }
 
 /**
@@ -180,6 +184,8 @@ export interface DcaIntent extends ScheduleBase {
   type: 'dca';
   side?: 'buy';
   maxFills?: bigint;
+  /** Where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  delivery?: DeliveryRequest;
 }
 
 /**
@@ -201,6 +207,8 @@ export interface DutchIntent extends SimpleBase {
   /** The start of the auction. Defaults to placement plus 30 DAA. */
   activeFrom?: Activation;
   maxFills?: bigint;
+  /** A rising bid only: where the bought tokens go (orders/delivery.ts). Default: the wallet default, else Collected. */
+  delivery?: DeliveryRequest;
 }
 
 /** Every plain intent. */

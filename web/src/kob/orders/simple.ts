@@ -26,6 +26,9 @@ import { bpsFloor, ceilDiv, fitsI64, roundToTick } from '../units';
 import {
   DEFAULT_BID_FILLS, buildCreate, carrierOf, defaultMinFillFor, failedPlan, finishPlan, hasError, heldAmount, issue, makeAsk, makeBid, makeDisclosure,
 } from './common';
+import { effectiveChoice, fundedFills, resolveDelivery, withDelivery, type DeliveryClass, type DeliveryRequest, type ResolvedDelivery } from './delivery';
+
+export { planDelivery } from './delivery';
 
 /** A fully resolved order: everything the state needs, in planner terms. */
 interface Draft {
@@ -48,8 +51,12 @@ interface Draft {
   priceEnd: bigint;
   decayStep: bigint;
   deadline: bigint | null;
-  /** bids: delivery carriers budgeted */
+  /** bids: delivery carriers budgeted (a Collected bid is funded with one: `fundedFills`) */
   fills: bigint;
+  /** bids: what the user and the wallet asked for the delivery */
+  delivery: DeliveryRequest | undefined;
+  /** bids: the delivery default rule's class of the order */
+  cls: DeliveryClass;
   /** the most aggressive price the order can trade at (limit / auction bound / decay end) */
   reach: bigint;
   expiryKind: ExpiryKind;
@@ -157,14 +164,21 @@ function place(env: PlanEnv, d: Draft, pre: PlanIssue[]): OrderPlan {
   let order: OrderState;
   let value: bigint;
   let tokenAmount = 0n;
+  let dlv: ResolvedDelivery | null = null;
+  let fills = d.fills;
   if (d.side === 'sell') {
     order = makeAsk(env, { ...common, amount: d.amount });
     value = carrierOf(env);
     tokenAmount = d.amount;
   } else {
-    order = makeBid(env, common);
-    // The escrow of `amount` base units in at most `fills` fills, as the covenant consumes it.
-    const escrow = env.kob.bidEscrow(order, d.amount, d.fills);
+    dlv = resolveDelivery({ codec: m.family, program: m.program, cls: d.cls, carrier: carrierOf(env), scale: m.scale, minFill, price: d.limitPrice }, d.delivery, issues);
+    if (hasError(issues)) return failedPlan(issues);
+    order = makeBid(env, { ...common, delivery: dlv.fields });
+    fills = fundedFills(dlv.choice, d.fills);
+    if (dlv.choice === 'collected') d.notes.push('deliveryCollected');
+    if (dlv.choice === 'topup') d.notes.push('deliveryTopup');
+    // The escrow of `amount` base units in at most `fills` fills, as the covenant consumes it (Collected: one carrier).
+    const escrow = env.kob.bidEscrow(order, d.amount, fills);
     if (escrow === null || !fitsI64(escrow)) return failedPlan([...issues, issue('AMOUNT_TOO_LARGE', undefined, 'amount')]);
     value = escrow;
   }
@@ -173,16 +187,18 @@ function place(env: PlanEnv, d: Draft, pre: PlanIssue[]): OrderPlan {
   if (res.built) {
     disclosure = makeDisclosure(env, res, {
       order, amount: d.amount, limitPrice: d.limitPrice, expectedPrice: d.expectedPrice, worstPrice: d.worstPrice,
-      expiryKind: d.expiryKind, activatesAt: d.activatesAt, fills: d.fills, notes: d.notes,
+      expiryKind: d.expiryKind, activatesAt: d.activatesAt, fills, notes: d.notes,
     });
     issues.push(...checkCarrierRatio(disclosure.carriers, disclosure.allInTotal));
   }
-  return finishPlan(issues, [order], res, disclosure);
+  const plan = finishPlan(issues, [order], res, disclosure);
+  return dlv ? withDelivery(plan, { delivery: dlv, fills }) : plan;
 }
+
 
 const blank = (side: 'sell' | 'buy', amount: bigint, price: bigint, tip: bigint, minFill: bigint | undefined): Draft => ({
   side, amount, minFill: minFill ?? null, immediate: false, price, tip, tif: 0, activeFrom: 0n, requestedActiveFrom: null, expiryDaa: 0n, interval: 0n,
-  maxFill: 0n, slope: 0n, priceEnd: 0n, decayStep: 1n, deadline: null, fills: 1n, reach: price, expiryKind: 'gtc', expectedPrice: null, worstPrice: null,
+  maxFill: 0n, slope: 0n, priceEnd: 0n, decayStep: 1n, deadline: null, fills: 1n, delivery: undefined, cls: 'resting', reach: price, expiryKind: 'gtc', expectedPrice: null, worstPrice: null,
   limitPrice: price, activatesAt: null, notes: [],
 });
 
@@ -220,6 +236,7 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
   d.expiryKind = exp.kind;
   d.notes.push(exp.kind === 'gtc' ? 'gtc' : exp.kind === 'day' ? 'dayOrder' : 'gtd');
   d.fills = i.side === 'buy' ? restingFills(env, i.amount, i.price, i.minFill, i.maxFills) : 1n;
+  d.delivery = i.side === 'buy' ? i.delivery : undefined;
   if (i.side === 'sell' && i.maxFills !== undefined) pre.push(issue('SIDE_INVALID', { side: 'sell' }, 'maxFills'));
 
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
@@ -266,6 +283,13 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
  * stands, with a warning when it is short.
  */
 function crossingBuy(env: PlanEnv, d: Draft, amount: bigint, bound: bigint, tip: bigint, minFill: bigint | undefined, wanted: bigint | undefined, pre: PlanIssue[]): OrderPlan {
+  if (effectiveChoice({ codec: env.token.family, cls: d.cls }, d.delivery) === 'collected') {
+    // One carrier serves every fill of a Collected bid: no fills to budget, only the minimum fill limits them.
+    const mf = minFill ?? defaultMinFillFor(env, amount, bound);
+    const possible = mf > 0n ? ceilDiv(amount, mf) : 1n;
+    const facts = fillsFacts(env, 'buy', amount, bound, tip, possible, null, pre, true);
+    return withFills(place(env, d, pre), { ...facts, carrierDeposit: carrierOf(env) });
+  }
   if (wanted === undefined) {
     const est = estimateFills({ side: 'buy', amount, limit: bound, tip, slots: env.token.slots, book: env.book });
     const need = BigInt(est.fills + (est.enough ? 0 : 1));
@@ -294,6 +318,7 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
   d.activeFrom = future ? requested : 0n;
   d.activatesAt = future ? requested : null;
   d.tif = i.type === 'fok' ? 2 : 1;
+  d.cls = 'immediate';
   d.expiryKind = i.type;
   d.expiryDaa = (future ? (requested as bigint) : env.clock.daa) + life;
   d.fills = 1n;
@@ -408,6 +433,8 @@ function planAuction(env: PlanEnv, r: AuctionRequest, pre: PlanIssue[]): OrderPl
 
   const end = auctionBound(r.side, touch, r.bps, env.token.tick);
   const d = blank(r.side, r.amount, touch, r.tip, r.minFill);
+  // a market order delivers at each fill, a multi-fill one too (bid-delivery-spec §10)
+  d.cls = 'immediate';
   d.activeFrom = env.clock.daa + delay;
   d.slope = decaySlope(touch, end, auctionDaa, 1n);
   d.priceEnd = d.slope > 0n ? end : 0n;
@@ -542,6 +569,7 @@ function planSchedule(env: PlanEnv, i: TwapIntent | DcaIntent): OrderPlan {
   }
   d.notes.push(i.type, exp.kind === 'day' ? 'dayOrder' : 'gtc');
   if (side === 'buy') {
+    d.delivery = (i as DcaIntent).delivery;
     const wanted = (i as DcaIntent).maxFills;
     if (wanted !== undefined && wanted < slices) pre.push(issue('MAX_FILLS_INVALID', undefined, 'maxFills'));
     d.fills = wanted !== undefined && wanted >= slices ? wanted : slices;
@@ -583,6 +611,7 @@ function planDutch(env: PlanEnv, i: DutchIntent): OrderPlan {
   d.worstPrice = i.priceEnd;
   d.expectedPrice = i.price;
   d.fills = i.side === 'buy' ? restingFills(env, i.amount, i.priceEnd, i.minFill, i.maxFills) : 1n;
+  d.delivery = i.side === 'buy' ? i.delivery : undefined;
   d.notes.push('auction', i.side === 'sell' ? 'dutch' : 'rising');
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.priceEnd, 'priceEnd'));
   // A rising bid whose end crosses visible asks is budgeted like a crossing limit buy.

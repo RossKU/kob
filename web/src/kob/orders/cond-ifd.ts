@@ -23,6 +23,9 @@ import {
   toStatePrice, failedPlan, type CondPlan, type CondSpec, type ExitSummary, type IssueLog, type KeeperSummary, type RepeatSummary,
 } from './cond-common';
 import { askWorst, bidWorst, condAskState, condBidState, resolveLegs, type LegInput } from './cond-legs';
+import { NO_DELIVERY } from './common';
+import { exitFieldsOf, resolveDelivery, withDelivery, type ResolvedDelivery } from './delivery';
+import type { PlanIssue } from '../plan-types';
 
 /** Bytes of the committed exit prefix of a KobIfdBid (`IFD_BID_EXIT_COMMIT` in state.rs). */
 const IFD_BID_EXIT_COMMIT_BYTES = 279;
@@ -259,6 +262,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
   let order: OrderState;
   let exitState: OrderState;
   let prefund: bigint | null = null;
+  /** sell-first: the delivery of the buy-back exits (bid-delivery-spec §10; a repeating entry's exits: each fill) */
+  let exitDlv: ResolvedDelivery | null = null;
   // KAS on the order UTXO, itemised. The total is the state's own escrow (kob-wasm ifdBidEscrow or
   // ifdAskEscrow), and the builder refuses less.
   const lines: CarrierLine[] = [];
@@ -289,7 +294,13 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
     lines.push({ kind: 'exitCarrier', amount: carrier, count: Number(exitCarriers) });
     if (keeperReserve > 0n) lines.push({ kind: 'keeperReserve', amount: entryKeeperTip, count: Number(armUpdates) });
   } else {
-    const bidExit = condBidState(env, { ...exitBase, deliveryCarrier: carrier }, legs);
+    const dIssues: PlanIssue[] = [];
+    exitDlv = resolveDelivery(
+      { codec: tk.family, program: tk.program, cls: repeat ? 'repeating' : 'resting', carrier, scale: tk.scale, minFill: exitMinFill, price: bidWorst(legs) }, intent.delivery, dIssues,
+    );
+    log.add(...dIssues);
+    if (log.failed) return failedPlan(log);
+    const bidExit = condBidState(env, { ...exitBase, deliveryCarrier: carrier, delivery: exitDlv.fields }, legs);
     exitState = { kind: kindFor('KobCondBid', tk.family), state: bidExit } as OrderState;
     // The exit holds the proceeds plus the prefund. That covers its worst buy-back per whole token,
     // which is what the exit's covenant spends at most.
@@ -312,6 +323,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
       prefund: str(prefund),
       exitCarrier: str(carrier),
       exitState: commitExit(env, { kind: kindFor('KobCondBid', tk.family), state: bidExit } as { kind: 'KobCondBid'; state: CondBidState }),
+      // the exits' delivery block, written into each exit with bought = 0 (a KRON entry: mode 0)
+      ...exitFieldsOf(tk.family === 'kcc20' ? exitDlv : { fields: { ...NO_DELIVERY } }),
     };
     order = { kind: kindFor('KobIfdAsk', tk.family), state: ask } as OrderState;
     const value = env.kob.ifdAskEscrow(order, carrier);
@@ -379,6 +392,8 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
     notes.push('repeat', count === null ? 'repeatUnlimited' : 'repeatCounted', buyFirst ? 'repeatReBuys' : 'repeatReSells', 'repeatStopLossEnds', 'mergeTip', 'cancelPosition');
   }
   if (!buyFirst) notes.push('prefund');
+  if (exitDlv?.choice === 'collected') notes.push('deliveryCollected');
+  if (exitDlv?.choice === 'topup') notes.push('deliveryTopup');
   const uniq = [...new Set(notes)];
 
   // The entry's all-in total by the covenant's quote rule. A buy-first entry pays at most
@@ -414,5 +429,7 @@ export function planIfd(env: PlanEnv, log: IssueLog, intent: IfdLikeIntent, tip:
       repeat: repeatSummary,
     },
   };
-  return finishPlan(env, log, spec);
+  const plan = finishPlan(env, log, spec);
+  // a top-up exit pays its tip at most once per possible exit fill
+  return exitDlv ? withDelivery(plan, { delivery: exitDlv, fills: ceilDiv(amount, exitMinFill > 0n ? exitMinFill : 1n) }) : plan;
 }

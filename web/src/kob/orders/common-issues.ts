@@ -41,6 +41,11 @@ export const ISSUE_CATALOG = {
   REFERENCE_PRICE_INVALID: e('error', 'The displayed price is not valid.'),
   MAX_FILLS_INVALID: e('error', 'The number of fills must be a positive integer.'),
   MAX_FILLS_TOO_LARGE: e('error', 'At most {max} fills.'),
+  // ---- delivery (bid-delivery-spec §10)
+  DELIVERY_TOPUP_UNAVAILABLE: e('error', 'Adding to one UTXO is not available for this order. Choose Collected or Each fill.'),
+  DELIVERY_TOPUP_FALLBACK: e('info', 'Adding to one UTXO is not available for this order: it uses Collected.'),
+  TOPUP_TIP_INVALID: e('error', 'The tip per added fill must be between 0 and the delivery carrier ({max:kas}).'),
+  TOPUP_TIP_LOW: e('warning', 'A tip per added fill below {tip:kas} may not pay for adding: such fills arrive as new UTXOs.'),
   // ---- time
   EXPIRY_TOO_SOON: e('error', 'The expiry must be later than the moment the order becomes active.'),
   EXPIRY_TOO_FAR: e('error', 'An order can live at most 90 days.'),

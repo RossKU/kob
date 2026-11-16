@@ -2,7 +2,7 @@
 // the oracle chain of cond-testkit (sign locally, finalize with tightened budgets, script-engine validate, recover the placement record).
 import { describe, expect, it } from 'vitest';
 import type { CondIntent } from '../intent-cond';
-import { CLOCK, KAS, MAKER_PK, OTHER_PK, TOK, makeEnv, market8x8, tokenUtxo } from '../../testing/fixtures';
+import { CLOCK, KAS, MAKER_PK, OTHER_PK, TOK, makeEnv, market8x8, marketKron, tokenUtxo } from '../../testing/fixtures';
 import { ceilDiv } from '../units';
 import { planCond } from './cond';
 import { askState, bidState, codes, errorCodes, planOk } from './cond-testkit';
@@ -10,6 +10,8 @@ import { askState, bidState, codes, errorCodes, planOk } from './cond-testkit';
 const CARRIER = 1_000_000_000n;
 const GTC = CLOCK.daa + 77_760_000n;
 const SCALE = 1_000n;
+/** Each fill (mode 0): the per-fill carrier tests below (a conditional buy defaults to Collected). */
+const EACH = { choice: 'each' } as const;
 /** the wallet default minimum fill: the amount worth 10 KAS at the leg price, clamped to 1..amount */
 const defMin = (amount: bigint, price: bigint): bigint => {
   const want = ceilDiv(10n * KAS * SCALE, price);
@@ -72,7 +74,7 @@ describe('stop-market', () => {
 
   it('buy: KobCondBid escrow at the stop ceiling plus delivery carriers and the arming tip', () => {
     const env = makeEnv();
-    const { plan, recovered } = planOk(env, { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n });
+    const { plan, recovered } = planOk(env, { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, delivery: EACH });
     const s = bidState(plan.states[0]!);
     expect(s).toMatchObject({
       extensionCommitment: env.token.extensionCommitment, tpPrice: '0', stopPrice: '260000000', slipBps: '300', bandDaa: '300', keeperTip: '2200000',
@@ -198,7 +200,7 @@ describe('trailing stop', () => {
 
   it('buy: the keeper reserve is added to the escrow', () => {
     const { plan, recovered } = planOk(makeEnv(), {
-      type: 'trailingStop', side: 'buy', amount: 5n * TOK, stop: 260_000_000n, trail: { ...trail, wait: 3_000n, expectedUpdates: 10 },
+      type: 'trailingStop', side: 'buy', amount: 5n * TOK, stop: 260_000_000n, trail: { ...trail, wait: 3_000n, expectedUpdates: 10 }, delivery: EACH,
     });
     expect(bidState(plan.states[0]!)).toMatchObject({ trailStep: '1000000', trailGap: '5000000', trailWait: '3000' });
     const ceiling = 267_800_000n;
@@ -239,7 +241,7 @@ describe('take-profit', () => {
   });
 
   it('buy: escrow is the limit all-in for the amount plus delivery carriers (no arming tip)', () => {
-    const { plan, recovered } = planOk(makeEnv(), { type: 'takeProfit', side: 'buy', amount: 10n * TOK, price: 200_000_000n, tip: 20_000n });
+    const { plan, recovered } = planOk(makeEnv(), { type: 'takeProfit', side: 'buy', amount: 10n * TOK, price: 200_000_000n, tip: 20_000n, delivery: EACH });
     expect(bidState(plan.states[0]!)).toMatchObject({ tpPrice: '200000000', stopPrice: '0', keeperTip: '0', tip: '20000', minFill: '5000' });
     // 10 KAS at 2 KAS per token is a 5-token minimum fill: two fills
     expect(BigInt(recovered[0]!.value)).toBe(10n * 200_020_000n + 2n * CARRIER);
@@ -269,7 +271,7 @@ describe('OCO', () => {
   });
 
   it('buy: one KobCondBid, escrow at the stop ceiling (the higher leg)', () => {
-    const { plan, recovered } = planOk(makeEnv(), { type: 'oco', side: 'buy', amount: 10n * TOK, takeProfit: 200_000_000n, stop: 260_000_000n });
+    const { plan, recovered } = planOk(makeEnv(), { type: 'oco', side: 'buy', amount: 10n * TOK, takeProfit: 200_000_000n, stop: 260_000_000n, delivery: EACH });
     expect(bidState(plan.states[0]!)).toMatchObject({ tpPrice: '200000000', stopPrice: '260000000' });
     const ceiling = 267_800_000n;
     expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + 3n * CARRIER + 2_200_000n);
@@ -478,5 +480,41 @@ describe('timed activation (activeFrom) of plain conditionals', () => {
     expect(past.disclosure!.activatesAt).toBeNull();
     expect(errorCodes(planCond(env, mk({ activeFrom: { daa: GTC + 1n } })))).toContain('ACTIVE_TOO_FAR');
     expect(errorCodes(planCond(env, mk({ activeFrom: { daa: CLOCK.daa + 20_000n }, expiry: { kind: 'gtdDaa', daa: CLOCK.daa + 10_000n } })))).toContain('ACTIVE_AFTER_EXPIRY');
+  });
+});
+
+describe('delivery of conditional buys and sell-first exits (bid-delivery-spec §10)', () => {
+  const ceiling = 267_800_000n;
+  it('a stop buy is Collected by default: mode 1 and one delivery carrier (negative: Each fill funds three)', () => {
+    const { plan, recovered } = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n });
+    expect(bidState(plan.states[0]!)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
+    expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + CARRIER + 2_200_000n);
+    expect(plan.disclosure!.carriers).toContainEqual({ kind: 'deliveryCarrier', amount: CARRIER, count: 1 });
+    expect(plan.disclosure!.notes).toContain('deliveryCollected');
+    const each = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, delivery: EACH });
+    expect(bidState(each.plan.states[0]!).mode).toBe('0');
+    expect(BigInt(each.recovered[0]!.value) - BigInt(recovered[0]!.value)).toBe(2n * CARRIER);
+  });
+
+  it('a stop-limit buy with Top-up: threshold at its worst price, the program tip, a carrier per fill', () => {
+    const { plan } = planOk(makeEnv(), { type: 'stopLimit', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, limit: 265_000_000n, minFill: 2_500n, delivery: { choice: 'topup' } });
+    // T = ceil(5 KAS x 1000 / 2.65 KAS) = 1887 base units, below minFill - 1
+    expect(bidState(plan.states[0]!)).toMatchObject({ mode: '2', recvThreshold: '1887', topupTip: '744250', bought: '0' });
+    expect(plan.disclosure!.carriers).toContainEqual({ kind: 'deliveryCarrier', amount: CARRIER, count: 3 });
+  });
+
+  it('the buy-back exits of a sell-first IFD are Collected; a repeating one delivers at each fill (negative: the repeating rule removed)', () => {
+    const ifd: CondIntent = { type: 'ifd', side: 'sell', amount: 10n * TOK, entry: { price: 260_000_000n }, exit: { takeProfit: 240_000_000n } };
+    const { plan } = planOk(makeEnv(), ifd);
+    expect(plan.states[0]!.state).toMatchObject({ exitMode: '1', exitRecvThreshold: '0', exitTopupTip: '0' });
+    expect(bidState(plan.states[1]!)).toMatchObject({ mode: '1', bought: '0' });
+    const rep = planOk(makeEnv(), { ...ifd, type: 'repeatIfd', delivery: { choice: 'collected' } } as CondIntent);
+    expect(rep.plan.states[0]!.state).toMatchObject({ exitMode: '0' });
+    expect(bidState(rep.plan.states[1]!).mode).toBe('0');
+  });
+
+  it('a KRON conditional buy delivers at each fill', () => {
+    const { plan } = planOk(makeEnv({ market: marketKron() }), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, delivery: { choice: 'collected' } });
+    expect(bidState(plan.states[0]!).mode).toBe('0');
   });
 });

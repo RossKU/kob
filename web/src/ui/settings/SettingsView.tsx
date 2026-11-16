@@ -12,7 +12,7 @@ import { t } from '../../i18n';
 import type { ComponentChildren } from 'preact';
 import { version as appVersion } from '../../../package.json';
 import {
-  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
+  Amount, Badge, Banner, Button, Checkbox, CopyText, downloadText, Dropdown, EmptyState, exportFileName, Field, friendlyErrorText, jsonText, KeyValueList, Modal, RawDetails, Section, Segmented, Table, TableMessage,
   showToast, toError,
 } from '../kit';
 import { NotifySettingsSection } from '../notify/NotifySettings';
@@ -21,6 +21,9 @@ import { IndexerTrust } from '../shell/IndexerTrust';
 import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import './settings.css';
+import { DELIVERY_CHOICES, type DeliveryChoice } from '../../kob/orders/delivery';
+import { formatUnits } from '../../kob/units';
+import { listThresholds, resetThreshold, useDeliveryPref } from './delivery-pref';
 import { changedFields, changesServers, clearKobStorage, configWithForm, describeStorageKey, formFromConfig, kobStorageKeys, resetServersPatch, settingsPatch, storedServerFields, validateSettings, type SettingsForm } from './settings-model';
 
 const reload = () => window.location.reload();
@@ -198,6 +201,57 @@ function DisplayCurrencySettings() {
           data-testid="settings-currency-choice"
         />
         <Learn short={t('settings.currency.hint.short')}>{t('settings.currency.hint')}</Learn>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * The default delivery of buy orders (kob/orders/delivery.ts): Collected (the default), Each fill or Top-up. Applies at once, kept in this browser;
+ * the ticket's Advanced options pick another one per order. Below it, read-only, the Top-up receive threshold of each token this wallet set at its
+ * first top-up order, with a reset (the next top-up order of the token sets it again from its price).
+ */
+function DeliverySettings() {
+  const [choice, setChoice] = useDeliveryPref();
+  const w = useWallet();
+  const pubkey = w.info?.pubkey ?? null;
+  const [tick, setTick] = useState(0);
+  const rows = useMemo(() => (pubkey ? listThresholds(pubkey) : []), [pubkey, tick]);
+  return (
+    <Section title={t('settings.delivery.title')} data-testid="settings-delivery">
+      <Learn short={t('settings.delivery.short')}>{t('settings.delivery.explain')}</Learn>
+      <div class="stack-sm">
+        <span class="small" id="settings-delivery-label">{t('settings.delivery.label')}</span>
+        {/* a drop-down: the long names of the three choices do not fit side by side */}
+        <Dropdown
+          labelledBy="settings-delivery-label"
+          value={choice}
+          options={DELIVERY_CHOICES.map((c) => ({ value: c, label: t(`ticket.opt.delivery.${c}`) }))}
+          onChange={(v) => setChoice(v as DeliveryChoice)}
+          data-testid="settings-delivery-choice"
+        />
+      </div>
+      <div class="stack-sm" data-testid="settings-delivery-thresholds">
+        <span class="small">{t('settings.delivery.threshold')}</span>
+        {rows.length ? (
+          <KeyValueList
+            compact
+            items={rows.map((r) => ({
+              label: r.ticker || r.tokenCovId,
+              value: (
+                <span class="settings-threshold">
+                  <span>{formatUnits(r.threshold, r.decimals, { group: ',' })} {r.ticker}</span>
+                  <Button small onClick={() => (resetThreshold(r), setTick((n) => n + 1))} title={t('settings.delivery.reset.hint')} data-testid={`settings-delivery-reset-${r.tokenCovId}`}>
+                    {t('settings.delivery.reset')}
+                  </Button>
+                </span>
+              ),
+              'data-testid': `settings-delivery-threshold-${r.tokenCovId}`,
+            }))}
+          />
+        ) : (
+          <p class="small muted" data-testid="settings-delivery-thresholds-none">{t(pubkey ? 'settings.delivery.thresholdNone' : 'settings.delivery.thresholdNoWallet')}</p>
+        )}
       </div>
     </Section>
   );
@@ -553,6 +607,7 @@ export function SettingsView(props: { warnings?: ConfigWarning[] }) {
         <div class="stack settings-col">
           <div class="settings-slot" style="--slot:2"><NotifySettingsSection /></div>
           <div class="settings-slot" style="--slot:3"><DisplayCurrencySettings /></div>
+          <div class="settings-slot" style="--slot:3"><DeliverySettings /></div>
           <div class="settings-slot" style="--slot:4"><TokenIconsSettings /></div>
         </div>
       </div>

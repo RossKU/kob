@@ -18,11 +18,14 @@ import { MAX_IDLE_DAA } from '../daa';
 import { keyState } from '../token-state';
 import { baseKind } from '../order-facts';
 import { ceilDiv, quoteOf } from '../units';
+import { NO_DELIVERY } from './common';
 
 const golden = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../crates/kob-protocol/vectors/golden.json', import.meta.url)), 'utf8'));
 const goldenState = (name: string): Record<string, string> => golden.transactions.find((t: { name: string }) => t.name === name).request.order.state;
 
 const K = kob();
+/** Each fill (mode 0): the delivery the golden vectors and the per-fill carrier tests are written for (a GTC buy defaults to Collected). */
+const EACH = { choice: 'each' } as const;
 const P = 250_000_000n; // 2.50 KAS per token: on the tick (100) and inside the default book
 const SCALE = 1_000n;
 const DC = 10n * KAS;
@@ -159,7 +162,7 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
   });
 
   it('GTC buy: KobBid whose value is kob-wasm bidEscrow (golden create.bid: 5451 KAS + 2 sompi of rounding)', () => {
-    const p = planValid(env(), { type: 'limit', side: 'buy', price: 245_000_000n, amount: 10n * TOK, tip: 100_000n });
+    const p = planValid(env(), { type: 'limit', side: 'buy', price: 245_000_000n, amount: 10n * TOK, tip: 100_000n, delivery: EACH });
     const s = bid(p);
     expect(s).toMatchObject({
       maker: MAKER_PK, extensionCommitment: market.extensionCommitment, price: '245000000', tip: '100000', tif: '0', activeFrom: '0', scale: '1000',
@@ -185,8 +188,8 @@ describe.each(markets)('limit orders on %s', (_name, market) => {
     // 2 tokens at 2.5 KAS: the 10-KAS minimum fill (4 tokens) is clamped to the amount: one fill
     expect(BigInt(planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 2n * TOK }).request!.value)).toBe(escrow(2n * TOK, P, 1n));
     // an explicit minimum fill of half a token allows the default 3 fills
-    expect(BigInt(planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 2n * TOK, minFill: 500n }).request!.value)).toBe(escrow(2n * TOK, P, 3n));
-    expect(BigInt(planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 10n * TOK, maxFills: 5n }).request!.value)).toBe(escrow(10n * TOK, P, 5n));
+    expect(BigInt(planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 2n * TOK, minFill: 500n, delivery: EACH }).request!.value)).toBe(escrow(2n * TOK, P, 3n));
+    expect(BigInt(planValid(env(), { type: 'limit', side: 'buy', price: P, amount: 10n * TOK, maxFills: 5n, delivery: EACH }).request!.value)).toBe(escrow(10n * TOK, P, 5n));
     const bad = planSimple(env(), { type: 'limit', side: 'buy', price: P, amount: 10n * TOK, maxFills: 0n });
     expect(bad.issues.map((i) => i.code)).toContain('MAX_FILLS_INVALID');
     expect(planSimple(env(), { type: 'limit', side: 'sell', price: P, amount: 10n * TOK, maxFills: 2n }).issues.map((i) => i.code)).toContain('SIDE_INVALID');
@@ -359,7 +362,8 @@ describe('market orders (matcher.md 10.2), golden cross-check on 3x3', () => {
     const env = makeEnv({ clock: { ...CLOCK, daa: 999_870n }, book: { bids: [], asks: [level(240_000_000n, 40n * TOK, 2)] } });
     const p = planValid(env, { type: 'market', side: 'buy', amount: 4n * TOK, tip: 100_000n, minFill: TOK });
     const g = goldenState('create.bid.market');
-    expect({ ...bid(p), maker: g.maker }).toEqual(g);
+    // a market buy delivers at each fill: the golden state plus a zero delivery block
+    expect({ ...bid(p), maker: g.maker }).toEqual({ ...g, ...NO_DELIVERY });
     expect(BigInt(p.request!.value)).toBe(1_989_200_000n); // ceil(4000 x (247.2M + 0.1M) / 1000) + 10 KAS
     const d = p.disclosure!;
     expect(d.expectedPrice).toBe(240_000_000n);
@@ -551,7 +555,7 @@ describe.each(markets)('TWAP / DCA on %s', (_name, market) => {
   });
 
   it('DCA buy: one delivery carrier per slice (golden bid.dca: 5 tokens, 1 per slice = 6225.5 KAS + 4 sompi of rounding)', () => {
-    const p = planValid(makeEnv({ market }), { type: 'dca', amount: 5n * TOK, sliceAmount: TOK, interval: { daa: 600n }, price: 245_000_000n, tip: 100_000n });
+    const p = planValid(makeEnv({ market }), { type: 'dca', amount: 5n * TOK, sliceAmount: TOK, interval: { daa: 600n }, price: 245_000_000n, tip: 100_000n, delivery: EACH });
     expect(bid(p)).toMatchObject({ interval: '600', maxFill: '1000', minFill: '1000', slope: '0', tif: '0' });
     expect(BigInt(p.request!.value)).toBe(6_225_500_004n);
     expect(p.disclosure!.carriers).toEqual([
@@ -561,7 +565,7 @@ describe.each(markets)('TWAP / DCA on %s', (_name, market) => {
   });
 
   it('DCA with a rising slice auction budgets at the cap; extra fills add carriers', () => {
-    const p = planValid(makeEnv({ market }), { type: 'dca', amount: 4n * TOK, sliceAmount: 2n * TOK, interval: { daa: 600n }, price: 245_000_000n, priceEnd: 250_000_000n, maxFills: 6n });
+    const p = planValid(makeEnv({ market }), { type: 'dca', amount: 4n * TOK, sliceAmount: 2n * TOK, interval: { daa: 600n }, price: 245_000_000n, priceEnd: 250_000_000n, maxFills: 6n, delivery: EACH });
     expect(bid(p)).toMatchObject({ price: '245000000', priceEnd: '250000000', slope: '25000' });
     expect(BigInt(p.request!.value)).toBe(escrow(4n * TOK, 250_000_000n, 6n));
     expect(planSimple(makeEnv({ market }), { type: 'dca', amount: 4n * TOK, sliceAmount: 2n * TOK, interval: { daa: 600n }, price: P, maxFills: 1n }).issues.map((i) => i.code)).toContain('MAX_FILLS_INVALID');
@@ -600,7 +604,7 @@ describe.each(markets)('Dutch decay / rising bid on %s', (_name, market) => {
   });
 
   it('buy (rising bid): escrow at the cap, cap is the worst price', () => {
-    const p = planValid(makeEnv({ market }), { type: 'dutch', side: 'buy', amount: 5n * TOK, price: 200_000_000n, priceEnd: 240_000_000n, duration: { daa: 4_000n }, stepDaa: 10n, maxFills: 2n });
+    const p = planValid(makeEnv({ market }), { type: 'dutch', side: 'buy', amount: 5n * TOK, price: 200_000_000n, priceEnd: 240_000_000n, duration: { daa: 4_000n }, stepDaa: 10n, maxFills: 2n, delivery: EACH });
     expect(bid(p)).toMatchObject({ price: '200000000', priceEnd: '240000000', slope: '100000', decayStep: '10' });
     expect(BigInt(p.request!.value)).toBe(escrow(5n * TOK, 240_000_000n, 2n));
     expect(p.disclosure!).toMatchObject({ expectedPrice: 200_000_000n, worstPrice: 240_000_000n, allInPrice: 240_000_000n });
@@ -1007,28 +1011,28 @@ describe('fills against the visible book (market, IOC, crossing buys)', () => {
 
   it('a crossing limit buy budgets the fills what crosses needs (at most 10), a user value short of it is warned', () => {
     const limit = P + 1_100_000n; // every ask crosses
-    const p = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit });
+    const p = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit, delivery: EACH });
     // 10 asks, 3 per transaction: 4 fills instead of the default 3
     expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, scope: 'crossing', fillable: 20n * TOK });
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0], 20n * TOK, 4n));
     expect(codes(p)).not.toContain('FILLS_BUDGET_SHORT');
     // more than the book holds: the crossing part (12 asks: 4 fills) and one for the rest that rests
-    expect(planValid(env(), { type: 'limit', side: 'buy', amount: 30n * TOK, price: limit }).fills!.budgeted).toBe(5n);
+    expect(planValid(env(), { type: 'limit', side: 'buy', amount: 30n * TOK, price: limit, delivery: EACH }).fills!.budgeted).toBe(5n);
     // the user's own value stands, with the warning
-    const mine = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit, maxFills: 2n });
+    const mine = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: limit, maxFills: 2n, delivery: EACH });
     expect(mine.fills!.budgeted).toBe(2n);
     expect(mine.issues.find((i) => i.code === 'FILLS_BUDGET_SHORT')).toMatchObject({ params: { needed: 4, fills: 2n, fillable: 12n * TOK } });
     // at most 10 by default: 60 small asks of a far larger buy
     const many = Array.from({ length: 60 }, (_, i) => bookOrder(P + BigInt(i) * 100n, TOK));
     const deep = makeEnv({ book: { asks: many.map((o) => level(o.price, o.amount)), bids: [], askOrders: many }, funding: [5000n * KAS] });
-    expect(planValid(deep, { type: 'limit', side: 'buy', amount: 60n * TOK, price: P + 6_000n }).fills!.budgeted).toBe(10n);
+    expect(planValid(deep, { type: 'limit', side: 'buy', amount: 60n * TOK, price: P + 6_000n, delivery: EACH }).fills!.budgeted).toBe(10n);
     // a limit that does not cross: the resting default, no estimate
     const resting = planValid(env(), { type: 'limit', side: 'buy', amount: 20n * TOK, price: P - 1_000_000n });
     expect(resting.fills).toBeUndefined();
   });
 
   it('a rising bid whose end crosses is budgeted the same way', () => {
-    const p = planValid(env(), { type: 'dutch', side: 'buy', amount: 20n * TOK, price: P - 1_000_000n, priceEnd: P + 1_100_000n, duration: { daa: 600n } });
+    const p = planValid(env(), { type: 'dutch', side: 'buy', amount: 20n * TOK, price: P - 1_000_000n, priceEnd: P + 1_100_000n, duration: { daa: 600n }, delivery: EACH });
     expect(p.fills).toMatchObject({ budgeted: 4n, needed: 4, scope: 'crossing' });
   });
 });

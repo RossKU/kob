@@ -15,7 +15,7 @@
 // Every rounded amount (custodies, escrows, tips, B totals) comes from kob-wasm. TypeScript only
 // assembles states and requests.
 import type { CarrierLine, Disclosure, PairDisclosure, PairOrderPlan, PairPlanEnv, PairSideFacts, PlanEnv, PlanIssue, TokenMarket } from '../plan-types';
-import type { BuiltTx, CondPairState, CreateOrderRequest, Hex, IfdPairState, KeyUtxo, OrderState, PairState, TokenUtxo } from '../types';
+import type { BuiltTx, CondPairState, CreateOrderRequest, DeliveryFields, ExitDeliveryFields, Hex, IfdPairState, KeyUtxo, OrderState, PairState, TokenUtxo } from '../types';
 import { atFloor, buildWithCap, recordFee } from '../fee-policy';
 import { guardRequest } from '../request-guard';
 import { KobError } from '../wasm';
@@ -25,7 +25,7 @@ import { daaToUnix } from '../daa';
 import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isSpendableHolding } from '../token-state';
 import { fitsI64 } from '../units';
 import { issue, hasError } from './common-issues';
-import { DEFAULT_CARRIER, orderCarrierFloor, str } from './common';
+import { DEFAULT_CARRIER, NO_DELIVERY, orderCarrierFloor, str } from './common';
 import type { CondSummary } from './cond-common';
 import type { Legs } from './cond-legs';
 import { pairIssue } from './pair-issues';
@@ -183,6 +183,8 @@ export interface PairStateParams {
   decayStep: bigint;
   /** the exact custody of S: the amount (ask) or the B escrow (bid), 0 while it is computed */
   custody: bigint;
+  /** the delivery block (bid-delivery-spec §2) of the token T the order receives; absent: each fill (mode 0) */
+  delivery?: Required<DeliveryFields>;
 }
 
 /** A new `KobPair` of the maker (side 1 is an ASK that sells A, side 2 a BID that buys A). */
@@ -206,6 +208,7 @@ export function makePairState(env: PairPlanEnv, p: PairStateParams): OrderState 
     decayStep: str(p.decayStep),
     amountLeft: str(p.amount),
     custody: str(p.custody),
+    ...(p.delivery ?? NO_DELIVERY),
   };
   return { kind: 'KobPair', state: st };
 }
@@ -222,6 +225,8 @@ export interface CondPairParams {
   deliveryCarrier: bigint;
   /** an exit committed by an entry: 0 (the entry writes it). A placed order: its custody. */
   custody: bigint;
+  /** the delivery block (bid-delivery-spec §2) of the token T the order receives; absent: each fill (mode 0) */
+  delivery?: Required<DeliveryFields>;
 }
 
 /** A `KobCondPair` from validated legs, not armed and with no repeat fields. */
@@ -253,6 +258,7 @@ export function makeCondPairState(env: PairPlanEnv, p: CondPairParams, l: Legs):
     rptPrice: '0',
     rptPre: '0',
     rptUntil: '0',
+    ...(p.delivery ?? NO_DELIVERY),
   };
   return { kind: 'KobCondPair', state: st };
 }
@@ -279,6 +285,8 @@ export interface IfdPairParams {
   custody: bigint;
   rptAmount: bigint;
   exitState: Hex;
+  /** the delivery block the entry writes into its exits (bid-delivery-spec §2); absent: each fill (mode 0) */
+  exitDelivery?: Required<ExitDeliveryFields>;
 }
 
 /** A new `KobIfdPair` entry. */
@@ -309,6 +317,7 @@ export function makeIfdPairState(env: PairPlanEnv, p: IfdPairParams): OrderState
     custody: str(p.custody),
     rptAmount: str(p.rptAmount),
     exitState: p.exitState,
+    ...(p.exitDelivery ?? { exitMode: '0', exitRecvThreshold: '0', exitTopupTip: '0' }),
   };
   return { kind: 'KobIfdPair', state: st };
 }

@@ -16,6 +16,8 @@ import { kindFor } from '../order-facts';
 import type { CarrierLine, PlanEnv } from '../plan-types';
 import { ceilDiv, minBig } from '../units';
 import { DEFAULT_BID_FILLS, carrierOf, defaultMinFillFor } from './common';
+import { fundedFills, resolveDelivery, withDelivery, type ResolvedDelivery } from './delivery';
+import type { PlanIssue } from '../plan-types';
 import { checkSelfTrade, failedPlan, finishPlan, resolveActivation, resolveExpiry, IssueLog, type CondPlan, type CondSummary } from './cond-common';
 import { planIfd } from './cond-ifd';
 import { askWorst, bidWorst, condAskState, condBidState, resolveLegs, type LegInput } from './cond-legs';
@@ -120,6 +122,8 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
   const base = { amount, minFill, tip, expiryDaa: expiry.expiryDaa, activeFrom: act.activeFrom };
   const lines: CarrierLine[] = [];
   let order: CondSpecOrder;
+  let dlv: ResolvedDelivery | null = null;
+  let funded = 0n;
   if (sell) {
     order = { kind: kindFor('KobCondAsk', tk.family), state: condAskState(env, base, legs) } as CondSpecOrder;
     lines.push({ kind: 'orderCarrier', amount: carrier, count: 1 });
@@ -137,16 +141,22 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
       log.shared('MAX_FILLS_INVALID', undefined, 'maxFills');
       return failedPlan(log);
     }
-    order = { kind: kindFor('KobCondBid', tk.family), state: condBidState(env, { ...base, deliveryCarrier: carrier }, legs) } as CondSpecOrder;
-    // The escrow is the whole amount at the worst leg plus one carrier per fill, as kob-wasm
+    // The delivery (bid-delivery-spec §10): a conditional buy rests until it fills, so it is Collected by default.
+    const dIssues: PlanIssue[] = [];
+    dlv = resolveDelivery({ codec: tk.family, program: tk.program, cls: 'resting', carrier, scale: tk.scale, minFill, price: worstState }, intent.delivery, dIssues);
+    log.add(...dIssues);
+    if (log.failed) return failedPlan(log);
+    funded = fundedFills(dlv.choice, fills);
+    order = { kind: kindFor('KobCondBid', tk.family), state: condBidState(env, { ...base, deliveryCarrier: carrier, delivery: dlv.fields }, legs) } as CondSpecOrder;
+    // The escrow is the whole amount at the worst leg plus one carrier per fill (a Collected order: one), as kob-wasm
     // condBidEscrow computes it (each fill's spend rounds down).
-    const escrow = env.kob.condBidEscrow(order, fills);
+    const escrow = env.kob.condBidEscrow(order, funded);
     if (escrow === null) {
       log.shared('AMOUNT_TOO_LARGE', undefined, 'amount');
       return failedPlan(log);
     }
-    lines.push({ kind: 'escrow', amount: escrow - carrier * fills, count: 1 });
-    lines.push({ kind: 'deliveryCarrier', amount: carrier, count: Number(fills) });
+    lines.push({ kind: 'escrow', amount: escrow - carrier * funded, count: 1 });
+    lines.push({ kind: 'deliveryCarrier', amount: carrier, count: Number(funded) });
     // An arming or trailing keeper takes its tip out of the escrow, so fund it on top.
     if (keeper !== null && keeper.reserve > 0n) lines.push({ kind: 'keeperReserve', amount: keeper.tip, count: keeper.expectedUpdates });
   }
@@ -163,8 +173,10 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
 
   const notes = [...NOTES_BY_TYPE[intent.type]];
   if (keeper !== null) notes.push('keeperReserve');
+  if (dlv?.choice === 'collected') notes.push('deliveryCollected');
+  if (dlv?.choice === 'topup') notes.push('deliveryTopup');
   const cond: CondSummary = { type: intent.type, legs: legs.summary, trail: legs.trail, keeper, entry: null, exit: null, repeat: null };
-  return finishPlan(env, log, {
+  const plan = finishPlan(env, log, {
     order,
     exit: null,
     lines,
@@ -179,6 +191,7 @@ function planLegs(env: PlanEnv, log: IssueLog, intent: LegsIntent, tip: bigint, 
     notes,
     cond,
   });
+  return dlv ? withDelivery(plan, { delivery: dlv, fills: funded }) : plan;
 }
 
 type CondSpecOrder = Parameters<typeof finishPlan>[2]['order'];

@@ -166,3 +166,70 @@
 [data-testid='order-type-panel'] .picker-group { margin-top: 4px; padding: 8px 8px 4px; border-top: 1px solid var(--border); color: var(--text); font-size: 0.82rem; font-weight: 700; font-variant-caps: all-small-caps; letter-spacing: 0.05em; }
 [data-testid='order-type-panel'] [role='group']:first-child > .picker-group { margin-top: 0; border-top: 0; }
 [data-testid='order-type-panel'] .picker-list { scrollbar-width: thin; scrollbar-color: var(--muted) transparent; }
+
+/* Delivery: the "What's this?" link of its label row and its dialog (DeliveryHelp.tsx). The drawing's colours are the app's tokens: light and dark. */
+.tk-whats { background: none; border: 0; padding: 0; font: inherit; font-size: 0.8rem; font-weight: 400; color: var(--link); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+.tk-whats:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+.dh-intro { margin: 0 0 12px; color: var(--muted); }
+.dh-lanes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.dh-lane { margin: 0; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; display: flex; flex-direction: column; gap: 4px; color: var(--text); background: var(--surface); }
+.dh-lane.dh-on { border-color: var(--buy); box-shadow: inset 0 0 0 1px var(--buy); background: var(--buy-bg); }
+.dh-lane-title { font-weight: 700; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dh-default .dh-lane-title { color: var(--buy); }
+.dh-pill { font-size: 0.72rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--buy-bg); color: var(--buy); }
+.dh-pill-on { background: var(--buy); color: var(--primary-contrast); }
+.dh-svg { display: block; width: 100%; max-width: 300px; height: auto; margin: 0 auto; }
+.dh-svg text { fill: var(--text); font-family: var(--font); }
+.dh-zone { font-size: 11px; fill: var(--muted) !important; letter-spacing: 0.04em; text-transform: uppercase; paint-order: stroke; stroke: var(--surface); stroke-width: 4px; stroke-linejoin: round; }
+.dh-lane.dh-on .dh-zone { stroke: color-mix(in srgb, var(--buy) 12%, var(--surface)); }
+.dh-small { font-size: 11px; fill: var(--muted) !important; }
+.dh-num { font-size: 13px; font-weight: 600; }
+.dh-box { fill: var(--surface); stroke: var(--text); stroke-width: 1; }
+.dh-cust { fill: var(--buy-bg); stroke: var(--buy); stroke-width: 1.5; }
+.dh-split { stroke: var(--muted); stroke-dasharray: 4 4; opacity: 0.6; }
+.dh-flow { stroke: var(--text); stroke-width: 1; }
+.dh-grow { stroke: var(--text); stroke-width: 1; stroke-dasharray: 3 3; }
+.dh-flow-buy { stroke: var(--buy); stroke-width: 1.5; }
+.dh-head { fill: var(--text); }
+.dh-head-buy { fill: var(--buy); }
+.dh-result { margin: 0; font-weight: 700; text-align: center; }
+.dh-cost { margin: 0; font-size: 0.85rem; color: var(--muted); text-align: center; }
+.dh-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 0.88rem; }
+.dh-table th, .dh-table td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.dh-table thead th { color: var(--muted); font-weight: 500; }
+.dh-table tbody th { white-space: nowrap; }
+.dh-table tr.dh-on th, .dh-table tr.dh-on td { background: var(--buy-bg); }
+.dh-table tr.dh-on th { color: var(--buy); }
+@media (max-width: 560px) {
+  .dh-table thead { display: none; }
+  .dh-table, .dh-table tbody, .dh-table tr, .dh-table th, .dh-table td { display: block; }
+  .dh-table tr { border: 1px solid var(--border); border-radius: var(--radius); margin-top: 8px; overflow: hidden; }
+  .dh-table th, .dh-table td { border-bottom: 0; padding: 4px 10px; }
+  .dh-table tbody th { padding-top: 8px; }
+  .dh-table td::before { content: attr(data-label); display: block; font-size: 0.75rem; color: var(--muted); }
+}
+
+/* the Delivery help's animation (delivery-help-steps.ts): a part appears when its step comes, a new amount pops, Collected's custody moves down */
+.dh-controls { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; flex-wrap: wrap; }
+.dh-ctl { min-width: 34px; height: 30px; border: 1px solid var(--border); border-radius: var(--ctl-r); background: var(--surface-2); color: var(--text); font-size: 15px; line-height: 1; cursor: pointer; }
+.dh-ctl:disabled { opacity: 0.4; cursor: default; }
+.dh-ctl:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.dh-ctl-play[aria-pressed="true"] { border-color: var(--buy); color: var(--buy); }
+.dh-caption { margin-left: 6px; font-weight: 600; font-size: 0.92rem; }
+.dh-step, .dh-result { transition: opacity 400ms var(--ease-out); }
+.dh-hide { opacity: 0; }
+.dh-show { opacity: 1; }
+.dh-gone { opacity: 0 !important; }
+.dh-cust-g { transition: transform 700ms var(--ease-out), opacity 400ms var(--ease-out); }
+.dh-moved { transform: translateY(80px); }
+.dh-show .dh-draw { stroke-dasharray: 140; stroke-dashoffset: 0; animation: dh-draw 600ms var(--ease-out); }
+.dh-pop { transform-box: fill-box; transform-origin: center; animation: dh-pop 450ms var(--ease-out); }
+.dh-flash { animation: dh-flash 900ms var(--ease-out); }
+.dh-tip { fill: var(--buy) !important; font-weight: 600; }
+@keyframes dh-draw { from { stroke-dashoffset: 140; } to { stroke-dashoffset: 0; } }
+@keyframes dh-pop { 0% { transform: scale(0.6); opacity: 0.2; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+@keyframes dh-flash { 0% { stroke: var(--buy); stroke-width: 2.5; } 100% { stroke: var(--text); stroke-width: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .dh-step, .dh-result, .dh-cust-g { transition: none; }
+  .dh-show .dh-draw, .dh-pop, .dh-flash { animation: none; }
+}

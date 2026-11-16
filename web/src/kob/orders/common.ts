@@ -8,7 +8,7 @@
 // `makeDisclosure` and `finishPlan`. All protocol logic (tx layout, state encoding, fees, signing
 // digests) stays in kob-wasm. This module only prepares requests.
 import type { CarrierLine, Disclosure, OrderPlan, PlanEnv, PlanIssue } from '../plan-types';
-import type { AskState, BidState, BuiltTx, CreateOrderRequest, KeyUtxo, OrderState, PayloadRecord, TokenUtxo } from '../types';
+import type { AskState, BidState, BuiltTx, CreateOrderRequest, DeliveryFields, KeyUtxo, OrderState, PayloadRecord, TokenUtxo } from '../types';
 import { atFloor, buildWithCap, recordFee } from '../fee-policy';
 import { guardRequest } from '../request-guard';
 import { KobError } from '../wasm';
@@ -89,6 +89,9 @@ function carrierIssues(env: PlanEnv, order: OrderState, tokenCarrier: bigint): P
 /** Decimal string of a bigint, the form order-state fields take. */
 export const str = (v: bigint): string => v.toString();
 
+/** The delivery block of an order that delivers at each fill (mode 0), and of a new order's `bought`. */
+export const NO_DELIVERY: Readonly<Required<DeliveryFields>> = { mode: '0', recvThreshold: '0', topupTip: '0', bought: '0' };
+
 // ---- order states
 
 /** Parameters of a KobAsk in planner terms: bigint, base-unit amounts, sompi per whole token. */
@@ -155,6 +158,8 @@ export function makeAsk(env: PlanEnv, p: AskParams): OrderState {
 export interface BidParams extends Omit<AskParams, 'amount'> {
   reserve?: bigint;
   deliveryCarrier?: bigint;
+  /** The delivery block (bid-delivery-spec §2; orders/delivery.ts). Absent: each fill (mode 0). */
+  delivery?: Required<DeliveryFields>;
 }
 
 /** Builds the KobBid state of an order for the token in `env`. */
@@ -182,6 +187,8 @@ export function makeBid(env: PlanEnv, p: BidParams): OrderState {
     slope: str(p.slope ?? 0n),
     priceEnd: str(p.priceEnd ?? 0n),
     decayStep: str(p.decayStep ?? 1n),
+    // a KRON bid is always mode 0 (its twin has no delivery block; kob-wasm returns the fields as 0)
+    ...(m.family === 'kcc20' && p.delivery ? p.delivery : NO_DELIVERY),
   };
   return { kind: kindFor('KobBid', m.family), state: st } as OrderState;
 }

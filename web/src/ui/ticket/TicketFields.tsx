@@ -41,6 +41,16 @@ export interface TicketFieldsProps {
   quoteTicker?: string;
   /** a pair: the tip fields whose typed tip is below what a netting fill needs (pair-common `pairTipBelowDefault`): a hint says a crossing order may wait */
   lowTips?: readonly string[];
+  /** the value an empty select shows when its default is not static (Delivery: the wallet default of Settings) */
+  defaults?: Readonly<Record<string, string>>;
+  /** what an empty box shows as its placeholder when its default is not static (the Top-up tip of the token's program) */
+  placeholders?: Readonly<Record<string, string>>;
+  /** one muted line under a field (Delivery: what Collected means; Top-up tip: the tip total) */
+  subs?: Readonly<Record<string, { text: string; testid: string }>>;
+  /** the options a select offers when they depend on the ticket (Bought tokens on a token pair: no "Added to one UTXO") */
+  options?: Readonly<Record<string, readonly string[]>>;
+  /** something at the right end of a select's label row (Delivery: its "What's this?" link) */
+  asides?: Readonly<Record<string, ComponentChildren>>;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -142,6 +152,8 @@ export function TicketFields(props: TicketFieldsProps) {
         const wholeAmount = spec.kind === 'amount' && !form.kas && ctx.decimals === 0 && phKey === 'ticket.ph.amount';
         const defaultHint = value === '' && FIELD_DEFAULTS[id] === undefined && has(phKey) ? (wholeAmount ? t('ticket.amountWholePh') : t(phKey)) : undefined;
         const common = { label, error: e ? errorText(e) : null, 'data-testid': spec.testid, disabled: props.disabled };
+        const sub = props.subs?.[id];
+        const subLine = sub ? <span class="tk-sub" data-testid={sub.testid} title={sub.text}><span key={sub.text}>{sub.text}</span></span> : null;
 
         if (spec.kind === 'bool') {
           return (
@@ -150,15 +162,15 @@ export function TicketFields(props: TicketFieldsProps) {
         }
         if (spec.kind === 'select') {
           return (
-            <FieldShell key={id} label={label} hint={helpOf(help)} error={common.error}>
+            <FieldShell key={id} label={label} labelAside={props.asides?.[id]} hint={subLine ? <>{subLine}{helpOf(help)}</> : helpOf(help)} error={common.error}>
               {({ id: cid, labelId, describedBy, invalid }) => (
                 <Dropdown
                   id={cid}
                   labelledBy={labelId}
                   describedBy={describedBy}
                   invalid={invalid}
-                  value={value || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
-                  options={(spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
+                  value={value || props.defaults?.[id] || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
+                  options={(props.options?.[id] ?? spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
                   onChange={(v) => props.onChange(id, v)}
                   data-testid={spec.testid}
@@ -272,7 +284,8 @@ export function TicketFields(props: TicketFieldsProps) {
             }
           }
         } else if (spec.kind === 'kas') {
-          suffix = <span class="tk-unit">KAS</span>;
+          suffix = <span class="tk-unit">{has(`ticket.unit.${id}`) ? t(`ticket.unit.${id}`) : 'KAS'}</span>;
+          if (subLine) hint = <>{subLine}{helpOf(helpShown)}</>;
         } else {
           const unit = UNIT_KEY[spec.kind];
           if (unit) suffix = <span class="tk-unit">{t(unit)}</span>;
@@ -315,7 +328,7 @@ export function TicketFields(props: TicketFieldsProps) {
             value={shownValue}
             onValue={onValue}
             inputMode={inputMode}
-            placeholder={defaultHint ?? (FIELD_DEFAULTS[id] !== undefined && FIELDS[id]?.kind !== 'select' ? FIELD_DEFAULTS[id] : undefined)}
+            placeholder={props.placeholders?.[id] ?? defaultHint ?? (FIELD_DEFAULTS[id] !== undefined && FIELDS[id]?.kind !== 'select' ? FIELD_DEFAULTS[id] : undefined)}
             hint={hint}
             suffix={suffix ? <span class="tk-suffix">{suffix}</span> : undefined}
           />
