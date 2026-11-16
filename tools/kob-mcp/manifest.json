@@ -7,7 +7,7 @@
   "long_description": "The key stays on this computer and is read only by the kob CLI. Every write returns its plan first and sends only when confirmed. Per-transaction and per-day KAS caps, a fee cap, a withdrawal allow-list (your primary wallet), a kill switch file and an audit log are kept in the data folder.",
   "author": { "name": "RossKU" },
   "repository": { "type": "git", "url": "https://github.com/RossKU/kob" },
-  "license": "MIT",
+  "license": "ISC",
   "keywords": ["kaspa", "kob", "order book", "kcc-20"],
   "server": {
     "type": "node",

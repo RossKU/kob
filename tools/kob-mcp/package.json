@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "An MCP server that lets AI agents read and trade KOB order books through the kob CLI, within local limits",
-  "license": "MIT",
+  "license": "ISC",
   "engines": { "node": ">=22" },
   "bin": { "kob-mcp": "server/index.mjs" },
   "scripts": {
