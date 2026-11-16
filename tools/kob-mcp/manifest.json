@@ -1,0 +1,64 @@
+{
+  "manifest_version": "0.3",
+  "name": "kob-mcp",
+  "display_name": "KOB order book",
+  "version": "0.1.0",
+  "description": "Read and trade KOB order books on Kaspa through the kob CLI, within local spending limits. Testnet-10 by default.",
+  "long_description": "The key stays on this computer and is read only by the kob CLI. Every write returns its plan first and sends only when confirmed. Per-transaction and per-day KAS caps, a fee cap, a withdrawal allow-list (your primary wallet), a kill switch file and an audit log are kept in the data folder.",
+  "author": { "name": "RossKU" },
+  "repository": { "type": "git", "url": "https://github.com/RossKU/kob" },
+  "license": "MIT",
+  "keywords": ["kaspa", "kob", "order book", "kcc-20"],
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/server/index.mjs"],
+      "env": {
+        "KOB_MCP_CONFIG": "${user_config.config_file}",
+        "KOB_MCP_NETWORK": "${user_config.network}",
+        "KOB_MCP_KOB_CLI": "${user_config.kob_cli}",
+        "KOB_MCP_KEY_FILE": "${user_config.key_file}",
+        "KOB_MCP_NODE": "${user_config.node}",
+        "KOB_MCP_DATA_DIR": "${user_config.data_dir}",
+        "KOB_MCP_WITHDRAW_TO": "${user_config.withdraw_to}",
+        "KOB_MCP_PER_TX_KAS": "${user_config.per_tx_kas}",
+        "KOB_MCP_PER_DAY_KAS": "${user_config.per_day_kas}",
+        "KOB_MCP_MAX_FEE_KAS": "${user_config.max_fee_kas}"
+      }
+    }
+  },
+  "user_config": {
+    "network": { "type": "string", "title": "Network", "description": "testnet-10 (mainnet also needs allowMainnet: true in a config file)", "default": "testnet-10", "required": true },
+    "kob_cli": { "type": "file", "title": "kob CLI", "description": "The kob binary (kob.exe on Windows) from a KOB release", "required": true },
+    "key_file": { "type": "file", "title": "Key file", "description": "A file holding the agent wallet's 64-hex key. Use a wallet only for the agent; only the kob CLI reads it.", "required": true },
+    "withdraw_to": { "type": "string", "title": "Primary wallet", "description": "The only address kob_send may pay (comma-separate more than one)", "required": true },
+    "per_tx_kas": { "type": "number", "title": "Per-transaction cap (KAS)", "description": "The most KAS one transaction may take out of the wallet: escrow, carriers, sends and fee", "default": 50, "min": 0.01, "required": true },
+    "per_day_kas": { "type": "number", "title": "Per-day cap (KAS)", "description": "The same over a UTC day", "default": 200, "min": 0.01, "required": true },
+    "max_fee_kas": { "type": "number", "title": "Fee cap (KAS)", "description": "The most network fee of one transaction", "default": 1, "min": 0.0001, "required": true },
+    "data_dir": { "type": "directory", "title": "Data folder", "description": "Ledger, audit log and the kill switch: create a file named STOP here to refuse every write", "default": "${HOME}/kob-mcp", "required": true },
+    "node": { "type": "string", "title": "Node (optional)", "description": "A JSON wRPC URL such as ws://host:18210; needed to create tokens. Empty: the public nodes", "required": false },
+    "config_file": { "type": "file", "title": "Config file (optional)", "description": "A kob-mcp config.json for further settings (mode, price band, allowMainnet); the fields above win", "required": false }
+  },
+  "tools": [
+    { "name": "kob_status", "description": "Wallet, network, limits, today's spend, kill switch" },
+    { "name": "kob_tokens", "description": "Tokens with a KOB market" },
+    { "name": "kob_book", "description": "A token's order book, as levels or single orders" },
+    { "name": "kob_stats", "description": "24 h stats of a token" },
+    { "name": "kob_candles", "description": "OHLCV candles of a token" },
+    { "name": "kob_balances", "description": "The wallet's KAS and tokens" },
+    { "name": "kob_orders", "description": "The wallet's orders" },
+    { "name": "kob_order", "description": "One order's details and events" },
+    { "name": "kob_fee_estimate", "description": "A dry run of a write: fee, spend, limits" },
+    { "name": "kob_place_limit", "description": "Place a limit order (plan, then confirm)" },
+    { "name": "kob_replace", "description": "Amend a live order (plan, then confirm)" },
+    { "name": "kob_cancel", "description": "Cancel an order (plan, then confirm)" },
+    { "name": "kob_take", "description": "Take a resting order within a required price bound" },
+    { "name": "kob_merge", "description": "Merge a token's UTXOs" },
+    { "name": "kob_claim", "description": "Claim what a collected buy order bought" },
+    { "name": "kob_token_create", "description": "Create a fixed-supply KCC-20 token" },
+    { "name": "kob_send", "description": "Send KAS or a token to the primary wallet only" }
+  ],
+  "compatibility": { "platforms": ["win32", "darwin", "linux"], "runtimes": { "node": ">=22.0.0" } }
+}

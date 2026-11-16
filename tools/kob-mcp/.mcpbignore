@@ -1,0 +1,6 @@
+test/
+config.json
+config.example.json
+kob-mcp-data/
+TN10-RUN.md
+*.key

@@ -1,0 +1,6 @@
+# the operator's own config, keys and run data never go into the repository
+/node_modules/
+/config.json
+/kob-mcp-data/
+*.key
+*.mcpb

@@ -7,3 +7,4 @@
 | `ablation` | Contract mutation runner. It shows which `require` rejects which attack | No, run by hand | [README](ablation/README.md), [RESULTS](ablation/RESULTS.md) |
 | `soak` | Testnet-10 market simulator with executors, bots, a checker and reports | No, run by hand | [README](soak/README.md) |
 | `wallet-gate` | Checks that browser wallets can sign covenant inputs. It carries a v1 `BidOrder`, which is not deployed | Yes. `scripts/check-wallet-gate.mjs` runs it, and `build-contracts.sh --check` runs that script. CI runs `npm audit` on it | [README](wallet-gate/README.md), [RESULTS](wallet-gate/RESULTS.md) |
+| `kob-mcp` | MCP server: AI agents (Claude Desktop, Claude Code) read and trade through the `kob` CLI within local limits | No, run by hand (`npm test`) | [README](kob-mcp/README.md), [TN10-RUN](kob-mcp/TN10-RUN.md) |
