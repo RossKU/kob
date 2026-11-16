@@ -1,0 +1,16 @@
+{
+  "network": "testnet-10",
+  "node": "ws://127.0.0.1:18210",
+  "indexer": "https://kob-api-tn10.kaspa.ag",
+  "kobCli": "C:/kob/kob.exe",
+  "keyFile": "C:/kob/tn10-mm.key",
+  "dataDir": "./run-tn10",
+  "capitalUsd": 1000,
+  "token": {
+    "covenantId": "<64 hex: the covenant id of a 6-decimal public-mint test token>",
+    "decimals": 6,
+    "label": "TUSDC6",
+    "usdSource": "kraken:USDCUSD",
+    "usdFallback": 1.0
+  }
+}

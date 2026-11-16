@@ -1,0 +1,13 @@
+{
+  "name": "kob-mm-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A two-sided market maker for one token on a KOB KAS book, driven through the kob CLI",
+  "engines": { "node": ">=22" },
+  "bin": { "kob-mm-bot": "bin/mm-bot.mjs" },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "status": "node bin/mm-bot.mjs status --config config.json"
+  }
+}
