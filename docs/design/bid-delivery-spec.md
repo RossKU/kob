@@ -244,3 +244,11 @@ branch (`delivery-<wp>`), edits **only the files it owns**, adds its own `[[test
 
 Can start now, in parallel: C1, C2, C3, C4 (to the handle), B1, D1. Never together: B2 and B5 (`build.rs`, `tx.rs`).
 The prototypes and `tests/design/` are reference only: no package edits them, and they are removed at the re-pin (P1).
+
+## 12. Known limitations
+
+- **No top-up through the router or an x402 swap.** The router delivers a mode-2 bid leg as form 0, plain `n` to the
+  maker (section 8), and the x402 swap verifier refuses a borrow-enabled token input, so a receive UTXO is never topped up on
+  those paths. A top-up is a matcher fill only (section 6); the mode-2 order itself stays fillable through both.
+- **Router custody shapes with a refunding plain bid.** `TokenToKas_sell2_c_out` and `TokenSwap_swap2_out_c` cannot take a
+  bid with a bought-custody whose end carries no refund followed by a plain bid whose end carries one.
