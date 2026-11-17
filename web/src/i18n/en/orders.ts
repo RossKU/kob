@@ -469,6 +469,7 @@ export default {
   'orders.issue.cancel.not-maker': 'This order belongs to another key: only its maker can cancel it.',
   'orders.issue.cancel.retired-cancel-only': 'An older contract version: this app only cancels this order.',
   'orders.issue.cancel.custody-missing': 'The token custody of this order could not be found. Refresh and try again.',
+  'orders.issue.cancel.bought-missing': 'The token UTXO holding what this order bought could not be found. Refresh and try again.',
   'orders.issue.cancel.strays-exceed-slots': '{strays} stray token outputs, but one transaction moves only {room}: cancelling abandons the rest.',
   'orders.issue.cancel.build-failed': 'The transaction could not be built: {message}',
   'orders.issue.cancel.insufficient-funds': 'Not enough KAS to pay the network fee ({shortfall} sompi short).',
