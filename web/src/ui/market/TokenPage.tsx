@@ -57,7 +57,7 @@ const TAPE_LIMIT = 50;
  * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart and depth | order ticket; the activity log of the market (ui/activity, full width);
  * token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
  */
-export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string }) {
+export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string; price?: string }) {
   const services = useServices();
   const wallet = useWallet();
   const { registry, indexer, kob, config } = services;
@@ -74,7 +74,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       ? { side: 'sell', type: 'close' }
       : props.ticket === 'cover' || props.ticket === 'sell'
         ? { side: props.ticket === 'cover' ? 'buy' : 'sell', type: 'market', ...(props.amount ? { amount: BigInt(props.amount) } : {}) }
-        : undefined,
+        : props.ticket === 'ask'
+          ? // the first sale of a token just created (Create token, "Sell at one price"): a limit sell of the amount at the price
+            { side: 'sell', ...(props.amount ? { amount: BigInt(props.amount) } : {}), ...(props.price ? { price: BigInt(props.price) } : {}) }
+          : undefined,
   );
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
