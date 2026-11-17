@@ -69,6 +69,7 @@ const TITLE: Record<SigningKind, string> = {
   claim: 'signer.kind.claim',
   'claim-merge': 'signer.kind.claimMerge',
   'claim-place': 'signer.kind.claimPlace',
+  take: 'signer.kind.take',
   other: 'signer.kind.other',
 };
 
@@ -428,6 +429,14 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     if (cont && was !== undefined && cont.value > was) lines.push({ label: t('signer.net.claimCarrier'), value: kas(cont.value - was), dir: null });
   }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
+  // a take: the resting orders it fills at their own prices, and the price on average
+  if (s.take) {
+    const tk = s.take;
+    const hint = hints.find((h) => h.covenantId === tk.ref.covenantId);
+    const unit = hint && hint.source !== 'assumed' && hint.ticker ? hint.ticker : longId(tk.ref.covenantId);
+    lines.push({ label: t('signer.take.fills'), value: t('signer.take.fillsValue', { orders: tk.fills.length, amount: `${formatTokenAmount(tk.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)} ${unit}` }), dir: null });
+    if (tk.avgPrice !== null) lines.push({ label: t('signer.take.price'), value: t('signer.take.priceValue', { price: formatKas(tk.avgPrice), unit }), dir: null });
+  }
   const fromTokens = freedFromTokens(s);
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
   const registry = hintRegistry(hints);
@@ -560,4 +569,50 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   // the token outputs checked against the claim are not "unknown scripts": every other finding still counts
   const problems = g.decoded.blocking.filter((b) => !SHOWN_AS_LINES.has(b.code) && !(b.code === 'output-unknown' && b.output !== undefined && verified.has(b.output)));
   return { ...g, title: t('signer.kind.createToken'), lines, fee: kas(k.fee + prepFee), ...problemsOf(problems) };
+}
+
+/** "4 min 30 s": a session's validity as the frame says it (never rounded up). */
+function durationWords(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const min = Math.floor(s / 60);
+  const sec = s % 60;
+  return sec === 0 ? t('signer.session.minutes', { min }) : min === 0 ? t('signer.session.seconds', { sec }) : t('signer.session.minSec', { min, sec });
+}
+
+/**
+ * The screen of a one-approval merge session (session.ts): what the frame derived from the plan it decoded, never what the app says. The
+ * token by its covenant id (8 + 8 hex), the UTXOs merged and left, the token amount (unchanged), the most transactions, the most network fee
+ * in all (and the planned fee), and how long the approval lasts. `decoded` is the first link's decoding (the summary type carries one).
+ */
+export function sessionSummary(terms: Pick<SessionTermsView, 'covenantId' | 'links' | 'utxos' | 'outputs' | 'amount' | 'feeMax' | 'plannedFee' | 'ttlMs'>, hints: TokenHint[], decoded: SigningSummary): SignerSummary {
+  const hint = hints.find((h) => h.covenantId === terms.covenantId);
+  const unit = hint && hint.source !== 'assumed' && hint.ticker ? ` ${hint.ticker}` : '';
+  // nothing this frame can check states the decimals (no pinned table lists the token, no declaration or convention was hinted): the
+  // amount is in base units, and says so, never a bare integer
+  const raw = !hint || hint.source === 'assumed';
+  const amount = raw ? t('signer.session.rawAmount', { amount: formatTokenAmount(terms.amount, RAW_TOKEN_DECIMALS) }) : `${formatTokenAmount(terms.amount, hint.decimals)}${unit}`;
+  const lines: SummaryLine[] = [
+    { label: t('signer.session.token'), value: tokenName(terms.covenantId, hint, true), dir: null },
+    { label: t('signer.session.what'), value: t('signer.session.whatValue', { utxos: terms.utxos, outputs: terms.outputs, amount }), dir: null },
+    { label: t('signer.session.txs'), value: t('signer.session.txsValue', { count: terms.links.length }), dir: null },
+    { label: t('signer.session.valid'), value: t('signer.session.validValue', { time: durationWords(terms.ttlMs) }), dir: null },
+  ];
+  const title = hint && hint.source !== 'assumed' && hint.ticker ? t('signer.session.title', { ticker: hint.ticker }) : t('signer.session.titleToken');
+  return {
+    title, lines, orders: [],
+    fee: t('signer.session.feeValue', { max: formatKas(terms.feeMax), planned: formatKas(terms.plannedFee) }),
+    problems: 0, problemCodes: [], decoded,
+  };
+}
+
+/** The terms the session screen shows (session.ts `SessionTerms`). */
+interface SessionTermsView {
+  covenantId: Hex;
+  links: readonly unknown[];
+  utxos: number;
+  outputs: number;
+  amount: bigint;
+  feeMax: bigint;
+  plannedFee: bigint;
+  ttlMs: number;
 }

@@ -38,7 +38,7 @@ export interface GiveSpec {
   kas?: bigint | string | number;
   count?: number;
   /** token UTXOs (base units); `token` defaults to the first token of the seed */
-  tokens?: { token?: string; amount: bigint | string | number; count?: number; carrier?: bigint | string | number; borrow_scheme?: number }[];
+  tokens?: { token?: string; amount: bigint | string | number; count?: number; carrier?: bigint | string | number; borrow_scheme?: number; borrow_guard?: string }[];
 }
 
 export interface SubmissionSummary {
@@ -132,7 +132,7 @@ export class MockClient {
   giveKas(key: KeyName | string, sompi: bigint | string | number, count = 1) {
     return this.give(key, { kas: sompi, count });
   }
-  giveTokens(key: KeyName | string, amount: bigint | string | number, opts: { token?: string; count?: number; carrier?: bigint | string | number; borrow_scheme?: number } = {}) {
+  giveTokens(key: KeyName | string, amount: bigint | string | number, opts: { token?: string; count?: number; carrier?: bigint | string | number; borrow_scheme?: number; borrow_guard?: string } = {}) {
     return this.give(key, { tokens: [{ amount, ...opts }] });
   }
   async submitted(withTx = true): Promise<SubmissionSummary[]> {

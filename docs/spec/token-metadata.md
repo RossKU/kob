@@ -173,6 +173,11 @@ key. The genesis therefore carries, in its payload, the states of its token outp
   for good while output 0 is not listed means the coin was spent elsewhere, and only "Forget it" is left. "Forget it" keeps the KAS. A
   genesis already on chain finishes its record silently. Records of the older `kob.creations.v1` key (always with a signed genesis)
   are moved to v2 on the first read.
+* A record is untrusted: anything that can write the origin's storage can plant or change one. Its shapes and sizes are checked on
+  read, and its stored genesis is never signed. "Finish the creation" plans the creation again with kob-wasm from the record's facts
+  (the preparation's funding and declaration, the token's holders, carrier and program, the fee rate), requires the same preparation
+  id, genesis id and token, runs the checks of a fresh creation, and shows the same confirmation screen before the wallet is asked.
+  Output 0 must be listed by the node with the planned amount. A record that does not check out offers only "Forget it".
 * While a record exists its output 0 is reserved for the genesis: no order or other transaction of the app funds itself from it.
 * The executor's indexer drops a preparation no genesis spent after 72 hours (`crates/kobd/src/config.rs`): a genesis sent later is
   valid but has no declaration there. The Create token page says to finish within 72 hours, and past 60 hours recommends a new

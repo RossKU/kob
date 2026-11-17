@@ -2391,3 +2391,37 @@ async fn the_price_route_answers_503_before_the_first_success_and_never_caches_i
     assert_eq!(get(&app, "/v1/price/kas-usd").await.0, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(m.calls(), 4, "one round");
 }
+
+/// `/v1/quotes`: the sampled top of the book as `[t, bid, ask]`, a bucket per change, with the
+/// parameters and errors of the candles.
+#[tokio::test]
+async fn quotes_serve_the_sampled_top_of_the_book() {
+    use crate::indexer::quotes::sample;
+    let e = env(|_| {});
+    let c = &e.w;
+    let ctx = crate::indexer::reads::ReadCtx { node_daa: Some(1000), settle_depth_daa: 0, now_unix: Some(100) };
+    let t0 = 1_790_000_100_000i64; // on a 5-minute boundary
+    seed_order(c, 1, 1, 290_000, 1, "open", Some(10 * W), Some(10 * W), true, MAKER);
+    sample(c, &ctx, t0).unwrap();
+    seed_order(c, 2, 2, 210_000, 1, "open", Some(5 * W), Some(5 * W), true, MAKER);
+    sample(c, &ctx, t0 + 60_000).unwrap();
+    e.state.generation.bump();
+    let app = router(e.state.clone());
+    let (s, v) = get(&app, &format!("/v1/quotes/{}?interval=1m", h(TOKEN))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert_eq!((v["interval"].as_str(), v["price_basis"].as_str()), (Some("1m"), Some("1000")));
+    assert_eq!(v["items"], serde_json::json!([[t0, null, "290000"], [t0 + 60_000, "210000", "290000"]]));
+    // Both rows fall in one 5m bucket: the last one counts.
+    let (_, v) = get(&app, &format!("/v1/quotes/{}?interval=5m", h(TOKEN))).await;
+    let b = t0.div_euclid(300_000) * 300_000;
+    assert_eq!(v["items"], serde_json::json!([[b, "210000", "290000"]]));
+    // A window after the rows starts with the value in force.
+    let (_, v) = get(&app, &format!("/v1/quotes/{}?interval=1m&from={}&to={}", h(TOKEN), t0 + 600_000, t0 + 660_000)).await;
+    assert_eq!(v["items"], serde_json::json!([[t0 + 600_000, "210000", "290000"]]));
+    let (_, v) = get(&app, &format!("/v1/quotes/{}", h(0x55))).await;
+    assert_eq!(v["items"], serde_json::json!([]));
+    for q in ["interval=2m", "interval=1m&from=10&to=5", "limit=0"] {
+        let (s, _) = get(&app, &format!("/v1/quotes/{}?{q}", h(TOKEN))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{q}");
+    }
+}

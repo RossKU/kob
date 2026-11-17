@@ -49,6 +49,20 @@ const confirmPopups = (page: Page): Promise<number> => page.evaluate(() => (wind
 const ownedOf = async (mock: MockClient, pubkey: string) =>
   ((await mock.get(`/v1/token-utxos?owner=${pubkey}&token=${STD}&spent=false&limit=200`)).items as { txid: string; index: number; amount: string; role: string }[]).filter((u) => u.role === 'owned');
 
+/** The wallet's own UTXOs of EXSTD as [amount, borrow scheme, borrow guard], smallest first. */
+type BorrowState = { borrow_scheme: number; borrow_guard: string };
+const ownedStates = async (mock: MockClient, pubkey: string) =>
+  ((await mock.get(`/v1/token-utxos?owner=${pubkey}&token=${STD}&spent=false&limit=50`)).items as { amount: string; role: string; state: BorrowState }[])
+    .filter((u) => u.role === 'owned')
+    .map((u) => [BigInt(u.amount), u.state.borrow_scheme, u.state.borrow_guard] as const)
+    .sort((a, b) => Number(a[0] - b[0]));
+/** The one guard the UTXOs with a borrow setting share. */
+const guardOf = (owned: Awaited<ReturnType<typeof ownedStates>>): string => {
+  const guards = new Set(owned.filter((u) => u[1] !== 0).map((u) => u[2]));
+  expect(guards.size).toBe(1);
+  return [...guards][0]!;
+};
+
 /** The screenshots of this run (saved with the test's results). */
 const shot = (page: Page, name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
 
@@ -57,7 +71,9 @@ async function openBalances(page: Page, count: number): Promise<void> {
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(new RegExp(`^Merge all \\(${count}\\): about \\+[0-9.,]+ KAS$`), { timeout: 15_000 });
+  // the button says Merge all; the count and the KAS it frees are its tooltip
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', new RegExp(`^Merge your ${count} UTXOs of this token into one: about \\+[0-9.,]+ KAS back\\. `), { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText('Merge all');
 }
 
 test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 approvals, then a tree of 3 -> 1 merges into one UTXO', async ({ appPage: page, mock, wallet }) => {
@@ -178,7 +194,7 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   await expect(page.getByTestId('notify-unread')).toHaveText('1');
   // run again: planned from the five left, two transactions into one
   await wallet!.configure({ approve: true, delayMs: 0 });
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(5\): /, { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', /^Merge your 5 UTXOs /, { timeout: 15_000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
   await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 5 EXSTD UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
@@ -211,7 +227,8 @@ test('a token the registry does not list is mergeable too, under its node-verifi
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
-  await expect(merge).toHaveText(/^Merge all \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  await expect(merge).toHaveAttribute('title', /^Merge your 4 UTXOs of this token into one: about \+[0-9.,]+ KAS back\. /, { timeout: 15_000 });
+  await expect(merge).toHaveText('Merge all');
   await merge.click();
   await expect(page.getByTestId('merge-all-summary')).toContainText('UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
@@ -229,6 +246,7 @@ test('Merge all merges each borrow setting apart: one UTXO per setting, each kee
   for (let k = 1; k <= 3; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
   for (let k = 4; k <= 5; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS, borrow_scheme: 2 });
   await mock.giveKas('alice', 20n * KAS);
+  const before = await ownedStates(mock, alice);
   await openBalances(page, 5);
   await expect(page.getByTestId('balances-panel')).toContainText('15');
   await page.screenshot({ path: test.info().outputPath('balances-borrow-merge.png'), animations: 'disabled' });
@@ -239,8 +257,10 @@ test('Merge all merges each borrow setting apart: one UTXO per setting, each kee
   await page.getByTestId('merge-all-confirm').click();
   const placed = await runFlow(page, mock, wallet, { steps: 2, confirm: false });
   expect(placed.map((p) => p.submission.token_outputs[0]!.amount)).toEqual([(6n * TOKEN).toString(), (9n * TOKEN).toString()]);
-  const owned = ((await mock.get(`/v1/token-utxos?owner=${alice}&token=${STD}&spent=false&limit=50`)).items as { amount: string; role: string; state: { borrow_scheme: number } }[]).filter((u) => u.role === 'owned');
-  expect(owned.map((u) => [BigInt(u.amount), u.state.borrow_scheme]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[6n * TOKEN, 0], [9n * TOKEN, 2]]);
+  // the mock gives the scheme-2 UTXOs a real guard key (not zeros): the merged one carries that same guard
+  const guard = guardOf(before);
+  expect(guard).not.toBe('00'.repeat(32));
+  expect(await ownedStates(mock, alice)).toEqual([[6n * TOKEN, 0, '00'.repeat(32)], [9n * TOKEN, 2, guard]]);
 });
 
 test('the sell ticket merges just enough first, then places the sale with its own confirmation', async ({ appPage: page, mock, wallet }) => {
@@ -301,4 +321,94 @@ test('the sell ticket merges just enough first, then places the sale with its ow
   expect(saleIns).toEqual(expect.arrayContaining([m1!.txid, m2!.txid]));
   expect(sale!.created).toHaveLength(1);
   expect((await ownedOf(mock, alice)).length).toBeLessThanOrEqual(2);
+});
+
+
+test('Convert to plain: the UTXOs with a borrow setting become one plain UTXO; the plain ones stay as they are', async ({ appPage: page, mock, wallet }) => {
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  for (let k = 1; k <= 2; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS });
+  // borrow scheme 2 with a guard key (the mock gives carol's): spent by the owner on the owner path
+  for (let k = 4; k <= 5; k++) await mock.giveTokens('alice', BigInt(k) * TOKEN, { token: STD, carrier: 2n * KAS, borrow_scheme: 2 });
+  await mock.giveKas('alice', 20n * KAS);
+  const before = await ownedStates(mock, alice);
+  expect(before.filter((u) => u[1] === 2).every((u) => u[2] !== '00'.repeat(32))).toBe(true);
+  await openBalances(page, 4);
+  // the row keeps its one Merge all button (the Portfolio layout is unchanged): its dialog offers the conversion
+  await expect(page.getByTestId(`orders-convert-token-${STD}`)).toHaveCount(0);
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 4 EXSTD UTXOs into 2, one per borrow setting.', { timeout: 30_000 });
+  await page.getByTestId('merge-all-convert').click();
+  await expect(page.getByTestId('merge-all-dialog')).toContainText('Convert EXSTD to plain', { timeout: 30_000 });
+  await expect(page.getByTestId('merge-all-summary')).toHaveText(/^Convert 2 EXSTD UTXOs with a borrow setting into 1 plain UTXO\. 1 transaction · 1 approval · about \+[0-9.]+ KAS after fees\.$/, { timeout: 30_000 });
+  await shot(page, 'convert-confirm');
+  await page.getByTestId('merge-all-confirm').click();
+  const placed = await runFlow(page, mock, wallet, { steps: 1, confirm: false });
+  expect(placed[0]!.submission.token_outputs).toHaveLength(1);
+  expect(await ownedStates(mock, alice)).toEqual([[1n * TOKEN, 0, '00'.repeat(32)], [2n * TOKEN, 0, '00'.repeat(32)], [9n * TOKEN, 0, '00'.repeat(32)]]);
+  // three plain UTXOs now: Merge all merges them in one tree, and offers no conversion
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', /^Merge your 3 UTXOs /, { timeout: 30_000 });
+  await page.getByTestId(`orders-merge-token-${STD}`).click();
+  await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 3 EXSTD UTXOs into 1.', { timeout: 30_000 });
+  await expect(page.getByTestId('merge-all-convert')).toHaveCount(0);
+});
+
+test('Convert to plain with nothing to merge: a small button in the same cell converts the one UTXO with a borrow setting', async ({ appPage: page, mock, wallet }) => {
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  await mock.giveTokens('alice', 2n * TOKEN, { token: STD, carrier: 2n * KAS });
+  await mock.giveTokens('alice', 3n * TOKEN, { token: STD, carrier: 2n * KAS, borrow_scheme: 1 });
+  await mock.giveKas('alice', 20n * KAS);
+  await registryWithStd(page);
+  await page.goto('/#/portfolio');
+  await connectWallet(page, 'kasware');
+  const convert = page.getByTestId(`orders-convert-token-${STD}`);
+  await expect(convert).toHaveText('Convert to plain', { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveCount(0);
+  await convert.click();
+  await expect(page.getByTestId('merge-all-summary')).toHaveText(/^Convert 1 EXSTD UTXO with a borrow setting into a plain one\. 1 transaction · 1 approval · about \+[0-9.]+ KAS after fees\.$/, { timeout: 30_000 });
+  await page.getByTestId('merge-all-confirm').click();
+  await runFlow(page, mock, wallet, { steps: 1, confirm: false });
+  expect(await ownedStates(mock, alice)).toEqual([[2n * TOKEN, 0, '00'.repeat(32)], [3n * TOKEN, 0, '00'.repeat(32)]]);
+  // two plain UTXOs: Merge all takes the cell's place
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toBeVisible({ timeout: 30_000 });
+  await expect(convert).toHaveCount(0);
+});
+
+test('the sell ticket: no one borrow setting holds the amount, so the order button converts first, then places the sale', async ({ appPage: page, mock, wallet }) => {
+  test.setTimeout(180_000);
+  await seedStd(mock);
+  const alice = (await mock.balance('alice')).pubkey;
+  // plain 5 and scheme 2 holding 7: a sale of 10 fits neither
+  await mock.giveTokens('alice', 5n * TOKEN, { token: STD, carrier: KAS });
+  await mock.giveTokens('alice', 7n * TOKEN, { token: STD, carrier: KAS, borrow_scheme: 2 });
+  await mock.giveKas('alice', 50n * KAS);
+  await registryWithStd(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`/#/market/${STD}`);
+  await connectWallet(page, 'kasware');
+  await expect(page.getByTestId('order-ticket')).toBeVisible();
+  await recordConfirmPopups(page);
+  await pickType(page, 'limit', 'sell');
+  await fillFields(page, { amount: '10', price: '1' });
+  await settlePlan(page);
+  await expect(page.getByTestId('order-note-merge')).toHaveText('No one borrow setting of your EXSTD holds this amount: 1 transaction converts to plain first, one wallet approval.', { timeout: 30_000 });
+  await expect(page.getByTestId('order-issues').locator('[data-severity="error"]')).toHaveCount(0);
+  const button = page.getByTestId('order-place');
+  await expect(button).toHaveText('Convert, then sell');
+  await expect(button).toHaveAttribute('title', /^A sale spends UTXOs of one borrow setting only\. /);
+  await shot(page, 'sell-ticket-convert-offer');
+  await button.click();
+  await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 90_000 });
+  expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed']);
+  await confirmReceipt(page);
+  const txid = await waitSubmitted(page);
+  const [conv, sale] = await mock.submitted();
+  expect(sale!.txid).toBe(txid);
+  expect(conv!.token_outputs).toHaveLength(1);
+  // the sale spends the plain 5 and the converted 7, both plain now
+  const saleIns = (sale!.spent ?? []).filter((x) => x.kind === 'token').map((x) => x.outpoint.split(':')[0]);
+  expect(saleIns).toHaveLength(2);
+  expect(saleIns).toContain(conv!.txid);
+  expect(await ownedStates(mock, alice)).toEqual([[2n * TOKEN, 0, '00'.repeat(32)]]);
 });

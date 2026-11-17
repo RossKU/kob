@@ -66,6 +66,11 @@ export interface SendJob {
    * wallet is asked at once, without the app's final confirmation; every check above still runs and the wallet still asks for its own approval
    */
   preconfirmed?: boolean | undefined;
+  /**
+   * a step of the wallet's one-approval session (a merge run with the private-key signer: wallet/types.ts `openSession`): the wallet signs it
+   * without a prompt while its own check finds it within the plan the user allowed; every check above still runs
+   */
+  session?: string | undefined;
 }
 
 /** The registry plus the job's open-list tokens: what its transaction is decoded against and its tokens' identities are checked with. */

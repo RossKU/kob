@@ -25,6 +25,11 @@ kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 # Borsh wRPC windows (rpc::borsh): the node's own RPC types and workflow-rpc framing (same release as the node)
 kaspa-rpc-core.workspace = true
+# Chain proofs (rpc::proof): header PoW, the difficulty floor, KIP-21 lane proofs of the acceptance data
+kaspa-pow.workspace = true
+kaspa-math.workspace = true
+kaspa-seq-commit.workspace = true
+kaspa-smt.workspace = true
 workflow-serializer = "0.18.0"
 borsh = "1"
 blake3.workspace = true

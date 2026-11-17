@@ -8,7 +8,7 @@ import { IndexerFailover, failoverIndexer, pinnedIndexer } from '../data/indexer
 import { loadKaspaSdk, spkStringToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import { ENTER_CHECK_FAILOVER_MS, StandaloneController, modeIndexer, standaloneUnavailable } from '../data/standalone';
 import type { NodeApi } from '../data/node';
-import { createNode } from '../data/node-factory';
+import { createNode, publicNodePicker } from '../data/node-factory';
 import { TokenTracker } from '../data/token-tracker';
 import { createUtxoService, type UtxoService } from '../data/utxos';
 import { parseRegistry, type TokenRegistry } from '../kob/registry';
@@ -117,6 +117,8 @@ function noIndexer(): IndexerApi {
  */
 export async function createServices(config: AppConfig, o: CreateServicesOverrides = {}): Promise<Services> {
   const fetchFn = o.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
+  // no node URL: the resolvers are asked for a public node while the wasm modules load
+  if (!o.node && config.nodeUrl.trim() === '') void publicNodePicker().pick(config.network);
   const [kob, sdk] = await Promise.all([
     o.kob ? Promise.resolve(o.kob) : loadKob(),
     o.sdk ? Promise.resolve(o.sdk) : loadKaspaSdk({ exposeForTests: config.features.test }),

@@ -277,6 +277,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'swept-in-place': { input: 0, output: 0, params: { utxos: 3 } },
       'claim-invalid': { input: 0, params: { reason: 'output 0 is not the same order with only bought set to 0' } }, 'bought-custody-lost': { input: 0 },
       'expected-claim-ids': { params: { expected: 1, actual: 0 } }, 'expected-delivery': { params: { fields: 'topupTip' } }, 'bought-claimed': { input: 0, output: 0 },
+      'take-amount': { params: { expected: 2000n, actual: 3000n } }, 'take-price': { params: { kas: 5n * KAS, bound: 4n * KAS } }, 'take-fills': { params: { orders: 2 } }, 'take-orders': {}, 'take-token': { input: 1, params: { token: 'ab'.repeat(32) } },
     };
     expect(Object.keys(sample).sort()).toEqual([...SIGNING_ISSUE_CODES].sort());
     for (const code of SIGNING_ISSUE_CODES) {

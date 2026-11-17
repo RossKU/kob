@@ -386,6 +386,43 @@ impl Default for FailoverConfig {
     }
 }
 
+/// The `[cross_check]` table: how a resolver pair vouches for the chain authority
+/// (`rpc::multi::CrossCheckPolicy`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct CrossCheckConfig {
+    /// Seconds the authority's answers wait for a cross-checking node that cannot answer before
+    /// the indexer goes on alone with the chain proofs (`cross_checked: false`). Default 120.
+    pub single_node_after_secs: u64,
+    /// Seconds a cross-checking public node may fail before the resolver is asked for another.
+    /// Default 20.
+    pub rotate_after_secs: u64,
+    /// Another chain block is a contradiction only this many DAA below the newest chain block both
+    /// nodes report; closer to the tip it is lag. Default 600 (a minute at 10 BPS).
+    pub contradiction_depth_daa: u64,
+}
+
+impl Default for CrossCheckConfig {
+    fn default() -> Self {
+        let p = crate::rpc::multi::CrossCheckPolicy::default();
+        CrossCheckConfig {
+            single_node_after_secs: p.single_after.as_secs(),
+            rotate_after_secs: p.rotate_after.as_secs(),
+            contradiction_depth_daa: p.deep_daa,
+        }
+    }
+}
+
+impl CrossCheckConfig {
+    pub fn policy(&self) -> crate::rpc::multi::CrossCheckPolicy {
+        crate::rpc::multi::CrossCheckPolicy {
+            single_after: std::time::Duration::from_secs(self.single_node_after_secs),
+            rotate_after: std::time::Duration::from_secs(self.rotate_after_secs.max(1)),
+            deep_daa: self.contradiction_depth_daa,
+        }
+    }
+}
+
 impl FailoverConfig {
     /// A fallback is configured.
     pub fn enabled(&self) -> bool {
@@ -415,6 +452,11 @@ pub struct IndexerConfig {
     /// The Indexer's fallback when the primary stops answering ([`FailoverConfig`]; off by
     /// default).
     pub failover: FailoverConfig,
+    /// The chain proofs of every batch (`[chain_proof]`, `rpc::proof`): proof of work, a
+    /// difficulty floor, transaction ids and the KIP-21 acceptance commitment. On by default.
+    pub chain_proof: crate::rpc::proof::ChainProofConfig,
+    /// How a resolver pair vouches for the authority (`[cross_check]`, `rpc::multi`).
+    pub cross_check: CrossCheckConfig,
     /// Directory of the database and, by default, the record log.
     pub data_dir: PathBuf,
     /// Where a fresh database starts following the chain.
@@ -568,6 +610,8 @@ impl Default for IndexerConfig {
             nodes: Vec::new(),
             primary_fetch: true,
             failover: FailoverConfig::default(),
+            chain_proof: Default::default(),
+            cross_check: CrossCheckConfig::default(),
             data_dir: PathBuf::from("kob-index"),
             start: StartMode::PruningPoint,
             fast_start: false,

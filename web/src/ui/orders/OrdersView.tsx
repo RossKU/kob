@@ -12,7 +12,8 @@ export interface MarketOf {
   base: Hex;
   quote: Hex | null;
 }
-import { t } from '../../i18n';
+import { t, tIssue } from '../../i18n';
+import { failureText } from '../notify/failure-toast';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
@@ -34,6 +35,8 @@ import { ClaimDialog } from './ClaimDialog';
 import { planClaimMany, prepareClaim, type ClaimContext } from './claim';
 import { ReplaceDialog } from './ReplaceDialog';
 import { AutoRefundToggle } from './AutoRefund';
+import { listCreations } from '../../data/creations';
+import { acquiredTokens, logoGate } from '../../data/logo-gate';
 import { BalancesFrame, BalancesPanel } from './BalancesPanel';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
@@ -43,7 +46,7 @@ import { FILL_SORT_KEYS, WalletFills, type FillSortKey } from './WalletFills';
 import { PORTFOLIO_PAGE_SIZES, PortfolioPager, pageOf, usePortfolioRows } from './portfolio-paging';
 import { useWalletBalances } from './use-balances';
 import { PlanErrors, TxFlow, type FlowOutcome, type FlowStep, type TxFlowProps } from './TxFlow';
-import { mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
+import { convertibleCounts, mergeApprovedOnce, mergeFailure, mergeRunLine, mergeSummary, mergeTokenFor, reservedOutpoints } from './merge-model';
 import type { MergePlan, MergeToken } from '../../kob/merge';
 import { tickerOrId } from '../market/token-model';
 import { unwindAmount } from './position-model';
@@ -69,6 +72,8 @@ interface Flow {
   steps: FlowStep[];
   /** a chained flow (token merge): builds step `index` at its turn, once the steps it follows were submitted */
   next?: TxFlowProps['next'];
+  /** the run as planned, for a wallet that approves it once (a merge with the private-key signer) */
+  session?: TxFlowProps['session'];
 }
 
 const REFRESH_MS = 15_000;
@@ -180,6 +185,17 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const [failure, setFailure] = useState<string | null>(null);
   const [failureRaw, setFailureRaw] = useState<string | null>(null);
   const [planFail, setPlanFail] = useState<{ plans: CancelPlan[]; failed: { id: string; message: string }[] } | null>(null);
+  // an action that could not start (its plan or a read failed) is said at the top right in red too (founder 2026-11-17): the banner above the
+  // list may be out of view; the banner keeps every reason, the toast the first
+  useEffect(() => {
+    if (failure) showToast(failureText(t('orders.flow.cannotBuild'), failure), 'error');
+  }, [failure]);
+  useEffect(() => {
+    if (!planFail) return;
+    const issue = planFail.plans.flatMap((p) => p.issues).find((i) => i.severity === 'error');
+    const first = issue ? tIssue('orders.issue', issue) : (planFail.failed[0]?.message ?? null);
+    if (first !== null) showToast(failureText(t('orders.flow.cannotBuild'), first), 'error');
+  }, [planFail]);
   const [amend, setAmend] = useState<OrderRowModel | null>(null);
   // a claim of what a Collected buy order bought, open in its dialog
   const [claim, setClaim] = useState<{ row: OrderRowModel; ctx: ClaimContext } | null>(null);
@@ -188,7 +204,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
   const [sweepFirst, setSweepFirst] = useState<{ ids: Hex[]; count: number; proceed: () => void; retry: () => void } | null>(null);
   // a planned "Merge all" waiting for its confirmation (the transactions, approvals and KAS it frees)
-  const [mergeAsk, setMergeAsk] = useState<{ token: MergeToken; ticker: string; plan: MergePlan; summary: string } | null>(null);
+  const [mergeAsk, setMergeAsk] = useState<{ id: Hex; token: MergeToken; ticker: string; plan: MergePlan; summary: string; convert?: boolean; canConvert?: boolean } | null>(null);
   const [sweepFollowUp, setSweepFollowUp] = useState<{ pending: boolean; retry: () => void } | null>(null);
 
   const d = late && late.base === data.data ? late.next : (data.data ?? null);
@@ -208,6 +224,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     return describeEntries(d.entries, { kob: services.kob, clock: d.clock }).map((r) => ((strayCounts.get(r.id) ?? 0) > r.strayCount ? { ...r, strayCount: strayCounts.get(r.id)! } : r));
   }, [d, services.kob]);
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  // the tokens this wallet acquired on its own (its orders, its creations): only their creator-hosted logos load here (data/logo-gate.ts); set during render so the rows below read it
+  const acquired = useMemo(() => acquiredTokens(rows, pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
+  logoGate.setAcquired(pubkey ?? null, acquired);
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   // an order of the market this panel stands on (a market page with "this market only"): every order elsewhere
   const inMarket = (r: OrderRowModel | undefined): boolean =>
@@ -275,7 +294,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   // a failed stray fetch is passed on as "unknown" (null): a record-path cancel then warns instead of silently abandoning strays
   const strayList = d?.straysError ? null : strays;
 
-  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next'> = {}) => {
+  const startFlow = (heading: string, steps: FlowStep[], chain: Pick<Flow, 'next' | 'session'> = {}) => {
     setPlanFail(null);
     setFailure(null);
     setFlow({ key: Date.now(), heading, steps, ...chain });
@@ -399,16 +418,19 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
    * "Merge all": plans the merge of every mergeable plain UTXO of `token` into one, as a tree of transfers to the wallet itself (kob/merge.ts),
    * and asks for the confirmation that states its transactions, the wallet approvals (one each) and the KAS it frees. Nothing is sent before.
    */
-  const mergeToken = (token: Hex) =>
-    void guarded(`merge-${token}`, async () => {
+  const mergeToken = (token: Hex, convert = false) =>
+    void guarded(`${convert ? 'convert' : 'merge'}-${token}`, async () => {
       // the registry's token, else (any held token the node verified a program for) the one built from that program and the wallet's UTXOs (merge-model.ts)
       const free = balances.free.data;
-      const mt = pubkey && free ? mergeTokenFor(token, free.freeTokens, services.registry.byCovenantId, pubkey, reserved, { kob: services.kob, programs: free.programOf ?? free.programs }) : null;
+      const unlisted = free ? { kob: services.kob, programs: free.programOf ?? free.programs } : undefined;
+      const mt = pubkey && free ? mergeTokenFor(token, free.freeTokens, services.registry.byCovenantId, pubkey, reserved, unlisted) : null;
       if (!pubkey || !mt) return;
+      // holdings with a borrow setting: the Merge all dialog also offers to convert them to plain
+      const canConvert = !convert && convertibleCounts(free!.freeTokens, services.registry.byCovenantId, pubkey, reserved, unlisted).has(token);
       const ticker = tokenOf(token)?.ticker ?? tickerOrId(shownToken(token)?.ticker ?? '', token);
-      const plan = await planMergeFor(services, pubkey, mt, reserved);
+      const plan = await planMergeFor(services, pubkey, mt, reserved, convert ? { convert } : {});
       if (!plan.ok) return setPlanFail({ plans: [mergeFailure(plan)], failed: [] });
-      setMergeAsk({ token: mt, ticker, plan, summary: mergeSummary(plan, ticker) });
+      setMergeAsk({ id: token, token: mt, ticker, plan, summary: mergeSummary(plan, ticker, mergeApprovedOnce(wallet.adapter, mt, convert)), ...(convert ? { convert } : {}), ...(canConvert ? { canConvert } : {}) });
     });
 
   /** The confirmed merge: its transactions one after the other, each approved in the wallet; a later one is built at its turn. */
@@ -417,7 +439,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     if (!pubkey) return;
     // the card while it runs: the steps and one line, the whole summary was the confirmation's
     const run = mergeFlow(services, pubkey, ask.token, ask.plan, mergeRunLine(ask.plan));
-    startFlow(t('orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next });
+    startFlow(t(ask.convert ? 'orders.convert.heading' : 'orders.merge.heading', { ticker: ask.ticker }), run.steps, { next: run.next, ...(run.session ? { session: run.session } : {}) });
   };
 
   /** Balances' Claim: the dialog for one order, else one claim per order in one flow. */
@@ -671,6 +693,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           onDone={onFlowDone}
           onClose={() => setFlow(null)}
           {...(flow.next ? { next: flow.next } : {})}
+          {...(flow.session ? { session: flow.session } : {})}
         />
       ) : null}
 
@@ -774,6 +797,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
                 busy={busy}
                 onMergeToken={mergeToken}
                 onClaimToken={claimToken}
+                onConvertToken={(token) => mergeToken(token, true)}
                 balances={balances}
                 iconOf={iconOf}
                 {...(embed ? { compact: true } : {})}
@@ -935,7 +959,7 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
 
       {mergeAsk ? (
         <Modal
-          title={t('orders.merge.confirmTitle', { ticker: mergeAsk.ticker })}
+          title={t(mergeAsk.convert ? 'orders.convert.confirmTitle' : 'orders.merge.confirmTitle', { ticker: mergeAsk.ticker })}
           onClose={() => setMergeAsk(null)}
           data-testid="merge-all-dialog"
           footer={
@@ -943,14 +967,19 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
               <Button onClick={() => setMergeAsk(null)} data-testid="merge-all-cancel">
                 {t('common.cancel')}
               </Button>
+              {mergeAsk.canConvert ? (
+                <Button variant="ghost" onClick={() => { const id = mergeAsk.id; setMergeAsk(null); mergeToken(id, true); }} title={t('orders.convert.dialogHint')} data-testid="merge-all-convert">
+                  {t('orders.convert.button')}
+                </Button>
+              ) : null}
               <Button variant="primary" data-autofocus onClick={() => startMerge(mergeAsk)} data-testid="merge-all-confirm">
-                {t('orders.merge.confirm')}
+                {t(mergeAsk.convert ? 'orders.convert.confirm' : 'orders.merge.confirm')}
               </Button>
             </>
           }
         >
           <p data-testid="merge-all-summary">{mergeAsk.summary}</p>
-          <p class="small muted">{t('orders.merge.confirmNote')}</p>
+          <p class="small muted">{t(mergeAsk.convert ? 'orders.convert.confirmNote' : 'orders.merge.confirmNote')}</p>
         </Modal>
       ) : null}
 

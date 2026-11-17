@@ -69,6 +69,7 @@ export default {
   'landing.bots.intro': 'The kob command line plans and signs exactly what the web wallet does. Every trading command prints one JSON document, with documented exit codes, so a script or an AI agent can read the book, place and cancel orders and follow fills. The read API needs no key.',
   'landing.bots.cli': 'Command line →',
   'landing.bots.api': 'Read API →',
+  'landing.bots.mcp': 'MCP server for AI agents →',
   'landing.bots.head': 'Terminal',
   'landing.bots.json': '--json',
   'landing.bots.aria': 'Example kob commands for a bot',

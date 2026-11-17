@@ -6,7 +6,7 @@
 //   * the creation record kept exactly while the genesis may still be missing (a declined second approval, a reload, a refused genesis), and
 //     finished later: with no signature when the genesis was signed, with one when it was not; a v1 record still resumes.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { finishCreation, resumeCreation, signAndSubmitCreation, CREATION_SPENT } from './create';
+import { finishCreation, resumeCreation, signAndSubmitCreation, CREATION_INVALID, CREATION_SPENT } from './create';
 import { SignFlowError, type SignStage } from './sign';
 import { createKaswareAdapter } from './kasware';
 import { createKaspireAdapter } from './kaspire';
@@ -16,7 +16,7 @@ import { fakeKaspire, fakeKasware, laggingWalletNode, type FakeWalletNode } from
 import { MockNode } from '../testing/mock-node';
 import { loadKaspaSdkNode } from '../data/kaspa-sdk.node';
 import { spkStringToAddress } from '../data/kaspa-sdk';
-import { MAKER_PK, MAKER_SK } from '../testing/token-fixtures';
+import { MAKER_PK, MAKER_SK, OTHER_PK } from '../testing/token-fixtures';
 import { kob } from '../testing/wallet-fixtures';
 import { signBuilt } from '../testing/local-signer';
 import { emptyIssueForm, planIssue, type IssuePlan } from '../kob/issue';
@@ -81,7 +81,7 @@ const args = (s: ReturnType<typeof setup>, adapter: WalletAdapter) => ({
 });
 
 const finishArgs = (s: ReturnType<typeof setup>, adapter: WalletAdapter, rec: CreationRecord) => ({
-  kob, node: s.node, adapter, network: NET, rec, addressOf, storage: s.storage, sleep: async () => undefined,
+  kob, node: s.node, adapter, network: NET, maker: MAKER_PK, rec, addressOf, storage: s.storage, sleep: async () => undefined,
 });
 
 const onlyRecord = (s: ReturnType<typeof setup>): CreationRecord => {
@@ -399,5 +399,80 @@ describe('signAndSubmitCreation: an extension wallet that checks its inputs on i
     const txid = await finishCreation(finishArgs(s, kasware(s).adapter, rec));
     expect(txid).toBe(s.plan.built.tx.id);
     expect(listCreations(NET, MAKER_PK, s.storage)).toEqual([]);
+  });
+});
+
+describe('finishCreation: the record is untrusted (M4), its stored genesis is never signed', () => {
+  /** a declined genesis: an unsigned record, the preparation on chain */
+  async function declined() {
+    const s = setup();
+    const w = kasware(s);
+    const sign = w.provider.signPskt.bind(w.provider);
+    let n = 0;
+    w.provider.signPskt = async (req) => (++n === 2 ? Promise.reject({ code: 4001, message: 'User rejected the request.' }) : sign(req));
+    await signAndSubmitCreation(args(s, w.adapter)).catch(() => undefined);
+    return { s, w, rec: onlyRecord(s) };
+  }
+  const tampered = async (edit: (r: CreationRecord) => void) => {
+    const { s, w, rec } = await declined();
+    const bad = JSON.parse(JSON.stringify(rec)) as CreationRecord;
+    edit(bad);
+    const before = w.signs();
+    const e = (await finishCreation(finishArgs(s, w.adapter, bad)).catch((x) => x)) as SignFlowError;
+    expect(e).toBeInstanceOf(SignFlowError);
+    expect(e.code).toBe(CREATION_INVALID);
+    expect(e.message).toMatch(/not valid .*Nothing was signed or sent/);
+    expect(w.signs()).toBe(before);
+    expect(s.node.submissions).toHaveLength(1); // the preparation of the real creation only
+    return e;
+  };
+  const attacker = '000020' + OTHER_PK + 'ac';
+
+  it('a valid record passes and signs the plan made again, not the stored one', async () => {
+    const { s, w, rec } = await declined();
+    // a stored plan with a dropped signing request would not matter: it is not what is signed
+    rec.genesisBuilt!.sign = [];
+    const txid = await finishCreation(finishArgs(s, w.adapter, rec));
+    expect(txid).toBe(s.plan.built.tx.id);
+    expect(s.node.submissions.map((t) => t.id)).toEqual([s.plan.prep.tx.id, s.plan.built.tx.id]);
+  });
+
+  it('a changed output of the stored genesis is refused', async () => {
+    await tampered((r) => {
+      r.genesisBuilt!.tx.outputs[0]!.scriptPublicKey = attacker;
+    });
+  });
+
+  it('an extra input of the stored genesis is refused', async () => {
+    await tampered((r) => {
+      const extra = { ...r.genesisBuilt!.tx.inputs[0]!, transactionId: 'ee'.repeat(32), index: 0 };
+      r.genesisBuilt!.tx.inputs.push(extra);
+      r.genesisBuilt!.tx.outputs.push({ value: '100000000', scriptPublicKey: attacker, covenant: null });
+    });
+  });
+
+  it('a swapped genesis (the coin of the first step to another key, its own id) is refused', async () => {
+    await tampered((r) => {
+      const g = r.genesisBuilt!;
+      g.tx.outputs = [{ value: r.prep.outputs[0]!.value, scriptPublicKey: attacker, covenant: null }];
+      g.tx.id = 'dd'.repeat(32);
+      r.genesisTxid = g.tx.id;
+    });
+  });
+
+  it('a holder changed to another key in the saved token is refused', async () => {
+    await tampered((r) => {
+      r.token.outputs[0]!.owner = OTHER_PK;
+    });
+  });
+
+  it('a first step that is not a token declaration, or of another wallet, is refused', async () => {
+    await tampered((r) => {
+      r.prep.payload = '00';
+    });
+    const e = await tampered((r) => {
+      r.maker = OTHER_PK;
+    });
+    expect(e.message).toMatch(/another wallet/);
   });
 });

@@ -116,3 +116,20 @@ describe('the cost preview', () => {
     expect(costPreview({ ...base, book: tipped, intent: market('sell', 3n * TOK) })).toMatchObject({ estimate: 27n * KAS / 10n });
   });
 });
+
+describe('an order filled from the book (a take)', () => {
+  const take = (o: Partial<import('../../kob/plan-types').TakeFacts>): import('../../kob/plan-types').TakeFacts => ({
+    side: 'buy', token: 'aa', restKind: 'limit', limit: 2n * KAS + KAS / 2n, scale: SCALE, steps: [{ fills: [], amount: 3n * TOK, kas: 6n * KAS }],
+    amount: 3n * TOK, kas: 6n * KAS, fee: KAS / 100n, bound: 0n, total: { amount: 3n * TOK, kas: 6n * KAS }, rest: 2n * TOK, restPlan: null, tokenCarrier: 0n, ...o,
+  });
+  it('a limit: the takes at the resting prices plus the rest at the limit and the fees; the max is all at the limit', () => {
+    const p = costPreview({ ...base, intent: limit('buy', 5n * TOK, 2n * KAS + KAS / 2n), take: take({}) });
+    // 6 KAS taken + 2 x 2.5 rest + 0.01 fee; the max: 5 x 2.5 + 0.01
+    expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 11n * KAS + KAS / 100n, bound: 12n * KAS + KAS / 2n + KAS / 100n });
+  });
+  it('an IOC or market order: what is taken; a rest that is not placed is a thin book', () => {
+    const all = costPreview({ ...base, intent: market('buy', 3n * TOK), take: take({ restKind: 'none', rest: 0n }) });
+    expect(all).toEqual({ kind: 'cost', side: 'buy', estimate: 6n * KAS + KAS / 100n, bound: 7n * KAS + KAS / 2n + KAS / 100n });
+    expect(costPreview({ ...base, intent: market('buy', 5n * TOK), take: take({ restKind: 'none' }) })).toEqual({ kind: 'thin', covers: 3n * TOK });
+  });
+});

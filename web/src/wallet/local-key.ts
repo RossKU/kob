@@ -6,9 +6,9 @@
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import { normalizeNetwork, pubkeyToAddress, type KaspaSdk } from '../data/kaspa-sdk';
 import type { RegistryRow } from '../signer/table';
-import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type SignerNote, type TokenHint } from '../signer/protocol';
+import { toSigner, parseSignerMessage, type AppToSigner, type GenesisClaim, type RejectReason, type SignerCap, type SignerNote, type TokenHint } from '../signer/protocol';
 import { SIGN_TIMEOUT_MS } from './sigs';
-import { WalletError, type SignOptions, type WalletAdapter, type WalletInfo } from './types';
+import { WalletError, type SignOptions, type SigningSession, type WalletAdapter, type WalletInfo } from './types';
 
 /** The wallet label shown for the private-key signer. */
 export const LOCAL_KEY_LABEL = 'Private key';
@@ -49,6 +49,16 @@ interface Waiting {
    * back too.
    */
   prep?: BuiltTx;
+  /** a step of this session: the frame is shown only when it asks (the session ended, or RETIME_SHOW_MS passed) */
+  session?: string;
+}
+
+/** A session plan waiting for the user's approval in the frame. */
+interface Opening {
+  id: string;
+  resolve(s: SigningSession | null): void;
+  reject(e: WalletError): void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -74,6 +84,13 @@ const REJECT_TEXT: Record<RejectReason, [WalletError['code'], string]> = {
 export class SignerHost {
   private pub: Hex | null = null;
   private waiting: Waiting | null = null;
+  private opening: Opening | null = null;
+  /** what the frame announced it can do (`hello`) */
+  private caps = new Set<SignerCap>();
+  /** the session the frame opened and has not closed, as far as this side knows */
+  private live: string | null = null;
+  /** sessions the frame ended before their plan was through */
+  private closedEarly = new Set<string>();
   private seq = 0;
   /** The id of the request the frame signed last, which is what a re-timed request names. */
   private lastSigned: string | null = null;
@@ -99,12 +116,40 @@ export class SignerHost {
     const m = parseSignerMessage(data);
     if (!m) return;
     switch (m.type) {
+      case 'hello':
+        this.caps = new Set(m.caps);
+        return;
+      case 'session-opened': {
+        const o = this.opening;
+        // a session this side no longer waits for (timed out, cancelled, another request): closed at once, so it is never usable
+        if (o?.id !== m.id) {
+          this.post(toSigner({ type: 'session-close', sid: m.sid }));
+          return;
+        }
+        this.live = m.sid;
+        this.settleOpen(() => o.resolve({ sid: m.sid, txs: m.txs, feeMax: BigInt(m.feeMax), expiresInMs: m.expiresInMs }));
+        return;
+      }
+      case 'session-closed':
+        if (this.live === m.sid) {
+          this.live = null;
+          if (m.reason !== 'done') this.closedEarly.add(m.sid);
+        }
+        // a step of the ended session now asks the user: the frame is shown at once
+        if (this.waiting?.session === m.sid && this.waiting.show !== undefined) {
+          clearTimeout(this.waiting.show);
+          this.waiting.show = undefined;
+          this.events.onRequest?.(true);
+        }
+        return;
       case 'connected':
         this.pub = m.pubkey;
         this.events.onConnected?.(m.pubkey);
         return;
       case 'forgotten':
         this.pub = null;
+        this.live = null;
+        this.settleOpen((o) => o.reject(new WalletError('other', 'The private key signer forgot its key.')));
         this.settle(null, new WalletError('other', 'The private key signer forgot its key.'));
         this.events.onForgotten?.();
         return;
@@ -132,6 +177,13 @@ export class SignerHost {
         }
         return;
       case 'rejected': {
+        const o = this.opening;
+        if (o?.id === m.id) {
+          // rejected by the user: the run ends; refused as not a merge plan, or busy: the run asks once per transaction
+          if (m.reason === 'user' || m.reason === 'cancelled') this.settleOpen(() => o.reject(new WalletError('rejected', REJECT_TEXT[m.reason][1])));
+          else this.settleOpen(() => o.resolve(null));
+          return;
+        }
         if (this.waiting?.id !== m.id) return;
         const [code, text] = REJECT_TEXT[m.reason];
         this.settle(null, new WalletError(code, text));
@@ -140,6 +192,52 @@ export class SignerHost {
       default:
         return;
     }
+  }
+
+  private settleOpen(then: (o: Opening) => void): void {
+    const o = this.opening;
+    if (!o) return;
+    this.opening = null;
+    clearTimeout(o.timer);
+    this.events.onRequest?.(false);
+    then(o);
+  }
+
+  /** Whether the frame announced `cap`. */
+  supports(cap: SignerCap): boolean {
+    return this.caps.has(cap);
+  }
+
+  /**
+   * Shows the merge plan `plan` in the frame for one approval. Resolves with the session the frame opened, or null when the frame does not
+   * hold sessions or refuses this plan (then each transaction is approved on its own); rejects `rejected` when the user rejects it.
+   */
+  openSession(plan: BuiltTx[], tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS): Promise<SigningSession | null> {
+    if (!this.supports('merge-session')) return Promise.resolve(null);
+    if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
+    if (this.waiting || this.opening) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
+    const id = `s${Date.now().toString(36)}${(++this.seq).toString(36)}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.post(toSigner({ type: 'cancel', id }));
+        this.settleOpen((o) => o.reject(new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`)));
+      }, timeoutMs);
+      this.opening = { id, resolve, reject, timer };
+      this.events.onRequest?.(true);
+      this.post(toSigner({ type: 'session-open', id, plan, tokens, ...this.table() }));
+    });
+  }
+
+  /** Whether the frame ended the session `sid` before its plan was through (a step off the plan, expiry, a rejection), not when done. */
+  endedEarly(sid: string): boolean {
+    return this.closedEarly.has(sid);
+  }
+
+  /** Ends the session `sid` in the frame (the run is over). */
+  closeSession(sid: string): void {
+    if (this.live !== sid) return;
+    this.live = null;
+    this.post(toSigner({ type: 'session-close', sid }));
   }
 
   private settle(sigs: InputSignature[] | null, err: WalletError | null, prep?: InputSignature[]): void {
@@ -160,7 +258,7 @@ export class SignerHost {
    */
   signChain(prep: BuiltTx, built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, genesis?: GenesisClaim): Promise<{ prep: InputSignature[]; built: InputSignature[] }> {
     if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
-    if (this.waiting) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
+    if (this.waiting || this.opening) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
     const id = `r${Date.now().toString(36)}${(++this.seq).toString(36)}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -180,22 +278,24 @@ export class SignerHost {
    * Asks the frame to show `built` and sign it once the user approves there. `retime` marks a
    * request that re-times the one signed last (retime.ts).
    */
-  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, retime = false, notes: SignerNote[] = []): Promise<InputSignature[]> {
+  sign(built: BuiltTx, tokens: TokenHint[], timeoutMs = SIGN_TIMEOUT_MS, retime = false, notes: SignerNote[] = [], session?: string): Promise<InputSignature[]> {
     if (!this.pub) return Promise.reject(new WalletError('other', 'The private key signer holds no key: connect again.'));
-    if (this.waiting) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
+    if (this.waiting || this.opening) return Promise.reject(new WalletError('other', 'The private key signer is busy with another request.'));
     const id = `r${Date.now().toString(36)}${(++this.seq).toString(36)}`;
     return new Promise<InputSignature[]>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.post(toSigner({ type: 'cancel', id }));
         this.settle(null, new WalletError('timeout', `Private key signer: no answer after ${Math.round(timeoutMs / 1000)}s.`));
       }, timeoutMs);
-      const retimeOf = retime && this.lastSigned ? this.lastSigned : undefined;
-      this.waiting = { id, resolve, reject, timer, shown: new Map([[built.tx.id, built]]) };
-      // A re-timed request is signed without a prompt when nothing got worse, so the frame is shown
-      // only if it is still waiting by then.
-      if (retimeOf) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
+      // a step of the live session only: once the frame closed it, a step is an ordinary request
+      const sid = session !== undefined && session === this.live ? session : undefined;
+      const retimeOf = !sid && retime && this.lastSigned ? this.lastSigned : undefined;
+      this.waiting = { id, resolve, reject, timer, shown: new Map([[built.tx.id, built]]), ...(sid ? { session: sid } : {}) };
+      // A re-timed request or a session step is signed without a prompt when the frame's check passes, so the frame is shown only if it is
+      // still waiting by then (a session step at once when the frame ends the session).
+      if (retimeOf || sid) this.waiting.show = setTimeout(() => this.waiting?.id === id && this.events.onRequest?.(true), RETIME_SHOW_MS);
       else this.events.onRequest?.(true);
-      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(notes.length > 0 ? { notes } : {}), ...(retimeOf ? { retimeOf } : {}) }));
+      this.post(toSigner({ type: 'sign', id, built, tokens, ...this.table(), ...(!sid && notes.length > 0 ? { notes } : {}), ...(retimeOf ? { retimeOf } : {}), ...(sid ? { session: sid } : {}) }));
     });
   }
 
@@ -232,6 +332,12 @@ export class SignerHost {
    * rejection.
    */
   cancel(): void {
+    const o = this.opening;
+    if (o) {
+      this.post(toSigner({ type: 'cancel', id: o.id }));
+      this.settleOpen(() => o.reject(new WalletError('rejected', 'The signing request was cancelled.')));
+      return;
+    }
     const w = this.waiting;
     if (!w) return;
     this.post(toSigner({ type: 'cancel', id: w.id }));
@@ -245,6 +351,8 @@ export class SignerHost {
   forget(): void {
     this.post(toSigner({ type: 'forget' }));
     this.pub = null;
+    this.live = null;
+    this.settleOpen((o) => o.reject(new WalletError('other', 'The private key signer was disconnected.')));
     this.settle(null, new WalletError('other', 'The private key signer was disconnected.'));
   }
 }
@@ -309,6 +417,17 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       }
       return [sigs.prep, sigs.built];
     },
+    canOpenSession: () => deps.host()?.supports('merge-session') === true,
+    async openSession(plan: BuiltTx[], opts: { timeoutMs?: number } = {}): Promise<SigningSession | null> {
+      const host = deps.host();
+      const pubkey = pub();
+      if (!host || plan.length === 0) return null;
+      if (plan.some((b) => b.sign.some((s) => s.pubkey !== pubkey))) throw new WalletError('other', 'This transaction asks for a signature of another key.');
+      host.registryTable = deps.registryTable?.();
+      return host.openSession(plan, deps.tokenHints?.(plan[0]!) ?? [], opts.timeoutMs);
+    },
+    closeSession: (sid: string) => deps.host()?.closeSession(sid),
+    sessionEnded: (sid: string) => deps.host()?.endedEarly(sid) === true,
     async signTx(built: BuiltTx, opts: SignOptions = {}): Promise<InputSignature[]> {
       const host = deps.host();
       const pubkey = pub();
@@ -318,7 +437,7 @@ export function createLocalKeyAdapter(deps: LocalKeyDeps): WalletAdapter {
       // it.
       if (opts.clockDaa !== undefined) host.clock(opts.clockDaa);
       host.registryTable = deps.registryTable?.();
-      const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true, opts.signerNotes);
+      const pending = host.sign(built, deps.tokenHints?.(built) ?? [], opts.timeoutMs, opts.retime === true, opts.signerNotes, opts.session);
       opts.live?.attach({ replace: (b) => host.update(b, deps.tokenHints?.(b) ?? []), clock: (daa) => host.clock(daa) });
       const sigs = await pending;
       // The transaction signed: the request, or the update of it that the frame showed last.

@@ -105,10 +105,11 @@ export const SIGNING_ISSUE_CODES = [
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
   'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
+  'take-amount', 'take-price', 'take-orders', 'take-token',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
-  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed',
+  'payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills',
 ] as const;
 /** The code of a signing finding. */
 export type SigningIssueCode = (typeof SIGNING_ISSUE_CODES)[number];
@@ -120,7 +121,7 @@ const LEVEL: Record<SigningIssueCode, IssueLevel> = Object.fromEntries(
     c,
     (['inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records'] as string[]).includes(c)
       ? 'warning'
-      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed'] as string[]).includes(c)
+      : (['payment-expected', 'transfer-expected', 'strays-swept', 'other-strays-swept', 'kas-released', 'trigger-evidence', 'swept-in-place', 'bought-claimed', 'take-fills'] as string[]).includes(c)
         ? 'info'
         : 'blocking',
   ]),
@@ -195,7 +196,11 @@ export interface DecodedOutput {
   index: number;
   /** KAS on the output UTXO, sompi */
   value: bigint;
-  kind: 'order' | 'custody' | 'token-change' | 'token-out' | 'kas-change' | 'payment-out' | 'unknown-covenant' | 'unknown';
+  /**
+   * `fill-payout`: what a resting order this tx fills is due (an ask's maker paid, a bid's maker's
+   * tokens delivered); `fill-continue`: the rest of such an order (its continuation, its custody)
+   */
+  kind: 'order' | 'custody' | 'token-change' | 'token-out' | 'kas-change' | 'payment-out' | 'fill-payout' | 'fill-continue' | 'unknown-covenant' | 'unknown';
   flagged: boolean;
   order: null | { covenantId: Hex; description: OrderDescription; verified: boolean; locked: LockedKas; deadline: bigint | null };
   token: null | { ref: TokenRef; amount: bigint; owner: Hex; ownerScheme: number; escrowOf: Hex | null };
@@ -397,7 +402,35 @@ export interface NetEffects {
  * `sweep` is the maker's sweep of an order's strays in place. The order continues unchanged and
  * only strays move.
  */
-export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'other';
+export type SigningKind = 'create' | 'cancel' | 'cancel-replace' | 'cancel-position' | 'refund' | 'send' | 'sweep' | 'claim' | 'claim-merge' | 'claim-place' | 'take' | 'other';
+
+/** A resting order of another key that this transaction fills, the wallet being the taker. */
+export interface DecodedTakeFill {
+  input: number;
+  covenantId: Hex | null;
+  /** the resting order's side */
+  side: 'ask' | 'bid';
+  maker: Hex;
+  /** base units filled (its entry's `n`) */
+  amount: bigint;
+  price: bigint;
+  tip: bigint;
+}
+
+/** What a take does: the resting orders it fills and the wallet's trade. */
+export interface DecodedTake {
+  /** the wallet's side: buy takes asks, sell takes bids */
+  side: 'buy' | 'sell';
+  ref: TokenRef;
+  fills: DecodedTakeFill[];
+  /** base units filled in all */
+  amount: bigint;
+  /** KAS the wallet pays (buy) or gets (sell) for them, the network fee left out (its net KAS) */
+  kas: bigint;
+  /** sompi per whole token on average (kas x scale / amount), null for nothing filled */
+  avgPrice: bigint | null;
+  scale: bigint;
+}
 
 /** The decoded transaction: what it spends, what it creates and every finding. */
 export interface SigningSummary {
@@ -412,6 +445,8 @@ export interface SigningSummary {
   spends: DecodedSpend[];
   /** orders this tx arms or trails, with their trigger evidence (also on their `spends` entry) */
   triggers: DecodedTrigger[];
+  /** the wallet takes resting orders of other keys (a crossing order filled from the wallet), else null */
+  take: DecodedTake | null;
   payload: { records: PayloadRecord[]; legacy: boolean; note: string | null } | null;
   net: NetEffects;
   /**
@@ -467,6 +502,12 @@ export interface ExpectedSigning {
   transfers?: { pubkey: Hex; amount: bigint; covenantId?: Hex }[];
   /** plain KAS payments to other keys the user asked for (sompi) */
   payments?: { pubkey: Hex; amount: bigint }[];
+  /**
+   * a take (kob/take.ts): the wallet receives (buy) or delivers (sell) exactly `amount` base units of
+   * `token`, pays at most (buy) or gets at least (sell) `bound` KAS for them, the fee left out, and
+   * fills exactly the resting orders `orders` (covenant ids)
+   */
+  take?: { side: 'buy' | 'sell'; token: Hex; amount: bigint; bound: bigint; orders: Hex[] };
 }
 
 /** The inputs of `decodeSigning`: the built tx, what the wallet knows and the planner's claims. */
@@ -610,7 +651,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const add = (code: SigningIssueCode, message: string, extra: Partial<SigningIssue> = {}) => issues.push({ code, severity: LEVEL[code], message, ...extra });
 
   const empty = (): SigningSummary => ({
-    txid: tx.id, kind: 'other', maker, inputs: [], outputs: [], orders: [], spends: [], triggers: [], payload: null,
+    txid: tx.id, kind: 'other', maker, inputs: [], outputs: [], orders: [], spends: [], triggers: [], take: null, payload: null,
     net: { kas: { fromWallet: 0n, fromOthers: 0n, released: 0n, toWallet: 0n, locked: zeroLocked(), toOthers: 0n, fee: 0n, walletDelta: 0n }, tokens: [] },
     fee: { sompi: 0n, declared: 0n, minimum: 0n, formatted: '0', mode: 'relay', mass: { fee: 0, priority: 0, storage: 0 } }, blocking: issues.filter((i) => i.severity === 'blocking'), warnings: [], info: [], ok: false, signatures: 0,
   });
@@ -751,6 +792,35 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (d.signer === maker && !d.willSign) add('unsigned-maker-input', `input ${d.index} needs the wallet's signature but no signature is requested`, { input: d.index });
     if (d.type === 'kas' && d.ownedBy === 'other') add('foreign-input', `input ${d.index} spends KAS of another key (${shortId(d.signer ?? '')}) that this wallet cannot sign`, { input: d.index });
   }
+
+  // ------------------------------------------- takes: resting orders of other keys this tx fills
+  // A plain KobAsk / KobBid of another key spent by its own fill entry (KobAsk.settle, KobBid.fill,
+  // n > 0): the wallet is the taker. Its covenant enforces the fill: what its maker is due, its
+  // continuation and its custody's. Those outputs are the order's, not a payment of the wallet; what
+  // the wallet pays or gets for them is its net effect, checked against `expected.take`.
+  const takeFills: DecodedTakeFill[] = [];
+  for (const d of inputs) {
+    const plan = built.plans[d.index]!;
+    const os = orderStates.get(d.index);
+    if (!os || !d.order || d.order.makerIsWallet || d.order.action !== 'fill' || plan.kind !== 'entry') continue;
+    const k = baseKind(os.kind);
+    if ((k !== 'KobAsk' || plan.entry !== 'settle') && (k !== 'KobBid' || plan.entry !== 'fill')) continue;
+    const n = fillArg(plan.args[0]);
+    if (n === null || n <= 0n) continue;
+    const st = os.state as unknown as Record<string, string>;
+    takeFills.push({ input: d.index, covenantId: d.order.covenantId, side: k === 'KobAsk' ? 'ask' : 'bid', maker: st.maker!.toLowerCase(), amount: n, price: big(st.price), tip: big(st.tip) });
+  }
+  /** covenant ids of the orders taken: their continuations and custodies are theirs */
+  const takenCovs = new Set(takeFills.map((f) => f.covenantId).filter((c): c is Hex => !!c));
+  /** the token the orders taken trade (a take of mixed tokens is refused below): the only token a take moves */
+  const takeToken: Hex | null = takeFills.length ? ((orderStates.get(takeFills[0]!.input)!.state as unknown as Record<string, string>).tokenCovId ?? null) : null;
+  const askMakers = new Set(takeFills.filter((f) => f.side === 'ask').map((f) => f.maker));
+  const bidMakers = new Set(takeFills.filter((f) => f.side === 'bid').map((f) => f.maker));
+  /** inputs that belong to the orders taken (each order and its custody): not the wallet's, not released to it */
+  const takenInputs = new Set<number>([
+    ...takeFills.map((f) => f.input),
+    ...inputs.filter((d) => d.token?.escrowOf && takenCovs.has(d.token.escrowOf)).map((d) => d.index),
+  ]);
 
   // every input's KAS value, script and covenant id must be what the node holds for that outpoint
   if (input.nodeInputs) {
@@ -1117,11 +1187,15 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (unplain) add('token-state-unplain', `output ${j}: the token state carries ${unplain}: tokens with these features could be moved by someone else`, { output: j });
       if (isCovenantOwned(st)) {
         if (newCovenantIds.has(st.owner)) return { ...blank, kind: 'custody', flagged: !ok, token };
+        // the custody left to an order this tx fills
+        if (takenCovs.has(st.owner) && tok.covenantId === takeToken) return { ...blank, kind: 'fill-continue', flagged: !ok, token };
         add('token-to-unknown-owner', `output ${j}: ${human(ref, token.amount)} would be locked in covenant ${shortId(st.owner)}, which this transaction does not create: the tokens could be lost`, { output: j, params: { owner: st.owner } });
         return { ...blank, kind: 'unknown-covenant', flagged: true, token };
       }
       if (isKeyOwned(st)) {
         if (st.owner === maker) return { ...blank, kind: 'token-change', flagged: !ok, token };
+        // the tokens a bid this tx fills buys, delivered to its maker
+        if (bidMakers.has(st.owner.toLowerCase()) && tok.covenantId === takeToken) return { ...blank, kind: 'fill-payout', flagged: !ok, token, recipient: st.owner };
         const ix = expectedTransfers.findIndex((t) => t.pubkey === st.owner && t.amount === token.amount && (!t.covenantId || t.covenantId === tok.covenantId));
         if (ix >= 0) {
           expectedTransfers.splice(ix, 1);
@@ -1137,6 +1211,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     const pk = p2pkOwner(out.scriptPublicKey);
     if (pk && !out.covenant) {
       if (pk === maker) return { ...blank, kind: 'kas-change' };
+      // what an ask this tx fills is due, paid to its maker
+      if (askMakers.has(pk)) return { ...blank, kind: 'fill-payout', recipient: pk };
       const ix = expectedPayments.findIndex((p) => p.pubkey === pk && p.amount === value);
       if (ix >= 0) {
         expectedPayments.splice(ix, 1);
@@ -1146,6 +1222,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       add('payment-out', `output ${j}: ${formatKas(value)} KAS would be PAID to another key (${shortId(pk)})`, { output: j, params: { recipient: pk, amount: value } });
       return { ...blank, kind: 'payment-out', flagged: true, recipient: pk };
     }
+    // the continuation of an order this tx fills (bound to its covenant id, which its covenant checks)
+    if (out.covenant && takenCovs.has(out.covenant.covenantId) && P2SH_RE.test(out.scriptPublicKey)) return { ...blank, kind: 'fill-continue' };
     add('output-unknown', `output ${j}: ${formatKas(value)} KAS would go to a script this app cannot identify${out.covenant ? ' (a covenant output)' : ''}`, { output: j });
     return { ...blank, kind: out.covenant ? 'unknown-covenant' : 'unknown', flagged: true };
   }
@@ -1643,7 +1721,10 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const sum = (xs: bigint[]): bigint => xs.reduce((a, b) => a + b, 0n);
   const fromWallet = sum(inputs.filter((d) => d.ownedBy === 'maker').map((d) => d.amount));
   const fromOthers = sum(inputs.filter((d) => d.ownedBy === 'other').map((d) => d.amount));
-  const released = sum(inputs.filter((d) => d.ownedBy === 'covenant').map((d) => d.amount));
+  const released = sum(inputs.filter((d) => d.ownedBy === 'covenant' && !takenInputs.has(d.index)).map((d) => d.amount));
+  /** KAS of the orders taken and their custodies: theirs, in and out */
+  const takenKasIn = sum(inputs.filter((d) => takenInputs.has(d.index)).map((d) => d.amount));
+  const takenKasOut = sum(outputs.filter((o) => o.kind === 'fill-payout' || o.kind === 'fill-continue').map((o) => o.value));
   const toWallet = sum(outputs.filter((o) => o.kind === 'kas-change' || o.kind === 'token-change').map((o) => o.value));
   const toOthers = sum(outputs.filter((o) => ['payment-out', 'token-out', 'unknown-covenant', 'unknown'].includes(o.kind)).map((o) => o.value));
   let locked = zeroLocked();
@@ -1656,7 +1737,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const declaredFee = big(built.fee.fee);
   const minimumFee = big(built.fee.minFee);
   if (derivedFee !== declaredFee) add('fee-mismatch', `the inputs minus the outputs leave a fee of ${formatKas(derivedFee)} KAS but the builder reports ${formatKas(declaredFee)} KAS`, { params: { derived: derivedFee, declared: declaredFee } });
-  const moved = locked.total + released + toOthers;
+  const moved = locked.total + released + toOthers + (takenKasOut > takenKasIn ? takenKasOut - takenKasIn : takenKasIn - takenKasOut);
   const policy = input.feePolicy;
   const dynamic = !!policy && policy.dynamic;
   if (policy) {
@@ -1697,7 +1778,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     if (inSum !== outSum) add('token-unbalanced', `${ref.display}: on-chain amount ${inSum} goes in but ${outSum} comes out: tokens would be created or destroyed`, { params: { in: inSum, out: outSum } });
     if (!ref.tradable && ins.length + outs.length > 0) warnToken(id);
     const fw = sum(ins.filter((d) => d.ownedBy === 'maker').map((d) => d.token!.amount));
-    const rel = sum(ins.filter((d) => d.ownedBy === 'covenant').map((d) => d.token!.amount));
+    const rel = sum(ins.filter((d) => d.ownedBy === 'covenant' && !takenInputs.has(d.index)).map((d) => d.token!.amount));
     const toMaker = sum(outs.filter((o) => o.kind === 'token-change').map((o) => o.token!.amount));
     const esc = sum(outs.filter((o) => o.kind === 'custody').map((o) => o.token!.amount));
     const oth = sum(outs.filter((o) => o.kind === 'token-out' || o.kind === 'unknown-covenant').map((o) => o.token!.amount));
@@ -1708,7 +1789,53 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
     });
   }
 
+  // ---------------------------------------------------------------- the take
+  let take: DecodedTake | null = null;
+  if (takeFills.length) {
+    const first = orderStates.get(takeFills[0]!.input)!;
+    const fs0 = first.state as unknown as Record<string, string>;
+    const tokenId = fs0.tokenCovId!;
+    const scale = big(fs0.scale);
+    const side: 'buy' | 'sell' = takeFills[0]!.side === 'ask' ? 'buy' : 'sell';
+    // one take trades one token at one scale, on one side
+    const mixed = takeFills.some((f) => {
+      const x = orderStates.get(f.input)!.state as unknown as Record<string, string>;
+      return x.tokenCovId !== tokenId || big(x.scale) !== scale || (f.side === 'ask' ? 'buy' : 'sell') !== side;
+    });
+    if (mixed) add('take-orders', 'the orders this transaction fills trade different tokens, scales or sides: a take fills one side of one book');
+    // a take moves its own token only: no other token of the wallet goes in, none of any other token comes out
+    for (const d of inputs) {
+      if (d.token && d.token.ref.covenantId !== tokenId) add('take-token', `input ${d.index}: a take of ${shortId(tokenId)} spends tokens of ${shortId(d.token.ref.covenantId)}`, { input: d.index, params: { token: d.token.ref.covenantId } });
+    }
+    for (const o of outputs) {
+      if (o.token && o.token.ref.covenantId !== tokenId) add('take-token', `output ${o.index}: a take of ${shortId(tokenId)} moves tokens of ${shortId(o.token.ref.covenantId)}`, { output: o.index, params: { token: o.token.ref.covenantId } });
+    }
+    const amount = takeFills.reduce((a, f) => a + f.amount, 0n);
+    const wd = toWallet - fromWallet;
+    const kas = side === 'buy' ? -wd - derivedFee : wd + derivedFee;
+    take = { side, ref: tokenRef(registry, tokenId), fills: takeFills, amount, kas, avgPrice: amount > 0n ? (kas * scale) / amount : null, scale };
+    add('take-fills', `the wallet ${side === 'buy' ? 'buys' : 'sells'} ${human(take.ref, amount)} from ${takeFills.length} resting order(s) for ${formatKas(kas < 0n ? -kas : kas)} KAS, the fee left out`, { params: { orders: takeFills.length } });
+  }
+
   // ---------------------------------------------------------- expected (planner claims) vs derived
+  if (expected?.take) {
+    const x = expected.take;
+    const tok = tokens.find((t) => t.ref.covenantId === x.token);
+    const got = tok ? (x.side === 'buy' ? tok.walletDelta : -tok.walletDelta) : 0n;
+    if (!take || take.side !== x.side || take.ref.covenantId !== x.token) add('take-orders', `the plan takes resting ${x.side === 'buy' ? 'asks' : 'bids'} of ${shortId(x.token)}, but the transaction does not`);
+    else {
+      const ids = takeFills.map((f) => f.covenantId ?? '').sort().join(',');
+      if (ids !== [...x.orders].sort().join(',')) add('take-orders', `the plan takes ${x.orders.length} order(s), the transaction fills ${takeFills.length} other or more`, { params: { expected: x.orders.length, actual: takeFills.length } });
+      if (take.amount !== x.amount) add('take-amount', `the plan fills on-chain amount ${x.amount}, the transaction's orders fill ${take.amount}`, { params: { expected: x.amount, actual: take.amount } });
+      if (x.side === 'buy' ? take.kas > x.bound : take.kas < x.bound) {
+        add('take-price', `the wallet would ${x.side === 'buy' ? 'pay' : 'get'} ${formatKas(take.kas)} KAS, ${x.side === 'buy' ? 'more' : 'less'} than ${formatKas(x.bound)} KAS at your limit`, { params: { kas: take.kas, bound: x.bound } });
+      }
+    }
+    if (got !== x.amount) add('take-amount', `the wallet would ${x.side === 'buy' ? 'receive' : 'deliver'} on-chain amount ${got} of the token, not the ${x.amount} the plan fills`, { params: { expected: x.amount, actual: got } });
+    if (orders.length || spends.some((sp) => sp.makerIsWallet)) add('take-orders', 'a take creates no order and spends none of your own orders');
+  } else if (take && expected) {
+    add('take-orders', `the transaction fills ${takeFills.length} resting order(s) of other keys, which the plan does not`);
+  }
   if (expected) {
     if (expected.maxFee !== undefined && derivedFee > expected.maxFee) {
       add('expected-max-fee', `the fee ${formatKas(derivedFee)} KAS exceeds the ${formatKas(expected.maxFee)} KAS the plan allowed`, { params: { fee: derivedFee, max: expected.maxFee } });
@@ -1827,7 +1954,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   const refunds = spends.filter((s) => s.action === 'refund');
   const sweptSpends = spends.filter((s) => s.action === 'sweep');
   const tokenOnly = spends.length === 0 && !createdOrders && tokens.length > 0;
-  const kind: SigningKind = claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
+  const kind: SigningKind = claimSpends.length ? (createdOrders ? 'claim-place' : mergesWallet ? 'claim-merge' : 'claim') : placesBought ? 'claim-place' : take && !createdOrders && !cancels.length ? 'take' : createdOrders && cancels.length ? 'cancel-replace' : createdOrders ? 'create' : cancels.length > 1 ? 'cancel-position' : cancels.length === 1 ? 'cancel' : refunds.length ? 'refund' : sweptSpends.length ? 'sweep' : tokenOnly ? 'send' : 'other';
   if (createdOrders && !payload) add('no-order-records', 'orders are created but the payload carries no KOB1 records');
   // an order under a retired template is only cancelled: no replacement, sweep or anything else in
   // the same transaction
@@ -1838,7 +1965,7 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
 
   const severity = (s: IssueLevel) => issues.filter((i) => i.severity === s);
   return {
-    txid: tx.id, kind, maker, inputs, outputs, orders, spends, triggers: [...triggers.values()], payload,
+    txid: tx.id, kind, maker, inputs, outputs, orders, spends, triggers: [...triggers.values()], take, payload,
     net: {
       kas: { fromWallet, fromOthers, released, toWallet, locked, toOthers, fee: derivedFee, walletDelta: toWallet - fromWallet },
       tokens,

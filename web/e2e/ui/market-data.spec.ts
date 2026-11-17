@@ -1,4 +1,4 @@
-// Market data of the token page against the mock indexer's market endpoints (`/v1/trades|candles|stats|depth`): the 24 h stats strip, the
+// Market data of the token page against the mock indexer's market endpoints (`/v1/trades|candles|quotes|stats|depth`): the 24 h stats strip, the
 // candlestick chart with its interval switch, the depth chart, the activity log, price grouping of the book, the theme toggle, and a phone
 // layout without horizontal scroll. The mock seeds a deterministic 48 h price history (`mock.seedHistory`) on top of the default book.
 // `KOB_SHOTS=1` also saves full-page screenshots (dark / light / phone) to test-results/shots/.
@@ -36,6 +36,9 @@ test.describe('market data', () => {
     await expect(chart.locator('canvas').first()).toBeVisible();
     expect(Number(await chart.getAttribute('data-bars'))).toBeGreaterThan(50);
     await expect(page.getByTestId('chart-legend')).toContainText(/0\.02/);
+    // the book's mid line (/v1/quotes) and its read-out in the legend
+    await expect(chart).toHaveAttribute('data-mid', '1');
+    await expect(page.getByTestId('chart-mid')).toContainText(/Mid\s*\d+\.\d+/);
     // the TradingView attribution stays on the chart and in the footer
     await expect(chart.locator('a[href*="tradingview.com"]')).toHaveCount(1);
     await expect(page.getByTestId('footer-chart-notice')).toContainText('TradingView');

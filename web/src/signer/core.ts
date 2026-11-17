@@ -6,8 +6,9 @@
 import type { KaspaSdk, SdkPrivateKey } from '../data/kaspa-sdk';
 import type { BuiltTx, Hex, InputSignature } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
-import { toApp, type AppToSigner, type RejectReason, type SignerNote, type SignerToApp, type TokenHint } from './protocol';
-import { creationSummary, summarize, type SignerSummary } from './summary';
+import { toApp, type AppToSigner, type RejectReason, type SessionCloseReason, type SignerNote, type SignerToApp, type TokenHint } from './protocol';
+import { creationSummary, sessionSummary, summarize, type SignerSummary } from './summary';
+import { admitStep, mergeFacts, openState, recordStep, sessionTerms, stepsLeft, type MergeFacts, type SessionState, type SessionTerms } from './session';
 import { RETIME_MAX_COUNT, RETIME_WINDOW_MS, sameOrBetter } from './retime';
 import type { RegistryRow } from './table';
 import { trustedHints } from './trusted-hints';
@@ -41,14 +42,20 @@ export interface PendingRequest {
   notes: SignerNote[];
   /** a token creation: the KCC-23 preparation `built` spends output 0 of, signed with it on the one approval */
   prep?: BuiltTx;
+  /** a merge plan to allow once (session.ts): the terms this frame derived from it; Approve signs nothing, it opens the session */
+  session?: SessionTerms;
 }
 
 export interface SignerCoreDeps {
   sdk: KaspaSdk;
   kob: KobWasm;
   post(m: SignerToApp): void;
-  /** ms clock (tests) */
+  /** ms clock (tests; the page passes its monotonic clock): re-time windows and session expiry */
   now?: () => number;
+  /** wall clock in ms (tests): a session also expires on it */
+  wallNow?: () => number;
+  /** random bytes for a session id (tests) */
+  random?: (n: number) => Uint8Array;
   /** the hash of the registry table pinned into this bundle (table.ts); without it every registry hint is shown as unverified */
   registryHash?: string;
 }
@@ -71,6 +78,8 @@ export interface SignerCore {
   /** signs the pending request `id` (ONLY from the user's click in the signer page); posts `signed`, or `rejected` when it cannot */
   approve(id: string): boolean;
   reject(id: string, reason?: RejectReason): void;
+  /** the live session (tests and the page): its id, the transactions it still covers and when it expires */
+  session(): { sid: string; left: number; expiresAt: number } | null;
 }
 
 const KEY_TEXT = /^(?:0x)?([0-9a-fA-F]{64})$/;
@@ -86,7 +95,16 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
   // `summary` is what the USER approved (never a re-timed one: each re-time is compared with it, so small differences cannot add up over many re-times); `retimes` how many
   // transactions were signed without asking on this approval
   let approved: { id: string; summary: SignerSummary; at: number; retimes: number } | null = null;
+  // the one-approval merge session the user allowed (session.ts), in this closure only: never stored, never sent
+  let session: SessionState | null = null;
   const now = deps.now ?? Date.now;
+  const wallNow = deps.wallNow ?? Date.now;
+  const random = deps.random ?? ((n: number) => crypto.getRandomValues(new Uint8Array(n)));
+
+  const endSession = (reason: SessionCloseReason) => {
+    if (session) post(toApp({ type: 'session-closed', sid: session.sid, reason }));
+    session = null;
+  };
 
   const drop = (reason: RejectReason) => {
     if (pending) post(toApp({ type: 'rejected', id: pending.id, reason }));
@@ -103,7 +121,8 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
     pub = null;
   };
 
-  const sign = (built: BuiltTx): InputSignature[] => {
+  /** signs `built`: the signatures, and the id kob-wasm's finalize gives the signed transaction (what the node will name it) */
+  const signWithId = (built: BuiltTx): { sigs: InputSignature[]; txid: Hex } => {
     // the SDK computes each digest from the transaction itself; kob-wasm `finalize` then checks them against the request's digests and the
     // script engine runs the result: a request whose digests or scripts do not belong to this transaction is refused, not signed blindly
     const tx = sdk.Transaction.deserializeFromSafeJSON(JSON.stringify(built.tx));
@@ -112,11 +131,14 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       if (!/^41[0-9a-f]{128}01$/.test(push)) throw new Error('unexpected signature encoding');
       return { inputIndex: req.inputIndex, signature: push.slice(2) };
     });
-    kob.validate(kob.finalize(built, sigs, { tightenBudgets: true }));
-    return sigs;
+    const signed = kob.finalize(built, sigs, { tightenBudgets: true });
+    kob.validate(signed);
+    return { sigs, txid: signed.tx.id };
   };
+  const sign = (built: BuiltTx): InputSignature[] => signWithId(built).sigs;
 
   const forget = () => {
+    endSession('forgotten');
     drop('cancelled');
     approved = null;
     free();
@@ -143,6 +165,7 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         next.free?.();
         throw new SignerKeyError();
       }
+      endSession('forgotten');
       drop('cancelled');
       approved = null;
       free();
@@ -164,10 +187,14 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         return null;
       }
       if (m.type === 'clock') return null;
+      if (m.type === 'session-close') {
+        if (session?.sid === m.sid) endSession('closed');
+        return null;
+      }
       if (m.type === 'update') {
         // only the request on screen, until it is approved or rejected; an update this frame cannot read, or for another key, is dropped;
         // a creation is never updated
-        if (!pending || pending.id !== m.id || !pub || pending.prep || m.built.sign.some((s) => s.pubkey !== pub)) return null;
+        if (!pending || pending.id !== m.id || !pub || pending.prep || pending.session || m.built.sign.some((s) => s.pubkey !== pub)) return null;
         let next: SignerSummary;
         try {
           next = summarize(kob, m.built, pub, hintsOf(m));
@@ -186,17 +213,51 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
         post(toApp({ type: 'rejected', id: m.id, reason: 'busy' }));
         return null;
       }
+      if (m.type === 'session-open') {
+        // one session at a time: a new plan ends the old session, and it is allowed or not on its own screen
+        endSession('closed');
+        const hints = hintsOf(m);
+        let terms: SessionTerms;
+        let first: SignerSummary;
+        try {
+          if (m.plan.some((b) => b.sign.some((s) => s.pubkey !== pub))) throw new Error('foreign key');
+          const links = m.plan.map((built) => {
+            const s = summarize(kob, built, pub!, hints);
+            const facts = mergeFacts(kob, s.decoded, built, pub!);
+            if ('refused' in facts) throw new Error(facts.refused);
+            return { built, facts, s };
+          });
+          const derived = sessionTerms(links);
+          if ('refused' in derived) throw new Error(derived.refused);
+          terms = derived;
+          first = links[0]!.s;
+        } catch {
+          post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
+          return null;
+        }
+        const summary = sessionSummary(terms, hints, first.decoded);
+        pending = { id: m.id, built: m.plan[0]!, summary, change: 'new', baseline: summary, notes: [], session: terms };
+        return pending;
+      }
+      // a request this frame refuses outright while a session is live ends the session too
+      const endLive = () => {
+        if (session) endSession(m.session !== undefined && m.session === session.sid ? 'refused' : 'closed');
+      };
       // every requested signature must be this key's: the signer never signs for another key's input
       if ([...m.built.sign, ...(m.prep?.sign ?? [])].some((s) => s.pubkey !== pub)) {
+        endLive();
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
       }
       if (m.prep) {
-        // a token creation: the preparation and the genesis checked and shown together (summary.ts `creationSummary`), one approval
+        // a token creation: the preparation and the genesis checked and shown together (summary.ts `creationSummary`), one approval; never a
+        // session step
+        endLive();
         let summary: SignerSummary;
         try {
           summary = creationSummary(kob, m.prep, m.built, pub, hintsOf(m), m.genesis);
         } catch {
+          endLive();
           post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
           return null;
         }
@@ -207,8 +268,42 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       try {
         summary = summarize(kob, m.built, pub, hintsOf(m));
       } catch {
+        endLive();
         post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
         return null;
+      }
+      if (session) {
+        // a step of the session: signed without a prompt only when it is exactly the next link of the plan the user allowed; anything else
+        // (another session id, no session id, any deviation) ends the session and is shown for confirmation as usual
+        const live = session;
+        let facts: MergeFacts | null = null;
+        let why: ReturnType<typeof admitStep> = 'deviates';
+        try {
+          if (m.session === live.sid) {
+            const f = mergeFacts(kob, summary.decoded, m.built, pub);
+            facts = 'refused' in f ? null : f;
+          }
+          why = facts ? admitStep(live, facts, now(), wallNow()) : 'deviates';
+        } catch {
+          // a check that throws refuses: the session ends and the request is shown as usual
+          facts = null;
+          why = 'deviates';
+        }
+        if (facts && why === null) {
+          let signed: { sigs: InputSignature[]; txid: Hex };
+          try {
+            signed = signWithId(m.built);
+          } catch {
+            endSession('refused');
+            post(toApp({ type: 'rejected', id: m.id, reason: 'invalid' }));
+            return null;
+          }
+          recordStep(live, facts, signed.txid);
+          post(toApp({ type: 'signed', id: m.id, txid: m.built.tx.id, signatures: signed.sigs }));
+          if (stepsLeft(live) === 0) endSession('done');
+          return null;
+        }
+        endSession(why === 'expired' ? 'expired' : m.session === undefined ? 'closed' : 'refused');
       }
       const base = m.retimeOf !== undefined && approved && approved.id === m.retimeOf && now() - approved.at <= RETIME_WINDOW_MS && approved.retimes < RETIME_MAX_COUNT ? approved : null;
       if (base && summary.problems === 0 && sameOrBetter(base.summary.decoded, summary.decoded)) {
@@ -229,11 +324,18 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
     },
     pending: () => pending,
     approve(id) {
-      if (!pending || pending.id !== id || !key) return false;
+      if (!pending || pending.id !== id || !key || !pub) return false;
       // a finding the decoder blocks signing on is never signed here, whatever asks: the page's Approve is off for it too (audit 2026-10-29 S2)
       if (pending.summary.problems > 0) return false;
       const req = pending;
       pending = null;
+      if (req.session) {
+        // the user allowed the plan: nothing is signed now; the session id is minted here and binds the steps to this plan, this key, this frame
+        const sid = [...random(16)].map((b) => b.toString(16).padStart(2, '0')).join('');
+        session = openState(sid, pub, req.session, now(), wallNow());
+        post(toApp({ type: 'session-opened', id, sid, txs: req.session.links.length, feeMax: req.session.feeMax.toString(), expiresInMs: req.session.ttlMs }));
+        return true;
+      }
       let sigs: InputSignature[];
       let prepSigs: InputSignature[] | undefined;
       try {
@@ -250,7 +352,11 @@ export function createSignerCore(deps: SignerCoreDeps): SignerCore {
       return true;
     },
     reject(id, reason = 'user') {
-      if (pending?.id === id) drop(reason);
+      if (pending?.id !== id) return;
+      // rejecting any request ends the session (the session screen says so)
+      endSession('rejected');
+      drop(reason);
     },
+    session: () => (session ? { sid: session.sid, left: stepsLeft(session), expiresAt: session.expiresAt } : null),
   };
 }

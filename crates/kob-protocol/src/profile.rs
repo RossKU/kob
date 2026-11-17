@@ -228,6 +228,10 @@ pub enum CompanionRole {
     /// review it), but a mint authority: the genesis check lists it among the minters, with no
     /// allowance, and holds the extension commitment of its mints to the token's one class.
     BridgeMinter,
+    /// A ZK bridge's minter (Kozmic's `BridgeMint`, [`crate::kozmic`]): mints only in a
+    /// transaction that spends the bridge covenant its state names. Treated as a
+    /// [`CompanionRole::BridgeMinter`]; KOB checks neither the bridge nor what backs it.
+    ZkBridgeMinter,
 }
 
 impl CompanionRole {
@@ -240,6 +244,22 @@ impl CompanionRole {
             CompanionRole::Pool => "pool",
             CompanionRole::Vault => "vault",
             CompanionRole::BridgeMinter => "bridge-minter",
+            CompanionRole::ZkBridgeMinter => "zk-bridge-minter",
+        }
+    }
+
+    /// True for a bridge's minter (federated or ZK): an opaque mint authority.
+    pub fn is_bridge_minter(self) -> bool {
+        matches!(self, CompanionRole::BridgeMinter | CompanionRole::ZkBridgeMinter)
+    }
+
+    /// The extension commitment that a bridge minter's state span gives what it mints, read by
+    /// the build's layout; `None` for another role or span.
+    pub fn bridge_mint_extension(self, state: &[u8]) -> Option<[u8; 32]> {
+        match self {
+            CompanionRole::BridgeMinter => crate::kusdt::bridge_mint_extension(state),
+            CompanionRole::ZkBridgeMinter => crate::kozmic::bridge_mint_extension(state),
+            _ => None,
         }
     }
 }
@@ -255,9 +275,9 @@ impl CompanionRole {
 /// - A `decoder` is for a companion whose state KOB reads: the code in [`crate::public_mint`].
 /// - An opaque program is given by `template_hash` and its cut (`prefix_len`, `state_len`,
 ///   `suffix_len`). An instance is recognised by the template hash of its cut. It carries no token
-///   amount and no mint authority, which the reviewer confirms. The exception is a `bridge-minter`,
-///   a mint authority whose extension commitment the genesis check reads
-///   ([`CompanionRole::BridgeMinter`]).
+///   amount and no mint authority, which the reviewer confirms. The exception is a bridge's minter
+///   (`bridge-minter`, `zk-bridge-minter`), a mint authority whose extension commitment the
+///   genesis check reads ([`CompanionRole::is_bridge_minter`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompanionRule {
@@ -708,6 +728,12 @@ impl ProgramProfile {
                         return e(format!(
                             "a bridge-minter companion is kUSDT's BridgeMint, whose state span is one of {:?} bytes",
                             crate::kusdt::BRIDGE_MINT_STATE_LENS
+                        ));
+                    }
+                    if comp.role == CompanionRole::ZkBridgeMinter && l.state_len != crate::kozmic::BRIDGE_MINT_STATE_LEN {
+                        return e(format!(
+                            "a zk-bridge-minter companion is Kozmic's BridgeMint, whose state span is {} bytes",
+                            crate::kozmic::BRIDGE_MINT_STATE_LEN
                         ));
                     }
                 }
@@ -1549,6 +1575,14 @@ mod tests {
             note: None,
         }))
         .contains("kUSDT's BridgeMint"));
+        assert!(bad(&|p| p.genesis.companions.push(CompanionRule {
+            role: CompanionRole::ZkBridgeMinter,
+            decoder: None,
+            template_hash: Some("00".repeat(32)),
+            layout: Some(Layout { prefix_len: 34, state_len: 173, suffix_len: 1 }),
+            note: None,
+        }))
+        .contains("Kozmic's BridgeMint"));
         assert!(bad(&|p| p.genesis.companions.push(CompanionRule {
             role: CompanionRole::Seed,
             decoder: Some("kcc20-public-mint/PublicMint".into()),

@@ -1,8 +1,16 @@
 // Message protocol between the app (parent page) and the private-key signer (signer.html, loaded in an `<iframe sandbox="allow-scripts">`
 // WITHOUT allow-same-origin: an opaque origin, so the app's scripts can read neither its DOM nor its memory).
 //
-//   signer -> app   ready | connected {pubkey} | signed {id, txid, signatures, prepSignatures?} | rejected {id, reason} | forgotten | height {px}
-//   app -> signer   sign {id, built, tokens, notes?, prep?} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//   signer -> app   ready | hello {caps} | connected {pubkey} | signed {id, txid, signatures, prepSignatures?} | rejected {id, reason} | forgotten
+//                   | height {px} | session-opened {id, sid, txs, feeMax, expiresInMs} | session-closed {sid, reason}
+//   app -> signer   sign {id, built, tokens, notes?, prep?, session?} | update {id, built, tokens} | clock {daa} | cancel {id} | forget
+//                   | session-open {id, plan, tokens} | session-close {sid}
+//
+// `session-open`: a merge plan (kob/merge.ts, every link built against provisional outpoints) the private-key signer shows on ONE screen.
+// Once the user allows it there, each `sign` carrying the session id `sid` the frame minted is signed without a prompt while the frame's own
+// decoding finds it to be exactly the next link of that plan (signer/session.ts). Anything else is shown for confirmation as usual and ends
+// the session. The frame announces sessions with `hello {caps: ['merge-session']}` after `ready`: an older frame drops a `sign` with an
+// unknown key, so the app uses sessions only after that announcement.
 //
 // `notes`: the app's non-blocking hints about the order (an order below the minimum value, a price far through the market) as STRUCTURED codes
 // with numbers only (`SignerNote`). The frame renders its own fixed sentences from them, under the app's label, never blocking and never in
@@ -71,8 +79,27 @@ const MAX_NOTE_BPS = 100_000_000;
 
 export type RejectReason = 'user' | 'invalid' | 'no-key' | 'busy' | 'cancelled';
 
+/** What a frame can do beyond the base protocol (`hello`). */
+export type SignerCap = 'merge-session';
+const CAPS: readonly SignerCap[] = ['merge-session'];
+/** Why a session ended. */
+export type SessionCloseReason = 'done' | 'expired' | 'refused' | 'rejected' | 'closed' | 'forgotten';
+const CLOSE_REASONS: readonly SessionCloseReason[] = ['done', 'expired', 'refused', 'rejected', 'closed', 'forgotten'];
+/** the most transactions of a session plan (signer/session.ts SESSION_MAX_TXS) */
+export const MAX_PLAN_TXS = 50;
+/** the largest plan, as JSON characters */
+const MAX_PLAN_JSON = 6_000_000;
+/** a session id: 16 random bytes of the frame, hex */
+const SID = /^[0-9a-f]{32}$/;
+
 export type SignerToApp =
   | { p: typeof SIGNER_PROTOCOL; type: 'ready' }
+  /** what the frame can do beyond the base protocol (sent after `ready`; an older app drops it) */
+  | { p: typeof SIGNER_PROTOCOL; type: 'hello'; caps: SignerCap[] }
+  /** the user allowed the session plan `id`: steps carry `sid`; the rest is display only (the frame derived it and enforces it) */
+  | { p: typeof SIGNER_PROTOCOL; type: 'session-opened'; id: string; sid: string; txs: number; feeMax: string; expiresInMs: number }
+  /** the session `sid` ended: every later request is shown for confirmation */
+  | { p: typeof SIGNER_PROTOCOL; type: 'session-closed'; sid: string; reason: SessionCloseReason }
   | { p: typeof SIGNER_PROTOCOL; type: 'connected'; pubkey: Hex }
   /** `txid`: the transaction signed (the request's, or the update of it the frame showed last); `prepSignatures`: of the request's `prep` */
   | { p: typeof SIGNER_PROTOCOL; type: 'signed'; id: string; txid?: Hex; signatures: InputSignature[]; prepSignatures?: InputSignature[] }
@@ -83,7 +110,11 @@ export type SignerToApp =
 
 export type AppToSigner =
   /** `retimeOf`: the request the user just confirmed, planned again with a later clock: signed without asking again when nothing they approved got worse (retime.ts) */
-  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; notes?: SignerNote[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim }
+  | { p: typeof SIGNER_PROTOCOL; type: 'sign'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[]; notes?: SignerNote[]; retimeOf?: string; prep?: BuiltTx; genesis?: GenesisClaim; session?: string }
+  /** a merge plan to allow on one screen (the frame derives and enforces the terms itself: signer/session.ts) */
+  | { p: typeof SIGNER_PROTOCOL; type: 'session-open'; id: string; plan: BuiltTx[]; tokens: TokenHint[]; registry?: RegistryRow[] }
+  /** the app is done with the session (only ever reduces what the frame may sign) */
+  | { p: typeof SIGNER_PROTOCOL; type: 'session-close'; sid: string }
   /** the same request planned again while the user reads it (a later clock, the market now): shown in its place (core.ts `receive`) */
   | { p: typeof SIGNER_PROTOCOL; type: 'update'; id: string; built: BuiltTx; tokens: TokenHint[]; registry?: RegistryRow[] }
   /** the node's DAA score now (display only: the times of the table are said from it; nothing is signed from it) */
@@ -193,9 +224,9 @@ export function sanitizeNotes(v: unknown): SignerNote[] {
   return out;
 }
 
-const sized = (v: unknown): boolean => {
+const sized = (v: unknown, max = MAX_JSON): boolean => {
   try {
-    return JSON.stringify(v).length <= MAX_JSON;
+    return JSON.stringify(v).length <= max;
   } catch {
     return false;
   }
@@ -206,7 +237,9 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
   if (!isObj(data) || data.p !== SIGNER_PROTOCOL || typeof data.type !== 'string') return null;
   switch (data.type) {
     case 'sign':
-      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'notes', 'retimeOf', 'prep', 'genesis']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry', 'notes', 'retimeOf', 'prep', 'genesis', 'session']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      // a session step is a plain request: never a re-timed one, a creation or one with the app's notes
+      if (data.session !== undefined && (typeof data.session !== 'string' || !SID.test(data.session) || data.retimeOf !== undefined || data.prep !== undefined || data.genesis !== undefined || data.notes !== undefined)) return null;
       if (data.retimeOf !== undefined && (typeof data.retimeOf !== 'string' || !ID.test(data.retimeOf))) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
       if (!sized(data.built) || !isBuiltTx(data.built)) return null;
@@ -222,7 +255,16 @@ export function parseAppMessage(data: unknown): AppToSigner | null {
         ...(notes.length > 0 ? { notes } : {}),
         ...(data.retimeOf !== undefined ? { retimeOf: data.retimeOf as string } : {}), ...(data.prep !== undefined ? { prep: data.prep as BuiltTx } : {}),
         ...(data.genesis !== undefined ? { genesis: data.genesis as GenesisClaim } : {}),
+        ...(data.session !== undefined ? { session: data.session as string } : {}),
       };
+    case 'session-open':
+      if (!hasKeys(data, ['p', 'type', 'id', 'plan', 'tokens', 'registry']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
+      if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
+      if (!Array.isArray(data.plan) || data.plan.length === 0 || data.plan.length > MAX_PLAN_TXS || !sized(data.plan, MAX_PLAN_JSON) || !data.plan.every((b) => sized(b) && isBuiltTx(b))) return null;
+      if (data.registry !== undefined && !isTable(data.registry)) return null;
+      return { p: SIGNER_PROTOCOL, type: 'session-open', id: data.id, plan: data.plan as BuiltTx[], tokens: data.tokens, ...(data.registry !== undefined ? { registry: data.registry as RegistryRow[] } : {}) };
+    case 'session-close':
+      return hasKeys(data, ['p', 'type', 'sid']) && typeof data.sid === 'string' && SID.test(data.sid) ? { p: SIGNER_PROTOCOL, type: 'session-close', sid: data.sid } : null;
     case 'update':
       if (!hasKeys(data, ['p', 'type', 'id', 'built', 'tokens', 'registry']) || typeof data.id !== 'string' || !ID.test(data.id)) return null;
       if (!Array.isArray(data.tokens) || data.tokens.length > 32 || !data.tokens.every(isTokenHint)) return null;
@@ -263,6 +305,17 @@ export function parseSignerMessage(data: unknown): SignerToApp | null {
         ...(prepSignatures ? { prepSignatures } : {}),
       };
     }
+    case 'hello':
+      // the capabilities this app knows; any other is dropped
+      if (!hasKeys(data, ['p', 'type', 'caps']) || !Array.isArray(data.caps) || data.caps.length > 16) return null;
+      return { p: SIGNER_PROTOCOL, type: 'hello', caps: CAPS.filter((c) => (data.caps as unknown[]).includes(c)) };
+    case 'session-opened':
+      if (!hasKeys(data, ['p', 'type', 'id', 'sid', 'txs', 'feeMax', 'expiresInMs']) || typeof data.id !== 'string' || !ID.test(data.id) || typeof data.sid !== 'string' || !SID.test(data.sid)) return null;
+      if (!isIndex(data.txs, MAX_PLAN_TXS + 1) || data.txs === 0 || typeof data.feeMax !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(data.feeMax) || !isIndex(data.expiresInMs, 3_600_001)) return null;
+      return { p: SIGNER_PROTOCOL, type: 'session-opened', id: data.id, sid: data.sid, txs: data.txs, feeMax: data.feeMax, expiresInMs: data.expiresInMs };
+    case 'session-closed':
+      if (!hasKeys(data, ['p', 'type', 'sid', 'reason']) || typeof data.sid !== 'string' || !SID.test(data.sid) || !CLOSE_REASONS.includes(data.reason as SessionCloseReason)) return null;
+      return { p: SIGNER_PROTOCOL, type: 'session-closed', sid: data.sid, reason: data.reason as SessionCloseReason };
     case 'height':
       return hasKeys(data, ['p', 'type', 'px']) && isIndex(data.px, 100_000) ? { p: SIGNER_PROTOCOL, type: 'height', px: data.px } : null;
     case 'rejected':

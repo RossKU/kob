@@ -1,0 +1,10 @@
+{
+  "network": "testnet-10",
+  "node": "ws://127.0.0.1:18210",
+  "kobCli": "C:/kob/kob.exe",
+  "keyFile": "C:/kob/agent.key",
+  "dataDir": "./kob-mcp-data",
+  "mode": "confirm",
+  "limits": { "perTxKas": 50, "perDayKas": 200, "maxFeeKas": 1, "priceBandPct": 25, "launchesPerDay": 3 },
+  "withdrawTo": ["kaspatest:<your primary wallet>"]
+}

@@ -112,6 +112,7 @@ calls! {
     "submitTransactionReplacement" => SubmitTransactionReplacement, SubmitTransactionReplacementRequest, SubmitTransactionReplacementResponse;
     "getFeeEstimate" => GetFeeEstimate, GetFeeEstimateRequest, GetFeeEstimateResponse;
     "getMempoolEntry" => GetMempoolEntry, GetMempoolEntryRequest, GetMempoolEntryResponse;
+    "getSeqCommitLaneProof" => GetSeqCommitLaneProof, GetSeqCommitLaneProofRequest, GetSeqCommitLaneProofResponse;
 }
 
 #[cfg(test)]
@@ -157,6 +158,8 @@ mod tests {
         node_reads::<GetSinkBlueScoreRequest>("getSinkBlueScore", json!({}));
         let r = node_reads::<GetBlockRequest>("getBlock", json!({"hash": H1, "includeTransactions": false}));
         assert_eq!(r, json!({"hash": H1, "includeTransactions": false}));
+        let r = node_reads::<GetSeqCommitLaneProofRequest>("getSeqCommitLaneProof", json!({"blockHash": H1, "laneKey": H1}));
+        assert_eq!(r, json!({"blockHash": H1, "laneKey": H1}));
         let r = node_reads::<GetVirtualChainFromBlockRequest>(
             "getVirtualChainFromBlock",
             json!({"startHash": H1, "includeAcceptedTransactionIds": true, "minConfirmationCount": 10}),
@@ -299,7 +302,18 @@ mod tests {
         // A body shorter than its length is refused, and so is an unknown method.
         assert!(decode("getServerInfo", &[9, 0, 0, 0, 1]).is_err());
         assert!(decode("getPeerAddresses", &body(&sink)).is_err());
-        assert_eq!(METHODS.len(), 11);
+        // The KIP-21 lane proof of the chain proofs (`rpc::proof`) reads back as the node sent it.
+        let proof = GetSeqCommitLaneProofResponse {
+            smt_proof: vec![1, 2, 3],
+            lane: Some(RpcLaneEntry { tip: kaspa_hashes::Hash::from_bytes([0x33; 32]), blue_score: 9 }),
+            payload_and_ctx_digest: kaspa_hashes::Hash::from_bytes([0x44; 32]),
+            parent_seq_commit: kaspa_hashes::Hash::from_bytes([0x55; 32]),
+            inactivity_shortcut: kaspa_hashes::Hash::from_bytes([0x66; 32]),
+        };
+        let v = decode("getSeqCommitLaneProof", &body(&proof)).unwrap();
+        let back: GetSeqCommitLaneProofResponse = serde_json::from_value(v).unwrap();
+        assert_eq!((back.smt_proof, back.lane), (proof.smt_proof, proof.lane));
+        assert_eq!(METHODS.len(), 12);
     }
 
     #[test]

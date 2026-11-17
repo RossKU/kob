@@ -537,6 +537,22 @@ impl<S: ChainSource> ChainSource for Failover<S> {
     fn source_status(&self) -> Option<FailoverStatus> {
         Some(self.status())
     }
+    fn proves_chain(&self) -> bool {
+        self.inner.tiers.iter().all(|t| t.proves_chain())
+    }
+    async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+        self.inner.call(move |s| async move { s.lane_proof(block, lane).await }).await.1
+    }
+    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+        self.inner.call(move |s| async move { s.block(hash, txs).await }).await.1
+    }
+    fn chain_refused(&self, origin: Origin, why: &str) {
+        let t = (origin.tier as usize).min(1);
+        self.inner.tiers[t].chain_refused(Origin { tier: 0, ..origin }, why);
+    }
+    fn cross_check(&self) -> crate::rpc::CrossCheck {
+        self.inner.tiers[self.active()].cross_check()
+    }
 }
 
 #[cfg(test)]

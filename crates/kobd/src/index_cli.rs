@@ -528,8 +528,17 @@ pub fn node_client(cfg: &IndexerConfig) -> Arc<MultiNode<WrpcClient>> {
             "several nodes: bodies from all (checked against the primary), the chain from the primary"
         );
     }
-    Arc::new(MultiNode::new(nodes, verifier))
+    let mut m = MultiNode::new(nodes, verifier).with_policy(cfg.cross_check.policy());
+    if pair {
+        // The referee: a public node of its own, resolved on first use (a contradiction), on a
+        // third host (rpc::multi, rpc::resolver).
+        m = m.with_referee(wrpc(cfg, &crate::rpc::resolver::pseudo(REFEREE_ENTRY), 0));
+    }
+    Arc::new(m)
 }
+
+/// The resolver entry of the referee, far above the numbers `number_resolver_entries` gives.
+pub const REFEREE_ENTRY: usize = 99;
 
 /// The fallback of the node failover: the public Kaspa nodes as a cross-checked pair (`rpc_url =
 /// "resolver"`, with the configuration's fetch settings).

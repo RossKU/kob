@@ -263,7 +263,7 @@ export function OrderRow(props: OrderRowProps) {
     <MarketCell
       name={marketText}
       href={marketHref}
-      identity={row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
+      identity={row.token ? <IdentityBlock scope="wallet" row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
       side={row.side}
       kind={row.curve && row.curve.priceNow !== null ? t('curve.row.kindShort', { level: row.curve.level + 1, levels: row.curve.levels }) : t(`orders.typeShort.${row.typeKey}`)}
       class="or-market"

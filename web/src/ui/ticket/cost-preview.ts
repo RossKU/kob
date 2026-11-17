@@ -10,7 +10,7 @@
 //     planner knows them;
 //   * a book too thin for the amount says what it covers instead.
 import type { Intent } from '../../kob/plan';
-import type { BookLevel, BookView } from '../../kob/plan-types';
+import type { BookLevel, BookView, TakeFacts } from '../../kob/plan-types';
 import { quoteOf } from '../../kob/units';
 
 export type CostPreview =
@@ -48,6 +48,11 @@ export interface CostInput {
   worstPrice: bigint | null;
   /** the network fee of the placement (KAS) when the quote is KAS and the planner knows it: part of every value */
   fee: bigint | null;
+  /**
+   * the order fills from the book directly (kob/take.ts): what the takes pay or get at the resting prices plus their fees (each take at the
+   * first one's fee), and a rest that rests at the limit; the bound is the whole amount at the limit
+   */
+  take?: TakeFacts | null;
 }
 
 /** A price with the order's own tip: a buy pays it on top, a sell receives it less. */
@@ -69,6 +74,17 @@ export function costPreview(i: CostInput): CostPreview {
   if (side === undefined || amount === undefined || amount <= 0n) return { kind: 'empty' };
   const round = side === 'sell' ? 'up' : 'down';
   const tip = (it as { tip?: bigint }).tip ?? 0n;
+  const tk = i.take;
+  if (tk) {
+    // an IOC or market order whose rest is not placed: the book covers only what is taken
+    if (tk.restKind === 'none' && tk.rest > 0n) return { kind: 'thin', covers: tk.total.amount };
+    const fees = tk.fee * BigInt(tk.steps.length) + (tk.restKind === 'limit' ? (tk.restPlan?.disclosure?.fee ?? 0n) : 0n);
+    const restAt = tk.restKind === 'limit' ? quoteOf(tk.rest, withTip(tk.limit, tip, side), i.scale, round) : 0n;
+    const traded = tk.restKind === 'limit' ? amount : tk.total.amount;
+    const estimate = withFee(tk.total.kas + restAt, fees, side);
+    const bound = withFee(quoteOf(traded, tk.limit, i.scale, round) + (tk.restKind === 'limit' ? restAt - quoteOf(tk.rest, tk.limit, i.scale, round) : 0n), fees, side);
+    return { kind: 'cost', side, estimate, bound };
+  }
   switch (it.type) {
     case 'limit':
     case 'ioc':

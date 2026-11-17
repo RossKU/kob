@@ -34,6 +34,8 @@ export interface IssuanceInput {
   prep?: BuiltTx;
   /** the wallet signs both transactions of a creation under one approval (`signChain`); false: it asks once per transaction (said as info) */
   oneApproval?: boolean;
+  /** a saved creation finished later: the preparation is signed already, only the genesis is asked for (said as info) */
+  resumed?: boolean;
   token: IssueToken;
   /**
    * the curve the genesis places ("Sell on a curve"): its output must carry exactly the script of this unbound state, made by this wallet, of the
@@ -196,7 +198,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4));
   if (others.length > 0) info(others.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: others.length }, 'holdersOther');
   info('walletBlind');
-  if (prep && i.oneApproval === false) info('walletTwice', { fee: kas(prepFee) });
+  if (prep && i.resumed) info('resumed');
+  else if (prep && i.oneApproval === false) info('walletTwice', { fee: kas(prepFee) });
 
   const sections: Section[] = [];
   const decimals = token.decimals;

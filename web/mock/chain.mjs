@@ -8,7 +8,22 @@ import { addressOfSpk, addressPrefix, p2pkSpk, spkOfAddress } from './address.mj
 import { KINDS, auctionOf, baseKind, bidBuyingPower, custodiesOf, custodyAmount, isPairKind, pairTokensOf, quoteOf, sideOf, termsOf } from './model.mjs';
 import { simulatePairArm, simulatePairFill } from './pair-fill.mjs';
 import { genesisStates, leaderNextStates, revealOf } from './script.mjs';
-import { ApiError, HEX64, Rejection, badRequest, notFound, syntheticId } from './util.mjs';
+import { TEST_PUBKEYS } from './keys.mjs';
+import { ApiError, HEX64, Rejection, badRequest, notFound, sha256hex, syntheticId } from './util.mjs';
+
+/**
+ * A realistic KCC-20 borrow guard for `scheme` (as a TN10 holding carries one): 1 an amount threshold (8 bytes LE, here half the
+ * holding), 2 somebody else's guard key (carol's), 3 a hash-chain head. Never all zeros, so a change that drops or alters it shows.
+ */
+export function borrowGuardOf(scheme, amount, seq = 0) {
+  if (scheme === 1) {
+    const b = Buffer.alloc(32);
+    b.writeBigUInt64LE(BigInt(amount) / 2n);
+    return b.toString('hex');
+  }
+  if (scheme === 2) return TEST_PUBKEYS.carol;
+  return sha256hex(`kob-mock-borrow-chain:${seq}`);
+}
 
 const TEMPLATE_ID_OF_PROGRAM = { KCC20Ref: 'kcc20-ref-3x3', KCC20Ref_8x8: 'kcc20-ref-8x8', KCC20KaspaCom_0_2_5: 'kcc20-kaspacom-0-2-5', KCC20PublicMint: 'kcc20-ref-public-mint' };
 const ZERO_FEE = { fee: '0', minFee: '0', feeRate: '0', mass: { size: 0, compute: 0, transient: 0, transientNormalized: 0, storage: 0, feeMass: 0 }, changeOutput: null };
@@ -270,11 +285,11 @@ export class MockChain {
   }
 
   /** Gives a key one P2PK-owned token UTXO (`amount` base units, on a `carrier` KAS output). */
-  giveTokens(pubkey, tokenRef, amount, carrier = DEFAULT_CARRIER, borrowScheme = 0) {
+  giveTokens(pubkey, tokenRef, amount, carrier = DEFAULT_CARRIER, borrowScheme = 0, borrowGuard = null) {
     const tok = this.tokenRef(tokenRef);
     const txid = syntheticId('tok', ++this.synth);
     const seq = ++this.blockSeq;
-    const rec = this.addTokenUtxo({ txid, index: 0, token: tok, state: { ...this.tokenState(tok, pubkey, 0, amount), ...(borrowScheme ? { borrow_scheme: borrowScheme } : {}) }, value: carrier, role: 'owned', daa: this.daa(), seq });
+    const rec = this.addTokenUtxo({ txid, index: 0, token: tok, state: { ...this.tokenState(tok, pubkey, 0, amount), ...(borrowScheme ? { borrow_scheme: borrowScheme, borrow_guard: borrowGuard ?? borrowGuardOf(borrowScheme, amount, seq) } : {}) }, value: carrier, role: 'owned', daa: this.daa(), seq });
     return { transactionId: txid, index: 0, token: tok.covenant_id, amount: rec.amount.toString(), value: rec.value.toString() };
   }
 

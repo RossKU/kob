@@ -332,6 +332,17 @@ impl Ingest {
         self.archive_prune(node_daa)
     }
 
+    /// Samples the top of the KAS books ([`super::quotes::sample`]) in one short transaction.
+    pub fn sample_quotes(&mut self, ctx: &super::reads::ReadCtx, now_ms: i64) -> Result<usize, IngestError> {
+        let tx = self.conn.transaction()?;
+        let n = super::quotes::sample(&tx, ctx, now_ms)?;
+        tx.commit()?;
+        if n > 0 {
+            self.generation.bump();
+        }
+        Ok(n)
+    }
+
     /// Runs one bounded batch of the archive pruning ([`super::archive::prune`]).
     ///
     /// `node_daa` is the position of the node, and the cursor's when unknown. It returns `None`

@@ -30,7 +30,9 @@ import { openTokenIdentity, type Row } from './confirm-model';
 import { DAA_PER_SECOND, untilWords } from '../../signer/words';
 import { expectedOutputs, signAndSubmit, waitForAcceptance } from '../../wallet/sign';
 import type { LiveSigning } from '../../wallet/types';
-import { Button, CopyText, Modal, RawDetails, Spinner, unitParts } from '../kit';
+import { Button, CopyText, Modal, RawDetails, Spinner, showToast, unitParts } from '../kit';
+import { toasts } from '../kit/toast-store';
+import { failureToast } from '../notify/failure-toast';
 import { classifyFailure } from './confirm-flow';
 import { checkBeforeSigning, inputAddressOf, recordAccepted, registryOfJob, type SendJob } from './send';
 import { SigningTimer, rememberSigningMs } from './signing-time';
@@ -288,7 +290,8 @@ export function useSend(): Sender {
       const timer = new SigningTimer();
       const walletId = w.adapter!.id;
       const live: LiveSigning | null =
-        walletId === 'local-key' && !final.retimed
+        // a session step is not followed while it waits: the frame signs it at once or shows it as a new request
+        walletId === 'local-key' && !final.retimed && !final.session
           ? {
               attach: (to) => {
                 follow(final, () => reading, (j) => {
@@ -321,6 +324,7 @@ export function useSend(): Sender {
           ...(final.submitByDaa != null ? { submitByDaa: final.submitByDaa } : {}),
           ...(final.retimed ? { retime: true } : {}),
           ...(final.signerNotes?.length ? { signerNotes: [...final.signerNotes] } : {}),
+          ...(final.session ? { session: final.session } : {}),
           ...(live ? { live: { signing: live, submitByOf: (b) => jobs.get(b.tx.id)?.submitByDaa ?? undefined } } : {}),
           addressOf: inputAddressOf(services),
           onWait: (waiting) => set(id, { phase: 'signing', ...(waiting ? { waiting: true } : {}) }),
@@ -573,6 +577,28 @@ export function SendStatusLine(props: { sender: Sender; lead?: string | null; po
 }
 
 /**
+ * The red toast of a send that stopped (notify/failure-toast.ts): once the action using `sender` is over (`busy` false: a retry within it, a
+ * direct fill's lost race taken again, raises none), a stopped status other than the app's own Cancel raises ONE error toast "<heading>: <reason>"
+ * at the top right (identical ones are counted on it, kit/toast-store.ts). A later send of the same sender that goes through takes it away.
+ * For a sender whose status is shown in a form (the order ticket); a flow's card shows its own failure.
+ */
+export function useSendFailureToast(status: SendStatus | null, busy: boolean, heading: string): void {
+  const said = useRef<SendStatus | null>(null);
+  const toast = useRef(0);
+  useEffect(() => {
+    if (busy || !status || status === said.current) return;
+    said.current = status;
+    if (status.phase === 'submitted') {
+      if (toast.current) toasts.dismiss(toast.current);
+      toast.current = 0;
+      return;
+    }
+    const text = failureToast(heading, status, t('confirm.failedOther'));
+    if (text) toast.current = showToast(text, 'error');
+  }, [status, busy]);
+}
+
+/**
  * The send status inside a form (the order ticket): what a click is doing and why nothing was sent, in the flow of the form, never over it.
  * A submitted transaction is not shown here: `SendStatusToast` with `only="submitted"` carries it to the notifications. The final confirmation
  * popup of an external wallet opens over the page.
@@ -601,7 +627,8 @@ export function SendStatusToast(props: { sender: Sender; lead?: string | null; o
   useEffect(() => setHost(document.querySelector<HTMLElement>('[data-testid="toast-host"]')), []);
   const s = props.sender.status;
   if (!s || (props.only === 'submitted' && s.phase !== 'submitted')) return null;
-  const tone = s.phase === 'blocked' || s.phase === 'failed' ? 'error' : s.phase === 'submitted' ? 'ok' : 'info';
+  // a transaction the network has not taken into a block after the wait is not a success yet
+  const tone = s.phase === 'blocked' || s.phase === 'failed' ? 'error' : s.phase === 'submitted' ? (s.confirmed === 'unconfirmed' ? 'warn' : 'ok') : 'info';
   const card = (
     <div class={`toast toast-${tone} send-toast`} data-testid="send-toast">
       <div class="grow wrap-anywhere">

@@ -553,7 +553,7 @@ async function balanceRow(rc, token, { timeoutMs = 60_000 } = {}) {
     // the table's cells are `role="cell"` divs named by column (`dt-c-<key>`, ui/kit/DataTable.tsx), not <td>s
     const cell = (k) => row?.querySelector(`.dt-c-${k}`) ?? null;
     const merge = document.querySelector(`[data-testid="orders-merge-token-${token}"]`);
-    return { free: val(cell('available')), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(cell('kasLocked')), mergeButton: merge ? txt(merge) : null };
+    return { free: val(cell('available')), escrowed: val(row?.querySelector('[data-testid="balance-escrowed"]')), strays: val(row?.querySelector('[data-testid="balance-strays"]')), kasLocked: val(cell('kasLocked')), mergeButton: merge ? (merge.getAttribute('title') ?? txt(merge)) : null };
   }, token);
 }
 
@@ -829,7 +829,8 @@ export async function runMerge(rc) {
     const token = rc.token.tokenId;
     await openOrders(rc);
     const before = await waitBalance(rc, token, (b) => !!b.mergeButton, 'a "Merge" button (two or more plain UTXOs)', 60_000);
-    const n0 = Number(/\((\d+)\)/.exec(before.mergeButton)?.[1] ?? NaN);
+    // the count is the button's tooltip (`Merge your 4 UTXOs of this token ...`)
+    const n0 = Number(/your (\d+) UTXOs/.exec(before.mergeButton)?.[1] ?? NaN);
     if (!(n0 >= 2)) throw new Error(`the merge button does not state the UTXO count: "${before.mergeButton}"`);
     const trackedBefore = (await trackedTokens(h)).filter((x) => x.token === token);
     const step = { name: `merge ${n0} UTXOs`, balancesBefore: before, trackedBefore, links: [], done: null };

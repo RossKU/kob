@@ -1,5 +1,5 @@
 // Picks the `NodeApi` implementation by URL scheme:
-//   ''  or  ws:// / wss://   -> KaspaRpcNode (official SDK over wRPC; '' = the SDK's public Resolver)
+//   ''  or  ws:// / wss://   -> KaspaRpcNode (official SDK over wRPC; '' = a public node the resolvers name, data/public-node.ts)
 //   http:// / https://       -> HttpMockNode  (the offline mock server; never a real node, see node-http.ts), only when `allowMock`: a test build
 //                               (`features.test`) or the vite dev server. Elsewhere such a URL is refused: a plain JSON server would otherwise
 //                               stand in for the node (input facts, acceptance) on any network.
@@ -7,6 +7,11 @@ import type { NodeApi } from './node';
 import type { KaspaSdk } from './kaspa-sdk';
 import { KaspaRpcNode, type KaspaRpcNodeOptions } from './node-rpc';
 import { HttpMockNode, type HttpMockNodeOptions } from './node-http';
+import { createPublicNodePicker, type PublicNodePicker } from './public-node';
+
+let picker: PublicNodePicker | null = null;
+/** The one picker of the page: a node without a URL connects to the public node it picked (services.ts asks it early). */
+export const publicNodePicker = (): PublicNodePicker => (picker ??= createPublicNodePicker());
 
 export interface NodeConfig {
   network: string;
@@ -44,5 +49,6 @@ export function createNode(config: NodeConfig, sdk: KaspaSdk | null, extras: Cre
     return new HttpMockNode({ baseUrl: url, network: config.network, ...extras.http });
   }
   if (!sdk) throw new Error('createNode: the kaspa SDK is required for a wRPC node');
-  return new KaspaRpcNode({ sdk, network: config.network, url, ...extras.rpc });
+  const publicNode = url ? {} : { publicNode: publicNodePicker() };
+  return new KaspaRpcNode({ sdk, network: config.network, url, ...publicNode, ...extras.rpc });
 }

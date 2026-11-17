@@ -200,7 +200,7 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'FOK sell', type: 'fok', side: 'sell', kind: 'KobAsk', listType: 'fok', listLabel: 'FOK', ...SELL,
-    fields: () => ({ amount: '2', price: '0.0245' }),
+    fields: () => ({ amount: '2', price: '0.0245', direct: 'order' }),
     receipt: {
       orderTitle: 'Sell FOK limit order',
       lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
@@ -211,7 +211,7 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'FOK buy', type: 'fok', side: 'buy', kind: 'KobBid', listType: 'fok', listLabel: 'FOK', locked: '1.053 KAS', escrowed: null,
-    fields: () => ({ amount: '2', price: '0.0265' }),
+    fields: () => ({ amount: '2', price: '0.0265', direct: 'order' }),
     receipt: {
       orderTitle: 'Buy FOK limit order',
       card: { 'KAS budget': '0.004 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'fill or kill: all or nothing', 'Refund tip kept in the order': '0.049 KAS', 'KAS on the order output': '1.053 KAS' },

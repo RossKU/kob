@@ -232,6 +232,7 @@ keep trading across several transactions for its short life (default 1). The tic
 Other order types exist (IOC, FOK, stops, take-profit, OCO, IFD, IFO, TWAP, DCA, Dutch). Their help text is in the ticket, and
 `docs/spec/order-types.md` defines them. Stops arm only on a trade that a matcher uses, never on a quote or a chart touch, so a
 stop can trigger later than the chart suggests and it has no guaranteed price.
+A stop can also be triggered by someone's own trade: use a tight band and a larger trigger size (`docs/spec/matcher.md` section 4.3).
 
 ## 6. Partial fills, and "You may receive up to"
 
@@ -306,8 +307,8 @@ armed or triggered, expiry soon, refunds. They are worked out in this browser wh
 Your tokens sit in token UTXOs (outputs). One transaction can spend only a few of them (3 on KOB's default token program). After many
 small buys, or a resting order filled in many parts, you may hold more, and a sale then needs them merged first.
 
-* In **My orders**, under Balances, press **Merge all (n)**. The button also shows roughly how much KAS the merge frees, for example
-  "Merge all (30): about +59 KAS".
+* In **My orders**, under Balances, press **Merge all**. Its tooltip gives the number of UTXOs and roughly how much KAS the merge frees,
+  for example "Merge your 30 UTXOs of this token into one: about +59 KAS back".
 * A confirmation says what the merge takes before anything is sent: "Merge your 30 ... UTXOs into one: 15 transactions, one after the
   other, each approved in your wallet (15 approvals)", and how much KAS of their carriers returns to your wallet after the network fees.
   Each transaction is approved in your wallet on its own; no wallet signs several at once.

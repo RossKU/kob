@@ -1,0 +1,58 @@
+{
+  "network": "mainnet",
+  "node": null,
+  "indexer": "https://kob-api.kaspa.ag",
+  "kobCli": "/opt/kob/kob",
+  "keyFile": "/home/mm/.kob/mm.key",
+  "dataDir": "./run",
+  "capitalUsd": 1000,
+  "token": {
+    "covenantId": "cc9957fe0d485f79994ed583aa7e16bacf194d9b9d6d77aeedc129349ddad12c",
+    "decimals": 6,
+    "label": "kzUSDC",
+    "usdSource": "kraken:USDCUSD",
+    "usdFallback": 1,
+    "pegUsd": 1,
+    "pegBand": 0.005
+  },
+  "retiredTokens": [],
+  "reference": {
+    "pollSec": 30,
+    "windowMin": 5,
+    "venues": [
+      "bybit",
+      "kucoin",
+      "gate",
+      "kraken"
+    ],
+    "fallbackVenues": [
+      "mexc"
+    ],
+    "minVenues": 2,
+    "maxDeviation": 0.01
+  },
+  "quotes": {
+    "levels": 3,
+    "spreadPct": 1,
+    "levelStepPct": 0.5,
+    "levelSizePct": 15,
+    "maxAskPct": 50,
+    "maxBidPct": 50,
+    "kasReserve": 50,
+    "repriceThreshold": 0.0025,
+    "skew": {
+      "enabled": false
+    }
+  },
+  "safety": {
+    "killJump": 0.02,
+    "resumeAfterSec": 180,
+    "maxFeesKasPerDay": 50,
+    "cancelReserveKas": 5
+  },
+  "alerts": {
+    "warnBelowPct": 12.5,
+    "remindMin": 60,
+    "webhookUrl": null
+  }
+}

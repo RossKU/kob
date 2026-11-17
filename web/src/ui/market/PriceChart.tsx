@@ -34,6 +34,8 @@ import { setChartExpanded, useChartExpanded } from './chart-expand';
 import { crosshairLabel, tickLabel } from './chart-time';
 import { type KascovWhy, laidOnBars, lineData, overlayPriceText, pairPoints, tokenPoints } from './kascov-overlay';
 import { useKascovCandles } from './use-kascov-candles';
+import { loadQuotes, midOnBars, midSeries } from './mid-line';
+import type { QuotesView } from '../../data/indexer-types';
 import { DrawingsPrimitive, PICK_MOUSE, PICK_TOUCH, type DrawingColors } from './chart-drawings-primitive';
 import { COLOR_TOKEN, DEFAULT_COLOR, DRAWING_COLORS, drawingsMarket, isDrawingColor, loadDrawings, MAX_DRAWINGS, newDrawingId, saveDrawings, type Anchor, type Drawing, type DrawingColor } from './chart-drawings';
 
@@ -169,7 +171,7 @@ interface Series {
 }
 const NO_SERIES: Series = { bars: [], volumes: [], text: () => null };
 
-interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean; /** the kascov price at this bar, when the line is on and has one */ k: string | null }
+interface Legend { o: string; h: string; l: string; c: string; v: string; /** the whole volume, for its title */ vExact: string; up: boolean; /** the kascov price at this bar, when the line is on and has one */ k: string | null; /** the book's mid at this bar (mid-line.ts) */ m: string | null }
 
 /** Price panel: interval switch (1m / 5m / 1h / 1d, remembered), candles with the previous close carried across empty buckets, volume below. */
 export function PriceChart(props: PriceChartProps) {
@@ -187,7 +189,7 @@ export function PriceChart(props: PriceChartProps) {
   const usdKey = usd ? `${usd.base.token}/${usd.quote.token}` : '';
   // the series on screen and what it was loaded for: a live refresh reads only the bars since its newest one; a change of source, interval
   // or a reorg / resync (`resyncKey`) reads the full series
-  const cache = useRef<{ key: string; resync: number; view: ChartView | null } | null>(null);
+  const cache = useRef<{ key: string; resync: number; view: ChartView | null; quotes: QuotesView | null } | null>(null);
   const resync = props.resyncKey ?? 0;
   const candles = useAsync(
     async (signal) => {
@@ -195,10 +197,14 @@ export function PriceChart(props: PriceChartProps) {
       const src: ChartSource = usd ? { base: usd.base.token, quote: usd.quote.token, ...(usd.pairCandles ? { pairCandles: true } : {}) } : { token };
       const key = `${token}|${usdKey}|${interval}`;
       const c = cache.current;
-      const prev = c && c.key === key && c.resync === resync ? c.view : null;
-      const view = await loadCandles(indexer, src, interval, prev, signal);
-      cache.current = { key, resync, view };
-      return { interval, view };
+      const same = c && c.key === key && c.resync === resync;
+      // the mid line of a token's KAS book, read beside its candles at the same interval
+      const [view, quotes] = await Promise.all([
+        loadCandles(indexer, src, interval, same ? c.view : null, signal),
+        'token' in src ? loadQuotes(indexer, token, interval, same ? c.quotes : null, signal, MAX_BARS) : Promise.resolve(null),
+      ]);
+      cache.current = { key, resync, view, quotes };
+      return { interval, view, quotes };
     },
     [indexer, token, usdKey, interval],
     { refreshKey: props.refreshKey },
@@ -234,6 +240,18 @@ export function PriceChart(props: PriceChartProps) {
     const p = (r: (typeof rc)[number]['o']) => usdText(r, props.dp);
     return { ...ratioSeries(rc), text: (i) => (rc[i] ? { o: p(rc[i]!.o), h: p(rc[i]!.h), l: p(rc[i]!.l), c: p(rc[i]!.c) } : null) };
   }, [current, interval, props.decimals, props.dp, usdKey, inverted]);
+
+  // the book's mid per bar, at the candles' price basis; null: no line (no quotes, or none with both sides)
+  const mid = useMemo(() => {
+    const q = current?.quotes;
+    const view = current?.view;
+    if (!q || view?.kind !== 'kas' || q.price_basis !== view.v.price_basis) return null;
+    const basis = basisOf(q.price_basis);
+    if (!basis) return null;
+    const times = series.bars.map((b) => b.time);
+    const m = midSeries(midOnBars(q.items, times, INTERVAL_MS[interval]), times, props.decimals, basis, props.dp, inverted);
+    return m.hasData ? m : null;
+  }, [current, series, interval, props.decimals, props.dp, inverted]);
 
   const state: 'loading' | 'error' | 'unsupported' | 'empty' | 'ready' | 'off' = !indexer
     ? 'off'
@@ -277,7 +295,7 @@ export function PriceChart(props: PriceChartProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const axisSeen = useRef(new Set<string>());
-  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; kascov: ISeriesApi<'Line'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
+  const chartRef = useRef<{ chart: IChartApi; candles: ISeriesApi<'Candlestick'>; kascov: ISeriesApi<'Line'>; mid: ISeriesApi<'Line'>; volume: ISeriesApi<'Histogram'>; drawings: DrawingsPrimitive } | null>(null);
   const [libReady, setLibReady] = useState(false);
   const [libError, setLibError] = useState<Error | null>(null);
   const [theme] = useTheme();
@@ -291,7 +309,7 @@ export function PriceChart(props: PriceChartProps) {
     if (!x || !b) return null;
     const vol = series.volumes[i]?.value ?? 0;
     const k = overlayValues?.[i];
-    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null };
+    return { ...x, v: compactText(vol), vExact: vol.toLocaleString(localeOf(), { maximumFractionDigits: 8 }), up: b.close >= b.open, k: k ? overlayPriceText(k) : null, m: mid?.text(i) ?? null };
   };
 
   // create the chart once the library is there and the panel has something to draw
@@ -315,6 +333,10 @@ export function PriceChart(props: PriceChartProps) {
         const kascovSeries = chart.addSeries(lw.LineSeries, {
           color: pal.text, lineWidth: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null,
         });
+        // the book's mid: thin, dashed and muted, under the candles; it takes part in the auto-fit (it is KOB's own price), with no tag or price line
+        const midLine = chart.addSeries(lw.LineSeries, {
+          color: alpha(pal.text, 0.7), lineWidth: 1, lineStyle: lw.LineStyle.Dashed, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+        });
         const candlesSeries = chart.addSeries(lw.CandlestickSeries, {
           upColor: pal.up, downColor: pal.down, wickUpColor: pal.up, wickDownColor: pal.down, borderVisible: false, priceLineVisible: true,
         });
@@ -331,7 +353,7 @@ export function PriceChart(props: PriceChartProps) {
           panelRef.current?.setAttribute('data-drawn-at', at);
         });
         candlesSeries.attachPrimitive(drawingsPrim);
-        chartRef.current = { chart, candles: candlesSeries, kascov: kascovSeries, volume, drawings: drawingsPrim };
+        chartRef.current = { chart, candles: candlesSeries, kascov: kascovSeries, mid: midLine, volume, drawings: drawingsPrim };
         setLibReady(true);
       },
       (e) => setLibError(e instanceof Error ? e : new Error(String(e))),
@@ -403,6 +425,14 @@ export function PriceChart(props: PriceChartProps) {
     c.kascov.applyOptions({ color: palette().text, priceFormat: { type: 'price', precision: props.dp, minMove: 10 ** -props.dp } });
     c.kascov.setData(overlayValues ? lineData(overlayValues, series.bars.map((b) => b.time)).map((p) => ({ time: p.time as UTCTimestamp, value: p.value })) : []);
   }, [libReady, overlayValues, series, props.dp, theme]);
+
+  // the mid line, in the theme's muted colour
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!c || !libReady) return;
+    c.mid.applyOptions({ color: alpha(palette().text, 0.7), priceFormat: { type: 'price', precision: props.dp, minMove: 10 ** -props.dp } });
+    c.mid.setData(mid ? mid.points.map((p) => ({ ...p, time: p.time as UTCTimestamp })) : []);
+  }, [libReady, mid, props.dp, theme]);
 
   // ---- drawings: stored per network and market (and orientation), shown by the primitive, edited by the tools
   const network = useServices().config.network;
@@ -605,7 +635,7 @@ export function PriceChart(props: PriceChartProps) {
   );
 
   return (
-    <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'} data-kascov={kascovShown ? '1' : '0'}>
+    <div class="chart-panel" ref={panelRef} data-testid="price-chart" data-quote={usd ? 'usd' : 'kas'} data-inverted={inverted ? '1' : '0'} data-state={state} data-interval={interval} data-bars={series.bars.length} data-drawings={drawings.length} data-expanded={expanded ? '1' : '0'} data-kascov={kascovShown ? '1' : '0'} data-mid={mid ? '1' : '0'}>
       <div class="chart-head">
         <div class="chart-intervals" role="group" aria-label={t('market.chart.interval')} data-testid="chart-intervals">
           {CANDLE_INTERVALS.map((iv) => (
@@ -683,6 +713,7 @@ export function PriceChart(props: PriceChartProps) {
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.l')}<b>{shown.l}</b></span>
             <span class={shown.up ? 'tone-up' : 'tone-down'}>{t('market.chart.c')}<b>{shown.c}</b></span>
             <span title={`${shown.vExact} ${volUnit}`}>{t('market.chart.v')}<b>{shown.v}</b><span class="chart-vol-unit">{volUnit}</span></span>
+            {shown.m ? <span data-testid="chart-mid">{t('market.chart.mid')}<b>{shown.m}</b></span> : null}
           </span>
         ) : null}
         {/* the optional third-party price: muted, with what it is in its tooltip; "unavailable" when kascov did not answer, and nothing else breaks */}

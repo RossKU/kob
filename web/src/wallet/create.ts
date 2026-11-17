@@ -13,12 +13,17 @@
 //   * A creation record (data/creations.ts) is written once the preparation is signed and validated, before it is sent; it holds the genesis
 //     as planned and, once signed, signed. It is removed once the genesis is accepted. If the page dies in between, the user declines the
 //     second approval, or the node refuses the genesis, the Create token page finishes it later (`finishCreation`).
+//   * The record is untrusted input (anything that writes this origin's localStorage can plant one): `finishCreation` never signs its stored
+//     genesis. It plans the creation again (creation-replan.ts), checks that plan as a fresh one (issuance-model.ts) and the preparation's
+//     output 0 on the node, and signs the plan.
 import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { genesisSigned, markPrepSent, removeCreation, saveCreation, type CreationRecord } from '../data/creations';
 import type { StorageLike } from '../config';
-import { spendsPreparation, type IssueCurve, type IssueDeclaration, type IssueDocs, type IssueToken } from '../kob/issue';
+import { spendsPreparation, type IssueCurve, type IssueDeclaration, type IssueDocs, type IssueResult, type IssueToken } from '../kob/issue';
 import type { BuiltTx, SignedTx } from '../kob/types';
+import { buildIssuanceModel, type IssuanceInput } from '../ui/confirm/issuance-model';
+import { replanCreation } from './creation-replan';
 import type { KobWasm } from '../kob/wasm';
 import { ChainError, runSignChain, sendTx, sendTxRetrying } from './chain';
 import { SignFlowError, type SignStage } from './sign';
@@ -230,6 +235,10 @@ export interface FinishArgs extends FinishOptions {
   node: NodeApi;
   /** the wallet of the record's key (it signs the genesis when the record holds none signed) */
   adapter: WalletAdapter;
+  /** that wallet's x-only key: a record of another key is refused */
+  maker: string;
+  /** the wallet's fee policy: the fee checks of a fresh creation (ConfirmSign) */
+  feePolicy?: IssuanceInput['feePolicy'];
   network: string;
   rec: CreationRecord;
   addressOf: (spk: string) => string;
@@ -250,25 +259,44 @@ export interface FinishArgs extends FinishOptions {
 
 /** The coin the genesis spends is gone (spent by another transaction): the creation cannot be finished. */
 export const CREATION_SPENT = 'creation-spent';
+/** The saved record does not plan into a valid creation of this wallet: nothing is signed or sent. */
+export const CREATION_INVALID = 'creation-invalid';
+
+/**
+ * Plans a saved creation again and checks it as a fresh one: the plan to sign, or a SignFlowError `creation-invalid` (nothing signed). The
+ * stored genesis is never used: the plan must reproduce the record's ids and token, and pass every blocking check of the issuance screen.
+ */
+export function checkSavedCreation(kob: KobWasm, rec: CreationRecord, maker: string, feePolicy?: IssuanceInput['feePolicy']): IssueResult {
+  const invalid = (why: string) => new SignFlowError('signing', null, `This saved creation is not valid (${why}). Nothing was signed or sent. Forget it.`, CREATION_INVALID);
+  const r = replanCreation(kob, rec, maker);
+  if (!r.ok) throw invalid(r.reason);
+  const { prep, built, token, curve } = r.plan;
+  const model = buildIssuanceModel({ kob, built, prep, token, ...(curve ? { curve } : {}), maker: maker.toLowerCase(), resumed: true, ...(feePolicy ? { feePolicy } : {}) });
+  const bad = model.blocking[0];
+  if (bad) throw invalid(bad.text ?? bad.code);
+  return r.plan;
+}
 
 /**
  * Finishes a saved creation (the Create token page, "Finish the creation"). A signed genesis is sent as it is (`resumeCreation`). An unsigned
  * one needs the wallet once: when the preparation's output 0 is in the node's UTXO set it is signed and sent at once; otherwise the saved
  * preparation is sent again and its output awaited first. A preparation the node refuses for good while its output is not listed means the
- * coin was spent elsewhere: SignFlowError `creation-spent` (only forgetting the record is left). Returns the genesis txid.
+ * coin was spent elsewhere: SignFlowError `creation-spent` (only forgetting the record is left). The record is planned again and checked first
+ * (`checkSavedCreation`): a record that does not check out is SignFlowError `creation-invalid`. Returns the genesis txid.
  */
 export async function finishCreation(a: FinishArgs): Promise<string> {
   const { node, rec } = a;
   const sleep = a.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = a.now ?? Date.now;
+  // planned again from the record's facts; its stored genesis is never signed
+  const plan = checkSavedCreation(a.kob, rec, a.maker, a.feePolicy);
   if (genesisSigned(rec)) return resumeCreation(node, rec, a);
-  const built = rec.genesisBuilt;
-  if (!built || !spendsPreparation({ tx: rec.prep } as BuiltTx, built) || built.tx.id !== rec.genesisTxid) {
-    throw new SignFlowError('signing', null, 'The saved genesis does not spend the saved preparation.', 'other');
-  }
-  const out0 = rec.prep.outputs[0]!;
+  const built: BuiltTx = plan.built;
+  // the coin the genesis spends, as the NODE lists it: the wallet's own key, the planned amount
+  const out0 = plan.prep.tx.outputs[0]!;
   const address = a.addressOf(out0.scriptPublicKey);
-  const listed = async (): Promise<boolean> => (await node.getUtxosByAddresses([address])).some((u) => u.transactionId === rec.prepTxid && u.index === 0);
+  const listed = async (): Promise<boolean> =>
+    (await node.getUtxosByAddresses([address])).some((u) => u.transactionId === rec.prepTxid && u.index === 0 && BigInt(u.amount) === BigInt(out0.value));
 
   // the preparation's output 0 must be on the node before the wallet is asked
   let sentAt = rec.prepSentAt ?? rec.createdAt;

@@ -18,7 +18,7 @@
 // units, and prices are in sompi per whole token (`scale` base units, see `TokenMarket`).
 import type { FeeContext, RatePick } from './fee-policy';
 import type { PairBookView } from '../data/indexer-types';
-import type { BuiltTx, CreateOrderRequest, Family, FeeMode, Hex, KeyUtxo, OrderState, PairKind, PairTriggerRule, TokenProgram, TokenUtxo } from './types';
+import type { BuiltTx, CreateOrderRequest, Family, FeeMode, Hex, KeyUtxo, OrderState, OrderUtxo, PairKind, PairTriggerRule, TokenProgram, TokenUtxo } from './types';
 import type { KobWasm } from './wasm';
 import type { PlanDelivery } from './orders/delivery';
 
@@ -239,6 +239,19 @@ export interface PlanEnv {
   feePick?: RatePick;
   /** Protocol default for carriers. Tests override it. */
   carrier?: bigint;
+  /**
+   * The node-confirmed UTXOs of the book's orders (app/book-verify.ts), by covenant id in lower
+   * case. A crossing order takes them directly (kob/take.ts). Absent: nothing can be taken.
+   */
+  bookOrders?: ReadonlyMap<string, BookOrderUtxo>;
+}
+
+/** A resting order of the book as the node confirmed it: what a take spends. */
+export interface BookOrderUtxo {
+  covenantId: Hex;
+  order: OrderUtxo<OrderState>;
+  /** an ask's custody; null for a bid */
+  custody: TokenUtxo | null;
 }
 
 /** How serious a plan finding is. */
@@ -360,6 +373,11 @@ export interface OrderPlan {
   fills?: PlanFills;
   /** A buy's delivery (mode 0 / 1 / 2, a top-up's tip and threshold): orders/delivery.ts `withDelivery`. */
   delivery?: PlanDelivery;
+  /**
+   * Set when the transaction takes resting orders directly from the wallet (a crossing limit with
+   * the `take` policy, kob/take.ts). `states` is then empty: the tx creates no order.
+   */
+  take?: TakeFacts;
 }
 
 /** The claims of a mode-1 order's bought-custody (bid-delivery-spec §7, CL1 to CL3); `decodeSigning` names them the same. */
@@ -381,6 +399,54 @@ export interface ClaimDisclosure {
   /** a claim and place that ends the order */
   ends: boolean;
   fee: bigint | null;
+}
+
+/** One resting order a take fills, at its own price. */
+export interface TakeFill {
+  covenantId: Hex;
+  /** the resting order's side: an ask is bought from, a bid is sold into */
+  side: 'ask' | 'bid';
+  maker: Hex;
+  /** its state price and tip, sompi per whole token */
+  price: bigint;
+  tip: bigint;
+  /** base units taken */
+  amount: bigint;
+  /** KAS the taker pays the maker (ask: kob-wasm `askProceeds`) or gets (bid: `bidSpend`), sompi */
+  kas: bigint;
+}
+
+/** One take transaction: the orders it fills. */
+export interface TakeStep { fills: TakeFill[]; amount: bigint; kas: bigint }
+
+/** What a take does and what is left of the order. */
+export interface TakeFacts {
+  /** the user's side */
+  side: 'sell' | 'buy';
+  /** the token's covenant id */
+  token: Hex;
+  /** what happens to the rest: it rests as a limit (GTC, GTD, day), or it is not placed (IOC, FOK, market) */
+  restKind: 'limit' | 'none';
+  /** the user's limit (a market order: its worst price), sompi per whole token */
+  limit: bigint;
+  scale: bigint;
+  /** the transactions the visible book needs, best price first; the first is the one built */
+  steps: TakeStep[];
+  /** base units and KAS of this transaction (steps[0]) */
+  amount: bigint;
+  kas: bigint;
+  /** network fee of this transaction */
+  fee: bigint;
+  /** the most KAS a buy pays (ceil at the limit), the least a sell gets (floor at the limit), for `amount` */
+  bound: bigint;
+  /** all steps together */
+  total: { amount: bigint; kas: bigint };
+  /** base units left after every step: they rest at the limit */
+  rest: bigint;
+  /** the plan of that rest against the book without the taken orders (its carriers and fee), or null */
+  restPlan: OrderPlan | null;
+  /** KAS on the taker's token output (kept by the wallet) */
+  tokenCarrier: bigint;
 }
 
 /**

@@ -113,6 +113,7 @@ declare('kas', {
   'expected-kas-locked': ['expected', 'actual'],
   'kas-released': ['released'],
   'payment-out': ['amount'],
+  'take-price': ['kas', 'bound'],
   'funds.insufficient': ['need', 'have'],
   'cancel.insufficient-funds': ['shortfall'],
 });
@@ -127,6 +128,9 @@ declare('token', {
   TOKEN_UTXOS_MIXED_BORROW: ['needed'],
   PAIR_TOKEN_UTXOS_MIXED_BORROW: ['needed'],
   MARKET_DEPTH_INSUFFICIENT: ['available', 'amount'],
+  TAKE_FOK_UNFILLED: ['amount'],
+  'take-amount': ['expected', 'actual'],
+  TAKE_REST_NOT_PLACED: ['rest'],
   MARKET_ONE_TX_LIMIT: ['fillable'],
   IOC_ONE_TX_LIMIT: ['fillable'],
   FILLS_BUDGET_SHORT: ['fillable', 'amount'],

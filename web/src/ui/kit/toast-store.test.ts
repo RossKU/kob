@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { MAX_TOASTS, ToastStore } from './toast-store';
+import { MAX_TOASTS, ToastStore, hostView, type ToastItem } from './toast-store';
 
 describe('toast store', () => {
-  it('while a flow card holds it, no new toast shows: an error goes to the bell listeners, nothing is replayed after the release', () => {
+  it('while a flow card holds it, no new notification shows and none is replayed after the release; an error still shows, and the bell listeners get it too', () => {
     const s = new ToastStore();
     s.push({ message: 'before', tone: 'ok' });
     const errors: string[] = [];
@@ -10,9 +10,15 @@ describe('toast store', () => {
     const release = s.hold();
     expect(s.held).toBe(true);
     expect(s.push({ message: 'Payment received', tone: 'ok' })).toBe(0);
-    expect(s.push({ message: 'the node failed', tone: 'error' })).toBe(0);
-    expect(s.snapshot().map((t) => t.message)).toEqual(['before']);
+    // founder 2026-11-17: a failure is always seen at the top right, never only in the bell
+    const err = s.push({ message: 'the node failed', tone: 'error' });
+    expect(err).toBeGreaterThan(0);
+    expect(s.snapshot().map((t) => t.message)).toEqual(['before', 'the node failed']);
     expect(errors).toEqual(['the node failed']);
+    // the same failure again: one toast, counted
+    expect(s.push({ message: 'the node failed', tone: 'error' })).toBe(err);
+    expect(s.snapshot().find((t) => t.id === err)?.count).toBe(2);
+    s.dismiss(err);
     // two cards: the hold lasts until both are gone; a release twice counts once
     const second = s.hold();
     release();
@@ -71,5 +77,30 @@ describe('toast store', () => {
     expect(n).toBe(1);
     s.clear();
     expect(s.snapshot()).toHaveLength(0);
+  });
+});
+
+describe('what the host shows', () => {
+  const item = (id: number, tone: ToastItem['tone']): ToastItem => ({ id, tone, message: `m${id}`, timeoutMs: 0, count: 1 });
+  const list = [item(1, 'error'), item(2, 'ok'), item(3, 'info')];
+
+  it('a desktop: every toast, nothing waits', () => {
+    expect(hostView(list, 1, false)).toEqual({ shown: list, waiting: 0, waitingError: false });
+  });
+
+  it('a phone: the newest error before a newer notification, the rest behind the chip', () => {
+    const v = hostView(list, 0, true);
+    expect(v.shown.map((x) => x.id)).toEqual([1]);
+    expect(v.waiting).toBe(2);
+    expect(v.waitingError).toBe(false);
+    expect(hostView([item(2, 'ok'), item(3, 'info')], 0, true).shown.map((x) => x.id)).toEqual([3]);
+    expect(hostView([item(4, 'error'), item(5, 'error')], 0, true).shown.map((x) => x.id)).toEqual([5]);
+    expect(hostView([item(4, 'error'), item(5, 'error')], 0, true).waitingError).toBe(true);
+    expect(hostView([], 0, true)).toEqual({ shown: [], waiting: 0, waitingError: false });
+  });
+
+  it('a phone with a card on screen: the card is shown, every toast waits, the chip is red while an error waits', () => {
+    expect(hostView(list, 1, true)).toEqual({ shown: [], waiting: 3, waitingError: true });
+    expect(hostView([item(2, 'ok')], 2, true)).toEqual({ shown: [], waiting: 2, waitingError: false });
   });
 });

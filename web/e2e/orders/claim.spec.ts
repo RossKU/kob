@@ -74,7 +74,7 @@ test('a Collected buy order: bought tokens shown as yours, Claim with its fee, o
 
   // one transaction: the order continues (nothing closed), its bought-custody is spent, the tokens go to alice as one UTXO
   expect(tx!.submission.closed).toEqual([]);
-  expect(tx!.submission.spent.some((s) => s.covenantId === tok.covenant_id && s.outpoint === `${view.bought_custody.utxo.txid}:${view.bought_custody.utxo.index}`)).toBe(true);
+  expect(tx!.submission.spent?.some((s) => s.covenantId === tok.covenant_id && s.outpoint === `${view.bought_custody.utxo.txid}:${view.bought_custody.utxo.index}`)).toBe(true);
   const after = await mock.order(id);
   expect(after).toMatchObject({ status: 'partial', bought: '0', state_known: true });
   expect(after.current.txid).toBe(tx!.txid);

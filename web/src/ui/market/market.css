@@ -520,6 +520,10 @@ body:has(.market-page) .container { max-width: none; }
 .tk-icon { position: relative; }
 .tk-icon img.tk-creator { position: absolute; inset: 0; background: transparent; }
 .tk-icon img.tk-creator.tk-loaded { background: var(--surface, #fff); }
+/* wallet view, creator's picture not loaded: the letter is the control ("Show logo"); a dashed ring and a corner dot mark it, the size does not change */
+.tk-icon[data-icon="withheld"] { cursor: pointer; box-shadow: 0 0 0 1px var(--tk-outline), inset 0 0 0 1.5px rgb(255 255 255 / 0.55); }
+.tk-icon[data-icon="withheld"]::after { content: ''; position: absolute; right: 1px; bottom: 1px; width: 6px; height: 6px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 1px hsl(var(--tk-h, 200) 42% 34%); }
+.tk-icon[data-icon="withheld"]:focus-visible { outline: 2px solid var(--accent, currentColor); outline-offset: 1px; }
 
 /* ---- identity block (Fingerprint.tsx): the icon and the fingerprint of the covenant id, the icon is --idb tall, the fingerprint 60 % of it */
 .idb { --idb: 40px; flex: none; display: inline-flex; align-items: center; gap: 6px; }

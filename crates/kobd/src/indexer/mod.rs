@@ -32,6 +32,7 @@ pub mod packed_dicts;
 pub mod pairs;
 pub mod prefetch;
 pub mod processor;
+pub mod quotes;
 pub mod reads;
 pub mod record;
 pub mod recordlog;

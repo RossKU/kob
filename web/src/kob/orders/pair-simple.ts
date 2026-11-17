@@ -229,7 +229,8 @@ function planLimit(env: PairPlanEnv, i: LimitIntent): PairOrderPlan {
   // The crossing policy against the pair book. A KAS tip never makes a B price cross.
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, 0n);
   if (x.crossing && x.touch !== null) {
-    const policy = i.crossing ?? 'auction';
+    // a pair order is not taken from the wallet (kob/take.ts is KAS books only): `take` is an auction
+    const policy = i.crossing === 'take' || i.crossing === undefined ? 'auction' : i.crossing;
     const start = i.side === 'sell' ? (x.touch > i.price ? x.touch : i.price) : x.touch < i.price ? x.touch : i.price;
     if (policy === 'reject') {
       pre.push(pairIssue('PAIR_MARKETABLE_REJECTED', { touch: x.touch, ticker }, 'price'));

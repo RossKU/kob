@@ -183,7 +183,8 @@ test.describe('a token of 18 decimals', () => {
     // the book quotes 0.025 KAS per 10^9 base units = 25,000,000 KAS per token; a sell far below it crosses the book (the planner's price warning
     // is not shown on the ticket and never a stop), and the final confirmation names the token's amount and the price per whole token
     await pickType(page, 'limit', 'sell');
-    await fillFields(page, { amount: '1', price: '1' });
+    // its auction (the order on the book): a direct fill would take the bids at their prices
+    await fillFields(page, { amount: '1', price: '1', crossing: 'auction' });
     await settlePlan(page);
     await expect(page.getByTestId('order-note-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);
     await expect(page.getByTestId('order-issue-PRICE_AGGRESSIVE_VS_MARKET')).toHaveCount(0);

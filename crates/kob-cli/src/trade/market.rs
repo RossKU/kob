@@ -356,7 +356,7 @@ const RESERVED_UNITS: [&str; 6] = ["base", "tok", "token", "tokens", "kas", "som
 /// A declared symbol as a ticker, when amounts can name it (`12.5SYM`).
 ///
 /// It is ASCII letters and digits, a letter first, and not a unit word.
-fn ticker_of_symbol(symbol: Option<&str>) -> Option<String> {
+pub(crate) fn ticker_of_symbol(symbol: Option<&str>) -> Option<String> {
     let s = symbol?;
     let ok = s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
         && s.chars().all(|c| c.is_ascii_alphanumeric())

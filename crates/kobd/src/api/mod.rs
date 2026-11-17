@@ -24,7 +24,7 @@
 //! - `/v1/orders?maker=&token=&status=&limit=&cursor=`, `/v1/orders/{covenant_id}`,
 //!   `/v1/orders/{covenant_id}/events`
 //! - `/v1/fills?token=&side=&limit=&before=`
-//! - `/v1/trades/{token}`, `/v1/candles/{token}`, `/v1/depth/{token}`
+//! - `/v1/trades/{token}`, `/v1/candles/{token}`, `/v1/quotes/{token}`, `/v1/depth/{token}`
 //! - `/v1/strays`, `/v1/token-events`, `/v1/token-utxos`
 //! - `/v1/stats?since=` (the activity totals: orders placed, traders, fees paid to fillers, KAS
 //!   locked), `/v1/stats/{token}` (24 h statistics)
@@ -236,6 +236,7 @@ pub(crate) fn build(state: ApiState, limiter: Option<RateLimiter>) -> (Router, A
         .route("/v1/token-utxos", get(rest::token_utxos))
         .route("/v1/trades/{token}", get(rest::trades))
         .route("/v1/candles/{token}", get(rest::candles))
+        .route("/v1/quotes/{token}", get(rest::quotes))
         .route("/v1/stats", get(rest::activity))
         .route("/v1/stats/{token}", get(rest::stats))
         .route("/v1/depth/{token}", get(rest::depth))
@@ -309,10 +310,19 @@ impl tower_http::compression::predicate::Predicate for JsonAboveMin {
 /// Rate-limit weight of a route.
 ///
 /// The queries that scan cost `heavy` tokens, and everything else costs one. The scanning routes
-/// are the candles, stats, depth, trades, books, token UTXOs, strays and pairs.
+/// are the candles, quotes, stats, depth, trades, books, token UTXOs, strays and pairs.
 fn route_cost(path: &str, heavy: u32) -> u32 {
-    const HEAVY: [&str; 8] =
-        ["/v1/candles/", "/v1/stats", "/v1/depth/", "/v1/trades/", "/v1/books/", "/v1/token-utxos", "/v1/strays", "/v1/pairs"];
+    const HEAVY: [&str; 9] = [
+        "/v1/candles/",
+        "/v1/quotes/",
+        "/v1/stats",
+        "/v1/depth/",
+        "/v1/trades/",
+        "/v1/books/",
+        "/v1/token-utxos",
+        "/v1/strays",
+        "/v1/pairs",
+    ];
     if HEAVY.iter().any(|p| path.starts_with(p)) {
         heavy.max(1)
     } else {
@@ -420,6 +430,7 @@ mod cost_tests {
     fn scanning_routes_cost_the_heavy_weight() {
         for p in [
             "/v1/candles/ab",
+            "/v1/quotes/ab",
             "/v1/stats",
             "/v1/stats/ab",
             "/v1/depth/ab",

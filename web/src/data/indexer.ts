@@ -7,7 +7,7 @@
 import type {
   BookView, EventView, HealthView, IndexerTokenView, OrderView, Page, StrayView, TokenEventView, TokenUtxoView, WsFrame,
   FillNoticeView, BookNotice, OrderNotice, ReorgNotice, HealthCursorNotice, HealthTickNotice,
-  ActivityStatsView, CandleInterval, CandlesView, DepthView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
+  ActivityStatsView, CandleInterval, CandlesView, DepthView, QuotesView, StatsView, TradesView, PairBookView, PairCandlesView, PairFillsView, PairSummaryView,
 } from './indexer-types';
 import { adaptPairCandles, adaptPairFills, adaptPairSummaries, sanitizePairBook } from './pair-api';
 import type { Hex } from '../kob/types';
@@ -226,6 +226,8 @@ export interface IndexerApi {
    */
   trades(token: Hex, q?: TradesQuery, o?: RequestOptions): Promise<TradesView | null>;
   candles(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<CandlesView | null>;
+  /** `GET /v1/quotes/{token}` (the chart's mid line); null on an indexer without the route. Optional: other sources have no quotes. */
+  quotes?(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<QuotesView | null>;
   stats(token: Hex, o?: RequestOptions): Promise<StatsView | null>;
   depth(token: Hex, q?: { levels?: number }, o?: RequestOptions): Promise<DepthView | null>;
   /**
@@ -506,6 +508,11 @@ export class HttpIndexer implements IndexerApi {
     if (!CANDLE_INTERVALS.includes(q.interval)) throw new IndexerError('bad-request', 0, 'bad_request', `unknown candle interval ${String(q.interval)}`);
     const r = await this.getOptional<CandlesView>(`/v1/candles/${assertHash('token', token)}`, { interval: q.interval, from: q.from, to: q.to, limit: q.limit }, o);
     return r && Array.isArray(r.items) ? r : null;
+  }
+
+  async quotes(token: Hex, q: CandlesQuery, o?: RequestOptions): Promise<QuotesView | null> {
+    const r = await this.getOptional<QuotesView>(`/v1/quotes/${assertHash('token', token)}`, { interval: q.interval, from: q.from, to: q.to, limit: q.limit }, o);
+    return r && Array.isArray(r.items) && typeof r.price_basis === 'string' ? r : null;
   }
 
   async stats(token: Hex, o?: RequestOptions): Promise<StatsView | null> {

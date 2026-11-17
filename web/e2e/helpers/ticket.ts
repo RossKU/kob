@@ -179,8 +179,17 @@ export async function readSignerFrame(page: Page): Promise<void> {
 export async function confirmReceipt(page: Page): Promise<void> {
   if (await isPrivateKey(page)) {
     await readSignerFrame(page);
-    await expect(signerFrameOf(page).getByTestId('signer-approve')).toBeEnabled();
-    await signerFrameOf(page).getByTestId('signer-approve').click();
+    const approve = signerFrameOf(page).getByTestId('signer-approve');
+    await expect(approve).toBeEnabled();
+    await approve.click();
+    // a click into the cross-origin frame can be lost (the browser's input protection for a frame that was just redrawn or scrolled; CI run
+    // 43829265470: Approve stayed enabled for 30 s after one click), as `cancelReceipt` notes: a person taps again. A click that was taken
+    // removes Approve at once (main.ts shows the idle view), so it is never clicked twice for one request
+    await expect(async () => {
+      if ((await approve.count()) === 0 || (await page.getByTestId('signer-overlay').isHidden())) return;
+      await approve.click({ timeout: 2_000 });
+      await expect(approve).toHaveCount(0, { timeout: 1_500 });
+    }).toPass({ timeout: 20_000 });
     // the frame signs and the page checks the clock before it closes: on a busy runner that passes 10 s
     await expect(page.getByTestId('signer-overlay')).toBeHidden({ timeout: 30_000 });
   } else {

@@ -169,6 +169,21 @@ export function candlesView(chain, tokenId, q) {
 }
 
 /**
+ * `GET /v1/quotes/{token}?interval=&from=&to=&limit=`: `[t, bid, ask]` per bucket. The mock keeps no book history: a bucket with trades reads its low
+ * and high as the touch, and the bucket of the chain time the current touch (null for an empty side).
+ */
+export function quotesView(chain, tokenId, q) {
+  const c = candlesView(chain, tokenId, q);
+  const now = statsView(chain, tokenId);
+  const ms = INTERVALS[c.interval];
+  const t = Math.floor(chain.nowMs() / ms) * ms;
+  const items = c.items.filter((x) => x.t < t).map((x) => [x.t, x.l, x.h]);
+  const to = intParam(q, 'to');
+  if (to === null || t < to) items.push([t, now.best_bid, now.best_ask]);
+  return { token: c.token, interval: c.interval, price_basis: c.price_basis, decimals: c.decimals, items };
+}
+
+/**
  * The KAS candle buckets of a token (prices per its `price_basis`, from its KAS-book trades only), keyed by bucket start (unix ms), optionally
  * limited to `[from, to)`. Shared by the token candles and the pair candles derived from two KAS series (pairs.mjs).
  */

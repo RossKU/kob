@@ -307,6 +307,7 @@ export function LandingContent(props: { network: string; footer: ComponentChildr
                 <p class="lp-intro lp-rv lp-links">
                   <a href={`${REPO_URL}/tree/master/crates/kob-cli`}>{t('landing.bots.cli')}</a>
                   <a href={`${REPO_URL}/blob/master/docs/api.md`}>{t('landing.bots.api')}</a>
+                  <a href={`${REPO_URL}/tree/master/tools/kob-mcp`}>{t('landing.bots.mcp')}</a>
                 </p>
               </div>
               <div class="lp-rv lp-d1">

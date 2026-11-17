@@ -280,7 +280,7 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
-    await fillFields(page, { amount: '1', price: '0.0245' });
+    await fillFields(page, { amount: '1', price: '0.0245', crossing: 'auction' }); // an order on the book (a direct fill would take the asks at their price)
     await settlePlan(page);
     const before = (await page.getByTestId('order-place').boundingBox())!;
     // twice the market (0.025): a typing error, but the user's order

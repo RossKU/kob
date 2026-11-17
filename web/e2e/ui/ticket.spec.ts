@@ -329,6 +329,18 @@ test.describe('order ticket', () => {
     await expect(page.getByTestId('order-side-sell')).toBeDisabled();
   });
 
+  test("a stop and a trailing stop say that a stop can be triggered by someone's own trade, with the docs link", async ({ appPage: page, mock }) => {
+    await fundAlice(mock);
+    await openTicket(page, mock);
+    for (const type of ['stopMarket', 'trailingStop']) {
+      await chooseOption(page.getByTestId('order-type'), type);
+      await page.getByTestId('order-advanced').evaluate((el) => ((el as HTMLDetailsElement).open = true));
+      const note = page.getByTestId('field-minTouch-hunt');
+      await expect(note, type).toContainText("A stop can be triggered by someone's own trade. Use a tight band and a larger trigger size.");
+      await expect(note.locator('a')).toHaveAttribute('href', /docs.*user-guide/);
+    }
+  });
+
   test('a stop-market sell is ready to place with its trigger rules', async ({ appPage: page, mock }) => {
     await fundAlice(mock);
     await openTicket(page, mock);

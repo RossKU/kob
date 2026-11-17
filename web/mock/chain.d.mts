@@ -19,7 +19,7 @@ export interface MockChain {
   advanceDaa(n: number): number;
   reset(): void;
   giveKas(pubkey: string, sompi: bigint | string | number): { transactionId: string; index: number; amount: string };
-  giveTokens(pubkey: string, token: string, amount: bigint | string | number, carrier?: bigint): { transactionId: string; index: number; token: string; amount: string; value: string };
+  giveTokens(pubkey: string, token: string, amount: bigint | string | number, carrier?: bigint, borrowScheme?: number, borrowGuard?: string | null): { transactionId: string; index: number; token: string; amount: string; value: string };
   kasBalance(pubkey: string): bigint;
   tokenBalance(pubkey: string, token: string): bigint;
   submit(tx: unknown): { transactionId: string };
@@ -37,3 +37,4 @@ export interface MockChain {
   kob: any;
   liveTokenUtxos(owner: string, role: string): any[];
 }
+export function borrowGuardOf(scheme: number, amount: bigint | string | number, seq?: number): string;

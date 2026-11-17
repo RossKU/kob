@@ -374,13 +374,13 @@ export function seedHistory(chain, { token, hours = 48, trades = 600, seed = 1, 
   return { token: tok.covenant_id, trades: n, fills, from_ts: tsOf(times[0]), to_ts: tsOf(times[n - 1]) };
 }
 
-/** `{pubkey|key, kas?, count?, tokens?: [{token, amount, count?, carrier?}]}` */
+/** `{pubkey|key, kas?, count?, tokens?: [{token, amount, count?, carrier?, borrow_scheme?, borrow_guard?}]}` (a borrow setting without a guard gets a realistic one: chain.mjs `borrowGuardOf`) */
 export function giveSpec(chain, u) {
   const pk = resolveKey(u.pubkey ?? u.key);
   const made = { kas: [], tokens: [] };
   if (u.kas !== undefined) for (let i = 0; i < (u.count ?? 1); i++) made.kas.push(chain.giveKas(pk, BigInt(u.kas)));
   for (const t of u.tokens ?? []) {
-    for (let i = 0; i < (t.count ?? 1); i++) made.tokens.push(chain.giveTokens(pk, t.token ?? [...chain.tokens.keys()][0], BigInt(t.amount), t.carrier === undefined ? DEFAULT_CARRIER : BigInt(t.carrier), t.borrow_scheme ?? 0));
+    for (let i = 0; i < (t.count ?? 1); i++) made.tokens.push(chain.giveTokens(pk, t.token ?? [...chain.tokens.keys()][0], BigInt(t.amount), t.carrier === undefined ? DEFAULT_CARRIER : BigInt(t.carrier), t.borrow_scheme ?? 0, t.borrow_guard ?? null));
   }
   return made;
 }

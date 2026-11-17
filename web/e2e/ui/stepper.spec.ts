@@ -85,7 +85,7 @@ for (const v of VARIANTS) {
       await page.goto('/#/portfolio');
       await connectWallet(page, 'kasware');
       await expect(page.locator('html')).toHaveAttribute('data-theme', v.theme);
-      await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(7\): /, { timeout: 15_000 });
+      await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', /^Merge your 7 UTXOs /, { timeout: 15_000 });
       await page.getByTestId(`orders-merge-token-${STD}`).click();
       await expect(page.getByTestId('merge-all-summary')).toContainText('3 transactions', { timeout: 30_000 });
       await page.getByTestId('merge-all-confirm').click();

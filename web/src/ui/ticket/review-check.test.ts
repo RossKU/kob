@@ -127,3 +127,17 @@ describe('the background clock of the ticket', () => {
     expect(liveClockAt(live, 9_000)).toBeNull();
   });
 });
+
+describe('the terms of a take', () => {
+  const tk = (side: 'buy' | 'sell', limit: bigint) => ({ disclosure: { side, allInTotal: 1n, limitPrice: limit }, take: { side, limit } }) as unknown as OrderPlan;
+  const resting = (side: 'buy' | 'sell', limit: bigint) => ({ disclosure: { side, allInTotal: 99n, limitPrice: limit } }) as unknown as OrderPlan;
+  it('a take at the click keeps them while its limit is the one shown, whatever it fills', () => {
+    expect(withinTerms(tk('buy', 100n), tk('buy', 100n))).toBe(true);
+    expect(withinTerms(tk('buy', 100n), tk('buy', 101n))).toBe(false);
+    expect(withinTerms(tk('sell', 100n), tk('sell', 99n))).toBe(false);
+  });
+  it('shown a take, planned a resting order at the same limit (the book moved): kept', () => {
+    expect(withinTerms(tk('buy', 100n), resting('buy', 100n))).toBe(true);
+    expect(withinTerms(tk('buy', 100n), resting('buy', 101n))).toBe(false);
+  });
+});

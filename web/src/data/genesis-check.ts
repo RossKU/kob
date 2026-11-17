@@ -16,13 +16,19 @@
 //
 // Result: verified (KOB's own fact), failed (the data does not match, or the genesis is not clean: a warning), or unavailable (the check could not
 // be done: never a statement about the token).
-import type { GenesisRequest, GenesisVerdict } from '../kob/genesis';
+import type { BridgeFacts, GenesisRequest, GenesisVerdict } from '../kob/genesis';
 import { familyOfProgram } from '../kob/token-state';
 import type { TokenProgram } from '../kob/types';
 import { readCapped, kascovNetwork, type KascovNetwork } from './kascov';
 
 /** The public Kaspa REST explorer of each network. */
 export const EXPLORER_BASE: Readonly<Record<KascovNetwork, string>> = { mainnet: 'https://api.kaspa.org', 'testnet-10': 'https://api-tn10.kaspa.org' };
+
+/** A bridge's minter in a token's genesis: `federated` (kUSDT's BridgeMint, role `bridge-minter`) or `zk` (Kozmic's, `zk-bridge-minter`). */
+export interface BridgeMinter {
+  kind: 'federated' | 'zk';
+  facts: BridgeFacts;
+}
 
 export type GenesisUnavailableReason = 'history' | 'program' | 'unreachable';
 export type GenesisSource = 'kascov' | 'explorer' | 'saved';
@@ -41,10 +47,12 @@ export type GenesisCheck =
       /** the genesis holds a KRON minter (`is_minter = 1`): it mints any amount, so there is no allowance to state (`mintAllowance` is null) */
       mintUnbounded?: boolean;
       /**
-       * The token is issued by a federated bridge: the genesis holds the minter KOB pins as a `bridge-minter` companion (kUSDT's BridgeMint, which mints
-       * against deposits locked on another chain when its signers sign). Not a public mint: it adds nothing to `mintAllowance`.
+       * The token is issued by a bridge: the genesis holds a minter KOB pins as a bridge's (kUSDT's BridgeMint, a federated bridge whose signers sign
+       * every mint; Kozmic's BridgeMint, a ZK bridge that mints only beside its bridge covenant). Not a public mint: it adds nothing to `mintAllowance`.
        */
       bridge?: boolean;
+      /** Which bridge minter, and what its state names (unchecked: the pin recognises the minter's code, not the bridge or its signers). Set with `bridge`. */
+      bridgeMinter?: BridgeMinter;
       /**
        * Every genesis public minter is still unspent according to the source, so no mint has used it: the allowance is all still there. False/null:
        * a mint may have used some (how much is left is not checked).
@@ -310,7 +318,10 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
 
   function verified(v: Extract<GenesisVerdict, { status: 'verified' }>, source: GenesisSource, live: (boolean | null)[], outputs: { index: number }[]): GenesisCheck {
     // a bridge's minter is a mint authority, but not a public mint with an allowance: it is named as the token's issuance instead
-    const bridgeAt = new Set(v.companionOutputs.filter((c) => c.role === 'bridge-minter').map((c) => c.index));
+    const bridges = v.companionOutputs.filter((c) => c.role === 'bridge-minter' || c.role === 'zk-bridge-minter');
+    const bridgeAt = new Set(bridges.map((c) => c.index));
+    const first = bridges[0];
+    const bridgeMinter: BridgeMinter | null = first ? { kind: first.role === 'zk-bridge-minter' ? 'zk' : 'federated', facts: first.bridge ?? {} } : null;
     const minters = v.minterOutputs.filter((m) => !bridgeAt.has(m));
     const kron = familyOfProgram(v.program as TokenProgram) === 'kron';
     const liveOf = (index: number) => live[outputs.findIndex((x) => x.index === index)] ?? null;
@@ -320,7 +331,7 @@ export function createGenesisChecker(o: GenesisCheckerOptions): GenesisChecker {
       mintAllowance: minters.length > 0 && !kron ? v.mintAllowance : null,
       ...(minters.length > 0 && kron ? { mintUnbounded: true } : {}),
       mintersUnspent: minters.length === 0 ? null : minters.every((m) => liveOf(m) === true) ? true : minters.some((m) => liveOf(m) === false) ? false : null,
-      ...(bridgeAt.size > 0 ? { bridge: true } : {}),
+      ...(bridgeMinter ? { bridge: true, bridgeMinter } : {}),
     };
   }
 

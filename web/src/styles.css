@@ -627,6 +627,7 @@ body.modal-open { overflow: hidden; }
   position: absolute; left: 14px; bottom: -13px; min-width: 32px; height: 26px; padding: 0 9px; border-radius: 13px; border: 1px solid var(--border); background: var(--surface-2, var(--surface));
   color: var(--text); font: inherit; font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 24px; box-shadow: var(--shadow); cursor: pointer; pointer-events: auto;
 }
+.toast-more-error { border-color: var(--bad); color: var(--bad); }
 .toast-more::after { content: ''; position: absolute; inset: -6px -4px; } /* a thumb-sized hit area around the small chip */
 .toast-more:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { .toast-host[data-phone] .toast { animation: none; } }

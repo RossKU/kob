@@ -28,7 +28,8 @@ USAGE
   kob book <TOKEN> [--quote TOKEN_B] [--depth N] [--json]
 
   TOKEN is a ticker or a covenant id. Prices are KAS per whole token (a pair: TOKEN_B per whole TOKEN), levels
-  aggregated by price, asks above the spread, bids below; the last fill closes the view.
+  aggregated by price, asks above the spread, bids below; the last fill closes the view. A token without a registry
+  ticker is named by the ticker its KCC-23 declaration names, marked (declared on chain, unverified).
 ";
 
 /// The help text of `kob orders`.
@@ -51,7 +52,8 @@ USAGE
 
   free: the maker's own KAS UTXOs (node) and token UTXOs (indexer, each confirmed on the node when the token's program
   is known); in orders: tokens in the custody of live orders, stray tokens sent to them (only the maker's cancel
-  recovers them), KAS locked (a buy's budget, carriers, tips and reserves).
+  recovers them), KAS locked (a buy's budget, carriers, tips and reserves). A token without a registry ticker is named
+  by the ticker its KCC-23 declaration names, marked (declared on chain, unverified).
 ";
 
 fn bail(e: String, code: i32) -> i32 {
@@ -84,18 +86,52 @@ pub fn maker_of(p: &Parsed, c: &Common, argv: &[String]) -> Result<[u8; 32], Str
 
 /// The display facts of a token from the registry and the indexer lists.
 ///
-/// When neither knows the token, only its full id is shown.
-pub(crate) fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> (TokenUnit, bool) {
+/// The ticker is the list's, else `declared` ([`declared_ticker`]), else the full id.
+pub(crate) fn unit_of(cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts], declared: Option<&str>) -> (TokenUnit, bool) {
     let f = reg.iter().find(|t| t.cov == *cov).or_else(|| idx.iter().find(|t| t.cov == *cov));
-    match f {
-        Some(t) => (
-            TokenUnit {
-                ticker: if t.ticker.is_empty() { show_id(cov, "") } else { t.ticker.clone() },
-                decimals: t.decimals.unwrap_or(0),
-            },
-            t.decimals.is_some(),
-        ),
-        None => (TokenUnit { ticker: show_id(cov, ""), decimals: 0 }, false),
+    let ticker = f
+        .map(|t| t.ticker.clone())
+        .filter(|t| !t.is_empty())
+        .or_else(|| declared.map(str::to_owned))
+        .unwrap_or_else(|| show_id(cov, ""));
+    let decimals = f.and_then(|t| t.decimals);
+    (TokenUnit { ticker, decimals: decimals.unwrap_or(0) }, decimals.is_some())
+}
+
+/// The marker of a ticker that only the token's KCC-23 declaration names, as the web app's.
+const DECLARED_MARK: &str = "declared on chain, unverified";
+
+/// The declared ticker of a token the registry and the indexer give no ticker, for a view.
+///
+/// It is the symbol of its KCC-23 declaration (the indexer's launch proof, verified against the
+/// covenant id, [`data::declaration`]) when it can be a ticker (`market::ticker_of_symbol`). It is
+/// asked for a token the indexer marks declared or does not list, as `market::resolve_with` does.
+/// No declaration, one that does not verify or cannot be fetched: `None`, the view unchanged.
+fn declared_ticker(indexer: &str, cov: &[u8; 32], reg: &[TokenFacts], idx: &[TokenFacts]) -> Option<String> {
+    declared_ticker_with(cov, reg, idx, &|c| data::declaration(indexer, c).ok().flatten())
+}
+
+/// [`declared_ticker`] with the declaration from `declaration`.
+fn declared_ticker_with(
+    cov: &[u8; 32],
+    reg: &[TokenFacts],
+    idx: &[TokenFacts],
+    declaration: &dyn Fn(&[u8; 32]) -> Option<market::Declared>,
+) -> Option<String> {
+    let listed = reg.iter().chain(idx).any(|t| t.cov == *cov && !t.ticker.is_empty());
+    let undeclared = idx.iter().any(|t| t.cov == *cov && !t.declared);
+    if listed || undeclared {
+        return None;
+    }
+    market::ticker_of_symbol(declaration(cov)?.symbol.as_deref())
+}
+
+/// The name of a token in a line of a view: `ticker` (the list's), or a declared ticker with the
+/// full id and [`DECLARED_MARK`].
+fn view_name(cov: &[u8; 32], ticker: &str, declared: Option<&str>) -> String {
+    match declared {
+        Some(d) => format!("{d} ({}, {DECLARED_MARK})", to_hex(cov)),
+        None => ticker.to_string(),
     }
 }
 
@@ -240,19 +276,31 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
                 (data::pair_book_from(&v, a.scale), None, bm.name())
             }
         };
-        let ua = a.unit();
+        // A token the lists give no ticker is named by its declared ticker, marked.
+        let da = if a.ticker.is_empty() { declared_ticker(indexer, &a.cov, &reg, &idx) } else { None };
+        let db = b.as_ref().filter(|bm| bm.ticker.is_empty()).and_then(|bm| declared_ticker(indexer, &bm.cov, &reg, &idx));
+        let a_ticker = if a.ticker.is_empty() { da.clone().unwrap_or_default() } else { a.ticker.clone() };
+        let ua = TokenUnit { ticker: a_ticker.clone(), ..a.unit() };
         let (qd, qn) = match &b {
-            Some(bm) => (bm.decimals, if bm.ticker.is_empty() { "B".to_string() } else { bm.ticker.clone() }),
+            Some(bm) => {
+                (bm.decimals, if bm.ticker.is_empty() { db.clone().unwrap_or_else(|| "B".to_string()) } else { bm.ticker.clone() })
+            }
             None => (units::KAS_DECIMALS, "KAS".to_string()),
+        };
+        let quote_name = match (&b, &db) {
+            (Some(bm), Some(d)) => view_name(&bm.cov, "", Some(d)),
+            _ => quote_name,
         };
         let price = |x: i64| units::price_per_whole(x, &ua, a.scale, qd, &qn);
         let amount = |x: i64| {
-            format!("{} {}", units::fmt_decimal(x as i128, a.decimals), if a.ticker.is_empty() { "tokens" } else { &a.ticker })
+            format!("{} {}", units::fmt_decimal(x as i128, a.decimals), if a_ticker.is_empty() { "tokens" } else { &a_ticker })
         };
         let out = json!({
             "network": c.network,
             "token": to_hex(&a.cov),
             "quote": b.as_ref().map(|x| to_hex(&x.cov)),
+            "declared_ticker": da.clone(),
+            "quote_declared_ticker": db.clone(),
             "scale": (a.decimals_from != market::DecimalsFrom::Unknown).then_some(a.scale),
             "asks": levels_json(&book.asks, &price),
             "bids": levels_json(&book.bids, &price),
@@ -263,7 +311,7 @@ pub fn book_view(c: &Common, p: &Parsed) -> Result<(Value, Vec<String>), String>
         });
         let mut lines = vec![format!(
             "book {} in {quote_name} per whole token (network {}, indexer {})",
-            a.name(),
+            if da.is_some() { view_name(&a.cov, "", da.as_deref()) } else { a.name() },
             c.network,
             http::shown(indexer)
         )];
@@ -401,8 +449,8 @@ pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
         Some(pt) => (pt.a.cov_id, Some(pt.b.cov_id)),
         None => (state.as_ref().map(AnyState::token_cov_id).or(hex32(o.get("token"))).unwrap_or_default(), None),
     };
-    let ua = unit_of(&a, reg, idx);
-    let ub = b.map(|b| unit_of(&b, reg, idx));
+    let ua = unit_of(&a, reg, idx, None);
+    let ub = b.map(|b| unit_of(&b, reg, idx, None));
     let what = match &state {
         Some(s) => describe(s, &ua, ub.as_ref().unwrap_or(&ua), b.is_some()),
         None => format!(
@@ -422,7 +470,7 @@ pub fn order_row(o: &Value, reg: &[TokenFacts], idx: &[TokenFacts]) -> Value {
             AnyState::KobCondPair(p) => p.t_cov_id,
             _ => s.token_cov_id(),
         };
-        super::delivery::text(s, &unit_of(&t, reg, idx).0)
+        super::delivery::text(s, &unit_of(&t, reg, idx, None).0)
     });
     let bought = state.as_ref().and_then(AnyState::bought_custody);
     let mut flags = vec![];
@@ -711,7 +759,8 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
         let remembered = |cov: &[u8; 32]| crate::recent::first_order_decimals(&c.network, cov);
         let open = market::OpenToken { remembered: Some(&remembered), ..market::OpenToken::new(&c.network, &order_scale) };
         for t in tokens {
-            let u = unit_of(&t, &reg, &idx);
+            let declared = declared_ticker(indexer, &t, &reg, &idx);
+            let u = unit_of(&t, &reg, &idx, declared.as_deref());
             // Free tokens are confirmed on the node when the market of the token is known, else the
             // figure of the indexer is used.
             let resolved: Option<TokenMarket> = market::resolve_with(&to_hex(&t), &reg, &idx, Some(&open)).ok();
@@ -726,12 +775,14 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             let e = held.get(&t).cloned().unwrap_or_default();
             locked += e.kas_escrow + e.kas_carriers;
             rows.push(json!({
-                "token": to_hex(&t), "ticker": u.0.ticker, "decimals": u.1.then_some(u.0.decimals),
+                "token": to_hex(&t), "ticker": unit_of(&t, &reg, &idx, None).0.ticker, "declared_ticker": declared.clone(),
+                "decimals": u.1.then_some(u.0.decimals),
                 "free": free.to_string(), "free_utxos": utxos, "free_verified": verified,
                 "in_orders": e.custody.to_string(), "bought": e.bought.to_string(), "strays": e.strays.to_string(),
                 "kas_escrow": e.kas_escrow.to_string(), "kas_carriers": e.kas_carriers.to_string(),
                 "kas_locked": (e.kas_escrow + e.kas_carriers).to_string(), "orders": e.orders,
                 "text": {
+                    "name": view_name(&t, &u.0.ticker, declared.as_deref()),
                     "free": amount_text(free, &u), "in_orders": amount_text(e.custody, &u), "bought": amount_text(e.bought, &u),
                     "strays": amount_text(e.strays, &u),
                     "kas_locked": units::kas(e.kas_escrow + e.kas_carriers),
@@ -764,7 +815,7 @@ pub fn balances_view(c: &Common, p: &Parsed, args: &[String]) -> Result<(Value, 
             };
             lines.push(format!(
                 "  {}: free {}{} in {} UTXO{}, in orders {}{bought}, strays {}, KAS locked {} ({} order{})",
-                s(&r["ticker"]),
+                s(&t["name"]),
                 s(&t["free"]),
                 if r["free_verified"].as_bool() == Some(true) { "" } else { " (indexer, not confirmed)" },
                 n(&r["free_utxos"]),
@@ -825,5 +876,61 @@ mod tests {
         ]);
         assert!(by.is_empty());
         assert_eq!(skipped, vec![("aa".to_string(), "terminal"), ("bb".to_string(), "state-unknown")]);
+    }
+
+    fn facts(cov: u8, ticker: &str, declared: bool) -> TokenFacts {
+        TokenFacts {
+            cov: [cov; 32],
+            ticker: ticker.into(),
+            decimals: None,
+            tpl_hash: None,
+            ext: None,
+            tick: None,
+            genesis_verified: false,
+            not_tradable: None,
+            market_scale: None,
+            declared,
+            program_ambiguous: false,
+        }
+    }
+
+    /// The name a view gives a token: what `kob balances` and `kob book` print for it.
+    fn shown(cov: u8, reg: &[TokenFacts], idx: &[TokenFacts], symbol: Option<&str>) -> (String, String, Option<String>) {
+        let d = |_: &[u8; 32]| Some(market::Declared { decimals: Some(2), symbol: symbol.map(str::to_owned), name: None });
+        let declared = declared_ticker_with(&[cov; 32], reg, idx, &d);
+        let u = unit_of(&[cov; 32], reg, idx, declared.as_deref());
+        (view_name(&[cov; 32], &u.0.ticker, declared.as_deref()), u.0.ticker, declared)
+    }
+
+    #[test]
+    fn a_registry_ticker_wins_over_a_declared_one() {
+        let reg = [facts(1, "REG", false)];
+        let idx = [facts(1, "", true)];
+        assert_eq!(shown(1, &reg, &idx, Some("FAKE")), ("REG".into(), "REG".into(), None));
+        // The indexer's ticker too.
+        assert_eq!(shown(1, &[], &[facts(1, "IDX", true)], Some("FAKE")), ("IDX".into(), "IDX".into(), None));
+    }
+
+    #[test]
+    fn a_declared_ticker_is_shown_with_its_marker_and_the_full_id() {
+        let id = "02".repeat(32);
+        let want = (format!("DEC ({id}, declared on chain, unverified)"), "DEC".to_string(), Some("DEC".to_string()));
+        // A token the indexer marks declared, and one it does not list (held or in an order).
+        assert_eq!(shown(2, &[], &[facts(2, "", true)], Some("DEC")), want);
+        assert_eq!(shown(2, &[], &[], Some("DEC")), want);
+    }
+
+    #[test]
+    fn without_a_ticker_or_declaration_the_full_id_is_shown() {
+        let id = "03".repeat(32);
+        let none = (id.clone(), id.clone(), None);
+        // No declaration.
+        assert_eq!(shown(3, &[], &[facts(3, "", true)], None), none);
+        // The indexer lists it as not declared: no declaration is asked.
+        assert_eq!(shown(3, &[], &[facts(3, "", false)], Some("DEC")), none);
+        // A symbol that cannot be a ticker (a unit word, not ASCII, a control character).
+        for bad in ["tokens", "Ünï", "A\u{1b}[31m"] {
+            assert_eq!(shown(3, &[], &[], Some(bad)), none, "{bad:?}");
+        }
     }
 }

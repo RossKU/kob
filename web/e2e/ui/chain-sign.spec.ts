@@ -2,7 +2,8 @@
 //   * the old creation flow (the genesis signed before the preparation was sent) is refused by such a wallet: its input is on no node;
 //   * the new flow signs and SENDS the preparation, hands it to the wallet's node (pushTx), then asks for the genesis: it passes;
 //   * a declined second approval leaves the preparation on chain and a record: the Create token page finishes the creation with one more
-//     approval, also after a reload.
+//     approval, also after a reload, on the confirmation screen (the creation planned again from the record and checked as a fresh one);
+//   * a tampered record (anything can write localStorage) is refused before the wallet is asked.
 // Screenshots (the founder's review of the flow) go to `KOB_CHAINSIGN_SHOTS`, else a temporary folder.
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -21,6 +22,16 @@ const shot = async (page: Page, name: string, focus?: string) => {
 };
 
 test.use({ autoOpen: false });
+
+/** "Finish the creation" opens the confirmation screen of the creation planned again: checked, then signed with one approval. */
+async function confirmResume(page: Page): Promise<void> {
+  await expect(page.getByTestId('confirm-screen')).toBeVisible();
+  await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
+  await expect(page.getByTestId('confirm-info').locator('[data-code="resumed"]')).toContainText('checked it like a new one');
+  await expect(page.getByTestId('confirm-info').locator('[data-code="walletTwice"]')).toHaveCount(0);
+  await page.getByTestId('confirm-ack').check();
+  await page.getByTestId('confirm-sign').click();
+}
 
 async function openCreate(page: Page, ticker: string): Promise<void> {
   await page.goto('/#/create');
@@ -133,6 +144,14 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await shot(page, '6-resume-after-reload', 'issue-pending');
     await wallet!.clearCalls();
     await page.getByTestId('issue-pending-send').click();
+    // the same confirmation as a fresh creation, with the stepper once signing: Prepare done, Create token current
+    await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    expect(await wallet!.calls()).toHaveLength(0);
+    await confirmResume(page);
+    await expect(page.getByTestId('create-step-prep')).toHaveAttribute('data-state', 'done');
+    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('create-stepper').locator('[data-state="done"]')).toHaveCount(2);
+    await page.getByTestId('confirm-close').click();
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
     await shot(page, '7-finished', 'issue-result');
     const calls = await wallet!.calls();
@@ -142,6 +161,47 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     expect(calls[0]!.tx.id).toBe(submitted[1]!.txid);
     expect(submitted[1]!.tx.inputs[0].transactionId).toBe(submitted[0]!.txid);
     expect(await page.evaluate(() => localStorage.getItem('kob.creations.v2'))).toBeNull();
+  });
+
+  test('a tampered record (its stored genesis pays another key) is refused before the wallet is asked; the real one still finishes', async ({ appPage: page, mock, wallet }) => {
+    await mock.giveKas('alice', 500n * KAS);
+    await openCreate(page, 'TAMP');
+    await page.getByTestId('issue-review').click();
+    await page.getByTestId('confirm-ack').check();
+    await page.getByTestId('confirm-sign').click();
+    await wallet!.waitForCalls(2, 20_000);
+    await wallet!.configure({ approve: false });
+    await expect(page.getByTestId('issue-pending')).toBeVisible({ timeout: 20_000 });
+    const real = await page.evaluate(() => localStorage.getItem('kob.creations.v2'));
+    // someone who can write this origin's storage swaps the genesis: the coin of the first step to their key, the ids left as they were
+    await page.evaluate(() => {
+      const recs = JSON.parse(localStorage.getItem('kob.creations.v2')!);
+      recs[0].genesisBuilt.tx.outputs = [{ value: recs[0].prep.outputs[0].value, scriptPublicKey: '000020' + '77'.repeat(32) + 'ac', covenant: null }];
+      localStorage.setItem('kob.creations.v2', JSON.stringify(recs));
+    });
+    await page.reload();
+    await clickConnectOption(page, 'wallet-connect-kasware');
+    await expect(page.getByTestId('issue-pending')).toBeVisible();
+    await wallet!.clearCalls();
+    await page.getByTestId('issue-pending-send').click();
+    await expect(page.getByTestId('issue-pending-invalid')).toContainText('does not match what its first step recorded on chain');
+    await expect(page.getByTestId('issue-pending-error')).toContainText('This saved creation is not valid');
+    // only forgetting is left
+    await expect(page.getByTestId('issue-pending-send')).toHaveCount(0);
+    await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    expect(await wallet!.calls()).toHaveLength(0);
+    expect(await mock.submitted()).toHaveLength(1);
+    await shot(page, '9-tampered', 'issue-pending');
+
+    // the record as the page wrote it: planned again, confirmed, signed
+    await page.evaluate((r) => localStorage.setItem('kob.creations.v2', r!), real);
+    await page.reload();
+    await clickConnectOption(page, 'wallet-connect-kasware');
+    await page.getByTestId('issue-pending-send').click();
+    await confirmResume(page);
+    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+    expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed']);
+    expect(await mock.submitted()).toHaveLength(2);
   });
 });
 
@@ -181,6 +241,9 @@ test.describe('chain signing: the wallet node lags the move from mempool to UTXO
     await wallet!.clearCalls();
     // the notice's own button finishes it, as the banner's does
     await page.getByTestId('issue-notice-finish').click();
+    await confirmResume(page);
+    await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
+    await page.getByTestId('confirm-close').click();
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
     expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed']);
     const submitted = await mock.submitted();

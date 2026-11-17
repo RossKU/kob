@@ -198,6 +198,10 @@ name = "kusdt_bridge_tests"
 path = "tests/programs/kusdt_bridge_tests.rs"
 
 [[test]]
+name = "kozmic_bridge_tests"
+path = "tests/programs/kozmic_bridge_tests.rs"
+
+[[test]]
 name = "program_kasparockettoken11458"
 path = "tests/programs/program_kasparockettoken11458.rs"
 

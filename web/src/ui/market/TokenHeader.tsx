@@ -14,6 +14,7 @@ import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
 import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
 import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
+import type { BridgeMinter } from '../../data/genesis-check';
 
 /** Cross-check findings between the indexer's token entry and the registry, translated. */
 export function IndexerProblems(props: { codes: string[] }) {
@@ -168,13 +169,23 @@ function TokenStatusDetails(props: { row: TokenRow; services: Pick<Services, 're
 }
 
 /**
- * The custody note of a token its genesis check found issued by a federated bridge (kUSDT's BridgeMint, pinned by its hash): the backing is held by the
- * bridge's signers on another chain, and nothing here can check it. Folded by default (founder 2026-11-05: it would fill the page), like "Status and checks".
+ * The custody note of a token its genesis check found issued by a bridge (a BridgeMint KOB pins by its hash: kUSDT's federated one, Kozmic's ZK one): the
+ * backing is on another chain, and nothing here can check it. It lists what the minter's state names (the signer set and guardian, or the bridge covenant),
+ * unchecked, for a holder to compare with what the issuer publishes. Folded by default (founder 2026-11-05: it would fill the page), like "Status and checks".
  */
-function BridgeCustodyNote() {
+function BridgeCustodyNote(props: { minter: BridgeMinter | undefined }) {
+  const zk = props.minter?.kind === 'zk';
+  const f = props.minter?.facts ?? {};
+  const facts: [string, string | undefined, string][] = zk
+    ? [[t('market.bridge.covenant'), f.bridgeCovenantId, 'token-bridge-covenant']]
+    : [[t('market.bridge.signerSet'), f.signerSet, 'token-bridge-signer-set'], [t('market.bridge.guardian'), f.guardian, 'token-bridge-guardian']];
+  const shown = facts.filter((x): x is [string, string, string] => x[1] !== undefined);
   return (
     <Section title={t('market.bridge.title')} collapsible defaultOpen={false} data-testid="token-bridge-note">
-      <p class="small" style="margin:0" data-testid="token-bridge-note-text">{t('market.bridge.text')}</p>
+      <p class="small" style="margin:0" data-testid="token-bridge-note-text">{t(zk ? 'market.bridge.zkText' : 'market.bridge.text')}</p>
+      {shown.length > 0 ? (
+        <KeyValueList compact items={shown.map(([label, value, id]) => ({ label, value: <CopyText value={value} ellipsis data-testid={id} /> }))} />
+      ) : null}
     </Section>
   );
 }
@@ -187,6 +198,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
   const g = (props.checked ?? r).genesis;
   // from the genesis check only (the pinned BridgeMint in the token's genesis group), never from a name or a list
   const bridge = g?.status === 'verified' && g.bridge === true;
+  const minter = g?.status === 'verified' ? g.bridgeMinter : undefined;
   return (
     <div class="mkt-details" data-testid="token-details">
       <Section title={t('market.token.info')} class="mkt-card">
@@ -221,7 +233,8 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
               label: t('market.token.issuance'),
               value: (
                 <span data-testid="token-issuance">
-                  {t('market.issuance.bridge')} <span class="small muted" data-testid="token-issuance-source">{t('market.issuance.perIssuer')}</span>
+                  {t(minter?.kind === 'zk' ? 'market.issuance.zkBridge' : 'market.issuance.bridge')}{' '}
+                  <span class="small muted" data-testid="token-issuance-source">{t(minter?.kind === 'zk' ? 'market.issuance.zkNote' : 'market.issuance.federatedNote')}</span>
                 </span>
               ),
               show: bridge,
@@ -249,7 +262,7 @@ export function TokenDetails(props: { row: TokenRow; services: Pick<Services, 'r
           ]}
         />
       </Section>
-      {bridge ? <BridgeCustodyNote /> : null}
+      {bridge ? <BridgeCustodyNote minter={minter} /> : null}
       <TokenStatusDetails row={props.checked ?? r} services={props.services} note={props.note} />
       <LogoSection row={r} />
     </div>

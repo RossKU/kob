@@ -67,6 +67,21 @@ export interface WalletAdapter {
    */
   signChain?(txs: [BuiltTx, BuiltTx], opts?: SignOptions): Promise<[InputSignature[], InputSignature[]]>;
   /**
+   * Whether `openSession` can be offered now (the private-key signer, once its frame announced sessions). Extension wallets do not define
+   * it: they ask once per transaction.
+   */
+  canOpenSession?(): boolean;
+  /**
+   * Shows a whole merge plan (kob/merge.ts, every link as planned) for ONE approval in the wallet. Resolves with the session its later
+   * `signTx` calls name (`SignOptions.session`), or null when the wallet will not hold one for this plan (the run then asks per transaction);
+   * rejects with `WalletError` `rejected` when the user rejects it. The wallet checks each step against the plan itself.
+   */
+  openSession?(plan: BuiltTx[], opts?: { timeoutMs?: number }): Promise<SigningSession | null>;
+  /** Ends the session `sid` (the run is over): any later request is shown for approval. */
+  closeSession?(sid: string): void;
+  /** Whether the wallet ended the session `sid` before its plan was through (a step off the plan, expiry): later steps then ask one by one. */
+  sessionEnded?(sid: string): boolean;
+  /**
    * Re-reads account, key and network of the ALREADY connected wallet without asking the user (no connect popup, no network switch).
    * Rejects with `WalletError` when the wallet no longer exposes an account (locked, disconnected the site).
    */
@@ -95,7 +110,17 @@ export interface LiveSigning {
   signed?: BuiltTx;
 }
 
+/** A one-approval session the wallet opened (`openSession`): `feeMax` and `expiresInMs` are the wallet's own terms, for display. */
+export interface SigningSession {
+  sid: string;
+  txs: number;
+  feeMax: bigint;
+  expiresInMs: number;
+}
+
 export interface SignOptions {
+  /** a step of the session `sid` (`WalletAdapter.openSession`): signed without a prompt while the wallet finds it within the plan */
+  session?: string;
   /** the transaction may be replaced while the user reads it (only a wallet that shows the app's updates takes it: the private-key signer) */
   live?: LiveSigning;
   /** network name used by wallets that need it (Kastle) */

@@ -334,6 +334,18 @@ CREATE TABLE IF NOT EXISTS candle_dirty (
     PRIMARY KEY (token_cov_id, t)
 ) WITHOUT ROWID;
 
+-- Top of each KAS book (`indexer::quotes`): a row per minute in which the best bid or ask changed. A side is the best level's
+-- (price, scale), NULL when empty. Observations, not chain data: a reorg does not revert them. Kept 30 days.
+CREATE TABLE IF NOT EXISTS book_quotes (
+    token_cov_id  BLOB NOT NULL,
+    t             INTEGER NOT NULL,       -- minute start (ms)
+    bid_price     INTEGER,
+    bid_scale     INTEGER,
+    ask_price     INTEGER,
+    ask_scale     INTEGER,
+    PRIMARY KEY (token_cov_id, t)
+) WITHOUT ROWID;
+
 -- "Possibly frozen" annotations (an operational flag, not chain data: the co-located matcher writes it when the engine
 -- pre-simulation of the order's next fill is rejected by the token program, e.g. a frozen or blacklisted balance). A flag names the
 -- order UTXO it was raised for and lapses the moment the order moves (fill, cancel, refund): only a flag on the CURRENT outpoint

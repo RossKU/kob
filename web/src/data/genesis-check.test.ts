@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createGenesisChecker, EXPLORER_BASE, lastPush, parseExplorerGenesis, parseKascovGenesis, revealFromSpend, type GenesisCheck, type GenesisChecker } from './genesis-check';
 import { verifyGenesis, type GenesisRequest } from '../kob/genesis';
 import { loadKobNode } from '../kob/wasm.node';
+import { kozmicRecording } from '../testing/kozmic-chain';
 import { kusdtRecording } from '../testing/kusdt-chain';
 
 interface Case {
@@ -164,6 +165,13 @@ describe.each([
     // the TokenSeed nobody revealed is rebuilt from the creator's key, which only the explorer's transaction names
     expect(r).toMatchObject({ status: 'verified', source: 'explorer', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
     expect(n.urls).toHaveLength(2);
+    // a federated bridge; what its minter names, unchecked: the hash of the signer keys and the guardian key
+    expect(r).toMatchObject({
+      bridgeMinter: {
+        kind: 'federated',
+        facts: { signerSet: 'b563c26ffc9f94f977e9d580f02a0b8501c023a8455f2f35b74e79f8df3c0301', guardian: '3c4c0ef3d985fb93ebdb30c5dd8ff8d6ffffa1e411565a21cc33aa2365a89566' },
+      },
+    });
   });
 
   it('the verdict lists the BridgeMint as a mint authority and as the bridge-minter companion; another verdict is no bridge', async () => {
@@ -378,5 +386,47 @@ describe('once per token per session', () => {
     const s2 = memStorage();
     await run(checkerFor(recorded(caseOf('kusdt-contaminated')), { storage: s2 }), caseOf('kusdt-contaminated'));
     expect(s2.data.size).toBe(0);
+  });
+});
+
+describe.each([
+  ['kzUSDC', 'kzusdc' as const],
+  ['the older kzUSDC instance', 'kzusdc_instance_1' as const],
+  ['Sepia.k, the Sepolia rehearsal', 'sepia' as const],
+])("a ZK-bridge token on mainnet (%s: Kozmic's BridgeMint pinned by hash)", (_, key) => {
+  const k = kozmicRecording(key, 'mainnet');
+  const net = (doc: unknown = k.kascov): Net => {
+    const urls: string[] = [];
+    const f = (async (input: string) => {
+      const u = String(input);
+      urls.push(u);
+      if (u === `${BASE}/mainnet/c/${k.covenantId}.json`) return new Response(JSON.stringify(doc), { status: 200, headers: { 'content-type': 'application/json' } });
+      throw new Error(`a test must not reach ${u}`);
+    }) as unknown as typeof fetch;
+    return { urls, fetch: f };
+  };
+
+  it("verifies from kascov's file alone, says the issuance is a ZK bridge, names the bridge covenant its minter names and counts no public mint", async () => {
+    const n = net();
+    const r = await checkerFor(n).check('mainnet', k.covenantId, { kascovBase: BASE });
+    expect(r).toMatchObject({ status: 'verified', source: 'kascov', program: 'KCC20PublicMint', supply: 0n, bridge: true, mintAllowance: null, mintersUnspent: null });
+    expect(r).toMatchObject({ bridgeMinter: { kind: 'zk', facts: { bridgeCovenantId: k.bridgeCovenantId } } });
+    expect(n.urls).toHaveLength(1);
+    const sent: GenesisRequest[] = [];
+    await checkerFor(net(), { verify: (q) => (sent.push(q), verifyGenesis(kob, q)) }).check('mainnet', k.covenantId, { kascovBase: BASE });
+    expect(verifyGenesis(kob, sent.at(-1)!)).toMatchObject({
+      status: 'verified', minterOutputs: [1], seedOutputs: [], mintAllowance: 0n,
+      companionOutputs: [{ index: 1, role: 'zk-bridge-minter', bridge: { bridgeCovenantId: k.bridgeCovenantId } }],
+    });
+  });
+
+  it('a BridgeMint with a byte of its code changed is not the pinned one: it no longer hashes to the output, and the file alone fails nothing', async () => {
+    const doc = clone(k.kascov) as { utxos: { revealed_hex?: string }[] };
+    const r = doc.utxos[0]!.revealed_hex!;
+    doc.utxos[0]!.revealed_hex = r.slice(0, 1000) + (r.slice(1000, 1002) === '00' ? '01' : '00') + r.slice(1002);
+    // kascov's file alone never fails a token; without the explorer the check is unavailable, never verified
+    const n = net(doc);
+    const out = await checkerFor(n).check('mainnet', k.covenantId, { kascovBase: BASE });
+    expect(out.status).not.toBe('verified');
   });
 });

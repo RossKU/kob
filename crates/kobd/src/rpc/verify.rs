@@ -22,7 +22,6 @@
 
 use crate::hex::Hash32;
 use crate::rpc::types::{ChainBlockHeader, ChainIds, RawChainBlock, RawVspcResponse, SpentUtxo, Tx, TxInput};
-use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::subnets::SubnetworkId;
 use kaspa_consensus_core::tx::{
     CovenantBinding, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput,
@@ -36,21 +35,7 @@ fn kh(h: Hash32) -> Hash {
 
 /// The hash of a header with every field (`Full` verbosity), or `None` when a field is missing.
 pub fn header_hash(h: &ChainBlockHeader) -> Option<Hash32> {
-    let header = Header::new_finalized(
-        h.version?,
-        h.parents_by_level.clone()?,
-        kh(h.hash_merkle_root?),
-        kh(h.accepted_id_merkle_root?),
-        kh(h.utxo_commitment?),
-        h.timestamp,
-        h.bits?,
-        h.nonce?,
-        h.daa_score,
-        h.blue_work?,
-        h.blue_score,
-        kh(h.pruning_point?),
-    );
-    Some(Hash32(header.hash.as_bytes()))
+    crate::rpc::proof::consensus_header(h).map(|x| Hash32(x.hash.as_bytes()))
 }
 
 /// Script public key from the wire form: the version as two big-endian bytes, then the script.
@@ -173,11 +158,9 @@ fn verify_block(hash: Hash32, blk: &RawChainBlock, expected: &[Hash32]) -> Resul
 /// indexed (`rpc::multi`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Agreement {
-    /// Leading chain blocks of `raw` the indexer may apply.
-    ///
-    /// That is all of them when nothing is contradicted. Blocks the other node does not report
-    /// yet, because it is a little behind, contradict nothing. Otherwise it is the blocks before
-    /// the first contradiction.
+    /// Leading chain blocks of `raw` the indexer may apply: those the other node reports too, up
+    /// to the first contradiction. Chain blocks the other node does not report yet wait for the
+    /// next poll.
     pub keep: usize,
     /// The first contradiction.
     ///
@@ -185,25 +168,28 @@ pub struct Agreement {
     /// transactions for the same chain block, or a disagreement about whether the start left the
     /// selected chain.
     pub contradiction: Option<String>,
-    /// The contradiction is only a different chain block among the newest ones both nodes report.
-    ///
-    /// Their tips differ for a moment, so it is not yet agreed and not a contradiction of agreed
-    /// history. Always false without a contradiction.
+    /// The contradiction is only lag near the tip: a different chain block (or reorg) less than
+    /// `deep_daa` below the newest chain block both nodes report. Always false without a
+    /// contradiction, and for other accepted transactions in the same chain block.
     pub at_tip: bool,
 }
 
-/// How many of the newest chain blocks may differ between the nodes without contradicting
-/// agreed history.
-pub const TIP_BLOCKS: usize = 10;
-
 /// Compares `raw` with `ids` and returns their [`Agreement`].
-pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
+///
+/// A different chain block counts as a contradiction of agreed history only when it lies at least
+/// `deep_daa` below the newest chain block both report (the authority's block at the other
+/// node's last position). Closer to the tip, honest nodes differ for a moment.
+pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds, deep_daa: u64) -> Agreement {
     let all = raw.added_chain_block_hashes.len().min(raw.chain_block_accepted_transactions.len());
+    let n = all.min(ids.added_chain_block_hashes.len());
+    let daa = |i: usize| raw.chain_block_accepted_transactions[i].chain_block_header.daa_score;
+    let deep = |i: usize| n > 0 && daa(n - 1).saturating_sub(daa(i)) >= deep_daa;
     if raw.removed_chain_block_hashes != ids.removed_chain_block_hashes {
         return Agreement {
             keep: 0,
-            // A shallow difference at the cursor is a reorg one node has seen before the other.
-            at_tip: raw.removed_chain_block_hashes.len().max(ids.removed_chain_block_hashes.len()) <= TIP_BLOCKS,
+            // A reorg at the cursor seen by one node only. The first added block bounds the
+            // cursor's depth from below.
+            at_tip: !deep(0),
             contradiction: Some(format!(
                 "the start left the selected chain for one node ({} removed blocks) and not for the other ({})",
                 raw.removed_chain_block_hashes.len(),
@@ -213,13 +199,12 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
     }
     let accepted: HashMap<Hash32, &[Hash32]> =
         ids.accepted_transaction_ids.iter().map(|a| (a.accepting_block_hash, a.accepted_transaction_ids.as_slice())).collect();
-    let n = all.min(ids.added_chain_block_hashes.len());
     for i in 0..n {
         let (mine, theirs) = (raw.added_chain_block_hashes[i], ids.added_chain_block_hashes[i]);
         if mine != theirs {
             return Agreement {
                 keep: i,
-                at_tip: n - i <= TIP_BLOCKS,
+                at_tip: !deep(i),
                 contradiction: Some(format!("chain block #{i} from the start is {mine} for one node and {theirs} for the other")),
             };
         }
@@ -238,7 +223,28 @@ pub fn agreement(raw: &RawVspcResponse, ids: &ChainIds) -> Agreement {
             };
         }
     }
-    Agreement { keep: all, contradiction: None, at_tip: false }
+    Agreement { keep: n, contradiction: None, at_tip: false }
+}
+
+/// Whether two nodes' acceptance data from the same start agree at chain position `i`: the same
+/// removed blocks, the same chain block there and the same transactions accepted in it.
+pub fn same_at(x: &ChainIds, y: &ChainIds, i: usize) -> bool {
+    let ids = |c: &ChainIds, h: Hash32| {
+        c.accepted_transaction_ids
+            .iter()
+            .find(|a| a.accepting_block_hash == h)
+            .map(|a| a.accepted_transaction_ids.clone())
+            .unwrap_or_default()
+    };
+    if x.removed_chain_block_hashes != y.removed_chain_block_hashes {
+        return false;
+    }
+    match (x.added_chain_block_hashes.get(i), y.added_chain_block_hashes.get(i)) {
+        (Some(a), Some(b)) => a == b && ids(x, *a) == ids(y, *b),
+        // A disagreement about the removed blocks only: the same removed blocks agree.
+        (None, None) => i == 0,
+        _ => false,
+    }
 }
 
 fn spent_eq(a: Option<&SpentUtxo>, b: Option<&SpentUtxo>) -> bool {
@@ -316,7 +322,7 @@ mod tests {
                 covenant: (version > 0).then_some(WireBinding { authorizing_input: 0, covenant_id: Hash32([9; 32]) }),
             }],
             payload: HexBytes(vec![0xaa, 0xbb]),
-            verbose_data: TxVerbose { transaction_id: Hash32::default(), block_time: 0 },
+            verbose_data: TxVerbose { transaction_id: Hash32::default(), block_time: 0, block_hash: None },
             version: Some(version),
             lock_time: Some(0),
             subnetwork_id: Some(HexBytes(vec![0; 20])),
@@ -367,13 +373,16 @@ mod tests {
         Hash32([n; 32])
     }
 
+    /// Chain blocks `hashes`, the i-th at DAA 10 * i.
     fn raw(hashes: &[u8]) -> RawVspcResponse {
         RawVspcResponse {
             removed_chain_block_hashes: vec![],
             added_chain_block_hashes: hashes.iter().map(|&n| h(n)).collect(),
-            chain_block_accepted_transactions: hashes
-                .iter()
-                .map(|_| RawChainBlock { chain_block_header: ChainBlockHeader::default(), accepted_transactions: vec![] })
+            chain_block_accepted_transactions: (0..hashes.len())
+                .map(|i| RawChainBlock {
+                    chain_block_header: ChainBlockHeader { daa_score: 10 * i as u64, ..Default::default() },
+                    accepted_transactions: vec![],
+                })
                 .collect(),
             wire_bytes: 0,
         }
@@ -387,44 +396,70 @@ mod tests {
         }
     }
 
-    /// A different chain block among the newest ones both report is the tips differing for a
-    /// moment (`at_tip`). A different block deep inside the answer, a different accepted set, or
-    /// a deep reorg seen by one side only are contradictions of agreed history.
+    /// A different chain block less than `deep_daa` below the newest chain block both report is
+    /// lag (`at_tip`). A deeper one, a different accepted set, or a deep reorg seen by one side only
+    /// are contradictions of agreed history. Blocks only the authority reports are not kept (H1).
     #[test]
-    fn a_disagreement_at_the_newest_blocks_is_told_from_one_in_agreed_history() {
+    fn a_disagreement_near_the_tip_is_lag_and_a_deep_one_a_contradiction() {
+        const DEEP: u64 = 100;
         // The last of five differs.
-        let a = agreement(&raw(&[1, 2, 3, 4, 5]), &ids(&[1, 2, 3, 4, 9]));
+        let a = agreement(&raw(&[1, 2, 3, 4, 5]), &ids(&[1, 2, 3, 4, 9]), DEEP);
         assert_eq!((a.keep, a.at_tip), (4, true));
         assert!(a.contradiction.is_some());
         // The very next block differs in a short answer: nothing applied, still the tips.
-        let a = agreement(&raw(&[1, 2]), &ids(&[7, 8]));
+        let a = agreement(&raw(&[1, 2]), &ids(&[7, 8]), DEEP);
         assert_eq!((a.keep, a.at_tip), (0, true));
-        // As deep as TIP_BLOCKS is still the tip, one deeper is history.
+        // 90 DAA below the newest common block is the tip, 100 is history.
         let long: Vec<u8> = (1..=40).collect();
         let mut other = long.clone();
-        other[40 - TIP_BLOCKS] = 200;
-        assert!(agreement(&raw(&long), &ids(&other)).at_tip);
+        other[30] = 200; // DAA 300, newest 390
+        assert!(agreement(&raw(&long), &ids(&other), DEEP).at_tip);
         other = long.clone();
-        other[40 - TIP_BLOCKS - 1] = 200;
-        let a = agreement(&raw(&long), &ids(&other));
-        assert_eq!((a.keep, a.at_tip), (40 - TIP_BLOCKS - 1, false));
-        // The other node is behind: nothing contradicted.
-        let a = agreement(&raw(&[1, 2, 3]), &ids(&[1, 2]));
-        assert_eq!((a.keep, a.contradiction, a.at_tip), (3, None, false));
+        other[29] = 200; // DAA 290
+        let a = agreement(&raw(&long), &ids(&other), DEEP);
+        assert_eq!((a.keep, a.at_tip), (29, false));
+        // Depth counts from the newest block both report, not the authority's tip: the other node
+        // ends at position 5, so a differing block at 4 is the tip.
+        let a = agreement(&raw(&long), &ids(&[1, 2, 3, 4, 99, 6]), DEEP);
+        assert_eq!((a.keep, a.at_tip), (4, true));
+        // H1: the other node is behind. Only what both report is kept, the rest waits.
+        let a = agreement(&raw(&[1, 2, 3]), &ids(&[1, 2]), DEEP);
+        assert_eq!((a.keep, a.contradiction, a.at_tip), (2, None, false));
+        let a = agreement(&raw(&[1, 2, 3, 99]), &ids(&[1, 2, 3]), DEEP);
+        assert_eq!((a.keep, a.contradiction), (3, None));
+        let a = agreement(&raw(&[1, 2]), &ids(&[]), DEEP);
+        assert_eq!((a.keep, a.contradiction), (0, None));
         // The same chain block with other accepted transactions is never a tip effect.
         let mut r = raw(&[1, 2, 3]);
         r.chain_block_accepted_transactions[2].accepted_transactions.push(Tx::default());
-        let a = agreement(&r, &ids(&[1, 2, 3]));
+        let a = agreement(&r, &ids(&[1, 2, 3]), DEEP);
         assert_eq!((a.keep, a.at_tip), (2, false));
         assert!(a.contradiction.is_some());
-        // A start that left the selected chain for one node only.
-        // A shallow reorg is the tips again, a deep one is history.
+        // A start that left the selected chain for one node only: shallow is the tips, deep is
+        // history.
         let mut r = raw(&[1]);
         r.removed_chain_block_hashes = vec![h(5)];
-        let a = agreement(&r, &ids(&[1]));
+        let a = agreement(&r, &ids(&[1]), DEEP);
         assert_eq!((a.keep, a.at_tip), (0, true));
-        r.removed_chain_block_hashes = (0..=TIP_BLOCKS as u8).map(h).collect();
-        let a = agreement(&r, &ids(&[1]));
+        let mut r = raw(&long);
+        r.removed_chain_block_hashes = vec![h(5)];
+        let a = agreement(&r, &ids(&long), DEEP);
         assert_eq!((a.keep, a.at_tip), (0, false));
+    }
+
+    #[test]
+    fn same_at_compares_one_position() {
+        let mut x = ids(&[1, 2, 3]);
+        let y = ids(&[1, 2, 4]);
+        assert!(same_at(&x, &y, 1));
+        assert!(!same_at(&x, &y, 2));
+        assert!(!same_at(&x, &ids(&[1]), 2));
+        x.accepted_transaction_ids =
+            vec![crate::rpc::types::AcceptedIds { accepting_block_hash: h(2), accepted_transaction_ids: vec![h(9)] }];
+        assert!(!same_at(&x, &y, 1));
+        let mut r = ids(&[]);
+        r.removed_chain_block_hashes = vec![h(1)];
+        assert!(!same_at(&r, &ids(&[]), 0));
+        assert!(same_at(&r, &r.clone(), 0));
     }
 }

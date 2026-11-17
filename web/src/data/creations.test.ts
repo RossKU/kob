@@ -7,12 +7,16 @@ function memory(): StorageLike & { data: Map<string, string> } {
   return { data, getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v), removeItem: (k) => void data.delete(k) };
 }
 const tx = (id: string) => ({ id, version: 1, inputs: [], outputs: [], subnetworkId: '00'.repeat(20), lockTime: '0', gas: '0', storageMass: '0', payload: '' });
+const token = (cov: string) => ({
+  covenantId: cov, program: 'KCC20PublicMint', templateHash: '03'.repeat(32), extensionCommitment: '04'.repeat(32), name: 'Coin', ticker: 'COIN', decimals: 2, supply: '100', carrier: '1000',
+  outputs: [{ index: 0, amount: '100', owner: 'aa'.repeat(32), ownerScheme: 0, borrowScheme: 0, borrowGuard: '00'.repeat(32) }],
+});
 /** a v2 record: the genesis as an unsigned plan (`signed`: also signed) */
 const rec = (cov: string, over: Partial<CreationRecord> = {}, signed = false): CreationRecord =>
   ({
     network: 'testnet-10', maker: 'aa'.repeat(32), createdAt: 1, covenantId: cov, prepTxid: '01'.repeat(32), genesisTxid: '02'.repeat(32),
     prep: tx('01'.repeat(32)), genesisBuilt: { tx: tx('02'.repeat(32)), sign: [], plans: [], roles: [], covenants: [], fee: {} },
-    ...(signed ? { genesis: tx('02'.repeat(32)) } : {}), token: { covenantId: cov }, declaration: { json: '{}', payload: '007b7d', funding: '1' },
+    ...(signed ? { genesis: tx('02'.repeat(32)) } : {}), token: token(cov), declaration: { json: '{}', payload: '007b7d', funding: '1' },
     docs: {}, prepSent: false, ...over,
   }) as unknown as CreationRecord;
 /** a v1 record: always a signed genesis, no plan */
@@ -70,9 +74,21 @@ describe('creation records (a creation whose genesis may not have gone out)', ()
       { ...rec('c4'.repeat(32), {}, true), genesis: tx('ff'.repeat(32)) },
       { ...rec('c5'.repeat(32)), genesisBuilt: { tx: tx('ff'.repeat(32)), sign: [] } },
       { ...v1('c6'.repeat(32)), genesis: undefined },
+      // untrusted: wrong types and sizes are dropped
+      { ...rec('c7'.repeat(32)), token: { ...token('c7'.repeat(32)), outputs: [] } },
+      { ...rec('c8'.repeat(32)), token: { ...token('c8'.repeat(32)), supply: -1 } },
+      { ...rec('c9'.repeat(32)), prep: { ...tx('01'.repeat(32)), payload: 'zz' } },
+      { ...rec('ca'.repeat(32)), prep: { ...tx('01'.repeat(32)), outputs: Array.from({ length: 300 }, () => ({ value: '1', scriptPublicKey: '00', covenant: null })) } },
+      { ...rec('cb'.repeat(32)), prep: { ...tx('01'.repeat(32)), inputs: [{ transactionId: 'x', index: 0, signatureScript: '', utxo: { amount: '1', scriptPublicKey: '' } }] } },
+      { ...rec('cc'.repeat(32)), createdAt: 'soon' },
       42,
     ]));
     expect(listCreations('testnet-10', 'aa'.repeat(32), s).map((r) => r.covenantId)).toEqual(['c1'.repeat(32)]);
+    // too many records, or too much text: only the newest are read, or none
+    s.setItem('kob.creations.v2', JSON.stringify(Array.from({ length: 100 }, (_, n) => rec(n.toString(16).padStart(2, '0').repeat(32)))));
+    expect(listCreations('testnet-10', 'aa'.repeat(32), s)).toHaveLength(64);
+    s.setItem('kob.creations.v2', JSON.stringify([{ ...rec('c1'.repeat(32)), docs: { pad: 'x'.repeat(4_000_001) } }]));
+    expect(listCreations('testnet-10', 'aa'.repeat(32), s)).toEqual([]);
     s.setItem('kob.creations.v2', '{not json');
     expect(listCreations('testnet-10', 'aa'.repeat(32), s)).toEqual([]);
     expect(saveCreation(rec('c1'.repeat(32)), null)).toBe(false);

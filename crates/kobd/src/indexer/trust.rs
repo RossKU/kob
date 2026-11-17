@@ -100,12 +100,17 @@ impl TrustContext {
     ///
     /// See the module documentation for what matters.
     pub fn flag(&self, blocks: &[RawChainBlock]) -> Vec<bool> {
+        self.matters(blocks).into_iter().map(|t| !t.is_empty()).collect()
+    }
+
+    /// Per chain block of `blocks`: the positions of its transactions that can matter to KOB.
+    pub fn matters(&self, blocks: &[RawChainBlock]) -> Vec<Vec<usize>> {
         let mut created: HashSet<(Hash32, u32)> = HashSet::new();
         blocks
             .iter()
             .map(|b| {
-                let mut any = false;
-                for t in &b.accepted_transactions {
+                let mut any = vec![];
+                for (k, t) in b.accepted_transactions.iter().enumerate() {
                     let matters = t.payload.0.starts_with(kob_protocol::payload::MAGIC)
                         || t.inputs.iter().any(|i| {
                             let op = (i.previous_outpoint.transaction_id, i.previous_outpoint.index);
@@ -116,7 +121,7 @@ impl TrustContext {
                             .filter_map(|o| o.covenant)
                             .any(|c| self.tokens.contains(&c.covenant_id) || self.allowlist.get(&c.covenant_id).is_some());
                     if matters {
-                        any = true;
+                        any.push(k);
                         let id = t.verbose_data.transaction_id;
                         created.extend((0..t.outputs.len() as u32).map(|k| (id, k)));
                     }

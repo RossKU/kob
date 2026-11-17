@@ -379,6 +379,23 @@ describe('indexer REST', () => {
     expect(r.items[0].state).toMatchObject({ owner: TEST_PUBKEYS.bob, owner_scheme: 0, amount: '300000000' });
     expect(BigInt((await get(`/mock/balance?key=bob`)).body.tokens.EXKCC)).toBe(600_000_000n);
   });
+
+  it('a holding with a borrow setting carries a realistic non-zero guard (or the one asked for)', async () => {
+    const guards: string[] = [];
+    for (const scheme of [1, 2, 3]) {
+      await post('/mock/utxo', { key: 'carol', tokens: [{ token: EXKCC, amount: '400000000', borrow_scheme: scheme }] });
+      const items = (await get(`/v1/token-utxos?owner=${TEST_PUBKEYS.carol}&token=${EXKCC}&spent=false&limit=50`)).body.items as { state: { borrow_scheme: number; borrow_guard: string } }[];
+      const guard = items.find((u) => u.state.borrow_scheme === scheme)!.state.borrow_guard;
+      expect(guard).not.toBe('00'.repeat(32));
+      guards.push(guard);
+    }
+    // scheme 1: an amount threshold (half the holding, 8 bytes LE); scheme 2: somebody else's guard key
+    expect(BigInt(`0x${Buffer.from(guards[0]!.slice(0, 16), 'hex').reverse().toString('hex')}`)).toBe(200_000_000n);
+    expect(guards[1]).toBe(TEST_PUBKEYS.carol);
+    await post('/mock/utxo', { key: 'bob', tokens: [{ token: EXKCC, amount: '1', borrow_scheme: 2, borrow_guard: 'cd'.repeat(32) }] });
+    const asked = ((await get(`/v1/token-utxos?owner=${TEST_PUBKEYS.bob}&token=${EXKCC}&spent=false&limit=50`)).body.items as { state: { borrow_guard: string }; txid: string; index: number }[]).find((u) => u.state.borrow_guard === 'cd'.repeat(32));
+    expect(asked).toBeDefined();
+  });
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------

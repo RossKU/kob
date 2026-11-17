@@ -253,6 +253,24 @@ describe('KaspaRpcNode', () => {
     expect(st.configs[0]!.encoding).toBe(realSdk.Encoding.Borsh);
   });
 
+  it('with a public node picker: connects over Borsh to the node it picked, forgets it when it fails, and falls back to the SDK Resolver without one', async () => {
+    const NODE = 'wss://n.example/kaspa/testnet-10/wrpc/borsh';
+    const forgotten: string[] = [];
+    let pick: string | null = NODE;
+    const publicNode = { pick: async () => pick, forget: (u: string) => void forgotten.push(u) };
+    const st = newState();
+    await mk(st, { url: '', publicNode }).connect();
+    expect(st.configs[0]).toMatchObject({ url: NODE, networkId: 'testnet-10', encoding: realSdk.Encoding.Borsh });
+    expect(st.configs[0]!.resolver).toBeUndefined();
+    const bad = newState({ network: 'mainnet' });
+    await expect(mk(bad, { url: '', publicNode }).connect()).rejects.toMatchObject({ code: 'network-mismatch' });
+    expect(forgotten).toEqual([NODE]);
+    pick = null;
+    const none = newState();
+    await mk(none, { url: '', publicNode }).connect();
+    expect(none.configs[0]!.resolver).toBeDefined();
+  });
+
   it('refuses a node on another network (accepting the node spelling of mainnet)', async () => {
     const st = newState({ network: 'mainnet' });
     await expect(mk(st).connect()).rejects.toMatchObject({ name: 'NodeError', code: 'network-mismatch' });

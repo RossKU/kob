@@ -67,7 +67,8 @@ use super::prefetch::{Head, Prefetch, PrefetchLimits};
 use super::status::{BackfillPace, CatchUp, FollowerState, HealthState, IndexEvent};
 use crate::config::StartMode;
 use crate::hex::Hash32;
-use crate::rpc::types::{RawVspcResponse, Verbosity, VspcBatch, VspcRequest};
+use crate::rpc::proof::{ChainProof, ChainProofConfig, ProofError};
+use crate::rpc::types::{RawVspcResponse, VspcBatch, VspcRequest};
 use crate::rpc::window::{BatchWindow, WindowPlan};
 use crate::rpc::{ChainSource, NodeErrorKind, Origin, RpcError, WindowRequest};
 use std::sync::{Arc, Mutex};
@@ -126,6 +127,9 @@ pub struct FollowerConfig {
     /// ... while the cursor does not move for this long, before another node may take over as the
     /// chain authority ([`AUTHORITY_STALL`], module documentation).
     pub authority_stall: Duration,
+    /// The chain proofs of every batch (`rpc::proof`). `None`: off. They also need a source that
+    /// serves them (`ChainSource::proves_chain`).
+    pub chain_proof: Option<ChainProofConfig>,
 }
 
 impl FollowerConfig {
@@ -149,6 +153,7 @@ impl FollowerConfig {
             prefetch_initial_blocks: 64,
             authority_failures: AUTHORITY_FAILURES,
             authority_stall: AUTHORITY_STALL,
+            chain_proof: Some(c.chain_proof.clone()).filter(|p| p.enabled),
         }
     }
 
@@ -228,11 +233,15 @@ pub struct Follower<S: ChainSource> {
     /// When the free space of the data directory and the size of the database are measured next,
     /// see [`Follower::disk_tick`].
     disk_next: Mutex<std::time::Instant>,
+    /// The wall-clock minute (ms) the books were last sampled, see [`Follower::quotes_tick`].
+    quotes_minute: Mutex<i64>,
     /// The authority's chain requests that failed on the wire in a row, and the last of them.
     chain_failures: Mutex<(u32, String)>,
     /// When the cursor last moved, or the authority last answered from it (the local monotonic
     /// clock).
     progress_at: Mutex<std::time::Instant>,
+    /// The chain proofs (`rpc::proof`), when on and the source serves them.
+    proof: Option<Arc<Mutex<ChainProof>>>,
 }
 
 /// How often the free space of the data directory and the size of the database are measured.
@@ -252,7 +261,9 @@ const LEAN_MAX_LAG_DAA: u64 = 600;
 /// A routine failure is the tips of two nodes differing for a moment, until it has repeated as
 /// often as it takes to replace a node (`attempt` failures in a row).
 fn retry_is_routine(reason: &str, attempt: u32) -> bool {
-    reason.contains(crate::rpc::multi::TIPS_DIFFER) && attempt < crate::rpc::multi::STALLS_BEFORE_REPLACING
+    // Waiting for a cross-checking node is logged by `rpc::multi` and shown in `/v1/health`.
+    reason.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK)
+        || (reason.contains(crate::rpc::multi::TIPS_DIFFER) && attempt < crate::rpc::multi::STALLS_BEFORE_REPLACING)
 }
 
 fn now_ms() -> u64 {
@@ -271,6 +282,8 @@ impl<S: ChainSource> Follower<S> {
         let window = Mutex::new(cfg.window());
         let prefetch = tokio::sync::Mutex::new(Prefetch::new(cfg.prefetch_limits()));
         let lean = ingest.lock().unwrap_or_else(|e| e.into_inner()).prunes();
+        let proof =
+            cfg.chain_proof.clone().filter(|_| source.proves_chain()).map(|p| Arc::new(Mutex::new(ChainProof::new(p, &cfg.network))));
         Follower {
             source,
             ingest,
@@ -284,8 +297,10 @@ impl<S: ChainSource> Follower<S> {
             lean_next: Mutex::new(lean.then(std::time::Instant::now)),
             pace: Mutex::new((BackfillPace::default(), std::time::Instant::now())),
             disk_next: Mutex::new(std::time::Instant::now()),
+            quotes_minute: Mutex::new(0),
             chain_failures: Mutex::new((0, String::new())),
             progress_at: Mutex::new(std::time::Instant::now()),
+            proof,
         }
     }
 
@@ -360,6 +375,30 @@ impl<S: ChainSource> Follower<S> {
             h.data_dir_free_bytes = free;
             h.db_bytes = size;
         });
+    }
+
+    /// Samples the top of the KAS books once a wall-clock minute ([`super::quotes`]).
+    ///
+    /// A store behind the node has an old book, so it samples nothing.
+    async fn quotes_tick(&self) {
+        let now = now_ms() as i64;
+        let minute = now - now.rem_euclid(60_000);
+        {
+            let mut m = self.quotes_minute.lock().unwrap_or_else(|e| e.into_inner());
+            if *m >= minute {
+                return;
+            }
+            *m = minute;
+        }
+        let snap = self.health.snapshot();
+        if !snap.within_lag_tolerance() {
+            return;
+        }
+        // The settle depth plays no part in a book.
+        let ctx = super::reads::ReadCtx { node_daa: snap.node_daa, settle_depth_daa: 0, now_unix: Some((now / 1_000) as u64) };
+        if let Err(e) = self.blocking(move |i| i.sample_quotes(&ctx, now)).await {
+            tracing::warn!(error = %e, "quotes: sampling the books failed; trying again next minute");
+        }
     }
 
     /// Updates how fast the store closes in on the node and when it will have, while it is
@@ -617,7 +656,12 @@ impl<S: ChainSource> Follower<S> {
         let source = self.source.source_status();
         // The alarms of named nodes (`rpc::judge`), process-wide.
         let alarms = crate::rpc::judge::alarms();
+        let cross = self.source.cross_check();
+        let proof = self.proof.as_ref().map(|p| p.lock().unwrap_or_else(|e| e.into_inner()).status());
         self.health.update(|h| {
+            h.cross_checked = cross.checked;
+            h.cross_check_reason = cross.reason;
+            h.chain_proof = proof;
             if !nodes.is_empty() || source.is_some() {
                 // Behind a failover the list is the active node's. It may be empty for a single
                 // node.
@@ -640,7 +684,7 @@ impl<S: ChainSource> Follower<S> {
             Ok(p) => p,
             Err(e) => return self.on_rpc_error(e).await,
         };
-        let mut req = VspcRequest::new(cursor.hash, Verbosity::High, plan.min_confirmations);
+        let mut req = VspcRequest::new(cursor.hash, self.source.authority_verbosity(), plan.min_confirmations);
         req.timeout_scale = plan.timeout_scale;
         let t0 = std::time::Instant::now();
         let raw = match self.source.vspc_v2(req).await {
@@ -664,6 +708,10 @@ impl<S: ChainSource> Follower<S> {
             }
         };
         let t_fetch = t0.elapsed();
+        let raw = match self.prove(cursor.hash, raw, Origin::PRIMARY).await {
+            Ok(r) => r,
+            Err(o) => return o,
+        };
         let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
             Ok(b) => b,
             Err(e) => {
@@ -750,6 +798,13 @@ impl<S: ChainSource> Follower<S> {
         });
         match head {
             Head::Ready { start, raw, sink_blue, end_blue, elapsed, origin } => {
+                let raw = match self.prove(start, raw, origin).await {
+                    Ok(r) => r,
+                    Err(o) => {
+                        self.prefetch.lock().await.discard();
+                        return o;
+                    }
+                };
                 if !origin.trusted {
                     // A window from another node: what no hash covers is taken from the primary
                     // where it can matter.
@@ -804,6 +859,115 @@ impl<S: ChainSource> Follower<S> {
                 self.step_sequential().await
             }
         }
+    }
+
+    /// The chain proofs of a batch `raw` from `start` (`rpc::proof`), before it is parsed and
+    /// applied. A batch that fails is not applied: the node behind `origin` is reported
+    /// (`ChainSource::chain_refused`) and the step is retried. A proof the node could not serve
+    /// is retried without blame.
+    async fn prove(&self, start: Hash32, raw: RawVspcResponse, origin: Origin) -> Result<RawVspcResponse, StepOutcome> {
+        let Some(proof) = self.proof.clone() else { return Ok(raw) };
+        let p = proof.clone();
+        let (raw, plan) = tokio::task::spawn_blocking(move || {
+            let r = p.lock().unwrap_or_else(|e| e.into_inner()).check_local(start, &raw);
+            (raw, r)
+        })
+        .await
+        .expect("proof task panicked");
+        let r = match plan {
+            Ok(None) => Ok(()),
+            Ok(Some(plan)) => match self.prove_lanes(&proof, plan).await {
+                Ok(()) => self.prove_scripts(&proof, &raw).await,
+                Err(e) => Err(e),
+            },
+            Err(e) => Err(e),
+        };
+        match r {
+            Ok(()) => Ok(raw),
+            Err(ProofError::Unavailable(why)) => {
+                let msg = format!("chain proof unavailable: {why}");
+                tracing::warn!(reason = %why, "a chain proof could not be fetched: the batch waits");
+                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                Err(StepOutcome::Retry(msg))
+            }
+            Err(ProofError::Refused(why)) => {
+                proof.lock().unwrap_or_else(|e| e.into_inner()).refused(&why);
+                tracing::error!(node = origin.node, reason = %why, "a batch failed its chain proof: refused, nothing applied, the node is backed off from");
+                self.source.chain_refused(origin, &why);
+                let msg = format!("chain proof refused: {why}");
+                self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
+                Err(StepOutcome::Retry(msg))
+            }
+        }
+    }
+
+    /// The node part of the acceptance proof: the anchor's header when it moved, the lanes new at
+    /// the anchor, and the lane proofs at the batch's last chain block.
+    async fn prove_lanes(&self, proof: &Mutex<ChainProof>, plan: crate::rpc::proof::Plan) -> Result<(), ProofError> {
+        let lock = || proof.lock().unwrap_or_else(|e| e.into_inner());
+        let unavailable = |what: &str, e: RpcError| ProofError::Unavailable(format!("{what}: {e}"));
+        if lock().needs_anchor(&plan) {
+            let block = self
+                .source
+                .block(plan.parent, false)
+                .await
+                .map_err(|e| unavailable("the header of the batch's parent", e))?
+                .ok_or_else(|| {
+                ProofError::Refused(format!("the node does not know {}, the parent of its own batch", plan.parent))
+            })?;
+            lock().set_anchor(&plan, &block.header)?;
+        }
+        let anchor = lock().anchor().map(|a| a.hash).unwrap_or(plan.parent);
+        let unknown = lock().unknown_lanes(&plan);
+        for lane in unknown {
+            let p = self
+                .source
+                .lane_proof(anchor, Hash32(lane.as_bytes()))
+                .await
+                .map_err(|e| unavailable("a lane proof at the cursor", e))?;
+            lock().learn_lane(lane, &p)?;
+        }
+        let expected = lock().expected(&plan)?;
+        let asks = expected.iter().map(|(lane, _)| self.source.lane_proof(plan.end, Hash32(lane.as_bytes())));
+        let proofs = futures_util::future::join_all(asks)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| unavailable("a lane proof at the batch's end", e))?;
+        lock().finish(plan, &expected, &proofs)
+    }
+
+    /// The signature scripts of the batch's transactions that can matter to KOB
+    /// (`super::trust`): each merged block holding one is fetched once and checked
+    /// (`ChainProof::check_merged_block`).
+    async fn prove_scripts(&self, proof: &Mutex<ChainProof>, raw: &RawVspcResponse) -> Result<(), ProofError> {
+        let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
+        let ctx = self
+            .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
+            .await
+            .map_err(|e| ProofError::Unavailable(format!("database: {e}")))?;
+        let blocks = &raw.chain_block_accepted_transactions;
+        let mut by_block: std::collections::BTreeMap<Hash32, Vec<&crate::rpc::types::Tx>> = Default::default();
+        for (b, txs) in ctx.matters(blocks).into_iter().enumerate() {
+            for k in txs {
+                let t = &blocks[b].accepted_transactions[k];
+                let Some(m) = t.verbose_data.block_hash else {
+                    return Err(ProofError::Refused(format!(
+                        "transaction {} has no merged block hash",
+                        t.verbose_data.transaction_id
+                    )));
+                };
+                by_block.entry(m).or_default().push(t);
+            }
+        }
+        for (m, txs) in by_block {
+            let block =
+                self.source.block(m, true).await.map_err(|e| ProofError::Unavailable(format!("merged block {m}: {e}")))?.ok_or_else(
+                    || ProofError::Refused(format!("the node does not know {m}, the merged block of its own transaction")),
+                )?;
+            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs)?;
+        }
+        Ok(())
     }
 
     /// Checks a window `raw` from another node against the primary, as far as it can matter to KOB.
@@ -1176,6 +1340,7 @@ impl<S: ChainSource> Follower<S> {
             };
             self.lean_tick().await;
             self.disk_tick().await;
+            self.quotes_tick().await;
             let delay = match &outcome {
                 StepOutcome::Applied { more: true, .. } | StepOutcome::Rewound { .. } => {
                     failures = 0;
@@ -1261,5 +1426,162 @@ mod tests {
         assert!(!retry_is_routine(&r, 3));
         assert!(!retry_is_routine("node error: the nodes disagree on the next chain block (x): nothing is indexed", 1));
         assert!(!retry_is_routine("transport: closed", 1));
+    }
+
+    /// The follower runs the chain proofs on a real recorded batch (`rpc::proof` fixtures): the
+    /// honest batch is applied, a tampered one is refused, nothing of it is applied, and the node
+    /// is reported.
+    mod chain_proof {
+        use super::super::*;
+        use crate::rpc::proof::tests::{fixture, Fixture, MAINNET, TN10};
+        use crate::rpc::types::{AddressUtxo, ChainHashes, DagInfo, ServerInfo};
+
+        struct Recorded {
+            fx: Fixture,
+            tamper: fn(&mut RawVspcResponse),
+            refused: Mutex<Vec<String>>,
+        }
+
+        impl Recorded {
+            fn last(&self) -> (Hash32, u64) {
+                let r = self.fx.raw();
+                let b = r.chain_block_accepted_transactions.last().unwrap();
+                (b.chain_block_header.hash, b.chain_block_header.blue_score)
+            }
+        }
+
+        impl ChainSource for Recorded {
+            async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
+                assert_eq!(req.data_verbosity_level, crate::rpc::types::Verbosity::Full, "the authority is asked at Full");
+                let mut r = self.fx.raw();
+                if req.start_hash != self.fx.start {
+                    r.added_chain_block_hashes.clear();
+                    r.chain_block_accepted_transactions.clear();
+                }
+                (self.tamper)(&mut r);
+                Ok(r)
+            }
+            async fn dag_info(&self) -> Result<DagInfo, RpcError> {
+                let (sink, _) = self.last();
+                Ok(DagInfo { network: self.fx.network.clone(), sink, pruning_point_hash: self.fx.start, virtual_daa_score: 0 })
+            }
+            async fn server_info(&self) -> Result<ServerInfo, RpcError> {
+                Ok(ServerInfo {
+                    server_version: "2.1.0".into(),
+                    network_id: self.fx.network.clone(),
+                    is_synced: true,
+                    has_utxo_index: true,
+                    virtual_daa_score: 0,
+                })
+            }
+            async fn utxos_by_addresses(&self, _a: &[String]) -> Result<Vec<AddressUtxo>, RpcError> {
+                Ok(vec![])
+            }
+            async fn block_exists(&self, _h: Hash32) -> Result<bool, RpcError> {
+                Ok(true)
+            }
+            async fn sink_blue_score(&self) -> Result<u64, RpcError> {
+                Ok(self.last().1)
+            }
+            async fn block_blue_score(&self, h: Hash32) -> Result<Option<u64>, RpcError> {
+                if h == self.fx.start {
+                    return Ok(Some(self.fx.start_header.blue_score));
+                }
+                Ok(self
+                    .fx
+                    .raw()
+                    .chain_block_accepted_transactions
+                    .iter()
+                    .find(|b| b.chain_block_header.hash == h)
+                    .map(|b| b.chain_block_header.blue_score))
+            }
+            async fn chain_hashes(&self, _s: Hash32) -> Result<ChainHashes, RpcError> {
+                Ok(ChainHashes::default())
+            }
+            fn proves_chain(&self) -> bool {
+                true
+            }
+            async fn lane_proof(
+                &self,
+                block: Hash32,
+                lane: Hash32,
+            ) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+                let p = self
+                    .fx
+                    .proofs
+                    .get(&kaspa_hashes::Hash::from_bytes(lane.0))
+                    .ok_or_else(|| RpcError::Node("no such lane".into()))?;
+                match block {
+                    b if b == self.fx.start => Ok(p.0.clone()),
+                    b if b == self.last().0 => Ok(p.1.clone()),
+                    _ => Err(RpcError::Node("not recorded".into())),
+                }
+            }
+            async fn block(&self, hash: Hash32, _txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+                if hash.0 == self.fx.merged.header.hash.as_bytes() {
+                    return Ok(Some(self.fx.merged.clone()));
+                }
+                Ok((hash == self.fx.start).then(|| kaspa_consensus_core::block::Block::new(self.fx.start_header.clone(), vec![])))
+            }
+            fn chain_refused(&self, _origin: Origin, why: &str) {
+                self.refused.lock().unwrap().push(why.to_string());
+            }
+        }
+
+        fn follower(
+            text: &str,
+            tamper: fn(&mut RawVspcResponse),
+        ) -> (Follower<Recorded>, Arc<Recorded>, Arc<Mutex<Ingest>>, Arc<HealthState>) {
+            let fx = fixture(text);
+            let network = fx.network.clone();
+            let start = fx.start;
+            let source = Arc::new(Recorded { fx, tamper, refused: Mutex::new(vec![]) });
+            let conn = crate::indexer::db::open_memory(&network).unwrap();
+            let ingest =
+                Arc::new(Mutex::new(Ingest::new(conn, crate::testkit::processor(), None).with_config(crate::testkit::wide_window())));
+            let health = Arc::new(HealthState::new(&network));
+            let (events, _) = broadcast::channel(8);
+            let mut cfg = FollowerConfig::from_indexer(&crate::config::IndexerConfig { network, ..Default::default() });
+            cfg.start = StartMode::Hash(start);
+            cfg.fetch_parallel = 1;
+            assert!(cfg.chain_proof.is_some(), "on by default");
+            let f = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
+            (f, source, ingest, health)
+        }
+
+        fn cursor(ingest: &Mutex<Ingest>) -> Hash32 {
+            ingest.lock().unwrap().cursor().unwrap().unwrap().hash
+        }
+
+        #[tokio::test]
+        async fn an_honest_batch_is_applied_and_a_tampered_one_is_refused() {
+            for text in [TN10, MAINNET] {
+                let (f, src, ingest, health) = follower(text, |_| {});
+                let (last, _) = src.last();
+                let n = src.fx.raw().added_chain_block_hashes.len();
+                let o = f.step().await;
+                assert!(matches!(o, StepOutcome::Applied { added, .. } if added == n), "{o:?}");
+                assert_eq!(cursor(&ingest), last);
+                let p = health.snapshot().chain_proof.unwrap();
+                assert_eq!((p.blocks_total, p.refused_total), (n as u64, 0));
+                assert!(src.refused.lock().unwrap().is_empty());
+                assert!(!health.snapshot().cross_checked, "a single node is not cross-checked");
+
+                // A native transaction hidden by the node: refused, nothing applied, the node reported.
+                let (f, src, ingest, health) = follower(text, |r| {
+                    let b = r.chain_block_accepted_transactions.iter_mut().find(|b| b.accepted_transactions.len() > 1);
+                    if let Some(b) = b {
+                        b.accepted_transactions.pop();
+                    }
+                });
+                let o = f.step().await;
+                assert!(matches!(&o, StepOutcome::Retry(m) if m.contains("chain proof refused")), "{o:?}");
+                assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
+                assert_eq!(src.refused.lock().unwrap().len(), 1);
+                let p = health.snapshot().chain_proof.unwrap();
+                assert_eq!((p.blocks_total, p.refused_total), (0, 1));
+                assert!(health.snapshot().status_line().contains("chain proofs refused 1"));
+            }
+        }
     }
 }

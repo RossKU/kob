@@ -9,7 +9,7 @@ import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/
 import { Checkbox, Dropdown, Field, FieldShell, Segmented, unitParts } from '../kit';
 import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
-  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
+  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, fieldDefault, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
   type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
@@ -51,6 +51,8 @@ export interface TicketFieldsProps {
   options?: Readonly<Record<string, readonly string[]>>;
   /** something at the right end of a select's label row (Delivery: its "What's this?" link) */
   asides?: Readonly<Record<string, ComponentChildren>>;
+  /** the executor tip option: what the tip it set pays in all (one line under it) */
+  tipAutoNote?: string;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -79,6 +81,9 @@ function errorText(e: FieldError): string {
 function Help(props: { text: string }) {
   return <span class="tk-help" title={props.text}>{props.text}</span>;
 }
+/** The user guide where stops are explained (a stop can be triggered by someone's own trade). */
+const STOP_DOCS_URL = 'https://github.com/RossKU/kob/blob/master/docs/user-guide.md#5-limit-and-market-orders';
+
 const helpOf = (text: string | undefined): ComponentChildren => (text ? <Help text={text} /> : undefined);
 
 /**
@@ -113,7 +118,7 @@ export function TicketFields(props: TicketFieldsProps) {
    * says what the label and the unit beside the box say: it is not shown.
    */
   const helpOf0 = (id: string): string | undefined => {
-    const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
+    const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : (id === 'maxFills' || id === 'direct') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
     return helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
   };
   /** the text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else what was typed */
@@ -156,11 +161,19 @@ export function TicketFields(props: TicketFieldsProps) {
         const subLine = sub ? <span class="tk-sub" data-testid={sub.testid} title={sub.text}><span key={sub.text}>{sub.text}</span></span> : null;
 
         if (spec.kind === 'bool') {
+          const note = id === 'tipAuto' && value === 'true' && props.tipAutoNote ? (
+            <>
+              <span class="tk-sub" data-testid="field-tipAuto-total">{props.tipAutoNote}</span>
+              <span class="tk-sub" data-testid="field-tipAuto-partial">{t('ticket.tipAuto.partial')}</span>
+            </>
+          ) : null;
           return (
-            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
+            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={note ? <>{note}{helpOf(help)}</> : helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
           );
         }
         if (spec.kind === 'select') {
+          // a pair order is never filled from the wallet: its crossing choices start at the auction
+          const pairNoTake = !!props.quoteTicker && id === 'crossing';
           return (
             <FieldShell key={id} label={label} labelAside={props.asides?.[id]} hint={subLine ? <>{subLine}{helpOf(help)}</> : helpOf(help)} error={common.error}>
               {({ id: cid, labelId, describedBy, invalid }) => (
@@ -169,8 +182,8 @@ export function TicketFields(props: TicketFieldsProps) {
                   labelledBy={labelId}
                   describedBy={describedBy}
                   invalid={invalid}
-                  value={value || props.defaults?.[id] || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
-                  options={(props.options?.[id] ?? spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
+                  value={value && !(pairNoTake && value === 'take') ? value : pairNoTake ? 'auction' : props.defaults?.[id] || fieldDefault(id, form.type) || spec.options?.[0] || ''}
+                  options={(props.options?.[id] ?? spec.options ?? []).filter((o) => !(pairNoTake && o === 'take')).map((o) => ({ value: o, label: t(has(`ticket.opt.${id}.${o}.${form.type}`) ? `ticket.opt.${id}.${o}.${form.type}` : `ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
                   onChange={(v) => props.onChange(id, v)}
                   data-testid={spec.testid}
@@ -193,6 +206,9 @@ export function TicketFields(props: TicketFieldsProps) {
               ) : null}
               {shown === TOUCH_MIN ? <span class="tk-sub" data-testid={`${spec.testid}-min`}>{t('ticket.touch.minHint')}</span> : null}
               {form.kas && preset === '' ? <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} /> : null}
+              <span class="tk-sub" data-testid={`${spec.testid}-hunt`}>
+                {t('ticket.touch.hunt')} <a href={STOP_DOCS_URL} target="_blank" rel="noopener noreferrer">{t('ticket.touch.hunt.link')}</a>
+              </span>
               {helpOf(help)}
               {helpOf(t('ticket.touch.tradeoff'))}
             </>
