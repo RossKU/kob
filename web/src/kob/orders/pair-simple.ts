@@ -128,7 +128,7 @@ function place(env: PairPlanEnv, d: Draft, pre: PlanIssue[]): PairOrderPlan {
   const possible = ceilDiv(d.amount, minFill);
   const fills = d.fills ?? d.fillsRequested ?? defaultPairFills(possible);
   const dc = pairCarrierOf(env);
-  // The delivery of the token the order receives (a buy: A, a sell: B): a resting order is Collected by default (one carrier for every
+  // The delivery of the token the order receives (a buy: A, a sell: B): a Collected pick (not the default) funds one carrier for every
   // fill), and its default tip also pays the custody input of every later fill (orders/delivery.ts collectedPairTipExtra; the tip is KAS
   // per whole A and the fills count A, on either side)
   const bought = d.side === 'buy' ? a : b;

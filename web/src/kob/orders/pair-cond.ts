@@ -80,7 +80,7 @@ function planPairLegs(env: PairPlanEnv, log: IssueLog, intent: LegsIntent, tip: 
     const c = crossingTouch(env.book, intent.side, legs.tpPrice, 0n);
     if (c.crossing && c.touch !== null) log.add(pairIssue('PAIR_TP_CROSSES', { touch: c.touch, ticker: b.ticker }, 'takeProfit'));
   }
-  // A buy's delivery: Collected by default (one carrier for every fill); its default tip also pays the custody input of every later fill
+  // A buy's delivery: Each fill by default; a Collected pick adds to its default tip what pays the custody input of every later fill
   // (a sell receives B, a buy A; the tip is KAS per whole A on either side)
   const bought = sell ? b : env.token;
   let tipNow = tip;

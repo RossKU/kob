@@ -1,4 +1,4 @@
-// Delivery of buy orders (bid-delivery-spec §10, mock stack): the ticket's Advanced options gain a Delivery row (Collected by default, Each fill,
+// Delivery of buy orders (bid-delivery-spec §10, mock stack): the ticket's Advanced options gain a Delivery row (Each fill by default, Collected,
 // Top-up with its tip per fill), the main form is unchanged, and Settings holds the wallet-wide default and, read-only, the Top-up threshold per
 // token. The placed orders carry the delivery block the planner chose (decoded by the mock indexer from the real transaction).
 //
@@ -23,7 +23,7 @@ const openAdvanced = async (page: Page): Promise<void> => {
 };
 const stateOf = (placed: { views: any[] }): Record<string, string> => placed.views[0]!.state.state as Record<string, string>;
 
-test('a limit buy is Collected by default: Delivery under Advanced, no Fills box, one carrier; the main form is unchanged', async ({ appPage: page, mock }) => {
+test('a limit buy is Each fill by default: Delivery under Advanced, the Fills box, a carrier per fill; the main form is unchanged', async ({ appPage: page, mock }) => {
   await page.setViewportSize({ width: 1280, height: 1000 });
   await openStd(page, mock);
   await pickType(page, 'limit', 'buy');
@@ -34,10 +34,10 @@ test('a limit buy is Collected by default: Delivery under Advanced, no Fills box
     els.filter((e) => !e.closest('.tk-advanced') && (e as HTMLElement).offsetParent !== null).map((e) => e.getAttribute('data-testid')),
   );
   expect(main).toEqual(['order-amount', 'order-price', 'field-ladder.on', 'field-lifetime']);
-  await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'collected');
-  await expect(page.getByTestId('field-delivery')).toContainText('Collected, sent at the end');
-  await expect(page.getByTestId('order-delivery-note')).toHaveText('Fills collect in the order and arrive as one UTXO when it ends.');
-  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
+  await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'each');
+  await expect(page.getByTestId('field-delivery')).toContainText('Each fill separately');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill arrives in your wallet as its own UTXO.');
+  await expect(page.getByTestId('field-maxFills')).toBeVisible();
   await expect(page.getByTestId('field-topupTip')).toHaveCount(0);
   // the row right after the priority tip
   const ids = await page.getByTestId('order-advanced').locator('[data-testid^="field-"], [data-testid="order-tip"]').evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')));
@@ -45,8 +45,22 @@ test('a limit buy is Collected by default: Delivery under Advanced, no Fills box
   await waitReviewable(page);
   if (shots) await page.getByTestId('order-ticket').screenshot({ path: `${shots}/delivery-advanced-default.png` });
   const placed = await placeOrder(page, mock);
-  expect(stateOf(placed)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
+  expect(stateOf(placed)).toMatchObject({ mode: '0', recvThreshold: '0', topupTip: '0', bought: '0' });
+});
 
+test('Collected is opt-in: the hint, no Fills box, one carrier, mode 1', async ({ appPage: page, mock }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await openStd(page, mock);
+  await pickType(page, 'limit', 'buy');
+  await fillFields(page, { price: '0.025', amount: '40', minFill: '10' });
+  await openAdvanced(page);
+  await chooseOption(page.getByTestId('field-delivery'), 'collected');
+  await expect(page.getByTestId('field-delivery')).toContainText('Collected, sent at the end');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Fills collect in the order and arrive as one UTXO when it ends.');
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
+  await waitReviewable(page);
+  const placed = await placeOrder(page, mock);
+  expect(stateOf(placed)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
 });
 
 test('Top-up: the tip per fill (default from the program), the tip total and Fills; the order carries the threshold, Settings shows it', async ({ appPage: page, mock }) => {
@@ -89,10 +103,10 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await page.goto('/#/settings');
   const card = page.getByTestId('settings-delivery');
   const choice = card.getByTestId('settings-delivery-choice');
-  await expect(choice).toHaveAttribute('data-value', 'collected');
-  await expect(choice).toContainText('Collected, sent at the end');
-  await chooseOption(choice, 'each');
   await expect(choice).toHaveAttribute('data-value', 'each');
+  await expect(choice).toContainText('Each fill separately');
+  await chooseOption(choice, 'collected');
+  await expect(choice).toHaveAttribute('data-value', 'collected');
   await expect(card.getByTestId('settings-delivery-thresholds-none')).toHaveText('None yet.');
   if (shots) {
     await card.scrollIntoViewIfNeeded();
@@ -102,13 +116,13 @@ test('Settings: the wallet default applies to the ticket at once; IOC, sells and
   await page.goto(`/#/market/${STD}`);
   await pickType(page, 'limit', 'buy');
   await openAdvanced(page);
-  await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'each');
-  await expect(page.getByTestId('field-delivery')).toContainText('Each fill separately');
-  await expect(page.getByTestId('order-delivery-note')).toHaveText('Every fill arrives in your wallet as its own UTXO.');
-  await expect(page.getByTestId('field-maxFills')).toBeVisible();
+  await expect(page.getByTestId('field-delivery')).toHaveAttribute('data-value', 'collected');
+  await expect(page.getByTestId('field-delivery')).toContainText('Collected, sent at the end');
+  await expect(page.getByTestId('order-delivery-note')).toHaveText('Fills collect in the order and arrive as one UTXO when it ends.');
+  await expect(page.getByTestId('field-maxFills')).toHaveCount(0);
   await fillFields(page, { price: '0.025', amount: '40', minFill: '10' });
   const placed = await placeOrder(page, mock);
-  expect(stateOf(placed).mode).toBe('0');
+  expect(stateOf(placed).mode).toBe('1');
 
   await pickType(page, 'ioc', 'buy');
   await expect(page.getByTestId('field-delivery')).toHaveCount(0);
@@ -138,9 +152,10 @@ test("What's this?: the step-by-step help opens from the Delivery label, plays, 
   await link.click();
   const help = page.getByTestId('delivery-help');
   await expect(help).toBeVisible();
-  // the choice in force (Collected) is highlighted
-  await expect(help.getByTestId('delivery-help-lane-collected')).toHaveAttribute('data-on', 'true');
-  await expect(help.getByTestId('delivery-help-lane-each')).toHaveAttribute('data-on', 'false');
+  // the choice in force (Each fill, the default) is highlighted and carries the default pill
+  await expect(help.getByTestId('delivery-help-lane-each')).toHaveAttribute('data-on', 'true');
+  await expect(help.getByTestId('delivery-help-lane-collected')).toHaveAttribute('data-on', 'false');
+  await expect(help.getByTestId('delivery-help-lane-each').locator('.dh-pill').first()).toHaveText('default');
   const caption = help.getByTestId('delivery-help-caption');
   const play = help.getByTestId('delivery-help-play');
   // it plays: the caption moves on by itself

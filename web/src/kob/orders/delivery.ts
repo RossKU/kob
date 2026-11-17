@@ -17,7 +17,7 @@ import { issue } from './common-issues';
 /** The three deliveries by their names in the app. */
 export type DeliveryChoice = 'each' | 'collected' | 'topup';
 /** The order of the choices in the ticket's select and in Settings. */
-export const DELIVERY_CHOICES: readonly DeliveryChoice[] = ['collected', 'each', 'topup'];
+export const DELIVERY_CHOICES: readonly DeliveryChoice[] = ['each', 'collected', 'topup'];
 export const isDeliveryChoice = (v: unknown): v is DeliveryChoice => v === 'each' || v === 'collected' || v === 'topup';
 
 /** The state's `mode` of each choice. */
@@ -40,7 +40,7 @@ export type DeliveryClass = 'resting' | 'immediate' | 'repeating';
 export interface DeliveryRequest {
   /** The choice under Advanced options. Absent: the wallet default. */
   choice?: DeliveryChoice;
-  /** The wallet-wide default of Settings. Absent: Collected. */
+  /** The wallet-wide default of Settings. Absent: Each fill. */
   walletDefault?: DeliveryChoice;
   /** Top-up only: the tip per fill in sompi. Absent: the default (`defaultTopupTip`). */
   topupTip?: bigint;
@@ -125,16 +125,16 @@ export interface ResolvedDelivery {
   threshold: bigint | null;
 }
 
-/** The choice an order gets: each fill when fixed, else the user's, else the wallet default, else Collected. */
+/** The choice an order gets: each fill when fixed, else the user's, else the wallet default, else Each fill. */
 export const effectiveChoice = (o: Pick<DeliveryOrder, 'codec' | 'cls'>, r: Pick<DeliveryRequest, 'choice' | 'walletDefault'> | undefined): DeliveryChoice =>
-  deliveryFixed(o) ? 'each' : r?.choice ?? r?.walletDefault ?? 'collected';
+  deliveryFixed(o) ? 'each' : r?.choice ?? r?.walletDefault ?? 'each';
 
 const EACH: Required<DeliveryFields> = { mode: '0', recvThreshold: '0', topupTip: '0', bought: '0' };
 
 /**
  * The delivery of an order from what the user and the wallet asked for (bid-delivery-spec §10). Problems are added to `pre`:
  * - a top-up the user chose that the order cannot have is an error (`DELIVERY_TOPUP_UNAVAILABLE`); a top-up that is only the
- *   wallet default falls back to Collected with a note (`DELIVERY_TOPUP_FALLBACK`);
+ *   wallet default falls back to Each fill with a note (`DELIVERY_TOPUP_FALLBACK`);
  * - a top-up tip below 0 or above the delivery carrier is an error (`TOPUP_TIP_INVALID`); one below the default warns
  *   (`TOPUP_TIP_LOW`: a filler may not top up for it, the fill then arrives as a new UTXO).
  */
@@ -146,7 +146,7 @@ export function resolveDelivery(o: DeliveryOrder, r: DeliveryRequest | undefined
     if (!offer.ok) {
       if (r?.choice === 'topup') pre.push(issue('DELIVERY_TOPUP_UNAVAILABLE', { reason: offer.reason }, 'delivery'));
       else pre.push(issue('DELIVERY_TOPUP_FALLBACK', { reason: offer.reason }));
-      choice = 'collected';
+      choice = 'each';
     } else {
       const tip = r?.topupTip ?? offer.defaultTip;
       if (tip < 0n || tip > o.carrier) pre.push(issue('TOPUP_TIP_INVALID', { max: o.carrier }, 'topupTip'));
@@ -192,7 +192,7 @@ export function withThreshold<I extends object>(intent: I, threshold: bigint): I
 
 // ---- pair orders (founder decision 11/16)
 //
-// A resting pair BID (KobPair, KobCondPair) whose bought token A is KCC-20 is Collected by default, like a KAS-book bid, and is funded
+// A resting pair BID (KobPair, KobCondPair) whose bought token A is KCC-20 delivers at each fill by default (founder decision 11/17), and when the user picks Collected it is funded
 // with one delivery carrier. "Added to one UTXO" is not offered on pairs (the spec defines no threshold price for them), and a KRON A
 // delivers at each fill. A Collected fill after the first also spends the bought-custody, which costs its filler more relay fee: the
 // default tip pays it.
@@ -229,7 +229,7 @@ export function collectedPairTipExtra(extra: bigint, scale: bigint, amount: bigi
 
 /**
  * The delivery of a pair BID: resolveDelivery without "Added to one UTXO". A GTC order is resting, any other each fill. A Top-up the user
- * chose is an error; one that is only the wallet default falls back to Collected.
+ * chose is an error; one that is only the wallet default falls back to Each fill.
  */
 export function resolvePairDelivery(o: Omit<DeliveryOrder, 'program' | 'price'>, r: DeliveryRequest | undefined, pre: PlanIssue[]): ResolvedDelivery {
   // no program: no top-up extra, so topupOffer refuses it

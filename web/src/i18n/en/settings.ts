@@ -7,7 +7,7 @@ export default {
   'settings.currency.hint.short': 'USD is an estimate, not a quote. It applies at once.',
   'settings.delivery.title': 'Bought tokens',
   'settings.delivery.short': 'Where the tokens your buy orders buy go. Applies at once; Advanced options can change it per order.',
-  'settings.delivery.explain': 'Collected: the order keeps what it buys and sends it as one UTXO when it ends, is cancelled or expires; Claim sends it earlier. One carrier per order. Each fill: every fill sends a new UTXO to your wallet. Add to one UTXO: each fill is added to one UTXO in your wallet and pays the filler a small tip; a fill that cannot be added arrives as a new UTXO. IOC, FOK and market orders and KRON tokens always deliver at each fill.',
+  'settings.delivery.explain': 'Each fill (default): every fill sends a new UTXO to your wallet. Collected: the order keeps what it buys and sends it as one UTXO when it ends, is cancelled or expires; Claim sends it earlier. One carrier per order. Add to one UTXO: each fill is added to one UTXO in your wallet and pays the filler a small tip; a fill that cannot be added arrives as a new UTXO. IOC, FOK and market orders and KRON tokens always deliver at each fill.',
   'settings.delivery.label': 'Default for buy orders',
   'settings.delivery.threshold': 'Threshold of the one UTXO, per token (set at your first such order)',
   'settings.delivery.thresholdNone': 'None yet.',

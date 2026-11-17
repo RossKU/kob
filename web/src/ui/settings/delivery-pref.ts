@@ -1,10 +1,10 @@
 // The wallet's delivery settings for buy orders (kob/orders/delivery.ts, bid-delivery-spec §10), kept per browser in localStorage:
-// - `kob.delivery`: the default delivery of buy orders (`each`, `topup`; absent: Collected). Chosen under Settings, applies at once; the ticket's
+// - `kob.delivery`: the default delivery of buy orders (`collected`, `topup`; absent: Each fill). Chosen under Settings, applies at once; the ticket's
 //   Advanced options can still pick another one per order.
 // - `kob.delivery.threshold.<wallet key>.<token covenant id>.<extension commitment>`: the receive threshold of Top-up for that token, set at the
 //   wallet's first top-up order of it and reused by every later one. It changes only when the user resets it (Settings).
 //
-// The stored values are a convenience, not authority: without storage the page works the same (Collected, and a threshold from each order's
+// The stored values are a convenience, not authority: without storage the page works the same (Each fill, and a threshold from each order's
 // price) and a choice lasts until the page is closed.
 import { useEffect, useState } from 'preact/hooks';
 import { isDeliveryChoice, type DeliveryChoice } from '../../kob/orders/delivery';
@@ -27,13 +27,13 @@ const browserStore = (): ListStore | null => {
 const listeners = new Set<(c: DeliveryChoice) => void>();
 let memory: DeliveryChoice | null = null;
 
-/** The stored default: Each fill or Top-up when the stored value says so, Collected otherwise or if unreadable. */
+/** The stored default: Collected or Top-up when the stored value says so, Each fill otherwise or if unreadable. */
 export function readDeliveryPref(store: Store | null = browserStore()): DeliveryChoice {
   try {
     const v = store?.getItem(DELIVERY_PREF_KEY);
-    return isDeliveryChoice(v) ? v : 'collected';
+    return isDeliveryChoice(v) ? v : 'each';
   } catch {
-    return 'collected';
+    return 'each';
   }
 }
 
@@ -45,7 +45,7 @@ export function writeDeliveryPref(c: DeliveryChoice, store: Store | null = brows
   for (const l of listeners) l(c);
   try {
     if (!store) return false;
-    if (c === 'collected') store.removeItem(DELIVERY_PREF_KEY);
+    if (c === 'each') store.removeItem(DELIVERY_PREF_KEY);
     else store.setItem(DELIVERY_PREF_KEY, c);
     return true;
   } catch {

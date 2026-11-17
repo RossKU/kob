@@ -34,30 +34,31 @@ describe('the Collected tip of a pair bid', () => {
 });
 
 describe('pair bids with a delivery (signed and validated by the script engine)', () => {
-  it('a resting pair bid is Collected by default: mode 1, one delivery carrier, the tip raised for the later fills', () => {
+  it('a resting pair bid is Each fill by default (the plain default tip); Collected is opt-in: mode 1, one delivery carrier, the tip raised for the later fills', () => {
     const env = makePairEnv();
-    const p = pairValid(env, buy);
+    const col = { delivery: { choice: 'collected' } } as const;
+    const p = pairValid(env, { ...buy, ...col });
     expect(pairState(p)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
     expect(p.pair!.deliveries).toBe(1n);
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'collected' }, fills: 1n });
     expect(BigInt(pairState(p).tip)).toBe(defaultPairTip(env, 10_000n) + collectedPairTipExtra(pairCollectedExtra(env.token.program), env.token.scale, 10_000n, 2_500n));
     expect(p.disclosure!.notes).toContain('deliveryCollected');
     // a tip the user typed stays as typed
-    expect(pairState(pairValid(env, { ...buy, tip: 7n })).tip).toBe('7');
-    // negative: Each fill funds the protocol's deliveries (at least two) with the plain default tip
-    const each = pairValid(env, { ...buy, delivery: { choice: 'each' } });
+    expect(pairState(pairValid(env, { ...buy, ...col, tip: 7n })).tip).toBe('7');
+    // the default: Each fill funds the protocol's deliveries (at least two) with the plain default tip
+    const each = pairValid(env, buy);
     expect(pairState(each).mode).toBe('0');
     expect(each.pair!.deliveries).toBeGreaterThan(1n);
     expect(BigInt(pairState(each).tip)).toBe(defaultPairTip(env, 10_000n));
   });
 
-  it('"Added to one UTXO" is not offered on a pair: refused when chosen, the wallet default falls back to Collected', () => {
+  it('"Added to one UTXO" is not offered on a pair: refused when chosen, the wallet default falls back to Each fill', () => {
     const env = makePairEnv();
     const chosen = plan(env, { ...buy, delivery: { choice: 'topup' } });
     expect(chosen.ok).toBe(false);
     expect(codes(chosen)).toContain('DELIVERY_TOPUP_UNAVAILABLE');
     const byDefault = pairValid(env, { ...buy, delivery: { walletDefault: 'topup' } });
-    expect(pairState(byDefault).mode).toBe('1');
+    expect(pairState(byDefault).mode).toBe('0');
     expect(codes(byDefault)).toContain('DELIVERY_TOPUP_FALLBACK');
   });
 
@@ -71,26 +72,34 @@ describe('pair bids with a delivery (signed and validated by the script engine)'
     expect(pairState(kronSell).mode).toBe('0');
   });
 
-  it('a conditional pair bid (KobCondPair) is Collected with one carrier', () => {
-    const p = pairValid(makePairEnv(), { type: 'stopLimit', side: 'buy', amount: 10_000n, stop: 1_700n, limit: 1_750n, minFill: 2_500n });
+  it('a conditional pair bid (KobCondPair) is Each fill by default; Collected has one carrier', () => {
+    const stop = { type: 'stopLimit', side: 'buy', amount: 10_000n, stop: 1_700n, limit: 1_750n, minFill: 2_500n } as const;
+    expect(pairState(pairValid(makePairEnv(), stop)).mode).toBe('0');
+    const p = pairValid(makePairEnv(), { ...stop, delivery: { choice: 'collected' } });
     expect(pairState(p)).toMatchObject({ mode: '1', bought: '0' });
     expect(p.pair!.deliveries).toBe(1n);
   });
 
-  it('a resting pair sell (it receives B) is Collected by default: one carrier, the tip raised with the extra of B', () => {
+  it('a resting pair sell (it receives B) is Each fill by default; Collected: one carrier, the tip raised with the extra of B', () => {
     const env = makePairEnv();
     const sell = { type: 'limit', side: 'sell', amount: 10_000n, price: 1_600n, minFill: 2_500n } as const;
-    const p = pairValid(env, sell);
+    const col = { delivery: { choice: 'collected' } } as const;
+    const p = pairValid(env, { ...sell, ...col });
     expect(pairState(p)).toMatchObject({ side: '1', mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
     expect(p.pair!.deliveries).toBe(1n);
     expect(BigInt(pairState(p).tip)).toBe(defaultPairTip(env, 10_000n) + collectedPairTipExtra(pairCollectedExtra(env.pair.quote.program), env.token.scale, 10_000n, 2_500n));
-    // negative: Each fill funds a carrier per possible fill
-    const each = pairValid(env, { ...sell, delivery: { choice: 'each' } });
+    // the default: Each fill funds a carrier per possible fill, the plain tip
+    const each = pairValid(env, sell);
     expect(pairState(each).mode).toBe('0');
     expect(each.pair!.deliveries).toBe(4n);
-    // a TWAP sell and a stop sell too; an IOC sell delivers at each fill
-    expect(pairState(pairValid(env, { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n })).mode).toBe('1');
-    expect(pairState(pairValid(env, { type: 'stopMarket', side: 'sell', amount: 8_000n, stop: 1_400n })).mode).toBe('1');
+    expect(BigInt(pairState(each).tip)).toBe(defaultPairTip(env, 10_000n));
+    // a TWAP sell and a stop sell: Each fill by default, Collected when picked; an IOC sell delivers at each fill
+    const twap = { type: 'twap', amount: 10_000n, sliceAmount: 2_500n, interval: { daa: 600n }, price: 1_500n } as const;
+    const stopSell = { type: 'stopMarket', side: 'sell', amount: 8_000n, stop: 1_400n } as const;
+    expect(pairState(pairValid(env, twap)).mode).toBe('0');
+    expect(pairState(pairValid(env, stopSell)).mode).toBe('0');
+    expect(pairState(pairValid(env, { ...twap, ...col })).mode).toBe('1');
+    expect(pairState(pairValid(env, { ...stopSell, ...col })).mode).toBe('1');
     const ioc = plan(env, { type: 'ioc', side: 'sell', amount: 1_000n, price: 1_400n });
     expect(planDelivery(ioc)?.delivery.choice ?? 'each').toBe('each');
   });

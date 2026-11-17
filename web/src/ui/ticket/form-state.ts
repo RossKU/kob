@@ -227,14 +227,14 @@ export function hasDeliveryChoice(form: Pick<TicketForm, 'type' | 'side'>, ctx?:
 export const deliveryChoicesOf = (ctx?: Pick<TicketCtx, 'quoteDecimals'>): readonly DeliveryChoice[] => (isPairCtx(ctx) ? DELIVERY_CHOICES.filter((c) => c !== 'topup') : DELIVERY_CHOICES);
 
 /**
- * The delivery the form's order gets: the choice under Advanced, else the wallet default, else Collected (a choice the ticket does not offer,
- * Added to one UTXO on a pair: Collected); null when it has no choice.
+ * The delivery the form's order gets: the choice under Advanced, else the wallet default, else Each fill (a choice the ticket does not offer,
+ * Added to one UTXO on a pair: Each fill); null when it has no choice.
  */
 export function deliveryOf(form: Pick<TicketForm, 'type' | 'side' | 'values'>, ctx?: Pick<TicketCtx, 'quoteDecimals' | 'family' | 'quoteFamily' | 'delivery'>): DeliveryChoice | null {
   if (!hasDeliveryChoice(form, ctx)) return null;
   const v = form.values.delivery;
-  const c = isDeliveryChoice(v) ? v : ctx?.delivery?.walletDefault ?? 'collected';
-  return deliveryChoicesOf(ctx).includes(c) ? c : 'collected';
+  const c = isDeliveryChoice(v) ? v : ctx?.delivery?.walletDefault ?? 'each';
+  return deliveryChoicesOf(ctx).includes(c) ? c : 'each';
 }
 
 /** A token/token pair ticket (the quote is a token B): a pair sell delivers B per fill, so it budgets its fills (`maxFills`) like a buy. */
@@ -704,7 +704,7 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     const choice = r.pick('delivery', offered);
     const wallet = ctx.delivery?.walletDefault;
     const req: DeliveryRequest = dropUndefined({
-      choice, walletDefault: wallet !== undefined && offered.includes(wallet) ? wallet : wallet !== undefined ? 'collected' : undefined, topupTip: delivery === 'topup' ? r.kas('topupTip') : undefined, threshold: delivery === 'topup' ? ctx.delivery?.threshold : undefined,
+      choice, walletDefault: wallet !== undefined && offered.includes(wallet) ? wallet : wallet !== undefined ? 'each' : undefined, topupTip: delivery === 'topup' ? r.kas('topupTip') : undefined, threshold: delivery === 'topup' ? ctx.delivery?.threshold : undefined,
     });
     return Object.keys(req).length ? { delivery: req } : {};
   };

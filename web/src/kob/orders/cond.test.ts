@@ -10,7 +10,7 @@ import { askState, bidState, codes, errorCodes, planOk } from './cond-testkit';
 const CARRIER = 1_000_000_000n;
 const GTC = CLOCK.daa + 77_760_000n;
 const SCALE = 1_000n;
-/** Each fill (mode 0): the per-fill carrier tests below (a conditional buy defaults to Collected). */
+/** Each fill (mode 0): the per-fill carrier tests below (Each fill is the default; the Collected tests select it). */
 const EACH = { choice: 'each' } as const;
 /** the wallet default minimum fill: the amount worth 10 KAS at the leg price, clamped to 1..amount */
 const defMin = (amount: bigint, price: bigint): bigint => {
@@ -485,13 +485,13 @@ describe('timed activation (activeFrom) of plain conditionals', () => {
 
 describe('delivery of conditional buys and sell-first exits (bid-delivery-spec ยง10)', () => {
   const ceiling = 267_800_000n;
-  it('a stop buy is Collected by default: mode 1 and one delivery carrier (negative: Each fill funds three)', () => {
-    const { plan, recovered } = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n });
+  it('a stop buy is Each fill by default; Collected is opt-in: mode 1 and one delivery carrier', () => {
+    const { plan, recovered } = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, delivery: { choice: 'collected' } });
     expect(bidState(plan.states[0]!)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
     expect(BigInt(recovered[0]!.value)).toBe(10n * ceiling + CARRIER + 2_200_000n);
     expect(plan.disclosure!.carriers).toContainEqual({ kind: 'deliveryCarrier', amount: CARRIER, count: 1 });
     expect(plan.disclosure!.notes).toContain('deliveryCollected');
-    const each = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n, delivery: EACH });
+    const each = planOk(makeEnv(), { type: 'stopMarket', side: 'buy', amount: 10n * TOK, stop: 260_000_000n });
     expect(bidState(each.plan.states[0]!).mode).toBe('0');
     expect(BigInt(each.recovered[0]!.value) - BigInt(recovered[0]!.value)).toBe(2n * CARRIER);
   });
@@ -503,9 +503,12 @@ describe('delivery of conditional buys and sell-first exits (bid-delivery-spec ย
     expect(plan.disclosure!.carriers).toContainEqual({ kind: 'deliveryCarrier', amount: CARRIER, count: 3 });
   });
 
-  it('the buy-back exits of a sell-first IFD are Collected; a repeating one delivers at each fill (negative: the repeating rule removed)', () => {
+  it('the buy-back exits of a sell-first IFD are Each fill by default and Collected when picked; a repeating one delivers at each fill (negative: the repeating rule removed)', () => {
     const ifd: CondIntent = { type: 'ifd', side: 'sell', amount: 10n * TOK, entry: { price: 260_000_000n }, exit: { takeProfit: 240_000_000n } };
-    const { plan } = planOk(makeEnv(), ifd);
+    const dflt = planOk(makeEnv(), ifd).plan;
+    expect(dflt.states[0]!.state).toMatchObject({ exitMode: '0' });
+    expect(bidState(dflt.states[1]!).mode).toBe('0');
+    const { plan } = planOk(makeEnv(), { ...ifd, delivery: { choice: 'collected' } } as CondIntent);
     expect(plan.states[0]!.state).toMatchObject({ exitMode: '1', exitRecvThreshold: '0', exitTopupTip: '0' });
     expect(bidState(plan.states[1]!)).toMatchObject({ mode: '1', bought: '0' });
     const rep = planOk(makeEnv(), { ...ifd, type: 'repeatIfd', delivery: { choice: 'collected' } } as CondIntent);

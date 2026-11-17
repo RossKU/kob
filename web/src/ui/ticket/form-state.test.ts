@@ -61,10 +61,10 @@ describe('vocabulary and layout', () => {
     expect(layoutOf(form('limit', 'sell', {})).main).not.toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', { lifetime: 'gtd' })).main).toContain('lifetimeAt');
     expect(layoutOf(form('limit', 'sell', {})).advanced).not.toContain('maxFills');
-    // a resting buy chooses its delivery right after the tip; Collected (the default) is funded with one carrier, so it has no Fills box
+    // a resting buy chooses its delivery right after the tip; Collected is funded with one carrier, so it has no Fills box; Each fill (the default) has one
     expect(layoutOf(form('limit', 'buy', {})).advanced.slice(0, 2)).toEqual(['tip', 'delivery']);
-    expect(layoutOf(form('limit', 'buy', {})).advanced).not.toContain('maxFills');
-    expect(layoutOf(form('limit', 'buy', { delivery: 'each' })).advanced).toContain('maxFills');
+    expect(layoutOf(form('limit', 'buy', { delivery: 'collected' })).advanced).not.toContain('maxFills');
+    expect(layoutOf(form('limit', 'buy', {})).advanced).toContain('maxFills');
     expect(layoutOf(form('limit', 'buy', { delivery: 'topup' })).advanced).toEqual(expect.arrayContaining(['delivery', 'topupTip', 'maxFills']));
     expect(layoutOf(form('ifd', 'buy', {})).main).toContain('exit.takeProfit');
     expect(layoutOf(form('ifd', 'buy', { 'exit.kind': 'stop' })).main).toContain('exit.stop');
@@ -634,12 +634,12 @@ describe('pair sells budget their fills (maxFills)', () => {
 
   it('a pair sell shows the fills field where a buy does; a KAS sell still does not', () => {
     for (const type of ['limit', 'dutch', 'stopMarket', 'stopLimit', 'trailingStop', 'takeProfit', 'oco'] as const) {
-      // a resting pair sell is Collected by default too (it receives B; one carrier): its Fills box shows with Each fill
-      expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).not.toContain('maxFills');
-      expect(layoutOf(form(type, 'sell', { delivery: 'each' }), PAIR).advanced, `${type} pair sell, each fill`).toContain('maxFills');
-      // a pair buy is Collected by default (one carrier): its Fills box shows with Each fill
-      expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).not.toContain('maxFills');
-      expect(layoutOf(form(type, 'buy', { delivery: 'each' }), PAIR).advanced, `${type} pair buy, each fill`).toContain('maxFills');
+      // a resting pair sell is Each fill by default (it receives B): its Fills box shows, and hides with Collected (one carrier)
+      expect(layoutOf(form(type, 'sell', {}), PAIR).advanced, `${type} pair sell`).toContain('maxFills');
+      expect(layoutOf(form(type, 'sell', { delivery: 'collected' }), PAIR).advanced, `${type} pair sell, collected`).not.toContain('maxFills');
+      // a pair buy is Each fill by default: its Fills box shows, and hides with Collected
+      expect(layoutOf(form(type, 'buy', {}), PAIR).advanced, `${type} pair buy`).toContain('maxFills');
+      expect(layoutOf(form(type, 'buy', { delivery: 'collected' }), PAIR).advanced, `${type} pair buy, collected`).not.toContain('maxFills');
       expect(layoutOf(form(type, 'sell', {})).advanced, `${type} KAS sell`).not.toContain('maxFills');
       expect(layoutOf(form(type, 'sell', {}), CTX).advanced, `${type} KAS sell (ctx)`).not.toContain('maxFills');
     }
@@ -728,35 +728,35 @@ describe('delivery of buy orders (bid-delivery-spec §10)', () => {
     expect(hasDeliveryChoice({ type: 'limit', side: 'sell' }, { ...PAIR, family: 'kron' })).toBe(true);
     expect(hasDeliveryChoice({ type: 'ifd', side: 'sell' }, PAIR)).toBe(false);
     expect(hasDeliveryChoice({ type: 'limit', side: 'buy' }, { ...PAIR, family: 'kron' })).toBe(false);
-    // a pair offers no Added to one UTXO: the wallet default falls back to Collected
-    expect(deliveryChoicesOf(PAIR)).toEqual(['collected', 'each']);
-    expect(deliveryOf(form('limit', 'buy', {}), { ...PAIR, delivery: { walletDefault: 'topup' } })).toBe('collected');
-    expect(buildIntent(form('limit', 'buy', { amount: '1', price: '1' }), { ...PAIR, delivery: { walletDefault: 'topup' } }).intent).toMatchObject({ delivery: { walletDefault: 'collected' } });
+    // a pair offers no Added to one UTXO: the wallet default falls back to Each fill
+    expect(deliveryChoicesOf(PAIR)).toEqual(['each', 'collected']);
+    expect(deliveryOf(form('limit', 'buy', {}), { ...PAIR, delivery: { walletDefault: 'topup' } })).toBe('each');
+    expect(buildIntent(form('limit', 'buy', { amount: '1', price: '1' }), { ...PAIR, delivery: { walletDefault: 'topup' } }).intent).toMatchObject({ delivery: { walletDefault: 'each' } });
     // no choice: no Delivery row, and the Fills box stays
     expect(layoutOf(form('ioc', 'buy', {})).advanced).not.toContain('delivery');
     expect(layoutOf(form('limit', 'buy', {}), { ...CTX, family: 'kron' }).advanced).toEqual(expect.arrayContaining(['maxFills']));
     expect(layoutOf(form('limit', 'buy', {}), { ...CTX, family: 'kron' }).advanced).not.toContain('delivery');
   });
 
-  it('the choice under Advanced, else the wallet default, else Collected', () => {
-    expect(deliveryOf(form('limit', 'buy', {}), CTX)).toBe('collected');
-    expect(deliveryOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'each' } })).toBe('each');
-    expect(deliveryOf(form('limit', 'buy', { delivery: 'topup' }), { ...CTX, delivery: { walletDefault: 'each' } })).toBe('topup');
+  it('the choice under Advanced, else the wallet default, else Each fill', () => {
+    expect(deliveryOf(form('limit', 'buy', {}), CTX)).toBe('each');
+    expect(deliveryOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'collected' } })).toBe('collected');
+    expect(deliveryOf(form('limit', 'buy', { delivery: 'topup' }), { ...CTX, delivery: { walletDefault: 'collected' } })).toBe('topup');
     expect(deliveryOf(form('ioc', 'buy', { delivery: 'topup' }), CTX)).toBeNull();
-    // the wallet default Each fill shows the Fills box
-    expect(layoutOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'each' } }).advanced).toContain('maxFills');
+    // the wallet default Collected hides the Fills box
+    expect(layoutOf(form('limit', 'buy', {}), { ...CTX, delivery: { walletDefault: 'collected' } }).advanced).not.toContain('maxFills');
   });
 
   it('builds the delivery request: the choice, the wallet default, a Top-up tip in KAS and the stored threshold', () => {
-    const ctx: TicketCtx = { ...CTX, delivery: { walletDefault: 'each', threshold: 777n } };
+    const ctx: TicketCtx = { ...CTX, delivery: { walletDefault: 'collected', threshold: 777n } };
     const base = { amount: '5', price: '1.5' };
-    expect(buildIntent(form('limit', 'buy', base), ctx).intent).toMatchObject({ delivery: { walletDefault: 'each' } });
+    expect(buildIntent(form('limit', 'buy', base), ctx).intent).toMatchObject({ delivery: { walletDefault: 'collected' } });
     expect(buildIntent(form('limit', 'buy', base), CTX).intent).not.toHaveProperty('delivery');
     const topup = buildIntent(form('limit', 'buy', { ...base, delivery: 'topup', topupTip: '0.009', maxFills: '4' }), ctx).intent;
-    expect(topup).toMatchObject({ delivery: { choice: 'topup', walletDefault: 'each', topupTip: 900_000n, threshold: 777n }, maxFills: 4n });
+    expect(topup).toMatchObject({ delivery: { choice: 'topup', walletDefault: 'collected', topupTip: 900_000n, threshold: 777n }, maxFills: 4n });
     // Collected drops the Fills value (one carrier), and a Top-up tip typed before is not sent
     const collected = buildIntent(form('limit', 'buy', { ...base, delivery: 'collected', topupTip: '0.009', maxFills: '4' }), ctx).intent;
-    expect(collected).toMatchObject({ delivery: { choice: 'collected', walletDefault: 'each' } });
+    expect(collected).toMatchObject({ delivery: { choice: 'collected', walletDefault: 'collected' } });
     expect(collected).not.toHaveProperty('maxFills');
     expect((collected as { delivery: object }).delivery).not.toHaveProperty('topupTip');
     expect(buildIntent(form('limit', 'buy', { ...base, delivery: 'topup', topupTip: 'x' }), ctx).errors.map((e) => [e.field, e.code])).toEqual([['topupTip', 'format']]);
@@ -767,10 +767,13 @@ describe('delivery of buy orders (bid-delivery-spec §10)', () => {
     expect(back.values).toMatchObject({ delivery: 'topup', topupTip: '0.009' });
   });
 
-  it('plans a Collected and a Top-up limit buy from the form', () => {
+  it('plans an Each fill, a Collected and a Top-up limit buy from the form', () => {
     const env = makeEnv();
     const c: TicketCtx = { decimals: 3, scale: 1_000n, tick: 1n };
-    const collected = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5' }), c).intent!);
+    const each = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5' }), c).intent!);
+    expect(errors(each)).toEqual([]);
+    expect(each.states[0]!.state).toMatchObject({ mode: '0' });
+    const collected = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5', delivery: 'collected' }), c).intent!);
     expect(errors(collected)).toEqual([]);
     expect(collected.states[0]!.state).toMatchObject({ mode: '1' });
     const topup = planOrder(env, buildIntent(form('limit', 'buy', { amount: '10', price: '2.5', minFill: '2.5', delivery: 'topup' }), c).intent!);
