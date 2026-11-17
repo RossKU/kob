@@ -137,6 +137,7 @@ export default {
   'issue.pending.window': "Finish it within 72 hours of the first step: after that, other apps may no longer show the token's name, ticker and decimals.",
   'issue.pending.old': "This creation was started more than 60 hours ago. Other apps stop picking up the token's details 72 hours after the first step: a new creation is the safer choice.",
   'issue.pending.spent': 'The coin of the first step was spent, so this creation cannot be finished. Start a new one.',
+  'issue.pending.invalid': 'This saved creation does not match what its first step recorded on chain, so it was not signed. It may have been changed in this browser. Forget it; the KAS of a real first step stays in your wallet.',
   'issue.pending.needWallet': 'Connect the wallet that started this creation to finish it.',
   'issue.pending.finish': 'Finish the creation',
   'issue.pending.continued': "The token's details are recorded on chain, but the token itself was not created yet.",

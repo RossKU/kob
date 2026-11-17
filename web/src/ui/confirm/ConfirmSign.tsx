@@ -4,7 +4,8 @@
 // acknowledgement, then runs `signAndSubmitCreation` (wallet/create.ts: one approval for the private-key signer; an extension wallet signs and
 // sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with the signing stepper (Prepare, Create token), and reports the
 // accepted genesis. A creation whose preparation went out but whose genesis did not (declined, not visible in time, refused) closes this
-// screen as `pending`: the Create token page finishes it (its record, data/creations.ts); it is never signed again here.
+// screen as `pending`: the Create token page finishes it (its record, data/creations.ts) on this same screen (`resume`): the creation planned
+// again from the record and checked as a fresh one, only the genesis signed (`finishCreation`).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { useServices, useWallet } from '../../app/context';
 import { readClock } from '../../app/env';
@@ -17,7 +18,8 @@ import type { PlacementRecord } from '../../kob/records';
 import type { BuiltTx } from '../../kob/types';
 import { formatUtc } from '../../kob/daa';
 import { SignFlowError, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
-import { signAndSubmitCreation, type CreationStep } from '../../wallet/create';
+import { CREATION_INVALID, CREATION_SPENT, finishCreation, signAndSubmitCreation, type CreationStep } from '../../wallet/create';
+import type { CreationRecord } from '../../data/creations';
 import { pendingSpends } from '../../app/pending-spends';
 import { Banner, Button, CopyText, Modal, RawDetails, Spinner, Stepper, copyToClipboard, unitParts } from '../kit';
 import { rowTimeTitleUnix, shortId } from '../kit/format';
@@ -32,7 +34,7 @@ import './confirm.css';
 export type ConfirmResult =
   | { status: 'cancelled' }
   | { status: 'submitted'; txid: string; records: PlacementRecord[] }
-  | { status: 'failed'; message: string }
+  | { status: 'failed'; message: string; code?: string }
   /** the preparation is on chain, the genesis is not: the creation record finishes it (`declined`: the wallet did not sign the genesis) */
   | { status: 'pending'; message: string; declined?: boolean };
 
@@ -50,6 +52,11 @@ export interface ConfirmSignProps {
    * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
    */
   creation?: { prep: BuiltTx; declaration: IssueDeclaration; docs: IssueDocs };
+  /**
+   * finishes this saved creation instead (`creation` and `built` are it planned again, wallet/create.ts `checkSavedCreation`): its preparation is
+   * signed already, only the genesis is asked for. Closes as `failed` with the code when the coin is spent or the record does not check out.
+   */
+  resume?: CreationRecord;
   /** called once when the flow ends (cancelled, submitted or failed) */
   onClose(result: ConfirmResult): void;
 }
@@ -115,7 +122,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
   /** a creation with a wallet that asks once per transaction: which approval it shows now (confirm.chain.*) */
   const [chainNote, setChainNote] = useState<'prep' | 'wait' | 'genesis' | null>(null);
   /** a creation: which of its two transactions the stages are of, and whether the node took the preparation (the stepper) */
-  const [chainAt, setChainAt] = useState<{ step: CreationStep | null; waiting: boolean; prepSent: boolean; tried: boolean }>({ step: null, waiting: false, prepSent: false, tried: false });
+  const [chainAt, setChainAt] = useState<{ step: CreationStep | null; waiting: boolean; prepSent: boolean; tried: boolean }>({ step: null, waiting: false, prepSent: !!props.resume?.prepSent, tried: false });
   const [failure, setFailure] = useState<Failure | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmed>('waiting');
@@ -142,7 +149,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     const fee = feeDisclosureOf(built);
     // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
-    const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain } : {};
+    const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain, resumed: !!props.resume } : {};
     return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
   }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
@@ -194,7 +201,23 @@ export function ConfirmSign(props: ConfirmSignProps) {
     try {
       const onStage = (s: SignStage) => alive.current && setStage(s);
       const addressOf = inputAddressOf(services);
-      if (props.creation) {
+      if (props.resume) {
+        // a saved creation: planned and checked again inside, the genesis signed once the node lists the coin of the first step
+        const rec = props.resume;
+        setChainAt((c) => ({ ...c, tried: true }));
+        const id = await finishCreation({
+          kob, node, adapter: wallet.adapter, network: config.network, rec, maker, addressOf,
+          ...(services.fees?.policy ? { feePolicy: services.fees.policy } : {}),
+          onStage: (s, info) => {
+            if (!alive.current) return;
+            setStage(s);
+            setChainAt((c) => ({ ...c, step: 'genesis', prepSent: true, waiting: !!info?.waiting }));
+            if (s === 'signing') setChainNote(info?.waiting ? 'wait' : 'genesis');
+          },
+        });
+        setChainNote(null);
+        await afterAccepted(id);
+      } else if (props.creation) {
         const c = props.creation;
         const twice = !wallet.adapter.signChain;
         setChainAt({ step: null, waiting: false, prepSent: false, tried: true });
@@ -228,6 +251,10 @@ export function ConfirmSign(props: ConfirmSignProps) {
       if (e instanceof SignFlowError && e.code === 'genesis-pending') {
         const declined = e.cause instanceof SignFlowError && e.cause.rejectedByUser;
         finish({ status: 'pending', message: e.message, ...(declined ? { declined: true } : {}) });
+        return;
+      }
+      if (props.resume && e instanceof SignFlowError && (e.code === CREATION_SPENT || e.code === CREATION_INVALID)) {
+        finish({ status: 'failed', message: e.message, code: e.code });
         return;
       }
       const f = classifyFailure(e);
@@ -380,7 +407,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
               step: chainAt.step,
               waiting: chainAt.waiting,
               prepSent: chainAt.prepSent,
-              oneApproval: !!wallet.adapter?.signChain,
+              oneApproval: !!wallet.adapter?.signChain && !props.resume,
               stopped: failure && !busy ? (failure.kind === 'rejected' ? 'declined' : 'failed') : null,
             })}
           />

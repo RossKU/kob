@@ -6,10 +6,11 @@
 // second approval, or the page died in between. The Create token page offers it again ("Finish the creation"): a saved signed genesis is sent
 // as it is; an unsigned one is signed (one approval) once the preparation's output 0 is visible.
 //
-// Nothing here can lose funds: the preparation's output 0 is an ordinary P2PK UTXO of the creator, spendable by their wallet like any other
-// coin, and discarding a record only forgets the unsent genesis. The transactions are not secrets (they are meant to be public); anyone who
-// could read this storage could only complete the creation the user approved. Per-browser convenience: a blocked storage keeps no record, and
-// the flow still works while the page is open.
+// The preparation's output 0 is an ordinary P2PK UTXO of the creator, spendable by their wallet like any other coin, and discarding a record
+// only forgets the unsent genesis. A record is UNTRUSTED input: anything that can write this origin's localStorage (an extension, another user
+// of the device, a script) can plant one. So the shapes and sizes are checked here, and a stored genesis is never signed: "Finish the creation"
+// plans it again from the record's facts and checks it as a fresh creation (wallet/creation-replan.ts, wallet/create.ts). Per-browser
+// convenience: a blocked storage keeps no record, and the flow still works while the page is open.
 //
 // `kob.creations.v2`: a v1 record (`kob.creations.v1`, always with a signed genesis) is moved here on the first read. A page of an older build
 // reads only v1 and would drop a record without a signed genesis on its next write: the new records never go there.
@@ -52,30 +53,52 @@ export interface CreationRecord {
 }
 
 const HEX32 = /^[0-9a-f]{64}$/;
+const HEX = /^(?:[0-9a-f]{2})*$/;
+const U64 = /^[0-9]{1,20}$/;
+/** Bounds of a stored record (a planted one is dropped, never parsed further): the raw text, the records read, inputs, outputs, text. */
+const MAX_RAW = 4_000_000;
+const MAX_READ = 64;
+const MAX_IO = 256;
+const MAX_TEXT = 4096;
 
+const obj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const str = (v: unknown, max = MAX_TEXT): v is string => typeof v === 'string' && v.length <= max;
+const u64 = (v: unknown): boolean => (typeof v === 'string' && U64.test(v)) || (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0);
+const int = (v: unknown, max: number): boolean => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= max;
+
+const isInput = (i: unknown): boolean =>
+  obj(i) && HEX32.test(String(i.transactionId)) && int(i.index, 0xffffffff) && str(i.signatureScript, 100_000) && HEX.test(i.signatureScript as string) &&
+  obj(i.utxo) && u64(i.utxo.amount) && str(i.utxo.scriptPublicKey, 1000);
+const isOutput = (o: unknown): boolean => obj(o) && u64(o.value) && str(o.scriptPublicKey, 100_000) && (o.covenant === null || o.covenant === undefined || obj(o.covenant));
 const isTx = (t: unknown, id: unknown): boolean =>
-  !!t && typeof t === 'object' && (t as { id?: unknown }).id === id && Array.isArray((t as { inputs?: unknown }).inputs) && Array.isArray((t as { outputs?: unknown }).outputs);
+  obj(t) && t.id === id && Array.isArray(t.inputs) && t.inputs.length <= MAX_IO && t.inputs.every(isInput) &&
+  Array.isArray(t.outputs) && t.outputs.length <= MAX_IO && t.outputs.every(isOutput) && str(t.payload, 100_000) && HEX.test(t.payload as string);
+const isToken = (t: unknown, covenantId: unknown): boolean =>
+  obj(t) && t.covenantId === covenantId && str(t.name, 256) && str(t.ticker, 64) && int(t.decimals, 18) && u64(t.supply) && u64(t.carrier) &&
+  str(t.program, 64) && HEX32.test(String(t.templateHash)) && HEX32.test(String(t.extensionCommitment)) && Array.isArray(t.outputs) && t.outputs.length >= 1 && t.outputs.length <= 64 &&
+  t.outputs.every((o) => obj(o) && int(o.index, 63) && u64(o.amount) && HEX32.test(String(o.owner)) && int(o.ownerScheme, 255) && int(o.borrowScheme, 255) && HEX32.test(String(o.borrowGuard)));
 
 function isRecord(v: unknown): v is CreationRecord {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
   const r = v as Record<string, unknown>;
   const built = r.genesisBuilt as { tx?: unknown; sign?: unknown } | undefined;
-  const hasBuilt = built !== undefined && !!built && typeof built === 'object' && isTx(built.tx, r.genesisTxid) && Array.isArray(built.sign);
+  const hasBuilt = obj(built) && isTx(built.tx, r.genesisTxid) && Array.isArray(built.sign) && built.sign.length <= MAX_IO;
   const hasSigned = r.genesis !== undefined && isTx(r.genesis, r.genesisTxid);
   if (r.genesisBuilt !== undefined && !hasBuilt) return false;
   if (r.genesis !== undefined && !hasSigned) return false;
   return (
-    typeof r.network === 'string' && HEX32.test(String(r.maker)) && typeof r.createdAt === 'number' && HEX32.test(String(r.covenantId)) &&
+    str(r.network, 64) && HEX32.test(String(r.maker)) && Number.isFinite(r.createdAt) && HEX32.test(String(r.covenantId)) &&
     HEX32.test(String(r.prepTxid)) && HEX32.test(String(r.genesisTxid)) && isTx(r.prep, r.prepTxid) && (hasBuilt || hasSigned) &&
-    !!r.token && typeof r.token === 'object' && (r.token as IssueToken).covenantId === r.covenantId && !!r.docs && !!r.declaration && typeof r.prepSent === 'boolean' &&
-    (r.prepSentAt === undefined || typeof r.prepSentAt === 'number')
+    isToken(r.token, r.covenantId) && obj(r.docs) && obj(r.declaration) && str(r.declaration.json, 100_000) && typeof r.prepSent === 'boolean' &&
+    (r.prepSentAt === undefined || Number.isFinite(r.prepSentAt))
   );
 }
 
 function parse(raw: string | null | undefined): CreationRecord[] {
   try {
-    const v: unknown = raw ? JSON.parse(raw) : null;
-    return Array.isArray(v) ? v.filter(isRecord) : [];
+    if (!raw || raw.length > MAX_RAW) return [];
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v) ? v.slice(-MAX_READ).filter(isRecord) : [];
   } catch {
     return [];
   }

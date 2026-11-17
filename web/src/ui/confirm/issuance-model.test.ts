@@ -58,6 +58,10 @@ describe('issuance confirmation model', () => {
     expect(m.sections.find((s) => s.id === 'spend')!.rows[0]!.value).toBe('500 KAS');
     expect(m.info.map((w) => w.code)).not.toContain('walletTwice');
     expect(model(p, p.built, maker, p.prep, false).info.map((w) => w.code)).toContain('walletTwice');
+    // a saved creation finished later: only the genesis is asked for
+    const resumed = buildIssuanceModel({ kob, built: p.built, prep: p.prep, oneApproval: false, resumed: true, token: p.token, maker, tr: (k, q) => t(k, q) });
+    expect(resumed.info.map((w) => w.code)).toEqual(expect.arrayContaining(['resumed']));
+    expect(resumed.info.map((w) => w.code)).not.toContain('walletTwice');
   });
 
   it('the declaration must be what the token is shown as, and the preparation must pay only the wallet', () => {

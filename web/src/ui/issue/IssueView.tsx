@@ -3,7 +3,8 @@
 // debounced `planIssue` -> summary -> the issuance pre-sign screen (ConfirmSign: the KCC-23 preparation and the genesis, one confirmation) ->
 // tracker + result panel with the registry entry. A creation whose genesis did not go out (data/creations.ts) is offered again at the top:
 // sent as it is when its genesis is signed, finished with one more wallet approval when it is not (the second approval was declined, or the
-// page closed between the two: wallet/create.ts `finishCreation`).
+// page closed between the two: wallet/create.ts `finishCreation`). The record is untrusted: before the wallet is asked, the creation is planned
+// again from it and checked as a fresh one, and shown on the same confirmation screen (`checkSavedCreation`).
 // All protocol logic is in kob/issue.ts (kob-wasm); this view only collects strings and renders findings.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 
@@ -28,9 +29,10 @@ import { adoptDeclaration } from '../../data/token-declarations';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
 import { issueText } from '../../i18n/issue-text';
-import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice } from '../../kob/issue';
+import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssueProgramChoice, type IssueResult } from '../../kob/issue';
 import { creationIsOld, genesisSigned, listCreations, removeCreation, type CreationRecord } from '../../data/creations';
-import { CREATION_SPENT, finishCreation } from '../../wallet/create';
+import { CREATION_INVALID, CREATION_SPENT, checkSavedCreation, finishCreation } from '../../wallet/create';
+import { replanCreation } from '../../wallet/creation-replan';
 import { SignFlowError } from '../../wallet/sign';
 import { pendingSpends } from '../../app/pending-spends';
 import { inputAddressOf } from '../confirm/send';
@@ -54,12 +56,16 @@ import { ResultPanel } from './ResultPanel';
 import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
 
-type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs'>; txid: string; trackFailed: boolean };
+/** `resume`: the confirmation finishes this saved creation (`plan` is it, planned again) */
+type Phase =
+  | { kind: 'form' }
+  | { kind: 'confirm'; plan: IssueResult; resume?: CreationRecord }
+  | { kind: 'result'; plan: Pick<IssueResult, 'token' | 'docs'>; txid: string; trackFailed: boolean };
 /** `finish`: the covenant id of the creation the notice offers to finish (the same action as its banner) */
 type Notice = { tone: 'info' | 'error'; text: string; finish?: Hex } | null;
 
 /** Remembers the token outputs of the genesis in the tracker (a genesis has no token leader, so `trackFromBuilt` does not cover it). */
-function trackIssued(services: Services, plan: Pick<IssuePlan, 'built' | 'token'>): boolean {
+function trackIssued(services: Services, plan: Pick<IssueResult, 'built' | 'token'>): boolean {
   let ok = true;
   for (const u of issuedTokenUtxos(plan)) {
     // only plain key-owned outputs can be tracked: custody / hash-owned holders are the receiver's business
@@ -202,8 +208,12 @@ export function IssueView() {
   const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
   /** what the wallet is asked for while a creation is finished (confirm.chain.*) */
   const [resumeNote, setResumeNote] = useState<'wait' | 'genesis' | null>(null);
-  /** creations whose first step's coin was spent elsewhere: only forgetting them is left */
-  const [spent, setSpent] = useState<ReadonlySet<string>>(new Set());
+  /** creations that cannot be finished: the first step's coin was spent elsewhere, or the record does not check out; only forgetting is left */
+  const [stopped, setStopped] = useState<ReadonlyMap<string, 'spent' | 'invalid'>>(new Map());
+  const stop = (id: string, code: string | undefined) => {
+    const why = code === CREATION_SPENT ? 'spent' : code === CREATION_INVALID ? 'invalid' : null;
+    if (why) setStopped((xs) => new Map(xs).set(id, why));
+  };
   const genesisTx = (rec: CreationRecord) => rec.genesis ?? rec.genesisBuilt!.tx;
   const completed = (rec: CreationRecord, txid: string, show: boolean) => {
     const plan = { built: { tx: genesisTx(rec) } as BuiltTx, token: rec.token };
@@ -222,10 +232,11 @@ export function IssueView() {
     const recs = listCreations(config.network, pubkey);
     setPending(recs);
     let alive = true;
-    // a record whose genesis is already on chain (the page died after sending it) is finished, not offered
+    // a record whose genesis is already on chain (the page died after sending it) is finished, not offered; only one that plans again exactly
     void (async () => {
       for (const rec of recs) {
         try {
+          if (!replanCreation(kob, rec, pubkey).ok) continue;
           const outs = expectedOutputs(services.sdk, config.network, genesisTx(rec), [0]);
           const found = await services.node.getUtxosByAddresses([outs[0]!.address]);
           if (alive && found.some((u) => u.transactionId === rec.genesisTxid && u.index === 0)) completed(rec, rec.genesisTxid, false);
@@ -242,14 +253,20 @@ export function IssueView() {
     setResuming(rec.covenantId);
     setResumeError(null);
     try {
-      if (!genesisSigned(rec) && !wallet.adapter) throw new Error(t('issue.pending.needWallet'));
+      if (!pubkey || (!genesisSigned(rec) && !wallet.adapter)) throw new Error(t('issue.pending.needWallet'));
+      if (!genesisSigned(rec)) {
+        // the wallet signs: planned again, checked, then the confirmation screen (it runs `finishCreation`)
+        setPhase({ kind: 'confirm', plan: checkSavedCreation(kob, rec, pubkey, services.fees?.policy), resume: rec });
+        return;
+      }
       const txid = await finishCreation({
-        kob, node: services.node, adapter: wallet.adapter!, network: config.network, rec, addressOf: inputAddressOf(services),
+        kob, node: services.node, adapter: wallet.adapter!, network: config.network, rec, maker: pubkey, addressOf: inputAddressOf(services),
+        ...(services.fees?.policy ? { feePolicy: services.fees.policy } : {}),
         onStage: (s, info) => setResumeNote(s === 'signing' ? (info?.waiting ? 'wait' : 'genesis') : null),
       });
       completed(rec, txid, true);
     } catch (e) {
-      if (e instanceof SignFlowError && e.code === CREATION_SPENT) setSpent((xs) => new Set(xs).add(rec.covenantId));
+      if (e instanceof SignFlowError) stop(rec.covenantId, e.code);
       setResumeError({ id: rec.covenantId, text: e instanceof Error ? e.message : String(e) });
     } finally {
       setResuming(null);
@@ -266,6 +283,16 @@ export function IssueView() {
   const onClose = (r: ConfirmResult) => {
     const current = phase.kind === 'confirm' ? phase.plan : null;
     if (!current) return;
+    const resumed = phase.kind === 'confirm' ? phase.resume : undefined;
+    if (resumed && r.status === 'submitted') return completed(resumed, r.txid, true);
+    if (resumed && r.status === 'failed') {
+      // spent elsewhere, or the record no longer checks out: said on its banner
+      stop(resumed.covenantId, r.code);
+      setResumeError({ id: resumed.covenantId, text: r.message });
+      setPhase({ kind: 'form' });
+      setRetry((n) => n + 1);
+      return;
+    }
     if (r.status === 'submitted') {
       const trackFailed = !trackIssued(services, current);
       // the issuer's own decimals, ticker and name: they prefill (never set) the decimals of the token's first order in this browser, and name the
@@ -331,7 +358,7 @@ export function IssueView() {
           data-testid="issue-pending"
           actions={
             <div class="row">
-              {spent.has(rec.covenantId) ? null : (
+              {stopped.has(rec.covenantId) ? null : (
                 <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-pending-send">
                   {t(genesisSigned(rec) ? 'issue.pending.send' : 'issue.pending.finish')}
                 </Button>
@@ -340,8 +367,8 @@ export function IssueView() {
             </div>
           }
         >
-          {spent.has(rec.covenantId) ? (
-            <p data-testid="issue-pending-spent">{t('issue.pending.spent')}</p>
+          {stopped.has(rec.covenantId) ? (
+            stopped.get(rec.covenantId) === 'spent' ? <p data-testid="issue-pending-spent">{t('issue.pending.spent')}</p> : <p data-testid="issue-pending-invalid">{t('issue.pending.invalid')}</p>
           ) : (
             <>
               <p data-testid="issue-pending-body">
@@ -368,7 +395,8 @@ export function IssueView() {
           )}
           {resumeError?.id === rec.covenantId ? (
             <div class="field-error wrap-anywhere" data-testid="issue-pending-error">
-              {t('issue.pending.failed', { reason: friendlyErrorText(resumeError.text) })}
+              {/* an invalid record is said above: only the reason here */}
+              {stopped.get(rec.covenantId) === 'invalid' ? null : t('issue.pending.failed', { reason: friendlyErrorText(resumeError.text) })}
               <RawDetails text={resumeError.text} />
             </div>
           ) : null}
@@ -609,6 +637,7 @@ export function IssueView() {
           label={t('issue.confirm.label', { ticker: phase.plan.token.ticker })}
           issue={{ token: phase.plan.token }}
           creation={{ prep: phase.plan.prep, declaration: phase.plan.declaration, docs: phase.plan.docs }}
+          {...(phase.resume ? { resume: phase.resume } : {})}
           onClose={onClose}
         />
       ) : null}
@@ -620,7 +649,7 @@ export function IssueView() {
   /** The notice's own "Finish the creation": the same action as the banner of the creation left unfinished. */
   function renderNoticeFinish() {
     const rec = notice?.finish ? pending.find((x) => x.covenantId === notice.finish) : undefined;
-    if (!rec || spent.has(rec.covenantId)) return undefined;
+    if (!rec || stopped.has(rec.covenantId)) return undefined;
     return (
       <Button variant="primary" small loading={resuming === rec.covenantId} disabled={resuming !== null} onClick={() => void resume(rec)} data-testid="issue-notice-finish">
         {t(genesisSigned(rec) ? 'issue.pending.send' : 'issue.pending.finish')}
