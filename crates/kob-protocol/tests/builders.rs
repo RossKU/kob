@@ -872,7 +872,7 @@ mod delivery {
         assert!(err(&Action::RefundOrder(x)).contains("boughtCustody"));
         let plain_refund = built(&scenario("refund.bid"));
         let SigPlan::Entry { args, .. } = &plain_refund.plans[0] else { panic!() };
-        assert_eq!(args.as_slice(), &[Arg::Int(0)][..]);
+        assert!(args.is_empty());
     }
 
     /// Placement (bid-delivery-spec §2): the mode and its fields, bought = 0, mode 0 for an IOC / FOK bid and for a KRON
