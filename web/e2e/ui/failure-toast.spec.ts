@@ -164,7 +164,7 @@ for (const [view, viewport] of VIEWPORTS) {
       await page.route('**/v1/books/**', async (route) => {
         if (!taken) {
           taken = true;
-          for (const a of asks) await fetch(`${process.env.KOB_MOCK_URL}/mock/take`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ covenant_id: a.covenant_id }) });
+          for (const a of asks) await fetch(`${process.env.KOB_MOCK_URL}/mock/take`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ covenant_id: a.covenant_id, amount: a.amount_left }) });
         }
         await route.continue();
       });

@@ -2,7 +2,7 @@
 // "Sell at one price", which hands the first sale to the order ticket. Mock KasWare (two approvals) and the private key (one approval).
 import type { Page } from '@playwright/test';
 import { test, expect, TEST_KEYS } from '../fixtures';
-import { clickConnectOption } from '../helpers/env';
+import { clickConnectOption, gotoOrders } from '../helpers/env';
 import { confirmReceipt, readReceipt } from '../helpers/ticket';
 
 const KAS = 100_000_000n;
@@ -80,6 +80,12 @@ test.describe('Create token: after creation', () => {
     const listed = (await mock.ordersOf('alice')) as any;
     const curve = (listed.orders ?? listed).find((o: any) => o.covenant_id === ids[2]);
     expect(curve).toMatchObject({ contract: 'KobCurveAsk', token: tokenId, curve: { level: 0, levels: 100, unbound: true } });
+    // Portfolio balances: the curve's custody under its token, in whole tokens; no row of the zero id the unbound state names
+    await gotoOrders(page, 'balances');
+    const bal = page.getByTestId(`balance-row-${tokenId}`);
+    await expect(bal.getByTestId('balance-escrowed')).toContainText('900,000', { timeout: 15_000 });
+    await expect(bal).not.toContainText('raw amount');
+    await expect(page.getByTestId(`balance-row-${'0'.repeat(64)}`)).toHaveCount(0);
   });
 
   test('sells at one price: the token keeps a share, and the result opens the ticket on the sale', async ({ appPage: page, mock }) => {

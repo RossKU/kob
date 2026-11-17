@@ -645,6 +645,31 @@ export class MockChain {
         touched.add(so.cov);
         continue;
       }
+      // a fill the mock did not build (a wallet's direct take): the new state proven against the continuation's script (processor.rs `derive_after`)
+      const derived = (entry === 'fill' || entry === 'settle') && cont ? this.deriveFill(o, so, cont) : null;
+      if (derived) {
+        const { next, n } = derived;
+        const t = termsOf(o.state);
+        const curvePaid = o.state.kind === 'KobCurveAsk' ? this.kob.raw.curveProceeds(JSON.stringify(o.state), String(n)) : null;
+        const price = curvePaid != null ? (BigInt(curvePaid) * t.scale) / n + t.tip : BigInt(auctionOf(o.state, o.currentDaa, daa)?.current_price ?? t.price);
+        cont.orderCov = so.cov;
+        cont.kind = 'order';
+        o.state = next;
+        o.stateKnown = true;
+        o.current = { txid, index: cont.index, value: cont.amount };
+        o.currentDaa = daa;
+        const left = baseKind(next.kind) === 'KobBid' ? bidBuyingPower(this.kob, next, BigInt(cont.amount)) : next.state.amountLeft !== undefined ? BigInt(next.state.amountLeft) : o.amountLeft;
+        if (o.amountExact || baseKind(next.kind) === 'KobBid') o.amountLeft = left;
+        o.filledAmount += n;
+        o.status = 'partial';
+        o.lastSeq = seq;
+        o.lastDaa = daa;
+        const payout = o.side === 1 && outs[so.input] ? outs[so.input].amount.toString() : null;
+        const ev = this.pushEvent({ cov: so.cov, kind: 'fill', seq, daa, txid, token: o.token, side: o.side, amount: n, price: price.toString(), payout, closes: false, detail: { input: so.input, entry } });
+        fills.push(this.fillNotice(o, ev, txid, n, payout));
+        touched.add(so.cov);
+        continue;
+      }
       const ioc = o.tif === 1n || o.tif === 2n;
       let kind = entry ?? 'unknown';
       let status;
@@ -730,6 +755,33 @@ export class MockChain {
     if (tx.outputs.filter((x) => x.covenant?.covenantId === so.cov).length !== 1) return null;
     if (tx.inputs.filter((x) => (x.utxo?.covenantId ?? null) === so.cov).length !== 1) return null;
     return rec;
+  }
+
+  /**
+   * The state a fill of `n` (the reveal's first argument, 8 bytes sign-magnitude LE) leaves at `cont`, or null: the unchanged state, `amountLeft - n`
+   * (a curve bound to its order's token) or a Collected bid's `bought + n`, whichever script is the continuation's.
+   */
+  deriveFill(o, so, cont) {
+    const p = so.reveal?.pushes?.[0];
+    if (!p || p.length !== 8 || (p[7] & 0x80) !== 0) return null;
+    const n = p.readBigUInt64LE(0);
+    if (n <= 0n) return null;
+    const any = o.state;
+    const s = any.state;
+    const cands = [any];
+    if (s.amountLeft !== undefined && BigInt(s.amountLeft) > n) {
+      const bind = any.kind === 'KobCurveAsk' && /^0{64}$/.test(s.tokenCovId) ? { tokenCovId: o.token } : {};
+      cands.push({ kind: any.kind, state: { ...s, amountLeft: String(BigInt(s.amountLeft) - n), ...bind } });
+    }
+    if (s.bought !== undefined) cands.push({ kind: any.kind, state: { ...s, bought: String(BigInt(s.bought) + n) } });
+    for (const next of cands) {
+      try {
+        if (this.kob.scriptPublicKey(next) === cont.spk) return { next, n };
+      } catch {
+        /* not a state kob-wasm accepts */
+      }
+    }
+    return null;
   }
 
   entryName(kind, tagHex) {

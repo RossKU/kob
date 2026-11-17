@@ -470,8 +470,8 @@ export function OrderTicket(props: OrderTicketProps) {
     const text = formatPrice(autoTip.tip, ctx, 'kas');
     if ((form.values.tip ?? '') !== text) setForm((f) => (f.values.tipAuto === 'true' ? setValue(f, 'tip', text) : f));
   }, [autoTip, form.values.tip]);
-  // what a crossing order fills from the book: the plan's, or while a click runs, the one it was for
-  const takeFacts: TakeFacts | null = (takeRun ? takeAtClick : null) ?? (!ladder && shownPlan?.take && shownPlan.ok ? shownPlan.take : null);
+  // what a crossing order fills from the book: while a click runs, the one it was for; else the plan's (a new amount, price, side or book plans it again)
+  const takeFacts: TakeFacts | null = (placing && takeRun ? takeAtClick : null) ?? (!ladder && shownPlan?.take && shownPlan.ok ? shownPlan.take : null);
   const takeLines = takeFacts
     ? {
         fills: t('ticket.take.fills', {
@@ -1234,14 +1234,16 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
       ) : null}
 
-      {takeFacts ? (
+      {takeLines || (takeRun && takeRun.length > 0) ? (
         <div class="tk-take" data-testid="order-take">
-          {/* two short lines, one row each (the final confirmation has the details: the orders, the fee exactly) */}
-          <p class="tk-take-fills" data-testid="order-take-fills" title={takeLines!.fills + takeLines!.fee}>
-            <span class="tk-take-main">{takeLines!.fills}</span>
-            <span class="tk-take-fee">{takeLines!.fee}</span>
-          </p>
-          {takeLines!.rest ? <p class="muted" data-testid="order-take-rest" title={takeLines!.rest}>{takeLines!.rest}</p> : null}
+          {/* two short lines, one row each (the final confirmation has the details: the orders, the fee exactly); a finished click keeps its steps only */}
+          {takeLines ? (
+            <p class="tk-take-fills" data-testid="order-take-fills" title={takeLines.fills + takeLines.fee}>
+              <span class="tk-take-main">{takeLines.fills}</span>
+              <span class="tk-take-fee">{takeLines.fee}</span>
+            </p>
+          ) : null}
+          {takeLines?.rest ? <p class="muted" data-testid="order-take-rest" title={takeLines.rest}>{takeLines.rest}</p> : null}
           {takeRun && takeRun.length > 0 ? <Stepper steps={takeRun} label={t('ticket.take.steps')} data-testid="order-take-stepper" /> : null}
         </div>
       ) : null}
