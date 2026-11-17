@@ -213,7 +213,10 @@ export async function cancelReceipt(page: Page): Promise<void> {
   }
 }
 
-/** The app popup, or a status that stopped the click before it, after a click on an order button / a My orders action. */
+/**
+ * The app popup, or a status that stopped the click before it, after a click on an order button / a My orders action. The ticket's stopped line is
+ * hidden (its red toast says why): it is waited for in the document, not on screen.
+ */
 function popupOrStop(page: Page, testid: string): Locator {
   const stopped = ['blocked', 'rejected', 'failed'].map((p) => `[data-testid="${testid}"][data-phase="${p}"]`).join(', ');
   return page.getByTestId('confirm-order').or(page.locator(stopped));
@@ -225,7 +228,7 @@ function popupOrStop(page: Page, testid: string): Locator {
  */
 export async function confirmAfterClick(page: Page, testid: StatusId = 'order-status'): Promise<void> {
   if (await isPrivateKey(page)) return;
-  await popupOrStop(page, testid).first().waitFor({ state: 'visible', timeout: 30_000 });
+  await popupOrStop(page, testid).first().waitFor({ state: 'attached', timeout: 30_000 });
   if (await page.getByTestId('confirm-order').isVisible()) await confirmReceipt(page);
 }
 
@@ -274,10 +277,10 @@ export interface SendRead {
   status: string | null;
 }
 
-/** Reads the inline status line (`order-status` of the ticket, `flow-status` of My orders). */
+/** Reads the status line (`order-status` of the ticket: hidden once the click stopped, its red toast says why; `flow-status` of My orders). */
 export async function readSendStatus(page: Page, testid: StatusId = 'order-status'): Promise<SendRead> {
   const root = page.getByTestId(testid);
-  await expect(root).toBeVisible();
+  await expect(root).toBeAttached();
   const one = async (id: string, attr: string | null) => {
     const loc = root.getByTestId(id);
     if ((await loc.count()) === 0) return null;
@@ -332,6 +335,12 @@ export async function expectStopped(page: Page, phase: 'blocked' | 'rejected' | 
   await expect(page.getByTestId(testid)).toHaveAttribute('data-phase', phase, { timeout: 30_000 });
   await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
   const read = await readSendStatus(page, testid);
+  // the ticket says why only in a red toast at the top right (the app's own Cancel is the user's choice: none); a flow's card says it itself
+  if (testid === 'order-status') {
+    await expect(page.getByTestId(testid), 'no failure box in the ticket').toBeHidden();
+    // (a phone shows a flow's card first: the toast waits behind it, the "+N" chip red)
+    if (read.code !== 'cancelled') await expect(page.getByTestId('toast-error').or(page.locator('[data-testid="toast-more"][data-tone="error"]')).first(), 'the red toast').toBeVisible();
+  }
   if (typeof opts.code === 'string') expect(read.code, 'finding / failure code').toBe(opts.code);
   else if (opts.code) expect(read.code, 'finding / failure code').toMatch(opts.code);
   expect(read.txid, 'nothing was submitted').toBeNull();

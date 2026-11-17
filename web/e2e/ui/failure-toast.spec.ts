@@ -2,7 +2,9 @@
 // order ticket that stops (the wallet declines, the node refuses: fee, mass, a missing input; the pre-sign check refuses; the node cannot be reached;
 // a direct fill from the book that loses its race every time; a chained step the wallet cannot see) raises ONE red toast with the reason, also on a
 // phone, and also while another flow's card is on screen (an error is never held back for the bell alone). A My orders flow (a cancel, a merge)
-// shows its failure on its own card, in red. A lost race that the retry wins shows no error at all. KOB_TOAST_SHOTS=<dir> saves screenshots.
+// shows its failure on its own card, in red. A lost race that the retry wins shows no error at all. The toast is the only place a send-time failure
+// is said (2026-11-18): the ticket shows no red box, keeps its height, its total and its button where they were, and a reason the button is off for
+// moves neither. KOB_TOAST_SHOTS=<dir> saves screenshots.
 import { mkdirSync, readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -47,6 +49,17 @@ async function expectRedToast(page: Page, view: View, text: RegExp): Promise<voi
   expect(box.y, 'at the top').toBeLessThan(200);
   expect(vw - (box.x + box.width), 'at the right edge').toBeLessThanOrEqual(17);
   if (view === 'desktop') expect(box.x, 'the right part of the screen').toBeGreaterThan(vw / 2);
+}
+
+/** Where the ticket, its footer, its total and its button are in the document (px, rounded): what a failure must not change. */
+async function ticketBoxes(page: Page): Promise<Record<'ticket' | 'foot' | 'total' | 'button', { top: number; height: number }>> {
+  return page.evaluate(() => {
+    const box = (sel: string) => {
+      const r = document.querySelector(sel)!.getBoundingClientRect();
+      return { top: Math.round(r.top + window.scrollY), height: Math.round(r.height) };
+    };
+    return { ticket: box('[data-testid="order-ticket"]'), foot: box('.tk-foot'), total: box('[data-testid="order-total"]'), button: box('[data-testid="order-place"]') };
+  });
 }
 
 async function sellTicket(page: Page): Promise<void> {
@@ -212,6 +225,37 @@ for (const [view, viewport] of VIEWPORTS) {
     });
   });
 
+  test.describe(`${view}: the ticket never moves for a failure`, () => {
+    test.use({ viewport });
+
+    test('after a failure the ticket keeps its height, its footer, its total and its button where they were (no red box in it); a reason next to the button moves neither the ticket nor the button', async ({ appPage: page, mock, wallet }) => {
+      await fund(mock);
+      await openMarket(page, mock);
+      await sellTicket(page);
+      const before = await ticketBoxes(page);
+      await mock.failNextSubmit('transaction has an orphan input');
+      await clickPlace(page);
+      await expect(page.getByTestId('toast-error')).toBeVisible({ timeout: 30_000 });
+      await page.waitForTimeout(400);
+      await shot(page, 'layout-after-failure', view);
+      await expectStopped(page, 'failed');
+      await expect(page.locator('.tk-status')).toBeHidden();
+      expect(await ticketBoxes(page), 'the same ticket after the failure').toEqual(before);
+      // the wallet declines too: still nothing in the ticket
+      await wallet!.configure({ approve: false });
+      await clickPlace(page);
+      await expectStopped(page, 'rejected');
+      expect(await ticketBoxes(page), 'the same ticket after a decline').toEqual(before);
+      // a reason the button is off for (more tokens than the wallet holds): in its slot above the total, the ticket and the button stay put
+      await fillFields(page, { amount: '100000' });
+      await expect(page.getByTestId('order-issue-INSUFFICIENT_TOKENS')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId('order-place')).toBeDisabled();
+      const reason = await ticketBoxes(page);
+      expect({ ticket: reason.ticket, button: reason.button, total: reason.total }, 'a reason moves neither').toEqual({ ticket: before.ticket, button: before.button, total: before.total });
+      await shot(page, 'layout-reason', view);
+    });
+  });
+
   test.describe(`${view}: a chained step the wallet cannot see yet`, () => {
     test.use({ viewport, walletOptions: { pushTxOutcome: 'lost', walletNodeLagMs: 60_000, refusal: 'reject' } });
 
@@ -222,7 +266,7 @@ for (const [view, viewport] of VIEWPORTS) {
       await fillFields(page, { amount: '1', price: '0.0245', 'ladder.on': true, 'ladder.levels': '2', 'ladder.pct': '2' });
       await waitReviewable(page);
       await page.getByTestId('order-place').click();
-      await confirmUntil(page, page.locator('[data-testid="order-status"][data-phase="failed"], [data-testid="order-status"][data-phase="rejected"]'), { timeout: 90_000 });
+      await confirmUntil(page, page.getByTestId('toast-error'), { timeout: 90_000 });
       await expectRedToast(page, view, /^Order not sent: /);
       await shot(page, 'chain-sign-refused', view);
     });
@@ -322,6 +366,7 @@ async function openBalances(page: Page, count: number): Promise<void> {
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
+  // the button says only "Merge all"; the count is its tooltip
   await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', new RegExp(`^Merge your ${count} UTXOs `), { timeout: 15_000 });
 }
 

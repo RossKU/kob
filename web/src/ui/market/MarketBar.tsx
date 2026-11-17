@@ -126,6 +126,8 @@ export function MarketBar(props: {
   stats: ComponentChildren;
   /** the live state chip */
   live?: ComponentChildren;
+  /** a one-line note in the top space of the bar (out of the flow: the bar keeps its height without it) */
+  note?: ComponentChildren;
 }) {
   return (
     <div class="mkt-bar" data-testid="market-bar">
@@ -136,6 +138,7 @@ export function MarketBar(props: {
       </div>
       <div class="mkt-bar-stats">{props.stats}</div>
       <div class="mkt-bar-live">{props.live}</div>
+      {props.note}
     </div>
   );
 }

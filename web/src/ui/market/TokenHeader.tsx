@@ -12,7 +12,7 @@ import { LogoSection } from './LogoReport';
 import { MarketBar } from './MarketBar';
 import { TokenNote } from './TokenNote';
 import { decimalsNote } from '../../app/token-display';
-import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
+import { FamilyChip, GenesisFailedBanner, PowersWarning, RiskChip, SharedTickerBarNote, SharedTickerNote, FactLabel, FactSentence, StatusBadges, powerName, riskReasons, tokenTitle } from './TokenBadges';
 import { riskFactIds, templateDetail, type TemplateDetail, type TokenRow } from './token-model';
 import type { BridgeMinter } from '../../data/genesis-check';
 
@@ -104,11 +104,12 @@ export function TokenHeader(props: {
         tools={<>{props.tools}<RiskChip row={r} /></>}
         stats={props.stats}
         live={props.badges}
+        note={<SharedTickerBarNote shared={!!props.sharedTicker} />}
       />
       <h1 class="sr-only" data-testid="token-title" data-covenant-id={r.covenantId}>
         {tokenTitle(r)}
       </h1>
-      <TokenWarnings row={r} sharedTicker={props.sharedTicker} />
+      <TokenWarnings row={r} />
     </div>
   );
 }
