@@ -59,7 +59,7 @@ function RoutedView(props: { route: Route; warnings: ConfigWarning[] }) {
         </Titled>
       );
     case 'token':
-      return <MarketView covenantId={r.covenantId} {...(r.ticket ? { ticket: r.ticket } : {})} {...(r.amount ? { amount: r.amount } : {})} />;
+      return <MarketView covenantId={r.covenantId} {...(r.ticket ? { ticket: r.ticket } : {})} {...(r.amount ? { amount: r.amount } : {})} {...(r.price ? { price: r.price } : {})} />;
     case 'pair':
       return <MarketView pair={{ base: r.base, quote: r.quote }} />;
     case 'activity':

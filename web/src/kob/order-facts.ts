@@ -23,8 +23,10 @@ export const KAS_KINDS: readonly KasKind[] = ['KobAsk', 'KobCondAsk', 'KobIfdAsk
  * One template per kind serves both sides and both token families, so there is no KRON twin.
  */
 export const PAIR_KINDS: readonly PairKind[] = ['KobPair', 'KobCondPair', 'KobIfdPair'];
+/** The stepped sell curve (`KobCurveAsk`): KCC-20 only, so no KRON twin. */
+export const CURVE_KINDS: readonly BaseKind[] = ['KobCurveAsk'];
 /** Every family-neutral order kind. */
-export const BASE_KINDS: readonly BaseKind[] = [...ASK_KINDS, ...BID_KINDS, ...PAIR_KINDS];
+export const BASE_KINDS: readonly BaseKind[] = [...ASK_KINDS, ...BID_KINDS, ...PAIR_KINDS, ...CURVE_KINDS];
 /**
  * Every order kind as kob-wasm tags it.
  * That is the KAS-quoted kinds with their KRON twins, and the three pair kinds.
@@ -33,6 +35,8 @@ export const ORDER_KINDS: readonly OrderKind[] = [...BASE_KINDS, ...[...ASK_KIND
 
 /** A pair kind (`KobPair`, `KobCondPair`, `KobIfdPair`). */
 export const isPairKind = (k: string): k is PairKind => (PAIR_KINDS as readonly string[]).includes(k);
+/** A stepped sell curve (`KobCurveAsk`). */
+export const isCurveKind = (k: string): k is 'KobCurveAsk' => k === 'KobCurveAsk';
 /** Strips the `Kron` suffix. Every KAS-quoted kind exists once per token family. */
 export const baseKind = (k: OrderKind): BaseKind => (k.endsWith('Kron') ? k.slice(0, -4) : k) as BaseKind;
 /**
@@ -59,13 +63,13 @@ export const orderKindOfTemplate = (t: string): string => (/^Kob[A-Za-z]+KronD0$
  * (docs/spec/matcher.md 1.2). Every pair kind may hold custodies of A, of B or both.
  * {@link custodiesOf} says which, from the state.
  */
-export const holdsTokens = (k: OrderKind): boolean => (ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k);
+export const holdsTokens = (k: OrderKind): boolean => (ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k) || isCurveKind(k);
 /**
  * Side of a KAS kind.
  * A pair kind's side is in its state ({@link sideOf}), so 'sell' is returned for it as a
  * placeholder.
  */
-export const sideOfKind = (k: OrderKind): 'sell' | 'buy' => ((ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k) ? 'sell' : 'buy');
+export const sideOfKind = (k: OrderKind): 'sell' | 'buy' => ((ASK_KINDS as readonly string[]).includes(baseKind(k)) || isPairKind(k) || isCurveKind(k) ? 'sell' : 'buy');
 /** Side of an order: KAS kinds by kind, pair kinds by their state (`side` 1 sells A, 2 buys A). */
 export function sideOf(o: { kind: string; state: object }): 'sell' | 'buy' {
   if (isPairKind(o.kind)) return bigOr0((o.state as { side?: unknown }).side) === 1n ? 'sell' : 'buy';
@@ -391,6 +395,38 @@ export interface OrderDescription {
    * `deliveryCarrier`, entry carriers, prefund, and a pair order's tip prefund.
    */
   reservedKas: bigint;
+  /** A stepped sell curve: its table and where it stands (`price` is the current level's price). Absent for other kinds. */
+  curve?: CurveFacts;
+}
+
+/** A `KobCurveAsk` read from its state (docs/design/curve-ask-spec.md §1). */
+export interface CurveFacts {
+  /** the current level (table index), `levels` when sold out */
+  level: number;
+  levels: number;
+  levelSize: bigint;
+  total: bigint;
+  /** sompi per whole token of each level */
+  table: bigint[];
+  /** the current level's price, null when sold out */
+  priceNow: bigint | null;
+  /** created in its token's genesis, not yet filled or amended: `tokenCovId` is zero */
+  unbound: boolean;
+}
+
+const ZERO_ID = '0'.repeat(64);
+
+/** The curve facts of a `KobCurveAsk` state, null for every other kind. */
+export function curveFactsOf(o: { kind: string; state: object }): CurveFacts | null {
+  if (!isCurveKind(o.kind)) return null;
+  const s = o.state as { levelSize: string; total: string; amountLeft: string; table: string[]; tokenCovId: string };
+  const levelSize = bigOr0(s.levelSize);
+  const total = bigOr0(s.total);
+  const table = (s.table ?? []).map((p) => bigOr0(p));
+  const sold = total - bigOr0(s.amountLeft);
+  const level = levelSize > 0n ? Number(sold / levelSize) : 0;
+  const left = bigOr0(s.amountLeft) > 0n;
+  return { level: left ? level : table.length, levels: table.length, levelSize, total, table, priceNow: left ? (table[level] ?? null) : null, unbound: s.tokenCovId === ZERO_ID };
 }
 
 const TIF: Record<string, TifName> = { '0': 'gtc', '1': 'ioc', '2': 'fok' };
@@ -510,6 +546,7 @@ export function describeOrder(o: OrderState, kob?: KobWasm): OrderDescription {
     ? { parent, rptPrice: bigOr0(s.rptPrice), rptUntil: bigOr0(s.rptUntil), ...(kind === 'KobCondPair' ? { rptPre: bigOr0(s.rptPre) } : {}) }
     : null;
   const left = amountLeftOf(o);
+  const curve = curveFactsOf(o);
   const scale = pair ? pair.base.scale : bigOr0(s.scale);
   // A hostile state (negative amounts or rates, a zero scale) describes as 0 here. The decoder
   // flags such a state, and describing it must not throw.
@@ -524,9 +561,10 @@ export function describeOrder(o: OrderState, kob?: KobWasm): OrderDescription {
   return {
     kind, side: pair ? pair.side : sideOfKind(kind), maker: s.maker, tokenCovId: pair ? pair.base.covId : s.tokenCovId, scale, minFill: bigOr0(s.minFill),
     amountLeft: left, tokenAmount: pair ? (pair.escrowA > 0n || pair.side === 'sell' ? pair.escrowA : null) : custodyAmountOf(o),
-    price: pair ? pair.price : bigOr0(cond ? s.tpPrice : s.price), tip: bigOr0(s.tip), tif: s.tif !== undefined ? (TIF[s.tif] ?? null) : null,
+    price: pair ? pair.price : curve ? (curve.priceNow ?? curve.table[curve.table.length - 1] ?? 0n) : bigOr0(cond ? s.tpPrice : s.price), tip: bigOr0(s.tip), tif: s.tif !== undefined ? (TIF[s.tif] ?? null) : null,
     activeFrom: bigOr0(s.activeFrom), expiryDaa: bigOr0(s.expiryDaa), refundTip: bigOr0(s.refundTip),
     auction, trigger, entry, pair, booked, reservedKas,
+    ...(curve ? { curve } : {}),
   };
 }
 

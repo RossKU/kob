@@ -245,6 +245,7 @@ fn amend(w: &World, l: &Live, bump: i64) -> (SignedTx, Live) {
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     }));
     let next = Live { tx: t.clone(), custody: l.custody.clone(), state: amended, cov: l.cov, left: l.left };
     (t, next)

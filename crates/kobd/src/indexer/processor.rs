@@ -466,6 +466,28 @@ pub fn custody_part_tokens(s: &AnyState) -> Vec<(Hash32, Option<[u8; 32]>)> {
     }
 }
 
+/// The token outputs of a genesis an unbound curve `cov` could take as its custody: owned by it,
+/// or of a state this indexer cannot read. The payload's order outputs are not token outputs.
+fn curve_custody_candidates(rec: &TxRecord, p: &payload::Payload, cov: &Hash32) -> usize {
+    let orders: HashSet<Hash32> = p
+        .records
+        .iter()
+        .filter_map(|r| match r {
+            Record::Order { output, .. } => rec.outputs.get(*output as usize).and_then(|o| o.cov).map(|c| c.1),
+            _ => None,
+        })
+        .collect();
+    rec.outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| o.cov.is_some_and(|(_, c)| !orders.contains(&c)))
+        .filter(|(j, _)| match rec.holds.iter().find(|h| h.out as usize == *j) {
+            Some(h) => h.state.is_covenant_owned() && h.state.owner() == cov.0,
+            None => true,
+        })
+        .count()
+}
+
 /// Whether a placement became an order.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CreateOutcome {
@@ -1148,8 +1170,18 @@ impl Processor {
                 let Some(out) = rec.outputs.get(ro.output as usize) else { continue };
                 let cov = Hash32(ro.covenant_id);
                 // The custody parts and their tokens. A pair order has them in the order of
-                // `custodies()`, each in its own token.
-                let part_tokens = custody_part_tokens(&ro.order);
+                // `custodies()`, each in its own token. An unbound curve's is its custody output's.
+                let part_tokens = match (&ro.order, &ro.custody) {
+                    (s, Some(c)) if model::is_unbound(s) => match rec.outputs.get(c.output as usize).and_then(|o| o.cov) {
+                        Some((_, t)) => vec![(t, s.token_tpl_hash())],
+                        None => continue,
+                    },
+                    (s, _) => custody_part_tokens(s),
+                };
+                // An unbound curve takes any custody of its genesis at its first fill: listed only
+                // when that genesis holds exactly one candidate.
+                let inherit = (model::is_unbound(&ro.order) && curve_custody_candidates(rec, &p, &cov) != 1)
+                    .then(|| (false, Some("curve_custody_ambiguous".to_string())));
                 let parts: Vec<(&payload::RecoveredCustody, Hash32, Option<[u8; 32]>)> =
                     ro.custody.iter().chain(ro.prefund.iter()).zip(part_tokens.iter()).map(|(c, (t, h))| (c, *t, *h)).collect();
                 let new_custody = |c: &payload::RecoveredCustody, t: Hash32| NewCustody {
@@ -1183,7 +1215,7 @@ impl Processor {
                         prefund,
                         ext_commit: ext,
                         origin: "chain",
-                        inherit_listed: None,
+                        inherit_listed: inherit,
                     },
                 )?;
                 match outcome {
@@ -1238,7 +1270,12 @@ impl Processor {
         let terms = model::terms_of(&n.state);
         let side = model::side_of(&n.state);
         let in_book = model::in_book(id);
-        let token = Hash32(n.state.token_cov_id());
+        // an unbound curve trades its custody's token
+        let token = match (model::is_unbound(&n.state), n.custody.as_ref().and_then(|c| c.token)) {
+            (true, Some(t)) => t,
+            _ => Hash32(n.state.token_cov_id()),
+        };
+        let named = model::bound(&n.state, token.0);
         let tpl_hash = n.state.token_tpl_hash().map(Hash32);
         let ext = model::extension_of(&n.state).or(n.ext_commit);
         let (budget_rate, reserve) = match &n.state {
@@ -1257,7 +1294,7 @@ impl Processor {
         let (listed, reason) = match n.inherit_listed {
             _ if sane.is_err() => (false, sane.err()),
             Some((l, r)) => (l, r),
-            None => self.listing(conn, &n.state, ext, n.daa, n.out_value)?,
+            None => self.listing(conn, &named, ext, n.daa, n.out_value)?,
         };
         // The maker, token, program, extension, template and quote token are rows of `ids`. The few
         // that the orders name come first, because the migration assigns them the first ids. A new
@@ -1348,7 +1385,7 @@ impl Processor {
             .to_string()
         ])?;
         // Token registry event: the first sighting of this (token, program, extension) identity.
-        for (tok, tpl, e) in placement_identities(&n.state, token, tpl_hash, ext) {
+        for (tok, tpl, e) in placement_identities(&named, token, tpl_hash, ext) {
             let seen = conn
                 .prepare_cached("SELECT 1 FROM token_events WHERE token_cov_id = ?1 AND tpl_hash IS ?2 AND ext_commit IS ?3")?
                 .exists(params![&tok.0[..], tpl.map(|t| t.0.to_vec()), e.map(|e| e.to_vec())])?;
@@ -1426,7 +1463,8 @@ impl Processor {
                 amount: state.amount_left(),
                 price: listing_price,
                 tip: Some(terms.tip),
-                expiry_daa: Some(terms.expiry_daa),
+                // a curve has no expiry (it rests until sold out or cancelled)
+                expiry_daa: state.expiry().map(|_| terms.expiry_daa),
                 genesis_daa: daa,
                 carrier,
                 keeper_tip: listing_keeper_tip(state, carrier),
@@ -1487,9 +1525,14 @@ impl Processor {
             self.record_reject(conn, seq, &rec.txid, &format!("amend:{why}"), delta)?;
             return Ok(None);
         }
+        // An unbound curve's amend binds it to its order's token (the custody's).
+        if model::is_unbound(before) && s.order.token.is_none_or(|t| t.0 != a.order.token_cov_id()) {
+            self.record_reject(conn, seq, &rec.txid, "amend:curve_not_bound_to_its_token", delta)?;
+            return Ok(None);
+        }
         // The custody of an ask stays where it is. A bid owns none: its quantity is the escrow of
         // the continuation.
-        let holds_custody = matches!(a.order, AnyState::KobAsk(_) | AnyState::KobAskKron(_));
+        let holds_custody = matches!(a.order, AnyState::KobAsk(_) | AnyState::KobAskKron(_) | AnyState::KobCurveAsk(_));
         if holds_custody && !has_live_custody(conn, &s.cov)? {
             self.record_reject(conn, seq, &rec.txid, "amend:custody_not_live", delta)?;
             return Ok(None);
@@ -1710,6 +1753,13 @@ impl Processor {
     /// and trailing steps all fall in the candidate sets. The P2SH of the spliced script decides.
     fn derive_after(&self, s: &Spent, out_spk: &[u8], evidence_prices: &[i64], rec: &TxRecord) -> Option<AnyState> {
         let before = s.before.as_ref()?;
+        // a curve fill leaves amountLeft - n, an unbound curve bound to its order's token
+        if let (AnyState::KobCurveAsk(c), Act::Fill(n)) = (before, s.act) {
+            let left =
+                AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { amount_left: c.amount_left.checked_sub(n)?, ..c.clone() });
+            let after = model::bound(&left, s.order.token?.0);
+            return (p2sh_spk(&after.redeem()) == out_spk).then_some(after);
+        }
         let id = before.template_id();
         let t = template(id);
         let redeem = before.redeem();
@@ -1930,6 +1980,8 @@ impl Processor {
                 let t_arg = s.reveal.as_ref().and_then(|r| match s.order.template {
                     TemplateId::KobPair | TemplateId::KobCondPair => r.int(3),
                     TemplateId::KobIfdPair => r.int(13),
+                    // a curve's settle has no time argument
+                    TemplateId::KobCurveAsk => None,
                     t => match delivery::time_arg(t) {
                         Some(k) => r.int(k),
                         None => r.args.last().and_then(|a| crate::script::script_int(a)),
@@ -2164,11 +2216,15 @@ impl Processor {
         }
         delta.tokens.extend(s.order.quote);
         if let Act::Fill(l) = s.act {
+            // a curve's row price is its first level's: the notice takes the fill's
+            let curve_price = (s.order.template == TemplateId::KobCurveAsk)
+                .then(|| events.iter().find(|e| e.0 == "fill").and_then(|e| e.2))
+                .flatten();
             delta.fills.push(FillNotice {
                 order: s.cov,
                 token: s.order.token,
                 side: s.order.side,
-                price: s.order.price,
+                price: curve_price.or(s.order.price),
                 amount: l,
                 payout,
                 txid,
@@ -2234,7 +2290,7 @@ impl Processor {
     /// The quote bound of a fill at the time argument of the call.
     ///
     /// For auctions it is the price that the covenant bounds the fill by.
-    fn fill_quote(&self, before: &AnyState, s: &Spent, _n: i64) -> Option<i64> {
+    fn fill_quote(&self, before: &AnyState, s: &Spent, n: i64) -> Option<i64> {
         let r = s.reveal.as_ref()?;
         let daa = s.utxo_daa;
         // The time argument of the call is the last one. The pair kinds differ: `settle` of
@@ -2250,6 +2306,7 @@ impl Processor {
             },
         }?;
         guarded(|| match before {
+            AnyState::KobCurveAsk(c) => model::curve_fill_price(c, n),
             AnyState::KobAsk(a) | AnyState::KobAskKron(a) => a.price_at(t, daa),
             AnyState::KobBid(b) | AnyState::KobBidKron(b) => b.price_at(t, daa),
             AnyState::KobCondAsk(c) | AnyState::KobCondAskKron(c) => {

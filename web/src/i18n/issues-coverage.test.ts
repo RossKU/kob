@@ -48,6 +48,9 @@ const walletNoticeCodes = unique(matches(decodeSrc.slice(decodeSrc.indexOf('expo
 const registrySrc = source('../kob/registry.ts');
 const verifyCodes = unique(matches(registrySrc, /problems\.push\(\{ code: '([\w-]+)'/g));
 
+/** The sale form of a creation (kob/curve.ts parseSale): its `issue('sale.…'` literals. */
+const saleCodes = unique(matches(source('../kob/curve.ts'), /\bissue\('(sale\.[\w.]+)'/g));
+
 /** dictionary key of every code, by catalogue */
 const catalogues: Record<string, string[]> = {
   'planner (ISSUE_CATALOG)': plannerCodes.map((c) => `issues.${c}`),
@@ -57,6 +60,7 @@ const catalogues: Record<string, string[]> = {
   'cancel / refund planners (cancel.ts)': cancelCodes.map((c) => `issues.${c}`),
   'snapshot errors (SnapshotError)': snapshotCodes.map((c) => `issues.${c}`),
   'issuance form (issue.ts)': issueFormCodes().map((c) => `issues.${c}`),
+  'creation sale form (curve.ts)': saleCodes.map((c) => `issues.${c}`),
   'registry issues (REGISTRY_ISSUE_CODES)': REGISTRY_ISSUE_CODES.map((c) => `issues.${c}`),
   'untradable reasons (UNTRADABLE_REASONS)': UNTRADABLE_REASONS.map((r) => `issues.untradable.${r}`),
   'registry verification problems': verifyCodes.map((c) => `issues.verify.${c}`),
@@ -79,6 +83,7 @@ describe('finding catalogues are found in the sources', () => {
       'cancel / refund planners (cancel.ts)': 17,
       'snapshot errors (SnapshotError)': 5,
       'issuance form (issue.ts)': 35,
+      'creation sale form (curve.ts)': 9,
       'registry issues (REGISTRY_ISSUE_CODES)': 20,
       'untradable reasons (UNTRADABLE_REASONS)': 4,
       'registry verification problems': 8,

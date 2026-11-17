@@ -2256,6 +2256,7 @@ pub enum AnyState {
     KobPair(PairState),
     KobCondPair(CondPairState),
     KobIfdPair(IfdPairState),
+    KobCurveAsk(CurveAskState),
 }
 
 impl AnyState {
@@ -2289,6 +2290,7 @@ impl AnyState {
             AnyState::KobPair(_) => TemplateId::KobPair,
             AnyState::KobCondPair(_) => TemplateId::KobCondPair,
             AnyState::KobIfdPair(_) => TemplateId::KobIfdPair,
+            AnyState::KobCurveAsk(_) => TemplateId::KobCurveAsk,
         }
     }
     /// Token family of this order, for a pair order the family of its base token A.
@@ -2361,7 +2363,7 @@ impl AnyState {
                     AnyState::KobIfdAsk(s)
                 }
             }
-            s @ (AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_)) => s,
+            s @ (AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) | AnyState::KobCurveAsk(_)) => s,
         }
     }
     /// Token extension commitment the state carries.
@@ -2375,6 +2377,7 @@ impl AnyState {
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => Some(s.extension_commitment),
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => Some(s.extension_commitment),
+            AnyState::KobCurveAsk(s) => Some(s.extension_commitment),
             _ => None,
         }
     }
@@ -2404,6 +2407,7 @@ impl AnyState {
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => Some(s.extension_commitment),
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.exit().ok().map(|x| x.extension_commitment),
+            AnyState::KobCurveAsk(s) => Some(s.extension_commitment),
             _ => None,
         }
     }
@@ -2515,6 +2519,10 @@ impl AnyState {
             AnyState::KobPair(s) => s.try_encode_layout(id, layout),
             AnyState::KobCondPair(s) => s.try_encode_layout(id, layout),
             AnyState::KobIfdPair(s) => s.try_encode_layout(id, layout),
+            AnyState::KobCurveAsk(_) if layout == StateLayout::Delivery => {
+                Err(StateError::Codec("AnyState", "KobCurveAsk has no delivery block (legacy layout only)".into()))
+            }
+            AnyState::KobCurveAsk(s) => s.try_encode(),
         }
     }
     /// The encoded state. Panics on a state [`AnyState::try_encode`] refuses.
@@ -2535,6 +2543,10 @@ impl AnyState {
     }
     /// [`AnyState::decode`], and the layout the span's length selected.
     pub fn decode_layout(id: TemplateId, bytes: &[u8]) -> Result<(AnyState, StateLayout), StateError> {
+        // variable length (its table): one layout
+        if id == TemplateId::KobCurveAsk {
+            return Ok((AnyState::KobCurveAsk(CurveAskState::decode(bytes)?), StateLayout::Legacy));
+        }
         let state = match id {
             TemplateId::KobAsk => AnyState::KobAsk(AskState::decode_as(id, bytes)?),
             TemplateId::KobBid => AnyState::KobBid(BidState::decode_as(id, bytes)?),
@@ -2592,11 +2604,17 @@ impl AnyState {
     }
     /// Redeem script of this instance under its template.
     pub fn redeem(&self) -> Vec<u8> {
-        template(self.template_id()).redeem(&self.encode())
+        match self {
+            AnyState::KobCurveAsk(s) => s.redeem(),
+            _ => template(self.template_id()).redeem(&self.encode()),
+        }
     }
     /// P2SH script public key of this instance under its template.
     pub fn spk(&self) -> ScriptPublicKey {
-        template(self.template_id()).spk(&self.encode())
+        match self {
+            AnyState::KobCurveAsk(s) => s.spk(),
+            _ => template(self.template_id()).spk(&self.encode()),
+        }
     }
     /// Maker key of an order.
     pub fn maker(&self) -> [u8; 32] {
@@ -2610,6 +2628,7 @@ impl AnyState {
             AnyState::KobPair(s) => s.maker,
             AnyState::KobCondPair(s) => s.maker,
             AnyState::KobIfdPair(s) => s.maker,
+            AnyState::KobCurveAsk(s) => s.maker,
         }
     }
     /// True for the kinds that hold tokens in covenant-id custody.
@@ -2627,6 +2646,7 @@ impl AnyState {
                 | AnyState::KobIfdAskKron(_)
                 | AnyState::KobPair(_)
                 | AnyState::KobCondPair(_)
+                | AnyState::KobCurveAsk(_)
         ) || matches!(self, AnyState::KobIfdPair(s) if s.amount_left > 0 && !s.is_buy_first() || s.custody > 0)
     }
     /// The exact custodies a token-holding order holds, in record order:
@@ -2663,6 +2683,7 @@ impl AnyState {
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.token_cov_id,
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.token_cov_id,
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.token_cov_id,
+            AnyState::KobCurveAsk(s) => s.token_cov_id,
             p => p.pair_tokens().expect("pair kind").a.cov_id,
         }
     }
@@ -2677,6 +2698,7 @@ impl AnyState {
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.token_tpl_hash,
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.token_tpl_hash,
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.token_tpl_hash,
+            AnyState::KobCurveAsk(s) => s.token_tpl_hash,
             p => p.pair_tokens().expect("pair kind").a.tpl_hash,
         })
     }
@@ -2689,6 +2711,7 @@ impl AnyState {
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => (s.tpl_prefix_len, s.tpl_suffix_len),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => (s.tpl_prefix_len, s.tpl_suffix_len),
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => (s.tpl_prefix_len, s.tpl_suffix_len),
+            AnyState::KobCurveAsk(s) => (s.tpl_prefix_len, s.tpl_suffix_len),
             p => {
                 let a = p.pair_tokens().expect("pair kind").a;
                 (a.prefix_len, a.suffix_len)
@@ -2704,6 +2727,7 @@ impl AnyState {
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => s.scale,
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => s.scale,
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.scale,
+            AnyState::KobCurveAsk(s) => s.scale,
             p => p.pair_tokens().expect("pair kind").a.scale,
         }
     }
@@ -2719,11 +2743,13 @@ impl AnyState {
             AnyState::KobPair(s) => s.min_fill,
             AnyState::KobCondPair(s) => s.min_fill,
             AnyState::KobIfdPair(s) => s.min_fill,
+            AnyState::KobCurveAsk(s) => s.min_fill,
         }
     }
-    /// Expiry and refund tip (every order kind has them).
+    /// Expiry and refund tip (every order kind but `KobCurveAsk`, which has no refund).
     pub fn expiry(&self) -> Option<(i64, i64)> {
         Some(match self {
+            AnyState::KobCurveAsk(_) => return None,
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => (s.expiry_daa, s.refund_tip),
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => (s.expiry_daa, s.refund_tip),
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => (s.expiry_daa, s.refund_tip),
@@ -2746,6 +2772,7 @@ impl AnyState {
             AnyState::KobPair(s) => s.amount_left,
             AnyState::KobCondPair(s) => s.amount_left,
             AnyState::KobIfdPair(s) => s.amount_left,
+            AnyState::KobCurveAsk(s) => s.amount_left,
             AnyState::KobBid(_) | AnyState::KobBidKron(_) => return None,
         })
     }
@@ -2760,9 +2787,10 @@ impl AnyState {
     }
     /// DAA score from which anyone may refund the order whose UTXO was created at `utxo_daa`.
     ///
-    /// It covers the soft expiry, 90 days idle and the IOC / FOK kill. Every order kind has one.
+    /// It covers the soft expiry, 90 days idle and the IOC / FOK kill. `None` for `KobCurveAsk`.
     pub fn refund_due(&self, utxo_daa: i64) -> Option<i64> {
         Some(match self {
+            AnyState::KobCurveAsk(_) => return None,
             AnyState::KobAsk(s) | AnyState::KobAskKron(s) => refund_due(s.expiry_daa, s.tif, s.active_from, utxo_daa),
             AnyState::KobBid(s) | AnyState::KobBidKron(s) => refund_due(s.expiry_daa, s.tif, s.active_from, utxo_daa),
             AnyState::KobCondAsk(s) | AnyState::KobCondAskKron(s) => refund_due(s.expiry_daa, TIF_GTC, s.active_from, utxo_daa),
@@ -2798,6 +2826,7 @@ impl AnyState {
             AnyState::KobPair(s) => return s.check_numbers(),
             AnyState::KobCondPair(s) => return s.check_numbers(),
             AnyState::KobIfdPair(s) => return s.check_numbers(),
+            AnyState::KobCurveAsk(s) => return s.check_numbers(),
             _ => {}
         }
         let name = self.template_id().name();
@@ -2834,7 +2863,9 @@ impl AnyState {
                     check(s.amount_left, sum(x.worst(), x.tip, "exit worst + tip")?, "exit worst leg + tip")?;
                 }
             }
-            AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) => unreachable!("checked above"),
+            AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) | AnyState::KobCurveAsk(_) => {
+                unreachable!("checked above")
+            }
         }
         Ok(())
     }
@@ -3022,6 +3053,8 @@ pub fn mutable_windows_in(id: TemplateId, layout: StateLayout) -> &'static [(&'s
     let delivery = layout == StateLayout::Delivery;
     match id.canonical() {
         TemplateId::KobAsk | TemplateId::KobAskKron => &[("amountLeft", 236, 244)],
+        // tokenCovId is written once, by the first fill of an unbound curve
+        TemplateId::KobCurveAsk => &[("tokenCovId", 35, 67), ("amountLeft", 173, 181)],
         TemplateId::KobBid if delivery => &[("bought", 314, 322)],
         TemplateId::KobPair if delivery => &[("amountLeft", 398, 406), ("custody", 407, 415), ("bought", 476, 484)],
         TemplateId::KobPair => &[("amountLeft", 398, 406), ("custody", 407, 415)],
@@ -3065,6 +3098,9 @@ pub fn encode_state_json(json: &str) -> Result<Vec<u8>, String> {
 
 mod pair;
 pub use pair::*;
+
+mod curve;
+pub use curve::*;
 
 #[cfg(test)]
 mod tests;

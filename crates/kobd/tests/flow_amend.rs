@@ -32,6 +32,7 @@ fn amend_req(c: &Ctx, at: &SignedTx, idx: usize, a: &AskState, amended: AskState
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     }
 }
 
@@ -269,6 +270,7 @@ async fn an_amended_bid_keeps_its_id_and_its_buying_power_follows_the_new_terms(
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     };
     let am = c.w.sign(&Action::AmendOrder(req));
     assert_eq!(am.tx.inputs.len(), 1, "the escrow pays the fee");
@@ -324,6 +326,7 @@ async fn a_bid_amend_that_changes_the_scale_is_listed_nowhere() {
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     };
     let moved = AnyState::KobBid(BidState { scale: b0.scale * 10, ..b0.clone() });
     let t = hostile(&c, req, |b| {
@@ -367,6 +370,7 @@ async fn an_amend_restarts_the_age_that_decides_which_side_sets_the_trade_price(
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     }));
     c.push(&[&am_b]).await;
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM rejects", []), 0);

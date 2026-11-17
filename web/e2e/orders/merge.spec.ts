@@ -93,6 +93,9 @@ test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 appr
   await expect(page.locator('[data-testid^="flow-step-"]')).toHaveCount(15);
   // mid-run: the first level is through, a later level is being built from its outputs
   await expect(page.getByTestId('flow-step-11')).toHaveAttribute('data-state', 'sending', { timeout: 120_000 });
+  // fifteen steps: a column, the running one current
+  await expect(page.getByTestId('flow-progress')).toHaveClass(/stepper-column/);
+  await expect(page.getByTestId('flow-step-11')).toHaveAttribute('aria-current', 'step');
   await shot(page, 'merge-all-progress');
   // the flow's card: at the top right just under the header (founder 2026-11-14), on top of any toast, and never past the bottom of the window
   const [fb, hb, vp] = [await flow.boundingBox(), await page.locator('header.header').boundingBox(), page.viewportSize()!];
@@ -155,6 +158,7 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   await expect(page.getByTestId('flow-done')).toHaveText('Done: 1 transaction submitted.');
   await expect(page.getByTestId('flow-step-0')).toHaveAttribute('data-state', 'submitted');
   await expect(page.getByTestId('flow-step-1')).toHaveAttribute('data-state', 'cancelled');
+  await expect(page.getByTestId('flow-step-1')).toContainText('Declined');
   await expect(page.getByTestId('flow-step-2')).toHaveAttribute('data-state', 'pending');
   await expect(page.getByTestId('tx-flow')).toContainText('1 transaction not started');
   expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'rejected']);
@@ -274,6 +278,10 @@ test('the sell ticket merges just enough first, then places the sale with its ow
   await shot(page, 'sell-ticket-merge-offer');
   await button.click();
 
+  // the stepper: the two merges, then the sale, current once they went through
+  await expect(page.getByTestId('flow-then-step')).toContainText('Sell');
+  await expect(page.getByTestId('flow-then-step')).toHaveAttribute('aria-current', 'step', { timeout: 90_000 });
+  await expect(page.getByTestId('flow-then-step')).toContainText('Confirm the sale');
   // the merges, each approved in the wallet, then the sale's own final confirmation
   await expect(page.getByTestId('confirm-order')).toBeVisible({ timeout: 90_000 });
   expect((await wallet!.calls()).map((c) => c.status)).toEqual(['signed', 'signed']);

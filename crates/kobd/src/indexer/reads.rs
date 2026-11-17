@@ -766,6 +766,10 @@ pub struct BookOrderView {
     pub genesis_daa: i64,
     pub confirmations: Option<i64>,
     pub settled: bool,
+    /// A `KobCurveAsk` level: its index in the table. Every row of one curve has its covenant id
+    /// (one order); `amount_left` is the level's base units left.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve_level: Option<i64>,
 }
 
 /// One side of a book, as aggregated levels or as single orders.
@@ -904,7 +908,7 @@ pub(crate) fn fillable_now(now: i64, now_unix: Option<u64>) -> String {
     // The current UTXO's DAA, or the order state's last DAA when the UTXO row is not stored.
     let udaa = "COALESCE(u.created_daa, s.last_daa)";
     let mut w = format!(
-        "(o.expiry_daa IS NULL OR o.expiry_daa > {now}) AND COALESCE(o.active_from, 0) <= {now} AND {udaa} + {MAX_IDLE} > {now} \
+        "(o.expiry_daa IS NULL OR o.expiry_daa > {now}) AND COALESCE(o.active_from, 0) <= {now} AND ({udaa} + {MAX_IDLE} > {now} OR o.contract = 'KobCurveAsk') \
          AND (COALESCE(o.tif, {TIF_GTC}) = {TIF_GTC} OR o.contract NOT IN ('KobAsk','KobAskKron','KobBid','KobBidKron') \
               OR MAX({udaa}, COALESCE(o.active_from, 0)) + {IOC_LIFE} > {now})"
     );
@@ -950,7 +954,28 @@ pub(crate) fn resting_level(
     Some((quote, amount))
 }
 
+/// [`resting_level`], with a `KobCurveAsk` as its remaining levels: `(level, quote, amount)`, the
+/// level `None` for any other order. The amounts sum to what the order has left.
+pub(crate) fn resting_levels(
+    contract: &str,
+    state: Option<Vec<u8>>,
+    udaa: i64,
+    price: i64,
+    remaining: Option<i64>,
+    now: i64,
+) -> Vec<(Option<usize>, i64, Option<i64>)> {
+    if contract == TemplateId::KobCurveAsk.name() {
+        if let Some(AnyState::KobCurveAsk(c)) = tip_state(contract, state.clone()) {
+            return crate::model::curve_levels(&c).into_iter().map(|(l, p, a)| (Some(l), p, Some(a))).collect();
+        }
+    }
+    resting_level(contract, state, udaa, price, remaining, now).map(|(q, a)| (None, q, a)).into_iter().collect()
+}
+
 /// The orders of one side of the book of a token, best first, at most `depth`.
+///
+/// A `KobCurveAsk` is one row per remaining level (`curve_level`), each with that level's price
+/// and size, all of one covenant id.
 fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64, depth: usize) -> DbResult<Vec<BookOrderView>> {
     let dir = if side == 1 { "ASC" } else { "DESC" };
     let now = book_daa(conn, ctx)?;
@@ -979,9 +1004,10 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
         let last_daa: i64 = r.get(16)?;
         // A taker in flight or a TWAP order between its slices is not in the book. The aggregated
         // levels leave it out the same way.
-        let Some((quote, _)) = resting_level(&contract, raw_state.clone(), utxo_daa.unwrap_or(last_daa), price, remaining, now) else {
+        let levels = resting_levels(&contract, raw_state.clone(), utxo_daa.unwrap_or(last_daa), price, remaining, now);
+        if levels.is_empty() {
             return Ok(None);
-        };
+        }
         let scale: Option<i64> = r.get(6)?;
         let state = tip_state(&contract, raw_state);
         let auction = state.as_ref().zip(utxo_daa).and_then(|(s, d)| auction_of(s, d, ctx.node_daa));
@@ -1006,10 +1032,29 @@ fn book_side_orders(conn: &Connection, ctx: &ReadCtx, token: &Hash32, side: i64,
             genesis_daa,
             confirmations: ctx.confirmations(genesis_daa),
             settled: ctx.settled(genesis_daa),
+            curve_level: None,
         };
-        Ok(Some((quote, scale.unwrap_or(1).max(1), view)))
+        let scale = scale.unwrap_or(1).max(1);
+        let rows: Vec<(i64, i64, BookOrderView)> = match levels.as_slice() {
+            [(None, quote, _)] => vec![(*quote, scale, view)],
+            _ => levels
+                .into_iter()
+                .map(|(l, p, a)| {
+                    let v = BookOrderView {
+                        price: p.to_string(),
+                        quote: Some(p.to_string()),
+                        amount_left: sompi(a),
+                        curve_level: l.map(|l| l as i64),
+                        ..view.clone()
+                    };
+                    (p, scale, v)
+                })
+                .collect(),
+        };
+        Ok(Some(rows))
     })?;
-    let mut out: Vec<(i64, i64, BookOrderView)> = rows.filter_map(Result::transpose).collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut out: Vec<(i64, i64, BookOrderView)> =
+        rows.filter_map(Result::transpose).collect::<rusqlite::Result<Vec<_>>>()?.into_iter().flatten().collect();
     // Best first by the quote now per base unit (an auction moves away from its limit). The SQL
     // order (age, covenant id) breaks ties.
     out.sort_by(|(qa, sa, _), (qb, sb, _)| {
@@ -1053,18 +1098,20 @@ pub(crate) fn book_side_sorted(conn: &Connection, ctx: &ReadCtx, token: &Hash32,
     let mut st = conn.prepare(&sql)?;
     let rows = st.query_map(rusqlite::params![token.0.to_vec(), side], |r| {
         let (price, remaining): (i64, Option<i64>) = (r.get(0)?, r.get(2)?);
-        let level = resting_level(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
+        let level = resting_levels(&r.get::<_, String>(4)?, r.get(5)?, r.get(6)?, price, remaining, now);
         Ok((level, r.get::<_, i64>(1)?, r.get::<_, i64>(3)?))
     })?;
-    // Maps (price, scale) to (amount, orders, estimated).
+    // Maps (price, scale) to (amount, orders, estimated). A curve adds each remaining level's size
+    // at its price, so its amount is counted once.
     let mut levels: BTreeMap<(i64, i64), (i128, i64, bool)> = BTreeMap::new();
     for r in rows {
         let (level, scale, exact) = r?;
-        let Some((price, remaining)) = level else { continue };
-        let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false));
-        l.0 += remaining.unwrap_or(0).max(0) as i128;
-        l.1 += 1;
-        l.2 |= remaining.is_none() || exact == 0;
+        for (_, price, remaining) in level {
+            let l = levels.entry((price, scale.max(1))).or_insert((0, 0, false));
+            l.0 += remaining.unwrap_or(0).max(0) as i128;
+            l.1 += 1;
+            l.2 |= remaining.is_none() || exact == 0;
+        }
     }
     let mut out: Vec<_> = levels.into_iter().collect();
     out.sort_by(|((pa, sa), _), ((pb, sb), _)| {
@@ -1397,6 +1444,10 @@ pub struct OrderView {
     /// `tip` is the KAS tip per whole A.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pair: Option<PairView>,
+    /// A `KobCurveAsk`: its levels, from its current state. `price` and `quote` are the current
+    /// level's price; `expiry_daa` is null (a curve rests until sold out or cancelled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve: Option<CurveView>,
     /// Warnings a client must show for the tokens of the order, derived from the registry's facts.
     ///
     /// See `docs/spec/matcher.md` 1.2a. `genesis_unverified` is given unless the registry says
@@ -1652,9 +1703,16 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
     // The delivery terms: the current state's, else the placement's. `bought` is the current one.
     let block = state.as_ref().or(placed.as_ref()).and_then(crate::indexer::delivery::block_of);
     let bought = state.as_ref().and_then(|s| s.delivery()).map(|d| d.bought.to_string());
+    let curve = state.as_ref().and_then(curve_view);
+    // a curve's price is its current level's
+    let price = match &curve {
+        Some(c) => c.price_now.clone(),
+        None => sompi(r.get(10)?),
+    };
     if quote.is_none() && pair.is_none() {
-        quote = sompi(r.get(10)?);
+        quote = price.clone();
     }
+    let expiry = expiry.filter(|_| contract != TemplateId::KobCurveAsk.name());
     Ok(OrderView {
         cancel_only: None,
         covenant_id: hx(r.get(0)?),
@@ -1668,7 +1726,7 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         extension_commitment: hxo(r.get(36)?),
         scale: r.get(8)?,
         min_fill: sompi(r.get(9)?),
-        price: sompi(r.get(10)?),
+        price,
         tip: sompi(r.get(11)?),
         tif,
         expiry_daa: expiry,
@@ -1725,7 +1783,58 @@ fn order_from_row(r: &Row<'_>, ctx: &ReadCtx) -> rusqlite::Result<OrderView> {
         children: None,
         children_total: None,
         pair,
+        curve,
         warnings: vec![],
+    })
+}
+
+/// A `KobCurveAsk`'s levels (`docs/design/curve-ask-spec.md`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CurveView {
+    /// The current level: `(total - amountLeft) / levelSize`.
+    pub level: i64,
+    /// Levels of the table.
+    pub levels: i64,
+    /// Base units per level.
+    pub level_size: String,
+    /// Base units the curve sells in all.
+    pub total: String,
+    /// The current level's price, sompi per whole token (null when sold out).
+    pub price_now: Option<String>,
+    /// Most base units one fill takes from here: the rest of 8 levels.
+    pub max_fill: String,
+    /// Created in its token's genesis and not yet filled or amended: `tokenCovId` is zero in the
+    /// state, and `token` is its custody's.
+    pub unbound: bool,
+    /// The remaining levels, the current first.
+    pub remaining: Vec<CurveLevelView>,
+}
+
+/// One remaining level of a curve.
+#[derive(Debug, Clone, Serialize)]
+pub struct CurveLevelView {
+    pub level: i64,
+    /// Sompi per whole token.
+    pub price: String,
+    /// Base units left in the level.
+    pub amount: String,
+}
+
+/// The [`CurveView`] of a curve state.
+pub fn curve_view(s: &AnyState) -> Option<CurveView> {
+    let AnyState::KobCurveAsk(c) = s else { return None };
+    Some(CurveView {
+        level: c.level(),
+        levels: c.levels() as i64,
+        level_size: c.level_size.to_string(),
+        total: c.total.to_string(),
+        price_now: c.price_now().map(|p| p.to_string()),
+        max_fill: c.max_fill().to_string(),
+        unbound: c.is_unbound(),
+        remaining: crate::model::curve_levels(c)
+            .into_iter()
+            .map(|(l, p, a)| CurveLevelView { level: l as i64, price: p.to_string(), amount: a.to_string() })
+            .collect(),
     })
 }
 

@@ -5,6 +5,7 @@
 // first as the user placed it (sell KAS for tokens), its chain-side terms below; every price reads "X per Y", never a pair notation.
 import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
 import { spendsPreparation } from '../kob/issue';
+import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
 import { decodeDeclaration } from '../kob/kcc23';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
@@ -472,8 +473,49 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   const verified = new Set<number>();
   let supply = 0n;
   let toMaker = 0n;
+  // a claimed curve (the genesis's sell order of this key): its output is exactly the script of its unbound state, alone in its own covenant
+  // group, made by this key, of the claimed program and commitment, and its custody is the claimed token output it owns with exactly its amount
+  let curveLines: SummaryLine[] = [];
+  if (claim?.curve) {
+    const c = claim.curve;
+    const st = c.state as { kind?: unknown; state?: Record<string, unknown> };
+    const s = st.state ?? {};
+    const out = built.tx.outputs[c.index];
+    const group = built.covenants.find((g) => g.covenantId === c.covenantId);
+    const custody = claim.outputs.find((o) => o.owner === c.covenantId && o.ownerScheme === 4);
+    const tpl = kob.templates().find((x) => x.name === claim.program);
+    if (
+      st.kind !== 'KobCurveAsk' || !out || !group || group.outputs.length !== 1 || group.outputs[0] !== c.index || out.covenant?.covenantId !== c.covenantId ||
+      kob.scriptPublicKey(c.state as never) !== out.scriptPublicKey || s.maker !== maker || s.tokenCovId !== '0'.repeat(64) || !tpl || s.tokenTplHash !== tpl.hash ||
+      s.extensionCommitment !== claim.extensionCommitment || !custody || custody.borrowScheme !== 0 || String(s.amountLeft) !== custody.amount || String(s.total) !== custody.amount
+    ) {
+      throw new Error('claim');
+    }
+    verified.add(c.index);
+    const table = (s.table as string[]).map((p) => BigInt(p));
+    // stricter than the protocol: a table that never falls, a tip below every level, levels that hold the amount, the scale of the declared decimals
+    if (decl.decimals === null || curveProblems(s as never, decl.decimals).length > 0) throw new Error('claim');
+    try {
+      kob.checkNumbers(c.state as never);
+    } catch {
+      throw new Error('claim');
+    }
+    const n = curveNumbersOfState(s as never);
+    const tip = BigInt(String(s.tip));
+    const units = (v: bigint) => `${formatTokenAmount(v, decl.decimals!)} ${decl.symbol ?? ''}`.trim();
+    curveLines = [
+      { label: t('signer.declare.curve'), value: t('signer.declare.curveValue', { levels: table.length, first: formatKas(table[0] ?? 0n), last: formatKas(table[table.length - 1] ?? 0n) }), dir: null },
+      { label: t('signer.declare.curveLevelSize'), value: units(BigInt(String(s.levelSize))), dir: null },
+      { label: t('signer.declare.curveAverage'), value: `${formatKas(n.average)} KAS`, dir: null },
+      { label: t('signer.declare.curveTotal'), value: `${formatKas(n.total)} KAS`, dir: null },
+      { label: t('signer.declare.curveTip'), value: `${formatKas(tip)} KAS`, dir: null },
+      { label: t('signer.declare.curveMinFill'), value: units(BigInt(String(s.minFill))), dir: null },
+      { label: t('signer.declare.curveTable'), value: tablePreview(table, (p) => formatKas(p)), dir: null },
+    ];
+  }
   if (claim) {
-    const cov = built.covenants.length === 1 ? built.covenants[0]! : null;
+    const tokenGroups = built.covenants.filter((g) => !claim.curve || g.covenantId !== claim.curve.covenantId);
+    const cov = tokenGroups.length === 1 && built.covenants.length === (claim.curve ? 2 : 1) ? tokenGroups[0]! : null;
     if (!cov || cov.outputs.length !== claim.outputs.length || claim.outputs.some((o) => !cov.outputs.includes(o.index))) throw new Error('claim');
     for (const o of claim.outputs) {
       const out = built.tx.outputs[o.index];
@@ -484,6 +526,8 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
       if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
     }
   }
+  // the custody of this key's own curve is not "to others"
+  const onCurve = claim?.curve ? claim.outputs.filter((o) => o.owner === claim.curve!.covenantId && o.ownerScheme === 4).reduce((a, o) => a + BigInt(o.amount), 0n) : 0n;
   // the KAS line: the genesis spends this key's preparation output, so its net is the creation's, less the preparation's fee
   const k = g.decoded.net.kas;
   const delta = k.walletDelta - prepFee;
@@ -505,7 +549,9 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
       ? [
           { label: t('signer.declare.supply'), value: `${formatTokenAmount(supply, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null },
           { label: t('signer.declare.toYou'), value: `+${formatTokenAmount(toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'in' as const },
-          ...(supply > toMaker ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
+          ...(onCurve > 0n ? [{ label: t('signer.declare.onCurve'), value: `${formatTokenAmount(onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
+          ...(supply > toMaker + onCurve ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker - onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
+          ...curveLines,
         ]
       : []),
     { label: t('signer.net.kas'), value: signed(delta, kas), dir: delta < 0n ? 'out' : delta > 0n ? 'in' : null },

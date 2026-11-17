@@ -909,6 +909,10 @@ pub fn tick_with_subsidy(inp: &KeeperInput, cfg: &KeeperConfig, signer: &dyn Sig
         if inp.excluded.contains(&id) || inp.excluded_outpoints.contains(&outpoint(&o.order.utxo)) || deferred.contains(&id) {
             continue;
         }
+        // a curve has no refund, kill or close: it rests until sold out or cancelled by its maker
+        if matches!(o.order.state, AnyState::KobCurveAsk(_)) {
+            continue;
+        }
         // numbers the builders cannot survive are never built from
         if let Err(why) = crate::sanity::check(&o.order.state) {
             report.skipped.push((id, format!("not serviced: {why}")));

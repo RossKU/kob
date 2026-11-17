@@ -239,6 +239,8 @@ struct Universe {
     rcap: Vec<i64>,
     /// Candidates per covenant id (exclusion).
     by_id: BTreeMap<CovId, Vec<usize>>,
+    /// A curve level's previous level (the one it fills after).
+    curve_prev: Vec<Option<usize>>,
     /// Work counters of the plan ([`PlanWork`]).
     allocations: Cell<u64>,
     pair_tries: Cell<u64>,
@@ -632,6 +634,15 @@ impl Universe {
         for (i, c) in cands.iter().enumerate() {
             by_id.entry(c.id).or_default().push(i);
         }
+        let mut curve_prev: Vec<Option<usize>> = vec![None; n];
+        for v in by_id.values() {
+            let level = |i: usize| cands[i].curve.map(|x| x.level);
+            for &i in v {
+                if let Some(l) = level(i).filter(|l| *l > 0) {
+                    curve_prev[i] = v.iter().copied().find(|&j| level(j) == Some(l - 1));
+                }
+            }
+        }
         Universe {
             cands,
             twin,
@@ -658,6 +669,7 @@ impl Universe {
             net_of,
             rcap: vec![],
             by_id,
+            curve_prev,
             allocations: Cell::new(0),
             pair_tries: Cell::new(0),
             net_steps: Cell::new(0),
@@ -1076,6 +1088,8 @@ impl<'u> Alloc<'u> {
                 // orders' sales).
                 PairRole::Surplus => {}
             },
+            // a curve's later levels share the first level's input and rest output
+            (None, Side::Ask) if c.curve.is_some_and(|x| x.level > 0) => d.sold = n as i128,
             (None, Side::Ask) => {
                 d.tin = 1;
                 // Custody remainder (or an IOC's tokens back to its maker).
@@ -1096,8 +1110,15 @@ impl<'u> Alloc<'u> {
     fn usable(&self, i: usize) -> bool {
         let c = &self.u.cands[i];
         let tw = self.u.twin[i];
-        let free = |id: &CovId| self.holder.get(id).is_none_or(|h| *h == i || Some(*h) == tw);
+        // the levels of one curve share its input; a level fills only after the one before is full
+        let sibling = |h: usize| c.curve.is_some() && self.u.cands[h].curve.is_some();
+        let free = |id: &CovId| self.holder.get(id).is_none_or(|h| *h == i || Some(*h) == tw || sibling(*h));
+        let level_ok = match c.curve {
+            Some(x) if x.level > 0 => self.u.curve_prev[i].is_some_and(|p| self.qty[p] > 0 && self.qty[p] >= self.caps[p]),
+            _ => true,
+        };
         self.live[i]
+            && level_ok
             && free(&c.id)
             && c.merge.as_ref().is_none_or(free)
             && c.parent.as_ref().is_none_or(free)
@@ -2020,6 +2041,7 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
                 bad.push(c.id);
             }
         }
+        bad.extend(curve_offenders(u, &al));
         let mut changed = capped || !bad.is_empty();
         let qty = al.qty.clone();
         drop(al);
@@ -2071,8 +2093,30 @@ fn settle(u: &Universe, mut st: State, max_bytes: u64, order: &[usize], deadline
     Settled { caps, st }
 }
 
-/// The removable units of an allocation: each direct leg, each pair order with both its legs, and
-/// each surplus offer.
+/// The curves of an allocation whose fill breaks the curve's rules (minimum fill, KIP-9, levels in
+/// order).
+fn curve_offenders(u: &Universe, al: &Alloc) -> Vec<CovId> {
+    let mut fills: BTreeMap<CovId, (i64, CurveLeg)> = BTreeMap::new();
+    let mut v = vec![];
+    for &i in &al.seq {
+        let (Some(x), q) = (u.cands[i].curve, al.qty[i]) else { continue };
+        if q <= 0 {
+            continue;
+        }
+        if x.level > 0 && u.curve_prev[i].is_none_or(|p| al.qty[p] < al.caps[p]) {
+            v.push(u.cands[i].id);
+        }
+        let e = fills.entry(u.cands[i].id).or_insert((0, x));
+        e.0 += q;
+    }
+    v.extend(fills.into_iter().filter(|(_, (n, x))| !x.fill_ok(*n)).map(|(id, _)| id));
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// The removable units of an allocation: each direct leg, each pair order with both its legs, each
+/// curve with all its levels, and each surplus offer.
 fn units_of(u: &Universe, al: &Alloc) -> Vec<Vec<usize>> {
     let mut out = vec![];
     let mut done = BTreeSet::new();
@@ -2084,6 +2128,14 @@ fn units_of(u: &Universe, al: &Alloc) -> Vec<Vec<usize>> {
             Some(t) => {
                 done.insert(t);
                 out.push(vec![i.min(t), i.max(t)]);
+            }
+            None if u.cands[i].curve.is_some() => {
+                let id = u.cands[i].id;
+                let mut un: Vec<usize> =
+                    al.seq.iter().copied().filter(|&j| u.cands[j].id == id && u.cands[j].curve.is_some()).collect();
+                un.sort_unstable();
+                done.extend(un.iter().copied());
+                out.push(un);
             }
             None => out.push(vec![i]),
         }
@@ -2356,7 +2408,7 @@ fn route_cap(u: &Universe, p: usize, cfg: &PlannerConfig) -> Option<i64> {
 /// released exactly at the reconciled cap, the receipt covered), and tokens left to the operator.
 /// The result is empty for every settled allocation, but the deadline can cut a settlement short.
 fn offenders(u: &Universe, al: &Alloc) -> Vec<CovId> {
-    let mut v = vec![];
+    let mut v = curve_offenders(u, al);
     for &i in &al.seq {
         if u.cands[i].pair.is_none() && !u.cands[i].quantity_ok(al.qty[i]) {
             v.push(u.cands[i].id);
@@ -2799,10 +2851,20 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i
             }
         }
     }
-    order.extend(al.seq.iter().copied().filter(|&i| u.cands[i].pair.is_none()));
+    // a curve is one leg: its first level, which the fills of its later levels add to
+    let first_level = |i: usize| u.cands[i].curve.is_none_or(|x| x.level == 0);
+    order.extend(al.seq.iter().copied().filter(|&i| u.cands[i].pair.is_none() && first_level(i)));
     // A fill's index in the plan is its leg index in the lowered batch (the evidence references); a
     // pair order's legs both map to its fill.
     let mut at: BTreeMap<usize, usize> = order.iter().enumerate().map(|(k, &i)| (i, k)).collect();
+    let mut curve_qty: BTreeMap<usize, i64> = BTreeMap::new();
+    for &i in al.seq.iter().filter(|&&i| !first_level(i)) {
+        let id = u.cands[i].id;
+        if let Some((k, &j)) = order.iter().enumerate().find(|(_, &j)| u.cands[j].id == id) {
+            at.insert(i, k);
+            *curve_qty.entry(j).or_default() += al.qty[i];
+        }
+    }
     for (k, &i) in order.iter().enumerate() {
         if let Some(t) = u.twin[i] {
             at.insert(t, k);
@@ -2819,7 +2881,19 @@ fn to_plan(u: &Universe, al: &Alloc, lock: u64, ticks: Option<&BTreeMap<CovId, i
             // priced there.
             let c = &u.cands[i];
             let t = ticks.filter(|_| c.pair.is_some()).and_then(|m| m.get(&c.id)).map(|&x| x.clamp(0, lock as i64) as u64);
-            Fill { cand: c.clone(), amount: al.qty[i], evidence, evidence_b, t: t.filter(|&x| x < lock) }
+            let amount = al.qty[i] + curve_qty.get(&i).copied().unwrap_or(0);
+            // a curve's fill is its first level's candidate with the rules of the whole fill
+            let cand = match c.curve {
+                Some(x) => Cand {
+                    cap: x.rules.cap,
+                    min_fill: x.rules.min_fill,
+                    rest_from: x.rules.rest_from,
+                    part_cap: x.rules.part_cap,
+                    ..c.clone()
+                },
+                None => c.clone(),
+            };
+            Fill { cand, amount, evidence, evidence_b, t: t.filter(|&x| x < lock) }
         })
         .collect();
     let updates: Vec<PlanUpdate> = al

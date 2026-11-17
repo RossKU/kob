@@ -3,14 +3,15 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import type { CancelPlan } from '../../kob/cancel';
 import type { PlacementRecord } from '../../kob/records';
-import { Banner, Button, IssueLine, Spinner } from '../kit';
+import { Banner, Button, IssueLine, Spinner, Stepper } from '../kit';
 import { toasts } from '../kit/toast-store';
 import { SendStatusLine, useSend } from '../confirm/SendStatus';
 import { PHONE_TOAST_QUERY } from '../shell/narrow';
 import { tCount } from './plural';
+import { flowStepperItems, type SessionStep } from './flow-steps';
 
 export interface FlowStep {
-  /** the step in the progress list */
+  /** the step's label in the stepper */
   title: string;
   plan: CancelPlan;
   /** placement-record label for orders the step creates (amendments) */
@@ -53,6 +54,8 @@ export interface TxFlowProps {
   next?(index: number, txids: readonly string[]): Promise<FlowStep>;
   /** the card was dismissed (its x once the flow is over, or by itself a moment after every step went through) */
   onClose?(): void;
+  /** a step after the run, outside it ("Merge, then sell": the sale), shown last in the stepper */
+  then?: { label: string; note: string };
 }
 
 /** How long the card of a flow whose every step went through stays (its toast says the same and stays longer). */
@@ -62,7 +65,7 @@ const DONE_CLOSE_PHONE_MS = 4000;
 
 /**
  * Runs one or several transactions one after the other, each checked silently and approved in the wallet (ui/confirm/send.ts) as soon as the flow
- * starts: the action's button was the user's request, the wallet's popup is the approval. A progress list shows every step and one line the
+ * starts: the action's button was the user's request, the wallet's popup is the approval. The stepper (kit/Stepper.tsx) shows every step and one line the
  * current one; a step that stops (rejected in the wallet, a failed check) ends the sequence, and steps not yet run are simply not run: each step
  * is valid alone (a merge's later step is built only at its turn, from the outputs of the steps it follows), so a partial sequence leaves
  * everything consistent.
@@ -76,6 +79,8 @@ export function TxFlow(props: TxFlowProps) {
   const [txids, setTxids] = useState<Record<number, string>>({});
   const done = useRef(false);
   const gone = useRef(false);
+  // no one-approval session on this branch: the stepper has no approval step
+  const session: SessionStep = 'none';
 
   const finish = (s: StepState[]) => {
     if (done.current) return;
@@ -157,26 +162,33 @@ export function TxFlow(props: TxFlowProps) {
     const timer = setTimeout(() => props.onClose?.(), phone ? DONE_CLOSE_PHONE_MS : DONE_CLOSE_MS);
     return () => clearTimeout(timer);
   }, [allThrough]);
+  const items = flowStepperItems({
+    titles: steps.map((s) => s.title),
+    states,
+    phase: sender.status?.phase ?? null,
+    waiting: !!sender.status?.waiting,
+    session,
+    ...(props.then ? { then: props.then } : {}),
+  });
+  // the session's step comes before the run's steps
+  const lead = session === 'none' ? 0 : 1;
   const tone = running ? 'info' : message || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';
 
   const card = (
     <div class={`toast toast-${tone} send-toast tx-flow-toast`} data-testid="tx-flow">
       <div class="grow wrap-anywhere stack-sm">
       <strong class="tx-flow-title">{props.heading}</strong>
-      {steps.length > 1 ? (
-        <ol class="progress" data-testid="flow-progress" ref={list}>
-          {steps.map((s, i) => (
-            <li key={i} data-testid={`flow-step-${i}`} data-state={states[i]}>
-              <span class="pill-step" aria-hidden="true">
-                {states[i] === 'submitted' ? '✓' : states[i] === 'failed' ? '✗' : states[i] === 'cancelled' ? '–' : i + 1}
-              </span>
-              <span>
-                {s.title} - {t(`orders.flow.state.${states[i]}`)}
-                {txids[i] ? <code class="mono small"> {txids[i].slice(0, 10)}{'…'}</code> : null}
-              </span>
-            </li>
-          ))}
-        </ol>
+      {items.length > 1 ? (
+        <Stepper
+          steps={items}
+          label={t('stepper.label')}
+          listRef={list}
+          data-testid="flow-progress"
+          extra={(k) => {
+            const i = k - lead;
+            return txids[i] ? <code class="mono small">{txids[i].slice(0, 10)}{'…'}</code> : null;
+          }}
+        />
       ) : null}
       {running && step?.shownAs ? <p class="small" data-testid="flow-shown-as">{step.shownAs}</p> : null}
       {preparing ? (

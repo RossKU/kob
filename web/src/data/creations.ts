@@ -14,7 +14,7 @@
 // `kob.creations.v2`: a v1 record (`kob.creations.v1`, always with a signed genesis) is moved here on the first read. A page of an older build
 // reads only v1 and would drop a record without a signed genesis on its next write: the new records never go there.
 import { defaultStorage, type StorageLike } from '../config';
-import type { IssueDeclaration, IssueDocs, IssueToken } from '../kob/issue';
+import type { IssueCurve, IssueDeclaration, IssueDocs, IssueToken } from '../kob/issue';
 import type { BuiltTx, Hex, TxJson } from '../kob/types';
 
 const KEY = 'kob.creations.v2';
@@ -49,6 +49,10 @@ export interface CreationRecord {
   prepSent: boolean;
   /** when the node took the preparation (ms since the epoch) */
   prepSentAt?: number;
+  /** "Sell on a curve": the curve the genesis places (its result line and placement record when the creation is finished later) */
+  curve?: IssueCurve;
+  /** "Sell at one price": what the result offers to place (base units, sompi per whole token) */
+  askSale?: { sell: string; price: string };
 }
 
 const HEX32 = /^[0-9a-f]{64}$/;

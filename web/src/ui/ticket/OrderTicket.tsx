@@ -27,7 +27,9 @@ import { lowPairTipFields } from '../../kob/orders/pair-common';
 import { planDelivery, programTopupTip, topupTipTotal, withThreshold } from '../../kob/orders/delivery';
 import { CODEC_OF_PROGRAM, isTokenProgram } from '../../kob/programs.generated';
 import { readThreshold, rememberThreshold, useDeliveryPref } from '../settings/delivery-pref';
-import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, useAsync } from '../kit';
+import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, Stepper, useAsync } from '../kit';
+import type { CurveIntent } from '../../kob/intent-simple';
+import { curveOfLadder, ladderStepItems } from './ladder-curve';
 import { bookFromIndexer, readClock } from '../../app/env';
 import { readPairReferences, readReferences, type References } from '../../data/indexer-crosscheck';
 import type { PlanEnv } from '../../kob/plan-types';
@@ -162,6 +164,10 @@ export function OrderTicket(props: OrderTicketProps) {
   // a ladder: the level being sent ("Level 2 of 3"), and how the whole ladder ended
   const [ladderLead, setLadderLead] = useState<string | null>(null);
   const [ladderNote, setLadderNote] = useState<{ done: boolean; text: string } | null>(null);
+  // a sell ladder placed as one curve order or as separate orders (null: the default, one curve above 2 levels)
+  const [placeAs, setPlaceAs] = useState<'curve' | 'separate' | null>(null);
+  // the level of a separate ladder being placed, for its stepper
+  const [ladderAt, setLadderAt] = useState<{ at: number; levels: number; failed?: boolean } | null>(null);
   // what Max just did, in a sentence (cleared by the next edit)
   const [maxNote, setMaxNote] = useState<string | null>(null);
 
@@ -282,6 +288,13 @@ export function OrderTicket(props: OrderTicketProps) {
     if (limitSet) return expandLimitLadder(built.intent, limitSet, ctx.tick);
     return null;
   }, [ladderSet, limitSet, built.intent, ctx.tick]);
+
+  // a sell ladder of a KAS market that can be one curve order (KCC-20; prices that never fall), and whether it is placed so
+  const curveIntent: CurveIntent | null = useMemo(
+    () => (limitSet && ladder?.ok && form.side === 'sell' && !quote && token.family === 'kcc20' ? curveOfLadder(ladder, built.intent) : null),
+    [limitSet, ladder, form.side, quote, token.family, built.intent],
+  );
+  const asCurve = !!curveIntent && (placeAs ?? (ladder!.levels.length > 2 ? 'curve' : 'separate')) === 'curve';
 
   const layout = layoutOf(form, ctx);
   const errs = visibleErrors(built.errors).filter((e) => (form.values[e.field] ?? '') !== '');
@@ -457,14 +470,27 @@ export function OrderTicket(props: OrderTicketProps) {
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
   // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
+  // one curve order: its own plan (its errors stop the button; its carriers and fee are what placing it costs)
+  const curvePlan = useMemo(() => {
+    if (!enabled || !env || !asCurve || !curveIntent) return null;
+    try {
+      return planOrder(env, curveIntent);
+    } catch {
+      return null;
+    }
+  }, [enabled, env, asCurve, curveIntent]);
+  // a curve order: the KAS it locks (the order's and its custody's carriers, returned when it sells out or is cancelled) plus the network fee
+  const curveCost = asCurve ? (curvePlan?.disclosure ? curvePlan.disclosure.kasLocked + (curvePlan.disclosure.fee ?? 0n) : null) : undefined;
+  const footText = curveCost === undefined ? costText : curveCost === null ? { text: t('ticket.cost.dash'), unit: '', usd: null } : { text: formatKas(curveCost, { group: ',' }), unit: 'KAS', usd: null };
   const lastOrderErrors = useMemo(() => {
     if (!enabled || !env || !limitSet || !ladder?.ok) return [];
     try {
+      if (asCurve) return curvePlan ? errors(curvePlan) : [];
       return errors(planOrder(env, ladder.levels[ladder.levels.length - 1]!.intent));
     } catch {
       return [];
     }
-  }, [enabled, env, limitSet, ladder]);
+  }, [enabled, env, limitSet, ladder, asCurve, curvePlan]);
   const ladderTot = useMemo(() => (shownPlan && ladder ? ladderTotals(shownPlan, ladder) : null), [shownPlan, ladder]);
   // a ladder the wallet cannot pay for as a whole (each level alone may plan): the shortfall is an error and the button stays disabled
   const ladderFunds: { code: string; text: string }[] = [];
@@ -503,6 +529,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const edited = () => {
     setMaxNote(null);
     setLadderNote(null);
+    setLadderAt(null);
     if (!placing && sender.status && sender.status.phase !== 'submitted') sender.clear();
   };
 
@@ -518,7 +545,7 @@ export function OrderTicket(props: OrderTicketProps) {
   const ladderRow = (l: LadderLevel): string => {
     if (!limitSet) return ladderRepeatRow(l);
     const amount = (l.intent as { amount: bigint }).amount;
-    return t('ticket.ladder.rowLimit', {
+    return t(asCurve ? 'ticket.ladder.rowCurve' : 'ticket.ladder.rowLimit', {
       level: l.level, side: t(form.side === 'buy' ? 'common.side.buy' : 'common.side.sell'), amount: `${formatUnits(amount, token.decimals, { group: ',' })} ${ticker}`,
       price: `${formatPrice(l.entryPrice, ctx)} ${quoteTicker}`, value: quoteText(quoteOf(amount, l.entryPrice, scale, form.side === 'sell' ? 'up' : 'down')),
     });
@@ -613,7 +640,7 @@ export function OrderTicket(props: OrderTicketProps) {
       // read after the click); the references of further indexers are always read again
       const toRead = fromCache ? stale(clickAt) : [];
       const settled = toRead.length === 0;
-      const label = orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
+      const label = intent0.type === 'curve' ? t('ticket.ladder.curveLabel', { name }) : orderLabel(form.type, form.side, levels > 1 ? { level: index + 1, levels } : undefined, name);
       const openTokens = (quote ? [token, quote] : [token]).filter((x) => x.openList);
       // the lines the final confirmation adds (an order below the minimum value, a price far through the market, contended blocks): worked out here, once, from this plan
       const notes = confirmNotes(planned, {
@@ -720,21 +747,26 @@ export function OrderTicket(props: OrderTicketProps) {
     // Top-up: every order of the click uses one receive threshold, the stored one or the one the shown plan set (the wallet's first top-up order
     // of the token); it is stored once an order with it is submitted
     const firstTopup = topupThreshold === null ? null : storedThreshold === undefined ? topupThreshold : null;
-    const intents = (ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent]).map((i) => (firstTopup !== null ? withThreshold(i, firstTopup) : i));
+    const intents = (asCurve && curveIntent ? [curveIntent as Intent] : ladder?.ok ? ladder.levels.map((l) => l.intent) : [built.intent]).map((i) => (firstTopup !== null ? withThreshold(i, firstTopup) : i));
     const levels = intents.length;
     // the terms the user saw: the plan the button was enabled for (a ladder's levels are planned each at its turn, each within the planner's rules)
     const shown = levels === 1 ? shownPlan : null;
     setPlacing(true);
     setMaxNote(null);
     setLadderNote(null);
+    setLadderAt(null);
     // the line of an earlier click goes: the button shows the click is running until the first check reports
     sender.clear();
     let placed = 0;
     try {
       for (let i = 0; i < levels; i++) {
         setLadderLead(levels > 1 ? t('ticket.ladder.reviewing', { level: i + 1, levels }) : null);
+        if (levels > 1) setLadderAt({ at: i, levels });
         const out = await placeLevel(intents[i]!, i, levels, shown);
-        if (out?.status !== 'submitted') break;
+        if (out?.status !== 'submitted') {
+          if (levels > 1) setLadderAt({ at: i, levels, failed: true });
+          break;
+        }
         placed += 1;
         if (firstTopup !== null && pubkey && ext && rememberThreshold({ maker: pubkey, tokenCovId: token.covenantId, extensionCommitment: ext, threshold: firstTopup, ticker, decimals: token.decimals })) {
           setThresholdTick((n) => n + 1);
@@ -745,6 +777,8 @@ export function OrderTicket(props: OrderTicketProps) {
     }
     if (placed === levels) {
       setLadderLead(null);
+      setLadderAt(levels > 1 ? { at: levels, levels } : null);
+      if (asCurve) setLadderNote({ done: true, text: t('ticket.ladder.curveDone') });
       if (levels > 1) setLadderNote({ done: true, text: t('ticket.ladder.done', { levels }) });
       // the order is placed: the next one starts empty (the price, type and side stay: the next click is usually a variation)
       setForm((f) => setValue(f, 'amount', ''));
@@ -969,7 +1003,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
+          form={form} ctx={ctx} ticker={ticker} ids={asCurve ? layout.main.filter((id) => id !== 'lifetime' && id !== 'lifetimeAt') : layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
@@ -1000,7 +1034,7 @@ export function OrderTicket(props: OrderTicketProps) {
               {/* the total is a line of its own height whether or not a plan is on hand: a re-plan never moves the lines below */}
               <p class="tk-ladder-total" data-testid="order-ladder-total">
                 {limitSet
-                  ? t('ticket.ladder.totalLimit', {
+                  ? t(asCurve ? 'ticket.ladder.totalCurve' : 'ticket.ladder.totalLimit', {
                       amount: `${formatUnits(ladder.totalAmount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length,
                       value: quoteText(limitLadderValues(ladder, form.side, scale).total),
                     })
@@ -1008,7 +1042,22 @@ export function OrderTicket(props: OrderTicketProps) {
                     ? t('ticket.ladder.total', { amount: `${formatUnits(ladderTot.amount, token.decimals, { group: ',' })} ${ticker}`, levels: ladder.levels.length, kas: `${formatKas(ladderTot.kasLocked, { group: ',' })} KAS` })
                     : ' '}
               </p>
-              <p class="muted">{t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
+              {curveIntent ? (
+                <div class="tk-place-as" data-testid="order-ladder-place-as">
+                  <span class="small muted">{t('ticket.ladder.placeAs')}</span>
+                  <Segmented<'curve' | 'separate'>
+                    block
+                    aria-label={t('ticket.ladder.placeAs')}
+                    value={asCurve ? 'curve' : 'separate'}
+                    onChange={(v) => { setPlaceAs(v); edited(); }}
+                    options={[
+                      { value: 'curve', label: t('ticket.ladder.asCurve'), 'data-testid': 'order-ladder-as-curve' },
+                      { value: 'separate', label: t('ticket.ladder.asSeparate'), 'data-testid': 'order-ladder-as-separate' },
+                    ]}
+                  />
+                </div>
+              ) : null}
+              <p class="muted" data-testid="order-ladder-how">{asCurve ? t('ticket.ladder.curveNote') : t('ticket.ladder.separate', { levels: ladder.levels.length })}</p>
               {delivery === 'collected' ? <p class="muted" data-testid="order-ladder-custodies">{t('ticket.ladder.custodies', { levels: ladder.levels.length })}</p> : null}
             </>
           ) : null}
@@ -1018,6 +1067,8 @@ export function OrderTicket(props: OrderTicketProps) {
       {enabled ? gate.element : null}
       {/* what the token's records say (facts, the genesis check) and the note of a ladder: the end of the scrolling form, so a late answer never moves the button */}
       {props.facts}
+      {/* a ladder of separate orders: one step per level while it is placed, and after (the level list goes with the reset amount) */}
+      {ladderAt ? <Stepper data-testid="order-ladder-stepper" label={t('stepper.label')} steps={ladderStepItems(ladderAt, placing)} /> : null}
       {ladderNote ? (
         <p class="muted" data-testid={ladderNote.done ? 'order-result-ladder' : 'order-ladder-stopped'}>
           <span key={ladderNote.text}>{ladderNote.text}</span>
@@ -1054,11 +1105,11 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* what the amount costs (a buy) or yields (a sell), the figure a trader checks before the click, labelled and directly over the button, under the reason slot: one line of a fixed height,
           "—" until there is an amount; the dollars of the estimate (USD display) stand in a column of their own at its left */}
       <div class="tk-total" data-testid="order-total">
-        <span class="tk-total-label">{t('ticket.total')}</span>
-        <div class="tk-cost" {...(costText.unit ? {} : { 'data-empty': '1' })} aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview" title={costText.text === t('ticket.cost.dash') ? undefined : `${costText.text} ${costText.unit}`.trim()}>
-          {costText.usd ? <span class="tk-line-usd" title={costText.usd.title || undefined} data-testid="order-cost-usd">{costText.usd.text}</span> : null}
-          <span class="tk-line-text" key={costText.text}>{costText.text}</span>{costText.unit ? ' ' : null}
-          <span class="tk-line-unit">{costText.unit}</span>
+        <span class="tk-total-label" {...(curveCost !== undefined ? { title: t('ticket.toPlaceHint') } : {})}>{t(curveCost !== undefined ? 'ticket.toPlace' : 'ticket.total')}</span>
+        <div class="tk-cost" {...(footText.unit ? {} : { 'data-empty': '1' })} aria-label={t(curveCost !== undefined ? 'ticket.toPlaceHint' : 'ticket.cost.aria')} data-testid="order-cost-preview" title={footText.text === t('ticket.cost.dash') ? undefined : `${footText.text} ${footText.unit}`.trim()}>
+          {footText.usd ? <span class="tk-line-usd" title={footText.usd.title || undefined} data-testid="order-cost-usd">{footText.usd.text}</span> : null}
+          <span class="tk-line-text" key={footText.text}>{footText.text}</span>{footText.unit ? ' ' : null}
+          <span class="tk-line-unit">{footText.unit}</span>
         </div>
       </div>
       {/* the submitted order: a card of the notifications (its id, Copy, then whether a block took it), not a line of the footer; its progress is the

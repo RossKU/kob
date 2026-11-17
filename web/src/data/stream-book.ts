@@ -18,6 +18,7 @@ import { outpointsOf } from '../kob/stream-orders';
 import { extensionOfState } from '../kob/token-state';
 import type { AnyState, Hex, TokenState } from '../kob/types';
 import { quoteOf } from '../kob/units';
+import { curveLevelsLeft } from '../kob/curve';
 import type { KobWasm } from '../kob/wasm';
 
 /** The least an order is worth (its amount at its price; a bid: its escrow) to be listed, sompi: the executor's default (1 KAS). */
@@ -67,6 +68,8 @@ export interface Listing {
   scale: bigint;
   amount: bigint;
   estimated: boolean;
+  /** a curve sell order: its remaining levels (each a row of its own), the current first */
+  levels?: { level: number; price: bigint; amount: bigint }[];
 }
 
 /** Whether a confirmed entry is part of the book now, and as what (pure). */
@@ -79,7 +82,8 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
   } catch {
     return null;
   }
-  if (d.pair || d.trigger || d.entry || d.tif !== 'gtc' || d.auction) return null;
+  // a curve has no time in force (it rests until sold out or cancelled)
+  if (d.pair || d.trigger || d.entry || (d.tif !== 'gtc' && !d.curve) || d.auction) return null;
   if (d.activeFrom > ctx.daa || (d.expiryDaa > 0n && ctx.daa >= d.expiryDaa)) return null;
   if (e.snap.deadline !== null && e.snap.deadline <= ctx.nowUnix) return null;
   if (d.price <= 0n || d.scale <= 0n) return null;
@@ -98,7 +102,10 @@ export function listingOf(e: StreamEntry, ctx: ListingContext): Listing | null {
     if (!e.snap.custody) return null;
     const amount = BigInt(e.snap.custody.state.amount);
     if (amount <= 0n || quoteOf(amount, d.price, d.scale, 'down') < min) return null;
-    return { entry: e, token: d.tokenCovId, side: 'sell', price: d.price, scale: d.scale, amount, estimated: false };
+    // an unbound curve (made in its token's genesis) names no token: its custody's is it
+    const c = d.curve;
+    const token = c?.unbound ? (e.snap.custody.covenantId ?? d.tokenCovId) : d.tokenCovId;
+    return { entry: e, token, side: 'sell', price: d.price, scale: d.scale, amount, estimated: false, ...(c ? { levels: curveLevelsLeft(c.levelSize, c.table, c.total, amount) } : {}) };
   }
   if (value < min) return null;
   let amount: bigint;
@@ -132,7 +139,9 @@ const statusOf = (e: StreamEntry, left: bigint | null): 'open' | 'partial' => (e
 
 function rowOf(l: Listing, ctx: ListingContext): BookOrderView {
   const d = describeOrder(l.entry.snap.order.state, ctx.kob);
+  const lv = l.levels?.[0];
   return {
+    ...(lv ? { curve_level: lv.level } : {}),
     covenant_id: l.entry.snap.covenantId, contract: l.entry.snap.order.state.kind, maker: d.maker, price: l.price.toString(), tip: d.tip.toString(), min_fill: d.minFill.toString(),
     scale: Number(l.scale), amount_left: l.amount.toString(), amount_estimated: l.estimated, status: statusOf(l.entry, d.amountLeft), cur_value: l.entry.snap.order.amount,
     expiry_daa: d.expiryDaa > 0n ? Number(d.expiryDaa) : null, expired: false, genesis_daa: Number(l.entry.genesis.daa), confirmations: null, settled: false, quote: l.price.toString(),
@@ -161,7 +170,9 @@ export function bookViewOf(entries: Iterable<StreamEntry>, token: Hex, ctx: List
   for (const e of entries) {
     const l = listingOf(e, ctx);
     if (!l || l.token.toLowerCase() !== t) continue;
-    (l.side === 'sell' ? asks : bids).push(l);
+    // a curve: one listing per remaining level, each at its price with its size
+    const ls = l.levels ? l.levels.map((lv) => ({ ...l, price: lv.price, amount: lv.amount, levels: [lv] })) : [l];
+    (l.side === 'sell' ? asks : bids).push(...ls);
   }
   const depth = Math.max(1, q.depth ?? 50);
   const side = (rows: Listing[], s: 'sell' | 'buy'): (LevelView | BookOrderView)[] => {

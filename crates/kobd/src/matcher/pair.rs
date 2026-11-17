@@ -1230,6 +1230,7 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                 bytes,
                 book: book(sm),
                 pair: Some(PairLeg { role: PairRole::Sell, info: info.clone() }),
+                curve: None,
             };
             let buy = Cand {
                 side: Side::Bid,
@@ -1243,6 +1244,7 @@ pub fn legs(orders: &[&ListedOrder], direct: &[Cand], cx: &CandCtx) -> Vec<(Cand
                 left: buy_cap,
                 book: book(tm),
                 pair: Some(PairLeg { role: PairRole::Buy, info }),
+                curve: None,
                 ..sell.clone()
             };
             out.push((sell, buy));
@@ -1322,6 +1324,7 @@ pub fn surplus_cand(m: Market, marker: CovId) -> Cand {
         bytes: 0,
         book: BookKey { family: m.family, token: m.token, template: m.template, extension: m.extension, scale: 0 },
         pair: Some(PairLeg { role: PairRole::Surplus, info: Arc::new(info) }),
+        curve: None,
     }
 }
 

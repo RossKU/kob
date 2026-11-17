@@ -56,6 +56,9 @@ test.describe('chain signing: a ladder spending the change of its previous level
       await pickType(page, 'limit', 'sell');
       await fillFields(page, { amount: '1', price: '0.03', 'ladder.on': true, 'ladder.levels': '3', 'ladder.pct': '2' });
       await waitReviewable(page);
+      // separate orders (a sell ladder of more than 2 levels is one curve order by default)
+      await page.getByTestId('order-ladder-as-separate').click();
+      await waitReviewable(page);
       const placed = await placeLadder(page, mock, 3);
       // the three sells listed under the ticket
       await expect(page.getByText('Open orders (3)')).toBeVisible({ timeout: 30_000 });

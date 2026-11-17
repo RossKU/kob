@@ -358,7 +358,7 @@ export function finishPlan(env: PlanEnv, log: IssueLog, spec: CondSpec): CondPla
     kasLocked,
     tokensEscrowed: tokenAmount,
     fee: BigInt(res.built.fee.fee),
-    refundTip: BigInt(st.refundTip),
+    refundTip: 'refundTip' in st ? BigInt(st.refundTip) : 0n,
     keeperTip: 'keeperTip' in st ? BigInt(st.keeperTip) : 0n,
     expiry: spec.expiry.disclosure,
     activatesAt: spec.activatesAt != null ? { daa: spec.activatesAt, approxUnixSeconds: daaToUnix(env.clock, spec.activatesAt) } : null,

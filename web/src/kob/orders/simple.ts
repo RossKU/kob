@@ -11,7 +11,7 @@
 import type { Disclosure, OrderPlan, PlanEnv, PlanFills, PlanIssue } from '../plan-types';
 import type { OrderState } from '../types';
 import type {
-  Activation, CloseIntent, DcaIntent, DutchIntent, FokIntent, IocIntent, Lifetime, LimitIntent, MarketIntent, SimpleIntent, StreamingIntent, TwapIntent,
+  Activation, CloseIntent, CurveIntent, DcaIntent, DutchIntent, FokIntent, IocIntent, Lifetime, LimitIntent, MarketIntent, SimpleIntent, StreamingIntent, TwapIntent,
 } from '../intent-simple';
 import { SIMPLE_TYPES } from '../intent-simple';
 import type { Duration, Expiry, ExpiryKind } from '../daa';
@@ -216,6 +216,46 @@ export function restingFills(env: Pick<PlanEnv, 'kob' | 'token'>, amount: bigint
 }
 
 // ---- limit
+
+/**
+ * A sell curve (`KobCurveAsk`): one custody of `amount` sold along `table`, `levelSize` per level; the order carries the token carrier and
+ * rests until sold out or cancelled (no expiry). The default minimum fill is worth 10 KAS at the first level.
+ */
+function planCurve(env: PlanEnv, i: CurveIntent): OrderPlan {
+  const m = env.token;
+  const pre: PlanIssue[] = [];
+  if (m.family !== 'kcc20') return failedPlan([issue('SIDE_INVALID', { side: 'curve' }, 'type')]);
+  const n = i.table.length;
+  if (n < 1 || i.levelSize <= 0n || i.amount <= 0n || i.amount > i.levelSize * BigInt(n) || i.amount <= i.levelSize * BigInt(n - 1)) {
+    return failedPlan([issue('AMOUNT_NOT_POSITIVE', undefined, 'amount')]);
+  }
+  for (const p of i.table) pre.push(...checkPrice(m, p));
+  const tip = i.tip ?? 0n;
+  pre.push(...checkTip('sell', tip, i.table[0]!));
+  pre.push(...checkAmount(i.amount, m, 'amount', true));
+  pre.push(...checkMarketBand(env.book, env.lastFillPrice, 'sell', i.table[0]!));
+  pre.push(...checkSelfTrade(env.ownOrders, { side: 'sell', price: i.table[0]!, tip }));
+  // at most one level: one fill crosses at most 8 levels, so a larger minimum could leave the curve unfillable
+  const dflt = defaultMinFillFor(env, i.amount, i.table[0]!);
+  const minFill = i.minFill ?? (dflt < i.levelSize ? dflt : i.levelSize);
+  if (minFill > 7n * i.levelSize + 1n) return failedPlan([...pre, issue('MIN_FILL_INVALID', undefined, 'minFill')]);
+  pre.push(...checkMinFill(minFill, i.amount));
+  pre.push(...checkNotional(i.levelSize, i.table[n - 1]!, m.scale));
+  if (hasError(pre)) return failedPlan(pre);
+  const order = {
+    kind: 'KobCurveAsk',
+    state: {
+      maker: env.maker, tokenCovId: m.covenantId, tokenTplHash: m.templateHash, tplPrefixLen: String(m.prefixLen), tplSuffixLen: String(m.suffixLen),
+      scale: m.scale.toString(), minFill: minFill.toString(), tip: tip.toString(), activeFrom: '0', levelSize: i.levelSize.toString(),
+      total: i.amount.toString(), amountLeft: i.amount.toString(), extensionCommitment: m.extensionCommitment, table: i.table.map(String),
+    },
+  } as OrderState;
+  const res = buildCreate(env, { order, value: carrierOf(env), tokenAmount: i.amount });
+  const disclosure = res.built
+    ? makeDisclosure(env, res, { order, amount: i.amount, limitPrice: i.table[0]!, expectedPrice: null, worstPrice: i.table[n - 1]!, expiryKind: 'gtc', notes: ['curve'] })
+    : null;
+  return finishPlan(pre, [order], res, disclosure);
+}
 
 function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
   const m = env.token;
@@ -643,6 +683,7 @@ export function planSimple(env: PlanEnv, intent: SimpleIntent): OrderPlan {
     case 'twap':
     case 'dca': return planSchedule(env, intent);
     case 'dutch': return planDutch(env, intent);
+    case 'curve': return planCurve(env, intent);
     default:
       return failedPlan([issue('INTENT_UNKNOWN_TYPE', { type: String((intent as { type?: unknown }).type) })]);
   }

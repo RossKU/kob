@@ -42,6 +42,8 @@ interface Hover { kind: 'ask' | 'bid'; index: number; top: number }
 function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; index: number; hot: boolean; onPick: OrderBookProps['onPick']; onHover: (h: Hover | null, row?: BookRowView) => void; inverted?: boolean; token?: string }) {
   const { row, kind } = props;
   const label = t(kind === 'ask' ? 'market.book.pickAsk' : 'market.book.pickBid', { price: row.priceText });
+  // a curve sell order's levels: a small mark, its level number in the title (1-based, as people count)
+  const curve = row.curve?.length ? curveMark(row.curve) : null;
   const enter = (e: Event) => {
     const el = e.currentTarget as HTMLElement;
     const book = el.closest('.book');
@@ -63,10 +65,12 @@ function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; index: number; hot:
       data-orders={row.orders}
       data-native-price={row.nativePrice.toString()}
       aria-label={label}
-      title={`${label} · ${t('market.book.ordersCount', { orders: row.orders })}`}
+      title={`${label} · ${t('market.book.ordersCount', { orders: row.orders })}${curve ? ` · ${curve}` : ''}`}
+      data-curve={row.curve?.length ? row.curve.map((l) => l + 1).join(',') : undefined}
       onClick={() => props.onPick?.(row.pick, row.nativePrice)}
     >
       <i class="book-bar" style={{ width: `${row.depthPct}%` }} aria-hidden="true" />
+      {curve ? <i class="book-curve" aria-hidden="true" data-testid="book-curve-mark" /> : null}
       <span class="book-price" title={row.priceTitle ?? undefined}>{row.priceShown}</span>
       <span title={row.sizeTitle ?? undefined}>
         {row.estimated ? <span class="est" title={estimatedNote(props.inverted, props.token)}>~</span> : null}
@@ -75,6 +79,11 @@ function Row(props: { row: BookRowView; kind: 'ask' | 'bid'; index: number; hot:
       <span title={row.totalTitle}>{row.totalText}</span>
     </button>
   );
+}
+
+/** The title of a level holding curve levels: "Level 12 of a curve order" (table indexes are 0-based). */
+export function curveMark(levels: readonly number[]): string {
+  return levels.length === 1 ? t('curve.book.mark', { level: levels[0]! + 1 }) : t('curve.book.markMany', { levels: levels.map((l) => l + 1).join(', ') });
 }
 
 /** An empty level slot: the same height as a level, so the block of a side never changes size when levels come and go. */

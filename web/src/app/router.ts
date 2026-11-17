@@ -25,7 +25,7 @@ export type Route =
    * - `?ticket=cover&amount=N` buys N base units back at market, the close of a sell-first one.
    * - `?ticket=close` is the "close (sell all)" type.
    */
-  | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string }
+  | { name: 'token'; covenantId: string; ticket?: TicketPreset; amount?: string; price?: string }
   /** Token/token pair BASE/QUOTE (`#/market/<base>/<quote>`), with prices in QUOTE per BASE. */
   | { name: 'pair'; base: string; quote: string; covenantId?: undefined }
   /**
@@ -54,9 +54,9 @@ export type ActivityMarket = { kind: 'token'; token: string } | { kind: 'pair'; 
 export type RouteName = Route['name'];
 
 /** Order-ticket presets a link may ask for. */
-export const TICKET_PRESETS = ['close', 'cover', 'sell'] as const;
-/** Presets that carry an amount (`&amount=N`, in base units). */
-const AMOUNT_PRESETS: readonly TicketPreset[] = ['cover', 'sell'];
+export const TICKET_PRESETS = ['close', 'cover', 'sell', 'ask'] as const;
+/** Presets that carry an amount (`&amount=N`, in base units); `ask` (a limit sell, the first sale of a token just created) also a price (`&price=P`, sompi per whole token). */
+const AMOUNT_PRESETS: readonly TicketPreset[] = ['cover', 'sell', 'ask'];
 const takesAmount = (p: TicketPreset | undefined): boolean => p !== undefined && AMOUNT_PRESETS.includes(p);
 /** One order-ticket preset. */
 export type TicketPreset = (typeof TICKET_PRESETS)[number];
@@ -76,6 +76,8 @@ export function parseHash(hash: string): Route {
   // An amount in base units (1..10^18) for the cover and sell presets. Anything else is dropped.
   const amountRaw = query?.get('amount') ?? '';
   const amount = takesAmount(ticket) && /^[1-9][0-9]{0,17}$/.test(amountRaw) ? amountRaw : undefined;
+  const priceRaw = query?.get('price') ?? '';
+  const price = ticket === 'ask' && /^[1-9][0-9]{0,17}$/.test(priceRaw) ? priceRaw : undefined;
   const parts = h.split('/').filter((p) => p !== '');
   const [first, second, third] = parts;
   if (!first) return { name: 'home' };
@@ -94,7 +96,7 @@ export function parseHash(hash: string): Route {
     const b = dec(second);
     const q = dec(third);
     // `#/market/<token>/kas` is the token's own KAS market.
-    if (page === 'market' && HEX64.test(b) && q.toLowerCase() === 'kas') return { name: 'token', covenantId: b.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}) };
+    if (page === 'market' && HEX64.test(b) && q.toLowerCase() === 'kas') return { name: 'token', covenantId: b.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}), ...(price ? { price } : {}) };
     if (HEX64.test(b) && HEX64.test(q) && b.toLowerCase() !== q.toLowerCase()) return { name: 'pair', base: b.toLowerCase(), quote: q.toLowerCase() };
     return { name: 'market', invalidToken: `${b}/${q}`.slice(0, 80) };
   }
@@ -106,7 +108,7 @@ export function parseHash(hash: string): Route {
     } catch {
       /* keep the raw text */
     }
-    return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}) } : { name: 'market', invalidToken: id.slice(0, 80) };
+    return HEX64.test(id) ? { name: 'token', covenantId: id.toLowerCase(), ...(ticket ? { ticket } : {}), ...(amount ? { amount } : {}), ...(price ? { price } : {}) } : { name: 'market', invalidToken: id.slice(0, 80) };
   }
   if (page === 'activity') {
     const market = activityMarketOf(query?.get('market') ?? '');
@@ -125,7 +127,7 @@ export function parseHash(hash: string): Route {
 export function routeToHash(route: Route): string {
   switch (route.name) {
     case 'token':
-      return `#/market/${route.covenantId.toLowerCase()}${route.ticket ? `?ticket=${route.ticket}${takesAmount(route.ticket) && route.amount ? `&amount=${route.amount}` : ''}` : ''}`;
+      return `#/market/${route.covenantId.toLowerCase()}${route.ticket ? `?ticket=${route.ticket}${takesAmount(route.ticket) && route.amount ? `&amount=${route.amount}` : ''}${route.ticket === 'ask' && route.price ? `&price=${route.price}` : ''}` : ''}`;
     case 'market':
       return '#/market';
     case 'pair':
@@ -161,8 +163,9 @@ export const navOf = (route: Route): 'market' | 'trade' | 'activity' | 'portfoli
   route.name === 'token' || route.name === 'pair' ? 'trade' : route.name === 'home' ? 'market' : route.name;
 
 /** The route of a token's KAS market, with an optional ticket preset and amount. */
-export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint): Route => ({
+export const tokenRoute = (covenantId: string, ticket?: TicketPreset, amount?: number | bigint, price?: bigint): Route => ({
   name: 'token', covenantId: covenantId.toLowerCase(), ...(ticket ? { ticket } : {}), ...(takesAmount(ticket) && amount !== undefined && BigInt(amount) > 0n ? { amount: BigInt(amount).toString() } : {}),
+  ...(ticket === 'ask' && price !== undefined && price > 0n ? { price: price.toString() } : {}),
 });
 /** The route of a token/token pair. */
 export const pairRoute = (base: string, quote: string): Route => ({ name: 'pair', base: base.toLowerCase(), quote: quote.toLowerCase() });

@@ -5,7 +5,8 @@
 // it with what the planner claims (`IssueToken`): every token output must carry exactly the script `tokenScriptPublicKey(program, state)` of the
 // claimed state, be bound to the claimed covenant id, hold the claimed carrier; the amounts must add up to the supply; nothing else may leave the
 // wallet except change to its own key; the fee is re-derived from inputs minus outputs. Any disagreement is a BLOCKING finding.
-import { issuedTokenUtxos, spendsPreparation, type IssueToken } from '../../kob/issue';
+import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
+import { curveNumbersOfState, curveProblems, tablePreview } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
@@ -34,6 +35,11 @@ export interface IssuanceInput {
   /** the wallet signs both transactions of a creation under one approval (`signChain`); false: it asks once per transaction (said as info) */
   oneApproval?: boolean;
   token: IssueToken;
+  /**
+   * the curve the genesis places ("Sell on a curve"): its output must carry exactly the script of this unbound state, made by this wallet, of the
+   * issued program and commitment, bound to its own covenant, and its custody must be the claimed holder owned by it with exactly its amount
+   */
+  curve?: IssueCurve;
   /** the wallet's x-only public key */
   maker: Hex;
   /** the fee rate and where it came from (`feeDisclosureOf(built)`) */
@@ -106,6 +112,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   // ---- token outputs: exactly what the planner claims
   const claimed = issuedTokenUtxos({ built, token });
   const tokenIdx = new Set(token.outputs.map((o) => o.index));
+  const curve = i.curve ?? null;
   let minted = 0n;
   let carriers = 0n;
   let toMaker = 0n;
@@ -126,6 +133,29 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     if (BigInt(out.value) !== BigInt(token.carrier)) block('outputCarrier', { output: o.index });
     if (o.owner === maker && o.ownerScheme === 0) toMaker += BigInt(o.amount);
   });
+  // ---- the curve: re-derived from its claimed state, never trusted
+  if (curve) {
+    const st = curve.state.state;
+    const out = tx.outputs[curve.output];
+    const custody = token.outputs.find((o) => o.index === curve.custody);
+    let spk: string | null = null;
+    try {
+      spk = kob.scriptPublicKey(curve.state);
+    } catch {
+      spk = null;
+    }
+    const zero = '0'.repeat(64);
+    const ok =
+      !!out && curve.state.kind === 'KobCurveAsk' && spk === out.scriptPublicKey && out.covenant?.covenantId === curve.covenantId && !tokenIdx.has(curve.output) &&
+      built.covenants.some((c) => c.covenantId === curve.covenantId && c.outputs.length === 1 && c.outputs[0] === curve.output) &&
+      st.maker === maker && st.tokenCovId === zero && st.tokenTplHash === token.templateHash && st.extensionCommitment === token.extensionCommitment &&
+      BigInt(st.amountLeft) === BigInt(st.total) && !!custody && custody.owner === curve.covenantId && custody.ownerScheme === 4 && custody.borrowScheme === 0 &&
+      BigInt(custody.amount) === BigInt(st.amountLeft) && BigInt(out.value) === BigInt(curve.carrier) &&
+      // stricter than the protocol: a table that never falls, a tip below every level, the token's own scale
+      curveProblems(st, token.decimals).length === 0;
+    if (!ok) block('curve', { output: curve.output });
+    else carriers += BigInt(out.value);
+  }
   if (minted !== BigInt(token.supply)) {
     const words = (v: bigint) => `${formatTokenAmount(v, token.decimals, GROUP)} ${token.ticker}`;
     block('supply', { minted: words(minted), supply: words(BigInt(token.supply)) });
@@ -137,7 +167,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   // ---- everything else must be change back to the wallet
   let change = prepChange;
   tx.outputs.forEach((out, n) => {
-    if (tokenIdx.has(n)) return;
+    if (tokenIdx.has(n) || (curve && n === curve.output)) return;
     if (out.covenant || out.scriptPublicKey !== p2pkSpk(maker)) block('outputOther', { output: n });
     else change += BigInt(out.value);
   });
@@ -163,7 +193,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
 
   // ---- disclosure findings
   warn('unaudited');
-  const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0));
+  const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4));
   if (others.length > 0) info(others.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: others.length }, 'holdersOther');
   info('walletBlind');
   if (prep && i.oneApproval === false) info('walletTwice', { fee: kas(prepFee) });
@@ -185,12 +215,38 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       row('covenantId', tr('confirm.issue.covenantId'), token.covenantId, 'muted'),
       row('templateHash', tr('confirm.issue.templateHash'), short(token.templateHash), 'muted'),
       row('extension', tr('confirm.issue.extension'), short(token.extensionCommitment), 'muted'),
-      ...token.outputs.map((o, k) =>
-        row(`holder-${k}`, tr('confirm.issue.holder', { n: k + 1 }), amountText(BigInt(o.amount)), o.owner === maker && o.ownerScheme === 0 ? 'good' : 'warn',
-          o.owner === maker && o.ownerScheme === 0 ? tr('confirm.issue.holderYou') : tr('confirm.issue.holderOther', { owner: short(o.owner), scheme: o.ownerScheme })),
-      ),
+      ...token.outputs.map((o, k) => {
+        const mine = o.owner === maker && o.ownerScheme === 0;
+        const onCurve = !!curve && o.owner === curve.covenantId && o.ownerScheme === 4;
+        return row(`holder-${k}`, tr('confirm.issue.holder', { n: k + 1 }), amountText(BigInt(o.amount)), mine || onCurve ? 'good' : 'warn',
+          mine ? tr('confirm.issue.holderYou') : onCurve ? tr('confirm.issue.holderCurve') : tr('confirm.issue.holderOther', { owner: short(o.owner), scheme: o.ownerScheme }));
+      }),
     ],
   });
+  // the curve: one sell order of the wallet, created with the token
+  if (curve) {
+    const st = curve.state.state;
+    const total = BigInt(st.total);
+    const n = curveNumbersOfState(st);
+    sections.push({
+      id: 'curve',
+      title: tr('confirm.issue.curveSection'),
+      note: tr('confirm.issue.curveNote'),
+      rows: [
+        row('curve-amount', tr('confirm.issue.curveAmount'), amountText(total), 'good'),
+        row('curve-levels', tr('confirm.issue.curveLevels'), String(n.levels)),
+        row('curve-first', tr('confirm.issue.curveFirst'), kas(n.first)),
+        row('curve-last', tr('confirm.issue.curveLast'), kas(n.last)),
+        row('curve-average', tr('confirm.issue.curveAverage'), kas(n.average)),
+        row('curve-total', tr('confirm.issue.curveTotal'), kas(n.total)),
+        row('curve-level-size', tr('confirm.issue.curveLevelSize'), amountText(BigInt(st.levelSize))),
+        row('curve-tip', tr('confirm.issue.curveTip'), kas(BigInt(st.tip)), BigInt(st.tip) > 0n ? 'warn' : 'muted'),
+        row('curve-min-fill', tr('confirm.issue.curveMinFill'), amountText(BigInt(st.minFill)), 'muted'),
+        row('curve-table', tr('confirm.issue.curveTable'), tablePreview(st.table.map((p) => BigInt(p)), (p) => formatKas(p, GROUP)), 'muted'),
+        row('curve-id', tr('confirm.issue.curveId'), curve.covenantId, 'muted'),
+      ],
+    });
+  }
   // the declaration (KCC-23): what the token says about itself on chain, committed to by its id
   if (prep && declared) {
     const d = declared.token;
@@ -210,7 +266,11 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   sections.push({ id: 'spend', title: tr('confirm.section.spend'), rows: [row('kas-spend', tr('confirm.spend.kas'), kas(kasIn))], fold: true });
   sections.push({
     id: 'locked', title: tr('confirm.section.locked'), note: tr('confirm.issue.lockedNote'),
-    rows: [row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'), row('locked-carriers', tr(token.outputs.length === 1 ? 'confirm.issue.carriers.one' : 'confirm.issue.carriers.other', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint'))],
+    rows: [
+      row('locked-total', tr('confirm.locked.total'), kas(carriers), 'warn'),
+      row('locked-carriers', tr(token.outputs.length === 1 ? 'confirm.issue.carriers.one' : 'confirm.issue.carriers.other', { count: token.outputs.length }), kas(BigInt(token.carrier)), 'normal', tr('confirm.locked.carriersHint')),
+      ...(curve ? [row('locked-curve', tr('confirm.issue.carrierCurve'), kas(BigInt(curve.carrier)), 'normal', tr('confirm.locked.carriersHint'))] : []),
+    ],
   });
   if (change > 0n) sections.push({ id: 'back', title: tr('confirm.section.back'), rows: [row('kas-back', tr('confirm.back.kas'), kas(change), 'good')], fold: true });
   const feeDisc = i.fee ?? null;
@@ -240,7 +300,7 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     outputs: [
       ...tx.outputs.map((out, n) => ({
         index: n,
-        text: tr('confirm.adv.output', { index: n, kind: tokenIdx.has(n) ? tr('confirm.outkind.issued') : tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }),
+        text: tr('confirm.adv.output', { index: n, kind: tokenIdx.has(n) ? tr('confirm.outkind.issued') : curve && n === curve.output ? tr('confirm.outkind.curve') : tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }),
         flagged: findings.some((f) => f.severity === 'blocking' && f.params?.output === n),
       })),
       ...(prep ? prep.tx.outputs.slice(1).map((out, n) => ({ index: tx.outputs.length + n, text: tr('confirm.adv.output', { index: tx.outputs.length + n, kind: tr('confirm.outkind.kas-change'), kas: formatKas(BigInt(out.value), GROUP) }), flagged: false })) : []),

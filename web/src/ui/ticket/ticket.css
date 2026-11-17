@@ -233,3 +233,6 @@
   .dh-step, .dh-result, .dh-cust-g { transition: none; }
   .dh-show .dh-draw, .dh-pop, .dh-flash { animation: none; }
 }
+
+/* a sell ladder: "Place as: One curve order / Separate orders" */
+.tk-place-as { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0; }

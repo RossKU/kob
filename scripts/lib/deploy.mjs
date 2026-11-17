@@ -25,8 +25,9 @@ if (!/^[a-z0-9-]+$/.test(network || '')) die(`bad network ${network}`);
 const readLf = (f) => fs.readFileSync(f, 'utf8').replace(/\r/g, '');
 const toHex = (b) => Buffer.from(b).toString('hex');
 
-// The KOB order kinds (the KOB1 kind codes 0x01..0x06 and 0x08..0x0a; 0x07, a retired receipt kind, is unused): the six
-// plain, conditional and if-done kinds in both families, and the three pair templates that serve both (KobPair, KobCondPair, KobIfdPair).
+// The KOB order kinds (the KOB1 kind codes 0x01..0x06 and 0x08..0x0b; 0x07, a retired receipt kind, is unused): the six
+// plain, conditional and if-done kinds in both families, the three pair templates that serve both (KobPair, KobCondPair, KobIfdPair)
+// and the KCC-20 curve (KobCurveAsk).
 const KINDS = ['KobAsk', 'KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk'];
 // A test network also gets the delivery id_type 0 builds of the KRON kinds (`*KronD0`, for token programs whose holders are
 // id_type 0: KForge on testnet-10); the mainnet record does not list them (kob_protocol::artifacts::deployed_order_kinds).
@@ -35,6 +36,7 @@ const names = [
   'KobPair',
   'KobCondPair',
   'KobIfdPair',
+  'KobCurveAsk',
   ...KINDS.map((k) => `${k}Kron`),
   ...(network === 'mainnet' ? [] : KINDS.map((k) => `${k}KronD0`)),
 ];

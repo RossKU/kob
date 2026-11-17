@@ -242,14 +242,19 @@ fn compute_budget_table_is_generated_exact_and_current() {
     let (measured, all) = measure_streamed();
     let generated: BTreeMap<String, u16> = measured.iter().map(|(r, (b, _, _))| (r.clone(), *b)).collect();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/compute_budgets.json");
+    // the curve's roles are tests/curve_budgets.rs's
+    let curve: BTreeMap<String, u16> = table().iter().filter(|(r, _)| r.starts_with("KobCurveAsk.")).map(|(r, b)| (r.clone(), *b)).collect();
     if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
+        let mut generated = generated.clone();
+        generated.extend(curve);
         let mut json = serde_json::to_string_pretty(&generated).unwrap();
         json.push('\n');
         std::fs::write(&path, json).unwrap();
         println!("wrote {} roles to {}", generated.len(), path.display());
     } else {
+        let own: BTreeMap<String, u16> = table().iter().filter(|(r, _)| !curve.contains_key(*r)).map(|(r, b)| (r.clone(), *b)).collect();
         assert_eq!(
-            table(),
+            &own,
             &generated,
             "compute budget table is stale: run `KOB_REGEN=1 cargo test -p kob-protocol --test budget_table`"
         );

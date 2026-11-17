@@ -1259,18 +1259,18 @@ pub fn order_carrier_floor(m: &TokenMarket) -> i64 {
 // ---------------------------------------------------------------------------- building (common.ts)
 
 pub(crate) struct CreateSpec {
-    order: AnyState,
-    value: i64,
-    token_amount: i64,
-    deadline: Option<i64>,
+    pub(crate) order: AnyState,
+    pub(crate) value: i64,
+    pub(crate) token_amount: i64,
+    pub(crate) deadline: Option<i64>,
 }
 
 pub(crate) struct CreateResult {
-    request: Option<CreateOrder>,
-    built: Option<BuiltTx>,
-    token_carrier: i64,
-    token_change: i64,
-    issues: Vec<Issue>,
+    pub(crate) request: Option<CreateOrder>,
+    pub(crate) built: Option<BuiltTx>,
+    pub(crate) token_carrier: i64,
+    pub(crate) token_change: i64,
+    pub(crate) issues: Vec<Issue>,
 }
 
 pub(crate) fn fee_options(env: &Env) -> FeeOptions {

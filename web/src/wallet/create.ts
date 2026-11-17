@@ -17,7 +17,7 @@ import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { genesisSigned, markPrepSent, removeCreation, saveCreation, type CreationRecord } from '../data/creations';
 import type { StorageLike } from '../config';
-import { spendsPreparation, type IssueDeclaration, type IssueDocs, type IssueToken } from '../kob/issue';
+import { spendsPreparation, type IssueCurve, type IssueDeclaration, type IssueDocs, type IssueToken } from '../kob/issue';
 import type { BuiltTx, SignedTx } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 import { ChainError, runSignChain, sendTx, sendTxRetrying } from './chain';
@@ -47,7 +47,7 @@ export interface CreationArgs {
   /** script public key -> address of the app's network (the visibility gate asks the node by address) */
   addressOf: (spk: string) => string;
   /** what the creation record keeps to resume and to show the result */
-  record: { token: IssueToken; declaration: IssueDeclaration; docs: IssueDocs };
+  record: { token: IssueToken; declaration: IssueDeclaration; docs: IssueDocs; curve?: IssueCurve; askSale?: { sell: string; price: string } };
   /** the creator's key (the record's owner) */
   maker: string;
   onStage?: (stage: SignStage, info?: CreationStageInfo) => void;
@@ -87,11 +87,12 @@ export interface CreationResult {
 const DEFINITE = new Set<string>(['orphan', 'double-spend', 'fee', 'script', 'invalid', 'network-mismatch']);
 
 /** What the genesis's token outputs are claimed to hold, for a wallet that checks them (the private-key signer). */
-export function genesisClaimOf(token: IssueToken): GenesisClaim {
+export function genesisClaimOf(token: IssueToken, curve?: IssueCurve): GenesisClaim {
   return {
     program: token.program,
     extensionCommitment: token.extensionCommitment,
     outputs: token.outputs.map((o) => ({ index: o.index, amount: o.amount, owner: o.owner, ownerScheme: o.ownerScheme, borrowScheme: o.borrowScheme, borrowGuard: o.borrowGuard })),
+    ...(curve ? { curve: { index: curve.output, covenantId: curve.covenantId, state: curve.state } } : {}),
   };
 }
 
@@ -132,6 +133,7 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
   const base = {
     network: a.network, maker: a.maker.toLowerCase(), createdAt: now(), covenantId: a.record.token.covenantId, prepTxid: prep.tx.id,
     genesisTxid: built.tx.id, genesisBuilt: built, token: a.record.token, declaration: a.record.declaration, docs: a.record.docs,
+    ...(a.record.curve ? { curve: a.record.curve } : {}), ...(a.record.askSale ? { askSale: a.record.askSale } : {}),
   };
   let saved = false;
   let prepSent = false;
@@ -139,7 +141,7 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
   try {
     const res = await runSignChain({
       kob: a.kob, node: a.node, adapter: a.adapter, network: a.network, steps: [prep, built], addressOf: a.addressOf,
-      signChainOptions: { genesisClaim: genesisClaimOf(a.record.token) },
+      signChainOptions: { genesisClaim: genesisClaimOf(a.record.token, a.record.curve) },
       ...(a.timeoutMs !== undefined ? { timeoutMs: a.timeoutMs } : {}),
       ...(a.checkWallet !== undefined ? { checkWallet: a.checkWallet } : {}),
       ...(a.validate !== undefined ? { validate: a.validate } : {}),

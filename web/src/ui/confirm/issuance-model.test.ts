@@ -5,6 +5,7 @@ import { loadKobNode } from '../../kob/wasm.node';
 import { t } from '../../i18n';
 import { pubkeyOf } from '../../testing/local-signer';
 import { buildIssuanceModel } from './issuance-model';
+import { defaultSaleForm } from '../../kob/curve';
 
 const kob = loadKobNode();
 const KAS = 100_000_000n;
@@ -186,5 +187,34 @@ describe('issuance confirmation model', () => {
       }
     }
     expect(en('confirm.issue.finding.unaudited')).toMatch(/audited/);
+  });
+
+  it('a curve created with the token verifies, is shown, and any change to it blocks', () => {
+    const p = plan({ supply: '1000000', sale: { ...defaultSaleForm(), mode: 'curve', keepPct: '10' } });
+    const withCurve = (curve = p.curve!, built = p.built) => buildIssuanceModel({ kob, built, prep: p.prep, oneApproval: true, token: p.token, curve, maker, tr: (k, q) => t(k, q) });
+    const m = withCurve();
+    expect(m.blocking).toEqual([]);
+    const c = m.sections.find((s) => s.id === 'curve')!;
+    expect(c.rows.find((r) => r.id === 'curve-amount')!.value).toBe('900,000 TEST');
+    expect(c.rows.find((r) => r.id === 'curve-levels')!.value).toBe('100');
+    const issue = m.sections.find((s) => s.id === 'issue')!;
+    expect(issue.rows.find((r) => r.id === 'holder-0')!.detail).toBe('your curve order (on sale)');
+    expect(issue.rows.find((r) => r.id === 'holder-1')!.detail).toBe('your wallet');
+    // no "tokens to other keys" for the curve's custody
+    expect(m.info.map((i) => i.code)).not.toContain('holdersOther');
+    // both carriers are locked
+    expect(m.sections.find((s) => s.id === 'locked')!.rows.find((r) => r.id === 'locked-curve')).toBeDefined();
+    // a curve claimed for another maker, a changed table, or a claim left out: blocked
+    const other2 = clone(p.curve!);
+    other2.state.state.maker = other;
+    expect(withCurve(other2).blocking.map((b) => b.code)).toContain('curve');
+    const table = clone(p.curve!);
+    table.state.state.table[0] = '1';
+    expect(withCurve(table).blocking.map((b) => b.code)).toContain('curve');
+    expect(model(p).blocking.map((b) => b.code)).toContain('outputOther');
+    for (const s of [...m.sections.flatMap((x) => [x.title, x.note ?? '', ...x.rows.flatMap((r) => [r.label, r.value, r.detail ?? ''])]), ...withCurve(other2).blocking.map((b) => b.text ?? '')]) {
+      expect(s).not.toMatch(/confirm.[a-zA-Z]/);
+      expect(s).not.toMatch(/{w+}/);
+    }
   });
 });

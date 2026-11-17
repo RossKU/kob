@@ -473,6 +473,7 @@ impl Gen {
                     deadline: None,
                     records: vec![],
                     fee: FeeOptions::default(),
+                    custody: None,
                 }))?;
                 self.live[i] = Lv {
                     cov: lv.cov,

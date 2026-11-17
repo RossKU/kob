@@ -38,6 +38,10 @@ name = "kob_bid_modes_tests"
 path = "tests/kob/kob_bid_modes_tests.rs"
 
 [[test]]
+name = "kob_curve_ask_tests"
+path = "tests/kob/kob_curve_ask_tests.rs"
+
+[[test]]
 name = "kob_cond_pair_tests"
 path = "tests/kob/kob_cond_pair_tests.rs"
 

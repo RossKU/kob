@@ -2,7 +2,7 @@
 // token whose facts can never change, so this dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and
 // the genesis spending it), shows the WHOLE effect in plain words, blocks signing on any blocking finding, asks for an explicit
 // acknowledgement, then runs `signAndSubmitCreation` (wallet/create.ts: one approval for the private-key signer; an extension wallet signs and
-// sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with a stage stepper, and reports the
+// sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with the signing stepper (Prepare, Create token), and reports the
 // accepted genesis. A creation whose preparation went out but whose genesis did not (declined, not visible in time, refused) closes this
 // screen as `pending`: the Create token page finishes it (its record, data/creations.ts); it is never signed again here.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -11,21 +11,22 @@ import { readClock } from '../../app/env';
 import { has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
 import { describeInputsForWallet } from '../../kob/decode';
-import type { IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
+import type { IssueCurve, IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import type { BuiltTx } from '../../kob/types';
 import { formatUtc } from '../../kob/daa';
 import { SignFlowError, expectedOutputs, signAndSubmit, waitForAcceptance, type SignStage } from '../../wallet/sign';
-import { signAndSubmitCreation } from '../../wallet/create';
+import { signAndSubmitCreation, type CreationStep } from '../../wallet/create';
 import { pendingSpends } from '../../app/pending-spends';
-import { Banner, Button, CopyText, Modal, RawDetails, Spinner, copyToClipboard, unitParts } from '../kit';
+import { Banner, Button, CopyText, Modal, RawDetails, Spinner, Stepper, copyToClipboard, unitParts } from '../kit';
 import { rowTimeTitleUnix, shortId } from '../kit/format';
 import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
 import { classifyFailure, explorerTxUrl, stepStates, type Failure } from './confirm-flow';
 import { inputAddressOf, recordAccepted } from './send';
+import { creationStepperItems } from './creation-steps';
 import './confirm.css';
 
 export type ConfirmResult =
@@ -43,7 +44,7 @@ export interface ConfirmSignProps {
   /** label stored in the records of the transaction */
   label?: string;
   /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
-  issue: { token: IssueToken };
+  issue: { token: IssueToken; curve?: IssueCurve; askSale?: { sell: string; price: string } };
   /**
    * a creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares; signed with the genesis (one approval where
    * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
@@ -113,6 +114,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
   const [stage, setStage] = useState<SignStage | null>(null);
   /** a creation with a wallet that asks once per transaction: which approval it shows now (confirm.chain.*) */
   const [chainNote, setChainNote] = useState<'prep' | 'wait' | 'genesis' | null>(null);
+  /** a creation: which of its two transactions the stages are of, and whether the node took the preparation (the stepper) */
+  const [chainAt, setChainAt] = useState<{ step: CreationStep | null; waiting: boolean; prepSent: boolean; tried: boolean }>({ step: null, waiting: false, prepSent: false, tried: false });
   const [failure, setFailure] = useState<Failure | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
   const [confirmed, setConfirmed] = useState<Confirmed>('waiting');
@@ -140,7 +143,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
     const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain } : {};
-    return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
+    return buildIssuanceModel({ kob, built, token: props.issue.token, ...(props.issue.curve ? { curve: props.issue.curve } : {}), maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
   }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
   // problems that are not about the transaction itself
@@ -194,17 +197,20 @@ export function ConfirmSign(props: ConfirmSignProps) {
       if (props.creation) {
         const c = props.creation;
         const twice = !wallet.adapter.signChain;
+        setChainAt({ step: null, waiting: false, prepSent: false, tried: true });
         const res = await signAndSubmitCreation({
           kob, node, adapter: wallet.adapter, prep: c.prep, built, network: config.network, maker, addressOf,
           onStage: (s, info) => {
             if (!alive.current) return;
             setStage(s);
+            setChainAt((c) => ({ ...c, step: info?.step ?? c.step, waiting: !!info?.waiting }));
             if (!twice || s !== 'signing') return;
             setChainNote(info?.step === 'genesis' ? (info.waiting ? 'wait' : 'genesis') : 'prep');
           },
-          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs },
+          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs, ...(props.issue.curve ? { curve: props.issue.curve } : {}), ...(props.issue.askSale ? { askSale: props.issue.askSale } : {}) },
           // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
           onPrepSent: (prep) => {
+            if (alive.current) setChainAt((c) => ({ ...c, prepSent: true }));
             pendingSpends.add(prep.tx.inputs);
             if (wallet.info) pendingSpends.addChange(prep.tx, prep.tx.id, wallet.info.pubkey);
           },
@@ -365,13 +371,28 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </Button>
         </details>
 
+        {props.creation && (busy || phase === 'submitted' || (failure && chainAt.tried)) ? (
+          <Stepper
+            data-testid="create-stepper"
+            label={t('stepper.label')}
+            steps={creationStepperItems({
+              stage: phase === 'submitted' ? 'submitted' : stage,
+              step: chainAt.step,
+              waiting: chainAt.waiting,
+              prepSent: chainAt.prepSent,
+              oneApproval: !!wallet.adapter?.signChain,
+              stopped: failure && !busy ? (failure.kind === 'rejected' ? 'declined' : 'failed') : null,
+            })}
+          />
+        ) : null}
+
         {busy && chainNote ? (
           <p class="cf-chain" data-testid="confirm-chain-step" data-step={chainNote} aria-live="polite">
             {t(`confirm.chain.${chainNote}`)}
           </p>
         ) : null}
 
-        {busy || phase === 'submitted' ? (
+        {!props.creation && (busy || phase === 'submitted') ? (
           <ol class="cf-stages" data-testid="confirm-stages" data-stage={stage ?? ''} aria-live="polite">
             {steps.map((s) => (
               <li key={s.stage} class={`cf-stage cf-stage-${s.state}`} data-stage={s.stage} data-state={s.state}>

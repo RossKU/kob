@@ -30,16 +30,18 @@
 
 use std::collections::BTreeSet;
 
+use kob_protocol::artifacts::TemplateId;
 use kob_protocol::issue::{
-    self, build_creation, hex, p2pk_script, CreationPlan, FundingUtxo, Holder, IssueProgram, IssueSpec, DEFAULT_CARRIER,
-    DEFAULT_FEE_RATE, EXTENSION_CLASS, EXTENSION_FIXED_SUPPLY, DEFAULT_MASS_MARGIN_PERCENT, MAX_GENESIS_OUTPUTS, MAX_SUPPLY,
-    OWNER_SCHEMES_ENABLED, REGISTRY_TEMPLATE_ID, REGISTRY_TEMPLATE_ID_PUBLIC_MINT, TX_MASS_LIMITS,
+    self, build_creation, hex, p2pk_script, CreationPlan, FundingUtxo, GenesisCurve, Holder, IssueProgram, IssueSpec, Program,
+    DEFAULT_CARRIER, DEFAULT_FEE_RATE, DEFAULT_MASS_MARGIN_PERCENT, EXTENSION_CLASS, EXTENSION_FIXED_SUPPLY, MAX_GENESIS_OUTPUTS,
+    MAX_SUPPLY, OWNER_SCHEMES_ENABLED, REGISTRY_TEMPLATE_ID, REGISTRY_TEMPLATE_ID_PUBLIC_MINT, TX_MASS_LIMITS,
 };
 use kob_protocol::json;
 use kob_protocol::kcc20::{ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS};
 use kob_protocol::kcc23;
 use kob_protocol::registry::MAX_DECIMALS;
 use kob_protocol::script::{push_data, SIGHASH_ALL};
+use kob_protocol::state::{AnyState, CurveAskState};
 use kob_protocol::tx::{self, BuiltTx, FeeReport, KeyUtxo, NewCovenant, SigPlan, SignRequest, TxJson, MIN_FEE_RATE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -113,6 +115,45 @@ struct IssueRequest {
     /// Share of each per-transaction mass limit the two transactions may fill, in percent (default 90).
     #[serde(default)]
     mass_margin_percent: Option<u8>,
+    /// A `KobCurveAsk` created in this genesis (docs/design/curve-ask-spec.md §4): holder `custody` (owner scheme
+    /// 0x04, owner zero) is its custody; the maker is the owner of `funding[0]`.
+    #[serde(default)]
+    curve: Option<CurveJson>,
+}
+
+/// The curve of an `IssueRequest`: its table and terms. Token fields, `total` and `amountLeft` come from the genesis.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CurveJson {
+    custody: usize,
+    #[serde(with = "json::field")]
+    level_size: i64,
+    #[serde(with = "json::field_vec")]
+    table: Vec<i64>,
+    #[serde(with = "json::field")]
+    min_fill: i64,
+    #[serde(with = "json::field", default)]
+    tip: Option<i64>,
+    #[serde(with = "json::field", default)]
+    active_from: Option<i64>,
+    /// KAS on the curve's UTXO (default: the token carrier).
+    #[serde(with = "json::field", default)]
+    carrier: Option<u64>,
+}
+
+/// Where the genesis placed its curve.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CurveOut {
+    #[serde(with = "json::field")]
+    covenant_id: [u8; 32],
+    output: u32,
+    /// The token output that is its custody.
+    custody: u32,
+    #[serde(with = "json::field")]
+    carrier: u64,
+    /// `{kind: "KobCurveAsk", state}`, unbound.
+    state: AnyState,
 }
 
 #[derive(Serialize)]
@@ -186,6 +227,8 @@ struct IssueResult {
     declaration: Declaration,
     token: TokenInfo,
     docs: Docs,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    curve: Option<CurveOut>,
     warnings: Vec<String>,
 }
 
@@ -296,6 +339,30 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
             return Err("the 8 / 8 program is a prototype and is not issued from the app: use public-mint (the default) or 3x3".into());
         }
     }
+    if let Some(c) = &r.curve {
+        let h =
+            spec.holders.get(c.custody).ok_or_else(|| format!("invalid parameter: curve custody {} is not a holder", c.custody))?;
+        let program = Program::of(spec.program).map_err(|e| e.to_string())?;
+        let amount = i64::try_from(h.amount).map_err(|_| "invalid parameter: curve amount overflows".to_string())?;
+        let maker = spec.funding.first().ok_or("invalid parameter: no funding")?.owner_pubkey;
+        let state = CurveAskState {
+            maker,
+            token_cov_id: [0; 32],
+            token_tpl_hash: program.template_hash,
+            tpl_prefix_len: program.prefix.len() as i64,
+            tpl_suffix_len: program.suffix.len() as i64,
+            scale: 10i64.checked_pow(u32::from(spec.decimals)).ok_or("invalid parameter: decimals")?,
+            min_fill: c.min_fill,
+            tip: c.tip.unwrap_or(0),
+            active_from: c.active_from.unwrap_or(0),
+            level_size: c.level_size,
+            total: amount,
+            amount_left: amount,
+            extension_commitment: spec.extension_commitment,
+            table: c.table.clone(),
+        };
+        spec.curve = Some(GenesisCurve { state, custody: c.custody, carrier: c.carrier.unwrap_or(spec.carrier) });
+    }
     Ok(spec)
 }
 
@@ -363,12 +430,20 @@ fn to_builts(plan: &CreationPlan, funding: &[KeyUtxo]) -> R<(BuiltTx, BuiltTx)> 
     let prep = to_built(TxJson::from_tx(&p.tx, &p.entries), &keys, &daa, p.fee, rate, p.change.map(|(i, _)| i as u32), vec![])?;
     let g = &plan.genesis;
     let maker = g.spec.funding[0].owner_pubkey;
-    let covenants = vec![NewCovenant {
+    let mut covenants = vec![NewCovenant {
         outputs: (0..g.states.len() as u32).collect(),
         authorizing_input: 0,
         covenant_id: g.covenant_id.as_bytes(),
         template: Some(g.spec.program.template_id()),
     }];
+    if let Some(c) = &g.curve {
+        covenants.push(NewCovenant {
+            outputs: vec![c.output as u32],
+            authorizing_input: 0,
+            covenant_id: c.covenant_id.as_bytes(),
+            template: Some(TemplateId::KobCurveAsk),
+        });
+    }
     let genesis = to_built(TxJson::from_tx(&g.tx, &g.entries), &[maker], &[], g.fee, rate, None, covenants)?;
     Ok((prep, genesis))
 }
@@ -417,7 +492,14 @@ pub fn issue(spec_json: &str) -> R<String> {
         launch_proof: serde_json::to_value(plan.launch_proof()).map_err(|e| e.to_string())?,
     };
     let declaration = Declaration { json: plan.prep.metadata.json(), payload: plan.prep.tx.payload.clone(), funding: plan.prep.value };
-    let result = IssueResult { prep, built, declaration, token, docs, warnings: plan.warnings().to_vec() };
+    let curve = g.curve.as_ref().map(|c| CurveOut {
+        covenant_id: c.covenant_id.as_bytes(),
+        output: c.output as u32,
+        custody: c.custody as u32,
+        carrier: g.tx.outputs[c.output].value,
+        state: AnyState::KobCurveAsk(c.state.clone()),
+    });
+    let result = IssueResult { prep, built, declaration, token, docs, curve, warnings: plan.warnings().to_vec() };
     serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 

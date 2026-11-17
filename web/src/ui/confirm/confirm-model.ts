@@ -5,6 +5,7 @@
 // Pure and DOM-free. Text comes through an injected translator (`tr`, default the app's `t`) so it is unit-tested and the renderers stay thin.
 // All amounts arrive as bigint and are formatted exactly (units.ts).
 import type { SigningKind, SigningSummary, LockedKas, TokenRef } from '../../kob/decode';
+import { curveNumbersOfState, curveRestKas, tablePreview } from '../../kob/curve';
 import type { WalletNotice } from '../../kob/decode';
 import { daaToUnix, formatLocal, formatUtc } from '../../kob/daa';
 import { UNLIMITED_REPEAT_COUNT } from '../../kob/orders/cond-common';
@@ -28,7 +29,7 @@ export interface Row {
 }
 
 export interface Section {
-  id: 'issue' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
+  id: 'issue' | 'curve' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
   /** one explaining sentence under the title */
   note?: string;
@@ -221,6 +222,8 @@ export function orderTypeCode(d: OrderDescription, dayDeadline: bigint | null = 
       const stopEntry = !!e && e.entryStop > 0n;
       return `${repeat ? 'repeat' : ''}${repeat ? (both ? 'Ifo' : 'Ifd') : both ? 'ifo' : 'ifd'}${stopEntry ? 'Stop' : ''}`;
     }
+    case 'KobCurveAsk':
+      return 'curve';
     default:
       return 'limit';
   }
@@ -336,9 +339,31 @@ export function auctionSeconds(d: OrderDescription): string | null {
 }
 
 /** Rows that describe one order state: quantity, prices (all-in), timing, auction, trigger, entry, repeat. */
+/** A curve's rows: its amount, levels and level size, first, last and average price, what the rest pays if it sells, tip, minimum fill, the table. */
+function curveRows(d: OrderDescription, c: NonNullable<OrderDescription['curve']>, f: Fmt): Row[] {
+  const { tr } = f;
+  const p = (x: bigint) => priceText(x, d, f).value;
+  const left = d.amountLeft ?? c.total;
+  const n = curveNumbersOfState({ levelSize: c.levelSize.toString(), table: c.table.map(String), total: c.total.toString(), scale: d.scale.toString() });
+  const rest = curveRestKas(c.levelSize, c.table.map((x) => (x > d.tip ? x - d.tip : 0n)), c.total, left, d.scale);
+  const rows: Row[] = [
+    row('amount', tr('confirm.f.amount'), tokenAmountText(f.ref, left, tr)),
+    row('curveLevels', tr('confirm.f.curveLevels'), tr('confirm.f.curveLevelsValue', { left: Math.max(0, c.levels - c.level), levels: c.levels, size: tokenAmountText(f.ref, c.levelSize, tr) })),
+    row('curveFirst', tr('confirm.f.curveFirst'), p(c.table[0] ?? 0n)),
+    row('curveLast', tr('confirm.f.curveLast'), p(c.table[c.table.length - 1] ?? 0n)),
+    row('curveAverage', tr('confirm.f.curveAverage'), p(n.average)),
+    row('curveRest', tr('confirm.f.curveRest'), kas(rest), 'normal', tr('confirm.f.curveRestHint')),
+  ];
+  if (d.tip > 0n) rows.push(row('tip', tr('confirm.f.tip'), p(d.tip), 'warn', tr('confirm.f.curveTipHint')));
+  rows.push(row('minFill', tr('confirm.f.minFill'), tokenAmountText(f.ref, d.minFill, tr), 'muted', tr('confirm.f.minFillHint')));
+  rows.push(row('curveTable', tr('confirm.f.curveTable'), tablePreview(c.table, (x) => formatPricePerToken(x, decimalsOf(f.ref), d.scale, GROUP)), 'muted', tr('confirm.f.curveTableHint')));
+  return rows;
+}
+
 export function orderRows(d: OrderDescription, extra: OrderExtra, f0: Fmt): Row[] {
   const f: Fmt = { ...f0, ref: onScale(f0.ref, d.scale) };
   const { tr } = f;
+  if (d.curve) return curveRows(d, d.curve, f);
   // a pair order: its prices are B per whole A, its tip KAS per whole A (never part of its B price)
   const pair = !!d.pair;
   const rows: Row[] = pair ? pairRows(d, f) : [];

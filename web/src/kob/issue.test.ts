@@ -13,6 +13,7 @@ import {
 } from './issue';
 import type { KeyUtxo } from './types';
 import { decodeDeclaration, verifyLaunchProof } from './kcc23';
+import { defaultSaleForm, type SaleForm } from './curve';
 
 const kob = loadKobNode();
 const limits: IssueLimits = issueLimits(kob);
@@ -550,5 +551,62 @@ describe("the token's X and Telegram accounts (declared on chain, and in the reg
     expect(limits.maxMetadataBytes).toBe(1024);
     expect(codes(form({ description: 'a'.repeat(400) }))).toEqual([]);
     expect(codes(form({ description: '\u00e9'.repeat(500) }))).toContain('metadata.too_large');
+  });
+});
+
+describe('"After creation": a sale', () => {
+  const sale = (over: Partial<SaleForm>): SaleForm => ({ ...defaultSaleForm(), ...over });
+
+  it('sells on a curve created in the genesis: unbound, custody owned by the curve, signed and validated', () => {
+    const plan = planIssue(kob, form({ supply: '1000000', sale: sale({ mode: 'curve' }) }), opts());
+    const c = plan.curve!;
+    expect(plan.sale).toMatchObject({ mode: 'curve', sell: 1_000_000n * 100_000_000n, keep: 0n, output: 0 });
+    expect(plan.token.outputs).toHaveLength(1);
+    expect(plan.token.outputs[0]).toMatchObject({ ownerScheme: 4, owner: c.covenantId, amount: (1_000_000n * 100_000_000n).toString() });
+    expect(c.output).toBe(1);
+    expect(c.custody).toBe(0);
+    expect(c.state.kind).toBe('KobCurveAsk');
+    expect(c.state.state).toMatchObject({ maker, tokenCovId: '0'.repeat(64), amountLeft: (1_000_000n * 100_000_000n).toString() });
+    expect(c.state.state.table).toHaveLength(100);
+    // the genesis declares both covenant groups
+    expect(plan.built.covenants.map((x) => x.covenantId)).toEqual([plan.token.covenantId, c.covenantId]);
+    expect(plan.built.tx.outputs[1]!.covenant?.covenantId).toBe(c.covenantId);
+    expect(plan.sale!.curve!.numbers.total).toBeLessThanOrEqual(10_000n * KAS);
+    // the default minimum fill: worth 10 KAS at the first level, at most one level
+    const dm = kob.defaultMinFill(plan.sale!.sell, plan.sale!.curve!.table.table[0]!, 100_000_000n);
+    expect(plan.sale!.curve!.minFill).toBe(dm < plan.sale!.curve!.table.levelSize ? dm : plan.sale!.curve!.table.levelSize);
+    signAndValidate(plan);
+  });
+
+  it('keeps a share in a separate wallet output (supply x keep%)', () => {
+    const plan = planIssue(kob, form({ supply: '1000000', sale: sale({ mode: 'curve', keepPct: '10', levels: '50', totalKas: '500', multiple: '2' }) }), opts());
+    expect(plan.token.outputs.map((o) => [o.ownerScheme, o.amount])).toEqual([
+      [4, (900_000n * 100_000_000n).toString()],
+      [0, (100_000n * 100_000_000n).toString()],
+    ]);
+    expect(plan.token.outputs[1]!.owner).toBe(maker);
+    expect(plan.curve!.state.state.table).toHaveLength(50);
+    signAndValidate(plan);
+  });
+
+  it('sells at one price: the wallet output for sale and the kept one, no curve', () => {
+    const plan = planIssue(kob, form({ supply: '1000', sale: sale({ mode: 'ask', keepPct: '25', price: '2' }) }), opts());
+    expect(plan.curve).toBeUndefined();
+    expect(plan.sale).toMatchObject({ mode: 'ask', sell: 750n * 100_000_000n, keep: 250n * 100_000_000n, output: 0, price: 2n * KAS, total: 1500n * KAS });
+    expect(plan.token.outputs.map((o) => [o.owner, o.ownerScheme, o.amount])).toEqual([
+      [maker, 0, (750n * 100_000_000n).toString()],
+      [maker, 0, (250n * 100_000_000n).toString()],
+    ]);
+    signAndValidate(plan);
+  });
+
+  it('caps the default minimum fill of a small curve at one level (else no fill could take it)', () => {
+    const plan = planIssue(kob, form({ supply: '1000000', sale: sale({ mode: 'curve', totalKas: '200' }) }), opts());
+    expect(plan.sale!.curve!.minFill).toBe(plan.sale!.curve!.table.levelSize);
+    signAndValidate(plan);
+  });
+
+  it('refuses a sale that leaves nothing to sell', () => {
+    expect(() => planIssue(kob, form({ supply: '1000', sale: sale({ mode: 'curve', keepPct: '100' }) }), opts())).toThrow(IssueFormError);
   });
 });

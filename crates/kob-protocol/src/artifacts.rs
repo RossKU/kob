@@ -124,7 +124,7 @@ pub mod spk_trace {
 include!(concat!(env!("OUT_DIR"), "/token_programs.rs"));
 
 /// Number of KOB order kinds (`TemplateId` variants that are not token programs).
-pub const ORDER_KIND_COUNT: usize = 21;
+pub const ORDER_KIND_COUNT: usize = 22;
 
 macro_rules! define_template_id {
     (
@@ -160,6 +160,9 @@ macro_rules! define_template_id {
             ///
             /// It covers IFD, IFO, bracket and repeat, in one template for both sides and families.
             KobIfdPair,
+            /// Stepped sell curve: one custody, the price rises level by level along a table
+            /// (`docs/design/curve-ask-spec.md`). Kind code 0x0b, KCC-20 only.
+            KobCurveAsk,
             $( #[doc = $kd] #[serde(rename = $kn)] $kv, )*
             // ---- KRON family (46-byte token state)
             KobAskKron,
@@ -192,6 +195,7 @@ macro_rules! define_template_id {
                 TemplateId::KobPair,
                 TemplateId::KobCondPair,
                 TemplateId::KobIfdPair,
+                TemplateId::KobCurveAsk,
                 $( TemplateId::$kv, )*
                 TemplateId::KobAskKron,
                 TemplateId::KobBidKron,
@@ -224,6 +228,7 @@ macro_rules! define_template_id {
                     TemplateId::KobPair => "KobPair",
                     TemplateId::KobCondPair => "KobCondPair",
                     TemplateId::KobIfdPair => "KobIfdPair",
+                    TemplateId::KobCurveAsk => "KobCurveAsk",
                     TemplateId::KobAskKron => "KobAskKron",
                     TemplateId::KobBidKron => "KobBidKron",
                     TemplateId::KobCondAskKron => "KobCondAskKron",
@@ -412,7 +417,12 @@ impl TemplateId {
     ///
     /// The pair kinds serve both families, and a `*KronD0` build serves KRON.
     pub fn serves(self, family: Family) -> bool {
-        self.kind_code().is_some() && self.in_family(family) == self.canonical()
+        self.kind_code().is_some() && self.in_family(family) == self.canonical() && (family == Family::Kcc20 || !self.is_kcc20_only())
+    }
+
+    /// True for the order kinds with no KRON build (`KobCurveAsk`).
+    pub fn is_kcc20_only(self) -> bool {
+        matches!(self, TemplateId::KobCurveAsk)
     }
 
     /// The token program's profile (`data/programs.json`); `None` for an order kind.
@@ -503,6 +513,7 @@ impl TemplateId {
             TemplateId::KobPair => 0x08,
             TemplateId::KobCondPair => 0x09,
             TemplateId::KobIfdPair => 0x0a,
+            TemplateId::KobCurveAsk => 0x0b,
             _ => return None,
         })
     }
@@ -540,6 +551,7 @@ pub const PINNED: [(TemplateId, &str); ORDER_KIND_COUNT] = [
     (TemplateId::KobPair, "d3d775de3dfb4091c8d3b631a018c89accac22565bf370e10d9172eb759a6ec8"),
     (TemplateId::KobCondPair, "216cdcb583aaa08a104834f6ac214cf8869c1dc4321e8f4f2394e4b882cd34ff"),
     (TemplateId::KobIfdPair, "1208cd408b3f06ad97d9a35aaa5e082d4a1dda8e79f50ea40bd872770d424315"),
+    (TemplateId::KobCurveAsk, "1e9bee3b01f67f802dba564ada22d28ca5f5e2bbc0eaf60005d9a8665d46d8b9"),
     (TemplateId::KobAskKron, "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d"),
     (TemplateId::KobBidKron, "7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582"),
     (TemplateId::KobCondAskKron, "e9930d360eb9c124ea68bc47a8c0e91b25ff919dc5f91dbfc3f1a9e9c8a10579"),
@@ -568,6 +580,7 @@ fn embedded_json(id: TemplateId) -> &'static str {
         TemplateId::KobPair => include_str!("../../../contracts/artifacts/KobPair.json"),
         TemplateId::KobCondPair => include_str!("../../../contracts/artifacts/KobCondPair.json"),
         TemplateId::KobIfdPair => include_str!("../../../contracts/artifacts/KobIfdPair.json"),
+        TemplateId::KobCurveAsk => include_str!("../../../contracts/artifacts/KobCurveAsk.json"),
         TemplateId::KobAskKron => include_str!("../../../contracts/artifacts/KobAskKron.json"),
         TemplateId::KobBidKron => include_str!("../../../contracts/artifacts/KobBidKron.json"),
         TemplateId::KobCondAskKron => include_str!("../../../contracts/artifacts/KobCondAskKron.json"),
@@ -638,7 +651,10 @@ pub struct TokenTemplate {
 impl TokenTemplate {
     /// Redeem script of an instance: `prefix ‖ state ‖ suffix`.
     pub fn redeem(&self, state: &[u8]) -> Vec<u8> {
-        assert_eq!(state.len(), self.state_len, "{}: state span must be {} bytes", self.id.name(), self.state_len);
+        // a curve's state ends with its table, of any length
+        if self.id != TemplateId::KobCurveAsk {
+            assert_eq!(state.len(), self.state_len, "{}: state span must be {} bytes", self.id.name(), self.state_len);
+        }
         [self.prefix.as_slice(), state, self.suffix.as_slice()].concat()
     }
 
@@ -700,7 +716,13 @@ impl Template {
 
     /// Redeem script of an instance: `prefix ‖ state ‖ suffix`.
     pub fn redeem(&self, state: &[u8]) -> Vec<u8> {
-        assert_eq!(state.len(), self.state_len, "{}: state span must be {} bytes", self.id.name(), self.state_len);
+        // a curve's state ends with its table, of any length
+        assert!(
+            self.id == TemplateId::KobCurveAsk || state.len() == self.state_len,
+            "{}: state span must be {} bytes",
+            self.id.name(),
+            self.state_len
+        );
         [self.prefix.as_slice(), state, self.suffix.as_slice()].concat()
     }
 

@@ -251,6 +251,7 @@ impl OrderRef {
             Leg::Pair { order, .. } => &order.utxo,
             Leg::CondPair { order, .. } => &order.utxo,
             Leg::IfdPair { order, .. } => &order.utxo,
+            Leg::CurveAsk { order, .. } => &order.utxo,
         };
         Outpoint::new(u.transaction_id, u.index)
     }

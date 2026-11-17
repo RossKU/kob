@@ -1084,6 +1084,7 @@ fn leg_t(l: &kob_protocol::build::Leg) -> Option<i64> {
         | Leg::Pair { t, .. }
         | Leg::CondPair { t, .. }
         | Leg::IfdPair { t, .. } => *t,
+        Leg::CurveAsk { .. } => None,
     }
 }
 

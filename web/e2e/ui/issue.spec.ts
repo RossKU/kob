@@ -337,6 +337,9 @@ test.describe('token issuance', () => {
     // the genesis was signed before it was refused: it is sent again as it is, with no new signature
     const asked = (await wallet!.calls()).length;
     await expect(page.getByTestId('issue-pending-send')).toHaveText('Send the creation');
+    const steps = page.getByTestId('issue-pending-stepper');
+    await expect(steps.getByTestId('create-step-prep')).toHaveAttribute('data-state', 'done');
+    await expect(steps.getByTestId('create-step-genesis')).toContainText('Signed, not sent');
     await page.getByTestId('issue-pending-send').click();
     await expect(page.getByTestId('issue-result')).toBeVisible({ timeout: 30_000 });
     expect((await wallet!.calls()).length).toBe(asked);
@@ -453,6 +456,9 @@ test.describe('token creation with the private key', () => {
     expect(receipt.lines['Decimals (recorded on chain)']).toBe('4');
     expect(receipt.lines['Total supply']).toBe('250 KEYC');
     await expect(f.getByTestId('signer-problems')).toHaveCount(0);
+    // one approval signs both: the stepper says so at its first step
+    await expect(page.getByTestId('create-step-prep')).toHaveAttribute('aria-current', 'step');
+    await expect(page.getByTestId('create-step-prep')).toContainText('Sign both in your wallet');
     await confirmReceipt(page);
     await expect(page.getByTestId('tx-status')).toBeVisible({ timeout: 30_000 });
     // no second request: both went out

@@ -462,6 +462,7 @@ fn typed(id: TemplateId, b: &[u8]) -> AnyState {
         TemplateId::KobPair => AnyState::KobPair(PairState::decode_as(id, b).unwrap()),
         TemplateId::KobCondPair => AnyState::KobCondPair(CondPairState::decode_as(id, b).unwrap()),
         TemplateId::KobIfdPair => AnyState::KobIfdPair(IfdPairState::decode_as(id, b).unwrap()),
+        TemplateId::KobCurveAsk => AnyState::KobCurveAsk(CurveAskState::decode(b).unwrap()),
         other => panic!("{} is not an order template", other.name()),
     }
 }

@@ -66,6 +66,14 @@ describe('router', () => {
     expect(tokenRoute(ID, 'cover', 0)).toEqual({ name: 'token', covenantId: ID, ticket: 'cover' });
   });
 
+  it('an ask link (the first sale of a token just created) carries the amount and the price per whole token', () => {
+    expect(parseHash(`#/market/${ID}?ticket=ask&amount=500&price=2000`)).toEqual({ name: 'token', covenantId: ID, ticket: 'ask', amount: '500', price: '2000' });
+    expect(routeToHash(tokenRoute(ID, 'ask', 500n, 2000n))).toBe(`#/market/${ID}?ticket=ask&amount=500&price=2000`);
+    expect(parseHash(`#/market/${ID}?ticket=ask&amount=500&price=0`)).toEqual({ name: 'token', covenantId: ID, ticket: 'ask', amount: '500' });
+    // only the ask preset takes a price
+    expect(parseHash(`#/market/${ID}?ticket=sell&amount=5&price=9`)).toEqual({ name: 'token', covenantId: ID, ticket: 'sell', amount: '5' });
+  });
+
   it('a sell link (close of a buy-first position) carries the amount the position bought, like cover', () => {
     expect(parseHash(`#/market/${ID}?ticket=sell&amount=250000000`)).toEqual({ name: 'token', covenantId: ID, ticket: 'sell', amount: '250000000' });
     expect(routeToHash(tokenRoute(ID, 'sell', 250_000_000n))).toBe(`#/market/${ID}?ticket=sell&amount=250000000`);

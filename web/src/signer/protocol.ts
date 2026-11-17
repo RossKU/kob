@@ -46,6 +46,8 @@ export interface GenesisClaim {
   program: string;
   extensionCommitment: Hex;
   outputs: { index: number; amount: string; owner: Hex; ownerScheme: number; borrowScheme: number; borrowGuard: Hex }[];
+  /** a sell curve the genesis places (`KobCurveAsk`, unbound): its output, covenant and state, checked by the frame like the token outputs */
+  curve?: { index: number; covenantId: Hex; state: unknown };
 }
 
 /**
@@ -144,8 +146,12 @@ const isTokenHint = (v: unknown): v is TokenHint =>
   // a registry or issued ticker; an assumed or program-default token has none (the frame names it by its covenant id)
   (v.source === 'assumed' || v.source === 'program' || v.source === 'scale' ? v.ticker === '' : TICKER.test(v.ticker));
 
+/** A claimed curve: an output index, a covenant id and a state object (decoded and re-derived by the frame, never trusted). */
+const isCurveClaim = (v: unknown): boolean =>
+  isObj(v) && hasKeys(v, ['index', 'covenantId', 'state']) && isIndex(v.index, MAX_IO) && HEX32.test(String(v.covenantId)) && isObj(v.state);
+
 const isClaim = (v: unknown): v is GenesisClaim =>
-  isObj(v) && hasKeys(v, ['program', 'extensionCommitment', 'outputs']) && typeof v.program === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(v.program) &&
+  isObj(v) && hasKeys(v, ['program', 'extensionCommitment', 'outputs', 'curve']) && (v.curve === undefined || isCurveClaim(v.curve)) && typeof v.program === 'string' && /^[A-Za-z0-9_]{1,64}$/.test(v.program) &&
   HEX32.test(String(v.extensionCommitment)) && Array.isArray(v.outputs) && v.outputs.length > 0 && v.outputs.length <= 64 &&
   v.outputs.every(
     (o) =>

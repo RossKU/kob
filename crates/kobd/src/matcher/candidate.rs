@@ -145,6 +145,26 @@ pub struct Cand {
     ///
     /// None for every KAS-book order.
     pub pair: Option<PairLeg>,
+    /// A `KobCurveAsk` level. A curve is one candidate per level a fill reaches; the planner fills
+    /// them in level order and lowers them as one leg (`super::batch`).
+    pub curve: Option<CurveLeg>,
+}
+
+/// The level a `KobCurveAsk` candidate stands for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurveLeg {
+    /// Levels from the current one (0) on, at most `CURVE_MAX_CROSS - 1`.
+    pub level: u8,
+    /// The quantity rules of the curve's whole fill (every level of it).
+    pub rules: QtyRules,
+}
+
+impl CurveLeg {
+    /// Whether a fill of `n` base units over all the curve's levels keeps its rules.
+    pub fn fill_ok(&self, n: i64) -> bool {
+        let r = &self.rules;
+        n > 0 && n <= r.cap && (n >= r.rest_from || (n >= r.min_fill && n <= r.part_cap))
+    }
 }
 
 /// Which side of a pair order a leg stands for (`super::pair`).
@@ -562,6 +582,7 @@ fn base(o: &ListedOrder, idx: usize, kind: TemplateId, side: Side, book: BookKey
         bytes: 0,
         book,
         pair: None,
+        curve: None,
     }
 }
 
@@ -680,6 +701,43 @@ pub fn candidates_of(orders: &[&ListedOrder], cx: &CandCtx) -> Vec<Cand> {
                 c.chain_safe = s.interval == 0;
                 c.bytes = INPUT_BYTES + rl(TemplateId::KobAsk) + custody_bytes(true) + 3 * OUTPUT_BYTES;
                 out.push(c);
+            }
+            AnyState::KobCurveAsk(s) => {
+                if t < s.active_from || s.amount_left <= 0 {
+                    continue;
+                }
+                // KIP-9 over the whole fill: the payout, the continuation and the rest custody
+                let cust = o.custody.as_ref().map(|x| x.utxo.amount.min(i64::MAX as u64) as i64).unwrap_or(0);
+                let pay = |n: i64| s.proceeds(n);
+                let all = QtyRules { cap: s.max_fill(), min_fill: s.min_fill.max(1), rest_from: s.amount_left, part_cap: i64::MAX };
+                let Some(rules) = kip9_limits(
+                    all,
+                    cust >= COV_OUTPUT_MIN && v >= COV_OUTPUT_MIN,
+                    |n| pay(n).is_some_and(|p| p >= KAS_OUTPUT_MIN),
+                    |_| true,
+                    |n| pay(n).is_some_and(|p| p.saturating_add(v).saturating_add(cust) >= KAS_OUTPUT_MIN),
+                ) else {
+                    continue;
+                };
+                let bytes = INPUT_BYTES + s.redeem().len() as u64 + custody_bytes(true) + 3 * OUTPUT_BYTES;
+                let mut lo = 0i64;
+                for (k, (_, p, size)) in crate::model::curve_levels(s).into_iter().take(CURVE_MAX_CROSS).enumerate() {
+                    let hi = lo.saturating_add(size).min(rules.cap);
+                    if hi <= lo {
+                        break;
+                    }
+                    let mut c = base(o, idx, TemplateId::KobCurveAsk, Side::Ask, bk);
+                    (c.quote, c.tip, c.scale, c.cap) = (p, s.tip, s.scale, hi - lo);
+                    // the first level carries the minimum fill (as far as it reaches) and the rest output
+                    c.left = if k == 0 { s.amount_left } else { c.cap };
+                    c.min_fill = if k == 0 { rules.min_fill.min(c.cap) } else { 1 };
+                    c.rest_from = if hi == s.amount_left && rules.rest_from <= rules.cap { c.cap } else { i64::MAX };
+                    c.leg = k as u8;
+                    c.curve = Some(CurveLeg { level: k as u8, rules });
+                    c.bytes = bytes;
+                    out.push(c);
+                    lo = hi;
+                }
             }
             AnyState::KobBid(s) => {
                 if t < s.active_from || s.min_fill <= 0 {

@@ -3,7 +3,7 @@
 // no DOM, no network; the caller injects the clock, the node-resolved records and kob-wasm.
 import type { OrderView } from '../../data/indexer-types';
 import { GTC_DAYS, MARKET_AUCTION_DAA, MAX_IDLE_DAA, daaToUnix, gtcRenewalUnix, renewalUnixForExpiry } from '../../kob/daa';
-import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isMultiFillMarket, isPairKind, type OrderDescription } from '../../kob/order-facts';
+import { asOrderState, baseKind, custodiesOf, custodyAmountOf, describeOrder, holdsTokens, isMultiFillMarket, isPairKind, type CurveFacts, type OrderDescription } from '../../kob/order-facts';
 import { boughtOf, deliveryModeOf } from '../../kob/bought';
 import { pairOfView } from '../../kob/pair-view';
 import type { Clock } from '../../kob/plan-types';
@@ -19,7 +19,7 @@ export type OrderStatusUi = (typeof ORDER_STATUSES)[number];
 /** Plain-words order types (i18n `orders.type.<key>`). */
 export const ORDER_TYPE_KEYS = [
   'limit', 'limit-gtd', 'limit-day', 'timed', 'market', 'ioc', 'fok', 'twap', 'dca', 'dutch',
-  'stop', 'trailing', 'take-profit', 'oco', 'exit', 'ifd', 'ifo', 'repeat', 'unknown',
+  'stop', 'trailing', 'take-profit', 'oco', 'exit', 'ifd', 'ifo', 'repeat', 'curve', 'unknown',
 ] as const;
 // Pair orders (KobPair, KobCondPair, KobIfdPair) get the type of the KAS kind they mirror (limit, stop, IFD, ...); the row's `pair` says they trade
 // a token pair.
@@ -143,6 +143,7 @@ export function isGtcExpiry(expiryDaa: bigint, genesisDaa: bigint | null): boole
 export function orderTypeKey(i: ClassifyInput): OrderTypeKey {
   const d = i.desc;
   const kind = baseKind(i.kind as OrderState['kind']);
+  if (kind === 'KobCurveAsk') return 'curve';
   if (kind === 'KobAsk' || kind === 'KobBid' || kind === 'KobPair') {
     const a = d.auction;
     if (a && a.interval > 0n && a.maxFill > 0n) return d.side === 'sell' ? 'twap' : 'dca';
@@ -294,6 +295,8 @@ export interface OrderRowModel {
    * of a stop; null for KAS-quoted orders
    */
   pair: PairRowFacts | null;
+  /** a stepped sell curve (`KobCurveAsk`): its table and current level; absent for other kinds */
+  curve?: CurveFacts | null;
 }
 
 export interface PairRowFacts {
@@ -327,8 +330,10 @@ export interface DescribeContext {
  * protocol: their resting limits, stops, take-profits, OCO and IFD / IFO entries are replaced from the full pair ticket form (cancel-replace).
  * Repeat entries and booked exits have none: the position is cancelled as a whole (their exits re-arm the entry).
  */
-export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | null {
+export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | 'curve' | null {
   const k = baseKind(state.kind);
+  // a curve: its levels left, level size, tip and minimum fill, amended in place
+  if (k === 'KobCurveAsk') return 'curve';
   // TWAP, DCA, Dutch / rising and timed orders (KAS and pair): replaced from the full ticket form with their schedule (replace-intent.ts)
   if ((k === 'KobPair' || k === 'KobAsk' || k === 'KobBid') && SCHEDULED_TYPES.includes(typeKey)) return 'replace';
   if (k === 'KobPair') return typeKey === 'limit' || typeKey === 'limit-gtd' || typeKey === 'limit-day' ? 'replace' : null;
@@ -450,7 +455,8 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
   const viaRecord = r?.status === 'live' && cancelBlocked === null;
 
   return {
-    id: e.id, entry: e, token: desc ? desc.tokenCovId : (v?.token ?? null), side, contract: v?.contract ?? kind, typeKey, status, source, live, expired, price, auctionStart, stopPrice, tip, allInPrice,
+    // an unbound curve (created in its token's genesis) names no token in its state: the indexer's `token` is its custody's
+    id: e.id, entry: e, token: desc && !desc.curve?.unbound ? desc.tokenCovId : (v?.token ?? desc?.tokenCovId ?? null), side, contract: v?.contract ?? kind, typeKey, status, source, live, expired, price, auctionStart, stopPrice, tip, allInPrice,
     budget: budgetOf(e, es ? es.state : null, desc, status),
     amountTotal, amountLeft, amountEstimated: v ? v.amount_estimated : e.resolved !== null && es?.source === 'node' && baseKind(es.state.kind) === 'KobBid',
     scale, minFill: desc ? desc.minFill : bi(v?.min_fill ?? null),
@@ -477,6 +483,7 @@ export function describeEntry(e: OrderEntry, ctx: DescribeContext): OrderRowMode
     possiblyFrozen: live && v?.possibly_frozen === true,
     unlisted: live && v?.listed === false ? { reason: v.unlisted_reason ?? null } : null,
     pair,
+    ...(desc?.curve ? { curve: desc.curve } : {}),
   };
 }
 

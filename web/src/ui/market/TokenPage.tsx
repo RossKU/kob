@@ -57,7 +57,7 @@ const TAPE_LIMIT = 50;
  * `#/market/<covenantId>`: an exchange layout. Title bar + 24 h stats; order book | price chart and depth | order ticket; the activity log of the market (ui/activity, full width);
  * token facts below. Live: the WebSocket feed (`book:` / `fills:`) triggers a debounced refetch, 5 s polling without it.
  */
-export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string }) {
+export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; amount?: string; price?: string }) {
   const services = useServices();
   const wallet = useWallet();
   const { registry, indexer, kob, config } = services;
@@ -74,7 +74,10 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
       ? { side: 'sell', type: 'close' }
       : props.ticket === 'cover' || props.ticket === 'sell'
         ? { side: props.ticket === 'cover' ? 'buy' : 'sell', type: 'market', ...(props.amount ? { amount: BigInt(props.amount) } : {}) }
-        : undefined,
+        : props.ticket === 'ask'
+          ? // the first sale of a token just created (Create token, "Sell at one price"): a limit sell of the amount at the price
+            { side: 'sell', ...(props.amount ? { amount: BigInt(props.amount) } : {}), ...(props.price ? { price: BigInt(props.price) } : {}) }
+          : undefined,
   );
   const [liveKey, setLiveKey] = useState(0);
   // bumps on a reorg / resync (history may have changed, not only grown): the chart reloads in full instead of fetching only its newest bars
@@ -105,7 +108,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
   const selectorRows = useMemo(() => withShownRows(choiceRows, [headerRow ?? row]), [choiceRows, headerRow, row]);
 
-  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
+  // one row per order (the levels are summed here, book-model.ts): a curve sell order's levels carry their `curve_level`, so the book can mark them
+  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: false }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
   const trades = useAsync(
     async (signal) => {

@@ -291,7 +291,9 @@ impl<'a> DecodeCtx<'a> {
         let tag: [u8; 4] = r.raw(4)?.try_into().expect("4");
         let args = read_args(r)?;
         Ok(match self.order_layout(code)? {
-            Some(id) if state.len() == template(id).state_len => Some(Reveal { template: id, state, tag, args }),
+            Some(id) if state.len() == template(id).state_len || id == TemplateId::KobCurveAsk => {
+                Some(Reveal { template: id, state, tag, args })
+            }
             _ => {
                 self.stats.unknown_reveals += 1;
                 None
@@ -319,7 +321,7 @@ impl<'a> DecodeCtx<'a> {
 
     /// An imported order's template: `None` (counted) when this build cannot interpret its state.
     pub(crate) fn import_template(&mut self, code: u8, state_len: usize) -> WireResult<Option<TemplateId>> {
-        let id = self.order_layout(code)?.filter(|id| template(*id).state_len == state_len);
+        let id = self.order_layout(code)?.filter(|id| template(*id).state_len == state_len || *id == TemplateId::KobCurveAsk);
         if id.is_none() {
             self.stats.unknown_imports += 1;
         }
@@ -633,6 +635,21 @@ pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
     ))
 }
 
+/// The `KOBG` state spans of a genesis payload: the payload itself, or a KOB1 payload's GENESIS
+/// record (a curve created in its token's genesis, `curve-ask-spec.md` §4).
+pub fn genesis_spans(payload: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if let Some(s) = kob_protocol::genesis_states::decode(payload) {
+        return Some(s);
+    }
+    if !payload.starts_with(payload::MAGIC) {
+        return None;
+    }
+    payload::decode(payload).ok()??.records.into_iter().find_map(|r| match r {
+        Record::Unknown { record_type: payload::REC_GENESIS, value } => kob_protocol::genesis_states::decode(&value),
+        _ => None,
+    })
+}
+
 /// The candidate states a token genesis names in its payload ([`kob_protocol::genesis_states`]).
 ///
 /// There is one [`Leader`] per pinned token program that can read every span as its own state,
@@ -644,7 +661,7 @@ pub fn leader_of(sigscript: &[u8]) -> Option<Leader> {
 /// of up to about 25 KB, and a payload of 255 states would cost some 20 MB of hashing per
 /// transaction, for about 29 KB of payload.
 pub fn genesis_leaders(payload: &[u8], cov_outputs: usize) -> Vec<Leader> {
-    let Some(spans) = kob_protocol::genesis_states::decode(payload) else { return vec![] };
+    let Some(spans) = genesis_spans(payload) else { return vec![] };
     if spans.len() > cov_outputs {
         return vec![];
     }

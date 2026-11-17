@@ -501,6 +501,8 @@ pub fn check_new_order(s: &AnyState) -> Result<()> {
                 return invalid("a repeating sell-first entry needs a take-profit that beats the entry (all-in)");
             }
         }
+        // the gates are its check_numbers (spec section 5); tokenCovId may be zero (unbound)
+        AnyState::KobCurveAsk(_) => {}
         AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) => unreachable!("checked above"),
     }
     Ok(())
@@ -711,6 +713,9 @@ pub struct AmendOrder {
     pub records: Vec<Record>,
     #[serde(default)]
     pub fee: FeeOptions,
+    /// An unbound curve (made in its token's genesis): its custody, whose token the amend must name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody: Option<TokenUtxo>,
 }
 
 /// Least KAS an in-place amend that pays its fee from the order's carrier leaves on the order.
@@ -1221,7 +1226,12 @@ fn own_tokens(s: &AnyState) -> Result<OwnTokens> {
 pub fn build_cancel_order(r: &CancelOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let order = &r.order;
     let id = order.state.template_id();
-    let (tokens, custodies, suffix) = own_tokens(&order.state)?;
+    // an unbound curve's token is its custody's
+    let named = match (&order.state, &r.custody) {
+        (AnyState::KobCurveAsk(c), Some(k)) => AnyState::KobCurveAsk(curve_bound(c, k)),
+        (s, _) => s.clone(),
+    };
+    let (tokens, custodies, suffix) = own_tokens(&named)?;
     if r.retired.is_some() && (r.replace.is_some() || !r.tokens.is_empty() || !r.records.is_empty()) {
         return invalid("an order under a retired template is only cancelled: no replacement, top-up or records");
     }
@@ -1449,6 +1459,25 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     payload::check_amend_terms(&order.state, &r.amended).map_err(|e| Error::Invalid(e.to_string()))?;
     check_new_order(&r.amended)?;
+    // an unbound curve is bound by its amend to its custody's token (the custody made with it in its genesis,
+    // owned by it, of exactly amountLeft)
+    if let (AnyState::KobCurveAsk(prev), AnyState::KobCurveAsk(next)) = (&order.state, &r.amended) {
+        if prev.is_unbound() {
+            let Some(c) = &r.custody else {
+                return invalid("the amend of an unbound curve needs its custody (it binds the curve to that token)");
+            };
+            let cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+            if c.utxo.transaction_id != order.utxo.transaction_id
+                || c.state.owner() != cov
+                || c.state.amount() as i64 != prev.amount_left
+            {
+                return invalid("the custody of an unbound curve is the output of its genesis it owns, of exactly amountLeft");
+            }
+            if c.utxo.covenant_id != Some(next.token_cov_id) {
+                return invalid("the amend of an unbound curve must name the token of its custody");
+            }
+        }
+    }
     let token = order_token(&order.state)?;
     let maker = order.state.maker();
     let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -1873,9 +1902,13 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
         return build_refund_pair(r, budgets);
     }
     let order = &r.order;
+    if matches!(order.state, AnyState::KobCurveAsk(_)) {
+        return invalid("a curve has no refund: its maker cancels it");
+    }
     let token = order_token(&order.state)?;
-    let (_, tip) = order.state.expiry().expect("order");
-    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
+    let (_, tip) = order.state.expiry().ok_or_else(|| Error::Invalid("this order has no expiry".into()))?;
+    let due =
+        order.state.refund_due(order.utxo.block_daa_score as i64).ok_or_else(|| Error::Invalid("this order has no refund".into()))?;
     if (r.lock_time as i64) < due {
         return invalid(format!("not refundable before DAA {due} (lockTime {})", r.lock_time));
     }
@@ -1983,8 +2016,9 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
 /// at its own index.
 fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let order = &request.order;
-    let (_, tip) = order.state.expiry().expect("order");
-    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
+    let (_, tip) = order.state.expiry().ok_or_else(|| Error::Invalid("this order has no expiry".into()))?;
+    let due =
+        order.state.refund_due(order.utxo.block_daa_score as i64).ok_or_else(|| Error::Invalid("this order has no refund".into()))?;
     if (request.lock_time as i64) < due {
         return invalid(format!("not refundable before DAA {due} (lockTime {})", request.lock_time));
     }
@@ -2132,6 +2166,16 @@ pub enum Leg {
         amount: i64,
         #[serde(with = "crate::json::field", default)]
         t: Option<i64>,
+    },
+    /// Stepped sell curve (`KobCurveAsk`): `amount` base units along its table, at most 8
+    /// levels. An unbound curve (created in its token's genesis) is bound by this fill.
+    #[serde(rename_all = "camelCase")]
+    CurveAsk {
+        order: OrderUtxo<CurveAskState>,
+        /// The custody: exactly `amountLeft` base units owned by the order.
+        custody: TokenUtxo,
+        #[serde(with = "crate::json::field")]
+        amount: i64,
     },
     /// Limit / IOC / FOK / DCA / rising / market-auction buy.
     #[serde(rename_all = "camelCase")]
@@ -2626,6 +2670,8 @@ fn evidence(batch: &Batch, lay: &Layout, k: usize) -> Result<(Touch, i64, i64)> 
 fn leg_state(l: &Leg) -> Result<AnyState> {
     let s = match l {
         Leg::Ask { order, .. } => AnyState::KobAsk(order.state.clone()),
+        // an unbound curve trades the token of its custody (the fill binds it)
+        Leg::CurveAsk { order, custody, .. } => return Ok(AnyState::KobCurveAsk(curve_bound(&order.state, custody))),
         Leg::Bid { order, .. } => AnyState::KobBid(order.state.clone()),
         Leg::CondAsk { order, .. } => AnyState::KobCondAsk(order.state.clone()),
         Leg::CondBid { order, .. } => AnyState::KobCondBid(order.state.clone()),
@@ -2643,6 +2689,7 @@ fn leg_state(l: &Leg) -> Result<AnyState> {
 pub fn leg_amount(l: &Leg) -> i64 {
     match l {
         Leg::Ask { amount, .. }
+        | Leg::CurveAsk { amount, .. }
         | Leg::Bid { amount, .. }
         | Leg::CondAsk { amount, .. }
         | Leg::CondBid { amount, .. }
@@ -2657,6 +2704,7 @@ pub fn leg_amount(l: &Leg) -> i64 {
 fn l_utxo(l: &Leg) -> &Utxo {
     match l {
         Leg::Ask { order, .. } => &order.utxo,
+        Leg::CurveAsk { order, .. } => &order.utxo,
         Leg::Bid { order, .. } => &order.utxo,
         Leg::CondAsk { order, .. } => &order.utxo,
         Leg::CondBid { order, .. } => &order.utxo,
@@ -2877,7 +2925,7 @@ fn permute_batch(batch: &Batch, perm: &[usize]) -> Batch {
                 map(evidence);
                 map(evidence_b);
             }
-            Leg::Ask { .. } | Leg::Bid { .. } | Leg::Pair { .. } => {}
+            Leg::Ask { .. } | Leg::CurveAsk { .. } | Leg::Bid { .. } | Leg::Pair { .. } => {}
         }
     }
     for u in out.updates.iter_mut() {
@@ -2989,7 +3037,9 @@ fn custody_inputs<'a>(
                 let ioc = order.state.tif != TIF_GTC && *amount < order.state.amount_left;
                 custodies.push((i, Slot::Custody, custody, tok, ioc));
             }
-            Leg::CondAsk { custody, .. } | Leg::IfdAsk { custody, .. } => custodies.push((i, Slot::Custody, custody, tok, false)),
+            Leg::CondAsk { custody, .. } | Leg::IfdAsk { custody, .. } | Leg::CurveAsk { custody, .. } => {
+                custodies.push((i, Slot::Custody, custody, tok, false))
+            }
             Leg::CondBid { merge: Some(m), .. } => {
                 if let Some(c) = &m.custody {
                     custodies.push((i, Slot::Entry, c, tok, false));
@@ -3149,6 +3199,65 @@ fn plan_ask(cx: &LegCtx, order: &OrderUtxo<AskState>, custody: &TokenUtxo, t: Op
             state.encode_for(family),
             "settle",
             vec![nb(n), Arg::Int(lay.at[&(i, Slot::Custody)] as i64), Arg::Int(0), Arg::Int(t)],
+        ),
+        extras,
+        suffix: format!("@{}", token.1.name()),
+        flows: vec![(token, n, 0)],
+        merge: None,
+        adjust: None,
+    })
+}
+
+/// A curve with its token named: an unbound one takes its custody's covenant id.
+pub(crate) fn curve_bound(s: &CurveAskState, custody: &TokenUtxo) -> CurveAskState {
+    match custody.utxo.covenant_id {
+        Some(t) if s.is_unbound() => CurveAskState { token_cov_id: t, ..s.clone() },
+        _ => s.clone(),
+    }
+}
+
+/// Plans a `KobCurveAsk` fill: the maker's proceeds along the table (rounded up per level), the
+/// continuation and the rest custody, or the sell-out.
+fn plan_curve_ask(cx: &LegCtx, order: &OrderUtxo<CurveAskState>, custody: &TokenUtxo, exts: &mut Exts) -> Result<LegPlan> {
+    let LegCtx { lay, index: i, token, amount: n, lock, utxo, value: order_value, cov_id, .. } = *cx;
+    let state = &order.state;
+    check_custody(custody, Some(cov_id), token, state.amount_left)?;
+    check_custody_ext(custody, state.extension_commitment)?;
+    exts.merge(token.0, custody.state.extension())?;
+    if state.is_unbound() && custody.utxo.transaction_id != utxo.transaction_id {
+        return invalid("an unbound curve takes only a custody created in the order's own transaction (its token's genesis)");
+    }
+    if lock < state.active_from {
+        return invalid(format!("curve at leg {i} is not active before DAA {}", state.active_from));
+    }
+    if !state.fill_ok(n) {
+        return invalid(format!(
+            "leg {i}: a curve fill of {n} needs n <= amountLeft {}, n >= minFill {} unless it takes everything left, and at most {CURVE_MAX_CROSS} levels ({} base units from here)",
+            state.amount_left,
+            state.min_fill,
+            state.max_fill()
+        ));
+    }
+    let proceeds = need(state.proceeds(n), "curve proceeds")?;
+    let rest = state.amount_left - n;
+    let mut extras = vec![];
+    let (payout, branch) = if rest > 0 {
+        let cont = CurveAskState { amount_left: rest, ..curve_bound(state, custody) };
+        extras.push(Extra::Cont(utxo.amount, cont.spk()));
+        extras.push(Extra::Tok { value: custody.utxo.amount, state: custody.state.with_amount(rest), token, patch: Some((i, 2)) });
+        (proceeds, "rest")
+    } else {
+        (add(add(proceeds, order_value, "curve payout")?, custody.utxo.amount as i64, "curve payout")?, "close")
+    };
+    Ok(LegPlan {
+        pos: PosOut::Pay(pos(payout, "curve payout")?, state.maker),
+        role: format!("{}.settle.{branch}", TemplateId::KobCurveAsk.name()),
+        sequence: 0,
+        plan: entry(
+            TemplateId::KobCurveAsk,
+            state.encode(),
+            "settle",
+            vec![nb(n), Arg::Int(lay.at[&(i, Slot::Custody)] as i64), Arg::Int(0), Arg::Int(state.redeem().len() as i64)],
         ),
         extras,
         suffix: format!("@{}", token.1.name()),
@@ -4192,6 +4301,7 @@ fn build_batch_pass(batch: &Batch, budgets: BudgetFn, strict: bool) -> Result<Pa
         };
         let p = match leg {
             Leg::Ask { order, custody, t, .. } => plan_ask(&cx, order, custody, *t, &mut exts)?,
+            Leg::CurveAsk { order, custody, .. } => plan_curve_ask(&cx, order, custody, &mut exts).map_err(|e| leg_fill_error(i, e))?,
             Leg::Bid { order, t, delivery, .. } => plan_bid(&cx, order, *t, delivery.as_ref(), forms[i], &mut exts, &mut refunds[i])?,
             Leg::CondAsk { order, custody, leg: cond_leg, evidence: ev, t, merge, .. } => {
                 plan_cond_ask(&cx, order, custody, *cond_leg, *ev, *t, merge.as_ref(), &mut exts)?

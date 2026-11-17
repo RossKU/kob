@@ -39,12 +39,17 @@ fn pair_vectors() -> Vec<(String, Action)> {
     v
 }
 
+/// The curve shapes (`KobCurveAsk`) on the reference program, 10 levels.
+fn curve_vectors() -> Vec<(String, Action)> {
+    common::curve::curve_scenarios(kob_protocol::artifacts::TemplateId::Kcc20Ref, 10)
+}
+
 fn vectors() -> Golden {
     let keys = common::keys();
     let mut transactions = vec![];
     let mut states = vec![];
     let mut payloads = vec![];
-    for (name, action) in common::scenarios().into_iter().chain(common::scenarios_kron()).chain(kron_2732()).chain(pair_vectors()) {
+    for (name, action) in common::scenarios().into_iter().chain(common::scenarios_kron()).chain(kron_2732()).chain(pair_vectors()).chain(curve_vectors()) {
         let built = build(&action).unwrap_or_else(|e| panic!("{name}: {e}"));
         let signatures = sign_locally(&built, &keys).unwrap();
         let opts = FinalizeOptions { tighten_budgets: true };

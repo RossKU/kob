@@ -118,6 +118,8 @@ export function useMergeBeforeSale(a: MergeBeforeSaleArgs): MergeBeforeSale {
       heading={flow.heading}
       steps={flow.run.steps}
       next={flow.run.next}
+      // the sale follows the merges in the ticket's own confirmation: the stepper shows it last
+      then={{ label: t('stepper.step.sell'), note: t('stepper.note.confirmSale') }}
       onStepSubmitted={(_s, r) => void txids.current.push(r.txid)}
       onDone={(o) => void done(o)}
       onClose={() => setFlow(null)}

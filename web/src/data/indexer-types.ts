@@ -74,6 +74,24 @@ export interface IndexerTokenView {
  */
 export interface LevelView { price: string; amount: string; amount_estimated: boolean; orders: number; scale: number }
 
+/** `OrderView.curve`: a stepped sell curve as `GET /v1/orders/{id}` serves it. */
+export interface CurveView {
+  /** the current level (table index) */
+  level: number;
+  levels: number;
+  /** base units per level, and in all */
+  level_size: string;
+  total: string;
+  /** sompi per whole token of the current level; null when sold out */
+  price_now: string | null;
+  /** the most one fill takes from here (the rest of 8 levels), base units */
+  max_fill: string;
+  /** created in its token's genesis and not yet filled or amended (`state.tokenCovId` is zero; `token` is the custody's) */
+  unbound: boolean;
+  /** the levels left, the current first */
+  remaining: { level: number; price: string; amount: string }[];
+}
+
 export interface BookOrderView {
   covenant_id: Hex; contract: string; maker: Hex | null; price: string;
   /** priority tip, sompi per whole token */
@@ -90,6 +108,8 @@ export interface BookOrderView {
   quote?: string | null;
   /** see `OrderView.possibly_frozen` (the server omits such orders from the book, so this is normally false / absent) */
   possibly_frozen?: boolean;
+  /** a `KobCurveAsk` level (its table index): one row per remaining level, all with the curve's `covenant_id` */
+  curve_level?: number;
 }
 
 /**
@@ -330,6 +350,8 @@ export interface OrderView {
    * are null; the tip is KAS). `orders?token=` lists a pair order under both its tokens.
    */
   pair?: PairOrderView | null;
+  /** a `KobCurveAsk` (docs/design/curve-ask-spec.md): its levels from the current state; absent for other kinds */
+  curve?: CurveView;
   /** the executor's pre-simulation of the order's next fill failed (the token program may have frozen / blacklisted it or its owner): the order is NOT in the book depth; absent on older executors */
   possibly_frozen?: boolean;
   /** warnings of the order's token(s) (`genesis_unverified`, matcher.md 1.2a), as on `/v1/tokens`; absent on older executors */

@@ -31,7 +31,9 @@ export type PairKind = 'KobPair' | 'KobCondPair' | 'KobIfdPair';
 /** The KAS-quoted order kinds (a token against KAS), family-neutral. */
 export type KasKind = 'KobAsk' | 'KobBid' | 'KobCondAsk' | 'KobCondBid' | 'KobIfdBid' | 'KobIfdAsk';
 /** The order kinds, family-neutral (what the UI and the planners reason about). */
-export type BaseKind = KasKind | PairKind;
+/** The stepped sell curve (`KobCurveAsk`): KCC-20 only, sell side only. */
+export type CurveKind = 'KobCurveAsk';
+export type BaseKind = KasKind | PairKind | CurveKind;
 /**
  * Order kinds as kob-wasm tags them.
  * The KRON family has its own templates of the KAS kinds (`KobAskKron`, ...). Each pair kind has
@@ -119,6 +121,26 @@ export interface AskState {
   amountLeft: I64;
   /** KCC-20 extension commitment of the custody (zero for KRON). The order takes no other one. */
   extensionCommitment: Hex;
+}
+/**
+ * State of a stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md): one custody sold level by level along `table`.
+ * Level j sells the units [j·levelSize, (j + 1)·levelSize) of `total` at `table[j]`; the current level is (total − amountLeft) / levelSize.
+ */
+export interface CurveAskState {
+  maker: Hex;
+  /** Zero while unbound (created in its token's genesis, not yet filled or amended). */
+  tokenCovId: Hex; tokenTplHash: Hex; tplPrefixLen: I64; tplSuffixLen: I64;
+  scale: I64; minFill: I64;
+  /** Sompi per whole token taken from every level. */
+  tip: I64;
+  activeFrom: I64;
+  levelSize: I64;
+  /** Base units the curve sells in all. */
+  total: I64;
+  amountLeft: I64;
+  extensionCommitment: Hex;
+  /** Sompi per whole token of each level. */
+  table: I64[];
 }
 /** State of a plain bid (`KobBid`): a KAS escrow that buys a token. */
 export interface BidState extends DeliveryFields {
@@ -351,7 +373,8 @@ export type AnyState =
   | Tagged<'KobIfdAsk', IfdAskState>
   | TaggedOne<'KobPair', PairState>
   | TaggedOne<'KobCondPair', CondPairState>
-  | TaggedOne<'KobIfdPair', IfdPairState>;
+  | TaggedOne<'KobIfdPair', IfdPairState>
+  | TaggedOne<'KobCurveAsk', CurveAskState>;
 
 /** Every state kob-wasm decodes is an order state. */
 export type OrderState = AnyState;
@@ -545,6 +568,8 @@ export interface AmendOrderRequest {
   records?: PayloadRecord[];
   fee?: FeeOptions;
   ownKeys?: Hex[];
+  /** an unbound curve: its custody (the amend names its token; the builder checks it) */
+  custody?: TokenUtxo | null;
 }
 
 /** One order to cancel in a position cancel, with its custody and strays. */

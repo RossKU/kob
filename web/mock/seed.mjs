@@ -89,6 +89,7 @@ export function buildOrderState(chain, spec) {
   const kron = tok.family === 'kron';
   const kind = spec.kind ?? (spec.side === 'bid' || spec.side === 2 ? 'KobBid' : 'KobAsk') + (kron ? 'Kron' : '');
   if (spec.state && spec.state.tokenCovId && spec.state.maker && spec.kind) return { kind, state: spec.state };
+  if (kind === 'KobCurveAsk') return curveState(chain, tok, spec);
   if (kind !== 'KobAsk' && kind !== 'KobBid' && kind !== 'KobAskKron' && kind !== 'KobBidKron') throw badRequest(`seeding ${kind} needs a complete "state" and "kind"`);
   const tpl = chain.templates.get(tok.program);
   const tips = chain.kob.keeperTips()[tok.program];
@@ -121,6 +122,38 @@ export function buildOrderState(chain, spec) {
   const bid = { ...base, reserve: '0', deliveryCarrier: String(DEFAULT_CARRIER), ...(spec.state ?? {}) };
   // the KRON bid layout has no extension commitment
   return { kind, state: kron ? bid : { ...bid, extensionCommitment: tok.extension_commitment ?? '0'.repeat(64) } };
+}
+
+/**
+ * A `KobCurveAsk` from a compact spec: `amount` base units, `levels` (default 100), `total` sompi if sold out (default 10,000 KAS), `multiple`
+ * last / first (default 5), `min_fill` (default 1). The table is kob-wasm's default (`curveTable`).
+ */
+function curveState(chain, tok, spec) {
+  if (tok.family === 'kron') throw badRequest('a curve is KCC-20 only');
+  const tpl = chain.templates.get(tok.program);
+  const scale = spec.scale === undefined ? scaleOf(tok) : big(spec.scale, 'scale');
+  const amount = spec.amount === undefined ? 100n * scale : big(spec.amount, 'amount');
+  const multipleMilli = BigInt(Math.round(Number(spec.multiple ?? 5) * 1000));
+  const t = JSON.parse(chain.kob.raw.curveTable(JSON.stringify({ amount: String(amount), levels: Number(spec.levels ?? 100), total: String(spec.total ?? 1_000_000_000_000), multipleMilli: String(multipleMilli), scale: String(scale), tip: String(spec.tip ?? 0) })));
+  return {
+    kind: 'KobCurveAsk',
+    state: {
+      maker: resolveKey(spec.maker, 'maker'),
+      tokenCovId: tok.covenant_id,
+      tokenTplHash: tok.template_hash,
+      tplPrefixLen: String(tpl.prefixLen),
+      tplSuffixLen: String(tpl.suffixLen),
+      scale: String(scale),
+      minFill: String(spec.min_fill ?? 1),
+      tip: String(spec.tip ?? 0),
+      activeFrom: String(spec.active_from ?? 0),
+      levelSize: String(t.levelSize),
+      total: String(amount),
+      amountLeft: String(amount),
+      extensionCommitment: tok.extension_commitment ?? '0'.repeat(64),
+      table: t.table.map(String),
+    },
+  };
 }
 
 /** Seeds one order (open, or `history: 'filled' | 'cancelled'`). Returns the order record. */

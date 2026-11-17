@@ -83,6 +83,7 @@ record   = type:u8 length:u16le value[length]
 | `0x82` | NOTE | no | UTF-8 client tag, at most 64 bytes (for example `kob-web/0.1`) |
 | `0x83` | SWEEP | no | a maker's sweep in place (any version): `output:LEB128 input:LEB128`, below |
 | `0x84` | RELEASE | no | the KOB release of the build that wrote the payload (any version): `major:LEB128 minor:LEB128 patch:LEB128`, below |
+| `0x85` | GENESIS | no | the token states of a genesis that also places an order (a `KobCurveAsk` created in its token's genesis): the `KOBG` payload bytes (`genesis_states`); decoders keep it as an unknown optional record |
 
 ### Compact state
 
@@ -98,6 +99,10 @@ field     = LEB128                          an 8-byte field (an integer): its 8 
                                             template's 32-byte fields): then it is all zero and not spelled
           | n bytes                         any other field (the committed exit state of an if-done entry), raw
 ```
+
+`KobCurveAsk` ends with its price table, an `int[]` of any length: its fixed fields are spelled as above, then
+`count:LEB128` and one LEB128 per entry; the decoder rebuilds the minimal push of `8·count` bytes
+(`docs/design/curve-ask-spec.md` §5).
 
 The decoder rebuilds the exact state span (push headers from the template, zero fields from the mask). It rejects a
 mask bit beyond the template's 32-byte fields and an all-zero 32-byte field spelled out instead of masked.
@@ -189,15 +194,16 @@ and the record's family is the family of the pair's base token A.
 | Code | Template | State bytes | Custody part | Pinned template hash |
 |---|---|---|---|---|
 | `0x01` | `KobAsk` | 276 | yes (`extensionCommitment`) | `070bb3b2…63b887c` |
-| `0x02` | `KobBid` | 321 (legacy 285) | no | `f5dc8334…561a4c5` |
-| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `81c45232…a8b284b` |
-| `0x04` | `KobCondBid` | 417 (legacy 381) | no | `8c0e8f06…036c486` |
-| `0x05` | `KobIfdBid` | 585 | no | `6ffb9b53…30cd80d` |
-| `0x06` | `KobIfdAsk` | 621 (legacy 594) | yes (its exit's `extensionCommitment`) | `001104ca…5882e97` |
+| `0x02` | `KobBid` | 321 (legacy 285) | no | `f5dc8334…90c64d8` |
+| `0x03` | `KobCondAsk` | 363 | yes (`extensionCommitment`) | `81c45232…44f117a` |
+| `0x04` | `KobCondBid` | 417 (legacy 381) | no | `8c0e8f06…31542c3` |
+| `0x05` | `KobIfdBid` | 585 | no | `6ffb9b53…a5bb6ee` |
+| `0x06` | `KobIfdAsk` | 621 (legacy 594) | yes (its exit's `extensionCommitment`) | `001104ca…d5c8f66` |
 | `0x07` | reserved | — | — | never reused: a record of this kind is refused |
-| `0x08` | `KobPair` (pair order, token A KCC-20) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…df85980` |
-| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…d5e9c08` |
-| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…971a2f3` |
+| `0x08` | `KobPair` (pair order, token A KCC-20) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…59a6ec8` |
+| `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…2cd34ff` |
+| `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…d424315` |
+| `0x0b` | `KobCurveAsk` (stepped sell curve, KCC-20 only) | 214 to 216 + 8 per level | yes (`extensionCommitment`); unbound (`tokenCovId` 0): its token is the custody output's, a genesis of this transaction | `1e9bee3b…65d46d8b9` |
 
 KRON (family `0x02`), same kind codes:
 
@@ -210,9 +216,9 @@ KRON (family `0x02`), same kind codes:
 | `0x05` | `KobIfdBidKron` | 552 | no | `644eeb9c…46b41ed` |
 | `0x06` | `KobIfdAskKron` | 561 | yes (token output only) | `2557e020…34a7a21` |
 | `0x07` | reserved | — | — | refused |
-| `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…df85980` |
-| `0x09` | `KobCondPair` (token A KRON; the same template) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…d5e9c08` |
-| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…971a2f3` |
+| `0x08` | `KobPair` (token A KRON; the same template as in family `0x01`) | 483 (legacy 447) | the custody of S (`sExt`) | `d3d775de…59a6ec8` |
+| `0x09` | `KobCondPair` (token A KRON; the same template) | 579 (legacy 543) | the custody of S (`sExt`) | `216cdcb5…2cd34ff` |
+| `0x0a` | `KobIfdPair` (token A KRON; the same template) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `1208cd40…d424315` |
 
 Codes `0x01` to `0x06` of family `0x02` also name the delivery id_type 0 builds of the KRON kinds (`KobAskKronD0` ..
 `KobIfdAskKronD0`, testnet only: the same state layouts, maker deliveries of KRON id_type 0, for a token program whose holders are
@@ -243,7 +249,7 @@ the replacement at output 0 as well. Day orders: `kob_protocol::defaults::day_or
 output        LEB128    index of the continuation output (the amended order)
 input         LEB128    index of the order input the maker's cancel spends
 family        u8        token family, as ORDER
-kind          u8        0x01 (KobAsk / KobAskKron) or 0x02 (KobBid / KobBidKron): only plain asks and bids are amended in place
+kind          u8        0x01 (KobAsk / KobAskKron), 0x02 (KobBid / KobBidKron) or 0x0b (KobCurveAsk): only these are amended in place
 flags         u8        bit 0: a deadline follows; every other bit must be 0
 state                   the amended state span, compact (above)
 deadline      LEB128    when flag bit 0: day-order deadline, as ORDER

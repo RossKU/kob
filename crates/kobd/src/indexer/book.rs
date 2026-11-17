@@ -327,9 +327,14 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         // Tokens of the order itself (a pair order has A and B) versus foreign strays (any other
         // token, `docs/spec/matcher.md` 1.2).
         let pair = state.pair_tokens();
+        // an unbound curve's token is its custody row's
+        let named = match own.iter().find(|t| t.custody).and_then(|t| t.utxo.covenant_id) {
+            Some(tk) if crate::model::is_unbound(&state) => crate::model::bound(&state, tk),
+            _ => state.clone(),
+        };
         let mine = |t: &OwnedToken| {
             let tok = t.utxo.covenant_id;
-            tok == Some(state.token_cov_id()) || pair.is_some_and(|p| tok == Some(p.b.cov_id))
+            tok == Some(named.token_cov_id()) || pair.is_some_and(|p| tok == Some(p.b.cov_id))
         };
         let (own, foreign_tokens): (Vec<_>, Vec<_>) = own.into_iter().partition(|t| mine(t));
         let mut foreign: Vec<kob_protocol::build::ForeignStrays> = vec![];
@@ -376,7 +381,7 @@ fn live_orders(conn: &Connection, listed: bool) -> DbResult<Vec<ListedOrder>> {
         };
         // The custodies in `AnyState::custodies` order: `custody` the first, `custody_b` the
         // second, which is a sell-first pair entry's B prefund.
-        let order_of: Vec<[u8; 32]> = state.custodies().iter().map(|c| c.0).collect();
+        let order_of: Vec<[u8; 32]> = named.custodies().iter().map(|c| c.0).collect();
         let mut custody = custody;
         custody.sort_by_key(|t| t.utxo.covenant_id.and_then(|c| order_of.iter().position(|x| *x == c)).unwrap_or(usize::MAX));
         let mut custody = custody.into_iter();

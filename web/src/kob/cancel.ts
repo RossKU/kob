@@ -30,7 +30,7 @@ import { boughtOf } from './bought';
 import type { ExpectedSigning } from './decode';
 import {
   asOrderState, baseKind, big, custodiesOf, extensionOf, familyOfKind, isKind, pairExtFor, pairFactsOf, quoteCovIdOf, tokenCovIdOf,
-  type CustodyFact,
+  curveFactsOf, type CustodyFact,
 } from './order-facts';
 import { pairOfView } from './pair-view';
 import type { PlanIssue } from './plan-types';
@@ -196,7 +196,7 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   const prefund = cs.length > 1 ? live(1) : null;
   // Strays of any other token are foreign. They are kept apart, with the program their state was
   // proven under.
-  const split = splitStrayViews((view.strays ?? []).filter((s) => !s.spent), st);
+  const split = splitStrayViews((view.strays ?? []).filter((s) => !s.spent), st, curveFactsOf(st)?.unbound ? (custody?.covenantId ?? view.token ?? null) : null);
   const custodyExt = (token: Hex): Hex | null => {
     const k = cs.findIndex((c) => c.token === token);
     const u = k === 0 ? custody : k === 1 ? prefund : null;
@@ -238,8 +238,9 @@ export interface UnprovenStray { outpoint: string; token: Hex; amount: bigint }
  * the program's family owned by the order id. Anything else is `unproven`, because nothing could
  * build its spend.
  */
-export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
-  const ownTokens = ownTokensOf(st);
+export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState, unboundToken: Hex | null = null): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
+  // an unbound curve names no token in its state: its own token is its custody's
+  const ownTokens = unboundToken ? [unboundToken] : ownTokensOf(st);
   const own: TokenUtxoView[] = [];
   const foreign: ForeignStrays[] = [];
   const unproven: UnprovenStray[] = [];
@@ -653,7 +654,9 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (st.state.maker !== env.maker) {
     return { error: [issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can cancel it', { covenantId: snap.covenantId })] };
   }
-  const cs = custodiesOf(st);
+  // an unbound curve (created in its token's genesis) names no token in its state: its token is its custody's
+  const unbound = curveFactsOf(st)?.unbound ? (snap.custody?.covenantId ?? null) : null;
+  const cs = custodiesOf(st).map((c) => (unbound ? { ...c, token: unbound } : c));
   if ((cs[0]?.amount ?? 0n) > 0n && !snap.custody) {
     return { error: [issue('cancel.custody-missing', 'error', 'the order\'s custody token UTXO is unknown: refresh the order from the indexer or node', { covenantId: snap.covenantId })] };
   }
@@ -666,7 +669,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (bf && !bc) {
     return { error: [issue('cancel.bought-missing', 'error', 'the token UTXO holding what this order bought is unknown: refresh the order from the indexer', { covenantId: snap.covenantId })] };
   }
-  const toks = ownTokenFacts(st);
+  const toks = ownTokenFacts(st).map((t) => (unbound ? { ...t, covenantId: unbound } : t));
   const ownIds = toks.map((t) => t.covenantId);
   // A stray of another token, none of the order's own, cannot join the order's own transfers. The
   // builder would refuse the whole cancel, so the stray is left behind and reported instead of
@@ -837,6 +840,12 @@ export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens
   // keep exact. Strays stay where they are, so only a cancel-replace sweeps them.
   const foreign = (order.foreign ?? []).length > 0;
   if (isKind(old, 'KobBid')) return !order.strays.length && !foreign && !order.straysUnknown && (extraTokens?.length ?? 0) === 0 && AMEND_KEEPS_BID.every((k) => a[k] === b[k]);
+  // a curve is amended in place whatever its strays (its custody never moves); an unbound one is bound to its custody's token
+  if (old.kind === 'KobCurveAsk') {
+    if (!order.custody || (extraTokens?.length ?? 0) > 0) return false;
+    const token = /^0{64}$/.test(a.tokenCovId!) ? order.custody.covenantId : a.tokenCovId;
+    return b.tokenCovId === token && AMEND_KEEPS.every((k) => k === 'tokenCovId' || a[k] === b[k]) && a.total === b.total;
+  }
   if (!isKind(old, 'KobAsk')) return false;
   if (order.strays.length || foreign || (extraTokens?.length ?? 0) > 0 || !order.custody) return false;
   return AMEND_KEEPS.every((k) => a[k] === b[k]);
@@ -856,6 +865,7 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
   const topUp = replacement.value > big(order.order.amount);
   const make = (funding: KeyUtxo[]): CancelRequest => ({
     action: 'amendOrder', order: order.order, amended: replacement.order, value: funding.length || topUp ? replacement.value.toString() : null, funding,
+    ...(curveFactsOf(order.order.state)?.unbound && order.custody ? { custody: order.custody } : {}),
     change: env.changeTo ?? null, lockTime: '0', deadline: replacement.deadline != null ? replacement.deadline.toString() : null, records: [], fee: feeOpts(env),
   });
   const r = buildWithFunding(env, make);
@@ -873,7 +883,10 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
   return {
     ok: true, issues: [inPlaceIssue, ...r.issues],
     request: r.request, built: r.built, cancelIds: [order.covenantId],
-    expected: withChange(env, r.built, { cancelIds: [order.covenantId], orders: [replacement.order], kasLocked }),
+    expected: withChange(env, r.built, {
+      cancelIds: [order.covenantId], orders: [replacement.order], kasLocked,
+      ...(curveFactsOf(order.order.state)?.unbound && order.custody?.covenantId ? { binds: { [order.covenantId]: order.custody.covenantId } } : {}),
+    }),
     tokensReturned: 0n, kasReleased: big(order.order.amount), fundingUsed: r.fundingUsed,
   };
 }
@@ -895,7 +908,9 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   const only = retiredOnly(order);
   if (only) return only;
   if (rep.state.maker !== env.maker) return failed([issue('cancel.replacement-wrong-maker', 'error', 'the replacement must belong to the wallet key')], [order.covenantId]);
-  if (tokenCovIdOf(rep) !== tokenCovIdOf(old) || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
+  // an unbound curve's token is its custody's (its amend binds it)
+  const oldToken = curveFactsOf(old)?.unbound ? (order.custody?.covenantId ?? tokenCovIdOf(old)) : tokenCovIdOf(old);
+  if (tokenCovIdOf(rep) !== oldToken || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
     return failed([issue('cancel.replacement-wrong-token', 'error', 'the replacement must trade the same token (a pair order: the same pair) as the cancelled order')], [order.covenantId]);
   }
   if (!opts.noInPlace && amendsInPlace(order, rep, extraTokens)) return planAmendInPlace(env, order, replacement);

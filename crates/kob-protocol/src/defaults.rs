@@ -95,6 +95,12 @@ pub fn default_min_fill(amount: i64, price: i64, scale: i64) -> i64 {
     want.clamp(1, amount as i128) as i64
 }
 
+/// Wallet default of a curve's `minFill`: [`default_min_fill`] at its first level, at most one level, so a fill can always
+/// reach it whatever level the curve stands at (one fill crosses at most 8 levels).
+pub fn curve_min_fill(amount: i64, first_price: i64, level_size: i64, scale: i64) -> i64 {
+    default_min_fill(amount, first_price, scale).min(level_size.max(1))
+}
+
 /// Wallet default of an if-done entry's `minFill`: `ceil(amount / 4)`, at most four fills.
 ///
 /// An entry prefunds a delivery and an exit carrier per possible fill, so a minimum of
@@ -256,6 +262,9 @@ pub fn day_order(d0: u64, t0: u64, rate_milli: Option<u64>) -> DayOrder {
     let margin = (delta * r).div_ceil(100_000);
     DayOrder { expiry_daa: d0 + estimate + margin, deadline }
 }
+
+mod curve;
+pub use curve::*;
 
 #[cfg(test)]
 mod tests {

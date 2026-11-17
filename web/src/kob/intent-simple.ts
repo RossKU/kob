@@ -75,6 +75,19 @@ export interface LimitIntent extends SimpleBase {
 }
 
 /**
+ * A stepped sell curve (`KobCurveAsk`, docs/design/curve-ask-spec.md): one order, one custody, sold level by level along `table` (the
+ * ticket's sell ladder placed as one order). KCC-20 only. No expiry: it rests until sold out or cancelled.
+ */
+export interface CurveIntent extends SimpleBase {
+  type: 'curve';
+  side: 'sell';
+  /** Base units per level; `amount` is the whole curve. */
+  levelSize: bigint;
+  /** Sompi per whole token of each level, non-decreasing. */
+  table: bigint[];
+}
+
+/**
  * IOC or FAK (tif 1). It fills what crosses now and returns the rest. The default life is 300 DAA,
  * at most 600.
  */
@@ -212,10 +225,10 @@ export interface DutchIntent extends SimpleBase {
 }
 
 /** Every plain intent. */
-export type SimpleIntent = LimitIntent | IocIntent | FokIntent | MarketIntent | StreamingIntent | CloseIntent | TwapIntent | DcaIntent | DutchIntent;
+export type SimpleIntent = LimitIntent | IocIntent | FokIntent | MarketIntent | StreamingIntent | CloseIntent | TwapIntent | DcaIntent | DutchIntent | CurveIntent;
 
 /** Every `type` planSimple handles. */
-export const SIMPLE_TYPES: readonly SimpleIntent['type'][] = ['limit', 'ioc', 'fok', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch'];
+export const SIMPLE_TYPES: readonly SimpleIntent['type'][] = ['limit', 'ioc', 'fok', 'market', 'streaming', 'close', 'twap', 'dca', 'dutch', 'curve'];
 
 /** The loose base shape that every simple intent has in common. */
 export interface SimpleIntentBase { type: string; side?: 'sell' | 'buy'; amount?: bigint }

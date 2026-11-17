@@ -3,7 +3,15 @@
 import {
   formatUnits, parseDecimal, registryEntryFromIssue, type IssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice, type IssueToken,
 } from '../../kob/issue';
+import {
+  curveNumbers, curveSteps, curveTable, defaultSaleForm, defaultSalePrice, keepPercentText, parsePercent, parseSale, saleSplit,
+  type CurveNumbers, type CurveStep, type ParsedSale, type SaleForm,
+} from '../../kob/curve';
 import type { PlanIssue } from '../../kob/plan-types';
+import type { KobWasm } from '../../kob/wasm';
+import { curveNumbersOfState } from '../../kob/curve';
+import type { CreationRecord } from '../../data/creations';
+import type { PlannedSale } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
 import { groupDigits, shortId } from '../kit/format';
 
@@ -40,10 +48,24 @@ export interface IssueUiState {
   /** X (Twitter) and Telegram accounts: a handle or an address */
   x: string;
   telegram: string;
+  /** "After creation": keep all, sell at one price, sell on a curve */
+  sale: SaleUi;
+}
+
+/**
+ * The sale as typed. "Keep in my wallet" and the amount for sale are linked: the field typed last (`lead`) is kept and the other one derived
+ * from the wallet's share, so a later change of the supply moves the derived one.
+ */
+export interface SaleUi extends SaleForm {
+  lead: 'keep' | 'amount';
+}
+
+export function emptySaleUi(): SaleUi {
+  return { ...defaultSaleForm(), lead: 'keep' };
 }
 
 export function emptyUiState(): IssueUiState {
-  return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '' };
+  return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '', sale: emptySaleUi() };
 }
 
 // ------------------------------------------------------------------------------------------------ small filters
@@ -141,6 +163,94 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
     website: state.website,
     ...(state.x.trim() ? { x: state.x.trim() } : {}),
     ...(state.telegram.trim() ? { telegram: state.telegram.trim() } : {}),
+    ...(state.sale.mode !== 'keep' ? { sale: saleFormOf(state.sale) } : {}),
+  };
+}
+
+/** The planner's sale: the amount only when it was typed last (else the keep percent decides). */
+export function saleFormOf(u: SaleUi): SaleForm {
+  const { lead, ...f } = u;
+  return { ...f, amount: lead === 'amount' ? f.amount.trim() : '' };
+}
+
+/** The wallet's share of the supply, base units (null when unknown): what a sale takes from. */
+export function saleShareOf(state: IssueUiState): bigint | null {
+  const s = sharesOf(state);
+  if (s.remaining === null || s.remaining <= 0n || !s.othersComplete) return null;
+  return s.remaining;
+}
+
+/** The two linked fields as shown: the one typed last as typed, the other derived. */
+export function linkedSaleFields(state: IssueUiState): { keepPct: string; amount: string } {
+  const u = state.sale;
+  const share = saleShareOf(state);
+  const d = parseDecimalsText(state.decimals);
+  if (share === null || Number.isNaN(d)) return { keepPct: u.keepPct, amount: u.amount };
+  if (u.lead === 'amount') {
+    const a = parseDecimal(u.amount, d);
+    return { keepPct: 'value' in a ? keepPercentText(share, a.value) : u.keepPct, amount: u.amount };
+  }
+  const k = parsePercent(u.keepPct);
+  return { keepPct: u.keepPct, amount: 'bps' in k ? formatUnits(saleSplit(share, k.bps).sell, d) : u.amount };
+}
+
+/** The sale of a creation finished later (its record): the curve from its state, or the one-price sale it offers to place. */
+export function saleOfRecord(rec: Pick<CreationRecord, 'curve' | 'askSale'>): PlannedSale | undefined {
+  if (rec.curve) {
+    const st = rec.curve.state.state;
+    const numbers = curveNumbersOfState(st);
+    const table = st.table.map((p) => BigInt(p));
+    return {
+      mode: 'curve', sell: BigInt(st.total), keep: 0n, output: rec.curve.custody, total: numbers.total,
+      curve: { table: { levelSize: BigInt(st.levelSize), table, realised: numbers.total }, minFill: BigInt(st.minFill), numbers },
+    };
+  }
+  if (rec.askSale) {
+    const sell = BigInt(rec.askSale.sell);
+    return { mode: 'ask', sell, keep: 0n, output: 0, total: 0n, price: BigInt(rec.askSale.price) };
+  }
+  return undefined;
+}
+
+/** What the sale section shows while the form is typed: the split, and for a curve its table, steps and numbers. */
+export interface SalePreview {
+  issues: PlanIssue[];
+  parsed: ParsedSale | null;
+  /** whole tokens, grouped */
+  sellText: string;
+  keepText: string;
+  curve: { steps: CurveStep[]; numbers: CurveNumbers } | null;
+  /** a curve that could not be built (kob-wasm's reason) */
+  curveError: string | null;
+  /** the one-price default (sompi per whole token) for the amount */
+  defaultPrice: bigint | null;
+}
+
+export function salePreview(kob: KobWasm, state: IssueUiState): SalePreview | null {
+  if (state.sale.mode === 'keep') return null;
+  const d = parseDecimalsText(state.decimals);
+  const share = saleShareOf(state);
+  if (Number.isNaN(d)) return { issues: [], parsed: null, sellText: '', keepText: '', curve: null, curveError: null, defaultPrice: null };
+  const form = saleFormOf(state.sale);
+  // the price field may be blank: the default is shown in it, so the preview uses it
+  const sellOnly = parseSale({ ...form, mode: 'ask', price: '1' }, share, d).parsed;
+  const defaultPrice = sellOnly ? defaultSalePrice(sellOnly.sell, 10n ** BigInt(d)) : null;
+  const { issues, parsed } = parseSale(form.mode === 'ask' && form.price.trim() === '' && defaultPrice ? { ...form, price: formatUnits(defaultPrice, 8) } : form, share, d);
+  const scale = 10n ** BigInt(d);
+  let curve: SalePreview['curve'] = null;
+  let curveError: string | null = null;
+  if (parsed && parsed.mode === 'curve') {
+    try {
+      const t = curveTable(kob, { amount: parsed.sell, levels: parsed.levels, total: parsed.total, multipleMilli: parsed.multipleMilli, scale });
+      curve = { steps: curveSteps(t.levelSize, t.table, parsed.sell), numbers: curveNumbers(t, parsed.sell, scale) };
+    } catch (e) {
+      curveError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return {
+    issues, parsed, curve, curveError, defaultPrice,
+    sellText: parsed ? humanAmount(parsed.sell, d) : '',
+    keepText: parsed ? humanAmount(parsed.keep, d) : '',
   };
 }
 
@@ -250,6 +360,8 @@ export interface HolderView {
   /** whole tokens with grouping */
   human: string;
   isWallet: boolean;
+  /** the custody of the curve this genesis places */
+  isCurve?: boolean;
 }
 
 export interface ReviewSummary {
@@ -268,9 +380,10 @@ export interface ReviewSummary {
   outputCount: number;
 }
 
-export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, walletKey: Hex | null): HolderView[] {
+export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, walletKey: Hex | null, curveId?: Hex | null): HolderView[] {
   const me = walletKey?.toLowerCase() ?? null;
   return token.outputs.map((o) => ({
+    ...(curveId && o.ownerScheme === 4 && o.owner === curveId ? { isCurve: true } : {}),
     index: o.index,
     owner: o.owner,
     ownerShort: shortId(o.owner, 14),
@@ -282,7 +395,7 @@ export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, wal
 }
 
 /** What the review shows before the pre-sign screen: from the plan, so the numbers are the ones that will be signed. */
-export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee'>, walletKey: Hex | null): ReviewSummary {
+export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve'>, walletKey: Hex | null): ReviewSummary {
   const { token } = plan;
   const supply = BigInt(token.supply);
   const carrierEach = BigInt(token.carrier);
@@ -292,12 +405,12 @@ export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee'>, walletKey:
     decimals: token.decimals,
     supplyBase: supply,
     supplyHuman: humanAmount(supply, token.decimals),
-    holders: holderViews(token, walletKey),
+    holders: holderViews(token, walletKey, plan.curve?.covenantId ?? null),
     carrierEach,
-    carrierTotal: carrierEach * BigInt(token.outputs.length),
+    carrierTotal: carrierEach * BigInt(token.outputs.length) + (plan.curve ? BigInt(plan.curve.carrier) : 0n),
     fee: plan.fee,
     program: token.program,
-    outputCount: token.outputs.length,
+    outputCount: token.outputs.length + (plan.curve ? 1 : 0),
   };
 }
 

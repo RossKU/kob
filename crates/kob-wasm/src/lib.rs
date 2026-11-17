@@ -560,7 +560,31 @@ pub mod api {
             AnyState::KobPair(s) => s.fill_ok(n),
             AnyState::KobCondPair(s) => s.fill_ok(n),
             AnyState::KobIfdPair(s) => s.fill_ok(n),
+            AnyState::KobCurveAsk(s) => s.fill_ok(n),
         })
+    }
+    fn curve(state: &str) -> R<state::CurveAskState> {
+        match any(state)? {
+            AnyState::KobCurveAsk(s) => Ok(s),
+            o => wrong(&o, "KobCurveAsk"),
+        }
+    }
+    /// Curve: the maker's proceeds of a fill of `n` (the covenant's walk), none past 8 levels.
+    pub fn curve_proceeds(state: &str, n: &str) -> R<Option<String>> {
+        Ok(opt(curve(state)?.proceeds(num("n", n)?)))
+    }
+    /// Curve: the most base units `budget` sompi buy in one fill.
+    pub fn curve_max_for_budget(state: &str, budget: &str) -> R<String> {
+        Ok(curve(state)?.max_for_budget(num("budget", budget)?).to_string())
+    }
+    /// Curve: the most one fill takes from here (the rest of 8 levels).
+    pub fn curve_max_fill(state: &str) -> R<String> {
+        Ok(curve(state)?.max_fill().to_string())
+    }
+    /// Curve: the default table (`defaults::curve_table`) of a `CurveSpec` JSON.
+    pub fn curve_table(spec: &str) -> R<String> {
+        let spec: defaults::CurveSpec = parse("spec", spec)?;
+        out(&defaults::curve_table(&spec).map_err(|e| e.to_string())?)
     }
     /// Conditional ask: least proceeds of `n` at a leg price
     /// (`ceil(n * (legPrice - tip) / scale)`).
@@ -1615,6 +1639,31 @@ pub fn bid_escrow(state: &str, amount: &str, fills: &str) -> Result<Option<Strin
 #[wasm_bindgen(js_name = fillOk)]
 pub fn fill_ok(state: &str, n: &str, value: &str) -> Result<bool, JsError> {
     js(api::fill_ok(state, n, value))
+}
+
+/// Curve: the maker's proceeds of a fill of `n` (none past 8 levels or the table).
+#[wasm_bindgen(js_name = curveProceeds)]
+pub fn curve_proceeds(state: &str, n: &str) -> Result<Option<String>, JsError> {
+    js(api::curve_proceeds(state, n))
+}
+
+/// Curve: the most base units `budget` sompi buy in one fill (a market buy).
+#[wasm_bindgen(js_name = curveMaxForBudget)]
+pub fn curve_max_for_budget(state: &str, budget: &str) -> Result<String, JsError> {
+    js(api::curve_max_for_budget(state, budget))
+}
+
+/// Curve: the most one fill takes from here.
+#[wasm_bindgen(js_name = curveMaxFill)]
+pub fn curve_max_fill(state: &str) -> Result<String, JsError> {
+    js(api::curve_max_fill(state))
+}
+
+/// Curve: the default price table of `{amount, levels, total, multipleMilli, scale, tip}`
+/// (`docs/design/curve-ask-spec.md` §7): `{levelSize, table, realised}`.
+#[wasm_bindgen(js_name = curveTable)]
+pub fn curve_table(spec: &str) -> Result<String, JsError> {
+    js(api::curve_table(spec))
 }
 
 /// Conditional ask: the least proceeds of `n` at a leg price.

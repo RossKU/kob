@@ -23,6 +23,8 @@ export interface BookRow {
   depthPct: number;
   /** the INVERTED price (tokens per KAS) of a level grouped in the inverted view: shown instead of the inverse of `price` (see `orientation.ts`) */
   inv?: Rational;
+  /** the curve levels (table indexes) at this level: a curve sell order's levels are book levels like any other, marked */
+  curve?: number[];
 }
 
 export interface BookModel {
@@ -50,7 +52,10 @@ export interface BookModel {
  * One price level: `price` sompi per whole token of the market's scale, `amount` base units. `value`: the KAS (sompi) the level's orders are worth at their OWN prices (`amount x price / scale`
  * per ungrouped level, rounded down, summed over a group): a grouped level's `price` is its worst price, so `amount x price` would overstate it. Absent: `amount x price / scale`.
  */
-export interface Level { price: bigint; amount: bigint; orders: number; estimated: boolean; inv?: Rational; value?: bigint }
+export interface Level { price: bigint; amount: bigint; orders: number; estimated: boolean; inv?: Rational; value?: bigint; curve?: number[] }
+
+/** Merges the curve marks of two levels (none stays absent). */
+export const mergeCurve = (a: number[] | undefined, b: number[] | undefined): number[] | undefined => (a || b ? [...(a ?? []), ...(b ?? [])] : undefined);
 
 const isOrder = (r: LevelView | BookOrderView): r is BookOrderView => 'covenant_id' in r;
 
@@ -78,7 +83,10 @@ export function levelsFromView(rows: readonly (LevelView | BookOrderView)[], sca
     let amount: bigint;
     let orders: number;
     let estimated: boolean;
+    let curve: number[] | undefined;
     if (isOrder(r)) {
+      // one row per remaining level of a curve order (`curve_level`): all its rows count as one order
+      if (typeof r.curve_level === 'number') curve = [r.curve_level];
       const left = parseBig(r.amount_left);
       amount = left ?? 0n;
       orders = 1;
@@ -93,7 +101,9 @@ export function levelsFromView(rows: readonly (LevelView | BookOrderView)[], sca
       cur.amount += amount;
       cur.orders += orders;
       cur.estimated ||= estimated;
-    } else by.set(price, { price, amount, orders, estimated });
+      const c = mergeCurve(cur.curve, curve);
+      if (c) cur.curve = c;
+    } else by.set(price, { price, amount, orders, estimated, ...(curve ? { curve } : {}) });
   }
   return [...by.values()].filter((l) => l.amount > 0n);
 }
@@ -134,7 +144,7 @@ export function groupPrice(price: bigint, group: bigint, side: 'ask' | 'bid'): b
 }
 
 /** Merges levels onto grouped prices (amounts and orders add up, estimates stay marked). */
-export function groupLevels<L extends { price: bigint; amount: bigint; orders: number; estimated: boolean; value?: bigint }>(levels: readonly L[], group: bigint, side: 'ask' | 'bid'): Level[] {
+export function groupLevels<L extends { price: bigint; amount: bigint; orders: number; estimated: boolean; value?: bigint; curve?: number[] }>(levels: readonly L[], group: bigint, side: 'ask' | 'bid'): Level[] {
   const by = new Map<bigint, Level>();
   for (const l of levels) {
     const price = groupPrice(l.price, group, side);
@@ -144,7 +154,9 @@ export function groupLevels<L extends { price: bigint; amount: bigint; orders: n
       cur.orders += l.orders;
       cur.estimated ||= l.estimated;
       if (cur.value !== undefined && l.value !== undefined) cur.value += l.value;
-    } else by.set(price, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}) });
+      const c = mergeCurve(cur.curve, l.curve);
+      if (c) cur.curve = c;
+    } else by.set(price, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}), ...(l.curve ? { curve: l.curve } : {}) });
   }
   return [...by.values()];
 }

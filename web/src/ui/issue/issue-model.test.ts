@@ -276,3 +276,22 @@ describe('a real issuance from a model-built form', () => {
     expect(reviewSummary(plan, wallet).carrierTotal).toBe(10n * KAS);
   });
 });
+
+describe('a creation finished later', () => {
+  it('shows the curve of its record as the plan showed it, and the one-price sale it offers', async () => {
+    const { saleOfRecord } = await import('./issue-model');
+    const { defaultSaleForm } = await import('../../kob/curve');
+    const { emptyIssueForm } = await import('../../kob/issue');
+    const { loadKobNode } = await import('../../kob/wasm.node');
+    const real = loadKobNode();
+    const maker = pubkeyOf('33'.repeat(32));
+    const funding: KeyUtxo[] = [{ transactionId: '07'.repeat(32), index: 1, amount: (500n * 100_000_000n).toString(), blockDaaScore: '5000', pubkey: maker }];
+    const p = planIssue(real, { ...emptyIssueForm(), name: 'Curve Coin', ticker: 'CURV', decimals: 8, supply: '1000', sale: { ...defaultSaleForm(), mode: 'curve', keepPct: '10' } }, { funding, maker, network: 'testnet-10' });
+    const s = saleOfRecord({ curve: p.curve! })!;
+    expect(s.mode).toBe('curve');
+    expect(s.sell).toBe(p.sale!.sell);
+    expect(s.curve!.numbers).toEqual(p.sale!.curve!.numbers);
+    expect(saleOfRecord({ askSale: { sell: '5', price: '7' } })).toMatchObject({ mode: 'ask', sell: 5n, price: 7n });
+    expect(saleOfRecord({})).toBeUndefined();
+  });
+});

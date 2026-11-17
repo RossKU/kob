@@ -678,6 +678,7 @@ fn amend_req(c: &Ctx, at: &SignedTx, idx: usize, a: &AskState, amended: AskState
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     }
 }
 

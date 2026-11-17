@@ -76,6 +76,15 @@ impl ListedOrder {
         self.order.state.clone().into_family(kob_protocol::family::Family::Kcc20)
     }
 
+    /// The state with its token named: an unbound curve takes its custody's token
+    /// (`crate::model::bound`). Builders take `order.state` itself.
+    pub fn named_state(&self) -> AnyState {
+        match self.custody.as_ref().and_then(|c| c.utxo.covenant_id) {
+            Some(t) => crate::model::bound(&self.order.state, t),
+            None => self.order.state.clone(),
+        }
+    }
+
     /// Covenant id of the order.
     pub fn id(&self) -> CovId {
         self.order.utxo.covenant_id.unwrap_or([0; 32])
@@ -97,7 +106,14 @@ impl ListedOrder {
         if crate::sanity::check(&self.order.state).is_err() {
             return false;
         }
-        let want: Vec<([u8; 32], i64)> = self.order.state.custodies().into_iter().filter(|c| c.1 != 0).collect();
+        // an unbound curve takes only a custody of its own genesis transaction
+        if crate::model::is_unbound(&self.order.state)
+            && self.custody.as_ref().is_none_or(|c| c.utxo.transaction_id != self.order.utxo.transaction_id)
+        {
+            return false;
+        }
+        let named = self.named_state();
+        let want: Vec<([u8; 32], i64)> = named.custodies().into_iter().filter(|c| c.1 != 0).collect();
         let have: Vec<&TokenUtxo> = self.custody.iter().chain(self.custody_b.iter()).collect();
         if want.len() != have.len() || (self.custody.is_none() && self.custody_b.is_some()) {
             return false;
@@ -107,8 +123,8 @@ impl ListedOrder {
                 && c.state.owner() == self.id()
                 && c.state.is_covenant_owned()
                 && c.state.is_plain()
-                && Some(c.state.family()) == custody_family(&self.order.state, &token)
-                && (c.state.family() != Family::Kcc20 || self.order.state.custody_ext(token) == Some(c.state.extension()))
+                && Some(c.state.family()) == custody_family(&named, &token)
+                && (c.state.family() != Family::Kcc20 || named.custody_ext(token) == Some(c.state.extension()))
                 && c.utxo.covenant_id == Some(token)
                 && !self.strays.iter().any(|s| outpoint(&s.utxo) == outpoint(&c.utxo))
         }) && self.bought_ok()
@@ -154,6 +170,7 @@ impl ListedOrder {
             AnyState::KobCondBid(s) | AnyState::KobCondBidKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdBid(s) | AnyState::KobIfdBidKron(s) => Some(s.extension_commitment),
             AnyState::KobIfdAsk(s) | AnyState::KobIfdAskKron(s) => s.exit().ok().map(|e| e.extension_commitment),
+            AnyState::KobCurveAsk(s) => Some(s.extension_commitment),
             _ => self.custody.as_ref().map(|c| c.state.extension()),
         }
     }
@@ -227,7 +244,7 @@ impl Market {
 
 /// The book an order belongs to (None for a pair order or an order with no known extension).
 pub fn book_key(o: &ListedOrder) -> Option<BookKey> {
-    let s = &o.order.state;
+    let s = &o.named_state();
     // A pair order quotes token B, not KAS: it belongs to no KAS book (`matcher::pair`).
     if s.is_pair() {
         return None;
