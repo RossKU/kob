@@ -112,7 +112,7 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
   [
     F('amount', 'amount'), F('price', 'price'), F('tip', 'tip'), F('minFill', 'amount'),
     F('lifetime', 'select', ['gtc', 'gtd', 'day']), F('lifetimeAt', 'datetime'), F('activeFrom', 'datetime'),
-    F('crossing', 'select', ['auction', 'limit', 'reject']), F('maxFills', 'int'),
+    F('crossing', 'select', ['take', 'auction', 'limit', 'reject']), F('maxFills', 'int'), F('direct', 'select', ['take', 'order']), F('tipAuto', 'bool'),
     F('life', 'seconds'), F('slippageBps', 'percent'), F('auction', 'seconds'), F('allOrNothing', 'bool'),
     F('displayedPrice', 'price'), F('toleranceBps', 'percent'),
     F('sliceAmount', 'amount'), F('interval', 'minutes'), F('priceEnd', 'price'), F('sliceAuction', 'seconds'), F('duration', 'minutes'), F('stepDaa', 'int'),
@@ -131,7 +131,9 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
 /** Wallet defaults of matcher.md section 10 / defaults.rs, shown as the prefilled value (an empty box always means "the default"). */
 export const FIELD_DEFAULTS: Readonly<Record<string, string>> = {
   lifetime: 'gtc',
-  crossing: 'auction',
+  // a crossing order fills from the book from the wallet (kob/take.ts); a pair order has no such fill (its auction)
+  crossing: 'take',
+  direct: 'take',
   life: '30',
   slippageBps: '3',
   auction: '20',
@@ -289,16 +291,20 @@ export function layoutOf(form: TicketForm, ctx?: Pick<TicketCtx, 'quoteDecimals'
   const ladder = (): string[] => (Number((v['ladder.levels'] ?? '').trim()) > 1 ? ['ladder.levels', 'ladder.step'] : ['ladder.levels']);
   // the priority tip is the first advanced option of every type (its default is fine for most orders)
   // the minimum fill is an advanced option of every type (its default is shown in the disclosure; IOC / FOK / market orders: 1 base unit)
+  // a KAS market: the tip can be the executors' (kob/fill-tip.ts), and an immediate order fills from the book directly (kob/take.ts)
+  const kas = !isPairCtx(ctx);
+  const tip = kas ? ['tip', 'tipAuto'] : ['tip'];
+  const direct = kas ? ['direct'] : [];
   switch (form.type) {
-    case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), ...life()], advanced: ['tip', 'minFill', 'activeFrom', 'crossing', ...fills] };
+    case 'limit': return { main: ['amount', 'price', 'ladder.on', ...(v['ladder.on'] === 'true' ? LIMIT_LADDER : []), ...life()], advanced: [...tip, 'minFill', 'activeFrom', 'crossing', ...fills] };
     case 'ioc':
-    case 'fok': return { main: ['amount', 'price'], advanced: ['tip', 'minFill', 'life', 'activeFrom'] };
-    case 'market': return { main: ['amount', 'slippageBps'], advanced: ['tip', 'minFill', ...(marketFills(form, ctx) ? ['maxFills'] : []), 'auction', 'life', 'allOrNothing'] };
+    case 'fok': return { main: ['amount', 'price'], advanced: [...tip, 'minFill', 'life', 'activeFrom', ...direct] };
+    case 'market': return { main: ['amount', 'slippageBps'], advanced: [...tip, 'minFill', ...(marketFills(form, ctx) ? ['maxFills'] : []), 'auction', 'life', 'allOrNothing', ...direct] };
     case 'streaming': return { main: ['amount', 'displayedPrice', 'toleranceBps'], advanced: ['tip', 'minFill', 'allOrNothing', 'auction', 'life'] };
     case 'close': return { main: ['amount'], advanced: ['tip', 'slippageBps', 'auction', 'life', 'allOrNothing'] };
     case 'twap':
-    case 'dca': return { main: ['amount', 'sliceAmount', 'interval', 'price'], advanced: ['tip', 'minFill', 'priceEnd', 'sliceAuction', ...life(), 'activeFrom', ...(form.type === 'dca' ? ['maxFills'] : [])] };
-    case 'dutch': return { main: ['amount', 'price', 'priceEnd', 'duration'], advanced: ['tip', 'minFill', 'stepDaa', ...life(), 'activeFrom', ...fills] };
+    case 'dca': return { main: ['amount', 'sliceAmount', 'interval', 'price'], advanced: [...tip, 'minFill', 'priceEnd', 'sliceAuction', ...life(), 'activeFrom', ...(form.type === 'dca' ? ['maxFills'] : [])] };
+    case 'dutch': return { main: ['amount', 'price', 'priceEnd', 'duration'], advanced: [...tip, 'minFill', 'stepDaa', ...life(), 'activeFrom', ...fills] };
     case 'stopMarket': return { main: ['amount', 'stop'], advanced: ['tip', 'minFill', 'slipBps', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
     case 'stopLimit': return { main: ['amount', 'stop', 'limit'], advanced: ['tip', 'minFill', ...STOP_KNOBS, ...life(), 'activeFrom', 'carrier', ...fills] };
     case 'trailingStop':
@@ -665,17 +671,25 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     return dropUndefined({ step, gap, wait, expectedUpdates: expectedUpdates === undefined ? undefined : Number(expectedUpdates) });
   };
 
+  // a crossing limit fills from the book by default; a pair order has no such fill: its default (the auction)
+  const crossingOf = () => {
+    const c = r.pick('crossing', ['take', 'auction', 'limit', 'reject'] as const) ?? 'take';
+    return isPairCtx(ctx) && c === 'take' ? undefined : c;
+  };
+  // an IOC, FOK or market order fills from the book unless the covenant order is chosen (a KAS market only)
+  const takeOf = (): { take?: boolean } => (isPairCtx(ctx) ? {} : { take: r.pick('direct', ['take', 'order'] as const) !== 'order' });
+
   let intent: Record<string, unknown> | null = null;
   switch (type) {
     case 'limit':
-      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: r.pick('crossing', ['auction', 'limit', 'reject'] as const), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
+      intent = { type, side, amount, minFill, price: r.price('price'), tip, lifetime: lifetimeSimple(), activeFrom: activeFrom(), crossing: crossingOf(), ...(budgetsFills(side, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
       break;
     case 'ioc':
     case 'fok':
-      intent = { type, side, amount, minFill, price: r.price('price'), tip, life: sec('life'), activeFrom: activeFrom() };
+      intent = { type, side, amount, minFill, price: r.price('price'), tip, life: sec('life'), activeFrom: activeFrom(), ...takeOf() };
       break;
     case 'market':
-      intent = { type, side, amount, minFill, tip, ...auctionOpts(), ...(marketFills(form, ctx) ? { maxFills: r.positive('maxFills', false) } : {}) };
+      intent = { type, side, amount, minFill, tip, ...auctionOpts(), ...(marketFills(form, ctx) ? { maxFills: r.positive('maxFills', false) } : {}), ...takeOf() };
       break;
     case 'streaming':
       intent = { type, side, amount, minFill, tip, displayedPrice: r.price('displayedPrice'), toleranceBps: r.bps('toleranceBps') ?? (r.err('toleranceBps', 'required'), undefined), ...auctionOpts(), slippageBps: undefined };
@@ -829,8 +843,9 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   if (i.tip !== undefined) kasTip('tip', i.tip);
   switch (intent.type) {
     case 'limit': price('price', i.price); life(i.lifetime); from(i.activeFrom); put('crossing', i.crossing); put('maxFills', i.maxFills); break;
-    case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); break;
+    case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); if (i.take === false) v.direct = 'order'; break;
     case 'market': case 'close':
+      if (i.take === false) v.direct = 'order';
       bps('slippageBps', i.slippageBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; put('maxFills', i.maxFills); break;
     case 'streaming':
       price('displayedPrice', i.displayedPrice); bps('toleranceBps', i.toleranceBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; break;

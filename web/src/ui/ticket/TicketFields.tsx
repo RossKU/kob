@@ -41,6 +41,8 @@ export interface TicketFieldsProps {
   quoteTicker?: string;
   /** a pair: the tip fields whose typed tip is below what a netting fill needs (pair-common `pairTipBelowDefault`): a hint says a crossing order may wait */
   lowTips?: readonly string[];
+  /** the executor tip option: what the tip it set pays in all (one line under it) */
+  tipAutoNote?: string;
 }
 
 /** What the fields need to speak the shown (inverted) market: the token's name, its scale and a KAS price per whole token to turn amounts into KAS. */
@@ -144,11 +146,14 @@ export function TicketFields(props: TicketFieldsProps) {
         const common = { label, error: e ? errorText(e) : null, 'data-testid': spec.testid, disabled: props.disabled };
 
         if (spec.kind === 'bool') {
+          const note = id === 'tipAuto' && value === 'true' && props.tipAutoNote ? <span class="tk-sub" data-testid="field-tipAuto-total">{props.tipAutoNote}</span> : null;
           return (
-            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
+            <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={note ? <>{note}{helpOf(help)}</> : helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
           );
         }
         if (spec.kind === 'select') {
+          // a pair order is never filled from the wallet: its crossing choices start at the auction
+          const pairNoTake = !!props.quoteTicker && id === 'crossing';
           return (
             <FieldShell key={id} label={label} hint={helpOf(help)} error={common.error}>
               {({ id: cid, labelId, describedBy, invalid }) => (
@@ -157,8 +162,8 @@ export function TicketFields(props: TicketFieldsProps) {
                   labelledBy={labelId}
                   describedBy={describedBy}
                   invalid={invalid}
-                  value={value || FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
-                  options={(spec.options ?? []).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
+                  value={value && !(pairNoTake && value === 'take') ? value : pairNoTake ? 'auction' : FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
+                  options={(spec.options ?? []).filter((o) => !(pairNoTake && o === 'take')).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
                   onChange={(v) => props.onChange(id, v)}
                   data-testid={spec.testid}

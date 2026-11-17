@@ -322,7 +322,7 @@ describe('buildIntent', () => {
 
   it('omits every unset optional so the planner applies the wallet defaults', () => {
     const r = buildIntent(form('limit', 'sell', { amount: '5', price: '1.5' }), CTX);
-    expect(r.intent).toEqual({ type: 'limit', side: 'sell', amount: 5n * T, price: 150_000_000n, crossing: 'auction' });
+    expect(r.intent).toEqual({ type: 'limit', side: 'sell', amount: 5n * T, price: 150_000_000n, crossing: 'take' });
     const c = buildIntent(form('stopMarket', 'sell', { amount: '5', stop: '2' }), CTX);
     expect(c.intent).toMatchObject({ type: 'stopMarket', amount: 5n * T, stop: 200_000_000n, slipBps: 300, bandDaa: 300n, minRestDaa: 50n });
     // the default threshold ("min fill") is left to the planner: kob-wasm defaultMinTouch of the order's minimum fill

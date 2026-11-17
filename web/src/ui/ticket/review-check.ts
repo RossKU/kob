@@ -99,7 +99,14 @@ export const TERMS_ROUND_BPS = 1n;
  * receives at least it (the covenant's bound at the worst price, tip included), up to TERMS_ROUND_BPS. A start price, a coin selection, a change
  * or a fee that differ do not count: the plan made at the click is the order to sign. No shown total (no plan shown, a kind without one): kept.
  */
-export function withinTerms(shown: Pick<OrderPlan, 'disclosure'> | null, fresh: Pick<OrderPlan, 'disclosure'>): boolean {
+export function withinTerms(shown: Pick<OrderPlan, 'disclosure' | 'take'> | null, fresh: Pick<OrderPlan, 'disclosure' | 'take'>): boolean {
+  // a take never pays beyond the limit shown, whatever it fills (kob/take.ts, checked again by the decoder)
+  if (fresh.take) return !shown?.take || (fresh.take.side === shown.take.side && (fresh.take.side === 'buy' ? fresh.take.limit <= shown.take.limit : fresh.take.limit >= shown.take.limit));
+  // shown a take, planned a resting order (the book moved): kept while its limit is the one shown
+  if (shown?.take) {
+    const lp = fresh.disclosure?.limitPrice ?? null;
+    return lp !== null && fresh.disclosure!.side === shown.take.side && (shown.take.side === 'buy' ? lp <= shown.take.limit : lp >= shown.take.limit);
+  }
   const a = shown?.disclosure?.allInTotal ?? null;
   const b = fresh.disclosure?.allInTotal ?? null;
   if (a === null || b === null || shown!.disclosure!.side !== fresh.disclosure!.side) return true;
