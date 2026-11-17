@@ -55,6 +55,7 @@ describe('graph', () => {
     expect(g.maxPrice).toBe(40n);
     expect(g.path).toBe('M0 37.5 H30 L30 25 H60 L60 12.5 H90 L90 0 H100');
     expect(g.soldPath).toBe('M0 37.5 H30');
+    expect(g.openPath).toBe('M30 25 H60 L60 12.5 H90 L90 0 H100');
     expect(g.soldX).toBe(30);
     expect(g.area).toBe('M30 25 H60 L60 12.5 H90 L90 0 H100 V50 H30 Z');
   });

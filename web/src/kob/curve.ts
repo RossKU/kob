@@ -163,8 +163,9 @@ export function curveSteps(levelSize: bigint, table: readonly bigint[], total: b
 export interface StepGeometry {
   /** the whole line */
   path: string;
-  /** the sold part (empty when nothing is sold) */
+  /** the sold part (empty when nothing is sold) and the rest */
   soldPath: string;
+  openPath: string;
   /** the filled area under the unsold part */
   area: string;
   /** x of the boundary between sold and unsold, null when nothing is sold */
@@ -181,7 +182,7 @@ export function stepGeometry(steps: readonly CurveStep[], w: number, h: number, 
   const sold = steps.filter((s) => s.sold);
   const open = steps.filter((s) => !s.sold);
   const area = open.length ? `${line(open)} V${h} H${f2(open[0]!.from * w)} Z` : '';
-  return { path: line(steps), soldPath: sold.length ? line(sold) : '', area, soldX: sold.length ? sold[sold.length - 1]!.to * w : null, maxPrice };
+  return { path: line(steps), soldPath: sold.length ? line(sold) : '', openPath: open.length ? line(open) : '', area, soldX: sold.length ? sold[sold.length - 1]!.to * w : null, maxPrice };
 }
 
 // ------------------------------------------------------------------------------------------------ the creation's sale
