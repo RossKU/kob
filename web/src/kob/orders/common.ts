@@ -16,6 +16,7 @@ import { InsufficientFunds, DEFAULT_FEE_RESERVE, selectFunding, selectTokens } f
 import { MAX_TOKEN_INPUTS } from '../guards';
 import { daaToUnix } from '../daa';
 import { isKind, kindFor } from '../order-facts';
+import { curveRestKas } from '../curve';
 import { KRON_MAX_OUTPUT_AMOUNT, extensionOfState, isKeyOwned, isKronState, isSpendableHolding } from '../token-state';
 import { issue, hasError } from './common-issues';
 
@@ -501,6 +502,20 @@ export function makeDisclosure(env: PlanEnv, res: CreateResult, p: DescribeParam
     carriers.push({ kind: 'deliveryCarrier', amount: carrier, count: Number(fills) });
     if (reserve > 0n) carriers.push({ kind: 'reserve', amount: reserve, count: 1 });
     if (p.limitPrice !== null) allInTotal = env.kob.bidSpendAt(o, p.amount, p.limitPrice);
+    notes.push('carrierReturned');
+  } else if (o.kind === 'KobCurveAsk') {
+    // a curve: its custody sold level by level, every level rounded up (what a sell-out pays the maker, less the tip per level)
+    side = 'sell';
+    const s = o.state;
+    tip = BigInt(s.tip);
+    refundTip = 0n;
+    expiryDaa = 0n;
+    tokensEscrowed = BigInt(s.amountLeft);
+    const table = s.table.map((x) => BigInt(x) - tip);
+    allInTotal = curveRestKas(BigInt(s.levelSize), table, BigInt(s.total), BigInt(s.amountLeft), BigInt(s.scale));
+    carriers.push({ kind: 'orderCarrier', amount: BigInt(res.request?.value ?? 0), count: 1 });
+    carriers.push({ kind: 'tokenCarrier', amount: res.tokenCarrier, count: 1 });
+    if (res.tokenChange > 0n) carriers.push({ kind: 'tokenChangeCarrier', amount: res.tokenCarrier, count: 1, kept: true });
     notes.push('carrierReturned');
   } else {
     throw new Error(`makeDisclosure: ${o.kind} is described by the conditional planner`);

@@ -56,7 +56,8 @@ test.describe('limit ladder', () => {
     await waitReviewable(page);
     const prices = ['0.03', '0.032', '0.034', '0.036'];
     for (let i = 0; i < 4; i++) await expect(page.getByTestId(`order-ladder-level-${i + 1}`)).toContainText(`Sell 2 EXKCC at ${prices[i]}`);
-    await expect(page.getByTestId('order-ladder-total')).toContainText('Total: 8 EXKCC in 4 orders');
+    // more than 2 levels of a sell: one curve order by default
+  await expect(page.getByTestId('order-ladder-total')).toContainText('Total: 8 EXKCC in one curve order of 4 levels');
   });
 
   test('ladder limits: 2 to 20 orders, a step or an end price, no collapsing levels', async ({ appPage: page, mock }) => {
