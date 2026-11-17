@@ -19,9 +19,9 @@ use kobd::testkit::*;
 use kobd::tokens::{ListingRules, TokenAllowlist, TokenEntry};
 use std::sync::Arc;
 
-/// Ten levels of one whole token, from 2.50 KAS up by 1 % (rounded to whole sompi).
+/// Twelve levels of one whole token, from 2.50 KAS up by 0.025 KAS each.
 fn table() -> Vec<i64> {
-    (0..10).map(|i| P250 + i * 2_500_000).collect()
+    (0..12).map(|i| P250 + i * 2_500_000).collect()
 }
 
 fn curve(maker: u8) -> CurveAskState {
@@ -37,8 +37,8 @@ fn curve(maker: u8) -> CurveAskState {
         tip: 0,
         active_from: 0,
         level_size: WHOLE,
-        total: 10 * WHOLE,
-        amount_left: 10 * WHOLE,
+        total: 12 * WHOLE,
+        amount_left: 12 * WHOLE,
         extension_commitment: EXT,
         table: table(),
     }
@@ -94,8 +94,8 @@ async fn a_placed_curve_is_listed_as_its_levels_and_filled_across_them() {
     assert!(v.listed && v.state_known && v.in_book, "{:?}", v.unlisted_reason);
     assert_eq!((v.price.as_deref(), v.quote.as_deref(), v.expiry_daa), (Some("250000000"), Some("250000000"), None));
     let cv = v.curve.as_ref().expect("the curve view");
-    assert_eq!((cv.level, cv.levels, cv.max_fill.as_str(), cv.unbound), (0, 10, "8000", false));
-    assert_eq!(cv.remaining.len(), 10);
+    assert_eq!((cv.level, cv.levels, cv.max_fill.as_str(), cv.unbound), (0, 12, "8000", false));
+    assert_eq!(cv.remaining.len(), 12);
     assert!(v.custody.as_ref().is_some_and(|k| k.ok));
     // the matcher's book: the curve with its custody
     let listed = book::listed_orders(c.hs.ingest.lock().unwrap().conn()).unwrap();
@@ -105,9 +105,9 @@ async fn a_placed_curve_is_listed_as_its_levels_and_filled_across_them() {
     let levels = ask_levels(&c, &read_ctx(&c));
     assert_eq!(levels, table().into_iter().map(|p| (p, WHOLE, 1)).collect::<Vec<_>>());
     let rows = ask_rows(&c);
-    assert_eq!(rows.len(), 10);
+    assert_eq!(rows.len(), 12);
     assert!(rows.iter().all(|r| r.0 == cov.to_hex()), "every row is the one order");
-    assert_eq!(rows.iter().map(|r| r.1).collect::<Vec<_>>(), (0..10).map(Some).collect::<Vec<_>>());
+    assert_eq!(rows.iter().map(|r| r.1).collect::<Vec<_>>(), (0..12).map(Some).collect::<Vec<_>>());
 
     // a fill of 2.5 levels: levels 0 and 1 whole, half of level 2
     let n = 2 * WHOLE + WHOLE / 2;
@@ -128,7 +128,7 @@ async fn a_placed_curve_is_listed_as_its_levels_and_filled_across_them() {
     let v = view(&c, &cov);
     assert_eq!(v.price, Some(t[2].to_string()), "the current level's price");
     let cv = v.curve.unwrap();
-    assert_eq!((cv.level, cv.remaining[0].amount.as_str(), cv.remaining.len()), (2, "500", 8));
+    assert_eq!((cv.level, cv.remaining[0].amount.as_str(), cv.remaining.len()), (2, "500", 10));
     assert!(v.custody.as_ref().is_some_and(|k| k.ok), "the rest custody is the order's: {:?}", v.custody);
     let levels = ask_levels(&c, &read_ctx(&c));
     assert_eq!(levels[0], (t[2], WHOLE / 2, 1));
@@ -228,9 +228,9 @@ async fn a_curve_is_never_idle() {
     // 90 days on: a plain ask waits for its refund, the curve (no refund) is still liquidity
     let later = ReadCtx { node_daa: Some(c.daa() + MAX_IDLE as u64 + 10), settle_depth_daa: 100, now_unix: None };
     let levels = ask_levels(&c, &later);
-    assert_eq!(levels.len(), 10, "only the curve's levels: {levels:?}");
+    assert_eq!(levels.len(), 12, "only the curve's levels: {levels:?}");
     assert!(levels.iter().all(|l| l.0 != P250 * 3));
-    assert_eq!(ask_levels(&c, &read_ctx(&c)).len(), 11, "before, both");
+    assert_eq!(ask_levels(&c, &read_ctx(&c)).len(), 13, "before, both");
     assert!(view(&c, &cov).refund_due_daa.is_none());
 }
 
@@ -434,9 +434,9 @@ async fn the_curve_view_serialises_its_levels() {
     let cv = &j["curve"];
     for (k, want) in [
         ("level", "0"),
-        ("levels", "10"),
+        ("levels", "12"),
         ("level_size", "\"1000\""),
-        ("total", "\"10000\""),
+        ("total", "\"12000\""),
         ("price_now", "\"250000000\""),
         ("max_fill", "\"8000\""),
         ("unbound", "false"),

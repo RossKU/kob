@@ -106,6 +106,10 @@ fn levels_fill_in_table_order_only() {
     // a cheaper level behind a dearer one is never taken before it
     let r = run_curve(vec![l_bid(2, bid(2, P255, T3), 5 * WHOLE), l_curve(1, curve(1, &[P260, P245, P245], 3 * WHOLE))]);
     assert!(curve_fills(&r, cid(1)).is_empty());
+    // a dear first level is taken alone rather than skipped for the cheap one behind it
+    let one = BidState { min_fill: 1, ..bid(2, P265, T3) };
+    let r = run_curve(vec![l_bid(2, one, WHOLE), l_curve(1, curve(1, &[P260, P245], 2 * WHOLE))]);
+    assert_eq!(curve_fills(&r, cid(1)), vec![(0, WHOLE)]);
     // the same levels in order cross
     let r = run_curve(vec![l_bid(2, bid(2, P255, T3), 5 * WHOLE), l_curve(1, curve(1, &[P245, P245, P260], 3 * WHOLE))]);
     assert_eq!(curve_fills(&r, cid(1)), vec![(0, 2 * WHOLE)]);

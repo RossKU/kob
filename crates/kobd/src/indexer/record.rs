@@ -940,15 +940,10 @@ impl Extractor<'_> {
                     // the log is unchanged whenever there is nothing to tell.
                     let newer_release = payload::release_of(&p).filter(|r| r.is_newer_than_build());
                     for r in p.records {
-                        if let Record::Order { template: t, state, custody, .. } = &r {
+                        if let Record::Order { template: t, state, .. } = &r {
                             relevant = true;
                             if let Ok(s) = AnyState::decode(*t, state) {
                                 payload_tokens.insert(Hash32(s.token_cov_id()));
-                                // an unbound curve trades its custody output's token
-                                if model::is_unbound(&s) {
-                                    let out = custody.as_ref().and_then(|c| tx.outputs.get(c.token_output as usize));
-                                    payload_tokens.extend(out.and_then(|o| o.covenant).map(|c| c.covenant_id));
-                                }
                                 if let Some(p) = s.pair_tokens() {
                                     payload_tokens.insert(Hash32(p.b.cov_id));
                                 }
