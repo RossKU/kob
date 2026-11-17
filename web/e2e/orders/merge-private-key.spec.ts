@@ -62,7 +62,9 @@ async function openBalances(page: Page, count: number): Promise<void> {
   await page.goto('/#/portfolio');
   await connectKey(page);
   await expect(page.getByTestId('balances-panel')).toBeVisible();
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(new RegExp(`^Merge all \\(${count}\\): about \\+[0-9.,]+ KAS$`), { timeout: 15_000 });
+  // the button says Merge all; the count and the KAS it frees are its tooltip
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', new RegExp(`^Merge your ${count} UTXOs of this token into one: about \\+[0-9.,]+ KAS back\\. `), { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText('Merge all');
 }
 
 /** The session screen of the frame: what it says, then Allow. */

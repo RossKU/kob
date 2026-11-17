@@ -281,17 +281,21 @@ export function BalancesPanel(props: {
                         {showMerge || showConvert || b.orderCount > 0 ? (
                           <span class="dt-act">
                             {mergeAs ? (
+                              // the count and the KAS freed are its tooltip (the confirmation states them again before signing)
                               <Button
                                 small
                                 disabled={!props.canSign || !!props.busy}
                                 loading={props.busy === `merge-${b.token}`}
-                                title={t('orders.merge.hint', { count: mergeable.get(b.token)!, max: mergeSlots(mergeAs!), txs: countText('tx', mergeTxCount(mergeable.get(b.token)!, mergeSlots(mergeAs!))) })}
+                                title={t((frees.get(b.token) ?? 0n) > 0n ? 'orders.merge.hintFrees' : 'orders.merge.hint', {
+                                  count: mergeable.get(b.token)!,
+                                  kas: formatKas(frees.get(b.token) ?? 0n),
+                                  max: mergeSlots(mergeAs!),
+                                  txs: countText('tx', mergeTxCount(mergeable.get(b.token)!, mergeSlots(mergeAs!))),
+                                })}
                                 onClick={() => props.onMergeToken!(b.token)}
                                 data-testid={`orders-merge-token-${b.token}`}
                               >
-                                {(frees.get(b.token) ?? 0n) > 0n
-                                  ? t('orders.merge.buttonFrees', { count: mergeable.get(b.token)!, kas: formatKas(frees.get(b.token)!) })
-                                  : t('orders.merge.button', { count: mergeable.get(b.token)! })}
+                                {t('orders.merge.button')}
                               </Button>
                             ) : null}
                             {showConvert ? (

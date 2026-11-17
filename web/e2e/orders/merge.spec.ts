@@ -71,7 +71,9 @@ async function openBalances(page: Page, count: number): Promise<void> {
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('balances-panel')).toBeVisible();
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(new RegExp(`^Merge all \\(${count}\\): about \\+[0-9.,]+ KAS$`), { timeout: 15_000 });
+  // the button says Merge all; the count and the KAS it frees are its tooltip
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', new RegExp(`^Merge your ${count} UTXOs of this token into one: about \\+[0-9.,]+ KAS back\\. `), { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText('Merge all');
 }
 
 test('Merge all of 30 UTXOs: one confirmation states 15 transactions and 15 approvals, then a tree of 3 -> 1 merges into one UTXO', async ({ appPage: page, mock, wallet }) => {
@@ -192,7 +194,7 @@ test('a step rejected mid-run stops the merge cleanly: what was sent stays merge
   await expect(page.getByTestId('notify-unread')).toHaveText('1');
   // run again: planned from the five left, two transactions into one
   await wallet!.configure({ approve: true, delayMs: 0 });
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(5\): /, { timeout: 15_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', /^Merge your 5 UTXOs /, { timeout: 15_000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
   await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 5 EXSTD UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
@@ -225,7 +227,8 @@ test('a token the registry does not list is mergeable too, under its node-verifi
   await page.goto('/#/portfolio');
   await connectWallet(page, 'kasware');
   const merge = page.getByTestId(`orders-merge-token-${STD}`);
-  await expect(merge).toHaveText(/^Merge all \(4\): about \+[0-9.,]+ KAS$/, { timeout: 15_000 });
+  await expect(merge).toHaveAttribute('title', /^Merge your 4 UTXOs of this token into one: about \+[0-9.,]+ KAS back\. /, { timeout: 15_000 });
+  await expect(merge).toHaveText('Merge all');
   await merge.click();
   await expect(page.getByTestId('merge-all-summary')).toContainText('UTXOs into 1. 2 transactions', { timeout: 30_000 });
   await page.getByTestId('merge-all-confirm').click();
@@ -344,7 +347,7 @@ test('Convert to plain: the UTXOs with a borrow setting become one plain UTXO; t
   expect(placed[0]!.submission.token_outputs).toHaveLength(1);
   expect(await ownedStates(mock, alice)).toEqual([[1n * TOKEN, 0, '00'.repeat(32)], [2n * TOKEN, 0, '00'.repeat(32)], [9n * TOKEN, 0, '00'.repeat(32)]]);
   // three plain UTXOs now: Merge all merges them in one tree, and offers no conversion
-  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveText(/^Merge all \(3\)/, { timeout: 30_000 });
+  await expect(page.getByTestId(`orders-merge-token-${STD}`)).toHaveAttribute('title', /^Merge your 3 UTXOs /, { timeout: 30_000 });
   await page.getByTestId(`orders-merge-token-${STD}`).click();
   await expect(page.getByTestId('merge-all-summary')).toContainText('Merge 3 EXSTD UTXOs into 1.', { timeout: 30_000 });
   await expect(page.getByTestId('merge-all-convert')).toHaveCount(0);

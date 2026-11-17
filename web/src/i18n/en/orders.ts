@@ -346,9 +346,10 @@ export default {
   'orders.flow.submitted.one': 'Submitted: {count} order spent.',
   'orders.flow.submitted.other': 'Submitted: {count} orders spent.',
   'orders.flow.preparing': 'Waiting for the previous transaction, then building the next one…',
-  'orders.merge.button': 'Merge all ({count})',
-  'orders.merge.buttonFrees': 'Merge all ({count}): about +{kas} KAS',
+  'orders.merge.button': 'Merge all',
+  // the button's tooltip has the count and the KAS freed (the confirmation states them again, also on a phone)
   'orders.merge.hint': 'Merge your {count} UTXOs of this token into one, at most {max} per transaction: {txs}, each approved in your wallet, freeing their carriers\' KAS',
+  'orders.merge.hintFrees': 'Merge your {count} UTXOs of this token into one: about +{kas} KAS back. At most {max} per transaction: {txs}, each approved in your wallet',
   'orders.merge.heading': 'Merge {ticker} UTXOs',
   'orders.merge.title': 'Merge tokens',
   'orders.merge.step': 'Merge {n} of {total}',

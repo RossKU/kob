@@ -77,12 +77,12 @@
   --dt-cols-2: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(136px, 2.2fr) var(--dt-chev);
 }
 /* Balances: each row is its own grid, so no track may follow its content. The buttons' column is fixed, so the header and every row share the same tracks and each
-   figure column ends on one edge. Fold 0: "Merge all (2): about +19 KAS" and Cancel all on one line; fold 1: Cancel all under it; fold 2: the figures take some of the
-   buttons' room (a label wraps in its button) */
+   figure column ends on one edge. Fold 0: Merge all and Cancel all on one line, also in a wide font; fold 1: a wide font puts Cancel all under it; fold 2:
+   Cancel all under it (a longer label wraps in its button) */
 .dt-balances {
-  --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) 300px;
-  --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 216px;
-  --dt-cols-2: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 168px;
+  --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) 208px;
+  --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 176px;
+  --dt-cols-2: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 136px;
 }
 /* a header is never cut: a long one wraps to two lines (the row's labels stand on its last line); a figure column's sort mark goes before its label, so the
    label ends on the figures' right edge */

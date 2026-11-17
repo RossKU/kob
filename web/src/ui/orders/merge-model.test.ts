@@ -1,4 +1,4 @@
-// The merge action's model: the outpoints held for open orders, the per-token count behind the "Merge all (n)" button, the KAS it frees, and
+// The merge action's model: the outpoints held for open orders, the per-token count in the "Merge all" button's tooltip, the KAS it frees, and
 // the flow steps with the summary the run's confirmation states (transactions, approvals, KAS freed).
 import { describe, expect, it } from 'vitest';
 import type { OrderView, StrayView } from '../../data/indexer-types';
