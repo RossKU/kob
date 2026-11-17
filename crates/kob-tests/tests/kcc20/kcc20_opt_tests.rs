@@ -146,6 +146,8 @@ struct Token {
     hash: Vec<u8>,
     /// batch-leader template committed by the holder program (hash, prefix len, suffix len): P2 and enabled KCC20Opt
     batch: Option<(Vec<u8>, i64, i64)>,
+    /// slots of the `KCC20Batch` build that leads this token (16 = the committed source)
+    lead_slots: usize,
 }
 fn ref_args() -> Vec<ArtifactValue> {
     vec![int(1000), bytes(&[3u8; 32]), ArtifactValue::Byte(SCHEME_COVID), ArtifactValue::Byte(0), bytes(&[0u8; 32]), bytes(&EXT)]
@@ -154,30 +156,49 @@ fn ref_args() -> Vec<ArtifactValue> {
 fn other_args() -> Vec<ArtifactValue> {
     vec![int(5), bytes(&[9u8; 32]), ArtifactValue::Byte(SCHEME_P2PK), ArtifactValue::Byte(1), bytes(&[0x42; 32]), bytes(&[0x11; 32])]
 }
+/// The `KCC20Batch` source with `slots` slots: the committed 16-slot source with `MAX_SLOTS` set.
+fn batch_src(slots: usize) -> String {
+    let s = src("KCC20Batch");
+    if slots == 16 {
+        return s;
+    }
+    let r = s.replace("int constant MAX_SLOTS = 16;", &format!("int constant MAX_SLOTS = {slots};"));
+    assert_ne!(r, s, "KCC20Batch: MAX_SLOTS not found");
+    r
+}
 /// The `KCC20Batch` template (hash, prefix len, suffix len), from a leader with arbitrary state.
 fn batch_template() -> (Vec<u8>, i64, i64) {
-    let b = batch_art_raw(0, &[1u8; 32], &[2u8; 32], &[2u8; 32], 1, 1);
+    batch_template_n(16)
+}
+fn batch_template_n(slots: usize) -> (Vec<u8>, i64, i64) {
+    let b = batch_art_n(slots, 0, &[1u8; 32], &[2u8; 32], &[2u8; 32], 1, 1);
     let (bp, bs, bh) = compiled_template_parts_and_hash(&b);
     (bh, bp.len() as i64, bs.len() as i64)
 }
 /// `KCC20Opt` constructor constants: the batch-leader commitment, all zeros when disabled.
 fn opt_consts(enabled: bool) -> Vec<ArtifactValue> {
+    opt_consts_n(enabled, 16)
+}
+fn opt_consts_n(enabled: bool, slots: usize) -> Vec<ArtifactValue> {
     if enabled {
-        let (bh, bp, bs) = batch_template();
+        let (bh, bp, bs) = batch_template_n(slots);
         vec![bytes(&bh), int(bp), int(bs)]
     } else {
         vec![bytes(&ZERO), int(0), int(0)]
     }
 }
 fn compile_opt(enabled: bool, state: Vec<ArtifactValue>) -> SilAbiArtifact {
-    let mut a = opt_consts(enabled);
+    compile_opt_n(enabled, 16, state)
+}
+fn compile_opt_n(enabled: bool, slots: usize, state: Vec<ArtifactValue>) -> SilAbiArtifact {
+    let mut a = opt_consts_n(enabled, slots);
     a.extend(state);
     compile_contract(&src("KCC20Opt"), &a, CompileOptions::default()).expect("compile KCC20Opt")
 }
 impl Token {
     fn from_art(name: &str, art: SilAbiArtifact, batch: Option<(Vec<u8>, i64, i64)>) -> Self {
         let (prefix, suffix, hash) = compiled_template_parts_and_hash(&art);
-        let t = Token { name: name.into(), art, prefix, suffix, hash, batch };
+        let t = Token { name: name.into(), art, prefix, suffix, hash, batch, lead_slots: 16 };
         assert_eq!(t.redeem(1000, &[3u8; 32], SCHEME_COVID, 0), bytecode(&t.art), "{name}: manual state encoding");
         t
     }
@@ -197,6 +218,12 @@ impl Token {
         let name = if enabled { "KCC20Opt (enabled)" } else { "KCC20Opt (disabled)" };
         Self::from_art(name, compile_opt(enabled, ref_args()), if enabled { Some(batch_template()) } else { None })
     }
+    /// Enabled `KCC20Opt` committing to the `slots`-slot `KCC20Batch` build.
+    fn opt_n(slots: usize) -> Self {
+        let mut t = Self::from_art(&format!("KCC20Opt + {slots}-slot leader"), compile_opt_n(true, slots, ref_args()), Some(batch_template_n(slots)));
+        t.lead_slots = slots;
+        t
+    }
     fn redeem(&self, amount: i64, owner: &[u8; 32], scheme: u8, borrow: u8) -> Vec<u8> {
         [self.prefix.clone(), tok_state_bytes(amount, owner, scheme, borrow), self.suffix.clone()].concat()
     }
@@ -205,12 +232,15 @@ impl Token {
     }
     /// A batch leader of this token (amount, owner key; ZERO = public seed) serving this holder template.
     fn leader(&self, amount: i64, owner: &[u8; 32]) -> SilAbiArtifact {
-        batch_art_raw(amount, owner, &EXT, &self.hash, self.prefix.len() as i64, self.suffix.len() as i64)
+        batch_art_n(self.lead_slots, amount, owner, &EXT, &self.hash, self.prefix.len() as i64, self.suffix.len() as i64)
     }
 }
 fn batch_art_raw(amount: i64, owner: &[u8; 32], ext: &[u8; 32], h_tpl: &[u8], h_pre: i64, h_suf: i64) -> SilAbiArtifact {
+    batch_art_n(16, amount, owner, ext, h_tpl, h_pre, h_suf)
+}
+fn batch_art_n(slots: usize, amount: i64, owner: &[u8; 32], ext: &[u8; 32], h_tpl: &[u8], h_pre: i64, h_suf: i64) -> SilAbiArtifact {
     compile_contract(
-        &src("KCC20Batch"),
+        &batch_src(slots),
         &[int(amount), bytes(owner), bytes(ext), bytes(h_tpl), int(h_pre), int(h_suf)],
         CompileOptions::default(),
     )
@@ -1179,5 +1209,185 @@ fn opt_holder_source_matches_generator() {
         serde_json::to_value(&ctor[..3]).unwrap(),
         serde_json::to_value(opt_consts(false)).unwrap(),
         "KCC20Opt.ctor.json: B_TPL / B_PRE / B_SUF all zeros"
+    );
+}
+
+/// One merge measured against the per-transaction limits of rusty-kaspa v2.1.0 (relay and mempool limits = block limits).
+struct Cap {
+    n: usize,
+    lead_bytes: usize,
+    /// largest signature script of any input (the 250,000 B limit is per input)
+    max_ss: usize,
+    lead_units: u64,
+    holder_units: u64,
+    size: u64,
+    compute: u64,
+    transient: u64,
+    storage: u64,
+    fee_mass: u64,
+    err: Option<String>,
+}
+const TX_STORAGE: u64 = 500_000;
+const MAX_SIG_SCRIPT: usize = 250_000;
+const MAX_TX_INPUTS: usize = 1_000;
+impl Cap {
+    /// The limits this transaction is over (empty: it relays).
+    fn over(&self) -> Vec<&'static str> {
+        self.over_at(100)
+    }
+    /// The same with every mass limit scaled to `pct` percent.
+    fn over_at(&self, pct: u64) -> Vec<&'static str> {
+        let mut v = vec![];
+        if self.err.is_some() {
+            v.push("script");
+        }
+        if self.compute > BLOCK_COMPUTE * pct / 100 {
+            v.push("compute");
+        }
+        if self.transient > BLOCK_TRANSIENT * pct / 100 {
+            v.push("transient");
+        }
+        if self.storage > TX_STORAGE * pct / 100 {
+            v.push("storage");
+        }
+        if self.max_ss > MAX_SIG_SCRIPT {
+            v.push("sigscript");
+        }
+        if self.n + 1 > MAX_TX_INPUTS {
+            v.push("inputs");
+        }
+        v
+    }
+    fn row(&self, label: &str) -> String {
+        format!(
+            "CAP {label:<28} | N {:>4} | leader {:>6} B | max sigscript {:>6} B | units leader {:>9} holder {:>7} | size {:>7} B | compute {:>7} | transient {:>7} | storage {:>6} | fee mass {:>7} | fee {:.5} KAS | {}",
+            self.n,
+            self.lead_bytes,
+            self.max_ss,
+            self.lead_units,
+            self.holder_units,
+            self.size,
+            self.compute,
+            self.transient,
+            self.storage,
+            self.fee_mass,
+            (self.fee_mass * MIN_FEE_PER_GRAM) as f64 / 1e8,
+            match (self.over(), &self.err) {
+                (o, _) if o.is_empty() => "fits".to_string(),
+                (o, Some(e)) => format!("OVER {} ({e})", o.join(",")),
+                (o, None) => format!("OVER {}", o.join(",")),
+            }
+        )
+    }
+}
+/// Builds and executes `s` (budgets from a first run), then measures it. A failing input is recorded, not a panic.
+fn capacity(net: &Net, s: &Scn, n: usize, lead_bytes: usize, lead_idx: Option<usize>) -> Cap {
+    let (tx, entries) = build(net, s, &[]);
+    let res = execute(&tx, &entries).expect("ctx");
+    let budgets: Vec<u16> = res
+        .iter()
+        .map(|r| r.as_ref().map(|u| u16::try_from(u.saturating_sub(FREE_UNITS).div_ceil(UNITS_PER_BUDGET)).expect("budget")).unwrap_or(0))
+        .collect();
+    let (tx, entries) = build(net, s, &budgets);
+    let res = execute(&tx, &entries).expect("ctx");
+    let err = res.iter().enumerate().find_map(|(i, r)| r.as_ref().err().map(|e| format!("in[{i}]: {e:?}")));
+    let units = |i: usize| res[i].as_ref().copied().unwrap_or(0);
+    let h = lead_idx.map(|l| l + 1).unwrap_or(1).min(res.len() - 1);
+    let mc = MassCalculator::new(1, 10, 1_000_000_000_000);
+    let nc = mc.calc_non_contextual_masses(&tx);
+    let populated = PopulatedTransaction::new(&tx, entries);
+    let storage = mc.calc_contextual_masses(&populated).map(|c| c.storage_mass).unwrap_or(u64::MAX);
+    let size = transaction_estimated_serialized_size(&tx);
+    Cap {
+        n,
+        lead_bytes,
+        max_ss: tx.inputs.iter().map(|i| i.signature_script.len()).max().unwrap_or(0),
+        lead_units: lead_idx.map(units).unwrap_or(0),
+        holder_units: units(h),
+        size,
+        compute: nc.compute_mass,
+        transient: nc.transient_mass,
+        storage,
+        fee_mass: nc.compute_mass.max(2 * size),
+        err,
+    }
+}
+/// Pure merge of `n` key-owned holders of enabled `KCC20Opt` into 1 output, led by an `n`-slot `KCC20Batch`.
+fn batch_merge_cap(n: usize) -> Cap {
+    let net = Net { t: Token::opt_n(n) };
+    let m = keypair();
+    let a = keypair();
+    let lead = bytecode(&net.t.leader(0, &pk(&m))).len();
+    let so = kaspa_txscript::get_sig_op_count_upper_bound::<PopulatedTransaction, SigHashReusedValuesUnsync>(
+        &push(&bytecode(&net.t.leader(0, &pk(&m)))),
+        &spk_of(&net.t.leader(0, &pk(&m))),
+    );
+    assert!(so <= 15, "{n}-slot leader: sig-op bound {so}");
+    capacity(&net, &leader_merge(&net, &m, &a, &a, n, &pk(&a)), n, lead, Some(0))
+}
+
+/// Capacity of a batch merge: N key-owned holder UTXOs (enabled `KCC20Opt`) led by an N-slot `KCC20Batch` into one output,
+/// for growing N, against the rusty-kaspa v2.1.0 per-transaction limits (compute 500,000, transient = 4 x size 1,000,000,
+/// storage 500,000, signature script 250,000 B per input, 1,000 inputs). Fee = max(compute, 2 x size) x 100 sompi per gram.
+/// The plain `KCC20Ref_16x16` merge of 16 is the comparison. Slow (large leaders): run with --ignored.
+#[test]
+#[ignore]
+fn opt_batch_capacity() {
+    let a = keypair();
+    let to = pk(&a);
+    let r16 = Net { t: Token::plain("KCC20Ref_16x16") };
+    let r = capacity(&r16, &holder_transfer(&r16, &a, &to, 16), 16, 0, None);
+    assert!(r.err.is_none(), "{:?}", r.err);
+    println!("{}", r.row("KCC20Ref_16x16 merge 16->1"));
+    let mut caps: BTreeMap<usize, Cap> = BTreeMap::new();
+    let mut cap = |n: usize| -> (Vec<&'static str>, Vec<&'static str>) {
+        let c = caps.entry(n).or_insert_with(|| {
+            let c = batch_merge_cap(n);
+            println!("{}", c.row("batch merge N->1"));
+            c
+        });
+        (c.over(), c.over_at(90))
+    };
+    let mut hi = 0;
+    for n in [16usize, 32, 64, 96, 128] {
+        if !cap(n).0.is_empty() {
+            hi = n;
+            break;
+        }
+    }
+    assert!(hi > 16, "no limit hit up to N = 128, or N = 16 is over");
+    // the largest N that fits each margin: bisect below the first N over (masses grow with N)
+    let mut max_at = |full: bool| {
+        let (mut lo, mut h) = (16, hi);
+        while h - lo > 1 {
+            let mid = (lo + h) / 2;
+            let o = cap(mid);
+            if (if full { o.0 } else { o.1 }).is_empty() {
+                lo = mid;
+            } else {
+                h = mid;
+            }
+        }
+        let o = cap(h);
+        (lo, if full { o.0 } else { o.1 })
+    };
+    let (n100, why100) = max_at(true);
+    let (n90, why90) = max_at(false);
+    println!("CAP max N = {n100} at the limits (N = {} is over: {}); {n90} within 90% (N = {} is over: {})", n100 + 1, why100.join(", "), n90 + 1, why90.join(", "));
+    // each limit on its own: linear in N between N = 16 and the largest fitting row
+    let (f, b) = (&caps[&16], &caps[&n100]);
+    let per = |name: &str, a: u64, z: u64, limit: u64| {
+        let slope = (z as f64 - a as f64) / (b.n - f.n) as f64;
+        if slope <= 0.0 {
+            return format!("{name} unbounded");
+        }
+        format!("{name} {}", (f.n as f64 + (limit as f64 - a as f64) / slope).floor() as i64)
+    };
+    println!(
+        "CAP max N per limit (linear): {}, {}, {}, {}",
+        per("compute", f.compute, b.compute, BLOCK_COMPUTE),
+        per("transient", f.transient, b.transient, BLOCK_TRANSIENT),
+        per("storage", f.storage, b.storage, TX_STORAGE),
+        per("sigscript", f.max_ss as u64, b.max_ss as u64, MAX_SIG_SCRIPT as u64)
     );
 }
