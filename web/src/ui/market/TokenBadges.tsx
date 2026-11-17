@@ -192,6 +192,19 @@ export function SharedTickerNote(props: { shared: boolean; block?: boolean; 'dat
 }
 
 /**
+ * The shared-ticker note inside the market bar (MarketBar `note`): one muted line in the bar's top space, a warning sign and the short text, the full sentence as its tooltip.
+ * It is out of the flow, so the bar has the same height with and without it. Renders nothing for other tokens.
+ */
+export function SharedTickerBarNote(props: { shared: boolean }) {
+  if (!props.shared) return null;
+  return (
+    <span class="mkt-bar-note" role="note" title={t('market.sharedTicker')} data-testid="token-shared-ticker">
+      <span aria-hidden="true">{'⚠'}</span> {t('market.sharedTickerShort')}
+    </span>
+  );
+}
+
+/**
  * The facts of a token that "High risk" states (token-model.ts `riskFactIds`), each with its plain sentence: in the order ticket's panel (`compact`: the badges, the
  * sentences open on a tap, because a tooltip does not exist on a touch screen), or printed (`block`). No other fact is shown by default: the rest of a token's facts
  * (a pass, kascov's remark, a capped public mint, blacklist, an unverified genesis) are in the "Status and checks" section of its details. Several tokens (a pair)

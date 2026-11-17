@@ -86,6 +86,38 @@ test.describe('shell and token list', () => {
     await expect(appPage.getByTestId('status-bar')).toHaveCount(0);
   });
 
+  test("the shared-ticker note sits inside the market bar and moves nothing: the bar's height and the y of the book below are the same with and without it", async ({ appPage, mock }) => {
+    await appPage.emulateMedia({ reducedMotion: 'reduce' });
+    const { id } = await seeded(mock);
+    const sizes = [{ width: 1280, height: 900 }, { width: 390, height: 844 }];
+    const measure = async (size: { width: number; height: number }) => {
+      await appPage.setViewportSize(size);
+      await appPage.goto('/#/market/' + id);
+      await appPage.reload();
+      await expect(appPage.getByTestId('order-book')).toBeVisible();
+      await appPage.waitForTimeout(300);
+      const [b, below] = await Promise.all([appPage.getByTestId('market-bar').boundingBox(), appPage.getByTestId('order-book').boundingBox()]);
+      return { barH: b!.height, barY: b!.y, belowY: below!.y };
+    };
+    const without = [] as Awaited<ReturnType<typeof measure>>[];
+    for (const size of sizes) {
+      without.push(await measure(size));
+      await expect(appPage.getByTestId('token-shared-ticker')).toHaveCount(0);
+    }
+    await mock.seed({ tokens: [{ ticker: 'exkcc', covenant_id: 'bb'.repeat(32), extension_commitment: 'cc'.repeat(32), decimals: 8 }] });
+    for (const [n, size] of sizes.entries()) {
+      const withNote = await measure(size);
+      const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
+      await expect(tag).toBeVisible();
+      // one line, inside the bar
+      const [tb, bb] = await Promise.all([tag.boundingBox(), appPage.getByTestId('market-bar').boundingBox()]);
+      expect(tb!.height).toBeLessThan(16);
+      expect(tb!.y).toBeGreaterThanOrEqual(bb!.y);
+      expect(tb!.y + tb!.height).toBeLessThanOrEqual(bb!.y + bb!.height);
+      expect(withNote).toEqual(without[n]);
+    }
+  });
+
   test('two listed tokens with one ticker: the list rows carry no warning (the fingerprints tell them apart), the token page header carries the shared-ticker note (the ticket does not repeat it); a unique ticker has none', async ({ appPage, mock }) => {
     const { id } = await seeded(mock);
     const twin = 'bb'.repeat(32);
@@ -114,7 +146,9 @@ test.describe('shell and token list', () => {
     for (const r of [regRow, twinRow, soloRow]) await expect(r).not.toContainText(/unverified|(?<!Genesis not )verified|official|pending review|NOT that token/i);
     // the token page header of the registry token repeats the note; the ticket under it stays free of it
     await regRow.getByTestId(`token-link-${id}`).click();
-    await expect(appPage.getByTestId('token-header').getByTestId('token-shared-ticker')).toHaveText(note);
+    const tag = appPage.getByTestId('market-bar').getByTestId('token-shared-ticker');
+    await expect(tag).toHaveText(/Shared ticker: check the covenant id/);
+    await expect(tag).toHaveAttribute('title', note);
     await expect(appPage.getByTestId('ticket-container')).toBeVisible();
     await expect(appPage.getByTestId('ticket-container')).not.toContainText(note);
     // the unique ticker's page has none
