@@ -29,6 +29,8 @@ fn help_is_reachable_every_way_and_prints_on_stdout() {
     for (a, b) in [
         (&["help", "book"][..], &["book", "--help"][..]),
         (&["help", "place"], &["place", "--help"]),
+        (&["help", "sweep"], &["sweep", "--help"]),
+        (&["help", "cancel"], &["cancel", "--help"]),
         (&["help", "token", "create"], &["token", "create", "--help"]),
         (&["help", "registry", "validate"], &["registry", "validate", "--help"]),
         (&["help", "token"], &["token", "--help"]),
@@ -68,6 +70,8 @@ fn help_is_reachable_every_way_and_prints_on_stdout() {
         "GLOBAL OPTIONS",
         "--key-file",
         "--dry-run",
+        "kob sweep",
+        "--allow-high-fee",
         "crates/kob-cli/README.md",
     ] {
         assert!(out.contains(want), "{want}: {out}");
@@ -80,13 +84,11 @@ fn a_usage_printed_because_of_a_mistake_goes_to_stderr_with_exit_2() {
     for args in [
         &["place"][..],
         &["watch"],
-        &["order"],
         &["token"],
         &["registry"],
         &["token", "resume"],
         &["token", "nosuch"],
         &["registry", "nosuch"],
-        &["order", "nosuch"],
         &["nosuch"],
         &["help", "nosuch"],
     ] {

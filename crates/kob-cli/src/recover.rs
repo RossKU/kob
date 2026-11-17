@@ -91,17 +91,19 @@ OUTPUT
 CANCEL
   --cancel      build the maker's cancel of every live order of the key's maker (custody verified when it has one): the
                 custody and the order's KAS back to the maker, one transaction per order. Strays are not swept (the node cannot tell them apart;
-                sweep them with `kob order sweep|cancel` from an indexer view first).
+                sweep them with `kob sweep --view FILE` or `kob cancel --view FILE` first).
                 The fee comes from the order's released KAS; if that is not enough, the smallest sufficient plain KAS UTXO
                 of the maker on the node is added.
   --key-file    the maker's signing key: a file holding the 64-hex secret
   --key-env     ... or the environment variable holding it (default $KOB_KEY); a key that is not the order's maker is
-                refused. The older `--key file:PATH`, `--key env:NAME` and `--key HEX` still work and print a warning (a
-                key on the command line is visible to other users)
+                refused. (`--key` was removed: a key on the
+                command line is visible to other users.)
   --yes, -y     sign and submit without asking. Without it, each cancel is described and a terminal asks (type yes);
                 without a terminal the cancel is refused (status `refused`, exit 1) and nothing is signed.
   --dry-run     build, sign and engine-validate, write, never submit (excludes --yes)
   --fee-rate    sompi per gram (default 100)
+  --allow-high-fee  pay a fee above the ceiling (default: a cancel paying more than 4 times the node's fee estimate on its mass is
+                refused: status `refused`, code FEE_ABOVE_CEILING, exit 1)
   --priority-fee  also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\": a higher fee, worth it only when blocks are
                 contended (charged at --fee-rate on the storage-inclusive mass)
   --out-dir     write <covenant id>.cancel.json (the signed transaction and its submitRequest) here
@@ -139,6 +141,8 @@ pub struct Args {
     pub priority_fee: bool,
     /// Where the signed cancels go.
     pub out_dir: Option<PathBuf>,
+    /// `--allow-high-fee`: no fee ceiling.
+    pub allow_high_fee: bool,
 }
 
 /// One `--amount-left` value: `<amount>` or `<covenant id>=<amount>`.
@@ -181,6 +185,7 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
         fee_rate: MIN_FEE_RATE,
         priority_fee: false,
         out_dir: None,
+        allow_high_fee: false,
     };
     let mut it = args.iter();
     while let Some(flag) = it.next() {
@@ -193,7 +198,9 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
             "--out" => a.out = Some(PathBuf::from(val("--out")?)),
             "--amount-left" => a.amount_left.push(parse_hint(&val("--amount-left")?)?),
             "--cancel" => a.cancel = true,
-            "--key" | "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
+            k if crate::token::is_removed_key_flag(k) => return Err(crate::token::KEY_FLAG_REMOVED.into()),
+            "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
+            "--allow-high-fee" => a.allow_high_fee = true,
             "--dry-run" => a.dry_run = true,
             "--yes" | "-y" => a.yes = true,
             "--fee-rate" => {
@@ -216,8 +223,8 @@ pub fn parse_args_with(args: &[String], fallback_key: Option<KeySource>) -> Resu
     if a.cancel && a.key.is_none() {
         return Err("--cancel needs a key: give --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY".into());
     }
-    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee) {
-        return Err("--key-file, --key-env, --yes, --dry-run, --priority-fee and --out-dir belong to --cancel".into());
+    if !a.cancel && (a.key.is_some() || a.dry_run || a.yes || a.out_dir.is_some() || a.priority_fee || a.allow_high_fee) {
+        return Err("--key-file, --key-env, --yes, --dry-run, --priority-fee, --allow-high-fee and --out-dir belong to --cancel".into());
     }
     if a.yes && a.dry_run {
         return Err("--yes and --dry-run exclude each other".into());
@@ -714,6 +721,10 @@ fn cancel_one(f: &Found, signer: &Signer, a: &Args) -> Result<Value, String> {
         }))
     })?;
     let cov = to_hex(&f.entry.covenant_id);
+    // The fee ceiling, as for every sending command.
+    if let Some(m) = crate::feecap::Ceiling::read(&a.node, a.allow_high_fee).violation_of(&built) {
+        return Ok(json!({"status": "refused", "code": crate::feecap::CODE, "reason": m}));
+    }
     let info = json!({"action": "cancel", "covenant_id": cov, "kind": state.template_id().name()});
     if !a.dry_run {
         // The same rule as every other submitting command: `--yes`, or a terminal asks, else
@@ -826,7 +837,7 @@ fn summary(report: &Value, a: &Args) {
     );
     if a.cancel {
         eprintln!(
-            "strays, if any, are not swept: use `kob order sweep` with an indexer view first{}",
+            "strays, if any, are not swept: use `kob sweep` (or `kob cancel`) first{}",
             if a.dry_run { "; dry run: nothing submitted" } else { "" }
         );
     }

@@ -1376,7 +1376,7 @@ kobd --indexer \
 
 The network is never implied by the reference build of the executor: `--network` (or `network` in the file, or `$KOB_NETWORK`) is required
 there, for every executor command that talks to a node (`--indexer`, `--executor`, `match`, `keep`, the facilitator's `network`). The command line `kob`
-(`kob order`, `kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, the
+(`kob recover`, `kob token create`, the trading commands `kob place`, `replace`, `cancel`, `sweep`, `refund`, `take`, `send`, `merge`, the
 views `kob book`, `orders`, `balances` and `kob watch`) defaults to mainnet like kaspad and takes `--testnet` / `--netsuffix=10` / `--network testnet-10`; its
 plans and confirmations name the network and the node must run it. A deployment build (`--features deploy-mainnet` or `deploy-tn10`) implies its own network
 and refuses another. `--rpc-url` (`rpc_url`) of `--indexer`, `--executor` and `kobd withdraw` defaults to `resolver`: the
@@ -1390,9 +1390,9 @@ that carries a password (`wss://user:pass@host/...`) or an API key (in its path 
 Every flag that takes one has an alternative: `--rpc-url` of `--indexer`, `--executor`, `match` and `keep` is also `$KOB_NODE_WRPC`
 (and `rpc_url` in the indexer's `--config` file); the indexer's `--extra-node` is also `$KOB_INDEX_NODES` (comma-separated) or
 `[[nodes]]` in that file; the facilitator's `--node` (`kobd x402`) is also `$KOB_NODE_WRPC` or `node` in its
-`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob order`, `kob token create` and the trading
-commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and `kob recover`, `kob order`, `kob token create` and the trading commands (`kob place`, `cancel`, `take`, ...) take their signing key only from a file
-(`--key-file PATH`) or the environment (`--key-env NAME`, else `$KOB_KEY`); the older `--key HEX|env:NAME|file:PATH` forms of `kob recover`, `kob order` and `kob token create` are deprecated and still accepted with a warning on stderr (the trading commands refuse `--key`), and a raw hex key given on a command line is visible in the process list and the shell history: use the file or the variable (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
+`--config` file (itself also `$KOB_X402_CONFIG`); `--node` of `kob recover`, `kob token create` and the trading
+commands is also `$KOB_NODE_WRPC`, their `--indexer` also `$KOB_INDEXER_URL`, and `kob recover`, `kob token create` and the trading commands (`kob place`, `cancel`, `sweep`, `take`, ...) take their signing key only from a file
+(`--key-file PATH`) or the environment (`--key-env NAME`, else `$KOB_KEY`); `--key` was removed (every command refuses it with a usage error, exit 2), because a raw hex key given on a command line is visible in the process list and the shell history: use the file or the variable (`crates/kob-cli/README.md`). A flag wins over its variable, the variable over the file. Keep the file readable by the service user
 only and put the variable in a root-owned `EnvironmentFile=` (mode 0600). Logs, error messages, the
 health and metrics routes and `kob recover`'s report show a node as `scheme://host[:port]` only (`/...` marks a removed
 path or query): user name, password, path, query and fragment are never printed.
@@ -2264,12 +2264,12 @@ refused), validated in the script engine before anything is written or submitted
 (signed transaction and `submitTransaction` request), and submitted unless `--dry-run`. Like every command that submits, it
 asks first: `--yes` (or `-y`) goes ahead, a terminal is shown each cancel and asked (type `yes`), and without a terminal
 the cancel is `refused` and nothing is signed (exit 1); `--yes` and `--dry-run` exclude each other. Strays are not swept: the node
-alone cannot tell them apart. With an indexer view, `kob order cancel --view <file> [--yes]` cancels with the custody (a pair order: every
+alone cannot tell them apart. With an indexer view, `kob cancel --view <file> [--yes]` (or `kob cancel <covenant id>`, which reads the view from the indexer) cancels with the custody (a pair order: every
 custody of its state, the second one, a sell-first entry's B prefund, from `pair.custodies[1].utxo`; a view without it is refused), the strays
 of the order's tokens (a pair order: of A and of B; within each program's token inputs) and foreign strays, and reports the strays left behind;
-`kob order sweep --view <file> [--yes]` returns the strays without ending the order (the maker's sweep in place: same covenant id,
-same script, custody untouched; the 90-day idle window restarts). Both ask before submitting in the same way as `kob recover --cancel`
-(`--yes`, a terminal, else refused; `--dry-run` signs and validates only). Both look up the view's order UTXO, custody and strays on
+`kob sweep --view <file> [--yes]` (or `kob sweep <covenant id>`, or `kob sweep --all`) returns the strays without ending the order (the maker's sweep in place: same covenant id,
+same script, custody untouched; the 90-day idle window restarts). Both ask before submitting in the same way as every trading command
+(`--yes`, a terminal, else refused; `--dry-run` stops after the plan). A fee above 4 times the node's estimate is refused (`FEE_ABOVE_CEILING`; `--allow-high-fee`). Both look up the view's order UTXO, custody and strays on
 the node first and refuse a view whose order UTXO the node does not hold (stale view).
 
 #### 7.6 Database lost or outdated, record log intact (`replay`)

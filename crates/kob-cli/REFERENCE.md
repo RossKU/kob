@@ -26,7 +26,7 @@ still change until a release says otherwise.
 - [kob watch details](#kob-watch-details)
 - [kob tokens details](#kob-tokens-details)
 - [Token commands details](#token-commands-details)
-- [kob merge, kob order and kob recover](#kob-merge-kob-order-and-kob-recover)
+- [kob merge, kob sweep and kob recover](#kob-merge-kob-sweep-and-kob-recover)
 
 ## The planner: same transactions as the web wallet
 
@@ -123,7 +123,18 @@ A token argument is a ticker or a covenant id. Sources, in order:
 - `--priority-fee` is the web app's "Pay the priority fee": the fee is charged on the storage-inclusive mass (the largest of
   the compute, transient and storage mass; never below the relay minimum) at `--fee-rate` (default 100). It is higher, so it
   is opt-in. The plan then says "(priority fee, storage mass included)" and `transaction.fee_mode` is `"priority"` in `--json`.
-  `kob order sweep|cancel` and `kob recover --cancel` take it too.
+  `kob sweep`, `kob cancel` and `kob recover --cancel` take it too.
+- **Fee ceiling.** Every command that signs compares the fee of each transaction with 4 times the node's fee estimate on the
+  transaction's mass: the estimate is the higher of the priority and the normal bucket of `getFeeEstimate` (at least the relay
+  floor, 100), the mass is the largest of the compute, transient and storage mass. A plan above it is refused: nothing is
+  signed, and the command exits 1 with the issue `FEE_ABOVE_CEILING` (severity `error`; `kob recover` marks the order
+  `refused` with `"code": "FEE_ABOVE_CEILING"`, `kob token create` prints the code in its error), whose message shows the
+  fee and the ceiling. It applies to `place`, `replace`, `cancel`, `sweep`, `refund`, `claim`, `take`, `send`, `merge`,
+  `token create` and `recover --cancel`. `--allow-high-fee` lifts it. The relay minimum and `--priority-fee` are far
+  below it; a `--fee-rate` of more than 4 times the estimate, or an explicit `--fee` of `token create` that is too high,
+  is what it catches. A node that gives no estimate leaves the relay floor as the reference, and a dry run of `token create`
+  (which stays offline) checks at the relay floor. `kob token resume` sends transactions `create` wrote and checked, so it
+  has no ceiling of its own.
 - **Congestion note.** When the node's fee estimate (`getFeeEstimate`) shows contended blocks and neither `--fee-rate` nor
   `--priority-fee` is given, one `note:` line on stderr says so and points at `--priority-fee`. `--fee-rate N` alone is still
   charged on the compute and transient mass only. The `--json` stdout is untouched; a node without the estimate gives no note.
@@ -286,8 +297,9 @@ refusal is the error on stderr (exit 1).
 ## JSON output
 
 `--json` is a flag of `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`, `book`, `orders` and `balances`.
-`kob tokens` prints one document with it and `kob watch` one JSON line per event. `kob order sweep|cancel` and `kob recover`
-always print a JSON report. In `kob registry`, `programs`, `add-program` and `verify-genesis` take `--json`.
+`kob tokens` prints one document with it and `kob watch` one JSON line per event. `kob recover` always prints a JSON report.
+In `kob registry`, `programs` and `verify-genesis` take `--json`. `kob sweep` and `kob cancel` take `--json` like the other trading
+commands (one document per order; with `--view FILE` too).
 `kob token create|resume|verify-declaration` have no `--json` (text; the files `--out-dir` writes are JSON).
 
 ### Conventions
@@ -458,28 +470,28 @@ NDJSON, one document per line:
   document, or the row `kob orders --json` prints for the order; `null` for an order the indexer does not know);
 - `{"type":"note","data":{"message":".."}}` for the watch's own events (reconnects, reorgs).
 
-### `kob order sweep|cancel` and `kob recover`
+### `kob recover`
 
-A report on stdout (or `--out FILE`); one line per order and a summary go to stderr. Confirmation is per order (`kob recover`
-only with `--cancel`): `--yes` signs and submits; without it a terminal is shown the order and asked; without a terminal the
-order is `refused` (reason `not signed: pass --yes ...`) and the exit code is 1. `--dry-run` signs and engine-validates but
-never submits.
+A report on stdout (or `--out FILE`); one line per order and a summary go to stderr. Confirmation is per order (only with
+`--cancel`): `--yes` signs and submits; without it a terminal is shown the order and asked; without a terminal the order is
+`refused` (reason `not signed: pass --yes ...`) and the exit code is 1. `--dry-run` signs and engine-validates but never
+submits. An order above the fee ceiling is `refused` with `"code": "FEE_ABOVE_CEILING"` (`--allow-high-fee`).
 
-- `kob order`: `{"action": "sweep" | "cancel", "network", "orders": [...], "rejected": [{"source", "reason"}]}`. Each order
-  has `covenant_id`, `kind`, `source` and `status`: `submitted`, `signed` (a dry run), `skipped`, `refused` or `failed` (the
-  last two with `reason`). A `submitted` or `signed` order also has `txid`, `fee` (string), `funding` (`"order"`, or the
-  outpoint of the maker's UTXO that paid the fee), `returned` (as `cancel`'s), `left_behind` (array of
-  `{"outpoint", "token", "reason"}`), `disclosure` (text), `file` (path or `null`) and `engine_validated`.
 - `kob recover`: `{"network", "node", "orders": [...], "rejected": [...], "summary": {"live", "not_found", "unsupported",
   "other_maker", "rejected"}}` (numbers in `summary`). Each order has `covenant_id`, `kind`, `template`, `template_hash`,
   `maker`, `status` (`live`, `not_found`, `unsupported` or `other_maker`), `note`, `source` and `candidates`; a live one also
   `outpoint`, `value`, `utxo_daa`, `state`, `amount_left`, `scale`, `min_fill` (strings), `found_by` and `custody`, and with
-  `--cancel` a `cancel` object shaped like an order of `kob order`.
+  `--cancel` a `cancel` object: `status` (`submitted`, `signed` (a dry run), `skipped`, `refused` or `failed`, the last two with
+  `reason`), and for a `submitted` or `signed` one `txid`, `fee` (string), `funding` (`"order"`, or the outpoint of the maker's UTXO
+  that paid the fee), `file` (path or `null`) and `engine_validated`.
+
+`kob sweep` and `kob cancel` (also from `--view FILE`) print the one document of every trading command, per order: see `kob cancel`
+above. A sweep's plan (`plan`) is `{"action": "sweep", "covenant_id", "kind", "template", "returned"}`; the strays left behind are
+`CANCEL_LEFT_BEHIND` warnings in `issues`.
 
 ### `kob registry`
 
-`programs --json` prints the array of token-program profiles. `add-program --json` prints one document (`profile`,
-`detection`, `already_embedded`, `blocked`, `review_tasks`, `registry_template`). `verify-genesis --json` prints its text
+`programs --json` prints the array of token-program profiles. `verify-genesis --json` prints its text
 lines first and then the array of genesis records (`ticker`, `covenant_id`, `genesis_verified`, and `genesis` or `error`) on
 the same stdout, so its output is not one JSON document.
 
@@ -491,7 +503,7 @@ The code separates three outcomes; the finer cause is in the message on stderr, 
 |---|---|
 | 0 | success: the work was done, `--dry-run` stopped after the plan, a view was printed, or `--help` / `--version` |
 | 1 | the command ran and did not do its work: a node, indexer or network-check error, a planning error, a plan with an `error` issue, a transaction needing another key's signature, a signing / script-engine / submission failure, a `kob take` whose price is worse than its `--max-price` / `--min-price` (`TAKE_PRICE_ABOVE_MAX` / `TAKE_PRICE_BELOW_MIN` in `issues`), **or a refusal to sign** (no `--yes` without a terminal, or an answer other than `yes`) |
-| 2 | usage: an unknown command or option, a missing or malformed argument, no signing key, a key on the command line (`--key` of a trading command), `--yes` with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a missing required option of the kind) in `place`, `replace`, `take`, `send` and `refund`; `kob take --yes` without `--max-price` or `--min-price`, both of them, or the one of the other side |
+| 2 | usage: an unknown command or option, a missing or malformed argument, no signing key, a key on the command line (`--key`, removed: every command refuses it), a removed spelling (`kob order`, `kob token issue`, `--logo`, `--icon`, `kob registry add-program`, `--program 8x8-prototype`), `--yes` with `--dry-run`, `kob place` without a kind; also an order term that does not read (an amount, price, tip or carrier without a unit or out of range, a covenant id that is not 64 hex, a missing required option of the kind) in `place`, `replace`, `take`, `send` and `refund`; `kob take --yes` without `--max-price` or `--min-price`, both of them, or the one of the other side |
 
 So a refusal, a plan error, a price bound a take does not meet, a node error and a declined prompt are all 1 (there is no
 exit code of its own for a price refusal: read `issues`). Read stderr (`error: ...` for failures,
@@ -503,17 +515,19 @@ An explicit `--help` or `-h` prints the usage on stdout and exits 0, on every co
 `kob token --help`, `kob registry --help`, `kob registry validate --help`, `kob book --help`. `kob help <command> [<subcommand>]` is
 `kob <command> [<subcommand>] --help`. `kob` with no command and `kob help` print the usage on stdout and exit 0. A usage
 printed because of a mistake goes to stderr and exits 2: an unknown command or subcommand, `kob token` or `kob registry` with
-no subcommand, and `kob place`, `kob order`, `kob watch` and `kob token resume` with no arguments. `kob --version` (`-V`)
+no subcommand, and `kob place`, `kob watch` and `kob token resume` with no arguments. `kob --version` (`-V`)
 prints `kob 0.1.0 (testnet-10 build, commit a1b2c3d4e5f6)`; a build without a deployment feature says `development build, no
 network`, and the commit is `unknown` when the build was not given one.
 
 Per family:
 
-- **Trading commands.** `kob cancel A B` tries every id; the exit code is that of the last id that failed (0 when none did).
-- **`kob order sweep|cancel`, `kob recover`.** 0 when every attempted order was handled; 1 when an order is `failed` or
-  `refused` (for `kob order` also when a file was `rejected`), when the report could not be written, or on an error such as
-  an unreadable file or an unreachable node; 2 for an argument error (`--yes` with `--dry-run` included). An order that is
-  only `skipped` does not make the code 1. `kob recover` without `--cancel` is 0 whatever it found.
+- **Trading commands.** `kob cancel A B` and `kob sweep A B` try every id; the exit code is that of the last id that failed (0 when
+  none did). From `--view FILE` (or `kob sweep --all`) an order that is skipped (another maker's, an unpinned template, nothing to
+  sweep) does not make the code 1; a stale view, a refusal, a file that is not a view or is `rejected`, and a plan above the fee
+  ceiling do. An id named on the command line that is skipped is 1.
+- **`kob recover`.** 0 when every attempted order was handled; 1 when an order is `failed` or `refused`, when the report could not
+  be written, or on an error such as an unreadable file or an unreachable node; 2 for an argument error (`--yes` with
+  `--dry-run` included). An order that is only `skipped` does not make the code 1. Without `--cancel` it is 0 whatever it found.
 - **`kob token create`.** 0 on success or a dry run; 2 for an argument error (an unknown or malformed option, a missing
   required one, no key); 1 on any other error and on a refusal (no `--yes`, no terminal). `resume`: the same, and 2 with no
   argument. `verify-declaration`: 0 when the proof verifies, 1 when it does not or
@@ -523,8 +537,8 @@ Per family:
   wanted, every subscription refused); 2 for an argument error.
 - **`kob registry`.** `validate`: 0 valid, 1 invalid, 2 usage or an unreadable file. `verify-genesis`: 0 when the registry
   says exactly what the evidence proves, 1 on a mismatch or an invalid registry or evidence file, 2 for usage or an
-  unreadable file. `programs`: 0, or 2 for usage. `add-program`: 0, 1 when the profile cannot be derived or `--write` is
-  refused, 2 for usage. Every one answers `--help` / `-h` with its usage on stdout and exit 0.
+  unreadable file. `programs`: 0, or 2 for usage. (`add-program` is `kob-maint add-program` now: 0, 1 when the profile cannot
+  be derived or `--write` is refused, 2 for usage; `kob registry add-program` is a usage error.) Every one answers `--help` / `-h` with its usage on stdout and exit 0.
 
 ## kob watch details
 
@@ -578,13 +592,13 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | `--fund-utxo TXID:INDEX:AMOUNT:OWNER` | required, repeatable, all of one key; AMOUNT in sompi; OWNER a 64-hex x-only key or a P2PK address |
 | `--supply UNITS` | total supply in base units; must equal the sum of the holders. Without `--holder` it all goes to the funding key |
 | `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` | repeatable, one token output each (OWNER 64-hex, `self` or an address) |
-| `--program` | `public-mint` (default), `3x3`, `8x8-prototype`, `kasparocket-testnet` (testnet-10 only) |
+| `--program` | `public-mint` (default), `3x3`, `kasparocket-testnet` (testnet-10 only); `8x8-prototype` is no longer issued (a usage error) |
 | `--carrier` | sompi on each token output (default 1000000000 = 10 KAS) |
 | `--fee`, `--fee-rate`, `--change-to` | explicit genesis fee; sompi per mass unit (default 100); change address (default the funding key) |
-| `--description`, `--image`, `--website`, `--x`, `--telegram` | declared on chain (at most 1024 bytes with name, symbol, decimals); `--logo` / `--icon` are deprecated spellings of `--image` |
+| `--description`, `--image`, `--website`, `--x`, `--telegram` | declared on chain (at most 1024 bytes with name, symbol, decimals); `--logo` / `--icon` were removed (use `--image`) |
 | `--image-file PATH` / `--image-hash HEX` | the picture's SHA-256, declared as `image_hash` (needs `--image`; PNG, JPEG, WebP or GIF up to 1500000 bytes, no SVG) |
 | `--extension-commitment`, `--allow-borrow` | advanced; see `--help` |
-| `--key-file PATH`, `--key-env NAME` | the signing key (the README's [Keys](README.md#keys); else `$KOB_KEY` when the run signs). The older `--key file:PATH`, `--key env:VAR` and `--key HEX` still work and print a deprecation warning |
+| `--key-file PATH`, `--key-env NAME` | the signing key (the README's [Keys](README.md#keys); else `$KOB_KEY` when the run signs). `--key` was removed (a key on the command line is a usage error) |
 | `--out-dir`, `--node`, `--network`, `--yes` / `-y`, `--dry-run` | as below |
 
 - **Program.** The default `public-mint` issues the `KCC20` actor of upstream's published `KCC20PublicMint` app (registry
@@ -610,23 +624,27 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
   `GET /v1/tokens/<id>/declaration`, a community list, `kob token create`). It recomputes both transaction ids and the
   covenant id and prints the covenant id, the transaction ids and the declaration only when it is bound to that id (exit 0);
   otherwise it prints the error on stderr and exits 1.
-- `kob token issue` is the former name of `kob token create`: it still works, identically, with a one-line deprecation note on
-  stderr.
+- `kob token issue` (the former name of `create`) was removed: a usage error (exit 2) that names `kob token create`. So were
+  `--key`, `--logo`, `--icon` and `--program 8x8-prototype`.
 
-## kob merge, kob order and kob recover
+## kob merge, kob sweep and kob recover
 
 - **`kob merge <TOKEN> [--wait-secs N]`** takes the key's UTXOs of the token of one borrow setting (plain first; smallest first)
   and chains transfers to the key itself; the merged output keeps that setting, at most 10 transactions per run (run again for more). The merged output keeps the largest input carrier (at most
   1 KAS); the freed carriers pay the fee. One confirmation signs the chain; each later link waits up to `--wait-secs`
   (default 30) for the node to show the previous output.
-- **`kob order sweep --view FILE...`** returns an order's strays to the maker while the order continues in place (same
-  covenant id). **`kob order cancel --view FILE...`** is the maker's cancel from saved indexer views (an order under a retired template of
-  the cancel-only table too: through that template's own cancel entry; `kob order sweep` skips such an order). Views come from `GET /v1/orders/{id}` or a page such as `GET /v1/orders?maker=<pubkey>&status=active`.
+- **`kob sweep <ID>... | --all | --view FILE...`** returns an order's strays to the maker while the order continues in place (same
+  covenant id). **`kob cancel <ID>... | --view FILE...`** is the maker's cancel (an order under a retired template of the
+  cancel-only table too: through that template's own cancel entry; `kob sweep` skips such an order). The order is read from the
+  indexer by covenant id, or from a saved view with `--view FILE` (repeatable; no indexer is needed; a view is `GET /v1/orders/{id}` or
+  a page such as `GET /v1/orders?maker=<pubkey>&status=active`; orders of other makers are skipped; every UTXO is looked up on the
+  node, a view whose order the node does not hold is refused as stale). `kob sweep --all` takes every live order of the key from the
+  indexer. Both are trading commands in every other respect: the plan and its decoded transaction, `--yes`, `--dry-run`, `--json`,
+  `--out-dir`, the fee ceiling and the exit codes are those of `kob cancel`. They replace `kob order sweep|cancel`, which was removed.
 - **`kob recover --from FILE... [--amount-left [ID=]AMOUNT] [--cancel --key-file PATH]`** finds the maker's orders on a node alone,
   from the web wallet's backup, an indexer recovery / export file or an indexer view. The search is not exhaustive: an order
   partly filled by an unusual amount is reported `not_found` unless you pass `--amount-left`. `--cancel` cancels every live
-  order of the key's maker (strays are not swept: use `kob order` from an indexer view first). `getUtxosByAddresses` needs a
+  order of the key's maker (strays are not swept: use `kob sweep` or `kob cancel` first). `getUtxosByAddresses` needs a
   node with `--utxoindex`.
-- These three keep their own option parsers, but the key rule is the same as everywhere: `--key-file PATH`, `--key-env NAME`,
-  else `$KOB_KEY`. The older `--key file:PATH`, `--key env:NAME` and `--key HEX` are still accepted and print a deprecation
-  warning that names the new spelling (a `HEX` key is visible in the process list and shell history).
+- `kob recover` and `kob token create` keep their own option parsers, but the key rule is the same as everywhere: `--key-file PATH`,
+  `--key-env NAME`, else `$KOB_KEY`. `--key` was removed (a `HEX` key is visible in the process list and shell history).

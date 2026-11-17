@@ -61,7 +61,7 @@ or after you type `yes` at a terminal. Without a terminal and without `--yes` it
 | Indexer | `--indexer URL` (`http://` or `https://`) | `KOB_INDEXER_URL` | testnet-10: `https://kob-api-tn10.kaspa.ag`; mainnet: `https://kob-api.kaspa.ag` |
 | Signing key | `--key-file PATH`, `--key-env NAME` | `KOB_KEY` | none |
 | Token registry | `--registry FILE` | | the registry embedded for the network |
-| Fee | `--fee-rate N`, `--priority-fee` | | 100 sompi per gram, relay minimum |
+| Fee | `--fee-rate N`, `--priority-fee`, `--allow-high-fee` | | 100 sompi per gram, relay minimum; a plan above 4 times the node's fee estimate is refused ([fee ceiling](#fee-ceiling)) |
 | Local state, cache | | `KOB_STATE_DIR`, `KOB_CACHE_DIR` | per-user state and cache directories |
 
 - **Network.** Every plan and prompt names the network. The node must run it, or nothing is planned
@@ -85,17 +85,25 @@ One rule for every command that takes a key:
 - `--key-env NAME`: the environment variable holding it.
 - With neither, the environment variable `KOB_KEY`. `--key-file` wins over the variable.
 - The key is never printed. A command line that contains the hex of the key anywhere is refused,
-  because arguments are visible to other users (`ps`, shell history). The trading commands refuse
-  `--key` altogether.
+  because arguments are visible to other users (`ps`, shell history). `--key` was removed: every
+  command refuses it with a usage error (exit 2) and never prints the key.
 - The CLI does not check the file's permissions. Protect it yourself: `chmod 600` on Unix, an
   owner-only ACL on Windows.
 - Commands that sign: `place`, `replace`, `cancel`, `refund`, `take`, `send`, `merge`,
-  `token create`, `recover --cancel`, `order sweep|cancel`. `orders` and `balances` use only the
+  `sweep`, `token create`, `recover --cancel`. `orders` and `balances` use only the
   public key (or `--maker KEY|ADDRESS`). The rest need no key. `kob token create --dry-run` signs
   only when a key is named with `--key-file` or `--key-env`.
-- Deprecated spellings of `kob token create`, `kob recover` and `kob order`: `--key file:PATH` (use
-  `--key-file PATH`), `--key env:NAME` (use `--key-env NAME`) and `--key HEX`. They still work and
-  print a deprecation warning on stderr. A key as `HEX` is visible to other users.
+
+### Fee ceiling
+
+Every command that signs (`place`, `replace`, `cancel`, `sweep`, `refund`, `claim`, `take`, `send`, `merge`,
+`token create`, `recover --cancel`) compares the fee of each transaction with a ceiling: 4 times the node's fee
+estimate (`getFeeEstimate`: the higher of the priority and the normal bucket, at least the relay floor of 100) on the
+transaction's mass. A plan above it is refused, nothing is signed, and the command exits 1 with the issue
+`FEE_ABOVE_CEILING`, which shows the fee and the ceiling. `--allow-high-fee` lifts the ceiling. The usual relay fee and
+`--priority-fee` are far below it; a `--fee-rate` of more than 4 times the estimate, or a wrong `--fee` of
+`token create`, is what it catches. A node that gives no estimate leaves the relay floor as the reference. A dry run of
+`token create` stays offline and checks at the relay floor.
 
 ## Commands
 
@@ -103,7 +111,8 @@ One rule for every command that takes a key:
 |---|---|
 | `kob place <KIND>` | place an order (kinds below) |
 | `kob replace <ID>` | amend a live order in place, or cancel-replace it in one transaction |
-| `kob cancel <ID>...` | the maker's cancel: custody, strays and KAS back to the maker |
+| `kob cancel <ID>...` | the maker's cancel: custody, strays and KAS back to the maker (`--view FILE`: from saved indexer views, no indexer needed) |
+| `kob sweep <ID>...` | return an order's strays to you; the order continues in place (`--all`: every live order of the key; `--view FILE`: from saved indexer views) |
 | `kob claim <ID> [--merge | --sell --price P]` | take what a collected buy order bought: alone, with your UTXOs, or sold in the same transaction |
 | `kob refund <ID>` | refund an ended order; any key may send it and keeps the refund tip, less the fee |
 | `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price`; one is required with `--yes`) |
@@ -114,12 +123,11 @@ One rule for every command that takes a key:
 | `kob balances` | free KAS and tokens, and what your live orders hold |
 | `kob tokens [SEARCH] [--all]` | tokens with a KOB market; `--all` adds kascov.io's list |
 | `kob watch fills\|book\|order\|health` | follow the live feed (read-only) |
-| `kob order sweep\|cancel --view FILE` | sweep strays or cancel from saved indexer views |
 | `kob recover --from FILE` | find your orders on a node from a backup or export, and cancel them (`--cancel`) |
 | `kob token create` | create a fixed-supply KCC-20 token |
 | `kob token resume <DIR>` | send a creation whose genesis did not go out |
 | `kob token verify-declaration <PROOF>` | check a KCC-23 launch proof |
-| `kob registry validate\|verify-genesis\|programs\|add-program` | token registry and token-program tools |
+| `kob registry validate\|verify-genesis\|programs` | token registry and token-program tools (`add-program` is `kob-maint`, the maintainers' binary, not part of the release) |
 
 `<ID>` is an order's covenant id (64 hex). `<TOKEN>` is a ticker or a covenant id. A ticker that
 names more than one token is refused: give the covenant id.
@@ -252,7 +260,7 @@ kob watch health                                # indexer progress; a health lin
 |---|---|
 | 0 | done, `--dry-run` stopped after the plan, or a view was printed |
 | 1 | the command ran but did not do its work: node / indexer / plan error, a take whose price is worse than its bound, or a refusal to sign (no `--yes`, or a declined prompt) |
-| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` on a trading command, `--yes` with `--dry-run`, `kob take --yes` without `--max-price` / `--min-price` |
+| 2 | usage: unknown option, malformed argument (e.g. an amount without a unit, `--depth 0`), no key, `--key` (removed), a removed spelling, `--yes` with `--dry-run`, `kob take --yes` without `--max-price` / `--min-price` |
 
 `--help` prints on stdout and exits 0. A usage printed because of a mistake (`kob place` with no
 arguments) goes to stderr and exits 2. The reason is on stderr (`error: ...` or `not signed: ...`)
@@ -291,7 +299,8 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
 - Drop `--dry-run` and add `--yes` to submit (the public nodes are used unless `--node` or
   `KOB_NODE_WRPC` names one).
 - `--program public-mint` (default) is what kascov.io lists as KCC-20. `--program 3x3` is cheaper
-  per transfer, but other indexers do not recognise it.
+  per transfer, but other indexers do not recognise it. The 8 / 8 prototype is no longer issued;
+  tokens that exist on it are still held, traded and recovered.
 - Files go to `--out-dir` (a submitting run without it: `./kob-create-<id>`). If the genesis did not
   go out: `kob token resume <DIR>`.
 - `kob token verify-declaration <launch_proof.json>` checks a launch proof from any source.
@@ -310,3 +319,26 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
 - `SEARCH` is a ticker prefix (any case) or a covenant-id prefix.
 - KOB makes no judgement of a token: there is no "verified" or "official" column. Tickers collide.
   The covenant id is the identity. More: [details](REFERENCE.md#kob-tokens-details).
+
+## Changes
+
+For the release notes. Each removed spelling is a usage error (exit 2) that names its replacement.
+
+- **Removed spellings.**
+  - `--key HEX`, `--key env:NAME`, `--key file:PATH` (also `--key=...`) on `token create` and `recover`: use
+    `--key-file PATH`, `--key-env NAME` or `KOB_KEY`. A key on the command line is refused by every command now.
+  - `kob token issue`: use `kob token create`.
+  - `--logo` and `--icon` of `token create`: use `--image`.
+- **`kob order` is gone.** `kob order sweep --view FILE` is `kob sweep --view FILE`, and `kob order cancel --view FILE`
+  is `kob cancel --view FILE`. Both now use the shared plan, confirmation, `--json` and exit-code rules of the trading
+  commands; the older report format (`--out`, a `status` per order) is gone. `kob sweep <ID>...` and `kob sweep --all`
+  take the order from the indexer, as `kob cancel <ID>...` does.
+- **`kob registry add-program` moved** to `kob-maint add-program`, a maintainers' binary of this crate that is not part of
+  the release (`cargo run -p kob-cli --bin kob-maint -- add-program ...`).
+- **Fee ceiling.** Every command that signs refuses a plan whose fee is above 4 times the node's fee estimate (issue
+  `FEE_ABOVE_CEILING`, exit 1) unless `--allow-high-fee` is given. See [Fee ceiling](#fee-ceiling).
+- **No 8 / 8 issuance.** `kob token create --program 8x8-prototype` is refused. Holding, trading and recovering tokens
+  that exist on that program is unchanged.
+- **`--node` is `--extra-node` in `kobd`** (changed earlier, in the executor's command line: a bare `--node` on a start is
+  a usage error naming `--rpc-url`; `--extra-node` adds a further node). The `--node` of `kob` is unchanged.
+- **Kept:** `kob watch`, `kob tokens --all`, `kob token create`.

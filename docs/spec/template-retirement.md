@@ -32,8 +32,8 @@ trail, merge, sweep, amend, cancel-replace or refund, no listing, and no placeme
 resolves the order from its own placement record under the retired script, marks it "older contract version — cancel only", and
 counts it in Cancel all; its signer shows such a cancel as "Cancel an order under an older contract version (cancel only)" and
 refuses any other spend of it. The indexer's single-order view (`GET /v1/orders/{id}`) serves such an order marked
-`cancel_only` (for `kob cancel`); no list, book, count or plan includes it. `kob cancel`, `kob order cancel --view` and
-`kob recover --cancel` build its cancel; `kob order sweep`, `kob replace` and `kob refund` refuse it. An order under a template
+`cancel_only` (for `kob cancel`); no list, book, count or plan includes it. `kob cancel` (also `kob cancel --view`) and
+`kob recover --cancel` build its cancel; `kob sweep`, `kob replace` and `kob refund` refuse it. An order under a template
 neither pinned nor in this table is unknown, as above: the web wallet marks it `old-template` with no Cancel button, and its
 maker cancels it with the KOB release it was placed with.
 

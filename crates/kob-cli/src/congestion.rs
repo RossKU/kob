@@ -39,7 +39,20 @@ pub fn note(node: &str, fee_rate: Option<u64>, priority_fee: bool) -> Option<Str
     if fee_rate.is_some() || priority_fee {
         return None;
     }
-    crate::wrpc::call(node, "getFeeEstimate", json!({}), ESTIMATE_TIMEOUT).ok().and_then(|a| note_for(&a))
+    note_from(answer(node).as_ref(), fee_rate, priority_fee)
+}
+
+/// What `getFeeEstimate` of `node` answers, or none when it does not answer in time.
+pub fn answer(node: &str) -> Option<Value> {
+    crate::wrpc::call(node, "getFeeEstimate", json!({}), ESTIMATE_TIMEOUT).ok()
+}
+
+/// [`note`] from an answer that was read already.
+pub fn note_from(answer: Option<&Value>, fee_rate: Option<u64>, priority_fee: bool) -> Option<String> {
+    if fee_rate.is_some() || priority_fee {
+        return None;
+    }
+    answer.and_then(note_for)
 }
 
 #[cfg(test)]

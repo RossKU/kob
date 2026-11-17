@@ -2,16 +2,16 @@
 //!
 //! The commands are:
 //! - `kob token create`, `resume` and `verify-declaration`: fixed-supply KCC-20 issuance.
-//! - `kob registry validate`, `verify-genesis`, `programs` and `add-program`.
+//! - `kob registry validate`, `verify-genesis` and `programs` (`add-program` is `kob-maint`, a maintainer binary).
 //! - `kob recover`: find the orders of a maker on the node from a backup, a recovery or export
 //!   file or an indexer view, and cancel them with `--cancel`.
-//! - `kob order sweep|cancel`: the sweep in place of the strays of a maker, and the cancel of the
-//!   maker, from an indexer order view.
-//! - The trading commands `kob place`, `replace`, `cancel`, `refund`, `take`, `send` and `merge`.
+//! - The trading commands `kob place`, `replace`, `cancel`, `sweep`, `refund`, `take`, `send` and `merge`;
+//!   `cancel` and `sweep` take saved indexer order views with `--view FILE`.
 //! - The views `kob book`, `orders` and `balances` ([`trade`]), and `kob watch` and `kob tokens`.
 
 mod common;
 mod congestion;
+mod feecap;
 mod help;
 mod inputs;
 mod nodelink;
@@ -46,7 +46,7 @@ READ (no key)
   kob watch fills|book|order|health [...]
                                follow the executor's live feed: fills, a book, orders' states, indexer progress
 
-TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; a key on the command line (--key) is refused)
+TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; --key was removed: a key on the command line is visible to others)
   kob place <KIND> --token T [--quote B] --side buy|sell --amount A [...]
                                place an order as the web wallet plans it: limit, ioc, fok, market, streaming, close,
                                twap, dca, dutch, stop-market, stop-limit, trailing-stop, take-profit, oco, ifd, ifo,
@@ -54,7 +54,9 @@ TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; a key on the com
   kob replace <COVENANT_ID> [--price P] [--amount A] [--tip T] [--stop P] [--renew] [...]
                                amend a live order in place, or cancel-replace it in one transaction (trailing stops,
                                if-done entries and pair orders are re-planned from their terms)
-  kob cancel <COVENANT_ID>...  the maker's cancel by covenant id (indexer view, checked on the node)
+  kob cancel <COVENANT_ID>...  the maker's cancel by covenant id (indexer view, checked on the node); `--view FILE` instead: saved views
+  kob sweep <COVENANT_ID>... | --all | --view FILE...
+                               return an order's strays to the maker, the order continues (`kob sweep --help`)
   kob refund <COVENANT_ID>     the permissionless refund of an ended order (the sender keeps the refund tip)
   kob claim <COVENANT_ID> [--merge | --sell --price P]
                                take the tokens a collected buy order bought (alone, merged with yours, or sold)
@@ -64,7 +66,8 @@ TRADE (a key: --key-file PATH or --key-env NAME, else $KOB_KEY; a key on the com
                                send a token (within its program's slots) or KAS
   kob merge <TOKEN>            merge the key's own UTXOs of a token into one (a chain of transfers to itself)
   The trading commands show the plan and sign only with --yes or a terminal's confirmation; --dry-run stops before
-  signing; --json prints one JSON document.
+  signing; --json prints one JSON document. A plan whose fee is above 4 times the node's fee estimate is refused
+  (FEE_ABOVE_CEILING, exit 1) unless --allow-high-fee is given; this holds for every command that signs.
 
 TOKENS AND REGISTRY
   kob token create [OPTIONS]   create a fixed-supply KCC-20 token: KCC-23 declaration, then the genesis (`kob token create --help`);
@@ -76,23 +79,17 @@ TOKENS AND REGISTRY
   kob registry verify-genesis --network NET [--evidence FILE] [--registry FILE] [--json]
                                re-derive each token's genesis check and live-minter check from chain evidence
   kob registry programs [--json]   the token-program profiles this build embeds
-  kob registry add-program <ARTIFACT|REDEEM> [--name N] [--slots I/O] [--write] [...]
-                               derive a new token program's profile from its bytes (`kob registry add-program --help`)
   kob recover --from <FILE>... --node ws://HOST:PORT [--amount-left <AMOUNT>] [--cancel --key-file PATH [--yes] ...]
                                find orders on the node from a backup / export / indexer view; cancel them (--cancel signs and
                                submits only with --yes or a terminal's confirmation; --dry-run stops before submitting)
                                (`kob recover --help`; `--amount-left` names the amount a partly filled order has left)
-  kob order sweep  --view <FILE>... --key-file PATH --node ws://HOST:PORT [--yes] [...]
-                               return an order's strays to the maker, the order continues (`kob order --help`)
-  kob order cancel --view <FILE>... --key-file PATH --node ws://HOST:PORT [--yes] [...]
-                               the maker's cancel with custody and strays from an indexer view (older contract versions too);
-                               both submit only with --yes or a terminal's confirmation; --dry-run stops before submitting
 
 GLOBAL OPTIONS (`kob <command> --help` lists the ones a command takes)
   --testnet            the testnet-10 network, as --network testnet-10 (also --netsuffix=10); every command
   --network NET        mainnet (the default) or testnet-10; a deployment build is bound to its own network
   --indexer URL        the indexer API (default $KOB_INDEXER_URL, else the deployment record's); read and trade commands
-  --node URL           the node's wRPC endpoint (default $KOB_NODE_WRPC, else the public nodes); trade, token, recover, order
+  --node URL           the node's wRPC endpoint (default $KOB_NODE_WRPC, else the public nodes); trade, token, recover
+  --allow-high-fee     pay a fee above the ceiling (4 times the node's fee estimate); every command that signs
   --key-file PATH      the file holding the signing key (64 hex), or
   --key-env NAME       the environment variable holding it (default $KOB_KEY); every command that signs
   --json               one JSON document (watch: one per line); read and trade commands
@@ -116,7 +113,7 @@ USAGE
 
 /// Help of `kob registry`.
 const REGISTRY_USAGE: &str = "\
-kob registry: check a token registry, re-derive its genesis checks, list and add token programs
+kob registry: check a token registry, re-derive its genesis checks, list the token programs
 
 USAGE
   kob registry validate <tokens.json> [--network NET]
@@ -124,15 +121,13 @@ USAGE
   kob registry verify-genesis --network NET [--evidence FILE] [--registry FILE] [--json]
                                         re-derive each token's genesis check and live-minter check from chain evidence
   kob registry programs [--json]        the token-program profiles this build embeds
-  kob registry add-program <ARTIFACT|REDEEM> [--name N] [--slots I/O] [--write] [...]
-                                        derive a new token program's profile from its bytes
 
   `kob registry <subcommand> --help` (or `kob help registry <subcommand>`) prints the help of one of them.
 ";
 
 /// The commands `kob help <command>` knows.
 const COMMANDS: &[&str] = &[
-    "token", "registry", "recover", "order", "place", "replace", "cancel", "refund", "claim", "take", "send", "merge", "book",
+    "token", "registry", "recover", "place", "replace", "cancel", "sweep", "refund", "claim", "take", "send", "merge", "book",
     "orders", "balances", "watch", "tokens",
 ];
 
@@ -162,6 +157,12 @@ fn unknown_sub(family: &str, sub: &str, usage: &str) -> i32 {
     help::print_usage_error(&[usage])
 }
 
+/// A removed spelling: a usage error (exit 2) that names its replacement.
+fn removed(old: &str, new: &str) -> i32 {
+    eprintln!("error: `{old}` was removed: use `{new}`");
+    help::USAGE_EXIT
+}
+
 fn main() {
     // `--testnet` and `--netsuffix=10`, as in kaspad, name testnet-10 for every command. Mainnet is
     // the default.
@@ -189,12 +190,8 @@ fn dispatch(args: &[String]) -> i32 {
             help::print_usage_error(&[USAGE])
         }
         ["token", "create", rest @ ..] => token::run_issue(&args[2..2 + rest.len()]),
-        // The former name of `kob token create`. It still works and says so on stderr, never in
-        // `--json` output on stdout.
-        ["token", "issue", rest @ ..] => {
-            eprintln!("note: `kob token issue` is now `kob token create`; the old name still works but is deprecated");
-            token::run_issue(&args[2..2 + rest.len()])
-        }
+        // Removed spellings are usage errors (exit 2) that name what replaces them.
+        ["token", "issue", ..] => removed("kob token issue", "kob token create"),
         ["token", "resume", rest @ ..] => token::run_resume(&args[2..2 + rest.len()]),
         ["token", "verify-declaration", rest @ ..] => token::run_verify_declaration(&args[2..2 + rest.len()]),
         ["token", rest @ ..] if rest.is_empty() || help::wants_help(&rest[..1]) => {
@@ -204,16 +201,22 @@ fn dispatch(args: &[String]) -> i32 {
         ["registry", "validate", rest @ ..] => registry::run_validate(rest),
         ["registry", "verify-genesis", rest @ ..] => registry::run_verify_genesis(rest),
         ["registry", "programs", rest @ ..] => programs::run_programs(rest),
-        ["registry", "add-program", rest @ ..] => programs::run_add_program(rest),
+        ["registry", "add-program", ..] => removed(
+            "kob registry add-program",
+            "kob-maint add-program (the maintainers' binary, from the source tree: cargo run -p kob-cli --bin kob-maint -- add-program ...)",
+        ),
         ["registry", rest @ ..] if rest.is_empty() || help::wants_help(&rest[..1]) => {
             help::help_or_usage(rest, &[REGISTRY_USAGE], true).unwrap_or(2)
         }
         ["registry", sub, ..] => unknown_sub("registry", sub, REGISTRY_USAGE),
         ["recover", ..] => recover::run(&args[1..]),
-        ["order", ..] => order::run(&args[1..]),
+        ["order", "sweep", ..] => removed("kob order sweep", "kob sweep --view FILE (or kob sweep ID..., kob sweep --all)"),
+        ["order", "cancel", ..] => removed("kob order cancel", "kob cancel --view FILE (or kob cancel ID...)"),
+        ["order", ..] => removed("kob order", "kob sweep or kob cancel (--view FILE takes saved indexer views)"),
         ["place", ..] => trade::place::run(&args[1..]),
         ["replace", ..] => trade::actions::run_replace(&args[1..]),
         ["cancel", ..] => trade::actions::run_cancel(&args[1..]),
+        ["sweep", ..] => trade::actions::run_sweep(&args[1..]),
         ["refund", ..] => trade::actions::run_refund(&args[1..]),
         ["claim", ..] => trade::actions::run_claim(&args[1..]),
         ["take", ..] => trade::actions::run_take(&args[1..]),

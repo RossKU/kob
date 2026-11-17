@@ -62,7 +62,7 @@ pub fn check_network_first(c: &Common) -> Result<(), String> {
 }
 
 /// Shows the plan, confirms, signs and submits, and returns the process exit code.
-pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &str) -> i32 {
+pub fn finish(c: &Common, signer: &Signer, mut r: Ready, units: &Units, argv_hint: &str) -> i32 {
     // The plan was read from this node, so it must run the network the command names before
     // anything is shown as a plan of that network or signed.
     if let Err(e) = c.need_node().and_then(|n| crate::wrpc::check_node_network(n, &c.network, crate::common::NODE_TIMEOUT)) {
@@ -71,8 +71,14 @@ pub fn finish(c: &Common, signer: &Signer, r: Ready, units: &Units, argv_hint: &
     }
     // With contended blocks and no --fee-rate or --priority-fee, one line goes to stderr, never
     // into the --json document. The fee stays the relay minimum.
-    if let Some(n) = c.need_node().ok().and_then(|n| crate::congestion::note(n, c.fee_rate, c.priority_fee)) {
+    // One estimate serves the note and the fee ceiling.
+    let estimate = c.need_node().ok().and_then(|n| crate::congestion::answer(n));
+    if let Some(n) = crate::congestion::note_from(estimate.as_ref(), c.fee_rate, c.priority_fee) {
         eprintln!("{n}");
+    }
+    // The fee ceiling: a plan that pays more than 4 times the estimate is an error, so nothing is signed.
+    if let Some(m) = crate::feecap::Ceiling::from_answer(estimate.as_ref(), c.allow_high_fee).violation_of(&r.built) {
+        r.issues.push(super::plan::error(crate::feecap::CODE, m));
     }
     let decoded = show::decode(&r.built, &signer.pubkey, units);
     let failed = print_issues(&r.issues, c.json);

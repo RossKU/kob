@@ -7,11 +7,18 @@ license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+# `cargo run -p kob-cli` runs the command line; the maintainers' binary is named: --bin kob-maint
+default-run = "kob"
 
 # The command line is called `kob` (`cargo build --release --bin kob`); the package keeps the name `kob-cli`.
 [[bin]]
 name = "kob"
 path = "src/main.rs"
+
+# The maintainers' commands (`kob-maint add-program`). Not part of the release: package-release ships `kob` alone.
+[[bin]]
+name = "kob-maint"
+path = "src/maint/main.rs"
 
 [dependencies]
 kob-protocol = { path = "../kob-protocol" }

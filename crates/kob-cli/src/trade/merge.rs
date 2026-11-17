@@ -332,6 +332,12 @@ pub fn run(args: &[String]) -> i32 {
         let funding = data::funding(node, &c.network, &signer.pubkey)?;
         let fee = c.fee_options();
         let links = plan(&m, &signer.pubkey, &utxos, &funding, &fee)?;
+        // The fee ceiling of every sending command: a link above it is refused before anything is signed.
+        let ceiling = crate::feecap::Ceiling::read(node, c.allow_high_fee);
+        if let Some(m) = links.iter().find_map(|l| ceiling.violation_of(&l.built)) {
+            eprintln!("error: {m} [{}]", crate::feecap::CODE);
+            return Ok(1);
+        }
         let mut units = Units::new();
         units.insert(m.cov, m.unit());
         let before = candidates(&m, &signer.pubkey, &utxos).len();
@@ -408,6 +414,9 @@ pub fn run(args: &[String]) -> i32 {
                 }
             };
             spent.extend(link.funding.iter().map(|f| outpoint(&f.utxo)));
+            if let Some(m) = ceiling.violation_of(&link.built) {
+                return Err(format!("link {} of {total}: {m} [{}] (earlier links were submitted; run kob merge again)", k + 1, crate::feecap::CODE));
+            }
             let file = format!("{}.merge-{}.json", to_hex(&m.cov), k + 1);
             let sent = sign_validate_send(&link.built, &signer, c.out_dir.as_deref(), &file, summary.clone(), false, node, &c.network)
                 .map_err(|e| format!("link {} of {total}: {e} (earlier links were submitted; run kob merge again)", k + 1))?;
