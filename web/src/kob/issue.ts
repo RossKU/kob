@@ -735,7 +735,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
   let sale: PlannedSale | undefined;
   if (form.sale && form.sale.mode !== 'keep') {
     const at = holders.findIndex((h) => h.owner === maker && h.ownerScheme === 0);
-    if (at < 0) throw new IssueFormError([issue('sale.no_share', 'Your wallet receives no tokens to sell: give it a share of the supply.', 'sale.amount')]);
+    if (at < 0) throw new IssueFormError([issue('sale.no_share', 'Your wallet receives no tokens to sell: give it a share of the supply.')]);
     const ps = parseSale(form.sale, BigInt(holders[at]!.amount), form.decimals);
     if (!ps.parsed) throw new IssueFormError(ps.issues);
     const p = ps.parsed;
@@ -749,7 +749,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       try {
         table = curveTable(kob, { amount: p.sell, levels: p.levels, total: p.total, multipleMilli: p.multipleMilli, scale });
       } catch (e) {
-        throw new IssueFormError([issue('sale.curve.invalid', e instanceof Error ? e.message : String(e), 'sale.levels')]);
+        throw new IssueFormError([issue('sale.curve.invalid', e instanceof Error ? e.message : String(e))]);
       }
       const minFill = kob.defaultMinFill(p.sell, table.table[0]!, scale);
       curve = { custody: at, levelSize: table.levelSize.toString(), table: table.table.map(String), minFill: minFill.toString() };
