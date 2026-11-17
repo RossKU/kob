@@ -34,10 +34,10 @@ function planValid(intent: SimpleIntent, env = makeEnv()): OrderPlan {
 }
 
 describe('the default delivery (bid-delivery-spec §10)', () => {
-  it('Collected for a resting KCC-20 buy; the wallet default and the user choice override it in that order', () => {
-    expect(effectiveChoice(order(), undefined)).toBe('collected');
-    expect(effectiveChoice(order(), { walletDefault: 'each' })).toBe('each');
-    expect(effectiveChoice(order(), { walletDefault: 'each', choice: 'topup' })).toBe('topup');
+  it('Each fill for a resting KCC-20 buy; the wallet default and the user choice override it in that order', () => {
+    expect(effectiveChoice(order(), undefined)).toBe('each');
+    expect(effectiveChoice(order(), { walletDefault: 'collected' })).toBe('collected');
+    expect(effectiveChoice(order(), { walletDefault: 'collected', choice: 'topup' })).toBe('topup');
     expect(effectiveChoice(order(), { walletDefault: 'topup', choice: 'collected' })).toBe('collected');
   });
 
@@ -124,13 +124,13 @@ describe('the receive threshold (bid-delivery-spec §10)', () => {
     expect(topupOffer(order({ price: 300_000_000n }))).toMatchObject({ ok: true, threshold: 1_667n });
   });
 
-  it('a top-up the user chose that the order cannot have is an error; one that is only the wallet default falls back to Collected', () => {
+  it('a top-up the user chose that the order cannot have is an error; one that is only the wallet default falls back to Each fill', () => {
     const pre: PlanIssue[] = [];
     resolveDelivery(order({ minFill: 1n }), { choice: 'topup' }, pre);
     expect(pre.map((i) => [i.code, i.severity, i.field])).toEqual([['DELIVERY_TOPUP_UNAVAILABLE', 'error', 'delivery']]);
     const pre2: PlanIssue[] = [];
     const r = resolveDelivery(order({ minFill: 1n }), { walletDefault: 'topup' }, pre2);
-    expect(r.fields.mode).toBe('1');
+    expect(r.fields.mode).toBe('0');
     expect(pre2.map((i) => [i.code, i.severity])).toEqual([['DELIVERY_TOPUP_FALLBACK', 'info']]);
     // negative: a wallet default the order can have is no fallback
     const pre3: PlanIssue[] = [];
@@ -142,18 +142,20 @@ describe('the receive threshold (bid-delivery-spec §10)', () => {
 describe('plans with a delivery (signed and validated by the script engine)', () => {
   const limitBuy = (o: Partial<Extract<SimpleIntent, { type: 'limit' }>> = {}): SimpleIntent => ({ type: 'limit', side: 'buy', price: P, amount: 10n * TOK, minFill: 2_500n, ...o });
 
-  it('a GTC limit buy is Collected by default: mode 1, one delivery carrier, maxFills does not add carriers', () => {
-    const p = planValid(limitBuy());
+  it('a GTC limit buy is Each fill by default (mode 0, a carrier per fill); Collected is opt-in: mode 1, one carrier, maxFills does not add carriers', () => {
+    const col = { delivery: { choice: 'collected' } } as const;
+    const p = planValid(limitBuy(col));
     expect(bidOf(p)).toMatchObject({ mode: '1', recvThreshold: '0', topupTip: '0', bought: '0' });
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 10n * TOK, 1n));
     expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')).toEqual({ kind: 'deliveryCarrier', amount: DC, count: 1 });
     expect(p.disclosure!.notes).toContain('deliveryCollected');
     expect(planDelivery(p)).toMatchObject({ delivery: { choice: 'collected' }, fills: 1n });
-    const more = planValid(limitBuy({ maxFills: 5n }));
+    const more = planValid(limitBuy({ maxFills: 5n, ...col }));
     expect(more.request!.value).toBe(p.request!.value);
-    // negative: each fill funds one carrier per fill (4 fills of 2.5 tokens, at most the default 3)
-    const each = planValid(limitBuy({ delivery: { choice: 'each' } }));
+    // the default: each fill funds one carrier per fill (4 fills of 2.5 tokens, at most the default 3)
+    const each = planValid(limitBuy());
     expect(bidOf(each).mode).toBe('0');
+    expect(planDelivery(each)).toMatchObject({ delivery: { choice: 'each' } });
     expect(BigInt(each.request!.value) - BigInt(p.request!.value)).toBe(2n * DC + 2n);
   });
 
@@ -195,20 +197,21 @@ describe('plans with a delivery (signed and validated by the script engine)', ()
     expect(p.disclosure!.carriers.find((c) => c.kind === 'deliveryCarrier')!.count).toBe(3);
   });
 
-  it('DCA and a rising bid are Collected by default with one carrier; the wallet default Each fill restores a carrier per slice', () => {
+  it('DCA and a rising bid are Each fill by default; picking Collected gives one carrier', () => {
     const dca: SimpleIntent = { type: 'dca', amount: 5n * TOK, sliceAmount: TOK, interval: { daa: 600n }, price: 245_000_000n };
-    const p = planValid(dca);
+    const p = planValid({ ...dca, delivery: { choice: 'collected' } } as SimpleIntent);
     expect(bidOf(p).mode).toBe('1');
     expect(BigInt(p.request!.value)).toBe(K.bidEscrow(p.states[0]!, 5n * TOK, 1n));
-    const each = planValid({ ...dca, delivery: { walletDefault: 'each' } } as SimpleIntent);
+    const each = planValid(dca);
     expect(bidOf(each).mode).toBe('0');
     expect(BigInt(each.request!.value)).toBe(K.bidEscrow(each.states[0]!, 5n * TOK, 5n));
-    const rising = planValid({ type: 'dutch', side: 'buy', amount: 5n * TOK, price: 200_000_000n, priceEnd: 240_000_000n, duration: { daa: 4_000n } });
-    expect(bidOf(rising).mode).toBe('1');
+    const risingIntent: SimpleIntent = { type: 'dutch', side: 'buy', amount: 5n * TOK, price: 200_000_000n, priceEnd: 240_000_000n, duration: { daa: 4_000n } };
+    expect(bidOf(planValid(risingIntent)).mode).toBe('0');
+    expect(bidOf(planValid({ ...risingIntent, delivery: { choice: 'collected' } } as SimpleIntent)).mode).toBe('1');
   });
 
   it('a crossing Collected buy is not warned for its fills (one carrier serves every fill)', () => {
-    const p = planValid(limitBuy({ price: P + 1_100_000n, amount: 20n * TOK, minFill: undefined }));
+    const p = planValid(limitBuy({ price: P + 1_100_000n, amount: 20n * TOK, minFill: undefined, delivery: { choice: 'collected' } }));
     expect(bidOf(p).mode).toBe('1');
     expect(codes(p.issues)).not.toContain('FILLS_BUDGET_SHORT');
     expect(p.fills).toMatchObject({ carrierDeposit: DC, scope: 'crossing' });

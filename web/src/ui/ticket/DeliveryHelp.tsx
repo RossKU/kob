@@ -13,7 +13,7 @@ import { LAST_STEP, boughtAt, captionOf, delayOf, initialSteps, stepBy, tick, to
 /** The lanes in the order of the mock-up. */
 const LANES: readonly DeliveryChoice[] = ['each', 'collected', 'topup'];
 /** The comparison rows, the default first. */
-const ROWS: readonly DeliveryChoice[] = ['collected', 'topup', 'each'];
+const ROWS: readonly DeliveryChoice[] = ['each', 'collected', 'topup'];
 
 const X = [20, 92, 164];
 const W = 56;
@@ -97,10 +97,10 @@ function Lane(props: { mode: DeliveryChoice; on: boolean; step: number }) {
     );
   }
   return (
-    <figure class={`dh-lane${props.on ? ' dh-on' : ''}${m === 'collected' ? ' dh-default' : ''}`} data-testid={`delivery-help-lane-${m}`} data-on={props.on ? 'true' : 'false'}>
+    <figure class={`dh-lane${props.on ? ' dh-on' : ''}${m === 'each' ? ' dh-default' : ''}`} data-testid={`delivery-help-lane-${m}`} data-on={props.on ? 'true' : 'false'}>
       <figcaption class="dh-lane-title">
         {t(`ticket.short.delivery.${m}`)}
-        {m === 'collected' ? <span class="dh-pill">{t('ticket.dhelp.default')}</span> : null}
+        {m === 'each' ? <span class="dh-pill">{t('ticket.dhelp.default')}</span> : null}
         {props.on ? <span class="dh-pill dh-pill-on">{t('ticket.dhelp.yours')}</span> : null}
       </figcaption>
       <svg class="dh-svg" viewBox="0 0 240 212" role="img" aria-label={t(`ticket.dhelp.aria.${m}`)}>

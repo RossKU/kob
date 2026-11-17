@@ -40,7 +40,7 @@ export default {
   'issues.MAX_FILLS_INVALID': 'The number of fills must be a positive whole number.',
   'issues.MAX_FILLS_TOO_LARGE': 'A market order takes at most {max} fills.',
   'issues.DELIVERY_TOPUP_UNAVAILABLE': 'Adding to one UTXO is not available for this order. Choose Collected or Each fill.',
-  'issues.DELIVERY_TOPUP_FALLBACK': 'Adding to one UTXO is not available for this order: it uses Collected.',
+  'issues.DELIVERY_TOPUP_FALLBACK': 'Adding to one UTXO is not available for this order: it uses Each fill.',
   'issues.TOPUP_TIP_INVALID': 'The tip per added fill must be between 0 and the delivery carrier ({max}).',
   'issues.TOPUP_TIP_LOW': 'A tip per added fill below {tip} may not pay for adding: such fills arrive as new UTXOs.',
   'issues.EXPIRY_TOO_SOON': 'The expiry must be after the activation.',

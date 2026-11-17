@@ -207,15 +207,15 @@ if-done entries and every pair order are re-planned from their terms with `--pri
 
 | Delivery | Mode | What fills do |
 |---|---|---|
+| `each` | 0 | a new token UTXO for you per fill, one carrier per fill (the default) |
 | `collected` | 1 | the order keeps what it buys; you get one UTXO when it ends or you claim; one delivery carrier funds all fills |
-| `each` | 0 | a new token UTXO for you per fill, one carrier per fill |
 | `one-utxo` | 2 | a filler may add to your receive UTXO and keeps `--topup-tip KAS` (default `min(carrier, ceil(1.25 x the program's extra fee))`) |
 
-Default: `collected` for a resting (GTC) buy of a KCC-20 token, a resting pair order and a non-repeating exit. IOC, FOK, market,
-KRON and a repeating entry's exits deliver `each` (another choice is ignored with a warning). `one-utxo` is never offered on
+Default: `each` for every buy, pair order and exit (founder decision 2026-11-17); `collected` and `one-utxo` are opt-in. IOC, FOK, market,
+KRON and a repeating entry's exits always deliver `each` (another choice is ignored with a warning). `one-utxo` is never offered on
 pair orders. Its receive threshold is `T = max(1, ceil(5 KAS x scale / price))`, kept in `receive-thresholds.json` of the state
 directory per key, token and extension commitment after the first submitted order; the order uses `min(T, minFill - 1)` (none:
-`one-utxo` is refused). `--reset-threshold` recomputes T at this order's price. A collected pair order's default tip adds
+`one-utxo` is refused). `--reset-threshold` recomputes T at this order's price. A `collected` pair order's default tip (not the `each` default) adds
 `ceil(ceil(1.25 x 1,282,600) x L x scale / amount)` sompi per whole A, `L` = later fills (at most 63), for the custody input.
 `kob replace` keeps an order's delivery.
 

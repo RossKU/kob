@@ -31,19 +31,22 @@ const key = { maker: MAKER, tokenCovId: TOKEN, extensionCommitment: EXT };
 
 describe('the default delivery', () => {
   beforeEach(resetDeliveryPrefMemory);
-  it('is Collected unless Each fill or Top-up is stored; Collected is stored as no key', () => {
+  it('is Each fill unless Collected or Top-up is stored; Each fill is stored as no key', () => {
     const s = new MemStore();
-    expect(readDeliveryPref(s)).toBe('collected');
+    expect(readDeliveryPref(s)).toBe('each');
     expect(writeDeliveryPref('topup', s)).toBe(true);
     expect(s.getItem(DELIVERY_PREF_KEY)).toBe('topup');
     expect(readDeliveryPref(s)).toBe('topup');
-    writeDeliveryPref('each', s);
-    expect(readDeliveryPref(s)).toBe('each');
     writeDeliveryPref('collected', s);
-    expect(s.getItem(DELIVERY_PREF_KEY)).toBeNull();
-    s.setItem(DELIVERY_PREF_KEY, 'bogus');
     expect(readDeliveryPref(s)).toBe('collected');
-    expect(readDeliveryPref(null)).toBe('collected');
+    writeDeliveryPref('each', s);
+    expect(s.getItem(DELIVERY_PREF_KEY)).toBeNull();
+    // a stored Each fill (saved before this default) still reads as Each fill
+    s.setItem(DELIVERY_PREF_KEY, 'each');
+    expect(readDeliveryPref(s)).toBe('each');
+    s.setItem(DELIVERY_PREF_KEY, 'bogus');
+    expect(readDeliveryPref(s)).toBe('each');
+    expect(readDeliveryPref(null)).toBe('each');
   });
 });
 

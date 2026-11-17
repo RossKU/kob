@@ -1,7 +1,7 @@
 //! How a buy-side order delivers what it buys (bid-delivery-spec §10, `web/src/kob/orders/delivery.ts`).
 //!
-//! `--delivery each|collected|one-utxo` is mode 0, 1 or 2. A resting KCC-20 buy is collected by
-//! default. IOC / FOK / market orders, KRON deliveries and a repeating entry's exits deliver each fill.
+//! `--delivery each|collected|one-utxo` is mode 0, 1 or 2. Each fill is the
+//! default (founder decision 2026-11-17); collected and one-utxo are opt-in. IOC / FOK / market orders, KRON deliveries and a repeating entry's exits deliver each fill.
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::json::to_hex;
@@ -195,7 +195,7 @@ pub fn resolve(o: &Order, r: &Request, issues: &mut Vec<Issue>) -> Resolved {
         }
         return Resolved::EACH;
     }
-    match r.choice.unwrap_or(Choice::Collected) {
+    match r.choice.unwrap_or(Choice::Each) {
         Choice::Each => Resolved::EACH,
         Choice::Collected => Resolved { choice: Choice::Collected, ..Resolved::EACH },
         Choice::OneUtxo => {
@@ -324,7 +324,9 @@ mod tests {
     #[test]
     fn defaults_follow_the_class() {
         let mut v = vec![];
-        assert_eq!(resolve(&order(Class::Resting), &Request::default(), &mut v).choice, Choice::Collected);
+        assert_eq!(resolve(&order(Class::Resting), &Request::default(), &mut v), Resolved::EACH);
+        let col = Request { choice: Some(Choice::Collected), ..Default::default() };
+        assert_eq!(resolve(&order(Class::Resting), &col, &mut v).choice, Choice::Collected);
         for c in [Class::Immediate, Class::Repeating] {
             assert_eq!(resolve(&order(c), &Request::default(), &mut v), Resolved::EACH);
         }
