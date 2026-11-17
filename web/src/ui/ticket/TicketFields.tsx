@@ -146,7 +146,12 @@ export function TicketFields(props: TicketFieldsProps) {
         const common = { label, error: e ? errorText(e) : null, 'data-testid': spec.testid, disabled: props.disabled };
 
         if (spec.kind === 'bool') {
-          const note = id === 'tipAuto' && value === 'true' && props.tipAutoNote ? <span class="tk-sub" data-testid="field-tipAuto-total">{props.tipAutoNote}</span> : null;
+          const note = id === 'tipAuto' && value === 'true' && props.tipAutoNote ? (
+            <>
+              <span class="tk-sub" data-testid="field-tipAuto-total">{props.tipAutoNote}</span>
+              <span class="tk-sub" data-testid="field-tipAuto-partial">{t('ticket.tipAuto.partial')}</span>
+            </>
+          ) : null;
           return (
             <Checkbox key={id} checked={value === 'true'} onChange={(c) => props.onChange(id, c ? 'true' : '')} label={label} hint={note ? <>{note}{helpOf(help)}</> : helpOf(help)} data-testid={spec.testid} disabled={props.disabled} />
           );

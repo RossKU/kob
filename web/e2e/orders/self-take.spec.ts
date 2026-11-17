@@ -249,8 +249,13 @@ test.describe('executor tip', () => {
     const tip = page.getByTestId('order-tip');
     await expect(tip).not.toHaveValue('');
     await expect(page.getByTestId('field-tipAuto-total')).toHaveText(/^Tip in all: 0\.0\d+ KAS$/);
+    await expect(page.getByTestId('field-tipAuto-partial')).toHaveText('Covers one fill of the whole order; small partial fills may wait.');
     const v = Number(await tip.inputValue());
     expect(v).toBeGreaterThan(0);
+    // over the whole 20 EXKCC: the tip in all is about 1.25 x one match fee, never many fees
+    const total = Number((await page.getByTestId('field-tipAuto-total').textContent())!.replace(/[^\d.]/g, ''));
+    expect(total).toBeLessThan(0.1);
+    expect(v * 20).toBeCloseTo(total, 6);
     await waitReviewable(page);
     // a hand-typed tip is the user's own
     await fillFields(page, { tip: '0.0001' });

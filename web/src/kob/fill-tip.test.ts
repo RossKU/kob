@@ -8,8 +8,8 @@ import { KAS, TOK, makeEnv, marketKron } from '../testing/fixtures';
 const empty = { asks: [], bids: [] };
 
 describe('tip conversion', () => {
-  it('per token over the minimum fill: a minimum fill earns the fee x 1.25', () => {
-    // a 0.012 KAS match, a minimum fill of 4 tokens of 1000 base units
+  it('per token over the whole amount: one fill of the whole order earns the fee x 1.25', () => {
+    // a 0.012 KAS match, an order of 4 tokens of 1000 base units
     const tip = tipForFee(1_200_000n, 4n * TOK, TOK);
     expect(tip).toBe(375_000n);
     expect((tip * 4n * TOK) / TOK).toBe((1_200_000n * TIP_FEE_MARGIN_PCT) / 100n);
@@ -32,8 +32,11 @@ describe('the measured match fee', () => {
       expect(fee!).toBeLessThan(KAS / 10n);
       const t = executorTip(env, p)!;
       expect(t.fee).toBe(fee);
-      expect(t.tip).toBe(tipForFee(fee!, 4n * TOK, TOK));
+      // over the whole 20 tokens, not the 4-token minimum fill: the tip in all is about one match fee x 1.25
+      expect(t.tip).toBe(tipForFee(fee!, 20n * TOK, TOK));
       expect(t.total).toBe((20n * TOK * t.tip + TOK - 1n) / TOK);
+      expect(t.total).toBeGreaterThanOrEqual((fee! * TIP_FEE_MARGIN_PCT) / 100n);
+      expect(t.total).toBeLessThanOrEqual((fee! * TIP_FEE_MARGIN_PCT) / 100n + 20n);
     });
   }
 
@@ -48,5 +51,18 @@ describe('the measured match fee', () => {
     const hi = makeEnv({ book: empty, feeRate: 400n });
     const i = { type: 'limit' as const, side: 'buy' as const, amount: 10n * TOK, price: 250_000_000n };
     expect(measureMatchFee(hi, planOrder(hi, i))!).toBeGreaterThan(measureMatchFee(lo, planOrder(lo, i))!);
+  });
+});
+
+describe('the founder case (2026-11-17)', () => {
+  it('a 306 KAS buy of about 8.3 tokens: the tip in all is about 1.25 x one fill, not 1.25 x per minimum fill', () => {
+    // a 0.0172 KAS match; 8.3 tokens; the old rule (per 0.27-token minimum fill) asked about 30 x as much
+    const fee = 1_720_000n;
+    const amount = 8_300n;
+    const tip = tipForFee(fee, amount, TOK);
+    const total = (amount * tip + TOK - 1n) / TOK;
+    expect(total).toBeGreaterThanOrEqual(2_150_000n);
+    expect(total).toBeLessThan(2_160_000n);
+    expect(tipForFee(fee, 270n, TOK) * amount / TOK).toBeGreaterThan(25n * total);
   });
 });

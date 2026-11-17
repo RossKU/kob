@@ -4,7 +4,8 @@
 // transaction's network fee. A spread thinner than that fee never fills. The tip here is the fee of
 // a match of this very order, measured by building one now: the planned order (its placement's own
 // outputs) matched one to one with an opposite order of the same price at the minimum fill. Times
-// TIP_FEE_MARGIN_PCT, spread over the minimum fill, so every partial fill pays its own match.
+// TIP_FEE_MARGIN_PCT, spread over the order's whole amount: one fill of the whole order pays its
+// match (founder, 2026-11-17). A small partial fill pays less than its match and may wait.
 import type { OrderPlan, PlanEnv } from './plan-types';
 import type { KeyUtxo, OrderState, TokenUtxo } from './types';
 import { baseKind } from './order-facts';
@@ -81,17 +82,20 @@ export function measureMatchFee(env: PlanEnv, plan: OrderPlan): bigint | null {
   return feeOf({ ...base, legs: [ownLeg], takerTokens, taker: env.maker });
 }
 
-/** Sompi per whole token that pay `fee` x TIP_FEE_MARGIN_PCT on every fill of at least `minFill` base units (rounded up). */
-export function tipForFee(fee: bigint, minFill: bigint, scale: bigint): bigint {
-  if (fee <= 0n || minFill <= 0n) return 0n;
-  return ceilDiv(fee * TIP_FEE_MARGIN_PCT * scale, 100n * minFill);
+/** Sompi per whole token that pay `fee` x TIP_FEE_MARGIN_PCT on one fill of `amount` base units (rounded up). */
+export function tipForFee(fee: bigint, amount: bigint, scale: bigint): bigint {
+  if (fee <= 0n || amount <= 0n) return 0n;
+  return ceilDiv(fee * TIP_FEE_MARGIN_PCT * scale, 100n * amount);
 }
 
-/** The tip of the plan's order (sompi per whole token) and what it pays in all at the order's amount, or null when it cannot be measured. */
+/**
+ * The tip of the plan's order (sompi per whole token) over its whole amount (a buy: the amount its budget buys at the limit), and what it pays
+ * in all, about the measured fee x TIP_FEE_MARGIN_PCT; null when it cannot be measured.
+ */
 export function executorTip(env: PlanEnv, plan: OrderPlan): { tip: bigint; fee: bigint; total: bigint } | null {
   const fee = measureMatchFee(env, plan);
   const d = plan.disclosure;
-  if (fee === null || !d || d.minFill <= 0n) return null;
-  const tip = tipForFee(fee, d.minFill, d.scale);
+  if (fee === null || !d || d.tokenAmount <= 0n) return null;
+  const tip = tipForFee(fee, d.tokenAmount, d.scale);
   return { tip, fee, total: ceilDiv(d.tokenAmount * tip, d.scale) };
 }
