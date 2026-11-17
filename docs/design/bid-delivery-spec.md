@@ -200,9 +200,13 @@ Frozen router shape [spec, C4]:
 
 ## 10. Wallet rules (web app and CLI)
 
-- **Mode default.** 1 for GTC orders that deliver a KCC-20 token (limit, ladder, DCA, stop-limit buys, pair orders buying a
-  KCC-20 token, the exits of non-repeating entries); 0 for IOC / FOK / market orders, KRON deliveries and repeating entries;
-  2 only when the user switches it on in the advanced settings.
+- **Mode default.** 0 (each fill) for every order: GTC orders that deliver a KCC-20 token (limit, ladder, DCA, stop-limit buys,
+  pair orders, the exits of non-repeating entries), IOC / FOK / market orders, KRON deliveries and repeating entries. 1 and 2
+  only when the user picks them in the advanced settings (or as the wallet default in Settings). IOC / FOK / market orders,
+  KRON deliveries and repeating entries ignore the pick and deliver each fill. A top-up default that the order cannot have falls
+  back to 0. Decision 2026-11-17 (founder): the default returns to mode 0; it had been 1 for resting orders. The contracts do not change.
+- **Pair tip.** The raise of the default pair tip for the custody input of later fills (`ceil(1.25 × extra)` per later fill) applies
+  only when the user picks mode 1; at the mode-0 default the pair tip is the plain default.
 - **Tip.** `topupTip = min(deliveryCarrier, ceil(1.25 × topup_extra[program]))`. The user may raise it up to `deliveryCarrier`.
 - **Threshold.** `RECV_THRESHOLD_SOMPI = 500,000,000`. At the wallet's first mode-2 order for a (token, extension commitment):
   `T = max(1, ceil(RECV_THRESHOLD_SOMPI × scale / price))`, `price` = the order's limit price in sompi per whole token (pair

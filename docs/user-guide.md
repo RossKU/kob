@@ -252,15 +252,15 @@ You never pay more than the budget shown, and the price still never goes beyond 
 
 ## 6a. Where bought tokens go
 
-A buy order that delivers KCC-20 tokens has three delivery choices (ticket, "Delivery"):
+A buy order that delivers KCC-20 tokens has three delivery choices (ticket, "Advanced options", "Bought tokens"). Each fill separately is the default; Settings can change the default for all your buys:
 
 | Choice | What happens |
 |---|---|
-| Each fill separately | Every fill sends its tokens to you as a new token UTXO. Used for market, IOC and FOK orders, KRON tokens and repeating orders. |
-| Collected, sent at the end | The default for a "Good till cancelled" buy. The order keeps what it buys; you get one token UTXO when the order ends or is cancelled. |
+| Each fill separately | The default. Every fill sends its tokens to you as a new token UTXO. Always used for market, IOC and FOK orders, KRON tokens and repeating orders. |
+| Collected, sent at the end | Optional, for a "Good till cancelled" buy (ticket "Advanced options", or Settings for every buy). The order keeps what it buys; you get one token UTXO when the order ends or is cancelled. |
 | Added to one UTXO | Optional, in the advanced settings. A matcher may add the tokens to your receive UTXO and keeps a small tip you set; it needs a minimum fill larger than your threshold. |
 
-While an order collects, the tokens show as **Bought tokens** ("held by the order"), counted as yours. Press **Claim** to take
+While an order collects (only if you chose Collected), the tokens show as **Bought tokens** ("held by the order"), counted as yours. Press **Claim** to take
 them now (also "Claim and sell", "Claim and merge"); the order stays open. A cancel or a refund also sends them to you.
 
 ## 7. Your orders: cancel, refund, renew

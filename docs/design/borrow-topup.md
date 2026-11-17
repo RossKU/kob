@@ -659,7 +659,7 @@ The maker signs once; the bid is spent through its `cancel` entry. [engine I]
 ### 16.4 What follows for the plan
 
 - Contracts: `KobBid` becomes the one-template form. Option A (section 6) ships in any case, for every borrow scheme; mode 2 depends on it.
-- Wallet default: mode 1 for GTC, ladder and DCA bids; mode 0 for IOC / FOK and market orders; mode 2 behind an advanced
+- Wallet default (superseded 2026-11-17: mode 0 is the default, see bid-delivery-spec §10): mode 1 for GTC, ladder and DCA bids; mode 0 for IOC / FOK and market orders; mode 2 behind an advanced
   setting with the tip default above.
 - Executor: sections 5 (mode 2) and 13.5 (mode 1) both apply; the one new ordering rule is 16.2.
 - Router sells reach mode-0 bids and mode-2 bids (form 0); they skip mode-1 bids until the router gets a bid-custody leg.
