@@ -470,16 +470,27 @@ export function OrderTicket(props: OrderTicketProps) {
   /** an amount of the market's quote (KAS, or a pair's token B) in words */
   const quoteText = (v: bigint): string => (quote ? `${formatUnits(v, quote.decimals, { group: ',' })} ${quote.ticker}` : `${formatKas(v, { group: ',' })} KAS`);
   // the LAST order of a limit ladder is the one furthest from the typed price: planned too, so a level that could never be placed is refused before the first is signed
+  // one curve order: its own plan (its errors stop the button; its carriers and fee are what placing it costs)
+  const curvePlan = useMemo(() => {
+    if (!enabled || !env || !asCurve || !curveIntent) return null;
+    try {
+      return planOrder(env, curveIntent);
+    } catch {
+      return null;
+    }
+  }, [enabled, env, asCurve, curveIntent]);
+  // a curve order: the KAS it locks (the order's and its custody's carriers, returned when it sells out or is cancelled) plus the network fee
+  const curveCost = asCurve ? (curvePlan?.disclosure ? curvePlan.disclosure.kasLocked + (curvePlan.disclosure.fee ?? 0n) : null) : undefined;
+  const footText = curveCost === undefined ? costText : curveCost === null ? { text: t('ticket.cost.dash'), unit: '', usd: null } : { text: formatKas(curveCost, { group: ',' }), unit: 'KAS', usd: null };
   const lastOrderErrors = useMemo(() => {
     if (!enabled || !env || !limitSet || !ladder?.ok) return [];
     try {
-      // one curve order: its own plan is the one to place
-      if (asCurve && curveIntent) return errors(planOrder(env, curveIntent));
+      if (asCurve) return curvePlan ? errors(curvePlan) : [];
       return errors(planOrder(env, ladder.levels[ladder.levels.length - 1]!.intent));
     } catch {
       return [];
     }
-  }, [enabled, env, limitSet, ladder, asCurve, curveIntent]);
+  }, [enabled, env, limitSet, ladder, asCurve, curvePlan]);
   const ladderTot = useMemo(() => (shownPlan && ladder ? ladderTotals(shownPlan, ladder) : null), [shownPlan, ladder]);
   // a ladder the wallet cannot pay for as a whole (each level alone may plan): the shortfall is an error and the button stays disabled
   const ladderFunds: { code: string; text: string }[] = [];
@@ -992,7 +1003,7 @@ export function OrderTicket(props: OrderTicketProps) {
         </div>
 
         <TicketFields
-          form={form} ctx={ctx} ticker={ticker} ids={layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
+          form={form} ctx={ctx} ticker={ticker} ids={asCurve ? layout.main.filter((id) => id !== 'lifetime' && id !== 'lifetimeAt') : layout.main} errors={errs} onChange={onChange} {...(form.type === 'market' ? { marketPrice: true } : {})} onMax={enabled && env ? onMax : undefined} {...(available ? { available } : {})} {...(available && form.side === 'sell' && unusable ? { unusable: { text: t('ticket.unusable', { amount: formatUnits(unusable.amount, token.decimals, { group: ',' }), ticker }), reason: t(`ticket.unusable.${unusable.reason}`) } } : {})} slider={slider}
           {...(inverted ? { flip } : {})} {...(quote ? { quoteTicker, lowTips } : {})}
         />
 
@@ -1094,11 +1105,11 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* what the amount costs (a buy) or yields (a sell), the figure a trader checks before the click, labelled and directly over the button, under the reason slot: one line of a fixed height,
           "—" until there is an amount; the dollars of the estimate (USD display) stand in a column of their own at its left */}
       <div class="tk-total" data-testid="order-total">
-        <span class="tk-total-label">{t('ticket.total')}</span>
-        <div class="tk-cost" {...(costText.unit ? {} : { 'data-empty': '1' })} aria-label={t('ticket.cost.aria')} data-testid="order-cost-preview" title={costText.text === t('ticket.cost.dash') ? undefined : `${costText.text} ${costText.unit}`.trim()}>
-          {costText.usd ? <span class="tk-line-usd" title={costText.usd.title || undefined} data-testid="order-cost-usd">{costText.usd.text}</span> : null}
-          <span class="tk-line-text" key={costText.text}>{costText.text}</span>{costText.unit ? ' ' : null}
-          <span class="tk-line-unit">{costText.unit}</span>
+        <span class="tk-total-label" {...(curveCost !== undefined ? { title: t('ticket.toPlaceHint') } : {})}>{t(curveCost !== undefined ? 'ticket.toPlace' : 'ticket.total')}</span>
+        <div class="tk-cost" {...(footText.unit ? {} : { 'data-empty': '1' })} aria-label={t(curveCost !== undefined ? 'ticket.toPlaceHint' : 'ticket.cost.aria')} data-testid="order-cost-preview" title={footText.text === t('ticket.cost.dash') ? undefined : `${footText.text} ${footText.unit}`.trim()}>
+          {footText.usd ? <span class="tk-line-usd" title={footText.usd.title || undefined} data-testid="order-cost-usd">{footText.usd.text}</span> : null}
+          <span class="tk-line-text" key={footText.text}>{footText.text}</span>{footText.unit ? ' ' : null}
+          <span class="tk-line-unit">{footText.unit}</span>
         </div>
       </div>
       {/* the submitted order: a card of the notifications (its id, Copy, then whether a block took it), not a line of the footer; its progress is the

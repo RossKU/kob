@@ -35,6 +35,15 @@ for (const v of VARIANTS) {
     await sellLadder(page, '3');
     await expect(page.getByTestId('order-ladder-as-curve')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('order-ladder-how')).toContainText('One order and one UTXO');
+    // a curve has no expiry: no "Lasts"; the footer says what placing it costs (its carriers and the fee)
+    await expect(page.getByTestId('field-lifetime')).toHaveCount(0);
+    await expect(page.getByTestId('order-total')).toContainText('To place');
+    await expect(page.getByTestId('order-cost-preview')).toContainText(/^\s*2\.0\d+ KAS\s*$/);
+    await page.getByTestId('order-ladder-as-separate').click();
+    await expect(page.getByTestId('field-lifetime')).toBeVisible();
+    await expect(page.getByTestId('order-total')).toContainText('Total');
+    await page.getByTestId('order-ladder-as-curve').click();
+    await waitReviewable(page);
     await page.getByTestId('order-ladder-place-as').scrollIntoViewIfNeeded();
     await shot(page, `ticket-curve-${v.name}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(v.width);

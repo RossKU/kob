@@ -4,6 +4,8 @@ export default {
   'ticket.side': 'Buy or sell',
   'ticket.pending': 'Calculating...',
   'ticket.total': 'Total',
+  'ticket.toPlace': 'To place',
+  'ticket.toPlaceHint': 'KAS on the curve order and its tokens (returned when it sells out or is cancelled) plus the network fee',
   'ticket.cost.dash': '—',
   'ticket.cost.exact': '{value}',
   'ticket.cost.buy': '≈ {estimate} · max {bound}',
