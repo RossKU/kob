@@ -1,0 +1,20 @@
+// A stepped sell curve (KobCurveAsk) in the book, the orders list and an order's details.
+export default {
+  'curve.book.mark': 'Level {level} of a curve order',
+  'curve.book.markMany': 'Levels {levels} of curve orders',
+  'orders.type.curve': 'Curve sell',
+  'orders.typeShort.curve': 'Curve',
+  'curve.row.level': 'Level {level} / {levels}',
+  'curve.row.soldOut': 'Sold out',
+  'curve.row.kindShort': 'Curve {level}/{levels}',
+  'curve.details.graph': 'Price by share sold',
+  'curve.details.axisStart': '0% sold',
+  'curve.details.axisEnd': '100%',
+  'curve.details.first': 'First level',
+  'curve.details.last': 'Last level',
+  'curve.details.now': 'Price now',
+  'curve.details.left': 'Levels left',
+  'curve.details.leftValue': '{left} of {levels}',
+  'curve.details.ifSold': 'If the rest sells',
+  'curve.details.unbound': 'Not filled yet: the first fill binds it to its token.',
+} as Record<string, string>;
