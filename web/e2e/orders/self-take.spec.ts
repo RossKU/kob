@@ -116,6 +116,31 @@ test.describe('direct fill from the book', () => {
     expect((await wallet!.calls()).length).toBe(2);
   });
 
+  test('a partial take of an ask: it stays in the book with what it has left', async ({ appPage: page, mock }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    const tok = await mock.token();
+    const ask = (await mock.orders(`token=${tok.covenant_id}&status=active&limit=200`)).find((o) => o.side === 1 && String(o.price) === '2520000')!;
+    expect(ask.amount_left).toBe((10n * TOKEN).toString());
+    await pickType(page, 'limit', 'buy');
+    // 3 + 4 at 0.0251, then 3 of the 10 at 0.0252
+    await fillFields(page, { amount: '10', price: '0.0252' });
+    await expectTake(page, /^Fills now: 10 EXKCC at 0\.0251\d* avg/);
+    await clickPlaceOnly(page);
+    const stepper = page.getByTestId('order-take-stepper');
+    await confirmUntil(page, stepper.filter({ hasNot: page.locator('[data-state="waiting"], [data-state="current"]') }));
+    await waitSubmitted(page);
+    const after = await mock.order(ask.covenant_id);
+    expect(after.status).toBe('partial');
+    expect(after.state_known).toBe(true);
+    expect(after.amount_left).toBe((7n * TOKEN).toString());
+    expect(after.state.state.amountLeft).toBe((7n * TOKEN).toString());
+    // the book: the ask at 0.0252 with its 7 left, the asks at 0.0251 gone
+    const book = page.getByTestId('order-book');
+    await expect(book.locator(`[data-testid=book-ask-row][data-amount="${7n * TOKEN}"]`, { hasText: /^0\.0252/ })).toHaveCount(1, { timeout: 15_000 });
+    await expect(book.locator('[data-testid=book-ask-row]', { hasText: /^0\.0251/ })).toHaveCount(0);
+  });
+
   test('a lost race: the taken order is gone at the node, the book is read again and the take is tried once more', async ({ appPage: page, mock, wallet }) => {
     await fund(mock);
     await openMarket(page, mock);
