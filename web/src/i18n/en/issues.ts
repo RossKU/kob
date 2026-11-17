@@ -171,6 +171,7 @@ export default {
   'issues.take-amount': 'The fill would move {actual} of the token, not the {expected} planned.',
   'issues.take-price': 'The fill would cost {kas}, beyond the {bound} your limit allows.',
   'issues.take-orders': 'The orders this transaction fills are not the ones planned.',
+  'issues.take-token': 'This fill would also move another token ({token}).',
   'issues.take-fills': 'Fills {orders} resting order(s) from the book.',
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
 

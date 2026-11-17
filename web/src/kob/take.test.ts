@@ -5,7 +5,7 @@ import type { BookOrderUtxo, BookView, OrderPlan, PlanEnv } from './plan-types';
 import { errors } from './plan-types';
 import { planOrder } from './plan';
 import { bookWithout, takeBound, takeLockTime, takesPerTx } from './take';
-import { CLOCK, KAS, MAKER_PK, MAKER_SK, OTHER_PK, TOK, consensusCheck, keyUtxo, kob, makeEnv, market3x3, tokenUtxo } from '../testing/fixtures';
+import { CLOCK, KAS, MAKER_PK, MAKER_SK, OTHER_PK, TOK, consensusCheck, keyUtxo, kob, makeEnv, market3x3, market8x8, tokenUtxo } from '../testing/fixtures';
 import { snapshotOfRecovered } from '../testing/chain-fixtures';
 import type { TokenMarket } from './plan-types';
 
@@ -13,14 +13,14 @@ const K = kob();
 const M = market3x3();
 
 /** A resting order of OTHER_PK, placed for real and read back as the node would confirm it. */
-function resting(side: 'sell' | 'buy', price: bigint, amount: bigint, o: { tip?: bigint; minFill?: bigint; market?: TokenMarket } = {}): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo } {
+function resting(side: 'sell' | 'buy', price: bigint, amount: bigint, o: { tip?: bigint; minFill?: bigint; market?: TokenMarket; maxFills?: bigint } = {}): { row: { covenantId: string; price: bigint; amount: bigint; tip: bigint }; utxo: BookOrderUtxo } {
   const market = o.market ?? M;
   const env: PlanEnv = {
     ...makeEnv({ market, book: { asks: [], bids: [] } }), maker: OTHER_PK,
     funding: [keyUtxo(10_000n * KAS, OTHER_PK)], tokenUtxos: [tokenUtxo(market, 1_000n * TOK, 10n * KAS, OTHER_PK)],
   };
   // a minimum fill of one token unless told otherwise: partial takes are possible
-  const p = planOrder(env, { type: 'limit', side, amount, price, ...(o.tip ? { tip: o.tip } : {}), minFill: o.minFill ?? TOK });
+  const p = planOrder(env, { type: 'limit', side, amount, price, ...(o.tip ? { tip: o.tip } : {}), minFill: o.minFill ?? TOK, ...(o.maxFills ? { maxFills: o.maxFills } : {}) });
   expect(errors(p)).toEqual([]);
   const rec = K.recoverOrders(p.built!.tx)[0]!;
   const snap = snapshotOfRecovered(rec, CLOCK.daa - 1000n);
@@ -149,6 +149,22 @@ describe('limit protection', () => {
     const a = resting('sell', 250_000_000n, 10n * TOK, { minFill: 5n * TOK });
     const p = take(takerEnv([a]), 'buy', 2n * TOK, 255_000_000n);
     expect(p.take).toBeUndefined();
+  });
+});
+
+describe('dust', () => {
+  it('a partial fill whose rest would be dust (KIP-9) is not taken; the whole order is', () => {
+    // 8 decimals, a bid of 4 tokens at 0.0249 KAS: 1 token left would be 0.0249 KAS on a covenant output, below its 0.08 KAS floor
+    const m = market8x8({ decimals: 8 } as never);
+    // its escrow budgets one delivery (as the mock's seeded bids)
+    const b = resting('buy', 2_490_000n, 4n * m.scale, { minFill: 1n, market: m, maxFills: 1n });
+    const env = { ...takerEnv([], [b], { tokens: 100n * m.scale }), token: m, tokenUtxos: [tokenUtxo(m, 100n * m.scale)] };
+    const part = planOrder(env, { type: 'ioc', side: 'sell', amount: 3n * m.scale, price: 2_480_000n, take: true });
+    expect(part.take).toBeUndefined();
+    const whole = planOrder(env, { type: 'ioc', side: 'sell', amount: 4n * m.scale, price: 2_480_000n, take: true });
+    expect(errors(whole)).toEqual([]);
+    expect(whole.take!.amount).toBe(4n * m.scale);
+    consensusCheck(K, whole.built!, [MAKER_SK]);
   });
 });
 

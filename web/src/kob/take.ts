@@ -28,6 +28,8 @@ export const MAX_TAKE_STEPS = 6;
 interface Taken {
   fill: TakeFill;
   utxo: BookOrderUtxo;
+  /** less than the order holds: its continuation must be a minable output */
+  partial: boolean;
 }
 
 /** The lock time a take is built with. */
@@ -46,7 +48,7 @@ const big = (v: string | number | bigint | undefined | null): bigint => (v === u
  * cannot be taken: not a plain order of the opposite side, the user's own, not active, past its
  * expiry, beyond the limit, or a fill its quantity rules refuse.
  */
-function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 'sell', limit: bigint, want: bigint, lock: bigint): TakeFill | null {
+function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 'sell', limit: bigint, want: bigint, lock: bigint): { fill: TakeFill; partial: boolean } | null {
   const st = o.order.state;
   const k = baseKind(st.kind);
   if (side === 'buy' ? k !== 'KobAsk' : k !== 'KobBid') return null;
@@ -99,7 +101,7 @@ function pickOf(env: PlanEnv, o: BookOrderUtxo, listed: bigint, side: 'buy' | 's
     kas = null;
   }
   if (kas === null || kas <= 0n) return null;
-  return { covenantId: o.covenantId, side: side === 'buy' ? 'ask' : 'bid', maker: d.maker, price, tip: d.tip, amount: n, kas };
+  return { fill: { covenantId: o.covenantId, side: side === 'buy' ? 'ask' : 'bid', maker: d.maker, price, tip: d.tip, amount: n, kas }, partial: n < avail };
 }
 
 /** The rows of the side a `side` order takes, best price first, that the node confirmed. */
@@ -127,8 +129,8 @@ export function takeSteps(env: PlanEnv, side: 'buy' | 'sell', limit: bigint, amo
     if (left <= 0n || picks.length >= per * MAX_TAKE_STEPS) break;
     const f = pickOf(env, u, listed, side, limit, left, lock);
     if (!f) continue;
-    picks.push({ fill: f, utxo: u });
-    left -= f.amount;
+    picks.push({ fill: f.fill, utxo: u, partial: f.partial });
+    left -= f.fill.amount;
   }
   const steps: Taken[][] = [];
   for (let i = 0; i < picks.length; i += per) steps.push(picks.slice(i, i + per));
@@ -271,7 +273,9 @@ export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, lim
   let first = steps[0]!;
   let built: { built: BuiltTx; request: TakeRequest; carrier: bigint } | null = null;
   let failure: PlanIssue | null = null;
-  // a transaction too big for its limits builds with one order less, down to one
+  // a transaction too big for its limits builds with one order less, down to one; a partial fill it refuses (the order's rest would be dust: KIP-9) is
+  // not taken at all
+  const refused = new Set<Taken>();
   while (first.length > 0) {
     const r = buildTake(env, side, first);
     if ('built' in r) {
@@ -281,12 +285,14 @@ export function planTake(env: PlanEnv, side: 'buy' | 'sell', amount: bigint, lim
     failure = r.issue;
     // funds or tokens short: fewer orders do not help; a FOK cannot take fewer
     if (r.issue.code !== 'BUILD_REJECTED' || mode.fok) break;
+    const last = first[first.length - 1]!;
+    if (last.partial) refused.add(last);
     first = first.slice(0, -1);
   }
   if (!built) return { none: failure };
-  const all = [first, ...steps.slice(1)];
+  const all = [first, ...steps.slice(1)].map((st) => st.filter((x) => !refused.has(x)));
   // the orders dropped from the first transaction are taken by the next one
-  if (first.length < steps[0]!.length) all.splice(1, 0, steps[0]!.slice(first.length));
+  if (first.length < steps[0]!.length) all.splice(1, 0, steps[0]!.slice(first.length).filter((x) => !refused.has(x)));
   const stepFacts = all.filter((s) => s.length > 0).map(stepOf);
   const totalAmount = stepFacts.reduce((s, x) => s + x.amount, 0n);
   const takenIds = new Set(all.flat().map((p) => p.fill.covenantId.toLowerCase()));

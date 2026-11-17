@@ -5,6 +5,7 @@ import type { BookOrderUtxo, BookView, OrderPlan, PlanEnv } from './plan-types';
 import { errors } from './plan-types';
 import { planOrder } from './plan';
 import { decodeSigning } from './decode';
+import { keyState } from './token-state';
 import { expectedFromPlan } from '../ui/ticket/plan-expected';
 import { CLOCK, KAS, MAKER_PK, OTHER_PK, TOK, keyUtxo, kob, makeEnv, market3x3, tokenUtxo } from '../testing/fixtures';
 import { snapshotOfRecovered } from '../testing/chain-fixtures';
@@ -137,5 +138,68 @@ describe('the take checks', () => {
     const rest = planOrder(takerEnv([a()]), { type: 'limit', side: 'buy', amount: TOK, price: 240_000_000n, crossing: 'take' });
     expect(rest.take).toBeUndefined();
     expect(codes(decode(rest, { take: { side: 'buy', token: M.covenantId, amount: TOK, bound: 0n, orders: [] } }))).toContain('take-orders');
+  });
+});
+
+describe('a take moves its own token only (mutations)', () => {
+  const M2 = market3x3({ covenant_id: '71'.repeat(32), ticker: 'TWO' });
+  /** the take with one more token input of the wallet (a second token) and its output to `owner` */
+  function withSecondToken(p: OrderPlan, owner: string) {
+    const built = clone(p.built!);
+    const st = keyState(M2.family, 5n * TOK, MAKER_PK, M2.extensionCommitment);
+    const out = keyState(M2.family, 5n * TOK, owner, M2.extensionCommitment);
+    const i = built.tx.inputs.length;
+    built.tx.inputs.push({
+      transactionId: 'cd'.repeat(32), index: 0, sequence: '0', sigOpCount: 0, computeBudget: 10, signatureScript: '',
+      utxo: { address: null, amount: '100000000', scriptPublicKey: K.tokenScriptPublicKey(M2.program, st), blockDaaScore: '500', isCoinbase: false, covenantId: M2.covenantId },
+    } as never);
+    built.plans.push({ kind: 'tokenLeader', template: M2.program, state: st, nextStates: [out], witness: { kind: 'p2pk', value: MAKER_PK } } as never);
+    built.roles.push('KCC20Ref.leader.p2pk');
+    built.tx.outputs.push({ value: '100000000', scriptPublicKey: K.tokenScriptPublicKey(M2.program, out), covenant: { authorizingInput: i, covenantId: M2.covenantId } } as never);
+    return built;
+  }
+
+  it('a second token of the wallet in and out (to the wallet itself) is refused', () => {
+    const a = resting('sell', 250_000_000n, 5n * TOK);
+    const p = take(takerEnv([a]), 'buy', 2n * TOK, 255_000_000n);
+    const built = withSecondToken(p, MAKER_PK);
+    expect(codes(decode(p, expectedFromPlan(p), built))).toContain('take-token');
+    // the signer frame refuses it too, without the plan
+    expect(codes(decode(p, undefined, built))).toContain('take-token');
+  });
+
+  it('a second token sent to a third party is refused', () => {
+    const a = resting('sell', 250_000_000n, 5n * TOK);
+    const p = take(takerEnv([a]), 'buy', 2n * TOK, 255_000_000n);
+    const c = codes(decode(p, expectedFromPlan(p), withSecondToken(p, THIRD)));
+    expect(c).toContain('take-token');
+    expect(c).toContain('transfer-out');
+  });
+
+  it('a second token delivered to a filled bid\'s maker is not that bid\'s payout', () => {
+    const b = resting('buy', 250_000_000n, 3n * TOK);
+    const p = take(takerEnv([], [b]), 'sell', 2n * TOK, 249_000_000n);
+    const built = withSecondToken(p, OTHER_PK);
+    const s = decode(p, expectedFromPlan(p), built);
+    expect(codes(s)).toContain('take-token');
+    expect(codes(s)).toContain('transfer-out');
+    expect(s.outputs[s.outputs.length - 1]!.kind).toBe('token-out');
+  });
+
+  it('the bought tokens sent to a third party instead of the wallet are refused', () => {
+    const a = resting('sell', 250_000_000n, 5n * TOK);
+    const p = take(takerEnv([a]), 'buy', 2n * TOK, 255_000_000n);
+    const built = clone(p.built!);
+    // the taker's token output: the leader plan's next state owned by the wallet
+    const leader = built.plans.find((x) => x.kind === 'tokenLeader') as unknown as { template: string; nextStates: { owner: string; owner_scheme: number }[] };
+    const k = leader.nextStates.findIndex((x) => x.owner === MAKER_PK);
+    expect(k).toBeGreaterThanOrEqual(0);
+    leader.nextStates[k] = { ...leader.nextStates[k]!, owner: THIRD };
+    const outs = built.tx.outputs.map((o, j) => [o, j] as const).filter(([o]) => o.covenant?.covenantId === M.covenantId);
+    const [o] = outs[k]!;
+    o.scriptPublicKey = K.tokenScriptPublicKey(leader.template as never, leader.nextStates[k] as never);
+    const c = codes(decode(p, expectedFromPlan(p), built));
+    expect(c).toContain('transfer-out');
+    expect(c).toContain('take-amount');
   });
 });

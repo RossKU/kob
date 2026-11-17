@@ -101,7 +101,7 @@ export const SIGNING_ISSUE_CODES = [
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
-  'retired-not-cancel', 'take-amount', 'take-price', 'take-orders',
+  'retired-not-cancel', 'take-amount', 'take-price', 'take-orders', 'take-token',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
@@ -763,6 +763,8 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
   }
   /** covenant ids of the orders taken: their continuations and custodies are theirs */
   const takenCovs = new Set(takeFills.map((f) => f.covenantId).filter((c): c is Hex => !!c));
+  /** the token the orders taken trade (a take of mixed tokens is refused below): the only token a take moves */
+  const takeToken: Hex | null = takeFills.length ? ((orderStates.get(takeFills[0]!.input)!.state as unknown as Record<string, string>).tokenCovId ?? null) : null;
   const askMakers = new Set(takeFills.filter((f) => f.side === 'ask').map((f) => f.maker));
   const bidMakers = new Set(takeFills.filter((f) => f.side === 'bid').map((f) => f.maker));
   /** inputs that belong to the orders taken (each order and its custody): not the wallet's, not released to it */
@@ -1056,14 +1058,14 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       if (isCovenantOwned(st)) {
         if (newCovenantIds.has(st.owner)) return { ...blank, kind: 'custody', flagged: !ok, token };
         // the custody left to an order this tx fills
-        if (takenCovs.has(st.owner)) return { ...blank, kind: 'fill-continue', flagged: !ok, token };
+        if (takenCovs.has(st.owner) && tok.covenantId === takeToken) return { ...blank, kind: 'fill-continue', flagged: !ok, token };
         add('token-to-unknown-owner', `output ${j}: ${human(ref, token.amount)} would be locked in covenant ${shortId(st.owner)}, which this transaction does not create: the tokens could be lost`, { output: j, params: { owner: st.owner } });
         return { ...blank, kind: 'unknown-covenant', flagged: true, token };
       }
       if (isKeyOwned(st)) {
         if (st.owner === maker) return { ...blank, kind: 'token-change', flagged: !ok, token };
         // the tokens a bid this tx fills buys, delivered to its maker
-        if (bidMakers.has(st.owner.toLowerCase())) return { ...blank, kind: 'fill-payout', flagged: !ok, token, recipient: st.owner };
+        if (bidMakers.has(st.owner.toLowerCase()) && tok.covenantId === takeToken) return { ...blank, kind: 'fill-payout', flagged: !ok, token, recipient: st.owner };
         const ix = expectedTransfers.findIndex((t) => t.pubkey === st.owner && t.amount === token.amount && (!t.covenantId || t.covenantId === tok.covenantId));
         if (ix >= 0) {
           expectedTransfers.splice(ix, 1);
@@ -1631,6 +1633,13 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       return x.tokenCovId !== tokenId || big(x.scale) !== scale || (f.side === 'ask' ? 'buy' : 'sell') !== side;
     });
     if (mixed) add('take-orders', 'the orders this transaction fills trade different tokens, scales or sides: a take fills one side of one book');
+    // a take moves its own token only: no other token of the wallet goes in, none of any other token comes out
+    for (const d of inputs) {
+      if (d.token && d.token.ref.covenantId !== tokenId) add('take-token', `input ${d.index}: a take of ${shortId(tokenId)} spends tokens of ${shortId(d.token.ref.covenantId)}`, { input: d.index, params: { token: d.token.ref.covenantId } });
+    }
+    for (const o of outputs) {
+      if (o.token && o.token.ref.covenantId !== tokenId) add('take-token', `output ${o.index}: a take of ${shortId(tokenId)} moves tokens of ${shortId(o.token.ref.covenantId)}`, { output: o.index, params: { token: o.token.ref.covenantId } });
+    }
     const amount = takeFills.reduce((a, f) => a + f.amount, 0n);
     const wd = toWallet - fromWallet;
     const kas = side === 'buy' ? -wd - derivedFee : wd + derivedFee;
