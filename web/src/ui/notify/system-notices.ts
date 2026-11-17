@@ -1,7 +1,7 @@
 // System notifications: what the app itself did that the user should know of, with or without a wallet (the wallet's notifications are per wallet,
 // kob/notifications.ts). Today: the market switched to the user's node (standalone mode, data/standalone.ts), and back to the indexer. One notification
-// per switch, in the bell with the others; nothing else on the page announces it (the header's dot is yellow while it lasts). An error toast held back
-// while a flow's card is on screen (kit/toast-store.ts `hold`) is one too, and colours the bell until it is read. Kept for the session only.
+// per switch, in the bell with the others; nothing else on the page announces it (the header's dot is yellow while it lasts). An error toast raised
+// while a flow's card is on screen (kit/toast-store.ts `hold`; the toast shows too) is one as well, and colours the bell until it is read. Kept for the session only.
 import type { StandaloneState } from '../../data/standalone';
 
 export type SystemNoticeKind = 'node' | 'indexer' | 'error';

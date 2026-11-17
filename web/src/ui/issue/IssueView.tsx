@@ -28,6 +28,7 @@ import { rememberIssuedToken } from '../../data/issued-decimals';
 import { adoptDeclaration } from '../../data/token-declarations';
 import { useServices, useWallet } from '../../app/context';
 import { t } from '../../i18n';
+import { failureText } from '../notify/failure-toast';
 import { issueText } from '../../i18n/issue-text';
 import { issueLimits, issuedTokenUtxos, validateIssueForm, type IssueLimits, type IssueProgramChoice, type IssueResult } from '../../kob/issue';
 import { creationIsOld, genesisSigned, listCreations, removeCreation, type CreationRecord } from '../../data/creations';
@@ -46,7 +47,7 @@ import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { pendingCreationItems } from '../confirm/creation-steps';
-import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
+import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, showToast, useAsync } from '../kit';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
   reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
@@ -98,6 +99,10 @@ export function IssueView() {
   const [touched, setTouched] = useState<ReadonlySet<string>>(new Set());
   const [phase, setPhase] = useState<Phase>({ kind: 'form' });
   const [notice, setNotice] = useState<Notice>(null);
+  // a failed creation, or one whose token step was not sent (its details are on chain): also a red toast at the top right
+  useEffect(() => {
+    if (notice && (notice.tone === 'error' || notice.finish)) showToast(failureText(t(notice.tone === 'error' ? 'issue.failed.title' : 'issue.toast.notFinished'), notice.text), 'error');
+  }, [notice]);
   const [retry, setRetry] = useState(0);
   const [fileError, setFileError] = useState<string | null>(null);
   // a small preview of the picked picture (an object URL of the file the browser already holds; nothing is uploaded), released when it is replaced or the view goes away
@@ -206,6 +211,10 @@ export function IssueView() {
   // ---- creations of this wallet whose genesis did not go out: offered again (a genesis already on chain finishes them silently)
   const [resuming, setResuming] = useState<string | null>(null);
   const [resumeError, setResumeError] = useState<{ id: string; text: string } | null>(null);
+  // a creation that failed, or stopped part way, is said at the top right in red too (founder 2026-11-17); the notice and the banner keep the details
+  useEffect(() => {
+    if (resumeError) showToast(failureText(t('issue.failed.title'), friendlyErrorText(resumeError.text)), 'error');
+  }, [resumeError]);
   /** what the wallet is asked for while a creation is finished (confirm.chain.*) */
   const [resumeNote, setResumeNote] = useState<'wait' | 'genesis' | null>(null);
   /** creations that cannot be finished: the first step's coin was spent elsewhere, or the record does not check out; only forgetting is left */

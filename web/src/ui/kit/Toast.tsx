@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import { t } from '../../i18n';
 import { PHONE_TOAST_QUERY, useMedia } from '../shell/narrow';
 import { Button } from './Button';
-import { toasts, type ToastItem } from './toast-store';
+import { hostView, toasts, type ToastItem } from './toast-store';
 
 /** Subscribes to the toast store and returns the current list. */
 export function useToasts(): readonly ToastItem[] {
@@ -97,8 +97,8 @@ function useHeaderOffset(host: { current: HTMLElement | null }, on: boolean): vo
  * Mount ONCE (App does). Show messages with `showToast(text, tone)` from toast-store. A desktop or a tablet: every toast and the card of a send or a
  * flow at the top right just under the header, stacked, the running task's card on top (founder 2026-11-14: one place, never over the order ticket's
  * button). A phone (PHONE_TOAST_QUERY): at the
- * top just under the header, ONE at a time (a card another component put in the host first, else the newest toast) with a "+N" chip for the rest, which opens
- * the bell; only the shown toast runs its timer. styles.css `.toast-host`.
+ * top just under the header, ONE at a time (a card another component put in the host first, else the newest error, else the newest toast) with a "+N"
+ * chip for the rest, red while an error waits, which opens the bell; only the shown toast runs its timer (toast-store.ts `hostView`). styles.css `.toast-host`.
  */
 export function ToastHost() {
   const list = useToasts();
@@ -106,9 +106,8 @@ export function ToastHost() {
   const ref = useRef<HTMLDivElement>(null);
   const cards = useHostCards(ref, phone);
   useHeaderOffset(ref, true);
-  // on a phone a send / flow card (it may wait for the user's approval) is the one shown; the toasts wait behind it
-  const shown = phone ? (cards > 0 ? [] : list.slice(-1)) : list;
-  const waiting = phone ? Math.max(0, cards - 1) + list.length - shown.length : 0;
+  // on a phone a send / flow card (it may wait for the user's approval) is the one shown; the toasts wait behind it (an error first once it goes)
+  const { shown, waiting, waitingError } = hostView(list, cards, phone);
   return (
     <div class="toast-host" aria-live="polite" data-testid="toast-host" {...(phone ? { 'data-phone': 'true' } : {})} ref={ref}>
       {shown.map((item) => (
@@ -117,8 +116,9 @@ export function ToastHost() {
       {waiting > 0 ? (
         <button
           type="button"
-          class="toast-more"
+          class={`toast-more${waitingError ? ' toast-more-error' : ''}`}
           data-testid="toast-more"
+          data-tone={waitingError ? 'error' : 'info'}
           aria-label={t('notify.toastMoreLabel', { count: waiting })}
           onClick={() => document.querySelector<HTMLElement>('[data-testid="notify-bell"]')?.click()}
         >

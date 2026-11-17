@@ -33,7 +33,7 @@ import type { PlanEnv } from '../../kob/plan-types';
 import { auctionSubmitBy } from '../../wallet/sign';
 import { useFailoverState } from '../shell/failover';
 import { useCongestion } from './use-congestion';
-import { SendStatusInline, SendStatusToast, sendBusy, useSend, type SendOutcome } from '../confirm/SendStatus';
+import { SendStatusInline, SendStatusToast, sendBusy, useSend, useSendFailureToast, type SendOutcome } from '../confirm/SendStatus';
 import type { GateVerdict, SendJob } from '../confirm/send';
 import { RETIME_LEAD_DAA, firstAttemptLead, laterClock, rememberedSigningMs, retimeLead } from '../confirm/signing-time';
 import { oppositeSide } from '../market/orientation';
@@ -511,6 +511,13 @@ export function OrderTicket(props: OrderTicketProps) {
     onMerged: (leaves) => setSellAfterMerge({ leaves, at: Date.now() }),
     onStop: (text, raw) => sender.stop(text, raw, 'merge'),
   });
+  // a click that ended without its order (blocked, declined, refused by the node, a direct fill that lost its race every time) is also said at
+  // the top right in red, once the click is over (founder 2026-11-17); the line under the button keeps the details
+  useSendFailureToast(
+    sender.status,
+    placing,
+    t(sender.status?.code === 'merge' ? 'send.failed.merge' : takeRun ? 'send.failed.take' : 'send.failed.order'),
+  );
   const canPlace =
     enabled && gate.ready && !!shownPlan && shownPlan.ok && planErrors.length === 0 && !!shownPlan.built && !pending && !placing && !sendBusy(sender.status) && !crash
     && (!ladder || ladder.ok) && lastOrderErrors.length === 0 && ladderFunds.length === 0 && !merge.running;
@@ -734,9 +741,14 @@ export function OrderTicket(props: OrderTicketProps) {
     if (sellReady) {
       setSellAfterMerge(null);
       if (canPlace) void place();
+      else sender.stop(t('ticket.merge.saleNotPlaced'), undefined, 'merge');
       return;
     }
-    const h = setTimeout(() => setSellAfterMerge(null), Math.max(0, SELL_AFTER_MERGE_MS - (Date.now() - sellAfterMerge.at)));
+    // the merged coins never showed up: the sale is not placed, and the ticket says so (it used to give the button back in silence)
+    const h = setTimeout(() => {
+      setSellAfterMerge(null);
+      sender.stop(t('ticket.merge.notVisible'), undefined, 'merge');
+    }, Math.max(0, SELL_AFTER_MERGE_MS - (Date.now() - sellAfterMerge.at)));
     return () => clearTimeout(h);
   }, [sellAfterMerge, sellReady]);
 
@@ -775,6 +787,8 @@ export function OrderTicket(props: OrderTicketProps) {
         if (!restsLimit) {
           items = items.slice(0, at);
           show();
+          // nothing at all was filled (the book moved since the plan): said, not a silent end of the click
+          if (txs === 0) sender.stop(t('ticket.take.nothingNow'), undefined, 'take-empty');
           break;
         }
         job = await prepareLevel({ ...intent0, amount: left, crossing: 'limit' } as Intent, txs + 1, 2, null);

@@ -21,4 +21,8 @@ export default {
   'send.inputsUnavailable': 'The node could not confirm your coins. Nothing was sent; try again.',
   'send.decodeFailed': 'The transaction could not be read back. Nothing was sent.',
   'send.checkFailed': 'The order could not be checked. Nothing was sent; try again.',
+  // the heading of the red toast of a click that ended without its order (notify/failure-toast.ts): "<heading>: <reason>"
+  'send.failed.order': 'Order not sent',
+  'send.failed.take': 'Fill from the book stopped',
+  'send.failed.merge': 'Merge stopped',
 };

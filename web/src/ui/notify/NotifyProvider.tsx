@@ -101,7 +101,7 @@ export function NotifyProvider(props: { children: ComponentChildren }) {
       if (n) setSystem((l) => addNotice(l, n));
     });
   }, [services.standalone]);
-  // an error toast held back while a flow's card is on screen goes to the bell instead
+  // an error toast raised while a flow's card is on screen is in the bell too (the toast shows all the same: kit/toast-store.ts `hold`)
   useEffect(() => toasts.onHeldError((text) => setSystem((l) => addNotice(l, noticeOfHeldError(text, Date.now())))), []);
 
   const store = useMemo(() => (pubkey ? new NotificationStore(safeStorage(), network, pubkey) : null), [pubkey, network]);

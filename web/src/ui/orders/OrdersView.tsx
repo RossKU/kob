@@ -12,7 +12,8 @@ export interface MarketOf {
   base: Hex;
   quote: Hex | null;
 }
-import { t } from '../../i18n';
+import { t, tIssue } from '../../i18n';
+import { failureText } from '../notify/failure-toast';
 import type { CancelPlan, OrderSnapshot } from '../../kob/cancel';
 import type { Position } from '../../kob/positions';
 import { longId } from '../../kob/registry';
@@ -181,6 +182,17 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
   const [failure, setFailure] = useState<string | null>(null);
   const [failureRaw, setFailureRaw] = useState<string | null>(null);
   const [planFail, setPlanFail] = useState<{ plans: CancelPlan[]; failed: { id: string; message: string }[] } | null>(null);
+  // an action that could not start (its plan or a read failed) is said at the top right in red too (founder 2026-11-17): the banner above the
+  // list may be out of view; the banner keeps every reason, the toast the first
+  useEffect(() => {
+    if (failure) showToast(failureText(t('orders.flow.cannotBuild'), failure), 'error');
+  }, [failure]);
+  useEffect(() => {
+    if (!planFail) return;
+    const issue = planFail.plans.flatMap((p) => p.issues).find((i) => i.severity === 'error');
+    const first = issue ? tIssue('orders.issue', issue) : (planFail.failed[0]?.message ?? null);
+    if (first !== null) showToast(failureText(t('orders.flow.cannotBuild'), first), 'error');
+  }, [planFail]);
   const [amend, setAmend] = useState<OrderRowModel | null>(null);
   const [replaceMode, setReplaceMode] = useState(false);
   const [confirmAll, setConfirmAll] = useState<{ token: Hex | null; ids: Hex[] } | null>(null);

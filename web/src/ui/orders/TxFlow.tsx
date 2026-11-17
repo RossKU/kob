@@ -1,7 +1,7 @@
 import { createPortal } from 'preact/compat';
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { useWallet } from '../../app/context';
-import { t } from '../../i18n';
+import { t, tIssue } from '../../i18n';
 import type { BuiltTx } from '../../kob/types';
 import { formatKas } from '../../kob/units';
 import { WalletError } from '../../wallet/types';
@@ -184,6 +184,9 @@ export function TxFlow(props: TxFlowProps) {
       show();
       if (!step.plan.built) {
         st[i] = 'failed';
+        // the reason on the card: the plan's first error (a step with no transaction always has one)
+        const issue = step.plan.issues.find((x) => x.severity === 'error');
+        setMessage(issue ? `${t('orders.flow.cannotBuild')}: ${tIssue('orders.issue', issue)}` : t('orders.flow.cannotBuild'));
         return end();
       }
       const sid = live.current?.sid;
@@ -210,7 +213,7 @@ export function TxFlow(props: TxFlowProps) {
       closeSession();
     };
   }, []);
-  // while the card is on screen no new toast shows (founder 2026-11-14): notifications go to the bell only, an error colours it
+  // while the card is on screen no new notification shows (founder 2026-11-14): they go to the bell only; an error still shows (2026-11-17) and colours it
   useEffect(() => toasts.hold(), []);
 
   // a long list scrolls in the card: the running step stays in view
@@ -243,7 +246,10 @@ export function TxFlow(props: TxFlowProps) {
   });
   // the session's step comes before the run's steps
   const lead = session === 'none' ? 0 : 1;
-  const tone = running ? 'info' : message || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';
+  // a step that failed, or that the wallet declined, is a failure the card shows in red (founder 2026-11-17); the app's own Cancel of a step's
+  // confirmation is the user's choice: not red
+  const declined = states.some((s) => s === 'cancelled') && sender.status?.code !== 'cancelled';
+  const tone = running ? 'info' : message || declined || states.some((s) => s === 'failed') ? 'error' : anySubmitted ? 'ok' : 'info';
 
   const card = (
     <div class={`toast toast-${tone} send-toast tx-flow-toast`} data-testid="tx-flow">
