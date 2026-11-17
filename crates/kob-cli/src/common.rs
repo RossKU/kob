@@ -257,6 +257,7 @@ pub fn with_amount_left(s: &AnyState, n: i64) -> Option<AnyState> {
             x.amount_left = n;
         }
         AnyState::KobIfdPair(x) => x.amount_left = n,
+        AnyState::KobCurveAsk(x) => x.amount_left = n,
         AnyState::KobBid(_) | AnyState::KobBidKron(_) => return None,
     }
     Some(s)

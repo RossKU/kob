@@ -335,6 +335,15 @@ pub fn describe(s: &AnyState, unit: &(TokenUnit, bool), quote: &(TokenUnit, bool
         }
     };
     let (side, what) = match s {
+        AnyState::KobCurveAsk(x) => (
+            "sell",
+            format!(
+                "curve, {} levels from {} to {}",
+                x.levels(),
+                p(x.table[0]),
+                p(*x.table.last().unwrap_or(&0))
+            ),
+        ),
         AnyState::KobAsk(x) | AnyState::KobAskKron(x) => ("sell", decay(x.price, x.price_end, x.slope)),
         AnyState::KobBid(x) | AnyState::KobBidKron(x) => ("buy", decay(x.price, x.price_end, x.slope)),
         AnyState::KobCondAsk(x) | AnyState::KobCondAskKron(x) => ("sell", legs(x.tp_price, x.stop_price, x.trail_step)),

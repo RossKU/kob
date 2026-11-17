@@ -1416,6 +1416,7 @@ pub fn refund_tip(s: &AnyState) -> i64 {
         AnyState::KobPair(x) => x.refund_tip,
         AnyState::KobCondPair(x) => x.refund_tip,
         AnyState::KobIfdPair(x) => x.refund_tip,
+        AnyState::KobCurveAsk(_) => 0,
     }
 }
 

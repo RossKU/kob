@@ -56,6 +56,8 @@ KINDS
                  if-done options: [--entry-stop P] (a stop entry), [--limit P] (the exit stop-limit), [--exit-tip T],
                  [--exit-min-fill AMOUNT] [--exit-min-touch AMOUNT] [--exit-slippage BPS], a trailing exit stop with
                  --trail-step P --trail-gap P [--trail-wait DURATION] [--trail-updates N]
+  curve          [--levels N] [--total KAS] [--multiple M]: one sell whose price steps up level by level
+                 (`kob place curve --help`)
   pair-limit     limit with --quote TOKEN_B (every kind takes --quote: the order trades TOKEN for TOKEN_B, a KobPair /
                  KobCondPair / KobIfdPair; prices are TOKEN_B per whole TOKEN, the tips stay KAS)
 
@@ -204,7 +206,7 @@ pub const MIN_CARRIER: u64 = 8_000_000;
 /// Close and twap sell, and dca buys.
 pub fn side_for(kind: &str, p: &Parsed) -> Result<Side, String> {
     let fixed = match kind {
-        "close" | "twap" => Some(Side::Sell),
+        "close" | "twap" | "curve" => Some(Side::Sell),
         "dca" => Some(Side::Buy),
         _ => None,
     };
@@ -855,6 +857,9 @@ type Planned = (Common, crate::common::Signer, Plan, TokenMarket, Option<TokenMa
 
 /// Runs `kob place`.
 pub fn run(args: &[String]) -> i32 {
+    if args.first().is_some_and(|a| a == "curve") {
+        return super::curve::run(&args[1..]);
+    }
     if let Some(code) = crate::help::help_or_usage(args, &[USAGE, COMMON_HELP], true) {
         return code;
     }
