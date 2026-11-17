@@ -196,7 +196,7 @@ export function snapshotFromOrderView(view: OrderView): OrderSnapshot {
   const prefund = cs.length > 1 ? live(1) : null;
   // Strays of any other token are foreign. They are kept apart, with the program their state was
   // proven under.
-  const split = splitStrayViews((view.strays ?? []).filter((s) => !s.spent), st);
+  const split = splitStrayViews((view.strays ?? []).filter((s) => !s.spent), st, curveFactsOf(st)?.unbound ? (custody?.covenantId ?? view.token ?? null) : null);
   const custodyExt = (token: Hex): Hex | null => {
     const k = cs.findIndex((c) => c.token === token);
     const u = k === 0 ? custody : k === 1 ? prefund : null;
@@ -238,8 +238,9 @@ export interface UnprovenStray { outpoint: string; token: Hex; amount: bigint }
  * the program's family owned by the order id. Anything else is `unproven`, because nothing could
  * build its spend.
  */
-export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
-  const ownTokens = ownTokensOf(st);
+export function splitStrayViews(views: readonly TokenUtxoView[], st: OrderState, unboundToken: Hex | null = null): { own: TokenUtxoView[]; foreign: ForeignStrays[]; unproven: UnprovenStray[] } {
+  // an unbound curve names no token in its state: its own token is its custody's
+  const ownTokens = unboundToken ? [unboundToken] : ownTokensOf(st);
   const own: TokenUtxoView[] = [];
   const foreign: ForeignStrays[] = [];
   const unproven: UnprovenStray[] = [];

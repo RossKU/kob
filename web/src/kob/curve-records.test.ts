@@ -109,5 +109,19 @@ describe('cancel of an unbound curve (made in its token genesis)', () => {
     const s = decodeSigning({ kob, built: c.built!, maker: MAKER.pk, registry: null, expected: c.expected, nodeInputs: nodeFactsOf(c.built!) });
     expect(s.blocking).toEqual([]);
     expect(c.tokensReturned).toBe(sell);
+
+    // a stray of its own token (sent to the curve's id before its first fill) is swept by the same cancel, never left behind
+    const { strayFor } = await import('../testing/chain-fixtures');
+    const { splitStrayViews } = await import('./cancel');
+    const stray = { ...strayFor(snap, 5n * SCALE), covenantId: plan.token.covenantId };
+    const view = { txid: stray.transactionId, index: stray.index, token: plan.token.covenantId, owner: snap.covenantId, amount: stray.state.amount, value: stray.amount, role: 'stray', created_daa: 1200, spent: false, spent_txid: null, state: stray.state, program: 'KCC20PublicMint', confirmations: 1, settled: true } as never;
+    expect(splitStrayViews([view], snap.order.state).own).toHaveLength(0);
+    expect(splitStrayViews([view], snap.order.state, plan.token.covenantId).own).toHaveLength(1);
+    const withStray = planCancel({ kob, maker: MAKER.pk, funding: [], tokenUtxos: [], clock: { daa: 78_000_000n } }, { ...snap, strays: [stray] });
+    expect(withStray.issues.filter((i) => i.severity !== 'info').map((i) => i.code)).toEqual([]);
+    expect(withStray.tokensReturned).toBe(sell + 5n * SCALE);
+    signAndValidate(kob, withStray.built!, [MAKER.sk]);
+    const s2 = decodeSigning({ kob, built: withStray.built!, maker: MAKER.pk, registry: null, expected: withStray.expected, nodeInputs: nodeFactsOf(withStray.built!) });
+    expect(s2.blocking).toEqual([]);
   });
 });

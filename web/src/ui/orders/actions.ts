@@ -9,7 +9,7 @@ import {
 } from '../../kob/cancel';
 import { confirmSnapshotOnNode } from '../../kob/node-verify';
 import { resolveRecord, retiredOf, type RecordKind, type RecordStore } from '../../kob/records';
-import { familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
+import { curveFactsOf, familyOfKind, quoteCovIdOf, tokenCovIdOf } from '../../kob/order-facts';
 import { isLiveStatus, type Position } from '../../kob/positions';
 import { custodyState, extensionOfState } from '../../kob/token-state';
 import type { Family, Hex, TokenUtxo } from '../../kob/types';
@@ -67,7 +67,7 @@ export async function snapshotFor(s: Services, entry: OrderEntry, strays: readon
       const b = secondTokenOf(resolved.order.state);
       const { views, unknown } = await straysOfOrder(s, entry.id, strays);
       // strays of any other token are foreign: kept apart with the program their state was proven under (or reported as unproven)
-      const split = splitStrayViews(views, resolved.order.state);
+      const split = splitStrayViews(views, resolved.order.state, curveFactsOf(resolved.order.state)?.unbound ? (resolved.custody?.covenantId ?? null) : null);
       const mapped = split.own.map((x) => (b && x.token === b.covenantId ? strayToTokenUtxo(x, b.family === 'kron' ? null : b.ext, b.family) : strayToTokenUtxo(x, ext, family)));
       const mine = mapped.filter((x): x is TokenUtxo => x !== null);
       const snap0 = snapshotFromRecord(resolved, mine, entry.record.deadline != null ? BigInt(entry.record.deadline) : null);
