@@ -452,6 +452,11 @@ With `aggregate=false`, each of `asks` / `bids` is an array of the same orders, 
 `tip`, `min_fill`, `scale`, `amount_left`, `amount_estimated`, `status`, `cur_value`, `expiry_daa`, `expired`, `deadline`
 (unix seconds or null), `deadline_passed`, `genesis_daa`, `confirmations`, `settled`.
 
+A `KobCurveAsk` is in the book as its remaining levels, each at its own price with its own size (base units left in it), so its
+amount counts once: an aggregated level counts it as one of its `orders`; with `aggregate=false` it is one row per level, all
+with its `covenant_id` and `curve_level` (the table index, omitted for other orders), `price` and `quote` the level's price and
+`amount_left` the level's size. A curve is never idle (it has no refund).
+
 ### 3.7 Pairs
 
 A pair `base/quote` (two token covenant ids) is **oriented**: its pair orders are those whose base token A is `base` and quote
@@ -618,6 +623,7 @@ curl -s $API/v1/orders/$ORDER
 | `children` | array, **omitted** | Covenant ids of orders created by this order (if-done exits): the newest 100, oldest first. Single lookups only. |
 | `children_total` | number, **omitted** | Present only when the order has more children than `children` lists: how many it has. |
 | `pair` | object, **omitted** | Pair orders (`KobPair`, `KobCondPair`, `KobIfdPair`): `base`, `quote`, `base_family`, `quote_family`, `base_template_hash`, `quote_template_hash`, `base_scale`, `quote_scale`, `side` (`ask`/`bid`), `price`, `price_num`, `price_den`, `stop_price` (omitted), `quote_now`, `amount_left`, `custodies` (`token`, `role` `base`/`quote`, `expected_amount`, and `utxo` and `ok`, both omitted outside single lookups and the live orders of a `maker=` list), `prefund` (omitted), `delivery_carrier`. See [ops/executor.md](ops/executor.md) 5.4. |
+| `curve` | object, **omitted** | A `KobCurveAsk` (`docs/design/curve-ask-spec.md`), from its current state: `level` (the current level, number), `levels` (number), `level_size`, `total`, `price_now` (the current level's price, null when sold out), `max_fill` (the most one fill takes from here: the rest of 8 levels), `unbound` (bool: created in its token's genesis and not yet filled or amended; `tokenCovId` is zero in `state`, `token` is the custody's), `remaining` (array of `level` number, `price`, `amount`: the levels left, the current first). Its `price` and `quote` are `price_now`; `expiry_daa` and `refund_due_daa` are null (it rests until sold out or cancelled). |
 | `warnings` | array of string | Show these with the order: `genesis_unverified` unless every token it trades is `genesis_verified`, `live_mint_authority`. |
 
 A token UTXO object (`custody.utxo`, `strays[]`) has `txid`, `index`, `token`, `owner`, `amount`, `value` (the KAS carrier),

@@ -358,9 +358,14 @@ pub fn bindings(genesis: &ProofTx, genesis_id: &Hash32, preps: &[ProofTx]) -> Ve
     };
     let mut seen: HashSet<(u16, [u8; 32])> = HashSet::new();
     let mut out: Vec<Binding> = Vec::new();
+    let orders = order_covenants(genesis);
     for c in genesis.outputs.iter().filter_map(|o| o.covenant.as_ref()) {
         if out.len() >= MAX_BOUND_COVENANTS || seen.len() >= MAX_COVENANTS_TRIED {
             break;
+        }
+        // an order placed in the genesis (a curve) shares the authorising input: it is no token
+        if orders.contains(&c.covenant_id) {
+            continue;
         }
         if !seen.insert((c.authorizing_input, c.covenant_id)) || out.iter().any(|b: &Binding| b.covenant_id.0 == c.covenant_id) {
             continue;
@@ -380,6 +385,20 @@ pub fn bindings(genesis: &ProofTx, genesis_id: &Hash32, preps: &[ProofTx]) -> Ve
         }
     }
     out
+}
+
+/// The covenant ids of the outputs a KOB1 payload of `genesis` places orders at.
+fn order_covenants(genesis: &ProofTx) -> HashSet<[u8; 32]> {
+    let Ok(Some(p)) = kob_protocol::payload::decode(&genesis.payload) else { return HashSet::new() };
+    p.records
+        .iter()
+        .filter_map(|r| match r {
+            kob_protocol::payload::Record::Order { output, .. } => {
+                genesis.outputs.get(*output as usize)?.covenant.as_ref().map(|c| c.covenant_id)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn candidate(conn: &Connection, txid: &Hash32) -> DbResult<Option<ProofTx>> {

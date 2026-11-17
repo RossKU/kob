@@ -16,7 +16,7 @@ use std::sync::OnceLock;
 pub const FAMILY_KCC20: u8 = 1;
 
 /// The order kinds of both families (KRON: both delivery builds).
-pub const ORDER_KINDS: [TemplateId; 21] = [
+pub const ORDER_KINDS: [TemplateId; 22] = [
     TemplateId::KobAsk,
     TemplateId::KobBid,
     TemplateId::KobCondAsk,
@@ -38,6 +38,7 @@ pub const ORDER_KINDS: [TemplateId; 21] = [
     TemplateId::KobPair,
     TemplateId::KobCondPair,
     TemplateId::KobIfdPair,
+    TemplateId::KobCurveAsk,
 ];
 
 /// True for the order kinds of both families.
@@ -51,7 +52,7 @@ pub fn is_order(id: TemplateId) -> bool {
 /// The pair kinds are one template for both sides. [`side_of`] reads their side from the state.
 pub fn side(id: TemplateId) -> u8 {
     match id.base() {
-        TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk => 1,
+        TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk | TemplateId::KobCurveAsk => 1,
         TemplateId::KobBid | TemplateId::KobCondBid | TemplateId::KobIfdBid => 2,
         _ => 0,
     }
@@ -84,7 +85,55 @@ fn side_code(side: i64) -> u8 {
 /// A pair order is in no KAS book, because it has no KAS price. It appears in the pair books
 /// (`/v1/pairs`).
 pub fn in_book(id: TemplateId) -> bool {
-    matches!(id.base(), TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobIfdAsk | TemplateId::KobIfdBid)
+    matches!(
+        id.base(),
+        TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobIfdAsk | TemplateId::KobIfdBid | TemplateId::KobCurveAsk
+    )
+}
+
+/// An unbound curve named with its custody's token (`curve-ask-spec.md` §4); any other state as it is.
+pub fn bound(s: &AnyState, token: [u8; 32]) -> AnyState {
+    match s {
+        AnyState::KobCurveAsk(c) if c.is_unbound() => {
+            AnyState::KobCurveAsk(kob_protocol::state::CurveAskState { token_cov_id: token, ..c.clone() })
+        }
+        _ => s.clone(),
+    }
+}
+
+/// True for an unbound `KobCurveAsk`.
+pub fn is_unbound(s: &AnyState) -> bool {
+    matches!(s, AnyState::KobCurveAsk(c) if c.is_unbound())
+}
+
+/// The mean level price of a curve fill of `n` from its state before, sompi per whole token (rounded down).
+pub fn curve_fill_price(c: &kob_protocol::state::CurveAskState, n: i64) -> Option<i64> {
+    let (mut pos, end) = (c.sold(), c.sold().checked_add(n)?);
+    let mut sum: i128 = 0;
+    while pos < end && c.level_size > 0 {
+        let lvl = pos / c.level_size;
+        let upto = (lvl + 1).checked_mul(c.level_size)?.min(end);
+        sum += (upto - pos) as i128 * *c.table.get(usize::try_from(lvl).ok()?)? as i128;
+        pos = upto;
+    }
+    (n > 0 && pos == end).then(|| i64::try_from(sum / n as i128).ok()).flatten()
+}
+
+/// The remaining levels of a curve: `(level, price, base units left in it)`, from the current one.
+pub fn curve_levels(c: &kob_protocol::state::CurveAskState) -> Vec<(usize, i64, i64)> {
+    let mut out = vec![];
+    if c.level_size <= 0 || c.amount_left <= 0 {
+        return out;
+    }
+    let (mut pos, end) = (c.sold(), c.total);
+    while pos < end {
+        let lvl = pos / c.level_size;
+        let Some(&p) = usize::try_from(lvl).ok().and_then(|l| c.table.get(l)) else { break };
+        let upto = (lvl + 1).saturating_mul(c.level_size).min(end);
+        out.push((lvl as usize, p, upto - pos));
+        pos = upto;
+    }
+    out
 }
 
 /// The order an if-done entry spawns on each fill (of the entry's family and delivery build).
@@ -126,7 +175,14 @@ pub fn entry_name(id: TemplateId, tag: [u8; 4]) -> Option<&'static str> {
 /// order kinds and the KCC-20 programs of both families' orders. KRON token programs are
 /// [`identify_kron_token`].
 pub fn identify_redeem(redeem: &[u8]) -> Option<(TemplateId, &[u8])> {
-    TemplateId::ALL.into_iter().filter(|t| t.is_artifact()).find_map(|id| template(id).state_of(redeem).map(|s| (id, s)))
+    TemplateId::ALL.into_iter().filter(|t| t.is_artifact()).find_map(|id| template(id).state_of(redeem).map(|s| (id, s))).or_else(
+        || {
+            // a curve's state ends with its table, of any length
+            let t = template(TemplateId::KobCurveAsk);
+            let ok = redeem.len() > t.prefix.len() + t.suffix.len() && redeem.starts_with(&t.prefix) && redeem.ends_with(&t.suffix);
+            ok.then(|| (TemplateId::KobCurveAsk, &redeem[t.prefix.len()..redeem.len() - t.suffix.len()]))
+        },
+    )
 }
 
 /// Identifies a revealed redeem script as one of the token programs pinned as raw redeem scripts.

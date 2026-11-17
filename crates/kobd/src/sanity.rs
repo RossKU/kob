@@ -175,8 +175,41 @@ pub fn check(state: &AnyState) -> Result<(), String> {
     }
     let mut c = Ck(Ok(()));
     match state {
-        // listed by the indexer package (docs/design/curve-ask-spec.md)
-        AnyState::KobCurveAsk(_) => return Err("bad_state:kind:curve_not_indexed".into()),
+        AnyState::KobCurveAsk(s) => {
+            common(
+                &mut c,
+                Common {
+                    scale: s.scale,
+                    min_fill: s.min_fill,
+                    tip: s.tip,
+                    active_from: s.active_from,
+                    tpl_lens: (s.tpl_prefix_len, s.tpl_suffix_len),
+                    expiry_daa: i64::MAX,
+                    refund_tip: 0,
+                },
+            );
+            c.range("minFill", s.min_fill, 1, AMOUNT_MAX);
+            c.range("levelSize", s.level_size, 1, AMOUNT_MAX);
+            c.range("total", s.total, 1, AMOUNT_MAX);
+            c.range("amountLeft", s.amount_left, 1, s.total.max(1));
+            if s.table.is_empty() || s.table.len() > CURVE_MAX_LEVELS {
+                c.fail("table", "out_of_range");
+            }
+            for p in &s.table {
+                c.range("table", *p, 1, PRICE_MAX);
+            }
+            // what the rest of the curve pays, level by level as the walk rounds
+            if c.0.is_ok() {
+                let mut sum: i128 = 0;
+                for (_, p, left) in crate::model::curve_levels(s) {
+                    match quote_exact(left, p, s.scale, Round::Up) {
+                        Some(v) => sum += v,
+                        None => c.fail("notional", "overflow"),
+                    }
+                }
+                c.le("notional", sum, NOTIONAL_MAX);
+            }
+        }
         AnyState::KobAsk(s) | AnyState::KobAskKron(s) => {
             common(
                 &mut c,
