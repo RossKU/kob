@@ -157,6 +157,7 @@ fn run(anchor: Hash32, nodes: Vec<(NodeSpec, Arc<Flaky>)>, fetch_parallel: usize
         prefetch_initial_blocks: 6,
         authority_failures: 2,
         authority_stall: Duration::ZERO,
+        chain_proof: None,
     };
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     Run { source, follower, ingest, health }

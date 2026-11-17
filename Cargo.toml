@@ -34,6 +34,11 @@ kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag =
 kaspa-txscript-zk-sdk = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 # the node's RPC types: Borsh wRPC bodies of the indexer (kobd rpc::borsh)
 kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+# chain proofs of the indexer (kobd rpc::proof): kHeavyHash, the 256-bit target, KIP-21 lane proofs
+kaspa-pow = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-math = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-seq-commit = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
+kaspa-smt = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.1.0" }
 
 # vendored SilverScript v1.0.0 (see vendor/silverscript/UPSTREAM.md)
 silverscript-lang = { path = "vendor/silverscript/silverscript-lang" }

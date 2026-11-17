@@ -1212,7 +1212,7 @@ mod tests {
                 covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: cov }),
             }],
             payload: crate::hex::HexBytes(vec![]),
-            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0 },
+            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0, block_hash: None },
             version: Some(1),
             lock_time: Some(0),
             subnetwork_id: None,
@@ -1270,7 +1270,7 @@ mod tests {
                 })
                 .collect(),
             payload: crate::hex::HexBytes(payload),
-            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0 },
+            verbose_data: TxVerbose { transaction_id: Hash32([2; 32]), block_time: 0, block_hash: None },
             version: Some(1),
             lock_time: Some(0),
             subnetwork_id: None,

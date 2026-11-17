@@ -426,7 +426,7 @@ pub fn wire_tx(t: &TxJson) -> Tx {
             })
             .collect(),
         payload: HexBytes(t.payload.clone()),
-        verbose_data: TxVerbose { transaction_id: Hash32(t.id), block_time: 0 },
+        verbose_data: TxVerbose { transaction_id: Hash32(t.id), block_time: 0, block_hash: None },
         version: Some(t.version),
         lock_time: Some(t.lock_time),
         subnetwork_id: Some(HexBytes(t.subnetwork_id.clone())),
@@ -1591,6 +1591,7 @@ impl Harness {
             prefetch_initial_blocks: 64,
             authority_failures: crate::indexer::follower::AUTHORITY_FAILURES,
             authority_stall: crate::indexer::follower::AUTHORITY_STALL,
+            chain_proof: None,
         };
         let mut fcfg = fcfg;
         adjust(&mut fcfg);
@@ -1824,7 +1825,7 @@ pub fn kcc23_wire(t: &kaspa_consensus_core::tx::Transaction, full: bool) -> Tx {
             })
             .collect(),
         payload: HexBytes(t.payload.clone()),
-        verbose_data: TxVerbose { transaction_id: kcc23_txid(t), block_time: 0 },
+        verbose_data: TxVerbose { transaction_id: kcc23_txid(t), block_time: 0, block_hash: None },
         version: full.then_some(t.version),
         lock_time: full.then_some(t.lock_time),
         subnetwork_id: full.then(|| HexBytes(AsRef::<[u8]>::as_ref(&t.subnetwork_id).to_vec())),

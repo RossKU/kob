@@ -124,6 +124,15 @@ pub struct HealthSnapshot {
     /// Status per node. Empty with a single node.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<crate::rpc::multi::NodeStatus>,
+    /// Whether a second node vouched for the last answer of the chain authority that was applied
+    /// (`rpc::multi`). `false` for a single node, and while no cross-checking node answers.
+    pub cross_checked: bool,
+    /// Why it is not cross-checked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cross_check_reason: Option<String>,
+    /// The chain proofs of the batches (`rpc::proof`). Absent when off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain_proof: Option<crate::rpc::proof::ChainProofStatus>,
     /// Status of the node failover: which node list is the chain source now, its switches and
     /// refusals.
     ///
@@ -467,6 +476,9 @@ impl HealthSnapshot {
             confirmed_blocks_total: 0,
             lies_total: 0,
             nodes: vec![],
+            cross_checked: false,
+            cross_check_reason: None,
+            chain_proof: None,
             node_source: None,
             node_alarms: vec![],
             authority_replaced_total: 0,
@@ -908,6 +920,19 @@ impl HealthSnapshot {
                 })
                 .collect();
             s.push_str(&format!(" | nodes: {}", nodes.join(", ")));
+        }
+        // Once the follower has said why (a single node, or no cross-checking node answering).
+        if let Some(why) = self.cross_check_reason.as_deref().filter(|_| !self.cross_checked) {
+            s.push_str(&format!(" | NOT cross-checked ({why})"));
+        }
+        if let Some(p) = &self.chain_proof {
+            if p.refused_total > 0 {
+                s.push_str(&format!(
+                    " | chain proofs refused {} batches (last: {})",
+                    p.refused_total,
+                    p.last_refusal.as_deref().unwrap_or("?")
+                ));
+            }
         }
         if let Some(f) = &self.node_source {
             if f.active != "primary" || f.switches > 0 {

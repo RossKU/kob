@@ -60,26 +60,43 @@
 //! steps near the sink and the windows (`verify::agreement`). Both nodes must report the same chain
 //! block at every position and the same accepted transactions in it.
 //!
-//! Only what both report is applied.
+//! Only what both report is applied. Chain blocks the other node does not report yet wait for the
+//! next poll (H1 of the 2026-11 review: they used to be applied unvouched).
 //!
 //! - The authority alone never makes the store rewind or halt. Its `cannot find header` or
 //!   `retention root` about the cursor, and its "unknown" for a stored block in the walk back,
 //!   count only when the cross-checking node says the same (`ChainSource::confirm_unknown_cursor`).
 //!   When it knows the cursor, that is a contradiction like the others below.
 //! - At the first contradiction the answer is cut before it.
-//! - When the very next chain block is contradicted, nothing is applied until the two agree. A race
-//!   at the tip settles within seconds.
-//! - A contradiction is logged and counted (`disagreements`). The tips differing for a moment are
-//!   only counted apart, as `tip_differs`, and logged at debug.
-//! - A contradiction that blocks the cursor [`STALLS_BEFORE_REPLACING`] times in a row gives the
-//!   cross-checking node up for another. Its resolver entry resolves a replacement.
-//! - After as many more, the authority's node is given up too. The cross-checking node becomes the
-//!   authority (`resolver::replace`).
+//! - Near the tip, honest nodes differ: another chain block less than
+//!   [`CrossCheckPolicy::deep_daa`] below the newest block both report is lag. Nothing past it is
+//!   applied until the two agree, which settles within seconds. It is counted as `tip_differs` and
+//!   logged at debug.
+//! - A real contradiction is another chain block deeper than that, other accepted transactions for
+//!   the same chain block, or the other node not knowing a deep cursor. A third node is asked then
+//!   (another cross-checking node, else the referee, a public node of its own,
+//!   [`MultiNode::with_referee`]):
+//!   - It agrees with the authority: the cross-checking node is given up as bad, and what the third
+//!     node vouches for is applied.
+//!   - It agrees with the cross-checking node: the authority is outvoted. Nothing of its answer is
+//!     applied and the role moves to the other node (a resolver entry gives its node up, a named
+//!     node is promoted). The new authority settles, and its batches pass the chain proofs
+//!     (`rpc::proof`) like any.
+//!   - There is no third node, or it agrees with neither: nothing past the contradiction is
+//!     applied. It is logged and counted (`disagreements`). [`STALLS_BEFORE_REPLACING`] in a row
+//!     give the cross-checking node up for another, as many more the authority's.
 //!
-//! A cross-checking node that cannot answer is skipped with a backoff, and the authority goes on
-//! alone meanwhile. Nothing stalls. No contradiction is ignored, but none can be seen while there
-//! is no second node. The node has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink, so
-//! that a hanging node does not hold the book back. It has [`CROSS_CHECK_TIMEOUT`] for a window.
+//! A cross-checking node that cannot answer is not skipped silently.
+//! - The authority's answers wait for it (nothing is applied, the error starts with
+//!   [`WAITING_FOR_CROSS_CHECK`]). A resolver entry that cannot answer for
+//!   [`CrossCheckPolicy::rotate_after`] gives its node up for another public node, at most
+//!   [`ROTATIONS_MAX`] times in a row.
+//! - After [`CrossCheckPolicy::single_after`] without any answer, the authority goes on alone with
+//!   the chain proofs only, and `/v1/health` shows `cross_checked: false` with the reason.
+//! - The first answer of a cross-checking node ends it.
+//!
+//! The node has [`CROSS_CHECK_STEP_TIMEOUT`] for a single step near the sink, so that a hanging
+//! node does not hold the book back. It has [`CROSS_CHECK_TIMEOUT`] for a window.
 //! Its timeouts count against it (`rpc::judge`).
 //!
 //! # The health watch
@@ -172,7 +189,7 @@
 
 use super::types::{AddressUtxo, ChainHashes, ChainIds, DagInfo, RawVspcResponse, ServerInfo, Verbosity, VspcRequest};
 use super::verify::{verify_window, Rejection};
-use super::{fetch_window_from, window_min_confirmations, ChainSource, Fetched, Origin, RpcError, WindowRequest};
+use super::{fetch_window_from, window_min_confirmations, ChainSource, CrossCheck, Fetched, Origin, RpcError, WindowRequest};
 use crate::hex::Hash32;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
@@ -772,6 +789,14 @@ pub struct MultiNode<N: ChainSource> {
     last_start: Mutex<Option<Hash32>>,
     /// Whether a probe of the demoted nodes runs now. Only one runs at a time.
     probing: Arc<AtomicBool>,
+    /// The cross-check policy.
+    policy: CrossCheckPolicy,
+    /// Since when the authority's answers wait for a cross-checking node (`None`: vouched).
+    unvouched: Mutex<Option<Unvouched>>,
+    /// What `/v1/health` reports as `cross_checked`.
+    cross: Mutex<CrossCheck>,
+    /// The third node asked when the pair contradicts each other ([`MultiNode::with_referee`]).
+    referee: Option<Arc<N>>,
 }
 
 /// The state of the health watch.
@@ -929,6 +954,65 @@ impl LagTrack {
 /// it until it repeats.
 pub const TIPS_DIFFER: &str = "the two nodes' newest chain blocks differ for a moment";
 
+/// The start of the error while the authority's answers wait for a cross-checking node.
+pub const WAITING_FOR_CROSS_CHECK: &str = "waiting for a cross-checking node";
+
+/// The start of the error when a third node sided with the cross-checking node.
+pub const OUTVOTED: &str = "the chain authority was outvoted";
+
+/// Times in a row a resolver entry that cannot vouch gives its node up for another.
+pub const ROTATIONS_MAX: u32 = 3;
+
+/// The cross-check policy of a pair (`[cross_check]`, module documentation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrossCheckPolicy {
+    /// How long the authority's answers wait for a cross-checking node that cannot answer, before
+    /// the indexer goes on with the chain proofs alone. Default 120 s.
+    pub single_after: Duration,
+    /// A resolver entry that cannot vouch for this long gives its node up. Default 20 s.
+    pub rotate_after: Duration,
+    /// Another chain block is a contradiction only this many DAA below the newest chain block both
+    /// nodes report. Default 600, a minute at 10 BPS: honest public nodes differ at the tip for
+    /// seconds, a node a minute behind is replaced by the health watch (`LAG_DAA`).
+    pub deep_daa: u64,
+}
+
+impl Default for CrossCheckPolicy {
+    fn default() -> Self {
+        CrossCheckPolicy { single_after: Duration::from_secs(120), rotate_after: Duration::from_secs(20), deep_daa: 600 }
+    }
+}
+
+/// Why the cross-checking node did not vouch for an answer.
+#[derive(Debug, Clone)]
+struct CrossFail {
+    /// The node asked, if any.
+    j: Option<usize>,
+    why: String,
+    /// It does not know the start (`cannot find header`).
+    unknown_start: bool,
+}
+
+/// Since when the authority's answers wait for a cross-checking node.
+#[derive(Debug, Clone)]
+struct Unvouched {
+    since: tokio::time::Instant,
+    rotations: u32,
+    last_rotation: Option<tokio::time::Instant>,
+    single: bool,
+}
+
+/// What a third node said about a contradiction ([`MultiNode::arbitrate`]).
+#[derive(Debug)]
+enum Verdict {
+    /// It agrees with the authority: the leading chain blocks it vouches for.
+    Authority(usize, String),
+    /// It agrees with the cross-checking node.
+    Second(String),
+    /// No third node, or it agrees with neither.
+    None(String),
+}
+
 /// Contradictions in a row that block the cursor before the cross-checking node is given up for
 /// another.
 ///
@@ -1039,6 +1123,10 @@ impl<N: ChainSource> MultiNode<N> {
             last_step: Mutex::new(None),
             last_start: Mutex::new(None),
             probing: Arc::new(AtomicBool::new(false)),
+            policy: CrossCheckPolicy::default(),
+            unvouched: Mutex::new(None),
+            cross: Mutex::new(CrossCheck::single("no answer applied yet")),
+            referee: None,
             // The first check is one period after the start.
             watch: Arc::new(Mutex::new(Watch {
                 every: WATCH_EVERY,
@@ -1052,6 +1140,20 @@ impl<N: ChainSource> MultiNode<N> {
                 inflated: None,
             })),
         }
+    }
+
+    /// Sets the cross-check policy (`[cross_check]`).
+    pub fn with_policy(mut self, policy: CrossCheckPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Sets the referee: a node asked only when the pair contradicts each other and no other
+    /// cross-checking node is configured. For a resolver pair it is a resolver entry of its own,
+    /// resolved on first use on a third host.
+    pub fn with_referee(mut self, referee: Arc<N>) -> Self {
+        self.referee = Some(referee);
+        self
     }
 
     /// Sets the health watch period to `every` and the checks in a row that make a node behind to
@@ -1274,23 +1376,24 @@ impl<N: ChainSource> MultiNode<N> {
     fn cross_checker(&self) -> Option<usize> {
         let now = tokio::time::Instant::now();
         let a = self.board.authority();
-        (0..self.nodes.len()).filter(|&i| i != a).find(|&i| {
+        let usable = |i: usize| {
             let entry = &self.specs[i].url;
-            // A resolver entry being replaced has no node to ask. The authority goes on alone
-            // meanwhile and never waits for it.
+            // A resolver entry being replaced has no node to ask.
             let replacing = super::resolver::is_resolver(entry) && super::resolver::current(entry).is_none();
-            self.specs[i].cross_check
-                && !replacing
-                && !self.board.dropped(i)
-                && !self.board.cut(i)
-                && !self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now))
-        })
+            i != a && self.specs[i].cross_check && !replacing && !self.board.dropped(i) && !self.board.cut(i)
+        };
+        let resting = |i: usize| self.board.with(i, |p| p.backoff_until.is_some_and(|t| t > now));
+        let first = (0..self.nodes.len()).find(|&i| usable(i) && !resting(i));
+        // While the answers wait for one, a node in backoff is asked anyway: the follower's
+        // retries pace the requests.
+        let waiting = self.unvouched.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        first.or_else(|| if waiting { (0..self.nodes.len()).find(|&i| usable(i)) } else { None })
     }
 
     /// The cross-checking node's acceptance data from `start`.
     ///
-    /// It is `None` when there is no such node now or it could not answer within `limit`. The
-    /// authority goes on alone then, and the node backs off. A timeout counts against the node
+    /// It is an error when there is no such node now or it could not answer within `limit`
+    /// ([`MultiNode::unvouched`]), and the node backs off. A timeout counts against the node
     /// (`rpc::judge`). The node is asked while the authority answers the same request, so it costs
     /// no extra round trip.
     async fn cross_ids(
@@ -1299,20 +1402,31 @@ impl<N: ChainSource> MultiNode<N> {
         start: Hash32,
         min_confirmations: Option<u64>,
         limit: Duration,
-    ) -> Option<(usize, ChainIds)> {
-        let j = j?;
+    ) -> Result<(usize, ChainIds), CrossFail> {
+        let Some(j) = j else {
+            return Err(CrossFail {
+                j: None,
+                why: "no cross-checking node can be asked now (being replaced or dropped)".into(),
+                unknown_start: false,
+            });
+        };
         match tokio::time::timeout(limit, self.nodes[j].chain_with_ids(start, min_confirmations)).await {
-            Ok(Ok(ids)) => Some((j, ids)),
+            Ok(Ok(ids)) => Ok((j, ids)),
             Ok(Err(e)) => {
+                let unknown_start = e.kind() == super::NodeErrorKind::UnknownHash;
                 self.board.failed(j, Fault::Failed, &format!("cross-check: {e}"));
-                None
+                Err(CrossFail { j: Some(j), why: format!("{}: {e}", self.board.shown(j)), unknown_start })
             }
             Err(_) => {
                 self.board.failed(j, Fault::Failed, &format!("timeout: cross-check after {limit:?}"));
                 if let Some(node) = self.board.node_of(j) {
                     super::judge::timed_out(self.board.entry(j), &node);
                 }
-                None
+                Err(CrossFail {
+                    j: Some(j),
+                    why: format!("{}: no answer within {} s", self.board.shown(j), limit.as_secs()),
+                    unknown_start: false,
+                })
             }
         }
     }
@@ -1335,7 +1449,12 @@ impl<N: ChainSource> MultiNode<N> {
     }
 
     async fn primary_window_from(&self, node: &N, w: &WindowRequest, origin: Origin) -> Result<Fetched, RpcError> {
-        let Some(j) = self.cross_checker() else { return fetch_window_from(node, w, Verbosity::High, origin).await };
+        let level = node.authority_verbosity();
+        if self.cross_node().is_none() {
+            self.set_cross(false, "no cross-checking node is configured");
+            return fetch_window_from(node, w, level, origin).await;
+        }
+        let j = self.cross_checker();
         let end_blue = match w.end_blue {
             Some(b) => b,
             None => node
@@ -1349,62 +1468,260 @@ impl<N: ChainSource> MultiNode<N> {
         };
         let mine = WindowRequest { end_blue: Some(end_blue), sink_blue: Some(sink_blue), ..*w };
         let min = window_min_confirmations(sink_blue, end_blue, w.min_confirmations);
-        let (f, cross) = tokio::join!(
-            fetch_window_from(node, &mine, Verbosity::High, origin),
-            self.cross_ids(Some(j), w.start, min, CROSS_CHECK_TIMEOUT)
-        );
+        let (f, cross) =
+            tokio::join!(fetch_window_from(node, &mine, level, origin), self.cross_ids(j, w.start, min, CROSS_CHECK_TIMEOUT));
         let Fetched { raw, sink_blue, end_blue, elapsed, origin } = f?;
-        Ok(Fetched { raw: self.vouched(raw, cross)?, sink_blue, end_blue, elapsed, origin })
+        Ok(Fetched { raw: self.vouched(w.start, min, raw, cross).await?, sink_blue, end_blue, elapsed, origin })
     }
 
-    /// The authority's answer `raw` from `start`, as far as the cross-checking node vouches for it.
+    /// Notes for `/v1/health` whether the last answer applied was cross-checked.
+    fn set_cross(&self, checked: bool, why: &str) {
+        let v = CrossCheck { checked, reason: (!checked).then(|| why.to_string()) };
+        *self.cross.lock().unwrap_or_else(|e| e.into_inner()) = v;
+    }
+
+    /// A cross-checking node vouched for an answer: any wait for one ends.
+    fn vouched_by(&self, j: usize) {
+        if let Some(u) = self.unvouched.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            tracing::info!(cross_check = %self.board.shown(j), waited_secs = u.since.elapsed().as_secs(), "a cross-checking node vouches for the chain authority again");
+        }
+        self.set_cross(true, "");
+    }
+
+    /// The authority's answer `raw` from `start`, as far as a second node vouches for it (module
+    /// documentation).
     ///
-    /// It is returned whole when nothing is contradicted or no such node can answer now. It is cut
-    /// before the first contradiction. It is an error when the next chain block itself is
-    /// contradicted (module documentation).
-    fn vouched(&self, mut raw: RawVspcResponse, cross: Option<(usize, ChainIds)>) -> Result<RawVspcResponse, RpcError> {
-        let Some((j, ids)) = cross else { return Ok(raw) };
-        let a = super::verify::agreement(&raw, &ids);
+    /// It is cut before the first contradiction and to the chain blocks the other node reports. It
+    /// is an error when nothing of it can be applied.
+    async fn vouched(
+        &self,
+        start: Hash32,
+        min: Option<u64>,
+        mut raw: RawVspcResponse,
+        cross: Result<(usize, ChainIds), CrossFail>,
+    ) -> Result<RawVspcResponse, RpcError> {
+        let (j, ids) = match cross {
+            Ok(x) => x,
+            // The other node does not know a cursor far below the authority's newest chain block.
+            Err(f) if f.unknown_start && deep_answer(&raw, self.policy.deep_daa) => {
+                let j = f.j.expect("an unknown start is an answer of a node");
+                let why =
+                    format!("the cross-checking node does not know the cursor {start}, which the authority continues ({})", f.why);
+                self.board.disagreed(j, &why, false);
+                return self.contradicted(start, min, raw, j, None, why, 0).await;
+            }
+            Err(f) => return self.unvouched(raw, f),
+        };
+        self.vouched_by(j);
+        let a = super::verify::agreement(&raw, &ids, self.policy.deep_daa);
         let Some(why) = a.contradiction else {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+            if a.keep == 0 && !raw.added_chain_block_hashes.is_empty() {
+                return Err(RpcError::Node(format!(
+                    "{TIPS_DIFFER}: the cross-checking node does not report the next chain block yet"
+                )));
+            }
+            cut(&mut raw, a.keep);
             return Ok(raw);
         };
         self.board.disagreed(j, &why, a.at_tip);
-        let total = raw.added_chain_block_hashes.len();
-        let log = {
-            let mut l = self.last_warn.lock().unwrap_or_else(|e| e.into_inner());
-            let due = l.is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
-            if due {
-                *l = Some(Instant::now());
-            }
-            due
-        };
-        if a.at_tip {
-            // The tips differ for a moment and are not agreed yet. This is routine on a public
-            // pair. A tip that never settles ends in replacing a node below, which is warned about.
-            tracing::debug!(applied = a.keep, of = total, reason = %why, "the two nodes' tips differ: only the chain blocks both report are indexed");
-        } else if log {
-            tracing::warn!(
-                authority = %self.board.shown(0),
-                cross_check = %self.board.shown(j),
-                applied = a.keep,
-                of = total,
-                reason = %why,
-                "the two nodes disagree: only the chain blocks both report are indexed"
-            );
+        if !a.at_tip {
+            return self.contradicted(start, min, raw, j, Some(&ids), why, a.keep).await;
         }
+        // The tips differ for a moment and are not agreed yet. This is routine on a public pair. A
+        // tip that never settles ends in replacing a node below, which is warned about.
+        let total = raw.added_chain_block_hashes.len();
+        tracing::debug!(applied = a.keep, of = total, reason = %why, "the two nodes' tips differ: only the chain blocks both report are indexed");
         if a.keep > 0 {
             self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
             cut(&mut raw, a.keep);
             return Ok(raw);
         }
         self.stalled(j);
-        if a.at_tip {
-            // The follower logs this at debug until it repeats `STALLS_BEFORE_REPLACING` times in a
-            // row.
-            return Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")));
+        // The follower logs this at debug until it repeats `STALLS_BEFORE_REPLACING` times in a row.
+        Err(RpcError::Node(format!("{TIPS_DIFFER} ({why}): nothing is indexed until they agree")))
+    }
+
+    /// No cross-checking node vouched for `raw` (`f` says why).
+    ///
+    /// Without a cross-checking node in the list, `raw` applies (a single node, chain proofs only).
+    /// Otherwise the answers wait for one, a resolver entry rotates its node, and after
+    /// [`CrossCheckPolicy::single_after`] the authority goes on alone.
+    fn unvouched(&self, raw: RawVspcResponse, f: CrossFail) -> Result<RawVspcResponse, RpcError> {
+        if self.cross_node().is_none() {
+            self.set_cross(false, "no cross-checking node is configured");
+            return Ok(raw);
         }
-        Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
+        // The node that failed, else the first cross-checking node (being replaced, it has none).
+        let j = f.j.or(self.cross_node()).expect("a cross-checking node");
+        let now = tokio::time::Instant::now();
+        let (waited, rotate, first_single) = {
+            let mut g = self.unvouched.lock().unwrap_or_else(|e| e.into_inner());
+            let u = g.get_or_insert(Unvouched { since: now, rotations: 0, last_rotation: None, single: false });
+            let rotate = u.rotations < ROTATIONS_MAX
+                && now.saturating_duration_since(u.last_rotation.unwrap_or(u.since)) >= self.policy.rotate_after;
+            if rotate {
+                u.rotations += 1;
+                u.last_rotation = Some(now);
+            }
+            let waited = now.saturating_duration_since(u.since);
+            let single = waited >= self.policy.single_after;
+            let first_single = single && !u.single;
+            u.single |= single;
+            (waited, rotate, first_single)
+        };
+        let entry = self.board.entry(j).to_string();
+        if rotate && super::resolver::is_resolver(&entry) {
+            if let Some(node) = self.board.node_of(j) {
+                tracing::warn!(cross_check = %self.board.shown(j), waited_secs = waited.as_secs(), reason = %f.why, "the cross-checking node cannot vouch for the chain authority: asking the resolver for another public node");
+                super::resolver::replace(&entry, &node, &format!("it could not vouch for the chain authority ({})", f.why));
+            }
+        }
+        if waited < self.policy.single_after {
+            let why =
+                format!("{WAITING_FOR_CROSS_CHECK} ({} of {} s): {}", waited.as_secs(), self.policy.single_after.as_secs(), f.why);
+            self.set_cross(false, &why);
+            return Err(RpcError::Node(why));
+        }
+        let why = format!(
+            "no cross-checking node answered for {} s ({}): the chain authority goes on alone, with chain proofs",
+            waited.as_secs(),
+            f.why
+        );
+        if first_single {
+            tracing::warn!(reason = %why, "single node: the indexer is not cross-checked until a cross-checking node answers again");
+        }
+        self.set_cross(false, &why);
+        Ok(raw)
+    }
+
+    /// A real contradiction (`why`) of the cross-checking node `j` (acceptance data `ids`, `None`
+    /// when it does not know the start) at chain position `at` of the authority's answer `raw`.
+    /// A third node decides ([`MultiNode::arbitrate`]).
+    #[allow(clippy::too_many_arguments)]
+    async fn contradicted(
+        &self,
+        start: Hash32,
+        min: Option<u64>,
+        mut raw: RawVspcResponse,
+        j: usize,
+        ids: Option<&ChainIds>,
+        why: String,
+        at: usize,
+    ) -> Result<RawVspcResponse, RpcError> {
+        let total = raw.added_chain_block_hashes.len();
+        match self.arbitrate(start, min, &raw, j, ids, at).await {
+            Verdict::Authority(keep, third) => {
+                tracing::warn!(authority = %self.board.shown(self.board.authority()), cross_check = %self.board.shown(j), third = %third, reason = %why, applied = keep, of = total, "the nodes disagree and a third node agrees with the chain authority: the cross-checking node is given up");
+                self.board.failed(j, Fault::Lie, &format!("a third node ({third}) contradicts it: {why}"));
+                self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.set_cross(true, "");
+                if keep == 0 && total > 0 {
+                    return Err(RpcError::Node(format!("{TIPS_DIFFER}: the third node does not report the next chain block yet")));
+                }
+                cut(&mut raw, keep);
+                Ok(raw)
+            }
+            Verdict::Second(third) => {
+                let a = self.board.authority();
+                tracing::error!(authority = %self.board.shown(a), cross_check = %self.board.shown(j), third = %third, reason = %why, "the nodes disagree and a third node agrees with the cross-checking node: the chain authority is outvoted, nothing of its answer is applied");
+                self.outvoted(start, j, &why).await;
+                Err(RpcError::Node(format!("{OUTVOTED} 2:1 ({why}); nothing of its answer is applied")))
+            }
+            Verdict::None(no) => {
+                let log = {
+                    let mut l = self.last_warn.lock().unwrap_or_else(|e| e.into_inner());
+                    let due = l.is_none_or(|t| t.elapsed() >= Duration::from_secs(10));
+                    if due {
+                        *l = Some(Instant::now());
+                    }
+                    due
+                };
+                if log {
+                    tracing::warn!(
+                        authority = %self.board.shown(self.board.authority()),
+                        cross_check = %self.board.shown(j),
+                        applied = at,
+                        of = total,
+                        reason = %why,
+                        third = %no,
+                        "the two nodes disagree and no third node settles it: only the chain blocks both report are indexed"
+                    );
+                }
+                if at > 0 {
+                    self.stalls.store(0, std::sync::atomic::Ordering::Relaxed);
+                    cut(&mut raw, at);
+                    return Ok(raw);
+                }
+                self.stalled(j);
+                Err(RpcError::Node(format!("the nodes disagree on the next chain block ({why}): nothing is indexed until they agree")))
+            }
+        }
+    }
+
+    /// Asks a third node from `start` about a contradiction at chain position `at` between the
+    /// authority (`raw`) and the cross-checking node `j` (`ids`, `None` when it does not know
+    /// `start`).
+    ///
+    /// The third node is another cross-checking node of the list, else the referee. It has
+    /// [`CROSS_CHECK_TIMEOUT`].
+    async fn arbitrate(
+        &self,
+        start: Hash32,
+        min: Option<u64>,
+        raw: &RawVspcResponse,
+        j: usize,
+        ids: Option<&ChainIds>,
+        at: usize,
+    ) -> Verdict {
+        let a = self.board.authority();
+        let third = (0..self.nodes.len())
+            .find(|&k| k != a && k != j && self.specs[k].cross_check && !self.board.dropped(k) && !self.board.cut(k))
+            .map(|k| (self.nodes[k].clone(), self.board.shown(k)))
+            .or_else(|| self.referee.clone().map(|r| (r, "the referee".to_string())));
+        let Some((node, name)) = third else { return Verdict::None("there is no third node".into()) };
+        let ids3 = match tokio::time::timeout(CROSS_CHECK_TIMEOUT, node.chain_with_ids(start, min)).await {
+            Ok(Ok(x)) => x,
+            Ok(Err(e)) if e.kind() == super::NodeErrorKind::UnknownHash && ids.is_none() => return Verdict::Second(name),
+            Ok(Err(e)) => return Verdict::None(format!("{name} could not answer: {e}")),
+            Err(_) => return Verdict::None(format!("{name} did not answer within {} s", CROSS_CHECK_TIMEOUT.as_secs())),
+        };
+        let a3 = super::verify::agreement(raw, &ids3, self.policy.deep_daa);
+        if a3.keep > at {
+            return Verdict::Authority(a3.keep, name);
+        }
+        if ids.is_some_and(|x| super::verify::same_at(x, &ids3, at)) {
+            return Verdict::Second(name);
+        }
+        Verdict::None(format!("{name} agrees with neither"))
+    }
+
+    /// The authority was outvoted 2:1 at `start`: the role moves to the cross-checking node `j`.
+    ///
+    /// A resolver entry gives the authority's node up, and the other node of the pair is the
+    /// authority at once (`rpc::resolver`). A named node gets an alarm, and `j` is promoted when it
+    /// can lead. The new authority settles from `start`.
+    async fn outvoted(&self, start: Hash32, j: usize, why: &str) {
+        let a = self.board.authority();
+        let entry = self.board.entry(a).to_string();
+        if let Some(node) = self.board.node_of(a) {
+            super::judge::contradicted(&entry, &node, &format!("outvoted 2:1 by the other nodes: {why}"));
+        }
+        if !super::resolver::is_resolver(&entry) && self.specs[j].may_lead {
+            match self.can_lead(j, start).await {
+                Ok(()) => {
+                    self.board.authority.store(j, Ordering::Relaxed);
+                    *self.sink.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    self.board.with(j, |p| p.status.promoted += 1);
+                    PROMOTIONS.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    tracing::warn!(candidate = %self.board.shown(j), reason = %e, "the outvoted chain authority stays: the other node cannot take over")
+                }
+            }
+        }
+        self.stalls.store(0, Ordering::Relaxed);
+        self.settle_from(start);
     }
 
     /// A contradiction with the cross-checking node `j` left nothing to apply.
@@ -1436,6 +1753,12 @@ impl<N: ChainSource> MultiNode<N> {
     fn cross_node(&self) -> Option<usize> {
         let a = self.board.authority();
         (0..self.nodes.len()).find(|&i| i != a && self.specs[i].cross_check)
+    }
+
+    /// The nodes other than the authority that are not dropped, in the order of the list.
+    fn others(&self) -> Vec<usize> {
+        let a = self.board.authority();
+        (0..self.nodes.len()).filter(|&k| k != a && !self.board.dropped(k)).collect()
     }
 
     /// The shared per-node state.
@@ -1844,6 +2167,16 @@ async fn watch_nodes<N: ChainSource>(nodes: &[Arc<N>], verifier: &Arc<N>, board:
     }
 }
 
+/// Whether the answer `raw` spans at least `deep_daa` from its first chain block to its last, so
+/// its start lies at least that deep.
+fn deep_answer(raw: &RawVspcResponse, deep_daa: u64) -> bool {
+    let b = &raw.chain_block_accepted_transactions;
+    match (b.first(), b.last()) {
+        (Some(x), Some(y)) => y.chain_block_header.daa_score.saturating_sub(x.chain_block_header.daa_score) >= deep_daa,
+        _ => false,
+    }
+}
+
 /// Keeps the first `n` chain blocks of a window.
 ///
 /// `wire_bytes` shrinks in proportion to the chain blocks and transactions kept, for the size
@@ -1864,14 +2197,64 @@ fn cut(raw: &mut RawVspcResponse, n: usize) {
 impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
         let (start, min_confirmations) = (req.start_hash, req.min_confirmation_count);
-        let j = self.cross_checker();
         self.health_watch();
         self.asked_from(start);
         *self.last_step.lock().unwrap_or_else(|e| e.into_inner()) = Some(start);
+        if self.cross_node().is_none() {
+            let raw = self.settle(start, self.primary().vspc_v2(req).await, |r| r.removed_chain_block_hashes.len(), true)?;
+            self.set_cross(false, "no cross-checking node is configured");
+            return Ok(raw);
+        }
+        let j = self.cross_checker();
         let (raw, cross) =
             tokio::join!(self.primary().vspc_v2(req), self.cross_ids(j, start, min_confirmations, CROSS_CHECK_STEP_TIMEOUT));
         let raw = self.settle(start, raw, |r| r.removed_chain_block_hashes.len(), true)?;
-        self.vouched(raw, cross)
+        self.vouched(start, min_confirmations, raw, cross).await
+    }
+    fn proves_chain(&self) -> bool {
+        self.nodes[0].proves_chain()
+    }
+    /// From the authority, else from another node: a proof checks itself (`rpc::proof`).
+    async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+        let e = match self.primary().lane_proof(block, lane).await {
+            Ok(p) => return Ok(p),
+            Err(e) => e,
+        };
+        for k in self.others() {
+            if let Ok(p) = self.nodes[k].lane_proof(block, lane).await {
+                return Ok(p);
+            }
+        }
+        Err(e)
+    }
+    /// From the authority, else from another node: a block checks itself against its hash.
+    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+        let e = match self.primary().block(hash, txs).await {
+            Ok(Some(b)) => return Ok(Some(b)),
+            r => r,
+        };
+        for k in self.others() {
+            if let Ok(Some(b)) = self.nodes[k].block(hash, txs).await {
+                return Ok(Some(b));
+            }
+        }
+        e
+    }
+    /// A batch of the node behind `origin` failed a chain proof. The authority is judged as a node
+    /// that contradicted the other (a resolver entry gives its node up, a named node gets an
+    /// alarm). Another node is dropped as one that lied.
+    fn chain_refused(&self, origin: Origin, why: &str) {
+        let a = self.board.authority();
+        if origin.trusted || origin.node == a {
+            if let Some(node) = self.board.node_of(a) {
+                super::judge::contradicted(self.board.entry(a), &node, &format!("its chain failed a proof: {why}"));
+            }
+        } else {
+            self.board.failed(origin.node, Fault::Lie, &format!("chain proof: {why}"));
+        }
+    }
+    fn cross_check(&self) -> CrossCheck {
+        self.cross.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
     async fn dag_info(&self) -> Result<DagInfo, RpcError> {
         self.primary().dag_info().await
@@ -2402,15 +2785,27 @@ mod tests {
     struct Fixed {
         added: Vec<Hash32>,
         ids: Mutex<Result<ChainIds, String>>,
+        /// The DAA score between two of its chain blocks (0: all at the tip).
+        daa: u64,
     }
 
     impl Fixed {
         fn new(added: &[u8], ids: Result<&[u8], &str>) -> Arc<Fixed> {
+            Self::spaced(added, ids, 0)
+        }
+        /// Chain blocks `daa` apart, so that older ones are deep below the tip.
+        fn spaced(added: &[u8], ids: Result<&[u8], &str>, daa: u64) -> Arc<Fixed> {
             let h = |b: &u8| Hash32([*b; 32]);
             let ids = ids
                 .map(|a| ChainIds { added_chain_block_hashes: a.iter().map(h).collect(), ..ChainIds::default() })
                 .map_err(str::to_string);
-            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids) })
+            Arc::new(Fixed { added: added.iter().map(h).collect(), ids: Mutex::new(ids), daa })
+        }
+        fn answer(&self, ids: Result<&[u8], &str>) {
+            let h = |b: &u8| Hash32([*b; 32]);
+            *self.ids.lock().unwrap() = ids
+                .map(|a| ChainIds { added_chain_block_hashes: a.iter().map(h).collect(), ..ChainIds::default() })
+                .map_err(str::to_string);
         }
     }
 
@@ -2419,8 +2814,13 @@ mod tests {
             let blocks = self
                 .added
                 .iter()
-                .map(|h| super::super::types::RawChainBlock {
-                    chain_block_header: super::super::types::ChainBlockHeader { hash: *h, ..Default::default() },
+                .enumerate()
+                .map(|(i, h)| super::super::types::RawChainBlock {
+                    chain_block_header: super::super::types::ChainBlockHeader {
+                        hash: *h,
+                        daa_score: self.daa * i as u64,
+                        ..Default::default()
+                    },
                     accepted_transactions: vec![],
                 })
                 .collect();
@@ -2432,7 +2832,12 @@ mod tests {
             })
         }
         async fn chain_with_ids(&self, _start: Hash32, _m: Option<u64>) -> Result<ChainIds, RpcError> {
-            self.ids.lock().unwrap().clone().map_err(RpcError::Transport)
+            // A node error, such as `cannot find header`, or a lost connection.
+            self.ids
+                .lock()
+                .unwrap()
+                .clone()
+                .map_err(|e| if e.starts_with("cannot") { RpcError::Node(e) } else { RpcError::Transport(e) })
         }
         async fn dag_info(&self) -> Result<DagInfo, RpcError> {
             Err(RpcError::Node("unused".into()))
@@ -2572,10 +2977,15 @@ mod tests {
         });
         let (a, b) = (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap());
 
-        // The other node is a block behind. Nothing is contradicted, so the whole answer applies.
+        // The other node is a block behind. Nothing is contradicted, and only the blocks both
+        // report apply (H1). The third waits for the next poll.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2])));
-        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 3);
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
         assert_eq!(m.board.snapshot()[1].disagreements, 0);
+        assert!(m.cross_check().checked);
+        // It reports nothing after the cursor yet: nothing is applied.
+        let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[])));
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(TIPS_DIFFER));
         // Another third block, so the first two are kept.
         let m = pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], Ok(&[1, 2, 9])));
         let r = m.vspc_v2(req()).await.unwrap();
@@ -2584,11 +2994,12 @@ mod tests {
         // The tips differing for a moment are counted apart and are not a disagreement.
         assert_eq!((m.board.snapshot()[1].disagreements, m.board.snapshot()[1].tip_differs), (0, 1));
         assert_eq!(m.board.snapshot()[1].last_error, None);
-        // The cross-checking node does not answer. The primary goes on alone and the node backs
-        // off.
+        // The cross-checking node does not answer. The primary's answers wait for it, and the node
+        // backs off (`an_unavailable_cross_checking_node_is_rotated_then_the_authority_goes_on_alone`).
         let m = pair(Fixed::new(&[1, 2], Ok(&[])), Fixed::new(&[], Err("connection closed")));
-        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(WAITING_FOR_CROSS_CHECK));
         assert_eq!(m.board.snapshot()[1].state, "backoff");
+        assert!(!m.cross_check().checked);
 
         // The very next block is contradicted, so nothing is applied. The third time the
         // cross-checking node is replaced, and the sixth time the primary's. The cross-checking
@@ -2613,6 +3024,139 @@ mod tests {
             }
         }
         assert_eq!(m.board.snapshot()[1].tip_differs, 6);
+    }
+
+    fn fake_resolver() -> (String, String) {
+        super::super::resolver::tests::reset(|_, avoid| {
+            let nodes = ["wss://a.example/x/borsh", "wss://b.example/x/borsh", "wss://c.example/x/borsh", "wss://d.example/x/borsh"];
+            let pick = nodes.iter().find(|n| !avoid.contains(&super::super::resolver::host(n))).unwrap_or(&nodes[0]);
+            Ok(super::super::resolver::Resolved { url: pick.to_string(), resolver: "fake".into() })
+        });
+        (super::super::resolver::endpoint("resolver").unwrap(), super::super::resolver::endpoint("resolver:2").unwrap())
+    }
+
+    /// B: a cross-checking node that cannot answer.
+    ///
+    /// - The authority's answers wait (nothing applied, `cross_checked: false` with the reason).
+    /// - After `rotate_after` the resolver entry gives its node up for another public node.
+    /// - After `single_after` the authority goes on alone (chain proofs only) and says so.
+    /// - The first answer of a cross-checking node ends it.
+    #[tokio::test(start_paused = true)]
+    #[allow(clippy::await_holding_lock)]
+    async fn an_unavailable_cross_checking_node_is_rotated_then_the_authority_goes_on_alone() {
+        let _g = super::super::resolver::tests::serial();
+        let (_a, b) = fake_resolver();
+        let second = Fixed::new(&[], Err("connection closed"));
+        let policy = CrossCheckPolicy { single_after: Duration::from_secs(120), rotate_after: Duration::from_secs(20), deep_daa: 600 };
+        let m = pair(Fixed::new(&[1, 2], Ok(&[])), second.clone()).with_policy(policy);
+        let e = m.vspc_v2(req()).await.unwrap_err().to_string();
+        assert!(e.contains(WAITING_FOR_CROSS_CHECK) && e.contains("connection closed"), "{e}");
+        assert_eq!(super::super::resolver::current("resolver:2"), Some(b.clone()), "not rotated yet");
+        let c = m.cross_check();
+        assert!(!c.checked && c.reason.as_deref().unwrap().contains(WAITING_FOR_CROSS_CHECK), "{c:?}");
+        // 20 s on: the resolver is asked for another node.
+        tokio::time::advance(Duration::from_secs(21)).await;
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(WAITING_FOR_CROSS_CHECK));
+        assert_eq!(super::super::resolver::current("resolver:2"), None, "given up");
+        assert!(super::super::resolver::last_reason("resolver:2").unwrap().contains("could not vouch"));
+        let c2 = super::super::resolver::endpoint("resolver:2").unwrap();
+        assert_ne!(super::super::resolver::host(&c2), super::super::resolver::host(&b), "another host");
+        // Still nothing past 120 s, then the authority goes on alone, and says so.
+        tokio::time::advance(Duration::from_secs(90)).await;
+        assert!(m.vspc_v2(req()).await.is_err());
+        tokio::time::advance(Duration::from_secs(10)).await;
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
+        let c = m.cross_check();
+        assert!(!c.checked && c.reason.as_deref().unwrap().contains("goes on alone"), "{c:?}");
+        // At most `ROTATIONS_MAX` in a row; the client resolves the entry again on its next use.
+        super::super::resolver::endpoint("resolver:2").unwrap();
+        // The node answers again: cross-checked.
+        second.answer(Ok(&[1, 2]));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 2);
+        assert_eq!(m.cross_check(), CrossCheck { checked: true, reason: None });
+        // A single node has nothing to wait for.
+        let spec =
+            NodeSpec { url: "ws://own:1".into(), fetch: true, submit: true, connections: 1, cross_check: false, may_lead: true };
+        let own = Fixed::new(&[1], Ok(&[]));
+        let one = MultiNode::new(vec![(spec, own.clone())], own);
+        assert_eq!(one.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
+        assert!(one.cross_check().reason.unwrap().contains("no cross-checking node"));
+    }
+
+    /// B: a contradiction deep below the tip asks a third node (the referee here).
+    ///
+    /// - It agrees with the authority: the cross-checking node is given up, the answer applies.
+    /// - It agrees with the cross-checking node: the authority is outvoted, nothing applies, and
+    ///   the other node is the authority.
+    /// - No third node: only the blocks before the contradiction apply, and a contradiction at the
+    ///   next block applies nothing (halt and alert as before).
+    /// - Lag near the tip asks nobody.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_deep_contradiction_is_settled_by_a_third_node() {
+        let _g = super::super::resolver::tests::serial();
+        const STEP: u64 = 1_000;
+        let authority = || Fixed::spaced(&[1, 2, 3, 4], Ok(&[]), STEP);
+
+        // The third node agrees with the authority.
+        let (a, b) = fake_resolver();
+        let m = pair(authority(), Fixed::new(&[], Ok(&[1, 9, 3, 4]))).with_referee(Fixed::new(&[], Ok(&[1, 2, 3, 4])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 4, "what the third node vouches for");
+        assert_eq!(super::super::resolver::current("resolver:2"), None, "the cross-checking node is given up");
+        assert!(super::super::resolver::last_reason("resolver:2").unwrap().contains("third node"));
+        assert_eq!(super::super::resolver::current("resolver"), Some(a.clone()));
+        assert_eq!(m.board.snapshot()[1].disagreements, 1);
+
+        // The third node agrees with the cross-checking node: the authority is outvoted.
+        let (a, b2) = fake_resolver();
+        assert_eq!(b2, b);
+        let m = pair(authority(), Fixed::new(&[], Ok(&[1, 9, 3, 4]))).with_referee(Fixed::new(&[], Ok(&[1, 9, 3, 4])));
+        let e = m.vspc_v2(req()).await.unwrap_err().to_string();
+        assert!(e.contains(OUTVOTED), "{e}");
+        assert_eq!(super::super::resolver::current("resolver"), Some(b.clone()), "the other node is the authority now");
+        assert!(super::super::resolver::last_reason("resolver").unwrap().starts_with(&super::super::resolver::host(&a)));
+
+        // No third node: the blocks before the contradiction apply, one at the next block halts.
+        fake_resolver();
+        let m = pair(authority(), Fixed::new(&[], Ok(&[1, 9, 3, 4])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
+        let m = pair(authority(), Fixed::new(&[], Ok(&[9, 2, 3, 4])));
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains("the nodes disagree on the next chain block"));
+        assert_eq!(super::super::resolver::current("resolver:2"), Some(b.clone()), "one stall replaces nobody");
+
+        // The third node agrees with neither: as with none.
+        let m = pair(authority(), Fixed::new(&[], Ok(&[1, 9, 3, 4]))).with_referee(Fixed::new(&[], Ok(&[1, 8, 3, 4])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 1);
+
+        // Another newest block is lag: the referee is not asked (it would fail the test).
+        let m = pair(authority(), Fixed::new(&[], Ok(&[1, 2, 3, 9]))).with_referee(Fixed::new(&[], Err("must not be asked")));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 3);
+        assert_eq!((m.board.snapshot()[1].disagreements, m.board.snapshot()[1].tip_differs), (0, 1));
+    }
+
+    /// B: the cross-checking node does not know a cursor the authority continues deep: a
+    /// contradiction (H1), settled by a third node. Near the tip it is only lag, and the answers
+    /// wait.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn an_unknown_deep_cursor_is_a_contradiction() {
+        let _g = super::super::resolver::tests::serial();
+        fake_resolver();
+        let unknown = Err("cannot find header 0000");
+        let m =
+            pair(Fixed::spaced(&[1, 2, 3], Ok(&[]), 1_000), Fixed::new(&[], unknown)).with_referee(Fixed::new(&[], Ok(&[1, 2, 3])));
+        assert_eq!(m.vspc_v2(req()).await.unwrap().added_chain_block_hashes.len(), 3, "the third node knows the cursor");
+        assert_eq!(super::super::resolver::current("resolver:2"), None, "the cross-checking node is given up");
+        // The third node does not know it either: the authority is outvoted.
+        let (_, b) = fake_resolver();
+        let m = pair(Fixed::spaced(&[1, 2, 3], Ok(&[]), 1_000), Fixed::new(&[], unknown)).with_referee(Fixed::new(&[], unknown));
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(OUTVOTED));
+        assert_eq!(super::super::resolver::current("resolver"), Some(b));
+        // A cursor near the tip it does not know yet: lag, the answer waits.
+        fake_resolver();
+        let m =
+            pair(Fixed::new(&[1, 2, 3], Ok(&[])), Fixed::new(&[], unknown)).with_referee(Fixed::new(&[], Err("must not be asked")));
+        assert!(m.vspc_v2(req()).await.unwrap_err().to_string().contains(WAITING_FOR_CROSS_CHECK));
     }
 
     /// Strikes bench a secondary for bodies, never the authority. The bench ends on the runtime's clock. A strike before the

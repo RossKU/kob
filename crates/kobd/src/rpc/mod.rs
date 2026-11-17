@@ -17,6 +17,7 @@ pub mod bridge;
 pub mod failover;
 pub mod judge;
 pub mod multi;
+pub mod proof;
 pub mod resolver;
 pub mod tls;
 pub mod types;
@@ -185,11 +186,55 @@ pub trait ChainSource: Send + Sync + 'static {
     /// from whichever node the source picks. A single node picks itself. The answer is the
     /// primary's, or it is checked against the primary ([`Fetched::origin`]).
     fn fetch_window(&self, w: WindowRequest) -> impl Future<Output = Result<Fetched, RpcError>> + Send {
-        async move { fetch_window_from(self, &w, Verbosity::High, Origin::PRIMARY).await }
+        async move { fetch_window_from(self, &w, self.authority_verbosity(), Origin::PRIMARY).await }
     }
     /// [`ChainSource::fetch_window`] from the primary only (the chain authority).
     fn fetch_window_primary(&self, w: WindowRequest) -> impl Future<Output = Result<Fetched, RpcError>> + Send {
-        async move { fetch_window_from(self, &w, Verbosity::High, Origin::PRIMARY).await }
+        async move { fetch_window_from(self, &w, self.authority_verbosity(), Origin::PRIMARY).await }
+    }
+    /// The source serves what chain proofs need (`rpc::proof`): `Full` windows, lane proofs and
+    /// blocks. The node clients do. The default, for test sources, does not, and nothing is proven.
+    fn proves_chain(&self) -> bool {
+        false
+    }
+    /// The verbosity of the chain authority's windows: `Full` when the source proves the chain.
+    fn authority_verbosity(&self) -> Verbosity {
+        if self.proves_chain() {
+            Verbosity::Full
+        } else {
+            Verbosity::High
+        }
+    }
+    /// A KIP-21 lane proof of `lane` at the chain block `block` (`getSeqCommitLaneProof`).
+    fn lane_proof(
+        &self,
+        block: Hash32,
+        lane: Hash32,
+    ) -> impl Future<Output = Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError>> + Send {
+        async move {
+            let _ = (block, lane);
+            Err(RpcError::Node("getSeqCommitLaneProof is not supported by this source".into()))
+        }
+    }
+    /// A block (`getBlock`), with its transactions when `txs`. `None`: the node does not know it.
+    fn block(
+        &self,
+        hash: Hash32,
+        txs: bool,
+    ) -> impl Future<Output = Result<Option<kaspa_consensus_core::block::Block>, RpcError>> + Send {
+        async move {
+            let _ = (hash, txs);
+            Err(RpcError::Node("getBlock is not supported by this source".into()))
+        }
+    }
+    /// The node behind `origin` served chain data that failed a chain proof (`why`). The source
+    /// stops using it.
+    fn chain_refused(&self, origin: Origin, why: &str) {
+        let _ = (origin, why);
+    }
+    /// Whether a second node vouches for the chain authority's answers now.
+    fn cross_check(&self) -> CrossCheck {
+        CrossCheck::single("a single node")
     }
     /// The node behind `origin` gave data the primary contradicts: stop using it.
     fn report_lie(&self, origin: Origin, why: &str) {
@@ -243,6 +288,21 @@ pub trait ChainSource: Send + Sync + 'static {
     /// configured.
     fn source_status(&self) -> Option<failover::FailoverStatus> {
         None
+    }
+}
+
+/// Whether a second node vouches for the chain authority's answers (`/v1/health` `cross_checked`).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct CrossCheck {
+    /// The last answer applied was vouched for by a second node.
+    pub checked: bool,
+    /// Why not, when it was not.
+    pub reason: Option<String>,
+}
+
+impl CrossCheck {
+    pub fn single(why: &str) -> CrossCheck {
+        CrossCheck { checked: false, reason: Some(why.to_string()) }
     }
 }
 
@@ -841,6 +901,30 @@ impl ChainSource for WrpcClient {
         match self.call_raw("getBlock", serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": false })).await {
             Ok(_) => Ok(true),
             Err(RpcError::Node(_)) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn proves_chain(&self) -> bool {
+        true
+    }
+
+    async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
+        self.call("getSeqCommitLaneProof", serde_json::json!({ "blockHash": block.to_hex(), "laneKey": lane.to_hex() })).await
+    }
+
+    async fn block(&self, hash: Hash32, txs: bool) -> Result<Option<kaspa_consensus_core::block::Block>, RpcError> {
+        let params = serde_json::json!({ "hash": hash.to_hex(), "includeTransactions": txs });
+        match self.call::<kaspa_rpc_core::GetBlockResponse>("getBlock", params).await {
+            Ok(r) => {
+                kaspa_consensus_core::block::Block::try_from(r.block).map(Some).map_err(|e| RpcError::Decode(format!("getBlock: {e}")))
+            }
+            // Only "unknown" means it does not know the block. Another node error proves nothing.
+            Err(RpcError::Node(m))
+                if m.to_ascii_lowercase().contains("not found") || classify_node_message(&m) == NodeErrorKind::UnknownHash =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }

@@ -138,6 +138,7 @@ async fn follows_testnet_10_and_decodes_real_vspc_v2_batches() {
         prefetch_initial_blocks: 64,
         authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
         authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
+        chain_proof: None,
     };
     let follower = Follower::new(client.clone(), ingest.clone(), cfg, health.clone(), events);
     let want: u64 = std::env::var("KOB_TN10_FOLLOW_BLOCKS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);

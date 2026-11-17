@@ -210,6 +210,10 @@ pub struct TxVerbose {
     /// The time of the block that accepted the transaction.
     #[serde(default)]
     pub block_time: u64,
+    /// The merged block that holds the transaction. Its body proves the signature scripts
+    /// (`rpc::proof`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<Hash32>,
 }
 
 /// A transaction output, named by the transaction and the index.

@@ -246,7 +246,7 @@ fn tx(t: RpcOptionalTransaction) -> Result<Tx, String> {
         inputs,
         outputs,
         payload: HexBytes(t.payload.unwrap_or_default()),
-        verbose_data: TxVerbose { transaction_id: h32(id), block_time: v.block_time.unwrap_or(0) },
+        verbose_data: TxVerbose { transaction_id: h32(id), block_time: v.block_time.unwrap_or(0), block_hash: v.block_hash.map(h32) },
         version: t.version,
         lock_time: t.lock_time,
         subnetwork_id: t.subnetwork_id.map(|s| HexBytes(AsRef::<[u8]>::as_ref(&s).to_vec())),

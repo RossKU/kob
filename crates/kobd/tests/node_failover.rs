@@ -150,6 +150,7 @@ fn run(anchor: Hash32, primary: &Arc<Tier>, fallback: &Arc<Tier>, fetch_parallel
         prefetch_initial_blocks: 6,
         authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
         authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
+        chain_proof: None,
     };
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     Run { source, follower, ingest, health }
@@ -676,6 +677,7 @@ async fn a_fallback_node_over_reporting_its_sink_does_not_keep_the_primary_away(
         prefetch_initial_blocks: 6,
         authority_failures: kobd::indexer::follower::AUTHORITY_FAILURES,
         authority_stall: kobd::indexer::follower::AUTHORITY_STALL,
+        chain_proof: None,
     };
     let follower = Follower::new(source.clone(), ingest.clone(), cfg, health.clone(), events);
     step_until(&follower, "first sync", || health.snapshot().cursor_hash == Some(node.tip())).await;
