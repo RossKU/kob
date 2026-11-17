@@ -68,13 +68,18 @@ fn largest(f: impl Fn(usize) -> Option<Action>) -> usize {
     n
 }
 
-/// Worker threads of the generator (the shapes are independent; the engine runs are the cost).
+/// Worker threads of the generator (the shapes are independent; the engine runs are the cost). `KOB_BUDGET_THREADS` lowers it.
 const THREADS: usize = 8;
+
+fn threads() -> usize {
+    let max = std::env::var("KOB_BUDGET_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(THREADS);
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, max.max(1))
+}
 
 /// `f` over `items` on up to [`THREADS`] threads, the results in the order of `items`.
 fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
     let next = AtomicUsize::new(0);
-    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, THREADS);
+    let threads = threads();
     let mut out: Vec<(usize, R)> = std::thread::scope(|s| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
@@ -104,41 +109,41 @@ fn shapes() -> &'static [(String, Action)] {
 
 /// Every measured shape: the scenarios on every program, their padded batches, and the grid.
 fn build_shapes() -> Vec<(String, Action)> {
-    let mut out: Vec<(String, Action)> = par_map(&common::PROGRAMS, |&p| {
-        let mut out = vec![];
-        // the golden scenarios and the branch fixtures (every builder role, C6: a role the table lacks is refused by `build`)
-        for (n, a) in common::scenarios_on(p).into_iter().chain(common::branches::branch_shapes(p)) {
-            let name = format!("{n}@{}", p.name());
-            if matches!(a, Action::Batch(_)) {
-                let pad = |asks: usize, bids: usize| common::pad_batch(p, &a, asks, bids);
-                let asks = largest(|k| pad(k, 0));
-                let mut combos = vec![(asks, 0), (0, largest(|m| pad(0, m)))];
-                for k in asks.saturating_sub(1)..=asks {
-                    combos.push((k, largest(|m| pad(k, m))));
-                }
-                combos.sort();
-                combos.dedup();
-                for (k, m) in combos.into_iter().filter(|c| *c != (0, 0)) {
-                    out.push((format!("{name}+{k}asks+{m}bids"), pad(k, m).expect("a batch")));
-                    // the same contexts with wide pad legs (amounts and prices of other byte widths): larger operands cost more
-                    for (amount, price) in WIDE_PADS {
-                        if let Some(w) = common::pad_batch_shaped(p, &a, k, m, amount, price) {
-                            if builds(&w) {
-                                out.push((format!("{name}+{k}asks+{m}bids+n{amount}p{price}"), w));
-                            }
+    let mut out: Vec<(String, Action)> = par_map(&common::PROGRAMS, |&p| program_shapes(p)).into_iter().flatten().collect();
+    out.extend(common::grid());
+    out.extend(pair_shapes());
+    out
+}
+
+/// The shapes of one program: its scenarios and branch fixtures, padded.
+fn program_shapes(p: TemplateId) -> Vec<(String, Action)> {
+    let mut out = vec![];
+    // the golden scenarios and the branch fixtures (every builder role, C6: a role the table lacks is refused by `build`)
+    for (n, a) in common::scenarios_on(p).into_iter().chain(common::branches::branch_shapes(p)) {
+        let name = format!("{n}@{}", p.name());
+        if matches!(a, Action::Batch(_)) {
+            let pad = |asks: usize, bids: usize| common::pad_batch(p, &a, asks, bids);
+            let asks = largest(|k| pad(k, 0));
+            let mut combos = vec![(asks, 0), (0, largest(|m| pad(0, m)))];
+            for k in asks.saturating_sub(1)..=asks {
+                combos.push((k, largest(|m| pad(k, m))));
+            }
+            combos.sort();
+            combos.dedup();
+            for (k, m) in combos.into_iter().filter(|c| *c != (0, 0)) {
+                out.push((format!("{name}+{k}asks+{m}bids"), pad(k, m).expect("a batch")));
+                // the same contexts with wide pad legs (amounts and prices of other byte widths): larger operands cost more
+                for (amount, price) in WIDE_PADS {
+                    if let Some(w) = common::pad_batch_shaped(p, &a, k, m, amount, price) {
+                        if builds(&w) {
+                            out.push((format!("{name}+{k}asks+{m}bids+n{amount}p{price}"), w));
                         }
                     }
                 }
             }
-            out.push((name, a));
         }
-        out
-    })
-    .into_iter()
-    .flatten()
-    .collect();
-    out.extend(common::grid());
-    out.extend(pair_shapes());
+        out.push((name, a));
+    }
     out
 }
 
@@ -169,51 +174,72 @@ fn pair_shapes_of(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
 /// allow: a pair covenant scans the inputs of BOTH its tokens (its stray guards), so its cost grows with every token input
 /// of either; the pads add custody inputs of each token (their tokens go to the batch's taker).
 fn pair_shapes() -> Vec<(String, Action)> {
-    use common::pair::pair_name;
-    par_map(&program_pairs(), |&(pa, pb)| {
-        let mut out = vec![];
-        let pn = pair_name(pa, pb);
-        for (n, a) in pair_shapes_of(pa, pb) {
-            if matches!(a, Action::Batch(_)) {
-                let pad_a = |k: usize| common::pad_asks_of(pa, common::TOKEN_COV, 0xd1, &a, k);
-                let ka = largest(pad_a);
-                let a_full = pad_a(ka).expect("a batch");
-                let pad_b = |k: usize| common::pad_asks_of(pb, common::TOKEN_B, 0xd5, &a_full, k);
-                let kb = largest(pad_b);
-                if ka + kb > 0 {
-                    out.push((format!("{n}+{ka}a+{kb}b@{pn}"), pad_b(kb).expect("a batch")));
-                }
-            }
-            out.push((format!("{n}@{pn}"), a));
-        }
-        out
-    })
-    .into_iter()
-    .flatten()
-    .collect()
+    par_map(&program_pairs(), |&(pa, pb)| pair_shapes_padded(pa, pb)).into_iter().flatten().collect()
 }
 
-/// Role -> (budget, the shape needing the most units, those units).
-fn measure_all(all: &[(String, Action)]) -> BTreeMap<String, (u16, String, u64)> {
-    let mut out: BTreeMap<String, (u16, String, u64)> = BTreeMap::new();
-    let mut add = |name: &str, measured: Vec<(String, u64)>| {
-        for (role, u) in measured {
-            let e = out.entry(role).or_insert((0, String::new(), 0));
-            if u > e.2 || e.1.is_empty() {
-                *e = (budget_for_units(u), name.to_string(), u);
+/// The pair shapes of one program pair, padded.
+fn pair_shapes_padded(pa: TemplateId, pb: TemplateId) -> Vec<(String, Action)> {
+    use common::pair::pair_name;
+    let mut out = vec![];
+    let pn = pair_name(pa, pb);
+    for (n, a) in pair_shapes_of(pa, pb) {
+        if matches!(a, Action::Batch(_)) {
+            let pad_a = |k: usize| common::pad_asks_of(pa, common::TOKEN_COV, 0xd1, &a, k);
+            let ka = largest(pad_a);
+            let a_full = pad_a(ka).expect("a batch");
+            let pad_b = |k: usize| common::pad_asks_of(pb, common::TOKEN_B, 0xd5, &a_full, k);
+            let kb = largest(pad_b);
+            if ka + kb > 0 {
+                out.push((format!("{n}+{ka}a+{kb}b@{pn}"), pad_b(kb).expect("a batch")));
             }
         }
-    };
-    for (name, measured) in all.iter().map(|(n, _)| n).zip(par_map(all, |(name, action)| units(name, action))) {
-        add(name, measured);
+        out.push((format!("{n}@{pn}"), a));
     }
     out
 }
 
+/// Role -> (budget, the shape needing the most units, those units), measured one group of shapes at a time (each program,
+/// the grid, each program pair), and the worst shape of each role: the whole shape set does not fit in memory.
+fn measure_streamed() -> (BTreeMap<String, (u16, String, u64)>, BTreeMap<String, Action>) {
+    let mut measured: BTreeMap<String, (u16, String, u64)> = BTreeMap::new();
+    let mut keep: BTreeMap<String, Action> = BTreeMap::new();
+    let mut groups: Vec<Box<dyn Fn() -> Vec<(String, Action)>>> = vec![];
+    for p in common::PROGRAMS {
+        groups.push(Box::new(move || program_shapes(p)));
+    }
+    groups.push(Box::new(common::grid));
+    for (pa, pb) in program_pairs() {
+        groups.push(Box::new(move || pair_shapes_padded(pa, pb)));
+    }
+    let n = groups.len();
+    for (k, g) in groups.into_iter().enumerate() {
+        let shapes = g();
+        let units = par_map(&shapes, |(name, action)| units(name, action));
+        for ((name, action), roles) in shapes.into_iter().zip(units) {
+            let mut worst = false;
+            for (role, u) in roles {
+                let e = measured.entry(role).or_insert((0, String::new(), 0));
+                if u > e.2 || e.1.is_empty() {
+                    *e = (budget_for_units(u), name.clone(), u);
+                    worst = true;
+                }
+            }
+            if worst {
+                keep.insert(name, action);
+            }
+        }
+        let live: BTreeSet<&String> = measured.values().map(|(_, s, _)| s).collect();
+        keep.retain(|name, _| live.contains(name));
+        if (k + 1) % 16 == 0 || k + 1 == n {
+            println!("measured {}/{n} groups, {} roles, {} worst shapes kept", k + 1, measured.len(), keep.len());
+        }
+    }
+    (measured, keep)
+}
+
 #[test]
 fn compute_budget_table_is_generated_exact_and_current() {
-    let all = shapes();
-    let measured = measure_all(all);
+    let (measured, all) = measure_streamed();
     let generated: BTreeMap<String, u16> = measured.iter().map(|(r, (b, _, _))| (r.clone(), *b)).collect();
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("data/compute_budgets.json");
     if std::env::var("KOB_REGEN").is_ok_and(|v| v == "1") {
