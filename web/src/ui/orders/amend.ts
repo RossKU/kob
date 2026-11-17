@@ -17,11 +17,12 @@ import type { PlanIssue } from '../../kob/plan-types';
 import type { OrderSnapshot, ReplacementSpec } from '../../kob/cancel';
 import { MAX_IDLE_DAA } from '../../kob/daa';
 import { formatKas, quoteOf } from '../../kob/units';
-import type { CondAskState, CondBidState, AskState, BidState, OrderState } from '../../kob/types';
+import type { CondAskState, CondBidState, AskState, BidState, CurveAskState, OrderState } from '../../kob/types';
+import { amendCurveTable, currentLevel } from '../../kob/curve';
 import type { KobWasm } from '../../kob/wasm';
 
 /** limit: plain ask / bid (in place where possible); cond: stop / take-profit / OCO legs. */
-export type AmendKind = 'limit' | 'cond';
+export type AmendKind = 'limit' | 'cond' | 'curve';
 
 /** New values as typed by the user (state prices: sompi per whole token; amounts: base units); a missing field keeps the current value. */
 export interface AmendInput {
@@ -45,6 +46,8 @@ export interface AmendInput {
    * (refund due at min(expiryDaa, utxoDaa + 90 days), expiryDaa = placement + 90 days), so renewing is a replacement with a new expiryDaa.
    */
   renew?: boolean;
+  /** a curve: its price now and its last level's (sompi per whole token), its level size and minimum fill (base units) */
+  curve?: { now?: bigint; last?: bigint; levelSize?: bigint; minFill?: bigint };
 }
 
 export interface AmendOptions {
@@ -243,7 +246,45 @@ function condReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions
   };
 }
 
+/**
+ * Builds the in-place amend of a curve (KobCurveAsk, spec §5): the price now and the last level's re-spread the levels left, the level size,
+ * tip and minimum fill may change; the amount left and the total stay. An unbound curve (made in its token genesis) is bound by its amend.
+ */
+function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOptions): AmendResult {
+  const st = snap.order.state;
+  if (st.kind !== 'KobCurveAsk') return fail([issue('not-amendable', 'error', 'this order type cannot be amended in place')]);
+  const s = st.state as CurveAskState;
+  const issues: PlanIssue[] = [];
+  const table0 = s.table.map((p) => big(p));
+  const lvl = Math.min(currentLevel(s), table0.length - 1);
+  const c = input.curve ?? {};
+  const now = c.now ?? table0[lvl]!;
+  const last = c.last ?? table0[table0.length - 1]!;
+  const levelSize = c.levelSize ?? big(s.levelSize);
+  const minFill = c.minFill ?? big(s.minFill);
+  const tip = input.tip ?? big(s.tip);
+  if (checkPrice('now', now, o.tick, issues) === null) return fail(issues);
+  if (checkPrice('last', last, o.tick, issues) === null) return fail(issues);
+  if (last < now) issues.push(issue('curve-last-below', 'error', 'the last level is at least the price now', 'last'));
+  if (levelSize < 1n) issues.push(issue('curve-level-size', 'error', 'the level size must be more than zero', 'levelSize'));
+  if (minFill < 1n) issues.push(issue('curve-min-fill', 'error', 'the minimum fill must be more than zero', 'minFill'));
+  if (tip < 0n) issues.push(issue('tip-negative', 'error', 'the tip cannot be negative', 'tip'));
+  else if (tip >= now) issues.push(issue('tip-exceeds-price', 'error', 'a sell must receive something after the tip', 'tip'));
+  if (issues.some((i) => i.severity === 'error')) return fail(issues);
+  const t = amendCurveTable({ total: big(s.total), amountLeft: big(s.amountLeft), levelSize, now, last });
+  if (!t) return fail([...issues, issue('curve-too-many-levels', 'error', 'this level size gives more than 1,000 levels', 'levelSize')]);
+  // an unbound curve names its token on its amend: the custody's
+  const unbound = /^0{64}$/.test(s.tokenCovId);
+  const bind = unbound ? snap.custody?.covenantId ?? null : null;
+  if (unbound && !bind) return fail([...issues, issue('curve-custody-unknown', 'error', 'the curve\'s tokens are not found yet: refresh and try again')]);
+  const next: CurveAskState = {
+    ...s, levelSize: str(t.levelSize), table: t.table.map(str), tip: str(tip), minFill: str(minFill), ...(bind ? { tokenCovId: bind } : {}),
+  };
+  const order = { kind: 'KobCurveAsk', state: next } as OrderState;
+  return { ok: true, issues, spec: { order, value: big(snap.order.amount), ...(snap.deadline !== null ? { deadline: snap.deadline } : {}) }, next: { price: now, stop: null, amount: big(s.amountLeft), tip } };
+}
+
 /** The replacement spec for an amendment, or the reasons it cannot be built. `kind` comes from `amendKind` (orders-model.ts). */
 export function buildReplacement(snap: OrderSnapshot, kind: AmendKind, input: AmendInput, o: AmendOptions = {}): AmendResult {
-  return kind === 'limit' ? limitReplacement(snap, input, o) : condReplacement(snap, input, o);
+  return kind === 'limit' ? limitReplacement(snap, input, o) : kind === 'curve' ? curveReplacement(snap, input, o) : condReplacement(snap, input, o);
 }

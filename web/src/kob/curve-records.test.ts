@@ -125,3 +125,55 @@ describe('cancel of an unbound curve (made in its token genesis)', () => {
     expect(s2.blocking).toEqual([]);
   });
 });
+
+describe('amend of a curve', () => {
+  it('re-spreads the levels left from the price now to the last, never falling', async () => {
+    const { amendCurveTable } = await import('./curve');
+    const t = amendCurveTable({ total: 100n, amountLeft: 55n, levelSize: 10n, now: 1000n, last: 2000n })!;
+    expect(t.table).toHaveLength(10);
+    // levels 0..4 are sold (they keep the price now), 4 is current, 9 is last
+    expect(t.table.slice(0, 5)).toEqual([1000n, 1000n, 1000n, 1000n, 1000n]);
+    expect(t.table[9]).toBe(2000n);
+    for (let i = 1; i < 10; i++) expect(t.table[i]! >= t.table[i - 1]!).toBe(true);
+    expect(amendCurveTable({ total: 100_000n, amountLeft: 1n, levelSize: 1n, now: 1n, last: 2n })).toBeNull();
+    expect(amendCurveTable({ total: 100n, amountLeft: 50n, levelSize: 10n, now: 5n, last: 4n })).toBeNull();
+  });
+
+  it('is in place (the custody stays), validates in the script engine, and binds an unbound curve', async () => {
+    const { MAKER, keyUtxo, signAndValidate, nodeFactsOf, snapshotOfRecovered, placeGolden } = await import('../testing/chain-fixtures');
+    const { planCancelReplace } = await import('./cancel');
+    const { decodeSigning } = await import('./decode');
+    const { buildReplacement } = await import('../ui/orders/amend');
+    const env = { kob, maker: MAKER.pk, funding: [keyUtxo(MAKER.pk, 100n * SCALE, 201)], tokenUtxos: [], clock: { daa: 78_000_000n } };
+    // bound
+    const snap = placeGolden(kob, 'create.curve').snapshots[0]!;
+    const s = (snap.order.state as Extract<typeof snap.order.state, { kind: 'KobCurveAsk' }>).state;
+    const a = buildReplacement(snap, 'curve', { curve: { now: BigInt(s.table[0]!) * 2n, last: BigInt(s.table[0]!) * 6n, minFill: 3n }, tip: 0n });
+    expect(a.ok).toBe(true);
+    const plan = planCancelReplace(env, snap, a.spec!);
+    expect(plan.ok).toBe(true);
+    expect(plan.issues.map((i) => i.code)).toContain('cancel.amend-in-place');
+    expect(plan.tokensReturned).toBe(0n);
+    signAndValidate(kob, plan.built!, [MAKER.sk]);
+    expect(decodeSigning({ kob, built: plan.built!, maker: MAKER.pk, registry: null, expected: plan.expected, nodeInputs: nodeFactsOf(plan.built!) }).blocking).toEqual([]);
+    // unbound: the amend names the custody's token
+    const sell = 900n * SCALE;
+    const t = curveTable(kob, { amount: sell, levels: 10, total: 100n * SCALE, multipleMilli: 5000n, scale: SCALE });
+    const g = issueRaw(kob, {
+      name: 'Curve Token', ticker: 'CRV', decimals: 8, supply: (1000n * SCALE).toString(),
+      holders: [{ owner: ZERO, ownerScheme: 4, amount: sell.toString() }, { owner: MAKER.pk, ownerScheme: 0, amount: (100n * SCALE).toString() }],
+      funding: [{ transactionId: '07'.repeat(32), index: 1, amount: (500n * SCALE).toString(), blockDaaScore: '5000', pubkey: MAKER.pk }],
+      network: 'testnet-10',
+      curve: { custody: 0, levelSize: t.levelSize.toString(), table: t.table.map(String), minFill: '1' },
+    } as never);
+    const u0 = snapshotOfRecovered(kob.recoverOrders(g.built.tx)[0]!);
+    const u = { ...u0, custody: { ...u0.custody!, covenantId: g.token.covenantId } };
+    const b = buildReplacement(u, 'curve', { curve: { levelSize: 50n * SCALE } });
+    expect(b.ok).toBe(true);
+    expect((b.spec!.order.state as { tokenCovId: string }).tokenCovId).toBe(g.token.covenantId);
+    const p2 = planCancelReplace(env, u, b.spec!);
+    expect(p2.ok).toBe(true);
+    expect(p2.issues.map((i) => i.code)).toContain('cancel.amend-in-place');
+    signAndValidate(kob, p2.built!, [MAKER.sk]);
+  });
+});

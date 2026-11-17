@@ -16,5 +16,12 @@ export default {
   'curve.details.left': 'Levels left',
   'curve.details.leftValue': '{left} of {levels}',
   'curve.details.ifSold': 'If the rest sells',
+  'curve.amend.title': 'Amend the curve',
+  'curve.amend.explain': 'The levels left are spread from the price now to the last price. The amount left stays.',
+  'curve.amend.now': 'Price now ({unit})',
+  'curve.amend.last': 'Last price ({unit})',
+  'curve.amend.levelSize': 'Level size ({ticker})',
+  'curve.amend.minFill': 'Minimum fill ({ticker})',
+  'curve.amend.rest': 'If the rest sells: {kas} KAS ({levels} levels)',
   'curve.details.unbound': 'Not filled yet: the first fill binds it to its token.',
 } as Record<string, string>;

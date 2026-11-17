@@ -840,6 +840,12 @@ export function amendsInPlace(order: OrderSnapshot, rep: OrderState, extraTokens
   // keep exact. Strays stay where they are, so only a cancel-replace sweeps them.
   const foreign = (order.foreign ?? []).length > 0;
   if (isKind(old, 'KobBid')) return !order.strays.length && !foreign && !order.straysUnknown && (extraTokens?.length ?? 0) === 0 && AMEND_KEEPS_BID.every((k) => a[k] === b[k]);
+  // a curve is amended in place whatever its strays (its custody never moves); an unbound one is bound to its custody's token
+  if (old.kind === 'KobCurveAsk') {
+    if (!order.custody || (extraTokens?.length ?? 0) > 0) return false;
+    const token = /^0{64}$/.test(a.tokenCovId!) ? order.custody.covenantId : a.tokenCovId;
+    return b.tokenCovId === token && AMEND_KEEPS.every((k) => k === 'tokenCovId' || a[k] === b[k]) && a.total === b.total;
+  }
   if (!isKind(old, 'KobAsk')) return false;
   if (order.strays.length || foreign || (extraTokens?.length ?? 0) > 0 || !order.custody) return false;
   return AMEND_KEEPS.every((k) => a[k] === b[k]);
@@ -898,7 +904,9 @@ export function planCancelReplace(env0: CancelEnv, order: OrderSnapshot, replace
   const only = retiredOnly(order);
   if (only) return only;
   if (rep.state.maker !== env.maker) return failed([issue('cancel.replacement-wrong-maker', 'error', 'the replacement must belong to the wallet key')], [order.covenantId]);
-  if (tokenCovIdOf(rep) !== tokenCovIdOf(old) || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
+  // an unbound curve's token is its custody's (its amend binds it)
+  const oldToken = curveFactsOf(old)?.unbound ? (order.custody?.covenantId ?? tokenCovIdOf(old)) : tokenCovIdOf(old);
+  if (tokenCovIdOf(rep) !== oldToken || quoteCovIdOf(rep) !== quoteCovIdOf(old)) {
     return failed([issue('cancel.replacement-wrong-token', 'error', 'the replacement must trade the same token (a pair order: the same pair) as the cancelled order')], [order.covenantId]);
   }
   if (!opts.noInPlace && amendsInPlace(order, rep, extraTokens)) return planAmendInPlace(env, order, replacement);

@@ -25,7 +25,7 @@ describe('a curve row', () => {
     expect(row.curve).toMatchObject({ level: 0, levels: st.state.table.length, unbound: false });
     expect(row.expiry.kind).toBe('none');
     expect(row.canCancel).toBe(true);
-    expect(row.canAmend).toBe(false);
+    expect(row.canAmend).toBe(true);
   });
 
   it('moves on with its state and lists an unbound curve under the indexer\'s token', () => {

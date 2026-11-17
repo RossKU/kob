@@ -129,6 +129,32 @@ export function curveNumbersOfState(s: Pick<CurveAskState, 'levelSize' | 'table'
   return curveNumbers({ levelSize: BigInt(s.levelSize), table, realised: curveRestKas(BigInt(s.levelSize), table, total, total, scale) }, total, scale);
 }
 
+/**
+ * The table of an amended curve (spec §5: the amend keeps `total` and `amountLeft`, may change `levelSize` and the table): the levels
+ * already sold keep the new current price (nothing fills them again), the rest rise geometrically from `now` to `last` (whole sompi,
+ * never falling). Null when the level size gives more than 1,000 levels or a price is not positive.
+ */
+export function amendCurveTable(a: { total: bigint; amountLeft: bigint; levelSize: bigint; now: bigint; last: bigint }): { levelSize: bigint; table: bigint[] } | null {
+  const { total, amountLeft, levelSize, now, last } = a;
+  if (levelSize <= 0n || now <= 0n || last < now || amountLeft <= 0n || amountLeft > total) return null;
+  const n = Number((total + levelSize - 1n) / levelSize);
+  if (n < 1 || n > CURVE_MAX_LEVELS) return null;
+  const cur = Number((total - amountLeft) / levelSize);
+  const steps = n - 1 - cur;
+  const r = steps > 0 ? Math.pow(Number(last) / Number(now), 1 / steps) : 1;
+  const table: bigint[] = [];
+  let prev = now;
+  for (let j = 0; j < n; j++) {
+    const k = j - cur;
+    let p = k <= 0 ? now : j === n - 1 ? last : BigInt(Math.round(Number(now) * Math.pow(r, k)));
+    if (p < prev) p = prev;
+    if (p > last) p = last;
+    table.push(p);
+    prev = p;
+  }
+  return { levelSize, table };
+}
+
 /** The current level of a state: (total − amountLeft) / levelSize. */
 export function currentLevel(s: Pick<CurveAskState, 'total' | 'amountLeft' | 'levelSize'>): number {
   return Number((BigInt(s.total) - BigInt(s.amountLeft)) / BigInt(s.levelSize));

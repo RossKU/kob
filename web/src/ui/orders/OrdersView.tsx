@@ -29,6 +29,7 @@ import { useListPage } from '../market/use-market-list';
 import { useKascov } from '../market/use-kascov';
 import { kascovIconOf } from '../market/kascov-merge';
 import { AmendDialog } from './AmendDialog';
+import { CurveAmendDialog } from './CurveAmendDialog';
 import { ClaimDialog } from './ClaimDialog';
 import { planClaimMany, prepareClaim, type ClaimContext } from './claim';
 import { ReplaceDialog } from './ReplaceDialog';
@@ -890,7 +891,18 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
           }}
         />
       ) : null}
-      {amend && amendState && amendK && amendK !== 'replace' ? (
+      {amend && amendState && amendK === 'curve' ? (
+        <CurveAmendDialog
+          row={amend}
+          state={amendState.state}
+          token={amendToken ?? shownToken(amend.token, amend.scale)}
+          pubkey={wallet.info.pubkey}
+          strays={strays}
+          onClose={() => setAmend(null)}
+          onPlanned={onPlannedAmend}
+        />
+      ) : null}
+      {amend && amendState && amendK && amendK !== 'replace' && amendK !== 'curve' ? (
         <AmendDialog
           row={amend}
           kind={amendK}

@@ -330,8 +330,10 @@ export interface DescribeContext {
  * protocol: their resting limits, stops, take-profits, OCO and IFD / IFO entries are replaced from the full pair ticket form (cancel-replace).
  * Repeat entries and booked exits have none: the position is cancelled as a whole (their exits re-arm the entry).
  */
-export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | null {
+export function amendKind(state: OrderState, typeKey: OrderTypeKey): 'limit' | 'cond' | 'replace' | 'curve' | null {
   const k = baseKind(state.kind);
+  // a curve: its levels left, level size, tip and minimum fill, amended in place
+  if (k === 'KobCurveAsk') return 'curve';
   // TWAP, DCA, Dutch / rising and timed orders (KAS and pair): replaced from the full ticket form with their schedule (replace-intent.ts)
   if ((k === 'KobPair' || k === 'KobAsk' || k === 'KobBid') && SCHEDULED_TYPES.includes(typeKey)) return 'replace';
   if (k === 'KobPair') return typeKey === 'limit' || typeKey === 'limit-gtd' || typeKey === 'limit-day' ? 'replace' : null;
