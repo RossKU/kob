@@ -30,7 +30,7 @@ import { boughtOf } from './bought';
 import type { ExpectedSigning } from './decode';
 import {
   asOrderState, baseKind, big, custodiesOf, extensionOf, familyOfKind, isKind, pairExtFor, pairFactsOf, quoteCovIdOf, tokenCovIdOf,
-  type CustodyFact,
+  curveFactsOf, type CustodyFact,
 } from './order-facts';
 import { pairOfView } from './pair-view';
 import type { PlanIssue } from './plan-types';
@@ -653,7 +653,9 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (st.state.maker !== env.maker) {
     return { error: [issue('cancel.not-maker', 'error', 'this order belongs to another key: only its maker can cancel it', { covenantId: snap.covenantId })] };
   }
-  const cs = custodiesOf(st);
+  // an unbound curve (created in its token's genesis) names no token in its state: its token is its custody's
+  const unbound = curveFactsOf(st)?.unbound ? (snap.custody?.covenantId ?? null) : null;
+  const cs = custodiesOf(st).map((c) => (unbound ? { ...c, token: unbound } : c));
   if ((cs[0]?.amount ?? 0n) > 0n && !snap.custody) {
     return { error: [issue('cancel.custody-missing', 'error', 'the order\'s custody token UTXO is unknown: refresh the order from the indexer or node', { covenantId: snap.covenantId })] };
   }
@@ -666,7 +668,7 @@ function prepare(env: CancelEnv, snap: OrderSnapshot, opts: CancelOptions, extra
   if (bf && !bc) {
     return { error: [issue('cancel.bought-missing', 'error', 'the token UTXO holding what this order bought is unknown: refresh the order from the indexer', { covenantId: snap.covenantId })] };
   }
-  const toks = ownTokenFacts(st);
+  const toks = ownTokenFacts(st).map((t) => (unbound ? { ...t, covenantId: unbound } : t));
   const ownIds = toks.map((t) => t.covenantId);
   // A stray of another token, none of the order's own, cannot join the order's own transfers. The
   // builder would refuse the whole cancel, so the stray is left behind and reported instead of

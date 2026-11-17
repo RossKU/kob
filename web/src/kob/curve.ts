@@ -102,6 +102,25 @@ export function levelSizes(levelSize: bigint, levels: number, total: bigint): bi
   return Array.from({ length: levels }, (_, i) => (i + 1 < levels ? levelSize : total - BigInt(levels - 1) * levelSize));
 }
 
+/** The levels left of a curve holding `left` base units: table index, price and the size left in it, the current first. */
+export function curveLevelsLeft(levelSize: bigint, table: readonly bigint[], total: bigint, left: bigint): { level: number; price: bigint; amount: bigint }[] {
+  const out: { level: number; price: bigint; amount: bigint }[] = [];
+  const sold = total - left;
+  let pos = 0n;
+  levelSizes(levelSize, table.length, total).forEach((size, j) => {
+    const end = pos + size;
+    const open = end > sold ? end - (sold > pos ? sold : pos) : 0n;
+    if (open > 0n) out.push({ level: j, price: table[j]!, amount: open });
+    pos = end;
+  });
+  return out;
+}
+
+/** Sompi the levels left pay if they all sell: each level's open part at its price, rounded up per level (what the covenant pays the maker). */
+export function curveRestKas(levelSize: bigint, table: readonly bigint[], total: bigint, left: bigint, scale: bigint): bigint {
+  return curveLevelsLeft(levelSize, table, total, left).reduce((a, l) => a + (scale > 0n ? (l.amount * l.price + scale - 1n) / scale : 0n), 0n);
+}
+
 /** The current level of a state: (total − amountLeft) / levelSize. */
 export function currentLevel(s: Pick<CurveAskState, 'total' | 'amountLeft' | 'levelSize'>): number {
   return Number((BigInt(s.total) - BigInt(s.amountLeft)) / BigInt(s.levelSize));

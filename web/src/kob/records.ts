@@ -886,6 +886,8 @@ export async function resolveRecord(
  * own token, A or B, on that token's program. A sell-first entry has A, then its B prefund. The
  * extension commitment is the one the record knows (the placed custody's) or the state names.
  */
+const ZERO_TOKEN = '0'.repeat(64);
+
 async function findCustody(
   kob: KobWasm,
   ask: (spks: string[]) => Promise<NodeUtxo[]>,
@@ -906,7 +908,8 @@ async function findCustody(
     if (family === 'kcc20' && !ext) return { utxo: null, issue: 'no-extension' };
     const st = custodyState(family, c.amount, record.covenantId, ext);
     const spk = kob.tokenScriptPublicKey(program, st);
-    const u = (await ask([spk])).find((x) => x.covenantId === c.token && x.scriptPublicKey === spk);
+    // an unbound curve names no token (zero): its custody script, owned by the curve alone, is enough
+    const u = (await ask([spk])).find((x) => (c.token === ZERO_TOKEN ? !!x.covenantId : x.covenantId === c.token) && x.scriptPublicKey === spk);
     if (!u) return { utxo: null, issue: 'not-found' };
     return { utxo: { transactionId: u.transactionId, index: u.index, amount: u.amount, blockDaaScore: u.blockDaaScore, covenantId: u.covenantId, state: st }, issue: null };
   };
