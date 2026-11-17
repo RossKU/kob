@@ -63,6 +63,8 @@ STAGE_NATIVE=$(cygpath -m "$STAGE/src" 2>/dev/null || echo "$STAGE/src")
 actors=()
 for f in $(ls contracts/orders/*.sil | LC_ALL=C sort); do
   n=$(basename "$f" .sil)
+  # only the orders KOBOrders.ag declares (KobCurveAsk is not in the router's interface)
+  grep -q "^actor $n " contracts/argent/KOBOrders.ag || continue
   actors+=("$n=contracts/artifacts/$n.json")
 done
 (cd "$STAGE/src" && "$ARGENTC" build KOBOrders.ag --out ../out/orders_skeleton >/dev/null)
