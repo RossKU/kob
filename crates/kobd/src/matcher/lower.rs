@@ -94,6 +94,12 @@ pub fn lower_batch(plan: &Plan, cx: &LowerCtx) -> Result<Batch, String> {
                 amount,
                 t,
             },
+            // the state as it is on chain (an unbound curve's fill binds it to its custody's token)
+            AnyState::KobCurveAsk(_) => Leg::CurveAsk {
+                order: typed(&o.order, |s| if let AnyState::KobCurveAsk(x) = s { Some(x.clone()) } else { None })?,
+                custody: custody()?,
+                amount,
+            },
             AnyState::KobBid(_) => Leg::Bid {
                 order: typed(&o.order, |s| if let AnyState::KobBid(x) = s { Some(x.clone()) } else { None })?,
                 amount,

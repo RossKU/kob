@@ -1227,7 +1227,7 @@ pub fn tick_with(inp: &TickInput, cfg: &EngineConfig, families: &Families, signe
 fn order_tokens(o: &ListedOrder) -> Vec<[u8; 32]> {
     match o.order.state.pair_tokens() {
         Some(t) => vec![t.a.cov_id, t.b.cov_id],
-        None => vec![o.order.state.token_cov_id()],
+        None => vec![o.named_state().token_cov_id()],
     }
 }
 

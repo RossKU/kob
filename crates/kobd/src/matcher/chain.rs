@@ -99,6 +99,15 @@ fn continuation(o: &ListedOrder, n: i64, leg: u8, trigger: bool, merge: bool, bu
             }
             (AnyState::KobIfdAsk(IfdAskState { amount_left: rest, ..s.clone() }), Some(rest))
         }
+        // A curve continues with amountLeft - n, bound to its custody's token by the fill.
+        AnyState::KobCurveAsk(s) => {
+            let rest = s.amount_left - n;
+            if rest <= 0 {
+                return None;
+            }
+            let next = CurveAskState { amount_left: rest, ..s.clone() };
+            (crate::model::bound(&AnyState::KobCurveAsk(next), o.custody.as_ref()?.utxo.covenant_id?), Some(rest))
+        }
         // A pair order is not chained: its fill is never chain-safe (`super::pair`).
         AnyState::KobPair(_) | AnyState::KobCondPair(_) | AnyState::KobIfdPair(_) => return None,
         _ => unreachable!("base_state is a KCC-20 kind"),
