@@ -76,11 +76,16 @@
   --dt-cols-1: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(88px, 1.2fr) minmax(88px, 1fr) minmax(136px, 2.2fr) var(--dt-chev);
   --dt-cols-2: 6.4em minmax(104px, 2fr) 38px minmax(80px, 1fr) minmax(96px, 1.2fr) minmax(136px, 2.2fr) var(--dt-chev);
 }
+/* Balances: each row is its own grid, so no track may follow its content. The buttons' column is fixed, so the header and every row share the same tracks and each
+   figure column ends on one edge. Fold 0: "Merge all (2): about +19 KAS" and Cancel all on one line; fold 1: Cancel all under it; fold 2: the figures take some of the
+   buttons' room (a label wraps in its button) */
 .dt-balances {
-  --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) minmax(150px, auto);
-  --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) minmax(128px, auto);
-  --dt-cols-2: var(--dt-cols-1);
+  --dt-cols: minmax(180px, 2fr) repeat(5, minmax(100px, 1fr)) 300px;
+  --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 216px;
+  --dt-cols-2: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 168px;
 }
+/* a longer button label wraps inside its button, within the column */
+.dt-balances:not([data-fold='cards']) .dt-act .btn { white-space: normal; text-wrap: balance; text-align: center; }
 
 /* a status too long for its cell ("expired (IOC/FOK)") wraps inside its chip */
 .dt-c-status .badge { white-space: normal; min-width: 0; }
