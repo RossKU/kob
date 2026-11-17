@@ -249,7 +249,7 @@ export function BalancesPanel(props: {
                     <DtRow>
                       <DtCell k="asset" card="head">
                         <span class="dt-market">
-                          <IdentityBlock row={{ covenantId: b.token, ticker: shown.ticker, kascov: props.iconOf?.(b.token) ?? null }} size="sm" />
+                          <IdentityBlock scope="wallet" row={{ covenantId: b.token, ticker: shown.ticker, kascov: props.iconOf?.(b.token) ?? null }} size="sm" />
                           <span class="dt-market-name">
                             {/* the covenant id and the fingerprint identify the token; where its decimals come from (its market's price scale) is the name's tooltip, not text in the row.
                                 Warnings (unverified, facts disagree, assumed decimals) stay inline. */}

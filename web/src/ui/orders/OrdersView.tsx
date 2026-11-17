@@ -31,6 +31,8 @@ import { kascovIconOf } from '../market/kascov-merge';
 import { AmendDialog } from './AmendDialog';
 import { ReplaceDialog } from './ReplaceDialog';
 import { AutoRefundToggle } from './AutoRefund';
+import { listCreations } from '../../data/creations';
+import { acquiredTokens, logoGate } from '../../data/logo-gate';
 import { BalancesFrame, BalancesPanel } from './BalancesPanel';
 import { OrderRow, type OrderRowActions } from './OrderRow';
 import { PositionCard } from './PositionCard';
@@ -205,6 +207,9 @@ export function OrdersView(props: { tab?: PortfolioTab; recover?: boolean; embed
     return describeEntries(d.entries, { kob: services.kob, clock: d.clock }).map((r) => ((strayCounts.get(r.id) ?? 0) > r.strayCount ? { ...r, strayCount: strayCounts.get(r.id)! } : r));
   }, [d, services.kob]);
   const rowById = useMemo(() => new Map(rows.map((r) => [r.id, r])), [rows]);
+  // the tokens this wallet acquired on its own (its orders, its creations): only their creator-hosted logos load here (data/logo-gate.ts); set during render so the rows below read it
+  const acquired = useMemo(() => acquiredTokens(rows, pubkey ? listCreations(services.config.network, pubkey) : []), [rows, pubkey, services.config.network]);
+  logoGate.setAcquired(pubkey ?? null, acquired);
   const entryById = useMemo(() => new Map((d?.entries ?? []).map((e) => [e.id, e])), [d]);
   // an order of the market this panel stands on (a market page with "this market only"): every order elsewhere
   const inMarket = (r: OrderRowModel | undefined): boolean =>

@@ -40,10 +40,10 @@ export function Fingerprint(props: { covenantId: string; height?: number; 'data-
 }
 
 /** Icon and fingerprint side by side: `md` (list rows), `sm` (26 px, a line of a table on the Portfolio page) or `bar` (the market bar: 32 px, smaller on a phone); the sizes are in market.css, which also narrows them on a phone. */
-export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'sm' | 'md' | 'bar'; 'data-testid'?: string }) {
+export function IdentityBlock(props: { row: Pick<TokenRow, 'covenantId' | 'ticker' | 'kascov'>; size?: 'sm' | 'md' | 'bar'; 'data-testid'?: string; /** wallet views: see TokenIcon */ scope?: 'wallet' }) {
   return (
     <span class={`idb idb-${props.size ?? 'md'}`} data-testid={props['data-testid'] ?? `identity-${props.row.covenantId}`}>
-      <TokenIcon row={props.row} />
+      <TokenIcon row={props.row} {...(props.scope ? { scope: props.scope } : {})} />
       <Fingerprint covenantId={props.row.covenantId} height={40} />
     </span>
   );

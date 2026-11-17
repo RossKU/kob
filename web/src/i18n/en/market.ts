@@ -507,6 +507,8 @@ export default {
   'market.token.scaleValuePart': "per {part} {ticker}; prices are shown per whole token",
   // token logos: where the picture comes from, and the report (data/logos.ts, data/logo-blocklist.ts)
   'market.logo.title': 'Logo',
+  'market.logo.show': 'Show logo',
+  'market.logo.show.title': 'Show logo: loads the picture from {host}, which then sees your IP address',
   'market.logo.unchecked': "Image from the creator's site, not checked",
   'market.logo.checked': 'Checked: the picture matches the hash its creator committed to (a copy saved by kascov.io).',
   'market.logo.ipfs': "Loaded from IPFS through a public gateway, which sees your IP address. The address names the picture, so the creator cannot swap it later.",

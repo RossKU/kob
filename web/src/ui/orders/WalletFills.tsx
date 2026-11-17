@@ -164,7 +164,7 @@ export function WalletFills(props: {
     const unix = fill.atMs > 0 ? Math.floor(fill.atMs / 1000) : null;
     const time = timeText(unix);
     const amount = amountCell(fill.amount, decimals);
-    const identity = row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
+    const identity = row.token ? <IdentityBlock scope="wallet" row={{ covenantId: row.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" /> : null;
     return { unit, market: marketOf(w), marketHref, valueKas, unix, time, amount, identity, key: `${fill.txid}-${row.id}-${fill.atMs}` };
   };
 

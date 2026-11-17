@@ -7,6 +7,7 @@
 //        - `ipfs://` fetched as bytes through the gateway: equal -> 'verified'; a different file -> 'mismatch'; no hash -> 'ipfs';
 //        - `https://` read in CORS mode: equal -> 'verified' (a blob); different -> 'mismatch'; not readable (no CORS header, the usual case) or
 //          no hash -> a plain <img> the page cannot read or check ('creator');
+//      In a wallet view (`scope: 'wallet'`) an https address loads only for a token the user acquired or chose to show (data/logo-gate.ts): else 'withheld'.
 //   4. none: the letter avatar (with the note, for 'mismatch', that the picture at the creator's address is not the one the creation record names).
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
@@ -15,10 +16,13 @@ import { useDeclarationsVersion } from '../../app/use-declaration';
 import { logoBlocklist } from '../../data/logo-blocklist';
 import { iconLoader, kascovNetwork } from '../../data/kascov';
 import { asImageHash, httpsChecker, ipfsLoader, parseLogoRef, type HttpsOutcome, type LogoRef } from '../../data/logos';
+import { useLogoAllowed, withholdsLogo } from '../../data/logo-gate';
 import { declaredToken } from '../../data/token-declarations';
 
 export type TokenLogo =
   | { state: 'off' | 'hidden' | 'pending' | 'none' }
+  /** wallet view, creator-hosted https logo of a token the user did not acquire: nothing is requested; the letter shows with a "Show logo" control */
+  | { state: 'withheld'; host: string }
   /** `checked`: bytes that hash to the creator's committed hash (kascov.io's copy); `ipfs`: bytes from the gateway, compared with the CID where that is possible */
   | { state: 'checked' | 'ipfs'; src: string }
   /** bytes from the creator's address that hash to the `image_hash` of the token's creation record */
@@ -53,12 +57,13 @@ const hostOf = (r: LogoRef, gateway: string): string => {
  * The logo of a token. `active`: the icon is on screen (nothing is fetched before). Returns the state to draw and `failed()` for an <img> that did not load
  * (the next candidate address is tried, then the letter).
  */
-export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLogo; failed: () => void } {
+export function useTokenLogo(row: LogoSubject, active: boolean, scope?: 'wallet'): { logo: TokenLogo; failed: () => void } {
   const { config } = useServices();
   const [iconsOn] = useIconPref();
   const [creatorOn] = useCreatorImagePref();
   useDeclarationsVersion();
   const hidden = useLogoHidden(row.covenantId);
+  const allowed = useLogoAllowed(row.covenantId);
   const { covenantId } = row;
   const net = kascovNetwork(config.network);
   const base = config.tokenNamesUrl;
@@ -103,7 +108,10 @@ export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLo
   const n = tried.key === candKey ? tried.n : 0;
   const next = () => setTried({ key: candKey, n: n + 1 });
   const advance = () => setTried((t) => ({ key: candKey, n: (t.key === candKey ? t.n : 0) + 1 }));
-  const cur = !blocked && active && creatorOn && checkedHere !== null && checkedHere.src === null ? candidates[n] : undefined;
+  const next0 = !blocked && active && creatorOn && checkedHere !== null && checkedHere.src === null ? candidates[n] : undefined;
+  // a wallet view asks a creator's host nothing for a token the user did not acquire
+  const withheld = next0 && withholdsLogo(scope, allowed, next0.kind) ? next0 : null;
+  const cur = withheld ? undefined : next0;
 
   // 3a. ipfs:// through the gateway (compared with the committed hash when there is one)
   const gateway = config.ipfsGatewayUrl;
@@ -149,7 +157,9 @@ export function useTokenLogo(row: LogoSubject, active: boolean): { logo: TokenLo
   else if (hidden) logo = { state: 'hidden' };
   else if (checkedHere?.src) logo = { state: 'checked', src: checkedHere.src };
   else if (!active || checkedHere === null) logo = { state: 'pending' };
-  else if (!creatorOn || !cur) logo = { state: 'none' };
+  else if (!creatorOn) logo = { state: 'none' };
+  else if (withheld) logo = { state: 'withheld', host: hostOf(withheld, gateway) };
+  else if (!cur) logo = { state: 'none' };
   else if (cur.kind === 'https') {
     if (cur.svg && (httpsKey === null || httpsHere?.kind === 'unreadable')) logo = { state: 'none' };
     else if (httpsKey === null || httpsHere?.kind === 'unreadable') logo = { state: 'creator', src: cur.url, host: hostOf(cur, gateway) };

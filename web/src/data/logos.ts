@@ -9,9 +9,9 @@
 //      (`verifyIpfsBytes`: a CIDv1 raw leaf, or a one-block CIDv0 / dag-pb file with no path, i.e. an image of at most 256 KiB); a larger file or one
 //      inside a directory is a many-block DAG, whose check needs the whole DAG, so there the gateway's content addressing is accepted (the gateway can
 //      then serve other bytes of a valid image type; it cannot make the creator's address point elsewhere).
-//   3. `https://` (the declaration, or kascov's claimed image when it has no saved copy): a plain <img src> with no referrer, no credentials, lazy,
+//   3. `https://` (the declaration, or kascov's claimed image when it has no saved copy): a plain <img src> with no referrer, lazy (no credentials for the `fetch`; the <img> sends the host's own cookies, if any),
 //      in a fixed box, labelled "Image from the creator's site, not checked". The creator's host sends no CORS header, so the page cannot read the bytes:
-//      nothing is checked, and that host sees the viewer's IP address and when the logo was looked at. The Settings switch turns this source off.
+//      nothing is checked, and that host sees the viewer's IP address and when the logo was looked at. The Settings switch turns this source off. Wallet views load it only for a token the user acquired or chose to show (data/logo-gate.ts).
 //      When the declaration carries an `image_hash` (SHA-256 of the picture file, KCC-0021's field), the page first tries to READ the bytes
 //      (`fetch` in CORS mode, no credentials, no referrer): readable and equal to the hash, they are shown from a `blob:` URL as checked; readable and
 //      different, the letter is shown with a note that the picture does not match the creation record (`createHttpsChecker`); not readable (no CORS

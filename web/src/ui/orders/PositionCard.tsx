@@ -79,7 +79,7 @@ export function PositionCard(props: PositionCardProps) {
             <path d="M9 6l6 6-6 6" />
           </svg>
         </button>
-        {sum.token ? <IdentityBlock row={{ covenantId: sum.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(sum.token) ?? null }} size="sm" /> : null}
+        {sum.token ? <IdentityBlock scope="wallet" row={{ covenantId: sum.token, ticker: token?.ticker ?? '', kascov: props.iconOf?.(sum.token) ?? null }} size="sm" /> : null}
         <div class="pc-head-main">
           <strong class="pc-title" data-testid="position-title">
             {typeKey === 'ifo' || typeKey === 'ifd' || typeKey === 'repeat' ? t(`orders.type.${typeKey}`) : t(`orders.position.${p.kind}`)}
