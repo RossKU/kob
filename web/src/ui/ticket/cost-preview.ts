@@ -76,6 +76,8 @@ export function costPreview(i: CostInput): CostPreview {
   const tip = (it as { tip?: bigint }).tip ?? 0n;
   const tk = i.take;
   if (tk) {
+    // an IOC or market order whose rest is not placed: the book covers only what is taken
+    if (tk.restKind === 'none' && tk.rest > 0n) return { kind: 'thin', covers: tk.total.amount };
     const fees = tk.fee * BigInt(tk.steps.length) + (tk.restKind === 'limit' ? (tk.restPlan?.disclosure?.fee ?? 0n) : 0n);
     const restAt = tk.restKind === 'limit' ? quoteOf(tk.rest, withTip(tk.limit, tip, side), i.scale, round) : 0n;
     const traded = tk.restKind === 'limit' ? amount : tk.total.amount;

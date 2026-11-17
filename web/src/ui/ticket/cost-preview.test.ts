@@ -127,8 +127,9 @@ describe('an order filled from the book (a take)', () => {
     // 6 KAS taken + 2 x 2.5 rest + 0.01 fee; the max: 5 x 2.5 + 0.01
     expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 11n * KAS + KAS / 100n, bound: 12n * KAS + KAS / 2n + KAS / 100n });
   });
-  it('an IOC or market order: only what is taken, its rest is not placed', () => {
-    const p = costPreview({ ...base, intent: market('buy', 5n * TOK), take: take({ restKind: 'none' }) });
-    expect(p).toEqual({ kind: 'cost', side: 'buy', estimate: 6n * KAS + KAS / 100n, bound: 7n * KAS + KAS / 2n + KAS / 100n });
+  it('an IOC or market order: what is taken; a rest that is not placed is a thin book', () => {
+    const all = costPreview({ ...base, intent: market('buy', 3n * TOK), take: take({ restKind: 'none', rest: 0n }) });
+    expect(all).toEqual({ kind: 'cost', side: 'buy', estimate: 6n * KAS + KAS / 100n, bound: 7n * KAS + KAS / 2n + KAS / 100n });
+    expect(costPreview({ ...base, intent: market('buy', 5n * TOK), take: take({ restKind: 'none' }) })).toEqual({ kind: 'thin', covers: 3n * TOK });
   });
 });
