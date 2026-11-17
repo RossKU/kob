@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
-export const SUITE_NAMES = ['kcc20-sell', 'kcc20-buy', 'kron-sell', 'kron-buy', 'pair', 'cond-pair', 'cond-pair-rpt', 'ifd-pair'];
+export const SUITE_NAMES = ['kcc20-sell', 'kcc20-buy', 'kron-sell', 'kron-buy', 'pair', 'cond-pair', 'cond-pair-rpt', 'ifd-pair', 'curve-ask'];
 
 // Suites whose catalogs are not run (name -> reason). `--suite all` skips them; naming one fails. None at present.
 export const PENDING_SUITES = {};
