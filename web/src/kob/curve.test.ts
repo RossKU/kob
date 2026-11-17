@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import {
-  curveNumbers, curveSteps, defaultSalePrice, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
+  curveNumbers, curveProblems, curveSteps, defaultSalePrice, tablePreview, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
 } from './curve';
 
 const kob = loadKobNode();
@@ -113,5 +113,34 @@ describe('sale split ("Keep in my wallet")', () => {
     expect(parseSale({ ...f, mode: 'ask', levels: 'x', multiple: 'x', price: '2.5' }, 10n, 0)).toMatchObject({ issues: [], parsed: { sell: 10n, price: 250_000_000n, total: 25n * KAS } });
     expect(parseSale({ ...f, mode: 'ask', price: '' }, 10n, 0).issues.map((i) => i.code)).toEqual(['sale.price.invalid']);
     expect(defaultSalePrice(1_000_000n * WHOLE, SCALE)).toBe(1_000_000n);
+  });
+});
+
+describe('curveProblems (stricter than the protocol)', () => {
+  const ok = { table: ['100', '120', '120', '150'], tip: '0', levelSize: '10', total: '35', amountLeft: '35', minFill: '1', scale: '100000000', activeFrom: '0' };
+  const of = (over: Partial<typeof ok>, decimals?: number) => curveProblems({ ...ok, ...over } as never, decimals);
+  it('accepts a sound curve (equal neighbours allowed)', () => {
+    expect(of({})).toEqual([]);
+    expect(of({}, 8)).toEqual([]);
+  });
+  it('refuses each bad field', () => {
+    expect(of({ table: [] as never })).toContain('table');
+    expect(of({ table: ['100', '0', '120', '150'] })).toContain('table');
+    expect(of({ table: ['100', '120', '110', '150'] })).toEqual(['falls']);
+    expect(of({ tip: '100' })).toEqual(['tip']);
+    expect(of({ tip: '-1' })).toEqual(['tip']);
+    expect(of({ levelSize: '0' })).toContain('levelSize');
+    expect(of({ total: '41' })).toEqual(['total']);
+    expect(of({ total: '30', amountLeft: '30' })).toEqual(['total']);
+    expect(of({ amountLeft: '36' })).toEqual(['amountLeft']);
+    expect(of({ minFill: '0' })).toEqual(['minFill']);
+    expect(of({}, 2)).toEqual(['scale']);
+    expect(of({ scale: '1000000000000000000' }, 18)).toEqual(['scale']);
+    expect(of({ scale: '1000000000' }, 18)).toEqual([]);
+    expect(of({ activeFrom: '-1' })).toEqual(['activeFrom']);
+  });
+  it('previews a table as its first three and last two levels', () => {
+    expect(tablePreview([1n, 2n, 3n], String)).toBe('1 · 2 · 3');
+    expect(tablePreview([1n, 2n, 3n, 4n, 5n, 6n, 7n], String)).toBe('1 · 2 · 3 … 6 · 7');
   });
 });

@@ -155,6 +155,48 @@ export function amendCurveTable(a: { total: bigint; amountLeft: bigint; levelSiz
   return { levelSize, table };
 }
 
+/**
+ * What the wallet refuses in a curve's state, stricter than the protocol (which only asks every price >= tip and > 0): a table that falls
+ * anywhere, a tip at or above any level's price, a level size or total the table cannot hold, an amount left above the total, no minimum fill,
+ * and, with the token's decimals, a scale other than 10^min(decimals, 9). Empty when the curve is sound.
+ */
+export type CurveProblem = 'table' | 'falls' | 'tip' | 'levelSize' | 'total' | 'amountLeft' | 'minFill' | 'scale' | 'activeFrom';
+export function curveProblems(s: Pick<CurveAskState, 'table' | 'tip' | 'levelSize' | 'total' | 'amountLeft' | 'minFill' | 'scale' | 'activeFrom'>, decimals?: number): CurveProblem[] {
+  const out: CurveProblem[] = [];
+  const num = (v: unknown): bigint | null => {
+    try {
+      return typeof v === 'string' && /^-?\d+$/.test(v) ? BigInt(v) : null;
+    } catch {
+      return null;
+    }
+  };
+  const table = Array.isArray(s.table) ? s.table.map(num) : [];
+  const tip = num(s.tip);
+  const size = num(s.levelSize);
+  const total = num(s.total);
+  const left = num(s.amountLeft);
+  const minFill = num(s.minFill);
+  const scale = num(s.scale);
+  const n = BigInt(table.length);
+  if (!table.length || table.length > CURVE_MAX_LEVELS || table.some((p) => p === null || p <= 0n)) out.push('table');
+  else if (table.some((p, i) => i > 0 && p! < table[i - 1]!)) out.push('falls');
+  if (tip === null || tip < 0n || (table.length && table.every((p) => p !== null) && table.some((p) => tip >= p!))) out.push('tip');
+  if (size === null || size <= 0n) out.push('levelSize');
+  else if (total === null || total <= 0n || total > size * n || total <= size * (n - 1n)) out.push('total');
+  if (left === null || left <= 0n || (total !== null && left > total)) out.push('amountLeft');
+  if (minFill === null || minFill < 1n) out.push('minFill');
+  if (scale === null || scale <= 0n || (decimals !== undefined && scale !== 10n ** BigInt(Math.min(decimals, 9)))) out.push('scale');
+  const af = num(s.activeFrom);
+  if (af === null || af < 0n) out.push('activeFrom');
+  return out;
+}
+
+/** A short preview of a table: the first three levels, then the last two ("1 · 2 · 3 … 9 · 10"); `fmt` prints one price. */
+export function tablePreview(table: readonly bigint[], fmt: (p: bigint) => string): string {
+  if (table.length <= 6) return table.map(fmt).join(' · ');
+  return `${table.slice(0, 3).map(fmt).join(' · ')} … ${table.slice(-2).map(fmt).join(' · ')}`;
+}
+
 /** The current level of a state: (total − amountLeft) / levelSize. */
 export function currentLevel(s: Pick<CurveAskState, 'total' | 'amountLeft' | 'levelSize'>): number {
   return Number((BigInt(s.total) - BigInt(s.amountLeft)) / BigInt(s.levelSize));

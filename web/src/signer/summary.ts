@@ -5,6 +5,7 @@
 // first as the user placed it (sell KAS for tokens), its chain-side terms below; every price reads "X per Y", never a pair notation.
 import { decodeSigning, type DecodedOrder, type SigningKind, type SigningSummary, type TokenRef } from '../kob/decode';
 import { spendsPreparation } from '../kob/issue';
+import { curveNumbersOfState, curveProblems, tablePreview } from '../kob/curve';
 import { decodeDeclaration } from '../kob/kcc23';
 import { baseKind, isMultiFillMarket, type OrderDescription } from '../kob/order-facts';
 import { DEFAULT_BID_FILLS } from '../kob/orders/common';
@@ -474,7 +475,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
   let toMaker = 0n;
   // a claimed curve (the genesis's sell order of this key): its output is exactly the script of its unbound state, alone in its own covenant
   // group, made by this key, of the claimed program and commitment, and its custody is the claimed token output it owns with exactly its amount
-  let curveLine: SummaryLine | null = null;
+  let curveLines: SummaryLine[] = [];
   if (claim?.curve) {
     const c = claim.curve;
     const st = c.state as { kind?: unknown; state?: Record<string, unknown> };
@@ -492,7 +493,25 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
     }
     verified.add(c.index);
     const table = (s.table as string[]).map((p) => BigInt(p));
-    curveLine = { label: t('signer.declare.curve'), value: t('signer.declare.curveValue', { levels: table.length, first: formatKas(table[0] ?? 0n), last: formatKas(table[table.length - 1] ?? 0n) }), dir: null };
+    // stricter than the protocol: a table that never falls, a tip below every level, levels that hold the amount, the scale of the declared decimals
+    if (decl.decimals === null || curveProblems(s as never, decl.decimals).length > 0) throw new Error('claim');
+    try {
+      kob.checkNumbers(c.state as never);
+    } catch {
+      throw new Error('claim');
+    }
+    const n = curveNumbersOfState(s as never);
+    const tip = BigInt(String(s.tip));
+    const units = (v: bigint) => `${formatTokenAmount(v, decl.decimals!)} ${decl.symbol ?? ''}`.trim();
+    curveLines = [
+      { label: t('signer.declare.curve'), value: t('signer.declare.curveValue', { levels: table.length, first: formatKas(table[0] ?? 0n), last: formatKas(table[table.length - 1] ?? 0n) }), dir: null },
+      { label: t('signer.declare.curveLevelSize'), value: units(BigInt(String(s.levelSize))), dir: null },
+      { label: t('signer.declare.curveAverage'), value: `${formatKas(n.average)} KAS`, dir: null },
+      { label: t('signer.declare.curveTotal'), value: `${formatKas(n.total)} KAS`, dir: null },
+      { label: t('signer.declare.curveTip'), value: `${formatKas(tip)} KAS`, dir: null },
+      { label: t('signer.declare.curveMinFill'), value: units(BigInt(String(s.minFill))), dir: null },
+      { label: t('signer.declare.curveTable'), value: tablePreview(table, (p) => formatKas(p)), dir: null },
+    ];
   }
   if (claim) {
     const tokenGroups = built.covenants.filter((g) => !claim.curve || g.covenantId !== claim.curve.covenantId);
@@ -532,7 +551,7 @@ export function creationSummary(kob: KobWasm, prep: BuiltTx, built: BuiltTx, mak
           { label: t('signer.declare.toYou'), value: `+${formatTokenAmount(toMaker, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'in' as const },
           ...(onCurve > 0n ? [{ label: t('signer.declare.onCurve'), value: `${formatTokenAmount(onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: null }] : []),
           ...(supply > toMaker + onCurve ? [{ label: t('signer.declare.toOthers'), value: `${formatTokenAmount(supply - toMaker - onCurve, decl.decimals)} ${decl.symbol ?? ''}`.trim(), dir: 'out' as const }] : []),
-          ...(curveLine ? [curveLine] : []),
+          ...curveLines,
         ]
       : []),
     { label: t('signer.net.kas'), value: signed(delta, kas), dir: delta < 0n ? 'out' : delta > 0n ? 'in' : null },

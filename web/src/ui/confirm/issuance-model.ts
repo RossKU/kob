@@ -6,7 +6,7 @@
 // claimed state, be bound to the claimed covenant id, hold the claimed carrier; the amounts must add up to the supply; nothing else may leave the
 // wallet except change to its own key; the fee is re-derived from inputs minus outputs. Any disagreement is a BLOCKING finding.
 import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
-import { curveNumbersOfState } from '../../kob/curve';
+import { curveNumbersOfState, curveProblems, tablePreview } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
@@ -150,7 +150,9 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
       built.covenants.some((c) => c.covenantId === curve.covenantId && c.outputs.length === 1 && c.outputs[0] === curve.output) &&
       st.maker === maker && st.tokenCovId === zero && st.tokenTplHash === token.templateHash && st.extensionCommitment === token.extensionCommitment &&
       BigInt(st.amountLeft) === BigInt(st.total) && !!custody && custody.owner === curve.covenantId && custody.ownerScheme === 4 && custody.borrowScheme === 0 &&
-      BigInt(custody.amount) === BigInt(st.amountLeft) && BigInt(out.value) === BigInt(curve.carrier);
+      BigInt(custody.amount) === BigInt(st.amountLeft) && BigInt(out.value) === BigInt(curve.carrier) &&
+      // stricter than the protocol: a table that never falls, a tip below every level, the token's own scale
+      curveProblems(st, token.decimals).length === 0;
     if (!ok) block('curve', { output: curve.output });
     else carriers += BigInt(out.value);
   }
@@ -235,7 +237,12 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
         row('curve-levels', tr('confirm.issue.curveLevels'), String(n.levels)),
         row('curve-first', tr('confirm.issue.curveFirst'), kas(n.first)),
         row('curve-last', tr('confirm.issue.curveLast'), kas(n.last)),
+        row('curve-average', tr('confirm.issue.curveAverage'), kas(n.average)),
         row('curve-total', tr('confirm.issue.curveTotal'), kas(n.total)),
+        row('curve-level-size', tr('confirm.issue.curveLevelSize'), amountText(BigInt(st.levelSize))),
+        row('curve-tip', tr('confirm.issue.curveTip'), kas(BigInt(st.tip)), BigInt(st.tip) > 0n ? 'warn' : 'muted'),
+        row('curve-min-fill', tr('confirm.issue.curveMinFill'), amountText(BigInt(st.minFill)), 'muted'),
+        row('curve-table', tr('confirm.issue.curveTable'), tablePreview(st.table.map((p) => BigInt(p)), (p) => formatKas(p, GROUP)), 'muted'),
         row('curve-id', tr('confirm.issue.curveId'), curve.covenantId, 'muted'),
       ],
     });

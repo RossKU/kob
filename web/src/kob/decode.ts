@@ -47,6 +47,7 @@
 //
 // The Schnorr digests in `built.sign` are produced by kob-wasm. TypeScript cannot recompute them,
 // and `kob.finalize` verifies signatures against them.
+import { curveProblems } from './curve';
 import type { WalletId } from '../wallet/types';
 import {
   baseKind, custodiesOf, describeOrder, familyOfKind, formatKas, formatUnits, isOrderKind, isPairKind, kindFor, big, orderKindOfTemplate, pairFactsOf,
@@ -103,7 +104,7 @@ export const SIGNING_ISSUE_CODES = [
   'output-unknown', 'sign-foreign-key', 'sign-mismatch', 'sign-unexpected', 'sighash-type', 'expected-orders', 'expected-kas-locked',
   'expected-tokens-escrowed', 'expected-cancel-ids', 'expected-max-fee', 'input-unconfirmed', 'token-state-unplain', 'token-state-mixed', 'pair-token-mismatch', 'pair-family-mismatch',
   'pair-terms-invalid', 'order-terms-invalid', 'expected-quote-escrowed', 'trigger-evidence-invalid', 'trigger-rule-unmet', 'sweep-invalid', 'expected-sweep-ids', 'sweep-custody-spent',
-  'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery',
+  'retired-not-cancel', 'claim-invalid', 'bought-custody-lost', 'expected-claim-ids', 'expected-delivery', 'curve-terms-invalid',
   // warnings
   'inputs-unverified', 'tx-version', 'fee-high', 'unsigned-maker-input', 'foreign-input', 'payload-unknown', 'payload-invalid', 'token-unlisted', 'no-order-records',
   // info
@@ -994,6 +995,11 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
    */
   function checkNewKasOrder(j: number, os: OrderState) {
     if (isPairKind(os.kind)) return;
+    // a curve: stricter than the protocol (a falling table, a tip at or above a level's price, levels that do not hold its amount)
+    if (os.kind === 'KobCurveAsk') {
+      const bad = curveProblems(os.state);
+      if (bad.length) add('curve-terms-invalid', `output ${j}: the curve order's terms are refused: ${bad.join(', ')}`, { output: j });
+    }
     try {
       kob.checkNewOrder(os);
     } catch (e) {

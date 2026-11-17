@@ -384,6 +384,7 @@ export default {
   'issues.trigger-evidence': 'Input {input} is armed (or trailed) by the fill of input {evidence}, which meets its trigger rule.',
   'issues.pair-token-mismatch': 'Output {output}: token {token} of this pair order is pinned to another program, family or extension than {covenantId}: it would not trade that token.',
   'issues.pair-family-mismatch': 'Output {output}: the family of token {token} does not match its program (or a KRON token has an extension commitment): the order could never settle.',
+  'issues.curve-terms-invalid': 'Output {output}: the curve order has a falling price table, a tip at or above a level price, or levels that do not hold its amount. It is not signed.',
   'issues.order-terms-invalid': 'Output {output}: the order terms break the rules for a new order (tips, slippage band, trailing terms, trigger threshold, carriers, or an if-done exit that is not your order of the same token): it would not trade as shown.',
   'issues.pair-terms-invalid': 'Output {output}: invalid pair order terms (price, scale, minimum fill or its KAS value, or the same token twice): it could not trade as shown.',
   'issues.expected-quote-escrowed': "The plan escrows {expected} of the quote token, the transaction {actual}.",
