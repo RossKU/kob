@@ -116,7 +116,7 @@ test.describe('direct fill from the book', () => {
     expect((await wallet!.calls()).length).toBe(2);
   });
 
-  test('a partial take of an ask: it stays in the book with what it has left', async ({ appPage: page, mock }) => {
+  test('a partial take of an ask: it stays in the book with what it has left; the "Fills now" line goes with the amount', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     const tok = await mock.token();
@@ -139,6 +139,13 @@ test.describe('direct fill from the book', () => {
     const book = page.getByTestId('order-book');
     await expect(book.locator(`[data-testid=book-ask-row][data-amount="${7n * TOKEN}"]`, { hasText: /^0\.0252/ })).toHaveCount(1, { timeout: 15_000 });
     await expect(book.locator('[data-testid=book-ask-row]', { hasText: /^0\.0251/ })).toHaveCount(0);
+    // the amount resets: what the click filled is no longer offered as "Fills now"; the steps stay
+    await expect(page.getByTestId('order-amount')).toHaveValue('');
+    await expect(page.getByTestId('order-take-fills')).toHaveCount(0);
+    await expect(stepper).toBeVisible();
+    // a new amount: the line is the new plan's, on the book as it is now
+    await fillFields(page, { amount: '2', price: '0.0252' });
+    await expectTake(page, /^Fills now: 2 EXKCC at 0\.0252 avg/);
   });
 
   test('a lost race: the taken order is gone at the node, the book is read again and the take is tried once more', async ({ appPage: page, mock, wallet }) => {
