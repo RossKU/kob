@@ -90,9 +90,9 @@ test('the indexer goes down: one notification, a yellow dot, no warnings; a limi
   expect(onChainTerms(sell)[0]!.state.price).toBe('5000000');
   expect(onChainTerms(sell)[0]!.custody).toEqual([(30n * TOKEN).toString()]);
 
-  // a market buy against the kept asks (the covenant auction): it starts at the best ask the node confirms
+  // a market buy against the kept asks: it starts at the best ask the node confirms
   await pickType(page, 'market', 'buy');
-  await fillFields(page, { amount: '2', direct: 'order' });
+  await fillFields(page, { amount: '2' });
   await clickPlace(page);
   const buy = await placedWithoutIndexer(mock, await waitSubmitted(page));
   expect(onChainTerms(buy)[0]!.state.price).toBe(bestAsk.toString());

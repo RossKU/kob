@@ -179,7 +179,7 @@ export const CASES: OrderCase[] = [
   // ---- IOC / FOK
   {
     name: 'IOC sell', type: 'ioc', side: 'sell', kind: 'KobAsk', listType: 'ioc', listLabel: 'IOC', ...SELL,
-    fields: () => ({ amount: '2', price: '0.0245', direct: 'order' }),
+    fields: () => ({ amount: '2', price: '0.0245' }),
     receipt: {
       orderTitle: 'Sell IOC limit order',
       lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
@@ -190,7 +190,7 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'IOC buy', type: 'ioc', side: 'buy', kind: 'KobBid', listType: 'ioc', listLabel: 'IOC', locked: '1.053 KAS', escrowed: null,
-    fields: () => ({ amount: '2', price: '0.0265', direct: 'order' }),
+    fields: () => ({ amount: '2', price: '0.0265' }),
     receipt: {
       orderTitle: 'Buy IOC limit order',
       card: { 'KAS budget': '0.004 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Limit price': '0.0265 KAS per EXKCC', 'You pay at most per token (all-in)': '0.0265 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.049 KAS', 'KAS on the order output': '1.053 KAS' },
@@ -222,7 +222,7 @@ export const CASES: OrderCase[] = [
   // ---- market (expected vs worst: the 3% slippage bound of the auction)
   {
     name: 'market sell: expected best bid, worst 3% below', type: 'market', side: 'sell', kind: 'KobAsk', listType: 'market', listLabel: 'Market', ...SELL,
-    fields: () => ({ amount: '2', direct: 'order' }),
+    fields: () => ({ amount: '2' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
       lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },
@@ -233,7 +233,7 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'market buy: expected best ask, worst 3% above', type: 'market', side: 'buy', kind: 'KobBid', listType: 'market', listLabel: 'Market', locked: '1.051706 KAS', escrowed: null,
-    fields: () => ({ amount: '2', direct: 'order' }),
+    fields: () => ({ amount: '2' }),
     receipt: {
       orderTitle: 'Buy market order (auction)',
       card: { 'KAS budget': '0.002706 KAS', 'Minimum fill': '0.00000001 EXKCC', 'Expected price (auction start)': '0.0251 KAS per EXKCC', 'Worst price (all-in): you pay at most per token': '0.025853 KAS per EXKCC', 'Auction ends at (worst price)': '0.025853 KAS per EXKCC', 'Time in force': 'immediate or cancel: the unfilled rest is returned', 'Refund tip kept in the order': '0.049 KAS', 'KAS on the order output': '1.051706 KAS' },
@@ -243,7 +243,7 @@ export const CASES: OrderCase[] = [
   },
   {
     name: 'market sell with a 1% slippage bound', type: 'market', side: 'sell', kind: 'KobAsk', listType: 'market', listLabel: 'Market', ...SELL,
-    fields: () => ({ amount: '2', slippageBps: '1', direct: 'order' }),
+    fields: () => ({ amount: '2', slippageBps: '1' }),
     receipt: {
       orderTitle: 'Sell market order (auction)',
       lines: { 'EXKCC (e5e5e5e5…e5e5e5e5)': '−2 EXKCC' },

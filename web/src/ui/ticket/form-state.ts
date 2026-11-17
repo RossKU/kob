@@ -131,9 +131,9 @@ export const FIELDS: Readonly<Record<string, FieldSpec>> = Object.fromEntries(
 /** Wallet defaults of matcher.md section 10 / defaults.rs, shown as the prefilled value (an empty box always means "the default"). */
 export const FIELD_DEFAULTS: Readonly<Record<string, string>> = {
   lifetime: 'gtc',
-  // a crossing order fills from the book from the wallet (kob/take.ts); a pair order has no such fill (its auction)
+  // a crossing limit fills from the book from the wallet (kob/take.ts); a pair order has no such fill (its auction). An IOC, FOK or market
+  // order's `direct` default depends on its type: `fieldDefault`
   crossing: 'take',
-  direct: 'take',
   life: '30',
   slippageBps: '3',
   auction: '20',
@@ -208,11 +208,17 @@ const budgetsFills = (side: Side, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefi
  */
 const marketFills = (form: Pick<TicketForm, 'values'>, ctx: Pick<TicketCtx, 'quoteDecimals'> | undefined): boolean => !isPairCtx(ctx) && form.values.allOrNothing !== 'true';
 
+/** The default of a field for an order type: an IOC or market order goes to the executors, a FOK fills from the book (founder, 2026-11-17). */
+export function fieldDefault(id: string, type: OrderTypeId): string | undefined {
+  if (id === 'direct') return type === 'fok' ? 'take' : 'order';
+  return FIELD_DEFAULTS[id];
+}
+
 export function initialForm(type: OrderTypeId = 'limit', side: Side = 'sell', kas = false): TicketForm {
   const sides = sidesOf(type);
   const values: Record<string, string> = {};
   for (const id of new Set([...layoutOf({ type, side, values: {} }).main, ...layoutOf({ type, side, values: {} }).advanced])) {
-    const d = FIELD_DEFAULTS[id];
+    const d = fieldDefault(id, type);
     if (d !== undefined) values[id] = d;
   }
   return { type, side: sides.includes(side) ? side : sides[0]!, values, ...(kas ? { kas: true } : {}) };
@@ -676,8 +682,8 @@ export function buildIntent(form: TicketForm, ctx: TicketCtx): BuildResult {
     const c = r.pick('crossing', ['take', 'auction', 'limit', 'reject'] as const) ?? 'take';
     return isPairCtx(ctx) && c === 'take' ? undefined : c;
   };
-  // an IOC, FOK or market order fills from the book unless the covenant order is chosen (a KAS market only)
-  const takeOf = (): { take?: boolean } => (isPairCtx(ctx) ? {} : { take: r.pick('direct', ['take', 'order'] as const) !== 'order' });
+  // an IOC, FOK or market order fills from the book when chosen (a FOK by default), else it is the order for executors (a KAS market only)
+  const takeOf = (): { take?: boolean } => (isPairCtx(ctx) ? {} : { take: (r.pick('direct', ['take', 'order'] as const) ?? fieldDefault('direct', type)) === 'take' });
 
   let intent: Record<string, unknown> | null = null;
   switch (type) {
@@ -843,9 +849,9 @@ export function formFromIntent(intent: Intent, ctx: TicketCtx): TicketForm {
   if (i.tip !== undefined) kasTip('tip', i.tip);
   switch (intent.type) {
     case 'limit': price('price', i.price); life(i.lifetime); from(i.activeFrom); put('crossing', i.crossing); put('maxFills', i.maxFills); break;
-    case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); if (i.take === false) v.direct = 'order'; break;
+    case 'ioc': case 'fok': price('price', i.price); secs('life', i.life); from(i.activeFrom); v.direct = i.take ? 'take' : 'order'; break;
     case 'market': case 'close':
-      if (i.take === false) v.direct = 'order';
+      if (intent.type === 'market') v.direct = i.take ? 'take' : 'order';
       bps('slippageBps', i.slippageBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; put('maxFills', i.maxFills); break;
     case 'streaming':
       price('displayedPrice', i.displayedPrice); bps('toleranceBps', i.toleranceBps); secs('auction', i.auction); secs('life', i.life); if (i.allOrNothing) v.allOrNothing = 'true'; break;

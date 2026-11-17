@@ -9,7 +9,7 @@ import { invertedToNativePriceText, nativeToInvertedPriceText } from '../market/
 import { Checkbox, Dropdown, Field, FieldShell, Segmented, unitParts } from '../kit';
 import { AmountSlider, type AmountSliderProps } from './AmountSlider';
 import {
-  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
+  BASE_SUFFIX, FIELDS, FIELD_DEFAULTS, fieldDefault, TOUCH_MIN, TOUCH_PRESETS, amountBaseOf, amountPriceOf, baseToKas, kasTextOf, parseTouch, priceInfo,
   type FieldError, type FieldSpec, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
@@ -105,7 +105,7 @@ export function TicketFields(props: TicketFieldsProps) {
    * says what the label and the unit beside the box say: it is not shown.
    */
   const helpOf0 = (id: string): string | undefined => {
-    const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : id === 'maxFills' && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
+    const helpKey = props.quoteTicker && has(`ticket.help.${id}.pair`) ? `ticket.help.${id}.pair` : (id === 'maxFills' || id === 'direct') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : props.flip && has(`ticket.help.${id}.inv`) ? `ticket.help.${id}.inv` : id.startsWith('ladder.') && has(`ticket.help.${id}.${form.type}`) ? `ticket.help.${id}.${form.type}` : `ticket.help.${id}`;
     return helpKey !== 'ticket.help.amount' && has(helpKey) ? t(helpKey, { ticker, quote: props.quoteTicker ?? 'KAS', local: formatLocalTime(nextUtcMidnight(Date.now())) }) : undefined;
   };
   /** the text an amount box shows: the KAS value of an exact amount kept for it (a `kas` form), else what was typed */
@@ -162,8 +162,8 @@ export function TicketFields(props: TicketFieldsProps) {
                   labelledBy={labelId}
                   describedBy={describedBy}
                   invalid={invalid}
-                  value={value && !(pairNoTake && value === 'take') ? value : pairNoTake ? 'auction' : FIELD_DEFAULTS[id] || spec.options?.[0] || ''}
-                  options={(spec.options ?? []).filter((o) => !(pairNoTake && o === 'take')).map((o) => ({ value: o, label: t(`ticket.opt.${id}.${o}`) }))}
+                  value={value && !(pairNoTake && value === 'take') ? value : pairNoTake ? 'auction' : fieldDefault(id, form.type) || spec.options?.[0] || ''}
+                  options={(spec.options ?? []).filter((o) => !(pairNoTake && o === 'take')).map((o) => ({ value: o, label: t(has(`ticket.opt.${id}.${o}.${form.type}`) ? `ticket.opt.${id}.${o}.${form.type}` : `ticket.opt.${id}.${o}`) }))}
                   disabled={props.disabled}
                   onChange={(v) => props.onChange(id, v)}
                   data-testid={spec.testid}

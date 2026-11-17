@@ -5,7 +5,7 @@ import { planOrder } from '../../kob/plan';
 import { consensusCheck, kob, makeEnv, market8x8 } from '../../testing/fixtures';
 import { CASES, CTX, TOKEN, WIDE, form, json, ticketEnv } from './ticket-fixtures';
 import {
-  FIELDS, FIELD_DEFAULTS, ORDER_TYPES, TYPE_GROUPS, buildIntent, formFromIntent, formatLocalDateTime, initialForm, isIncomplete, layoutOf, maxAmount, parseAmount, parseLocalDateTime,
+  FIELDS, FIELD_DEFAULTS, ORDER_TYPES, fieldDefault, TYPE_GROUPS, buildIntent, formFromIntent, formatLocalDateTime, initialForm, isIncomplete, layoutOf, maxAmount, parseAmount, parseLocalDateTime,
   followQuote, parsePrice, parseTouch, parseWhole, priceInfo, setSide, setValue, sidesOf, streamingQuoteText, switchType, visibleErrors, type OrderTypeId, type Side, type TicketCtx, type TicketForm,
 } from './form-state';
 
@@ -696,5 +696,26 @@ describe('streaming: the price you saw follows the quote', () => {
     expect(followQuote(r.form, null, r.auto).form.values.displayedPrice).toBe('2.7');
     const lim = form('limit', 'buy', { price: '' });
     expect(followQuote(lim, '2.5', null).form).toBe(lim);
+  });
+});
+
+describe('the direct fill defaults (founder, 2026-11-17)', () => {
+  const take = (type: 'limit' | 'ioc' | 'fok' | 'market', values: Record<string, string>) => buildIntent(initialFormWith(type, values), CTX).intent as unknown as { take?: boolean; crossing?: string };
+  const initialFormWith = (type: 'limit' | 'ioc' | 'fok' | 'market', values: Record<string, string>) => {
+    const f = initialForm(type, 'buy');
+    return { ...f, values: { ...f.values, ...values } };
+  };
+  it('a crossing limit and a FOK fill from the book; an IOC and a market order go to the executors', () => {
+    expect(take('limit', { amount: '1', price: '2' }).crossing).toBe('take');
+    expect(take('fok', { amount: '1', price: '2' }).take).toBe(true);
+    expect(take('ioc', { amount: '1', price: '2' }).take).toBe(false);
+    expect(take('market', { amount: '1' }).take).toBe(false);
+    expect(fieldDefault('direct', 'fok')).toBe('take');
+    expect(fieldDefault('direct', 'market')).toBe('order');
+  });
+  it('the other choice is one select away', () => {
+    expect(take('ioc', { amount: '1', price: '2', direct: 'take' }).take).toBe(true);
+    expect(take('market', { amount: '1', direct: 'take' }).take).toBe(true);
+    expect(take('fok', { amount: '1', price: '2', direct: 'order' }).take).toBe(false);
   });
 });

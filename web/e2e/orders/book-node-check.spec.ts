@@ -43,7 +43,7 @@ test.describe('market orders start from a price the node confirms', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '2', direct: 'order' }); // the covenant auction (a direct fill takes only node-confirmed orders too)
+    await fillFields(page, { amount: '2' });
     await waitReviewable(page);
     await expect(page.getByText(/not on the node/i)).toHaveCount(0);
     const placed = await placeOrder(page, mock);
@@ -56,7 +56,7 @@ test.describe('market orders start from a price the node confirms', () => {
     expect(phantom).toBeLessThan(real);
     await openMarket(page, mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '2', direct: 'order' }); // the covenant auction (a direct fill takes only node-confirmed orders too)
+    await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await waitReviewable(page);
     // nothing is shown for the orders left out (a note on every refresh was noise; the console has it): the order button stays a single click
@@ -90,7 +90,7 @@ test.describe('market orders start from a price the node confirms', () => {
     await page.route(`**/v1/orders/${PHANTOM}`, (route) => route.fulfill({ status: 200, contentType: 'application/json', headers: cors, body: JSON.stringify(forged) }));
     await openMarket(page, mock);
     await pickType(page, 'market', 'sell');
-    await fillFields(page, { amount: '2', direct: 'order' }); // the covenant auction (a direct fill takes only node-confirmed orders too)
+    await fillFields(page, { amount: '2' });
     await settlePlan(page);
     await waitReviewable(page);
     await expect(page.getByText(/not on the node/i)).toHaveCount(0);

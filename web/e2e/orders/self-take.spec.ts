@@ -26,6 +26,12 @@ const activeOf = async (mock: MockClient) => (await mock.ordersOf('alice')).filt
 async function expectTake(page: import('@playwright/test').Page, fills: RegExp, rest?: RegExp): Promise<void> {
   await settlePlan(page);
   await expect(page.getByTestId('order-take')).toBeVisible();
+  // each line one row, not cut, on the ticket's width
+  for (const id of ['order-take-fills', 'order-take-rest']) {
+    const el = page.getByTestId(id);
+    if ((await el.count()) === 0) continue;
+    expect(await el.evaluate((e) => e.scrollWidth <= e.clientWidth), `${id} fits its row`).toBe(true);
+  }
   await expect(page.getByTestId('order-take-fills')).toHaveText(fills);
   if (rest) await expect(page.getByTestId('order-take-rest')).toHaveText(rest);
   else await expect(page.getByTestId('order-take-rest')).toHaveCount(0);
@@ -130,12 +136,31 @@ test.describe('direct fill from the book', () => {
 });
 
 test.describe('direct fill by time in force', () => {
-  test('market buy: takes the asks within its worst price, nothing else is placed', async ({ appPage: page, mock }) => {
+  test('market and IOC go to the executors by default; the direct fill is one choice away', async ({ appPage: page, mock }) => {
+    await fund(mock);
+    await openMarket(page, mock);
+    for (const type of ['market', 'ioc'] as const) {
+      await pickType(page, type, 'buy');
+      await fillFields(page, type === 'market' ? { amount: '2' } : { amount: '2', price: '0.0252' });
+      await settlePlan(page);
+      await expect(page.getByTestId('order-take')).toHaveCount(0);
+      await fillFields(page, { direct: 'take' });
+      await settlePlan(page);
+      await expect(page.getByTestId('order-take')).toBeVisible();
+    }
+    // a FOK fills from the book by default
+    await pickType(page, 'fok', 'buy');
+    await fillFields(page, { amount: '2', price: '0.0252' });
+    await expectTake(page, /^Fills now: 2 EXKCC at 0.0251 avg/);
+  });
+
+
+  test('market buy filled now: takes the asks within its worst price, nothing else is placed', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     const before = await tokensOf(mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '5' });
+    await fillFields(page, { amount: '5', direct: 'take' });
     await expectTake(page, /^Fills now: 5 EXKCC at 0\.0251 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
@@ -143,12 +168,12 @@ test.describe('direct fill by time in force', () => {
     expect(await activeOf(mock)).toEqual([]);
   });
 
-  test('market sell: takes the bids within its worst price', async ({ appPage: page, mock }) => {
+  test('market sell filled now: takes the bids within its worst price', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     const before = await tokensOf(mock);
     await pickType(page, 'market', 'sell');
-    await fillFields(page, { amount: '9' });
+    await fillFields(page, { amount: '9', direct: 'take' });
     await expectTake(page, /^Fills now: 9 EXKCC at 0\.0249 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
@@ -156,12 +181,12 @@ test.describe('direct fill by time in force', () => {
     expect(await activeOf(mock)).toEqual([]);
   });
 
-  test('IOC: takes what crosses, the rest is not placed', async ({ appPage: page, mock }) => {
+  test('IOC filled now: takes what crosses, the rest is not placed', async ({ appPage: page, mock }) => {
     await fund(mock);
     await openMarket(page, mock);
     const before = await tokensOf(mock);
     await pickType(page, 'ioc', 'buy');
-    await fillFields(page, { amount: '10', price: '0.0251' });
+    await fillFields(page, { amount: '10', price: '0.0251', direct: 'take' });
     await expectTake(page, /^Fills now: 7 EXKCC at 0\.0251 avg/, /^Rest: not placed$/);
     await clickPlace(page);
     await waitSubmitted(page);
@@ -229,7 +254,7 @@ test.describe('screenshots of the ticket before signing', () => {
       await pickType(page, 'limit', 'buy');
       await fillFields(page, { amount: '10', price: '0.0251' });
       await expectTake(page, /^Fills now: 7 EXKCC/, /^Rest: 3 EXKCC at 0\.0251$/);
-      await page.getByTestId('order-take').scrollIntoViewIfNeeded();
+      await page.getByTestId('order-take').evaluate((el) => el.scrollIntoView({ block: 'center' }));
       mkdirSync(SHOTS, { recursive: true });
       await page.screenshot({ path: `${SHOTS}/phone-ticket.png` });
       await clickPlaceOnly(page);

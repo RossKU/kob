@@ -441,6 +441,19 @@ export function OrderTicket(props: OrderTicketProps) {
   }, [autoTip, form.values.tip]);
   // what a crossing order fills from the book: the plan's, or while a click runs, the one it was for
   const takeFacts: TakeFacts | null = (takeRun ? takeAtClick : null) ?? (!ladder && shownPlan?.take && shownPlan.ok ? shownPlan.take : null);
+  const takeLines = takeFacts
+    ? {
+        fills: t('ticket.take.fills', {
+          amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
+          price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
+          // about: two significant digits, so the line fits one row (the final confirmation has the exact fee)
+          fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)),
+        }),
+        rest: takeFacts.rest > 0n
+          ? t(takeFacts.restKind === 'limit' ? 'ticket.take.rest' : 'ticket.take.restNone', { amount: formatUnits(takeFacts.rest, token.decimals, { group: ',' }), ticker, price: formatKas(takeFacts.limit, { group: ',' }) })
+          : null,
+      }
+    : null;
   const tipAutoNote = tipAutoOn ? (autoTip ? t('ticket.tipAuto.total', { kas: formatKas(autoTip.total, { group: ',' }) }) : t('ticket.tipAuto.unknown')) : undefined;
   const planErrors = shownPlan ? errors(shownPlan) : [];
   // under the amount box: what this amount costs (a buy) or yields (a sell) in the quote, from the book the planner sees; a fixed line, "—" when empty
@@ -1115,20 +1128,9 @@ export function OrderTicket(props: OrderTicketProps) {
 
       {takeFacts ? (
         <div class="tk-take" data-testid="order-take">
-          {/* two short lines (the final confirmation has the details: the orders, the fee exactly) */}
-          <p data-testid="order-take-fills">
-            {t('ticket.take.fills', {
-              amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
-              price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
-              // about: two significant digits, so the line fits one row (the final confirmation has the exact fee)
-              fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)),
-            })}
-          </p>
-          {takeFacts.rest > 0n ? (
-            <p class="muted" data-testid="order-take-rest">
-              {t(takeFacts.restKind === 'limit' ? 'ticket.take.rest' : 'ticket.take.restNone', { amount: formatUnits(takeFacts.rest, token.decimals, { group: ',' }), ticker, price: formatKas(takeFacts.limit, { group: ',' }) })}
-            </p>
-          ) : null}
+          {/* two short lines, one row each (the final confirmation has the details: the orders, the fee exactly) */}
+          <p data-testid="order-take-fills" title={takeLines!.fills}>{takeLines!.fills}</p>
+          {takeLines!.rest ? <p class="muted" data-testid="order-take-rest" title={takeLines!.rest}>{takeLines!.rest}</p> : null}
           {takeRun && takeRun.length > 0 ? <Stepper steps={takeRun} label={t('ticket.take.steps')} data-testid="order-take-stepper" /> : null}
         </div>
       ) : null}
