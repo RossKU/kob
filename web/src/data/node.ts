@@ -1,6 +1,6 @@
 // Node access contract. Two implementations:
 //   * `KaspaRpcNode` (data/node-rpc.ts): the official kaspa-wasm v2.1.0 SDK `RpcClient` over wRPC (`ws://...`, a testnet-10 node of your own,
-//     `ws://127.0.0.1:18210`, or the SDK's public `Resolver` when the node URL is empty);
+//     `ws://127.0.0.1:18210`, or a public node the SDK's resolvers name when the node URL is empty, data/public-node.ts);
 //   * `HttpMockNode` (data/node-http.ts): JSON over HTTP against the mock server (mock/server.mjs) for offline tests
 //     (selected when `nodeUrl` starts with http:// or https://).
 // Submission always goes through node RPC (never REST: REST drops the per-input compute budget).

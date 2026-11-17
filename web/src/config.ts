@@ -26,7 +26,7 @@ export interface AppConfig {
    * stored setting, which the bell then names on every page; a link must not add verifiers). Empty = a single indexer, unverified.
    */
   extraIndexerUrls: string[];
-  /** wRPC (`ws://` / `wss://`) node, '' = the SDK's public Resolver; a mock-server base (`http://` / `https://`) only in test / dev builds */
+  /** wRPC (`ws://` / `wss://`) node, '' = a public node the SDK's resolvers name (data/public-node.ts); a mock-server base (`http://` / `https://`) only in test / dev builds */
   nodeUrl: string;
   /** token registry JSON: a relative path (bundled) or an http(s) URL */
   registryUrl: string;

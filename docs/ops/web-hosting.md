@@ -116,11 +116,13 @@ Each backup serves the whole read load while the primary is down: give it the ca
 
 ### The node and the SDK resolver
 
-With `nodeUrl` empty the page asks the official Kaspa SDK for a node: `new Resolver()` with the network name (`web/src/data/node-rpc.ts`,
-`doConnect`). It is the SDK's own and KOB does not change it: a built-in list of community resolver hosts (`*.kaspa.stream`, `*.kaspa.red`,
-`*.kaspa-ng.org`, compiled into the SDK's wasm) is asked over HTTPS from the visitor's browser for a public wRPC node of that network, and the SDK
-connects to the node it names. The code is the same on both networks (only `networkId` is `testnet-10` or `mainnet`); there is no
-mainnet-specific path and no other fallback. Two things to know:
+With `nodeUrl` empty the page asks the community resolvers of the official Kaspa SDK for a node (`web/src/data/public-node.ts`): the
+SDK's built-in list (`*.kaspa.stream`, `*.kaspa.red`, `*.kaspa.green`, `*.kaspa.blue`) is asked over HTTPS from the visitor's browser,
+four at once and one more every 300 ms, for a public wRPC node of that network; the first `wss://` node named wins and the page connects to
+it. The SDK's own `new Resolver()` asks them one after another, and a resolver that does not answer held it for about 20 s (testnet-10
+2026-11-17: 5 of the 16 hung), so the page now falls back to it only when no resolver answers. The node picked is kept for the browser session
+(10 minutes) and forgotten when it fails. The code is the same on both networks (only `networkId` is `testnet-10` or `mainnet`). Two things
+to know:
 
 * The resolvers answer 404 for the JSON encoding and serve **Borsh** only, so the page asks for Borsh when the node comes from the resolver
   (since commit 3195209b; before it an empty `nodeUrl` left the page at "Node: unreachable" in a browser). That was verified live on testnet-10

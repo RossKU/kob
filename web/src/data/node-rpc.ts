@@ -5,6 +5,7 @@ import { parseFeeEstimate, type FeeEstimate } from '../kob/fee-policy';
 import type { Hex, TxJson } from '../kob/types';
 import type { BlockSubscription, NodeApi, NodeInfo, NodeUtxo } from './node';
 import { streamBlockOf, type StreamBlock } from './block-stream';
+import type { PublicNodePicker } from './public-node';
 import { joinSpkString, normalizeNetwork, spkStringToAddress, type KaspaSdk, type SdkRpcClient, type SdkUtxoEntryReference } from './kaspa-sdk';
 import { NodeError, describeNodeError, isConnectionError, rawErrorText } from './node-error';
 
@@ -135,6 +136,8 @@ export interface KaspaRpcNodeOptions {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   estimator?: DaaRateEstimator;
+  /** with no URL: races the public resolvers for a node (data/public-node.ts) instead of the SDK's one-by-one Resolver, which it falls back to */
+  publicNode?: PublicNodePicker;
 }
 
 /** Rejects with an `unavailable` NodeError when `p` does not settle in time (the SDK's own timeouts do not cover every path, e.g. a Resolver lookup). */
@@ -147,6 +150,8 @@ function timed<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
 }
 
 const DISCONNECT_WAIT_MS = 3_000;
+/** The connect timeout of a node the resolvers named (another one is picked after it). */
+const PICKED_CONNECT_MS = 8_000;
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -162,6 +167,7 @@ export class KaspaRpcNode implements NodeApi {
   private readonly now: () => number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly estimator: DaaRateEstimator;
+  private readonly publicNode: PublicNodePicker | null;
   /** the node's own long-window rate (`nodeDaaRate`) and when it was read */
   private nodeRate: { milli: number | null; atMs: number } | null = null;
   private rpc: SdkRpcClient | null = null;
@@ -197,6 +203,7 @@ export class KaspaRpcNode implements NodeApi {
     this.now = o.now ?? Date.now;
     this.sleep = o.sleep ?? realSleep;
     this.estimator = o.estimator ?? new DaaRateEstimator();
+    this.publicNode = o.publicNode ?? null;
   }
 
   get status(): RpcNodeStatus {
@@ -233,10 +240,17 @@ export class KaspaRpcNode implements NodeApi {
     const { sdk } = this;
     await this.dispose();
     this.setState('connecting');
+    // a public node named by the resolvers: picked here (several asked at once), else by the SDK's Resolver
+    const picked = !this.url && this.publicNode ? await this.publicNode.pick(this.network).catch(() => null) : null;
+    if (this.state === 'closed') throw new NodeError('unavailable', 'The node connection was closed.');
     const cfg = this.url
       ? { url: this.url, networkId: this.network, encoding: sdk.Encoding.SerdeJson }
       : // the public resolvers (`/v2/kaspa/<network>/any/wrpc/...`) answer 404 for `json` and serve `borsh` only, so a resolver-picked node is reached over Borsh
-        { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh };
+        picked
+        ? { url: picked, networkId: this.network, encoding: sdk.Encoding.Borsh }
+        : { resolver: new sdk.Resolver(), networkId: this.network, encoding: sdk.Encoding.Borsh };
+    // a picked node that does not come up is left sooner: the next attempt asks the resolvers again
+    const connectMs = picked ? Math.min(this.connectTimeoutMs, PICKED_CONNECT_MS) : this.connectTimeoutMs;
     let rpc: SdkRpcClient;
     try {
       rpc = new sdk.RpcClient(cfg);
@@ -260,13 +274,14 @@ export class KaspaRpcNode implements NodeApi {
     });
     this.rpc = rpc;
     try {
-      await timed(rpc.connect({ blockAsyncConnect: true, timeoutDuration: this.connectTimeoutMs }), this.connectTimeoutMs + this.connectGraceMs, 'connect');
+      await timed(rpc.connect({ blockAsyncConnect: true, timeoutDuration: connectMs }), connectMs + this.connectGraceMs, 'connect');
       const info = await this.info();
       this.setState('connected');
       // a new client after a lost link: the block subscribers follow it (and may have missed blocks)
       if (this.blockSubs.size && this.blockRpc !== rpc) void this.resubscribe(rpc);
       return info;
     } catch (e) {
+      if (picked) this.publicNode?.forget(picked);
       await this.dispose();
       this.setState('idle');
       throw e instanceof NodeError ? e : describeNodeError(e, 'read');
