@@ -24,6 +24,7 @@
 //   KeyValueList  <dl> { items: [{ label, value, 'data-testid', show }], compact }
 //   Tabs          tab strip { tabs, active, onChange, 'aria-label' }
 //   EmptyState    the one empty / disconnected state { icon, children (one sentence), action, compact }
+//   HelpTip       a "?" beside a label or heading that opens its explanation (click / tap / keyboard, Escape closes) { label (the topic), children }
 //
 // Helpers: download.ts (downloadText, readFileText, exportFileName, jsonText), format.ts (shortId, shortAddress, kasText, tokenText, pricePerTokenText, amountText, formatRowTime, displayPriceDp, columnPriceDp), hooks.ts (useAsync, useInterval, useNow),
 // toast-store.ts (showToast, ToastStore).
@@ -41,6 +42,7 @@ export { friendlyErrorText } from './friendly-error';
 export { Dropdown, usePickerPanel, type DropdownProps } from './Dropdown';
 export type { DropdownEntry, DropdownGroup, DropdownOption } from './dropdown-model';
 export { Checkbox, Field, FieldShell, Select, type FieldProps, type FieldShellProps, type SelectOption, type SelectProps } from './Field';
+export { HelpTip, type HelpTipProps } from './HelpTip';
 export { KeyValueList, type KeyValueItem } from './KeyValueList';
 export { Dialog, Modal, type ModalProps } from './Modal';
 export { Section, type SectionProps } from './Section';

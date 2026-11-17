@@ -52,6 +52,11 @@ test.describe('Create token: after creation', () => {
     await expect(page.getByTestId('issue-summary-sale')).toContainText('Sell 900,000 CURV on a curve: 100 levels');
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    // the summary says what goes on sale; the curve's full terms are under "All details"
+    await expect(page.getByTestId('confirm-brief-sale')).toContainText('900,000 CURV');
+    await expect(page.getByTestId('confirm-brief-sale')).toContainText('on a curve: 100 levels');
+    await expect(page.getByTestId('confirm-brief-keep')).toContainText('100,000 CURV');
+    await page.getByTestId('confirm-details').locator(':scope > summary').click();
     await expect(page.getByTestId('confirm-section-curve')).toBeVisible();
     await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
     await page.getByTestId('confirm-ack').check();

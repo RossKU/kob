@@ -32,7 +32,9 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await expect(page.getByTestId('issue-form')).not.toContainText('That picture carries code');
   await page.getByTestId('issue-image-hash-advanced').locator('summary').click();
   await expect(page.getByTestId('issue-image-hash')).toHaveValue(want);
-  await expect(page.getByTestId('issue-form')).toContainText('cannot be changed later');
+  await page.getByTestId('issue-image-file-help').click();
+  await expect(page.getByTestId('issue-image-file-help-panel')).toContainText('cannot be changed later');
+  await page.keyboard.press('Escape');
   // a hash typed by hand must be 64 hex
   await page.getByTestId('issue-image-hash').fill('abc');
   await expect(page.getByTestId('issue-form')).toContainText('64 hexadecimal characters');
@@ -41,6 +43,7 @@ test('a logo file is hashed in the browser, declared as image + image_hash, and 
   await expect(page.getByTestId('issue-review')).toBeEnabled();
 
   await page.getByTestId('issue-review').click();
+  await page.getByTestId('confirm-details').locator(':scope > summary').click();
   await expect(page.getByTestId('confirm-declare-declare-imageHash')).toContainText(want);
   await page.getByTestId('confirm-ack').check();
   await page.getByTestId('confirm-sign').click();

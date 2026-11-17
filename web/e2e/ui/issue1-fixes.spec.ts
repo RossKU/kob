@@ -36,9 +36,11 @@ test('My orders: the KAS on token coins has a one-line muted explanation', async
 test('token creation: the image address says each viewer loads the logo from it, and that ipfs:// is tamper-proof', async ({ appPage: page }) => {
   await page.goto('/#/create');
   await expect(page.getByTestId('issue-form')).toBeVisible();
-  const field = page.getByTestId('issue-icon').locator('xpath=ancestor::*[contains(@class,"field")][1]');
-  await expect(field).toContainText('loads the logo from this address');
-  await expect(field).toContainText('ipfs:// address is tamper-proof');
+  // behind the Logo label's "?"
+  await page.getByTestId('issue-icon-help').click();
+  const help = page.getByTestId('issue-icon-help-panel');
+  await expect(help).toContainText('loads the logo from this address');
+  await expect(help).toContainText('ipfs:// address is tamper-proof');
 });
 
 for (const width of [1280, 880, 390]) {

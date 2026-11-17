@@ -2,6 +2,7 @@
 export default {
   'issue.title': "Create a token",
   'issue.intro': "Create a new fixed-supply token. Its name, ticker, decimals and links are recorded on chain with it{approvals}, and the whole supply goes to your wallet (or to the holders you choose under Advanced).",
+  'issue.intro.short': 'Create a fixed-supply token. The whole supply goes to your wallet.',
   'issue.intro.one': ' (one approval)',
   'issue.intro.two': ' (your wallet asks twice)',
 

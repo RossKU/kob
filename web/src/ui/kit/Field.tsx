@@ -9,6 +9,8 @@ export interface FieldShellProps {
   label?: ComponentChildren;
   /** at the right end of the label row (a balance, a shortcut); kept out of the `<label>` so it is not part of the control's name */
   labelAside?: ComponentChildren;
+  /** a "?" right after the label (kit/HelpTip.tsx): the field's explanation behind it, so the form shows only labels, boxes and errors */
+  help?: ComponentChildren;
   hint?: ComponentChildren;
   /** an error text puts the control into the invalid state (`aria-invalid`) and shows the message under it */
   error?: ComponentChildren | null;
@@ -35,9 +37,16 @@ export function FieldShell(props: FieldShellProps) {
   const describedBy = [hintId, errId].filter(Boolean).join(' ') || undefined;
   return (
     <div class={`field${props.class ? ` ${props.class}` : ''}`}>
-      {props.label && props.labelAside ? (
+      {props.label && (props.labelAside || props.help) ? (
         <div class="field-label-row">
-          <label id={labelId} for={id}>{keyed(props.label)}</label>
+          {props.help ? (
+            <span class="field-label-help">
+              <label id={labelId} for={id}>{keyed(props.label)}</label>
+              {props.help}
+            </span>
+          ) : (
+            <label id={labelId} for={id}>{keyed(props.label)}</label>
+          )}
           {props.labelAside}
         </div>
       ) : props.label ? <label id={labelId} for={id}>{keyed(props.label)}</label> : null}
@@ -51,6 +60,7 @@ export function FieldShell(props: FieldShellProps) {
 export interface FieldProps {
   label?: ComponentChildren;
   labelAside?: ComponentChildren;
+  help?: ComponentChildren;
   hint?: ComponentChildren;
   error?: ComponentChildren | null;
   /** control kind (default `input`); `select` is the kit's Dropdown, which takes `value`, `onValue` and `disabled` */
@@ -91,9 +101,9 @@ export interface FieldProps {
  * The value is controlled: pass `value` and `onValue` (string) or the raw `onInput`.
  */
 export function Field(props: FieldProps) {
-  const { label, labelAside, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
+  const { label, labelAside, help, hint, error, as = 'input', options, onValue, onInput, onChange, suffix, class: cls, id, 'data-testid': testId, ...rest } = props;
   return (
-    <FieldShell label={label} labelAside={labelAside} hint={hint} error={error} id={id} class={cls}>
+    <FieldShell label={label} labelAside={labelAside} help={help} hint={hint} error={error} id={id} class={cls}>
       {({ id: cid, labelId, describedBy, invalid }) => {
         const common = {
           id: cid,

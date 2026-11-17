@@ -193,6 +193,38 @@ describe('issuance confirmation model', () => {
     expect(en('confirm.issue.finding.unaudited')).toMatch(/audited/);
   });
 
+  it('the short summary: what is created, kept, on sale, the fees of both transactions and the KAS locked, with the explanations behind "?"', () => {
+    const p = plan({ supply: '1000000', sale: { ...defaultSaleForm(), mode: 'curve', keepPct: '10' } });
+    const m = buildIssuanceModel({ kob, built: p.built, prep: p.prep, oneApproval: true, token: p.token, curve: p.curve!, maker, tr: (k, q) => t(k, q) });
+    const brief = m.brief!;
+    expect(brief.map((r) => r.id)).toEqual(['create', 'keep', 'sale', 'fee', 'locked']);
+    const r = (id: string) => brief.find((x) => x.id === id)!;
+    expect(r('create').value).toBe('1,000,000 TEST');
+    expect(r('create').detail).toBe('Test Token, 8 decimals, fixed supply');
+    expect(r('keep').value).toBe('100,000 TEST');
+    expect(r('sale').value).toBe('900,000 TEST');
+    expect(r('sale').detail).toMatch(/^on a curve: 100 levels, [\d.]+ to [\d.]+ KAS$/);
+    const fee = BigInt(p.prep.fee.fee) + BigInt(p.built.fee.fee);
+    expect(r('fee').value).toBe(`${Number(fee) / 1e8} KAS`);
+    expect(r('fee').detail).toBe('for 2 transactions, not returned');
+    expect(r('locked').value).toBe(m.sections.find((s) => s.id === 'locked')!.rows.find((x) => x.id === 'locked-total')!.value);
+    // nothing is lost: the intro, the lock's note and each carrier are behind the "?"s
+    expect(r('create').help).toEqual([m.intro]);
+    expect(r('locked').help![0]).toBe(t('confirm.issue.lockedNote'));
+    expect(r('locked').help!.some((h) => h.startsWith('KAS on the curve order: '))).toBe(true);
+    // the unaudited program stays a warning (the screen's one risk line)
+    expect(m.warnings.map((w) => w.code)).toEqual(['unaudited']);
+    // one price: placed after creation, shown in the summary; tokens to another key are a row of their own
+    const q = plan({ supply: '1000', holders: [{ owner: maker, ownerScheme: 0, amount: '600' }, { owner: other, ownerScheme: 0, amount: '400' }] });
+    const ask = buildIssuanceModel({ kob, built: q.built, prep: q.prep, token: q.token, askSale: { sell: 50_000_000_000n, price: 2n * KAS }, maker, tr: (k, x) => t(k, x) }).brief!;
+    expect(ask.find((x) => x.id === 'sale')!.detail).toBe('at 2 KAS each, as a sell order you place after creation');
+    expect(ask.find((x) => x.id === 'others')).toMatchObject({ value: '400 TEST', tone: 'warn', detail: 'One output sends tokens to another key, as you asked.' });
+    for (const s of [...brief, ...ask].flatMap((x) => [x.label, x.value, x.detail ?? '', ...(x.help ?? [])])) {
+      expect(s).not.toMatch(/confirm\.[a-zA-Z]/);
+      expect(s).not.toMatch(/\{\w+\}/);
+    }
+  });
+
   it('a curve created with the token verifies, is shown, and any change to it blocks', () => {
     const p = plan({ supply: '1000000', sale: { ...defaultSaleForm(), mode: 'curve', keepPct: '10' } });
     const withCurve = (curve = p.curve!, built = p.built) => buildIssuanceModel({ kob, built, prep: p.prep, oneApproval: true, token: p.token, curve, maker, tr: (k, q) => t(k, q) });

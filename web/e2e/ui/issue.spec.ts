@@ -18,10 +18,16 @@ test.describe('token issuance', () => {
 
     await expect(page.getByTestId('issue-form')).toBeVisible();
     await expect(page.getByTestId('issue-review')).toBeDisabled();
-    // the page is "Create a token": the basics in view, one plain line on what the program can do, the rest folded under Advanced
+    // the page is "Create a token": one line under the title, the basics in view, the rest folded under Advanced; the explanations are behind "?"
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Create a token');
     await expect(page.getByTestId('nav-create')).toHaveText('Create token');
-    await expect(page.getByTestId('issue-fixed-line')).toHaveText('Fixed supply: no one can mint more, freeze or seize these tokens.');
+    await expect(page.getByTestId('issue-intro')).toHaveText('Create a fixed-supply token. The whole supply goes to your wallet.');
+    await expect(page.getByTestId('issue-fixed-line')).toHaveCount(0);
+    await page.getByTestId('issue-intro-help').click();
+    await expect(page.getByTestId('issue-intro-help-panel').getByTestId('issue-fixed-line')).toHaveText('Fixed supply: no one can mint more, freeze or seize these tokens.');
+    await expect(page.getByTestId('issue-intro-long')).toContainText('the whole supply goes to your wallet (or to the holders you choose under Advanced)');
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('issue-intro-help-panel')).toHaveCount(0);
     for (const id of ['issue-name', 'issue-ticker', 'issue-supply', 'issue-decimals', 'issue-icon', 'issue-description', 'issue-website', 'issue-x', 'issue-telegram']) await expect(page.getByTestId(id), id).toBeVisible();
     await expect(page.getByTestId('issue-decimals')).toHaveValue('8');
     await expect(page.getByTestId('issue-holder-add')).toBeHidden();
@@ -30,8 +36,11 @@ test.describe('token issuance', () => {
     // the program: the published public-mint build (KCC20PublicMint, no minter) by default, the standalone 3 / 3 as the one alternative
     await expect(page.getByTestId('issue-program-public-mint')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-program').getByRole('radio')).toHaveCount(2);
+    await page.getByTestId('issue-program-help').click();
     await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20PublicMint');
     await expect(page.getByTestId('issue-program-hint')).toContainText('kascov.io');
+    await page.getByTestId('issue-program-help').click();
+    await expect(page.getByTestId('issue-program-help-panel')).toHaveCount(0);
     await page.getByTestId('issue-name').fill('New Example Coin');
     // the ticker is uppercased as typed
     await page.getByTestId('issue-ticker').fill('newkcc');
@@ -51,21 +60,36 @@ test.describe('token issuance', () => {
     await page.getByTestId('issue-program-3x3').click();
     await expect(page.getByTestId('issue-program-3x3')).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('issue-summary')).toContainText('KCC20Ref');
+    await page.getByTestId('issue-program-help').click();
     await expect(page.getByTestId('issue-fixed-program')).toContainText('KCC20Ref');
     await expect(page.getByTestId('issue-program-hint')).toContainText('do not recognise');
+    await page.keyboard.press('Escape');
     await page.getByTestId('issue-program-public-mint').click();
     await expect(page.getByTestId('issue-summary')).not.toContainText('KCC20Ref');
 
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
-    // what is recorded on chain with the token (KCC-23), and that this wallet asks twice
+    // the short summary first; the risk and the wallet notes one line each, their full text behind "?"
+    await expect(page.getByTestId('confirm-brief-create')).toContainText('1,000,000 NEWKCC');
+    await expect(page.getByTestId('confirm-brief-keep')).toContainText('1,000,000 NEWKCC');
+    await expect(page.getByTestId('confirm-brief-fee')).toContainText('for 2 transactions');
+    await expect(page.getByTestId('confirm-brief-locked')).toContainText('10 KAS');
+    await expect(page.getByTestId('confirm-risk')).toBeVisible();
+    await expect(page.getByTestId('confirm-risk')).toContainText('Unaudited token program');
+    await expect(page.getByTestId('confirm-wallet-line')).toHaveText(/Your wallet asks twice and shows only KAS/);
+    await expect(page.getByTestId('confirm-wallet-line')).toHaveAttribute('data-codes', /walletTwice/);
+    // the full sections are under "All details": what is recorded on chain with the token (KCC-23)
     const declare = page.getByTestId('confirm-section-declare');
+    await expect(declare).toBeHidden();
+    await page.getByTestId('confirm-details').locator(':scope > summary').click();
     await expect(declare).toBeVisible();
     await expect(page.getByTestId('confirm-declare-declare-name')).toContainText('New Example Coin');
     await expect(page.getByTestId('confirm-declare-declare-symbol')).toContainText('NEWKCC');
     await expect(page.getByTestId('confirm-declare-declare-decimals')).toContainText('2');
     await expect(page.getByTestId('confirm-declare-declare-x')).toContainText('https://x.com/newkcc');
+    await page.getByTestId('confirm-wallet-help').click();
     await expect(page.getByTestId('confirm-info').locator('[data-code="walletTwice"]')).toHaveCount(1);
+    await expect(page.getByTestId('confirm-info').locator('[data-code="walletBlind"]')).toHaveText('Your wallet cannot show tokens: it will only show KAS amounts. Check the token details on this screen.');
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();
 
@@ -286,6 +310,79 @@ test.describe('token issuance', () => {
     await expect(page.getByTestId('issue-review')).toBeEnabled();
   });
 
+  for (const width of [1280, 390]) {
+    test(`${width} px: the explanations are behind "?" buttons: named, opened by a tap or the keyboard, closed by Escape; on the confirmation Escape closes the help, not the dialog`, async ({ appPage: page, mock }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await mock.giveKas('alice', 500n * KAS);
+      await page.goto('/#/create');
+      await clickConnectOption(page, 'wallet-connect-kasware');
+      await expect(page.getByTestId('wallet-address')).toBeVisible();
+      // the field hints are not on the page: each is behind its label's "?"
+      const ticker = page.getByTestId('issue-ticker-help');
+      await expect(ticker).toHaveAttribute('aria-label', 'More about Ticker');
+      await expect(ticker).toHaveAttribute('aria-expanded', 'false');
+      await expect(page.getByTestId('issue-form')).not.toContainText('capital letters A-Z');
+      await ticker.click();
+      await expect(ticker).toHaveAttribute('aria-expanded', 'true');
+      const panel = page.getByTestId('issue-ticker-help-panel');
+      await expect(panel).toContainText('capital letters A-Z or digits 0-9');
+      await expect(ticker).toHaveAttribute('aria-controls', (await panel.getAttribute('id'))!);
+      // inside the window, 16 px from its sides, nothing scrolls sideways
+      const box = (await panel.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(16);
+      expect(box.x + box.width).toBeLessThanOrEqual(width - 16);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      // a tap elsewhere closes it; so does Escape, which puts the focus back on its button
+      await page.getByRole('heading', { level: 1 }).click();
+      await expect(panel).toHaveCount(0);
+      await ticker.focus();
+      await page.keyboard.press('Enter');
+      await expect(panel).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(panel).toHaveCount(0);
+      await expect(ticker).toBeFocused();
+      await page.keyboard.press('Space');
+      await expect(panel).toBeVisible();
+      await page.keyboard.press('Escape');
+      for (const id of ['issue-name-help', 'issue-supply-help', 'issue-decimals-help', 'issue-icon-help', 'issue-image-file-help', 'issue-intro-help']) await expect(page.getByTestId(id), id).toHaveAttribute('aria-label', /^More about /);
+      // validation errors stay at their field
+      await page.getByTestId('issue-ticker').fill('A');
+      await page.getByTestId('issue-ticker').blur();
+      await expect(page.getByTestId('issue-ticker').locator('xpath=ancestor::div[contains(@class,"field")][1]').locator('.field-error')).toBeVisible();
+
+      await page.getByTestId('issue-name').fill('Help Coin');
+      await page.getByTestId('issue-ticker').fill('HELP');
+      await page.getByTestId('issue-supply').fill('1000');
+      await page.getByTestId('issue-review').click();
+      await expect(page.getByTestId('confirm-screen')).toBeVisible();
+      // the "not audited" disclosure: a short line in view before signing, its full text one tap away
+      const risk = page.getByTestId('confirm-risk');
+      await expect(risk).toBeVisible();
+      await expect(risk).toHaveAttribute('data-codes', 'unaudited');
+      await expect(risk).toContainText('Unaudited token program');
+      await expect(page.getByTestId('confirm-warnings')).toHaveCount(0);
+      await page.getByTestId('confirm-risk-help').click();
+      await expect(page.getByTestId('confirm-warnings').locator('[data-code="unaudited"]')).toHaveText('The token program is the KCC-20 reference, which has not been audited. Only create tokens you can afford to lose.');
+      const rbox = (await page.getByTestId('confirm-risk-help-panel').boundingBox())!;
+      expect(rbox.x + rbox.width).toBeLessThanOrEqual(width - 16);
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('confirm-risk-help-panel')).toHaveCount(0);
+      await expect(page.getByTestId('confirm-screen')).toBeVisible();
+      await expect(page.getByTestId('confirm-risk-help')).toBeFocused();
+      // the locked KAS and the fees explain themselves behind their "?"
+      await page.getByTestId('confirm-brief-locked-help').click();
+      await expect(page.getByTestId('confirm-brief-locked-help-panel')).toContainText('Every token output carries KAS.');
+      await page.getByTestId('confirm-brief-fee-help').click();
+      await expect(page.getByTestId('confirm-brief-locked-help-panel')).toHaveCount(0);
+      await expect(page.getByTestId('confirm-brief-fee-help-panel')).toContainText('Paid to the network, not returned');
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+      // a second Escape closes the dialog as before
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('confirm-screen')).toHaveCount(0);
+    });
+  }
+
   test('a wallet without enough KAS sees the exact shortfall and cannot review', async ({ appPage: page, mock }) => {
     await mock.giveKas('alice', 4n * KAS);
     await page.goto('/#/create');
@@ -445,6 +542,9 @@ test.describe('token creation with the private key', () => {
     await page.getByTestId('issue-supply').fill('250');
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    await expect(page.getByTestId('confirm-wallet-line')).toHaveText(/Your wallet shows only KAS, not tokens/);
+    await page.getByTestId('confirm-wallet-help').click();
+    await expect(page.getByTestId('confirm-info').locator('[data-code="walletBlind"]')).toHaveCount(1);
     await expect(page.getByTestId('confirm-info').locator('[data-code="walletTwice"]')).toHaveCount(0);
     await page.getByTestId('confirm-ack').check();
     await page.getByTestId('confirm-sign').click();

@@ -39,6 +39,7 @@ export default {
   'common.reload': 'Reload',
   'common.none': 'None',
   'common.details': 'Details',
+  'common.helpAbout': 'More about {topic}',
   'common.save': 'Save',
   'common.search': 'Search',
   'common.import': 'Import',
