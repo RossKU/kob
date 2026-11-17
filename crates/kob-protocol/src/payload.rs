@@ -1507,8 +1507,16 @@ fn revealed(t: TemplateId, sigscript: &[u8]) -> Result<(AnyState, String)> {
     let pushes = script_pushes(sigscript).ok_or_else(|| bad("the order input's signature script is not push-only"))?;
     let [.., tag, redeem] = pushes.as_slice() else { return Err(bad("the order input is unsigned or reveals no redeem script")) };
     let tpl = template(t);
-    let span = tpl.state_of(redeem).ok_or_else(|| bad("the order input does not reveal the record's template"))?;
-    let previous = AnyState::decode(t, span)?;
+    // a curve's state has its table's length (one template for every table)
+    let previous = if t == TemplateId::KobCurveAsk {
+        AnyState::KobCurveAsk(
+            crate::state::CurveAskState::from_redeem(redeem)
+                .map_err(|_| bad("the order input does not reveal the record's template"))?,
+        )
+    } else {
+        let span = tpl.state_of(redeem).ok_or_else(|| bad("the order input does not reveal the record's template"))?;
+        AnyState::decode(t, span)?
+    };
     let entry = tpl
         .contract()
         .entries

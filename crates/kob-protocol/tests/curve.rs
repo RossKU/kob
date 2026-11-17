@@ -168,6 +168,12 @@ fn curve_builders_on_every_kcc20_program() {
                     let extra = if n == s.amount_left { 2 * carrier() } else { 0 };
                     assert!(signed.tx.outputs[k].value >= pay as u64 + extra, "{name}: the maker's payout");
                 }
+                // a signed amend reveals the curve's previous state (its redeem script has the table's length)
+                if let Action::AmendOrder(r) = &a {
+                    let got = payload::recover_amends(&signed.tx).unwrap_or_else(|e| panic!("{name}: recover the amend: {e}"));
+                    assert_eq!(got.len(), 1, "{name}");
+                    assert_eq!(got[0].order, r.amended, "{name}");
+                }
             }
         }
     }
