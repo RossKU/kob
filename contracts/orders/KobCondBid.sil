@@ -567,7 +567,9 @@ contract KobCondBid(
                         // key, amount-threshold with a threshold of at least
                         // recvThreshold and a canonical guard, the order's
                         // commitment. Its state bytes [9..112) are kept, and its
-                        // KAS stays on it.
+                        // KAS stays on it. Output i is its successor on the borrow
+                        // path, so no second order can claim it.
+                        require(OpAuthOutputIdx(tokIn, 0) == self);
                         require(tx.inputs[tokIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
                         byte[] rst = trs.slice(tplPrefixLen, tplPrefixLen + 112);
                         require(rst.slice(9, 47) == byte[](0x20) + byte[](maker) + byte[](0x0100010120));

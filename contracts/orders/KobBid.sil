@@ -336,11 +336,11 @@ contract KobBid(
                     // Top-up: tokIn is the maker's receive UTXO, the P2SH of the
                     // script its state is read from. Owner the maker's key,
                     // amount-threshold with a threshold >= recvThreshold and a
-                    // canonical guard, the order's commitment. The token
-                    // program (borrow path) requires the leader's first output
-                    // to keep its state bytes [9, 112) with a gain above the
-                    // threshold, so output i must be that output.
+                    // canonical guard, the order's commitment. Output i is its
+                    // successor on the borrow path (the leader's first output),
+                    // so no second order can claim the same receive UTXO.
                     require(form == 2);
+                    require(OpAuthOutputIdx(tokIn, 0) == self);
                     require(tx.inputs[tokIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(trs)));
                     byte[] rst = trs.slice(tplPrefixLen, tplPrefixLen + 112);
                     require(rst.slice(9, 47) == byte[](0x20) + byte[](maker) + byte[](0x0100010120));

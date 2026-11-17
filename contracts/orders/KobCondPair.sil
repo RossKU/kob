@@ -1056,8 +1056,10 @@ contract KobCondPair(
                             // guard, the commitment tExt. It grows by tOut
                             // and keeps the rest of its state. The order
                             // leaves topupTip to the filler and puts no
-                            // carrier on it.
+                            // carrier on it. Output i is its successor on the
+                            // borrow path, so no second order can claim it.
                             require(form == 2);
+                            require(OpAuthOutputIdx(tTplIn, 0) == self);
                             require(tx.inputs[tTplIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(tr)));
                             byte[] rst = tr.slice(tPre, tPre + 112);
                             require(rst.slice(9, 47) == rcv);

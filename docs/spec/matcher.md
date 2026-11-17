@@ -1179,7 +1179,7 @@ for both tokens `KobPair` 6 to 15, `KobCondPair` 7 to 29 (a fill 29, an update 1
 (a sell-first fill that arms its stop entry and books its exit 40); over every program pair at most 96, 133 and 163 (the
 largest token programs, whose custody inputs the scans read).
 
-**Template sizes.** `KobPair` 3,717 B (state 483 B), `KobCondPair` 7,842 B (state 579 B), `KobIfdPair` 9,351 B (state
+**Template sizes.** `KobPair` 3,727 B (state 483 B), `KobCondPair` 7,852 B (state 579 B), `KobIfdPair` 9,351 B (state
 936 B; the committed exit 432 B). The scans of both tokens are unrolled to `MAX_TOK_IN` = 8 slots each (a KRON program
 accepts fewer), so every spend of a pair order pays for them; a larger route or net is split into several fills (§7).
 

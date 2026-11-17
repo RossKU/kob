@@ -133,6 +133,13 @@ Further rules:
 3. A top-up (mode 2 form 2): the receive UTXO is the token's **first** input (the leader, borrow path, witness `0x01`), and the
    topped-up order is the token's **lowest-index delivering order**, so that its `D` is the leader's first output. At most one
    top-up per token per transaction. [engine A3, A5, H2]
+
+   **Successor binding (DLV-07).** A form-2 fill requires `OpAuthOutputIdx(tokIn, 0) == i`: its `D` is the output the
+   token program's borrow path checks as the receive UTXO's successor (`next_states[0]` at the leader's first authorised
+   output). Two orders naming one receive UTXO would need the same output with different amounts, so the second fails;
+   a delegate `tokIn` has no authorised output and fails too. One check of a few bytes and no new layout rule: the
+   builders already put `D` there. In `KobBid`, `KobCondBid`, `KobPair`, `KobCondPair` (so also the exits of
+   `KobIfdAsk`, `KobIfdPair`); the router never tops up (section 12).
 4. If a token has a refund-carrying terminal bid in the transaction, only that bid may be the top-up; otherwise the builder
    uses form 1 for that token.
 5. Token slots per token per transaction: mode 0 and forms 0 / 1 = 0 inputs, 1 output; mode 1 = 1 input once the custody
