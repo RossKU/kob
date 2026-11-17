@@ -24,7 +24,7 @@ import { formatKas, formatUnits, quoteOf } from '../../kob/units';
 import { costLine, costPreview } from './cost-preview';
 import { DEFAULT_CARRIER, heldAmount, unusableTokenHeld } from '../../kob/orders/common';
 import { lowPairTipFields } from '../../kob/orders/pair-common';
-import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, Stepper, useAsync, type StepperItem } from '../kit';
+import { Banner, Button, Dropdown, Loading, RawDetails, Segmented, Stepper, kasApprox, useAsync, type StepperItem } from '../kit';
 import { executorTip } from '../../kob/fill-tip';
 import { MAX_TAKE_STEPS } from '../../kob/take';
 import { bookFromIndexer, readClock } from '../../app/env';
@@ -1120,7 +1120,8 @@ export function OrderTicket(props: OrderTicketProps) {
             {t('ticket.take.fills', {
               amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
               price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
-              fee: formatKas(takeFacts.fee * BigInt(takeFacts.steps.length), { group: ',' }),
+              // about: two significant digits, so the line fits one row (the final confirmation has the exact fee)
+              fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)),
             })}
           </p>
           {takeFacts.rest > 0n ? (

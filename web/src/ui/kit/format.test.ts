@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { amountText, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeShort, formatRowTimeShortUnix, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
+import { amountText, kasApprox, CELL_CHARS, columnFraction, compactZeros, fitAmountColumn, fixedPricePerToken, fixedUnits, groupDigits, kasText, pricePerTokenText, scaleOfDecimals, shortAddress, shortId, signedKasText, tickKasFraction, tickPriceFraction, tokenText, tokenTextShort, trailingZeros, unitsFraction, formatRowTime, formatRowTimeShort, formatRowTimeShortUnix, formatRowTimeUnix, rowTimeTitle, displayPriceDp, columnPriceDp, displayPriceText, exactPriceText } from './format';
 
 describe('kit format', () => {
   it('shortens ids from their start, never in the middle, without touching short strings', () => {
@@ -246,5 +246,17 @@ describe('one price display rule', () => {
     // 8 decimals, one whole token = 1e8 base units: a price in sompi per token
     expect(displayPriceText(3_341_892_984n, 8, 100_000_000n, 3)).toBe('33.419');
     expect(exactPriceText(3_341_892_984n, 8, 100_000_000n)).toBe('33.41892984');
+  });
+});
+
+describe('kasApprox', () => {
+  it('rounds half up to two significant digits', () => {
+    expect(kasApprox(3_382_400n)).toBe('0.034');
+    expect(kasApprox(1_106_800n)).toBe('0.011');
+    expect(kasApprox(1_750_000n)).toBe('0.018');
+    expect(kasApprox(99_600_000n)).toBe('1');
+    expect(kasApprox(250_000_000n)).toBe('2.5');
+    expect(kasApprox(42n)).toBe('0.00000042');
+    expect(kasApprox(0n)).toBe('0');
   });
 });

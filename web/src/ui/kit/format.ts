@@ -23,6 +23,15 @@ export function shortAddress(address: string, chars = 12): string {
 /** KAS text of a sompi amount: up to 8 decimals, trailing zeros trimmed. */
 export const kasText = (sompi: bigint): string => formatKas(sompi);
 
+/** `sompi` rounded half up to `digits` significant digits, as KAS ("0.034" for 3,382,400 sompi): an approximate figure ("fee ~0.034 KAS"). */
+export function kasApprox(sompi: bigint, digits = 2): string {
+  if (sompi <= 0n) return formatKas(0n);
+  const len = sompi.toString().length;
+  if (len <= digits) return formatKas(sompi);
+  const unit = 10n ** BigInt(len - digits);
+  return formatKas(((sompi + unit / 2n) / unit) * unit);
+}
+
 /** Token amount text with the token's decimals, trailing zeros trimmed. */
 export const tokenText = (base: bigint, decimals: number): string => formatTokenAmount(base, decimals);
 
