@@ -78,6 +78,8 @@ const isView = (o: Input): o is OrderView => 'covenant_id' in o;
 
 interface Normalised {
   covenantId: Hex;
+  /** The order's token (a pair order: A). An unbound curve's state names none (zero until its first fill or amend): it is its custody's. */
+  token: Hex;
   state: OrderState;
   /** KAS of the order UTXO. */
   value: bigint;
@@ -86,6 +88,13 @@ interface Normalised {
   strays: { token: Hex; amount: bigint; kas: bigint }[];
   /** The bought-custody (amount from the state; KAS from its UTXO when known). */
   bought: { token: Hex; amount: bigint; kas: bigint } | null;
+}
+
+const ZERO_ID = '0'.repeat(64);
+/** The state's token, or `known` (the indexer's `token`, the custody's) where the state names none. */
+function orderToken(state: OrderState, known: Hex | null): Hex {
+  const t = tokenCovIdOf(state);
+  return (t === ZERO_ID || !t) && known ? known : t;
 }
 
 function normalise(o: Input): Normalised | SkippedOrder {
@@ -102,17 +111,17 @@ function normalise(o: Input): Normalised | SkippedOrder {
     const bf = boughtOf(state);
     const bu = o.bought_custody?.utxo;
     return {
-      covenantId: o.covenant_id, state, value: big(o.current.value),
+      covenantId: o.covenant_id, token: orderToken(state, o.token ?? o.custody?.utxo?.token ?? null), state, value: big(o.current.value),
       custodies: cus.filter((cu): cu is NonNullable<typeof cu> => !!cu && !cu.spent).map((cu) => ({ token: cu.token, amount: big(cu.state?.amount ?? cu.amount), kas: big(cu.value) })),
       strays: (o.strays ?? []).filter((s) => !s.spent).map((s) => ({ token: s.token, amount: big(s.state?.amount ?? s.amount), kas: big(s.value) })),
       bought: bf ? { token: bf.token, amount: bf.amount, kas: bu && !bu.spent ? big(bu.value) : 0n } : null,
     };
   }
   const bf = boughtOf(o.order.state);
-  const token = tokenCovIdOf(o.order.state);
+  const token = orderToken(o.order.state, o.custody?.covenantId ?? null);
   const cs = custodiesOf(o.order.state);
   return {
-    covenantId: o.covenantId, state: o.order.state, value: big(o.order.amount),
+    covenantId: o.covenantId, token, state: o.order.state, value: big(o.order.amount),
     custodies: [o.custody ?? null, o.prefund ?? null].flatMap((u, k) => (u ? [{ token: u.covenantId ?? cs[k]?.token ?? token, amount: big(u.state.amount), kas: big(u.amount) }] : [])),
     strays: o.strays.map((s) => ({ token: s.covenantId ?? token, amount: big(s.state.amount), kas: big(s.amount) })),
     bought: bf ? { token: bf.token, amount: bf.amount, kas: o.boughtCustody ? big(o.boughtCustody.amount) : 0n } : null,
@@ -132,7 +141,9 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
       continue;
     }
     const d = describeOrder(n.state);
-    const token = tokenCovIdOf(n.state);
+    const token = n.token;
+    // a custody fact of an unbound curve names the zero id: it is the order's token
+    const tokenOfFact = (t: Hex): Hex => (t === ZERO_ID ? token : t);
     const row = (t: Hex): EscrowedBalance =>
       by.get(t) ?? (by.set(t, { token: t, custody: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasEscrow: 0n, kasCarriers: 0n, kasLocked: 0n, orders: 0 }).get(t) as EscrowedBalance);
     const b = row(token);
@@ -146,7 +157,7 @@ export function escrowedBalancesDetailed(orders: Input[]): EscrowedResult {
       carriers += c.kas;
       seen.add(c.token);
     }
-    for (const c of custodiesOf(n.state)) if (!seen.has(c.token)) row(c.token).custody += c.amount;
+    for (const c of custodiesOf(n.state)) if (!seen.has(tokenOfFact(c.token))) row(tokenOfFact(c.token)).custody += c.amount;
     for (const s of n.strays) {
       row(s.token).strays += s.amount;
       carriers += s.kas;

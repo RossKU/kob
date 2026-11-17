@@ -95,6 +95,22 @@ describe('escrowedBalances', () => {
     expect(r.skipped.map((x) => x.reason)).toEqual(['terminal', 'terminal', 'state-unknown', 'no-current-utxo']);
   });
 
+  it('an unbound curve (its state names the zero token) counts under the token the indexer names, view or snapshot', () => {
+    const snap = placeGolden(kob, 'create.curve').snapshots[0]!;
+    const st = snap.order.state as { kind: string; state: { tokenCovId: string; amountLeft: string } };
+    const unbound = { ...st, state: { ...st.state, tokenCovId: '0'.repeat(64) } } as typeof snap.order.state;
+    const view = orderViewOf(kob, snap, { state: unbound, token: TOKEN.covenantId });
+    // a list view may lack the custody UTXO: the state's amount counts, under the order's token
+    const listed = { ...view, custody: undefined };
+    const asSnap = { ...snap, order: { ...snap.order, state: unbound } };
+    for (const o of [view, listed, asSnap]) {
+      const out = escrowedBalances([o]);
+      expect(out.map((b) => b.token)).toEqual([TOKEN.covenantId]);
+      expect(out[0]!.custody).toBe(BigInt(st.state.amountLeft));
+      expect(out[0]!.orders).toBe(1);
+    }
+  });
+
   it('ignores a spent custody / stray on a view and falls back to the state-implied custody', () => {
     const a = placeGolden(kob, 'create.ask');
     const view = orderViewOf(kob, { ...a.snapshots[0], strays: [strayFor(a.snapshots[0], 9n)] });
