@@ -904,16 +904,19 @@ fn delivery_router() {
     r.assert_clean();
 }
 
-/// Open finding DLV-07 (docs/security/redteam-coverage.md): a second mode-2 bid names the receive UTXO another bid tops up, and
-/// its delivery (a copy of the receive state, not the successor) is accepted; the maker pays `topupTip` for a delivery that
-/// tops nothing up. Ignored until the maintainer decides; run with --ignored to reproduce (it fails on the finding).
+/// DLV-07 (docs/security/redteam-coverage.md): a second mode-2 bid names the receive UTXO another bid tops up and delivers a
+/// copy of its state, not its successor. Refused by that bid since a top-up's delivery must be the receive UTXO's successor
+/// (`OpAuthOutputIdx(tokIn, 0) == i`); ablation: kcc20-sell `DM-31` (scenario NO07).
 #[test]
-#[ignore = "open finding DLV-07, awaiting the maintainer"]
 fn delivery_second_topup() {
     let s = second_topup_shapes();
     assert!(!s.is_empty(), "the two-bid top-up shape builds");
+    let n = s.len() as u64;
     let r = run("delivery/second-topup", s, false);
     r.assert_clean();
+    let c: Vec<&Cell> = r.cells.iter().filter(|((a, _, _), _)| a == "DLV-07").map(|(_, c)| c).collect();
+    let (judged, by_target) = (c.iter().map(|c| c.judged).sum::<u64>(), c.iter().map(|c| c.by_target).sum::<u64>());
+    assert!(judged >= n && by_target == judged, "DLV-07: {judged} judged, {by_target} refused by an order (one per shape: {n})");
 }
 
 /// Prints every attempt on the shapes whose name contains `RT_DESCRIBE` with its verdict (all failing inputs).

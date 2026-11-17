@@ -45,7 +45,7 @@ tests are `#[ignore]` (heavy); the counts include them.
 | DLV-04 | tip over-take | `NM07`, `NM07b`, `NT06`, `NT11`, `NC07`, `NC08`, `NC12`, `NC18` | 31,603 / 31,603 / 0 / 0 |
 | DLV-05 | claim by a non-maker; refund before due | `NCL1`..`NCL4`, `NR10`; `web/src/kob/decode-claim.test.ts` | 234 / 234 / 0 / 0 |
 | DLV-06 | `bought` inflated / deflated | `NC01`, `NC06`, `NC17`, `NS03`..`NS05` | 1,562 / 1,562 / 0 / 0 |
-| DLV-07 | a second top-up of one receive UTXO | `NO04` (two borrowed inputs: the token refuses) | 9 / 0 / 0 / **9 (open)** |
+| DLV-07 | a second top-up of one receive UTXO | `NO04` (two borrowed inputs: the token refuses); since the fix `NO07`, `DM2-36`, pair `NM20` (ablation `DM-31`, `DM-CB-topup-succ`, `DM-P10`, `DM-CP2`) | 9 / 9 / 0 / 0 (fixed) |
 | DLV-08 | the receive successor off its slot | `NO01`, `NO03`, `PO05` | 963 / 963 / 0 / 0 |
 | DLV-09 | stray-guard bypass with an exact look-alike custody | `NG01`, `NC04`, `NR08`, `NR12` | 2,718 / 2,718 / 0 / 0 |
 | DLV-10 | fill or claim keeps `bought` while the custody leaves | `NC03`, `NC09`, `NC11`, `PCL1` | 238 / 238 / 0 / 0 |
@@ -67,20 +67,16 @@ and written as JSON per test when `KOB_RT_OUT` is set.
 - DLV-03: `form` is read in mode 2 only (spec section 3); a mode change that leaves the spec's delivery the same (plain `n`);
   a refund, which releases the escrow and the custody to the maker whatever the mode.
 
-## Open finding DLV-07
+## DLV-07 (fixed)
 
 Two mode-2 bids of one maker are filled in one transaction. Bid 0 tops up the maker's receive UTXO R (form 2, R leads its token
-on the borrow path). Bid 1 also claims form 2 and names R as its `tokIn`; its delivery is a second token output with R's state
-and `have + n` units, not R's successor. Both bids accept, the token program accepts (the borrow path constrains only R's
-successor; the second output is an ordinary new UTXO of the maker), and consensus accepts (also judged as given by
-kaspa-redteam 0.17.2's validator). Bid 1 releases `topupTip` instead of putting `deliveryCarrier` on its delivery.
+on the borrow path). Bid 1 also claimed form 2 with R as its `tokIn` and delivered a second token output with R's state and
+`have + n` units, not R's successor. The token program constrains only R's successor, so before the fix every input and
+consensus accepted it: the maker paid `topupTip` for a delivery that topped nothing up, the filler `have` extra units.
 
-Effect: the maker pays `topupTip` for a delivery that tops nothing up (a new receive-state UTXO, which `topupTip` is meant to
-avoid); the filler pays the delivery's KAS (at least R's) and `have` extra units. The bought units reach the maker. The filler
-gains only when R carries less KAS than `topupTip`. Spec section 6.3 says one top-up per token per transaction; the existing
-test `NO04` covers two borrowed inputs (the token refuses), not two orders naming one input. Reproducer:
-`cargo test -p kob-tests --test redteam_delivery_tests delivery_second_topup -- --ignored` (ignored until the maintainer decides; no
-contract was changed).
+Fix (spec section 6.3, successor binding): a form-2 fill of `KobBid`, `KobCondBid`, `KobPair` and `KobCondPair` requires
+`OpAuthOutputIdx(tokIn, 0) == i`, so its delivery is the output the borrow path checks; a second order naming R fails. The
+red-team test `delivery_second_topup` now requires every attempt refused by an order (9 programs).
 
 ## What is not covered
 

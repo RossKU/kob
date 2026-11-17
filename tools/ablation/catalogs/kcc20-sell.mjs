@@ -112,6 +112,7 @@ const M_NEG = 'kob_bid_modes_tests::modes_fill_negatives';
 const M_STRAY = 'kob_bid_modes_tests::modes_stray_guard';
 const M_SLOTS = 'kob_bid_modes_tests::modes_stray_guard_slots_8x8';
 const M_END = 'kob_bid_modes_tests::modes_refund_cancel_claim';
+const M_ORD = 'kob_bid_modes_tests::modes_ordering_and_slots';
 
 export const mutations = withPublicMint([
   // ---- KobCondAsk
@@ -948,4 +949,6 @@ export const mutations = withPublicMint([
   { id: "DM-28", file: "KobBid", run: { [M_END]: ["NR02","NR04","NR05","NR07"] }, note: "refund: the custody goes whole to the maker's key as one plain UTXO at custIn", edits: [del("            require(tx.outputs[custIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(\n                trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](bought as byte[8]) + byte[](0x20) + byte[](maker) + byte[](0x0100010020)\n                    + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8]) + byte[](0 as byte[8])\n                    + byte[](0x20) + extensionCommitment + trs.slice(tplPrefixLen + 112, tplPrefixLen + 112 + tplSuffixLen)\n            )));\n")] },
   { id: "DM-29", file: "KobBid", run: { [M_END]: ["NR13"] }, note: "refund: the release is bound to the token covenant (an unbound copy of the release script holds nothing)", edits: [del("            require(OpOutputCovenantId(custIn) == tokenCovId);\n")] },
   { id: "DM-30", file: "KobBid", run: { [M_END]: ["NR03"] }, note: "refund: the release keeps the custody's KAS", edits: [del("            require(tx.outputs[custIn].value >= tx.inputs[custIn].value);\n")] },
+  { id: "DM-31", file: "KobBid", run: { [M_ORD]: ["NO07","NO08"] }, note: "top-up: output i is the receive UTXO's successor (DLV-07: a second bid claims the receive UTXO another bid tops up, or one bid leaves the successor to another output)", edits: [del("                    require(OpAuthOutputIdx(tokIn, 0) == self);\n")] },
+  { id: "DM-32", file: "KobBid", run: { [T_TRL]: ["NTT11c"], [T_IA]: ["NTJ11c"], "kob_v2_buy_tests::v2_buy_touch_cond_arm": ["NTV11c"] }, note: "refund takes no argument (H1: refund(int custIn) pushed as 8 bytes reads as a fill of n, so a due refund arms or trails stops)", edits: [rep("    entry refund() {\n", "    entry refund(int custIn) {\n"), del("            int custIn = OpCovInputIdx(tokenCovId, 0);\n")] },
 ], { batteries: BATTERIES, skip: NOT_ON_3x3 });

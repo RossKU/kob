@@ -1869,3 +1869,39 @@ fn cond_pair_delivery_modes() {
     m.extend(mixes());
     suite(&m, delivery_modes);
 }
+
+/// The second order of MAKER_A in the DLV-07 shapes.
+const OID2: [u8; 32] = [0x83; 32];
+
+/// DLV-07: two mode-2 conditional orders of one maker buying T on the take-profit leg against the matcher's inventory.
+/// Order 0 tops up the receive UTXO, order 1 delivers a new receive UTXO (honest); order 1 naming the receive UTXO as
+/// form 2 as well is refused by order 1.
+fn second_topups(r: &Run, pa: TemplateId, pb: TemplateId) {
+    for ask in [true, false] {
+        let c = mode_case(ask, pa, pb);
+        if c.prog.family() != Family::Kcc20 {
+            continue;
+        }
+        let s = CondPairState { mode: MODE_TOPUP, recv_threshold: M_THR, topup_tip: M_TIP, ..cside(ask, pa, pb) };
+        let recv = TokenUtxo { utxo: utxo(0xb8, M_KAS, 1_000, Some(c.tok)), state: c.recv(M_HAVE, MAKER_A, M_THR) };
+        let mut b = tp_inv(s.clone(), pa, pb, 2 * NR);
+        if let Leg::CondPair { receive, form, amount, .. } = &mut b.legs[0] {
+            (*receive, *form, *amount) = (Some(recv), Some(2), NR);
+        }
+        let mut l1 = cond_pair_leg_amount(s, pa, pb, OID2, 80, NR, 0);
+        if let Leg::CondPair { form, .. } = &mut l1 {
+            *form = Some(1);
+        }
+        b.legs.push(l1);
+        let pfx = if ask { "a" } else { "b" };
+        let honest = edb(&format!("{pfx}PM20 one maker, two orders: order 0 tops up, order 1 a new receive UTXO"), b);
+        r.ok(&honest);
+        let (e, i1) = second_topup(&c, &honest, OID2, &format!("{pfx}NM20 one maker, two orders both top up the receive UTXO"));
+        r.bad(&e, i1);
+    }
+}
+
+#[test]
+fn cond_pair_second_topup() {
+    suite(&[family_mixes()[0]], second_topups);
+}

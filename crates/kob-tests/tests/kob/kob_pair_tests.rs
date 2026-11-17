@@ -28,7 +28,7 @@ use fx::*;
 use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, UtxoEntry};
 use kaspa_consensus_core::Hash;
 use kob_protocol::artifacts::{token_template, TemplateId};
-use kob_protocol::build::{Action, Batch, CancelOrder, RefundOrder};
+use kob_protocol::build::{Action, Batch, CancelOrder, Leg, RefundOrder};
 use kob_protocol::family::Family;
 use kob_protocol::script::{p2pk_spk, p2sh_spk, push_data};
 use kob_protocol::state::*;
@@ -1535,4 +1535,41 @@ fn pair_delivery_modes() {
     let mut m = vec![family_mixes()[0]];
     m.extend(mixed());
     suite(&m, delivery_modes);
+}
+
+/// The second order of MAKER_A in the DLV-07 shapes.
+const OID2: [u8; 32] = [0x83; 32];
+
+/// DLV-07: two mode-2 orders of one maker buying T against the matcher's inventory. Order 0 tops up the receive UTXO, order
+/// 1 delivers a new receive UTXO (honest); order 1 naming the receive UTXO as form 2 as well is refused by order 1.
+fn second_topups(r: &Run, pa: TemplateId, pb: TemplateId) {
+    for ask in [true, false] {
+        let c = mode_case(ask, pa, pb);
+        if c.prog.family() != Family::Kcc20 {
+            continue;
+        }
+        let s = PairState { mode: MODE_TOPUP, recv_threshold: M_THR, topup_tip: M_TIP, ..side_pr(ask, pa, pb) };
+        let recv = TokenUtxo { utxo: utxo(0xb8, M_KAS, 1_000, Some(c.tok)), state: c.recv(M_HAVE, MAKER_A, M_THR) };
+        let mut b = inv(s.clone(), pa, pb, 2 * NR);
+        let Leg::Pair { receive, form, .. } = &mut b.legs[0] else { unreachable!() };
+        (*receive, *form) = (Some(recv), Some(2));
+        let mut l1 = pair_leg_amount(s, pa, pb, OID2, 80, NR);
+        if let Leg::Pair { form, .. } = &mut l1 {
+            *form = Some(1);
+        }
+        if let Leg::Pair { amount, .. } = &mut b.legs[0] {
+            *amount = NR;
+        }
+        b.legs.push(l1);
+        let pfx = if ask { "a" } else { "b" };
+        let honest = edb(&format!("{pfx}PM20 one maker, two orders: order 0 tops up, order 1 a new receive UTXO"), b);
+        r.ok(&honest);
+        let (e, i1) = second_topup(&c, &honest, OID2, &format!("{pfx}NM20 one maker, two orders both top up the receive UTXO"));
+        r.bad(&e, i1);
+    }
+}
+
+#[test]
+fn pair_second_topup() {
+    suite(&[family_mixes()[0]], second_topups);
 }

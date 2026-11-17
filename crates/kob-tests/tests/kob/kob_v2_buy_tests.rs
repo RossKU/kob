@@ -237,6 +237,8 @@ enum EvMode {
     ZeroFill,
     /// a look-alike: a P2SH script carrying a real order's state under another template
     Forged,
+    /// H1: a KobBid refund whose sigscript starts with 0x08 || n (before the fix, its `custIn` pushed as 8 bytes)
+    RefundPush,
     /// the real redeem script pushed by an input whose script public key is not its P2SH
     NotP2sh,
 }
@@ -693,8 +695,7 @@ fn entry_ss(art: &SilAbiArtifact, entry: &str, args: &[ArtifactValue]) -> Vec<u8
     s
 }
 
-/// Calls written before the delivery modes (KobCondBid settle without `form`, refund without `custIn`) take 0 for the
-/// arguments the entry gained: form 0, and a custIn that a refund with bought == 0 never reads.
+/// Calls written before the delivery modes (KobCondBid settle without `form`) take 0 for the arguments the entry gained.
 fn pad_args(art: &SilAbiArtifact, entry: &str, args: &[ArtifactValue]) -> Vec<ArtifactValue> {
     let mut v = args.to_vec();
     let want = common::entry_by_name(art, entry).map(|e| e.params.len()).unwrap_or(0);
@@ -1017,6 +1018,19 @@ fn forged_ev(real: &[u8], n: i64, value: i64, c: Hash, daa: u64) -> Inp {
         seq: 0,
     }
 }
+
+/// H1: a KobBid refund whose sigscript starts with 0x08 || n, as a fill's would. With `refund(int custIn)` that is its
+/// first argument pushed as 8 bytes (never read while bought == 0); with `refund()` an extra push the entry must refuse.
+fn refund_push_ev(art: &SilAbiArtifact, n: i64, value: i64, c: Hash, daa: u64) -> Inp {
+    let params = common::entry_by_name(art, "refund").map(|e| e.params.len()).unwrap_or(0);
+    let head = encode_entry_sig_script(art, "refund", &vec![int(0); params]).expect("encode refund");
+    let mut ss = vec![0x08];
+    ss.extend(n.to_le_bytes());
+    // custIn = 0 is the one-byte OP_0, replaced by the 8-byte push
+    ss.extend_from_slice(if params > 0 { &head[1..] } else { &head[..] });
+    ss.extend(push(&bytecode(art)));
+    Inp { entry: utxo(value, spk_of(art), c, daa), role: Role::RawSs { ss, name: "ev.bid.refund8" }, seq: 0 }
+}
 /// The real redeem script of an evidence order pushed (after 0x08 || n) by an input whose script public key
 /// is not its P2SH ("2DROP TRUE"): the state is genuine, the UTXO is not that order.
 fn not_p2sh_ev(real: &[u8], n: i64, value: i64, c: Hash, daa: u64) -> Inp {
@@ -1053,7 +1067,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
     let decay = e.slope != 0;
     let origin = if e.interval > 0 { e.active_from.max(e.daa as i64 + e.interval) } else { e.active_from };
     let t_arg = if decay { origin } else { 0 };
-    let expiry = if matches!(e.mode, EvMode::Refund | EvMode::ZeroFill) { NOW as i64 } else { EXPIRY };
+    let expiry = if matches!(e.mode, EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill) { NOW as i64 } else { EXPIRY };
     let look = matches!(e.mode, EvMode::Forged | EvMode::NotP2sh);
     let owner = if e.mode == EvMode::Cancel { mc } else { matcher };
     if e.ask {
@@ -1075,7 +1089,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
             EvMode::Fill => {
                 call(&art, "settle", vec![nb(n * whole), iv(tk), iv(0), iv(t_arg)], "ev.ask.settle", CARRIER, e.cov, e.daa)
             }
-            EvMode::Refund | EvMode::ZeroFill => {
+            EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill => {
                 call(&art, "settle", vec![nb(0), iv(tk), iv(0), iv(0)], "ev.ask.refund", CARRIER, e.cov, e.daa)
             }
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.ask.cancel", CARRIER, e.cov, e.daa),
@@ -1084,7 +1098,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         };
         inp.seq = e.interval as u64;
         s.inputs.push(inp);
-        if matches!(e.mode, EvMode::Refund | EvMode::ZeroFill) {
+        if matches!(e.mode, EvMode::Refund | EvMode::RefundPush | EvMode::ZeroFill) {
             // the unsold tokens go back to maker C at the ask's own index
             let st = vec![tok_state(n * whole, &mc, SCHEME_P2PK)];
             let l = push_tok(f, s, CARRIER, n * whole, &e.cov.as_bytes(), SCHEME_COVID, e.token, Wit::CovId, e.tok_daa, st);
@@ -1114,6 +1128,7 @@ fn add_ev(f: &Fx, s: &mut Scn, e: &Ev) -> (i64, i64) {
         let mut inp = match e.mode {
             EvMode::Fill => call(&art, "fill", vec![nb(n * whole), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill", v, e.cov, e.daa),
             EvMode::Refund => call(&art, "refund", vec![], "ev.bid.refund", v, e.cov, e.daa),
+            EvMode::RefundPush => refund_push_ev(&art, n * whole, v, e.cov, e.daa),
             EvMode::Cancel => call(&art, "cancel", vec![Arg::SigPos(f.maker_c, 0x01)], "ev.bid.cancel", v, e.cov, e.daa),
             EvMode::ZeroFill => call(&art, "fill", vec![nb(0), iv(ei as i64 + 1), iv(t_arg)], "ev.bid.fill0", v, e.cov, e.daa),
             EvMode::Forged => forged_ev(&bytecode(&art), n * whole, v, e.cov, e.daa),
@@ -2757,6 +2772,10 @@ fn touch_battery(f: &Fx, kind: Kind) {
     bad(&good.with(|e| e.mode = EvMode::Refund), 0, "11", "refunded, not filled (ask settle n = 0 / bid refund; minTouchUnits 0)");
     if !good.ask {
         bad(&good.with(|e| e.mode = EvMode::ZeroFill), 0, "11b", "a bid fill with n = 0 (the bid refuses it too; minTouchUnits 0)");
+        // H1: a due refund of a bid whose sigscript reads as a fill of n (refused by the bid itself, refund() has no argument)
+        let s = trig(f, kind, &good.with(|e| e.mode = EvMode::RefundPush), 1);
+        let at = ev_args(&s, kind).0 as usize;
+        bad_s(s, "11c", "a bid refund whose sigscript starts with 0x08 || n (H1)", at);
     }
     // wrong indices
     let base = trig(f, kind, &good, 1);
@@ -6460,6 +6479,59 @@ fn dm_delivery_rules_negative() {
     run_bad(n, &with_name(s, "DM2-35 top-up of n <= the receive UTXO's threshold (token program)"), ix.lead);
 }
 
+/// DLV-07: two conditional buys of one maker (inputs 0, 1), the receive UTXO leading at input 2. Order 0 tops it up (output
+/// 0, its successor); order 1 delivers a new receive UTXO (form 1), or with `both` names the receive UTXO as form 2 and
+/// delivers a copy of its state at output 1 (the attack).
+fn dm_two_topups(f: &Fx, both: bool) -> Scn {
+    let t = &f.net.t;
+    let m = pk(&f.maker_b);
+    let (ca, cb) = (dm_cp(m, 2, 0), dm_cp(m, 2, 0).with_qty(8));
+    let (c0, c1) = (cov(DMC), cov(DMC + 1));
+    let recv = TSt::recv(DM_RECV_HAVE, &m, DM_THR);
+    let (na, nb_) = (2 * WHOLE, 3 * WHOLE);
+    let d0 = recv.with(|r| r.amount += na);
+    let d1 = if both { recv.with(|r| r.amount += nb_) } else { TSt::recv(nb_, &m, DM_THR) };
+    let sold = TSt::plain(na + nb_ + if both { DM_RECV_HAVE } else { 0 }, &pk(&f.taker));
+    let form1 = if both { 2 } else { 1 };
+    let settle = |cp: &CondBP, n: i64, form: i64, c: Hash| {
+        call(&condb(&f.net, cp), "settle", vec![nb(n), iv(2), iv(0), iv(0), iv(0), iv(form)], "condb.settle", dm_value(cp), c, 2_000)
+    };
+    let cont = |cp: &CondBP, n: i64, form: i64, c: Hash, i: u16| {
+        let left = dm_value(cp) - bid_all_in(n / WHOLE, cp.leg_price(0), cp.tip) - dm_released(cp, form);
+        out(left, spk_of(&condb(&f.net, &CondBP { qty: cp.qty - n / WHOLE, ..cp.clone() })), Some((i, c)))
+    };
+    let mut s = Scn {
+        name: String::new(),
+        inputs: vec![
+            settle(&ca, na, 2, c0),
+            settle(&cb, nb_, form1, c1),
+            t_in(t, DM_RECV_KAS, &recv, Some(&[d0, d1]), Wit::Borrow, 1_000),
+            t_in(t, CARRIER, &sold, None, Wit::P2pk(f.taker), 1_000),
+        ],
+        outputs: vec![
+            t_out(t, DM_RECV_KAS, &d0, 2),
+            t_out(t, if both { DM_RECV_KAS } else { DC }, &d1, 2),
+            cont(&ca, na, 2, c0, 0),
+            cont(&cb, nb_, form1, c1, 1),
+            out(0, p2pk_spk(&pk(&f.taker)), None),
+        ],
+        lock_time: NOW,
+        payload: vec![],
+    };
+    balance(&mut s, 4);
+    s
+}
+
+/// DLV-07: a top-up's delivery is the receive UTXO's successor, so a second order cannot claim the same receive UTXO.
+#[test]
+fn dm_second_topup() {
+    for f in [fx(), fx_pm()] {
+        let n = &f.net;
+        run_ok(n, &with_name(dm_two_topups(&f, false), "DM2-36+ one maker, two orders: order 0 tops up, order 1 a new receive UTXO"));
+        run_bad(n, &with_name(dm_two_topups(&f, true), "DM2-36 one maker, two orders both top up the receive UTXO"), 1);
+    }
+}
+
 /// DM3: the stray guard. A fill lets through only the bought-custody it names and authenticates.
 #[test]
 fn dm_stray_guard() {
@@ -6737,7 +6809,7 @@ fn dm_refund(f: &Fx, cp: &CondBP) -> Scn {
     Scn {
         name: "DM refund".into(),
         inputs: vec![
-            call(&condb(&f.net, cp), "refund", vec![iv(1)], "condb.refund", v, c, (EXPIRY - 1_000) as u64),
+            call(&condb(&f.net, cp), "refund", vec![], "condb.refund", v, c, (EXPIRY - 1_000) as u64),
             t_in(t, DM_CUST_KAS, &TSt::custody(cp.bought, c), Some(&[rel]), Wit::CovId, 1_500),
         ],
         outputs: vec![out(v - REFUND_TIP, p2pk_spk(&cp.maker), None), t_out(t, DM_CUST_KAS, &rel, 1)],
@@ -6746,7 +6818,7 @@ fn dm_refund(f: &Fx, cp: &CondBP) -> Scn {
     }
 }
 
-/// DM6: the order's end without the maker's signature never leaves a bought-custody behind (refund(custIn)).
+/// DM6: the order's end without the maker's signature never leaves a bought-custody behind (refund()).
 #[test]
 fn dm_refund_releases_the_custody() {
     let f = fx();
@@ -6785,7 +6857,6 @@ fn dm_refund_releases_the_custody() {
     let mut s = dm_refund(&f, &held);
     s.inputs.truncate(1);
     s.outputs.truncate(1);
-    set_arg(&mut s, 0, 0, iv(0));
     bad(s, "DM6-08 refund of an order holding bought units without its custody");
     let mut s = condb_refund(&f, &dm_cp(m, 1, 0));
     let st = TSt::plain(2 * WHOLE, &taker);

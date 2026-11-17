@@ -1192,7 +1192,7 @@ fn modes_stray_guard_slots_8x8() {
 
 // ================================================================ the order's end: refund, cancel and the claim shapes
 
-/// refund(custIn): with bought > 0 the bought-custody goes whole, with its KAS, to the maker's key at its own index; the
+/// refund(): with bought > 0 the bought-custody goes whole, with its KAS, to the maker's key at its own index; the
 /// claim shapes CL1..CL4 of section 7 through `cancel`.
 #[test]
 fn modes_refund_cancel_claim() {
@@ -1203,11 +1203,11 @@ fn modes_refund_cancel_claim() {
         let have = custody(4_000, BID_COV);
         let p1b = BidP::new(&f.maker, 1).bought(4_000);
         let due = bid(&f, &p1b.expiry(1_000));
-        // refund after expiry (anyone): the escrow at output 0, the custody at output custIn
+        // refund after expiry (anyone): the escrow at output 0, the custody at its own index (input 1)
         let refund = |name: &str, cust: Option<(St, St, i64)>| {
             let mut s = Scn {
                 name: name.into(),
-                inputs: vec![call(&due, "refund", vec![int(1)], "bid.refund", v1, BID_COV)],
+                inputs: vec![call(&due, "refund", vec![], "bid.refund", v1, BID_COV)],
                 outputs: vec![out(v1, p2pk_spk(&m), None)],
             };
             match cust {
@@ -1250,11 +1250,10 @@ fn modes_refund_cancel_claim() {
         }
         s.outputs.push(tok_out(&f.t, CARRIER, &plain(5, &tk), 1));
         bad_only(&f.t, &s, 0);
-        // custIn names the escrow's own index
-        let mut s = refund("NR09 refund with custIn = 0 (the order itself)", Some((have, plain(4_000, &m), DC)));
-        if let Role::Call { args, .. } = &mut s.inputs[0].role {
-            *args = vec![int(0)];
-        }
+        // the release off the custody's own index (output 2, a KAS output at 1)
+        let mut s = refund("NR09 refund with the custody's release off its own index", Some((have, plain(4_000, &m), DC)));
+        s.outputs.insert(1, out(KAS, p2pk_spk(&tk), None));
+        s.inputs.push(p2pk_in(&f.taker, KAS));
         bad_only(&f.t, &s, 0);
         // a 10,000-unit stray of the order's id named as the custody (bought 4,000): 4,000 to the maker, 6,000 to another key
         let mut s = refund("NR12 refund naming a 10,000-unit stray of the order's id as the custody", Some((custody(10_000, BID_COV), plain(4_000, &m), DC)));
@@ -1264,22 +1263,22 @@ fn modes_refund_cancel_claim() {
         s.inputs.push(p2pk_in(&f.taker, KAS));
         s.outputs.push(tok_out(&f.t, KAS, &plain(6_000, &o), 1));
         bad_only(&f.t, &s, 0);
-        // output custIn carries the release's script but is not bound to the token: the tokens go to another key
-        let mut s = refund("NR13 refund whose output custIn is an unbound copy of the release", Some((have, plain(4_000, &o), DC)));
+        // output 1 carries the release's script but is not bound to the token: the tokens go to another key
+        let mut s = refund("NR13 refund whose output 1 is an unbound copy of the release", Some((have, plain(4_000, &o), DC)));
         s.outputs.insert(1, out(DC, f.t.spk(&plain(4_000, &m)), None));
         s.outputs[2].covenant = Some(CovenantBinding { authorizing_input: 1, covenant_id: TOKEN_COV });
         s.inputs.push(p2pk_in(&f.taker, DC));
         bad_only(&f.t, &s, 0);
         // before expiry
         let mut s = refund("NR10 refund of an unexpired order", Some((have, plain(4_000, &m), DC)));
-        s.inputs[0] = call(&bid(&f, &p1b), "refund", vec![int(1)], "bid.refund", v1, BID_COV);
+        s.inputs[0] = call(&bid(&f, &p1b), "refund", vec![], "bid.refund", v1, BID_COV);
         bad_only(&f.t, &s, 0);
         // bought == 0 (any mode): as before, no token input
         for (id, mode) in [("PR03", 0), ("PR04", 1), ("PR05", 2)] {
             let b = bid(&f, &BidP::new(&f.maker, mode).expiry(1_000));
             let s = Scn {
                 name: format!("{id} refund of a mode-{mode} order holding no custody"),
-                inputs: vec![call(&b, "refund", vec![int(0)], "bid.refund", v0(), BID_COV), p2pk_in(&f.taker, KAS)],
+                inputs: vec![call(&b, "refund", vec![], "bid.refund", v0(), BID_COV), p2pk_in(&f.taker, KAS)],
                 outputs: vec![out(v0() - REFUND_TIP, p2pk_spk(&m), None), out(KAS + REFUND_TIP, p2pk_spk(&tk), None)],
             };
             ok(&f.t, &s);
@@ -1288,7 +1287,7 @@ fn modes_refund_cancel_claim() {
         let s = Scn {
             name: "NR11 refund of a mode-1 order holding no custody, with a stray of its id".into(),
             inputs: vec![
-                call(&b, "refund", vec![int(1)], "bid.refund", v0(), BID_COV),
+                call(&b, "refund", vec![], "bid.refund", v0(), BID_COV),
                 tok_leader(&f.t, CARRIER, &custody(5, BID_COV), &[plain(5, &tk)], Wit::CovId),
             ],
             outputs: vec![out(v0(), p2pk_spk(&m), None), tok_out(&f.t, CARRIER, &plain(5, &tk), 1)],
@@ -1432,7 +1431,9 @@ fn modes_ordering_and_slots() {
             },
             &f.taker,
         );
-        bad_only(&f.t, &s, 2);
+        // the token refuses it, and the bid too: a delegate has no successor (OpAuthOutputIdx)
+        bad(&f.t, &s, 2);
+        bad(&f.t, &s, 0);
 
         // O2 n <= the receive UTXO's threshold: the token program refuses the top-up (the builder uses form 1)
         let rh = recv(7_000, &m, n);
@@ -1478,7 +1479,10 @@ fn modes_ordering_and_slots() {
             close(Scn { name: name.into(), inputs, outputs: outs }, &f.matcher)
         };
         ok(&f.t, &batch(true, "PO03 mixed batch: mode-2 top-up first + mode-1 custody x one resting ask (3 / 3)"));
-        bad_only(&f.t, &batch(false, "NO03 mixed batch with the mode-1 order at the lower index"), 3);
+        // the token refuses it, and the top-up bid at input 1: its output 1 is not the successor
+        let s = batch(false, "NO03 mixed batch with the mode-1 order at the lower index");
+        bad(&f.t, &s, 3);
+        bad(&f.t, &s, 1);
 
         // O4 two top-ups of one token: the second receive UTXO is a delegate (the token refuses it); one top-up + one form 1 passes
         let p2m2 = BidP::new(&f.maker2, 2);
@@ -1511,7 +1515,74 @@ fn modes_ordering_and_slots() {
             )
         };
         ok(&f.t, &two(false, "PO04 two buyers: bid 0 topped up, bid 1 a new receive UTXO"));
-        bad_only(&f.t, &two(true, "NO04 two buyers, both topped up (two borrowed inputs of one token)"), 3);
+        // the token refuses the second borrowed input, and bid 2: a delegate has no successor
+        let s = two(true, "NO04 two buyers, both topped up (two borrowed inputs of one token)");
+        bad(&f.t, &s, 3);
+        bad(&f.t, &s, 1);
+
+        // O7 (DLV-07) two bids of one maker both name the receive UTXO as form 2: bid 1's delivery at output 1 is a copy of
+        // its state, not its successor. Form 1 for bid 1 is the honest shape.
+        let bb = bid(&f, &p2.expiry(EXPIRY + 1));
+        let seven = |both: bool, name: &str| {
+            let d2 = if both { r.plus(3_000) } else { recv(3_000, &m, THR) };
+            close(
+                Scn {
+                    name: name.into(),
+                    inputs: vec![
+                        call(&b2, "fill", fill_args(2_000, 2, 2), "bid1.fill", v, BID_COV),
+                        call(&bb, "fill", fill_args(3_000, 2, if both { 2 } else { 1 }), "bid2.fill", v, BID2_COV),
+                        tok_leader(&f.t, CARRIER, &r, &[r.plus(2_000), d2, plain(18_000 - d2.amount, &tk)], Wit::Borrow),
+                        tok_delegate(&f.t, CARRIER, &plain(20_000, &tk), Wit::P2pk(f.taker)),
+                        p2pk_in(&f.taker, KAS),
+                    ],
+                    outputs: vec![
+                        tok_out(&f.t, CARRIER, &r.plus(2_000), 2),
+                        tok_out(&f.t, if both { CARRIER } else { DC }, &d2, 2),
+                        out(v - spend(2) - TT, spk_of(&b2), Some((0, BID_COV))),
+                        out(v - spend(3) - if both { TT } else { DC }, spk_of(&bb), Some((1, BID2_COV))),
+                        tok_out(&f.t, CARRIER, &plain(18_000 - d2.amount, &tk), 2),
+                    ],
+                },
+                &f.taker,
+            )
+        };
+        ok(&f.t, &seven(false, "PO07 one maker, two bids: bid 0 tops up the receive UTXO, bid 1 a new receive UTXO"));
+        bad_only(&f.t, &seven(true, "NO07 one maker, two bids both top up the receive UTXO (bid 1's delivery not its successor)"), 1);
+
+        // O8 (DLV-07, one bid) the bid at input 1 tops up; with `fake`, the receive UTXO's real successor is output 0 (the
+        // seller pays a gain of THR + 1) and the bid's output 1 is a copy of the receive state grown by n.
+        let eight = |fake: bool, name: &str| {
+            let d = r.plus(n);
+            let succ = r.plus(THR + 1);
+            let first = if fake { succ } else { d };
+            let change = plain(20_000 + 7_000 - first.amount - if fake { d.amount } else { 0 }, &tk);
+            let mut next = vec![first];
+            let mut outputs = vec![tok_out(&f.t, CARRIER, &first, 2)];
+            if fake {
+                next.push(d);
+                outputs.push(tok_out(&f.t, CARRIER, &d, 2));
+            } else {
+                outputs.insert(0, out(KAS, p2pk_spk(&tk), None));
+            }
+            next.push(change);
+            outputs.extend([out(v - spend(3) - TT, spk_of(&b2), Some((1, BID_COV))), tok_out(&f.t, CARRIER, &change, 2)]);
+            close(
+                Scn {
+                    name: name.into(),
+                    inputs: vec![
+                        p2pk_in(&f.taker, KAS),
+                        call(&b2, "fill", fill_args(n, 2, 2), "bid.fill", v, BID_COV),
+                        tok_leader(&f.t, CARRIER, &r, &next, Wit::Borrow),
+                        tok_delegate(&f.t, CARRIER, &plain(20_000, &tk), Wit::P2pk(f.taker)),
+                        p2pk_in(&f.taker, KAS),
+                    ],
+                    outputs,
+                },
+                &f.taker,
+            )
+        };
+        ok(&f.t, &eight(false, "PO08 a top-up by the bid at input 1 (output 0 a KAS output)"));
+        bad_only(&f.t, &eight(true, "NO08 one bid: the receive UTXO's successor at output 0, the bid's output 1 a copy of its state"), 1);
 
         // O5 a refund-carrying terminal bid (IOC, input 0) next to a GTC mode-2 bid (input 1): only the terminal bid may top up
         let pr = BidP::new(&f.maker, 2).tif(IOC);
@@ -1549,7 +1620,10 @@ fn modes_ordering_and_slots() {
             )
         };
         ok(&f.t, &five(true, "PO05 the refund-carrying terminal bid (input 0) tops up, the GTC bid gets a new receive UTXO"));
-        bad_only(&f.t, &five(false, "NO05 the GTC bid at input 1 tops up next to a refund-carrying terminal bid"), 2);
+        // the token refuses it, and the GTC bid: its output 1 is not the successor
+        let s = five(false, "NO05 the GTC bid at input 1 tops up next to a refund-carrying terminal bid");
+        bad(&f.t, &s, 2);
+        bad(&f.t, &s, 1);
 
         // O6 slots on a 3 / 3 program: two mode-1 orders with custodies x one resting ask fit; a third does not
         let pa = BidP::new(&f.maker, 1).bought(4_000);

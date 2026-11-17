@@ -49,12 +49,12 @@ directory (line endings normalised to LF) and mutates only the copies.
 
 | Suite | Family | Test binary | Contracts (`srcDir`) | Contracts mutated | Mutations |
 |---|---|---|---|---|---|
-| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 340 |
-| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 255 |
+| `kcc20-sell` | KCC-20, sell side: repeat IFD lifecycle, touch trigger (the `TA` / `TU` / `TI` entries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale) | `kob_v2_tests` | `contracts/orders` | KobAsk, KobBid, KobCondAsk, KobIfdBid | 342 |
+| `kcc20-buy` | KCC-20, buy side: repeat IFD lifecycle, touch trigger (the `TB` / `TV` / `TW` / `TK` / `TL` entries of the touch batteries flip on the reference 3/3 program and on 8/8), v3 checks (minFill, rounding, tip, merge push, merge scale, re-arm bound) | `kob_v2_buy_tests` | `contracts/orders` | KobCondBid, KobIfdAsk | 256 |
 | `kron-sell` | KRON adapter, sell side (v3) | `kob_kron_v2_tests` | `contracts/orders/kron` | KobAskKron, KobBidKron, KobCondAskKron, KobIfdBidKron | 321 |
 | `kron-buy` | KRON adapter, buy side (v3) | `kob_kron_v2_buy_tests` | `contracts/orders/kron` | KobCondBidKron, KobIfdAskKron | 218 |
-| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 88 |
-| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 133 |
+| `pair` | pair orders, plain (`KobPair`, both sides, both families of A and B) | `kob_pair_tests` | `contracts/orders` | KobPair | 89 |
+| `cond-pair` | pair conditionals (`KobCondPair`): legs, trigger evidence in both modes, trailing, updates | `kob_cond_pair_tests` | `contracts/orders` | KobCondPair | 134 |
 | `cond-pair-rpt` | the repeat-IFD checks of `KobCondPair` (TP fills with / without the entry, re-arm profit, budget, prefund, the merge bound) | `kob_ifd_pair_tests` | `contracts/orders` | KobCondPair | 12 |
 | `ifd-pair` | pair if-done entries (`KobIfdPair`, buy-first and sell-first, merges, stop entries) | `kob_ifd_pair_tests` | `contracts/orders` | KobIfdPair | 135 |
 

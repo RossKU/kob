@@ -1530,6 +1530,29 @@ pub fn m2_topup(c: &ModeCase, mut e: Ed, thr: i64) -> (Ed, usize) {
     (e, first)
 }
 
+/// DLV-07 on an honest two-order build (MAKER_A's orders `c.oid`, which tops up the receive UTXO, and `oid2`, form 1 and
+/// continuing): `oid2` names the receive UTXO as form 2 and delivers a copy of its state grown by its fill, not its
+/// successor. The matcher pays the extra units and the KAS. Returns (ed, `oid2`'s input).
+pub fn second_topup(c: &ModeCase, honest: &Ed, oid2: [u8; 32], name: &str) -> (Ed, usize) {
+    let mut e = honest.clone().named(name);
+    let (i0, i1) = (e.order_in(c.oid), e.order_in(oid2));
+    let r = c.t_in(&e, i0);
+    c.set_t_in(&mut e, i1, r);
+    c.set_form(&mut e, i1, 2);
+    let n1 = e.out_state(i1).amount();
+    e.set_out_state(i1, c.recv(M_HAVE + n1, MAKER_A, M_THR));
+    let mt = c.matcher_t(&e);
+    e.add_out_amount(mt, -M_HAVE);
+    let k = e.cont_out(oid2).expect("order 2 continues");
+    let (dv, kv) = (e.value(i1) as i64, e.value(k) as i64);
+    e.set_value(i1, (dv - c.dc + M_KAS as i64) as u64);
+    e.set_value(k, (kv + c.dc - M_TIP) as u64);
+    let ch = e.change_out();
+    let cv = e.value(ch) as i64;
+    e.set_value(ch, (cv + M_TIP - M_KAS as i64) as u64);
+    (e, i1)
+}
+
 /// The honest builds a [`mode_battery`] edits: a partial fill and the fill that ends the order (both of a KCC-20 T at
 /// the order's input, with the matcher's own T as the counterparty) and a refund.
 pub struct ModeShapes<'a> {

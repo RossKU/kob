@@ -254,4 +254,5 @@ mutations.push(
 // delivery modes (docs/design/bid-delivery-spec.md; WP-C3): a booked exit re-arming fill delivers in mode 0
 mutations.push(
   { id: "DM-CP1", file: F, test: DM, expect: ["yNM82"], inputOnly: ["yNM82"], note: "a re-arming fill (the entry present) is mode 0", edits: [rep("                        rearm = true;\n                        require(mode == 0);\n", "                        rearm = true;\n")] },
+  { id: "DM-CP2", file: F, test: "cond_pair_second_topup", expect: ["aNM20","bNM20"], note: "mode 2 top-up: output i is the receive UTXO's successor (DLV-07: a second order claims the receive UTXO another order tops up)", edits: [del("                            require(OpAuthOutputIdx(tTplIn, 0) == self);\n")] },
 );
