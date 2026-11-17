@@ -71,6 +71,9 @@ function errorText(e: FieldError): string {
 function Help(props: { text: string }) {
   return <span class="tk-help" title={props.text}>{props.text}</span>;
 }
+/** The user guide where stops are explained (a stop can be triggered by someone's own trade). */
+const STOP_DOCS_URL = 'https://github.com/RossKU/kob/blob/master/docs/user-guide.md#5-limit-and-market-orders';
+
 const helpOf = (text: string | undefined): ComponentChildren => (text ? <Help text={text} /> : undefined);
 
 /**
@@ -191,6 +194,9 @@ export function TicketFields(props: TicketFieldsProps) {
               ) : null}
               {shown === TOUCH_MIN ? <span class="tk-sub" data-testid={`${spec.testid}-min`}>{t('ticket.touch.minHint')}</span> : null}
               {form.kas && preset === '' ? <KasAmountHint form={form} ctx={ctx} id={id} ticker={ticker} testid={spec.testid} /> : null}
+              <span class="tk-sub" data-testid={`${spec.testid}-hunt`}>
+                {t('ticket.touch.hunt')} <a href={STOP_DOCS_URL} target="_blank" rel="noopener noreferrer">{t('ticket.touch.hunt.link')}</a>
+              </span>
               {helpOf(help)}
               {helpOf(t('ticket.touch.tradeoff'))}
             </>

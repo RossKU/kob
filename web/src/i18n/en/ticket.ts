@@ -360,6 +360,8 @@ export default {
   'ticket.touch.preset.min': 'default (min fill or 25%)',
   'ticket.touch.custom': 'custom',
   'ticket.touch.resolved': '= {amount} (of your {order})',
+  'ticket.touch.hunt': "A stop can be triggered by someone's own trade. Use a tight band and a larger trigger size.",
+  'ticket.touch.hunt.link': 'Docs',
   'ticket.touch.tradeoff': 'Smaller: triggers sooner, easier to hunt. 100%: a hunter must expose your full size, but it may trigger later in thin markets.',
   'ticket.unit.per': '{unit} per {per}',
   'ticket.unit.percent': '%',

@@ -763,6 +763,11 @@ fills against buyers and its evidence is a seller (a resting ask); a buy stop mi
   time R (a quarter of the stop's size by default, exposed to every matcher at the trigger price), not its cost (the
   fees of one fill). The covenants cannot require the evidence's counterparty to be another party: keys are free, and
   the batch's counterparties are not tied to a maker key. A user who needs more chooses a larger threshold (50 %, 100 %).
+  The rest time costs that party nothing either when its evidence order was placed without a KOB1 record: no
+  indexer lists such an order, so no one else can see it or fill it during R. The stop's band (§2.1) bounds the loss
+  of the stop's owner to the band. No covenant-only fix exists: the covenant cannot tell a genesis UTXO from a
+  continuation, so it cannot require that the evidence order was visible. This was found in an internal review on
+  2026-11-17 and is accepted as a known limit.
 - Once armed, a stop is only a limit bounded by its band (§2.1). A quote placed beyond the stop to
   trigger it must rest there for R, open to every matcher, before its fill counts; the threshold
   sets how much of it must trade.

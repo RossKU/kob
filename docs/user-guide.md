@@ -232,6 +232,7 @@ keep trading across several transactions for its short life (default 1). The tic
 Other order types exist (IOC, FOK, stops, take-profit, OCO, IFD, IFO, TWAP, DCA, Dutch). Their help text is in the ticket, and
 `docs/spec/order-types.md` defines them. Stops arm only on a trade that a matcher uses, never on a quote or a chart touch, so a
 stop can trigger later than the chart suggests and it has no guaranteed price.
+A stop can also be triggered by someone's own trade: use a tight band and a larger trigger size (`docs/spec/matcher.md` section 4.3).
 
 ## 6. Partial fills, and "You may receive up to"
 
