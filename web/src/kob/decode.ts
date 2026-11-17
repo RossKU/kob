@@ -443,6 +443,8 @@ export interface ExpectedSigning {
   tokensEscrowed?: bigint;
   /** covenant ids of orders spent by maker cancels / refunds */
   cancelIds?: Hex[];
+  /** an unbound curve amended in place: the token of its custody (order covenant id -> token), which the amend must name */
+  binds?: Record<Hex, Hex>;
   /** covenant ids of orders swept in place (verified SWEEP records): they are not cancelled */
   sweepIds?: Hex[];
   /** covenant ids of orders claimed (bid-delivery-spec §7): they continue with `bought` 0 */
@@ -1064,6 +1066,12 @@ export function decodeSigning(input: DecodeInput): SigningSummary {
       const deadline = am.deadline != null ? big(am.deadline) : null;
       // an amend keeps the delivery block (bid-delivery-spec §2)
       const was = orderStates.get(am.input);
+      // an unbound curve is bound by its amend: to the token of its custody, which the plan names
+      if (was?.kind === 'KobCurveAsk' && /^0{64}$/.test((was.state as { tokenCovId: string }).tokenCovId) && expected) {
+        const want = expected.binds?.[am.covenantId];
+        const got = (os.state as { tokenCovId?: string }).tokenCovId;
+        if (!want || got !== want) add('curve-terms-invalid', `output ${j}: the amend of an unbound curve names ${shortId(String(got))}, not the token of its custody`, { output: j });
+      }
       if (was && JSON.stringify(deliveryOf(was), bigReplacer) !== JSON.stringify(deliveryOf(os), bigReplacer)) add('order-terms-invalid', `output ${j}: the amend changes the order's delivery (mode, tip, threshold or bought), which an amend keeps`, { output: j });
       orders.push({ output: j, covenantId: am.covenantId, description, state: os, value, locked, deadline, verified, custody: null, custodies: [], amendedFrom: am.input, delivery: deliveryOf(os) });
       return { ...blank, kind: 'order', flagged: !verified, order: { covenantId: am.covenantId, description, verified, locked, deadline } };

@@ -570,7 +570,9 @@ describe('"After creation": a sale', () => {
     expect(plan.built.covenants.map((x) => x.covenantId)).toEqual([plan.token.covenantId, c.covenantId]);
     expect(plan.built.tx.outputs[1]!.covenant?.covenantId).toBe(c.covenantId);
     expect(plan.sale!.curve!.numbers.total).toBeLessThanOrEqual(10_000n * KAS);
-    expect(plan.sale!.curve!.minFill).toBe(kob.defaultMinFill(plan.sale!.sell, plan.sale!.curve!.table.table[0]!, 100_000_000n));
+    // the default minimum fill: worth 10 KAS at the first level, at most one level
+    const dm = kob.defaultMinFill(plan.sale!.sell, plan.sale!.curve!.table.table[0]!, 100_000_000n);
+    expect(plan.sale!.curve!.minFill).toBe(dm < plan.sale!.curve!.table.levelSize ? dm : plan.sale!.curve!.table.levelSize);
     signAndValidate(plan);
   });
 
@@ -593,6 +595,12 @@ describe('"After creation": a sale', () => {
       [maker, 0, (750n * 100_000_000n).toString()],
       [maker, 0, (250n * 100_000_000n).toString()],
     ]);
+    signAndValidate(plan);
+  });
+
+  it('caps the default minimum fill of a small curve at one level (else no fill could take it)', () => {
+    const plan = planIssue(kob, form({ supply: '1000000', sale: sale({ mode: 'curve', totalKas: '200' }) }), opts());
+    expect(plan.sale!.curve!.minFill).toBe(plan.sale!.curve!.table.levelSize);
     signAndValidate(plan);
   });
 

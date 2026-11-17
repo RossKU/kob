@@ -865,6 +865,7 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
   const topUp = replacement.value > big(order.order.amount);
   const make = (funding: KeyUtxo[]): CancelRequest => ({
     action: 'amendOrder', order: order.order, amended: replacement.order, value: funding.length || topUp ? replacement.value.toString() : null, funding,
+    ...(curveFactsOf(order.order.state)?.unbound && order.custody ? { custody: order.custody } : {}),
     change: env.changeTo ?? null, lockTime: '0', deadline: replacement.deadline != null ? replacement.deadline.toString() : null, records: [], fee: feeOpts(env),
   });
   const r = buildWithFunding(env, make);
@@ -882,7 +883,10 @@ function planAmendInPlace(env: CancelEnv, order: OrderSnapshot, replacement: Rep
   return {
     ok: true, issues: [inPlaceIssue, ...r.issues],
     request: r.request, built: r.built, cancelIds: [order.covenantId],
-    expected: withChange(env, r.built, { cancelIds: [order.covenantId], orders: [replacement.order], kasLocked }),
+    expected: withChange(env, r.built, {
+      cancelIds: [order.covenantId], orders: [replacement.order], kasLocked,
+      ...(curveFactsOf(order.order.state)?.unbound && order.custody?.covenantId ? { binds: { [order.covenantId]: order.custody.covenantId } } : {}),
+    }),
     tokensReturned: 0n, kasReleased: big(order.order.amount), fundingUsed: r.fundingUsed,
   };
 }

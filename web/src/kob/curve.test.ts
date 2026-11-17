@@ -134,6 +134,9 @@ describe('curveProblems (stricter than the protocol)', () => {
     expect(of({ total: '30', amountLeft: '30' })).toEqual(['total']);
     expect(of({ amountLeft: '36' })).toEqual(['amountLeft']);
     expect(of({ minFill: '0' })).toEqual(['minFill']);
+    // at most 7 levels + 1: what one fill always reaches
+    expect(of({ minFill: '71' })).toEqual([]);
+    expect(of({ minFill: '72' })).toEqual(['minFill']);
     expect(of({}, 2)).toEqual(['scale']);
     expect(of({ scale: '1000000000000000000' }, 18)).toEqual(['scale']);
     expect(of({ scale: '1000000000' }, 18)).toEqual([]);

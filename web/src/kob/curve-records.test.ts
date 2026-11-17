@@ -175,5 +175,13 @@ describe('amend of a curve', () => {
     expect(p2.ok).toBe(true);
     expect(p2.issues.map((i) => i.code)).toContain('cancel.amend-in-place');
     signAndValidate(kob, p2.built!, [MAKER.sk]);
+    // the plan states the custody's token; the decoder checks the amend names it
+    expect(p2.expected.binds).toEqual({ [u.covenantId]: g.token.covenantId });
+    const dec = (binds: Record<string, string>) => decodeSigning({ kob, built: p2.built!, maker: MAKER.pk, registry: null, expected: { ...p2.expected, binds }, nodeInputs: nodeFactsOf(p2.built!) }).blocking.map((x) => x.code);
+    expect(dec({ [u.covenantId]: g.token.covenantId })).not.toContain('curve-terms-invalid');
+    expect(dec({ [u.covenantId]: '77'.repeat(32) })).toContain('curve-terms-invalid');
+    expect(dec({})).toContain('curve-terms-invalid');
+    // a minimum fill beyond one fill's reach is refused
+    expect(buildReplacement(u, 'curve', { curve: { minFill: 8n * BigInt(t.levelSize) } }).issues.map((i) => i.code)).toContain('curve-min-fill-reach');
   });
 });

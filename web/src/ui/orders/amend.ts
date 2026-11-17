@@ -268,6 +268,7 @@ function curveReplacement(snap: OrderSnapshot, input: AmendInput, o: AmendOption
   if (last < now) issues.push(issue('curve-last-below', 'error', 'the last level is at least the price now', 'last'));
   if (levelSize < 1n) issues.push(issue('curve-level-size', 'error', 'the level size must be more than zero', 'levelSize'));
   if (minFill < 1n) issues.push(issue('curve-min-fill', 'error', 'the minimum fill must be more than zero', 'minFill'));
+  else if (levelSize > 0n && minFill > 7n * levelSize + 1n) issues.push(issue('curve-min-fill-reach', 'error', 'the minimum fill is more than one fill can take (7 levels and 1)', 'minFill'));
   if (tip < 0n) issues.push(issue('tip-negative', 'error', 'the tip cannot be negative', 'tip'));
   else if (tip >= now) issues.push(issue('tip-exceeds-price', 'error', 'a sell must receive something after the tip', 'tip'));
   if (issues.some((i) => i.severity === 'error')) return fail(issues);

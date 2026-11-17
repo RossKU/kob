@@ -20,7 +20,7 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
-import { curveNumbers, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
+import { curveMinFill, curveNumbers, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
 import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
@@ -751,7 +751,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
       } catch (e) {
         throw new IssueFormError([issue('sale.curve.invalid', e instanceof Error ? e.message : String(e))]);
       }
-      const minFill = kob.defaultMinFill(p.sell, table.table[0]!, scale);
+      const minFill = curveMinFill(kob, p.sell, table.table[0]!, table.levelSize, scale);
       curve = { custody: at, levelSize: table.levelSize.toString(), table: table.table.map(String), minFill: minFill.toString() };
       sale = { mode: 'curve', sell: p.sell, keep: p.keep, output: at, total: table.realised, curve: { table, minFill, numbers: curveNumbers(table, p.sell, scale) } };
     } else {

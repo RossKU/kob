@@ -568,6 +568,8 @@ export interface AmendOrderRequest {
   records?: PayloadRecord[];
   fee?: FeeOptions;
   ownKeys?: Hex[];
+  /** an unbound curve: its custody (the amend names its token; the builder checks it) */
+  custody?: TokenUtxo | null;
 }
 
 /** One order to cancel in a position cancel, with its custody and strays. */

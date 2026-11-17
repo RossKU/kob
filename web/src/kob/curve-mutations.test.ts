@@ -34,8 +34,13 @@ describe('a new curve order with refused terms is blocked by the pre-sign decode
   it('accepts a sound curve', () => expect(decodeWith(good())).not.toContain('curve-terms-invalid'));
   it.each([
     ['a falling level', (s: CurveAskState) => ({ ...s, table: [s.table[0]!, '50000', s.table[2]!, s.table[3]!] })],
-    ['a tip equal to the first price', (s: CurveAskState) => ({ ...s, tip: s.table[0]! })],
   ])('refuses %s', (_name, mut) => expect(decodeWith(mut(good()))).toContain('curve-terms-invalid'));
+  it('a tip equal to the first price is refused by the builder itself (the library gate)', () => {
+    const e = env();
+    const res = buildCreate(e, { order: { kind: 'KobCurveAsk', state: { ...good(), tip: good().table[0]! } } as OrderState, value: carrierOf(e), tokenAmount: 40_000n });
+    expect(res.built).toBeNull();
+    expect(res.issues.map((i) => i.code)).toContain('BUILD_REJECTED');
+  });
   it('shows the curve as a curve: levels, first, last, average, the rest, the table', () => {
     const d = describeOrder({ kind: 'KobCurveAsk', state: good() } as OrderState, kob);
     const f = { tr: (k: string, p?: Record<string, unknown>) => t(k, p as never), ref: { covenantId: good().tokenCovId, ticker: 'TST', decimals: 3 }, clock: null, time: (u: bigint) => u.toString() };
@@ -81,9 +86,11 @@ describe('a genesis curve with refused terms', () => {
   });
   it.each([
     ['a falling level', { table: ['1000000', '500000', '3000000', '4000000'] }],
-    ['a tip equal to the first price', { tip: '1000000' }],
   ])('refuses %s in the app and in the frame', (_n, over) => {
     expect(verdicts(genesis(over))).toEqual({ app: ['curve'], frame: 'claim' });
+  });
+  it('a tip equal to the first price is refused when the genesis is built (the library gate)', () => {
+    expect(() => genesis({ tip: '1000000' })).toThrow(/tip/);
   });
   it('the frame refuses a claimed state that differs from the output in any field', () => {
     const g = genesis();

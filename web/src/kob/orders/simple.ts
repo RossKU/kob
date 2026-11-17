@@ -235,7 +235,10 @@ function planCurve(env: PlanEnv, i: CurveIntent): OrderPlan {
   pre.push(...checkAmount(i.amount, m, 'amount', true));
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, 'sell', i.table[0]!));
   pre.push(...checkSelfTrade(env.ownOrders, { side: 'sell', price: i.table[0]!, tip }));
-  const minFill = i.minFill ?? defaultMinFillFor(env, i.amount, i.table[0]!);
+  // at most one level: one fill crosses at most 8 levels, so a larger minimum could leave the curve unfillable
+  const dflt = defaultMinFillFor(env, i.amount, i.table[0]!);
+  const minFill = i.minFill ?? (dflt < i.levelSize ? dflt : i.levelSize);
+  if (minFill > 7n * i.levelSize + 1n) return failedPlan([...pre, issue('MIN_FILL_INVALID', undefined, 'minFill')]);
   pre.push(...checkMinFill(minFill, i.amount));
   pre.push(...checkNotional(i.levelSize, i.table[n - 1]!, m.scale));
   if (hasError(pre)) return failedPlan(pre);

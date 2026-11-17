@@ -184,11 +184,18 @@ export function curveProblems(s: Pick<CurveAskState, 'table' | 'tip' | 'levelSiz
   if (size === null || size <= 0n) out.push('levelSize');
   else if (total === null || total <= 0n || total > size * n || total <= size * (n - 1n)) out.push('total');
   if (left === null || left <= 0n || (total !== null && left > total)) out.push('amountLeft');
-  if (minFill === null || minFill < 1n) out.push('minFill');
+  // one fill crosses at most 8 levels: from any position it reaches 7 levels + 1 base unit, so a larger minimum can leave the curve unfillable
+  if (minFill === null || minFill < 1n || (size !== null && size > 0n && minFill > (BigInt(CURVE_MAX_CROSS) - 1n) * size + 1n)) out.push('minFill');
   if (scale === null || scale <= 0n || (decimals !== undefined && scale !== 10n ** BigInt(Math.min(decimals, 9)))) out.push('scale');
   const af = num(s.activeFrom);
   if (af === null || af < 0n) out.push('activeFrom');
   return out;
+}
+
+/** The default minimum fill of a curve: the amount worth 10 KAS at its first level (kob-wasm `defaultMinFill`), at most one level. */
+export function curveMinFill(kob: KobWasm, amount: bigint, firstPrice: bigint, levelSize: bigint, scale: bigint): bigint {
+  const m = kob.defaultMinFill(amount, firstPrice, scale);
+  return m < levelSize ? m : levelSize > 0n ? levelSize : 1n;
 }
 
 /** A short preview of a table: the first three levels, then the last two ("1 · 2 · 3 … 9 · 10"); `fmt` prints one price. */

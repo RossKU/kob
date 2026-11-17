@@ -484,6 +484,7 @@ export default {
   'orders.amend.curve-last-below': 'The last price is at least the price now.',
   'orders.amend.curve-level-size': 'The level size must be more than zero.',
   'orders.amend.curve-min-fill': 'The minimum fill must be more than zero.',
+  'orders.amend.curve-min-fill-reach': 'The minimum fill is more than one fill can take (7 levels and 1 token unit).',
   'orders.amend.curve-too-many-levels': 'This level size gives more than 1,000 levels.',
   'orders.amend.curve-custody-unknown': "The curve's tokens are not found yet: refresh and try again.",
   'orders.amend.amount-not-positive': "The amount must be more than zero.",
