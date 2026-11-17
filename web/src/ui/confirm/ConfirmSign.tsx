@@ -11,7 +11,7 @@ import { readClock } from '../../app/env';
 import { has, t } from '../../i18n';
 import { issueText, walletNoticeText } from '../../i18n/issue-text';
 import { describeInputsForWallet } from '../../kob/decode';
-import type { IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
+import type { IssueCurve, IssueDeclaration, IssueDocs, IssueToken } from '../../kob/issue';
 import type { Clock } from '../../kob/plan-types';
 import type { PlacementRecord } from '../../kob/records';
 import type { BuiltTx } from '../../kob/types';
@@ -44,7 +44,7 @@ export interface ConfirmSignProps {
   /** label stored in the records of the transaction */
   label?: string;
   /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
-  issue: { token: IssueToken };
+  issue: { token: IssueToken; curve?: IssueCurve };
   /**
    * a creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares; signed with the genesis (one approval where
    * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
@@ -143,7 +143,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
     // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
     const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain } : {};
-    return buildIssuanceModel({ kob, built, token: props.issue.token, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
+    return buildIssuanceModel({ kob, built, token: props.issue.token, ...(props.issue.curve ? { curve: props.issue.curve } : {}), maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
   }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
   // problems that are not about the transaction itself
@@ -207,7 +207,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
             if (!twice || s !== 'signing') return;
             setChainNote(info?.step === 'genesis' ? (info.waiting ? 'wait' : 'genesis') : 'prep');
           },
-          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs },
+          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs, ...(props.issue.curve ? { curve: props.issue.curve } : {}) },
           // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
           onPrepSent: (prep) => {
             if (alive.current) setChainAt((c) => ({ ...c, prepSent: true }));

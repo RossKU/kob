@@ -28,7 +28,7 @@ export interface Row {
 }
 
 export interface Section {
-  id: 'issue' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
+  id: 'issue' | 'curve' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
   /** one explaining sentence under the title */
   note?: string;
