@@ -106,6 +106,40 @@ test.describe('Create token: after creation', () => {
     const genesis = (await mock.submitted()).at(-1)!;
     expect(genesis.tx.outputs.filter((o: any) => o?.covenant).length).toBe(2);
   });
+
+  test('a curve creation finished later shows the curve and keeps its placement record', async ({ appPage: page, mock }) => {
+    await mock.giveKas('alice', 500n * KAS);
+    await page.goto('/#/create');
+    await clickConnectOption(page, 'wallet-connect-kasware');
+    await fillToken(page);
+    await page.getByTestId('issue-after-curve').click();
+    await expect(page.getByTestId('issue-summary-sale')).toBeVisible();
+    // the node takes the preparation and refuses the genesis (a KOB1 payload with the curve) once
+    let submits = 0;
+    await page.route('**/*', async (route) => {
+      const r = route.request();
+      if (r.method() === 'POST' && (r.postData() ?? '').includes('"payload":"4b4f4231') && /submit/i.test(r.url() + (r.postData() ?? '')) && ++submits === 1) {
+        return route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: 'Rejected transaction x: the node is not taking it now (invalid)' }) });
+      }
+      return route.continue();
+    });
+    await page.getByTestId('issue-review').click();
+    await page.getByTestId('confirm-ack').check();
+    await page.getByTestId('confirm-sign').click();
+    await expect(page.getByTestId('confirm-screen')).toHaveCount(0, { timeout: 30_000 });
+    await page.unroute('**/*');
+    await page.getByTestId('issue-pending-send').click();
+    await expect(page.getByTestId('issue-result-curve')).toContainText('Your curve order is on the book: 1,000,000 CURV');
+    // the placement record of the curve (Open orders and its cancel read it)
+    const genesis = (await mock.submitted()).at(-1)!;
+    const curveId = genesis.tx.outputs[1].covenant.covenantId;
+    const records = () =>
+      page.evaluate((pk) => {
+        const k = Object.keys(localStorage).find((x) => x.startsWith('kob.records.v1:') && x.endsWith(pk));
+        return k ? localStorage.getItem(k) ?? '' : '';
+      }, TEST_KEYS.alice.pubkey);
+    await expect.poll(records).toContain(curveId);
+  });
 });
 
 test.describe('Create token with the private key: after creation', () => {

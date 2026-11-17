@@ -33,7 +33,7 @@ import { creationIsOld, genesisSigned, listCreations, removeCreation, type Creat
 import { CREATION_SPENT, finishCreation } from '../../wallet/create';
 import { SignFlowError } from '../../wallet/sign';
 import { pendingSpends } from '../../app/pending-spends';
-import { inputAddressOf } from '../confirm/send';
+import { inputAddressOf, recordAccepted } from '../confirm/send';
 import { expectedOutputs } from '../../wallet/sign';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { PlanIssue } from '../../kob/plan-types';
@@ -48,7 +48,7 @@ import { Banner, Button, CurveGraph, EmptyState, ErrorBanner, Field, FieldShell,
 import { formatUnits as baseUnitsText } from '../../kob/issue';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
-  humanAmount, linkedSaleFields, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
+  humanAmount, linkedSaleFields, saleOfRecord, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
 } from './issue-model';
 import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
@@ -224,7 +224,10 @@ export function IssueView() {
     adoptDeclaration(kob, config.network, rec.token.covenantId, rec.docs.launchProof);
     removeCreation(config.network, rec.covenantId);
     setPending((xs) => xs.filter((x) => x.covenantId !== rec.covenantId));
-    if (show) setPhase({ kind: 'result', plan: { token: rec.token, docs: rec.docs }, txid, trackFailed });
+    // the curve the genesis placed: its placement record (as an accepted creation saves it), and the result's line
+    if (rec.curve) void recordAccepted(services, wallet, { tx: genesisTx(rec), sign: [] } as unknown as BuiltTx, txid).catch(() => undefined);
+    const sale = saleOfRecord(rec);
+    if (show) setPhase({ kind: 'result', plan: { token: rec.token, docs: rec.docs, ...(rec.curve ? { curve: rec.curve } : {}), ...(sale ? { sale } : {}) }, txid, trackFailed });
   };
   useEffect(() => {
     if (!usable || !pubkey) {
@@ -623,7 +626,11 @@ export function IssueView() {
           built={phase.plan.built}
           title={t('issue.confirm.title', { ticker: phase.plan.token.ticker })}
           label={t('issue.confirm.label', { ticker: phase.plan.token.ticker })}
-          issue={{ token: phase.plan.token, ...(phase.plan.curve ? { curve: phase.plan.curve } : {}) }}
+          issue={{
+            token: phase.plan.token,
+            ...(phase.plan.curve ? { curve: phase.plan.curve } : {}),
+            ...(phase.plan.sale?.mode === 'ask' ? { askSale: { sell: phase.plan.sale.sell.toString(), price: (phase.plan.sale.price ?? 0n).toString() } } : {}),
+          }}
           creation={{ prep: phase.plan.prep, declaration: phase.plan.declaration, docs: phase.plan.docs }}
           onClose={onClose}
         />

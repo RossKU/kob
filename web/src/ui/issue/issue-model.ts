@@ -9,6 +9,9 @@ import {
 } from '../../kob/curve';
 import type { PlanIssue } from '../../kob/plan-types';
 import type { KobWasm } from '../../kob/wasm';
+import { curveNumbersOfState } from '../../kob/curve';
+import type { CreationRecord } from '../../data/creations';
+import type { PlannedSale } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
 import { groupDigits, shortId } from '../kit/format';
 
@@ -189,6 +192,24 @@ export function linkedSaleFields(state: IssueUiState): { keepPct: string; amount
   }
   const k = parsePercent(u.keepPct);
   return { keepPct: u.keepPct, amount: 'bps' in k ? formatUnits(saleSplit(share, k.bps).sell, d) : u.amount };
+}
+
+/** The sale of a creation finished later (its record): the curve from its state, or the one-price sale it offers to place. */
+export function saleOfRecord(rec: Pick<CreationRecord, 'curve' | 'askSale'>): PlannedSale | undefined {
+  if (rec.curve) {
+    const st = rec.curve.state.state;
+    const numbers = curveNumbersOfState(st);
+    const table = st.table.map((p) => BigInt(p));
+    return {
+      mode: 'curve', sell: BigInt(st.total), keep: 0n, output: rec.curve.custody, total: numbers.total,
+      curve: { table: { levelSize: BigInt(st.levelSize), table, realised: numbers.total }, minFill: BigInt(st.minFill), numbers },
+    };
+  }
+  if (rec.askSale) {
+    const sell = BigInt(rec.askSale.sell);
+    return { mode: 'ask', sell, keep: 0n, output: 0, total: 0n, price: BigInt(rec.askSale.price) };
+  }
+  return undefined;
 }
 
 /** What the sale section shows while the form is typed: the split, and for a curve its table, steps and numbers. */

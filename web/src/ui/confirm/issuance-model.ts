@@ -6,7 +6,7 @@
 // claimed state, be bound to the claimed covenant id, hold the claimed carrier; the amounts must add up to the supply; nothing else may leave the
 // wallet except change to its own key; the fee is re-derived from inputs minus outputs. Any disagreement is a BLOCKING finding.
 import { issuedTokenUtxos, spendsPreparation, type IssueCurve, type IssueToken } from '../../kob/issue';
-import { curveNumbers, levelSizes } from '../../kob/curve';
+import { curveNumbersOfState } from '../../kob/curve';
 import { decodeDeclaration } from '../../kob/kcc23';
 import type { BuiltTx, Hex } from '../../kob/types';
 import type { KobWasm } from '../../kob/wasm';
@@ -225,18 +225,14 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
   if (curve) {
     const st = curve.state.state;
     const total = BigInt(st.total);
-    const table = st.table.map((p) => BigInt(p));
-    const sizes = levelSizes(BigInt(st.levelSize), table.length, total);
-    const scale = BigInt(st.scale);
-    const realised = sizes.reduce((a, sz, k) => a + (sz * table[k]! + scale - 1n) / scale, 0n);
-    const n = curveNumbers({ levelSize: BigInt(st.levelSize), table, realised }, total, scale);
+    const n = curveNumbersOfState(st);
     sections.push({
       id: 'curve',
       title: tr('confirm.issue.curveSection'),
       note: tr('confirm.issue.curveNote'),
       rows: [
         row('curve-amount', tr('confirm.issue.curveAmount'), amountText(total), 'good'),
-        row('curve-levels', tr('confirm.issue.curveLevels'), String(table.length)),
+        row('curve-levels', tr('confirm.issue.curveLevels'), String(n.levels)),
         row('curve-first', tr('confirm.issue.curveFirst'), kas(n.first)),
         row('curve-last', tr('confirm.issue.curveLast'), kas(n.last)),
         row('curve-total', tr('confirm.issue.curveTotal'), kas(n.total)),

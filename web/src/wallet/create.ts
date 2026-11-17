@@ -47,7 +47,7 @@ export interface CreationArgs {
   /** script public key -> address of the app's network (the visibility gate asks the node by address) */
   addressOf: (spk: string) => string;
   /** what the creation record keeps to resume and to show the result */
-  record: { token: IssueToken; declaration: IssueDeclaration; docs: IssueDocs; curve?: IssueCurve };
+  record: { token: IssueToken; declaration: IssueDeclaration; docs: IssueDocs; curve?: IssueCurve; askSale?: { sell: string; price: string } };
   /** the creator's key (the record's owner) */
   maker: string;
   onStage?: (stage: SignStage, info?: CreationStageInfo) => void;
@@ -133,6 +133,7 @@ export async function signAndSubmitCreation(a: CreationArgs): Promise<CreationRe
   const base = {
     network: a.network, maker: a.maker.toLowerCase(), createdAt: now(), covenantId: a.record.token.covenantId, prepTxid: prep.tx.id,
     genesisTxid: built.tx.id, genesisBuilt: built, token: a.record.token, declaration: a.record.declaration, docs: a.record.docs,
+    ...(a.record.curve ? { curve: a.record.curve } : {}), ...(a.record.askSale ? { askSale: a.record.askSale } : {}),
   };
   let saved = false;
   let prepSent = false;

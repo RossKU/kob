@@ -121,6 +121,14 @@ export function curveRestKas(levelSize: bigint, table: readonly bigint[], total:
   return curveLevelsLeft(levelSize, table, total, left).reduce((a, l) => a + (scale > 0n ? (l.amount * l.price + scale - 1n) / scale : 0n), 0n);
 }
 
+/** First, last, average and "Total if sold out" of a curve's whole table (its state). */
+export function curveNumbersOfState(s: Pick<CurveAskState, 'levelSize' | 'table' | 'total' | 'scale'>): CurveNumbers {
+  const table = s.table.map((p) => BigInt(p));
+  const total = BigInt(s.total);
+  const scale = BigInt(s.scale);
+  return curveNumbers({ levelSize: BigInt(s.levelSize), table, realised: curveRestKas(BigInt(s.levelSize), table, total, total, scale) }, total, scale);
+}
+
 /** The current level of a state: (total − amountLeft) / levelSize. */
 export function currentLevel(s: Pick<CurveAskState, 'total' | 'amountLeft' | 'levelSize'>): number {
   return Number((BigInt(s.total) - BigInt(s.amountLeft)) / BigInt(s.levelSize));

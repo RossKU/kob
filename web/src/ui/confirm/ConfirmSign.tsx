@@ -44,7 +44,7 @@ export interface ConfirmSignProps {
   /** label stored in the records of the transaction */
   label?: string;
   /** the token facts the planner claims: a genesis has no token inputs, so they are verified against the transaction */
-  issue: { token: IssueToken; curve?: IssueCurve };
+  issue: { token: IssueToken; curve?: IssueCurve; askSale?: { sell: string; price: string } };
   /**
    * a creation under KCC-23: the preparation the genesis (`built`) spends, with what it declares; signed with the genesis (one approval where
    * the wallet can give it) and sent first. Absent: a bare genesis (signAndSubmit).
@@ -207,7 +207,7 @@ export function ConfirmSign(props: ConfirmSignProps) {
             if (!twice || s !== 'signing') return;
             setChainNote(info?.step === 'genesis' ? (info.waiting ? 'wait' : 'genesis') : 'prep');
           },
-          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs, ...(props.issue.curve ? { curve: props.issue.curve } : {}) },
+          record: { token: props.issue.token, declaration: c.declaration, docs: c.docs, ...(props.issue.curve ? { curve: props.issue.curve } : {}), ...(props.issue.askSale ? { askSale: props.issue.askSale } : {}) },
           // the preparation spends the wallet's coins even if the genesis then fails: no plan of this page may pick them meanwhile
           onPrepSent: (prep) => {
             if (alive.current) setChainAt((c) => ({ ...c, prepSent: true }));
