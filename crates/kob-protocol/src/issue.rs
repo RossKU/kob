@@ -103,9 +103,9 @@ pub const MAX_SUPPLY: u64 = 2_900_000_000_000_000_000;
 /// Default KAS carried by every token UTXO of the genesis group: 10 KAS. Not the order carrier
 /// (`defaults::DEFAULT_ORDER_CARRIER`, 1 KAS): a genesis group puts many token outputs in one
 /// transaction, and a token output's KIP-9 storage mass is `4 × 10^12 / carrier` (plurality 2)
-/// against the [`MAX_STANDARD_MASS`] this tool keeps a genesis within, so 10 KAS outputs fit 24
-/// holders and 1 KAS outputs only 2 (`genesis_holders_at_the_default_carrier`). The relay fee does
-/// not depend on it.
+/// against the 90% of the per-transaction storage limit (500,000) this tool keeps a genesis within, so
+/// 1 KAS outputs fit only 11 holders, while 10 KAS outputs fit the hard cap of [`MAX_GENESIS_OUTPUTS`]
+/// (`genesis_holders_at_the_default_carrier`). The relay fee does not depend on it.
 pub const DEFAULT_CARRIER: u64 = 1_000_000_000;
 /// Default fee rate, sompi per gram.
 ///
@@ -119,8 +119,9 @@ pub const EXTENSION_FIXED_SUPPLY: [u8; 32] = [0u8; 32];
 /// Hard cap on token outputs in one genesis group (a warning is raised above the program's output
 /// slot limit).
 pub const MAX_GENESIS_OUTPUTS: usize = 64;
-/// Standard transaction mass limit (relay policy).
-pub const MAX_STANDARD_MASS: u64 = 100_000;
+/// The per-transaction mass limits (rusty-kaspa v2.1.0 relay and mempool, equal to the block
+/// limits) and the default share of them that an issuance fills ([`IssueSpec::mass_margin_percent`]).
+pub use crate::tx::{DEFAULT_MASS_MARGIN_PERCENT, TX_MASS_LIMITS};
 /// Registry class of the extension commitment used by the tool.
 pub const EXTENSION_CLASS: &str = "fixed-supply-standard";
 /// Id of the standalone 3 / 3 build in `registry/tokens.json` ([`IssueProgram::Ref3x3`], issued
@@ -568,6 +569,9 @@ pub struct IssueSpec {
     pub network: String,
     /// The token program issued (default: the published public-mint build, 3 / 3 slots, no minter).
     pub program: IssueProgram,
+    /// Share of each per-transaction mass limit (compute, transient, storage) that the preparation
+    /// and the genesis may fill, in percent (1..=100; default [`DEFAULT_MASS_MARGIN_PERCENT`]).
+    pub mass_margin_percent: u8,
 }
 
 impl IssueSpec {
@@ -594,6 +598,7 @@ impl IssueSpec {
             telegram: None,
             network: "testnet-10".into(),
             program: IssueProgram::default(),
+            mass_margin_percent: DEFAULT_MASS_MARGIN_PERCENT,
         }
     }
 
@@ -631,6 +636,9 @@ impl IssueSpec {
         }
         if self.holders.is_empty() {
             return invalid("at least one holder is required");
+        }
+        if self.mass_margin_percent == 0 || self.mass_margin_percent > 100 {
+            return invalid(format!("mass margin must be 1..=100 percent (got {})", self.mass_margin_percent));
         }
         if self.holders.len() > MAX_GENESIS_OUTPUTS {
             return invalid(format!("at most {MAX_GENESIS_OUTPUTS} genesis outputs (got {})", self.holders.len()));
@@ -827,12 +835,12 @@ fn contextual_storage_mass(tx: &Transaction, entries: &[UtxoEntry]) -> u64 {
     crate::tx::masses(tx, entries).storage
 }
 
-/// `(compute, storage, size, relay fee mass, the mass checked against MAX_STANDARD_MASS)`: the fee
-/// is the node's relay floor on `max(compute, normalized transient)`; the issuance policy limit
-/// keeps counting every dimension.
-fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> (u64, u64, u64, u64, u64) {
+/// `(compute, storage, size, relay fee mass, the full report)`: the fee is the node's relay floor on
+/// `max(compute, normalized transient)`; the report is checked per dimension against the
+/// per-transaction limits ([`crate::tx::MassReport::check_tx_limits`]).
+fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> (u64, u64, u64, u64, crate::tx::MassReport) {
     let m = crate::tx::masses(tx, entries);
-    (m.compute, m.storage, m.size, m.fee_mass, m.compute.max(m.transient).max(m.storage))
+    (m.compute, m.storage, m.size, m.fee_mass, m)
 }
 
 /// The parts of a genesis that do not depend on its fee: program, token states, outputs (bound to
@@ -1005,8 +1013,8 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
         }
         masses(&measured, &draft.entries)
     };
-    if limit_mass > MAX_STANDARD_MASS {
-        return Err(IssueError::Verify(format!("transaction mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)")));
+    if let Err(e) = limit_mass.check_tx_limits(spec.mass_margin_percent) {
+        return Err(IssueError::Verify(format!("genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)")));
     }
     Ok(GenesisPlan {
         tx,
@@ -1163,10 +1171,8 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
         }
         masses(&measured, &entries)
     };
-    if limit_mass > MAX_STANDARD_MASS {
-        return Err(IssueError::Verify(format!(
-            "preparation mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (too many or too small funding UTXOs)"
-        )));
+    if let Err(e) = limit_mass.check_tx_limits(spec.mass_margin_percent) {
+        return Err(IssueError::Verify(format!("preparation: {e} (too many or too small funding UTXOs)")));
     }
     let prep = PrepPlan {
         tx,
@@ -1260,7 +1266,8 @@ impl CreationPlan {
     ///
     /// - The preparation is version 1 with exactly the declared payload.
     /// - Its output 0 is the P2PK of the creator with the funding value of the genesis.
-    /// - It commits its storage mass, fits the standard mass and pays at least the relay floor.
+    /// - It commits its storage mass, fits the per-transaction mass limits (with the spec's margin)
+    ///   and pays at least the relay floor.
     /// - Once signed, its inputs run in the script engine.
     /// - The genesis spends that output and nothing else.
     /// - The KCC-23 binding of the declaration to the covenant id verifies.
@@ -1289,8 +1296,8 @@ impl CreationPlan {
             }
         }
         let (_, _, _, fee_mass, limit_mass) = masses(&measured, &p.entries);
-        if limit_mass > MAX_STANDARD_MASS {
-            return fail(format!("preparation mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS}"));
+        if let Err(e) = limit_mass.check_tx_limits(self.genesis.spec.mass_margin_percent) {
+            return fail(format!("preparation: {e}"));
         }
         let total_in: u64 = p.entries.iter().map(|e| e.amount).sum();
         let total_out: u64 = p.tx.outputs.iter().map(|o| o.value).sum();
@@ -1445,8 +1452,8 @@ impl GenesisPlan {
             }
         }
         let (compute, storage, size, fee_mass, limit_mass) = masses(&measured, &self.entries);
-        if limit_mass > MAX_STANDARD_MASS {
-            return fail(format!("transaction mass {limit_mass} exceeds the standard limit {MAX_STANDARD_MASS} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)"));
+        if let Err(e) = limit_mass.check_tx_limits(self.spec.mass_margin_percent) {
+            return fail(format!("genesis: {e} (storage mass grows with more or smaller outputs: raise the carrier or issue fewer outputs)"));
         }
         let min_fee = crate::tx::relay_fee_for_mass(fee_mass, self.spec.fee_rate);
         if self.fee < min_fee.min(self.spec.fee.unwrap_or(u64::MAX)) {
@@ -1954,8 +1961,8 @@ mod tests {
     }
 
     /// Why the genesis carrier stays at 10 KAS while the order carrier is 1 KAS: the most holders a
-    /// genesis can have within MAX_STANDARD_MASS (storage mass `4 × 10^12 / carrier` per token
-    /// output).
+    /// genesis can have within 90% of the per-transaction storage limit (storage mass
+    /// `4 × 10^12 / carrier` per token output). At 10 KAS the hard cap binds first.
     #[test]
     fn genesis_holders_at_the_default_carrier() {
         let most = |carrier: u64| {
@@ -1964,13 +1971,61 @@ mod tests {
                     let holders: Vec<Holder> = (0..n).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
                     let mut s = spec(holders, n as u64);
                     s.carrier = carrier;
+                    s.funding = vec![funding(carrier * n as u64 + 10 * 100_000_000, key().1)];
                     build_genesis(&s).is_ok()
                 })
                 .last()
                 .unwrap_or(0)
         };
-        assert_eq!(most(DEFAULT_CARRIER), 24);
-        assert_eq!(most(crate::defaults::DEFAULT_ORDER_CARRIER), 2);
+        println!("MOST holders: 10 KAS {}, 1 KAS {}", most(DEFAULT_CARRIER), most(crate::defaults::DEFAULT_ORDER_CARRIER));
+        assert_eq!(most(DEFAULT_CARRIER), MAX_GENESIS_OUTPUTS);
+        assert_eq!(most(crate::defaults::DEFAULT_ORDER_CARRIER), 11);
+        // the storage the 64-output genesis takes at 10 KAS, and where the margin would stop it
+        let holders: Vec<Holder> = (0..MAX_GENESIS_OUTPUTS).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
+        let mut s = spec(holders, MAX_GENESIS_OUTPUTS as u64);
+        s.funding = vec![funding(1_000 * 100_000_000, key().1)];
+        let g = build_genesis(&s).unwrap();
+        println!("STORAGE 64 x 10 KAS: {} (budget {})", g.storage_mass, crate::tx::tx_mass_budget(DEFAULT_MASS_MARGIN_PERCENT).storage);
+        // a genesis over the margin names the dimension
+        let holders: Vec<Holder> = (0..20).map(|i| Holder::new([i as u8 + 1; 32], 0, 1)).collect();
+        let mut s = spec(holders, 20);
+        s.carrier = crate::defaults::DEFAULT_ORDER_CARRIER;
+        let e = build_genesis(&s).unwrap_err().to_string();
+        assert!(e.contains("storage mass") && e.contains("90% of the per-transaction storage limit 500000"), "{e}");
+        s.mass_margin_percent = 0;
+        assert!(matches!(s.validate().unwrap_err(), IssueError::Invalid(_)));
+    }
+
+    /// The most P2PK funding UTXOs a preparation takes within the mass margin: compute mass binds
+    /// (each input weighs its size plus its compute budget).
+    #[test]
+    fn preparation_funding_inputs_within_the_mass_margin() {
+        let (_, pk) = key();
+        let with = |n: usize| {
+            let mut s = spec(vec![Holder::new(pk, 0, 10)], 10);
+            s.funding = (0..n)
+                .map(|i| FundingUtxo {
+                    outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([9u8; 32]), index: i as u32 },
+                    amount: 100_000_000,
+                    owner_pubkey: pk,
+                })
+                .collect();
+            build_creation(&s)
+        };
+        let (mut lo, mut hi) = (20usize, 1_000usize);
+        assert!(with(lo).is_ok() && with(hi).is_err());
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2;
+            if with(mid).is_ok() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let e = with(hi).unwrap_err().to_string();
+        println!("MOST funding inputs: {lo} ({e})");
+        assert!(e.contains("preparation: compute mass"), "{e}");
+        assert_eq!(lo, 400);
     }
 
     #[test]

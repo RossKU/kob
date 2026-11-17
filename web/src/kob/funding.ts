@@ -9,18 +9,18 @@ import type { KeyUtxo, TokenProgram, TokenUtxo } from './types';
  */
 export const DEFAULT_FEE_RESERVE = 5_000_000n;
 /**
- * The most KAS inputs one placement uses. Beyond it the mass nears the standard limit, so the
- * wallet must consolidate first.
+ * The most KAS inputs one placement uses; beyond it the wallet must consolidate first. It keeps the
+ * fee and the signing small: a P2PK input weighs about 1,120 compute mass, so the per-transaction
+ * compute limit (500,000) alone would allow several hundred.
  */
 export const MAX_FUNDING_INPUTS = 50;
 
 /**
  * The most token inputs of one token that the spare-slot fill of `selectTokens` takes a placement
  * to. It equals the slots of KOB's standard program, KCC20Ref 3 by 3. The spare slots of a larger
- * program are not filled, because a sell placement with 8 token inputs exceeds the 100,000 standard
- * mass that KOB's tools keep (kob-protocol issue.rs `MAX_STANDARD_MASS`), and every extra input
- * only adds fee. At 3 inputs the mass stays far below it, as funding.test.ts measures. The covering
- * set itself may still use every slot.
+ * program are not filled, because every extra input only adds fee: a sell placement with 8 token
+ * inputs weighs about 105,000 (within the per-transaction limits, 500,000 compute), with 3 under
+ * 60,000 (simple.test.ts). The covering set itself may still use every slot.
  */
 export const MAX_SPARE_TOKEN_INPUTS = 3;
 

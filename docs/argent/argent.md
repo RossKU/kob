@@ -362,7 +362,7 @@ KobBidKron 1 and 1,090, then the token handles' own: KCC20 3/3 1 and 2,802, the 
 prototype 1 and 6,237, KRON 0 and 2,387 or 2,686); the `expire` and the `cancel` of a token intent take the locked token's
 two. Slot limit: at most 3 escrow inputs and 4 token outputs in one token group, bounded further by the token's program (the
 standard 3/3 program has no room for the three-bid sells); the largest transaction (`swap2`: 8 inputs, 2 bids, 2 asks) is 38.8 kB and 53.0k
-compute mass, under the 100k standard limit.
+compute mass, within the per-transaction limits (compute 500,000, transient 1,000,000).
 
 What the router pins and what it leaves to the orders. The router observes each order's shape (one
 input, zero or one output of its covenant) and pins the token flows: custody change, deliveries,

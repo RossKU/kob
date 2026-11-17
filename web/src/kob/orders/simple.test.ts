@@ -771,14 +771,15 @@ describe('funding and token selection', () => {
     const tokenOutKas = sum(tokenOuts.map((o) => BigInt(o.value)));
     expect(kasChange).toBe(fundingIn + 30n * KAS - BigInt(built.tx.outputs[0].value) - tokenOutKas - BigInt(built.fee.fee));
     expect(p.disclosure!.carriers.find((c) => c.kind === 'tokenChangeCarrier')).toMatchObject({ kept: true });
-    expect(built.fee.mass.priorityMass).toBeLessThan(100_000);
+    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000 on the compute scale)
+    expect(built.fee.mass.priorityMass).toBeLessThan(450_000);
   });
 
-  it('the spare fill stops at 3 token inputs on the 8 / 8 program: the placement stays far below the standard mass', () => {
+  it('the spare fill stops at 3 token inputs on the 8 / 8 program: the placement stays far below the per-transaction limits', () => {
     const env = makeEnv({ market: market8x8(), tokenAmounts: Array.from({ length: 8 }, (_, i) => BigInt(i + 1) * TOK) });
     const p = planValid(env, { type: 'limit', side: 'sell', price: P, amount: 8n * TOK });
     expect(p.built!.tx.inputs.filter((i) => i.utxo.covenantId)).toHaveLength(3);
-    // max(compute, normalized transient, storage): the mempool's standard limit is 100,000 (8 inputs would weigh 105,546)
+    // max(compute, normalized transient, storage) against the 500,000 limit: 8 inputs would weigh 105,546 and pay more fee
     expect(p.built!.fee.mass.priorityMass).toBeLessThan(60_000);
   });
 
