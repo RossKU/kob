@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { loadKobNode } from './wasm.node';
 import {
-  curveNumbers, curveSteps, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
+  curveNumbers, curveSteps, defaultSalePrice, curveTable, currentLevel, defaultSaleForm, keepPercentText, levelSizes, parsePercent, parseSale, saleSplit, stepGeometry,
 } from './curve';
 
 const kob = loadKobNode();
@@ -110,6 +110,8 @@ describe('sale split ("Keep in my wallet")', () => {
     // "Keep all in my wallet": nothing to parse
     expect(parseSale(defaultSaleForm(), 1n, 0)).toEqual({ issues: [], parsed: null });
     // a one-price sale has no levels or multiple
-    expect(parseSale({ ...f, mode: 'ask', levels: 'x', multiple: 'x' }, 10n, 0).issues).toEqual([]);
+    expect(parseSale({ ...f, mode: 'ask', levels: 'x', multiple: 'x', price: '2.5' }, 10n, 0)).toMatchObject({ issues: [], parsed: { sell: 10n, price: 250_000_000n, total: 25n * KAS } });
+    expect(parseSale({ ...f, mode: 'ask', price: '' }, 10n, 0).issues.map((i) => i.code)).toEqual(['sale.price.invalid']);
+    expect(defaultSalePrice(1_000_000n * WHOLE, SCALE)).toBe(1_000_000n);
   });
 });

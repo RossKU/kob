@@ -20,7 +20,8 @@ import { schnorr } from '@noble/curves/secp256k1.js';
 import { atFloor, capForTotal, describeFee, rememberFeeChoice, withUrgency, type FeeContext, type RatePick } from './fee-policy';
 import type { PlanIssue } from './plan-types';
 import { normalizeTicker } from './registry';
-import type { BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
+import { curveNumbers, curveTable, parseSale, type CurveNumbers, type CurveTable, type SaleForm } from './curve';
+import type { AnyState, BuiltTx, Hex, Kcc20State, KeyUtxo, TokenUtxo, U64 } from './types';
 import { KobError, type KobWasm } from './wasm';
 
 // ------------------------------------------------------------------------------- kob-wasm boundary
@@ -103,6 +104,31 @@ export interface IssueSpec {
    * (`KCC20Ref`, the standalone 3 / 3).
    */
   program?: '3x3' | 'public-mint';
+  /** A `KobCurveAsk` created in this genesis, unbound: holder `custody` (owner zero, scheme 0x04) is its custody. */
+  curve?: IssueCurveSpec;
+}
+
+/** The curve of an `IssueSpec` (kob-wasm fills the maker, the token fields, `total` and `amountLeft`). */
+export interface IssueCurveSpec {
+  custody: number;
+  levelSize: U64;
+  table: U64[];
+  minFill: U64;
+  tip?: U64;
+  activeFrom?: U64;
+  /** KAS on the curve's UTXO (default: the token carrier) */
+  carrier?: U64;
+}
+
+/** Where the genesis placed its curve. */
+export interface IssueCurve {
+  covenantId: Hex;
+  output: number;
+  /** the token output that is its custody */
+  custody: number;
+  carrier: U64;
+  /** `KobCurveAsk`, unbound */
+  state: Extract<AnyState, { kind: 'KobCurveAsk' }>;
 }
 
 /** One token output of the issued genesis. */
@@ -196,6 +222,8 @@ export interface IssueResult {
   declaration: IssueDeclaration;
   token: IssueToken;
   docs: IssueDocs;
+  /** the curve this genesis places ("Sell on a curve") */
+  curve?: IssueCurve;
   warnings: string[];
 }
 
@@ -344,6 +372,11 @@ export interface IssueForm {
   telegram?: string;
   /** Permit a non-zero borrow scheme on non-covenant holders (never set by the default form). */
   allowBorrow?: boolean;
+  /**
+   * "After creation": keep all, sell at one price (a KobAsk placed once the token exists) or sell on a curve (a KobCurveAsk in the genesis).
+   * The sale takes the wallet's share; what is kept is a separate output of the wallet.
+   */
+  sale?: SaleForm;
 }
 
 /** A blank form with the default decimals. */
@@ -632,6 +665,22 @@ export interface IssuePlan extends IssueResult {
   spec: IssueSpec;
   /** Network fee in sompi: the preparation's and the genesis's together. */
   fee: bigint;
+  /** the sale chosen under "After creation" */
+  sale?: PlannedSale;
+}
+
+/** A sale of the creation: base units for sale and kept, and the genesis output that holds the part for sale. */
+export interface PlannedSale {
+  mode: 'ask' | 'curve';
+  sell: bigint;
+  keep: bigint;
+  /** a curve: its custody; one price: the wallet output the ask spends */
+  output: number;
+  /** sompi if sold out */
+  total: bigint;
+  curve?: { table: CurveTable; minFill: bigint; numbers: CurveNumbers };
+  /** one price: sompi per whole token */
+  price?: bigint;
 }
 
 /**
@@ -672,7 +721,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
   if (!HEX32.test(maker)) throw new IssueFormError([issue('maker.invalid', 'The wallet key is not a 32-byte x-only public key.', undefined)]);
 
   const feeRate = opts.feeRate ?? BigInt(limits.defaultFeeRate);
-  const holders: IssueHolderSpec[] =
+  let holders: IssueHolderSpec[] =
     parsed.holders.length > 0
       ? parsed.holders.map((h) => ({
           owner: h.owner,
@@ -681,7 +730,36 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
           ...(h.borrowScheme !== 0 ? { borrowScheme: h.borrowScheme, borrowGuard: h.borrowGuard } : {}),
         }))
       : [{ owner: maker, ownerScheme: 0, amount: parsed.supply.toString() }];
-  const outputs = BigInt(holders.length);
+  // "After creation": the sale takes the wallet's share; the kept part is a separate output of the wallet
+  let curve: IssueCurveSpec | undefined;
+  let sale: PlannedSale | undefined;
+  if (form.sale && form.sale.mode !== 'keep') {
+    const at = holders.findIndex((h) => h.owner === maker && h.ownerScheme === 0);
+    if (at < 0) throw new IssueFormError([issue('sale.no_share', 'Your wallet receives no tokens to sell: give it a share of the supply.', 'sale.amount')]);
+    const ps = parseSale(form.sale, BigInt(holders[at]!.amount), form.decimals);
+    if (!ps.parsed) throw new IssueFormError(ps.issues);
+    const p = ps.parsed;
+    const scale = 10n ** BigInt(form.decimals);
+    const kept: IssueHolderSpec[] = p.keep > 0n ? [{ owner: maker, ownerScheme: 0, amount: p.keep.toString() }] : [];
+    const forSale: IssueHolderSpec =
+      p.mode === 'curve' ? { owner: ZERO32, ownerScheme: limits.covenantOwnerScheme, amount: p.sell.toString() } : { owner: maker, ownerScheme: 0, amount: p.sell.toString() };
+    holders = [...holders.slice(0, at), forSale, ...kept, ...holders.slice(at + 1)];
+    if (p.mode === 'curve') {
+      let table: CurveTable;
+      try {
+        table = curveTable(kob, { amount: p.sell, levels: p.levels, total: p.total, multipleMilli: p.multipleMilli, scale });
+      } catch (e) {
+        throw new IssueFormError([issue('sale.curve.invalid', e instanceof Error ? e.message : String(e), 'sale.levels')]);
+      }
+      const minFill = kob.defaultMinFill(p.sell, table.table[0]!, scale);
+      curve = { custody: at, levelSize: table.levelSize.toString(), table: table.table.map(String), minFill: minFill.toString() };
+      sale = { mode: 'curve', sell: p.sell, keep: p.keep, output: at, total: table.realised, curve: { table, minFill, numbers: curveNumbers(table, p.sell, scale) } };
+    } else {
+      sale = { mode: 'ask', sell: p.sell, keep: p.keep, output: at, total: p.total, price: p.price };
+    }
+  }
+  // a curve's own UTXO carries KAS too (the token carrier)
+  const outputs = BigInt(holders.length + (curve ? 1 : 0));
 
   // Only plain P2PK UTXOs of the maker can fund the genesis, because the wallet signs every input
   // with its one key.
@@ -694,7 +772,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     new IssueFormError([
       issue(
         'funds.insufficient',
-        `Not enough KAS: the issuance locks ${formatUnits(carriers, 8)} KAS in ${holders.length} token output(s) (returned when the tokens are spent or consolidated) plus the network fee; the wallet has ${formatUnits(have, 8)} KAS spendable.`,
+        `Not enough KAS: the issuance locks ${formatUnits(carriers, 8)} KAS in ${outputs} output(s) (returned when the tokens are spent or consolidated) plus the network fee; the wallet has ${formatUnits(have, 8)} KAS spendable.`,
         undefined,
         { need: carriers, have },
       ),
@@ -703,7 +781,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
 
   // The smallest largest-first prefix covering the carriers and an estimated fee. It grows on
   // demand.
-  const reserve = feeRate * estimateFeeMass(holders.length);
+  const reserve = feeRate * estimateFeeMass(Number(outputs));
   let count = 0;
   let acc = 0n;
   while (count < candidates.length && acc < carriers + reserve) acc += BigInt(candidates[count++].amount);
@@ -725,6 +803,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
     ...(form.x && socialUrl('x', form.x) ? { x: socialUrl('x', form.x)! } : {}),
     ...(form.telegram && socialUrl('telegram', form.telegram) ? { telegram: socialUrl('telegram', form.telegram)! } : {}),
     network: opts.network,
+    ...(curve ? { curve } : {}),
   };
   for (;;) {
     let spec: IssueSpec = { ...base, funding: candidates.slice(0, count) };
@@ -748,7 +827,7 @@ function planIssueAt(kob: KobWasm, form: IssueForm, opts: PlanIssueOptions): Iss
         rememberFeeChoice(r.prep, describeFee(opts.fees.policy, opts.feePick, rate, BigInt(r.prep.fee.fee)));
         rememberFeeChoice(r.built, describeFee(opts.fees.policy, opts.feePick, rate, BigInt(r.built.fee.fee)));
       }
-      return { ...r, spec, fee: total(r) };
+      return { ...r, spec, fee: total(r), ...(sale ? { sale } : {}) };
     } catch (e) {
       if (e instanceof KobError && /insufficient funds/.test(e.message) && count < candidates.length) {
         count += 1;

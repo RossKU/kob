@@ -223,10 +223,12 @@ export interface SaleForm {
   totalKas: string;
   /** last level / first level */
   multiple: string;
+  /** a one-price sale: KAS per whole token */
+  price: string;
 }
 
 export function defaultSaleForm(): SaleForm {
-  return { mode: 'keep', keepPct: CURVE_DEFAULTS.keepPct, amount: '', levels: CURVE_DEFAULTS.levels, totalKas: CURVE_DEFAULTS.totalKas, multiple: CURVE_DEFAULTS.multiple };
+  return { mode: 'keep', keepPct: CURVE_DEFAULTS.keepPct, amount: '', levels: CURVE_DEFAULTS.levels, totalKas: CURVE_DEFAULTS.totalKas, multiple: CURVE_DEFAULTS.multiple, price: '' };
 }
 
 /** A sale form after parsing. */
@@ -239,6 +241,8 @@ export interface ParsedSale {
   /** sompi if sold out */
   total: bigint;
   multipleMilli: bigint;
+  /** a one-price sale: sompi per whole token */
+  price: bigint;
 }
 
 const issue = (code: string, message: string, field: string, params?: PlanIssue['params']): PlanIssue => ({ code, severity: 'error', message, field: `sale.${field}`, ...(params ? { params } : {}) });
@@ -264,8 +268,14 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
     if (sell <= 0n) issues.push(issue('sale.amount.zero', 'Nothing is left for sale: lower the share you keep.', 'amount'));
     else if (sell > share) issues.push(issue('sale.amount.too_large', 'The amount for sale is more than your share of the supply.', 'amount'));
   }
-  const total = parseDecimal(f.totalKas, 8);
+  const total = f.mode === 'curve' ? parseDecimal(f.totalKas, 8) : ({ value: 1n } as const);
   if ('error' in total || total.value <= 0n) issues.push(issue('sale.total.invalid', 'Enter the KAS if sold out as a positive number.', 'totalKas'));
+  let price = 0n;
+  if (f.mode === 'ask') {
+    const p = parseDecimal(f.price, 8);
+    if ('error' in p || p.value <= 0n) issues.push(issue('sale.price.invalid', 'Enter the price per token in KAS.', 'price'));
+    else price = p.value;
+  }
   let levels = 1;
   let multipleMilli = 1000n;
   if (f.mode === 'curve') {
@@ -276,7 +286,15 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
     else multipleMilli = m.value;
   }
   if (issues.length || sell === null || share === null || 'error' in total) return { issues, parsed: null };
-  return { issues, parsed: { mode: f.mode, sell, keep: share - sell, levels, total: total.value, multipleMilli } };
+  const sold = f.mode === 'ask' ? (sell * price + (10n ** BigInt(decimals) - 1n)) / 10n ** BigInt(decimals) : total.value;
+  return { issues, parsed: { mode: f.mode, sell, keep: share - sell, levels, total: sold, multipleMilli, price } };
+}
+
+/** The default one price of a sale: 10,000 KAS over the amount (sompi per whole token, at least 1). */
+export function defaultSalePrice(sell: bigint, scale: bigint): bigint {
+  if (sell <= 0n) return 1n;
+  const p = (BigInt(CURVE_DEFAULTS.totalKas) * SOMPI * scale) / sell;
+  return p > 0n ? p : 1n;
 }
 
 /** KAS text of sompi. */
