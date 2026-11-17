@@ -162,7 +162,7 @@ test.describe('order ticket', () => {
     await fundAlice(mock);
     await openTicket(page, mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '2' });
+    await fillFields(page, { amount: '2', direct: 'order' });
     await clickPlaceOnly(page);
     const first = await readReceipt(page);
     expect(first.title).toBe('Place order');

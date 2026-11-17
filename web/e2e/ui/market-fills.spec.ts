@@ -42,7 +42,7 @@ test('a market buy against many small asks: one transaction takes 3, with Fills 
   await connectWallet(page, 'kasware');
   await expect(page.getByTestId('order-ticket')).toBeVisible();
   await pickType(page, 'market', 'buy');
-  await fillFields(page, { amount: '9' });
+  await fillFields(page, { amount: '9', direct: 'order' });
   await settlePlan(page);
 
   // fills 1: one transaction takes 3 of the 9 asks, the rest returns
@@ -96,7 +96,7 @@ test('a market sell with Fills: no carrier per fill; FOK hides the box', async (
   await fund(mock);
   await openMarket(page, mock);
   await pickType(page, 'market', 'sell');
-  await fillFields(page, { amount: '2', maxFills: '2' });
+  await fillFields(page, { amount: '2', maxFills: '2', direct: 'order' });
   await settlePlan(page);
   await expect(page.getByTestId('field-maxFills-note')).toHaveCount(0);
   // the minimum fill (the smallest bid, 2 tokens) leaves one fill for 2 tokens: the typed 2 fills are cut to 1, and the ticket says so

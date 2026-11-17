@@ -57,7 +57,7 @@ test.describe('fill-or-kill pre-check', () => {
     await fund(mock, 'alice', { tokens: 500n });
     await openMarket(page, mock);
     await pickType(page, 'fok', 'sell');
-    await fillFields(page, { amount: '400', price: '0.0245' }); // far more than all bids at or above 0.0245 hold
+    await fillFields(page, { amount: '400', price: '0.0245', direct: 'order' }); // far more than all bids at or above 0.0245 hold
     const issue = page.getByTestId('order-issue-FOK_INSUFFICIENT_DEPTH');
     await expect(issue).toBeVisible({ timeout: 30_000 });
     await expect(issue).toContainText('400 EXKCC');
@@ -74,7 +74,7 @@ test.describe('fill-or-kill pre-check', () => {
     await seedOrders(mock, Array.from({ length: 12 }, () => ({ side: 'bid' as const, price: 2_490_000, tokens: 1, maker: 'maker' as const })));
     await openMarket(page, mock);
     await pickType(page, 'fok', 'sell');
-    await fillFields(page, { amount: '17', price: '0.0249' });
+    await fillFields(page, { amount: '17', price: '0.0249', direct: 'order' });
     const issue = page.getByTestId('order-issue-FOK_TOO_MANY_COUNTERPARTIES');
     await expect(issue).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId('order-place')).toBeDisabled();
@@ -94,7 +94,7 @@ test.describe('fill-or-kill pre-check', () => {
     await openMarket(page, mock);
     await pickType(page, 'fok', 'sell');
     // 8 = 6 + 2 of the second bid, below its minimum of 3; no other split exists
-    await fillFields(page, { amount: '8', price: '0.025' });
+    await fillFields(page, { amount: '8', price: '0.025', direct: 'order' });
     const issue = page.getByTestId('order-issue-FOK_MIN_FILL_BLOCKS');
     await expect(issue).toBeVisible({ timeout: 30_000 });
     await expect(issue).toContainText('at least 3 EXKCC');

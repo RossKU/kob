@@ -76,7 +76,7 @@ test.describe('order flow: one button, the wallet approves', () => {
     /** A small market BUY (below 100 KAS: no start acknowledgement). */
     async function typeMarketBuy(page: Page): Promise<void> {
       await pickType(page, 'market', 'buy');
-      await fillFields(page, { amount: '1' });
+      await fillFields(page, { amount: '1', direct: 'order' });
     }
 
     test('a slow first approval: the ticket plans again with the current clock and the second request is the one sent', async ({ appPage: page, mock, wallet }) => {
@@ -164,7 +164,7 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'market', 'sell');
-    await fillFields(page, { amount: '1' });
+    await fillFields(page, { amount: '1', direct: 'order' });
     await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
     await expect(page.getByTestId('order-ticket').locator('input[type="checkbox"][data-testid$="-ack"]')).toHaveCount(0);
     await clickPlace(page);
@@ -187,7 +187,7 @@ test.describe('no acknowledgement boxes: what the ticket cannot check stops the 
       await fund(mock);
       await openMarket(page, mock);
       await pickType(page, 'market', 'buy');
-      await fillFields(page, { amount: '1' });
+      await fillFields(page, { amount: '1', direct: 'order' });
       const issue = page.getByTestId('order-issue-MARKET_START_VS_INDEXER');
       await expect(issue).toBeVisible({ timeout: 20_000 });
       await expect(issue).toHaveAttribute('data-severity', 'error');
@@ -242,7 +242,7 @@ test.describe('the book moves between the ticket and the click', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '1' });
+    await fillFields(page, { amount: '1', direct: 'order' });
     await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
     await slowBooks(page);
     const { before, after } = await liftBestAsks(mock);
@@ -262,7 +262,7 @@ test.describe('the book moves between the ticket and the click', () => {
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '1', slippageBps: '0.1' });
+    await fillFields(page, { amount: '1', slippageBps: '0.1', direct: 'order' });
     await expect(page.getByTestId('order-place')).toBeEnabled({ timeout: 15_000 });
     await slowBooks(page);
     const { before, after } = await liftBestAsks(mock);
@@ -280,7 +280,7 @@ test.describe('the planner\'s warnings are not on the ticket (founder, 2026-11-0
     await fund(mock);
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
-    await fillFields(page, { amount: '1', price: '0.0245' });
+    await fillFields(page, { amount: '1', price: '0.0245', crossing: 'auction' }); // an order on the book (a direct fill would take the asks at their price)
     await settlePlan(page);
     const before = (await page.getByTestId('order-place').boundingBox())!;
     // twice the market (0.025): a typing error, but the user's order

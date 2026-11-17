@@ -161,7 +161,7 @@ test.describe('standalone mode', () => {
 
     // a market buy is planned from that book after the node check (the best ask the indexer listed, which the node confirms), signed by the wallet and sent to the node
     await pickType(page, 'market', 'buy');
-    await fillFields(page, { amount: '2' });
+    await fillFields(page, { amount: '2', direct: 'order' });
     await clickPlace(page);
     const buy = await placedWithoutIndexer(mock, await waitSubmitted(page));
     expect(onChainTerms(buy)[0]!.state.price).toBe(best.toString());
