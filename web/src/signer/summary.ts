@@ -65,6 +65,7 @@ const TITLE: Record<SigningKind, string> = {
   refund: 'signer.kind.refund',
   send: 'signer.kind.send',
   sweep: 'signer.kind.sweep',
+  take: 'signer.kind.take',
   other: 'signer.kind.other',
 };
 
@@ -390,6 +391,14 @@ export function summaryLines(s: SigningSummary, appHints: TokenHint[], kob?: Kob
     lines.push({ label: t(sp.action === 'sweep' ? 'signer.net.sweeps' : sp.retired ? 'signer.net.closesRetired' : 'signer.net.closes'), value: longId(sp.covenantId!), dir: null });
   }
   if (k.toOthers > 0n) lines.push({ label: t('signer.net.toOthers'), value: kas(k.toOthers), dir: 'out' });
+  // a take: the resting orders it fills at their own prices, and the price on average
+  if (s.take) {
+    const tk = s.take;
+    const hint = hints.find((h) => h.covenantId === tk.ref.covenantId);
+    const unit = hint && hint.source !== 'assumed' && hint.ticker ? hint.ticker : longId(tk.ref.covenantId);
+    lines.push({ label: t('signer.take.fills'), value: t('signer.take.fillsValue', { orders: tk.fills.length, amount: `${formatTokenAmount(tk.amount, hint ? hint.decimals : RAW_TOKEN_DECIMALS)} ${unit}` }), dir: null });
+    if (tk.avgPrice !== null) lines.push({ label: t('signer.take.price'), value: t('signer.take.priceValue', { price: formatKas(tk.avgPrice), unit }), dir: null });
+  }
   const fromTokens = freedFromTokens(s);
   if (fromTokens > 0n) lines.push({ label: t('signer.net.fromTokens'), value: kas(fromTokens), dir: null });
   const registry = hintRegistry(hints);

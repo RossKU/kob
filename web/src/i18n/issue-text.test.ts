@@ -275,6 +275,7 @@ describe('issueText: pre-sign findings of the decoder', () => {
       'other-strays-swept': { input: 1, params: { amount: '2.5 TSTB', token: 'TSTB (7171…7171)' } },
       'sweep-invalid': { output: 0, input: 0 }, 'expected-sweep-ids': { params: { expected: 1, actual: 0 } }, 'sweep-custody-spent': { input: 1 }, 'retired-not-cancel': { input: 0 },
       'swept-in-place': { input: 0, output: 0, params: { utxos: 3 } },
+      'take-amount': { params: { expected: 2000n, actual: 3000n } }, 'take-price': { params: { kas: 5n * KAS, bound: 4n * KAS } }, 'take-fills': { params: { orders: 2 } }, 'take-orders': {},
     };
     expect(Object.keys(sample).sort()).toEqual([...SIGNING_ISSUE_CODES].sort());
     for (const code of SIGNING_ISSUE_CODES) {

@@ -56,6 +56,9 @@ export default {
   'issues.MARKETABLE_AUCTION': 'Your limit crosses the market: it fills immediately as a taker, auctioning from the best price ({touch}) toward your limit; any rest stays at your limit.',
   'issues.MARKETABLE_LIMIT_FILLS_AT_LIMIT': 'Your limit crosses the market: it fills immediately as a taker at your limit; the matcher keeps the difference to {touch}.',
   'issues.MARKETABLE_REJECTED': 'Your limit crosses the market at {touch}.',
+  'issues.TAKE_FOK_UNFILLED': 'Fill or kill: the book cannot fill all {amount} at your price in one transaction. Nothing is placed.',
+  'issues.TAKE_REST_NOT_PLACED': 'What the book cannot fill now ({rest}) is not placed.',
+  'issues.TAKE_NOW': 'Your limit crosses the book: it fills now from {orders} resting order(s) at their prices. No executor; you pay only the network fee.',
   'issues.PRICE_AGGRESSIVE_VS_MARKET': 'Your price is {percent}% through the market ({reference}). Check for a typing error.',
   'issues.PRICE_FAR_FROM_MARKET': 'Your price is {percent}% from the market ({reference}): unlikely to fill soon.',
   // the book is empty: the reference is the last trade price (finding param basis = 'last')
@@ -165,6 +168,10 @@ export default {
   'issues.sweep-invalid': 'A sweep record does not verify: the order would not continue under the same contract. Not signing. Details: {message}',
   'issues.expected-sweep-ids': 'The plan sweeps {expected} order(s), the transaction {actual}. Not signing.',
   'issues.sweep-custody-spent': 'Input {input}: the sweep spends the order\'s custody, which it must leave in place. Not signing.',
+  'issues.take-amount': 'The fill would move {actual} of the token, not the {expected} planned.',
+  'issues.take-price': 'The fill would cost {kas}, beyond the {bound} your limit allows.',
+  'issues.take-orders': 'The orders this transaction fills are not the ones planned.',
+  'issues.take-fills': 'Fills {orders} resting order(s) from the book.',
   'issues.swept-in-place': 'Input {input}: the order continues unchanged at output {output}; only its {utxos} stray token UTXO(s) return to you.',
 
   // ================================================================ wallet-popup notices (describeInputsForWallet)

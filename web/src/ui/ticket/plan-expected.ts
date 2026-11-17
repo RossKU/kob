@@ -6,6 +6,14 @@ import type { OrderPlan } from '../../kob/plan-types';
 
 export function expectedFromPlan(plan: OrderPlan): ExpectedSigning {
   const d = plan.disclosure;
+  // a take creates no order: the tokens it trades, the KAS bound at the limit and the orders it fills
+  const tk = plan.take;
+  if (tk) {
+    return {
+      orders: [],
+      take: { side: tk.side, token: tk.token, amount: tk.amount, bound: tk.bound, orders: tk.steps[0]!.fills.map((f) => f.covenantId) },
+    };
+  }
   return {
     orders: plan.states,
     ...(d ? { kasLocked: d.kasLocked, tokensEscrowed: d.tokensEscrowed } : {}),

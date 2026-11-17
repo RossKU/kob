@@ -42,7 +42,7 @@ import { NodeError, describeNodeError } from '../data/node-error';
 import { SnapshotError, snapshotFromOrderView, type OrderSnapshot } from '../kob/cancel';
 import { confirmSnapshotsOnNode } from '../kob/node-verify';
 import { describeOrder } from '../kob/order-facts';
-import type { DroppedBookOrder } from '../kob/plan-types';
+import type { BookOrderUtxo, DroppedBookOrder } from '../kob/plan-types';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
 
@@ -106,6 +106,8 @@ export interface VerifiedBook {
   dropped: DroppedBookOrder[];
   /** Rows behind the verified depth, left out of `view` and never looked at. */
   beyond: number;
+  /** The node-confirmed UTXOs of the orders kept, by covenant id in lower case (what a take spends). */
+  orders: Map<string, BookOrderUtxo>;
 }
 
 const isOrderRow = (r: LevelView | BookOrderView): r is BookOrderView => 'covenant_id' in r;
@@ -252,10 +254,10 @@ export async function confirmOrders(
   return out;
 }
 
-/** The verdict of each row. Rejects only when the node cannot be asked. */
-async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<Verdict[]> {
+/** The verdict of each row, with the node-confirmed snapshot. Rejects only when the node cannot be asked. */
+async function checkRows(deps: BookVerifyDeps, rows: readonly { row: BookOrderView; side: 'sell' | 'buy' }[]): Promise<{ v: Verdict; snap: OrderSnapshot | null }[]> {
   const got = await confirmOrders(deps, rows.map((r) => r.row));
-  return got.map((g, i) => (g ? judge(deps, rows[i]!.row, rows[i]!.side, g.claimed, g.confirmed) : 'unproven'));
+  return got.map((g, i) => (g ? { v: judge(deps, rows[i]!.row, rows[i]!.side, g.claimed, g.confirmed), snap: g.confirmed instanceof SnapshotError ? null : g.confirmed } : { v: 'unproven', snap: null }));
 }
 
 // The book.
@@ -310,6 +312,7 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     return { side, rows, levels: rows.length > 0 && !rows.every(isOrderRow), cands, next: 0, confirmed: 0, depth: 0n, kept: [] as BookOrderView[] };
   });
   const dropped: DroppedBookOrder[] = [];
+  const orders = new Map<string, BookOrderUtxo>();
   for (const s of sides) {
     if (!s.levels) continue;
     for (const r of s.rows) dropped.push(dropOf(r, s.side, 'unchecked'));
@@ -323,8 +326,9 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     for (const s of sides) if (!satisfied(s)) s.next = Math.min(s.next + BOOK_CHECK_PER_SIDE, BOOK_CHECK_MAX_ROWS);
     const verdicts = await checkRows(deps, batch.map((b) => ({ row: b.row, side: b.s.side })));
     batch.forEach((b, i) => {
-      const v = verdicts[i]!;
+      const { v, snap } = verdicts[i]!;
       if (typeof v === 'object') {
+        if (snap) orders.set(b.row.covenant_id.toLowerCase(), { covenantId: snap.covenantId, order: snap.order, custody: snap.custody });
         // An ask's amount is the custody the node holds. The row's own word counts only where the
         // order has no custody to read, which is a bid, and then only up to what the node-confirmed
         // KAS of the bid can buy at its price.
@@ -358,6 +362,6 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   const asks = rowsOf(a);
   const bids = rowsOf(b);
   const beyond = beyondOf(a) + beyondOf(b);
-  if (!dropped.length && !beyond && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped, beyond };
-  return { view: { ...view, asks, bids }, dropped, beyond };
+  if (!dropped.length && !beyond && same(view.asks, asks) && same(view.bids, bids)) return { view, dropped, beyond, orders };
+  return { view: { ...view, asks, bids }, dropped, beyond, orders };
 }

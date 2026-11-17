@@ -23,6 +23,7 @@ import {
   estimateFills, touchPrice,
 } from '../guards';
 import { bpsFloor, ceilDiv, fitsI64, roundToTick } from '../units';
+import { planTakeAtFloor, type TakeMode } from '../take';
 import {
   DEFAULT_BID_FILLS, buildCreate, carrierOf, defaultMinFillFor, failedPlan, finishPlan, hasError, heldAmount, issue, makeAsk, makeBid, makeDisclosure,
 } from './common';
@@ -224,8 +225,14 @@ function planLimit(env: PlanEnv, i: LimitIntent): OrderPlan {
 
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
   const x = future ? { crossing: false, touch: null } : crossingTouch(env.book, i.side, i.price, tip);
+  if (x.crossing && x.touch !== null && i.crossing === 'take') {
+    // Filled now from the wallet (kob/take.ts), the rest rests as a plain limit at the user's price; a
+    // book with nothing it can take places it as an auction.
+    const t = tryTake(env, i.side, i.amount, i.price, tip, pre, { restKind: 'limit', rest: (e, amount) => planLimit(e, { ...i, amount, crossing: 'limit' }) });
+    if (t) return t;
+  }
   if (x.crossing && x.touch !== null) {
-    const policy = i.crossing ?? 'auction';
+    const policy = i.crossing === 'take' || i.crossing === undefined ? 'auction' : i.crossing;
     const start = i.side === 'sell' ? (x.touch > i.price ? x.touch : i.price) : x.touch < i.price ? x.touch : i.price;
     if (policy === 'reject') {
       pre.push(issue('MARKETABLE_REJECTED', { touch: x.touch }, 'price'));
@@ -279,6 +286,20 @@ function crossingBuy(env: PlanEnv, d: Draft, amount: bigint, bound: bigint, tip:
   return withFills(place(env, d, pre), facts);
 }
 
+/**
+ * A take of what crosses `limit` now (kob/take.ts), or null when the book has nothing to take (the
+ * caller places the order as before). A self-trade, or a FOK the book cannot fill in one
+ * transaction, is refused.
+ */
+function tryTake(env: PlanEnv, side: 'sell' | 'buy', amount: bigint, limit: bigint, tip: bigint, pre: PlanIssue[], mode: TakeMode): OrderPlan | null {
+  const own = checkSelfTrade(env.ownOrders, { side, price: limit, tip });
+  if (hasError(own)) return failedPlan([...pre, ...own]);
+  if (hasError(pre)) return null;
+  const r = planTakeAtFloor(env, side, amount, limit, pre, mode);
+  if ('plan' in r) return r.plan;
+  return mode.fok && r.none?.severity === 'error' ? failedPlan([...pre, r.none]) : null;
+}
+
 // ---- IOC / FOK
 
 function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
@@ -299,6 +320,11 @@ function planImmediate(env: PlanEnv, i: IocIntent | FokIntent): OrderPlan {
   d.fills = 1n;
   d.notes.push(i.type === 'fok' ? 'fokAllOrNothing' : 'iocRemainderReturned');
   pre.push(...checkMarketBand(env.book, env.lastFillPrice, i.side, i.price));
+  // Direct fill: an IOC takes what crosses and places nothing more, a FOK all in one transaction or nothing.
+  if (i.take && !future) {
+    const t = tryTake(env, i.side, i.amount, i.price, tip, pre, { restKind: 'none', fok: i.type === 'fok' });
+    if (t) return t;
+  }
   // FOK: the pre-check refuses what one transaction cannot fill (checkFok). An IOC fills what one
   // transaction takes and returns the rest.
   if (i.type === 'fok' || future) return place(env, d, pre);
@@ -467,6 +493,18 @@ function withBuyingPower(env: PlanEnv, p: OrderPlan): OrderPlan {
 
 function planMarket(env: PlanEnv, i: MarketIntent): OrderPlan {
   const pre: PlanIssue[] = [];
+  // Direct fill within the worst price the slippage allows, like an IOC (a FOK with all or nothing).
+  const touch = touchPrice(env.book, i.side);
+  if (i.take && touch !== null) {
+    const bps = i.slippageBps ?? SLIPPAGE_BPS;
+    const bad: PlanIssue[] = [];
+    checkBps(bps, 'slippageBps', bad);
+    if (!hasError(bad)) {
+      const worst = auctionBound(i.side, touch, bps, env.token.tick);
+      const t = tryTake(env, i.side, i.amount, worst, i.tip ?? 0n, [...pre, issue('MARKET_REFERENCE_SOURCE', { reference: touch, worst })], { restKind: 'none', fok: !!i.allOrNothing });
+      if (t) return t;
+    }
+  }
   return planAuction(env, {
     side: i.side, amount: i.amount, tip: i.tip ?? 0n, minFill: i.minFill, reference: touchPrice(env.book, i.side), bps: i.slippageBps ?? SLIPPAGE_BPS,
     auction: i.auction, activation: i.activation, life: i.life, allOrNothing: i.allOrNothing ?? false, ...(i.maxFills !== undefined ? { maxFills: i.maxFills } : {}), fillsBox: true, notes: ['market'],

@@ -61,6 +61,9 @@ export const ISSUE_CATALOG = {
   MARKETABLE_AUCTION: e('info', 'Your limit crosses the market: it fills immediately as a taker, placed as an auction from the best price ({touch:kas}) to your limit; any rest stays at your limit.'),
   MARKETABLE_LIMIT_FILLS_AT_LIMIT: e('warning', 'Your limit crosses the market: it fills immediately as a taker at your limit price; a matcher keeps the difference to the better price ({touch:kas}).'),
   MARKETABLE_REJECTED: e('error', 'Your limit crosses the market at {touch:kas}.'),
+  TAKE_FOK_UNFILLED: e('error', 'Fill or kill: the book cannot fill all {amount} at your price in one transaction. Nothing is placed.'),
+  TAKE_REST_NOT_PLACED: e('info', 'What the book cannot fill now ({rest}) is not placed.'),
+  TAKE_NOW: e('info', 'Your limit crosses the book: it fills now from {orders} resting order(s) at their prices, no executor; you pay only the network fee.'),
   PRICE_AGGRESSIVE_VS_MARKET: e('warning', 'Your price is {percent}% through the market ({reference:kas}): check for a typing error.'),
   PRICE_FAR_FROM_MARKET: e('warning', 'Your price is {percent}% away from the market ({reference:kas}): it is unlikely to fill soon.'),
   // ---- guards

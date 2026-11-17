@@ -52,6 +52,8 @@ export function requestKeyProblem(req: unknown, keys: OwnKeys): string | null {
       if (m !== null && m !== keys.maker) problems.push(`an order to cancel belongs to ${m.slice(0, 8)}..., not to the wallet`);
     }
   }
+  // a take: the wallet receives what it buys and the change
+  if (r.action === 'batch') problems.push(bad('taker key', asKey(r.taker), own));
   for (const f of (r.funding as { pubkey?: unknown }[] | undefined) ?? []) if (asKey(f.pubkey) !== null && !own.has(f.pubkey as Hex)) problems.push(`funding input of ${String(f.pubkey).slice(0, 8)}... is not a key of the connected wallet`);
   problems.push(bad('change key', asKey(r.change)));
   problems.push(bad('token change key', asKey(r.tokenChange)));

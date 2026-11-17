@@ -24,8 +24,14 @@ export type Activation = { unixSeconds: bigint } | { daa: bigint };
 /** What to do with a limit that already crosses the book at placement (matcher.md 10.5). */
 export type CrossingPolicy =
   /**
+   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts),
+   * no executor, then the rest rests at the limit. The ticket's default on a KAS market. A pair
+   * order plans it as `auction`.
+   */
+  | 'take'
+  /**
    * Place it as an auction from the touch to the limit, then resting at the limit. This is the
-   * default.
+   * planner's default.
    */
   | 'auction'
   /**
@@ -75,6 +81,12 @@ export interface LimitIntent extends SimpleBase {
  * at most 600.
  */
 export interface IocIntent extends SimpleBase {
+  /**
+   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts)
+   * and places nothing for the rest. A FOK takes all in one transaction or nothing. Off by default
+   * here (the covenant order); the ticket turns it on.
+   */
+  take?: boolean;
   type: 'ioc';
   side: 'sell' | 'buy';
   price: bigint;
@@ -87,6 +99,12 @@ export interface IocIntent extends SimpleBase {
  * fill it (matcher.md 10.4).
  */
 export interface FokIntent extends SimpleBase {
+  /**
+   * Fill now from the book: the wallet takes the crossing orders at their own prices (kob/take.ts)
+   * and places nothing for the rest. A FOK takes all in one transaction or nothing. Off by default
+   * here (the covenant order); the ticket turns it on.
+   */
+  take?: boolean;
   type: 'fok';
   side: 'sell' | 'buy';
   price: bigint;
@@ -118,6 +136,12 @@ interface AuctionOptions {
  * (orders/simple.ts `planAuction`).
  */
 export interface MarketIntent extends SimpleBase, AuctionOptions {
+  /**
+   * Fill now from the book: the wallet takes the crossing orders at their own prices, within the slippage bound (kob/take.ts)
+   * and places nothing for the rest. With `allOrNothing` it takes all in one transaction or nothing. Off by default
+   * here (the covenant order); the ticket turns it on.
+   */
+  take?: boolean;
   type: 'market';
   side: 'sell' | 'buy';
   /**

@@ -6,10 +6,11 @@ import { declaredToken } from '../data/token-declarations';
 import type { CancelEnv } from '../kob/cancel';
 import { normalizePolicy, readFeeContext, type FeeContext } from '../kob/fee-policy';
 import type { FeeMode, KeyUtxo, TokenUtxo } from '../kob/types';
-import { isPairEnv, type BookLevel, type BookOrder, type BookView, type Clock, type DroppedBookOrder, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
+import { isPairEnv, type BookLevel, type BookOrder, type BookOrderUtxo, type BookView, type Clock, type DroppedBookOrder, type OwnOrderRef, type PairPlanEnv, type PlanEnv, type TokenMarket } from '../kob/plan-types';
 import type { TokenInfo } from '../kob/registry';
 import { impliedPairRate, isPairOrderView, ownPairOrderRefs } from '../kob/pair';
 import { firmReferencePrice } from '../kob/guards';
+import { bookWithout } from '../kob/take';
 import { toTokenMarket } from '../kob/token-market';
 import type { Hex } from '../kob/types';
 import type { WalletInfo } from '../wallet/types';
@@ -162,6 +163,8 @@ export interface MarketPart {
   dropped: DroppedBookOrder[];
   bookUnavailable: boolean;
   lastFillPrice: bigint | null;
+  /** The node-confirmed UTXOs of the book's orders, by covenant id in lower case (what a take spends). */
+  orders?: ReadonlyMap<string, BookOrderUtxo>;
 }
 
 /** The node part: clock, spendable KAS and the fee context. Rejects when the node is down. */
@@ -221,7 +224,7 @@ export async function readMarketPart(s: Pick<Services, 'indexer' | 'kob' | 'node
   // Trades are priced per `price_basis` base units (the standard scale). Convert to the market's
   // scale, per whole token.
   const lastFillPrice = last && trades.price_basis && BigInt(trades.price_basis) > 0n ? (BigInt(last.price) * market.scale) / BigInt(trades.price_basis) : null;
-  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, dropped: checked?.dropped ?? [], bookUnavailable: !bv, lastFillPrice };
+  return { book: bv ? bookFromIndexer(market, bv) : { asks: [], bids: [] }, dropped: checked?.dropped ?? [], bookUnavailable: !bv, lastFillPrice, ...(checked ? { orders: checked.orders } : {}) };
 }
 
 /** Reads the node part of the environment. */
@@ -275,8 +278,16 @@ export function assemblePlanEnv(
   const guardsUnavailable: ('own-orders' | 'book')[] = [];
   if (parts.market.bookUnavailable) guardsUnavailable.push('book');
   if (parts.holdings && parts.holdings.ownOrders === null) guardsUnavailable.push('own-orders');
+  // An order this page has just taken (its outpoint spent by a transaction not yet in a block) is
+  // gone: out of the book and of what can be taken.
+  const orders = new Map<string, BookOrderUtxo>();
+  const taken = new Set<string>();
+  for (const [k, o] of parts.market.orders ?? []) {
+    if (pendingSpends.has(o.order.transactionId, o.order.index)) taken.add(k);
+    else orders.set(k, o);
+  }
   return {
-    kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: parts.market.book, ownOrders: parts.holdings?.ownOrders ?? [],
+    kob: s.kob, token: market, maker: wallet.pubkey, clock: parts.coins.clock, book: bookWithout(parts.market.book, taken), ...(orders.size ? { bookOrders: orders } : {}), ownOrders: parts.holdings?.ownOrders ?? [],
     ...(guardsUnavailable.length ? { guardsUnavailable } : {}), lastFillPrice: parts.market.lastFillPrice,
     funding: pendingSpends.funding(parts.coins.funding, wallet.pubkey), tokenUtxos: pendingSpends.tokens(parts.holdings?.tokenUtxos ?? [], wallet.pubkey, market.covenantId),
     freshTxids: freshTxids(),
