@@ -1,0 +1,192 @@
+pragma silverscript ^0.1.0;
+
+// KobCurveAsk: one sell order (one custody UTXO) whose price steps up level by
+// level along a price table, like a Hyperliquid HIP-2 ask. Spec:
+// docs/design/curve-ask-spec.md.
+//
+// Level j sells the units [j * levelSize, (j + 1) * levelSize) of `total` at
+// table[j], sompi per whole token (`scale` base units), all-in (KobAsk's price
+// convention: the maker gets price - tip). The last level may be partial. The
+// level is derived: (total - amountLeft) / levelSize. amountLeft is the only
+// mutable field and the custody's exact amount pins it.
+//
+// Custody, the stray guard, the positional payout and the cancel are KobAsk's
+// (KobAsk.sil), without IOC/FOK, TWAP, decay and the refund: a curve rests
+// until it sells out or the maker cancels it (an expiry would cost every fill
+// its refund code; the placement record's deadline is the free, soft one).
+//
+// Unbound: tokenCovId = 0 lets the curve sit in its token's genesis
+// transaction (the two covenant ids would otherwise commit to each other).
+// Its first spend takes the token of a custody input created in the same
+// transaction as the order UTXO, which only the maker can have built, and a
+// partial fill writes that id into the continuation.
+//
+// Entries:
+//   settle(nb, tokenIn, tokOut, rsLen), n = int(nb), rsLen = this script's length
+//     Buy n > 0 base units at the curve. Anyone, once tx.daa >= activeFrom.
+//   cancel(sig)  Maker only, SIGHASH_ALL (also the amend).
+//
+// A fill crosses at most MAX_CROSS levels, counting the one it starts in.
+// Each level is rounded up on its own (quoteOf, ceil is superadditive).
+contract KobCurveAsk(
+    pubkey init_maker,
+    byte[32] init_tokenCovId,
+    byte[32] init_tokenTplHash,
+    int init_tplPrefixLen,
+    int init_tplSuffixLen,
+    int init_scale,
+    int init_minFill,
+    int init_tip,
+    int init_activeFrom,
+    int init_levelSize,
+    int init_total,
+    int init_amountLeft,
+    byte[32] init_extensionCommitment,
+    int[] init_table
+) {
+    pubkey maker = init_maker;
+    byte[32] tokenCovId = init_tokenCovId;   // 0 = unbound (redeem [35..67), written by the first fill)
+    byte[32] tokenTplHash = init_tokenTplHash;
+    int tplPrefixLen = init_tplPrefixLen;
+    int tplSuffixLen = init_tplSuffixLen;
+    int scale = init_scale;
+    int minFill = init_minFill;
+    int tip = init_tip;                      // sompi per whole token, every level
+    int activeFrom = init_activeFrom;
+    int levelSize = init_levelSize;
+    int total = init_total;
+    int amountLeft = init_amountLeft;        // mutable, redeem [173..181)
+    byte[32] extensionCommitment = init_extensionCommitment;
+    int[] table = init_table;                // last field: its length varies
+
+    byte constant SCHEME_COVID = 0x04;
+    byte constant SIGHASH_ALL = 0x01;
+    int constant MAX_TOK_IN = 8;
+    int constant MAX_CROSS = 8;
+
+    // KobAsk's quoteOf.
+    function quoteOf(int n, int r, int c) : int {
+        int m = n % scale;
+        int q = n / scale;
+        return q * r + m * (r / scale) + (m * (r % scale) + c) / scale;
+    }
+
+    // KobAsk's tplRs.
+    function tplRs(int idx, int pre, int stLen, int suf, byte[32] tpl) : byte[] {
+        int size = pre + stLen + suf;
+        int base = OpTxInputScriptSigLen(idx) - size;
+        byte[] rs = OpTxInputScriptSigSubstr(idx, base, base + size);
+        require(tx.inputs[idx].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        require(blake3(byte[](pre as byte[8]) + rs.slice(0, pre) + byte[](suf as byte[8]) + rs.slice(pre + stLen, size)) == tpl);
+        return rs;
+    }
+
+    // KobAsk's stray guard, over token tok.
+    function noStrays(byte[32] tok, byte[32] me, int custody) {
+        int cnt = OpCovInputCount(tok);
+        require(cnt <= MAX_TOK_IN);
+        int off = 10 - 112 - tplSuffixLen;
+        if (cnt > 0) { int x0 = OpCovInputIdx(tok, 0); if (x0 != custody) { int e0 = OpTxInputScriptSigLen(x0) + off; require(byte[32](OpTxInputScriptSigSubstr(x0, e0, e0 + 32)) != me); } }
+        if (cnt > 1) { int x1 = OpCovInputIdx(tok, 1); if (x1 != custody) { int e1 = OpTxInputScriptSigLen(x1) + off; require(byte[32](OpTxInputScriptSigSubstr(x1, e1, e1 + 32)) != me); } }
+        if (cnt > 2) { int x2 = OpCovInputIdx(tok, 2); if (x2 != custody) { int e2 = OpTxInputScriptSigLen(x2) + off; require(byte[32](OpTxInputScriptSigSubstr(x2, e2, e2 + 32)) != me); } }
+        if (cnt > 3) { int x3 = OpCovInputIdx(tok, 3); if (x3 != custody) { int e3 = OpTxInputScriptSigLen(x3) + off; require(byte[32](OpTxInputScriptSigSubstr(x3, e3, e3 + 32)) != me); } }
+        if (cnt > 4) { int x4 = OpCovInputIdx(tok, 4); if (x4 != custody) { int e4 = OpTxInputScriptSigLen(x4) + off; require(byte[32](OpTxInputScriptSigSubstr(x4, e4, e4 + 32)) != me); } }
+        if (cnt > 5) { int x5 = OpCovInputIdx(tok, 5); if (x5 != custody) { int e5 = OpTxInputScriptSigLen(x5) + off; require(byte[32](OpTxInputScriptSigSubstr(x5, e5, e5 + 32)) != me); } }
+        if (cnt > 6) { int x6 = OpCovInputIdx(tok, 6); if (x6 != custody) { int e6 = OpTxInputScriptSigLen(x6) + off; require(byte[32](OpTxInputScriptSigSubstr(x6, e6, e6 + 32)) != me); } }
+        if (cnt > 7) { int x7 = OpCovInputIdx(tok, 7); if (x7 != custody) { int e7 = OpTxInputScriptSigLen(x7) + off; require(byte[32](OpTxInputScriptSigSubstr(x7, e7, e7 + 32)) != me); } }
+    }
+
+    // P2SH of this script with tokenCovId and amountLeft replaced. rsLen is an
+    // argument (this.bytecodeSize would make each table length a template) and
+    // the bytes it reads are checked against this input's P2SH.
+    function contSpk(int rsLen, byte[32] cid, int newLeft) : byte[] {
+        int self = this.activeInputIndex;
+        int len = OpTxInputScriptSigLen(self);
+        byte[] rs = OpTxInputScriptSigSubstr(self, len - rsLen, len);
+        require(tx.inputs[self].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(rs)));
+        return byte[](new ScriptPubKeyP2SHFromRedeemScript(
+            rs.slice(0, 35) + byte[](cid) + rs.slice(67, 173) + byte[](newLeft as byte[8]) + rs.slice(181, rsLen)
+        ));
+    }
+
+    entry settle(byte[8] nb, int tokenIn, int tokOut, int rsLen) {
+        int n = int(nb);
+        int self = this.activeInputIndex;
+        byte[32] selfId = OpInputCovenantId(self);
+        require(OpCovInputCount(selfId) == 1);
+
+        // Unbound: the token of a custody from the order UTXO's own transaction.
+        byte[32] cid = tokenCovId;
+        byte[] z = byte[](0 as byte[8]) + byte[](0 as byte[8]);
+        z = z + z;
+        if (cid == byte[32](z)) {
+            require(tx.inputs[tokenIn].outpointTxId == tx.inputs[self].outpointTxId);
+            cid = OpInputCovenantId(tokenIn);
+        }
+        // Custody, as KobAsk.
+        require(OpInputCovenantId(tokenIn) == cid);
+        byte[] trs = tplRs(tokenIn, tplPrefixLen, 112, tplSuffixLen, tokenTplHash);
+        byte[] tin = trs.slice(tplPrefixLen, tplPrefixLen + 112);
+        require(byte[32](tin.slice(10, 42)) == selfId);
+        require(tin.slice(43, 46) == byte[](0x040100));
+        require(byte[32](tin.slice(80, 112)) == extensionCommitment);
+        require(int(byte[8](tin.slice(1, 9))) == amountLeft);
+        noStrays(cid, selfId, tokenIn);
+
+        require(tx.daa >= activeFrom);
+        require(n > 0);
+        // Nothing checks the state at creation.
+        require(scale > 0);
+        require(tip >= 0);
+        require(levelSize > 0);
+        require(amountLeft <= total);
+        require(n <= amountLeft);
+        require(n >= minFill || n == amountLeft);
+
+        // Each step takes the rest of the current level or of n. A level past
+        // the table fails the read.
+        int pos = total - amountLeft;
+        int end = pos + n;
+        int allIn = 0;
+        for (k, 0, MAX_CROSS, MAX_CROSS) {
+            if (pos < end) {
+                int lvl = pos / levelSize;
+                int upto = (lvl + 1) * levelSize;
+                if (end < upto) { upto = end; }
+                int p = table[lvl];
+                require(p >= tip);
+                allIn = allIn + quoteOf(upto - pos, p - tip, scale - 1);
+                pos = upto;
+            }
+        }
+        require(pos == end);
+
+        int rest = amountLeft - n;
+        require(tx.outputs[self].scriptPubKey == byte[](new ScriptPubKeyP2PK(maker)));
+        if (rest > 0) {
+            require(OpCovOutputCount(selfId) == 1);
+            int selfOut = OpCovOutputIdx(selfId, 0);
+            require(tx.outputs[selfOut].scriptPubKey == contSpk(rsLen, cid, rest));
+            require(tx.outputs[selfOut].value >= tx.inputs[self].value);
+            require(tx.outputs[tokOut].value >= tx.inputs[tokenIn].value);
+            require(tx.outputs[self].value >= allIn);
+            // The rest custody, KobAsk's pin.
+            require(tx.outputs[tokOut].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(
+                trs.slice(0, tplPrefixLen) + byte[](0x08) + byte[](rest as byte[8]) + byte[](0x20) + byte[](selfId)
+                    + byte[](0x01) + byte[](SCHEME_COVID) + byte[](0x010020) + tin.slice(47, 79)
+                    + byte[](0x20) + tin.slice(80, 112) + trs.slice(tplPrefixLen + 112, trs.length)
+            )));
+            require(OpOutputCovenantId(tokOut) == cid);
+        } else {
+            require(OpCovOutputCount(selfId) == 0);
+            require(tx.outputs[self].value >= allIn + tx.inputs[self].value + tx.inputs[tokenIn].value);
+        }
+    }
+
+    entry cancel(sig s) {
+        byte[] sb = byte[](s);
+        require(sb.length == 65);
+        require(sb[64] == SIGHASH_ALL);
+        require(checkSig(s, maker));
+    }
+}
