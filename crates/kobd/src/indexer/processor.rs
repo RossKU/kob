@@ -2043,11 +2043,7 @@ impl Processor {
                 // `refund()` and of a pair order.
                 if let (Some(b), Some(k)) = (s.before.as_ref().and_then(|b| b.bought_custody()), s.bought_in) {
                     detail["released"] = json!(b.to_string());
-                    let at =
-                        if is_pair { Some(k) } else { s.reveal.as_ref().and_then(|r| r.int(0)).and_then(|v| usize::try_from(v).ok()) };
-                    if let Some(at) = at {
-                        detail["release_output"] = json!(at);
-                    }
+                    detail["release_output"] = json!(k);
                 }
                 let kind = if ioc { "kill" } else { "refund" };
                 events.push((kind, amount_before, None, closes));

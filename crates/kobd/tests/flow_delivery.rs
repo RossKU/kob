@@ -171,7 +171,7 @@ async fn a_mode_1_bid_keeps_what_it_buys_in_its_bought_custody_and_the_claim_and
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobBid(b2.clone())));
     assert_eq!(token_rows(&c, &cov).last(), Some(&("bought".to_string(), 2 * WHOLE, false)));
 
-    // a keeper's refund after the expiry releases the custody at `custIn`
+    // a keeper's refund after the expiry releases the custody at its own index
     let o2 = find_cov(&fc, &cov).unwrap();
     let c2 = c.w.token_at(&fc, find_custody(&fc, &cov, 2 * WHOLE).unwrap(), bought(2 * WHOLE, &cov));
     let order = c.w.order(&fc, o2, AnyState::KobBid(b2.clone()));
@@ -184,7 +184,7 @@ async fn a_mode_1_bid_keeps_what_it_buys_in_its_bought_custody_and_the_claim_and
     let at = d["release_output"].as_u64().unwrap() as usize;
     assert_eq!(holding(&c, &refund, at, MAKER_A).0, 2 * WHOLE);
     assert!(token_rows(&c, &cov).iter().all(|r| r.2), "nothing of the order is left live");
-    assert!(c.check_income(&refund), "the release at custIn is pinned by the covenant, not the keeper's");
+    assert!(c.check_income(&refund), "the release at the custody's index is pinned by the covenant, not the keeper's");
     assert_eq!(executor(&c, &refund).1, 0);
 }
 

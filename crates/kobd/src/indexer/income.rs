@@ -152,9 +152,7 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         }
         (KobBid(_) | KobBidKron(_), Spend::Refund) => {
             v.push(i);
-            if l.bought_in.is_some() {
-                v.push(arg(0)?);
-            }
+            v.extend(l.bought_in);
         }
         // `settle(nb, tokenTplIn, leg, ...)`: the delivery at i, or the maker's profit at i for a
         // re-arming take-profit. A terminal fill that does not re-arm sends what it did not spend
@@ -172,9 +170,7 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         }
         (KobCondBid(_) | KobCondBidKron(_), Spend::Refund) => {
             v.push(i);
-            if l.bought_in.is_some() {
-                v.push(arg(0)?);
-            }
+            v.extend(l.bought_in);
         }
         (KobCondBid(_) | KobCondBidKron(_), Spend::Update) => {}
         // `fill`: the bought tokens at i, owned by the exit. `refund()`: the maker's at i.
