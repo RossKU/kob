@@ -30,6 +30,7 @@ import { bidSpentByFills, filledAmount, orderEnded, orderTotalKas, placedUnix } 
 import { amountCell, longDate, priceDpOf, tokenUnit, type AmountText } from './cells';
 import { tCount } from './plural';
 import { unlistedHint, unlistedText } from './unlisted';
+import { CurveDetails } from './CurveDetails';
 import './order-line.css';
 
 const STATUS_TONE: Record<OrderStatusUi, Tone> = { open: 'ok', partial: 'info', filled: 'neutral', cancelled: 'neutral', refunded: 'neutral', killed: 'neutral', closed: 'neutral', unknown: 'warn' };
@@ -251,6 +252,8 @@ export function OrderRow(props: OrderRowProps) {
   const boughtUnit = row.bought ? tokenUnit(boughtTk?.ticker, row.bought.token).text : '';
   const claimHint = row.bought ? t('orders.claim.hint', { amount: boughtText!, ticker: boughtUnit }) : undefined;
 
+  // a curve's level: under its price in the table; a phone card says "Curve 4/20" on its "Sell · type" line
+  const curveLevel = row.curve ? (row.curve.priceNow === null ? t('curve.row.soldOut') : t('curve.row.level', { level: row.curve.level + 1, levels: row.curve.levels })) : null;
   const cells: Record<string, JSX.Element> = {};
   cells.time = (
     <TimeCell unix={line.unix} label={t('orders.col.time')} class="or-time" />
@@ -262,7 +265,7 @@ export function OrderRow(props: OrderRowProps) {
       href={marketHref}
       identity={row.token ? <IdentityBlock row={{ covenantId: row.token, ticker: tk?.ticker ?? '', kascov: props.iconOf?.(row.token) ?? null }} size="sm" data-testid={`order-identity-${row.id}`} /> : null}
       side={row.side}
-      kind={t(`orders.typeShort.${row.typeKey}`)}
+      kind={row.curve && row.curve.priceNow !== null ? t('curve.row.kindShort', { level: row.curve.level + 1, levels: row.curve.levels }) : t(`orders.typeShort.${row.typeKey}`)}
       class="or-market"
       nameClass="or-market-name"
     />
@@ -274,7 +277,11 @@ export function OrderRow(props: OrderRowProps) {
     <DtCell k="side" label={t('orders.col.side')} card="hidden" class={`or-side ${row.side === 'buy' ? 'dt-side-buy' : 'dt-side-sell'}`}>{t(`common.side.${row.side}`)}</DtCell>
   );
   cells.price = (
-    <DtCell k="price" label={t(fiat ? 'orders.col.priceLineUsd' : 'orders.col.priceLine')} num class="or-price">{priceFigure(row.price, line.price)}</DtCell>
+    <DtCell k="price" label={t(fiat ? 'orders.col.priceLineUsd' : 'orders.col.priceLine')} num class="or-price">
+      {priceFigure(row.price, line.price)}
+      {/* a curve: one row per order, its current level under its price */}
+      {curveLevel ? <div class="dt-sub or-curve-level" data-testid={`order-curve-level-${row.id}`}>{curveLevel}</div> : null}
+    </DtCell>
   );
   cells.avg = (
     <DtCell k="avg" label={t(fiat ? 'orders.col.avgPriceUsd' : 'orders.col.avgPrice')} card="hidden" num class="or-avg">{priceFigure(props.avg, line.avgText)}</DtCell>
@@ -426,6 +433,8 @@ export function OrderRow(props: OrderRowProps) {
         </Banner>
       ) : null}
 
+      {row.curve ? <CurveDetails id={row.id} curve={row.curve} amountLeft={row.amountLeft} scale={row.scale} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} /> : null}
+
       <KeyValueList
         compact
         flow
@@ -433,7 +442,7 @@ export function OrderRow(props: OrderRowProps) {
           ...(row.pair ? pairItems(row, tk, bToken) : []),
           // an auction's bound is its END price (the worst it can fill at), never labelled a limit; its start is only the expected price
           {
-            label: t(row.auctionStart !== null ? 'orders.worstPrice' : 'orders.limitPrice'),
+            label: t(row.curve ? 'curve.details.now' : row.auctionStart !== null ? 'orders.worstPrice' : 'orders.limitPrice'),
             value: <PriceCell row={row} token={tk} quote={bToken} value={row.price} dp={ownDp} />,
             'data-testid': 'order-price',
             show: row.price !== null || row.stopPrice === null,

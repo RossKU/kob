@@ -81,8 +81,8 @@ test.describe('indexer load per viewer', () => {
     // the wallet holds each request for a moment: what the app read is judged when the request arrives, before the placement's own refresh
     await wallet!.configure({ delayMs: 1_500 });
 
-    // the ticket's own book read (per order, aggregate=false) marks an environment build
-    const envReads = record(page, /\/v1\/books\/[0-9a-f]+\?.*aggregate=false/);
+    // the ticket's own book read (per order, depth 100) marks an environment build (the market's book reads per order too, at its own depth)
+    const envReads = record(page, /\/v1\/books\/[0-9a-f]+\?(?=.*aggregate=false)(?=.*depth=100\b)/);
     await mock.resync(); // the feed says "reload": the environment is read again
     await expect.poll(() => envReads.length).toBeGreaterThan(0);
     await settlePlan(page);

@@ -1,4 +1,5 @@
 // What the Portfolio's order lists sort by: each column of an order's line, as a value the shared sort (ui/kit/sort.ts) compares.
+import { curveRestKas } from '../../kob/curve';
 import { RAW_TOKEN_DECIMALS, t } from '../../i18n';
 import { daaToUnix } from '../../kob/daa';
 import type { Clock } from '../../kob/plan-types';
@@ -80,6 +81,8 @@ export function orderTotalKas(row: OrderRowModel, avg: bigint | null | undefined
     if (filled === 0n) return 0n;
     return avg !== null && avg !== undefined ? quoteOf(filled, avg, row.scale, 'down') : null;
   }
+  // a curve: what the whole table sells for (each level at its own price)
+  if (row.curve) return curveRestKas(row.curve.levelSize, row.curve.table, row.curve.total, row.curve.total, row.scale);
   return row.amountTotal !== null && row.price !== null ? quoteOf(row.amountTotal, row.price, row.scale, 'down') : null;
 }
 

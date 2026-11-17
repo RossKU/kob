@@ -9,3 +9,5 @@
 .or-warn { display: inline-flex; color: var(--warn); flex: none; }
 .or-details { padding: 10px 12px 12px; }
 .or-group.nested .or-market { padding-left: 14px; }
+/* a curve's level sits under its price in the table; a phone card says it on its "Sell · Curve" line instead */
+.dt-list[data-fold='cards'] .or-price > .or-curve-level { display: none; }

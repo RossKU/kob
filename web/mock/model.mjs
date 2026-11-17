@@ -19,13 +19,15 @@ const BASE_KINDS = {
   KobPair: { side: null, inBook: false },
   KobCondPair: { side: null, inBook: false },
   KobIfdPair: { side: null, inBook: false },
+  // a stepped sell curve (KCC-20 only): in the book as its remaining levels
+  KobCurveAsk: { side: 1, inBook: true },
 };
 export const PAIR_KINDS = ['KobPair', 'KobCondPair', 'KobIfdPair'];
 export const isPairKind = (kind) => PAIR_KINDS.includes(kind);
 
 /** Side / book membership per order kind, both families (`KobAskKron` ...; the pair kinds have no KRON twin). */
 export const KINDS = Object.fromEntries(
-  Object.entries(BASE_KINDS).flatMap(([k, v]) => (isPairKind(k) ? [[k, v]] : [[k, v], [`${k}Kron`, v]])),
+  Object.entries(BASE_KINDS).flatMap(([k, v]) => (isPairKind(k) || k === 'KobCurveAsk' ? [[k, v]] : [[k, v], [`${k}Kron`, v]])),
 );
 
 /** The family-neutral kind (`KobAskKron` -> `KobAsk`). */
@@ -73,11 +75,38 @@ export function quoteOf(n, rate, scale, round) {
   return round === 'up' ? (nn * r + s - 1n) / s : (nn * r) / s;
 }
 
+/** No expiry: a curve rests until sold out or cancelled (a sentinel far past any DAA score). */
+export const NO_EXPIRY = 1n << 60n;
+
+/**
+ * A `KobCurveAsk`'s levels from its state (docs/design/curve-ask-spec.md §1): the current level, the price now (null when sold out) and the
+ * remaining levels `[{level, price, amount}]` (bigint), the current first.
+ */
+export function curveOf(any) {
+  if (any.kind !== 'KobCurveAsk') return null;
+  const s = any.state;
+  const size = b(s.levelSize);
+  const total = b(s.total);
+  const left = b(s.amountLeft);
+  const table = s.table.map((p) => b(p));
+  const pos = total - left;
+  const level = size > 0n ? Number(pos / size) : 0;
+  const remaining = [];
+  for (let j = level; j < table.length && left > 0n; j++) {
+    const start = BigInt(j) * size;
+    const end = j + 1 < table.length ? start + size : total;
+    const from = start > pos ? start : pos;
+    if (end > from) remaining.push({ level: j, price: table[j], amount: end - from });
+  }
+  return { level: left > 0n ? level : table.length, levels: table.length, levelSize: size, total, table, priceNow: left > 0n ? table[level] : null, remaining };
+}
+
 /** Normalised numeric terms of an order state (`terms_of` in the indexer). All bigint; `price` is the conditional kinds' tpPrice. */
 export function termsOf(any) {
   const s = any.state;
   const k = baseKind(any.kind);
-  const price = k === 'KobCondAsk' || k === 'KobCondBid' || k === 'KobCondPair' ? b(s.tpPrice) : b(s.price);
+  const curve = curveOf(any);
+  const price = curve ? (curve.priceNow ?? curve.table[curve.table.length - 1] ?? 0n) : k === 'KobCondAsk' || k === 'KobCondBid' || k === 'KobCondPair' ? b(s.tpPrice) : b(s.price);
   const pt = pairTokensOf(any);
   return {
     scale: pt ? pt.a.scale : b(s.scale),
@@ -85,7 +114,7 @@ export function termsOf(any) {
     price,
     tip: b(s.tip),
     tif: b(s.tif),
-    expiryDaa: b(s.expiryDaa),
+    expiryDaa: curve ? NO_EXPIRY : b(s.expiryDaa),
     activeFrom: b(s.activeFrom),
     amountLeft: s.amountLeft === undefined ? null : b(s.amountLeft),
   };
