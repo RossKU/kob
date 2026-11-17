@@ -228,7 +228,8 @@ fn builders_refuse_fills_below_the_minimum_fill() {
             | Leg::IfdAsk { amount, .. }
             | Leg::Pair { amount, .. }
             | Leg::CondPair { amount, .. }
-            | Leg::IfdPair { amount, .. } => *amount = n,
+            | Leg::IfdPair { amount, .. }
+            | Leg::CurveAsk { amount, .. } => *amount = n,
         }
     }
     let refused = |b: &Batch, what: &str| {

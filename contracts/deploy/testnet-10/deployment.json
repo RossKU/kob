@@ -69,6 +69,13 @@
       "suffix_len": 8414
     },
     {
+      "name": "KobCurveAsk",
+      "artifact": "contracts/artifacts/KobCurveAsk.json",
+      "hash": "1e9bee3b01f67f802dba564ada22d28ca5f5e2bbc0eaf60005d9a8665d46d8b9",
+      "prefix_len": 1,
+      "suffix_len": 2182
+    },
+    {
       "name": "KobAskKron",
       "artifact": "contracts/artifacts/KobAskKron.json",
       "hash": "f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d",

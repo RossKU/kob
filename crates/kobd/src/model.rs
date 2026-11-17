@@ -243,6 +243,7 @@ pub fn mutable_of(s: &AnyState) -> Mutable {
         AnyState::KobIfdAsk(a) | AnyState::KobIfdAskKron(a) => {
             Mutable { amount: Some(a.amount_left), armed: Some(a.armed), stop: None, rpt: Some(a.rpt_amount), custody: None }
         }
+        AnyState::KobCurveAsk(a) => Mutable { amount: Some(a.amount_left), ..Mutable::default() },
         AnyState::KobBid(_) | AnyState::KobBidKron(_) => Mutable::default(),
     }
 }
@@ -251,6 +252,11 @@ pub fn mutable_of(s: &AnyState) -> Mutable {
 pub fn with_mutable(s: &AnyState, m: Mutable) -> AnyState {
     let mut s = s.clone();
     match &mut s {
+        AnyState::KobCurveAsk(a) => {
+            if let Some(v) = m.amount {
+                a.amount_left = v;
+            }
+        }
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => {
             if let Some(v) = m.amount {
                 a.amount_left = v;
@@ -369,6 +375,17 @@ pub struct Terms {
 /// The terms of an order state, whichever fields its kind has.
 pub fn terms_of(s: &AnyState) -> Terms {
     match s {
+        // a curve's price is its current level's; it has no expiry
+        AnyState::KobCurveAsk(a) => Terms {
+            scale: a.scale,
+            min_fill: a.min_fill,
+            price: a.price_now(),
+            tip: a.tip,
+            tif: None,
+            active_from: a.active_from,
+            expiry_daa: i64::MAX,
+            refund_tip: 0,
+        },
         AnyState::KobAsk(a) | AnyState::KobAskKron(a) => Terms {
             scale: a.scale,
             min_fill: a.min_fill,

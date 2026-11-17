@@ -25,6 +25,7 @@ every network.
 | KobPair | `cba29506b515146727665c89720e9cb9190779d2ce0dad58081f0906adf85980` | 1 / 3233 |
 | KobCondPair | `97359a5b5268e3a4bceeaf93905e679e7e3e0f5884b3f4be85840af7ad5e9c08` | 1 / 7262 |
 | KobIfdPair | `62ac27d7f7ed5922720fa82d9742537a7d6d658f46967abddc49fdea1971a2f3` | 1 / 8414 |
+| KobCurveAsk | `1e9bee3b01f67f802dba564ada22d28ca5f5e2bbc0eaf60005d9a8665d46d8b9` | 1 / 2182 |
 | KobAskKron | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1 / 1243 |
 | KobBidKron | `7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582` | 1 / 1203 |
 | KobCondAskKron | `e9930d360eb9c124ea68bc47a8c0e91b25ff919dc5f91dbfc3f1a9e9c8a10579` | 1 / 3136 |

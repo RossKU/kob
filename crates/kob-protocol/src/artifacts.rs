@@ -716,7 +716,13 @@ impl Template {
 
     /// Redeem script of an instance: `prefix ‖ state ‖ suffix`.
     pub fn redeem(&self, state: &[u8]) -> Vec<u8> {
-        assert_eq!(state.len(), self.state_len, "{}: state span must be {} bytes", self.id.name(), self.state_len);
+        // a curve's state ends with its table, of any length
+        assert!(
+            self.id == TemplateId::KobCurveAsk || state.len() == self.state_len,
+            "{}: state span must be {} bytes",
+            self.id.name(),
+            self.state_len
+        );
         [self.prefix.as_slice(), state, self.suffix.as_slice()].concat()
     }
 

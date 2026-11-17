@@ -257,6 +257,9 @@ pub fn day_order(d0: u64, t0: u64, rate_milli: Option<u64>) -> DayOrder {
     DayOrder { expiry_daa: d0 + estimate + margin, deadline }
 }
 
+mod curve;
+pub use curve::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;

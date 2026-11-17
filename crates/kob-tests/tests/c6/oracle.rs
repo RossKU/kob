@@ -349,6 +349,7 @@ fn set_mut(s: &AnyState, amount: Option<i64>, armed: Option<i64>, stop: Option<i
             upd!(x, armed);
             upd!(x, rpt);
         }
+        AnyState::KobCurveAsk(x) => upd!(x, amount),
         AnyState::KobBid(_) | AnyState::KobBidKron(_) => {}
     }
     s
@@ -669,6 +670,7 @@ pub fn fill_terms(s: &AnyState, plan: &SigPlan, value: u64, daa: i64, lock: i64,
     let sell = |owed: Owed| Terms { lo, hi, flows: vec![(tok, Flow::Give)], owed, hint };
     let buy = |lo: i64, hi: i64, owed: Owed| Terms { lo, hi, flows: vec![(tok, Flow::Take)], owed, hint };
     match s {
+        AnyState::KobCurveAsk(_) => unreachable!("the c6 generators make no curve"),
         AnyState::KobAsk(x) | AnyState::KobAskKron(x) => {
             let o = origin(x.active_from, x.interval);
             let (p0, p1) = (
@@ -1135,6 +1137,7 @@ fn refund_tip_of(s: &AnyState) -> Option<i64> {
         AnyState::KobPair(x) => x.refund_tip,
         AnyState::KobCondPair(x) => x.refund_tip,
         AnyState::KobIfdPair(x) => x.refund_tip,
+        AnyState::KobCurveAsk(_) => return None,
     })
 }
 

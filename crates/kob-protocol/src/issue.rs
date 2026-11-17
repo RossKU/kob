@@ -568,6 +568,34 @@ pub struct IssueSpec {
     pub network: String,
     /// The token program issued (default: the published public-mint build, 3 / 3 slots, no minter).
     pub program: IssueProgram,
+    /// A curve placed in this genesis (`docs/design/curve-ask-spec.md` §4); one of the holders is
+    /// its custody.
+    pub curve: Option<GenesisCurve>,
+}
+
+/// A `KobCurveAsk` created in its token's genesis, unbound.
+#[derive(Debug, Clone)]
+pub struct GenesisCurve {
+    /// The curve: `tokenCovId` zero, `amountLeft` its custody's amount, the issued program's
+    /// token fields and the genesis's extension commitment.
+    pub state: crate::state::CurveAskState,
+    /// The holder that is its custody: owner scheme 0x04, borrowing disabled. The builder writes
+    /// the curve's covenant id as its owner.
+    pub custody: usize,
+    /// KAS on the curve's UTXO.
+    pub carrier: u64,
+}
+
+/// Where a genesis placed its curve.
+#[derive(Debug, Clone)]
+pub struct CurvePlaced {
+    /// Output index of the curve (after the token outputs).
+    pub output: usize,
+    /// The curve's covenant id.
+    pub covenant_id: Hash,
+    pub state: crate::state::CurveAskState,
+    /// The token output that is its custody.
+    pub custody: usize,
 }
 
 impl IssueSpec {
@@ -594,6 +622,7 @@ impl IssueSpec {
             telegram: None,
             network: "testnet-10".into(),
             program: IssueProgram::default(),
+            curve: None,
         }
     }
 
@@ -749,6 +778,8 @@ pub struct GenesisPlan {
     pub program: Program,
     /// The spec the plan was built from.
     pub spec: IssueSpec,
+    /// The curve this genesis places, if any.
+    pub curve: Option<CurvePlaced>,
 }
 
 fn p2pk_spk(pk: &[u8; 32]) -> ScriptPublicKey {
@@ -767,6 +798,46 @@ fn p2pk_spk(pk: &[u8; 32]) -> ScriptPublicKey {
 pub fn genesis_payload(states: &[TokenState]) -> Vec<u8> {
     let spans: Vec<Vec<u8>> = states.iter().map(TokenState::encode).collect();
     crate::genesis_states::encode(&spans).unwrap_or_default()
+}
+
+/// [`genesis_payload`], or with a curve a `KOB1` payload: the curve's ORDER record (its custody a
+/// token output of this genesis) and the token states as an optional `GENESIS` record.
+pub fn genesis_payload_with(states: &[TokenState], curve: Option<&CurvePlaced>, ext: &[u8; 32]) -> Vec<u8> {
+    let Some(c) = curve else { return genesis_payload(states) };
+    use crate::payload::{Custody, Record, REC_GENESIS};
+    let order = crate::state::AnyState::KobCurveAsk(c.state.clone());
+    let records = vec![
+        Record::order(c.output as u16, &order, Some(Custody { token_output: c.custody as u16, extension_commitment: *ext }), None),
+        Record::Unknown { record_type: REC_GENESIS, value: genesis_payload(states) },
+    ];
+    crate::payload::encode_with_release(&records).unwrap_or_default()
+}
+
+/// The rules of a curve in its token's genesis: unbound, of the issued program and commitment,
+/// its custody a covenant-held holder of exactly `amountLeft`, and the gates.
+fn check_curve(spec: &IssueSpec, program: &Program, c: &GenesisCurve, states: &[TokenState]) -> Result<()> {
+    let s = &c.state;
+    let Some(h) = states.get(c.custody) else { return invalid(format!("curve custody {} is not a holder", c.custody)) };
+    if h.owner_scheme != SCHEME_COVENANT_ID || h.borrow_scheme != 0 || h.amount as i64 != s.amount_left {
+        return invalid("the curve's custody is a holder of owner scheme 0x04, borrowing disabled, of exactly amountLeft");
+    }
+    if !s.is_unbound() {
+        return invalid("a curve in its token's genesis is unbound (tokenCovId zero)");
+    }
+    if s.token_tpl_hash != program.template_hash
+        || s.tpl_prefix_len != program.prefix.len() as i64
+        || s.tpl_suffix_len != program.suffix.len() as i64
+    {
+        return invalid("the curve's token fields are not the issued program's");
+    }
+    if s.extension_commitment != spec.extension_commitment {
+        return invalid("the curve's extension commitment is not the genesis's");
+    }
+    s.check_numbers().map_err(IssueError::Invalid)?;
+    if c.carrier < crate::tx::COVENANT_OUTPUT_MIN {
+        return invalid(format!("the curve's carrier is below {} sompi", crate::tx::COVENANT_OUTPUT_MIN));
+    }
+    Ok(())
 }
 
 /// P2PK (Schnorr) script public key of an x-only public key.
@@ -839,6 +910,8 @@ fn masses(tx: &Transaction, entries: &[UtxoEntry]) -> (u64, u64, u64, u64, u64) 
 /// the covenant id of the funding outpoint), funding inputs and entries.
 struct GenesisDraft {
     program: Program,
+    curve: Option<CurvePlaced>,
+    spec_ext: [u8; 32],
     states: Vec<TokenState>,
     outputs: Vec<TransactionOutput>,
     inputs: Vec<TransactionInput>,
@@ -863,6 +936,17 @@ impl GenesisDraft {
                 extension_commitment: spec.extension_commitment,
             })
             .collect();
+        let mut states = states;
+        // A curve: its id first (its state names no token), then its custody's owner, then the token's id.
+        let mut curve_out = None;
+        if let Some(c) = &spec.curve {
+            check_curve(spec, &program, c, &states)?;
+            let output = states.len();
+            let o = TransactionOutput { value: c.carrier, script_public_key: c.state.spk(), covenant: None };
+            let id = covenant_id(spec.funding[0].outpoint, [(output as u32, &o)].into_iter());
+            states[c.custody].owner = id.as_bytes();
+            curve_out = Some((o, CurvePlaced { output, covenant_id: id, state: c.state.clone(), custody: c.custody }));
+        }
         let budget = p2pk_compute_budget();
         let entries = spec.funding.iter().map(|f| UtxoEntry::new(f.amount, p2pk_spk(&f.owner_pubkey), 0, false, None)).collect();
         let inputs = spec.funding.iter().map(|f| TransactionInput::new_with_compute_budget(f.outpoint, vec![], 0, budget)).collect();
@@ -877,7 +961,12 @@ impl GenesisDraft {
         for o in outputs.iter_mut() {
             o.covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id });
         }
-        Ok(GenesisDraft { program, states, outputs, inputs, entries, change_spk, covenant_id, budget })
+        let curve = curve_out.map(|(mut o, placed)| {
+            o.covenant = Some(CovenantBinding { authorizing_input: 0, covenant_id: placed.covenant_id });
+            outputs.push(o);
+            placed
+        });
+        Ok(GenesisDraft { program, curve, spec_ext: spec.extension_commitment, states, outputs, inputs, entries, change_spk, covenant_id, budget })
     }
 
     /// The transaction with placeholder signatures (their final size) and the given change.
@@ -894,9 +983,10 @@ impl GenesisDraft {
         Transaction::new(1, ins, outs, 0, Default::default(), 0, self.payload())
     }
 
-    /// The payload of the genesis: the states of its token outputs ([`crate::genesis_states`]).
+    /// The payload of the genesis: the states of its token outputs ([`crate::genesis_states`]),
+    /// or with a curve its ORDER record carrying them.
     fn payload(&self) -> Vec<u8> {
-        genesis_payload(&self.states)
+        genesis_payload_with(&self.states, self.curve.as_ref(), &self.spec_ext)
     }
 
     /// The relay floor with or without a change output. It rests on compute and transient mass
@@ -968,8 +1058,11 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
     let mut warnings = spec.validate()?;
     let draft = GenesisDraft::new(spec)?;
     let total_in: u64 = spec.funding.iter().map(|f| f.amount).sum();
-    let carriers =
-        spec.carrier.checked_mul(draft.states.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+    let carriers = spec
+        .carrier
+        .checked_mul(draft.states.len() as u64)
+        .and_then(|c| c.checked_add(spec.curve.as_ref().map_or(0, |c| c.carrier)))
+        .ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
     let need_base = carriers;
     if total_in < need_base {
         return Err(IssueError::InsufficientFunds { need: need_base, have: total_in });
@@ -1023,6 +1116,7 @@ pub fn build_genesis(spec: &IssueSpec) -> Result<GenesisPlan> {
         signed: false,
         program: draft.program,
         spec: spec.clone(),
+        curve: draft.curve,
     })
 }
 
@@ -1100,8 +1194,11 @@ pub fn build_creation(spec: &IssueSpec) -> Result<CreationPlan> {
     if spec.funding.iter().any(|f| f.owner_pubkey != maker) {
         return invalid("every funding UTXO of a creation must belong to the creator (the owner of the first one)");
     }
-    let carriers =
-        spec.carrier.checked_mul(spec.holders.len() as u64).ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
+    let carriers = spec
+        .carrier
+        .checked_mul(spec.holders.len() as u64)
+        .and_then(|c| c.checked_add(spec.curve.as_ref().map_or(0, |c| c.carrier)))
+        .ok_or_else(|| IssueError::Invalid("carrier overflow".into()))?;
 
     // the genesis fee: its floor without a change output (it spends exactly carriers + fee), or the
     // explicit one
@@ -1413,8 +1510,22 @@ impl GenesisPlan {
         if supply != self.spec.supply as u128 {
             return Err(IssueError::SupplyMismatch { sum: supply, declared: self.spec.supply });
         }
-        if self.tx.payload != genesis_payload(&self.states) {
-            return fail("the genesis payload is not the states of its token outputs".into());
+        if self.tx.payload != genesis_payload_with(&self.states, self.curve.as_ref(), &self.spec.extension_commitment) {
+            return fail("the genesis payload is not the states of its token outputs (and its curve's record)".into());
+        }
+        if let Some(c) = &self.curve {
+            let Some(o) = self.tx.outputs.get(c.output) else { return fail("the curve output is missing".into()) };
+            let id = covenant_id(self.tx.inputs[0].previous_outpoint, [(c.output as u32, &TransactionOutput { covenant: None, ..o.clone() })].into_iter());
+            if o.script_public_key != c.state.spk() || id != c.covenant_id || o.covenant != Some(CovenantBinding { authorizing_input: 0, covenant_id: id }) {
+                return fail("the curve output is not the genesis of its own group".into());
+            }
+            let h = &self.states[c.custody];
+            if h.owner != id.as_bytes() || h.owner_scheme != SCHEME_COVENANT_ID || h.amount as i64 != c.state.amount_left {
+                return fail("the curve's custody is not owned by the curve with exactly amountLeft".into());
+            }
+            if self.tx.outputs.iter().filter(|x| x.covenant.is_some_and(|b| b.covenant_id == id)).count() != 1 {
+                return fail("the curve's genesis group is not its output alone".into());
+            }
         }
         let group = self.tx.outputs[..self.states.len()].iter().enumerate().map(|(i, o)| (i as u32, o));
         let recomputed = covenant_id(self.tx.inputs[0].previous_outpoint, group);

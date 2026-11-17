@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 
 pub mod branches;
+pub mod curve;
 pub mod exact;
 pub mod pair;
 

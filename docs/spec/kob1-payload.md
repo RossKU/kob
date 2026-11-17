@@ -83,6 +83,7 @@ record   = type:u8 length:u16le value[length]
 | `0x82` | NOTE | no | UTF-8 client tag, at most 64 bytes (for example `kob-web/0.1`) |
 | `0x83` | SWEEP | no | a maker's sweep in place (any version): `output:LEB128 input:LEB128`, below |
 | `0x84` | RELEASE | no | the KOB release of the build that wrote the payload (any version): `major:LEB128 minor:LEB128 patch:LEB128`, below |
+| `0x85` | GENESIS | no | the token states of a genesis that also places an order (a `KobCurveAsk` created in its token's genesis): the `KOBG` payload bytes (`genesis_states`); decoders keep it as an unknown optional record |
 
 ### Compact state
 
@@ -98,6 +99,10 @@ field     = LEB128                          an 8-byte field (an integer): its 8 
                                             template's 32-byte fields): then it is all zero and not spelled
           | n bytes                         any other field (the committed exit state of an if-done entry), raw
 ```
+
+`KobCurveAsk` ends with its price table, an `int[]` of any length: its fixed fields are spelled as above, then
+`count:LEB128` and one LEB128 per entry; the decoder rebuilds the minimal push of `8·count` bytes
+(`docs/design/curve-ask-spec.md` §5).
 
 The decoder rebuilds the exact state span (push headers from the template, zero fields from the mask). It rejects a
 mask bit beyond the template's 32-byte fields and an all-zero 32-byte field spelled out instead of masked.
@@ -198,6 +203,7 @@ and the record's family is the family of the pair's base token A.
 | `0x08` | `KobPair` (pair order, token A KCC-20) | 483 (legacy 447) | the custody of S (`sExt`) | `cba29506…df85980` |
 | `0x09` | `KobCondPair` (pair conditional / exit, token A KCC-20) | 579 (legacy 543) | the custody of S (`sExt`) | `97359a5b…d5e9c08` |
 | `0x0a` | `KobIfdPair` (pair if-done entry, token A KCC-20) | 936 (legacy 909) | buy-first: the B escrow; sell-first: A, then the B prefund | `62ac27d7…971a2f3` |
+| `0x0b` | `KobCurveAsk` (stepped sell curve, KCC-20 only) | 214 to 216 + 8 per level | yes (`extensionCommitment`); unbound (`tokenCovId` 0): its token is the custody output's, a genesis of this transaction | `1e9bee3b…65d46d8b9` |
 
 KRON (family `0x02`), same kind codes:
 
@@ -243,7 +249,7 @@ the replacement at output 0 as well. Day orders: `kob_protocol::defaults::day_or
 output        LEB128    index of the continuation output (the amended order)
 input         LEB128    index of the order input the maker's cancel spends
 family        u8        token family, as ORDER
-kind          u8        0x01 (KobAsk / KobAskKron) or 0x02 (KobBid / KobBidKron): only plain asks and bids are amended in place
+kind          u8        0x01 (KobAsk / KobAskKron), 0x02 (KobBid / KobBidKron) or 0x0b (KobCurveAsk): only these are amended in place
 flags         u8        bit 0: a deadline follows; every other bit must be 0
 state                   the amended state span, compact (above)
 deadline      LEB128    when flag bit 0: day-order deadline, as ORDER

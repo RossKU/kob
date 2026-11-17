@@ -2273,6 +2273,7 @@ impl Processor {
                 c.leg_price(leg, c.armed == 0 && leg == 1, t, daa)
             }
             AnyState::KobIfdPair(e) => e.price_at(e.entry_stop > 0 && e.armed == 0, t, daa),
+            AnyState::KobCurveAsk(c) => c.price_now(),
         })
         .flatten()
     }

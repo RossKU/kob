@@ -89,6 +89,10 @@ pub const REC_SWEEP: u8 = 0x83;
 /// `docs/spec/kob1-payload.md`, *RELEASE record*. The type is optional on purpose: a build that
 /// does not know it skips it, so a new placement stays readable by old builds.
 pub const REC_RELEASE: u8 = 0x84;
+/// Optional: the token states of a genesis that also places an order (a curve created in its
+/// token's genesis, `docs/design/curve-ask-spec.md` §4). The value is the `KOBG` payload
+/// (`crate::genesis_states`); it is kept as [`Record::Unknown`].
+pub const REC_GENESIS: u8 = 0x85;
 
 /// Compact ORDER flag: the record carries a day-order deadline.
 const FLAG_DEADLINE: u8 = 0x01;
@@ -539,6 +543,56 @@ fn get_compact_layout(v: &[u8], p: &mut usize, name: &str, layout: Vec<(Vec<u8>,
     Ok(span)
 }
 
+/// The pushes of a curve's fixed fields (`KobCurveAsk` up to its table).
+fn curve_fixed_layout() -> Vec<(Vec<u8>, usize)> {
+    let mut l = vec![(vec![0x20u8], 32); 3];
+    l.extend(std::iter::repeat_n((vec![0x08u8], 8), 9));
+    l.push((vec![0x20], 32));
+    l
+}
+
+/// Compact state of any order template. A curve spells its fixed fields as every template, then
+/// its table as `count:LEB128` and one LEB128 per entry.
+fn put_compact_any(out: &mut Vec<u8>, t: TemplateId, span: &[u8]) -> Result<()> {
+    if t != TemplateId::KobCurveAsk {
+        return put_compact_state(out, template(t), span);
+    }
+    let s = crate::state::CurveAskState::decode(span)?;
+    let at = crate::state::CURVE_TABLE_AT;
+    put_compact_layout(out, "KobCurveAsk", &curve_fixed_layout(), &span[..at])?;
+    put_varint(out, s.table.len() as u64);
+    for p in &s.table {
+        put_varint(out, *p as u64);
+    }
+    Ok(())
+}
+
+/// Inverse of [`put_compact_any`].
+fn get_compact_any(v: &[u8], p: &mut usize, t: TemplateId) -> Result<Vec<u8>> {
+    if t != TemplateId::KobCurveAsk {
+        return get_compact_state(v, p, template(t));
+    }
+    let mut span = get_compact_layout(v, p, "KobCurveAsk", curve_fixed_layout())?;
+    let n = get_varint(v, p, "table length")?;
+    if n == 0 || n > crate::state::CURVE_MAX_LEVELS as u64 {
+        return Err(Error::Payload(format!("KobCurveAsk: a table of {n} levels")));
+    }
+    let mut table = vec![];
+    for _ in 0..n {
+        table.push(get_varint(v, p, "table entry")? as i64);
+    }
+    let len = 8 * table.len();
+    span.extend(match len {
+        1..=75 => vec![len as u8],
+        76..=255 => vec![0x4c, len as u8],
+        _ => vec![0x4d, len as u8, (len >> 8) as u8],
+    });
+    for x in table {
+        span.extend_from_slice(&x.to_le_bytes());
+    }
+    Ok(span)
+}
+
 /// The checks an encoder shares with the decoder.
 ///
 /// The template must be an order template serving the record's family. The state must have the
@@ -554,7 +608,7 @@ fn check_order_state(family: u8, t: TemplateId, state: &[u8], placement: bool) -
     if !t.serves(fam) {
         return Err(Error::Payload(format!("{}: family byte {family:#04x} does not match the template", t.name())));
     }
-    if state.len() != template(t).state_len {
+    if t != TemplateId::KobCurveAsk && state.len() != template(t).state_len {
         return Err(Error::Payload(format!("{} state must be {} bytes", t.name(), template(t).state_len)));
     }
     let s = AnyState::decode(t, state)?;
@@ -611,7 +665,7 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
                 v.push(*family);
                 v.push(t.kind_code().expect("kind"));
                 v.push(flags);
-                put_compact_state(&mut v, template(*t), state)?;
+                put_compact_any(&mut v, *t, state)?;
                 for (c, fam) in parts.iter().zip(&fams) {
                     put_varint(&mut v, u64::from(c.token_output));
                     if *fam == Family::Kcc20 && c.extension_commitment != [0; 32] {
@@ -634,7 +688,7 @@ pub fn encode(records: &[Record]) -> Result<Vec<u8>> {
                 v.push(*family);
                 v.push(t.kind_code().expect("kind"));
                 v.push(if deadline.is_some() { FLAG_DEADLINE } else { 0 });
-                put_compact_state(&mut v, template(*t), state)?;
+                put_compact_any(&mut v, *t, state)?;
                 if let Some(d) = deadline {
                     put_varint(&mut v, *d);
                 }
@@ -710,7 +764,7 @@ pub fn release_of(p: &Payload) -> Option<Release> {
 ///
 /// The pair kinds hold one or two custodies depending on their state, see [`custody_families`].
 pub fn holds_tokens(t: TemplateId) -> bool {
-    matches!(t.base(), TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk)
+    matches!(t.base(), TemplateId::KobAsk | TemplateId::KobCondAsk | TemplateId::KobIfdAsk | TemplateId::KobCurveAsk)
 }
 
 /// The custody parts a placement record of `s` carries, in order, as the family of each custody's
@@ -824,7 +878,7 @@ fn decode_order_compact(v: &[u8]) -> Result<Record> {
     if flags & !(FLAG_DEADLINE | FLAG_EXT_ZERO | FLAG_PREFUND_EXT_ZERO) != 0 {
         return Err(Error::Payload(format!("order record flags {flags:#04x}: unknown bits")));
     }
-    let state = get_compact_state(v, &mut p, template(t))?;
+    let state = get_compact_any(v, &mut p, t)?;
     let t = build_of(t, &state);
     let fams = custody_families(&check_order_state(family, t, &state, true)?);
     let mut parts = vec![];
@@ -898,7 +952,7 @@ fn decode_amend(v: &[u8]) -> Result<Record> {
     if flags & !FLAG_DEADLINE != 0 {
         return Err(Error::Payload(format!("amend record flags {flags:#04x}: unknown bits")));
     }
-    let state = get_compact_state(v, &mut p, template(t))?;
+    let state = get_compact_any(v, &mut p, t)?;
     let t = build_of(t, &state);
     check_order_state(family, t, &state, false)?;
     let deadline = if flags & FLAG_DEADLINE != 0 { Some(get_varint(v, &mut p, "deadline")?) } else { None };
@@ -1020,6 +1074,32 @@ fn verify_custody(
     Ok(RecoveredCustody { output: c.token_output as u32, value: tout.value, state: st })
 }
 
+/// The token of an unbound curve (`docs/design/curve-ask-spec.md` §4): the covenant id of the
+/// custody output, which must be a genesis of this transaction (its id recomputed from its group).
+fn verify_token_genesis(tx: &TxJson, k: usize, o: usize) -> Result<[u8; 32]> {
+    let bad = |m: &str| Err(Error::Payload(format!("order record for output {o}: {m}")));
+    let Some(txo) = tx.outputs.get(k) else { return bad("custody output missing") };
+    let Some(cov) = &txo.covenant else { return bad("an unbound curve's custody has no covenant binding") };
+    let Some(inp) = tx.inputs.get(cov.authorizing_input as usize) else { return bad("authorising input missing") };
+    if inp.utxo.covenant_id == Some(cov.covenant_id) {
+        return bad("an unbound curve is placed only in its token's genesis");
+    }
+    let group: Vec<(u32, TransactionOutput)> = tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.covenant.as_ref() == Some(cov))
+        .map(|(j, x)| {
+            Ok((j as u32, TransactionOutput { value: x.value, script_public_key: spk_from_string(&x.script_public_key)?, covenant: None }))
+        })
+        .collect::<Result<_>>()?;
+    let op = TransactionOutpoint { transaction_id: TransactionId::from_bytes(inp.transaction_id), index: inp.index };
+    if covenant_id(op, group.iter().map(|(j, x)| (*j, x))).as_bytes() != cov.covenant_id {
+        return bad("the custody's token covenant id is not the genesis id of its group");
+    }
+    Ok(cov.covenant_id)
+}
+
 /// Checks the two tokens of a pair order.
 ///
 /// They must be supported programs of the recorded families, with the lengths the covenant uses,
@@ -1083,6 +1163,17 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
                     })
                     .collect()
             }
+            // an unbound curve: its token is the custody output's, a genesis of this transaction
+            None if matches!(&order, AnyState::KobCurveAsk(c) if c.is_unbound()) => {
+                let c = custody.as_ref().ok_or_else(|| Error::Payload(format!("order record for output {o}: no custody part")))?;
+                vec![(
+                    verify_token_genesis(tx, c.token_output as usize, o)?,
+                    order.token_tpl_hash().expect("order"),
+                    order.family(),
+                    order.custody_amount().expect("token-holding kind"),
+                    order.extension_commitment(),
+                )]
+            }
             None if order.holds_tokens() => vec![(
                 order.token_cov_id(),
                 order.token_tpl_hash().expect("order"),
@@ -1136,7 +1227,7 @@ pub fn recover_orders(tx: &TxJson) -> Result<Vec<RecoveredOrder>> {
 /// quantity is the KAS escrow on the order UTXO itself. A stray owned by its id stays a stray,
 /// because only a cancel sweeps strays.
 pub fn amendable(t: TemplateId) -> bool {
-    matches!(t.base(), TemplateId::KobAsk | TemplateId::KobBid)
+    matches!(t.base(), TemplateId::KobAsk | TemplateId::KobBid | TemplateId::KobCurveAsk)
 }
 
 /// The terms an in-place amend keeps.
@@ -1205,7 +1296,28 @@ pub fn check_amend_terms(previous: &AnyState, next: &AnyState) -> Result<()> {
                 return bad("mode, recvThreshold, topupTip and bought cannot change");
             }
         }
-        _ => return bad("only a plain ask or a plain bid is amended in place"),
+        (AnyState::KobCurveAsk(a), AnyState::KobCurveAsk(b)) => {
+            // keeps the maker, the token, the commitment, the scale and amountLeft (the custody
+            // stays exact); an unbound curve is bound by its amend (curve-ask-spec §5)
+            if a.maker != b.maker {
+                return bad("the maker cannot change");
+            }
+            if b.is_unbound() {
+                return bad("an amended curve names its token (an amend of an unbound curve binds it)");
+            }
+            if (!a.is_unbound() && a.token_cov_id != b.token_cov_id)
+                || (a.token_tpl_hash, a.tpl_prefix_len, a.tpl_suffix_len) != (b.token_tpl_hash, b.tpl_prefix_len, b.tpl_suffix_len)
+            {
+                return bad("the token cannot change");
+            }
+            if a.extension_commitment != b.extension_commitment {
+                return bad("the extensionCommitment cannot change (the order settles only the custody it holds)");
+            }
+            if (a.scale, a.amount_left) != (b.scale, b.amount_left) {
+                return bad("scale and amountLeft cannot change (the custody stays where it is: change the amount by cancel-replace)");
+            }
+        }
+        _ => return bad("only a plain ask, a plain bid or a curve is amended in place"),
     }
     Ok(())
 }

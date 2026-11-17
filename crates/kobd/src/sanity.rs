@@ -175,6 +175,8 @@ pub fn check(state: &AnyState) -> Result<(), String> {
     }
     let mut c = Ck(Ok(()));
     match state {
+        // listed by the indexer package (docs/design/curve-ask-spec.md)
+        AnyState::KobCurveAsk(_) => return Err("bad_state:kind:curve_not_indexed".into()),
         AnyState::KobAsk(s) | AnyState::KobAskKron(s) => {
             common(
                 &mut c,
