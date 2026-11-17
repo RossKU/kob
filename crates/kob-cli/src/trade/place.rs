@@ -68,9 +68,9 @@ AMOUNTS (always with a unit; never rounded)
   --exit-tip T   the if-done exit's tip (a pair if-done: the same default as --tip when not typed)
   --min-fill A   smallest fill (default: worth 10 KAS at the limit; IOC / FOK / market 1 base unit; if-done ceil(amount/4))
   --min-touch A  stop trigger threshold (default: max(min fill, 25% of the amount))
-  --delivery D   how a buy hands over what it buys: collected (the default for a resting buy of a KCC-20 token: the order
-                 keeps the tokens until it ends or you run kob claim; one delivery carrier in all), each (a new UTXO per
-                 fill; always for IOC / FOK / market, KRON and repeating exits) or one-utxo (a filler may top up your receive
+  --delivery D   how a buy hands over what it buys: each (the default: a new UTXO per fill; always for IOC / FOK /
+                 market, KRON and repeating exits), collected (the order keeps the tokens until it ends or you run
+                 kob claim; one delivery carrier in all) or one-utxo (a filler may top up your receive
                  UTXO and keeps --topup-tip KAS, default 1.25 x its extra fee; the threshold is kept per token and
                  --reset-threshold renews it; not on pair orders). For buys, pair orders and a sell-first if-done's exit
   --carrier KAS  KAS on every covenant UTXO of the order (default 1KAS; at least 0.08KAS and the token program's floor)

@@ -113,7 +113,7 @@ transaction's mass. A plan above it is refused, nothing is signed, and the comma
 | `kob replace <ID>` | amend a live order in place, or cancel-replace it in one transaction |
 | `kob cancel <ID>...` | the maker's cancel: custody, strays and KAS back to the maker (`--view FILE`: from saved indexer views, no indexer needed) |
 | `kob sweep <ID>...` | return an order's strays to you; the order continues in place (`--all`: every live order of the key; `--view FILE`: from saved indexer views) |
-| `kob claim <ID> [--merge | --sell --price P]` | take what a collected buy order bought: alone, with your UTXOs, or sold in the same transaction |
+| `kob claim <ID> [--merge | --sell --price P]` | take what a collected buy order (`--delivery collected`, not the default) bought: alone, with your UTXOs, or sold in the same transaction |
 | `kob refund <ID>` | refund an ended order; any key may send it and keeps the refund tip, less the fee |
 | `kob take <ID> --amount A` | fill a resting order as the taker (`--max-price` / `--min-price`; one is required with `--yes`) |
 | `kob send <TOKEN\|KAS> <TO> <AMOUNT>` | send a token or KAS |

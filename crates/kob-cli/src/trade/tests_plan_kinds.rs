@@ -1101,17 +1101,18 @@ fn ioc_buy(amount: i64, price: i64) -> Intent {
     })
 }
 
-/// bid-delivery-spec §10: a resting KCC-20 buy is collected by default and funded with one carrier;
-/// each fill keeps today's mode 0 and one carrier per budgeted fill.
+/// bid-delivery-spec §10: a resting KCC-20 buy is each fill by default (mode 0, one carrier per budgeted
+/// fill, founder decision 2026-11-17); collected is opt-in and funded with one carrier.
 #[test]
-fn a_resting_buy_is_collected_by_default_with_one_carrier() {
+fn a_resting_buy_is_each_fill_by_default_and_collected_with_one_carrier_on_request() {
     let m = market(TemplateId::Kcc20Ref);
     let e = env(&m);
     let buy = || Intent::Limit(limit(Side::Buy, 100 * TOK, P));
-    let each = valid(&pick(&e, Some(Choice::Each)), buy());
-    let col = valid(&pick(&e, None), buy());
-    assert_eq!(modes(&each, 0), (0, 0, 0, 0));
-    assert_eq!(modes(&col, 0), (1, 0, 0, 0), "the default is collected");
+    let each = valid(&pick(&e, None), buy());
+    let col = valid(&pick(&e, Some(Choice::Collected)), buy());
+    assert_eq!(modes(&each, 0), (0, 0, 0, 0), "the default is each fill");
+    assert_eq!(modes(&valid(&pick(&e, Some(Choice::Each)), buy()), 0), (0, 0, 0, 0));
+    assert_eq!(modes(&col, 0), (1, 0, 0, 0));
     assert_eq!((delivery_carriers(&each), delivery_carriers(&col)), (3, 1));
     assert_eq!(value(&each) - value(&col), 2 * C + 2, "the escrow holds one carrier, not three (and 2 sompi of rounding)");
     assert!(col.issues.is_empty(), "{:?}", col.issues);
@@ -1120,13 +1121,13 @@ fn a_resting_buy_is_collected_by_default_with_one_carrier() {
     // A stop buy is funded with one carrier too.
     let stop =
         |e: &Env| valid(e, Intent::Cond(CondIntent { stop: Some(260_000_000), ..cond(CondKind::StopMarket, Side::Buy, 10 * TOK) }));
-    let (s_each, s_col) = (stop(&pick(&e, Some(Choice::Each))), stop(&pick(&e, None)));
+    let (s_each, s_col) = (stop(&pick(&e, None)), stop(&pick(&e, Some(Choice::Collected))));
     assert_eq!((modes(&s_each, 0).0, modes(&s_col, 0).0), (0, 1));
     assert_eq!(value(&s_each) - value(&s_col), 2 * C);
     assert_eq!(delivery_carriers(&s_col), 1);
     // A DCA is a resting buy.
-    let dca = valid(&pick(&e, None), Intent::Schedule(sched(true, 10 * TOK, 2 * TOK, 600, P)));
-    assert_eq!(modes(&dca, 0).0, 1);
+    let dca = |c| valid(&pick(&e, c), Intent::Schedule(sched(true, 10 * TOK, 2 * TOK, 600, P)));
+    assert_eq!((modes(&dca(None), 0).0, modes(&dca(Some(Choice::Collected)), 0).0), (0, 1));
 }
 
 /// IOC / FOK / market buys, KRON and a repeating entry's exit deliver each fill whatever is asked.
@@ -1146,8 +1147,10 @@ fn immediate_kron_and_repeating_buys_deliver_each_fill() {
     let p = valid(&pick(&env(&k), Some(Choice::Collected)), Intent::Limit(limit(Side::Buy, 100 * k.scale, P)));
     assert_eq!(modes(&p, 0), (0, 0, 0, 0));
     assert!(codes(&p).contains(&"DELIVERY_EACH_FILL"));
-    // A sell-first entry: a plain one collects at its exit; a repeating one merges back and delivers each fill.
-    let plain = valid(&e, Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
+    // A sell-first entry: a plain one delivers each fill by default (collected on request); a repeating one merges back and delivers each fill.
+    let plain = valid(&pick(&e, Some(Choice::Collected)), Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
+    let dflt = valid(&e, Intent::Ifd(ifd(Side::Sell, 260_000_000, Some(240_000_000), None)));
+    assert_eq!((modes(&dflt, 0), modes(&dflt, 1)), ((0, 0, 0, 0), (0, 0, 0, 0)));
     assert_eq!(modes(&plain, 0), (1, 0, 0, 0), "the entry carries the exit block");
     assert_eq!(modes(&plain, 1), (1, 0, 0, 0), "and the committed exit agrees");
     let repeating = valid(&e, Intent::Ifd(rep(Side::Sell, 260_000_000, 240_000_000, Some(2))));
@@ -1194,13 +1197,13 @@ fn one_utxo_carries_the_threshold_and_the_tip() {
     assert!(p.new_threshold.is_some());
 }
 
-/// Pair orders: collected by default for the token they receive, never one-utxo, KRON each fill;
-/// the default tip pays the custody input of the later fills.
+/// Pair orders: each fill by default, collected on request for the token they receive, never one-utxo,
+/// KRON each fill; a collected order's default tip pays the custody input of the later fills.
 #[test]
-fn pair_orders_are_collected_and_their_tip_pays_the_later_fills() {
+fn pair_orders_are_each_fill_by_default_and_a_collected_tip_pays_the_later_fills() {
     let (a, b) = (TokenMarket { tick: 1, ..market(TemplateId::Kcc20Ref) }, tok_b());
-    let each = pick(&pair_env(&a, &b), Some(Choice::Each));
-    let col = pick(&pair_env(&a, &b), None);
+    let each = pick(&pair_env(&a, &b), None);
+    let col = pick(&pair_env(&a, &b), Some(Choice::Collected));
     let amount = 9_001;
     let plan = |e: &Env, side: Side, price: i64| {
         let mut i = Intent::Limit(limit(side, amount, price));
@@ -1229,7 +1232,7 @@ fn pair_orders_are_collected_and_their_tip_pays_the_later_fills() {
     assert_eq!(cpair(&p).mode, 1);
     assert_eq!(pair_mode(&valid(&col, ioc_buy(amount, 1_450))).0, 0);
     // KRON A: a buy receives KRON (each fill); the sell receives B (KCC-20: collected).
-    let k = pick(&pair_env(&kron_a(), &tok_b()), None);
+    let k = pick(&pair_env(&kron_a(), &tok_b()), Some(Choice::Collected));
     let mode = |side, price| pair_mode(&valid(&k, Intent::Limit(limit(side, amount, price)))).0;
     assert_eq!((mode(Side::Buy, 1_450), mode(Side::Sell, 1_550)), (0, 1));
     // A pair if-done order delivers each fill.
