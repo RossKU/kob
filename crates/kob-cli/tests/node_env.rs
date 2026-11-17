@@ -33,10 +33,12 @@ fn token_run(sub: &str, env: Option<&str>, extra: &[&str]) -> (std::path::PathBu
     let n = RUNS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     let cwd = std::env::temp_dir().join(format!("kob-node-env-{}-{n}", std::process::id()));
     std::fs::create_dir_all(&cwd).unwrap();
+    std::fs::write(cwd.join("key.hex"), format!("{SK}
+")).unwrap();
     let mut cmd = Command::new(BIN);
     cmd.current_dir(&cwd);
     cmd.args(["token", sub, "--name", "Test", "--ticker", "TEST", "--decimals", "8", "--supply", "5", "--network", "testnet-10"])
-        .args(["--fund-utxo", &fund, "--key", SK])
+        .args(["--fund-utxo", &fund, "--key-file", "key.hex"])
         .args(extra)
         .stdin(Stdio::null())
         .env_remove("KOB_NODE_WRPC")
@@ -85,28 +87,11 @@ fn token_issue_refuses_without_yes_when_there_is_no_terminal() {
     assert!(!ok && out.contains("exclude each other"), "{out}");
 }
 
-/// `kob token issue` is the former name of `kob token create`: it still works, says so on stderr, and keeps stdout (the plan, or the
-/// result with --json) the same.
+/// The help of `kob token create` is the help of the command, and names the removed spellings as removed.
 #[test]
-fn token_issue_is_a_deprecated_alias_of_token_create() {
-    let args = ["--dry-run"];
-    let (_, ok, new_out, new_err) = token_run("create", Some("ws://127.0.0.1:1"), &args);
-    assert!(ok && new_out.contains("genesis tx"), "{new_out}{new_err}");
-    // `create` is the current name; its `--key HEX` (this helper's way to give the key) is the deprecated part, and never printed
-    assert!(!new_err.contains("token issue") && new_err.contains("`--key HEX` is deprecated") && !new_err.contains(SK), "{new_err}");
-    let (_, ok, old_out, old_err) = token_run("issue", Some("ws://127.0.0.1:1"), &args);
-    assert!(ok, "{old_out}{old_err}");
-    assert!(old_err.contains("`kob token issue` is now `kob token create`") && old_err.contains("deprecated"), "{old_err}");
-    // the note is on stderr only: stdout is what `create` prints (the ids and files differ per run only in the output directory)
-    assert!(!old_out.contains("deprecated") && old_out.contains("genesis tx"), "{old_out}");
-    assert_eq!(old_out.lines().count(), new_out.lines().count());
-    // the help of either name is the create help
-    let help = |sub: &str| {
-        let o = Command::new(BIN).args(["token", sub, "--help"]).stdin(Stdio::null()).output().unwrap();
-        (o.status.success(), String::from_utf8_lossy(&o.stdout).to_string())
-    };
-    let (ok, h) = help("create");
-    assert!(ok && h.starts_with("kob token create: create a fixed-supply KCC-20 token"), "{h}");
-    let (ok, h) = help("issue");
-    assert!(ok && h.starts_with("kob token create:"), "{h}");
+fn token_create_help_is_reachable() {
+    let o = Command::new(BIN).args(["token", "create", "--help"]).stdin(Stdio::null()).output().unwrap();
+    let h = String::from_utf8_lossy(&o.stdout).to_string();
+    assert!(o.status.success() && h.starts_with("kob token create: create a fixed-supply KCC-20 token"), "{h}");
+    assert!(h.contains("`--key` was removed") && !h.contains("8x8-prototype") && h.contains("--allow-high-fee"), "{h}");
 }

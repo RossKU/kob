@@ -2,7 +2,7 @@
 //!
 //! The fixtures are real orders built with kob-protocol, a kob-backup, an export file and indexer
 //! views on disk. The tests run `kob recover` (search, report, `--cancel --dry-run`, submit) and
-//! `kob order sweep|cancel`. Every signed transaction is re-validated in the rusty-kaspa engine
+//! `kob sweep|cancel` on saved views (`--view`). Every signed transaction is re-validated in the rusty-kaspa engine
 //! from the file that the command wrote.
 //!
 //! Amounts are base units and prices are sompi per whole token. The fixtures use `SCALE = 1000`
@@ -15,7 +15,7 @@ use kob_protocol::artifacts::{template, token_template, TemplateId};
 use kob_protocol::json::to_hex;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AnyState, AskState, BidState, CondPairState, IfdPairState, PairState, TokenState, SIDE_ASK, SIDE_BID};
-use kob_protocol::tx::{pubkey_of, spk_to_string, SignedTx};
+use kob_protocol::tx::{pubkey_of, spk_to_string, FeeMode, FeeOptions, SignedTx};
 use kob_protocol::verify::validate_signed;
 use kob_protocol::Family;
 use serde_json::{json, Value};
@@ -475,8 +475,8 @@ fn recover_finds_cancels_and_submits() {
     // --cancel --dry-run: engine-validated signed cancels written, nothing submitted.
     let out = dir.join("signed");
     let a = recover::parse_args(&v(&format!(
-        "{base} --cancel --dry-run --key {} --out-dir {} --out {}",
-        to_hex(&sk(1)),
+        "{base} --cancel --dry-run --key-file {} --out-dir {} --out {}",
+        keyf(1),
         out.display(),
         dir.join("report.json").display()
     )))
@@ -498,7 +498,7 @@ fn recover_finds_cancels_and_submits() {
     // Submit without `--yes`: with no terminal to ask, every cancel is refused and nothing is
     // signed or sent.
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        let a = recover::parse_args(&v(&format!("{base} --cancel --key {}", to_hex(&sk(1))))).unwrap();
+        let a = recover::parse_args(&v(&format!("{base} --cancel --key-file {}", keyf(1)))).unwrap();
         let (report, ok) = recover::execute(&a).unwrap();
         assert!(!ok, "a refusal is an exit code 1: {report}");
         assert_eq!(by_cov(&report, A1)["cancel"]["status"], "refused");
@@ -506,7 +506,7 @@ fn recover_finds_cancels_and_submits() {
         assert!(node.lock().unwrap().submitted.is_empty(), "nothing submitted");
     }
     // With --yes: one transaction per live order of the key.
-    let a = recover::parse_args(&v(&format!("{base} --cancel --yes --key {}", to_hex(&sk(1))))).unwrap();
+    let a = recover::parse_args(&v(&format!("{base} --cancel --yes --key-file {}", keyf(1)))).unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
     assert!(ok, "{report}");
     assert_eq!(by_cov(&report, A7)["cancel"]["status"], "submitted");
@@ -516,9 +516,9 @@ fn recover_finds_cancels_and_submits() {
     // Without `--maker`, the order of another maker is found live. Its cancel is skipped and never
     // attempted with this key.
     let a = recover::parse_args(&v(&format!(
-        "--from {} --node {url} --network {NET} --cancel --dry-run --key {}",
+        "--from {} --node {url} --network {NET} --cancel --dry-run --key-file {}",
         export.display(),
-        to_hex(&sk(1))
+        keyf(1)
     )))
     .unwrap();
     let (report, ok) = recover::execute(&a).unwrap();
@@ -574,7 +574,7 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     assert!(by_cov(&report, A9)["note"].as_str().unwrap().contains("--amount-left ignored"), "{report}");
     // The hinted order is cancellable like any other.
     let out = dir.join("signed");
-    let report = run(&format!("--amount-left 6.5 --cancel --dry-run --key {} --out-dir {}", to_hex(&sk(1)), out.display()));
+    let report = run(&format!("--amount-left 6.5 --cancel --dry-run --key-file {} --out-dir {}", keyf(1), out.display()));
     let c = &by_cov(&report, A9)["cancel"];
     assert_eq!(c["status"], "signed", "{c}");
     let s = signed_from(c["file"].as_str().unwrap());
@@ -583,9 +583,9 @@ fn amount_left_hint_finds_a_partial_fill_the_fallback_misses() {
     let e = recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --yes")).unwrap_err();
     assert!(e.contains("belong to --cancel"), "{e}");
     let e =
-        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key 00 --yes --dry-run")).unwrap_err();
+        recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt --yes --dry-run")).unwrap_err();
     assert!(e.contains("exclude each other"), "{e}");
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key 00 -y")).unwrap().yes);
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-file k.txt -y")).unwrap().yes);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left abc")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left 1.2.3")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --amount-left zz=5")).is_err());
@@ -669,26 +669,92 @@ fn a1_view(f: &Fixture, cur: (u8, u32)) -> Value {
     )
 }
 
+/// The path of a file that holds the key of `sk(n)` (a key never goes on the command line).
+fn keyf(n: u8) -> String {
+    let dir = std::env::temp_dir().join(format!("kob-cli-e2e-keys-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(format!("k{n}"));
+    // Written aside and renamed in one step: tests run in parallel and read the file while another writes it.
+    let tmp = dir.join(format!("k{n}.{:?}.tmp", std::thread::current().id()));
+    std::fs::write(&tmp, format!("{}\n", to_hex(&sk(n)))).unwrap();
+    std::fs::rename(&tmp, &p).unwrap();
+    p.display().to_string()
+}
+
+/// The options of `prepare` at the relay floor.
+fn opts(op: order::Op, url: &str) -> order::Opts {
+    order::Opts {
+        op,
+        node: url.to_string(),
+        network: NET.to_string(),
+        fee: FeeOptions { fee_rate: None, fee_mode: FeeMode::Relay },
+    }
+}
+
+/// The sweep or cancel of the view `doc` for `maker`, built and not signed; `Err` is a skip or a refusal.
+fn prep(o: &order::Opts, doc: &Value, maker: u8) -> Result<order::Prepared, order::Outcome> {
+    let parsed = inputs::parse(doc, "v", NET).unwrap();
+    order::prepare(&parsed.views[0], o, pk(maker)).unwrap()
+}
+
+/// The reason of a skipped or refused order, with its status.
+fn why(r: Result<order::Prepared, order::Outcome>) -> (&'static str, String) {
+    let o = r.err().expect("skipped or refused");
+    (o.status, o.json["reason"].as_str().unwrap_or("").to_string())
+}
+
+/// `kob sweep` or `kob cancel` on a view file, as a user runs it, and the exit code.
+fn run_op(op: order::Op, url: &str, file: &Path, extra: &str) -> i32 {
+    let args = v(&format!("--view {} --key-file {} --node {url} --network {NET} {extra}", file.display(), keyf(1)));
+    match op {
+        order::Op::Sweep => crate::trade::actions::run_sweep(&args),
+        order::Op::Cancel => crate::trade::actions::run_cancel(&args),
+    }
+}
+
 #[test]
-fn order_and_recover_take_the_priority_fee_flag() {
-    use kob_protocol::tx::FeeMode;
+fn recover_takes_the_priority_fee_flag_and_a_sweep_builds_it() {
     // Parsing: off by default, a switch without a value. `kob recover` takes it with --cancel only.
-    let o = |extra: &str| {
-        order::parse_args(order::Op::Cancel, &v(&format!("--view a.json --key 00 --node ws://x:1 --network {NET} {extra}")))
-    };
-    assert!(!o("").unwrap().priority_fee);
-    assert!(o("--priority-fee").unwrap().priority_fee);
-    assert!(o("--priority-fee=1").is_err());
     let r = |extra: &str| recover::parse_args(&v(&format!("--from a.json --node ws://x:1 --network {NET} {extra}")));
-    assert!(!r("--cancel --key 00").unwrap().priority_fee);
-    assert!(r("--cancel --key 00 --priority-fee --fee-rate 150").unwrap().priority_fee);
+    assert!(!r("--cancel --key-file k.txt").unwrap().priority_fee);
+    assert!(r("--cancel --key-file k.txt --priority-fee --fee-rate 150").unwrap().priority_fee);
     assert!(r("--priority-fee").unwrap_err().contains("belong to --cancel"));
-    assert!(order::USAGE.contains("--priority-fee") && recover::USAGE.contains("--priority-fee"));
+    assert!(recover::USAGE.contains("--priority-fee") && recover::USAGE.contains("--allow-high-fee"));
+    assert!(crate::trade::actions::SWEEP_USAGE.contains("--view") && crate::trade::actions::CANCEL_USAGE.contains("--view"));
 
     // The fee actually built: a bid's sweep pays its fee from a plain UTXO of the maker.
     let f = fixture();
     let (url, _node) = mock::start(f.utxos.clone());
-    let dir = tmp("order-priority");
+    let bid_view = view(
+        A2,
+        template(TemplateId::KobBid).hash,
+        any_json(&f.a2),
+        (0x21, 0),
+        f.bid_value,
+        None,
+        vec![tview(P, TOKEN, 0x23, 5, A2, false, true)],
+    );
+    let sweep = |mode: FeeMode| {
+        let mut o = opts(order::Op::Sweep, &url);
+        o.fee.fee_mode = mode;
+        prep(&o, &bid_view, 1).ok().expect("built").built.fee
+    };
+    let (relay, prio) = (sweep(FeeMode::Relay), sweep(FeeMode::Priority));
+    assert_eq!(relay.fee_mode, FeeMode::Relay);
+    assert_eq!(prio.fee_mode, FeeMode::Priority);
+    // The priority fee is the relay floor or above it, charged on the storage-inclusive mass at the
+    // default rate.
+    assert_eq!(prio.min_fee, kob_protocol::tx::priority_fee(&prio.mass, relay.fee_rate));
+    assert!(prio.min_fee >= relay.min_fee && prio.fee >= relay.fee, "{prio:?} {relay:?}");
+}
+
+/// The fee ceiling of a sweep: a fee above 4 times the estimate is refused (exit 1, nothing signed or sent), and
+/// `--allow-high-fee` pays it.
+#[test]
+fn a_fee_above_the_ceiling_is_refused_and_allowed_with_the_flag() {
+    let f = fixture();
+    let (url, node) = mock::start(f.utxos.clone());
+    let dir = tmp("ceiling");
     let bid_view = view(
         A2,
         template(TemplateId::KobBid).hash,
@@ -699,65 +765,75 @@ fn order_and_recover_take_the_priority_fee_flag() {
         vec![tview(P, TOKEN, 0x23, 5, A2, false, true)],
     );
     let file = write(&dir, "a2.json", &bid_view);
-    let key = to_hex(&sk(1));
-    let sweep = |extra: &str| {
-        let a = order::parse_args(
-            order::Op::Sweep,
-            &v(&format!(
-                "--view {} --key {key} --node {url} --network {NET} --out-dir {} --dry-run {extra}",
-                file.display(),
-                dir.join("out").display()
-            )),
-        )
+    let out = dir.join("out");
+    let out_arg = format!("--out-dir {}", out.display());
+    // The relay floor passes, and so does a rate of 3 times the floor.
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, &format!("--dry-run {out_arg}")), 0);
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, &format!("--dry-run --fee-rate 300 {out_arg}")), 0);
+    // 40 times the floor is above the ceiling, even with --yes: refused, nothing written, nothing sent.
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, &format!("--yes --fee-rate 4000 {out_arg}")), 1);
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, "--dry-run --fee-rate 4000"), 1, "a dry run shows the refusal too");
+    assert!(node.lock().unwrap().submitted.is_empty() && !out.exists());
+    // With the flag it is paid.
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, &format!("--yes --fee-rate 4000 --allow-high-fee {out_arg}")), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), 1);
+    let s = signed_from(out.join(format!("{}.sweep.json", to_hex(&A2))).to_str().unwrap());
+    assert_eq!(s.fee.fee_rate, 4000);
+    // The node's own estimate moves the ceiling: at 300 sompi per gram a rate of 1000 is within 4 times, 6000 is not.
+    node.lock().unwrap().fee_estimate = Some(json!({"estimate": {
+        "priorityBucket": {"feerate": 300.0, "estimatedSeconds": 0.5},
+        "normalBuckets": [{"feerate": 250.0, "estimatedSeconds": 20.0}],
+        "lowBuckets": [{"feerate": 100.0, "estimatedSeconds": 3000.0}]
+    }}));
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, "--dry-run --fee-rate 1000"), 0);
+    assert_eq!(run_op(order::Op::Sweep, &url, &file, "--dry-run --fee-rate 6000"), 1);
+    // `kob recover --cancel` and `kob cancel` obey it as well.
+    assert_eq!(run_op(order::Op::Cancel, &url, &file, "--dry-run --fee-rate 6000"), 1);
+    let (backup, _) = files(&f, &dir);
+    let recover = |extra: &str| {
+        let a = recover::parse_args(&v(&format!(
+            "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {} --fee-rate 6000 {extra}",
+            backup.display(),
+            to_hex(&pk(1)),
+            keyf(1)
+        )))
         .unwrap();
-        let (report, ok) = order::execute(&a).unwrap();
-        assert!(ok, "{report}");
-        signed_from(report["orders"][0]["file"].as_str().unwrap())
+        recover::execute(&a).unwrap().0
     };
-    let relay = sweep("");
-    let prio = sweep("--priority-fee");
-    assert_eq!(relay.fee.fee_mode, FeeMode::Relay);
-    assert_eq!(prio.fee.fee_mode, FeeMode::Priority);
-    // The priority fee is the relay floor or above it, charged on the storage-inclusive mass at the
-    // default rate.
-    assert_eq!(prio.fee.min_fee, kob_protocol::tx::priority_fee(&prio.fee.mass, relay.fee.fee_rate));
-    assert!(prio.fee.min_fee >= relay.fee.min_fee && prio.fee.fee >= relay.fee.fee, "{:?} {:?}", prio.fee, relay.fee);
+    let report = recover("");
+    let c = &by_cov(&report, A1)["cancel"];
+    assert_eq!((c["status"].as_str(), c["code"].as_str()), (Some("refused"), Some("FEE_ABOVE_CEILING")), "{c}");
+    assert!(c["reason"].as_str().unwrap().contains("--allow-high-fee"), "{c}");
+    assert_eq!(by_cov(&recover("--allow-high-fee"), A1)["cancel"]["status"], "signed");
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-fn order_sweep_and_cancel_from_views() {
+fn sweep_and_cancel_from_views() {
     let f = fixture();
     let (url, node) = mock::start(f.utxos.clone());
     let dir = tmp("order");
-    let key = to_hex(&sk(1));
-    let sweep = |file: &Path, extra: &str| {
-        let a = order::parse_args(
-            order::Op::Sweep,
-            &v(&format!(
-                "--view {} --key {key} --node {url} --network {NET} --out-dir {} {extra}",
-                file.display(),
-                dir.join("out").display()
-            )),
-        )
-        .unwrap();
-        order::execute(&a).unwrap()
-    };
+    let out = dir.join("out");
+    let o_sweep = opts(order::Op::Sweep, &url);
+    let o_cancel = opts(order::Op::Cancel, &url);
 
     // An ask with own and foreign strays: swept in place, paid by its carrier.
-    let p = write(&dir, "a1.json", &a1_view(&f, (0x11, 0)));
-    let (report, ok) = sweep(&p, "--dry-run");
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["status"], "signed", "{o}");
-    assert_eq!(o["funding"], "order");
-    assert_eq!(o["returned"].as_array().unwrap().len(), 2, "own token and the foreign token: {o}");
-    assert_eq!(o["left_behind"].as_array().unwrap().len(), 2, "unproven stray and foreign stray without a program: {o}");
-    assert!(o["disclosure"].as_str().unwrap().contains("90-day idle window restarts"));
-    let s = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&f.a1.spk()), "output 0 continues the order");
-    assert_eq!(s.tx.outputs[0].covenant.as_ref().unwrap().covenant_id, A1);
-    assert_eq!(s.tx.inputs.len(), 4, "order + 2 own strays + 1 foreign, no custody, no funding");
+    let a1 = a1_view(&f, (0x11, 0));
+    let p = write(&dir, "a1.json", &a1);
+    let sw = prep(&o_sweep, &a1, 1).ok().expect("built");
+    assert!(matches!(sw.funding, crate::common::Funding::Own));
+    assert_eq!(sw.returned.len(), 2, "own token and the foreign token: {:?}", sw.returned);
+    assert_eq!(sw.left.len(), 2, "unproven stray and foreign stray without a program: {:?}", sw.left);
+    assert!(sw.disclosure.contains("90-day idle window restarts"));
+    assert_eq!(sw.built.tx.outputs[0].script_public_key, spk_to_string(&f.a1.spk()), "output 0 continues the order");
+    assert_eq!(sw.built.tx.outputs[0].covenant.as_ref().unwrap().covenant_id, A1);
+    assert_eq!(sw.built.tx.inputs.len(), 4, "order + 2 own strays + 1 foreign, no custody, no funding");
+    // Signed and sent by the command, and engine-validated from its file.
+    assert_eq!(run_op(order::Op::Sweep, &url, &p, &format!("--yes --out-dir {}", out.display())), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), 1);
+    let s = signed_from(out.join(format!("{}.sweep.json", to_hex(&A1))).to_str().unwrap());
+    assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&f.a1.spk()));
+    assert_eq!(s.tx.inputs.len(), 4);
 
     // The sweep of a bid needs funding: the smallest sufficient plain KAS UTXO of the maker, from
     // the node.
@@ -770,28 +846,22 @@ fn order_sweep_and_cancel_from_views() {
         None,
         vec![tview(P, TOKEN, 0x23, 5, A2, false, true)],
     );
-    let (report, ok) = sweep(&write(&dir, "a2.json", &bid_view), "--dry-run");
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["funding"], format!("{}:0", to_hex(&[0x91; 32])));
-    let s = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(s.tx.outputs[0].script_public_key, spk_to_string(&f.a2.spk()));
-    assert_eq!(s.tx.outputs[0].value, f.bid_value, "a funded sweep keeps the bid's escrow");
+    let b = prep(&o_sweep, &bid_view, 1).ok().expect("built");
+    match &b.funding {
+        crate::common::Funding::Key(k) => assert_eq!((k.utxo.transaction_id, k.utxo.index), ([0x91; 32], 0)),
+        crate::common::Funding::Own => panic!("a bid sweep needs funding"),
+    }
+    assert_eq!(b.built.tx.outputs[0].script_public_key, spk_to_string(&f.a2.spk()));
+    assert_eq!(b.built.tx.outputs[0].value, f.bid_value, "a funded sweep keeps the bid's escrow");
 
-    // A stale view (the order moved on): refused, nothing built.
-    let (report, ok) = sweep(&write(&dir, "stale.json", &a1_view(&f, (0x11, 5))), "--dry-run");
-    assert!(!ok);
-    assert_eq!(report["orders"][0]["status"], "refused");
-    assert!(report["orders"][0]["reason"].as_str().unwrap().contains("stale view"));
-    assert_eq!(
-        order::run(&v(&format!(
-            "sweep --view {} --key {key} --node {url} --network {NET} --dry-run",
-            dir.join("stale.json").display()
-        ))),
-        1
-    );
+    // A stale view (the order moved on): refused, nothing built, exit 1.
+    let stale = a1_view(&f, (0x11, 5));
+    let (status, reason) = why(prep(&o_sweep, &stale, 1));
+    assert_eq!(status, "refused");
+    assert!(reason.contains("stale view"), "{reason}");
+    assert_eq!(run_op(order::Op::Sweep, &url, &write(&dir, "stale.json", &stale), "--dry-run"), 1);
 
-    // A page: the key's order is swept and submitted, another maker's is skipped.
+    // A page: the key's order is swept and submitted, another maker's is skipped (not an error).
     let other = view(
         A6,
         template(TemplateId::KobAsk).hash,
@@ -801,96 +871,62 @@ fn order_sweep_and_cancel_from_views() {
         None,
         vec![tview(P, TOKEN, 0x63, 1, A6, false, true)],
     );
+    let (status, reason) = why(prep(&o_sweep, &other, 1));
+    assert_eq!(status, "skipped");
+    assert!(reason.contains("another maker"), "{reason}");
     let page = json!({"items": [a1_view(&f, (0x11, 0)), other], "next_cursor": null});
     let pagef = write(&dir, "page.json", &page);
+    let before = node.lock().unwrap().submitted.len();
     // Without `--yes` and without a terminal the sweep is refused, and nothing is signed or sent.
-    // The order of the other maker is skipped.
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        let (report, ok) = sweep(&pagef, "");
-        assert!(!ok, "a refusal is an exit code 1: {report}");
-        assert_eq!(report["orders"][0]["status"], "refused");
-        assert!(report["orders"][0]["reason"].as_str().unwrap().contains("pass --yes"), "{report}");
-        assert_eq!(report["orders"][1]["status"], "skipped");
-        assert!(node.lock().unwrap().submitted.is_empty(), "nothing submitted");
+        assert_eq!(run_op(order::Op::Sweep, &url, &pagef, ""), 1, "a refusal is an exit code 1");
+        assert_eq!(node.lock().unwrap().submitted.len(), before, "nothing submitted");
     }
-    let (report, ok) = sweep(&pagef, "--yes");
-    assert!(ok, "{report}");
-    assert_eq!(report["orders"][0]["status"], "submitted");
-    assert_eq!(report["orders"][1]["status"], "skipped");
-    assert_eq!(node.lock().unwrap().submitted.len(), 1);
+    assert_eq!(run_op(order::Op::Sweep, &url, &pagef, "--yes"), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), before + 1);
 
     // The maker's cancel: refused without --yes, submitted with it.
-    let cancel = |extra: &str| {
-        let a = order::parse_args(
-            order::Op::Cancel,
-            &v(&format!("--view {} --key {key} --node {url} --network {NET} {extra}", p.display())),
-        )
-        .unwrap();
-        order::execute(&a).unwrap()
-    };
     if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-        let (report, ok) = cancel("");
-        assert!(!ok && report["orders"][0]["status"] == "refused", "{report}");
-        assert_eq!(node.lock().unwrap().submitted.len(), 1, "nothing more submitted");
+        assert_eq!(run_op(order::Op::Cancel, &url, &p, ""), 1);
+        assert_eq!(node.lock().unwrap().submitted.len(), before + 1, "nothing more submitted");
     }
-    let (report, ok) = cancel("-y");
-    assert!(ok && report["orders"][0]["status"] == "submitted", "{report}");
-    assert_eq!(node.lock().unwrap().submitted.len(), 2);
-    // --yes and --dry-run exclude each other.
-    let e = order::parse_args(order::Op::Cancel, &v(&format!("--view {} --key {key} --node {url} --yes --dry-run", p.display())))
-        .unwrap_err();
-    assert!(e.contains("exclude each other"), "{e}");
+    assert_eq!(run_op(order::Op::Cancel, &url, &p, "-y"), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), before + 2);
+    // --yes and --dry-run exclude each other: a usage error.
+    assert_eq!(run_op(order::Op::Cancel, &url, &p, "--yes --dry-run"), 2);
+    // Neither an id nor a file: a usage error.
+    assert_eq!(crate::trade::actions::run_cancel(&v(&format!("--key-file {} --node {url} --network {NET}", keyf(1)))), 2);
+    assert_eq!(crate::trade::actions::run_sweep(&v(&format!("--key-file {} --node {url} --network {NET}", keyf(1)))), 2);
 
     // The maker's cancel from the view: custody, own and foreign strays back to the maker.
-    let a = order::parse_args(
-        order::Op::Cancel,
-        &v(&format!(
-            "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
-            p.display(),
-            dir.join("out").display()
-        )),
-    )
-    .unwrap();
-    let (report, ok) = order::execute(&a).unwrap();
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["status"], "signed", "{o}");
-    let s = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(s.tx.inputs.len(), 5, "order + custody + 2 own strays + 1 foreign");
-    assert!(o["disclosure"].as_str().unwrap().contains("the custody (10000 units)"));
+    let c = prep(&o_cancel, &a1, 1).ok().expect("built");
+    assert_eq!(c.built.tx.inputs.len(), 5, "order + custody + 2 own strays + 1 foreign");
+    assert!(c.disclosure.contains("the custody (10000 units)"), "{}", c.disclosure);
+    let dry = dir.join("out2");
+    assert_eq!(run_op(order::Op::Cancel, &url, &p, &format!("--yes --out-dir {}", dry.display())), 0);
+    let s = signed_from(dry.join(format!("{}.cancel.json", to_hex(&A1))).to_str().unwrap());
+    assert_eq!(s.tx.inputs.len(), 5);
 
-    // An order of a template this build does not pin is unknown: neither cancelled nor swept.
+    // An order of a template this build does not pin is unknown: neither cancelled nor swept. From a file that is a
+    // skip, not an error.
     let mut unpinned = a1_view(&f, (0x11, 0));
     unpinned["template_hash"] = json!(to_hex(&[0x98; 32]));
     let up = write(&dir, "unpinned.json", &unpinned);
-    let a = order::parse_args(
-        order::Op::Cancel,
-        &v(&format!(
-            "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
-            up.display(),
-            dir.join("out").display()
-        )),
-    )
-    .unwrap();
-    let (report, _) = order::execute(&a).unwrap();
-    assert_eq!(report["orders"][0]["status"], "skipped");
-    assert_eq!(report["orders"][0]["reason"], "template is neither pinned by this build nor in its cancel-only table");
-    let (report, _) = sweep(&up, "--dry-run");
-    assert_eq!(report["orders"][0]["status"], "skipped");
+    for op in [&o_cancel, &o_sweep] {
+        let (status, reason) = why(prep(op, &unpinned, 1));
+        assert_eq!(status, "skipped");
+        assert_eq!(reason, "template is neither pinned by this build nor in its cancel-only table");
+    }
+    let before = node.lock().unwrap().submitted.len();
+    assert_eq!(run_op(order::Op::Cancel, &url, &up, "--yes"), 0);
+    assert_eq!(node.lock().unwrap().submitted.len(), before);
 
     // A key that is not the maker builds nothing.
-    let a = order::parse_args(
-        order::Op::Cancel,
-        &v(&format!("--view {} --key {} --node {url} --network {NET} --dry-run", p.display(), to_hex(&sk(2)))),
-    )
-    .unwrap();
-    let (report, _) = order::execute(&a).unwrap();
-    assert_eq!(report["orders"][0]["status"], "skipped");
-    // A backup is not a view.
+    assert_eq!(why(prep(&o_cancel, &a1, 2)).0, "skipped");
+    // A backup is not a view: an error, and nothing sent.
     let (b, _) = files(&f, &dir);
-    let a =
-        order::parse_args(order::Op::Sweep, &v(&format!("--view {} --key {key} --node {url} --network {NET}", b.display()))).unwrap();
-    assert!(order::execute(&a).is_err());
+    assert_eq!(run_op(order::Op::Sweep, &url, &b, "--yes"), 1);
+    assert_eq!(node.lock().unwrap().submitted.len(), before);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -977,7 +1013,7 @@ fn input_formats_and_bad_input() {
         None
     )
     .is_err());
-    let k = order::parse_args_with(order::Op::Sweep, &v("--view a.json --key-env MY_KEY --network testnet-10"), None).unwrap();
+    let k = recover::parse_args_with(&v("--from a.json --node ws://x:1 --network testnet-10 --cancel --key-env MY_KEY"), None).unwrap();
     assert_eq!(k.key, Some(crate::token::KeySource::Env("MY_KEY".into())));
     assert!(
         recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --dry-run")).is_err(),
@@ -986,17 +1022,10 @@ fn input_formats_and_bad_input() {
     // No --network: the build's own network, else mainnet (never testnet-10 by default).
     let want = kob_protocol::artifacts::deployment_network().unwrap_or("mainnet");
     assert_eq!(recover::parse_args(&v("--from a.json --node ws://x:1")).unwrap().network, want);
-    assert_eq!(order::parse_args(order::Op::Cancel, &v("--view a.json --key 00 --node ws://x:1")).unwrap().network, want);
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --network moon")).is_err());
-    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key 00")).is_err());
+    assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --fee-rate 5 --cancel --key-file k.txt")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --bogus")).is_err());
     assert!(recover::parse_args(&v("--from a.json --node ws://x:1 --network testnet-10 --lots 3")).is_err(), "no lot flags remain");
-    assert!(order::parse_args_with(order::Op::Sweep, &v("--view a.json --node ws://x:1"), None).is_err(), "needs a key");
-    // No --node: the public nodes (unless $KOB_NODE_WRPC names one).
-    if std::env::var(crate::wrpc::NODE_ENV).is_err() {
-        let a = order::parse_args(order::Op::Sweep, &v("--view a.json --key 00 --network testnet-10")).unwrap();
-        assert_eq!(a.node, "resolver:testnet-10");
-    }
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -1072,9 +1101,9 @@ fn candidate_search() {
 
 /// An order under a retired template of the cancel-only table (`KobBid` b995661f).
 ///
-/// `kob order cancel` (from the single-order view of the indexer, `cancel_only`) and
+/// `kob cancel` (from the single-order view of the indexer, `cancel_only`) and
 /// `kob recover --cancel` (from a backup record) cancel it through the own script of that
-/// template, engine-validated. `kob order sweep` skips it. Nothing is submitted in a dry run.
+/// template, engine-validated. `kob sweep` skips it. A recover dry run submits nothing.
 #[test]
 fn retired_template_orders_are_cancelled_from_views_and_backups() {
     const AR: [u8; 32] = [0xd1; 32];
@@ -1087,31 +1116,19 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
     let (url, node) =
         mock::start(vec![node_utxo(&spk, 0xd2, 0, value, Some(AR)), node_utxo(&p2pk_spk(&pk(1)), 0x91, 0, 50 * KAS, None)]);
     let dir = tmp("retired");
-    let key = to_hex(&sk(1));
+    let key = keyf(1);
     let mut vw = view(AR, r.hash, any_json(&s), (0xd2, 0), value, None, vec![]);
     vw["cancel_only"] = json!(true);
     let p = write(&dir, "retired.json", &vw);
-    let run = |op: order::Op| {
-        let a = order::parse_args(
-            op,
-            &v(&format!(
-                "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
-                p.display(),
-                dir.join("out").display()
-            )),
-        )
-        .unwrap();
-        order::execute(&a).unwrap()
-    };
-    let (report, ok) = run(order::Op::Cancel);
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!(o["status"], "signed", "{o}");
-    assert!(o["disclosure"].as_str().unwrap().contains("older contract version, cancel only: KobBid b995661f"), "{o}");
-    let signed = signed_from(o["file"].as_str().unwrap());
-    assert_eq!(signed.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk), "the order input is the retired template's script");
-    let (report, _) = run(order::Op::Sweep);
-    assert_eq!(report["orders"][0]["status"], "skipped", "{report}");
+    let c = prep(&opts(order::Op::Cancel, &url), &vw, 1).ok().expect("built");
+    assert!(c.disclosure.contains("older contract version, cancel only: KobBid b995661f"), "{}", c.disclosure);
+    assert_eq!(c.built.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk), "the order input is the retired template's script");
+    // The command signs it, engine-validated from its file, and sends it.
+    let out = dir.join("out");
+    assert_eq!(run_op(order::Op::Cancel, &url, &p, &format!("--yes --out-dir {}", out.display())), 0);
+    let signed = signed_from(out.join(format!("{}.cancel.json", to_hex(&AR))).to_str().unwrap());
+    assert_eq!(signed.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk));
+    assert_eq!(why(prep(&opts(order::Op::Sweep, &url), &vw, 1)).0, "skipped", "a retired template is only cancelled");
 
     // The backup record of the web wallet for it is found on the node under the retired script and
     // cancelled with `--cancel`.
@@ -1122,7 +1139,7 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
         &json!({"format": "kob-backup", "version": 1, "network": NET, "exportedAt": "2026-11-06T00:00:00Z", "records": [rec], "txs": {}}),
     );
     let a = recover::parse_args(&v(&format!(
-        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key {key} --out-dir {}",
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {key} --out-dir {}",
         backup.display(),
         to_hex(&pk(1)),
         dir.join("signed").display()
@@ -1136,14 +1153,14 @@ fn retired_template_orders_are_cancelled_from_views_and_backups() {
     assert_eq!(o["cancel"]["status"], "signed", "{o}");
     let signed = signed_from(o["cancel"]["file"].as_str().unwrap());
     assert_eq!(signed.tx.inputs[0].utxo.script_public_key, spk_to_string(&spk));
-    assert!(node.lock().unwrap().submitted.is_empty(), "a dry run submits nothing");
+    assert_eq!(node.lock().unwrap().submitted.len(), 1, "only the cancel from the view was sent: the recover dry run sends nothing");
     let _ = std::fs::remove_dir_all(dir);
 }
 
 /// Pair orders: a sell-first `KobIfdPair` holds two custodies (its A and its B prefund), and a
 /// `KobPair` BID holds a custody of token B.
 ///
-/// `kob order cancel` returns both custodies, and a stray of token B (the order's own token), from
+/// `kob cancel --view` returns both custodies, and a stray of token B (the order's own token), from
 /// an indexer view. `kob recover` finds the entry and verifies both custodies, and its cancel
 /// carries the prefund.
 #[test]
@@ -1171,7 +1188,7 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     ];
     let (url, node) = mock::start(utxos);
     let dir = tmp("pair");
-    let key = to_hex(&sk(1));
+    let key = keyf(1);
 
     // The view of the entry: the A custody at `custody`, the B prefund at `pair.custodies[1]` and a
     // stray of B.
@@ -1190,42 +1207,33 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     );
     bv["pair"] = json!({"custodies": [{"token": to_hex(&TOKEN), "utxo": ca}, {"token": to_hex(&TOKEN_B), "utxo": cb}]});
     let bp = write(&dir, "b1.json", &bv);
-    let cancel_args = |file: &Path| {
-        order::parse_args(
-            order::Op::Cancel,
-            &v(&format!(
-                "--view {} --key {key} --node {url} --network {NET} --dry-run --out-dir {}",
-                file.display(),
-                dir.join("out").display()
-            )),
-        )
-        .unwrap()
+    let o_cancel = opts(order::Op::Cancel, &url);
+    let out = dir.join("out");
+    let cancel_file = |file: &Path, cov: [u8; 32]| {
+        assert_eq!(run_op(order::Op::Cancel, &url, file, &format!("--yes --out-dir {}", out.display())), 0);
+        signed_from(out.join(format!("{}.cancel.json", to_hex(&cov))).to_str().unwrap())
     };
-    let (report, ok) = order::execute(&cancel_args(&bp)).unwrap();
-    assert!(ok, "{report}");
-    let o = &report["orders"][0];
-    assert_eq!((o["status"].as_str(), o["kind"].as_str()), (Some("signed"), Some("KobIfdPair")), "{o}");
-    let s = signed_from(o["file"].as_str().unwrap());
+    let c = prep(&o_cancel, &bv, 1).ok().expect("built");
+    assert_eq!(c.built.tx.inputs.len(), 4, "order, both custodies and the stray of B");
+    let s = cancel_file(&bp, B1);
     let spent: Vec<([u8; 32], u32)> = s.tx.inputs.iter().map(|i| (i.transaction_id, i.index)).collect();
     for tag in [0xd1u8, 0xd2, 0xd3, 0xd4] {
-        assert!(spent.contains(&([tag; 32], 0)), "{tag:#x} spent: {o}");
+        assert!(spent.contains(&([tag; 32], 0)), "{tag:#x} spent");
     }
-    let d = o["disclosure"].as_str().unwrap();
+    let d = &c.disclosure;
     assert!(d.contains("the custody (10000 units of") && d.contains("the custody (2009 units of"), "{d}");
     // A view without the prefund custody is refused (the cancel must return both).
     let mut no_b = bv.clone();
     no_b["pair"] = json!({"custodies": [{"token": to_hex(&TOKEN), "utxo": no_b["custody"]["utxo"].clone()}]});
-    let (report, ok) = order::execute(&cancel_args(&write(&dir, "b1x.json", &no_b))).unwrap();
-    assert!(!ok);
-    assert_eq!(report["orders"][0]["status"], "refused");
+    assert_eq!(why(prep(&o_cancel, &no_b, 1)).0, "refused");
+    assert_eq!(run_op(order::Op::Cancel, &url, &write(&dir, "b1x.json", &no_b), "--yes"), 1);
 
     // A pair BID: its custody is the B escrow (token B's program).
     let mut cy = tview(P, TOKEN_B, 0xe2, y_escrow, B2, false, true);
     cy["role"] = json!("custody");
     let yv = view(B2, template(TemplateId::KobPair).hash, any_json(&y), (0xe1, 0), CARRIER + 8 * KAS, Some(cy), vec![]);
-    let (report, ok) = order::execute(&cancel_args(&write(&dir, "b2.json", &yv))).unwrap();
-    assert!(ok, "{report}");
-    let s = signed_from(report["orders"][0]["file"].as_str().unwrap());
+    assert!(prep(&o_cancel, &yv, 1).is_ok());
+    let s = cancel_file(&write(&dir, "b2.json", &yv), B2);
     assert!(s.tx.inputs.iter().any(|i| i.transaction_id == [0xe2; 32]), "the escrow custody is spent");
 
     // Recover: an export entry of each. Both custodies of the entry are verified, and the cancel
@@ -1237,7 +1245,7 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     ]});
     let ep = write(&dir, "export.json", &export);
     let a = recover::parse_args(&v(&format!(
-        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key {key} --out-dir {}",
+        "--from {} --node {url} --network {NET} --maker {} --cancel --dry-run --key-file {key} --out-dir {}",
         ep.display(),
         to_hex(&pk(1)),
         dir.join("signed").display()
@@ -1256,6 +1264,6 @@ fn pair_orders_cancel_from_views_and_recover_with_two_custodies() {
     assert_eq!((b2["status"].as_str(), b2["custody"]["status"].as_str()), (Some("live"), Some("verified")), "{b2}");
     assert!(b2.get("prefund").is_none());
     assert_eq!(b2["cancel"]["status"], "signed");
-    assert!(node.lock().unwrap().submitted.is_empty());
+    assert_eq!(node.lock().unwrap().submitted.len(), 2, "the two cancels from views; the recover dry run sends nothing");
     let _ = std::fs::remove_dir_all(dir);
 }

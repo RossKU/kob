@@ -487,7 +487,7 @@ pub fn build_replace(
         let slots = m.slots.0.min(MAX_TOKEN_INPUTS);
         if inputs > slots {
             return Err(format!(
-                "the order has more stray token UTXOs than one transaction moves ({slots} inputs): sweep them first (kob order sweep)"
+                "the order has more stray token UTXOs than one transaction moves ({slots} inputs): sweep them first (kob sweep)"
             ));
         }
         if need > have {
@@ -771,88 +771,183 @@ fn replan_replace(c: &Common, p: &Parsed, signer: &Signer, live: &Live, ms: &[To
 
 /// The help text of `kob cancel`.
 pub const CANCEL_USAGE: &str = "\
-kob cancel: the maker's cancel of live orders by covenant id (the indexer's view, every UTXO checked on the node)
+kob cancel: the maker's cancel of live orders by covenant id (the indexer's view, every UTXO checked on the node), or from saved views
 
 USAGE
   kob cancel <COVENANT_ID>... [options]
+  kob cancel --view <FILE>... [options]
 
   The order's KAS, its custody, a collected buy's bought tokens, the strays of its own token(s) and foreign strays (other tokens sent to it) return to
   the maker in one transaction per order; strays one transaction cannot take are reported. Fee from the released KAS,
-  else the smallest sufficient KAS UTXO of the key. (`kob order cancel --view FILE` does the same from saved views.)
+  else the smallest sufficient KAS UTXO of the key.
   An order under an older contract version (a retired template of this build's cancel-only table, which the indexer's
   single-order view marks `cancel_only`) is cancelled through that template's own cancel entry; nothing else is built
   for it.
+
+  --view FILE   repeatable: a saved indexer order view (GET /v1/orders/{id}) or a page of views ({\"items\":[..]}, e.g.
+                GET /v1/orders?maker=<pubkey>&status=active). It needs no indexer. Orders of other makers are skipped. The
+                view must name the order's current UTXO and its proven state; the node must hold an unspent output at the
+                order's script with its covenant id at that outpoint, else the view is refused as stale. The custody and
+                every stray are looked up on the node the same way (a stray the node does not hold is left out). A backup
+                or export file is not a view: `kob recover` reads those.
 ";
+
+/// The help text of `kob sweep`.
+pub const SWEEP_USAGE: &str = "\
+kob sweep: return the strays of live orders to the maker; the order continues unchanged
+
+USAGE
+  kob sweep <COVENANT_ID>... [options]
+  kob sweep --all [options]
+  kob sweep --view <FILE>... [options]
+
+  The maker's `cancel` entry continues the order IN PLACE: same covenant id, same script, custody untouched; strays of the
+  order's own token (a cross limit: also token B) and foreign strays (tokens of other covenant ids, moved with the
+  `program` the view names) go back to the maker, one output per token. Per token at most the program's token inputs and one
+  extension commitment (the first stray's) per transaction: the rest is reported, run again after this one confirms. A stray
+  without a proven state (or a foreign one without a program) is skipped. The order's 90-day idle window restarts with the
+  sweep. An order under an older contract version is only cancelled (`kob cancel`).
+  Fee: a plain ask pays from its carrier; every other kind adds the smallest sufficient plain KAS UTXO of the key.
+
+  --all         every live order of the key's maker (the indexer's list), each read as by covenant id; orders with no
+                strays are skipped
+  --view FILE   repeatable: a saved indexer order view or a page of views, as for `kob cancel --view` (no indexer needed;
+                orders of other makers are skipped; every UTXO is looked up on the node)
+";
+
+/// Where the orders of a sweep or cancel come from.
+enum Source {
+    /// A covenant id: the indexer's view of it. `true` when the person named it, `false` when --all listed it.
+    Id(String, bool),
+    /// A saved view: one order of a file.
+    View(Box<crate::inputs::View>),
+}
+
+/// The built order of a source, or why it is skipped or refused.
+type Prepared = Result<(Ready, Units), crate::order::Outcome>;
 
 /// Runs `kob cancel`.
 pub fn run_cancel(args: &[String]) -> i32 {
-    let (p, c, signer) = match ctx(args, &[], &[], CANCEL_USAGE) {
+    run_ops(crate::order::Op::Cancel, args, CANCEL_USAGE)
+}
+
+/// Runs `kob sweep`.
+pub fn run_sweep(args: &[String]) -> i32 {
+    run_ops(crate::order::Op::Sweep, args, SWEEP_USAGE)
+}
+
+/// The sweep or the cancel of each order named by covenant id or by `--view` file.
+fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
+    let sweep = op == crate::order::Op::Sweep;
+    let name = if sweep { "sweep" } else { "cancel" };
+    let bools: &[&str] = if sweep { &["--all"] } else { &[] };
+    let (p, c, signer) = match ctx_checked(args, &["--view"], bools, usage_text, |p| {
+        if p.pos.is_empty() && p.get("--view").is_none() && !p.has("--all") {
+            return Err(format!("give at least one covenant id or --view FILE{}", if sweep { " (or --all)" } else { "" }));
+        }
+        Ok(())
+    }) {
         Ok(x) => x,
         Err(code) => return code,
     };
-    if p.pos.is_empty() {
-        eprintln!("error: give at least one covenant id");
-        return 2;
-    }
     let mut code = 0;
-    for id in &p.pos {
-        let r = (|| -> Result<(Ready, Units), String> {
-            let cov = cov_arg(id)?;
-            let node = c.need_node()?.to_string();
-            let indexer = c.need_indexer()?;
-            let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT)?;
-            let parsed = crate::inputs::parse(&v, &format!("indexer order {}", to_hex(&cov)), &c.network)?;
-            let view = parsed.views.into_iter().next().ok_or("the indexer's view of the order is not usable")?;
-            let a = crate::order::Args {
-                op: crate::order::Op::Cancel,
-                views: vec![],
-                key: None,
-                node: node.clone(),
-                network: c.network.clone(),
-                dry_run: true,
-                yes: false,
-                fee_rate: c.fee_rate.unwrap_or(kob_protocol::tx::MIN_FEE_RATE),
-                priority_fee: c.priority_fee,
-                out_dir: None,
-                out: None,
-            };
-            let prepared = match crate::order::prepare(&view, &a, signer.pubkey)? {
-                Ok(x) => x,
-                Err(o) => return Err(o.json["reason"].as_str().unwrap_or("refused").to_string()),
-            };
-            let live = data::live_order(indexer, &node, &c.network, &cov).ok();
-            let ms = live.as_ref().and_then(|l| markets_of(&c, l).ok()).unwrap_or_default();
-            let mut lines = live.as_ref().map(|l| order_lines(l, &ms)).unwrap_or_default();
-            lines.push(prepared.disclosure.clone());
-            let issues = prepared
-                .left
-                .iter()
-                .map(|l| {
-                    issue(
-                        "CANCEL_LEFT_BEHIND",
-                        Severity::Warning,
-                        format!("left behind {}: {}", l["outpoint"].as_str().unwrap_or(""), l["reason"].as_str().unwrap_or("")),
-                    )
-                })
-                .collect();
-            Ok((
-                Ready {
-                    title: format!("cancel {}", to_hex(&cov)),
-                    lines,
-                    issues,
-                    file: prepared.name,
-                    json: prepared.info,
-                    built: prepared.built,
-                },
-                units_of(&ms),
-            ))
-        })();
-        let c2 = finish_or(&c, &signer, r.map_err(Fail::from), "this cancel");
+    // The ids as given, then the saved views, then (--all) the key's live orders.
+    let mut sources: Vec<Source> = p.pos.iter().map(|id| Source::Id(id.clone(), true)).collect();
+    for file in p.vals.get("--view").into_iter().flatten() {
+        match crate::inputs::read_file(std::path::Path::new(file), &c.network) {
+            Ok(parsed) if !parsed.entries.is_empty() => {
+                eprintln!("error: {file}: not an indexer order view (use `kob recover` for backup and export files)");
+                code = 1;
+            }
+            Ok(parsed) => {
+                for r in &parsed.rejected {
+                    eprintln!("rejected {}: {}", r.source, r.reason);
+                    code = 1;
+                }
+                sources.extend(parsed.views.into_iter().map(|v| Source::View(Box::new(v))));
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                code = 1;
+            }
+        }
+    }
+    if p.has("--all") {
+        let listed = c.need_indexer().and_then(|ix| super::views::fetch_orders(ix, &signer.pubkey, None, false));
+        match listed {
+            Ok(items) => sources.extend(items.iter().filter_map(|o| o["covenant_id"].as_str()).map(|id| Source::Id(id.to_string(), false))),
+            Err(e) => {
+                eprintln!("error: {e}");
+                code = 1;
+            }
+        }
+    }
+    // An order the person named by id that is skipped is an error. From a file or from --all,
+    // skipping another maker's order or an order with nothing to do is the normal case.
+    for src in sources {
+        let (named, r) = match src {
+            Source::Id(id, named) => (named, order_of_id(&c, &signer, op, &id)),
+            Source::View(v) => (false, order_of_view(&c, &signer, op, &v, None)),
+        };
+        let c2 = match r {
+            Ok(Ok(ready)) => finish_or(&c, &signer, Ok(ready), &format!("this {name}")),
+            Ok(Err(o)) => {
+                eprintln!("{}: {}", o.status, o.json["reason"].as_str().unwrap_or(""));
+                i32::from(o.status != "skipped" || named)
+            }
+            Err(e) => finish_or(&c, &signer, Err(e), ""),
+        };
         if c2 != 0 {
             code = c2;
         }
     }
     code
+}
+
+/// The order of a covenant id, read from the indexer.
+fn order_of_id(c: &Common, signer: &Signer, op: crate::order::Op, id: &str) -> Result<Prepared, Fail> {
+    let cov = cov_arg(id).map_err(usage)?;
+    let indexer = c.need_indexer()?;
+    let v = super::http::get_ok(indexer, &format!("/v1/orders/{}", to_hex(&cov)), data::INDEXER_TIMEOUT)?;
+    let parsed = crate::inputs::parse(&v, &format!("indexer order {}", to_hex(&cov)), &c.network)?;
+    let view = parsed.views.into_iter().next().ok_or("the indexer's view of the order is not usable")?;
+    order_of_view(c, signer, op, &view, Some(indexer))
+}
+
+/// The sweep or cancel of one view: shown and built, or why it is skipped or refused.
+///
+/// With an `indexer` the live order is read as well, which names the tokens in the plan.
+fn order_of_view(
+    c: &Common,
+    signer: &Signer,
+    op: crate::order::Op,
+    view: &crate::inputs::View,
+    indexer: Option<&str>,
+) -> Result<Prepared, Fail> {
+    let node = c.need_node()?.to_string();
+    let o = crate::order::Opts { op, node: node.clone(), network: c.network.clone(), fee: c.fee_options() };
+    let prepared = match crate::order::prepare(view, &o, signer.pubkey)? {
+        Ok(x) => x,
+        Err(out) => return Ok(Err(out)),
+    };
+    let cov = view.covenant_id;
+    let live = indexer.and_then(|ix| data::live_order(ix, &node, &c.network, &cov).ok());
+    let ms = live.as_ref().and_then(|l| markets_of(c, l).ok()).unwrap_or_default();
+    let mut lines = live.as_ref().map(|l| order_lines(l, &ms)).unwrap_or_default();
+    lines.push(prepared.disclosure.clone());
+    let issues = prepared
+        .left
+        .iter()
+        .map(|l| {
+            issue(
+                "CANCEL_LEFT_BEHIND",
+                Severity::Warning,
+                format!("left behind {}: {}", l["outpoint"].as_str().unwrap_or(""), l["reason"].as_str().unwrap_or("")),
+            )
+        })
+        .collect();
+    let title = format!("{} {}", if op == crate::order::Op::Sweep { "sweep" } else { "cancel" }, to_hex(&cov));
+    Ok(Ok((Ready { title, lines, issues, file: prepared.name, json: prepared.info, built: prepared.built }, units_of(&ms))))
 }
 
 fn finish_or(c: &Common, signer: &Signer, r: Result<(Ready, Units), Fail>, what: &str) -> i32 {

@@ -15,9 +15,9 @@
 //!
 //! The explicit second choice is the standalone single-actor 3 / 3 build of the reference
 //! (`contracts/kcc20/KCC20Ref.sil`, registry `kcc20-ref-3x3`). It costs less per transfer, but
-//! other indexers do not recognise it. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype. The
-//! CLI issues it only when it is named `8x8-prototype`, and the wasm surface and the web app never
-//! do. Neither program has a mint, burn or public-mint entry that is usable without a minter
+//! other indexers do not recognise it. The 8 / 8 slot variant (`KCC20Ref_8x8`) is a prototype that
+//! nothing issues any more (the CLI refuses `8x8-prototype`; the wasm surface and the web app never
+//! issued it). Existing 8 / 8 tokens are held, traded and recovered as before. Neither program has a mint, burn or public-mint entry that is usable without a minter
 //! actor, and a creation makes none. So the supply is exactly the sum of the genesis outputs,
 //! fixed forever. The choice of programs and the measured fees are in
 //! `docs/spec/token-programs.md`, section 8.
@@ -163,8 +163,8 @@ pub enum IssueProgram {
     #[default]
     PublicMint,
     /// Prototype, not KOB's issuance: the reference program with 8 / 8 slot limits (`KCC20Ref_8x8`,
-    /// registry `kcc20-ref-8x8`). Only the CLI issues it, when it is named `8x8-prototype`, and
-    /// every plan carries a warning.
+    /// registry `kcc20-ref-8x8`). No spelling names it any more ([`IssueProgram::parse`] refuses
+    /// `8x8-prototype`): the variant stays for tokens that exist and for the tests.
     Ref8x8Prototype,
     /// Third-party, testnet-10 only, not KOB's issuance: the token program of the KaspaRocket
     /// launchpad, the public-mint `KCC20` actor at 10 / 10 slots (`KaspaRocketToken11458`,
@@ -174,16 +174,14 @@ pub enum IssueProgram {
 }
 
 impl IssueProgram {
-    /// Parses the CLI spelling (`public-mint`, the default; `3x3`; `8x8-prototype`).
+    /// Parses the CLI spelling (`public-mint`, the default; `3x3`; `kasparocket-testnet`).
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "3x3" | "ref" | "kcc20-ref-3x3" => Ok(IssueProgram::Ref3x3),
             "public-mint" | "kcc20-ref-public-mint" => Ok(IssueProgram::PublicMint),
-            "8x8-prototype" => Ok(IssueProgram::Ref8x8Prototype),
             "kasparocket-testnet" => Ok(IssueProgram::KaspaRocketTestnet),
-            "8x8" | "ref-8x8" | "kcc20-ref-8x8" => invalid(
-                "the 8 / 8 program is a prototype, not KOB's issuance: issue public-mint (the default) or 3x3, or name the \
-                 prototype 8x8-prototype",
+            "8x8" | "8x8-prototype" | "ref-8x8" | "kcc20-ref-8x8" => invalid(
+                "the 8 / 8 program is a prototype, not KOB's issuance, and is no longer issued: issue public-mint (the default) or 3x3",
             ),
             other => invalid(format!("unknown program `{other}` (public-mint or 3x3)")),
         }
@@ -1751,17 +1749,17 @@ mod tests {
     }
 
     /// KOB issues the published public-mint build by default (the standalone 3 / 3 only when
-    /// named); the 8 / 8 variant is a prototype the CLI issues only by its explicit name, and every
-    /// plan of it says so.
+    /// named); the 8 / 8 variant is a prototype no spelling issues any more (a plan built from the
+    /// variant, for an existing token's tests, says so).
     #[test]
     fn public_mint_is_the_default_and_8x8_is_a_prototype() {
         assert_eq!(IssueSpec::new("N", "T", 0, 1, vec![], vec![]).program, IssueProgram::PublicMint);
         assert_eq!(IssueProgram::parse("3x3").unwrap(), IssueProgram::Ref3x3);
         assert_eq!(IssueProgram::parse("kcc20-ref-3x3").unwrap(), IssueProgram::Ref3x3);
-        for old in ["8x8", "ref-8x8", "kcc20-ref-8x8"] {
-            assert!(IssueProgram::parse(old).unwrap_err().to_string().contains("prototype"), "{old}");
+        for old in ["8x8", "8x8-prototype", "ref-8x8", "kcc20-ref-8x8"] {
+            let e = IssueProgram::parse(old).unwrap_err().to_string();
+            assert!(e.contains("prototype") && e.contains("no longer issued"), "{old}: {e}");
         }
-        assert_eq!(IssueProgram::parse("8x8-prototype").unwrap(), IssueProgram::Ref8x8Prototype);
         let (_, pk) = key();
         let standard = build_genesis(&spec(vec![Holder::new(pk, 0, 10)], 10)).unwrap();
         assert!(standard.warnings.is_empty(), "{:?}", standard.warnings);

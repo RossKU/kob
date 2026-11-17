@@ -68,7 +68,6 @@ SUPPLY
                         3x3: the standalone reference program with its 3 / 3 slots (registry kcc20-ref-3x3): a
                         transfer costs less (testnet-10, 2026-11-04: 1 -> 1 0.00678 KAS against 0.00901 KAS) but
                         other indexers (kascov.io) do not recognise it.
-                        8x8-prototype: the 8 / 8 slot variant, a prototype that is not KOB's issuance (the plan warns).
                         kasparocket-testnet: KaspaRocket's program (the public-mint actor at 10 / 10 slots,
                         KaspaRocketToken11458), issued on testnet-10 only, to test KOB against that launchpad.
 
@@ -76,11 +75,12 @@ TRANSACTION
   --carrier             sompi on each token output (default 1000000000 = 10 KAS)
   --fee                 explicit GENESIS fee in sompi (default: fee-rate x mass); the preparation pays fee-rate x mass
   --fee-rate            sompi per mass unit (default 100)
+  --allow-high-fee      pay a fee above the ceiling (default: a transaction paying more than 4 times the node's fee
+                        estimate on its mass is refused: [FEE_ABOVE_CEILING], exit 1; a dry run checks at the relay floor)
   --change-to           address or 64-hex pubkey for the change (default: the funding key)
   --key-file PATH       the signing key: a file holding the 64-hex secret
   --key-env NAME        ... or the environment variable holding it (default $KOB_KEY when the run signs)
-                        (the older `--key file:PATH`, `--key env:NAME` and `--key HEX` still work and print a warning:
-                        a key on the command line is visible to other users)
+                        (`--key` was removed: a key on the command line is visible to other users)
 
 OUTPUT
   --out-dir             write preparation_tx.json, genesis_tx.json, submit_preparation.json, submit_request.json (the
@@ -89,8 +89,7 @@ OUTPUT
   --description --image --website --x --telegram
                         declared on chain in the preparation payload (at most 1024 bytes with name, symbol and
                         decimals) and copied to the registry entry; --x and --telegram take a handle or the address
-  --image <URL>         the token's picture: an https:// or ipfs:// address, declared as `image`. (--logo and --icon
-                        are deprecated spellings of --image.)
+  --image <URL>         the token's picture: an https:// or ipfs:// address, declared as `image`.
   --image-file <PATH>   the picture file (PNG, JPEG, WebP or GIF, at most 1500000 bytes, no SVG) whose SHA-256 is
                         declared as `image_hash`, right after `image`: viewers and explorers can then check that the
                         picture at the address is the one you meant. The hash cannot be changed later. Needs --image.
@@ -112,8 +111,6 @@ OUTPUT
 /// Where the signing key comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeySource {
-    /// Hex on the command line.
-    Hex(String),
     /// Environment variable.
     Env(String),
     /// File containing the hex.
@@ -183,7 +180,9 @@ pub struct IssueArgs {
     pub change_to: Option<[u8; 32]>,
     /// Description.
     pub description: Option<String>,
-    /// Image address (declared as `image`; `--image`, deprecated aliases `--logo` and `--icon`).
+    /// `--allow-high-fee`: no fee ceiling.
+    pub allow_high_fee: bool,
+    /// Image address (declared as `image`; `--image`).
     pub icon: Option<String>,
     /// SHA-256 of the picture file's bytes (64 lowercase hex; declared as `image_hash`).
     pub image_hash: Option<String>,
@@ -291,38 +290,25 @@ pub fn parse_fund(s: &str) -> Result<FundArg, String> {
     })
 }
 
-/// The signing key of `token create`, `recover` and `order`.
+/// The usage error of the removed `--key`: it names what replaces it and never quotes the key.
+pub(crate) const KEY_FLAG_REMOVED: &str = "--key was removed: a key on the command line is visible to other users (ps, shell history); use --key-file PATH or --key-env NAME, or set the environment variable KOB_KEY";
+
+/// Whether `flag` is the removed `--key` (also `--key=VALUE`).
+pub(crate) fn is_removed_key_flag(flag: &str) -> bool {
+    flag == "--key" || flag.starts_with("--key=")
+}
+
+/// The signing key of `token create` and `recover`: `--key-file PATH` or `--key-env NAME`.
 ///
-/// The key comes from `--key-file PATH`, `--key-env NAME` or the deprecated
-/// `--key HEX | env:VAR | file:PATH`. The deprecated form prints the new spelling on stderr and
-/// never the key. A second key option is refused.
+/// A second key option is refused.
 pub(crate) fn key_option(flag: &str, value: &str, have: bool) -> Result<KeySource, String> {
     if have {
         return Err("give the key once: --key-file PATH or --key-env NAME".into());
     }
     Ok(match flag {
         "--key-file" => KeySource::File(PathBuf::from(value)),
-        "--key-env" => KeySource::Env(value.to_string()),
-        _ => {
-            let src = parse_key_source(value);
-            eprintln!("{}", deprecation(&src));
-            src
-        }
+        _ => KeySource::Env(value.to_string()),
     })
-}
-
-/// The warning of a deprecated `--key` form: the new spelling, never the key.
-fn deprecation(src: &KeySource) -> String {
-    match src {
-        KeySource::File(p) => {
-            format!("warning: `--key file:{0}` is deprecated; write `--key-file {0}`", p.display())
-        }
-        KeySource::Env(v) => format!("warning: `--key env:{v}` is deprecated; write `--key-env {v}`"),
-        KeySource::Hex(_) => {
-            "warning: `--key HEX` is deprecated: a key on the command line is visible to other users (ps, shell history); write `--key-file PATH` or `--key-env NAME`"
-                .to_string()
-        }
-    }
 }
 
 /// The key when none was named: the environment variable `KOB_KEY`, when it is set.
@@ -331,17 +317,6 @@ pub(crate) fn default_key() -> Option<KeySource> {
         .ok()
         .filter(|v| !v.trim().is_empty())
         .map(|_| KeySource::Env(crate::trade::opts::KEY_ENV.into()))
-}
-
-/// Classify a `--key` value as an `env:` name, a `file:` path or a hex key.
-pub(crate) fn parse_key_source(s: &str) -> KeySource {
-    if let Some(v) = s.strip_prefix("env:") {
-        KeySource::Env(v.to_string())
-    } else if let Some(p) = s.strip_prefix("file:") {
-        KeySource::File(PathBuf::from(p))
-    } else {
-        KeySource::Hex(s.to_string())
-    }
 }
 
 /// Parse the arguments after `kob token create`.
@@ -375,6 +350,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
         network: String::new(),
         dry_run: false,
         yes: false,
+        allow_high_fee: false,
         node: None,
         program: IssueProgram::default(),
     };
@@ -400,7 +376,8 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--supply" => a.supply = Some(parse_u64(&val("--supply")?, "--supply")?),
             "--holder" => a.holders.push(parse_holder(&val("--holder")?)?),
             "--fund-utxo" => a.fund.push(parse_fund(&val("--fund-utxo")?)?),
-            "--key" | "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
+            k if is_removed_key_flag(k) => return Err(KEY_FLAG_REMOVED.into()),
+            "--key-file" | "--key-env" => a.key = Some(key_option(flag, &val(flag)?, a.key.is_some())?),
             "--out-dir" => a.out_dir = Some(PathBuf::from(val("--out-dir")?)),
             "--carrier" => a.carrier = parse_u64(&val("--carrier")?, "--carrier")?,
             "--fee" => a.fee = Some(parse_u64(&val("--fee")?, "--fee")?),
@@ -411,7 +388,8 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--allow-borrow" => a.allow_borrow = true,
             "--change-to" => a.change_to = Some(parse_pubkey(&val("--change-to")?)?),
             "--description" => a.description = Some(val("--description")?),
-            "--image" | "--icon" | "--logo" => a.icon = Some(val("--image")?),
+            "--image" => a.icon = Some(val("--image")?),
+            "--icon" | "--logo" => return Err(format!("{flag} was removed: use --image")),
             "--image-file" => {
                 let p = val("--image-file")?;
                 let bytes = std::fs::read(&p).map_err(|e| format!("--image-file {p}: {e}"))?;
@@ -447,6 +425,7 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
             "--network" => a.network = val("--network")?,
             "--dry-run" => a.dry_run = true,
             "--yes" | "-y" => a.yes = true,
+            "--allow-high-fee" => a.allow_high_fee = true,
             "--node" => a.node = Some(val("--node")?),
             "--program" => a.program = IssueProgram::parse(&val("--program")?).map_err(|e| e.to_string())?,
             other => return Err(format!("unknown argument `{other}` (see `kob token create --help`)")),
@@ -483,7 +462,6 @@ pub fn parse_issue_args_with(args: &[String], fallback_key: Option<KeySource>) -
 /// Read the secret key from its source.
 pub(crate) fn read_key(src: &KeySource) -> Result<SecretKey, String> {
     let raw = match src {
-        KeySource::Hex(h) => h.clone(),
         KeySource::Env(v) => std::env::var(v).map_err(|_| format!("environment variable {v} is not set"))?,
         KeySource::File(p) => std::fs::read_to_string(p).map_err(|e| format!("cannot read key file {}: {e}", p.display()))?,
     };
@@ -644,7 +622,7 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         if report.scripts_executed {
             ", every input executed in the script engine"
         } else {
-            " (UNSIGNED: script execution skipped, pass --key)"
+            " (UNSIGNED: script execution skipped, pass --key-file or --key-env)"
         }
     );
     for w in plan.warnings() {
@@ -652,6 +630,22 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
     }
     if g.spec.program == IssueProgram::Ref3x3 {
         println!("note         --program 3x3: a transfer of this token costs less than the default public-mint build, but other indexers (e.g. kascov.io) do not recognise it as a KCC-20 token");
+    }
+    // The fee ceiling, as for every sending command: each transaction against 4 times the node's
+    // estimate on its mass. A dry run stays offline and reads the relay floor.
+    let ceiling = match (a.dry_run, a.node.as_deref()) {
+        (false, Some(node)) => crate::feecap::Ceiling::read(node, a.allow_high_fee),
+        _ => crate::feecap::Ceiling::offline(a.allow_high_fee),
+    };
+    // The compute mass is what the relay fee is charged on (the transient mass is at most about twice it).
+    let mass_of = |c: u64, _storage: u64| c;
+    for (what, fee, mass) in [
+        ("preparation", plan.prep.fee, mass_of(plan.prep.compute_mass, plan.prep.storage_mass)),
+        ("genesis", g.fee, mass_of(report.compute_mass, report.storage_mass)),
+    ] {
+        if let Some(m) = ceiling.violation(fee, mass) {
+            return Err(format!("the {what}: {m} [{}]", crate::feecap::CODE));
+        }
     }
     // A submitting run asks first, by the rule of every submitting command: `--yes`, or a
     // terminal, else nothing is written or sent. It then always keeps the signed transactions,
@@ -908,7 +902,8 @@ mod tests {
             ),
         )
         .unwrap();
-        for src in [KeySource::Hex(bad.clone()), KeySource::File(p.clone()), KeySource::Hex(format!("{}z", &good[1..]))] {
+        std::env::set_var("KOB_TEST_BAD_KEY_ENV", &bad);
+        for src in [KeySource::Env("KOB_TEST_BAD_KEY_ENV".into()), KeySource::File(p.clone())] {
             let e = read_key(&src).unwrap_err();
             assert_eq!(e, "signing key is not 64 hex characters");
             assert!(!e.contains(&good[..8]));
@@ -918,6 +913,16 @@ mod tests {
 
     fn v(s: &str) -> Vec<String> {
         s.split_whitespace().map(str::to_string).collect()
+    }
+
+    /// A file holding the key `hex`, for `--key-file`.
+    fn key_file(tag: &str, hex: &str) -> String {
+        let dir = std::env::temp_dir().join(format!("kob-token-keys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(tag);
+        std::fs::write(&p, format!("{hex}
+")).unwrap();
+        p.display().to_string()
     }
     const TX: &str = "0707070707070707070707070707070707070707070707070707070707070707";
     const PK: &str = "aa2c17c5f5e5d5a3b6c0d2f1e4b7a9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2";
@@ -952,28 +957,24 @@ mod tests {
     }
 
     #[test]
-    fn the_key_rule_of_the_older_commands() {
+    fn the_key_rule_of_token_create() {
         let run = format!("--name X --ticker X --decimals 1 --fund-utxo {TX}:0:1:{PK} --supply 1 --network testnet-10");
         let src =
             |extra: &str, fallback: Option<KeySource>| parse_issue_args_with(&v(&format!("{run} {extra}")), fallback).map(|a| a.key);
         assert_eq!(src("--key-file k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
         assert_eq!(src("--key-env MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
-        // The older spellings still work.
-        assert_eq!(src("--key file:k.txt", None).unwrap(), Some(KeySource::File("k.txt".into())));
-        assert_eq!(src("--key env:MY_KEY", None).unwrap(), Some(KeySource::Env("MY_KEY".into())));
-        assert_eq!(src("--key 07", None).unwrap(), Some(KeySource::Hex("07".into())));
+        // `--key` was removed in every form: a usage error that names the new options and never the key.
+        for old in ["--key file:k.txt", "--key env:MY_KEY", "--key 07", "--key=07"] {
+            let e = src(old, None).unwrap_err();
+            assert!(e.contains("--key was removed") && e.contains("--key-file") && e.contains("--key-env"), "{old}: {e}");
+            assert!(!e.contains("07"), "{e}");
+        }
         // One key only.
         assert!(src("--key-file a --key-env B", None).unwrap_err().contains("once"));
         // Without a key: the fallback ($KOB_KEY) when the run signs, nothing in a dry run.
         let kob_key = Some(KeySource::Env("KOB_KEY".into()));
         assert_eq!(src("", kob_key.clone()).unwrap(), kob_key);
         assert_eq!(src("--dry-run", kob_key).unwrap(), None);
-        // The warning names the new spelling and never the key.
-        let w = |s: &str| deprecation(&parse_key_source(s));
-        assert!(w("file:/tmp/k").contains("--key-file /tmp/k"));
-        assert!(w("env:MY_KEY").contains("--key-env MY_KEY"));
-        let hex = w(&"33".repeat(32));
-        assert!(hex.contains("--key-file") && hex.contains("--key-env") && !hex.contains("3333"), "{hex}");
     }
 
     #[test]
@@ -1016,8 +1017,9 @@ mod tests {
             .serialize();
         let dir = std::env::temp_dir().join(format!("kob-issue-test-{}", std::process::id()));
         let cmd = format!(
-            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --holder self:0:900 --holder {PK}:4:100 --dry-run --network testnet-10 --key {sk} --out-dir {}",
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --holder self:0:900 --holder {PK}:4:100 --dry-run --network testnet-10 --key-file {} --out-dir {}",
             hex(&pk),
+            key_file("k3", sk),
             dir.display()
         );
         assert_eq!(run_issue(&v(&cmd)), 0);
@@ -1078,7 +1080,7 @@ mod tests {
         assert_eq!(reg3["template_id"], "kcc20-ref-3x3");
         let _ = std::fs::remove_dir_all(dir3);
         // A wrong key is refused.
-        let cmd3 = format!("{cmd2} --key 5555555555555555555555555555555555555555555555555555555555555555");
+        let cmd3 = format!("{cmd2} --key-file {}", key_file("k5", &"55".repeat(32)));
         assert_eq!(run_issue(&v(&cmd3)), 1);
         // A supply mismatch is refused.
         let cmd4 = format!("{cmd2} --holder self:0:4");
@@ -1103,11 +1105,18 @@ mod tests {
             .token_metadata()
             .json()
             .ends_with(r#""image":"ipfs://cid","x":"https://x.com/kaspa","telegram":"https://t.me/kaspa_chat"}"#));
-        // `--logo` and `--icon` are deprecated spellings of `--image`.
+        // `--logo` and `--icon` were removed: a usage error that names `--image`.
         for old in ["--logo", "--icon"] {
-            let a = parse_issue_args(&v(&format!("{} --supply 1 {old} https://e.org/a.png", base()))).unwrap();
-            assert_eq!(a.icon.as_deref(), Some("https://e.org/a.png"));
-            assert!(to_spec(&a).unwrap().token_metadata().json().contains(r#""image":"https://e.org/a.png""#));
+            let e = parse_issue_args(&v(&format!("{} --supply 1 {old} https://e.org/a.png", base()))).unwrap_err();
+            assert!(e.contains(&format!("{old} was removed")) && e.contains("--image"), "{e}");
+        }
+        // The prototype program is not issued any more; the others are.
+        for old in ["8x8-prototype", "8x8", "kcc20-ref-8x8"] {
+            let e = parse_issue_args(&v(&format!("{} --supply 1 --program {old}", base()))).unwrap_err();
+            assert!(e.contains("no longer issued"), "{old}: {e}");
+        }
+        for ok in ["public-mint", "3x3"] {
+            assert!(parse_issue_args(&v(&format!("{} --supply 1 --program {ok}", base()))).is_ok(), "{ok}");
         }
     }
 
@@ -1146,7 +1155,8 @@ mod tests {
             format!("--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:1:5000000000:{PK} --supply 1 --network testnet-10");
         assert!(parse_issue_args(&v(&format!("{base} --dry-run --yes"))).unwrap_err().contains("exclude each other"));
         assert!(parse_issue_args(&v(&format!("{base} --dry-run -y"))).is_err());
-        let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key {PK} --yes"))).unwrap();
+        let a = parse_issue_args(&v(&format!("{base} --node ws://x:1 --key-file {} --yes", key_file("kpk", PK))))
+        .unwrap();
         assert!(a.yes && !a.dry_run);
     }
 
@@ -1161,8 +1171,9 @@ mod tests {
         let (url, state) = crate::wrpc::mock::start(vec![]);
         let dir = std::env::temp_dir().join(format!("kob-create-test-{}", std::process::id()));
         let cmd = format!(
-            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --network testnet-10 --key {sk} --node {url} --out-dir {}",
+            "--name Test --ticker TEST --decimals 8 --fund-utxo {TX}:0:5000000000:{} --supply 1000 --network testnet-10 --key-file {} --node {url} --out-dir {}",
             hex(&pk),
+            key_file("k3b", sk),
             dir.display()
         );
         // Without `--yes` and without a terminal nothing is written and nothing is sent.

@@ -19,7 +19,7 @@ pub const KEY_ENV: &str = "KOB_KEY";
 pub const COMMON_VALUE_FLAGS: &[&str] =
     &["--network", "--node", "--indexer", "--key-file", "--key-env", "--fee-rate", "--out-dir", "--registry", "--key"];
 /// Flags that every trading command takes without a value.
-pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json", "--priority-fee"];
+pub const COMMON_BOOL_FLAGS: &[&str] = &["--yes", "-y", "--dry-run", "--json", "--priority-fee", "--allow-high-fee"];
 
 /// The help text of the shared options.
 pub const COMMON_HELP: &str = "\
@@ -33,11 +33,13 @@ COMMON OPTIONS
                     network's deployment record, when it names one)
   --key-file PATH   the signing key: a file holding the 64-hex secret
   --key-env NAME    ... or the environment variable holding it (default KOB_KEY)
-                    a key on the command line (--key) is refused: arguments are visible to other users (ps)
+                    (--key was removed: a key on the command line is visible to other users, ps and shell history)
   --registry FILE   token registry (default: the one this build embeds, when its network matches)
   --fee-rate N      sompi per gram (default: the relay floor, 100)
   --priority-fee    also pay for the storage mass (KIP-9), as the web app's \"Pay the priority fee\" does: a higher fee, worth it
                     only when blocks are contended (the fee is charged at --fee-rate, default 100, on the storage-inclusive mass)
+  --allow-high-fee  pay a fee above the ceiling (default: a plan whose fee is more than 4 times the node's fee estimate,
+                    on the transaction's mass, is refused: issue FEE_ABOVE_CEILING, exit 1)
   --dry-run         show the plan and stop: nothing is signed
   --yes, -y         sign and submit without asking (otherwise a terminal asks; without a terminal, refused)
   --json            print the plan and the result as one JSON document (the result is in its `result` key)
@@ -99,9 +101,7 @@ pub fn parse(args: &[String], value_flags: &[&str], bool_flags: &[&str]) -> Resu
         }
     }
     if p.vals.contains_key("--key") {
-        return Err(format!(
-            "--key is refused here: a key on the command line is visible to other users (ps, shell history); use --key-file PATH or the environment variable {KEY_ENV}"
-        ));
+        return Err(crate::token::KEY_FLAG_REMOVED.to_string());
     }
     if p.has("--yes") && p.has("--dry-run") {
         return Err("--yes and --dry-run exclude each other".into());
@@ -122,6 +122,8 @@ pub struct Common {
     pub fee_rate: Option<u64>,
     /// `--priority-fee`: the storage-inclusive fee instead of the relay floor.
     pub priority_fee: bool,
+    /// `--allow-high-fee`: no fee ceiling.
+    pub allow_high_fee: bool,
     /// Whether to plan and show only, without signing.
     pub dry_run: bool,
     /// Whether to sign without asking.
@@ -166,6 +168,7 @@ impl Common {
             indexer,
             fee_rate,
             priority_fee: p.has("--priority-fee"),
+            allow_high_fee: p.has("--allow-high-fee"),
             dry_run: p.has("--dry-run"),
             yes: p.has("--yes"),
             json: p.has("--json"),
@@ -244,7 +247,7 @@ pub fn would_ask(yes: bool) -> bool {
 }
 
 /// [`confirm`] for the commands that keep their own options, such as `kob token create`,
-/// `kob recover` and `kob order`.
+/// `kob recover`.
 ///
 /// The rule, the prompt and the refusal are the same.
 pub fn confirm_with(yes: bool, network: &str, what: &str) -> Result<(), String> {

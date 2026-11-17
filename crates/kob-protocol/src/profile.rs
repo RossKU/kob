@@ -41,7 +41,7 @@
 //!   order templates and their review.
 //! - A new companion decoder is for a genesis actor whose state bounds the supply.
 //!
-//! A program of an existing family is data plus review. `kob registry add-program` derives its
+//! A program of an existing family is data plus review. `kob-maint add-program` derives its
 //! profile from its bytes ([`derive_profile`]), and `docs/spec/token-programs.md` lists what the
 //! reviewer checks.
 
@@ -883,7 +883,7 @@ pub fn cut_artifact_in(
     let contract = artifact.contracts.values().next().expect("one contract");
     let bytecode = &contract.compiled.bytecode;
     let (offset, len) = (contract.compiled.state_span.offset, contract.compiled.state_span.len);
-    // an artifact supplied to `kob registry add-program` is untrusted: an out-of-range span is an
+    // an artifact supplied to `kob-maint add-program` is untrusted: an out-of-range span is an
     // error, never a panic
     let Some(end) = offset.checked_add(len).filter(|end| *end <= bytecode.len()) else {
         return Err(e(format!("state span {offset}+{len} outside bytecode of {} bytes", bytecode.len())));
@@ -1001,7 +1001,7 @@ pub fn of(id: TemplateId) -> Option<&'static ProgramProfile> {
 // ------------------------------------------------------------------------------------------------
 // derivation
 
-/// What `kob registry add-program` is given.
+/// What `kob-maint add-program` is given.
 #[derive(Clone, Debug)]
 pub enum ProgramInput {
     /// A silverc artifact (JSON text).
@@ -1243,7 +1243,7 @@ pub fn derive_profile(input: &ProgramInput, opt: &DeriveOptions) -> Result<Deriv
         witness: cut.witness,
         router_intents: false,
         genesis: GenesisRules { minters: MinterSource::Unknown, companions: vec![] },
-        review: Review { status: ProgramReview::PendingReview, basis: "derived by kob registry add-program; not reviewed".into() },
+        review: Review { status: ProgramReview::PendingReview, basis: "derived by kob-maint add-program; not reviewed".into() },
         networks: opt.networks.clone(),
         default_decimals: None,
         name,
@@ -1423,7 +1423,7 @@ pub fn detect_raw_layout(bytes: &[u8]) -> Option<(usize, Family)> {
 
 /// The registry strict-list entry for a profile (`templates[]` of `registry/tokens.json`).
 ///
-/// It is the entry that `kob registry add-program` proposes. It is always `pending-review` until
+/// It is the entry that `kob-maint add-program` proposes. It is always `pending-review` until
 /// the review is done. Serialise it with `serde_json::to_string_pretty` to keep the field order of
 /// the registry.
 pub fn registry_template(p: &ProgramProfile, upstream: Option<&str>) -> crate::registry::Template {
@@ -1621,7 +1621,7 @@ mod tests {
         }
     }
 
-    /// `kob registry add-program` reads an artifact it is given: a state span out of range (an
+    /// `kob-maint add-program` reads an artifact it is given: a state span out of range (an
     /// `offset + len` that wraps) or context fields that run past the span are errors, never a
     /// panic.
     #[test]

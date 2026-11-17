@@ -1448,3 +1448,44 @@ fn claim_merge_sell_and_the_bought_custody_in_cancel_refund_and_views() {
     assert_eq!((e.bought, e.custody), (4_000, 0));
     assert!(e.kas_carriers >= 2 * KAS as i128, "the bought-custody's carrier is locked KAS: {}", e.kas_carriers);
 }
+
+/// The fee ceiling reaches every command that signs: a rate of 50 times the relay floor (above 4 times the node's
+/// estimate, here none) is refused with exit 1 and nothing is signed or sent, and `--allow-high-fee` pays it.
+#[test]
+fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
+    let (maker, taker) = (pk(0x11), pk(0x22));
+    let (a, c) = ([0xa1; 32], [0xc1; 32]);
+    let w = world(
+        "ceiling",
+        &[
+            (AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000)), a, 0x10, 2 * KAS),
+            (AnyState::KobAsk(ask(maker, 10 * SCALE, 1_000_000 + 77_000_000)), c, 0x40, 2 * KAS),
+        ],
+    );
+    let high = "--fee-rate 5000";
+    let to = address_of(&p2pk_spk(&taker), NET).unwrap();
+    type Case<'a> = (&'a str, fn(&[String]) -> i32, u8, String, &'a str);
+    let cases: Vec<Case> = vec![
+        ("place", crate::trade::place::run, 0x11, "limit --token TST --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
+        ("replace", crate::trade::actions::run_replace, 0x11, format!("{} --price 3.1KAS", to_hex(&a)), ".replace.json"),
+        ("take", crate::trade::actions::run_take, 0x22, format!("{} --amount 4TST --max-price 4KAS", to_hex(&a)), ".take.json"),
+        ("cancel", crate::trade::actions::run_cancel, 0x11, to_hex(&c), ".cancel.json"),
+        ("send", crate::trade::actions::run_send, 0x11, format!("KAS {to} 2.5KAS"), ".json"),
+    ];
+    for (name, f, key, args, suffix) in cases {
+        let before = w.submitted();
+        assert_eq!(run(f, w.args(key, &format!("{args} {high} --yes"))), 1, "{name}: refused");
+        assert_eq!(run(f, w.args(key, &format!("{args} {high} --dry-run"))), 1, "{name}: a dry run shows the refusal");
+        assert_eq!(w.submitted(), before, "{name}: nothing sent");
+        assert_eq!(run(f, w.args(key, &format!("{args} {high} --allow-high-fee --yes"))), 0, "{name}: allowed");
+        assert_eq!(w.submitted(), before + 1, "{name}: sent");
+        assert_eq!(w.signed(suffix).fee.fee_rate, 5000, "{name}: the fee that was asked for");
+    }
+    // `kob merge` checks every link before it signs the first.
+    let m = merge_world("ceiling-merge");
+    let before = m.submitted();
+    assert_eq!(run(crate::trade::merge::run, m.args(0x11, &format!("TST {high} --yes --wait-secs 0"))), 1);
+    assert_eq!(m.submitted(), before, "nothing sent");
+    assert_eq!(run(crate::trade::merge::run, m.args(0x11, &format!("TST {high} --allow-high-fee --yes --wait-secs 0"))), 0);
+    assert_eq!(m.submitted(), 2);
+}

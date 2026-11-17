@@ -3,7 +3,7 @@
 Status: 2026-10-27. Normative for this repository. KOB pairs with every KCC-20 launchpad (the KRON launchpad, Kasseal,
 KaspaCom, KForge, future ones), and each brings a token program or a build of a shared one. Supporting a new program must be a
 small, well-defined, reviewable step. This document defines the **token-program profile** (everything KOB needs to know about
-one program, declared in one place), the onboarding path (`kob registry add-program`), the generic genesis rule for launchpad
+one program, declared in one place), the onboarding path (`kob-maint add-program`), the generic genesis rule for launchpad
 genesis shapes, and the checklist a reviewer works through before this build supports trading a program's tokens.
 
 ## 1. The profile
@@ -104,8 +104,10 @@ evidence.
 
 ## 4. Onboarding a token program
 
+`kob-maint` is the maintainers' binary of `crates/kob-cli` (not part of the release): `cargo run -p kob-cli --bin kob-maint -- add-program ...`.
+
 ```
-kob registry add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name NAME [--registry-id ID] [--slots I/O]
+kob-maint add-program <ARTIFACT.json | REDEEM.bin | REDEEM.hex | HEX> --name NAME [--registry-id ID] [--slots I/O]
                          [--source-path PATH] [--upstream TEXT] [--write]
 ```
 
@@ -191,7 +193,7 @@ on testnet-10, which KForge's registry no longer names. It stays testnet-10 only
 `crates/kob-tests/tests/programs/program_kforgetoken1785.rs`, fixtures in `contracts/third-party/kforge/` (`program.bin`, a redeem script
 observed on testnet-10; `observed-transfer.json`, a real transfer).
 
-* Derived from the bytes alone (`kob registry add-program ... --slots 1/3 --holder 0 --network testnet-10`): KRON codec, a one-byte
+* Derived from the bytes alone (`kob-maint add-program ... --slots 1/3 --holder 0 --network testnet-10`): KRON codec, a one-byte
   prefix (`OP_TOALTSTACK`: an entry selector) before the 46-byte state, template hash
   `5b136633944a2371a1d0f6a94fdc0d329327ffc700fdec097fc59e76e1d33ae1`, witness `kron-columns` with one trailing `OP_0`. KOB's
   builder with that profile reproduces the signature script of the observed transfer byte for byte, and its token outputs are the
@@ -228,7 +230,7 @@ testnet-10 launch: genesis, the supply's move into the launch's pool, the pool's
   11,458-byte redeem scripts byte for byte. Since 2026-10-14 the publisher's repository (La-Gauffre/KaspaRocket-Silverscript-Contract
   `86fe1e8`, `kcc20.sil`) holds that same source, and the official silverc v1.0.0 compiles it to KOB's pinned bytecode; the
   repository has no licence file and publishes no artifact JSON (KOB's source derives from the vendored ISC fixture). Derived from
-  the artifact (`kob registry add-program ... --slots 10/10`): the KCC-1 actor-type handle cut (prefix 34 B with the
+  the artifact (`kob-maint add-program ... --slots 10/10`): the KCC-1 actor-type handle cut (prefix 34 B with the
   `gen__kcc20_template` context, state 112 B, suffix 11,312 B), template hash
   `3d689d6273b7631e69f672d5ca744cb266ae997b04974196439858675cc04fe1` (the Sil cut is `ff3ae732...`: both are BLAKE3 template
   hashes of the same bytes, the handle is what the order states pin), witness `kcc20-transfer`. Every rule of the program is the
@@ -282,7 +284,7 @@ review only, 2026-11-05): tradable on mainnet.
   Upstream's own build at `27f8403` with `MAX_DELEGATES` 5 and `MAX_TOKEN_OUTPUTS` 6 reproduces that artifact in every field but its
   module path strings; its generated `KCC20.sil` is `KCC20.public-mint.6x6.sil` (seven lines apart from the vendored fixture, the
   seventh the program's own suffix length) without KOB's header, and hashes to the source hash KForge names; silverc v1.0.0 compiles it
-  to the published bytecode. Derived from the artifact (`kob registry add-program ... --slots 6/6`): the KCC-1 actor-type handle cut
+  to the published bytecode. Derived from the artifact (`kob-maint add-program ... --slots 6/6`): the KCC-1 actor-type handle cut
   (prefix 34 B with the `gen__kcc20_template` context, state 112 B, suffix 7,068 B), template hash
   `da96d352c404ad7835bc9857b9ae54ae634f41f83a837a5c913ab58cb9f0dec7`, witness `kcc20-transfer`. Every rule of the program is the reviewed
   `KCC20PublicMint` actor's: only the two slot bounds differ.
@@ -357,6 +359,6 @@ review only, 2026-11-05): tradable on mainnet.
 
 * **Default: the `KCC20` actor of the published `KCC20PublicMint` app** (`contracts/third-party/kcc20-reference`, registry id `kcc20-ref-public-mint`, 3 token inputs and 3 token outputs per transfer). It is the de-facto standard KCC-20 program that indexers such as kascov.io list as a KCC-20 token. Its holders carry the compiler-owned context `gen__kcc20_template` (the Sil template hash of the program itself) before the 112-byte state. The genesis holds only `KCC20` holders of the app, with no `PublicMint` and no `TokenSeed`, so every wallet of the app reads the tokens as its own. This is the default since 2026-11-04.
 * **Second choice: the standalone single-actor 3 / 3 build of the reference** (argent kcc20-reference `c8a0871`, `contracts/kcc20/KCC20Ref.sil`, registry id `kcc20-ref-3x3`). It costs less per transfer (a 1 -> 1 transfer on testnet-10, measured 2026-11-04: 0.00678 KAS against 0.00901 KAS for the default), but other indexers do not recognise it.
-* **Prototype: the 8 / 8 slot variant** (`KCC20Ref_8x8`). The CLI issues it only when it is named `8x8-prototype`. The wasm surface and the web app never issue it.
+* **Prototype: the 8 / 8 slot variant** (`KCC20Ref_8x8`). No tool issues it any more (the CLI refuses `8x8-prototype`; the wasm surface and the web app never did). Tokens that exist on it are held, traded and recovered as before.
 
 Neither the default nor the standalone program has a mint, burn or public-mint entry that is usable without a minter actor, and a creation makes none. So the supply is exactly the sum of the genesis outputs, fixed forever. Proposal P2 and `KCC20Opt` are not used.
