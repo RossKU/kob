@@ -105,7 +105,8 @@ export function TokenPage(props: { covenantId: string; ticket?: TicketPreset; am
   // the pair selector's rows: the tradable tokens, this token named as the page names it (a token no list names has no row of its own: it is added)
   const selectorRows = useMemo(() => withShownRows(choiceRows, [headerRow ?? row]), [choiceRows, headerRow, row]);
 
-  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: true }, { signal }) : Promise.resolve(null)), [indexer, id]);
+  // one row per order (the levels are summed here, book-model.ts): a curve sell order's levels carry their `curve_level`, so the book can mark them
+  const book = useAsync((signal) => (indexer ? indexer.book(id, { depth: BOOK_FETCH_DEPTH, aggregate: false }, { signal }) : Promise.resolve(null)), [indexer, id]);
   // the latest trades (the last price and the page's price precision; the list of trades is the activity log below): `/v1/trades`, or the fill events of an indexer without it
   const trades = useAsync(
     async (signal) => {

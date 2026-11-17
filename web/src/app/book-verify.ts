@@ -41,7 +41,8 @@ import type { NodeApi } from '../data/node';
 import { NodeError, describeNodeError } from '../data/node-error';
 import { SnapshotError, snapshotFromOrderView, type OrderSnapshot } from '../kob/cancel';
 import { confirmSnapshotsOnNode } from '../kob/node-verify';
-import { describeOrder } from '../kob/order-facts';
+import { curveFactsOf, describeOrder } from '../kob/order-facts';
+import { curveLevelsLeft } from '../kob/curve';
 import type { DroppedBookOrder } from '../kob/plan-types';
 import type { Hex } from '../kob/types';
 import type { KobWasm } from '../kob/wasm';
@@ -155,6 +156,8 @@ function judge(
   if (confirmed instanceof SnapshotError) return confirmed.code === 'node-mismatch' ? 'not-on-node' : 'unproven';
   try {
     const d = describeOrder(confirmed.order.state, deps.kob);
+    // a curve sell order: its rows are its remaining levels; one created in its token's genesis names no token until its first fill (its custody's)
+    const curve = curveFactsOf(confirmed.order.state);
     if (confirmed.covenantId !== row.covenant_id || d.side !== side || d.price !== BigInt(row.price)) return 'changed';
     const m = deps.market;
     if (m) {
@@ -163,7 +166,7 @@ function judge(
       // whatever the indexer lists it under.
       const st = confirmed.order.state.state as unknown as Record<string, string | undefined>;
       if (
-        d.tokenCovId?.toLowerCase() !== m.covenantId.toLowerCase() ||
+        (curve?.unbound ? confirmed.custody?.covenantId ?? '' : d.tokenCovId)?.toLowerCase() !== m.covenantId.toLowerCase() ||
         (st.tokenTplHash ?? '').toLowerCase() !== m.templateHash.toLowerCase() ||
         (st.extensionCommitment ?? ZERO32).toLowerCase() !== m.extensionCommitment.toLowerCase() ||
         (confirmed.custody && confirmed.custody.covenantId?.toLowerCase() !== m.covenantId.toLowerCase())
@@ -184,7 +187,7 @@ function judge(
     // An ask is liquidity only with the custody the node holds. Its amount is that, and an ask with
     // none has nothing to sell.
     if (side === 'sell' && !confirmed.custody) return 'unproven';
-    if (confirmed.custody) {
+    if (confirmed.custody && !curve) {
       const left = !row.amount_estimated && row.amount_left != null ? row.amount_left : claimed.custody?.state.amount;
       if (left !== undefined && BigInt(left) !== BigInt(confirmed.custody.state.amount)) return 'changed';
     }
@@ -195,6 +198,7 @@ function judge(
       // node-confirmed state's, not the row's.
       tip: d.tip,
       minFill: d.minFill,
+      ...(curve && confirmed.custody ? { levels: levelsLeftOf(curve, BigInt(confirmed.custody.state.amount)) } : {}),
     };
   } catch {
     return 'unproven';
@@ -207,7 +211,14 @@ function judge(
  * so its `cap` is the most its node-confirmed KAS buys at its price, and the row's own amount is
  * believed only up to it.
  */
-type Verdict = DroppedBookOrder['reason'] | 'expired' | 'inactive' | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint };
+type Verdict =
+  | DroppedBookOrder['reason'] | 'expired' | 'inactive'
+  /** `levels`: a curve's remaining levels as its confirmed state has them (table index -> price and size left) */
+  | { amount: bigint | null; cap: bigint; tip: bigint; minFill: bigint; levels?: Map<number, { price: bigint; amount: bigint }> };
+
+/** The remaining levels of a curve state holding `left` base units (table index -> price, size left). */
+const levelsLeftOf = (c: NonNullable<ReturnType<typeof curveFactsOf>>, left: bigint): Map<number, { price: bigint; amount: bigint }> =>
+  new Map(curveLevelsLeft(c.levelSize, c.table, c.total, left).map((l) => [l.level, { price: l.price, amount: l.amount }]));
 
 /** A book row's identity for the order-view cache: its covenant id and the facts the key uses. */
 export type OrderKey = Pick<BookOrderView, 'covenant_id' | 'price' | 'amount_left' | 'cur_value'>;
@@ -293,11 +304,15 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   const inScale = deps.inScale ?? (() => true);
   const sides = (['sell', 'buy'] as const).map((side) => {
     const rows = side === 'sell' ? view.asks : view.bids;
-    // One row per order. The indexer listing an order N times does not count it N times.
+    // One row per order. The indexer listing an order N times does not count it N times. A curve is checked by its lowest level's row (its
+    // current level, whose price its state names); its other levels follow from the confirmed state.
     const seenIds = new Set<string>();
+    const lowest = new Map<string, number>();
+    for (const row of rows) if (isOrderRow(row) && row.curve_level != null) lowest.set(row.covenant_id, Math.min(lowest.get(row.covenant_id) ?? row.curve_level, row.curve_level));
     const cands = rows
       .filter(isOrderRow)
       .filter(inScale)
+      .filter((row) => !lowest.has(row.covenant_id) || row.curve_level === lowest.get(row.covenant_id))
       .filter((row) => !seenIds.has(row.covenant_id) && !!seenIds.add(row.covenant_id))
       .map((row, at) => ({ row, at, key: priceKey(row) }))
       .sort((a, b) => {
@@ -324,6 +339,23 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
     const verdicts = await checkRows(deps, batch.map((b) => ({ row: b.row, side: b.s.side })));
     batch.forEach((b, i) => {
       const v = verdicts[i]!;
+      if (typeof v === 'object' && b.row.curve_level != null) {
+        // A curve sell order: one row per remaining level, checked once. Its levels stay rows of their own (each at its price), within the custody
+        // the node holds.
+        // a level row counts only at the price its confirmed state gives that level, at most the size left in it
+        const [tip, minFill] = [v.tip.toString(), v.minFill.toString()];
+        b.s.confirmed++;
+        for (const lv of b.s.rows.filter((x): x is BookOrderView => isOrderRow(x) && x.covenant_id === b.row.covenant_id)) {
+          const state = lv.curve_level != null ? v.levels?.get(lv.curve_level) : undefined;
+          if (!state || lv.price !== state.price.toString()) continue;
+          const want = lv.amount_left != null ? BigInt(lv.amount_left) : 0n;
+          const amount = want < state.amount ? want : state.amount;
+          if (amount <= 0n) continue;
+          b.s.depth += amount;
+          b.s.kept.push(amount === want && lv.tip === tip && lv.min_fill === minFill ? lv : { ...lv, amount_left: amount.toString(), tip, min_fill: minFill });
+        }
+        return;
+      }
       if (typeof v === 'object') {
         // An ask's amount is the custody the node holds. The row's own word counts only where the
         // order has no custody to read, which is a bid, and then only up to what the node-confirmed
@@ -353,6 +385,16 @@ export async function verifyBook(deps: BookVerifyDeps, view: BookView): Promise<
   // word and stay out. A side with nothing confirmed has none, because all of them were dropped.
   const same = (rows: readonly (LevelView | BookOrderView)[], kept: readonly BookOrderView[]) => rows.length === kept.length && rows.every((r, i) => r === kept[i]);
   const [a, b] = sides as [(typeof sides)[number], (typeof sides)[number]];
+  // a curve's levels join the kept rows when its first is confirmed: back into price order (stable)
+  for (const x of sides) {
+    if (!x.kept.some((k) => k.curve_level != null)) continue;
+    const at = new Map(x.kept.map((k, i) => [k, i]));
+    x.kept.sort((p, q) => {
+      const [kp, kq] = [priceKey(p), priceKey(q)];
+      if (kp === kq || kp === null || kq === null) return at.get(p)! - at.get(q)!;
+      return (x.side === 'sell' ? kp < kq : kp > kq) ? -1 : 1;
+    });
+  }
   const rowsOf = (x: typeof a): BookOrderView[] => (x.levels || x.confirmed === 0 ? [] : x.kept);
   const beyondOf = (x: typeof a): number => (x.levels || x.confirmed === 0 ? 0 : Math.max(0, x.cands.length - x.next));
   const asks = rowsOf(a);

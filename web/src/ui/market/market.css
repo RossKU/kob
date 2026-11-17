@@ -350,6 +350,8 @@ body:has(.market-page) .container { max-width: none; }
 .ob .book-row > span { text-align: right; }
 .ob .book-row > span.book-price { text-align: right; font-weight: 600; }
 .ob .book-bar { opacity: 1; }
+/* a level of a curve sell order (one order, many levels): three small steps at the row's left edge, its level in the row's title */
+.ob .book-curve { position: absolute; left: 1px; top: 50%; width: 3px; height: 3px; margin-top: 1px; background: var(--sell); box-shadow: 3px -3px 0 var(--sell), 0 -3px 0 var(--sell), 3px -6px 0 var(--sell); z-index: 1; pointer-events: none; }
 .ob .book-row:hover { background: var(--surface-3); }
 /* the hovered level and every level between it and the best price (review M-17): tinted, with a line that says what taking them all would be */
 .ob .book-row.is-cum { background: var(--surface-2); }

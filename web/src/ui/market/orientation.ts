@@ -18,6 +18,7 @@ import { formatRational, parseDecimal, ratToNumber, reduce, significantDp, type 
 import { formatUnits, pow10, quoteOf, SOMPI_PER_KAS } from '../../kob/units';
 import { columnFraction, fitAmountColumn, fitDecimalTexts, PRICE_DP_CAP, PRICE_SIGNIFICANT_DIGITS, tickKasFraction, type AmountCell } from '../kit/format';
 import type { BookModel, BookRow, Level } from './book-model';
+import { mergeCurve } from './book-model';
 import {
   amountText, basisOf, basisToNumber, bigOrNull, bpsPercentText, changeMarkFields, changeMarks, compactText, exactIfRounded, exactPriceText, priceText, thinBookUnder, toneOf, unitsToNumber,
   type Candle, type ChartBar, type DepthPoint, type DepthSeries, type StatsModel, type VolumeBar,
@@ -171,13 +172,15 @@ export function invertedRegrouper(c: { decimals: number; scale: bigint; dp: numb
         cur.orders += l.orders;
         cur.estimated ||= l.estimated;
         if (cur.value !== undefined && l.value !== undefined) cur.value += l.value;
+        const cv = mergeCurve(cur.curve, l.curve);
+        if (cv) cur.curve = cv;
         continue;
       }
       // the bucket's native price: P = basisKas scale / (dec k mult), rounded so that the order it prefills reaches the whole bucket
       const pn = basisKas * scale;
       const pd = dec * k * c.mult;
       const price = side === 'ask' ? ceilDiv(pn, pd) : pn / pd > 0n ? pn / pd : 1n;
-      by.set(k, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}), inv: reduce({ num: k * c.mult, den: scale }) });
+      by.set(k, { price, amount: l.amount, orders: l.orders, estimated: l.estimated, ...(l.value !== undefined ? { value: l.value } : {}), ...(l.curve ? { curve: l.curve } : {}), inv: reduce({ num: k * c.mult, den: scale }) });
     }
     return [...by.values()];
   };
@@ -209,6 +212,8 @@ export interface BookRowView {
   nativePrice: bigint;
   /** the side a click would take, in NATIVE terms (an ask level: "buy the token at this price", a bid level "sell"); it picks the rounding of the price, the ticket keeps its own side */
   pick: 'buy' | 'sell';
+  /** the curve levels (table indexes) at this level, absent when none: the row is marked as part of a curve order */
+  curve?: number[];
   /** from the best price to this level (the hover read-out, review M-17): the average price (one digit finer than the column), the amount of the token and its value in KAS (the other way round in a flipped book: KAS, then the token) */
   cum: { avg: string; amount: string; total: string };
 }
@@ -296,6 +301,7 @@ export function nativeBookView(m: BookModel, c: BookViewCtx): BookView {
     amount: r.amount,
     nativePrice: r.price,
     pick: side === 'ask' ? 'buy' : 'sell',
+    ...(r.curve ? { curve: r.curve } : {}),
   });
   const priced = fitPrices([...m.asksDisplay.map((r) => row(r, 'ask')), ...m.bids.map((r) => row(r, 'bid'))]);
   return {
@@ -348,6 +354,7 @@ export function flippedBookView(m: BookModel, c: BookViewCtx): BookView {
       nativePrice: r.price,
       // the level a click reaches is native: a native ask level = buy the token (displayed as a BID of KAS), a native bid level = sell the token
       pick: side === 'ask' ? 'buy' : 'sell',
+      ...(r.curve ? { curve: r.curve } : {}),
     };
   };
   // displayed bids = native asks (best = lowest native price = highest inverted), displayed asks = native bids; asks are listed best-last

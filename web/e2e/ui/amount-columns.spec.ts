@@ -57,12 +57,21 @@ for (const decimals of [0, 18]) {
     await mock.seed({ book: { token: id, mid: 2_500_000, tick: 10_000, levels: 3 } });
     await listTokens(page, [{ ticker, covenant_id: id, decimals }]);
     const huge = 56_609_953n * unit + (decimals ? 1n : 0n);
+    // the k-th price level of a side holds `amount`: an aggregated level's amount, or (one row per order) its first order's, the others at that price emptied
+    const setLevel = (rows: { price: string; amount?: string; amount_left?: string }[], k: number, amount: string) => {
+      const price = [...new Set(rows.map((r) => r.price))][k];
+      rows.filter((r) => r.price === price).forEach((r, i) => {
+        const v = i === 0 ? amount : '0';
+        if ('amount_left' in r) r.amount_left = v;
+        else r.amount = v;
+      });
+    };
     await rewrite(page, new RegExp(`/v1/books/${id}`), (b) => {
-      const asks = b.asks as { amount: string }[];
-      const bids = b.bids as { amount: string }[];
-      asks[0]!.amount = huge.toString();
-      bids[0]!.amount = '1';
-      bids[1]!.amount = (12_345_678_901n * unit).toString();
+      const asks = b.asks as { price: string; amount?: string; amount_left?: string }[];
+      const bids = b.bids as { price: string; amount?: string; amount_left?: string }[];
+      setLevel(asks, 0, huge.toString());
+      setLevel(bids, 0, '1');
+      setLevel(bids, 1, (12_345_678_901n * unit).toString());
     });
     const now = Date.now();
     const trade = (n: number, amount: bigint) => ({ id: n, txid: n.toString(16).padStart(64, '0'), ts: now - n * 1000, daa: 1000 - n, price: '2500000', amount: amount.toString(), quote: '1000', side: n % 2 ? 'buy' : 'sell', fills: 1, confirmations: 10, settled: true });
