@@ -26,16 +26,45 @@ const activeOf = async (mock: MockClient) => (await mock.ordersOf('alice')).filt
 async function expectTake(page: import('@playwright/test').Page, fills: RegExp, rest?: RegExp): Promise<void> {
   await settlePlan(page);
   await expect(page.getByTestId('order-take')).toBeVisible();
-  // each line one row, not cut, on the ticket's width
-  for (const id of ['order-take-fills', 'order-take-rest']) {
-    const el = page.getByTestId(id);
-    if ((await el.count()) === 0) continue;
-    expect(await el.evaluate((e) => e.scrollWidth <= e.clientWidth), `${id} fits its row`).toBe(true);
-  }
   await expect(page.getByTestId('order-take-fills')).toHaveText(fills);
+  await expectOneRow(page);
   if (rest) await expect(page.getByTestId('order-take-rest')).toHaveText(rest);
   else await expect(page.getByTestId('order-take-rest')).toHaveCount(0);
 }
+
+/**
+ * What the user sees of the block, whatever the font: each line one row (a narrow ticket cuts its end, the fee first), its whole text in its tooltip,
+ * and no sideways scroll of the page.
+ */
+async function expectOneRow(page: import('@playwright/test').Page): Promise<void> {
+  for (const id of ['order-take-fills', 'order-take-rest']) {
+    const el = page.getByTestId(id);
+    if ((await el.count()) === 0) continue;
+    const r = await el.evaluate((e) => {
+      const cs = getComputedStyle(e);
+      const line = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.3;
+      return { height: e.getBoundingClientRect().height, line, title: e.getAttribute('title') ?? '', text: (e.textContent ?? '').trim() };
+    });
+    expect(r.height, `${id}: one row`).toBeLessThanOrEqual(r.line * 1.5);
+    expect(r.title.trim(), `${id}: the whole line is its tooltip`).toBe(r.text);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth), 'no sideways scroll').toBeLessThanOrEqual(0);
+}
+
+test.describe('a wide fallback font (CI renders with other fonts)', () => {
+  for (const [name, viewport] of [['desktop', { width: 1280, height: 800 }], ['phone', { width: 390, height: 844 }]] as const) {
+    test(`${name}: the lines stay one row each, the fee cut first`, async ({ appPage: page, mock }) => {
+      await page.setViewportSize(viewport);
+      await fund(mock);
+      await openMarket(page, mock);
+      await page.addStyleTag({ content: '* { font-family: Verdana, "DejaVu Sans", sans-serif !important; letter-spacing: 0.02em !important; }' });
+      await pickType(page, 'limit', 'buy');
+      await fillFields(page, { amount: '10', price: '0.0251' });
+      await expectTake(page, /^Fills now: 7 EXKCC at 0\.0251 avg/, /^Rest: 3 EXKCC at 0\.0251$/);
+      await expect(page.getByTestId('order-take-fills')).toHaveAttribute('title', /^Fills now: 7 EXKCC at 0\.0251 avg · fee ~0\.0\d\d? KAS$/);
+    });
+  }
+});
 
 test.describe('direct fill from the book', () => {
   test('a crossing limit buy fills now from the asks at their price, no order is placed', async ({ appPage: page, mock, wallet }) => {

@@ -73,8 +73,12 @@
 .tk-reason-item .btn { margin-left: 6px; vertical-align: baseline; }
 .tk-ladder-total { margin: 0; min-height: 1.4em; }
 .tk-take { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; background: var(--surface-2); display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-/* one row each: a narrow ticket cuts the end (the whole line is its tooltip) */
-.tk-take p { margin: 0; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* one row each, whatever the font: a narrow ticket cuts the fee first, then the rest of the line (the whole line is its tooltip) */
+.tk-take p { margin: 0; font-size: 0.82rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tk-take-fills { display: flex; }
+.tk-take-fills > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.tk-take-main { flex: 0 1 auto; }
+.tk-take-fee { flex: 0 1000 auto; }
 .tk-take .stepper { margin-top: 4px; }
 
 .tk-disclosure { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface-2); }

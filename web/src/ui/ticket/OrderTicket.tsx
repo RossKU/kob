@@ -446,9 +446,9 @@ export function OrderTicket(props: OrderTicketProps) {
         fills: t('ticket.take.fills', {
           amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
           price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
-          // about: two significant digits, so the line fits one row (the final confirmation has the exact fee)
-          fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)),
         }),
+        // about: two significant digits (the final confirmation has the exact fee); on a narrow ticket it is cut first
+        fee: t('ticket.take.fee', { fee: kasApprox(takeFacts.fee * BigInt(takeFacts.steps.length)) }),
         rest: takeFacts.rest > 0n
           ? t(takeFacts.restKind === 'limit' ? 'ticket.take.rest' : 'ticket.take.restNone', { amount: formatUnits(takeFacts.rest, token.decimals, { group: ',' }), ticker, price: formatKas(takeFacts.limit, { group: ',' }) })
           : null,
@@ -1129,7 +1129,10 @@ export function OrderTicket(props: OrderTicketProps) {
       {takeFacts ? (
         <div class="tk-take" data-testid="order-take">
           {/* two short lines, one row each (the final confirmation has the details: the orders, the fee exactly) */}
-          <p data-testid="order-take-fills" title={takeLines!.fills}>{takeLines!.fills}</p>
+          <p class="tk-take-fills" data-testid="order-take-fills" title={takeLines!.fills + takeLines!.fee}>
+            <span class="tk-take-main">{takeLines!.fills}</span>
+            <span class="tk-take-fee">{takeLines!.fee}</span>
+          </p>
           {takeLines!.rest ? <p class="muted" data-testid="order-take-rest" title={takeLines!.rest}>{takeLines!.rest}</p> : null}
           {takeRun && takeRun.length > 0 ? <Stepper steps={takeRun} label={t('ticket.take.steps')} data-testid="order-take-stepper" /> : null}
         </div>
