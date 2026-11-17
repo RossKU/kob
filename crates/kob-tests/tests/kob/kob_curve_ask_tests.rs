@@ -1293,3 +1293,48 @@ fn fake_holder(t: &Token, real: &[u8]) -> Vec<u8> {
     assert_eq!(v.len(), real.len());
     v
 }
+
+// ---------------------------------------------------------------- security review 2026-11-17 (branch sec-contracts-curve)
+
+/// The placement gates of a curve (`CurveAskState::check_numbers`, spec section 5) on the scenario's numbers.
+fn sec_state(p: &CurveP) -> kob_protocol::state::CurveAskState {
+    kob_protocol::state::CurveAskState {
+        maker: p.maker,
+        token_cov_id: p.token_cov,
+        token_tpl_hash: [0x11; 32],
+        tpl_prefix_len: 1,
+        tpl_suffix_len: 1,
+        scale: p.scale,
+        min_fill: p.min_fill,
+        tip: p.tip,
+        active_from: p.active_from,
+        level_size: p.level_size,
+        total: p.total,
+        amount_left: p.amount_left,
+        extension_commitment: EXT,
+        table: p.table.clone(),
+    }
+}
+
+/// SEC-L1 (security review 2026-11-17). A fill crosses at most 8 levels and takes at least minFill: the gates now refuse
+/// a minFill above 7 levels + 1 (what one fill always reaches), and at that bound the worst position still takes a fill
+/// in the engine: after a purchase that stops one base unit short of a level's end, a fill of 7 levels + 1.
+#[test]
+fn sec_curve_min_fill_beyond_the_cross_cap() {
+    let f = fx();
+    let net = Net::new();
+    let t = &net.t;
+    let l = 2 * TOK;
+    // (a) and (b) of the reproducer: refused at placement
+    assert!(sec_state(&CurveP { min_fill: 8 * l + 1, ..hip2_50(&f) }).check_numbers().is_err());
+    assert!(sec_state(&CurveP { min_fill: 7 * l + 2, ..hip2_50(&f) }).check_numbers().is_err());
+    // the bound: fillable from the worst position
+    let p = CurveP { min_fill: 7 * l + 1, ..hip2_50(&f) };
+    sec_state(&p).check_numbers().expect("the bound passes");
+    run_ok(t, &named(fill(&net, &f, &p, 8 * l - 1), "SEC-L1 a taker buys 8 levels less one base unit"));
+    let after = p.left(p.total - (8 * l - 1));
+    let g = sec_state(&after);
+    g.check_numbers().expect("the continuation passes");
+    assert_eq!(g.max_fill(), 7 * l + 1);
+    run_ok(t, &named(fill(&net, &f, &after, 7 * l + 1), "SEC-L1 the continuation: a fill of 7 levels + 1"));
+}

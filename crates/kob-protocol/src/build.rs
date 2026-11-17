@@ -713,6 +713,9 @@ pub struct AmendOrder {
     pub records: Vec<Record>,
     #[serde(default)]
     pub fee: FeeOptions,
+    /// An unbound curve (made in its token's genesis): its custody, whose token the amend must name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custody: Option<TokenUtxo>,
 }
 
 /// Least KAS an in-place amend that pays its fee from the order's carrier leaves on the order.
@@ -1456,6 +1459,25 @@ pub fn build_amend_order(r: &AmendOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     }
     payload::check_amend_terms(&order.state, &r.amended).map_err(|e| Error::Invalid(e.to_string()))?;
     check_new_order(&r.amended)?;
+    // an unbound curve is bound by its amend to its custody's token (the custody made with it in its genesis,
+    // owned by it, of exactly amountLeft)
+    if let (AnyState::KobCurveAsk(prev), AnyState::KobCurveAsk(next)) = (&order.state, &r.amended) {
+        if prev.is_unbound() {
+            let Some(c) = &r.custody else {
+                return invalid("the amend of an unbound curve needs its custody (it binds the curve to that token)");
+            };
+            let cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
+            if c.utxo.transaction_id != order.utxo.transaction_id
+                || c.state.owner() != cov
+                || c.state.amount() as i64 != prev.amount_left
+            {
+                return invalid("the custody of an unbound curve is the output of its genesis it owns, of exactly amountLeft");
+            }
+            if c.utxo.covenant_id != Some(next.token_cov_id) {
+                return invalid("the amend of an unbound curve must name the token of its custody");
+            }
+        }
+    }
     let token = order_token(&order.state)?;
     let maker = order.state.maker();
     let order_cov = order.utxo.covenant_id.ok_or_else(|| Error::Invalid("order UTXO has no covenant id".into()))?;
@@ -1880,9 +1902,13 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
         return build_refund_pair(r, budgets);
     }
     let order = &r.order;
+    if matches!(order.state, AnyState::KobCurveAsk(_)) {
+        return invalid("a curve has no refund: its maker cancels it");
+    }
     let token = order_token(&order.state)?;
-    let (_, tip) = order.state.expiry().expect("order");
-    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
+    let (_, tip) = order.state.expiry().ok_or_else(|| Error::Invalid("this order has no expiry".into()))?;
+    let due =
+        order.state.refund_due(order.utxo.block_daa_score as i64).ok_or_else(|| Error::Invalid("this order has no refund".into()))?;
     if (r.lock_time as i64) < due {
         return invalid(format!("not refundable before DAA {due} (lockTime {})", r.lock_time));
     }
@@ -1991,8 +2017,9 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
 /// at its own index.
 fn build_refund_pair(request: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx> {
     let order = &request.order;
-    let (_, tip) = order.state.expiry().expect("order");
-    let due = order.state.refund_due(order.utxo.block_daa_score as i64).expect("order");
+    let (_, tip) = order.state.expiry().ok_or_else(|| Error::Invalid("this order has no expiry".into()))?;
+    let due =
+        order.state.refund_due(order.utxo.block_daa_score as i64).ok_or_else(|| Error::Invalid("this order has no refund".into()))?;
     if (request.lock_time as i64) < due {
         return invalid(format!("not refundable before DAA {due} (lockTime {})", request.lock_time));
     }

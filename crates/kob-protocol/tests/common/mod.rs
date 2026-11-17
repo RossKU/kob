@@ -939,6 +939,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         deadline,
         records: vec![],
         fee: fee(),
+        custody: None,
     };
     add("amend.ask", Action::AmendOrder(amend(AskState { price: 240_000_000, ..ask(MAKER_A, P250, t3) }, vec![], None)));
     add(
@@ -977,6 +978,7 @@ fn scenarios_all(t3: TemplateId) -> Vec<(String, Action)> {
         deadline: None,
         records: vec![],
         fee: fee(),
+        custody: None,
     };
     add("amend.bid", Action::AmendOrder(amend_bid(BidState { price: 240_000_000, ..bid(MAKER_B, P245, t3) }, None, vec![])));
     add(

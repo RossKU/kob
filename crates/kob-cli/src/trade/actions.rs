@@ -445,6 +445,8 @@ pub fn build_replace(
                 deadline: live.deadline,
                 records: vec![],
                 fee: fee.clone(),
+                // an unbound curve: its amend binds it to its custody's token
+                custody: if matches!(live.order.state, AnyState::KobCurveAsk(_)) { live.custody.clone() } else { None },
             })
         })?;
         let kept = built.tx.outputs.first().map(|o| o.value).unwrap_or(0);

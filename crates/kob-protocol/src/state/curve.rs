@@ -315,8 +315,9 @@ impl CurveAskState {
         if self.tip < 0 {
             return e(format!("tip must be >= 0, got {}", self.tip));
         }
-        if let Some((j, p)) = self.table.iter().enumerate().find(|(_, p)| **p < self.tip || **p <= 0) {
-            return e(format!("level {j} is priced {p}: every price must be >= tip ({}) and > 0", self.tip));
+        // a level priced at the tip would sell for nothing (the maker gets price - tip)
+        if let Some((j, p)) = self.table.iter().enumerate().find(|(_, p)| **p <= self.tip || **p <= 0) {
+            return e(format!("level {j} is priced {p}: every price must be > tip ({}) and > 0", self.tip));
         }
         let max = *self.table.iter().max().expect("non-empty");
         match quote_exact(self.level_size, max, self.scale, Round::Up) {
@@ -325,6 +326,12 @@ impl CurveAskState {
         }
         if self.min_fill < 1 {
             return e(format!("minFill must be >= 1, got {}", self.min_fill));
+        }
+        // one fill crosses at most MAX_CROSS levels: from any position it reaches at least 7 levels + 1 base unit, so a larger minFill
+        // leaves a position with no acceptable fill
+        let reach = (CURVE_MAX_CROSS as i128 - 1) * self.level_size as i128 + 1;
+        if self.min_fill as i128 > reach {
+            return e(format!("minFill ({}) must be at most {reach} (7 levels + 1: what one fill always reaches)", self.min_fill));
         }
         if self.active_from < 0 {
             return e(format!("activeFrom must be >= 0, got {}", self.active_from));

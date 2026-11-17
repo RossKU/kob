@@ -228,6 +228,7 @@ fn forged_amend_records_are_refused() {
         deadline: None,
         records: vec![],
         fee: fee(),
+        custody: None,
     };
     assert!(build(&Action::AmendOrder(req)).is_err());
 }

@@ -425,6 +425,7 @@ async fn a_sweep_record_on_anything_but_the_same_order_is_refused() {
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     };
     let mut built = build(&Action::AmendOrder(req)).unwrap();
     built.tx.payload = kob_protocol::payload::encode(&[Record::Sweep { output: 0, input: 0 }]).unwrap();

@@ -314,3 +314,81 @@ fn curve_default_table() {
 fn quote_of_up(n: i64, p: i64) -> i64 {
     kob_protocol::state::quote_of(n, p, SCALE, kob_protocol::state::Round::Up).unwrap()
 }
+
+/// SEC-L2 (security review 2026-11-17): a refund request that names a curve is refused cleanly (a curve has no refund).
+#[test]
+fn sec_refund_request_of_a_curve_is_refused() {
+    use kob_protocol::build::RefundOrder;
+    let c = cancel_curve(&curve(TemplateId::Kcc20Ref, 10));
+    let a = Action::RefundOrder(RefundOrder {
+        order: c.order.clone(),
+        custody: c.custody.clone(),
+        prefund: None,
+        bought_custody: None,
+        foreign: vec![],
+        lock_time: NOW,
+        funding: vec![],
+        change: None,
+        fee: fee(),
+    });
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(&a).map(|_| ()).map_err(|e| e.to_string())));
+    let e = r.expect("no panic").expect_err("refused");
+    assert!(e.contains("no refund"), "{e}");
+}
+
+/// SEC-L1 (security review 2026-11-17), the default path: the curve default minFill is at most one level, so a small curve
+/// of the default shape takes fills from any position; the uncapped default (more than 8 levels) is refused by the gates.
+#[test]
+fn sec_default_min_fill_of_a_small_curve_is_within_one_level() {
+    use kob_protocol::defaults::{curve_min_fill, default_min_fill};
+    let amount = 1_000_000 * WHOLE;
+    let spec = CurveSpec { total: (200 * KAS) as i64, ..CurveSpec::defaults(amount, SCALE) };
+    let t = curve_table(&spec).unwrap();
+    let base = CurveAskState {
+        level_size: t.level_size,
+        total: amount,
+        amount_left: amount,
+        table: t.table.clone(),
+        ..curve(TemplateId::Kcc20Ref, 1)
+    };
+    let old = CurveAskState { min_fill: default_min_fill(amount, t.table[0], SCALE), ..base.clone() };
+    assert!(old.min_fill > 8 * old.level_size);
+    assert!(old.check_numbers().is_err(), "a minFill beyond what one fill reaches is refused");
+    assert!(kob_protocol::build::check_new_order(&AnyState::KobCurveAsk(old)).is_err());
+    let s = CurveAskState { min_fill: curve_min_fill(amount, t.table[0], t.level_size, SCALE), ..base };
+    assert!(s.min_fill <= s.level_size);
+    s.check_numbers().expect("the capped default passes");
+    assert!(s.fill_ok(s.max_fill()) && s.fill_ok(s.min_fill));
+    // the gate's bound: 7 levels + 1 passes, one more is refused
+    let at = |m: i64| CurveAskState { min_fill: m, ..s.clone() }.check_numbers();
+    assert!(at(7 * s.level_size + 1).is_ok() && at(7 * s.level_size + 2).is_err());
+}
+
+/// SEC S8: a level priced at the tip (it would sell for nothing) is refused.
+#[test]
+fn sec_a_level_at_the_tip_is_refused() {
+    let s = curve(TemplateId::Kcc20Ref, 10);
+    assert!(CurveAskState { tip: s.table[0], ..s.clone() }.check_numbers().is_err());
+    assert!(CurveAskState { tip: s.table[0] - 1, ..s.clone() }.check_numbers().is_ok());
+}
+
+/// SEC S7: the amend of an unbound curve names the token of its custody, which the builder is given and checks.
+#[test]
+fn sec_unbound_amend_names_its_custodys_token() {
+    let mut s = curve(TemplateId::Kcc20Ref, 10);
+    s.token_cov_id = [0; 32];
+    let mut a = amend_curve(&s);
+    let bound = CurveAskState { token_cov_id: TOKEN_COV, tip: TIP, ..s.clone() };
+    a.amended = AnyState::KobCurveAsk(bound.clone());
+    // no custody: refused
+    assert!(build(&Action::AmendOrder(a.clone())).unwrap_err().to_string().contains("needs its custody"));
+    let c = cancel_curve(&s);
+    let mut custody = c.custody.clone().expect("a custody");
+    custody.utxo.transaction_id = a.order.utxo.transaction_id;
+    custody.utxo.covenant_id = Some(TOKEN_COV);
+    a.custody = Some(custody.clone());
+    build(&Action::AmendOrder(a.clone())).expect("bound to its custody's token");
+    // another token
+    a.amended = AnyState::KobCurveAsk(CurveAskState { token_cov_id: [0x77; 32], ..bound });
+    assert!(build(&Action::AmendOrder(a.clone())).unwrap_err().to_string().contains("token of its custody"));
+}

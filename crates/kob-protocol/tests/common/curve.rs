@@ -100,6 +100,7 @@ pub fn amend_curve(s: &CurveAskState) -> AmendOrder {
         deadline: None,
         records: vec![],
         fee: fee(),
+        custody: None,
     }
 }
 

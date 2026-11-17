@@ -1,7 +1,7 @@
 //! `kob place curve`: one sell order whose price steps up level by level (`KobCurveAsk`,
 //! `docs/design/curve-ask-spec.md`).
 
-use kob_protocol::defaults::{curve_table, default_min_fill, CurveSpec, CurveTable};
+use kob_protocol::defaults::{curve_min_fill, curve_table, CurveSpec, CurveTable};
 use kob_protocol::json::to_hex;
 use kob_protocol::state::{AnyState, CurveAskState, CURVE_MAX_CROSS};
 use serde_json::json;
@@ -77,7 +77,7 @@ pub fn curve_of(p: &Parsed, m: &TokenMarket, maker: [u8; 32], held: i64, clock: 
     let t = curve_table(&spec).map_err(|e| e.to_string())?;
     let min_fill = match p.get("--min-fill") {
         Some(v) => parse_token_amount(v, &unit, "--min-fill")?,
-        None => default_min_fill(amount, t.table[0], m.scale),
+        None => curve_min_fill(amount, t.table[0], t.level_size, m.scale),
     };
     let active_from = match p.get("--active-from").map(|v| parse_when(v, "--active-from")).transpose()? {
         None => 0,

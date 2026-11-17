@@ -189,6 +189,7 @@ async fn a_curve_is_amended_in_place_and_cancelled() {
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: None,
     }));
     c.push(&[&am]).await;
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobCurveAsk(amended.clone())));
@@ -386,7 +387,7 @@ async fn a_genesis_curve_with_a_second_custody_candidate_is_not_listed() {
     assert_eq!(v.unlisted_reason.as_deref(), Some("curve_custody_ambiguous"));
 }
 
-fn amend_to(c: &Ctx, order: OrderUtxo<CurveAskState>, amended: CurveAskState) -> SignedTx {
+fn amend_to(c: &Ctx, order: OrderUtxo<CurveAskState>, amended: CurveAskState, custody: TokenUtxo) -> SignedTx {
     c.w.sign(&Action::AmendOrder(AmendOrder {
         order: OrderUtxo { utxo: order.utxo, state: AnyState::KobCurveAsk(order.state) },
         amended: AnyState::KobCurveAsk(amended),
@@ -397,6 +398,7 @@ fn amend_to(c: &Ctx, order: OrderUtxo<CurveAskState>, amended: CurveAskState) ->
         deadline: None,
         records: vec![],
         fee: FeeOptions::default(),
+        custody: Some(custody),
     }))
 }
 
@@ -406,17 +408,20 @@ async fn an_amend_of_an_unbound_curve_must_bind_it_to_its_token() {
     // naming another token: a reject, the continuation listed nowhere
     let c = open_ctx();
     launch(&c, &plan).await;
-    let (order, _) = genesis_utxos(&c, &plan, &s, token, cov);
-    let wrong = amend_to(&c, order, CurveAskState { token_cov_id: TOKEN_COV, tip: TIP, ..s.clone() });
+    let (order, custody) = genesis_utxos(&c, &plan, &s, token, cov);
+    // the builder checks the custody it is given: told it is of another token, it builds the wrong binding,
+    // which the indexer must refuse
+    let lie = TokenUtxo { utxo: Utxo { covenant_id: Some(TOKEN_COV), ..custody.utxo.clone() }, ..custody.clone() };
+    let wrong = amend_to(&c, order, CurveAskState { token_cov_id: TOKEN_COV, tip: TIP, ..s.clone() }, lie);
     c.push(&[&wrong]).await;
     assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM rejects WHERE reason = 'amend:curve_not_bound_to_its_token'", []), 1);
     assert!(!view(&c, &cov).state_known);
     // naming its token: bound
     let c = open_ctx();
     launch(&c, &plan).await;
-    let (order, _) = genesis_utxos(&c, &plan, &s, token, cov);
+    let (order, custody) = genesis_utxos(&c, &plan, &s, token, cov);
     let bound = CurveAskState { token_cov_id: token.0, tip: TIP, ..s.clone() };
-    let right = amend_to(&c, order, bound.clone());
+    let right = amend_to(&c, order, bound.clone(), custody);
     c.push(&[&right]).await;
     assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobCurveAsk(bound)));
     let v = view(&c, &cov);
