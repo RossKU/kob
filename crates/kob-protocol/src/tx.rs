@@ -696,6 +696,23 @@ impl MassReport {
     pub fn within_block_limits(&self) -> bool {
         self.compute <= BLOCK_COMPUTE_LIMIT && self.storage <= BLOCK_STORAGE_LIMIT && self.transient <= BLOCK_TRANSIENT_LIMIT
     }
+
+    /// Checks each dimension against [`tx_mass_budget`]`(percent)`. The error names the first
+    /// dimension over.
+    pub fn check_tx_limits(&self, percent: u8) -> std::result::Result<(), String> {
+        let b = tx_mass_budget(percent);
+        let p = percent.min(100);
+        for (name, mass, budget, limit) in [
+            ("compute", self.compute, b.compute, TX_MASS_LIMITS.compute),
+            ("transient", self.transient, b.transient, TX_MASS_LIMITS.transient),
+            ("storage", self.storage, b.storage, TX_MASS_LIMITS.storage),
+        ] {
+            if mass > budget {
+                return Err(format!("{name} mass {mass} exceeds {budget} ({p}% of the per-transaction {name} limit {limit})"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The consensus parameters masses are computed with, those of rusty-kaspa v2.1.0 mainnet.
@@ -709,6 +726,25 @@ pub fn mass_params() -> &'static Params {
 /// The block mass limits the constants above state (also the node's mempool limits).
 pub const BLOCK_MASS_LIMITS: BlockMassLimits =
     BlockMassLimits { compute: BLOCK_COMPUTE_LIMIT, storage: BLOCK_STORAGE_LIMIT, transient: BLOCK_TRANSIENT_LIMIT };
+
+/// Per-transaction mass limits of the node's relay and mempool: the block limits
+/// (rusty-kaspa v2.1.0 `mining/src/mempool/check_transaction_limits.rs`). v2.1.0 has no separate
+/// standard mass cap.
+pub const TX_MASS_LIMITS: BlockMassLimits = BLOCK_MASS_LIMITS;
+
+/// Default share of each per-transaction limit that KOB's issuance fills, in percent, so that a
+/// transaction never sits at the edge.
+pub const DEFAULT_MASS_MARGIN_PERCENT: u8 = 90;
+
+/// [`TX_MASS_LIMITS`] scaled to `percent` (at most 100).
+pub const fn tx_mass_budget(percent: u8) -> BlockMassLimits {
+    let p = if percent > 100 { 100 } else { percent as u64 };
+    BlockMassLimits {
+        compute: TX_MASS_LIMITS.compute * p / 100,
+        storage: TX_MASS_LIMITS.storage * p / 100,
+        transient: TX_MASS_LIMITS.transient * p / 100,
+    }
+}
 
 /// Computes every mass dimension of a transaction with its entries.
 ///

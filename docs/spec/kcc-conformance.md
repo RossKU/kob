@@ -359,3 +359,25 @@ every holder refuses a foreign leader (16 of 16 refused), and in the standalone 
 genesis could do it, which KOB's issuance never creates. A 16-holder transaction needs a non-default program for the holders:
 the 16/16 slot variant (11,846 B pushed by every token input) or a holder program that names a batch leader (`KCC20P2`,
 `KCC20Opt` enabled; 2,920 / 2,934 B), both outside the default KCC-20 configuration.
+
+Batch capacity (`kcc20_opt_tests.rs`, `opt_batch_capacity`, ignored by default; measured 2026-11-17). A pure merge: N
+key-owned holders of enabled `KCC20Opt` into one output, led by an N-slot `KCC20Batch` (the committed source with
+`MAX_SLOTS` = N; the holder commits to that build's template, so a token picks one slot count). Limits are rusty-kaspa
+v2.1.0's per-transaction relay and mempool limits, which equal the block limits: compute 500,000, transient (4 x bytes)
+1,000,000, storage 500,000, 250,000 B of signature script per input, 1,000 inputs. Fee = max(compute, 2 x bytes) x 100
+sompi per gram.
+
+| Merge | Leader | Bytes | Compute | Transient | Storage | Fee (KAS) |
+|---|---|---|---|---|---|---|
+| `KCC20Ref_16x16`, 16 -> 1 | none | 191,878 | 212,448 | 767,512 | 0 | 0.38376 |
+| Batch, N = 16 | 5,986 B | 55,489 | 90,029 | 221,956 | 0 | 0.11098 |
+| Batch, N = 32 | 11,190 B | 109,685 | 189,525 | 438,740 | 0 | 0.21937 |
+| Batch, N = 64 | 21,590 B | 218,069 | 439,709 | 872,276 | 0 | 0.43971 |
+| Batch, N = 70 (max) | 23,540 B | 238,391 | 494,631 | 953,564 | 0 | 0.49463 |
+| Batch, N = 71 | 23,865 B | 241,778 | 501,618 (over) | 967,112 | 0 | 0.50162 |
+
+Compute binds first: N = 70 is the largest merge (71 is over by 1,618); within a 90 % margin (as KOB keeps for issuance) the largest is 65.
+Transient alone would stop at 73, storage never (a merge has fewer, larger outputs), the leader's signature script
+(about 325 B per slot) at about 766, and no script hits the stack (244) or op limits (every N up to 96 runs). Compute
+grows faster than linearly: each holder hashes the whole leader script, so a holder's script units rise from 192,307 at
+N = 16 to 350,293 at N = 70. The leader has one signature operation (P2SH standard: at most 15).

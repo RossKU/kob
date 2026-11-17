@@ -35,7 +35,10 @@ export interface IssueLimits {
   defaultCarrier: U64;
   defaultFeeRate: U64;
   minFeeRate: U64;
-  maxStandardMass: U64;
+  /** Per-transaction mass limits of the node (rusty-kaspa v2.1.0 relay = the block limits). */
+  txMassLimits: { compute: U64; transient: U64; storage: U64 };
+  /** The share of each limit an issuance fills by default, in percent. */
+  massMarginPercent: number;
   maxTokenInputs: number;
   maxTokenOutputs: number;
   maxDecimals: number;
@@ -98,6 +101,8 @@ export interface IssueSpec {
   /** The token's Telegram: a handle or its address. Declared as `https://t.me/<handle>`. */
   telegram?: string;
   network?: string;
+  /** Share of each per-transaction mass limit the two transactions may fill, in percent (default 90). */
+  massMarginPercent?: number;
   /**
    * `public-mint` (default, `KCC20PublicMint`, the published build of the reference) or `3x3`
    * (`KCC20Ref`, the standalone 3 / 3).

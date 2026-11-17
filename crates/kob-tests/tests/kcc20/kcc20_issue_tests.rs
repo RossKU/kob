@@ -427,5 +427,5 @@ fn issue_tool_rules() {
     // carrier so small that the storage mass explodes is refused by the mass check
     let mut spec = IssueSpec::new("T", "T1", 0, 90, (0..9).map(|i| Holder::new([i + 1; 32], 0, 10)).collect(), vec![f.clone()]);
     spec.carrier = KAS / 10;
-    assert!(build_genesis(&spec).is_err(), "9 outputs of 0.1 KAS exceed the standard mass");
+    assert!(build_genesis(&spec).is_err(), "9 outputs of 0.1 KAS exceed the storage mass limit");
 }

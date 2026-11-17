@@ -52,6 +52,8 @@ describe('limits', () => {
   it('come from kob-wasm and match the protocol rules', () => {
     expect(limits.maxSupply).toBe('2900000000000000000');
     expect(limits.maxGenesisOutputs).toBe(64);
+    expect(limits.txMassLimits).toEqual({ compute: '500000', transient: '1000000', storage: '500000' });
+    expect(limits.massMarginPercent).toBe(90);
     expect(limits.defaultCarrier).toBe((10n * KAS).toString());
     expect([limits.maxTokenInputs, limits.maxTokenOutputs, limits.maxDecimals]).toEqual([3, 3, 18]);
     expect(limits.program).toBe('KCC20Ref');

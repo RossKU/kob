@@ -32,8 +32,8 @@ use std::collections::BTreeSet;
 
 use kob_protocol::issue::{
     self, build_creation, hex, p2pk_script, CreationPlan, FundingUtxo, Holder, IssueProgram, IssueSpec, DEFAULT_CARRIER,
-    DEFAULT_FEE_RATE, EXTENSION_CLASS, EXTENSION_FIXED_SUPPLY, MAX_GENESIS_OUTPUTS, MAX_STANDARD_MASS, MAX_SUPPLY,
-    OWNER_SCHEMES_ENABLED, REGISTRY_TEMPLATE_ID, REGISTRY_TEMPLATE_ID_PUBLIC_MINT,
+    DEFAULT_FEE_RATE, EXTENSION_CLASS, EXTENSION_FIXED_SUPPLY, DEFAULT_MASS_MARGIN_PERCENT, MAX_GENESIS_OUTPUTS, MAX_SUPPLY,
+    OWNER_SCHEMES_ENABLED, REGISTRY_TEMPLATE_ID, REGISTRY_TEMPLATE_ID_PUBLIC_MINT, TX_MASS_LIMITS,
 };
 use kob_protocol::json;
 use kob_protocol::kcc20::{ISSUE_MAX_TOKEN_INPUTS, ISSUE_MAX_TOKEN_OUTPUTS};
@@ -110,6 +110,9 @@ struct IssueRequest {
     /// `8x8-prototype` is refused here and by the CLI.
     #[serde(default)]
     program: Option<String>,
+    /// Share of each per-transaction mass limit the two transactions may fill, in percent (default 90).
+    #[serde(default)]
+    mass_margin_percent: Option<u8>,
 }
 
 #[derive(Serialize)]
@@ -281,6 +284,9 @@ fn to_spec(r: &IssueRequest, fee_rate: u64) -> R<IssueSpec> {
     if let Some(n) = &r.network {
         spec.network = n.clone();
     }
+    if let Some(m) = r.mass_margin_percent {
+        spec.mass_margin_percent = m;
+    }
     if let Some(p) = &r.program {
         spec.program = IssueProgram::parse(p).map_err(|e| e.to_string())?;
         if spec.program.is_testnet_third_party() {
@@ -423,7 +429,13 @@ pub fn issue_limits() -> R<String> {
         "defaultCarrier": DEFAULT_CARRIER.to_string(),
         "defaultFeeRate": DEFAULT_FEE_RATE.to_string(),
         "minFeeRate": MIN_FEE_RATE.to_string(),
-        "maxStandardMass": MAX_STANDARD_MASS.to_string(),
+        // per-transaction limits (rusty-kaspa v2.1.0 relay = block limits) and the default share filled
+        "txMassLimits": {
+            "compute": TX_MASS_LIMITS.compute.to_string(),
+            "transient": TX_MASS_LIMITS.transient.to_string(),
+            "storage": TX_MASS_LIMITS.storage.to_string(),
+        },
+        "massMarginPercent": DEFAULT_MASS_MARGIN_PERCENT,
         "maxTokenInputs": ISSUE_MAX_TOKEN_INPUTS,
         "maxTokenOutputs": ISSUE_MAX_TOKEN_OUTPUTS,
         "maxDecimals": MAX_DECIMALS,

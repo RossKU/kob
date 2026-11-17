@@ -237,7 +237,7 @@ describe('KobIfdPair economics and refusals', () => {
 });
 
 describe('pair placement: the spare token slots of each token take its smallest other UTXOs', () => {
-  it('IFO sell-first (A custody and B prefund): 3 token inputs of each token, ONE change per token to the maker, under the standard mass', () => {
+  it('IFO sell-first (A custody and B prefund): 3 token inputs of each token, ONE change per token to the maker, within the per-transaction mass limits', () => {
     const a = tokenA();
     const b = tokenB();
     const amount = 8_003n;
@@ -254,6 +254,7 @@ describe('pair placement: the spare token slots of each token take its smallest 
     expect(outs(b.covenantId)).toHaveLength(2);
     const aChange = K.tokenScriptPublicKey(a.program!, keyState(a.family, 3n, env.maker, a.extensionCommitment, a.program!));
     expect(outs(a.covenantId).filter((o) => o.scriptPublicKey === aChange)).toHaveLength(1);
-    expect(built.fee.mass.priorityMass).toBeLessThan(100_000);
+    // max(compute, normalized transient, storage) within 90% of the per-transaction limits (500,000 on the compute scale)
+    expect(built.fee.mass.priorityMass).toBeLessThan(450_000);
   });
 });

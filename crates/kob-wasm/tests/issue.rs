@@ -494,6 +494,14 @@ fn limits_mirror_the_protocol_constants() {
     let l: Value = serde_json::from_str(&api::issue_limits().unwrap()).unwrap();
     assert_eq!(l["maxSupply"], kob_protocol::issue::MAX_SUPPLY.to_string());
     assert_eq!(l["maxGenesisOutputs"], 64);
+    assert_eq!(l["txMassLimits"], json!({ "compute": "500000", "transient": "1000000", "storage": "500000" }));
+    assert_eq!(l["massMarginPercent"], 90);
+    // the margin is per request: 0 is refused, 100 accepted
+    let mut r = request();
+    r["massMarginPercent"] = json!(0);
+    assert!(issue(&r).unwrap_err().contains("mass margin"));
+    r["massMarginPercent"] = json!(100);
+    issue(&r).unwrap();
     assert_eq!(l["defaultCarrier"], (10 * KAS).to_string());
     assert_eq!((l["maxTokenInputs"].clone(), l["maxTokenOutputs"].clone()), (json!(3), json!(3)));
     assert_eq!(l["maxDecimals"], 18);
