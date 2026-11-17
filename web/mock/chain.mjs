@@ -467,7 +467,8 @@ export class MockChain {
     const used = new Set();
     // A token genesis has no leader: it names the states of its outputs in its payload (`KOBG`), believed only where their P2SH is the output's
     // script (the indexer does the same: record.rs `genesis_leaders`), and the token is tracked from then on, listed or not.
-    const genesis = genesisStates(tx.payload);
+    // a genesis that places a sell curve carries them in its KOB1 payload, as the optional GENESIS record (0x85, the same KOBG bytes)
+    const genesis = genesisStates(tx.payload) ?? genesisStates(this.genesisRecord(tx.payload));
     tx.outputs.forEach((o, j) => {
       if (!o.covenant) return;
       let tok = this.tokens.get(o.covenant.covenantId);
@@ -517,7 +518,7 @@ export class MockChain {
         u.kind = 'order';
         if (r.custody && !tokenMatches.has(r.custody.output)) tokenMatches.set(r.custody.output, r.custody.state);
         if (r.prefund && !tokenMatches.has(r.prefund.output)) tokenMatches.set(r.prefund.output, r.prefund.state);
-        this.registerOrder({ covenantId: r.covenantId, any: r.order, txid, out: r.output, value: BigInt(r.value), daa, seq, custodyState: r.custody?.state ?? null, deadline: r.deadline != null ? Number(r.deadline) : null, origin: 'chain' });
+        this.registerOrder({ covenantId: r.covenantId, any: r.order, txid, out: r.output, value: BigInt(r.value), daa, seq, custodyState: r.custody?.state ?? null, deadline: r.deadline != null ? Number(r.deadline) : null, origin: 'chain', custodyToken: r.custody ? outs[r.custody.output]?.covenantId ?? null : null });
         created.add(r.covenantId);
         createdInfo.push({ covenantId: r.covenantId, kind: r.order.kind, output: r.output });
       }
@@ -684,6 +685,13 @@ export class MockChain {
     return { transactionId: txid };
   }
 
+  /** The value (hex) of a KOB1 payload's GENESIS record (0x85): the token states of a genesis that places a curve; null when there is none. */
+  genesisRecord(payload) {
+    if (typeof payload !== 'string' || !payload.startsWith(KOB1)) return null;
+    const r = this.decodeRecords(payload).find((x) => x.type === 'unknown' && x.recordType === 0x85);
+    return r ? r.value : null;
+  }
+
   decodeRecords(payload) {
     if (!payload) return [];
     try {
@@ -777,13 +785,14 @@ export class MockChain {
    * Registers an order the way the indexer does after recovering a placement record: the order row, its `create` event and the
    * token registry sighting. The order UTXO / custody UTXO themselves are created by the caller.
    */
-  registerOrder({ covenantId, any, txid, out, value, daa, seq, custodyState, deadline = null, origin = 'chain', parent = null }) {
+  registerOrder({ covenantId, any, txid, out, value, daa, seq, custodyState, deadline = null, origin = 'chain', parent = null, custodyToken = null }) {
     const info = KINDS[any.kind];
     const s = any.state;
     const t = termsOf(any);
     // a pair order: its token is A, its quote B (both must pass the listing rules; B's refusal is `quote_<reason>`)
     const pt = pairTokensOf(any);
-    const tokenId = pt ? pt.a.covId : s.tokenCovId;
+    // an unbound curve (made in its token's genesis) names no token: it is its custody's
+    const tokenId = pt ? pt.a.covId : any.kind === 'KobCurveAsk' && /^0{64}$/.test(s.tokenCovId) && custodyToken ? custodyToken : s.tokenCovId;
     const tplHash = pt ? pt.a.tplHash : s.tokenTplHash;
     const tok = this.tokens.get(tokenId) ?? null;
     const listing = (tk, hash, scale) =>
