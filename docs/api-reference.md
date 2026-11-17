@@ -230,6 +230,8 @@ curl -s $API/v1/health
   "lag_tolerance_daa": 300,
   "untrusted_windows_total": 0, "untrusted_blocks_total": 0, "confirmed_blocks_total": 0, "lies_total": 0,
   "authority_replaced_total": 0,
+  "cross_checked": true,
+  "chain_proof": { "enabled": true, "blocks_total": 0, "lane_proofs_total": 0, "merged_blocks_total": 0, "refused_total": 0, "cpu_us_per_block": 0.0 },
   "book_complete": true,
   "lean": false, "lean_orders_pruned_total": 0, "lean_rows_pruned_total": 0, "history_from": null,
   "roles": ["indexer"],
@@ -305,6 +307,8 @@ Every key the handler returns:
 | `prefetch_windows`, `prefetch_in_flight`, `prefetch_bytes`, `prefetch_bytes_peak`, `prefetch_window_blocks`, `prefetch_discards_total`, `prefetch_oversize_total` | Parallel fetch: windows queued ahead of the cursor and in flight, their bytes now and at most, the current window in chain blocks, plans dropped because the chain moved, windows refused as oversize. |
 | `untrusted_windows_total`, `untrusted_blocks_total`, `confirmed_blocks_total`, `lies_total` | Several nodes: windows and chain blocks fetched from a node other than the primary, how many were compared with the primary's copy before applying, and contradictions found. |
 | `authority_replaced_total` | Chain authorities given up for a finding since the start: a public one (a resolver entry) judged useless, a disagreement that did not settle, or an answer that contradicted the store; and any authority whose chain requests kept failing while the cursor stalled (a named one hands its role to another node: `nodes[].promoted`). Not a lost connection. Metric `kob_indexer_authority_replaced_total`. |
+| `cross_checked`, `cross_check_reason` | Whether a second node (a resolver pair) vouched for the last answer of the chain authority that was applied. `false` with the reason for a single node, and while no cross-checking node answers (the answers wait for one, then go on alone with the chain proofs). |
+| `chain_proof` | The chain proofs of every batch (`[chain_proof]`, docs/ops/executor.md Part C, *Node*): chain blocks that passed, lane proofs checked, merged blocks fetched for signature scripts, batches refused and the last reason (`last_refusal`), and the CPU time of the local checks per chain block. Absent when off. |
 | `lean`, `lean_orders_pruned_total`, `lean_rows_pruned_total` | Lean storage: whether it is on, and the closed orders / rows it deleted since the start. |
 | `history_from` | number or null | A lean store's trade history is complete from this time (unix ms): the last event of the oldest closed order the store still holds that its pruning could delete (one without a live exit), else its oldest event; `null` for a full store (and an empty one). The pruning deletes closed orders oldest last activity first, with their fills, so trades, candles, 24 h figures and totals are whole from it on; before it, closed orders may be gone (live orders keep their own older events). A client labels older history as partial. |
 | `roles` | What the process does, from `executor` (the matcher and the keepers of `kobd --executor` work on this store) and `indexer` (the store keeps the history and this API serves it): `["indexer"]` for `kobd --indexer`, `["executor"]` for `kobd --executor` (a lean store, `lean: true`), `["executor", "indexer"]` for `kobd --executor --indexer` (a full store). The metrics carry `kob_role{role="executor"|"indexer"}`. |

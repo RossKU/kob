@@ -3068,13 +3068,28 @@ run without the file). Unlisted tokens (stray dust) are sold under the floor.
 
 ### Node
 
+**Chain proofs** (`[chain_proof]`, on by default; `rpc::proof`). One node cannot make the indexer apply a chain block it
+forged, whichever node served the batch: every header must hash to its block, link to the chain block before it, meet the
+target of its `bits` (kHeavyHash, rusty-kaspa's `kaspa-pow`) and not claim a target easier than `floor_factor` (default
+4) times the median of the last `floor_window` (600) headers, nor than a network minimum (`min_difficulty`: 1e13 on
+mainnet, 1e4 on testnet-10); every transaction must hash to its id; every lane the batch touches (the native lane always,
+coinbase aside) must fold into the tip a KIP-21 lane proof (`getSeqCommitLaneProof`) shows against the last chain block's
+`accepted_id_merkle_root`, so no native transaction can be hidden or added; and the signature scripts of every
+transaction that can matter to KOB must match its merged block, whose transactions must match its `hash_merkle_root`.
+A batch that fails is refused, logged, not applied, and its node is given up (a public node) or alarmed (a named one). The
+difficulty floor is a heuristic against trivial `bits`, not the node's difficulty adjustment; on testnet-10 the proof of
+work itself is cheap. Cost: one kHeavyHash per chain block, one lane proof call per lane per batch, `Full` verbosity
+(about 1-4 % more bytes than `High`), one `getBlock` per merged block holding a KOB transaction. Left to the node: a lane
+other than the native one that a batch hides entirely (until it next shows up), and the spent outputs attached to inputs.
+
 Run a rusty-kaspa v2.1.0 node with `--utxoindex` (funding lookup), `--retention-period-days=7`,
 `--disable-upnp`, RPC on loopback only, never `--unsaferpc` (the recommended setup), or use public nodes (*Public nodes*
 below). The executor speaks JSON wRPC by default (`--rpc-url ws://127.0.0.1:18210` on testnet-10, `:18110` on mainnet), or
 Borsh wRPC for every call when the URL is a Borsh endpoint (a path ending in `/borsh`, or a node's default Borsh port
 `17110` / `17210` with no path: `--rpclisten-borsh=default`): `rpc::bridge` carries the same calls (`getServerInfo`,
 `getBlockDagInfo`, `getSinkBlueScore`, `getBlock`, `getVirtualChainFromBlock`, `getVirtualChainFromBlockV2`,
-`getUtxosByAddresses`, `submitTransaction`, `submitTransactionReplacement`, `getFeeEstimate`, `getMempoolEntry`) with the
+`getUtxosByAddresses`, `submitTransaction`, `submitTransactionReplacement`, `getFeeEstimate`, `getMempoolEntry`,
+`getSeqCommitLaneProof`) with the
 node's own request and response types, so every part of the executor (indexer, matcher, keepers, x402 facilitator, setup)
 reads the same answers over either encoding. It checks the network id
 and the sync state every tick and does nothing while the node is not synced. Transactions go
@@ -3094,20 +3109,28 @@ resolvers (rusty-kaspa `rpc/wrpc/client/Resolvers.toml`: `*.kaspa.stream`, `*.ka
   bodies (checked against the authority as any other node's, Part B 3, *Several nodes*), takes every submission, and vouches
   for the authority's own answers: each single step and each window the authority serves is compared with its acceptance
   data from the same start (the same chain block at every position, the same accepted transactions), and only what both
-  report is indexed. A contradiction cuts the answer before it (a race at the tip settles within seconds); one at the very
-  next chain block applies nothing until the two agree, and when it persists (three times in a row) the cross-checking node
-  is given up for another, then (three more) the authority's. Counted per node (`disagreements` in `/v1/health` `nodes`, the
-  status line). The tips of the two nodes differing for a moment (a different chain block among the newest ten, or a shallow
-  reorg one node has seen first) is no contradiction: it is counted apart as `tip_differs`, logged at debug, and warned about
-  only when it repeats as often as it takes to replace a node.
+  report is indexed: chain blocks the other node does not report yet wait for the next poll. Near the tip honest nodes
+  differ: another chain block less than `[cross_check] contradiction_depth_daa` (default 600, a minute) below the newest
+  block both report, or a shallow reorg one node has seen first, is lag. It is counted apart as `tip_differs`, logged at
+  debug, and nothing past it is indexed until the two agree. A real contradiction (another chain block deeper than that,
+  other accepted transactions in the same chain block, or the other node not knowing a deep cursor) asks a third node: a
+  further `resolver` entry if configured, else the referee (`resolver:99`, a public node of its own resolved on first use).
+  If it agrees with the authority, the cross-checking node is given up and the answer is indexed; if it agrees with the
+  cross-checking node, the authority is outvoted, nothing of its answer is indexed and the other node takes the role; with no
+  third node (or one agreeing with neither) nothing past the contradiction is indexed, and when it persists (three times in a
+  row) the cross-checking node is given up for another, then (three more) the authority's. Counted per node
+  (`disagreements` in `/v1/health` `nodes`, the status line).
 * A node that cannot be reached or drops its connection gets one reconnect first (public nodes close connections now and
   then under load): the same node is tried once more with a 5 s connect timeout (`GRACE_CONNECT_TIMEOUT`). When it is the
   authority's, the other node is the authority from the next call on (no resolution, no wait) and the dropped node is
   retried as the cross-checking one. A node that drops again within 2 minutes of its last drop (`DROP_WINDOW`; its retry
   failing included) is given up at once, and a replacement on a host neither in use nor failed lately is resolved in the
-  background; the same for the cross-checking node. A cross-checking node that cannot answer leaves the
-  authority alone meanwhile (it has 5 s for a single step near the tip and 30 s for a window, and its timeouts count
-  against it as below; nothing can be contradicted while there is no second node). With no node left (a network blip of a home link, a
+  background; the same for the cross-checking node. A cross-checking node that cannot answer (it has 5 s for a single
+  step near the tip and 30 s for a window, and its timeouts count against it as below) holds the authority's answers back:
+  after `[cross_check] rotate_after_secs` (default 20) its entry gives its node up for another public node, at most three
+  times in a row; after `single_node_after_secs` (default 120) without any answer the authority goes on alone with the
+  chain proofs only (below), and `/v1/health` shows `cross_checked: false` with `cross_check_reason` (the status line
+  says `NOT cross-checked`). The first answer of a cross-checking node ends it. With no node left (a network blip of a home link, a
   phone switching networks, a laptop waking up), both are resolved again with a backoff (2 s doubling to 60 s), never held back
   by the rate limit below: the pair is back within about a minute of the link. Every change is logged with the host names, and the status line
   shows both hosts, their state and how often each entry was replaced.
