@@ -424,14 +424,14 @@ pub fn cancel_sweeping(
     c.w.resign(built, false)
 }
 
-/// A keeper's refund of a mode-1 bid (`refund(custIn)`, at input 0) that releases its bought-custody `custody` (input 1) as one plain
-/// UTXO of the maker at output `custIn` = 1, the custody's own input index. The maker gets the escrow less the refund tip at output 0.
+/// A keeper's refund of a mode-1 bid (`refund()`, at input 0) that releases its bought-custody `custody` (input 1) as one plain
+/// UTXO of the maker at output 1, the custody's own input index. The maker gets the escrow less the refund tip at output 0.
 pub fn refund_releasing(c: &Ctx, order: &OrderUtxo<AnyState>, custody: &TokenUtxo, lock: u64) -> SignedTx {
     let AnyState::KobBid(s) = &order.state else { panic!("a bid") };
     let cov = order.utxo.covenant_id.unwrap();
     let mut b = draft(lock);
     let entry =
-        SigPlan::Entry { template: TemplateId::KobBid, state: order.state.encode(), entry: "refund".into(), args: vec![Arg::Int(1)] };
+        SigPlan::Entry { template: TemplateId::KobBid, state: order.state.encode(), entry: "refund".into(), args: vec![] };
     add_input(&mut b, &order.utxo, spk_to_string(&order.state.spk()), entry, None);
     let release = plain(custody.state.amount(), MAKER_A);
     let lead = SigPlan::TokenLeader {

@@ -68,8 +68,8 @@ change; only the state lengths of the table above. An in-place amend may not cha
 
 | Template | Entries (changed ones in bold) |
 |---|---|
-| `KobBid` | **`fill(byte[8] nb, int tokIn, int t, int form)`**, `cancel(sig)`, **`refund(int custIn)`** |
-| `KobCondBid` | **`settle(byte[8] nb, int tokIn, int leg, int ev, int t, int form)`**, `update(int ev, int tk)`, `cancel(sig)`, **`refund(int custIn)`** |
+| `KobBid` | **`fill(byte[8] nb, int tokIn, int t, int form)`**, `cancel(sig)`, `refund()` |
+| `KobCondBid` | **`settle(byte[8] nb, int tokIn, int leg, int ev, int t, int form)`**, `update(int ev, int tk)`, `cancel(sig)`, `refund()` |
 | `KobPair` | **`settle(byte[8] nb, int custIn, int tTplIn, int t, int sOut, int tOut, int form)`**, `cancel(sig)` |
 | `KobCondPair` | **`settle(...)` as today with a last argument `int form`**, `cancel(sig)` |
 | `KobIfdAsk`, `KobIfdPair` | unchanged signatures |
@@ -79,6 +79,8 @@ change; only the state lengths of the table above. An in-place amend may not cha
   mode 2 form 2 → the receive UTXO; otherwise any input of the bought token (only its template bytes are read).
 - `form` is read in mode 2 only: 0 plain new, 1 new receive UTXO, 2 top-up. Any other value in mode 2 is refused.
 - No `claim` entry. A claim is the `cancel` entry (section 7).
+- `refund()` takes no argument (H1): the custody is the token's only input, `OpCovInputIdx(tokenCovId, 0)`. An
+  argument could be pushed as 8 bytes, so a refund would start like a fill and pass as trigger evidence or as a merge.
 
 ## 4. Fill rules
 
@@ -119,8 +121,8 @@ Further rules:
 - **No bought-custody is left behind.** Every path that ends the order without the maker's signature releases the whole
   bought-custody, with at least its KAS, to the maker's key as one plain UTXO:
   - ending fill: at `D`, amount `bought + n`;
-  - `refund(custIn)` of bid kinds: with `bought > 0` the bought-custody is the only input of the token and its release sits at
-    output `custIn` (the custody's own input index); with `bought == 0` no input of the token, as today;
+  - `refund()` of bid kinds: with `bought > 0` the bought-custody is the only input of the token and its release sits at
+    the custody's own input index; with `bought == 0` no input of the token, as today;
   - pair kinds' refund / zero-fill and IOC end: the bought-custody's release sits at its own input index, next to the existing
     return of the sell custody.
   [engine G8, G11 to G13 for `KobBid`]

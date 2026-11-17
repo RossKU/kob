@@ -395,9 +395,9 @@ actor KobBid owns KobBidState {
         require(checkSig(s, maker));
     }
 
-    // With bought > 0 the bought-custody is input custIn and goes whole to the
-    // maker's key at output custIn.
-    entry refund(int custIn) emits none {
+    // With bought > 0 the bought-custody goes whole to the maker's key at its
+    // own index.
+    entry refund() emits none {
         require(true);
     }
 }
@@ -523,7 +523,7 @@ actor KobCondBid owns KobCondBidState {
         require(checkSig(s, maker));
     }
 
-    entry refund(int custIn) emits none {
+    entry refund() emits none {
         require(true);
     }
 }

@@ -17,14 +17,14 @@ every network.
 | Template | Template hash | prefix / suffix |
 |---|---|---|
 | KobAsk | `070bb3b2425cc800c02e2e9465241a8b94abdce93e712fd3baf19474b63b887c` | 1 / 1407 |
-| KobBid | `1917f8ad359a00a9c520c3c3ab86f6fbb45c95e117c137549f0bc552357bb4d1` | 1 / 2367 |
-| KobCondAsk | `73fe58d2f3107722e2d5d1ec33c8e21875f9847fe4cfaedf7c1ce5cc45bbaebc` | 1 / 3491 |
-| KobCondBid | `6de6f0f2808fee7cb029de3fcdcfd1a9ea06fd050c898095182d185d570736ed` | 1 / 4383 |
-| KobIfdBid | `c433e986eff7f25c5c4ac1f0f0d199882c2df46a177eb7aa9d560eb27213b565` | 1 / 3255 |
-| KobIfdAsk | `661d28e1a504f8356f3800659dd89a8079753b31bc0d12ff7d58e9ad92354093` | 1 / 4726 |
+| KobBid | `f5dc833403c1cdeb134ec8b5c31dcc5d2aa9c3905035c26820506859b90c64d8` | 1 / 2357 |
+| KobCondAsk | `81c45232ce30dc72a5aeae470feb4690c017d1c0e2e1f5275dc1db65e44f117a` | 1 / 3491 |
+| KobCondBid | `8c0e8f0694fbd5ac91de346d7921d58cb41b0fdc80ca669f1ff7b8d8f31542c3` | 1 / 4373 |
+| KobIfdBid | `6ffb9b53dd72b6a8d1602c93999e52853c6d69e97656211237f4377eaa5bb6ee` | 1 / 3255 |
+| KobIfdAsk | `001104cafcc7a1bc00b35773d6468a1990cae5827b7b1ad0276d3eb1dd5c8f66` | 1 / 4726 |
 | KobPair | `d3d775de3dfb4091c8d3b631a018c89accac22565bf370e10d9172eb759a6ec8` | 1 / 3243 |
-| KobCondPair | `c189b7d070cbe773b61b590fb8ca5aff0c1713905c811db1939ad55d163a11ea` | 1 / 7272 |
-| KobIfdPair | `24a01b2fdd62c5af4803eeaff2830ddc63e766995874917a119fa624f7719cf2` | 1 / 8414 |
+| KobCondPair | `216cdcb583aaa08a104834f6ac214cf8869c1dc4321e8f4f2394e4b882cd34ff` | 1 / 7272 |
+| KobIfdPair | `1208cd408b3f06ad97d9a35aaa5e082d4a1dda8e79f50ea40bd872770d424315` | 1 / 8414 |
 | KobAskKron | `f7274b79b081fbbf05d14b006359883c144304adb0ec0c6f9b8741feaef8f76d` | 1 / 1243 |
 | KobBidKron | `7cb4f6abe8ab4282469fd3e70d3372122f9dbe6b0e03a5b192fc5c1393062582` | 1 / 1203 |
 | KobCondAskKron | `e9930d360eb9c124ea68bc47a8c0e91b25ff919dc5f91dbfc3f1a9e9c8a10579` | 1 / 3136 |

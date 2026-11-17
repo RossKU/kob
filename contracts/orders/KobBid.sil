@@ -14,9 +14,9 @@ pragma silverscript ^0.1.0;
 //   cancel(sig)
 //     Maker only, signed with SIGHASH_ALL. A claim of the bought tokens
 //     (mode 1) is a cancel whose outputs continue the order with bought = 0.
-//   refund(custIn)
+//   refund()
 //     Return the escrow to the maker at output i, and the bought-custody
-//     (mode 1, bought > 0) at output custIn. Anyone, once
+//     (mode 1, bought > 0) at its own index. Anyone, once
 //     tx.daa >= min(expiryDaa, UTXO DAA + 90 days, IOC/FOK kill).
 //
 // Delivery mode, set by the maker and immutable (state field `mode`):
@@ -422,8 +422,9 @@ contract KobBid(
     // Refund. Due at the earliest of expiryDaa, 90 days idle and, for IOC and
     // FOK, IOC_LIFE after the order became fillable. On chain every tif but
     // GTC has the kill. A covenant cannot prove an upper time bound on a
-    // fill, so the kill is a refund that anyone may send.
-    entry refund(int custIn) {
+    // fill, so the kill is a refund that anyone may send. No argument: its
+    // sigscript never starts with the 8-byte push trigger evidence reads.
+    entry refund() {
         int self = this.activeInputIndex;
         int utxoDaa = OpTxInputDaaScore(self);
         int idleEnd = utxoDaa + MAX_IDLE;
@@ -446,6 +447,7 @@ contract KobBid(
             // its KAS, to the maker's key as one plain UTXO at the custody's
             // own index.
             require(OpCovInputCount(tokenCovId) == 1);
+            int custIn = OpCovInputIdx(tokenCovId, 0);
             byte[] trs = tokRs(custIn);
             isCustody(custIn, trs, selfId);
             require(tx.outputs[custIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(

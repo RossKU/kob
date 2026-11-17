@@ -18,9 +18,9 @@ pragma silverscript ^0.1.0;
 //   cancel(sig)
 //     Maker only, signed with SIGHASH_ALL. It is also the claim of the
 //     bought-custody.
-//   refund(custIn)
-//     Return the escrow to the maker at output i, and the bought-custody at
-//     input custIn, if any, at output custIn. Anyone, once
+//   refund()
+//     Return the escrow to the maker at output i, and the bought-custody, if
+//     any, at its own index. Anyone, once
 //     tx.daa >= min(expiryDaa, UTXO DAA + 90 days).
 //
 // The quantity is amountLeft, not the escrow as in KobBid. The legs have
@@ -707,9 +707,9 @@ contract KobCondBid(
     }
 
     // Refund. Due at the earliest of expiryDaa and 90 days idle. This order
-    // has no tif, so it has no IOC kill. custIn is the input of the
-    // bought-custody, read only when bought > 0.
-    entry refund(int custIn) {
+    // has no tif, so it has no IOC kill. No argument, as KobBid.refund: its
+    // sigscript never starts with the 8-byte push a merge reads.
+    entry refund() {
         int self = this.activeInputIndex;
         int idleEnd = OpTxInputDaaScore(self) + MAX_IDLE;
         if (expiryDaa < idleEnd) { idleEnd = expiryDaa; }
@@ -724,6 +724,7 @@ contract KobCondBid(
             // The bought-custody is the only token input. It goes whole, with
             // its KAS, to the maker's key as one plain UTXO at its own index.
             require(OpCovInputCount(tokenCovId) == 1);
+            int custIn = OpCovInputIdx(tokenCovId, 0);
             byte[] trs = tokRs(custIn);
             isCustody(custIn, trs, selfId);
             require(tx.outputs[custIn].scriptPubKey == byte[](new ScriptPubKeyP2SHFromRedeemScript(

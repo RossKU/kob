@@ -2039,8 +2039,8 @@ impl Processor {
             }
             Act::Refund => {
                 // A mode-1 order's refund releases its whole bought-custody to the maker as one
-                // plain UTXO (bid-delivery-spec §5): at output `custIn` of a bid kind's
-                // `refund(custIn)`, at the custody's own input index of a pair order.
+                // plain UTXO (bid-delivery-spec §5): at the custody's own input index of a bid kind's
+                // `refund()` and of a pair order.
                 if let (Some(b), Some(k)) = (s.before.as_ref().and_then(|b| b.bought_custody()), s.bought_in) {
                     detail["released"] = json!(b.to_string());
                     let at =

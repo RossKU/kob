@@ -850,20 +850,20 @@ mod delivery {
         }
     }
 
-    /// A refund of a mode-1 bid holding bought tokens releases the custody whole at its own index (`refund(custIn)`).
+    /// A refund of a mode-1 bid holding bought tokens releases the custody whole at its own index (`refund()`).
     #[test]
     fn a_refund_releases_the_bought_custody_at_its_own_index() {
         let a = scenario("refund.bid.acc");
         let b = built(&a);
         let Action::RefundOrder(r) = &a else { panic!() };
         let SigPlan::Entry { args, entry, .. } = &b.plans[0] else { panic!() };
-        assert_eq!((entry.as_str(), args.as_slice()), ("refund", &[Arg::Int(1)][..]));
+        assert_eq!((entry.as_str(), args.as_slice()), ("refund", &[][..]));
         assert_eq!(b.roles[0], "KobBid.refund.custody@KCC20Ref");
         assert_eq!(out_spk(&b, 0), kob_protocol::script::p2pk_spk(&pk(MAKER_B)));
         assert_eq!(out_spk(&b, 1), tok_spk(&plain(4 * WHOLE, MAKER_B)));
         assert_eq!(out_value(&b, 1), r.bought_custody.as_ref().unwrap().utxo.amount);
         built(&scenario("refund.condBid.acc"));
-        // without the custody: refused; a refund of a bid holding none names custIn 0 and no token input
+        // without the custody: refused; a refund of a bid holding none has no token input
         let mut x = r.clone();
         x.bought_custody = None;
         assert!(err(&Action::RefundOrder(x.clone())).contains("bought-custody"));

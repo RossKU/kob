@@ -734,7 +734,7 @@ pub struct RefundOrder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prefund: Option<TokenUtxo>,
     /// A mode-1 order's bought-custody (`bought > 0`), released whole to the maker: `KobBid`,
-    /// `KobCondBid` (at output 1, `refund(custIn)`), `KobPair`, `KobCondPair`.
+    /// `KobCondBid` (at output 1, `refund()`), `KobPair`, `KobCondPair`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bought_custody: Option<TokenUtxo>,
     /// Foreign strays (`matcher.md` §1.2) the refund returns to the maker, one output per token.
@@ -1887,13 +1887,12 @@ pub fn build_refund_order(r: &RefundOrder, budgets: BudgetFn) -> Result<BuiltTx>
     let mut draft = Draft::new(r.lock_time, &r.fee, r.change.or(r.funding.first().map(|f| f.pubkey)))?;
     let state = order.state.encode();
     let custody_amount = order.state.custody_amount();
-    // A mode-1 bid's bought-custody (bid-delivery-spec §5): `refund(custIn)` releases it whole to
-    // the maker at its own input index, the order being input 0 and the custody input 1.
+    // A mode-1 bid's bought-custody (bid-delivery-spec §5): `refund()` releases it whole to the
+    // maker at its own input index, the order being input 0 and the custody input 1.
     let bought = order.state.bought_custody();
     let (plan, what) = match &order.state {
         AnyState::KobBid(_) | AnyState::KobCondBid(_) => {
-            let cust_in = if bought.is_some() { 1 } else { 0 };
-            (entry(id, state, "refund", vec![Arg::Int(cust_in)]), if bought.is_some() { "refund.custody" } else { "refund" })
+            (entry(id, state, "refund", vec![]), if bought.is_some() { "refund.custody" } else { "refund" })
         }
         AnyState::KobAsk(_) | AnyState::KobAskKron(_) => {
             (entry(id, state, "settle", vec![nb(0), Arg::Int(1), Arg::Int(0), Arg::Int(0)]), "refund")

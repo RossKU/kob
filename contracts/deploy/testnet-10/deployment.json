@@ -15,35 +15,35 @@
     {
       "name": "KobBid",
       "artifact": "contracts/artifacts/KobBid.json",
-      "hash": "1917f8ad359a00a9c520c3c3ab86f6fbb45c95e117c137549f0bc552357bb4d1",
+      "hash": "f5dc833403c1cdeb134ec8b5c31dcc5d2aa9c3905035c26820506859b90c64d8",
       "prefix_len": 1,
-      "suffix_len": 2367
+      "suffix_len": 2357
     },
     {
       "name": "KobCondAsk",
       "artifact": "contracts/artifacts/KobCondAsk.json",
-      "hash": "73fe58d2f3107722e2d5d1ec33c8e21875f9847fe4cfaedf7c1ce5cc45bbaebc",
+      "hash": "81c45232ce30dc72a5aeae470feb4690c017d1c0e2e1f5275dc1db65e44f117a",
       "prefix_len": 1,
       "suffix_len": 3491
     },
     {
       "name": "KobCondBid",
       "artifact": "contracts/artifacts/KobCondBid.json",
-      "hash": "6de6f0f2808fee7cb029de3fcdcfd1a9ea06fd050c898095182d185d570736ed",
+      "hash": "8c0e8f0694fbd5ac91de346d7921d58cb41b0fdc80ca669f1ff7b8d8f31542c3",
       "prefix_len": 1,
-      "suffix_len": 4383
+      "suffix_len": 4373
     },
     {
       "name": "KobIfdBid",
       "artifact": "contracts/artifacts/KobIfdBid.json",
-      "hash": "c433e986eff7f25c5c4ac1f0f0d199882c2df46a177eb7aa9d560eb27213b565",
+      "hash": "6ffb9b53dd72b6a8d1602c93999e52853c6d69e97656211237f4377eaa5bb6ee",
       "prefix_len": 1,
       "suffix_len": 3255
     },
     {
       "name": "KobIfdAsk",
       "artifact": "contracts/artifacts/KobIfdAsk.json",
-      "hash": "661d28e1a504f8356f3800659dd89a8079753b31bc0d12ff7d58e9ad92354093",
+      "hash": "001104cafcc7a1bc00b35773d6468a1990cae5827b7b1ad0276d3eb1dd5c8f66",
       "prefix_len": 1,
       "suffix_len": 4726
     },
@@ -57,14 +57,14 @@
     {
       "name": "KobCondPair",
       "artifact": "contracts/artifacts/KobCondPair.json",
-      "hash": "c189b7d070cbe773b61b590fb8ca5aff0c1713905c811db1939ad55d163a11ea",
+      "hash": "216cdcb583aaa08a104834f6ac214cf8869c1dc4321e8f4f2394e4b882cd34ff",
       "prefix_len": 1,
       "suffix_len": 7272
     },
     {
       "name": "KobIfdPair",
       "artifact": "contracts/artifacts/KobIfdPair.json",
-      "hash": "24a01b2fdd62c5af4803eeaff2830ddc63e766995874917a119fa624f7719cf2",
+      "hash": "1208cd408b3f06ad97d9a35aaa5e082d4a1dda8e79f50ea40bd872770d424315",
       "prefix_len": 1,
       "suffix_len": 8414
     },

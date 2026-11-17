@@ -369,8 +369,8 @@ contract KobIfdAsk(
                 // m is this exit's n. The exit's sigscript starts with the
                 // 8-byte push of the n of its settle. Its other entries cannot
                 // pass for it. Cancel starts with this maker's own 65-byte
-                // signature, refund refuses token inputs, which a merge always
-                // has, and update refuses to run next to this entry.
+                // signature, refund with its dispatch tag (no argument), and
+                // update refuses to run next to this entry.
                 require(OpTxInputScriptSigSubstr(k, 0, 1) == byte[](0x08));
                 require(int(byte[8](OpTxInputScriptSigSubstr(k, 1, 9))) == m);
                 // The entry takes back the prefund the exit releases for m.

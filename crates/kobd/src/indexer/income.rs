@@ -140,7 +140,7 @@ pub fn pinned(l: &Leg<'_>, outputs: usize) -> Option<Vec<usize>> {
         // `fill(nb, tokIn, t, form)`: the delivery at i. A terminal fill's unspent KAS beyond what
         // the fill releases (`released`: the delivery carrier, none into an existing
         // bought-custody, `topupTip` for a top-up) goes at M - 1 - i (`refundTo`), from REFUND_MIN
-        // up. `refund(custIn)`: the maker's at i, and a bought-custody's release at custIn.
+        // up. `refund()`: the maker's at i, and a bought-custody's release at its own index.
         (KobBid(b) | KobBidKron(b), Spend::Fill(n)) => {
             v.push(i);
             if !l.continues {
