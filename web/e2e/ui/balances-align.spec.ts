@@ -1,5 +1,5 @@
 // Portfolio > Balances: the header and every row share one set of column tracks, whatever buttons a row has (none, Merge all, Cancel all, both, Convert to plain),
-// so each figure column ends on one right edge (within 1 px) at 1280 and 1024 px; a phone keeps its cards. Screenshots go to the test's output. Mock stack.
+// so each figure column and its header label end on one right edge (within 1 px), no header cut, at 1280, 1152 and 1024 px; a phone keeps its cards. Screenshots go to the test's output. Mock stack.
 import { readFileSync } from 'node:fs';
 import type { Page } from '@playwright/test';
 import { expect, test, type MockClient } from '../fixtures';
@@ -47,7 +47,7 @@ async function open(page: Page, mock: MockClient): Promise<void> {
   await page.evaluate(async () => { await document.fonts.ready; await Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished)); });
 }
 
-/** Per figure column: the right edges of the header cell and of every row's cell, and of every row's figure (its first line), in px. */
+/** Per figure column: the right edges of the header cell and of every row's cell, and of the header's label and every row's figure (first lines), in px. */
 const edges = (page: Page) =>
   page.getByTestId('token-balances-table').evaluate((table, cols) => {
     const firstLineRight = (cell: Element): number => {
@@ -61,7 +61,7 @@ const edges = (page: Page) =>
     for (const k of cols) {
       const head = table.querySelector(`.dt-head .dt-h-${k}`)!;
       const cells = Array.from(table.querySelectorAll(`.dt-body .dt-row > .dt-c-${k}`));
-      out[k] = { cells: [head, ...cells].map((c) => c.getBoundingClientRect().right), figures: cells.map(firstLineRight) };
+      out[k] = { cells: [head, ...cells].map((c) => c.getBoundingClientRect().right), figures: [firstLineRight(head.querySelector('.sortbtn')!), ...cells.map(firstLineRight)] };
     }
     return out;
   }, NUM_COLS);
@@ -81,9 +81,12 @@ for (const width of [1280, 1152, 1024]) {
     // one grid for all: the same tracks on the header and on each row
     const tracks = await table.locator('.dt-head, .dt-body .dt-row').evaluateAll((els) => els.map((e) => getComputedStyle(e).gridTemplateColumns));
     expect(new Set(tracks).size, tracks.join('\n')).toBe(1);
+    // no header is cut (a long one wraps)
+    const cut = await table.locator('.dt-head .sortbtn > span:first-child').evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+    expect(cut, 'headers cut off').toEqual([]);
     for (const [k, e] of Object.entries(await edges(page))) {
       expect(spread(e.cells), `${k}: cell right edges ${e.cells}`).toBeLessThanOrEqual(1);
-      expect(spread(e.figures), `${k}: figure right edges ${e.figures}`).toBeLessThanOrEqual(1);
+      expect(spread(e.figures), `${k}: header label and figure right edges ${e.figures}`).toBeLessThanOrEqual(1);
     }
     // the buttons stay inside their cell
     for (const act of await table.locator('.dt-c-act').all()) {

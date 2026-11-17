@@ -84,6 +84,13 @@
   --dt-cols-1: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 216px;
   --dt-cols-2: minmax(150px, 2fr) repeat(5, minmax(84px, 1fr)) 168px;
 }
+/* a header is never cut: a long one wraps to two lines (the row's labels stand on its last line); a figure column's sort mark goes before its label, so the
+   label ends on the figures' right edge */
+.dt-balances .dt-head { align-items: end; }
+.dt-balances .dt-head .sortbtn { white-space: normal; }
+.dt-balances .dt-head .sortbtn > span:first-child { overflow: visible; text-overflow: clip; }
+.dt-balances .dt-head .dt-hr .sortbtn { text-align: right; }
+.dt-balances .dt-head .dt-hr .sortbtn-mark { order: -1; }
 /* a longer button label wraps inside its button, within the column */
 .dt-balances:not([data-fold='cards']) .dt-act .btn { white-space: normal; text-wrap: balance; text-align: center; }
 
