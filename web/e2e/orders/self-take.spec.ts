@@ -27,7 +27,6 @@ async function expectTake(page: import('@playwright/test').Page, fills: RegExp, 
   await settlePlan(page);
   await expect(page.getByTestId('order-take')).toBeVisible();
   await expect(page.getByTestId('order-take-fills')).toHaveText(fills);
-  await expect(page.getByTestId('order-take-fee')).toContainText('No executor');
   if (rest) await expect(page.getByTestId('order-take-rest')).toHaveText(rest);
   else await expect(page.getByTestId('order-take-rest')).toHaveCount(0);
 }
@@ -40,7 +39,7 @@ test.describe('direct fill from the book', () => {
     await pickType(page, 'limit', 'buy');
     // 0.0001 KAS above the best ask
     await fillFields(page, { amount: '2', price: '0.0252' });
-    await expectTake(page, /^2 EXKCC at 0\.0251 KAS average, from 1 order\(s\)$/);
+    await expectTake(page, /^Fills now: 2 EXKCC at 0\.0251 avg · fee ~0\.0\d+ KAS$/);
     await clickPlaceOnly(page);
     // the final confirmation: what it fills and at what price, the fee
     const r = await readReceipt(page);
@@ -67,7 +66,7 @@ test.describe('direct fill from the book', () => {
     const before = await tokensOf(mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '10', price: '0.0251' });
-    await expectTake(page, /^7 EXKCC at 0\.0251 KAS average, from 2 order\(s\)$/, /^The rest, 3 EXKCC, rests at your limit 0\.0251 KAS\.$/);
+    await expectTake(page, /^Fills now: 7 EXKCC at 0\.0251 avg · fee ~0\.0\d+ KAS$/, /^Rest: 3 EXKCC at 0\.0251$/);
     await clickPlaceOnly(page);
     await confirmUntil(page, page.getByTestId('order-take-step-rest').and(page.locator('[data-state="done"]')));
     await expect(page.getByTestId('order-take-stepper')).toBeVisible();
@@ -88,7 +87,7 @@ test.describe('direct fill from the book', () => {
     const before = await tokensOf(mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '2', price: '0.0252' });
-    await expectTake(page, /^2 EXKCC at 0\.0251 KAS average/);
+    await expectTake(page, /^Fills now: 2 EXKCC at 0\.0251 avg/);
     // the node refuses the first take as if its ask had been spent by someone else
     await mock.failNextSubmit('transaction has an orphan input: already spent by another transaction', 1);
     await clickPlaceOnly(page);
@@ -107,7 +106,7 @@ test.describe('direct fill from the book', () => {
     await pickType(page, 'limit', 'sell');
     // the whole first bid (a part of it would leave its rest as dust: KIP-9)
     await fillFields(page, { amount: '4', price: '0.0248' });
-    await expectTake(page, /^4 EXKCC at 0\.0249 KAS average, from 1 order\(s\)$/);
+    await expectTake(page, /^Fills now: 4 EXKCC at 0\.0249 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before - 4n * TOKEN);
@@ -137,7 +136,7 @@ test.describe('direct fill by time in force', () => {
     const before = await tokensOf(mock);
     await pickType(page, 'market', 'buy');
     await fillFields(page, { amount: '5' });
-    await expectTake(page, /^5 EXKCC at 0\.0251 KAS average, from 2 order\(s\)$/);
+    await expectTake(page, /^Fills now: 5 EXKCC at 0\.0251 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before + 5n * TOKEN);
@@ -150,7 +149,7 @@ test.describe('direct fill by time in force', () => {
     const before = await tokensOf(mock);
     await pickType(page, 'market', 'sell');
     await fillFields(page, { amount: '9' });
-    await expectTake(page, /^9 EXKCC at 0\.0249 KAS average, from 2 order\(s\)$/);
+    await expectTake(page, /^Fills now: 9 EXKCC at 0\.0249 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before - 9n * TOKEN);
@@ -163,7 +162,7 @@ test.describe('direct fill by time in force', () => {
     const before = await tokensOf(mock);
     await pickType(page, 'ioc', 'buy');
     await fillFields(page, { amount: '10', price: '0.0251' });
-    await expectTake(page, /^7 EXKCC at 0\.0251 KAS average/, /^The rest, 3 EXKCC, is not placed\.$/);
+    await expectTake(page, /^Fills now: 7 EXKCC at 0\.0251 avg/, /^Rest: not placed$/);
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before + 7n * TOKEN);
@@ -180,7 +179,7 @@ test.describe('direct fill by time in force', () => {
     await expect(page.getByTestId('order-issue-TAKE_FOK_UNFILLED')).toBeVisible();
     await expect(page.getByTestId('order-place')).toBeDisabled();
     await fillFields(page, { amount: '7' });
-    await expectTake(page, /^7 EXKCC at 0\.0251 KAS average, from 2 order\(s\)$/);
+    await expectTake(page, /^Fills now: 7 EXKCC at 0\.0251 avg · fee ~0\.0\d+ KAS$/);
     await clickPlace(page);
     await waitSubmitted(page);
     expect(await tokensOf(mock)).toBe(before + 7n * TOKEN);
@@ -215,7 +214,7 @@ test.describe('screenshots of the ticket before signing', () => {
     await openMarket(page, mock);
     await pickType(page, 'limit', 'buy');
     await fillFields(page, { amount: '10', price: '0.0251' });
-    await expectTake(page, /^7 EXKCC/, /rests at your limit/);
+    await expectTake(page, /^Fills now: 7 EXKCC/, /^Rest: 3 EXKCC at 0\.0251$/);
     // the block is at the end of the ticket's scrolling form
     await page.getByTestId('order-take').scrollIntoViewIfNeeded();
     mkdirSync(SHOTS, { recursive: true });
@@ -229,7 +228,7 @@ test.describe('screenshots of the ticket before signing', () => {
       await openMarket(page, mock);
       await pickType(page, 'limit', 'buy');
       await fillFields(page, { amount: '10', price: '0.0251' });
-      await expectTake(page, /^7 EXKCC/, /rests at your limit/);
+      await expectTake(page, /^Fills now: 7 EXKCC/, /^Rest: 3 EXKCC at 0\.0251$/);
       await page.getByTestId('order-take').scrollIntoViewIfNeeded();
       mkdirSync(SHOTS, { recursive: true });
       await page.screenshot({ path: `${SHOTS}/phone-ticket.png` });

@@ -1115,14 +1115,14 @@ export function OrderTicket(props: OrderTicketProps) {
 
       {takeFacts ? (
         <div class="tk-take" data-testid="order-take">
-          <h3>{t('ticket.take.title')}</h3>
+          {/* two short lines (the final confirmation has the details: the orders, the fee exactly) */}
           <p data-testid="order-take-fills">
             {t('ticket.take.fills', {
-              amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker, orders: takeFacts.steps.reduce((n, x) => n + x.fills.length, 0),
+              amount: formatUnits(takeFacts.total.amount, token.decimals, { group: ',' }), ticker,
               price: takeFacts.total.amount > 0n ? formatKas((takeFacts.total.kas * takeFacts.scale) / takeFacts.total.amount, { group: ',' }) : '0',
+              fee: formatKas(takeFacts.fee * BigInt(takeFacts.steps.length), { group: ',' }),
             })}
           </p>
-          <p class="muted" data-testid="order-take-fee">{t(takeFacts.steps.length > 1 ? 'ticket.take.feeTxs' : 'ticket.take.fee', { fee: formatKas(takeFacts.fee * BigInt(takeFacts.steps.length), { group: ',' }), txs: takeFacts.steps.length })}</p>
           {takeFacts.rest > 0n ? (
             <p class="muted" data-testid="order-take-rest">
               {t(takeFacts.restKind === 'limit' ? 'ticket.take.rest' : 'ticket.take.restNone', { amount: formatUnits(takeFacts.rest, token.decimals, { group: ',' }), ticker, price: formatKas(takeFacts.limit, { group: ',' }) })}
