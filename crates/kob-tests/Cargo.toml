@@ -204,3 +204,11 @@ path = "tests/programs/program_kforgetoken1785.rs"
 [[test]]
 name = "program_kforgetoken7214"
 path = "tests/programs/program_kforgetoken7214.rs"
+
+[[test]]
+name = "redteam_library_tests"
+path = "tests/redteam/redteam_library_tests.rs"
+
+[[test]]
+name = "redteam_delivery_tests"
+path = "tests/redteam/redteam_delivery_tests.rs"
