@@ -44,17 +44,18 @@ import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { pendingCreationItems } from '../confirm/creation-steps';
-import { Banner, Button, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
+import { Banner, Button, CurveGraph, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, useAsync } from '../kit';
+import { formatUnits as baseUnitsText } from '../../kob/issue';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
-  reviewSummary, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState,
+  humanAmount, linkedSaleFields, reviewSummary, salePreview, shortfallOf, supplyPreview, walletRowIncluded, type IssueUiState, type SaleUi,
 } from './issue-model';
 import { hashImageFile } from './image-file';
 import { ResultPanel } from './ResultPanel';
 import { useIssuePlan } from './use-issue-plan';
 import './issue.css';
 
-type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs'>; txid: string; trackFailed: boolean };
+type Phase = { kind: 'form' } | { kind: 'confirm'; plan: IssuePlan } | { kind: 'result'; plan: Pick<IssuePlan, 'token' | 'docs' | 'curve' | 'sale'>; txid: string; trackFailed: boolean };
 /** `finish`: the covenant id of the creation the notice offers to finish (the same action as its banner) */
 type Notice = { tone: 'info' | 'error'; text: string; finish?: Hex } | null;
 
@@ -157,12 +158,23 @@ export function IssueView() {
   const spendable = fundingList ? fundingList.reduce((s, u) => s + BigInt(u.amount), 0n) : null;
 
   // ---- form -> findings
-  const form = useMemo(() => formToIssueForm(state, pubkey), [state, pubkey]);
+  const form = useMemo(() => {
+    const f = formToIssueForm(state, pubkey);
+    // a blank one price is the default shown in its field (10,000 KAS over the amount)
+    if (f.sale?.mode === 'ask' && f.sale.price.trim() === '') {
+      const p = salePreview(kob, state)?.defaultPrice;
+      if (p) return { ...f, sale: { ...f.sale, price: baseUnitsText(p, 8) } };
+    }
+    return f;
+  }, [state, pubkey, kob]);
   const walletRow = walletRowIncluded(state);
   const decimals = parseDecimalsText(state.decimals);
   const findings = useMemo<PlanIssue[]>(() => (limits ? validateIssueForm(form, limits, registryTickers) : []), [form, limits, registryTickers]);
   const own = useMemo(() => modelIssues(state, pubkey, 0), [state, pubkey]);
-  const blocked = findings.some((i) => i.severity === 'error') || own.some((i) => i.severity === 'error');
+  // "After creation": the split, and a curve's table, graph and numbers, while the form is typed
+  const sale = useMemo(() => salePreview(kob, state), [kob, state]);
+  const saleBlocked = !!sale && (sale.issues.length > 0 || sale.curveError !== null || (state.sale.mode !== 'keep' && !sale.parsed));
+  const blocked = findings.some((i) => i.severity === 'error') || own.some((i) => i.severity === 'error') || saleBlocked;
 
   // ---- fee policy: the node's estimate (a cached read that never fails: no estimate = the floor)
   const fees = useAsync(async () => readFees(services), [retry]);
@@ -290,6 +302,8 @@ export function IssueView() {
           : { tone: 'info', text: t('issue.cancelled') },
     );
   };
+
+  const setSale = (patch: Partial<SaleUi>) => setState((s) => ({ ...s, sale: { ...s.sale, ...patch } }));
 
   const another = () => {
     setState(emptyUiState());
@@ -537,6 +551,8 @@ export function IssueView() {
           </div>
         </Section>
 
+        {renderSale()}
+
         <Section title={t('issue.section.advanced')} collapsible defaultOpen={false} data-testid="issue-advanced">
           <div class="stack">
             {renderHolders()}
@@ -607,7 +623,7 @@ export function IssueView() {
           built={phase.plan.built}
           title={t('issue.confirm.title', { ticker: phase.plan.token.ticker })}
           label={t('issue.confirm.label', { ticker: phase.plan.token.ticker })}
-          issue={{ token: phase.plan.token }}
+          issue={{ token: phase.plan.token, ...(phase.plan.curve ? { curve: phase.plan.curve } : {}) }}
           creation={{ prep: phase.plan.prep, declaration: phase.plan.declaration, docs: phase.plan.docs }}
           onClose={onClose}
         />
@@ -634,6 +650,132 @@ export function IssueView() {
     if (blocked) return t('issue.review.fix');
     if (plan.status === 'invalid') return shortfall ? t('issue.review.connect') : t('issue.review.fix');
     return t('issue.review.wait');
+  }
+
+  /** One line of the review: what happens after creation. */
+  function saleSummaryText(p: IssuePlan): string {
+    const s = p.sale!;
+    const words = { sell: humanAmount(s.sell, p.token.decimals), ticker: p.token.ticker };
+    if (s.mode === 'curve' && s.curve) {
+      return t('issue.summary.saleCurve', { ...words, levels: s.curve.numbers.levels, first: kasText(s.curve.numbers.first), last: kasText(s.curve.numbers.last) });
+    }
+    return t('issue.summary.saleAsk', { ...words, price: kasText(s.price ?? 0n) });
+  }
+
+  /** "After creation": keep all, sell at one price, sell on a curve; a curve's fields, graph and numbers. */
+  function renderSale() {
+    const u = state.sale;
+    const linked = linkedSaleFields(state);
+    const ticker = form.ticker || t('issue.sale.tokens');
+    const errOf = (field: string) => {
+      const xs = (sale?.issues ?? []).filter((i) => i.field === `sale.${field}`);
+      return xs.length ? xs.map(say).join(' ') : null;
+    };
+    const choice = (mode: SaleUi['mode']) => (
+      <label class={`issue-after-option${u.mode === mode ? ' is-on' : ''}`} data-testid={`issue-after-${mode}`}>
+        <input type="radio" name="issue-after" value={mode} checked={u.mode === mode} onChange={() => setSale({ mode })} />
+        <span class="issue-after-text">
+          <strong>{t(`issue.after.${mode}`)}</strong>
+          <span class="small muted">{t(`issue.after.${mode}.hint`)}</span>
+        </span>
+      </label>
+    );
+    const n = sale?.curve?.numbers ?? null;
+    return (
+      <Section title={t('issue.section.after')} data-testid="issue-after">
+        <div class="issue-after-options" role="radiogroup" aria-label={t('issue.section.after')}>
+          {choice('keep')}
+          {choice('ask')}
+          {choice('curve')}
+        </div>
+        {u.mode === 'keep' ? null : (
+          <div class="stack-sm issue-sale" data-testid="issue-sale">
+            <div class="issue-grid">
+              <Field
+                label={t('issue.sale.keep')}
+                value={linked.keepPct}
+                onValue={(v) => setSale({ keepPct: v.trim(), lead: 'keep' })}
+                error={errOf('keepPct')}
+                inputMode="decimal"
+                suffix={<span class="muted">%</span>}
+                data-testid="sale-keep"
+              />
+              <Field
+                label={t('issue.sale.amount')}
+                value={linked.amount}
+                onValue={(v) => setSale({ amount: v.trim(), lead: 'amount' })}
+                error={errOf('amount')}
+                inputMode="decimal"
+                suffix={<span class="muted">{ticker}</span>}
+                data-testid="sale-amount"
+              />
+            </div>
+            {sale?.parsed ? (
+              <p class="issue-sale-split" data-testid="sale-split">
+                {sale.parsed.keep > 0n
+                  ? t('issue.sale.split', { keep: sale.keepText, sell: sale.sellText, ticker })
+                  : t('issue.sale.splitAll', { sell: sale.sellText, ticker })}
+              </p>
+            ) : null}
+            {u.mode === 'ask' ? (
+              <div class="issue-grid">
+                <Field
+                  label={t('issue.sale.price')}
+                  value={u.price}
+                  placeholder={sale?.defaultPrice ? kasText(sale.defaultPrice) : ''}
+                  onValue={(v) => setSale({ price: v.trim() })}
+                  error={errOf('price')}
+                  inputMode="decimal"
+                  suffix={<span class="muted">KAS</span>}
+                  data-testid="sale-price"
+                />
+                <div class="issue-sale-total" data-testid="sale-total-ask">
+                  <span class="small muted">{t('issue.sale.total')}</span>
+                  <strong>{sale?.parsed ? `${kasText(sale.parsed.total)} KAS` : '-'}</strong>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div class="issue-grid issue-grid-3">
+                  <Field label={t('issue.sale.levels')} value={u.levels} onValue={(v) => setSale({ levels: v.trim() })} error={errOf('levels')} inputMode="numeric" data-testid="sale-levels" />
+                  <Field
+                    label={t('issue.sale.total')}
+                    value={u.totalKas}
+                    onValue={(v) => setSale({ totalKas: v.trim() })}
+                    error={errOf('totalKas')}
+                    inputMode="decimal"
+                    suffix={<span class="muted">KAS</span>}
+                    data-testid="sale-total"
+                  />
+                  <Field
+                    label={t('issue.sale.multiple')}
+                    value={u.multiple}
+                    onValue={(v) => setSale({ multiple: v.trim() })}
+                    error={errOf('multiple')}
+                    inputMode="decimal"
+                    suffix={<span class="muted">{t('issue.sale.multiple.suffix')}</span>}
+                    data-testid="sale-multiple"
+                  />
+                </div>
+                {sale?.curveError ? <p class="field-error" data-testid="sale-curve-error">{friendlyErrorText(sale.curveError)}</p> : null}
+                {sale?.curve && n ? (
+                  <div class="issue-curve" data-testid="sale-curve">
+                    <CurveGraph steps={sale.curve.steps} label={t('issue.sale.graph')} axis={[t('issue.sale.axis0'), t('issue.sale.axis1')]} data-testid="sale-graph" />
+                    <dl class="issue-curve-numbers" data-testid="sale-numbers">
+                      <div><dt>{t('issue.sale.first')}</dt><dd data-testid="sale-first">{kasText(n.first)} KAS</dd></div>
+                      <div><dt>{t('issue.sale.last')}</dt><dd data-testid="sale-last">{kasText(n.last)} KAS</dd></div>
+                      <div><dt>{t('issue.sale.average')}</dt><dd data-testid="sale-average">{kasText(n.average)} KAS</dd></div>
+                      <div><dt>{t('issue.sale.realised')}</dt><dd data-testid="sale-realised">{kasText(n.total)} KAS</dd></div>
+                    </dl>
+                  </div>
+                ) : null}
+                <p class="small muted">{t('issue.sale.note')}</p>
+              </>
+            )}
+          </div>
+        )}
+      </Section>
+    );
   }
 
   function renderSupply() {
@@ -855,13 +997,14 @@ export function IssueView() {
                   <ul class="issue-holder-list">
                     {summary.holders.map((h) => (
                       <li key={h.index} class="wrap-anywhere">
-                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : shortId(h.owner, 14), amount: `${h.human} ${summary.ticker}` })}
+                        {t('issue.summary.holder', { owner: h.isWallet ? t('issue.summary.you') : h.isCurve ? t('issue.summary.holderCurve') : shortId(h.owner, 14), amount: `${h.human} ${summary.ticker}` })}
                       </li>
                     ))}
                   </ul>
                 ),
                 'data-testid': 'issue-summary-holders',
               },
+              ...(plan.status === 'ready' && plan.plan.sale ? [{ label: t('issue.summary.sale'), value: saleSummaryText(plan.plan), 'data-testid': 'issue-summary-sale' }] : []),
               { label: t('issue.summary.program'), value: <code>{summary.program}</code> },
               {
                 label: t('issue.summary.carriers'),

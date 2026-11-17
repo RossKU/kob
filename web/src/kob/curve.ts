@@ -257,7 +257,8 @@ export function parseSale(f: SaleForm, share: bigint | null, decimals: number): 
   let sell: bigint | null = null;
   if (f.amount.trim() !== '') {
     const a = parseDecimal(f.amount, decimals);
-    if ('error' in a) issues.push(issue(a.error === 'precision' ? 'sale.amount.precision' : 'sale.amount.invalid', 'Enter the amount for sale as a number.', 'amount', { decimals }));
+    if ('error' in a && a.error === 'precision') issues.push(issue('sale.amount.precision', `The amount for sale has more than ${decimals} decimal places.`, 'amount', { decimals }));
+    else if ('error' in a) issues.push(issue('sale.amount.invalid', 'Enter the amount for sale as a number.', 'amount'));
     else sell = a.value;
   } else {
     const k = parsePercent(f.keepPct);

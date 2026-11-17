@@ -4,12 +4,12 @@ import { routeToHash, tokenRoute } from '../../app/router';
 import { t } from '../../i18n';
 import type { IssuePlan } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
-import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, KeyValueList, RawDetails, Section } from '../kit';
+import { Banner, Button, CopyText, copyToClipboard, friendlyErrorText, kasText, KeyValueList, RawDetails, Section } from '../kit';
 import { downloadText } from './download';
-import { resultViewModel } from './issue-model';
+import { humanAmount, resultViewModel } from './issue-model';
 
 export interface ResultPanelProps {
-  plan: Pick<IssuePlan, 'token' | 'docs'>;
+  plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'curve' | 'sale'>>;
   txid: string;
   walletKey: Hex | null;
   /** the wallet-owned token outputs could not be saved in the token tracker */
@@ -82,10 +82,39 @@ export function ResultPanel(props: ResultPanelProps) {
         {copied === 'failed' ? <p class="field-error" role="alert">{t('issue.result.copyFailed')}</p> : null}
       </Section>
 
+      {renderSale()}
+
       <div class="row">
         <a class="btn btn-primary" href={routeToHash(tokenRoute(plan.token.covenantId))} data-testid="issue-open-market"><span class="btn-label">{t('issue.result.openMarket')}</span></a>
         <Button onClick={props.onAnother} data-testid="issue-another">{t('issue.result.another')}</Button>
       </div>
     </div>
   );
+
+  /** "After creation": the curve is on the book already; a one-price sale is the next step (the ticket, prefilled). */
+  function renderSale() {
+    const s = plan.sale;
+    if (!s) return null;
+    const words = { sell: humanAmount(s.sell, plan.token.decimals), ticker: plan.token.ticker };
+    if (s.mode === 'curve' && s.curve) {
+      return (
+        <Banner tone="info" data-testid="issue-result-curve">
+          {t('issue.result.curve', { ...words, first: kasText(s.curve.numbers.first), last: kasText(s.curve.numbers.last) })}
+        </Banner>
+      );
+    }
+    return (
+      <Banner
+        tone="info"
+        data-testid="issue-result-ask"
+        actions={
+          <a class="btn btn-primary btn-sm" href={routeToHash(tokenRoute(plan.token.covenantId, 'ask', s.sell, s.price))} data-testid="issue-result-ask-place">
+            <span class="btn-label">{t('issue.result.askButton')}</span>
+          </a>
+        }
+      >
+        {t('issue.result.ask', { ...words, price: kasText(s.price ?? 0n) })}
+      </Banner>
+    );
+  }
 }
