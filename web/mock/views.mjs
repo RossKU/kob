@@ -1,6 +1,6 @@
 // REST views of the mock indexer: the exact JSON shapes of crates/kobd/src/indexer/reads.rs (snake_case, string sompi and base units,
 // numeric DAA / counts / scales, `confirmations` + `settled` on every chain-derived view) built from the MockChain state.
-import { KINDS, auctionOf, baseKind, bidBudgetRate, custodiesOf, custodyAmount, ifdBudgetRate, isPairKind, pairTokensOf, refundDue, repeatOf, termsOf } from './model.mjs';
+import { KINDS, curveOf, auctionOf, baseKind, bidBudgetRate, custodiesOf, custodyAmount, ifdBudgetRate, isPairKind, pairTokensOf, refundDue, repeatOf, termsOf } from './model.mjs';
 import { HEX64, badRequest } from './util.mjs';
 
 export const MAX_PAGE_SIZE = 200;
@@ -289,7 +289,8 @@ export function orderView(chain, o, ctx, detailed = false) {
   const repeat = stateKnown ? repeatOf(any) : null;
   let refundDueDaa = null;
   let killDaa = null;
-  if (stateKnown && o.currentDaa != null) {
+  const curve = curveOf(any);
+  if (stateKnown && o.currentDaa != null && !curve) {
     refundDueDaa = Number(refundDue(t.expiryDaa, t.tif, t.activeFrom, BigInt(o.currentDaa)));
     if (t.tif === 1n || t.tif === 2n) killDaa = refundDueDaa;
   }
@@ -298,7 +299,8 @@ export function orderView(chain, o, ctx, detailed = false) {
   const pair = isPairKind(o.kind);
   const pt = pair ? pairTokensOf(any) : null;
   const hasTif = kind === 'KobAsk' || kind === 'KobBid' || kind === 'KobPair';
-  const expiry = Number(t.expiryDaa);
+  // a curve has no expiry (it rests until sold out or cancelled)
+  const expiry = curve ? null : Number(t.expiryDaa);
   const view = {
     covenant_id: o.covenantId,
     contract: o.kind,
@@ -347,9 +349,18 @@ export function orderView(chain, o, ctx, detailed = false) {
     last_daa: o.lastDaa,
     confirmations: conf(ctx, o.lastDaa),
     settled: settled(ctx, o.lastDaa),
-    expired: active(o) && ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
+    expired: expiry !== null && active(o) && ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
     possibly_frozen: !!o.possiblyFrozen,
   };
+  // a curve: its levels from the current state (kobd reads.rs `CurveView`); `price` / `quote` are the current level's
+  if (curve) {
+    const c = curveOf(stateKnown ? any : { ...any, state: { ...s, amountLeft: '0' } });
+    view.curve = {
+      level: c.level, levels: c.levels, level_size: c.levelSize.toString(), total: c.total.toString(), price_now: c.priceNow === null ? null : c.priceNow.toString(),
+      max_fill: maxFillOf(c).toString(), unbound: /^0{64}$/.test(s.tokenCovId), remaining: c.remaining.map((l) => ({ level: l.level, price: l.price.toString(), amount: l.amount.toString() })),
+    };
+    view.price = view.quote = view.curve.price_now;
+  }
   // a delivering order's mode and, in mode 1, what its bought-custody holds (kobd reads.rs; a non-pair bid's custody is that view too)
   if (s.mode !== undefined) {
     const mode = Number(s.mode);
@@ -378,6 +389,9 @@ export function orderView(chain, o, ctx, detailed = false) {
   }
   return view;
 }
+
+/** The most one fill of a curve takes from here: the rest of 8 levels. */
+const maxFillOf = (c) => c.remaining.slice(0, 8).reduce((a, l) => a + l.amount, 0n);
 
 const cmpKey = (a, b) => (a[0] !== b[0] ? a[0] - b[0] : a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0);
 
@@ -433,16 +447,31 @@ function bookOrders(chain, token, side) {
     });
 }
 
+/** The book rows of a side: one per order, one per remaining level of a curve (`level`), by price per base unit, then age, then level. */
+function bookRows(chain, token, side) {
+  const rows = bookOrders(chain, token, side).flatMap((o) => {
+    const c = curveOf(o.state);
+    if (!c) return [{ o, price: termsOf(o.state).price, amount: o.amountLeft, level: null }];
+    return c.remaining.map((l) => ({ o, price: l.price, amount: l.amount, level: l.level }));
+  });
+  const dir = side === 1 ? 1 : -1;
+  return rows.sort((a, b) => {
+    const sa = termsOf(a.o.state).scale || 1n;
+    const sb = termsOf(b.o.state).scale || 1n;
+    return dir * cmpPerBaseUnit(a.price, sa, b.price, sb) || a.o.genesis.seq - b.o.genesis.seq || (a.o.covenantId < b.o.covenantId ? -1 : a.o.covenantId > b.o.covenantId ? 1 : 0) || (a.level ?? 0) - (b.level ?? 0);
+  });
+}
+
 export function bookView(chain, tokenId, q) {
   const token = parseHash('token', tokenId);
   const ctx = ctxOf(chain);
   const depth = limitParam(q, 'depth', 20);
   const aggregate = flagParam(q, 'aggregate') ?? true;
   const side = (n) => {
-    const orders = bookOrders(chain, token, n);
+    const orders = bookRows(chain, token, n);
     if (!aggregate) {
-      return orders.slice(0, depth).map((o) => {
-        const t = termsOf(o.state);
+      return orders.slice(0, depth).map(({ o, price, amount, level }) => {
+        const t = { ...termsOf(o.state), price };
         const auction = auctionOf(o.state, o.currentDaa, ctx.nodeDaa);
         const expiry = Number(t.expiryDaa);
         return {
@@ -455,12 +484,13 @@ export function bookView(chain, tokenId, q) {
           tip: t.tip.toString(),
           min_fill: t.minFill.toString(),
           scale: Number(t.scale),
-          amount_left: o.amountLeft === null ? null : o.amountLeft.toString(),
+          amount_left: amount === null ? null : amount.toString(),
           amount_estimated: !o.amountExact || o.amountLeft === null,
           status: o.status,
           cur_value: o.current ? o.current.value.toString() : null,
-          expiry_daa: expiry,
-          expired: ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
+          expiry_daa: level === null ? expiry : null,
+          expired: level === null && ctx.nodeDaa !== null && ctx.nodeDaa >= expiry,
+          ...(level === null ? {} : { curve_level: level }),
           deadline: o.deadline,
           deadline_passed: o.deadline !== null && ctx.nowUnix >= o.deadline,
           genesis_daa: o.genesis.daa,
@@ -470,13 +500,14 @@ export function bookView(chain, tokenId, q) {
       });
     }
     const levels = new Map();
-    for (const o of orders) {
-      // levels group by (price, scale): orders of another scale quote another whole token (kobd reads.rs `book_side_levels`)
-      const t = termsOf(o.state);
+    for (const { o, price, amount } of orders) {
+      // levels group by (price, scale): orders of another scale quote another whole token (kobd reads.rs `book_side_levels`); a curve adds each
+      // remaining level at its own price
+      const t = { ...termsOf(o.state), price };
       const scale = t.scale > 0n ? t.scale : 1n;
       const key = `${t.price}:${scale}`;
       const lv = levels.get(key) ?? { price: t.price, amount: 0n, amount_estimated: false, orders: 0, scale };
-      lv.amount += o.amountLeft === null || o.amountLeft < 0n ? 0n : o.amountLeft;
+      lv.amount += amount === null || amount < 0n ? 0n : amount;
       lv.orders += 1;
       lv.amount_estimated = lv.amount_estimated || !o.amountExact || o.amountLeft === null;
       levels.set(key, lv);

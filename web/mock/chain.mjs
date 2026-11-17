@@ -998,7 +998,10 @@ export class MockChain {
     if (!this.kob.raw.fillOk(JSON.stringify(any), String(n), String(cur.amount))) throw badRequest(`a fill of ${n} base units breaks the order's minimum fill (${t.minFill})`);
     const daa = this.daa();
     const nowQuote = auctionOf(any, o.currentDaa, daa)?.current_price;
-    const p = price !== undefined ? big(price, 'price') : BigInt(nowQuote ?? t.price);
+    // a curve is paid level by level (kob-wasm `curveProceeds`, at most 8 levels); its fill price is the mean level price
+    const curvePaid = any.kind === 'KobCurveAsk' ? this.kob.raw.curveProceeds(JSON.stringify(any), String(n)) : null;
+    if (any.kind === 'KobCurveAsk' && curvePaid == null) throw badRequest('a curve fill touches at most 8 levels');
+    const p = price !== undefined ? big(price, 'price') : curvePaid != null ? (BigInt(curvePaid) * t.scale) / n + t.tip : BigInt(nowQuote ?? t.price);
     const txid = syntheticId('fill-tx', ++this.synth);
     const seq = ++this.blockSeq;
     const tok = this.tokens.get(o.token);
@@ -1014,7 +1017,7 @@ export class MockChain {
       const custody = this.liveTokenUtxos(cov, 'custody')[0];
       if (!custody) throw badRequest('order has no live custody UTXO');
       newLeft = left - n;
-      payout = quoteOf(n, p - t.tip > 0n ? p - t.tip : 0n, t.scale, 'up') ?? 0n;
+      payout = curvePaid != null ? BigInt(curvePaid) : (quoteOf(n, p - t.tip > 0n ? p - t.tip : 0n, t.scale, 'up') ?? 0n);
       const custodyUtxo = this.utxos.get(outKey(custody.txid, custody.index));
       this.spendUtxo(custodyUtxo, txid);
       let childValue = 0n;
