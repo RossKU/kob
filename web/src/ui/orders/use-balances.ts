@@ -1,7 +1,9 @@
 // The wallet's balances on the Portfolio page, read once for the page: the free balances (node, token tracker), combined with the live orders and the
 // strays (balances-data.ts), and each held token's last price (the indexer's stats), so the summary strip over the tabs and the Balances tab show the
 // same figures. A token without a last price has no value in KAS (null): the total then counts KAS and the priced tokens, and says so.
-import { useMemo } from 'preact/hooks';
+// The free balances are read as soon as the key is known, beside the list (not after it), and a reload of the list reads them again coalesced:
+// a refresh never aborts a read in flight (on a busy market the list reloads every few seconds, and the first read would never get through).
+import { useMemo, useRef } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import type { Hex } from '../../kob/types';
 import { quoteOf } from '../../kob/units';
@@ -12,9 +14,17 @@ import type { OrdersData } from './orders-data';
 
 export function useWalletBalances(data: OrdersData | null, pubkey: Hex | undefined, version: unknown) {
   const services = useServices();
+  // each load of the list after the first (not each background update of it): a coalesced re-read
+  const loads = useRef<{ last: unknown; n: number }>({ last: null, n: 0 });
+  const v = version ?? data;
+  if (v !== loads.current.last) {
+    if (loads.current.last !== null && v !== null) loads.current.n += 1;
+    loads.current.last = v;
+  }
   const free = useAsync(
-    (_signal) => (pubkey && data ? loadFreeBalances(services, pubkey, services.registry.tokens, { anyToken: true }) : Promise.resolve(null)),
-    [pubkey, version ?? data, !!data],
+    (_signal) => (pubkey ? loadFreeBalances(services, pubkey, services.registry.tokens, { anyToken: true }) : Promise.resolve(null)),
+    [pubkey],
+    { refreshKey: loads.current.n },
   );
   const combined = useMemo(() => {
     if (!free.data || !data || !pubkey) return null;
