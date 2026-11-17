@@ -7,6 +7,8 @@ export interface SectionProps {
   subtitle?: ComponentChildren;
   /** right side of the header (buttons, badges) */
   actions?: ComponentChildren;
+  /** a "?" right after the title (kit/HelpTip.tsx) */
+  help?: ComponentChildren;
   children?: ComponentChildren;
   /** the body can be folded; the header text becomes the toggle */
   collapsible?: boolean;
@@ -30,6 +32,11 @@ export function Section(props: SectionProps) {
             <button type="button" class="disclosure" aria-expanded={open ? 'true' : 'false'} onClick={() => setOpen(!open)}>
               <h2>{props.title}</h2>
             </button>
+          ) : props.help ? (
+            <div class="help-title">
+              <h2>{props.title}</h2>
+              {props.help}
+            </div>
           ) : props.subtitle ? (
             <div class="section-titles">
               <h2>{props.title}</h2>

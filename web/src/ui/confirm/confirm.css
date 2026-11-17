@@ -45,6 +45,23 @@
 .cf-wallet p { margin: 0 0 6px; }
 .cf-wallet ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 
+/* the short summary (BriefRow), the one-line risk and wallet notes, the full details folded */
+.cf-brief { border: 2px solid var(--primary); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); min-width: 0; }
+.cf-brief dt .help-title { gap: 6px; }
+.cf-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); min-width: 0; overflow-wrap: anywhere; }
+.cf-risk { border-left: 4px solid var(--warn); background: var(--warn-bg); color: var(--text); font-weight: 600; }
+.cf-risk > span[aria-hidden='true']:first-child { color: var(--warn); }
+.cf-wallet-line { color: var(--muted); font-size: 0.92rem; padding-block: 2px; }
+.cf-sep { color: var(--muted); }
+.cf-risk .help-tip { border-color: var(--warn); color: var(--text); }
+.cf-help-list { margin: 0 0 6px; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-weight: 400; }
+.cf-help-list:last-child { margin-bottom: 0; }
+.cf-help-list:has(> li:only-child) { list-style: none; padding-left: 0; }
+.cf-wallet-notes ul { margin: 0; }
+.cf-more { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--surface); }
+.cf-more summary { cursor: pointer; font-weight: 600; }
+.cf-more[open] > .cf-summary { margin-top: 10px; }
+
 .cf-advanced { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--surface); }
 .cf-advanced summary { cursor: pointer; font-weight: 600; }
 .cf-advanced h4 { margin: 10px 0 4px; font-size: 0.95rem; }

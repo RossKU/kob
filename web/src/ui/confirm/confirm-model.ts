@@ -28,6 +28,11 @@ export interface Row {
   tone: Tone;
 }
 
+/** A row of the short summary at the top of a creation's confirmation; `help`: the explanation behind its "?" (sentences). */
+export interface BriefRow extends Row {
+  help?: string[];
+}
+
 export interface Section {
   id: 'issue' | 'curve' | 'declare' | 'spend' | 'locked' | 'back' | 'fee' | 'net';
   title: string;
@@ -77,6 +82,11 @@ export interface ConfirmModel {
   canSign: boolean;
   notices: WalletNotice[];
   advanced: AdvancedModel;
+  /**
+   * a token creation: the short summary shown first (what is created, what the wallet keeps, what goes on sale, the network fees, the KAS locked),
+   * every figure from the verified transaction; the sections hold the full detail
+   */
+  brief?: BriefRow[];
 }
 
 const GROUP = { group: ',' };

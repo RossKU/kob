@@ -14,7 +14,7 @@ import { formatKas, formatTokenAmount } from '../../kob/units';
 import { t, type Params } from '../../i18n';
 import { declaredRateLimit, type FeePolicy } from '../../kob/fee-policy';
 import type { FeeDisclosure } from './fee-disclosure';
-import type { AdvancedModel, ConfirmModel, Finding, Row, Section, Translate } from './confirm-model';
+import type { AdvancedModel, BriefRow, ConfirmModel, Finding, Row, Section, Translate } from './confirm-model';
 import type { WalletNotice } from '../../kob/decode';
 
 const GROUP = { group: ',' };
@@ -42,6 +42,8 @@ export interface IssuanceInput {
    * issued program and commitment, bound to its own covenant, and its custody must be the claimed holder owned by it with exactly its amount
    */
   curve?: IssueCurve;
+  /** "Sell at one price": the sell order the wallet places after the creation (not part of these transactions; shown in the summary only) */
+  askSale?: { sell: bigint; price: bigint };
   /** the wallet's x-only public key */
   maker: Hex;
   /** the fee rate and where it came from (`feeDisclosureOf(built)`) */
@@ -195,8 +197,8 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
 
   // ---- disclosure findings
   warn('unaudited');
-  const others = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4));
-  if (others.length > 0) info(others.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: others.length }, 'holdersOther');
+  const othersAll = token.outputs.filter((o) => !(o.owner === maker && o.ownerScheme === 0) && !(curve && o.owner === curve.covenantId && o.ownerScheme === 4));
+  if (othersAll.length > 0) info(othersAll.length === 1 ? 'holdersOther.one' : 'holdersOther.other', { count: othersAll.length }, 'holdersOther');
   info('walletBlind');
   if (prep && i.resumed) info('resumed');
   else if (prep && i.oneApproval === false) info('walletTwice', { fee: kas(prepFee) });
@@ -311,6 +313,33 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     payload: declared ? [declared.json] : [],
   };
 
+  // ---- the short summary: the same verified figures, the explanations behind a "?"
+  const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+  const line = (r: Row) => `${r.label}: ${r.value}${r.detail ? ` (${r.detail})` : ''}`;
+  const brief: BriefRow[] = [
+    { ...row('create', tr('confirm.brief.create'), amountText(supply), 'normal', tr('confirm.brief.createDetail', { name: token.name, decimals })), help: [tr('confirm.kind.issueIntro')] },
+    { ...row('keep', tr('confirm.brief.keep'), amountText(toMaker), 'good'), help: [cap(tr('confirm.issue.netTokenHint'))] },
+  ];
+  if (curve) {
+    const st = curve.state.state;
+    const n = curveNumbersOfState(st);
+    brief.push({ ...row('sale', tr('confirm.brief.sale'), amountText(BigInt(st.total)), 'good', tr('confirm.brief.saleCurve', { levels: n.levels, first: formatKas(n.first, GROUP), last: formatKas(n.last, GROUP) })), help: [tr('confirm.issue.curveNote')] });
+  } else if (i.askSale && i.askSale.sell > 0n) {
+    brief.push(row('sale', tr('confirm.brief.sale'), amountText(i.askSale.sell), 'normal', tr('confirm.brief.saleAsk', { price: formatKas(i.askSale.price, GROUP) })));
+  }
+  if (othersAll.length > 0) {
+    const sum = othersAll.reduce((a, o) => a + BigInt(o.amount), 0n);
+    brief.push(row('others', tr('confirm.brief.others'), amountText(sum), 'warn', tr(othersAll.length === 1 ? 'confirm.issue.finding.holdersOther.one' : 'confirm.issue.finding.holdersOther.other', { count: othersAll.length })));
+  }
+  brief.push({
+    ...row('fee', tr('confirm.brief.fee'), kas(fee), 'normal', prep ? tr('confirm.brief.feeTwo') : tr('confirm.fee.hint')),
+    help: [cap(tr('confirm.fee.hint')), ...(feeDisc?.rows ?? []).map(line), ...(feeDisc?.info ?? []).map((f) => f.text ?? f.message)],
+  });
+  if (carriers > 0n) {
+    const lockedRows = sections.find((x) => x.id === 'locked')!.rows.filter((r) => r.id !== 'locked-total');
+    brief.push({ ...row('locked', tr('confirm.brief.locked'), kas(carriers), 'warn', tr('confirm.locked.carriersHint')), help: [tr('confirm.issue.lockedNote'), ...lockedRows.map((r) => `${r.label}: ${r.value}`)] });
+  }
+
   const blocking = findings.filter((f) => f.severity === 'blocking');
   return {
     kind: 'issue',
@@ -323,5 +352,6 @@ export function buildIssuanceModel(i: IssuanceInput, notices: WalletNotice[] = [
     canSign: blocking.length === 0,
     notices,
     advanced,
+    brief,
   };
 }

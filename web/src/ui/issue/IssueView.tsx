@@ -47,7 +47,7 @@ import { visibilityCheckSupported } from '../../signer/seen';
 import { privateKeySigningAllowed } from '../../app/mirror';
 import { ConfirmSign, type ConfirmResult } from '../confirm/ConfirmSign';
 import { pendingCreationItems } from '../confirm/creation-steps';
-import { Banner, Button, CurveGraph, EmptyState, ErrorBanner, Field, FieldShell, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, showToast, useAsync } from '../kit';
+import { Banner, Button, CurveGraph, EmptyState, ErrorBanner, Field, FieldShell, HelpTip, KeyValueList, RawDetails, Section, Segmented, Spinner, Stepper, friendlyErrorText, kasText, shortId, showToast, useAsync } from '../kit';
 import { formatUnits as baseUnitsText } from '../../kob/issue';
 import {
   defaultCarrierText, emptyUiState, filterDecimals, filterOwner, filterTicker, formToIssueForm, groupByField, modelIssues, parseDecimalsText, remainingText,
@@ -141,13 +141,14 @@ export function IssueView() {
 
   // the one plain line on what the program can do, from its registry template's powers (the creation makes no minter: a public-mint program's
   // mint power has no holder); nothing when the registry does not describe the program
-  const fixedLine = useMemo(() => {
+  // (`powers`: an authority holds powers over the tokens, a warning that stays on the page; the plain fixed-supply line is in the title's help)
+  const fixedLine = useMemo<{ text: string; powers: boolean } | null>(() => {
     if (!limits) return null;
     const id = state.program === '3x3' ? limits.registryTemplateId : limits.publicMint.registryTemplateId;
     const tpl = services.registry.templates.find((x) => x.id === id);
     if (!tpl) return null;
     const powers = (tpl.capabilities ?? []).filter((c) => c !== 'public-mint');
-    return powers.length === 0 ? t('issue.fixedLine') : t('issue.powersLine', { powers: powers.join(', ') });
+    return powers.length === 0 ? { text: t('issue.fixedLine'), powers: false } : { text: t('issue.powersLine', { powers: powers.join(', ') }), powers: true };
   }, [limits, state.program, services.registry]);
 
   const pubkey = wallet.info?.pubkey ?? null;
@@ -366,11 +367,18 @@ export function IssueView() {
   return (
     <div class="issue-page stack" data-testid="issue-view">
       <div>
-        <h1>{t('issue.title')}</h1>
-        <p class="muted" data-testid="issue-intro">{t('issue.intro', { approvals: wallet.adapter ? t(wallet.adapter.signChain ? 'issue.intro.one' : 'issue.intro.two') : '' })}</p>
+        {/* one line under the title; the full introduction and the fixed-supply line are behind its "?" */}
+        <div class="help-title">
+          <h1>{t('issue.title')}</h1>
+          <HelpTip label={t('issue.title')} data-testid="issue-intro-help">
+            <p data-testid="issue-intro-long">{t('issue.intro', { approvals: wallet.adapter ? t(wallet.adapter.signChain ? 'issue.intro.one' : 'issue.intro.two') : '' })}</p>
+            {fixedLine && !fixedLine.powers ? <p data-testid="issue-fixed-line">{fixedLine.text}</p> : null}
+          </HelpTip>
+        </div>
+        <p class="muted" data-testid="issue-intro">{t('issue.intro.short')}</p>
       </div>
 
-      {fixedLine ? <p class="issue-fixed-line" data-testid="issue-fixed-line">{fixedLine}</p> : null}
+      {fixedLine?.powers ? <p class="issue-fixed-line" data-testid="issue-fixed-line">{fixedLine.text}</p> : null}
 
       {limitsResult.error ? <ErrorBanner error={limitsResult.error} data-testid="issue-limits-error" /> : null}
 
@@ -434,7 +442,7 @@ export function IssueView() {
           <div class="issue-grid">
             <Field
               label={t('issue.field.name')}
-              hint={t('issue.field.name.hint')}
+              help={<HelpTip label={t('issue.field.name')} data-testid="issue-name-help">{t('issue.field.name.hint')}</HelpTip>}
               value={state.name}
               onValue={(v) => set({ name: v })}
               onBlur={() => touch('name')}
@@ -444,7 +452,7 @@ export function IssueView() {
             />
             <Field
               label={t('issue.field.ticker')}
-              hint={limits ? t('issue.field.ticker.hint', { min: limits.ticker.minLength, max: limits.ticker.maxLength }) : undefined}
+              help={limits ? <HelpTip label={t('issue.field.ticker')} data-testid="issue-ticker-help">{t('issue.field.ticker.hint', { min: limits.ticker.minLength, max: limits.ticker.maxLength })}</HelpTip> : undefined}
               value={state.ticker}
               onValue={(v) => set({ ticker: filterTicker(v) })}
               onBlur={() => touch('ticker')}
@@ -466,7 +474,7 @@ export function IssueView() {
             {renderSupply()}
             <Field
               label={t('issue.field.decimals')}
-              hint={limits ? t('issue.field.decimals.hint', { max: limits.maxDecimals }) : undefined}
+              help={limits ? <HelpTip label={t('issue.field.decimals')} data-testid="issue-decimals-help">{t('issue.field.decimals.hint', { max: limits.maxDecimals })}</HelpTip> : undefined}
               value={state.decimals}
               onValue={(v) => set({ decimals: filterDecimals(v) })}
               onBlur={() => touch('decimals')}
@@ -478,7 +486,7 @@ export function IssueView() {
           <div class="issue-grid issue-details">
             <Field
               label={t('issue.field.icon')}
-              hint={t('issue.field.icon.hint')}
+              help={<HelpTip label={t('issue.field.icon')} data-testid="issue-icon-help">{t('issue.field.icon.hint')}</HelpTip>}
               value={state.icon}
               onValue={(v) => set({ icon: v })}
               onBlur={() => touch('icon')}
@@ -488,7 +496,7 @@ export function IssueView() {
             />
             <FieldShell
               label={t('issue.field.imageFile')}
-              hint={t('issue.field.imageHash.hint')}
+              help={<HelpTip label={t('issue.field.imageFile')} data-testid="issue-image-file-help">{t('issue.field.imageHash.hint')}</HelpTip>}
               error={fileError ?? errorOf('imageHash', state.imageHash)}
             >
               {({ id, describedBy, invalid }) => (
@@ -600,7 +608,13 @@ export function IssueView() {
               <h3>{t('issue.section.carrier')}</h3>
               <Field
                 label={t('issue.field.carrier')}
-                hint={t('issue.field.carrier.hint', { default: limits ? defaultCarrierText(limits) : '10' })}
+                help={
+                  <HelpTip label={t('issue.field.carrier')} data-testid="issue-carrier-help">
+                    <p>{t('issue.field.carrier.hint', { default: limits ? defaultCarrierText(limits) : '10' })}</p>
+                    <p>{t('issue.fixed.carrier')}</p>
+                    <p>{t('issue.fixed.custody')}</p>
+                  </HelpTip>
+                }
                 value={state.carrier}
                 placeholder={limits ? defaultCarrierText(limits) : ''}
                 onValue={(v) => set({ carrier: v })}
@@ -610,10 +624,15 @@ export function IssueView() {
                 suffix={<span class="muted">KAS</span>}
                 data-testid="issue-carrier"
               />
-              <p class="muted small">{t('issue.fixed.carrier')} {t('issue.fixed.custody')}</p>
             </div>
             <div class="stack-sm" data-testid="issue-program-section">
-              <h3>{t('issue.section.program')}</h3>
+              <div class="help-title">
+                <h3>{t('issue.section.program')}</h3>
+                <HelpTip label={t('issue.section.program')} data-testid="issue-program-help">
+                  <p data-testid="issue-program-hint">{t(state.program === '3x3' ? 'issue.program.threeByThree.hint' : 'issue.program.publicMint.hint')}</p>
+                  <p data-testid="issue-fixed-program">{t(state.program === '3x3' ? 'issue.fixed.program' : 'issue.fixed.programPublicMint')}</p>
+                </HelpTip>
+              </div>
               <Segmented<IssueProgramChoice>
                 aria-label={t('issue.section.program')}
                 value={state.program}
@@ -624,10 +643,6 @@ export function IssueView() {
                 ]}
                 data-testid="issue-program"
               />
-              <p class="muted" data-testid="issue-program-hint">
-                {t(state.program === '3x3' ? 'issue.program.threeByThree.hint' : 'issue.program.publicMint.hint')}
-              </p>
-              <p class="muted small" data-testid="issue-fixed-program">{t(state.program === '3x3' ? 'issue.fixed.program' : 'issue.fixed.programPublicMint')}</p>
             </div>
           </div>
         </Section>
@@ -643,7 +658,12 @@ export function IssueView() {
         ) : null}
       </div>
 
-      <Section title={t('issue.summary.title')} data-testid="issue-plan-section">
+      {/* the spendable KAS: a small figure beside the Summary heading, next to what the creation costs */}
+      <Section
+        title={t('issue.summary.title')}
+        actions={usable && spendable !== null && !funding.error ? <span class="small muted" data-testid="issue-funds-balance">{t('issue.funds.balance', { kas: kasText(spendable) })}</span> : undefined}
+        data-testid="issue-plan-section"
+      >
         {renderPlanArea()}
         {notice ? (
           <Banner tone={notice.tone === 'error' ? 'error' : 'info'} title={notice.tone === 'error' ? t('issue.failed.title') : undefined} actions={renderNoticeFinish()} data-testid="issue-notice">
@@ -828,12 +848,8 @@ export function IssueView() {
     return (
       <Field
         label={t('issue.field.supply')}
-        hint={
-          <>
-            <span>{t('issue.field.supply.hint')}</span>
-            {preview ? <span class="issue-preview" data-testid="issue-supply-preview">{` ${t('issue.field.supply.preview', preview)}`}</span> : null}
-          </>
-        }
+        help={<HelpTip label={t('issue.field.supply')} data-testid="issue-supply-help">{t('issue.field.supply.hint')}</HelpTip>}
+        hint={preview ? <span class="issue-preview" data-testid="issue-supply-preview">{t('issue.field.supply.preview', preview)}</span> : undefined}
         value={state.supply}
         onValue={(v) => set({ supply: v.trim() })}
         onBlur={() => touch('supply')}
@@ -849,8 +865,10 @@ export function IssueView() {
     const count = walletRow || state.extras.length === 0 ? state.extras.length + 1 : state.extras.length;
     return (
       <div class="stack-sm" data-testid="issue-holders">
-        <h3>{t('issue.section.holders')}</h3>
-        <p class="muted">{t('issue.holders.intro')}</p>
+        <div class="help-title">
+          <h3>{t('issue.section.holders')}</h3>
+          <HelpTip label={t('issue.section.holders')} data-testid="issue-holders-help">{t('issue.holders.intro')}</HelpTip>
+        </div>
         <div class="stack-sm">
           <div class="issue-holder issue-holder-you" data-testid="issue-holder-row-0">
             <Field
@@ -974,6 +992,8 @@ export function IssueView() {
         </Banner>
       );
     }
+    // the balance itself is beside the Summary heading: here only its loading and its error
+    if (!(funding.loading && spendable === null) && !funding.error) return null;
     return (
       <div class="row issue-funds" data-testid="issue-funds">
         {funding.loading && spendable === null ? (
@@ -983,8 +1003,6 @@ export function IssueView() {
           </>
         ) : funding.error ? (
           <ErrorBanner error={t('issue.funds.error')} onRetry={() => setRetry((n) => n + 1)} data-testid="issue-funds-error" />
-        ) : spendable !== null ? (
-          <span data-testid="issue-funds-balance">{t('issue.funds.balance', { kas: kasText(spendable) })}</span>
         ) : null}
       </div>
     );

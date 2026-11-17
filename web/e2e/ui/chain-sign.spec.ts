@@ -27,8 +27,11 @@ test.use({ autoOpen: false });
 async function confirmResume(page: Page): Promise<void> {
   await expect(page.getByTestId('confirm-screen')).toBeVisible();
   await expect(page.getByTestId('confirm-blocking')).toHaveCount(0);
+  await expect(page.getByTestId('confirm-wallet-line')).toHaveText(/Your wallet asks once, for the token itself/);
+  await page.getByTestId('confirm-wallet-help').click();
   await expect(page.getByTestId('confirm-info').locator('[data-code="resumed"]')).toContainText('checked it like a new one');
   await expect(page.getByTestId('confirm-info').locator('[data-code="walletTwice"]')).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await page.getByTestId('confirm-ack').check();
   await page.getByTestId('confirm-sign').click();
 }
@@ -50,14 +53,19 @@ test.describe('chain signing: a wallet that checks its inputs on its own node', 
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await mock.giveKas('alice', 500n * KAS);
     await openCreate(page, 'CHAIN');
-    await expect(page.getByTestId('issue-intro')).toContainText('your wallet asks twice');
+    await page.getByTestId('issue-intro-help').click();
+    await expect(page.getByTestId('issue-intro-long')).toContainText('your wallet asks twice');
+    await page.keyboard.press('Escape');
     await page.getByTestId('issue-review').click();
     await expect(page.getByTestId('confirm-screen')).toBeVisible();
+    await expect(page.getByTestId('confirm-wallet-line')).toHaveText(/Your wallet asks twice/);
+    await page.getByTestId('confirm-wallet-help').click();
     const twice = page.getByTestId('confirm-info').locator('[data-code="walletTwice"]');
     await expect(twice).toContainText('The first approval records the token');
     await expect(twice).toContainText('you can finish the creation later from this page');
     await expect(twice).not.toContainText('nothing is sent until both are signed');
     await shot(page, '1-confirm', 'confirm-info');
+    await page.keyboard.press('Escape');
 
     // the old flow: the genesis (the transaction this screen copies) asked for before the preparation is on any node
     await page.getByTestId('confirm-advanced').locator('summary').click();

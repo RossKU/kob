@@ -1,6 +1,7 @@
 // The PRE-SIGN CONFIRMATION SCREEN of a token creation (the Create token page). Order actions have none (ui/confirm/send.ts): a genesis creates a
 // token whose facts can never change, so this dialog decodes the built transactions with the issuance verifier (the KCC-23 preparation and
-// the genesis spending it), shows the WHOLE effect in plain words, blocks signing on any blocking finding, asks for an explicit
+// the genesis spending it), shows the WHOLE effect in plain words (a short summary first, the risk and the wallet notes one line each with their full
+// text behind a "?", every verified section under "All details"), blocks signing on any blocking finding, asks for an explicit
 // acknowledgement, then runs `signAndSubmitCreation` (wallet/create.ts: one approval for the private-key signer; an extension wallet signs and
 // sends the preparation, then is asked for the genesis once its wallet node sees the preparation) with the signing stepper (Prepare, Create token), and reports the
 // accepted genesis. A creation whose preparation went out but whose genesis did not (declined, not visible in time, refused) closes this
@@ -21,9 +22,9 @@ import { SignFlowError, expectedOutputs, signAndSubmit, waitForAcceptance, type 
 import { CREATION_INVALID, CREATION_SPENT, finishCreation, signAndSubmitCreation, type CreationStep } from '../../wallet/create';
 import type { CreationRecord } from '../../data/creations';
 import { pendingSpends } from '../../app/pending-spends';
-import { Banner, Button, CopyText, Modal, RawDetails, Spinner, Stepper, copyToClipboard, unitParts } from '../kit';
+import { Banner, Button, CopyText, HelpTip, Modal, RawDetails, Spinner, Stepper, copyToClipboard, unitParts } from '../kit';
 import { rowTimeTitleUnix, shortId } from '../kit/format';
-import type { ConfirmModel, Finding, Row, Section } from './confirm-model';
+import type { BriefRow, ConfirmModel, Finding, Row, Section } from './confirm-model';
 import { buildIssuanceModel } from './issuance-model';
 import { feeDisclosureOf } from './fee-disclosure';
 import { classifyFailure, explorerTxUrl, stepStates, type Failure } from './confirm-flow';
@@ -96,6 +97,38 @@ function SectionView(props: { section: Section }) {
 
 const findingText = (f: Finding): string => f.text ?? issueText(f);
 
+/** The short summary: one row per fact, its explanation behind a "?" beside the label. */
+function Brief(props: { rows: BriefRow[] }) {
+  return (
+    <section class="cf-brief" data-testid="confirm-brief" aria-labelledby="cf-brief-title">
+      <h3 id="cf-brief-title" class="sr-only">{t('confirm.brief.title')}</h3>
+      <dl class="cf-rows">
+        {props.rows.map((r) => (
+          <div class={`cf-row ${tone(r.tone)}`} key={r.id}>
+            <dt>
+              <span class="help-title">
+                <span>{r.label}</span>
+                {r.help?.length ? (
+                  <HelpTip label={r.label} data-testid={`confirm-brief-${r.id}-help`}>
+                    {r.help.map((h, n) => <p key={n}>{h}</p>)}
+                  </HelpTip>
+                ) : null}
+              </span>
+            </dt>
+            <dd data-testid={`confirm-brief-${r.id}`}>
+              <span class="cf-value">{unitParts(r.value, true)}</span>
+              {r.detail ? <span class="cf-detail">{r.detail}</span> : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+/** what the wallet asks and shows: the codes of the creation's wallet notes (one line on the screen, the full text behind its "?") */
+const WALLET_CODES = ['walletTwice', 'resumed', 'walletBlind'];
+
 function FindingList(props: { items: Finding[]; testid: string; class: string }) {
   if (props.items.length === 0) return null;
   return (
@@ -150,7 +183,8 @@ export function ConfirmSign(props: ConfirmSignProps) {
     // a dynamic fee is several times the relay floor in a busy market: the verifier's sanity ceiling follows the policy's own per-transaction cap
     const feePolicy = services.fees?.policy;
     const creation = props.creation ? { prep: props.creation.prep, oneApproval: !!wallet.adapter?.signChain, resumed: !!props.resume } : {};
-    return buildIssuanceModel({ kob, built, token: props.issue.token, ...(props.issue.curve ? { curve: props.issue.curve } : {}), maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
+    const ask = props.issue.askSale ? { askSale: { sell: BigInt(props.issue.askSale.sell), price: BigInt(props.issue.askSale.price) } } : {};
+    return buildIssuanceModel({ kob, built, token: props.issue.token, ...(props.issue.curve ? { curve: props.issue.curve } : {}), ...ask, maker, fee, ...creation, ...(feePolicy ? { feePolicy } : {}) }, notices);
   }, [built, props.issue, props.creation, maker, wallet.info?.id]);
 
   // problems that are not about the transaction itself
@@ -164,6 +198,16 @@ export function ConfirmSign(props: ConfirmSignProps) {
     extraBlocking.push({ code: 'network', severity: 'blocking', message: 'network', text: t('confirm.networkMismatch', { wallet: wallet.info.network, app: config.network }) });
   }
   const blocking = [...extraBlocking, ...model.blocking];
+  // the wallet's notes go on the wallet line; the rest (holders of other keys, fee notes) is in the summary's "?" and in the details
+  const walletInfo = model.info.filter((f) => WALLET_CODES.includes(f.code));
+  const otherInfo = model.info.filter((f) => !WALLET_CODES.includes(f.code));
+  /** "Unaudited token program" (and how many other risk notes are behind the "?") */
+  const riskWords = (): string => {
+    const audited = model.warnings.some((w) => w.code === 'unaudited');
+    const rest = model.warnings.length - (audited ? 1 : 0);
+    if (!audited) return t('confirm.risk.notes');
+    return rest > 0 ? `${t('confirm.risk.unaudited')} · ${t(rest === 1 ? 'confirm.risk.more.one' : 'confirm.risk.more.other', { count: rest })}` : t('confirm.risk.unaudited');
+  };
   const busy = phase === 'busy';
   const canSign = blocking.length === 0 && model.canSign && ack && phase === 'review';
 
@@ -284,8 +328,6 @@ export function ConfirmSign(props: ConfirmSignProps) {
   return (
     <Modal title={title} large dismissable={!busy} hideClose={busy} onClose={close} data-testid="confirm-screen">
       <div class="cf" data-phase={phase} data-kind={model.kind}>
-        <p class="cf-intro">{model.intro}</p>
-
         {blocking.length > 0 ? (
           <div class="cf-blocking" data-testid="confirm-blocking" role="alert">
             <h3>{t('confirm.blockingTitle')}</h3>
@@ -307,37 +349,66 @@ export function ConfirmSign(props: ConfirmSignProps) {
           </Banner>
         ) : null}
 
-        <div class="cf-summary" data-testid="confirm-summary">
-          {model.sections.filter((s) => !s.fold).map((s) => (
-            <SectionView section={s} key={s.id} />
-          ))}
-          {/* the gross flows (the wallet's inputs and change) behind the net effect above */}
-          {model.sections.some((s) => s.fold) ? (
-            <details class="cf-flows" data-testid="confirm-flows">
-              <summary>{t('confirm.flows.title')}</summary>
-              {model.sections.filter((s) => s.fold).map((s) => (
-                <SectionView section={s} key={s.id} />
-              ))}
-            </details>
-          ) : null}
-        </div>
+        {model.brief ? <Brief rows={model.brief} /> : null}
 
-        <FindingList items={model.warnings} testid="confirm-warnings" class="cf-list-warn" />
-        <FindingList items={model.info} testid="confirm-info" class="cf-list-info" />
-
-        {model.notices.length > 0 ? (
-          <aside class="cf-wallet" data-testid="confirm-wallet-notice">
-            <h3>{t('confirm.wallet.title', { wallet: wallet.info?.label ?? t('confirm.wallet.yours') })}</h3>
-            <p>{t(built.sign.length === 1 ? 'confirm.wallet.lead.one' : 'confirm.wallet.lead.other', { count: built.sign.length })}</p>
-            <ul>
-              {model.notices.map((n) => (
-                <li key={n.code} data-code={n.code}>
-                  {walletNoticeText(n)}
-                </li>
-              ))}
-            </ul>
-          </aside>
+        {/* the risk notes: ONE line that stays in view before signing (a safety disclosure), the full text behind its "?" */}
+        {model.warnings.length > 0 ? (
+          <div class="cf-line cf-risk" data-testid="confirm-risk" data-codes={model.warnings.map((w) => w.code).join(' ')}>
+            <span aria-hidden="true">{'\u26A0\uFE0E'}</span>
+            <span>
+              {riskWords()}
+            </span>
+            <span class="cf-sep" aria-hidden="true">·</span>
+            <HelpTip label={t('confirm.risk.label')} data-testid="confirm-risk-help">
+              <FindingList items={model.warnings} testid="confirm-warnings" class="cf-help-list" />
+            </HelpTip>
+          </div>
         ) : null}
+
+        {/* what the wallet asks and shows: one line, the full notes (and what this wallet's popup shows) behind its "?" */}
+        {walletInfo.length > 0 || model.notices.length > 0 ? (
+          <div class="cf-line cf-wallet-line" data-testid="confirm-wallet-line" data-codes={walletInfo.map((f) => f.code).join(' ')}>
+            <span>{t(walletInfo.some((f) => f.code === 'walletTwice') ? 'confirm.walletLine.twice' : walletInfo.some((f) => f.code === 'resumed') ? 'confirm.walletLine.resumed' : 'confirm.walletLine.blind')}</span>
+            <span class="cf-sep" aria-hidden="true">·</span>
+            <HelpTip label={t('confirm.walletLine.label')} data-testid="confirm-wallet-help">
+              <FindingList items={walletInfo} testid="confirm-info" class="cf-help-list" />
+              {model.notices.length > 0 ? (
+                <div class="cf-wallet-notes" data-testid="confirm-wallet-notice">
+                  <h4>{t('confirm.wallet.title', { wallet: wallet.info?.label ?? t('confirm.wallet.yours') })}</h4>
+                  <p>{t(built.sign.length === 1 ? 'confirm.wallet.lead.one' : 'confirm.wallet.lead.other', { count: built.sign.length })}</p>
+                  <ul>
+                    {model.notices.map((n) => (
+                      <li key={n.code} data-code={n.code}>
+                        {walletNoticeText(n)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+            </HelpTip>
+          </div>
+        ) : null}
+
+        {/* every verified section in full: the token, the curve, what is recorded on chain, the net effect, the KAS locked, the fee, the wallet's flows */}
+        <details class="cf-more" data-testid="confirm-details">
+          <summary>{t('confirm.details.title')}</summary>
+          <div class="cf-summary" data-testid="confirm-summary">
+            <p class="cf-note">{model.intro}</p>
+            {model.sections.filter((s) => !s.fold).map((s) => (
+              <SectionView section={s} key={s.id} />
+            ))}
+            {/* the gross flows (the wallet's inputs and change) behind the net effect */}
+            {model.sections.some((s) => s.fold) ? (
+              <details class="cf-flows" data-testid="confirm-flows">
+                <summary>{t('confirm.flows.title')}</summary>
+                {model.sections.filter((s) => s.fold).map((s) => (
+                  <SectionView section={s} key={s.id} />
+                ))}
+              </details>
+            ) : null}
+            {otherInfo.length > 0 ? <FindingList items={otherInfo} testid="confirm-other-info" class="cf-list-info" /> : null}
+          </div>
+        </details>
 
         <details class="cf-advanced" data-testid="confirm-advanced">
           <summary>{t('confirm.advanced.title')}</summary>

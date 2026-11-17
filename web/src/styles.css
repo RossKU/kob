@@ -491,6 +491,20 @@ small, .small { font-size: 0.85em; }
 .picker-check { flex: none; font-style: normal; }
 .field-hint { color: var(--muted); font-size: 0.85rem; }
 .field-error { color: var(--bad); font-size: 0.85rem; font-weight: 600; }
+/* the "?" beside a label or a heading and its panel (kit/HelpTip.tsx): a small round button whose hit area is larger than its circle; the panel is fixed to the window */
+.field-label-help, .help-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.field-label-help > label { font-weight: 600; font-size: 0.9rem; }
+.help-title > h1, .help-title > h2, .help-title > h3 { margin: 0; }
+.help-tip { position: relative; flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--muted); font: inherit; font-size: 0.72rem; font-weight: 700; line-height: 1; cursor: pointer; vertical-align: middle; }
+.help-tip::after { content: ''; position: absolute; inset: -6px; }
+.help-tip:hover, .help-tip[aria-expanded='true'] { color: var(--text); border-color: var(--muted); background: var(--surface-2); }
+.help-tip:focus-visible { outline: 2px solid var(--focus, var(--primary)); outline-offset: 1px; }
+@media (pointer: coarse) { .help-tip { width: 22px; height: 22px; font-size: 0.8rem; } .help-tip::after { inset: -7px -10px; } }
+.help-panel { position: fixed; z-index: 60; width: min(20rem, calc(100vw - 32px)); box-sizing: border-box; padding: 10px 12px; font-size: 0.85rem; font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; overflow-wrap: anywhere; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+.help-panel p, .help-panel ul { margin: 0 0 6px; }
+.help-panel ul { padding-left: 18px; }
+.help-panel > :last-child, .help-panel li:last-child { margin-bottom: 0; }
+.help-panel h4 { margin: 0 0 4px; font-size: 0.85rem; }
 .checkbox-row { display: flex; gap: 8px; align-items: flex-start; }
 .checkbox-row input { margin-top: 4px; }
 
