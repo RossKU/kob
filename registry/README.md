@@ -44,7 +44,7 @@ registry changes happen only in a release (`docs/ops/release.md`, 3).
   because its template hash is here, never by code special-casing: a third-party KCC-20-compatible program (same 112-byte state,
   draft transfer tags, owner scheme 4) such as KaspaCom's KCC20 0.2.5 is one more template entry plus its pinned artifact. Adding one
   is data plus review: the artifact or raw bytes under `contracts/third-party/` (with provenance and licence), its profile in
-  `crates/kob-protocol/data/programs.json` (`kob registry add-program` derives it from the bytes and writes the test stub), its compute
+  `crates/kob-protocol/data/programs.json` (`kob-maint add-program` derives it from the bytes and writes the test stub), its compute
   budgets and keeper tips (`KOB_REGEN=1`), the engine tests and the reviewer checklist of
   [`docs/spec/token-programs.md`](../docs/spec/token-programs.md). A template entry whose program this build embeds must state
   the profile's family, layout, slots and custody owner (the validator checks it).
@@ -210,7 +210,7 @@ covenant id).
 
 An entry records facts; it is not a listing and changes nothing about whether the token trades (that follows from its program alone).
 
-1. Make sure its program is in `templates` (new program: `kob registry add-program`, then the onboarding steps and the reviewer
+1. Make sure its program is in `templates` (new program: `kob-maint add-program`, then the onboarding steps and the reviewer
    checklist of [`docs/spec/token-programs.md`](../docs/spec/token-programs.md)).
 2. Add the token with `verified: false`; set `verified: true` after checking the covenant id and template hash against a chain UTXO,
    and `genesis_verified` plus its `genesis` record after `kob registry verify-genesis` checked every output of its genesis group

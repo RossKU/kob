@@ -107,7 +107,7 @@ struct IssueRequest {
     #[serde(default)]
     network: Option<String>,
     /// `public-mint` (default) or `3x3`, as `kob_protocol::issue::IssueProgram::parse` reads them.
-    /// The `8x8-prototype` of the CLI is refused here.
+    /// `8x8-prototype` is refused here and by the CLI.
     #[serde(default)]
     program: Option<String>,
 }

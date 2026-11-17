@@ -120,7 +120,7 @@ programs the tests run against.
 - **`prototypes/kcc20/variants/KCC20Ref_*.sil`.** Prototypes, not used for issuance. They are the reference token with other
   per-transaction slot limits (4/5, 8/8, 16/16).
   - `KCC20Ref_8x8` stays pinned so that testnet tokens issued with it remain tradable.
-  - The CLI issues it only as `--program 8x8-prototype`.
+  - No tool issues it any more (the CLI refuses `--program 8x8-prototype`); tokens that exist on it are held, traded and recovered as before.
 - **`prototypes/kcc20/p2/KCC20P2.sil`, `KCC20Batch.sil`.** Prototype for proposal P2 (KOB code), implemented and tested, not used
   for issuance.
   - `KCC20P2` is the 3/3 reference holder program with a two-entry leader allowlist.

@@ -257,7 +257,7 @@ plan, and the Create page in the choice's hint).
 KOB's earlier choice (2026-10-10), kept for the record: it issued the reference in its standard configuration, `KCC20Ref`
 (3 token inputs / 3 token outputs per transaction, registry `kcc20-ref-3x3`), the published public-mint build being the second
 choice. The slot variants (`KCC20Ref_4x5`, `KCC20Ref_8x8`, `KCC20Ref_16x16`), `KCC20P2` / `KCC20Batch` and `KCC20Opt` are
-prototypes: kept, built and tested, not KOB's issuance (the CLI issues the 8/8 only when it is named `--program 8x8-prototype`,
+prototypes: kept, built and tested, not KOB's issuance (nothing issues the 8/8 any more: the CLI refused `--program 8x8-prototype` from the release that dropped it,
 with a warning; the app does not offer it). `KCC20Ref_8x8` stays a pinned template (`pending-review`: not tradable on
 mainnet).
 

@@ -13,7 +13,7 @@ testnet-10 only and `pending-review`, kept so that the tokens issued with it sta
 | `observed-transfer.json` | that input's signature script and the transaction's token outputs |
 
 KOB embeds this program as `KForgeToken1785` (`crates/kob-protocol/data/programs.json`, written by
-`kob registry add-program contracts/third-party/kforge/program.bin --name KForgeToken1785 --slots 1/3 --holder 0 --network testnet-10`):
+`kob-maint add-program contracts/third-party/kforge/program.bin --name KForgeToken1785 --slots 1/3 --holder 0 --network testnet-10`):
 `pending-review`, `networks: [testnet-10]`, so it is on no registry shipped with KOB (the shipped registry is mainnet's) and a
 mainnet build never trades it; a testnet-10 build trades its tokens through the delivery id_type 0 builds of the KRON order
 kinds (`KobAskKronD0` .. `KobIfdAskKronD0`, `contracts/orders/kron/README.md`), because the program refuses address-presence

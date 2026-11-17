@@ -22,7 +22,7 @@ blake3.workspace = true
 sha2 = "0.10"
 
 # Test targets by area. Names stay flat, so `cargo test --test <name>` and CI filters do not depend on the folder. A new test file
-# under a folder runs only once it has an entry here; one directly under tests/ (where `kob registry add-program` writes its stub)
+# under a folder runs only once it has an entry here; one directly under tests/ (where `kob-maint add-program` writes its stub)
 # is discovered without one.
 
 [[test]]
