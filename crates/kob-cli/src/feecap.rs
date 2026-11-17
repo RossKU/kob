@@ -3,8 +3,8 @@
 //! A plan whose fee is above [`FACTOR`] times what the node's fee estimate asks for is refused
 //! with the issue code [`CODE`], unless `--allow-high-fee` is given. The reference rate is the
 //! higher of the node's priority and normal buckets (sompi per gram), at least the relay floor.
-//! It is charged on the largest mass dimension of the transaction, so the relay fee, the
-//! storage-inclusive priority fee and a normal `--fee-rate` pass; a fee that is a mistake (a wrong
+//! It is charged on the mass the fee itself is charged on (the compute and transient mass, or with
+//! `--priority-fee` the storage-inclusive one), so the relay fee, the priority fee and a normal `--fee-rate` pass; a fee that is a mistake (a wrong
 //! `--fee-rate`, `--fee`, or a change folded into the fee) does not. A node that gives no estimate
 //! leaves the relay floor as the reference.
 
@@ -69,7 +69,12 @@ impl Ceiling {
     /// [`Ceiling::violation`] of a built transaction.
     pub fn violation_of(&self, built: &BuiltTx) -> Option<String> {
         let m = &built.fee.mass;
-        self.violation(built.fee.fee, m.priority_mass.max(m.fee_mass).max(m.compute).max(m.storage))
+        // The mass the fee is charged on: the relay fee on compute and transient mass, the priority fee on the storage-inclusive one.
+        let mass = match built.fee.fee_mode {
+            kob_protocol::tx::FeeMode::Relay => m.fee_mass,
+            kob_protocol::tx::FeeMode::Priority => m.priority_mass.max(m.fee_mass),
+        };
+        self.violation(built.fee.fee, mass)
     }
 }
 

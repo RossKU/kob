@@ -820,7 +820,7 @@ enum Source {
     /// A covenant id: the indexer's view of it. `true` when the person named it, `false` when --all listed it.
     Id(String, bool),
     /// A saved view: one order of a file.
-    View(crate::inputs::View),
+    View(Box<crate::inputs::View>),
 }
 
 /// The built order of a source, or why it is skipped or refused.
@@ -864,7 +864,7 @@ fn run_ops(op: crate::order::Op, args: &[String], usage_text: &str) -> i32 {
                     eprintln!("rejected {}: {}", r.source, r.reason);
                     code = 1;
                 }
-                sources.extend(parsed.views.into_iter().map(Source::View));
+                sources.extend(parsed.views.into_iter().map(|v| Source::View(Box::new(v))));
             }
             Err(e) => {
                 eprintln!("error: {e}");

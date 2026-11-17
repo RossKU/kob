@@ -93,5 +93,5 @@ fn token_create_help_is_reachable() {
     let o = Command::new(BIN).args(["token", "create", "--help"]).stdin(Stdio::null()).output().unwrap();
     let h = String::from_utf8_lossy(&o.stdout).to_string();
     assert!(o.status.success() && h.starts_with("kob token create: create a fixed-supply KCC-20 token"), "{h}");
-    assert!(h.contains("--key was removed") && !h.contains("8x8-prototype") && h.contains("--allow-high-fee"), "{h}");
+    assert!(h.contains("`--key` was removed") && !h.contains("8x8-prototype") && h.contains("--allow-high-fee"), "{h}");
 }

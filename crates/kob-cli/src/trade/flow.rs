@@ -72,7 +72,7 @@ pub fn finish(c: &Common, signer: &Signer, mut r: Ready, units: &Units, argv_hin
     // With contended blocks and no --fee-rate or --priority-fee, one line goes to stderr, never
     // into the --json document. The fee stays the relay minimum.
     // One estimate serves the note and the fee ceiling.
-    let estimate = c.need_node().ok().and_then(|n| crate::congestion::answer(n));
+    let estimate = c.need_node().ok().and_then(crate::congestion::answer);
     if let Some(n) = crate::congestion::note_from(estimate.as_ref(), c.fee_rate, c.priority_fee) {
         eprintln!("{n}");
     }

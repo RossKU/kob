@@ -124,9 +124,11 @@ pub(crate) struct Prepared {
     pub info: Value,
     /// The text shown to the maker before the confirmation.
     pub disclosure: String,
-    /// How the fee is paid.
+    /// How the fee is paid (read by the tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub funding: Funding,
-    /// The units and carriers per token that return to the maker.
+    /// The units and carriers per token that return to the maker (read by the tests).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub returned: Vec<Value>,
     /// The strays that the transaction does not take.
     pub left: Vec<Value>,

@@ -35,6 +35,7 @@ pub fn note_for(answer: &Value) -> Option<String> {
 /// The note of `node` for a command, given its `fee_rate` and `priority_fee` choices.
 ///
 /// It is none when a rate or the priority fee was chosen, or when the node gives no estimate.
+#[cfg(test)]
 pub fn note(node: &str, fee_rate: Option<u64>, priority_fee: bool) -> Option<String> {
     if fee_rate.is_some() || priority_fee {
         return None;

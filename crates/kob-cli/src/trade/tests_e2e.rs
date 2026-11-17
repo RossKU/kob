@@ -1464,7 +1464,8 @@ fn every_trading_command_refuses_a_fee_above_the_ceiling_unless_allowed() {
     );
     let high = "--fee-rate 5000";
     let to = address_of(&p2pk_spk(&taker), NET).unwrap();
-    let cases: Vec<(&str, fn(&[String]) -> i32, u8, String, &str)> = vec![
+    type Case<'a> = (&'a str, fn(&[String]) -> i32, u8, String, &'a str);
+    let cases: Vec<Case> = vec![
         ("place", crate::trade::place::run, 0x11, "limit --token TST --side sell --amount 10TST --price 3KAS".into(), ".place.json"),
         ("replace", crate::trade::actions::run_replace, 0x11, format!("{} --price 3.1KAS", to_hex(&a)), ".replace.json"),
         ("take", crate::trade::actions::run_take, 0x22, format!("{} --amount 4TST --max-price 4KAS", to_hex(&a)), ".take.json"),

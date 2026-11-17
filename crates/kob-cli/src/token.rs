@@ -637,7 +637,8 @@ fn issue(a: &IssueArgs) -> Result<(), String> {
         (false, Some(node)) => crate::feecap::Ceiling::read(node, a.allow_high_fee),
         _ => crate::feecap::Ceiling::offline(a.allow_high_fee),
     };
-    let mass_of = |c: u64, s: u64| c.max(s);
+    // The compute mass is what the relay fee is charged on (the transient mass is at most about twice it).
+    let mass_of = |c: u64, _storage: u64| c;
     for (what, fee, mass) in [
         ("preparation", plan.prep.fee, mass_of(plan.prep.compute_mass, plan.prep.storage_mass)),
         ("genesis", g.fee, mass_of(report.compute_mass, report.storage_mass)),

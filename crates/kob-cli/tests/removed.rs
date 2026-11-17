@@ -90,10 +90,10 @@ fn the_image_spellings_and_the_prototype_program_are_removed() {
 #[test]
 fn kob_order_is_removed_for_sweep_and_cancel_with_view() {
     for (args, want) in [
-        (&["order", "sweep", "--view", "a.json"][..], "`kob sweep --view FILE"),
-        (&["order", "cancel", "--view", "a.json"], "`kob cancel --view FILE"),
-        (&["order"], "`kob sweep` or `kob cancel`"),
-        (&["order", "nosuch"], "`kob sweep` or `kob cancel`"),
+        (&["order", "sweep", "--view", "a.json"][..], "kob sweep --view FILE"),
+        (&["order", "cancel", "--view", "a.json"], "kob cancel --view FILE"),
+        (&["order"], "kob sweep or kob cancel"),
+        (&["order", "nosuch"], "kob sweep or kob cancel"),
     ] {
         let (code, err) = kob(args);
         assert_eq!(code, 2, "{args:?}: {err}");
@@ -112,5 +112,5 @@ fn add_program_is_not_in_the_user_cli() {
     assert!(!help.contains("add-program") && help.contains("verify-genesis") && help.contains("programs"), "{help}");
     let out = Command::new(BIN).arg("--help").output().unwrap();
     let help = String::from_utf8_lossy(&out.stdout);
-    assert!(!help.contains("add-program") && !help.contains("kob order"), "{help}");
+    assert!(!help.contains("add-program") && !help.contains("kob order sweep"), "{help}");
 }

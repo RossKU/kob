@@ -674,7 +674,10 @@ fn keyf(n: u8) -> String {
     let dir = std::env::temp_dir().join(format!("kob-cli-e2e-keys-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(format!("k{n}"));
-    std::fs::write(&p, format!("{}\n", to_hex(&sk(n)))).unwrap();
+    // Written aside and renamed in one step: tests run in parallel and read the file while another writes it.
+    let tmp = dir.join(format!("k{n}.{:?}.tmp", std::thread::current().id()));
+    std::fs::write(&tmp, format!("{}\n", to_hex(&sk(n)))).unwrap();
+    std::fs::rename(&tmp, &p).unwrap();
     p.display().to_string()
 }
 
