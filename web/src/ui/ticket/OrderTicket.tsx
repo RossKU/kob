@@ -512,7 +512,7 @@ export function OrderTicket(props: OrderTicketProps) {
     onStop: (text, raw) => sender.stop(text, raw, 'merge'),
   });
   // a click that ended without its order (blocked, declined, refused by the node, a direct fill that lost its race every time) is also said at
-  // the top right in red, once the click is over (founder 2026-11-17); the line under the button keeps the details
+  // the top right in red, once the click is over (founder 2026-11-17); it is the only place it is said (2026-11-18: no red box in the ticket)
   useSendFailureToast(
     sender.status,
     placing,
@@ -1164,7 +1164,7 @@ export function OrderTicket(props: OrderTicketProps) {
       {/* the one place that says why the order cannot be placed (and what to know before it is: a warning), above the total and the button: no room when there is
           nothing to say, two lines at most (more scroll in it); the footer grows upwards from the pinned button, and the total is under the slot, so a sentence coming and
           going moves neither of them */}
-      {/* what a click is doing and why it stopped, in the footer itself (never over the form); a submitted order is a notification (below) */}
+      {/* what a click is doing, in the footer itself (never over the form); why it stopped is the red toast, a submitted order a notification (below) */}
       <div class="tk-status">
         <SendStatusInline sender={sender} lead={ladderLead} data-testid="order-status" />
       </div>

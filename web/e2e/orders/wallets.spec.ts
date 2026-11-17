@@ -166,7 +166,7 @@ test.describe('KasWare failure modes', () => {
     await mock.failNextSubmit('mock: injected submit failure');
     await clickPlace(page);
     await expectStopped(page, 'failed');
-    await expect(page.getByTestId('order-status')).toContainText('injected submit failure'); // the node's text sits behind "Details"
+    await expect(page.getByTestId('toast-error')).toContainText('injected submit failure'); // the node's own words, in the red toast
     expect(await mock.submitted(false)).toHaveLength(0);
     await expect(page.getByTestId('order-place')).toBeEnabled();
     await clickPlace(page);

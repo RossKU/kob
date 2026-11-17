@@ -599,17 +599,20 @@ export function useSendFailureToast(status: SendStatus | null, busy: boolean, he
 }
 
 /**
- * The send status inside a form (the order ticket): what a click is doing and why nothing was sent, in the flow of the form, never over it.
- * A submitted transaction is not shown here: `SendStatusToast` with `only="submitted"` carries it to the notifications. The final confirmation
- * popup of an external wallet opens over the page.
+ * The send status inside a form (the order ticket): what a click is doing, in the flow of the form, never over it. Why a click stopped is not
+ * shown here (founder 2026-11-18: the red box broke the ticket's layout): the red toast at the top right says it (`useSendFailureToast`); the
+ * stopped line stays in the document, hidden, as the state of the last click (its phase and code). A submitted transaction is not shown here
+ * either: `SendStatusToast` with `only="submitted"` carries it to the notifications. The final confirmation popup of an external wallet opens over the page.
  */
 export function SendStatusInline(props: { sender: Sender; lead?: string | null; 'data-testid'?: string }) {
   const s = props.sender.status;
   if (!s || s.phase === 'submitted') return null;
   const popup = s.phase === 'confirming' && s.table && typeof document !== 'undefined' ? createPortal(<ConfirmPopup status={s} onAnswer={props.sender.decide} />, document.body) : null;
+  const line = <SendStatusLine sender={props.sender} lead={props.lead ?? null} popup={false} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />;
+  if (!sendBusy(s)) return <div hidden class="send-stopped">{line}</div>;
   return (
     <>
-      <SendStatusLine sender={props.sender} lead={props.lead ?? null} popup={false} {...(props['data-testid'] ? { 'data-testid': props['data-testid'] } : {})} />
+      {line}
       {popup}
     </>
   );
