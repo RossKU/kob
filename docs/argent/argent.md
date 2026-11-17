@@ -1,4 +1,4 @@
-| `KOBOrders::KobIfdPair` | `1208cd408b3f06ad97d9a35aaa5e082d4a1dda8e79f50ea40bd872770d424315` | 1+936 | 9,351 B || `KOBOrders::KobCondPair` | `216cdcb583aaa08a104834f6ac214cf8869c1dc4321e8f4f2394e4b882cd34ff` | 1+579 | 7,852 B || `KOBOrders::KobPair` | `d3d775de3dfb4091c8d3b631a018c89accac22565bf370e10d9172eb759a6ec8` | 1+483 | 3,727 B || `KOBOrders::KobIfdBid` | `6ffb9b53dd72b6a8d1602c93999e52853c6d69e97656211237f4377eaa5bb6ee` | 1+585 | 3,841 B || `KOBOrders::KobIfdAsk` | `001104cafcc7a1bc00b35773d6468a1990cae5827b7b1ad0276d3eb1dd5c8f66` | 1+621 | 5,348 B || `KOBOrders::KobCondBid` | `8c0e8f0694fbd5ac91de346d7921d58cb41b0fdc80ca669f1ff7b8d8f31542c3` | 1+417 | 4,791 B || `KOBOrders::KobCondAsk` | `81c45232ce30dc72a5aeae470feb4690c017d1c0e2e1f5275dc1db65e44f117a` | 1+363 | 3,855 B || `KOBOrders::KobBid` | `f5dc833403c1cdeb134ec8b5c31dcc5d2aa9c3905035c26820506859b90c64d8` | 1+321 | 2,679 B |# KOB as an Argent app
+# KOB as an Argent app
 
 KOB is an Argent app on the outside and hand-written SilverScript on the inside. This document
 says what is published, how another Argent app imports it, and what the KOB router on top of it
