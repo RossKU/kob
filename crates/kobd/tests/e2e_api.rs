@@ -168,6 +168,10 @@ async fn rest_and_websocket_follow_the_chain() {
     assert_eq!(o["amount_left"], (6 * WHOLE).to_string());
     assert_eq!(o["amount_estimated"], false);
     assert_eq!(o["state"]["state"]["amountLeft"], (6 * WHOLE).to_string());
+    // the taker's continuation stays in the book with what is left (a wallet's direct take is this batch)
+    let (_, book) = http_get(addr, &format!("/v1/books/{token}")).await;
+    assert_eq!(book["asks"].as_array().unwrap().len(), 1, "{book}");
+    assert_eq!(book["asks"][0]["amount"], (6 * WHOLE).to_string(), "{book}");
 
     // reorg: the fill disappears, the client is told
     node.reorg(1, vec![vec![], vec![]]);
