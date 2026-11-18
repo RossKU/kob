@@ -1,10 +1,20 @@
-// The Activity page's summary (ActivitySummary.tsx): all time, a time window (1D / 7D / 1M / 1Y) with its volume chart, and the books now. Pure, tested
-// in summary-model.test.ts. Built from what the indexer serves: the KAS candles of every token (`/v1/candles`), the token list's open orders and the
-// pairs' live orders, and the store's activity totals (`/v1/stats?since=`: orders placed, traders, what the executors earned and paid the miners, the KAS locked in orders).
-// Volume and trades are the KAS markets' (exact, sompi): a pair fill carries no KAS price, and most go through the KAS books, whose fills these already
-// count. What an indexer does not report (an older one has no `/v1/stats`, or null executors: one before schema 10 recorded no fill's funder) is null:
-// the page shows "—". The executors' income and the miners' fees come from their own fields (`executor_income`, `miner_fees`): never from `fees_paid`, which is only the
-// priority-tip sum, so an indexer without them shows a dash, not a smaller number under the wrong label.
+// The Activity page's summary (ActivitySummary.tsx): all time, a time window (1D / 7D / 1M / 1Y)
+// with its volume chart, and the books now. It is pure and tested in summary-model.test.ts.
+//
+// It is built from what the indexer serves.
+// - The KAS candles of every token (`/v1/candles`).
+// - The token list's open orders and the pairs' live orders.
+// - The store's activity totals (`/v1/stats?since=`): orders placed, traders, what the executors
+//   earned and paid the miners, and the KAS locked in orders.
+//
+// Volume and trades are the KAS markets' (exact, sompi). A pair fill carries no KAS price, and most
+// go through the KAS books, whose fills these already count.
+//
+// A figure an indexer does not report is null, and the page shows "—". That covers an indexer
+// without `/v1/stats` and one that records no fill's funder (null executors). The executors'
+// income and the miners' fees come from their own fields (`executor_income`, `miner_fees`), never
+// from `fees_paid`, which is only the priority-tip sum. An indexer without those fields therefore
+// shows a dash, not a smaller number under the wrong label.
 import { unorderedPairKey } from '../market/pair-model';
 import type { ActivityStatsView, CandleView, IndexerTokenView, PairSummaryView } from '../../data/indexer-types';
 
@@ -15,13 +25,13 @@ const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
 export interface WindowDef {
-  /** the candle interval the window is read from */
+  /** The candle interval the window is read from. */
   interval: '1h' | '1d';
-  /** one bar */
+  /** One bar, in ms. */
   bucketMs: number;
-  /** bars in the window */
+  /** Bars in the window. */
   buckets: number;
-  /** dictionary key of one bar's length (`activity.summary.unit.*`) */
+  /** Dictionary key of one bar's length (`activity.summary.unit.*`). */
   unit: 'hour' | 'sixHours' | 'day' | 'week';
 }
 
@@ -32,22 +42,31 @@ export const WINDOWS: Record<SummaryWindow, WindowDef> = {
   '1Y': { interval: '1d', bucketMs: 7 * DAY, buckets: 52, unit: 'week' },
 };
 
-/** The length of each window as the page words it (last 24 hours, 7 days, 30 days, 52 weeks): `/v1/stats?since=` starts that far back. */
+/**
+ * The length of each window as the page words it: last 24 hours, 7 days, 30 days, 52 weeks.
+ * `/v1/stats?since=` starts that far back.
+ */
 export const WINDOW_SPAN_MS: Record<SummaryWindow, number> = { '1D': DAY, '7D': 7 * DAY, '1M': 30 * DAY, '1Y': 52 * 7 * DAY };
 
-/** `since` of a window's activity totals: the start of the last whole minute, so every viewer of a minute asks the same (cached) question. */
+/**
+ * `since` of a window's activity totals: the start of the last whole minute, so every viewer of a
+ * minute asks the same (cached) question.
+ */
 export function activitySince(window: SummaryWindow, now: number): number {
   return Math.floor((now - WINDOW_SPAN_MS[window]) / 60_000) * 60_000;
 }
 
-/** Hourly candles a token needs for 1D and 7D with their previous windows (two weeks), and daily ones for everything (all time). */
+/**
+ * Hourly candles a token needs for 1D and 7D with their previous windows (two weeks). Daily ones
+ * serve everything (all time).
+ */
 export const HOURLY_LIMIT = 14 * 24;
 export const DAILY_LIMIT = 1500;
 
 export interface Bar {
-  /** bar start, unix ms */
+  /** Bar start, unix ms. */
   t: number;
-  /** KAS markets' volume, sompi */
+  /** The KAS markets' volume, sompi. */
   quote: bigint;
   trades: number;
 }
@@ -57,19 +76,25 @@ export interface WindowSummary {
   bars: Bar[];
   quote: bigint;
   trades: number;
-  /** the same totals over the window before (null when nothing is known that far back) */
+  /** The same totals over the window before. Null when nothing is known that far back. */
   prevQuote: bigint | null;
   prevTrades: number | null;
-  /** tokens with a KAS trade in the window */
+  /** Tokens with a KAS trade in the window. */
   activeTokens: number;
 }
 
-/** The end of the window: the end of the bar that holds `now` (bars are aligned to UTC multiples of their length). */
+/**
+ * The end of the window: the end of the bar that holds `now`. Bars are aligned to UTC multiples of
+ * their length.
+ */
 export function windowEnd(now: number, def: WindowDef): number {
   return Math.floor(now / def.bucketMs) * def.bucketMs + def.bucketMs;
 }
 
-/** One window's bars and totals over the candles of every token (`series`: one ascending list of `def.interval` candles per token). */
+/**
+ * One window's bars and totals over the candles of every token. `series` is one ascending list of
+ * `def.interval` candles per token.
+ */
 export function summarizeWindow(window: SummaryWindow, series: readonly (readonly CandleView[])[], now: number): WindowSummary {
   const def = WINDOWS[window];
   const end = windowEnd(now, def);
@@ -112,7 +137,7 @@ export function summarizeWindow(window: SummaryWindow, series: readonly (readonl
 export interface AllTime {
   quote: bigint;
   trades: number;
-  /** the first day with a trade, unix ms (null: no trade yet) */
+  /** The first day with a trade, unix ms. Null means no trade yet. */
   since: number | null;
 }
 
@@ -135,19 +160,28 @@ export interface ActivityFigures {
   orders: number | null;
   traders: number | null;
   executors: number | null;
-  /** sompi the range's KOB transactions left to the executors that sent them, before network fees (negative when they lost; null: an indexer without the field) */
+  /**
+   * Sompi the range's KOB transactions left to the executors that sent them, before network fees.
+   * It is negative when they lost. Null means an indexer without the field.
+   */
   executorIncome: bigint | null;
-  /** executor transactions whose income is not known, so not in `executorIncome` (null: not reported) */
+  /**
+   * Executor transactions whose income is not known, so not in `executorIncome`. Null means not
+   * reported.
+   */
   executorIncomeUnknown: number | null;
-  /** sompi of network fees of those transactions (null: an indexer without the field) */
+  /** Sompi of network fees of those transactions. Null means an indexer without the field. */
   minerFees: bigint | null;
-  /** transactions whose fee is not known, so not in `minerFees` (null: not reported) */
+  /** Transactions whose fee is not known, so not in `minerFees`. Null means not reported. */
   minerFeesUnknown: number | null;
-  /** sompi in the live orders now */
+  /** Sompi in the live orders now. */
   locked: bigint | null;
 }
 
-/** The activity totals as the page shows them; every figure is null (a dash) for an indexer that does not report them. */
+/**
+ * The activity totals as the page shows them. Every figure is null (a dash) for an indexer that
+ * does not report them.
+ */
 export function activityFigures(v: ActivityStatsView | null | undefined): ActivityFigures {
   if (!v) return { orders: null, traders: null, executors: null, executorIncome: null, executorIncomeUnknown: null, minerFees: null, minerFeesUnknown: null, locked: null };
   return {
@@ -155,7 +189,7 @@ export function activityFigures(v: ActivityStatsView | null | undefined): Activi
     traders: v.traders,
     executors: v.executors,
     executorIncome: v.executor_income === null ? null : signed(v.executor_income),
-    // not counted: unknown, and the own trades (an indexer before them reports none)
+    // Not counted: unknown, and the own trades (an indexer without them reports none).
     executorIncomeUnknown:
       v.executor_income === null || v.executor_income_unknown_txs === null ? null : v.executor_income_unknown_txs + (v.executor_income_own_trade_txs ?? 0),
     minerFees: v.miner_fees === null ? null : big(v.miner_fees),
@@ -172,7 +206,10 @@ export interface BooksNow {
   pairs: number;
 }
 
-/** The books now: the token list's listed open orders and the pairs' live pair orders (`pairs`: the pairs with orders, the two orientations of one counted once). */
+/**
+ * The books now: the token list's listed open orders and the pairs' live pair orders. `pairs` are
+ * the pairs with orders, and the two orientations of one pair count once.
+ */
 export function booksNow(tokens: readonly IndexerTokenView[], pairs: readonly PairSummaryView[]): BooksNow {
   let bids = 0;
   let asks = 0;
@@ -185,12 +222,13 @@ export function booksNow(tokens: readonly IndexerTokenView[], pairs: readonly Pa
     if (a + b > 0) withOrders++;
   }
   const pairOrders = pairs.reduce((s, p) => s + p.direct_asks + p.direct_bids + p.entry_asks + p.entry_bids + p.conditionals, 0);
-  // a pair is one market whichever way its orders are placed: QUOTE/BASE and BASE/QUOTE (each its own entry of `/v1/pairs`) count once
+  // A pair is one market whichever way its orders are placed. QUOTE/BASE and BASE/QUOTE, each its
+  // own entry of `/v1/pairs`, count once.
   const markets = new Set(pairs.map((p) => unorderedPairKey(p.base, p.quote)));
   return { bids, asks, pairOrders, tokensWithOrders: withOrders, pairs: markets.size };
 }
 
-/** Change against the window before, in whole percent (null: nothing to compare with). */
+/** Change against the window before, in whole percent. Null means nothing to compare with. */
 export function changePct(now: bigint | number, prev: bigint | number | null): number | null {
   if (prev === null) return null;
   const p = BigInt(prev);
@@ -199,7 +237,10 @@ export function changePct(now: bigint | number, prev: bigint | number | null): n
   return Number(((n - p) * 1000n) / p) / 10;
 }
 
-/** Whole KAS of a sompi amount, compact: 9,840 · 412K · 9.81M (the suffixes are the kit's: K, M, B) (no rounding up past what was traded). */
+/**
+ * Whole KAS of a sompi amount, compact: 9,840 · 412K · 9.81M. The suffixes are the kit's K, M and
+ * B. It never rounds up past what was traded.
+ */
 export function compactKas(sompi: bigint): string {
   if (sompi < 0n) return negated(compactKas(-sompi));
   const kas = Number(sompi / 1_000_000n) / 100;
@@ -209,7 +250,10 @@ export function compactKas(sompi: bigint): string {
   return Math.floor(kas).toLocaleString('en-US');
 }
 
-/** KAS of a sompi amount where it is small, to the cent (0.37 · 12.5 · 840); from 1,000 KAS up as [`compactKas`]. Never rounded up. */
+/**
+ * KAS of a sompi amount where it is small, to the cent (0.37 · 12.5 · 840). From 1,000 KAS up it
+ * is [`compactKas`]. It never rounds up.
+ */
 export function fineKas(sompi: bigint): string {
   if (sompi < 0n) return negated(fineKas(-sompi));
   if (sompi >= 1_000n * 100_000_000n) return compactKas(sompi);
@@ -219,7 +263,10 @@ export function fineKas(sompi: bigint): string {
   return `${whole.toLocaleString('en-US')}${frac ? `.${frac}` : ''}`;
 }
 
-/** The chart's top: the highest bar rounded up to 1, 2 or 5 times a power of ten (0 for an empty window). */
+/**
+ * The chart's top: the highest bar rounded up to 1, 2 or 5 times a power of ten. It is 0 for an
+ * empty window.
+ */
 export function axisTop(bars: readonly Bar[]): bigint {
   let peak = 0n;
   for (const b of bars) if (b.quote > peak) peak = b.quote;
@@ -230,7 +277,7 @@ export function axisTop(bars: readonly Bar[]): bigint {
   return 10n * step;
 }
 
-/** A bar's height in percent of `top`, one decimal (0 when the window is empty). */
+/** A bar's height in percent of `top`, with one decimal. It is 0 when the window is empty. */
 export function barPct(quote: bigint, top: bigint): string {
   if (top === 0n) return '0%';
   return `${(Number((quote * 1000n) / top) / 10).toFixed(1)}%`;
@@ -245,7 +292,7 @@ function trim(v: number): string {
   return (Math.floor(v * 100) / 100).toFixed(2).replace(/\.?0+$/, '');
 }
 
-/** A signed sompi decimal string (an income can be negative); anything else is 0. */
+/** A signed sompi decimal string, as an income can be negative. Anything else is 0. */
 function signed(s: string): bigint {
   return /^-?\d+$/.test(s) ? BigInt(s) : 0n;
 }

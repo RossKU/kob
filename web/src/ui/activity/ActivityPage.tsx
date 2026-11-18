@@ -1,5 +1,6 @@
-// `#/activity`: the activity log of every market, full width (kaspa.stream's transaction list, for KOB). The page has no market filter: an old link with
-// `?market=...` shows every market too. The log on a token or pair page shows that market.
+// `#/activity`: the activity log of every market, full width, like a block explorer's transaction
+// list. The page has no market filter, and a link with `?market=...` shows every market too. The
+// log on a token or pair page shows that market.
 import { FiatNote } from '../../app/use-fiat';
 import type { PairFillsView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
@@ -7,7 +8,7 @@ import { marketKeyOf, type MarketFilter, type MarketRef } from './activity-model
 import { ActivityLog } from './ActivityLog';
 import { ActivitySummary } from './ActivitySummary';
 
-/** The rows of a page of the log on a token or pair page until the viewer picks another size (the page has more below it). */
+/** The rows of a page of the log on a token or pair page until the viewer picks another size. */
 const MARKET_PAGE_ROWS = 20;
 
 const EVERY_MARKET: MarketFilter = { kind: 'all' };
@@ -23,7 +24,10 @@ export function ActivityPage() {
   );
 }
 
-/** The log on a token or pair page: the same component, showing that market; "All activity →" opens the Activity page. Another market starts at its first page. */
+/**
+ * The log on a token or pair page. It is the same component, showing that market, and
+ * "All activity →" opens the Activity page. Another market starts at its first page.
+ */
 export function MarketActivity(props: { market: MarketRef; pairFills?: { base: Hex; quote: Hex; view: PairFillsView | null | undefined } | null }) {
   return (
     <div class="mkt-area-activity">

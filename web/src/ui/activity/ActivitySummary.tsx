@@ -1,8 +1,16 @@
-// The summary at the top of the Activity page: all time, a time window (1D / 7D / 1M / 1Y) with its volume chart, and the books now (summary-model.ts).
-// Read from the indexer every minute: the token list, the pairs and the KAS candles of each token (daily for all time and the long windows, hourly for
-// 1D and 7D, only for tokens that traded in the last two weeks) and the store's activity totals (all time, and the chosen window: orders, traders, what the
-// executors earned, what they paid the miners, the KAS locked). Figures an indexer does not report (an older one has no `/v1/stats`; executors are recorded by none) show "—". Nothing
-// shows without an indexer or in standalone mode (the node alone has no history).
+// The summary at the top of the Activity page: all time, a time window (1D / 7D / 1M / 1Y) with its
+// volume chart, and the books now (summary-model.ts).
+//
+// It reads from the indexer every minute.
+// - The token list, the pairs and the KAS candles of each token. Candles are daily for all time
+//   and the long windows, and hourly for 1D and 7D, only for tokens that traded in the last two
+//   weeks.
+// - The store's activity totals, for all time and the chosen window: orders, traders, what the
+//   executors earned, what they paid the miners and the KAS locked.
+//
+// A figure an indexer does not report shows "—". An older indexer has no `/v1/stats`, and none
+// records executors. Nothing shows without an indexer or in standalone mode, because the node alone
+// has no history.
 import { useEffect, useMemo, useState } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { kasTitleOf, sompiToUsdCompact, type Fiat } from '../../app/fiat';
@@ -33,7 +41,7 @@ import {
 
 const REFRESH_MS = 60_000;
 const PARALLEL = 4;
-/** The log's first rows go first: the summary's reads start a little later and use a few connections at a time. */
+/** The log's first rows go first. The summary's reads start a little later. */
 const START_DELAY_MS = 400;
 const RECENT_MS = 15 * 24 * 3_600_000;
 const DASH = '—';
@@ -44,7 +52,7 @@ interface Loaded {
   pairs: Awaited<ReturnType<IndexerApi['pairs']>>;
   daily: CandleView[][];
   hourly: CandleView[][];
-  /** the all-time totals (null: this indexer has no `/v1/stats`) */
+  /** The all-time totals. Null means this indexer has no `/v1/stats`. */
   activity: ActivityStatsView | null;
 }
 
@@ -79,18 +87,22 @@ async function load(ix: IndexerApi, signal: AbortSignal): Promise<Loaded> {
 }
 
 const UNKNOWN = t('activity.summary.unknown');
-/** A line's place while its text loads (a plain space collapses and the line takes no height). */
+/** A line's place while its text loads. A plain space collapses and the line takes no height. */
 const NBSP = '\u00a0';
 
-/** The totals of a window: asked once the page has loaded, again for each window chosen, and kept with the window they belong to. */
+/**
+ * The totals of a window. They are asked once the page has loaded and again for each window
+ * chosen, and kept with the window they belong to.
+ */
 interface WindowActivity {
   win: SummaryWindow;
   activity: ActivityStatsView | null;
 }
 
 /**
- * A KAS value of the summary as it is shown: KAS (compact for a volume, or to the cent when small), or dollars; the tooltip has the exact KAS figure (and the rate in dollars), so a
- * compact figure never hides its digits.
+ * A KAS value of the summary as it is shown. It is KAS, compact for a volume or to the cent when
+ * small, or dollars. The tooltip has the exact KAS figure and the rate in dollars, so a compact
+ * figure never hides its digits.
  */
 function money(sompi: bigint, fiat: Fiat | null, fine = false): { text: string; title?: string } {
   if (!fiat) return { text: fine ? fineKas(sompi) : compactKas(sompi), title: `${formatKas(sompi, { group: ',' })} KAS` };
@@ -99,7 +111,8 @@ function money(sompi: bigint, fiat: Fiat | null, fine = false): { text: string; 
 
 function Stat(props: { label: string; value: string | null; sub?: string | null; kas?: boolean; usd?: boolean; tip?: string | undefined; help?: string | undefined; testid: string }) {
   const known = props.value !== null;
-  // a figure with a help text: the exact value, then what the figure is (the label carries the help text alone)
+  // A figure with a help text shows the exact value, then what the figure is. The label carries
+  // the help text alone.
   const title = known ? (props.help && props.tip ? `${props.tip}\n${props.help}` : (props.tip ?? props.help)) : UNKNOWN;
   return (
     <div class="sum-stat" data-testid={props.testid}>
@@ -123,7 +136,10 @@ function changeText(pct: number | null): { text: string; tone: string } {
   return { text: t('activity.summary.vsPrev', { pct: s }), tone: pct > 0 ? 'sum-up' : 'sum-down' };
 }
 
-/** The dated form of the kit's row time (`YYYY-MM-DD HH:MM`, 24-hour): a clock one day later makes `formatRowTime` print the date, whatever day it is now. */
+/**
+ * The dated form of the kit's row time (`YYYY-MM-DD HH:MM`, 24-hour). A clock one day later makes
+ * `formatRowTime` print the date, whatever day it is now.
+ */
 const DAY_MS = 86_400_000;
 const stamp = (ms: number): string => formatRowTime(ms, ms + DAY_MS);
 const dateFmt = (ms: number): string => stamp(ms).slice(0, 10);
@@ -133,14 +149,14 @@ function barWhen(ms: number, w: SummaryWindow): string {
   return w === '1Y' ? t('activity.summary.weekOf', { day }) : day;
 }
 
-/** "1 trade", "2,481 trades": one / other keys chosen here (no "(s)"). */
+/** "1 trade", "2,481 trades". The one and other keys are chosen here, with no "(s)". */
 const tradesText = (n: number): string => t(n === 1 ? 'activity.summary.tradesN.one' : 'activity.summary.tradesN.other', { n: n.toLocaleString('en-US') });
 const countText = (key: 'tokens' | 'pairs', n: number): string => t(`activity.summary.${key}.${n === 1 ? 'one' : 'other'}`, { n: n.toLocaleString('en-US') });
 
 export function ActivitySummary() {
   const { indexer, standalone } = useServices();
   const sa = useStandalone(standalone);
-  // the USD display (Settings): every KAS figure of the summary in dollars; null = KAS
+  // The USD display (Settings) shows every KAS figure of the summary in dollars. Null means KAS.
   const fiat = useFiat();
   const off = !indexer || !!sa?.active;
   const data = useAsync((signal) => (off ? Promise.resolve(null) : load(indexer!, signal)), [indexer, off]);
@@ -170,13 +186,14 @@ export function ActivitySummary() {
     const series = def.interval === '1h' ? d.hourly : d.daily;
     return { all: summarizeAllTime(d.daily), w: summarizeWindow(win, series, d.now), books: booksNow(d.tokens, d.pairs ?? []), allAct: activityFigures(d.activity) };
   }, [d, win]);
-  // the window's totals belong to the window they were asked for: another window's are never shown under this one
+  // The window's totals belong to the window they were asked for. Another window's are never shown
+  // under this one.
   const wd = winData.data && winData.data.win === win ? winData.data : null;
   const winAct = wd ? activityFigures(wd.activity) : null;
   const num = (n: number | null | undefined): string | null => (n === null || n === undefined ? null : n.toLocaleString('en-US'));
   const kas = (v: bigint | null | undefined): string | null => (v === null || v === undefined ? null : money(v, fiat, true).text);
   const kasTip = (v: bigint | null | undefined): string | undefined => (v === null || v === undefined ? undefined : money(v, fiat, true).title);
-  // what a tile of the executors' side is, and how many transactions it left out
+  // What a tile of the executors' side is, and how many transactions it left out.
   const notCounted = (n: number | null | undefined): string => (n ? ` ${t(n === 1 ? 'activity.summary.notCounted.one' : 'activity.summary.notCounted.other', { n: n.toLocaleString('en-US') })}` : '');
   const incomeHelp = (a: { executorIncomeUnknown: number | null }): string => t('activity.summary.paidHelp') + notCounted(a.executorIncomeUnknown);
   const minersHelp = (a: { minerFeesUnknown: number | null }): string => t('activity.summary.minersHelp') + notCounted(a.minerFeesUnknown);

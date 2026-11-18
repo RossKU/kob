@@ -1,13 +1,21 @@
-// The activity log's view model (pure): indexer records -> one row per transaction, the filters and their stored form, the hold that keeps rows
-// still while the viewer points at the list, and the confirmation clock. Rendering is ActivityLog.tsx, fetching use-activity.ts.
+// The activity log's view model, pure. It turns indexer records into one row per transaction. It
+// also holds the filters and their stored form, the hold that keeps rows still while the viewer
+// points at the list, and the confirmation clock. Rendering is in ActivityLog.tsx and fetching in
+// use-activity.ts.
 //
-// PHASE 1 (no indexer change): a row is a FILL (`/v1/fills`, the WebSocket `fills` channels; a pair's fills from `/v1/pairs/{a}/{b}/fills`) or a
-// PLACEMENT (`/v1/orders`, newest first by genesis, polled). Cancels, amends, refunds, kills, expiries and stop arms are recorded per order only
-// (`/v1/orders/{id}/events`): they need the global event list of phase 2 (`GET /v1/events`, an `events` WebSocket channel) and are not offered in
-// Columns until then (`AVAILABLE_KINDS`). Their icons and filter slots exist already so the stored filters keep their meaning.
+// A row is a FILL or a PLACEMENT.
+// - A fill comes from `/v1/fills`, from the WebSocket `fills` channels, or for a pair from
+//   `/v1/pairs/{a}/{b}/fills`.
+// - A placement comes from `/v1/orders`, newest first by genesis, and is polled.
 //
-// Who: a fill names the order that was filled (its maker is looked up once per order, `/v1/orders/{id}`); the executor that sent the transaction is
-// not recorded by the indexer, so the log shows ROLES (maker-signed orders vs executions), never an executor's identity.
+// Cancels, amends, refunds, kills, expiries and stop arms are recorded per order only
+// (`/v1/orders/{id}/events`). The log needs a global event list for them, so the Columns menu does
+// not offer them (`AVAILABLE_KINDS`). Their icons and filter slots exist so the stored filters
+// keep their meaning.
+//
+// A fill names the order that was filled, and its maker is looked up once per order
+// (`/v1/orders/{id}`). The indexer does not record which executor sent the transaction. The log
+// therefore shows ROLES (maker-signed orders and executions), never an executor's identity.
 import { explorerTxUrl, type AppConfig } from '../../config';
 import type { EventView, OrderView, PairFillsView, PairFillView } from '../../data/indexer-types';
 import type { Hex } from '../../kob/types';
@@ -15,34 +23,40 @@ import { pow10 } from '../../kob/units';
 import { columnPriceDp, fitAmountColumn, unitsFraction } from '../kit/format';
 import { pageWindow, type ListPageSize, type PageWindow } from '../market/market-list';
 
-// ------------------------------------------------------------------------------------------------ kinds
+// ---- kinds
 
-/** What a row is about. `placed` includes amends (maker-signed), `refund` includes kills and expiry returns, `stop` arms / triggers / trails. */
+/**
+ * What a row is about. `placed` includes amends (maker-signed). `refund` includes kills and expiry
+ * returns. `stop` covers arms, triggers and trails.
+ */
 export type ActivityKind = 'placed' | 'fill' | 'cancel' | 'refund' | 'stop';
 export const ALL_KINDS: readonly ActivityKind[] = ['placed', 'fill', 'cancel', 'refund', 'stop'];
-/** Phase 1: the kinds the current API lists across orders (see the head of this file). The others wait for the phase-2 event list. */
+/** The kinds the current API lists across orders. The others wait for a global event list. */
 export const AVAILABLE_KINDS: readonly ActivityKind[] = ['placed', 'fill'];
 /** Signed by the order's owner. */
 export const ORDER_KINDS: readonly ActivityKind[] = ['placed', 'cancel'];
-/** Sent by an executor (or anyone): fills, refunds / kills / expiries, stop triggers. */
+/** Sent by an executor or by anyone: fills, refunds, kills, expiries and stop triggers. */
 export const EXECUTION_KINDS: readonly ActivityKind[] = ['fill', 'refund', 'stop'];
 /** A transaction with several kinds shows the strongest. */
 const STRENGTH: Record<ActivityKind, number> = { fill: 5, cancel: 4, refund: 3, stop: 2, placed: 1 };
 
-/** DAA scores after which a row counts as settled (the indexer's `settled`: 100 DAA, about 10 s). */
+/** DAA scores after which a row counts as settled (the indexer's `settled`: 100, about 10 s). */
 export const SETTLE_DAA = 100;
 /** Rows kept in memory; older ones are dropped. */
 export const ROW_CAP = 500;
 /** The rows of a page on the Activity page until the viewer picks another size. */
 export const PAGE_ROWS: ListPageSize = 50;
-/** The log reaches this many rows back, whatever the page size: new rows push the oldest off. */
+/** How many rows the log reaches back, whatever the page size. New rows push the oldest off. */
 export const ACTIVITY_DEPTH = 100;
 /** Milliseconds per DAA score (10 blocks per second on mainnet and testnet-10). */
 export const MS_PER_DAA = 100;
 
-// ------------------------------------------------------------------------------------------------ markets
+// ---- markets
 
-/** A KAS book (`token`) or a token/token pair (`pair`, in the orientation its order was placed in). */
+/**
+ * A KAS book (`token`) or a token/token pair (`pair`). A pair is in the orientation its order was
+ * placed in.
+ */
 export type MarketRef = { kind: 'token'; token: Hex } | { kind: 'pair'; base: Hex; quote: Hex };
 
 /** The log's market filter: every market, one token's KAS book, or one pair (both orientations). */
@@ -50,7 +64,10 @@ export type MarketFilter = { kind: 'all' } | MarketRef;
 
 export const marketKeyOf = (m: MarketFilter): string => (m.kind === 'all' ? 'all' : m.kind === 'token' ? m.token : `${m.base}/${m.quote}`);
 
-/** Whether a row's market is the filter's (a pair matches in both orientations; a pair row never matches a token's KAS book). */
+/**
+ * Whether a row's market is the filter's. A pair matches in both orientations. A pair row never
+ * matches a token's KAS book.
+ */
 export function inMarket(row: Pick<ActivityRow, 'market'>, f: MarketFilter): boolean {
   if (f.kind === 'all') return true;
   const m = row.market;
@@ -58,61 +75,70 @@ export function inMarket(row: Pick<ActivityRow, 'market'>, f: MarketFilter): boo
   return m.kind === 'pair' && ((m.base === f.base && m.quote === f.quote) || (m.base === f.quote && m.quote === f.base));
 }
 
-// ------------------------------------------------------------------------------------------------ rows
+// ---- rows
 
 export interface ActivityRow {
-  /** the transaction id: one row per transaction */
+  /** The transaction id. There is one row per transaction. */
   key: string;
   txid: Hex;
-  /** the strongest kind of the transaction (its icon) */
+  /** The strongest kind of the transaction. It sets the icon. */
   kind: ActivityKind;
-  /** every kind the transaction has (the tooltip) */
+  /** Every kind the transaction has, shown in the tooltip. */
   kinds: ActivityKind[];
-  /** the colour: a fill's TAKER side (`buy` = an ask was taken); a placement's order side */
+  /** The colour: a fill's TAKER side (`buy` means an ask was taken), else a placement's side. */
   side: 'buy' | 'sell' | null;
   market: MarketRef;
-  /** further markets the transaction touched (not the KAS legs of a pair route) */
+  /** Further markets the transaction touched, not counting the KAS legs of a pair route. */
   moreMarkets: number;
-  /** the orders the row is about (covenant ids), resting side first */
+  /** The orders the row is about (covenant ids), resting side first. */
   orders: Hex[];
-  /** placements in this transaction (a ladder places several) */
+  /** Placements in this transaction. A ladder places several. */
   placed: number;
-  /** the main amount: base units of `token` (a pair: of A) */
+  /** The main amount, in base units of `token` (for a pair, of A). */
   amount: { token: Hex; units: bigint } | null;
-  /** the second line: the KAS value (sompi), or a pair's B amount */
+  /** The second line: the KAS value in sompi, or a pair's B amount. */
   value: { kind: 'kas'; sompi: bigint } | { kind: 'token'; token: Hex; units: bigint } | null;
-  /** KAS per whole token as a state price (sompi per `scale` base units); a ladder: its range; null for a pair (a pair fill never makes a price) */
+  /**
+   * KAS per whole token as a state price, in sompi per `scale` base units. A ladder shows its
+   * range. It is null for a pair, because a pair fill never makes a price.
+   */
   price: { low: bigint; high: bigint; scale: bigint } | null;
-  /** a pair placement: the pair order's side (`ask` sells A) */
+  /** A pair placement's order side (`ask` sells A). */
   pairSide: 'ask' | 'bid' | null;
-  /** a pair fill: how it was filled (route / netting / inventory) */
+  /** A pair fill's route: route, netting or inventory. */
   counterparty: string | null;
   daa: number;
-  /** block time, ms; null when unknown (a placement without a time reference) */
+  /** Block time in ms, or null when unknown (a placement without a time reference). */
   timeMs: number | null;
-  /** `timeMs` is estimated from the DAA score (a placement: the indexer reports its DAA score, not its block time) */
+  /**
+   * Whether `timeMs` is estimated from the DAA score. A placement is, because the indexer reports
+   * its DAA score and not its block time.
+   */
   timeEstimated: boolean;
-  /** confirmations when the indexer reported the row (the live count is `confirmationsAt`) */
+  /** Confirmations when the indexer reported the row. The live count is `confirmationsAt`. */
   confirmations: number | null;
   settled: boolean;
-  /** newest first: DAA score, then this (an event id or a placement's block sequence) */
+  /** Sort key after `daa`, newest first: an event id or a placement's block sequence. */
   seq: number;
 }
 
-/** What the rows need to know about the orders they name (from `/v1/orders/{id}` lookups and the placements already listed). */
+/**
+ * What the rows need to know about the orders they name. It comes from `/v1/orders/{id}` lookups
+ * and the placements already listed.
+ */
 export interface OrderFacts {
   maker: Hex | null;
-  /** the order's `scale` (base units per whole token: its prices' denominator) */
+  /** The order's `scale`: base units per whole token, the denominator of its prices. */
   scale: bigint | null;
   genesisDaa: number | null;
 }
 
 export interface RowContext {
-  /** the market's price scale of a token (its standard scale), null when unknown */
+  /** The market's price scale of a token (its standard scale), null when unknown. */
   tokenScale(token: Hex): bigint | null;
-  /** what is known about an order (undefined: not looked up yet) */
+  /** What is known about an order, or undefined when it has not been looked up yet. */
   order(covenantId: Hex): OrderFacts | null | undefined;
-  /** a time for a DAA score (a placement), or null */
+  /** A time for a DAA score (a placement), or null. */
   timeOfDaa(daa: number): number | null;
 }
 
@@ -130,7 +156,10 @@ function pairDetail(e: EventView): { base: Hex; quote: Hex; side: 'ask' | 'bid';
   };
 }
 
-/** A pair fill of `/v1/pairs/{a}/{b}/fills` as the fill event the feed would list (so both build the same rows). */
+/**
+ * Converts a pair fill of `/v1/pairs/{a}/{b}/fills` to the fill event the feed would list, so
+ * both build the same rows.
+ */
 export function pairFillEvent(f: PairFillView, viewBase: Hex, viewQuote: Hex): EventView {
   const base = (f.base ?? viewBase).toLowerCase();
   const quote = (f.quote ?? viewQuote).toLowerCase();
@@ -141,7 +170,7 @@ export function pairFillEvent(f: PairFillView, viewBase: Hex, viewQuote: Hex): E
   };
 }
 
-/** Fill events -> one row per transaction (newest first is up to the caller). */
+/** Turns fill events into one row per transaction. The caller sorts them, newest first. */
 export function fillRows(events: Iterable<EventView>, ctx: RowContext): ActivityRow[] {
   const byTx = new Map<string, EventView[]>();
   for (const e of events) {
@@ -171,7 +200,7 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
   };
   const pairs = evs.map((e) => ({ e, p: pairDetail(e) })).filter((x): x is { e: EventView; p: NonNullable<ReturnType<typeof pairDetail>> } => x.p !== null);
   if (pairs.length) {
-    // a pair fill (with the KAS legs of a route, if any): the row is the pair's
+    // A pair fill, with the KAS legs of a route if any. The row is the pair's.
     const first = pairs[0]!.p;
     const same = pairs.filter((x) => x.p.base === first.base && x.p.quote === first.quote && x.p.side === first.side);
     const otherPairs = new Set(pairs.filter((x) => x.p.base !== first.base || x.p.quote !== first.quote).map((x) => `${x.p.base}/${x.p.quote}`));
@@ -184,7 +213,7 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
       price: null, pairSide: null, counterparty: first.counterparty,
     };
   }
-  // KAS-book fills: the token with the most fills is the row's market
+  // KAS-book fills. The token with the most fills is the row's market.
   const byToken = new Map<Hex, EventView[]>();
   for (const e of evs) {
     if (!hex(e.token)) continue;
@@ -195,7 +224,8 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
   const [token, fills] = [...byToken.entries()].sort((a, b) => b[1].length - a[1].length)[0]!;
   const asks = fills.filter((e) => e.side === 1);
   const bids = fills.filter((e) => e.side === 2);
-  // the RESTING side sets the price and the amount (as /v1/trades): one side only, or the side of the older order (asks on a tie or when unknown)
+  // The RESTING side sets the price and the amount, as in /v1/trades. That is one side only, or the
+  // side of the older order, with asks winning a tie or an unknown age.
   let resting = asks.length ? asks : bids;
   if (asks.length && bids.length) {
     const oldest = (xs: EventView[]) => Math.min(...xs.map((e) => ctx.order(e.covenant_id)?.genesisDaa ?? Number.POSITIVE_INFINITY));
@@ -218,7 +248,7 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
     }
     if (sompi !== null) sompi += (n * p) / sc;
     if (rowScale === null) rowScale = sc;
-    // every price on the row's scale
+    // Every price on the row's scale.
     const q = rowScale === sc ? p : (p * rowScale) / sc;
     low = low === null || q < low ? q : low;
     high = high === null || q > high ? q : high;
@@ -232,10 +262,12 @@ function fillRowOf(txid: Hex, evs: EventView[], ctx: RowContext): ActivityRow | 
 }
 
 /**
- * What an order placed: `initial_amount`, else (an index that has none, or 0, as for every bid: its quantity is its escrow) what was filled plus what
- * is left. An ended bid has nothing left to read: only one that ended by a fill (`filled`: less than one minimum fill of buying power left) placed
- * about what it filled; for any other end (closed partly filled, cancelled, refunded) the placed amount is unknown, never the filled one, which
- * would read as 100 % filled.
+ * What an order placed. That is `initial_amount`, or else what was filled plus what is left, for
+ * an index that has none or 0. Every bid has 0, because its quantity is its escrow.
+ * An ended bid has nothing left to read. Only a bid that ended by a fill (less than one minimum
+ * fill of buying power left) placed about what it filled. For any other end (closed partly
+ * filled, cancelled, refunded) the placed amount is unknown. It is never the filled amount,
+ * which would read as 100 % filled.
  */
 export function placedAmount(o: OrderView): bigint | null {
   const init = big(o.initial_amount);
@@ -246,13 +278,19 @@ export function placedAmount(o: OrderView): bigint | null {
   return filled + left > 0n ? filled + left : init;
 }
 
-/** The market an order trades in: its pair (in the order's orientation) or its token's KAS book; null without either. */
+/**
+ * The market an order trades in: its pair in the order's orientation, or its token's KAS book.
+ * It is null for neither.
+ */
 export function orderMarket(o: Pick<OrderView, 'pair' | 'token'>): MarketRef | null {
   if (o.pair && hex(o.pair.base) && hex(o.pair.quote)) return { kind: 'pair', base: o.pair.base.toLowerCase(), quote: o.pair.quote.toLowerCase() };
   return hex(o.token) ? { kind: 'token', token: o.token.toLowerCase() } : null;
 }
 
-/** Placements (`/v1/orders` views) -> one row per placement transaction (a ladder places several orders in one). */
+/**
+ * Turns placements (`/v1/orders` views) into one row per placement transaction. A ladder places
+ * several orders in one.
+ */
 export function placedRows(orders: Iterable<OrderView>, ctx: RowContext): ActivityRow[] {
   const byTx = new Map<string, OrderView[]>();
   for (const o of orders) {
@@ -280,7 +318,8 @@ export function placedRows(orders: Iterable<OrderView>, ctx: RowContext): Activi
     const amountToken = market.kind === 'pair' ? market.base : market.token;
     let units: bigint | null = 0n;
     let sompi: bigint | null = market.kind === 'token' ? 0n : null;
-    // a pair placement's second line: the quote it asks or offers (base units of B = units x price_num / price_den, B per base unit of A)
+    // A pair placement's second line is the quote it asks or offers. In base units of B it is
+    // units x price_num / price_den, with the price in B per base unit of A.
     let quoteUnits: bigint | null = market.kind === 'pair' ? 0n : null;
     let low: bigint | null = null;
     let high: bigint | null = null;
@@ -325,7 +364,10 @@ const uniq = (xs: readonly (string | null | undefined)[]): Hex[] => {
   return out;
 };
 
-/** Rows of every source, one per transaction (a transaction in several lists keeps the strongest kind and lists them all), newest first, capped. */
+/**
+ * Merges the rows of every source into one row per transaction, newest first, capped. A
+ * transaction in several lists keeps the strongest kind and lists them all.
+ */
 export function mergeRows(lists: readonly (readonly ActivityRow[])[], cap = ROW_CAP): ActivityRow[] {
   const byKey = new Map<string, ActivityRow>();
   for (const list of lists) {
@@ -345,10 +387,13 @@ export function mergeRows(lists: readonly (readonly ActivityRow[])[], cap = ROW_
 
 export const newestFirst = (a: Pick<ActivityRow, 'daa' | 'seq' | 'key'>, b: Pick<ActivityRow, 'daa' | 'seq' | 'key'>): number => b.daa - a.daa || b.seq - a.seq || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
-/** The row's link: its transaction on the network's explorer (config.explorerTxUrl: kaspa.stream, tn10.kaspa.stream on testnet-10, or the configured one). */
+/**
+ * The row's link: its transaction on the network's explorer (`config.explorerTxUrl`, or the
+ * configured one).
+ */
 export const rowHref = (c: Pick<AppConfig, 'network' | 'explorerUrl'>, r: Pick<ActivityRow, 'txid'>): string | null => explorerTxUrl(c, r.txid);
 
-/** The makers a row names, in its order list's order, once looked up (unknown ones are left out). */
+/** The makers a row names, in its order list's order, once looked up. Unknown ones are left out. */
 export function rowMakers(row: Pick<ActivityRow, 'orders'>, ctx: Pick<RowContext, 'order'>): Hex[] {
   const out: Hex[] = [];
   for (const id of row.orders) {
@@ -358,19 +403,21 @@ export function rowMakers(row: Pick<ActivityRow, 'orders'>, ctx: Pick<RowContext
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ time and confirmations
+// ---- time and confirmations
 
 /**
- * A clock that turns DAA scores into times: one reference point (a fill's block time and DAA score, or the node's DAA score when it was reported) and
- * MS_PER_DAA between them. Null without a reference.
+ * A clock that turns DAA scores into times. It uses one reference point, a fill's block time and
+ * DAA score or the node's DAA score when reported, and MS_PER_DAA between them. It is null without
+ * a reference.
  */
 export function daaClock(ref: { daa: number; ms: number } | null): (daa: number) => number | null {
   return (daa) => (ref ? ref.ms + (daa - ref.daa) * MS_PER_DAA : null);
 }
 
 /**
- * The chain's DAA score now, from the last report (`daa` reported at `atMs`): it advances MS_PER_DAA per DAA score, for at most a minute past the
- * report (a stalled report must not make every row settle).
+ * The chain's DAA score now, from the last report (`daa` reported at `atMs`). It advances
+ * MS_PER_DAA per DAA score, for at most a minute past the report, so a stalled report cannot make
+ * every row settle.
  */
 export function daaNow(report: { daa: number; atMs: number } | null, nowMs: number): number | null {
   if (!report) return null;
@@ -378,30 +425,42 @@ export function daaNow(report: { daa: number; atMs: number } | null, nowMs: numb
   return report.daa + ahead;
 }
 
-/** A row's confirmations now: from the chain's DAA score when known, else what the indexer reported. */
+/**
+ * A row's confirmations now. They come from the chain's DAA score when known, else from what the
+ * indexer reported.
+ */
 export function confirmationsAt(row: Pick<ActivityRow, 'daa' | 'confirmations' | 'settled'>, chainDaa: number | null): { n: number | null; settled: boolean } {
   const n = chainDaa !== null ? Math.max(0, chainDaa - row.daa, row.confirmations ?? 0) : row.confirmations;
   return { n, settled: row.settled || (n !== null && n >= SETTLE_DAA) };
 }
 
 /**
- * An address for the Wallet column: the network prefix dropped, the rest whole; the cell ends it with an ellipsis where the column is too narrow (founder 2026-11-12: the ids
- * and the wallets are never shortened in the middle), and its title has the address whole. The time column is the kit's `formatRowTime` (one 24-hour format on every table and
- * log: today HH:MM:SS, else YYYY-MM-DD HH:MM).
+ * An address for the Wallet column. The network prefix is dropped and the rest is whole. The cell
+ * ends it with an ellipsis where the column is too narrow, and its title has the whole address.
+ * Ids and wallets are never shortened in the middle. The time column is the kit's `formatRowTime`,
+ * one 24-hour format on every table and log: today HH:MM:SS, else YYYY-MM-DD HH:MM.
  */
 export function walletBody(address: string): string {
   return address.includes(':') ? address.slice(address.indexOf(':') + 1) : address;
 }
 
-// ------------------------------------------------------------------------------------------------ number formats
+// ---- number formats
 
-/** Most fraction digits an amount shows in the log (the Portfolio's table rule); the exact amount is in the cell's title. */
+/**
+ * Most fraction digits an amount shows in the log (the Portfolio's table rule). The exact amount
+ * is in the cell's title.
+ */
 export const AMOUNT_FRACTION_MAX = 4;
 
 /**
- * One amount cell of the log: at most AMOUNT_FRACTION_MAX fraction digits (fewer when the amount needs fewer), plain digits (never a subscript-zero form: a column of amounts is read
- * by eye), and `<0.0001` for an amount too small to show (never a zero for something that is there). `exact` is the whole amount for the title, null when the text is already it.
- * A column too narrow for the whole digits falls back to K / M / B (`fitAmountColumn`), so no digit is ever cut by the cell edge.
+ * One amount cell of the log.
+ * - It shows at most AMOUNT_FRACTION_MAX fraction digits, fewer when the amount needs fewer.
+ * - It uses plain digits, never a subscript-zero form, because a column of amounts is read by eye.
+ * - It shows `<0.0001` for an amount too small to show, never a zero for something that is there.
+ *
+ * `exact` is the whole amount for the title, null when the text is already it. A column too
+ * narrow for the whole digits falls back to K / M / B (`fitAmountColumn`), so the cell edge never
+ * cuts a digit.
  */
 export function amountCell(units: bigint, decimals: number, width = 12): { text: string; exact: string | null } {
   const fraction = Math.min(unitsFraction(units, decimals), AMOUNT_FRACTION_MAX);
@@ -410,19 +469,23 @@ export function amountCell(units: bigint, decimals: number, width = 12): { text:
   return cell;
 }
 
-/** A row's price at the high end of its range as KAS (sompi) per whole token: what the display rule (`displayPriceDp`) reads. Null for a pair row and a row without a price. */
+/**
+ * A row's price at the high end of its range, as KAS (sompi) per whole token. The display rule
+ * (`displayPriceDp`) reads it. It is null for a pair row and for a row without a price.
+ */
 export function priceRefOf(row: Pick<ActivityRow, 'price' | 'market'>, decimalsOf: (token: Hex) => number): bigint | null {
   if (!row.price || row.market.kind !== 'token' || row.price.scale <= 0n) return null;
   return (row.price.high * pow10(decimalsOf(row.market.token))) / row.price.scale;
 }
 
 /**
- * The fraction digits of the Price column: ONE number for the rows on the page (the finest any of their markets needs, 5 significant digits, at most 6), so every decimal point
- * lines up whatever markets the log mixes. A log of one market (a token or pair page) has that market's.
+ * The fraction digits of the Price column. It is ONE number for the rows on the page: the finest
+ * any of their markets needs, with 5 significant digits and at most 6. Every decimal point then
+ * lines up whatever markets the log mixes. A log of one market has that market's number.
  */
 export const logPriceDp = (rows: readonly Pick<ActivityRow, 'price' | 'market'>[], decimalsOf: (token: Hex) => number): number => columnPriceDp(rows.map((r) => priceRefOf(r, decimalsOf)));
 
-// ------------------------------------------------------------------------------------------------ filters
+// ---- filters
 
 /** All / Orders (signed by the order's owner) / Executions (sent by an executor or anyone). */
 export type ActorFilter = 'all' | 'orders' | 'executions';
@@ -440,22 +503,28 @@ export const DEFAULT_PREFS: Readonly<ActivityPrefs> = Object.freeze({
   mine: false,
 });
 
-/** The kinds a row may have to be shown: the toggles, the quick switch, and what the API offers (phase 1). */
+/** The kinds a row may have to be shown: the toggles, the quick switch, and what the API offers. */
 export function shownKinds(p: ActivityPrefs, available: readonly ActivityKind[] = AVAILABLE_KINDS): Set<ActivityKind> {
   const actor = p.actor === 'orders' ? ORDER_KINDS : p.actor === 'executions' ? EXECUTION_KINDS : ALL_KINDS;
   return new Set(available.filter((k) => p.kinds[k] && actor.includes(k)));
 }
 
-/** The rows the filters let through. `mine`: the connected wallet's key (x-only); without a wallet "mine only" has no effect (its toggle is disabled). */
+/**
+ * The rows the filters let through. `mine` is the connected wallet's x-only key. Without a wallet
+ * "mine only" has no effect, and its toggle is disabled.
+ */
 export function filterRows(rows: readonly ActivityRow[], o: { prefs: ActivityPrefs; market: MarketFilter; mine: Hex | null; makersOf: (r: ActivityRow) => Hex[]; available?: readonly ActivityKind[] }): ActivityRow[] {
   const kinds = shownKinds(o.prefs, o.available);
   const me = o.mine?.toLowerCase() ?? null;
   return rows.filter((r) => kinds.has(r.kind) && inMarket(r, o.market) && (!o.prefs.mine || me === null || o.makersOf(r).includes(me)));
 }
 
-// ------------------------------------------------------------------------------------------------ stored filters
+// ---- stored filters
 
-/** localStorage key of the filters: one record for the Activity page, one shared by the logs on the token and pair pages. */
+/**
+ * The localStorage key of the filters. One record is for the Activity page and one is shared by
+ * the logs on the token and pair pages.
+ */
 export const PREFS_KEY = 'kob.activity.v1';
 export type PrefsScope = 'page' | 'market';
 
@@ -468,7 +537,10 @@ const browserStore = (): Store | null => {
   }
 };
 
-/** Validates a stored record: unknown fields are dropped, a missing or malformed one takes its default. */
+/**
+ * Validates a stored record. Unknown fields are dropped, and a missing or malformed one takes its
+ * default.
+ */
 export function parsePrefs(v: unknown): ActivityPrefs {
   const o = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>;
   const k = (o.kinds && typeof o.kinds === 'object' ? o.kinds : {}) as Record<string, unknown>;
@@ -478,7 +550,10 @@ export function parsePrefs(v: unknown): ActivityPrefs {
   return { kinds, actor, mine: typeof o.mine === 'boolean' ? o.mine : DEFAULT_PREFS.mine };
 }
 
-/** The viewer's filters of `scope` (defaults without storage or with a damaged record). Never throws. */
+/**
+ * The viewer's filters of `scope`, or the defaults without storage or with a damaged record. It
+ * never throws.
+ */
 export function readPrefs(scope: PrefsScope, store: Store | null = browserStore()): ActivityPrefs {
   try {
     const raw = store?.getItem(PREFS_KEY);
@@ -489,7 +564,10 @@ export function readPrefs(scope: PrefsScope, store: Store | null = browserStore(
   }
 }
 
-/** Stores the filters of `scope` (the other scope's record is kept). False when the browser keeps nothing (the choice lasts for the visit). */
+/**
+ * Stores the filters of `scope` and keeps the other scope's record. It returns false when the
+ * browser keeps nothing, so the choice lasts for the visit.
+ */
 export function writePrefs(scope: PrefsScope, prefs: ActivityPrefs, store: Store | null = browserStore()): boolean {
   try {
     if (!store) return false;
@@ -499,7 +577,7 @@ export function writePrefs(scope: PrefsScope, prefs: ActivityPrefs, store: Store
       const parsed: unknown = raw ? JSON.parse(raw) : null;
       if (parsed && typeof parsed === 'object') all = parsed as Record<string, unknown>;
     } catch {
-      /* a damaged record is replaced */
+      /* A damaged record is replaced. */
     }
     all[scope] = parsePrefs(prefs);
     store.setItem(PREFS_KEY, JSON.stringify(all));
@@ -509,9 +587,12 @@ export function writePrefs(scope: PrefsScope, prefs: ActivityPrefs, store: Store
   }
 }
 
-// ------------------------------------------------------------------------------------------------ pages
+// ---- pages
 
-/** One page of the log: the rows within reach (`kept`, at most ACTIVITY_DEPTH) and the ones on the page (`shown`, at most `size`). */
+/**
+ * One page of the log: the rows within reach (`kept`, at most ACTIVITY_DEPTH) and those on the
+ * page (`shown`, at most `size`).
+ */
 export function logPage<R>(rows: readonly R[], size: number, page: number): PageWindow & { kept: R[]; shown: R[] } {
   const kept = rows.slice(0, ACTIVITY_DEPTH);
   const w = pageWindow(kept.length, size, page);
@@ -519,19 +600,23 @@ export function logPage<R>(rows: readonly R[], size: number, page: number): Page
 }
 
 /**
- * Whether the log can turn on from `w`: the rows are there, or older ones may be and the depth is not reached. `asked`: the page the viewer asked for. A page asked
- * for and not there yet waits for its rows, so a second press is not offered.
+ * Whether the log can turn on from `w`. It can when the rows are there, or when older ones may be
+ * there and the depth is not reached. `asked` is the page the viewer asked for. A page asked for
+ * and not there yet waits for its rows, so a second press is not offered.
  */
 export function logHasNext(w: PageWindow, size: number, asked: number, hasOlder: boolean): boolean {
   return w.page + 1 < w.pages || (hasOlder && asked === w.page && (w.page + 1) * size < ACTIVITY_DEPTH);
 }
 
-// ------------------------------------------------------------------------------------------------ hold
+// ---- hold
 
 /**
- * What the list shows while it is HELD (paused, or the pointer or the focus is in it): the rows it showed when the hold began stay where they are and
- * keep updating (confirmations); a row that would be inserted among or above them is held back and counted (`+N new`). Rows older than every shown
- * one (a read further back) are appended, which moves nothing. Without a hold (`snapshot` null) every row shows.
+ * What the list shows while it is HELD, meaning paused or with the pointer or focus in it.
+ * - The rows shown when the hold began stay where they are and keep updating (confirmations).
+ * - A row that would be inserted among or above them is held back and counted (`+N new`).
+ * - Rows older than every shown one, from a read further back, are appended. That moves nothing.
+ *
+ * Without a hold (`snapshot` null) every row shows.
  */
 export function heldView<R extends { key: string }>(rows: readonly R[], snapshot: ReadonlySet<string> | null): { rows: R[]; held: number } {
   if (!snapshot) return { rows: [...rows], held: 0 };
@@ -549,14 +634,19 @@ export function heldView<R extends { key: string }>(rows: readonly R[], snapshot
 }
 
 /**
- * The fills of the two orientations of a pair as one view of BASE/QUOTE (`ab`): the fills of QUOTE/BASE orders keep their own pair (`base`, `quote`), so
- * their rows say what those orders did; the 24 h volume adds QUOTE/BASE's with its two amounts swapped; the page goes on below the newer of the two
- * cursors (a fill both lists, a netting, is one row: the rows are per transaction). Newest first.
+ * The fills of the two orientations of a pair as one view of BASE/QUOTE (`ab`).
+ * - The fills of QUOTE/BASE orders keep their own pair (`base`, `quote`), so their rows say what
+ *   those orders did.
+ * - The 24 h volume adds QUOTE/BASE's with its two amounts swapped.
+ * - The page goes on below the newer of the two cursors.
+ *
+ * A fill in both lists, a netting, is one row, because rows are per transaction. The view is
+ * newest first.
  */
 export function mergePairFills(ab: PairFillsView, ba: PairFillsView | null | undefined): PairFillsView {
   if (!ba || ba.base !== ab.quote || ba.quote !== ab.base) return ab;
   const n = (s: string) => (/^\d+$/.test(s) ? BigInt(s) : 0n);
-  // a record is one id: one BASE/QUOTE already lists is not taken again from the other view
+  // A record is one id. One that BASE/QUOTE already lists is not taken again from the other view.
   const seen = new Set(ab.items.map((f) => f.id));
   const turned = ba.items.filter((f) => !seen.has(f.id)).map((f) => ({ ...f, base: ba.base, quote: ba.quote }));
   const cursor = (a: string | null, b: string | null) => (a === null ? b : b === null ? a : /^\d+$/.test(a) && /^\d+$/.test(b) ? (BigInt(a) > BigInt(b) ? a : b) : a);
@@ -573,15 +663,17 @@ export function mergePairFills(ab: PairFillsView, ba: PairFillsView | null | und
 }
 
 /**
- * A row of a pair market as the page shows the pair: a row of the other orientation (the order's pair is QUOTE/BASE) is turned round, so a buy of
- * the page's base is a buy whatever way its order was placed: the side and the pair side swap, and a fill's two amounts swap (the amount is then in the
- * page's base, the second line in its quote; a placement's too, when its price gave its quote amount). Any other row is unchanged.
+ * A row of a pair market as the page shows the pair. A row of the other orientation (the order's
+ * pair is QUOTE/BASE) is turned round, so a buy of the page's base is a buy whatever way its
+ * order was placed. The side and the pair side swap, and a fill's two amounts swap. The amount is
+ * then in the page's base and the second line in its quote. A placement's amounts swap too, when
+ * its price gave its quote amount. Any other row is unchanged.
  */
 export function orientRow(row: ActivityRow, f: MarketFilter): ActivityRow {
   if (f.kind !== 'pair' || row.market.kind !== 'pair' || row.market.base !== f.quote || row.market.quote !== f.base) return row;
   const side = row.side === 'buy' ? 'sell' : row.side === 'sell' ? 'buy' : row.side;
   const pairSide = row.pairSide === 'ask' ? 'bid' : row.pairSide === 'bid' ? 'ask' : row.pairSide;
-  // a fill's two amounts, or a placement's amount and the quote it asks or offers
+  // A fill's two amounts, or a placement's amount and the quote it asks or offers.
   const swap = !!row.amount && row.value?.kind === 'token';
   return {
     ...row,
