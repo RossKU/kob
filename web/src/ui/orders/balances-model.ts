@@ -1,5 +1,11 @@
-// Balances the wallet does not show: free tokens (P2PK-owned, tracked locally / by the indexer; KRON tokens KOB cannot spend apart), tokens in 0x04 custody of live orders,
-// tokens bought and held by mode-1 orders, stray tokens, and KAS locked in orders. Combines the pure helpers of kob/balances.ts with the indexer's stray list. Pure.
+// Balances the wallet does not show. These are:
+// - free tokens, which are P2PK-owned and tracked locally and by the indexer, where KRON tokens KOB
+//   cannot spend are kept apart,
+// - tokens in 0x04 custody of live orders,
+// - tokens bought and held by mode-1 orders,
+// - stray tokens,
+// - KAS locked in orders.
+// It combines the pure helpers of kob/balances.ts with the indexer's stray list. It is pure.
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import { escrowedBalances, kasBalanceSummary, withFreeBalances, type TokenBalance } from '../../kob/balances';
 import type { OrderSnapshot } from '../../kob/cancel';
@@ -7,29 +13,35 @@ import { TOKEN_PROGRAMS } from '../../kob/programs.generated';
 import type { Hex, TokenProgram, TokenUtxo } from '../../kob/types';
 
 export interface CombinedBalances {
-  /** one entry per token that has free, escrowed or stray tokens or KAS locked (sorted by token id) */
+  /**
+   * One entry per token that has free, escrowed or stray tokens or KAS locked, sorted by token id.
+   */
   tokens: TokenBalance[];
   /**
-   * `onTokens`: KAS on the wallet's own free token UTXOs (each fill delivers a token UTXO with its carrier and, for a buy, the price improvement
-   * over the escrowed worst price): the wallet's, but spendable only by moving those UTXOs (Merge, a sale, a transfer); counted in `total`
+   * `onTokens` is the KAS on the wallet's own free token UTXOs. Each fill delivers a token UTXO
+   * with its carrier and, for a buy, the price improvement over the escrowed worst price. It is the
+   * wallet's, but spendable only by moving those UTXOs (Merge, a sale or a transfer). It is counted
+   * in `total`.
    */
   kas: { free: bigint; locked: bigint; onTokens: bigint; total: bigint };
-  /** strays that can never be recovered because their order is closed (`lost`): informational */
+  /** Strays that can never be recovered because their order is closed (`lost`). Informational. */
   lostStrayTokens: bigint;
 }
 
 /**
- * True when a balance's token program is not one this build supports for trading (a prototype or test-only layout, a third-party program whose
- * engineering review is pending): the balance is real (its script verified on the node under that pinned program) but is marked. `null`
- * (unknown program) counts as unsupported.
+ * True when a balance's token program is not one this build supports for trading, such as a
+ * prototype or test-only layout or a third-party program whose engineering review is pending. The
+ * balance is real, because its script verified on the node under that pinned program, but it is
+ * marked. `null`, an unknown program, counts as unsupported.
  */
 export function unreviewedProgram(program: TokenProgram | null | undefined): boolean {
   return TOKEN_PROGRAMS.find((p) => p.name === program)?.review !== 'reviewed';
 }
 
 /**
- * The token program each live order names (`token_template_hash`, a pinned program's), by token: the program of a token held only in orders, which
- * neither the registry nor a free UTXO names (a whole new supply put on sale at its creation would read "unsupported program").
+ * The token program each live order names (`token_template_hash`, a pinned program's), by token. It
+ * covers the program of a token held only in orders, which neither the registry nor a free UTXO
+ * names. A whole new supply put on sale at its creation would otherwise read "unsupported program".
  */
 export function orderTokenPrograms(views: readonly Pick<OrderView, 'token' | 'token_template_hash'>[]): Map<Hex, TokenProgram> {
   const out = new Map<Hex, TokenProgram>();
@@ -42,7 +54,10 @@ export function orderTokenPrograms(views: readonly Pick<OrderView, 'token' | 'to
 
 const big = (v: string | number | bigint | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
 
-/** Per token: sum of the live (unspent) stray UTXOs' token amounts, split into recoverable (the order is live) and lost. */
+/**
+ * Per token: the sum of the live, unspent stray UTXOs' token amounts, split into recoverable, where
+ * the order is live, and lost.
+ */
 export function strayTotals(strays: readonly StrayView[]): Map<Hex, { recoverable: bigint; lost: bigint }> {
   const out = new Map<Hex, { recoverable: bigint; lost: bigint }>();
   for (const s of strays) {
@@ -57,8 +72,9 @@ export function strayTotals(strays: readonly StrayView[]): Map<Hex, { recoverabl
 }
 
 /**
- * `liveOrders`: the wallet's live orders (list views are fine: a missing custody UTXO falls back to the amount the order's state must hold).
- * The strays of the separate stray list REPLACE any stray numbers inside the order views, so nothing is counted twice.
+ * `liveOrders` are the wallet's live orders. List views are fine, because a missing custody UTXO
+ * falls back to the amount the order's state must hold. The strays of the separate stray list
+ * replace any stray numbers inside the order views, so nothing is counted twice.
  */
 export function combineBalances(o: {
   maker: Hex;
@@ -66,12 +82,15 @@ export function combineBalances(o: {
   freeTokens: readonly TokenUtxo[];
   liveOrders: readonly (OrderView | OrderSnapshot)[];
   strays: readonly StrayView[];
-  /** the token program of each token (decides which KRON key-held type is spendable); absent: the family default */
+  /**
+   * The token program of each token. It decides which KRON key-held type is spendable. When absent,
+   * the family default applies.
+   */
   programs?: ReadonlyMap<Hex, TokenProgram>;
-  /** what the wallet's creator locks hold, per token (a token held only so still has its row) */
+  /** What the wallet's creator locks hold, per token. A token held only so still has its row. */
   locked?: readonly { token: Hex; amount: bigint; until: bigint }[];
 }): CombinedBalances {
-  // views: the separate stray list is authoritative; snapshots (resolved from a node) never know strays
+  // The separate stray list is authoritative. Snapshots, resolved from a node, never know strays.
   const noStrays = o.liveOrders.map((v) => ('covenant_id' in v ? { ...v, strays: undefined } : { ...v, strays: [] }));
   const balances = withFreeBalances(escrowedBalances(noStrays), [...o.freeTokens], o.maker, (t) => o.programs?.get(t));
   const totals = strayTotals(o.strays);
@@ -85,7 +104,7 @@ export function combineBalances(o: {
   for (const l of o.locked ?? []) {
     if (l.amount <= 0n) continue;
     const cur = by.get(l.token) ?? { token: l.token, free: 0n, notSpendable: 0n, escrowed: 0n, bought: 0n, boughtOrders: 0, strays: 0n, kasLocked: 0n, kasEscrow: 0n, kasCarriers: 0n, orderCount: 0 };
-    // one lock per token (its declaration names one); the earliest time stands for several
+    // One lock per token, because its declaration names one. The earliest time stands for several.
     const was = cur.locked;
     by.set(l.token, { ...cur, locked: { amount: (was?.amount ?? 0n) + l.amount, until: was && was.until < l.until ? was.until : l.until } });
   }
@@ -96,9 +115,11 @@ export function combineBalances(o: {
 }
 
 /**
- * The fixed fraction digits of the balance columns (the finest amount of each column, so the decimal points line up), over the tokens whose
- * decimals are known (`decimalsOf` returns `undefined` for a token without a registry entry). A token of unknown decimals is shown in base
- * units with no fraction: padding its base units to another token's fraction (`500,000.00000000`) would read as whole tokens.
+ * The fixed fraction digits of the balance columns, which are the finest amount of each column so
+ * the decimal points line up. They are taken over the tokens whose decimals are known (`decimalsOf`
+ * returns `undefined` for a token without a registry entry). A token of unknown decimals is shown
+ * in base units with no fraction, because padding its base units to another token's fraction
+ * (`500,000.00000000`) would read as whole tokens.
  */
 export function balanceColumnFractions(
   tokens: readonly TokenBalance[],

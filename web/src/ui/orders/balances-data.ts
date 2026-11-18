@@ -1,6 +1,8 @@
-// Loads everything the balances panels need for one wallet key: KAS (node), free tokens (tracker: indexer proposal + local candidates, verified
-// on the node), live orders (indexer) for the escrowed part, and the stray list. Every source may fail on its own: the result carries what it could
-// get plus `errors`, so a down indexer degrades the panel instead of blanking it.
+// Loads everything the balances panels need for one wallet key. That is KAS from the node, free
+// tokens from the tracker (indexer proposal and local candidates, verified on the node), live
+// orders from the indexer for the escrowed part, and the stray list. Every source may fail on its
+// own. The result carries what it could get plus `errors`, so a down indexer degrades the panel
+// instead of blanking it.
 import type { Services } from '../../app/services';
 import type { OrderView, StrayView } from '../../data/indexer-types';
 import type { OrderSnapshot } from '../../kob/cancel';
@@ -14,44 +16,55 @@ export type BalanceSource = 'kas' | 'tokens' | 'orders' | 'strays';
 export interface BalanceError { source: BalanceSource; message: string }
 
 export interface FreeBalances {
-  /** null when the node could not be read */
+  /** Null when the node could not be read. */
   kasFree: bigint | null;
   freeTokens: TokenUtxo[];
-  /** the program of each token outside `tokens` (or without a program there) whose UTXOs were read (`anyToken`): the one its scripts verified under */
+  /**
+   * The program of each token outside `tokens`, or without a program there, whose UTXOs were read
+   * (`anyToken`). It is the one its scripts verified under.
+   */
   programs: Map<Hex, TokenProgram>;
-  /** the program of every token read (registry tokens and `programs`) */
+  /** The program of every token read, which covers registry tokens and `programs`. */
   programOf?: Map<Hex, TokenProgram>;
-  /** the wallet's tokens its creator locks hold (`loadLockedHoldings`), read with `anyToken` */
+  /**
+   * The wallet's tokens that its creator locks hold (`loadLockedHoldings`), read with `anyToken`.
+   */
   locked?: LockedHolding[];
   errors: BalanceError[];
 }
 
-/** The tokens a creator lock of the wallet holds (kob/creator-lock.ts), verified on the node: not spendable before `until`. */
+/**
+ * The tokens a creator lock of the wallet holds (kob/creator-lock.ts), verified on the node. They
+ * are not spendable before `until`.
+ */
 export interface LockedHolding {
   token: Hex;
   program: TokenProgram;
-  /** unix ms */
+  /** Unix ms. */
   until: bigint;
   key: Hex;
   authority: Hex;
   utxos: TokenUtxo[];
-  /** base units */
+  /** Base units. */
   amount: bigint;
 }
 
 /**
- * The wallet's locked tokens. The indexer names the tokens whose declaration locks a share for the key (`GET /v1/creator-locks`): their
- * declarations are loaded and verified here, so a lock shows without a visit to the token's page. Then, for every verified declaration known in
- * this browser (memory, and the proofs kept here) whose creator lock is the
- * wallet key's, the UTXOs the lock holds, verified on the node (data/token-tracker.ts `lockedTokenUtxos`: the locked genesis outputs and what
- * the indexer lists for the lock's owner). A token whose lock holds nothing any more (unlocked) is left out.
+ * The wallet's locked tokens. The indexer names the tokens whose declaration locks a share for the
+ * key (`GET /v1/creator-locks`). Their declarations are loaded and verified here, so a lock shows
+ * without a visit to the token's page. Then, for every verified declaration known in this browser,
+ * from memory and the proofs kept here, whose creator lock is the wallet key's, it reads the UTXOs
+ * the lock holds, verified on the node (data/token-tracker.ts `lockedTokenUtxos`). Those are the
+ * locked genesis outputs and what the indexer lists for the lock's owner. A token whose lock holds
+ * nothing any more is left out.
  */
 export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | 'config'> & Partial<Pick<Services, 'indexer'>>, pubkey: Hex): Promise<LockedHolding[]> {
   const network = s.config?.network;
   if (!network || typeof s.tracker.lockedTokenUtxos !== 'function') return [];
   restoreDeclarations(s.kob);
   const me = pubkey.toLowerCase();
-  // the indexer's hint: each named declaration is verified before it counts (a wrong or missing hint only hides a lock, it never makes one)
+  // The indexer's hint. Each named declaration is verified before it counts, so a wrong or missing
+  // hint only hides a lock and never makes one.
   const named = s.indexer?.creatorLocks ? await s.indexer.creatorLocks(me).catch(() => null) : null;
   for (const n of named ?? []) await loadDeclaration(s.kob, s.indexer ?? null, network, n.covenant_id).catch(() => null);
   const mine = knownDeclarations(network).filter((d) => d.lock && d.lock.key === me && d.genesisTxid);
@@ -68,9 +81,11 @@ export async function loadLockedHoldings(s: Pick<Services, 'kob' | 'tracker' | '
 }
 
 /**
- * Spendable KAS (node) and free token UTXOs (tracker, verified on the node) of a key. The registry `tokens` with a known program are read; with
- * `anyToken` every other token the key holds as well (the indexer's holdings of the key and the local candidates, verified the same way: tokens
- * from other trading apps, launchpads, bridges), and KRON UTXOs KOB cannot spend (`id_type` 0), which only a balance shows.
+ * Spendable KAS (node) and free token UTXOs (tracker, verified on the node) of a key. The registry
+ * `tokens` with a known program are read. With `anyToken` every other token the key holds is read
+ * as well. These come from the indexer's holdings of the key and the local candidates, verified the
+ * same way, and include tokens from other trading apps, launchpads and bridges. KRON UTXOs KOB
+ * cannot spend (`id_type` 0) are read too, and only a balance shows them.
  */
 export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonly TokenInfo[], o: { anyToken?: boolean } = {}): Promise<FreeBalances> {
   const errors: BalanceError[] = [];
@@ -94,7 +109,8 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
   const [kasFree, freeTokens, held, locked] = await Promise.all([kasP, tokensP, heldP, lockedP]);
   const programs = new Map<Hex, TokenProgram>();
   for (const u of held) if (!read.has(u.covenantId)) programs.set(u.covenantId, u.program);
-  // the program the node verified each held token under: the display of a token without a registry entry takes its program's default decimals
+  // The program the node verified each held token under. The display of a token without a registry
+  // entry takes its program's default decimals.
   const network = s.config?.network;
   if (network) for (const [id, p] of programs) noteTokenProgram(network, id, p);
   const programOf = new Map<Hex, TokenProgram>(programs);
@@ -104,9 +120,10 @@ export async function loadFreeBalances(s: Services, pubkey: Hex, tokens: readonl
 }
 
 /**
- * The combined balances of one key from its free balances (`loadFreeBalances`), live orders and strays, with the program of every token read: a
- * KRON program's holder owner decides which key-held states are spendable (KForge: id_type 0), so without the programs a KForge holding reads
- * "not spendable by KOB" (TN10 2026-10-15 B-15: My orders' Balances did not pass them).
+ * The combined balances of one key from its free balances (`loadFreeBalances`), live orders and
+ * strays, with the program of every token read. A KRON program's holder owner decides which
+ * key-held states are spendable (KForge: id_type 0). Without the programs a KForge holding reads
+ * "not spendable by KOB".
  */
 export function combineFreeBalances(free: FreeBalances, o: { maker: Hex; liveOrders: (OrderView | OrderSnapshot)[]; strays: StrayView[] }): CombinedBalances {
   return combineBalances({
