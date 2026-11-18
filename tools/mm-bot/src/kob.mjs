@@ -1,4 +1,5 @@
-// The kob CLI as a child process: --json, --dry-run before --yes, exit code first; the key only as a file path or KOB_KEY.
+// The kob CLI as a child process: --json, --dry-run before --yes, exit code first, the key only as
+// a file path or KOB_KEY.
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
@@ -28,11 +29,11 @@ export function parseJsonStream(text) {
   return docs;
 }
 
-// stderr lines that are progress notes, not errors
+// Stderr lines that are progress notes, not errors.
 const NOISE = /blocks are contended|^dry run: nothing signed/;
 
 export class Kob {
-  /** opts: dryRun never signs; prefixArgs go before the command (tests). */
+  /** opts: `dryRun` never signs. `prefixArgs` go before the command (tests). */
   constructor(cfg, { dryRun = false, prefixArgs = [] } = {}) {
     this.cfg = cfg;
     this.dryRun = dryRun;
@@ -69,7 +70,10 @@ export class Kob {
     });
   }
 
-  /** Plans with --dry-run, then signs with --yes unless dry: { ok, dryRun, txid, fee, newIds, doc, error }. */
+  /**
+   * Plans with --dry-run, then signs with --yes unless dry. Returns { ok, dryRun, txid, fee,
+   * newIds, doc, error }.
+   */
   async sign(args) {
     const extra = this.cfg.cli.priorityFee ? ['--priority-fee'] : [];
     if (this.cfg.cli.preflight || this.dryRun) {
@@ -86,7 +90,7 @@ export class Kob {
     if (r.code !== 0) return { ok: false, error: `exit ${r.code}: ${r.stderr || 'no output'}`, doc: r.json };
     const doc = r.json;
     if (doc?.links) {
-      // merge: a summary with one link per transaction
+      // Merge: a summary with one link per transaction.
       const links = doc.links.filter((l) => l.status === 'submitted');
       return { ok: true, txid: links.map((l) => l.txid).join(','), txids: links.map((l) => l.txid), fee: Number(doc.fee ?? 0), newIds: [], doc };
     }
@@ -121,8 +125,10 @@ export class Kob {
     return this.sign(['cancel', id]);
   }
 
-  /** Cancels every order of a saved page of indexer views (`kob cancel --view`: checked on the node, no indexer):
-   * { ok, ids (cancels sent or planned), fee, error }. */
+  /**
+   * Cancels every order of a saved page of indexer views (`kob cancel --view`: checked on the node,
+   * no indexer). Returns { ok, ids (cancels sent or planned), fee, error }.
+   */
   async cancelViews(file) {
     const r = await this.exec(['cancel', '--view', file, ...(this.cfg.cli.priorityFee ? ['--priority-fee'] : []), this.dryRun ? '--dry-run' : '--yes']);
     const sent = r.docs.filter((d) => this.dryRun || d?.result?.status === 'submitted');

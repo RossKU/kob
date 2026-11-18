@@ -8,17 +8,18 @@ const ADDR = 'kaspatest:qzsanlgngufgqyddqqmtqau5n43jwn2a8w9vsdghwmpse9z77tp0kmzy
 const TOKEN = { id: '02'.repeat(32), label: 'USDX' };
 const RATES = { tokenUsd: 1, kasUsd: 0.025 };
 const FAIR = 40; // 1 / 0.025
-// 1000 USD capital, 3 levels of 15 % (150 USD = 150 tokens), sides capped at 50 %
+// 1000 USD capital, 3 levels of 15 % (150 USD = 150 tokens), sides capped at 50 %.
 const Q = sizedQuotes(1000, { levels: 3, spreadPct: 1.0, levelStepPct: 0.5, levelSizePct: 15, maxAskPct: 50, maxBidPct: 50, kasReserve: 50 }, RATES.tokenUsd, RATES.kasUsd);
 const base = { fair: FAIR, q: Q, capitalUsd: 1000, warnBelowPct: 12.5, rates: RATES, address: ADDR, token: TOKEN, bidsQuoting: true, asksQuoting: true };
 
 test('what the full ladder needs', () => {
   const n = ladderNeeds(FAIR, Q);
-  // bids: 150 tokens at 40 x (0.995, 0.99, 0.985) = 5970 + 5940 + 5910 = 17,820 KAS (under the 50 % cap of 20,000 KAS)
+  // Bids: 150 tokens at 40 x (0.995, 0.99, 0.985) = 5970 + 5940 + 5910 = 17,820 KAS (under the 50 %
+  // cap of 20,000 KAS).
   assert.ok(Math.abs(n.bidKas - 17_820) < 1e-6);
   assert.ok(Math.abs(n.askTokens - 450) < 1e-9);
   assert.equal(n.reserveKas, 50);
-  // the cap binds when the levels add up to more than the side may hold
+  // The cap binds when the levels add up to more than the side may hold.
   const capped = ladderNeeds(FAIR, { ...Q, levels: 5 });
   assert.equal(capped.askTokens, 500);
   assert.equal(capped.bidKas, 20_000);

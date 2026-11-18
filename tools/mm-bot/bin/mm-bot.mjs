@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 // kob-mm-bot: a market maker for one token on a KOB KAS book. See README.md.
-//   node bin/mm-bot.mjs run    --config FILE [--dry-run]   the keepalive: runs the bot and restarts it after a crash
+//   node bin/mm-bot.mjs run    --config FILE [--dry-run]   the keepalive: runs the bot and
+//                                                          restarts it after a crash
 //   node bin/mm-bot.mjs once   --config FILE [--dry-run]   one cycle in the foreground, then exit
-//   node bin/mm-bot.mjs status --config FILE [--json]      what the bot did last: mode, fair value, venues, quotes, inventory, fees
-//   node bin/mm-bot.mjs stop   --config FILE               write the STOP file: the bot cancels its quotes and exits
-//   node bin/mm-bot.mjs check  --config FILE               check the config and print it merged with the defaults
-// --dry-run plans with the CLI's --dry-run only: nothing is signed and the state file is not written.
+//   node bin/mm-bot.mjs status --config FILE [--json]      what the bot did last: mode, fair value,
+//                                                          venues, quotes, inventory, fees
+//   node bin/mm-bot.mjs stop   --config FILE               write the STOP file: the bot cancels its
+//                                                          quotes and exits
+//   node bin/mm-bot.mjs check  --config FILE               check the config and print it
+//                                                          merged with the defaults
+// --dry-run plans with the CLI's --dry-run only: nothing is signed and the state file is not
+// written.
 
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -78,7 +83,7 @@ if (cmd === 'once') {
 if (flag('--child')) {
   const bot = new Bot(cfg, { dryRun: flag('--dry-run') });
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(sig, () => { bot.stopSignal = true; bot.log.info(`${sig}: stopping`); });
-  // nothing that escapes a cycle may end the bot
+  // Nothing that escapes a cycle may end the bot.
   process.on('unhandledRejection', (e) => bot.log.info(`unhandled rejection: ${e?.stack ?? e}`));
   process.on('uncaughtException', (e) => bot.log.info(`uncaught exception: ${e?.stack ?? e}`));
   await bot.run();
@@ -98,7 +103,7 @@ if (existsSync(P.pid)) {
 }
 writeFileSync(P.pid, `${process.pid}\n`);
 process.on('exit', () => { try { if (Number(readFileSync(P.pid, 'utf8')) === process.pid) rmSync(P.pid); } catch { /* gone */ } });
-// a signal reaches the child too; wait for it to cancel its quotes and exit
+// A signal reaches the child too. Wait for it to cancel its quotes and exit.
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK']) process.on(sig, () => log.info(`${sig}: waiting for the bot to stop`));
 log.info(`keepalive pid ${process.pid}`);
 for (;;) {

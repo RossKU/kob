@@ -29,7 +29,10 @@ function toWords(bytes) {
   return out;
 }
 
-/** The address of a 64-hex x-only public key on `network` (mainnet: `kaspa:`, testnet-10: `kaspatest:`). */
+/**
+ * The address of a 64-hex x-only public key on `network` (mainnet: `kaspa:`, testnet-10:
+ * `kaspatest:`).
+ */
 export function addressOfXOnly(xOnlyHex, network) {
   if (!/^[0-9a-f]{64}$/.test(xOnlyHex)) throw new Error('an x-only key is 64 lower-case hex');
   const prefix = network === 'mainnet' ? 'kaspa' : 'kaspatest';

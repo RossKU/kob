@@ -1,4 +1,5 @@
-// The cycle: reference, wallet and orders, reconcile, mode, actions, funds. Only the operator ends the loop.
+// The cycle: reference, wallet and orders, reconcile, mode, actions, funds. Only the operator ends
+// the loop.
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { addressOfXOnly } from './address.mjs';
@@ -48,7 +49,7 @@ const holdings = (orders) => ({
 });
 
 export class Bot {
-  /** opts: dryRun plans with the CLI's --dry-run and never signs; once runs one cycle. */
+  /** opts: `dryRun` plans with the CLI's --dry-run and never signs. `once` runs one cycle. */
   constructor(cfg, { dryRun = false, once = false } = {}) {
     this.cfg = cfg;
     this.dryRun = dryRun;
@@ -58,9 +59,9 @@ export class Bot {
     this.kob = new Kob(cfg, { dryRun });
     this.idx = new Indexer(indexerUrl(cfg));
     this.state = loadState(cfg.dataDir);
-    // a stop is final for the run that was stopped, not for the next start
+    // A stop is final for the run that was stopped, not for the next start.
     if (this.state.mode.mode === STOPPING) this.state.mode = initialMode(Date.now());
-    // `once` skips the start-up cool-down
+    // `once` skips the start-up cool-down.
     if (once && this.state.mode.reason === 'cooldown') this.state.mode = { ...this.state.mode, steadySince: Date.now() - cfg.safety.resumeAfterSec * 1000 };
     this.refMemory = {};
     this.scale = 10 ** cfg.token.decimals;
@@ -105,7 +106,7 @@ export class Bot {
     }
   }
 
-  /** One cycle; returns 'stopped' once the bot has stopped. */
+  /** One cycle. Returns 'stopped' once the bot has stopped. */
   async cycle() {
     const c = this.cfg;
     const now = Date.now();
@@ -121,7 +122,8 @@ export class Bot {
       this.address ??= addressOfXOnly(bal.maker, c.network);
       orders = await this.reconcile(now);
     } catch (e) {
-      // the wallet or the indexer does not answer: a pull that is due goes through the node from the saved views
+      // The wallet or the indexer does not answer: a pull that is due goes through the node from
+      // the saved views.
       await this.blindPull(stop, snap, now, e);
       throw e;
     }
@@ -192,9 +194,10 @@ export class Bot {
   }
 
   /**
-   * The reads failed and the mode says pull (STOP, no reference, a jump, the peg): cancel the bot's orders from the last
-   * saved indexer views with `kob cancel --view`, which checks each on the node and needs no indexer. An order amended,
-   * filled or placed since that view is refused as stale and waits for the indexer.
+   * The reads failed and the mode says pull (STOP, no reference, a jump, the peg).
+   * It cancels the bot's orders from the last saved indexer views with `kob cancel --view`, which
+   * checks each on the node and needs no indexer. An order amended, filled or placed since that
+   * view is refused as stale and waits for the indexer.
    */
   async blindPull(stop, snap, now, cause) {
     const c = this.cfg;
@@ -222,7 +225,10 @@ export class Bot {
     this.save();
   }
 
-  /** The last indexer views of the bot's live orders, for kob cancel --view (written only when they change). */
+  /**
+   * The last indexer views of the bot's live orders, for kob cancel --view (written only when they
+   * change).
+   */
   saveViews() {
     if (this.dryRun) return;
     const items = this.idx.views[this.cfg.token.covenantId] ?? [];
@@ -234,7 +240,10 @@ export class Bot {
     renameSync(`${this.p.views}.tmp`, this.p.views);
   }
 
-  /** Syncs the state file with the indexer and returns the live orders; an unknown order is adopted to be cancelled. */
+  /**
+   * Syncs the state file with the indexer and returns the live orders. An unknown order is adopted
+   * to be cancelled.
+   */
   async reconcile(now) {
     const c = this.cfg;
     const live = await this.idx.liveOrders(this.maker, c.token.covenantId);
@@ -258,7 +267,7 @@ export class Bot {
         }
         continue;
       }
-      // not in the live list: ended, or not indexed yet
+      // Not in the live list: ended, or not indexed yet.
       if (s.pending?.kind === 'place' && now - s.pending.since <= timeout) continue;
       const one = await this.idx.order(id);
       if (one?.live) {
@@ -276,7 +285,8 @@ export class Bot {
     }
     for (const [id, r] of Object.entries(this.state.recent)) if (now - r.endedAt > 3_600_000) delete this.state.recent[id];
 
-    // an unknown order of the token on the bot's key gets a level past the ladder, so the planner cancels it
+    // An unknown order of the token on the bot's key gets a level past the ladder, so the planner
+    // cancels it.
     for (const o of live) {
       if (this.state.orders[o.id] || !o.side || (o.contract !== 'KobAsk' && o.contract !== 'KobBid')) continue;
       this.log.info(`${short(o.id)}: a live ${o.side} of this token on the bot's key that the state file does not know: treated as a stale quote of the bot's own and cancelled`);
@@ -299,7 +309,7 @@ export class Bot {
     const items = await this.idx.fills(this.cfg.token.covenantId, 100);
     const lastId = this.state.lastFillId;
     if (lastId == null) {
-      // the first run: start from the newest fill, do not replay history
+      // The first run: start from the newest fill, do not replay history.
       this.state.lastFillId = items[0]?.id ?? 0;
       return;
     }
@@ -328,7 +338,8 @@ export class Bot {
     const targets = buildLadder(snap.fair, budgets, q, this.scale, shift);
     const free = { kas: Math.max(0, bal.kasFree - Math.floor(c.quotes.kasReserve * 1e8)), tokens: bal.token.free };
     let actions = planActions(targets, orders, { fair: snap.fair, scale: this.scale, free, q });
-    // the token program takes at most 3 token inputs per transaction: merge the free token UTXOs before placing an ask
+    // The token program takes at most 3 token inputs per transaction: merge the free token UTXOs
+    // before placing an ask.
     const asksToPlace = actions.some((a) => a.kind === 'place' && a.side === 'sell');
     if (asksToPlace && bal.token.freeUtxos > c.quotes.mergeAboveUtxos) {
       actions = [...actions.filter((a) => !(a.kind === 'place' && a.side === 'sell')), { kind: 'merge', reason: `${bal.token.freeUtxos} free token UTXOs` }];
@@ -377,7 +388,7 @@ export class Bot {
     this.log.action(rec);
     if (!r.ok) {
       this.log.info(`${desc} (${a.reason}): FAILED ${r.error}`);
-      // the order's state is unknown now: leave it alone until the next cycle has re-read it
+      // The order's state is unknown now: leave it alone until the next cycle has re-read it.
       if (a.id && this.state.orders[a.id]) this.state.orders[a.id].pending = { kind: 'reread', since: Date.now() };
       this.save();
       return r;
@@ -394,7 +405,7 @@ export class Bot {
       const inPlace = r.doc?.plan?.inPlace !== false && !r.newIds.length;
       if (inPlace) Object.assign(s, { price: a.price, quotedFair: a.quotedFair, pending: { kind: 'amend', since: now, txid: r.txid } });
       else {
-        // a cancel-replace: the order has a new id
+        // A cancel-replace: the order has a new id.
         delete this.state.orders[a.id];
         this.state.recent[a.id] = { side: a.side, level: a.level, endedAt: now };
         const id = r.newIds[0];
@@ -414,7 +425,7 @@ export class Bot {
     const c = this.cfg;
     const q = plan?.q ?? sizedQuotes(c.capitalUsd, c.quotes, snap.tokenUsd.value, snap.kasUsd);
     const mine = plan?.mine ?? holdings(orders);
-    // while idle, judge each side by the ladder it would build
+    // While idle, judge each side by the ladder it would build.
     const targets = plan?.targets ?? buildLadder(snap.fair, sideBudgets({ kasFree: bal.kasFree, tokenFree: bal.token.free }, mine, q, this.scale), q, this.scale, 0);
     const checks = fundChecks({
       fair: snap.fair, q, capitalUsd: c.capitalUsd, warnBelowPct: c.alerts.warnBelowPct, rates: { tokenUsd: snap.tokenUsd.value, kasUsd: snap.kasUsd },
@@ -439,7 +450,7 @@ export class Bot {
     if (this.cfg.alerts.webhookUrl) this.webhook(rec);
   }
 
-  /** Retired tokens: cancel the bot's orders and merge the returned UTXOs; never place or amend. */
+  /** Retired tokens: cancel the bot's orders and merge the returned UTXOs. Never place or amend. */
   async retire(bal, stopping) {
     const now = Date.now();
     for (const id of this.cfg.retiredTokens) {
@@ -469,7 +480,9 @@ export class Bot {
     }
   }
 
-  /** The optional webhook: a POST of the alert as JSON. A failure is logged and otherwise ignored. */
+  /**
+   * The optional webhook: a POST of the alert as JSON. A failure is logged and otherwise ignored.
+   */
   webhook(rec) {
     const body = { ...rec, ts: new Date().toISOString() };
     fetch(this.cfg.alerts.webhookUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10_000) })

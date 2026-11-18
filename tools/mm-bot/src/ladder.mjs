@@ -1,6 +1,10 @@
-// The target ladder. spreadPct is the whole bid-ask gap, so each best level sits spreadPct / 2 from fair.
+// The target ladder. spreadPct is the whole bid-ask gap, so each best level sits spreadPct / 2 from
+// fair.
 
-/** The KAS (sompi) a bid of `amount` base units at `price` sompi per whole token escrows, without its carrier. */
+/**
+ * The KAS (sompi) a bid of `amount` base units at `price` sompi per whole token escrows, without
+ * its carrier.
+ */
 export const bidCost = (amount, price, scale) => Math.ceil((amount * price) / scale);
 
 /** Level i's distance from the fair value, a fraction: half the spread plus i steps. */
@@ -9,7 +13,10 @@ export const levelOffset = (q, i) => q.spreadPct / 200 + (i * q.levelStepPct) / 
 /** The KAS (sompi) an order of `amount` base units is worth at `price`. */
 export const orderValue = (amount, price, scale) => Math.floor((amount * price) / scale);
 
-/** The target ladders, inside out: levels { side, level, price (sompi per token), amount (base units) }. */
+/**
+ * The target ladders, inside out: levels { side, level, price (sompi per token), amount (base
+ * units) }.
+ */
 export function buildLadder(fair, budgets, q, scale, shift = 0) {
   if (!(fair > 0)) throw new Error('the ladder needs a positive fair value');
   const size = Math.floor(q.sizePerLevel * scale);

@@ -1,4 +1,5 @@
-// Files under dataDir: state.json, logs/ (mm-bot.log, actions.jsonl, fills.jsonl, alerts.jsonl) and STOP.
+// Files under dataDir: state.json, logs/ (mm-bot.log, actions.jsonl, fills.jsonl, alerts.jsonl) and
+// STOP.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';

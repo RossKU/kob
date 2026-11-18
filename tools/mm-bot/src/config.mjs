@@ -1,4 +1,5 @@
-// The JSON config merged over DEFAULTS; relative paths are relative to the config file. README.md lists the fields.
+// The JSON config merged over DEFAULTS. Relative paths are relative to the config file. README.md
+// lists the fields.
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
@@ -93,7 +94,7 @@ export function loadConfig(path) {
   const abs = (p) => (p == null ? p : isAbsolute(p) ? p : resolve(base, p));
   cfg.dataDir = abs(cfg.dataDir);
   if (cfg.keyFile) cfg.keyFile = abs(cfg.keyFile);
-  // a bare name (`kob`) is looked up on PATH, unless a file of that name sits next to the config
+  // A bare name (`kob`) is looked up on PATH, unless a file of that name sits next to the config.
   if (cfg.kobCli && (/[\\/]/.test(cfg.kobCli) || existsSync(abs(cfg.kobCli)))) cfg.kobCli = abs(cfg.kobCli);
   cfg.configPath = resolve(path);
   const problems = validate(cfg);

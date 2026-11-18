@@ -13,7 +13,7 @@ test('spreadPct is the bid-ask gap: the best levels sit spreadPct / 2 from fair,
   const { bids, asks } = buildLadder(FAIR, { askTokens: 100 * SCALE, bidKas: 5000e8 }, Q, SCALE);
   assert.deepEqual(asks.map((a) => a.price), [Math.ceil(37.5e8 * (1 + 0.005)), Math.ceil(37.5e8 * (1 + 0.005 + 0.005)), Math.ceil(37.5e8 * (1 + 0.005 + 0.01))]);
   assert.deepEqual(bids.map((b) => b.price), [Math.floor(37.5e8 * (1 - 0.005)), Math.floor(37.5e8 * (1 - 0.005 - 0.005)), Math.floor(37.5e8 * (1 - 0.005 - 0.01))]);
-  // the gap between the best bid and the best ask is 1 % of fair
+  // The gap between the best bid and the best ask is 1 % of fair.
   assert.ok(Math.abs((asks[0].price - bids[0].price) / 37.5e8 - 0.01) < 1e-9);
   assert.ok(asks.every((a) => a.amount === 10 * SCALE && a.side === 'sell'));
   assert.ok(bids.every((b) => b.amount === 10 * SCALE && b.side === 'buy'));
@@ -21,13 +21,13 @@ test('spreadPct is the bid-ask gap: the best levels sit spreadPct / 2 from fair,
 });
 
 test('a side stops where its budget ends; the last level may be partial if still worth minOrderKas', () => {
-  // 25 tokens: two full asks and a 5-token third (5 x 38.06 = 190 KAS >= 15)
+  // 25 tokens: two full asks and a 5-token third (5 x 38.06 = 190 KAS >= 15).
   const a = buildLadder(FAIR, { askTokens: 25 * SCALE, bidKas: 0 }, Q, SCALE);
   assert.deepEqual(a.asks.map((x) => x.amount / SCALE), [10, 10, 5]);
   assert.equal(a.bids.length, 0, 'no KAS: no bids (the side is idle, never borrowed)');
-  // 0.3 tokens is worth about 11 KAS: below the minimum, no ask at all
+  // 0.3 tokens is worth about 11 KAS: below the minimum, no ask at all.
   assert.equal(buildLadder(FAIR, { askTokens: 0.3 * SCALE, bidKas: 0 }, Q, SCALE).asks.length, 0);
-  // 500 KAS of bids: one full level (371 KAS) and a partial one
+  // 500 KAS of bids: one full level (371 KAS) and a partial one.
   const b = buildLadder(FAIR, { askTokens: 0, bidKas: 500e8 }, Q, SCALE);
   assert.equal(b.bids.length, 2);
   const spent = b.bids.reduce((s, x) => s + bidCost(x.amount, x.price, SCALE), 0);

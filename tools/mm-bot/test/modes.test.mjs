@@ -1,4 +1,5 @@
-// The mode state machine: the bot idles on every safety condition, resumes by itself, and stops only for the operator.
+// The mode state machine: the bot idles on every safety condition, resumes by itself, and stops
+// only for the operator.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { backoffMs, feeGate, IDLE, initialMode, nextMode, QUOTING, sideStatus, STOPPING } from '../src/modes.mjs';
@@ -42,7 +43,7 @@ test('a one-minute jump above killJump pulls the quotes; another jump during the
   const q = { mode: QUOTING, reason: null, since: T0, steadySince: T0, feeDay: null };
   const ms = walk(q, [[30, { jump: 0.025 }], [60, {}], [150, { jump: 0.03 }], [180, {}], [300, {}], [360, {}]]);
   assert.deepEqual(ms.map((m) => `${m.mode}/${m.reason}`), ['IDLE/jump', 'IDLE/cooldown', 'IDLE/jump', 'IDLE/cooldown', 'IDLE/cooldown', 'QUOTING/null']);
-  // a jump at exactly the threshold is not a jump
+  // A jump at exactly the threshold is not a jump.
   assert.equal(walk(q, [[30, { jump: 0.02 }]])[0].mode, QUOTING);
 });
 
@@ -53,10 +54,10 @@ test('the fee cap idles the bot until the UTC day rolls over, whatever the refer
   assert.equal(`${m.mode}/${m.reason}`, 'IDLE/fee-cap');
   assert.equal(m.feeDay, '2026-11-17');
   assert.equal(m.pull, true);
-  // still blocked the same day even if the gate's reading clears
+  // Still blocked the same day even if the gate's reading clears.
   m = nextMode(m, OK, CFG, late + 30_000);
   assert.equal(m.reason, 'fee-cap');
-  // the next UTC day: cool-down, then quoting
+  // The next UTC day: cool-down, then quoting.
   m = nextMode(m, OK, CFG, Date.parse('2026-11-18T00:00:10Z'));
   assert.equal(`${m.mode}/${m.reason}`, 'IDLE/cooldown');
   m = nextMode(m, OK, CFG, Date.parse('2026-11-18T00:03:10Z'));
@@ -70,7 +71,7 @@ test('only the operator stops the bot, and STOPPING is final', () => {
   assert.equal(m.pull, true);
   m = nextMode(m, OK, CFG, sec(20));
   assert.equal(m.mode, STOPPING, 'no way back from STOPPING');
-  // no safety condition ever yields STOPPING
+  // No safety condition ever yields STOPPING.
   for (const input of [{ refOk: false }, { jump: 0.5 }, { feeBlocked: true }]) {
     assert.equal(nextMode(q, { ...OK, ...input }, CFG, sec(10)).mode, IDLE);
   }

@@ -1,4 +1,5 @@
-// Candle parsers and the reference price, on responses recorded from the venues (test/fixtures, 2026-11-16 ~16:56Z).
+// Tests the candle parsers and the reference price on responses recorded from the venues.
+// The fixtures (test/fixtures) were recorded on 2026-11-16 at about 16:56Z.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
@@ -6,7 +7,7 @@ import { parseBybit, parseCoinbaseMid, parseGate, parseKraken, parseKrakenMid, p
 import { closedWindow, combine, fairValueKas, median, oneMinuteJump, stableRate, usdtRate, venueVwap } from '../src/reference.mjs';
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), 'utf8'));
-// Bybit's response time; the minute 16:56 (1794848160 s) is still in progress
+// Bybit's response time. The minute 16:56 (1794848160 s) is still in progress.
 const NOW = 1794848208940;
 const OPTS = { nowMs: NOW, windowMin: 5, maxCandleAgeSec: 120 };
 const close = (a, b, tol = 1e-12) => assert.ok(Math.abs(a - b) <= tol, `${a} != ${b}`);
@@ -28,7 +29,7 @@ test('every parser returns oldest-first candles in ms with base and quote volume
       assert.ok(r.base >= 0 && r.quote >= 0);
     }
   }
-  // the column orders differ per venue: spot-check one row of each against the raw response
+  // The column orders differ per venue: spot-check one row of each against the raw response.
   const b = sets.bybit.find((r) => r.t === 1794848100000);
   assert.deepEqual(b, { t: 1794848100000, close: 0.02657, base: 76830.4, quote: 2036.9514785 });
   const k = sets.kucoin.find((r) => r.t === 1794848100000);
@@ -61,7 +62,7 @@ test('stablecoin mids: Kraken renames USDTUSD to USDTZUSD; Coinbase mid', () => 
 test('the minute in progress is dropped and the window is exactly the last 5 closed minutes', () => {
   const rows = closedWindow(parseBybit(fx('bybit-kasusdt.json')), NOW, 5);
   assert.deepEqual(rows.map((r) => r.t / 1000), [1794847860, 1794847920, 1794847980, 1794848040, 1794848100]);
-  // Kraken was read a minute later and has 16:57 too; at NOW both 16:56 and 16:57 are excluded
+  // Kraken was read a minute later and has 16:57 too. At NOW both 16:56 and 16:57 are excluded.
   const kr = closedWindow(parseKraken(fx('kraken-ohlc-kasusd.json')), NOW, 5);
   assert.equal(Math.max(...kr.map((r) => r.t)), 1794848100000);
 });
@@ -75,7 +76,8 @@ test('venue VWAP = sum(quote) / sum(base) over the window, times the USD rate', 
   close(v.base, base, 1e-6);
   close(v.lastClose, 0.02657 * 0.9995);
   close(v.prevClose, 0.02647 * 0.9995);
-  // KuCoin has empty minutes (zero volume) in the window: they add nothing and do not break the VWAP
+  // KuCoin has empty minutes (zero volume) in the window. They add nothing and do not break the
+  // VWAP.
   const k = venueVwap(parseKucoin(fx('kucoin-kas-usdt.json')), 1, OPTS);
   close(k.vwap, (337.820710913 + 0 + 0.58664466 + 0 + 31.692) / (12767.1188 + 22.171 + 1200));
 });
@@ -104,11 +106,11 @@ test('combine: median of the fresh venues, outliers past 1% dropped, at least mi
   assert.deepEqual(c.dropped.map((d) => d.name).sort(), ['kraken', 'mexc']);
   assert.match(c.dropped.find((d) => d.name === 'kraken').reason, /% from the median/);
 
-  // one fresh venue is not enough
+  // One fresh venue is not enough.
   const one = combine({ bybit: v(0.0266), kucoin: { fresh: false, reason: 'HTTP 503' } }, { minVenues: 2, maxDeviation: 0.01 });
   assert.equal(one.ok, false);
   assert.match(one.reason, /1 fresh venue/);
-  // two fresh venues far apart: the median sits between them and both are more than 1% off it
+  // Two fresh venues far apart: the median sits between them and both are more than 1% off it.
   const apart = combine({ a: v(0.026), b: v(0.028) }, { minVenues: 2, maxDeviation: 0.01 });
   assert.equal(apart.ok, false);
 });
@@ -123,7 +125,7 @@ test('one-minute jump: the median candle move and the reference against a minute
   close(oneMinuteJump(venues, ['a', 'b', 'c'], 1, [], 0), 0.02);
   const history = [{ at: 0, kasUsd: 1.0 }, { at: 30_000, kasUsd: 1.01 }];
   close(oneMinuteJump({}, [], 1.05, history, 60_000), 0.05);
-  // a sample older than 2 minutes is not "a minute ago"
+  // A sample older than 2 minutes is not "a minute ago".
   assert.equal(oneMinuteJump({}, [], 1.05, [{ at: 0, kasUsd: 1 }], 200_000), 0);
 });
 
@@ -140,7 +142,7 @@ test('two venues must agree within pairAgreement: one venue 1.9 % off idles the 
   assert.equal(off.ok, false);
   assert.match(off.reason, /only 2 venues and they differ by 1\.90%/);
   assert.equal(combine({ kucoin: v(0.025), mexc: v(0.025 * 1.001) }, R).ok, true, 'two that agree');
-  // three venues: one bad venue cannot move the median past the others
+  // Three venues: one bad venue cannot move the median past the others.
   const three = combine({ a: v(0.025), b: v(0.025), c: v(0.025 * 1.009) }, R);
   assert.equal(three.ok, true);
   close(three.kasUsd, 0.025);

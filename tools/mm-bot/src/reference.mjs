@@ -1,4 +1,5 @@
-// The KAS/USD reference (per-venue VWAP of closed candles, median, outlier rule) and the fair value.
+// The KAS/USD reference (per-venue VWAP of closed candles, median, outlier rule) and the fair
+// value.
 
 const MINUTE = 60_000;
 
@@ -26,7 +27,7 @@ export function venueVwap(candles, usdRate, { nowMs, windowMin, maxCandleAgeSec 
   const rows = closedWindow(candles, nowMs, windowMin).sort((a, b) => a.t - b.t);
   if (!rows.length) return { fresh: false, reason: 'no closed candle in the window' };
   const newest = rows[rows.length - 1].t;
-  // a closed candle starting at `newest` ended one minute later; its age is measured from that end
+  // A closed candle starting at `newest` ended one minute later. Its age is measured from that end.
   const ageSec = (nowMs - (newest + MINUTE)) / 1000;
   if (ageSec > maxCandleAgeSec) return { fresh: false, reason: `newest closed candle is ${ageSec.toFixed(0)} s old` };
   const base = rows.reduce((a, c) => a + c.base, 0);
@@ -46,8 +47,9 @@ export function venueVwap(candles, usdRate, { nowMs, windowMin, maxCandleAgeSec 
 }
 
 /**
- * The median of the fresh venues, outliers past maxDeviation dropped; ok only with minVenues left. With only two left the
- * median is their midpoint, which one bad venue moves: they must agree within pairAgreement.
+ * The median of the fresh venues, with outliers past maxDeviation dropped. It is ok only with
+ * minVenues left. With only two left the median is their midpoint, which one bad venue moves, so
+ * they must agree within pairAgreement.
  */
 export function combine(venues, { minVenues, maxDeviation, pairAgreement = null }) {
   const dropped = [];
@@ -80,8 +82,9 @@ export function combine(venues, { minVenues, maxDeviation, pairAgreement = null 
 }
 
 /**
- * USDT/USD from the sources' fresh readings ({ kraken, coinbase }): a reading outside 1 +- band is refused; two that
- * differ by more than agreement give no rate. { value, source } or { value: null, reason }.
+ * USDT/USD from the sources' fresh readings ({ kraken, coinbase }).
+ * A reading outside 1 +- band is refused, and two that differ by more than agreement give no rate.
+ * The result is { value, source } or { value: null, reason }.
  */
 export function usdtRate(readings, { band, agreement }) {
   const ok = [];
@@ -106,7 +109,10 @@ export function fairValueKas(tokenUsd, kasUsd) {
   return tokenUsd / kasUsd;
 }
 
-/** The larger of the venues' median last-minute move and the reference's move against about a minute ago. */
+/**
+ * The larger of the venues' median last-minute move and the reference's move against about a minute
+ * ago.
+ */
 export function oneMinuteJump(venues, used, kasUsd, history, nowMs) {
   const moves = used.map((n) => venues[n]).filter((v) => v?.fresh && v.prevClose > 0).map((v) => Math.abs(v.lastClose / v.prevClose - 1));
   const candleMove = moves.length ? median(moves) : 0;
