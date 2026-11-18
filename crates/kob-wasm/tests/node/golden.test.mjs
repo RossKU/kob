@@ -106,9 +106,9 @@ test('KRON family: kinds, token programs, token states, placement record', () =>
   assert.deepEqual(JSON.parse(kob.decodeTokenState(hex)), st);
   assert.match(kob.tokenScriptPublicKey('KronToken2433', s(st)), /^0000aa20[0-9a-f]{64}87$/);
   assert.throws(() => kob.tokenScriptPublicKey('KCC20Ref', s(st)));
-  // The mutable windows of the KRON kinds sit 33 bytes earlier on the bid side.
+  // The mutable windows of the KRON kinds sit 33 bytes earlier on the bid side (KobCondBid also has the delivery block's bought).
   assert.deepEqual(JSON.parse(kob.mutableWindows('KobCondBidKron')), [['stopPrice', 191, 199], ['amountLeft', 254, 262], ['armed', 263, 271]]);
-  assert.deepEqual(JSON.parse(kob.mutableWindows('KobCondBid')), [['stopPrice', 224, 232], ['amountLeft', 287, 295], ['armed', 296, 304]]);
+  assert.deepEqual(JSON.parse(kob.mutableWindows('KobCondBid')), [['stopPrice', 224, 232], ['amountLeft', 287, 295], ['armed', 296, 304], ['bought', 410, 418]]);
   // The KRON placement record: family byte 0x02, 2-byte custody part.
   const c = golden.transactions.find((t) => t.name === 'kron.create.ask');
   const rec = JSON.parse(kob.decodePayload(c.signed.tx.payload));
@@ -132,13 +132,13 @@ test('pair orders: three kinds for both families and sides, windows, placement r
   }
   // ONE template per kind for both sides and both families; the pair orders replaced KobCross
   const tpls = JSON.parse(kob.templates());
-  for (const [name, code, len] of [['KobPair', 8, 447], ['KobCondPair', 9, 543], ['KobIfdPair', 10, 909]]) {
+  for (const [name, code, len] of [['KobPair', 8, 483], ['KobCondPair', 9, 579], ['KobIfdPair', 10, 936]]) {
     const t = tpls.find((x) => x.name === name);
     assert.ok(t && t.kindCode === code && t.stateLen === len, name);
   }
   assert.ok(!tpls.some((t) => t.name === 'KobCross'));
-  assert.deepEqual(JSON.parse(kob.mutableWindows('KobPair')).map((w) => w[0]), ['amountLeft', 'custody']);
-  assert.deepEqual(JSON.parse(kob.mutableWindows('KobCondPair')).map((w) => w[0]), ['stopPrice', 'armed', 'amountLeft', 'custody']);
+  assert.deepEqual(JSON.parse(kob.mutableWindows('KobPair')).map((w) => w[0]), ['amountLeft', 'custody', 'bought']);
+  assert.deepEqual(JSON.parse(kob.mutableWindows('KobCondPair')).map((w) => w[0]), ['stopPrice', 'armed', 'amountLeft', 'custody', 'bought']);
   assert.deepEqual(JSON.parse(kob.mutableWindows('KobIfdPair')).map((w) => w[0]), ['armed', 'amountLeft', 'custody', 'rptAmount']);
   // the record's family byte is the family of base token A; the custody parts follow custodies() (a sell-first entry: A then its B prefund)
   for (const [name, family, kind, custodies] of [
