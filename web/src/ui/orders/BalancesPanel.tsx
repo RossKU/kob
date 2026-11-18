@@ -23,7 +23,7 @@ import type { KascovMeta } from '../market/token-model';
 import type { WalletBalances } from './use-balances';
 import { AMOUNT_FRACTION_MAX, amountCell } from './cells';
 import { countText, tCount } from './plural';
-import { balanceColumnFractions, unreviewedProgram } from './balances-model';
+import { balanceColumnFractions, orderTokenPrograms, unreviewedProgram } from './balances-model';
 import { convertibleCounts, mergeAllFrees, mergeTokenFor, mergeableCounts } from './merge-model';
 import type { OrdersData } from './orders-data';
 import './balances.css';
@@ -119,6 +119,7 @@ export function BalancesPanel(props: {
   });
 
   // a token outside the registry is merged under the program the node verified its UTXOs under (the template's slots, the extension commitment its UTXOs share)
+  const orderPrograms = useMemo(() => orderTokenPrograms(props.data.views), [props.data]);
   const unlisted = useMemo(() => (free.data ? { kob: services.kob, programs: free.data.programOf ?? free.data.programs } : undefined), [free.data, services.kob]);
   // free token UTXOs a merge may take, per token (two or more)
   const mergeable = useMemo(
@@ -246,7 +247,7 @@ export function BalancesPanel(props: {
                 const claimable = !!props.onClaimToken && b.bought > 0n;
                 // "Convert to plain" is in the Merge all dialog where that button shows; only a token with nothing to merge has it here (the cell keeps its width)
                 const showConvert = !!props.onConvertToken && convertible.has(b.token) && !showMerge;
-                const program = info?.program ?? free.data!.programs.get(b.token) ?? null;
+                const program = info?.program ?? free.data!.programs.get(b.token) ?? orderPrograms.get(b.token) ?? null;
                 return (
                   <DtGroup key={b.token} data-testid={`balance-row-${b.token}`}>
                     <DtRow>
