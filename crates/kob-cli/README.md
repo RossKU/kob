@@ -305,7 +305,8 @@ kob token create --name "Test USD" --ticker TUSD --decimals 6 --supply 100000000
   that cover it, largest first.
 - After creation, as the web app: the wallet keeps everything by default. `--sell price [--price P]`
   sends a limit sell (GTC) right after the genesis (default price: 10,000 KAS over the amount).
-  `--sell curve [--levels 100] [--total 10000KAS] [--multiple 5]` puts a curve (no expiry) in the
+  `--sell curve [--levels 100] [--total 10000KAS] [--multiple 5]` (or `--shape chromatic --octaves 2`: one
+  semitone per level) puts a curve (no expiry) in the
   genesis. `--keep PERCENT` of the share stays in the wallet. One confirmation (or `--yes`) covers
   everything.
 - `--lock-until +90d` (or a date `YYYY-MM-DD`, UTC) locks the kept share on chain until then: the

@@ -121,3 +121,9 @@ can be set.
   level by level) is at most the target. `p0` is the largest (fixed point, `r` and `r^i` in integer Q40 arithmetic, so
   every platform builds the same table) with `R ≤ total`; then, from the top level down, each price is raised by one
   sompi while `R` stays `≤ total` and the table stays non-decreasing.
+- **Chromatic shape** (`shape: chromatic`, web "Shape: Chromatic", CLI `--shape chromatic --octaves N`), after Kaspa's
+  chromatic emission (its reward falls one semitone, `2^(−1/12)`, a month): one semitone up per level. `N` octaves (1 to 8)
+  give `12·N + 1` levels, the start level included; `p_i = p_(i mod 12)·2^(i div 12)` with `p_k = ⌊p0·S_k⌋` and
+  `S_k = round(2^(k/12)·2^40)` a fixed table (`defaults::SEMITONES`), so every 12 levels exactly double and the top is
+  exactly `2^N` times the start. `p0` is solved as above; no leftover is spread over the top levels (the octaves stay
+  exact). `levels` and `multiple` are not used. The contract is unchanged: the table is explicit state.

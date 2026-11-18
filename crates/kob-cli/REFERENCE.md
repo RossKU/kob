@@ -599,6 +599,7 @@ declaration. Both are signed at once; the genesis is sent right after the prepar
 | `--lock-until WHEN` | lock the kept share until WHEN (`+90d`, `+12h`, `+15m`, `YYYY-MM-DD` 00:00 UTC, `YYYY-MM-DDTHH:MMZ`, unix ms): with `--sell` the `--keep` part, else `--keep` of the share (default all), the rest free. The locked output's owner is the P2SH hash (scheme 0x03) of `<until ms> OP_CHECKLOCKTIMEVERIFY <key> OP_CHECKSIG`, declared as `lock` (`docs/spec/token-metadata.md`, *Creator lock*) |
 | `--price P` | `--sell price`: KAS per whole token (default 10,000 KAS over the amount). A limit sell (GTC) sent right after the genesis, spending its output and the preparation's change; saved as `sell_order.json` |
 | `--levels N`, `--total KAS`, `--multiple M` | `--sell curve`: a `KobCurveAsk` in the genesis (unbound, no expiry); defaults 100, 10000KAS, 5 |
+| `--shape chromatic`, `--octaves N` | `--sell curve` (and `kob place curve`): one semitone (2^(1/12)) per level over N octaves (1 to 8, default 2), 12 x N + 1 levels, the top 2^N times the start, `--total` sets the start; instead of `--levels` and `--multiple` (`docs/design/curve-ask-spec.md` 7) |
 | `--supply UNITS` | total supply in base units; must equal the sum of the holders. Without `--holder` it all goes to the funding key |
 | `--holder OWNER:SCHEME:AMOUNT[:BORROW_SCHEME:GUARD]` | repeatable, one token output each (OWNER 64-hex, `self` or an address) |
 | `--program` | `public-mint` (default), `3x3`, `kasparocket-testnet` (testnet-10 only); `8x8-prototype` is no longer issued (a usage error) |
