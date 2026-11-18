@@ -591,7 +591,7 @@ intent outpoint in its ledger, broadcasts the creation and then executes the int
 plans against the book of the moment, records the execution in the ledger before it submits it, and when an
 order it named is taken by another fill it remembers the order as lost and plans again, without the payer.
 The periodic reconcile keeps driving intents whose `/settle` answered `settlement_pending`; no execution is
-attempted after the authorization's expiry (an invoice's expiry caps it), and after `maxAttempts` the payment
+attempted after the authorization's expiry (for an invoice it may not be later than the invoice's), and after `maxAttempts` the payment
 fails.
 
 **Expiry.** An intent that ended without an execution (its deadline passed, its attempts ran out, or no book could

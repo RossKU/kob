@@ -792,7 +792,7 @@ settlement (section 17.6): an intent no order can fill is not worth broadcasting
    durably, and submits it. When an order it named was filled by someone else (the submission conflicts,
    or the order is spent while the execution is not accepted) the execution is dead: the facilitator
    remembers the order as lost and plans again, without the payer. It does not execute after the
-   **deadline**: `authorization.expiresAt`, capped by an invoice's `expiresAt` (section 18); it then expires the intent (section 17.7).
+   **deadline**: `authorization.expiresAt`, which for an invoice may not be later than the invoice's `expiresAt` (section 18); it then expires the intent (section 17.7).
 4. Completion is the execution's merchant output at the required finality, exactly as in section 11. The
    settlement response names the **execution** in `transaction`, its merchant output in
    `extensions.kaspa.paymentOutputIndex`, and the creation in `extensions.kob.intent`
@@ -812,7 +812,8 @@ unbroadcast creation to the facilitator only.
 ### 17.7 Cancel, deadline and expiry
 
 The intent's deadline is the authorization's expiry (`expiresAt`, unix ms); a payer paying an invoice
-chooses its authorization's expiry no later than the invoice's (KOB payer SDK: `IntentOptions::expires_in_ms`).
+chooses its authorization's expiry no later than the invoice's (KOB payer SDK: `IntentOptions::expires_in_ms`); a facilitator refuses
+one that is later (`authorization_exceeds_max_timeout`), because anyone may execute the intent until its own deadline.
 
 - **Cancel.** The payer can cancel at any time (I2). Before the deadline a cancel races the
   facilitator's execution and either may win, never both. The KOB router requires a token intent's
@@ -1000,7 +1001,7 @@ own payment: the transaction it signed (for an intent entry the creation, `exten
 class (`extensions.kaspa.custody`, companion proposal section 10). This endpoint is the one
 unauthenticated path to the facilitator's ledger: it is rate-limited per source like `/verify`, and it
 creates ledger state only for a payment that verifies completely against a registered, unexpired, unpaid
-invoice.
+invoice. An intent entry's `expiresAt` must not be later than the invoice's.
 
 KOB payer SDK (informative): `KobX402Client.payInvoice` pays any entry (native, `kcc20`, payer-signed route, intent)
 under the client's limits (ceilings, `maxPay`, `approve`, `intentTerms`, the preflight; an intent's deadline never past

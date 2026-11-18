@@ -6,7 +6,7 @@
 //! * an expired invoice refuses a payment and reports it as late once it reaches the chain anyway;
 //! * a second payment of a paid invoice is a duplicate, reported when it reaches the chain;
 //! * a payment for another merchant (or another offer) is refused;
-//! * an intent the book cannot execute ends at the invoice's deadline and the payer cancels it;
+//! * an invoice intent that outlives the invoice is refused; one the book cannot execute is expired at the invoice's end;
 //! * the Rust payer's intent retry (`pay_intent_with_retry`) re-sends the one creation until it executes and stops,
 //!   without re-signing, when only a new signature could pay.
 #![allow(clippy::too_many_arguments)]
@@ -24,9 +24,9 @@ use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction};
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::script::p2pk_spk;
 use kob_protocol::state::{AskState, BidState, OrderState, SCHEME_COVID, SCHEME_P2PK};
-use kob_protocol::tx::{finalize, sign_locally, FinalizeOptions, OrderUtxo, TokenUtxo, Utxo};
+use kob_protocol::tx::{OrderUtxo, TokenUtxo, Utxo};
 use kob_x402::chain::{ChainError, ChainUtxo, ChainView, Clock, FixedClock, Outpoint, OutputStatus, SubmitError, Txid};
-use kob_x402::client::intent::{cancel_intent, intent_requirements, pay_intent, IntentOptions, IntentPayment};
+use kob_x402::client::intent::{intent_requirements, pay_intent, IntentOptions, IntentPayment};
 use kob_x402::client::native::{native_requirements, pay_native, PayOptions};
 use kob_x402::client::retry::{pay_intent_with_retry, Built, GiveUp, ResendTransport, RetryPolicy, Sent};
 use kob_x402::client::swap::{MerchantGain, PayAssetSpec, PayerFunds, SwapOfferParams};
@@ -305,7 +305,11 @@ impl World {
         native_requirements(Network::Testnet10, amount, &addr(merchant), 600, Finality::Accepted).unwrap()
     }
     fn pay_t2k(&self, offer: &PaymentRequirements, rh: &str, max_sell: i64) -> IntentPayment {
-        let opts = IntentOptions { max_sell: Some(max_sell), ..IntentOptions::default() };
+        self.pay_t2k_for(offer, rh, max_sell, None)
+    }
+    /// `pay_t2k` with an authorization lifetime (default 5 min).
+    fn pay_t2k_for(&self, offer: &PaymentRequirements, rh: &str, max_sell: i64, expires_in_ms: Option<u64>) -> IntentPayment {
+        let opts = IntentOptions { max_sell: Some(max_sell), expires_in_ms, ..IntentOptions::default() };
         // the payer funds it from its unspent coins
         let unspent = |u: &Utxo| self.chain.utxo(&Outpoint::new(u.transaction_id, u.index)).is_some();
         let funds =
@@ -479,9 +483,8 @@ fn a_payment_for_another_merchant_or_offer_is_refused() {
 }
 
 #[test]
-fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
+fn an_unexecuted_invoice_intent_ends_at_the_invoice_expiry() {
     let w = world();
-    // the invoice expires before the intent's own authorization: the invoice caps the deadline
     let offer = w.kas_intent_offer(5 * KAS, MERCHANT);
     let id = w.invoice(vec![offer.clone()], 120_000);
     // one bid only, and a rival takes it as soon as the keeper's execution names it
@@ -491,13 +494,22 @@ fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
         let o = b.bids[0].0.utxo.clone();
         *w.view.rival.lock().unwrap() = Some(Outpoint::new(o.transaction_id, o.index));
     }
-    let p = w.pay_t2k(&offer, &id, 3 * WHOLE);
+    // an intent that outlives the invoice (5 min against 2) could still be executed after the invoice reads expired,
+    // because the covenant's deadline is the authorization's: refused, nothing broadcast
+    let long = w.pay_t2k(&offer, &id, 3 * WHOLE);
+    let r = w.fac.pay_invoice(&id, long.payload.clone());
+    assert_eq!(diag(&r), "authorization_exceeds_max_timeout", "{r:?}");
+    assert_eq!(w.chain.submit_count(), 0);
+    assert_eq!(w.status(&id).status, InvoiceState::Unpaid);
+    // signed to end with the invoice
+    let p = w.pay_t2k_for(&offer, &id, 3 * WHOLE, Some(120_000));
+    assert_eq!(p.state.deadline(), (NOW_MS + 120_000) as i64);
     w.fac.set_settle_wait(Duration::from_millis(300));
     let r = with_miner(&w, || w.fac.pay_invoice(&id, p.payload.clone()));
     assert!(!r.success);
     assert_eq!(diag(&r), "settlement_pending", "{r:?}");
     assert_eq!(w.status(&id).status, InvoiceState::Pending);
-    // liquidity comes back only after the deadline: the facilitator does not execute any more
+    // liquidity comes back only after the deadline: the facilitator does not execute any more, it expires the intent
     w.clock.set(NOW_MS + 121_000);
     w.book.lock().unwrap().bids.push((bid_a(22, common::MAKER_A, P245, 10), None));
     let o = w.book.lock().unwrap().bids.last().unwrap().0.clone();
@@ -510,20 +522,11 @@ fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
     let s = w.status(&id);
     assert_eq!(s.status, InvoiceState::Expired);
     assert_eq!(s.attempts.len(), 1);
-    // the facilitator will expire the intent on chain, but not before the intent's own deadline (the authorization's
-    // expiry, 300 s): the invoice ended the payment earlier
-    let x = e.intent.as_ref().unwrap().expiry.clone().expect("expiry pending");
-    assert_eq!((x.txid.as_deref(), x.outcome.as_deref()), (None, None));
-    let submits = w.chain.submit_count();
-    assert!(w.fac.reconcile().expiries_driven >= 1);
-    assert_eq!(w.chain.submit_count(), submits, "no expiry before the intent's deadline");
-    // the payer cancels: its KAS and its locked tokens come back
-    let built = cancel_intent(&p, None).unwrap();
-    let sigs = sign_locally(&built, &keys()).unwrap();
-    let (tx, _) = finalize(&built, &sigs, FinalizeOptions { tighten_budgets: true }).unwrap().tx.to_tx().unwrap();
-    w.chain.submit(&tx).unwrap();
+    let x = e.intent.unwrap().expiry.expect("expiry");
+    let expiry = kob_x402::wire::parse_hash32(x.txid.as_deref().expect("the expiry was submitted")).unwrap();
     w.chain.mine(1);
-    assert!(w.chain.utxo(&Outpoint::new(p.intent.transaction_id, p.intent.index)).is_none());
+    assert!(w.chain.is_accepted(&expiry));
+    assert!(w.chain.utxo(&Outpoint::new(p.intent.transaction_id, p.intent.index)).is_none(), "the intent is spent");
     let back = w.chain.unspent_of(
         &kob_protocol::state::TokenState::user(kob_protocol::Family::Kcc20, 3 * WHOLE, pk(PAYER), EXT)
             .spk_with(kob_protocol::artifacts::token_template(P8)),
@@ -531,8 +534,7 @@ fn an_unexecuted_intent_ends_at_the_deadline_and_the_payer_cancels_it() {
     assert_eq!(back.len(), 1, "the locked tokens are the payer's again");
     w.fac.reconcile();
     let e = w.ledger.get(&hex(&p.txid)).unwrap();
-    assert_eq!(e.state, State::Failed);
-    assert_eq!(e.intent.unwrap().expiry.unwrap().outcome.as_deref(), Some("spent"), "the cancel ended the intent");
+    assert_eq!(e.intent.unwrap().expiry.unwrap().outcome.as_deref(), Some("expired"));
 }
 
 #[test]
