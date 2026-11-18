@@ -1,4 +1,4 @@
-//! Which characters a displayed name, ticker or text may hold (security finding L7).
+//! Which characters a displayed name, ticker or text may hold.
 //!
 //! One definition, `data/display-chars.json`, read here and by the web (`web/src/kob/display.ts`).
 //! The same file holds test cases that both sides run, so the two cannot drift.
