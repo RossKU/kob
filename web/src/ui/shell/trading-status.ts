@@ -1,9 +1,15 @@
-// The one status light of the header (the dot of the network chip): whether trading works, and how. Pure: the facts in, the light out.
-//   * green: the indexer is healthy (the market comes from it, every trade is still checked on the node);
-//   * yellow: trading works another way or with less: through the node (standalone mode, automatic or switched on in Settings), through a backup
-//     indexer, through an indexer that is behind the chain, or while the app is switching to the node;
-//   * red: the node cannot be reached (nothing can be read or signed), or the indexer is down with no fallback to the node.
-// The details are the tooltip and the lines of the chip's panel (StatusBar.tsx); the bell keeps one calm line while it is not green.
+// The one status light of the header (the dot of the network chip): whether trading works, and
+// how. It is pure: the facts in, the light out.
+// - Green: the indexer is healthy. The market comes from it, and every trade is still checked on
+//   the node.
+// - Yellow: trading works another way or with less. That is through the node (standalone mode,
+//   automatic or switched on in Settings), through a backup indexer, through an indexer that is
+//   behind the chain, or while the app is switching to the node.
+// - Red: the node cannot be reached, so nothing can be read or signed, or the indexer is down with
+//   no fallback to the node.
+//
+// The details are the tooltip and the lines of the chip's panel (StatusBar.tsx). The bell keeps
+// one calm line while it is not green.
 import type { StandaloneState } from '../../data/standalone';
 import type { HealthAssessment } from './health';
 
@@ -12,13 +18,16 @@ export type TradingCode = 'checking' | 'indexer' | 'lagging' | 'backup' | 'switc
 export const TRADING_CODES: readonly TradingCode[] = ['checking', 'indexer', 'lagging', 'backup', 'switching', 'node', 'manual', 'unavailable', 'node-down'];
 
 export interface TradingFacts {
-  /** the node answers (undefined: not known yet) */
+  /** The node answers. Undefined means not known yet. */
   nodeReachable: boolean | undefined;
   indexer: HealthAssessment;
   standalone: Pick<StandaloneState, 'active' | 'reason'> | null;
-  /** standalone mode takes over by itself when the indexer cannot be used (the mode exists and its automatic fallback is on) */
+  /**
+   * Standalone mode takes over by itself when the indexer cannot be used: the mode exists and its
+   * automatic fallback is on.
+   */
   fallback: boolean;
-  /** the market comes from a backup indexer of the host's list */
+  /** The market comes from a backup indexer of the host's list. */
   backup: boolean;
 }
 

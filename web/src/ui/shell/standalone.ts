@@ -1,9 +1,12 @@
-// The standalone-mode state for the views (data/standalone.ts): a component that shows what depends on it (the banner, the book label, the "since"
-// notes of the charts and figures) reads it here and re-renders when it changes.
+// The standalone-mode state for the views (data/standalone.ts). A component that shows what
+// depends on it (the banner, the book label, the "since" notes of the charts and figures) reads it
+// here and re-renders when it changes.
 import { useEffect, useState } from 'preact/hooks';
 import type { StandaloneController, StandaloneState } from '../../data/standalone';
 
-/** The standalone state now (null: no standalone mode in these services), kept current. */
+/**
+ * The standalone state now, kept current. It is null when these services have no standalone mode.
+ */
 export function useStandalone(c: StandaloneController | null | undefined): StandaloneState | null {
   const [state, setState] = useState<StandaloneState | null>(c ? c.state : null);
   useEffect(() => {

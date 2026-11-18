@@ -8,13 +8,16 @@ export interface SystemStatus {
   indexer: IndexerStatus;
   node: LiveNodeStatus;
   feed: FeedStatus;
-  /** deep re-organisations seen since the page opened (shallow ones are routine and not tracked) */
+  /** Deep re-organisations seen since the page opened. Shallow ones are routine and not tracked. */
   deepReorgs: DeepReorgs;
 }
 
 const StatusContext = createContext<SystemStatus | null>(null);
 
-/** One shared poller for node + indexer health: the status bar and every view read the same values. */
+/**
+ * One shared poller for node and indexer health. The status bar and every view read the same
+ * values.
+ */
 export function StatusProvider(props: { children: ComponentChildren }) {
   const services = useServices();
   const indexer = useIndexerStatus(services);

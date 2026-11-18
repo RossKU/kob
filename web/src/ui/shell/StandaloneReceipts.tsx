@@ -1,6 +1,8 @@
-// Standalone mode (data/standalone.ts) and the wallet's own orders: while the mode is on, the connected wallet's placement receipts (the records My
-// orders and Recover orders keep, kob/records.ts) are resolved on the node, as My orders resolves them without the indexer (ui/orders/orders-data.ts
-// `resolveRecords`), and every live one joins the book: an order placed before the mode started is shown when it is the wallet's own.
+// Standalone mode (data/standalone.ts) and the wallet's own orders. While the mode is on, the
+// connected wallet's placement receipts are resolved on the node. They are the records My orders
+// and Recover orders keep (kob/records.ts), resolved as My orders resolves them without the
+// indexer (ui/orders/orders-data.ts `resolveRecords`). Every live one joins the book, so an order
+// placed before the mode started is shown when it is the wallet's own.
 import { useEffect } from 'preact/hooks';
 import { readClock } from '../../app/env';
 import { useServices, useWallet } from '../../app/context';
@@ -13,7 +15,7 @@ import { useStandalone } from './standalone';
 /** The receipts are resolved again this often while the mode is on. */
 export const RECEIPTS_EVERY_MS = 60_000;
 
-/** Renders nothing: feeds the standalone book with the wallet's own orders. */
+/** Renders nothing. It feeds the standalone book with the wallet's own orders. */
 export function StandaloneReceipts() {
   const services = useServices();
   const wallet = useWallet();
@@ -40,15 +42,15 @@ export function StandaloneReceipts() {
           const r = found.get(rec.covenantId);
           if (r?.status !== 'live') continue;
           try {
-            // a day order's deadline is the receipt's: the book leaves it out once it passed
+            // A day order's deadline is the receipt's. The book leaves it out once it passed.
             snaps.push(snapshotFromRecord(r, [], rec.deadline ? BigInt(rec.deadline) : null));
           } catch {
-            /* not spendable after all */
+            /* Not spendable after all. */
           }
         }
         c.adopt(snaps, clock?.daa);
       } catch {
-        /* the node could not be asked: next round */
+        /* The node could not be asked. Try again next round. */
       } finally {
         if (alive) timer = setTimeout(() => void run(), RECEIPTS_EVERY_MS);
       }

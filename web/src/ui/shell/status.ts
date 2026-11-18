@@ -1,9 +1,15 @@
-// Live system status for the status bar and the banners: node reachability (+ virtual DAA), indexer health (polled and pushed by the feed),
-// the feed's connection state. Every failure is data (`error`), never an exception: a down node or indexer degrades the UI, it does not blank it.
+// Live system status for the status bar and the banners: node reachability (with the virtual DAA),
+// indexer health (polled and pushed by the feed) and the feed's connection state. Every failure is
+// data (`error`), never an exception. A down node or indexer degrades the UI and does not blank it.
 //
-// Load: `/v1/health` is read every HEALTH_POLL_MS on a shown page (a background tab pauses, and catches up when shown), on a reconnect of the feed,
-// and, at most once per HEALTH_PUSH_GAP_MS, when the feed reports a reorg, a resync or a new state in its periodic `health` frame. The per-block
-// `cursor` frames never trigger a read (a busy chain pushes one per block: that was one read per second per open tab).
+// `/v1/health` is read in these cases.
+// - Every HEALTH_POLL_MS on a shown page. A background tab pauses, and catches up when shown.
+// - On a reconnect of the feed.
+// - At most once per HEALTH_PUSH_GAP_MS, when the feed reports a reorg, a resync or a new state in
+//   its periodic `health` frame.
+//
+// The per-block `cursor` frames never trigger a read. A busy chain pushes one per block, which
+// would be one read per second per open tab.
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import type { Services } from '../../app/services';
 import type { IndexerFailover } from '../../data/indexer-failover';
@@ -16,7 +22,7 @@ import { isDeepReorg } from './reorg-notice';
 import { useStandalone } from './standalone';
 
 export const HEALTH_POLL_MS = 15_000;
-/** feed-triggered health reads (reorg, resync, a state change) are at least this far apart */
+/** Feed-triggered health reads (reorg, resync, a state change) are at least this far apart. */
 export const HEALTH_PUSH_GAP_MS = 10_000;
 
 export interface IndexerStatus {
@@ -26,7 +32,10 @@ export interface IndexerStatus {
   refresh(): void;
 }
 
-/** Runs `fn` at most once per `gapMs` (pure apart from the timer): a call inside the gap is deferred to its end, one run however many calls came in. */
+/**
+ * Runs `fn` at most once per `gapMs`. It is pure apart from the timer. A call inside the gap is
+ * deferred to its end, and one run covers however many calls came in.
+ */
 export class Throttle {
   private last = -Infinity;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -46,7 +55,7 @@ export class Throttle {
     }, wait);
   }
 
-  /** `fn` ran by other means (the poll): the gap starts again from now. */
+  /** `fn` ran by other means (the poll), so the gap starts again from now. */
   ran(): void {
     this.last = this.now();
   }
@@ -63,8 +72,9 @@ export class Throttle {
 }
 
 /**
- * Whether a frame of the feed's `health` channel calls for a `/v1/health` read: only the periodic `health` frame whose state differs from the one on
- * screen (a per-block `cursor` frame never does: the REST poll keeps the lag current).
+ * Whether a frame of the feed's `health` channel calls for a `/v1/health` read. Only the periodic
+ * `health` frame whose state differs from the one on screen does. A per-block `cursor` frame never
+ * does, as the REST poll keeps the lag current.
  */
 export function healthPushDue(frame: { type: string; data: unknown }, held: HealthView | null): boolean {
   if (frame.type !== 'health') return false;
@@ -72,7 +82,10 @@ export function healthPushDue(frame: { type: string; data: unknown }, held: Heal
   return !!d && typeof d.state === 'string' && (held === null || d.state !== held.state);
 }
 
-/** Polls `indexer.health()` (coalesced: never two reads in flight) and re-reads it on the feed's pushes that matter (see the head of this file). */
+/**
+ * Polls `indexer.health()`, coalesced so there are never two reads in flight, and re-reads it on
+ * the feed's pushes that matter (see the head of this file).
+ */
 export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'> & { failover?: IndexerFailover | null; standalone?: StandaloneController | null }): IndexerStatus {
   const [health, setHealth] = useState<HealthView | null>(null);
   const [error, setError] = useState<Error | null>(null);
@@ -86,14 +99,15 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
 
   const refresh = useCallback(() => {
     const indexer = s.indexer;
-    // standalone mode switched on in Settings: the indexer is not asked, not even for its health
+    // Standalone mode switched on in Settings: the indexer is not asked, not even for its health.
     if (!indexer || s.standalone?.manual || !runs.current.request()) return;
     const failover = s.failover ?? null;
     const network = s.config.network;
     const sa = s.standalone ?? null;
     const once = (): void => {
       runs.current.started();
-      // the answer belongs to the indexer that was active when the read was made: after a switch it is dropped
+      // The answer belongs to the indexer that was active when the read was made. After a switch it
+      // is dropped.
       const epoch = failover ? failover.epoch : 0;
       const current = (): boolean => !failover || failover.epoch === epoch;
       indexer.health().then(
@@ -121,7 +135,7 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
     once();
   }, [s.indexer, s.failover, s.standalone, s.config.network]);
 
-  // another indexer is in use now: the answer of the old one says nothing about it
+  // Another indexer is in use now, so the answer of the old one says nothing about it.
   useEffect(() => {
     if (!s.failover) return;
     return s.failover.subscribe((st) => {
@@ -152,9 +166,10 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
     const offs = [
       s.feed.on('health', (f) => healthPushDue(f, held.current) && onPush()),
       s.feed.on('reorg', onPush),
-      // a resync the server sent (the client fell behind); the resync of a reconnect is the `open` below
+      // A resync the server sent, because the client fell behind. The resync of a reconnect is the
+      // `open` below.
       s.feed.on('resync', (e) => e.reason !== 'reconnect' && onPush()),
-      // the socket was down: whatever happened meanwhile, read it now, once
+      // The socket was down. Whatever happened meanwhile, read it now, once.
       s.feed.on('open', (e) => {
         if (e.reconnect && pageVisible()) {
           pushed.ran();
@@ -168,7 +183,7 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
     };
   }, [s.feed, refresh]);
 
-  // back from a manual standalone mode: read the health at once
+  // Back from a manual standalone mode: read the health at once.
   const wasManual = useRef(manual);
   useEffect(() => {
     if (wasManual.current && !manual) refresh();
@@ -178,24 +193,31 @@ export function useIndexerStatus(s: Pick<Services, 'indexer' | 'feed' | 'config'
   return { health, error, assessment, refresh };
 }
 
-/** The indexer's status while standalone mode is on by the setting: not asked (neither good nor bad). */
+/**
+ * The indexer's status while standalone mode is on by the setting: not asked, so neither good nor
+ * bad.
+ */
 const standaloneAssessment: HealthAssessment = { level: 'unknown', code: 'standalone', lagSeconds: null, fresh: false };
 
 export interface NodeStatus {
-  /** undefined until the first answer */
+  /** Undefined until the first answer. */
   reachable: boolean | undefined;
   daa: bigint | null;
   error: Error | null;
 }
 
 /**
- * The longest the status waits for the node's answer. The node client has its own timeouts (about 20 s to connect), but a hung connect or
- * resolver lookup (the SDK's public resolver answers a browser with 404 / no CORS headers on testnet-10) must still end as "unreachable" with a
- * reason, never as "checking..." for ever.
+ * The longest the status waits for the node's answer. The node client has its own timeouts (about
+ * 20 s to connect). A hung connect or resolver lookup must still end as "unreachable" with a
+ * reason, never as "checking..." for ever. The SDK's public resolver answers a browser with 404
+ * and no CORS headers on testnet-10.
  */
 export const NODE_WAIT_MS = 25_000;
 
-/** One read of the node clock, ended by `waitMs` at the latest: the status it makes (`error` says what, a timeout included). */
+/**
+ * One read of the node clock, ended by `waitMs` at the latest. The status it makes says what failed
+ * in `error`, a timeout included.
+ */
 export async function readNodeStatus(node: Pick<Services['node'], 'getClock'>, waitMs: number, prev: NodeStatus | null = null): Promise<NodeStatus> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const limit = new Promise<never>((_, reject) => {
@@ -211,10 +233,16 @@ export async function readNodeStatus(node: Pick<Services['node'], 'getClock'>, w
   }
 }
 
-/** The node is known to be unreachable: a read that has not answered yet (`reachable` undefined) is not "down" (NodeDownNote.tsx). */
+/**
+ * The node is known to be unreachable. A read that has not answered yet (`reachable` undefined) is
+ * not "down" (NodeDownNote.tsx).
+ */
 export const nodeIsDown = (node: Pick<NodeStatus, 'reachable'>): boolean => node.reachable === false;
 
-/** The polled node status: `checkedAt` is when the last read ended (ms, 0 before the first), `refresh` reads again now (a read in flight is not doubled). */
+/**
+ * The polled node status. `checkedAt` is when the last read ended (ms, 0 before the first), and
+ * `refresh` reads again now. A read in flight is not doubled.
+ */
 export interface LiveNodeStatus extends NodeStatus {
   checkedAt: number;
   refresh(): void;
@@ -225,7 +253,7 @@ export function useNodeStatus(s: Pick<Services, 'node'>): LiveNodeStatus {
   const [st, setSt] = useState<NodeStatus & { checkedAt: number }>({ reachable: undefined, daa: null, error: null, checkedAt: 0 });
   const busy = useRef(false);
   const poll = useCallback(() => {
-    // one read at a time: a node that hangs must not pile up a new request every poll
+    // One read at a time, so a node that hangs does not pile up a new request every poll.
     if (busy.current) return;
     busy.current = true;
     void readNodeStatus(s.node, NODE_WAIT_MS).then((next) => {
@@ -239,7 +267,7 @@ export function useNodeStatus(s: Pick<Services, 'node'>): LiveNodeStatus {
   return { ...st, refresh: poll };
 }
 
-/** Connection state of the WebSocket feed (`idle` when there is no feed). */
+/** Connection state of the WebSocket feed. It is `idle` when there is no feed. */
 export function useFeedStatus(feed: Services['feed']): FeedStatus {
   const [status, setStatus] = useState<FeedStatus>(feed?.status ?? 'idle');
   useEffect(() => {
@@ -251,13 +279,16 @@ export function useFeedStatus(feed: Services['feed']): FeedStatus {
 }
 
 export interface DeepReorgs {
-  /** deep re-organisations seen since mount */
+  /** Deep re-organisations seen since mount. */
   count: number;
-  /** chain blocks replaced by the latest one */
+  /** Chain blocks replaced by the latest one. */
   blocks: number;
 }
 
-/** Deep chain re-organisations (more than `DEEP_REORG_BLOCKS` replaced) seen since mount; shallow ones are routine and not counted. */
+/**
+ * Deep chain re-organisations (more than `DEEP_REORG_BLOCKS` replaced) seen since mount. Shallow
+ * ones are routine and not counted.
+ */
 export function useDeepReorgs(feed: Services['feed']): DeepReorgs {
   const [s, setS] = useState<DeepReorgs>({ count: 0, blocks: 0 });
   useEffect(() => (feed ? feed.on('reorg', (e) => { if (isDeepReorg(e?.reverted_blocks)) setS((x) => ({ count: x.count + 1, blocks: e.reverted_blocks })); }) : undefined), [feed]);
