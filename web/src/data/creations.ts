@@ -1,65 +1,84 @@
-// Token creations of this browser that may not have reached the chain whole (KCC-23: the preparation, then the genesis spending its output 0).
+// Token creations of this browser that may not have reached the chain whole. Under KCC-23 a
+// creation is the preparation, then the genesis spending its output 0.
 //
-// A record is written once the preparation is signed and validated, BEFORE it is sent, and removed once the genesis is accepted. It holds the
-// signed preparation and the genesis: as an unsigned plan (`genesisBuilt`) until the wallet signed it, then signed (`genesis`). An extension
-// wallet signs the genesis only after the preparation went out (wallet/chain.ts), so a record may hold no signed genesis: the user declined the
-// second approval, or the page died in between. The Create token page offers it again ("Finish the creation"): a saved signed genesis is sent
-// as it is; an unsigned one is signed (one approval) once the preparation's output 0 is visible.
+// A record is written once the preparation is signed and validated, before it is sent, and
+// removed once the genesis is accepted. It holds the signed preparation and the genesis. The
+// genesis is an unsigned plan (`genesisBuilt`) until the wallet signed it, then signed
+// (`genesis`). An extension wallet signs the genesis only after the preparation went out
+// (wallet/chain.ts). So a record may hold no signed genesis, when the user declined the second
+// approval or the page died in between. The Create token page offers it again ("Finish the
+// creation"). A saved signed genesis is sent as it is. An unsigned one is signed, with one
+// approval, once the preparation's output 0 is visible.
 //
-// The preparation's output 0 is an ordinary P2PK UTXO of the creator, spendable by their wallet like any other coin, and discarding a record
-// only forgets the unsent genesis. A record is UNTRUSTED input: anything that can write this origin's localStorage (an extension, another user
-// of the device, a script) can plant one. So the shapes and sizes are checked here, and a stored genesis is never signed: "Finish the creation"
-// plans it again from the record's facts and checks it as a fresh creation (wallet/creation-replan.ts, wallet/create.ts). Per-browser
-// convenience: a blocked storage keeps no record, and the flow still works while the page is open.
+// The preparation's output 0 is an ordinary P2PK UTXO of the creator, spendable by their wallet
+// like any other coin. Discarding a record only forgets the unsent genesis. A record is untrusted
+// input, because anything that can write this origin's localStorage can plant one, such as an
+// extension, another user of the device or a script. So the shapes and sizes are checked here,
+// and a stored genesis plan is never signed. "Finish the creation" plans it again from the
+// record's facts and checks it as a fresh creation (wallet/creation-replan.ts, wallet/create.ts).
+// This is a per-browser convenience. A blocked storage keeps no record, and the flow still works
+// while the page is open.
 //
-// `kob.creations.v2`: a v1 record (`kob.creations.v1`, always with a signed genesis) is moved here on the first read. A page of an older build
-// reads only v1 and would drop a record without a signed genesis on its next write: the new records never go there.
+// Records live under `kob.creations.v2`. A v1 record (`kob.creations.v1`, always with a signed
+// genesis) is moved here on the first read. A page of an older build reads only v1 and would drop
+// a record without a signed genesis on its next write, so new records never go there.
 import { defaultStorage, type StorageLike } from '../config';
 import type { IssueCurve, IssueDeclaration, IssueDocs, IssueToken } from '../kob/issue';
 import type { BuiltTx, Hex, TxJson } from '../kob/types';
 
 const KEY = 'kob.creations.v2';
 const KEY_V1 = 'kob.creations.v1';
-/** Most records kept per network (the oldest are dropped). */
+/** Most records kept per network. The oldest are dropped. */
 const MAX_RECORDS = 20;
 /**
- * The executor's indexer drops a preparation no genesis spent after 72 hours (crates/kobd/src/config.rs): a genesis sent later is valid, but
- * other apps may no longer show the name. Past this age (60 h) the page warns and recommends a new creation.
+ * The age past which the page warns and recommends a new creation, 60 h. The executor's indexer
+ * drops a preparation no genesis spent after 72 hours (crates/kobd/src/config.rs). A genesis sent
+ * later is valid, but other apps may no longer show the name.
  */
 export const DECLARATION_WARN_MS = 60 * 3600_000;
 
+/** One token creation of this browser that may not have reached the chain whole. */
 export interface CreationRecord {
   network: string;
-  /** the creator's x-only key: the records of another wallet are not offered */
+  /** The creator's x-only key. The records of another wallet are not offered. */
   maker: Hex;
-  /** ms since the epoch */
+  /** Ms since the epoch. */
   createdAt: number;
   covenantId: Hex;
   prepTxid: Hex;
   genesisTxid: Hex;
-  /** signed and validated */
+  /** Signed and validated. */
   prep: TxJson;
-  /** the genesis as planned, unsigned (absent in a record moved from v1, which always holds a signed genesis) */
+  /**
+   * The genesis as planned, unsigned. A record moved from v1 lacks it, because it always holds a
+   * signed genesis.
+   */
   genesisBuilt?: BuiltTx;
-  /** the genesis signed and validated, once the wallet signed it */
+  /** The genesis signed and validated, once the wallet signed it. */
   genesis?: TxJson;
   token: IssueToken;
   declaration: IssueDeclaration;
   docs: IssueDocs;
-  /** the preparation was accepted by the node (sent): the genesis is what remains */
+  /** Whether the node accepted the preparation, so the genesis is what remains. */
   prepSent: boolean;
-  /** when the node took the preparation (ms since the epoch) */
+  /** When the node took the preparation, in ms since the epoch. */
   prepSentAt?: number;
-  /** "Sell on a curve": the curve the genesis places (its result line and placement record when the creation is finished later) */
+  /**
+   * "Sell on a curve": the curve the genesis places, for its result line and placement record
+   * when the creation is finished later.
+   */
   curve?: IssueCurve;
-  /** "Sell at one price": what the result offers to place (base units, sompi per whole token) */
+  /** "Sell at one price": what the result offers to place, base units and sompi per whole token. */
   askSale?: { sell: string; price: string };
 }
 
 const HEX32 = /^[0-9a-f]{64}$/;
 const HEX = /^(?:[0-9a-f]{2})*$/;
 const U64 = /^[0-9]{1,20}$/;
-/** Bounds of a stored record (a planted one is dropped, never parsed further): the raw text, the records read, inputs, outputs, text. */
+/**
+ * Bounds of a stored record, so a planted one is dropped and never parsed further. They cover the
+ * raw text, the records read, the inputs and outputs, and text fields.
+ */
 const MAX_RAW = 4_000_000;
 const MAX_READ = 64;
 const MAX_IO = 256;
@@ -118,14 +137,15 @@ function readAll(storage: StorageLike | null): CreationRecord[] {
     return [];
   }
   if (!v1raw) return v2;
-  // move the v1 records here (a record of the same creation already here wins), then drop the v1 key
+  // Move the v1 records here, where a record of the same creation already here wins. Then drop
+  // the v1 key.
   const v1 = parse(v1raw).filter((r) => !v2.some((x) => x.network === r.network && x.covenantId === r.covenantId));
   const all = [...v1, ...v2];
   if (writeAll(storage, all)) {
     try {
       storage?.removeItem?.(KEY_V1);
     } catch {
-      /* moved again on the next read */
+      /* Moved again on the next read. */
     }
   }
   return all;
@@ -145,13 +165,13 @@ function writeAll(storage: StorageLike | null, all: CreationRecord[]): boolean {
   }
 }
 
-/** Saves (or replaces, by covenant id) a creation record. False when the storage is unavailable. */
+/** Saves a creation record, or replaces it by covenant id. False if the storage is unavailable. */
 export function saveCreation(rec: CreationRecord, storage: StorageLike | null = defaultStorage()): boolean {
   const all = readAll(storage).filter((r) => !(r.network === rec.network && r.covenantId === rec.covenantId));
   return writeAll(storage, [...all, rec]);
 }
 
-/** Marks the preparation of a record as sent (at `at`, ms). */
+/** Marks the preparation of a record as sent at `at`, in ms. */
 export function markPrepSent(network: string, covenantId: Hex, storage: StorageLike | null = defaultStorage(), at: number = Date.now()): void {
   const all = readAll(storage);
   const r = all.find((x) => x.network === network && x.covenantId === covenantId);
@@ -162,7 +182,7 @@ export function markPrepSent(network: string, covenantId: Hex, storage: StorageL
   }
 }
 
-/** Forgets a record (the genesis was accepted, or the user discarded it). */
+/** Forgets a record, when the genesis was accepted or the user discarded it. */
 export function removeCreation(network: string, covenantId: Hex, storage: StorageLike | null = defaultStorage()): void {
   const all = readAll(storage);
   const rest = all.filter((r) => !(r.network === network && r.covenantId === covenantId));
@@ -176,15 +196,18 @@ export function listCreations(network: string, maker: Hex, storage: StorageLike 
 }
 
 /**
- * The preparation output 0 of every record (`txid:0`, lower case): reserved for its genesis, never funding of another transaction while the
- * record exists (app/pending-spends.ts).
+ * The preparation output 0 of every record, as `txid:0` in lower case. It is reserved for its
+ * genesis and never funds another transaction while the record exists (app/pending-spends.ts).
  */
 export function reservedCreationOutpoints(storage: StorageLike | null = defaultStorage()): Set<string> {
   return new Set(readAll(storage).map((r) => `${r.prepTxid.toLowerCase()}:0`));
 }
 
-/** The record holds a signed genesis: finishing it needs no signature. */
+/** Whether the record holds a signed genesis, so finishing it needs no signature. */
 export const genesisSigned = (r: CreationRecord): r is CreationRecord & { genesis: TxJson } => r.genesis !== undefined;
 
-/** The record is old enough that the declaration window of other apps may be closing (`DECLARATION_WARN_MS`). */
+/**
+ * Whether the record is old enough that the declaration window of other apps may be closing
+ * (`DECLARATION_WARN_MS`).
+ */
 export const creationIsOld = (r: Pick<CreationRecord, 'createdAt' | 'prepSentAt'>, now: number = Date.now()): boolean => now - (r.prepSentAt ?? r.createdAt) > DECLARATION_WARN_MS;
