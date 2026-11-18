@@ -1,9 +1,11 @@
-// View models of the market-data endpoints (M5): price-basis conversion, display precision, candles with gap filling, 24 h stats, the trade
-// tape and depth series. Pure; bigint arithmetic for every exact figure, floats only for chart coordinates.
+// View models of the market-data endpoints: price-basis conversion, display precision, candles
+// with gap filling, 24 h stats, the trade tape and depth series. The module is pure. It uses
+// bigint arithmetic for every exact figure and floats only for chart coordinates.
 //
-// Price basis: every market-data price is sompi per `price_basis` token base units (the token's standard scale `10^decimals`). KAS per whole
-// token = price / 1e8 * 10^decimals / price_basis. A book price (an order's state price: sompi per `scale` base units) is the same thing with
-// basis = scale, so every formatter below takes (price, decimals, basis) and works for both.
+// Price basis: every market-data price is sompi per `price_basis` token base units, the token's
+// standard scale `10^decimals`. KAS per whole token is `price / 1e8 * 10^decimals / price_basis`.
+// A book price, an order's state price in sompi per `scale` base units, is the same thing with
+// basis = scale. So every formatter below takes (price, decimals, basis) and works for both.
 import type { CandleInterval, CandleView, DepthView, StatsView, TradeView, TradesView } from '../../data/indexer-types';
 import { sompiToUsd, type Rate } from '../../app/fiat';
 import { cmpRational, formatRational, type Rational } from '../../kob/pair';
@@ -13,9 +15,12 @@ import { displayPriceDp } from '../kit/format';
 import type { BookModel } from './book-model';
 import type { TradeRow } from './trades-model';
 
-// ------------------------------------------------------------------------------------------------ parsing
+// ----------------------------------------------------------------------------------------- parsing
 
-/** Unsigned decimal string (or safe integer) -> bigint; anything else -> null (never guessed). */
+/**
+ * Parses an unsigned decimal string or safe integer into a bigint. Anything else gives null and is
+ * never guessed.
+ */
 export function bigOrNull(v: unknown): bigint | null {
   if (typeof v === 'bigint') return v >= 0n ? v : null;
   if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0 ? BigInt(v) : null;
@@ -23,42 +28,50 @@ export function bigOrNull(v: unknown): bigint | null {
   return null;
 }
 
-/** A usable price basis (positive), else null. */
+/** A usable price basis, which must be positive, else null. */
 export const basisOf = (v: unknown): bigint | null => {
   const b = bigOrNull(v);
   return b !== null && b > 0n ? b : null;
 };
 
-// ------------------------------------------------------------------------------------------------ price basis conversion
+// -------------------------------------------------------------------------- price basis conversion
 
-/** Sompi per `basis` base units -> sompi per whole token, rounded to nearest. */
+/** Converts sompi per `basis` base units to sompi per whole token, rounded to nearest. */
 export function basisToTokenSompi(price: bigint, decimals: number, basis: bigint): bigint {
   return roundDiv(price * pow10(decimals), basis);
 }
 
-/** Sompi per `basis` base units -> KAS per whole token as a float (chart coordinates only; exact text goes through `priceText`). */
+/**
+ * Converts sompi per `basis` base units to KAS per whole token as a float. It is for chart
+ * coordinates only. Exact text goes through `priceText`.
+ */
 export function basisToNumber(price: bigint, decimals: number, basis: bigint): number {
   if (basis <= 0n) return 0;
-  // 12 extra digits keep ~15 significant digits for any realistic price
+  // 12 extra digits keep about 15 significant digits for any realistic price.
   const scaled = (price * pow10(decimals) * 10n ** 12n) / basis;
   return Number(scaled) / 1e20;
 }
 
-/** Base units -> whole tokens as a float (chart coordinates only). */
+/** Converts base units to whole tokens as a float, for chart coordinates only. */
 export const unitsToNumber = (amount: bigint, decimals: number): number => Number(amount) / 10 ** decimals;
 
-// the significant-digit rule is the kit's (ui/kit/format.ts: `displayPriceDp` is the one display precision; `priceDecimals` is its uncapped base)
+// The significant-digit rule is the kit's (ui/kit/format.ts). `displayPriceDp` is the one display
+// precision and `priceDecimals` is its uncapped base.
 export { priceDecimals } from '../kit/format';
 
 /** Exact KAS-per-token text with `dp` fraction digits (half up), thousands grouped. */
 export function priceText(price: bigint, decimals: number, basis: bigint, dp: number): string {
-  // a price DIFFERENCE can be negative: the spread of a momentarily crossed book (a bid above an ask until a matcher crosses them)
+  // A price difference can be negative, such as the spread of a momentarily crossed book. A bid is
+  // above an ask until a matcher crosses them.
   if (price < 0n) return '-' + priceText(-price, decimals, basis, dp);
   if (basis <= 0n) return formatUnits(price, 8, { maxFraction: dp, trim: false, group: ',' });
   return formatPricePerToken(price, decimals, basis, { maxFraction: dp, trim: false, group: ',' });
 }
 
-/** Every digit of a price (KAS per whole token; trailing zeros trimmed, thousands grouped): the `title` of a price that is shown rounded to the market's display decimals. */
+/**
+ * Every digit of a price in KAS per whole token, with trailing zeros trimmed and thousands
+ * grouped. It is the `title` of a price that is shown rounded to the market's display decimals.
+ */
 export function exactPriceText(price: bigint, decimals: number, basis: bigint): string {
   if (price < 0n) return '-' + exactPriceText(-price, decimals, basis);
   if (basis <= 0n) return formatUnits(price, 8, { maxFraction: 8, group: ',' });
@@ -67,45 +80,56 @@ export function exactPriceText(price: bigint, decimals: number, basis: bigint): 
 
 const plainNumber = (s: string): string => s.replace(/,/g, '').replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 
-/** `exact` when `shown` (a price cut to the display decimals) is not the whole of it, else null: a title is only worth having when it says more than the cell. */
+/**
+ * Returns `exact` when `shown`, a price cut to the display decimals, is not the whole of it, else
+ * null. A title is only worth having when it says more than the cell.
+ */
 export function exactIfRounded(shown: string | null, exact: string | null): string | null {
   if (!shown || !exact) return null;
   return plainNumber(shown) === plainNumber(exact) ? null : exact;
 }
 
-/** Token amount text with at most `maxFraction` digits (trailing zeros trimmed), thousands grouped. */
+/**
+ * Token amount text with at most `maxFraction` digits (trailing zeros trimmed), thousands grouped.
+ */
 export function amountText(amount: bigint, decimals: number, maxFraction = 4): string {
   return formatUnits(amount, decimals, { maxFraction: Math.min(maxFraction, decimals), group: ',' });
 }
 
-/** Compact text of a large figure (`1.2M`, `950K`, `12.3`) in the current locale; exact values belong in titles. */
+/**
+ * Compact text of a large figure (`1.2M`, `950K`, `12.3`) in the current locale. Exact values
+ * belong in titles.
+ */
 export function compactText(n: number, maxFraction = 2): string {
   if (!Number.isFinite(n)) return '—';
   if (Math.abs(n) < 10_000) return formatNumber(n, { maximumFractionDigits: Math.abs(n) < 10 ? Math.max(maxFraction, 4) : maxFraction });
   return formatNumber(n, { notation: 'compact', maximumFractionDigits: maxFraction });
 }
 
-// ------------------------------------------------------------------------------------------------ candles
+// ----------------------------------------------------------------------------------------- candles
 
 export const INTERVAL_MS: Record<CandleInterval, number> = { '1m': 60_000, '5m': 300_000, '1h': 3_600_000, '1d': 86_400_000 };
 
 export interface Candle {
-  /** bucket start, unix ms */
+  /** Bucket start, unix ms. */
   t: number;
   o: bigint;
   h: bigint;
   l: bigint;
   c: bigint;
-  /** token base units */
+  /** Token base units. */
   volume: bigint;
-  /** sompi */
+  /** Sompi. */
   quote: bigint;
   trades: number;
-  /** a bucket without trades, carried from the previous close */
+  /** A bucket without trades, carried from the previous close. */
   filled: boolean;
 }
 
-/** Indexer candles -> typed candles, ascending, deduplicated by bucket; malformed items are dropped. */
+/**
+ * Turns indexer candles into typed candles, ascending and deduplicated by bucket. Malformed items
+ * are dropped.
+ */
 export function parseCandles(items: readonly CandleView[]): Candle[] {
   const by = new Map<number, Candle>();
   for (const it of items) {
@@ -117,16 +141,19 @@ export function parseCandles(items: readonly CandleView[]): Candle[] {
 }
 
 export interface GapFillOptions {
-  /** extend the series with carried buckets up to (and including) the bucket of this time, unix ms */
+  /**
+   * Extend the series with carried buckets up to and including the bucket of this time, unix ms.
+   */
   until?: number;
-  /** keep at most this many buckets (the newest); default 2000 */
+  /** Keep at most this many buckets, the newest. The default is 2000. */
   maxBars?: number;
 }
 
 /**
- * The indexer omits buckets without trades; a chart needs them. Every missing bucket between two candles (and after the last one, up to
- * `until`) becomes a flat candle at the previous close with zero volume. Only the newest `maxBars` buckets are produced (a sparse 1m
- * series over months does not allocate millions of bars).
+ * The indexer omits buckets without trades, and a chart needs them. Every missing bucket between
+ * two candles, and after the last one up to `until`, becomes a flat candle at the previous close
+ * with zero volume. Only the newest `maxBars` buckets are produced, so a sparse 1m series over
+ * months does not allocate millions of bars.
  */
 export function fillCandleGaps(candles: readonly Candle[], intervalMs: number, opts: GapFillOptions = {}): Candle[] {
   if (!candles.length || intervalMs <= 0) return [...candles];
@@ -139,10 +166,10 @@ export function fillCandleGaps(candles: readonly Candle[], intervalMs: number, o
   const out: Candle[] = [];
   let i = 0;
   let prevClose: bigint | null = null;
-  // candles before the window only provide the carried close
+  // Candles before the window only provide the carried close.
   while (i < sorted.length && sorted[i]!.t < start) prevClose = sorted[i++]!.c;
   for (let t = start; t <= end; t += intervalMs) {
-    // candles off the interval grid (should not happen) are taken as they come
+    // Candles off the interval grid are taken as they come. This should not happen.
     while (i < sorted.length && sorted[i]!.t < t) {
       out.push(sorted[i]!);
       prevClose = sorted[i++]!.c;
@@ -160,7 +187,10 @@ export function fillCandleGaps(candles: readonly Candle[], intervalMs: number, o
 export interface ChartBar { time: number; open: number; high: number; low: number; close: number; /** no trades in the bucket (carried close) */ filled: boolean }
 export interface VolumeBar { time: number; value: number; up: boolean }
 
-/** Candles -> chart series (time in UTC seconds, prices in KAS per whole token, volume in whole tokens). */
+/**
+ * Turns candles into a chart series, with time in UTC seconds, prices in KAS per whole token and
+ * volume in whole tokens.
+ */
 export function chartSeries(candles: readonly Candle[], decimals: number, basis: bigint): { bars: ChartBar[]; volumes: VolumeBar[] } {
   const bars: ChartBar[] = [];
   const volumes: VolumeBar[] = [];
@@ -172,53 +202,62 @@ export function chartSeries(candles: readonly Candle[], decimals: number, basis:
   return { bars, volumes };
 }
 
-// ------------------------------------------------------------------------------------------------ 24 h stats
+// -------------------------------------------------------------------------------------- 24 h stats
 
 export type Tone = 'up' | 'down' | 'flat';
 
 export interface StatsModel {
-  /** KAS per token, fixed decimals */
+  /** KAS per token, fixed decimals. */
   last: string | null;
   lastSide: 'buy' | 'sell' | null;
-  /** `+2.87%` / `-0.40%` / `0.00%` */
+  /** `+2.87%`, `-0.40%` or `0.00%`. */
   change: string | null;
-  /** muted ('flat') while the change rests on a thin window (`changeNote`) */
+  /** Muted ('flat') while the change rests on a thin window (`changeNote`). */
   changeTone: Tone | null;
-  /** the tooltip of the change when it rests on a thin window and / or a thin book: its lines ("Based on N trades in 24 h", "Thin book: ..."), one per line */
+  /**
+   * The tooltip of the change when it rests on a thin window or a thin book. It has one line per
+   * mark, such as "Based on N trades in 24 h" and "Thin book: ...".
+   */
   changeNote?: string | null;
-  /** fewer than `THIN_TRADES_24H` trades (`data-thin`) */
+  /** Fewer than `THIN_TRADES_24H` trades (`data-thin`). */
   changeThin?: boolean;
-  /** a thin book (`thinBookUnder`; `data-thin-book`) */
+  /** A thin book (`thinBookUnder`, `data-thin-book`). */
   changeThinBook?: boolean;
   high: string | null;
   low: string | null;
-  /** 24 h volume in tokens (compact) and exact */
+  /** 24 h volume in tokens, compact and exact. */
   volume: string | null;
   volumeExact: string | null;
-  /** 24 h volume in KAS (compact) and exact */
+  /** 24 h volume in KAS, compact and exact. */
   quoteVolume: string | null;
   quoteVolumeExact: string | null;
   trades: number | null;
-  /** the trade count as shown when it is not the plain number (a lower bound: `≥ 12`) */
+  /** The trade count as shown when it is not the plain number, such as the lower bound `≥ 12`. */
   tradesText?: string | null;
-  /** `0.24%` */
+  /** `0.24%`. */
   spread: string | null;
-  /** the whole price when the shown one is rounded to the display decimals (their tooltips) */
+  /** The whole price when the shown one is rounded to the display decimals, for their tooltips. */
   lastExact?: string | null;
   highExact?: string | null;
   lowExact?: string | null;
-  /** decimals used for the prices */
+  /** Decimals used for the prices. */
   dp: number;
 }
 
 /**
- * A 24 h change rests on a thin window when it counts fewer trades than this: the change compares the last trade with the price 24 h ago (the last trade before the
- * window, else the window's first), so with one or two trades it compares two prints, and one tiny trade can put it at +900%.
- * Such a change is shown muted with its trade count in the tooltip (nothing else changes: same text, same cell).
+ * A 24 h change rests on a thin window when it counts fewer trades than this. The change compares
+ * the last trade with the price 24 h ago, which is the last trade before the window or else the
+ * window's first. With one or two trades it compares two prints, and one tiny trade can put it at
+ * +900%. Such a change is shown muted with its trade count in the tooltip. Nothing else changes,
+ * so the text and the cell stay the same.
  */
 export const THIN_TRADES_24H = 3;
 
-/** The tooltip of a change over a thin window ("Based on 2 trades in 24 h"), or null when it has a normal basis or the indexer did not report the count (an older one: no marker). */
+/**
+ * The tooltip of a change over a thin window ("Based on 2 trades in 24 h"). It is null when the
+ * change has a normal basis or the indexer did not report the count, as an older one does not.
+ * There is then no marker.
+ */
 export function thinChangeNote(bps: number | null, trades: number | null | undefined): string | null {
   if (bps === null || typeof trades !== 'number' || !Number.isInteger(trades) || trades < 1 || trades >= THIN_TRADES_24H) return null;
   return t(trades === 1 ? 'market.change.thinOne' : 'market.change.thin', { n: trades });
@@ -226,14 +265,20 @@ export function thinChangeNote(bps: number | null, trades: number | null | undef
 
 /** A book's thin-book threshold is this share of the token's fully diluted value (FDV)... */
 export const THIN_BOOK_FDV_SHARE = 0.001;
-/** ...but at least this many US dollars (CoinMarketCap's smallest test order for its liquidity score) */
+/**
+ * ...but at least this many US dollars (CoinMarketCap's smallest test order for its liquidity
+ * score)...
+ */
 export const THIN_BOOK_MIN_USD = 100;
 /** ...and at most this many (its largest). The depth band is CoinGecko's +/-2 %. */
 export const THIN_BOOK_MAX_USD = 10_000;
 
 const FDV_SHARE_DEN = BigInt(Math.round(1 / THIN_BOOK_FDV_SHARE));
 
-/** The thin-book threshold in USD for a token of fully diluted value `fdvUsd`: `THIN_BOOK_FDV_SHARE` of it, clamped to `THIN_BOOK_MIN_USD` .. `THIN_BOOK_MAX_USD`. Exact. */
+/**
+ * The thin-book threshold in USD for a token of fully diluted value `fdvUsd`. It is
+ * `THIN_BOOK_FDV_SHARE` of it, clamped to `THIN_BOOK_MIN_USD` .. `THIN_BOOK_MAX_USD`, and exact.
+ */
 export function thinBookThresholdUsd(fdvUsd: Rational): Rational {
   const share: Rational = { num: fdvUsd.num, den: fdvUsd.den * FDV_SHARE_DEN };
   const lo: Rational = { num: BigInt(THIN_BOOK_MIN_USD), den: 1n };
@@ -242,9 +287,13 @@ export function thinBookThresholdUsd(fdvUsd: Rational): Rational {
 }
 
 /**
- * The thin-book threshold (USD) when the book of a KAS market is thin, else null: the smaller of `depth_2pct_bid_sompi` and `depth_2pct_ask_sompi` (a missing side is 0) is
- * worth less than `thinBookThresholdUsd` of the token's FDV = `supplyUnits` (its fixed total supply, base units) x the reference price (the mid, else the one side, else the
- * last trade) x `rate` (USD per KAS, the app's price feed). Null without the rate, the supply, a price or the indexer's two figures (an older one): never a guess.
+ * The thin-book threshold in USD when the book of a KAS market is thin, else null. A book is thin
+ * when the smaller of `depth_2pct_bid_sompi` and `depth_2pct_ask_sompi` is worth less than
+ * `thinBookThresholdUsd` of the token's FDV. A missing side counts as 0. The FDV is `supplyUnits`,
+ * the fixed total supply in base units, times the reference price, times `rate`, the app's USD per
+ * KAS price feed. The reference price is the mid, else the one side, else the last trade. The
+ * result is null without the rate, the supply, a price or the indexer's two figures, which an
+ * older indexer lacks. It is never a guess.
  */
 export function thinBookUnder(
   v: Pick<StatsView, 'price_basis' | 'mid' | 'best_ask' | 'best_bid' | 'last' | 'depth_2pct_bid_sompi' | 'depth_2pct_ask_sompi'> | null | undefined,
@@ -257,26 +306,30 @@ export function thinBookUnder(
   const basis = basisOf(v.price_basis);
   const ref = bigOrNull(v.mid) ?? bigOrNull(v.best_ask) ?? bigOrNull(v.best_bid) ?? bigOrNull(v.last);
   if (bid === null || ask === null || bid < 0n || ask < 0n || !basis || ref === null || ref <= 0n) return null;
-  // sompi per `basis` base units x base units / basis = the FDV in sompi (exact), then x the rate
+  // Sompi per `basis` base units times base units over basis is the FDV in sompi, exact. Then
+  // multiply by the rate.
   const fdvUsd = sompiToUsd(ref * supplyUnits, rate);
   const threshold = thinBookThresholdUsd({ num: fdvUsd.num, den: fdvUsd.den * basis });
   const usd = sompiToUsd(bid < ask ? bid : ask, rate);
   return cmpRational(usd, threshold) < 0 ? threshold : null;
 }
 
-/** What marks a 24 h change as thin: few trades and / or a thin book. `note` is the tooltip, each applicable line on its own line; null when neither applies or there is no change. */
+/**
+ * What marks a 24 h change as thin: few trades or a thin book. `note` is the tooltip, with each
+ * applicable line on its own line. It is null when neither applies or there is no change.
+ */
 export interface ChangeMarks {
   note: string;
   thinTrades: boolean;
   thinBook: boolean;
 }
 
-/** `thinBookUsd`: the threshold when the book is thin (`thinBookUnder`), else null. */
+/** `thinBookUsd` is the threshold when the book is thin (`thinBookUnder`), else null. */
 export function changeMarks(bps: number | null, trades: number | null | undefined, thinBookUsd: Rational | null): ChangeMarks | null {
   if (bps === null) return null;
   const tradesLine = thinChangeNote(bps, trades);
   if (!tradesLine && !thinBookUsd) return null;
-  // the book line and, under it, the rule it comes from (the named constants)
+  // The book line comes first. Under it is the rule it comes from, with the named constants.
   const bookLine = thinBookUsd
     ? [
         t('market.change.thinBook', { usd: '$' + formatRational(thinBookUsd, 0, 'nearest', 0, ',') }),
@@ -289,12 +342,12 @@ export function changeMarks(bps: number | null, trades: number | null | undefine
   return { note: lines.join('\n'), thinTrades: !!tradesLine, thinBook: !!thinBookUsd };
 }
 
-/** The mark fields of a `StatsModel` (none when the change is not thin). */
+/** The mark fields of a `StatsModel`. There are none when the change is not thin. */
 export function changeMarkFields(m: ChangeMarks | null): Pick<StatsModel, 'changeNote' | 'changeThin' | 'changeThinBook'> {
   return m ? { changeNote: m.note, ...(m.thinTrades ? { changeThin: true } : {}), ...(m.thinBook ? { changeThinBook: true } : {}) } : {};
 }
 
-/** Signed percentage text of basis points: 287 -> `+2.87%`. */
+/** Signed percentage text of basis points, so 287 gives `+2.87%`. */
 export function bpsPercentText(bps: number): string {
   const v = Math.trunc(bps);
   const sign = v > 0 ? '+' : v < 0 ? '-' : '';
@@ -304,7 +357,10 @@ export function bpsPercentText(bps: number): string {
 
 export const toneOf = (bps: number | null): Tone | null => (bps === null ? null : bps > 0 ? 'up' : bps < 0 ? 'down' : 'flat');
 
-/** Stats of `/v1/stats` for display. `null` stats (an indexer without the route) give an all-dash model. */
+/**
+ * Stats of `/v1/stats` for display. `null` stats, from an indexer without the route, give an
+ * all-dash model.
+ */
 export function statsModel(v: StatsView | null, decimals: number, dpHint?: number, rate?: Rate | null, supplyUnits?: bigint | null): StatsModel {
   const basis = v ? basisOf(v.price_basis) : null;
   const last = v && basis ? bigOrNull(v.last) : null;
@@ -343,22 +399,22 @@ export function statsModel(v: StatsView | null, decimals: number, dpHint?: numbe
   };
 }
 
-// ------------------------------------------------------------------------------------------------ trade tape
+// -------------------------------------------------------------------------------------- trade tape
 
 export interface TapeRow {
   id: string;
-  /** the transaction of the trade (the explorer link of the row); null when unknown */
+  /** The transaction of the trade, which the row links to in the explorer. Null when unknown. */
   txid?: string | null;
-  /** unix ms; null when unknown */
+  /** Unix ms. Null when unknown. */
   timeMs: number | null;
   daa: number;
-  /** the aggressor's side */
+  /** The aggressor's side. */
   side: 'buy' | 'sell' | null;
-  /** sompi per `basis` base units */
+  /** Sompi per `basis` base units. */
   price: bigint | null;
-  /** token base units */
+  /** Token base units. */
   amount: bigint | null;
-  /** sompi */
+  /** Sompi. */
   quote: bigint | null;
   settled: boolean;
   fills: number;
@@ -367,11 +423,11 @@ export interface TapeRow {
 export interface Tape {
   basis: bigint | null;
   rows: TapeRow[];
-  /** where the rows came from: the trades endpoint, or the fill events of an older indexer */
+  /** Where the rows came from: the trades endpoint, or the fill events of an older indexer. */
   source: 'trades' | 'fills';
 }
 
-/** `/v1/trades` -> tape rows (newest first, as served). */
+/** Turns `/v1/trades` into tape rows, newest first as served. */
 export function tapeFromTrades(v: TradesView, limit = 50): Tape {
   const rows = v.items.slice(0, limit).map((t: TradeView): TapeRow => ({
     id: String(t.id),
@@ -389,8 +445,9 @@ export function tapeFromTrades(v: TradesView, limit = 50): Tape {
 }
 
 /**
- * Fallback for an indexer without `/v1/trades`: one row per fill event (the orders' state prices, so basis = the market's scale). Without a
- * known scale the prices are left per the orders' own basis.
+ * Fallback for an indexer without `/v1/trades`. It makes one row per fill event. These carry the
+ * orders' state prices, so basis is the market's scale. Without a known scale the prices are left
+ * per the orders' own basis.
  */
 export function tapeFromFills(rows: readonly TradeRow[], scale: bigint | null): Tape {
   return {
@@ -411,7 +468,10 @@ export function tapeFromFills(rows: readonly TradeRow[], scale: bigint | null): 
   };
 }
 
-/** `HH:MM:SS` in local time (the tape shows today's trades; older ones get the date in the title). */
+/**
+ * `HH:MM:SS` in local time. The tape shows today's trades, and older ones get the date in the
+ * title.
+ */
 export function tapeTime(ms: number | null): string {
   if (ms === null) return '--:--:--';
   const d = new Date(ms);
@@ -419,29 +479,32 @@ export function tapeTime(ms: number | null): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-// ------------------------------------------------------------------------------------------------ depth
+// ------------------------------------------------------------------------------------------- depth
 
 export interface DepthPoint {
-  /** KAS per whole token */
+  /** KAS per whole token. */
   price: number;
-  /** cumulative whole tokens from the best price up to this level */
+  /** Cumulative whole tokens from the best price up to this level. */
   cum: number;
 }
 
 export interface DepthSeries {
-  /** best first (highest bid first) */
+  /** Best first, so the highest bid comes first. */
   bids: DepthPoint[];
-  /** best first (lowest ask first) */
+  /** Best first, so the lowest ask comes first. */
   asks: DepthPoint[];
   mid: number | null;
-  /** some bid amounts are upper bounds */
+  /** Some bid amounts are upper bounds. */
   estimated: boolean;
-  /** exact cumulative totals (base units) of each side, for the summary */
+  /** Exact cumulative totals in base units of each side, for the summary. */
   bidTotal: bigint;
   askTotal: bigint;
 }
 
-/** Cumulates amounts from the best price outwards (the indexer's `cum_*` fields are not trusted for drawing: they are recomputed). */
+/**
+ * Cumulates amounts from the best price outwards. The indexer's `cum_*` fields are not trusted for
+ * drawing, so they are recomputed.
+ */
 export function cumulate(levels: readonly { price: bigint; amount: bigint }[]): { price: bigint; amount: bigint; cum: bigint }[] {
   let cum = 0n;
   return levels.map((l) => {
@@ -450,7 +513,10 @@ export function cumulate(levels: readonly { price: bigint; amount: bigint }[]): 
   });
 }
 
-/** `/v1/depth` -> depth series in KAS per token and whole tokens. Levels are sorted best first whatever the server order. */
+/**
+ * Turns `/v1/depth` into a depth series in KAS per token and whole tokens. Levels are sorted best
+ * first whatever the server order.
+ */
 export function depthFromView(v: DepthView, decimals: number): DepthSeries | null {
   const basis = basisOf(v.price_basis);
   if (!basis) return null;
@@ -475,7 +541,10 @@ export function depthFromView(v: DepthView, decimals: number): DepthSeries | nul
   };
 }
 
-/** Fallback without `/v1/depth`: the aggregated book (state prices per `scale` base units, amounts in base units) as a depth series. */
+/**
+ * Fallback without `/v1/depth`. It turns the aggregated book into a depth series. The book has
+ * state prices per `scale` base units and amounts in base units.
+ */
 export function depthFromBook(m: BookModel, decimals: number, scale: bigint): DepthSeries {
   const pts = (rows: BookModel['bids']) => rows.map((r) => ({ price: basisToNumber(r.price, decimals, scale), cum: unitsToNumber(r.cumAmount, decimals) }));
   return {
@@ -495,7 +564,7 @@ export interface DepthGeometry {
   bidLine: string;
   askArea: string;
   askLine: string;
-  /** x of the mid price */
+  /** The x of the mid price. */
   midX: number | null;
   xTicks: { x: number; value: number }[];
   yTicks: { y: number; value: number }[];
@@ -507,7 +576,7 @@ export interface DepthGeometry {
 
 const r2 = (n: number): string => (Math.round(n * 100) / 100).toString();
 
-/** "Nice" tick values covering [lo, hi] (about `count` of them). */
+/** "Nice" tick values covering [lo, hi], about `count` of them. */
 export function niceTicks(lo: number, hi: number, count = 4): number[] {
   if (!(hi > lo) || !Number.isFinite(lo) || !Number.isFinite(hi)) return [];
   const raw = (hi - lo) / Math.max(1, count);
@@ -519,8 +588,9 @@ export function niceTicks(lo: number, hi: number, count = 4): number[] {
 }
 
 /**
- * Step-area geometry of a depth chart: bids to the left of the mid price, asks to the right, the x range symmetric around the mid (so the
- * two sides are comparable), the y axis the deeper side's cumulative amount. Coordinates in an SVG box of `width` x `height`.
+ * Step-area geometry of a depth chart. Bids are to the left of the mid price and asks to the
+ * right. The x range is symmetric around the mid, so the two sides are comparable. The y axis is
+ * the deeper side's cumulative amount. Coordinates are in an SVG box of `width` x `height`.
  */
 export function depthGeometry(s: DepthSeries, width: number, height: number): DepthGeometry {
   const empty: DepthGeometry = { width, height, bidArea: '', bidLine: '', askArea: '', askLine: '', midX: null, xTicks: [], yTicks: [], xMin: 0, xMax: 0, yMax: 0, hasData: false };
