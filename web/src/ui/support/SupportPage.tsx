@@ -1,4 +1,6 @@
-// `#/support`: the volunteers' note, the donation address and those who gave to it, linked from the footer of every page (support-model.ts). The text is in src/i18n/en/support.ts; the table is read from the public Kaspa explorer (data/contributors.ts).
+// `#/support`: the volunteers' note, the donation address and those who gave to it. It is linked
+// from the footer of every page (support-model.ts). The text is in src/i18n/en/support.ts, and the
+// table is read from the public Kaspa explorer (data/contributors.ts).
 import { useMemo } from 'preact/hooks';
 import { useServices } from '../../app/context';
 import { readContributions, type Contributions } from '../../data/contributors';
@@ -10,10 +12,13 @@ import { README_URL } from '../landing/landing-model';
 import { qrPath } from './qr';
 import { supportAddressOf, tierOfRank, titleEntryOfRank } from './support-model';
 
-/** Screen pixels per module: a whole number keeps the modules sharp. */
+/** Screen pixels per module. A whole number keeps the modules sharp. */
 const QR_SCALE = 4;
 
-/** Fixed black on white in both themes, the quiet zone included: a wallet reads it on a dark page too. */
+/**
+ * Fixed black on white in both themes, the quiet zone included, so a wallet reads it on a dark page
+ * too.
+ */
 function QrCode(props: { text: string }) {
   const { size, path } = useMemo(() => qrPath(props.text), [props.text]);
   return (
