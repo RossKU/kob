@@ -1,7 +1,10 @@
-// Fill history of one order (R-8): per-fill rows from the indexer's order events (`/v1/orders/{id}/events`), the amount-weighted average price, and a
-// CSV export of the wallet's fills. Pure: no network, no DOM (the caller loads the events and triggers the download).
+// Fill history of one order. It has per-fill rows from the indexer's order events
+// (`/v1/orders/{id}/events`), the amount-weighted average price and a CSV export of the wallet's
+// fills. It is pure, with no network and no DOM. The caller loads the events and triggers the
+// download.
 //
-// Amounts are token base units (event `amount`), prices state prices (sompi per whole token of the order's `scale` base units, event `price`).
+// Amounts are token base units (event `amount`). Prices are state prices, in sompi per whole token
+// of the order's `scale` base units (event `price`).
 import type { EventView } from '../../data/indexer-types';
 import { pairDetailOf } from '../../data/pair-api';
 import type { Hex } from '../../kob/types';
@@ -9,31 +12,38 @@ import { formatPricePerToken, formatUnits, quoteOf } from '../../kob/units';
 
 export interface FillRow {
   orderId: Hex;
-  /** block time, unix milliseconds (0 when unknown) */
+  /** Block time in unix milliseconds, 0 when unknown. */
   atMs: number;
   txid: Hex;
-  /** base units filled */
+  /** Base units filled. */
   amount: bigint;
-  /** the fill's price, sompi per whole token of the order's scale; null when the event carries none */
+  /**
+   * The fill's price in sompi per whole token of the order's scale. Null when the event carries
+   * none.
+   */
   price: bigint | null;
-  /** KAS paid out to the maker by this fill (sell side), sompi */
+  /** KAS paid out to the maker by this fill, on the sell side, in sompi. */
   payout: bigint;
   settled: boolean;
   /**
-   * a pair order's fill (event `detail.pair`): the quote token B the maker received (an ask) or paid (a bid), base units, and how it was filled
-   * (`route`, `netting`, `inventory`). A pair fill carries no KAS price (`price` null): it is volume only.
+   * A pair order's fill (event `detail.pair`). It has the quote token B the maker received (an ask)
+   * or paid (a bid), in base units, and how it was filled (`route`, `netting`, `inventory`). A pair
+   * fill carries no KAS price (`price` is null). It is volume only.
    */
   pair?: { amountB: bigint | null; counterparty: string };
 }
 
 export interface FillHistory {
   rows: FillRow[];
-  /** base units filled over all rows */
+  /** Base units filled over all rows. */
   amount: bigint;
-  /** amount-weighted average price (sompi per whole token, rounded down); null without a priced fill */
+  /**
+   * Amount-weighted average price in sompi per whole token, rounded down. Null without a priced
+   * fill.
+   */
   avgPrice: bigint | null;
   payout: bigint;
-  /** the order's scale the prices are quoted per */
+  /** The order's scale the prices are quoted per. */
   scale: bigint;
 }
 
@@ -46,7 +56,10 @@ const big = (v: string | number | null | undefined): bigint | null => {
   }
 };
 
-/** The fills of one order's events, oldest first; duplicate events (same id) count once. `scale` is the order's (its prices' denominator). */
+/**
+ * The fills of one order's events, oldest first. Duplicate events with the same id count once.
+ * `scale` is the order's, the denominator of its prices.
+ */
 export function fillHistory(events: readonly EventView[], scale: bigint | number = 1): FillHistory {
   const sc = BigInt(scale) > 0n ? BigInt(scale) : 1n;
   const seen = new Set<number>();
@@ -81,7 +94,7 @@ export interface CsvOrderInfo {
   ticker: string;
   side: 'sell' | 'buy';
   type: string;
-  /** the token's decimals (amounts in token units; base units when unknown) */
+  /** The token's decimals. Amounts are in token units, or in base units when unknown. */
   decimals?: number;
 }
 
@@ -95,9 +108,11 @@ const kas = (v: bigint): string => {
 const cell = (s: string): string => (/[",\n\r]/.test(s) || /^[=+\-@]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s);
 
 /**
- * CSV of fills (RFC 4180, UTC ISO times, KAS with 8 decimals, exact): one line per fill of every order given. `amount` is in token units when the
- * decimals are known (else base units), `price_kas_per_token` KAS per whole token, `value_kas` the fill's value at its price (rounded down). Text
- * cells that a spreadsheet would read as a formula are quoted (no CSV injection through a token ticker).
+ * CSV of fills, with one line per fill of every order given. It follows RFC 4180, uses UTC ISO
+ * times and writes KAS exactly with 8 decimals. `amount` is in token units when the decimals are
+ * known, else in base units. `price_kas_per_token` is KAS per whole token, and `value_kas` is the
+ * fill's value at its price, rounded down. Text cells that a spreadsheet would read as a formula
+ * are quoted, so a token ticker cannot inject a formula.
  */
 export function fillsCsv(orders: readonly { info: CsvOrderInfo; history: FillHistory }[]): string {
   const head = ['time_utc', 'order_id', 'token', 'side', 'type', 'amount', 'price_kas_per_token', 'value_kas', 'payout_kas', 'txid', 'settled'];
@@ -123,7 +138,7 @@ export function fillsCsv(orders: readonly { info: CsvOrderInfo; history: FillHis
   return lines.join('\r\n') + '\r\n';
 }
 
-/** `kob-fills-<network>-<yyyymmdd>.csv` (UTC date). */
+/** The file name `kob-fills-<network>-<yyyymmdd>.csv`, with a UTC date. */
 export function fillsFileName(network: string, now: Date | number = new Date()): string {
   const d = new Date(now);
   const ymd = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;

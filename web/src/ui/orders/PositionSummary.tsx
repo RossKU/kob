@@ -15,15 +15,21 @@ export interface PositionSummaryProps {
   position: Position;
   summary: PositionSummary;
   token: TokenInfo | undefined;
-  /** a pair position (KobIfdPair entry, KobCondPair exits): its quote token B; the prices are B base units per whole A (`quote` unknown: raw units) */
+  /**
+   * A pair position (KobIfdPair entry, KobCondPair exits) has a quote token B. The prices are B
+   * base units per whole A, and raw units when `quote` is unknown.
+   */
   pair?: { quote: TokenInfo | undefined; quoteId: Hex } | null;
-  /** loads the events of one order (the indexer's `/v1/orders/{id}/events`, every page); absent: no fills section */
+  /**
+   * Loads the events of one order, from the indexer's `/v1/orders/{id}/events` with every page.
+   * When absent there is no fills section.
+   */
   loadEvents?: (id: Hex, signal: AbortSignal) => Promise<EventView[]>;
 }
 
 /**
- * A state price (sompi per whole token of `scale` base units): KAS per whole token when the token is known, else KAS per `scale` base units.
- * Missing: a dash.
+ * A state price (sompi per whole token of `scale` base units) as KAS per whole token when the token
+ * is known, else KAS per `scale` base units. A missing price is a dash.
  */
 function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: bigint; dp: number; pair?: PositionSummaryProps['pair'] }) {
   const fiat = useFiat();
@@ -34,7 +40,8 @@ function Price(p: { value: bigint | null; token: TokenInfo | undefined; scale: b
     const base = tk?.ticker ?? '?';
     return <span data-unit="pair">{unitParts(`${amountCell(p.value, q?.decimals ?? RAW_TOKEN_DECIMALS).text} ${q?.ticker ?? '?'} per ${base}`, true)}</span>;
   }
-  // one number of decimals for every price of the card (entry, exits, averages: `priceDpOf`, 5 significant digits, at most 6), the exact price in the title
+  // One number of decimals for every price of the card: entry, exits and averages (`priceDpOf`, 5
+  // significant digits, at most 6). The exact price is in the title.
   return <Amount kind="price" value={p.value} decimals={tk?.decimals ?? RAW_TOKEN_DECIMALS} scale={p.scale} unit={t('orders.unit.kasPer', { ticker: tokenUnit(tk?.ticker, tk?.covenantId).text || '?' })} fraction={p.dp} group fiat={fiat} />;
 }
 
@@ -51,7 +58,7 @@ function Prices({ values, token, scale, dp, pair }: { values: readonly bigint[];
   );
 }
 
-/** A slim progress bar (0..1); nothing when the ratio is unknown. */
+/** A slim progress bar from 0 to 1. It shows nothing when the ratio is unknown. */
 function Bar({ value, label, tone }: { value: number | null; label: string; tone?: 'buy' | 'sell' | 'accent' }) {
   if (value === null) return <div class="pc-bar pc-bar-empty" aria-hidden="true" />;
   const pct = Math.round(value * 1000) / 10;
@@ -77,7 +84,10 @@ function Stat(p: { label: ComponentChildren; aside?: ComponentChildren; children
 
 const pctText = (v: number): string => `${v > 0 ? '+' : ''}${formatNumber(v, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
-/** Realised fills of the position: entry and exit legs with their average prices (loaded by the panel on demand). */
+/**
+ * Realised fills of the position, with entry and exit legs and their average prices. The panel
+ * loads them on demand.
+ */
 function Fills({ fills: f, token, amount, dp }: { fills: PositionFills; token: TokenInfo | undefined; amount: (v: bigint | null) => string; dp: number }) {
   const fiat = useFiat();
   const spread = f.spreadPerToken;
@@ -109,18 +119,21 @@ function Fills({ fills: f, token, amount, dp }: { fills: PositionFills; token: T
   );
 }
 
-/** Stat grid of a position card: price path, amounts with progress, repeat progress, realised PnL; realised fills on demand. */
+/**
+ * Stat grid of a position card: price path, amounts with progress, repeat progress and realised
+ * PnL, with realised fills on demand.
+ */
 export function PositionSummaryPanel({ position, summary: s, token, loadEvents, pair = null }: PositionSummaryProps) {
   const fiat = useFiat();
   const [showFills, setShowFills] = useState(false);
   const members = position.entry ? [position.entry, ...position.exits] : position.exits;
   const key = members.map((m) => `${m.covenant_id}:${m.filled_amount}:${m.status}`).join(',');
-  // the orders' scale: an entry and its exits quote per the same whole token
+  // The orders' scale. An entry and its exits quote per the same whole token.
   const scaleRaw = position.entry?.scale ?? position.exits[0]?.scale ?? null;
   const scale = scaleRaw ? BigInt(scaleRaw) : token ? scaleOfDecimals(token.decimals) : 1n;
   const unit = tokenUnit(token?.ticker, token?.covenantId).text;
   const amount = (v: bigint | null): string => (v === null ? '?' : token ? `${amountCell(v, token.decimals).text} ${unit}` : v.toString());
-  // one events request per member order, only once the user asked for the fills
+  // One events request per member order, only once the user asked for the fills.
   const fillsData = useAsync(
     async (signal): Promise<PositionFills | null> => {
       if (!showFills || !loadEvents) return null;
@@ -138,7 +151,8 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
   const entryStop = s.entryStop !== null && s.entryPrice === null;
   const tps = s.exitTakeProfits;
   const stops = [...new Set(s.exits.filter((e) => e.stop !== null && (e.status === 'open' || e.status === 'partial')).map((e) => e.stop as bigint))];
-  // no exit of a leg is live yet: the exit the entry commits, marked as planned, with the amount it is booked for
+  // No exit of a leg is live yet. Show the exit the entry commits, marked as planned, with the
+  // amount it is booked for.
   const planned = s.plannedExit;
   const plannedTp = !tps.length && planned?.takeProfit != null ? planned.takeProfit : null;
   const plannedStop = !stops.length && planned?.stop != null ? planned.stop : null;
@@ -149,7 +163,7 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
   );
   const amountLine = t('orders.position.amountLine', { total: amount(s.amountTotal), entered: amount(s.amountEntered), exited: amount(s.amountExited), open: amount(s.amountOpen) });
   const r = s.repeat;
-  // the re-arms left as whole cycles of the entry's amount (rounded down)
+  // The re-arms left as whole cycles of the entry's amount, rounded down.
   const cyclesLeft = r && r.rearmAmount !== null && s.amountTotal !== null && s.amountTotal > 0n ? r.rearmAmount / s.amountTotal : null;
   const repeatTotal = r && cyclesLeft !== null ? BigInt(r.cyclesDone) + cyclesLeft : null;
   const until = r
@@ -159,7 +173,8 @@ export function PositionSummaryPanel({ position, summary: s, token, loadEvents, 
         ? t('orders.position.repeatUntilDaa', { daa: formatNumber(r.untilDaa) })
         : null
     : null;
-  // every price of the card (the legs' prices, the planned exits, the average fill prices of the entry and the exits) on one number of decimals
+  // Every price of the card on one number of decimals. That covers the legs' prices, the planned
+  // exits and the average fill prices of the entry and the exits.
   const dp = priceDpOf([s.entryPrice, s.entryStop, ...tps, ...stops, plannedTp, plannedStop, fills?.entry.avgPrice, fills?.exits.avgPrice].map((price) => ({ price, decimals: token?.decimals ?? RAW_TOKEN_DECIMALS, scale })));
   const pnlClass = pnl?.pnl ? (pnl.pnl > 0n ? 'pc-pos' : 'pc-neg') : '';
 

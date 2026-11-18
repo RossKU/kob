@@ -24,7 +24,7 @@ import { amountCell, priceDpOf, tokenUnit, type AmountText, type UnitText } from
 export const FILL_SORT_KEYS = ['time', 'market', 'side', 'price', 'amount', 'value', 'tx'] as const;
 export type FillSortKey = (typeof FILL_SORT_KEYS)[number];
 
-/** The columns of the fills table, in its order; `time` is the table's own order (newest first). */
+/** The columns of the fills table, in its order. `time` is the table's own order, newest first. */
 export function fillColumns(usd = false): (DtColumn<FillSortKey> | DtPlain)[] {
   return [
     { key: 'time', label: t('orders.fills.time'), kind: 'time', card: 'badge' },
@@ -38,13 +38,14 @@ export function fillColumns(usd = false): (DtColumn<FillSortKey> | DtPlain)[] {
   ];
 }
 
-/** Events of a few orders at a time: one request per order that filled. */
+/** Events are read a few orders at a time, with one request per order that filled. */
 const BATCH = 4;
 
 /**
- * The fills last read, per list of orders (their ids and statuses), kept for the visit: the tab is drawn anew each time it is opened, and the rows of the last visit stand
- * at once while the read is made again (as the Open orders and Order history lists, which live in the page, do), instead of a spinner. A few lists are kept: the
- * Portfolio's and a market page's panel have their own.
+ * The fills last read, per list of orders (their ids and statuses), kept for the visit. The tab is
+ * drawn anew each time it is opened. The rows of the last visit stand at once while the read is
+ * made again, as the Open orders and Order history lists do, which live in the page, instead of a
+ * spinner. A few lists are kept, because the Portfolio's and a market page's panel have their own.
  */
 const fillsSeen = new Map<string, WalletFill[]>();
 const FILLS_SEEN_MAX = 8;
@@ -73,25 +74,28 @@ interface Facts {
 }
 
 /**
- * The Portfolio page's Fills tab: every fill of the wallet's orders, newest first, one row each (market, side, price, amount, value, time, the transaction), in
- * the shared table (kit/DataTable.tsx). Read when the tab opens: the events of each order that filled (the same requests as the CSV export of every fill).
+ * The Portfolio page's Fills tab. It shows every fill of the wallet's orders, newest first, one row
+ * each with market, side, price, amount, value, time and the transaction, in the shared table
+ * (kit/DataTable.tsx). It is read when the tab opens, from the events of each order that filled.
+ * These are the same requests as the CSV export of every fill.
  */
 export function WalletFills(props: {
   rows: readonly OrderRowModel[];
   tokenOf(id: string | null, scale?: bigint | null): TokenInfo | undefined;
   loadEvents: ((id: Hex, signal: AbortSignal) => Promise<EventView[]>) | null;
-  /** kascov.io's picture of a token, for its icon */
+  /** kascov.io's picture of a token, for its icon. */
   iconOf?: (covenantId: string) => KascovMeta | null;
-  /** the viewer's sort of the fills (none: newest first) and how it is changed */
+  /** The viewer's sort of the fills, where none means newest first, and how it is changed. */
   sort: SortState<FillSortKey> | null;
   onSort: (s: SortState<FillSortKey> | null) => void;
-  /** the rows of a page and the page shown (0 first): the newest fills come first */
+  /** The rows of a page and the page shown, with 0 first. The newest fills come first. */
   size: number;
   page: number;
   onPage: (page: number) => void;
 }) {
   const txUrl = useTxUrl();
-  // the USD display: the price and the value of a fill in dollars; the amount of tokens never
+  // The USD display shows the price and the value of a fill in dollars. The amount of tokens is
+  // never converted.
   const fiat = useFiat();
   const key = props.rows.map((r) => `${r.id}:${r.status}`).join(',');
   const data = useAsync(
@@ -122,7 +126,10 @@ export function WalletFills(props: {
     }
     return row.pair ? `${ticker}/${quote?.ticker ?? longId(row.pair.quote)}` : `${ticker}/KAS`;
   };
-  /** What a column compares: the amounts as tokens (the tokens have their own decimals), the KAS value as sompi, the time as milliseconds. */
+  /**
+   * What a column compares. Amounts are compared as tokens, because the tokens have their own
+   * decimals. The KAS value is compared as sompi and the time as milliseconds.
+   */
   const valueOf = (w: WalletFill, key: FillSortKey): SortValue => {
     const { fill, row, token } = w;
     switch (key) {
@@ -142,11 +149,12 @@ export function WalletFills(props: {
         return fill.txid;
     }
   };
-  // what is read now, else what the last visit read for this very list
+  // What is read now, else what the last visit read for this very list.
   const read = data.data ?? fillsSeen.get(key);
   const all = read ? sortBy(read, props.sort, valueOf) : read;
   const { rows: list, window: win } = pageOf(all ?? [], props.size, props.page);
-  // the price column has one number of decimals (the finest of the whole list, so a page turned keeps it), the KAS value column too (at most 4); the exact figures are the titles
+  // The price column has one number of decimals, the finest of the whole list, so a page turned
+  // keeps it. The KAS value column has one too, at most 4. The exact figures are the titles.
   const priceDp = priceDpOf((all ?? []).filter((w) => !w.row.pair).map((w) => ({ price: w.fill.price, decimals: w.token?.decimals ?? RAW_TOKEN_DECIMALS, scale: w.row.scale })));
   const kasDp = Math.min(KAS_FRACTION_MAX, columnFraction((all ?? []).map((w) => (!w.row.pair && w.fill.price !== null ? quoteOf(w.fill.amount, w.fill.price, w.row.scale, 'down') : null)), 8));
   const cols = fillColumns(!!fiat);
@@ -159,7 +167,8 @@ export function WalletFills(props: {
     const decimals = token?.decimals ?? RAW_TOKEN_DECIMALS;
     const unit = tokenUnit(token?.ticker, row.token);
     const marketHref = row.pair ? routeToHash(pairRoute(row.pair.base, row.pair.quote)) : row.token ? `#/market/${row.token}` : undefined;
-    // a KAS market's fill has a price and a KAS value (drawn by their cells with the table's decimals); a pair fill is volume only (the B amount stands for its value)
+    // A KAS market's fill has a price and a KAS value, drawn by their cells with the table's
+    // decimals. A pair fill is volume only, and the B amount stands for its value.
     const valueKas = !row.pair && fill.price !== null ? quoteOf(fill.amount, fill.price, row.scale, 'down') : null;
     const unix = fill.atMs > 0 ? Math.floor(fill.atMs / 1000) : null;
     const time = timeText(unix);
@@ -187,7 +196,7 @@ export function WalletFills(props: {
   );
 }
 
-/** One fill: its row, and under it (on a chevron) the order and the transaction in full. */
+/** One fill: its row and, under it on a chevron, the order and the transaction in full. */
 function FillRowView(props: { item: WalletFill; f: Facts; txUrl: (txid: string) => string | null; fiat: boolean; priceDp: number; kasDp: number }) {
   const fiat = useFiat();
   const { fill, row } = props.item;
