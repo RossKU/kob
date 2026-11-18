@@ -9,6 +9,7 @@ mod delivery;
 
 use common::*;
 use delivery::*;
+use kob_protocol::build::{Action, CancelOrder};
 use kob_protocol::state::*;
 use kob_protocol::tx::*;
 use kobd::hex::Hash32;
@@ -353,4 +354,76 @@ async fn a_mode_0_bid_reads_wallet_and_holds_no_bought_custody() {
     assert!(va.delivery.is_none() && va.bought.is_none() && va.topup_tip.is_none());
     let json = serde_json::to_value(&va).unwrap();
     assert!(json.get("delivery").is_none() && json.get("bought_custody").is_none(), "absent, not null");
+}
+
+/// L2: a fill that names an exact look-alike of the bought-custody (a stray sent to the order: the contract takes either) in place
+/// of the live one leaves that one unspent. The fill's new custody is the order's, the old one a stray: the order stays listed with
+/// its bought-custody, a reorg gives the roles back, and the maker's cancel sweeps the stray with the custody.
+#[tokio::test]
+async fn a_fill_naming_a_look_alike_of_the_bought_custody_keeps_the_order_and_strays_the_old_one() {
+    let c = Ctx::new();
+    let b0 = mode1(bid(MAKER_A, P250));
+    let escrow = b0.escrow(10 * WHOLE, 4).unwrap() as u64;
+    let (create, cov) = place(&c, &b0, escrow).await;
+    let fa = fill_first(&c, &c.w.order(&create, 0, b0.clone()), &cov, 4 * WHOLE);
+    c.push(&[&fa]).await;
+    let b4 = BidState { bought: 4 * WHOLE, ..b0.clone() };
+    let stray = c.w.stray(cov, 4 * WHOLE, TAKER);
+    c.push(&[&stray]).await;
+    assert_eq!(token_rows(&c, &cov), [("bought".to_string(), 4 * WHOLE, false), ("stray".to_string(), 4 * WHOLE, false)]);
+    let before = c.hs.snapshot();
+
+    let look = c.w.token_at(&stray, find_custody(&stray, &cov, 4 * WHOLE).unwrap(), bought(4 * WHOLE, &cov));
+    let fb = fill_into(&c, &c.w.order(&fa, find_cov(&fa, &cov).unwrap(), b4.clone()), &cov, &look, 3 * WHOLE);
+    c.push(&[&fb]).await;
+    let b7 = BidState { bought: 7 * WHOLE, ..b0.clone() };
+    assert_eq!(c.hs.tip_state(&cov), Some(AnyState::KobBid(b7.clone())));
+    let rows =
+        [("stray".to_string(), 4 * WHOLE, false), ("stray".to_string(), 4 * WHOLE, true), ("bought".to_string(), 7 * WHOLE, false)];
+    assert_eq!(token_rows(&c, &cov), rows, "the new custody is the order's, the one left behind a stray");
+    let v = view(&c, &cov);
+    assert_eq!((v.status.as_str(), v.bought.as_deref()), ("partial", Some("7000")));
+    assert!(v.bought_custody.as_ref().is_some_and(|b| b.ok && b.utxo.as_ref().is_some_and(|u| u.amount == "7000")));
+    assert_eq!(v.strays.as_ref().map(|s| s.len()), Some(1));
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        let book = kobd::indexer::book::listed_orders(g.conn()).unwrap();
+        assert!(book.iter().any(|o| o.order.utxo.covenant_id == Some(cov.0)), "still listed: the matcher fills it");
+        let bc = kobd::indexer::book::bought_custodies(g.conn()).unwrap();
+        assert_eq!(bc.get(&cov.0).map(|t| t.state.amount()), Some(7 * WHOLE));
+    }
+
+    // a reorg of the fill's block gives the old custody its role back, every row as it was
+    c.hs.node.reorg(1, vec![vec![]]);
+    c.hs.sync().await;
+    let rows_of = |s: &str| s.lines().filter(|l| !l.starts_with("state ")).map(str::to_string).collect::<Vec<_>>();
+    assert_eq!(rows_of(&c.hs.snapshot()), rows_of(&before));
+    assert_eq!(token_rows(&c, &cov), [("bought".to_string(), 4 * WHOLE, false), ("stray".to_string(), 4 * WHOLE, false)]);
+    c.w.include(&c.hs.node, &[&fb]);
+    c.hs.sync().await;
+    assert_eq!(token_rows(&c, &cov), rows);
+
+    // the maker's cancel takes the custody and the stray: nothing of the order is left
+    let ob = find_cov(&fb, &cov).unwrap();
+    let custody = c.w.token_at(&fb, find_custody(&fb, &cov, 7 * WHOLE).unwrap(), bought(7 * WHOLE, &cov));
+    let old = c.w.token_at(&fa, find_custody(&fa, &cov, 4 * WHOLE).unwrap(), bought(4 * WHOLE, &cov));
+    let req = CancelOrder {
+        retired: None,
+        prefund: None,
+        order: c.w.order(&fb, ob, AnyState::KobBid(b7)),
+        custody: None,
+        foreign: vec![],
+        strays: vec![custody, old],
+        tokens: vec![],
+        funding: vec![c.w.coin(MAKER_A, 10)],
+        change: None,
+        replace: None,
+        lock_time: 0,
+        records: vec![],
+        fee: FeeOptions::default(),
+    };
+    let cancel = c.w.sign(&Action::CancelOrder(req));
+    c.push(&[&cancel]).await;
+    assert_eq!(c.hs.status(&cov), "cancelled");
+    assert!(token_rows(&c, &cov).iter().all(|r| r.2), "nothing of the order is left live");
 }

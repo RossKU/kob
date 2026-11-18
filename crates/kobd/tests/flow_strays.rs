@@ -446,3 +446,53 @@ async fn a_sweep_record_on_anything_but_the_same_order_is_refused() {
     assert!(rejects.iter().any(|r| r.starts_with("sweep:")), "{rejects:?}");
     let _ = oi;
 }
+
+/// L2 for an ask: a fill that names an exact look-alike of the custody (a stray of the exact amount: the contract takes either)
+/// leaves the custody unspent. The continuation's custody is the order's and the old one a stray, so the ask stays liquidity; the
+/// maker's cancel sweeps both.
+#[tokio::test]
+async fn a_fill_naming_a_look_alike_of_the_custody_keeps_the_ask_and_strays_the_old_one() {
+    let c = Ctx::new();
+    let a = ask(MAKER_A, P250);
+    let create = c.w.create_tx(AnyState::KobAsk(a.clone()), CARRIER, MAKER_A, 10 * WHOLE);
+    c.push(&[&create]).await;
+    let cov = c.w.cov(&create, 0);
+    let stray = c.w.stray(cov, 10 * WHOLE, TAKER);
+    c.push(&[&stray]).await;
+    let look = c.w.token_at(&stray, find_custody(&stray, &cov, 10 * WHOLE).unwrap(), Kcc20State::custody(10 * WHOLE, cov.0, EXT));
+    let leg = Leg::Ask { order: c.w.order(&create, 0, a.clone()), custody: look, amount: 4 * WHOLE, t: None };
+    let fill = c.w.sign(&Action::Batch(batch(&c.w, c.daa(), vec![leg])));
+    c.push(&[&fill]).await;
+    assert_eq!(c.hs.status(&cov), "partial");
+    let roles: Vec<(String, i64, bool)> = {
+        let g = c.hs.ingest.lock().unwrap();
+        let mut st = g
+            .conn()
+            .prepare(
+                "SELECT role, amount, spent_block IS NOT NULL FROM token_utxos WHERE order_id = (SELECT id FROM orders WHERE covenant_id = ?1) \
+                 ORDER BY created_block, idx",
+            )
+            .unwrap();
+        st.query_map([&cov.0[..]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().map(|r| r.unwrap()).collect()
+    };
+    let want =
+        [("stray".to_string(), 10 * WHOLE, false), ("stray".to_string(), 10 * WHOLE, true), ("custody".to_string(), 6 * WHOLE, false)];
+    assert_eq!(roles, want, "the continuation's custody is the order's, the one left behind a stray");
+    let v = view(&c, &cov);
+    assert!(v.custody.as_ref().is_some_and(|x| x.ok), "the ask keeps its custody");
+    assert_eq!(v.strays.as_ref().map(|s| s.len()), Some(1));
+    {
+        let g = c.hs.ingest.lock().unwrap();
+        let bk = reads::book(g.conn(), &ctx_of(&c), &Hash32(TOKEN_COV), 10, true).unwrap();
+        let reads::BookSide::Levels(asks) = bk.asks else { panic!() };
+        assert_eq!(asks.first().map(|l| l.amount.clone()), Some((6 * WHOLE).to_string()), "still liquidity");
+    }
+    let a6 = AskState { amount_left: 6 * WHOLE, ..a };
+    let oi = find_cov(&fill, &cov).unwrap();
+    let custody = c.w.token_at(&fill, find_custody(&fill, &cov, 6 * WHOLE).unwrap(), Kcc20State::custody(6 * WHOLE, cov.0, EXT));
+    let old = c.w.token_at(&create, 1, Kcc20State::custody(10 * WHOLE, cov.0, EXT));
+    let sweep = cancel(&c, c.w.order(&fill, oi, AnyState::KobAsk(a6)), Some(custody), vec![old]);
+    c.push(&[&sweep]).await;
+    assert_eq!(c.hs.status(&cov), "cancelled");
+    assert_eq!(c.hs.query::<i64>("SELECT COUNT(*) FROM token_utxos WHERE spent_block IS NULL", []), 0);
+}

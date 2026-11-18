@@ -227,6 +227,79 @@ fn has_live_role(conn: &Connection, cov: &Hash32, role: &str) -> DbResult<bool> 
         .exists(params![&cov.0[..], role])?)
 }
 
+/// Whether transaction `txid` spent a stray of order `cov` of `token` (L2: a look-alike named in
+/// place of the order's custody).
+fn spent_stray_of(conn: &Connection, txid: &Hash32, cov: &Hash32, token: &Hash32) -> DbResult<bool> {
+    Ok(conn
+        .prepare_cached(concat!(
+            "SELECT 1 FROM token_utxos WHERE order_id = ",
+            order_of!("?1"),
+            " AND token_id = ",
+            id_of!("?2"),
+            " AND role = 'stray' AND spent_txid = ?3 LIMIT 1"
+        ))?
+        .exists(params![&cov.0[..], &token.0[..], &txid.0[..]])?)
+}
+
+/// The reject reason that records a demotion: `demoted:<role>:<txid hex>:<idx>`.
+const DEMOTED: &str = "demoted:";
+
+/// Makes every live `role` row of order `cov` of `token` that an earlier
+/// transaction created a stray (L2), and records each in `rejects` so that `revert_block` gives
+/// the role back. Returns whether a row of this transaction may take the role: none of its rows
+/// has it yet.
+fn demote_role(
+    conn: &Connection,
+    seq: i64,
+    txid: &Hash32,
+    cov: &Hash32,
+    token: &Hash32,
+    role: &str,
+    delta: &mut Delta,
+) -> DbResult<bool> {
+    let rows: Vec<(Vec<u8>, i64)> = conn
+        .prepare_cached(concat!(
+            "SELECT txid, idx FROM token_utxos WHERE order_id = ",
+            order_of!("?1"),
+            " AND token_id = ",
+            id_of!("?3"),
+            " AND role = ?2 AND spent_block IS NULL"
+        ))?
+        .query_map(params![&cov.0[..], role, &token.0[..]], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    if rows.iter().any(|(t, _)| t[..] == txid.0[..]) {
+        return Ok(false);
+    }
+    for (t, idx) in rows {
+        conn.prepare_cached("UPDATE token_utxos SET role = 'stray' WHERE txid = ?1 AND idx = ?2")?.execute(params![&t[..], idx])?;
+        conn.prepare_cached("INSERT INTO rejects (block_seq, txid, reason) VALUES (?1, ?2, ?3)")?.execute(params![
+            seq,
+            &txid.0[..],
+            format!("{DEMOTED}{role}:{}:{idx}", crate::hex::encode(&t))
+        ])?;
+        delta.rejects += 1;
+    }
+    Ok(true)
+}
+
+/// Gives back the roles that block `seq` demoted (`demote_role`).
+fn restore_demoted(conn: &Connection, seq: i64) -> DbResult<usize> {
+    let reasons: Vec<String> = conn
+        .prepare_cached("SELECT reason FROM rejects WHERE block_seq = ?1 AND reason LIKE 'demoted:%'")?
+        .query_map([seq], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut n = 0;
+    for r in reasons {
+        let mut it = r[DEMOTED.len()..].splitn(3, ':');
+        let (Some(role), Some(t), Some(idx)) = (it.next(), it.next(), it.next()) else { continue };
+        let (Ok(t), Ok(idx)) = (crate::hex::decode(t), idx.parse::<i64>()) else { continue };
+        n += conn
+            .prepare_cached("UPDATE token_utxos SET role = ?1 WHERE txid = ?2 AND idx = ?3 AND role = 'stray'")?
+            .execute(params![role, &t[..], idx])?;
+    }
+    Ok(n)
+}
+
 /// Whether the order already has a live custody row of `token`.
 ///
 /// A pair order holds at most one custody per token.
@@ -858,12 +931,21 @@ impl Processor {
             if created.contains(&t.owner) || spent_covs.contains(&t.owner) {
                 let hold = rec.holds.iter().find(|h| h.out == t.out);
                 let held = hold.map(|h| &h.state);
-                if is_exact_custody(conn, &t.owner, &token, t.amount, held)? && !has_live_custody_of(conn, &t.owner, &token)? {
+                // L2: a fill may name an exact look-alike (a stray of the order, interchangeable by
+                // design) in place of the live custody, which then stays unspent. The new exact
+                // output is then the order's, and the old row, which no longer matches the order's
+                // state, becomes a stray (`demote_role`, undone by a revert).
+                let swapped = spent_stray_of(conn, &txid, &t.owner, &token)?;
+                if is_exact_custody(conn, &t.owner, &token, t.amount, held)?
+                    && (!has_live_custody_of(conn, &t.owner, &token)?
+                        || swapped && demote_role(conn, seq, &txid, &t.owner, &token, "custody", delta)?)
+                {
                     role = "custody";
                 } else if spent.iter().any(|s| {
                     s.cov == t.owner
                         && s.after.as_ref().is_some_and(|a| delivery::is_bought_custody(a, &t.owner, &token, t.amount, hold))
-                }) && !has_live_role(conn, &t.owner, ROLE_BOUGHT)?
+                }) && (!has_live_role(conn, &t.owner, ROLE_BOUGHT)?
+                    || swapped && demote_role(conn, seq, &txid, &t.owner, &token, ROLE_BOUGHT, delta)?)
                 {
                     // The bought-custody of a mode-1 order that this transaction continued with
                     // `bought` > 0: the order's, never a stray.
@@ -2981,6 +3063,7 @@ pub fn revert_block(conn: &Connection, seq: i64, delta: &mut Delta) -> DbResult<
     changed += conn.execute("DELETE FROM token_holdings WHERE created_block = ?1", [seq])?;
     changed += conn.execute("UPDATE token_holdings SET spent_block = NULL, spent_txid = NULL WHERE spent_block = ?1", [seq])?;
     changed += conn.execute("DELETE FROM token_events WHERE block_seq = ?1", [seq])?;
+    changed += restore_demoted(conn, seq)?;
     changed += conn.execute("DELETE FROM rejects WHERE block_seq = ?1", [seq])?;
     // The state rows of the orders this block created go with them. A row left would name an order
     // that is gone.
