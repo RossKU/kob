@@ -1,4 +1,5 @@
-//! The maintainer binary `kob-maint`: `add-program` lives here and not in `kob`. Nothing is written: no `--write`.
+//! Tests the maintainer binary `kob-maint`: `add-program` lives here and not in `kob`. Nothing is
+//! written: no `--write`.
 
 use std::process::{Command, Stdio};
 

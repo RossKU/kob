@@ -1,5 +1,5 @@
-//! The removed spellings of the `kob` binary: each is a usage error (exit 2) that names what replaces it, and none echoes a
-//! key. Nothing here contacts a node or an indexer.
+//! Tests the removed spellings of the `kob` binary: each is a usage error (exit 2) that names what
+//! replaces it, and none echoes a key. Nothing here contacts a node or an indexer.
 
 use std::process::{Command, Stdio};
 
