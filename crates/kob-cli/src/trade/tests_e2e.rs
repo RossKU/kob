@@ -791,7 +791,7 @@ fn an_unlisted_token_commitment_must_match_the_wallets_holdings() {
 }
 
 /// A market sell starts at the best bid the node confirms; a bid that only the indexer lists is
-/// left out of the book (security review 2026-11-17, M13).
+/// left out of the book.
 ///
 /// A start far below the last fill still needs `--ack-market-start`, or a floor price of the
 /// user. The same holds for `close`.
@@ -835,7 +835,7 @@ fn a_market_sell_starts_at_a_node_confirmed_bid() {
 }
 
 /// A market buy starts at the best ask the node confirms: a cheaper phantom ask that only the
-/// indexer lists is left out (security review 2026-11-17, M13).
+/// indexer lists is left out.
 #[test]
 fn a_market_buy_skips_a_phantom_ask() {
     let real = [0xa1; 32];
@@ -853,8 +853,7 @@ fn a_market_buy_skips_a_phantom_ask() {
 }
 
 /// Decimals of an unlisted token that only the indexer names are checked against the scale of
-/// its orders on the node: an indexer that says 5 where the orders use 10^3 is refused (security
-/// review 2026-11-17, M12).
+/// its orders on the node: an indexer that says 5 where the orders use 10^3 is refused.
 #[test]
 fn indexer_decimals_that_the_orders_on_the_node_contradict_are_refused() {
     let real = [0xb1; 32];

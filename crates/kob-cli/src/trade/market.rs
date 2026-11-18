@@ -917,7 +917,7 @@ pub fn resolve_with(
 /// The decimals of a token without a registry entry, a declaration or a program default are the
 /// indexer's word (its token list or the scale of its market). An order's state, re-derived on the
 /// node, commits its scale. When the two disagree the indexer's decimals would read the amount
-/// and the price bound off by that factor (security review 2026-11-17, M12), so nothing is planned.
+/// and the price bound off by that factor, so nothing is planned.
 pub fn check_order_scale(m: &TokenMarket, order_scale: i64) -> Result<(), String> {
     let indexer_only = m.listing == Listing::Unlisted && matches!(m.decimals_from, DecimalsFrom::Lists | DecimalsFrom::Market);
     if indexer_only && m.scale != order_scale {
@@ -1067,7 +1067,7 @@ mod tests {
 
         // A token that the indexer lists without a declaration: a view does not ask for one (no
         // request, no 404). A signing command asks, so an indexer that hides the declaration
-        // cannot give the token other decimals (security review 2026-11-17, M12).
+        // cannot give the token other decimals.
         let n = asked.get();
         let plain = vec![TokenFacts { declared: false, market_scale: Some(Some(1000)), ..listed.clone() }];
         let view = OpenToken { view: true, ..open(decl, held_d, &no_orders) };

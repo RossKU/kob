@@ -1,7 +1,8 @@
-//! How a buy-side order delivers what it buys (bid-delivery-spec §10, `web/src/kob/orders/delivery.ts`).
+//! How a buy-side order delivers what it buys (bid-delivery-spec §10).
 //!
-//! `--delivery each|collected|one-utxo` is mode 0, 1 or 2. Each fill is the
-//! default (founder decision 2026-11-17); collected and one-utxo are opt-in. IOC / FOK / market orders, KRON deliveries and a repeating entry's exits deliver each fill.
+//! The web's twin is `web/src/kob/orders/delivery.ts`. `--delivery each|collected|one-utxo` is
+//! mode 0, 1 or 2. Each fill is the default, and collected and one-utxo are opt-in. IOC, FOK and
+//! market orders, KRON deliveries and a repeating entry's exits always deliver each fill.
 
 use kob_protocol::artifacts::TemplateId;
 use kob_protocol::json::to_hex;
@@ -221,7 +222,7 @@ pub fn resolve(o: &Order, r: &Request, issues: &mut Vec<Issue>) -> Resolved {
                 );
             }
             let tip = r.tip.unwrap_or(default);
-            // At most the carrier, and below 0.08 KAS (S4): a larger tip pays a filler to make a new
+            // At most the carrier, and below 0.08 KAS: a larger tip pays a filler to make a new
             // receive UTXO for each fill.
             let max = o.carrier.min(kob_protocol::state::TOPUP_TIP_MAX);
             if tip < 0 || tip > max {
@@ -372,7 +373,7 @@ mod tests {
         let mut v = vec![];
         resolve(&order(Class::Resting), &Request { tip: Some(200_000_000), ..r.clone() }, &mut v);
         assert_eq!(v[0].code, "TOPUP_TIP_INVALID");
-        // S4: below 0.08 KAS even with a 1 KAS carrier.
+        // Below 0.08 KAS even with a 1 KAS carrier.
         let max = kob_protocol::state::TOPUP_TIP_MAX;
         let mut v = vec![];
         resolve(&order(Class::Resting), &Request { tip: Some(max + 1), ..r.clone() }, &mut v);

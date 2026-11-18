@@ -1101,8 +1101,8 @@ fn ioc_buy(amount: i64, price: i64) -> Intent {
     })
 }
 
-/// bid-delivery-spec §10: a resting KCC-20 buy is each fill by default (mode 0, one carrier per budgeted
-/// fill, founder decision 2026-11-17); collected is opt-in and funded with one carrier.
+/// bid-delivery-spec §10: a resting KCC-20 buy is each fill by default (mode 0, one carrier per
+/// budgeted fill). Collected is opt-in and funded with one carrier.
 #[test]
 fn a_resting_buy_is_each_fill_by_default_and_collected_with_one_carrier_on_request() {
     let m = market(TemplateId::Kcc20Ref);

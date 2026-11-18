@@ -12,8 +12,10 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-/// A coinbase-dust address can hold 100k+ UTXOs: the soak bank's getUtxosByAddresses answer was 29.9 MB on 2026-10-02 (tungstenite's
-/// default limit is 16 MiB).
+/// The largest WebSocket message, 512 MiB.
+///
+/// A coinbase-dust address can hold 100k+ UTXOs, and one `getUtxosByAddresses` answer for the soak
+/// bank measured 29.9 MB. tungstenite's default limit is 16 MiB.
 const MAX_MESSAGE: usize = 512 << 20;
 
 pub struct Rpc {
