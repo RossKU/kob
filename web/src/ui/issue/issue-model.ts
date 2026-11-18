@@ -1,5 +1,6 @@
-// Pure model of the issuance view: UI state (strings) -> `IssueForm`, the wallet's remaining share, display helpers and the result
-// view model. No DOM, no i18n: rows carry i18n KEY SUFFIXES, the component translates them. Amount arithmetic is exact (bigint).
+// Pure model of the issuance view: UI state (strings) to `IssueForm`, the wallet's remaining
+// share, display helpers and the result view model. It has no DOM and no i18n. Rows carry i18n KEY
+// SUFFIXES and the component translates them. Amount arithmetic is exact (bigint).
 import {
   formatUnits, parseDecimal, registryEntryFromIssue, type IssueForm, type IssueLimits, type IssuePlan, type IssueProgramChoice, type IssueToken,
 } from '../../kob/issue';
@@ -15,55 +16,73 @@ import type { IssueLock, PlannedSale } from '../../kob/issue';
 import type { Hex } from '../../kob/types';
 import { groupDigits, shortId } from '../kit/format';
 
-// ------------------------------------------------------------------------------------------------ UI state
+// ---- UI state
 
-/** An additional holder typed by the user. The wallet's own row is not stored: it is derived (supply minus the others). */
+/**
+ * An additional holder typed by the user. The wallet's own row is not stored. It is derived as the
+ * supply minus the others.
+ */
 export interface HolderRow {
-  /** 64 hex characters: x-only public key of the receiving wallet */
+  /** 64 hex characters: the x-only public key of the receiving wallet. */
   owner: string;
-  /** whole tokens, decimal text */
+  /** Whole tokens, as decimal text. */
   amount: string;
 }
 
 /** Everything the form holds, as the user typed it. */
 export interface IssueUiState {
-  /** the token program: the reference's published public-mint build (default) or the standalone 3 / 3 build */
+  /**
+   * The token program: the reference's published public-mint build (default) or the standalone 3 /
+   * 3 build.
+   */
   program: IssueProgramChoice;
   name: string;
   ticker: string;
-  /** whole number as text ("8") so an emptied field is representable */
+  /** A whole number as text ("8"), so an emptied field is representable. */
   decimals: string;
   supply: string;
-  /** additional holders; empty = the whole supply goes to the connected wallet */
+  /** Additional holders. Empty means the whole supply goes to the connected wallet. */
   extras: HolderRow[];
-  /** KAS per token output; empty = the default of the protocol limits */
+  /** KAS per token output. Empty means the default of the protocol limits. */
   carrier: string;
   description: string;
   icon: string;
-  /** SHA-256 of the picture file, 64 hex (from a picked file, or typed in the advanced field); empty = none */
+  /**
+   * SHA-256 of the picture file, 64 hex, from a picked file or typed in the advanced field. Empty
+   * means none.
+   */
   imageHash: string;
-  /** the name of the picture file the hash was computed from, '' when the hash was typed or there is none (display only) */
+  /**
+   * The name of the picture file the hash was computed from, for display only. It is '' when the
+   * hash was typed or there is none.
+   */
   imageFile: string;
   website: string;
-  /** X (Twitter) and Telegram accounts: a handle or an address */
+  /** X (Twitter) and Telegram accounts: a handle or an address. */
   x: string;
   telegram: string;
-  /** "After creation": keep all, sell at one price, sell on a curve */
+  /** "After creation": keep all, sell at one price, or sell on a curve. */
   sale: SaleUi;
-  /** "Lock my share until": none, a number of days, or a date */
+  /** "Lock my share until": none, a number of days, or a date. */
   lock: LockUi;
 }
 
-/** The lock choices: none, a number of days from the choice, or a date (YYYY-MM-DD, the start of that day in the viewer's zone). */
+/**
+ * The lock choices: none, a number of days from the choice, or a date (YYYY-MM-DD, the start of
+ * that day in the viewer's zone).
+ */
 export const LOCK_DAYS = ['30', '90', '180', '365'] as const;
 export type LockChoice = 'none' | (typeof LOCK_DAYS)[number] | 'date';
 
-/** "Lock my share until" as chosen: `until` (unix ms) is fixed when a number of days is chosen, so the plan does not move with the clock. */
+/**
+ * "Lock my share until" as chosen. `until` (unix ms) is fixed when a number of days is chosen, so
+ * the plan does not move with the clock.
+ */
 export interface LockUi {
   choice: LockChoice;
-  /** YYYY-MM-DD of the date input */
+  /** YYYY-MM-DD of the date input. */
   date: string;
-  /** unix ms of a number of days, decimal text; '' otherwise */
+  /** Unix ms of a number of days, as decimal text. It is '' otherwise. */
   until: string;
 }
 
@@ -81,8 +100,9 @@ export function chooseLock(choice: LockChoice, prev: LockUi, now: number = Date.
 }
 
 /**
- * The planner's `lockUntil` (unix ms, decimal text) of the choice: '' for none; a date is the start of that day in the viewer's zone; a missing or
- * unreadable date gives '0', which the validator refuses (`lock.invalid`).
+ * The planner's `lockUntil` (unix ms, decimal text) of the choice. It is '' for none. A date is the
+ * start of that day in the viewer's zone. A missing or unreadable date gives '0', which the
+ * validator refuses (`lock.invalid`).
  */
 export function lockUntilOf(l: LockUi): string {
   if (l.choice === 'none') return '';
@@ -94,8 +114,9 @@ export function lockUntilOf(l: LockUi): string {
 }
 
 /**
- * The sale as typed. "Keep in my wallet" and the amount for sale are linked: the field typed last (`lead`) is kept and the other one derived
- * from the wallet's share, so a later change of the supply moves the derived one.
+ * The sale as typed. "Keep in my wallet" and the amount for sale are linked. The field typed last
+ * (`lead`) is kept and the other one is derived from the wallet's share, so a later change of the
+ * supply moves the derived one.
  */
 export interface SaleUi extends SaleForm {
   lead: 'keep' | 'amount';
@@ -109,42 +130,54 @@ export function emptyUiState(): IssueUiState {
   return { program: 'public-mint', name: '', ticker: '', decimals: '8', supply: '', extras: [], carrier: '', description: '', icon: '', imageHash: '', imageFile: '', website: '', x: '', telegram: '', sale: emptySaleUi(), lock: { choice: 'none', date: '', until: '' } };
 }
 
-// ------------------------------------------------------------------------------------------------ small filters
+// ---- Small filters
 
-/** The ticker input: capitals as typed, whitespace dropped (other characters are kept so the validator can explain them). */
+/**
+ * The ticker input: capitals as typed, whitespace dropped. Other characters are kept so the
+ * validator can explain them.
+ */
 export function filterTicker(input: string, maxChars = 32): string {
   return input.replace(/\s+/g, '').toUpperCase().slice(0, maxChars);
 }
 
-/** The decimals input: digits only (at most 2), so "8" stays a number and paste of "8.0" cannot sneak in a fraction. */
+/**
+ * The decimals input: digits only, at most 2. "8" stays a number, and a pasted "8.0" cannot sneak
+ * in a fraction.
+ */
 export function filterDecimals(input: string): string {
   return input.replace(/\D+/g, '').slice(0, 2);
 }
 
-/** A hex key typed or pasted: trimmed and lower-cased (the protocol wants lower-case hex). */
+/** A hex key typed or pasted, trimmed and lower-cased, as the protocol wants lower-case hex. */
 export function filterOwner(input: string): string {
   return input.replace(/\s+/g, '').toLowerCase().slice(0, 64);
 }
 
-/** Decimals text -> number; NaN when empty or invalid (the validator reports `decimals.invalid` for NaN). */
+/**
+ * Decimals text to a number. It is NaN when empty or invalid, and the validator then reports
+ * `decimals.invalid`.
+ */
 export function parseDecimalsText(text: string): number {
   return /^\d{1,2}$/.test(text.trim()) ? Number(text.trim()) : Number.NaN;
 }
 
-// ------------------------------------------------------------------------------------------------ shares
+// ---- Shares
 
 export interface Shares {
-  /** the total supply in base units; null when the supply or the decimals do not parse */
+  /** The total supply in base units. Null when the supply or the decimals do not parse. */
   supply: bigint | null;
-  /** sum of the extra holders' parsable, positive amounts */
+  /** The sum of the extra holders' parsable, positive amounts. */
   others: bigint;
-  /** supply - others; null when the supply is unknown. Negative = the others exceed the supply (an error). */
+  /**
+   * The supply minus `others`. Null when the supply is unknown. Negative means the others exceed
+   * the supply, an error.
+   */
   remaining: bigint | null;
-  /** an extra row's amount does not parse (its own validation message explains) */
+  /** False when an extra row's amount does not parse. Its own validation message explains. */
   othersComplete: boolean;
 }
 
-/** The wallet's share = the supply minus what the extra holders receive, all in base units. */
+/** The wallet's share, the supply minus what the extra holders receive, all in base units. */
 export function sharesOf(state: IssueUiState): Shares {
   const decimals = parseDecimalsText(state.decimals);
   const ps = Number.isNaN(decimals) ? ({ error: 'syntax' } as const) : parseDecimal(state.supply, decimals);
@@ -159,14 +192,17 @@ export function sharesOf(state: IssueUiState): Shares {
   return { supply, others, remaining: supply === null ? null : supply - others, othersComplete };
 }
 
-/** True when the wallet's own row is part of the holder list (it is left out when the others take the whole supply). */
+/**
+ * True when the wallet's own row is part of the holder list. It is left out when the others take
+ * the whole supply.
+ */
 export function walletRowIncluded(state: IssueUiState): boolean {
   if (state.extras.length === 0) return false;
   const s = sharesOf(state);
   return s.remaining === null || s.remaining !== 0n || !s.othersComplete;
 }
 
-/** Remaining share as decimal text of whole tokens ("" when unknown or negative). */
+/** The remaining share as decimal text of whole tokens. It is "" when unknown or negative. */
 export function remainingText(state: IssueUiState): string {
   const s = sharesOf(state);
   const decimals = parseDecimalsText(state.decimals);
@@ -174,12 +210,14 @@ export function remainingText(state: IssueUiState): string {
   return formatUnits(s.remaining, decimals);
 }
 
-// ------------------------------------------------------------------------------------------------ UI state -> IssueForm
+// ---- UI state to IssueForm
 
 /**
- * Maps the UI state to the planner's `IssueForm`. With no extra holders the list is empty (protocol default: everything to the maker).
- * Otherwise the wallet is holder 0 with the remaining amount, followed by the extras (scheme 0 = a wallet key). A wallet share of zero
- * drops the wallet row; a negative one becomes "0" so validation fails with a holder amount error (the view adds `holders.exceeds`).
+ * Maps the UI state to the planner's `IssueForm`. With no extra holders the list is empty, which
+ * is the protocol default of everything to the maker. Otherwise the wallet is holder 0 with the
+ * remaining amount, followed by the extras (scheme 0 = a wallet key). A wallet share of zero drops
+ * the wallet row. A negative one becomes "0", so validation fails with a holder amount error and
+ * the view adds `holders.exceeds`.
  */
 export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): IssueForm {
   const holders: IssueForm['holders'] = [];
@@ -209,13 +247,15 @@ export function formToIssueForm(state: IssueUiState, walletKey: Hex | null): Iss
   };
 }
 
-/** The planner's sale: the amount only when it was typed last (else the keep percent decides). */
+/**
+ * The planner's sale. It has the amount only when it was typed last, else the keep percent decides.
+ */
 export function saleFormOf(u: SaleUi): SaleForm {
   const { lead, ...f } = u;
   return { ...f, amount: lead === 'amount' ? f.amount.trim() : '' };
 }
 
-/** The wallet's share of the supply, base units (null when unknown): what a sale takes from. */
+/** The wallet's share of the supply in base units, or null when unknown. A sale takes from it. */
 export function saleShareOf(state: IssueUiState): bigint | null {
   const s = sharesOf(state);
   if (s.remaining === null || s.remaining <= 0n || !s.othersComplete) return null;
@@ -236,7 +276,10 @@ export function linkedSaleFields(state: IssueUiState): { keepPct: string; amount
   return { keepPct: u.keepPct, amount: 'bps' in k ? formatUnits(saleSplit(share, k.bps).sell, d) : u.amount };
 }
 
-/** The sale of a creation finished later (its record): the curve from its state, or the one-price sale it offers to place. */
+/**
+ * The sale of a creation finished later (its record): the curve from its state, or the one-price
+ * sale it offers to place.
+ */
 export function saleOfRecord(rec: Pick<CreationRecord, 'curve' | 'askSale'>): PlannedSale | undefined {
   if (rec.curve) {
     const st = rec.curve.state.state;
@@ -254,17 +297,20 @@ export function saleOfRecord(rec: Pick<CreationRecord, 'curve' | 'askSale'>): Pl
   return undefined;
 }
 
-/** What the sale section shows while the form is typed: the split, and for a curve its table, steps and numbers. */
+/**
+ * What the sale section shows while the form is typed: the split, and for a curve its table, steps
+ * and numbers.
+ */
 export interface SalePreview {
   issues: PlanIssue[];
   parsed: ParsedSale | null;
-  /** whole tokens, grouped */
+  /** Whole tokens, grouped. */
   sellText: string;
   keepText: string;
   curve: { steps: CurveStep[]; numbers: CurveNumbers } | null;
-  /** a curve that could not be built (kob-wasm's reason) */
+  /** A curve that could not be built, with kob-wasm's reason. */
   curveError: string | null;
-  /** the one-price default (sompi per whole token) for the amount */
+  /** The one-price default (sompi per whole token) for the amount. */
   defaultPrice: bigint | null;
 }
 
@@ -274,7 +320,7 @@ export function salePreview(kob: KobWasm, state: IssueUiState): SalePreview | nu
   const share = saleShareOf(state);
   if (Number.isNaN(d)) return { issues: [], parsed: null, sellText: '', keepText: '', curve: null, curveError: null, defaultPrice: null };
   const form = saleFormOf(state.sale);
-  // the price field may be blank: the default is shown in it, so the preview uses it
+  // The price field may be blank. The default is shown in it, so the preview uses it.
   const sellOnly = parseSale({ ...form, mode: 'ask', price: '1' }, share, d).parsed;
   const defaultPrice = sellOnly ? defaultSalePrice(sellOnly.sell, 10n ** BigInt(d)) : null;
   const { issues, parsed } = parseSale(form.mode === 'ask' && form.price.trim() === '' && defaultPrice ? { ...form, price: formatUnits(defaultPrice, 8) } : form, share, d);
@@ -296,7 +342,7 @@ export function salePreview(kob: KobWasm, state: IssueUiState): SalePreview | nu
   };
 }
 
-/** Findings only the view model knows (they are translated under `issue.*`, not `issues.*`). */
+/** Findings only the view model knows. They are translated under `issue.*`, not `issues.*`. */
 export interface ModelIssue {
   code: 'holders.exceeds' | 'holders.duplicate';
   severity: 'error' | 'warning';
@@ -317,11 +363,15 @@ export function modelIssues(state: IssueUiState, walletKey: Hex | null, decimals
   return out;
 }
 
-// ------------------------------------------------------------------------------------------------ issue field -> input
+// ---- Issue field to input
 
 /**
- * Where an `IssueForm` finding belongs in the UI: a top-level field name ("name", "ticker", ...), `holder-<row>-owner|amount` with the UI
- * row (row 0 = the wallet's own share, extras are 1..n), `holders` (the list as a whole) or null (general, no field).
+ * Where an `IssueForm` finding belongs in the UI.
+ * - A top-level field name ("name", "ticker", ...).
+ * - `holder-<row>-owner|amount` with the UI row, where row 0 is the wallet's own share and the
+ *   extras are 1..n.
+ * - `holders` for the list as a whole.
+ * - Null for a general finding with no field.
  */
 export function uiFieldOf(field: string | undefined, walletRow: boolean): string | null {
   if (!field) return null;
@@ -333,7 +383,7 @@ export function uiFieldOf(field: string | undefined, walletRow: boolean): string
   return field;
 }
 
-/** Groups findings by UI field ("" = general), keeping order. */
+/** Groups findings by UI field ("" is general), keeping order. */
 export function groupByField<T extends PlanIssue>(issues: T[], walletRow: boolean): Map<string, T[]> {
   const map = new Map<string, T[]>();
   for (const i of issues) {
@@ -345,7 +395,10 @@ export function groupByField<T extends PlanIssue>(issues: T[], walletRow: boolea
   return map;
 }
 
-/** Exact KAS missing for the issuance, from the `funds.insufficient` finding (`need` = carriers, `have` = spendable). */
+/**
+ * Exact KAS missing for the issuance, from the `funds.insufficient` finding (`need` is carriers,
+ * `have` is spendable).
+ */
 export function shortfallOf(issue: Pick<PlanIssue, 'code' | 'params'>): { need: bigint; have: bigint; missing: bigint } | null {
   if (issue.code !== 'funds.insufficient' || !issue.params) return null;
   try {
@@ -357,14 +410,17 @@ export function shortfallOf(issue: Pick<PlanIssue, 'code' | 'params'>): { need: 
   }
 }
 
-// ------------------------------------------------------------------------------------------------ display helpers
+// ---- Display helpers
 
-/** Token amount in human units with digit grouping: 100000000000 at 8 decimals -> "1,000". */
+/** Token amount in human units with digit grouping: 100000000000 at 8 decimals gives "1,000". */
 export function humanAmount(base: bigint | string, decimals: number): string {
   return groupDigits(formatUnits(BigInt(base), decimals));
 }
 
-/** The supply hint under the input: "1,000,000 tokens (100000000000000 base units)"; null when it does not parse. */
+/**
+ * The supply hint under the input: "1,000,000 tokens (100000000000000 base units)". It is null when
+ * the supply does not parse.
+ */
 export function supplyPreview(state: IssueUiState): { human: string; base: string } | null {
   const s = sharesOf(state);
   const decimals = parseDecimalsText(state.decimals);
@@ -372,39 +428,44 @@ export function supplyPreview(state: IssueUiState): { human: string; base: strin
   return { human: humanAmount(s.supply, decimals), base: s.supply.toString() };
 }
 
-/** The default carrier shown as placeholder: "10". */
+/** The default carrier shown as the placeholder: "10". */
 export function defaultCarrierText(limits: Pick<IssueLimits, 'defaultCarrier'>): string {
   return formatUnits(BigInt(limits.defaultCarrier), 8);
 }
 
-// ------------------------------------------------------------------------------------------------ file names and JSON
+// ---- File names and JSON
 
 const safeName = (ticker: string): string => ticker.replace(/[^A-Za-z0-9_-]/g, '_') || 'token';
 
-/** `<ticker>.registry-entry.json`: the token's facts in the format of a `registry/tokens.json` entry (for tools and community lists; no listing request). */
+/**
+ * `<ticker>.registry-entry.json`: the token's facts in the format of a `registry/tokens.json`
+ * entry, for tools and community lists. It is not a listing request.
+ */
 export const registryEntryFileName = (ticker: string): string => `${safeName(ticker)}.registry-entry.json`;
 export const supplyDocFileName = (ticker: string): string => `${safeName(ticker)}.supply.json`;
 export const metadataDocFileName = (ticker: string): string => `${safeName(ticker)}.metadata.json`;
 export const proofDocFileName = (ticker: string): string => `${safeName(ticker)}.launch-proof.json`;
 
-/** Pretty JSON with a trailing newline (files end with one). */
+/** Pretty JSON with a trailing newline, as files end with one. */
 export const jsonText = (value: unknown): string => `${JSON.stringify(value, null, 2)}\n`;
 
-// ------------------------------------------------------------------------------------------------ review + result
+// ---- Review and result
 
 export interface HolderView {
   index: number;
   owner: string;
   ownerShort: string;
   ownerScheme: number;
-  /** base units */
+  /** Base units. */
   amount: bigint;
-  /** whole tokens with grouping */
+  /** Whole tokens with grouping. */
   human: string;
   isWallet: boolean;
-  /** the custody of the curve this genesis places */
+  /** The custody of the curve this genesis places. */
   isCurve?: boolean;
-  /** the wallet's share held by the creation's creator lock: opens at `lockedUntil` (unix ms) */
+  /**
+   * The wallet's share held by the creation's creator lock. It opens at `lockedUntil` (unix ms).
+   */
   lockedUntil?: bigint;
 }
 
@@ -415,14 +476,14 @@ export interface ReviewSummary {
   supplyBase: bigint;
   supplyHuman: string;
   holders: HolderView[];
-  /** KAS (sompi) locked in each token output and in total */
+  /** KAS (sompi) locked in each token output and in total. */
   carrierEach: bigint;
   carrierTotal: bigint;
-  /** network fee (sompi) */
+  /** The network fee in sompi. */
   fee: bigint;
   program: string;
   outputCount: number;
-  /** the creator lock: what it holds and when it opens (unix ms); null for none */
+  /** The creator lock: what it holds and when it opens (unix ms). Null means none. */
   lock: { amount: bigint; human: string; until: bigint } | null;
 }
 
@@ -441,7 +502,10 @@ export function holderViews(token: Pick<IssueToken, 'outputs' | 'decimals'>, wal
   }));
 }
 
-/** What the review shows before the pre-sign screen: from the plan, so the numbers are the ones that will be signed. */
+/**
+ * What the review shows before the pre-sign screen. It comes from the plan, so the numbers are the
+ * ones that will be signed.
+ */
 export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve' | 'lock'>, walletKey: Hex | null): ReviewSummary {
   const { token } = plan;
   const holders = holderViews(token, walletKey, plan.curve?.covenantId ?? null, plan.lock ?? null);
@@ -466,10 +530,10 @@ export function reviewSummary(plan: Pick<IssuePlan, 'token' | 'fee' | 'curve' | 
 }
 
 export interface ResultRow {
-  /** i18n key suffix under `issue.result.` and test id suffix (`issue-result-<id>`) */
+  /** The i18n key suffix under `issue.result.` and the test id suffix (`issue-result-<id>`). */
   id: 'tokenId' | 'templateHash' | 'extension' | 'txid' | 'prepTxid' | 'program';
   value: string;
-  /** offer a copy button */
+  /** Offer a copy button. */
   copy: boolean;
 }
 
@@ -482,7 +546,7 @@ export interface ResultViewModel {
   supplyFile: string;
   metadataJson: string;
   metadataFile: string;
-  /** the KCC-23 launch proof (null: the docs carry none) */
+  /** The KCC-23 launch proof. Null means the docs carry none. */
   proofJson: string | null;
   proofFile: string;
 }
@@ -493,7 +557,10 @@ function prepTxidOf(docs: IssuePlan['docs']): string | null {
   return typeof k === 'string' && /^[0-9a-f]{64}$/.test(k) ? k : null;
 }
 
-/** Rows and file contents of the result panel. Throws when the docs do not describe the issued token (`registryEntryFromIssue`). */
+/**
+ * Rows and file contents of the result panel. It throws when the docs do not describe the issued
+ * token (`registryEntryFromIssue`).
+ */
 export function resultViewModel(plan: Pick<IssuePlan, 'token' | 'docs'> & Partial<Pick<IssuePlan, 'lock'>>, txid: string, walletKey: Hex | null = null): ResultViewModel {
   const entry = registryEntryFromIssue(plan.token, plan.docs);
   return {
