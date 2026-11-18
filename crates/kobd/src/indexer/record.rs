@@ -292,7 +292,8 @@ impl<'a> DecodeCtx<'a> {
         let tag: [u8; 4] = r.raw(4)?.try_into().expect("4");
         let args = read_args(r)?;
         Ok(match self.order_layout(code)? {
-            Some(id) if state.len() == template(id).state_len || id == TemplateId::KobCurveAsk => {
+            // a retired template's cancel keeps its own (legacy) layout
+            Some(id) if kob_protocol::state::layout_of_len(id, state.len()).is_some() || id == TemplateId::KobCurveAsk => {
                 Some(Reveal { template: id, state, tag, args })
             }
             _ => {
@@ -588,7 +589,7 @@ pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
     let tag: [u8; 4] = pushes[pushes.len() - 2].as_slice().try_into().ok()?;
     // Identify first (prefix and suffix compared with the pinned templates). Only an order's redeem
     // script is hashed, never the token program that a transfer input reveals (up to 25 KB).
-    let (id, state) = model::identify_redeem(redeem)?;
+    let (id, state) = model::identify_redeem(redeem).or_else(|| retired_cancel(redeem, &tag))?;
     if !model::is_order(id) {
         return None;
     }
@@ -597,6 +598,17 @@ pub fn parse_reveal(sigscript: &[u8], spent_spk: &[u8]) -> Option<Reveal> {
     }
     let args = pushes[..pushes.len() - 2].iter().map(|a| if a.len() > MAX_ARG_BYTES { vec![] } else { a.clone() }).collect();
     Some(Reveal { template: id, state: state.to_vec(), tag, args })
+}
+
+/// The maker's cancel of an order under a retired template of the cancel-only table
+/// (`kob_protocol::retired`): today's kind and the state span in its layout.
+///
+/// Only the `cancel(sig)` entry is read; any other entry of a retired template stays unknown.
+fn retired_cancel<'a>(redeem: &'a [u8], tag: &[u8; 4]) -> Option<(TemplateId, &'a [u8])> {
+    if *tag != kob_protocol::retired::CANCEL_TAG {
+        return None;
+    }
+    kob_protocol::retired::retired().iter().find_map(|r| r.state_of(redeem).map(|s| (r.kind, s)))
 }
 
 /// Whether the reveal is a fill that is trigger evidence.
@@ -1193,6 +1205,46 @@ mod tests {
         let mut w = Writer::new();
         rec.encode(&mut w);
         assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec);
+    }
+
+    /// The maker's cancel of an order under a retired template of the cancel-only table is read
+    /// (today's kind, the state span in its own layout) and survives the record log; any other
+    /// entry of a retired template is not.
+    #[test]
+    fn a_retired_templates_cancel_is_revealed_and_its_other_entries_are_not() {
+        for r in kob_protocol::retired::retired() {
+            let span = vec![0x51u8; r.state_len];
+            let spk = crate::script::spk_bytes(&r.spk(&span).unwrap());
+            let sig = r.cancel_sigscript(&span, &[7; 65]).unwrap();
+            let rv = parse_reveal(&sig, &spk).unwrap_or_else(|| panic!("{}", r.label()));
+            assert_eq!((rv.template, rv.state.as_slice(), rv.entry()), (r.kind, span.as_slice(), Some("cancel")), "{}", r.label());
+            // another spent script, or another entry of the same script, is not this order's cancel
+            assert!(parse_reveal(&sig, &crate::script::p2sh_spk(&[0x51])).is_none());
+            let redeem = r.redeem(&span).unwrap();
+            let other = [
+                kob_protocol::script::push_data(&[7; 65]),
+                kob_protocol::script::push_data(&[1, 2, 3, 4]),
+                kob_protocol::script::push_data(&redeem),
+            ]
+            .concat();
+            assert!(parse_reveal(&other, &spk).is_none(), "{}", r.label());
+            // the record log keeps the reveal of the legacy span
+            let rec = TxRecord {
+                txid: Hash32([1; 32]),
+                pos: 0,
+                payload: vec![],
+                inputs: vec![RecIn { txid: Hash32([3; 32]), index: 0, cov: Some(Hash32([4; 32])), daa: 9, reveal: Some(rv) }],
+                outputs: vec![],
+                tok_outs: vec![],
+                holds: vec![],
+                kcc23: None,
+                payer: None,
+                in_value: None,
+            };
+            let mut w = Writer::new();
+            rec.encode(&mut w);
+            assert_eq!(TxRecord::decode(&mut Reader::new(&w.buf)).unwrap(), rec, "{}", r.label());
+        }
     }
 
     /// A public-mint app's `mint` reveals the holder it creates.
