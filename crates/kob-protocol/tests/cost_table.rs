@@ -1,10 +1,11 @@
-//! Real-operation cost table (measurement, not a regression gate; `#[ignore]`d).
+//! Measures the cost of real operations (a table, not a regression gate; `#[ignore]`d).
 //!
-//! Builds every builder scenario of the golden-vector set on every token program KOB builds for, the pair order
-//! shapes on a set of program pairs, and plain batches padded with extra asks / bids (the marginal cost of a fill
-//! in a batch), signs them with the fixture keys, tightens the compute budgets in the engine and writes one CSV row
-//! per transaction: masses, the relay floor and every input's signature script with what it is (order template and
-//! entry, token program and role, P2PK). Run:
+//! Builds every builder scenario of the golden-vector set on every token program KOB builds for,
+//! the pair order shapes on a set of program pairs, and plain batches padded with extra asks / bids
+//! (the marginal cost of a fill in a batch), signs them with the fixture keys, tightens the compute
+//! budgets in the engine and writes one CSV row per transaction: masses, the relay floor and every
+//! input's signature script with what it is (order template and entry, token program and role,
+//! P2PK). Run:
 //!
 //! ```text
 //! KOB_COST_OUT=target/cost_table.csv cargo test -p kob-protocol --test cost_table -- --ignored --nocapture

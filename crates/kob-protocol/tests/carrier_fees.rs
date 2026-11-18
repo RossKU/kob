@@ -1,16 +1,18 @@
-//! The order carrier and the fee (`docs/spec/order-types.md`, *Defaults*: carriers).
+//! Tests the order carrier and the fee (`docs/spec/order-types.md`, *Defaults*: carriers).
 //!
-//! Every builder scenario of the golden-vector set on every token program, and the pair scenarios on a set of program
-//! pairs, built with every order-side carrier (order UTXOs, custodies, the maker's token UTXOs, `deliveryCarrier`,
-//! `exitCarrier`) at one value and the matcher's taker token carrier at its fixture value, signed with the fixture keys,
-//! budgets tightened, and validated in the engine. A token output carries a covenant id, so its KIP-9 storage plurality is
-//! 2 and its storage mass is `4 × 10^12 / carrier`: the relay fee (`rate × max(compute, normalized transient)`) never
-//! prices it, the storage-inclusive priority fee (`rate × max(fee mass, storage)`) does once the storage mass exceeds the
-//! transaction's fee mass.
+//! Every builder scenario of the golden-vector set on every token program, and the pair scenarios
+//! on a set of program pairs, built with every order-side carrier (order UTXOs, custodies, the
+//! maker's token UTXOs, `deliveryCarrier`, `exitCarrier`) at one value and the matcher's taker
+//! token carrier at its fixture value, signed with the fixture keys, budgets tightened, and
+//! validated in the engine. A token output carries a covenant id, so its KIP-9 storage plurality is
+//! 2 and its storage mass is `4 × 10^12 / carrier`: the relay fee (`rate × max(compute,
+//! normalized transient)`) never prices it, the storage-inclusive priority fee (`rate × max(fee
+//! mass, storage)`) does once the storage mass exceeds the transaction's fee mass.
 //!
-//! `the_default_order_carrier_adds_no_relay_fee` is the gate: at [`DEFAULT_ORDER_CARRIER`] no shape pays more relay fee
-//! than at 10 KAS, none comes near the block storage limit, and the opt-in priority fee rises by a bounded amount. The
-//! measurement over every candidate carrier (10 / 5 / 3 / 2 / 1.5 / 1 / 0.5 / 0.25 / 0.1 KAS) is `#[ignore]`d:
+//! `the_default_order_carrier_adds_no_relay_fee` is the gate: at [`DEFAULT_ORDER_CARRIER`] no shape
+//! pays more relay fee than at 10 KAS, none comes near the block storage limit, and the opt-in
+//! priority fee rises by a bounded amount. The measurement over every candidate carrier (10 / 5 / 3
+//! / 2 / 1.5 / 1 / 0.5 / 0.25 / 0.1 KAS) is `#[ignore]`d:
 //!
 //! ```text
 //! KOB_CARRIER_FEES_OUT=target/carrier_fees.csv cargo test -p kob-protocol --test carrier_fees -- --ignored --nocapture

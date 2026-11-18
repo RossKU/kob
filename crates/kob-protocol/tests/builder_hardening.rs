@@ -1,5 +1,7 @@
-//! Builder hardening: a refund with funding but no change key, a hostile order state
-//! traps the encoder, off-curve keys written into outputs, and finalize on a malformed `BuiltTx`.
+//! Tests the hardening of the builders and of `finalize`.
+//!
+//! Covered: a refund with funding but no change key, a hostile order state that traps the encoder,
+//! off-curve keys written into outputs, and `finalize` on a malformed `BuiltTx`.
 mod common;
 
 use common::*;
@@ -334,11 +336,11 @@ fn an_if_done_entry_with_an_exit_at_another_scale_is_refused() {
     }
 }
 
-/// Audit A2: terms that hurt the maker are refused by `check_new_order` (every builder of a new order and of an in-place
-/// amend runs it), in both families: a trailing gap, trailing wait or trigger exposure below zero (the pair builder already
-/// refused these), a slippage band outside 0..=10000, a negative keeper tip or trigger threshold, a stop / take-profit
-/// below an ask's tip, an armed new order, and an if-done exit that is not the maker's order of the same token at the
-/// entry's scale.
+/// Terms that hurt the maker are refused by `check_new_order` (every builder of a new order and of
+/// an in-place amend runs it), in both families: a trailing gap, trailing wait or trigger exposure
+/// below zero, a slippage band outside 0..=10000, a negative keeper tip or trigger threshold, a
+/// stop / take-profit below an ask's tip, an armed new order, and an if-done exit that is not the
+/// maker's order of the same token at the entry's scale.
 #[test]
 fn audit_maker_harming_terms_of_new_orders_are_refused() {
     for t in [TemplateId::Kcc20Ref8x8, TemplateId::KronToken2433] {

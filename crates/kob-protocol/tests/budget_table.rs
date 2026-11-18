@@ -1,22 +1,27 @@
-//! Generates the compute-budget table by running every builder shape (the golden scenarios plus
-//! the token slot grid) through the rusty-kaspa v2.1.0 engine, and checks it against the
-//! committed `data/compute_budgets.json`. `KOB_REGEN=1` rewrites the file.
+//! Generates the compute-budget table and checks it against the committed
+//! `data/compute_budgets.json`.
+//!
+//! Every builder shape (the golden scenarios plus the token slot grid) runs through the rusty-kaspa
+//! v2.1.0 engine. `KOB_REGEN=1` rewrites the file.
 //!
 //! An input's script-unit cost depends on the transaction around it: every other token input (an
 //! ask's custody) adds about 120 units to each order covenant of the transaction, every other bid a
 //! few. So every batch scenario is also measured inside the largest batches the builders accept
-//! (`common::pad_batch`: extra asks of one whole token up to the token slot limit, then extra bids of one whole token up
-//! to the output limit, and bids alone), and each role's budget is the maximum over all of them.
+//! (`common::pad_batch`: extra asks of one whole token up to the token slot limit, then extra bids
+//! of one whole token up to the output limit, and bids alone), and each role's budget is the
+//! maximum over all of them.
 //!
-//! A role name does not always tell every branch of its covenant apart: a buy-first pair entry's fill of everything left
-//! (`KobIfdPair.fill.bid….wait` / `….close`) pins its B rest only when its escrow exceeds the spend (an entry filled or
-//! merged before), some 24,000 units more under the same name, so the grid builds both (`common::pair::pair_fill_grid`).
-//! Note when reading an executor's report: `ExceededCommittedScriptUnits { used }` is the limit plus the overflow of the
-//! one charge that crossed it (the script stops there), not what the input needs; measure the shape to know that.
+//! A role name does not always tell every branch of its covenant apart: a buy-first pair entry's
+//! fill of everything left (`KobIfdPair.fill.bid….wait` / `….close`) pins its B rest only when
+//! its escrow exceeds the spend (an entry filled or merged before), some 24,000 units more under
+//! the same name, so the grid builds both (`common::pair::pair_fill_grid`). Note when reading an
+//! executor's report: `ExceededCommittedScriptUnits { used }` is the limit plus the overflow of the
+//! one charge that crossed it (the script stops there), not what the input needs; measure the shape
+//! to know that.
 //!
 //! The table is exact: for every role, the shape that needs the most units is rebuilt with that
-//! role's budget lowered by one, and the engine must reject it (`ExceededCommittedScriptUnits` at an
-//! input of that role), while the table budget passes.
+//! role's budget lowered by one, and the engine must reject it (`ExceededCommittedScriptUnits` at
+//! an input of that role), while the table budget passes.
 
 mod common;
 
@@ -35,9 +40,9 @@ const MAX_PAD: usize = 24;
 
 /// Wide pad shapes (base units per pad leg, ask price in sompi per whole token) measured besides the one-token pads: real books
 /// have amounts and prices of every byte width, and the quote rule's split multiplication costs a little more with a
-/// remainder (`n % scale`, `price % scale` non-zero) and larger operands (the Kcc20Ref4x5 table was one unit short for
-/// 0.6-1% of random books before wide pads were measured). The widest amount only where the program's outputs hold it
-/// (KRON: at most 10^9 base units per output).
+/// remainder (`n % scale`, `price % scale` non-zero) and larger operands (the Kcc20Ref4x5 table
+/// needs them to be exact for random books). The widest amount only where the program's outputs
+/// hold it (KRON: at most 10^9 base units per output).
 const WIDE_PADS: [(i64, i64); 3] = [(63_001, 250_000_007), (16_777_217, 2_500_000_011), (16_777_216_001, 257_000_013)];
 
 /// The provisional budget a measuring build commits (the engine measures without enforcing).
@@ -118,7 +123,8 @@ fn build_shapes() -> Vec<(String, Action)> {
 /// The shapes of one program: its scenarios and branch fixtures, padded.
 fn program_shapes(p: TemplateId) -> Vec<(String, Action)> {
     let mut out = vec![];
-    // the golden scenarios and the branch fixtures (every builder role, C6: a role the table lacks is refused by `build`)
+    // the golden scenarios and the branch fixtures (every builder role: a role the table lacks is
+    // refused by `build`)
     for (n, a) in common::scenarios_on(p).into_iter().chain(common::branches::branch_shapes(p)) {
         let name = format!("{n}@{}", p.name());
         if matches!(a, Action::Batch(_)) {
@@ -489,11 +495,12 @@ fn every_pair_role_is_present_and_sufficient_on_every_program_pair() {
     println!("{} pair roles limited by the token slots: {slot_limited_roles:?}", slot_limited_roles.len());
 }
 
-/// The fill the TN10 soak's matcher found short (`KobIfdPair.fill.bid.book.wait@KCC20Ref+KCC20Ref` at 23, the engine
-/// stopping at 242,223 units): a repeating buy-first entry filled before, its escrow one base unit above the spend of what
-/// it has left (the floor of its first fill), filled for all of it, pins its B rest. It needs more than 259,999 units (the
-/// grid measured only fresh entries, whose escrow is exactly the spend: 238,900) and the committed table covers it, as it
-/// covers the not-booked waiting fill and the closing fill of such an entry.
+/// A fill that a table measured on fresh entries alone would leave short
+/// (`KobIfdPair.fill.bid.book.wait@KCC20Ref+KCC20Ref` at 23): a repeating buy-first entry filled
+/// before, its escrow one base unit above the spend of what it has left (the floor of its first
+/// fill), filled for all of it, pins its B rest. It needs more than 259,999 units (a fresh entry's
+/// escrow is exactly the spend: 238,900) and the committed table covers it, as it covers the
+/// not-booked waiting fill and the closing fill of such an entry.
 #[test]
 fn a_buy_first_entry_keeping_a_b_rest_fills_everything_left_within_its_budget() {
     use common::pair::pair_branch_shapes;
@@ -516,9 +523,10 @@ fn a_buy_first_entry_keeping_a_b_rest_fills_everything_left_within_its_budget() 
     }
 }
 
-/// The merge the executor found short: a sell-first entry sold out with a prefund rest left (its B custody held, its A
-/// custody new), re-armed by its exit's sell-out, on a KCC-20 / KRON pair both ways. Its input needs more than 259,999
-/// units (the budget measured on entries holding nothing), and the committed table covers it.
+/// A merge that a table measured on entries holding nothing would leave short: a sell-first entry
+/// sold out with a prefund rest left (its B custody held, its A custody new), re-armed by its
+/// exit's sell-out, on a KCC-20 / KRON pair both ways. Its input needs more than 259,999 units, and
+/// the committed table covers it.
 #[test]
 fn a_sold_out_entry_keeping_its_prefund_rest_re_arms_within_its_budget() {
     use common::pair::{pair_name, rearm_with, Rearm};
