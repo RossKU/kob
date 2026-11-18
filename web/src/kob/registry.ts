@@ -170,7 +170,9 @@ export type UntradableReason = (typeof UNTRADABLE_REASONS)[number];
 
 // ------------------------------------------------------------------------------------- text safety
 
-/** True if `s` has an invisible or reordering character. The rule is shared with Rust: see display.ts. */
+/**
+ * True if `s` has an invisible or reordering character. The rule is shared with Rust (display.ts).
+ */
 export { hasBadChar, hasLookalike };
 
 /**
@@ -202,7 +204,13 @@ const CONFUSABLE_LATIN: Readonly<Record<string, string>> = {
   'Օ': 'O', 'Ս': 'U',
 };
 
-/** Combining marks, format characters (soft hyphen, ALM, tags), hangul and braille fillers and variation selectors: nothing shows, so a ticker with one reads as the one without. */
+/**
+ * Characters that show nothing, so a ticker with one reads as the one without. They are
+ * - combining marks,
+ * - format characters (soft hyphen, ALM, tags),
+ * - hangul and braille fillers,
+ * - variation selectors.
+ */
 const INVISIBLE_IN_TICKER = /[\p{M}\p{Cf}\u115F\u1160\u180E\u2800\u3164\uFFA0\uFE00-\uFE0F\u{E0100}-\u{E01EF}]/gu;
 
 /**

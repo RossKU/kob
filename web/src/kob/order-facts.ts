@@ -23,7 +23,7 @@ export const KAS_KINDS: readonly KasKind[] = ['KobAsk', 'KobCondAsk', 'KobIfdAsk
  * One template per kind serves both sides and both token families, so there is no KRON twin.
  */
 export const PAIR_KINDS: readonly PairKind[] = ['KobPair', 'KobCondPair', 'KobIfdPair'];
-/** The stepped sell curve (`KobCurveAsk`): KCC-20 only, so no KRON twin. */
+/** The stepped sell curve (`KobCurveAsk`). It is KCC-20 only, so it has no KRON twin. */
 export const CURVE_KINDS: readonly BaseKind[] = ['KobCurveAsk'];
 /** Every family-neutral order kind. */
 export const BASE_KINDS: readonly BaseKind[] = [...ASK_KINDS, ...BID_KINDS, ...PAIR_KINDS, ...CURVE_KINDS];
@@ -395,22 +395,25 @@ export interface OrderDescription {
    * `deliveryCarrier`, entry carriers, prefund, and a pair order's tip prefund.
    */
   reservedKas: bigint;
-  /** A stepped sell curve: its table and where it stands (`price` is the current level's price). Absent for other kinds. */
+  /**
+   * A stepped sell curve, with its table and where it stands (`price` is the current level's
+   * price). Absent for other kinds.
+   */
   curve?: CurveFacts;
 }
 
 /** A `KobCurveAsk` read from its state (docs/design/curve-ask-spec.md §1). */
 export interface CurveFacts {
-  /** the current level (table index), `levels` when sold out */
+  /** The current level (table index), `levels` when sold out. */
   level: number;
   levels: number;
   levelSize: bigint;
   total: bigint;
-  /** sompi per whole token of each level */
+  /** Sompi per whole token of each level. */
   table: bigint[];
-  /** the current level's price, null when sold out */
+  /** The current level's price, null when sold out. */
   priceNow: bigint | null;
-  /** created in its token's genesis, not yet filled or amended: `tokenCovId` is zero */
+  /** Created in its token's genesis and not yet filled or amended, so `tokenCovId` is zero. */
   unbound: boolean;
 }
 
