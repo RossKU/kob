@@ -1,6 +1,8 @@
-// The landing page's motion: the hero's lines rise in once the page has painted, and each block below rises / grows in the first time it scrolls into
-// view (an IntersectionObserver marks it `lp-seen`, once). Without IntersectionObserver everything is shown at once. prefers-reduced-motion is handled
-// by landing.css (no transitions, everything in its final place), so the hooks do not need to know about it.
+// The landing page's motion. The hero's lines rise in once the page has painted. Each block below
+// rises or grows in the first time it scrolls into view, when an IntersectionObserver marks it
+// `lp-seen` once. Without IntersectionObserver everything is shown at once.
+// landing.css handles prefers-reduced-motion with no transitions and everything in its final
+// place, so the hooks do not need to know about it.
 import type { RefObject } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
 
@@ -8,7 +10,10 @@ import { useEffect, useState } from 'preact/hooks';
 export const REVEAL_SELECTOR = '.lp-rv, .lp-sec .lp-ln, .lp-final .lp-ln, .lp-bigbook';
 export const SEEN = 'lp-seen';
 
-/** Marks the reveal elements under `root` as seen when they enter the viewport (14 % above its bottom edge, as the prototype). */
+/**
+ * Marks the reveal elements under `root` as seen when they enter the viewport, 14 % above its
+ * bottom edge.
+ */
 export function useReveal(root: RefObject<HTMLElement>): void {
   useEffect(() => {
     const el = root.current;
@@ -33,7 +38,10 @@ export function useReveal(root: RefObject<HTMLElement>): void {
   }, [root]);
 }
 
-/** True two frames after the first render: the hero's start state has been painted, so its transition runs. */
+/**
+ * True two frames after the first render. The hero's start state has been painted by then, so its
+ * transition runs.
+ */
 export function useHeroGo(): boolean {
   const [go, setGo] = useState(false);
   useEffect(() => {
