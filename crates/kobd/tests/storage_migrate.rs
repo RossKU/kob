@@ -1,8 +1,9 @@
-//! `kobd db migrate`: a store written by an earlier build (schema 5: states whole, no counters, the indexes of that time; schema 7: packed
-//! states, 32-byte ids in every row; schema 8: integer ids in the child tables, blobs in the orders; schema 9: no fees, executors or
-//! activity totals) is rebuilt as the current schema (integer ids in the orders too, the fees of the fills, the totals) in one run, and no
-//! read changes: every table digests the same
-//! with its ids joined back and its states decoded, the API reads return the same JSON, the event ids and sequences are kept, a
+//! `kobd db migrate`: a store written by an earlier build (schema 5: states whole, no counters, the
+//! indexes of that time; schema 7: packed states, 32-byte ids in every row; schema 8: integer ids
+//! in the child tables, blobs in the orders; schema 9: no fees, executors or activity totals) is
+//! rebuilt as the current schema (integer ids in the orders too, the fees of the fills, the totals)
+//! in one run, and no read changes: every table digests the same with its ids joined back and its
+//! states decoded, the API reads return the same JSON, the event ids and sequences are kept, a
 //! store this build refuses is left as it is, and the migrated store goes on being indexed.
 
 mod common;

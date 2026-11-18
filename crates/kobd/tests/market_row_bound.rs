@@ -1,10 +1,11 @@
 //! Regression: market queries bound their memory, and candles never lose old history to a row cap.
 //!
-//! `GET /v1/candles/{token}?from=0` used to load every fill of the token into memory (`limit` only trimmed the output), and the
-//! 24 h stats scanned by event id without a time index. The fix capped every window read at the newest `MAX_FILL_ROWS` rows,
-//! which also cut the charts: once a token had more fills than the cap, its 1d / 1h charts started at the 20 000th newest
-//! fill and the older days disappeared (the TN10 soak, 2026-10-14). Now candles stream every fill of the window through the
-//! `(kind, token, ts)` index and hold only the newest `limit` candles; the 24 h stats keep the row cap and say when it cut
+//! `GET /v1/candles/{token}?from=0` must not load every fill of the token into memory (`limit` only
+//! trims the output), and the 24 h stats must not scan by event id without a time index. A row cap
+//! on every window read would also cut the charts: once a token had more fills than the cap, its 1d
+//! / 1h charts would start at the 20 000th newest fill and the older days would disappear. So
+//! candles stream every fill of the window through the `(kind, token, ts)` index and hold only the
+//! newest `limit` candles; the 24 h stats keep the row cap (`MAX_FILL_ROWS`) and say when it cut
 //! the window (`window_truncated`).
 
 use kobd::hex::Hash32;

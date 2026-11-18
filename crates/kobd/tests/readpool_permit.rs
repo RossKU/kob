@@ -1,9 +1,10 @@
 //! Regression: a cancelled read keeps its permit until its blocking task ends.
 //!
-//! `ReadPool::with` used to release the semaphore permit when the caller's future was dropped (the API guard's timeout, a client
-//! disconnect) while the blocking task still held its pooled connection: the next request found the pool empty and panicked
-//! (HTTP 500). The permit now travels into the blocking task, and the read itself is interrupted (or never started), so the
-//! permit comes back as soon as the statement stops. Short reads have a lane of their own.
+//! If `ReadPool::with` released the semaphore permit when the caller's future was dropped (the API
+//! guard's timeout, a client disconnect) while the blocking task still held its pooled connection,
+//! the next request would find the pool empty and panic (HTTP 500). So the permit travels into the
+//! blocking task, and the read itself is interrupted (or never started), so the permit comes back
+//! as soon as the statement stops. Short reads have a lane of their own.
 
 use kobd::indexer::db::{meta_get, open_writer, ReadPool};
 use std::time::Duration;

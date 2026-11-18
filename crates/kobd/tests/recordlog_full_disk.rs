@@ -1,5 +1,6 @@
-//! The record log on a full disk: a failed append is rolled back to the last complete frame, so the frames written once
-//! space is back follow it directly and the next start opens the log as it was written.
+//! The record log on a full disk: a failed append is rolled back to the last complete frame, so the
+//! frames written once space is back follow it directly and the next start opens the log as it was
+//! written.
 //!
 //! The tests need a small tmpfs and skip themselves without `KOB_SMALL_TMPFS`:
 //!

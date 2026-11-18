@@ -1,4 +1,5 @@
-//! Regression tests of the round-5 indexer audit fixes (audit 2026-10-30 V7, I16, I17) and their bypasses. Offline.
+//! Regression tests of the indexer findings V7, I16 and I17 (`docs/security/AUDIT-2026-10.md`) and
+//! their bypasses. Offline.
 #![allow(dead_code, unused_imports)]
 
 mod common;
