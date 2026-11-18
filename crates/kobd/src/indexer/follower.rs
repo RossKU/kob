@@ -940,10 +940,7 @@ impl<S: ChainSource> Follower<S> {
         let proved = async {
             match plan {
                 None => Ok(()),
-                Some(plan) => match self.prove_lanes(&proof, plan).await {
-                    Ok(()) => self.prove_scripts(&proof, &raw).await,
-                    Err(e) => Err(e),
-                },
+                Some(plan) => self.prove_scripts(&proof, &raw, self.prove_lanes(&proof, plan)).await,
             }
         };
         let confirmed = async {
@@ -1019,10 +1016,31 @@ impl<S: ChainSource> Follower<S> {
     /// (`super::trust`): each merged block holding one is fetched once and checked
     /// (`ChainProof::check_merged_block`).
     ///
-    /// The blocks are asked for [`PROOF_FETCHES`] at a time and checked in order as they arrive.
-    /// One after another, a busy batch (a block a second holding a KOB transaction on the TN10
-    /// soak) waited a round trip per block and held the follower to about chain speed.
-    async fn prove_scripts(&self, proof: &Mutex<ChainProof>, raw: &RawVspcResponse) -> Result<(), ProofError> {
+    /// The blocks are asked for [`PROOF_FETCHES`] at a time while `lanes`, the acceptance proof
+    /// of the batch, runs, and checked in order once it has passed. One after another, after the
+    /// lanes, a busy batch (a block a second holding a KOB transaction on the TN10 soak) waited a
+    /// round trip per block and held the follower to about chain speed. A failure of the lanes is
+    /// reported before one of the blocks, as when they ran first.
+    async fn prove_scripts(
+        &self,
+        proof: &Mutex<ChainProof>,
+        raw: &RawVspcResponse,
+        lanes: impl std::future::Future<Output = Result<(), ProofError>>,
+    ) -> Result<(), ProofError> {
+        let (lanes, fetched) = tokio::join!(lanes, self.merged_blocks(raw));
+        lanes?;
+        for (m, txs, block) in fetched? {
+            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, &txs)?;
+        }
+        Ok(())
+    }
+
+    /// The merged blocks of the batch's transactions that can matter to KOB, with those
+    /// transactions, in the order of their hashes. It stops at the first failure.
+    async fn merged_blocks<'a>(
+        &self,
+        raw: &'a RawVspcResponse,
+    ) -> Result<Vec<(Hash32, Vec<&'a crate::rpc::types::Tx>, kaspa_consensus_core::block::Block)>, ProofError> {
         let keys = super::trust::WindowKeys::of(&raw.chain_block_accepted_transactions);
         let ctx = self
             .blocking(move |i| super::trust::TrustContext::load(i.conn(), i.processor().tokens.clone(), &keys))
@@ -1042,17 +1060,19 @@ impl<S: ChainSource> Follower<S> {
                 by_block.entry(m).or_default().push(t);
             }
         }
-        let mut asked = std::pin::pin!(asked_in_order(by_block.keys().copied(), PROOF_FETCHES, |m| self.source.block(m, true)));
-        for (&m, txs) in &by_block {
+        let hashes: Vec<Hash32> = by_block.keys().copied().collect();
+        let mut asked = std::pin::pin!(asked_in_order(hashes, PROOF_FETCHES, |m| self.source.block(m, true)));
+        let mut out = Vec::with_capacity(by_block.len());
+        for (m, txs) in by_block {
             let block = asked
                 .next()
                 .await
                 .expect("one answer per merged block")
                 .map_err(|e| ProofError::Unavailable(format!("merged block {m}: {e}")))?
                 .ok_or_else(|| ProofError::Refused(format!("the node does not know {m}, the merged block of its own transaction")))?;
-            proof.lock().unwrap_or_else(|e| e.into_inner()).check_merged_block(m, &block, txs)?;
+            out.push((m, txs, block));
         }
-        Ok(())
+        Ok(out)
     }
 
     /// Checks a window `raw` from another node against the primary, as far as it can matter to KOB.
@@ -1767,11 +1787,12 @@ mod tests {
 
         /// The proofs of a batch wait one round trip per kind of request, not one per request: the
         /// lanes new at the anchor go out together (two on the mainnet fixture), as the lanes at the
-        /// batch's end and the merged blocks do. One by one, a batch waited a round trip per lane at
-        /// the anchor and per merged block.
+        /// batch's end do, and the merged blocks are fetched meanwhile. One by one, a batch waited a
+        /// round trip per lane at the anchor and per merged block, after the lanes.
         #[tokio::test(start_paused = true)]
         async fn the_proof_requests_of_a_batch_go_out_together() {
             let rtt = Duration::from_millis(300);
+            let mut merged = 0;
             for text in [MAINNET, TN10] {
                 let (f, src, ingest, health) = follower_with(text, |_| {}, rtt);
                 let lanes = src.fx.proofs.len();
@@ -1783,14 +1804,17 @@ mod tests {
                 let p = health.snapshot().chain_proof.unwrap();
                 assert_eq!(p.refused_total, 0);
                 assert!(src.refused.lock().unwrap().is_empty());
-                // The anchor's header, the lanes at the anchor, the lanes at the end, and the
-                // merged blocks when the batch holds a transaction that can matter to KOB.
-                let rounds = 3 + u32::from(p.merged_blocks_total > 0);
+                // The anchor's header, the lanes at the anchor, the lanes at the end. The merged
+                // blocks of the transactions that can matter to KOB arrive meanwhile.
+                let rounds = 3;
+                merged += p.merged_blocks_total;
                 assert!(took >= rtt * rounds && took < rtt * (rounds + 1), "{took:?} for {rounds} round trips, {lanes} lanes");
                 assert!(src.peak.load(SeqCst) >= lanes, "the lanes were asked together");
             }
-            // The mainnet fixture has two lanes: one by one they took a round trip more.
+            // The mainnet fixture has two lanes: one by one they took a round trip more, and the
+            // merged block one more after them.
             assert_eq!(fixture(MAINNET).proofs.len(), 2);
+            assert!(merged > 0, "a merged block was checked");
         }
     }
 }
