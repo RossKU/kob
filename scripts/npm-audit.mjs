@@ -1,11 +1,14 @@
 #!/usr/bin/env node
-// npm audit of one package directory with a narrow allow-list (CI job deps).
+// Runs npm audit on one package directory with a narrow allow-list (CI job deps).
 //
 //   node scripts/npm-audit.mjs <dir> [--allow-file <file>] [--allow <GHSA id>]...
 //
-// Runs `npm audit --package-lock-only --json` in <dir> and fails (exit 1) on any high or critical advisory that is not
-// allowed. The allowed ones are printed. The allow-list is scripts/npm-audit-allow.json (each entry: id, the dirs it
-// applies to, reason), like the accepted RustSec advisories in .cargo/deny.toml; --allow adds an id for this run.
+// It runs `npm audit --package-lock-only --json` in <dir> and fails (exit 1) on any high or
+// critical advisory that is not allowed. The allowed ones are printed.
+//
+// The allow-list is scripts/npm-audit-allow.json. Each entry has an id, the dirs it applies to and
+// a reason, like the accepted RustSec advisories in .cargo/deny.toml. --allow adds an id for this
+// run.
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -46,7 +49,8 @@ if (report.error) {
   console.error(`npm audit in ${dir} failed: ${JSON.stringify(report.error)}`);
   process.exit(2);
 }
-// The advisories themselves are the object entries of `via` (string entries name the package an advisory reaches through).
+// The advisories themselves are the object entries of `via`.
+// String entries name the package an advisory reaches through.
 const advisories = new Map();
 for (const [pkg, v] of Object.entries(report.vulnerabilities ?? {})) {
   for (const a of v.via ?? []) {

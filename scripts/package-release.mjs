@@ -1,21 +1,32 @@
 #!/usr/bin/env node
-// Packages the release binaries of one network and target into the archive operators download (.github/workflows/release.yml).
+// Packages the release binaries of one network and target into the archive operators download
+// (.github/workflows/release.yml).
 //
-//   node scripts/package-release.mjs --version 1.2.3 --network mainnet --target x86_64-pc-windows-msvc \
+//   node scripts/package-release.mjs --version 1.2.3 --network mainnet \
+//        --target x86_64-pc-windows-msvc
 //        --bin-dir target/x86_64-pc-windows-msvc/release [--out dist]
-//   node scripts/package-release.mjs --sums dist          write dist/SHA256SUMS over every archive and APK in dist
-//   node scripts/package-release.mjs --check-tag v1.2.3   fail unless the tag is `v` + the workspace version that kobd and
-//                                                         kob-cli (the `kob` binary) carry (Cargo.toml [workspace.package] and Cargo.lock): the
-//                                                         binaries' --version is the tag (docs/ops/release.md 6)
+//   node scripts/package-release.mjs --sums dist
+//        write dist/SHA256SUMS over every archive and APK in dist
+//   node scripts/package-release.mjs --check-tag v1.2.3
+//        fail unless the tag is `v` + the workspace version that kobd and kob-cli (the `kob`
+//        binary) carry (Cargo.toml [workspace.package] and Cargo.lock). The binaries' --version is
+//        the tag (docs/ops/release.md 6).
 //
-// Two archives per network and target, `.zip` (Windows targets) or `.tar.gz` (every other target), each holding one directory of
-// its name: `kobd-<version>-<network>-<target>` with kobd (the daemon), kob (the command line), on Windows kobd-supervise.cmd
-// (scripts/windows: it starts kobd again when it exits with an error; elsewhere kobd.service, a sample systemd unit from
-// scripts/linux), QUICKSTART.md
-// (docs/ops/executor-quickstart.md), LICENSE, NOTICE and a SHA256SUMS of those files; and `kob-<version>-<network>-<target>` with
-// kob alone, README.md and REFERENCE.md (crates/kob-cli/), LICENSE, NOTICE and a SHA256SUMS of those files. The archive is written here, not by zip / tar: the bytes depend only on the inputs and on
-// SOURCE_DATE_EPOCH (default: the commit time of HEAD) as every entry's time, fixed modes and no owner names, so two builds of
-// identical binaries give identical archives on any runner (docs/ops/release.md 6). Needs Node >= 22 (zlib.crc32).
+// It writes two archives per network and target: `.zip` for Windows targets and `.tar.gz` for every
+// other target. Each holds one directory of its name.
+// - `kobd-<version>-<network>-<target>` holds:
+//   - kobd (the daemon) and kob (the command line).
+//   - On Windows kobd-supervise.cmd (scripts/windows), which starts kobd again when it exits with
+//     an error. Elsewhere kobd.service, a sample systemd unit from scripts/linux.
+//   - QUICKSTART.md (docs/ops/executor-quickstart.md), LICENSE and NOTICE.
+//   - A SHA256SUMS of those files.
+// - `kob-<version>-<network>-<target>` holds kob alone, README.md and REFERENCE.md
+//   (crates/kob-cli/), LICENSE, NOTICE and a SHA256SUMS of those files.
+//
+// The archive is written here, not by zip or tar. The bytes depend only on the inputs and on
+// SOURCE_DATE_EPOCH (default: the commit time of HEAD), which is every entry's time, with fixed
+// modes and no owner names. So two builds of identical binaries give identical archives on any
+// runner (docs/ops/release.md 6). It needs Node >= 22 (zlib.crc32).
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -49,7 +60,8 @@ function epoch() {
   }
 }
 
-// ---- zip (stored names in UTF-8, deflate, DOS time of `when`, Unix modes in the external attributes)
+// ---- zip (stored names in UTF-8, deflate, DOS time of `when`, Unix modes in the external
+// attributes)
 function dosTime(when) {
   const d = new Date(Math.max(when, 315532800) * 1000); // DOS time starts in 1980
   const time = (d.getUTCHours() << 11) | (d.getUTCMinutes() << 5) | (d.getUTCSeconds() >> 1);
@@ -142,7 +154,8 @@ function targz(entries, when) {
     }
   }
   parts.push(Buffer.alloc(1024));
-  // gzip: zlib writes MTIME 0 and no file name, so the bytes depend on the content only
+  // zlib writes MTIME 0 and no file name in the gzip header, so the bytes depend on the content
+  // only.
   return zlib.gzipSync(Buffer.concat(parts), { level: 9 });
 }
 
@@ -156,7 +169,8 @@ function packageOne(o) {
     if (!fs.existsSync(p)) throw new Error(`missing ${p}`);
     return fs.readFileSync(p);
   };
-  // text files with LF line endings whatever the checkout did, so the archive does not depend on core.autocrlf
+  // Text files get LF line endings whatever the checkout did, so the archive does not depend on
+  // core.autocrlf.
   const text = (p) => Buffer.from(read(p).toString('utf8').replace(/\r\n/g, '\n'), 'utf8');
   const kob = [`kob${exe}`, read(path.join(o['bin-dir'], `kob${exe}`)), 0o755];
   const out = path.resolve(o.out ?? 'dist');
@@ -173,10 +187,11 @@ function packageOne(o) {
     ['LICENSE', text(path.join(root, 'LICENSE')), 0o644],
     ['NOTICE', text(path.join(root, 'NOTICE')), 0o644],
   ];
-  // Windows: the loop that starts kobd again when it exits with an error (quickstart 6), with CRLF line endings (cmd.exe can
-  // misread labels in a batch file with LF ones)
+  // Windows: the loop that starts kobd again when it exits with an error (quickstart 6). It has
+  // CRLF line endings, because cmd.exe can misread labels in a batch file with LF ones.
   const crlf = (p) => Buffer.from(text(p).toString('utf8').replace(/\n/g, '\r\n'), 'utf8');
-  // Linux (not Android): a sample systemd unit (quickstart 6); macOS and the rest: none (launchd is not systemd)
+  // Linux (not Android): a sample systemd unit (quickstart 6). macOS and the rest get none, because
+  // launchd is not systemd.
   const linux = o.target.includes('-linux-') && !o.target.includes('android');
   const supervise = windows
     ? [['kobd-supervise.cmd', crlf(path.join(root, 'scripts/windows/kobd-supervise.cmd')), 0o755]]
@@ -198,8 +213,11 @@ function packageOne(o) {
   ]);
 }
 
-/** The tag is `v` + the version the binaries report: [workspace.package] version, inherited by kobd and kob-cli, and
- * the version Cargo.lock records for both (a --locked build refuses a stale lock anyway; this says why in one line). */
+/**
+ * Checks that the tag is `v` + the version the binaries report: the [workspace.package] version,
+ * inherited by kobd and kob-cli, and the version Cargo.lock records for both. A --locked build
+ * refuses a stale lock anyway, and this says why in one line.
+ */
 function checkTag(tag) {
   const read = (p) => fs.readFileSync(path.join(root, p), 'utf8').replace(/\r\n/g, '\n');
   const ws = /^\[workspace\.package\]\n(?:(?!\[)[^\n]*\n)*?version\s*=\s*"([^"]+)"/m.exec(read('Cargo.toml'));

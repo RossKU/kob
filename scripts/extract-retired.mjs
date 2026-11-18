@@ -1,12 +1,14 @@
 #!/usr/bin/env node
-// The cancel-only table's bytes (docs/spec/template-retirement.md): the compiled bytecode of every retired order template, taken
-// from the last commit that carried it, written to crates/kob-protocol/data/retired/<Kind>.<hash prefix>.bin.
+// Extracts the cancel-only table's bytes (docs/spec/template-retirement.md).
 //
-//   node scripts/extract-retired.mjs           write the files (needs the git history of the commits below)
-//   node scripts/extract-retired.mjs --check   fail (exit 1) if a file differs from its artifact in git history
+// These are the compiled bytecode of every retired order template, taken from the last commit that
+// carried it and written to crates/kob-protocol/data/retired/<Kind>.<hash prefix>.bin.
 //
-// kob-protocol (src/retired.rs) embeds the files and recomputes each template hash from them, so the bytes need no history to be
-// checked; this script only shows where they came from.
+//   node scripts/extract-retired.mjs           write the files (needs the git history below)
+//   node scripts/extract-retired.mjs --check   exit 1 if a file differs from git history
+//
+// kob-protocol (src/retired.rs) embeds the files and recomputes each template hash from them, so
+// the bytes need no history to be checked. This script only shows where they came from.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,21 +18,24 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const out = path.join(root, 'crates/kob-protocol/data/retired');
 const check = process.argv.includes('--check');
 
-// [commit that last carried the templates, the kinds retired after it]
+// Each entry is [commit that last carried the templates, the kinds retired after it].
 const GENERATIONS = [
-  // retired by acf39cf (a terminal bid fill returns the spare KAS to its maker); 59d9ea30 is the last release carrying them
+  // Retired by acf39cf (a terminal bid fill returns the spare KAS to its maker). 59d9ea30 is the
+  // last release carrying them.
   ['59d9ea30', ['KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobCondPair', 'KobIfdPair', 'KobBidKron', 'KobCondAskKron',
     'KobCondBidKron', 'KobIfdBidKron', 'KobIfdAskKron', 'KobBidKronD0', 'KobCondAskKronD0', 'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
-  // retired by da35841 (audit 2026-10-29 F1); 60a4d11 is the last commit carrying them (KobBid, KobBidKron and KobBidKronD0 are the
-  // templates above)
+  // Retired by da35841. 60a4d11 is the last commit carrying them (KobBid, KobBidKron and
+  // KobBidKronD0 are the templates above).
   ['60a4d11', ['KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobCondPair', 'KobIfdPair', 'KobCondAskKron', 'KobCondBidKron',
     'KobIfdBidKron', 'KobIfdAskKron', 'KobCondAskKronD0', 'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
-  // retired by the bid delivery re-pin (docs/design/bid-delivery-spec.md: the delivery block of the buy-side kinds); d12b28e1 is the
-  // last commit carrying them. Their state is the legacy layout (no delivery block); the KRON kinds did not change.
+  // Retired by the bid delivery re-pin (docs/design/bid-delivery-spec.md: the delivery block of the
+  // buy-side kinds). d12b28e1 is the last commit carrying them. Their state is the legacy layout
+  // (no delivery block). The KRON kinds did not change.
   ['d12b28e1', ['KobBid', 'KobCondAsk', 'KobCondBid', 'KobIfdBid', 'KobIfdAsk', 'KobPair', 'KobCondPair', 'KobIfdPair']],
-  // retired by the bid minimum-fill rule (71a6c32: a fill below minFill takes all the buying power): the KRON kinds of the TN10
-  // generation 0506de663e7837a3 that changed with KobBidKron; 1652c9ace is the last commit carrying them. (Their KCC-20 twins are the
-  // delivery row above; the delivery templates of 1652c9ace itself were never deployed.)
+  // Retired by the bid minimum-fill rule (71a6c32: a fill below minFill takes all the buying
+  // power). These are the KRON kinds of the TN10 generation 0506de663e7837a3 that changed with
+  // KobBidKron. 1652c9ace is the last commit carrying them. Their KCC-20 twins are the delivery row
+  // above. The delivery templates of 1652c9ace itself were never deployed.
   ['1652c9ace', ['KobBidKron', 'KobCondAskKron', 'KobCondBidKron', 'KobIfdBidKron', 'KobIfdAskKron', 'KobBidKronD0', 'KobCondAskKronD0',
     'KobCondBidKronD0', 'KobIfdBidKronD0', 'KobIfdAskKronD0']],
 ];

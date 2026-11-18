@@ -1,18 +1,26 @@
 #!/usr/bin/env node
-// Builds the frozen compression dictionaries of crates/kobd/src/indexer/packed_dicts.rs from a KOB indexer database.
+// Builds the frozen compression dictionaries of crates/kobd/src/indexer/packed_dicts.rs from a KOB
+// indexer database.
 //
-//   node scripts/build-state-dicts.mjs <index.sqlite3> [--out crates/kobd/src/indexer/packed_dicts.rs] [--first-id N]
+//   node scripts/build-state-dicts.mjs <index.sqlite3>
+//        [--out crates/kobd/src/indexer/packed_dicts.rs] [--first-id N]
 //
-// What they are for (indexer/packed.rs): the genesis state of an order (`orders.genesis_state`, about 380 bytes) and the detail JSON of
-// an event (`order_events.detail`, about 110 bytes) are stored deflated against a dictionary: a representative of the same kind, then,
-// for a genesis state, the order's own maker, token, token program and quote token (which its state repeats). A dictionary is part of the
-// stored format: a value names its dictionary by id and can be read for as long as the build carries that id. THE GENERATED FILE IS
-// APPEND-ONLY: a better dictionary gets a new id (run this with --first-id above the last id in the file and add its entries to
-// the file by hand), an existing entry is never edited or removed (the test `dictionaries_are_frozen` pins their hashes).
+// What they are for (indexer/packed.rs): the genesis state of an order (`orders.genesis_state`,
+// about 380 bytes) and the detail JSON of an event (`order_events.detail`, about 110 bytes) are
+// stored deflated against a dictionary. The dictionary is a representative of the same kind, then,
+// for a genesis state, the order's own maker, token, token program and quote token (which its state
+// repeats).
 //
-// The representative of each contract / kind is the one (out of a sample of its rows) that deflates the other sampled rows to the fewest
-// bytes; its maker, token, program, quote-token and extension bytes are zeroed (the row's own are appended at pack time), so no key or
-// token id of the database it was chosen from is kept.
+// A dictionary is part of the stored format: a value names its dictionary by id and can be read for
+// as long as the build carries that id. THE GENERATED FILE IS APPEND-ONLY. A better dictionary gets
+// a new id (run this with --first-id above the last id in the file and add its entries to the file
+// by hand). An existing entry is never edited or removed (the test `dictionaries_are_frozen` pins
+// their hashes).
+//
+// The representative of each contract or kind is the one (out of a sample of its rows) that
+// deflates the other sampled rows to the fewest bytes. Its maker, token, program, quote-token and
+// extension bytes are zeroed (the row's own are appended at pack time), so no key or token id of
+// the database it was chosen from is kept.
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
@@ -71,7 +79,7 @@ for (const { kind, n } of db.prepare('SELECT kind, COUNT(*) n FROM order_events 
     for (const r of rows) total += size(r, c);
     if (!best || total < best.total) best = { dict: c, total };
   }
-  // a second representative in front when it pays (shapes that differ in their keys)
+  // A second representative in front when it pays (shapes that differ in their keys).
   let chosen = best.dict, total = best.total;
   for (const c of cands) {
     const d = Buffer.concat([c, best.dict]);

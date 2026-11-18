@@ -5,15 +5,19 @@
 //
 // A line is dropped when, after trimming, it is empty or starts with `//`. Every other line must be
 // byte-identical and in the same order. That includes indentation, trailing comments and trailing
-// whitespace. This is the rule of `strip_sil` in scripts/build-argent.sh. Exit code 1 on any difference.
+// whitespace. This is the rule of `strip_sil` in scripts/build-argent.sh. Exit code 1 on any
+// difference.
 //
 // Works for .sil, .ag, .rs and .ts files. Limits:
-// - A `/* */` block, or a multi-line string literal whose lines start with `//`, counts as comment text.
-// - Do not use it on files that embed contract source in string literals (kob-protocol/src/kcc20.rs).
+// - A `/* */` block, or a multi-line string literal whose lines start with `//`, counts as comment
+//   text.
+// - Do not use it on files that embed contract source in string literals
+//   (kob-protocol/src/kcc20.rs).
 const fs = require('fs');
 const { execFileSync } = require('child_process');
 
-// --block (first argument, .ts and .tsx only) also drops JSDoc lines: trimmed text starting with `/*` or `*`.
+// --block (first argument, .ts and .tsx only) also drops JSDoc lines: trimmed text starting with
+// `/*` or `*`.
 let block = false;
 if (process.argv[2] === '--block') { block = true; process.argv.splice(2, 1); }
 const view = (src) => src.replace(/\r\n/g, '\n').split('\n').filter((l) => {
