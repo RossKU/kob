@@ -5,6 +5,9 @@
 //! The cursor is never advanced on any of these:
 //! - A transport error, a timeout, or `consensus is currently in a transitional ibd state`: back
 //!   off and retry.
+//! - A block of the batch to prove at left the selected parent chain (a tip reorg): fetch the
+//!   batch again at once, a few blue scores short of the sink, and prove it anew. The node is not
+//!   blamed and the state is not `node_unavailable`.
 //! - `cannot find header`, which means the node does not know the cursor: walk the stored chain
 //!   back to the newest block the node still knows, revert everything above it, and continue from
 //!   there. If none is known, or the node says `the queried hash does not have retention root on
@@ -49,6 +52,20 @@
 //! the source ([`ChainSource::authority_failing`]). With several nodes, another node that can lead
 //! becomes the chain authority (`rpc::multi`), and the follower asks it at once
 //! ([`StepOutcome::Handover`]). With a single node nothing changes: it retries with its backoff.
+
+/// The start of a retry reason that says a tip reorg took a block of the batch off the chain.
+pub const TIP_REORG: &str = "the batch left the selected parent chain (a tip reorg)";
+
+/// Fetches of a batch again in one step after a tip reorg ([`TIP_REORG`]).
+const TIP_REORG_REFETCHES: u32 = 2;
+
+/// Confirmations (blue score below the sink) a batch fetched again after a tip reorg ends at,
+/// about a second at 10 BPS, below where tip reorgs reach.
+const TIP_REORG_CONFIRMATIONS: u64 = 10;
+
+fn is_tip_reorg(o: &StepOutcome) -> bool {
+    matches!(o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG))
+}
 
 /// The text of a gap reason that says the node pruned the history the cursor stood in.
 ///
@@ -286,11 +303,13 @@ where
 /// Whether a step failure is routine and not worth a warning.
 ///
 /// A routine failure is the tips of two nodes differing for a moment, until it has repeated as
-/// often as it takes to replace a node (`attempt` failures in a row).
+/// often as it takes to replace a node (`attempt` failures in a row), and a tip reorg
+/// ([`TIP_REORG`]) that did not repeat yet.
 fn retry_is_routine(reason: &str, attempt: u32) -> bool {
     // Waiting for a cross-checking node is logged by `rpc::multi` and shown in `/v1/health`.
     reason.contains(crate::rpc::multi::WAITING_FOR_CROSS_CHECK)
         || (reason.contains(crate::rpc::multi::TIPS_DIFFER) && attempt < crate::rpc::multi::STALLS_BEFORE_REPLACING)
+        || (reason.starts_with(TIP_REORG) && attempt < 3)
 }
 
 fn now_ms() -> u64 {
@@ -711,36 +730,46 @@ impl<S: ChainSource> Follower<S> {
             Ok(p) => p,
             Err(e) => return self.on_rpc_error(e).await,
         };
-        let mut req = VspcRequest::new(cursor.hash, self.source.authority_verbosity(), plan.min_confirmations);
-        req.timeout_scale = plan.timeout_scale;
-        let t0 = std::time::Instant::now();
-        let raw = match self.source.vspc_v2(req).await {
-            Ok(r) => r,
-            Err(e) => {
-                if matches!(e, RpcError::Timeout(_) | RpcError::TooLarge { .. }) {
-                    // Split the batch: the same request would only time out, or be too large,
-                    // again.
-                    let (window, scale) = {
-                        let mut w = self.win();
-                        w.on_timeout(plan.span);
-                        (w.current(), w.timeout_scale())
-                    };
-                    tracing::warn!(window_blue = window, timeout_scale = scale, "VSPC batch timed out; asking for a smaller one");
-                    self.health.update(|h| {
-                        h.vspc_timeouts_total += 1;
-                        h.batch_window_blue = Some(window);
-                    });
+        let mut confirmations = plan.min_confirmations;
+        let mut refetches = 0;
+        let (raw, t0, t_fetch, t_check) = loop {
+            let mut req = VspcRequest::new(cursor.hash, self.source.authority_verbosity(), confirmations);
+            req.timeout_scale = plan.timeout_scale;
+            let t0 = std::time::Instant::now();
+            let raw = match self.source.vspc_v2(req).await {
+                Ok(r) => r,
+                Err(e) => {
+                    if matches!(e, RpcError::Timeout(_) | RpcError::TooLarge { .. }) {
+                        // Split the batch: the same request would only time out, or be too large,
+                        // again.
+                        let (window, scale) = {
+                            let mut w = self.win();
+                            w.on_timeout(plan.span);
+                            (w.current(), w.timeout_scale())
+                        };
+                        tracing::warn!(window_blue = window, timeout_scale = scale, "VSPC batch timed out; asking for a smaller one");
+                        self.health.update(|h| {
+                            h.vspc_timeouts_total += 1;
+                            h.batch_window_blue = Some(window);
+                        });
+                    }
+                    return self.on_rpc_error(e).await;
                 }
-                return self.on_rpc_error(e).await;
+            };
+            let t_fetch = t0.elapsed();
+            let t_check0 = std::time::Instant::now();
+            match self.prove(cursor.hash, raw, Origin::PRIMARY).await {
+                Ok(r) => break (r, t0, t_fetch, t_check0.elapsed()),
+                // A tip reorg: the chain from the cursor is read again at once, ending below the
+                // tip, and the new batch is proven in full.
+                Err(o) if is_tip_reorg(&o) && refetches < TIP_REORG_REFETCHES => {
+                    refetches += 1;
+                    confirmations = Some(confirmations.unwrap_or(0).max(TIP_REORG_CONFIRMATIONS));
+                }
+                Err(StepOutcome::Retry(m)) if m.starts_with(TIP_REORG) => return self.tip_reorg_wait(m),
+                Err(o) => return o,
             }
         };
-        let t_fetch = t0.elapsed();
-        let t_check0 = std::time::Instant::now();
-        let raw = match self.prove(cursor.hash, raw, Origin::PRIMARY).await {
-            Ok(r) => r,
-            Err(o) => return o,
-        };
-        let t_check = t_check0.elapsed();
         let batch = match tokio::task::spawn_blocking(move || raw.into_batch()).await.expect("parse task panicked") {
             Ok(b) => b,
             Err(e) => {
@@ -750,7 +779,8 @@ impl<S: ChainSource> Follower<S> {
             }
         };
         let t_parse = t0.elapsed().saturating_sub(t_fetch + t_check);
-        if plan.by_window() && batch.added.is_empty() {
+        // Empty after a tip reorg: the extra confirmations, not the window, held the blocks back.
+        if plan.by_window() && batch.added.is_empty() && refetches == 0 {
             self.record_fetch(&batch, t_fetch);
             // The next chain block lies beyond the window, or the stripped head held all of them.
             // Widen it.
@@ -841,6 +871,10 @@ impl<S: ChainSource> Follower<S> {
                 let t_check = t_check0.elapsed();
                 if let Err(o) = proved {
                     self.prefetch.lock().await.discard();
+                    if is_tip_reorg(&o) {
+                        // The plan no longer matches the chain: one step from the cursor.
+                        return self.step_sequential().await;
+                    }
                     return o;
                 }
                 if let Err(why) = confirmed {
@@ -966,6 +1000,10 @@ impl<S: ChainSource> Follower<S> {
                 self.set_state(FollowerState::NodeUnavailable, Some(msg.clone()));
                 Err(StepOutcome::Retry(msg))
             }
+            Err(ProofError::Reorged(why)) => {
+                tracing::debug!(reason = %why, "a block of the batch left the selected parent chain (a tip reorg): fetched again");
+                Err(StepOutcome::Retry(format!("{TIP_REORG}: {why}")))
+            }
             Err(ProofError::Refused(why)) => {
                 proof.lock().unwrap_or_else(|e| e.into_inner()).refused(&why);
                 tracing::error!(node = origin.node, reason = %why, "a batch failed its chain proof: refused, nothing applied, the node is backed off from");
@@ -977,11 +1015,30 @@ impl<S: ChainSource> Follower<S> {
         }
     }
 
+    /// A step that gave up on a batch after tip reorgs ([`TIP_REORG`]). The node answered, so the
+    /// state is not `node_unavailable`. `following` and `catching_up` stay.
+    fn tip_reorg_wait(&self, msg: String) -> StepOutcome {
+        self.health.update(|h| {
+            if matches!(h.state, FollowerState::NodeUnavailable | FollowerState::Starting) {
+                h.state = FollowerState::CatchingUp;
+            }
+            h.last_poll_unix_ms = now_ms();
+            h.last_error = Some(msg.clone());
+        });
+        StepOutcome::Retry(msg)
+    }
+
     /// The node part of the acceptance proof: the anchor's header when it moved, the lanes new at
     /// the anchor, and the lane proofs at the batch's last chain block.
     async fn prove_lanes(&self, proof: &Mutex<ChainProof>, plan: crate::rpc::proof::Plan) -> Result<(), ProofError> {
         let lock = || proof.lock().unwrap_or_else(|e| e.into_inner());
-        let unavailable = |what: &str, e: RpcError| ProofError::Unavailable(format!("{what}: {e}"));
+        let unavailable = |what: &str, e: RpcError| {
+            if e.left_selected_chain() {
+                ProofError::Reorged(format!("{what}: {e}"))
+            } else {
+                ProofError::Unavailable(format!("{what}: {e}"))
+            }
+        };
         if lock().needs_anchor(&plan) {
             let block = self
                 .source
@@ -1473,8 +1530,13 @@ impl<S: ChainSource> Follower<S> {
                     } else {
                         tracing::warn!(attempt = failures, "{r}");
                     }
-                    let d = self.cfg.backoff.saturating_mul(1u32 << failures.min(10).saturating_sub(1));
-                    d.min(self.cfg.max_backoff)
+                    if is_tip_reorg(&outcome) {
+                        // The node answers: poll again, without a growing backoff.
+                        self.cfg.poll_interval
+                    } else {
+                        let d = self.cfg.backoff.saturating_mul(1u32 << failures.min(10).saturating_sub(1));
+                        d.min(self.cfg.max_backoff)
+                    }
                 }
                 StepOutcome::Gap(r) => {
                     if recover && is_pruned_gap(r) {
@@ -1613,6 +1675,11 @@ mod tests {
             /// Proof requests in flight now, and the most seen at once.
             in_flight: std::sync::atomic::AtomicUsize,
             peak: std::sync::atomic::AtomicUsize,
+            /// Lane proofs at the batch's end still to answer that the block left the selected
+            /// parent chain (a tip reorg after the batch was served).
+            reorgs: std::sync::atomic::AtomicUsize,
+            /// The `minConfirmationCount` of each VSPC request.
+            asked: Mutex<Vec<Option<u64>>>,
         }
 
         impl Recorded {
@@ -1637,6 +1704,7 @@ mod tests {
         impl ChainSource for Recorded {
             async fn vspc_v2(&self, req: VspcRequest) -> Result<RawVspcResponse, RpcError> {
                 assert_eq!(req.data_verbosity_level, crate::rpc::types::Verbosity::Full, "the authority is asked at Full");
+                self.asked.lock().unwrap().push(req.min_confirmation_count);
                 let mut r = self.fx.raw();
                 if req.start_hash != self.fx.start {
                     r.added_chain_block_hashes.clear();
@@ -1698,6 +1766,9 @@ mod tests {
                     .ok_or_else(|| RpcError::Node("no such lane".into()))?;
                 match block {
                     b if b == self.fx.start => Ok(p.0.clone()),
+                    b if b == self.last().0 && self.reorgs.fetch_update(SeqCst, SeqCst, |n| n.checked_sub(1)).is_ok() => {
+                        Err(RpcError::Node(format!("block {b} is not in the selected parent chain")))
+                    }
                     b if b == self.last().0 => Ok(p.1.clone()),
                     _ => Err(RpcError::Node("not recorded".into())),
                 }
@@ -1736,6 +1807,8 @@ mod tests {
                 delay,
                 in_flight: Default::default(),
                 peak: Default::default(),
+                reorgs: Default::default(),
+                asked: Mutex::new(vec![]),
             });
             let conn = crate::indexer::db::open_memory(&network).unwrap();
             let ingest =
@@ -1815,6 +1888,58 @@ mod tests {
             // merged block one more after them.
             assert_eq!(fixture(MAINNET).proofs.len(), 2);
             assert!(merged > 0, "a merged block was checked");
+        }
+
+        /// A tip reorg takes the batch's last block off the chain between the batch and its lane
+        /// proofs (TN10 soak, 2026-11-18: several times a minute). The batch is fetched again at
+        /// once, ending below the tip, and proven in full in the same step. Nothing is refused and
+        /// the state never reads `node_unavailable`. Before, the step failed as "chain proof
+        /// unavailable", waited out a growing backoff and reported the node unavailable.
+        #[tokio::test]
+        async fn a_tip_reorg_at_the_batch_end_is_fetched_again_at_once() {
+            for text in [TN10, MAINNET] {
+                let (f, src, ingest, health) = follower(text, |_| {});
+                src.reorgs.store(1, SeqCst);
+                let n = src.fx.raw().added_chain_block_hashes.len();
+                let o = f.step().await;
+                assert!(matches!(o, StepOutcome::Applied { added, .. } if added == n), "{o:?}");
+                assert_eq!(cursor(&ingest), src.last().0);
+                assert_eq!(*src.asked.lock().unwrap(), vec![None, Some(TIP_REORG_CONFIRMATIONS)]);
+                let h = health.snapshot();
+                assert_ne!(h.state, FollowerState::NodeUnavailable);
+                assert_eq!(h.chain_proof.unwrap().refused_total, 0);
+                assert!(src.refused.lock().unwrap().is_empty(), "the node is not blamed");
+            }
+        }
+
+        /// Tip reorgs that go on past the fetches of one step: the step gives up for one poll.
+        /// Nothing is applied or refused, and the state is `catching_up`, not `node_unavailable`.
+        /// Once the chain settles, the next step applies the batch.
+        #[tokio::test]
+        async fn repeated_tip_reorgs_wait_one_poll_without_blaming_the_node() {
+            let (f, src, ingest, health) = follower(TN10, |_| {});
+            src.reorgs.store(usize::MAX, SeqCst);
+            let o = f.step().await;
+            assert!(matches!(&o, StepOutcome::Retry(m) if m.starts_with(TIP_REORG)), "{o:?}");
+            assert!(retry_is_routine(
+                match &o {
+                    StepOutcome::Retry(m) => m,
+                    _ => unreachable!(),
+                },
+                1
+            ));
+            assert_eq!(src.asked.lock().unwrap().len(), 1 + TIP_REORG_REFETCHES as usize);
+            assert_eq!(cursor(&ingest), src.fx.start, "nothing applied");
+            let h = health.snapshot();
+            assert_eq!(h.state, FollowerState::CatchingUp);
+            assert!(!h.status_line().contains("waiting for the node"), "{}", h.status_line());
+            assert_eq!(h.chain_proof.unwrap().refused_total, 0);
+            assert!(src.refused.lock().unwrap().is_empty(), "the node is not blamed");
+
+            src.reorgs.store(0, SeqCst);
+            let o = f.step().await;
+            assert!(matches!(o, StepOutcome::Applied { .. }), "{o:?}");
+            assert_eq!(cursor(&ingest), src.last().0);
         }
     }
 }

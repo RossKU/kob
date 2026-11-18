@@ -112,6 +112,12 @@ impl RpcError {
             _ => NodeErrorKind::Other,
         }
     }
+
+    /// The node's `block <hash> is not in the selected parent chain`: the block was on its chain
+    /// a moment ago and a tip reorg took it off. The node is fine.
+    pub fn left_selected_chain(&self) -> bool {
+        matches!(self, RpcError::Node(m) if m.to_ascii_lowercase().contains("not in the selected parent chain"))
+    }
 }
 
 pub fn classify_node_message(m: &str) -> NodeErrorKind {

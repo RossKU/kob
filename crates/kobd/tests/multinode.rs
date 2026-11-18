@@ -677,3 +677,31 @@ async fn a_failing_secondary_is_benched_for_bodies_still_cross_checks_and_return
         assert_eq!((f.state.as_str(), f.benched, f.bench_secs), ("ok", 1, 0), "{f:?}");
     }
 }
+
+/// Two secondaries whose windows hang until the request timeout (180 s), next to a healthy primary (simulated time). A
+/// late window is asked of the second hanging node, and once that one is late too, of the primary. Before, the hedge to
+/// the second hanging node was the last one: the window waited the whole 180 s, and every window behind it (a TN10 soak
+/// executor stood still for 229 s so).
+#[tokio::test(start_paused = true)]
+async fn two_hanging_secondaries_do_not_hold_a_window_for_the_request_timeout() {
+    let c = Ctx::new();
+    let _ = chain(&c, 80);
+    let node = c.hs.node.clone();
+    let hang = |k: usize| {
+        let p = Peer::new(&node, Mode::Honest);
+        p.down.store(HANGS, Ordering::Relaxed);
+        (spec(&format!("hangs-{k}"), true, 2), p)
+    };
+    let (a, b) = (hang(1), hang(2));
+    let (pa, pb) = (a.1.clone(), b.1.clone());
+    let m = multi(node.anchor(), vec![(spec("hang-primary", true, 2), Peer::new(&node, Mode::Honest)), a, b]);
+    let t0 = tokio::time::Instant::now();
+    m.sync(2_000).await;
+    let took = t0.elapsed();
+    assert!(took < Duration::from_secs(60), "{took:?}");
+    assert!(pa.windows.load(Ordering::Relaxed) > 0 && pb.windows.load(Ordering::Relaxed) > 0, "both were asked");
+    let h = m.health.snapshot();
+    assert_eq!(h.cursor_hash, Some(node.tip()));
+    assert_eq!(m.snapshot(), fresh_snapshot(&node.chain()), "the same rows as a clean replay");
+    assert!(h.nodes[1..].iter().all(|n| n.windows_ok == 0), "{:?}", h.nodes);
+}

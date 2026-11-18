@@ -38,7 +38,9 @@
 //!   late: out for [`HEDGE_FACTOR`] times the median window time of the other healthy nodes, plus
 //!   [`HEDGE_MARGIN`] ([`HEDGE_UNMEASURED`] while no other node is measured). The other node is
 //!   picked as for any window, and the authority always qualifies. Whichever answer arrives first
-//!   is used, and the other request is dropped. A hedge's answer is checked like any other.
+//!   is used, and the other request is dropped. A hedge's answer is checked like any other. A hedge
+//!   on a node other than the authority that is late too is hedged in turn, so two hanging nodes
+//!   cannot hold a window for their request timeout.
 //! - **Strikes.** A late window that the other node delivered first is a strike against the late
 //!   node (`hedged`). So is a window it failed on the wire: a transport error, a timeout, an
 //!   undecodable or oversized answer. A window it delivers in time clears its strikes. Not knowing
@@ -363,6 +365,9 @@ pub const HEDGE_MARGIN: Duration = Duration::from_secs(2);
 pub const HEDGE_UNMEASURED: Duration = Duration::from_secs(10);
 /// How often a window in flight reads its deadline again, since the other nodes' times change.
 const HEDGE_RECHECK: Duration = Duration::from_secs(1);
+/// How long another node is given for a lane proof or a block the authority did not serve. One that
+/// hangs must not hold the follower for its whole request timeout.
+pub const FALLBACK_ASK_TIMEOUT: Duration = Duration::from_secs(10);
 /// Strikes in a row that bench a node for bodies.
 pub const BENCH_STRIKES: u32 = 3;
 /// How long the first bench lasts. Each further bench doubles it.
@@ -2218,10 +2223,12 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
     async fn lane_proof(&self, block: Hash32, lane: Hash32) -> Result<kaspa_rpc_core::GetSeqCommitLaneProofResponse, RpcError> {
         let e = match self.primary().lane_proof(block, lane).await {
             Ok(p) => return Ok(p),
+            // The block left the authority's chain: the follower fetches the batch again.
+            Err(e) if e.left_selected_chain() => return Err(e),
             Err(e) => e,
         };
         for k in self.others() {
-            if let Ok(p) = self.nodes[k].lane_proof(block, lane).await {
+            if let Ok(Ok(p)) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].lane_proof(block, lane)).await {
                 return Ok(p);
             }
         }
@@ -2234,7 +2241,7 @@ impl<N: ChainSource> ChainSource for MultiNode<N> {
             r => r,
         };
         for k in self.others() {
-            if let Ok(Some(b)) = self.nodes[k].block(hash, txs).await {
+            if let Ok(Ok(Some(b))) = tokio::time::timeout(FALLBACK_ASK_TIMEOUT, self.nodes[k].block(hash, txs)).await {
                 return Ok(Some(b));
             }
         }
@@ -2607,8 +2614,8 @@ impl<N: ChainSource> MultiNode<N> {
         let mut running = FuturesUnordered::new();
         // The attempt that may still turn late, with when it got its connection.
         let mut watched: Option<(usize, tokio::time::Instant)> = None;
-        // The attempt that turned late, once another node was asked too.
-        let mut late: Option<(usize, tokio::time::Instant)> = None;
+        // The attempts that turned late, once another node was asked too.
+        let mut late: Vec<(usize, tokio::time::Instant)> = vec![];
         loop {
             if running.is_empty() {
                 let Some(i) = self.pick(&tried) else { break };
@@ -2623,10 +2630,10 @@ impl<N: ChainSource> MultiNode<N> {
             tokio::select! {
                 Some((i, r, took)) = running.next() => match r {
                     Ok(f) => {
-                        let was_late = late.is_some_and(|(j, _)| j == i);
+                        let was_late = late.iter().any(|(j, _)| *j == i);
                         self.board.fetched(i, &f, took, !was_late);
-                        if let Some((j, t0)) = late.filter(|(j, _)| *j != i) {
-                            self.board.lost_race(j, t0.elapsed());
+                        for (j, t0) in late.iter().filter(|(j, _)| *j != i) {
+                            self.board.lost_race(*j, t0.elapsed());
                         }
                         return Ok(f);
                     }
@@ -2646,14 +2653,12 @@ impl<N: ChainSource> MultiNode<N> {
                         if watched.is_some_and(|(j, _)| j == i) {
                             watched = None;
                         }
-                        match late {
-                            // The late node failed. Its failure is its strike, and the other
-                            // request goes on.
-                            Some((j, _)) if j == i => late = None,
-                            // The other node failed. The late request may be asked of a further
-                            // node.
-                            Some(_) => watched = late.take(),
-                            None => {}
+                        // A late node that failed: its failure is its strike, and the other
+                        // requests go on.
+                        late.retain(|(j, _)| *j != i);
+                        // Only late requests are left: the newest may be asked of a further node.
+                        if watched.is_none() {
+                            watched = late.pop();
                         }
                         last = Some(e);
                     }
@@ -2666,9 +2671,12 @@ impl<N: ChainSource> MultiNode<N> {
                     watched = None;
                     if let Some(j) = self.pick(&tried) {
                         tried[j] = true;
-                        late = Some((i, t0));
+                        late.push((i, t0));
                         tracing::debug!(late = %self.board.shown(i), other = %self.board.shown(j), "a window is late: asking another node too");
                         running.push(self.attempt(j, w, None));
+                        // A further node, if this one is late too: two hanging nodes must not hold
+                        // the window for their request timeout.
+                        watched = (j != self.board.authority()).then(|| (j, tokio::time::Instant::now()));
                     }
                 }
                 else => break,

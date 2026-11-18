@@ -103,6 +103,9 @@ pub enum ProofError {
     Refused(String),
     /// A proof could not be fetched. Nothing is held against the node.
     Unavailable(String),
+    /// A block to prove at left the node's selected parent chain (a tip reorg) after the batch
+    /// was fetched. The batch is fetched again. Nothing is held against the node.
+    Reorged(String),
 }
 
 impl std::fmt::Display for ProofError {
@@ -110,6 +113,7 @@ impl std::fmt::Display for ProofError {
         match self {
             ProofError::Refused(w) => write!(f, "chain proof refused: {w}"),
             ProofError::Unavailable(w) => write!(f, "chain proof unavailable: {w}"),
+            ProofError::Reorged(w) => write!(f, "chain proof after a tip reorg: {w}"),
         }
     }
 }
